@@ -1,0 +1,51 @@
+# Mine — AI-Native Data Migration Platform
+# Architecture: Next.js App Router + Supabase (auth, DB, storage) + Claude API
+# Deployed on Vercel at trymine.ai
+
+## Stack Rules
+- Next.js App Router with Server Components by default, 'use client' only when needed
+- Supabase for auth, database (PostgreSQL), and file storage
+- Claude API (Sonnet) for AI features — all calls server-side only
+- Tailwind CSS for styling
+- TypeScript strict mode
+
+## Supabase Client Rules (CRITICAL)
+- THREE Supabase clients exist, never mix them:
+  1. `lib/supabase/client.ts` — browser only, uses NEXT_PUBLIC_SUPABASE_ANON_KEY, respects RLS
+  2. `lib/supabase/server.ts` — Server Components/Actions only, uses anon key + user cookies, respects RLS
+  3. `lib/supabase/admin.ts` — Server-side admin only, uses SUPABASE_SERVICE_ROLE_KEY, BYPASSES RLS
+- NEVER import `lib/supabase/admin.ts` in any client component
+- NEVER import `lib/supabase/client.ts` in any server component
+- NEVER use SUPABASE_SERVICE_ROLE_KEY in client-side code
+
+## Security Rules
+- NEVER expose ANTHROPIC_API_KEY or SUPABASE_SERVICE_ROLE_KEY to the client
+- Only NEXT_PUBLIC_SUPABASE_URL and NEXT_PUBLIC_SUPABASE_ANON_KEY get the NEXT_PUBLIC_ prefix
+- All Claude API calls go through lib/ai/claude.ts (server-side only)
+- Always validate and sanitize CSV data before storing
+- Always run validateGeneratedSQL() before executing any AI-generated SQL
+- Never log API keys, user passwords, or full JWT tokens
+- Use parameterized queries — never string-concatenate user input into SQL
+
+## File Structure Convention
+- app/ — Next.js App Router pages and layouts
+- components/ — Reusable React components
+- lib/ — Utilities, Supabase clients, AI helpers, types
+- lib/supabase/ — Supabase client files (client.ts, server.ts, admin.ts)
+- lib/ai/ — Claude API integration
+- lib/types/ — TypeScript type definitions
+- supabase/migrations/ — SQL migration files
+
+## Database Pattern
+- Every table has RLS enabled
+- All data traces back to projects.user_id = auth.uid()
+- Use UUID primary keys with gen_random_uuid()
+- Timestamps use TIMESTAMPTZ DEFAULT now()
+- Foreign keys use ON DELETE CASCADE
+
+## Component Pattern
+- Server Components by default (no directive needed)
+- Add 'use client' only for interactive components (forms, dropdowns, click handlers)
+- Use Server Actions for data mutations
+- Use Supabase server client in Server Components and Server Actions
+- Use Supabase browser client only in 'use client' components that need real-time or client-side queries
