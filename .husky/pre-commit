@@ -1,0 +1,15 @@
+#!/bin/sh
+# Block commits that ADD API keys or secrets (only scans + lines, not removed lines)
+# All patterns are split so this file does not self-trigger the scanner
+P1="sk-""ant-"
+P2="SUPABASE_SERVICE""_ROLE_KEY=ey"
+P3="sb_""secret_"
+P4="ANTHROPIC_API""_KEY=sk-"
+
+if git diff --cached --diff-filter=ACM | grep '^+' | grep -qE "(${P1}|${P2}|${P3}|${P4})"; then
+  echo ""
+  echo "ERROR: Possible API key or secret detected in staged files."
+  echo "Remove the secret before committing."
+  echo ""
+  exit 1
+fi

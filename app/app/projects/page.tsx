@@ -1,19 +1,13 @@
-'use client'
-
+import { getProjects } from '@/lib/actions/projects'
 import SidebarShell from '@/components/app/SidebarShell'
-import { ProjectsDashboard } from '@/components/app/ProjectsDashboard'
-import { useRouter } from 'next/navigation'
+import { ProjectsList } from '@/components/app/ProjectsList'
 
-export default function ProjectsPage() {
-  const router = useRouter()
-
-  const handleSelectProject = (projectId: string) => {
-    router.push(`/app/projects/${projectId}/schemas`)
-  }
+export default async function ProjectsPage() {
+  const projects = await getProjects()
 
   return (
     <SidebarShell>
-      <ProjectsDashboard onSelectProject={handleSelectProject} />
+      <ProjectsList initialProjects={projects} />
     </SidebarShell>
   )
 }
