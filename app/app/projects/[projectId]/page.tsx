@@ -1,7 +1,8 @@
 import { notFound } from 'next/navigation'
-import { getProject } from '@/lib/actions/projects'
-import { getDatasetTables } from '@/lib/actions/tables'
-import { ControlPlaneClient } from './ControlPlaneClient'
+import { createClient } from '@/lib/supabase/server'
+import { getDatasetsWithTables } from '@/lib/actions/datasets'
+import { getSchemaDocuments } from '@/lib/actions/schema-documents'
+import { ControlPlaneContent } from './project/ControlPlaneContent'
 
 export default async function ControlPlanePage({
   params,
@@ -9,23 +10,38 @@ export default async function ControlPlanePage({
   params: Promise<{ projectId: string }>
 }) {
   const { projectId } = await params
-  const project = await getProject(projectId).catch(() => notFound())
+  const supabase = await createClient()
 
-  const sourceDataset = project.datasets?.find((d) => d.role === 'source')
-  const targetDataset = project.datasets?.find((d) => d.role === 'target')
+  const { data: project } = await supabase
+    .from('projects')
+    .select('id')
+    .eq('id', projectId)
+    .single()
 
-  const [sourceTables, targetTables] = await Promise.all([
-    sourceDataset ? getDatasetTables(sourceDataset.id) : Promise.resolve([]),
-    targetDataset ? getDatasetTables(targetDataset.id) : Promise.resolve([]),
+  if (!project) notFound()
+
+  const [sourceDatasets, targetDatasets] = await Promise.all([
+    getDatasetsWithTables(projectId, 'source'),
+    getDatasetsWithTables(projectId, 'target'),
+  ])
+
+  const primarySourceDatasetId = sourceDatasets[0]?.id ?? null
+  const primaryTargetDatasetId = targetDatasets[0]?.id ?? null
+
+  const [sourceDocs, targetDocs] = await Promise.all([
+    primarySourceDatasetId ? getSchemaDocuments(primarySourceDatasetId) : Promise.resolve([]),
+    primaryTargetDatasetId ? getSchemaDocuments(primaryTargetDatasetId) : Promise.resolve([]),
   ])
 
   return (
-    <ControlPlaneClient
+    <ControlPlaneContent
       projectId={projectId}
-      sourceDataset={sourceDataset ?? null}
-      targetDataset={targetDataset ?? null}
-      sourceTables={sourceTables}
-      targetTables={targetTables}
+      sourceDatasets={sourceDatasets}
+      targetDatasets={targetDatasets}
+      initialSourceDocs={sourceDocs}
+      initialTargetDocs={targetDocs}
+      primarySourceDatasetId={primarySourceDatasetId}
+      primaryTargetDatasetId={primaryTargetDatasetId}
     />
   )
 }

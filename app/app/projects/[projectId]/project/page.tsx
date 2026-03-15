@@ -1,250 +1,50 @@
-'use client'
+import { notFound } from 'next/navigation'
+import { createClient } from '@/lib/supabase/server'
+import { getDatasetsWithTables } from '@/lib/actions/datasets'
+import { getSchemaDocuments } from '@/lib/actions/schema-documents'
+import { ControlPlaneContent } from './ControlPlaneContent'
 
-import { useState } from 'react'
-import { Button } from '@/components/ui/button'
-import { Input } from '@/components/ui/input'
-import { Label } from '@/components/ui/label'
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
-import { Upload, CheckCircle2, FileText } from '@/components/icons'
-import { IngestionCard } from './IngestionCard'
+export default async function ControlPlanePage({
+  params,
+}: {
+  params: Promise<{ projectId: string }>
+}) {
+  const { projectId } = await params
+  const supabase = await createClient()
 
-type IngestionMethod = 'db' | 'csv' | null
+  // Verify project ownership (RLS handles this, but we also want a 404 on missing)
+  const { data: project } = await supabase
+    .from('projects')
+    .select('id')
+    .eq('id', projectId)
+    .single()
 
-interface UploadedFile {
-  name: string
-  size: string
-}
+  if (!project) notFound()
 
-interface DatabaseConnection {
-  host: string
-  port: string
-  databaseName: string
-  username: string
-  password?: string
-}
-
-interface Database {
-  id: string
-  name: string
-  tables: Table[]
-}
-
-interface Table {
-  id: string
-  name: string
-  lastUploaded?: string
-}
-
-interface CsvState {
-  selectedDbId: string | null
-  selectedTableId: string | null
-  databases: Database[]
-  newDbName: string
-  newTableName: string
-  showNewDbInput: boolean
-  showNewTableInput: boolean
-  uploadStatus: 'idle' | 'uploading' | 'complete'
-}
-
-interface IngestionState {
-  method: IngestionMethod
-  db: DatabaseConnection
-  csv: CsvState
-}
-
-export default function ControlPlanePage() {
-  // Schema Documents state
-  const [sourceFiles, setSourceFiles] = useState<UploadedFile[]>([
-    { name: 'salesforce_schema.ddl', size: '2.4 KB' },
-  ])
-  const [targetFiles, setTargetFiles] = useState<UploadedFile[]>([
-    { name: 'sap_erd.pdf', size: '1.8 KB' },
+  // Fetch datasets + their tables (with field counts) for both roles
+  const [sourceDatasets, targetDatasets] = await Promise.all([
+    getDatasetsWithTables(projectId, 'source'),
+    getDatasetsWithTables(projectId, 'target'),
   ])
 
-  // Source Ingestion state
-  const [sourceIngestion, setSourceIngestion] = useState<IngestionState>({
-    method: null,
-    db: { host: '', port: '', databaseName: '', username: '' },
-    csv: {
-      selectedDbId: null,
-      selectedTableId: null,
-      databases: [
-        { id: 'db1', name: 'SALESFORCE_PROD', tables: [{ id: 't1', name: 'Account' }, { id: 't2', name: 'Contact' }] },
-      ],
-      newDbName: '',
-      newTableName: '',
-      showNewDbInput: false,
-      showNewTableInput: false,
-      uploadStatus: 'idle',
-    },
-  })
+  const primarySourceDatasetId = sourceDatasets[0]?.id ?? null
+  const primaryTargetDatasetId = targetDatasets[0]?.id ?? null
 
-  // Target Ingestion state
-  const [targetIngestion, setTargetIngestion] = useState<IngestionState>({
-    method: null,
-    db: { host: '', port: '', databaseName: '', username: '' },
-    csv: {
-      selectedDbId: null,
-      selectedTableId: null,
-      databases: [
-        { id: 'db1', name: 'SAP_S4HANA', tables: [{ id: 't1', name: 'CUSTOMER' }, { id: 't2', name: 'CONTACT_PERSON' }] },
-      ],
-      newDbName: '',
-      newTableName: '',
-      showNewDbInput: false,
-      showNewTableInput: false,
-      uploadStatus: 'idle',
-    },
-  })
-
-  const handleFileUpload = (type: 'source' | 'target', files: FileList | null) => {
-    if (!files) return
-    const newFiles: UploadedFile[] = Array.from(files).map(file => ({
-      name: file.name,
-      size: `${(file.size / 1024).toFixed(1)} KB`,
-    }))
-    if (type === 'source') {
-      setSourceFiles([...sourceFiles, ...newFiles])
-    } else {
-      setTargetFiles([...targetFiles, ...newFiles])
-    }
-  }
-
-  const updateSourceIngestion = (updates: Partial<IngestionState>) => {
-    setSourceIngestion(prev => ({ ...prev, ...updates }))
-  }
-
-  const updateTargetIngestion = (updates: Partial<IngestionState>) => {
-    setTargetIngestion(prev => ({ ...prev, ...updates }))
-  }
+  // Prefetch schema documents for the primary datasets
+  const [sourceDocs, targetDocs] = await Promise.all([
+    primarySourceDatasetId ? getSchemaDocuments(primarySourceDatasetId) : Promise.resolve([]),
+    primaryTargetDatasetId ? getSchemaDocuments(primaryTargetDatasetId) : Promise.resolve([]),
+  ])
 
   return (
-    <div className="flex-1 bg-gray-50 p-8">
-      <div className="max-w-6xl mx-auto space-y-8">
-        {/* Page Header */}
-        <div>
-          <h1 className="text-2xl font-semibold text-gray-900 mb-2">Control Plane</h1>
-          <p className="text-sm text-gray-600">Configure source and target system connections</p>
-        </div>
-
-        {/* Data Ingestion Section */}
-        <div className="space-y-4">
-          <h2 className="text-lg font-semibold text-gray-900">Data Ingestion</h2>
-          <div className="grid md:grid-cols-2 gap-6">
-            {/* Source Database Card */}
-            <IngestionCard
-              type="source"
-              title="Source Database"
-              state={sourceIngestion}
-              onUpdate={updateSourceIngestion}
-            />
-
-            {/* Target Database Card */}
-            <IngestionCard
-              type="target"
-              title="Target Database"
-              state={targetIngestion}
-              onUpdate={updateTargetIngestion}
-            />
-          </div>
-        </div>
-
-        {/* Schema Documents Section */}
-        <Card>
-          <CardHeader>
-            <CardTitle>Schema Documents</CardTitle>
-          </CardHeader>
-          <CardContent>
-            <div className="grid md:grid-cols-2 gap-6">
-              {/* Source Schema Files */}
-              <div className="space-y-4">
-                <h3 className="text-sm font-semibold text-gray-900">Source Schema Files</h3>
-                <div className="border-2 border-dashed border-gray-300 rounded-lg p-6 text-center hover:border-gray-400 transition-colors">
-                  <div className="space-y-2">
-                    <FileText className="w-8 h-8 text-gray-400 mx-auto" />
-                    <p className="text-xs text-gray-500">Upload DDL, ERD, or documentation</p>
-                    <input
-                      type="file"
-                      id="source-upload"
-                      multiple
-                      className="hidden"
-                      onChange={(e) => handleFileUpload('source', e.target.files)}
-                    />
-                    <label htmlFor="source-upload" className="cursor-pointer">
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        type="button"
-                      >
-                        Upload Files
-                      </Button>
-                    </label>
-                  </div>
-                </div>
-                {sourceFiles.length > 0 && (
-                  <div className="space-y-2">
-                    {sourceFiles.map((file, idx) => (
-                      <div
-                        key={idx}
-                        className="flex items-center justify-between p-2 bg-gray-50 rounded border border-gray-200"
-                      >
-                        <div className="flex items-center gap-2">
-                          <CheckCircle2 className="w-4 h-4 text-green-600" />
-                          <span className="text-sm text-gray-900">{file.name}</span>
-                        </div>
-                        <span className="text-xs text-gray-500">{file.size}</span>
-                      </div>
-                    ))}
-                  </div>
-                )}
-              </div>
-
-              {/* Target Schema Files */}
-              <div className="space-y-4">
-                <h3 className="text-sm font-semibold text-gray-900">Target Schema Files</h3>
-                <div className="border-2 border-dashed border-gray-300 rounded-lg p-6 text-center hover:border-gray-400 transition-colors">
-                  <div className="space-y-2">
-                    <FileText className="w-8 h-8 text-gray-400 mx-auto" />
-                    <p className="text-xs text-gray-500">Upload DDL, ERD, or documentation</p>
-                    <input
-                      type="file"
-                      id="target-upload"
-                      multiple
-                      className="hidden"
-                      onChange={(e) => handleFileUpload('target', e.target.files)}
-                    />
-                    <label htmlFor="target-upload" className="cursor-pointer">
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        type="button"
-                      >
-                        Upload Files
-                      </Button>
-                    </label>
-                  </div>
-                </div>
-                {targetFiles.length > 0 && (
-                  <div className="space-y-2">
-                    {targetFiles.map((file, idx) => (
-                      <div
-                        key={idx}
-                        className="flex items-center justify-between p-2 bg-gray-50 rounded border border-gray-200"
-                      >
-                        <div className="flex items-center gap-2">
-                          <CheckCircle2 className="w-4 h-4 text-green-600" />
-                          <span className="text-sm text-gray-900">{file.name}</span>
-                        </div>
-                        <span className="text-xs text-gray-500">{file.size}</span>
-                      </div>
-                    ))}
-                  </div>
-                )}
-              </div>
-            </div>
-          </CardContent>
-        </Card>
-      </div>
-    </div>
+    <ControlPlaneContent
+      projectId={projectId}
+      sourceDatasets={sourceDatasets}
+      targetDatasets={targetDatasets}
+      initialSourceDocs={sourceDocs}
+      initialTargetDocs={targetDocs}
+      primarySourceDatasetId={primarySourceDatasetId}
+      primaryTargetDatasetId={primaryTargetDatasetId}
+    />
   )
 }

@@ -67,6 +67,7 @@ export interface SchemaDocument {
   filename: string
   file_size: number | null
   file_storage_path: string
+  extracted_text: string | null
   created_at: string
 }
 

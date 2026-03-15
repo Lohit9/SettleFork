@@ -2,8 +2,9 @@
 
 import Papa from 'papaparse'
 import { createClient } from '@/lib/supabase/server'
+import { validateCSVUpload } from '@/lib/upload/validate'
 
-export type UploadCSVResult = {
+export interface UploadCSVResult {
   success: boolean
   tableId?: string
   fieldCount?: number
@@ -20,22 +21,35 @@ export async function uploadCSV(formData: FormData): Promise<UploadCSVResult> {
     if (!user) return { success: false, error: 'Not authenticated' }
 
     const file = formData.get('file') as File
+    const projectId = formData.get('projectId') as string
+    const role = formData.get('role') as 'source' | 'target'
     const datasetId = formData.get('datasetId') as string
     const tableName = formData.get('tableName') as string
 
-    if (!file || !datasetId || !tableName) {
+    if (!file || !projectId || !role || !datasetId || !tableName) {
       return { success: false, error: 'Missing required fields' }
     }
 
-    if (file.size > 10 * 1024 * 1024) {
-      return { success: false, error: 'File exceeds 10MB limit' }
+    // ── Step 1: Validate file ─────────────────────────────────────────────────
+    const validation = validateCSVUpload(file)
+    if (!validation.valid) {
+      return { success: false, error: validation.reason }
     }
 
-    const validTypes = ['text/csv', 'application/vnd.ms-excel', 'text/plain', 'application/csv']
-    if (!validTypes.includes(file.type) && !file.name.toLowerCase().endsWith('.csv')) {
-      return { success: false, error: 'File must be a CSV (.csv)' }
+    // ── Step 1b: Verify dataset ownership BEFORE any parsing work ─────────────
+    // This prevents CPU waste from parsing files that will always fail RLS
+    const { data: ownedDataset } = await supabase
+      .from('datasets')
+      .select('id')
+      .eq('id', datasetId)
+      .eq('project_id', projectId)
+      .maybeSingle()
+
+    if (!ownedDataset) {
+      return { success: false, error: 'Dataset not found or access denied' }
     }
 
+    // ── Step 2: Parse CSV ─────────────────────────────────────────────────────
     const text = await file.text()
     const parseResult = Papa.parse<Record<string, string>>(text, {
       header: true,
@@ -49,25 +63,37 @@ export async function uploadCSV(formData: FormData): Promise<UploadCSVResult> {
 
     const rows = parseResult.data
     if (rows.length === 0) {
-      return { success: false, error: 'CSV file is empty or has no data rows' }
+      return { success: false, error: 'CSV has no data rows' }
     }
-
-    if (rows.length > 100000) {
+    if (rows.length > 100_000) {
       return { success: false, error: 'CSV exceeds 100,000 row limit' }
     }
 
-    const headers = parseResult.meta.fields || Object.keys(rows[0])
-    if (headers.length === 0) {
-      return { success: false, error: 'CSV has no columns' }
+    // ── Step 3: Sanitize + validate headers ───────────────────────────────────
+    const rawHeaders = parseResult.meta.fields || Object.keys(rows[0])
+    if (rawHeaders.length < 2) {
+      return { success: false, error: 'CSV must have at least 2 columns' }
     }
 
-    const sampleRows = rows.slice(0, 100)
+    const headers = deduplicateHeaders(rawHeaders.map(sanitizeHeader))
 
-    // Infer schema for each column
+    // ── Step 4: Sanitize all cell values ─────────────────────────────────────
+    const sanitizedRows = rows.map((row: Record<string, string>) => {
+      const out: Record<string, string> = {}
+      rawHeaders.forEach((raw: string, i: number) => {
+        const sanitized = headers[i]
+        const val = row[raw] ?? ''
+        out[sanitized] = sanitizeValue(String(val))
+      })
+      return out
+    })
+
+    // ── Step 5: Infer schema ──────────────────────────────────────────────────
+    const sampleRows = sanitizedRows.slice(0, 100)
     const inferredFields = headers.map((header, index) => {
       const values = sampleRows
-        .map((r) => r[header])
-        .filter((v) => v !== '' && v !== null && v !== undefined)
+        .map((r: Record<string, string>) => r[header])
+        .filter((v: string) => v !== '' && v !== null && v !== undefined)
 
       const { dataType, inferredType } = inferColumnType(header, values)
       const isNullable = values.length < sampleRows.length
@@ -80,7 +106,7 @@ export async function uploadCSV(formData: FormData): Promise<UploadCSVResult> {
       const isForeignKey = !isPrimaryKey && isFKName(header)
 
       return {
-        name: header.trim(),
+        name: header,
         data_type: dataType,
         inferred_type: inferredType,
         is_nullable: isNullable,
@@ -91,97 +117,106 @@ export async function uploadCSV(formData: FormData): Promise<UploadCSVResult> {
       }
     })
 
-    // Upsert table — delete and recreate if it already exists
+    // ── Step 6: Upsert table record (delete old + recreate) ───────────────────
     const { data: existingTable } = await supabase
       .from('tables')
       .select('id')
       .eq('dataset_id', datasetId)
       .eq('name', tableName)
-      .single()
+      .maybeSingle()
 
     let tableId: string
 
     if (existingTable) {
-      await supabase.from('fields').delete().eq('table_id', existingTable.id)
-      await supabase.from('data_rows').delete().eq('table_id', existingTable.id)
-      await supabase.from('field_profiles').delete().in(
-        'field_id',
-        (await supabase.from('fields').select('id').eq('table_id', existingTable.id)).data?.map(
-          (f) => f.id
-        ) || []
-      )
-      await supabase
-        .from('tables')
-        .update({ row_count: rows.length })
-        .eq('id', existingTable.id)
-      tableId = existingTable.id
-    } else {
-      const { data: newTable, error: tableError } = await supabase
-        .from('tables')
-        .insert({ dataset_id: datasetId, name: tableName, row_count: rows.length })
-        .select()
-        .single()
-      if (tableError || !newTable) {
-        return { success: false, error: tableError?.message || 'Failed to create table' }
-      }
-      tableId = newTable.id
+      // Cascade delete cleans up fields, data_rows, field_profiles
+      await supabase.from('tables').delete().eq('id', existingTable.id)
     }
 
-    // Insert fields
+    const { data: newTable, error: tableError } = await supabase
+      .from('tables')
+      .insert({ dataset_id: datasetId, name: tableName, row_count: rows.length })
+      .select()
+      .single()
+
+    if (tableError || !newTable) {
+      return { success: false, error: tableError?.message || 'Failed to create table record' }
+    }
+    tableId = newTable.id
+
+    // ── Step 7: Insert fields ─────────────────────────────────────────────────
     const { data: createdFields, error: fieldsError } = await supabase
       .from('fields')
       .insert(inferredFields.map((f) => ({ ...f, table_id: tableId })))
       .select()
-    if (fieldsError) {
-      return { success: false, error: 'Failed to create fields: ' + fieldsError.message }
+
+    if (fieldsError || !createdFields) {
+      await supabase.from('tables').delete().eq('id', tableId)
+      return { success: false, error: 'Failed to create field records: ' + fieldsError?.message }
     }
 
-    // Insert data_rows in batches of 500
-    const BATCH_SIZE = 500
-    for (let i = 0; i < rows.length; i += BATCH_SIZE) {
-      const batch = rows.slice(i, i + BATCH_SIZE).map((row, idx) => ({
+    // ── Step 8: Insert data_rows in batches of 1,000 ─────────────────────────
+    const BATCH_SIZE = 1000
+    for (let i = 0; i < sanitizedRows.length; i += BATCH_SIZE) {
+      const batch = sanitizedRows.slice(i, i + BATCH_SIZE).map((row: Record<string, string>, idx: number) => ({
         table_id: tableId,
         row_number: i + idx + 1,
-        row_data: sanitizeRow(row),
+        row_data: row,
       }))
       const { error: rowsError } = await supabase.from('data_rows').insert(batch)
       if (rowsError) {
+        await supabase.from('tables').delete().eq('id', tableId)
         return { success: false, error: 'Failed to insert rows: ' + rowsError.message }
       }
     }
 
-    // Compute and insert field profiles
-    if (createdFields && createdFields.length > 0) {
-      const profiles = createdFields.map((field) => {
-        const fieldValues = rows.map((r) => r[field.name])
-        const nonNull = fieldValues.filter((v) => v !== '' && v !== null && v !== undefined)
-        const uniqueSet = new Set(nonNull)
-        const sorted = [...nonNull].sort()
+    // ── Step 9: Compute and insert field_profiles ─────────────────────────────
+    const profiles = createdFields.map((field) => {
+        const fieldValues = sanitizedRows.map((r: Record<string, string>) => r[field.name] ?? '')
+        const nonNull = fieldValues.filter((v: string) => v !== '' && v !== null && v !== undefined)
+      const uniqueSet = new Set(nonNull)
+      const sorted = [...nonNull].sort()
+      const formatIssues = countFormatIssues(nonNull, field.data_type)
 
-        return {
-          field_id: field.id,
-          total_rows: rows.length,
-          null_count: rows.length - nonNull.length,
-          null_percentage: +((((rows.length - nonNull.length) / rows.length) * 100).toFixed(2)),
-          cardinality: uniqueSet.size,
-          unique_percentage:
-            nonNull.length > 0 ? +((uniqueSet.size / nonNull.length) * 100).toFixed(2) : 0,
-          format_issues_count: 0,
-          min_value: sorted[0] ?? null,
-          max_value: sorted[sorted.length - 1] ?? null,
-          sample_values: [...uniqueSet].slice(0, 10),
-        }
-      })
-      await supabase.from('field_profiles').insert(profiles)
+      return {
+        field_id: field.id,
+        total_rows: sanitizedRows.length,
+        null_count: sanitizedRows.length - nonNull.length,
+        null_percentage: +(
+          (((sanitizedRows.length - nonNull.length) / sanitizedRows.length) * 100).toFixed(2)
+        ),
+        cardinality: uniqueSet.size,
+        unique_percentage:
+          nonNull.length > 0 ? +((uniqueSet.size / nonNull.length) * 100).toFixed(2) : 0,
+        format_issues_count: formatIssues,
+        min_value: sorted[0] ?? null,
+        max_value: sorted[sorted.length - 1] ?? null,
+        sample_values: [...uniqueSet].slice(0, 5),
+      }
+    })
+
+    await supabase.from('field_profiles').insert(profiles)
+
+    // ── Step 10: Upload raw CSV to Supabase Storage ───────────────────────────
+    const sanitizedFilename = validation.sanitizedFilename ?? `${tableName}.csv`
+    const storagePath = `${user.id}/${projectId}/${role}/${sanitizedFilename}`
+
+    const { error: storageError } = await supabase.storage
+      .from('project-files')
+      .upload(storagePath, file, { upsert: true, contentType: 'text/csv' })
+
+    if (!storageError) {
+      await supabase.from('tables').update({ csv_storage_path: storagePath }).eq('id', tableId)
     }
+    // Storage failure is non-fatal — DB records are already created
 
     return {
       success: true,
       tableId,
       fieldCount: inferredFields.length,
-      rowCount: rows.length,
+      rowCount: sanitizedRows.length,
     }
   } catch (err) {
+    console.error('[uploadCSV]', err)
     return {
       success: false,
       error: err instanceof Error ? err.message : 'An unexpected error occurred',
@@ -189,7 +224,33 @@ export async function uploadCSV(formData: FormData): Promise<UploadCSVResult> {
   }
 }
 
-// ─── Schema inference helpers ──────────────────────────────────────────────
+// ─── Header sanitization ──────────────────────────────────────────────────────
+
+function sanitizeHeader(name: string): string {
+  const trimmed = name.trim().slice(0, 100)
+  return trimmed.replace(/[^a-zA-Z0-9_]/g, '_').replace(/^(\d)/, '_$1') || 'column'
+}
+
+function deduplicateHeaders(headers: string[]): string[] {
+  const seen = new Map<string, number>()
+  return headers.map((h) => {
+    const count = seen.get(h) ?? 0
+    seen.set(h, count + 1)
+    return count === 0 ? h : `${h}_${count + 1}`
+  })
+}
+
+// ─── Value sanitization ───────────────────────────────────────────────────────
+
+function sanitizeValue(value: string): string {
+  // Neutralize CSV formula injection (Excel/Sheets attack vector)
+  if (/^[=+\-@\t\r]/.test(value)) {
+    return "'" + value
+  }
+  return value
+}
+
+// ─── Schema inference ─────────────────────────────────────────────────────────
 
 function inferColumnType(
   name: string,
@@ -199,15 +260,26 @@ function inferColumnType(
 
   if (values.length === 0) return { dataType: 'VARCHAR(255)', inferredType: null }
 
-  // Email
+  // Email — name hint or value pattern
   if (lower.includes('email') || values.every((v) => /^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(v))) {
     return { dataType: 'VARCHAR(255)', inferredType: 'email' }
   }
 
   // Boolean
-  const boolSet = new Set(['true', 'false', '0', '1', 'yes', 'no', 'y', 'n'])
+  const boolSet = new Set(['true', 'false', '0', '1', 'yes', 'no', 'y', 'n', 't', 'f'])
   if (values.every((v) => boolSet.has(v.toLowerCase()))) {
     return { dataType: 'BOOLEAN', inferredType: null }
+  }
+
+  // ISO timestamp (must check before date)
+  if (values.every((v) => /^\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}/.test(v))) {
+    return { dataType: 'TIMESTAMP', inferredType: null }
+  }
+
+  // Date patterns
+  const datePatterns = [/^\d{4}-\d{2}-\d{2}$/, /^\d{1,2}\/\d{1,2}\/\d{4}$/, /^\d{1,2}-\d{1,2}-\d{4}$/]
+  if (values.every((v) => datePatterns.some((p) => p.test(v)))) {
+    return { dataType: 'DATE', inferredType: null }
   }
 
   // Integer (no decimals)
@@ -217,7 +289,8 @@ function inferColumnType(
       lower.includes('amount') ||
       lower.includes('revenue') ||
       lower.includes('salary') ||
-      lower.includes('cost')
+      lower.includes('cost') ||
+      lower.includes('total')
     if (isCurrency) return { dataType: 'DECIMAL(18,2)', inferredType: 'currency' }
     return { dataType: 'INT', inferredType: null }
   }
@@ -229,60 +302,58 @@ function inferColumnType(
       lower.includes('amount') ||
       lower.includes('revenue') ||
       lower.includes('salary') ||
-      lower.includes('cost')
-    return {
-      dataType: 'DECIMAL(18,2)',
-      inferredType: isCurrency ? 'currency' : null,
-    }
-  }
-
-  // Date / Timestamp
-  const datePatterns = [
-    /^\d{4}-\d{2}-\d{2}$/,
-    /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}/,
-    /^\d{1,2}\/\d{1,2}\/\d{4}$/,
-    /^\d{1,2}-\d{1,2}-\d{4}$/,
-  ]
-  if (values.some((v) => datePatterns.some((p) => p.test(v)))) {
-    const hasTime = values.some((v) => /T\d{2}:\d{2}/.test(v) || /\d{2}:\d{2}:\d{2}/.test(v))
-    return { dataType: hasTime ? 'TIMESTAMP' : 'DATE', inferredType: null }
+      lower.includes('cost') ||
+      lower.includes('total')
+    return { dataType: 'DECIMAL(18,2)', inferredType: isCurrency ? 'currency' : null }
   }
 
   // Phone
   if (lower.includes('phone') || lower.includes('mobile') || lower.includes('fax')) {
-    return { dataType: 'VARCHAR(50)', inferredType: 'phone' }
+    return { dataType: 'VARCHAR(20)', inferredType: 'phone' }
   }
 
   // URL
-  if (lower.includes('url') || lower.includes('website') || values.some((v) => v.startsWith('http'))) {
+  if (lower.includes('url') || lower.includes('website') || values.some((v) => /^https?:\/\//.test(v))) {
     return { dataType: 'VARCHAR(2048)', inferredType: 'url' }
   }
 
-  // Default: VARCHAR sized to max observed length
+  // Default: VARCHAR sized to max observed length, min 40, round up to nearest 10
   const maxLen = Math.max(...values.map((v) => v.length), 1)
-  const roundedLen = Math.min(4096, Math.max(50, Math.ceil(maxLen / 50) * 50))
+  const roundedLen = Math.min(4096, Math.max(40, Math.ceil(maxLen / 10) * 10))
   return { dataType: `VARCHAR(${roundedLen})`, inferredType: null }
 }
 
 function isPKName(name: string): boolean {
   const lower = name.toLowerCase()
-  return lower === 'id' || lower.endsWith('_id') || lower === 'pk' || lower === 'key'
+  return lower === 'id' || lower === 'pk' || lower === 'key' || /^.+_id$/.test(lower)
 }
 
 function isFKName(name: string): boolean {
   const lower = name.toLowerCase()
-  return (lower.endsWith('_id') || lower.endsWith('id')) && lower !== 'id'
+  return (/^.+_id$/.test(lower) || /^.+id$/.test(lower)) && lower !== 'id'
 }
 
-function sanitizeRow(row: Record<string, string>): Record<string, string> {
-  const out: Record<string, string> = {}
-  for (const [key, value] of Object.entries(row)) {
-    // Neutralize CSV formula injection (Excel/Sheets attack vector)
-    if (typeof value === 'string' && /^[=+\-@\t\r]/.test(value)) {
-      out[key] = "'" + value
-    } else {
-      out[key] = value
-    }
+function countFormatIssues(values: string[], dataType: string): number {
+  if (dataType === 'INT') {
+    return values.filter((v) => !/^-?\d+$/.test(v)).length
   }
-  return out
+  if (dataType === 'DECIMAL(18,2)') {
+    return values.filter((v) => !/^-?\d+\.?\d*$/.test(v)).length
+  }
+  if (dataType === 'BOOLEAN') {
+    const boolSet = new Set(['true', 'false', '0', '1', 'yes', 'no', 'y', 'n', 't', 'f'])
+    return values.filter((v) => !boolSet.has(v.toLowerCase())).length
+  }
+  if (dataType === 'DATE') {
+    return values.filter(
+      (v) =>
+        !/^\d{4}-\d{2}-\d{2}$/.test(v) &&
+        !/^\d{1,2}\/\d{1,2}\/\d{4}$/.test(v) &&
+        !/^\d{1,2}-\d{1,2}-\d{4}$/.test(v)
+    ).length
+  }
+  if (dataType === 'TIMESTAMP') {
+    return values.filter((v) => !/^\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}/.test(v)).length
+  }
+  return 0
 }
