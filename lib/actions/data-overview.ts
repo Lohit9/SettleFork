@@ -38,10 +38,12 @@ export interface ProjectSchema {
 export interface TableOption {
   id: string
   name: string
+  friendlyName: string
   datasetId: string
   datasetName: string
   role: 'source' | 'target'
   row_count: number
+  fieldNames: string[]
 }
 
 export interface ProfilingData {
@@ -159,21 +161,43 @@ export async function getAllTablesForProject(projectId: string): Promise<TableOp
 
   const { data: tables } = await supabase
     .from('tables')
-    .select('id, dataset_id, name, row_count')
+    .select('id, dataset_id, name, row_count, friendly_name')
     .in('dataset_id', datasetIds)
     .order('name', { ascending: true })
 
+  if (!tables?.length) return []
+
+  const tableIds = tables.map((t) => t.id)
+
+  const { data: fields } = await supabase
+    .from('fields')
+    .select('table_id, name')
+    .in('table_id', tableIds)
+    .order('ordinal_position', { ascending: true })
+
+  const fieldNamesByTable = new Map<string, string[]>()
+  for (const f of fields || []) {
+    const list = fieldNamesByTable.get(f.table_id) ?? []
+    list.push(f.name)
+    fieldNamesByTable.set(f.table_id, list)
+  }
+
   const datasetMap = new Map(datasets.map((d) => [d.id, d]))
 
-  return (tables || []).map((t) => {
+  return tables.map((t) => {
     const ds = datasetMap.get(t.dataset_id)!
+    const friendlyName =
+      t.friendly_name ??
+      `${ds.name.toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '')}.${t.name.toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '')}`
     return {
       id: t.id,
       name: t.name,
+      friendlyName,
       datasetId: t.dataset_id,
       datasetName: ds.name,
       role: ds.role as 'source' | 'target',
       row_count: t.row_count ?? 0,
+      fieldNames: fieldNamesByTable.get(t.id) ?? [],
     }
   })
 }

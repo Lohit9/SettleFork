@@ -3,6 +3,7 @@
 import Papa from 'papaparse'
 import { createClient } from '@/lib/supabase/server'
 import { validateCSVUpload } from '@/lib/upload/validate'
+import { computeFriendlyName } from '@/lib/db/sql-rewriter'
 
 export interface UploadCSVResult {
   success: boolean
@@ -40,7 +41,7 @@ export async function uploadCSV(formData: FormData): Promise<UploadCSVResult> {
     // This prevents CPU waste from parsing files that will always fail RLS
     const { data: ownedDataset } = await supabase
       .from('datasets')
-      .select('id')
+      .select('id, name')
       .eq('id', datasetId)
       .eq('project_id', projectId)
       .maybeSingle()
@@ -48,6 +49,8 @@ export async function uploadCSV(formData: FormData): Promise<UploadCSVResult> {
     if (!ownedDataset) {
       return { success: false, error: 'Dataset not found or access denied' }
     }
+
+    const friendlyName = computeFriendlyName(ownedDataset.name, tableName)
 
     // ── Step 2: Parse CSV ─────────────────────────────────────────────────────
     const text = await file.text()
@@ -134,7 +137,7 @@ export async function uploadCSV(formData: FormData): Promise<UploadCSVResult> {
 
     const { data: newTable, error: tableError } = await supabase
       .from('tables')
-      .insert({ dataset_id: datasetId, name: tableName, row_count: rows.length })
+      .insert({ dataset_id: datasetId, name: tableName, row_count: rows.length, friendly_name: friendlyName })
       .select()
       .single()
 
