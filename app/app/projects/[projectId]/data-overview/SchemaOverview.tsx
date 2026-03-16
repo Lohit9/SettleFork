@@ -4,6 +4,7 @@ import { useState, useTransition } from 'react'
 import { useRouter } from 'next/navigation'
 import { ChevronDown, ChevronRight, Upload, Check, Pencil } from '@/components/icons'
 import { updateField } from '@/lib/actions/fields'
+import { generateMappings } from '@/lib/actions/mappings'
 import type { DatasetSchemaData, FieldData } from '@/lib/actions/data-overview'
 
 interface SchemaOverviewProps {
@@ -396,14 +397,100 @@ export default function SchemaOverview({ projectId, source, target }: SchemaOver
   const hasTargetSelected = targetTableIds.some((id) => selectedTables.has(id))
   const canGenerate = hasSourceSelected && hasTargetSelected
 
-  function handleGenerateMappings() {
-    startNav(() => {
-      router.push(`/app/projects/${projectId}/mapping`)
-    })
+  const [generating, setGenerating] = useState(false)
+  const [genError, setGenError] = useState<string | null>(null)
+  const [showConfirm, setShowConfirm] = useState(false)
+
+  function handleGenerateMappingsClick() {
+    setGenError(null)
+    setShowConfirm(true)
   }
 
+  async function confirmGenerate() {
+    setShowConfirm(false)
+    const selectedSourceIds = sourceTableIds.filter((id) => selectedTables.has(id))
+    const selectedTargetIds = targetTableIds.filter((id) => selectedTables.has(id))
+
+    setGenerating(true)
+    setGenError(null)
+    try {
+      const result = await generateMappings(projectId, selectedSourceIds, selectedTargetIds)
+      if (!result.success) {
+        setGenError(result.error ?? 'Generation failed. Please try again.')
+        setGenerating(false)
+      } else {
+        startNav(() => {
+          router.push(`/app/projects/${projectId}/mapping`)
+        })
+      }
+    } catch (e) {
+      setGenError(e instanceof Error ? e.message : 'Generation failed. Please try again.')
+      setGenerating(false)
+    }
+  }
+
+  const selectedSourceCount = sourceTableIds.filter((id) => selectedTables.has(id)).length
+  const selectedTargetCount = targetTableIds.filter((id) => selectedTables.has(id)).length
+
   return (
-    <div className="flex flex-col gap-4 flex-1">
+    <div className="flex flex-col gap-4 flex-1 relative">
+      {/* AI generation loading overlay */}
+      {generating && (
+        <div className="absolute inset-0 bg-white/95 flex flex-col items-center justify-center z-20 rounded-xl border border-gray-200">
+          <div className="flex flex-col items-center gap-4 text-center px-8">
+            <div className="w-12 h-12 border-4 border-indigo-600 border-t-transparent rounded-full animate-spin" />
+            <div>
+              <p className="font-semibold text-gray-900">Generating AI-powered mappings…</p>
+              <p className="text-sm text-gray-500 mt-1">
+                Analyzing schemas and sample data to find the best field matches
+              </p>
+              <p className="text-xs text-gray-400 mt-2">This may take 15–30 seconds</p>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* In-app confirm dialog */}
+      {showConfirm && (
+        <div className="absolute inset-0 bg-white/90 flex items-center justify-center z-20 rounded-xl">
+          <div className="bg-white border border-gray-200 rounded-xl shadow-lg p-6 mx-6 w-full max-w-sm">
+            <div className="flex items-start gap-3 mb-4">
+              <div className="w-9 h-9 rounded-full bg-indigo-50 flex items-center justify-center flex-shrink-0 mt-0.5">
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="text-indigo-600">
+                  <path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71" />
+                  <path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71" />
+                </svg>
+              </div>
+              <div>
+                <p className="font-semibold text-gray-900 text-sm">Generate AI Mappings</p>
+                <p className="text-sm text-gray-500 mt-1">
+                  Mapping{' '}
+                  <span className="font-medium text-gray-700">{selectedSourceCount} source</span> and{' '}
+                  <span className="font-medium text-gray-700">{selectedTargetCount} target</span> table{selectedTargetCount !== 1 ? 's' : ''}.
+                </p>
+              </div>
+            </div>
+            <div className="bg-amber-50 border border-amber-100 rounded-lg px-3 py-2.5 mb-5 text-xs text-amber-800">
+              Any existing mappings for this project will be replaced. This may take 15–30 seconds.
+            </div>
+            <div className="flex gap-3">
+              <button
+                onClick={() => setShowConfirm(false)}
+                className="flex-1 px-4 py-2.5 text-sm font-medium text-gray-700 border border-gray-200 rounded-lg hover:bg-gray-50 transition-colors"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={confirmGenerate}
+                className="flex-1 px-4 py-2.5 text-sm font-medium text-white bg-indigo-600 rounded-lg hover:bg-indigo-700 transition-colors"
+              >
+                Generate
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       <div className="flex gap-4">
         <SchemaPanel
           title="Source Schema"
@@ -425,14 +512,31 @@ export default function SchemaOverview({ projectId, source, target }: SchemaOver
         />
       </div>
 
+      {genError && (
+        <div className="flex items-start gap-2.5 px-4 py-3 bg-red-50 border border-red-200 rounded-lg">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="text-red-500 flex-shrink-0 mt-0.5">
+            <circle cx="12" cy="12" r="10" /><line x1="12" y1="8" x2="12" y2="12" /><line x1="12" y1="16" x2="12.01" y2="16" />
+          </svg>
+          <div className="flex-1 min-w-0">
+            <p className="text-sm font-medium text-red-800">Generation failed</p>
+            <p className="text-xs text-red-600 mt-0.5">{genError}</p>
+          </div>
+          <button onClick={() => setGenError(null)} className="text-red-400 hover:text-red-600 flex-shrink-0">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+              <line x1="18" y1="6" x2="6" y2="18" /><line x1="6" y1="6" x2="18" y2="18" />
+            </svg>
+          </button>
+        </div>
+      )}
+
       <div className="flex justify-end">
         <button
-          onClick={handleGenerateMappings}
-          disabled={!canGenerate || navigating}
+          onClick={handleGenerateMappingsClick}
+          disabled={!canGenerate || generating || navigating}
           title={!canGenerate ? 'Select at least one source and one target table' : undefined}
           className="px-5 py-2.5 text-sm font-medium text-white bg-indigo-600 rounded-lg hover:bg-indigo-700 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
         >
-          {navigating ? 'Going to Mapping…' : 'Generate Mappings'}
+          {generating ? 'Generating…' : navigating ? 'Going to Mapping…' : 'Generate Mappings'}
         </button>
       </div>
     </div>
