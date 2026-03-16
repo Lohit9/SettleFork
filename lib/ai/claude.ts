@@ -1,0 +1,23 @@
+import Anthropic from '@anthropic-ai/sdk'
+
+// CRITICAL: This file is server-side only. NEVER import in client components.
+// ANTHROPIC_API_KEY must never appear in client bundles.
+
+const anthropic = new Anthropic({
+  apiKey: process.env.ANTHROPIC_API_KEY!,
+})
+
+export async function callClaude(systemPrompt: string, userMessage: string): Promise<string> {
+  const response = await anthropic.messages.create({
+    model: 'claude-opus-4-5',
+    max_tokens: 4096,
+    system: systemPrompt,
+    messages: [{ role: 'user', content: userMessage }],
+  })
+
+  const textBlock = response.content.find((block) => block.type === 'text')
+  if (!textBlock || textBlock.type !== 'text') {
+    throw new Error('No text response from Claude')
+  }
+  return textBlock.text
+}
