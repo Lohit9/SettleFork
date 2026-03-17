@@ -1174,7 +1174,7 @@ function CreateManualFixModal({
                       )}
                       <div className="flex gap-2">
                         <button
-                          onClick={handleApplyNL}
+                          onClick={() => handleApplyNL()}
                           disabled={isApplying}
                           className="flex-1 px-3 py-1.5 text-sm bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 disabled:opacity-50 flex items-center justify-center gap-2"
                         >
@@ -1219,7 +1219,7 @@ function CreateManualFixModal({
                       ) : 'Validate & Preview'}
                     </button>
                     <button
-                      onClick={handleApplySQL}
+                      onClick={() => handleApplySQL()}
                       disabled={!sqlValidated || isApplying}
                       className="flex-1 px-3 py-1.5 text-sm bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 disabled:opacity-50 flex items-center justify-center gap-2"
                     >
