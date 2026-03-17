@@ -1,6 +1,7 @@
 import { notFound } from 'next/navigation'
 import { Navigation } from '@/components/app/Navigation'
 import { getProject } from '@/lib/actions/projects'
+import { supabaseAdmin } from '@/lib/supabase/admin'
 
 export default async function ProjectLayout({
   children,
@@ -16,6 +17,20 @@ export default async function ProjectLayout({
   const sourceDataset = project.datasets?.find((d) => d.role === 'source')
   const targetDataset = project.datasets?.find((d) => d.role === 'target')
 
+  // Count open blocking issues for sidebar badge (non-fatal if it fails)
+  let blockingIssueCount = 0
+  try {
+    const { count } = await supabaseAdmin
+      .from('quality_issues')
+      .select('*', { count: 'exact', head: true })
+      .eq('project_id', projectId)
+      .eq('severity', 'blocking')
+      .eq('status', 'open')
+    blockingIssueCount = count ?? 0
+  } catch {
+    // Non-fatal
+  }
+
   return (
     <div className="h-screen w-full flex bg-gray-50 overflow-hidden">
       <Navigation
@@ -23,6 +38,7 @@ export default async function ProjectLayout({
         projectId={projectId}
         sourceSystemName={sourceDataset?.name}
         targetSystemName={targetDataset?.name}
+        blockingIssueCount={blockingIssueCount}
       />
       <div className="flex-1 overflow-auto">{children}</div>
     </div>

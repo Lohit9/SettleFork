@@ -212,6 +212,15 @@ export async function uploadCSV(formData: FormData): Promise<UploadCSVResult> {
     }
     // Storage failure is non-fatal — DB records are already created
 
+    // ── Step 11: Auto-run source data quality checks ──────────────────────────
+    // Fire-and-forget: don't fail the upload if detection has an error
+    try {
+      const { runSourceDataChecks } = await import('@/lib/quality/detection-engine')
+      await runSourceDataChecks(projectId, tableId, 'auto')
+    } catch (detectionErr) {
+      console.warn('[csv] Auto detection failed (non-fatal):', detectionErr)
+    }
+
     return {
       success: true,
       tableId,

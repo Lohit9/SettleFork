@@ -95,6 +95,16 @@ export interface FieldMapping {
   created_at: string
 }
 
+export interface FixOption {
+  label: string
+  description: string
+  sql: string
+  tradeoff: string
+  downstream_impact: string
+  risk_level: 'low' | 'medium' | 'high'
+  estimated_rows_affected: number
+}
+
 export interface QualityIssue {
   id: string
   project_id: string
@@ -106,9 +116,65 @@ export interface QualityIssue {
   description: string
   affected_records: number
   ai_suggested_fix: string | null
+  ai_fix_options: FixOption[] | null
+  downstream_impact: string | null
+  affected_rows_sample: Record<string, unknown>[] | null
   generated_sql: string | null
   status: 'open' | 'fixed' | 'accepted_risk'
+  detection_source: 'auto' | 'manual_scan' | 'custom_rule'
+  validation_rule_id: string | null
   created_at: string
+}
+
+export interface ValidationRule {
+  id: string
+  project_id: string
+  field_id: string | null
+  table_id: string | null
+  name: string
+  description: string | null
+  rule_type: string
+  rule_config: Record<string, unknown>
+  severity: 'blocking' | 'warning'
+  is_ai_generated: boolean
+  ai_original_prompt: string | null
+  created_at: string
+}
+
+export interface FixHistory {
+  id: string
+  quality_issue_id: string | null
+  project_id: string
+  table_id: string
+  fix_description: string
+  fix_sql: string
+  fix_option_chosen: string | null
+  affected_row_count: number
+  old_values_sample: Record<string, unknown>[] | null
+  status: 'applied' | 'reverted'
+  snapshot_failed: boolean | null
+  applied_by: string
+  applied_at: string
+  reverted_at: string | null
+}
+
+export interface FixSnapshot {
+  id: string
+  fix_history_id: string
+  row_id: number
+  row_number: number | null
+  old_row_data: Record<string, unknown>
+}
+
+export interface ReadinessScore {
+  score: number
+  status: 'ready' | 'at_risk' | 'not_ready'
+  blocking_count: number
+  warning_count: number
+  ready_field_count: number
+  total_fields_checked: number
+  unmapped_required_count: number
+  top_issues: QualityIssue[]
 }
 
 export interface Transformation {

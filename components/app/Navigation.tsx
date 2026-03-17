@@ -17,6 +17,7 @@ interface NavigationProps {
   projectId?: string
   sourceSystemName?: string
   targetSystemName?: string
+  blockingIssueCount?: number
 }
 
 export function Navigation({
@@ -24,6 +25,7 @@ export function Navigation({
   projectId,
   sourceSystemName,
   targetSystemName,
+  blockingIssueCount = 0,
 }: NavigationProps) {
   const pathname = usePathname()
 
@@ -122,7 +124,12 @@ export function Navigation({
                   `}
                 >
                   <Icon className="w-5 h-5 flex-shrink-0" />
-                  <span>{item.label}</span>
+                  <span className="flex-1">{item.label}</span>
+                  {item.id === 'data-quality' && blockingIssueCount > 0 && (
+                    <span className={`text-xs font-semibold px-1.5 py-0.5 rounded-full ${isActive ? 'bg-white/20 text-white' : 'bg-red-100 text-red-700'}`}>
+                      {blockingIssueCount}
+                    </span>
+                  )}
                 </Link>
               </li>
             )

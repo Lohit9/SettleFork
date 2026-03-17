@@ -1,0 +1,1622 @@
+'use client'
+
+import { useState, useEffect, useTransition, useRef } from 'react'
+import { useRouter } from 'next/navigation'
+import type { QualityIssue, FixOption, ReadinessScore, ValidationRule, FixHistory } from '@/lib/types/database'
+import { applyFix, acceptRisk, revertFix, runFullScan, getQualityIssues, getFixHistory } from '@/lib/actions/quality-fixes'
+import { generateFixSuggestions } from '@/lib/quality/fix-engine'
+import { addValidationRule, addValidationRuleFromNL, executeCustomRules, deleteValidationRule } from '@/lib/actions/validation-rules'
+import { generateManualFix, applyManualFix, previewManualFix } from '@/lib/actions/manual-fix'
+import { computeReadinessScore } from '@/lib/quality/readiness-score'
+
+// ── Types ─────────────────────────────────────────────────────────────────────
+
+interface FieldStub {
+  id: string
+  name: string
+  data_type: string
+  inferred_type: string | null
+}
+interface TableStub {
+  id: string
+  name: string
+  fields: FieldStub[]
+}
+interface DatasetStub {
+  id: string
+  role: string
+  name: string
+  tables: TableStub[]
+}
+
+interface Props {
+  projectId: string
+  initialIssues: QualityIssue[]
+  initialReadiness: ReadinessScore
+  initialRules: ValidationRule[]
+  hasMappings: boolean
+  allDatasets: DatasetStub[]
+}
+
+// ── Small helpers ─────────────────────────────────────────────────────────────
+
+function severityColor(s: string) {
+  return s === 'blocking' ? 'text-red-600' : 'text-amber-600'
+}
+function riskColor(r: string) {
+  if (r === 'low') return 'bg-green-100 text-green-800'
+  if (r === 'medium') return 'bg-amber-100 text-amber-800'
+  return 'bg-red-100 text-red-800'
+}
+function scoreColor(score: number) {
+  if (score >= 80) return '#16a34a'
+  if (score >= 50) return '#d97706'
+  return '#dc2626'
+}
+
+// ── Readiness Gauge (SVG arc) ─────────────────────────────────────────────────
+
+function ReadinessGauge({ score, status }: { score: number; status: string }) {
+  const r = 54
+  const cx = 70
+  const cy = 70
+  const circumference = Math.PI * r  // half circle
+  const progress = (score / 100) * circumference
+  const color = scoreColor(score)
+
+  const statusLabel =
+    status === 'ready' ? 'Ready' : status === 'at_risk' ? 'At Risk' : 'Not Ready'
+  const statusBg =
+    status === 'ready' ? 'text-green-700' : status === 'at_risk' ? 'text-amber-700' : 'text-red-700'
+
+  return (
+    <div className="flex flex-col items-center">
+      <svg width="140" height="80" viewBox="0 0 140 85">
+        {/* Track */}
+        <path
+          d={`M ${cx - r} ${cy} A ${r} ${r} 0 0 1 ${cx + r} ${cy}`}
+          fill="none"
+          stroke="#e5e7eb"
+          strokeWidth="12"
+          strokeLinecap="round"
+        />
+        {/* Progress */}
+        <path
+          d={`M ${cx - r} ${cy} A ${r} ${r} 0 0 1 ${cx + r} ${cy}`}
+          fill="none"
+          stroke={color}
+          strokeWidth="12"
+          strokeLinecap="round"
+          strokeDasharray={`${progress} ${circumference}`}
+          style={{ transition: 'stroke-dasharray 0.8s ease' }}
+        />
+        {/* Score text */}
+        <text x={cx} y={cy - 8} textAnchor="middle" fontSize="22" fontWeight="700" fill={color}>
+          {score}%
+        </text>
+        <text x={cx} y={cy + 8} textAnchor="middle" fontSize="10" fill="#6b7280">
+          Migration Readiness
+        </text>
+      </svg>
+      <span className={`text-sm font-semibold mt-1 ${statusBg}`}>{statusLabel}</span>
+    </div>
+  )
+}
+
+// ── SQL Modal ─────────────────────────────────────────────────────────────────
+
+function SQLModal({ sql, onClose }: { sql: string; onClose: () => void }) {
+  const [copied, setCopied] = useState(false)
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
+      <div className="bg-white rounded-xl shadow-2xl w-full max-w-2xl">
+        <div className="flex items-center justify-between p-4 border-b">
+          <h3 className="font-semibold text-gray-900">Fix SQL</h3>
+          <button onClick={onClose} className="text-gray-400 hover:text-gray-600 text-xl">×</button>
+        </div>
+        <div className="p-4">
+          <pre className="bg-gray-950 text-green-300 rounded-lg p-4 text-sm overflow-x-auto whitespace-pre-wrap font-mono max-h-80">
+            {sql}
+          </pre>
+          <p className="text-xs text-gray-500 mt-2 italic">
+            This SQL modifies staging data only. All changes are logged and revertable.
+          </p>
+        </div>
+        <div className="flex gap-2 p-4 border-t">
+          <button
+            onClick={() => { navigator.clipboard.writeText(sql); setCopied(true); setTimeout(() => setCopied(false), 2000) }}
+            className="px-4 py-2 text-sm bg-indigo-600 text-white rounded-lg hover:bg-indigo-700"
+          >
+            {copied ? '✓ Copied' : 'Copy SQL'}
+          </button>
+          <button onClick={onClose} className="px-4 py-2 text-sm border border-gray-300 rounded-lg hover:bg-gray-50">Close</button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+// ── Confirm Modal ─────────────────────────────────────────────────────────────
+
+function ConfirmModal({
+  title, message, confirmLabel = 'Confirm', onConfirm, onCancel, loading
+}: { title: string; message: string; confirmLabel?: string; onConfirm: () => void; onCancel: () => void; loading?: boolean }) {
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
+      <div className="bg-white rounded-xl shadow-2xl w-full max-w-md p-6">
+        <h3 className="font-semibold text-gray-900 mb-2">{title}</h3>
+        <p className="text-sm text-gray-600 mb-6">{message}</p>
+        <div className="flex gap-3 justify-end">
+          <button onClick={onCancel} disabled={loading} className="px-4 py-2 text-sm border border-gray-300 rounded-lg hover:bg-gray-50 disabled:opacity-50">
+            Cancel
+          </button>
+          <button onClick={onConfirm} disabled={loading}
+            className="px-4 py-2 text-sm bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 disabled:opacity-50 flex items-center gap-2">
+            {loading && <span className="w-3.5 h-3.5 border-2 border-white/30 border-t-white rounded-full animate-spin" />}
+            {confirmLabel}
+          </button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+// ── Inline RotateCcw icon (no external dep needed) ───────────────────────────
+
+function RotateCcwIcon({ className }: { className?: string }) {
+  return (
+    <svg
+      xmlns="http://www.w3.org/2000/svg"
+      width="16"
+      height="16"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      className={className}
+    >
+      <path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8" />
+      <path d="M3 3v5h5" />
+    </svg>
+  )
+}
+
+// ── Issue Card ────────────────────────────────────────────────────────────────
+
+function IssueCard({
+  issue,
+  tableRole,
+  onUpdate,
+}: {
+  issue: QualityIssue
+  tableRole?: 'source' | 'target'
+  onUpdate: (updated: QualityIssue) => void
+}) {
+  const [generatingFix, startGenerating] = useTransition()
+  const [applyingIdx, setApplyingIdx] = useState<number | null>(null)
+  const [reverting, setReverting] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+  const [toast, setToast] = useState<string | null>(null)
+  const [showSQL, setShowSQL] = useState<string | null>(null)
+  const [confirmApply, setConfirmApply] = useState<{ idx: number; fix: FixOption } | null>(null)
+  const [confirmNoSnapshot, setConfirmNoSnapshot] = useState<number | null>(null)
+  const [acceptingRisk, setAcceptingRisk] = useState(false)
+  const [riskReason, setRiskReason] = useState('')
+  const [showAcceptModal, setShowAcceptModal] = useState(false)
+
+  function showToast(msg: string) {
+    setToast(msg)
+    setTimeout(() => setToast(null), 3500)
+  }
+
+  async function handleGenerateFix() {
+    setError(null)
+    startGenerating(async () => {
+      const res = await generateFixSuggestions(issue.id)
+      if (!res.success) {
+        setError(res.error ?? 'Failed to generate fix suggestions')
+      } else {
+        // Refresh issue from server via parent
+        const { issues: refreshed } = await getQualityIssues(issue.project_id)
+        const updated = refreshed.find(i => i.id === issue.id)
+        if (updated) onUpdate(updated)
+      }
+    })
+  }
+
+  async function handleApplyFix(idx: number, skipSnapshot = false) {
+    setApplyingIdx(idx)
+    setError(null)
+    const res = await applyFix(issue.id, idx, skipSnapshot)
+    setApplyingIdx(null)
+    setConfirmApply(null)
+    if (res.requiresSnapshotConfirmation) {
+      // Fix uses complex SQL (CTE) — ask user to confirm applying without a snapshot
+      setConfirmNoSnapshot(idx)
+      return
+    }
+    if (!res.success) {
+      setError(res.error ?? 'Fix failed')
+    } else {
+      showToast(`✓ Fix applied to ${res.rowsAffected} records`)
+      onUpdate({ ...issue, status: 'fixed' })
+    }
+  }
+
+  async function handleAcceptRisk() {
+    const res = await acceptRisk(issue.id, riskReason || undefined)
+    setShowAcceptModal(false)
+    setRiskReason('')
+    if (res.success) {
+      showToast('Risk accepted')
+      onUpdate({ ...issue, status: 'accepted_risk' })
+    }
+  }
+
+  async function handleRevert() {
+    setReverting(true)
+    setError(null)
+    try {
+      // Find the most recent applied fix_history record for this issue
+      const history = await getFixHistory(issue.project_id)
+      const entry = history.find(h => h.quality_issue_id === issue.id && h.status === 'applied')
+      if (!entry) {
+        setError('No revertable fix found for this issue')
+        setReverting(false)
+        return
+      }
+      const res = await revertFix(entry.id)
+      if (!res.success) {
+        setError(res.error ?? 'Revert failed')
+      } else {
+        showToast(`Reverted — ${res.rowsAffected ?? 0} rows restored, issue re-opened`)
+        onUpdate({ ...issue, status: 'open' })
+      }
+    } catch {
+      setError('Revert failed. Please try again.')
+    }
+    setReverting(false)
+  }
+
+  const isFixed = issue.status === 'fixed'
+  const isAccepted = issue.status === 'accepted_risk'
+  const hasOptions = issue.ai_fix_options && issue.ai_fix_options.length > 0
+
+  return (
+    <>
+      {showSQL && <SQLModal sql={showSQL} onClose={() => setShowSQL(null)} />}
+      {confirmApply && (
+        <ConfirmModal
+          title={`Apply fix: ${confirmApply.fix.label}`}
+          message={`This will modify approximately ${confirmApply.fix.estimated_rows_affected} records in the table. This action is logged and can be reverted from Fix History.`}
+          confirmLabel="Apply Fix"
+          loading={applyingIdx === confirmApply.idx}
+          onConfirm={() => handleApplyFix(confirmApply.idx)}
+          onCancel={() => setConfirmApply(null)}
+        />
+      )}
+      {confirmNoSnapshot !== null && (
+        <ConfirmModal
+          title="Fix is not reversible"
+          message="This fix uses complex SQL that cannot be fully snapshotted. If you apply it, you will NOT be able to revert it automatically — you would need to re-upload the original CSV to restore data. Apply without snapshot?"
+          confirmLabel="Apply Without Snapshot"
+          loading={applyingIdx === confirmNoSnapshot}
+          onConfirm={() => {
+            const idx = confirmNoSnapshot
+            setConfirmNoSnapshot(null)
+            handleApplyFix(idx, true)
+          }}
+          onCancel={() => setConfirmNoSnapshot(null)}
+        />
+      )}
+      {showAcceptModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
+          <div className="bg-white rounded-xl shadow-2xl w-full max-w-md p-6">
+            <h3 className="font-semibold text-gray-900 mb-2">Accept Risk</h3>
+            <p className="text-sm text-gray-600 mb-3">Why are you accepting this risk? (optional)</p>
+            <textarea
+              value={riskReason}
+              onChange={e => setRiskReason(e.target.value)}
+              placeholder="e.g., This field is not used in the target system..."
+              className="w-full text-sm border rounded-lg p-2 h-24 resize-none focus:outline-none focus:ring-2 focus:ring-indigo-500"
+            />
+            <div className="flex gap-3 justify-end mt-4">
+              <button onClick={() => setShowAcceptModal(false)} className="px-4 py-2 text-sm border border-gray-300 rounded-lg hover:bg-gray-50">Cancel</button>
+              <button onClick={handleAcceptRisk} className="px-4 py-2 text-sm bg-gray-700 text-white rounded-lg hover:bg-gray-800">Accept Risk</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      <div className={`rounded-xl border bg-white shadow-sm transition-opacity ${isFixed || isAccepted ? 'opacity-70' : ''}`}>
+        {/* Card Header */}
+        <div className="p-4 pb-2">
+          <div className="flex items-start gap-3">
+            <div className="flex-1 min-w-0">
+              <div className="flex flex-wrap items-center gap-2 mb-1">
+                <span className="text-sm font-semibold text-gray-900 truncate">{issue.title}</span>
+                {/* Severity badge */}
+                {issue.severity === 'blocking' ? (
+                  <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-red-100 text-red-800 border border-red-200">
+                    <span>⊘</span> Blocking
+                  </span>
+                ) : (
+                  <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-amber-100 text-amber-800 border border-amber-200">
+                    <span>△</span> Warning
+                  </span>
+                )}
+                {/* Status badge */}
+                {isFixed && (
+                  <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-green-100 text-green-800 border border-green-200">
+                    ✓ Fixed
+                  </span>
+                )}
+                {isAccepted && (
+                  <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-gray-100 text-gray-600 border border-gray-200">
+                    Risk Accepted
+                  </span>
+                )}
+                {/* Detection source */}
+                {issue.detection_source === 'custom_rule' ? (
+                  <span className="px-1.5 py-0.5 rounded text-[10px] bg-indigo-50 text-indigo-700 border border-indigo-200">
+                    ✦ Custom Rule
+                  </span>
+                ) : (
+                  <span className="px-1.5 py-0.5 rounded text-[10px] bg-gray-100 text-gray-500 border border-gray-200">
+                    Auto
+                  </span>
+                )}
+                {/* Source / Target system badge */}
+                {tableRole === 'source' && (
+                  <span className="px-1.5 py-0.5 rounded text-[10px] bg-blue-50 text-blue-700 border border-blue-200">
+                    Source
+                  </span>
+                )}
+                {tableRole === 'target' && (
+                  <span className="px-1.5 py-0.5 rounded text-[10px] bg-purple-50 text-purple-700 border border-purple-200">
+                    Target
+                  </span>
+                )}
+              </div>
+              <p className="text-sm text-gray-700">{issue.description}</p>
+              <p className="text-xs text-gray-400 mt-1">Affected records: {issue.affected_records.toLocaleString()}</p>
+              {issue.downstream_impact && (
+                <p className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded px-2 py-1 mt-2">
+                  <strong>Impact:</strong> {issue.downstream_impact}
+                </p>
+              )}
+            </div>
+
+            {/* Revert button — only on fixed or accepted_risk issues */}
+            {(isFixed || isAccepted) && (
+              <button
+                onClick={handleRevert}
+                disabled={reverting}
+                title="Revert this change"
+                className="shrink-0 mt-0.5 p-1.5 rounded-md text-gray-300 hover:text-gray-600 hover:bg-gray-100 disabled:opacity-40 transition-colors"
+              >
+                {reverting ? (
+                  <span className="block w-4 h-4 border-2 border-gray-300 border-t-gray-500 rounded-full animate-spin" />
+                ) : (
+                  <RotateCcwIcon />
+                )}
+              </button>
+            )}
+          </div>
+        </div>
+
+        {/* AI Fix Section */}
+        {!isFixed && !isAccepted && (
+          <div className="mx-4 mb-4 rounded-lg bg-gradient-to-br from-indigo-50 to-blue-50 border border-indigo-200 p-4">
+            <div className="flex items-center gap-2 mb-3">
+              <span className="text-sm font-semibold text-gray-900">✦ AI-Suggested Fix</span>
+            </div>
+
+            {error && (
+              <p className="text-xs text-red-600 bg-red-50 rounded px-2 py-1 mb-3">{error}</p>
+            )}
+
+            {!hasOptions ? (
+              <button
+                onClick={handleGenerateFix}
+                disabled={generatingFix}
+                className="flex items-center gap-2 px-4 py-2 text-sm border border-indigo-400 text-indigo-700 rounded-lg hover:bg-indigo-100 disabled:opacity-50 transition-colors"
+              >
+                {generatingFix ? (
+                  <><span className="w-3.5 h-3.5 border-2 border-indigo-300 border-t-indigo-600 rounded-full animate-spin" />Generating suggestions…</>
+                ) : (
+                  <>✦ Generate Fix Suggestions</>
+                )}
+              </button>
+            ) : (
+              <div className="space-y-3">
+                {(issue.ai_fix_options ?? []).map((opt, idx) => (
+                  <div key={idx} className="bg-white rounded-lg border border-indigo-100 p-3 space-y-2">
+                    <div className="flex items-start justify-between gap-2">
+                      <div className="flex-1">
+                        <p className="text-sm font-semibold text-gray-900">Option {String.fromCharCode(65 + idx)}: {opt.label}</p>
+                        <p className="text-sm text-gray-700 mt-0.5">{opt.description}</p>
+                      </div>
+                      <span className={`text-xs px-2 py-0.5 rounded-full font-medium shrink-0 ${riskColor(opt.risk_level)}`}>
+                        {opt.risk_level.charAt(0).toUpperCase() + opt.risk_level.slice(1)} Risk
+                      </span>
+                    </div>
+                    <div className="text-xs space-y-1">
+                      <p className="text-gray-500"><span className="font-medium text-gray-700">Tradeoff:</span> {opt.tradeoff}</p>
+                      <p className="text-gray-500"><span className="font-medium text-gray-700">Downstream impact:</span> {opt.downstream_impact}</p>
+                      <p className="text-gray-500"><span className="font-medium text-gray-700">Estimated rows:</span> {opt.estimated_rows_affected?.toLocaleString() ?? 'Unknown'}</p>
+                    </div>
+                    <div className="flex items-center gap-3 pt-1">
+                      <button
+                        onClick={() => setConfirmApply({ idx, fix: opt })}
+                        disabled={applyingIdx !== null}
+                        className="px-3 py-1.5 text-xs bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 disabled:opacity-50 flex items-center gap-1.5"
+                      >
+                        {applyingIdx === idx && <span className="w-3 h-3 border-2 border-white/30 border-t-white rounded-full animate-spin" />}
+                        Apply Fix
+                      </button>
+                      <button
+                        onClick={() => setShowSQL(opt.sql)}
+                        className="text-xs text-indigo-600 hover:text-indigo-800 underline"
+                      >
+                        View SQL
+                      </button>
+                    </div>
+                  </div>
+                ))}
+                <div className="pt-1 border-t border-indigo-100">
+                  <button
+                    onClick={() => setShowAcceptModal(true)}
+                    className="text-sm text-gray-500 hover:text-gray-700 underline"
+                  >
+                    Accept Risk
+                  </button>
+                </div>
+              </div>
+            )}
+
+            {!hasOptions && !generatingFix && (
+              <button
+                onClick={() => setShowAcceptModal(true)}
+                className="mt-2 text-sm text-gray-500 hover:text-gray-700 underline"
+              >
+                Accept Risk
+              </button>
+            )}
+          </div>
+        )}
+
+        {toast && (
+          <div className="mx-4 mb-3 px-3 py-2 bg-green-50 text-green-700 text-sm rounded-lg border border-green-200">
+            {toast}
+          </div>
+        )}
+      </div>
+    </>
+  )
+}
+
+// ── Add Validation Rule Modal ─────────────────────────────────────────────────
+
+function AddRuleModal({
+  projectId,
+  allDatasets,
+  onClose,
+  onAdded,
+}: {
+  projectId: string
+  allDatasets: DatasetStub[]
+  onClose: () => void
+  onAdded: (rule: ValidationRule) => void
+}) {
+  const [mode, setMode] = useState<'nl' | 'manual'>('nl')
+  const [selectedTableId, setSelectedTableId] = useState('')
+  const [selectedFieldId, setSelectedFieldId] = useState('')
+  const [nlPrompt, setNlPrompt] = useState('')
+  const [nlSeverity, setNlSeverity] = useState<'blocking' | 'warning'>('warning')
+  const [reviewSeverity, setReviewSeverity] = useState<'blocking' | 'warning'>('warning')
+  const [manualType, setManualType] = useState('not_null')
+  const [manualName, setManualName] = useState('')
+  const [manualSeverity, setManualSeverity] = useState<'blocking' | 'warning'>('warning')
+  const [manualConfig, setManualConfig] = useState<Record<string, unknown>>({})
+  const [generatedRule, setGeneratedRule] = useState<ValidationRule | null>(null)
+  const [loading, startLoading] = useTransition()
+  const [error, setError] = useState<string | null>(null)
+
+  const allTables = allDatasets.flatMap(d => d.tables)
+  const selectedTable = allTables.find(t => t.id === selectedTableId)
+  const selectedField = selectedTable?.fields.find(f => f.id === selectedFieldId) ?? null
+
+  async function handleGenerateNL() {
+    if (!selectedFieldId || !nlPrompt.trim()) return
+    setError(null)
+    startLoading(async () => {
+      try {
+        const res = await addValidationRuleFromNL(projectId, selectedFieldId, nlPrompt, nlSeverity)
+        if (!res?.success) { setError(res?.error ?? 'Failed to generate rule. Have you run the database migration?'); return }
+        setGeneratedRule(res.rule!)
+        setReviewSeverity(res.rule!.severity)
+      } catch (e) {
+        setError('Failed to generate rule. Please ensure the database migration (006_data_quality.sql) has been run.')
+      }
+    })
+  }
+
+  async function handleSaveManual() {
+    if (!manualName.trim()) { setError('Rule name is required'); return }
+    setError(null)
+    startLoading(async () => {
+      try {
+        const res = await addValidationRule(
+          projectId,
+          selectedFieldId || null,
+          selectedTableId || null,
+          { name: manualName, rule_type: manualType, rule_config: manualConfig, severity: manualSeverity }
+        )
+        if (!res?.success) { setError(res?.error ?? 'Failed to save rule. Have you run the database migration?'); return }
+        onAdded(res.rule!)
+        onClose()
+      } catch (e) {
+        setError('Failed to save rule. Please ensure the database migration (006_data_quality.sql) has been run.')
+      }
+    })
+  }
+
+  function handleAcceptGenerated() {
+    if (!generatedRule) return
+    if (reviewSeverity === generatedRule.severity) {
+      // Severity unchanged — use the already-saved rule as-is
+      onAdded(generatedRule)
+      onClose()
+    } else {
+      // Severity changed on review screen — delete old rule, re-insert with new severity
+      startLoading(async () => {
+        try {
+        await deleteValidationRule(generatedRule.id)
+        const res = await addValidationRule(
+          projectId,
+          generatedRule.field_id,
+          generatedRule.table_id,
+          {
+            name: generatedRule.name,
+            rule_type: generatedRule.rule_type,
+            rule_config: generatedRule.rule_config,
+            severity: reviewSeverity,
+            description: generatedRule.description ?? undefined,
+          }
+        )
+        if (!res?.success) { setError(res?.error ?? 'Failed to save rule'); return }
+        onAdded(res.rule!)
+        onClose()
+        } catch (e) {
+          setError('Failed to save rule. Please try again.')
+        }
+      })
+    }
+  }
+
+  const ruleTypeOptions = [
+    { value: 'not_null', label: 'Not Null' },
+    { value: 'unique', label: 'Unique' },
+    { value: 'min_value', label: 'Min Value' },
+    { value: 'max_value', label: 'Max Value' },
+    { value: 'min_length', label: 'Min Length' },
+    { value: 'max_length', label: 'Max Length' },
+    { value: 'regex', label: 'Regex Pattern' },
+    { value: 'allowed_values', label: 'Allowed Values' },
+    { value: 'range', label: 'Range' },
+    { value: 'date_after', label: 'Date After' },
+    { value: 'date_before', label: 'Date Before' },
+  ]
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
+      <div className="bg-white rounded-xl shadow-2xl w-full max-w-lg max-h-[85vh] overflow-y-auto">
+        <div className="flex items-center justify-between p-5 border-b sticky top-0 bg-white">
+          <h3 className="font-semibold text-gray-900">Add Validation Rule</h3>
+          <button onClick={onClose} className="text-gray-400 hover:text-gray-600 text-xl">×</button>
+        </div>
+        <div className="p-5 space-y-4">
+          {/* Step 1: Select field */}
+          <div>
+            <label className="text-xs font-semibold text-gray-500 uppercase tracking-wide">Step 1: Select Table & Field</label>
+            <div className="mt-1.5 grid grid-cols-2 gap-2">
+              <select
+                value={selectedTableId}
+                onChange={e => { setSelectedTableId(e.target.value); setSelectedFieldId('') }}
+                className="text-sm border rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-indigo-500"
+              >
+                <option value="">Select table…</option>
+                {allDatasets.map(ds => (
+                  <optgroup key={ds.id} label={`${ds.name} (${ds.role})`}>
+                    {ds.tables.map(t => (
+                      <option key={t.id} value={t.id}>{t.name}</option>
+                    ))}
+                  </optgroup>
+                ))}
+              </select>
+              <select
+                value={selectedFieldId}
+                onChange={e => setSelectedFieldId(e.target.value)}
+                disabled={!selectedTableId}
+                className="text-sm border rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-indigo-500 disabled:opacity-50"
+              >
+                <option value="">Select field…</option>
+                {selectedTable?.fields.map(f => (
+                  <option key={f.id} value={f.id}>{f.name} ({f.data_type})</option>
+                ))}
+              </select>
+            </div>
+          </div>
+
+          {/* Step 2: Mode toggle */}
+          <div>
+            <label className="text-xs font-semibold text-gray-500 uppercase tracking-wide">Step 2: Define Rule</label>
+            <div className="mt-1.5 flex rounded-lg border overflow-hidden">
+              <button
+                onClick={() => setMode('nl')}
+                className={`flex-1 text-sm py-2 ${mode === 'nl' ? 'bg-indigo-600 text-white' : 'bg-white text-gray-600 hover:bg-gray-50'}`}
+              >
+                ✦ Natural Language
+              </button>
+              <button
+                onClick={() => setMode('manual')}
+                className={`flex-1 text-sm py-2 ${mode === 'manual' ? 'bg-indigo-600 text-white' : 'bg-white text-gray-600 hover:bg-gray-50'}`}
+              >
+                Manual
+              </button>
+            </div>
+          </div>
+
+          {error && <p className="text-sm text-red-600 bg-red-50 rounded-lg px-3 py-2">{error}</p>}
+
+          {mode === 'nl' ? (
+            generatedRule ? (
+              <div className="space-y-3">
+                <p className="text-xs font-semibold text-gray-500 uppercase">Generated Rule — Review</p>
+                <div className="bg-indigo-50 rounded-lg border border-indigo-200 p-3 space-y-2 text-sm">
+                  <p><strong>Name:</strong> {generatedRule.name}</p>
+                  <p><strong>Type:</strong> {generatedRule.rule_type}</p>
+                  <p><strong>Config:</strong> {JSON.stringify(generatedRule.rule_config)}</p>
+                  {generatedRule.description && <p><strong>Description:</strong> {generatedRule.description}</p>}
+                  {/* Editable severity on review screen */}
+                  <div className="flex items-center gap-2 pt-1">
+                    <strong>Severity:</strong>
+                    <button
+                      onClick={() => setReviewSeverity('warning')}
+                      className={`text-xs px-2.5 py-1 rounded-full border transition-colors ${reviewSeverity === 'warning' ? 'bg-amber-100 text-amber-800 border-amber-300' : 'text-gray-500 border-gray-200 hover:bg-gray-50'}`}
+                    >
+                      Warning
+                    </button>
+                    <button
+                      onClick={() => setReviewSeverity('blocking')}
+                      className={`text-xs px-2.5 py-1 rounded-full border transition-colors ${reviewSeverity === 'blocking' ? 'bg-red-100 text-red-800 border-red-300' : 'text-gray-500 border-gray-200 hover:bg-gray-50'}`}
+                    >
+                      Blocking
+                    </button>
+                  </div>
+                </div>
+                <div className="flex gap-2">
+                  <button
+                    onClick={handleAcceptGenerated}
+                    disabled={loading}
+                    className="flex-1 px-4 py-2 text-sm bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 disabled:opacity-50 flex items-center justify-center gap-2"
+                  >
+                    {loading ? <><span className="w-3.5 h-3.5 border-2 border-white/30 border-t-white rounded-full animate-spin" />Saving…</> : 'Save Rule'}
+                  </button>
+                  <button onClick={() => setGeneratedRule(null)} disabled={loading} className="px-4 py-2 text-sm border rounded-lg hover:bg-gray-50 disabled:opacity-50">
+                    Edit
+                  </button>
+                </div>
+              </div>
+            ) : (
+              <div className="space-y-3">
+                {/* Severity toggle for NL mode */}
+                <div className="flex items-center gap-2">
+                  <span className="text-sm text-gray-600">Severity:</span>
+                  <button
+                    onClick={() => setNlSeverity('warning')}
+                    className={`text-sm px-3 py-1 rounded-full border transition-colors ${nlSeverity === 'warning' ? 'bg-amber-100 text-amber-800 border-amber-300' : 'text-gray-500 border-gray-200 hover:bg-gray-50'}`}
+                  >
+                    Warning
+                  </button>
+                  <button
+                    onClick={() => setNlSeverity('blocking')}
+                    className={`text-sm px-3 py-1 rounded-full border transition-colors ${nlSeverity === 'blocking' ? 'bg-red-100 text-red-800 border-red-300' : 'text-gray-500 border-gray-200 hover:bg-gray-50'}`}
+                  >
+                    Blocking
+                  </button>
+                </div>
+                <textarea
+                  value={nlPrompt}
+                  onChange={e => setNlPrompt(e.target.value)}
+                  placeholder="e.g., Revenue should never be negative"
+                  className="w-full text-sm border rounded-lg p-3 h-24 resize-none focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                />
+                <button
+                  onClick={handleGenerateNL}
+                  disabled={loading || !selectedFieldId || !nlPrompt.trim()}
+                  className="w-full px-4 py-2 text-sm bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 disabled:opacity-50 flex items-center justify-center gap-2"
+                >
+                  {loading ? <><span className="w-3.5 h-3.5 border-2 border-white/30 border-t-white rounded-full animate-spin" />Generating…</> : '✦ Generate Rule'}
+                </button>
+              </div>
+            )
+          ) : (
+            <div className="space-y-3">
+              <input
+                value={manualName}
+                onChange={e => setManualName(e.target.value)}
+                placeholder="Rule name"
+                className="w-full text-sm border rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-indigo-500"
+              />
+              <select
+                value={manualType}
+                onChange={e => { setManualType(e.target.value); setManualConfig({}) }}
+                className="w-full text-sm border rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-indigo-500"
+              >
+                {ruleTypeOptions.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
+              </select>
+
+              {/* Dynamic config based on type */}
+              {manualType === 'min_value' && (
+                <input type="number" placeholder="Minimum value" onChange={e => setManualConfig({ min: Number(e.target.value) })}
+                  className="w-full text-sm border rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-indigo-500" />
+              )}
+              {manualType === 'max_value' && (
+                <input type="number" placeholder="Maximum value" onChange={e => setManualConfig({ max: Number(e.target.value) })}
+                  className="w-full text-sm border rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-indigo-500" />
+              )}
+              {manualType === 'max_length' && (
+                <input type="number" placeholder="Maximum length" onChange={e => setManualConfig({ max_length: Number(e.target.value) })}
+                  className="w-full text-sm border rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-indigo-500" />
+              )}
+              {manualType === 'min_length' && (
+                <input type="number" placeholder="Minimum length" onChange={e => setManualConfig({ min_length: Number(e.target.value) })}
+                  className="w-full text-sm border rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-indigo-500" />
+              )}
+              {manualType === 'regex' && (
+                <input placeholder="Regex pattern (e.g. ^[A-Z]{2}\\d{4}$)" onChange={e => setManualConfig({ pattern: e.target.value })}
+                  className="w-full text-sm border rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-indigo-500" />
+              )}
+              {manualType === 'allowed_values' && (
+                <input placeholder="Comma-separated values (e.g. Active, Inactive)" onChange={e => setManualConfig({ values: e.target.value.split(',').map(v => v.trim()) })}
+                  className="w-full text-sm border rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-indigo-500" />
+              )}
+              {manualType === 'range' && (
+                <div className="grid grid-cols-2 gap-2">
+                  <input type="number" placeholder="Min" onChange={e => setManualConfig(c => ({ ...c, min: Number(e.target.value) }))}
+                    className="text-sm border rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-indigo-500" />
+                  <input type="number" placeholder="Max" onChange={e => setManualConfig(c => ({ ...c, max: Number(e.target.value) }))}
+                    className="text-sm border rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-indigo-500" />
+                </div>
+              )}
+              {(manualType === 'date_after' || manualType === 'date_before') && (
+                <input type="date" onChange={e => setManualConfig({ date: e.target.value })}
+                  className="w-full text-sm border rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-indigo-500" />
+              )}
+
+              <div className="flex gap-3">
+                <label className="text-sm text-gray-600">Severity:</label>
+                <button onClick={() => setManualSeverity('warning')}
+                  className={`text-sm px-3 py-1 rounded-full border ${manualSeverity === 'warning' ? 'bg-amber-100 text-amber-800 border-amber-300' : 'text-gray-500 hover:bg-gray-50'}`}>
+                  Warning
+                </button>
+                <button onClick={() => setManualSeverity('blocking')}
+                  className={`text-sm px-3 py-1 rounded-full border ${manualSeverity === 'blocking' ? 'bg-red-100 text-red-800 border-red-300' : 'text-gray-500 hover:bg-gray-50'}`}>
+                  Blocking
+                </button>
+              </div>
+
+              <button
+                onClick={handleSaveManual}
+                disabled={loading}
+                className="w-full px-4 py-2 text-sm bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 disabled:opacity-50 flex items-center justify-center gap-2"
+              >
+                {loading ? <><span className="w-3.5 h-3.5 border-2 border-white/30 border-t-white rounded-full animate-spin" />Saving…</> : 'Save Rule'}
+              </button>
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  )
+}
+
+// ── Fix History Panel ─────────────────────────────────────────────────────────
+
+function FixHistoryPanel({
+  projectId,
+  onClose,
+}: {
+  projectId: string
+  onClose: () => void
+}) {
+  const [history, setHistory] = useState<FixHistory[]>([])
+  const [loading, setLoading] = useState(true)
+  const [revertingId, setRevertingId] = useState<string | null>(null)
+  const [showSQL, setShowSQL] = useState<string | null>(null)
+
+  useEffect(() => {
+    getFixHistory(projectId).then(h => { setHistory(h); setLoading(false) })
+  }, [projectId])
+
+  const [revertError, setRevertError] = useState<string | null>(null)
+
+  async function handleRevert(id: string) {
+    setRevertingId(id)
+    setRevertError(null)
+    const res = await revertFix(id)
+    setRevertingId(null)
+    if (res.success) {
+      setHistory(h => h.map(e => e.id === id ? { ...e, status: 'reverted' } : e))
+    } else {
+      setRevertError(res.error ?? 'Revert failed')
+    }
+  }
+
+  return (
+    <>
+      {showSQL && <SQLModal sql={showSQL} onClose={() => setShowSQL(null)} />}
+      <div className="fixed inset-0 z-40 flex items-center justify-end bg-black/30 p-4">
+        <div className="bg-white rounded-xl shadow-2xl w-full max-w-lg h-full max-h-[90vh] flex flex-col">
+          <div className="flex items-center justify-between p-4 border-b">
+            <h3 className="font-semibold text-gray-900">Fix History</h3>
+            <button onClick={onClose} className="text-gray-400 hover:text-gray-600 text-xl">×</button>
+          </div>
+          <div className="flex-1 overflow-y-auto p-4 space-y-3">
+            {revertError && (
+              <div className="bg-red-50 border border-red-200 rounded-lg px-3 py-2 text-xs text-red-700">
+                {revertError}
+              </div>
+            )}
+            {loading ? (
+              <p className="text-sm text-gray-400 text-center py-8">Loading…</p>
+            ) : history.length === 0 ? (
+              <p className="text-sm text-gray-400 text-center py-8">No fixes applied yet.</p>
+            ) : history.map(entry => (
+              <div key={entry.id} className="border rounded-lg p-3 space-y-1 text-sm">
+                <div className="flex items-start justify-between gap-2">
+                  <p className="font-medium text-gray-900">{entry.fix_description}</p>
+                  <div className="flex flex-col items-end gap-1 shrink-0">
+                    <span className={`text-xs px-2 py-0.5 rounded-full ${entry.status === 'applied' ? 'bg-green-100 text-green-700' : 'bg-gray-100 text-gray-500'}`}>
+                      {entry.status === 'applied' ? 'Applied' : 'Reverted'}
+                    </span>
+                    {entry.fix_option_chosen === 'Manual fix' && (
+                      <span className="text-[10px] px-1.5 py-0.5 rounded bg-violet-100 text-violet-700 border border-violet-200">
+                        Manual
+                      </span>
+                    )}
+                  </div>
+                </div>
+                <p className="text-gray-500 text-xs">{entry.affected_row_count.toLocaleString()} rows affected · {new Date(entry.applied_at).toLocaleString()}</p>
+                <div className="flex gap-3 pt-1 items-center">
+                  <button onClick={() => setShowSQL(entry.fix_sql)} className="text-xs text-indigo-600 underline hover:text-indigo-800">View SQL</button>
+                  {entry.status === 'applied' && (
+                    entry.snapshot_failed ? (
+                      <span
+                        title="Cannot revert — no snapshot was taken for this fix. Re-upload the original CSV to restore data."
+                        className="text-xs text-gray-300 cursor-not-allowed select-none"
+                      >
+                        Revert
+                      </span>
+                    ) : (
+                      <button
+                        onClick={() => handleRevert(entry.id)}
+                        disabled={revertingId === entry.id}
+                        className="text-xs text-red-600 underline hover:text-red-800 disabled:opacity-50"
+                      >
+                        {revertingId === entry.id ? 'Reverting…' : 'Revert'}
+                      </button>
+                    )
+                  )}
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      </div>
+    </>
+  )
+}
+
+// ── Create Manual Fix Modal ───────────────────────────────────────────────────
+
+function CreateManualFixModal({
+  projectId,
+  allDatasets,
+  onClose,
+  onApplied,
+}: {
+  projectId: string
+  allDatasets: DatasetStub[]
+  onClose: () => void
+  onApplied: () => void
+}) {
+  const [mode, setMode] = useState<'nl' | 'sql'>('nl')
+  const [tableId, setTableId] = useState('')
+  const [fieldId, setFieldId] = useState('')
+  const [nlDescription, setNlDescription] = useState('')
+  const [sqlText, setSqlText] = useState('')
+  const [generatedSql, setGeneratedSql] = useState('')
+  const [estimatedRows, setEstimatedRows] = useState<number | null>(null)
+  const [validationError, setValidationError] = useState<string | null>(null)
+  const [sqlValidated, setSqlValidated] = useState(false)
+  const [generating, startGenerate] = useTransition()
+  const [validating, startValidate] = useTransition()
+  const [applying, startApply] = useTransition()
+  const [error, setError] = useState<string | null>(null)
+  const [toast, setToast] = useState<string | null>(null)
+  const [confirmNoSnapshot, setConfirmNoSnapshot] = useState<{ sql: string; desc: string } | null>(null)
+
+  const allTables = allDatasets.flatMap(d => d.tables)
+  const selectedTable = allTables.find(t => t.id === tableId)
+
+  // Auto-populate table_id placeholder into SQL editor when table changes
+  useEffect(() => {
+    if (mode === 'sql' && tableId && !sqlText) {
+      setSqlText(`UPDATE data_rows\nSET row_data = jsonb_set(row_data, '{FieldName}', '"new_value"')\nWHERE table_id = '${tableId}'`)
+    }
+  }, [tableId, mode, sqlText])
+
+  function handleModeSwitch(newMode: 'nl' | 'sql') {
+    setMode(newMode)
+    // Pre-fill SQL editor with generated SQL when switching from NL
+    if (newMode === 'sql' && generatedSql) {
+      setSqlText(generatedSql)
+    }
+    setValidationError(null)
+    setSqlValidated(false)
+    setEstimatedRows(null)
+  }
+
+  function handleGenerateFix() {
+    if (!tableId || !nlDescription.trim()) return
+    setError(null)
+    startGenerate(async () => {
+      try {
+        const res = await generateManualFix(projectId, tableId, fieldId || null, nlDescription)
+        if (res.error) { setError(res.error); return }
+        setGeneratedSql(res.sql)
+        setEstimatedRows(res.estimatedRows)
+      } catch {
+        setError('Failed to generate fix. Please try again.')
+      }
+    })
+  }
+
+  function handleValidate() {
+    if (!sqlText.trim() || !tableId) return
+    setValidationError(null)
+    setSqlValidated(false)
+    setEstimatedRows(null)
+    startValidate(async () => {
+      try {
+        const res = await previewManualFix(projectId, tableId, sqlText)
+        if (!res.valid) {
+          setValidationError(res.error ?? 'Invalid SQL')
+        } else {
+          setSqlValidated(true)
+          setEstimatedRows(res.estimatedRows)
+        }
+      } catch {
+        setValidationError('Validation failed. Please try again.')
+      }
+    })
+  }
+
+  function handleApplyNL(skipSnapshot = false) {
+    if (!generatedSql || !tableId) return
+    setError(null)
+    startApply(async () => {
+      try {
+        const res = await applyManualFix(projectId, tableId, generatedSql, nlDescription, skipSnapshot)
+        if (res.requiresSnapshotConfirmation) {
+          setConfirmNoSnapshot({ sql: generatedSql, desc: nlDescription })
+          return
+        }
+        if (!res.success) { setError(res.error ?? 'Failed to apply fix'); return }
+        setToast(`✓ Fix applied to ${res.rowsAffected} rows`)
+        setTimeout(() => { onApplied(); onClose() }, 1500)
+      } catch {
+        setError('Failed to apply fix. Please try again.')
+      }
+    })
+  }
+
+  function handleApplySQL(skipSnapshot = false) {
+    if (!sqlText.trim() || !tableId || !sqlValidated) return
+    setError(null)
+    startApply(async () => {
+      try {
+        const desc = nlDescription.trim() || `Manual SQL fix on ${selectedTable?.name ?? 'table'}`
+        const res = await applyManualFix(projectId, tableId, sqlText, desc, skipSnapshot)
+        if (res.requiresSnapshotConfirmation) {
+          setConfirmNoSnapshot({ sql: sqlText, desc })
+          return
+        }
+        if (!res.success) { setError(res.error ?? 'Failed to apply fix'); return }
+        setToast(`✓ Fix applied to ${res.rowsAffected} rows`)
+        setTimeout(() => { onApplied(); onClose() }, 1500)
+      } catch {
+        setError('Failed to apply fix. Please try again.')
+      }
+    })
+  }
+
+  const isApplying = applying
+
+  return (
+    <>
+    {confirmNoSnapshot && (
+      <ConfirmModal
+        title="Fix is not reversible"
+        message="This fix uses complex SQL that cannot be fully snapshotted. If you apply it, you will NOT be able to revert it automatically — you would need to re-upload the original CSV to restore data. Apply without snapshot?"
+        confirmLabel="Apply Without Snapshot"
+        loading={applying}
+        onConfirm={() => {
+          const { sql, desc } = confirmNoSnapshot
+          setConfirmNoSnapshot(null)
+          setError(null)
+          startApply(async () => {
+            try {
+              const res = await applyManualFix(projectId, tableId, sql, desc, true)
+              if (!res.success) { setError(res.error ?? 'Failed to apply fix'); return }
+              setToast(`✓ Fix applied to ${res.rowsAffected} rows`)
+              setTimeout(() => { onApplied(); onClose() }, 1500)
+            } catch {
+              setError('Failed to apply fix. Please try again.')
+            }
+          })
+        }}
+        onCancel={() => setConfirmNoSnapshot(null)}
+      />
+    )}
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
+      <div className="bg-white rounded-xl shadow-2xl w-full max-w-xl max-h-[90vh] flex flex-col">
+        {/* Header */}
+        <div className="flex items-center justify-between p-4 border-b shrink-0">
+          <h3 className="font-semibold text-gray-900">Create Manual Fix</h3>
+          <button onClick={onClose} className="text-gray-400 hover:text-gray-600 text-xl">×</button>
+        </div>
+
+        <div className="flex-1 overflow-y-auto p-4 space-y-4">
+          {toast && (
+            <div className="bg-green-50 border border-green-200 rounded-lg px-3 py-2 text-sm text-green-700">{toast}</div>
+          )}
+          {error && (
+            <div className="bg-red-50 border border-red-200 rounded-lg px-3 py-2 text-sm text-red-700">{error}</div>
+          )}
+
+          {/* Step 1: Select scope */}
+          <div className="space-y-2">
+            <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide">Step 1 — Select scope</p>
+            <select
+              value={tableId}
+              onChange={e => { setTableId(e.target.value); setFieldId(''); setGeneratedSql(''); setSqlText(''); setSqlValidated(false) }}
+              className="w-full text-sm border rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-indigo-500"
+            >
+              <option value="">Select table…</option>
+              {allDatasets.map(ds => (
+                <optgroup key={ds.id} label={`${ds.name} (${ds.role})`}>
+                  {ds.tables.map(t => (
+                    <option key={t.id} value={t.id}>{t.name}</option>
+                  ))}
+                </optgroup>
+              ))}
+            </select>
+            {selectedTable && (
+              <select
+                value={fieldId}
+                onChange={e => setFieldId(e.target.value)}
+                className="w-full text-sm border rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-indigo-500"
+              >
+                <option value="">Entire table (all fields)</option>
+                {selectedTable.fields.map(f => (
+                  <option key={f.id} value={f.id}>{f.name} ({f.inferred_type ?? f.data_type})</option>
+                ))}
+              </select>
+            )}
+          </div>
+
+          {/* Step 2: Define fix */}
+          {tableId && (
+            <div className="space-y-3">
+              <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide">Step 2 — Define fix</p>
+
+              {/* Mode toggle */}
+              <div className="flex rounded-lg border border-gray-200 overflow-hidden text-sm">
+                <button
+                  onClick={() => handleModeSwitch('nl')}
+                  className={`flex-1 py-2 flex items-center justify-center gap-1.5 transition-colors ${mode === 'nl' ? 'bg-indigo-600 text-white' : 'text-gray-600 hover:bg-gray-50'}`}
+                >
+                  <span>✦</span> Natural Language
+                </button>
+                <button
+                  onClick={() => handleModeSwitch('sql')}
+                  className={`flex-1 py-2 flex items-center justify-center gap-1.5 transition-colors ${mode === 'sql' ? 'bg-indigo-600 text-white' : 'text-gray-600 hover:bg-gray-50'}`}
+                >
+                  <span className="font-mono">{`</>`}</span> SQL Editor
+                </button>
+              </div>
+
+              {mode === 'nl' ? (
+                <div className="space-y-3">
+                  <textarea
+                    value={nlDescription}
+                    onChange={e => { setNlDescription(e.target.value); setGeneratedSql('') }}
+                    placeholder={"e.g., Set all null Industry values to 'UNKNOWN'\ne.g., Delete all rows where Status is 'Archived'\ne.g., Convert all phone numbers to E.164 format"}
+                    className="w-full text-sm border rounded-lg p-3 h-24 resize-none focus:outline-none focus:ring-2 focus:ring-indigo-500 font-normal"
+                  />
+                  <button
+                    onClick={handleGenerateFix}
+                    disabled={generating || !nlDescription.trim()}
+                    className="w-full px-4 py-2 text-sm bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 disabled:opacity-50 flex items-center justify-center gap-2"
+                  >
+                    {generating ? (
+                      <><span className="w-3.5 h-3.5 border-2 border-white/30 border-t-white rounded-full animate-spin" />Generating fix…</>
+                    ) : '✦ Generate Fix'}
+                  </button>
+
+                  {/* Generated SQL review panel */}
+                  {generatedSql && (
+                    <div className="space-y-3 border border-indigo-200 rounded-lg p-3 bg-indigo-50">
+                      <p className="text-xs font-semibold text-indigo-700">Generated SQL — Review before applying</p>
+                      <pre className="bg-gray-950 text-green-300 rounded-lg p-3 text-xs overflow-x-auto whitespace-pre-wrap font-mono">
+                        {generatedSql}
+                      </pre>
+                      {estimatedRows !== null && (
+                        <p className="text-xs text-indigo-700">
+                          Estimated rows affected: <strong>{estimatedRows.toLocaleString()}</strong>
+                        </p>
+                      )}
+                      <div className="flex gap-2">
+                        <button
+                          onClick={handleApplyNL}
+                          disabled={isApplying}
+                          className="flex-1 px-3 py-1.5 text-sm bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 disabled:opacity-50 flex items-center justify-center gap-2"
+                        >
+                          {isApplying ? (
+                            <><span className="w-3.5 h-3.5 border-2 border-white/30 border-t-white rounded-full animate-spin" />Applying…</>
+                          ) : 'Apply Fix'}
+                        </button>
+                        <button
+                          onClick={() => handleModeSwitch('sql')}
+                          className="px-3 py-1.5 text-sm border border-indigo-300 text-indigo-700 rounded-lg hover:bg-indigo-100"
+                        >
+                          Edit SQL
+                        </button>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              ) : (
+                <div className="space-y-3">
+                  <textarea
+                    value={sqlText}
+                    onChange={e => { setSqlText(e.target.value); setSqlValidated(false); setValidationError(null) }}
+                    placeholder={`UPDATE data_rows\nSET row_data = jsonb_set(row_data, '{Industry}', '"UNKNOWN"')\nWHERE table_id = '${tableId}'\n  AND (row_data->>'Industry' IS NULL)`}
+                    className="w-full text-sm border rounded-lg p-3 h-36 resize-none focus:outline-none focus:ring-2 focus:ring-indigo-500 font-mono"
+                  />
+                  {validationError && (
+                    <p className="text-xs text-red-600 bg-red-50 border border-red-200 rounded px-2 py-1">{validationError}</p>
+                  )}
+                  {sqlValidated && estimatedRows !== null && (
+                    <p className="text-xs text-green-700 bg-green-50 border border-green-200 rounded px-2 py-1">
+                      ✓ SQL valid — estimated rows affected: <strong>{estimatedRows.toLocaleString()}</strong>
+                    </p>
+                  )}
+                  <div className="flex gap-2">
+                    <button
+                      onClick={handleValidate}
+                      disabled={validating || !sqlText.trim()}
+                      className="px-3 py-1.5 text-sm border border-gray-300 text-gray-700 rounded-lg hover:bg-gray-50 disabled:opacity-50 flex items-center gap-2"
+                    >
+                      {validating ? (
+                        <><span className="w-3 h-3 border-2 border-gray-300 border-t-gray-600 rounded-full animate-spin" />Validating…</>
+                      ) : 'Validate & Preview'}
+                    </button>
+                    <button
+                      onClick={handleApplySQL}
+                      disabled={!sqlValidated || isApplying}
+                      className="flex-1 px-3 py-1.5 text-sm bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 disabled:opacity-50 flex items-center justify-center gap-2"
+                    >
+                      {isApplying ? (
+                        <><span className="w-3.5 h-3.5 border-2 border-white/30 border-t-white rounded-full animate-spin" />Applying…</>
+                      ) : 'Apply Fix'}
+                    </button>
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+
+        {/* Footer */}
+        <div className="p-4 border-t shrink-0 flex justify-end">
+          <button onClick={onClose} className="px-4 py-2 text-sm border border-gray-300 rounded-lg hover:bg-gray-50">
+            Cancel
+          </button>
+        </div>
+      </div>
+    </div>
+    </>
+  )
+}
+
+// ── Main Component ────────────────────────────────────────────────────────────
+
+export default function DataQualityContent({
+  projectId,
+  initialIssues,
+  initialReadiness,
+  initialRules,
+  hasMappings,
+  allDatasets,
+}: Props) {
+  const router = useRouter()
+  const [issues, setIssues] = useState<QualityIssue[]>(initialIssues)
+  const [readiness, setReadiness] = useState<ReadinessScore>(initialReadiness)
+  const [rules, setRules] = useState<ValidationRule[]>(initialRules)
+  const [activeTab, setActiveTab] = useState<'source' | 'in_flight' | 'target'>(
+    hasMappings ? 'in_flight' : 'source'
+  )
+  const [scanning, startScan] = useTransition()
+  const [showAddRule, setShowAddRule] = useState(false)
+  const [showHistory, setShowHistory] = useState(false)
+  const [showCreateFix, setShowCreateFix] = useState(false)
+  const [scanError, setScanError] = useState<string | null>(null)
+  const [scanToast, setScanToast] = useState<string | null>(null)
+  const issueRefs = useRef<Record<string, HTMLDivElement>>({})
+
+  const sourceIssues = issues.filter(i => i.stage === 'source')
+  const inFlightIssues = issues.filter(i => i.stage === 'in_flight')
+  const activeIssues = activeTab === 'source' ? sourceIssues : activeTab === 'in_flight' ? inFlightIssues : []
+
+  // Build a map from table_id → 'source' | 'target' for the badge on each issue card
+  const tableRoleMap = new Map<string, 'source' | 'target'>(
+    allDatasets.flatMap(ds =>
+      ds.tables.map(t => [t.id, ds.role as 'source' | 'target'])
+    )
+  )
+
+  const openActive = activeIssues.filter(i => i.status === 'open')
+  const blockingCount = openActive.filter(i => i.severity === 'blocking').length
+  const warningCount = openActive.filter(i => i.severity === 'warning').length
+
+  // Fields with zero open issues = "ready" (rough count)
+  const fieldsWithOpenIssues = new Set(openActive.filter(i => i.field_id).map(i => i.field_id))
+  const readyCount = Math.max(0, readiness.total_fields_checked - fieldsWithOpenIssues.size)
+
+  function showToast(msg: string) {
+    setScanToast(msg)
+    setTimeout(() => setScanToast(null), 3500)
+  }
+
+  async function handleIssueUpdate(updated: QualityIssue) {
+    setIssues(prev => prev.map(i => i.id === updated.id ? updated : i))
+    // Refresh readiness score
+    const newScore = await computeReadinessScore(projectId)
+    setReadiness(newScore)
+  }
+
+  function handleRunFullScan() {
+    setScanError(null)
+    startScan(async () => {
+      const res = await runFullScan(projectId)
+      if (!res.success) {
+        setScanError(res.error ?? 'Scan failed')
+        return
+      }
+      // Refresh issues + readiness
+      const [freshIssues, freshScore] = await Promise.all([
+        getQualityIssues(projectId),
+        computeReadinessScore(projectId),
+      ])
+      setIssues(freshIssues.issues)
+      setReadiness(freshScore)
+      showToast(`Scan complete — ${res.issueCount} open issues found`)
+    })
+  }
+
+  function scrollToIssue(issueId: string, stage: 'source' | 'in_flight') {
+    setActiveTab(stage)
+    setTimeout(() => {
+      issueRefs.current[issueId]?.scrollIntoView({ behavior: 'smooth', block: 'center' })
+    }, 100)
+  }
+
+  const tabLabels = {
+    source: `Source Data${sourceIssues.filter(i => i.status === 'open').length > 0 ? ` (${sourceIssues.filter(i => i.status === 'open').length})` : ''}`,
+    in_flight: `In-flight Data${inFlightIssues.filter(i => i.status === 'open').length > 0 ? ` (${inFlightIssues.filter(i => i.status === 'open').length})` : ''}`,
+    target: 'Target Data',
+  }
+
+  return (
+    <div className="flex-1 bg-gray-50 flex flex-col min-h-0">
+      {showAddRule && (
+        <AddRuleModal
+          projectId={projectId}
+          allDatasets={allDatasets}
+          onClose={() => setShowAddRule(false)}
+          onAdded={r => { setRules(prev => [r, ...prev]); setShowAddRule(false) }}
+        />
+      )}
+      {showHistory && <FixHistoryPanel projectId={projectId} onClose={() => setShowHistory(false)} />}
+      {showCreateFix && (
+        <CreateManualFixModal
+          projectId={projectId}
+          allDatasets={allDatasets}
+          onClose={() => setShowCreateFix(false)}
+          onApplied={async () => {
+            // Refresh fix history is handled by reopening the panel
+            showToast('Manual fix applied — view it in Fix History')
+          }}
+        />
+      )}
+
+      {/* Page Header */}
+      <div className="border-b border-gray-200 bg-white px-6 py-4">
+        <div className="flex items-start justify-between">
+          <div>
+            <h1 className="text-2xl font-semibold text-gray-900">Data Quality</h1>
+            <p className="text-sm text-gray-500 mt-0.5">Continuous data quality monitoring and validation</p>
+          </div>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={() => setShowHistory(true)}
+              className="px-3 py-1.5 text-sm border border-gray-300 rounded-lg text-gray-600 hover:bg-gray-50"
+            >
+              Fix History
+            </button>
+            <button
+              onClick={() => setShowAddRule(true)}
+              className="px-3 py-1.5 text-sm border border-indigo-300 rounded-lg text-indigo-700 hover:bg-indigo-50"
+            >
+              + Add Rule
+            </button>
+            <button
+              onClick={() => setShowCreateFix(true)}
+              className="px-3 py-1.5 text-sm border border-violet-300 rounded-lg text-violet-700 hover:bg-violet-50"
+            >
+              + Create Fix
+            </button>
+            <button
+              onClick={handleRunFullScan}
+              disabled={scanning}
+              className="px-4 py-1.5 text-sm bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 disabled:opacity-50 flex items-center gap-2"
+            >
+              {scanning ? <><span className="w-3.5 h-3.5 border-2 border-white/30 border-t-white rounded-full animate-spin" />Scanning…</> : '⟳ Run Full Scan'}
+            </button>
+          </div>
+        </div>
+      </div>
+
+      <div className="flex-1 overflow-auto">
+        <div className="p-6 space-y-6 max-w-5xl mx-auto">
+
+          {/* Notifications */}
+          {scanError && (
+            <div className="bg-red-50 border border-red-200 rounded-lg px-4 py-3 text-sm text-red-700">{scanError}</div>
+          )}
+          {scanToast && (
+            <div className="bg-green-50 border border-green-200 rounded-lg px-4 py-3 text-sm text-green-700">{scanToast}</div>
+          )}
+
+          {/* ── Migration Readiness Dashboard ── */}
+          <div className="bg-white rounded-xl border border-gray-200 shadow-sm p-5">
+            <div className="flex flex-col md:flex-row gap-6">
+              {/* Left: Gauge */}
+              <div className="flex flex-col items-center justify-center min-w-[160px]">
+                <ReadinessGauge score={readiness.score} status={readiness.status} />
+              </div>
+
+              {/* Center: Stat cards */}
+              <div className="flex-1 grid grid-cols-3 gap-3">
+                <div className="rounded-lg border border-red-100 bg-red-50 p-3 text-center">
+                  <p className="text-xs text-gray-500 mb-1">Blocking Issues</p>
+                  <p className="text-3xl font-bold text-red-600">{readiness.blocking_count}</p>
+                  <p className="text-xs text-gray-400 mt-1">Must fix before migration</p>
+                </div>
+                <div className="rounded-lg border border-amber-100 bg-amber-50 p-3 text-center">
+                  <p className="text-xs text-gray-500 mb-1">Warnings</p>
+                  <p className="text-3xl font-bold text-amber-600">{readiness.warning_count}</p>
+                  <p className="text-xs text-gray-400 mt-1">Review recommended</p>
+                </div>
+                <div className="rounded-lg border border-green-100 bg-green-50 p-3 text-center">
+                  <p className="text-xs text-gray-500 mb-1">Ready</p>
+                  <p className="text-3xl font-bold text-green-600">{readiness.ready_field_count}</p>
+                  <p className="text-xs text-gray-400 mt-1">No issues detected</p>
+                </div>
+              </div>
+
+              {/* Right: Top issues */}
+              {readiness.top_issues.length > 0 && (
+                <div className="min-w-[220px] max-w-[280px]">
+                  <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-2">Top Issues</p>
+                  <div className="space-y-1.5">
+                    {readiness.top_issues.slice(0, 4).map(issue => (
+                      <button
+                        key={issue.id}
+                        onClick={() => scrollToIssue(issue.id, issue.stage === 'source' ? 'source' : 'in_flight')}
+                        className="w-full text-left flex items-start gap-2 text-xs p-2 rounded-lg hover:bg-gray-50 border border-gray-100 transition-colors"
+                      >
+                        <span className={issue.severity === 'blocking' ? 'text-red-500 shrink-0 mt-0.5' : 'text-amber-500 shrink-0 mt-0.5'}>
+                          {issue.severity === 'blocking' ? '⊘' : '△'}
+                        </span>
+                        <div className="min-w-0">
+                          <p className="font-medium text-gray-900 truncate">{issue.title}</p>
+                          <p className="text-gray-400 truncate">{issue.affected_records.toLocaleString()} records</p>
+                        </div>
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </div>
+          </div>
+
+          {/* ── Active Validation Rules ── */}
+          {rules.length > 0 && (
+            <details className="bg-white rounded-xl border border-gray-200 shadow-sm">
+              <summary className="cursor-pointer px-5 py-3 flex items-center justify-between text-sm font-medium text-gray-700 hover:bg-gray-50 rounded-xl">
+                <span>Active Validation Rules ({rules.length})</span>
+                <span className="text-gray-400 text-xs">Click to expand</span>
+              </summary>
+              <div className="px-5 pb-4 space-y-2 border-t pt-3">
+                {rules.map(rule => (
+                  <div key={rule.id} className="flex items-center justify-between text-sm py-1.5 border-b border-gray-100 last:border-0">
+                    <div className="flex items-center gap-2 min-w-0">
+                      <span className={`shrink-0 text-xs px-2 py-0.5 rounded-full ${rule.severity === 'blocking' ? 'bg-red-100 text-red-700' : 'bg-amber-100 text-amber-700'}`}>
+                        {rule.severity}
+                      </span>
+                      <span className="font-medium text-gray-900 truncate">{rule.name}</span>
+                      <span className="text-gray-400 text-xs truncate">{rule.rule_type}</span>
+                      {rule.is_ai_generated && (
+                        <span title={rule.ai_original_prompt ?? ''} className="text-xs px-1.5 py-0.5 rounded bg-indigo-50 text-indigo-700 border border-indigo-100">✦ AI</span>
+                      )}
+                    </div>
+                    <div className="flex items-center gap-2 shrink-0">
+                      <button
+                        onClick={async () => {
+                          if (!rule.table_id) return
+                          await executeCustomRules(projectId, rule.table_id)
+                          const [freshIssues, freshScore] = await Promise.all([
+                            getQualityIssues(projectId),
+                            computeReadinessScore(projectId),
+                          ])
+                          setIssues(freshIssues.issues)
+                          setReadiness(freshScore)
+                        }}
+                        className="text-xs text-indigo-600 hover:text-indigo-800 underline"
+                      >
+                        Run
+                      </button>
+                      <button
+                        onClick={async () => {
+                          await deleteValidationRule(rule.id)
+                          setRules(prev => prev.filter(r => r.id !== rule.id))
+                        }}
+                        className="text-xs text-red-400 hover:text-red-600"
+                      >
+                        Delete
+                      </button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </details>
+          )}
+
+          {/* ── Tabs ── */}
+          <div className="bg-white rounded-xl border border-gray-200 shadow-sm">
+            {/* Tab nav */}
+            <div className="border-b border-gray-200 px-4 flex">
+              {(['source', 'in_flight', 'target'] as const).map(tab => (
+                <button
+                  key={tab}
+                  onClick={() => setActiveTab(tab)}
+                  className={`px-4 py-3 text-sm font-medium border-b-2 transition-colors ${
+                    activeTab === tab
+                      ? 'border-indigo-600 text-indigo-600'
+                      : 'border-transparent text-gray-500 hover:text-gray-700'
+                  }`}
+                >
+                  {tabLabels[tab]}
+                </button>
+              ))}
+            </div>
+
+            <div className="p-5 space-y-5">
+              {/* Summary cards */}
+              {activeTab !== 'target' && (
+                <div className="grid grid-cols-3 gap-3">
+                  <div className="rounded-lg border p-3">
+                    <p className="text-xs text-gray-500 mb-1">Blocking Issues</p>
+                    <p className={`text-2xl font-semibold ${blockingCount > 0 ? 'text-red-600' : 'text-green-600'}`}>{blockingCount}</p>
+                  </div>
+                  <div className="rounded-lg border p-3">
+                    <p className="text-xs text-gray-500 mb-1">Warnings</p>
+                    <p className={`text-2xl font-semibold ${warningCount > 0 ? 'text-amber-600' : 'text-green-600'}`}>{warningCount}</p>
+                  </div>
+                  <div className="rounded-lg border p-3">
+                    <p className="text-xs text-gray-500 mb-1">Ready</p>
+                    <p className="text-2xl font-semibold text-green-600">{readyCount}</p>
+                  </div>
+                </div>
+              )}
+
+              {/* Content */}
+              {activeTab === 'target' ? (
+                <div className="text-center py-12 opacity-60">
+                  <div className="text-4xl mb-3">🎯</div>
+                  <p className="font-semibold text-gray-700 mb-1">Target Data Validation — Coming Soon</p>
+                  <p className="text-sm text-gray-500 max-w-sm mx-auto">
+                    Post-migration validation will be available after data is loaded into the target system. This will include reconciliation counts, constraint violation detection, and ongoing drift monitoring.
+                  </p>
+                </div>
+              ) : activeTab === 'in_flight' && !hasMappings ? (
+                <div className="text-center py-10 bg-amber-50 rounded-xl border border-amber-200">
+                  <p className="font-semibold text-amber-800 mb-1">In-flight checks require mappings</p>
+                  <p className="text-sm text-amber-700 mb-4">
+                    Generate mappings in the Mapping tab first to enable target-aware validation.
+                  </p>
+                  <a
+                    href={`/app/projects/${projectId}/mapping`}
+                    className="inline-block px-4 py-2 text-sm bg-amber-600 text-white rounded-lg hover:bg-amber-700"
+                  >
+                    Go to Mapping →
+                  </a>
+                </div>
+              ) : activeIssues.length === 0 ? (
+                <div className="text-center py-12 text-gray-400">
+                  <div className="text-3xl mb-2">✓</div>
+                  <p className="text-sm">No issues detected. {activeTab === 'in_flight' ? 'Run a scan to check in-flight data.' : 'Upload a CSV to trigger automatic detection.'}</p>
+                </div>
+              ) : (
+                <div className="space-y-4">
+                  {/* Section header */}
+                  <div>
+                    <h2 className="text-base font-semibold text-gray-900">
+                      {activeTab === 'source' ? 'Source System Issues' : 'In-flight Transformation Issues'}
+                    </h2>
+                    <p className="text-sm text-gray-500 mt-0.5">
+                      {activeTab === 'source'
+                        ? 'Issues detected in source data before transformation'
+                        : 'Issues detected when comparing source data against target constraints'}
+                    </p>
+                  </div>
+
+                  {activeIssues.map(issue => (
+                    <div
+                      key={issue.id}
+                      ref={el => { if (el) issueRefs.current[issue.id] = el }}
+                    >
+                      <IssueCard
+                        issue={issue}
+                        tableRole={issue.table_id ? tableRoleMap.get(issue.table_id) : undefined}
+                        onUpdate={handleIssueUpdate}
+                      />
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          </div>
+
+          {/* Proceed to Mapping CTA */}
+          <div className="flex justify-end pb-4">
+            <button
+              onClick={() => router.push(`/app/projects/${projectId}/mapping`)}
+              className="px-5 py-2.5 text-sm bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 font-medium"
+            >
+              Proceed to Mapping →
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  )
+}
