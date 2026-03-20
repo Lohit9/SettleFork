@@ -498,6 +498,14 @@ export async function runFullScan(
     }
   }
 
+  // Regenerate staged data so in-flight checks validate transformed values
+  const { stageAllData } = await import('@/lib/actions/staging')
+  try {
+    await stageAllData(projectId)
+  } catch {
+    // Non-fatal — in-flight checks will fall back to source data
+  }
+
   const { runInFlightChecks } = await import('@/lib/quality/detection-engine')
   try {
     await runInFlightChecks(projectId)

@@ -265,7 +265,7 @@ CRITICAL RULES:
 3. Do NOT include semicolons
 4. Do NOT include column aliases (no AS clause at the top level)
 5. The expression will be embedded inside: SELECT {your_expression} AS "target_field" FROM ...
-6. Use the source field name directly (e.g., "Type", "Industry") — the system wraps it in JSONB access automatically
+6. Use ONLY the bare field name without any table prefix — write "Region", NOT "Sales.Region"; write "Type", NOT "Account.Type". The system handles table context automatically.
 7. Handle NULL values explicitly when relevant using COALESCE or CASE WHEN ... IS NULL
 8. Handle edge cases (unexpected values) with an ELSE clause in CASE statements
 9. Be precise — map actual sample values from the data, not generic patterns
@@ -470,13 +470,21 @@ export async function updateTransformSQL(
   const cleanSql = sql.replace(/;+$/, '').trim()
   if (!cleanSql) return { success: false, error: 'SQL cannot be empty' }
 
-  // RLS will enforce ownership through field_mappings → table_mappings → projects
+  // Check current status — if applied, mark as stale instead of draft
+  const { data: current } = await supabase
+    .from('transformations')
+    .select('status')
+    .eq('id', transformationId)
+    .single()
+
+  const newStatus = current?.status === 'applied' ? 'stale' : 'draft'
+
   const { error } = await supabase
     .from('transformations')
     .update({
       generated_sql: cleanSql,
       is_ai_generated: false,
-      status: 'draft',
+      status: newStatus,
       test_results: null,
     })
     .eq('id', transformationId)
@@ -673,4 +681,177 @@ export async function autoGenerateAllTransforms(
   }
 
   return { success: true, generated, failed }
+}
+
+// ── applyTransform ────────────────────────────────────────────────────────────
+// Applies a single field's transform to staged_data_rows via the
+// dq_apply_field_transform RPC. Creates staged rows if none exist for the
+// table mapping yet (incremental staging).
+
+export async function applyTransform(
+  fieldMappingId: string,
+  sql: string
+): Promise<{ success: boolean; rowsAffected: number; error?: string }> {
+  const supabase = await createClient()
+  const {
+    data: { user },
+  } = await supabase.auth.getUser()
+  if (!user) return { success: false, rowsAffected: 0, error: 'Not authenticated' }
+
+  if (!sql.trim()) return { success: false, rowsAffected: 0, error: 'No SQL to apply' }
+
+  // Resolve ownership chain
+  const { data: fm } = await supabase
+    .from('field_mappings')
+    .select('id, source_field_id, target_field_id, table_mapping_id')
+    .eq('id', fieldMappingId)
+    .single()
+  if (!fm) return { success: false, rowsAffected: 0, error: 'Field mapping not found' }
+
+  const { data: tm } = await supabase
+    .from('table_mappings')
+    .select('id, project_id, source_table_id, target_table_id')
+    .eq('id', fm.table_mapping_id)
+    .single()
+  if (!tm) return { success: false, rowsAffected: 0, error: 'Table mapping not found' }
+
+  const { data: projectCheck } = await supabase
+    .from('projects')
+    .select('id')
+    .eq('id', tm.project_id)
+    .eq('user_id', user.id)
+    .single()
+  if (!projectCheck) return { success: false, rowsAffected: 0, error: 'Access denied' }
+
+  // Fetch source and target field names
+  const [{ data: srcField }, { data: tgtField }] = await Promise.all([
+    supabase.from('fields').select('id, name, table_id').eq('id', fm.source_field_id).single(),
+    supabase.from('fields').select('id, name').eq('id', fm.target_field_id).single(),
+  ])
+  if (!srcField || !tgtField) {
+    return { success: false, rowsAffected: 0, error: 'Fields not found' }
+  }
+
+  // All source field names for JSONB rewriting
+  const { data: allSourceFields } = await supabase
+    .from('fields')
+    .select('name')
+    .eq('table_id', srcField.table_id)
+  const fieldNames = (allSourceFields ?? []).map((f) => f.name)
+
+  const wrappedSql = wrapFieldRefsInJsonb(sql.replace(/;+$/, '').trim(), fieldNames)
+
+  // Check if staged rows already exist for this table mapping
+  const { count: stagedCount } = await supabaseAdmin
+    .from('staged_data_rows')
+    .select('id', { count: 'exact', head: true })
+    .eq('table_mapping_id', tm.id)
+
+  const hasExistingStaged = (stagedCount ?? 0) > 0
+
+  // Execute via RPC
+  const { data: rowsAffected, error: rpcErr } = await supabaseAdmin.rpc(
+    'dq_apply_field_transform',
+    {
+      p_table_mapping_id: tm.id,
+      p_source_table_id: tm.source_table_id,
+      p_target_table_id: tm.target_table_id,
+      p_target_field_name: tgtField.name,
+      p_transform_sql: wrappedSql,
+      p_has_existing_staged: hasExistingStaged,
+    }
+  )
+
+  if (rpcErr) {
+    return { success: false, rowsAffected: 0, error: rpcErr.message }
+  }
+
+  // Mark this transformation as applied
+  await supabase
+    .from('transformations')
+    .update({ status: 'applied' })
+    .eq('field_mapping_id', fieldMappingId)
+
+  return { success: true, rowsAffected: Number(rowsAffected ?? 0) }
+}
+
+// ── previewTransformDistinct ──────────────────────────────────────────────────
+// Returns all distinct (before, after, count) triples for a SQL expression.
+// Used by the "All Distinct Values" toggle in the live preview panel.
+
+export async function previewTransformDistinct(
+  fieldMappingId: string,
+  sql: string
+): Promise<{
+  success: boolean
+  results?: { before: string | null; after: string | null; count: number }[]
+  error?: string
+}> {
+  const supabase = await createClient()
+  const {
+    data: { user },
+  } = await supabase.auth.getUser()
+  if (!user) return { success: false, error: 'Not authenticated' }
+
+  if (!sql.trim()) return { success: false, error: 'No SQL to preview' }
+
+  const { data: fm } = await supabase
+    .from('field_mappings')
+    .select('id, source_field_id, table_mapping_id')
+    .eq('id', fieldMappingId)
+    .single()
+  if (!fm) return { success: false, error: 'Field mapping not found' }
+
+  const { data: tm } = await supabase
+    .from('table_mappings')
+    .select('id, project_id, source_table_id')
+    .eq('id', fm.table_mapping_id)
+    .single()
+  if (!tm) return { success: false, error: 'Table mapping not found' }
+
+  const { data: projectCheck } = await supabase
+    .from('projects')
+    .select('id')
+    .eq('id', tm.project_id)
+    .eq('user_id', user.id)
+    .single()
+  if (!projectCheck) return { success: false, error: 'Access denied' }
+
+  const { data: srcField } = await supabase
+    .from('fields')
+    .select('id, name, table_id')
+    .eq('id', fm.source_field_id)
+    .single()
+  if (!srcField) return { success: false, error: 'Source field not found' }
+
+  const { data: allSourceFields } = await supabase
+    .from('fields')
+    .select('name')
+    .eq('table_id', srcField.table_id)
+  const fieldNames = (allSourceFields ?? []).map((f) => f.name)
+
+  const wrappedSql = wrapFieldRefsInJsonb(sql.replace(/;+$/, '').trim(), fieldNames)
+
+  const { data: rpcResult, error: rpcErr } = await supabaseAdmin.rpc(
+    'execute_transform_test_distinct',
+    {
+      p_expression: wrappedSql,
+      p_table_id: srcField.table_id,
+      p_source_field: srcField.name,
+      p_limit: 200,
+    }
+  )
+
+  if (rpcErr) {
+    return { success: false, error: rpcErr.message }
+  }
+
+  const rows = (rpcResult as { before_value: unknown; after_value: unknown; row_count: number }[]) ?? []
+  const results = rows.map((r) => ({
+    before: r.before_value != null ? String(r.before_value) : null,
+    after: r.after_value != null ? String(r.after_value) : null,
+    count: r.row_count ?? 0,
+  }))
+
+  return { success: true, results }
 }

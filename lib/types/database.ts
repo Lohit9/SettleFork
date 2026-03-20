@@ -184,18 +184,36 @@ export interface Transformation {
   generated_sql: string
   is_ai_generated: boolean
   test_results: unknown | null
-  status: 'draft' | 'tested' | 'saved'
+  status: 'draft' | 'tested' | 'saved' | 'applied' | 'stale'
   created_at: string
 }
 
 export interface Output {
   id: string
   project_id: string
-  type: 'mapping_file' | 'transformation_specs' | 'readiness_report'
+  type:
+    | 'mapping_file'
+    | 'transformation_specs'
+    | 'readiness_report'
+    | 'gold_standard_csv'
+    | 'gold_standard_sql'
+    | 'fix_log'
+    | 'data_dictionary'
   format: string
   version: string
   file_storage_path: string | null
   generated_at: string
+}
+
+export interface StagedDataRow {
+  id: number
+  table_mapping_id: string
+  source_table_id: string
+  target_table_id: string
+  row_number: number
+  source_row_data: Record<string, unknown>
+  transformed_row_data: Record<string, unknown>
+  staged_at: string
 }
 
 export type ProjectWithDatasets = Project & { datasets: Dataset[] }

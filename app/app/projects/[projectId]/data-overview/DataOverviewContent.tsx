@@ -60,7 +60,7 @@ export default function DataOverviewContent({ projectId, schema, tables }: DataO
             target={schema.target}
           />
         )}
-        {activeTab === 'preview' && <DataPreview tables={tables} />}
+        {activeTab === 'preview' && <DataPreview projectId={projectId} tables={tables} />}
         {activeTab === 'query' && <QueryData projectId={projectId} tables={tables} />}
         {activeTab === 'profiling' && <DataProfiling tables={tables} />}
       </div>

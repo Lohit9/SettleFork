@@ -1,6 +1,6 @@
 'use client'
 
-import { FileText, Database, GitBranch, Code, CheckCircle, Download, ArrowLeft } from '@/components/icons'
+import { FileText, Database, GitBranch, Code, CheckCircle, LayoutDashboard, ArrowLeft } from '@/components/icons'
 import Link from 'next/link'
 import { usePathname } from 'next/navigation'
 
@@ -44,12 +44,6 @@ export function Navigation({
       href: projectId ? `/app/projects/${projectId}/data-overview` : '#',
     },
     {
-      id: 'data-quality',
-      label: 'Data Quality',
-      icon: CheckCircle,
-      href: projectId ? `/app/projects/${projectId}/data-quality` : '#',
-    },
-    {
       id: 'mapping',
       label: 'Mapping',
       icon: GitBranch,
@@ -62,9 +56,15 @@ export function Navigation({
       href: projectId ? `/app/projects/${projectId}/transform` : '#',
     },
     {
+      id: 'data-quality',
+      label: 'Validate',
+      icon: CheckCircle,
+      href: projectId ? `/app/projects/${projectId}/data-quality` : '#',
+    },
+    {
       id: 'outputs',
-      label: 'Outputs',
-      icon: Download,
+      label: 'Migration Center',
+      icon: LayoutDashboard,
       href: projectId ? `/app/projects/${projectId}/outputs` : '#',
     },
   ]

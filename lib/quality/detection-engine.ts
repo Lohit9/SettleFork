@@ -431,6 +431,20 @@ export async function runInFlightChecks(projectId: string): Promise<void> {
   type SFRow = { id: string; name: string; data_type: string; inferred_type: string | null; is_nullable: boolean; is_primary_key: boolean; table_id: string }
   type TFRow = { id: string; name: string; data_type: string; is_nullable: boolean; table_id: string }
 
+  // Determine which table_mappings have staged data (transforms applied)
+  const uniqueMappingIds = [
+    ...new Set(fieldMappings.map((fm) => fm.table_mapping_id)),
+  ]
+  const stagedMappingIds = new Set<string>()
+  for (const mappingId of uniqueMappingIds) {
+    const { count } = await supabaseAdmin
+      .from('staged_data_rows')
+      .select('id', { count: 'exact', head: true })
+      .eq('table_mapping_id', mappingId)
+      .limit(1)
+    if ((count ?? 0) > 0) stagedMappingIds.add(mappingId)
+  }
+
   // Fetch target table names for display
   const targetTableIds = [
     ...new Set(
@@ -467,33 +481,60 @@ export async function runInFlightChecks(projectId: string): Promise<void> {
     const sourceTableName = sourceTableMap.get(tm.source_table_id) ?? 'source'
     const targetTableName = targetTableMap.get(tm.target_table_id) ?? 'target'
     const fieldTitle = `${sourceTableName}.${sf.name}`
+    const hasStaged = stagedMappingIds.has(fm.table_mapping_id)
 
     // ── Check 8: String length truncation (BLOCKING)
+    // Checks TRANSFORMED value against target length limit when staged data exists;
+    // falls back to source data otherwise.
     const targetType = tf.data_type?.toUpperCase() ?? ''
     const lengthMatch = targetType.match(/(?:CHAR|VARCHAR)\((\d+)\)/)
     if (lengthMatch) {
       const maxLen = parseInt(lengthMatch[1], 10)
-      const exceededCount = await rpcCount('dq_length_exceeded_count', {
-        p_table_id: tm.source_table_id,
-        p_field: sf.name,
-        p_max: maxLen,
-      })
-      if (exceededCount > 0) {
-        const samples = await rpcSamples('dq_length_exceeded_samples', {
+
+      let exceededCount = 0
+      let samples: Record<string, unknown>[] = []
+
+      if (hasStaged) {
+        exceededCount = await rpcCount('dq_staged_length_exceeded', {
+          p_mapping_id: fm.table_mapping_id,
+          p_field: tf.name,
+          p_max: maxLen,
+        })
+        if (exceededCount > 0) {
+          samples = await rpcSamples('dq_staged_length_exceeded_samples', {
+            p_mapping_id: fm.table_mapping_id,
+            p_field: tf.name,
+            p_max: maxLen,
+            p_limit: 5,
+          })
+        }
+      } else {
+        exceededCount = await rpcCount('dq_length_exceeded_count', {
           p_table_id: tm.source_table_id,
           p_field: sf.name,
           p_max: maxLen,
-          p_limit: 5,
         })
+        if (exceededCount > 0) {
+          samples = await rpcSamples('dq_length_exceeded_samples', {
+            p_table_id: tm.source_table_id,
+            p_field: sf.name,
+            p_max: maxLen,
+            p_limit: 5,
+          })
+        }
+      }
+
+      if (exceededCount > 0) {
+        const dataNote = hasStaged ? '' : ' (checked against source data — stage transforms for transformed validation)'
         issuesToInsert.push(
           makeIssue({
             project_id: projectId,
-            table_id: tm.source_table_id,
-            field_id: sf.id,
+            table_id: hasStaged ? tm.target_table_id : tm.source_table_id,
+            field_id: hasStaged ? tf.id : sf.id,
             stage: 'in_flight',
             severity: 'blocking',
-            title: fieldTitle,
-            description: `Source ${sf.name} values exceed target field limit (${maxLen} chars) — ${exceededCount} records affected`,
+            title: hasStaged ? `${targetTableName}.${tf.name}` : fieldTitle,
+            description: `Transformed ${tf.name} values exceed target field limit (${maxLen} chars) — ${exceededCount} records affected${dataNote}`,
             affected_records: Number(exceededCount),
             affected_rows_sample: samples,
             detection_source: 'manual_scan',
@@ -503,26 +544,35 @@ export async function runInFlightChecks(projectId: string): Promise<void> {
     }
 
     // ── Check 9: Case inconsistency (WARNING)
-    // Target field is UPPER_CASE but source has mixed case values
+    // When staged data exists, check the TRANSFORMED values; target codes should
+    // already be uppercase, so this should be rare after a transform is applied.
     const targetIsUpper =
       targetTableName === targetTableName.toUpperCase() &&
       tf.name === tf.name.toUpperCase() &&
       tf.name.includes('_')
     if (targetIsUpper) {
-      const mixedCount = await rpcCount('dq_mixed_case_count', {
-        p_table_id: tm.source_table_id,
-        p_field: sf.name,
-      })
+      let mixedCount = 0
+      if (hasStaged) {
+        mixedCount = await rpcCount('dq_staged_mixed_case_count', {
+          p_mapping_id: fm.table_mapping_id,
+          p_field: tf.name,
+        })
+      } else {
+        mixedCount = await rpcCount('dq_mixed_case_count', {
+          p_table_id: tm.source_table_id,
+          p_field: sf.name,
+        })
+      }
       if (mixedCount > 0) {
         issuesToInsert.push(
           makeIssue({
             project_id: projectId,
-            table_id: tm.source_table_id,
-            field_id: sf.id,
+            table_id: hasStaged ? tm.target_table_id : tm.source_table_id,
+            field_id: hasStaged ? tf.id : sf.id,
             stage: 'in_flight',
             severity: 'warning',
             title: `${targetTableName}.${tf.name}`,
-            description: `Case inconsistency: mixed case in source, target expects uppercase — ${mixedCount} records affected`,
+            description: `Case inconsistency: ${hasStaged ? 'transformed' : 'source'} values contain lowercase, target expects uppercase — ${mixedCount} records affected`,
             affected_records: Number(mixedCount),
             detection_source: 'manual_scan',
           })
@@ -530,22 +580,32 @@ export async function runInFlightChecks(projectId: string): Promise<void> {
       }
     }
 
-    // ── Check 11: Non-nullable target mapped to nullable source with nulls (BLOCKING)
+    // ── Check 11: Non-nullable target with null/empty values (BLOCKING)
+    // When staged data exists, check the TRANSFORMED value for the TARGET field.
     if (!tf.is_nullable && sf.is_nullable) {
-      const nullCount = await rpcCount('dq_null_count', {
-        p_table_id: tm.source_table_id,
-        p_field: sf.name,
-      })
+      let nullCount = 0
+      if (hasStaged) {
+        nullCount = await rpcCount('dq_staged_null_count', {
+          p_mapping_id: fm.table_mapping_id,
+          p_field: tf.name,
+        })
+      } else {
+        nullCount = await rpcCount('dq_null_count', {
+          p_table_id: tm.source_table_id,
+          p_field: sf.name,
+        })
+      }
       if (nullCount > 0) {
+        const dataNote = hasStaged ? '' : ' (checked against source data — stage transforms for transformed validation)'
         issuesToInsert.push(
           makeIssue({
             project_id: projectId,
-            table_id: tm.source_table_id,
-            field_id: sf.id,
+            table_id: hasStaged ? tm.target_table_id : tm.source_table_id,
+            field_id: hasStaged ? tf.id : sf.id,
             stage: 'in_flight',
             severity: 'blocking',
-            title: fieldTitle,
-            description: `Target field ${targetTableName}.${tf.name} is non-nullable but source ${sf.name} has ${nullCount} null values — these records will fail on load`,
+            title: hasStaged ? `${targetTableName}.${tf.name}` : fieldTitle,
+            description: `Target field ${targetTableName}.${tf.name} is non-nullable but has ${nullCount} null/empty values after transformation — these records will fail on load${dataNote}`,
             affected_records: Number(nullCount),
             detection_source: 'manual_scan',
           })

@@ -1,11 +1,30 @@
-'use client'
+import { notFound } from 'next/navigation'
+import { createClient } from '@/lib/supabase/server'
+import { getOutputsPageData } from '@/lib/actions/outputs'
+import OutputsContent from './OutputsContent'
 
-import { useParams } from 'next/navigation'
-import { Outputs } from '@/components/app/Outputs'
+interface PageProps {
+  params: Promise<{ projectId: string }>
+}
 
-export default function OutputsPage() {
-  const params = useParams()
-  const projectId = params.projectId as string
+export default async function OutputsPage({ params }: PageProps) {
+  const { projectId } = await params
 
-  return <Outputs projectId={projectId} />
+  const supabase = await createClient()
+  const {
+    data: { user },
+  } = await supabase.auth.getUser()
+  if (!user) notFound()
+
+  const { data: project } = await supabase
+    .from('projects')
+    .select('id, name')
+    .eq('id', projectId)
+    .eq('user_id', user.id)
+    .single()
+  if (!project) notFound()
+
+  const pageData = await getOutputsPageData(projectId)
+
+  return <OutputsContent projectId={projectId} initialData={pageData} />
 }

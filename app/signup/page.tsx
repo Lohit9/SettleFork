@@ -1,19 +1,20 @@
 'use client'
 
-import { useState } from 'react'
+import { useEffect, useRef, useState, useTransition } from 'react'
 import { useRouter } from 'next/navigation'
-import { createClient } from '@/lib/supabase/client'
+import { signUpWithBotProtection } from '@/lib/actions/auth'
 import AuthCard from '@/components/auth/AuthCard'
 import FormField from '@/components/auth/FormField'
 import { Button } from '@/components/ui/button'
 import { Alert } from '@/components/ui/alert'
-import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 
 const PERSONAL_EMAIL_DOMAINS = ['gmail.com', 'yahoo.com', 'outlook.com', 'hotmail.com', 'icloud.com', 'aol.com']
 
 export default function SignupPage() {
   const router = useRouter()
+  const [isPending, startTransition] = useTransition()
+
   const [formData, setFormData] = useState({
     fullName: '',
     companyName: '',
@@ -23,89 +24,78 @@ export default function SignupPage() {
     companySize: '',
     role: '',
   })
-  const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [success, setSuccess] = useState(false)
   const [emailWarning, setEmailWarning] = useState(false)
 
-  const validateEmail = (email: string) => {
-    const domain = email.split('@')[1]?.toLowerCase()
-    return PERSONAL_EMAIL_DOMAINS.includes(domain || '')
-  }
+  // Bot protection: record when the page loaded (used for minimum-time check)
+  const loadedAtRef = useRef<number>(0)
+  useEffect(() => {
+    loadedAtRef.current = Date.now()
+  }, [])
 
   const handleEmailChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const value = e.target.value
-    setFormData({ ...formData, email: value })
+    setFormData((prev) => ({ ...prev, email: value }))
     if (value.includes('@')) {
-      setEmailWarning(validateEmail(value))
+      const domain = value.split('@')[1]?.toLowerCase() ?? ''
+      setEmailWarning(PERSONAL_EMAIL_DOMAINS.includes(domain))
     } else {
       setEmailWarning(false)
     }
   }
 
-  const handleSubmit = async (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault()
     setError(null)
 
-    // Validation
+    // Client-side field validation
     if (!formData.fullName || !formData.companyName || !formData.email || !formData.password) {
       setError('Please fill in all required fields.')
       return
     }
-
     if (formData.password !== formData.confirmPassword) {
       setError('Passwords do not match.')
       return
     }
-
     if (formData.password.length < 8) {
       setError('Password must be at least 8 characters long.')
       return
     }
 
-    setLoading(true)
+    // Client-side honeypot check (defence-in-depth; server also checks)
+    const form = e.currentTarget
+    const honeypotEl = form.elements.namedItem('website') as HTMLInputElement | null
+    if (honeypotEl?.value) {
+      // Silent fake-success — don't reveal that we noticed
+      setSuccess(true)
+      return
+    }
 
-    try {
-      const supabase = createClient()
-      const { data, error: signUpError } = await supabase.auth.signUp({
+    startTransition(async () => {
+      const result = await signUpWithBotProtection({
+        fullName: formData.fullName,
+        companyName: formData.companyName,
         email: formData.email,
         password: formData.password,
-        options: {
-          data: {
-            full_name: formData.fullName,
-            company_name: formData.companyName,
-            company_size: formData.companySize,
-            role: formData.role,
-          },
-        },
+        companySize: formData.companySize,
+        role: formData.role,
+        website: honeypotEl?.value ?? '',
+        loadedAt: String(loadedAtRef.current),
       })
 
-      if (signUpError) {
-        // Security: Generic error messages to prevent account enumeration
-        if (signUpError.message.includes('already registered')) {
-          setError('An account with this email already exists. Please sign in instead.')
-        } else if (signUpError.message.includes('password')) {
-          setError('Password does not meet requirements. Please use a stronger password.')
-        } else {
-          setError('Unable to create account. Please try again.')
-        }
-        setLoading(false)
+      if (!result.success) {
+        setError(result.error ?? 'Unable to create account. Please try again.')
         return
       }
 
-      // Check if email confirmation is required
-      if (data.user && !data.session) {
+      if (result.requiresEmailVerification) {
         setSuccess(true)
-        setLoading(false)
       } else {
-        // No email confirmation required, redirect immediately
         router.push('/app/projects')
         router.refresh()
       }
-    } catch (err) {
-      setError('An unexpected error occurred. Please try again.')
-      setLoading(false)
-    }
+    })
   }
 
   if (success) {
@@ -149,12 +139,29 @@ export default function SignupPage() {
           </Alert>
         )}
 
+        {/*
+          Bot protection — honeypot field.
+          Hidden from real users via CSS. Bots auto-fill every input.
+          aria-hidden prevents screen readers from reading it.
+          tabIndex={-1} prevents keyboard navigation to it.
+        */}
+        <div aria-hidden="true" style={{ display: 'none' }}>
+          <label htmlFor="website">Website</label>
+          <input
+            id="website"
+            name="website"
+            type="text"
+            tabIndex={-1}
+            autoComplete="off"
+          />
+        </div>
+
         <FormField
           label="Full name"
           name="fullName"
           placeholder="John Doe"
           value={formData.fullName}
-          onChange={(e) => setFormData({ ...formData, fullName: e.target.value })}
+          onChange={(e) => setFormData((prev) => ({ ...prev, fullName: e.target.value }))}
           required
           autoComplete="name"
         />
@@ -164,7 +171,7 @@ export default function SignupPage() {
           name="companyName"
           placeholder="Acme Inc."
           value={formData.companyName}
-          onChange={(e) => setFormData({ ...formData, companyName: e.target.value })}
+          onChange={(e) => setFormData((prev) => ({ ...prev, companyName: e.target.value }))}
           required
           autoComplete="organization"
         />
@@ -188,7 +195,7 @@ export default function SignupPage() {
           type="password"
           placeholder="At least 8 characters"
           value={formData.password}
-          onChange={(e) => setFormData({ ...formData, password: e.target.value })}
+          onChange={(e) => setFormData((prev) => ({ ...prev, password: e.target.value }))}
           required
           autoComplete="new-password"
         />
@@ -199,7 +206,7 @@ export default function SignupPage() {
           type="password"
           placeholder="Confirm your password"
           value={formData.confirmPassword}
-          onChange={(e) => setFormData({ ...formData, confirmPassword: e.target.value })}
+          onChange={(e) => setFormData((prev) => ({ ...prev, confirmPassword: e.target.value }))}
           required
           autoComplete="new-password"
         />
@@ -211,7 +218,7 @@ export default function SignupPage() {
               id="companySize"
               name="companySize"
               value={formData.companySize}
-              onChange={(e) => setFormData({ ...formData, companySize: e.target.value })}
+              onChange={(e) => setFormData((prev) => ({ ...prev, companySize: e.target.value }))}
               className="flex h-10 w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm text-gray-900 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2"
             >
               <option value="">Select size</option>
@@ -228,7 +235,7 @@ export default function SignupPage() {
               id="role"
               name="role"
               value={formData.role}
-              onChange={(e) => setFormData({ ...formData, role: e.target.value })}
+              onChange={(e) => setFormData((prev) => ({ ...prev, role: e.target.value }))}
               className="flex h-10 w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm text-gray-900 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2"
             >
               <option value="">Select role</option>
@@ -241,8 +248,8 @@ export default function SignupPage() {
           </div>
         </div>
 
-        <Button type="submit" variant="default" size="lg" className="w-full" disabled={loading}>
-          {loading ? 'Creating account...' : 'Get started for free'}
+        <Button type="submit" variant="default" size="lg" className="w-full" disabled={isPending}>
+          {isPending ? 'Creating account...' : 'Get started for free'}
         </Button>
 
         <p className="text-center text-xs text-gray-500">No credit card required</p>
