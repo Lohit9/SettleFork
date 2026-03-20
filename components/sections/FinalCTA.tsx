@@ -1,33 +1,36 @@
 import Link from 'next/link'
+import ScrollReveal from '@/components/ui/ScrollReveal'
 
 export default function FinalCTA() {
   return (
-    <section className="py-20 bg-slate-50">
-      <div className="max-w-4xl mx-auto px-4 sm:px-6 lg:px-8 text-center">
-        <h2 className="text-3xl lg:text-4xl font-bold text-slate-900 mb-4">
-          Bring autonomy to your next migration
-        </h2>
-        <p className="text-lg text-slate-600 mb-8">
-          Tell us about your upcoming program and we'll explore early access or design partnership.
-        </p>
-        <div className="flex flex-col sm:flex-row gap-4 justify-center">
-          <Link
-            href="/signup"
-            className="px-6 py-3 bg-indigo-600 text-white rounded-md hover:bg-indigo-700 transition-colors font-medium text-center"
-          >
-            Get started for free
-          </Link>
-          <a
-            href="https://calendly.com/trymine-info/demo"
-            target="_blank"
-            rel="noopener noreferrer"
-            className="px-6 py-3 border border-slate-300 text-slate-700 rounded-md hover:bg-white transition-colors font-medium text-center"
-          >
-            Book a Demo
-          </a>
-        </div>
+    <section className="bg-[#0F172A] py-24 px-6 lg:px-12">
+      <div className="max-w-xl mx-auto text-center">
+        <ScrollReveal>
+          <h2 className="text-4xl font-bold text-white tracking-tight mb-4">
+            Bring autonomy to your next migration
+          </h2>
+          <p className="text-[#94A3B8] text-base leading-relaxed mb-9">
+            Tell us about your upcoming program and we&apos;ll explore early access or design partnership.
+          </p>
+
+          <div className="flex flex-wrap justify-center gap-3">
+            <Link
+              href="/signup"
+              className="bg-[#2563EB] hover:bg-[#3B82F6] text-white font-semibold px-8 py-4 rounded-xl text-base shadow-lg shadow-blue-600/25 hover:-translate-y-0.5 transition-all"
+            >
+              Get started for free
+            </Link>
+            <a
+              href="https://calendly.com/trymine-info/demo"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="border border-[#334155] text-[#CBD5E1] font-medium px-8 py-4 rounded-xl text-base hover:border-[#64748B] hover:text-white transition-all"
+            >
+              Book a Demo
+            </a>
+          </div>
+        </ScrollReveal>
       </div>
     </section>
   )
 }
-
