@@ -35,70 +35,65 @@ function formatDate(dateStr: string): string {
 
 function ProjectCard({ project }: { project: ProjectWithStats }) {
   const isCompleted = project.status === 'completed'
-
-  const readinessDisplay = () => {
-    if (project.readinessScore === null) return null
-    return project.readinessScore
-  }
-  const score = readinessDisplay()
+  const score = project.readinessScore
 
   const scoreColor =
     score === null
-      ? 'text-gray-500'
+      ? 'text-gray-400'
       : score >= 90
-        ? 'text-green-400'
+        ? 'text-green-600'
         : score >= 60
-          ? 'text-amber-400'
-          : 'text-red-400'
+          ? 'text-amber-500'
+          : 'text-red-500'
 
   // Bottom stats chips
-  const stats: { label: string; value: string; color?: string }[] = []
+  const stats: { label: string; color?: string }[] = []
 
   if (project.mappedFieldCount > 0 || project.totalSourceFields > 0) {
-    stats.push({ label: `Mapped: ${project.mappedFieldCount}/${project.totalSourceFields} fields`, value: '' })
+    stats.push({ label: `Mapped: ${project.mappedFieldCount}/${project.totalSourceFields} fields` })
   } else if (project.totalRows > 0) {
-    stats.push({ label: `Rows: ${project.totalRows.toLocaleString()}`, value: '' })
+    stats.push({ label: `Rows: ${project.totalRows.toLocaleString()}` })
   }
 
   if (project.blockingIssueCount > 0) {
-    stats.push({ label: `Blocking: ${project.blockingIssueCount}`, value: '', color: 'text-red-400' })
+    stats.push({ label: `Blocking: ${project.blockingIssueCount}`, color: 'text-red-600' })
   }
 
   if (project.warningCount > 0) {
-    stats.push({ label: `Warnings: ${project.warningCount}`, value: '', color: 'text-amber-400' })
+    stats.push({ label: `Warnings: ${project.warningCount}`, color: 'text-amber-600' })
   }
 
   if (project.totalTransforms > 0) {
-    stats.push({ label: `Transforms: ${project.savedTransforms}/${project.totalTransforms} saved`, value: '' })
+    stats.push({ label: `Transforms: ${project.savedTransforms}/${project.totalTransforms} saved` })
   }
 
   if (isCompleted && project.outputCount > 0) {
-    stats.push({ label: `Deliverables: ${project.outputCount} generated`, value: '' })
+    stats.push({ label: `Deliverables: ${project.outputCount} generated` })
   }
 
   return (
     <Link
       href={`/app/projects/${project.id}`}
-      className={`block bg-[#1a1a1a] border border-[#2a2a2a] rounded-xl p-5 hover:border-[#3a3a3a] transition-all ${
-        isCompleted ? 'opacity-70' : ''
+      className={`block bg-white border border-gray-200 rounded-xl p-5 hover:border-gray-300 hover:shadow-sm transition-all ${
+        isCompleted ? 'opacity-75' : ''
       }`}
     >
       {/* Top row */}
       <div className="flex items-start justify-between gap-4 mb-4">
         <div className="flex-1 min-w-0">
           <div className="flex items-center gap-2 mb-1">
-            <span className="text-base font-medium text-white truncate">{project.name}</span>
+            <span className="text-base font-medium text-gray-900 truncate">{project.name}</span>
             {isCompleted ? (
-              <Badge className="bg-green-900/40 text-green-400 border border-green-800/50 hover:bg-green-900/40 text-[11px] px-1.5 py-0 flex-shrink-0">
+              <Badge className="bg-green-100 text-green-700 hover:bg-green-100 text-[11px] px-1.5 py-0 flex-shrink-0">
                 Completed
               </Badge>
             ) : (
-              <Badge className="bg-blue-900/40 text-blue-400 border border-blue-800/50 hover:bg-blue-900/40 text-[11px] px-1.5 py-0 flex-shrink-0">
+              <Badge className="bg-blue-100 text-blue-700 hover:bg-blue-100 text-[11px] px-1.5 py-0 flex-shrink-0">
                 Active
               </Badge>
             )}
           </div>
-          <p className="text-xs text-gray-500 truncate">
+          <p className="text-xs text-gray-400 truncate">
             {project.source_label} → {project.target_label}
             <span className="mx-1.5">·</span>
             Created {formatDate(project.created_at)}
@@ -111,13 +106,13 @@ function ProjectCard({ project }: { project: ProjectWithStats }) {
         <div className="text-right flex-shrink-0">
           {score !== null ? (
             <>
-              <div className={`text-2xl font-medium leading-none ${scoreColor}`}>{score}%</div>
-              <div className="text-[11px] text-gray-500 mt-0.5">Readiness</div>
+              <div className={`text-2xl font-semibold leading-none ${scoreColor}`}>{score}%</div>
+              <div className="text-[11px] text-gray-400 mt-0.5">Readiness</div>
             </>
           ) : (
             <>
-              <div className="text-base font-medium text-red-500 leading-none">—</div>
-              <div className="text-[11px] text-gray-500 mt-0.5">Not scanned</div>
+              <div className="text-sm font-medium text-gray-400 leading-none">—</div>
+              <div className="text-[11px] text-gray-400 mt-0.5">Not scanned</div>
             </>
           )}
         </div>
@@ -130,10 +125,10 @@ function ProjectCard({ project }: { project: ProjectWithStats }) {
 
       {/* Bottom stats */}
       {stats.length > 0 && (
-        <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-gray-500">
+        <div className="flex flex-wrap items-center gap-x-0 gap-y-1 text-xs text-gray-500">
           {stats.map((s, i) => (
-            <span key={i} className="flex items-center gap-3">
-              {i > 0 && <span className="text-[#2a2a2a]">|</span>}
+            <span key={i} className="flex items-center">
+              {i > 0 && <span className="mx-2.5 text-gray-300">|</span>}
               <span className={s.color ?? 'text-gray-500'}>{s.label}</span>
             </span>
           ))}
@@ -167,12 +162,12 @@ function NewProjectForm({ onCancel, onCreated }: { onCancel: () => void; onCreat
   }
 
   return (
-    <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-50 p-4">
-      <div className="bg-[#1a1a1a] border border-[#2a2a2a] rounded-xl w-full max-w-lg p-6">
-        <h2 className="text-lg font-semibold text-white mb-5">New Project</h2>
+    <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4">
+      <div className="bg-white border border-gray-200 rounded-xl shadow-xl w-full max-w-lg p-6">
+        <h2 className="text-lg font-semibold text-gray-900 mb-5">New Project</h2>
         <div className="space-y-4">
           <div>
-            <Label htmlFor="project-name" className="text-xs text-gray-400 mb-1.5 block">
+            <Label htmlFor="project-name" className="text-sm text-gray-700 mb-1.5 block">
               Project Name
             </Label>
             <Input
@@ -180,12 +175,12 @@ function NewProjectForm({ onCancel, onCreated }: { onCancel: () => void; onCreat
               value={projectName}
               onChange={(e) => setProjectName(e.target.value)}
               placeholder="e.g., Salesforce to SAP Migration"
-              className="bg-[#111111] border-[#2a2a2a] text-white placeholder:text-gray-600 focus-visible:ring-[#4F46E5] focus-visible:border-[#4F46E5]"
+              className="w-full"
             />
           </div>
           <div className="grid grid-cols-2 gap-3">
             <div>
-              <Label htmlFor="source-system" className="text-xs text-gray-400 mb-1.5 block">
+              <Label htmlFor="source-system" className="text-sm text-gray-700 mb-1.5 block">
                 Source System
               </Label>
               <Input
@@ -193,11 +188,11 @@ function NewProjectForm({ onCancel, onCreated }: { onCancel: () => void; onCreat
                 value={sourceSystem}
                 onChange={(e) => setSourceSystem(e.target.value)}
                 placeholder="e.g., Salesforce"
-                className="bg-[#111111] border-[#2a2a2a] text-white placeholder:text-gray-600 focus-visible:ring-[#4F46E5] focus-visible:border-[#4F46E5]"
+                className="w-full"
               />
             </div>
             <div>
-              <Label htmlFor="target-system" className="text-xs text-gray-400 mb-1.5 block">
+              <Label htmlFor="target-system" className="text-sm text-gray-700 mb-1.5 block">
                 Target System
               </Label>
               <Input
@@ -205,36 +200,32 @@ function NewProjectForm({ onCancel, onCreated }: { onCancel: () => void; onCreat
                 value={targetSystem}
                 onChange={(e) => setTargetSystem(e.target.value)}
                 placeholder="e.g., SAP S/4HANA"
-                className="bg-[#111111] border-[#2a2a2a] text-white placeholder:text-gray-600 focus-visible:ring-[#4F46E5] focus-visible:border-[#4F46E5]"
+                className="w-full"
               />
             </div>
           </div>
           <div>
-            <Label htmlFor="notes" className="text-xs text-gray-400 mb-1.5 block">
-              Description <span className="text-gray-600">(optional)</span>
+            <Label htmlFor="notes" className="text-sm text-gray-700 mb-1.5 block">
+              Description <span className="text-gray-400">(optional)</span>
             </Label>
             <Textarea
               id="notes"
               value={notes}
               onChange={(e) => setNotes(e.target.value)}
               placeholder="Add any context or requirements"
-              className="bg-[#111111] border-[#2a2a2a] text-white placeholder:text-gray-600 resize-none min-h-20 focus-visible:ring-[#4F46E5] focus-visible:border-[#4F46E5]"
+              className="w-full resize-none min-h-20"
             />
           </div>
         </div>
 
         {error && (
-          <div className="mt-4 p-3 bg-red-950/50 border border-red-900/50 rounded-lg text-sm text-red-400">
+          <div className="mt-4 p-3 bg-red-50 border border-red-200 rounded-lg text-sm text-red-700">
             {error}
           </div>
         )}
 
         <div className="mt-5 flex justify-end gap-2">
-          <Button
-            variant="ghost"
-            onClick={onCancel}
-            className="text-gray-400 hover:text-white hover:bg-[#2a2a2a]"
-          >
+          <Button variant="ghost" onClick={onCancel} className="text-gray-600">
             Cancel
           </Button>
           <Button
@@ -290,22 +281,22 @@ export function ProjectsList({ initialProjects }: ProjectsListProps) {
   ]
 
   return (
-    <div className="flex-1 bg-[#111111] flex flex-col min-h-screen">
+    <div className="flex-1 bg-gray-50 flex flex-col min-h-screen">
       {/* Header */}
-      <div className="px-8 pt-8 pb-6">
-        <div className="flex items-center justify-between mb-6">
+      <div className="border-b border-gray-200 bg-white px-8 pt-6 pb-0">
+        <div className="flex items-center justify-between mb-5">
           <div>
-            <h1 className="text-xl font-semibold text-white">Projects</h1>
+            <h1 className="text-xl font-semibold text-gray-900">Projects</h1>
             <p className="text-sm text-gray-500 mt-0.5">Manage your data migration projects</p>
           </div>
           <div className="flex items-center gap-3">
             <div className="relative">
-              <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-gray-500 pointer-events-none" />
+              <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-gray-400 pointer-events-none" />
               <input
                 value={search}
                 onChange={(e) => setSearch(e.target.value)}
                 placeholder="Search projects…"
-                className="h-9 pl-9 pr-3 w-52 bg-[#1a1a1a] border border-[#2a2a2a] rounded-lg text-sm text-white placeholder:text-gray-600 focus:outline-none focus:border-[#4F46E5] transition-colors"
+                className="h-9 pl-9 pr-3 w-52 bg-gray-50 border border-gray-200 rounded-lg text-sm text-gray-900 placeholder:text-gray-400 focus:outline-none focus:ring-2 focus:ring-[#4F46E5] focus:border-[#4F46E5] transition-colors"
               />
             </div>
             <Button
@@ -319,32 +310,32 @@ export function ProjectsList({ initialProjects }: ProjectsListProps) {
         </div>
 
         {/* Summary stats */}
-        <div className="grid grid-cols-4 gap-3 mb-6">
-          <div className="bg-[#1a1a1a] border border-[#2a2a2a] rounded-lg p-4">
+        <div className="grid grid-cols-4 gap-3 mb-5">
+          <div className="bg-gray-50 border border-gray-200 rounded-lg p-3">
             <div className="text-xs text-gray-500 mb-1">Total projects</div>
-            <div className="text-xl font-semibold text-white">{projects.length}</div>
+            <div className="text-xl font-semibold text-gray-900">{projects.length}</div>
           </div>
-          <div className="bg-[#1a1a1a] border border-[#2a2a2a] rounded-lg p-4">
+          <div className="bg-gray-50 border border-gray-200 rounded-lg p-3">
             <div className="text-xs text-gray-500 mb-1">Active</div>
-            <div className="text-xl font-semibold text-green-400">{activeCount}</div>
+            <div className="text-xl font-semibold text-green-600">{activeCount}</div>
           </div>
-          <div className="bg-[#1a1a1a] border border-[#2a2a2a] rounded-lg p-4">
+          <div className="bg-gray-50 border border-gray-200 rounded-lg p-3">
             <div className="text-xs text-gray-500 mb-1">Blocking issues</div>
-            <div className={`text-xl font-semibold ${totalBlocking > 0 ? 'text-orange-400' : 'text-white'}`}>
+            <div className={`text-xl font-semibold ${totalBlocking > 0 ? 'text-orange-500' : 'text-gray-900'}`}>
               {totalBlocking}
             </div>
           </div>
-          <div className="bg-[#1a1a1a] border border-[#2a2a2a] rounded-lg p-4">
+          <div className="bg-gray-50 border border-gray-200 rounded-lg p-3">
             <div className="text-xs text-gray-500 mb-1">Avg. readiness</div>
             <div
               className={`text-xl font-semibold ${
                 avgReadiness === null
-                  ? 'text-gray-600'
+                  ? 'text-gray-400'
                   : avgReadiness >= 90
-                    ? 'text-green-400'
+                    ? 'text-green-600'
                     : avgReadiness >= 60
-                      ? 'text-amber-400'
-                      : 'text-red-400'
+                      ? 'text-amber-500'
+                      : 'text-red-500'
               }`}
             >
               {avgReadiness !== null ? `${avgReadiness}%` : '—'}
@@ -353,21 +344,23 @@ export function ProjectsList({ initialProjects }: ProjectsListProps) {
         </div>
 
         {/* Filter tabs */}
-        <div className="flex items-center gap-1 border-b border-[#2a2a2a]">
+        <div className="flex items-center gap-1">
           {TABS.map((tab) => (
             <button
               key={tab.id}
               onClick={() => setActiveFilter(tab.id)}
-              className={`px-3 pb-2.5 text-sm font-medium flex items-center gap-1.5 border-b-2 transition-colors ${
+              className={`px-3 pb-3 text-sm font-medium flex items-center gap-1.5 border-b-2 transition-colors ${
                 activeFilter === tab.id
-                  ? 'border-[#4F46E5] text-white'
-                  : 'border-transparent text-gray-500 hover:text-gray-300'
+                  ? 'border-[#4F46E5] text-[#4F46E5]'
+                  : 'border-transparent text-gray-500 hover:text-gray-700'
               }`}
             >
               {tab.label}
               <span
                 className={`text-[11px] px-1.5 py-0.5 rounded-full ${
-                  activeFilter === tab.id ? 'bg-[#4F46E5] text-white' : 'bg-[#2a2a2a] text-gray-400'
+                  activeFilter === tab.id
+                    ? 'bg-indigo-100 text-indigo-700'
+                    : 'bg-gray-100 text-gray-500'
                 }`}
               >
                 {tab.count}
@@ -378,13 +371,13 @@ export function ProjectsList({ initialProjects }: ProjectsListProps) {
       </div>
 
       {/* Project list */}
-      <div className="flex-1 px-8 pb-8">
+      <div className="flex-1 px-8 py-6">
         {filtered.length === 0 ? (
           <div className="flex flex-col items-center justify-center py-24 text-center">
-            <div className="w-14 h-14 bg-[#1a1a1a] border border-[#2a2a2a] rounded-full flex items-center justify-center mb-4">
-              <Database className="w-6 h-6 text-gray-600" />
+            <div className="w-14 h-14 bg-gray-100 rounded-full flex items-center justify-center mb-4">
+              <Database className="w-6 h-6 text-gray-400" />
             </div>
-            <h3 className="text-base font-medium text-white mb-2">
+            <h3 className="text-base font-medium text-gray-900 mb-2">
               {search ? 'No projects match your search' : 'No projects yet'}
             </h3>
             <p className="text-sm text-gray-500 mb-6 max-w-xs">
@@ -403,7 +396,7 @@ export function ProjectsList({ initialProjects }: ProjectsListProps) {
             )}
           </div>
         ) : (
-          <div className="space-y-3">
+          <div className="space-y-3 max-w-5xl">
             {filtered.map((project) => (
               <ProjectCard key={project.id} project={project} />
             ))}

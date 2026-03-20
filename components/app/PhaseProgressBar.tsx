@@ -15,9 +15,9 @@ export function PhaseProgressBar({ currentPhase, showLabels = false }: PhaseProg
           if (phase < currentPhase) {
             color = 'bg-green-500'
           } else if (phase === currentPhase) {
-            color = 'bg-amber-500'
+            color = 'bg-amber-400'
           } else {
-            color = 'bg-[#2a2a2a]'
+            color = 'bg-gray-200'
           }
           return <div key={label} className={`flex-1 h-1 rounded-full ${color}`} />
         })}
@@ -25,7 +25,7 @@ export function PhaseProgressBar({ currentPhase, showLabels = false }: PhaseProg
       {showLabels && (
         <div className="flex mt-1.5">
           {PHASE_LABELS.map((label) => (
-            <div key={label} className="flex-1 text-[10px] text-gray-600 text-center leading-none">
+            <div key={label} className="flex-1 text-[10px] text-gray-400 text-center leading-none">
               {label}
             </div>
           ))}
