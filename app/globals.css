@@ -5,6 +5,14 @@
 @tailwind components;
 @tailwind utilities;
 
+html {
+  scroll-behavior: smooth;
+}
+
+::selection {
+  background: rgba(37, 99, 235, 0.12);
+}
+
 @layer base {
   * {
     border-color: var(--border);

@@ -1,67 +1,85 @@
 'use client'
 
 import { useState } from 'react'
+import { AnimatePresence, motion } from 'framer-motion'
+import ScrollReveal from '@/components/ui/ScrollReveal'
 
-const faqs = [
+const FAQS = [
   {
-    question: 'Who is MINE for?',
-    answer: 'Transformation leaders, data migration leads, and enterprise IT teams running complex ERP and CRM programs.',
+    question: 'How does Mine handle data security?',
+    answer: 'Mine runs in your environment or a dedicated cloud instance. Data never leaves your VPC. We support SOC 2 compliance requirements and provide full audit trails for every AI-generated mapping and transformation.',
   },
   {
-    question: 'Which systems does MINE support?',
-    answer: 'Salesforce, SAP, Oracle, NetSuite, and SQL-based sources to start, with more connectors planned.',
+    question: 'What systems does Mine connect to?',
+    answer: 'Mine is built for enterprise migrations from Salesforce, SAP, Oracle, NetSuite, and custom databases. We support SQL Server, PostgreSQL, and API-based source extraction.',
   },
   {
-    question: 'Where does MINE run?',
-    answer: 'You can run generated ETL in your own environment or use MINE\'s secure runtime.',
+    question: 'What if the AI gets a mapping wrong?',
+    answer: 'Every AI-proposed mapping includes a confidence score and explanation. Your team reviews and approves before anything executes. Ambiguous mappings are flagged for human review — the AI never acts without visibility.',
   },
   {
-    question: 'Is MINE a consulting service?',
-    answer: 'No. MINE is a full-stack, AI-native migration product that can work alongside your SI or internal team.',
+    question: 'Is Mine a consulting service?',
+    answer: 'No. Mine is a software platform. We replace the manual spreadsheet-and-SQL work that consultants do today with an autonomous, reusable engine. Consultants can use Mine to accelerate their own delivery.',
   },
   {
-    question: 'How early can we get access?',
-    answer: 'We\'re building with a small group of design partners. Join the waitlist for early access.',
+    question: 'How quickly can we get started?',
+    answer: 'Connect your source schema and target model, and Mine profiles your data in minutes. First mapping proposals are generated within an hour. Full migration readiness typically takes days, not months.',
   },
 ]
 
 export default function FAQ() {
-  const [openIndex, setOpenIndex] = useState<number | null>(0)
+  const [openIndex, setOpenIndex] = useState<number>(0)
+
+  const toggle = (i: number) => setOpenIndex(openIndex === i ? -1 : i)
 
   return (
-    <section className="py-20 bg-white">
-      <div className="max-w-3xl mx-auto px-4 sm:px-6 lg:px-8">
-        <div className="text-center mb-12">
-          <h2 className="text-3xl lg:text-4xl font-bold text-slate-900 mb-4">
+    <section id="faq" className="py-24 px-6 lg:px-12">
+      <div className="max-w-2xl mx-auto">
+
+        <ScrollReveal>
+          <h2 className="text-4xl font-bold text-[#0F172A] tracking-tight text-center mb-10">
             FAQ
           </h2>
-        </div>
+        </ScrollReveal>
 
-        <div className="space-y-4">
-          {faqs.map((faq, index) => (
-            <div
-              key={index}
-              className="border border-slate-200 rounded-lg overflow-hidden"
-            >
+        {FAQS.map((faq, i) => (
+          <ScrollReveal key={faq.question} delay={i * 0.05}>
+            <div className="border-b border-[#E2E8F0]">
               <button
-                onClick={() => setOpenIndex(openIndex === index ? null : index)}
-                className="w-full px-6 py-4 text-left flex justify-between items-center hover:bg-slate-50 transition-colors"
+                onClick={() => toggle(i)}
+                className="w-full flex items-center justify-between py-5 text-left group"
               >
-                <span className="font-semibold text-slate-900">{faq.question}</span>
-                <span className="text-slate-400 text-xl">
-                  {openIndex === index ? '−' : '+'}
+                <span className="text-base font-medium text-[#1E3A5F] group-hover:text-[#2563EB] transition-colors pr-4">
+                  {faq.question}
+                </span>
+                <span
+                  className="text-[#94A3B8] text-xl shrink-0 transition-transform duration-300"
+                  style={{ transform: openIndex === i ? 'rotate(45deg)' : 'rotate(0deg)' }}
+                >
+                  +
                 </span>
               </button>
-              {openIndex === index && (
-                <div className="px-6 py-4 bg-slate-50 text-slate-600">
-                  {faq.answer}
-                </div>
-              )}
+
+              <AnimatePresence initial={false}>
+                {openIndex === i && (
+                  <motion.div
+                    initial={{ height: 0, opacity: 0 }}
+                    animate={{ height: 'auto', opacity: 1 }}
+                    exit={{ height: 0, opacity: 0 }}
+                    transition={{ duration: 0.3, ease: [0.22, 1, 0.36, 1] }}
+                    style={{ overflow: 'hidden' }}
+                  >
+                    <p className="text-[15px] text-[#64748B] leading-relaxed pb-5">
+                      {faq.answer}
+                    </p>
+                  </motion.div>
+                )}
+              </AnimatePresence>
             </div>
-          ))}
-        </div>
+          </ScrollReveal>
+        ))}
+
       </div>
     </section>
   )
 }
-

@@ -1,121 +1,88 @@
 'use client'
 
 import { useState } from 'react'
-import Link from 'next/link'
+import { AnimatePresence, motion } from 'framer-motion'
+import ScrollReveal from '@/components/ui/ScrollReveal'
+import SchemaTable from './how-it-works/SchemaTable'
+import MappingTable from './how-it-works/MappingTable'
+import ValidationDashboard from './how-it-works/ValidationDashboard'
 
-const steps = [
-  {
-    title: 'Schema understanding',
-    description: 'Agents scan source systems and learn tables, keys, and relationships.',
-    bullets: [
-      'Map entities and dependencies automatically.',
-      'Spot duplicates and anomalies.',
-    ],
-  },
-  {
-    title: 'Auto-mapping & transformation',
-    description: 'MINE proposes and refines field-level mappings into your target model.',
-    bullets: [
-      'Generate mapping specs automatically.',
-      'Surface ambiguous mappings for human review.',
-    ],
-  },
-  {
-    title: 'Cleansing & standardization',
-    description: 'Cleansing becomes a reusable layer instead of one-off scripts.',
-    bullets: [
-      'Address normalization and picklist alignment.',
-      'Dedupe, merge, and fix referential integrity.',
-    ],
-  },
-  {
-    title: 'Generated ETL & loaders',
-    description: 'MINE outputs production-ready SQL, Python, or API-based loaders.',
-    bullets: [
-      'Run in your environment or MINE\'s runtime.',
-      'Parameterize for dev, test, and prod.',
-    ],
-  },
-  {
-    title: 'Validation, reconciliation & delta',
-    description: 'Multi-agent validation ensures safe loads and smooth deltas.',
-    bullets: [
-      'Detect constraint issues and data drift.',
-      'Handle schema changes and delta migrations.',
-    ],
-  },
+const TABS = [
+  '1. Schema understanding',
+  '2. Auto-mapping',
+  '3. Validation & readiness',
+]
+
+const TAB_CONTENT = [
+  <SchemaTable key="schema" />,
+  <MappingTable key="mapping" />,
+  <ValidationDashboard key="validation" />,
 ]
 
 export default function HowItWorks() {
-  const [activeStep, setActiveStep] = useState(0)
+  const [activeTab, setActiveTab] = useState(0)
 
   return (
-    <section id="how-it-works" className="py-20 bg-white">
-      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-        <div className="text-center mb-12">
-          <h2 className="text-3xl lg:text-4xl font-bold text-slate-900 mb-4">
-            How MINE works end-to-end
-          </h2>
-          <p className="text-lg text-slate-600">
-            An autonomous, multi-agent workflow across the migration lifecycle.
-          </p>
-        </div>
+    <section id="how" className="py-24 px-6 lg:px-12">
+      <div className="max-w-7xl mx-auto">
 
-        {/* Tabs */}
-        <div className="mb-8">
-          <div className="flex flex-wrap gap-1 sm:gap-2 justify-center border-b border-slate-200">
-            {steps.map((step, index) => (
+        {/* Header */}
+        <ScrollReveal>
+          <h2 className="text-4xl font-bold text-[#0F172A] tracking-tight text-center mb-3">
+            See Mine work end-to-end
+          </h2>
+          <p className="text-[#64748B] text-[17px] text-center max-w-xl mx-auto mb-12">
+            One Casella migration. 240 tables. 3,412 fields. Watch the autonomous workflow from profiling to production-ready load files.
+          </p>
+        </ScrollReveal>
+
+        {/* Tab bar */}
+        <ScrollReveal delay={0.1}>
+          <div className="flex justify-center border-b border-[#E2E8F0] overflow-x-auto gap-0 mb-0">
+            {TABS.map((tab, i) => (
               <button
-                key={index}
-                onClick={() => setActiveStep(index)}
-                className={`px-2 sm:px-4 py-2 text-xs sm:text-sm font-medium transition-colors whitespace-nowrap ${
-                  activeStep === index
-                    ? 'text-indigo-600 border-b-2 border-indigo-600'
-                    : 'text-slate-600 hover:text-slate-900'
+                key={tab}
+                onClick={() => setActiveTab(i)}
+                className={`px-4 py-3 text-sm font-medium border-b-2 transition-all whitespace-nowrap cursor-pointer bg-transparent ${
+                  activeTab === i
+                    ? 'text-[#2563EB] border-[#2563EB]'
+                    : 'text-[#64748B] border-transparent hover:text-[#334155]'
                 }`}
               >
-                {index + 1}. {step.title}
+                {tab}
               </button>
             ))}
           </div>
-        </div>
+        </ScrollReveal>
 
-        {/* Active Step Content */}
-        <div className="bg-slate-50 rounded-lg p-8 mb-8">
-          <h3 className="text-2xl font-bold text-slate-900 mb-4">
-            {steps[activeStep].title}
-          </h3>
-          <p className="text-lg text-slate-600 mb-6">
-            {steps[activeStep].description}
-          </p>
-          <ul className="space-y-2">
-            {steps[activeStep].bullets.map((bullet, idx) => (
-              <li key={idx} className="flex items-start text-slate-600">
-                <span className="text-indigo-500 mr-2">•</span>
-                <span>{bullet}</span>
-              </li>
-            ))}
-          </ul>
-        </div>
+        {/* Tab content */}
+        <ScrollReveal delay={0.15}>
+          <div className="mt-6">
+            <AnimatePresence mode="wait">
+              <motion.div
+                key={activeTab}
+                initial={{ opacity: 0, y: 8 }}
+                animate={{ opacity: 1, y: 0 }}
+                exit={{ opacity: 0, y: -8 }}
+                transition={{ duration: 0.3 }}
+              >
+                {TAB_CONTENT[activeTab]}
+              </motion.div>
+            </AnimatePresence>
+          </div>
+        </ScrollReveal>
 
-        {/* Result Strip */}
-        <div className="bg-indigo-50 border border-indigo-200 rounded-lg p-6 mb-8">
-          <p className="text-center text-slate-900 font-medium">
-            <span className="font-bold">Result:</span> migrations in weeks, not months — with 50–70% lower cost and dramatically reduced risk.
-          </p>
-        </div>
+        {/* Result callout */}
+        <ScrollReveal delay={0.2}>
+          <div className="mt-10 p-5 bg-[#ECFDF5] rounded-xl border border-teal-200 flex items-center gap-3">
+            <span className="text-[#0D9488] font-bold text-[15px] shrink-0">Result:</span>
+            <span className="text-[#115E59] text-[15px]">
+              migrations in weeks, not months — with 50–70% lower cost and dramatically reduced risk.
+            </span>
+          </div>
+        </ScrollReveal>
 
-        {/* CTA */}
-        <div className="text-center">
-          <Link
-            href="/signup"
-            className="inline-block px-6 py-3 bg-indigo-600 text-white rounded-md hover:bg-indigo-700 transition-colors font-medium"
-          >
-            Get Started
-          </Link>
-        </div>
       </div>
     </section>
   )
 }
-
