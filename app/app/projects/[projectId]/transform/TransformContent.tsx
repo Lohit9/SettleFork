@@ -1047,13 +1047,13 @@ function FieldRow({ field, isSelected, onSelect }: {
         <div className="flex items-center gap-1 flex-shrink-0">
           {/* Status icon */}
           {status === 'applied' && (
-            <CheckCircle2 className="w-3.5 h-3.5 text-green-500" title="Applied to staged data" />
+            <span title="Applied to staged data"><CheckCircle2 className="w-3.5 h-3.5 text-green-500" /></span>
           )}
           {status === 'stale' && (
-            <AlertCircle className="w-3.5 h-3.5 text-yellow-500" title="Transform edited after apply — re-apply needed" />
+            <span title="Transform edited after apply — re-apply needed"><AlertCircle className="w-3.5 h-3.5 text-yellow-500" /></span>
           )}
           {(status === 'saved' || status === 'tested') && (
-            <Save className="w-3 h-3 text-blue-500" title="Saved but not yet applied to staged data" />
+            <span title="Saved but not yet applied to staged data"><Save className="w-3 h-3 text-blue-500" /></span>
           )}
           {field.needsTransform && !field.transformation && (
             <Badge className="bg-orange-100 text-orange-700 hover:bg-orange-100 border border-orange-200 text-[10px] px-1.5 py-0">
