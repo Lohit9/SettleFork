@@ -8,7 +8,12 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Upload, CheckCircle2, AlertCircle, RefreshCw } from '@/components/icons'
 import { uploadCSV } from '@/lib/actions/csv'
 import { createDataset, getTablesForDataset } from '@/lib/actions/datasets'
+import { parseDDLFile, confirmDDLSchema } from '@/lib/actions/ddl-upload'
+import type { ParsedTable } from '@/lib/parsers/ddl-parser'
 import type { DatasetWithTableStats, TableStats } from '@/lib/actions/datasets'
+import { DDLSchemaReview } from './DDLSchemaReview'
+
+type IngestMethod = 'csv' | 'ddl' | 'db' | null
 
 interface UploadState {
   status: 'idle' | 'uploading' | 'success' | 'error'
@@ -16,6 +21,36 @@ interface UploadState {
   rowCount?: number
   fieldCount?: number
   error?: string
+}
+
+type DDLStep = 'upload' | 'review' | 'saved'
+
+interface DDLState {
+  step: DDLStep
+  parsing: boolean
+  saving: boolean
+  error: string | null
+  filename: string
+  usedAI: boolean
+  parsedTables: ParsedTable[]
+  ddlContent: string
+  savedTableCount: number
+  isDragOver: boolean
+  showReplaceConfirm: boolean
+}
+
+const INITIAL_DDL: DDLState = {
+  step: 'upload',
+  parsing: false,
+  saving: false,
+  error: null,
+  filename: '',
+  usedAI: false,
+  parsedTables: [],
+  ddlContent: '',
+  savedTableCount: 0,
+  isDragOver: false,
+  showReplaceConfirm: false,
 }
 
 interface IngestionCardProps {
@@ -38,18 +73,29 @@ export function IngestionCard({ type, title, projectId, initialDatasets }: Inges
   const [newTableName, setNewTableName] = useState('')
   const [showNewTableInput, setShowNewTableInput] = useState(false)
 
-  const [method, setMethod] = useState<'csv' | 'db' | null>(null)
+  const [method, setMethod] = useState<IngestMethod>(null)
   const [isDragOver, setIsDragOver] = useState(false)
   const [uploadState, setUploadState] = useState<UploadState>({ status: 'idle' })
   const [showReplaceConfirm, setShowReplaceConfirm] = useState(false)
   const [pendingFile, setPendingFile] = useState<File | null>(null)
   const [creatingDataset, setCreatingDataset] = useState(false)
 
+  const [ddl, setDdl] = useState<DDLState>(INITIAL_DDL)
+
   const fileInputRef = useRef<HTMLInputElement>(null)
+  const ddlFileInputRef = useRef<HTMLInputElement>(null)
 
   const selectedDataset = datasets.find((d) => d.id === selectedDatasetId)
   const selectedTable = selectedDataset?.tables.find((t) => t.id === selectedTableId)
   const tableHasData = selectedTable && selectedTable.row_count > 0
+
+  // ── Shared: when method changes, reset DDL state ──────────────────────────
+
+  const handleMethodChange = (newMethod: IngestMethod) => {
+    setMethod(newMethod)
+    setDdl(INITIAL_DDL)
+    setUploadState({ status: 'idle' })
+  }
 
   // ── Dataset handlers ──────────────────────────────────────────────────────
 
@@ -65,6 +111,7 @@ export function IngestionCard({ type, title, projectId, initialDatasets }: Inges
       setSelectedTableId(null)
       setSelectedTableName(null)
       setUploadState({ status: 'idle' })
+      setDdl(INITIAL_DDL)
     }
   }
 
@@ -90,7 +137,7 @@ export function IngestionCard({ type, title, projectId, initialDatasets }: Inges
     }
   }
 
-  // ── Table handlers ────────────────────────────────────────────────────────
+  // ── CSV: table handlers ───────────────────────────────────────────────────
 
   const handleTableSelect = (value: string) => {
     if (value === 'new') {
@@ -109,7 +156,6 @@ export function IngestionCard({ type, title, projectId, initialDatasets }: Inges
 
   const handleSaveNewTable = () => {
     if (!newTableName.trim()) return
-    // Table is created on CSV upload — just store the name locally
     const tempId = `new_${Date.now()}`
     const newTable: TableStats = {
       id: tempId,
@@ -130,7 +176,7 @@ export function IngestionCard({ type, title, projectId, initialDatasets }: Inges
     setShowNewTableInput(false)
   }
 
-  // ── Upload handlers ───────────────────────────────────────────────────────
+  // ── CSV: upload handlers ──────────────────────────────────────────────────
 
   const doUpload = useCallback(
     async (file: File) => {
@@ -148,19 +194,15 @@ export function IngestionCard({ type, title, projectId, initialDatasets }: Inges
       const result = await uploadCSV(formData)
 
       if (result.success && result.tableId) {
-        // Reload tables from DB so we have the real ID and stats
         try {
           const freshTables = await getTablesForDataset(selectedDatasetId)
           setDatasets((prev) =>
             prev.map((d) => (d.id === selectedDatasetId ? { ...d, tables: freshTables } : d))
           )
-          // Auto-select the newly created/updated table
           const uploadedTable = freshTables.find((t) => t.name === selectedTableName)
-          if (uploadedTable) {
-            setSelectedTableId(uploadedTable.id)
-          }
+          if (uploadedTable) setSelectedTableId(uploadedTable.id)
         } catch {
-          // Non-fatal — UI will still show success
+          // non-fatal
         }
 
         setUploadState({
@@ -198,11 +240,7 @@ export function IngestionCard({ type, title, projectId, initialDatasets }: Inges
     if (file) handleFileSelected(file)
   }
 
-  const handleDragOver = (e: React.DragEvent) => {
-    e.preventDefault()
-    setIsDragOver(true)
-  }
-
+  const handleDragOver = (e: React.DragEvent) => { e.preventDefault(); setIsDragOver(true) }
   const handleDragLeave = () => setIsDragOver(false)
 
   const handleConfirmReplace = () => {
@@ -212,16 +250,122 @@ export function IngestionCard({ type, title, projectId, initialDatasets }: Inges
       setPendingFile(null)
     }
   }
+  const handleCancelReplace = () => { setShowReplaceConfirm(false); setPendingFile(null) }
 
-  const handleCancelReplace = () => {
-    setShowReplaceConfirm(false)
-    setPendingFile(null)
+  // ── DDL: upload and parse ─────────────────────────────────────────────────
+
+  const handleDDLFile = async (file: File) => {
+    if (!selectedDatasetId) return
+
+    // If this dataset already has tables, confirm replacement
+    const existingDs = datasets.find((d) => d.id === selectedDatasetId)
+    if (existingDs && existingDs.tables.length > 0 && ddl.step !== 'review') {
+      setDdl((s) => ({ ...s, filename: file.name, showReplaceConfirm: true }))
+      // Stash the file so we can use it after confirmation
+      setPendingFile(file)
+      return
+    }
+
+    await doParseDDL(file)
   }
+
+  const doParseDDL = async (file: File) => {
+    setDdl((s) => ({
+      ...s,
+      parsing: true,
+      error: null,
+      filename: file.name,
+      showReplaceConfirm: false,
+    }))
+    setPendingFile(null)
+
+    const formData = new FormData()
+    formData.append('file', file)
+    formData.append('projectId', projectId)
+    formData.append('datasetId', selectedDatasetId!)
+
+    const result = await parseDDLFile(formData)
+
+    if (result.success && result.tables) {
+      setDdl((s) => ({
+        ...s,
+        parsing: false,
+        step: 'review',
+        parsedTables: result.tables!,
+        usedAI: result.usedAI ?? false,
+        ddlContent: result.ddlContent ?? '',
+      }))
+    } else {
+      setDdl((s) => ({ ...s, parsing: false, error: result.error ?? 'Parse failed' }))
+    }
+  }
+
+  const handleDDLInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0]
+    if (file) handleDDLFile(file)
+    e.target.value = ''
+  }
+
+  const handleDDLDrop = (e: React.DragEvent) => {
+    e.preventDefault()
+    setDdl((s) => ({ ...s, isDragOver: false }))
+    const file = e.dataTransfer.files[0]
+    if (file) handleDDLFile(file)
+  }
+
+  // ── DDL: confirm schema ───────────────────────────────────────────────────
+
+  const handleDDLConfirm = async (editedTables: ParsedTable[]) => {
+    if (!selectedDatasetId) return
+
+    setDdl((s) => ({ ...s, saving: true, error: null }))
+
+    const result = await confirmDDLSchema(
+      projectId,
+      type,
+      selectedDatasetId,
+      editedTables,
+      ddl.ddlContent,
+      ddl.filename
+    )
+
+    if (result.success) {
+      // Refresh datasets so the sidebar reflects new tables
+      try {
+        const freshTables = await getTablesForDataset(selectedDatasetId)
+        setDatasets((prev) =>
+          prev.map((d) => (d.id === selectedDatasetId ? { ...d, tables: freshTables } : d))
+        )
+      } catch {
+        // non-fatal
+      }
+
+      setDdl((s) => ({
+        ...s,
+        saving: false,
+        step: 'saved',
+        savedTableCount: result.tableCount ?? editedTables.length,
+      }))
+    } else {
+      setDdl((s) => ({
+        ...s,
+        saving: false,
+        error: result.error ?? 'Failed to save schema',
+      }))
+    }
+  }
+
+  const handleDDLCancel = () => setDdl(INITIAL_DDL)
 
   // ── Render ────────────────────────────────────────────────────────────────
 
-  const showUploadZone =
-    method === 'csv' && selectedDatasetId && (selectedTableId || showNewTableInput === false) && selectedTableName
+  const showCSVUploadZone =
+    method === 'csv' &&
+    selectedDatasetId &&
+    selectedTableName &&
+    (selectedTableId || !showNewTableInput)
+
+  const showDDLSection = method === 'ddl' && selectedDatasetId
 
   return (
     <Card className="border-gray-200">
@@ -236,17 +380,23 @@ export function IngestionCard({ type, title, projectId, initialDatasets }: Inges
         </div>
       </CardHeader>
       <CardContent className="space-y-5">
-        {/* Method Selector */}
+
+        {/* ── Method Selector ───────────────────────────────────────────── */}
         <div className="space-y-2">
           <Label htmlFor={`${type}-method`}>Data ingestion method</Label>
           <select
             id={`${type}-method`}
             value={method ?? ''}
-            onChange={(e) => setMethod(e.target.value === '' ? null : (e.target.value as 'csv' | 'db'))}
+            onChange={(e) =>
+              handleMethodChange(
+                e.target.value === '' ? null : (e.target.value as IngestMethod)
+              )
+            }
             className="w-full h-9 rounded-md border border-gray-300 px-3 py-1 text-sm focus:outline-none focus:ring-2 focus:ring-[#4F46E5]"
           >
             <option value="">Select method</option>
             <option value="csv">CSV Upload</option>
+            <option value="ddl">DDL / Schema Upload</option>
             <option value="db">Database Connection</option>
           </select>
         </div>
@@ -258,11 +408,11 @@ export function IngestionCard({ type, title, projectId, initialDatasets }: Inges
           </div>
         )}
 
-        {/* Database Connection — disabled / coming soon */}
+        {/* ── Database Connection — coming soon ─────────────────────────── */}
         {method === 'db' && (
           <div className="space-y-4">
             <div className="rounded-md border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
-              Database connections are coming soon. Use CSV Upload for now.
+              Database connections are coming soon. Use CSV Upload or DDL / Schema Upload for now.
             </div>
             <div className="space-y-3 opacity-50 pointer-events-none">
               <div className="grid grid-cols-2 gap-3">
@@ -291,48 +441,97 @@ export function IngestionCard({ type, title, projectId, initialDatasets }: Inges
           </div>
         )}
 
-        {/* CSV Upload Mode */}
-        {method === 'csv' && (
+        {/* ── Shared: Dataset / Schema selector (CSV + DDL) ─────────────── */}
+        {(method === 'csv' || method === 'ddl') && (
+          <div className="space-y-2">
+            <Label htmlFor={`${type}-dataset`}>Schema</Label>
+            <select
+              id={`${type}-dataset`}
+              value={selectedDatasetId ?? ''}
+              onChange={(e) => handleDatasetSelect(e.target.value)}
+              className="w-full h-9 rounded-md border border-gray-300 px-3 py-1 text-sm focus:outline-none focus:ring-2 focus:ring-[#4F46E5]"
+            >
+              <option value="">Select schema</option>
+              {datasets.map((d) => (
+                <option key={d.id} value={d.id}>
+                  {d.name}
+                </option>
+              ))}
+              <option value="new">+ Add new schema</option>
+            </select>
+
+            {showNewDatasetInput && (
+              <div className="flex gap-2">
+                <Input
+                  placeholder="Schema name (e.g. SAP_S4HANA)"
+                  value={newDatasetName}
+                  onChange={(e) => setNewDatasetName(e.target.value)}
+                  onKeyDown={(e) => e.key === 'Enter' && handleSaveNewDataset()}
+                  autoFocus
+                />
+                <Button
+                  size="sm"
+                  onClick={handleSaveNewDataset}
+                  disabled={!newDatasetName.trim() || creatingDataset}
+                  className="bg-[#4F46E5] hover:bg-[#4338CA] text-white"
+                >
+                  {creatingDataset ? 'Saving…' : 'Save'}
+                </Button>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  onClick={() => { setShowNewDatasetInput(false); setNewDatasetName('') }}
+                >
+                  Cancel
+                </Button>
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* ── CSV Upload Mode ───────────────────────────────────────────── */}
+        {method === 'csv' && selectedDatasetId && (
           <div className="space-y-5">
-            {/* Step 1: Dataset / Database selector */}
+            {/* Step 2: Table selector */}
             <div className="space-y-2">
-              <Label htmlFor={`${type}-dataset`}>Schema</Label>
+              <Label htmlFor={`${type}-table`}>Table</Label>
               <select
-                id={`${type}-dataset`}
-                value={selectedDatasetId ?? ''}
-                onChange={(e) => handleDatasetSelect(e.target.value)}
+                id={`${type}-table`}
+                value={selectedTableId ?? ''}
+                onChange={(e) => handleTableSelect(e.target.value)}
                 className="w-full h-9 rounded-md border border-gray-300 px-3 py-1 text-sm focus:outline-none focus:ring-2 focus:ring-[#4F46E5]"
               >
-                <option value="">Select schema</option>
-                {datasets.map((d) => (
-                  <option key={d.id} value={d.id}>
-                    {d.name}
+                <option value="">Select table</option>
+                {selectedDataset?.tables.map((t) => (
+                  <option key={t.id} value={t.id}>
+                    {t.name}
+                    {t.row_count > 0 ? ` (${t.row_count.toLocaleString()} rows)` : ''}
                   </option>
                 ))}
-                <option value="new">+ Add new schema</option>
+                <option value="new">+ Add new table</option>
               </select>
 
-              {showNewDatasetInput && (
+              {showNewTableInput && (
                 <div className="flex gap-2">
                   <Input
-                    placeholder="Schema name (e.g. SALESFORCE_PROD)"
-                    value={newDatasetName}
-                    onChange={(e) => setNewDatasetName(e.target.value)}
-                    onKeyDown={(e) => e.key === 'Enter' && handleSaveNewDataset()}
+                    placeholder="Table name (e.g. Account)"
+                    value={newTableName}
+                    onChange={(e) => setNewTableName(e.target.value)}
+                    onKeyDown={(e) => e.key === 'Enter' && handleSaveNewTable()}
                     autoFocus
                   />
                   <Button
                     size="sm"
-                    onClick={handleSaveNewDataset}
-                    disabled={!newDatasetName.trim() || creatingDataset}
+                    onClick={handleSaveNewTable}
+                    disabled={!newTableName.trim()}
                     className="bg-[#4F46E5] hover:bg-[#4338CA] text-white"
                   >
-                    {creatingDataset ? 'Saving…' : 'Save'}
+                    Save
                   </Button>
                   <Button
                     size="sm"
                     variant="outline"
-                    onClick={() => { setShowNewDatasetInput(false); setNewDatasetName('') }}
+                    onClick={() => { setShowNewTableInput(false); setNewTableName('') }}
                   >
                     Cancel
                   </Button>
@@ -340,59 +539,9 @@ export function IngestionCard({ type, title, projectId, initialDatasets }: Inges
               )}
             </div>
 
-            {/* Step 2: Table selector */}
-            {selectedDatasetId && (
-              <div className="space-y-2">
-                <Label htmlFor={`${type}-table`}>Table</Label>
-                <select
-                  id={`${type}-table`}
-                  value={selectedTableId ?? ''}
-                  onChange={(e) => handleTableSelect(e.target.value)}
-                  className="w-full h-9 rounded-md border border-gray-300 px-3 py-1 text-sm focus:outline-none focus:ring-2 focus:ring-[#4F46E5]"
-                >
-                  <option value="">Select table</option>
-                  {selectedDataset?.tables.map((t) => (
-                    <option key={t.id} value={t.id}>
-                      {t.name}
-                      {t.row_count > 0 ? ` (${t.row_count.toLocaleString()} rows)` : ''}
-                    </option>
-                  ))}
-                  <option value="new">+ Add new table</option>
-                </select>
-
-                {showNewTableInput && (
-                  <div className="flex gap-2">
-                    <Input
-                      placeholder="Table name (e.g. Account)"
-                      value={newTableName}
-                      onChange={(e) => setNewTableName(e.target.value)}
-                      onKeyDown={(e) => e.key === 'Enter' && handleSaveNewTable()}
-                      autoFocus
-                    />
-                    <Button
-                      size="sm"
-                      onClick={handleSaveNewTable}
-                      disabled={!newTableName.trim()}
-                      className="bg-[#4F46E5] hover:bg-[#4338CA] text-white"
-                    >
-                      Save
-                    </Button>
-                    <Button
-                      size="sm"
-                      variant="outline"
-                      onClick={() => { setShowNewTableInput(false); setNewTableName('') }}
-                    >
-                      Cancel
-                    </Button>
-                  </div>
-                )}
-              </div>
-            )}
-
             {/* Step 3: Upload zone */}
-            {showUploadZone && (
+            {showCSVUploadZone && (
               <div className="space-y-3">
-                {/* Existing data summary */}
                 {tableHasData && uploadState.status === 'idle' && (
                   <div className="flex items-center justify-between rounded-md bg-green-50 border border-green-200 px-3 py-2">
                     <div className="flex items-center gap-2">
@@ -415,7 +564,6 @@ export function IngestionCard({ type, title, projectId, initialDatasets }: Inges
                   </div>
                 )}
 
-                {/* Replace confirmation */}
                 {showReplaceConfirm && (
                   <div className="rounded-md border border-amber-200 bg-amber-50 px-4 py-3 space-y-2">
                     <p className="text-sm text-amber-800 font-medium">Replace existing data?</p>
@@ -438,7 +586,6 @@ export function IngestionCard({ type, title, projectId, initialDatasets }: Inges
                   </div>
                 )}
 
-                {/* Upload zone */}
                 {!showReplaceConfirm && (
                   <div
                     onDrop={handleDrop}
@@ -472,7 +619,8 @@ export function IngestionCard({ type, title, projectId, initialDatasets }: Inges
                         <CheckCircle2 className="w-10 h-10 text-green-500 mx-auto" />
                         <p className="text-sm font-medium text-gray-900">{uploadState.filename}</p>
                         <p className="text-sm text-green-700 font-medium">
-                          ✓ {uploadState.rowCount?.toLocaleString()} rows, {uploadState.fieldCount} fields uploaded
+                          ✓ {uploadState.rowCount?.toLocaleString()} rows,{' '}
+                          {uploadState.fieldCount} fields uploaded
                         </p>
                         <button
                           className="text-xs text-gray-500 underline mt-1"
@@ -543,6 +691,161 @@ export function IngestionCard({ type, title, projectId, initialDatasets }: Inges
             )}
           </div>
         )}
+
+        {/* ── DDL / Schema Upload Mode ──────────────────────────────────── */}
+        {showDDLSection && (
+          <div className="space-y-4">
+
+            {/* DDL replace-schema confirmation */}
+            {ddl.showReplaceConfirm && (
+              <div className="rounded-md border border-amber-200 bg-amber-50 px-4 py-3 space-y-2">
+                <p className="text-sm text-amber-800 font-medium">Replace existing schema?</p>
+                <p className="text-xs text-amber-700">
+                  This will delete all existing tables and fields for this schema and replace them
+                  with the DDL-defined structure. Any uploaded CSV data will also be removed.
+                </p>
+                <div className="flex gap-2">
+                  <Button
+                    size="sm"
+                    className="bg-amber-600 hover:bg-amber-700 text-white"
+                    onClick={() => pendingFile && doParseDDL(pendingFile)}
+                  >
+                    Yes, replace
+                  </Button>
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    onClick={() => { setDdl((s) => ({ ...s, showReplaceConfirm: false })); setPendingFile(null) }}
+                  >
+                    Cancel
+                  </Button>
+                </div>
+              </div>
+            )}
+
+            {/* Upload zone — shown in 'upload' step */}
+            {ddl.step === 'upload' && !ddl.showReplaceConfirm && (
+              <div
+                onDrop={handleDDLDrop}
+                onDragOver={(e) => { e.preventDefault(); setDdl((s) => ({ ...s, isDragOver: true })) }}
+                onDragLeave={() => setDdl((s) => ({ ...s, isDragOver: false }))}
+                className={`border-2 border-dashed rounded-lg p-8 text-center transition-colors ${
+                  ddl.isDragOver
+                    ? 'border-[#4F46E5] bg-indigo-50'
+                    : 'border-gray-300 hover:border-gray-400'
+                }`}
+              >
+                {ddl.parsing ? (
+                  <div className="space-y-3">
+                    <div className="flex justify-center">
+                      <svg className="animate-spin w-8 h-8 text-[#4F46E5]" fill="none" viewBox="0 0 24 24">
+                        <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                        <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v4l3-3-3-3v4a8 8 0 00-8 8h4z" />
+                      </svg>
+                    </div>
+                    <p className="text-sm text-gray-600">
+                      Parsing <span className="font-medium">{ddl.filename}</span>…
+                    </p>
+                    <p className="text-xs text-gray-400">
+                      Extracting table and field definitions from your DDL.
+                    </p>
+                  </div>
+                ) : ddl.error ? (
+                  <div className="space-y-2">
+                    <AlertCircle className="w-10 h-10 text-red-500 mx-auto" />
+                    <p className="text-sm font-medium text-red-700">Parse failed</p>
+                    <p className="text-xs text-red-600 max-w-xs mx-auto">{ddl.error}</p>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={() => { setDdl(INITIAL_DDL); ddlFileInputRef.current?.click() }}
+                    >
+                      Try a different file
+                    </Button>
+                  </div>
+                ) : (
+                  <div className="space-y-3">
+                    <Upload className="w-10 h-10 text-gray-400 mx-auto" />
+                    <div>
+                      <p className="text-sm font-medium text-gray-700">
+                        {ddl.isDragOver
+                          ? 'Drop DDL file here'
+                          : 'Drop DDL / SQL file here or click to select'}
+                      </p>
+                      <p className="text-xs text-gray-400 mt-1">
+                        Accepted: .sql, .ddl, .txt · Max 2 MB
+                      </p>
+                      <p className="text-xs text-gray-400 mt-0.5">
+                        Supports standard SQL, SQL Server, Oracle, SAP HANA, MySQL, PostgreSQL
+                      </p>
+                    </div>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      type="button"
+                      onClick={() => ddlFileInputRef.current?.click()}
+                    >
+                      Select File
+                    </Button>
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* Review screen */}
+            {ddl.step === 'review' && !ddl.showReplaceConfirm && (
+              <DDLSchemaReview
+                tables={ddl.parsedTables}
+                usedAI={ddl.usedAI}
+                onConfirm={handleDDLConfirm}
+                onCancel={handleDDLCancel}
+                saving={ddl.saving}
+              />
+            )}
+
+            {/* Saved confirmation */}
+            {ddl.step === 'saved' && (
+              <div className="space-y-3">
+                <div className="flex items-center gap-3 rounded-lg bg-green-50 border border-green-200 px-4 py-3">
+                  <CheckCircle2 className="w-6 h-6 text-green-600 shrink-0" />
+                  <div>
+                    <p className="text-sm font-medium text-green-800">
+                      Schema saved — {ddl.savedTableCount} table
+                      {ddl.savedTableCount !== 1 ? 's' : ''} created
+                    </p>
+                    <p className="text-xs text-green-700 mt-0.5">
+                      Tables and fields are ready. No data rows — this is schema-only.
+                    </p>
+                  </div>
+                </div>
+                <button
+                  className="text-xs text-gray-500 underline hover:text-gray-700 flex items-center gap-1"
+                  onClick={() => { setDdl(INITIAL_DDL); setTimeout(() => ddlFileInputRef.current?.click(), 50) }}
+                >
+                  <RefreshCw className="w-3 h-3" />
+                  Upload a different DDL file
+                </button>
+              </div>
+            )}
+
+            {/* Error outside review */}
+            {ddl.step !== 'upload' && ddl.error && (
+              <div className="flex items-start gap-2 rounded-md border border-red-200 bg-red-50 px-3 py-2">
+                <AlertCircle className="w-4 h-4 text-red-500 shrink-0 mt-0.5" />
+                <p className="text-xs text-red-700">{ddl.error}</p>
+              </div>
+            )}
+
+            <input
+              ref={ddlFileInputRef}
+              type="file"
+              accept=".sql,.ddl,.txt"
+              className="hidden"
+              onChange={handleDDLInputChange}
+            />
+          </div>
+        )}
+
       </CardContent>
     </Card>
   )

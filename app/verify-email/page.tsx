@@ -1,56 +1,57 @@
 'use client'
 
-import { Suspense, useEffect, useState } from 'react'
-
-export const dynamic = 'force-dynamic'
+import { Suspense, useEffect, useState, useTransition } from 'react'
 import { useRouter, useSearchParams } from 'next/navigation'
 import { createClient } from '@/lib/supabase/client'
+import { resendVerificationEmail, signOut } from '@/lib/actions/auth'
 import AuthCard from '@/components/auth/AuthCard'
 import { Button } from '@/components/ui/button'
 import { Alert } from '@/components/ui/alert'
+
+export const dynamic = 'force-dynamic'
 
 function VerifyEmailContent() {
   const router = useRouter()
   const searchParams = useSearchParams()
   const verified = searchParams.get('verified') === 'true'
+
   const [loading, setLoading] = useState(true)
-  const [user, setUser] = useState<{ email?: string } | null>(null)
+  const [userEmail, setUserEmail] = useState<string | null>(null)
+  const [resendState, setResendState] = useState<'idle' | 'sent' | 'error'>('idle')
+  const [isPending, startTransition] = useTransition()
 
   useEffect(() => {
-    const checkUser = async () => {
+    const check = async () => {
       const supabase = createClient()
       const {
-        data: { user: currentUser },
+        data: { user },
       } = await supabase.auth.getUser()
-
-      setUser(currentUser)
+      setUserEmail(user?.email ?? null)
       setLoading(false)
     }
-
-    checkUser()
+    check()
   }, [])
 
-  const handleResend = async () => {
-    if (!user?.email) return
-
-    const supabase = createClient()
-    const { error } = await supabase.auth.resend({
-      type: 'signup',
-      email: user.email,
+  const handleResend = () => {
+    startTransition(async () => {
+      const result = await resendVerificationEmail()
+      setResendState(result.success ? 'sent' : 'error')
     })
+  }
 
-    if (error) {
-      alert('Failed to resend email: ' + error.message)
-    } else {
-      alert('Verification email sent! Please check your inbox.')
-    }
+  const handleSignOut = () => {
+    startTransition(async () => {
+      await signOut()
+      router.push('/login')
+      router.refresh()
+    })
   }
 
   if (loading) {
     return (
-      <AuthCard title="Verifying Email" subtitle="Please wait...">
+      <AuthCard title="Verify Your Email" subtitle="Please wait...">
         <div className="text-center">
-          <div className="mb-4 h-8 w-8 animate-spin rounded-full border-4 border-blue-600 border-t-transparent mx-auto"></div>
+          <div className="mb-4 h-8 w-8 animate-spin rounded-full border-4 border-blue-600 border-t-transparent mx-auto" />
         </div>
       </AuthCard>
     )
@@ -59,9 +60,7 @@ function VerifyEmailContent() {
   if (verified) {
     return (
       <AuthCard title="Email Verified" subtitle="Your email has been successfully verified">
-        <Alert variant="success">
-          Your email has been verified! You can now access your account.
-        </Alert>
+        <Alert variant="success">Your email is confirmed — you can now access your account.</Alert>
         <Button
           variant="default"
           size="lg"
@@ -77,31 +76,55 @@ function VerifyEmailContent() {
   return (
     <AuthCard
       title="Verify Your Email"
-      subtitle="Please check your email to verify your account"
+      subtitle="One more step before you can access your account"
     >
       <Alert variant="default">
-        We've sent a verification link to {user?.email || 'your email'}. Please click the link in
-        the email to verify your account.
+        We sent a verification link to <strong>{userEmail ?? 'your email address'}</strong>. Click
+        the link in that email to activate your account.
       </Alert>
-      <div className="space-y-2">
+
+      {resendState === 'sent' && (
+        <Alert variant="success">
+          Verification email resent — please check your inbox (and spam folder).
+        </Alert>
+      )}
+      {resendState === 'error' && (
+        <Alert variant="destructive">
+          Unable to resend the email. Please try again in a moment.
+        </Alert>
+      )}
+
+      <div className="space-y-3">
         <Button
           variant="default"
           size="lg"
           className="w-full"
-          onClick={() => router.push('/login')}
+          onClick={handleResend}
+          disabled={isPending || resendState === 'sent'}
         >
-          Go to Sign In
+          {isPending ? 'Sending...' : resendState === 'sent' ? 'Email sent ✓' : 'Resend Verification Email'}
         </Button>
+
         <Button
           variant="outline"
           size="lg"
           className="w-full"
-          onClick={handleResend}
-          disabled={!user?.email}
+          onClick={handleSignOut}
+          disabled={isPending}
         >
-          Resend Verification Email
+          Sign out and use a different account
         </Button>
       </div>
+
+      <p className="text-center text-xs text-gray-500">
+        Already verified?{' '}
+        <button
+          className="text-blue-600 hover:underline"
+          onClick={() => router.push('/login')}
+        >
+          Sign in
+        </button>
+      </p>
     </AuthCard>
   )
 }
@@ -110,9 +133,9 @@ export default function VerifyEmailPage() {
   return (
     <Suspense
       fallback={
-        <AuthCard title="Verifying Email" subtitle="Please wait...">
+        <AuthCard title="Verify Your Email" subtitle="Please wait...">
           <div className="text-center">
-            <div className="mb-4 h-8 w-8 animate-spin rounded-full border-4 border-blue-600 border-t-transparent mx-auto"></div>
+            <div className="mb-4 h-8 w-8 animate-spin rounded-full border-4 border-blue-600 border-t-transparent mx-auto" />
           </div>
         </AuthCard>
       }
