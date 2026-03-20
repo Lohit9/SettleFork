@@ -217,3 +217,23 @@ export interface StagedDataRow {
 }
 
 export type ProjectWithDatasets = Project & { datasets: Dataset[] }
+
+export interface ProjectWithStats {
+  id: string
+  name: string
+  source_label: string
+  target_label: string
+  status: 'active' | 'completed' | 'archived'
+  created_at: string
+  updated_at: string
+  totalSourceFields: number
+  mappedFieldCount: number
+  totalRows: number
+  blockingIssueCount: number
+  warningCount: number
+  totalTransforms: number
+  savedTransforms: number
+  readinessScore: number | null
+  currentPhase: number
+  outputCount: number
+}
