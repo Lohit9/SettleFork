@@ -1,3 +1,4 @@
+import Link from 'next/link'
 import SidebarShell from '@/components/app/SidebarShell'
 import { CheckCircle, RefreshCw, Download } from '@/components/icons'
 
@@ -150,7 +151,7 @@ export default function SupportPage() {
 
           {/* ── Quick start cards ─────────────────────────────────────────── */}
           <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
-            <div className="bg-white border border-gray-200 rounded-xl p-5 cursor-pointer hover:border-gray-300 transition-colors">
+            <Link href="/app/support/guides/getting-started" className="bg-white border border-gray-200 rounded-xl p-5 hover:border-gray-300 hover:shadow-sm transition-all">
               <div className="w-9 h-9 rounded-lg bg-blue-50 flex items-center justify-center mb-3">
                 <BoxIcon className="text-blue-600" />
               </div>
@@ -158,9 +159,9 @@ export default function SupportPage() {
               <p className="text-xs text-gray-500 leading-relaxed">
                 Create your first project, upload schemas, and generate mappings in under 5 minutes.
               </p>
-            </div>
+            </Link>
 
-            <div className="bg-white border border-gray-200 rounded-xl p-5 cursor-pointer hover:border-gray-300 transition-colors">
+            <Link href="/app/support/guides/data-quality" className="bg-white border border-gray-200 rounded-xl p-5 hover:border-gray-300 hover:shadow-sm transition-all">
               <div className="w-9 h-9 rounded-lg bg-green-50 flex items-center justify-center mb-3">
                 <CheckCircle className="w-5 h-5 text-green-600" />
               </div>
@@ -168,9 +169,9 @@ export default function SupportPage() {
               <p className="text-xs text-gray-500 leading-relaxed">
                 Understand validation rules, fix workflows, and how to get your migration to 100% readiness.
               </p>
-            </div>
+            </Link>
 
-            <div className="bg-white border border-gray-200 rounded-xl p-5 cursor-pointer hover:border-gray-300 transition-colors">
+            <Link href="/app/support/guides/transforms" className="bg-white border border-gray-200 rounded-xl p-5 hover:border-gray-300 hover:shadow-sm transition-all">
               <div className="w-9 h-9 rounded-lg bg-amber-50 flex items-center justify-center mb-3">
                 <RefreshCw className="w-5 h-5 text-amber-600" />
               </div>
@@ -178,7 +179,7 @@ export default function SupportPage() {
               <p className="text-xs text-gray-500 leading-relaxed">
                 Write natural language transforms, review generated SQL, and test before applying.
               </p>
-            </div>
+            </Link>
           </div>
 
           {/* ── Documentation ─────────────────────────────────────────────── */}
@@ -232,10 +233,10 @@ export default function SupportPage() {
                 Need help with your migration? Our team typically responds within a few hours.
               </p>
               <a
-                href="mailto:support@trymine.ai"
+                href="mailto:contact@trymine.ai"
                 className="text-sm text-[#4F46E5] hover:underline"
               >
-                support@trymine.ai
+                contact@trymine.ai
               </a>
             </div>
 
