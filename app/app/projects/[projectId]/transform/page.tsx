@@ -1,11 +1,35 @@
-'use client'
+import { notFound } from 'next/navigation'
+import { createClient } from '@/lib/supabase/server'
+import { getTransformData } from '@/lib/actions/transformations'
+import TransformContent from './TransformContent'
 
-import { useParams } from 'next/navigation'
-import { Transform } from '@/components/app/Transform'
+interface PageProps {
+  params: Promise<{ projectId: string }>
+}
 
-export default function TransformPage() {
-  const params = useParams()
-  const projectId = params.projectId as string
+export default async function TransformPage({ params }: PageProps) {
+  const { projectId } = await params
 
-  return <Transform projectId={projectId} />
+  const supabase = await createClient()
+  const {
+    data: { user },
+  } = await supabase.auth.getUser()
+  if (!user) notFound()
+
+  const { data: project } = await supabase
+    .from('projects')
+    .select('id, name')
+    .eq('id', projectId)
+    .eq('user_id', user.id)
+    .single()
+  if (!project) notFound()
+
+  const transformData = await getTransformData(projectId)
+
+  return (
+    <TransformContent
+      projectId={projectId}
+      initialData={transformData}
+    />
+  )
 }
