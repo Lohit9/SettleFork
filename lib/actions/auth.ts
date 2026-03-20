@@ -1,6 +1,7 @@
 'use server'
 
 import { createClient } from '@/lib/supabase/server'
+import { supabaseAdmin } from '@/lib/supabase/admin'
 import { revalidatePath } from 'next/cache'
 import { headers } from 'next/headers'
 import { checkSignupRateLimit } from '@/lib/auth/signup-rate-limit'
@@ -96,6 +97,37 @@ export async function signUpWithBotProtection(payload: SignUpPayload): Promise<S
 }
 
 // ── resendVerificationEmail ───────────────────────────────────────────────────
+
+export async function changePassword(
+  newPassword: string
+): Promise<{ success: boolean; error?: string }> {
+  if (newPassword.length < 8) {
+    return { success: false, error: 'Password must be at least 8 characters.' }
+  }
+  const supabase = await createClient()
+  const { error } = await supabase.auth.updateUser({ password: newPassword })
+  if (error) return { success: false, error: error.message }
+  return { success: true }
+}
+
+export async function deleteAccount(): Promise<{ success: boolean; error?: string }> {
+  const supabase = await createClient()
+  const {
+    data: { user },
+  } = await supabase.auth.getUser()
+
+  if (!user) return { success: false, error: 'Not authenticated.' }
+
+  // Delete all projects — cascade handles all related tables
+  await supabase.from('projects').delete().eq('user_id', user.id)
+
+  // Delete the Supabase Auth user via admin (bypasses RLS)
+  const { error } = await supabaseAdmin.auth.admin.deleteUser(user.id)
+  if (error) return { success: false, error: error.message }
+
+  await supabase.auth.signOut()
+  return { success: true }
+}
 
 export async function resendVerificationEmail(): Promise<{ success: boolean; error?: string }> {
   const supabase = await createClient()

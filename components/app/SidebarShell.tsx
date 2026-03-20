@@ -16,7 +16,7 @@ export default function SidebarShell({ children }: SidebarShellProps) {
   // Home is active on /app/projects (the main projects list page)
   const isHomeActive = pathname === '/app/projects' || pathname === '/app'
   const isSupportActive = pathname === '/app/support'
-  const isProfileActive = pathname === '/app/profile'
+  const isProfileActive = pathname === '/app/settings' || pathname === '/app/profile'
 
   return (
     <div className="h-screen w-full flex bg-gray-50 overflow-hidden">
@@ -57,7 +57,7 @@ export default function SidebarShell({ children }: SidebarShellProps) {
                 <HelpCircle className="w-4 h-4" />
               </Button>
             </Link>
-            <Link href="/app/profile" title="Settings">
+            <Link href="/app/settings" title="Settings">
               <Button
                 variant="ghost"
                 size="sm"
