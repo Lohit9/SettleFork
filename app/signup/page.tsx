@@ -118,7 +118,7 @@ export default function SignupPage() {
 
   return (
     <AuthCard
-      title="Get started with MINE"
+      title="Get started with Mine"
       subtitle="Create your account in minutes"
       footer={{
         text: 'Already have an account?',

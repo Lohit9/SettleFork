@@ -21,7 +21,7 @@ export default function AuthCard({ children, title, subtitle, footer }: AuthCard
           <Link href="/">
             <img
               src="/Mine Logo no background.png"
-              alt="MINE - AI-Native Data Migration Automation"
+              alt="Mine - AI-Native Data Migration Automation"
               className="h-10 w-auto"
             />
           </Link>

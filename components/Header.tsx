@@ -28,10 +28,10 @@ export default function Header() {
           <Link href="/" className="flex items-center gap-2.5" onClick={closeMenu}>
             <img
               src="/Mine Logo no background.png"
-              alt="MINE"
+              alt="Mine"
               className="h-7 w-auto"
             />
-            <span className="text-lg font-bold tracking-tight text-[#0F172A]">MINE</span>
+            <span className="text-lg font-bold tracking-tight text-[#0F172A]">Mine</span>
           </Link>
 
           {/* Desktop nav */}

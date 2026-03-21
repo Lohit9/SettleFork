@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useTransition } from 'react'
+import { useState, useEffect, useTransition } from 'react'
 import Link from 'next/link'
 import { useRouter } from 'next/navigation'
 import { Button } from '@/components/ui/button'
@@ -12,6 +12,7 @@ import { Plus, Database, Search } from '@/components/icons'
 import { PhaseProgressBar } from '@/components/app/PhaseProgressBar'
 import { createProject } from '@/lib/actions/projects'
 import { ProjectWithStats } from '@/lib/types/database'
+import { ProjectMenu } from '@/components/app/ProjectMenu'
 
 // ── helpers ────────────────────────────────────────────────────────────────
 
@@ -33,7 +34,7 @@ function formatDate(dateStr: string): string {
 
 // ── ProjectCard ─────────────────────────────────────────────────────────────
 
-function ProjectCard({ project }: { project: ProjectWithStats }) {
+function ProjectCard({ project, onUpdate }: { project: ProjectWithStats; onUpdate: () => void }) {
   const isCompleted = project.status === 'completed'
   const score = project.readinessScore
 
@@ -72,69 +73,85 @@ function ProjectCard({ project }: { project: ProjectWithStats }) {
   }
 
   return (
-    <Link
-      href={`/app/projects/${project.id}`}
-      className={`block bg-white border border-gray-200 rounded-xl p-5 hover:border-gray-300 hover:shadow-sm transition-all ${
-        isCompleted ? 'opacity-75' : ''
-      }`}
-    >
-      {/* Top row */}
-      <div className="flex items-start justify-between gap-4 mb-4">
-        <div className="flex-1 min-w-0">
-          <div className="flex items-center gap-2 mb-1">
-            <span className="text-base font-medium text-gray-900 truncate">{project.name}</span>
-            {isCompleted ? (
-              <Badge className="bg-green-100 text-green-700 hover:bg-green-100 text-[11px] px-1.5 py-0 flex-shrink-0">
-                Completed
-              </Badge>
+    <div className="relative group/card">
+      <Link
+        href={`/app/projects/${project.id}`}
+        className={`block bg-white border border-gray-200 rounded-xl p-5 pr-12 hover:border-gray-300 hover:shadow-sm transition-all ${
+          isCompleted ? 'opacity-75' : ''
+        }`}
+      >
+        {/* Top row */}
+        <div className="flex items-start justify-between gap-4 mb-4">
+          <div className="flex-1 min-w-0">
+            <div className="flex items-center gap-2 mb-1">
+              <span className="text-base font-medium text-gray-900 truncate">{project.name}</span>
+              {isCompleted ? (
+                <Badge className="bg-green-100 text-green-700 hover:bg-green-100 text-[11px] px-1.5 py-0 flex-shrink-0">
+                  Completed
+                </Badge>
+              ) : (
+                <Badge className="bg-blue-100 text-blue-700 hover:bg-blue-100 text-[11px] px-1.5 py-0 flex-shrink-0">
+                  Active
+                </Badge>
+              )}
+            </div>
+            <p className="text-xs text-gray-400 truncate">
+              {project.source_label} → {project.target_label}
+              <span className="mx-1.5">·</span>
+              Created {formatDate(project.created_at)}
+              <span className="mx-1.5">·</span>
+              Last updated {formatRelativeTime(project.updated_at)}
+            </p>
+          </div>
+
+          {/* Readiness score */}
+          <div className="text-right flex-shrink-0">
+            {score !== null ? (
+              <>
+                <div className={`text-2xl font-semibold leading-none ${scoreColor}`}>{score}%</div>
+                <div className="text-[11px] text-gray-400 mt-0.5">Readiness</div>
+              </>
             ) : (
-              <Badge className="bg-blue-100 text-blue-700 hover:bg-blue-100 text-[11px] px-1.5 py-0 flex-shrink-0">
-                Active
-              </Badge>
+              <>
+                <div className="text-sm font-medium text-gray-400 leading-none">—</div>
+                <div className="text-[11px] text-gray-400 mt-0.5">Not scanned</div>
+              </>
             )}
           </div>
-          <p className="text-xs text-gray-400 truncate">
-            {project.source_label} → {project.target_label}
-            <span className="mx-1.5">·</span>
-            Created {formatDate(project.created_at)}
-            <span className="mx-1.5">·</span>
-            Last updated {formatRelativeTime(project.updated_at)}
-          </p>
         </div>
 
-        {/* Readiness score */}
-        <div className="text-right flex-shrink-0">
-          {score !== null ? (
-            <>
-              <div className={`text-2xl font-semibold leading-none ${scoreColor}`}>{score}%</div>
-              <div className="text-[11px] text-gray-400 mt-0.5">Readiness</div>
-            </>
-          ) : (
-            <>
-              <div className="text-sm font-medium text-gray-400 leading-none">—</div>
-              <div className="text-[11px] text-gray-400 mt-0.5">Not scanned</div>
-            </>
-          )}
+        {/* Phase progress bar */}
+        <div className="mb-3">
+          <PhaseProgressBar currentPhase={project.currentPhase} showLabels />
         </div>
+
+        {/* Bottom stats */}
+        {stats.length > 0 && (
+          <div className="flex flex-wrap items-center gap-x-0 gap-y-1 text-xs text-gray-500">
+            {stats.map((s, i) => (
+              <span key={i} className="flex items-center">
+                {i > 0 && <span className="mx-2.5 text-gray-300">|</span>}
+                <span className={s.color ?? 'text-gray-500'}>{s.label}</span>
+              </span>
+            ))}
+          </div>
+        )}
+      </Link>
+
+      {/* Three-dot menu — floats above the card link */}
+      <div className="absolute top-4 right-4 opacity-0 group-hover/card:opacity-100 transition-opacity">
+        <ProjectMenu
+          project={{
+            id: project.id,
+            name: project.name,
+            source_label: project.source_label,
+            target_label: project.target_label,
+            status: project.status,
+          }}
+          onUpdate={onUpdate}
+        />
       </div>
-
-      {/* Phase progress bar */}
-      <div className="mb-3">
-        <PhaseProgressBar currentPhase={project.currentPhase} showLabels />
-      </div>
-
-      {/* Bottom stats */}
-      {stats.length > 0 && (
-        <div className="flex flex-wrap items-center gap-x-0 gap-y-1 text-xs text-gray-500">
-          {stats.map((s, i) => (
-            <span key={i} className="flex items-center">
-              {i > 0 && <span className="mx-2.5 text-gray-300">|</span>}
-              <span className={s.color ?? 'text-gray-500'}>{s.label}</span>
-            </span>
-          ))}
-        </div>
-      )}
-    </Link>
+    </div>
   )
 }
 
@@ -251,7 +268,10 @@ interface ProjectsListProps {
 
 export function ProjectsList({ initialProjects }: ProjectsListProps) {
   const router = useRouter()
-  const [projects] = useState<ProjectWithStats[]>(initialProjects)
+  const [projects, setProjects] = useState<ProjectWithStats[]>(initialProjects)
+
+  // Sync with server data when router.refresh() causes new props
+  useEffect(() => { setProjects(initialProjects) }, [initialProjects])
   const [activeFilter, setActiveFilter] = useState<FilterTab>('all')
   const [search, setSearch] = useState('')
   const [showCreate, setShowCreate] = useState(false)
@@ -398,7 +418,7 @@ export function ProjectsList({ initialProjects }: ProjectsListProps) {
         ) : (
           <div className="space-y-3 max-w-5xl">
             {filtered.map((project) => (
-              <ProjectCard key={project.id} project={project} />
+              <ProjectCard key={project.id} project={project} onUpdate={() => router.refresh()} />
             ))}
           </div>
         )}

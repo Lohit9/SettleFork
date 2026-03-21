@@ -70,7 +70,7 @@ function HeroFlow() {
                 : 'text-slate-600 bg-slate-800 border border-slate-700'
             }`}
           >
-            MINE
+            Mine
           </div>
         </div>
 

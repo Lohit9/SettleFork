@@ -32,15 +32,16 @@ export default async function ProjectLayout({
   }
 
   return (
-    <div className="h-screen w-full flex bg-gray-50 overflow-hidden">
+    <div className="h-screen bg-gray-50 overflow-hidden">
       <Navigation
         projectName={project.name}
         projectId={projectId}
         sourceSystemName={sourceDataset?.name}
         targetSystemName={targetDataset?.name}
         blockingIssueCount={blockingIssueCount}
+        projectStatus={project.status ?? 'active'}
       />
-      <div className="flex-1 overflow-auto">{children}</div>
+      <div className="h-full pl-[60px] overflow-auto">{children}</div>
     </div>
   )
 }

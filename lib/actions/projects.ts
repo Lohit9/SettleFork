@@ -1,7 +1,25 @@
 'use server'
 
+import { revalidatePath } from 'next/cache'
 import { createClient } from '@/lib/supabase/server'
 import { Project, Dataset, ProjectWithDatasets, ProjectWithStats } from '@/lib/types/database'
+
+export async function updateProjectLabels(
+  projectId: string,
+  sourceLabel: string,
+  targetLabel: string
+): Promise<void> {
+  const supabase = await createClient()
+  const { data: { user } } = await supabase.auth.getUser()
+  if (!user) throw new Error('Not authenticated')
+
+  await Promise.all([
+    supabase.from('datasets').update({ name: sourceLabel }).eq('project_id', projectId).eq('role', 'source'),
+    supabase.from('datasets').update({ name: targetLabel }).eq('project_id', projectId).eq('role', 'target'),
+  ])
+
+  revalidatePath('/app/projects')
+}
 
 export async function createProject(
   name: string,

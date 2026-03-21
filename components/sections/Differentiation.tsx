@@ -61,7 +61,7 @@ export default function Differentiation() {
           {/* Mine card */}
           <ScrollReveal delay={0.2}>
             <div className="bg-white rounded-2xl p-8 border border-[#2563EB] border-t-[3px] h-full hover:-translate-y-1 hover:shadow-lg transition-all duration-300">
-              <h3 className="text-lg font-bold text-[#0F172A] mb-5">MINE</h3>
+              <h3 className="text-lg font-bold text-[#0F172A] mb-5">Mine</h3>
               <ul className="space-y-3">
                 {MINE_BULLETS.map((bullet) => (
                   <li key={bullet} className="flex gap-3">

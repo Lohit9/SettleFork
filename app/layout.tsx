@@ -6,7 +6,7 @@ const dmSans = DM_Sans({ subsets: ['latin'], variable: '--font-dm-sans' })
 const jetbrainsMono = JetBrains_Mono({ subsets: ['latin'], variable: '--font-jetbrains-mono' })
 
 export const metadata: Metadata = {
-  title: 'MINE - AI-Native Data Migration Automation',
+  title: 'Mine - AI-Native Data Migration Automation',
   description: 'The autonomous engine for your data migration. Cut time and cost by 50–70% while reducing go-live risk.',
   viewport: 'width=device-width, initial-scale=1',
 }

@@ -56,10 +56,10 @@ function LoginContent() {
 
   return (
     <AuthCard
-      title="Sign in to MINE"
+      title="Sign in to Mine"
       subtitle="Access your data migration projects"
       footer={{
-        text: 'New to MINE?',
+        text: 'New to Mine?',
         linkText: 'Get started for free',
         linkHref: '/signup',
       }}
@@ -115,7 +115,7 @@ export default function LoginPage() {
   return (
     <Suspense
       fallback={
-        <AuthCard title="Sign in to MINE" subtitle="Loading...">
+        <AuthCard title="Sign in to Mine" subtitle="Loading...">
           <div className="text-center">
             <div className="mb-4 h-8 w-8 animate-spin rounded-full border-4 border-blue-600 border-t-transparent mx-auto"></div>
           </div>
