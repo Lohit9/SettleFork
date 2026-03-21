@@ -27,7 +27,7 @@ function HeroFlow() {
           <div className="w-2.5 h-2.5 rounded-full bg-green-500/80" />
         </div>
         <span className="text-[#64748B] text-xs ml-2 font-mono">
-          mine — Casella multi-site migration
+          mine — enterprise data migration
         </span>
       </div>
 
