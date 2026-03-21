@@ -177,9 +177,7 @@ export function ProjectMenu({ project, onUpdate }: ProjectMenuProps) {
     })
   }
 
-  const handleToggleStatus = (e: React.MouseEvent) => {
-    e.preventDefault()
-    e.stopPropagation()
+  const handleToggleStatus = () => {
     setIsOpen(false)
     const newStatus = project.status === 'completed' ? 'active' : 'completed'
     startTransition(async () => {
