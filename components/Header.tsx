@@ -5,9 +5,11 @@ import Link from 'next/link'
 import { motion, AnimatePresence } from 'framer-motion'
 
 const NAV_LINKS = [
-  { label: 'How It Works', href: '/how-it-works' },
-  { label: 'Use Cases',    href: '/use-cases' },
+  { label: 'How It Works', href: '/#how' },
+  { label: 'Use Cases',    href: '/#why' },
 ]
+
+const CALENDLY = 'https://calendly.com/trymine-info/demo'
 
 export default function Header() {
   const [mobileOpen, setMobileOpen] = useState(false)
@@ -35,7 +37,7 @@ export default function Header() {
           </Link>
 
           {/* Desktop nav */}
-          <div className="hidden lg:flex items-center gap-8">
+          <div className="hidden lg:flex items-center gap-6">
             {NAV_LINKS.map((link) => (
               <Link
                 key={link.href}
@@ -46,20 +48,30 @@ export default function Header() {
               </Link>
             ))}
 
+            {/* Login — understated text link */}
+            <Link
+              href="/login"
+              className="text-sm font-medium text-[#94A3B8] hover:text-[#334155] transition-colors"
+            >
+              Login
+            </Link>
+
+            {/* Book a Demo — secondary outlined */}
             <a
-              href="https://calendly.com/trymine-info/demo"
+              href={CALENDLY}
               target="_blank"
               rel="noopener noreferrer"
-              className="bg-[#2563EB] hover:bg-[#3B82F6] text-white text-sm font-semibold px-5 py-2 rounded-lg transition-all hover:-translate-y-0.5 hover:shadow-lg hover:shadow-blue-600/25"
+              className="border border-[#CBD5E1] text-[#334155] hover:border-[#2563EB] hover:text-[#2563EB] text-sm font-medium px-5 py-2 rounded-lg transition-all"
             >
               Book a Demo
             </a>
 
+            {/* Request Access — primary, most prominent */}
             <Link
-              href="/login"
-              className="bg-transparent border border-[#CBD5E1] text-[#334155] hover:border-[#2563EB] hover:text-[#2563EB] text-sm font-medium px-5 py-2 rounded-lg transition-all"
+              href="/request-access"
+              className="bg-[#2563EB] hover:bg-[#1D4ED8] text-white text-sm font-semibold px-5 py-2 rounded-lg transition-all hover:-translate-y-0.5 hover:shadow-lg hover:shadow-blue-600/25"
             >
-              Sign In
+              Request Access
             </Link>
           </div>
 
@@ -99,21 +111,28 @@ export default function Header() {
                 </Link>
               ))}
               <div className="pt-2 flex flex-col gap-3">
+                <Link
+                  href="/request-access"
+                  onClick={closeMenu}
+                  className="w-full bg-[#2563EB] hover:bg-[#1D4ED8] text-white text-sm font-semibold px-5 py-3 rounded-lg transition-all text-center"
+                >
+                  Request Access
+                </Link>
                 <a
-                  href="https://calendly.com/trymine-info/demo"
+                  href={CALENDLY}
                   target="_blank"
                   rel="noopener noreferrer"
                   onClick={closeMenu}
-                  className="w-full bg-[#2563EB] hover:bg-[#3B82F6] text-white text-sm font-semibold px-5 py-3 rounded-lg transition-all text-center"
+                  className="w-full border border-[#CBD5E1] text-[#334155] text-sm font-medium px-5 py-3 rounded-lg transition-all text-center"
                 >
                   Book a Demo
                 </a>
                 <Link
                   href="/login"
                   onClick={closeMenu}
-                  className="w-full border border-[#CBD5E1] text-[#334155] text-sm font-medium px-5 py-3 rounded-lg transition-all text-center"
+                  className="text-sm font-medium text-[#94A3B8] hover:text-[#334155] transition-colors text-center py-1"
                 >
-                  Sign In
+                  Login
                 </Link>
               </div>
             </div>

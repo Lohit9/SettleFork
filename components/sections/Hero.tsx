@@ -140,10 +140,10 @@ export default function Hero() {
 
             <div className="flex flex-wrap gap-3 mb-3">
               <Link
-                href="/signup"
+                href="/request-access"
                 className="bg-[#2563EB] hover:bg-[#1D4ED8] text-white font-semibold px-8 py-3.5 rounded-xl shadow-lg shadow-blue-600/20 hover:-translate-y-0.5 transition-all text-sm"
               >
-                Get started for free
+                Request Access
               </Link>
               <a
                 href="https://calendly.com/trymine-info/demo"
@@ -156,7 +156,7 @@ export default function Hero() {
             </div>
 
             <p className="text-xs text-[#94A3B8] mt-1">
-              No credit card required · Free for your first migration
+              Currently onboarding design partners for enterprise migrations
             </p>
           </ScrollReveal>
 

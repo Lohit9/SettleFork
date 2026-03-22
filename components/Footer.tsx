@@ -1,3 +1,5 @@
+import Link from 'next/link'
+
 export default function Footer() {
   return (
     <footer className="border-t border-[#E2E8F0] py-8 px-6 lg:px-12">
@@ -21,6 +23,12 @@ export default function Footer() {
             >
               Book a Demo
             </a>
+            <Link
+              href="/login"
+              className="text-[#94A3B8] text-sm hover:text-[#475569] transition-colors"
+            >
+              Login
+            </Link>
             <a
               href="#"
               className="text-[#94A3B8] text-sm hover:text-[#475569] transition-colors"

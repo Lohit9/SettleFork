@@ -15,10 +15,10 @@ export default function FinalCTA() {
 
           <div className="flex flex-wrap justify-center gap-3">
             <Link
-              href="/signup"
+              href="/request-access"
               className="bg-[#2563EB] hover:bg-[#3B82F6] text-white font-semibold px-8 py-4 rounded-xl text-base shadow-lg shadow-blue-600/25 hover:-translate-y-0.5 transition-all"
             >
-              Get started for free
+              Request Access
             </Link>
             <a
               href="https://calendly.com/trymine-info/demo"

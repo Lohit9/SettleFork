@@ -59,9 +59,9 @@ function LoginContent() {
       title="Sign in to Mine"
       subtitle="Access your data migration projects"
       footer={{
-        text: 'New to Mine?',
-        linkText: 'Get started for free',
-        linkHref: '/signup',
+        text: "Don't have an account?",
+        linkText: 'Request access',
+        linkHref: '/request-access',
       }}
     >
       <form onSubmit={handleSubmit} className="space-y-4">

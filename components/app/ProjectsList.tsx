@@ -258,6 +258,43 @@ function NewProjectForm({ onCancel, onCreated }: { onCancel: () => void; onCreat
   )
 }
 
+// ── Welcome modal (first-time users) ─────────────────────────────────────
+
+function WelcomeModal({ onDismiss }: { onDismiss: () => void }) {
+  return (
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 px-4"
+      onMouseDown={(e) => { if (e.target === e.currentTarget) onDismiss() }}
+    >
+      <div className="bg-white rounded-2xl shadow-xl w-full max-w-[440px] p-8 text-center">
+        {/* Logo / icon */}
+        <div className="flex justify-center mb-5">
+          <div className="w-12 h-12 rounded-xl bg-[#4F46E5] flex items-center justify-center">
+            <span className="text-white text-xl font-bold leading-none">M</span>
+          </div>
+        </div>
+
+        <h2 className="text-xl font-semibold text-gray-900 mb-3">Welcome to Mine!</h2>
+        <p className="text-sm text-gray-600 leading-relaxed mb-3">
+          Your account is ready. You can start exploring right away — create a project,
+          upload data, and see what Mine can do.
+        </p>
+        <p className="text-sm text-gray-500 leading-relaxed mb-7">
+          Our team will reach out within 24 hours to schedule a guided onboarding session
+          where we&apos;ll set up your first migration project together.
+        </p>
+
+        <Button
+          onClick={onDismiss}
+          className="w-full bg-[#4F46E5] hover:bg-[#4338CA] text-white font-medium"
+        >
+          Get Started
+        </Button>
+      </div>
+    </div>
+  )
+}
+
 // ── Main component ──────────────────────────────────────────────────────────
 
 type FilterTab = 'all' | 'active' | 'completed'
@@ -269,9 +306,23 @@ interface ProjectsListProps {
 export function ProjectsList({ initialProjects }: ProjectsListProps) {
   const router = useRouter()
   const [projects, setProjects] = useState<ProjectWithStats[]>(initialProjects)
+  const [showWelcome, setShowWelcome] = useState(false)
 
   // Sync with server data when router.refresh() causes new props
   useEffect(() => { setProjects(initialProjects) }, [initialProjects])
+
+  // Show welcome modal for first-time users (zero projects, never dismissed)
+  useEffect(() => {
+    if (initialProjects.length === 0) {
+      const dismissed = localStorage.getItem('mine_welcome_dismissed')
+      if (!dismissed) setShowWelcome(true)
+    }
+  }, [initialProjects.length])
+
+  const dismissWelcome = () => {
+    localStorage.setItem('mine_welcome_dismissed', 'true')
+    setShowWelcome(false)
+  }
   const [activeFilter, setActiveFilter] = useState<FilterTab>('all')
   const [search, setSearch] = useState('')
   const [showCreate, setShowCreate] = useState(false)
@@ -430,6 +481,8 @@ export function ProjectsList({ initialProjects }: ProjectsListProps) {
           onCreated={(id) => router.push(`/app/projects/${id}`)}
         />
       )}
+
+      {showWelcome && <WelcomeModal onDismiss={dismissWelcome} />}
     </div>
   )
 }
