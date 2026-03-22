@@ -8,7 +8,6 @@ const CALENDLY_SCOPING = process.env.NEXT_PUBLIC_CALENDLY_SCOPING_URL || 'https:
 const FROM_NOTIFICATIONS = 'Mine Notifications <contact@trymine.ai>'
 const FROM_KAAN = 'Kaan from Mine <contact@trymine.ai>'
 const ADMIN_EMAIL = 'contact@trymine.ai'
-const ADMIN_NOTIFY_EMAIL = 'kaandincer1@gmail.com'
 
 // ── in-memory rate limit: max 3 notifications per email per 24h ───────────
 interface RLEntry { count: number; resetAt: number }
@@ -168,8 +167,8 @@ export async function POST(request: Request) {
     if (type === 'signup') {
       await resend.emails.send({
         from: FROM_NOTIFICATIONS,
-        to: ADMIN_NOTIFY_EMAIL,
-        replyTo: 'contact@trymine.ai',
+        to: ADMIN_EMAIL,
+        replyTo: ADMIN_EMAIL,
         subject: `New Mine Signup: ${email}`,
         html: adminSignupHtml(name || '', email, company || '', invite_code || ''),
       })
@@ -204,8 +203,8 @@ export async function POST(request: Request) {
         }),
         resend.emails.send({
           from: FROM_NOTIFICATIONS,
-          to: ADMIN_NOTIFY_EMAIL,
-          replyTo: 'contact@trymine.ai',
+          to: ADMIN_EMAIL,
+          replyTo: ADMIN_EMAIL,
           subject: `Invite sent: ${name} at ${company}`,
           html: `
             <div style="font-family: -apple-system, sans-serif; line-height: 1.6; max-width: 600px; padding: 24px;">
@@ -240,8 +239,8 @@ export async function POST(request: Request) {
     const results = await Promise.allSettled([
       resend.emails.send({
         from: FROM_NOTIFICATIONS,
-        to: ADMIN_NOTIFY_EMAIL,
-        replyTo: 'contact@trymine.ai',
+        to: ADMIN_EMAIL,
+        replyTo: ADMIN_EMAIL,
         subject: `New Mine Access Request: ${company}`,
         html: adminAccessRequestHtml(name, email, company, role_type, systems_involved, additional_notes),
       }),
