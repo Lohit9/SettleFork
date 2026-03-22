@@ -117,7 +117,7 @@ export async function signUpWithBotProtection(payload: SignUpPayload): Promise<S
 
       await resend.emails.send({
         from: 'Mine Notifications <contact@trymine.ai>',
-        to: 'kaandincer1@gmail.com',
+        to: 'contact@trymine.ai',
         replyTo: 'contact@trymine.ai',
         subject: `New Mine Signup: ${payload.email}`,
         html: `

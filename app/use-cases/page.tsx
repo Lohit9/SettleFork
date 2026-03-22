@@ -86,7 +86,7 @@ export default function UseCasesPage() {
               Have a migration program we should know about?
             </p>
             <a
-              href="https://calendly.com/trymine-info/demo"
+              href="https://calendly.com/mine-ai/demo"
               target="_blank"
               rel="noopener noreferrer"
               className="inline-block bg-[#2563EB] hover:bg-[#1D4ED8] text-white font-semibold px-8 py-3.5 rounded-xl shadow-lg shadow-blue-600/20 hover:-translate-y-0.5 transition-all text-sm"

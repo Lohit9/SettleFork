@@ -4,7 +4,7 @@ import { useState, useTransition } from 'react'
 import Link from 'next/link'
 import { submitAccessRequest } from '@/lib/actions/invites'
 
-const CALENDLY = 'https://calendly.com/trymine-info/demo'
+const CALENDLY = 'https://calendly.com/mine-ai/demo'
 
 const ROLE_OPTIONS = [
   { value: '', label: 'Select one…' },

@@ -21,7 +21,7 @@ export default function FinalCTA() {
               Request Access
             </Link>
             <a
-              href="https://calendly.com/trymine-info/demo"
+              href="https://calendly.com/mine-ai/demo"
               target="_blank"
               rel="noopener noreferrer"
               className="border border-[#334155] text-[#CBD5E1] font-medium px-8 py-4 rounded-xl text-base hover:border-[#64748B] hover:text-white transition-all"

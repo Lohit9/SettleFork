@@ -3,10 +3,12 @@ import { NextResponse } from 'next/server'
 
 const resend = new Resend(process.env.RESEND_API_KEY)
 
-const CALENDLY = 'https://calendly.com/trymine-info/demo'
+const CALENDLY_DEMO = 'https://calendly.com/mine-ai/demo'
+const CALENDLY_SCOPING = process.env.NEXT_PUBLIC_CALENDLY_SCOPING_URL || 'https://calendly.com/mine-ai/migration-scoping-call'
 const FROM_NOTIFICATIONS = 'Mine Notifications <contact@trymine.ai>'
 const FROM_KAAN = 'Kaan from Mine <contact@trymine.ai>'
-const ADMIN_EMAIL = 'kaandincer1@gmail.com'
+const ADMIN_EMAIL = 'contact@trymine.ai'
+const ADMIN_NOTIFY_EMAIL = 'kaandincer1@gmail.com'
 
 // ── in-memory rate limit: max 3 notifications per email per 24h ───────────
 interface RLEntry { count: number; resetAt: number }
@@ -79,16 +81,23 @@ function adminAccessRequestHtml(name: string, email: string, company: string, ro
 function requesterConfirmationHtml(name: string) {
   const firstName = name.split(' ')[0]
   return `
-    <div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; max-width: 500px; color: #1a1a2e; line-height: 1.6;">
+    <div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; max-width: 520px; color: #1a1a2e; line-height: 1.7;">
       <p style="margin: 0 0 16px 0;">Hi ${firstName},</p>
-      <p style="margin: 0 0 16px 0;">Thanks for your interest in Mine. We received your access request and will be in touch within 24 hours.</p>
-      <p style="margin: 0 0 16px 0;">In the meantime, if you'd like to see Mine in action, you can book a demo call:</p>
-      <p style="margin: 0 0 24px 0;">
-        <a href="${CALENDLY}"
-           style="display: inline-block; background: #4F46E5; color: white; padding: 10px 24px; text-decoration: none; border-radius: 6px; font-weight: 500; font-size: 14px;">
-          Book a Demo
+      <p style="margin: 0 0 16px 0;">Thanks for your interest in Mine — excited to learn about your migration.</p>
+      <p style="margin: 0 0 8px 0;">Here's how the process works:</p>
+      <p style="margin: 0 0 16px 0;">
+        <strong>1.</strong> We'll hop on a 30-minute call where I'll learn about your migration needs and walk you through how Mine works<br/>
+        <strong>2.</strong> If it's a fit, we'll set up your early access and onboard you personally<br/>
+        <strong>3.</strong> You'll have direct access to me throughout your first migration project
+      </p>
+      <p style="margin: 0 0 12px 0;"><strong>Book a time that works for you:</strong></p>
+      <p style="margin: 0 0 16px 0;">
+        <a href="${CALENDLY_SCOPING}"
+           style="display: inline-block; background: #6C3AED; color: white; padding: 12px 28px; text-decoration: none; border-radius: 6px; font-weight: 600; font-size: 16px;">
+          Schedule a Call
         </a>
       </p>
+      <p style="margin: 0 0 16px 0; color: #666; font-size: 14px;">If none of the times work, just reply to this email and we'll figure it out.</p>
       <p style="margin: 0; color: #334155;">Best,<br/>Kaan Dincer<br/>Founder, Mine</p>
     </div>
   `
@@ -159,11 +168,60 @@ export async function POST(request: Request) {
     if (type === 'signup') {
       await resend.emails.send({
         from: FROM_NOTIFICATIONS,
-        to: ADMIN_EMAIL,
+        to: ADMIN_NOTIFY_EMAIL,
         replyTo: 'contact@trymine.ai',
         subject: `New Mine Signup: ${email}`,
         html: adminSignupHtml(name || '', email, company || '', invite_code || ''),
       })
+      return NextResponse.json({ success: true })
+    }
+
+    // ── Invite approved: email to user + admin confirmation ──────────────
+    if (type === 'invite') {
+      const { signup_url } = body
+      await Promise.allSettled([
+        resend.emails.send({
+          from: FROM_KAAN,
+          to: email,
+          replyTo: 'contact@trymine.ai',
+          subject: 'Welcome to Mine — create your account',
+          html: `
+            <div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; max-width: 520px; color: #1a1a2e; line-height: 1.7;">
+              <p style="margin: 0 0 16px 0;">Hi ${name},</p>
+              <p style="margin: 0 0 16px 0;">Welcome to Mine! Your early access is ready.</p>
+              <p style="margin: 0 0 12px 0;">Click below to create your account:</p>
+              <p style="margin: 0 0 16px 0;">
+                <a href="${signup_url}"
+                   style="display: inline-block; background: #6C3AED; color: white; padding: 12px 28px; text-decoration: none; border-radius: 6px; font-weight: 600; font-size: 16px;">
+                  Create Your Account
+                </a>
+              </p>
+              <p style="margin: 0 0 16px 0;">This is a one-time link — once you've created your account, you can log in anytime at <a href="https://trymine.ai" style="color: #6C3AED;">trymine.ai</a>.</p>
+              <p style="margin: 0 0 16px 0;">I'll reach out shortly to schedule your onboarding session where we'll set up your first migration project together.</p>
+              <p style="margin: 0; color: #334155;">Best,<br/>Kaan Dincer<br/>Founder, Mine</p>
+            </div>
+          `,
+        }),
+        resend.emails.send({
+          from: FROM_NOTIFICATIONS,
+          to: ADMIN_NOTIFY_EMAIL,
+          replyTo: 'contact@trymine.ai',
+          subject: `Invite sent: ${name} at ${company}`,
+          html: `
+            <div style="font-family: -apple-system, sans-serif; line-height: 1.6; max-width: 600px; padding: 24px;">
+              <p>Invite email sent to <strong>${name}</strong> (<a href="mailto:${email}">${email}</a>) at ${company}.</p>
+              <p>Signup link: <a href="${signup_url}">${signup_url}</a></p>
+              <p>They'll receive an email with their one-time link to create their account.</p>
+              <div style="margin-top: 16px;">
+                <a href="https://trymine.ai/admin/invites"
+                   style="display: inline-block; background: #4F46E5; color: white; padding: 11px 22px; text-decoration: none; border-radius: 8px; font-size: 14px; font-weight: 600;">
+                  View Admin Dashboard →
+                </a>
+              </div>
+            </div>
+          `,
+        }),
+      ])
       return NextResponse.json({ success: true })
     }
 
@@ -182,7 +240,7 @@ export async function POST(request: Request) {
     const results = await Promise.allSettled([
       resend.emails.send({
         from: FROM_NOTIFICATIONS,
-        to: ADMIN_EMAIL,
+        to: ADMIN_NOTIFY_EMAIL,
         replyTo: 'contact@trymine.ai',
         subject: `New Mine Access Request: ${company}`,
         html: adminAccessRequestHtml(name, email, company, role_type, systems_involved, additional_notes),

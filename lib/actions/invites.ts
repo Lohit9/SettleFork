@@ -201,6 +201,25 @@ export async function approveAndGenerateInvite(
     .update({ status: 'approved' })
     .eq('id', requestId)
 
+  const signupUrl = `${APP_URL}/signup?invite=${code}`
+
+  // Fire invite email (non-blocking — clipboard copy is the fallback)
+  try {
+    await fetch(`${APP_URL}/api/notify-access-request`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        type: 'invite',
+        name: request.name,
+        email: request.email,
+        company: request.company,
+        signup_url: signupUrl,
+      }),
+    })
+  } catch (err) {
+    console.error('Invite email failed (non-blocking):', err)
+  }
+
   revalidatePath('/admin/invites')
-  return { code, signupUrl: `${APP_URL}/signup?invite=${code}` }
+  return { code, signupUrl }
 }

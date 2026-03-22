@@ -92,7 +92,7 @@ function RequestsSection({ initialRequests }: { initialRequests: AccessRequest[]
       if (result.error) { showToast(`Error: ${result.error}`); return }
       updateLocal(req.id, 'approved')
       await navigator.clipboard.writeText(result.signupUrl).catch(() => {})
-      showToast(`Invite link copied! Send to ${req.email} — ${result.code}`)
+      showToast(`Invite sent to ${req.email} — link also copied to clipboard`)
     })
   }
 

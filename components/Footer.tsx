@@ -16,7 +16,7 @@ export default function Footer() {
 
           <div className="flex gap-6">
             <a
-              href="https://calendly.com/trymine-info/demo"
+              href="https://calendly.com/mine-ai/demo"
               target="_blank"
               rel="noopener noreferrer"
               className="text-[#94A3B8] text-sm hover:text-[#475569] transition-colors"

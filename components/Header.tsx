@@ -9,7 +9,7 @@ const NAV_LINKS = [
   { label: 'Use Cases',    href: '/#why' },
 ]
 
-const CALENDLY = 'https://calendly.com/trymine-info/demo'
+const CALENDLY = 'https://calendly.com/mine-ai/demo'
 
 export default function Header() {
   const [mobileOpen, setMobileOpen] = useState(false)

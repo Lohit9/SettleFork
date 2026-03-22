@@ -102,7 +102,7 @@ export default function HowItWorksPage() {
                 Request Access
               </Link>
               <a
-                href="https://calendly.com/trymine-info/demo"
+                href="https://calendly.com/mine-ai/demo"
                 target="_blank"
                 rel="noopener noreferrer"
                 className="border border-[#CBD5E1] text-[#0F172A] font-medium px-8 py-3.5 rounded-xl hover:border-[#2563EB] hover:text-[#2563EB] transition-all text-sm"
