@@ -116,9 +116,9 @@ export async function signUpWithBotProtection(payload: SignUpPayload): Promise<S
         .maybeSingle()
 
       await resend.emails.send({
-        from: 'Mine Notifications <contact@trymine.ai>',
-        to: 'contact@trymine.ai',
-        replyTo: 'contact@trymine.ai',
+        from: 'Mine Notifications <info@trymine.ai>',
+        to: 'info@trymine.ai',
+        replyTo: 'info@trymine.ai',
         subject: `New Mine Signup: ${payload.email}`,
         html: `
           <div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; max-width: 600px; padding: 24px;">

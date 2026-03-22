@@ -233,10 +233,10 @@ export default function SupportPage() {
                 Need help with your migration? Our team typically responds within a few hours.
               </p>
               <a
-                href="mailto:contact@trymine.ai"
+                href="mailto:info@trymine.ai"
                 className="text-sm text-[#4F46E5] hover:underline"
               >
-                contact@trymine.ai
+                info@trymine.ai
               </a>
             </div>
 

@@ -5,9 +5,9 @@ const resend = new Resend(process.env.RESEND_API_KEY)
 
 const CALENDLY_DEMO = 'https://calendly.com/mine-ai/demo'
 const CALENDLY_SCOPING = process.env.NEXT_PUBLIC_CALENDLY_SCOPING_URL || 'https://calendly.com/mine-ai/migration-scoping-call'
-const FROM_NOTIFICATIONS = 'Mine Notifications <contact@trymine.ai>'
-const FROM_KAAN = 'Kaan from Mine <contact@trymine.ai>'
-const ADMIN_EMAIL = 'contact@trymine.ai'
+const FROM_NOTIFICATIONS = 'Mine Notifications <info@trymine.ai>'
+const FROM_KAAN = 'Kaan from Mine <info@trymine.ai>'
+const ADMIN_EMAIL = 'info@trymine.ai'
 
 // ── in-memory rate limit: max 3 notifications per email per 24h ───────────
 interface RLEntry { count: number; resetAt: number }
@@ -182,7 +182,7 @@ export async function POST(request: Request) {
         resend.emails.send({
           from: FROM_KAAN,
           to: email,
-          replyTo: 'contact@trymine.ai',
+          replyTo: 'info@trymine.ai',
           subject: 'Welcome to Mine — create your account',
           html: `
             <div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; max-width: 520px; color: #1a1a2e; line-height: 1.7;">
@@ -247,7 +247,7 @@ export async function POST(request: Request) {
       resend.emails.send({
         from: FROM_KAAN,
         to: email,
-        replyTo: 'contact@trymine.ai',
+        replyTo: 'info@trymine.ai',
         subject: 'We received your request — Mine',
         html: requesterConfirmationHtml(name),
       }),
