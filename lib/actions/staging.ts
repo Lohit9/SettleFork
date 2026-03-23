@@ -17,6 +17,7 @@ export interface StagedMappingOption {
   tableMappingId: string
   sourceTableName: string
   targetTableName: string
+  targetTableId: string
   rowCount: number
 }
 
@@ -293,6 +294,7 @@ export async function getStagedMappings(projectId: string): Promise<StagedMappin
       tableMappingId: tm.id,
       sourceTableName: tableNameById.get(tm.source_table_id) ?? 'unknown',
       targetTableName: tableNameById.get(tm.target_table_id) ?? 'unknown',
+      targetTableId: tm.target_table_id,
       rowCount: countByMapping.get(tm.id) ?? 0,
     }))
 }

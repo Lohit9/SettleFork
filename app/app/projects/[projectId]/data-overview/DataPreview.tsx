@@ -108,10 +108,15 @@ export default function DataPreview({ projectId, tables }: DataPreviewProps) {
   }
 
   // ── Helpers ────────────────────────────────────────────────────────────────
-  const columns = rows.length > 0 ? Object.keys(rows[0]) : []
+  // Use field order from the fields table (ordinal_position) rather than
+  // Object.keys() on JSONB, which gives arbitrary hash order.
+  const columns = selectedTable?.fieldNames ?? (rows.length > 0 ? Object.keys(rows[0]) : [])
   const totalPages = Math.ceil(totalRows / PAGE_SIZE)
 
-  const stagedColumns = stagedRows.length > 0 ? Object.keys(stagedRows[0]) : []
+  const selectedMapping = stagedMappings.find((m) => m.tableMappingId === selectedMappingId)
+  const stagedTargetTable = tables.find((t) => t.id === selectedMapping?.targetTableId)
+  const stagedColumns =
+    stagedTargetTable?.fieldNames ?? (stagedRows.length > 0 ? Object.keys(stagedRows[0]) : [])
   const stagedTotalPages = Math.ceil(stagedTotal / PAGE_SIZE)
 
   // Group source tables by dataset for the dropdown
@@ -124,8 +129,6 @@ export default function DataPreview({ projectId, tables }: DataPreviewProps) {
     }
     tablesByDataset.get(t.datasetName)!.push(t)
   }
-
-  const selectedMapping = stagedMappings.find((m) => m.tableMappingId === selectedMappingId)
 
   return (
     <div className="flex flex-col gap-4">
