@@ -92,6 +92,14 @@ export async function uploadCSV(formData: FormData): Promise<UploadCSVResult> {
     })
 
     // ── Step 5: Infer schema ──────────────────────────────────────────────────
+    // Fetch sibling tables so FK detection can verify the referenced table exists
+    const { data: siblingTables } = await supabase
+      .from('tables')
+      .select('name')
+      .eq('dataset_id', datasetId)
+
+    const existingTables = (siblingTables ?? []).map((t) => ({ name: t.name }))
+
     const sampleRows = sanitizedRows.slice(0, 100)
     const inferredFields = headers.map((header, index) => {
       const values = sampleRows
@@ -100,13 +108,7 @@ export async function uploadCSV(formData: FormData): Promise<UploadCSVResult> {
 
       const { dataType, inferredType } = inferColumnType(header, values)
       const isNullable = values.length < sampleRows.length
-      const uniqueValues = new Set(values)
-      const isPrimaryKey =
-        !isNullable &&
-        uniqueValues.size === values.length &&
-        values.length > 0 &&
-        isPKName(header)
-      const isForeignKey = !isPrimaryKey && isFKName(header)
+      const { isPrimaryKey, isForeignKey } = detectKeyType(header, tableName, values, existingTables)
 
       return {
         name: header,
@@ -335,14 +337,60 @@ function inferColumnType(
   return { dataType: `VARCHAR(${roundedLen})`, inferredType: null }
 }
 
-function isPKName(name: string): boolean {
-  const lower = name.toLowerCase()
-  return lower === 'id' || lower === 'pk' || lower === 'key' || /^.+_id$/.test(lower)
-}
+function detectKeyType(
+  fieldName: string,
+  tableName: string,
+  values: string[],
+  existingTables: { name: string }[]
+): { isPrimaryKey: boolean; isForeignKey: boolean } {
+  const lowerField = fieldName.toLowerCase()
+  const lowerTable = tableName.toLowerCase()
+  const singularTable = lowerTable.endsWith('s') ? lowerTable.slice(0, -1) : lowerTable
 
-function isFKName(name: string): boolean {
-  const lower = name.toLowerCase()
-  return (/^.+_id$/.test(lower) || /^.+id$/.test(lower)) && lower !== 'id'
+  // Step 1: Self-referencing PK — highest priority, no uniqueness check needed.
+  // "customer_id" in "customers" or "contacts" table → always PK.
+  const isSelfReferencing =
+    lowerField === 'id' ||
+    lowerField === 'pk' ||
+    lowerField === 'key' ||
+    lowerField === `${lowerTable}_id` ||
+    lowerField === `${singularTable}_id`
+
+  if (isSelfReferencing) {
+    return { isPrimaryKey: true, isForeignKey: false }
+  }
+
+  // Step 2: FK detection — only if the referenced table actually exists.
+  // "customer_id" in "contacts" when customers table already uploaded → FK.
+  const fkMatch = lowerField.match(/^(.+?)_id$/)
+  if (fkMatch) {
+    const referencedName = fkMatch[1].toLowerCase()
+    const matchesExistingTable = existingTables.some((t) => {
+      const otherTable = t.name.toLowerCase()
+      const otherSingular = otherTable.endsWith('s') ? otherTable.slice(0, -1) : otherTable
+      return referencedName === otherTable || referencedName === otherSingular
+    })
+    if (matchesExistingTable) {
+      return { isPrimaryKey: false, isForeignKey: true }
+    }
+  }
+
+  // Step 3: Heuristic PK — fallback for plain "id" variants with high uniqueness.
+  const nonNullValues = values.filter((v) => v !== null && v !== undefined && v !== '')
+  const uniqueRatio = new Set(nonNullValues).size / Math.max(nonNullValues.length, 1)
+  const isIdColumn = lowerField === 'id' || lowerField.endsWith('_id')
+
+  if (isIdColumn && uniqueRatio > 0.95 && nonNullValues.length > 0) {
+    return { isPrimaryKey: true, isForeignKey: false }
+  }
+
+  // Step 4: Heuristic FK fallback — *_id that isn't self-referencing.
+  // Covers cases where the referenced table hasn't been uploaded yet.
+  if (lowerField.endsWith('_id')) {
+    return { isPrimaryKey: false, isForeignKey: true }
+  }
+
+  return { isPrimaryKey: false, isForeignKey: false }
 }
 
 function countFormatIssues(values: string[], dataType: string): number {
