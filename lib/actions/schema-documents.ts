@@ -47,11 +47,14 @@ export async function uploadSchemaDocument(formData: FormData): Promise<UploadSc
 
     try {
       if (ext === '.pdf') {
+        const { PDFParse } = await import('pdf-parse')
         const buffer = Buffer.from(await file.arrayBuffer())
-        // eslint-disable-next-line @typescript-eslint/no-require-imports
-        const pdfParse = require('pdf-parse') as (buf: Buffer) => Promise<{ text: string }>
-        const pdfData = await pdfParse(buffer)
+        const parser = new PDFParse({ data: buffer })
+        const pdfData = await parser.getText()
         extractedText = pdfData.text?.trim() || null
+        if (!extractedText) {
+          console.warn('[uploadSchemaDocument] No text extracted from PDF (may be scanned/image-only):', sanitizedFilename)
+        }
       } else if (['.sql', '.ddl', '.txt'].includes(ext)) {
         extractedText = (await file.text()).trim() || null
       }
