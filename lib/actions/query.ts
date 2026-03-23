@@ -3,6 +3,7 @@
 import { createClient } from '@/lib/supabase/server'
 import { callClaude } from '@/lib/ai/claude'
 import { checkAIRateLimit } from '@/lib/ai/rate-limit'
+import { getSchemaDocumentContext, formatDocumentContextForPrompt } from '@/lib/ai/document-context'
 import { executeQuery, getTableMappingsForProject, type QueryEngineResult } from '@/lib/db/query-engine'
 
 export type { QueryEngineResult }
@@ -69,10 +70,14 @@ CRITICAL SAFETY RULES:
 - NEVER include SQL comments (--)
 - Return ONLY the raw SQL query — no explanation, no markdown, no backticks`
 
+  const queryDocBlock = formatDocumentContextForPrompt(
+    await getSchemaDocumentContext(projectId)
+  )
+
   const userMessage = `<schema>
 ${tableLines}
 </schema>
-
+${queryDocBlock}
 <question>
 ${question}
 </question>

@@ -4,6 +4,7 @@ import { createClient } from '@/lib/supabase/server'
 import { supabaseAdmin } from '@/lib/supabase/admin'
 import { callClaude } from '@/lib/ai/claude'
 import { checkAIRateLimit } from '@/lib/ai/rate-limit'
+import { getSchemaDocumentContext, formatDocumentContextForPrompt } from '@/lib/ai/document-context'
 import { wrapFieldRefsInJsonb } from '@/lib/utils/transform-helpers'
 
 // ── Shared types ──────────────────────────────────────────────────────────────
@@ -737,6 +738,8 @@ export async function generateSQLLoadScripts(projectId: string): Promise<{
 
 const REPORT_SYSTEM_PROMPT = `You are a senior data migration consultant. Generate a comprehensive Migration Readiness Report in clean Markdown format. Use ## for section headers, **bold** for key terms, and tables where appropriate. Be direct, precise, and actionable. Reference specific table and field names from the data provided.
 
+If documentation is provided (business rules, data dictionaries, schema docs), reference it when assessing readiness. Flag any areas where the current data state does not meet the documented requirements, and include relevant business rule references in the Risk Register.
+
 Structure the report exactly as follows:
 ## Go/No-Go Recommendation
 ## Executive Summary
@@ -848,6 +851,10 @@ export async function generateReadinessReport(
     .map((fh) => `- ${new Date(fh.applied_at).toLocaleDateString()}: ${fh.fix_description} (${fh.affected_row_count} rows, status: ${fh.status})`)
     .join('\n')
 
+  const reportDocBlock = formatDocumentContextForPrompt(
+    await getSchemaDocumentContext(projectId)
+  )
+
   const userMessage = `<project>
 Name: ${project.name}
 Source: ${srcDs?.name ?? 'Unknown'} (${srcTables.length} tables, ${totalSourceRows.toLocaleString()} rows)
@@ -895,7 +902,7 @@ ${savedTransformDetail || 'No saved transforms.'}
 <fix_history>
 ${fixHistoryDetail || 'No fixes applied.'}
 </fix_history>
-
+${reportDocBlock}
 Generate the full Migration Readiness Report now.`
 
   let reportText: string

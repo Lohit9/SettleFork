@@ -13,6 +13,7 @@ import { supabaseAdmin } from '@/lib/supabase/admin'
 import { createClient } from '@/lib/supabase/server'
 import { callClaude } from '@/lib/ai/claude'
 import { checkAIRateLimit } from '@/lib/ai/rate-limit'
+import { getSchemaDocumentContext, formatDocumentContextForPrompt } from '@/lib/ai/document-context'
 import type { FixOption } from '@/lib/types/database'
 
 const SYSTEM_PROMPT = `You are a senior enterprise data migration consultant. A data quality issue has been detected in a migration project. Your job is to:
@@ -90,6 +91,8 @@ The simpler alternative for adding a default value to all rows (preferred when p
   WHERE table_id = '<uuid>'
 
 Always choose the simplest correct pattern. Avoid window functions unless strictly required.
+
+If documentation is provided, follow the data quality rules and exception handling procedures specified in the business rules. For example, if the documentation says negative revenue should be flagged for business review rather than auto-corrected, your fix suggestions must respect that. Reference specific rules from the documentation in your fix descriptions when applicable.
 
 Respond with ONLY valid JSON (no markdown, no code fences):
 {
@@ -192,30 +195,10 @@ Target nullable: ${tf.is_nullable}`
     }
   }
 
-  // Fetch schema document context
-  let docContext = 'No additional documentation.'
-  if (issue.table_id) {
-    const { data: tableData } = await supabaseAdmin
-      .from('tables')
-      .select('dataset_id')
-      .eq('id', issue.table_id)
-      .single()
-
-    if (tableData?.dataset_id) {
-      const { data: docs } = await supabaseAdmin
-        .from('schema_documents')
-        .select('extracted_text, filename')
-        .eq('dataset_id', tableData.dataset_id)
-        .not('extracted_text', 'is', null)
-        .limit(2)
-
-      if (docs && docs.length > 0) {
-        docContext = docs
-          .map((d) => `--- ${d.filename} ---\n${(d.extracted_text ?? '').slice(0, 800)}`)
-          .join('\n\n')
-      }
-    }
-  }
+  // Fetch schema document context (source + target docs, up to 15k chars each)
+  const fixDocBlock = issue.project_id
+    ? formatDocumentContextForPrompt(await getSchemaDocumentContext(issue.project_id as string))
+    : ''
 
   // Fetch other open issues on the same table (to avoid conflicting fixes)
   let otherIssues = 'No other open issues on this table.'
@@ -261,10 +244,7 @@ ${samplesStr}
 ${targetContext}
 </target_context>
 
-<schema_documentation>
-${docContext}
-</schema_documentation>
-
+${fixDocBlock}
 <other_issues>
 ${otherIssues}
 </other_issues>

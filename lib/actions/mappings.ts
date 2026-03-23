@@ -3,6 +3,7 @@
 import { createClient } from '@/lib/supabase/server'
 import { callClaude } from '@/lib/ai/claude'
 import { checkAIRateLimit } from '@/lib/ai/rate-limit'
+import { getSchemaDocumentContext, formatDocumentContextForPrompt } from '@/lib/ai/document-context'
 
 // ─── Claude Response Types ─────────────────────────────────────────────────────
 
@@ -168,18 +169,9 @@ export async function generateMappings(
 
     const profileByFieldId = new Map(fieldProfiles?.map((p) => [p.field_id, p]) ?? [])
 
-    // Fetch schema documents for context
-    const allDatasetIds = [
-      ...new Set([
-        ...(sourceTables ?? []).map((t) => t.dataset_id),
-        ...(targetTables ?? []).map((t) => t.dataset_id),
-      ]),
-    ]
-    const { data: schemaDocs } = await supabase
-      .from('schema_documents')
-      .select('filename, extracted_text')
-      .in('dataset_id', allDatasetIds)
-      .not('extracted_text', 'is', null)
+    // Fetch schema document context (source + target docs, up to 15k chars each)
+    const docContext = await getSchemaDocumentContext(projectId)
+    const docBlock = formatDocumentContextForPrompt(docContext)
 
     // Build schema section string
     function buildSchemaSection(
@@ -223,14 +215,6 @@ export async function generateMappings(
     const sourceSection = buildSchemaSection(sourceTables ?? [], sourceFields ?? [])
     const targetSection = buildSchemaSection(targetTables ?? [], targetFields ?? [])
 
-    const docContext =
-      schemaDocs?.filter((d) => d.extracted_text).length
-        ? schemaDocs
-            .filter((d) => d.extracted_text)
-            .map((d) => `=== ${d.filename} ===\n${d.extracted_text!.slice(0, 2000)}`)
-            .join('\n\n')
-        : 'No additional documentation provided.'
-
     const systemPrompt = `You are an enterprise data migration expert specializing in source-to-target schema mapping. Given source and target database schemas with sample data and optional documentation context, generate comprehensive mapping suggestions.
 
 For each mapping, provide:
@@ -255,6 +239,12 @@ Consider these signals when mapping:
 - Cardinality and value patterns from sample data
 - Field position and grouping within tables
 
+If documentation is provided, use it to:
+- Identify exact value mappings (industry codes, stage values, status values)
+- Understand target field constraints (picklist values, required formats, NOT NULL fields)
+- Flag fields that need specific transformation logic based on documented rules
+- Set higher confidence scores when documentation confirms a mapping
+
 CRITICAL: Respond with ONLY valid JSON, no markdown, no backticks, no explanation outside the JSON structure.`
 
     const userMessage = `<source_schema>
@@ -263,10 +253,7 @@ ${sourceSection}
 <target_schema>
 ${targetSection}
 </target_schema>
-<documentation_context>
-${docContext}
-</documentation_context>
-
+${docBlock}
 Generate source-to-target mappings. Respond with this exact JSON structure.
 
 CRITICAL RULES FOR THE JSON:
@@ -924,6 +911,10 @@ export async function suggestRemainingMappings(
   const rawTgtDs = tgtT?.datasets as unknown
   const tgtDsN = Array.isArray(rawTgtDs) ? (rawTgtDs[0]?.name ?? 'target') : ((rawTgtDs as { name?: string } | null)?.name ?? 'target')
 
+  const remainingDocBlock = formatDocumentContextForPrompt(
+    await getSchemaDocumentContext(tm.project_id)
+  )
+
   const userMsg = `Source ${srcDsN}.${srcT?.name} → Target ${tgtDsN}.${tgtT?.name}. Suggest mappings for these UNMAPPED fields only.
 
 <source_unmapped>
@@ -932,7 +923,7 @@ ${unmapSrc.map(fLine).join('\n')}
 <target_unmapped>
 ${unmapTgt.map(fLine).join('\n')}
 </target_unmapped>
-
+${remainingDocBlock}
 CRITICAL: Use ONLY the bare field name (not table.field). Respond with ONLY valid JSON:
 {"field_mappings":[{"source_field":"name","target_field":"name","confidence":75,"reasoning":"reason","similar_fields_considered":[],"type_compatibility":"TYPE→TYPE"}]}`
 

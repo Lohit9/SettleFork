@@ -4,6 +4,7 @@ import { createClient } from '@/lib/supabase/server'
 import { supabaseAdmin } from '@/lib/supabase/admin'
 import { callClaude } from '@/lib/ai/claude'
 import { checkAIRateLimit } from '@/lib/ai/rate-limit'
+import { getSchemaDocumentContext, formatDocumentContextForPrompt } from '@/lib/ai/document-context'
 import { fieldNeedsTransform, wrapFieldRefsInJsonb } from '@/lib/utils/transform-helpers'
 import type { Transformation } from '@/lib/types/database'
 
@@ -281,7 +282,9 @@ Common transformation patterns:
 - Substring: SUBSTRING(field FROM 1 FOR 10)
 - Regex replace: REGEXP_REPLACE(field, 'pattern', 'replacement')
 - Hash: MD5(field)
-- Truncation: LEFT(field, 10) or SUBSTRING(field FROM 1 FOR 10)`
+- Truncation: LEFT(field, 10) or SUBSTRING(field FROM 1 FOR 10)
+
+If documentation is provided, follow the exact value mappings and transformation rules specified in the business rules. Do not invent mappings that contradict the documentation. If the documentation specifies edge cases or special handling, include them in the expression.`
 
 // ── generateTransform ─────────────────────────────────────────────────────────
 
@@ -353,17 +356,11 @@ export async function generateTransform(
     .eq('field_id', srcField.id)
     .single()
 
-  // Fetch schema docs for context
-  const { data: schemaDocs } = await supabase
-    .from('schema_documents')
-    .select('extracted_text')
-    .in('dataset_id', [
-      (srcTable?.datasets as unknown as { id: string } | null)?.id,
-    ].filter(Boolean) as string[])
-    .not('extracted_text', 'is', null)
-    .limit(1)
+  // Fetch schema document context (source + target docs, up to 15k chars each)
+  const transformDocBlock = formatDocumentContextForPrompt(
+    await getSchemaDocumentContext(tm.project_id)
+  )
 
-  const docText = schemaDocs?.[0]?.extracted_text ?? 'No additional documentation.'
   const srcDatasetName = (srcTable?.datasets as unknown as { name: string } | null)?.name ?? ''
   const tgtTableName = tgtTable?.name ?? ''
   const sampleValues = (profile?.sample_values as unknown[]) ?? []
@@ -386,11 +383,7 @@ Nullable: ${tgtField.is_nullable}
 <type_compatibility>
 ${fm.type_compatibility ?? 'Not specified'}
 </type_compatibility>
-
-<documentation>
-${docText.slice(0, 2000)}
-</documentation>
-
+${transformDocBlock}
 <description>
 ${description}
 </description>
