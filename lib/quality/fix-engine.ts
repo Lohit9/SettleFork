@@ -13,7 +13,7 @@ import { supabaseAdmin } from '@/lib/supabase/admin'
 import { createClient } from '@/lib/supabase/server'
 import { callClaude } from '@/lib/ai/claude'
 import { checkAIRateLimit } from '@/lib/ai/rate-limit'
-import { getSchemaDocumentContext, formatDocumentContextForPrompt } from '@/lib/ai/document-context'
+import { buildAIContext, formatFieldForPrompt, formatDocumentsForPrompt } from '@/lib/ai/context-builder'
 import type { FixOption } from '@/lib/types/database'
 
 const SYSTEM_PROMPT = `You are a senior enterprise data migration consultant. A data quality issue has been detected in a migration project. Your job is to:
@@ -144,39 +144,75 @@ export async function generateFixSuggestions(
     return { success: false, error: 'Access denied' }
   }
 
-  // Fetch field context
+  // Build rich AI context for the affected field: value distributions + docs
+  // Uses RLS client since ownership has already been verified above
   let fieldContext = 'No field information available.'
-  if (issue.field_id) {
-    const { data: field } = await supabaseAdmin
-      .from('fields')
-      .select('*, field_profiles(*)')
-      .eq('id', issue.field_id)
-      .single()
+  let tableName = 'unknown'
+  let fixDocBlock = ''
 
-    if (field) {
-      const profile = (field.field_profiles as { null_percentage?: number; cardinality?: number; sample_values?: unknown[] }[])?.[0]
-      fieldContext = `Field: ${field.name}
-Type: ${field.data_type} (inferred: ${field.inferred_type ?? 'unknown'})
-Nullable: ${field.is_nullable}
-Primary Key: ${field.is_primary_key}
-Null rate: ${profile?.null_percentage ?? 0}%
-Cardinality: ${profile?.cardinality ?? 'unknown'}
-Sample values: ${JSON.stringify(profile?.sample_values?.slice(0, 10) ?? [])}`
+  if (issue.project_id) {
+    try {
+      const fixCtx = await buildAIContext(issue.project_id as string, {
+        tableIds: issue.table_id ? [issue.table_id as string] : [],
+        fieldIds: issue.field_id ? [issue.field_id as string] : [],
+        includeProfilingStats: true,
+        includeValueDistributions: true,
+        includeSampleValues: true,
+        includeDocuments: true,
+        maxDistributionValues: 15,
+      })
+
+      // Find the affected field context (search source + target tables)
+      const allFieldCtxs = [...fixCtx.source_tables, ...fixCtx.target_tables].flatMap((t) => t.fields)
+      const affectedFieldCtx = allFieldCtxs[0] // filtered by fieldId — at most one field
+
+      if (affectedFieldCtx) {
+        fieldContext = formatFieldForPrompt(affectedFieldCtx)
+      }
+
+      // Get table name from context
+      const allTableCtxs = [...fixCtx.source_tables, ...fixCtx.target_tables]
+      if (allTableCtxs[0]) {
+        tableName = allTableCtxs[0].table_name
+      }
+
+      fixDocBlock = formatDocumentsForPrompt(fixCtx.documents)
+    } catch {
+      // Fall back to admin fetch if context builder fails (e.g., no dataset for this table)
+      if (issue.field_id) {
+        const { data: field } = await supabaseAdmin
+          .from('fields')
+          .select('name, data_type, inferred_type, is_nullable, is_primary_key')
+          .eq('id', issue.field_id)
+          .single()
+        if (field) {
+          fieldContext = `Field: ${field.name}\nType: ${field.data_type} (inferred: ${field.inferred_type ?? 'unknown'})\nNullable: ${field.is_nullable}`
+        }
+      }
+      if (issue.table_id) {
+        const { data: table } = await supabaseAdmin.from('tables').select('name').eq('id', issue.table_id).single()
+        if (table) tableName = table.name
+      }
+    }
+  } else {
+    // No project_id — fall back to direct admin queries
+    if (issue.field_id) {
+      const { data: field } = await supabaseAdmin
+        .from('fields')
+        .select('name, data_type, inferred_type, is_nullable, is_primary_key')
+        .eq('id', issue.field_id)
+        .single()
+      if (field) {
+        fieldContext = `Field: ${field.name}\nType: ${field.data_type} (inferred: ${field.inferred_type ?? 'unknown'})\nNullable: ${field.is_nullable}`
+      }
+    }
+    if (issue.table_id) {
+      const { data: table } = await supabaseAdmin.from('tables').select('name').eq('id', issue.table_id).single()
+      if (table) tableName = table.name
     }
   }
 
-  // Fetch table context
-  let tableName = 'unknown'
-  if (issue.table_id) {
-    const { data: table } = await supabaseAdmin
-      .from('tables')
-      .select('name')
-      .eq('id', issue.table_id)
-      .single()
-    if (table) tableName = table.name
-  }
-
-  // Fetch target mapping context
+  // Fetch target mapping context (still via admin since field_mappings may not have RLS for this join)
   let targetContext = 'No target mapping exists yet.'
   if (issue.field_id) {
     const { data: fmData } = await supabaseAdmin
@@ -194,11 +230,6 @@ Sample values: ${JSON.stringify(profile?.sample_values?.slice(0, 10) ?? [])}`
 Target nullable: ${tf.is_nullable}`
     }
   }
-
-  // Fetch schema document context (source + target docs, up to 15k chars each)
-  const fixDocBlock = issue.project_id
-    ? formatDocumentContextForPrompt(await getSchemaDocumentContext(issue.project_id as string))
-    : ''
 
   // Fetch other open issues on the same table (to avoid conflicting fixes)
   let otherIssues = 'No other open issues on this table.'

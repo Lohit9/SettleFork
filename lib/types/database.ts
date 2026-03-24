@@ -58,6 +58,7 @@ export interface FieldProfile {
   min_value: string | null
   max_value: string | null
   sample_values: unknown[] | null
+  value_distribution: { value: string; count: number }[] | null
   computed_at: string
 }
 

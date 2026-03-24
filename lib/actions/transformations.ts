@@ -4,7 +4,7 @@ import { createClient } from '@/lib/supabase/server'
 import { supabaseAdmin } from '@/lib/supabase/admin'
 import { callClaude } from '@/lib/ai/claude'
 import { checkAIRateLimit } from '@/lib/ai/rate-limit'
-import { getSchemaDocumentContext, formatDocumentContextForPrompt } from '@/lib/ai/document-context'
+import { buildAIContext, formatFieldForPrompt, formatDocumentsForPrompt } from '@/lib/ai/context-builder'
 import { fieldNeedsTransform, wrapFieldRefsInJsonb } from '@/lib/utils/transform-helpers'
 import type { Transformation } from '@/lib/types/database'
 
@@ -349,35 +349,35 @@ export async function generateTransform(
     supabase.from('tables').select('id, name').eq('id', tm.target_table_id).single(),
   ])
 
-  // Fetch field profile for sample values
-  const { data: profile } = await supabase
-    .from('field_profiles')
-    .select('sample_values, cardinality')
-    .eq('field_id', srcField.id)
-    .single()
+  // Build rich AI context for the two mapped fields: full value distributions + docs
+  const txCtx = await buildAIContext(tm.project_id, {
+    tableIds: [tm.source_table_id, tm.target_table_id],
+    fieldIds: [srcField.id, tgtField.id],
+    includeProfilingStats: true,
+    includeValueDistributions: true,
+    includeSampleValues: true,
+    includeDocuments: true,
+    maxDistributionValues: 25,
+  })
 
-  // Fetch schema document context (source + target docs, up to 15k chars each)
-  const transformDocBlock = formatDocumentContextForPrompt(
-    await getSchemaDocumentContext(tm.project_id)
-  )
-
-  const srcDatasetName = (srcTable?.datasets as unknown as { name: string } | null)?.name ?? ''
   const tgtTableName = tgtTable?.name ?? ''
-  const sampleValues = (profile?.sample_values as unknown[]) ?? []
+  const transformDocBlock = formatDocumentsForPrompt(txCtx.documents)
+
+  // Find field contexts (source has distribution data; target is DDL-only so profile is empty)
+  const srcFieldCtx = txCtx.source_tables.flatMap((t) => t.fields).find((f) => f.name === srcField.name)
+  const tgtFieldCtx = txCtx.target_tables.flatMap((t) => t.fields).find((f) => f.name === tgtField.name)
 
   // Build user message
   const userMessage = `<source_field>
-Field: ${srcTable?.name ?? ''}.${srcField.name}
-Type: ${srcField.data_type}${srcField.inferred_type ? ` (${srcField.inferred_type})` : ''}
-Nullable: ${srcField.is_nullable}
-Sample values: ${sampleValues.length > 0 ? sampleValues.slice(0, 15).join(', ') : 'none available'}
-Distinct value count: ${profile?.cardinality ?? 'unknown'}
+${srcFieldCtx ? formatFieldForPrompt(srcFieldCtx) : `${srcField.name} (${srcField.data_type})\n  Nullable: ${srcField.is_nullable}`}
+Table: ${srcTable?.name ?? ''}
 </source_field>
 
 <target_field>
 Field: ${tgtTableName}.${tgtField.name}
 Type: ${tgtField.data_type}${tgtField.inferred_type ? ` (${tgtField.inferred_type})` : ''}
 Nullable: ${tgtField.is_nullable}
+${tgtFieldCtx && tgtFieldCtx.cardinality > 0 ? `Distinct values: ${tgtFieldCtx.cardinality}` : ''}
 </target_field>
 
 <type_compatibility>

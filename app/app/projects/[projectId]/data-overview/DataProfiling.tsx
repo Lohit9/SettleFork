@@ -28,7 +28,10 @@ function StatCard({
 }
 
 export default function DataProfiling({ tables }: DataProfilingProps) {
-  const [selectedTableId, setSelectedTableId] = useState<string>(tables[0]?.id ?? '')
+  // Only tables with uploaded CSV data have profiling stats — filter out DDL-only tables
+  const profilableTables = tables.filter((t) => t.row_count > 0)
+
+  const [selectedTableId, setSelectedTableId] = useState<string>(profilableTables[0]?.id ?? '')
   const [data, setData] = useState<ProfilingData | null>(null)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -51,15 +54,27 @@ export default function DataProfiling({ tables }: DataProfilingProps) {
     }
   }
 
-  // Group tables for the dropdown
+  // Group profilable tables for the dropdown
   const datasetOrder: string[] = []
   const tablesByDataset = new Map<string, TableOption[]>()
-  for (const t of tables) {
+  for (const t of profilableTables) {
     if (!tablesByDataset.has(t.datasetName)) {
       tablesByDataset.set(t.datasetName, [])
       datasetOrder.push(t.datasetName)
     }
     tablesByDataset.get(t.datasetName)!.push(t)
+  }
+
+  if (profilableTables.length === 0) {
+    return (
+      <div className="bg-white border border-gray-200 rounded-xl p-10 text-center">
+        <p className="text-sm font-medium text-gray-700">No data to profile</p>
+        <p className="text-sm text-gray-500 mt-1">
+          Upload CSV files as source data to see profiling statistics.
+          Tables created from DDL files do not have row data.
+        </p>
+      </div>
+    )
   }
 
   return (

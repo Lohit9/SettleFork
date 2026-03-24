@@ -127,10 +127,33 @@ export async function getTableMappingsForProject(
     .in('table_id', tableIds)
     .order('ordinal_position', { ascending: true })
 
-  const fieldsByTable = new Map<string, { name: string; dataType: string }[]>()
+  // Fetch sample values and null rates so the NL prompt can see actual data formatting
+  const fieldIds = (fields ?? []).map((f) => f.id)
+  const { data: profiles } =
+    fieldIds.length > 0
+      ? await supabase
+          .from('field_profiles')
+          .select('field_id, sample_values, null_percentage, format_issues')
+          .in('field_id', fieldIds)
+      : { data: [] }
+
+  const profileByFieldId = new Map(
+    (profiles ?? []).map((p) => [p.field_id, p])
+  )
+
+  const fieldsByTable = new Map<string, { name: string; dataType: string; sampleValues?: string[]; nullPercentage?: number; formatIssues?: number }[]>()
   for (const f of fields || []) {
+    const profile = profileByFieldId.get(f.id)
     const list = fieldsByTable.get(f.table_id) ?? []
-    list.push({ name: f.name, dataType: f.data_type })
+    list.push({
+      name: f.name,
+      dataType: f.data_type,
+      sampleValues: profile?.sample_values
+        ? (profile.sample_values as unknown[]).slice(0, 5).map((v) => String(v ?? ''))
+        : undefined,
+      nullPercentage: profile?.null_percentage ?? undefined,
+      formatIssues: profile?.format_issues ?? undefined,
+    })
     fieldsByTable.set(f.table_id, list)
   }
 

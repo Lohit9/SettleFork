@@ -22,7 +22,13 @@
 export interface TableMapping {
   friendlyName: string   // "softpak.prices"
   tableId: string        // UUID
-  fields: { name: string; dataType: string }[]
+  fields: {
+    name: string
+    dataType: string
+    sampleValues?: string[]   // up to 5 samples from field_profiles — used by NL prompt
+    nullPercentage?: number   // from field_profiles — used by NL prompt
+    formatIssues?: number     // count of rows with formatting problems — used by NL prompt
+  }[]
 }
 
 export interface RewriteResult {
@@ -182,7 +188,7 @@ function rewriteSelectList(
       return `ERROR: Use explicit columns with JOINs (e.g., SELECT p."Price", c."Name")`
     }
     return primaryMapping.fields
-      .map((f) => `row_data->>'${f.name}' AS "${f.name}"`)
+      .map((f) => `TRIM(row_data->>'${f.name}') AS "${f.name}"`)
       .join(', ')
   }
 
@@ -193,7 +199,7 @@ function rewriteSelectList(
     if (entry) {
       const prefix = entry.alias ? `${entry.alias}.` : ''
       return entry.mapping.fields
-        .map((f) => `${prefix}row_data->>'${f.name}' AS "${f.name}"`)
+        .map((f) => `TRIM(${prefix}row_data->>'${f.name}') AS "${f.name}"`)
         .join(', ')
     }
   }
@@ -213,15 +219,15 @@ function rewriteSelectColumn(
     return `${transformColRefs(asMatch[1].trim(), aliasMap)} AS ${asMatch[2]}`
   }
 
-  // Simple quoted column: "FieldName" → row_data->>'FieldName' AS "FieldName"
+  // Simple quoted column: "FieldName" → TRIM(row_data->>'FieldName') AS "FieldName"
   const simpleQuoted = /^(?:([\w]+)\.)?"([^"]+)"$/.exec(col)
   if (simpleQuoted) {
     const alias = simpleQuoted[1]
     const fieldName = simpleQuoted[2]
     if (alias) {
-      return `${alias}.row_data->>'${fieldName}' AS "${fieldName}"`
+      return `TRIM(${alias}.row_data->>'${fieldName}') AS "${fieldName}"`
     }
-    return `row_data->>'${fieldName}' AS "${fieldName}"`
+    return `TRIM(row_data->>'${fieldName}') AS "${fieldName}"`
   }
 
   // Otherwise transform as expression (aggregate, cast, etc.)
@@ -231,10 +237,13 @@ function rewriteSelectColumn(
 // ─── Column reference transformation ─────────────────────────────────────────
 //
 // Applied in order (most specific first to avoid double-replacement):
-//  1. alias."col"::type  → (alias.row_data->>'col')::type
-//  2. "col"::type        → (row_data->>'col')::type
-//  3. alias."col"        → alias.row_data->>'col'
-//  4. "col"              → row_data->>'col'
+//  1. alias."col"::type  → (TRIM(alias.row_data->>'col'))::type
+//  2. "col"::type        → (TRIM(row_data->>'col'))::type
+//  3. alias."col"        → TRIM(alias.row_data->>'col')
+//  4. "col"              → TRIM(row_data->>'col')
+//
+// TRIM() is applied to every field extraction to handle leading/trailing
+// whitespace in stored values, which would otherwise break numeric casts.
 
 function transformColRefs(
   text: string,
@@ -245,17 +254,17 @@ function transformColRefs(
   // 1. alias."col"::type
   result = result.replace(
     /\b([\w]+)\."([^"]+)"::([\w()]+)/g,
-    "($1.row_data->>'$2')::$3"
+    "(TRIM($1.row_data->>'$2'))::$3"
   )
 
   // 2. "col"::type (no alias)
-  result = result.replace(/"([^"]+)"::([\w()]+)/g, "(row_data->>'$1')::$2")
+  result = result.replace(/"([^"]+)"::([\w()]+)/g, "(TRIM(row_data->>'$1'))::$2")
 
   // 3. alias."col" (no cast)
-  result = result.replace(/\b([\w]+)\."([^"]+)"/g, "$1.row_data->>'$2'")
+  result = result.replace(/\b([\w]+)\."([^"]+)"/g, "TRIM($1.row_data->>'$2')")
 
   // 4. "col" (no alias, no cast) — must come last
-  result = result.replace(/"([^"]+)"/g, "row_data->>'$1'")
+  result = result.replace(/"([^"]+)"/g, "TRIM(row_data->>'$1')")
 
   return result
 }

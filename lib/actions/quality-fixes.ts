@@ -3,6 +3,7 @@
 import { supabaseAdmin } from '@/lib/supabase/admin'
 import { createClient } from '@/lib/supabase/server'
 import { validateFixSQL } from '@/lib/quality/fix-sql-validator'
+import { countFormatIssues } from '@/lib/utils/profiling'
 import { runSourceDataChecks } from '@/lib/quality/detection-engine'
 import { executeCustomRules } from '@/lib/actions/validation-rules'
 import type { QualityIssue, FixHistory } from '@/lib/types/database'
@@ -567,7 +568,7 @@ async function recomputeFieldProfile(fieldId: string, tableId: string): Promise<
 
   const { data: field } = await supabase
     .from('fields')
-    .select('name')
+    .select('name, data_type, inferred_type')
     .eq('id', fieldId)
     .single()
 
@@ -575,12 +576,48 @@ async function recomputeFieldProfile(fieldId: string, tableId: string): Promise<
 
   const fieldName = field.name
   const total = rows.length
-  const values = rows.map((r) => (r.row_data as Record<string, unknown>)[fieldName])
-  const nullCount = values.filter((v) => v === null || v === undefined || v === '').length
-  const nonNullValues = values.filter((v) => v !== null && v !== undefined && v !== '')
-  const uniqueSet = new Set(nonNullValues.map((v) => String(v)))
+  const rawValues = rows.map((r) => String((r.row_data as Record<string, unknown>)[fieldName] ?? ''))
+  const nullCount = rawValues.filter((v) => v === '' || v === 'null' || v === 'undefined').length
+  const nonNullValues = rawValues.filter((v) => v !== '' && v !== 'null' && v !== 'undefined')
+  const uniqueSet = new Set(nonNullValues)
   const cardinality = uniqueSet.size
-  const sampleValues = [...uniqueSet].slice(0, 10)
+
+  // Frequency distribution — top 25 most frequent values
+  const freqMap = new Map<string, number>()
+  for (const v of nonNullValues) {
+    const t = v.trim()
+    if (t) freqMap.set(t, (freqMap.get(t) ?? 0) + 1)
+  }
+  const valueDistribution = Array.from(freqMap.entries())
+    .map(([value, count]) => ({ value, count }))
+    .sort((a, b) => b.count - a.count)
+    .slice(0, 25)
+
+  const sampleValues = valueDistribution.slice(0, 10).map((d) => d.value)
+
+  // Numeric-aware min/max
+  let minValue: string | null = null
+  let maxValue: string | null = null
+  const inferredType = field.inferred_type
+  if (nonNullValues.length > 0) {
+    if (inferredType === 'currency' || inferredType === 'integer' || inferredType === 'decimal') {
+      const numeric = nonNullValues
+        .map((v) => { const n = Number(v.replace(/[$,\s]/g, '')); return isNaN(n) ? null : { v, n } })
+        .filter(Boolean) as { v: string; n: number }[]
+      if (numeric.length > 0) {
+        numeric.sort((a, b) => a.n - b.n)
+        minValue = numeric[0].v
+        maxValue = numeric[numeric.length - 1].v
+      }
+    }
+    if (!minValue) {
+      const sorted = [...nonNullValues].sort()
+      minValue = sorted[0]
+      maxValue = sorted[sorted.length - 1]
+    }
+  }
+
+  const formatIssuesCount = countFormatIssues(nonNullValues, field.data_type ?? '', field.inferred_type ?? null, fieldName)
 
   await supabase.from('field_profiles').upsert(
     {
@@ -589,12 +626,12 @@ async function recomputeFieldProfile(fieldId: string, tableId: string): Promise<
       null_count: nullCount,
       null_percentage: total > 0 ? (nullCount / total) * 100 : 0,
       cardinality,
-      unique_percentage: total > 0 ? (uniqueSet.size / total) * 100 : 0,
-      format_issues_count: 0,
-      min_value: nonNullValues.length > 0 ? String(nonNullValues[0]) : null,
-      max_value:
-        nonNullValues.length > 0 ? String(nonNullValues[nonNullValues.length - 1]) : null,
+      unique_percentage: total > 0 ? (cardinality / total) * 100 : 0,
+      format_issues_count: formatIssuesCount,
+      min_value: minValue,
+      max_value: maxValue,
       sample_values: sampleValues,
+      value_distribution: valueDistribution,
       computed_at: new Date().toISOString(),
     },
     { onConflict: 'field_id' }

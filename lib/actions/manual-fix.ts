@@ -3,6 +3,7 @@
 import { supabaseAdmin } from '@/lib/supabase/admin'
 import { createClient } from '@/lib/supabase/server'
 import { validateFixSQL } from '@/lib/quality/fix-sql-validator'
+import { countFormatIssues, computeValueDistribution, computeMinMax } from '@/lib/utils/profiling'
 import { callClaude } from '@/lib/ai/claude'
 import { checkAIRateLimit } from '@/lib/ai/rate-limit'
 
@@ -323,10 +324,9 @@ export async function applyManualFix(
 
   // Recompute field profiles for all fields on this table
   try {
-    // Fix 1: use RLS client for fields, data_rows, and field_profiles
     const { data: fields } = await supabase
       .from('fields')
-      .select('id, name')
+      .select('id, name, data_type, inferred_type')
       .eq('table_id', tableId)
 
     const { data: rows } = await supabase
@@ -337,10 +337,20 @@ export async function applyManualFix(
     for (const f of fields ?? []) {
       if (!rows || rows.length === 0) continue
       const total = rows.length
-      const values = rows.map((r) => (r.row_data as Record<string, unknown>)[f.name])
-      const nullCount = values.filter((v) => v === null || v === undefined || v === '').length
-      const nonNull = values.filter((v) => v !== null && v !== undefined && v !== '')
-      const uniqueSet = new Set(nonNull.map((v) => String(v)))
+      const rawValues = rows.map((r) => String((r.row_data as Record<string, unknown>)[f.name] ?? ''))
+      const nullCount = rawValues.filter((v) => v === '' || v === 'null' || v === 'undefined').length
+      const nonNullValues = rawValues.filter((v) => v !== '' && v !== 'null' && v !== 'undefined')
+
+      // Frequency distribution (top 25)
+      const valueDistribution = computeValueDistribution(nonNullValues)
+      const cardinality = new Set(nonNullValues.map((v) => v.trim()).filter(Boolean)).size
+      const sampleValues = valueDistribution.slice(0, 10).map((d) => d.value)
+
+      // Numeric-aware min/max
+      const { min: minValue, max: maxValue } = computeMinMax(nonNullValues, f.inferred_type ?? null)
+
+      // Actual format issue detection based on semantic type + heuristics
+      const formatIssuesCount = countFormatIssues(nonNullValues, f.data_type ?? '', f.inferred_type ?? null, f.name)
 
       await supabase.from('field_profiles').upsert(
         {
@@ -348,12 +358,13 @@ export async function applyManualFix(
           total_rows: total,
           null_count: nullCount,
           null_percentage: total > 0 ? (nullCount / total) * 100 : 0,
-          cardinality: uniqueSet.size,
-          unique_percentage: total > 0 ? (uniqueSet.size / total) * 100 : 0,
-          format_issues_count: 0,
-          min_value: nonNull.length > 0 ? String(nonNull[0]) : null,
-          max_value: nonNull.length > 0 ? String(nonNull[nonNull.length - 1]) : null,
-          sample_values: [...uniqueSet].slice(0, 10),
+          cardinality,
+          unique_percentage: total > 0 ? (cardinality / total) * 100 : 0,
+          format_issues_count: formatIssuesCount,
+          min_value: minValue,
+          max_value: maxValue,
+          sample_values: sampleValues,
+          value_distribution: valueDistribution,
           computed_at: new Date().toISOString(),
         },
         { onConflict: 'field_id' }

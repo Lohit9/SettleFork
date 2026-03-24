@@ -3,7 +3,7 @@
 import { createClient } from '@/lib/supabase/server'
 import { callClaude } from '@/lib/ai/claude'
 import { checkAIRateLimit } from '@/lib/ai/rate-limit'
-import { getSchemaDocumentContext, formatDocumentContextForPrompt } from '@/lib/ai/document-context'
+import { buildAIContext, formatSchemaForPrompt, formatDocumentsForPrompt } from '@/lib/ai/context-builder'
 
 // ─── Claude Response Types ─────────────────────────────────────────────────────
 
@@ -106,7 +106,7 @@ export async function generateMappings(
   projectId: string,
   sourceTableIds: string[],
   targetTableIds: string[]
-): Promise<{ success: boolean; error?: string }> {
+): Promise<{ success: boolean; error?: string; generated?: number; skipped?: number; message?: string }> {
   const supabase = await createClient()
   const { data: { user } } = await supabase.auth.getUser()
   if (!user) return { success: false, error: 'Not authenticated' }
@@ -157,63 +157,20 @@ export async function generateMappings(
       .order('ordinal_position', { ascending: true })
     if (tfErr) throw tfErr
 
-    // Fetch field profiles for sample values
-    const allFieldIds = [
-      ...(sourceFields ?? []).map((f) => f.id),
-      ...(targetFields ?? []).map((f) => f.id),
-    ]
-    const { data: fieldProfiles } = await supabase
-      .from('field_profiles')
-      .select('field_id, sample_values')
-      .in('field_id', allFieldIds)
+    // Build rich AI context: value distributions, format issues, profiling stats, and docs
+    const aiCtx = await buildAIContext(projectId, {
+      tableIds: [...sourceTableIds, ...targetTableIds],
+      includeProfilingStats: true,
+      includeValueDistributions: true,
+      includeSampleValues: true,
+      includeDocuments: true,
+      maxDistributionValues: 15,
+      maxSampleValues: 5,
+    })
 
-    const profileByFieldId = new Map(fieldProfiles?.map((p) => [p.field_id, p]) ?? [])
-
-    // Fetch schema document context (source + target docs, up to 15k chars each)
-    const docContext = await getSchemaDocumentContext(projectId)
-    const docBlock = formatDocumentContextForPrompt(docContext)
-
-    // Build schema section string
-    function buildSchemaSection(
-      tables: NonNullable<typeof sourceTables>,
-      fields: NonNullable<typeof sourceFields>
-    ): string {
-      return tables
-        .map((table) => {
-          const tableFields = fields.filter((f) => f.table_id === table.id)
-          const rawDs = table.datasets as unknown
-          const datasetName = Array.isArray(rawDs)
-            ? ((rawDs[0] as { name?: string })?.name ?? 'unknown')
-            : ((rawDs as { name?: string } | null)?.name ?? 'unknown')
-
-          const fieldLines = tableFields
-            .map((f) => {
-              const tags: string[] = []
-              if (f.is_primary_key) tags.push('PK')
-              if (f.is_foreign_key) tags.push('FK')
-              if (f.is_nullable) tags.push('nullable')
-              const tagStr = tags.length ? ` [${tags.join(', ')}]` : ''
-
-              const profile = profileByFieldId.get(f.id)
-              const samples = profile?.sample_values
-                ? (profile.sample_values as unknown[])
-                    .filter(Boolean)
-                    .slice(0, 5)
-                    .map((v) => String(v))
-                    .join(', ')
-                : 'no samples'
-
-              return `  - ${f.name} (${f.data_type})${tagStr}\n    Sample values: ${samples}`
-            })
-            .join('\n')
-
-          return `Table: ${datasetName}.${table.name}\nFields:\n${fieldLines}`
-        })
-        .join('\n\n')
-    }
-
-    const sourceSection = buildSchemaSection(sourceTables ?? [], sourceFields ?? [])
-    const targetSection = buildSchemaSection(targetTables ?? [], targetFields ?? [])
+    const sourceSection = formatSchemaForPrompt(aiCtx.source_tables, 'source')
+    const targetSection = formatSchemaForPrompt(aiCtx.target_tables, 'target')
+    const docBlock = formatDocumentsForPrompt(aiCtx.documents)
 
     const systemPrompt = `You are an enterprise data migration expert specializing in source-to-target schema mapping. Given source and target database schemas with sample data and optional documentation context, generate comprehensive mapping suggestions.
 
@@ -247,12 +204,8 @@ If documentation is provided, use it to:
 
 CRITICAL: Respond with ONLY valid JSON, no markdown, no backticks, no explanation outside the JSON structure.`
 
-    const userMessage = `<source_schema>
-${sourceSection}
-</source_schema>
-<target_schema>
+    const userMessage = `${sourceSection}
 ${targetSection}
-</target_schema>
 ${docBlock}
 Generate source-to-target mappings. Respond with this exact JSON structure.
 
@@ -301,8 +254,16 @@ Map ALL source fields to their best target match. If a source field has no reaso
       parsedResponse = parseClaudeJSON(retryRaw)
     }
 
-    // Delete existing mappings (re-generate flow) — cascade deletes field_mappings
-    await supabase.from('table_mappings').delete().eq('project_id', projectId)
+    // Additive generation — fetch existing pairs so we can skip them instead of deleting
+    const { data: existingMappingPairs } = await supabase
+      .from('table_mappings')
+      .select('source_table_id, target_table_id')
+      .eq('project_id', projectId)
+
+    const existingPairSet = new Set(
+      (existingMappingPairs ?? []).map((m) => `${m.source_table_id}::${m.target_table_id}`)
+    )
+    let skippedCount = 0
 
     // Normalize: strip dataset prefix if Claude returns "dataset.table" or "dataset.field"
     function bareTableName(s: string | null | undefined): string {
@@ -348,6 +309,13 @@ Map ALL source fields to their best target match. If a source field has no reaso
       const tgtTable = targetTableMap.get(tgtKey)
       if (!srcTable || !tgtTable) {
         console.warn(`[mappings] No match for "${tm.source_table}" → "${tm.target_table}" (keys: ${srcKey}, ${tgtKey})`)
+        continue
+      }
+
+      // Skip pairs that already have a table mapping (additive — preserve existing work)
+      const pairKey = `${srcTable.id}::${tgtTable.id}`
+      if (existingPairSet.has(pairKey)) {
+        skippedCount++
         continue
       }
 
@@ -401,7 +369,16 @@ Map ALL source fields to their best target match. If a source field has no reaso
     }
 
     if (storedCount === 0) {
-      // Nothing was stored — Claude returned names that don't match any table
+      // All pairs already existed — every suggestion was skipped
+      if (skippedCount > 0) {
+        return {
+          success: true,
+          generated: 0,
+          skipped: skippedCount,
+          message: 'All selected table pairs already have mappings. Go to the Mapping tab to manage them.',
+        }
+      }
+      // Claude returned names that don't match any table
       console.error('[mappings] Zero table mappings stored. Claude response tables:', 
         parsedResponse.table_mappings.map(tm => `${tm.source_table} → ${tm.target_table}`))
       return {
@@ -410,7 +387,14 @@ Map ALL source fields to their best target match. If a source field has no reaso
       }
     }
 
-    return { success: true }
+    return {
+      success: true,
+      generated: storedCount,
+      skipped: skippedCount,
+      message: skippedCount > 0
+        ? `Generated mappings for ${storedCount} table pair${storedCount !== 1 ? 's' : ''}. Skipped ${skippedCount} pair${skippedCount !== 1 ? 's' : ''} that already have mappings.`
+        : undefined,
+    }
   } catch (err) {
     console.error('generateMappings error:', err)
     return { success: false, error: err instanceof Error ? err.message : 'Generation failed' }
@@ -552,8 +536,14 @@ export async function getMappings(projectId: string): Promise<MappingsResult | n
   })
 
   // Compute unmapped fields
-  const mappedSourceFieldIds = new Set((rawFMs ?? []).map((fm) => fm.source_field_id))
-  const mappedTargetFieldIds = new Set((rawFMs ?? []).map((fm) => fm.target_field_id))
+  // Only non-rejected mappings count as "active" — a field whose only mapping
+  // is rejected should appear in the Unmapped tab and coverage indicator
+  const mappedSourceFieldIds = new Set(
+    (rawFMs ?? []).filter((fm) => fm.status !== 'rejected').map((fm) => fm.source_field_id)
+  )
+  const mappedTargetFieldIds = new Set(
+    (rawFMs ?? []).filter((fm) => fm.status !== 'rejected').map((fm) => fm.target_field_id)
+  )
 
   const sourceDatasetIds = new Set(
     (allDatasets ?? []).filter((d) => d.role === 'source').map((d) => d.id)
@@ -737,6 +727,26 @@ export async function addManualTableMapping(
     .single()
   if (!project) return { success: false, error: 'Project not found' }
 
+  // Prevent duplicate table mappings for the exact same source→target pair
+  const { data: existingMapping } = await supabase
+    .from('table_mappings')
+    .select('id')
+    .eq('project_id', projectId)
+    .eq('source_table_id', sourceTableId)
+    .eq('target_table_id', targetTableId)
+    .limit(1)
+
+  if (existingMapping && existingMapping.length > 0) {
+    const [{ data: srcTableData }, { data: tgtTableData }] = await Promise.all([
+      supabase.from('tables').select('name').eq('id', sourceTableId).single(),
+      supabase.from('tables').select('name').eq('id', targetTableId).single(),
+    ])
+    return {
+      success: false,
+      error: `A mapping from ${srcTableData?.name ?? 'source table'} → ${tgtTableData?.name ?? 'target table'} already exists.`,
+    }
+  }
+
   const { data, error } = await supabase
     .from('table_mappings')
     .insert({
@@ -752,6 +762,48 @@ export async function addManualTableMapping(
 
   if (error) return { success: false, error: error.message }
   return { success: true, data: { id: data.id } }
+}
+
+// ─── regenerateFieldMappings ──────────────────────────────────────────────────
+
+/**
+ * Delete all existing field mappings for a table mapping and regenerate them
+ * using AI. Ownership is verified before deletion. The regeneration reuses
+ * suggestRemainingMappings since all fields will be unmapped after deletion.
+ */
+export async function regenerateFieldMappings(
+  tableMappingId: string
+): Promise<{ success: boolean; fieldCount: number; error?: string }> {
+  const supabase = await createClient()
+  const { data: { user } } = await supabase.auth.getUser()
+  if (!user) return { success: false, fieldCount: 0, error: 'Not authenticated' }
+
+  // Verify ownership by tracing through project
+  const { data: tm } = await supabase
+    .from('table_mappings')
+    .select('id, project_id')
+    .eq('id', tableMappingId)
+    .single()
+  if (!tm) return { success: false, fieldCount: 0, error: 'Table mapping not found' }
+
+  const { data: proj } = await supabase
+    .from('projects')
+    .select('id')
+    .eq('id', tm.project_id)
+    .eq('user_id', user.id)
+    .single()
+  if (!proj) return { success: false, fieldCount: 0, error: 'Access denied' }
+
+  // Delete all existing field mappings for this table pair
+  await supabase.from('field_mappings').delete().eq('table_mapping_id', tableMappingId)
+
+  // Regenerate: with all fields now unmapped, suggestRemainingMappings generates all
+  const result = await suggestRemainingMappings(tableMappingId)
+  return {
+    success: result.success,
+    fieldCount: result.newMappingsCount,
+    error: result.error,
+  }
 }
 
 // ─── deleteFieldMapping ───────────────────────────────────────────────────────
@@ -891,37 +943,58 @@ export async function suggestRemainingMappings(
   const { data: srcT } = await supabase.from('tables').select('name, datasets(name)').eq('id', tm.source_table_id).single()
   const { data: tgtT } = await supabase.from('tables').select('name, datasets(name)').eq('id', tm.target_table_id).single()
 
-  const allFIds = [...unmapSrc.map((f) => f.id), ...unmapTgt.map((f) => f.id)]
-  const { data: profs } = await supabase.from('field_profiles').select('field_id, sample_values').in('field_id', allFIds)
-  const profMap = new Map((profs ?? []).map((p) => [p.field_id, p]))
-
-  function fLine(f: { id: string; name: string; data_type: string; is_primary_key: boolean; is_foreign_key: boolean; is_nullable: boolean }) {
-    const tags: string[] = []
-    if (f.is_primary_key) tags.push('PK')
-    if (f.is_foreign_key) tags.push('FK')
-    if (f.is_nullable) tags.push('nullable')
-    const tagStr = tags.length ? ` [${tags.join(', ')}]` : ''
-    const p = profMap.get(f.id)
-    const samples = p?.sample_values ? (p.sample_values as unknown[]).filter(Boolean).slice(0, 3).map((v) => String(v)).join(', ') : 'no samples'
-    return `  - ${f.name} (${f.data_type})${tagStr}\n    Samples: ${samples}`
-  }
-
   const rawSrcDs = srcT?.datasets as unknown
   const srcDsN = Array.isArray(rawSrcDs) ? (rawSrcDs[0]?.name ?? 'source') : ((rawSrcDs as { name?: string } | null)?.name ?? 'source')
   const rawTgtDs = tgtT?.datasets as unknown
   const tgtDsN = Array.isArray(rawTgtDs) ? (rawTgtDs[0]?.name ?? 'target') : ((rawTgtDs as { name?: string } | null)?.name ?? 'target')
 
-  const remainingDocBlock = formatDocumentContextForPrompt(
-    await getSchemaDocumentContext(tm.project_id)
+  // Build rich AI context for unmapped fields: value distributions + docs
+  const remCtx = await buildAIContext(tm.project_id, {
+    tableIds: [tm.source_table_id, tm.target_table_id],
+    fieldIds: [...unmapSrc.map((f) => f.id), ...unmapTgt.map((f) => f.id)],
+    includeValueDistributions: true,
+    includeSampleValues: true,
+    includeDocuments: true,
+    maxDistributionValues: 15,
+    maxSampleValues: 5,
+  })
+
+  // Build per-name context lookups for the fLine formatter
+  const srcCtxByName = new Map(
+    remCtx.source_tables.flatMap((t) => t.fields).map((f) => [f.name.toLowerCase(), f])
   )
+  const tgtCtxByName = new Map(
+    remCtx.target_tables.flatMap((t) => t.fields).map((f) => [f.name.toLowerCase(), f])
+  )
+
+  type UnmapFieldRow = { id: string; name: string; data_type: string; is_primary_key: boolean; is_foreign_key: boolean; is_nullable: boolean }
+
+  function fLine(f: UnmapFieldRow, ctxByName: Map<string, { value_distribution: { value: string; count: number }[]; sample_values: string[] }>) {
+    const tags: string[] = []
+    if (f.is_primary_key) tags.push('PK')
+    if (f.is_foreign_key) tags.push('FK')
+    if (f.is_nullable) tags.push('nullable')
+    const tagStr = tags.length ? ` [${tags.join(', ')}]` : ''
+    const ctx = ctxByName.get(f.name.toLowerCase())
+    let line = `  - ${f.name} (${f.data_type})${tagStr}`
+    if (ctx?.value_distribution?.length) {
+      const top = ctx.value_distribution.slice(0, 10)
+      line += `\n    Values: ${top.map((v) => `"${v.value}"(${v.count})`).join(', ')}`
+    } else if (ctx?.sample_values?.length) {
+      line += `\n    Samples: ${ctx.sample_values.slice(0, 5).map((v) => `"${v}"`).join(', ')}`
+    }
+    return line
+  }
+
+  const remainingDocBlock = formatDocumentsForPrompt(remCtx.documents)
 
   const userMsg = `Source ${srcDsN}.${srcT?.name} → Target ${tgtDsN}.${tgtT?.name}. Suggest mappings for these UNMAPPED fields only.
 
 <source_unmapped>
-${unmapSrc.map(fLine).join('\n')}
+${unmapSrc.map((f) => fLine(f, srcCtxByName)).join('\n')}
 </source_unmapped>
 <target_unmapped>
-${unmapTgt.map(fLine).join('\n')}
+${unmapTgt.map((f) => fLine(f, tgtCtxByName)).join('\n')}
 </target_unmapped>
 ${remainingDocBlock}
 CRITICAL: Use ONLY the bare field name (not table.field). Respond with ONLY valid JSON:
@@ -963,7 +1036,37 @@ CRITICAL: Use ONLY the bare field name (not table.field). Respond with ONLY vali
     })
   }
 
-  if (inserts.length > 0) await supabase.from('field_mappings').insert(inserts)
+  if (inserts.length > 0) {
+    await supabase.from('field_mappings').insert(inserts)
+
+    // Recompute table-level confidence from ALL field mappings (including any pre-existing ones)
+    const { data: allFMs } = await supabase
+      .from('field_mappings')
+      .select('confidence')
+      .eq('table_mapping_id', tableMappingId)
+
+    const confidences = (allFMs ?? [])
+      .map((fm) => fm.confidence)
+      .filter((c): c is number => c !== null && c !== undefined)
+
+    if (confidences.length > 0) {
+      const avgConfidence = Math.round(
+        confidences.reduce((sum, c) => sum + c, 0) / confidences.length
+      )
+      await supabase
+        .from('table_mappings')
+        .update({
+          confidence: avgConfidence,
+          // Only set ai_reasoning if the table mapping was created manually (null reasoning)
+          // — don't overwrite reasoning already set by generateMappings
+          ...(tm.ai_reasoning === null && {
+            ai_reasoning: `Auto-generated ${confidences.length} field mapping${confidences.length !== 1 ? 's' : ''}. Average confidence: ${avgConfidence}%.`,
+          }),
+        })
+        .eq('id', tableMappingId)
+    }
+  }
+
   return { success: true, newMappingsCount: inserts.length }
 }
 

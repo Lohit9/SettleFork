@@ -4,6 +4,7 @@ import Papa from 'papaparse'
 import { createClient } from '@/lib/supabase/server'
 import { validateCSVUpload } from '@/lib/upload/validate'
 import { computeFriendlyName } from '@/lib/db/sql-rewriter'
+import { computeValueDistribution, computeMinMax, countFormatIssues } from '@/lib/utils/profiling'
 
 export interface UploadCSVResult {
   success: boolean
@@ -176,11 +177,18 @@ export async function uploadCSV(formData: FormData): Promise<UploadCSVResult> {
 
     // ── Step 9: Compute and insert field_profiles ─────────────────────────────
     const profiles = createdFields.map((field) => {
-        const fieldValues = sanitizedRows.map((r: Record<string, string>) => r[field.name] ?? '')
-        const nonNull = fieldValues.filter((v: string) => v !== '' && v !== null && v !== undefined)
-      const uniqueSet = new Set(nonNull)
-      const sorted = [...nonNull].sort()
-      const formatIssues = countFormatIssues(nonNull, field.data_type)
+      const fieldValues = sanitizedRows.map((r: Record<string, string>) => r[field.name] ?? '')
+      const nonNull = fieldValues.filter((v: string) => v !== '' && v !== null && v !== undefined)
+      const formatIssues = countFormatIssues(nonNull, field.data_type, field.inferred_type ?? null, field.name)
+
+      // Frequency distribution — top 25 by count (most useful for low-cardinality fields)
+      const valueDistribution = computeValueDistribution(nonNull)
+
+      // Sample values: most frequent distinct values (more representative than insertion order)
+      const sampleValues = valueDistribution.slice(0, 10).map((d) => d.value)
+
+      // Min/max: numeric comparison for currency/integer/decimal, lexicographic otherwise
+      const { min: minValue, max: maxValue } = computeMinMax(nonNull, field.inferred_type ?? null)
 
       return {
         field_id: field.id,
@@ -189,13 +197,14 @@ export async function uploadCSV(formData: FormData): Promise<UploadCSVResult> {
         null_percentage: +(
           (((sanitizedRows.length - nonNull.length) / sanitizedRows.length) * 100).toFixed(2)
         ),
-        cardinality: uniqueSet.size,
+        cardinality: new Set(nonNull).size,
         unique_percentage:
-          nonNull.length > 0 ? +((uniqueSet.size / nonNull.length) * 100).toFixed(2) : 0,
+          nonNull.length > 0 ? +((new Set(nonNull).size / nonNull.length) * 100).toFixed(2) : 0,
         format_issues_count: formatIssues,
-        min_value: sorted[0] ?? null,
-        max_value: sorted[sorted.length - 1] ?? null,
-        sample_values: [...uniqueSet].slice(0, 5),
+        min_value: minValue,
+        max_value: maxValue,
+        sample_values: sampleValues,
+        value_distribution: valueDistribution,
       }
     })
 
@@ -257,10 +266,22 @@ function deduplicateHeaders(headers: string[]): string[] {
 // ─── Value sanitization ───────────────────────────────────────────────────────
 
 function sanitizeValue(value: string): string {
-  // Neutralize CSV formula injection (Excel/Sheets attack vector)
-  if (/^[=+\-@\t\r]/.test(value)) {
+  // Neutralize CSV formula injection (Excel/Sheets / DDE attack vector).
+  // '=' and '@' at start are always formula triggers. Tab/CR are always injection vectors.
+  if (/^[=@\t\r]/.test(value)) return "'" + value
+
+  // '+' and '-' are ONLY dangerous when not followed by a number.
+  //   +15551234567  → E.164 phone — legitimate, don't corrupt
+  //   -70023.63     → negative number — legitimate, don't corrupt
+  //   +CMD()        → DDE injection — sanitize
+  //   -1+1+cmd|...  → DDE injection — sanitize
+  if (value[0] === '+' || value[0] === '-') {
+    const rest = value.slice(1).replace(/[$,.\s]/g, '')
+    // Treat as safe if remainder is all digits (numeric or phone)
+    if (rest === '' || /^\d+$/.test(rest)) return value
     return "'" + value
   }
+
   return value
 }
 
@@ -393,27 +414,5 @@ function detectKeyType(
   return { isPrimaryKey: false, isForeignKey: false }
 }
 
-function countFormatIssues(values: string[], dataType: string): number {
-  if (dataType === 'INT') {
-    return values.filter((v) => !/^-?\d+$/.test(v)).length
-  }
-  if (dataType === 'DECIMAL(18,2)') {
-    return values.filter((v) => !/^-?\d+\.?\d*$/.test(v)).length
-  }
-  if (dataType === 'BOOLEAN') {
-    const boolSet = new Set(['true', 'false', '0', '1', 'yes', 'no', 'y', 'n', 't', 'f'])
-    return values.filter((v) => !boolSet.has(v.toLowerCase())).length
-  }
-  if (dataType === 'DATE') {
-    return values.filter(
-      (v) =>
-        !/^\d{4}-\d{2}-\d{2}$/.test(v) &&
-        !/^\d{1,2}\/\d{1,2}\/\d{4}$/.test(v) &&
-        !/^\d{1,2}-\d{1,2}-\d{4}$/.test(v)
-    ).length
-  }
-  if (dataType === 'TIMESTAMP') {
-    return values.filter((v) => !/^\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}/.test(v)).length
-  }
-  return 0
-}
+// Profiling helpers (computeValueDistribution, computeMinMax, countFormatIssues) are in
+// lib/utils/profiling.ts — import from there. They are used below via the import at the top.

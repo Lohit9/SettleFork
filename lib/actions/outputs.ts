@@ -4,7 +4,7 @@ import { createClient } from '@/lib/supabase/server'
 import { supabaseAdmin } from '@/lib/supabase/admin'
 import { callClaude } from '@/lib/ai/claude'
 import { checkAIRateLimit } from '@/lib/ai/rate-limit'
-import { getSchemaDocumentContext, formatDocumentContextForPrompt } from '@/lib/ai/document-context'
+import { buildAIContext, formatDocumentsForPrompt } from '@/lib/ai/context-builder'
 import { wrapFieldRefsInJsonb } from '@/lib/utils/transform-helpers'
 
 // ── Shared types ──────────────────────────────────────────────────────────────
@@ -851,9 +851,13 @@ export async function generateReadinessReport(
     .map((fh) => `- ${new Date(fh.applied_at).toLocaleDateString()}: ${fh.fix_description} (${fh.affected_row_count} rows, status: ${fh.status})`)
     .join('\n')
 
-  const reportDocBlock = formatDocumentContextForPrompt(
-    await getSchemaDocumentContext(projectId)
-  )
+  const reportCtx = await buildAIContext(projectId, {
+    includeProfilingStats: false,
+    includeValueDistributions: false,
+    includeSampleValues: false,
+    includeDocuments: true,
+  })
+  const reportDocBlock = formatDocumentsForPrompt(reportCtx.documents)
 
   const userMessage = `<project>
 Name: ${project.name}

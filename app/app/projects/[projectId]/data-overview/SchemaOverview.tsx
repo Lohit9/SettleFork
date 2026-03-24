@@ -399,6 +399,7 @@ export default function SchemaOverview({ projectId, source, target }: SchemaOver
 
   const [generating, setGenerating] = useState(false)
   const [genError, setGenError] = useState<string | null>(null)
+  const [genNotice, setGenNotice] = useState<string | null>(null)
   const [showConfirm, setShowConfirm] = useState(false)
 
   function handleGenerateMappingsClick() {
@@ -413,12 +414,19 @@ export default function SchemaOverview({ projectId, source, target }: SchemaOver
 
     setGenerating(true)
     setGenError(null)
+    setGenNotice(null)
     try {
       const result = await generateMappings(projectId, selectedSourceIds, selectedTargetIds)
       if (!result.success) {
         setGenError(result.error ?? 'Generation failed. Please try again.')
         setGenerating(false)
+      } else if (result.generated === 0) {
+        // All pairs already existed — stay on this page and show a notice
+        setGenNotice(result.message ?? 'All selected table pairs already have mappings.')
+        setGenerating(false)
       } else {
+        // New mappings generated — navigate to mapping tab
+        // Include skip notice as a URL param if some were skipped
         startNav(() => {
           router.push(`/app/projects/${projectId}/mapping`)
         })
@@ -470,8 +478,8 @@ export default function SchemaOverview({ projectId, source, target }: SchemaOver
                 </p>
               </div>
             </div>
-            <div className="bg-amber-50 border border-amber-100 rounded-lg px-3 py-2.5 mb-5 text-xs text-amber-800">
-              Any existing mappings for this project will be replaced. This may take 15–30 seconds.
+            <div className="bg-blue-50 border border-blue-100 rounded-lg px-3 py-2.5 mb-5 text-xs text-blue-800">
+              New mappings will be generated for these tables. Existing mappings are preserved. This may take 15–30 seconds.
             </div>
             <div className="flex gap-3">
               <button
@@ -511,6 +519,23 @@ export default function SchemaOverview({ projectId, source, target }: SchemaOver
           projectId={projectId}
         />
       </div>
+
+      {genNotice && (
+        <div className="flex items-start gap-2.5 px-4 py-3 bg-blue-50 border border-blue-200 rounded-lg">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="text-blue-500 flex-shrink-0 mt-0.5">
+            <circle cx="12" cy="12" r="10" /><line x1="12" y1="8" x2="12" y2="12" /><line x1="12" y1="16" x2="12.01" y2="16" />
+          </svg>
+          <div className="flex-1 min-w-0">
+            <p className="text-sm font-medium text-blue-800">Already mapped</p>
+            <p className="text-xs text-blue-600 mt-0.5">{genNotice}</p>
+          </div>
+          <button onClick={() => setGenNotice(null)} className="text-blue-400 hover:text-blue-600 flex-shrink-0">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+              <line x1="18" y1="6" x2="6" y2="18" /><line x1="6" y1="6" x2="18" y2="18" />
+            </svg>
+          </button>
+        </div>
+      )}
 
       {genError && (
         <div className="flex items-start gap-2.5 px-4 py-3 bg-red-50 border border-red-200 rounded-lg">

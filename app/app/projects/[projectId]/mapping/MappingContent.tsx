@@ -14,6 +14,8 @@ import {
   rejectAllFieldMappings,
   approveHighConfidenceMappings,
   suggestRemainingMappings,
+  regenerateFieldMappings,
+  generateMappings,
   mapUnmappedField,
   getMappings,
 } from '@/lib/actions/mappings'
@@ -83,62 +85,310 @@ function TrashIcon({ className = '' }: { className?: string }) {
   )
 }
 
-// ─── Empty State ──────────────────────────────────────────────────────────────
+// ─── Table Selector (used in GenerateMappingsPanel) ──────────────────────────
 
-function EmptyState({ projectId }: { projectId: string }) {
+function TableSelector({
+  title,
+  tables,
+  selected,
+  onToggle,
+  colorClass = 'text-indigo-600',
+}: {
+  title: string
+  tables: { id: string; name: string; datasetName: string }[]
+  selected: Set<string>
+  onToggle: (id: string) => void
+  colorClass?: string
+}) {
+  const allSelected = tables.length > 0 && tables.every((t) => selected.has(t.id))
+  const noneSelected = tables.every((t) => !selected.has(t.id))
+
+  function toggleAll() {
+    if (allSelected) tables.forEach((t) => onToggle(t.id))
+    else tables.filter((t) => !selected.has(t.id)).forEach((t) => onToggle(t.id))
+  }
+
   return (
-    <div className="flex flex-col items-center justify-center py-24 text-center">
-      <div className="w-16 h-16 rounded-full bg-indigo-50 flex items-center justify-center mb-4">
-        <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" className="text-indigo-400">
-          <path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71" />
-          <path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71" />
-        </svg>
+    <div className="border border-gray-200 rounded-xl p-4 flex flex-col">
+      <div className="flex items-center justify-between mb-3">
+        <h4 className="text-sm font-semibold text-gray-800">{title}</h4>
+        <button
+          onClick={toggleAll}
+          className={`text-xs font-medium ${colorClass} hover:opacity-80 transition-opacity`}
+        >
+          {allSelected ? 'Deselect All' : 'Select All'}
+        </button>
       </div>
-      <h3 className="text-lg font-semibold text-gray-900 mb-2">No mappings generated yet</h3>
-      <p className="text-sm text-gray-500 mb-6 max-w-xs">Go to Data Overview → Schema Overview, select your source and target tables, then click "Generate Mappings".</p>
-      <a href={`/app/projects/${projectId}/data-overview`} className="px-5 py-2.5 text-sm font-medium text-white bg-indigo-600 rounded-lg hover:bg-indigo-700 transition-colors">
-        Go to Data Overview
-      </a>
+      {tables.length === 0 ? (
+        <p className="text-xs text-gray-400 py-2">No tables available.</p>
+      ) : (
+        <div className="space-y-1.5 overflow-y-auto max-h-48">
+          {tables.map((t) => (
+            <label key={t.id} className="flex items-center gap-2.5 cursor-pointer group">
+              <input
+                type="checkbox"
+                checked={selected.has(t.id)}
+                onChange={() => onToggle(t.id)}
+                className={`w-4 h-4 rounded border-gray-300 focus:ring-2 focus:ring-indigo-500 cursor-pointer`}
+              />
+              <span className="text-sm text-gray-800 group-hover:text-gray-900">{t.name}</span>
+              {t.datasetName && (
+                <span className="text-xs text-gray-400 truncate">{t.datasetName}</span>
+              )}
+            </label>
+          ))}
+        </div>
+      )}
+      <p className="text-xs text-gray-400 mt-2 pt-2 border-t border-gray-100">
+        {selected.size > 0 ? `${Array.from(selected).filter(id => tables.some(t => t.id === id)).length} of ${tables.length} selected` : `${tables.length} table${tables.length !== 1 ? 's' : ''}`}
+      </p>
+    </div>
+  )
+}
+
+// ─── Generate Mappings Panel ──────────────────────────────────────────────────
+
+function GenerateMappingsPanel({
+  projectId,
+  sourceTables,
+  targetTables,
+  onDone,
+  onCancel,
+}: {
+  projectId: string
+  sourceTables: { id: string; name: string; datasetName: string }[]
+  targetTables: { id: string; name: string; datasetName: string }[]
+  onDone: (result: { generated: number; skipped: number; message?: string }) => void
+  onCancel?: () => void
+}) {
+  const [selectedSrc, setSelectedSrc] = useState<Set<string>>(
+    () => new Set(sourceTables.map((t) => t.id))
+  )
+  const [selectedTgt, setSelectedTgt] = useState<Set<string>>(
+    () => new Set(targetTables.map((t) => t.id))
+  )
+  const [generating, setGenerating] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+
+  function toggleSrc(id: string) {
+    setSelectedSrc((prev) => { const n = new Set(prev); n.has(id) ? n.delete(id) : n.add(id); return n })
+  }
+  function toggleTgt(id: string) {
+    setSelectedTgt((prev) => { const n = new Set(prev); n.has(id) ? n.delete(id) : n.add(id); return n })
+  }
+
+  const canGenerate = selectedSrc.size > 0 && selectedTgt.size > 0
+
+  async function handleGenerate() {
+    setError(null)
+    setGenerating(true)
+    try {
+      const result = await generateMappings(projectId, [...selectedSrc], [...selectedTgt])
+      if (!result.success) {
+        setError(result.error ?? 'Generation failed. Please try again.')
+        setGenerating(false)
+        return
+      }
+      onDone({ generated: result.generated ?? 0, skipped: result.skipped ?? 0, message: result.message })
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Generation failed. Please try again.')
+      setGenerating(false)
+    }
+  }
+
+  if (sourceTables.length === 0 || targetTables.length === 0) {
+    return (
+      <div className="text-center py-8 text-sm text-gray-500">
+        {sourceTables.length === 0
+          ? 'All source tables already have mappings. Use "+ Add New Mapping" for additional pairs.'
+          : 'All target tables already have mappings. Use "+ Add New Mapping" for additional pairs.'}
+      </div>
+    )
+  }
+
+  return (
+    <div className="relative">
+      {generating && (
+        <div className="absolute inset-0 bg-white/95 flex items-center justify-center z-10 rounded-xl">
+          <div className="text-center px-4">
+            <div className="w-10 h-10 border-4 border-indigo-600 border-t-transparent rounded-full animate-spin mx-auto mb-3" />
+            <p className="font-semibold text-gray-900 text-sm">Generating AI-powered mappings…</p>
+            <p className="text-xs text-gray-500 mt-1">Analyzing schemas and sample data. This may take 15–30 seconds.</p>
+          </div>
+        </div>
+      )}
+
+      <div className="grid grid-cols-2 gap-4 mb-4">
+        <TableSelector
+          title="Source Tables"
+          tables={sourceTables}
+          selected={selectedSrc}
+          onToggle={toggleSrc}
+          colorClass="text-indigo-600"
+        />
+        <TableSelector
+          title="Target Tables"
+          tables={targetTables}
+          selected={selectedTgt}
+          onToggle={toggleTgt}
+          colorClass="text-purple-600"
+        />
+      </div>
+
+      {error && (
+        <div className="flex items-start gap-2 px-3 py-2.5 bg-red-50 border border-red-200 rounded-lg mb-4 text-xs text-red-700">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="flex-shrink-0 mt-0.5"><circle cx="12" cy="12" r="10" /><line x1="12" y1="8" x2="12" y2="12" /><line x1="12" y1="16" x2="12.01" y2="16" /></svg>
+          {error}
+        </div>
+      )}
+
+      <div className="flex items-center justify-between">
+        {onCancel ? (
+          <button onClick={onCancel} className="px-4 py-2 text-sm font-medium text-gray-700 border border-gray-200 rounded-lg hover:bg-gray-50 transition-colors">
+            Cancel
+          </button>
+        ) : <div />}
+        <button
+          onClick={handleGenerate}
+          disabled={!canGenerate || generating}
+          className="px-5 py-2.5 text-sm font-medium text-white bg-indigo-600 rounded-lg hover:bg-indigo-700 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+        >
+          {generating ? 'Generating…' : 'Generate Mappings'}
+        </button>
+      </div>
+    </div>
+  )
+}
+
+// ─── Regenerate Confirm Dialog ────────────────────────────────────────────────
+
+function RegenerateConfirmDialog({
+  sourceTableName,
+  targetTableName,
+  fieldCount,
+  onConfirm,
+  onCancel,
+}: {
+  sourceTableName: string
+  targetTableName: string
+  fieldCount: number
+  onConfirm: () => void
+  onCancel: () => void
+}) {
+  return (
+    <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4">
+      <div className="bg-white rounded-xl shadow-xl w-full max-w-sm p-6">
+        <div className="flex items-start gap-3 mb-5">
+          <div className="w-9 h-9 rounded-full bg-amber-50 flex items-center justify-center flex-shrink-0">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="text-amber-500">
+              <polyline points="23 4 23 10 17 10" /><polyline points="1 20 1 14 7 14" />
+              <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15" />
+            </svg>
+          </div>
+          <div>
+            <p className="font-semibold text-gray-900 text-sm mb-1">Regenerate Field Mappings</p>
+            <p className="text-sm text-gray-600">
+              This will replace all {fieldCount > 0 ? `${fieldCount} ` : ''}field mapping{fieldCount !== 1 ? 's' : ''} for{' '}
+              <span className="font-medium text-gray-800">{sourceTableName} → {targetTableName}</span>.
+              Any approved or edited mappings will be lost.
+            </p>
+          </div>
+        </div>
+        <div className="flex gap-3">
+          <button onClick={onCancel} className="flex-1 px-4 py-2.5 text-sm font-medium text-gray-700 border border-gray-200 rounded-lg hover:bg-gray-50">Cancel</button>
+          <button onClick={onConfirm} className="flex-1 px-4 py-2.5 text-sm font-medium text-white bg-amber-600 rounded-lg hover:bg-amber-700">Regenerate</button>
+        </div>
+      </div>
     </div>
   )
 }
 
 // ─── Mapping Progress Bar ─────────────────────────────────────────────────────
 
-function MappingProgress({ tableMappings, allFieldsByTable }: { tableMappings: RichTableMapping[]; allFieldsByTable: Record<string, SimpleField[]> }) {
+function MappingProgress({
+  tableMappings,
+  allFieldsByTable,
+  onShowUncovered,
+}: {
+  tableMappings: RichTableMapping[]
+  allFieldsByTable: Record<string, SimpleField[]>
+  onShowUncovered: () => void
+}) {
+  const allFMs = tableMappings.flatMap((tm) => tm.fieldMappings)
+  const totalFMs = allFMs.length
+  const approvedCount = allFMs.filter((fm) => fm.status === 'approved').length
+  const rejectedCount = allFMs.filter((fm) => fm.status === 'rejected').length
+  const reviewedCount = approvedCount + rejectedCount
+  const awaitingCount = totalFMs - reviewedCount
+  const reviewPct = totalFMs > 0 ? Math.round((reviewedCount / totalFMs) * 100) : 0
+
+  // Coverage: unique source fields that have at least one non-rejected mapping
   const sourceTableIds = new Set(tableMappings.map((tm) => tm.source_table_id))
   const totalSourceFields = Object.entries(allFieldsByTable)
     .filter(([tid]) => sourceTableIds.has(tid))
     .reduce((sum, [, fields]) => sum + fields.length, 0)
+  const coveredSourceFieldIds = new Set(
+    allFMs.filter((fm) => fm.status !== 'rejected').map((fm) => fm.source_field_id)
+  )
+  const uncoveredCount = Math.max(0, totalSourceFields - coveredSourceFieldIds.size)
+  const isFullyCovered = uncoveredCount === 0
 
-  const allFMs = tableMappings.flatMap((tm) => tm.fieldMappings)
-  const approvedCount = allFMs.filter((fm) => fm.status === 'approved').length
-  const reviewCount = allFMs.filter((fm) => fm.status === 'needs_review').length
-  const mappedTotal = allFMs.length
-
-  if (totalSourceFields === 0) return null
-
-  const approvedPct = totalSourceFields > 0 ? (approvedCount / totalSourceFields) * 100 : 0
-  const reviewPct = totalSourceFields > 0 ? (reviewCount / totalSourceFields) * 100 : 0
+  if (totalFMs === 0 && totalSourceFields === 0) return null
 
   return (
-    <div className="bg-white border border-gray-200 rounded-xl px-5 py-4">
-      <div className="flex items-center justify-between mb-2">
-        <span className="text-sm font-medium text-gray-700">Mapping Progress</span>
+    <div className="bg-white border border-gray-200 rounded-xl px-5 py-4 space-y-2">
+      {/* Header row */}
+      <div className="flex items-center justify-between">
+        <span className="text-sm font-medium text-gray-700">Mapping Review</span>
         <span className="text-sm text-gray-500">
-          <span className="font-semibold text-gray-900">{mappedTotal}</span> of{' '}
-          <span className="font-semibold text-gray-900">{totalSourceFields}</span> source fields mapped
-          {totalSourceFields > 0 && <span className="text-gray-400 ml-1">({Math.round((mappedTotal / totalSourceFields) * 100)}%)</span>}
+          <span className="font-semibold text-gray-900">{reviewedCount}</span> of{' '}
+          <span className="font-semibold text-gray-900">{totalFMs}</span> reviewed
+          {totalFMs > 0 && <span className="text-gray-400 ml-1">({reviewPct}%)</span>}
         </span>
       </div>
-      <div className="w-full h-2.5 bg-gray-100 rounded-full overflow-hidden flex">
-        <div className="h-full bg-green-500 transition-all" style={{ width: `${approvedPct}%` }} title={`${approvedCount} approved`} />
-        <div className="h-full bg-amber-400 transition-all" style={{ width: `${reviewPct}%` }} title={`${reviewCount} needs review`} />
+
+      {/* Progress bar — green = reviewed (approved + rejected), empty = awaiting */}
+      <div className="w-full h-2.5 bg-gray-100 rounded-full overflow-hidden">
+        <div
+          className="h-full bg-green-500 rounded-full transition-all duration-300"
+          style={{ width: `${reviewPct}%` }}
+        />
       </div>
-      <div className="flex items-center gap-4 mt-2">
-        <span className="flex items-center gap-1.5 text-xs text-gray-500"><span className="w-2 h-2 rounded-full bg-green-500" />{approvedCount} approved</span>
-        <span className="flex items-center gap-1.5 text-xs text-gray-500"><span className="w-2 h-2 rounded-full bg-amber-400" />{reviewCount} needs review</span>
-        <span className="flex items-center gap-1.5 text-xs text-gray-500"><span className="w-2 h-2 rounded-full bg-gray-200" />{totalSourceFields - mappedTotal} unmapped</span>
+
+      {/* Breakdown (left) + Coverage indicator (right) */}
+      <div className="flex items-center justify-between gap-4">
+        <span className="text-xs text-gray-500 flex items-center flex-wrap gap-x-0">
+          <span className="text-green-600 font-medium">{approvedCount} approved</span>
+          <span className="mx-1.5 text-gray-300">·</span>
+          <span className="text-amber-600">{awaitingCount} awaiting review</span>
+          {rejectedCount > 0 && (
+            <>
+              <span className="mx-1.5 text-gray-300">·</span>
+              <span className="text-red-500">{rejectedCount} rejected</span>
+            </>
+          )}
+        </span>
+
+        {totalSourceFields > 0 && (
+          isFullyCovered ? (
+            <span className="text-xs text-green-600 flex items-center gap-1 flex-shrink-0">
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="currentColor">
+                <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-2 14.59L5.41 12 6.83 10.58 10 13.75l7.17-7.17 1.41 1.42L10 16.59z" />
+              </svg>
+              All {totalSourceFields} source fields covered
+            </span>
+          ) : (
+            <button
+              onClick={onShowUncovered}
+              className="text-xs text-amber-600 hover:text-amber-700 flex items-center gap-1 flex-shrink-0 hover:underline transition-colors"
+            >
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="currentColor">
+                <path d="M1 21h22L12 2 1 21zm12-3h-2v-2h2v2zm0-4h-2v-4h2v4z" />
+              </svg>
+              {uncoveredCount} source field{uncoveredCount !== 1 ? 's' : ''} with no active mapping
+            </button>
+          )
+        )}
       </div>
     </div>
   )
@@ -190,15 +440,24 @@ function AddMappingModal({
   const [sourceTableId, setSourceTableId] = useState('')
   const [targetTableId, setTargetTableId] = useState('')
   const [pending, startTransition] = useTransition()
+  const [generatingFields, setGeneratingFields] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
   function handleAdd() {
     if (!sourceTableId || !targetTableId) return
     setError(null)
     startTransition(async () => {
+      // Step 1: Create the table mapping (duplicate check is in server action)
       const result = await addManualTableMapping(projectId, sourceTableId, targetTableId)
       if (!result.success) { setError(result.error ?? 'Failed'); return }
-      onAdded(); onClose()
+
+      // Step 2: Auto-generate field mappings with AI
+      setGeneratingFields(true)
+      await suggestRemainingMappings(result.data!.id)
+      setGeneratingFields(false)
+
+      onAdded()
+      onClose()
     })
   }
 
@@ -207,29 +466,35 @@ function AddMappingModal({
       <div className="bg-white rounded-xl shadow-xl w-full max-w-md">
         <div className="flex items-center justify-between px-6 py-4 border-b border-gray-100">
           <h2 className="font-semibold text-gray-900">Add New Table Mapping</h2>
-          <button onClick={onClose} className="text-gray-400 hover:text-gray-600"><X className="w-5 h-5" /></button>
+          <button onClick={onClose} disabled={pending} className="text-gray-400 hover:text-gray-600 disabled:opacity-40"><X className="w-5 h-5" /></button>
         </div>
         <div className="px-6 py-5 space-y-4">
           <div>
             <label className="block text-xs font-medium text-gray-600 mb-1.5">Source Table</label>
-            <select value={sourceTableId} onChange={(e) => setSourceTableId(e.target.value)} className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500">
+            <select value={sourceTableId} onChange={(e) => setSourceTableId(e.target.value)} disabled={pending} className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500 disabled:opacity-60">
               <option value="">Select source table…</option>
               {allSourceTables.map((t) => <option key={t.id} value={t.id}>{t.datasetName}.{t.name}</option>)}
             </select>
           </div>
           <div>
             <label className="block text-xs font-medium text-gray-600 mb-1.5">Target Table</label>
-            <select value={targetTableId} onChange={(e) => setTargetTableId(e.target.value)} className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500">
+            <select value={targetTableId} onChange={(e) => setTargetTableId(e.target.value)} disabled={pending} className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500 disabled:opacity-60">
               <option value="">Select target table…</option>
               {allTargetTables.map((t) => <option key={t.id} value={t.id}>{t.datasetName}.{t.name}</option>)}
             </select>
           </div>
+          {generatingFields && (
+            <div className="flex items-center gap-2.5 px-3 py-2.5 bg-indigo-50 border border-indigo-100 rounded-lg text-xs text-indigo-700">
+              <span className="w-3.5 h-3.5 border-2 border-indigo-500 border-t-transparent rounded-full animate-spin flex-shrink-0" />
+              Generating field mappings with AI… this may take 15–30 seconds.
+            </div>
+          )}
           {error && <p className="text-xs text-red-600">{error}</p>}
         </div>
         <div className="flex gap-3 px-6 py-4 border-t border-gray-100">
-          <button onClick={onClose} className="flex-1 px-4 py-2 text-sm font-medium text-gray-700 border border-gray-200 rounded-lg hover:bg-gray-50">Cancel</button>
+          <button onClick={onClose} disabled={pending} className="flex-1 px-4 py-2 text-sm font-medium text-gray-700 border border-gray-200 rounded-lg hover:bg-gray-50 disabled:opacity-40">Cancel</button>
           <button onClick={handleAdd} disabled={!sourceTableId || !targetTableId || pending} className="flex-1 px-4 py-2 text-sm font-medium text-white bg-indigo-600 rounded-lg hover:bg-indigo-700 disabled:opacity-40">
-            {pending ? 'Adding…' : 'Add Mapping'}
+            {pending ? (generatingFields ? 'Generating fields…' : 'Adding…') : 'Add Mapping'}
           </button>
         </div>
       </div>
@@ -255,10 +520,17 @@ function InlineAddFieldRow({
   const [pending, startTransition] = useTransition()
   const [error, setError] = useState<string | null>(null)
 
-  const mappedSrcIds = new Set(tm.fieldMappings.map((fm) => fm.source_field_id))
+  // Only exclude source fields that have at least one non-rejected mapping
+  // (a field whose only mapping was rejected is available to map again)
+  const activelymappedSrcIds = new Set(
+    tm.fieldMappings.filter((fm) => fm.status !== 'rejected').map((fm) => fm.source_field_id)
+  )
+  const availSrc = (allFieldsByTable[tm.source_table_id] ?? []).filter(
+    (f) => !activelymappedSrcIds.has(f.id)
+  )
+  // Show ALL target fields — a target field can receive from multiple source fields
+  const allTgtFields = allFieldsByTable[tm.target_table_id] ?? []
   const mappedTgtIds = new Set(tm.fieldMappings.map((fm) => fm.target_field_id))
-  const availSrc = (allFieldsByTable[tm.source_table_id] ?? []).filter((f) => !mappedSrcIds.has(f.id))
-  const availTgt = (allFieldsByTable[tm.target_table_id] ?? []).filter((f) => !mappedTgtIds.has(f.id))
 
   function handleAdd() {
     if (!srcFieldId || !tgtFieldId) return
@@ -268,7 +540,7 @@ function InlineAddFieldRow({
       if (!result.success) { setError(result.error ?? 'Failed'); return }
 
       const sf = availSrc.find((f) => f.id === srcFieldId)
-      const tf = availTgt.find((f) => f.id === tgtFieldId)
+      const tf = allTgtFields.find((f) => f.id === tgtFieldId)
       const newFM: RichFieldMapping = {
         id: result.data!.id,
         table_mapping_id: tm.id,
@@ -291,7 +563,29 @@ function InlineAddFieldRow({
     })
   }
 
-  if (availSrc.length === 0 || availTgt.length === 0) return null
+  // When no source fields are available, show a message instead of silently
+  // hiding — returning null here would leave the UI broken (button stays hidden)
+  if (availSrc.length === 0) {
+    return (
+      <div className="flex items-center justify-between gap-3 px-5 py-3 bg-gray-50 border-t border-gray-100">
+        <span className="text-xs text-gray-500">All source fields already have active mappings.</span>
+        <button onClick={onCancel} className="text-xs text-gray-500 hover:text-gray-700 underline flex-shrink-0">
+          Close
+        </button>
+      </div>
+    )
+  }
+
+  if (allTgtFields.length === 0) {
+    return (
+      <div className="flex items-center justify-between gap-3 px-5 py-3 bg-gray-50 border-t border-gray-100">
+        <span className="text-xs text-gray-500">No target fields found for this table.</span>
+        <button onClick={onCancel} className="text-xs text-gray-500 hover:text-gray-700 underline flex-shrink-0">
+          Close
+        </button>
+      </div>
+    )
+  }
 
   return (
     <div className="flex items-center gap-3 px-5 py-3 bg-indigo-50/40 border-t border-indigo-100">
@@ -301,7 +595,9 @@ function InlineAddFieldRow({
         className="flex-1 border border-gray-200 rounded-lg px-2.5 py-1.5 text-xs text-gray-900 bg-white focus:outline-none focus:ring-2 focus:ring-indigo-500"
       >
         <option value="">Source field…</option>
-        {availSrc.map((f) => <option key={f.id} value={f.id}>{f.name} — {f.data_type}</option>)}
+        {availSrc.map((f) => (
+          <option key={f.id} value={f.id}>{f.name} — {f.data_type}</option>
+        ))}
       </select>
       <ArrowRight className="w-3 h-3 text-gray-400 flex-shrink-0" />
       <select
@@ -310,7 +606,11 @@ function InlineAddFieldRow({
         className="flex-1 border border-gray-200 rounded-lg px-2.5 py-1.5 text-xs text-gray-900 bg-white focus:outline-none focus:ring-2 focus:ring-indigo-500"
       >
         <option value="">Target field…</option>
-        {availTgt.map((f) => <option key={f.id} value={f.id}>{f.name} — {f.data_type}</option>)}
+        {allTgtFields.map((f) => (
+          <option key={f.id} value={f.id}>
+            {f.name} — {f.data_type}{mappedTgtIds.has(f.id) ? ' ✓' : ''}
+          </option>
+        ))}
       </select>
       <button
         onClick={handleAdd}
@@ -319,8 +619,10 @@ function InlineAddFieldRow({
       >
         {pending ? '…' : 'Add'}
       </button>
-      <button onClick={onCancel} className="text-gray-400 hover:text-gray-600 flex-shrink-0"><X className="w-3.5 h-3.5" /></button>
-      {error && <span className="text-xs text-red-600">{error}</span>}
+      <button onClick={onCancel} className="text-gray-400 hover:text-gray-600 flex-shrink-0">
+        <X className="w-3.5 h-3.5" />
+      </button>
+      {error && <span className="text-xs text-red-600 ml-1">{error}</span>}
     </div>
   )
 }
@@ -400,6 +702,8 @@ function TableMappingCard({
   allFieldsByTable,
   suggestingThis,
   onSuggestRemaining,
+  regeneratingThis,
+  onRegenerate,
 }: {
   tm: RichTableMapping
   expanded: boolean
@@ -418,6 +722,8 @@ function TableMappingCard({
   allFieldsByTable: Record<string, SimpleField[]>
   suggestingThis: boolean
   onSuggestRemaining: () => void
+  regeneratingThis: boolean
+  onRegenerate: () => void
 }) {
   const srcDs = tm.sourceTable?.dataset
   const tgtDs = tm.targetTable?.dataset
@@ -469,6 +775,27 @@ function TableMappingCard({
             className="px-2 py-1 text-xs font-medium text-gray-600 bg-gray-100 hover:bg-gray-200 rounded transition-colors"
           >
             Reject All
+          </button>
+          <button
+            onClick={onRegenerate}
+            disabled={regeneratingThis}
+            title="Regenerate field mappings with AI"
+            className="flex items-center gap-1 px-2 py-1 text-xs font-medium text-indigo-600 bg-indigo-50 hover:bg-indigo-100 rounded transition-colors disabled:opacity-50"
+          >
+            {regeneratingThis ? (
+              <>
+                <span className="w-2.5 h-2.5 border-2 border-indigo-400 border-t-transparent rounded-full animate-spin" />
+                Regenerating…
+              </>
+            ) : (
+              <>
+                <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
+                  <polyline points="23 4 23 10 17 10" /><polyline points="1 20 1 14 7 14" />
+                  <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15" />
+                </svg>
+                Regenerate
+              </>
+            )}
           </button>
           <button
             onClick={onDeleteTM}
@@ -909,8 +1236,11 @@ export default function MappingContent({ projectId, initialData }: Props) {
   const [expandedIds, setExpandedIds] = useState<Set<string>>(new Set())
   const [selectedFM, setSelectedFM] = useState<RichFieldMapping | null>(null)
   const [showAddModal, setShowAddModal] = useState(false)
+  const [showGenerateModal, setShowGenerateModal] = useState(false)
   const [addRowForTMId, setAddRowForTMId] = useState<string | null>(null)
   const [deleteTMTarget, setDeleteTMTarget] = useState<RichTableMapping | null>(null)
+  const [regenerateConfirmTarget, setRegenerateConfirmTarget] = useState<RichTableMapping | null>(null)
+  const [regeneratingTMId, setRegeneratingTMId] = useState<string | null>(null)
   const [suggestingTMId, setSuggestingTMId] = useState<string | null>(null)
   const [approvingHC, setApprovingHC] = useState(false)
   const [hcConfirmCount, setHcConfirmCount] = useState<number | null>(null)
@@ -918,8 +1248,19 @@ export default function MappingContent({ projectId, initialData }: Props) {
   // Tab counts
   const allFMs = useMemo(() => tableMappings.flatMap((tm) => tm.fieldMappings), [tableMappings])
   const needsReviewCount = useMemo(() => allFMs.filter((fm) => fm.status === 'needs_review').length, [allFMs])
+  // High Confidence tab: table mappings whose overall confidence is >= 75
   const highConfCount = useMemo(() => tableMappings.filter((tm) => (tm.confidence ?? 0) >= 75).length, [tableMappings])
-  const unmappedCount = unmappedSource.length + unmappedTarget.length
+  // Unmapped tab: unique source fields with no active (non-rejected) mapping
+  const unmappedCount = useMemo(() => {
+    const sourceTableIds = new Set(tableMappings.map((tm) => tm.source_table_id))
+    const srcFieldCount = Object.entries(allFieldsByTable)
+      .filter(([tid]) => sourceTableIds.has(tid))
+      .reduce((sum, [, fields]) => sum + fields.length, 0)
+    const coveredIds = new Set(
+      allFMs.filter((fm) => fm.status !== 'rejected').map((fm) => fm.source_field_id)
+    )
+    return Math.max(0, srcFieldCount - coveredIds.size)
+  }, [tableMappings, allFieldsByTable, allFMs])
 
   // High-confidence count for bulk approve button
   const hcFMCount = useMemo(() => allFMs.filter((fm) => fm.status === 'needs_review' && (fm.confidence ?? 0) >= 85).length, [allFMs])
@@ -967,6 +1308,8 @@ export default function MappingContent({ projectId, initialData }: Props) {
     startTransition(async () => {
       const r = await updateFieldMappingStatus(fmId, 'approved')
       if (!r.success) updateFM(fmId, { status: 'needs_review' })
+      // Sync unmapped lists: approving a field removes it from the coverage gap
+      else refreshData()
     })
   }
 
@@ -977,13 +1320,19 @@ export default function MappingContent({ projectId, initialData }: Props) {
     startTransition(async () => {
       const r = await updateFieldMappingStatus(fmId, newStatus)
       if (!r.success) updateFM(fmId, { status: fm?.status ?? 'needs_review' })
+      // Sync unmapped lists: rejecting a mapping may expose a coverage gap
+      else refreshData()
     })
   }
 
   function handleDeleteFM(fmId: string) {
     setTableMappings((prev) => prev.map((tm) => ({ ...tm, fieldMappings: tm.fieldMappings.filter((fm) => fm.id !== fmId) })))
     if (selectedFM?.id === fmId) setSelectedFM(null)
-    startTransition(async () => { await deleteFieldMapping(fmId) })
+    startTransition(async () => {
+      await deleteFieldMapping(fmId)
+      // Sync unmapped lists: deleting a mapping may expose a coverage gap
+      refreshData()
+    })
   }
 
   function handleEditFM(fmId: string, updates: { source_field_id?: string; target_field_id?: string }) {
@@ -1009,17 +1358,28 @@ export default function MappingContent({ projectId, initialData }: Props) {
       patch.ai_reasoning = `Manually re-mapped target from ${oldFM?.targetField?.name ?? '?'} to ${tgtField?.name ?? '?'}`
     }
     updateFM(fmId, patch)
-    startTransition(async () => { await editFieldMapping(fmId, { ...updates, confidence: null, ai_reasoning: patch.ai_reasoning ?? undefined }) })
+    startTransition(async () => {
+      const r = await editFieldMapping(fmId, { ...updates, confidence: null, ai_reasoning: patch.ai_reasoning ?? undefined })
+      // Sync unmapped lists: editing source_field_id changes which fields are covered
+      if (r.success) refreshData()
+    })
   }
 
   function handleApproveAll(tmId: string) {
     setTableMappings((prev) => prev.map((tm) => tm.id !== tmId ? tm : { ...tm, status: 'approved', fieldMappings: tm.fieldMappings.map((fm) => ({ ...fm, status: 'approved' as const })) }))
-    startTransition(async () => { await approveAllFieldMappings(tmId) })
+    startTransition(async () => {
+      await approveAllFieldMappings(tmId)
+      refreshData()
+    })
   }
 
   function handleRejectAll(tmId: string) {
     setTableMappings((prev) => prev.map((tm) => tm.id !== tmId ? tm : { ...tm, fieldMappings: tm.fieldMappings.map((fm) => ({ ...fm, status: 'rejected' as const })) }))
-    startTransition(async () => { await rejectAllFieldMappings(tmId) })
+    startTransition(async () => {
+      await rejectAllFieldMappings(tmId)
+      // Sync unmapped lists: rejecting all may expose multiple coverage gaps
+      refreshData()
+    })
   }
 
   function confirmDeleteTM() {
@@ -1044,6 +1404,26 @@ export default function MappingContent({ projectId, initialData }: Props) {
     if (result.success && result.newMappingsCount > 0) refreshData()
   }
 
+  async function handleRegenerate(tmId: string) {
+    setRegenerateConfirmTarget(null)
+    setRegeneratingTMId(tmId)
+    const result = await regenerateFieldMappings(tmId)
+    setRegeneratingTMId(null)
+    if (result.success) refreshData()
+  }
+
+  // Tables not yet in any existing mapping — used for "Generate More" modal
+  const mappedSourceIds = useMemo(() => new Set(tableMappings.map((tm) => tm.source_table_id)), [tableMappings])
+  const mappedTargetIds = useMemo(() => new Set(tableMappings.map((tm) => tm.target_table_id)), [tableMappings])
+  const unmappedSourceTablesForModal = useMemo(
+    () => (data?.allSourceTables ?? []).filter((t) => !mappedSourceIds.has(t.id)),
+    [data?.allSourceTables, mappedSourceIds]
+  )
+  const unmappedTargetTablesForModal = useMemo(
+    () => (data?.allTargetTables ?? []).filter((t) => !mappedTargetIds.has(t.id)),
+    [data?.allTargetTables, mappedTargetIds]
+  )
+
   function handleApproveHighConf() {
     if (hcConfirmCount === null) {
       setHcConfirmCount(hcFMCount)
@@ -1059,13 +1439,38 @@ export default function MappingContent({ projectId, initialData }: Props) {
   }
 
   if (tableMappings.length === 0) {
-    return <div className="px-6 py-4"><EmptyState projectId={projectId} /></div>
+    return (
+      <div className="px-6 py-8 max-w-2xl mx-auto">
+        <div className="text-center mb-8">
+          <div className="w-16 h-16 rounded-full bg-indigo-50 flex items-center justify-center mx-auto mb-4">
+            <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" className="text-indigo-400">
+              <path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71" />
+              <path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71" />
+            </svg>
+          </div>
+          <h3 className="text-lg font-semibold text-gray-900 mb-2">Generate Your Mappings</h3>
+          <p className="text-sm text-gray-500 max-w-xs mx-auto">
+            Select source and target tables below, then click Generate Mappings. AI will analyze your schemas and suggest field-level mappings with confidence scores.
+          </p>
+        </div>
+        <GenerateMappingsPanel
+          projectId={projectId}
+          sourceTables={data?.allSourceTables ?? []}
+          targetTables={data?.allTargetTables ?? []}
+          onDone={() => refreshData()}
+        />
+      </div>
+    )
   }
 
   return (
     <div className="px-6 py-6 space-y-5">
       {/* Progress bar */}
-      <MappingProgress tableMappings={tableMappings} allFieldsByTable={allFieldsByTable} />
+      <MappingProgress
+        tableMappings={tableMappings}
+        allFieldsByTable={allFieldsByTable}
+        onShowUncovered={() => setActiveFilter('unmapped')}
+      />
 
       {/* Source ↔ Target header */}
       {(sourceDatasetName || targetDatasetName) && (
@@ -1154,6 +1559,8 @@ export default function MappingContent({ projectId, initialData }: Props) {
                 allFieldsByTable={allFieldsByTable}
                 suggestingThis={suggestingTMId === tm.id}
                 onSuggestRemaining={() => handleSuggestRemaining(tm.id)}
+                regeneratingThis={regeneratingTMId === tm.id}
+                onRegenerate={() => setRegenerateConfirmTarget(tm)}
               />
             ))
           )}
@@ -1176,10 +1583,24 @@ export default function MappingContent({ projectId, initialData }: Props) {
 
       {/* Bottom bar */}
       <div className="flex items-center justify-between pt-2 border-t border-gray-100">
-        <button onClick={() => setShowAddModal(true)} className="flex items-center gap-2 text-sm font-medium text-gray-600 hover:text-indigo-700 transition-colors">
-          <Plus className="w-4 h-4" />
-          Add New Mapping
-        </button>
+        <div className="flex items-center gap-3">
+          <button onClick={() => setShowAddModal(true)} className="flex items-center gap-2 text-sm font-medium text-gray-600 hover:text-indigo-700 transition-colors">
+            <Plus className="w-4 h-4" />
+            Add New Mapping
+          </button>
+          {unmappedSourceTablesForModal.length > 0 && unmappedTargetTablesForModal.length > 0 && (
+            <button
+              onClick={() => setShowGenerateModal(true)}
+              className="flex items-center gap-1.5 text-sm font-medium text-indigo-600 hover:text-indigo-800 transition-colors"
+            >
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                <polyline points="23 4 23 10 17 10" /><polyline points="1 20 1 14 7 14" />
+                <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15" />
+              </svg>
+              Generate More Mappings
+            </button>
+          )}
+        </div>
         <button onClick={() => router.push(`/app/projects/${projectId}/transform`)} className="px-5 py-2.5 text-sm font-medium text-white bg-indigo-600 rounded-lg hover:bg-indigo-700 transition-colors">
           Proceed to Transform →
         </button>
@@ -1196,11 +1617,49 @@ export default function MappingContent({ projectId, initialData }: Props) {
         />
       )}
 
+      {showGenerateModal && (
+        <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-xl shadow-xl w-full max-w-2xl max-h-[90vh] overflow-y-auto">
+            <div className="flex items-center justify-between px-6 py-4 border-b border-gray-100">
+              <div>
+                <h2 className="font-semibold text-gray-900">Generate More Mappings</h2>
+                <p className="text-xs text-gray-500 mt-0.5">Only unmapped tables are shown. Existing mappings will be preserved.</p>
+              </div>
+              <button onClick={() => setShowGenerateModal(false)} className="text-gray-400 hover:text-gray-600">
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+            <div className="px-6 py-5">
+              <GenerateMappingsPanel
+                projectId={projectId}
+                sourceTables={unmappedSourceTablesForModal}
+                targetTables={unmappedTargetTablesForModal}
+                onDone={({ generated }) => {
+                  setShowGenerateModal(false)
+                  if (generated > 0) refreshData()
+                }}
+                onCancel={() => setShowGenerateModal(false)}
+              />
+            </div>
+          </div>
+        </div>
+      )}
+
       {deleteTMTarget && (
         <DeleteConfirmDialog
           message={`Remove ${deleteTMTarget.sourceTable?.name ?? '?'} → ${deleteTMTarget.targetTable?.name ?? '?'} and all ${deleteTMTarget.fieldMappings.length} field mapping${deleteTMTarget.fieldMappings.length !== 1 ? 's' : ''}?`}
           onConfirm={confirmDeleteTM}
           onCancel={() => setDeleteTMTarget(null)}
+        />
+      )}
+
+      {regenerateConfirmTarget && (
+        <RegenerateConfirmDialog
+          sourceTableName={regenerateConfirmTarget.sourceTable?.name ?? '?'}
+          targetTableName={regenerateConfirmTarget.targetTable?.name ?? '?'}
+          fieldCount={regenerateConfirmTarget.fieldMappings.length}
+          onConfirm={() => handleRegenerate(regenerateConfirmTarget.id)}
+          onCancel={() => setRegenerateConfirmTarget(null)}
         />
       )}
     </div>
