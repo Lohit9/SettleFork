@@ -24,9 +24,16 @@ export interface FieldItem {
   targetFieldDataType: string
   targetFieldInferredType: string | null
   targetFieldIsNullable: boolean
+  targetFieldIsPrimaryKey: boolean
   sourceTableId: string
   typeCompatibility: string | null
   confidence: number | null
+  /** AI-generated reasoning from the field mapping (why this mapping was made) */
+  aiReasoning: string | null
+  /** Null rate for the source field (from field_profiles) */
+  nullPercentage: number
+  /** Count of format issues for the source field (from field_profiles) */
+  formatIssuesCount: number
   sampleValues: unknown[]
   cardinality: number
   needsTransform: boolean
@@ -107,7 +114,7 @@ export async function getTransformData(
       .in('id', allTableIds),
     supabase
       .from('field_mappings')
-      .select('id, table_mapping_id, source_field_id, target_field_id, type_compatibility, confidence, is_contributing')
+      .select('id, table_mapping_id, source_field_id, target_field_id, type_compatibility, confidence, is_contributing, ai_reasoning')
       .in('table_mapping_id', tmIds)
       .neq('status', 'rejected'),
   ])
@@ -133,11 +140,11 @@ export async function getTransformData(
       .in('id', allSourceFieldIds),
     supabase
       .from('fields')
-      .select('id, name, data_type, inferred_type, is_nullable')
+      .select('id, name, data_type, inferred_type, is_nullable, is_primary_key')
       .in('id', allTargetFieldIds),
     supabase
       .from('field_profiles')
-      .select('field_id, sample_values, cardinality')
+      .select('field_id, sample_values, cardinality, null_percentage, format_issues_count')
       .in('field_id', allSourceFieldIds),
     supabase
       .from('transformations')
@@ -232,6 +239,7 @@ export async function getTransformData(
         hasTransformation: transformation !== null,
       })
 
+      const fmTyped = fm as typeof fm & { ai_reasoning?: string | null }
       fields.push({
         fieldMappingId: fm.id,
         sourceFieldId: srcField.id,
@@ -244,9 +252,13 @@ export async function getTransformData(
         targetFieldDataType: tgtField.data_type,
         targetFieldInferredType: tgtField.inferred_type,
         targetFieldIsNullable: tgtField.is_nullable,
+        targetFieldIsPrimaryKey: !!(tgtField as typeof tgtField & { is_primary_key?: boolean }).is_primary_key,
         sourceTableId: srcField.table_id,
         typeCompatibility: fm.type_compatibility,
         confidence: fm.confidence,
+        aiReasoning: fmTyped.ai_reasoning ?? null,
+        nullPercentage: (profile as typeof profile & { null_percentage?: number } | undefined)?.null_percentage ?? 0,
+        formatIssuesCount: (profile as typeof profile & { format_issues_count?: number } | undefined)?.format_issues_count ?? 0,
         sampleValues: (profile?.sample_values as unknown[]) ?? [],
         cardinality: profile?.cardinality ?? 0,
         needsTransform,
