@@ -41,6 +41,8 @@ export interface RichFieldMapping {
   ai_reasoning: string | null
   similar_fields_considered: string[] | null
   type_compatibility: string | null
+  /** True when this is a secondary source contributing to a target that already has a primary mapping */
+  is_contributing: boolean
   created_at: string
   sourceField: { id: string; name: string; data_type: string; inferred_type: string | null } | null
   targetField: { id: string; name: string; data_type: string; inferred_type: string | null } | null
@@ -496,6 +498,7 @@ export async function getMappings(projectId: string): Promise<MappingsResult | n
         ai_reasoning: fm.ai_reasoning,
         similar_fields_considered: fm.similar_fields_considered as string[] | null,
         type_compatibility: fm.type_compatibility,
+        is_contributing: fm.is_contributing ?? false,
         created_at: fm.created_at,
         sourceField: srcField
           ? { id: srcField.id, name: srcField.name, data_type: srcField.data_type, inferred_type: srcField.inferred_type }
@@ -604,6 +607,13 @@ export async function updateFieldMappingStatus(
   const { data: { user } } = await supabase.auth.getUser()
   if (!user) return { success: false, error: 'Not authenticated' }
 
+  // Fetch the FM before updating so we can run promotion logic if needed
+  const { data: fmBefore } = await supabase
+    .from('field_mappings')
+    .select('table_mapping_id, target_field_id, is_contributing')
+    .eq('id', fieldMappingId)
+    .single()
+
   const { error } = await supabase
     .from('field_mappings')
     .update({ status })
@@ -611,25 +621,39 @@ export async function updateFieldMappingStatus(
 
   if (error) return { success: false, error: error.message }
 
-  // Auto-approve table mapping if all field mappings are approved
-  if (status === 'approved') {
-    const { data: fm } = await supabase
-      .from('field_mappings')
-      .select('table_mapping_id')
-      .eq('id', fieldMappingId)
-      .single()
+  if (fmBefore) {
+    // If we're rejecting a PRIMARY mapping, promote the first active contributor for that target
+    if (status === 'rejected' && !fmBefore.is_contributing) {
+      const { data: contributors } = await supabase
+        .from('field_mappings')
+        .select('id')
+        .eq('table_mapping_id', fmBefore.table_mapping_id)
+        .eq('target_field_id', fmBefore.target_field_id)
+        .eq('is_contributing', true)
+        .neq('status', 'rejected')
+        .order('created_at', { ascending: true })
+        .limit(1)
 
-    if (fm) {
+      if (contributors && contributors.length > 0) {
+        await supabase
+          .from('field_mappings')
+          .update({ is_contributing: false })
+          .eq('id', contributors[0].id)
+      }
+    }
+
+    // Auto-approve table mapping if all field mappings are approved
+    if (status === 'approved') {
       const { data: siblings } = await supabase
         .from('field_mappings')
         .select('status')
-        .eq('table_mapping_id', fm.table_mapping_id)
+        .eq('table_mapping_id', fmBefore.table_mapping_id)
 
       if (siblings && siblings.every((s) => s.status === 'approved')) {
         await supabase
           .from('table_mappings')
           .update({ status: 'approved' })
-          .eq('id', fm.table_mapping_id)
+          .eq('id', fmBefore.table_mapping_id)
       }
     }
   }
@@ -685,8 +709,9 @@ export async function editFieldMapping(
 export async function addManualFieldMapping(
   tableMappingId: string,
   sourceFieldId: string,
-  targetFieldId: string
-): Promise<{ success: boolean; data?: { id: string }; error?: string }> {
+  targetFieldId: string,
+  isContributing = false
+): Promise<{ success: boolean; data?: { id: string; is_contributing: boolean }; error?: string }> {
   const supabase = await createClient()
   const { data: { user } } = await supabase.auth.getUser()
   if (!user) return { success: false, error: 'Not authenticated' }
@@ -699,13 +724,14 @@ export async function addManualFieldMapping(
       target_field_id: targetFieldId,
       confidence: 100,
       status: 'approved',
-      ai_reasoning: 'Manually mapped by user',
+      ai_reasoning: isContributing ? 'Contributing source — manually mapped by user' : 'Manually mapped by user',
+      is_contributing: isContributing,
     })
-    .select('id')
+    .select('id, is_contributing')
     .single()
 
   if (error) return { success: false, error: error.message }
-  return { success: true, data: { id: data.id } }
+  return { success: true, data: { id: data.id, is_contributing: data.is_contributing } }
 }
 
 // ─── addManualTableMapping ────────────────────────────────────────────────────
@@ -832,12 +858,40 @@ export async function deleteFieldMapping(
   const { data: { user } } = await supabase.auth.getUser()
   if (!user) return { success: false, error: 'Not authenticated' }
 
+  // Fetch before deleting so we can promote a contributor if this is a primary mapping
+  const { data: fmBefore } = await supabase
+    .from('field_mappings')
+    .select('table_mapping_id, target_field_id, is_contributing')
+    .eq('id', fieldMappingId)
+    .single()
+
   const { error } = await supabase
     .from('field_mappings')
     .delete()
     .eq('id', fieldMappingId)
 
   if (error) return { success: false, error: error.message }
+
+  // If a primary was deleted, promote the first active contributor for that target
+  if (fmBefore && !fmBefore.is_contributing) {
+    const { data: contributors } = await supabase
+      .from('field_mappings')
+      .select('id')
+      .eq('table_mapping_id', fmBefore.table_mapping_id)
+      .eq('target_field_id', fmBefore.target_field_id)
+      .eq('is_contributing', true)
+      .neq('status', 'rejected')
+      .order('created_at', { ascending: true })
+      .limit(1)
+
+    if (contributors && contributors.length > 0) {
+      await supabase
+        .from('field_mappings')
+        .update({ is_contributing: false })
+        .eq('id', contributors[0].id)
+    }
+  }
+
   return { success: true }
 }
 
@@ -1103,7 +1157,8 @@ CRITICAL: Use ONLY the bare field name (not table.field). Respond with ONLY vali
 export async function mapUnmappedField(
   projectId: string,
   sourceFieldId: string,
-  targetFieldId: string
+  targetFieldId: string,
+  isContributing = false
 ): Promise<{ success: boolean; error?: string }> {
   const supabase = await createClient()
   const { data: { user } } = await supabase.auth.getUser()
@@ -1140,7 +1195,8 @@ export async function mapUnmappedField(
     target_field_id: targetFieldId,
     confidence: 100,
     status: 'approved',
-    ai_reasoning: 'Manually mapped by user',
+    ai_reasoning: isContributing ? 'Contributing source — manually mapped by user' : 'Manually mapped by user',
+    is_contributing: isContributing,
   })
 
   if (fmErr) return { success: false, error: fmErr.message }

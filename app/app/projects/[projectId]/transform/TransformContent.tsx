@@ -625,6 +625,17 @@ export default function TransformContent({ projectId, initialData }: Props) {
                       <label className="block text-sm font-medium text-gray-900 mb-2">
                         Describe how this field should be transformed
                       </label>
+                      {/* Contributing source hint — shown when this mapping has contributors */}
+                      {selectedContext?.field.contributingSourceFields && selectedContext.field.contributingSourceFields.length > 0 && (
+                        <div className="mb-3 px-3 py-2 bg-indigo-50 border border-indigo-100 rounded-lg text-xs text-indigo-700">
+                          <span className="font-medium">Multi-source mapping.</span> This field also receives data from:{' '}
+                          <span className="font-mono">
+                            {selectedContext.field.contributingSourceFields.map((f) => f.name).join(', ')}
+                          </span>
+                          . Write a transform that combines all source fields
+                          (e.g., <code className="bg-indigo-100 px-1 rounded">CONCAT(first_name, &apos; &apos;, last_name)</code>).
+                        </div>
+                      )}
                       <Textarea
                         value={localTransform?.description ?? ''}
                         onChange={(e) =>
@@ -1007,7 +1018,7 @@ function TableNode({
       </button>
       {expanded && (
         <div className="bg-gray-50 border-t border-gray-100">
-          {table.fields.map((field) => (
+          {table.fields.filter((f) => !f.isContributing).map((field) => (
             <FieldRow
               key={field.fieldMappingId}
               field={field}

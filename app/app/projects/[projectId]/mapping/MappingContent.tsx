@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useMemo, useTransition, useCallback } from 'react'
+import { useState, useMemo, useTransition, useCallback, useEffect } from 'react'
 import { useRouter } from 'next/navigation'
 import { Check, Pencil, X, ChevronDown, ChevronRight, ArrowRight, Plus } from '@/components/icons'
 import {
@@ -504,6 +504,8 @@ function AddMappingModal({
 
 // ─── Inline Add Field Row ─────────────────────────────────────────────────────
 
+const SUPPRESS_MULTI_TARGET_KEY = 'mine_suppress_multi_target_warning'
+
 function InlineAddFieldRow({
   tm,
   allFieldsByTable,
@@ -520,37 +522,52 @@ function InlineAddFieldRow({
   const [pending, startTransition] = useTransition()
   const [error, setError] = useState<string | null>(null)
 
-  // Only exclude source fields that have at least one non-rejected mapping
-  // (a field whose only mapping was rejected is available to map again)
+  // Multi-target warning state
+  const [showMultiTargetWarning, setShowMultiTargetWarning] = useState(false)
+  const [suppressMTW, setSuppressMTW] = useState(false)
+  const [suppressMTWChecked, setSuppressMTWChecked] = useState(false)
+
+  // Multi-source info state
+  const [showMultiSourceInfo, setShowMultiSourceInfo] = useState(false)
+
+  // Pending pair when waiting for user to confirm dialogs
+  const [pendingPair, setPendingPair] = useState<{ srcId: string; tgtId: string } | null>(null)
+
+  // Read suppress preference from localStorage on mount
+  useEffect(() => {
+    setSuppressMTW(localStorage.getItem(SUPPRESS_MULTI_TARGET_KEY) === 'true')
+  }, [])
+
+  // ALL source fields are available — multi-target is now allowed with a warning
+  const allSrcFields = allFieldsByTable[tm.source_table_id] ?? []
+  const allTgtFields = allFieldsByTable[tm.target_table_id] ?? []
+
+  // Fields with at least one active (non-rejected) mapping — used for visual indicators
   const activelymappedSrcIds = new Set(
     tm.fieldMappings.filter((fm) => fm.status !== 'rejected').map((fm) => fm.source_field_id)
   )
-  const availSrc = (allFieldsByTable[tm.source_table_id] ?? []).filter(
-    (f) => !activelymappedSrcIds.has(f.id)
+  const mappedTgtIds = new Set(
+    tm.fieldMappings.filter((fm) => fm.status !== 'rejected').map((fm) => fm.target_field_id)
   )
-  // Show ALL target fields — a target field can receive from multiple source fields
-  const allTgtFields = allFieldsByTable[tm.target_table_id] ?? []
-  const mappedTgtIds = new Set(tm.fieldMappings.map((fm) => fm.target_field_id))
 
-  function handleAdd() {
-    if (!srcFieldId || !tgtFieldId) return
-    setError(null)
+  function proceedWithAdd(srcId: string, tgtId: string, isContributing: boolean) {
     startTransition(async () => {
-      const result = await addManualFieldMapping(tm.id, srcFieldId, tgtFieldId)
+      const result = await addManualFieldMapping(tm.id, srcId, tgtId, isContributing)
       if (!result.success) { setError(result.error ?? 'Failed'); return }
 
-      const sf = availSrc.find((f) => f.id === srcFieldId)
-      const tf = allTgtFields.find((f) => f.id === tgtFieldId)
+      const sf = allSrcFields.find((f) => f.id === srcId)
+      const tf = allTgtFields.find((f) => f.id === tgtId)
       const newFM: RichFieldMapping = {
         id: result.data!.id,
         table_mapping_id: tm.id,
-        source_field_id: srcFieldId,
-        target_field_id: tgtFieldId,
+        source_field_id: srcId,
+        target_field_id: tgtId,
         confidence: 100,
         status: 'approved',
-        ai_reasoning: 'Manually mapped by user',
+        ai_reasoning: isContributing ? 'Contributing source — manually mapped by user' : 'Manually mapped by user',
         similar_fields_considered: null,
         type_compatibility: null,
+        is_contributing: isContributing,
         created_at: new Date().toISOString(),
         sourceField: sf ? { id: sf.id, name: sf.name, data_type: sf.data_type, inferred_type: null } : null,
         targetField: tf ? { id: tf.id, name: tf.name, data_type: tf.data_type, inferred_type: null } : null,
@@ -560,18 +577,63 @@ function InlineAddFieldRow({
       onAdded(newFM)
       setSrcFieldId('')
       setTgtFieldId('')
+      setPendingPair(null)
     })
   }
 
-  // When no source fields are available, show a message instead of silently
-  // hiding — returning null here would leave the UI broken (button stays hidden)
-  if (availSrc.length === 0) {
+  function checkAndProceed(srcId: string, tgtId: string) {
+    setError(null)
+    // Step 1: multi-target check — source already has an active mapping in this TM?
+    const srcAlreadyMapped = activelymappedSrcIds.has(srcId)
+    if (srcAlreadyMapped && !suppressMTW) {
+      setPendingPair({ srcId, tgtId })
+      setShowMultiTargetWarning(true)
+      return
+    }
+    // Step 2: multi-source check — target already has an active mapping from a different source?
+    const tgtAlreadyMapped = mappedTgtIds.has(tgtId)
+    if (tgtAlreadyMapped) {
+      setPendingPair({ srcId, tgtId })
+      setShowMultiSourceInfo(true)
+      return
+    }
+    proceedWithAdd(srcId, tgtId, false)
+  }
+
+  function handleAdd() {
+    if (!srcFieldId || !tgtFieldId) return
+    checkAndProceed(srcFieldId, tgtFieldId)
+  }
+
+  function confirmMultiTarget() {
+    if (suppressMTWChecked) localStorage.setItem(SUPPRESS_MULTI_TARGET_KEY, 'true')
+    setShowMultiTargetWarning(false)
+    // Now check multi-source
+    const tgtAlreadyMapped = pendingPair && mappedTgtIds.has(pendingPair.tgtId)
+    if (tgtAlreadyMapped) {
+      setShowMultiSourceInfo(true)
+      return
+    }
+    if (pendingPair) proceedWithAdd(pendingPair.srcId, pendingPair.tgtId, false)
+  }
+
+  function confirmMultiSource() {
+    setShowMultiSourceInfo(false)
+    if (pendingPair) proceedWithAdd(pendingPair.srcId, pendingPair.tgtId, true)
+  }
+
+  function cancelDialog() {
+    setShowMultiTargetWarning(false)
+    setShowMultiSourceInfo(false)
+    setPendingPair(null)
+    setSuppressMTWChecked(false)
+  }
+
+  if (allSrcFields.length === 0) {
     return (
       <div className="flex items-center justify-between gap-3 px-5 py-3 bg-gray-50 border-t border-gray-100">
-        <span className="text-xs text-gray-500">All source fields already have active mappings.</span>
-        <button onClick={onCancel} className="text-xs text-gray-500 hover:text-gray-700 underline flex-shrink-0">
-          Close
-        </button>
+        <span className="text-xs text-gray-500">No source fields found for this table.</span>
+        <button onClick={onCancel} className="text-xs text-gray-500 hover:text-gray-700 underline flex-shrink-0">Close</button>
       </div>
     )
   }
@@ -580,59 +642,147 @@ function InlineAddFieldRow({
     return (
       <div className="flex items-center justify-between gap-3 px-5 py-3 bg-gray-50 border-t border-gray-100">
         <span className="text-xs text-gray-500">No target fields found for this table.</span>
-        <button onClick={onCancel} className="text-xs text-gray-500 hover:text-gray-700 underline flex-shrink-0">
-          Close
-        </button>
+        <button onClick={onCancel} className="text-xs text-gray-500 hover:text-gray-700 underline flex-shrink-0">Close</button>
       </div>
     )
   }
 
+  const pendingSrcName = pendingPair ? (allSrcFields.find((f) => f.id === pendingPair.srcId)?.name ?? '?') : ''
+  const pendingTgtName = pendingPair ? (allTgtFields.find((f) => f.id === pendingPair.tgtId)?.name ?? '?') : ''
+  const existingTgtForSrc = pendingPair
+    ? tm.fieldMappings.find((f) => f.source_field_id === pendingPair.srcId && f.status !== 'rejected')?.targetField?.name
+    : null
+  const existingSrcForTgt = pendingPair
+    ? tm.fieldMappings.find((f) => f.target_field_id === pendingPair.tgtId && f.status !== 'rejected' && !f.is_contributing)?.sourceField?.name
+    : null
+
   return (
-    <div className="flex items-center gap-3 px-5 py-3 bg-indigo-50/40 border-t border-indigo-100">
-      <select
-        value={srcFieldId}
-        onChange={(e) => setSrcFieldId(e.target.value)}
-        className="flex-1 border border-gray-200 rounded-lg px-2.5 py-1.5 text-xs text-gray-900 bg-white focus:outline-none focus:ring-2 focus:ring-indigo-500"
-      >
-        <option value="">Source field…</option>
-        {availSrc.map((f) => (
-          <option key={f.id} value={f.id}>{f.name} — {f.data_type}</option>
-        ))}
-      </select>
-      <ArrowRight className="w-3 h-3 text-gray-400 flex-shrink-0" />
-      <select
-        value={tgtFieldId}
-        onChange={(e) => setTgtFieldId(e.target.value)}
-        className="flex-1 border border-gray-200 rounded-lg px-2.5 py-1.5 text-xs text-gray-900 bg-white focus:outline-none focus:ring-2 focus:ring-indigo-500"
-      >
-        <option value="">Target field…</option>
-        {allTgtFields.map((f) => (
-          <option key={f.id} value={f.id}>
-            {f.name} — {f.data_type}{mappedTgtIds.has(f.id) ? ' ✓' : ''}
-          </option>
-        ))}
-      </select>
-      <button
-        onClick={handleAdd}
-        disabled={!srcFieldId || !tgtFieldId || pending}
-        className="px-3 py-1.5 text-xs font-medium text-white bg-indigo-600 rounded-lg hover:bg-indigo-700 disabled:opacity-40 flex-shrink-0"
-      >
-        {pending ? '…' : 'Add'}
-      </button>
-      <button onClick={onCancel} className="text-gray-400 hover:text-gray-600 flex-shrink-0">
-        <X className="w-3.5 h-3.5" />
-      </button>
-      {error && <span className="text-xs text-red-600 ml-1">{error}</span>}
-    </div>
+    <>
+      {/* Multi-target warning dialog */}
+      {showMultiTargetWarning && (
+        <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4" onClick={cancelDialog}>
+          <div className="bg-white rounded-xl shadow-xl w-full max-w-md p-6 space-y-4" onClick={(e) => e.stopPropagation()}>
+            <div className="flex items-start gap-3">
+              <span className="text-2xl">⚠️</span>
+              <div>
+                <h3 className="font-semibold text-gray-900">Multiple Target Mappings</h3>
+                <p className="text-sm text-gray-600 mt-1">
+                  <strong>&quot;{pendingSrcName}&quot;</strong> is already mapped to <strong>&quot;{existingTgtForSrc}&quot;</strong> in this table mapping.
+                  Are you sure you also want to map it to <strong>&quot;{pendingTgtName}&quot;</strong>?
+                </p>
+                <p className="text-xs text-gray-500 mt-2">
+                  This is fine if the same source value is needed in multiple target fields.
+                </p>
+              </div>
+            </div>
+            <label className="flex items-center gap-2 text-sm text-gray-600 cursor-pointer select-none">
+              <input
+                type="checkbox"
+                checked={suppressMTWChecked}
+                onChange={(e) => setSuppressMTWChecked(e.target.checked)}
+                className="rounded border-gray-300 text-indigo-600 focus:ring-indigo-500"
+              />
+              Don&apos;t show this warning again
+            </label>
+            <div className="flex justify-end gap-3">
+              <button onClick={cancelDialog} className="px-4 py-2 text-sm font-medium text-gray-700 hover:text-gray-900">
+                Cancel
+              </button>
+              <button
+                onClick={confirmMultiTarget}
+                className="px-4 py-2 text-sm font-medium text-white bg-amber-500 hover:bg-amber-600 rounded-lg"
+              >
+                Map Anyway
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Multi-source info dialog */}
+      {showMultiSourceInfo && (
+        <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4" onClick={cancelDialog}>
+          <div className="bg-white rounded-xl shadow-xl w-full max-w-md p-6 space-y-4" onClick={(e) => e.stopPropagation()}>
+            <div className="flex items-start gap-3">
+              <span className="text-2xl">📋</span>
+              <div>
+                <h3 className="font-semibold text-gray-900">Multiple Source Fields → One Target</h3>
+                <p className="text-sm text-gray-600 mt-1">
+                  <strong>&quot;{pendingTgtName}&quot;</strong> already receives data from <strong>&quot;{existingSrcForTgt}&quot;</strong>.
+                  Adding <strong>&quot;{pendingSrcName}&quot;</strong> as a contributing source.
+                </p>
+                <p className="text-sm text-gray-600 mt-2">
+                  On the Transform tab, write a transformation that combines both fields
+                  (e.g., <code className="bg-gray-100 px-1 rounded text-xs">CONCAT(first_name, &apos; &apos;, last_name)</code>).
+                  The transform will be set on the primary mapping ({existingSrcForTgt} → {pendingTgtName}).
+                </p>
+              </div>
+            </div>
+            <div className="flex justify-end gap-3">
+              <button onClick={cancelDialog} className="px-4 py-2 text-sm font-medium text-gray-700 hover:text-gray-900">
+                Cancel
+              </button>
+              <button
+                onClick={confirmMultiSource}
+                className="px-4 py-2 text-sm font-medium text-white bg-indigo-600 hover:bg-indigo-700 rounded-lg"
+              >
+                Add Contributing Mapping
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      <div className="flex items-center gap-3 px-5 py-3 bg-indigo-50/40 border-t border-indigo-100">
+        <select
+          value={srcFieldId}
+          onChange={(e) => setSrcFieldId(e.target.value)}
+          className="flex-1 border border-gray-200 rounded-lg px-2.5 py-1.5 text-xs text-gray-900 bg-white focus:outline-none focus:ring-2 focus:ring-indigo-500"
+        >
+          <option value="">Source field…</option>
+          {allSrcFields.map((f) => (
+            <option key={f.id} value={f.id}>
+              {f.name} — {f.data_type}{activelymappedSrcIds.has(f.id) ? ' (already mapped)' : ''}
+            </option>
+          ))}
+        </select>
+        <ArrowRight className="w-3 h-3 text-gray-400 flex-shrink-0" />
+        <select
+          value={tgtFieldId}
+          onChange={(e) => setTgtFieldId(e.target.value)}
+          className="flex-1 border border-gray-200 rounded-lg px-2.5 py-1.5 text-xs text-gray-900 bg-white focus:outline-none focus:ring-2 focus:ring-indigo-500"
+        >
+          <option value="">Target field…</option>
+          {allTgtFields.map((f) => (
+            <option key={f.id} value={f.id}>
+              {f.name} — {f.data_type}{mappedTgtIds.has(f.id) ? ' ✓' : ''}
+            </option>
+          ))}
+        </select>
+        <button
+          onClick={handleAdd}
+          disabled={!srcFieldId || !tgtFieldId || pending}
+          className="px-3 py-1.5 text-xs font-medium text-white bg-indigo-600 rounded-lg hover:bg-indigo-700 disabled:opacity-40 flex-shrink-0"
+        >
+          {pending ? '…' : 'Add'}
+        </button>
+        <button onClick={onCancel} className="text-gray-400 hover:text-gray-600 flex-shrink-0">
+          <X className="w-3.5 h-3.5" />
+        </button>
+        {error && <span className="text-xs text-red-600 ml-1">{error}</span>}
+      </div>
+    </>
   )
 }
 
 // ─── Field Mapping Row ────────────────────────────────────────────────────────
 
 function FieldMappingRow({
-  fm, onSelect, onApprove, onReject, onDelete,
+  fm, allTMFMs, onSelect, onApprove, onReject, onDelete,
 }: {
   fm: RichFieldMapping
+  /** All field mappings in this table mapping — used to compute multi-target/source badges */
+  allTMFMs: RichFieldMapping[]
   onSelect: () => void
   onApprove: () => void
   onReject: () => void
@@ -641,9 +791,21 @@ function FieldMappingRow({
   const isApproved = fm.status === 'approved'
   const isRejected = fm.status === 'rejected'
 
+  // Multi-target badge: how many active mappings does this source field have?
+  const activeForSrc = allTMFMs.filter(
+    (f) => f.source_field_id === fm.source_field_id && f.status !== 'rejected'
+  ).length
+  const multiTargetCount = activeForSrc > 1 ? activeForSrc : 0
+
+  // Multi-source badges: how many non-rejected mappings does this target field have?
+  const activeForTgt = allTMFMs.filter(
+    (f) => f.target_field_id === fm.target_field_id && f.status !== 'rejected'
+  ).length
+  const multiSourceCount = activeForTgt > 1 ? activeForTgt : 0
+
   return (
     <div
-      className={`flex items-center px-5 py-3 hover:bg-gray-50 cursor-pointer transition-colors ${isApproved ? 'bg-green-50/60' : isRejected ? 'bg-red-50/30' : ''}`}
+      className={`flex items-center px-5 py-3 hover:bg-gray-50 cursor-pointer transition-colors ${isApproved ? 'bg-green-50/60' : isRejected ? 'bg-red-50/30' : fm.is_contributing ? 'bg-blue-50/20' : ''}`}
       onClick={onSelect}
     >
       <div className="w-[36%] flex items-center gap-2 min-w-0">
@@ -651,17 +813,43 @@ function FieldMappingRow({
         <span className={`text-sm truncate ${isRejected ? 'line-through text-gray-400' : 'text-gray-900'}`}>
           {fm.sourceField?.name ?? '—'}
         </span>
+        {multiTargetCount > 0 && (
+          <span
+            title={`${fm.sourceField?.name} maps to ${multiTargetCount} targets in this table mapping`}
+            className="flex-shrink-0 text-[10px] font-medium px-1.5 py-0.5 rounded-full bg-amber-100 text-amber-700 border border-amber-200"
+          >
+            {multiTargetCount} targets
+          </span>
+        )}
       </div>
       <div className="w-[28%] flex items-center justify-center gap-1">
         <span className={`text-xs font-semibold ${cText(fm.confidence)}`}>{fm.confidence !== null ? `${fm.confidence}%` : '—'}</span>
         <ArrowRight className="w-3 h-3 text-gray-300" />
       </div>
       <div className="w-[36%] flex items-center justify-between gap-2 min-w-0">
-        <div className="flex items-center gap-2 min-w-0 flex-1">
+        <div className="flex items-center gap-1.5 min-w-0 flex-1">
           <span className={`w-2 h-2 rounded-full flex-shrink-0 ${cDot(fm.confidence)}`} />
           <span className={`text-sm truncate ${isRejected ? 'line-through text-gray-400' : 'text-gray-900'}`}>
             {fm.targetField?.name ?? '—'}
           </span>
+          {/* Contributing badge */}
+          {fm.is_contributing && (
+            <span
+              title="This is a contributing source. The transform SQL lives on the primary mapping."
+              className="flex-shrink-0 text-[10px] font-medium px-1.5 py-0.5 rounded-full bg-slate-100 text-slate-500 border border-slate-200"
+            >
+              contributing
+            </span>
+          )}
+          {/* Primary multi-source badge */}
+          {!fm.is_contributing && multiSourceCount > 0 && (
+            <span
+              title={`${fm.targetField?.name} receives from ${multiSourceCount} source fields`}
+              className="flex-shrink-0 text-[10px] font-medium px-1.5 py-0.5 rounded-full bg-indigo-100 text-indigo-600 border border-indigo-200"
+            >
+              +{multiSourceCount - 1} source
+            </span>
+          )}
         </div>
         <div className="flex items-center gap-0.5" onClick={(e) => e.stopPropagation()}>
           <button onClick={onApprove} title="Accept" className={`p-1 rounded transition-colors ${isApproved ? 'text-green-600' : 'text-gray-300 hover:text-green-600 hover:bg-green-50'}`}>
@@ -824,6 +1012,7 @@ function TableMappingCard({
               <FieldMappingRow
                 key={fm.id}
                 fm={fm}
+                allTMFMs={tm.fieldMappings}
                 onSelect={() => onSelectFM(fm)}
                 onApprove={() => onApproveFM(fm.id)}
                 onReject={() => onRejectFM(fm.id)}

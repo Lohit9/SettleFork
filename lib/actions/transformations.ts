@@ -31,6 +31,10 @@ export interface FieldItem {
   cardinality: number
   needsTransform: boolean
   transformation: Transformation | null
+  /** True when this mapping is a contributing (secondary) source — hidden from the transform tree */
+  isContributing: boolean
+  /** Additional source fields that contribute to the same target (for primary mappings only) */
+  contributingSourceFields: { id: string; name: string; data_type: string }[]
 }
 
 export interface TableGroup {
@@ -103,7 +107,7 @@ export async function getTransformData(
       .in('id', allTableIds),
     supabase
       .from('field_mappings')
-      .select('id, table_mapping_id, source_field_id, target_field_id, type_compatibility, confidence')
+      .select('id, table_mapping_id, source_field_id, target_field_id, type_compatibility, confidence, is_contributing')
       .in('table_mapping_id', tmIds)
       .neq('status', 'rejected'),
   ])
@@ -197,10 +201,23 @@ export async function getTransformData(
     const fms = fmsByTmId.get(tm.id) ?? []
     const fields: FieldItem[] = []
 
+    // Build a lookup: target_field_id → contributing source field names (for primary mappings)
+    const contributingByTarget = new Map<string, { id: string; name: string; data_type: string }[]>()
+    for (const fm of fms) {
+      if (!(fm as typeof fm & { is_contributing?: boolean }).is_contributing) continue
+      const srcField = srcFieldById.get(fm.source_field_id)
+      if (!srcField) continue
+      const list = contributingByTarget.get(fm.target_field_id) ?? []
+      list.push({ id: srcField.id, name: srcField.name, data_type: srcField.data_type })
+      contributingByTarget.set(fm.target_field_id, list)
+    }
+
     for (const fm of fms) {
       const srcField = srcFieldById.get(fm.source_field_id)
       const tgtField = tgtFieldById.get(fm.target_field_id)
       if (!srcField || !tgtField) continue
+
+      const isContributing = !!(fm as typeof fm & { is_contributing?: boolean }).is_contributing
 
       const profile = profileByFieldId.get(fm.source_field_id)
       const transformation = transformByFMId.get(fm.id) ?? null
@@ -234,6 +251,9 @@ export async function getTransformData(
         cardinality: profile?.cardinality ?? 0,
         needsTransform,
         transformation,
+        isContributing,
+        // Primary mappings carry the contributing field list; contributing mappings have []
+        contributingSourceFields: isContributing ? [] : (contributingByTarget.get(fm.target_field_id) ?? []),
       })
     }
 
@@ -349,10 +369,22 @@ export async function generateTransform(
     supabase.from('tables').select('id, name').eq('id', tm.target_table_id).single(),
   ])
 
-  // Build rich AI context for the two mapped fields: full value distributions + docs
+  // Fetch any contributing field mappings for this target (for multi-source transforms)
+  const { data: contributingFMs } = await supabase
+    .from('field_mappings')
+    .select('source_field_id')
+    .eq('table_mapping_id', fm.table_mapping_id)
+    .eq('target_field_id', fm.target_field_id)
+    .eq('is_contributing', true)
+    .neq('status', 'rejected')
+
+  const contributingFieldIds = (contributingFMs ?? []).map((c) => c.source_field_id)
+
+  // Build rich AI context — include primary + contributing source fields + target + docs
+  const allSourceFieldIds = [srcField.id, ...contributingFieldIds]
   const txCtx = await buildAIContext(tm.project_id, {
     tableIds: [tm.source_table_id, tm.target_table_id],
-    fieldIds: [srcField.id, tgtField.id],
+    fieldIds: [...allSourceFieldIds, tgtField.id],
     includeProfilingStats: true,
     includeValueDistributions: true,
     includeSampleValues: true,
@@ -364,15 +396,35 @@ export async function generateTransform(
   const transformDocBlock = formatDocumentsForPrompt(txCtx.documents)
 
   // Find field contexts (source has distribution data; target is DDL-only so profile is empty)
-  const srcFieldCtx = txCtx.source_tables.flatMap((t) => t.fields).find((f) => f.name === srcField.name)
+  const allSrcCtxFields = txCtx.source_tables.flatMap((t) => t.fields)
+  const srcFieldCtx = allSrcCtxFields.find((f) => f.name === srcField.name)
   const tgtFieldCtx = txCtx.target_tables.flatMap((t) => t.fields).find((f) => f.name === tgtField.name)
+
+  // Fetch contributing field metadata for the prompt
+  let contributingSourcesBlock = ''
+  if (contributingFieldIds.length > 0) {
+    const { data: contribFields } = await supabase
+      .from('fields')
+      .select('id, name, data_type')
+      .in('id', contributingFieldIds)
+    if (contribFields && contribFields.length > 0) {
+      const lines = contribFields.map((cf) => {
+        const ctx = allSrcCtxFields.find((f) => f.name === cf.name)
+        return ctx ? formatFieldForPrompt(ctx) : `${cf.name} (${cf.data_type})`
+      })
+      contributingSourcesBlock = `\n<contributing_source_fields>
+This field also receives data from the following source fields. Include ALL of them in the transform:
+${lines.join('\n')}
+</contributing_source_fields>\n`
+    }
+  }
 
   // Build user message
   const userMessage = `<source_field>
 ${srcFieldCtx ? formatFieldForPrompt(srcFieldCtx) : `${srcField.name} (${srcField.data_type})\n  Nullable: ${srcField.is_nullable}`}
 Table: ${srcTable?.name ?? ''}
 </source_field>
-
+${contributingSourcesBlock}
 <target_field>
 Field: ${tgtTableName}.${tgtField.name}
 Type: ${tgtField.data_type}${tgtField.inferred_type ? ` (${tgtField.inferred_type})` : ''}

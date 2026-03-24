@@ -93,6 +93,8 @@ export interface FieldMapping {
   ai_reasoning: string | null
   similar_fields_considered: unknown[] | null
   type_compatibility: string | null
+  /** True when this is a secondary source contributing to a target that already has a primary mapping */
+  is_contributing: boolean
   created_at: string
 }
 
