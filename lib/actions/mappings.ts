@@ -795,7 +795,24 @@ export async function regenerateFieldMappings(
   if (!proj) return { success: false, fieldCount: 0, error: 'Access denied' }
 
   // Delete all existing field mappings for this table pair
-  await supabase.from('field_mappings').delete().eq('table_mapping_id', tableMappingId)
+  const { error: deleteError } = await supabase
+    .from('field_mappings')
+    .delete()
+    .eq('table_mapping_id', tableMappingId)
+
+  if (deleteError) {
+    return { success: false, fieldCount: 0, error: `Failed to clear existing field mappings: ${deleteError.message}` }
+  }
+
+  // Verify delete actually cleared the records before proceeding
+  const { count: remaining } = await supabase
+    .from('field_mappings')
+    .select('id', { count: 'exact', head: true })
+    .eq('table_mapping_id', tableMappingId)
+
+  if (remaining && remaining > 0) {
+    return { success: false, fieldCount: 0, error: 'Could not clear existing field mappings. Please try again.' }
+  }
 
   // Regenerate: with all fields now unmapped, suggestRemainingMappings generates all
   const result = await suggestRemainingMappings(tableMappingId)
@@ -1037,7 +1054,18 @@ CRITICAL: Use ONLY the bare field name (not table.field). Respond with ONLY vali
   }
 
   if (inserts.length > 0) {
-    await supabase.from('field_mappings').insert(inserts)
+    // De-duplicate: re-fetch any field_mappings that may have been created between
+    // our initial "find unmapped" check and this insert (handles race conditions / double-calls)
+    const { data: latestFMs } = await supabase
+      .from('field_mappings')
+      .select('source_field_id')
+      .eq('table_mapping_id', tableMappingId)
+    const alreadyMappedSrcIds = new Set((latestFMs ?? []).map((fm) => fm.source_field_id))
+    const safeInserts = inserts.filter((i) => !alreadyMappedSrcIds.has(i.source_field_id as string))
+
+    if (safeInserts.length > 0) {
+      await supabase.from('field_mappings').insert(safeInserts)
+    }
 
     // Recompute table-level confidence from ALL field mappings (including any pre-existing ones)
     const { data: allFMs } = await supabase
