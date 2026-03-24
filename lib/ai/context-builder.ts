@@ -156,7 +156,7 @@ export async function buildAIContext(
       .select(profileColumns.join(', '))
       .in('field_id', fieldIds.length ? fieldIds : ['__none__'])
 
-    profilesData = (data as Record<string, unknown>[]) ?? []
+    profilesData = (data as unknown as Record<string, unknown>[]) ?? []
   }
 
   const profileMap = new Map(profilesData.map((p) => [p.field_id as string, p]))
