@@ -19,6 +19,8 @@ export interface StagedMappingOption {
   targetTableName: string
   targetTableId: string
   rowCount: number
+  /** true = staging has been run; false = passthrough (source rows, no transforms applied yet) */
+  isStaged: boolean
 }
 
 // ── stageAllData ──────────────────────────────────────────────────────────────
@@ -241,6 +243,10 @@ export async function hasStagedData(projectId: string): Promise<boolean> {
 }
 
 // ── getStagedMappings ─────────────────────────────────────────────────────────
+// Returns ALL non-rejected table mappings regardless of staging status.
+// isStaged = true  → rows come from staged_data_rows (transforms applied)
+// isStaged = false → preview will use source data_rows as passthrough
+// Returns an empty array only if no table mappings exist (mapping not done yet).
 
 export async function getStagedMappings(projectId: string): Promise<StagedMappingOption[]> {
   const supabase = await createClient()
@@ -267,70 +273,164 @@ export async function getStagedMappings(projectId: string): Promise<StagedMappin
 
   const mappingIds = tms.map((tm) => tm.id)
 
+  // Count staged rows per mapping (zero for un-staged mappings)
   const { data: stagedRows } = await supabaseAdmin
     .from('staged_data_rows')
     .select('table_mapping_id')
     .in('table_mapping_id', mappingIds)
 
-  if (!stagedRows || stagedRows.length === 0) return []
-
-  const countByMapping = new Map<string, number>()
-  for (const r of stagedRows) {
-    countByMapping.set(r.table_mapping_id, (countByMapping.get(r.table_mapping_id) ?? 0) + 1)
+  const stagedCountByMapping = new Map<string, number>()
+  for (const r of stagedRows ?? []) {
+    stagedCountByMapping.set(r.table_mapping_id, (stagedCountByMapping.get(r.table_mapping_id) ?? 0) + 1)
   }
 
+  // Table names + source row counts (for un-staged fallback display)
   const allTableIds = [
     ...new Set([...tms.map((tm) => tm.source_table_id), ...tms.map((tm) => tm.target_table_id)]),
   ]
-  const { data: tableNameRows } = await supabaseAdmin
+  const { data: tableRows } = await supabaseAdmin
     .from('tables')
-    .select('id, name')
+    .select('id, name, row_count')
     .in('id', allTableIds)
-  const tableNameById = new Map((tableNameRows ?? []).map((t) => [t.id, t.name]))
+  const tableNameById = new Map((tableRows ?? []).map((t) => [t.id, t.name]))
+  const tableRowCountById = new Map((tableRows ?? []).map((t) => [t.id, (t.row_count as number) ?? 0]))
 
-  return tms
-    .filter((tm) => countByMapping.has(tm.id))
-    .map((tm) => ({
+  return tms.map((tm) => {
+    const staged = stagedCountByMapping.get(tm.id) ?? 0
+    return {
       tableMappingId: tm.id,
       sourceTableName: tableNameById.get(tm.source_table_id) ?? 'unknown',
       targetTableName: tableNameById.get(tm.target_table_id) ?? 'unknown',
       targetTableId: tm.target_table_id,
-      rowCount: countByMapping.get(tm.id) ?? 0,
-    }))
+      rowCount: staged > 0 ? staged : (tableRowCountById.get(tm.source_table_id) ?? 0),
+      isStaged: staged > 0,
+    }
+  })
 }
 
 // ── getStagedDataPreview ──────────────────────────────────────────────────────
+// Returns complete target-shaped rows by merging three sources:
+//   1. transformed_row_data  — fields that have been explicitly applied
+//   2. source passthrough    — mapped fields not yet applied (raw source value)
+//   3. null                  — target fields with no mapping
+//
+// stagedFields: the target field names that have been written into
+//   transformed_row_data (i.e., transforms have been applied). The UI uses
+//   this to visually distinguish "transformed" columns from "passthrough" ones.
+//
+// When no staging has been done at all, falls back to querying data_rows
+// directly and maps source values into target field positions (pure passthrough).
 
 export async function getStagedDataPreview(
   tableMappingId: string,
   page: number,
   pageSize: number
-): Promise<{ rows: Record<string, unknown>[]; totalRows: number }> {
+): Promise<{ rows: Record<string, unknown>[]; totalRows: number; stagedFields: string[] }> {
   const supabase = await createClient()
   const {
     data: { user },
   } = await supabase.auth.getUser()
-  if (!user) return { rows: [], totalRows: 0 }
+  if (!user) return { rows: [], totalRows: 0, stagedFields: [] }
 
   const from = (page - 1) * pageSize
   const to = from + pageSize - 1
 
-  const [{ data: rowData }, { count }] = await Promise.all([
-    supabase
-      .from('staged_data_rows')
-      .select('transformed_row_data')
-      .eq('table_mapping_id', tableMappingId)
-      .order('row_number')
-      .range(from, to),
-    supabase
-      .from('staged_data_rows')
-      .select('id', { count: 'exact', head: true })
-      .eq('table_mapping_id', tableMappingId),
+  // ── 1. Load non-rejected, non-contributing field mappings ─────────────────
+  // Contributing mappings feed into a primary mapping's transform SQL —
+  // they don't produce their own separate target column in the preview.
+  const { data: fms } = await supabase
+    .from('field_mappings')
+    .select('source_field_id, target_field_id')
+    .eq('table_mapping_id', tableMappingId)
+    .neq('status', 'rejected')
+    .or('is_contributing.is.null,is_contributing.eq.false')
+
+  if (!fms || fms.length === 0) return { rows: [], totalRows: 0, stagedFields: [] }
+
+  const srcIds = fms.map((fm) => fm.source_field_id)
+  const tgtIds = fms.map((fm) => fm.target_field_id)
+
+  const [{ data: srcFields }, { data: tgtFields }] = await Promise.all([
+    supabase.from('fields').select('id, name').in('id', srcIds),
+    supabase.from('fields').select('id, name').in('id', tgtIds),
   ])
 
-  const rows = (rowData ?? []).map(
-    (r) => r.transformed_row_data as Record<string, unknown>
-  )
+  const srcNameById = new Map((srcFields ?? []).map((f) => [f.id, f.name]))
+  const tgtNameById = new Map((tgtFields ?? []).map((f) => [f.id, f.name]))
 
-  return { rows, totalRows: count ?? 0 }
+  // targetFieldName → sourceFieldName
+  const fieldMap = new Map<string, string>()
+  for (const fm of fms) {
+    const src = srcNameById.get(fm.source_field_id)
+    const tgt = tgtNameById.get(fm.target_field_id)
+    if (src && tgt) fieldMap.set(tgt, src)
+  }
+
+  // ── 2. Check whether staging has been run ─────────────────────────────────
+  const { count: stagedCount } = await supabase
+    .from('staged_data_rows')
+    .select('id', { count: 'exact', head: true })
+    .eq('table_mapping_id', tableMappingId)
+
+  const hasStaged = (stagedCount ?? 0) > 0
+
+  if (hasStaged) {
+    // ── 3a. Staged path: merge transformed fields + source passthrough ───────
+    const { data: stagedRows } = await supabase
+      .from('staged_data_rows')
+      .select('source_row_data, transformed_row_data')
+      .eq('table_mapping_id', tableMappingId)
+      .order('row_number')
+      .range(from, to)
+
+    // Determine which target fields have been applied by inspecting the first row
+    const firstTransformed = ((stagedRows?.[0]?.transformed_row_data) ?? {}) as Record<string, unknown>
+    const stagedFieldSet = new Set(Object.keys(firstTransformed))
+
+    const rows = (stagedRows ?? []).map((row) => {
+      const source = (row.source_row_data ?? {}) as Record<string, unknown>
+      const transformed = (row.transformed_row_data ?? {}) as Record<string, unknown>
+      const merged: Record<string, unknown> = {}
+      for (const [tgt, src] of fieldMap) {
+        merged[tgt] = tgt in transformed ? transformed[tgt] : (source[src] ?? null)
+      }
+      return merged
+    })
+
+    return { rows, totalRows: stagedCount ?? 0, stagedFields: [...stagedFieldSet] }
+  } else {
+    // ── 3b. No staging yet — pure passthrough from data_rows ─────────────────
+    const { data: tm } = await supabase
+      .from('table_mappings')
+      .select('source_table_id')
+      .eq('id', tableMappingId)
+      .single()
+
+    if (!tm) return { rows: [], totalRows: 0, stagedFields: [] }
+
+    const [{ data: sourceRows }, { count: totalCount }] = await Promise.all([
+      supabase
+        .from('data_rows')
+        .select('row_data')
+        .eq('table_id', tm.source_table_id)
+        .order('row_number')
+        .range(from, to),
+      supabase
+        .from('data_rows')
+        .select('id', { count: 'exact', head: true })
+        .eq('table_id', tm.source_table_id),
+    ])
+
+    const rows = (sourceRows ?? []).map((row) => {
+      const source = (row.row_data ?? {}) as Record<string, unknown>
+      const merged: Record<string, unknown> = {}
+      for (const [tgt, src] of fieldMap) {
+        merged[tgt] = source[src] ?? null
+      }
+      return merged
+    })
+
+    // No fields have been transformed yet — stagedFields is empty
+    return { rows, totalRows: totalCount ?? 0, stagedFields: [] }
+  }
 }

@@ -65,11 +65,13 @@ export async function uploadSchemaDocument(formData: FormData): Promise<UploadSc
       console.error('[uploadSchemaDocument] text extraction failed:', parseErr)
     }
 
-    // Create DB record
+    // Create DB record — schema docs are dataset-scoped, doc_type = 'schema'
     const { data: doc, error: dbError } = await supabase
       .from('schema_documents')
       .insert({
         dataset_id: datasetId,
+        project_id: null,
+        doc_type: 'schema',
         filename: sanitizedFilename,
         file_size: file.size,
         file_storage_path: storagePath,
@@ -82,6 +84,20 @@ export async function uploadSchemaDocument(formData: FormData): Promise<UploadSc
       // Clean up storage if DB insert fails
       await supabase.storage.from('project-files').remove([storagePath])
       return { success: false, error: dbError?.message || 'Failed to create document record' }
+    }
+
+    // Trigger schema enrichment for all existing tables in this dataset
+    // Fire-and-forget: a newly uploaded doc with no extracted text won't enrich anything
+    if (extractedText) {
+      try {
+        const { enrichAllTablesInDataset } = await import('@/lib/actions/schema-enrichment')
+        const result = await enrichAllTablesInDataset(datasetId)
+        if (result.totalCorrections > 0) {
+          console.log(`[schema-documents] Enrichment: ${result.totalCorrections} field(s) corrected across ${result.tableCount} table(s)`)
+        }
+      } catch (enrichErr) {
+        console.warn('[schema-documents] Schema enrichment failed (non-fatal):', enrichErr)
+      }
     }
 
     return { success: true, documentId: doc.id }
@@ -123,6 +139,111 @@ export async function getSchemaDocuments(datasetId: string): Promise<SchemaDocum
     .from('schema_documents')
     .select('*')
     .eq('dataset_id', datasetId)
+    .eq('doc_type', 'schema')
+    .order('created_at', { ascending: true })
+
+  if (error) throw new Error(error.message)
+  return (data || []) as SchemaDocument[]
+}
+
+// ── Business Context Documents ─────────────────────────────────────────────────
+
+export interface UploadBusinessContextResult {
+  success: boolean
+  documentId?: string
+  error?: string
+}
+
+export async function uploadBusinessContextDoc(
+  formData: FormData
+): Promise<UploadBusinessContextResult> {
+  try {
+    const supabase = await createClient()
+    const {
+      data: { user },
+    } = await supabase.auth.getUser()
+    if (!user) return { success: false, error: 'Not authenticated' }
+
+    const file = formData.get('file') as File
+    const projectId = formData.get('projectId') as string
+
+    if (!file || !projectId) return { success: false, error: 'Missing required fields' }
+
+    // Verify project ownership
+    const { data: project } = await supabase
+      .from('projects')
+      .select('id')
+      .eq('id', projectId)
+      .eq('user_id', user.id)
+      .single()
+    if (!project) return { success: false, error: 'Project not found or access denied' }
+
+    // Validate file size (20 MB limit)
+    const MAX_BYTES = 20 * 1024 * 1024
+    if (file.size > MAX_BYTES) return { success: false, error: 'File exceeds 20 MB limit' }
+
+    const sanitizedFilename = file.name.replace(/[^a-zA-Z0-9._\-() ]/g, '_').trim() || 'document'
+    const storagePath = `${user.id}/${projectId}/context/${sanitizedFilename}`
+
+    const { error: storageError } = await supabase.storage
+      .from('project-files')
+      .upload(storagePath, file, { upsert: true })
+    if (storageError) return { success: false, error: 'Storage upload failed: ' + storageError.message }
+
+    // Extract text for supported formats
+    let extractedText: string | null = null
+    const ext = sanitizedFilename.toLowerCase().match(/\.[^.]+$/)?.[0] ?? ''
+    try {
+      if (ext === '.pdf') {
+        const { PDFParse } = await import('pdf-parse')
+        const buffer = Buffer.from(await file.arrayBuffer())
+        const parser = new PDFParse({ data: buffer })
+        const pdfData = await parser.getText()
+        extractedText = pdfData.text?.trim() || null
+      } else if (['.sql', '.ddl', '.txt', '.csv'].includes(ext)) {
+        extractedText = (await file.text()).trim() || null
+      }
+      // .xlsx, .docx, .png, .jpg: text extraction deferred
+    } catch (parseErr) {
+      console.error('[uploadBusinessContextDoc] text extraction failed:', parseErr)
+    }
+
+    const { data: doc, error: dbError } = await supabase
+      .from('schema_documents')
+      .insert({
+        dataset_id: null,
+        project_id: projectId,
+        doc_type: 'business_context',
+        filename: sanitizedFilename,
+        file_size: file.size,
+        file_storage_path: storagePath,
+        extracted_text: extractedText,
+      })
+      .select()
+      .single()
+
+    if (dbError || !doc) {
+      await supabase.storage.from('project-files').remove([storagePath])
+      return { success: false, error: dbError?.message || 'Failed to create document record' }
+    }
+
+    return { success: true, documentId: doc.id }
+  } catch (err) {
+    console.error('[uploadBusinessContextDoc]', err)
+    return {
+      success: false,
+      error: err instanceof Error ? err.message : 'An unexpected error occurred',
+    }
+  }
+}
+
+export async function getBusinessContextDocs(projectId: string): Promise<SchemaDocument[]> {
+  const supabase = await createClient()
+  const { data, error } = await supabase
+    .from('schema_documents')
+    .select('*')
+    .eq('project_id', projectId)
+    .eq('doc_type', 'business_context')
     .order('created_at', { ascending: true })
 
   if (error) throw new Error(error.message)

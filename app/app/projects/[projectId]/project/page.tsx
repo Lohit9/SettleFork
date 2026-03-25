@@ -1,7 +1,7 @@
 import { notFound } from 'next/navigation'
 import { createClient } from '@/lib/supabase/server'
 import { getDatasetsWithTables } from '@/lib/actions/datasets'
-import { getSchemaDocuments } from '@/lib/actions/schema-documents'
+import { getSchemaDocuments, getBusinessContextDocs } from '@/lib/actions/schema-documents'
 import { ControlPlaneContent } from './ControlPlaneContent'
 
 export default async function ControlPlanePage({
@@ -30,10 +30,11 @@ export default async function ControlPlanePage({
   const primarySourceDatasetId = sourceDatasets[0]?.id ?? null
   const primaryTargetDatasetId = targetDatasets[0]?.id ?? null
 
-  // Prefetch schema documents for the primary datasets
-  const [sourceDocs, targetDocs] = await Promise.all([
+  // Prefetch schema documents and business context docs
+  const [sourceDocs, targetDocs, contextDocs] = await Promise.all([
     primarySourceDatasetId ? getSchemaDocuments(primarySourceDatasetId) : Promise.resolve([]),
     primaryTargetDatasetId ? getSchemaDocuments(primaryTargetDatasetId) : Promise.resolve([]),
+    getBusinessContextDocs(projectId),
   ])
 
   return (
@@ -43,6 +44,7 @@ export default async function ControlPlanePage({
       targetDatasets={targetDatasets}
       initialSourceDocs={sourceDocs}
       initialTargetDocs={targetDocs}
+      initialContextDocs={contextDocs}
       primarySourceDatasetId={primarySourceDatasetId}
       primaryTargetDatasetId={primaryTargetDatasetId}
     />

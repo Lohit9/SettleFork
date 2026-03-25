@@ -13,19 +13,21 @@ import {
   AlertCircle,
   CheckCircle2,
   Zap,
-  Save,
   Database,
+  Sparkles,
+  Play,
 } from '@/components/icons'
 import {
   generateTransform,
-  updateTransformSQL,
+  autoSaveTransform,
+  runFullTransformTest,
   testTransformation,
-  saveTransformation,
   autoGenerateAllTransforms,
   applyTransform,
   previewTransformDistinct,
+  suggestTransformDescription,
 } from '@/lib/actions/transformations'
-import type { TransformPageData, DatasetGroup, TableGroup, FieldItem } from '@/lib/actions/transformations'
+import type { TransformPageData, DatasetGroup, TableGroup, FieldItem, FullTransformTestResult } from '@/lib/actions/transformations'
 import { stageAllData } from '@/lib/actions/staging'
 
 // ── Types ──────────────────────────────────────────────────────────────────────
@@ -35,7 +37,7 @@ interface Props {
   initialData: TransformPageData
 }
 
-type LocalStatus = 'draft' | 'tested' | 'saved' | 'applied' | 'stale'
+type LocalStatus = 'draft' | 'tested' | 'applied' | 'stale'
 
 interface LocalTransform {
   transformationId: string | null
@@ -81,21 +83,33 @@ function findField(
   return null
 }
 
-/** Detect rows where the after value is likely from the ELSE clause.
- *  Heuristic: any `after` value that is shared by 2+ distinct `before` values. */
-function detectElseRows(rows: PreviewRow[]): Set<number> {
-  const afterCount = new Map<string, number>()
-  for (const row of rows) {
-    if (row.after != null) {
-      afterCount.set(row.after, (afterCount.get(row.after) ?? 0) + 1)
-    }
-  }
-  const elseValues = new Set<string>()
-  afterCount.forEach((cnt, val) => { if (cnt >= 2) elseValues.add(val) })
+/** Extract the ELSE clause value from a SQL CASE expression.
+ *  Returns null if ELSE is NULL, there is no ELSE, or the value can't be parsed. */
+function extractElseValue(sql: string): string | null {
+  if (!sql) return null
+  // ELSE 'string literal' — most common pattern from Claude
+  const strMatch = sql.match(/\bELSE\s+'([^']*)'/i)
+  if (strMatch) return strMatch[1]
+  // ELSE <integer or decimal> — e.g. ELSE 0
+  const numMatch = sql.match(/\bELSE\s+(-?\d+(?:\.\d+)?)\b/i)
+  if (numMatch) return numMatch[1]
+  // ELSE NULL or no parseable ELSE → no warnings
+  return null
+}
+
+/** Flag rows whose transformed value came from the ELSE clause.
+ *  Parses the ELSE value out of the SQL string so only true ELSE-path rows
+ *  get a warning — rows that matched an explicit WHEN clause are never flagged,
+ *  even when multiple source values share the same explicit mapping target. */
+function detectElseRows(rows: PreviewRow[], sql?: string | null): Set<number> {
+  const elseValue = extractElseValue(sql ?? '')
+  if (elseValue === null) return new Set()
 
   const elseIndices = new Set<number>()
   rows.forEach((row, i) => {
-    if (row.after != null && elseValues.has(row.after)) elseIndices.add(i)
+    if (row.after !== null && row.after === elseValue) {
+      elseIndices.add(i)
+    }
   })
   return elseIndices
 }
@@ -143,6 +157,8 @@ export default function TransformContent({ projectId, initialData }: Props) {
     )
   )
   const [localTransform, setLocalTransform] = useState<LocalTransform | null>(null)
+  // Whether the Generated SQL panel is expanded; auto-collapses on new AI generation
+  const [sqlExpanded, setSqlExpanded] = useState(false)
 
   // Preview state
   const [previewMode, setPreviewMode] = useState<'sample' | 'distinct'>('sample')
@@ -150,21 +166,41 @@ export default function TransformContent({ projectId, initialData }: Props) {
   const [previewError, setPreviewError] = useState<string | null>(null)
   const [previewResults, setPreviewResults] = useState<PreviewRow[]>([])
 
+  // Full-run test state
+  const [testResult, setTestResult] = useState<FullTransformTestResult | null>(null)
+  const [isTesting, startTesting] = useTransition()
+
+  // Auto-save state
+  const [saveStatus, setSaveStatus] = useState<'idle' | 'saving' | 'saved'>('idle')
+  const savedFadeTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+
   // Action states
-  const [showSaveWarning, setShowSaveWarning] = useState(false)
   const [autoGenProgress, setAutoGenProgress] = useState<string | null>(null)
   const [applyResult, setApplyResult] = useState<{ rowsAffected: number } | null>(null)
   const [toast, setToast] = useState<{ message: string; type: 'success' | 'error' } | null>(null)
   const [stagingError, setStagingError] = useState<string | null>(null)
 
   const [isGenerating, startGenerating] = useTransition()
-  const [isSaving, startSaving] = useTransition()
   const [isAutoGen, startAutoGen] = useTransition()
   const [isApplying, startApplying] = useTransition()
   const [isStaging, startStaging] = useTransition()
+  const [isSuggesting, startSuggesting] = useTransition()
 
-  const sqlUpdateTimeout = useRef<ReturnType<typeof setTimeout> | null>(null)
+  // "Why transform?" collapsible (collapsed by default — it's reference info)
+  const [whyExpanded, setWhyExpanded] = useState(false)
+  // AI Suggest: confirm before replacing existing textarea content
+  const [showReplaceConfirm, setShowReplaceConfirm] = useState<string | null>(null)
+
+  // Auto-save refs — use refs so handleSelectField can access latest values without stale closure
+  const localTransformRef = useRef<LocalTransform | null>(null)
+  const selectedMappingIdRef = useRef<string | null>(null)
+  const isDirtyRef = useRef(false)
+  const autoSaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const previewTimeout = useRef<ReturnType<typeof setTimeout> | null>(null)
+
+  // Keep refs in sync with state
+  useEffect(() => { localTransformRef.current = localTransform }, [localTransform])
+  useEffect(() => { selectedMappingIdRef.current = selectedMappingId }, [selectedMappingId])
 
   const needsTransformCount = countNeedsTransform(data.datasets)
 
@@ -197,12 +233,6 @@ export default function TransformContent({ projectId, initialData }: Props) {
           if (result.success && result.results) {
             setPreviewResults(result.results)
             setPreviewError(null)
-            // Reflect tested status in local transform
-            setLocalTransform((prev) =>
-              prev && prev.status === 'draft'
-                ? { ...prev, status: 'tested', transformationId: result.transformationId ?? prev.transformationId }
-                : prev
-            )
           } else {
             setPreviewError(result.error ?? 'Preview failed')
             setPreviewResults([])
@@ -222,6 +252,89 @@ export default function TransformContent({ projectId, initialData }: Props) {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [localTransform?.sql, selectedMappingId, previewMode])
 
+  // ── Auto-save helpers ─────────────────────────────────────────────────────
+
+  /**
+   * Patch the in-memory data.datasets tree after an auto-save so that switching
+   * fields (which reads from data.datasets) sees the freshly saved content.
+   * Matches by transformation.id, not fieldMappingId, because that's what we
+   * have available inside flushAutoSave without a stale closure.
+   */
+  function refreshFieldTransformContent(
+    transformationId: string,
+    sql: string,
+    description: string,
+    status?: string
+  ) {
+    setData((prev) => ({
+      ...prev,
+      datasets: prev.datasets.map((ds) => ({
+        ...ds,
+        tables: ds.tables.map((tbl) => ({
+          ...tbl,
+          fields: tbl.fields.map((f) => {
+            if (f.transformation?.id !== transformationId) return f
+            return {
+              ...f,
+              transformation: {
+                ...f.transformation,
+                generated_sql: sql,
+                description: description || null,
+                ...(status ? { status } : {}),
+              },
+            }
+          }),
+        })),
+      })),
+    }))
+  }
+
+  /**
+   * Persist the current transform (sql, description, status) to DB, then patch
+   * data.datasets so field switching reads the saved values — not stale initialData.
+   */
+  async function flushAutoSave() {
+    const lt = localTransformRef.current
+    const fmId = selectedMappingIdRef.current
+    if (!lt?.transformationId || !fmId || !isDirtyRef.current) return
+    isDirtyRef.current = false
+    setSaveStatus('saving')
+    try {
+      const result = await autoSaveTransform(lt.transformationId, lt.sql, lt.description, lt.status)
+      if (result.success) {
+        // Patch the in-memory tree so handleSelectField reads fresh data on field switch
+        refreshFieldTransformContent(lt.transformationId, lt.sql, lt.description, lt.status)
+      }
+      setSaveStatus('saved')
+      if (savedFadeTimer.current) clearTimeout(savedFadeTimer.current)
+      savedFadeTimer.current = setTimeout(() => setSaveStatus('idle'), 2500)
+    } catch {
+      setSaveStatus('idle')
+    }
+  }
+
+  /** Schedule a debounced auto-save; call flushAutoSave() to cancel + flush immediately */
+  function scheduleAutoSave() {
+    isDirtyRef.current = true
+    setSaveStatus('saving')
+    if (autoSaveTimerRef.current) clearTimeout(autoSaveTimerRef.current)
+    autoSaveTimerRef.current = setTimeout(() => flushAutoSave(), 800)
+  }
+
+  // Flush on unmount (tab/page navigation) — fire-and-forget using refs
+  useEffect(() => {
+    return () => {
+      const lt = localTransformRef.current
+      const fmId = selectedMappingIdRef.current
+      if (autoSaveTimerRef.current) clearTimeout(autoSaveTimerRef.current)
+      if (isDirtyRef.current && lt?.transformationId && fmId) {
+        // Fire-and-forget — don't block unmount
+        autoSaveTransform(lt.transformationId, lt.sql, lt.description, lt.status).catch(() => {})
+      }
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
   // ── Toast helper ──────────────────────────────────────────────────────────
 
   function showToast(message: string, type: 'success' | 'error') {
@@ -232,12 +345,22 @@ export default function TransformContent({ projectId, initialData }: Props) {
   // ── Select a field ────────────────────────────────────────────────────────
 
   const handleSelectField = useCallback(
-    (fieldMappingId: string) => {
+    async (fieldMappingId: string) => {
+      // Flush any pending auto-save for the PREVIOUS field before switching.
+      // Must await so the DB write completes before we load the new field's data.
+      if (autoSaveTimerRef.current) clearTimeout(autoSaveTimerRef.current)
+      await flushAutoSave()
+
       setSelectedMappingId(fieldMappingId)
       setPreviewResults([])
       setPreviewError(null)
       setPreviewMode('sample')
       setApplyResult(null)
+      setTestResult(null)
+      setSqlExpanded(false)
+      setWhyExpanded(false)
+      setSaveStatus('idle')
+      isDirtyRef.current = false
 
       const found = findField(data.datasets, fieldMappingId)
       if (!found) return
@@ -261,6 +384,7 @@ export default function TransformContent({ projectId, initialData }: Props) {
         })
       }
     },
+    // eslint-disable-next-line react-hooks/exhaustive-deps
     [data.datasets]
   )
 
@@ -273,6 +397,43 @@ export default function TransformContent({ projectId, initialData }: Props) {
     setPreviewResults([])
     setPreviewError(null)
     setApplyResult(null)
+    setTestResult(null)
+    isDirtyRef.current = false
+  }
+
+  // ── AI Suggest ────────────────────────────────────────────────────────────
+
+  function handleSuggest() {
+    if (!selectedMappingId) return
+    const existing = localTransform?.description?.trim()
+    // If there's already content, confirm before replacing
+    if (existing) {
+      // We use startSuggesting to get the suggestion first, then show the dialog
+      startSuggesting(async () => {
+        const result = await suggestTransformDescription(selectedMappingId)
+        if (!result.success || !result.suggestion) {
+          showToast(result.error ?? 'Could not generate suggestion. Please describe the transformation manually.', 'error')
+          return
+        }
+        setShowReplaceConfirm(result.suggestion)
+      })
+      return
+    }
+    // Textarea is empty — populate directly
+    startSuggesting(async () => {
+      const result = await suggestTransformDescription(selectedMappingId)
+      if (!result.success || !result.suggestion) {
+        showToast(result.error ?? 'Could not generate suggestion. Please describe the transformation manually.', 'error')
+        return
+      }
+      setLocalTransform((prev) => prev ? { ...prev, description: result.suggestion! } : null)
+    })
+  }
+
+  function applyReplaceConfirm() {
+    if (!showReplaceConfirm) return
+    setLocalTransform((prev) => prev ? { ...prev, description: showReplaceConfirm } : null)
+    setShowReplaceConfirm(null)
   }
 
   // ── Generate Transform ────────────────────────────────────────────────────
@@ -297,9 +458,11 @@ export default function TransformContent({ projectId, initialData }: Props) {
           status: 'draft',
         } : null
       )
+      setSqlExpanded(false) // auto-collapse after AI generation
       setPreviewResults([])
       setPreviewError(null)
       setApplyResult(null)
+      setTestResult(null)
       refreshFieldTransformation(selectedMappingId, result.transformationId ?? null, result.sql!, 'ai', desc, 'draft')
     })
   }
@@ -310,40 +473,48 @@ export default function TransformContent({ projectId, initialData }: Props) {
     const prevStatus = localTransform?.status
     const newStatus: LocalStatus = prevStatus === 'applied' ? 'stale' : 'draft'
 
+    setSqlExpanded(true) // expand when user edits directly
     setLocalTransform((prev) =>
       prev ? { ...prev, sql: newSql, badge: 'modified', status: newStatus } : null
     )
     setPreviewResults([])
     setPreviewError(null)
     setApplyResult(null)
+    setTestResult(null)
+    scheduleAutoSave()
 
-    // Debounce persist to DB
-    if (sqlUpdateTimeout.current) clearTimeout(sqlUpdateTimeout.current)
-    sqlUpdateTimeout.current = setTimeout(() => {
-      if (localTransform?.transformationId) {
-        updateTransformSQL(localTransform.transformationId, newSql).catch(() => {})
+    // Keep the sidebar badge in sync: if we just reverted tested/applied → draft,
+    // update the datasets state so the FieldRow badge changes immediately.
+    if (prevStatus !== newStatus && selectedMappingId) {
+      refreshFieldStatus(selectedMappingId, newStatus)
+    }
+  }
+
+  // ── Test Transform (full run against all rows) ────────────────────────────
+
+  function handleTest() {
+    if (!selectedMappingId || !localTransform?.transformationId) return
+    setTestResult(null)
+
+    // Flush any pending auto-save first so the RPC uses the latest SQL
+    if (autoSaveTimerRef.current) clearTimeout(autoSaveTimerRef.current)
+    flushAutoSave()
+
+    startTesting(async () => {
+      const res = await runFullTransformTest(selectedMappingId)
+      if (!res.success || !res.result) {
+        showToast(res.error ?? 'Test failed', 'error')
+        return
       }
-    }, 1000)
-  }
-
-  // ── Save ──────────────────────────────────────────────────────────────────
-
-  function handleSave() {
-    if (!localTransform?.transformationId) return
-    if (localTransform.status === 'draft') { setShowSaveWarning(true); return }
-    doSave()
-  }
-
-  function doSave() {
-    setShowSaveWarning(false)
-    if (!localTransform?.transformationId) return
-
-    startSaving(async () => {
-      const result = await saveTransformation(localTransform.transformationId!)
-      if (!result.success) { showToast(result.error ?? 'Save failed', 'error'); return }
-      setLocalTransform((prev) => prev ? { ...prev, status: 'saved' } : null)
-      refreshFieldStatus(selectedMappingId!, 'saved')
-      showToast('Transformation saved', 'success')
+      setTestResult(res.result)
+      if (res.result.failedRows === 0) {
+        // All rows pass → update local status to tested
+        setLocalTransform((prev) => prev ? { ...prev, status: 'tested' } : null)
+        refreshFieldStatus(selectedMappingId, 'tested')
+      } else {
+        // Failures → keep as draft
+        setLocalTransform((prev) => prev ? { ...prev, status: 'draft' } : null)
+      }
     })
   }
 
@@ -351,6 +522,10 @@ export default function TransformContent({ projectId, initialData }: Props) {
 
   function handleApply() {
     if (!selectedMappingId || !localTransform?.sql) return
+    if (localTransform.status !== 'tested') {
+      showToast('Run "Test Transform" first to verify all rows pass.', 'error')
+      return
+    }
     setApplyResult(null)
 
     startApplying(async () => {
@@ -458,9 +633,16 @@ export default function TransformContent({ projectId, initialData }: Props) {
   function statusBadge() {
     if (!localTransform) return null
     const s = localTransform.status
+
+    // Test ran and had failures
+    if (testResult && testResult.failedRows > 0) return (
+      <Badge className="bg-red-100 text-red-700 hover:bg-red-100 border border-red-200">
+        <AlertCircle className="w-3 h-3 mr-1" />{testResult.failedRows} Failure{testResult.failedRows !== 1 ? 's' : ''}
+      </Badge>
+    )
     if (s === 'applied') return (
       <Badge className="bg-green-100 text-green-700 hover:bg-green-100 border border-green-200">
-        <CheckCircle2 className="w-3 h-3 mr-1" />Applied
+        <CheckCircle2 className="w-3 h-3 mr-1" />Applied ✓
       </Badge>
     )
     if (s === 'stale') return (
@@ -468,21 +650,17 @@ export default function TransformContent({ projectId, initialData }: Props) {
         <AlertCircle className="w-3 h-3 mr-1" />Stale
       </Badge>
     )
-    if (s === 'saved') return (
-      <Badge className="bg-blue-100 text-blue-700 hover:bg-blue-100 border border-blue-200">
-        <CheckCircle2 className="w-3 h-3 mr-1" />Saved
-      </Badge>
-    )
     if (s === 'tested') return (
       <Badge className="bg-green-100 text-green-700 hover:bg-green-100 border border-green-200">
-        <CheckCircle2 className="w-3 h-3 mr-1" />Tested
+        <CheckCircle2 className="w-3 h-3 mr-1" />Tested ✓
       </Badge>
     )
-    return (
-      <Badge className="bg-gray-100 text-gray-600 hover:bg-gray-100 border border-gray-200">
+    if (localTransform.sql) return (
+      <Badge className="bg-gray-100 text-gray-500 hover:bg-gray-100 border border-gray-200">
         Untested
       </Badge>
     )
+    return null
   }
 
   function sqlBadge() {
@@ -522,10 +700,10 @@ export default function TransformContent({ projectId, initialData }: Props) {
 
   // ── Main layout ────────────────────────────────────────────────────────────
 
-  const elseIndices = detectElseRows(previewResults)
+  const elseIndices = detectElseRows(previewResults, localTransform?.sql)
 
   return (
-    <div className="flex-1 bg-gray-50 flex flex-col overflow-hidden relative">
+    <div className="h-full bg-gray-50 flex flex-col overflow-hidden relative">
 
       {/* Toast */}
       {toast && (
@@ -636,23 +814,103 @@ export default function TransformContent({ projectId, initialData }: Props) {
                     </span>
                   </div>
                 </div>
-                <div className="flex-shrink-0">{statusBadge()}</div>
+                <div className="flex items-center gap-2 flex-shrink-0">
+                  {/* Auto-save indicator */}
+                  {saveStatus === 'saving' && (
+                    <span className="flex items-center gap-1 text-xs text-gray-400">
+                      <span className="w-3 h-3 border-2 border-gray-300 border-t-gray-500 rounded-full animate-spin" />
+                      Saving...
+                    </span>
+                  )}
+                  {saveStatus === 'saved' && (
+                    <span className="text-xs text-gray-400 flex items-center gap-1">
+                      <CheckCircle2 className="w-3 h-3 text-gray-400" />Saved
+                    </span>
+                  )}
+                  {statusBadge()}
+                </div>
               </div>
 
-              {/* Single-column editor */}
-              <div className="flex-1 flex flex-col overflow-hidden">
+              {/* Single-column editor — flex column so the action bar pins to bottom */}
+              <div className="flex-1 flex flex-col min-h-0">
                 <div className="flex-1 overflow-auto p-5 space-y-4">
 
-                  {/* Why Transform? context block */}
+                  {/* NL Description — first interactive element */}
+                  <div className="bg-white rounded-lg border border-gray-200 p-4">
+                    <label className="block text-sm font-medium text-gray-900 mb-2">
+                      Describe how this field should be transformed
+                    </label>
+                    {selectedContext?.field.contributingSourceFields && selectedContext.field.contributingSourceFields.length > 0 && (
+                      <div className="mb-3 px-3 py-2 bg-indigo-50 border border-indigo-100 rounded-lg text-xs text-indigo-700">
+                        <span className="font-medium">Multi-source mapping.</span> This field also receives data from:{' '}
+                        <span className="font-mono">
+                          {selectedContext.field.contributingSourceFields.map((f) => f.name).join(', ')}
+                        </span>
+                        . Write a transform that combines all source fields
+                        (e.g., <code className="bg-indigo-100 px-1 rounded">CONCAT(first_name, &apos; &apos;, last_name)</code>).
+                      </div>
+                    )}
+                    <Textarea
+                      value={localTransform?.description ?? ''}
+                      onChange={(e) => {
+                        setLocalTransform((prev) =>
+                          prev ? { ...prev, description: e.target.value } : null
+                        )
+                        scheduleAutoSave()
+                      }}
+                      placeholder={getSmartPlaceholder(selectedContext.field)}
+                      className="min-h-20 resize-none text-sm"
+                    />
+                    <div className="mt-3 flex items-center gap-2 flex-wrap">
+                      <Button
+                        variant="outline"
+                        className="gap-1.5 text-sm border-gray-300 text-gray-700 hover:text-indigo-700 hover:border-indigo-300 hover:bg-indigo-50"
+                        onClick={handleSuggest}
+                        disabled={isSuggesting || isGenerating}
+                      >
+                        {isSuggesting ? (
+                          <span className="w-3.5 h-3.5 border-2 border-gray-400 border-t-indigo-500 rounded-full animate-spin" />
+                        ) : (
+                          <Sparkles className="w-3.5 h-3.5" />
+                        )}
+                        {isSuggesting ? 'Suggesting...' : 'AI Suggest'}
+                      </Button>
+                      <Button
+                        className="bg-[#4F46E5] hover:bg-[#4338CA] text-white gap-2"
+                        onClick={handleGenerate}
+                        disabled={isGenerating || isSuggesting}
+                      >
+                        <RefreshCw className={`w-4 h-4 ${isGenerating ? 'animate-spin' : ''}`} />
+                        {isGenerating ? 'Generating...' : 'Generate Transform'}
+                      </Button>
+                      <button
+                        className="text-sm text-gray-500 hover:text-gray-700 underline-offset-2 hover:underline"
+                        onClick={handleClear}
+                      >
+                        Clear
+                      </button>
+                    </div>
+                  </div>
+
+                  {/* Why Transform? — collapsible reference block, collapsed by default */}
                   {selectedContext.field.needsTransform && selectedContext.field.aiReasoning && (
-                    <div className="rounded-lg border border-amber-200 bg-amber-50 p-4">
-                      <div className="flex items-start gap-2">
-                        <AlertCircle className="w-4 h-4 text-amber-600 mt-0.5 flex-shrink-0" />
-                        <div className="flex-1 min-w-0">
-                          <p className="text-sm font-medium text-amber-900 mb-1">
-                            Why this field needs transformation
-                          </p>
-                          <p className="text-sm text-amber-800">
+                    <div className="rounded-lg border border-gray-200 bg-white overflow-hidden">
+                      <button
+                        type="button"
+                        onClick={() => setWhyExpanded((v) => !v)}
+                        className="w-full flex items-center justify-between px-4 py-2.5 hover:bg-gray-50 transition-colors text-left"
+                      >
+                        <span className="text-xs font-medium text-gray-500 flex items-center gap-1.5">
+                          <AlertCircle className="w-3.5 h-3.5 text-amber-500" />
+                          Why this field needs transformation
+                        </span>
+                        <span className="text-xs text-gray-400">
+                          {whyExpanded ? <ChevronDown className="w-3.5 h-3.5" /> : <ChevronRight className="w-3.5 h-3.5" />}
+                        </span>
+                      </button>
+                      {whyExpanded && (
+                        <div className="px-4 pb-4 pt-0 border-t border-gray-100 bg-amber-50/40">
+                          <p className="text-sm text-amber-900 mt-3">
                             {selectedContext.field.aiReasoning}
                           </p>
                           {selectedContext.field.typeCompatibility && (
@@ -662,19 +920,19 @@ export default function TransformContent({ projectId, initialData }: Props) {
                           )}
                           <div className="flex flex-wrap items-center gap-3 mt-2 text-xs text-amber-700">
                             {selectedContext.field.confidence != null && (
-                              <span>Mapping confidence: {selectedContext.field.confidence}%</span>
+                              <span>Confidence: {selectedContext.field.confidence}%</span>
                             )}
                             {selectedContext.field.nullPercentage > 0 && (
                               <span>Null rate: {selectedContext.field.nullPercentage.toFixed(1)}%</span>
                             )}
                             {selectedContext.field.formatIssuesCount > 0 && (
                               <span className="text-red-600 font-medium">
-                                ⚠ {selectedContext.field.formatIssuesCount} format issues detected
+                                ⚠ {selectedContext.field.formatIssuesCount} format issues
                               </span>
                             )}
                           </div>
                         </div>
-                      </div>
+                      )}
                     </div>
                   )}
 
@@ -693,49 +951,6 @@ export default function TransformContent({ projectId, initialData }: Props) {
                     </div>
                   )}
 
-                  {/* NL Description */}
-              <div className="bg-white rounded-lg border border-gray-200 p-4">
-                <label className="block text-sm font-medium text-gray-900 mb-2">
-                  Describe how this field should be transformed
-                </label>
-                {selectedContext?.field.contributingSourceFields && selectedContext.field.contributingSourceFields.length > 0 && (
-                  <div className="mb-3 px-3 py-2 bg-indigo-50 border border-indigo-100 rounded-lg text-xs text-indigo-700">
-                    <span className="font-medium">Multi-source mapping.</span> This field also receives data from:{' '}
-                    <span className="font-mono">
-                      {selectedContext.field.contributingSourceFields.map((f) => f.name).join(', ')}
-                    </span>
-                    . Write a transform that combines all source fields
-                    (e.g., <code className="bg-indigo-100 px-1 rounded">CONCAT(first_name, &apos; &apos;, last_name)</code>).
-                  </div>
-                )}
-                <Textarea
-                  value={localTransform?.description ?? ''}
-                  onChange={(e) =>
-                    setLocalTransform((prev) =>
-                      prev ? { ...prev, description: e.target.value } : null
-                    )
-                  }
-                  placeholder={getSmartPlaceholder(selectedContext.field)}
-                  className="min-h-20 resize-none text-sm"
-                />
-                <div className="mt-3 flex items-center gap-3">
-                  <Button
-                    className="bg-[#4F46E5] hover:bg-[#4338CA] text-white gap-2"
-                    onClick={handleGenerate}
-                    disabled={isGenerating}
-                  >
-                    <RefreshCw className={`w-4 h-4 ${isGenerating ? 'animate-spin' : ''}`} />
-                    {isGenerating ? 'Generating...' : 'Generate Transform'}
-                  </Button>
-                  <button
-                    className="text-sm text-gray-500 hover:text-gray-700 underline-offset-2 hover:underline"
-                    onClick={handleClear}
-                  >
-                    Clear
-                  </button>
-                </div>
-              </div>
-
               {/* Stale warning banner */}
               {localTransform?.status === 'stale' && (
                 <div className="bg-yellow-50 border border-yellow-300 rounded-lg p-3">
@@ -749,24 +964,33 @@ export default function TransformContent({ projectId, initialData }: Props) {
                 </div>
               )}
 
-              {/* Generated SQL */}
+              {/* Generated SQL — collapsed by default, toggle to expand */}
               {localTransform?.sql && (
                 <div className="bg-white rounded-lg border border-gray-200">
-                  <div className="px-4 py-2.5 border-b border-gray-200 flex items-center justify-between">
+                  <button
+                    type="button"
+                    onClick={() => setSqlExpanded((v) => !v)}
+                    className="w-full px-4 py-2.5 flex items-center justify-between hover:bg-gray-50 transition-colors"
+                  >
                     <div className="flex items-center gap-2">
                       <span className="text-sm font-semibold text-gray-900">Generated SQL</span>
                       {sqlBadge()}
                     </div>
-                  </div>
-                  <div className="p-4">
-                    <textarea
-                      value={localTransform.sql}
-                      onChange={(e) => handleSqlChange(e.target.value)}
-                      className="w-full font-mono text-xs text-gray-800 bg-gray-50 rounded border border-gray-200 p-3 resize-none focus:outline-none focus:ring-2 focus:ring-[#4F46E5]/30 focus:border-[#4F46E5]"
-                      rows={Math.max(4, localTransform.sql.split('\n').length + 1)}
-                      spellCheck={false}
-                    />
-                  </div>
+                    <span className="text-xs text-gray-400">
+                      {sqlExpanded ? 'Hide ▴' : 'Show ▾'}
+                    </span>
+                  </button>
+                  {sqlExpanded && (
+                    <div className="p-4 border-t border-gray-100">
+                      <textarea
+                        value={localTransform.sql}
+                        onChange={(e) => handleSqlChange(e.target.value)}
+                        className="w-full font-mono text-xs text-gray-800 bg-gray-50 rounded border border-gray-200 p-3 resize-none focus:outline-none focus:ring-2 focus:ring-[#4F46E5]/30 focus:border-[#4F46E5]"
+                        rows={Math.max(4, localTransform.sql.split('\n').length + 1)}
+                        spellCheck={false}
+                      />
+                    </div>
+                  )}
                 </div>
               )}
 
@@ -892,41 +1116,121 @@ export default function TransformContent({ projectId, initialData }: Props) {
 
             </div>
 
-            {/* Action buttons */}
-            {localTransform?.sql && (
-              <div className="border-t border-gray-200 bg-white px-4 py-3 flex items-center gap-3">
-                <Button
-                  className="bg-[#4F46E5] hover:bg-[#4338CA] text-white gap-2 flex-1"
-                  onClick={handleApply}
-                  disabled={isApplying || !localTransform?.transformationId}
-                >
-                  {isApplying ? (
-                    <span className="flex items-center gap-2">
-                      <span className="w-3.5 h-3.5 border-2 border-white/30 border-t-white rounded-full animate-spin" />
-                      Applying…
-                    </span>
+            {/* Test results section */}
+            {testResult && (
+              <div className={`mx-5 mb-4 rounded-lg border text-sm ${testResult.failedRows === 0 ? 'bg-green-50 border-green-200' : 'bg-red-50 border-red-200'}`}>
+                <div className="flex items-center gap-2 px-4 py-3">
+                  {testResult.failedRows === 0 ? (
+                    <>
+                      <CheckCircle2 className="w-4 h-4 text-green-600 flex-shrink-0" />
+                      <span className="font-medium text-green-800">
+                        All {testResult.totalRows.toLocaleString()} rows transformed successfully
+                      </span>
+                      <span className="ml-auto text-xs text-green-600">
+                        Ready to apply →
+                      </span>
+                    </>
                   ) : (
                     <>
-                      <Database className="w-3.5 h-3.5" />
-                      Apply Transform
+                      <AlertCircle className="w-4 h-4 text-red-600 flex-shrink-0" />
+                      <span className="font-medium text-red-800">
+                        {testResult.failedRows.toLocaleString()} of {testResult.totalRows.toLocaleString()} rows failed
+                      </span>
                     </>
                   )}
-                </Button>
-                {localTransform?.transformationId && (
-                  <button
-                    className="text-sm text-gray-600 hover:text-gray-900 underline-offset-2 hover:underline disabled:opacity-50 flex items-center gap-1.5"
-                    onClick={handleSave}
-                    disabled={isSaving}
-                  >
-                    <Save className="w-3.5 h-3.5" />
-                    {isSaving ? 'Saving...' : 'Save'}
-                  </button>
+                </div>
+                {testResult.failedRows > 0 && testResult.failures.length > 0 && (
+                  <div className="border-t border-red-200">
+                    <table className="w-full text-xs">
+                      <thead>
+                        <tr className="bg-red-100/60">
+                          <th className="text-left px-4 py-1.5 font-medium text-red-700 w-16">Row</th>
+                          <th className="text-left px-4 py-1.5 font-medium text-red-700 w-40">Source Value</th>
+                          <th className="text-left px-4 py-1.5 font-medium text-red-700">Error</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {testResult.failures.map((f, i) => (
+                          <tr key={i} className="border-t border-red-200/60">
+                            <td className="px-4 py-1.5 text-red-600 font-mono">{f.rowNumber}</td>
+                            <td className="px-4 py-1.5 font-mono text-red-700 truncate max-w-[10rem]">{f.sourceValue || <em className="text-red-400">empty</em>}</td>
+                            <td className="px-4 py-1.5 text-red-600 truncate">{f.errorMessage}</td>
+                          </tr>
+                        ))}
+                        {testResult.failedRows > testResult.failures.length && (
+                          <tr className="border-t border-red-200/60">
+                            <td colSpan={3} className="px-4 py-1.5 text-red-500 italic">
+                              ... and {(testResult.failedRows - testResult.failures.length).toLocaleString()} more failures
+                            </td>
+                          </tr>
+                        )}
+                      </tbody>
+                    </table>
+                    <div className="px-4 py-2.5 border-t border-red-200 bg-red-50/80 flex items-center gap-3">
+                      <span className="text-xs text-red-600 flex-1">Fix the transform logic above, then re-test.</span>
+                      <button
+                        className="text-xs font-medium text-indigo-700 hover:text-indigo-900 underline-offset-2 hover:underline"
+                        onClick={() => {
+                          // Allow applying anyway (e.g., skip bad rows)
+                          setLocalTransform((prev) => prev ? { ...prev, status: 'tested' } : null)
+                          setTestResult(null)
+                          showToast('Test override — Apply will skip failed rows.', 'success')
+                        }}
+                      >
+                        Apply Anyway (skip {testResult.failedRows} failed rows)
+                      </button>
+                    </div>
+                  </div>
                 )}
               </div>
             )}
-          </div>
 
-          {/* Footer */}
+                {/* Pinned action bar — flex-shrink-0 keeps it visible below the scroll area */}
+                {localTransform?.sql && (
+                  <div className="flex-shrink-0 z-10 border-t border-gray-200 bg-white px-4 py-3 flex items-center gap-3 shadow-[0_-2px_8px_rgba(0,0,0,0.06)]">
+                    {/* Test Transform */}
+                    <Button
+                      variant="outline"
+                      className="gap-2 border-gray-300 text-gray-700 hover:border-indigo-400 hover:text-indigo-700 hover:bg-indigo-50"
+                      onClick={handleTest}
+                      disabled={isTesting || !localTransform?.transformationId}
+                    >
+                      {isTesting ? (
+                        <span className="flex items-center gap-2">
+                          <span className="w-3.5 h-3.5 border-2 border-gray-400 border-t-indigo-600 rounded-full animate-spin" />
+                          Testing...
+                        </span>
+                      ) : (
+                        <>
+                          <Play className="w-3.5 h-3.5" />
+                          Test Transform
+                        </>
+                      )}
+                    </Button>
+                    {/* Apply Transform — only enabled after successful test */}
+                    <Button
+                      className="bg-[#4F46E5] hover:bg-[#4338CA] text-white gap-2 flex-1 disabled:opacity-50 disabled:cursor-not-allowed"
+                      onClick={handleApply}
+                      disabled={isApplying || !localTransform?.transformationId || localTransform.status !== 'tested'}
+                      title={localTransform.status !== 'tested' ? 'Run "Test Transform" first' : undefined}
+                    >
+                      {isApplying ? (
+                        <span className="flex items-center gap-2">
+                          <span className="w-3.5 h-3.5 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+                          Applying…
+                        </span>
+                      ) : (
+                        <>
+                          <Database className="w-3.5 h-3.5" />
+                          Apply Transform
+                        </>
+                      )}
+                    </Button>
+                  </div>
+                )}
+              </div>
+
+          {/* Footer — page-level navigation only */}
           <div className="border-t border-gray-200 bg-white px-6 py-3 flex items-center justify-between flex-shrink-0">
             <span className="text-xs text-gray-400">
               Use <strong>Apply Transform</strong> to update staged data for individual fields,
@@ -965,18 +1269,22 @@ export default function TransformContent({ projectId, initialData }: Props) {
         </div>
       </div>
 
-      {/* Save without test modal */}
-      {showSaveWarning && (
+      {/* AI Suggest — replace existing description confirmation */}
+      {showReplaceConfirm && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/30">
-          <div className="bg-white rounded-xl shadow-xl p-6 max-w-sm w-full mx-4">
-            <h3 className="text-base font-semibold text-gray-900 mb-2">Save untested transformation?</h3>
-            <p className="text-sm text-gray-600 mb-5">
-              This transformation has not been tested yet. It will be saved as a draft.
-            </p>
+          <div className="bg-white rounded-xl shadow-xl p-6 max-w-md w-full mx-4">
+            <h3 className="text-base font-semibold text-gray-900 mb-2 flex items-center gap-2">
+              <Sparkles className="w-4 h-4 text-indigo-500" />
+              Replace current description?
+            </h3>
+            <p className="text-sm text-gray-500 mb-3">AI suggestion:</p>
+            <div className="bg-gray-50 border border-gray-200 rounded-lg px-3 py-2.5 text-sm text-gray-800 mb-5">
+              {showReplaceConfirm}
+            </div>
             <div className="flex gap-3 justify-end">
-              <Button variant="outline" size="sm" onClick={() => setShowSaveWarning(false)}>Cancel</Button>
-              <Button size="sm" className="bg-[#4F46E5] hover:bg-[#4338CA] text-white" onClick={doSave}>
-                Save Anyway
+              <Button variant="outline" size="sm" onClick={() => setShowReplaceConfirm(null)}>Keep current</Button>
+              <Button size="sm" className="bg-[#4F46E5] hover:bg-[#4338CA] text-white" onClick={applyReplaceConfirm}>
+                Use suggestion
               </Button>
             </div>
           </div>
@@ -1102,14 +1410,24 @@ function FieldRow({ field, isSelected, onSelect }: {
           {status === 'stale' && (
             <span title="Transform edited after apply — re-apply needed"><AlertCircle className="w-3.5 h-3.5 text-yellow-500" /></span>
           )}
-          {(status === 'saved' || status === 'tested') && (
-            <span title="Saved but not yet applied to staged data"><Save className="w-3 h-3 text-blue-500" /></span>
-          )}
-          {field.needsTransform && !field.transformation && (
+          {/* Four-state badge: Transform → Saved → Tested → Transformed */}
+          {status === 'applied' ? (
+            <Badge className="bg-green-100 text-green-700 hover:bg-green-100 border border-green-200 text-[10px] px-1.5 py-0">
+              Transformed
+            </Badge>
+          ) : status === 'tested' ? (
+            <Badge className="bg-teal-100 text-teal-700 hover:bg-teal-100 border border-teal-200 text-[10px] px-1.5 py-0">
+              Tested
+            </Badge>
+          ) : field.transformation ? (
+            <Badge className="bg-blue-100 text-blue-700 hover:bg-blue-100 border border-blue-200 text-[10px] px-1.5 py-0">
+              Saved
+            </Badge>
+          ) : field.needsTransform ? (
             <Badge className="bg-orange-100 text-orange-700 hover:bg-orange-100 border border-orange-200 text-[10px] px-1.5 py-0">
               Transform
             </Badge>
-          )}
+          ) : null}
         </div>
       </div>
       <div className="flex items-center gap-1 pl-3">

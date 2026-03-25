@@ -32,6 +32,7 @@ export async function getSchemaDocumentContext(projectId: string): Promise<Schem
     .from('schema_documents')
     .select('dataset_id, filename, extracted_text')
     .in('dataset_id', datasetIds)
+    .eq('doc_type', 'schema')
     .not('extracted_text', 'is', null)
 
   if (!docs?.length) return { sourceDocuments: [], targetDocuments: [] }

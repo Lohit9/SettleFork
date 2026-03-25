@@ -114,7 +114,7 @@ export async function getTransformData(
       .in('id', allTableIds),
     supabase
       .from('field_mappings')
-      .select('id, table_mapping_id, source_field_id, target_field_id, type_compatibility, confidence, is_contributing, ai_reasoning')
+      .select('id, table_mapping_id, source_field_id, target_field_id, type_compatibility, confidence, is_contributing, ai_reasoning, needs_transformation')
       .in('table_mapping_id', tmIds)
       .neq('status', 'rejected'),
   ])
@@ -229,6 +229,8 @@ export async function getTransformData(
       const profile = profileByFieldId.get(fm.source_field_id)
       const transformation = transformByFMId.get(fm.id) ?? null
 
+      const fmWithFlags = fm as typeof fm & { ai_reasoning?: string | null; needs_transformation?: boolean | null }
+
       const needsTransform = fieldNeedsTransform({
         typeCompatibility: fm.type_compatibility,
         confidence: fm.confidence,
@@ -237,9 +239,10 @@ export async function getTransformData(
         sourceFieldName: srcField.name,
         targetFieldName: tgtField.name,
         hasTransformation: transformation !== null,
+        needsTransformation: fmWithFlags.needs_transformation ?? null,
       })
 
-      const fmTyped = fm as typeof fm & { ai_reasoning?: string | null }
+      const fmTyped = fmWithFlags
       fields.push({
         fieldMappingId: fm.id,
         sourceFieldId: srcField.id,
@@ -316,7 +319,56 @@ Common transformation patterns:
 - Hash: MD5(field)
 - Truncation: LEFT(field, 10) or SUBSTRING(field FROM 1 FOR 10)
 
-If documentation is provided, follow the exact value mappings and transformation rules specified in the business rules. Do not invent mappings that contradict the documentation. If the documentation specifies edge cases or special handling, include them in the expression.`
+If documentation is provided, follow the exact value mappings and transformation rules specified in the business rules. Do not invent mappings that contradict the documentation. If the documentation specifies edge cases or special handling, include them in the expression.
+
+CRITICAL — USER INSTRUCTION FAITHFULNESS:
+The user's natural language description is the AUTHORITATIVE specification for this transformation. Follow it exactly.
+- If the user specifies explicit value mappings and a default/catch-all (e.g., "all others=X" or "everything else=X"), generate ONLY the mappings they listed. All values not explicitly mapped MUST go to the catch-all via ELSE. Do NOT invent additional mappings for values you see in the data.
+- If the user specifies a general rule (e.g., "convert to uppercase", "strip $ and commas"), apply that rule uniformly — do not add case-by-case logic unless the user asked for it.
+- If the user's instruction is ambiguous or incomplete, prefer a simpler interpretation that matches their words over a more "complete" one that adds logic they didn't request.
+- The value distribution and sample data are provided so you can write CORRECT SQL (proper quoting, case handling, edge cases) — NOT so you can expand the user's specification with additional mappings.
+- It is ALWAYS better to under-engineer (strict adherence to user's words + ELSE catch-all) than to over-engineer (inventing mappings the user didn't ask for).
+
+NULL HANDLING:
+Always preserve NULL and empty values unless the user explicitly instructs you to convert them. When generating CASE expressions or any conditional logic, add a NULL/empty guard as the FIRST condition:
+  CASE
+    WHEN field_name IS NULL OR TRIM(field_name::text) = '' THEN NULL
+    WHEN ... (user's specified logic)
+    ELSE ...
+  END
+This ensures that NULL source values do not accidentally map to a default/catch-all value. "All others" or "everything else" in the user's description means "all other NON-NULL, NON-EMPTY values" unless they explicitly say otherwise (e.g., "including nulls" or "map nulls to X"). Apply this NULL guard to ALL conditional expressions (CASE, COALESCE chains, IIF, etc.) unless the user's instruction explicitly handles nulls differently.`
+
+// ── wrapWithNullGuard ─────────────────────────────────────────────────────────
+
+/**
+ * Deterministically ensures NULL/empty source values are preserved as NULL
+ * in the generated SQL, regardless of what Claude produced.
+ *
+ * - If Claude already included a NULL guard for the source field → return as-is
+ * - If the SQL is a CASE expression → prepend a NULL WHEN as the first clause
+ * - Otherwise → wrap the whole expression in a NULL-safe CASE/ELSE
+ */
+function wrapWithNullGuard(sql: string, sourceFieldName: string): string {
+  const trimmed = sql.trim()
+  const escapedName = sourceFieldName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+
+  // Already has a null guard for this field — trust Claude
+  const hasNullGuard = new RegExp(
+    `WHEN\\s+["']?${escapedName}["']?\\s+IS\\s+NULL|WHEN\\s+TRIM\\s*\\(\\s*["']?${escapedName}["']?`,
+    'i'
+  ).test(trimmed)
+  if (hasNullGuard) return trimmed
+
+  const nullWhen = `WHEN "${sourceFieldName}" IS NULL OR TRIM("${sourceFieldName}"::text) = '' THEN NULL`
+
+  // CASE expression → insert NULL guard as the first WHEN clause
+  if (/^\s*CASE\b/i.test(trimmed)) {
+    return trimmed.replace(/^(\s*CASE\b)/i, `$1\n  ${nullWhen}`)
+  }
+
+  // Non-CASE expression (function call, arithmetic, etc.) → wrap entirely
+  return `CASE\n  ${nullWhen}\n  ELSE ${trimmed}\nEND`
+}
 
 // ── generateTransform ─────────────────────────────────────────────────────────
 
@@ -470,6 +522,10 @@ Generate the SQL transformation expression.`
 
   if (!sql) return { success: false, error: 'AI returned empty SQL. Please try again.' }
 
+  // Deterministically wrap with NULL guard — ensures NULL/empty source values
+  // always produce NULL output regardless of how Claude wrote the CASE expression
+  sql = wrapWithNullGuard(sql, srcField.name)
+
   // Store or update the transformation record
   const { data: existing } = await supabase
     .from('transformations')
@@ -548,6 +604,152 @@ export async function updateTransformSQL(
 
   if (error) return { success: false, error: 'Failed to update SQL' }
   return { success: true }
+}
+
+// ── autoSaveTransform ─────────────────────────────────────────────────────────
+// Persists sql, description, and optionally status.
+// Used by the client-side debounced auto-save.
+
+export async function autoSaveTransform(
+  transformationId: string,
+  sql: string,
+  description: string,
+  status?: string
+): Promise<{ success: boolean; error?: string }> {
+  const supabase = await createClient()
+  const {
+    data: { user },
+  } = await supabase.auth.getUser()
+  if (!user) return { success: false, error: 'Not authenticated' }
+
+  const cleanSql = sql.replace(/;+$/, '').trim()
+
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const updates: Record<string, any> = {
+    generated_sql: cleanSql || sql,
+    description: description.trim() || null,
+  }
+  if (status) updates.status = status
+
+  const { error } = await supabase
+    .from('transformations')
+    .update(updates)
+    .eq('id', transformationId)
+
+  if (error) return { success: false, error: 'Auto-save failed' }
+  return { success: true }
+}
+
+// ── runFullTransformTest ──────────────────────────────────────────────────────
+// Runs the stored transform SQL against ALL rows in the source table.
+// Returns pass/fail counts and up to 20 failure details.
+// On success (0 failures) sets transformation status → 'tested'.
+// On failures keeps status as 'draft'.
+
+export interface TransformTestFailure {
+  rowNumber: number
+  sourceValue: string
+  errorMessage: string
+}
+
+export interface FullTransformTestResult {
+  totalRows: number
+  passedRows: number
+  failedRows: number
+  failures: TransformTestFailure[]
+}
+
+export async function runFullTransformTest(
+  fieldMappingId: string
+): Promise<{ success: boolean; result?: FullTransformTestResult; error?: string }> {
+  const supabase = await createClient()
+  const {
+    data: { user },
+  } = await supabase.auth.getUser()
+  if (!user) return { success: false, error: 'Not authenticated' }
+
+  const { data: fm } = await supabase
+    .from('field_mappings')
+    .select('id, source_field_id, table_mapping_id')
+    .eq('id', fieldMappingId)
+    .single()
+  if (!fm) return { success: false, error: 'Field mapping not found' }
+
+  const { data: tm } = await supabase
+    .from('table_mappings')
+    .select('id, project_id, source_table_id')
+    .eq('id', fm.table_mapping_id)
+    .single()
+  if (!tm) return { success: false, error: 'Table mapping not found' }
+
+  const { data: projectCheck } = await supabase
+    .from('projects')
+    .select('id')
+    .eq('id', tm.project_id)
+    .eq('user_id', user.id)
+    .single()
+  if (!projectCheck) return { success: false, error: 'Access denied' }
+
+  // Load the current transformation record
+  const { data: transformation } = await supabase
+    .from('transformations')
+    .select('id, generated_sql, status')
+    .eq('field_mapping_id', fieldMappingId)
+    .single()
+  if (!transformation?.generated_sql) return { success: false, error: 'No transform SQL found. Generate a transform first.' }
+
+  const { data: srcField } = await supabase
+    .from('fields')
+    .select('id, name, table_id')
+    .eq('id', fm.source_field_id)
+    .single()
+  if (!srcField) return { success: false, error: 'Source field not found' }
+
+  const { data: allSourceFields } = await supabase
+    .from('fields')
+    .select('name')
+    .eq('table_id', srcField.table_id)
+  const fieldNames = (allSourceFields ?? []).map((f) => f.name)
+
+  const wrappedSql = wrapFieldRefsInJsonb(transformation.generated_sql.replace(/;+$/, '').trim(), fieldNames)
+
+  const { data: rpcResult, error: rpcErr } = await supabaseAdmin.rpc(
+    'execute_transform_full_test',
+    {
+      p_expression: wrappedSql,
+      p_table_id: srcField.table_id,
+      p_source_field: srcField.name,
+    }
+  )
+
+  if (rpcErr) return { success: false, error: rpcErr.message }
+
+  const raw = rpcResult as {
+    total_rows: number
+    passed_rows: number
+    failed_rows: number
+    failures: { row_number: number; source_value: string; error_message: string }[]
+  }
+
+  const result: FullTransformTestResult = {
+    totalRows: raw.total_rows ?? 0,
+    passedRows: raw.passed_rows ?? 0,
+    failedRows: raw.failed_rows ?? 0,
+    failures: (raw.failures ?? []).map((f) => ({
+      rowNumber: f.row_number,
+      sourceValue: f.source_value,
+      errorMessage: f.error_message,
+    })),
+  }
+
+  // Update transformation status based on test outcome
+  const newStatus = result.failedRows === 0 ? 'tested' : 'draft'
+  await supabase
+    .from('transformations')
+    .update({ status: newStatus })
+    .eq('id', transformation.id)
+
+  return { success: true, result }
 }
 
 // ── testTransformation ────────────────────────────────────────────────────────
@@ -757,6 +959,16 @@ export async function applyTransform(
 
   if (!sql.trim()) return { success: false, rowsAffected: 0, error: 'No SQL to apply' }
 
+  // Gate: require the transform to have been tested first
+  const { data: trans } = await supabase
+    .from('transformations')
+    .select('status')
+    .eq('field_mapping_id', fieldMappingId)
+    .single()
+  if (trans && trans.status !== 'tested' && trans.status !== 'applied') {
+    return { success: false, rowsAffected: 0, error: 'Run "Test Transform" before applying.' }
+  }
+
   // Resolve ownership chain
   const { data: fm } = await supabase
     .from('field_mappings')
@@ -911,4 +1123,112 @@ export async function previewTransformDistinct(
   }))
 
   return { success: true, results }
+}
+
+// ── suggestTransformDescription ───────────────────────────────────────────────
+
+const SUGGEST_SYSTEM_PROMPT = `You are a data migration expert. Given context about a source-to-target field mapping, generate a concise natural language description of how this field should be transformed.
+
+The description will be fed directly into a SQL transform generator, so be specific and actionable. Include:
+- The type of transformation needed (value mapping, format change, type conversion, etc.)
+- Specific value mappings if the value distribution and documentation make them clear
+- How to handle edge cases (nulls are handled automatically — do NOT include null handling instructions)
+- Any truncation, formatting, or normalization rules
+
+Write as a direct instruction. Keep it under 2-3 sentences for simple transforms, or use a clear mapping format for value mappings.
+
+Examples of good descriptions:
+- "Convert to uppercase and trim whitespace"
+- "Strip $ signs and commas, then cast to decimal number"
+- "Map industry names to codes: Technology=TECH, Manufacturing=MANU, Healthcare=HLTH. All other non-null values=OTHR"
+- "Parse mixed date formats (MM/DD/YYYY and YYYY-MM-DD) to ISO 8601 (YYYY-MM-DD)"
+- "Convert boolean representations (Y/N, yes/no, 1/0, true/false) to PostgreSQL TRUE/FALSE"
+- "Strip CUST- prefix and return the numeric portion as a string"
+
+Return ONLY the description text — no explanation, no preamble, no markdown.`
+
+export async function suggestTransformDescription(
+  fieldMappingId: string
+): Promise<{ success: boolean; suggestion?: string; error?: string }> {
+  const supabase = await createClient()
+  const {
+    data: { user },
+  } = await supabase.auth.getUser()
+  if (!user) return { success: false, error: 'Not authenticated' }
+
+  const rateLimit = checkAIRateLimit(user.id)
+  if (!rateLimit.allowed) return { success: false, error: rateLimit.error }
+
+  // Fetch field mapping with context
+  const { data: fm } = await supabase
+    .from('field_mappings')
+    .select('id, source_field_id, target_field_id, type_compatibility, confidence, ai_reasoning, table_mapping_id')
+    .eq('id', fieldMappingId)
+    .single()
+  if (!fm) return { success: false, error: 'Field mapping not found' }
+
+  const { data: tm } = await supabase
+    .from('table_mappings')
+    .select('id, project_id, source_table_id, target_table_id')
+    .eq('id', fm.table_mapping_id)
+    .single()
+  if (!tm) return { success: false, error: 'Mapping not found' }
+
+  const { data: projectCheck } = await supabase
+    .from('projects')
+    .select('id')
+    .eq('id', tm.project_id)
+    .eq('user_id', user.id)
+    .single()
+  if (!projectCheck) return { success: false, error: 'Access denied' }
+
+  const [{ data: srcField }, { data: tgtField }] = await Promise.all([
+    supabase.from('fields').select('id, name, data_type, inferred_type, is_nullable').eq('id', fm.source_field_id).single(),
+    supabase.from('fields').select('id, name, data_type, inferred_type, is_nullable').eq('id', fm.target_field_id).single(),
+  ])
+  if (!srcField || !tgtField) return { success: false, error: 'Fields not found' }
+
+  // Build AI context for field distributions and documents
+  const ctx = await buildAIContext(tm.project_id, {
+    tableIds: [tm.source_table_id, tm.target_table_id],
+    fieldIds: [srcField.id, tgtField.id],
+    includeProfilingStats: true,
+    includeValueDistributions: true,
+    includeSampleValues: true,
+    includeDocuments: true,
+    maxDistributionValues: 20,
+  })
+
+  const srcFieldCtx = ctx.source_tables.flatMap((t) => t.fields).find((f) => f.name === srcField.name)
+  const tgtFieldCtx = ctx.target_tables.flatMap((t) => t.fields).find((f) => f.name === tgtField.name)
+  const docsBlock = formatDocumentsForPrompt(ctx.documents)
+
+  const fmWithReasoning = fm as typeof fm & { ai_reasoning?: string | null }
+
+  const userMessage = `<source_field>
+${srcFieldCtx ? formatFieldForPrompt(srcFieldCtx) : `${srcField.name} (${srcField.data_type})\n  Nullable: ${srcField.is_nullable}`}
+</source_field>
+
+<target_field>
+${tgtField.name} (${tgtField.data_type}${tgtField.inferred_type ? `, ${tgtField.inferred_type}` : ''})
+Nullable: ${tgtField.is_nullable}
+${tgtFieldCtx && tgtFieldCtx.cardinality > 0 ? `Distinct values: ${tgtFieldCtx.cardinality}` : ''}
+</target_field>
+
+<mapping_context>
+Type compatibility: ${fm.type_compatibility ?? 'Not specified'}
+Confidence: ${fm.confidence ?? 'N/A'}%
+AI reasoning: ${fmWithReasoning.ai_reasoning ?? 'Not available'}
+</mapping_context>
+${docsBlock}
+Suggest a transformation description for this field mapping.`
+
+  let suggestion: string
+  try {
+    suggestion = await callClaude(SUGGEST_SYSTEM_PROMPT, userMessage, 256)
+  } catch {
+    return { success: false, error: 'AI suggestion failed. Please describe the transformation manually.' }
+  }
+
+  return { success: true, suggestion: suggestion.trim() }
 }

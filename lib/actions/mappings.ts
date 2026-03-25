@@ -180,8 +180,24 @@ For each mapping, provide:
 - A confidence score (0-100) based on how certain you are about the match
 - Brief reasoning explaining WHY this mapping makes sense
 - Alternative target fields you considered
-- Type compatibility assessment
-- Whether a transformation will be needed
+- Type compatibility assessment — describe what specific conversion or validation is needed, not just whether types match. Examples: "VARCHAR → DECIMAL — strip $ and commas, parse to number", "VARCHAR → BOOLEAN — normalize Y/N/yes/no/1/0 to TRUE/FALSE", "VARCHAR(200) → VARCHAR(120) — truncation needed, 12 values exceed limit". If no conversion is needed, write "direct compatible — no conversion needed".
+- Whether a transformation will be needed (see transformation rules below)
+
+TRANSFORMATION RULES — A field needs_transformation = true if ANY of these apply:
+1. DATA TYPE CONVERSION: Source data type must change to fit target (VARCHAR → DECIMAL, VARCHAR → DATE, VARCHAR → BOOLEAN, etc.)
+2. VALUE MAPPING: Source values must be translated to different target values (e.g., "Won" → "Closed Won", "Technology" → "TECH"). Look at the value distribution — if source values don't match expected target picklist/enum values from documentation, this needs transformation.
+3. FORMAT STANDARDIZATION: Source values are in inconsistent or wrong format for target (mixed date formats like "01/15/2024" and "2024-01-15" → ISO only, phone numbers needing E.164, currency strings like "$1,234.56" → numeric).
+4. ID FORMAT CHANGE: Source uses one ID scheme, target uses another (e.g., "CUST-00001" → Salesforce 18-char alphanumeric ID).
+5. BOOLEAN NORMALIZATION: Source uses mixed representations (Y/N, yes/no, 1/0, true/false) and target expects a specific boolean format. Check the value distribution for mixed boolean-like values.
+6. CASING / CAPITALIZATION: Source values need systematic casing changes (e.g., "john" or "JOHN" → "John" for proper name fields). Check sample values for inconsistent casing.
+7. TRUNCATION: Source values exceed target field's max length.
+8. COMPUTATION: Target value must be derived (stripping currency symbols, concatenating fields, splitting fields).
+9. FOREIGN KEY REFORMAT: A FK field whose referenced PK is being transformed (if customer_id → Account.Id changes format, then contact.customer_id → Contact.AccountId also needs transformation to stay consistent).
+
+A field DOES NOT need transformation for:
+- Naming convention differences only (snake_case vs camelCase, lowercase vs PascalCase) when data values pass through unchanged
+- Minor type aliasing where data is compatible without conversion (TEXT vs VARCHAR, VARCHAR(100) vs VARCHAR(255) when no values exceed the smaller limit)
+- Fields where source and target are semantically identical and values can be copied directly
 
 Scoring guidelines:
 - 90-100: Near-certain match (identical names, same types, same business meaning)
@@ -362,6 +378,7 @@ Map ALL source fields to their best target match. If a source field has no reaso
           ai_reasoning: fm.reasoning,
           similar_fields_considered: fm.similar_fields_considered ?? [],
           type_compatibility: fm.type_compatibility ?? null,
+          needs_transformation: fm.needs_transformation ?? null,
         })
       }
 
@@ -1104,6 +1121,7 @@ CRITICAL: Use ONLY the bare field name (not table.field). Respond with ONLY vali
       ai_reasoning: fm.reasoning,
       similar_fields_considered: fm.similar_fields_considered ?? [],
       type_compatibility: fm.type_compatibility ?? null,
+      needs_transformation: fm.needs_transformation ?? null,
     })
   }
 
