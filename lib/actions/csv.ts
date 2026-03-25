@@ -109,7 +109,7 @@ export async function uploadCSV(formData: FormData): Promise<UploadCSVResult> {
 
       const { dataType, inferredType } = inferColumnType(header, values)
       const isNullable = values.length < sampleRows.length
-      const { isPrimaryKey, isForeignKey } = detectKeyType(header, tableName, values, existingTables)
+      const { isPrimaryKey, isForeignKey, fkReference } = detectKeyType(header, tableName, values, existingTables)
 
       return {
         name: header,
@@ -118,7 +118,7 @@ export async function uploadCSV(formData: FormData): Promise<UploadCSVResult> {
         is_nullable: isNullable,
         is_primary_key: isPrimaryKey,
         is_foreign_key: isForeignKey,
-        fk_reference: null as string | null,
+        fk_reference: fkReference,
         ordinal_position: index + 1,
       }
     })
@@ -383,7 +383,7 @@ function detectKeyType(
   tableName: string,
   values: string[],
   existingTables: { name: string }[]
-): { isPrimaryKey: boolean; isForeignKey: boolean } {
+): { isPrimaryKey: boolean; isForeignKey: boolean; fkReference: string | null } {
   const lowerField = fieldName.toLowerCase()
   const lowerTable = tableName.toLowerCase()
   const singularTable = lowerTable.endsWith('s') ? lowerTable.slice(0, -1) : lowerTable
@@ -398,21 +398,25 @@ function detectKeyType(
     lowerField === `${singularTable}_id`
 
   if (isSelfReferencing) {
-    return { isPrimaryKey: true, isForeignKey: false }
+    return { isPrimaryKey: true, isForeignKey: false, fkReference: null }
   }
 
   // Step 2: FK detection — only if the referenced table actually exists.
   // "customer_id" in "contacts" when customers table already uploaded → FK.
+  // Also populate fkReference so the orphaned FK check can use it.
   const fkMatch = lowerField.match(/^(.+?)_id$/)
   if (fkMatch) {
     const referencedName = fkMatch[1].toLowerCase()
-    const matchesExistingTable = existingTables.some((t) => {
+    const matchedTable = existingTables.find((t) => {
       const otherTable = t.name.toLowerCase()
       const otherSingular = otherTable.endsWith('s') ? otherTable.slice(0, -1) : otherTable
       return referencedName === otherTable || referencedName === otherSingular
     })
-    if (matchesExistingTable) {
-      return { isPrimaryKey: false, isForeignKey: true }
+    if (matchedTable) {
+      // Canonical fk_reference: "<TableName>.<fieldName>" pointing to the likely PK of the parent
+      const pkFieldName = referencedName + '_id'
+      const fkRef = `${matchedTable.name}.${pkFieldName}`
+      return { isPrimaryKey: false, isForeignKey: true, fkReference: fkRef }
     }
   }
 
@@ -422,16 +426,22 @@ function detectKeyType(
   const isIdColumn = lowerField === 'id' || lowerField.endsWith('_id')
 
   if (isIdColumn && uniqueRatio > 0.95 && nonNullValues.length > 0) {
-    return { isPrimaryKey: true, isForeignKey: false }
+    return { isPrimaryKey: true, isForeignKey: false, fkReference: null }
   }
 
   // Step 4: Heuristic FK fallback — *_id that isn't self-referencing.
-  // Covers cases where the referenced table hasn't been uploaded yet.
-  if (lowerField.endsWith('_id')) {
-    return { isPrimaryKey: false, isForeignKey: true }
+  // Referenced table hasn't been uploaded yet — set a best-guess fk_reference
+  // using the field name prefix so the orphaned FK check can fire once the
+  // parent table is uploaded and the scan is re-run.
+  if (lowerField.endsWith('_id') && fkMatch) {
+    const prefix = fkMatch[1]
+    // Capitalise first letter to match the table naming convention (e.g. Customers)
+    const guessedTable = prefix.charAt(0).toUpperCase() + prefix.slice(1) + 's'
+    const fkRef = `${guessedTable}.${lowerField}`
+    return { isPrimaryKey: false, isForeignKey: true, fkReference: fkRef }
   }
 
-  return { isPrimaryKey: false, isForeignKey: false }
+  return { isPrimaryKey: false, isForeignKey: false, fkReference: null }
 }
 
 // Profiling helpers (computeValueDistribution, computeMinMax, countFormatIssues) are in

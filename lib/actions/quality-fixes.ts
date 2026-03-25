@@ -484,9 +484,16 @@ export async function runFullScan(
     }
     try {
       const { runAIAugmentedChecks } = await import('@/lib/actions/ai-quality-detection')
-      await runAIAugmentedChecks(projectId, tid)
+      const aiResult = await runAIAugmentedChecks(projectId, tid)
+      if (aiResult.error) {
+        console.error(`[quality-fixes] AI augmented checks error for table ${tid}:`, aiResult.error)
+      } else if (aiResult.skipped) {
+        console.warn(`[quality-fixes] AI augmented checks skipped for table ${tid} (rate limit)`)
+      } else {
+        console.log(`[quality-fixes] AI augmented checks found ${aiResult.issuesFound} issues for table ${tid}`)
+      }
     } catch (err) {
-      console.warn(`[quality-fixes] AI augmented checks failed for table ${tid}:`, err)
+      console.error(`[quality-fixes] AI augmented checks FAILED for table ${tid}:`, err)
     }
   }
 
