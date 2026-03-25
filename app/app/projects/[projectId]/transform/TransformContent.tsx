@@ -264,7 +264,7 @@ export default function TransformContent({ projectId, initialData }: Props) {
     transformationId: string,
     sql: string,
     description: string,
-    status?: string
+    status?: 'draft' | 'tested' | 'saved' | 'applied' | 'stale'
   ) {
     setData((prev) => ({
       ...prev,
