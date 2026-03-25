@@ -22,6 +22,49 @@ export interface QueryEngineResult {
   error?: string
 }
 
+// ─── Column ordering helper ───────────────────────────────────────────────────
+
+/**
+ * Reorder query result columns to match the source field ordinal_position order.
+ * Finds the mapping whose field names overlap most with the result columns,
+ * then uses that mapping's field order as the canonical column order.
+ * Columns that aren't in any mapping (e.g. computed/aliased columns) are
+ * appended at the end in the order they appeared in the result.
+ */
+function sortColumnsByOrdinalPosition(
+  rawColumns: string[],
+  mappings: TableMapping[]
+): string[] {
+  if (rawColumns.length === 0 || mappings.length === 0) return rawColumns
+
+  const rawSet = new Set(rawColumns)
+
+  // Find the mapping whose fields have the most overlap with result columns
+  let bestMapping: TableMapping | null = null
+  let bestOverlap = 0
+  for (const m of mappings) {
+    const overlap = m.fields.filter((f) => rawSet.has(f.name)).length
+    if (overlap > bestOverlap) {
+      bestOverlap = overlap
+      bestMapping = m
+    }
+  }
+
+  if (!bestMapping || bestOverlap === 0) return rawColumns
+
+  // Ordered columns: fields in ordinal_position order (already ordered by the DB query),
+  // filtered to only those present in results
+  const ordered = bestMapping.fields
+    .map((f) => f.name)
+    .filter((name) => rawSet.has(name))
+
+  // Append any result columns not covered by the mapping (aliased, computed, etc.)
+  const orderedSet = new Set(ordered)
+  const extras = rawColumns.filter((c) => !orderedSet.has(c))
+
+  return [...ordered, ...extras]
+}
+
 // ─── Main entry point ─────────────────────────────────────────────────────────
 
 export async function executeQuery(
@@ -77,11 +120,16 @@ export async function executeQuery(
     }
 
     const rows = result.rows ?? []
-    const columns = rows.length > 0 ? Object.keys(rows[0]) : []
+    const rawColumns = rows.length > 0 ? Object.keys(rows[0]) : []
+
+    // Sort result columns to match the source field ordinal_position order.
+    // Fields are already fetched ordered by ordinal_position in getTableMappingsForProject,
+    // so we just need to find which mapping's fields appear in this result set.
+    const orderedColumns = sortColumnsByOrdinalPosition(rawColumns, mappings)
 
     return {
       success: true,
-      columns,
+      columns: orderedColumns,
       rows,
       rowCount: rows.length,
       friendlySQL,

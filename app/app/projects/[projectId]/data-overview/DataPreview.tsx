@@ -17,8 +17,11 @@ export default function DataPreview({ projectId, tables }: DataPreviewProps) {
   // ── View mode ──────────────────────────────────────────────────────────────
   const [viewMode, setViewMode] = useState<'source' | 'transformed'>('source')
 
+  // Source Data tab only shows tables from source datasets (target tables have 0 rows)
+  const sourceTables = tables.filter((t) => t.role === 'source')
+
   // ── Source mode state ──────────────────────────────────────────────────────
-  const [selectedTableId, setSelectedTableId] = useState<string>(tables[0]?.id ?? '')
+  const [selectedTableId, setSelectedTableId] = useState<string>(sourceTables[0]?.id ?? '')
   const [page, setPage] = useState(1)
   const [rows, setRows] = useState<Record<string, unknown>[]>([])
   const [totalRows, setTotalRows] = useState(0)
@@ -37,7 +40,7 @@ export default function DataPreview({ projectId, tables }: DataPreviewProps) {
   /** Target field names whose transforms have been applied to staged_data_rows */
   const [stagedFields, setStagedFields] = useState<string[]>([])
 
-  const selectedTable = tables.find((t) => t.id === selectedTableId)
+  const selectedTable = sourceTables.find((t) => t.id === selectedTableId)
 
   // ── Source data fetching ───────────────────────────────────────────────────
   useEffect(() => {
@@ -122,10 +125,10 @@ export default function DataPreview({ projectId, tables }: DataPreviewProps) {
     stagedTargetTable?.fieldNames ?? (stagedRows.length > 0 ? Object.keys(stagedRows[0]) : [])
   const stagedTotalPages = Math.ceil(stagedTotal / PAGE_SIZE)
 
-  // Group source tables by dataset for the dropdown
+  // Group source-only tables by dataset for the Source Data dropdown
   const datasetOrder: string[] = []
   const tablesByDataset = new Map<string, TableOption[]>()
-  for (const t of tables) {
+  for (const t of sourceTables) {
     if (!tablesByDataset.has(t.datasetName)) {
       tablesByDataset.set(t.datasetName, [])
       datasetOrder.push(t.datasetName)
