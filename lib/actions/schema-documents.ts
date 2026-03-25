@@ -47,10 +47,9 @@ export async function uploadSchemaDocument(formData: FormData): Promise<UploadSc
 
     try {
       if (ext === '.pdf') {
-        const { PDFParse } = await import('pdf-parse')
+        const pdfParse = (await import('pdf-parse')).default
         const buffer = Buffer.from(await file.arrayBuffer())
-        const parser = new PDFParse({ data: buffer })
-        const pdfData = await parser.getText()
+        const pdfData = await pdfParse(buffer)
         extractedText = pdfData.text?.trim() || null
         if (!extractedText) {
           console.warn('[uploadSchemaDocument] No text extracted from PDF (may be scanned/image-only):', sanitizedFilename)
@@ -195,11 +194,13 @@ export async function uploadBusinessContextDoc(
     const ext = sanitizedFilename.toLowerCase().match(/\.[^.]+$/)?.[0] ?? ''
     try {
       if (ext === '.pdf') {
-        const { PDFParse } = await import('pdf-parse')
+        const pdfParse = (await import('pdf-parse')).default
         const buffer = Buffer.from(await file.arrayBuffer())
-        const parser = new PDFParse({ data: buffer })
-        const pdfData = await parser.getText()
+        const pdfData = await pdfParse(buffer)
         extractedText = pdfData.text?.trim() || null
+        if (!extractedText) {
+          console.warn('[uploadBusinessContextDoc] No text extracted from PDF (may be scanned/image-only):', sanitizedFilename)
+        }
       } else if (['.sql', '.ddl', '.txt', '.csv'].includes(ext)) {
         extractedText = (await file.text()).trim() || null
       }
