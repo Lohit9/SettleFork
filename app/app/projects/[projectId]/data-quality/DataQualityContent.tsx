@@ -1462,35 +1462,28 @@ export default function DataQualityContent({
                 <ReadinessGauge score={readiness.score} status={readiness.status} />
               </div>
 
-              {/* Right: Compact stat list */}
+              {/* Right: Compact stat row */}
               <div className="flex-1 min-w-0">
-                <div className="space-y-3">
-                  <div className="flex items-baseline gap-3">
-                    <span className="text-3xl font-bold text-red-600 tabular-nums w-10 text-right shrink-0">
+                <div className="flex items-center justify-around gap-4">
+                  <div className="flex flex-col items-center gap-0.5">
+                    <span className="text-3xl font-bold text-red-600 tabular-nums">
                       {readiness.blocking_count}
                     </span>
-                    <div>
-                      <p className="text-sm font-semibold text-gray-800">Blocking</p>
-                      <p className="text-xs text-gray-400">Must fix before migration</p>
-                    </div>
+                    <p className="text-sm font-semibold text-gray-700">Blocking</p>
                   </div>
-                  <div className="flex items-baseline gap-3">
-                    <span className="text-3xl font-bold text-amber-500 tabular-nums w-10 text-right shrink-0">
+                  <div className="w-px h-10 bg-gray-200 shrink-0" />
+                  <div className="flex flex-col items-center gap-0.5">
+                    <span className="text-3xl font-bold text-amber-500 tabular-nums">
                       {readiness.warning_count}
                     </span>
-                    <div>
-                      <p className="text-sm font-semibold text-gray-800">Warnings</p>
-                      <p className="text-xs text-gray-400">Review recommended</p>
-                    </div>
+                    <p className="text-sm font-semibold text-gray-700">Warnings</p>
                   </div>
-                  <div className="flex items-baseline gap-3">
-                    <span className="text-3xl font-bold text-green-600 tabular-nums w-10 text-right shrink-0">
+                  <div className="w-px h-10 bg-gray-200 shrink-0" />
+                  <div className="flex flex-col items-center gap-0.5">
+                    <span className="text-3xl font-bold text-green-600 tabular-nums">
                       {readiness.ready_field_count}
                     </span>
-                    <div>
-                      <p className="text-sm font-semibold text-gray-800">Ready</p>
-                      <p className="text-xs text-gray-400">No issues detected</p>
-                    </div>
+                    <p className="text-sm font-semibold text-gray-700">Ready</p>
                   </div>
                 </div>
 
