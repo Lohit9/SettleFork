@@ -474,10 +474,19 @@ export async function runSourceDataChecks(
     }
 
     // ── Check 11: Inconsistent capitalisation in name fields (WARNING)
-    const nameKeywords = ['name', 'first', 'last', 'full', 'company', 'title']
+    // Exact-match keywords prevent false positives on 'title', 'department', etc.
+    const nameExactKeywords = ['first_name', 'last_name', 'full_name', 'display_name', 'given_name', 'family_name', 'middle_name', 'preferred_name']
+    const fn = field.name.toLowerCase()
     const isNameField =
       (field.inferred_type ?? '').toLowerCase() === 'name' ||
-      nameKeywords.some((k) => field.name.toLowerCase().includes(k))
+      nameExactKeywords.includes(fn) ||
+      // Fields ending in _name, excluding company/product/file/table names (can be all-caps)
+      (fn.endsWith('_name') &&
+        !fn.includes('company') &&
+        !fn.includes('product') &&
+        !fn.includes('file') &&
+        !fn.includes('table') &&
+        !fn.includes('column'))
 
     if (isNameField) {
       const capsCount = await rpcCount('dq_inconsistent_caps_count', {
