@@ -212,7 +212,9 @@ export async function runAIAugmentedChecks(
   }
 
   // Format the table context for the prompt
-  const tableCtx = aiContext.source_tables.find((t) => t.table_id === tableId)
+  const tableCtx =
+    aiContext.source_tables.find((t) => t.table_id === tableId) ||
+    aiContext.target_tables.find((t) => t.table_id === tableId)
   if (!tableCtx) return { issuesFound: 0, error: 'Table not found in AI context' }
 
   const schemaSection = formatSchemaForPrompt([tableCtx], 'source')
