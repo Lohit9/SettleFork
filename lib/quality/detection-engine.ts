@@ -368,6 +368,167 @@ export async function runSourceDataChecks(
         )
       }
     }
+
+    // ── Check 8: Date format issues — non-ISO dates and fully-invalid date strings (WARNING / BLOCKING)
+    const dateKeywords = ['date', 'created', 'updated', 'modified', 'dob', 'birth', 'start', 'end', 'expir']
+    const isDateField =
+      dateKeywords.some((k) => field.name.toLowerCase().includes(k)) ||
+      (field.inferred_type ?? '').toLowerCase() === 'date'
+
+    if (isDateField) {
+      // Load the profile to get format_issues_count (non-ISO but recognisable date patterns)
+      const { data: fp } = await supabaseAdmin
+        .from('field_profiles')
+        .select('format_issues_count')
+        .eq('field_id', field.id)
+        .maybeSingle()
+
+      const profileFormatIssues = fp?.format_issues_count ?? 0
+
+      if (profileFormatIssues > 0) {
+        issuesToInsert.push(
+          makeIssue({
+            project_id: projectId,
+            table_id: tableId,
+            field_id: field.id,
+            stage: 'source',
+            severity: 'warning',
+            title: fieldTitle,
+            description: `Non-ISO date formats detected in ${profileFormatIssues} records. Mixed formats (MM/DD/YYYY, DD-MM-YY, etc.) found — transform to ISO 8601 (YYYY-MM-DD) before loading.`,
+            affected_records: profileFormatIssues,
+            detection_source: detectionSource,
+          })
+        )
+      }
+
+      // Completely unrecognisable date strings (blocking — cannot be parsed at load time)
+      const invalidDateCount = await rpcCount('dq_invalid_date_string_count', {
+        p_table_id: tableId,
+        p_field_name: field.name,
+      })
+      if (invalidDateCount > 0) {
+        issuesToInsert.push(
+          makeIssue({
+            project_id: projectId,
+            table_id: tableId,
+            field_id: field.id,
+            stage: 'source',
+            severity: 'blocking',
+            title: fieldTitle,
+            description: `Invalid date strings in ${invalidDateCount} records — values are not recognisable as any date format and will fail on load.`,
+            affected_records: Number(invalidDateCount),
+            detection_source: detectionSource,
+          })
+        )
+      }
+    }
+
+    // ── Check 9: Currency formatting — $ signs and commas in numeric fields (WARNING)
+    const currencyKeywords = ['revenue', 'amount', 'price', 'cost', 'total', 'salary', 'income', 'budget', 'fee', 'rate', 'pay', 'charge', 'balance']
+    const isCurrencyField =
+      (field.inferred_type ?? '').toLowerCase() === 'currency' ||
+      ['decimal', 'float', 'numeric'].includes((field.inferred_type ?? '').toLowerCase()) ||
+      currencyKeywords.some((k) => field.name.toLowerCase().includes(k))
+
+    if (isCurrencyField) {
+      const currencyFmtCount = await rpcCount('dq_currency_format_count', {
+        p_table_id: tableId,
+        p_field_name: field.name,
+      })
+      if (currencyFmtCount > 0) {
+        issuesToInsert.push(
+          makeIssue({
+            project_id: projectId,
+            table_id: tableId,
+            field_id: field.id,
+            stage: 'source',
+            severity: 'warning',
+            title: fieldTitle,
+            description: `Currency formatting detected in ${currencyFmtCount} records ($ signs or commas). Strip formatting before casting to a numeric target field.`,
+            affected_records: Number(currencyFmtCount),
+            detection_source: detectionSource,
+          })
+        )
+      }
+
+      // ── Check 10: Negative values in currency/revenue fields (WARNING)
+      const negativeCount = await rpcCount('dq_negative_numeric_count', {
+        p_table_id: tableId,
+        p_field_name: field.name,
+      })
+      if (negativeCount > 0) {
+        issuesToInsert.push(
+          makeIssue({
+            project_id: projectId,
+            table_id: tableId,
+            field_id: field.id,
+            stage: 'source',
+            severity: 'warning',
+            title: fieldTitle,
+            description: `Negative values found in ${negativeCount} records. Revenue/amount fields typically should not contain negative values — verify these are intentional credits or adjustments.`,
+            affected_records: Number(negativeCount),
+            detection_source: detectionSource,
+          })
+        )
+      }
+    }
+
+    // ── Check 11: Inconsistent capitalisation in name fields (WARNING)
+    const nameKeywords = ['name', 'first', 'last', 'full', 'company', 'title']
+    const isNameField =
+      (field.inferred_type ?? '').toLowerCase() === 'name' ||
+      nameKeywords.some((k) => field.name.toLowerCase().includes(k))
+
+    if (isNameField) {
+      const capsCount = await rpcCount('dq_inconsistent_caps_count', {
+        p_table_id: tableId,
+        p_field_name: field.name,
+      })
+      if (capsCount > 0) {
+        issuesToInsert.push(
+          makeIssue({
+            project_id: projectId,
+            table_id: tableId,
+            field_id: field.id,
+            stage: 'source',
+            severity: 'warning',
+            title: fieldTitle,
+            description: `Inconsistent capitalisation in ${capsCount} records — some values are all-lowercase or ALL-UPPERCASE where proper case (Title Case) is expected.`,
+            affected_records: Number(capsCount),
+            detection_source: detectionSource,
+          })
+        )
+      }
+    }
+
+    // ── Check 12: Non-standard boolean representations (WARNING)
+    const boolKeywords = ['is_', 'has_', 'active', 'enabled', 'flag', 'valid']
+    const isBoolField =
+      (field.inferred_type ?? '').toLowerCase() === 'boolean' ||
+      field.data_type.toUpperCase() === 'BOOLEAN' ||
+      boolKeywords.some((k) => field.name.toLowerCase().includes(k))
+
+    if (isBoolField) {
+      const nonBoolCount = await rpcCount('dq_non_standard_boolean_count', {
+        p_table_id: tableId,
+        p_field_name: field.name,
+      })
+      if (nonBoolCount > 0) {
+        issuesToInsert.push(
+          makeIssue({
+            project_id: projectId,
+            table_id: tableId,
+            field_id: field.id,
+            stage: 'source',
+            severity: 'warning',
+            title: fieldTitle,
+            description: `Non-standard boolean representations in ${nonBoolCount} records (Y/N, yes/no, 1/0, etc.). Transform to TRUE/FALSE before loading into a boolean target field.`,
+            affected_records: Number(nonBoolCount),
+            detection_source: detectionSource,
+          })
+        )
+      }
+    }
   }
 
   // Batch insert all issues
