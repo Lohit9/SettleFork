@@ -129,6 +129,8 @@ export interface QualityIssue {
   generated_sql: string | null
   status: 'open' | 'fixed' | 'accepted_risk'
   detection_source: 'auto' | 'manual_scan' | 'custom_rule'
+  /** Added by migration 022 — distinguishes auto/custom_rule/ai_augmented/manual */
+  detection_type?: 'auto' | 'custom_rule' | 'ai_augmented' | 'manual'
   validation_rule_id: string | null
   created_at: string
 }

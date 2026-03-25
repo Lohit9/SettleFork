@@ -358,7 +358,11 @@ function IssueCard({
                   </span>
                 )}
                 {/* Detection source */}
-                {issue.detection_source === 'custom_rule' ? (
+                {(issue.detection_type === 'ai_augmented' || issue.detection_source === 'ai_augmented' as string) ? (
+                  <span className="px-1.5 py-0.5 rounded text-[10px] bg-violet-50 text-violet-700 border border-violet-200">
+                    ✦ AI
+                  </span>
+                ) : issue.detection_source === 'custom_rule' || issue.detection_type === 'custom_rule' ? (
                   <span className="px-1.5 py-0.5 rounded text-[10px] bg-indigo-50 text-indigo-700 border border-indigo-200">
                     ✦ Custom Rule
                   </span>

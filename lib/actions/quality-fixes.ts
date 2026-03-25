@@ -482,6 +482,12 @@ export async function runFullScan(
     } catch (err) {
       console.warn(`[quality-fixes] Custom rules failed for table ${tid}:`, err)
     }
+    try {
+      const { runAIAugmentedChecks } = await import('@/lib/actions/ai-quality-detection')
+      await runAIAugmentedChecks(projectId, tid)
+    } catch (err) {
+      console.warn(`[quality-fixes] AI augmented checks failed for table ${tid}:`, err)
+    }
   }
 
   const targetDatasetIds = datasets.filter((d) => d.role === 'target').map((d) => d.id)
