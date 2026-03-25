@@ -308,7 +308,6 @@ Identify additional data quality issues NOT already listed in existing_issues.`
       affected_records: actualCount,
       status: 'open',
       detection_source: 'manual_scan',
-      // @ts-expect-error detection_type is added by migration 022 but not yet in the TS type
       detection_type: 'ai_augmented',
       ai_suggested_fix: null,
       ai_fix_options: null,
