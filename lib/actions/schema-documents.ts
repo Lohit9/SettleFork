@@ -47,7 +47,10 @@ export async function uploadSchemaDocument(formData: FormData): Promise<UploadSc
 
     try {
       if (ext === '.pdf') {
-        const pdfParse = (await import('pdf-parse')).default
+        // pdf-parse is a CJS module; .default may not appear in TypeScript typings
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const pdfParseModule = await import('pdf-parse') as any
+        const pdfParse: (buf: Buffer) => Promise<{ text: string }> = pdfParseModule.default ?? pdfParseModule
         const buffer = Buffer.from(await file.arrayBuffer())
         const pdfData = await pdfParse(buffer)
         extractedText = pdfData.text?.trim() || null
@@ -194,7 +197,10 @@ export async function uploadBusinessContextDoc(
     const ext = sanitizedFilename.toLowerCase().match(/\.[^.]+$/)?.[0] ?? ''
     try {
       if (ext === '.pdf') {
-        const pdfParse = (await import('pdf-parse')).default
+        // pdf-parse is a CJS module; .default may not appear in TypeScript typings
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const pdfParseModule = await import('pdf-parse') as any
+        const pdfParse: (buf: Buffer) => Promise<{ text: string }> = pdfParseModule.default ?? pdfParseModule
         const buffer = Buffer.from(await file.arrayBuffer())
         const pdfData = await pdfParse(buffer)
         extractedText = pdfData.text?.trim() || null
