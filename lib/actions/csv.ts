@@ -232,6 +232,26 @@ export async function uploadCSV(formData: FormData): Promise<UploadCSVResult> {
       console.warn('[csv] Auto detection failed (non-fatal):', detectionErr)
     }
 
+    // ── Step 12: AI schema enrichment (if schema docs exist for this dataset) ─
+    // Fire-and-forget: never fail the upload due to enrichment errors
+    try {
+      const { count: docCount } = await supabase
+        .from('schema_documents')
+        .select('id', { count: 'exact', head: true })
+        .eq('dataset_id', datasetId)
+        .not('extracted_text', 'is', null)
+
+      if ((docCount ?? 0) > 0) {
+        const { enrichSchemaFromDocs } = await import('@/lib/actions/schema-enrichment')
+        const enrichResult = await enrichSchemaFromDocs(datasetId, tableId)
+        if (enrichResult.correctedFields > 0) {
+          console.log(`[csv] Schema enrichment: ${enrichResult.correctedFields} field(s) corrected for table ${tableId}`)
+        }
+      }
+    } catch (enrichErr) {
+      console.warn('[csv] Schema enrichment failed (non-fatal):', enrichErr)
+    }
+
     return {
       success: true,
       tableId,

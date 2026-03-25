@@ -41,6 +41,8 @@ export interface RichFieldMapping {
   ai_reasoning: string | null
   similar_fields_considered: string[] | null
   type_compatibility: string | null
+  /** True when this is a secondary source contributing to a target that already has a primary mapping */
+  is_contributing: boolean
   created_at: string
   sourceField: { id: string; name: string; data_type: string; inferred_type: string | null } | null
   targetField: { id: string; name: string; data_type: string; inferred_type: string | null } | null
@@ -178,8 +180,24 @@ For each mapping, provide:
 - A confidence score (0-100) based on how certain you are about the match
 - Brief reasoning explaining WHY this mapping makes sense
 - Alternative target fields you considered
-- Type compatibility assessment
-- Whether a transformation will be needed
+- Type compatibility assessment — describe what specific conversion or validation is needed, not just whether types match. Examples: "VARCHAR → DECIMAL — strip $ and commas, parse to number", "VARCHAR → BOOLEAN — normalize Y/N/yes/no/1/0 to TRUE/FALSE", "VARCHAR(200) → VARCHAR(120) — truncation needed, 12 values exceed limit". If no conversion is needed, write "direct compatible — no conversion needed".
+- Whether a transformation will be needed (see transformation rules below)
+
+TRANSFORMATION RULES — A field needs_transformation = true if ANY of these apply:
+1. DATA TYPE CONVERSION: Source data type must change to fit target (VARCHAR → DECIMAL, VARCHAR → DATE, VARCHAR → BOOLEAN, etc.)
+2. VALUE MAPPING: Source values must be translated to different target values (e.g., "Won" → "Closed Won", "Technology" → "TECH"). Look at the value distribution — if source values don't match expected target picklist/enum values from documentation, this needs transformation.
+3. FORMAT STANDARDIZATION: Source values are in inconsistent or wrong format for target (mixed date formats like "01/15/2024" and "2024-01-15" → ISO only, phone numbers needing E.164, currency strings like "$1,234.56" → numeric).
+4. ID FORMAT CHANGE: Source uses one ID scheme, target uses another (e.g., "CUST-00001" → Salesforce 18-char alphanumeric ID).
+5. BOOLEAN NORMALIZATION: Source uses mixed representations (Y/N, yes/no, 1/0, true/false) and target expects a specific boolean format. Check the value distribution for mixed boolean-like values.
+6. CASING / CAPITALIZATION: Source values need systematic casing changes (e.g., "john" or "JOHN" → "John" for proper name fields). Check sample values for inconsistent casing.
+7. TRUNCATION: Source values exceed target field's max length.
+8. COMPUTATION: Target value must be derived (stripping currency symbols, concatenating fields, splitting fields).
+9. FOREIGN KEY REFORMAT: A FK field whose referenced PK is being transformed (if customer_id → Account.Id changes format, then contact.customer_id → Contact.AccountId also needs transformation to stay consistent).
+
+A field DOES NOT need transformation for:
+- Naming convention differences only (snake_case vs camelCase, lowercase vs PascalCase) when data values pass through unchanged
+- Minor type aliasing where data is compatible without conversion (TEXT vs VARCHAR, VARCHAR(100) vs VARCHAR(255) when no values exceed the smaller limit)
+- Fields where source and target are semantically identical and values can be copied directly
 
 Scoring guidelines:
 - 90-100: Near-certain match (identical names, same types, same business meaning)
@@ -360,6 +378,7 @@ Map ALL source fields to their best target match. If a source field has no reaso
           ai_reasoning: fm.reasoning,
           similar_fields_considered: fm.similar_fields_considered ?? [],
           type_compatibility: fm.type_compatibility ?? null,
+          needs_transformation: fm.needs_transformation ?? null,
         })
       }
 
@@ -496,6 +515,7 @@ export async function getMappings(projectId: string): Promise<MappingsResult | n
         ai_reasoning: fm.ai_reasoning,
         similar_fields_considered: fm.similar_fields_considered as string[] | null,
         type_compatibility: fm.type_compatibility,
+        is_contributing: fm.is_contributing ?? false,
         created_at: fm.created_at,
         sourceField: srcField
           ? { id: srcField.id, name: srcField.name, data_type: srcField.data_type, inferred_type: srcField.inferred_type }
@@ -604,6 +624,13 @@ export async function updateFieldMappingStatus(
   const { data: { user } } = await supabase.auth.getUser()
   if (!user) return { success: false, error: 'Not authenticated' }
 
+  // Fetch the FM before updating so we can run promotion logic if needed
+  const { data: fmBefore } = await supabase
+    .from('field_mappings')
+    .select('table_mapping_id, target_field_id, is_contributing')
+    .eq('id', fieldMappingId)
+    .single()
+
   const { error } = await supabase
     .from('field_mappings')
     .update({ status })
@@ -611,25 +638,39 @@ export async function updateFieldMappingStatus(
 
   if (error) return { success: false, error: error.message }
 
-  // Auto-approve table mapping if all field mappings are approved
-  if (status === 'approved') {
-    const { data: fm } = await supabase
-      .from('field_mappings')
-      .select('table_mapping_id')
-      .eq('id', fieldMappingId)
-      .single()
+  if (fmBefore) {
+    // If we're rejecting a PRIMARY mapping, promote the first active contributor for that target
+    if (status === 'rejected' && !fmBefore.is_contributing) {
+      const { data: contributors } = await supabase
+        .from('field_mappings')
+        .select('id')
+        .eq('table_mapping_id', fmBefore.table_mapping_id)
+        .eq('target_field_id', fmBefore.target_field_id)
+        .eq('is_contributing', true)
+        .neq('status', 'rejected')
+        .order('created_at', { ascending: true })
+        .limit(1)
 
-    if (fm) {
+      if (contributors && contributors.length > 0) {
+        await supabase
+          .from('field_mappings')
+          .update({ is_contributing: false })
+          .eq('id', contributors[0].id)
+      }
+    }
+
+    // Auto-approve table mapping if all field mappings are approved
+    if (status === 'approved') {
       const { data: siblings } = await supabase
         .from('field_mappings')
         .select('status')
-        .eq('table_mapping_id', fm.table_mapping_id)
+        .eq('table_mapping_id', fmBefore.table_mapping_id)
 
       if (siblings && siblings.every((s) => s.status === 'approved')) {
         await supabase
           .from('table_mappings')
           .update({ status: 'approved' })
-          .eq('id', fm.table_mapping_id)
+          .eq('id', fmBefore.table_mapping_id)
       }
     }
   }
@@ -685,8 +726,9 @@ export async function editFieldMapping(
 export async function addManualFieldMapping(
   tableMappingId: string,
   sourceFieldId: string,
-  targetFieldId: string
-): Promise<{ success: boolean; data?: { id: string }; error?: string }> {
+  targetFieldId: string,
+  isContributing = false
+): Promise<{ success: boolean; data?: { id: string; is_contributing: boolean }; error?: string }> {
   const supabase = await createClient()
   const { data: { user } } = await supabase.auth.getUser()
   if (!user) return { success: false, error: 'Not authenticated' }
@@ -699,13 +741,14 @@ export async function addManualFieldMapping(
       target_field_id: targetFieldId,
       confidence: 100,
       status: 'approved',
-      ai_reasoning: 'Manually mapped by user',
+      ai_reasoning: isContributing ? 'Contributing source — manually mapped by user' : 'Manually mapped by user',
+      is_contributing: isContributing,
     })
-    .select('id')
+    .select('id, is_contributing')
     .single()
 
   if (error) return { success: false, error: error.message }
-  return { success: true, data: { id: data.id } }
+  return { success: true, data: { id: data.id, is_contributing: data.is_contributing } }
 }
 
 // ─── addManualTableMapping ────────────────────────────────────────────────────
@@ -795,7 +838,24 @@ export async function regenerateFieldMappings(
   if (!proj) return { success: false, fieldCount: 0, error: 'Access denied' }
 
   // Delete all existing field mappings for this table pair
-  await supabase.from('field_mappings').delete().eq('table_mapping_id', tableMappingId)
+  const { error: deleteError } = await supabase
+    .from('field_mappings')
+    .delete()
+    .eq('table_mapping_id', tableMappingId)
+
+  if (deleteError) {
+    return { success: false, fieldCount: 0, error: `Failed to clear existing field mappings: ${deleteError.message}` }
+  }
+
+  // Verify delete actually cleared the records before proceeding
+  const { count: remaining } = await supabase
+    .from('field_mappings')
+    .select('id', { count: 'exact', head: true })
+    .eq('table_mapping_id', tableMappingId)
+
+  if (remaining && remaining > 0) {
+    return { success: false, fieldCount: 0, error: 'Could not clear existing field mappings. Please try again.' }
+  }
 
   // Regenerate: with all fields now unmapped, suggestRemainingMappings generates all
   const result = await suggestRemainingMappings(tableMappingId)
@@ -815,12 +875,40 @@ export async function deleteFieldMapping(
   const { data: { user } } = await supabase.auth.getUser()
   if (!user) return { success: false, error: 'Not authenticated' }
 
+  // Fetch before deleting so we can promote a contributor if this is a primary mapping
+  const { data: fmBefore } = await supabase
+    .from('field_mappings')
+    .select('table_mapping_id, target_field_id, is_contributing')
+    .eq('id', fieldMappingId)
+    .single()
+
   const { error } = await supabase
     .from('field_mappings')
     .delete()
     .eq('id', fieldMappingId)
 
   if (error) return { success: false, error: error.message }
+
+  // If a primary was deleted, promote the first active contributor for that target
+  if (fmBefore && !fmBefore.is_contributing) {
+    const { data: contributors } = await supabase
+      .from('field_mappings')
+      .select('id')
+      .eq('table_mapping_id', fmBefore.table_mapping_id)
+      .eq('target_field_id', fmBefore.target_field_id)
+      .eq('is_contributing', true)
+      .neq('status', 'rejected')
+      .order('created_at', { ascending: true })
+      .limit(1)
+
+    if (contributors && contributors.length > 0) {
+      await supabase
+        .from('field_mappings')
+        .update({ is_contributing: false })
+        .eq('id', contributors[0].id)
+    }
+  }
+
   return { success: true }
 }
 
@@ -1033,11 +1121,23 @@ CRITICAL: Use ONLY the bare field name (not table.field). Respond with ONLY vali
       ai_reasoning: fm.reasoning,
       similar_fields_considered: fm.similar_fields_considered ?? [],
       type_compatibility: fm.type_compatibility ?? null,
+      needs_transformation: fm.needs_transformation ?? null,
     })
   }
 
   if (inserts.length > 0) {
-    await supabase.from('field_mappings').insert(inserts)
+    // De-duplicate: re-fetch any field_mappings that may have been created between
+    // our initial "find unmapped" check and this insert (handles race conditions / double-calls)
+    const { data: latestFMs } = await supabase
+      .from('field_mappings')
+      .select('source_field_id')
+      .eq('table_mapping_id', tableMappingId)
+    const alreadyMappedSrcIds = new Set((latestFMs ?? []).map((fm) => fm.source_field_id))
+    const safeInserts = inserts.filter((i) => !alreadyMappedSrcIds.has(i.source_field_id as string))
+
+    if (safeInserts.length > 0) {
+      await supabase.from('field_mappings').insert(safeInserts)
+    }
 
     // Recompute table-level confidence from ALL field mappings (including any pre-existing ones)
     const { data: allFMs } = await supabase
@@ -1075,7 +1175,8 @@ CRITICAL: Use ONLY the bare field name (not table.field). Respond with ONLY vali
 export async function mapUnmappedField(
   projectId: string,
   sourceFieldId: string,
-  targetFieldId: string
+  targetFieldId: string,
+  isContributing = false
 ): Promise<{ success: boolean; error?: string }> {
   const supabase = await createClient()
   const { data: { user } } = await supabase.auth.getUser()
@@ -1112,7 +1213,8 @@ export async function mapUnmappedField(
     target_field_id: targetFieldId,
     confidence: 100,
     status: 'approved',
-    ai_reasoning: 'Manually mapped by user',
+    ai_reasoning: isContributing ? 'Contributing source — manually mapped by user' : 'Manually mapped by user',
+    is_contributing: isContributing,
   })
 
   if (fmErr) return { success: false, error: fmErr.message }

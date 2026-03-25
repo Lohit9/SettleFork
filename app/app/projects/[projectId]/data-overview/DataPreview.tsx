@@ -34,6 +34,8 @@ export default function DataPreview({ projectId, tables }: DataPreviewProps) {
   const [stagedTotal, setStagedTotal] = useState(0)
   const [stagedLoading, setStagedLoading] = useState(false)
   const [stagedError, setStagedError] = useState<string | null>(null)
+  /** Target field names whose transforms have been applied to staged_data_rows */
+  const [stagedFields, setStagedFields] = useState<string[]>([])
 
   const selectedTable = tables.find((t) => t.id === selectedTableId)
 
@@ -95,6 +97,7 @@ export default function DataPreview({ projectId, tables }: DataPreviewProps) {
       const result = await getStagedDataPreview(mappingId, p, PAGE_SIZE)
       setStagedRows(result.rows)
       setStagedTotal(result.totalRows)
+      setStagedFields(result.stagedFields)
     } catch (e) {
       setStagedError(e instanceof Error ? e.message : 'Failed to load transformed data')
     } finally {
@@ -214,10 +217,9 @@ export default function DataPreview({ projectId, tables }: DataPreviewProps) {
           ) : stagedMappings.length === 0 ? (
             <div className="bg-white border border-gray-200 rounded-xl p-10 text-center">
               <div className="text-3xl mb-3">🔄</div>
-              <p className="font-medium text-gray-700 mb-1">No transformed data available</p>
+              <p className="font-medium text-gray-700 mb-1">No mappings yet</p>
               <p className="text-sm text-gray-500 max-w-sm mx-auto">
-                Save transformations on the Transform page, then click{' '}
-                <strong>Continue to Validation</strong> to generate the staged data.
+                Complete the <strong>Mapping</strong> step first to see how your source data maps to the target schema.
               </p>
             </div>
           ) : (
@@ -238,7 +240,12 @@ export default function DataPreview({ projectId, tables }: DataPreviewProps) {
                 </select>
                 {selectedMapping && (
                   <span className="text-xs text-gray-400">
-                    {selectedMapping.rowCount.toLocaleString()} rows staged
+                    {selectedMapping.rowCount.toLocaleString()} rows
+                    {selectedMapping.isStaged ? (
+                      <span className="ml-1 text-green-600 font-medium">· staged</span>
+                    ) : (
+                      <span className="ml-1 text-gray-400">· passthrough</span>
+                    )}
                   </span>
                 )}
               </div>
@@ -255,6 +262,7 @@ export default function DataPreview({ projectId, tables }: DataPreviewProps) {
                 pageSize={PAGE_SIZE}
                 label="Transformed Data Preview"
                 badge="Target format"
+                stagedFields={stagedFields}
               />
             </>
           )}
@@ -278,6 +286,7 @@ function DataTable({
   pageSize,
   label,
   badge,
+  stagedFields,
 }: {
   columns: string[]
   rows: Record<string, unknown>[]
@@ -290,11 +299,26 @@ function DataTable({
   pageSize: number
   label: string
   badge?: string
+  /** When provided, columns IN this set have been transformed; others are source passthrough */
+  stagedFields?: string[]
 }) {
+  // Only show differentiation when some (but not all) fields are staged
+  const stagedSet = stagedFields ? new Set(stagedFields) : null
+  const showDiff = stagedSet !== null && stagedSet.size > 0 && stagedSet.size < columns.length
+
   return (
     <div className="bg-white border border-gray-200 rounded-xl overflow-hidden">
       <div className="px-5 py-3 border-b border-gray-100 flex items-center justify-between">
-        <span className="text-sm font-semibold text-gray-900">{label}</span>
+        <div className="flex items-center gap-2">
+          <span className="text-sm font-semibold text-gray-900">{label}</span>
+          {showDiff && (
+            <span className="text-xs text-gray-400 font-normal">
+              <span className="text-green-600 font-medium">{stagedSet!.size} transformed</span>
+              {' · '}
+              {columns.length - stagedSet!.size} passthrough
+            </span>
+          )}
+        </div>
         <div className="flex items-center gap-2">
           {badge && (
             <span className="text-xs font-medium px-2 py-0.5 bg-violet-100 text-violet-700 rounded-full">
@@ -319,28 +343,47 @@ function DataTable({
             <table className="w-full text-sm">
               <thead className="bg-gray-50 border-b border-gray-100">
                 <tr>
-                  {columns.map((col) => (
-                    <th
-                      key={col}
-                      className="text-left px-4 py-3 text-xs font-semibold text-gray-700 whitespace-nowrap"
-                    >
-                      {col}
-                    </th>
-                  ))}
+                  {columns.map((col) => {
+                    const isTransformed = stagedSet ? stagedSet.has(col) : true
+                    return (
+                      <th
+                        key={col}
+                        className={`text-left px-4 py-3 text-xs font-semibold whitespace-nowrap ${
+                          showDiff && !isTransformed
+                            ? 'text-gray-400'
+                            : 'text-gray-700'
+                        }`}
+                        title={showDiff ? (isTransformed ? 'Transform applied' : 'Source passthrough — not yet transformed') : undefined}
+                      >
+                        {col}
+                        {showDiff && isTransformed && (
+                          <span className="ml-1 inline-block w-1.5 h-1.5 rounded-full bg-green-400 align-middle" />
+                        )}
+                      </th>
+                    )
+                  })}
                 </tr>
               </thead>
               <tbody>
                 {rows.map((row, i) => (
                   <tr key={i} className="border-b border-gray-100 last:border-b-0 hover:bg-gray-50">
-                    {columns.map((col) => (
-                      <td key={col} className="px-4 py-2.5 text-gray-700 text-xs whitespace-nowrap max-w-[200px] truncate">
-                        {row[col] == null ? (
-                          <span className="text-gray-300 italic">null</span>
-                        ) : (
-                          String(row[col])
-                        )}
-                      </td>
-                    ))}
+                    {columns.map((col) => {
+                      const isTransformed = stagedSet ? stagedSet.has(col) : true
+                      return (
+                        <td
+                          key={col}
+                          className={`px-4 py-2.5 text-xs whitespace-nowrap max-w-[200px] truncate ${
+                            showDiff && !isTransformed ? 'text-gray-400' : 'text-gray-700'
+                          }`}
+                        >
+                          {row[col] == null ? (
+                            <span className="text-gray-300 italic">null</span>
+                          ) : (
+                            String(row[col])
+                          )}
+                        </td>
+                      )
+                    })}
                   </tr>
                 ))}
               </tbody>

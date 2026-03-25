@@ -14,6 +14,7 @@ export interface FieldData {
   is_foreign_key: boolean
   fk_reference: string | null
   ordinal_position: number
+  schema_source: 'inferred' | 'doc_enriched' | 'manual'
 }
 
 export interface TableData {
@@ -98,7 +99,7 @@ export async function getProjectSchema(projectId: string): Promise<ProjectSchema
 
   const { data: fields } = await supabase
     .from('fields')
-    .select('id, table_id, name, data_type, inferred_type, is_nullable, is_primary_key, is_foreign_key, fk_reference, ordinal_position')
+    .select('id, table_id, name, data_type, inferred_type, is_nullable, is_primary_key, is_foreign_key, fk_reference, ordinal_position, schema_source')
     .in('table_id', tableIds)
     .order('ordinal_position', { ascending: true })
 
@@ -115,6 +116,7 @@ export async function getProjectSchema(projectId: string): Promise<ProjectSchema
       is_foreign_key: f.is_foreign_key,
       fk_reference: f.fk_reference,
       ordinal_position: f.ordinal_position,
+      schema_source: (f.schema_source as 'inferred' | 'doc_enriched' | 'manual') ?? 'inferred',
     })
     fieldsByTable.set(f.table_id, list)
   }

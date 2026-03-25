@@ -188,11 +188,9 @@ function RotateCcwIcon({ className }: { className?: string }) {
 
 function IssueCard({
   issue,
-  tableRole,
   onUpdate,
 }: {
   issue: QualityIssue
-  tableRole?: 'source' | 'target'
   onUpdate: (updated: QualityIssue) => void
 }) {
   const [generatingFix, startGenerating] = useTransition()
@@ -369,15 +367,15 @@ function IssueCard({
                     Auto
                   </span>
                 )}
-                {/* Source / Target system badge */}
-                {tableRole === 'source' && (
+                {/* Stage badge — derived from issue.stage */}
+                {issue.stage === 'source' && (
                   <span className="px-1.5 py-0.5 rounded text-[10px] bg-blue-50 text-blue-700 border border-blue-200">
                     Source
                   </span>
                 )}
-                {tableRole === 'target' && (
+                {(issue.stage === 'in_flight' || issue.stage === 'target') && (
                   <span className="px-1.5 py-0.5 rounded text-[10px] bg-purple-50 text-purple-700 border border-purple-200">
-                    Target
+                    Target-Ready
                   </span>
                 )}
               </div>
@@ -1261,9 +1259,6 @@ export default function DataQualityContent({
   const [issues, setIssues] = useState<QualityIssue[]>(initialIssues)
   const [readiness, setReadiness] = useState<ReadinessScore>(initialReadiness)
   const [rules, setRules] = useState<ValidationRule[]>(initialRules)
-  const [activeTab, setActiveTab] = useState<'source' | 'in_flight' | 'target'>(
-    hasMappings ? 'in_flight' : 'source'
-  )
   const [scanning, startScan] = useTransition()
   const [isRestaging, startRestaging] = useTransition()
   const [showAddRule, setShowAddRule] = useState(false)
@@ -1274,24 +1269,54 @@ export default function DataQualityContent({
   const [stagingToast, setStagingToast] = useState<string | null>(null)
   const issueRefs = useRef<Record<string, HTMLDivElement>>({})
 
-  const sourceIssues = issues.filter(i => i.stage === 'source')
-  const inFlightIssues = issues.filter(i => i.stage === 'in_flight')
-  const activeIssues = activeTab === 'source' ? sourceIssues : activeTab === 'in_flight' ? inFlightIssues : []
+  // ── Filter state ─────────────────────────────────────────────────────────
+  const [filterStage, setFilterStage] = useState<'all' | 'source' | 'target_ready'>('all')
+  const [filterSeverity, setFilterSeverity] = useState<'all' | 'blocking' | 'warning'>('all')
+  const [filterTableId, setFilterTableId] = useState<string>('all')
+  const [filterStatus, setFilterStatus] = useState<'all' | 'open' | 'fixed' | 'accepted_risk'>('open')
 
-  // Build a map from table_id → 'source' | 'target' for the badge on each issue card
-  const tableRoleMap = new Map<string, 'source' | 'target'>(
-    allDatasets.flatMap(ds =>
-      ds.tables.map(t => [t.id, ds.role as 'source' | 'target'])
-    )
+  // ── Derived data ─────────────────────────────────────────────────────────
+
+  function isTargetReady(stage: string) {
+    return stage === 'in_flight' || stage === 'target'
+  }
+
+  // Tables that appear in issues (for Table filter dropdown)
+  const tableNameById = new Map<string, string>(
+    allDatasets.flatMap(ds => ds.tables.map(t => [t.id, t.name]))
   )
+  const tablesWithIssues = [...new Set(issues.filter(i => i.table_id).map(i => i.table_id!))]
+    .map(id => ({ id, name: tableNameById.get(id) ?? id }))
+    .sort((a, b) => a.name.localeCompare(b.name))
 
-  const openActive = activeIssues.filter(i => i.status === 'open')
-  const blockingCount = openActive.filter(i => i.severity === 'blocking').length
-  const warningCount = openActive.filter(i => i.severity === 'warning').length
+  // Stage breakdown for the readiness dashboard (always all open issues)
+  const openIssues = issues.filter(i => i.status === 'open')
+  const sourceOpen = openIssues.filter(i => i.stage === 'source')
+  const targetReadyOpen = openIssues.filter(i => isTargetReady(i.stage))
+  const sourceBlocking = sourceOpen.filter(i => i.severity === 'blocking').length
+  const sourceWarning = sourceOpen.filter(i => i.severity === 'warning').length
+  const targetBlocking = targetReadyOpen.filter(i => i.severity === 'blocking').length
+  const targetWarning = targetReadyOpen.filter(i => i.severity === 'warning').length
 
-  // Fields with zero open issues = "ready" (rough count)
-  const fieldsWithOpenIssues = new Set(openActive.filter(i => i.field_id).map(i => i.field_id))
-  const readyCount = Math.max(0, readiness.total_fields_checked - fieldsWithOpenIssues.size)
+  // Filtered issues for the list
+  const filteredIssues = issues.filter(issue => {
+    if (filterStage === 'source' && issue.stage !== 'source') return false
+    if (filterStage === 'target_ready' && !isTargetReady(issue.stage)) return false
+    if (filterSeverity !== 'all' && issue.severity !== filterSeverity) return false
+    if (filterTableId !== 'all' && issue.table_id !== filterTableId) return false
+    if (filterStatus !== 'all' && issue.status !== filterStatus) return false
+    return true
+  })
+
+  const hasActiveFilters =
+    filterStage !== 'all' || filterSeverity !== 'all' || filterTableId !== 'all' || filterStatus !== 'open'
+
+  function resetFilters() {
+    setFilterStage('all')
+    setFilterSeverity('all')
+    setFilterTableId('all')
+    setFilterStatus('open')
+  }
 
   function showToast(msg: string) {
     setScanToast(msg)
@@ -1315,7 +1340,6 @@ export default function DataQualityContent({
 
   async function handleIssueUpdate(updated: QualityIssue) {
     setIssues(prev => prev.map(i => i.id === updated.id ? updated : i))
-    // Refresh readiness score
     const newScore = await computeReadinessScore(projectId)
     setReadiness(newScore)
   }
@@ -1328,7 +1352,6 @@ export default function DataQualityContent({
         setScanError(res.error ?? 'Scan failed')
         return
       }
-      // Refresh issues + readiness
       const [freshIssues, freshScore] = await Promise.all([
         getQualityIssues(projectId),
         computeReadinessScore(projectId),
@@ -1339,17 +1362,11 @@ export default function DataQualityContent({
     })
   }
 
-  function scrollToIssue(issueId: string, stage: 'source' | 'in_flight') {
-    setActiveTab(stage)
+  function scrollToIssue(issueId: string) {
+    setFilterStatus('open')
     setTimeout(() => {
       issueRefs.current[issueId]?.scrollIntoView({ behavior: 'smooth', block: 'center' })
     }, 100)
-  }
-
-  const tabLabels = {
-    source: `Source Data${sourceIssues.filter(i => i.status === 'open').length > 0 ? ` (${sourceIssues.filter(i => i.status === 'open').length})` : ''}`,
-    in_flight: `In-flight Data${inFlightIssues.filter(i => i.status === 'open').length > 0 ? ` (${inFlightIssues.filter(i => i.status === 'open').length})` : ''}`,
-    target: 'Target Data',
   }
 
   return (
@@ -1369,7 +1386,6 @@ export default function DataQualityContent({
           allDatasets={allDatasets}
           onClose={() => setShowCreateFix(false)}
           onApplied={async () => {
-            // Refresh fix history is handled by reopening the panel
             showToast('Manual fix applied — view it in Fix History')
           }}
         />
@@ -1380,7 +1396,7 @@ export default function DataQualityContent({
         <div className="flex items-start justify-between">
           <div>
             <h1 className="text-2xl font-semibold text-gray-900">Validate</h1>
-            <p className="text-sm text-gray-500 mt-0.5">Continuous data quality monitoring and validation</p>
+            <p className="text-sm text-gray-500 mt-0.5">Data quality monitoring and migration readiness</p>
           </div>
           <div className="flex items-center gap-2">
             <button
@@ -1405,7 +1421,7 @@ export default function DataQualityContent({
               onClick={handleRegenerateStagedData}
               disabled={isRestaging || scanning}
               className="px-3 py-1.5 text-sm border border-violet-300 rounded-lg text-violet-700 hover:bg-violet-50 disabled:opacity-50 flex items-center gap-1.5"
-              title="Re-apply saved transformations to generate fresh staged data for in-flight validation"
+              title="Re-apply saved transformations to generate fresh staged data for target-ready validation"
             >
               {isRestaging ? (
                 <><span className="w-3 h-3 border-2 border-violet-400/30 border-t-violet-600 rounded-full animate-spin" />Staging…</>
@@ -1418,7 +1434,7 @@ export default function DataQualityContent({
               disabled={scanning || isRestaging}
               className="px-4 py-1.5 text-sm bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 disabled:opacity-50 flex items-center gap-2"
             >
-              {scanning ? <><span className="w-3.5 h-3.5 border-2 border-white/30 border-t-white rounded-full animate-spin" />Scanning…</> : '⟳ Run Full Scan'}
+              {scanning ? <><span className="w-3.5 h-3.5 border-2 border-white/30 border-t-white rounded-full animate-spin" />Scanning…</> : '⊙ Run Full Scan'}
             </button>
           </div>
         </div>
@@ -1439,55 +1455,81 @@ export default function DataQualityContent({
           )}
 
           {/* ── Migration Readiness Dashboard ── */}
-          <div className="bg-white rounded-xl border border-gray-200 shadow-sm p-5">
-            <div className="flex flex-col md:flex-row gap-6">
-              {/* Left: Gauge */}
-              <div className="flex flex-col items-center justify-center min-w-[160px]">
+          <div className="bg-white rounded-xl border border-gray-200 shadow-sm px-6 py-5">
+            <div className="flex items-center gap-8">
+              {/* Left: Gauge — hero metric */}
+              <div className="flex flex-col items-center justify-center shrink-0">
                 <ReadinessGauge score={readiness.score} status={readiness.status} />
               </div>
 
-              {/* Center: Stat cards */}
-              <div className="flex-1 grid grid-cols-3 gap-3">
-                <div className="rounded-lg border border-red-100 bg-red-50 p-3 text-center">
-                  <p className="text-xs text-gray-500 mb-1">Blocking Issues</p>
-                  <p className="text-3xl font-bold text-red-600">{readiness.blocking_count}</p>
-                  <p className="text-xs text-gray-400 mt-1">Must fix before migration</p>
-                </div>
-                <div className="rounded-lg border border-amber-100 bg-amber-50 p-3 text-center">
-                  <p className="text-xs text-gray-500 mb-1">Warnings</p>
-                  <p className="text-3xl font-bold text-amber-600">{readiness.warning_count}</p>
-                  <p className="text-xs text-gray-400 mt-1">Review recommended</p>
-                </div>
-                <div className="rounded-lg border border-green-100 bg-green-50 p-3 text-center">
-                  <p className="text-xs text-gray-500 mb-1">Ready</p>
-                  <p className="text-3xl font-bold text-green-600">{readiness.ready_field_count}</p>
-                  <p className="text-xs text-gray-400 mt-1">No issues detected</p>
-                </div>
-              </div>
-
-              {/* Right: Top issues */}
-              {readiness.top_issues.length > 0 && (
-                <div className="min-w-[220px] max-w-[280px]">
-                  <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-2">Top Issues</p>
-                  <div className="space-y-1.5">
-                    {readiness.top_issues.slice(0, 4).map(issue => (
-                      <button
-                        key={issue.id}
-                        onClick={() => scrollToIssue(issue.id, issue.stage === 'source' ? 'source' : 'in_flight')}
-                        className="w-full text-left flex items-start gap-2 text-xs p-2 rounded-lg hover:bg-gray-50 border border-gray-100 transition-colors"
-                      >
-                        <span className={issue.severity === 'blocking' ? 'text-red-500 shrink-0 mt-0.5' : 'text-amber-500 shrink-0 mt-0.5'}>
-                          {issue.severity === 'blocking' ? '⊘' : '△'}
-                        </span>
-                        <div className="min-w-0">
-                          <p className="font-medium text-gray-900 truncate">{issue.title}</p>
-                          <p className="text-gray-400 truncate">{issue.affected_records.toLocaleString()} records</p>
-                        </div>
-                      </button>
-                    ))}
+              {/* Right: Compact stat list */}
+              <div className="flex-1 min-w-0">
+                <div className="space-y-3">
+                  <div className="flex items-baseline gap-3">
+                    <span className="text-3xl font-bold text-red-600 tabular-nums w-10 text-right shrink-0">
+                      {readiness.blocking_count}
+                    </span>
+                    <div>
+                      <p className="text-sm font-semibold text-gray-800">Blocking</p>
+                      <p className="text-xs text-gray-400">Must fix before migration</p>
+                    </div>
+                  </div>
+                  <div className="flex items-baseline gap-3">
+                    <span className="text-3xl font-bold text-amber-500 tabular-nums w-10 text-right shrink-0">
+                      {readiness.warning_count}
+                    </span>
+                    <div>
+                      <p className="text-sm font-semibold text-gray-800">Warnings</p>
+                      <p className="text-xs text-gray-400">Review recommended</p>
+                    </div>
+                  </div>
+                  <div className="flex items-baseline gap-3">
+                    <span className="text-3xl font-bold text-green-600 tabular-nums w-10 text-right shrink-0">
+                      {readiness.ready_field_count}
+                    </span>
+                    <div>
+                      <p className="text-sm font-semibold text-gray-800">Ready</p>
+                      <p className="text-xs text-gray-400">No issues detected</p>
+                    </div>
                   </div>
                 </div>
-              )}
+
+                {/* Per-stage breakdown */}
+                <div className="mt-4 pt-3 border-t border-gray-100 flex flex-wrap gap-x-6 gap-y-1 text-xs text-gray-500">
+                  <div className="flex items-center gap-1.5">
+                    <span className="w-1.5 h-1.5 rounded-full bg-blue-400 shrink-0" />
+                    <span>
+                      <span className="font-medium text-gray-600">Source:</span>
+                      {' '}
+                      {sourceBlocking === 0 && sourceWarning === 0 ? (
+                        <span className="text-green-600">No open issues</span>
+                      ) : (
+                        <>
+                          {sourceBlocking > 0 && <span className="text-red-500">{sourceBlocking} blocking</span>}
+                          {sourceBlocking > 0 && sourceWarning > 0 && ' · '}
+                          {sourceWarning > 0 && <span className="text-amber-500">{sourceWarning} warnings</span>}
+                        </>
+                      )}
+                    </span>
+                  </div>
+                  <div className="flex items-center gap-1.5">
+                    <span className="w-1.5 h-1.5 rounded-full bg-purple-400 shrink-0" />
+                    <span>
+                      <span className="font-medium text-gray-600">Target-Ready:</span>
+                      {' '}
+                      {targetBlocking === 0 && targetWarning === 0 ? (
+                        <span className="text-green-600">No open issues</span>
+                      ) : (
+                        <>
+                          {targetBlocking > 0 && <span className="text-red-500">{targetBlocking} blocking</span>}
+                          {targetBlocking > 0 && targetWarning > 0 && ' · '}
+                          {targetWarning > 0 && <span className="text-amber-500">{targetWarning} warnings</span>}
+                        </>
+                      )}
+                    </span>
+                  </div>
+                </div>
+              </div>
             </div>
           </div>
 
@@ -1543,118 +1585,131 @@ export default function DataQualityContent({
             </details>
           )}
 
-          {/* ── Tabs ── */}
-          <div className="bg-white rounded-xl border border-gray-200 shadow-sm">
-            {/* Tab nav */}
-            <div className="border-b border-gray-200 px-4 flex">
-              {(['source', 'in_flight', 'target'] as const).map(tab => (
-                <button
-                  key={tab}
-                  onClick={() => setActiveTab(tab)}
-                  className={`px-4 py-3 text-sm font-medium border-b-2 transition-colors ${
-                    activeTab === tab
-                      ? 'border-indigo-600 text-indigo-600'
-                      : 'border-transparent text-gray-500 hover:text-gray-700'
-                  }`}
+          {/* ── Filter Bar ── */}
+          <div className="bg-white rounded-xl border border-gray-200 shadow-sm px-4 py-3">
+            <div className="flex flex-wrap items-center gap-3">
+              {/* Stage */}
+              <div className="flex items-center gap-2">
+                <label className="text-xs font-medium text-gray-500 whitespace-nowrap">Stage</label>
+                <select
+                  value={filterStage}
+                  onChange={e => setFilterStage(e.target.value as typeof filterStage)}
+                  className="text-sm border border-gray-200 rounded-lg px-2.5 py-1.5 focus:outline-none focus:ring-2 focus:ring-indigo-500 bg-white"
                 >
-                  {tabLabels[tab]}
-                </button>
-              ))}
-            </div>
+                  <option value="all">All</option>
+                  <option value="source">Source</option>
+                  <option value="target_ready">Target-Ready</option>
+                </select>
+              </div>
 
-            <div className="p-5 space-y-5">
-              {/* Summary cards */}
-              {activeTab !== 'target' && (
-                <div className="grid grid-cols-3 gap-3">
-                  <div className="rounded-lg border p-3">
-                    <p className="text-xs text-gray-500 mb-1">Blocking Issues</p>
-                    <p className={`text-2xl font-semibold ${blockingCount > 0 ? 'text-red-600' : 'text-green-600'}`}>{blockingCount}</p>
-                  </div>
-                  <div className="rounded-lg border p-3">
-                    <p className="text-xs text-gray-500 mb-1">Warnings</p>
-                    <p className={`text-2xl font-semibold ${warningCount > 0 ? 'text-amber-600' : 'text-green-600'}`}>{warningCount}</p>
-                  </div>
-                  <div className="rounded-lg border p-3">
-                    <p className="text-xs text-gray-500 mb-1">Ready</p>
-                    <p className="text-2xl font-semibold text-green-600">{readyCount}</p>
-                  </div>
-                </div>
-              )}
+              <div className="w-px h-4 bg-gray-200" />
 
-              {/* Content */}
-              {activeTab === 'target' ? (
-                <div className="text-center py-12 opacity-60">
-                  <div className="text-4xl mb-3">🎯</div>
-                  <p className="font-semibold text-gray-700 mb-1">Target Data Validation — Coming Soon</p>
-                  <p className="text-sm text-gray-500 max-w-sm mx-auto">
-                    Post-migration validation will be available after data is loaded into the target system. This will include reconciliation counts, constraint violation detection, and ongoing drift monitoring.
-                  </p>
-                </div>
-              ) : activeTab === 'in_flight' && !hasMappings ? (
-                <div className="text-center py-10 bg-amber-50 rounded-xl border border-amber-200">
-                  <p className="font-semibold text-amber-800 mb-1">In-flight checks require mappings</p>
-                  <p className="text-sm text-amber-700 mb-4">
-                    Generate mappings in the Mapping tab first to enable target-aware validation.
-                  </p>
-                  <a
-                    href={`/app/projects/${projectId}/mapping`}
-                    className="inline-block px-4 py-2 text-sm bg-amber-600 text-white rounded-lg hover:bg-amber-700"
-                  >
-                    Go to Mapping →
-                  </a>
-                </div>
-              ) : activeTab === 'in_flight' && activeIssues.length === 0 ? (
-                <div className="space-y-3">
-                  <div className="bg-violet-50 border border-violet-200 rounded-lg px-4 py-3 text-sm text-violet-800 flex items-start gap-2">
-                    <span className="mt-0.5">ℹ</span>
-                    <span>In-flight checks validate your <strong>transformed data</strong> against target field constraints. Click <strong>↻ Regenerate Staged Data</strong> to re-apply transforms, then <strong>⟳ Run Full Scan</strong> to detect issues.</span>
-                  </div>
-                  <div className="text-center py-12 text-gray-400">
-                    <div className="text-3xl mb-2">✓</div>
-                    <p className="text-sm">No in-flight issues detected. Run a scan to check transformed data against target constraints.</p>
-                  </div>
-                </div>
-              ) : activeIssues.length === 0 ? (
-                <div className="text-center py-12 text-gray-400">
-                  <div className="text-3xl mb-2">✓</div>
-                  <p className="text-sm">No issues detected. {activeTab === 'in_flight' ? 'Run a scan to check in-flight data.' : 'Upload a CSV to trigger automatic detection.'}</p>
-                </div>
-              ) : (
-                <div className="space-y-4">
-                  {/* Section header */}
-                  <div>
-                    <h2 className="text-base font-semibold text-gray-900">
-                      {activeTab === 'source' ? 'Source System Issues' : 'In-flight Transformation Issues'}
-                    </h2>
-                    <p className="text-sm text-gray-500 mt-0.5">
-                      {activeTab === 'source'
-                        ? 'Issues detected in source data before transformation'
-                        : 'Issues detected in transformed data against target field constraints'}
-                    </p>
-                  </div>
-                  {activeTab === 'in_flight' && (
-                    <div className="bg-violet-50 border border-violet-200 rounded-lg px-4 py-2.5 text-xs text-violet-800 flex items-center gap-2">
-                      <span>ℹ</span>
-                      <span>Validating <strong>transformed data</strong>. Use <strong>↻ Regenerate Staged Data</strong> after editing transforms to refresh, then re-run the scan.</span>
-                    </div>
-                  )}
+              {/* Severity */}
+              <div className="flex items-center gap-2">
+                <label className="text-xs font-medium text-gray-500 whitespace-nowrap">Severity</label>
+                <select
+                  value={filterSeverity}
+                  onChange={e => setFilterSeverity(e.target.value as typeof filterSeverity)}
+                  className="text-sm border border-gray-200 rounded-lg px-2.5 py-1.5 focus:outline-none focus:ring-2 focus:ring-indigo-500 bg-white"
+                >
+                  <option value="all">All</option>
+                  <option value="blocking">Blocking</option>
+                  <option value="warning">Warning</option>
+                </select>
+              </div>
 
-                  {activeIssues.map(issue => (
-                    <div
-                      key={issue.id}
-                      ref={el => { if (el) issueRefs.current[issue.id] = el }}
-                    >
-                      <IssueCard
-                        issue={issue}
-                        tableRole={issue.table_id ? tableRoleMap.get(issue.table_id) : undefined}
-                        onUpdate={handleIssueUpdate}
-                      />
-                    </div>
+              <div className="w-px h-4 bg-gray-200" />
+
+              {/* Table */}
+              <div className="flex items-center gap-2">
+                <label className="text-xs font-medium text-gray-500 whitespace-nowrap">Table</label>
+                <select
+                  value={filterTableId}
+                  onChange={e => setFilterTableId(e.target.value)}
+                  className="text-sm border border-gray-200 rounded-lg px-2.5 py-1.5 focus:outline-none focus:ring-2 focus:ring-indigo-500 bg-white"
+                >
+                  <option value="all">All</option>
+                  {tablesWithIssues.map(t => (
+                    <option key={t.id} value={t.id}>{t.name}</option>
                   ))}
-                </div>
-              )}
+                </select>
+              </div>
+
+              <div className="w-px h-4 bg-gray-200" />
+
+              {/* Status */}
+              <div className="flex items-center gap-2">
+                <label className="text-xs font-medium text-gray-500 whitespace-nowrap">Status</label>
+                <select
+                  value={filterStatus}
+                  onChange={e => setFilterStatus(e.target.value as typeof filterStatus)}
+                  className="text-sm border border-gray-200 rounded-lg px-2.5 py-1.5 focus:outline-none focus:ring-2 focus:ring-indigo-500 bg-white"
+                >
+                  <option value="open">Open</option>
+                  <option value="all">All</option>
+                  <option value="fixed">Fixed</option>
+                  <option value="accepted_risk">Accepted Risk</option>
+                </select>
+              </div>
+
+              <div className="ml-auto flex items-center gap-3">
+                <span className="text-sm text-gray-500">
+                  Showing <span className="font-medium text-gray-700">{filteredIssues.length}</span> issues
+                </span>
+                {hasActiveFilters && (
+                  <button
+                    onClick={resetFilters}
+                    className="text-xs text-indigo-600 hover:text-indigo-800 hover:underline"
+                  >
+                    Reset filters
+                  </button>
+                )}
+              </div>
             </div>
           </div>
+
+          {/* ── Target-Ready empty state (contextual) ── */}
+          {filterStage === 'target_ready' && targetReadyOpen.length === 0 && (
+            <div className="bg-blue-50 border border-blue-200 rounded-xl px-4 py-4 flex items-start gap-3">
+              <span className="text-blue-500 mt-0.5 shrink-0">ℹ</span>
+              <div className="text-sm text-blue-800">
+                <p className="font-medium mb-1">No target-ready issues detected.</p>
+                <p>Target-ready checks validate your transformed data against target field constraints. Click <strong>↻ Regenerate Staged Data</strong> to apply transforms, then <strong>⊙ Run Full Scan</strong> to detect issues.</p>
+              </div>
+            </div>
+          )}
+
+          {/* ── Issue List ── */}
+          {filteredIssues.length === 0 ? (
+            <div className="bg-white rounded-xl border border-gray-200 shadow-sm p-10 text-center">
+              <div className="text-3xl mb-3">✓</div>
+              {hasActiveFilters ? (
+                <>
+                  <p className="font-medium text-gray-700 mb-1">No issues match your filters</p>
+                  <p className="text-sm text-gray-500 mb-4">Try adjusting the filters above to see more results.</p>
+                  <button
+                    onClick={resetFilters}
+                    className="px-4 py-2 text-sm border border-gray-300 rounded-lg text-gray-600 hover:bg-gray-50"
+                  >
+                    Reset filters
+                  </button>
+                </>
+              ) : (
+                <p className="text-sm text-gray-500">No issues detected. Upload a CSV and run a scan to check data quality.</p>
+              )}
+            </div>
+          ) : (
+            <div className="space-y-4">
+              {filteredIssues.map(issue => (
+                <div
+                  key={issue.id}
+                  ref={el => { if (el) issueRefs.current[issue.id] = el }}
+                >
+                  <IssueCard issue={issue} onUpdate={handleIssueUpdate} />
+                </div>
+              ))}
+            </div>
+          )}
 
           {/* Proceed to Mapping CTA */}
           <div className="flex justify-end pb-4">

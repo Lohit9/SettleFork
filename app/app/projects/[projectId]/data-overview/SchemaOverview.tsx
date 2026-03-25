@@ -5,6 +5,7 @@ import { useRouter } from 'next/navigation'
 import { ChevronDown, ChevronRight, Upload, Check, Pencil } from '@/components/icons'
 import { updateField } from '@/lib/actions/fields'
 import { generateMappings } from '@/lib/actions/mappings'
+import { enrichSchemaFromDocs } from '@/lib/actions/schema-enrichment'
 import type { DatasetSchemaData, FieldData } from '@/lib/actions/data-overview'
 
 interface SchemaOverviewProps {
@@ -171,6 +172,45 @@ function FieldEditModal({
 
 // ─── Schema Panel ─────────────────────────────────────────────────────────────
 
+// ── Schema source badge ───────────────────────────────────────────────────────
+
+function SchemaSourceBadge({ source }: { source: FieldData['schema_source'] }) {
+  if (source === 'doc_enriched') {
+    return (
+      <span
+        title="Schema verified against uploaded documentation"
+        className="inline-flex items-center gap-0.5 px-1 py-0.5 rounded text-[10px] font-medium bg-emerald-50 text-emerald-700 border border-emerald-200"
+      >
+        <svg width="9" height="9" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" className="inline">
+          <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
+          <polyline points="14 2 14 8 20 8" />
+          <line x1="16" y1="13" x2="8" y2="13" />
+          <line x1="16" y1="17" x2="8" y2="17" />
+          <polyline points="10 9 9 9 8 9" />
+        </svg>
+        Verified
+      </span>
+    )
+  }
+  if (source === 'manual') {
+    return (
+      <span
+        title="Manually edited"
+        className="inline-flex items-center gap-0.5 px-1 py-0.5 rounded text-[10px] font-medium bg-violet-50 text-violet-700 border border-violet-200"
+      >
+        <svg width="9" height="9" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" className="inline">
+          <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7" />
+          <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z" />
+        </svg>
+        Manual
+      </span>
+    )
+  }
+  return null
+}
+
+// ── Schema Panel ──────────────────────────────────────────────────────────────
+
 function SchemaPanel({
   title,
   datasets,
@@ -192,11 +232,13 @@ function SchemaPanel({
   const totalTables = allTableIds.length
   const selectedCount = allTableIds.filter((id) => selectedTables.has(id)).length
 
-  // Expanded state per table
   const [expanded, setExpanded] = useState<Set<string>>(new Set())
-  // Per-field local overrides (optimistic updates from edits)
   const [fieldOverrides, setFieldOverrides] = useState<Map<string, FieldData>>(new Map())
   const [editingField, setEditingField] = useState<FieldData | null>(null)
+
+  // Per-table enrichment state
+  const [enrichingTableId, setEnrichingTableId] = useState<string | null>(null)
+  const [enrichToast, setEnrichToast] = useState<{ tableId: string; msg: string } | null>(null)
 
   function toggle(tableId: string) {
     setExpanded((prev) => {
@@ -207,7 +249,26 @@ function SchemaPanel({
   }
 
   function handleFieldSaved(updated: FieldData) {
-    setFieldOverrides((prev) => new Map(prev).set(updated.id, updated))
+    setFieldOverrides((prev) => new Map(prev).set(updated.id, { ...updated, schema_source: 'manual' }))
+  }
+
+  async function handleReanalyze(datasetId: string, tableId: string) {
+    setEnrichingTableId(tableId)
+    setEnrichToast(null)
+    try {
+      const result = await enrichSchemaFromDocs(datasetId, tableId)
+      if (!result.success) {
+        setEnrichToast({ tableId, msg: result.error ?? 'Enrichment failed' })
+      } else if (result.correctedFields === 0) {
+        setEnrichToast({ tableId, msg: 'No corrections found — schema matches documentation.' })
+      } else {
+        setEnrichToast({ tableId, msg: `✓ ${result.correctedFields} field${result.correctedFields !== 1 ? 's' : ''} corrected from documentation. Refresh to see updates.` })
+      }
+    } catch {
+      setEnrichToast({ tableId, msg: 'Re-analysis failed. Please try again.' })
+    }
+    setEnrichingTableId(null)
+    setTimeout(() => setEnrichToast(null), 5000)
   }
 
   return (
@@ -262,6 +323,14 @@ function SchemaPanel({
               {ds.tables.map((table) => {
                 const isExpanded = expanded.has(table.id)
                 const isSelected = selectedTables.has(table.id)
+                const isEnriching = enrichingTableId === table.id
+                const toast = enrichToast?.tableId === table.id ? enrichToast.msg : null
+
+                // Count enrichment coverage for this table
+                const enrichedCount = table.fields.filter(
+                  (f) => (fieldOverrides.get(f.id) ?? f).schema_source !== 'inferred'
+                ).length
+
                 return (
                   <div key={table.id} className="border-b border-gray-100 last:border-b-0">
                     {/* Table row */}
@@ -274,7 +343,7 @@ function SchemaPanel({
                       />
                       <button
                         onClick={() => toggle(table.id)}
-                        className="flex items-center gap-2 flex-1 text-left"
+                        className="flex items-center gap-2 flex-1 text-left min-w-0"
                       >
                         {isExpanded ? (
                           <ChevronDown className="w-4 h-4 text-gray-400 flex-shrink-0" />
@@ -282,9 +351,38 @@ function SchemaPanel({
                           <ChevronRight className="w-4 h-4 text-gray-400 flex-shrink-0" />
                         )}
                         <span className="text-sm font-medium text-gray-900">{table.name}</span>
-                        <span className="ml-auto text-xs text-gray-500">{table.fields.length} fields</span>
+                        <span className="ml-auto text-xs text-gray-500 shrink-0">{table.fields.length} fields</span>
+                        {enrichedCount > 0 && (
+                          <span className="text-xs text-emerald-600 font-medium shrink-0">
+                            {enrichedCount} verified
+                          </span>
+                        )}
+                      </button>
+                      {/* Re-analyze button */}
+                      <button
+                        onClick={() => handleReanalyze(ds.id, table.id)}
+                        disabled={isEnriching}
+                        title="Re-analyze schema against uploaded documentation"
+                        className="shrink-0 flex items-center gap-1 text-xs text-gray-400 hover:text-indigo-600 hover:bg-indigo-50 rounded px-1.5 py-1 transition-colors disabled:opacity-40"
+                      >
+                        {isEnriching ? (
+                          <span className="w-3 h-3 border-2 border-indigo-300 border-t-indigo-600 rounded-full animate-spin" />
+                        ) : (
+                          <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                            <path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8" />
+                            <path d="M3 3v5h5" />
+                          </svg>
+                        )}
+                        {isEnriching ? 'Analyzing…' : 'Re-analyze'}
                       </button>
                     </div>
+
+                    {/* Toast for this table */}
+                    {toast && (
+                      <div className={`mx-5 mb-2 px-3 py-2 rounded-lg text-xs border ${toast.startsWith('✓') ? 'bg-emerald-50 border-emerald-200 text-emerald-700' : 'bg-amber-50 border-amber-200 text-amber-700'}`}>
+                        {toast}
+                      </div>
+                    )}
 
                     {/* Expanded fields */}
                     {isExpanded && (
@@ -296,6 +394,7 @@ function SchemaPanel({
                               <th className="text-left px-3 py-2 text-gray-500 font-medium">Type</th>
                               <th className="text-center px-3 py-2 text-gray-500 font-medium">Nullable</th>
                               <th className="text-center px-3 py-2 text-gray-500 font-medium">Key</th>
+                              <th className="text-left px-3 py-2 text-gray-500 font-medium">Source</th>
                               <th className="w-6" />
                             </tr>
                           </thead>
@@ -321,6 +420,9 @@ function SchemaPanel({
                                     ) : (
                                       <span className="text-gray-300">—</span>
                                     )}
+                                  </td>
+                                  <td className="px-3 py-2">
+                                    <SchemaSourceBadge source={f.schema_source ?? 'inferred'} />
                                   </td>
                                   <td className="pr-3">
                                     <button

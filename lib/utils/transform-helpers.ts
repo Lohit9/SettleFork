@@ -8,6 +8,8 @@ export function fieldNeedsTransform(params: {
   sourceFieldName: string
   targetFieldName: string
   hasTransformation: boolean
+  /** From field_mappings.needs_transformation when set by mapping generation */
+  needsTransformation?: boolean | null
 }): boolean {
   const {
     typeCompatibility,
@@ -17,16 +19,39 @@ export function fieldNeedsTransform(params: {
     sourceFieldName,
     targetFieldName,
     hasTransformation,
+    needsTransformation,
   } = params
 
+  // 1. If a transformation already exists, always show the badge
   if (hasTransformation) return true
+
+  // 2. If Claude explicitly assessed this field, trust its judgment
+  if (needsTransformation === true) return true
+  if (needsTransformation === false) return false
+
+  // 3. Fallback heuristic (manually created mappings or suggestRemainingMappings where needs_transformation is null)
+
   if (confidence !== null && confidence < 75) return true
 
   const compat = (typeCompatibility ?? '').toLowerCase()
-  if (/needs|truncat|convers|mapping|hash|transform|convert/.test(compat))
+  // Check for explicit "no conversion needed" signal first
+  if (/direct compatible|no conversion needed|compatible.?no/.test(compat)) return false
+  // Check for transformation signals
+  if (/needs|truncat|convers|mapping|hash|transform|convert|strip|normalize|reformat|parse/.test(compat))
     return true
 
-  if (sourceDataType !== targetDataType) return true
+  // Normalize types for comparison — don't flag text vs varchar mismatches
+  const normalizeType = (t: string): string =>
+    t
+      .toLowerCase()
+      .replace(/varchar\(\d+\)/g, 'varchar')
+      .replace(/character varying(\(\d+\))?/g, 'varchar')
+      .replace(/^text$/g, 'varchar')
+      .replace(/decimal\(\d+,?\d*\)/g, 'decimal')
+      .replace(/numeric\(\d+,?\d*\)/g, 'decimal')
+      .trim()
+
+  if (normalizeType(sourceDataType) !== normalizeType(targetDataType)) return true
 
   const srcUp = sourceFieldName.toUpperCase()
   const tgtUp = targetFieldName.toUpperCase()

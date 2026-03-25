@@ -37,10 +37,10 @@ export async function updateField(
 
   if (!field) throw new Error('Field not found')
 
-  // RLS already enforces ownership, but this is an explicit check
+  // Mark as manually edited — manual takes precedence over doc_enriched or inferred
   const { data: updated, error } = await supabase
     .from('fields')
-    .update(updates)
+    .update({ ...updates, schema_source: 'manual' })
     .eq('id', fieldId)
     .select()
     .single()
