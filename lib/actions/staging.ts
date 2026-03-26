@@ -389,7 +389,7 @@ export async function checkStagingFreshness(tableMappingId: string): Promise<{
     .eq('id', tableMappingId)
     .maybeSingle()
 
-  const sourceTable = tm?.source_table as { data_modified_at: string | null } | null
+  const sourceTable = tm?.source_table as unknown as { data_modified_at: string | null } | null
   const sourceModifiedAt = sourceTable?.data_modified_at ?? null
   const stagedAt = latestStaged.staged_at as string | null
 
@@ -442,7 +442,7 @@ export async function checkProjectStaleness(projectId: string): Promise<{
 
   const staleTableMappingIds: string[] = []
   for (const tm of tms) {
-    const srcTable = tm.source_table as { data_modified_at: string | null } | null
+    const srcTable = tm.source_table as unknown as { data_modified_at: string | null } | null
     const modifiedAt = srcTable?.data_modified_at
     const stagedAt = latestStagedAt.get(tm.id)
     if (modifiedAt && stagedAt && new Date(modifiedAt) > new Date(stagedAt)) {
