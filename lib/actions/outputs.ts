@@ -28,7 +28,7 @@ export interface OutputsMetrics {
   totalSourceFields: number
   openBlocking: number
   openWarnings: number
-  savedTransforms: number
+  completedTransforms: number
   totalTransforms: number
 }
 
@@ -185,10 +185,10 @@ export async function getOutputsPageData(projectId: string): Promise<OutputsPage
       targetTableCount: 0,
       totalSourceRows: 0,
       phases: { dataIngestion: 'incomplete', dataQuality: 'gray', mapping: 'red', transformations: 'gray', validation: 'red', completedCount: 0 },
-      metrics: { readinessScore: 0, readinessStatus: 'not_ready', approvedFieldMappings: 0, totalSourceFields: 0, openBlocking: 0, openWarnings: 0, savedTransforms: 0, totalTransforms: 0 },
+      metrics: { readinessScore: 0, readinessStatus: 'not_ready', approvedFieldMappings: 0, totalSourceFields: 0, openBlocking: 0, openWarnings: 0, completedTransforms: 0, totalTransforms: 0 },
       decisions: [],
       totalDecisions: 0,
-      outstanding: { unmappedSourceFields: 0, blockingIssues: 0, untestedTransforms: 0, unsavedTransforms: 0 },
+      outstanding: { unmappedSourceFields: 0, blockingIssues: 0, fieldsNeedingTransformWork: 0, untestedTransforms: 0, testedTransforms: 0 },
       existingOutputs: [],
       hasMappings: false,
       hasSourceData: false,
