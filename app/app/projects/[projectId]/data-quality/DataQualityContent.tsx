@@ -3,7 +3,7 @@
 import { useState, useEffect, useTransition, useRef } from 'react'
 import { useRouter } from 'next/navigation'
 import type { QualityIssue, FixOption, ReadinessScore, ValidationRule, FixHistory } from '@/lib/types/database'
-import { applyFix, acceptRisk, revertFix, runFullScan, getQualityIssues, getFixHistory } from '@/lib/actions/quality-fixes'
+import { applyFix, acceptRisk, revertFix, runFullScan, getQualityIssues, getFixHistory, markIssueFixed } from '@/lib/actions/quality-fixes'
 import { generateFixSuggestions } from '@/lib/quality/fix-engine'
 import { addValidationRule, addValidationRuleFromNL, executeCustomRules, deleteValidationRule } from '@/lib/actions/validation-rules'
 import { generateManualFix, applyManualFix, previewManualFix } from '@/lib/actions/manual-fix'
@@ -37,6 +37,12 @@ interface Props {
   initialRules: ValidationRule[]
   hasMappings: boolean
   allDatasets: DatasetStub[]
+  /** Pre-set filter values from URL search params (deep-links from Transform/staging warning popup) */
+  initialFilterTableId?: string
+  initialFilterFieldId?: string
+  initialFilterSeverity?: string
+  initialFilterStatus?: string
+  initialFilterStage?: string
 }
 
 // ── Small helpers ─────────────────────────────────────────────────────────────
@@ -204,6 +210,23 @@ function IssueCard({
   const [acceptingRisk, setAcceptingRisk] = useState(false)
   const [riskReason, setRiskReason] = useState('')
   const [showAcceptModal, setShowAcceptModal] = useState(false)
+  const [showCustomFix, setShowCustomFix] = useState(false)
+  const [fixDetails, setFixDetails] = useState<FixHistory | null>(null)
+
+  // When a fixed or accepted-risk issue is rendered, fetch the most recent
+  // fix_history entry so we can show the "Fix Applied" / "Risk Accepted" summary.
+  useEffect(() => {
+    if (issue.status === 'fixed' || issue.status === 'accepted_risk') {
+      getFixHistory(issue.project_id).then((history) => {
+        const latest = history.find(
+          (h) => h.quality_issue_id === issue.id && h.status === 'applied'
+        )
+        setFixDetails(latest ?? null)
+      })
+    } else {
+      setFixDetails(null)
+    }
+  }, [issue.status, issue.id, issue.project_id])
 
   function showToast(msg: string) {
     setToast(msg)
@@ -286,6 +309,18 @@ function IssueCard({
   return (
     <>
       {showSQL && <SQLModal sql={showSQL} onClose={() => setShowSQL(null)} />}
+      {showCustomFix && (
+        <IssueFixModal
+          issue={issue}
+          projectId={issue.project_id}
+          onClose={() => setShowCustomFix(false)}
+          onFixApplied={(updated, rowsAffected) => {
+            setShowCustomFix(false)
+            onUpdate(updated)
+            showToast(`✓ Fix applied to ${rowsAffected?.toLocaleString() ?? ''} records`)
+          }}
+        />
+      )}
       {confirmApply && (
         <ConfirmModal
           title={`Apply fix: ${confirmApply.fix.label}`}
@@ -329,7 +364,13 @@ function IssueCard({
         </div>
       )}
 
-      <div className={`rounded-xl border bg-white shadow-sm transition-opacity ${isFixed || isAccepted ? 'opacity-70' : ''}`}>
+      <div className={`rounded-xl border shadow-sm overflow-hidden ${
+        isFixed
+          ? 'bg-green-50/50 border-green-200 border-l-[3px] border-l-green-400'
+          : isAccepted
+          ? 'bg-amber-50/30 border-amber-200 border-l-[3px] border-l-amber-300'
+          : 'bg-white'
+      }`}>
         {/* Card Header */}
         <div className="p-4 pb-2">
           <div className="flex items-start gap-3">
@@ -410,6 +451,51 @@ function IssueCard({
           </div>
         </div>
 
+        {/* Fix Applied Summary — shown when status === 'fixed' */}
+        {isFixed && fixDetails && (
+          <div className="mx-4 mb-4 bg-green-50 border border-green-200 rounded-lg p-3">
+            <div className="flex items-center gap-2 mb-1">
+              <svg className="w-4 h-4 text-green-600 shrink-0" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" d="M9 12.75L11.25 15 15 9.75M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+              </svg>
+              <span className="text-sm font-medium text-green-800">Fix Applied</span>
+            </div>
+            <p className="text-sm text-green-700 ml-6">{fixDetails.fix_description}</p>
+            <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5 ml-6 mt-1.5 text-xs text-green-600">
+              <span>{fixDetails.affected_row_count.toLocaleString()} rows affected</span>
+              <span>·</span>
+              <span>Applied {new Date(fixDetails.applied_at).toLocaleString()}</span>
+              {fixDetails.fix_sql && fixDetails.fix_sql !== '-- Risk accepted, no SQL executed' && (
+                <>
+                  <span>·</span>
+                  <button
+                    onClick={() => setShowSQL(fixDetails.fix_sql)}
+                    className="text-green-700 hover:text-green-900 underline"
+                  >
+                    View SQL
+                  </button>
+                </>
+              )}
+            </div>
+          </div>
+        )}
+
+        {/* Risk Accepted Summary — shown when status === 'accepted_risk' */}
+        {isAccepted && fixDetails && (
+          <div className="mx-4 mb-4 bg-amber-50 border border-amber-200 rounded-lg p-3">
+            <div className="flex items-center gap-2 mb-1">
+              <svg className="w-4 h-4 text-amber-600 shrink-0" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" d="M12 9v3.75m-9.303 3.376c-.866 1.5.217 3.374 1.948 3.374h14.71c1.73 0 2.813-1.874 1.948-3.374L13.949 3.378c-.866-1.5-3.032-1.5-3.898 0L2.697 16.126zM12 15.75h.007v.008H12v-.008z" />
+              </svg>
+              <span className="text-sm font-medium text-amber-800">Risk Accepted</span>
+            </div>
+            <p className="text-sm text-amber-700 ml-6">{fixDetails.fix_description}</p>
+            <p className="text-xs text-amber-500 ml-6 mt-1">
+              Accepted {new Date(fixDetails.applied_at).toLocaleString()}
+            </p>
+          </div>
+        )}
+
         {/* AI Fix Section */}
         {!isFixed && !isAccepted && (
           <div className="mx-4 mb-4 rounded-lg bg-gradient-to-br from-indigo-50 to-blue-50 border border-indigo-200 p-4">
@@ -422,17 +508,25 @@ function IssueCard({
             )}
 
             {!hasOptions ? (
-              <button
-                onClick={handleGenerateFix}
-                disabled={generatingFix}
-                className="flex items-center gap-2 px-4 py-2 text-sm border border-indigo-400 text-indigo-700 rounded-lg hover:bg-indigo-100 disabled:opacity-50 transition-colors"
-              >
-                {generatingFix ? (
-                  <><span className="w-3.5 h-3.5 border-2 border-indigo-300 border-t-indigo-600 rounded-full animate-spin" />Generating suggestions…</>
-                ) : (
-                  <>✦ Generate Fix Suggestions</>
-                )}
-              </button>
+              <div className="flex items-center gap-2 flex-wrap">
+                <button
+                  onClick={handleGenerateFix}
+                  disabled={generatingFix}
+                  className="flex items-center gap-2 px-4 py-2 text-sm border border-indigo-400 text-indigo-700 rounded-lg hover:bg-indigo-100 disabled:opacity-50 transition-colors"
+                >
+                  {generatingFix ? (
+                    <><span className="w-3.5 h-3.5 border-2 border-indigo-300 border-t-indigo-600 rounded-full animate-spin" />Generating suggestions…</>
+                  ) : (
+                    <>✦ Generate Fix Suggestions</>
+                  )}
+                </button>
+                <button
+                  onClick={() => setShowCustomFix(true)}
+                  className="flex items-center gap-1.5 px-4 py-2 text-sm border border-gray-300 text-gray-700 rounded-lg hover:bg-gray-50 transition-colors"
+                >
+                  ✎ Custom Fix
+                </button>
+              </div>
             ) : (
               <div className="space-y-3">
                 {(issue.ai_fix_options ?? []).map((opt, idx) => (
@@ -469,7 +563,13 @@ function IssueCard({
                     </div>
                   </div>
                 ))}
-                <div className="pt-1 border-t border-indigo-100">
+                <div className="pt-1 border-t border-indigo-100 flex items-center justify-between gap-3">
+                  <button
+                    onClick={() => setShowCustomFix(true)}
+                    className="flex items-center gap-1.5 px-3 py-1.5 text-sm border border-gray-300 text-gray-700 rounded-lg hover:bg-gray-50 transition-colors"
+                  >
+                    ✎ Write a Custom Fix
+                  </button>
                   <button
                     onClick={() => setShowAcceptModal(true)}
                     className="text-sm text-gray-500 hover:text-gray-700 underline"
@@ -833,9 +933,11 @@ function AddRuleModal({
 function FixHistoryPanel({
   projectId,
   onClose,
+  onIssueReverted,
 }: {
   projectId: string
   onClose: () => void
+  onIssueReverted?: (qualityIssueId: string | null) => void
 }) {
   const [history, setHistory] = useState<FixHistory[]>([])
   const [loading, setLoading] = useState(true)
@@ -854,7 +956,9 @@ function FixHistoryPanel({
     const res = await revertFix(id)
     setRevertingId(null)
     if (res.success) {
+      const revertedEntry = history.find(e => e.id === id)
       setHistory(h => h.map(e => e.id === id ? { ...e, status: 'reverted' } : e))
+      onIssueReverted?.(revertedEntry?.quality_issue_id ?? null)
     } else {
       setRevertError(res.error ?? 'Revert failed')
     }
@@ -1249,6 +1353,300 @@ function CreateManualFixModal({
   )
 }
 
+// ── Issue Fix Modal ───────────────────────────────────────────────────────────
+// Pre-populated custom fix modal for a specific quality issue. Mirrors
+// CreateManualFixModal but skips the table/field selectors (already known from
+// the issue) and marks the linked quality_issue as fixed after applying.
+
+function IssueFixModal({
+  issue,
+  projectId,
+  onClose,
+  onFixApplied,
+}: {
+  issue: QualityIssue
+  projectId: string
+  onClose: () => void
+  onFixApplied: (updated: QualityIssue, rowsAffected?: number) => void
+}) {
+  const [mode, setMode] = useState<'nl' | 'sql'>('nl')
+  const [nlDescription, setNlDescription] = useState('')
+  const [generatedSql, setGeneratedSql] = useState('')
+  const [sqlText, setSqlText] = useState('')
+  const [isGenerating, setIsGenerating] = useState(false)
+  const [isApplying, setIsApplying] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+  const [requiresSnapshot, setRequiresSnapshot] = useState(false)
+
+  const tableId = issue.table_id ?? ''
+  const fieldId = issue.field_id ?? null
+
+  function handleAISuggest() {
+    const desc = issue.description.toLowerCase()
+    const field = issue.title.split('.').pop() ?? 'field'
+    const count = issue.affected_records
+
+    let suggestion = `Fix ${count} records with ${issue.description.toLowerCase()}`
+    if (desc.includes('null') || desc.includes('missing')) {
+      suggestion = `Set null ${field} values to a sensible default or remove the ${count} affected rows`
+    } else if (desc.includes('orphan') || desc.includes('referential')) {
+      suggestion = `Delete the ${count} orphaned records that reference non-existent parent records`
+    } else if (desc.includes('duplicate')) {
+      suggestion = `Deduplicate records by keeping the most recent entry for each duplicate ${field}`
+    } else if (desc.includes('format') || desc.includes('invalid')) {
+      suggestion = `Standardize the ${count} ${field} values to match the expected format`
+    }
+    setNlDescription(suggestion)
+  }
+
+  async function handleGenerateSQL() {
+    setError(null)
+    setGeneratedSql('')
+    setIsGenerating(true)
+    try {
+      const result = await generateManualFix(projectId, tableId, fieldId, nlDescription, {
+        title: issue.title,
+        description: issue.description,
+        severity: issue.severity,
+        affectedRecords: issue.affected_records,
+      })
+      if ('error' in result && result.error) {
+        setError(result.error)
+      } else {
+        setGeneratedSql(result.sql)
+      }
+    } finally {
+      setIsGenerating(false)
+    }
+  }
+
+  async function handleApply(skipSnapshot = false) {
+    setError(null)
+    setIsApplying(true)
+    setRequiresSnapshot(false)
+    try {
+      const sql = mode === 'nl' ? generatedSql : sqlText
+      const desc =
+        mode === 'nl' && nlDescription.trim()
+          ? nlDescription
+          : `Custom SQL fix for ${issue.title}`
+
+      const result = await applyManualFix(projectId, tableId, sql, desc, skipSnapshot)
+
+      if (result.requiresSnapshotConfirmation) {
+        setRequiresSnapshot(true)
+        setIsApplying(false)
+        return
+      }
+
+      if (!result.success) {
+        setError(result.error ?? 'Fix failed')
+        return
+      }
+
+      // Mark the linked quality issue as fixed and link the fix_history row
+      await markIssueFixed(issue.id, result.fixHistoryId)
+
+      onFixApplied({ ...issue, status: 'fixed' }, result.rowsAffected)
+    } finally {
+      setIsApplying(false)
+    }
+  }
+
+  const canApply = mode === 'nl' ? !!generatedSql : !!sqlText.trim()
+
+  return (
+    <>
+      {requiresSnapshot && (
+        <ConfirmModal
+          title="Fix is not reversible"
+          message="This fix uses complex SQL that cannot be fully snapshotted. If you apply it, you will NOT be able to revert it automatically. Apply without snapshot?"
+          confirmLabel="Apply Without Snapshot"
+          loading={isApplying}
+          onConfirm={() => handleApply(true)}
+          onCancel={() => setRequiresSnapshot(false)}
+        />
+      )}
+      <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
+        <div className="bg-white rounded-xl shadow-2xl w-full max-w-xl max-h-[90vh] flex flex-col">
+          {/* Header */}
+          <div className="flex items-center justify-between p-4 border-b shrink-0">
+            <h3 className="font-semibold text-gray-900">Fix Issue</h3>
+            <button
+              onClick={onClose}
+              className="text-gray-400 hover:text-gray-600 text-xl leading-none"
+            >
+              ×
+            </button>
+          </div>
+
+          {/* Scrollable body */}
+          <div className="flex-1 overflow-y-auto p-4 space-y-4">
+            {/* Issue summary (read-only) */}
+            <div className="bg-gray-50 rounded-lg p-3 border border-gray-200">
+              <div className="flex flex-wrap items-center gap-2 mb-1">
+                <span className="font-medium text-sm text-gray-900">{issue.title}</span>
+                {issue.severity === 'blocking' ? (
+                  <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-red-100 text-red-800 border border-red-200">
+                    <span>⊘</span> Blocking
+                  </span>
+                ) : (
+                  <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-amber-100 text-amber-800 border border-amber-200">
+                    <span>△</span> Warning
+                  </span>
+                )}
+                {issue.stage === 'source' && (
+                  <span className="px-1.5 py-0.5 rounded text-[10px] bg-blue-50 text-blue-700 border border-blue-200">
+                    Source
+                  </span>
+                )}
+                {(issue.stage === 'in_flight' || issue.stage === 'target') && (
+                  <span className="px-1.5 py-0.5 rounded text-[10px] bg-purple-50 text-purple-700 border border-purple-200">
+                    Target-Ready
+                  </span>
+                )}
+              </div>
+              <p className="text-sm text-gray-600">{issue.description}</p>
+              <p className="text-xs text-gray-400 mt-1">
+                Affected records: {issue.affected_records.toLocaleString()}
+              </p>
+            </div>
+
+            {/* Mode toggle */}
+            <div className="flex gap-1 bg-gray-100 rounded-lg p-1">
+              <button
+                onClick={() => setMode('nl')}
+                className={`flex-1 py-1.5 px-3 rounded-md text-sm font-medium transition-colors ${
+                  mode === 'nl'
+                    ? 'bg-white text-gray-900 shadow-sm'
+                    : 'text-gray-500 hover:text-gray-700'
+                }`}
+              >
+                ✦ Natural Language
+              </button>
+              <button
+                onClick={() => setMode('sql')}
+                className={`flex-1 py-1.5 px-3 rounded-md text-sm font-medium transition-colors ${
+                  mode === 'sql'
+                    ? 'bg-white text-gray-900 shadow-sm'
+                    : 'text-gray-500 hover:text-gray-700'
+                }`}
+              >
+                SQL Editor
+              </button>
+            </div>
+
+            {/* NL mode */}
+            {mode === 'nl' && (
+              <>
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">
+                    Describe your fix
+                  </label>
+                  <textarea
+                    value={nlDescription}
+                    onChange={(e) => setNlDescription(e.target.value)}
+                    className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm resize-none focus:ring-2 focus:ring-indigo-500 focus:border-transparent"
+                    rows={3}
+                    placeholder={`e.g., "Delete the ${issue.affected_records} orphaned records" or "Set null values to a default"`}
+                  />
+                </div>
+
+                <div className="flex items-center gap-2 flex-wrap">
+                  <button
+                    onClick={handleAISuggest}
+                    className="px-3 py-1.5 text-sm text-gray-600 hover:text-gray-900 border border-gray-200 rounded-lg flex items-center gap-1.5 hover:bg-gray-50"
+                  >
+                    ✦ AI Suggest
+                  </button>
+                  <button
+                    onClick={handleGenerateSQL}
+                    disabled={!nlDescription.trim() || isGenerating}
+                    className="px-4 py-1.5 text-sm bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 disabled:opacity-50"
+                  >
+                    {isGenerating ? 'Generating…' : 'Generate SQL'}
+                  </button>
+                  {nlDescription && (
+                    <button
+                      onClick={() => {
+                        setNlDescription('')
+                        setGeneratedSql('')
+                      }}
+                      className="text-sm text-gray-400 hover:text-gray-600"
+                    >
+                      Clear
+                    </button>
+                  )}
+                </div>
+
+                {generatedSql && (
+                  <div className="bg-gray-900 rounded-lg p-3">
+                    <div className="flex justify-between items-center mb-2">
+                      <span className="text-xs text-gray-400">Generated SQL</span>
+                      <button
+                        onClick={() => {
+                          setSqlText(generatedSql)
+                          setMode('sql')
+                        }}
+                        className="text-xs text-indigo-400 hover:text-indigo-300"
+                      >
+                        Edit SQL →
+                      </button>
+                    </div>
+                    <pre className="text-sm text-green-400 font-mono whitespace-pre-wrap overflow-x-auto">
+                      {generatedSql}
+                    </pre>
+                  </div>
+                )}
+              </>
+            )}
+
+            {/* SQL mode */}
+            {mode === 'sql' && (
+              <>
+                <textarea
+                  value={sqlText}
+                  onChange={(e) => setSqlText(e.target.value)}
+                  className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm font-mono resize-none bg-gray-50 focus:ring-2 focus:ring-indigo-500"
+                  rows={7}
+                  placeholder={`UPDATE data_rows\nSET row_data = ...\nWHERE table_id = '${tableId}'\nAND ...`}
+                />
+              </>
+            )}
+
+            {error && (
+              <div className="bg-red-50 border border-red-200 rounded-lg p-3 text-sm text-red-700">
+                {error}
+              </div>
+            )}
+
+          </div>
+
+          {/* Footer */}
+          <div className="p-4 border-t shrink-0 flex justify-end gap-2">
+            <button
+              onClick={onClose}
+              className="px-4 py-2 text-sm border border-gray-300 rounded-lg hover:bg-gray-50"
+            >
+              Cancel
+            </button>
+            <button
+              onClick={() => handleApply()}
+              disabled={isApplying || !canApply}
+              className="px-4 py-2 text-sm bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 disabled:opacity-50 flex items-center gap-2"
+            >
+              {isApplying && (
+                <span className="w-3.5 h-3.5 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+              )}
+              {isApplying ? 'Applying…' : 'Apply Fix'}
+            </button>
+          </div>
+        </div>
+      </div>
+    </>
+  )
+}
+
 // ── Main Component ────────────────────────────────────────────────────────────
 
 export default function DataQualityContent({
@@ -1258,6 +1656,11 @@ export default function DataQualityContent({
   initialRules,
   hasMappings,
   allDatasets,
+  initialFilterTableId,
+  initialFilterFieldId,
+  initialFilterSeverity,
+  initialFilterStatus,
+  initialFilterStage,
 }: Props) {
   const router = useRouter()
   const [issues, setIssues] = useState<QualityIssue[]>(initialIssues)
@@ -1269,15 +1672,35 @@ export default function DataQualityContent({
   const [showHistory, setShowHistory] = useState(false)
   const [showCreateFix, setShowCreateFix] = useState(false)
   const [scanError, setScanError] = useState<string | null>(null)
+  const [scanWarnings, setScanWarnings] = useState<string[]>([])
   const [scanToast, setScanToast] = useState<string | null>(null)
   const [stagingToast, setStagingToast] = useState<string | null>(null)
+  // Shown after a fix is applied to remind the user staged data is now outdated
+  const [fixAppliedNote, setFixAppliedNote] = useState(false)
   const issueRefs = useRef<Record<string, HTMLDivElement>>({})
 
-  // ── Filter state ─────────────────────────────────────────────────────────
-  const [filterStage, setFilterStage] = useState<'all' | 'source' | 'target_ready'>('all')
-  const [filterSeverity, setFilterSeverity] = useState<'all' | 'blocking' | 'warning'>('all')
-  const [filterTableId, setFilterTableId] = useState<string>('all')
-  const [filterStatus, setFilterStatus] = useState<'all' | 'open' | 'fixed' | 'accepted_risk'>('open')
+  // ── Filter state — initialized from URL search params when deep-linking ──
+  const validStages = ['all', 'source', 'target_ready'] as const
+  const validSeverities = ['all', 'blocking', 'warning'] as const
+  const validStatuses = ['all', 'open', 'fixed', 'accepted_risk'] as const
+
+  const [filterStage, setFilterStage] = useState<'all' | 'source' | 'target_ready'>(
+    validStages.includes(initialFilterStage as 'all' | 'source' | 'target_ready')
+      ? (initialFilterStage as 'all' | 'source' | 'target_ready')
+      : 'all'
+  )
+  const [filterSeverity, setFilterSeverity] = useState<'all' | 'blocking' | 'warning'>(
+    validSeverities.includes(initialFilterSeverity as 'all' | 'blocking' | 'warning')
+      ? (initialFilterSeverity as 'all' | 'blocking' | 'warning')
+      : 'all'
+  )
+  const [filterTableId, setFilterTableId] = useState<string>(initialFilterTableId ?? 'all')
+  const [filterFieldId, setFilterFieldId] = useState<string>(initialFilterFieldId ?? 'all')
+  const [filterStatus, setFilterStatus] = useState<'all' | 'open' | 'fixed' | 'accepted_risk'>(
+    validStatuses.includes(initialFilterStatus as 'all' | 'open' | 'fixed' | 'accepted_risk')
+      ? (initialFilterStatus as 'all' | 'open' | 'fixed' | 'accepted_risk')
+      : 'open'
+  )
 
   // ── Derived data ─────────────────────────────────────────────────────────
 
@@ -1302,23 +1725,35 @@ export default function DataQualityContent({
   const targetBlocking = targetReadyOpen.filter(i => i.severity === 'blocking').length
   const targetWarning = targetReadyOpen.filter(i => i.severity === 'warning').length
 
-  // Filtered issues for the list
-  const filteredIssues = issues.filter(issue => {
-    if (filterStage === 'source' && issue.stage !== 'source') return false
-    if (filterStage === 'target_ready' && !isTargetReady(issue.stage)) return false
-    if (filterSeverity !== 'all' && issue.severity !== filterSeverity) return false
-    if (filterTableId !== 'all' && issue.table_id !== filterTableId) return false
-    if (filterStatus !== 'all' && issue.status !== filterStatus) return false
-    return true
-  })
+  // Filtered issues for the list — open first, then fixed, then accepted_risk;
+  // within each group: blocking before warning, then by affected records descending.
+  const statusOrder: Record<string, number> = { open: 0, fixed: 1, accepted_risk: 2 }
+  const filteredIssues = issues
+    .filter(issue => {
+      if (filterStage === 'source' && issue.stage !== 'source') return false
+      if (filterStage === 'target_ready' && !isTargetReady(issue.stage)) return false
+      if (filterSeverity !== 'all' && issue.severity !== filterSeverity) return false
+      if (filterTableId !== 'all' && issue.table_id !== filterTableId) return false
+      if (filterFieldId !== 'all' && issue.field_id !== filterFieldId) return false
+      if (filterStatus !== 'all' && issue.status !== filterStatus) return false
+      return true
+    })
+    .sort((a, b) => {
+      const aOrder = statusOrder[a.status] ?? 0
+      const bOrder = statusOrder[b.status] ?? 0
+      if (aOrder !== bOrder) return aOrder - bOrder
+      if (a.severity !== b.severity) return a.severity === 'blocking' ? -1 : 1
+      return (b.affected_records ?? 0) - (a.affected_records ?? 0)
+    })
 
   const hasActiveFilters =
-    filterStage !== 'all' || filterSeverity !== 'all' || filterTableId !== 'all' || filterStatus !== 'open'
+    filterStage !== 'all' || filterSeverity !== 'all' || filterTableId !== 'all' || filterFieldId !== 'all' || filterStatus !== 'open'
 
   function resetFilters() {
     setFilterStage('all')
     setFilterSeverity('all')
     setFilterTableId('all')
+    setFilterFieldId('all')
     setFilterStatus('open')
   }
 
@@ -1334,6 +1769,7 @@ export default function DataQualityContent({
       if (result.success) {
         const total = result.tables.reduce((s, t) => s + t.rowCount, 0)
         setStagingToast(`Staged data regenerated — ${total.toLocaleString()} rows across ${result.tables.length} table(s)`)
+        setFixAppliedNote(false)
         setTimeout(() => setStagingToast(null), 4000)
       } else {
         setStagingToast(`Staging failed: ${result.error ?? 'Unknown error'}`)
@@ -1346,10 +1782,15 @@ export default function DataQualityContent({
     setIssues(prev => prev.map(i => i.id === updated.id ? updated : i))
     const newScore = await computeReadinessScore(projectId)
     setReadiness(newScore)
+    // Show stale-staging reminder when a source fix was just applied
+    if (updated.status === 'fixed' && updated.stage === 'source' && hasMappings) {
+      setFixAppliedNote(true)
+    }
   }
 
   function handleRunFullScan() {
     setScanError(null)
+    setScanWarnings([])
     startScan(async () => {
       const res = await runFullScan(projectId)
       if (!res.success) {
@@ -1362,7 +1803,17 @@ export default function DataQualityContent({
       ])
       setIssues(freshIssues.issues)
       setReadiness(freshScore)
-      showToast(`Scan complete — ${res.issueCount} open issues found`)
+      if (res.warnings && res.warnings.length > 0) {
+        setScanWarnings(res.warnings)
+      }
+      const staleNote = hasMappings
+        ? ' · Regenerate staged data for accurate target-ready validation.'
+        : ''
+      const warnNote =
+        res.warnings && res.warnings.length > 0
+          ? ` · ${res.warnings.length} warning${res.warnings.length !== 1 ? 's' : ''}`
+          : ''
+      showToast(`Scan complete — ${res.issueCount} open issues found${staleNote}${warnNote}`)
     })
   }
 
@@ -1383,7 +1834,16 @@ export default function DataQualityContent({
           onAdded={r => { setRules(prev => [r, ...prev]); setShowAddRule(false) }}
         />
       )}
-      {showHistory && <FixHistoryPanel projectId={projectId} onClose={() => setShowHistory(false)} />}
+      {showHistory && (
+        <FixHistoryPanel
+          projectId={projectId}
+          onClose={() => setShowHistory(false)}
+          onIssueReverted={async () => {
+            const { issues: fresh } = await getQualityIssues(projectId)
+            setIssues(fresh)
+          }}
+        />
+      )}
       {showCreateFix && (
         <CreateManualFixModal
           projectId={projectId}
@@ -1451,11 +1911,53 @@ export default function DataQualityContent({
           {scanError && (
             <div className="bg-red-50 border border-red-200 rounded-lg px-4 py-3 text-sm text-red-700">{scanError}</div>
           )}
+          {scanWarnings.length > 0 && (
+            <div className="bg-amber-50 border border-amber-200 rounded-lg p-4">
+              <div className="flex items-start justify-between">
+                <div>
+                  <h4 className="text-sm font-medium text-amber-800 mb-1">
+                    Scan completed with {scanWarnings.length} warning{scanWarnings.length !== 1 ? 's' : ''}
+                  </h4>
+                  <ul className="text-sm text-amber-700 space-y-1">
+                    {scanWarnings.map((w, i) => (
+                      <li key={i} className="flex items-start gap-2">
+                        <span className="text-amber-500 mt-0.5">⚠</span>
+                        <span>{w}</span>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+                <button
+                  onClick={() => setScanWarnings([])}
+                  className="text-amber-400 hover:text-amber-600 text-lg leading-none ml-4 flex-shrink-0"
+                >
+                  ×
+                </button>
+              </div>
+            </div>
+          )}
           {scanToast && (
             <div className="bg-green-50 border border-green-200 rounded-lg px-4 py-3 text-sm text-green-700">{scanToast}</div>
           )}
           {stagingToast && (
             <div className={`border rounded-lg px-4 py-3 text-sm ${stagingToast.startsWith('Staging failed') ? 'bg-red-50 border-red-200 text-red-700' : 'bg-violet-50 border-violet-200 text-violet-800'}`}>{stagingToast}</div>
+          )}
+          {fixAppliedNote && (
+            <div className="bg-amber-50 border border-amber-200 rounded-lg px-4 py-3 flex items-start gap-3">
+              <span className="text-amber-600 text-base leading-none mt-0.5 flex-shrink-0">ℹ</span>
+              <div className="flex-1 min-w-0 text-sm text-amber-800">
+                <span className="font-medium">Fix applied — staged data may now be outdated.</span>
+                {' '}Go to the <strong>Transform</strong> tab and click{' '}
+                <strong>"Stage All Data"</strong> to re-apply transforms with the fixed source data.
+              </div>
+              <button
+                onClick={() => setFixAppliedNote(false)}
+                className="text-amber-500 hover:text-amber-700 text-lg leading-none flex-shrink-0"
+                aria-label="Dismiss"
+              >
+                ×
+              </button>
+            </div>
           )}
 
           {/* ── Migration Readiness Dashboard ── */}
@@ -1664,6 +2166,28 @@ export default function DataQualityContent({
               </div>
             </div>
           </div>
+
+          {/* Resolved issues hint — visible only when viewing Open filter and resolved issues exist */}
+          {filterStatus === 'open' && (issues.filter(i => i.status === 'fixed').length > 0 || issues.filter(i => i.status === 'accepted_risk').length > 0) && (
+            <div className="flex items-center gap-1.5 text-xs text-gray-400 px-1">
+              {issues.filter(i => i.status === 'fixed').length > 0 && (
+                <span>{issues.filter(i => i.status === 'fixed').length} fixed</span>
+              )}
+              {issues.filter(i => i.status === 'fixed').length > 0 && issues.filter(i => i.status === 'accepted_risk').length > 0 && (
+                <span>·</span>
+              )}
+              {issues.filter(i => i.status === 'accepted_risk').length > 0 && (
+                <span>{issues.filter(i => i.status === 'accepted_risk').length} accepted risk</span>
+              )}
+              <span>·</span>
+              <button
+                onClick={() => setFilterStatus('all')}
+                className="text-indigo-500 hover:text-indigo-700 underline"
+              >
+                show all
+              </button>
+            </div>
+          )}
 
           {/* ── Target-Ready empty state (contextual) ── */}
           {filterStage === 'target_ready' && targetReadyOpen.length === 0 && (

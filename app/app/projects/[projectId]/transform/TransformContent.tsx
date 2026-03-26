@@ -11,6 +11,7 @@ import {
   ChevronRight,
   ArrowRight,
   AlertCircle,
+  AlertTriangle,
   CheckCircle2,
   Zap,
   Database,
@@ -28,7 +29,10 @@ import {
   suggestTransformDescription,
 } from '@/lib/actions/transformations'
 import type { TransformPageData, DatasetGroup, TableGroup, FieldItem, FullTransformTestResult } from '@/lib/actions/transformations'
-import { stageAllData } from '@/lib/actions/staging'
+import { stageAllData, getBlockingSourceIssues, getSourceIssuesForField, checkProjectStaleness } from '@/lib/actions/staging'
+import type { BlockingIssue, FieldSourceIssue } from '@/lib/actions/staging'
+import { sourcePreviewValueMatchesIssues, maxAffectedRecordsForField } from '@/lib/quality/preview-source-issue-match'
+import StagingWarningPopup from '@/components/StagingWarningPopup'
 
 // ── Types ──────────────────────────────────────────────────────────────────────
 
@@ -186,6 +190,22 @@ export default function TransformContent({ projectId, initialData }: Props) {
   const [isStaging, startStaging] = useTransition()
   const [isSuggesting, startSuggesting] = useTransition()
 
+  // Staging warning popup — shown when blocking source issues exist before staging
+  const [showStagingWarning, setShowStagingWarning] = useState(false)
+  const [stagingBlockingIssues, setStagingBlockingIssues] = useState<BlockingIssue[]>([])
+  const [stagingProceedLabel, setStagingProceedLabel] = useState('Stage All — Review Flagged Rows')
+  const [isCheckingIssues, setIsCheckingIssues] = useState(false)
+  // Stores the actual staging action to run after the user dismisses the warning
+  const pendingStagingFnRef = useRef<(() => void) | null>(null)
+  // Deep-link URL for "Fix Issues →" button in the popup
+  const fixIssuesUrlRef = useRef<string>(`/app/projects/${projectId}/data-quality?stage=source&severity=blocking&status=open`)
+
+  // Staleness — table mapping IDs where source data was changed after last staging run
+  const [staleTableMappingIds, setStaleTableMappingIds] = useState<Set<string>>(new Set())
+
+  // Open source quality issues for the currently selected field (for Data Preview flagging)
+  const [fieldSourceIssues, setFieldSourceIssues] = useState<FieldSourceIssue[]>([])
+
   // "Why transform?" collapsible (collapsed by default — it's reference info)
   const [whyExpanded, setWhyExpanded] = useState(false)
   // AI Suggest: confirm before replacing existing textarea content
@@ -203,6 +223,14 @@ export default function TransformContent({ projectId, initialData }: Props) {
   useEffect(() => { selectedMappingIdRef.current = selectedMappingId }, [selectedMappingId])
 
   const needsTransformCount = countNeedsTransform(data.datasets)
+
+  // DISABLED: Source-data staleness check — will re-enable with per-field tracking later
+  // useEffect(() => {
+  //   checkProjectStaleness(projectId).then(({ staleTableMappingIds: ids }) => {
+  //     if (ids.length > 0) setStaleTableMappingIds(new Set(ids))
+  //   }).catch(() => {})
+  // // eslint-disable-next-line react-hooks/exhaustive-deps
+  // }, [])
 
   // ── Auto-preview: debounced on sql + selectedMappingId + previewMode ────────
 
@@ -366,6 +394,11 @@ export default function TransformContent({ projectId, initialData }: Props) {
       if (!found) return
 
       const { field } = found
+
+      // Load open source issues for this field asynchronously (for preview row flagging)
+      setFieldSourceIssues([])
+      getSourceIssuesForField(projectId, field.sourceFieldId).then(setFieldSourceIssues).catch(() => {})
+
       if (field.transformation) {
         setLocalTransform({
           transformationId: field.transformation.id,
@@ -520,25 +553,76 @@ export default function TransformContent({ projectId, initialData }: Props) {
 
   // ── Apply Transform ───────────────────────────────────────────────────────
 
-  function handleApply() {
-    if (!selectedMappingId || !localTransform?.sql) return
-    if (localTransform.status !== 'tested') {
-      showToast('Run "Test Transform" first to verify all rows pass.', 'error')
-      return
-    }
+  function executeApplyTransform(fmId: string, sql: string) {
     setApplyResult(null)
-
     startApplying(async () => {
-      const result = await applyTransform(selectedMappingId, localTransform.sql)
+      const result = await applyTransform(fmId, sql)
       if (!result.success) {
         showToast(result.error ?? 'Apply failed', 'error')
         return
       }
       setLocalTransform((prev) => prev ? { ...prev, status: 'applied' } : null)
-      refreshFieldStatus(selectedMappingId, 'applied')
+      refreshFieldStatus(fmId, 'applied')
       setApplyResult({ rowsAffected: result.rowsAffected })
       showToast(`Applied to ${result.rowsAffected.toLocaleString()} rows`, 'success')
     })
+  }
+
+  async function handleApply() {
+    if (!selectedMappingId || !localTransform?.sql) return
+    if (localTransform.status !== 'tested') {
+      showToast('Run "Test Transform" first to verify all rows pass.', 'error')
+      return
+    }
+
+    // Check for blocking issues scoped to THIS specific source field (+ table-level issues)
+    const sourceTableId = selectedContext?.table.sourceTableId
+    const sourceFieldId = selectedContext?.field.sourceFieldId
+    setIsCheckingIssues(true)
+    try {
+      const issues = await getBlockingSourceIssues(
+        projectId,
+        sourceTableId ? [sourceTableId] : undefined,
+        sourceFieldId   // field-scoped: only show issues for this field
+      )
+      if (issues.length > 0) {
+        setStagingBlockingIssues(issues)
+        setStagingProceedLabel('Apply Anyway — Review Flagged Rows')
+        // Build deep-link: filter Validate tab to this table's blocking issues
+        const tableId = issues[0]?.table_id
+        const params = new URLSearchParams({ stage: 'source', severity: 'blocking', status: 'open' })
+        if (tableId) params.set('tableId', tableId)
+        fixIssuesUrlRef.current = `/app/projects/${projectId}/data-quality?${params.toString()}`
+        const capturedFmId = selectedMappingId
+        const capturedSql = localTransform.sql
+        pendingStagingFnRef.current = () => executeApplyTransform(capturedFmId, capturedSql)
+        setShowStagingWarning(true)
+        return
+      }
+    } finally {
+      setIsCheckingIssues(false)
+    }
+    executeApplyTransform(selectedMappingId, localTransform.sql)
+  }
+
+  // ── Staging warning popup actions ─────────────────────────────────────────
+
+  function handleWarningProceed() {
+    setShowStagingWarning(false)
+    const fn = pendingStagingFnRef.current
+    pendingStagingFnRef.current = null
+    fn?.()
+  }
+
+  function handleWarningFixIssues() {
+    setShowStagingWarning(false)
+    pendingStagingFnRef.current = null
+    router.push(fixIssuesUrlRef.current)
+  }
+
+  function handleWarningCancel() {
+    setShowStagingWarning(false)
+    pendingStagingFnRef.current = null
   }
 
   // ── Auto-Generate All ─────────────────────────────────────────────────────
@@ -559,8 +643,7 @@ export default function TransformContent({ projectId, initialData }: Props) {
 
   // ── Stage All Data ────────────────────────────────────────────────────────
 
-  function handleStageAll() {
-    setStagingError(null)
+  function executeStageAll() {
     startStaging(async () => {
       const result = await stageAllData(projectId)
       if (!result.success && result.error) {
@@ -569,12 +652,42 @@ export default function TransformContent({ projectId, initialData }: Props) {
         return
       }
       const totalRows = result.tables.reduce((s, t) => s + t.rowCount, 0)
+      const flaggedRows = result.tables.reduce((s, t) => s + t.flaggedRows, 0)
+      const flagMsg = flaggedRows > 0 ? ` · ${flaggedRows.toLocaleString()} row${flaggedRows !== 1 ? 's' : ''} flagged` : ''
       showToast(
-        `Staged ${totalRows.toLocaleString()} rows across ${result.tables.length} table${result.tables.length !== 1 ? 's' : ''}`,
+        `Staged ${totalRows.toLocaleString()} rows across ${result.tables.length} table${result.tables.length !== 1 ? 's' : ''}${flagMsg}`,
         'success'
       )
+      setStaleTableMappingIds(new Set())
       router.refresh()
     })
+  }
+
+  async function handleStageAll() {
+    setStagingError(null)
+    // Collect all source table IDs to check for blocking issues
+    const allSourceTableIds = data.datasets.flatMap((ds) =>
+      ds.tables.map((t) => t.sourceTableId)
+    )
+    setIsCheckingIssues(true)
+    try {
+      const issues = await getBlockingSourceIssues(projectId, allSourceTableIds)
+      if (issues.length > 0) {
+        setStagingBlockingIssues(issues)
+        setStagingProceedLabel('Stage All — Review Flagged Rows')
+        // Build deep-link: single table → include tableId, multiple → omit
+        const uniqueTableIds = [...new Set(issues.map((i) => i.table_id).filter(Boolean))]
+        const params = new URLSearchParams({ stage: 'source', severity: 'blocking', status: 'open' })
+        if (uniqueTableIds.length === 1 && uniqueTableIds[0]) params.set('tableId', uniqueTableIds[0])
+        fixIssuesUrlRef.current = `/app/projects/${projectId}/data-quality?${params.toString()}`
+        pendingStagingFnRef.current = () => executeStageAll()
+        setShowStagingWarning(true)
+        return
+      }
+    } finally {
+      setIsCheckingIssues(false)
+    }
+    executeStageAll()
   }
 
   // ── Refresh field state helpers ───────────────────────────────────────────
@@ -740,10 +853,15 @@ export default function TransformContent({ projectId, initialData }: Props) {
             size="sm"
             className="bg-[#4F46E5] hover:bg-[#4338CA] text-white gap-2"
             onClick={handleStageAll}
-            disabled={isStaging || isAutoGen}
+            disabled={isStaging || isAutoGen || isCheckingIssues}
           >
             <Database className="w-3 h-3" />
-            {isStaging ? (
+            {isCheckingIssues ? (
+              <span className="flex items-center gap-1.5">
+                <span className="w-3 h-3 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+                Checking…
+              </span>
+            ) : isStaging ? (
               <span className="flex items-center gap-1.5">
                 <span className="w-3 h-3 border-2 border-white/30 border-t-white rounded-full animate-spin" />
                 Staging data…
@@ -752,6 +870,23 @@ export default function TransformContent({ projectId, initialData }: Props) {
           </Button>
         </div>
       </div>
+
+      {/* DISABLED: Source-data staleness banner — will re-enable later */}
+      {/* {staleTableMappingIds.size > 0 && (
+        <div className="bg-amber-50 border-b border-amber-200 px-6 py-2.5 flex items-center justify-between flex-shrink-0">
+          <p className="text-sm text-amber-800">
+            <span className="font-semibold">⚠ Source data was modified since transforms were last staged.</span>
+            {' '}Click "Stage All Data" to refresh the staged results.
+          </p>
+          <button
+            onClick={() => setStaleTableMappingIds(new Set())}
+            className="text-amber-500 hover:text-amber-700 text-lg leading-none ml-4 flex-shrink-0"
+            aria-label="Dismiss"
+          >
+            ×
+          </button>
+        </div>
+      )} */}
 
       {/* ── Body: sidebar + split panel ────────────────────────────────────── */}
       <div className="flex-1 flex overflow-hidden">
@@ -771,6 +906,7 @@ export default function TransformContent({ projectId, initialData }: Props) {
                   expanded={expandedDatasets.has(ds.datasetId)}
                   expandedTables={expandedTables}
                   selectedMappingId={selectedMappingId}
+                  staleTableMappingIds={staleTableMappingIds}
                   onToggleDataset={(id) => setExpandedDatasets((prev) => {
                     const next = new Set(prev); next.has(id) ? next.delete(id) : next.add(id); return next
                   })}
@@ -1003,12 +1139,45 @@ export default function TransformContent({ projectId, initialData }: Props) {
               )}
 
               {/* Data Preview — source values on left, target constraints or live output on right */}
+              {(() => {
+                // Issue count from open quality_issues for this source field
+                const issueCount = maxAffectedRecordsForField(fieldSourceIssues)
+                const hasFieldIssues = fieldSourceIssues.length > 0
+
+                // Which preview rows are flagged (Sample mode only)
+                const previewIssueIndices = hasFieldIssues && previewMode === 'sample'
+                  ? new Set(previewResults.map((r, i) =>
+                      sourcePreviewValueMatchesIssues(r.before, fieldSourceIssues) ? i : -1
+                    ).filter((i) => i >= 0))
+                  : new Set<number>()
+
+                // Which static sample values are flagged (before any transform is entered)
+                const sampleIssueIndices = hasFieldIssues && previewResults.length === 0 && previewMode === 'sample'
+                  ? new Set(
+                      (selectedContext.field.sampleValues as (string | null)[])
+                        .slice(0, 10)
+                        .map((v, i) => sourcePreviewValueMatchesIssues(v, fieldSourceIssues) ? i : -1)
+                        .filter((i) => i >= 0)
+                    )
+                  : new Set<number>()
+
+                // Deep-link to Validate tab pre-filtered to this table + field
+                const validateUrl = `/app/projects/${projectId}/data-quality?stage=source&status=open` +
+                  (selectedContext.table.sourceTableId ? `&tableId=${selectedContext.table.sourceTableId}` : '') +
+                  `&fieldId=${selectedContext.field.sourceFieldId}`
+
+                return (
               <div className="border border-gray-200 rounded-lg overflow-hidden bg-white">
                 <div className="flex items-center justify-between px-4 py-3 bg-gray-50 border-b border-gray-200">
                   <div className="flex items-center gap-2">
                     <span className="text-sm font-semibold text-gray-900">Data Preview</span>
                     {previewLoading && (
                       <span className="w-3.5 h-3.5 border-2 border-indigo-500 border-t-transparent rounded-full animate-spin" />
+                    )}
+                    {hasFieldIssues && issueCount > 0 && !previewLoading && (
+                      <span className="text-xs text-amber-600">
+                        · {issueCount.toLocaleString()} rows have source issues
+                      </span>
                     )}
                     {elseIndices.size > 0 && !previewLoading && (
                       <span className="text-xs text-amber-600">
@@ -1060,43 +1229,91 @@ export default function TransformContent({ projectId, initialData }: Props) {
                   </thead>
                   <tbody>
                     {previewResults.length > 0 && !previewError ? (
-                      previewResults.map((row, i) => (
-                        <tr key={i} className="border-b border-gray-100 last:border-0 hover:bg-gray-50/50">
-                          <td className="px-4 py-2 font-mono text-xs text-gray-500 align-top">
-                            {row.before != null ? String(row.before) : <span className="italic text-gray-400">null</span>}
-                          </td>
-                          <td className="px-4 py-2 font-mono text-xs text-gray-900 align-top">
-                            <span className="flex items-center gap-1.5 flex-wrap">
-                              {row.after != null ? (
-                                <span className={row.after !== row.before ? 'text-green-700' : ''}>
-                                  {String(row.after)}
+                      previewResults.map((row, i) => {
+                        const isIssueRow = previewIssueIndices.has(i)
+                        return (
+                          <tr
+                            key={i}
+                            className={`border-b border-gray-100 last:border-0 ${
+                              isIssueRow ? 'bg-amber-50' : 'hover:bg-gray-50/50'
+                            }`}
+                          >
+                            <td className={`px-4 py-2 font-mono text-xs align-top ${isIssueRow ? 'text-red-600' : 'text-gray-500'}`}>
+                              {row.before != null ? (
+                                isIssueRow ? (
+                                  <span className="flex items-center gap-1">
+                                    <AlertTriangle className="w-3 h-3 text-red-500 flex-shrink-0" />
+                                    {String(row.before)}
+                                  </span>
+                                ) : (
+                                  String(row.before)
+                                )
+                              ) : isIssueRow ? (
+                                <span className="flex items-center gap-1">
+                                  <AlertTriangle className="w-3 h-3 text-red-500 flex-shrink-0" />
+                                  <span className="italic">null</span>
                                 </span>
                               ) : (
-                                <span className="italic text-gray-400 font-normal">null</span>
+                                <span className="italic text-gray-400">null</span>
                               )}
-                              {elseIndices.has(i) && (
-                                <span title="May hit ELSE clause — check for missing WHEN cases">
-                                  <AlertCircle className="w-3 h-3 text-amber-500 flex-shrink-0" />
+                            </td>
+                            <td className={`px-4 py-2 font-mono text-xs align-top ${isIssueRow ? 'text-red-400' : 'text-gray-900'}`}>
+                              <span className="flex items-center gap-1.5 flex-wrap">
+                                {row.after != null ? (
+                                  <span className={!isIssueRow && row.after !== row.before ? 'text-green-700' : ''}>
+                                    {String(row.after)}
+                                  </span>
+                                ) : (
+                                  <span className="italic text-gray-400 font-normal">null</span>
+                                )}
+                                {elseIndices.has(i) && (
+                                  <span title="May hit ELSE clause — check for missing WHEN cases">
+                                    <AlertCircle className="w-3 h-3 text-amber-500 flex-shrink-0" />
+                                  </span>
+                                )}
+                                {previewMode === 'distinct' && row.count != null && (
+                                  <span className="ml-auto text-gray-400 text-xs font-sans">×{row.count.toLocaleString()}</span>
+                                )}
+                              </span>
+                            </td>
+                          </tr>
+                        )
+                      })
+                    ) : (selectedContext.field.sampleValues as (string | null)[]).length > 0 ? (
+                      (selectedContext.field.sampleValues as (string | null)[]).slice(0, 10).map((v, i) => {
+                        const isIssueRow = sampleIssueIndices.has(i)
+                        return (
+                          <tr
+                            key={i}
+                            className={`border-b border-gray-100 last:border-0 ${
+                              isIssueRow ? 'bg-amber-50' : 'hover:bg-gray-50/50'
+                            }`}
+                          >
+                            <td className={`px-4 py-2 font-mono text-xs ${isIssueRow ? 'text-red-600' : 'text-gray-500'}`}>
+                              {v != null ? (
+                                isIssueRow ? (
+                                  <span className="flex items-center gap-1">
+                                    <AlertTriangle className="w-3 h-3 text-red-500 flex-shrink-0" />
+                                    {String(v)}
+                                  </span>
+                                ) : (
+                                  String(v)
+                                )
+                              ) : isIssueRow ? (
+                                <span className="flex items-center gap-1">
+                                  <AlertTriangle className="w-3 h-3 text-red-500 flex-shrink-0" />
+                                  <span className="italic">null</span>
                                 </span>
+                              ) : (
+                                <span className="italic text-gray-400">null</span>
                               )}
-                              {previewMode === 'distinct' && row.count != null && (
-                                <span className="ml-auto text-gray-400 text-xs font-sans">×{row.count.toLocaleString()}</span>
-                              )}
-                            </span>
-                          </td>
-                        </tr>
-                      ))
-                    ) : (selectedContext.field.sampleValues as string[]).length > 0 ? (
-                      (selectedContext.field.sampleValues as string[]).slice(0, 10).map((v, i) => (
-                        <tr key={i} className="border-b border-gray-100 last:border-0 hover:bg-gray-50/50">
-                          <td className="px-4 py-2 font-mono text-xs text-gray-500">
-                            {v != null ? String(v) : <span className="italic text-gray-400">null</span>}
-                          </td>
-                          <td className="px-4 py-2 text-xs text-gray-400 font-sans italic">
-                            {getTargetConstraintHint(selectedContext.field)}
-                          </td>
-                        </tr>
-                      ))
+                            </td>
+                            <td className={`px-4 py-2 text-xs font-sans italic ${isIssueRow ? 'text-red-400' : 'text-gray-400'}`}>
+                              {getTargetConstraintHint(selectedContext.field)}
+                            </td>
+                          </tr>
+                        )
+                      })
                     ) : (
                       <tr>
                         <td colSpan={2} className="px-4 py-8 text-center text-sm text-gray-400">
@@ -1107,12 +1324,31 @@ export default function TransformContent({ projectId, initialData }: Props) {
                   </tbody>
                 </table>
 
-                {!localTransform?.sql && (selectedContext.field.sampleValues as string[]).length > 0 && (
+                {/* Bottom bar — shown when there are open source issues for this field (Sample only) */}
+                {hasFieldIssues && previewMode === 'sample' ? (
+                  <div className="flex items-center justify-between px-4 py-2.5 bg-amber-50 border-t border-amber-200">
+                    <div className="flex items-center gap-2 text-xs text-amber-800">
+                      <AlertTriangle className="w-3.5 h-3.5 text-amber-600 flex-shrink-0" />
+                      <span>
+                        <strong>{issueCount > 0 ? `${issueCount.toLocaleString()} rows` : 'Some rows'}</strong>{' '}
+                        have source data issues for this field
+                      </span>
+                    </div>
+                    <button
+                      onClick={() => router.push(validateUrl)}
+                      className="text-xs text-indigo-600 hover:text-indigo-800 font-medium whitespace-nowrap"
+                    >
+                      Fix in Validate tab →
+                    </button>
+                  </div>
+                ) : !localTransform?.sql && (selectedContext.field.sampleValues as string[]).length > 0 ? (
                   <div className="px-4 py-2 bg-gray-50 border-t border-gray-100 text-xs text-gray-400">
                     Generate a transform to see how values will be converted
                   </div>
-                )}
+                ) : null}
               </div>
+                ) // end IIFE return
+              })(/* end Data Preview IIFE */)}
 
             </div>
 
@@ -1211,10 +1447,15 @@ export default function TransformContent({ projectId, initialData }: Props) {
                     <Button
                       className="bg-[#4F46E5] hover:bg-[#4338CA] text-white gap-2 flex-1 disabled:opacity-50 disabled:cursor-not-allowed"
                       onClick={handleApply}
-                      disabled={isApplying || !localTransform?.transformationId || localTransform.status !== 'tested'}
+                      disabled={isApplying || isCheckingIssues || !localTransform?.transformationId || localTransform.status !== 'tested'}
                       title={localTransform.status !== 'tested' ? 'Run "Test Transform" first' : undefined}
                     >
-                      {isApplying ? (
+                      {isCheckingIssues ? (
+                        <span className="flex items-center gap-2">
+                          <span className="w-3.5 h-3.5 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+                          Checking…
+                        </span>
+                      ) : isApplying ? (
                         <span className="flex items-center gap-2">
                           <span className="w-3.5 h-3.5 border-2 border-white/30 border-t-white rounded-full animate-spin" />
                           Applying…
@@ -1269,6 +1510,17 @@ export default function TransformContent({ projectId, initialData }: Props) {
         </div>
       </div>
 
+      {/* Staging warning popup — shown when blocking source issues exist */}
+      {showStagingWarning && (
+        <StagingWarningPopup
+          issues={stagingBlockingIssues}
+          proceedLabel={stagingProceedLabel}
+          onProceed={handleWarningProceed}
+          onFixIssues={handleWarningFixIssues}
+          onCancel={handleWarningCancel}
+        />
+      )}
+
       {/* AI Suggest — replace existing description confirmation */}
       {showReplaceConfirm && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/30">
@@ -1297,13 +1549,14 @@ export default function TransformContent({ projectId, initialData }: Props) {
 // ── DatasetNode ───────────────────────────────────────────────────────────────
 
 function DatasetNode({
-  dataset, expanded, expandedTables, selectedMappingId,
+  dataset, expanded, expandedTables, selectedMappingId, staleTableMappingIds,
   onToggleDataset, onToggleTable, onSelectField,
 }: {
   dataset: DatasetGroup
   expanded: boolean
   expandedTables: Set<string>
   selectedMappingId: string | null
+  staleTableMappingIds: Set<string>
   onToggleDataset: (id: string) => void
   onToggleTable: (id: string) => void
   onSelectField: (id: string) => void
@@ -1327,6 +1580,7 @@ function DatasetNode({
               table={tbl}
               expanded={expandedTables.has(tbl.tableMappingId)}
               selectedMappingId={selectedMappingId}
+              isTableStale={staleTableMappingIds.has(tbl.tableMappingId)}
               onToggle={() => onToggleTable(tbl.tableMappingId)}
               onSelectField={onSelectField}
             />
@@ -1340,11 +1594,12 @@ function DatasetNode({
 // ── TableNode ─────────────────────────────────────────────────────────────────
 
 function TableNode({
-  table, expanded, selectedMappingId, onToggle, onSelectField,
+  table, expanded, selectedMappingId, isTableStale, onToggle, onSelectField,
 }: {
   table: TableGroup
   expanded: boolean
   selectedMappingId: string | null
+  isTableStale: boolean
   onToggle: () => void
   onSelectField: (id: string) => void
 }) {
@@ -1408,7 +1663,9 @@ function FieldRow({ field, isSelected, onSelect }: {
             <span title="Applied to staged data"><CheckCircle2 className="w-3.5 h-3.5 text-green-500" /></span>
           )}
           {status === 'stale' && (
-            <span title="Transform edited after apply — re-apply needed"><AlertCircle className="w-3.5 h-3.5 text-yellow-500" /></span>
+            <span title="Transform edited after apply — re-apply needed">
+              <AlertCircle className="w-3.5 h-3.5 text-amber-500" />
+            </span>
           )}
           {/* Four-state badge: Transform → Saved → Tested → Transformed */}
           {status === 'applied' ? (

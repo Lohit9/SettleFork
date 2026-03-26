@@ -25,6 +25,7 @@ import {
   generateDataDictionary,
 } from '@/lib/actions/outputs'
 import type { OutputsPageData, GeneratedFile, ExistingOutput } from '@/lib/actions/outputs'
+import { updateProject } from '@/lib/actions/projects'
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -77,11 +78,12 @@ function decisionIcon(type: string) {
 
 function decisionDotColor(type: string) {
   switch (type) {
-    case 'mapping': return 'bg-indigo-500'
-    case 'fix': return 'bg-green-500'
-    case 'risk': return 'bg-yellow-500'
-    case 'transform': return 'bg-purple-500'
-    case 'rule': return 'bg-blue-500'
+    case 'fix': return 'bg-green-500'         // fixes applied/reverted
+    case 'mapping': return 'bg-indigo-500'    // mapping decisions
+    case 'transform': return 'bg-purple-500'  // transform events
+    case 'validation': return 'bg-amber-500'  // rules, risk accepted
+    case 'data': return 'bg-blue-500'         // uploads
+    case 'system': return 'bg-gray-500'       // scans, staging
     default: return 'bg-gray-400'
   }
 }
@@ -112,6 +114,7 @@ export default function OutputsContent({ projectId, initialData }: Props) {
   const [goldFormat, setGoldFormat] = useState<'csv' | 'sql'>('csv')
   const [goldFiles, setGoldFiles] = useState<GeneratedFile[]>([])
   const [isGeneratingGold, startGeneratingGold] = useTransition()
+  const [isCompleting, startCompleting] = useTransition()
   const [goldProgress, setGoldProgress] = useState<string | null>(null)
 
   // Deliverables: keyed by `type_format`
@@ -160,7 +163,7 @@ export default function OutputsContent({ projectId, initialData }: Props) {
 
       try {
         if (type === 'readiness' && format === 'report') {
-          result = await generateReadinessReport(projectId, 'markdown')
+          result = await generateReadinessReport(projectId, 'docx')
         } else if (type === 'mapping' && format === 'csv') {
           result = await generateMappingFile(projectId, 'csv')
         } else if (type === 'mapping' && format === 'json') {
@@ -215,8 +218,8 @@ export default function OutputsContent({ projectId, initialData }: Props) {
   // ── Computed values ─────────────────────────────────────────────────────
 
   const { phases, metrics, decisions, outstanding, existingOutputs } = data
-  const displayedDecisions = showAllDecisions ? decisions : decisions.slice(0, 5)
-  const hasOutstanding = outstanding.unmappedSourceFields > 0 || outstanding.blockingIssues > 0 || outstanding.untestedTransforms > 0 || outstanding.unsavedTransforms > 0
+  const displayedDecisions = showAllDecisions ? decisions : decisions.slice(0, 8)
+  const hasOutstanding = outstanding.unmappedSourceFields > 0 || outstanding.blockingIssues > 0 || outstanding.fieldsNeedingTransformWork > 0 || outstanding.untestedTransforms > 0 || outstanding.testedTransforms > 0
   const canGenerateGold = data.hasMappings && data.hasSourceData
 
   // ── Render ──────────────────────────────────────────────────────────────
@@ -255,10 +258,10 @@ export default function OutputsContent({ projectId, initialData }: Props) {
               <div className="flex items-center gap-1">
                 {[
                   { id: 'ingestion', label: 'Data Ingestion', color: phases.dataIngestion === 'complete' ? 'green' : 'gray' },
-                  { id: 'quality', label: 'Validate', color: phases.dataQuality },
                   { id: 'mapping', label: 'Mapping', color: phases.mapping },
-                  { id: 'transforms', label: 'Transforms', color: phases.transformations },
-                  { id: 'validation', label: 'Validation', color: phases.validation },
+                  { id: 'transforms', label: 'Transform', color: phases.transformations },
+                  { id: 'quality', label: 'Validate', color: phases.dataQuality },
+                  { id: 'validation', label: 'Ready', color: phases.validation },
                 ].map((phase, i, arr) => {
                   const colors = phaseColor(phase.color)
                   return (
@@ -321,13 +324,13 @@ export default function OutputsContent({ projectId, initialData }: Props) {
               {/* Transforms */}
               <div className="px-5 py-4">
                 <p className="text-xs text-gray-500 font-medium mb-1">Transforms</p>
-                <p className="text-2xl font-bold text-gray-900">{metrics.savedTransforms}<span className="text-sm font-normal text-gray-400"> / {metrics.totalTransforms}</span></p>
+                <p className="text-2xl font-bold text-gray-900">{metrics.completedTransforms}<span className="text-sm font-normal text-gray-400"> / {metrics.totalTransforms}</span></p>
                 {metrics.totalTransforms > 0 && (
                   <div className="mt-2 h-1.5 bg-gray-100 rounded-full overflow-hidden">
-                    <div className="h-full bg-purple-500 rounded-full" style={{ width: `${Math.round((metrics.savedTransforms / metrics.totalTransforms) * 100)}%` }} />
+                    <div className="h-full bg-purple-500 rounded-full" style={{ width: `${Math.round((metrics.completedTransforms / metrics.totalTransforms) * 100)}%` }} />
                   </div>
                 )}
-                <p className="text-xs text-gray-400 mt-1">{metrics.totalTransforms === 0 ? 'None needed' : 'saved'}</p>
+                <p className="text-xs text-gray-400 mt-1">{metrics.totalTransforms === 0 ? 'None needed' : 'complete'}</p>
               </div>
             </div>
 
@@ -349,7 +352,7 @@ export default function OutputsContent({ projectId, initialData }: Props) {
                     </div>
                   ))}
                 </div>
-                {decisions.length > 5 && (
+                {decisions.length > 8 && (
                   <button
                     className="mt-3 text-xs text-indigo-600 hover:text-indigo-700 font-medium"
                     onClick={() => setShowAllDecisions((v) => !v)}
@@ -388,20 +391,29 @@ export default function OutputsContent({ projectId, initialData }: Props) {
                       <a href={`/app/projects/${projectId}/data-quality`} className="text-xs text-indigo-600 hover:underline">Go to Validate →</a>
                     </div>
                   )}
-                  {outstanding.untestedTransforms > 0 && (
+                  {outstanding.fieldsNeedingTransformWork > 0 && (
                     <div className="flex items-center justify-between">
                       <div className="flex items-center gap-2">
-                        <div className="w-2 h-2 rounded-full bg-orange-400" />
-                        <span className="text-sm text-gray-700">{outstanding.untestedTransforms} untested transform{outstanding.untestedTransforms !== 1 ? 's' : ''}</span>
+                        <div className="w-2 h-2 rounded-full bg-purple-400" />
+                        <span className="text-sm text-gray-700">{outstanding.fieldsNeedingTransformWork} field{outstanding.fieldsNeedingTransformWork !== 1 ? 's' : ''} need transformation</span>
                       </div>
                       <a href={`/app/projects/${projectId}/transform`} className="text-xs text-indigo-600 hover:underline">Go to Transform →</a>
                     </div>
                   )}
-                  {outstanding.unsavedTransforms > 0 && (
+                  {outstanding.untestedTransforms > 0 && (
                     <div className="flex items-center justify-between">
                       <div className="flex items-center gap-2">
-                        <div className="w-2 h-2 rounded-full bg-purple-400" />
-                        <span className="text-sm text-gray-700">{outstanding.unsavedTransforms} unsaved transform{outstanding.unsavedTransforms !== 1 ? 's' : ''}</span>
+                        <div className="w-2 h-2 rounded-full bg-orange-400" />
+                        <span className="text-sm text-gray-700">{outstanding.untestedTransforms} transform{outstanding.untestedTransforms !== 1 ? 's' : ''} need testing</span>
+                      </div>
+                      <a href={`/app/projects/${projectId}/transform`} className="text-xs text-indigo-600 hover:underline">Go to Transform →</a>
+                    </div>
+                  )}
+                  {outstanding.testedTransforms > 0 && (
+                    <div className="flex items-center justify-between">
+                      <div className="flex items-center gap-2">
+                        <div className="w-2 h-2 rounded-full bg-blue-400" />
+                        <span className="text-sm text-gray-700">{outstanding.testedTransforms} transform{outstanding.testedTransforms !== 1 ? 's' : ''} need applying</span>
                       </div>
                       <a href={`/app/projects/${projectId}/transform`} className="text-xs text-indigo-600 hover:underline">Go to Transform →</a>
                     </div>
@@ -563,7 +575,7 @@ export default function OutputsContent({ projectId, initialData }: Props) {
               title="Migration Readiness Report"
               description="AI-generated executive summary with validation results, risk assessment, and go/no-go recommendation"
               icon="📋"
-              formats={[{ key: 'readiness_report', label: 'Download Markdown', ext: 'md' }]}
+              formats={[{ key: 'readiness_report', label: 'Download Report (.docx)', ext: 'docx' }]}
               state={deliverableMap['readiness_report']}
               isGenerating={generatingKey === 'readiness_report'}
               onGenerate={() => handleGenerateDeliverable('readiness_report')}
@@ -648,11 +660,20 @@ export default function OutputsContent({ projectId, initialData }: Props) {
           </div>
         </div>
 
-        {/* Start New Project */}
+        {/* Mark Project as Complete */}
         <div className="flex justify-center pt-2">
-          <Button variant="outline" onClick={() => router.push('/app/projects')} className="gap-2">
-            <ArrowRight className="w-4 h-4" />
-            Start New Project
+          <Button
+            onClick={() =>
+              startCompleting(async () => {
+                await updateProject(projectId, { status: 'completed' })
+                router.push('/app/projects')
+              })
+            }
+            disabled={isCompleting}
+            className="gap-2 bg-green-600 hover:bg-green-700 text-white"
+          >
+            <CheckCircle2 className="w-4 h-4" />
+            {isCompleting ? 'Completing…' : 'Mark Project as Complete'}
           </Button>
         </div>
 

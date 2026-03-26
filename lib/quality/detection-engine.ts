@@ -80,6 +80,7 @@ function makeIssue(
     title: string
     description: string
     affected_records: number
+    issue_kind?: string | null
     affected_rows_sample?: Record<string, unknown>[]
     detection_source?: QualityIssue['detection_source']
   }
@@ -93,6 +94,7 @@ function makeIssue(
     detection_source: 'auto',
     validation_rule_id: null,
     affected_rows_sample: null,
+    issue_kind: null,
     ...overrides,
   }
 }
@@ -154,6 +156,7 @@ export async function runSourceDataChecks(
             title: fieldTitle,
             description: 'Null values in primary key field',
             affected_records: Number(nullCount),
+            issue_kind: 'null_pk',
             affected_rows_sample: samples,
             detection_source: detectionSource,
           })
@@ -183,6 +186,7 @@ export async function runSourceDataChecks(
             title: fieldTitle,
             description: 'Null values in non-nullable field',
             affected_records: Number(nullCount),
+            issue_kind: 'null_required',
             affected_rows_sample: samples,
             detection_source: detectionSource,
           })
@@ -212,6 +216,7 @@ export async function runSourceDataChecks(
             title: fieldTitle,
             description: `Duplicate values in primary key field (${dupeCount} duplicate rows)`,
             affected_records: Number(dupeCount),
+            issue_kind: 'duplicate_pk',
             affected_rows_sample: samples,
             detection_source: detectionSource,
           })
@@ -237,6 +242,7 @@ export async function runSourceDataChecks(
             title: fieldTitle,
             description: `Type mismatch: ${mismatchCount} values in ${field.name} are not valid integers`,
             affected_records: Number(mismatchCount),
+            issue_kind: 'type_mismatch_integer',
             detection_source: detectionSource,
           })
         )
@@ -257,6 +263,7 @@ export async function runSourceDataChecks(
             title: fieldTitle,
             description: `Type mismatch: ${mismatchCount} values in ${field.name} are not valid numbers`,
             affected_records: Number(mismatchCount),
+            issue_kind: 'type_mismatch_numeric',
             detection_source: detectionSource,
           })
         )
@@ -280,6 +287,7 @@ export async function runSourceDataChecks(
             title: fieldTitle,
             description: `Invalid email format detected in ${invalidCount} records`,
             affected_records: Number(invalidCount),
+            issue_kind: 'email_format',
             detection_source: detectionSource,
           })
         )
@@ -300,6 +308,7 @@ export async function runSourceDataChecks(
             title: fieldTitle,
             description: `Invalid phone format detected in ${invalidCount} records`,
             affected_records: Number(invalidCount),
+            issue_kind: 'phone_format',
             detection_source: detectionSource,
           })
         )
@@ -337,6 +346,7 @@ export async function runSourceDataChecks(
                 title: fieldTitle,
                 description: `Referential integrity violation: ${orphanCount} orphaned records in ${field.name} referencing non-existent ${refTableName}.${refFieldName}`,
                 affected_records: Number(orphanCount),
+                issue_kind: 'orphaned_fk',
                 detection_source: detectionSource,
               })
             )
@@ -363,6 +373,7 @@ export async function runSourceDataChecks(
             title: fieldTitle,
             description: `High null rate (${Math.round(nullRate)}%) in ${field.name} — review if this data should be populated`,
             affected_records: Number(nullCount),
+            issue_kind: 'high_null_rate',
             detection_source: detectionSource,
           })
         )
@@ -396,6 +407,7 @@ export async function runSourceDataChecks(
             title: fieldTitle,
             description: `Non-ISO date formats detected in ${profileFormatIssues} records. Mixed formats (MM/DD/YYYY, DD-MM-YY, etc.) found — transform to ISO 8601 (YYYY-MM-DD) before loading.`,
             affected_records: profileFormatIssues,
+            issue_kind: 'non_iso_date',
             detection_source: detectionSource,
           })
         )
@@ -417,6 +429,7 @@ export async function runSourceDataChecks(
             title: fieldTitle,
             description: `Invalid date strings in ${invalidDateCount} records — values are not recognisable as any date format and will fail on load.`,
             affected_records: Number(invalidDateCount),
+            issue_kind: 'invalid_date_string',
             detection_source: detectionSource,
           })
         )
@@ -446,6 +459,7 @@ export async function runSourceDataChecks(
             title: fieldTitle,
             description: `Currency formatting detected in ${currencyFmtCount} records ($ signs or commas). Strip formatting before casting to a numeric target field.`,
             affected_records: Number(currencyFmtCount),
+            issue_kind: 'currency_format',
             detection_source: detectionSource,
           })
         )
@@ -467,6 +481,7 @@ export async function runSourceDataChecks(
             title: fieldTitle,
             description: `Negative values found in ${negativeCount} records. Revenue/amount fields typically should not contain negative values — verify these are intentional credits or adjustments.`,
             affected_records: Number(negativeCount),
+            issue_kind: 'negative_value',
             detection_source: detectionSource,
           })
         )

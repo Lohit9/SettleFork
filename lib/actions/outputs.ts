@@ -6,6 +6,7 @@ import { callClaude } from '@/lib/ai/claude'
 import { checkAIRateLimit } from '@/lib/ai/rate-limit'
 import { buildAIContext, formatDocumentsForPrompt } from '@/lib/ai/context-builder'
 import { wrapFieldRefsInJsonb } from '@/lib/utils/transform-helpers'
+import { buildReadinessDocx } from '@/lib/reports/readiness-report-docx'
 
 // ── Shared types ──────────────────────────────────────────────────────────────
 
@@ -31,18 +32,22 @@ export interface OutputsMetrics {
   totalTransforms: number
 }
 
+export type DecisionType = 'fix' | 'mapping' | 'transform' | 'validation' | 'data' | 'system'
+
 export interface DecisionEntry {
   id: string
-  type: 'mapping' | 'fix' | 'risk' | 'transform' | 'rule'
+  type: DecisionType
   label: string
   timestamp: string
+  metadata?: Record<string, unknown>
 }
 
 export interface OutstandingItems {
   unmappedSourceFields: number
   blockingIssues: number
+  fieldsNeedingTransformWork: number
   untestedTransforms: number
-  unsavedTransforms: number
+  testedTransforms: number
 }
 
 export interface ExistingOutput {
@@ -249,11 +254,19 @@ export async function getOutputsPageData(projectId: string): Promise<OutputsPage
   const allFMIds = (rawFieldMappings ?? []).map((fm) => fm.id)
   const approvedFMs = (rawFieldMappings ?? []).filter((fm) => fm.status === 'approved')
 
-  // Round 4: Transforms
-  const { data: transformRows } =
+  // Round 4: Transforms + flagged field_mapping IDs
+  const [{ data: transformRows }, { data: flaggedFMRows }] = await Promise.all([
     allFMIds.length > 0
-      ? await supabaseAdmin.from('transformations').select('id, field_mapping_id, status, description, created_at').in('field_mapping_id', allFMIds)
-      : { data: [] }
+      ? supabaseAdmin.from('transformations').select('id, field_mapping_id, status, description, created_at').in('field_mapping_id', allFMIds)
+      : Promise.resolve({ data: [] }),
+    nonRejectedTMIds.length > 0
+      ? supabaseAdmin
+          .from('field_mappings')
+          .select('id')
+          .in('table_mapping_id', nonRejectedTMIds)
+          .eq('needs_transformation', true)
+      : Promise.resolve({ data: [] }),
+  ])
 
   // ── Metrics ───────────────────────────────────────────────────────────────
 
@@ -265,9 +278,22 @@ export async function getOutputsPageData(projectId: string): Promise<OutputsPage
   const openWarnings = (qualityIssueRows ?? []).filter((q) => q.severity === 'warning' && q.status === 'open').length
 
   const allTransforms = transformRows ?? []
-  const savedTransforms = allTransforms.filter((t) => t.status === 'saved').length
-  const untestedTransforms = allTransforms.filter((t) => t.status === 'draft').length
-  const unsavedTransforms = allTransforms.filter((t) => t.status !== 'saved').length
+  // Build ID sets for precise set-math
+  const fmIdsWithTransforms = new Set(allTransforms.map((t) => t.field_mapping_id))
+  const flaggedFMIds = new Set((flaggedFMRows ?? []).map((fm) => fm.id))
+  // DENOMINATOR: flagged fields ∪ fields with a transform record (passthrough fields the user chose to transform)
+  const passthroughWithRecord = [...fmIdsWithTransforms].filter((id) => !flaggedFMIds.has(id)).length
+  const totalTransformScope = flaggedFMIds.size + passthroughWithRecord
+  // NUMERATOR: transforms fully applied to staged data
+  const completedTransforms = allTransforms.filter((t) => t.status === 'applied').length
+  // OUTSTANDING 1: flagged fields with NO transform record at all (the orange "Transform" badge fields)
+  const fieldsNeedingTransformWork = [...flaggedFMIds].filter((id) => !fmIdsWithTransforms.has(id)).length
+  // OUTSTANDING 2: transform records in draft state (SQL not yet written/saved)
+  const draftTransforms = allTransforms.filter((t) => t.status === 'draft').length
+  // OUTSTANDING 3: transforms tested but not yet applied to staged data
+  const testedTransforms = allTransforms.filter((t) => t.status === 'tested').length
+  // (untestedTransforms kept for backward compat — the old "saved" bucket — renamed to draftTransforms above)
+  const untestedTransforms = draftTransforms
 
   // Readiness score (simplified inline calculation matching readiness-score.ts)
   const requiredTargetFields = (targetFieldRows ?? []).filter((f) => !f.is_nullable)
@@ -289,7 +315,7 @@ export async function getOutputsPageData(projectId: string): Promise<OutputsPage
   const mappingPct = totalSourceFields > 0 ? (approvedFMs.length / totalSourceFields) * 100 : 0
   const mappingColor: PhaseColor = mappingPct >= 80 ? 'green' : mappingPct >= 50 ? 'yellow' : 'red'
   const transformColor: PhaseColor =
-    allTransforms.length === 0 ? 'gray' : savedTransforms === allTransforms.length ? 'green' : savedTransforms > 0 ? 'yellow' : 'red'
+    totalTransformScope === 0 ? 'gray' : completedTransforms >= totalTransformScope ? 'green' : completedTransforms > 0 ? 'yellow' : 'red'
   const validationColor: PhaseColor = readinessScore >= 80 ? 'green' : readinessScore >= 50 ? 'yellow' : 'red'
 
   const completedCount =
@@ -299,83 +325,22 @@ export async function getOutputsPageData(projectId: string): Promise<OutputsPage
     (transformColor === 'green' || transformColor === 'gray' ? 1 : 0) +
     (validationColor === 'green' ? 1 : 0)
 
-  // ── Decisions log ─────────────────────────────────────────────────────────
+  // ── Decisions log — single query from activity_log ─────────────────────────
 
-  // Mapping decisions: need field names
-  const decisionFMIds = approvedFMs.slice(0, 20)
-  const decisionFieldIds = [
-    ...decisionFMIds.map((fm) => fm.source_field_id),
-    ...decisionFMIds.map((fm) => fm.target_field_id),
-  ]
-  const { data: decisionFieldRows } =
-    decisionFieldIds.length > 0
-      ? await supabaseAdmin.from('fields').select('id, name').in('id', decisionFieldIds)
-      : { data: [] }
-  const fieldNameById = new Map((decisionFieldRows ?? []).map((f) => [f.id, f.name]))
+  const { data: activityRows } = await supabaseAdmin
+    .from('activity_log')
+    .select('id, action_type, description, category, metadata, created_at')
+    .eq('project_id', projectId)
+    .order('created_at', { ascending: false })
+    .limit(50)
 
-  // Transform decisions: need field names via field_mapping
-  const savedTransformItems = allTransforms.filter((t) => t.status === 'saved').slice(0, 15)
-  const savedTransformFMIds = savedTransformItems.map((t) => t.field_mapping_id)
-  const { data: savedTransformFMs } =
-    savedTransformFMIds.length > 0
-      ? await supabaseAdmin.from('field_mappings').select('id, source_field_id, target_field_id').in('id', savedTransformFMIds)
-      : { data: [] }
-  const savedTransformFMMap = new Map((savedTransformFMs ?? []).map((fm) => [fm.id, fm]))
-  const savedTransformFieldIds = [
-    ...(savedTransformFMs ?? []).map((fm) => fm.source_field_id),
-    ...(savedTransformFMs ?? []).map((fm) => fm.target_field_id),
-  ]
-  const { data: savedTransformFieldNames } =
-    savedTransformFieldIds.length > 0
-      ? await supabaseAdmin.from('fields').select('id, name').in('id', savedTransformFieldIds)
-      : { data: [] }
-  const stfnById = new Map((savedTransformFieldNames ?? []).map((f) => [f.id, f.name]))
-
-  const mappingDecisions: DecisionEntry[] = decisionFMIds.map((fm) => ({
-    id: `fm_${fm.id}`,
-    type: 'mapping',
-    label: `Mapping approved: ${fieldNameById.get(fm.source_field_id) ?? '?'} → ${fieldNameById.get(fm.target_field_id) ?? '?'}${fm.confidence ? ` (${Math.round(fm.confidence)}% confidence)` : ''}`,
-    timestamp: fm.created_at,
+  const allDecisions: DecisionEntry[] = (activityRows ?? []).map((entry) => ({
+    id: entry.id,
+    type: entry.category as DecisionType,
+    label: entry.description,
+    timestamp: entry.created_at,
+    metadata: entry.metadata as Record<string, unknown>,
   }))
-
-  const fixDecisions: DecisionEntry[] = (fixHistoryRows ?? []).map((fh) => ({
-    id: `fh_${fh.id}`,
-    type: 'fix',
-    label: `Fix applied: ${fh.fix_description} — ${fh.affected_row_count} record${fh.affected_row_count !== 1 ? 's' : ''}`,
-    timestamp: fh.applied_at,
-  }))
-
-  const riskDecisions: DecisionEntry[] = (qualityIssueRows ?? [])
-    .filter((q) => q.status === 'accepted_risk')
-    .slice(0, 10)
-    .map((q) => ({
-      id: `risk_${q.id}`,
-      type: 'risk',
-      label: `Risk accepted: ${q.title}`,
-      timestamp: q.created_at,
-    }))
-
-  const transformDecisions: DecisionEntry[] = savedTransformItems.map((t) => {
-    const fm = savedTransformFMMap.get(t.field_mapping_id)
-    const srcName = fm ? (stfnById.get(fm.source_field_id) ?? '?') : '?'
-    const tgtName = fm ? (stfnById.get(fm.target_field_id) ?? '?') : '?'
-    return {
-      id: `tr_${t.id}`,
-      type: 'transform',
-      label: `Transform saved: ${srcName} → ${tgtName}${t.description ? ` — ${t.description.slice(0, 60)}` : ''}`,
-      timestamp: t.created_at,
-    }
-  })
-
-  const ruleDecisions: DecisionEntry[] = (validationRuleRows ?? []).map((r) => ({
-    id: `rule_${r.id}`,
-    type: 'rule',
-    label: `Validation rule added: ${r.name}`,
-    timestamp: r.created_at,
-  }))
-
-  const allDecisions = [...mappingDecisions, ...fixDecisions, ...riskDecisions, ...transformDecisions, ...ruleDecisions]
-    .sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime())
 
   // ── Existing outputs with signed URLs ─────────────────────────────────────
 
@@ -411,12 +376,12 @@ export async function getOutputsPageData(projectId: string): Promise<OutputsPage
       totalSourceFields,
       openBlocking,
       openWarnings,
-      savedTransforms,
-      totalTransforms: allTransforms.length,
+      completedTransforms,
+      totalTransforms: totalTransformScope,
     },
-    decisions: allDecisions.slice(0, 10),
+    decisions: allDecisions,
     totalDecisions: allDecisions.length,
-    outstanding: { unmappedSourceFields, blockingIssues: openBlocking, untestedTransforms, unsavedTransforms },
+    outstanding: { unmappedSourceFields, blockingIssues: openBlocking, fieldsNeedingTransformWork, untestedTransforms, testedTransforms },
     existingOutputs,
     hasMappings: rawFieldMappings !== null && (rawFieldMappings ?? []).length > 0,
     hasSourceData: sourceTables.length > 0,
@@ -916,28 +881,38 @@ Generate the full Migration Readiness Report now.`
     return { success: false, error: 'AI report generation failed. Please try again.' }
   }
 
-  // Add header metadata to the report
   const now = new Date().toUTCString()
-  const fullReport = `# Migration Readiness Report\n**Project:** ${project.name}  \n**Generated:** ${now}  \n**Score:** ${readinessScore}% — ${readinessLabel}\n\n---\n\n${reportText}`
 
-  // For PDF/DOCX, we fall back to Markdown (no PDF library installed)
-  const actualFormat = 'markdown'
-  const ext = 'md'
+  // Build the Word document from Claude's Markdown output
+  let docxBuffer: Buffer
+  try {
+    docxBuffer = await buildReadinessDocx(reportText, {
+      projectName: project.name,
+      generatedDate: now,
+      readinessScore,
+      readinessLabel,
+    })
+  } catch {
+    return { success: false, error: 'Failed to build Word document. Please try again.' }
+  }
+
+  const actualFormat = 'docx'
+  const ext = 'docx'
   const version = await getNextVersion(projectId, 'readiness_report', actualFormat)
   const storagePath = `outputs/reports/readiness_report_v${version}.${ext}`
 
   const { signedUrl } = await uploadAndRecord({
     projectId,
     userId: user.id,
-    content: fullReport,
+    content: docxBuffer,
     storagePath,
-    contentType: 'text/markdown',
+    contentType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
     outputType: 'readiness_report',
     format: actualFormat,
     version,
   })
 
-  return { success: true, downloadUrl: signedUrl, content: fullReport, version }
+  return { success: true, downloadUrl: signedUrl, version }
 }
 
 // ── generateMappingFile ───────────────────────────────────────────────────────

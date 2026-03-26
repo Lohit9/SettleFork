@@ -6,6 +6,7 @@ import { validateFixSQL } from '@/lib/quality/fix-sql-validator'
 import { countFormatIssues, computeValueDistribution, computeMinMax } from '@/lib/utils/profiling'
 import { callClaude } from '@/lib/ai/claude'
 import { checkAIRateLimit } from '@/lib/ai/rate-limit'
+import { logActivity } from '@/lib/actions/activity-log'
 
 // ── helpers ───────────────────────────────────────────────────────────────────
 
@@ -73,7 +74,8 @@ export async function generateManualFix(
   projectId: string,
   tableId: string,
   fieldId: string | null,
-  description: string
+  description: string,
+  issueContext?: { title: string; description: string; severity: string; affectedRecords: number }
 ): Promise<{ sql: string; estimatedRows: number; error?: string }> {
   const supabase = await createClient()
   const {
@@ -132,6 +134,45 @@ export async function generateManualFix(
     }
   }
 
+  // Fetch field profile for the focused field so Claude sees actual data formats,
+  // distributions, and null rates — prevents generating SQL with wrong format assumptions
+  // (e.g., assuming YYYY-MM-DD when the column contains mixed MM/DD/YYYY and ISO dates).
+  let fieldProfileContext = ''
+  if (fieldId) {
+    const { data: profile } = await supabase
+      .from('field_profiles')
+      .select('null_percentage, cardinality, unique_percentage, format_issues_count, min_value, max_value, value_distribution, sample_values')
+      .eq('field_id', fieldId)
+      .single()
+
+    if (profile) {
+      fieldProfileContext = `\nField profile for focused field:`
+      fieldProfileContext += `\n  Null: ${profile.null_percentage != null ? (profile.null_percentage as number).toFixed(1) : '?'}%, Distinct values: ${profile.cardinality ?? '?'}, Format issues: ${profile.format_issues_count ?? 0}`
+
+      if (profile.min_value || profile.max_value) {
+        fieldProfileContext += `\n  Range: ${profile.min_value ?? '?'} to ${profile.max_value ?? '?'}`
+      }
+
+      const dist = profile.value_distribution as Array<{ value: string; count: number }> | null
+      if (dist && dist.length > 0) {
+        fieldProfileContext += `\n  Value distribution (top ${Math.min(dist.length, 10)}):`
+        for (const v of dist.slice(0, 10)) {
+          fieldProfileContext += `\n    "${v.value}" → ${v.count} rows`
+        }
+        if (dist.length > 10) {
+          fieldProfileContext += `\n    ... and ${dist.length - 10} more values`
+        }
+      } else if (Array.isArray(profile.sample_values) && (profile.sample_values as string[]).length > 0) {
+        const samples = (profile.sample_values as string[]).slice(0, 10)
+        fieldProfileContext += `\n  Sample values: ${samples.map((v) => `"${v}"`).join(', ')}`
+      }
+    }
+  }
+
+  const issueBlock = issueContext
+    ? `\nIssue being fixed: ${issueContext.title} — ${issueContext.description} (${issueContext.severity}, ${issueContext.affectedRecords} records)`
+    : ''
+
   const systemPrompt = `You are a data migration fix expert. Given a table's schema and a natural language description of a fix, generate the exact SQL to implement it.
 
 The data is stored in a PostgreSQL table called 'data_rows' with:
@@ -148,17 +189,18 @@ RULES:
 - Never reference tables other than data_rows
 - Never use DDL (DROP, ALTER, CREATE, TRUNCATE)
 - NEVER use LIMIT, FETCH FIRST, or OFFSET — fixes must apply to ALL matching rows
+- ALWAYS check the field profile's sample values and value distribution to determine actual data formats before using TO_DATE, TO_NUMBER, or similar parsing functions. Data may contain MIXED formats — handle all observed formats in your SQL (use CASE with regex patterns).
 - Generate ONLY the SQL, no explanation, no markdown fences`
 
   const userMessage = `Table: ${tableRow.name} (table_id: '${tableId}')
 Fields:
-${fieldList}${focusedFieldContext}
+${fieldList}${focusedFieldContext}${fieldProfileContext}${issueBlock}
 
 Fix description: "${description}"`
 
   let generatedSql = ''
   try {
-    const raw = await callClaude(systemPrompt, userMessage, 512)
+    const raw = await callClaude(systemPrompt, userMessage, 1024)
     generatedSql = raw
       .replace(/^```(?:sql)?\s*/i, '')
       .replace(/\s*```\s*$/, '')
@@ -207,7 +249,7 @@ export async function applyManualFix(
   sql: string,
   description: string,
   skipSnapshot = false
-): Promise<{ success: boolean; rowsAffected: number; error?: string; requiresSnapshotConfirmation?: boolean }> {
+): Promise<{ success: boolean; rowsAffected: number; fixHistoryId?: string; error?: string; requiresSnapshotConfirmation?: boolean }> {
   // Fix 1: use RLS client for table ownership and fix_history operations
   const supabase = await createClient()
   const {
@@ -262,7 +304,7 @@ export async function applyManualFix(
     return { success: false, rowsAffected: 0, error: 'Failed to log fix. Please try again.' }
   }
 
-  const fixHistoryId = histRecord.id
+  const fixHistoryId: string = histRecord.id
 
   // Fix 3: snapshot BEFORE executing — abort if snapshot fails
   let snapshotResult: { snapshotted: boolean; requiresConfirmation: boolean; rowCount: number }
@@ -374,7 +416,25 @@ export async function applyManualFix(
     // Non-critical
   }
 
-  return { success: true, rowsAffected }
+  // Mark the source table as modified so staleness checks detect stale staged data
+  try {
+    await supabaseAdmin
+      .from('tables')
+      .update({ data_modified_at: new Date().toISOString() })
+      .eq('id', tableId)
+  } catch {
+    // Non-critical
+  }
+
+  await logActivity(
+    projectId,
+    'fix_applied',
+    `Fix applied: ${description} — ${rowsAffected} record${rowsAffected !== 1 ? 's' : ''}`,
+    'fix',
+    { fix_history_id: fixHistoryId, affected_rows: rowsAffected }
+  )
+
+  return { success: true, rowsAffected, fixHistoryId }
 }
 
 // ── validate and preview manual fix SQL ───────────────────────────────────────
