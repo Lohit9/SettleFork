@@ -5,8 +5,8 @@ import Link from 'next/link'
 import { motion, AnimatePresence } from 'framer-motion'
 
 const NAV_LINKS = [
-  { label: 'How It Works', href: '/#how' },
-  { label: 'Use Cases',    href: '/#why' },
+  { label: 'How It Works', href: '/how-it-works' },
+  { label: 'Use Cases',    href: '/use-cases' },
 ]
 
 const CALENDLY = 'https://calendly.com/mine-ai/demo'
