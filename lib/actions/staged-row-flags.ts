@@ -118,7 +118,7 @@ export async function flagStagedRowIssues(
 
     const targetNameBySrcId = new Map<string, string>()
     for (const fm of fieldMappings ?? []) {
-      const tgt = fm.target_field as { name: string } | null
+      const tgt = fm.target_field as unknown as { name: string } | null
       if (tgt?.name) {
         targetNameBySrcId.set(fm.source_field_id, tgt.name)
       }
