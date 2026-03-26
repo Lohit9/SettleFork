@@ -8,10 +8,18 @@ import DataQualityContent from './DataQualityContent'
 
 interface PageProps {
   params: Promise<{ projectId: string }>
+  searchParams: Promise<{
+    tableId?: string
+    fieldId?: string
+    severity?: string
+    status?: string
+    stage?: string
+  }>
 }
 
-export default async function DataQualityPage({ params }: PageProps) {
+export default async function DataQualityPage({ params, searchParams }: PageProps) {
   const { projectId } = await params
+  const sp = await searchParams
 
   const supabase = await createClient()
   const {
@@ -50,6 +58,11 @@ export default async function DataQualityPage({ params }: PageProps) {
       initialRules={validationRules}
       hasMappings={hasMappings}
       allDatasets={allDatasets}
+      initialFilterTableId={sp.tableId}
+      initialFilterFieldId={sp.fieldId}
+      initialFilterSeverity={sp.severity}
+      initialFilterStatus={sp.status}
+      initialFilterStage={sp.stage}
     />
   )
 }

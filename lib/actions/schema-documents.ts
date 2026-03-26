@@ -3,6 +3,7 @@
 import { createClient } from '@/lib/supabase/server'
 import { SchemaDocument } from '@/lib/types/database'
 import { validateSchemaDocUpload } from '@/lib/upload/validate'
+import { logActivity } from '@/lib/actions/activity-log'
 
 export interface UploadSchemaDocResult {
   success: boolean
@@ -101,6 +102,14 @@ export async function uploadSchemaDocument(formData: FormData): Promise<UploadSc
         console.warn('[schema-documents] Schema enrichment failed (non-fatal):', enrichErr)
       }
     }
+
+    await logActivity(
+      projectId,
+      'doc_uploaded',
+      `Schema document uploaded: ${sanitizedFilename}`,
+      'data',
+      { file_name: sanitizedFilename, doc_type: 'schema', document_id: doc.id }
+    )
 
     return { success: true, documentId: doc.id }
   } catch (err) {
@@ -233,6 +242,14 @@ export async function uploadBusinessContextDoc(
       await supabase.storage.from('project-files').remove([storagePath])
       return { success: false, error: dbError?.message || 'Failed to create document record' }
     }
+
+    await logActivity(
+      projectId,
+      'doc_uploaded',
+      `Business context document uploaded: ${sanitizedFilename}`,
+      'data',
+      { file_name: sanitizedFilename, doc_type: 'business_context', document_id: doc.id }
+    )
 
     return { success: true, documentId: doc.id }
   } catch (err) {

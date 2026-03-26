@@ -6,6 +6,7 @@ import { callClaude } from '@/lib/ai/claude'
 import { checkAIRateLimit } from '@/lib/ai/rate-limit'
 import { buildAIContext, formatFieldForPrompt, formatDocumentsForPrompt } from '@/lib/ai/context-builder'
 import { fieldNeedsTransform, wrapFieldRefsInJsonb } from '@/lib/utils/transform-helpers'
+import { logActivity } from '@/lib/actions/activity-log'
 import type { Transformation } from '@/lib/types/database'
 
 export { fieldNeedsTransform, wrapFieldRefsInJsonb }
@@ -136,8 +137,9 @@ export async function getTransformData(
   ] = await Promise.all([
     supabase
       .from('fields')
-      .select('id, name, data_type, inferred_type, is_nullable, table_id')
-      .in('id', allSourceFieldIds),
+      .select('id, name, data_type, inferred_type, is_nullable, table_id, ordinal_position')
+      .in('id', allSourceFieldIds)
+      .order('ordinal_position', { ascending: true }),
     supabase
       .from('fields')
       .select('id, name, data_type, inferred_type, is_nullable, is_primary_key')
@@ -273,6 +275,12 @@ export async function getTransformData(
     }
 
     if (fields.length > 0) {
+      // Sort by source field's ordinal_position so the sidebar follows CSV upload order
+      fields.sort((a, b) => {
+        const sfA = srcFieldById.get(a.sourceFieldId) as { ordinal_position?: number } | undefined
+        const sfB = srcFieldById.get(b.sourceFieldId) as { ordinal_position?: number } | undefined
+        return (sfA?.ordinal_position ?? 9999) - (sfB?.ordinal_position ?? 9999)
+      })
       dsGroup.tables.push({
         tableMappingId: tm.id,
         sourceTableId: tm.source_table_id,
@@ -852,6 +860,19 @@ export async function testTransformation(
     transformationId = existing.id
   }
 
+  // Log the test event with source → target field names
+  const [{ data: srcFldLog }, { data: tgtFldLog }] = await Promise.all([
+    supabase.from('fields').select('name').eq('id', fm.source_field_id).single(),
+    supabase.from('fields').select('name').eq('id', fm.target_field_id).single(),
+  ])
+  await logActivity(
+    tm.project_id,
+    'transform_tested',
+    `Transform tested: ${srcFldLog?.name ?? '?'} \u2192 ${tgtFldLog?.name ?? '?'}`,
+    'transform',
+    { transformation_id: transformationId, source_field: srcFldLog?.name, target_field: tgtFldLog?.name }
+  )
+
   return { success: true, results, transformationId }
 }
 
@@ -1041,7 +1062,29 @@ export async function applyTransform(
     .update({ status: 'applied' })
     .eq('field_mapping_id', fieldMappingId)
 
-  return { success: true, rowsAffected: Number(rowsAffected ?? 0) }
+  // Re-flag row_issues now that transform values have changed
+  try {
+    const { flagStagedRowIssues } = await import('@/lib/actions/staged-row-flags')
+    await flagStagedRowIssues(tm.project_id, tm.id)
+  } catch {
+    // Non-critical — row_issues may be stale but staging data is intact
+  }
+
+  const appliedRows = Number(rowsAffected ?? 0)
+  await logActivity(
+    tm.project_id,
+    'transform_applied',
+    `Transform applied: ${srcField.name} \u2192 ${tgtField.name} — ${appliedRows} row${appliedRows !== 1 ? 's' : ''}`,
+    'transform',
+    {
+      field_mapping_id: fieldMappingId,
+      source_field: srcField.name,
+      target_field: tgtField.name,
+      rows_affected: appliedRows,
+    }
+  )
+
+  return { success: true, rowsAffected: appliedRows }
 }
 
 // ── previewTransformDistinct ──────────────────────────────────────────────────

@@ -1,6 +1,7 @@
-import { notFound } from 'next/navigation'
+import { notFound, redirect } from 'next/navigation'
 import { Navigation } from '@/components/app/Navigation'
 import { getProject } from '@/lib/actions/projects'
+import { createClient } from '@/lib/supabase/server'
 import { supabaseAdmin } from '@/lib/supabase/admin'
 
 export default async function ProjectLayout({
@@ -11,6 +12,13 @@ export default async function ProjectLayout({
   params: Promise<{ projectId: string }>
 }) {
   const { projectId } = await params
+
+  // Check auth first — unauthenticated users go to login, not the not-found page
+  const supabase = await createClient()
+  const { data: { user } } = await supabase.auth.getUser()
+  if (!user) {
+    redirect(`/login?returnTo=/app/projects/${projectId}`)
+  }
 
   const project = await getProject(projectId).catch(() => notFound())
 

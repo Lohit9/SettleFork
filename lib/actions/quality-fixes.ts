@@ -6,6 +6,7 @@ import { validateFixSQL } from '@/lib/quality/fix-sql-validator'
 import { countFormatIssues } from '@/lib/utils/profiling'
 import { runSourceDataChecks } from '@/lib/quality/detection-engine'
 import { executeCustomRules } from '@/lib/actions/validation-rules'
+import { logActivity } from '@/lib/actions/activity-log'
 import type { QualityIssue, FixHistory } from '@/lib/types/database'
 
 // ── helpers ───────────────────────────────────────────────────────────────────
@@ -224,6 +225,12 @@ export async function applyFix(
 
   await supabase.from('quality_issues').update({ status: 'fixed' }).eq('id', issueId)
 
+  // Mark the source table as modified so staleness checks detect stale staged data
+  await supabaseAdmin
+    .from('tables')
+    .update({ data_modified_at: new Date().toISOString() })
+    .eq('id', tableId)
+
   if (issue.stage === 'source') {
     try {
       await runSourceDataChecks(issue.project_id, tableId, 'manual_scan')
@@ -239,6 +246,14 @@ export async function applyFix(
       // Non-critical
     }
   }
+
+  await logActivity(
+    issue.project_id,
+    'fix_applied',
+    `Fix applied: ${chosenFix.label} — ${rowsAffected} record${rowsAffected !== 1 ? 's' : ''}`,
+    'fix',
+    { fix_history_id: fixHistoryId, quality_issue_id: issueId, affected_rows: rowsAffected }
+  )
 
   return { success: true, rowsAffected }
 }
@@ -275,6 +290,14 @@ export async function acceptRisk(
     status: 'applied',
     snapshot_failed: false,
   })
+
+  await logActivity(
+    issue.project_id,
+    'risk_accepted',
+    `Risk accepted: ${issue.title}${reason ? ' — ' + reason : ''}`,
+    'validation',
+    { quality_issue_id: issueId }
+  )
 
   return { success: true }
 }
@@ -414,6 +437,18 @@ export async function revertFix(
     // Non-critical
   }
 
+  await logActivity(
+    histRecord.project_id,
+    'fix_reverted',
+    `Fix reverted: ${histRecord.fix_description}`,
+    'fix',
+    {
+      fix_history_id: fixHistoryId,
+      quality_issue_id: histRecord.quality_issue_id ?? null,
+      affected_rows: rowsAffected,
+    }
+  )
+
   return { success: true, rowsAffected }
 }
 
@@ -441,7 +476,7 @@ export async function getFixHistory(
 
 export async function runFullScan(
   projectId: string
-): Promise<{ success: boolean; issueCount: number; error?: string }> {
+): Promise<{ success: boolean; issueCount: number; warnings?: string[]; error?: string }> {
   const supabase = await createClient()
   const {
     data: { user },
@@ -461,26 +496,35 @@ export async function runFullScan(
     .select('id, role')
     .eq('project_id', projectId)
 
-  if (!datasets) return { success: true, issueCount: 0 }
+  if (!datasets) return { success: true, issueCount: 0, warnings: [] }
+
+  const warnings: string[] = []
 
   const sourceDatasetIds = datasets.filter((d) => d.role === 'source').map((d) => d.id)
   const { data: sourceTables } = await supabase
     .from('tables')
-    .select('id')
+    .select('id, name')
     .in('dataset_id', sourceDatasetIds)
 
   const tableIds = (sourceTables ?? []).map((t) => t.id)
 
   for (const tid of tableIds) {
+    const tableName = (sourceTables ?? []).find((t) => t.id === tid)?.name ?? tid
     try {
       await runSourceDataChecks(projectId, tid, 'manual_scan')
     } catch (err) {
       console.warn(`[quality-fixes] Source scan failed for table ${tid}:`, err)
+      warnings.push(`Source data scan encountered an error for table ${tableName}`)
     }
     try {
-      await executeCustomRules(projectId, tid)
+      const result = await executeCustomRules(projectId, tid)
+      if (result.warnings.length > 0) {
+        warnings.push(...result.warnings)
+      }
     } catch (err) {
-      console.warn(`[quality-fixes] Custom rules failed for table ${tid}:`, err)
+      const msg = err instanceof Error ? err.message : String(err)
+      console.warn(`[quality-fixes] Custom rules failed for table ${tid}:`, msg)
+      warnings.push(`Custom rule evaluation failed for table ${tableName}: ${msg}`)
     }
     try {
       const { runAIAugmentedChecks } = await import('@/lib/actions/ai-quality-detection')
@@ -501,13 +545,18 @@ export async function runFullScan(
   if (targetDatasetIds.length > 0) {
     const { data: targetTables } = await supabase
       .from('tables')
-      .select('id')
+      .select('id, name')
       .in('dataset_id', targetDatasetIds)
-    for (const tid of (targetTables ?? []).map((t) => t.id)) {
+    for (const ttRow of targetTables ?? []) {
       try {
-        await executeCustomRules(projectId, tid)
+        const result = await executeCustomRules(projectId, ttRow.id)
+        if (result.warnings.length > 0) {
+          warnings.push(...result.warnings)
+        }
       } catch (err) {
-        console.warn(`[quality-fixes] Custom rules failed for target table ${tid}:`, err)
+        const msg = err instanceof Error ? err.message : String(err)
+        console.warn(`[quality-fixes] Custom rules failed for target table ${ttRow.id}:`, msg)
+        warnings.push(`Custom rule evaluation failed for table ${ttRow.name}: ${msg}`)
       }
     }
   }
@@ -533,7 +582,16 @@ export async function runFullScan(
     .eq('project_id', projectId)
     .eq('status', 'open')
 
-  return { success: true, issueCount: count ?? 0 }
+  const issueCount = count ?? 0
+  await logActivity(
+    projectId,
+    'scan_run',
+    `Full scan completed — ${issueCount} open issue${issueCount !== 1 ? 's' : ''} found`,
+    'system',
+    { issue_count: issueCount, warning_count: warnings.length }
+  )
+
+  return { success: true, issueCount, warnings }
 }
 
 // ── get all issues for a project ──────────────────────────────────────────────
@@ -563,6 +621,42 @@ export async function getQualityIssues(
     issues: (issues as QualityIssue[]) ?? [],
     hasMappings: (mappingCount ?? 0) > 0,
   }
+}
+
+// ── mark issue as fixed (used after a custom manual fix is applied) ───────────
+// Updates the issue status to 'fixed' and, if the fix_history row ID is known,
+// links it back to the quality issue so Fix History correctly shows the association.
+
+export async function markIssueFixed(
+  issueId: string,
+  fixHistoryId?: string
+): Promise<{ success: boolean; error?: string }> {
+  const supabase = await createClient()
+  const {
+    data: { user },
+  } = await supabase.auth.getUser()
+  if (!user) return { success: false, error: 'Not authenticated' }
+
+  const issue = await verifyIssueAccess(supabase, issueId, user.id)
+  if (!issue) return { success: false, error: 'Issue not found or access denied' }
+
+  const { error: updateErr } = await supabase
+    .from('quality_issues')
+    .update({ status: 'fixed' })
+    .eq('id', issueId)
+
+  if (updateErr) return { success: false, error: updateErr.message }
+
+  if (fixHistoryId) {
+    // Link the manual fix_history row to this quality issue so Fix History
+    // shows the issue title alongside the fix and so Revert can re-open the issue.
+    await supabase
+      .from('fix_history')
+      .update({ quality_issue_id: issueId })
+      .eq('id', fixHistoryId)
+  }
+
+  return { success: true }
 }
 
 // ── helper: recompute field profile ──────────────────────────────────────────

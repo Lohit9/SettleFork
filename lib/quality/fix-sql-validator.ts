@@ -31,9 +31,30 @@ export function validateFixSQL(sql: string, tableId: string): FixSQLValidationRe
   const isCTE = /^WITH\b/i.test(trimmed)
 
   if (isCTE) {
-    // CTE must contain a final UPDATE or DELETE
-    if (!/\b(UPDATE|DELETE)\b/i.test(trimmed)) {
-      return { safe: false, reason: 'CTE must contain an UPDATE or DELETE statement' }
+    // Main DML must follow the WITH clause(s): ") UPDATE " or ") DELETE " (last match
+    // wins when nested parens appear inside CTE bodies).
+    const dmlMatches = [...trimmed.matchAll(/\)\s*(UPDATE|DELETE)\s+/gi)]
+    if (dmlMatches.length === 0) {
+      return {
+        safe: false,
+        reason:
+          'CTE fix SQL must end with UPDATE or DELETE on data_rows (e.g. WITH ... AS (...) UPDATE data_rows ...)',
+      }
+    }
+    const last = dmlMatches[dmlMatches.length - 1]
+    const kw = last[1].toUpperCase()
+    const afterDml = trimmed.slice((last.index ?? 0) + last[0].length)
+    if (kw === 'UPDATE' && !/^\s*data_rows\b/i.test(afterDml)) {
+      return {
+        safe: false,
+        reason: 'CTE must end with UPDATE data_rows — main statement must target data_rows',
+      }
+    }
+    if (kw === 'DELETE' && !/^\s*FROM\s+data_rows\b/i.test(afterDml)) {
+      return {
+        safe: false,
+        reason: 'CTE must end with DELETE FROM data_rows — main statement must target data_rows',
+      }
     }
     // CTEs may use window functions in the subquery body — that is safe and intentional
   } else {

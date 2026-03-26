@@ -5,6 +5,7 @@ import { createClient } from '@/lib/supabase/server'
 import { callClaude } from '@/lib/ai/claude'
 import { checkAIRateLimit } from '@/lib/ai/rate-limit'
 import { validateFixSQL } from '@/lib/quality/fix-sql-validator'
+import { logActivity } from '@/lib/actions/activity-log'
 import type { ValidationRule, QualityIssue } from '@/lib/types/database'
 
 // ── helpers ───────────────────────────────────────────────────────────────────
@@ -211,6 +212,15 @@ export async function addValidationRule(
     .single()
 
   if (error) return { success: false, error: error.message }
+
+  await logActivity(
+    projectId,
+    'rule_added',
+    `Validation rule added: ${rule.name}`,
+    'validation',
+    { validation_rule_id: (data as ValidationRule).id, rule_type: rule.rule_type }
+  )
+
   return { success: true, rule: data as ValidationRule }
 }
 
@@ -346,7 +356,17 @@ User's rule: "${naturalLanguageRule}"`
     .single()
 
   if (error) return { success: false, error: error.message }
-  return { success: true, rule: data as ValidationRule }
+
+  const savedRule = data as ValidationRule
+  await logActivity(
+    projectId,
+    'rule_added',
+    `Validation rule added: ${savedRule.name}`,
+    'validation',
+    { validation_rule_id: savedRule.id, rule_type: savedRule.rule_type, ai_generated: true }
+  )
+
+  return { success: true, rule: savedRule }
 }
 
 // ── execute custom rules for a table ─────────────────────────────────────────
@@ -354,12 +374,12 @@ User's rule: "${naturalLanguageRule}"`
 export async function executeCustomRules(
   projectId: string,
   tableId: string
-): Promise<{ success: boolean; newIssues: number; error?: string }> {
+): Promise<{ success: boolean; newIssues: number; warnings: string[]; error?: string }> {
   const supabase = await createClient()
   const {
     data: { user },
   } = await supabase.auth.getUser()
-  if (!user) return { success: false, newIssues: 0, error: 'Not authenticated' }
+  if (!user) return { success: false, newIssues: 0, warnings: [], error: 'Not authenticated' }
 
   // Fix 1: use RLS client for tables and datasets — they have proper RLS policies
   const { data: tableData } = await supabase
@@ -368,7 +388,7 @@ export async function executeCustomRules(
     .eq('id', tableId)
     .single()
 
-  if (!tableData) return { success: false, newIssues: 0, error: 'Table not found' }
+  if (!tableData) return { success: false, newIssues: 0, warnings: [], error: 'Table not found' }
   const tableName = tableData.name
   const datasetRole = (tableData as unknown as { datasets: { role: string } }).datasets?.role ?? 'source'
   const stage: 'source' | 'in_flight' = datasetRole === 'source' ? 'source' : 'in_flight'
@@ -380,7 +400,7 @@ export async function executeCustomRules(
     .eq('project_id', projectId)
     .or(`table_id.eq.${tableId},table_id.is.null`)
 
-  if (!allMatchedRules || allMatchedRules.length === 0) return { success: true, newIssues: 0 }
+  if (!allMatchedRules || allMatchedRules.length === 0) return { success: true, newIssues: 0, warnings: [] }
 
   // Fix 1: use RLS client for fields SELECT
   const { data: tableFields } = await supabase
@@ -395,9 +415,10 @@ export async function executeCustomRules(
     return false
   })
 
-  if (rules.length === 0) return { success: true, newIssues: 0 }
+  if (rules.length === 0) return { success: true, newIssues: 0, warnings: [] }
 
   const issuesToInsert: Omit<QualityIssue, 'id' | 'created_at'>[] = []
+  const warnings: string[] = []
 
   for (const rule of rules as ValidationRule[]) {
     let violationCount = 0
@@ -416,6 +437,7 @@ export async function executeCustomRules(
 
     const cfg = rule.rule_config as Record<string, unknown>
 
+    try {
     switch (rule.rule_type) {
       case 'not_null':
         if (fieldId) {
@@ -532,6 +554,18 @@ export async function executeCustomRules(
       default:
         continue
     }
+    } catch (err) {
+      const errMsg = err instanceof Error ? err.message : String(err)
+      console.warn(`[validation-rules] Rule "${rule.name}" (${rule.rule_type}) failed on field "${fieldName}":`, errMsg)
+      warnings.push(
+        `Rule "${rule.name}" could not be evaluated on ${tableName}.${fieldName}: ${
+          errMsg.toLowerCase().includes('numeric') || errMsg.toLowerCase().includes('invalid input syntax')
+            ? 'field contains non-numeric values (e.g. currency symbols or text)'
+            : errMsg
+        }`
+      )
+      continue
+    }
 
     if (violationCount > 0) {
       issuesToInsert.push({
@@ -558,10 +592,10 @@ export async function executeCustomRules(
   if (issuesToInsert.length > 0) {
     // Fix 1: use RLS client for quality_issues INSERT
     const { error } = await supabase.from('quality_issues').insert(issuesToInsert)
-    if (error) return { success: false, newIssues: 0, error: error.message }
+    if (error) return { success: false, newIssues: 0, warnings, error: error.message }
   }
 
-  return { success: true, newIssues: issuesToInsert.length }
+  return { success: true, newIssues: issuesToInsert.length, warnings }
 }
 
 // ── delete a rule ─────────────────────────────────────────────────────────────
@@ -578,7 +612,7 @@ export async function deleteValidationRule(
   // Fix 1: use RLS client — validation_rules RLS enforces project ownership
   const { data: rule } = await supabase
     .from('validation_rules')
-    .select('project_id, projects!inner(user_id)')
+    .select('project_id, name, rule_type, projects!inner(user_id)')
     .eq('id', ruleId)
     .single()
 
@@ -588,6 +622,15 @@ export async function deleteValidationRule(
   }
 
   await supabase.from('validation_rules').delete().eq('id', ruleId)
+
+  await logActivity(
+    rule.project_id,
+    'rule_deleted',
+    `Validation rule deleted: ${rule.name}`,
+    'validation',
+    { validation_rule_id: ruleId, rule_type: rule.rule_type }
+  )
+
   return { success: true }
 }
 

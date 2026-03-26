@@ -5,6 +5,7 @@ import { createClient } from '@/lib/supabase/server'
 import { validateCSVUpload } from '@/lib/upload/validate'
 import { computeFriendlyName } from '@/lib/db/sql-rewriter'
 import { computeValueDistribution, computeMinMax, countFormatIssues } from '@/lib/utils/profiling'
+import { logActivity } from '@/lib/actions/activity-log'
 
 export interface UploadCSVResult {
   success: boolean
@@ -251,6 +252,15 @@ export async function uploadCSV(formData: FormData): Promise<UploadCSVResult> {
     } catch (enrichErr) {
       console.warn('[csv] Schema enrichment failed (non-fatal):', enrichErr)
     }
+
+    const actionType = role === 'source' ? 'source_uploaded' : 'target_uploaded'
+    await logActivity(
+      projectId,
+      actionType,
+      `${role === 'source' ? 'Source' : 'Target'} data uploaded: ${tableName} (${sanitizedRows.length} rows, ${inferredFields.length} fields)`,
+      'data',
+      { file_name: file.name, table_name: tableName, row_count: sanitizedRows.length, field_count: inferredFields.length }
+    )
 
     return {
       success: true,

@@ -4,6 +4,7 @@ import { createClient } from '@/lib/supabase/server'
 import { callClaude } from '@/lib/ai/claude'
 import { checkAIRateLimit } from '@/lib/ai/rate-limit'
 import { buildAIContext, formatSchemaForPrompt, formatDocumentsForPrompt } from '@/lib/ai/context-builder'
+import { logActivity } from '@/lib/actions/activity-log'
 
 // ─── Claude Response Types ─────────────────────────────────────────────────────
 
@@ -494,39 +495,46 @@ export async function getMappings(projectId: string): Promise<MappingsResult | n
     const tgtTable = tableMap.get(tm.target_table_id)
     const fms = (rawFMs ?? []).filter((fm) => fm.table_mapping_id === tm.id)
 
-    const fieldMappings: RichFieldMapping[] = fms.map((fm) => {
-      const srcField = fieldMap.get(fm.source_field_id) ?? null
-      const tgtField = fieldMap.get(fm.target_field_id) ?? null
-      const srcProfile = profileMap.get(fm.source_field_id)
-      const tgtProfile = profileMap.get(fm.target_field_id)
+    const fieldMappings: RichFieldMapping[] = fms
+      .map((fm) => {
+        const srcField = fieldMap.get(fm.source_field_id) ?? null
+        const tgtField = fieldMap.get(fm.target_field_id) ?? null
+        const srcProfile = profileMap.get(fm.source_field_id)
+        const tgtProfile = profileMap.get(fm.target_field_id)
 
-      const toSamples = (p: typeof srcProfile) =>
-        p?.sample_values
-          ? (p.sample_values as unknown[]).filter(Boolean).slice(0, 3).map((v) => String(v))
-          : []
+        const toSamples = (p: typeof srcProfile) =>
+          p?.sample_values
+            ? (p.sample_values as unknown[]).filter(Boolean).slice(0, 3).map((v) => String(v))
+            : []
 
-      return {
-        id: fm.id,
-        table_mapping_id: fm.table_mapping_id,
-        source_field_id: fm.source_field_id,
-        target_field_id: fm.target_field_id,
-        confidence: fm.confidence,
-        status: fm.status as RichFieldMapping['status'],
-        ai_reasoning: fm.ai_reasoning,
-        similar_fields_considered: fm.similar_fields_considered as string[] | null,
-        type_compatibility: fm.type_compatibility,
-        is_contributing: fm.is_contributing ?? false,
-        created_at: fm.created_at,
-        sourceField: srcField
-          ? { id: srcField.id, name: srcField.name, data_type: srcField.data_type, inferred_type: srcField.inferred_type }
-          : null,
-        targetField: tgtField
-          ? { id: tgtField.id, name: tgtField.name, data_type: tgtField.data_type, inferred_type: tgtField.inferred_type }
-          : null,
-        sourceFieldSamples: toSamples(srcProfile),
-        targetFieldSamples: toSamples(tgtProfile),
-      }
-    })
+        return {
+          id: fm.id,
+          table_mapping_id: fm.table_mapping_id,
+          source_field_id: fm.source_field_id,
+          target_field_id: fm.target_field_id,
+          confidence: fm.confidence,
+          status: fm.status as RichFieldMapping['status'],
+          ai_reasoning: fm.ai_reasoning,
+          similar_fields_considered: fm.similar_fields_considered as string[] | null,
+          type_compatibility: fm.type_compatibility,
+          is_contributing: fm.is_contributing ?? false,
+          created_at: fm.created_at,
+          sourceField: srcField
+            ? { id: srcField.id, name: srcField.name, data_type: srcField.data_type, inferred_type: srcField.inferred_type }
+            : null,
+          targetField: tgtField
+            ? { id: tgtField.id, name: tgtField.name, data_type: tgtField.data_type, inferred_type: tgtField.inferred_type }
+            : null,
+          sourceFieldSamples: toSamples(srcProfile),
+          targetFieldSamples: toSamples(tgtProfile),
+        }
+      })
+      // Sort by source field's ordinal_position so mapping rows follow CSV upload order
+      .sort((a, b) => {
+        const posA = fieldMap.get(a.source_field_id)?.ordinal_position ?? 9999
+        const posB = fieldMap.get(b.source_field_id)?.ordinal_position ?? 9999
+        return posA - posB
+      })
 
     return {
       id: tm.id,
@@ -624,10 +632,10 @@ export async function updateFieldMappingStatus(
   const { data: { user } } = await supabase.auth.getUser()
   if (!user) return { success: false, error: 'Not authenticated' }
 
-  // Fetch the FM before updating so we can run promotion logic if needed
+  // Fetch the FM before updating so we can run promotion logic and logging
   const { data: fmBefore } = await supabase
     .from('field_mappings')
-    .select('table_mapping_id, target_field_id, is_contributing')
+    .select('table_mapping_id, source_field_id, target_field_id, confidence, is_contributing')
     .eq('id', fieldMappingId)
     .single()
 
@@ -671,6 +679,38 @@ export async function updateFieldMappingStatus(
           .from('table_mappings')
           .update({ status: 'approved' })
           .eq('id', fmBefore.table_mapping_id)
+      }
+    }
+
+    // Log mapping approval / rejection
+    if (status === 'approved' || status === 'rejected') {
+      try {
+        const { data: tm } = await supabase
+          .from('table_mappings')
+          .select('project_id')
+          .eq('id', fmBefore.table_mapping_id)
+          .single()
+        const [{ data: srcFld }, { data: tgtFld }] = await Promise.all([
+          supabase.from('fields').select('name').eq('id', fmBefore.source_field_id).single(),
+          supabase.from('fields').select('name').eq('id', fmBefore.target_field_id).single(),
+        ])
+        if (tm) {
+          const confNote = fmBefore.confidence ? ` (${Math.round(fmBefore.confidence)}% confidence)` : ''
+          await logActivity(
+            tm.project_id,
+            status === 'approved' ? 'mapping_approved' : 'mapping_rejected',
+            `Mapping ${status}: ${srcFld?.name ?? '?'} \u2192 ${tgtFld?.name ?? '?'}${status === 'approved' ? confNote : ''}`,
+            'mapping',
+            {
+              field_mapping_id: fieldMappingId,
+              source_field: srcFld?.name,
+              target_field: tgtFld?.name,
+              confidence: fmBefore.confidence,
+            }
+          )
+        }
+      } catch {
+        // Non-critical
       }
     }
   }
