@@ -1,4 +1,5 @@
 import type { Metadata } from 'next'
+import Image from 'next/image'
 import Link from 'next/link'
 import Header from '@/components/Header'
 import Footer from '@/components/Footer'
@@ -14,37 +15,59 @@ const STEPS = [
     title: 'Schema understanding',
     description:
       "Mine's agents scan your source systems and learn tables, keys, relationships, and business meaning. Entities and dependencies are mapped automatically. Duplicates and anomalies are flagged before mapping begins.",
+    screenshot: '/images/how-it-works/schema-overview.png',
+    alt: 'Mine schema overview showing source and target system schemas side by side',
   },
   {
     n: '02',
     title: 'Auto-mapping & transformation',
     description:
       'Mine proposes and refines field-level mappings into your target model. Mapping specs are generated automatically with confidence scores. Ambiguous mappings are surfaced for human review — the AI never acts without visibility.',
+    screenshot: '/images/how-it-works/mapping-review.png',
+    alt: 'Mine mapping review with AI-generated field mappings and confidence scores',
   },
   {
     n: '03',
     title: 'Cleansing & standardization',
     description:
       'Cleansing becomes a reusable layer instead of one-off scripts. Address normalization, picklist alignment, deduplication, merge logic, and referential integrity fixes are applied systematically across every load cycle.',
+    screenshot: '/images/how-it-works/transform.png',
+    alt: 'Mine transform editor with AI-suggested transformations and live data preview',
   },
   {
     n: '04',
     title: 'Generated ETL & loaders',
     description:
       "Mine outputs production-ready SQL, Python, or API-based loaders. Run them in your environment or Mine's runtime. Parameterize for dev, test, and prod with full audit trails.",
+    screenshot: '/images/how-it-works/migration-center.png',
+    alt: 'Mine migration center showing production-ready output files and migration status',
   },
   {
     n: '05',
     title: 'Validation, reconciliation & delta',
     description:
       'Multi-agent validation ensures safe loads and smooth deltas. Constraint issues, data drift, and schema changes are detected before they break downstream. Each load cycle feeds back into the next — making every iteration faster and safer.',
+    screenshot: '/images/how-it-works/validate.png',
+    alt: 'Mine validation dashboard with migration readiness score and AI-suggested fixes',
   },
 ]
 
-function Placeholder() {
+function Screenshot({ src, alt }: { src: string; alt: string }) {
   return (
-    <div className="bg-[#F1F5F9] rounded-xl h-64 flex items-center justify-center">
-      <span className="text-[#94A3B8] text-sm">Product screenshot</span>
+    <div className="rounded-2xl overflow-hidden shadow-2xl shadow-slate-900/10 border border-slate-200">
+      {/* Browser chrome top bar */}
+      <div className="h-8 bg-slate-100 flex items-center px-3 gap-1.5 border-b border-slate-200">
+        <span className="w-2.5 h-2.5 rounded-full" style={{ background: '#EF4444' }} />
+        <span className="w-2.5 h-2.5 rounded-full" style={{ background: '#F59E0B' }} />
+        <span className="w-2.5 h-2.5 rounded-full" style={{ background: '#22C55E' }} />
+      </div>
+      <Image
+        src={src}
+        alt={alt}
+        width={800}
+        height={500}
+        className="w-full h-auto"
+      />
     </div>
   )
 }
@@ -81,7 +104,7 @@ export default function HowItWorksPage() {
                   </div>
                   {/* Visual */}
                   <div className={flipped ? 'lg:[direction:ltr]' : ''}>
-                    <Placeholder />
+                    <Screenshot src={step.screenshot} alt={step.alt} />
                   </div>
                 </div>
               </div>
