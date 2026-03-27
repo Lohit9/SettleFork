@@ -462,7 +462,7 @@ export async function generateTransform(
     includeSampleValues: true,
     includeDocuments: true,
     maxDistributionValues: 25,
-  })
+  }, user.id)
 
   const tgtTableName = tgtTable?.name ?? ''
   const transformDocBlock = formatDocumentsForPrompt(txCtx.documents)
@@ -508,7 +508,7 @@ ${tgtFieldCtx && tgtFieldCtx.cardinality > 0 ? `Distinct values: ${tgtFieldCtx.c
 ${fm.type_compatibility ?? 'Not specified'}
 </type_compatibility>
 ${transformDocBlock}
-<description>
+${txCtx.intelligence_context ? txCtx.intelligence_context + '\n\n' : ''}<description>
 ${description}
 </description>
 
@@ -1240,7 +1240,7 @@ export async function suggestTransformDescription(
     includeSampleValues: true,
     includeDocuments: true,
     maxDistributionValues: 20,
-  })
+  }, user.id)
 
   const srcFieldCtx = ctx.source_tables.flatMap((t) => t.fields).find((f) => f.name === srcField.name)
   const tgtFieldCtx = ctx.target_tables.flatMap((t) => t.fields).find((f) => f.name === tgtField.name)
@@ -1264,7 +1264,7 @@ Confidence: ${fm.confidence ?? 'N/A'}%
 AI reasoning: ${fmWithReasoning.ai_reasoning ?? 'Not available'}
 </mapping_context>
 ${docsBlock}
-Suggest a transformation description for this field mapping.`
+${ctx.intelligence_context ? ctx.intelligence_context + '\n\n' : ''}Suggest a transformation description for this field mapping.`
 
   let suggestion: string
   try {

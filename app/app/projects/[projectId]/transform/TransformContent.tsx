@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useEffect, useTransition, useCallback, useRef } from 'react'
+import { useState, useEffect, useTransition, useCallback, useRef, useMemo } from 'react'
 import { useRouter } from 'next/navigation'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -222,7 +222,7 @@ export default function TransformContent({ projectId, initialData }: Props) {
   useEffect(() => { localTransformRef.current = localTransform }, [localTransform])
   useEffect(() => { selectedMappingIdRef.current = selectedMappingId }, [selectedMappingId])
 
-  const needsTransformCount = countNeedsTransform(data.datasets)
+  const needsTransformCount = useMemo(() => countNeedsTransform(data.datasets), [data.datasets])
 
   // DISABLED: Source-data staleness check — will re-enable with per-field tracking later
   // useEffect(() => {
@@ -741,7 +741,10 @@ export default function TransformContent({ projectId, initialData }: Props) {
 
   // ── UI helpers ────────────────────────────────────────────────────────────
 
-  const selectedContext = selectedMappingId ? findField(data.datasets, selectedMappingId) : null
+  const selectedContext = useMemo(
+    () => (selectedMappingId ? findField(data.datasets, selectedMappingId) : null),
+    [data.datasets, selectedMappingId]
+  )
 
   function statusBadge() {
     if (!localTransform) return null

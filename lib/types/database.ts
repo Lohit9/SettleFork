@@ -248,3 +248,20 @@ export interface ProjectWithStats {
   currentPhase: number
   outputCount: number
 }
+
+export interface MigrationIntelligence {
+  id: string
+  user_id: string
+  category: 'transformation_recipe' | 'data_quality_pattern' | 'domain_knowledge' | 'source_system_hint'
+  title: string
+  pattern_description: string
+  pattern_config: Record<string, unknown>
+  confidence: number
+  times_seen: number
+  times_confirmed: number
+  times_rejected: number
+  tags: string[]
+  source_project_ids: string[]
+  created_at: string
+  updated_at: string
+}

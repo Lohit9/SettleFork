@@ -1,6 +1,6 @@
 import { notFound } from 'next/navigation'
 import { createClient } from '@/lib/supabase/server'
-import { getQualityIssues } from '@/lib/actions/quality-fixes'
+import { getQualityIssues, getFixHistory } from '@/lib/actions/quality-fixes'
 import { getValidationRules } from '@/lib/actions/validation-rules'
 import { computeReadinessScore } from '@/lib/quality/readiness-score'
 import { supabaseAdmin } from '@/lib/supabase/admin'
@@ -27,8 +27,8 @@ export default async function DataQualityPage({ params, searchParams }: PageProp
   } = await supabase.auth.getUser()
   if (!user) notFound()
 
-  // Parallel data fetch
-  const [{ issues, hasMappings }, validationRules, readiness, tablesData] = await Promise.all([
+  // Parallel data fetch — fix history fetched once here to avoid N+1 per IssueCard
+  const [{ issues, hasMappings }, validationRules, readiness, tablesData, initialFixHistory] = await Promise.all([
     getQualityIssues(projectId),
     getValidationRules(projectId),
     computeReadinessScore(projectId),
@@ -37,6 +37,7 @@ export default async function DataQualityPage({ params, searchParams }: PageProp
       .from('datasets')
       .select('id, role, name, tables(id, name, fields(id, name, data_type, inferred_type))')
       .eq('project_id', projectId),
+    getFixHistory(projectId),
   ])
 
   const allDatasets = (tablesData.data ?? []) as Array<{
@@ -58,6 +59,7 @@ export default async function DataQualityPage({ params, searchParams }: PageProp
       initialRules={validationRules}
       hasMappings={hasMappings}
       allDatasets={allDatasets}
+      initialFixHistory={initialFixHistory}
       initialFilterTableId={sp.tableId}
       initialFilterFieldId={sp.fieldId}
       initialFilterSeverity={sp.severity}

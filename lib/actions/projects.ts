@@ -3,6 +3,7 @@
 import { revalidatePath } from 'next/cache'
 import { createClient } from '@/lib/supabase/server'
 import { Project, Dataset, ProjectWithDatasets, ProjectWithStats } from '@/lib/types/database'
+import { extractMigrationIntelligence } from '@/lib/actions/migration-intelligence'
 
 export async function updateProjectLabels(
   projectId: string,
@@ -305,4 +306,24 @@ export async function getProjectsWithStats(): Promise<ProjectWithStats[]> {
       outputCount: b.outputCount,
     }
   })
+}
+
+/**
+ * Marks a project as complete and triggers background migration intelligence
+ * extraction. The extraction is fire-and-forget — it never blocks the
+ * completion response and failures are logged but not surfaced to the user.
+ */
+export async function markProjectComplete(projectId: string): Promise<Project> {
+  const project = await updateProject(projectId, { status: 'completed' })
+
+  // Fire intelligence extraction in the background — non-blocking and failure-safe
+  try {
+    extractMigrationIntelligence(projectId).catch((err) => {
+      console.error('Migration intelligence extraction failed (non-critical):', err)
+    })
+  } catch (err) {
+    console.error('Migration intelligence extraction failed (non-critical):', err)
+  }
+
+  return project
 }
