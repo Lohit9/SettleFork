@@ -81,14 +81,19 @@ export async function computeReadinessScore(projectId: string): Promise<Readines
       if (requiredFields) {
         totalRequiredCount = Math.max(requiredFields.length, 1)
 
-        for (const rf of requiredFields) {
-          const { count } = await supabaseAdmin
-            .from('field_mappings')
-            .select('*', { count: 'exact', head: true })
-            .eq('target_field_id', rf.id)
+        // Single query replaces the previous N+1 sequential loop
+        const { data: mappedTargetFields } = await supabaseAdmin
+          .from('field_mappings')
+          .select('target_field_id')
+          .in('target_field_id', requiredFields.map((f) => f.id))
 
-          if ((count ?? 0) === 0) unmappedRequiredCount++
-        }
+        const mappedTargetFieldIds = new Set(
+          (mappedTargetFields ?? []).map((r) => r.target_field_id)
+        )
+
+        unmappedRequiredCount = requiredFields.filter(
+          (f) => !mappedTargetFieldIds.has(f.id)
+        ).length
       }
     }
   }
