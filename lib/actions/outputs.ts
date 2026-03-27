@@ -249,7 +249,7 @@ export async function getOutputsPageData(projectId: string): Promise<OutputsPage
       nonRejectedTMIds.length > 0
         ? supabaseAdmin
             .from('field_mappings')
-            .select('id, status, source_field_id, target_field_id, confidence, created_at')
+            .select('id, status, source_field_id, target_field_id, confidence, created_at, is_contributing')
             .in('table_mapping_id', nonRejectedTMIds)
         : Promise.resolve({ data: [] }),
     ])
@@ -276,6 +276,13 @@ export async function getOutputsPageData(projectId: string): Promise<OutputsPage
   const totalSourceFields = (sourceFieldRows ?? []).length
   const mappedSrcIds = new Set(approvedFMs.map((fm) => fm.source_field_id))
   const unmappedSourceFields = Math.max(0, totalSourceFields - mappedSrcIds.size)
+
+  // Deduplicated counts — contributing rows share the same target as their primary;
+  // counting rows inflates both the source and target coverage metrics.
+  const approvedPrimaryFMs = approvedFMs.filter((fm) => !(fm as { is_contributing?: boolean }).is_contributing)
+  const coveredTargetFieldIds = new Set(approvedPrimaryFMs.map((fm) => fm.target_field_id))
+  const approvedFieldMappingCount = mappedSrcIds.size   // unique source fields with at least one approved mapping
+  const targetFieldCoverageCount = coveredTargetFieldIds.size
 
   const openBlocking = (qualityIssueRows ?? []).filter((q) => q.severity === 'blocking' && q.status === 'open').length
   const openWarnings = (qualityIssueRows ?? []).filter((q) => q.severity === 'warning' && q.status === 'open').length
@@ -315,7 +322,7 @@ export async function getOutputsPageData(projectId: string): Promise<OutputsPage
 
   const dataIngestion = sourceTables.length > 0 && targetTables.length > 0 ? 'complete' : ('incomplete' as const)
   const dataQualityColor: PhaseColor = openBlocking === 0 ? 'green' : openBlocking < 5 ? 'yellow' : 'red'
-  const mappingPct = totalSourceFields > 0 ? (approvedFMs.length / totalSourceFields) * 100 : 0
+  const mappingPct = totalSourceFields > 0 ? (approvedFieldMappingCount / totalSourceFields) * 100 : 0
   const mappingColor: PhaseColor = mappingPct >= 80 ? 'green' : mappingPct >= 50 ? 'yellow' : 'red'
   const transformColor: PhaseColor =
     totalTransformScope === 0 ? 'gray' : completedTransforms >= totalTransformScope ? 'green' : completedTransforms > 0 ? 'yellow' : 'red'
@@ -368,7 +375,7 @@ export async function getOutputsPageData(projectId: string): Promise<OutputsPage
     metrics: {
       readinessScore,
       readinessStatus,
-      approvedFieldMappings: approvedFMs.length,
+      approvedFieldMappings: approvedFieldMappingCount,
       totalSourceFields,
       openBlocking,
       openWarnings,
@@ -760,7 +767,7 @@ export async function generateReadinessReport(
 
   const [{ data: fieldMappings }, { data: srcFields }] = await Promise.all([
     nonRejectedTMIds.length > 0
-      ? supabaseAdmin.from('field_mappings').select('id, status, confidence').in('table_mapping_id', nonRejectedTMIds)
+      ? supabaseAdmin.from('field_mappings').select('id, status, confidence, source_field_id, is_contributing').in('table_mapping_id', nonRejectedTMIds)
       : Promise.resolve({ data: [] }),
     srcTableIds.length > 0
       ? supabaseAdmin.from('fields').select('id').in('table_id', srcTableIds)
@@ -833,8 +840,8 @@ Status: ${readinessLabel}
 
 <mapping_summary>
 Total source fields: ${totalSourceFields}
-Approved field mappings: ${approvedFMs.length} (${totalSourceFields > 0 ? Math.round((approvedFMs.length / totalSourceFields) * 100) : 0}%)
-Unmapped source fields: ${totalSourceFields - approvedFMs.length}
+Approved field mappings: ${new Set(approvedFMs.map((fm) => fm.source_field_id)).size} source fields → ${new Set(approvedFMs.filter((fm) => !(fm as { is_contributing?: boolean }).is_contributing).map((fm) => (fm as { target_field_id?: string }).target_field_id)).size} target fields (${totalSourceFields > 0 ? Math.round((new Set(approvedFMs.map((fm) => fm.source_field_id)).size / totalSourceFields) * 100) : 0}% source coverage)
+Unmapped source fields: ${totalSourceFields - new Set(approvedFMs.map((fm) => fm.source_field_id)).size}
 Approved table mappings: ${(tableMappings ?? []).filter((tm) => tm.status === 'approved').length}
 Rejected mappings: ${(fieldMappings ?? []).filter((fm) => fm.status === 'rejected').length}
 Average confidence: ${avgConfidence}%

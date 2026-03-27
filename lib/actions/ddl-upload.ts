@@ -135,6 +135,13 @@ export async function confirmDDLSchema(
 
   let tableCount = 0
 
+  // Accumulate (parsedTable, tableId, insertedFields) for validation rule seeding
+  const seededTables: Array<{
+    parsedTable: (typeof tables)[number]
+    tableId: string
+    fieldIdByName: Map<string, string>
+  }> = []
+
   for (const parsedTable of tables) {
     if (!parsedTable.name || parsedTable.fields.length === 0) continue
 
@@ -171,7 +178,7 @@ export async function confirmDDLSchema(
       continue
     }
 
-    // Build field records
+    // Build field records — includes check_constraint from parsed DDL
     const fieldRecords = parsedTable.fields.map((f, idx) => ({
       table_id: newTable.id,
       name: f.name,
@@ -182,9 +189,13 @@ export async function confirmDDLSchema(
       is_foreign_key: f.isForeignKey,
       fk_reference: f.fkReference,
       ordinal_position: idx + 1,
+      check_constraint: f.checkConstraint ?? null,
     }))
 
-    const { error: fieldsErr } = await supabase.from('fields').insert(fieldRecords)
+    const { data: insertedFields, error: fieldsErr } = await supabase
+      .from('fields')
+      .insert(fieldRecords)
+      .select('id, name')
 
     if (fieldsErr) {
       console.error('[confirmDDLSchema] fields insert failed:', fieldsErr.message)
@@ -193,7 +204,135 @@ export async function confirmDDLSchema(
       continue
     }
 
+    // Build name → id map for validation rule seeding
+    const fieldIdByName = new Map<string, string>(
+      (insertedFields ?? []).map((f: { id: string; name: string }) => [f.name, f.id])
+    )
+
+    seededTables.push({ parsedTable, tableId: newTable.id, fieldIdByName })
     tableCount++
+  }
+
+  // ── Auto-seed validation rules from CHECK constraints ──────────────────────
+  // Deduplication: don't insert rules we already created (handles re-uploads)
+  const { data: existingRules } = await supabase
+    .from('validation_rules')
+    .select('name')
+    .eq('project_id', projectId)
+    .like('name', '%(from DDL)%')
+
+  const existingRuleNames = new Set((existingRules ?? []).map((r: { name: string }) => r.name))
+
+  const validationRuleInserts: Array<{
+    project_id: string
+    table_id: string
+    field_id: string
+    name: string
+    rule_type: string
+    rule_config: Record<string, unknown>
+    severity: 'blocking'
+    is_ai_generated: boolean
+  }> = []
+
+  for (const { parsedTable, tableId, fieldIdByName } of seededTables) {
+    for (const field of parsedTable.fields) {
+      const constraint = field.checkConstraint
+      if (!constraint) continue
+
+      const fieldId = fieldIdByName.get(field.name)
+      if (!fieldId) continue
+
+      if (constraint.type === 'in_list' && constraint.allowedValues.length > 0) {
+        const ruleName = `${field.name}: allowed values (from DDL)`
+        if (!existingRuleNames.has(ruleName)) {
+          validationRuleInserts.push({
+            project_id: projectId,
+            table_id: tableId,
+            field_id: fieldId,
+            name: ruleName,
+            rule_type: 'allowed_values',
+            rule_config: { allowed_values: constraint.allowedValues },
+            severity: 'blocking',
+            is_ai_generated: false,
+          })
+        }
+      }
+
+      if (constraint.type === 'regex' && constraint.pattern) {
+        const ruleName = `${field.name}: format validation (from DDL)`
+        if (!existingRuleNames.has(ruleName)) {
+          validationRuleInserts.push({
+            project_id: projectId,
+            table_id: tableId,
+            field_id: fieldId,
+            name: ruleName,
+            rule_type: 'regex',
+            rule_config: { pattern: constraint.pattern },
+            severity: 'blocking',
+            is_ai_generated: false,
+          })
+        }
+      }
+
+      if (constraint.type === 'range') {
+        if (constraint.min !== undefined && constraint.max !== undefined) {
+          const ruleName = `${field.name}: value range (from DDL)`
+          if (!existingRuleNames.has(ruleName)) {
+            validationRuleInserts.push({
+              project_id: projectId,
+              table_id: tableId,
+              field_id: fieldId,
+              name: ruleName,
+              rule_type: 'range',
+              rule_config: { min: constraint.min, max: constraint.max },
+              severity: 'blocking',
+              is_ai_generated: false,
+            })
+          }
+        } else if (constraint.min !== undefined) {
+          const ruleName = `${field.name}: minimum value (from DDL)`
+          if (!existingRuleNames.has(ruleName)) {
+            validationRuleInserts.push({
+              project_id: projectId,
+              table_id: tableId,
+              field_id: fieldId,
+              name: ruleName,
+              rule_type: 'min_value',
+              rule_config: { min: constraint.min },
+              severity: 'blocking',
+              is_ai_generated: false,
+            })
+          }
+        } else if (constraint.max !== undefined) {
+          const ruleName = `${field.name}: maximum value (from DDL)`
+          if (!existingRuleNames.has(ruleName)) {
+            validationRuleInserts.push({
+              project_id: projectId,
+              table_id: tableId,
+              field_id: fieldId,
+              name: ruleName,
+              rule_type: 'max_value',
+              rule_config: { max: constraint.max },
+              severity: 'blocking',
+              is_ai_generated: false,
+            })
+          }
+        }
+      }
+    }
+  }
+
+  if (validationRuleInserts.length > 0) {
+    const { error: rulesError } = await supabase
+      .from('validation_rules')
+      .insert(validationRuleInserts)
+
+    if (rulesError) {
+      console.error('[confirmDDLSchema] failed to auto-seed validation rules:', rulesError.message)
+      // Non-blocking — DDL upload succeeds even if rule seeding fails
+    } else {
+      console.log(`[confirmDDLSchema] auto-seeded ${validationRuleInserts.length} validation rules from CHECK constraints`)
+    }
   }
 
   if (tableCount === 0) {

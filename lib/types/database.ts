@@ -25,6 +25,12 @@ export interface DBTable {
   created_at: string
 }
 
+export type CheckConstraint =
+  | { type: 'in_list'; allowedValues: string[]; raw: string }
+  | { type: 'regex'; pattern: string; raw: string }
+  | { type: 'range'; min?: number; max?: number; raw: string }
+  | { type: 'custom'; raw: string }
+
 export interface Field {
   id: string
   table_id: string
@@ -37,6 +43,7 @@ export interface Field {
   fk_reference: string | null
   ordinal_position: number
   created_at: string
+  check_constraint: CheckConstraint | null
 }
 
 export interface DataRow {

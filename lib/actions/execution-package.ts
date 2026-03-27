@@ -282,6 +282,7 @@ export async function generateExecutionPackage(
             .select('id, table_mapping_id, source_field_id, target_field_id, confidence, needs_transformation')
             .in('table_mapping_id', tmIds)
             .eq('status', 'approved')
+            .or('is_contributing.is.null,is_contributing.eq.false')
         : Promise.resolve({ data: [] as FieldMappingRow[] }),
       // Schema docs scoped to datasets (schema type) OR to project (business_context type)
       allDatasetIds.length > 0

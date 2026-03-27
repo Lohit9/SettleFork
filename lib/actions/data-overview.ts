@@ -4,6 +4,12 @@ import { createClient } from '@/lib/supabase/server'
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
+export type CheckConstraint =
+  | { type: 'in_list'; allowedValues: string[]; raw: string }
+  | { type: 'regex'; pattern: string; raw: string }
+  | { type: 'range'; min?: number; max?: number; raw: string }
+  | { type: 'custom'; raw: string }
+
 export interface FieldData {
   id: string
   name: string
@@ -15,6 +21,7 @@ export interface FieldData {
   fk_reference: string | null
   ordinal_position: number
   schema_source: 'inferred' | 'doc_enriched' | 'manual'
+  check_constraint: CheckConstraint | null
 }
 
 export interface TableData {
@@ -77,7 +84,8 @@ export async function getProjectSchema(projectId: string): Promise<ProjectSchema
         fields (
           id, table_id, name, data_type, inferred_type,
           is_nullable, is_primary_key, is_foreign_key,
-          fk_reference, ordinal_position, schema_source
+          fk_reference, ordinal_position, schema_source,
+          check_constraint
         )
       )
     `)
@@ -97,7 +105,7 @@ export async function getProjectSchema(projectId: string): Promise<ProjectSchema
         id: string; table_id: string; name: string; data_type: string
         inferred_type: string | null; is_nullable: boolean; is_primary_key: boolean
         is_foreign_key: boolean; fk_reference: string | null; ordinal_position: number
-        schema_source: string | null
+        schema_source: string | null; check_constraint: CheckConstraint | null
       }>
     }>) ?? [])
       .map((t) => ({
@@ -117,6 +125,7 @@ export async function getProjectSchema(projectId: string): Promise<ProjectSchema
             fk_reference: f.fk_reference,
             ordinal_position: f.ordinal_position,
             schema_source: (f.schema_source as 'inferred' | 'doc_enriched' | 'manual') ?? 'inferred',
+            check_constraint: (f.check_constraint as CheckConstraint | null) ?? null,
           })),
       })),
   }))
