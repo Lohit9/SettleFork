@@ -541,8 +541,8 @@ export async function extractMigrationIntelligence(projectId: string): Promise<{
           if (!t.generated_sql) continue
           const fm = fieldMappings.find((f) => f.id === t.field_mapping_id)
           if (!fm) continue
-          const src = fm.source_field as { name: string; data_type: string } | null
-          const tgt = fm.target_field as { name: string; data_type: string } | null
+          const src = fm.source_field as unknown as { name: string; data_type: string } | null
+          const tgt = fm.target_field as unknown as { name: string; data_type: string } | null
           if (!src || !tgt) continue
 
           appliedTransforms.push({
@@ -601,8 +601,8 @@ export async function extractMigrationIntelligence(projectId: string): Promise<{
 
       const fields = fieldMappings.filter((fm) => fm.table_mapping_id === tm.id)
       for (const fm of fields) {
-        const src = fm.source_field as { name: string; data_type: string; inferred_type: string | null } | null
-        const tgt = fm.target_field as { name: string; data_type: string; is_nullable: boolean } | null
+        const src = fm.source_field as unknown as { name: string; data_type: string; inferred_type: string | null } | null
+        const tgt = fm.target_field as unknown as { name: string; data_type: string; is_nullable: boolean } | null
         if (!src || !tgt) continue
 
         const transform = transformsByFieldMappingId.get(fm.id)
