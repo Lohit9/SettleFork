@@ -158,7 +158,7 @@ export async function generateMigrationRunbook(
 
   const tmIds = approvedTMs.map((tm) => tm.id)
 
-  const [{ data: allTables }, { data: fieldMappings }, { data: srcFields }] = await Promise.all([
+  const [{ data: allTables }, { data: fieldMappings }] = await Promise.all([
     supabaseAdmin.from('tables').select('id, name, dataset_id, row_count').in('id', allTableIds),
     supabaseAdmin
       .from('field_mappings')
@@ -166,20 +166,18 @@ export async function generateMigrationRunbook(
         'id, table_mapping_id, status, needs_transformation, source_field:fields!field_mappings_source_field_id_fkey(id, name, data_type), target_field:fields!field_mappings_target_field_id_fkey(id, name, data_type, is_foreign_key, fk_reference)'
       )
       .in('table_mapping_id', tmIds),
-    srcDs
-      ? supabaseAdmin
-          .from('fields')
-          .select('id')
-          .in(
-            'table_id',
-            (allTables ?? []).filter((t) => t.dataset_id === srcDs.id).map((t) => t.id)
-          )
-      : Promise.resolve({ data: [] }),
   ])
 
   const tables = allTables ?? []
   const fms = fieldMappings ?? []
   const fmIds = fms.map((fm) => fm.id)
+
+  // srcFields needs allTables resolved first (can't be in the same Promise.all)
+  const srcTableIds = tables.filter((t) => t.dataset_id === srcDs?.id).map((t) => t.id)
+  const { data: srcFields } =
+    srcTableIds.length > 0
+      ? await supabaseAdmin.from('fields').select('id').in('table_id', srcTableIds)
+      : { data: [] as { id: string }[] }
 
   // ── Parallel data fetch (hop 3) ─────────────────────────────────────────────
   const [{ data: transformations }, { data: targetFieldsFull }] = await Promise.all([
