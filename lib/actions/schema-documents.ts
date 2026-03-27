@@ -52,7 +52,7 @@ export async function uploadSchemaDocument(formData: FormData): Promise<UploadSc
         const { extractText } = await import('unpdf')
         const buffer = Buffer.from(await file.arrayBuffer())
         const { text } = await extractText(new Uint8Array(buffer))
-        extractedText = text?.trim() || null
+        extractedText = (Array.isArray(text) ? text.join('\n') : text)?.trim() || null
         if (!extractedText) {
           console.warn('[uploadSchemaDocument] No text extracted from PDF (may be scanned/image-only):', sanitizedFilename)
         }
@@ -208,7 +208,7 @@ export async function uploadBusinessContextDoc(
         const { extractText } = await import('unpdf')
         const buffer = Buffer.from(await file.arrayBuffer())
         const { text } = await extractText(new Uint8Array(buffer))
-        extractedText = text?.trim() || null
+        extractedText = (Array.isArray(text) ? text.join('\n') : text)?.trim() || null
         if (!extractedText) {
           console.warn('[uploadBusinessContextDoc] No text extracted from PDF (may be scanned/image-only):', sanitizedFilename)
         }
