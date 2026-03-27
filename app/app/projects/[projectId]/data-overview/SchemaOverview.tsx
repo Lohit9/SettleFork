@@ -173,13 +173,19 @@ function FieldEditModal({
 // ─── Constraint Badge ─────────────────────────────────────────────────────────
 
 function ConstraintBadge({ constraint }: { constraint: CheckConstraint | null }) {
+  const [expanded, setExpanded] = useState(false)
+
   if (!constraint) return <span className="text-gray-300">—</span>
 
   switch (constraint.type) {
-    case 'in_list':
+    case 'in_list': {
+      const values = constraint.allowedValues ?? []
+      const PREVIEW = 6
+      const hidden = values.length - PREVIEW
+      const visible = expanded ? values : values.slice(0, PREVIEW)
       return (
-        <div className="flex flex-wrap gap-1">
-          {(constraint.allowedValues ?? []).slice(0, 6).map((val: string) => (
+        <div className="flex flex-wrap gap-1 items-center">
+          {visible.map((val: string) => (
             <span
               key={val}
               className="inline-block px-1.5 py-0.5 bg-blue-50 text-blue-700 rounded text-[10px] font-mono"
@@ -187,13 +193,25 @@ function ConstraintBadge({ constraint }: { constraint: CheckConstraint | null })
               {val}
             </span>
           ))}
-          {(constraint.allowedValues?.length ?? 0) > 6 && (
-            <span className="text-gray-400 text-[10px]">
-              +{constraint.allowedValues.length - 6} more
-            </span>
+          {!expanded && hidden > 0 && (
+            <button
+              onClick={() => setExpanded(true)}
+              className="text-[10px] text-blue-500 hover:text-blue-700 hover:underline"
+            >
+              +{hidden} more
+            </button>
+          )}
+          {expanded && hidden > 0 && (
+            <button
+              onClick={() => setExpanded(false)}
+              className="text-[10px] text-gray-400 hover:text-gray-600 hover:underline"
+            >
+              show less
+            </button>
           )}
         </div>
       )
+    }
 
     case 'regex':
       return (
