@@ -623,8 +623,8 @@ export async function extractMigrationIntelligence(projectId: string): Promise<{
     let transformsSection = ''
     for (const t of allTransforms) {
       const fm = fieldMappings.find((f) => f.id === t.field_mapping_id)
-      const src = (fm?.source_field as { name: string } | null)?.name ?? 'unknown'
-      const tgt = (fm?.target_field as { name: string } | null)?.name ?? 'unknown'
+      const src = (fm?.source_field as unknown as { name: string } | null)?.name ?? 'unknown'
+      const tgt = (fm?.target_field as unknown as { name: string } | null)?.name ?? 'unknown'
       transformsSection += `  - ${src} → ${tgt}: ${t.description ?? 'n/a'}\n    SQL: ${t.generated_sql ?? 'n/a'}\n    Status: ${t.status}\n`
     }
 
