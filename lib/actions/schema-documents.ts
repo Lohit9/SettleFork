@@ -48,12 +48,12 @@ export async function uploadSchemaDocument(formData: FormData): Promise<UploadSc
 
     try {
       if (ext === '.pdf') {
-        // pdf-parse is a CJS module; .default may not appear in TypeScript typings
+        // pdf-parse v2 exports a named class, not a callable function
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        const pdfParseModule = await import('pdf-parse') as any
-        const pdfParse: (buf: Buffer) => Promise<{ text: string }> = pdfParseModule.default ?? pdfParseModule
+        const { PDFParse } = await import('pdf-parse') as any
         const buffer = Buffer.from(await file.arrayBuffer())
-        const pdfData = await pdfParse(buffer)
+        const parser = new PDFParse({ data: buffer })
+        const pdfData = await parser.getText()
         extractedText = pdfData.text?.trim() || null
         if (!extractedText) {
           console.warn('[uploadSchemaDocument] No text extracted from PDF (may be scanned/image-only):', sanitizedFilename)
@@ -206,12 +206,12 @@ export async function uploadBusinessContextDoc(
     const ext = sanitizedFilename.toLowerCase().match(/\.[^.]+$/)?.[0] ?? ''
     try {
       if (ext === '.pdf') {
-        // pdf-parse is a CJS module; .default may not appear in TypeScript typings
+        // pdf-parse v2 exports a named class, not a callable function
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        const pdfParseModule = await import('pdf-parse') as any
-        const pdfParse: (buf: Buffer) => Promise<{ text: string }> = pdfParseModule.default ?? pdfParseModule
+        const { PDFParse } = await import('pdf-parse') as any
         const buffer = Buffer.from(await file.arrayBuffer())
-        const pdfData = await pdfParse(buffer)
+        const parser = new PDFParse({ data: buffer })
+        const pdfData = await parser.getText()
         extractedText = pdfData.text?.trim() || null
         if (!extractedText) {
           console.warn('[uploadBusinessContextDoc] No text extracted from PDF (may be scanned/image-only):', sanitizedFilename)
