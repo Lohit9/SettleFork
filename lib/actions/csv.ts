@@ -1,6 +1,7 @@
 'use server'
 
 import Papa from 'papaparse'
+import { revalidatePath } from 'next/cache'
 import { createClient } from '@/lib/supabase/server'
 import { validateCSVUpload } from '@/lib/upload/validate'
 import { computeFriendlyName } from '@/lib/db/sql-rewriter'
@@ -261,6 +262,9 @@ export async function uploadCSV(formData: FormData): Promise<UploadCSVResult> {
       'data',
       { file_name: file.name, table_name: tableName, row_count: sanitizedRows.length, field_count: inferredFields.length }
     )
+
+    // Invalidate the project subtree cache so navigating back to any tab shows fresh data
+    revalidatePath(`/app/projects/${projectId}`, 'layout')
 
     return {
       success: true,

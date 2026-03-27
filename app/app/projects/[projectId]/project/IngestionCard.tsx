@@ -1,6 +1,7 @@
 'use client'
 
 import { useState, useRef, useCallback } from 'react'
+import { useRouter } from 'next/navigation'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
@@ -61,6 +62,7 @@ interface IngestionCardProps {
 }
 
 export function IngestionCard({ type, title, projectId, initialDatasets }: IngestionCardProps) {
+  const router = useRouter()
   const [datasets, setDatasets] = useState<DatasetWithTableStats[]>(initialDatasets)
   const [selectedDatasetId, setSelectedDatasetId] = useState<string | null>(
     initialDatasets[0]?.id ?? null
@@ -211,6 +213,7 @@ export function IngestionCard({ type, title, projectId, initialDatasets }: Inges
           rowCount: result.rowCount,
           fieldCount: result.fieldCount,
         })
+        router.refresh()
       } else {
         setUploadState({ status: 'error', error: result.error ?? 'Upload failed' })
       }
@@ -346,6 +349,7 @@ export function IngestionCard({ type, title, projectId, initialDatasets }: Inges
         step: 'saved',
         savedTableCount: result.tableCount ?? editedTables.length,
       }))
+      router.refresh()
     } else {
       setDdl((s) => ({
         ...s,
