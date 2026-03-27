@@ -12,6 +12,22 @@ export interface UploadSchemaDocResult {
 }
 
 export async function uploadSchemaDocument(formData: FormData): Promise<UploadSchemaDocResult> {
+  // TEMPORARY DEBUG — remove after confirming pdf-parse API shape
+  try {
+    const pdfModule = await import('pdf-parse')
+    console.log('[PDF DEBUG] typeof pdfModule:', typeof pdfModule)
+    console.log('[PDF DEBUG] keys:', Object.keys(pdfModule))
+    console.log('[PDF DEBUG] typeof pdfModule.default:', typeof pdfModule.default)
+    console.log('[PDF DEBUG] typeof pdfModule.PDFParse:', typeof (pdfModule as any).PDFParse)
+    console.log('[PDF DEBUG] typeof pdfModule.default?.PDFParse:', typeof (pdfModule as any).default?.PDFParse)
+    console.log('[PDF DEBUG] is function?:', typeof pdfModule.default === 'function')
+    if ((pdfModule as any).PDFParse) {
+      console.log('[PDF DEBUG] PDFParse prototype:', Object.getOwnPropertyNames((pdfModule as any).PDFParse.prototype))
+    }
+  } catch (e) {
+    console.log('[PDF DEBUG] import error:', e)
+  }
+
   try {
     const supabase = await createClient()
     const {
