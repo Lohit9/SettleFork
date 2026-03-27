@@ -50,6 +50,7 @@ export function DDLSchemaReview({
                   isForeignKey: false,
                   fkReference: null,
                   defaultValue: null,
+                  checkConstraint: null,
                 },
               ],
             }
