@@ -67,77 +67,58 @@ export interface ProfilingData {
 export async function getProjectSchema(projectId: string): Promise<ProjectSchema> {
   const supabase = await createClient()
 
+  // Single nested query — 1 round trip instead of 3 sequential ones
   const { data: datasets, error } = await supabase
     .from('datasets')
-    .select('id, name, role')
+    .select(`
+      id, name, role,
+      tables (
+        id, dataset_id, name, row_count,
+        fields (
+          id, table_id, name, data_type, inferred_type,
+          is_nullable, is_primary_key, is_foreign_key,
+          fk_reference, ordinal_position, schema_source
+        )
+      )
+    `)
     .eq('project_id', projectId)
     .order('created_at', { ascending: true })
 
   if (error) throw new Error(error.message)
   if (!datasets?.length) return { source: [], target: [] }
 
-  const datasetIds = datasets.map((d) => d.id)
-
-  const { data: tables } = await supabase
-    .from('tables')
-    .select('id, dataset_id, name, row_count')
-    .in('dataset_id', datasetIds)
-    .order('created_at', { ascending: true })
-
-  if (!tables?.length) {
-    return {
-      source: datasets
-        .filter((d) => d.role === 'source')
-        .map((d) => ({ ...d, role: 'source' as const, tables: [] })),
-      target: datasets
-        .filter((d) => d.role === 'target')
-        .map((d) => ({ ...d, role: 'target' as const, tables: [] })),
-    }
-  }
-
-  const tableIds = tables.map((t) => t.id)
-
-  const { data: fields } = await supabase
-    .from('fields')
-    .select('id, table_id, name, data_type, inferred_type, is_nullable, is_primary_key, is_foreign_key, fk_reference, ordinal_position, schema_source')
-    .in('table_id', tableIds)
-    .order('ordinal_position', { ascending: true })
-
-  const fieldsByTable = new Map<string, FieldData[]>()
-  for (const f of fields || []) {
-    const list = fieldsByTable.get(f.table_id) ?? []
-    list.push({
-      id: f.id,
-      name: f.name,
-      data_type: f.data_type,
-      inferred_type: f.inferred_type,
-      is_nullable: f.is_nullable,
-      is_primary_key: f.is_primary_key,
-      is_foreign_key: f.is_foreign_key,
-      fk_reference: f.fk_reference,
-      ordinal_position: f.ordinal_position,
-      schema_source: (f.schema_source as 'inferred' | 'doc_enriched' | 'manual') ?? 'inferred',
-    })
-    fieldsByTable.set(f.table_id, list)
-  }
-
-  const tablesByDataset = new Map<string, TableData[]>()
-  for (const t of tables) {
-    const list = tablesByDataset.get(t.dataset_id) ?? []
-    list.push({
-      id: t.id,
-      name: t.name,
-      row_count: t.row_count ?? 0,
-      fields: fieldsByTable.get(t.id) ?? [],
-    })
-    tablesByDataset.set(t.dataset_id, list)
-  }
-
   const result = datasets.map((d) => ({
     id: d.id,
     name: d.name,
     role: d.role as 'source' | 'target',
-    tables: tablesByDataset.get(d.id) ?? [],
+    tables: ((d.tables as Array<{
+      id: string; dataset_id: string; name: string; row_count: number | null
+      fields: Array<{
+        id: string; table_id: string; name: string; data_type: string
+        inferred_type: string | null; is_nullable: boolean; is_primary_key: boolean
+        is_foreign_key: boolean; fk_reference: string | null; ordinal_position: number
+        schema_source: string | null
+      }>
+    }>) ?? [])
+      .map((t) => ({
+        id: t.id,
+        name: t.name,
+        row_count: t.row_count ?? 0,
+        fields: (t.fields ?? [])
+          .sort((a, b) => a.ordinal_position - b.ordinal_position)
+          .map((f) => ({
+            id: f.id,
+            name: f.name,
+            data_type: f.data_type,
+            inferred_type: f.inferred_type,
+            is_nullable: f.is_nullable,
+            is_primary_key: f.is_primary_key,
+            is_foreign_key: f.is_foreign_key,
+            fk_reference: f.fk_reference,
+            ordinal_position: f.ordinal_position,
+            schema_source: (f.schema_source as 'inferred' | 'doc_enriched' | 'manual') ?? 'inferred',
+          })),
+      })),
   }))
 
   return {
@@ -151,40 +132,28 @@ export async function getProjectSchema(projectId: string): Promise<ProjectSchema
 export async function getAllTablesForProject(projectId: string): Promise<TableOption[]> {
   const supabase = await createClient()
 
+  // Single nested query — datasets → tables → fields in one round trip
   const { data: datasets } = await supabase
     .from('datasets')
-    .select('id, name, role')
+    .select('id, name, role, tables(id, dataset_id, name, row_count, friendly_name, fields(table_id, name, ordinal_position))')
     .eq('project_id', projectId)
     .order('created_at', { ascending: true })
 
   if (!datasets?.length) return []
 
-  const datasetIds = datasets.map((d) => d.id)
+  const datasetMap = new Map(datasets.map((d) => [d.id, d]))
 
-  const { data: tables } = await supabase
-    .from('tables')
-    .select('id, dataset_id, name, row_count, friendly_name')
-    .in('dataset_id', datasetIds)
-    .order('name', { ascending: true })
+  const tables = datasets.flatMap((d) =>
+    (d.tables as Array<{ id: string; dataset_id: string; name: string; row_count: number | null; friendly_name: string | null; fields: Array<{ table_id: string; name: string; ordinal_position: number }> }>) ?? []
+  )
 
-  if (!tables?.length) return []
-
-  const tableIds = tables.map((t) => t.id)
-
-  const { data: fields } = await supabase
-    .from('fields')
-    .select('table_id, name')
-    .in('table_id', tableIds)
-    .order('ordinal_position', { ascending: true })
+  if (!tables.length) return []
 
   const fieldNamesByTable = new Map<string, string[]>()
-  for (const f of fields || []) {
-    const list = fieldNamesByTable.get(f.table_id) ?? []
-    list.push(f.name)
-    fieldNamesByTable.set(f.table_id, list)
+  for (const t of tables) {
+    const sortedFields = (t.fields ?? []).sort((a, b) => a.ordinal_position - b.ordinal_position)
+    fieldNamesByTable.set(t.id, sortedFields.map((f) => f.name))
   }
-
-  const datasetMap = new Map(datasets.map((d) => [d.id, d]))
 
   return tables.map((t) => {
     const ds = datasetMap.get(t.dataset_id)!

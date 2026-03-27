@@ -164,7 +164,7 @@ export async function runAIAugmentedChecks(
       maxDocChars: 12000,
       maxDistributionValues: 25,
       maxSampleValues: 10,
-    })
+    }, user.id)
   } catch (err) {
     console.warn('[ai-detection] buildAIContext failed:', err)
     return { issuesFound: 0, error: 'Failed to build AI context' }
@@ -222,7 +222,7 @@ export async function runAIAugmentedChecks(
 
   const userMessage = `${schemaSection}
 ${docsSection}
-
+${aiContext.intelligence_context ? '\n' + aiContext.intelligence_context + '\n' : ''}
 <target_mappings>
 ${mappingsSummary || '(no mappings found for this table)'}
 </target_mappings>

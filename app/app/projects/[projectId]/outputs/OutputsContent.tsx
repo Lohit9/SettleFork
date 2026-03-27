@@ -25,7 +25,9 @@ import {
   generateDataDictionary,
 } from '@/lib/actions/outputs'
 import type { OutputsPageData, GeneratedFile, ExistingOutput } from '@/lib/actions/outputs'
-import { updateProject } from '@/lib/actions/projects'
+import { generateExecutionPackage, getExecutionPackageUrl } from '@/lib/actions/execution-package'
+import { generateMigrationRunbook } from '@/lib/actions/migration-runbook'
+import { markProjectComplete } from '@/lib/actions/projects'
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -38,6 +40,15 @@ interface DeliverableState {
   downloadUrl: string
   version: string
   generatedAt: string
+}
+
+interface ExecutionPackageState {
+  status: 'idle' | 'generating' | 'generated' | 'error'
+  sqlContent: string | null
+  signedUrl: string | null
+  version: string | null
+  generatedAt: string | null
+  error: string | null
 }
 
 type ToastState = { message: string; type: 'success' | 'error' }
@@ -124,6 +135,22 @@ export default function OutputsContent({ projectId, initialData }: Props) {
   const [generatingKey, setGeneratingKey] = useState<string | null>(null)
   const [allGenProgress, setAllGenProgress] = useState<string | null>(null)
 
+  // Execution package
+  const [executionPackage, setExecutionPackage] = useState<ExecutionPackageState>(() => {
+    const existing = initialData.existingOutputs.find((o) => o.type === 'execution_package')
+    if (existing) {
+      return {
+        status: 'generated',
+        sqlContent: null,
+        signedUrl: existing.signedUrl,
+        version: existing.version,
+        generatedAt: existing.generated_at,
+        error: null,
+      }
+    }
+    return { status: 'idle', sqlContent: null, signedUrl: null, version: null, generatedAt: null, error: null }
+  })
+
   // Decisions log
   const [showAllDecisions, setShowAllDecisions] = useState(false)
 
@@ -152,6 +179,63 @@ export default function OutputsContent({ projectId, initialData }: Props) {
     })
   }
 
+  // ── Execution package handlers ──────────────────────────────────────────
+
+  async function handleGenerateExecutionPackage() {
+    setExecutionPackage((prev) => ({ ...prev, status: 'generating', error: null }))
+    try {
+      const result = await generateExecutionPackage(projectId)
+      if (result.success) {
+        setExecutionPackage({
+          status: 'generated',
+          sqlContent: result.sqlContent,
+          signedUrl: null,
+          version: result.version,
+          generatedAt: new Date().toISOString(),
+          error: null,
+        })
+        showToast('Execution package generated successfully', 'success')
+      } else {
+        setExecutionPackage((prev) => ({
+          ...prev,
+          status: 'error',
+          error: result.error ?? 'Failed to generate execution package',
+        }))
+        showToast(result.error ?? 'Generation failed', 'error')
+      }
+    } catch {
+      setExecutionPackage((prev) => ({
+        ...prev,
+        status: 'error',
+        error: 'An unexpected error occurred. Please try again.',
+      }))
+      showToast('An unexpected error occurred', 'error')
+    }
+  }
+
+  async function handleDownloadExecutionPackage() {
+    // Option B: in-memory blob download (no extra round-trip) when content is available
+    if (executionPackage.sqlContent) {
+      const blob = new Blob([executionPackage.sqlContent], { type: 'application/sql' })
+      const url = URL.createObjectURL(blob)
+      const a = document.createElement('a')
+      a.href = url
+      a.download = `migration_execution_package_v${executionPackage.version ?? '1.0'}.sql`
+      document.body.appendChild(a)
+      a.click()
+      document.body.removeChild(a)
+      URL.revokeObjectURL(url)
+      return
+    }
+    // Option A fallback: fetch a fresh signed URL (e.g. after page refresh)
+    const result = await getExecutionPackageUrl(projectId)
+    if (result.url) {
+      window.open(result.url, '_blank')
+    } else {
+      showToast('Could not generate download link. Please try regenerating.', 'error')
+    }
+  }
+
   // ── Deliverable handler ─────────────────────────────────────────────────
 
   const handleGenerateDeliverable = useCallback(
@@ -162,7 +246,9 @@ export default function OutputsContent({ projectId, initialData }: Props) {
       let result: { success: boolean; downloadUrl?: string; version?: string; error?: string }
 
       try {
-        if (type === 'readiness' && format === 'report') {
+        if (type === 'runbook' && format === 'docx') {
+          result = await generateMigrationRunbook(projectId)
+        } else if (type === 'readiness' && format === 'report') {
           result = await generateReadinessReport(projectId, 'docx')
         } else if (type === 'mapping' && format === 'csv') {
           result = await generateMappingFile(projectId, 'csv')
@@ -199,6 +285,7 @@ export default function OutputsContent({ projectId, initialData }: Props) {
 
   async function handleGenerateAll() {
     const steps: { key: string; label: string }[] = [
+      { key: 'runbook_docx', label: 'Generating migration runbook…' },
       { key: 'readiness_report', label: 'Generating readiness report…' },
       { key: 'mapping_csv', label: 'Generating mapping file…' },
       { key: 'transform_specs', label: 'Generating transformation specs…' },
@@ -210,6 +297,10 @@ export default function OutputsContent({ projectId, initialData }: Props) {
       setAllGenProgress(step.label)
       await handleGenerateDeliverable(step.key)
     }
+
+    // Also generate the execution package as part of "Generate All"
+    setAllGenProgress('Generating execution package…')
+    await handleGenerateExecutionPackage()
 
     setAllGenProgress(null)
     showToast('All deliverables generated', 'success')
@@ -425,7 +516,114 @@ export default function OutputsContent({ projectId, initialData }: Props) {
         </div>
 
         {/* ════════════════════════════════════════════════════
-            SECTION 2 — GOLD STANDARD FILES
+            SECTION 2 — MIGRATION EXECUTION PACKAGE (hero deliverable)
+        ════════════════════════════════════════════════════ */}
+        <div>
+          <div className="flex items-center gap-2 mb-3">
+            <Zap className="w-5 h-5 text-blue-600" />
+            <h2 className="text-lg font-bold text-gray-900">Migration Execution Package</h2>
+          </div>
+
+          {/* Accent card: left-border + subtle blue tint to signal primary deliverable */}
+          <div className="bg-gradient-to-r from-blue-50/60 to-white border border-blue-200 border-l-4 border-l-blue-600 rounded-xl shadow-sm p-6">
+
+            <p className="text-sm text-gray-600 mb-5">
+              Complete SQL migration script with extract queries, transformation logic, load scripts,
+              post-load validation queries, and rollback procedures — ready for your team to review and execute.
+            </p>
+
+            {/* No mappings guard */}
+            {!data.hasMappings && executionPackage.status === 'idle' && (
+              <div className="flex items-start gap-2 p-3 bg-amber-50 border border-amber-200 rounded-lg text-sm text-amber-800 mb-4">
+                <AlertCircle className="w-4 h-4 mt-0.5 flex-shrink-0 text-amber-500" />
+                <span>
+                  No approved mappings yet.{' '}
+                  <a href={`/app/projects/${projectId}/mapping`} className="font-medium underline hover:text-amber-900">
+                    Go to Mapping →
+                  </a>{' '}
+                  and approve at least one table mapping before generating the execution package.
+                </span>
+              </div>
+            )}
+
+            {/* IDLE */}
+            {executionPackage.status === 'idle' && (
+              <Button
+                className="bg-[#4F46E5] hover:bg-[#4338CA] text-white gap-2"
+                onClick={handleGenerateExecutionPackage}
+                disabled={!data.hasMappings}
+              >
+                <Zap className="w-4 h-4" />
+                Generate Execution Package
+              </Button>
+            )}
+
+            {/* GENERATING */}
+            {executionPackage.status === 'generating' && (
+              <div className="flex items-center gap-3">
+                <RefreshCw className="w-5 h-5 text-blue-600 animate-spin flex-shrink-0" />
+                <div>
+                  <p className="text-sm font-medium text-gray-800">Generating execution package…</p>
+                  <p className="text-xs text-gray-500 mt-0.5">
+                    Assembling extract, transform, load, and validation scripts. This may take 15–30 seconds.
+                  </p>
+                </div>
+              </div>
+            )}
+
+            {/* GENERATED */}
+            {executionPackage.status === 'generated' && (
+              <div>
+                <div className="flex items-center gap-2 mb-4">
+                  <CheckCircle2 className="w-4 h-4 text-green-600 flex-shrink-0" />
+                  <span className="text-sm font-medium text-green-700">Generated</span>
+                  {executionPackage.version && (
+                    <span className="text-xs text-gray-500 bg-gray-100 px-2 py-0.5 rounded-full border border-gray-200">
+                      v{executionPackage.version}
+                    </span>
+                  )}
+                  {executionPackage.generatedAt && (
+                    <span className="text-xs text-gray-400">{fmtDateTime(executionPackage.generatedAt)}</span>
+                  )}
+                </div>
+                <div className="flex items-center gap-3 flex-wrap">
+                  <Button
+                    className="bg-[#4F46E5] hover:bg-[#4338CA] text-white gap-2"
+                    onClick={handleDownloadExecutionPackage}
+                  >
+                    <Download className="w-4 h-4" />
+                    Download .sql
+                  </Button>
+                  <Button
+                    variant="outline"
+                    className="gap-2"
+                    onClick={handleGenerateExecutionPackage}
+                  >
+                    <RefreshCw className="w-3.5 h-3.5" />
+                    Regenerate
+                  </Button>
+                </div>
+              </div>
+            )}
+
+            {/* ERROR */}
+            {executionPackage.status === 'error' && (
+              <div>
+                <div className="flex items-center gap-2 mb-3">
+                  <AlertCircle className="w-4 h-4 text-red-500 flex-shrink-0" />
+                  <span className="text-sm text-red-700">{executionPackage.error}</span>
+                </div>
+                <Button variant="outline" className="gap-2" onClick={handleGenerateExecutionPackage}>
+                  <RefreshCw className="w-3.5 h-3.5" />
+                  Try Again
+                </Button>
+              </div>
+            )}
+          </div>
+        </div>
+
+        {/* ════════════════════════════════════════════════════
+            SECTION 3 — GOLD STANDARD FILES
         ════════════════════════════════════════════════════ */}
         <div>
           <div className="flex items-start justify-between mb-4">
@@ -549,7 +747,7 @@ export default function OutputsContent({ projectId, initialData }: Props) {
         </div>
 
         {/* ════════════════════════════════════════════════════
-            SECTION 3 — DELIVERABLE PACKAGE
+            SECTION 4 — DELIVERABLE PACKAGE
         ════════════════════════════════════════════════════ */}
         <div>
           <div className="flex items-start justify-between mb-4">
@@ -570,6 +768,18 @@ export default function OutputsContent({ projectId, initialData }: Props) {
           </div>
 
           <div className="space-y-3">
+            {/* Migration Runbook */}
+            <DeliverableCard
+              title="Migration Runbook"
+              description="Complete operational guide with step-by-step execution plan, pre-migration checklist, validation criteria, sign-off lines, and embedded mapping specifications"
+              icon="📘"
+              formats={[{ key: 'runbook_docx', label: 'Download Runbook (.docx)', ext: 'docx' }]}
+              state={deliverableMap['runbook_docx']}
+              isGenerating={generatingKey === 'runbook_docx'}
+              onGenerate={() => handleGenerateDeliverable('runbook_docx')}
+              existingOutput={existingOutputs.find((o) => o.type === 'migration_runbook')}
+            />
+
             {/* Readiness Report */}
             <DeliverableCard
               title="Migration Readiness Report"
@@ -665,7 +875,7 @@ export default function OutputsContent({ projectId, initialData }: Props) {
           <Button
             onClick={() =>
               startCompleting(async () => {
-                await updateProject(projectId, { status: 'completed' })
+                await markProjectComplete(projectId)
                 router.push('/app/projects')
               })
             }
@@ -801,6 +1011,7 @@ function DeliverableCard({ title, description, icon, formats, state, stateMap, i
 function buildInitialDeliverableMap(outputs: ExistingOutput[]): Record<string, DeliverableState> {
   const map: Record<string, DeliverableState> = {}
   const typeToKey: Record<string, string> = {
+    migration_runbook: 'runbook_docx',
     readiness_report: 'readiness_report',
     mapping_file: 'mapping_csv',
     transformation_specs: 'transform_specs',

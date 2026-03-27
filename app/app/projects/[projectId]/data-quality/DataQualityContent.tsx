@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useEffect, useTransition, useRef } from 'react'
+import { useState, useEffect, useTransition, useRef, useMemo } from 'react'
 import { useRouter } from 'next/navigation'
 import type { QualityIssue, FixOption, ReadinessScore, ValidationRule, FixHistory } from '@/lib/types/database'
 import { applyFix, acceptRisk, revertFix, runFullScan, getQualityIssues, getFixHistory, markIssueFixed } from '@/lib/actions/quality-fixes'
@@ -37,6 +37,8 @@ interface Props {
   initialRules: ValidationRule[]
   hasMappings: boolean
   allDatasets: DatasetStub[]
+  /** Fix history pre-fetched server-side to avoid N+1 per IssueCard */
+  initialFixHistory?: FixHistory[]
   /** Pre-set filter values from URL search params (deep-links from Transform/staging warning popup) */
   initialFilterTableId?: string
   initialFilterFieldId?: string
@@ -195,9 +197,11 @@ function RotateCcwIcon({ className }: { className?: string }) {
 function IssueCard({
   issue,
   onUpdate,
+  prefetchedFixHistory,
 }: {
   issue: QualityIssue
   onUpdate: (updated: QualityIssue) => void
+  prefetchedFixHistory?: FixHistory[]
 }) {
   const [generatingFix, startGenerating] = useTransition()
   const [applyingIdx, setApplyingIdx] = useState<number | null>(null)
@@ -211,22 +215,29 @@ function IssueCard({
   const [riskReason, setRiskReason] = useState('')
   const [showAcceptModal, setShowAcceptModal] = useState(false)
   const [showCustomFix, setShowCustomFix] = useState(false)
-  const [fixDetails, setFixDetails] = useState<FixHistory | null>(null)
+  // When prefetchedFixHistory is provided (server-prefetched), derive fixDetails directly.
+  // Otherwise fall back to a client-side fetch to stay backward-compatible.
+  const [fetchedFixDetails, setFetchedFixDetails] = useState<FixHistory | null>(null)
 
-  // When a fixed or accepted-risk issue is rendered, fetch the most recent
-  // fix_history entry so we can show the "Fix Applied" / "Risk Accepted" summary.
+  const fixDetails: FixHistory | null = prefetchedFixHistory
+    ? (prefetchedFixHistory.find(
+        (h) => h.quality_issue_id === issue.id && h.status === 'applied'
+      ) ?? null)
+    : fetchedFixDetails
+
   useEffect(() => {
+    if (prefetchedFixHistory) return
     if (issue.status === 'fixed' || issue.status === 'accepted_risk') {
       getFixHistory(issue.project_id).then((history) => {
         const latest = history.find(
           (h) => h.quality_issue_id === issue.id && h.status === 'applied'
         )
-        setFixDetails(latest ?? null)
+        setFetchedFixDetails(latest ?? null)
       })
     } else {
-      setFixDetails(null)
+      setFetchedFixDetails(null)
     }
-  }, [issue.status, issue.id, issue.project_id])
+  }, [issue.status, issue.id, issue.project_id, prefetchedFixHistory])
 
   function showToast(msg: string) {
     setToast(msg)
@@ -1656,6 +1667,7 @@ export default function DataQualityContent({
   initialRules,
   hasMappings,
   allDatasets,
+  initialFixHistory,
   initialFilterTableId,
   initialFilterFieldId,
   initialFilterSeverity,
@@ -1666,6 +1678,7 @@ export default function DataQualityContent({
   const [issues, setIssues] = useState<QualityIssue[]>(initialIssues)
   const [readiness, setReadiness] = useState<ReadinessScore>(initialReadiness)
   const [rules, setRules] = useState<ValidationRule[]>(initialRules)
+  const [fixHistory, setFixHistory] = useState<FixHistory[]>(initialFixHistory ?? [])
   const [scanning, startScan] = useTransition()
   const [isRestaging, startRestaging] = useTransition()
   const [showAddRule, setShowAddRule] = useState(false)
@@ -1709,42 +1722,58 @@ export default function DataQualityContent({
   }
 
   // Tables that appear in issues (for Table filter dropdown)
-  const tableNameById = new Map<string, string>(
-    allDatasets.flatMap(ds => ds.tables.map(t => [t.id, t.name]))
+  const tableNameById = useMemo(
+    () => new Map<string, string>(allDatasets.flatMap(ds => ds.tables.map(t => [t.id, t.name]))),
+    [allDatasets]
   )
-  const tablesWithIssues = [...new Set(issues.filter(i => i.table_id).map(i => i.table_id!))]
-    .map(id => ({ id, name: tableNameById.get(id) ?? id }))
-    .sort((a, b) => a.name.localeCompare(b.name))
+  const tablesWithIssues = useMemo(
+    () =>
+      [...new Set(issues.filter(i => i.table_id).map(i => i.table_id!))]
+        .map(id => ({ id, name: tableNameById.get(id) ?? id }))
+        .sort((a, b) => a.name.localeCompare(b.name)),
+    [issues, tableNameById]
+  )
 
   // Stage breakdown for the readiness dashboard (always all open issues)
-  const openIssues = issues.filter(i => i.status === 'open')
-  const sourceOpen = openIssues.filter(i => i.stage === 'source')
-  const targetReadyOpen = openIssues.filter(i => isTargetReady(i.stage))
-  const sourceBlocking = sourceOpen.filter(i => i.severity === 'blocking').length
-  const sourceWarning = sourceOpen.filter(i => i.severity === 'warning').length
-  const targetBlocking = targetReadyOpen.filter(i => i.severity === 'blocking').length
-  const targetWarning = targetReadyOpen.filter(i => i.severity === 'warning').length
+  const { sourceOpen, targetReadyOpen, sourceBlocking, sourceWarning, targetBlocking, targetWarning } =
+    useMemo(() => {
+      const openIssues = issues.filter(i => i.status === 'open')
+      const src = openIssues.filter(i => i.stage === 'source')
+      const tgt = openIssues.filter(i => isTargetReady(i.stage))
+      return {
+        sourceOpen: src,
+        targetReadyOpen: tgt,
+        sourceBlocking: src.filter(i => i.severity === 'blocking').length,
+        sourceWarning: src.filter(i => i.severity === 'warning').length,
+        targetBlocking: tgt.filter(i => i.severity === 'blocking').length,
+        targetWarning: tgt.filter(i => i.severity === 'warning').length,
+      }
+    }, [issues])
 
   // Filtered issues for the list — open first, then fixed, then accepted_risk;
   // within each group: blocking before warning, then by affected records descending.
   const statusOrder: Record<string, number> = { open: 0, fixed: 1, accepted_risk: 2 }
-  const filteredIssues = issues
-    .filter(issue => {
-      if (filterStage === 'source' && issue.stage !== 'source') return false
-      if (filterStage === 'target_ready' && !isTargetReady(issue.stage)) return false
-      if (filterSeverity !== 'all' && issue.severity !== filterSeverity) return false
-      if (filterTableId !== 'all' && issue.table_id !== filterTableId) return false
-      if (filterFieldId !== 'all' && issue.field_id !== filterFieldId) return false
-      if (filterStatus !== 'all' && issue.status !== filterStatus) return false
-      return true
-    })
-    .sort((a, b) => {
-      const aOrder = statusOrder[a.status] ?? 0
-      const bOrder = statusOrder[b.status] ?? 0
-      if (aOrder !== bOrder) return aOrder - bOrder
-      if (a.severity !== b.severity) return a.severity === 'blocking' ? -1 : 1
-      return (b.affected_records ?? 0) - (a.affected_records ?? 0)
-    })
+  const filteredIssues = useMemo(
+    () =>
+      issues
+        .filter(issue => {
+          if (filterStage === 'source' && issue.stage !== 'source') return false
+          if (filterStage === 'target_ready' && !isTargetReady(issue.stage)) return false
+          if (filterSeverity !== 'all' && issue.severity !== filterSeverity) return false
+          if (filterTableId !== 'all' && issue.table_id !== filterTableId) return false
+          if (filterFieldId !== 'all' && issue.field_id !== filterFieldId) return false
+          if (filterStatus !== 'all' && issue.status !== filterStatus) return false
+          return true
+        })
+        .sort((a, b) => {
+          const aOrder = statusOrder[a.status] ?? 0
+          const bOrder = statusOrder[b.status] ?? 0
+          if (aOrder !== bOrder) return aOrder - bOrder
+          if (a.severity !== b.severity) return a.severity === 'blocking' ? -1 : 1
+          return (b.affected_records ?? 0) - (a.affected_records ?? 0)
+        }),
+    [issues, filterStage, filterSeverity, filterTableId, filterFieldId, filterStatus]
+  )
 
   const hasActiveFilters =
     filterStage !== 'all' || filterSeverity !== 'all' || filterTableId !== 'all' || filterFieldId !== 'all' || filterStatus !== 'open'
@@ -1780,8 +1809,13 @@ export default function DataQualityContent({
 
   async function handleIssueUpdate(updated: QualityIssue) {
     setIssues(prev => prev.map(i => i.id === updated.id ? updated : i))
-    const newScore = await computeReadinessScore(projectId)
+    const [newScore, freshHistory] = await Promise.all([
+      computeReadinessScore(projectId),
+      // Refresh fix history so IssueCards immediately show the new fix summary
+      getFixHistory(projectId),
+    ])
     setReadiness(newScore)
+    setFixHistory(freshHistory)
     // Show stale-staging reminder when a source fix was just applied
     if (updated.status === 'fixed' && updated.stage === 'source' && hasMappings) {
       setFixAppliedNote(true)
@@ -2226,7 +2260,11 @@ export default function DataQualityContent({
                   key={issue.id}
                   ref={el => { if (el) issueRefs.current[issue.id] = el }}
                 >
-                  <IssueCard issue={issue} onUpdate={handleIssueUpdate} />
+                  <IssueCard
+                    issue={issue}
+                    onUpdate={handleIssueUpdate}
+                    prefetchedFixHistory={fixHistory.length > 0 ? fixHistory : undefined}
+                  />
                 </div>
               ))}
             </div>

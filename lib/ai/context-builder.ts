@@ -1,4 +1,6 @@
 import { createClient } from '@/lib/supabase/server'
+import { supabaseAdmin } from '@/lib/supabase/admin'
+import type { MigrationIntelligence } from '@/lib/types/database'
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -46,6 +48,8 @@ export interface ProjectAIContext {
   source_tables: TableContext[]
   target_tables: TableContext[]
   documents: DocumentContext
+  /** Formatted migration intelligence section, ready to append to a Claude user message. Empty string if no patterns exist or userId was not provided. */
+  intelligence_context: string
 }
 
 // ── Scope options ─────────────────────────────────────────────────────────────
@@ -87,7 +91,8 @@ const DEFAULT_SCOPE: Required<ContextScope> = {
 
 export async function buildAIContext(
   projectId: string,
-  scope: ContextScope = {}
+  scope: ContextScope = {},
+  userId?: string
 ): Promise<ProjectAIContext> {
   const opts: Required<ContextScope> = {
     ...DEFAULT_SCOPE,
@@ -269,13 +274,152 @@ export async function buildAIContext(
   const sourceTables = buildTableContexts(sourceDataset?.id, sourceDataset?.name ?? '', 'source')
   const targetTables = buildTableContexts(targetDataset?.id, targetDataset?.name ?? '', 'target')
 
+  // Append migration intelligence when userId is provided (non-blocking)
+  let intelligence_context = ''
+  if (userId) {
+    try {
+      intelligence_context = await buildIntelligenceContext(userId, {
+        sourceSystemName: sourceDataset?.name,
+        targetSystemName: targetDataset?.name,
+      })
+    } catch (err) {
+      console.error('Failed to load migration intelligence (non-critical):', err)
+    }
+  }
+
   return {
     project_id: project.id,
     project_name: project.name,
     source_tables: sourceTables,
     target_tables: targetTables,
     documents,
+    intelligence_context,
   }
+}
+
+// ── Migration Intelligence ────────────────────────────────────────────────────
+
+/**
+ * Builds the "Migration Intelligence" section to append to Claude prompts.
+ * Queries the user's accumulated patterns from past completed migrations.
+ * Returns an empty string if no qualifying patterns exist.
+ * This function ALWAYS uses the admin client so it works in any server context.
+ */
+export async function buildIntelligenceContext(
+  userId: string,
+  projectContext?: {
+    sourceSystemName?: string
+    targetSystemName?: string
+    tags?: string[]
+  }
+): Promise<string> {
+  const MAX_CHARS = 8000
+
+  const { data: rawPatterns } = await supabaseAdmin
+    .from('migration_intelligence')
+    .select('*')
+    .eq('user_id', userId)
+    .gte('confidence', 0.4)
+    .order('confidence', { ascending: false })
+    .order('times_seen', { ascending: false })
+    .limit(30)
+
+  const patterns = (rawPatterns ?? []) as MigrationIntelligence[]
+  if (patterns.length === 0) return ''
+
+  // Derive hint tags from system names for relevance boosting
+  const hintTags = new Set<string>([
+    ...(projectContext?.tags ?? []).map((t) => t.toLowerCase()),
+    ...(projectContext?.sourceSystemName ?? '').toLowerCase().split(/[\s_-]+/).filter(Boolean),
+    ...(projectContext?.targetSystemName ?? '').toLowerCase().split(/[\s_-]+/).filter(Boolean),
+  ])
+
+  // Sort: high-confidence patterns first, then boost patterns with tag overlap
+  const scored = patterns.map((p) => {
+    const overlap = p.tags.filter((t) => hintTags.has(t.toLowerCase())).length
+    return { pattern: p, score: p.confidence + overlap * 0.05 }
+  })
+  scored.sort((a, b) => b.score - a.score)
+
+  // Always keep patterns with confidence >= 0.8 regardless of tag match
+  const highConfidence = scored.filter((s) => s.pattern.confidence >= 0.8)
+  const rest = scored.filter((s) => s.pattern.confidence < 0.8)
+  const ordered = [...highConfidence, ...rest].map((s) => s.pattern)
+
+  // Group by category
+  const byCategory = new Map<MigrationIntelligence['category'], MigrationIntelligence[]>()
+  for (const p of ordered) {
+    if (!byCategory.has(p.category)) byCategory.set(p.category, [])
+    byCategory.get(p.category)!.push(p)
+  }
+
+  function stars(confidence: number): string {
+    if (confidence >= 0.8) return '★★★'
+    if (confidence >= 0.6) return '★★'
+    return '★'
+  }
+
+  function plural(n: number, word: string): string {
+    return `${n} ${word}${n === 1 ? '' : 's'}`
+  }
+
+  const header = `## Migration Intelligence (Reference Only — Do Not Copy Directly)
+
+The following patterns were learned from previous migrations completed by your team.
+Use them as HINTS to improve your suggestions, but ALWAYS validate against the actual
+source data and target schema for THIS project.
+
+IMPORTANT: Do NOT copy these patterns verbatim. Previous migrations had different
+configurations, field names, data, and business rules. These patterns describe general
+APPROACHES, not specific mappings to apply.
+
+Treat ★★★ patterns as strong indicators (confirmed across multiple projects).
+Treat ★★ patterns as useful hints.
+Treat ★ patterns as possibilities to consider.
+`
+
+  const CATEGORY_LABELS: Record<MigrationIntelligence['category'], string> = {
+    transformation_recipe: '### Transformation Recipes',
+    data_quality_pattern: '### Data Quality Patterns',
+    domain_knowledge: '### Domain Context',
+    source_system_hint: '### Source System Hints',
+  }
+
+  const CATEGORY_ORDER: MigrationIntelligence['category'][] = [
+    'transformation_recipe',
+    'data_quality_pattern',
+    'domain_knowledge',
+    'source_system_hint',
+  ]
+
+  let body = ''
+  let charCount = header.length
+
+  for (const category of CATEGORY_ORDER) {
+    const categoryPatterns = byCategory.get(category)
+    if (!categoryPatterns || categoryPatterns.length === 0) continue
+
+    const sectionHeader = '\n' + CATEGORY_LABELS[category] + '\n'
+    if (charCount + sectionHeader.length > MAX_CHARS) break
+    body += sectionHeader
+    charCount += sectionHeader.length
+
+    for (const p of categoryPatterns) {
+      const seenLine =
+        category === 'transformation_recipe' || category === 'data_quality_pattern'
+          ? ` (${category === 'transformation_recipe' ? 'confirmed in' : 'seen in'} ${plural(p.times_seen, 'migration')})`
+          : ''
+
+      const entry = `${stars(p.confidence)} ${p.title}${seenLine}\n${p.pattern_description}\n\n`
+
+      if (charCount + entry.length > MAX_CHARS) break
+      body += entry
+      charCount += entry.length
+    }
+  }
+
+  if (!body.trim()) return ''
+  return header + body
 }
 
 // ── Formatters ────────────────────────────────────────────────────────────────

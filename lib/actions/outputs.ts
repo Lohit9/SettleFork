@@ -205,31 +205,34 @@ export async function getOutputsPageData(projectId: string): Promise<OutputsPage
     .single()
   if (!project) throw new Error('Project not found')
 
-  // Round 2: Datasets + top-level data
-  const { data: datasets } = await supabaseAdmin
-    .from('datasets')
-    .select('id, role, name')
-    .eq('project_id', projectId)
-
-  const sourceDataset = datasets?.find((d) => d.role === 'source') ?? null
-  const targetDataset = datasets?.find((d) => d.role === 'target') ?? null
-  const allDatasetIds = datasets?.map((d) => d.id) ?? []
-
+  // Round 2: everything that only needs projectId — all parallel
   const [
-    { data: allTables },
+    { data: datasets },
     { data: rawTableMappings },
     { data: qualityIssueRows },
     { data: fixHistoryRows },
     { data: validationRuleRows },
     { data: outputRows },
+    { data: activityRows },
   ] = await Promise.all([
-    supabaseAdmin.from('tables').select('id, dataset_id, name, row_count').in('dataset_id', allDatasetIds),
+    supabaseAdmin.from('datasets').select('id, role, name').eq('project_id', projectId),
     supabaseAdmin.from('table_mappings').select('id, status').eq('project_id', projectId).neq('status', 'rejected'),
     supabaseAdmin.from('quality_issues').select('id, severity, status, title, created_at').eq('project_id', projectId),
     supabaseAdmin.from('fix_history').select('id, fix_description, affected_row_count, applied_at').eq('project_id', projectId).eq('status', 'applied').order('applied_at', { ascending: false }).limit(20),
     supabaseAdmin.from('validation_rules').select('id, name, created_at').eq('project_id', projectId).order('created_at', { ascending: false }).limit(10),
     supabaseAdmin.from('outputs').select('*').eq('project_id', projectId).order('generated_at', { ascending: false }),
+    supabaseAdmin.from('activity_log').select('id, action_type, description, category, metadata, created_at').eq('project_id', projectId).order('created_at', { ascending: false }).limit(50),
   ])
+
+  const sourceDataset = datasets?.find((d) => d.role === 'source') ?? null
+  const targetDataset = datasets?.find((d) => d.role === 'target') ?? null
+  const allDatasetIds = datasets?.map((d) => d.id) ?? []
+
+  // tables needs dataset IDs from round 2 above
+  const { data: allTables } = await supabaseAdmin
+    .from('tables')
+    .select('id, dataset_id, name, row_count')
+    .in('dataset_id', allDatasetIds.length ? allDatasetIds : ['__none__'])
 
   const sourceTables = (allTables ?? []).filter((t) => t.dataset_id === sourceDataset?.id)
   const targetTables = (allTables ?? []).filter((t) => t.dataset_id === targetDataset?.id)
@@ -325,14 +328,7 @@ export async function getOutputsPageData(projectId: string): Promise<OutputsPage
     (transformColor === 'green' || transformColor === 'gray' ? 1 : 0) +
     (validationColor === 'green' ? 1 : 0)
 
-  // ── Decisions log — single query from activity_log ─────────────────────────
-
-  const { data: activityRows } = await supabaseAdmin
-    .from('activity_log')
-    .select('id, action_type, description, category, metadata, created_at')
-    .eq('project_id', projectId)
-    .order('created_at', { ascending: false })
-    .limit(50)
+  // ── Decisions log — fetched in round 2 parallel batch above ─────────────────
 
   const allDecisions: DecisionEntry[] = (activityRows ?? []).map((entry) => ({
     id: entry.id,

@@ -169,7 +169,7 @@ export async function generateMappings(
       includeDocuments: true,
       maxDistributionValues: 15,
       maxSampleValues: 5,
-    })
+    }, user.id)
 
     const sourceSection = formatSchemaForPrompt(aiCtx.source_tables, 'source')
     const targetSection = formatSchemaForPrompt(aiCtx.target_tables, 'target')
@@ -226,7 +226,7 @@ CRITICAL: Respond with ONLY valid JSON, no markdown, no backticks, no explanatio
     const userMessage = `${sourceSection}
 ${targetSection}
 ${docBlock}
-Generate source-to-target mappings. Respond with this exact JSON structure.
+${aiCtx.intelligence_context ? aiCtx.intelligence_context + '\n\n' : ''}Generate source-to-target mappings. Respond with this exact JSON structure.
 
 CRITICAL RULES FOR THE JSON:
 - "source_table" must be ONLY the table name (e.g., "prices") — NOT the qualified name (NOT "trux.prices")
@@ -437,57 +437,48 @@ export async function getMappings(projectId: string): Promise<MappingsResult | n
     .single()
   if (!project) return null
 
-  // Fetch all datasets for the project
-  const { data: allDatasets } = await supabase
-    .from('datasets')
-    .select('id, name, role')
-    .eq('project_id', projectId)
+  // Hop 2: everything that only needs projectId — run in parallel
+  const [{ data: allDatasets }, { data: rawTMs }] = await Promise.all([
+    supabase.from('datasets').select('id, name, role').eq('project_id', projectId),
+    supabase.from('table_mappings').select('*').eq('project_id', projectId).order('created_at', { ascending: true }),
+  ])
 
   const datasetMap = new Map((allDatasets ?? []).map((d) => [d.id, d]))
-
-  // Fetch all tables for the project
   const datasetIds = (allDatasets ?? []).map((d) => d.id)
-  const { data: allTables } = await supabase
-    .from('tables')
-    .select('id, name, dataset_id, row_count')
-    .in('dataset_id', datasetIds.length ? datasetIds : ['__none__'])
+  const tmIds = (rawTMs ?? []).map((tm) => tm.id)
+
+  // Hop 3: things that need dataset/TM IDs — run in parallel
+  const [{ data: allTables }, { data: rawFMs }] = await Promise.all([
+    supabase
+      .from('tables')
+      .select('id, name, dataset_id, row_count')
+      .in('dataset_id', datasetIds.length ? datasetIds : ['__none__']),
+    supabase
+      .from('field_mappings')
+      .select('*')
+      .in('table_mapping_id', tmIds.length ? tmIds : ['__none__'])
+      .order('created_at', { ascending: true }),
+  ])
 
   const tableMap = new Map((allTables ?? []).map((t) => [t.id, t]))
-
-  // Fetch all fields for the project
   const tableIds = (allTables ?? []).map((t) => t.id)
+
+  // Hop 4: fields with their profiles embedded — single query instead of two sequential ones
   const { data: allFields } = await supabase
     .from('fields')
-    .select('id, table_id, name, data_type, inferred_type, is_nullable, is_primary_key, is_foreign_key, ordinal_position')
+    .select('id, table_id, name, data_type, inferred_type, is_nullable, is_primary_key, is_foreign_key, ordinal_position, field_profiles(field_id, sample_values)')
     .in('table_id', tableIds.length ? tableIds : ['__none__'])
     .order('ordinal_position', { ascending: true })
 
   const fieldMap = new Map((allFields ?? []).map((f) => [f.id, f]))
-
-  // Fetch field profiles for sample values
-  const allFieldIds = (allFields ?? []).map((f) => f.id)
-  const { data: fieldProfiles } = await supabase
-    .from('field_profiles')
-    .select('field_id, sample_values')
-    .in('field_id', allFieldIds.length ? allFieldIds : ['__none__'])
-
-  const profileMap = new Map((fieldProfiles ?? []).map((p) => [p.field_id, p]))
-
-  // Fetch table mappings
-  const { data: rawTMs } = await supabase
-    .from('table_mappings')
-    .select('*')
-    .eq('project_id', projectId)
-    .order('created_at', { ascending: true })
-
-  const tmIds = (rawTMs ?? []).map((tm) => tm.id)
-
-  // Fetch field mappings
-  const { data: rawFMs } = await supabase
-    .from('field_mappings')
-    .select('*')
-    .in('table_mapping_id', tmIds.length ? tmIds : ['__none__'])
-    .order('created_at', { ascending: true })
+  const profileMap = new Map(
+    (allFields ?? [])
+      .map((f) => {
+        const p = Array.isArray(f.field_profiles) ? f.field_profiles[0] : null
+        return p ? ([f.id, p] as [string, { field_id: string; sample_values: unknown }]) : null
+      })
+      .filter((entry): entry is [string, { field_id: string; sample_values: unknown }] => entry !== null)
+  )
 
   // Join table mappings with related data
   const tableMappings: RichTableMapping[] = (rawTMs ?? []).map((tm) => {
@@ -1085,7 +1076,7 @@ export async function suggestRemainingMappings(
     includeDocuments: true,
     maxDistributionValues: 15,
     maxSampleValues: 5,
-  })
+  }, user.id)
 
   // Build per-name context lookups for the fLine formatter
   const srcCtxByName = new Map(
@@ -1125,7 +1116,7 @@ ${unmapSrc.map((f) => fLine(f, srcCtxByName)).join('\n')}
 ${unmapTgt.map((f) => fLine(f, tgtCtxByName)).join('\n')}
 </target_unmapped>
 ${remainingDocBlock}
-CRITICAL: Use ONLY the bare field name (not table.field). Respond with ONLY valid JSON:
+${remCtx.intelligence_context ? remCtx.intelligence_context + '\n\n' : ''}CRITICAL: Use ONLY the bare field name (not table.field). Respond with ONLY valid JSON:
 {"field_mappings":[{"source_field":"name","target_field":"name","confidence":75,"reasoning":"reason","similar_fields_considered":[],"type_compatibility":"TYPE→TYPE"}]}`
 
   let parsed: { field_mappings: ClaudeFieldMapping[] }
