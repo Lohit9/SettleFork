@@ -12,22 +12,6 @@ export interface UploadSchemaDocResult {
 }
 
 export async function uploadSchemaDocument(formData: FormData): Promise<UploadSchemaDocResult> {
-  // TEMPORARY DEBUG — remove after confirming pdf-parse API shape
-  try {
-    const pdfModule = await import('pdf-parse')
-    console.log('[PDF DEBUG] typeof pdfModule:', typeof pdfModule)
-    console.log('[PDF DEBUG] keys:', Object.keys(pdfModule))
-    console.log('[PDF DEBUG] typeof pdfModule.default:', typeof pdfModule.default)
-    console.log('[PDF DEBUG] typeof pdfModule.PDFParse:', typeof (pdfModule as any).PDFParse)
-    console.log('[PDF DEBUG] typeof pdfModule.default?.PDFParse:', typeof (pdfModule as any).default?.PDFParse)
-    console.log('[PDF DEBUG] is function?:', typeof pdfModule.default === 'function')
-    if ((pdfModule as any).PDFParse) {
-      console.log('[PDF DEBUG] PDFParse prototype:', Object.getOwnPropertyNames((pdfModule as any).PDFParse.prototype))
-    }
-  } catch (e) {
-    console.log('[PDF DEBUG] import error:', e)
-  }
-
   try {
     const supabase = await createClient()
     const {
@@ -64,13 +48,11 @@ export async function uploadSchemaDocument(formData: FormData): Promise<UploadSc
 
     try {
       if (ext === '.pdf') {
-        // pdf-parse v2 exports a named class, not a callable function
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        const { PDFParse } = await import('pdf-parse') as any
+        // unpdf: pure-JS PDF parser, no native dependencies — works on Vercel serverless
+        const { extractText } = await import('unpdf')
         const buffer = Buffer.from(await file.arrayBuffer())
-        const parser = new PDFParse({ data: buffer })
-        const pdfData = await parser.getText()
-        extractedText = pdfData.text?.trim() || null
+        const { text } = await extractText(new Uint8Array(buffer))
+        extractedText = text?.trim() || null
         if (!extractedText) {
           console.warn('[uploadSchemaDocument] No text extracted from PDF (may be scanned/image-only):', sanitizedFilename)
         }
@@ -222,13 +204,11 @@ export async function uploadBusinessContextDoc(
     const ext = sanitizedFilename.toLowerCase().match(/\.[^.]+$/)?.[0] ?? ''
     try {
       if (ext === '.pdf') {
-        // pdf-parse v2 exports a named class, not a callable function
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        const { PDFParse } = await import('pdf-parse') as any
+        // unpdf: pure-JS PDF parser, no native dependencies — works on Vercel serverless
+        const { extractText } = await import('unpdf')
         const buffer = Buffer.from(await file.arrayBuffer())
-        const parser = new PDFParse({ data: buffer })
-        const pdfData = await parser.getText()
-        extractedText = pdfData.text?.trim() || null
+        const { text } = await extractText(new Uint8Array(buffer))
+        extractedText = text?.trim() || null
         if (!extractedText) {
           console.warn('[uploadBusinessContextDoc] No text extracted from PDF (may be scanned/image-only):', sanitizedFilename)
         }
