@@ -6,7 +6,7 @@ import { ChevronDown, ChevronRight, Upload, Check, Pencil } from '@/components/i
 import { updateField } from '@/lib/actions/fields'
 import { generateMappings } from '@/lib/actions/mappings'
 import { enrichSchemaFromDocs } from '@/lib/actions/schema-enrichment'
-import type { DatasetSchemaData, FieldData } from '@/lib/actions/data-overview'
+import type { DatasetSchemaData, FieldData, CheckConstraint } from '@/lib/actions/data-overview'
 
 interface SchemaOverviewProps {
   projectId: string
@@ -168,6 +168,67 @@ function FieldEditModal({
       </div>
     </div>
   )
+}
+
+// ─── Constraint Badge ─────────────────────────────────────────────────────────
+
+function ConstraintBadge({ constraint }: { constraint: CheckConstraint | null }) {
+  if (!constraint) return <span className="text-gray-300">—</span>
+
+  switch (constraint.type) {
+    case 'in_list':
+      return (
+        <div className="flex flex-wrap gap-1">
+          {(constraint.allowedValues ?? []).slice(0, 6).map((val: string) => (
+            <span
+              key={val}
+              className="inline-block px-1.5 py-0.5 bg-blue-50 text-blue-700 rounded text-[10px] font-mono"
+            >
+              {val}
+            </span>
+          ))}
+          {(constraint.allowedValues?.length ?? 0) > 6 && (
+            <span className="text-gray-400 text-[10px]">
+              +{constraint.allowedValues.length - 6} more
+            </span>
+          )}
+        </div>
+      )
+
+    case 'regex':
+      return (
+        <span
+          className="inline-block px-1.5 py-0.5 bg-purple-50 text-purple-700 rounded text-[10px] font-mono"
+          title={`Regex: ${constraint.pattern}`}
+        >
+          /{constraint.pattern}/
+        </span>
+      )
+
+    case 'range': {
+      const parts: string[] = []
+      if (constraint.min !== undefined) parts.push(`≥ ${constraint.min}`)
+      if (constraint.max !== undefined) parts.push(`≤ ${constraint.max}`)
+      return (
+        <span className="inline-block px-1.5 py-0.5 bg-amber-50 text-amber-700 rounded text-[10px]">
+          {parts.join(', ')}
+        </span>
+      )
+    }
+
+    case 'custom':
+      return (
+        <span
+          className="inline-block px-1.5 py-0.5 bg-gray-100 text-gray-600 rounded text-[10px]"
+          title={constraint.raw}
+        >
+          CHECK
+        </span>
+      )
+
+    default:
+      return <span className="text-gray-300">—</span>
+  }
 }
 
 // ─── Schema Panel ─────────────────────────────────────────────────────────────
@@ -368,10 +429,11 @@ function SchemaPanel({
                         <table className="w-full text-xs">
                           <thead>
                             <tr className="border-b border-gray-100">
-                              <th className="text-left px-8 py-2 text-gray-500 font-medium w-2/5">Field</th>
+                              <th className="text-left px-8 py-2 text-gray-500 font-medium w-1/4">Field</th>
                               <th className="text-left px-3 py-2 text-gray-500 font-medium">Type</th>
                               <th className="text-center px-3 py-2 text-gray-500 font-medium">Nullable</th>
                               <th className="text-center px-3 py-2 text-gray-500 font-medium">Key</th>
+                              <th className="text-left px-3 py-2 text-gray-500 font-medium">Constraints</th>
                               <th className="w-6" />
                             </tr>
                           </thead>
@@ -397,6 +459,9 @@ function SchemaPanel({
                                     ) : (
                                       <span className="text-gray-300">—</span>
                                     )}
+                                  </td>
+                                  <td className="px-3 py-2">
+                                    <ConstraintBadge constraint={f.check_constraint ?? null} />
                                   </td>
                                   <td className="pr-3">
                                     <button

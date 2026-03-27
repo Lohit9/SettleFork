@@ -9,13 +9,18 @@ import { logActivity } from '@/lib/actions/activity-log'
 // ─── Claude Response Types ─────────────────────────────────────────────────────
 
 interface ClaudeFieldMapping {
-  source_field: string
-  target_field: string
+  source_field: string                   // primary source field name (always present)
+  target_field: string                   // target field name (always present)
   confidence: number
   reasoning: string
   similar_fields_considered?: string[]
   type_compatibility?: string
   needs_transformation?: boolean
+  // Many-to-one / one-to-many support
+  mapping_type?: 'one_to_one' | 'many_to_one' | 'one_to_many'
+  contributing_source_fields?: string[]  // additional source fields for many-to-one (not including primary)
+  combination_hint?: string              // e.g., "Concatenate with space separator"
+  split_hint?: string                    // e.g., "Extract city portion" (for one-to-many)
 }
 
 interface ClaudeTableMapping {
@@ -49,6 +54,7 @@ export interface RichFieldMapping {
   targetField: { id: string; name: string; data_type: string; inferred_type: string | null } | null
   sourceFieldSamples: string[]
   targetFieldSamples: string[]
+  sourceFieldNullPercentage: number
 }
 
 export interface RichTableMapping {
@@ -200,6 +206,43 @@ A field DOES NOT need transformation for:
 - Minor type aliasing where data is compatible without conversion (TEXT vs VARCHAR, VARCHAR(100) vs VARCHAR(255) when no values exceed the smaller limit)
 - Fields where source and target are semantically identical and values can be copied directly
 
+MULTI-FIELD MAPPING PATTERNS:
+
+You MUST detect and correctly map these patterns:
+
+MANY-TO-ONE (multiple source fields → one target field):
+When multiple source fields should be combined into a single target field, set:
+- mapping_type: "many_to_one"
+- source_field: the FIRST/PRIMARY source field name
+- contributing_source_fields: array of ADDITIONAL source field names (do NOT repeat the primary)
+- combination_hint: brief description of how to combine (e.g., "Concatenate with space separator")
+- needs_transformation: true (always true for many-to-one)
+
+Common many-to-one patterns:
+- first_name + last_name → full_name, name, display_name, primary_contact
+- street + city + state + zip → full_address, address
+- date_field + time_field → datetime
+- Any name component fields → a single combined name field
+
+IMPORTANT: Return many-to-one as a SINGLE mapping entry (not separate entries for each source field). The contributing_source_fields array tells the system which other fields to include.
+
+ONE-TO-MANY (one source field → multiple target fields):
+When a single source field should be split into multiple target fields, create SEPARATE mapping entries for EACH target field, each with:
+- mapping_type: "one_to_many"
+- source_field: the SAME source field name in each entry
+- target_field: DIFFERENT target field in each entry
+- split_hint: description of what part to extract (e.g., "Extract first name", "Extract last name")
+- needs_transformation: true (always true for one-to-many)
+
+Common one-to-many patterns:
+- full_name → first_name, last_name
+- full_address → street, city, state, zip
+- datetime → date, time
+
+IMPORTANT: Each split target gets its OWN mapping entry in the field_mappings array. They share the same source_field but have different target_field values.
+
+If a mapping is standard one-to-one, either omit mapping_type or set it to "one_to_one". Do NOT include contributing_source_fields or split_hint for one-to-one mappings.
+
 Scoring guidelines:
 - 90-100: Near-certain match (identical names, same types, same business meaning)
 - 75-89: High confidence (similar names, compatible types, clear business alignment)
@@ -241,17 +284,28 @@ CRITICAL RULES FOR THE JSON:
       "target_table": "ARTICLE_PRICES",
       "confidence": 88,
       "reasoning": "Both tables store pricing information for items/articles...",
-      "field_mappings": [
-        {
-          "source_field": "item_price",
-          "target_field": "PRICE",
-          "confidence": 85,
-          "reasoning": "Direct price field mapping, DECIMAL to DECIMAL compatible",
-          "similar_fields_considered": ["UNIT_PRICE", "BASE_PRICE"],
-          "type_compatibility": "DECIMAL(10,2) → DECIMAL(15,4) — target has higher precision",
-          "needs_transformation": false
-        }
-      ]
+        "field_mappings": [
+          {
+            "source_field": "item_price",
+            "target_field": "PRICE",
+            "confidence": 85,
+            "reasoning": "Direct price field mapping, DECIMAL to DECIMAL compatible",
+            "similar_fields_considered": ["UNIT_PRICE", "BASE_PRICE"],
+            "type_compatibility": "DECIMAL(10,2) → DECIMAL(15,4) — target has higher precision",
+            "needs_transformation": true
+          },
+          {
+            "source_field": "contact_first",
+            "target_field": "CONTACT_NAME",
+            "confidence": 90,
+            "reasoning": "First and last name components should be combined into full name",
+            "type_compatibility": "VARCHAR(50) + VARCHAR(50) → VARCHAR(100)",
+            "needs_transformation": true,
+            "mapping_type": "many_to_one",
+            "contributing_source_fields": ["contact_last"],
+            "combination_hint": "Concatenate first and last name with space separator"
+          }
+        ]
     }
   ]
 }
@@ -370,17 +424,54 @@ Map ALL source fields to their best target match. If a source field has no reaso
           continue
         }
 
+        const mappingType = fm.mapping_type || 'one_to_one'
+
+        // Build the reasoning string, appending hints for multi-field mappings
+        let reasoningText = fm.reasoning
+        if (fm.combination_hint) reasoningText += ` [Combination: ${fm.combination_hint}]`
+        if (fm.split_hint) reasoningText += ` [Split: ${fm.split_hint}]`
+
+        // Primary mapping row (always inserted)
         fieldInserts.push({
           table_mapping_id: insertedTM.id,
           source_field_id: srcField.id,
           target_field_id: tgtField.id,
           confidence: fm.confidence,
           status: 'needs_review',
-          ai_reasoning: fm.reasoning,
+          ai_reasoning: reasoningText,
           similar_fields_considered: fm.similar_fields_considered ?? [],
           type_compatibility: fm.type_compatibility ?? null,
-          needs_transformation: fm.needs_transformation ?? null,
+          needs_transformation: fm.needs_transformation ?? (mappingType !== 'one_to_one' ? true : null),
+          is_contributing: false,
         })
+
+        // For many-to-one: create a contributing row for each additional source field
+        if (mappingType === 'many_to_one' && fm.contributing_source_fields?.length) {
+          for (const contribFieldName of fm.contributing_source_fields) {
+            const contribKey = bareTableName(contribFieldName)
+            const contribField = srcFieldsForTable.get(contribKey)
+            if (!contribField) {
+              console.warn(`[mappings] Contributing field "${contribFieldName}" not found in source table — skipping`)
+              continue
+            }
+            fieldInserts.push({
+              table_mapping_id: insertedTM.id,
+              source_field_id: contribField.id,
+              target_field_id: tgtField.id,
+              confidence: fm.confidence,
+              status: 'needs_review',
+              ai_reasoning: `Contributing field for many-to-one: ${fm.source_field} + ${contribFieldName} → ${fm.target_field}. ${fm.combination_hint ?? ''}`.trim(),
+              similar_fields_considered: [],
+              type_compatibility: fm.type_compatibility ?? null,
+              needs_transformation: false,
+              is_contributing: true,
+            })
+          }
+        }
+
+        // For one-to-many: no special handling — Claude returns a separate entry per target
+        // field naturally, all sharing the same source_field. The split_hint is embedded in
+        // the ai_reasoning of each row above.
       }
 
       if (fieldInserts.length > 0) {
@@ -518,6 +609,7 @@ export async function getMappings(projectId: string): Promise<MappingsResult | n
             : null,
           sourceFieldSamples: toSamples(srcProfile),
           targetFieldSamples: toSamples(tgtProfile),
+          sourceFieldNullPercentage: (srcProfile as { null_percentage?: number } | undefined)?.null_percentage ?? 0,
         }
       })
       // Sort by source field's ordinal_position so mapping rows follow CSV upload order
@@ -758,12 +850,14 @@ export async function addManualFieldMapping(
   tableMappingId: string,
   sourceFieldId: string,
   targetFieldId: string,
-  isContributing = false
+  isContributing = false,
+  aiReasoning?: string
 ): Promise<{ success: boolean; data?: { id: string; is_contributing: boolean }; error?: string }> {
   const supabase = await createClient()
   const { data: { user } } = await supabase.auth.getUser()
   if (!user) return { success: false, error: 'Not authenticated' }
 
+  const defaultReasoning = isContributing ? 'Contributing source — manually mapped by user' : 'Manually mapped by user'
   const { data, error } = await supabase
     .from('field_mappings')
     .insert({
@@ -772,7 +866,7 @@ export async function addManualFieldMapping(
       target_field_id: targetFieldId,
       confidence: 100,
       status: 'approved',
-      ai_reasoning: isContributing ? 'Contributing source — manually mapped by user' : 'Manually mapped by user',
+      ai_reasoning: aiReasoning ?? defaultReasoning,
       is_contributing: isContributing,
     })
     .select('id, is_contributing')

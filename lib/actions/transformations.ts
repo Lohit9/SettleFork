@@ -484,9 +484,24 @@ export async function generateTransform(
         const ctx = allSrcCtxFields.find((f) => f.name === cf.name)
         return ctx ? formatFieldForPrompt(ctx) : `${cf.name} (${cf.data_type})`
       })
+      // Extract combination hint from the primary mapping's AI reasoning
+      const { data: primaryMapping } = await supabase
+        .from('field_mappings')
+        .select('ai_reasoning')
+        .eq('id', fieldMappingId)
+        .single()
+      const hintMatch = primaryMapping?.ai_reasoning?.match(/\[Combination:\s*(.*?)\]/)
+      const combinationHint = hintMatch ? hintMatch[1] : ''
       contributingSourcesBlock = `\n<contributing_source_fields>
-This field also receives data from the following source fields. Include ALL of them in the transform:
+This is a MANY-TO-ONE mapping. Multiple source fields must be combined into a single target field value.
+
+Primary source field: ${srcField.name} (${srcField.data_type})
+Contributing source fields:
 ${lines.join('\n')}
+${combinationHint ? `\nCombination hint: ${combinationHint}` : ''}
+Generate a SQL expression that COMBINES all source fields into the target field.
+Reference source fields by name — they are accessible as row_data->>'field_name'.
+Handle nulls gracefully — if one source field is null, use the remaining field(s).
 </contributing_source_fields>\n`
     }
   }
@@ -1090,13 +1105,16 @@ export async function applyTransform(
 // ── previewTransformDistinct ──────────────────────────────────────────────────
 // Returns all distinct (before, after, count) triples for a SQL expression.
 // Used by the "All Distinct Values" toggle in the live preview panel.
+// For many-to-one mappings pass contributingFieldNames so the before-values
+// object includes all contributing source fields, not just the primary.
 
 export async function previewTransformDistinct(
   fieldMappingId: string,
-  sql: string
+  sql: string,
+  contributingFieldNames?: string[]
 ): Promise<{
   success: boolean
-  results?: { before: string | null; after: string | null; count: number }[]
+  results?: { before: string | null; beforeValues: Record<string, string | null>; after: string | null; count: number }[]
   error?: string
 }> {
   const supabase = await createClient()
@@ -1144,12 +1162,16 @@ export async function previewTransformDistinct(
 
   const wrappedSql = wrapFieldRefsInJsonb(sql.replace(/;+$/, '').trim(), fieldNames)
 
+  // Build the array of source field names for the preview columns
+  // Primary field first, then any contributing fields
+  const sourceFields = [srcField.name, ...(contributingFieldNames ?? [])]
+
   const { data: rpcResult, error: rpcErr } = await supabaseAdmin.rpc(
     'execute_transform_test_distinct',
     {
-      p_expression: wrappedSql,
       p_table_id: srcField.table_id,
-      p_source_field: srcField.name,
+      p_source_fields: sourceFields,
+      p_transform_sql: wrappedSql,
       p_limit: 200,
     }
   )
@@ -1158,12 +1180,21 @@ export async function previewTransformDistinct(
     return { success: false, error: rpcErr.message }
   }
 
-  const rows = (rpcResult as { before_value: unknown; after_value: unknown; row_count: number }[]) ?? []
-  const results = rows.map((r) => ({
-    before: r.before_value != null ? String(r.before_value) : null,
-    after: r.after_value != null ? String(r.after_value) : null,
-    count: r.row_count ?? 0,
-  }))
+  const rows = (rpcResult as { before_values: unknown; after_value: unknown; occurrence_count: number }[]) ?? []
+  const results = rows.map((r) => {
+    const bv = r.before_values as Record<string, string | null> | null
+    // If the DB returned an error sentinel, surface it
+    if (bv && (bv as { _error?: boolean })._error) {
+      return { before: null, beforeValues: {} as Record<string, string | null>, after: r.after_value != null ? String(r.after_value) : null, count: 0 }
+    }
+    const primaryVal = bv ? (bv[srcField.name] ?? null) : null
+    return {
+      before: primaryVal != null ? String(primaryVal) : null,
+      beforeValues: (bv ?? {}) as Record<string, string | null>,
+      after: r.after_value != null ? String(r.after_value) : null,
+      count: r.occurrence_count ?? 0,
+    }
+  })
 
   return { success: true, results }
 }

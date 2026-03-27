@@ -10,6 +10,12 @@ import { callClaude } from '@/lib/ai/claude'
 
 // ── Public types ──────────────────────────────────────────────────────────────
 
+export type CheckConstraint =
+  | { type: 'in_list'; allowedValues: string[]; raw: string }
+  | { type: 'regex'; pattern: string; raw: string }
+  | { type: 'range'; min?: number; max?: number; raw: string }
+  | { type: 'custom'; raw: string }
+
 export interface ParsedField {
   name: string
   dataType: string
@@ -18,6 +24,7 @@ export interface ParsedField {
   isForeignKey: boolean
   fkReference: string | null
   defaultValue: string | null
+  checkConstraint: CheckConstraint | null
 }
 
 export interface ParsedTable {
@@ -87,17 +94,94 @@ function parseDataType(rest: string): { dataType: string; remainder: string } {
   }
 }
 
-/** Parse one column definition line. Returns null for constraint lines. */
+/**
+ * Parse the body of a CHECK(...) expression into a structured constraint.
+ * Handles IN lists, regex patterns (~), and numeric range comparisons.
+ * Falls back to { type: 'custom', raw } for anything unrecognized.
+ */
+export function parseCheckConstraint(constraintBody: string): CheckConstraint {
+  const text = constraintBody.trim()
+
+  // Pattern 1: IN list — field_name IN ('val1', 'val2', ...)
+  // Also handles NOT IN (we ignore NOT and still record the value list)
+  const inMatch = text.match(/\bIN\s*\(\s*((?:'[^']*'(?:\s*,\s*)?)+)\s*\)/i)
+  if (inMatch) {
+    const valuesStr = inMatch[1]
+    const values = [...valuesStr.matchAll(/'([^']*)'/g)].map((m) => m[1])
+    if (values.length > 0) {
+      return { type: 'in_list', allowedValues: values, raw: text }
+    }
+  }
+
+  // Pattern 2: Regex — field_name ~ 'pattern'  or  field_name ~* 'pattern'
+  const regexMatch = text.match(/~\*?\s*'([^']+)'/)
+  if (regexMatch) {
+    return { type: 'regex', pattern: regexMatch[1], raw: text }
+  }
+
+  // Pattern 3: Range — field >= N [AND field <= N]  or  field BETWEEN N AND N
+  const betweenMatch = text.match(/BETWEEN\s+(-?[\d.]+)\s+AND\s+(-?[\d.]+)/i)
+  if (betweenMatch) {
+    return {
+      type: 'range',
+      min: parseFloat(betweenMatch[1]),
+      max: parseFloat(betweenMatch[2]),
+      raw: text,
+    }
+  }
+
+  const gteMatch = text.match(/>=\s*(-?[\d.]+)/)
+  const lteMatch = text.match(/<=\s*(-?[\d.]+)/)
+  const gtMatch  = text.match(/(?<![<>!])>\s*(-?[\d.]+)/)
+  const ltMatch  = text.match(/(?<![<>!])<\s*(-?[\d.]+)/)
+
+  if (gteMatch || lteMatch || gtMatch || ltMatch) {
+    return {
+      type: 'range',
+      min: gteMatch ? parseFloat(gteMatch[1]) : (gtMatch ? parseFloat(gtMatch[1]) : undefined),
+      max: lteMatch ? parseFloat(lteMatch[1]) : (ltMatch ? parseFloat(ltMatch[1]) : undefined),
+      raw: text,
+    }
+  }
+
+  // Fallback: store raw text
+  return { type: 'custom', raw: text }
+}
+
+/**
+ * Extract content inside the outermost CHECK(...) parentheses.
+ * Handles nested parens correctly.
+ */
+function extractCheckBody(src: string, checkKeywordIndex: number): string | null {
+  const openIdx = src.indexOf('(', checkKeywordIndex)
+  if (openIdx === -1) return null
+  let depth = 1
+  let i = openIdx + 1
+  while (i < src.length && depth > 0) {
+    if (src[i] === '(') depth++
+    else if (src[i] === ')') depth--
+    i++
+  }
+  if (depth !== 0) return null
+  return src.slice(openIdx + 1, i - 1)
+}
+
+/** Parse one column definition line. Returns null for pure constraint lines. */
 function parseColumnDef(def: string): ParsedField | null {
   const trimmed = def.trim()
   if (!trimmed) return null
 
   const upper = trimmed.toUpperCase()
 
-  // Skip table-level constraints
+  // Skip table-level-only constraint lines (those starting with keywords, not a column name)
   if (
-    /^(CONSTRAINT|PRIMARY\s+KEY|FOREIGN\s+KEY|UNIQUE|CHECK|INDEX|KEY\s+\w)/.test(upper)
+    /^(CONSTRAINT|PRIMARY\s+KEY|FOREIGN\s+KEY|UNIQUE|INDEX|KEY\s+\w)/.test(upper)
   ) {
+    return null
+  }
+
+  // Standalone table-level CHECK (without CONSTRAINT keyword) — skip as column def
+  if (/^CHECK\s*\(/.test(upper)) {
     return null
   }
 
@@ -130,6 +214,21 @@ function parseColumnDef(def: string): ParsedField | null {
     defaultValue = defMatch[1].replace(/^'|'$/g, '') || defMatch[1]
   }
 
+  // Extract inline CHECK constraint from this column definition
+  let checkConstraint: CheckConstraint | null = null
+  const checkIdx = flags.indexOf('CHECK')
+  if (checkIdx !== -1) {
+    // Find the actual 'CHECK' position in remainder (case-insensitive)
+    const remUpper = remainder.toUpperCase()
+    const remCheckIdx = remUpper.indexOf('CHECK')
+    if (remCheckIdx !== -1) {
+      const body = extractCheckBody(remainder, remCheckIdx)
+      if (body) {
+        checkConstraint = parseCheckConstraint(body)
+      }
+    }
+  }
+
   return {
     name,
     dataType,
@@ -138,11 +237,12 @@ function parseColumnDef(def: string): ParsedField | null {
     isForeignKey,
     fkReference,
     defaultValue,
+    checkConstraint,
   }
 }
 
 /**
- * Apply table-level PRIMARY KEY and FOREIGN KEY constraints
+ * Apply table-level PRIMARY KEY, FOREIGN KEY, and CHECK constraints
  * to the already-parsed field list.
  */
 function applyTableConstraints(parts: string[], fields: ParsedField[]): void {
@@ -176,6 +276,29 @@ function applyTableConstraints(parts: string[], fields: ParsedField[]): void {
         for (const col of m[1].split(',')) {
           const f = fieldByName.get(unquoteIdent(col).toUpperCase())
           if (f) { f.isForeignKey = true; f.fkReference = `${refTable}.${refCol}` }
+        }
+      }
+    }
+
+    // CHECK constraints (table-level and CONSTRAINT...CHECK)
+    // Match: CONSTRAINT name CHECK (...) or CHECK (...)
+    if (/(?:CONSTRAINT\s+\w+\s+)?CHECK\s*\(/.test(upper)) {
+      const checkIdx = upper.indexOf('CHECK')
+      const body = extractCheckBody(trimmed, checkIdx)
+      if (!body) continue
+
+      const parsed = parseCheckConstraint(body)
+
+      // Identify which field this constraint targets by looking for a field name
+      // at the start of the body. Common forms: "field_name IN (...)", "field_name >= N"
+      const bodyUpper = body.toUpperCase().trim()
+      // Try to match the first word in the body against known field names
+      const firstWordMatch = body.trim().match(/^(\w+)/)
+      if (firstWordMatch) {
+        const candidateName = firstWordMatch[1].toUpperCase()
+        const targetField = fieldByName.get(candidateName)
+        if (targetField && !targetField.checkConstraint) {
+          targetField.checkConstraint = parsed
         }
       }
     }
@@ -215,7 +338,7 @@ export function parseDDL(sql: string): ParsedTable[] {
       if (field) fields.push(field)
     }
 
-    // Apply table-level PRIMARY KEY / FOREIGN KEY constraints
+    // Apply table-level PRIMARY KEY / FOREIGN KEY / CHECK constraints
     applyTableConstraints(parts, fields)
 
     if (fields.length > 0) {
@@ -242,14 +365,21 @@ Respond with ONLY valid JSON, no markdown, no explanation:
           "isPrimaryKey": false,
           "isForeignKey": false,
           "fkReference": null,
-          "defaultValue": null
+          "defaultValue": null,
+          "checkConstraint": null
         }
       ]
     }
   ]
 }
 Handle any SQL dialect: PostgreSQL, MySQL, Oracle, SQL Server, SAP HANA, DB2.
-Extract the most accurate type information possible. Use the canonical type name with precision/scale where present.`
+Extract the most accurate type information possible. Use the canonical type name with precision/scale where present.
+For CHECK constraints, populate checkConstraint with one of these shapes:
+- IN list:  { "type": "in_list", "allowedValues": ["A","B","C"], "raw": "status IN ('A','B','C')" }
+- Regex:    { "type": "regex", "pattern": "^[A-Z]{2}$", "raw": "code ~ '^[A-Z]{2}$'" }
+- Range:    { "type": "range", "min": 0, "max": 24, "raw": "hours >= 0 AND hours <= 24" }
+- Other:    { "type": "custom", "raw": "original constraint text" }
+If no CHECK constraint exists for the field, set checkConstraint to null.`
 
 export async function parseDDLWithAI(sql: string): Promise<ParsedTable[]> {
   const raw = await callClaude(DDL_PARSE_SYSTEM, sql.slice(0, 12000), 4096)
