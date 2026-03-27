@@ -29,12 +29,12 @@ export default function Footer() {
             >
               Login
             </Link>
-            <a
-              href="#"
+            <Link
+              href="/privacy"
               className="text-[#94A3B8] text-sm hover:text-[#475569] transition-colors"
             >
               Privacy
-            </a>
+            </Link>
           </div>
         </div>
 
