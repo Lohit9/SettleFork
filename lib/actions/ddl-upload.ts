@@ -1,5 +1,6 @@
 'use server'
 
+import { revalidatePath } from 'next/cache'
 import { createClient } from '@/lib/supabase/server'
 import { parseDDL, parseDDLWithAI } from '@/lib/parsers/ddl-parser'
 import type { ParsedTable } from '@/lib/parsers/ddl-parser'
@@ -357,6 +358,9 @@ export async function confirmDDLSchema(
   } catch {
     // Non-fatal — schema is saved even if document record fails
   }
+
+  // Invalidate the project subtree cache so navigating back to any tab shows fresh data
+  revalidatePath(`/app/projects/${projectId}`, 'layout')
 
   return { success: true, tableCount }
 }
