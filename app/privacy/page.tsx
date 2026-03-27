@@ -1,4 +1,5 @@
 import Link from 'next/link'
+import Image from 'next/image'
 import type { Metadata } from 'next'
 
 export const metadata: Metadata = {
@@ -13,9 +14,13 @@ export default function PrivacyPage() {
       <header className="border-b border-gray-100 px-6 py-4">
         <div className="max-w-3xl mx-auto flex items-center justify-between">
           <Link href="/" className="flex items-center gap-2">
-            <div className="w-6 h-6 rounded bg-[#2563EB] flex items-center justify-center shrink-0">
-              <span className="text-white text-xs font-bold leading-none">M</span>
-            </div>
+            <Image
+              src="/Mine Logo no background.png"
+              alt="Mine"
+              width={28}
+              height={28}
+              className="h-7 w-auto"
+            />
             <span className="font-semibold text-gray-900">Mine</span>
           </Link>
           <Link href="/" className="text-sm text-gray-500 hover:text-gray-700 transition-colors">
