@@ -135,7 +135,7 @@ export default function Hero() {
               The autonomous engine for your data migration.
             </h1>
             <p className="text-lg text-[#475569] leading-relaxed max-w-lg mb-8">
-              Mine turns data migration from a labor-driven service into an autonomous, reusable product. Cut time and cost by 50–70% while reducing go-live risk.
+              Mine turns data migration from a labor-driven service into an autonomous, reusable product. Cut time and cost by 40–50% while reducing go-live risk.
             </p>
 
             <div className="flex flex-wrap gap-3 mb-3">
