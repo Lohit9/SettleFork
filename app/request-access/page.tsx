@@ -231,7 +231,7 @@ export default function RequestAccessPage() {
               disabled={isPending}
               className="w-full bg-[#2563EB] hover:bg-[#1D4ED8] disabled:opacity-60 text-white font-semibold py-3.5 rounded-xl transition-all text-sm mt-2"
             >
-              {isPending ? 'Submitting…' : 'Request Access'}
+              {isPending ? 'Submitting…' : 'Get Your Assessment'}
             </button>
           </form>
 
