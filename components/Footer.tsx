@@ -15,6 +15,12 @@ export default function Footer() {
           </div>
 
           <div className="flex gap-6">
+            <Link
+              href="/migrate"
+              className="text-[#94A3B8] text-sm hover:text-[#475569] transition-colors"
+            >
+              Migration Paths
+            </Link>
             <a
               href="https://calendly.com/mine-ai/demo"
               target="_blank"
