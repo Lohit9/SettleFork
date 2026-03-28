@@ -343,8 +343,8 @@ export default async function MigrationPageRoute({
               </ScrollReveal>
               <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                 {(page.challenges ?? []).map((challenge, i) => (
-                  <ScrollReveal key={i} delay={i * 0.05}>
-                    <div className="bg-white rounded-xl p-6 border border-mine-slate-200 hover:-translate-y-1 hover:shadow-lg transition-all">
+                  <ScrollReveal key={i} delay={i * 0.05} className="h-full">
+                    <div className="bg-white rounded-xl p-6 border border-mine-slate-200 hover:-translate-y-1 hover:shadow-lg transition-all h-full">
                       <h3 className="text-lg font-semibold text-mine-slate-900 mb-2">
                         {challenge.title}
                       </h3>
@@ -517,7 +517,12 @@ export default async function MigrationPageRoute({
                 {/* Mine */}
                 <ScrollReveal delay={0.1}>
                   <div className="bg-mine-blue-600 rounded-xl p-8">
-                    <p className="text-lg font-semibold text-blue-100 mb-6">With Mine</p>
+                    <div className="flex items-start justify-between mb-6">
+                      <p className="text-lg font-semibold text-blue-100">With Mine</p>
+                      <span className="text-[10px] text-blue-200/60 uppercase tracking-widest">
+                        Enterprise benchmarks
+                      </span>
+                    </div>
                     <div className="space-y-5">
                       <div>
                         <p className="text-blue-200 text-xs uppercase tracking-widest mb-1">
@@ -537,11 +542,6 @@ export default async function MigrationPageRoute({
                         </p>
                         <p className="text-white text-xl font-bold">{stats.cost_reduction ? `${stats.cost_reduction} less` : '—'}</p>
                       </div>
-                    </div>
-                    <div className="mt-6">
-                      <span className="inline-block text-xs text-blue-200/70 bg-blue-500/30 px-3 py-1 rounded-full">
-                        Based on enterprise migration benchmarks
-                      </span>
                     </div>
                   </div>
                 </ScrollReveal>
