@@ -87,6 +87,16 @@ export interface SimpleField {
   is_nullable?: boolean
 }
 
+export interface FieldAcknowledgmentRow {
+  id: string
+  project_id: string
+  field_id: string
+  side: string
+  reason: string
+  notes: string | null
+  acknowledged_at: string
+}
+
 export interface MappingsResult {
   tableMappings: RichTableMapping[]
   unmappedSourceFields: UnmappedField[]
@@ -95,6 +105,8 @@ export interface MappingsResult {
   allTargetTables: { id: string; name: string; datasetName: string }[]
   /** All fields for every table in the project, keyed by table_id */
   allFieldsByTable: Record<string, SimpleField[]>
+  /** Persisted acknowledgments for unmapped fields */
+  acknowledgments: FieldAcknowledgmentRow[]
 }
 
 // ─── Helper: parse Claude JSON with fence stripping ───────────────────────────
@@ -531,9 +543,10 @@ export async function getMappings(projectId: string): Promise<MappingsResult | n
   if (!project) return null
 
   // Hop 2: everything that only needs projectId — run in parallel
-  const [{ data: allDatasets }, { data: rawTMs }] = await Promise.all([
+  const [{ data: allDatasets }, { data: rawTMs }, { data: rawAcks }] = await Promise.all([
     supabase.from('datasets').select('id, name, role').eq('project_id', projectId),
     supabase.from('table_mappings').select('*').eq('project_id', projectId).order('created_at', { ascending: true }),
+    supabase.from('field_acknowledgments').select('id, project_id, field_id, side, reason, notes, acknowledged_at').eq('project_id', projectId),
   ])
 
   const datasetMap = new Map((allDatasets ?? []).map((d) => [d.id, d]))
@@ -704,7 +717,9 @@ export async function getMappings(projectId: string): Promise<MappingsResult | n
       .map((f) => ({ id: f.id, name: f.name, data_type: f.data_type, is_nullable: f.is_nullable ?? true }))
   }
 
-  return { tableMappings, unmappedSourceFields, unmappedTargetFields, allSourceTables, allTargetTables, allFieldsByTable }
+  const acknowledgments: FieldAcknowledgmentRow[] = (rawAcks ?? []) as FieldAcknowledgmentRow[]
+
+  return { tableMappings, unmappedSourceFields, unmappedTargetFields, allSourceTables, allTargetTables, allFieldsByTable, acknowledgments }
 }
 
 // ─── updateFieldMappingStatus ─────────────────────────────────────────────────
