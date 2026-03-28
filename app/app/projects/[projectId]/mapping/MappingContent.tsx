@@ -1221,6 +1221,8 @@ function TableMappingCard({
 
   // Track which unmapped field's "+ Map" was clicked so InlineAddFieldRow renders right below it
   const [addAfterUnmappedId, setAddAfterUnmappedId] = useState<string | null>(null)
+  // Track unmapped fields the user has explicitly approved as "intentionally unmapped"
+  const [approvedUnmappedIds, setApprovedUnmappedIds] = useState<Set<string>>(new Set())
 
   return (
     <div className="border border-gray-200 rounded-xl overflow-hidden">
@@ -1393,42 +1395,66 @@ function TableMappingCard({
               <div className="px-5 py-1.5 text-xs font-medium text-gray-400 uppercase tracking-wide">
                 Unmapped Target Fields ({unmappedTgtFields.length})
               </div>
-              {unmappedTgtFields.map((field) => (
-                <div key={field.id}>
-                  <div className="flex items-center px-5 py-2 text-gray-400 hover:bg-gray-50 transition-colors">
-                    <div className="w-[36%] flex items-center gap-2">
-                      <span className="text-xs italic text-gray-300">No source field</span>
+              {unmappedTgtFields.map((field) => {
+                const isApproved = approvedUnmappedIds.has(field.id)
+                return (
+                  <div key={field.id}>
+                    <div className={`flex items-center px-5 py-2 hover:bg-gray-50 transition-colors ${isApproved ? 'opacity-50' : 'text-gray-400'}`}>
+                      <div className="w-[36%] flex items-center gap-2">
+                        <span className="text-xs italic text-gray-300">No source field</span>
+                      </div>
+                      <div className="w-[28%] text-center">
+                        <span className="text-xs text-gray-300">—</span>
+                      </div>
+                      <div className="w-[36%] flex items-center gap-2 min-w-0">
+                        <span className={`w-2 h-2 rounded-full flex-shrink-0 ${isApproved ? 'bg-green-500' : field.is_nullable !== false ? 'bg-gray-300' : 'bg-amber-400'}`} />
+                        <span className="text-sm text-gray-500 truncate">{field.name}</span>
+                        <span className="text-xs text-gray-400 flex-shrink-0">{field.data_type}</span>
+                        {field.is_nullable === false && !isApproved && (
+                          <span className="text-[10px] font-medium text-amber-600 bg-amber-50 px-1.5 py-0.5 rounded flex-shrink-0">NOT NULL</span>
+                        )}
+                        {isApproved && (
+                          <span className="text-[10px] font-medium text-green-600 bg-green-50 px-1.5 py-0.5 rounded flex-shrink-0">Approved</span>
+                        )}
+                      </div>
+                      <div className="w-28 flex items-center justify-end gap-1 flex-shrink-0">
+                        {isApproved ? (
+                          <button
+                            onClick={() => setApprovedUnmappedIds((prev) => { const next = new Set(prev); next.delete(field.id); return next })}
+                            className="text-xs text-gray-400 hover:text-gray-600 font-medium px-2 py-1 rounded hover:bg-gray-100 transition-colors"
+                          >
+                            Undo
+                          </button>
+                        ) : (
+                          <>
+                            <button
+                              onClick={() => setApprovedUnmappedIds((prev) => new Set([...prev, field.id]))}
+                              title="Approve as intentionally unmapped"
+                              className="p-1 rounded text-gray-300 hover:text-green-600 hover:bg-green-50 transition-colors"
+                            >
+                              <Check className="w-3.5 h-3.5" />
+                            </button>
+                            <button
+                              onClick={() => { setAddAfterUnmappedId(field.id); onShowAddRow(); }}
+                              className="text-xs text-blue-600 hover:text-blue-800 font-medium px-2 py-1 rounded hover:bg-blue-50 transition-colors"
+                            >
+                              + Map
+                            </button>
+                          </>
+                        )}
+                      </div>
                     </div>
-                    <div className="w-[28%] text-center">
-                      <span className="text-xs text-gray-300">—</span>
-                    </div>
-                    <div className="w-[36%] flex items-center gap-2 min-w-0">
-                      <span className={`w-2 h-2 rounded-full flex-shrink-0 ${field.is_nullable !== false ? 'bg-gray-300' : 'bg-amber-400'}`} />
-                      <span className="text-sm text-gray-500 truncate">{field.name}</span>
-                      <span className="text-xs text-gray-400 flex-shrink-0">{field.data_type}</span>
-                      {field.is_nullable === false && (
-                        <span className="text-[10px] font-medium text-amber-600 bg-amber-50 px-1.5 py-0.5 rounded flex-shrink-0">NOT NULL</span>
-                      )}
-                    </div>
-                    <div className="w-24 text-right flex-shrink-0">
-                      <button
-                        onClick={() => { setAddAfterUnmappedId(field.id); onShowAddRow(); }}
-                        className="text-xs text-blue-600 hover:text-blue-800 font-medium px-2 py-1 rounded hover:bg-blue-50 transition-colors"
-                      >
-                        + Map
-                      </button>
-                    </div>
+                    {showAddRow && addAfterUnmappedId === field.id && (
+                      <InlineAddFieldRow
+                        tm={tm}
+                        allFieldsByTable={allFieldsByTable}
+                        onAdded={(fm) => { setAddAfterUnmappedId(null); onFieldAdded(fm); }}
+                        onCancel={() => { setAddAfterUnmappedId(null); onHideAddRow(); }}
+                      />
+                    )}
                   </div>
-                  {showAddRow && addAfterUnmappedId === field.id && (
-                    <InlineAddFieldRow
-                      tm={tm}
-                      allFieldsByTable={allFieldsByTable}
-                      onAdded={(fm) => { setAddAfterUnmappedId(null); onFieldAdded(fm); }}
-                      onCancel={() => { setAddAfterUnmappedId(null); onHideAddRow(); }}
-                    />
-                  )}
-                </div>
-              ))}
+                )
+              })}
             </div>
           )}
 
@@ -1438,39 +1464,64 @@ function TableMappingCard({
               <div className="px-5 py-1.5 text-xs font-medium text-gray-400 uppercase tracking-wide">
                 Unmapped Source Fields ({unmappedSrcFields.length})
               </div>
-              {unmappedSrcFields.map((field) => (
-                <div key={field.id}>
-                  <div className="flex items-center px-5 py-2 text-gray-400">
-                    <div className="w-[36%] flex items-center gap-2 min-w-0">
-                      <span className="w-2 h-2 rounded-full bg-gray-300 flex-shrink-0" />
-                      <span className="text-sm text-gray-500 truncate">{field.name}</span>
-                      <span className="text-xs text-gray-400 flex-shrink-0">{field.data_type}</span>
+              {unmappedSrcFields.map((field) => {
+                const isApproved = approvedUnmappedIds.has(field.id)
+                return (
+                  <div key={field.id}>
+                    <div className={`flex items-center px-5 py-2 transition-colors ${isApproved ? 'opacity-50' : 'text-gray-400'}`}>
+                      <div className="w-[36%] flex items-center gap-2 min-w-0">
+                        <span className={`w-2 h-2 rounded-full flex-shrink-0 ${isApproved ? 'bg-green-500' : 'bg-gray-300'}`} />
+                        <span className="text-sm text-gray-500 truncate">{field.name}</span>
+                        <span className="text-xs text-gray-400 flex-shrink-0">{field.data_type}</span>
+                      </div>
+                      <div className="w-[28%] text-center">
+                        <span className="text-xs text-gray-300">—</span>
+                      </div>
+                      <div className="w-[36%] flex items-center gap-2">
+                        {isApproved ? (
+                          <span className="text-[10px] font-medium text-green-600 bg-green-50 px-1.5 py-0.5 rounded">Approved</span>
+                        ) : (
+                          <span className="text-xs italic text-gray-300">Not migrated</span>
+                        )}
+                      </div>
+                      <div className="w-28 flex items-center justify-end gap-1 flex-shrink-0">
+                        {isApproved ? (
+                          <button
+                            onClick={() => setApprovedUnmappedIds((prev) => { const next = new Set(prev); next.delete(field.id); return next })}
+                            className="text-xs text-gray-400 hover:text-gray-600 font-medium px-2 py-1 rounded hover:bg-gray-100 transition-colors"
+                          >
+                            Undo
+                          </button>
+                        ) : (
+                          <>
+                            <button
+                              onClick={() => setApprovedUnmappedIds((prev) => new Set([...prev, field.id]))}
+                              title="Approve as intentionally unmapped"
+                              className="p-1 rounded text-gray-300 hover:text-green-600 hover:bg-green-50 transition-colors"
+                            >
+                              <Check className="w-3.5 h-3.5" />
+                            </button>
+                            <button
+                              onClick={() => { setAddAfterUnmappedId(field.id); onShowAddRow(); }}
+                              className="text-xs text-blue-600 hover:text-blue-800 font-medium px-2 py-1 rounded hover:bg-blue-50 transition-colors"
+                            >
+                              + Map
+                            </button>
+                          </>
+                        )}
+                      </div>
                     </div>
-                    <div className="w-[28%] text-center">
-                      <span className="text-xs text-gray-300">—</span>
-                    </div>
-                    <div className="w-[36%] flex items-center gap-2">
-                      <span className="text-xs italic text-gray-300">Not migrated</span>
-                    </div>
-                    <div className="w-24 text-right flex-shrink-0">
-                      <button
-                        onClick={() => { setAddAfterUnmappedId(field.id); onShowAddRow(); }}
-                        className="text-xs text-blue-600 hover:text-blue-800 font-medium px-2 py-1 rounded hover:bg-blue-50 transition-colors"
-                      >
-                        + Map
-                      </button>
-                    </div>
+                    {showAddRow && addAfterUnmappedId === field.id && (
+                      <InlineAddFieldRow
+                        tm={tm}
+                        allFieldsByTable={allFieldsByTable}
+                        onAdded={(fm) => { setAddAfterUnmappedId(null); onFieldAdded(fm); }}
+                        onCancel={() => { setAddAfterUnmappedId(null); onHideAddRow(); }}
+                      />
+                    )}
                   </div>
-                  {showAddRow && addAfterUnmappedId === field.id && (
-                    <InlineAddFieldRow
-                      tm={tm}
-                      allFieldsByTable={allFieldsByTable}
-                      onAdded={(fm) => { setAddAfterUnmappedId(null); onFieldAdded(fm); }}
-                      onCancel={() => { setAddAfterUnmappedId(null); onHideAddRow(); }}
-                    />
-                  )}
-                </div>
-              ))}
+                )
+              })}
             </div>
           )}
 
