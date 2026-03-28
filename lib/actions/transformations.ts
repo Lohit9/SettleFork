@@ -825,10 +825,11 @@ export async function runFullTransformTest(
 
 export async function testTransformation(
   fieldMappingId: string,
-  sql: string
+  sql: string,
+  contributingFieldNames?: string[]
 ): Promise<{
   success: boolean
-  results?: { before: string | null; after: string | null }[]
+  results?: { before: string | null; after: string | null; beforeValues?: Record<string, string | null> }[]
   transformationId?: string
   error?: string
 }> {
@@ -882,26 +883,38 @@ export async function testTransformation(
   // Wrap bare field refs with JSONB access
   const wrappedSql = wrapFieldRefsInJsonb(sql.trim(), fieldNames)
 
+  // Build source field list: primary + contributing (for many-to-one mappings)
+  const sourceFieldNames = [srcField.name, ...(contributingFieldNames ?? [])]
+  const useMultiField = sourceFieldNames.length > 1
+
   // Execute via RPC — uses supabaseAdmin since execute_transform_test is SECURITY DEFINER
-  const { data: rpcResult, error: rpcErr } = await supabaseAdmin.rpc(
-    'execute_transform_test',
-    {
-      p_expression: wrappedSql,
-      p_table_id: srcField.table_id,
-      p_source_field: srcField.name,
-      p_limit: 20,
-    }
-  )
+  const { data: rpcResult, error: rpcErr } = useMultiField
+    ? await supabaseAdmin.rpc('execute_transform_test', {
+        p_expression: wrappedSql,
+        p_table_id: srcField.table_id,
+        p_source_fields: sourceFieldNames,
+        p_limit: 20,
+      })
+    : await supabaseAdmin.rpc('execute_transform_test', {
+        p_expression: wrappedSql,
+        p_table_id: srcField.table_id,
+        p_source_field: srcField.name,
+        p_limit: 20,
+      })
 
   if (rpcErr) {
-    // Return the database error message — it's safe and useful for debugging
     return { success: false, error: rpcErr.message }
   }
 
-  const rows = (rpcResult as { before_value: unknown; after_value: unknown }[]) ?? []
+  const rows = (rpcResult as { before_value: unknown; after_value: unknown; before_values?: Record<string, unknown> }[]) ?? []
   const results = rows.map((r) => ({
     before: r.before_value != null ? String(r.before_value) : null,
     after: r.after_value != null ? String(r.after_value) : null,
+    ...(r.before_values ? {
+      beforeValues: Object.fromEntries(
+        Object.entries(r.before_values).map(([k, v]) => [k, v != null ? String(v) : null])
+      ),
+    } : {}),
   }))
 
   // Update the transformation record with test results and status

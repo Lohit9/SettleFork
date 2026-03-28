@@ -322,7 +322,11 @@ export default function TransformContent({ projectId, initialData }: Props) {
             setPreviewResults([])
           }
         } else {
-          const result = await testTransformation(selectedMappingId, sql)
+          const result = await testTransformation(
+            selectedMappingId,
+            sql,
+            contributingNames.length > 0 ? contributingNames : undefined
+          )
           if (result.success && result.results) {
             setPreviewResults(result.results)
             setPreviewError(null)
