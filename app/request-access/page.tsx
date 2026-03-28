@@ -1,6 +1,7 @@
 'use client'
 
 import { useState, useTransition } from 'react'
+import { useSearchParams } from 'next/navigation'
 import Link from 'next/link'
 import { submitAccessRequest } from '@/lib/actions/invites'
 
@@ -16,6 +17,9 @@ const ROLE_OPTIONS = [
 ]
 
 export default function RequestAccessPage() {
+  const searchParams = useSearchParams()
+  const ref = searchParams.get('ref') || 'general'
+  const isAssessment = ref === 'assessment'
   const [isPending, startTransition] = useTransition()
   const [submitted, setSubmitted] = useState(false)
   const [submittedName, setSubmittedName] = useState('')
@@ -69,6 +73,7 @@ export default function RequestAccessPage() {
         role_type: form.role_type,
         systems_involved: form.systems_involved || undefined,
         additional_notes: form.additional_notes || undefined,
+        ref,
       })
 
       if (!result.success) {
@@ -140,7 +145,9 @@ export default function RequestAccessPage() {
         <div className="bg-white rounded-2xl border border-gray-200 shadow-sm p-8 lg:p-10">
           {/* Header */}
           <div className="mb-7">
-            <h1 className="text-2xl font-bold text-gray-900 mb-2">Tell us about your migration</h1>
+            <h1 className="text-2xl font-bold text-gray-900 mb-2">
+              {isAssessment ? 'Get Your Free Migration Assessment' : 'Tell us about your migration'}
+            </h1>
             <p className="text-sm text-gray-500 leading-relaxed">
               We&apos;ll review your requirements and share a preliminary assessment within 48 hours.
             </p>
@@ -231,7 +238,7 @@ export default function RequestAccessPage() {
               disabled={isPending}
               className="w-full bg-[#2563EB] hover:bg-[#1D4ED8] disabled:opacity-60 text-white font-semibold py-3.5 rounded-xl transition-all text-sm mt-2"
             >
-              {isPending ? 'Submitting…' : 'Get Your Assessment'}
+              {isPending ? 'Submitting…' : isAssessment ? 'Get Your Free Assessment' : 'Get Your Assessment'}
             </button>
           </form>
 

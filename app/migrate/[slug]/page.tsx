@@ -212,7 +212,7 @@ export default async function MigrationPageRoute({
                 </p>
                 <div className="flex flex-wrap gap-3">
                   <Link
-                    href="/request-access"
+                    href="/request-access?ref=assessment"
                     className="bg-mine-blue-600 hover:bg-mine-blue-700 text-white text-sm font-semibold px-6 py-3 rounded-lg transition-all hover:-translate-y-0.5 hover:shadow-lg hover:shadow-blue-600/25"
                   >
                     Get Your Free Assessment
@@ -336,7 +336,7 @@ export default async function MigrationPageRoute({
                 </p>
                 <div className="flex flex-wrap justify-center gap-3">
                   <Link
-                    href="/request-access"
+                    href="/request-access?ref=assessment"
                     className="bg-mine-blue-600 hover:bg-mine-blue-700 text-white text-sm font-semibold px-6 py-3 rounded-lg transition-all hover:-translate-y-0.5 hover:shadow-lg hover:shadow-blue-600/25"
                   >
                     Get Your Free Assessment

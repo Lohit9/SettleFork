@@ -77,7 +77,7 @@ function adminAccessRequestHtml(name: string, email: string, company: string, ro
   `
 }
 
-function requesterConfirmationHtml(name: string) {
+function requesterAccessHtml(name: string) {
   const firstName = name.split(' ')[0]
   return `
     <div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; max-width: 520px; color: #1a1a2e; line-height: 1.7;">
@@ -94,6 +94,31 @@ function requesterConfirmationHtml(name: string) {
         <a href="${CALENDLY_SCOPING}"
            style="display: inline-block; background: #6C3AED; color: white; padding: 12px 28px; text-decoration: none; border-radius: 6px; font-weight: 600; font-size: 16px;">
           Schedule a Call
+        </a>
+      </p>
+      <p style="margin: 0 0 16px 0; color: #666; font-size: 14px;">If none of the times work, just reply to this email and we'll figure it out.</p>
+      <p style="margin: 0; color: #334155;">Best,<br/>Kaan Dincer<br/>Founder, Mine</p>
+    </div>
+  `
+}
+
+function requesterAssessmentHtml(name: string) {
+  const firstName = name.split(' ')[0]
+  return `
+    <div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; max-width: 520px; color: #1a1a2e; line-height: 1.7;">
+      <p style="margin: 0 0 16px 0;">Hi ${firstName},</p>
+      <p style="margin: 0 0 16px 0;">Thanks for telling us about your migration. We're reviewing your requirements now.</p>
+      <p style="margin: 0 0 8px 0;">Here's what happens next:</p>
+      <p style="margin: 0 0 16px 0;">
+        <strong>1.</strong> We'll review your migration scope and prepare a preliminary assessment<br/>
+        <strong>2.</strong> We'll hop on a 30-minute call to walk through the assessment and learn more about your needs<br/>
+        <strong>3.</strong> If it's a fit, we'll set you up with access and onboard you personally
+      </p>
+      <p style="margin: 0 0 12px 0;"><strong>Want to get started faster? Book a call now:</strong></p>
+      <p style="margin: 0 0 16px 0;">
+        <a href="${CALENDLY_SCOPING}"
+           style="display: inline-block; background: #2563EB; color: white; padding: 12px 28px; text-decoration: none; border-radius: 6px; font-weight: 600; font-size: 16px;">
+          Schedule Your Assessment Call
         </a>
       </p>
       <p style="margin: 0 0 16px 0; color: #666; font-size: 14px;">If none of the times work, just reply to this email and we'll figure it out.</p>
@@ -157,6 +182,7 @@ export async function POST(request: Request) {
       systems_involved,
       additional_notes,
       invite_code,
+      ref,
     } = body
 
     if (!email) {
@@ -234,22 +260,30 @@ export async function POST(request: Request) {
       return NextResponse.json({ success: true, skipped: true })
     }
 
-    // Send admin notification + requester confirmation in parallel.
-    // If the requester email fails, the admin notification still succeeds.
+    const isAssessment = ref === 'assessment'
+    const requesterSubject = isAssessment
+      ? 'Your migration assessment is underway — Mine'
+      : 'We received your request — Mine'
+    const requesterHtml = isAssessment
+      ? requesterAssessmentHtml(name)
+      : requesterAccessHtml(name)
+
     const results = await Promise.allSettled([
       resend.emails.send({
         from: FROM_NOTIFICATIONS,
         to: ADMIN_EMAIL,
         replyTo: ADMIN_EMAIL,
-        subject: `New Mine Access Request: ${company}`,
+        subject: isAssessment
+          ? `New Migration Assessment Request: ${company}`
+          : `New Mine Access Request: ${company}`,
         html: adminAccessRequestHtml(name, email, company, role_type, systems_involved, additional_notes),
       }),
       resend.emails.send({
         from: FROM_KAAN,
         to: email,
         replyTo: 'info@trymine.ai',
-        subject: 'We received your request — Mine',
-        html: requesterConfirmationHtml(name),
+        subject: requesterSubject,
+        html: requesterHtml,
       }),
     ])
 
