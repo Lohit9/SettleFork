@@ -96,6 +96,7 @@ export async function submitAccessRequest(data: {
   role_type: string
   systems_involved?: string
   additional_notes?: string
+  ref?: string
 }): Promise<{ success: boolean; error?: string }> {
   const { error } = await supabaseAdmin.from('access_requests').insert({
     name: data.name.trim(),
