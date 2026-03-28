@@ -1,5 +1,6 @@
 'use server'
 
+import { revalidatePath } from 'next/cache'
 import { createClient } from '@/lib/supabase/server'
 import { callClaude } from '@/lib/ai/claude'
 import { checkAIRateLimit } from '@/lib/ai/rate-limit'
@@ -792,6 +793,7 @@ export async function updateFieldMappingStatus(
               confidence: fmBefore.confidence,
             }
           )
+          revalidatePath(`/app/projects/${tm.project_id}/transform`)
         }
       } catch {
         // Non-critical
@@ -874,6 +876,10 @@ export async function addManualFieldMapping(
     .single()
 
   if (error) return { success: false, error: error.message }
+
+  const { data: tm } = await supabase.from('table_mappings').select('project_id').eq('id', tableMappingId).single()
+  if (tm) revalidatePath(`/app/projects/${tm.project_id}/transform`)
+
   return { success: true, data: { id: data.id, is_contributing: data.is_contributing } }
 }
 
@@ -1001,10 +1007,10 @@ export async function deleteFieldMapping(
   const { data: { user } } = await supabase.auth.getUser()
   if (!user) return { success: false, error: 'Not authenticated' }
 
-  // Fetch before deleting so we can promote a contributor if this is a primary mapping
+  // Fetch before deleting so we can promote a contributor and revalidate
   const { data: fmBefore } = await supabase
     .from('field_mappings')
-    .select('table_mapping_id, target_field_id, is_contributing')
+    .select('table_mapping_id, target_field_id, is_contributing, table_mappings!inner(project_id)')
     .eq('id', fieldMappingId)
     .single()
 
@@ -1035,6 +1041,9 @@ export async function deleteFieldMapping(
     }
   }
 
+  const pid = (fmBefore?.table_mappings as unknown as { project_id: string })?.project_id
+  if (pid) revalidatePath(`/app/projects/${pid}/transform`)
+
   return { success: true }
 }
 
@@ -1047,8 +1056,13 @@ export async function deleteTableMapping(
   const { data: { user } } = await supabase.auth.getUser()
   if (!user) return { success: false, error: 'Not authenticated' }
 
+  const { data: tm } = await supabase.from('table_mappings').select('project_id').eq('id', tableMappingId).single()
+
   const { error } = await supabase.from('table_mappings').delete().eq('id', tableMappingId)
   if (error) return { success: false, error: error.message }
+
+  if (tm) revalidatePath(`/app/projects/${tm.project_id}/transform`)
+
   return { success: true }
 }
 
@@ -1081,6 +1095,10 @@ export async function rejectAllFieldMappings(
   const { error } = await supabase
     .from('field_mappings').update({ status: 'rejected' }).eq('table_mapping_id', tableMappingId)
   if (error) return { success: false, error: error.message }
+
+  const { data: tm } = await supabase.from('table_mappings').select('project_id').eq('id', tableMappingId).single()
+  if (tm) revalidatePath(`/app/projects/${tm.project_id}/transform`)
+
   return { success: true }
 }
 
