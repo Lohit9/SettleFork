@@ -222,7 +222,7 @@ export async function stageAllData(projectId: string): Promise<{
       // Get non-rejected field mappings for this table mapping
       const { data: fms } = await supabaseAdmin
         .from('field_mappings')
-        .select('id, source_field_id, target_field_id')
+        .select('id, source_field_id, target_field_id, is_contributing')
         .eq('table_mapping_id', tm.id)
         .neq('status', 'rejected')
 
@@ -264,6 +264,7 @@ export async function stageAllData(projectId: string): Promise<{
       const jsonbPairs: string[] = []
 
       for (const fm of fms) {
+        if (fm.is_contributing) continue
         const srcField = srcById.get(fm.source_field_id)
         const tgtField = tgtById.get(fm.target_field_id)
         if (!srcField || !tgtField) continue
