@@ -29,7 +29,7 @@ function shouldNotify(email: string): boolean {
 
 // ── email builders ─────────────────────────────────────────────────────────
 
-function adminAccessRequestHtml(name: string, email: string, company: string, role_type: string, systems_involved?: string, additional_notes?: string) {
+function adminAccessRequestHtml(name: string, email: string, company: string, role_type: string, systems_involved?: string, additional_notes?: string, ref?: string) {
   return `
     <div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; max-width: 600px; margin: 0 auto; padding: 24px;">
       <div style="display: flex; align-items: center; gap: 10px; margin-bottom: 24px;">
@@ -62,8 +62,14 @@ function adminAccessRequestHtml(name: string, email: string, company: string, ro
           <td style="padding: 10px 14px; font-size: 13px; color: #0F172A; border-bottom: 1px solid #E2E8F0;">${systems_involved || '<span style="color:#94A3B8;">Not specified</span>'}</td>
         </tr>
         <tr>
-          <td style="padding: 10px 14px; font-size: 13px; font-weight: 600; color: #475569; vertical-align: top;">Notes</td>
-          <td style="padding: 10px 14px; font-size: 13px; color: #0F172A;">${additional_notes || '<span style="color:#94A3B8;">None</span>'}</td>
+          <td style="padding: 10px 14px; font-size: 13px; font-weight: 600; color: #475569; border-bottom: 1px solid #E2E8F0; vertical-align: top;">Notes</td>
+          <td style="padding: 10px 14px; font-size: 13px; color: #0F172A; border-bottom: 1px solid #E2E8F0;">${additional_notes || '<span style="color:#94A3B8;">None</span>'}</td>
+        </tr>
+        <tr style="background: #F8FAFC;">
+          <td style="padding: 10px 14px; font-size: 13px; font-weight: 600; color: #475569; border-top: 1px solid #E2E8F0;">Source</td>
+          <td style="padding: 10px 14px; font-size: 13px; color: #0F172A; border-top: 1px solid #E2E8F0;">
+            ${ref === 'assessment' ? '<span style="color: #2563EB; font-weight: 600;">Migration Page — Assessment Request</span>' : '<span style="color: #6B7280;">Homepage / General — Access Request</span>'}
+          </td>
         </tr>
       </table>
       <div style="margin-top: 24px;">
@@ -82,21 +88,15 @@ function requesterAccessHtml(name: string) {
   return `
     <div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; max-width: 520px; color: #1a1a2e; line-height: 1.7;">
       <p style="margin: 0 0 16px 0;">Hi ${firstName},</p>
-      <p style="margin: 0 0 16px 0;">Thanks for your interest in Mine — excited to learn about your migration.</p>
-      <p style="margin: 0 0 8px 0;">Here's how the process works:</p>
-      <p style="margin: 0 0 16px 0;">
-        <strong>1.</strong> We'll hop on a 30-minute call where I'll learn about your migration needs and walk you through how Mine works<br/>
-        <strong>2.</strong> If it's a fit, we'll set up your early access and onboard you personally<br/>
-        <strong>3.</strong> You'll have direct access to me throughout your first migration project
-      </p>
-      <p style="margin: 0 0 12px 0;"><strong>Book a time that works for you:</strong></p>
+      <p style="margin: 0 0 16px 0;">Thanks for your interest in Mine. I'll review your request and follow up within 48 hours.</p>
+      <p style="margin: 0 0 16px 0;">If you'd like to chat sooner:</p>
       <p style="margin: 0 0 16px 0;">
         <a href="${CALENDLY_SCOPING}"
-           style="display: inline-block; background: #6C3AED; color: white; padding: 12px 28px; text-decoration: none; border-radius: 6px; font-weight: 600; font-size: 16px;">
-          Schedule a Call
+           style="display: inline-block; background: #2563EB; color: white; padding: 12px 28px; text-decoration: none; border-radius: 6px; font-weight: 600; font-size: 16px;">
+          Book a Call
         </a>
       </p>
-      <p style="margin: 0 0 16px 0; color: #666; font-size: 14px;">If none of the times work, just reply to this email and we'll figure it out.</p>
+      <p style="margin: 0 0 16px 0; color: #666; font-size: 14px;">Otherwise, I'll be in touch soon. Just reply to this email anytime.</p>
       <p style="margin: 0; color: #334155;">Best,<br/>Kaan Dincer<br/>Founder, Mine</p>
     </div>
   `
@@ -107,21 +107,15 @@ function requesterAssessmentHtml(name: string) {
   return `
     <div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; max-width: 520px; color: #1a1a2e; line-height: 1.7;">
       <p style="margin: 0 0 16px 0;">Hi ${firstName},</p>
-      <p style="margin: 0 0 16px 0;">Thanks for telling us about your migration. We're reviewing your requirements now.</p>
-      <p style="margin: 0 0 8px 0;">Here's what happens next:</p>
-      <p style="margin: 0 0 16px 0;">
-        <strong>1.</strong> We'll review your migration scope and prepare a preliminary assessment<br/>
-        <strong>2.</strong> We'll hop on a 30-minute call to walk through the assessment and learn more about your needs<br/>
-        <strong>3.</strong> If it's a fit, we'll set you up with access and onboard you personally
-      </p>
-      <p style="margin: 0 0 12px 0;"><strong>Want to get started faster? Book a call now:</strong></p>
+      <p style="margin: 0 0 16px 0;">Thanks for telling us about your migration. I'm reviewing your requirements now and will follow up within 48 hours with a preliminary assessment of your migration scope.</p>
+      <p style="margin: 0 0 16px 0;">In the meantime, if you'd like to get started sooner:</p>
       <p style="margin: 0 0 16px 0;">
         <a href="${CALENDLY_SCOPING}"
            style="display: inline-block; background: #2563EB; color: white; padding: 12px 28px; text-decoration: none; border-radius: 6px; font-weight: 600; font-size: 16px;">
-          Schedule Your Assessment Call
+          Book a Call
         </a>
       </p>
-      <p style="margin: 0 0 16px 0; color: #666; font-size: 14px;">If none of the times work, just reply to this email and we'll figure it out.</p>
+      <p style="margin: 0 0 16px 0; color: #666; font-size: 14px;">Otherwise, I'll reach out shortly. Just reply to this email anytime.</p>
       <p style="margin: 0; color: #334155;">Best,<br/>Kaan Dincer<br/>Founder, Mine</p>
     </div>
   `
@@ -274,9 +268,9 @@ export async function POST(request: Request) {
         to: ADMIN_EMAIL,
         replyTo: ADMIN_EMAIL,
         subject: isAssessment
-          ? `New Migration Assessment Request: ${company}`
-          : `New Mine Access Request: ${company}`,
-        html: adminAccessRequestHtml(name, email, company, role_type, systems_involved, additional_notes),
+          ? `🎯 Migration Assessment Request: ${company}`
+          : `New Access Request: ${company}`,
+        html: adminAccessRequestHtml(name, email, company, role_type, systems_involved, additional_notes, ref),
       }),
       resend.emails.send({
         from: FROM_KAAN,
