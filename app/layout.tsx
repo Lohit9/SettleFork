@@ -7,7 +7,7 @@ const jetbrainsMono = JetBrains_Mono({ subsets: ['latin'], variable: '--font-jet
 
 export const metadata: Metadata = {
   title: 'Mine - AI-Native Data Migration Automation',
-  description: 'The autonomous engine for your data migration. Cut time and cost by 50–70% while reducing go-live risk.',
+  description: 'The autonomous engine for your data migration. Cut time and cost by 40–50% while reducing go-live risk.',
   viewport: 'width=device-width, initial-scale=1',
 }
 

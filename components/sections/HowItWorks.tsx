@@ -77,7 +77,7 @@ export default function HowItWorks() {
           <div className="mt-10 p-5 bg-[#ECFDF5] rounded-xl border border-teal-200 flex items-center gap-3">
             <span className="text-[#0D9488] font-bold text-[15px] shrink-0">Result:</span>
             <span className="text-[#115E59] text-[15px]">
-              migrations in weeks, not months — with 50–70% lower cost and dramatically reduced risk.
+              migrations in weeks, not months — with 40–50% lower cost and dramatically reduced risk.
             </span>
           </div>
         </ScrollReveal>

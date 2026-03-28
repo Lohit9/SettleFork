@@ -140,10 +140,9 @@ export default function RequestAccessPage() {
         <div className="bg-white rounded-2xl border border-gray-200 shadow-sm p-8 lg:p-10">
           {/* Header */}
           <div className="mb-7">
-            <h1 className="text-2xl font-bold text-gray-900 mb-2">Request Access</h1>
+            <h1 className="text-2xl font-bold text-gray-900 mb-2">Tell us about your migration</h1>
             <p className="text-sm text-gray-500 leading-relaxed">
-              We&apos;re onboarding design partners in small batches. Tell us about your migration
-              and we&apos;ll be in touch within 24 hours.
+              We&apos;ll review your requirements and share a preliminary assessment within 48 hours.
             </p>
           </div>
 
