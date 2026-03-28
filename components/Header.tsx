@@ -7,7 +7,6 @@ import { motion, AnimatePresence } from 'framer-motion'
 const NAV_LINKS = [
   { label: 'How It Works',     href: '/how-it-works' },
   { label: 'Migration Paths',  href: '/migrate' },
-  { label: 'Use Cases',        href: '/use-cases' },
 ]
 
 const CALENDLY = 'https://calendly.com/mine-ai/demo'
@@ -51,7 +50,7 @@ export default function Header() {
 
             <Link
               href="/login"
-              className="text-sm font-medium text-[#CBD5E1] hover:text-[#94A3B8] transition-colors"
+              className="text-sm font-medium text-[#94A3B8] hover:text-[#334155] transition-colors"
             >
               Login
             </Link>
