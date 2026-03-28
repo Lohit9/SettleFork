@@ -1172,6 +1172,7 @@ function TableMappingCard({
   onRegenerate,
   showContributingRows,
   showInlineUnmapped,
+  hideMappedRows,
 }: {
   tm: RichTableMapping
   expanded: boolean
@@ -1194,6 +1195,7 @@ function TableMappingCard({
   onRegenerate: () => void
   showContributingRows: boolean
   showInlineUnmapped: boolean
+  hideMappedRows?: boolean
 }) {
   const srcDs = tm.sourceTable?.dataset
   const tgtDs = tm.targetTable?.dataset
@@ -1222,7 +1224,11 @@ function TableMappingCard({
           <div className="flex-1 min-w-0">
             <p className="text-xs text-gray-400 mb-0.5 truncate">{srcDs?.name}</p>
             <p className="font-semibold text-gray-900 truncate">{tm.sourceTable?.name ?? '—'}</p>
-            <p className="text-xs text-gray-500 mt-0.5">{tm.fieldMappings.length} field{tm.fieldMappings.length !== 1 ? 's' : ''}</p>
+            <p className="text-xs text-gray-500 mt-0.5">
+              {hideMappedRows
+                ? `${unmappedTgtFields.length + unmappedSrcFields.length} unmapped`
+                : `${tm.fieldMappings.length} field${tm.fieldMappings.length !== 1 ? 's' : ''}`}
+            </p>
           </div>
           <div className="flex items-center px-3 flex-shrink-0">
             <div className="w-6 border-t-2 border-dashed border-indigo-200" />
@@ -1291,16 +1297,18 @@ function TableMappingCard({
       {/* Expanded field list */}
       {expanded && (
         <div className="border-t border-gray-100">
-          {/* Column headers */}
+          {/* Column headers + mapped field rows (hidden when hideMappedRows) */}
+          {!hideMappedRows && (
           <div className="flex items-center px-5 py-2 bg-gray-50 border-b border-gray-100">
             <div className="w-[36%] text-xs font-medium text-gray-500">Source Field</div>
             <div className="w-[28%] text-center text-xs font-medium text-gray-500">Confidence</div>
             <div className="w-[36%] text-xs font-medium text-gray-500">Target Field</div>
           </div>
+          )}
 
-          {tm.fieldMappings.length === 0 ? (
+          {!hideMappedRows && tm.fieldMappings.length === 0 ? (
             <div className="px-5 py-4 text-sm text-gray-400 text-center">No field mappings yet.</div>
-          ) : (
+          ) : !hideMappedRows ? (
             (() => {
               // Respect showContributingRows: in most views contributing rows are hidden (they show via +N badge on primary)
               const visibleFMs = showContributingRows
@@ -1377,7 +1385,7 @@ function TableMappingCard({
                 )
               })
             })()
-          )}
+          ) : null}
 
           {/* Inline unmapped target fields */}
           {showInlineUnmapped && unmappedTgtFields.length > 0 && (
@@ -2074,9 +2082,12 @@ export default function MappingContent({ projectId, initialData }: Props) {
   const filteredMappings = useMemo(() => {
     switch (activeFilter) {
       case 'needs_review':
-        return tableMappings.filter(
-          (tm) => tm.status === 'needs_review' || tm.fieldMappings.some((fm) => !fm.is_contributing && fm.status === 'needs_review')
-        )
+        return tableMappings
+          .map((tm) => ({
+            ...tm,
+            fieldMappings: tm.fieldMappings.filter((fm) => !fm.is_contributing && fm.status === 'needs_review'),
+          }))
+          .filter((tm) => tm.fieldMappings.length > 0)
       case 'approved':
         return tableMappings
           .map((tm) => ({
@@ -2086,8 +2097,16 @@ export default function MappingContent({ projectId, initialData }: Props) {
           .filter((tm) => tm.fieldMappings.length > 0)
       case 'all':
         return tableMappings
-      case 'unmapped':
+      case 'unmapped': {
         return tableMappings
+          .filter((tm) => {
+            const activeSrcIds = new Set(tm.fieldMappings.filter((fm) => fm.status !== 'rejected').map((fm) => fm.source_field_id))
+            const activeTgtIds = new Set(tm.fieldMappings.filter((fm) => fm.status !== 'rejected').map((fm) => fm.target_field_id))
+            const allSrc = allFieldsByTable[tm.source_table_id] ?? []
+            const allTgt = allFieldsByTable[tm.target_table_id] ?? []
+            return allSrc.some((f) => !activeSrcIds.has(f.id)) || allTgt.some((f) => !activeTgtIds.has(f.id))
+          })
+      }
       case 'many_to_one':
         return tableMappings
           .map((tm) => {
@@ -2121,7 +2140,7 @@ export default function MappingContent({ projectId, initialData }: Props) {
       default:
         return []
     }
-  }, [tableMappings, activeFilter])
+  }, [tableMappings, activeFilter, allFieldsByTable])
 
   const sourceDatasetName = tableMappings[0]?.sourceTable?.dataset?.name ?? ''
   const targetDatasetName = tableMappings[0]?.targetTable?.dataset?.name ?? ''
@@ -2379,7 +2398,7 @@ export default function MappingContent({ projectId, initialData }: Props) {
         <div className="flex-1 space-y-3 min-w-0">
           {filteredMappings.length === 0 ? (
             <div className="text-center py-12 text-sm text-gray-400 border border-dashed border-gray-200 rounded-xl">
-              {activeFilter === 'needs_review' ? 'All mappings have been reviewed.' : activeFilter === 'approved' ? 'No approved mappings yet.' : activeFilter === 'many_to_one' ? 'No many-to-one mappings found.' : activeFilter === 'one_to_many' ? 'No one-to-many mappings found.' : 'No mappings found.'}
+              {activeFilter === 'needs_review' ? 'All mappings have been reviewed.' : activeFilter === 'approved' ? 'No approved mappings yet.' : activeFilter === 'unmapped' ? 'All fields are mapped.' : activeFilter === 'many_to_one' ? 'No many-to-one mappings found.' : activeFilter === 'one_to_many' ? 'No one-to-many mappings found.' : 'No mappings found.'}
             </div>
           ) : (
             filteredMappings.map((tm) => (
@@ -2406,6 +2425,7 @@ export default function MappingContent({ projectId, initialData }: Props) {
                 onRegenerate={() => setRegenerateConfirmTarget(tm)}
                 showContributingRows={activeFilter === 'many_to_one'}
                 showInlineUnmapped={activeFilter === 'all' || activeFilter === 'unmapped'}
+                hideMappedRows={activeFilter === 'unmapped'}
               />
             ))
           )}

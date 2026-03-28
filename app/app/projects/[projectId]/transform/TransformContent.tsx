@@ -43,6 +43,8 @@ interface Props {
 
 type LocalStatus = 'draft' | 'tested' | 'applied' | 'stale'
 
+type TransformFilter = 'all' | 'needs_transform' | 'has_transform' | 'unmapped' | 'applied'
+
 interface LocalTransform {
   transformationId: string | null
   description: string
@@ -210,6 +212,11 @@ export default function TransformContent({ projectId, initialData }: Props) {
   // Unmapped NOT NULL target fields — sidebar selection
   const [selectedUnmappedFieldId, setSelectedUnmappedFieldId] = useState<string | null>(null)
 
+  // Sidebar filter
+  const [sidebarFilter, setSidebarFilter] = useState<TransformFilter>('all')
+  const [filterOpen, setFilterOpen] = useState(false)
+  const filterRef = useRef<HTMLDivElement>(null)
+
   // "Why transform?" collapsible (collapsed by default — it's reference info)
   const [whyExpanded, setWhyExpanded] = useState(false)
   // AI Suggest: confirm before replacing existing textarea content
@@ -226,7 +233,53 @@ export default function TransformContent({ projectId, initialData }: Props) {
   useEffect(() => { localTransformRef.current = localTransform }, [localTransform])
   useEffect(() => { selectedMappingIdRef.current = selectedMappingId }, [selectedMappingId])
 
+  // Close filter dropdown on click outside
+  useEffect(() => {
+    function handleClick(e: MouseEvent) {
+      if (filterRef.current && !filterRef.current.contains(e.target as Node)) setFilterOpen(false)
+    }
+    document.addEventListener('mousedown', handleClick)
+    return () => document.removeEventListener('mousedown', handleClick)
+  }, [])
+
   const needsTransformCount = useMemo(() => countNeedsTransform(data.datasets), [data.datasets])
+
+  // Per-table unmapped field lookups (keyed by target table name)
+  const unmappedByTargetTable = useMemo(() => {
+    const map: Record<string, { notNull: UnmappedTargetField[]; nullable: UnmappedTargetField[] }> = {}
+    for (const f of data.unmappedNotNullTargetFields) {
+      if (!map[f.table_name]) map[f.table_name] = { notNull: [], nullable: [] }
+      map[f.table_name].notNull.push(f)
+    }
+    for (const f of data.unmappedNullableTargetFields) {
+      if (!map[f.table_name]) map[f.table_name] = { notNull: [], nullable: [] }
+      map[f.table_name].nullable.push(f)
+    }
+    return map
+  }, [data.unmappedNotNullTargetFields, data.unmappedNullableTargetFields])
+
+  // Filter counts
+  const allFieldsFlat = useMemo(() => data.datasets.flatMap((ds) => ds.tables.flatMap((t) => t.fields)), [data.datasets])
+  const filterCounts = useMemo(() => {
+    const mapped = allFieldsFlat.filter((f) => !f.isContributing)
+    const totalUnmapped = data.unmappedNotNullTargetFields.length + data.unmappedNullableTargetFields.length
+    return {
+      all: mapped.length + totalUnmapped,
+      needs_transform: mapped.filter((f) => f.needsTransform).length,
+      has_transform: mapped.filter((f) => f.transformation !== null).length,
+      unmapped: totalUnmapped,
+      applied: mapped.filter((f) => f.transformation?.status === 'applied').length,
+    }
+  }, [allFieldsFlat, data.unmappedNotNullTargetFields.length, data.unmappedNullableTargetFields.length])
+
+  const filterOptions: { key: TransformFilter; label: string }[] = [
+    { key: 'all', label: 'All Fields' },
+    { key: 'needs_transform', label: 'Needs Transform' },
+    { key: 'has_transform', label: 'Has Transform' },
+    { key: 'unmapped', label: 'Unmapped' },
+    { key: 'applied', label: 'Applied' },
+  ]
+  const activeFilterLabel = filterOptions.find((o) => o.key === sidebarFilter)?.label ?? 'All Fields'
 
   // DISABLED: Source-data staleness check — will re-enable with per-field tracking later
   // useEffect(() => {
@@ -909,8 +962,49 @@ export default function TransformContent({ projectId, initialData }: Props) {
 
         {/* ── Left Sidebar ── */}
         <div className="w-72 bg-white border-r border-gray-200 flex flex-col flex-shrink-0">
+          {/* Filter dropdown */}
+          <div className="relative px-3 pt-3 pb-2" ref={filterRef}>
+            <button
+              onClick={() => setFilterOpen((v) => !v)}
+              className="w-full flex items-center justify-between px-3 py-2 bg-gray-50 border border-gray-200 rounded-lg text-xs font-medium text-gray-700 hover:bg-gray-100 transition-colors"
+            >
+              <span>{activeFilterLabel}</span>
+              <div className="flex items-center gap-1.5">
+                <span className="text-[10px] bg-indigo-100 text-indigo-700 px-1.5 py-0.5 rounded-full font-semibold">
+                  {filterCounts[sidebarFilter]}
+                </span>
+                <ChevronDown className={`w-3.5 h-3.5 text-gray-400 transition-transform ${filterOpen ? 'rotate-180' : ''}`} />
+              </div>
+            </button>
+            {filterOpen && (
+              <div className="absolute left-3 right-3 top-full mt-1 bg-white border border-gray-200 rounded-lg shadow-lg z-20 py-1">
+                {filterOptions.map((opt) => (
+                  <button
+                    key={opt.key}
+                    onClick={() => { setSidebarFilter(opt.key); setFilterOpen(false) }}
+                    className={`w-full flex items-center justify-between px-3 py-2 text-xs transition-colors ${
+                      sidebarFilter === opt.key
+                        ? 'bg-indigo-50 text-indigo-700 font-medium'
+                        : 'text-gray-600 hover:bg-gray-50'
+                    }`}
+                  >
+                    <div className="flex items-center gap-2">
+                      {sidebarFilter === opt.key && (
+                        <svg className="w-3 h-3 text-indigo-600" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={3}>
+                          <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
+                        </svg>
+                      )}
+                      <span className={sidebarFilter !== opt.key ? 'ml-5' : ''}>{opt.label}</span>
+                    </div>
+                    <span className="text-[10px] text-gray-400">{filterCounts[opt.key]}</span>
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+
           <div className="flex-1 overflow-auto p-3 space-y-2">
-            {data.datasets.length === 0 ? (
+            {data.datasets.length === 0 && filterCounts.unmapped === 0 ? (
               <p className="text-xs text-gray-500 text-center py-8">
                 All fields are compatible — no transformations required.
               </p>
@@ -922,7 +1016,10 @@ export default function TransformContent({ projectId, initialData }: Props) {
                   expanded={expandedDatasets.has(ds.datasetId)}
                   expandedTables={expandedTables}
                   selectedMappingId={selectedMappingId}
+                  selectedUnmappedFieldId={selectedUnmappedFieldId}
                   staleTableMappingIds={staleTableMappingIds}
+                  unmappedByTargetTable={unmappedByTargetTable}
+                  filter={sidebarFilter}
                   onToggleDataset={(id) => setExpandedDatasets((prev) => {
                     const next = new Set(prev); next.has(id) ? next.delete(id) : next.add(id); return next
                   })}
@@ -930,12 +1027,16 @@ export default function TransformContent({ projectId, initialData }: Props) {
                     const next = new Set(prev); next.has(id) ? next.delete(id) : next.add(id); return next
                   })}
                   onSelectField={handleSelectField}
+                  onSelectUnmappedField={(id) => {
+                    setSelectedUnmappedFieldId(id)
+                    setSelectedMappingId(null)
+                  }}
                 />
               ))
             )}
 
-            {/* Need Values — unmapped NOT NULL target fields */}
-            {data.unmappedNotNullTargetFields.length > 0 && (
+            {/* Need Values — unmapped NOT NULL target fields (standalone section) */}
+            {sidebarFilter !== 'unmapped' && data.unmappedNotNullTargetFields.length > 0 && (
               <div className="mt-4 border-t border-dashed border-gray-200 pt-3">
                 <div className="px-4 text-xs font-medium text-amber-600 uppercase tracking-wide mb-2">
                   Need Values ({data.unmappedNotNullTargetFields.length})
@@ -967,18 +1068,24 @@ export default function TransformContent({ projectId, initialData }: Props) {
         <div className="flex-1 flex flex-col overflow-hidden">
           {selectedUnmappedFieldId && !selectedContext ? (() => {
             const field = data.unmappedNotNullTargetFields.find((f) => f.id === selectedUnmappedFieldId)
+              ?? data.unmappedNullableTargetFields.find((f) => f.id === selectedUnmappedFieldId)
             if (!field) return null
+            const isRequired = !field.is_nullable
             return (
               <div className="flex-1 flex items-start justify-center p-8">
-                <div className="max-w-lg w-full bg-amber-50 border border-amber-200 rounded-lg p-6">
+                <div className={`max-w-lg w-full rounded-lg p-6 ${isRequired ? 'bg-amber-50 border border-amber-200' : 'bg-gray-50 border border-gray-200'}`}>
                   <div className="flex items-center gap-2 mb-4">
-                    <span className="w-3 h-3 rounded-full bg-amber-400" />
-                    <span className="text-lg font-semibold text-amber-800">Unmapped Required Field</span>
+                    <span className={`w-3 h-3 rounded-full ${isRequired ? 'bg-amber-400' : 'bg-gray-300'}`} />
+                    <span className={`text-lg font-semibold ${isRequired ? 'text-amber-800' : 'text-gray-700'}`}>
+                      {isRequired ? 'Unmapped Required Field' : 'Unmapped Optional Field'}
+                    </span>
                   </div>
                   <div className="space-y-3 text-sm text-gray-700">
-                    <div className="bg-white rounded-md p-3 border border-amber-100">
+                    <div className={`bg-white rounded-md p-3 border ${isRequired ? 'border-amber-100' : 'border-gray-100'}`}>
                       <p className="font-medium text-gray-900">{field.name}</p>
-                      <p className="text-gray-500 text-xs mt-0.5">{field.data_type} · NOT NULL{field.table_name ? ` · ${field.table_name}` : ''}</p>
+                      <p className="text-gray-500 text-xs mt-0.5">
+                        {field.data_type} · {isRequired ? 'NOT NULL' : 'NULLABLE'}{field.table_name ? ` · ${field.table_name}` : ''}
+                      </p>
                       {field.check_constraint?.type === 'in_list' && (field.check_constraint as { allowedValues?: string[] }).allowedValues && (
                         <div className="mt-2 flex flex-wrap gap-1">
                           {((field.check_constraint as { allowedValues: string[] }).allowedValues).map((v: string) => (
@@ -990,18 +1097,24 @@ export default function TransformContent({ projectId, initialData }: Props) {
                         <p className="mt-1 text-xs text-purple-600 font-mono">Pattern: {(field.check_constraint as { pattern: string }).pattern}</p>
                       )}
                     </div>
-                    <p>This target field is <strong>NOT NULL</strong> but has no source field mapped to it. A value must be provided for every record.</p>
-                    <div className="space-y-2 text-gray-600">
-                      <p className="font-medium text-gray-700">Options:</p>
-                      <div className="flex items-start gap-2">
-                        <span className="text-blue-500 mt-0.5">1.</span>
-                        <p>Go to the <strong>Mapping</strong> tab and map a source field to this target field.</p>
-                      </div>
-                      <div className="flex items-start gap-2">
-                        <span className="text-blue-500 mt-0.5">2.</span>
-                        <p>The <strong>Execution Package</strong> will auto-generate a default value based on the field type and constraints when you generate it.</p>
-                      </div>
-                    </div>
+                    {isRequired ? (
+                      <>
+                        <p>This target field is <strong>NOT NULL</strong> but has no source field mapped to it. A value must be provided for every record.</p>
+                        <div className="space-y-2 text-gray-600">
+                          <p className="font-medium text-gray-700">Options:</p>
+                          <div className="flex items-start gap-2">
+                            <span className="text-blue-500 mt-0.5">1.</span>
+                            <p>Go to the <strong>Mapping</strong> tab and map a source field to this target field.</p>
+                          </div>
+                          <div className="flex items-start gap-2">
+                            <span className="text-blue-500 mt-0.5">2.</span>
+                            <p>The <strong>Execution Package</strong> will auto-generate a default value based on the field type and constraints when you generate it.</p>
+                          </div>
+                        </div>
+                      </>
+                    ) : (
+                      <p>This target field is <strong>nullable</strong> and has no source field mapped to it. It will be left as <code className="text-xs bg-gray-100 px-1 py-0.5 rounded">NULL</code> during migration unless you map a source field to it.</p>
+                    )}
                   </div>
                 </div>
               </div>
@@ -1690,17 +1803,22 @@ export default function TransformContent({ projectId, initialData }: Props) {
 // ── DatasetNode ───────────────────────────────────────────────────────────────
 
 function DatasetNode({
-  dataset, expanded, expandedTables, selectedMappingId, staleTableMappingIds,
-  onToggleDataset, onToggleTable, onSelectField,
+  dataset, expanded, expandedTables, selectedMappingId, selectedUnmappedFieldId,
+  staleTableMappingIds, unmappedByTargetTable, filter,
+  onToggleDataset, onToggleTable, onSelectField, onSelectUnmappedField,
 }: {
   dataset: DatasetGroup
   expanded: boolean
   expandedTables: Set<string>
   selectedMappingId: string | null
+  selectedUnmappedFieldId: string | null
   staleTableMappingIds: Set<string>
+  unmappedByTargetTable: Record<string, { notNull: UnmappedTargetField[]; nullable: UnmappedTargetField[] }>
+  filter: TransformFilter
   onToggleDataset: (id: string) => void
   onToggleTable: (id: string) => void
   onSelectField: (id: string) => void
+  onSelectUnmappedField: (id: string) => void
 }) {
   return (
     <div className="border border-gray-200 rounded-lg overflow-hidden">
@@ -1721,9 +1839,13 @@ function DatasetNode({
               table={tbl}
               expanded={expandedTables.has(tbl.tableMappingId)}
               selectedMappingId={selectedMappingId}
+              selectedUnmappedFieldId={selectedUnmappedFieldId}
               isTableStale={staleTableMappingIds.has(tbl.tableMappingId)}
+              unmappedFields={unmappedByTargetTable[tbl.targetTableName]}
+              filter={filter}
               onToggle={() => onToggleTable(tbl.tableMappingId)}
               onSelectField={onSelectField}
+              onSelectUnmappedField={onSelectUnmappedField}
             />
           ))}
         </div>
@@ -1735,15 +1857,40 @@ function DatasetNode({
 // ── TableNode ─────────────────────────────────────────────────────────────────
 
 function TableNode({
-  table, expanded, selectedMappingId, isTableStale, onToggle, onSelectField,
+  table, expanded, selectedMappingId, selectedUnmappedFieldId, isTableStale,
+  unmappedFields, filter, onToggle, onSelectField, onSelectUnmappedField,
 }: {
   table: TableGroup
   expanded: boolean
   selectedMappingId: string | null
+  selectedUnmappedFieldId: string | null
   isTableStale: boolean
+  unmappedFields?: { notNull: UnmappedTargetField[]; nullable: UnmappedTargetField[] }
+  filter: TransformFilter
   onToggle: () => void
   onSelectField: (id: string) => void
+  onSelectUnmappedField: (id: string) => void
 }) {
+  const primaryFields = table.fields.filter((f) => !f.isContributing)
+
+  // Apply filter to mapped fields
+  const filteredFields = primaryFields.filter((f) => {
+    switch (filter) {
+      case 'needs_transform': return f.needsTransform
+      case 'has_transform': return f.transformation !== null
+      case 'applied': return f.transformation?.status === 'applied'
+      case 'unmapped': return false
+      default: return true
+    }
+  })
+
+  const showUnmapped = filter === 'all' || filter === 'unmapped'
+  const unmappedNotNull = showUnmapped ? (unmappedFields?.notNull ?? []) : []
+  const unmappedNullable = showUnmapped ? (unmappedFields?.nullable ?? []) : []
+  const totalVisible = filteredFields.length + unmappedNotNull.length + unmappedNullable.length
+
+  if (totalVisible === 0) return null
+
   return (
     <div>
       <button
@@ -1761,9 +1908,9 @@ function TableNode({
       </button>
       {expanded && (
         <div className="bg-gray-50 border-t border-gray-100">
-          {table.fields.filter((f) => !f.isContributing).map((field) => {
-            const oneToManyCount = table.fields.filter(
-              (f) => f.sourceFieldId === field.sourceFieldId && !f.isContributing
+          {filteredFields.map((field) => {
+            const oneToManyCount = primaryFields.filter(
+              (f) => f.sourceFieldId === field.sourceFieldId
             ).length
             return (
               <FieldRow
@@ -1773,6 +1920,40 @@ function TableNode({
                 onSelect={() => onSelectField(field.fieldMappingId)}
                 oneToManyCount={oneToManyCount}
               />
+            )
+          })}
+
+          {/* Unmapped target fields — same layout as FieldRow */}
+          {[...unmappedNotNull, ...unmappedNullable].map((field) => {
+            const isRequired = !field.is_nullable
+            const isSelected = selectedUnmappedFieldId === field.id
+            return (
+              <button
+                key={field.id}
+                onClick={() => onSelectUnmappedField(field.id)}
+                className={`w-full px-3 py-2.5 border-b border-gray-100 last:border-0 text-left transition-colors ${
+                  isSelected
+                    ? isRequired ? 'bg-amber-50 border-l-2 border-l-amber-400' : 'bg-gray-100 border-l-2 border-l-gray-400'
+                    : 'border-l-2 border-l-transparent hover:bg-gray-100'
+                }`}
+              >
+                <div className="flex items-start justify-between gap-2 mb-0.5">
+                  <div className="flex items-center gap-1.5 min-w-0 flex-1">
+                    <div className={`w-1.5 h-1.5 rounded-full flex-shrink-0 mt-0.5 ${isRequired ? 'bg-amber-400' : 'bg-gray-300'}`} />
+                    <span className={`text-xs font-semibold truncate ${isRequired ? 'text-gray-900' : 'text-gray-500'}`}>{field.name}</span>
+                  </div>
+                  <Badge className={`text-[10px] px-1.5 py-0 flex-shrink-0 ${
+                    isRequired
+                      ? 'bg-amber-100 text-amber-700 hover:bg-amber-100 border border-amber-200'
+                      : 'bg-gray-100 text-gray-500 hover:bg-gray-100 border border-gray-200'
+                  }`}>
+                    {isRequired ? 'Required' : 'Unmapped'}
+                  </Badge>
+                </div>
+                <div className="flex items-center gap-1 pl-3">
+                  <span className="text-[11px] text-gray-400 italic">No source mapped</span>
+                </div>
+              </button>
             )
           })}
         </div>
