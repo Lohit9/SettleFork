@@ -308,11 +308,9 @@ function RegenerateConfirmDialog({
 function MappingProgress({
   tableMappings,
   allFieldsByTable,
-  onShowUncovered,
 }: {
   tableMappings: RichTableMapping[]
   allFieldsByTable: Record<string, SimpleField[]>
-  onShowUncovered: () => void
 }) {
   const allFMs = tableMappings.flatMap((tm) => tm.fieldMappings)
   // Review progress tracks primary rows only — contributing rows are implicitly managed
@@ -340,10 +338,6 @@ function MappingProgress({
   const coveredTargetFieldIds = new Set(
     primaryFMs.filter((fm) => fm.status !== 'rejected').map((fm) => fm.target_field_id)
   )
-  const uncoveredCount = Math.max(0, totalSourceFields - coveredSourceFieldIds.size)
-  const isFullyCovered = uncoveredCount === 0
-  const isTargetFullyCovered = totalTargetFields > 0 && coveredTargetFieldIds.size >= totalTargetFields
-
   if (totalToReview === 0 && totalSourceFields === 0) return null
 
   const approvePct = totalToReview > 0 ? (approvedCount / totalToReview) * 100 : 0
@@ -379,24 +373,8 @@ function MappingProgress({
         />
       </div>
 
-      {/* Coverage metrics — source left, target right */}
+      {/* Coverage metrics — target first (blocking), source second (informational) */}
       <div className="flex items-center gap-6 text-sm">
-        {totalSourceFields > 0 && (
-          <div className="flex items-center gap-1.5">
-            <span className="w-2 h-2 rounded-full bg-blue-400 inline-block flex-shrink-0" />
-            <span className="text-gray-600">
-              {coveredSourceFieldIds.size}/{totalSourceFields} source fields used
-            </span>
-            {uncoveredCount > 0 && (
-              <button
-                onClick={onShowUncovered}
-                className="text-xs text-amber-600 hover:text-amber-700 hover:underline transition-colors"
-              >
-                ({uncoveredCount} unmapped)
-              </button>
-            )}
-          </div>
-        )}
         {totalTargetFields > 0 && (
           <div className="flex items-center gap-1.5">
             {coveredTargetFieldIds.size >= totalTargetFields ? (
@@ -406,6 +384,14 @@ function MappingProgress({
             )}
             <span className={coveredTargetFieldIds.size >= totalTargetFields ? 'text-green-700' : 'text-amber-700'}>
               {coveredTargetFieldIds.size}/{totalTargetFields} target fields mapped
+            </span>
+          </div>
+        )}
+        {totalSourceFields > 0 && (
+          <div className="flex items-center gap-1.5">
+            <span className="w-2 h-2 rounded-full bg-blue-400 inline-block flex-shrink-0" />
+            <span className="text-gray-600">
+              {coveredSourceFieldIds.size}/{totalSourceFields} source fields used
             </span>
           </div>
         )}
@@ -536,14 +522,18 @@ function InlineAddFieldRow({
   allFieldsByTable,
   onAdded,
   onCancel,
+  initialSourceFieldId,
+  initialTargetFieldId,
 }: {
   tm: RichTableMapping
   allFieldsByTable: Record<string, SimpleField[]>
   onAdded: (newFM: RichFieldMapping) => void
   onCancel: () => void
+  initialSourceFieldId?: string
+  initialTargetFieldId?: string
 }) {
-  const [srcFieldId, setSrcFieldId] = useState('')
-  const [tgtFieldId, setTgtFieldId] = useState('')
+  const [srcFieldId, setSrcFieldId] = useState(initialSourceFieldId ?? '')
+  const [tgtFieldId, setTgtFieldId] = useState(initialTargetFieldId ?? '')
   const [pending, startTransition] = useTransition()
   const [error, setError] = useState<string | null>(null)
 
@@ -1448,6 +1438,7 @@ function TableMappingCard({
                       <InlineAddFieldRow
                         tm={tm}
                         allFieldsByTable={allFieldsByTable}
+                        initialTargetFieldId={field.id}
                         onAdded={(fm) => { setAddAfterUnmappedId(null); onFieldAdded(fm); }}
                         onCancel={() => { setAddAfterUnmappedId(null); onHideAddRow(); }}
                       />
@@ -1515,6 +1506,7 @@ function TableMappingCard({
                       <InlineAddFieldRow
                         tm={tm}
                         allFieldsByTable={allFieldsByTable}
+                        initialSourceFieldId={field.id}
                         onAdded={(fm) => { setAddAfterUnmappedId(null); onFieldAdded(fm); }}
                         onCancel={() => { setAddAfterUnmappedId(null); onHideAddRow(); }}
                       />
@@ -2034,6 +2026,7 @@ export default function MappingContent({ projectId, initialData }: Props) {
 
   // Tab counts
   const allFMs = useMemo(() => tableMappings.flatMap((tm) => tm.fieldMappings), [tableMappings])
+  const primaryFMCount = useMemo(() => allFMs.filter((fm) => !fm.is_contributing).length, [allFMs])
   // Needs review: primary rows only (contributing rows are reviewed via their primary)
   const needsReviewCount = useMemo(
     () => allFMs.filter((fm) => !fm.is_contributing && fm.status === 'needs_review').length,
@@ -2325,7 +2318,6 @@ export default function MappingContent({ projectId, initialData }: Props) {
       <MappingProgress
         tableMappings={tableMappings}
         allFieldsByTable={allFieldsByTable}
-        onShowUncovered={() => setActiveFilter('unmapped')}
       />
 
       {/* Source ↔ Target header */}
@@ -2344,7 +2336,7 @@ export default function MappingContent({ projectId, initialData }: Props) {
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-1 p-1 bg-gray-100 rounded-xl">
           {([
-            { key: 'all', label: 'All', count: tableMappings.length, cc: 'bg-gray-200 text-gray-600' },
+            { key: 'all', label: 'All', count: primaryFMCount, cc: 'bg-gray-200 text-gray-600' },
             { key: 'needs_review', label: 'Needs Review', count: needsReviewCount, cc: 'bg-amber-100 text-amber-700' },
             { key: 'approved', label: 'Approved', count: approvedFMCount, cc: 'bg-green-100 text-green-700' },
             { key: 'unmapped', label: 'Unmapped', count: unmappedCount, cc: 'bg-gray-200 text-gray-600' },
