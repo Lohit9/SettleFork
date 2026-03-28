@@ -112,47 +112,59 @@ export async function getProjectsWithStats(): Promise<ProjectWithStats[]> {
   const projectIds = projects.map((p) => p.id)
   const allDatasets = projects.flatMap((p) => (p.datasets || []) as Dataset[])
   const sourceDatasetIds = allDatasets.filter((d) => d.role === 'source').map((d) => d.id)
+  const targetDatasetIds = allDatasets.filter((d) => d.role === 'target').map((d) => d.id)
 
-  // Round 2: parallel fetch (tables, table_mappings, quality_issues, outputs)
+  // Round 2: parallel fetch (tables for both source + target, table_mappings, quality_issues, outputs, acknowledgments)
   const DUMMY_ID = '00000000-0000-0000-0000-000000000000'
   const [
     { data: sourceTables },
+    { data: targetTables },
     { data: tableMappings },
     { data: qualityIssues },
     { data: outputs },
+    { data: fieldAcks },
   ] = await Promise.all([
     supabase
       .from('tables')
       .select('id, dataset_id, row_count')
       .in('dataset_id', sourceDatasetIds.length > 0 ? sourceDatasetIds : [DUMMY_ID]),
     supabase
+      .from('tables')
+      .select('id, dataset_id')
+      .in('dataset_id', targetDatasetIds.length > 0 ? targetDatasetIds : [DUMMY_ID]),
+    supabase
       .from('table_mappings')
-      .select('id, project_id')
+      .select('id, project_id, target_table_id')
       .in('project_id', projectIds),
     supabase
       .from('quality_issues')
       .select('project_id, severity, status')
       .in('project_id', projectIds),
     supabase.from('outputs').select('project_id').in('project_id', projectIds),
+    supabase.from('field_acknowledgments').select('project_id, field_id').in('project_id', projectIds),
   ])
 
   const sourceTableIds = (sourceTables || []).map((t) => t.id)
   const tableMappingIds = (tableMappings || []).map((tm) => tm.id)
+  const allTargetTableIds = [...new Set((tableMappings || []).map((tm) => tm.target_table_id))]
 
-  // Round 3: fields and field_mappings
-  const [{ data: fields }, { data: fieldMappings }] = await Promise.all([
+  // Round 3: source fields, field_mappings (with richer columns), ALL target fields (for counting)
+  const [{ data: fields }, { data: fieldMappings }, { data: allTargetFields }] = await Promise.all([
     sourceTableIds.length > 0
       ? supabase.from('fields').select('id, table_id').in('table_id', sourceTableIds)
       : Promise.resolve({ data: [] as { id: string; table_id: string }[], error: null }),
     tableMappingIds.length > 0
       ? supabase
           .from('field_mappings')
-          .select('id, table_mapping_id, status')
+          .select('id, table_mapping_id, status, is_contributing, source_field_id, target_field_id, needs_transformation')
           .in('table_mapping_id', tableMappingIds)
       : Promise.resolve({
-          data: [] as { id: string; table_mapping_id: string; status: string }[],
+          data: [] as { id: string; table_mapping_id: string; status: string; is_contributing: boolean; source_field_id: string; target_field_id: string; needs_transformation: boolean | null }[],
           error: null,
         }),
+    allTargetTableIds.length > 0
+      ? supabase.from('fields').select('id, table_id').in('table_id', allTargetTableIds)
+      : Promise.resolve({ data: [] as { id: string; table_id: string }[], error: null }),
   ])
 
   const fieldMappingIds = (fieldMappings || []).map((fm) => fm.id)
@@ -196,9 +208,19 @@ export async function getProjectsWithStats(): Promise<ProjectWithStats[]> {
     totalQualityIssues: number
     resolvedQualityIssues: number
     outputCount: number
-    hasSourceData: boolean
-    hasMappings: boolean
-    allTransformsSaved: boolean
+    hasSourceTables: boolean
+    hasTargetTables: boolean
+    // Mapping phase: track primary mappings, approvals, and acknowledgments
+    primaryMappingCount: number
+    allPrimaryApproved: boolean
+    mappedTargetFieldIds: Set<string>
+    mappedSourceFieldIds: Set<string>
+    acknowledgedFieldIds: Set<string>
+    totalSourceFieldCount: number
+    totalTargetFieldCount: number
+    // Transform phase: track needs_transformation coverage
+    needsTransformIds: Set<string>
+    coveredTransformIds: Set<string>
   }
   const buckets = new Map<string, Bucket>()
   projectIds.forEach((id) =>
@@ -213,22 +235,54 @@ export async function getProjectsWithStats(): Promise<ProjectWithStats[]> {
       totalQualityIssues: 0,
       resolvedQualityIssues: 0,
       outputCount: 0,
-      hasSourceData: false,
-      hasMappings: false,
-      allTransformsSaved: true,
+      hasSourceTables: false,
+      hasTargetTables: false,
+      primaryMappingCount: 0,
+      allPrimaryApproved: true,
+      mappedTargetFieldIds: new Set(),
+      mappedSourceFieldIds: new Set(),
+      acknowledgedFieldIds: new Set(),
+      totalSourceFieldCount: 0,
+      totalTargetFieldCount: 0,
+      needsTransformIds: new Set(),
+      coveredTransformIds: new Set(),
     })
   )
 
   ;(fields || []).forEach((f) => {
     const pid = tableToProject.get(f.table_id)
-    if (pid) buckets.get(pid)!.totalSourceFields++
+    if (pid) {
+      buckets.get(pid)!.totalSourceFields++
+      buckets.get(pid)!.totalSourceFieldCount++
+    }
   })
   ;(sourceTables || []).forEach((t) => {
     const pid = datasetToProject.get(t.dataset_id)
     if (!pid) return
     const b = buckets.get(pid)!
     b.totalRows += t.row_count || 0
-    if ((t.row_count || 0) > 0) b.hasSourceData = true
+    b.hasSourceTables = true
+  })
+  // Count target fields per project (via target tables → datasets → project)
+  const targetTableToProject = new Map<string, string>()
+  ;(targetTables || []).forEach((t) => {
+    const pid = datasetToProject.get(t.dataset_id)
+    if (pid) {
+      buckets.get(pid)!.hasTargetTables = true
+      targetTableToProject.set(t.id, pid)
+    }
+  })
+  // Count target fields per project (via table mapping target tables)
+  ;(allTargetFields || []).forEach((f) => {
+    const tms = (tableMappings || []).filter((tm) => tm.target_table_id === f.table_id)
+    for (const tm of tms) {
+      const b = buckets.get(tm.project_id)
+      if (b) b.totalTargetFieldCount++
+    }
+  })
+  ;(fieldAcks || []).forEach((fa) => {
+    const b = buckets.get(fa.project_id)
+    if (b) b.acknowledgedFieldIds.add(fa.field_id)
   })
   ;(fieldMappings || []).forEach((fm) => {
     const pid = tmToProject.get(fm.table_mapping_id)
@@ -236,7 +290,23 @@ export async function getProjectsWithStats(): Promise<ProjectWithStats[]> {
     const b = buckets.get(pid)!
     if (fm.status !== 'rejected') {
       b.mappedFieldCount++
-      b.hasMappings = true
+    }
+    if (fm.status !== 'rejected') b.mappedSourceFieldIds.add(fm.source_field_id)
+    if (!fm.is_contributing) {
+      b.primaryMappingCount++
+      if (fm.status !== 'approved') b.allPrimaryApproved = false
+      if (fm.status !== 'rejected') b.mappedTargetFieldIds.add(fm.target_field_id)
+      if (fm.status === 'approved' && fm.needs_transformation) {
+        b.needsTransformIds.add(fm.id)
+      }
+    }
+  })
+  // Collect NOT NULL target field IDs per project (via table_mapping → project)
+  ;(notNullTargetFields || []).forEach((f) => {
+    const tms = (tableMappings || []).filter((tm) => tm.target_table_id === f.table_id)
+    for (const tm of tms) {
+      const b = buckets.get(tm.project_id)
+      if (b) b.notNullTargetFieldIds.add(f.id)
     }
   })
   ;(qualityIssues || []).forEach((qi) => {
@@ -257,7 +327,9 @@ export async function getProjectsWithStats(): Promise<ProjectWithStats[]> {
     const b = buckets.get(pid)!
     b.totalTransforms++
     if (t.status === 'saved' || t.status === 'applied') b.savedTransforms++
-    else b.allTransformsSaved = false
+    if (b.needsTransformIds.has(t.field_mapping_id)) {
+      b.coveredTransformIds.add(t.field_mapping_id)
+    }
   })
   ;(outputs || []).forEach((o) => {
     const b = buckets.get(o.project_id)
@@ -275,15 +347,30 @@ export async function getProjectsWithStats(): Promise<ProjectWithStats[]> {
         ? null
         : Math.round((b.resolvedQualityIssues / b.totalQualityIssues) * 100)
 
-    // Determine highest completed phase
+    // Phase 1 — Ingestion: both source and target tables exist
+    const ingestionDone = b.hasSourceTables && b.hasTargetTables
+
+    // Phase 2 — Mapping: all fields addressed (mapped or acknowledged)
+    const hasMappings = b.primaryMappingCount > 0
+    const totalFields = b.totalSourceFieldCount + b.totalTargetFieldCount
+    const allMappedOrAckedIds = new Set([...b.mappedSourceFieldIds, ...b.mappedTargetFieldIds, ...b.acknowledgedFieldIds])
+    const addressedCount = allMappedOrAckedIds.size
+    const mappingDone = hasMappings && b.allPrimaryApproved && totalFields > 0 && addressedCount >= totalFields
+
+    // Phase 3 — Transform: all approved needs_transformation mappings have a saved transform
+    const transformDone = b.needsTransformIds.size === 0
+      ? hasMappings
+      : b.coveredTransformIds.size >= b.needsTransformIds.size
+
+    // Phase 4 — Validate: at least one scan run AND zero open blocking issues
+    const validateDone = b.totalQualityIssues > 0 && b.blockingIssueCount === 0
+
     let completed = 0
-    if (b.hasSourceData) completed = 1
-    if (completed >= 1 && b.hasMappings) completed = 2
-    if (completed >= 2 && (b.totalTransforms === 0 || b.allTransformsSaved)) completed = 3
-    if (completed >= 3 && readinessScore !== null && readinessScore >= 90) completed = 4
+    if (ingestionDone) completed = 1
+    if (completed >= 1 && mappingDone) completed = 2
+    if (completed >= 2 && transformDone) completed = 3
+    if (completed >= 3 && validateDone) completed = 4
     if (completed >= 4 && b.outputCount > 0) completed = 5
-    // currentPhase = next phase to work on (1-indexed), capped so that when
-    // all 5 phases are done the bar shows fully green (use 6 to signal "all done")
     const currentPhase = completed >= 5 ? 6 : completed + 1
 
     return {
