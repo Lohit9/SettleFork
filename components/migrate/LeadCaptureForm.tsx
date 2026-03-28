@@ -100,6 +100,9 @@ export default function LeadCaptureForm({ sourceSystem, targetSystem, slug }: Le
 
   return (
     <div>
+      <p className="text-xs text-mine-slate-400 text-center mb-4 max-w-lg mx-auto italic">
+        You'll receive a preliminary mapping analysis showing how your source objects map to your target schema, with confidence scores and flagged risk areas.
+      </p>
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
         <input
           type="text"
@@ -154,7 +157,7 @@ export default function LeadCaptureForm({ sourceSystem, targetSystem, slug }: Le
         disabled={isSubmitting}
         className="w-full bg-mine-blue-600 hover:bg-mine-blue-500 disabled:opacity-60 disabled:cursor-not-allowed text-white font-semibold py-3.5 rounded-xl transition-all hover:-translate-y-0.5 hover:shadow-lg hover:shadow-blue-600/25 mt-2"
       >
-        {isSubmitting ? 'Submitting…' : 'Get Started'}
+        {isSubmitting ? 'Submitting…' : 'Get Your Free Assessment'}
       </button>
     </div>
   )
