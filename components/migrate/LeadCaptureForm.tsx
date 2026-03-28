@@ -36,6 +36,7 @@ export default function LeadCaptureForm({ sourceSystem, targetSystem, slug }: Le
   const [email, setEmail] = useState('')
   const [timeline, setTimeline] = useState('')
   const [volume, setVolume] = useState('')
+  const [notes, setNotes] = useState('')
   const [isSubmitting, setIsSubmitting] = useState(false)
   const [isSubmitted, setIsSubmitted] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -61,6 +62,7 @@ export default function LeadCaptureForm({ sourceSystem, targetSystem, slug }: Le
         target_system: targetSystem,
         timeline: timeline || null,
         volume: volume || null,
+        notes: notes.trim() || null,
         page_slug: slug,
       })
 
@@ -134,6 +136,14 @@ export default function LeadCaptureForm({ sourceSystem, targetSystem, slug }: Le
           ))}
         </select>
       </div>
+
+      <textarea
+        placeholder="Anything else about your migration? (optional)"
+        value={notes}
+        onChange={(e) => setNotes(e.target.value)}
+        rows={2}
+        className={`${INPUT_CLASS} mt-4 resize-none`}
+      />
 
       {error && (
         <p className="mt-3 text-sm text-red-500">{error}</p>
