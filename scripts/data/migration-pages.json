@@ -1,1 +1,1366 @@
-[]
+[
+    {
+      "slug": "sap-ecc-to-salesforce",
+      "source_system": "SAP ECC",
+      "target_system": "Salesforce",
+      "source_slug": "sap-ecc",
+      "target_slug": "salesforce",
+      "source_category": "ERP",
+      "target_category": "CRM",
+      "meta_title": "SAP ECC to Salesforce Data Migration | Mine",
+      "meta_description": "Automate your SAP ECC to Salesforce data migration with Mine. AI-powered field mapping, transformation, and validation. Cut migration time by 70%.",
+      "hero_headline": "SAP ECC to Salesforce Data Migration",
+      "hero_subheadline": "Automate the most complex parts of your SAP ECC to Salesforce migration. Mine handles schema profiling, field mapping, data transformation, and validation — so your team can focus on go-live, not spreadsheets.",
+      "overview_paragraphs": [
+        "SAP ECC to Salesforce migrations are among the most common cross-platform data movements in enterprise IT. They typically occur when companies are modernizing their customer-facing operations — moving away from SAP's tightly coupled ERP model toward Salesforce's cloud-native CRM for sales, service, and marketing. This migration is often triggered by M&A activity, digital transformation initiatives, or the desire to give commercial teams a purpose-built CRM instead of forcing them into SAP's customer management modules.",
+        "The technical complexity is significant. SAP ECC stores customer and partner data across deeply normalized structures — KNA1 (general data), KNVV (sales area data), KNVP (partner functions), and KNVK (contact persons) — while Salesforce uses a flatter object model with Accounts, Contacts, and Opportunities. Custom fields, SAP number ranges, partner function hierarchies, and sales organization-specific data all need to be untangled and remapped. Currency and unit-of-measure conversions, SAP-specific date formats (YYYYMMDD), and industry-specific configurations add further complexity.",
+        "Most companies handle this migration through consulting engagements that rely on manual field mapping in spreadsheets and custom ABAP or middleware-based ETL. This approach typically takes 6–12 months, costs $1–3M, and requires deep SAP functional knowledge that's increasingly hard to find."
+      ],
+      "challenges": [
+        {
+          "title": "SAP's normalized customer model vs. Salesforce's flat Accounts",
+          "description": "SAP ECC splits customer data across KNA1, KNB1, KNVV, and KNVP tables organized by company code and sales area. Salesforce stores everything on the Account object with custom fields. Reconciling which SAP sales area maps to which Salesforce record type — and how to handle customers that exist in multiple company codes — requires business logic that can't be automated with simple field matching."
+        },
+        {
+          "title": "Partner function hierarchies",
+          "description": "SAP's partner function concept (sold-to, ship-to, bill-to, payer) is deeply embedded in the sales document flow. Salesforce doesn't have a native equivalent — these relationships typically need to be modeled using Account hierarchies, custom junction objects, or Salesforce's Contact Roles. The mapping decision affects downstream process design."
+        },
+        {
+          "title": "SAP number ranges and external IDs",
+          "description": "SAP uses configurable number ranges for customer, material, and document IDs that may overlap across company codes. Salesforce uses its own 18-character alphanumeric IDs. Maintaining bidirectional traceability requires careful external ID mapping and deduplication logic."
+        },
+        {
+          "title": "Sales organization-specific pricing and conditions",
+          "description": "SAP's condition technique (pricing, discounts, surcharges) is stored across A-tables with complex access sequences. Salesforce CPQ or standard price books use a fundamentally different pricing model. Migrating pricing data requires business decisions about what to flatten, archive, or reconstruct."
+        },
+        {
+          "title": "Currency and unit-of-measure handling",
+          "description": "SAP stores amounts in transaction currency, local currency, and group currency with explicit exchange rates. Salesforce uses a single currency per record with organization-level multi-currency support. Conversion logic must account for historical rates, rounding rules, and SAP's currency decimal configuration."
+        }
+      ],
+      "data_objects": [
+        { "source_object": "KNA1 (Customer Master)", "target_object": "Account", "notes": "General customer data — name, address, industry" },
+        { "source_object": "KNVV (Sales Area Data)", "target_object": "Account (custom fields)", "notes": "Sales org-specific fields, payment terms, incoterms" },
+        { "source_object": "KNVK (Contact Persons)", "target_object": "Contact", "notes": "Contact details linked to customer master" },
+        { "source_object": "KNVP (Partner Functions)", "target_object": "Account Contact Role / Custom Object", "notes": "Sold-to, ship-to, bill-to relationships" },
+        { "source_object": "VBAK/VBAP (Sales Orders)", "target_object": "Opportunity / Order", "notes": "Header and line item data" },
+        { "source_object": "MARA/MAKT (Materials)", "target_object": "Product2", "notes": "Material master with descriptions" },
+        { "source_object": "A-Tables (Pricing Conditions)", "target_object": "PricebookEntry / CPQ", "notes": "Condition records for pricing" },
+        { "source_object": "BSEG (Accounting Documents)", "target_object": "Custom Object / Archive", "notes": "Open items, payment history" },
+        { "source_object": "ADR (Addresses)", "target_object": "Account.BillingAddress / ShippingAddress", "notes": "Multiple address types per customer" },
+        { "source_object": "CDHDR/CDPOS (Change Documents)", "target_object": "Field History Tracking", "notes": "Audit trail of master data changes" }
+      ],
+      "how_mine_helps": [
+        "Mine auto-profiles SAP ECC customer tables (KNA1, KNVV, KNVK, KNVP) and maps them to Salesforce Account, Contact, and custom objects with 90%+ confidence — including sales area-specific fields.",
+        "Partner function hierarchies are automatically detected and mapped to Salesforce Contact Roles or custom junction objects based on your target architecture.",
+        "SAP number ranges are reconciled against Salesforce external ID fields with built-in deduplication logic that handles cross-company-code overlaps.",
+        "Mine generates production-ready SQL transformations for SAP date formats, currency conversions, and unit-of-measure mappings — validated against your Salesforce field constraints before the first load."
+      ],
+      "migration_stats": {
+        "manual_timeline": "6–12 months",
+        "mine_timeline": "4–8 weeks",
+        "manual_cost": "$1M–3M",
+        "cost_reduction": "50–70%",
+        "manual_team": "6–10 consultants (SAP + Salesforce)",
+        "mine_team": "1–2 internal resources"
+      },
+      "faqs": [
+        {
+          "question": "Can Mine handle SAP's multi-company-code customer structures?",
+          "answer": "Yes. Mine profiles customer records across all company codes and sales areas, identifies duplicates, and lets you define consolidation rules — whether that's creating one Salesforce Account per unique customer or preserving company code distinctions using record types."
+        },
+        {
+          "question": "Does Mine support SAP's partner function mapping to Salesforce?",
+          "answer": "Mine detects partner function relationships in KNVP and proposes mappings to Salesforce Contact Roles, Account hierarchies, or custom junction objects. You review and approve the mapping strategy before any data moves."
+        },
+        {
+          "question": "How does Mine handle SAP date and currency formats?",
+          "answer": "Mine automatically detects SAP-specific formats (YYYYMMDD dates, currency decimals per ISO configuration) and generates transformation SQL that converts to Salesforce-compatible formats. All conversions are validated against target field constraints."
+        },
+        {
+          "question": "Can we migrate historical sales orders or just open items?",
+          "answer": "Mine supports both. You define the extraction scope — open orders only, last N years of history, or full archive — and Mine maps VBAK/VBAP header and line item data to Salesforce Opportunities or Orders with referential integrity preserved."
+        },
+        {
+          "question": "How long does the initial schema profiling take?",
+          "answer": "Mine profiles a typical SAP ECC customer data landscape (10–20 tables, thousands of fields) in under 15 minutes. You'll see field-level statistics, null rates, cardinality, and format issues immediately."
+        }
+      ],
+      "keywords": {
+        "primary": "SAP ECC to Salesforce data migration",
+        "secondary": ["migrate SAP to Salesforce", "SAP Salesforce migration tool", "SAP to Salesforce ETL", "SAP CRM to Salesforce migration"],
+        "long_tail": ["how to migrate data from SAP to Salesforce", "SAP to Salesforce field mapping", "SAP customer master to Salesforce Account", "SAP to Salesforce migration cost", "SAP to Salesforce migration timeline", "SAP ECC to Salesforce CRM data migration tool"]
+      },
+      "related_slugs": ["sap-ecc-to-sap-s4hana", "sap-ecc-to-netsuite", "oracle-ebs-to-salesforce", "siebel-to-salesforce"],
+      "is_published": true,
+      "display_order": 1
+    },
+    {
+      "slug": "sap-ecc-to-sap-s4hana",
+      "source_system": "SAP ECC",
+      "target_system": "SAP S/4HANA",
+      "source_slug": "sap-ecc",
+      "target_slug": "sap-s4hana",
+      "source_category": "ERP",
+      "target_category": "ERP",
+      "meta_title": "SAP ECC to S/4HANA Data Migration | Mine",
+      "meta_description": "Automate your SAP ECC to S/4HANA data migration. AI-powered field mapping handles table simplifications, BP merges, and custom code adjustments.",
+      "hero_headline": "SAP ECC to S/4HANA Data Migration",
+      "hero_subheadline": "The most complex ERP migration in enterprise IT — automated. Mine handles the table simplifications, Business Partner conversions, and custom field mappings that make S/4HANA migrations so painful.",
+      "overview_paragraphs": [
+        "SAP ECC to S/4HANA is the defining enterprise migration of this decade. With SAP ending mainstream ECC maintenance in 2027, virtually every SAP customer is planning or executing this transition. It's also one of the most technically demanding migrations in enterprise IT — not because the source and target are different products, but because S/4HANA fundamentally restructures how SAP stores data.",
+        "The core challenge is S/4HANA's data model simplification. Hundreds of ECC tables have been merged, renamed, or eliminated. The MATDOC table replaces MKPF/MSEG for material documents. The ACDOCA universal journal replaces dozens of FI/CO line item tables. The Business Partner (BP) model replaces separate customer (KNA1) and vendor (LFA1) masters. Every custom Z-table, report, and interface that touches these structures needs to be analyzed and potentially rewritten.",
+        "Consulting firms typically quote 12–24 months and $5–20M for a brownfield S/4HANA migration. The data conversion workstream alone — profiling custom objects, mapping to simplified structures, validating referential integrity across the new data model — consumes 30–40% of the program budget."
+      ],
+      "challenges": [
+        {
+          "title": "Table simplification and data model changes",
+          "description": "S/4HANA merges hundreds of ECC tables into simplified structures. Material documents move from MKPF/MSEG to MATDOC. Financial documents consolidate into ACDOCA. Custom reports and interfaces built on the old table structures must be identified and remapped. Mine profiles your custom objects against the S/4HANA simplification list automatically."
+        },
+        {
+          "title": "Business Partner conversion (CVI)",
+          "description": "S/4HANA requires all customers (KNA1) and vendors (LFA1) to be converted to the Business Partner model. Entities that are both customer and vendor must be merged. The Customer-Vendor Integration (CVI) process is notorious for data quality issues — duplicate BP numbers, missing role assignments, and inconsistent address data."
+        },
+        {
+          "title": "Custom code remediation impact on data",
+          "description": "Custom ABAP code (Z-programs, enhancements, user exits) that references deprecated tables will break in S/4HANA. While code remediation is a separate workstream, the data structures these programs create and consume — Z-tables, custom clusters, append structures — all need migration analysis."
+        },
+        {
+          "title": "Material Ledger and currency type changes",
+          "description": "S/4HANA makes Material Ledger mandatory and changes how parallel currencies are handled. Historical cost data stored in MBEW/CKMLHD must be converted to the new valuation structure. Getting this wrong creates financial reporting discrepancies post-cutover."
+        },
+        {
+          "title": "Selective data migration vs. full conversion",
+          "description": "Companies must choose between converting all historical data (higher risk, longer timeline) or selectively migrating recent transactions with archived history. Mine helps you analyze data volumes and dependencies to make this decision with full visibility."
+        }
+      ],
+      "data_objects": [
+        { "source_object": "KNA1/KNB1 (Customer Master)", "target_object": "BUT000 (Business Partner)", "notes": "Customer-to-BP conversion via CVI" },
+        { "source_object": "LFA1/LFB1 (Vendor Master)", "target_object": "BUT000 (Business Partner)", "notes": "Vendor-to-BP conversion, merge with customer" },
+        { "source_object": "MKPF/MSEG (Material Documents)", "target_object": "MATDOC", "notes": "Table simplification — merged structure" },
+        { "source_object": "BSEG/BKPF (FI Documents)", "target_object": "ACDOCA (Universal Journal)", "notes": "Line items consolidated into single table" },
+        { "source_object": "MBEW (Material Valuation)", "target_object": "CKMLHD_NEW", "notes": "Material Ledger now mandatory" },
+        { "source_object": "MARA/MAKT (Material Master)", "target_object": "MARA/MAKT (simplified)", "notes": "Fields removed, some moved to new tables" },
+        { "source_object": "VBAK/VBAP (Sales Documents)", "target_object": "VBAK/VBAP (simplified)", "notes": "Credit management fields restructured" },
+        { "source_object": "EKKO/EKPO (Purchase Orders)", "target_object": "EKKO/EKPO (simplified)", "notes": "Procurement simplifications" },
+        { "source_object": "Z-Tables (Custom)", "target_object": "Custom (mapped)", "notes": "Requires individual analysis" },
+        { "source_object": "CE* (Profitability Analysis)", "target_object": "ACDOCA", "notes": "CO-PA merged into Universal Journal" }
+      ],
+      "how_mine_helps": [
+        "Mine automatically profiles your ECC custom objects and maps them against SAP's S/4HANA simplification list — identifying which tables are merged, renamed, or deprecated before you start.",
+        "Business Partner conversion rules are generated automatically — Mine detects customer-vendor overlaps, proposes merge logic, and validates BP number range assignments.",
+        "Custom Z-table dependencies are traced and mapped to their S/4HANA equivalents, with flagging for tables that have no direct target and need architectural decisions.",
+        "Mine validates the full conversion against S/4HANA field constraints and data type changes, catching issues like truncated fields, deprecated domains, and incompatible currency configurations before cutover."
+      ],
+      "migration_stats": {
+        "manual_timeline": "12–24 months",
+        "mine_timeline": "6–12 weeks",
+        "manual_cost": "$5M–20M",
+        "cost_reduction": "40–60%",
+        "manual_team": "10–20 consultants",
+        "mine_team": "2–4 internal resources"
+      },
+      "faqs": [
+        {
+          "question": "Does Mine support both brownfield and greenfield S/4HANA migrations?",
+          "answer": "Mine is optimized for brownfield (in-place conversion) data analysis, but the profiling and mapping capabilities work for greenfield (new implementation) data migration as well. The tooling adapts based on whether you're converting existing structures or mapping to a clean S/4HANA instance."
+        },
+        {
+          "question": "How does Mine handle the Business Partner conversion?",
+          "answer": "Mine profiles your KNA1 and LFA1 masters, identifies entities that exist as both customer and vendor, proposes merge rules, and generates the BP conversion mapping with role assignments. All rules are reviewable before execution."
+        },
+        {
+          "question": "Can Mine identify which custom Z-tables are affected by S/4HANA simplifications?",
+          "answer": "Yes. Mine cross-references your custom table catalog against SAP's simplification database, flagging tables that reference deprecated structures and proposing S/4HANA-compatible alternatives where they exist."
+        },
+        {
+          "question": "What about historical financial data in ACDOCA?",
+          "answer": "Mine supports selective data migration analysis — you define the cutover boundary (e.g., current fiscal year + 2 years of history) and Mine validates the ACDOCA conversion for that scope, including parallel currency and ledger group mappings."
+        }
+      ],
+      "keywords": {
+        "primary": "SAP ECC to S/4HANA data migration",
+        "secondary": ["SAP ECC to S4HANA migration", "SAP S/4HANA conversion tool", "SAP ECC S4HANA data conversion", "SAP brownfield migration tool"],
+        "long_tail": ["how to migrate data from SAP ECC to S/4HANA", "SAP Business Partner conversion tool", "SAP ECC to S/4HANA table simplification", "SAP S/4HANA migration cost", "SAP ECC to S/4HANA migration timeline", "SAP custom table migration S/4HANA"]
+      },
+      "related_slugs": ["sap-ecc-to-salesforce", "sap-ecc-to-netsuite", "oracle-ebs-to-sap-s4hana", "dynamics-ax-to-dynamics-365"],
+      "is_published": true,
+      "display_order": 2
+    },
+    {
+      "slug": "oracle-ebs-to-salesforce",
+      "source_system": "Oracle EBS",
+      "target_system": "Salesforce",
+      "source_slug": "oracle-ebs",
+      "target_slug": "salesforce",
+      "source_category": "ERP",
+      "target_category": "CRM",
+      "meta_title": "Oracle EBS to Salesforce Data Migration | Mine",
+      "meta_description": "Automate your Oracle EBS to Salesforce data migration. AI-powered mapping for AR, customer master, and order data. Cut migration time by 70%.",
+      "hero_headline": "Oracle EBS to Salesforce Data Migration",
+      "hero_subheadline": "Move your customer, order, and receivables data from Oracle EBS to Salesforce with AI-powered automation. Mine handles the complex schema transformations between Oracle's relational model and Salesforce's object architecture.",
+      "overview_paragraphs": [
+        "Oracle EBS to Salesforce migrations are driven by companies that want a modern, cloud-native CRM without the overhead of Oracle's on-premise EBS customer management modules. Sales and service teams increasingly demand Salesforce's user experience, AppExchange ecosystem, and mobile capabilities — none of which Oracle EBS was designed to deliver.",
+        "The migration is technically demanding because Oracle EBS uses a deeply relational, normalized data model with hundreds of interconnected tables organized by operating unit. Customer data lives across HZ_PARTIES, HZ_CUST_ACCOUNTS, HZ_CUST_SITE_USES, and dozens of related TCA (Trading Community Architecture) tables. Salesforce's Account-Contact-Opportunity model is fundamentally different in structure, and the mapping is never one-to-one.",
+        "Traditional approaches rely on custom PL/SQL extraction scripts, middleware like Oracle Data Integrator, and extensive manual mapping — typically a 6–12 month effort involving both Oracle and Salesforce specialists."
+      ],
+      "challenges": [
+        {
+          "title": "Trading Community Architecture (TCA) complexity",
+          "description": "Oracle EBS stores customer data in the TCA model — HZ_PARTIES (organizations and people), HZ_PARTY_SITES (addresses), HZ_CUST_ACCOUNTS (customer accounts), and HZ_CUST_SITE_USES (billing/shipping purposes). A single business entity can have dozens of records across these tables. Mapping to Salesforce's flatter Account model requires careful denormalization."
+        },
+        {
+          "title": "Multi-org and operating unit segmentation",
+          "description": "Oracle EBS uses operating units (ORG_ID) to segment transactional data. Customers, orders, and invoices all carry ORG_ID references. Salesforce doesn't have a native operating unit concept — this segmentation must be modeled using record types, custom fields, or multi-org architecture decisions."
+        },
+        {
+          "title": "Receivables and payment history",
+          "description": "Oracle AR data (RA_CUSTOMER_TRX, AR_PAYMENT_SCHEDULES, AR_CASH_RECEIPTS) contains complex invoice and payment linkages. Migrating this to Salesforce — whether to custom objects or a financial app — requires preserving transaction-to-receipt relationships and aging calculations."
+        },
+        {
+          "title": "Oracle DFF and KFF custom extensions",
+          "description": "Oracle's Descriptive Flexfields (DFFs) and Key Flexfields (KFFs) are used extensively to store custom data. These context-sensitive, segment-based structures have no direct Salesforce equivalent and must be analyzed individually to determine the target mapping."
+        }
+      ],
+      "data_objects": [
+        { "source_object": "HZ_PARTIES", "target_object": "Account / Contact", "notes": "Party type determines target object" },
+        { "source_object": "HZ_CUST_ACCOUNTS", "target_object": "Account", "notes": "Customer account-level data" },
+        { "source_object": "HZ_PARTY_SITES / HZ_LOCATIONS", "target_object": "Account Address fields", "notes": "Denormalize address hierarchy" },
+        { "source_object": "HZ_CUST_SITE_USES", "target_object": "Account (custom fields)", "notes": "Billing/shipping site purposes" },
+        { "source_object": "HZ_CONTACT_POINTS", "target_object": "Contact.Phone / Contact.Email", "notes": "Phone, email, web contact points" },
+        { "source_object": "OE_ORDER_HEADERS / LINES", "target_object": "Opportunity / Order", "notes": "Sales order data" },
+        { "source_object": "RA_CUSTOMER_TRX (AR Invoices)", "target_object": "Custom Object / Archive", "notes": "Invoice header and line items" },
+        { "source_object": "AR_PAYMENT_SCHEDULES", "target_object": "Custom Object", "notes": "Payment terms and aging" },
+        { "source_object": "QP_LIST_HEADERS (Price Lists)", "target_object": "PricebookEntry", "notes": "Pricing data" },
+        { "source_object": "FND_LOOKUP_VALUES", "target_object": "Picklist Values", "notes": "Lookup-to-picklist alignment" }
+      ],
+      "how_mine_helps": [
+        "Mine auto-profiles Oracle's TCA model across HZ_PARTIES, HZ_CUST_ACCOUNTS, and site use tables, then proposes denormalized mappings to Salesforce Account and Contact objects — preserving party relationships.",
+        "Operating unit segmentation is detected automatically. Mine flags cross-org customers and proposes consolidation rules or record type strategies for your Salesforce architecture.",
+        "Oracle DFFs and KFFs are profiled at the segment level, with each context-sensitive combination mapped to the appropriate Salesforce custom field or picklist.",
+        "Mine generates transformation SQL that handles Oracle's NULL-vs-empty-string conventions, date format differences (DD-MON-YYYY to ISO), and multi-byte character encoding for international customer data."
+      ],
+      "migration_stats": {
+        "manual_timeline": "6–12 months",
+        "mine_timeline": "4–8 weeks",
+        "manual_cost": "$800K–2.5M",
+        "cost_reduction": "50–70%",
+        "manual_team": "5–10 consultants",
+        "mine_team": "1–2 internal resources"
+      },
+      "faqs": [
+        {
+          "question": "Can Mine handle Oracle's Trading Community Architecture (TCA)?",
+          "answer": "Yes. Mine profiles the full TCA hierarchy — HZ_PARTIES, HZ_CUST_ACCOUNTS, HZ_PARTY_SITES, and HZ_CUST_SITE_USES — and proposes flattened mappings to Salesforce Account objects with proper address and relationship preservation."
+        },
+        {
+          "question": "How does Mine handle Oracle operating unit segmentation?",
+          "answer": "Mine detects ORG_ID-level segmentation across all transactional tables, identifies customers that span multiple operating units, and proposes Salesforce modeling strategies — whether record types, custom fields, or org-based separation."
+        },
+        {
+          "question": "Does Mine support Oracle Flexfield migration?",
+          "answer": "Mine profiles DFFs and KFFs at the segment level, maps each context-value combination to Salesforce fields, and flags segments that need custom object creation rather than simple field mapping."
+        },
+        {
+          "question": "Can we migrate AR transaction history to Salesforce?",
+          "answer": "Mine maps Oracle AR data (invoices, payments, credit memos) to Salesforce custom objects or external systems. You define the history depth, and Mine validates referential integrity across the transaction chain."
+        }
+      ],
+      "keywords": {
+        "primary": "Oracle EBS to Salesforce data migration",
+        "secondary": ["migrate Oracle EBS to Salesforce", "Oracle to Salesforce migration tool", "Oracle EBS Salesforce ETL", "Oracle ERP to Salesforce CRM migration"],
+        "long_tail": ["how to migrate data from Oracle EBS to Salesforce", "Oracle TCA to Salesforce Account mapping", "Oracle EBS to Salesforce migration cost", "Oracle EBS customer master to Salesforce", "Oracle EBS to Salesforce migration timeline"]
+      },
+      "related_slugs": ["oracle-ebs-to-netsuite", "oracle-ebs-to-oracle-cloud", "sap-ecc-to-salesforce", "siebel-to-salesforce"],
+      "is_published": true,
+      "display_order": 3
+    },
+    {
+      "slug": "netsuite-to-salesforce",
+      "source_system": "NetSuite",
+      "target_system": "Salesforce",
+      "source_slug": "netsuite",
+      "target_slug": "salesforce",
+      "source_category": "ERP",
+      "target_category": "CRM",
+      "meta_title": "NetSuite to Salesforce Data Migration | Mine",
+      "meta_description": "Automate your NetSuite to Salesforce data migration. AI-powered mapping for customers, transactions, and custom records. Migrate in weeks, not months.",
+      "hero_headline": "NetSuite to Salesforce Data Migration",
+      "hero_subheadline": "Move your customer, opportunity, and transaction data from NetSuite to Salesforce with AI-powered automation. Mine maps NetSuite's subsidiary structure to Salesforce's flat model without losing business context.",
+      "overview_paragraphs": [
+        "NetSuite to Salesforce migrations typically happen when companies outgrow NetSuite's CRM capabilities and need Salesforce's deeper sales automation, marketing integration, and AppExchange ecosystem. This is especially common after M&A events where the acquiring company standardizes on Salesforce while the acquired entity runs NetSuite as their ERP and CRM.",
+        "The technical challenge centers on NetSuite's subsidiary-based data model. NetSuite organizes customers, transactions, and custom records by subsidiary, with entity-level data shared across subsidiaries but transactional data segmented. Salesforce has no native subsidiary concept. Additionally, NetSuite's custom record types, saved searches, and formula fields don't have direct Salesforce equivalents — each requires individual analysis.",
+        "Companies typically use NetSuite's SuiteTalk API or CSV exports combined with Salesforce Data Loader and extensive manual mapping. This approach works for simple migrations but breaks down when custom records, multi-subsidiary structures, and transaction history are involved."
+      ],
+      "challenges": [
+        {
+          "title": "Subsidiary structure mapping",
+          "description": "NetSuite's OneWorld subsidiaries segment financial and transactional data. A customer can exist at the entity level but have subsidiary-specific pricing, payment terms, and addresses. Salesforce has no native hierarchy that maps to this — requiring decisions about record types, custom fields, or multi-org architecture."
+        },
+        {
+          "title": "Custom record type migration",
+          "description": "NetSuite allows unlimited custom record types with custom fields, sublists, and scripted logic. These don't map to standard Salesforce objects and often require custom object creation. Each custom record's relationships, field types, and scripted dependencies must be analyzed individually."
+        },
+        {
+          "title": "Transaction history and status mapping",
+          "description": "NetSuite's transaction model (estimates → sales orders → invoices → payments) uses a different lifecycle than Salesforce's Opportunity stages. Mapping historical transaction statuses to Salesforce Opportunity stages or custom objects requires business logic decisions about what constitutes a 'won' deal vs. an open pipeline item."
+        },
+        {
+          "title": "Saved searches and formula fields",
+          "description": "NetSuite formula fields use a proprietary syntax that has no Salesforce equivalent. Saved searches that drive business processes need to be rebuilt as Salesforce reports or SOQL queries. The underlying field references change entirely."
+        }
+      ],
+      "data_objects": [
+        { "source_object": "Customer (Entity)", "target_object": "Account", "notes": "Company-level customer data" },
+        { "source_object": "Contact", "target_object": "Contact", "notes": "Contact persons linked to customers" },
+        { "source_object": "Opportunity (Estimate)", "target_object": "Opportunity", "notes": "Sales pipeline records" },
+        { "source_object": "Sales Order", "target_object": "Opportunity / Order", "notes": "Depends on Salesforce architecture" },
+        { "source_object": "Invoice", "target_object": "Custom Object / Archive", "notes": "AR transaction data" },
+        { "source_object": "Item (Inventory/Service/Non-Inventory)", "target_object": "Product2 / PricebookEntry", "notes": "Item types map differently" },
+        { "source_object": "Custom Record Types", "target_object": "Custom Objects", "notes": "Requires individual analysis" },
+        { "source_object": "Employee", "target_object": "User / Contact", "notes": "Depends on use case" },
+        { "source_object": "Vendor", "target_object": "Account (Vendor type)", "notes": "May need record type" },
+        { "source_object": "Notes / Activities", "target_object": "Task / Event / Note", "notes": "Activity history" }
+      ],
+      "how_mine_helps": [
+        "Mine profiles NetSuite's subsidiary structure and proposes Salesforce modeling strategies — whether consolidating subsidiaries into one org with record types or preserving segmentation through custom fields.",
+        "Custom record types are analyzed field-by-field. Mine detects relationship patterns, scripted dependencies, and sublist structures, then proposes equivalent Salesforce custom objects with lookup relationships.",
+        "NetSuite transaction lifecycles (estimate → SO → invoice → payment) are mapped to Salesforce Opportunity stages or custom objects with full status translation tables generated automatically.",
+        "Mine handles NetSuite's internal ID-to-Salesforce external ID mapping, ensuring referential integrity across all migrated objects."
+      ],
+      "migration_stats": {
+        "manual_timeline": "4–8 months",
+        "mine_timeline": "3–6 weeks",
+        "manual_cost": "$300K–1M",
+        "cost_reduction": "50–70%",
+        "manual_team": "3–6 consultants",
+        "mine_team": "1–2 internal resources"
+      },
+      "faqs": [
+        {
+          "question": "Can Mine handle NetSuite OneWorld subsidiary structures?",
+          "answer": "Yes. Mine profiles subsidiary-specific data segmentation and proposes Salesforce architecture strategies. You decide whether to consolidate, use record types, or create custom fields — Mine generates the mapping for whichever approach you choose."
+        },
+        {
+          "question": "How does Mine handle NetSuite custom record types?",
+          "answer": "Mine profiles each custom record's fields, sublists, and relationship patterns, then proposes equivalent Salesforce custom objects with appropriate lookup and master-detail relationships. Scripted logic dependencies are flagged for review."
+        },
+        {
+          "question": "Can we migrate NetSuite saved searches to Salesforce reports?",
+          "answer": "Mine maps the field references in saved searches to their Salesforce equivalents, making it easier to rebuild them as Salesforce reports. Formula fields are flagged where Salesforce formula syntax differs from NetSuite's."
+        },
+        {
+          "question": "Does Mine support incremental migration from NetSuite?",
+          "answer": "Yes. Mine supports delta loads based on NetSuite's lastModifiedDate, allowing you to run initial loads followed by incremental syncs during the transition period."
+        }
+      ],
+      "keywords": {
+        "primary": "NetSuite to Salesforce data migration",
+        "secondary": ["migrate NetSuite to Salesforce", "NetSuite Salesforce migration tool", "NetSuite to Salesforce ETL", "NetSuite CRM to Salesforce migration"],
+        "long_tail": ["how to migrate data from NetSuite to Salesforce", "NetSuite to Salesforce field mapping", "NetSuite customer to Salesforce Account", "NetSuite to Salesforce migration cost", "NetSuite to Salesforce migration timeline", "NetSuite subsidiary to Salesforce mapping"]
+      },
+      "related_slugs": ["netsuite-to-hubspot", "oracle-ebs-to-salesforce", "hubspot-to-salesforce", "quickbooks-to-netsuite"],
+      "is_published": true,
+      "display_order": 4
+    },
+    {
+      "slug": "hubspot-to-salesforce",
+      "source_system": "HubSpot",
+      "target_system": "Salesforce",
+      "source_slug": "hubspot",
+      "target_slug": "salesforce",
+      "source_category": "CRM",
+      "target_category": "CRM",
+      "meta_title": "HubSpot to Salesforce Data Migration | Mine",
+      "meta_description": "Automate your HubSpot to Salesforce data migration. AI-powered mapping for contacts, deals, and custom properties. Preserve your pipeline and history.",
+      "hero_headline": "HubSpot to Salesforce Data Migration",
+      "hero_subheadline": "Migrate your contacts, companies, deals, and engagement history from HubSpot to Salesforce without losing pipeline context. Mine automates the property-to-field mapping that makes CRM-to-CRM migrations so tedious.",
+      "overview_paragraphs": [
+        "HubSpot to Salesforce is one of the most common CRM migrations in the market. It typically happens when fast-growing companies outgrow HubSpot's sales automation capabilities, need Salesforce's enterprise features (CPQ, territory management, advanced reporting), or when an acquiring company standardizes on Salesforce post-M&A.",
+        "While both are CRM platforms, their data models differ significantly. HubSpot uses a property-based system where contacts and companies can have hundreds of custom properties without formal schema constraints. Salesforce uses typed fields on defined objects with validation rules, picklist values, and field-level security. This means a migration isn't just a data copy — it's a schema translation exercise where every HubSpot property needs to be mapped to the right Salesforce field type with proper validation.",
+        "Most companies use the native HubSpot-Salesforce sync connector for ongoing integration, but it doesn't support bulk historical migration. Teams typically fall back to CSV exports and Salesforce Data Loader, spending weeks mapping properties manually and fixing data quality issues one field at a time."
+      ],
+      "challenges": [
+        {
+          "title": "Property-to-field type mapping",
+          "description": "HubSpot properties are loosely typed — a 'single-line text' property might contain phone numbers, URLs, or freeform text. Salesforce requires explicit field types (Phone, URL, Text). Each property must be analyzed for its actual content, not just its declared type, to determine the correct Salesforce field."
+        },
+        {
+          "title": "Deal stage and pipeline mapping",
+          "description": "HubSpot supports multiple pipelines with custom deal stages. Salesforce uses Sales Processes, Opportunity stages, and record types. The mapping isn't one-to-one — HubSpot stages may need to be consolidated, split, or reorganized to fit Salesforce's stage probability model."
+        },
+        {
+          "title": "Engagement history and activity timeline",
+          "description": "HubSpot tracks emails, meetings, calls, and notes as engagements tied to contacts and deals. Salesforce stores these as Tasks, Events, and EmailMessages with different relationship models. Preserving the full activity timeline requires careful object mapping and timestamp handling."
+        },
+        {
+          "title": "Association labels and custom relationships",
+          "description": "HubSpot's association labels allow flexible many-to-many relationships between objects. Salesforce uses lookup and master-detail relationships with more rigid cardinality rules. Complex association patterns may require junction objects in Salesforce."
+        }
+      ],
+      "data_objects": [
+        { "source_object": "Contacts", "target_object": "Lead / Contact", "notes": "Depends on lead conversion strategy" },
+        { "source_object": "Companies", "target_object": "Account", "notes": "Company-level data" },
+        { "source_object": "Deals", "target_object": "Opportunity", "notes": "Pipeline and stage mapping" },
+        { "source_object": "Tickets", "target_object": "Case", "notes": "Support ticket history" },
+        { "source_object": "Products", "target_object": "Product2 / OpportunityLineItem", "notes": "Product catalog" },
+        { "source_object": "Engagements (Emails)", "target_object": "EmailMessage / Task", "notes": "Email history" },
+        { "source_object": "Engagements (Meetings)", "target_object": "Event", "notes": "Calendar events" },
+        { "source_object": "Engagements (Calls)", "target_object": "Task", "notes": "Call logs" },
+        { "source_object": "Notes", "target_object": "ContentNote / Note", "notes": "Notes and attachments" },
+        { "source_object": "Custom Objects", "target_object": "Custom Objects", "notes": "Requires individual mapping" },
+        { "source_object": "Lists / Workflows", "target_object": "Reports / Flows", "notes": "Logic rebuild required" }
+      ],
+      "how_mine_helps": [
+        "Mine profiles every HubSpot property's actual data content — not just its declared type — to determine the optimal Salesforce field type, length, and validation rules.",
+        "Deal pipeline and stage mappings are proposed automatically with probability scores aligned to Salesforce's forecasting model. Multi-pipeline configurations are mapped to Salesforce record types.",
+        "Engagement history is mapped to the correct Salesforce activity objects (Tasks, Events, EmailMessages) with all timestamps, associations, and metadata preserved.",
+        "Mine generates a complete Contact-to-Lead-or-Contact routing strategy based on your data — flagging records that should enter as Leads vs. those that should be created as converted Contacts with Account relationships."
+      ],
+      "migration_stats": {
+        "manual_timeline": "2–6 months",
+        "mine_timeline": "2–4 weeks",
+        "manual_cost": "$100K–500K",
+        "cost_reduction": "50–70%",
+        "manual_team": "2–4 consultants",
+        "mine_team": "1 internal resource"
+      },
+      "faqs": [
+        {
+          "question": "Should HubSpot Contacts migrate as Salesforce Leads or Contacts?",
+          "answer": "It depends on your sales process. Mine analyzes your HubSpot data and proposes a routing strategy — contacts with deals become converted Contacts with Accounts, while others can enter as Leads. You approve the rules before migration."
+        },
+        {
+          "question": "Can Mine preserve HubSpot email engagement history in Salesforce?",
+          "answer": "Yes. Mine maps HubSpot email engagements to Salesforce EmailMessage or Task records with full metadata — timestamps, associations, open/click tracking data — preserved and linked to the correct Contact and Opportunity."
+        },
+        {
+          "question": "How does Mine handle HubSpot's custom properties?",
+          "answer": "Mine profiles each custom property's actual data values to recommend the optimal Salesforce field type. A property declared as 'text' that only contains dates will be flagged for Date field mapping, not Text."
+        },
+        {
+          "question": "Does Mine support migrating HubSpot workflows to Salesforce Flows?",
+          "answer": "Mine migrates the data that workflows act on, and maps the field references used in workflow logic to their Salesforce equivalents. The flow logic itself needs to be rebuilt in Salesforce, but Mine provides the field mapping documentation to accelerate that work."
+        }
+      ],
+      "keywords": {
+        "primary": "HubSpot to Salesforce data migration",
+        "secondary": ["migrate HubSpot to Salesforce", "HubSpot Salesforce migration tool", "HubSpot to Salesforce ETL", "HubSpot to SFDC migration"],
+        "long_tail": ["how to migrate data from HubSpot to Salesforce", "HubSpot to Salesforce field mapping", "HubSpot deals to Salesforce opportunities", "HubSpot to Salesforce migration cost", "HubSpot contacts to Salesforce leads", "HubSpot to Salesforce migration timeline"]
+      },
+      "related_slugs": ["salesforce-to-hubspot", "netsuite-to-salesforce", "dynamics-365-to-salesforce", "hubspot-to-dynamics-365"],
+      "is_published": true,
+      "display_order": 5
+    },
+    {
+        "slug": "oracle-ebs-to-netsuite",
+        "source_system": "Oracle EBS",
+        "target_system": "NetSuite",
+        "source_slug": "oracle-ebs",
+        "target_slug": "netsuite",
+        "source_category": "ERP",
+        "target_category": "ERP",
+        "meta_title": "Oracle EBS to NetSuite Data Migration | Mine",
+        "meta_description": "Automate your Oracle EBS to NetSuite data migration. AI-powered mapping for TCA, GL, AP/AR, and inventory data. Cut migration time by 70%.",
+        "hero_headline": "Oracle EBS to NetSuite Data Migration",
+        "hero_subheadline": "Automate the most complex parts of your Oracle EBS to NetSuite migration. Mine handles schema profiling, field mapping, data transformation, and validation — so your team can focus on go-live, not spreadsheets.",
+        "overview_paragraphs": [
+          "Oracle EBS to NetSuite migrations are among the most common ERP-to-ERP transitions in the mid-market and upper mid-market. They're typically driven by companies looking to move off Oracle's expensive on-premise infrastructure onto a cloud-native platform with lower total cost of ownership. This migration is especially common after private equity acquisitions, where the new ownership wants a modern ERP without Oracle's licensing complexity and hardware dependencies.",
+          "The technical challenge is substantial because Oracle EBS and NetSuite use fundamentally different data architectures. Oracle EBS relies on the Trading Community Architecture (TCA) for customer and party data, with deeply normalized tables across HZ_PARTIES, HZ_CUST_ACCOUNTS, and HZ_LOCATIONS. NetSuite uses a flatter, record-type-based model where Customers, Vendors, and Employees are distinct entity types. Oracle's multi-org structure (operating units, sets of books, legal entities) maps imperfectly to NetSuite's subsidiary model. Chart of accounts segments, flex values, and value sets all need to be restructured.",
+          "Companies typically handle this migration through large consulting engagements using Oracle Data Integrator or custom PL/SQL extraction scripts paired with NetSuite CSV imports. This approach requires deep expertise in both platforms and typically takes 9–18 months with significant manual mapping and reconciliation effort."
+        ],
+        "challenges": [
+          {
+            "title": "TCA party model to NetSuite entity mapping",
+            "description": "Oracle EBS stores customers, contacts, and addresses across the TCA hierarchy (HZ_PARTIES, HZ_CUST_ACCOUNTS, HZ_PARTY_SITES, HZ_CUST_SITE_USES). NetSuite uses a single Customer record with address subtabs and contact sub-records. Denormalizing the TCA hierarchy into NetSuite's flat structure while preserving billing/shipping site purposes requires careful business logic."
+          },
+          {
+            "title": "Chart of accounts restructuring",
+            "description": "Oracle EBS uses a multi-segment accounting flexfield (typically 6–10 segments for company, department, account, project, etc.) while NetSuite uses a dimensional chart of accounts with separate classification fields. Each Oracle segment must be mapped to a NetSuite dimension, class, department, or location — and the combinations validated against NetSuite's segment rules."
+          },
+          {
+            "title": "Multi-org to subsidiary mapping",
+            "description": "Oracle EBS organizes data by operating unit, set of books, and legal entity with complex security rules. NetSuite uses a subsidiary hierarchy with role-based access. Determining which Oracle org structures map to which NetSuite subsidiaries — and how cross-org transactions are handled — requires deep business process analysis."
+          },
+          {
+            "title": "Open transaction migration and cutover balances",
+            "description": "Migrating open AP invoices, AR invoices, purchase orders, and sales orders requires preserving document linkages and aging data. Oracle stores these across dozens of tables (AP_INVOICES_ALL, RA_CUSTOMER_TRX_ALL, PO_HEADERS_ALL) with complex distribution and status logic that must be translated to NetSuite's transaction model."
+          },
+          {
+            "title": "Item master and inventory structure differences",
+            "description": "Oracle EBS uses a shared item master (MTL_SYSTEM_ITEMS) with organization-level attributes, while NetSuite uses item records with subsidiary-level pricing and inventory. Lot and serial tracking configurations, unit of measure conversions, and item categories all need restructuring."
+          }
+        ],
+        "data_objects": [
+          { "source_object": "HZ_PARTIES / HZ_CUST_ACCOUNTS", "target_object": "Customer", "notes": "TCA denormalization required" },
+          { "source_object": "HZ_PARTY_SITES / HZ_LOCATIONS", "target_object": "Customer Address subtab", "notes": "Multiple address purposes" },
+          { "source_object": "HZ_CONTACT_POINTS", "target_object": "Contact (sub-record)", "notes": "Phone, email, fax contacts" },
+          { "source_object": "AP_SUPPLIERS / AP_SUPPLIER_SITES", "target_object": "Vendor", "notes": "Supplier site to vendor address" },
+          { "source_object": "GL_CODE_COMBINATIONS", "target_object": "Account", "notes": "Segment-to-dimension restructuring" },
+          { "source_object": "MTL_SYSTEM_ITEMS", "target_object": "Item (Inventory/Service/Non-Inventory)", "notes": "Item type mapping required" },
+          { "source_object": "OE_ORDER_HEADERS / LINES", "target_object": "Sales Order", "notes": "Open orders with line details" },
+          { "source_object": "PO_HEADERS / LINES", "target_object": "Purchase Order", "notes": "Open POs with receipt status" },
+          { "source_object": "RA_CUSTOMER_TRX_ALL", "target_object": "Invoice", "notes": "Open AR with payment schedules" },
+          { "source_object": "AP_INVOICES_ALL", "target_object": "Vendor Bill", "notes": "Open AP with distributions" },
+          { "source_object": "GL_JE_HEADERS / LINES", "target_object": "Journal Entry", "notes": "Historical or opening balances" },
+          { "source_object": "FND_LOOKUP_VALUES", "target_object": "Custom Lists", "notes": "Lookup to picklist alignment" }
+        ],
+        "how_mine_helps": [
+          "Mine auto-profiles Oracle's TCA hierarchy and proposes denormalized mappings to NetSuite Customer records — preserving billing and shipping address purposes, contact relationships, and payment terms.",
+          "Chart of accounts segments are automatically analyzed and mapped to NetSuite dimensions (subsidiary, department, class, location) with combination validation against NetSuite's segment rules.",
+          "Oracle multi-org structures are mapped to NetSuite subsidiaries with cross-org transaction handling rules generated automatically — flagging intercompany scenarios that need business decisions.",
+          "Mine validates open transaction balances (AP, AR, PO, SO) between Oracle and NetSuite after transformation, ensuring aging calculations and document linkages are preserved before cutover."
+        ],
+        "migration_stats": {
+          "manual_timeline": "9–18 months",
+          "mine_timeline": "6–10 weeks",
+          "manual_cost": "$1M–4M",
+          "cost_reduction": "50–70%",
+          "manual_team": "6–12 consultants",
+          "mine_team": "2–3 internal resources"
+        },
+        "faqs": [
+          {
+            "question": "How does Mine handle Oracle's TCA model when migrating to NetSuite?",
+            "answer": "Mine profiles the full TCA hierarchy — parties, accounts, sites, and site uses — and generates a denormalized mapping to NetSuite's Customer record structure. Address purposes (bill-to, ship-to) are preserved as NetSuite address subtab entries with correct default flags."
+          },
+          {
+            "question": "Can Mine restructure Oracle's chart of accounts for NetSuite?",
+            "answer": "Yes. Mine analyzes each Oracle accounting flexfield segment and proposes mappings to NetSuite's dimensional structure — accounts, departments, classes, and locations. Invalid segment combinations are flagged before migration."
+          },
+          {
+            "question": "How does Mine handle Oracle operating units vs. NetSuite subsidiaries?",
+            "answer": "Mine maps Oracle operating units and sets of books to NetSuite subsidiaries based on your target org design. Cross-org customers and intercompany transactions are flagged for business rules decisions."
+          },
+          {
+            "question": "Can we migrate open transactions from Oracle EBS to NetSuite?",
+            "answer": "Yes. Mine supports migrating open AP invoices, AR invoices, purchase orders, and sales orders with full status, aging, and distribution data preserved. Cutover balance reconciliation is validated automatically."
+          },
+          {
+            "question": "How long does the initial schema profiling take for Oracle EBS?",
+            "answer": "Mine profiles a typical Oracle EBS instance (50–100 active tables across AR, AP, GL, OM, INV modules) in under 20 minutes. You see field-level statistics, null rates, data type analysis, and cross-table relationships immediately."
+          }
+        ],
+        "keywords": {
+          "primary": "Oracle EBS to NetSuite data migration",
+          "secondary": ["migrate Oracle EBS to NetSuite", "Oracle to NetSuite migration tool", "Oracle EBS NetSuite ETL", "Oracle ERP to NetSuite migration"],
+          "long_tail": ["how to migrate data from Oracle EBS to NetSuite", "Oracle EBS to NetSuite field mapping", "Oracle TCA to NetSuite customer mapping", "Oracle EBS to NetSuite migration cost", "Oracle EBS to NetSuite migration timeline", "Oracle chart of accounts to NetSuite"]
+        },
+        "related_slugs": ["oracle-ebs-to-salesforce", "oracle-ebs-to-oracle-cloud", "sap-ecc-to-netsuite", "quickbooks-to-netsuite"],
+        "is_published": true,
+        "display_order": 6
+      },
+      {
+        "slug": "dynamics-gp-to-dynamics-365",
+        "source_system": "Microsoft Dynamics GP",
+        "target_system": "Microsoft Dynamics 365",
+        "source_slug": "dynamics-gp",
+        "target_slug": "dynamics-365",
+        "source_category": "ERP",
+        "target_category": "ERP",
+        "meta_title": "Dynamics GP to Dynamics 365 Data Migration | Mine",
+        "meta_description": "Automate your Dynamics GP to Dynamics 365 data migration. AI-powered mapping for GL, AP/AR, inventory, and custom Dexterity tables. Migrate in weeks.",
+        "hero_headline": "Dynamics GP to Dynamics 365 Data Migration",
+        "hero_subheadline": "Move from Dynamics GP to Dynamics 365 Finance & Operations or Business Central with AI-powered automation. Mine handles the schema translation between GP's Dexterity-based architecture and D365's Dataverse model.",
+        "overview_paragraphs": [
+          "Dynamics GP to Dynamics 365 is one of Microsoft's most heavily promoted upgrade paths, and for good reason — GP has been in maintenance mode since Microsoft shifted investment to D365 Finance & Operations and Business Central. Companies on GP face dwindling support options, an aging Dexterity-based architecture, and an inability to integrate with modern cloud services. The migration is often timed with hardware refresh cycles or driven by the need for real-time reporting and API-based integrations that GP cannot provide.",
+          "Despite both being Microsoft products, the data architectures are fundamentally different. GP uses a proprietary Dexterity-based SQL Server schema with non-intuitive table names (RM00101 for customers, PM00200 for vendors, SOP10100 for sales orders) and a flat, wide-table design. Dynamics 365 uses the Dataverse entity model (for Business Central / CE) or normalized X++ data entities (for Finance & Operations). Field names, data types, and relational structures differ significantly — it's not a simple version upgrade but a full platform re-implementation.",
+          "Microsoft offers migration toolkits and ISV solutions (like eOne SmartConnect or Binary Stream), but these handle only standard modules. Companies with customized GP installations — which is virtually all of them — still face significant manual mapping, especially for modified reports, custom Dexterity tables, and third-party ISV data."
+        ],
+        "challenges": [
+          {
+            "title": "GP's cryptic table naming to D365 entities",
+            "description": "Dynamics GP uses non-descriptive table names inherited from its Dexterity origins — RM00101 (Customer Master), PM00200 (Vendor Master), GL00100 (Account Master), SOP10100 (Sales Transaction Work). Dynamics 365 uses descriptive entity names. Mapping between the two requires a crosswalk that covers hundreds of tables, and GP's documentation is notoriously sparse."
+          },
+          {
+            "title": "Choosing the right D365 target: F&O vs. Business Central",
+            "description": "Companies must decide between Dynamics 365 Finance & Operations (enterprise-grade, X++ data model) and Business Central (mid-market, AL-based extensions). The data migration path differs significantly for each. Mine helps by profiling your GP data complexity to recommend the appropriate target and generating mappings specific to that platform."
+          },
+          {
+            "title": "Historical transaction migration and sub-ledger detail",
+            "description": "GP stores financial history across work, open, and history tables (GL20000 for open year, GL30000 for history). Dynamics 365 uses different period-close and fiscal calendar models. Deciding how much history to migrate — and ensuring sub-ledger to GL reconciliation survives the transition — is a major decision point."
+          },
+          {
+            "title": "GP customizations and third-party ISV data",
+            "description": "Most GP installations include third-party ISV modules (Mekorma for payments, Binary Stream for multi-entity, SalesPad for order management) that store data in custom tables alongside GP's core schema. These tables have no D365 equivalent and require individual analysis to determine what migrates, what gets archived, and what gets rebuilt."
+          }
+        ],
+        "data_objects": [
+          { "source_object": "RM00101 (Customer Master)", "target_object": "Customer Entity / Account", "notes": "Customer classes to categories" },
+          { "source_object": "PM00200 (Vendor Master)", "target_object": "Vendor Entity", "notes": "Payment terms and 1099 data" },
+          { "source_object": "GL00100 (Account Master)", "target_object": "Chart of Accounts / Main Account", "notes": "Segment restructuring" },
+          { "source_object": "GL20000/GL30000 (GL Transactions)", "target_object": "General Journal", "notes": "Open year + history" },
+          { "source_object": "SOP10100/SOP30200 (Sales Orders)", "target_object": "Sales Order / Sales Invoice", "notes": "Work vs. history tables" },
+          { "source_object": "POP10100/POP30100 (Purchase Orders)", "target_object": "Purchase Order", "notes": "Open and received POs" },
+          { "source_object": "RM20101 (AR Open)", "target_object": "Customer Ledger Entry", "notes": "Open receivables with aging" },
+          { "source_object": "PM20000 (AP Open)", "target_object": "Vendor Ledger Entry", "notes": "Open payables with due dates" },
+          { "source_object": "IV00101/IV00102 (Item Master)", "target_object": "Item / Released Product", "notes": "Item sites to warehouse" },
+          { "source_object": "UPR00100 (Employee Master)", "target_object": "Employee / Worker", "notes": "HR and payroll data" },
+          { "source_object": "SY01200 (Addresses)", "target_object": "Party Addresses", "notes": "Multi-address per entity" }
+        ],
+        "how_mine_helps": [
+          "Mine auto-maps GP's cryptic table names (RM00101, PM00200, GL00100) to their D365 entity equivalents with field-level mapping — including GP's obscure column names like CUSTNMBR, VENDORID, and ACTINDX.",
+          "GP's work/open/history table split (GL20000 for current, GL30000 for history) is detected automatically. Mine generates migration rules that unify the data into D365's single-ledger model with proper period assignments.",
+          "Third-party ISV tables are profiled alongside GP core tables. Mine flags tables that belong to ISV modules (Mekorma, Binary Stream, SalesPad) and separates them from standard migration scope.",
+          "Mine validates the full GL-to-subledger reconciliation after migration — ensuring AR, AP, and inventory subsidiary balances match the general ledger in D365."
+        ],
+        "migration_stats": {
+          "manual_timeline": "6–12 months",
+          "mine_timeline": "4–8 weeks",
+          "manual_cost": "$300K–1.5M",
+          "cost_reduction": "50–70%",
+          "manual_team": "4–8 consultants",
+          "mine_team": "1–2 internal resources"
+        },
+        "faqs": [
+          {
+            "question": "Does Mine support migration to both D365 Finance & Operations and Business Central?",
+            "answer": "Yes. Mine generates different mappings depending on your D365 target. F&O uses X++ data entities with a different schema than Business Central's AL-based tables. You select the target during setup and Mine adapts the mapping accordingly."
+          },
+          {
+            "question": "How does Mine handle GP's cryptic table and column names?",
+            "answer": "Mine has built-in knowledge of GP's Dexterity schema naming conventions. It automatically translates RM00101 to 'Customer Master', CUSTNMBR to 'Customer Number', and maps these to the appropriate D365 entities and fields."
+          },
+          {
+            "question": "Can Mine identify third-party ISV data in our GP database?",
+            "answer": "Mine profiles your entire GP SQL database and flags tables that don't belong to GP's core modules. ISV tables are separated into a review queue where you decide what migrates, what archives, and what needs a custom target in D365."
+          },
+          {
+            "question": "How much GL history should we migrate?",
+            "answer": "Mine helps you make this decision by analyzing your GL20000 (open year) and GL30000 (history) tables — showing volume, date ranges, and sub-ledger dependencies. Most companies migrate 2–3 years of detail plus summary balances for older periods."
+          },
+          {
+            "question": "Does Mine validate sub-ledger to GL reconciliation after migration?",
+            "answer": "Yes. Mine runs automated reconciliation checks between AR, AP, inventory sub-ledgers and the general ledger in D365 after every test load — catching imbalances before they become go-live blockers."
+          }
+        ],
+        "keywords": {
+          "primary": "Dynamics GP to Dynamics 365 data migration",
+          "secondary": ["migrate Dynamics GP to D365", "GP to Dynamics 365 migration tool", "Dynamics GP to D365 F&O migration", "GP to Business Central migration"],
+          "long_tail": ["how to migrate data from Dynamics GP to Dynamics 365", "Dynamics GP to D365 field mapping", "GP table names to D365 entities", "Dynamics GP to Dynamics 365 migration cost", "Dynamics GP to D365 migration timeline", "GP customizations to Dynamics 365"]
+        },
+        "related_slugs": ["dynamics-ax-to-dynamics-365", "quickbooks-to-netsuite", "sage-intacct-to-netsuite", "dynamics-gp-to-netsuite"],
+        "is_published": true,
+        "display_order": 7
+      },
+      {
+        "slug": "dynamics-ax-to-dynamics-365",
+        "source_system": "Microsoft Dynamics AX",
+        "target_system": "Microsoft Dynamics 365",
+        "source_slug": "dynamics-ax",
+        "target_slug": "dynamics-365",
+        "source_category": "ERP",
+        "target_category": "ERP",
+        "meta_title": "Dynamics AX to Dynamics 365 F&O Data Migration | Mine",
+        "meta_description": "Automate your Dynamics AX to Dynamics 365 Finance & Operations migration. AI-powered mapping for X++ data entities, custom tables, and financial data.",
+        "hero_headline": "Dynamics AX to Dynamics 365 F&O Data Migration",
+        "hero_subheadline": "Upgrade from Dynamics AX 2009 or AX 2012 to Dynamics 365 Finance & Operations with AI-powered data migration. Mine handles the data entity mapping, custom table analysis, and financial validation that make AX upgrades so labor-intensive.",
+        "overview_paragraphs": [
+          "Dynamics AX to Dynamics 365 Finance & Operations is Microsoft's primary enterprise ERP upgrade path. AX 2009 and AX 2012 customers face end-of-extended-support timelines that make migration urgent. Unlike GP-to-D365 (which is a re-implementation), AX-to-D365 F&O is conceptually an upgrade — the underlying X++ framework is shared — but the data model changes between AX 2012 and D365 F&O are significant enough that it's effectively a migration with transformation requirements.",
+          "The key technical challenge is that D365 F&O introduced data entities as the primary interface for data import/export, replacing AX's direct table access. AX customizations (AOT modifications, custom tables, extended data types) must be mapped to D365's data entity framework. Dimensions handling changed substantially — AX 2012's financial dimensions are restructured in D365 F&O with different storage patterns. Number sequences, workflow configurations, and security roles all require migration analysis.",
+          "Microsoft provides the Data Migration Toolkit and Lifecycle Services (LCS) for AX-to-D365 upgrades, but these tools handle standard data entities only. Customized AX installations — which represent the majority of enterprise deployments — require significant manual effort to map modified tables, custom fields, and ISV solutions to D365 equivalents."
+        ],
+        "challenges": [
+          {
+            "title": "AX direct table access vs. D365 data entity framework",
+            "description": "AX 2012 allows direct SQL access to tables like CustTable, VendTable, and InventTable. D365 F&O requires data import through data entities (CustCustomerV3Entity, VendVendorV2Entity) that aggregate multiple tables with business logic layers. Mapping AX tables to the correct data entities — and handling fields that don't surface in standard entities — requires deep analysis."
+          },
+          {
+            "title": "Financial dimensions restructuring",
+            "description": "AX 2012 R3 introduced a financial dimensions framework that D365 F&O further evolved. Dimension set storage, default dimension combinations, and ledger dimension patterns all changed. Historical transactions must be migrated with their dimension values intact, and the new dimension framework validated against D365's account structure rules."
+          },
+          {
+            "title": "AOT customizations and overlayering removal",
+            "description": "AX's Application Object Tree (AOT) allowed direct overlayering of standard objects — tables, forms, classes. D365 F&O eliminated overlayering in favor of extensions. Custom fields added via overlayering must be migrated to extension-based custom fields, and custom tables need equivalent data entities created in D365."
+          },
+          {
+            "title": "Number sequence migration and gap handling",
+            "description": "AX and D365 use different number sequence engines. Migrated documents must preserve their original numbers for audit continuity, while new documents in D365 must start from the correct sequence. Gaps between migrated and new number sequences need careful configuration."
+          }
+        ],
+        "data_objects": [
+          { "source_object": "CustTable (Customer)", "target_object": "CustCustomerV3Entity", "notes": "Customer master with party reference" },
+          { "source_object": "VendTable (Vendor)", "target_object": "VendVendorV2Entity", "notes": "Vendor master with addresses" },
+          { "source_object": "LedgerJournalTable / Trans", "target_object": "LedgerJournalEntity", "notes": "GL journal headers and lines" },
+          { "source_object": "InventTable (Item)", "target_object": "ReleasedProductV2Entity", "notes": "Item master with configurations" },
+          { "source_object": "SalesTable / SalesLine", "target_object": "SalesOrderHeaderV2Entity / Lines", "notes": "Open sales orders" },
+          { "source_object": "PurchTable / PurchLine", "target_object": "PurchaseOrderHeaderV2Entity / Lines", "notes": "Open purchase orders" },
+          { "source_object": "CustTrans (AR Transactions)", "target_object": "Customer payment journal", "notes": "Open receivables" },
+          { "source_object": "VendTrans (AP Transactions)", "target_object": "Vendor payment journal", "notes": "Open payables" },
+          { "source_object": "BOMTable / BOMLine (BOMs)", "target_object": "BillOfMaterialsV3Entity", "notes": "Bill of materials" },
+          { "source_object": "ProjTable (Projects)", "target_object": "ProjectEntity", "notes": "Project master and WBS" },
+          { "source_object": "HcmWorker (Employees)", "target_object": "HcmWorkerEntity", "notes": "Worker records with positions" }
+        ],
+        "how_mine_helps": [
+          "Mine maps AX direct table references (CustTable, VendTable, InventTable) to their D365 data entity equivalents (CustCustomerV3Entity, VendVendorV2Entity, ReleasedProductV2Entity) — including fields that aren't exposed in standard entities.",
+          "Financial dimension values and combinations are automatically profiled and validated against D365's dimension framework — catching invalid combinations and orphaned dimension values before migration.",
+          "AOT customizations are detected by comparing your AX schema against the standard AX baseline. Custom fields, extended tables, and modified enums are cataloged with proposed D365 extension mappings.",
+          "Mine validates number sequence continuity — ensuring migrated documents retain their original IDs while D365 sequences start from the correct next value with no overlaps."
+        ],
+        "migration_stats": {
+          "manual_timeline": "8–16 months",
+          "mine_timeline": "6–10 weeks",
+          "manual_cost": "$800K–3M",
+          "cost_reduction": "40–60%",
+          "manual_team": "5–10 consultants",
+          "mine_team": "2–3 internal resources"
+        },
+        "faqs": [
+          {
+            "question": "Does Mine support both AX 2009 and AX 2012 as source systems?",
+            "answer": "Yes. Mine profiles the AX SQL database directly regardless of version. The data entity mappings differ between AX 2009 (pre-financial-dimensions-framework) and AX 2012 R3, and Mine adapts the mapping strategy accordingly."
+          },
+          {
+            "question": "How does Mine handle AX customizations that were built with overlayering?",
+            "answer": "Mine compares your AX schema against the standard baseline to identify all customizations — added fields, modified tables, custom enums, and new tables. Each is cataloged with a recommended D365 extension approach."
+          },
+          {
+            "question": "Can Mine migrate AX financial dimensions to D365's new framework?",
+            "answer": "Yes. Mine profiles all dimension values, default dimension combinations, and ledger dimension patterns in AX, then generates transformation rules for D365's restructured dimension storage — validating every combination against D365's account structure."
+          },
+          {
+            "question": "What about AX data entities that don't exist in D365?",
+            "answer": "Mine flags AX tables and custom objects that have no standard D365 data entity. For each, it recommends whether to create a custom data entity in D365, map to an existing entity with extensions, or archive the data."
+          }
+        ],
+        "keywords": {
+          "primary": "Dynamics AX to Dynamics 365 data migration",
+          "secondary": ["migrate Dynamics AX to D365 F&O", "AX 2012 to D365 migration tool", "Dynamics AX upgrade to D365", "AX to D365 Finance Operations migration"],
+          "long_tail": ["how to migrate data from Dynamics AX to Dynamics 365", "AX 2012 to D365 data entity mapping", "Dynamics AX customizations to D365", "Dynamics AX to D365 migration cost", "AX financial dimensions to D365", "Dynamics AX to D365 migration timeline"]
+        },
+        "related_slugs": ["dynamics-gp-to-dynamics-365", "sap-ecc-to-sap-s4hana", "oracle-ebs-to-oracle-cloud", "dynamics-ax-to-netsuite"],
+        "is_published": true,
+        "display_order": 8
+      },
+      {
+        "slug": "salesforce-to-hubspot",
+        "source_system": "Salesforce",
+        "target_system": "HubSpot",
+        "source_slug": "salesforce",
+        "target_slug": "hubspot",
+        "source_category": "CRM",
+        "target_category": "CRM",
+        "meta_title": "Salesforce to HubSpot Data Migration | Mine",
+        "meta_description": "Automate your Salesforce to HubSpot data migration. AI-powered mapping for leads, contacts, opportunities, and custom objects. Preserve your pipeline.",
+        "hero_headline": "Salesforce to HubSpot Data Migration",
+        "hero_subheadline": "Migrate your accounts, contacts, opportunities, and activity history from Salesforce to HubSpot without losing pipeline context. Mine automates the field-to-property mapping that makes CRM-to-CRM migrations so tedious.",
+        "overview_paragraphs": [
+          "Salesforce to HubSpot migrations have grown dramatically as companies reevaluate the cost and complexity of maintaining Salesforce. Mid-market companies that originally adopted Salesforce often find themselves paying enterprise-level prices for features they don't use, while HubSpot's all-in-one platform offers CRM, marketing, sales, and service at a lower total cost of ownership. This migration is especially common during cost optimization initiatives, private equity portfolio standardization, and when companies want tighter marketing-to-sales alignment without expensive middleware.",
+          "The technical challenge is that Salesforce's data model is significantly more complex than HubSpot's. Salesforce uses strongly typed fields with validation rules, lookup and master-detail relationships, record types, page layouts, and complex sharing rules. HubSpot uses a property-based model with more flexible but less structured relationships. Salesforce custom objects with master-detail relationships, roll-up summary fields, and cross-object formula fields have no direct HubSpot equivalent. Association labels in HubSpot provide some relationship modeling, but the mapping is never one-to-one.",
+          "Companies typically use HubSpot's native import tools or the Salesforce-HubSpot integration for ongoing sync, but neither handles bulk historical migration well. Teams end up exporting CSVs from Salesforce, manually mapping fields to HubSpot properties, and spending weeks fixing association errors and missing data."
+        ],
+        "challenges": [
+          {
+            "title": "Salesforce's typed field model vs. HubSpot's flexible properties",
+            "description": "Salesforce enforces strict field types — Currency fields with currency ISO codes, Lookup relationships with referential integrity, Picklists with value dependencies. HubSpot properties are more flexible but less structured. A Salesforce Currency field becomes a HubSpot Number property, losing the currency type. Dependent picklists have no HubSpot equivalent. Each field requires analysis of its actual usage, not just its type."
+          },
+          {
+            "title": "Custom objects and relationship mapping",
+            "description": "Salesforce custom objects with master-detail relationships, junction objects, and roll-up summaries are common in established Salesforce orgs. HubSpot's custom objects (available on Enterprise tier) use association labels instead of master-detail patterns. Junction objects need to be rebuilt using HubSpot's many-to-many associations, and roll-up logic must be recreated using HubSpot workflows or calculated properties."
+          },
+          {
+            "title": "Activity and engagement history preservation",
+            "description": "Salesforce stores activities as Tasks (calls, to-dos) and Events (meetings) with WhoId and WhatId polymorphic lookups to any object. HubSpot stores engagements differently — calls, emails, meetings, and notes are separate engagement types with their own association models. Preserving the full activity timeline with correct object associations requires careful mapping of Salesforce's polymorphic references."
+          },
+          {
+            "title": "Opportunity stage to Deal stage mapping",
+            "description": "Salesforce Opportunities use Sales Processes with stage-to-probability mappings and record type-specific stage paths. HubSpot Deals use pipelines with deal stages. Multiple Salesforce record types with different stage paths may need to map to multiple HubSpot pipelines, and the probability model differs between platforms."
+          }
+        ],
+        "data_objects": [
+          { "source_object": "Account", "target_object": "Company", "notes": "Account hierarchies to parent company" },
+          { "source_object": "Contact", "target_object": "Contact", "notes": "Lookup relationships to associations" },
+          { "source_object": "Lead", "target_object": "Contact", "notes": "Lifecycle stage set to 'Lead'" },
+          { "source_object": "Opportunity", "target_object": "Deal", "notes": "Stage and pipeline mapping" },
+          { "source_object": "OpportunityLineItem", "target_object": "Line Item", "notes": "Product association" },
+          { "source_object": "Product2 / PricebookEntry", "target_object": "Product", "notes": "Multi-pricebook to single pricing" },
+          { "source_object": "Case", "target_object": "Ticket", "notes": "Support case history" },
+          { "source_object": "Task", "target_object": "Task / Call / Note", "notes": "Task type determines target" },
+          { "source_object": "Event", "target_object": "Meeting", "notes": "Calendar event data" },
+          { "source_object": "EmailMessage", "target_object": "Email engagement", "notes": "Email activity log" },
+          { "source_object": "Custom Objects", "target_object": "Custom Objects (Enterprise)", "notes": "Requires HubSpot Enterprise tier" },
+          { "source_object": "Attachment / ContentDocument", "target_object": "File / Note attachment", "notes": "Binary file migration" }
+        ],
+        "how_mine_helps": [
+          "Mine profiles every Salesforce field's actual data content and maps it to the optimal HubSpot property type — catching cases where a Text field should become a Dropdown, or a Lookup should become an Association.",
+          "Salesforce custom objects with master-detail and junction patterns are analyzed and mapped to HubSpot's custom objects with appropriate association labels — preserving relationship cardinality and hierarchy.",
+          "Opportunity record types with different stage paths are automatically routed to separate HubSpot pipelines with stage-to-stage mapping and probability alignment.",
+          "Mine generates a complete Lead-vs-Contact routing strategy — Salesforce Leads become HubSpot Contacts with lifecycle stage 'Lead', while converted Leads are matched to their existing Contact records by email deduplication."
+        ],
+        "migration_stats": {
+          "manual_timeline": "2–6 months",
+          "mine_timeline": "2–4 weeks",
+          "manual_cost": "$100K–500K",
+          "cost_reduction": "50–70%",
+          "manual_team": "2–4 consultants",
+          "mine_team": "1 internal resource"
+        },
+        "faqs": [
+          {
+            "question": "Do we need HubSpot Enterprise to migrate Salesforce custom objects?",
+            "answer": "HubSpot's custom objects require the Enterprise tier. Mine profiles your Salesforce custom objects and flags which ones need HubSpot custom objects vs. which can be modeled using standard HubSpot objects with custom properties. This helps you determine the right HubSpot tier before purchasing."
+          },
+          {
+            "question": "How does Mine handle Salesforce Leads vs. Contacts in HubSpot?",
+            "answer": "HubSpot doesn't have a separate Lead object — all people are Contacts with a lifecycle stage. Mine routes unconverted Salesforce Leads to HubSpot Contacts with lifecycle stage 'Lead', and matches converted Leads to their Account-Contact pairs using email deduplication."
+          },
+          {
+            "question": "Can Mine preserve Salesforce activity history in HubSpot?",
+            "answer": "Yes. Mine maps Salesforce Tasks, Events, and EmailMessages to HubSpot's engagement types (calls, meetings, emails, notes) with timestamps and object associations preserved. WhoId and WhatId polymorphic references are resolved to the correct HubSpot associations."
+          },
+          {
+            "question": "How does Mine handle Salesforce's multi-pricebook model?",
+            "answer": "Salesforce supports multiple price books per product. HubSpot uses a simpler single-price-per-product model. Mine analyzes your active price book usage and proposes a consolidation strategy — either migrating the primary price book or creating HubSpot product variants."
+          },
+          {
+            "question": "What about Salesforce formula fields and roll-up summaries?",
+            "answer": "Mine catalogs all formula fields and roll-up summaries, maps the underlying field references to HubSpot properties, and flags which formulas can be recreated as HubSpot calculated properties vs. which need workflow-based alternatives."
+          }
+        ],
+        "keywords": {
+          "primary": "Salesforce to HubSpot data migration",
+          "secondary": ["migrate Salesforce to HubSpot", "Salesforce to HubSpot migration tool", "SFDC to HubSpot ETL", "Salesforce to HubSpot CRM migration"],
+          "long_tail": ["how to migrate data from Salesforce to HubSpot", "Salesforce to HubSpot field mapping", "Salesforce opportunities to HubSpot deals", "Salesforce to HubSpot migration cost", "Salesforce custom objects to HubSpot", "Salesforce to HubSpot migration timeline"]
+        },
+        "related_slugs": ["hubspot-to-salesforce", "salesforce-to-dynamics-365", "netsuite-to-hubspot", "siebel-to-salesforce"],
+        "is_published": true,
+        "display_order": 9
+      },
+      {
+        "slug": "quickbooks-to-netsuite",
+        "source_system": "QuickBooks Enterprise",
+        "target_system": "NetSuite",
+        "source_slug": "quickbooks",
+        "target_slug": "netsuite",
+        "source_category": "ERP",
+        "target_category": "ERP",
+        "meta_title": "QuickBooks to NetSuite Data Migration | Mine",
+        "meta_description": "Automate your QuickBooks Enterprise to NetSuite data migration. AI-powered mapping for chart of accounts, customers, vendors, and transaction history.",
+        "hero_headline": "QuickBooks Enterprise to NetSuite Data Migration",
+        "hero_subheadline": "Outgrowing QuickBooks? Migrate your financial data, customer records, and transaction history to NetSuite with AI-powered automation. Mine handles the schema translation between QuickBooks' flat structure and NetSuite's multi-subsidiary model.",
+        "overview_paragraphs": [
+          "QuickBooks Enterprise to NetSuite is the classic 'graduation migration' — companies that started on QuickBooks and outgrew its capabilities as they scaled. Common triggers include surpassing QuickBooks' entity or transaction volume limits, needing multi-subsidiary or multi-currency support, requiring advanced inventory management or revenue recognition, or preparing for an IPO or audit that demands more robust financial controls.",
+          "While QuickBooks is simpler than NetSuite, the migration isn't straightforward. QuickBooks uses a proprietary data format with a flat chart of accounts (no segments or dimensions), simple customer/vendor records without subsidiary awareness, and a limited item type system. NetSuite's multi-dimensional chart of accounts, subsidiary hierarchy, classification system (departments, classes, locations), and rich item types require significant schema restructuring. QuickBooks' custom fields are stored differently than NetSuite's, and data exports from QuickBooks are often lossy — IIF files and QBW direct access have different fidelity levels.",
+          "Companies typically use NetSuite's native CSV import or partner tools like Celigo, but these require all the mapping and transformation work to be done manually upfront. For companies with 3–5 years of QuickBooks history, this manual approach takes 2–4 months of dedicated effort."
+        ],
+        "challenges": [
+          {
+            "title": "Flat chart of accounts to multi-dimensional NetSuite",
+            "description": "QuickBooks uses a flat, single-segment chart of accounts (e.g., '6100 - Office Supplies - Marketing'). NetSuite uses a multi-dimensional structure where the account (6100 Office Supplies), department (Marketing), class, and location are separate fields. Decomposing QuickBooks' embedded segments into NetSuite dimensions requires pattern analysis across the entire account list."
+          },
+          {
+            "title": "QuickBooks data extraction limitations",
+            "description": "QuickBooks Enterprise doesn't expose a clean relational database. Data access options include IIF export (lossy, text-based), QODBC driver (slow, with query limitations), or direct QBW file access (requires SDK). Each method has different data fidelity — some lose custom field data, others can't export certain transaction types. Mine must handle whichever extraction format you can provide."
+          },
+          {
+            "title": "Transaction type mapping",
+            "description": "QuickBooks uses generic transaction types (Invoice, Sales Receipt, Credit Memo, Check, Bill, Bill Payment) with limited customization. NetSuite uses a richer transaction model with custom transaction types, approval workflows, and subsidiary-specific numbering. Each QuickBooks transaction type must be mapped to the correct NetSuite equivalent with proper form, status, and posting rules."
+          },
+          {
+            "title": "Class and location tracking differences",
+            "description": "QuickBooks' class tracking is optional and limited — a single class per transaction or line item. NetSuite supports mandatory department, class, and location fields at both header and line level with different inheritance rules. Historical QuickBooks data may have inconsistent or missing class assignments that need to be enriched during migration."
+          }
+        ],
+        "data_objects": [
+          { "source_object": "Customer", "target_object": "Customer", "notes": "Simple to rich entity conversion" },
+          { "source_object": "Vendor", "target_object": "Vendor", "notes": "Payment terms mapping" },
+          { "source_object": "Chart of Accounts", "target_object": "Account + Dimensions", "notes": "Flat to multi-dimensional" },
+          { "source_object": "Item (Inventory/Service/Non-Inventory)", "target_object": "Item", "notes": "Item type enrichment" },
+          { "source_object": "Invoice", "target_object": "Invoice", "notes": "AR transactions" },
+          { "source_object": "Sales Receipt", "target_object": "Cash Sale", "notes": "Payment at point of sale" },
+          { "source_object": "Bill", "target_object": "Vendor Bill", "notes": "AP transactions" },
+          { "source_object": "Check / Bill Payment", "target_object": "Vendor Payment", "notes": "Payment records" },
+          { "source_object": "Purchase Order", "target_object": "Purchase Order", "notes": "Open POs" },
+          { "source_object": "Estimate", "target_object": "Estimate / Opportunity", "notes": "Sales pipeline" },
+          { "source_object": "Journal Entry", "target_object": "Journal Entry", "notes": "Manual GL adjustments" }
+        ],
+        "how_mine_helps": [
+          "Mine analyzes your QuickBooks chart of accounts and automatically proposes the dimensional decomposition — splitting embedded segments into NetSuite accounts, departments, classes, and locations based on naming pattern recognition.",
+          "Multiple QuickBooks data extraction formats (IIF, QODBC, CSV) are supported. Mine profiles whichever format you provide and flags data loss compared to the full QuickBooks schema.",
+          "Transaction type mapping rules are generated automatically — QuickBooks Invoices to NetSuite Invoices, Sales Receipts to Cash Sales, etc. — with status, date, and posting rule translation included.",
+          "Mine validates opening balances after migration — ensuring the trial balance in NetSuite matches QuickBooks as of cutover date, with sub-ledger reconciliation for AR and AP."
+        ],
+        "migration_stats": {
+          "manual_timeline": "2–4 months",
+          "mine_timeline": "2–3 weeks",
+          "manual_cost": "$50K–200K",
+          "cost_reduction": "50–70%",
+          "manual_team": "1–3 consultants",
+          "mine_team": "1 internal resource"
+        },
+        "faqs": [
+          {
+            "question": "What's the best way to extract data from QuickBooks Enterprise?",
+            "answer": "Mine supports IIF exports, QODBC-connected extracts, and CSV exports. QODBC provides the most complete data but is slower for large files. Mine profiles whichever format you provide and flags any missing fields or data quality gaps."
+          },
+          {
+            "question": "How does Mine restructure QuickBooks' flat chart of accounts for NetSuite?",
+            "answer": "Mine uses pattern recognition to decompose embedded segments in your QB account names. For example, '6100 - Office Supplies - Marketing' is split into Account '6100 Office Supplies' + Department 'Marketing'. You review and adjust the proposed decomposition before migration."
+          },
+          {
+            "question": "Can we migrate historical transactions or just opening balances?",
+            "answer": "Mine supports both. You choose the cutover strategy — full transaction history (all invoices, payments, journals) or summary opening balances. Most mid-size companies migrate 1–2 years of detail plus opening balance journals for older periods."
+          },
+          {
+            "question": "Does Mine handle QuickBooks class tracking to NetSuite departments?",
+            "answer": "Yes. Mine maps QuickBooks classes to NetSuite departments, classes, or locations based on your configuration. Transactions with missing class assignments are flagged so you can decide on a default value or leave them unclassified."
+          }
+        ],
+        "keywords": {
+          "primary": "QuickBooks to NetSuite data migration",
+          "secondary": ["migrate QuickBooks to NetSuite", "QuickBooks NetSuite migration tool", "QB Enterprise to NetSuite ETL", "QuickBooks to NetSuite upgrade"],
+          "long_tail": ["how to migrate data from QuickBooks to NetSuite", "QuickBooks to NetSuite chart of accounts mapping", "QuickBooks to NetSuite migration cost", "QuickBooks to NetSuite migration timeline", "outgrowing QuickBooks to NetSuite"]
+        },
+        "related_slugs": ["sage-intacct-to-netsuite", "dynamics-gp-to-dynamics-365", "oracle-ebs-to-netsuite", "quickbooks-to-dynamics-365"],
+        "is_published": true,
+        "display_order": 10
+      },
+      {
+        "slug": "siebel-to-salesforce",
+        "source_system": "Siebel CRM",
+        "target_system": "Salesforce",
+        "source_slug": "siebel",
+        "target_slug": "salesforce",
+        "source_category": "CRM",
+        "target_category": "CRM",
+        "meta_title": "Siebel CRM to Salesforce Data Migration | Mine",
+        "meta_description": "Automate your Siebel CRM to Salesforce data migration. AI-powered mapping for accounts, contacts, opportunities, and service requests. Cut migration time by 70%.",
+        "hero_headline": "Siebel CRM to Salesforce Data Migration",
+        "hero_subheadline": "Retire Siebel and move to Salesforce with AI-powered data migration. Mine automates the complex mapping between Siebel's on-premise relational model and Salesforce's cloud-native architecture.",
+        "overview_paragraphs": [
+          "Siebel CRM to Salesforce is the legacy CRM modernization migration. Siebel was the dominant enterprise CRM through the 2000s, but its on-premise architecture, expensive licensing, and complex administration have made it a prime target for replacement. Companies migrate to Salesforce for cloud-native scalability, a modern user experience, the AppExchange ecosystem, and dramatically lower infrastructure costs. This migration is often part of broader Oracle-to-cloud or digital transformation programs.",
+          "The technical complexity is significant because Siebel's data model is highly normalized and deeply customized in most enterprises. Siebel uses a proprietary table layer (S_CONTACT, S_ORG_EXT, S_OPTY, S_SRV_REQ) with extension columns (ATTRIB_01 through ATTRIB_50) for custom fields, multi-value groups (MVGs) for many-to-many relationships, and integration objects for data exchange. Salesforce's object model is fundamentally different — flatter, with explicit custom fields, lookup relationships, and junction objects. Siebel's decades of accumulated customizations (applets, views, business components, scripted logic) mean every installation is unique.",
+          "Traditional Siebel-to-Salesforce migrations are run by large consulting firms over 12–18 months using middleware tools like Informatica or Dell Boomi. The data mapping alone — across accounts, contacts, opportunities, service requests, activities, and custom objects — typically takes 3–4 months of manual analysis."
+        ],
+        "challenges": [
+          {
+            "title": "Siebel extension columns to Salesforce custom fields",
+            "description": "Siebel uses generic extension columns (ATTRIB_01 through ATTRIB_50, X_CUSTOM_01 through X_CUSTOM_50) on base tables, with the column's meaning defined in configuration, not the schema. Salesforce uses explicitly named custom fields (Custom_Field__c). Mapping requires reading Siebel's repository metadata to understand what each extension column actually stores, then creating the corresponding Salesforce custom field."
+          },
+          {
+            "title": "Multi-value groups and intersection tables",
+            "description": "Siebel uses multi-value groups (MVGs) to model many-to-many relationships — for example, a contact associated with multiple accounts. These are stored in intersection tables (S_PARTY_PER, S_CONTACT_BU). Salesforce uses junction objects or AccountContactRelation. The MVG-to-junction-object translation must preserve relationship attributes (roles, dates, primary flags)."
+          },
+          {
+            "title": "Siebel Organization-based access control",
+            "description": "Siebel segments data visibility by Organization (S_ORG_EXT), Position, and Responsibility. Salesforce uses Profiles, Roles, Sharing Rules, and OWD settings. The access control model translation isn't just a data migration issue — it affects which records should be visible to which users post-migration and requires parallel security design."
+          },
+          {
+            "title": "Service request and activity model differences",
+            "description": "Siebel's Service Request (S_SRV_REQ) model with activities (S_EVT_ACT), action items, and resolution codes is deeply integrated with Siebel's assignment engine. Salesforce Cases use a different workflow with Case Teams, Entitlements, and Milestones. The activity and resolution history must be mapped to preserve service-level reporting continuity."
+          }
+        ],
+        "data_objects": [
+          { "source_object": "S_ORG_EXT (Account)", "target_object": "Account", "notes": "Organization master data" },
+          { "source_object": "S_CONTACT (Contact)", "target_object": "Contact", "notes": "Person records with extensions" },
+          { "source_object": "S_OPTY (Opportunity)", "target_object": "Opportunity", "notes": "Sales pipeline data" },
+          { "source_object": "S_OPTY_PROD (Opportunity Product)", "target_object": "OpportunityLineItem", "notes": "Revenue line items" },
+          { "source_object": "S_SRV_REQ (Service Request)", "target_object": "Case", "notes": "Support case history" },
+          { "source_object": "S_EVT_ACT (Activity)", "target_object": "Task / Event", "notes": "Activity log" },
+          { "source_object": "S_PROD_INT (Product)", "target_object": "Product2", "notes": "Product catalog" },
+          { "source_object": "S_ADDR_PER (Address)", "target_object": "Account/Contact Address", "notes": "Multi-address per entity" },
+          { "source_object": "S_PARTY_PER (Party/Relationship)", "target_object": "AccountContactRelation / Junction", "notes": "MVG relationships" },
+          { "source_object": "S_NOTE (Notes)", "target_object": "ContentNote", "notes": "Note attachments" },
+          { "source_object": "S_ASSET (Asset)", "target_object": "Asset", "notes": "Installed base tracking" }
+        ],
+        "how_mine_helps": [
+          "Mine reads Siebel's repository metadata to decode extension columns — mapping ATTRIB_01 through X_CUSTOM_50 to meaningful Salesforce custom fields based on the business component configuration, not just the generic column names.",
+          "Multi-value groups and intersection tables are automatically profiled and mapped to Salesforce junction objects or native relationships (AccountContactRelation) — preserving roles, primary flags, and relationship dates.",
+          "Mine auto-maps Siebel Service Requests to Salesforce Cases with status translation, priority mapping, and activity history preservation — including escalation paths and resolution codes.",
+          "Siebel's picklist (LOV) values are extracted from the repository and aligned with Salesforce picklist values — flagging mismatches and generating value mapping tables for each field."
+        ],
+        "migration_stats": {
+          "manual_timeline": "12–18 months",
+          "mine_timeline": "6–10 weeks",
+          "manual_cost": "$1.5M–5M",
+          "cost_reduction": "50–70%",
+          "manual_team": "8–15 consultants",
+          "mine_team": "2–3 internal resources"
+        },
+        "faqs": [
+          {
+            "question": "How does Mine read Siebel's repository metadata?",
+            "answer": "Mine connects to the Siebel repository tables (S_TABLE, S_COLUMN, S_BUSCOMP, S_BUSCOMP_FLD) to understand the business meaning of extension columns and custom configurations. This is far more accurate than trying to reverse-engineer the base table schema."
+          },
+          {
+            "question": "Can Mine handle Siebel's multi-value groups?",
+            "answer": "Yes. Mine identifies all MVG relationships, profiles the intersection tables, and maps them to Salesforce junction objects or AccountContactRelation records with full relationship attribute preservation."
+          },
+          {
+            "question": "What about Siebel integrations and EAI data?",
+            "answer": "Mine focuses on the CRM data layer — accounts, contacts, opportunities, service requests, and activities. Integration configurations (EAI, workflow processes, assignment rules) are flagged as requiring Salesforce-native rebuild but aren't part of the data migration scope."
+          },
+          {
+            "question": "How does Mine handle Siebel's picklist (LOV) alignment with Salesforce?",
+            "answer": "Mine extracts all LOV values from Siebel's repository, compares them with your target Salesforce picklist values, and generates a value mapping table for each field — highlighting values that need to be added, merged, or deprecated in Salesforce."
+          }
+        ],
+        "keywords": {
+          "primary": "Siebel CRM to Salesforce data migration",
+          "secondary": ["migrate Siebel to Salesforce", "Siebel Salesforce migration tool", "Siebel to SFDC ETL", "Siebel CRM replacement Salesforce"],
+          "long_tail": ["how to migrate data from Siebel to Salesforce", "Siebel to Salesforce field mapping", "Siebel extension columns to Salesforce custom fields", "Siebel to Salesforce migration cost", "Siebel to Salesforce migration timeline"]
+        },
+        "related_slugs": ["oracle-ebs-to-salesforce", "sap-ecc-to-salesforce", "dynamics-365-to-salesforce", "siebel-to-dynamics-365"],
+        "is_published": true,
+        "display_order": 11
+      },
+      {
+        "slug": "sap-ecc-to-netsuite",
+        "source_system": "SAP ECC",
+        "target_system": "NetSuite",
+        "source_slug": "sap-ecc",
+        "target_slug": "netsuite",
+        "source_category": "ERP",
+        "target_category": "ERP",
+        "meta_title": "SAP ECC to NetSuite Data Migration | Mine",
+        "meta_description": "Automate your SAP ECC to NetSuite data migration. AI-powered mapping for customer master, GL, materials, and sales orders. Cut migration time by 70%.",
+        "hero_headline": "SAP ECC to NetSuite Data Migration",
+        "hero_subheadline": "Move from SAP ECC to NetSuite with AI-powered data migration. Mine handles the schema translation between SAP's deeply normalized structures and NetSuite's cloud-native model — including company code, chart of accounts, and material master mapping.",
+        "overview_paragraphs": [
+          "SAP ECC to NetSuite migrations are increasingly common among mid-market companies that were originally deployed on SAP by consulting firms but now find the platform too complex and expensive for their actual needs. Private equity firms frequently drive this migration when they acquire SAP-running companies and want to consolidate on a lower-cost, cloud-native ERP. Companies also migrate when they've outgrown their SAP support resources and can't find or afford the Basis and functional consultants needed to maintain the system.",
+          "The technical challenge is bridging two fundamentally different ERP architectures. SAP ECC is deeply normalized — customer data spans KNA1, KNB1, KNVV, and dozens of related tables organized by company code, sales organization, and distribution channel. NetSuite uses a flatter, subsidiary-based model with custom records and fields. SAP's accounting structures (company code, business area, profit center, cost center) must be restructured into NetSuite's dimensional model (subsidiary, department, class, location). Material master data in SAP (MARA, MARC, MVKE, MBEW) is far more granular than NetSuite's item records.",
+          "Traditional migrations rely on ABAP extraction programs, middleware like MuleSoft or Informatica, and extensive manual mapping — typically a 12–18 month effort with deep SAP functional expertise requirements."
+        ],
+        "challenges": [
+          {
+            "title": "SAP's organizational structures to NetSuite subsidiaries",
+            "description": "SAP ECC uses company codes, sales organizations, distribution channels, divisions, plants, and storage locations — a multi-dimensional organizational model. NetSuite uses subsidiaries, departments, classes, and locations. There's no one-to-one mapping; companies must make architectural decisions about which SAP org units map to which NetSuite dimensions, and these decisions cascade across all transactional data."
+          },
+          {
+            "title": "Material master complexity reduction",
+            "description": "SAP's material master spans MARA (general), MARC (plant), MVKE (sales org), MBEW (valuation), and MARD (storage location) tables — a single material can have dozens of records. NetSuite uses a single item record with subsidiary-level inventory and pricing. Flattening SAP's material views while preserving the right level of detail for NetSuite requires careful field selection."
+          },
+          {
+            "title": "Chart of accounts and controlling structures",
+            "description": "SAP's GL accounts are organized by chart of accounts with company code-specific settings. Cost centers, profit centers, and internal orders in SAP CO don't have direct NetSuite equivalents. The entire controlling structure must be reimagined using NetSuite's dimensional accounting — departments, classes, and locations — which behave differently than SAP's cost objects."
+          },
+          {
+            "title": "SAP document flow and transaction linkages",
+            "description": "SAP maintains a document flow (VBFA) that links sales orders to deliveries to billing documents to accounting documents. NetSuite has a transaction chain but models it differently. Preserving audit-trail linkages across the migration — especially for open documents that span the cutover — requires careful sequence management."
+          }
+        ],
+        "data_objects": [
+          { "source_object": "KNA1/KNB1/KNVV (Customer Master)", "target_object": "Customer", "notes": "Multi-table to single record" },
+          { "source_object": "LFA1/LFB1 (Vendor Master)", "target_object": "Vendor", "notes": "Company code-specific data" },
+          { "source_object": "SKA1/SKB1 (GL Accounts)", "target_object": "Account", "notes": "COA restructuring" },
+          { "source_object": "MARA/MARC/MVKE/MBEW (Material Master)", "target_object": "Item", "notes": "View consolidation" },
+          { "source_object": "VBAK/VBAP (Sales Orders)", "target_object": "Sales Order", "notes": "Open orders with pricing" },
+          { "source_object": "EKKO/EKPO (Purchase Orders)", "target_object": "Purchase Order", "notes": "Open POs" },
+          { "source_object": "BKPF/BSEG (Accounting Documents)", "target_object": "Journal Entry", "notes": "GL postings" },
+          { "source_object": "VBRK/VBRP (Billing Documents)", "target_object": "Invoice", "notes": "AR billing data" },
+          { "source_object": "BSIK/BSAK (Vendor Line Items)", "target_object": "Vendor Bill", "notes": "AP open and cleared items" },
+          { "source_object": "CSKS (Cost Centers)", "target_object": "Department / Class", "notes": "CO to dimension mapping" }
+        ],
+        "how_mine_helps": [
+          "Mine auto-profiles SAP's organizational hierarchy (company codes, sales orgs, plants) and proposes NetSuite subsidiary and dimension mappings — generating a complete org structure crosswalk before data migration begins.",
+          "Material master views across MARA, MARC, MVKE, and MBEW are consolidated into NetSuite item records with the right level of detail preserved — pricing, valuation, and inventory attributes mapped per subsidiary.",
+          "SAP's chart of accounts and controlling objects (cost centers, profit centers) are restructured into NetSuite's dimensional accounting model with validation rules ensuring every GL combination is valid in NetSuite.",
+          "Mine validates open document balances between SAP and NetSuite after each test load — ensuring AP, AR, and inventory subsidiary ledgers reconcile with the general ledger."
+        ],
+        "migration_stats": {
+          "manual_timeline": "12–18 months",
+          "mine_timeline": "6–10 weeks",
+          "manual_cost": "$1.5M–5M",
+          "cost_reduction": "50–70%",
+          "manual_team": "8–15 consultants",
+          "mine_team": "2–3 internal resources"
+        },
+        "faqs": [
+          {
+            "question": "How does Mine handle SAP company codes to NetSuite subsidiaries?",
+            "answer": "Mine analyzes your SAP organizational structure and proposes a mapping to NetSuite subsidiaries. You define the target org design, and Mine generates the transformation rules — including how cross-company-code transactions become intercompany journals in NetSuite."
+          },
+          {
+            "question": "Can Mine flatten SAP's material master into NetSuite items?",
+            "answer": "Yes. Mine profiles all material views (general, plant, sales org, valuation) and proposes which attributes to carry into NetSuite's item record vs. which to archive. Pricing, inventory, and valuation data are mapped per subsidiary."
+          },
+          {
+            "question": "How does Mine handle SAP cost centers in NetSuite?",
+            "answer": "SAP cost centers are mapped to NetSuite departments, classes, or locations based on your dimensional accounting design. Mine validates that every historical GL posting can be re-expressed in NetSuite's dimensional model without losing reporting granularity."
+          },
+          {
+            "question": "What about SAP-specific date and currency formats?",
+            "answer": "Mine automatically detects SAP's YYYYMMDD date format and currency decimal configurations, generating transformation SQL that converts to NetSuite's expected formats. Multi-currency amounts are converted using the appropriate exchange rate source."
+          }
+        ],
+        "keywords": {
+          "primary": "SAP ECC to NetSuite data migration",
+          "secondary": ["migrate SAP to NetSuite", "SAP ECC NetSuite migration tool", "SAP to NetSuite ETL", "SAP ERP to NetSuite migration"],
+          "long_tail": ["how to migrate data from SAP to NetSuite", "SAP to NetSuite field mapping", "SAP material master to NetSuite items", "SAP to NetSuite migration cost", "SAP company code to NetSuite subsidiary", "SAP to NetSuite migration timeline"]
+        },
+        "related_slugs": ["sap-ecc-to-salesforce", "sap-ecc-to-sap-s4hana", "oracle-ebs-to-netsuite", "quickbooks-to-netsuite"],
+        "is_published": true,
+        "display_order": 12
+      },
+      {
+        "slug": "oracle-ebs-to-oracle-cloud",
+        "source_system": "Oracle EBS",
+        "target_system": "Oracle Cloud",
+        "source_slug": "oracle-ebs",
+        "target_slug": "oracle-cloud",
+        "source_category": "ERP",
+        "target_category": "ERP",
+        "meta_title": "Oracle EBS to Oracle Cloud Data Migration | Mine",
+        "meta_description": "Automate your Oracle EBS to Oracle Cloud Fusion data migration. AI-powered mapping for GL, AP, AR, procurement, and custom DFFs. Migrate in weeks.",
+        "hero_headline": "Oracle EBS to Oracle Cloud Data Migration",
+        "hero_subheadline": "Move from Oracle EBS to Oracle Cloud ERP (Fusion) with AI-powered data migration. Mine handles the FBDI template mapping, DFF conversion, and flexfield restructuring that make Oracle-to-Oracle Cloud migrations surprisingly complex.",
+        "overview_paragraphs": [
+          "Oracle EBS to Oracle Cloud (Fusion) is Oracle's primary upgrade path and one of the largest enterprise migration programs happening today. With Oracle incentivizing Cloud ERP adoption through pricing pressure and new feature exclusivity, EBS customers face a clear mandate: migrate to the cloud or stay on increasingly expensive sustaining support. Despite being the same vendor, this is not a simple upgrade — Oracle Cloud uses a fundamentally different architecture with predefined business processes, limited customization, and a SaaS delivery model.",
+          "The technical challenge is paradoxically high for an intra-vendor migration. Oracle Cloud uses File-Based Data Import (FBDI) templates as the primary data loading mechanism — pre-formatted CSV files that must conform to exact column structures. EBS's deeply customized tables, Descriptive Flexfields (DFFs), Key Flexfields (KFFs), and lookup values must be mapped to Cloud's more standardized fields. The chart of accounts structure changes significantly — Cloud uses a tree-based segment hierarchy instead of EBS's value sets. Setup data (payment terms, tax codes, units of measure) must be recreated in Cloud before transaction data can load.",
+          "Oracle offers the Cloud Migration Toolkit, but it covers only a subset of data objects and assumes a relatively vanilla EBS installation. Companies with extensive customizations — which is most enterprise EBS deployments — face significant manual effort mapping DFFs, custom tables, and modified workflows to Cloud equivalents."
+        ],
+        "challenges": [
+          {
+            "title": "FBDI template formatting and sequencing",
+            "description": "Oracle Cloud requires data to be loaded through FBDI (File-Based Data Import) templates — specific CSV formats with exact column ordering, mandatory fields, and lookup validations. Each business object (suppliers, customers, invoices, journals) has its own FBDI template with different rules. Generating correctly formatted FBDI files from EBS data requires precise transformation logic and loading sequences that respect cross-object dependencies."
+          },
+          {
+            "title": "Descriptive Flexfield (DFF) and global segment conversion",
+            "description": "EBS DFFs use context-sensitive segments (ATTRIBUTE1–ATTRIBUTE15) whose meaning varies by context value. Oracle Cloud has its own DFF framework with different context structures and naming. Each EBS DFF context-segment combination must be mapped to the equivalent Cloud DFF or replaced with a Cloud extensible flexfield — and the data values converted accordingly."
+          },
+          {
+            "title": "Chart of accounts restructuring for Cloud segments",
+            "description": "EBS uses accounting flexfield value sets with independent or dependent validation. Oracle Cloud uses tree-based hierarchies for each COA segment. The value set-to-tree conversion is non-trivial — parent-child relationships must be explicitly defined in Cloud's tree structure, and cross-validation rules must be recreated as Cloud segment rules."
+          },
+          {
+            "title": "Setup data migration before transaction data",
+            "description": "Oracle Cloud requires all reference data (payment terms, tax codes, currencies, UOM, supplier sites, customer sites) to be loaded and validated before any transaction data can import. The sequencing is strict — a single missing setup record causes entire FBDI loads to fail. Identifying the complete setup data dependency tree from EBS is a project in itself."
+          }
+        ],
+        "data_objects": [
+          { "source_object": "HZ_PARTIES / HZ_CUST_ACCOUNTS", "target_object": "Customer (FBDI)", "notes": "TCA to Cloud customer model" },
+          { "source_object": "AP_SUPPLIERS / AP_SUPPLIER_SITES", "target_object": "Supplier (FBDI)", "notes": "Supplier with site addresses" },
+          { "source_object": "GL_CODE_COMBINATIONS", "target_object": "Chart of Accounts Segment Values", "notes": "Value set to tree hierarchy" },
+          { "source_object": "GL_JE_HEADERS / LINES", "target_object": "Journal Import (FBDI)", "notes": "GL transaction data" },
+          { "source_object": "AP_INVOICES_ALL", "target_object": "AP Invoice Import (FBDI)", "notes": "Open payables" },
+          { "source_object": "RA_CUSTOMER_TRX_ALL", "target_object": "AR Invoice Import (FBDI)", "notes": "Open receivables" },
+          { "source_object": "PO_HEADERS_ALL / PO_LINES_ALL", "target_object": "Purchase Order Import (FBDI)", "notes": "Open procurement" },
+          { "source_object": "MTL_SYSTEM_ITEMS", "target_object": "Item Import (FBDI)", "notes": "Item master" },
+          { "source_object": "HR_ALL_ORGANIZATION_UNITS", "target_object": "Enterprise Structure Setup", "notes": "Org hierarchy" },
+          { "source_object": "FA_ADDITIONS (Fixed Assets)", "target_object": "Asset Import (FBDI)", "notes": "Asset register" }
+        ],
+        "how_mine_helps": [
+          "Mine automatically generates correctly formatted FBDI templates from EBS data — handling column ordering, mandatory field defaults, and lookup value alignment for each Cloud business object.",
+          "EBS DFF context-segment combinations are profiled from the repository and mapped to Cloud DFF structures — with data value conversion rules generated for each context.",
+          "Chart of accounts value sets are converted to Cloud's tree-based hierarchy format with parent-child relationships derived from EBS segment value attributes.",
+          "Mine analyzes cross-object dependencies and generates the correct FBDI loading sequence — ensuring all setup data (payment terms, tax codes, UOM) loads and validates before transaction data imports."
+        ],
+        "migration_stats": {
+          "manual_timeline": "9–18 months",
+          "mine_timeline": "6–10 weeks",
+          "manual_cost": "$1M–4M",
+          "cost_reduction": "40–60%",
+          "manual_team": "6–12 consultants",
+          "mine_team": "2–3 internal resources"
+        },
+        "faqs": [
+          {
+            "question": "Does Mine generate Oracle Cloud FBDI templates directly?",
+            "answer": "Yes. Mine transforms EBS data into correctly formatted FBDI CSV files for each Cloud business object — handling column ordering, mandatory field defaults, date formats, and lookup code validation automatically."
+          },
+          {
+            "question": "How does Mine handle EBS DFF migration to Oracle Cloud?",
+            "answer": "Mine reads the EBS DFF repository metadata, maps each context-segment combination to the Cloud DFF framework, and generates transformation rules for data values. DFFs that don't have Cloud equivalents are flagged for extensible flexfield creation."
+          },
+          {
+            "question": "Can Mine determine the correct FBDI loading sequence?",
+            "answer": "Yes. Mine analyzes foreign key dependencies across all FBDI templates and generates a sequenced loading plan — setup data first, then masters, then transactions — ensuring no load fails due to missing reference data."
+          },
+          {
+            "question": "What about Oracle Cloud's limited customization compared to EBS?",
+            "answer": "Mine profiles all EBS customizations (DFFs, custom tables, modified forms) and identifies which can be migrated to Cloud as-is, which need redesign using Cloud's extensibility framework, and which must be retired. This analysis is delivered before any data migration begins."
+          }
+        ],
+        "keywords": {
+          "primary": "Oracle EBS to Oracle Cloud data migration",
+          "secondary": ["migrate Oracle EBS to Cloud ERP", "Oracle EBS to Fusion migration tool", "Oracle EBS to Oracle Cloud ETL", "Oracle EBS Cloud upgrade migration"],
+          "long_tail": ["how to migrate data from Oracle EBS to Oracle Cloud", "Oracle EBS to Cloud FBDI templates", "Oracle EBS DFF to Cloud migration", "Oracle EBS to Oracle Cloud migration cost", "Oracle EBS to Cloud migration timeline"]
+        },
+        "related_slugs": ["oracle-ebs-to-salesforce", "oracle-ebs-to-netsuite", "sap-ecc-to-sap-s4hana", "dynamics-ax-to-dynamics-365"],
+        "is_published": true,
+        "display_order": 13
+      },
+      {
+        "slug": "sage-intacct-to-netsuite",
+        "source_system": "Sage Intacct",
+        "target_system": "NetSuite",
+        "source_slug": "sage-intacct",
+        "target_slug": "netsuite",
+        "source_category": "ERP",
+        "target_category": "ERP",
+        "meta_title": "Sage Intacct to NetSuite Data Migration | Mine",
+        "meta_description": "Automate your Sage Intacct to NetSuite data migration. AI-powered mapping for dimensions, GL, AP/AR, and custom objects. Migrate in weeks, not months.",
+        "hero_headline": "Sage Intacct to NetSuite Data Migration",
+        "hero_subheadline": "Move from Sage Intacct to NetSuite with AI-powered data migration. Mine handles the dimensional accounting restructuring, custom object mapping, and multi-entity consolidation that make this migration deceptively complex.",
+        "overview_paragraphs": [
+          "Sage Intacct to NetSuite migrations happen when companies outgrow Intacct's capabilities — typically triggered by the need for deeper inventory management, manufacturing, CRM integration, or multi-subsidiary consolidation beyond what Intacct provides natively. This is also common in M&A scenarios where the acquiring company runs NetSuite and needs to consolidate the acquired entity off Intacct. Despite both being cloud-native, the migration is more complex than most teams expect.",
+          "The core technical challenge is that Sage Intacct and NetSuite handle dimensional accounting differently. Intacct uses user-defined dimensions (UDDs) with up to 10 custom dimensions that can be applied at both transaction header and line level. NetSuite uses a fixed set of classification fields — subsidiary, department, class, and location — plus custom segments. Mapping Intacct's flexible dimensions to NetSuite's structured model requires careful analysis of how each dimension is actually used in reporting. Additionally, Intacct's contract billing and revenue recognition module has a different data model than NetSuite's Advanced Revenue Management.",
+          "Companies typically use CSV exports from Intacct combined with NetSuite's CSV import, but the dimensional restructuring and custom object translation require extensive manual transformation in spreadsheets before the data can load."
+        ],
+        "challenges": [
+          {
+            "title": "User-defined dimension mapping to NetSuite classifications",
+            "description": "Sage Intacct supports up to 10 user-defined dimensions that can be freely applied to transactions. NetSuite uses a fixed structure — subsidiary, department, class, location — plus custom segments for additional dimensions. Not all Intacct dimensions map cleanly to NetSuite's classification fields. Some may need to become custom segments, custom fields, or even separate custom records in NetSuite."
+          },
+          {
+            "title": "Multi-entity consolidation differences",
+            "description": "Intacct's multi-entity structure supports top-level and child entities with intercompany elimination rules. NetSuite's OneWorld uses a different subsidiary hierarchy and elimination subsidiary model. The consolidation structure, intercompany journal rules, and currency translation methods all need to be redesigned."
+          },
+          {
+            "title": "Contract billing and revenue recognition",
+            "description": "Intacct's contract and revenue management module stores contract schedules, revenue recognition plans, and billing schedules in a purpose-built data model. NetSuite's Advanced Revenue Management uses different recognition methods and scheduling logic. Migrating active contracts with in-progress revenue schedules requires careful period-by-period reconciliation."
+          },
+          {
+            "title": "Intacct custom objects and platform services",
+            "description": "Intacct's Platform Services allow custom objects, custom transactions, and smart events. These have no direct NetSuite equivalent — each custom object must be analyzed and rebuilt as a NetSuite custom record with SuiteScript triggers replacing Intacct smart events."
+          }
+        ],
+        "data_objects": [
+          { "source_object": "Customer", "target_object": "Customer", "notes": "Customer master with contacts" },
+          { "source_object": "Vendor", "target_object": "Vendor", "notes": "Vendor master with payment info" },
+          { "source_object": "GL Account", "target_object": "Account", "notes": "Account structure mapping" },
+          { "source_object": "GL Journal Entry", "target_object": "Journal Entry", "notes": "Historical and opening balances" },
+          { "source_object": "AP Bill", "target_object": "Vendor Bill", "notes": "Open payables" },
+          { "source_object": "AR Invoice", "target_object": "Invoice", "notes": "Open receivables" },
+          { "source_object": "Purchase Order", "target_object": "Purchase Order", "notes": "Open procurement" },
+          { "source_object": "Order Entry Transaction", "target_object": "Sales Order", "notes": "Open sales" },
+          { "source_object": "Item", "target_object": "Item", "notes": "Inventory and service items" },
+          { "source_object": "Employee", "target_object": "Employee", "notes": "Employee records" },
+          { "source_object": "Contract / Revenue Schedule", "target_object": "Revenue Arrangement", "notes": "Active contracts" },
+          { "source_object": "Custom Objects (Platform Services)", "target_object": "Custom Record", "notes": "Individual analysis required" }
+        ],
+        "how_mine_helps": [
+          "Mine profiles all Intacct user-defined dimensions and proposes the optimal NetSuite mapping — whether department, class, location, or custom segment — based on actual usage patterns in your transaction data.",
+          "Multi-entity hierarchies are mapped to NetSuite's subsidiary structure with intercompany elimination rules translated and validated against NetSuite's consolidation engine.",
+          "Intacct custom objects and platform services data are profiled and mapped to NetSuite custom records with relationship fields and workflow triggers documented for SuiteScript rebuild.",
+          "Mine validates dimensional reporting continuity — ensuring that any Intacct dimension-based report can be replicated in NetSuite using the mapped classification structure."
+        ],
+        "migration_stats": {
+          "manual_timeline": "3–6 months",
+          "mine_timeline": "3–5 weeks",
+          "manual_cost": "$150K–500K",
+          "cost_reduction": "50–70%",
+          "manual_team": "2–4 consultants",
+          "mine_team": "1–2 internal resources"
+        },
+        "faqs": [
+          {
+            "question": "How does Mine handle Sage Intacct's user-defined dimensions?",
+            "answer": "Mine profiles every dimension's usage across your transactions, then recommends the optimal NetSuite target — department, class, location, or custom segment — based on cardinality, reporting requirements, and how the dimension is applied at header vs. line level."
+          },
+          {
+            "question": "Can Mine migrate active Intacct contracts with revenue schedules?",
+            "answer": "Mine maps Intacct contract and revenue schedule data to NetSuite's Advanced Revenue Management structure. Active contracts with in-progress recognition schedules are flagged for period-by-period reconciliation to ensure revenue continuity."
+          },
+          {
+            "question": "How does Mine handle Intacct's multi-entity to NetSuite OneWorld?",
+            "answer": "Mine maps Intacct entities to NetSuite subsidiaries, translates intercompany elimination rules, and validates the consolidation hierarchy. Currency translation methods are mapped between Intacct's and NetSuite's consolidation engines."
+          },
+          {
+            "question": "What about Intacct Platform Services custom objects?",
+            "answer": "Mine profiles each custom object's fields, relationships, and smart event triggers, then proposes equivalent NetSuite custom records with SuiteScript-based automation. The mapping documentation accelerates the custom object rebuild in NetSuite."
+          }
+        ],
+        "keywords": {
+          "primary": "Sage Intacct to NetSuite data migration",
+          "secondary": ["migrate Sage Intacct to NetSuite", "Intacct to NetSuite migration tool", "Sage Intacct NetSuite ETL", "Intacct to NetSuite upgrade"],
+          "long_tail": ["how to migrate data from Sage Intacct to NetSuite", "Intacct dimensions to NetSuite mapping", "Sage Intacct to NetSuite migration cost", "Intacct to NetSuite migration timeline", "Intacct custom objects to NetSuite"]
+        },
+        "related_slugs": ["quickbooks-to-netsuite", "oracle-ebs-to-netsuite", "sap-ecc-to-netsuite", "sage-intacct-to-dynamics-365"],
+        "is_published": true,
+        "display_order": 14
+      },
+      {
+        "slug": "legacy-database-to-salesforce",
+        "source_system": "Legacy Database",
+        "target_system": "Salesforce",
+        "source_slug": "legacy-database",
+        "target_slug": "salesforce",
+        "source_category": "Database",
+        "target_category": "CRM",
+        "meta_title": "Legacy Database to Salesforce Data Migration | Mine",
+        "meta_description": "Automate your legacy database to Salesforce data migration. AI-powered schema profiling and field mapping for custom databases, Access, FoxPro, and more.",
+        "hero_headline": "Legacy Database to Salesforce Data Migration",
+        "hero_subheadline": "Migrating from a custom database, Access, FoxPro, or homegrown system to Salesforce? Mine profiles any relational schema and automates the field mapping, data transformation, and validation — even when there's no documentation.",
+        "overview_paragraphs": [
+          "Legacy database to Salesforce migrations are among the most varied and unpredictable migration types. The source could be anything — a Microsoft Access database that's been running for 15 years, a custom SQL Server or MySQL application, a FoxPro system, a FileMaker database, or even flat files exported from a decommissioned mainframe. These migrations are triggered when companies finally replace homegrown or legacy CRM systems with Salesforce, often as part of a broader digital transformation or after an acquisition where the acquired company has no standard CRM.",
+          "The core technical challenge is that legacy databases have no standard schema. Unlike migrating from SAP or Oracle where the table structures are known, a custom database requires discovery from scratch — table relationships must be inferred from foreign keys (if they exist), data types are often inconsistent, business logic lives in application code rather than the database, and there's rarely documentation. Field naming conventions are unpredictable, and the same conceptual entity (a customer) might be spread across multiple tables with no obvious join path.",
+          "Companies typically handle these migrations with brute-force manual effort — a database developer exports tables to CSV, a Salesforce admin manually maps columns to Salesforce fields, and someone spends weeks fixing data quality issues one field at a time. For large legacy databases with 50–200 tables, this process takes 4–8 months."
+        ],
+        "challenges": [
+          {
+            "title": "Undocumented schema discovery",
+            "description": "Legacy databases rarely have ERD documentation or data dictionaries. Table and column names may be cryptic (TBL_CUST, FLD_01, STATUS_CD), relationships may not be enforced with foreign keys, and the same data may exist in multiple tables with no clear master. Mine's schema profiler infers relationships from data patterns — matching column values across tables to discover implicit joins."
+          },
+          {
+            "title": "Inconsistent data types and encoding",
+            "description": "Legacy databases often store dates as strings, phone numbers as integers, booleans as Y/N or 1/0 or T/F, and currencies without decimal precision. Character encoding may vary between tables (Latin-1, Windows-1252, UTF-8). Every field needs content analysis, not just schema analysis, to determine the correct Salesforce target type."
+          },
+          {
+            "title": "No standard object model",
+            "description": "Unlike ERP or CRM source systems that have standard concepts (customers, orders, invoices), legacy databases have bespoke object models. A 'Customers' table might combine what Salesforce separates into Accounts, Contacts, and Leads. A 'Transactions' table might contain sales orders, invoices, and payments mixed together with a type column. Decomposing these composite structures into Salesforce's object model requires business logic decisions."
+          },
+          {
+            "title": "Data quality issues accumulated over decades",
+            "description": "Legacy databases accumulate data quality issues over their lifetime — duplicate records created by different application versions, orphaned foreign keys from deleted records, truncated fields from past schema changes, and test data mixed with production data. These issues aren't just migration problems — they need to be resolved before data enters Salesforce."
+          }
+        ],
+        "data_objects": [
+          { "source_object": "Customers / Clients table", "target_object": "Account + Contact", "notes": "May need decomposition" },
+          { "source_object": "Contacts / People table", "target_object": "Contact", "notes": "Deduplication likely needed" },
+          { "source_object": "Sales / Orders table", "target_object": "Opportunity", "notes": "Status mapping required" },
+          { "source_object": "Products / Services table", "target_object": "Product2 / PricebookEntry", "notes": "Catalog normalization" },
+          { "source_object": "Invoices / Billing table", "target_object": "Custom Object or Archive", "notes": "Depends on Salesforce design" },
+          { "source_object": "Activities / Notes table", "target_object": "Task / Event / Note", "notes": "Type-based routing" },
+          { "source_object": "Categories / Types table", "target_object": "Picklist Values / Record Types", "notes": "Lookup to picklist" },
+          { "source_object": "Addresses table", "target_object": "Account / Contact Address fields", "notes": "Multi-address handling" },
+          { "source_object": "Attachments / Documents table", "target_object": "ContentDocument / Files", "notes": "Binary file migration" },
+          { "source_object": "Users / Staff table", "target_object": "User", "notes": "Permission mapping" }
+        ],
+        "how_mine_helps": [
+          "Mine profiles any relational database (SQL Server, MySQL, PostgreSQL, Access, or CSV exports) and infers table relationships from data patterns — even when foreign keys aren't defined in the schema.",
+          "Field content analysis goes beyond schema types — Mine samples actual data values to recommend the correct Salesforce field type, length, and validation rules for each column.",
+          "Composite tables (customers + contacts in one table, mixed transaction types) are detected and decomposition rules are proposed — splitting source rows into multiple Salesforce objects with correct relationships.",
+          "Mine generates a complete data quality report before migration begins — duplicate detection, orphaned references, type inconsistencies, and encoding issues — so you can remediate before loading into Salesforce."
+        ],
+        "migration_stats": {
+          "manual_timeline": "4–8 months",
+          "mine_timeline": "3–6 weeks",
+          "manual_cost": "$200K–800K",
+          "cost_reduction": "50–70%",
+          "manual_team": "3–6 consultants",
+          "mine_team": "1–2 internal resources"
+        },
+        "faqs": [
+          {
+            "question": "What database types does Mine support as sources?",
+            "answer": "Mine supports SQL Server, MySQL, PostgreSQL, Oracle, SQLite, Microsoft Access, and CSV/Excel file exports. For databases that can't be directly connected, you export to CSV and Mine profiles the files with the same depth of analysis."
+          },
+          {
+            "question": "How does Mine handle a database with no documentation?",
+            "answer": "Mine infers the schema from the database itself — profiling every table's columns, data types, value distributions, and cross-table relationships. It generates a complete data dictionary and ERD that you likely don't have, then proposes Salesforce mappings based on the discovered structure."
+          },
+          {
+            "question": "Can Mine decompose composite tables into separate Salesforce objects?",
+            "answer": "Yes. Mine detects when a single source table contains data that should be split across multiple Salesforce objects — for example, a Customers table that combines company and contact data. It proposes decomposition rules and generates the split logic."
+          },
+          {
+            "question": "How does Mine handle data quality issues in legacy databases?",
+            "answer": "Mine runs a comprehensive data quality scan before migration — detecting duplicates, orphaned foreign keys, inconsistent formats, encoding issues, and null patterns. Each issue is categorized by severity and a remediation strategy is proposed."
+          },
+          {
+            "question": "What if our legacy database has no foreign keys defined?",
+            "answer": "Mine infers relationships by analyzing column name patterns and matching data values across tables. If a 'customer_id' column in an Orders table contains values that match the 'id' column in a Customers table, Mine identifies this as an implicit foreign key and uses it in the mapping."
+          }
+        ],
+        "keywords": {
+          "primary": "legacy database to Salesforce data migration",
+          "secondary": ["migrate legacy database to Salesforce", "custom database to Salesforce migration", "Access to Salesforce migration tool", "legacy CRM to Salesforce ETL"],
+          "long_tail": ["how to migrate data from legacy database to Salesforce", "custom database to Salesforce field mapping", "legacy system to Salesforce migration cost", "Access database to Salesforce migration", "FoxPro to Salesforce data migration", "legacy database to Salesforce migration timeline"]
+        },
+        "related_slugs": ["siebel-to-salesforce", "oracle-ebs-to-salesforce", "sap-ecc-to-salesforce", "hubspot-to-salesforce"],
+        "is_published": true,
+        "display_order": 15
+      }
+    ]
+    
