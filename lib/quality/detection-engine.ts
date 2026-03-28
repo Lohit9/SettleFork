@@ -382,8 +382,10 @@ export async function runSourceDataChecks(
 
     // ── Check 8: Date format issues — non-ISO dates and fully-invalid date strings (WARNING / BLOCKING)
     const dateKeywords = ['date', 'created', 'updated', 'modified', 'dob', 'birth', 'start', 'end', 'expir']
+    const fieldLower = field.name.toLowerCase()
+    const fieldWordMatch = (k: string) => new RegExp(`(?:^|_|\\b)${k}(?:$|_|\\b)`).test(fieldLower)
     const isDateField =
-      dateKeywords.some((k) => field.name.toLowerCase().includes(k)) ||
+      dateKeywords.some(fieldWordMatch) ||
       (field.inferred_type ?? '').toLowerCase() === 'date'
 
     if (isDateField) {
@@ -441,7 +443,7 @@ export async function runSourceDataChecks(
     const isCurrencyField =
       (field.inferred_type ?? '').toLowerCase() === 'currency' ||
       ['decimal', 'float', 'numeric'].includes((field.inferred_type ?? '').toLowerCase()) ||
-      currencyKeywords.some((k) => field.name.toLowerCase().includes(k))
+      currencyKeywords.some((k) => new RegExp(`(?:^|_|\\b)${k}(?:$|_|\\b)`).test(field.name.toLowerCase()))
 
     if (isCurrencyField) {
       const currencyFmtCount = await rpcCount('dq_currency_format_count', {
@@ -530,7 +532,7 @@ export async function runSourceDataChecks(
     const isBoolField =
       (field.inferred_type ?? '').toLowerCase() === 'boolean' ||
       field.data_type.toUpperCase() === 'BOOLEAN' ||
-      boolKeywords.some((k) => field.name.toLowerCase().includes(k))
+      boolKeywords.some((k) => new RegExp(`(?:^|_|\\b)${k}(?:$|_|\\b)`).test(field.name.toLowerCase()))
 
     if (isBoolField) {
       const nonBoolCount = await rpcCount('dq_non_standard_boolean_count', {
