@@ -1,0 +1,392 @@
+[
+    {
+      "slug": "sap-ecc-to-salesforce",
+      "bridge_paragraph": "SAP ECC stores customer and partner data across deeply normalized structures — KNA1 (general data), KNVV (sales area data), KNVK (contact persons), KNVP (partner functions) — while Salesforce uses a flatter object model with Accounts, Contacts, and Opportunities. Mine bridges this structural gap automatically, handling the schema translation, data transformation, and validation that typically consumes months of manual effort.",
+      "faqs": [
+        {
+          "question": "How long does an SAP ECC to Salesforce data migration take?",
+          "answer": "A typical SAP ECC to Salesforce migration takes 6–12 months using traditional consulting approaches, including schema analysis, field mapping, transformation development, testing, and cutover. The timeline depends on the number of data objects, volume of records, complexity of custom fields, and how many mock migrations are needed before go-live. Mine reduces this to 4–8 weeks by automating schema profiling, field mapping, transformation SQL generation, and validation — so teams can focus on business decisions rather than spreadsheet work."
+        },
+        {
+          "question": "What data can be migrated from SAP ECC to Salesforce?",
+          "answer": "The most commonly migrated data includes customer master records (KNA1/KNB1), contact persons (KNVK), partner functions (KNVP), sales orders (VBAK/VBAP), materials (MARA/MAKT), pricing conditions (A-tables), and addresses. Some companies also migrate open AR items and change document history. Financial and supply chain data typically stays in SAP. Mine profiles your SAP schema and identifies exactly which tables and fields are relevant for your Salesforce target model."
+        },
+        {
+          "question": "What are the biggest risks in an SAP to Salesforce migration?",
+          "answer": "The three highest-risk areas are: partner function hierarchies that have no native Salesforce equivalent and require architectural decisions about Contact Roles vs. custom objects; SAP number range overlaps across company codes that create duplicate records in Salesforce if not handled; and sales organization-specific pricing that must be restructured for Salesforce's simpler pricebook model. Mine detects all three automatically during schema profiling and proposes resolution strategies before any data moves."
+        },
+        {
+          "question": "How do you handle SAP's multi-company-code customer structures in Salesforce?",
+          "answer": "SAP allows the same customer to exist across multiple company codes and sales organizations, each with different payment terms, pricing, and addresses. Salesforce has no native multi-company-code concept. The standard approaches are: creating one Salesforce Account per unique customer with record types for company code distinctions, or creating separate Accounts per company code with a parent-child hierarchy. Mine profiles your cross-company-code customer overlap and proposes consolidation rules for whichever approach you choose."
+        },
+        {
+          "question": "How much does an SAP ECC to Salesforce migration cost?",
+          "answer": "Traditional SAP-to-Salesforce migrations through consulting firms typically cost $1M–3M, depending on scope, data volume, and customization complexity. The data conversion workstream alone — mapping, transformation, testing, and validation — often represents 30–40% of that cost. Mine reduces the data conversion cost by 40–50% by automating the most labor-intensive parts: schema profiling, field mapping, SQL generation, and validation."
+        }
+      ]
+    },
+    {
+      "slug": "sap-ecc-to-sap-s4hana",
+      "bridge_paragraph": "S/4HANA fundamentally restructures how SAP stores data — merging hundreds of ECC tables into simplified structures like MATDOC (replacing MKPF/MSEG) and ACDOCA (replacing dozens of FI/CO line item tables), while requiring all customers and vendors to convert to the Business Partner model. Mine automates the impact analysis, mapping, and validation that make this the most complex ERP upgrade in enterprise IT.",
+      "faqs": [
+        {
+          "question": "How long does an SAP ECC to S/4HANA migration take?",
+          "answer": "A brownfield SAP ECC to S/4HANA conversion typically takes 12–24 months end-to-end, with the data conversion workstream consuming 6–12 months of that timeline. Greenfield reimplementations can take even longer. The timeline depends heavily on the volume of custom Z-tables, the complexity of Business Partner conversion, and whether you're migrating full history or doing a selective data transition. Mine reduces the data conversion portion to 6–12 weeks by automating custom table analysis, BP conversion mapping, and simplification list impact assessment."
+        },
+        {
+          "question": "What tables change from SAP ECC to S/4HANA?",
+          "answer": "Hundreds of ECC tables are merged, renamed, or deprecated in S/4HANA. The most significant changes include: material documents moving from MKPF/MSEG to MATDOC, financial line items consolidating into the ACDOCA universal journal, customer master (KNA1) and vendor master (LFA1) merging into the Business Partner model (BUT000), and CO-PA profitability analysis moving into ACDOCA. SAP publishes a simplification list with all changes. Mine cross-references your custom objects against this list automatically."
+        },
+        {
+          "question": "What is Business Partner conversion and why is it difficult?",
+          "answer": "S/4HANA requires all customers (KNA1) and vendors (LFA1) to be migrated to the Business Partner (BUT000) model. Entities that are both customer and vendor must be merged into a single BP record with multiple roles. The difficulty comes from data quality — duplicate BP numbers, inconsistent addresses, missing role assignments, and overlapping number ranges between customers and vendors. Mine detects these conflicts automatically and generates merge rules with full audit trail."
+        },
+        {
+          "question": "Should we do a brownfield or greenfield S/4HANA migration?",
+          "answer": "Brownfield (in-place conversion) preserves your existing configuration and historical data but requires converting all custom objects to S/4HANA's new data model. Greenfield (new implementation) gives you a clean start but requires migrating master and open transaction data from ECC. The choice depends on your customization complexity, data history requirements, and willingness to redesign business processes. Mine supports both paths — profiling your ECC data and generating mappings appropriate to whichever approach you choose."
+        },
+        {
+          "question": "How much does an SAP ECC to S/4HANA migration cost?",
+          "answer": "Enterprise S/4HANA migrations typically cost $5M–20M through system integrators, with data conversion representing 30–40% of the total program budget. The cost scales with the number of company codes, custom Z-tables, and historical data volume. Selective data migration (recent transactions + summary balances) is significantly cheaper than full historical conversion. Mine reduces the data conversion portion by 40–50% through automated impact analysis, mapping, and validation."
+        }
+      ]
+    },
+    {
+      "slug": "oracle-ebs-to-salesforce",
+      "bridge_paragraph": "Oracle EBS stores customer data in the Trading Community Architecture (TCA) — a deeply normalized hierarchy spanning HZ_PARTIES, HZ_CUST_ACCOUNTS, HZ_PARTY_SITES, and HZ_CUST_SITE_USES — while Salesforce uses a flatter Account-Contact-Opportunity model. Mine denormalizes the TCA hierarchy automatically, preserving billing and shipping address purposes, contact relationships, and multi-org segmentation.",
+      "faqs": [
+        {
+          "question": "How long does an Oracle EBS to Salesforce data migration take?",
+          "answer": "A typical Oracle EBS to Salesforce migration takes 6–12 months with traditional consulting approaches. The TCA model analysis alone can take 6–8 weeks manually because of the deeply normalized party-account-site hierarchy. Timeline depends on the number of operating units, volume of AR transaction history, and complexity of DFF/KFF customizations. Mine reduces this to 4–8 weeks by automating TCA profiling, denormalization logic, and field mapping."
+        },
+        {
+          "question": "What is Oracle's TCA model and why does it make migration hard?",
+          "answer": "TCA (Trading Community Architecture) is Oracle's data model for storing customer, contact, and address data across multiple normalized tables — HZ_PARTIES for organizations and people, HZ_CUST_ACCOUNTS for customer accounts, HZ_PARTY_SITES for addresses, and HZ_CUST_SITE_USES for billing/shipping purposes. A single customer can have dozens of records across these tables. Salesforce stores all this on the Account object with address fields. Mine profiles the full TCA hierarchy and generates denormalized mappings to Salesforce automatically."
+        },
+        {
+          "question": "What data can be migrated from Oracle EBS to Salesforce?",
+          "answer": "Common data objects include customers (HZ_PARTIES/HZ_CUST_ACCOUNTS), contacts (HZ_CONTACT_POINTS), addresses (HZ_LOCATIONS), sales orders (OE_ORDER_HEADERS), AR invoices (RA_CUSTOMER_TRX_ALL), price lists (QP_LIST_HEADERS), and lookup values (FND_LOOKUP_VALUES). Some companies also migrate open AR balances and payment history. Financial, procurement, and inventory data typically stays in Oracle EBS. Mine profiles your Oracle schema and identifies exactly which tables are CRM-relevant."
+        },
+        {
+          "question": "How do you handle Oracle's multi-org structure in Salesforce?",
+          "answer": "Oracle EBS segments data by operating unit (ORG_ID), and customers can exist across multiple operating units with different terms and pricing. Salesforce has no native operating unit concept. The typical approaches are: using Salesforce record types to segment by org, custom fields to tag the original ORG_ID, or creating separate Account records per operating unit. Mine detects cross-org customers and proposes consolidation strategies for whichever approach fits your Salesforce architecture."
+        },
+        {
+          "question": "How much does an Oracle EBS to Salesforce migration cost?",
+          "answer": "Traditional Oracle-to-Salesforce migrations cost $800K–2.5M through consulting firms, with data conversion typically representing 25–35% of the total. The cost is driven by TCA complexity, number of operating units, DFF/KFF customization depth, and the volume of historical transaction data to migrate. Mine reduces the data conversion cost by 40–50% by automating TCA denormalization, DFF profiling, and lookup value alignment."
+        }
+      ]
+    },
+    {
+      "slug": "netsuite-to-salesforce",
+      "bridge_paragraph": "NetSuite organizes data by subsidiary with entity-level sharing and subsidiary-specific transactions, while Salesforce uses a flat Account-Contact-Opportunity model with no native subsidiary concept. Mine maps NetSuite's subsidiary structure to Salesforce record types or custom fields automatically, preserving customer relationships, transaction history, and custom record data.",
+      "faqs": [
+        {
+          "question": "How long does a NetSuite to Salesforce data migration take?",
+          "answer": "A typical NetSuite to Salesforce migration takes 4–8 months with traditional approaches, depending on the number of custom record types, subsidiary complexity, and volume of transaction history. The mapping work is complicated by NetSuite's unified ERP/CRM model — separating CRM-relevant data from ERP data requires careful field-by-field analysis. Mine reduces this to 3–6 weeks by automating schema profiling, field selection, and mapping generation."
+        },
+        {
+          "question": "What data moves from NetSuite to Salesforce?",
+          "answer": "The most commonly migrated objects are Customers (to Accounts), Contacts, Opportunities or Estimates (to Opportunities), Items (to Products), and activity records (phone calls, tasks, events). Custom record types often migrate to Salesforce custom objects. Financial data like invoices, payments, and journal entries typically stays in NetSuite. Mine profiles your NetSuite instance and separates CRM-relevant fields from ERP-only fields automatically."
+        },
+        {
+          "question": "How do you handle NetSuite subsidiaries in Salesforce?",
+          "answer": "NetSuite OneWorld organizes customers, pricing, and transactions by subsidiary. Salesforce has no native subsidiary concept. Common approaches include: using Salesforce record types to segment by subsidiary, adding custom fields for subsidiary context, or creating separate Account records per subsidiary linked through parent-child hierarchies. Mine analyzes your subsidiary-specific data and proposes the approach that preserves the most business context with the least Salesforce complexity."
+        },
+        {
+          "question": "Can NetSuite custom record types be migrated to Salesforce?",
+          "answer": "Yes, but each custom record type requires individual analysis. NetSuite custom records with sublists, scripted logic, and relationship fields must be translated to Salesforce custom objects with lookup relationships and potentially Flow-based automation. Mine profiles each custom record's fields, sublists, and SuiteScript dependencies, then proposes equivalent Salesforce custom objects with appropriate relationship patterns."
+        },
+        {
+          "question": "How much does a NetSuite to Salesforce migration cost?",
+          "answer": "NetSuite-to-Salesforce migrations typically cost $300K–1M through consulting firms, depending on custom record complexity and transaction history volume. The cost scales with the number of custom record types and whether you're migrating just CRM data or also historical transaction data for reporting. Mine reduces data conversion costs by 40–50% through automated profiling, mapping, and transformation generation."
+        }
+      ]
+    },
+    {
+      "slug": "hubspot-to-salesforce",
+      "bridge_paragraph": "HubSpot uses a flexible property-based system where contacts and companies can have hundreds of custom properties without formal type constraints, while Salesforce enforces strict field types with validation rules, picklist values, and field-level security. Mine analyzes each property's actual data content to determine the optimal Salesforce field type — not just its declared type.",
+      "faqs": [
+        {
+          "question": "How long does a HubSpot to Salesforce data migration take?",
+          "answer": "A typical HubSpot to Salesforce migration takes 2–6 months with traditional approaches. The timeline depends on the number of custom properties, deal pipeline complexity, engagement history volume, and whether you're migrating custom objects (which require HubSpot Enterprise). Simple migrations with standard objects can be faster; heavily customized HubSpot instances with workflows and custom objects take longer. Mine reduces this to 2–4 weeks."
+        },
+        {
+          "question": "Should HubSpot contacts become Salesforce Leads or Contacts?",
+          "answer": "HubSpot doesn't distinguish between Leads and Contacts — all people are Contacts with a lifecycle stage property. In Salesforce, Leads and Contacts are separate objects with different behaviors. The standard approach is: HubSpot Contacts with lifecycle stage 'Lead' or 'MQL' become Salesforce Leads, while Contacts associated with closed deals become Salesforce Contacts with Account relationships. Mine analyzes your HubSpot data and generates routing rules based on lifecycle stage, deal associations, and company relationships."
+        },
+        {
+          "question": "What happens to HubSpot email engagement history in Salesforce?",
+          "answer": "HubSpot tracks email opens, clicks, replies, and thread history as engagement records tied to contacts. Salesforce stores email data as EmailMessage or Task records with different metadata structures. The full engagement timeline can be migrated — timestamps, associations, and open/click data — but the tracking metrics (open rates, click rates) need to be stored in custom fields since Salesforce doesn't have native engagement scoring on email records. Mine maps HubSpot engagements to the correct Salesforce activity objects automatically."
+        },
+        {
+          "question": "How do HubSpot deal pipelines map to Salesforce opportunities?",
+          "answer": "HubSpot supports multiple deal pipelines with custom stages. Salesforce uses Sales Processes tied to record types, with Opportunity stages and probability values. Each HubSpot pipeline typically becomes a Salesforce record type with its own Sales Process. Mine maps stage names, generates probability assignments, and handles the structural translation between HubSpot's simpler pipeline model and Salesforce's more rigid stage-probability framework."
+        },
+        {
+          "question": "How much does a HubSpot to Salesforce migration cost?",
+          "answer": "HubSpot-to-Salesforce migrations typically cost $100K–500K depending on data volume, customization complexity, and whether custom objects need to migrate. The biggest cost drivers are engagement history volume (email, call, meeting records can number in the millions) and custom object complexity. Mine reduces data conversion costs by 40–50% by automating property-to-field mapping, pipeline translation, and engagement history migration."
+        }
+      ]
+    },
+    {
+      "slug": "oracle-ebs-to-netsuite",
+      "bridge_paragraph": "Oracle EBS uses the Trading Community Architecture (TCA) with deeply normalized customer tables and a multi-org structure of operating units and sets of books, while NetSuite uses a flatter entity model organized by subsidiary. Mine denormalizes Oracle's TCA hierarchy into NetSuite Customer records and maps Oracle org structures to NetSuite subsidiaries automatically.",
+      "faqs": [
+        {
+          "question": "How long does an Oracle EBS to NetSuite data migration take?",
+          "answer": "A typical Oracle EBS to NetSuite migration takes 9–18 months with traditional consulting approaches. The TCA denormalization, chart of accounts restructuring, and multi-org mapping each require deep analysis. The timeline depends on the number of operating units, custom DFF/KFF complexity, and whether you're migrating open transactions or full history. Mine reduces the data conversion portion to 6–10 weeks."
+        },
+        {
+          "question": "How do you restructure Oracle's chart of accounts for NetSuite?",
+          "answer": "Oracle EBS uses a multi-segment accounting flexfield (typically 6–10 segments) while NetSuite uses a dimensional chart of accounts with separate classification fields (subsidiary, department, class, location). Each Oracle segment must be analyzed and mapped to a NetSuite dimension. Segment combinations that were valid in Oracle must be validated against NetSuite's segment rules. Mine automates this analysis, proposing the optimal dimensional mapping based on your actual GL data patterns."
+        },
+        {
+          "question": "What data migrates from Oracle EBS to NetSuite?",
+          "answer": "Common objects include customers (HZ_PARTIES/HZ_CUST_ACCOUNTS to Customer), vendors (AP_SUPPLIERS to Vendor), GL accounts (GL_CODE_COMBINATIONS to Account), items (MTL_SYSTEM_ITEMS to Item), sales orders, purchase orders, open AP/AR invoices, and journal entries. Historical closed transactions are typically migrated as summary balances. Mine profiles your Oracle schema and identifies exactly which tables and fields need to move."
+        },
+        {
+          "question": "How do Oracle operating units map to NetSuite subsidiaries?",
+          "answer": "Oracle EBS operating units segment transactional data with complex security rules. NetSuite subsidiaries serve a similar purpose but with a different data sharing model — NetSuite shares entity masters across subsidiaries by default while Oracle partitions by operating unit. The mapping requires business decisions about which Oracle orgs become NetSuite subsidiaries vs. departments. Mine analyzes your org structure and proposes the mapping with cross-org customer consolidation rules."
+        },
+        {
+          "question": "How much does an Oracle EBS to NetSuite migration cost?",
+          "answer": "Oracle EBS to NetSuite migrations typically cost $1M–4M through consulting firms, with data conversion representing 25–35% of the total. The cost is driven by TCA complexity, chart of accounts restructuring, number of operating units, and open transaction volume. Mine reduces the data conversion cost by 40–50% through automated TCA profiling, COA mapping, and transaction validation."
+        }
+      ]
+    },
+    {
+      "slug": "dynamics-gp-to-dynamics-365",
+      "bridge_paragraph": "Dynamics GP uses a proprietary Dexterity-based SQL Server schema with cryptic table names (RM00101 for customers, PM00200 for vendors, GL00100 for accounts) and a flat, wide-table design, while Dynamics 365 uses the Dataverse entity model or X++ data entities. Mine translates GP's legacy naming conventions to D365's modern entity framework automatically.",
+      "faqs": [
+        {
+          "question": "How long does a Dynamics GP to Dynamics 365 migration take?",
+          "answer": "A typical Dynamics GP to Dynamics 365 migration takes 6–12 months end-to-end, with the data conversion workstream consuming 2–4 months. The timeline depends on whether you're targeting D365 Finance & Operations or Business Central, the volume of ISV third-party data, and how much GL history you're migrating. Mine reduces the data conversion to 4–8 weeks."
+        },
+        {
+          "question": "What are GP's table names and how do they map to D365?",
+          "answer": "Dynamics GP uses non-descriptive table names inherited from its Dexterity framework — RM00101 is the Customer Master, PM00200 is the Vendor Master, GL00100 is the Account Master, SOP10100 is Sales Transaction Work. D365 uses descriptive entity names. The mapping requires a crosswalk covering hundreds of tables, and GP's documentation is sparse. Mine has built-in knowledge of GP's naming conventions and maps them to D365 entities automatically."
+        },
+        {
+          "question": "Should we migrate to D365 Finance & Operations or Business Central?",
+          "answer": "The choice depends on your company's complexity and scale. Finance & Operations is enterprise-grade with advanced manufacturing, project accounting, and multi-entity capabilities. Business Central is designed for mid-market companies and is simpler to implement and maintain. If you're under $500M in revenue with straightforward operations, Business Central is likely the better fit. Mine generates different mappings depending on your target — the data entity schemas differ significantly between the two platforms."
+        },
+        {
+          "question": "How much GP history should we migrate to D365?",
+          "answer": "Most companies migrate 2–3 years of detailed transaction history plus summary opening balances for older periods. GP stores history across separate tables (GL20000 for open year, GL30000 for history) and you need to decide how far back to go for each sub-ledger. Migrating everything is possible but increases timeline and cost. Mine analyzes your GP history tables and recommends the optimal cutover strategy based on data volume and reporting requirements."
+        },
+        {
+          "question": "How much does a Dynamics GP to D365 migration cost?",
+          "answer": "GP-to-D365 migrations typically cost $300K–1.5M depending on whether you're targeting F&O or Business Central, the volume of ISV data, and historical depth. Business Central implementations are generally less expensive. The data conversion workstream is typically 20–30% of the total. Mine reduces that portion by 40–50% through automated table mapping, ISV data identification, and sub-ledger reconciliation."
+        }
+      ]
+    },
+    {
+      "slug": "dynamics-ax-to-dynamics-365",
+      "bridge_paragraph": "Dynamics AX 2012 allows direct SQL table access (CustTable, VendTable, InventTable) while D365 Finance & Operations requires data import through data entities (CustCustomerV3Entity, VendVendorV2Entity) that aggregate multiple tables with business logic layers. Mine maps AX's direct table references to the correct D365 data entities automatically — including fields not exposed in standard entities.",
+      "faqs": [
+        {
+          "question": "How long does a Dynamics AX to D365 F&O migration take?",
+          "answer": "A typical AX 2012 to D365 F&O migration takes 8–16 months, with the data conversion workstream running 3–6 months. The timeline depends on the volume of AOT customizations, financial dimension complexity, and whether you're migrating full transaction history or selective data. AX 2009 migrations take longer due to greater data model differences. Mine reduces the data conversion to 6–10 weeks."
+        },
+        {
+          "question": "What changes between AX 2012 and D365 F&O?",
+          "answer": "The most significant changes are: D365 requires data import through data entities instead of direct table access, the financial dimensions framework was restructured, AOT overlayering was replaced with extensions, and the deployment model moved from on-premise to cloud. These aren't just version differences — they require re-architecting how custom data is stored and accessed. Mine profiles your AX customizations and generates D365-compatible mapping for each change."
+        },
+        {
+          "question": "How does the Business Partner conversion work for AX?",
+          "answer": "Unlike SAP's BP conversion, AX-to-D365 doesn't require merging customers and vendors into a single entity. However, D365 uses the global address book and party model differently than AX 2012. Customer and vendor addresses, contact information, and party relationships need to be migrated through specific data entities. Mine maps these relationships automatically, including party-based address sharing between customer and vendor records."
+        },
+        {
+          "question": "What happens to AX customizations in D365?",
+          "answer": "AX allowed direct overlayering of standard objects through the AOT — adding fields to standard tables, modifying forms, and extending classes. D365 eliminated overlayering in favor of extensions. Custom fields added via overlayering must become extension fields, and custom tables need corresponding data entities. Mine compares your AX schema against the standard baseline, catalogs every customization, and proposes D365 extension mappings."
+        },
+        {
+          "question": "How much does an AX to D365 migration cost?",
+          "answer": "AX-to-D365 F&O migrations typically cost $800K–3M through consulting firms, with data conversion representing 25–35% of the total. The cost scales with customization volume — heavily modified AX installations with dozens of custom tables and overlayered objects are more expensive. Mine reduces the data conversion portion by 40–50% through automated customization detection, data entity mapping, and dimension validation."
+        }
+      ]
+    },
+    {
+      "slug": "salesforce-to-hubspot",
+      "bridge_paragraph": "Salesforce uses strongly typed fields with validation rules, lookup and master-detail relationships, record types, and complex sharing rules, while HubSpot uses a flexible property-based model with simpler but less structured relationships. Mine translates Salesforce's rigid schema to HubSpot's property model automatically — analyzing actual data content, not just declared field types.",
+      "faqs": [
+        {
+          "question": "How long does a Salesforce to HubSpot data migration take?",
+          "answer": "A typical Salesforce to HubSpot migration takes 2–6 months with traditional approaches. The timeline depends on the number of custom objects, complexity of Apex/Flow automation to recreate, volume of engagement history, and whether you need HubSpot Enterprise for custom objects. Simple orgs with standard objects can migrate faster. Mine reduces the data conversion to 2–4 weeks."
+        },
+        {
+          "question": "What Salesforce data can be migrated to HubSpot?",
+          "answer": "Core objects migrate well: Accounts to Companies, Contacts to Contacts, Opportunities to Deals, Cases to Tickets, Tasks/Events to activity engagements. Products and price books map to HubSpot's product catalog. Custom objects require HubSpot Enterprise tier. Salesforce-specific features like validation rules, formula fields, and Apex triggers don't migrate — they need to be rebuilt using HubSpot workflows and calculated properties. Mine maps all data objects and generates a field-by-field specification."
+        },
+        {
+          "question": "Do we need HubSpot Enterprise to migrate Salesforce custom objects?",
+          "answer": "Yes — HubSpot custom objects are only available on the Enterprise tier. If you're on HubSpot Professional, custom object data must either be modeled using standard objects with custom properties, archived, or kept in an external system. Mine profiles your Salesforce custom objects and classifies which ones need true custom objects vs. which can be represented using standard HubSpot objects with custom properties."
+        },
+        {
+          "question": "How do Salesforce Leads work in HubSpot?",
+          "answer": "HubSpot doesn't have a separate Lead object — all people are Contacts with a lifecycle stage property. Unconverted Salesforce Leads become HubSpot Contacts with lifecycle stage set to 'Lead' or 'Subscriber'. Converted Leads are matched to their Account-Contact pairs. Mine generates routing rules based on Lead status, conversion status, and Account associations to ensure every Salesforce Lead ends up in the right HubSpot state."
+        },
+        {
+          "question": "How much does a Salesforce to HubSpot migration cost?",
+          "answer": "Salesforce-to-HubSpot migrations typically cost $100K–500K depending on org complexity, engagement history volume, and custom object count. Companies often save $50K–200K annually in licensing by switching from Salesforce to HubSpot, which offsets migration costs. Mine reduces the data conversion cost by 40–50% by automating field mapping, pipeline translation, and engagement history migration."
+        }
+      ]
+    },
+    {
+      "slug": "quickbooks-to-netsuite",
+      "bridge_paragraph": "QuickBooks Enterprise uses a flat, single-segment chart of accounts with simple customer and vendor records, while NetSuite uses a multi-dimensional accounting structure with subsidiaries, departments, classes, and locations. Mine decomposes QuickBooks' embedded account segments into NetSuite's dimensional model using pattern recognition on your actual chart of accounts.",
+      "faqs": [
+        {
+          "question": "How long does a QuickBooks to NetSuite data migration take?",
+          "answer": "A typical QuickBooks Enterprise to NetSuite migration takes 2–4 months with traditional approaches — shorter than ERP-to-ERP migrations because QuickBooks has a simpler data model. The timeline depends on transaction history depth, chart of accounts complexity, and whether you're migrating open transactions or summary balances. Mine reduces this to 2–3 weeks."
+        },
+        {
+          "question": "How do you restructure QuickBooks' chart of accounts for NetSuite?",
+          "answer": "QuickBooks uses a flat chart where departments and projects are often embedded in account names (e.g., '6100 - Office Supplies - Marketing'). NetSuite separates the account (6100 Office Supplies) from the classification (Department: Marketing). Mine uses pattern recognition to analyze your QuickBooks account names and propose the dimensional decomposition — which parts become NetSuite accounts, which become departments, and which become classes or locations."
+        },
+        {
+          "question": "What's the best way to extract data from QuickBooks Enterprise?",
+          "answer": "QuickBooks doesn't expose a clean relational database. The main options are: IIF export (text-based, loses some fields), QODBC driver (SQL access but slow with query limitations), CSV exports from reports, or direct QBW file access via SDK. QODBC provides the most complete data. Mine supports all these formats and flags data fidelity differences between extraction methods."
+        },
+        {
+          "question": "Should we migrate full transaction history or just opening balances?",
+          "answer": "Most companies migrate 1–2 years of detailed transaction history plus summary opening balance journals for older periods. Full history migration is possible but increases timeline and data volume significantly. The decision depends on reporting requirements and audit needs. Mine analyzes your QuickBooks transaction tables and recommends the optimal cutover strategy with volume projections for each approach."
+        },
+        {
+          "question": "How much does a QuickBooks to NetSuite migration cost?",
+          "answer": "QuickBooks-to-NetSuite migrations typically cost $50K–200K including the NetSuite implementation. Data conversion is usually 15–25% of the total because QuickBooks' simpler data model requires less transformation. The main cost drivers are chart of accounts restructuring and transaction history depth. Mine reduces the data conversion portion by 40–50%."
+        }
+      ]
+    },
+    {
+      "slug": "siebel-to-salesforce",
+      "bridge_paragraph": "Siebel CRM uses a highly normalized on-premise relational model with extension columns (ATTRIB_01 through ATTRIB_50), multi-value groups for many-to-many relationships, and decades of accumulated customizations, while Salesforce uses a cloud-native object model with explicit custom fields and junction objects. Mine reads Siebel's repository metadata to decode extension columns into meaningful Salesforce field mappings.",
+      "faqs": [
+        {
+          "question": "How long does a Siebel CRM to Salesforce migration take?",
+          "answer": "A typical Siebel to Salesforce migration takes 12–18 months with traditional consulting approaches — it's one of the longer CRM migrations because Siebel installations are deeply customized after years of operation. The mapping work is complicated by Siebel's extension column architecture, which requires repository metadata analysis to understand what each generic column actually stores. Mine reduces the data conversion to 6–10 weeks."
+        },
+        {
+          "question": "How do Siebel extension columns work and how do they map to Salesforce?",
+          "answer": "Siebel stores custom data in generic extension columns (ATTRIB_01 through ATTRIB_50 and X_CUSTOM_01 through X_CUSTOM_50) on base tables. The column's meaning is defined in Siebel's repository metadata, not the database schema. A single table might have 30 extension columns each storing different data depending on the business component configuration. Mine reads the repository to decode each column's purpose and creates explicitly named Salesforce custom fields for each."
+        },
+        {
+          "question": "What data typically migrates from Siebel to Salesforce?",
+          "answer": "Core CRM data migrates: accounts (S_ORG_EXT), contacts (S_CONTACT), opportunities (S_OPTY), service requests (S_SRV_REQ), activities (S_EVT_ACT), products (S_PROD_INT), and assets (S_ASSET). Multi-value group relationships (stored in intersection tables like S_PARTY_PER) migrate to Salesforce junction objects or AccountContactRelation. Siebel's integration objects, workflow configurations, and assignment rules don't migrate — they need Salesforce-native rebuilds."
+        },
+        {
+          "question": "How do Siebel's multi-value groups work in Salesforce?",
+          "answer": "Siebel uses multi-value groups (MVGs) for many-to-many relationships — for example, a contact associated with multiple accounts with different roles. These are stored in intersection tables with relationship attributes. Salesforce uses junction objects or the native AccountContactRelation for similar patterns. Mine profiles each MVG, identifies the intersection table, and maps it to the appropriate Salesforce relationship pattern with role and date attributes preserved."
+        },
+        {
+          "question": "How much does a Siebel to Salesforce migration cost?",
+          "answer": "Siebel-to-Salesforce migrations are among the most expensive CRM transitions, typically costing $1.5M–5M through large consulting firms. The cost is driven by Siebel's deep customization, extension column complexity, and the sheer volume of data accumulated over years of operation. The data mapping workstream alone can take 3–4 months manually. Mine reduces that cost by 40–50% through automated repository analysis, extension column decoding, and MVG-to-junction-object mapping."
+        }
+      ]
+    },
+    {
+      "slug": "sap-ecc-to-netsuite",
+      "bridge_paragraph": "SAP ECC uses a deeply normalized organizational model — company codes, sales organizations, plants, storage locations — with customer data split across KNA1, KNB1, and KNVV tables, while NetSuite uses a subsidiary-based hierarchy with flatter entity records. Mine maps SAP's multi-dimensional org structure to NetSuite's subsidiary model automatically, restructuring charts of accounts and material masters in the process.",
+      "faqs": [
+        {
+          "question": "How long does an SAP ECC to NetSuite migration take?",
+          "answer": "A typical SAP ECC to NetSuite migration takes 12–18 months with traditional consulting approaches. This is one of the more complex ERP-to-ERP migrations because SAP's organizational hierarchy and NetSuite's subsidiary model are structurally different. Timeline depends on the number of company codes, material master complexity, and open transaction volume. Mine reduces the data conversion to 6–10 weeks."
+        },
+        {
+          "question": "How do SAP company codes map to NetSuite subsidiaries?",
+          "answer": "SAP's organizational hierarchy — company codes, sales organizations, distribution channels, divisions, plants — is more granular than NetSuite's subsidiary model. There's no one-to-one mapping. Companies must decide which SAP org units become subsidiaries, which become departments or classes, and how cross-company transactions become intercompany journals. Mine analyzes your SAP org structure and proposes the NetSuite mapping with downstream impacts documented."
+        },
+        {
+          "question": "What happens to SAP's material master in NetSuite?",
+          "answer": "SAP's material master spans MARA (general), MARC (plant), MVKE (sales org), MBEW (valuation), and MARD (storage location) — a single material can have dozens of records across these views. NetSuite uses a single Item record with subsidiary-level pricing and inventory. Flattening SAP's multi-view structure requires deciding which attributes to carry forward, which to archive, and how plant-level data maps to NetSuite locations. Mine profiles all material views and proposes the consolidation strategy."
+        },
+        {
+          "question": "Can SAP and NetSuite run in parallel during the migration?",
+          "answer": "Yes, most companies run both systems in parallel during a transition period. SAP handles day-to-day operations while NetSuite is loaded and validated. Mine supports iterative migration — running initial loads, validating data, fixing issues, and running delta loads for records that changed since the last load. This parallel approach reduces cutover risk."
+        },
+        {
+          "question": "How much does an SAP ECC to NetSuite migration cost?",
+          "answer": "SAP-to-NetSuite migrations typically cost $1.5M–5M through consulting firms, with data conversion representing 30–40% of the total. The cost is driven by organizational structure complexity, material master volume, and the depth of SAP customization. Mine reduces the data conversion cost by 40–50% through automated org mapping, material master consolidation, and chart of accounts restructuring."
+        }
+      ]
+    },
+    {
+      "slug": "oracle-ebs-to-oracle-cloud",
+      "bridge_paragraph": "Despite being the same vendor, Oracle EBS and Oracle Cloud use fundamentally different data architectures — Cloud requires data loading through FBDI (File-Based Data Import) templates with exact column structures, and EBS's Descriptive Flexfields must be converted to Cloud's different DFF framework. Mine generates correctly formatted FBDI files from EBS data automatically, handling the loading sequences and dependency chains.",
+      "faqs": [
+        {
+          "question": "How long does an Oracle EBS to Oracle Cloud migration take?",
+          "answer": "A typical Oracle EBS to Cloud ERP migration takes 9–18 months, making it one of the longer enterprise ERP migrations despite being an intra-vendor upgrade. The timeline is driven by FBDI template complexity, DFF conversion, chart of accounts restructuring for Cloud's tree-based hierarchies, and the strict loading sequence requirements. Mine reduces the data conversion to 6–10 weeks."
+        },
+        {
+          "question": "What are FBDI templates and why are they complicated?",
+          "answer": "Oracle Cloud requires data to be loaded through File-Based Data Import (FBDI) templates — pre-formatted CSV files with exact column ordering, mandatory field defaults, and lookup validations. Each business object (customers, suppliers, invoices, journals) has its own FBDI template with different rules. A single missing lookup value or wrong column order causes the entire load to fail. Mine generates correctly formatted FBDI files from EBS data automatically, including dependency sequencing."
+        },
+        {
+          "question": "How does Oracle Cloud differ from Oracle EBS for customizations?",
+          "answer": "Oracle Cloud is a SaaS platform with significantly less customization flexibility than EBS. EBS DFFs, custom tables, and Forms personalizations often have no direct Cloud equivalent. Some can use Cloud's extensible flexfields, others require Oracle Application Composer, and some must be retired entirely. Mine profiles all EBS customizations and categorizes them by Cloud compatibility — what migrates, what needs redesign, and what gets archived."
+        },
+        {
+          "question": "How does the chart of accounts change between EBS and Cloud?",
+          "answer": "EBS uses accounting flexfield value sets with independent or dependent validation. Oracle Cloud uses tree-based hierarchies for each COA segment, which requires explicitly defining parent-child relationships. The conversion from value sets to trees is non-trivial and affects all financial reporting. Mine analyzes your EBS value sets and generates the Cloud tree hierarchy structures with parent-child relationships derived from your existing segment attributes."
+        },
+        {
+          "question": "How much does an Oracle EBS to Oracle Cloud migration cost?",
+          "answer": "Oracle EBS to Cloud migrations typically cost $1M–4M through consulting firms, depending on module scope, customization complexity, and data history requirements. Oracle's own Cloud Migration Toolkit covers standard data but not custom DFFs or non-standard objects. Mine reduces the data conversion cost by 40–50% by automating FBDI generation, DFF conversion, and loading sequence management."
+        }
+      ]
+    },
+    {
+      "slug": "sage-intacct-to-netsuite",
+      "bridge_paragraph": "Sage Intacct uses up to 10 user-defined dimensions that can be flexibly applied at transaction header and line level, while NetSuite uses a fixed classification structure of subsidiaries, departments, classes, and locations. Mine analyzes how each Intacct dimension is actually used in your data and maps it to the optimal NetSuite classification field — preserving reporting continuity.",
+      "faqs": [
+        {
+          "question": "How long does a Sage Intacct to NetSuite migration take?",
+          "answer": "A typical Sage Intacct to NetSuite migration takes 3–6 months with traditional approaches. Despite both being cloud-native ERPs, the dimensional accounting restructuring, multi-entity mapping, and custom object translation add significant complexity. Timeline depends on the number of user-defined dimensions, active contracts, and custom Platform Services objects. Mine reduces this to 3–5 weeks."
+        },
+        {
+          "question": "How do Sage Intacct's dimensions map to NetSuite?",
+          "answer": "Intacct supports up to 10 user-defined dimensions with flexible application rules. NetSuite uses a fixed set — subsidiary, department, class, location — plus custom segments. Not all Intacct dimensions map cleanly to NetSuite's structure. Some may need to become custom segments, custom fields, or even separate custom records. Mine profiles each dimension's cardinality, usage patterns, and reporting dependencies to recommend the optimal NetSuite target."
+        },
+        {
+          "question": "What about Intacct's multi-entity consolidation in NetSuite?",
+          "answer": "Intacct's multi-entity model supports top-level and child entities with intercompany elimination rules and currency translation. NetSuite OneWorld uses a different subsidiary hierarchy and elimination subsidiary concept. The consolidation structure, elimination journal rules, and translation methods all need to be redesigned. Mine maps the entity hierarchy and documents the consolidation rule translation so the NetSuite configuration can be built correctly."
+        },
+        {
+          "question": "Can Intacct contract billing data migrate to NetSuite?",
+          "answer": "Intacct's contract and revenue management module stores contract schedules, billing schedules, and recognition plans in a purpose-built model. NetSuite's Advanced Revenue Management uses different structures. Active contracts with in-progress revenue schedules are the trickiest — they require period-by-period reconciliation to ensure revenue recognition continuity. Mine maps the data structures and flags contracts that need cutover validation."
+        },
+        {
+          "question": "How much does a Sage Intacct to NetSuite migration cost?",
+          "answer": "Intacct-to-NetSuite migrations typically cost $150K–500K depending on dimensional complexity, contract billing volume, and custom Platform Services objects. The data conversion workstream is 20–30% of the total. The biggest cost driver is the dimensional restructuring — if you have 7+ active dimensions, the mapping and validation work is significantly more complex. Mine reduces that cost by 40–50%."
+        }
+      ]
+    },
+    {
+      "slug": "legacy-database-to-salesforce",
+      "bridge_paragraph": "Legacy databases — whether Microsoft Access, custom SQL Server apps, FoxPro, or FileMaker — have no standard schema, undocumented relationships, and decades of accumulated data quality issues. Mine profiles any relational database and infers table relationships from data patterns, even when foreign keys aren't defined and documentation doesn't exist.",
+      "faqs": [
+        {
+          "question": "How long does a legacy database to Salesforce migration take?",
+          "answer": "A legacy database to Salesforce migration typically takes 4–8 months with traditional approaches. The timeline is highly variable because legacy databases have no standard schema — every one is unique. The bulk of the time is spent on discovery: understanding table relationships, decoding cryptic column names, and identifying data quality issues. Mine reduces this to 3–6 weeks by automating schema discovery and relationship inference."
+        },
+        {
+          "question": "What if our legacy database has no documentation?",
+          "answer": "This is extremely common and it's exactly the scenario Mine is built for. Mine connects to your database (SQL Server, MySQL, PostgreSQL, SQLite, or CSV exports), profiles every table and column, analyzes data value distributions, and infers relationships by matching column values across tables. It generates a complete data dictionary and entity relationship diagram that you likely don't have — then proposes Salesforce object mappings based on the discovered structure."
+        },
+        {
+          "question": "How does Mine handle inconsistent data types in legacy databases?",
+          "answer": "Legacy databases commonly store dates as strings, phone numbers as integers, booleans as Y/N or 1/0, and currencies without decimal precision. Mine performs content analysis on every column — sampling actual data values to determine the real data type regardless of what the schema declares. A column declared as VARCHAR(50) that only contains dates will be flagged for Date field mapping in Salesforce, not Text."
+        },
+        {
+          "question": "What legacy database types does Mine support?",
+          "answer": "Mine supports SQL Server, MySQL, PostgreSQL, Oracle, SQLite, and Microsoft Access directly. For databases that can't be connected (FoxPro, FileMaker, mainframe exports), you export to CSV and Mine profiles the files with the same depth of analysis. The profiling quality is the same regardless of source format — Mine analyzes data content, not just schema metadata."
+        },
+        {
+          "question": "How much does a legacy database to Salesforce migration cost?",
+          "answer": "Legacy-to-Salesforce migrations typically cost $200K–800K depending on database size, complexity, and data quality. The discovery and mapping phase often costs more than the actual data loading because someone has to reverse-engineer the undocumented schema. Mine reduces the total cost by 40–50% by automating the most expensive part: schema discovery, relationship inference, and field mapping."
+        }
+      ]
+    }
+  ]

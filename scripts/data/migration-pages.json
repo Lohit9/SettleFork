@@ -1361,6 +1361,902 @@
         "related_slugs": ["siebel-to-salesforce", "oracle-ebs-to-salesforce", "sap-ecc-to-salesforce", "hubspot-to-salesforce"],
         "is_published": true,
         "display_order": 15
-      }
-    ]
+      },
+      {
+        "slug": "salesforce-to-netsuite",
+        "source_system": "Salesforce",
+        "target_system": "NetSuite",
+        "source_slug": "salesforce",
+        "target_slug": "netsuite",
+        "source_category": "CRM",
+        "target_category": "ERP",
+        "meta_title": "Salesforce to NetSuite Data Migration | Mine",
+        "meta_description": "Automate your Salesforce to NetSuite data migration. AI-powered mapping for accounts, contacts, opportunities, and custom objects. Migrate in weeks.",
+        "hero_headline": "Salesforce to NetSuite Data Migration",
+        "hero_subheadline": "Moving CRM data into your new ERP? Mine automates the field mapping between Salesforce's object model and NetSuite's entity structure — preserving relationships, custom fields, and transaction history.",
+        "overview_paragraphs": [
+        "Salesforce to NetSuite data migration happens when companies adopt NetSuite as their ERP and want to consolidate CRM data into NetSuite's built-in CRM module rather than maintaining two separate systems. This is common during ERP implementations where leadership decides that running Salesforce alongside NetSuite creates unnecessary integration complexity, duplicate data entry, and reconciliation overhead. It's also driven by cost — eliminating Salesforce licensing while leveraging NetSuite's included CRM capabilities can save $50K-200K annually for mid-market companies.",
+        "The technical challenge is mapping Salesforce's highly customizable object model to NetSuite's more structured entity framework. Salesforce custom objects with lookup and master-detail relationships, formula fields, roll-up summaries, and validation rules have no direct NetSuite equivalent. NetSuite uses custom record types with different relationship patterns. Salesforce's Opportunity-to-Quote-to-Order pipeline maps differently to NetSuite's Estimate-to-Sales Order-to-Invoice transaction chain. Multi-currency handling, picklist values, and record type-based page layouts all require translation.",
+        "Companies typically handle this migration during the NetSuite implementation project, using CSV exports from Salesforce and NetSuite's import tools. The mapping work falls on the NetSuite implementation partner, adding weeks to the project timeline and thousands in consulting fees."
+        ],
+        "challenges": [
+        {
+        "title": "Salesforce object model to NetSuite entity mapping",
+        "description": "Salesforce uses Accounts, Contacts, Opportunities, and unlimited custom objects with flexible relationships. NetSuite uses Customers, Contacts, Opportunities, and custom record types with a more rigid entity hierarchy. The mapping isn't one-to-one — Salesforce Account hierarchies must be modeled using NetSuite's parent-child customer relationships, and Salesforce's polymorphic lookups have no NetSuite equivalent."
+        },
+        {
+        "title": "Opportunity pipeline to NetSuite transaction chain",
+        "description": "Salesforce Opportunities with Products (OpportunityLineItems) and stage-based forecasting must map to NetSuite's Estimate → Sales Order → Invoice transaction flow. Salesforce stage probabilities, forecast categories, and custom sales processes need to be translated into NetSuite's probability-based forecasting and transaction status model."
+        },
+        {
+        "title": "Custom fields and formula field translation",
+        "description": "Salesforce formula fields use SOQL-based expressions that don't exist in NetSuite. Roll-up summary fields aggregate child records in ways that NetSuite handles through saved searches or SuiteScript. Each formula must be analyzed to determine whether it becomes a NetSuite formula field, a saved search, or a SuiteScript-based calculation."
+        },
+        {
+        "title": "Activity and engagement history migration",
+        "description": "Salesforce Tasks, Events, and EmailMessages are linked to records via WhoId/WhatId polymorphic lookups. NetSuite stores activities differently — phone calls, tasks, events, and messages are linked through specific entity references. Preserving the complete activity timeline requires careful mapping of Salesforce's flexible association model to NetSuite's structured activity types."
+        }
+        ],
+        "data_objects": [
+        { "source_object": "Account", "target_object": "Customer", "notes": "Account hierarchies to parent-child customers" },
+        { "source_object": "Contact", "target_object": "Contact", "notes": "Contact roles and relationships" },
+        { "source_object": "Opportunity", "target_object": "Opportunity / Estimate", "notes": "Stage-to-status mapping" },
+        { "source_object": "OpportunityLineItem", "target_object": "Item line on transaction", "notes": "Product association" },
+        { "source_object": "Product2 / PricebookEntry", "target_object": "Item / Price Level", "notes": "Multi-pricebook to price levels" },
+        { "source_object": "Lead", "target_object": "Lead / Prospect", "notes": "Lead status mapping" },
+        { "source_object": "Case", "target_object": "Support Case", "notes": "Case fields and status" },
+        { "source_object": "Task", "target_object": "Task / Phone Call", "notes": "Activity type routing" },
+        { "source_object": "Event", "target_object": "Event", "notes": "Calendar events" },
+        { "source_object": "Campaign", "target_object": "Campaign", "notes": "Campaign member association" },
+        { "source_object": "Custom Objects", "target_object": "Custom Record Types", "notes": "Individual analysis required" }
+        ],
+        "how_mine_helps": [
+        "Mine auto-maps Salesforce Accounts to NetSuite Customers — preserving parent-child hierarchies, billing/shipping addresses, and custom field values with 90%+ confidence.",
+        "Opportunity pipeline data is mapped to NetSuite's transaction model with stage-to-status translation, probability alignment, and product line item association handled automatically.",
+        "Salesforce formula fields are analyzed and classified — identifying which can become NetSuite formula fields vs. which need saved searches or SuiteScript alternatives.",
+        "Mine generates a complete field-by-field mapping spec that your NetSuite implementation partner can use directly — cutting weeks off the implementation timeline."
+        ],
+        "migration_stats": {
+        "manual_timeline": "3–6 months",
+        "mine_timeline": "2–5 weeks",
+        "manual_cost": "$150K–500K",
+        "cost_reduction": "50–70%",
+        "manual_team": "2–5 consultants",
+        "mine_team": "1–2 internal resources"
+        },
+        "faqs": [
+        {
+        "question": "Should we use NetSuite's CRM or keep Salesforce?",
+        "answer": "That's a business decision Mine doesn't make for you, but Mine helps you evaluate it — by profiling your Salesforce data complexity, Mine shows exactly how much would need to map to NetSuite's CRM vs. what would require custom record types or integration. This informs the build-vs-buy decision."
+        },
+        {
+        "question": "Can Mine handle Salesforce custom objects in NetSuite?",
+        "answer": "Yes. Mine profiles each Salesforce custom object and proposes whether it maps to a NetSuite custom record type, a standard entity with custom fields, or a custom transaction. Relationship fields are translated to NetSuite's reference patterns."
+        },
+        {
+        "question": "How does Mine handle Salesforce's multi-pricebook model?",
+        "answer": "Salesforce supports multiple price books per product while NetSuite uses price levels and pricing groups. Mine analyzes your active pricebook usage and proposes the optimal NetSuite pricing structure — consolidating where possible and creating price levels where needed."
+        },
+        {
+        "question": "Does Mine migrate Salesforce reports and dashboards?",
+        "answer": "Mine migrates the data that reports are built on, and maps all field references to their NetSuite equivalents. The reports themselves need to be rebuilt as NetSuite saved searches, but Mine provides the field mapping documentation to accelerate that work."
+        }
+        ],
+        "keywords": {
+        "primary": "Salesforce to NetSuite data migration",
+        "secondary": ["migrate Salesforce to NetSuite", "Salesforce NetSuite migration tool", "SFDC to NetSuite ETL", "Salesforce to NetSuite CRM migration"],
+        "long_tail": ["how to migrate data from Salesforce to NetSuite", "Salesforce to NetSuite field mapping", "Salesforce accounts to NetSuite customers", "Salesforce to NetSuite migration cost", "Salesforce to NetSuite migration timeline"]
+        },
+        "related_slugs": ["netsuite-to-salesforce", "salesforce-to-hubspot", "hubspot-to-salesforce", "quickbooks-to-netsuite"],
+        "is_published": true,
+        "display_order": 16
+        },
+        {
+        "slug": "salesforce-to-dynamics-365",
+        "source_system": "Salesforce",
+        "target_system": "Microsoft Dynamics 365",
+        "source_slug": "salesforce",
+        "target_slug": "dynamics-365",
+        "source_category": "CRM",
+        "target_category": "ERP",
+        "meta_title": "Salesforce to Dynamics 365 Data Migration | Mine",
+        "meta_description": "Automate your Salesforce to Dynamics 365 data migration. AI-powered mapping for accounts, contacts, opportunities, and custom entities. Migrate in weeks.",
+        "hero_headline": "Salesforce to Dynamics 365 Data Migration",
+        "hero_subheadline": "Consolidating on the Microsoft stack? Mine automates the mapping between Salesforce's object model and Dynamics 365's Dataverse entity framework — preserving relationships, custom fields, and business logic.",
+        "overview_paragraphs": [
+        "Salesforce to Dynamics 365 migrations are driven by Microsoft stack consolidation. Companies that run Office 365, Azure, and Teams increasingly question why they're paying Salesforce premium pricing when Dynamics 365 integrates natively with their existing Microsoft ecosystem. This migration is especially common after CIO transitions where new leadership prefers a unified vendor strategy, or during enterprise license agreement renewals where Microsoft offers aggressive Dynamics 365 bundling against Salesforce renewals.",
+        "Despite both being major CRM platforms, the data models differ substantially. Salesforce uses a proprietary object model with Apex classes, Visualforce pages, and Lightning components. Dynamics 365 uses Dataverse (formerly Common Data Service) with Power Platform integration. Salesforce lookup and master-detail relationships map to Dataverse lookups and polymorphic lookups differently. Custom objects become custom entities, but field types, option sets (picklists), and business rules translate with varying fidelity. Salesforce's sharing model (OWD, profiles, permission sets) maps to Dynamics 365's security roles and business units through a different paradigm.",
+        "Companies typically use Microsoft's data migration tools or partner solutions like Scribe/TIBCO, KingswaySoft, or manual CSV export/import. Even with tools, the custom field mapping, picklist value alignment, and relationship translation require extensive manual effort — typically 3–8 months with dedicated CRM consultants."
+        ],
+        "challenges": [
+        {
+        "title": "Salesforce objects to Dataverse entities",
+        "description": "Salesforce standard and custom objects must map to Dataverse standard and custom entities. While conceptually similar (Account→Account, Contact→Contact), the field-level differences are significant — Salesforce Text(255) fields may need Dataverse Single Line of Text or Multiline, lookup relationships use different referencing patterns, and polymorphic fields like WhoId/WhatId have no direct Dataverse equivalent."
+        },
+        {
+        "title": "Picklist and option set alignment",
+        "description": "Salesforce picklists (including dependent picklists and record-type-specific picklist values) must map to Dynamics 365 option sets (global and local). The value-label structure is similar but the dependency model differs — Salesforce's record type-based picklist filtering has no exact Dynamics equivalent and may require business rules or form scripting."
+        },
+        {
+        "title": "Apex and automation logic translation",
+        "description": "Salesforce's Apex triggers, Process Builder flows, and Lightning flows contain business logic tied to data events. Dynamics 365 uses Power Automate, plugins, and business rules. While the data migrates, the automation logic must be rebuilt — and Mine flags which data fields are referenced by Salesforce automation so the D365 team knows what logic to recreate."
+        },
+        {
+        "title": "Salesforce sharing model to D365 security",
+        "description": "Salesforce's organization-wide defaults, role hierarchy, sharing rules, and manual shares control record visibility. Dynamics 365 uses business units, security roles, teams, and access teams. The access control translation affects which records are visible to which users post-migration and requires parallel security architecture design."
+        }
+        ],
+        "data_objects": [
+        { "source_object": "Account", "target_object": "Account", "notes": "Field-level differences despite same name" },
+        { "source_object": "Contact", "target_object": "Contact", "notes": "Relationship model differences" },
+        { "source_object": "Opportunity", "target_object": "Opportunity", "notes": "Sales process to BPF mapping" },
+        { "source_object": "OpportunityLineItem", "target_object": "Opportunity Product", "notes": "Product association" },
+        { "source_object": "Lead", "target_object": "Lead", "notes": "Lead qualification process differences" },
+        { "source_object": "Case", "target_object": "Case", "notes": "Case routing and SLA differences" },
+        { "source_object": "Campaign", "target_object": "Campaign", "notes": "Campaign response model" },
+        { "source_object": "Task / Event", "target_object": "Activity (Task / Appointment)", "notes": "Unified activity model in D365" },
+        { "source_object": "Product2 / PricebookEntry", "target_object": "Product / Price List Item", "notes": "Price list structure" },
+        { "source_object": "Quote / QuoteLineItem", "target_object": "Quote / Quote Product", "notes": "Quote-to-order process" },
+        { "source_object": "Custom Objects", "target_object": "Custom Entities", "notes": "Dataverse entity creation" },
+        { "source_object": "Attachment / ContentDocument", "target_object": "Note / Annotation", "notes": "File storage model" }
+        ],
+        "how_mine_helps": [
+        "Mine auto-maps Salesforce objects to Dataverse entities with field-level precision — detecting type mismatches (Text vs. Single Line, Number vs. Whole Number vs. Decimal) and proposing the correct D365 field type for each.",
+        "Picklist-to-option-set mapping is generated automatically, including dependent picklist analysis and record-type-specific value filtering — flagged where D365 business rules are needed to replicate the behavior.",
+        "Salesforce custom objects are profiled and mapped to Dataverse custom entities with relationship types (1:N, N:N) translated to D365's lookup and intersection entity patterns.",
+        "Mine catalogs every Salesforce field referenced by Apex triggers and flows, generating a dependency report so your D365 team knows exactly which Power Automate flows and plugins to build."
+        ],
+        "migration_stats": {
+        "manual_timeline": "4–8 months",
+        "mine_timeline": "3–6 weeks",
+        "manual_cost": "$200K–800K",
+        "cost_reduction": "50–70%",
+        "manual_team": "3–6 consultants",
+        "mine_team": "1–2 internal resources"
+        },
+        "faqs": [
+        {
+        "question": "Does Mine support migration to both D365 Sales and D365 Customer Engagement?",
+        "answer": "Yes. Both use Dataverse as the underlying data platform. Mine generates mappings to Dataverse entities regardless of which D365 app you're deploying — Sales, Customer Service, Field Service, or Marketing."
+        },
+        {
+        "question": "How does Mine handle Salesforce record types in Dynamics 365?",
+        "answer": "Salesforce record types are analyzed and mapped to D365 alternatives — either custom option sets that filter forms, business process flows that control page layouts, or separate entities where the record types represent fundamentally different data."
+        },
+        {
+        "question": "Can Mine migrate Salesforce files and attachments to D365?",
+        "answer": "Yes. Mine maps Salesforce Attachments, ContentDocuments, and ContentVersions to D365's Note/Annotation storage or SharePoint integration. File metadata, version history, and entity associations are preserved."
+        },
+        {
+        "question": "What about Salesforce AppExchange packages and managed package data?",
+        "answer": "Mine profiles managed package objects and fields alongside standard Salesforce data. Package-specific objects are flagged — you decide whether they map to D365 custom entities, third-party D365 solutions, or get archived."
+        }
+        ],
+        "keywords": {
+        "primary": "Salesforce to Dynamics 365 data migration",
+        "secondary": ["migrate Salesforce to D365", "Salesforce to Dynamics CRM migration tool", "SFDC to D365 ETL", "Salesforce to Microsoft Dynamics migration"],
+        "long_tail": ["how to migrate data from Salesforce to Dynamics 365", "Salesforce to D365 field mapping", "Salesforce to Dynamics 365 migration cost", "Salesforce to Dynamics 365 migration timeline", "Salesforce custom objects to Dataverse entities"]
+        },
+        "related_slugs": ["dynamics-365-to-salesforce", "salesforce-to-hubspot", "hubspot-to-salesforce", "dynamics-gp-to-dynamics-365"],
+        "is_published": true,
+        "display_order": 17
+        },
+        {
+        "slug": "dynamics-365-to-salesforce",
+        "source_system": "Microsoft Dynamics 365",
+        "target_system": "Salesforce",
+        "source_slug": "dynamics-365",
+        "target_slug": "salesforce",
+        "source_category": "CRM",
+        "target_category": "CRM",
+        "meta_title": "Dynamics 365 to Salesforce Data Migration | Mine",
+        "meta_description": "Automate your Dynamics 365 to Salesforce data migration. AI-powered mapping for accounts, contacts, opportunities, and custom entities. Migrate in weeks.",
+        "hero_headline": "Dynamics 365 to Salesforce Data Migration",
+        "hero_subheadline": "Standardizing on Salesforce? Mine automates the mapping between Dataverse entities and Salesforce objects — handling the field type translations, relationship conversions, and option set-to-picklist alignment that make this migration tedious.",
+        "overview_paragraphs": [
+        "Dynamics 365 to Salesforce migrations are most common after M&A events where the acquiring company runs Salesforce and needs to onboard the acquired entity's CRM data. They also happen when companies decide that Salesforce's ecosystem — AppExchange, Pardot/Marketing Cloud, Einstein AI — better serves their go-to-market strategy than Microsoft's CRM offering. Sales and marketing teams often drive this switch when they find Salesforce's user experience and third-party integration ecosystem superior for their workflows.",
+        "The migration requires translating Dataverse's entity model to Salesforce's object model. While conceptually similar, the implementation details differ — Dataverse uses globally unique identifiers (GUIDs), option sets with integer backing values, and a polymorphic activity party model. Salesforce uses 18-character alphanumeric IDs, picklists with text values, and separate Task/Event objects. Business process flows in D365 must be mapped to Salesforce's sales processes and record types. Custom entities with N:N relationships require junction objects in Salesforce.",
+        "Companies typically use Salesforce Data Loader or partner tools like Jitterbit and Informatica, but the schema translation work — especially for custom entities, option set values, and activity records — requires extensive manual mapping that adds months to the project."
+        ],
+        "challenges": [
+        {
+        "title": "Dataverse GUIDs to Salesforce IDs",
+        "description": "Dynamics 365 uses 128-bit GUIDs as primary keys while Salesforce uses 18-character alphanumeric IDs. All cross-entity references must be re-keyed during migration. Maintaining a GUID-to-Salesforce-ID crosswalk is critical for preserving relational integrity across accounts, contacts, opportunities, and custom objects."
+        },
+        {
+        "title": "Option sets to picklist value translation",
+        "description": "D365 option sets store integer backing values with display labels, and global option sets can be shared across entities. Salesforce picklists use text values and don't have a direct global picklist equivalent (global value sets are similar but behave differently). Each option set must be translated with exact value matching to ensure reporting continuity."
+        },
+        {
+        "title": "Activity party model to Salesforce activities",
+        "description": "Dynamics 365 uses a unified activity model with an activity party entity that allows multiple participants (to, from, cc, bcc, required, optional) on any activity. Salesforce uses separate Task and Event objects with simpler participant models (WhoId for contact, WhatId for related record). Decomposing D365's rich activity party structure into Salesforce's flatter model requires careful mapping decisions."
+        },
+        {
+        "title": "Business process flows to Salesforce sales processes",
+        "description": "D365 business process flows (BPFs) guide users through multi-stage processes with cross-entity navigation. Salesforce uses sales processes tied to record types and opportunity stages. BPFs that span multiple entities (Lead → Opportunity → Quote) must be decomposed into Salesforce's per-object process model."
+        }
+        ],
+        "data_objects": [
+        { "source_object": "Account", "target_object": "Account", "notes": "GUID to Salesforce ID re-keying" },
+        { "source_object": "Contact", "target_object": "Contact", "notes": "Party list relationships" },
+        { "source_object": "Opportunity", "target_object": "Opportunity", "notes": "BPF stage to opportunity stage" },
+        { "source_object": "Opportunity Product", "target_object": "OpportunityLineItem", "notes": "Product association" },
+        { "source_object": "Lead", "target_object": "Lead", "notes": "Qualification process mapping" },
+        { "source_object": "Case", "target_object": "Case", "notes": "Entitlement and SLA data" },
+        { "source_object": "Activity (Task/Appointment)", "target_object": "Task / Event", "notes": "Unified to split model" },
+        { "source_object": "Product / Price List", "target_object": "Product2 / PricebookEntry", "notes": "Price list structure" },
+        { "source_object": "Quote / Order / Invoice", "target_object": "Quote / Order", "notes": "Transaction flow" },
+        { "source_object": "Custom Entities", "target_object": "Custom Objects", "notes": "Entity to object translation" },
+        { "source_object": "Note / Annotation", "target_object": "ContentNote / File", "notes": "Attachment migration" }
+        ],
+        "how_mine_helps": [
+        "Mine auto-maps Dataverse entities to Salesforce objects with GUID-to-ID crosswalk generation — ensuring every relationship reference is re-keyed correctly across the full data model.",
+        "Option set values are extracted with their integer-label pairs and mapped to Salesforce picklist values — with exact match validation and a value translation table generated for each field.",
+        "D365 activity records with complex party lists are decomposed into Salesforce Tasks and Events with WhoId/WhatId associations derived from the activity party roles.",
+        "Business process flow stages are mapped to Salesforce sales process stages with probability values aligned to your forecasting model."
+        ],
+        "migration_stats": {
+        "manual_timeline": "3–6 months",
+        "mine_timeline": "2–5 weeks",
+        "manual_cost": "$150K–600K",
+        "cost_reduction": "50–70%",
+        "manual_team": "3–5 consultants",
+        "mine_team": "1–2 internal resources"
+        },
+        "faqs": [
+        {
+        "question": "How does Mine handle the GUID-to-Salesforce-ID conversion?",
+        "answer": "Mine generates a complete crosswalk table mapping every D365 GUID to its corresponding Salesforce ID after initial record creation. All lookup and relationship fields are then updated using this crosswalk to preserve referential integrity."
+        },
+        {
+        "question": "Can Mine migrate D365 custom entities to Salesforce custom objects?",
+        "answer": "Yes. Mine profiles each custom entity's fields, relationships, and option sets, then proposes equivalent Salesforce custom objects with appropriate field types, lookup relationships, and picklist values."
+        },
+        {
+        "question": "What about D365 business process flow data?",
+        "answer": "Mine maps BPF stages to Salesforce opportunity stages or custom process steps. Cross-entity BPFs that span Lead to Opportunity are decomposed into Salesforce's per-object sales processes with stage history preserved."
+        },
+        {
+        "question": "Does Mine handle D365's connection and connection role data?",
+        "answer": "Mine maps D365 connections to Salesforce relationship fields or custom junction objects depending on the connection type. Connection roles are translated to Salesforce contact roles or custom relationship descriptors."
+        }
+        ],
+        "keywords": {
+        "primary": "Dynamics 365 to Salesforce data migration",
+        "secondary": ["migrate Dynamics 365 to Salesforce", "D365 to Salesforce migration tool", "Dynamics CRM to SFDC ETL", "Microsoft Dynamics to Salesforce migration"],
+        "long_tail": ["how to migrate data from Dynamics 365 to Salesforce", "D365 to Salesforce field mapping", "Dynamics 365 to Salesforce migration cost", "Dynamics 365 to Salesforce migration timeline", "Dataverse to Salesforce object mapping"]
+        },
+        "related_slugs": ["salesforce-to-dynamics-365", "salesforce-to-hubspot", "dynamics-gp-to-dynamics-365", "siebel-to-salesforce"],
+        "is_published": true,
+        "display_order": 18
+        },
+        {
+        "slug": "netsuite-to-dynamics-365",
+        "source_system": "NetSuite",
+        "target_system": "Microsoft Dynamics 365",
+        "source_slug": "netsuite",
+        "target_slug": "dynamics-365",
+        "source_category": "ERP",
+        "target_category": "ERP",
+        "meta_title": "NetSuite to Dynamics 365 Data Migration | Mine",
+        "meta_description": "Automate your NetSuite to Dynamics 365 F&O or Business Central data migration. AI-powered mapping for customers, items, transactions, and subsidiaries.",
+        "hero_headline": "NetSuite to Dynamics 365 Data Migration",
+        "hero_subheadline": "Switching from NetSuite to Dynamics 365 Finance & Operations or Business Central? Mine automates the schema translation between NetSuite's subsidiary-based model and D365's legal entity structure.",
+        "overview_paragraphs": [
+        "NetSuite to Dynamics 365 migrations occur when companies decide to consolidate on Microsoft's enterprise stack — typically driven by existing Azure and Office 365 investments, ERP feature requirements that NetSuite doesn't cover (advanced manufacturing, project accounting), or PE/corporate mandate to standardize on a single vendor. This migration is also common when companies outgrow NetSuite's mid-market capabilities and need D365 Finance & Operations' enterprise-grade functionality.",
+        "The technical complexity centers on the fundamental architectural differences between the two platforms. NetSuite's subsidiary hierarchy with shared entity records differs from D365's legal entity model where data is partitioned by company. NetSuite's SuiteScript customizations, saved searches, and workflows must be reimagined in D365's Power Platform paradigm. Chart of accounts structures, item types, and transaction flows follow different patterns in each system.",
+        "Companies typically run this migration as part of a full D365 implementation, relying on the implementation partner to handle data conversion. The migration workstream alone — profiling, mapping, transforming, and validating — often consumes 25–30% of the total implementation budget and timeline."
+        ],
+        "challenges": [
+        {
+        "title": "NetSuite subsidiary hierarchy to D365 legal entities",
+        "description": "NetSuite's OneWorld organizes data by subsidiary with shared entity masters (customers, items) and subsidiary-specific transactions. D365 F&O partitions data by legal entity with cross-company data sharing configured separately. Determining which NetSuite subsidiaries become D365 legal entities vs. business units vs. financial dimensions requires deep architectural analysis."
+        },
+        {
+        "title": "Transaction model differences",
+        "description": "NetSuite's transaction types (sales order, invoice, cash sale, credit memo, vendor bill, vendor payment) each have specific behaviors and custom body/line fields. D365's transaction model uses different document types with separate posting profiles and number sequences. The lifecycle and status transitions differ between platforms."
+        },
+        {
+        "title": "Saved searches to D365 reporting",
+        "description": "NetSuite's saved searches serve as the primary reporting, data access, and integration mechanism. D365 uses SSRS reports, Power BI, data entities, and views. Critical saved searches must be translated — but they reference NetSuite-specific fields and formula syntax that has no direct D365 equivalent."
+        },
+        {
+        "title": "SuiteScript and workflow translation",
+        "description": "NetSuite customizations built with SuiteScript (client scripts, user event scripts, scheduled scripts) and SuiteFlow workflows contain business logic tied to data events. D365 uses X++ for server-side logic and Power Automate for workflow. Mine flags which data fields are touched by SuiteScript so the D365 team knows what logic to rebuild."
+        }
+        ],
+        "data_objects": [
+        { "source_object": "Customer", "target_object": "Customer / Customer Account", "notes": "Subsidiary to legal entity mapping" },
+        { "source_object": "Vendor", "target_object": "Vendor / Vendor Account", "notes": "Payment terms translation" },
+        { "source_object": "Item (Inventory/Service/Kit)", "target_object": "Released Product / Item", "notes": "Item type mapping" },
+        { "source_object": "Sales Order", "target_object": "Sales Order", "notes": "Transaction flow differences" },
+        { "source_object": "Purchase Order", "target_object": "Purchase Order", "notes": "Procurement process" },
+        { "source_object": "Invoice / Cash Sale", "target_object": "Free Text Invoice / Sales Invoice", "notes": "AR document types" },
+        { "source_object": "Vendor Bill", "target_object": "Vendor Invoice", "notes": "AP document processing" },
+        { "source_object": "Journal Entry", "target_object": "General Journal", "notes": "GL posting rules" },
+        { "source_object": "Account (COA)", "target_object": "Main Account / Chart of Accounts", "notes": "Dimensional restructuring" },
+        { "source_object": "Department / Class / Location", "target_object": "Financial Dimensions", "notes": "Classification to dimensions" },
+        { "source_object": "Employee", "target_object": "Worker / Employee", "notes": "HR data if applicable" },
+        { "source_object": "Custom Record Types", "target_object": "Custom Entities / Tables", "notes": "Individual analysis" }
+        ],
+        "how_mine_helps": [
+        "Mine profiles NetSuite's subsidiary hierarchy and proposes the D365 legal entity structure — mapping subsidiaries to legal entities, departments to financial dimensions, and intercompany rules to D365's cross-company posting.",
+        "Transaction types are mapped with status translation tables — NetSuite's transaction lifecycle to D365's document posting and status model, including custom body and line fields.",
+        "NetSuite's chart of accounts with department/class/location dimensions is restructured into D365's Main Account + financial dimensions framework with combination validation.",
+        "Mine generates a complete SuiteScript dependency report — cataloging every field referenced by custom scripts so the D365 team knows which Power Automate flows and X++ customizations to build."
+        ],
+        "migration_stats": {
+        "manual_timeline": "6–12 months",
+        "mine_timeline": "4–8 weeks",
+        "manual_cost": "$500K–2M",
+        "cost_reduction": "50–70%",
+        "manual_team": "5–10 consultants",
+        "mine_team": "2–3 internal resources"
+        },
+        "faqs": [
+        {
+        "question": "Does Mine support migration to both D365 F&O and Business Central?",
+        "answer": "Yes. Mine generates different mappings depending on your target. F&O uses X++ data entities while Business Central uses AL-based APIs and pages. You select the target during setup and Mine adapts the mapping logic accordingly."
+        },
+        {
+        "question": "How does Mine handle NetSuite's subsidiary-to-legal-entity mapping?",
+        "answer": "Mine profiles all subsidiaries, analyzes shared entity patterns, and proposes a D365 legal entity structure. Cross-subsidiary customers and intercompany transactions are flagged with recommended D365 intercompany posting rules."
+        },
+        {
+        "question": "Can Mine migrate NetSuite saved searches?",
+        "answer": "Mine doesn't recreate saved searches in D365, but it maps every field reference used in your saved searches to D365 equivalents — generating a translation document that accelerates report rebuilding in SSRS or Power BI."
+        },
+        {
+        "question": "What about NetSuite custom record types?",
+        "answer": "Mine profiles each custom record's fields, sublists, and relationships, then proposes equivalent D365 custom entities or tables with appropriate relationship patterns and field types."
+        }
+        ],
+        "keywords": {
+        "primary": "NetSuite to Dynamics 365 data migration",
+        "secondary": ["migrate NetSuite to D365", "NetSuite to Dynamics 365 migration tool", "NetSuite to D365 F&O ETL", "NetSuite to Business Central migration"],
+        "long_tail": ["how to migrate data from NetSuite to Dynamics 365", "NetSuite to D365 field mapping", "NetSuite subsidiary to D365 legal entity", "NetSuite to Dynamics 365 migration cost", "NetSuite to Dynamics 365 migration timeline"]
+        },
+        "related_slugs": ["dynamics-365-to-netsuite", "netsuite-to-salesforce", "sap-ecc-to-dynamics-365", "quickbooks-to-netsuite"],
+        "is_published": true,
+        "display_order": 19
+        },
+        {
+        "slug": "dynamics-365-to-netsuite",
+        "source_system": "Microsoft Dynamics 365",
+        "target_system": "NetSuite",
+        "source_slug": "dynamics-365",
+        "target_slug": "netsuite",
+        "source_category": "ERP",
+        "target_category": "ERP",
+        "meta_title": "Dynamics 365 to NetSuite Data Migration | Mine",
+        "meta_description": "Automate your Dynamics 365 to NetSuite data migration. AI-powered mapping for customers, GL, items, and transactions. Cut migration time by 70%.",
+        "hero_headline": "Dynamics 365 to NetSuite Data Migration",
+        "hero_subheadline": "Moving from Dynamics 365 to NetSuite? Mine automates the schema translation between D365's legal entity model and NetSuite's subsidiary structure — including financial dimensions, transaction types, and custom entities.",
+        "overview_paragraphs": [
+        "Dynamics 365 to NetSuite migrations happen when companies prefer NetSuite's cloud-native architecture and mid-market focus over Dynamics 365's complexity. This is common among companies in the $50M–$500M revenue range that find D365 Finance & Operations over-engineered for their needs, or Business Central too limited in certain areas. PE portfolio companies frequently make this switch to standardize on NetSuite across acquisitions. The appeal is NetSuite's unified ERP/CRM, simpler administration, and Oracle's cloud infrastructure.",
+        "The migration involves translating D365's legal entity-partitioned data model to NetSuite's subsidiary hierarchy. D365's financial dimensions (department, cost center, purpose) must map to NetSuite's department/class/location classification plus custom segments. Data entities in D365 — the primary export mechanism — don't map one-to-one to NetSuite's record types. Transaction posting profiles, number sequences, and workflow approvals all differ between platforms.",
+        "Companies typically manage this migration through their NetSuite implementation partner using CSV exports from D365 data entities. The mapping and transformation work is manual and repetitive — especially for companies with heavy D365 customization."
+        ],
+        "challenges": [
+        {
+        "title": "D365 legal entities to NetSuite subsidiaries",
+        "description": "D365 F&O partitions transactional data by legal entity with cross-company data sharing configured at the table level. NetSuite's OneWorld uses a subsidiary hierarchy where entity masters (customers, items) can be shared across subsidiaries. The structural inversion — D365 partitions by default while NetSuite shares by default — requires careful analysis of which records need subsidiary-level segmentation."
+        },
+        {
+        "title": "Financial dimensions to NetSuite classifications",
+        "description": "D365 supports unlimited financial dimensions with complex combination rules and default dimension templates. NetSuite uses a fixed set of classifications (subsidiary, department, class, location) plus custom segments. Mapping D365's flexible dimension model to NetSuite's structured classification system may require consolidating multiple D365 dimensions into fewer NetSuite fields."
+        },
+        {
+        "title": "Data entity export to NetSuite import alignment",
+        "description": "D365's data entities aggregate multiple tables into flattened export structures. NetSuite's CSV import expects data organized by record type with specific column patterns. The structural mismatch means D365 data entity exports can't be imported directly into NetSuite — transformation and restructuring is required for every object."
+        },
+        {
+        "title": "Posting profiles and GL integration differences",
+        "description": "D365 uses posting profiles to control which GL accounts receive debits and credits for each transaction type. NetSuite uses GL impact settings and custom GL mapping rules. The GL integration logic must be rebuilt in NetSuite, and historical transactions need their GL references translated."
+        }
+        ],
+        "data_objects": [
+        { "source_object": "Customer Account", "target_object": "Customer", "notes": "Legal entity to subsidiary" },
+        { "source_object": "Vendor Account", "target_object": "Vendor", "notes": "Payment terms and methods" },
+        { "source_object": "Released Product", "target_object": "Item", "notes": "Product dimension to item attribute" },
+        { "source_object": "Sales Order", "target_object": "Sales Order", "notes": "Document flow differences" },
+        { "source_object": "Purchase Order", "target_object": "Purchase Order", "notes": "Procurement process" },
+        { "source_object": "General Journal", "target_object": "Journal Entry", "notes": "Financial dimension translation" },
+        { "source_object": "Main Account", "target_object": "Account", "notes": "COA restructuring" },
+        { "source_object": "Financial Dimensions", "target_object": "Department / Class / Location", "notes": "Dimension consolidation" },
+        { "source_object": "Vendor Invoice", "target_object": "Vendor Bill", "notes": "AP documents" },
+        { "source_object": "Free Text Invoice", "target_object": "Invoice", "notes": "AR documents" },
+        { "source_object": "Worker / Employee", "target_object": "Employee", "notes": "HR data" }
+        ],
+        "how_mine_helps": [
+        "Mine maps D365 legal entities to NetSuite subsidiaries — analyzing cross-company data sharing patterns to determine which records should be shared vs. subsidiary-specific in NetSuite.",
+        "Financial dimensions are profiled and consolidated into NetSuite's classification structure — department, class, location, and custom segments — with combination validation against NetSuite's segment rules.",
+        "D365 data entity exports are automatically restructured into NetSuite's import format — handling column mapping, date format conversion, and lookup value translation per record type.",
+        "Mine validates GL mapping continuity — ensuring that D365 posting profile logic is documented so NetSuite GL impact settings can be configured to produce equivalent accounting entries."
+        ],
+        "migration_stats": {
+        "manual_timeline": "6–10 months",
+        "mine_timeline": "4–8 weeks",
+        "manual_cost": "$400K–1.5M",
+        "cost_reduction": "50–70%",
+        "manual_team": "4–8 consultants",
+        "mine_team": "2–3 internal resources"
+        },
+        "faqs": [
+        {
+        "question": "How does Mine handle the legal-entity-to-subsidiary structural inversion?",
+        "answer": "Mine profiles all D365 legal entities, analyzes which records are shared vs. entity-specific, and proposes the NetSuite subsidiary structure. The fundamental model difference — D365 partitions by default, NetSuite shares by default — is handled through explicit subsidiary assignment rules."
+        },
+        {
+        "question": "Can Mine consolidate D365 financial dimensions into NetSuite classifications?",
+        "answer": "Yes. Mine analyzes dimension usage patterns and cardinality to recommend which D365 dimensions map to department, class, location, or custom segments in NetSuite. Low-cardinality dimensions may be consolidated into fewer NetSuite fields."
+        },
+        {
+        "question": "Does Mine support migration from both D365 F&O and Business Central?",
+        "answer": "Yes. Mine profiles the D365 data model regardless of the source edition. F&O data entities and Business Central APIs export differently, and Mine handles both formats."
+        },
+        {
+        "question": "What about D365 custom entities?",
+        "answer": "Mine profiles each custom entity's fields and relationships, then proposes equivalent NetSuite custom record types with appropriate field types and sublist configurations."
+        }
+        ],
+        "keywords": {
+        "primary": "Dynamics 365 to NetSuite data migration",
+        "secondary": ["migrate Dynamics 365 to NetSuite", "D365 to NetSuite migration tool", "Dynamics 365 to NetSuite ETL", "D365 F&O to NetSuite migration"],
+        "long_tail": ["how to migrate data from Dynamics 365 to NetSuite", "D365 to NetSuite field mapping", "D365 legal entity to NetSuite subsidiary", "Dynamics 365 to NetSuite migration cost", "Dynamics 365 to NetSuite migration timeline"]
+        },
+        "related_slugs": ["netsuite-to-dynamics-365", "dynamics-gp-to-dynamics-365", "quickbooks-to-netsuite", "oracle-ebs-to-netsuite"],
+        "is_published": true,
+        "display_order": 20
+        },
+        {
+        "slug": "netsuite-to-hubspot",
+        "source_system": "NetSuite",
+        "target_system": "HubSpot",
+        "source_slug": "netsuite",
+        "target_slug": "hubspot",
+        "source_category": "ERP",
+        "target_category": "CRM",
+        "meta_title": "NetSuite to HubSpot Data Migration | Mine",
+        "meta_description": "Automate your NetSuite to HubSpot data migration. AI-powered mapping for customers, contacts, opportunities, and transaction history into HubSpot CRM.",
+        "hero_headline": "NetSuite to HubSpot Data Migration",
+        "hero_subheadline": "Splitting your CRM out of NetSuite? Mine automates the field mapping between NetSuite's entity model and HubSpot's property-based system — preserving customer relationships, deal history, and activity data.",
+        "overview_paragraphs": [
+        "NetSuite to HubSpot migrations happen when companies decide that NetSuite's built-in CRM module isn't meeting their sales and marketing team's needs. While NetSuite provides basic CRM functionality, HubSpot offers a more modern user experience, deeper marketing automation, content management, and a better mobile experience for field sales. Companies often make this switch when they realize their sales team is underusing NetSuite's CRM features and needs a purpose-built sales tool.",
+        "The technical challenge is extracting CRM-relevant data from NetSuite's unified ERP/CRM model and mapping it to HubSpot's property-based system. NetSuite Customers include both billing/accounting data (payment terms, credit limits, tax codes) and CRM data (sales rep, territory, lead source) in a single record. HubSpot's Company object only needs the CRM-relevant fields. NetSuite's Opportunity and Estimate records must map to HubSpot Deals with proper pipeline and stage configuration. Custom fields, saved search-based segments, and NetSuite's subsidiary context all need translation.",
+        "Companies typically handle this with CSV exports from NetSuite and HubSpot's import tool. The challenge is knowing which fields from NetSuite's complex entity records are CRM-relevant and how to restructure them for HubSpot's flatter property model."
+        ],
+        "challenges": [
+        {
+        "title": "Extracting CRM data from NetSuite's unified model",
+        "description": "NetSuite's Customer record combines ERP data (payment terms, credit limit, tax exempt status, currency) with CRM data (sales rep, lead source, territory, category). Migrating to HubSpot means selecting which fields are CRM-relevant and which should stay in NetSuite. Mine helps you define this boundary cleanly."
+        },
+        {
+        "title": "NetSuite subsidiary context in HubSpot",
+        "description": "NetSuite customers may have subsidiary-specific data — different sales reps, pricing, and transaction history per subsidiary. HubSpot has no subsidiary concept. Customer data must be consolidated or segmented using HubSpot custom properties or company record owner assignment."
+        },
+        {
+        "title": "Opportunity and estimate pipeline mapping",
+        "description": "NetSuite uses Opportunities and Estimates as separate transaction types with different statuses and lifecycles. HubSpot uses a single Deal object with pipeline stages. Deciding whether NetSuite Opportunities and Estimates both become HubSpot Deals — and how their statuses map to deal stages — requires pipeline architecture decisions."
+        },
+        {
+        "title": "Activity and communication history",
+        "description": "NetSuite stores activities as phone calls, tasks, events, and messages tied to entity records. HubSpot has its own engagement model with calls, emails, meetings, and notes. The activity association model differs — NetSuite links activities to transaction records while HubSpot associates engagements with contact and company records."
+        }
+        ],
+        "data_objects": [
+        { "source_object": "Customer (Company)", "target_object": "Company", "notes": "Filter to CRM-relevant fields" },
+        { "source_object": "Contact", "target_object": "Contact", "notes": "Contact role mapping" },
+        { "source_object": "Opportunity", "target_object": "Deal", "notes": "Pipeline and stage mapping" },
+        { "source_object": "Estimate", "target_object": "Deal (or Quote)", "notes": "Depends on HubSpot architecture" },
+        { "source_object": "Item line (on opportunities)", "target_object": "Line Item", "notes": "Product association" },
+        { "source_object": "Item (product catalog)", "target_object": "Product", "notes": "Pricing model differences" },
+        { "source_object": "Phone Call / Task / Event", "target_object": "Call / Task / Meeting", "notes": "Activity type routing" },
+        { "source_object": "Message / Note", "target_object": "Note / Email engagement", "notes": "Communication log" },
+        { "source_object": "Lead / Prospect", "target_object": "Contact (lifecycle: Lead)", "notes": "Lifecycle stage assignment" },
+        { "source_object": "Campaign", "target_object": "Campaign", "notes": "Campaign membership" }
+        ],
+        "how_mine_helps": [
+        "Mine profiles NetSuite Customer records and separates CRM-relevant fields from ERP-only fields — generating a clean Company mapping that includes only the data HubSpot needs.",
+        "Subsidiary-specific data is analyzed and consolidation rules are proposed — whether to merge subsidiaries into a single HubSpot Company or create custom properties to preserve the segmentation.",
+        "NetSuite Opportunities and Estimates are mapped to HubSpot Deal pipelines with stage translation tables and probability alignment generated automatically.",
+        "Mine handles the activity history migration — routing NetSuite phone calls, tasks, and events to the correct HubSpot engagement types with company and contact associations preserved."
+        ],
+        "migration_stats": {
+        "manual_timeline": "2–4 months",
+        "mine_timeline": "2–4 weeks",
+        "manual_cost": "$80K–300K",
+        "cost_reduction": "50–70%",
+        "manual_team": "2–3 consultants",
+        "mine_team": "1 internal resource"
+        },
+        "faqs": [
+        {
+        "question": "Should we migrate all NetSuite customer fields to HubSpot?",
+        "answer": "No — and Mine helps you decide which ones to include. Mine profiles every field on your NetSuite Customer record and flags which are CRM-relevant (sales rep, lead source, industry) vs. ERP-only (payment terms, credit limit, tax status). You approve the field selection before mapping."
+        },
+        {
+        "question": "How does Mine handle NetSuite subsidiaries in HubSpot?",
+        "answer": "Mine analyzes subsidiary-specific customer data and proposes strategies — consolidating subsidiaries into one HubSpot Company with custom properties, or creating separate Company records linked through parent-child relationships."
+        },
+        {
+        "question": "Can Mine map both NetSuite Opportunities and Estimates to HubSpot Deals?",
+        "answer": "Yes. Mine profiles both transaction types and proposes pipeline configurations — either combining them into one pipeline with different stages or creating separate HubSpot pipelines for opportunities vs. estimates."
+        },
+        {
+        "question": "Does Mine keep NetSuite as the ERP while moving CRM to HubSpot?",
+        "answer": "Mine focuses on migrating the CRM data layer out of NetSuite into HubSpot. Your NetSuite instance stays as the ERP with financial, inventory, and fulfillment data intact. Mine can also generate the field mapping documentation needed to set up an ongoing NetSuite-HubSpot sync."
+        }
+        ],
+        "keywords": {
+        "primary": "NetSuite to HubSpot data migration",
+        "secondary": ["migrate NetSuite to HubSpot", "NetSuite to HubSpot migration tool", "NetSuite CRM to HubSpot", "NetSuite to HubSpot ETL"],
+        "long_tail": ["how to migrate data from NetSuite to HubSpot", "NetSuite to HubSpot field mapping", "NetSuite customers to HubSpot companies", "NetSuite to HubSpot migration cost", "NetSuite CRM to HubSpot migration timeline"]
+        },
+        "related_slugs": ["netsuite-to-salesforce", "hubspot-to-salesforce", "salesforce-to-hubspot", "quickbooks-to-netsuite"],
+        "is_published": true,
+        "display_order": 21
+        },
+        {
+        "slug": "sap-ecc-to-dynamics-365",
+        "source_system": "SAP ECC",
+        "target_system": "Microsoft Dynamics 365",
+        "source_slug": "sap-ecc",
+        "target_slug": "dynamics-365",
+        "source_category": "ERP",
+        "target_category": "ERP",
+        "meta_title": "SAP ECC to Dynamics 365 Data Migration | Mine",
+        "meta_description": "Automate your SAP ECC to Dynamics 365 data migration. AI-powered mapping for customer master, GL, materials, and sales orders into D365 F&O.",
+        "hero_headline": "SAP ECC to Dynamics 365 Data Migration",
+        "hero_subheadline": "Choosing Microsoft over S/4HANA? Mine automates the mapping between SAP ECC's deeply normalized structures and Dynamics 365's data entity framework — including organizational structure translation, chart of accounts restructuring, and material master conversion.",
+        "overview_paragraphs": [
+        "SAP ECC to Dynamics 365 migrations represent companies choosing Microsoft's ERP over SAP's own S/4HANA upgrade path. This decision is often driven by total cost of ownership — D365's cloud licensing and Azure infrastructure can be significantly cheaper than S/4HANA's licensing plus migration costs. Companies already invested in the Microsoft ecosystem (Office 365, Azure, Teams, Power Platform) see natural synergies. This migration is also common when companies want to avoid SAP's vendor lock-in or find S/4HANA's functional changes too disruptive.",
+        "This is one of the most technically demanding ERP migrations because SAP ECC and Dynamics 365 use fundamentally different data architectures. SAP's deeply normalized table structures (KNA1/KNB1/KNVV for customers, MARA/MARC/MVKE for materials) must map to D365's data entities (CustCustomerV3Entity, ReleasedProductV2Entity). SAP's organizational hierarchy (company code, sales organization, plant, storage location) must translate to D365's legal entity and site/warehouse structure. The chart of accounts, controlling structures, and document flows are entirely different between the platforms.",
+        "This migration is typically managed by large system integrators (Deloitte, Accenture, Infosys) over 12–24 months. The data conversion workstream alone — profiling custom tables, mapping organizational structures, translating master and transactional data — consumes 30–40% of the total program effort."
+        ],
+        "challenges": [
+        {
+        "title": "SAP organizational hierarchy to D365 legal entity/site model",
+        "description": "SAP ECC's organizational structure — company codes, sales organizations, distribution channels, divisions, plants, storage locations — is more granular than D365's legal entity/site/warehouse model. Mapping decisions cascade across all transactional data. A single SAP plant may map to a D365 site, warehouse, or operating unit depending on how it's used."
+        },
+        {
+        "title": "SAP table structures to D365 data entities",
+        "description": "SAP ECC uses hundreds of normalized tables accessible via direct SQL or RFC. D365 F&O uses data entities as the primary import interface — each entity aggregates multiple tables with business logic layers. Not all SAP fields surface in standard D365 data entities, and custom entities may need to be created for SAP-specific data patterns."
+        },
+        {
+        "title": "SAP controlling (CO) to D365 financial dimensions",
+        "description": "SAP's controlling module — cost centers, profit centers, internal orders, WBS elements — is deeply integrated with the GL. D365 uses financial dimensions as the primary classification mechanism, with project accounting handled separately. Translating SAP CO structures to D365 dimensions requires rethinking how management reporting works."
+        },
+        {
+        "title": "Material master complexity",
+        "description": "SAP's material master spans MARA, MARC, MVKE, MBEW, and MARD tables with plant-level, sales org-level, and valuation-level attributes. D365's Released Product entity consolidates much of this but uses product dimensions (configuration, size, color, style) differently. Flattening SAP's multi-view material model while preserving the right detail level is a major mapping challenge."
+        },
+        {
+        "title": "IDOC and custom ABAP interface dependencies",
+        "description": "SAP integrations often use IDOCs, BAPIs, and custom ABAP function modules that reference specific table structures. These data dependencies must be identified and mapped to D365 equivalents — typically data entities, OData endpoints, or Power Platform connectors."
+        }
+        ],
+        "data_objects": [
+        { "source_object": "KNA1/KNB1/KNVV (Customer Master)", "target_object": "CustCustomerV3Entity", "notes": "Multi-table to entity" },
+        { "source_object": "LFA1/LFB1 (Vendor Master)", "target_object": "VendVendorV2Entity", "notes": "Company code to legal entity" },
+        { "source_object": "SKA1/SKB1 (GL Accounts)", "target_object": "MainAccount / Chart of Accounts", "notes": "COA restructuring" },
+        { "source_object": "MARA/MARC/MVKE (Materials)", "target_object": "ReleasedProductV2Entity", "notes": "View consolidation" },
+        { "source_object": "VBAK/VBAP (Sales Orders)", "target_object": "SalesOrderHeaderV2Entity", "notes": "Document flow" },
+        { "source_object": "EKKO/EKPO (Purchase Orders)", "target_object": "PurchaseOrderHeaderV2Entity", "notes": "Procurement" },
+        { "source_object": "BKPF/BSEG (Accounting Docs)", "target_object": "LedgerJournalEntity", "notes": "GL postings" },
+        { "source_object": "CSKS (Cost Centers)", "target_object": "Financial Dimensions", "notes": "CO to dimensions" },
+        { "source_object": "PRPS (WBS Elements)", "target_object": "Project Entity", "notes": "Project structure" },
+        { "source_object": "MBEW (Material Valuation)", "target_object": "Product costing entity", "notes": "Valuation method mapping" },
+        { "source_object": "Z-Tables (Custom)", "target_object": "Custom Data Entities", "notes": "Requires individual analysis" }
+        ],
+        "how_mine_helps": [
+        "Mine auto-profiles SAP's organizational hierarchy and proposes the D365 legal entity/site/warehouse mapping — generating a complete org structure crosswalk before data migration begins.",
+        "SAP tables are mapped to D365 data entities automatically — including fields that aren't exposed in standard entities, with recommendations for custom entity creation where needed.",
+        "Material master views across MARA, MARC, MVKE, and MBEW are consolidated into D365 Released Product entities with product dimensions, inventory parameters, and valuation methods mapped appropriately.",
+        "SAP's controlling structures (cost centers, profit centers, internal orders) are translated to D365 financial dimensions with combination validation against D365's account structure rules."
+        ],
+        "migration_stats": {
+        "manual_timeline": "12–24 months",
+        "mine_timeline": "8–14 weeks",
+        "manual_cost": "$2M–10M",
+        "cost_reduction": "40–60%",
+        "manual_team": "10–20+ consultants",
+        "mine_team": "3–5 internal resources"
+        },
+        "faqs": [
+        {
+        "question": "Why would a company choose D365 over S/4HANA?",
+        "answer": "Common reasons include lower total cost of ownership, existing Microsoft ecosystem investments (Azure, O365, Teams), desire to avoid SAP vendor lock-in, and D365's tighter integration with Power Platform for low-code customization. Mine doesn't influence this decision — we automate whichever path you choose."
+        },
+        {
+        "question": "How does Mine handle SAP's organizational hierarchy in D365?",
+        "answer": "Mine profiles all SAP org units (company codes, sales orgs, plants, storage locations) and proposes the D365 equivalent — legal entities, sites, warehouses, and operating units. You approve the structure and Mine generates all downstream mappings accordingly."
+        },
+        {
+        "question": "Can Mine map SAP custom Z-tables to D365?",
+        "answer": "Yes. Mine profiles all custom tables in your SAP schema, identifies which contain data worth migrating, and proposes D365 custom data entities or extensions to standard entities for each."
+        },
+        {
+        "question": "What about SAP ABAP and IDOC dependencies?",
+        "answer": "Mine catalogs all custom ABAP programs and IDOCs that reference tables in the migration scope, generating a dependency report so the D365 team knows which integrations need to be rebuilt using data entities, OData, or Power Platform connectors."
+        }
+        ],
+        "keywords": {
+        "primary": "SAP ECC to Dynamics 365 data migration",
+        "secondary": ["migrate SAP to Dynamics 365", "SAP to D365 F&O migration tool", "SAP ECC to D365 ETL", "SAP to Microsoft Dynamics migration"],
+        "long_tail": ["how to migrate data from SAP to Dynamics 365", "SAP to D365 field mapping", "SAP to Dynamics 365 migration cost", "SAP ECC to D365 F&O migration timeline", "SAP company code to D365 legal entity"]
+        },
+        "related_slugs": ["sap-ecc-to-salesforce", "sap-ecc-to-sap-s4hana", "sap-ecc-to-netsuite", "oracle-ebs-to-dynamics-365"],
+        "is_published": true,
+        "display_order": 22
+        },
+        {
+        "slug": "oracle-ebs-to-dynamics-365",
+        "source_system": "Oracle EBS",
+        "target_system": "Microsoft Dynamics 365",
+        "source_slug": "oracle-ebs",
+        "target_slug": "dynamics-365",
+        "source_category": "ERP",
+        "target_category": "ERP",
+        "meta_title": "Oracle EBS to Dynamics 365 Data Migration | Mine",
+        "meta_description": "Automate your Oracle EBS to Dynamics 365 data migration. AI-powered mapping for TCA, GL, AP/AR, and inventory data into D365 Finance & Operations.",
+        "hero_headline": "Oracle EBS to Dynamics 365 Data Migration",
+        "hero_subheadline": "Moving from Oracle EBS to D365 Finance & Operations? Mine automates the mapping between Oracle's TCA model and D365's customer entity framework — including multi-org translation, flexfield conversion, and chart of accounts restructuring.",
+        "overview_paragraphs": [
+        "Oracle EBS to Dynamics 365 migrations are increasingly common as companies look for alternatives to Oracle's own Cloud ERP upgrade path. Some companies prefer Microsoft's ecosystem and licensing model over Oracle's. Others find D365's Power Platform extensibility more accessible than Oracle Cloud's limited customization. PE-backed companies often choose D365 for its lower implementation cost relative to Oracle Cloud, especially when the company already runs Office 365 and Azure.",
+        "The technical complexity is substantial — both platforms are full-featured enterprise ERPs with deeply different architectures. Oracle EBS's Trading Community Architecture (TCA) for customer and party data must map to D365's simpler customer account model. Oracle's multi-org structure (operating units, sets of books, legal entities) translates to D365's legal entity model differently than it would to Oracle Cloud. Flexfields, lookup values, and Oracle's extensive PL/SQL customizations all require analysis and translation.",
+        "These migrations are typically managed by large consulting firms over 12–18 months. The data conversion workstream — profiling custom tables, mapping TCA, translating flexfields, validating open transactions — is one of the most labor-intensive parts of the program."
+        ],
+        "challenges": [
+        {
+        "title": "Oracle TCA to D365 customer model",
+        "description": "Oracle EBS's TCA model stores party, customer account, site, and site use data across HZ_PARTIES, HZ_CUST_ACCOUNTS, HZ_PARTY_SITES, and HZ_CUST_SITE_USES. D365 uses a simpler customer account model with addresses stored on the customer or through the global address book. Denormalizing Oracle's multi-level TCA hierarchy into D365's flatter structure requires business rules for address consolidation and site purpose mapping."
+        },
+        {
+        "title": "Oracle multi-org to D365 legal entities",
+        "description": "Oracle EBS uses operating units, sets of books, and legal entities with complex multi-org access control. D365 uses legal entities as the primary organizational boundary. Determining which Oracle org structures map to D365 legal entities vs. business units vs. operating units requires deep analysis of how the Oracle orgs are actually used."
+        },
+        {
+        "title": "Descriptive and Key Flexfield conversion",
+        "description": "Oracle EBS DFFs use context-sensitive segment columns (ATTRIBUTE1-15) whose meaning varies by context value. D365 doesn't have an equivalent mechanism — each DFF segment must become a specific field on the corresponding D365 entity or a custom field. Key Flexfields like the accounting flexfield must map to D365's chart of accounts and financial dimensions."
+        },
+        {
+        "title": "Open transaction migration and GL reconciliation",
+        "description": "Migrating open AP invoices, AR invoices, and purchase orders requires translating Oracle's document structures (AP_INVOICES_ALL, RA_CUSTOMER_TRX_ALL, PO_HEADERS_ALL) to D365 equivalents with proper status mapping, aging preservation, and GL account translation. Post-migration, sub-ledger balances must reconcile to the GL in both systems."
+        }
+        ],
+        "data_objects": [
+        { "source_object": "HZ_PARTIES / HZ_CUST_ACCOUNTS", "target_object": "CustCustomerV3Entity", "notes": "TCA denormalization" },
+        { "source_object": "AP_SUPPLIERS / SITES", "target_object": "VendVendorV2Entity", "notes": "Supplier master" },
+        { "source_object": "GL_CODE_COMBINATIONS", "target_object": "MainAccount / Dimensions", "notes": "COA restructuring" },
+        { "source_object": "MTL_SYSTEM_ITEMS", "target_object": "ReleasedProductV2Entity", "notes": "Item master" },
+        { "source_object": "OE_ORDER_HEADERS / LINES", "target_object": "SalesOrderHeaderV2Entity", "notes": "Sales orders" },
+        { "source_object": "PO_HEADERS / LINES", "target_object": "PurchaseOrderHeaderV2Entity", "notes": "Purchase orders" },
+        { "source_object": "AP_INVOICES_ALL", "target_object": "Vendor Invoice Entity", "notes": "Open AP" },
+        { "source_object": "RA_CUSTOMER_TRX_ALL", "target_object": "Free Text Invoice Entity", "notes": "Open AR" },
+        { "source_object": "GL_JE_HEADERS / LINES", "target_object": "LedgerJournalEntity", "notes": "GL journals" },
+        { "source_object": "FA_ADDITIONS (Fixed Assets)", "target_object": "Fixed Asset Entity", "notes": "Asset register" },
+        { "source_object": "FND_LOOKUP_VALUES", "target_object": "Enum / Option Set", "notes": "Lookup translation" }
+        ],
+        "how_mine_helps": [
+        "Mine auto-profiles Oracle's TCA hierarchy and maps it to D365's customer account model — denormalizing party, account, site, and site use records into clean customer entities with address preservation.",
+        "Oracle multi-org structures are analyzed and mapped to D365 legal entities — with cross-org customer and vendor relationships flagged for intercompany configuration.",
+        "DFF segments are profiled from the Oracle repository and mapped to specific D365 fields — each context-value combination gets its own mapping rule with data value transformation.",
+        "Mine validates open transaction balances after migration — ensuring AP, AR, and inventory sub-ledger totals match the GL in D365 before cutover."
+        ],
+        "migration_stats": {
+        "manual_timeline": "12–18 months",
+        "mine_timeline": "6–12 weeks",
+        "manual_cost": "$1.5M–5M",
+        "cost_reduction": "40–60%",
+        "manual_team": "8–15 consultants",
+        "mine_team": "2–4 internal resources"
+        },
+        "faqs": [
+        {
+        "question": "How does Mine handle Oracle's TCA model in D365?",
+        "answer": "Mine profiles the full TCA hierarchy and generates flattened mappings to D365's customer account entity. Party-to-account relationships, address purposes, and contact associations are all translated with business rules you approve."
+        },
+        {
+        "question": "Can Mine map Oracle operating units to D365 legal entities?",
+        "answer": "Yes. Mine analyzes Oracle's org structure and proposes D365 legal entity mappings — including which operating units consolidate, which become separate legal entities, and how cross-org transactions become intercompany journals."
+        },
+        {
+        "question": "Does Mine handle Oracle DFF conversion for D365?",
+        "answer": "Mine reads the Oracle DFF repository metadata, maps each context-segment combination to a D365 field (standard or custom), and generates transformation rules for the data values."
+        },
+        {
+        "question": "What about Oracle to D365 chart of accounts restructuring?",
+        "answer": "Mine analyzes Oracle's accounting flexfield segments and value sets, then maps them to D365's Main Account and financial dimensions — with segment combination validation against D365's account structure rules."
+        }
+        ],
+        "keywords": {
+        "primary": "Oracle EBS to Dynamics 365 data migration",
+        "secondary": ["migrate Oracle EBS to D365", "Oracle to Dynamics 365 migration tool", "Oracle EBS to D365 F&O ETL", "Oracle ERP to Microsoft Dynamics migration"],
+        "long_tail": ["how to migrate data from Oracle EBS to Dynamics 365", "Oracle TCA to D365 customer mapping", "Oracle EBS to Dynamics 365 migration cost", "Oracle EBS to D365 migration timeline", "Oracle flexfield to D365 dimension mapping"]
+        },
+        "related_slugs": ["oracle-ebs-to-salesforce", "oracle-ebs-to-netsuite", "oracle-ebs-to-oracle-cloud", "sap-ecc-to-dynamics-365"],
+        "is_published": true,
+        "display_order": 23
+        },
+        {
+        "slug": "quickbooks-to-dynamics-365",
+        "source_system": "QuickBooks Enterprise",
+        "target_system": "Microsoft Dynamics 365",
+        "source_slug": "quickbooks",
+        "target_slug": "dynamics-365",
+        "source_category": "ERP",
+        "target_category": "ERP",
+        "meta_title": "QuickBooks to Dynamics 365 Data Migration | Mine",
+        "meta_description": "Automate your QuickBooks Enterprise to Dynamics 365 Business Central data migration. AI-powered mapping for chart of accounts, customers, and transactions.",
+        "hero_headline": "QuickBooks Enterprise to Dynamics 365 Data Migration",
+        "hero_subheadline": "Outgrowing QuickBooks? Mine automates the schema translation between QuickBooks' flat structure and Dynamics 365 Business Central's dimensional accounting model — including chart of accounts restructuring and transaction type mapping.",
+        "overview_paragraphs": [
+        "QuickBooks Enterprise to Dynamics 365 Business Central is a natural upgrade path for Microsoft-aligned companies that have outgrown QuickBooks. The triggers are familiar — multi-entity requirements, advanced inventory, manufacturing needs, or audit readiness that QuickBooks can't support. Companies already using Office 365 and Azure often prefer Business Central over NetSuite because of the native Microsoft integration — Power BI, Power Automate, Teams, and Outlook all work seamlessly.",
+        "The technical challenge mirrors QuickBooks-to-NetSuite: QuickBooks' flat chart of accounts, simple customer/vendor records, and limited item types must be restructured into Business Central's dimensional accounting model with posting groups, number series, and multi-company support. QuickBooks' proprietary data format adds extraction complexity — QODBC, IIF exports, and direct QBW file access each have different fidelity levels.",
+        "Companies typically manage this migration during their Business Central implementation, using a combination of RapidStart Services and manual CSV imports. The chart of accounts restructuring and transaction mapping work is largely manual."
+        ],
+        "challenges": [
+        {
+        "title": "Flat chart of accounts to dimensional Business Central",
+        "description": "QuickBooks uses a flat, single-segment chart of accounts where departments and projects are embedded in account names. Business Central uses a multi-dimensional structure with G/L accounts, dimensions (department, project, cost center), and dimension values. Decomposing QuickBooks' embedded segments into proper Business Central dimensions requires pattern analysis."
+        },
+        {
+        "title": "QuickBooks data extraction limitations",
+        "description": "QuickBooks Enterprise doesn't expose a clean relational database. Data access via IIF export loses some fields, QODBC is slow with query limitations, and direct QBW access requires the QuickBooks SDK. Each extraction method produces different data fidelity — Mine handles whichever format you can provide."
+        },
+        {
+        "title": "Posting group configuration",
+        "description": "Business Central uses posting groups (customer, vendor, inventory, general) to control GL account assignment on transactions. QuickBooks has no equivalent — accounts are assigned directly on transactions. Setting up posting groups and ensuring historical data maps correctly to the new posting logic requires careful analysis."
+        },
+        {
+        "title": "Number series and document numbering",
+        "description": "QuickBooks uses simple sequential numbering per transaction type. Business Central uses configurable number series with prefixes, suffixes, and gaps. Migrated documents must preserve their original numbers while Business Central's series starts from the correct next value."
+        }
+        ],
+        "data_objects": [
+        { "source_object": "Customer", "target_object": "Customer", "notes": "Posting group assignment" },
+        { "source_object": "Vendor", "target_object": "Vendor", "notes": "Payment terms mapping" },
+        { "source_object": "Chart of Accounts", "target_object": "G/L Account + Dimensions", "notes": "Flat to dimensional" },
+        { "source_object": "Item", "target_object": "Item", "notes": "Item type and tracking" },
+        { "source_object": "Invoice", "target_object": "Sales Invoice", "notes": "AR transactions" },
+        { "source_object": "Sales Receipt", "target_object": "Cash Receipt Journal", "notes": "Cash sales" },
+        { "source_object": "Bill", "target_object": "Purchase Invoice", "notes": "AP transactions" },
+        { "source_object": "Check / Bill Payment", "target_object": "Payment Journal", "notes": "Payment records" },
+        { "source_object": "Purchase Order", "target_object": "Purchase Order", "notes": "Open POs" },
+        { "source_object": "Journal Entry", "target_object": "General Journal", "notes": "Manual adjustments" },
+        { "source_object": "Employee", "target_object": "Employee", "notes": "HR data if applicable" }
+        ],
+        "how_mine_helps": [
+        "Mine analyzes your QuickBooks chart of accounts and proposes the Business Central dimensional decomposition — splitting embedded segments into G/L accounts, dimensions, and dimension values based on naming pattern recognition.",
+        "Multiple QuickBooks extraction formats (IIF, QODBC, CSV) are supported. Mine profiles whichever format you provide and flags data fidelity differences compared to the full QuickBooks schema.",
+        "Posting group assignments are generated automatically based on your transaction patterns — Mine analyzes which GL accounts QuickBooks transactions typically post to and proposes the equivalent Business Central posting group configuration.",
+        "Mine validates trial balance reconciliation after migration — ensuring the opening balances in Business Central match QuickBooks as of cutover date."
+        ],
+        "migration_stats": {
+        "manual_timeline": "2–4 months",
+        "mine_timeline": "2–3 weeks",
+        "manual_cost": "$50K–200K",
+        "cost_reduction": "50–70%",
+        "manual_team": "1–3 consultants",
+        "mine_team": "1 internal resource"
+        },
+        "faqs": [
+        {
+        "question": "Does Mine support migration to Business Central specifically?",
+        "answer": "Yes. Mine generates mappings specific to Business Central's data model — G/L accounts, dimensions, posting groups, and number series. The output is compatible with RapidStart Services or direct API import."
+        },
+        {
+        "question": "How does Mine restructure QuickBooks' flat chart of accounts?",
+        "answer": "Mine uses pattern recognition to identify embedded segments in QuickBooks account names (e.g., '6100 Office Supplies - Marketing') and proposes decomposition into Business Central G/L account '6100' plus dimension 'DEPT' = 'Marketing'. You review and adjust before migration."
+        },
+        {
+        "question": "Can Mine set up Business Central posting groups?",
+        "answer": "Mine doesn't configure Business Central settings directly, but it analyzes your QuickBooks transaction patterns and generates a posting group recommendation — showing which customer/vendor/inventory posting groups to create and which GL accounts they should map to."
+        },
+        {
+        "question": "What about QuickBooks class tracking?",
+        "answer": "QuickBooks classes are mapped to Business Central dimensions. Mine profiles class usage across your transactions and proposes the optimal dimension mapping — whether global dimension 1, global dimension 2, or a shortcut dimension."
+        }
+        ],
+        "keywords": {
+        "primary": "QuickBooks to Dynamics 365 data migration",
+        "secondary": ["migrate QuickBooks to D365", "QuickBooks to Business Central migration tool", "QB to D365 ETL", "QuickBooks to Dynamics 365 upgrade"],
+        "long_tail": ["how to migrate data from QuickBooks to Dynamics 365", "QuickBooks to Business Central field mapping", "QuickBooks to D365 migration cost", "QuickBooks to Business Central migration timeline", "QuickBooks chart of accounts to Business Central"]
+        },
+        "related_slugs": ["quickbooks-to-netsuite", "dynamics-gp-to-dynamics-365", "sage-intacct-to-dynamics-365", "dynamics-gp-to-netsuite"],
+        "is_published": true,
+        "display_order": 24
+        },
+        {
+        "slug": "sage-intacct-to-dynamics-365",
+        "source_system": "Sage Intacct",
+        "target_system": "Microsoft Dynamics 365",
+        "source_slug": "sage-intacct",
+        "target_slug": "dynamics-365",
+        "source_category": "ERP",
+        "target_category": "ERP",
+        "meta_title": "Sage Intacct to Dynamics 365 Data Migration | Mine",
+        "meta_description": "Automate your Sage Intacct to Dynamics 365 data migration. AI-powered mapping for dimensions, GL, AP/AR, and custom objects into D365 F&O or Business Central.",
+        "hero_headline": "Sage Intacct to Dynamics 365 Data Migration",
+        "hero_subheadline": "Moving from Sage Intacct to Dynamics 365? Mine automates the dimensional accounting restructuring, entity mapping, and multi-entity consolidation translation between these cloud ERP platforms.",
+        "overview_paragraphs": [
+        "Sage Intacct to Dynamics 365 migrations happen when companies need ERP capabilities beyond Intacct's core strengths — typically manufacturing, advanced supply chain, field service, or deeper CRM integration. Companies already invested in the Microsoft ecosystem see natural advantages in D365's Power Platform integration, Azure hosting, and Office 365 connectivity. This migration is also driven by PE roll-up strategies where the platform company standardizes on D365 across portfolio acquisitions.",
+        "Despite both being cloud-native ERPs, the data model translation is non-trivial. Sage Intacct's user-defined dimensions (up to 10 custom dimensions) must map to D365's financial dimensions — but the cardinality, hierarchy, and posting behavior differ. Intacct's multi-entity consolidation model uses top-level entities with elimination rules that translate differently to D365's intercompany and consolidation company patterns. Contract billing and revenue recognition modules use different data models between the platforms.",
+        "Companies typically manage this during a D365 implementation engagement, with the implementation partner handling data conversion. The dimensional restructuring and custom object translation work is manual and iterative."
+        ],
+        "challenges": [
+        {
+        "title": "User-defined dimensions to D365 financial dimensions",
+        "description": "Sage Intacct supports up to 10 user-defined dimensions with flexible application at transaction header and line level. D365 uses financial dimensions with different configuration patterns — global dimensions, shortcut dimensions, and default dimension templates. The mapping must account for how each Intacct dimension is used in reporting and whether it becomes a D365 global dimension, shortcut dimension, or dimension value."
+        },
+        {
+        "title": "Multi-entity to legal entity / consolidation company",
+        "description": "Intacct's multi-entity structure supports shared entities across a top-level and child entities with intercompany elimination. D365 uses legal entities with cross-company data sharing and a separate consolidation company concept. The consolidation structure, elimination journal rules, and currency translation methods all need redesign."
+        },
+        {
+        "title": "Revenue recognition model differences",
+        "description": "Intacct's contract and revenue management module stores contract schedules and recognition plans in a purpose-built data model. D365's revenue recognition module uses different recognition methods, deferral schedules, and reallocation patterns. Active contracts with in-progress revenue schedules require period-by-period reconciliation during migration."
+        },
+        {
+        "title": "Platform Services custom objects",
+        "description": "Intacct's Platform Services allow custom objects, custom transactions, and smart events with scripted logic. These must be translated to D365 custom entities, business events, and Power Automate flows — each requiring individual analysis of the data structure and automation logic."
+        }
+        ],
+        "data_objects": [
+        { "source_object": "Customer", "target_object": "CustCustomerV3Entity", "notes": "Customer with dimensions" },
+        { "source_object": "Vendor", "target_object": "VendVendorV2Entity", "notes": "Vendor with payment info" },
+        { "source_object": "GL Account", "target_object": "MainAccount", "notes": "Account structure" },
+        { "source_object": "GL Journal Entry", "target_object": "LedgerJournalEntity", "notes": "Journals with dimensions" },
+        { "source_object": "AP Bill", "target_object": "Vendor Invoice Entity", "notes": "Open payables" },
+        { "source_object": "AR Invoice", "target_object": "Free Text Invoice Entity", "notes": "Open receivables" },
+        { "source_object": "Purchase Order", "target_object": "PurchaseOrderHeaderV2Entity", "notes": "Open procurement" },
+        { "source_object": "Sales Order / Order Entry", "target_object": "SalesOrderHeaderV2Entity", "notes": "Open sales" },
+        { "source_object": "Item", "target_object": "ReleasedProductV2Entity", "notes": "Inventory items" },
+        { "source_object": "Employee", "target_object": "HcmWorkerEntity", "notes": "Worker records" },
+        { "source_object": "Contract / Revenue Schedule", "target_object": "Revenue Recognition Schedule", "notes": "Active contracts" },
+        { "source_object": "Custom Objects", "target_object": "Custom Data Entities", "notes": "Platform Services data" }
+        ],
+        "how_mine_helps": [
+        "Mine profiles all Intacct user-defined dimensions and maps them to D365 financial dimensions — recommending which become global dimensions, shortcut dimensions, or default dimension values based on usage patterns and cardinality.",
+        "Multi-entity hierarchies are mapped to D365's legal entity structure with intercompany posting rules and consolidation company configuration documented and validated.",
+        "Intacct custom objects from Platform Services are profiled and mapped to D365 custom data entities with field types, relationships, and smart event logic documented for Power Automate rebuild.",
+        "Mine validates dimensional reporting continuity — ensuring every Intacct dimension-based report can be replicated in D365 using the mapped financial dimension structure."
+        ],
+        "migration_stats": {
+        "manual_timeline": "4–8 months",
+        "mine_timeline": "3–6 weeks",
+        "manual_cost": "$250K–800K",
+        "cost_reduction": "50–70%",
+        "manual_team": "3–6 consultants",
+        "mine_team": "1–2 internal resources"
+        },
+        "faqs": [
+        {
+        "question": "Does Mine support migration to both D365 F&O and Business Central?",
+        "answer": "Yes. Mine generates different mappings depending on your target. F&O uses X++ data entities with a more complex dimensional model, while Business Central uses AL-based APIs with global and shortcut dimensions. You select the target and Mine adapts."
+        },
+        {
+        "question": "How does Mine handle Intacct's user-defined dimensions?",
+        "answer": "Mine profiles every dimension's usage across your transactions — cardinality, header vs. line level application, reporting dependencies — then recommends which D365 financial dimension type (global, shortcut, or standard) each should become."
+        },
+        {
+        "question": "Can Mine migrate active Intacct contracts to D365 revenue recognition?",
+        "answer": "Mine maps contract and revenue schedule data between platforms, but active contracts with in-progress recognition schedules require period-by-period reconciliation. Mine generates the mapping and flags contracts that need manual cutover validation."
+        },
+        {
+        "question": "What about Intacct's multi-entity to D365 intercompany?",
+        "answer": "Mine maps Intacct entities to D365 legal entities, translates elimination rules to D365's consolidation company configuration, and validates intercompany posting rules. Currency translation methods are mapped between Intacct's and D365's consolidation engines."
+        }
+        ],
+        "keywords": {
+        "primary": "Sage Intacct to Dynamics 365 data migration",
+        "secondary": ["migrate Sage Intacct to D365", "Intacct to Dynamics 365 migration tool", "Sage Intacct to D365 F&O ETL", "Intacct to Business Central migration"],
+        "long_tail": ["how to migrate data from Sage Intacct to Dynamics 365", "Intacct dimensions to D365 financial dimensions", "Sage Intacct to D365 migration cost", "Intacct to Dynamics 365 migration timeline", "Intacct custom objects to D365"]
+        },
+        "related_slugs": ["sage-intacct-to-netsuite", "dynamics-gp-to-dynamics-365", "quickbooks-to-dynamics-365", "oracle-ebs-to-dynamics-365"],
+        "is_published": true,
+        "display_order": 25
+        }
+        ]
     
