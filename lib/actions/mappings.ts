@@ -83,6 +83,7 @@ export interface SimpleField {
   id: string
   name: string
   data_type: string
+  is_nullable?: boolean
 }
 
 export interface MappingsResult {
@@ -699,7 +700,7 @@ export async function getMappings(projectId: string): Promise<MappingsResult | n
   for (const t of allTables ?? []) {
     allFieldsByTable[t.id] = (allFields ?? [])
       .filter((f) => f.table_id === t.id)
-      .map((f) => ({ id: f.id, name: f.name, data_type: f.data_type }))
+      .map((f) => ({ id: f.id, name: f.name, data_type: f.data_type, is_nullable: f.is_nullable ?? true }))
   }
 
   return { tableMappings, unmappedSourceFields, unmappedTargetFields, allSourceTables, allTargetTables, allFieldsByTable }

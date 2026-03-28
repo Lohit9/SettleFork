@@ -34,7 +34,7 @@ interface Props {
   initialData: MappingsResult | null
 }
 
-type FilterTab = 'needs_review' | 'high_confidence' | 'unmapped' | 'all' | 'many_to_one' | 'one_to_many'
+type FilterTab = 'all' | 'needs_review' | 'approved' | 'unmapped' | 'many_to_one' | 'one_to_many'
 
 // ─── Confidence helpers ───────────────────────────────────────────────────────
 
@@ -1181,6 +1181,7 @@ function TableMappingCard({
   regeneratingThis,
   onRegenerate,
   showContributingRows,
+  showInlineUnmapped,
 }: {
   tm: RichTableMapping
   expanded: boolean
@@ -1202,14 +1203,24 @@ function TableMappingCard({
   regeneratingThis: boolean
   onRegenerate: () => void
   showContributingRows: boolean
+  showInlineUnmapped: boolean
 }) {
   const srcDs = tm.sourceTable?.dataset
   const tgtDs = tm.targetTable?.dataset
+  const activeSrcIds = new Set(tm.fieldMappings.filter((fm) => fm.status !== 'rejected').map((fm) => fm.source_field_id))
+  const activeTgtIds = new Set(tm.fieldMappings.filter((fm) => fm.status !== 'rejected').map((fm) => fm.target_field_id))
   const mappedSrcIds = new Set(tm.fieldMappings.map((fm) => fm.source_field_id))
   const mappedTgtIds = new Set(tm.fieldMappings.map((fm) => fm.target_field_id))
-  const availSrc = (allFieldsByTable[tm.source_table_id] ?? []).filter((f) => !mappedSrcIds.has(f.id))
-  const availTgt = (allFieldsByTable[tm.target_table_id] ?? []).filter((f) => !mappedTgtIds.has(f.id))
+  const allSrcFields = allFieldsByTable[tm.source_table_id] ?? []
+  const allTgtFields = allFieldsByTable[tm.target_table_id] ?? []
+  const availSrc = allSrcFields.filter((f) => !mappedSrcIds.has(f.id))
+  const availTgt = allTgtFields.filter((f) => !mappedTgtIds.has(f.id))
   const hasUnmapped = availSrc.length > 0 && availTgt.length > 0
+  const unmappedTgtFields = allTgtFields.filter((f) => !activeTgtIds.has(f.id))
+  const unmappedSrcFields = allSrcFields.filter((f) => !activeSrcIds.has(f.id))
+
+  // Track which unmapped field's "+ Map" was clicked so InlineAddFieldRow renders right below it
+  const [addAfterUnmappedId, setAddAfterUnmappedId] = useState<string | null>(null)
 
   return (
     <div className="border border-gray-200 rounded-xl overflow-hidden">
@@ -1376,8 +1387,95 @@ function TableMappingCard({
             })()
           )}
 
-          {/* Inline add field row */}
-          {showAddRow && (
+          {/* Inline unmapped target fields */}
+          {showInlineUnmapped && unmappedTgtFields.length > 0 && (
+            <div className="border-t border-dashed border-gray-200 mt-2 pt-2">
+              <div className="px-5 py-1.5 text-xs font-medium text-gray-400 uppercase tracking-wide">
+                Unmapped Target Fields ({unmappedTgtFields.length})
+              </div>
+              {unmappedTgtFields.map((field) => (
+                <div key={field.id}>
+                  <div className="flex items-center px-5 py-2 text-gray-400 hover:bg-gray-50 transition-colors">
+                    <div className="w-[36%] flex items-center gap-2">
+                      <span className="text-xs italic text-gray-300">No source field</span>
+                    </div>
+                    <div className="w-[28%] text-center">
+                      <span className="text-xs text-gray-300">—</span>
+                    </div>
+                    <div className="w-[36%] flex items-center gap-2 min-w-0">
+                      <span className={`w-2 h-2 rounded-full flex-shrink-0 ${field.is_nullable !== false ? 'bg-gray-300' : 'bg-amber-400'}`} />
+                      <span className="text-sm text-gray-500 truncate">{field.name}</span>
+                      <span className="text-xs text-gray-400 flex-shrink-0">{field.data_type}</span>
+                      {field.is_nullable === false && (
+                        <span className="text-[10px] font-medium text-amber-600 bg-amber-50 px-1.5 py-0.5 rounded flex-shrink-0">NOT NULL</span>
+                      )}
+                    </div>
+                    <div className="w-24 text-right flex-shrink-0">
+                      <button
+                        onClick={() => { setAddAfterUnmappedId(field.id); onShowAddRow(); }}
+                        className="text-xs text-blue-600 hover:text-blue-800 font-medium px-2 py-1 rounded hover:bg-blue-50 transition-colors"
+                      >
+                        + Map
+                      </button>
+                    </div>
+                  </div>
+                  {showAddRow && addAfterUnmappedId === field.id && (
+                    <InlineAddFieldRow
+                      tm={tm}
+                      allFieldsByTable={allFieldsByTable}
+                      onAdded={(fm) => { setAddAfterUnmappedId(null); onFieldAdded(fm); }}
+                      onCancel={() => { setAddAfterUnmappedId(null); onHideAddRow(); }}
+                    />
+                  )}
+                </div>
+              ))}
+            </div>
+          )}
+
+          {/* Inline unmapped source fields */}
+          {showInlineUnmapped && unmappedSrcFields.length > 0 && (
+            <div className="border-t border-dashed border-gray-200 mt-1 pt-2">
+              <div className="px-5 py-1.5 text-xs font-medium text-gray-400 uppercase tracking-wide">
+                Unmapped Source Fields ({unmappedSrcFields.length})
+              </div>
+              {unmappedSrcFields.map((field) => (
+                <div key={field.id}>
+                  <div className="flex items-center px-5 py-2 text-gray-400">
+                    <div className="w-[36%] flex items-center gap-2 min-w-0">
+                      <span className="w-2 h-2 rounded-full bg-gray-300 flex-shrink-0" />
+                      <span className="text-sm text-gray-500 truncate">{field.name}</span>
+                      <span className="text-xs text-gray-400 flex-shrink-0">{field.data_type}</span>
+                    </div>
+                    <div className="w-[28%] text-center">
+                      <span className="text-xs text-gray-300">—</span>
+                    </div>
+                    <div className="w-[36%] flex items-center gap-2">
+                      <span className="text-xs italic text-gray-300">Not migrated</span>
+                    </div>
+                    <div className="w-24 text-right flex-shrink-0">
+                      <button
+                        onClick={() => { setAddAfterUnmappedId(field.id); onShowAddRow(); }}
+                        className="text-xs text-blue-600 hover:text-blue-800 font-medium px-2 py-1 rounded hover:bg-blue-50 transition-colors"
+                      >
+                        + Map
+                      </button>
+                    </div>
+                  </div>
+                  {showAddRow && addAfterUnmappedId === field.id && (
+                    <InlineAddFieldRow
+                      tm={tm}
+                      allFieldsByTable={allFieldsByTable}
+                      onAdded={(fm) => { setAddAfterUnmappedId(null); onFieldAdded(fm); }}
+                      onCancel={() => { setAddAfterUnmappedId(null); onHideAddRow(); }}
+                    />
+                  )}
+                </div>
+              ))}
+            </div>
+          )}
+
+          {/* Inline add field row — only at bottom when triggered from "Add Field Mapping" button (not from unmapped rows) */}
+          {showAddRow && !addAfterUnmappedId && (
             <InlineAddFieldRow
               tm={tm}
               allFieldsByTable={allFieldsByTable}
@@ -1390,7 +1488,7 @@ function TableMappingCard({
           <div className="flex items-center gap-3 px-5 py-3 border-t border-gray-100 bg-gray-50/50">
             {!showAddRow && (
               <button
-                onClick={onShowAddRow}
+                onClick={() => { setAddAfterUnmappedId(null); onShowAddRow(); }}
                 className="flex items-center gap-1.5 text-xs font-medium text-indigo-600 hover:text-indigo-800 transition-colors"
               >
                 <Plus className="w-3.5 h-3.5" />
@@ -1870,7 +1968,7 @@ export default function MappingContent({ projectId, initialData }: Props) {
   const [unmappedTarget, setUnmappedTarget] = useState<UnmappedField[]>(initialData?.unmappedTargetFields ?? [])
   const allFieldsByTable = data?.allFieldsByTable ?? {}
 
-  const [activeFilter, setActiveFilter] = useState<FilterTab>('needs_review')
+  const [activeFilter, setActiveFilter] = useState<FilterTab>('all')
   const [expandedIds, setExpandedIds] = useState<Set<string>>(new Set())
   const [selectedFM, setSelectedFM] = useState<RichFieldMapping | null>(null)
   const [showAddModal, setShowAddModal] = useState(false)
@@ -1890,8 +1988,11 @@ export default function MappingContent({ projectId, initialData }: Props) {
     () => allFMs.filter((fm) => !fm.is_contributing && fm.status === 'needs_review').length,
     [allFMs]
   )
-  // High Confidence tab: table mappings whose overall confidence is >= 75
-  const highConfCount = useMemo(() => tableMappings.filter((tm) => (tm.confidence ?? 0) >= 75).length, [tableMappings])
+  // Approved tab: primary field mappings with status === 'approved'
+  const approvedFMCount = useMemo(
+    () => allFMs.filter((fm) => !fm.is_contributing && fm.status === 'approved').length,
+    [allFMs]
+  )
   // Unmapped tab: unique source fields with no active (non-rejected) mapping
   const unmappedCount = useMemo(() => {
     const sourceTableIds = new Set(tableMappings.map((tm) => tm.source_table_id))
@@ -1932,9 +2033,16 @@ export default function MappingContent({ projectId, initialData }: Props) {
         return tableMappings.filter(
           (tm) => tm.status === 'needs_review' || tm.fieldMappings.some((fm) => !fm.is_contributing && fm.status === 'needs_review')
         )
-      case 'high_confidence':
-        return tableMappings.filter((tm) => (tm.confidence ?? 0) >= 75)
+      case 'approved':
+        return tableMappings
+          .map((tm) => ({
+            ...tm,
+            fieldMappings: tm.fieldMappings.filter((fm) => !fm.is_contributing && fm.status === 'approved'),
+          }))
+          .filter((tm) => tm.fieldMappings.length > 0)
       case 'all':
+        return tableMappings
+      case 'unmapped':
         return tableMappings
       case 'many_to_one':
         return tableMappings
@@ -2185,10 +2293,10 @@ export default function MappingContent({ projectId, initialData }: Props) {
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-1 p-1 bg-gray-100 rounded-xl">
           {([
-            { key: 'needs_review', label: 'Needs Review', count: needsReviewCount, cc: 'bg-amber-100 text-amber-700' },
-            { key: 'high_confidence', label: 'High Confidence', count: highConfCount, cc: 'bg-green-100 text-green-700' },
-            { key: 'unmapped', label: 'Unmapped', count: unmappedCount, cc: 'bg-gray-200 text-gray-600' },
             { key: 'all', label: 'All', count: tableMappings.length, cc: 'bg-gray-200 text-gray-600' },
+            { key: 'needs_review', label: 'Needs Review', count: needsReviewCount, cc: 'bg-amber-100 text-amber-700' },
+            { key: 'approved', label: 'Approved', count: approvedFMCount, cc: 'bg-green-100 text-green-700' },
+            { key: 'unmapped', label: 'Unmapped', count: unmappedCount, cc: 'bg-gray-200 text-gray-600' },
             ...(manyToOneCount > 0 ? [{ key: 'many_to_one' as const, label: 'Many→One', count: manyToOneCount, cc: 'bg-blue-100 text-blue-700' }] : []),
             ...(oneToManyCount > 0 ? [{ key: 'one_to_many' as const, label: 'One→Many', count: oneToManyCount, cc: 'bg-purple-100 text-purple-700' }] : []),
           ] as const).map((tab) => (
@@ -2226,16 +2334,9 @@ export default function MappingContent({ projectId, initialData }: Props) {
       {/* Main content */}
       <div className="flex gap-5 items-start">
         <div className="flex-1 space-y-3 min-w-0">
-          {activeFilter === 'unmapped' ? (
-            <UnmappedView
-              unmappedSource={unmappedSource}
-              unmappedTarget={unmappedTarget}
-              projectId={projectId}
-              onMapped={refreshData}
-            />
-          ) : filteredMappings.length === 0 ? (
+          {filteredMappings.length === 0 ? (
             <div className="text-center py-12 text-sm text-gray-400 border border-dashed border-gray-200 rounded-xl">
-              {activeFilter === 'needs_review' ? 'All mappings have been reviewed.' : activeFilter === 'high_confidence' ? 'No high-confidence mappings.' : activeFilter === 'many_to_one' ? 'No many-to-one mappings found.' : activeFilter === 'one_to_many' ? 'No one-to-many mappings found.' : 'No mappings found.'}
+              {activeFilter === 'needs_review' ? 'All mappings have been reviewed.' : activeFilter === 'approved' ? 'No approved mappings yet.' : activeFilter === 'many_to_one' ? 'No many-to-one mappings found.' : activeFilter === 'one_to_many' ? 'No one-to-many mappings found.' : 'No mappings found.'}
             </div>
           ) : (
             filteredMappings.map((tm) => (
@@ -2261,6 +2362,7 @@ export default function MappingContent({ projectId, initialData }: Props) {
                 regeneratingThis={regeneratingTMId === tm.id}
                 onRegenerate={() => setRegenerateConfirmTarget(tm)}
                 showContributingRows={activeFilter === 'many_to_one'}
+                showInlineUnmapped={activeFilter === 'all' || activeFilter === 'unmapped'}
               />
             ))
           )}
