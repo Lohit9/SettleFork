@@ -1,7 +1,6 @@
 import { notFound } from 'next/navigation'
 import type { Metadata } from 'next'
 import Link from 'next/link'
-import Image from 'next/image'
 import { createClient } from '@supabase/supabase-js'
 
 import Header from '@/components/Header'
@@ -132,41 +131,6 @@ export async function generateMetadata({
   }
 }
 
-// ─── Sub-components ──────────────────────────────────────────────────────────
-
-function BrowserChrome({
-  source,
-  target,
-  size = 'lg',
-}: {
-  source: string
-  target: string
-  size?: 'sm' | 'lg'
-}) {
-  return (
-    <div className="rounded-2xl overflow-hidden shadow-2xl border border-mine-slate-200">
-      <div className="h-8 bg-mine-slate-100 flex items-center px-3 gap-1.5">
-        <span className="w-2.5 h-2.5 rounded-full bg-red-400" />
-        <span className="w-2.5 h-2.5 rounded-full bg-amber-400" />
-        <span className="w-2.5 h-2.5 rounded-full bg-green-400" />
-        <span className="ml-3 text-[11px] text-mine-slate-500 truncate">
-          {source} → {target} migration
-        </span>
-      </div>
-      <div className={`relative bg-mine-slate-50 ${size === 'lg' ? 'h-72 lg:h-96' : 'h-52 lg:h-64'}`}>
-        <Image
-          src="/images/product/mapping-review.png"
-          alt={`${source} to ${target} migration — Mine product`}
-          fill
-          className="object-cover object-top"
-          sizes={size === 'lg' ? '(max-width: 1024px) 100vw, 50vw' : '(max-width: 1024px) 100vw, 40vw'}
-          priority={size === 'lg'}
-        />
-      </div>
-    </div>
-  )
-}
-
 // ─── Page ────────────────────────────────────────────────────────────────────
 
 export default async function MigrationPageRoute({
@@ -273,7 +237,28 @@ export default async function MigrationPageRoute({
               </ScrollReveal>
 
               <ScrollReveal delay={0.1}>
-                <BrowserChrome source={src} target={tgt} size="lg" />
+                <div className="bg-mine-slate-900 rounded-2xl p-8 text-white">
+                  <p className="text-sm text-mine-slate-400 uppercase tracking-widest mb-6">
+                    Migration at a glance
+                  </p>
+                  <div className="space-y-5">
+                    <div className="pb-5 border-b border-mine-slate-700">
+                      <p className="text-mine-slate-400 text-sm mb-1">Manual timeline</p>
+                      <p className="text-2xl font-bold text-white">{stats.manual_timeline ?? '—'}</p>
+                    </div>
+                    <div className="pb-5 border-b border-mine-slate-700">
+                      <p className="text-mine-slate-400 text-sm mb-1">With Mine</p>
+                      <p className="text-2xl font-bold text-mine-blue-400">{stats.mine_timeline ?? '—'}</p>
+                    </div>
+                    <div>
+                      <p className="text-mine-slate-400 text-sm mb-1">Cost reduction</p>
+                      <p className="text-2xl font-bold text-mine-teal-400">{stats.cost_reduction ?? '—'}</p>
+                    </div>
+                  </div>
+                  <p className="text-xs text-mine-slate-500 mt-4">
+                    Based on enterprise migration benchmarks
+                  </p>
+                </div>
               </ScrollReveal>
             </div>
           </section>
@@ -291,6 +276,26 @@ export default async function MigrationPageRoute({
               ))}
             </ScrollReveal>
           </section>
+
+          {/* ── Stats Bar ────────────────────────────────────────────── */}
+          <ScrollReveal>
+            <section className="bg-mine-slate-900 py-10 px-6">
+              <div className="max-w-6xl mx-auto grid grid-cols-1 md:grid-cols-3 gap-8 text-center">
+                <div>
+                  <p className="text-3xl font-bold text-white">{stats.manual_timeline ?? '—'}</p>
+                  <p className="text-sm text-mine-slate-400 mt-1">typical manual timeline</p>
+                </div>
+                <div>
+                  <p className="text-3xl font-bold text-mine-blue-400">{stats.mine_timeline ?? '—'}</p>
+                  <p className="text-sm text-mine-slate-400 mt-1">with Mine</p>
+                </div>
+                <div>
+                  <p className="text-3xl font-bold text-mine-teal-400">{stats.cost_reduction ?? '—'}</p>
+                  <p className="text-sm text-mine-slate-400 mt-1">cost reduction</p>
+                </div>
+              </div>
+            </section>
+          </ScrollReveal>
 
           {/* ── SECTION 4 — Challenges ──────────────────────────────── */}
           <section className="py-16 px-6 lg:px-12">
@@ -366,30 +371,51 @@ export default async function MigrationPageRoute({
 
           {/* ── SECTION 6 — How Mine Helps ──────────────────────────── */}
           <section className="py-16 px-6 lg:px-12">
-            <div className="max-w-6xl mx-auto grid lg:grid-cols-2 gap-12 items-center">
-              <ScrollReveal>
-                <h2 className="text-2xl font-bold text-mine-slate-900 mb-6">
-                  How Mine automates your {src} to {tgt} migration
-                </h2>
-                <ul className="space-y-4">
-                  {(page.how_mine_helps ?? []).map((item, i) => (
-                    <li key={i} className="flex gap-3">
-                      <span className="mt-0.5 shrink-0 w-5 h-5 bg-mine-blue-600 rounded-full flex items-center justify-center">
-                        <svg className="w-3 h-3 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={3}>
-                          <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
-                        </svg>
-                      </span>
-                      <p className="text-mine-slate-600 leading-relaxed text-sm">{item}</p>
-                    </li>
-                  ))}
-                </ul>
-              </ScrollReveal>
-
-              <ScrollReveal delay={0.1}>
-                <BrowserChrome source={src} target={tgt} size="sm" />
-              </ScrollReveal>
-            </div>
+            <ScrollReveal className="max-w-3xl mx-auto">
+              <h2 className="text-2xl font-bold text-mine-slate-900 mb-6">
+                How Mine automates your {src} to {tgt} migration
+              </h2>
+              <ul className="space-y-4">
+                {(page.how_mine_helps ?? []).map((item, i) => (
+                  <li key={i} className="flex gap-3">
+                    <span className="mt-0.5 shrink-0 w-5 h-5 bg-mine-blue-600 rounded-full flex items-center justify-center">
+                      <svg className="w-3 h-3 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={3}>
+                        <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
+                      </svg>
+                    </span>
+                    <p className="text-mine-slate-600 leading-relaxed text-sm">{item}</p>
+                  </li>
+                ))}
+              </ul>
+            </ScrollReveal>
           </section>
+
+          {/* ── Mid-page CTA ──────────────────────────────────────── */}
+          <ScrollReveal>
+            <div className="py-12 px-6">
+              <div className="max-w-3xl mx-auto text-center">
+                <p className="text-lg text-mine-slate-600 mb-6">
+                  See how Mine handles your {src} to {tgt} migration
+                </p>
+                <div className="flex flex-wrap justify-center gap-3">
+                  <a
+                    href="https://calendly.com/mine-ai/demo"
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="bg-mine-blue-600 hover:bg-mine-blue-700 text-white text-sm font-semibold px-6 py-3 rounded-lg transition-all hover:-translate-y-0.5 hover:shadow-lg hover:shadow-blue-600/25"
+                  >
+                    Book a Demo
+                  </a>
+                  <Link
+                    href="/request-access"
+                    className="border border-mine-slate-200 text-mine-slate-700 hover:border-mine-blue-400 hover:text-mine-blue-600 text-sm font-semibold px-6 py-3 rounded-lg transition-all"
+                  >
+                    Request Access
+                  </Link>
+                </div>
+              </div>
+            </div>
+          </ScrollReveal>
 
           {/* ── SECTION 7 — Timeline Comparison ────────────────────── */}
           <section className="bg-mine-slate-900 py-16 px-6 lg:px-12">
@@ -446,6 +472,12 @@ export default async function MigrationPageRoute({
                         </p>
                         <p className="text-white text-xl font-bold">{stats.mine_team ?? '—'}</p>
                       </div>
+                      <div>
+                        <p className="text-blue-200 text-xs uppercase tracking-widest mb-1">
+                          Estimated cost
+                        </p>
+                        <p className="text-white text-xl font-bold">{stats.cost_reduction ? `${stats.cost_reduction} less` : '—'}</p>
+                      </div>
                     </div>
                     {stats.cost_reduction && (
                       <div className="mt-6">
@@ -459,6 +491,20 @@ export default async function MigrationPageRoute({
               </div>
             </div>
           </section>
+
+          {/* ── Credibility Signal ─────────────────────────────────── */}
+          <ScrollReveal>
+            <div className="py-10 px-6">
+              <p className="max-w-3xl mx-auto text-center text-sm leading-relaxed">
+                <span className="font-semibold text-mine-slate-800">
+                  Built by migration specialists who've led enterprise data programs.
+                </span>{' '}
+                <span className="text-mine-slate-500">
+                  In active design partnership with enterprise clients.
+                </span>
+              </p>
+            </div>
+          </ScrollReveal>
 
           {/* ── SECTION 8 — FAQ ─────────────────────────────────────── */}
           {(page.faqs ?? []).length > 0 && (
@@ -483,7 +529,9 @@ export default async function MigrationPageRoute({
                     Related migration paths
                   </h2>
                 </ScrollReveal>
-                <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+                <div className={`grid grid-cols-1 gap-6 ${
+                  related.length === 2 ? 'md:grid-cols-2' : related.length >= 3 ? 'md:grid-cols-3' : ''
+                }`}>
                   {related.map((rel, i) => (
                     <ScrollReveal key={rel.slug} delay={i * 0.05}>
                       <Link
