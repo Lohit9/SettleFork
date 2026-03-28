@@ -19,7 +19,7 @@ export default function Footer() {
               href="/migrate"
               className="text-[#94A3B8] text-sm hover:text-[#475569] transition-colors"
             >
-              Migration Paths
+              Migrations
             </Link>
             <a
               href="https://calendly.com/mine-ai/demo"

@@ -10,7 +10,7 @@ export default function FinalCTA() {
             Bring autonomy to your next migration
           </h2>
           <p className="text-[#94A3B8] text-base leading-relaxed mb-9">
-            Tell us about your upcoming program and we&apos;ll explore early access or design partnership.
+            Tell us about your upcoming migration and we&apos;ll share a preliminary assessment within 48 hours.
           </p>
 
           <div className="flex flex-wrap justify-center gap-3">
