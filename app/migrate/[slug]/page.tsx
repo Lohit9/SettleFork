@@ -258,10 +258,28 @@ export default async function MigrationPageRoute({
                   <p className="text-xs text-mine-slate-500 mt-4">
                     Based on enterprise migration benchmarks
                   </p>
+                  <div className="border-t border-mine-slate-700 mt-4 pt-4">
+                    <p className="text-xs text-mine-slate-400 italic leading-relaxed">
+                      Most enterprise migrations start 6+ months behind schedule. Yours doesn't have to.
+                    </p>
+                  </div>
                 </div>
               </ScrollReveal>
             </div>
           </section>
+
+          {/* ── Who This Is For ─────────────────────────────────────── */}
+          <ScrollReveal>
+            <div className="py-6 px-6 lg:px-12">
+              <p className="max-w-3xl mx-auto text-sm text-mine-slate-500 text-center leading-relaxed">
+                This guide is for{' '}
+                <span className="font-medium text-mine-slate-700">
+                  VPs of IT, data architects, and migration leads
+                </span>{' '}
+                at companies moving data from {src} to {tgt} — whether you're scoping, planning, or mid-program.
+              </p>
+            </div>
+          </ScrollReveal>
 
           {/* ── SECTION 3 — Overview ────────────────────────────────── */}
           <section className="bg-mine-slate-50 py-16 px-6 lg:px-12">
@@ -269,11 +287,25 @@ export default async function MigrationPageRoute({
               <h2 className="text-2xl font-bold text-mine-slate-900 mb-6">
                 Why companies migrate from {src} to {tgt}
               </h2>
-              {(page.overview_paragraphs ?? []).map((para, i) => (
-                <p key={i} className="text-mine-slate-600 leading-relaxed mb-4">
-                  {para}
-                </p>
-              ))}
+              <p className="text-lg font-semibold text-mine-slate-800 mb-4">
+                {src} to {tgt} data migration
+              </p>
+              {(page.overview_paragraphs ?? []).map((para, i, arr) => {
+                const isLast = i === arr.length - 1
+                return isLast ? (
+                  <div key={i} className="border-l-4 border-mine-blue-600 pl-4 bg-mine-blue-50/50 py-3 rounded-r-lg mb-4">
+                    <p className="text-mine-slate-600 leading-relaxed">{para}</p>
+                  </div>
+                ) : (
+                  <p key={i} className="text-mine-slate-600 leading-relaxed mb-4">{para}</p>
+                )
+              })}
+              <Link
+                href="/migrate"
+                className="text-mine-blue-600 hover:text-mine-blue-500 text-sm font-medium mt-4 inline-block"
+              >
+                Explore all migration paths →
+              </Link>
             </ScrollReveal>
           </section>
 
@@ -326,9 +358,12 @@ export default async function MigrationPageRoute({
           <section className="bg-mine-slate-50 py-16 px-6 lg:px-12">
             <div className="max-w-4xl mx-auto">
               <ScrollReveal>
-                <h2 className="text-2xl font-bold text-mine-slate-900 mb-8 text-center">
-                  What data moves from {src} to {tgt}
+                <h2 className="text-2xl font-bold text-mine-slate-900 mb-2 text-center">
+                  {src} to {tgt} field mapping — what data moves
                 </h2>
+                <p className="text-sm text-mine-slate-500 text-center mb-6">
+                  {(page.data_objects ?? []).length} data objects typically migrated
+                </p>
               </ScrollReveal>
               <ScrollReveal delay={0.05}>
                 <div className="overflow-x-auto rounded-xl border border-mine-slate-200">
@@ -387,6 +422,12 @@ export default async function MigrationPageRoute({
                   </li>
                 ))}
               </ul>
+              <Link
+                href="/how-it-works"
+                className="text-mine-blue-600 hover:text-mine-blue-500 text-sm font-medium mt-4 inline-block"
+              >
+                See how Mine works end-to-end →
+              </Link>
             </ScrollReveal>
           </section>
 
@@ -394,8 +435,8 @@ export default async function MigrationPageRoute({
           <ScrollReveal>
             <div className="py-12 px-6">
               <div className="max-w-3xl mx-auto text-center">
-                <p className="text-lg text-mine-slate-600 mb-6">
-                  See how Mine handles your {src} to {tgt} migration
+                <p className="text-lg font-medium text-mine-slate-700 mb-6">
+                  Get your {src} to {tgt} mapping analysis — see results in under an hour
                 </p>
                 <div className="flex flex-wrap justify-center gap-3">
                   <a
@@ -479,13 +520,11 @@ export default async function MigrationPageRoute({
                         <p className="text-white text-xl font-bold">{stats.cost_reduction ? `${stats.cost_reduction} less` : '—'}</p>
                       </div>
                     </div>
-                    {stats.cost_reduction && (
-                      <div className="mt-6">
-                        <span className="inline-block bg-blue-500 text-white text-xs font-semibold px-3 py-1 rounded-full">
-                          {stats.cost_reduction} cost reduction
-                        </span>
-                      </div>
-                    )}
+                    <div className="mt-6">
+                      <span className="inline-block text-xs text-blue-200/70 bg-blue-500/30 px-3 py-1 rounded-full">
+                        Based on enterprise migration benchmarks
+                      </span>
+                    </div>
                   </div>
                 </ScrollReveal>
               </div>
@@ -550,6 +589,39 @@ export default async function MigrationPageRoute({
             </section>
           )}
 
+          {/* ── Next Steps ────────────────────────────────────────────── */}
+          <ScrollReveal>
+            <section className="py-12 px-6 lg:px-12">
+              <div className="max-w-3xl mx-auto">
+                <h2 className="text-2xl font-bold text-mine-slate-900 text-center mb-8">
+                  Get started in 4 steps
+                </h2>
+                <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+                  <div className="text-center p-4">
+                    <p className="text-2xl font-bold text-mine-blue-200">01</p>
+                    <p className="text-sm font-medium text-mine-slate-900 mt-1">Connect your schema</p>
+                    <p className="text-xs text-mine-slate-500 mt-1">Upload or connect your {src} data</p>
+                  </div>
+                  <div className="text-center p-4">
+                    <p className="text-2xl font-bold text-mine-blue-200">02</p>
+                    <p className="text-sm font-medium text-mine-slate-900 mt-1">Mine profiles your data</p>
+                    <p className="text-xs text-mine-slate-500 mt-1">Field-level analysis in 15 minutes</p>
+                  </div>
+                  <div className="text-center p-4">
+                    <p className="text-2xl font-bold text-mine-blue-200">03</p>
+                    <p className="text-sm font-medium text-mine-slate-900 mt-1">Review AI mappings</p>
+                    <p className="text-xs text-mine-slate-500 mt-1">Approve, edit, or regenerate any mapping</p>
+                  </div>
+                  <div className="text-center p-4">
+                    <p className="text-2xl font-bold text-mine-blue-200">04</p>
+                    <p className="text-sm font-medium text-mine-slate-900 mt-1">Export load-ready files</p>
+                    <p className="text-xs text-mine-slate-500 mt-1">Production SQL, CSVs, and validation reports</p>
+                  </div>
+                </div>
+              </div>
+            </section>
+          </ScrollReveal>
+
           {/* ── SECTION 10 — Lead Capture ───────────────────────────── */}
           <section className="py-20 px-6 lg:px-12">
             <div className="max-w-2xl mx-auto text-center">
@@ -557,8 +629,11 @@ export default async function MigrationPageRoute({
                 <h2 className="text-3xl font-bold text-mine-slate-900 mb-4">
                   Ready to migrate from {src} to {tgt}?
                 </h2>
-                <p className="text-mine-slate-500 mb-8">
+                <p className="text-mine-slate-500 mb-4">
                   Tell us about your migration and we'll show you how Mine can help.
+                </p>
+                <p className="text-sm text-mine-slate-400 mb-6">
+                  No commitment required. We'll review your migration scope and share a preliminary assessment within 48 hours.
                 </p>
               </ScrollReveal>
               <ScrollReveal delay={0.05}>
@@ -567,6 +642,14 @@ export default async function MigrationPageRoute({
                   targetSystem={tgt}
                   slug={slug}
                 />
+                <a
+                  href="https://calendly.com/mine-ai/demo"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="text-sm text-mine-blue-600 hover:text-mine-blue-500 mt-4 inline-block"
+                >
+                  Or book a demo call →
+                </a>
               </ScrollReveal>
             </div>
           </section>
