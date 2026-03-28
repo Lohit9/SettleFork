@@ -28,7 +28,7 @@ import {
   previewTransformDistinct,
   suggestTransformDescription,
 } from '@/lib/actions/transformations'
-import type { TransformPageData, DatasetGroup, TableGroup, FieldItem, FullTransformTestResult } from '@/lib/actions/transformations'
+import type { TransformPageData, DatasetGroup, TableGroup, FieldItem, FullTransformTestResult, UnmappedTargetField } from '@/lib/actions/transformations'
 import { stageAllData, getBlockingSourceIssues, getSourceIssuesForField, checkProjectStaleness } from '@/lib/actions/staging'
 import type { BlockingIssue, FieldSourceIssue } from '@/lib/actions/staging'
 import { sourcePreviewValueMatchesIssues, maxAffectedRecordsForField } from '@/lib/quality/preview-source-issue-match'
@@ -206,6 +206,9 @@ export default function TransformContent({ projectId, initialData }: Props) {
 
   // Open source quality issues for the currently selected field (for Data Preview flagging)
   const [fieldSourceIssues, setFieldSourceIssues] = useState<FieldSourceIssue[]>([])
+
+  // Unmapped NOT NULL target fields — sidebar selection
+  const [selectedUnmappedFieldId, setSelectedUnmappedFieldId] = useState<string | null>(null)
 
   // "Why transform?" collapsible (collapsed by default — it's reference info)
   const [whyExpanded, setWhyExpanded] = useState(false)
@@ -389,6 +392,7 @@ export default function TransformContent({ projectId, initialData }: Props) {
       await flushAutoSave()
 
       setSelectedMappingId(fieldMappingId)
+      setSelectedUnmappedFieldId(null)
       setPreviewResults([])
       setPreviewError(null)
       setPreviewMode('sample')
@@ -929,12 +933,80 @@ export default function TransformContent({ projectId, initialData }: Props) {
                 />
               ))
             )}
+
+            {/* Need Values — unmapped NOT NULL target fields */}
+            {data.unmappedNotNullTargetFields.length > 0 && (
+              <div className="mt-4 border-t border-dashed border-gray-200 pt-3">
+                <div className="px-4 text-xs font-medium text-amber-600 uppercase tracking-wide mb-2">
+                  Need Values ({data.unmappedNotNullTargetFields.length})
+                </div>
+                {data.unmappedNotNullTargetFields.map((field) => (
+                  <div
+                    key={field.id}
+                    className={`flex items-center gap-2 px-4 py-1.5 text-sm cursor-pointer rounded mx-2 transition-colors ${
+                      selectedUnmappedFieldId === field.id
+                        ? 'bg-amber-100 text-amber-800'
+                        : 'text-gray-500 hover:bg-amber-50'
+                    }`}
+                    onClick={() => {
+                      setSelectedUnmappedFieldId(field.id)
+                      setSelectedMappingId(null)
+                    }}
+                  >
+                    <span className="w-2 h-2 rounded-full bg-amber-400 flex-shrink-0" />
+                    <span className="truncate">{field.name}</span>
+                    <span className="text-[10px] text-amber-500 ml-auto flex-shrink-0">NOT NULL</span>
+                  </div>
+                ))}
+              </div>
+            )}
           </div>
         </div>
 
-        {/* ── Right area: empty state OR split panel ── */}
+        {/* ── Right area: empty state OR unmapped info OR split panel ── */}
         <div className="flex-1 flex flex-col overflow-hidden">
-          {!selectedContext ? (
+          {selectedUnmappedFieldId && !selectedContext ? (() => {
+            const field = data.unmappedNotNullTargetFields.find((f) => f.id === selectedUnmappedFieldId)
+            if (!field) return null
+            return (
+              <div className="flex-1 flex items-start justify-center p-8">
+                <div className="max-w-lg w-full bg-amber-50 border border-amber-200 rounded-lg p-6">
+                  <div className="flex items-center gap-2 mb-4">
+                    <span className="w-3 h-3 rounded-full bg-amber-400" />
+                    <span className="text-lg font-semibold text-amber-800">Unmapped Required Field</span>
+                  </div>
+                  <div className="space-y-3 text-sm text-gray-700">
+                    <div className="bg-white rounded-md p-3 border border-amber-100">
+                      <p className="font-medium text-gray-900">{field.name}</p>
+                      <p className="text-gray-500 text-xs mt-0.5">{field.data_type} · NOT NULL{field.table_name ? ` · ${field.table_name}` : ''}</p>
+                      {field.check_constraint?.type === 'in_list' && (field.check_constraint as { allowedValues?: string[] }).allowedValues && (
+                        <div className="mt-2 flex flex-wrap gap-1">
+                          {((field.check_constraint as { allowedValues: string[] }).allowedValues).map((v: string) => (
+                            <span key={v} className="text-[10px] px-1.5 py-0.5 bg-blue-50 text-blue-700 rounded font-mono">{v}</span>
+                          ))}
+                        </div>
+                      )}
+                      {field.check_constraint?.type === 'regex' && (field.check_constraint as { pattern?: string }).pattern && (
+                        <p className="mt-1 text-xs text-purple-600 font-mono">Pattern: {(field.check_constraint as { pattern: string }).pattern}</p>
+                      )}
+                    </div>
+                    <p>This target field is <strong>NOT NULL</strong> but has no source field mapped to it. A value must be provided for every record.</p>
+                    <div className="space-y-2 text-gray-600">
+                      <p className="font-medium text-gray-700">Options:</p>
+                      <div className="flex items-start gap-2">
+                        <span className="text-blue-500 mt-0.5">1.</span>
+                        <p>Go to the <strong>Mapping</strong> tab and map a source field to this target field.</p>
+                      </div>
+                      <div className="flex items-start gap-2">
+                        <span className="text-blue-500 mt-0.5">2.</span>
+                        <p>The <strong>Execution Package</strong> will auto-generate a default value based on the field type and constraints when you generate it.</p>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            )
+          })() : !selectedContext ? (
             <div className="flex-1 flex items-center justify-center p-8">
               <div className="text-center max-w-md">
                 <div className="w-16 h-16 bg-gray-100 rounded-full flex items-center justify-center mx-auto mb-4">

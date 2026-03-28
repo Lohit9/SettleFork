@@ -59,10 +59,22 @@ export interface DatasetGroup {
   tables: TableGroup[]
 }
 
+export interface UnmappedTargetField {
+  id: string
+  name: string
+  data_type: string
+  is_nullable: boolean
+  is_primary_key: boolean
+  table_id: string
+  table_name: string
+  check_constraint: { type: string; allowedValues?: string[]; pattern?: string; raw?: string } | null
+}
+
 export interface TransformPageData {
   datasets: DatasetGroup[]
   schemaDocText: string
   hasMappings: boolean
+  unmappedNotNullTargetFields: UnmappedTargetField[]
 }
 
 // ── getTransformData ──────────────────────────────────────────────────────────
@@ -74,7 +86,7 @@ export async function getTransformData(
   const {
     data: { user },
   } = await supabase.auth.getUser()
-  if (!user) return { datasets: [], schemaDocText: '', hasMappings: false }
+  if (!user) return { datasets: [], schemaDocText: '', hasMappings: false, unmappedNotNullTargetFields: [] }
 
   // Verify project ownership
   const { data: project } = await supabase
@@ -83,7 +95,7 @@ export async function getTransformData(
     .eq('id', projectId)
     .eq('user_id', user.id)
     .single()
-  if (!project) return { datasets: [], schemaDocText: '', hasMappings: false }
+  if (!project) return { datasets: [], schemaDocText: '', hasMappings: false, unmappedNotNullTargetFields: [] }
 
   // 1. Table mappings (non-rejected)
   const { data: tms } = await supabase
@@ -93,7 +105,7 @@ export async function getTransformData(
     .neq('status', 'rejected')
 
   if (!tms || tms.length === 0) {
-    return { datasets: [], schemaDocText: '', hasMappings: false }
+    return { datasets: [], schemaDocText: '', hasMappings: false, unmappedNotNullTargetFields: [] }
   }
 
   const tmIds = tms.map((tm) => tm.id)
@@ -121,7 +133,7 @@ export async function getTransformData(
   ])
 
   if (!fieldMappings || fieldMappings.length === 0) {
-    return { datasets: [], schemaDocText: '', hasMappings: true }
+    return { datasets: [], schemaDocText: '', hasMappings: true, unmappedNotNullTargetFields: [] }
   }
 
   const allSourceFieldIds = fieldMappings.map((fm) => fm.source_field_id)
@@ -291,10 +303,40 @@ export async function getTransformData(
     }
   }
 
+  // ── Compute unmapped NOT NULL target fields ─────────────────────────────────
+  const allTargetTableIds = [...new Set(tms.map((tm) => tm.target_table_id))]
+  const { data: allTgtFieldRows } = await supabase
+    .from('fields')
+    .select('id, name, data_type, is_nullable, is_primary_key, table_id, check_constraint')
+    .in('table_id', allTargetTableIds.length > 0 ? allTargetTableIds : ['__none__'])
+    .order('ordinal_position', { ascending: true })
+
+  const mappedTargetFieldIds = new Set(
+    fieldMappings.filter((fm) => !fm.is_contributing).map((fm) => fm.target_field_id)
+  )
+
+  const tgtTableNameById = new Map(
+    (tables ?? []).filter((t) => allTargetTableIds.includes(t.id)).map((t) => [t.id, t.name])
+  )
+
+  const unmappedNotNullTargetFields: UnmappedTargetField[] = (allTgtFieldRows ?? [])
+    .filter((f) => !f.is_nullable && !f.is_primary_key && !mappedTargetFieldIds.has(f.id))
+    .map((f) => ({
+      id: f.id,
+      name: f.name,
+      data_type: f.data_type,
+      is_nullable: f.is_nullable,
+      is_primary_key: f.is_primary_key ?? false,
+      table_id: f.table_id,
+      table_name: tgtTableNameById.get(f.table_id) ?? '',
+      check_constraint: f.check_constraint as UnmappedTargetField['check_constraint'],
+    }))
+
   return {
     datasets: [...datasetGroupMap.values()],
     schemaDocText,
     hasMappings: true,
+    unmappedNotNullTargetFields,
   }
 }
 
