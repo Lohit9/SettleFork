@@ -28,9 +28,10 @@ const INPUT_CLASS =
 interface LeadCaptureFormProps {
   sourceSystem: string
   targetSystem: string
+  slug: string
 }
 
-export default function LeadCaptureForm({ sourceSystem, targetSystem }: LeadCaptureFormProps) {
+export default function LeadCaptureForm({ sourceSystem, targetSystem, slug }: LeadCaptureFormProps) {
   const [companyName, setCompanyName] = useState('')
   const [email, setEmail] = useState('')
   const [timeline, setTimeline] = useState('')
@@ -54,12 +55,13 @@ export default function LeadCaptureForm({ sourceSystem, targetSystem }: LeadCapt
     setIsSubmitting(true)
     try {
       const { error: dbError } = await supabase.from('migration_leads').insert({
-        company_name: companyName.trim(),
+        company_name: companyName.trim() || null,
         email: email.trim(),
         source_system: sourceSystem,
         target_system: targetSystem,
         timeline: timeline || null,
         volume: volume || null,
+        page_slug: slug,
       })
 
       if (dbError) throw dbError
