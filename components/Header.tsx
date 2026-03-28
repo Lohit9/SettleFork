@@ -6,7 +6,7 @@ import { motion, AnimatePresence } from 'framer-motion'
 
 const NAV_LINKS = [
   { label: 'How It Works',     href: '/how-it-works' },
-  { label: 'Migration Paths',  href: '/migrate' },
+  { label: 'Migrations',  href: '/migrate' },
 ]
 
 const CALENDLY = 'https://calendly.com/mine-ai/demo'
