@@ -227,7 +227,7 @@ export default async function MigrationPageRoute({
                   </a>
                 </div>
                 <p className="mt-4 text-xs text-mine-slate-400">
-                  Now accepting enterprise migration programs
+                  Working with enterprise teams on active migration programs
                 </p>
               </ScrollReveal>
               <ScrollReveal delay={0.1}>
@@ -290,6 +290,9 @@ export default async function MigrationPageRoute({
             <p className="text-xs text-mine-slate-400 mt-2">
               Based on enterprise migration programs led by Mine's founding team
             </p>
+            <p className="text-xs text-mine-slate-400 text-center mt-1">
+              Last updated March 2026
+            </p>
           </div>
 
           {/* ── 7. How Mine Helps ─────────────────────────────────── */}
@@ -332,20 +335,20 @@ export default async function MigrationPageRoute({
                   Get your {src} to {tgt} mapping analysis — see results in under an hour
                 </p>
                 <div className="flex flex-wrap justify-center gap-3">
+                  <Link
+                    href="/request-access"
+                    className="bg-mine-blue-600 hover:bg-mine-blue-700 text-white text-sm font-semibold px-6 py-3 rounded-lg transition-all hover:-translate-y-0.5 hover:shadow-lg hover:shadow-blue-600/25"
+                  >
+                    Get Your Free Assessment
+                  </Link>
                   <a
                     href="https://calendly.com/mine-ai/demo"
                     target="_blank"
                     rel="noopener noreferrer"
-                    className="bg-mine-blue-600 hover:bg-mine-blue-700 text-white text-sm font-semibold px-6 py-3 rounded-lg transition-all hover:-translate-y-0.5 hover:shadow-lg hover:shadow-blue-600/25"
+                    className="border border-mine-slate-200 text-mine-slate-700 hover:border-mine-blue-400 hover:text-mine-blue-600 text-sm font-semibold px-6 py-3 rounded-lg transition-all"
                   >
                     Book a Demo
                   </a>
-                  <Link
-                    href="/request-access"
-                    className="border border-mine-slate-200 text-mine-slate-700 hover:border-mine-blue-400 hover:text-mine-blue-600 text-sm font-semibold px-6 py-3 rounded-lg transition-all"
-                  >
-                    Request Access
-                  </Link>
                 </div>
               </div>
             </div>
@@ -361,7 +364,7 @@ export default async function MigrationPageRoute({
               </ScrollReveal>
               <div className="grid md:grid-cols-2 gap-6">
                 <ScrollReveal delay={0.05}>
-                  <div className="bg-mine-slate-800 rounded-xl p-8 h-full">
+                  <div className="bg-mine-slate-800 rounded-xl p-8 h-full flex flex-col">
                     <p className="text-lg font-semibold text-mine-slate-300 mb-6">
                       Traditional approach
                     </p>
@@ -377,6 +380,22 @@ export default async function MigrationPageRoute({
                       <div>
                         <p className="text-mine-slate-500 text-xs uppercase tracking-widest mb-1">Team size</p>
                         <p className="text-white text-xl font-bold">{stats.manual_team ?? '—'}</p>
+                      </div>
+                    </div>
+                    <div className="border-t border-mine-slate-600 mt-6 pt-4">
+                      <p className="text-[10px] uppercase tracking-widest text-mine-slate-400 mb-3">Typically requires</p>
+                      <div className="grid grid-cols-2 gap-x-4 gap-y-1">
+                        {[
+                          'Manual field mapping in spreadsheets',
+                          'Custom ABAP/SQL extraction scripts',
+                          '3–5 mock migration cycles',
+                          'Dedicated source system consultants',
+                          'Manual reconciliation testing',
+                        ].map((item) => (
+                          <p key={item} className="text-xs text-mine-slate-400">
+                            <span className="text-mine-slate-500 mr-1">×</span>{item}
+                          </p>
+                        ))}
                       </div>
                     </div>
                   </div>
@@ -434,11 +453,12 @@ export default async function MigrationPageRoute({
                 </h2>
               </ScrollReveal>
               <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                {(page.challenges ?? []).map((challenge, i) => {
+                {(page.challenges ?? []).map((challenge, i, arr) => {
                   const dotIdx = challenge.description.indexOf('. ')
                   const hasSplit = dotIdx !== -1
+                  const isLastOdd = i === arr.length - 1 && arr.length % 2 !== 0
                   return (
-                    <ScrollReveal key={i} delay={i * 0.05} className="h-full">
+                    <ScrollReveal key={i} delay={i * 0.05} className={`h-full ${isLastOdd ? 'md:col-span-2' : ''}`}>
                       <div className="bg-white rounded-xl p-6 border border-mine-slate-200 hover:-translate-y-1 hover:shadow-lg transition-all h-full">
                         <h3 className="text-lg font-semibold text-mine-slate-900 mb-2">
                           {challenge.title}
@@ -457,6 +477,9 @@ export default async function MigrationPageRoute({
                             </span>
                           )}
                         </p>
+                        <Link href="/migrate" className="text-mine-blue-600 hover:text-mine-blue-500 text-xs font-medium mt-3 inline-block">
+                          Explore related migrations →
+                        </Link>
                       </div>
                     </ScrollReveal>
                   )
@@ -506,50 +529,22 @@ export default async function MigrationPageRoute({
             </div>
           </section>
 
-          {/* ── 12. $100K Proof Point ─────────────────────────────── */}
-          <ScrollReveal>
-            <div className="max-w-3xl mx-auto px-6 py-8">
-              <blockquote className="border-l-4 border-mine-blue-600 bg-mine-blue-50/50 rounded-r-lg p-6 text-left">
-                <p className="text-base text-mine-slate-700 italic leading-relaxed">
-                  In one enterprise migration, a single field mapping error in customer master data caused $100K in billing discrepancies that went undetected for 6 months.
-                </p>
-                <p className="text-sm text-mine-slate-500 mt-3 not-italic">
-                  Mine catches these issues before they reach production.
-                </p>
-              </blockquote>
-            </div>
-          </ScrollReveal>
-
-          {/* ── 13. Credibility ───────────────────────────────────── */}
-          <ScrollReveal>
-            <div className="py-6 px-6">
-              <p className="max-w-3xl mx-auto text-center text-sm leading-relaxed">
-                <span className="font-semibold text-mine-slate-800">
-                  Built by a team that led SAP, Oracle, and Salesforce data migration programs for Fortune 500 companies at a Big 4 consulting firm.
-                </span>{' '}
-                <span className="text-mine-slate-500">
-                  Currently in design partnership with enterprise clients running active migration programs.
-                </span>
-              </p>
-            </div>
-          </ScrollReveal>
-
-          {/* ── 14. Overview ──────────────────────────────────────── */}
+          {/* ── 12. Overview ──────────────────────────────────────── */}
           <section className="bg-mine-slate-50 py-12 px-6 lg:px-12">
             <ScrollReveal className="max-w-3xl mx-auto">
               <h2 className="text-2xl font-bold text-mine-slate-900 mb-6">
-                Why companies migrate from {src} to {tgt}
+                The cost of manual {src} to {tgt} migration
               </h2>
-              {(page.overview_paragraphs ?? []).map((para, i, arr) => {
-                const isLast = i === arr.length - 1
-                return isLast ? (
-                  <div key={i} className="border-l-4 border-mine-blue-600 pl-4 bg-mine-blue-50/50 py-3 rounded-r-lg mb-4">
-                    <p className="text-mine-slate-600 leading-relaxed">{para}</p>
+              {(() => {
+                const paras = page.overview_paragraphs ?? []
+                const lastPara = paras[paras.length - 1]
+                if (!lastPara) return null
+                return (
+                  <div className="border-l-4 border-mine-blue-600 pl-4 bg-mine-blue-50/50 py-3 rounded-r-lg mb-4">
+                    <p className="text-mine-slate-600 leading-relaxed">{lastPara}</p>
                   </div>
-                ) : (
-                  <p key={i} className="text-mine-slate-600 leading-relaxed mb-4">{para}</p>
                 )
-              })}
+              })()}
               <Link
                 href="/migrate"
                 className="text-mine-blue-600 hover:text-mine-blue-500 text-sm font-medium mt-4 inline-block"
@@ -606,7 +601,35 @@ export default async function MigrationPageRoute({
             </section>
           )}
 
-          {/* ── 17. Lead Capture ──────────────────────────────────── */}
+          {/* ── $100K Proof Point ──────────────────────────────────── */}
+          <ScrollReveal>
+            <div className="max-w-3xl mx-auto px-6 py-8">
+              <blockquote className="border-l-4 border-mine-blue-600 bg-mine-blue-50/50 rounded-r-lg p-6 text-left">
+                <p className="text-base text-mine-slate-700 italic leading-relaxed">
+                  In one enterprise migration, a single field mapping error in customer master data caused $100K in billing discrepancies that went undetected for 6 months.
+                </p>
+                <p className="text-sm text-mine-slate-500 mt-3 not-italic">
+                  Mine catches these issues before they reach production.
+                </p>
+              </blockquote>
+            </div>
+          </ScrollReveal>
+
+          {/* ── Credibility ────────────────────────────────────────── */}
+          <ScrollReveal>
+            <div className="py-6 px-6">
+              <p className="max-w-3xl mx-auto text-center text-sm leading-relaxed">
+                <span className="font-semibold text-mine-slate-800">
+                  Built by a team that led SAP, Oracle, and Salesforce data migration programs for Fortune 500 companies at a Big 4 consulting firm.
+                </span>{' '}
+                <span className="text-mine-slate-500">
+                  Currently in design partnership with enterprise clients running active migration programs.
+                </span>
+              </p>
+            </div>
+          </ScrollReveal>
+
+          {/* ── Lead Capture ───────────────────────────────────────── */}
           <section className="py-14 px-6 lg:px-12">
             <div className="max-w-2xl mx-auto text-center">
               <ScrollReveal>
