@@ -1,0 +1,1666 @@
+[
+  {
+    "slug": "dynamics-gp-to-netsuite",
+    "source_system": "Microsoft Dynamics GP",
+    "target_system": "NetSuite",
+    "source_slug": "dynamics-gp",
+    "target_slug": "netsuite",
+    "source_category": "ERP",
+    "target_category": "ERP",
+    "meta_title": "Dynamics GP to NetSuite Data Migration | Mine",
+    "meta_description": "Automate your Dynamics GP to NetSuite data migration. AI-powered mapping for GP's cryptic table names to NetSuite entities. Migrate in weeks.",
+    "hero_headline": "Dynamics GP to NetSuite Data Migration",
+    "hero_subheadline": "Choosing NetSuite over Dynamics 365? Mine automates the mapping between GP's Dexterity-based schema and NetSuite's cloud-native entity model — translating cryptic table names, restructuring charts of accounts, and handling ISV data.",
+    "bridge_paragraph": "Dynamics GP uses a proprietary Dexterity-based SQL Server schema with non-descriptive table names — RM00101 for customers, PM00200 for vendors, GL00100 for accounts — while NetSuite uses a modern cloud-native entity model with intuitive record types. Mine translates GP's legacy naming conventions and flat table structures into NetSuite's subsidiary-based dimensional model automatically.",
+    "overview_paragraphs": [
+      "Dynamics GP to NetSuite migrations happen when companies choose NetSuite's cloud-native platform over Microsoft's Dynamics 365 upgrade path. This is common among companies that want a unified ERP/CRM on a single cloud platform, prefer Oracle's infrastructure over Azure, or find NetSuite's mid-market focus better aligned with their complexity level. PE portfolio companies frequently standardize on NetSuite across acquisitions, making GP-to-NetSuite a recurring migration pattern.",
+      "The technical challenge combines GP's legacy architecture problems with NetSuite's structural differences. GP's cryptic Dexterity table names (RM00101, PM00200, SOP10100) must be decoded and mapped to NetSuite's entity types. GP's flat chart of accounts needs restructuring into NetSuite's dimensional model with subsidiaries, departments, classes, and locations. Third-party ISV data (Mekorma, Binary Stream, SalesPad) stored in custom tables has no NetSuite equivalent.",
+      "Companies typically manage this migration during their NetSuite implementation using CSV exports from GP's SQL database. The table name translation, chart of accounts restructuring, and ISV data handling are largely manual — adding weeks to the implementation timeline."
+    ],
+    "challenges": [
+      {
+        "title": "GP's Dexterity table names to NetSuite entities",
+        "description": "GP uses non-descriptive table names inherited from its Dexterity framework — RM00101 (Customer Master), PM00200 (Vendor Master), GL00100 (Account Master), IV00101 (Item Master). NetSuite uses intuitive entity names. Building a complete crosswalk across hundreds of GP tables requires deep knowledge of GP's undocumented schema."
+      },
+      {
+        "title": "Flat chart of accounts to NetSuite dimensional model",
+        "description": "GP uses a flat or minimally segmented chart of accounts. NetSuite uses a multi-dimensional structure with subsidiaries, departments, classes, and locations. Decomposing GP's account structure into NetSuite's dimensional model — and deciding which GP segments become which NetSuite dimensions — requires analysis of actual GL posting patterns."
+      },
+      {
+        "title": "ISV and third-party module data",
+        "description": "Most GP installations include third-party ISV modules (Mekorma for payments, Binary Stream for multi-entity, SalesPad for order management) that store data in custom SQL tables. These have no NetSuite equivalent and require individual analysis to determine migration scope vs. archive vs. rebuild."
+      },
+      {
+        "title": "Work/Open/History table split",
+        "description": "GP stores transactions across separate work, open, and history tables (SOP10100 for sales work, SOP30200 for sales history; GL20000 for open year, GL30000 for GL history). NetSuite uses a unified transaction model. Deciding how much history to migrate and unifying GP's split tables requires careful cutover planning."
+      }
+    ],
+    "data_objects": [
+      { "source_object": "RM00101 (Customer Master)", "target_object": "Customer", "notes": "Customer classes to categories" },
+      { "source_object": "PM00200 (Vendor Master)", "target_object": "Vendor", "notes": "Payment terms mapping" },
+      { "source_object": "GL00100 (Account Master)", "target_object": "Account + Dimensions", "notes": "Flat to dimensional" },
+      { "source_object": "GL20000/GL30000 (GL Trans)", "target_object": "Journal Entry", "notes": "Open + history tables" },
+      { "source_object": "IV00101/IV00102 (Items)", "target_object": "Item", "notes": "Item sites to locations" },
+      { "source_object": "SOP10100/SOP30200 (Sales)", "target_object": "Sales Order / Invoice", "notes": "Work vs. history" },
+      { "source_object": "POP10100/POP30100 (PO)", "target_object": "Purchase Order", "notes": "Open and received" },
+      { "source_object": "RM20101 (AR Open)", "target_object": "Invoice (open)", "notes": "Open receivables" },
+      { "source_object": "PM20000 (AP Open)", "target_object": "Vendor Bill (open)", "notes": "Open payables" },
+      { "source_object": "UPR00100 (Employees)", "target_object": "Employee", "notes": "HR/payroll data" }
+    ],
+    "how_mine_helps": [
+      "Mine auto-maps GP's cryptic table names (RM00101, PM00200, GL00100) to their NetSuite entity equivalents — including GP's obscure column names like CUSTNMBR, VENDORID, and ACTINDX.",
+      "GP's flat chart of accounts is analyzed and decomposed into NetSuite's dimensional model — accounts, departments, classes, and locations mapped based on actual GL posting patterns.",
+      "ISV module tables are profiled alongside GP core tables and flagged separately — Mekorma, Binary Stream, and SalesPad data is cataloged with migration vs. archive recommendations.",
+      "GP's work/open/history table split is unified into NetSuite's single transaction model with proper period assignments and status translations."
+    ],
+    "migration_stats": {
+      "manual_timeline": "6–10 months",
+      "mine_timeline": "4–8 weeks",
+      "manual_cost": "$300K–1.2M",
+      "cost_reduction": "40–50%",
+      "manual_team": "4–8 consultants",
+      "mine_team": "1–2 internal resources"
+    },
+    "faqs": [
+      {
+        "question": "How long does a Dynamics GP to NetSuite data migration take?",
+        "answer": "A typical GP-to-NetSuite migration takes 6–10 months with traditional approaches. The timeline depends on ISV module complexity, GL history depth, and how much of GP's customization needs to carry over. Mine reduces the data conversion to 4–8 weeks by automating table name translation, chart of accounts restructuring, and transaction unification."
+      },
+      {
+        "question": "What are GP's table names and how do they map to NetSuite?",
+        "answer": "GP uses non-descriptive Dexterity-based table names: RM00101 is Customer Master, PM00200 is Vendor Master, GL00100 is Account Master, SOP10100 is Sales Transaction Work. NetSuite uses intuitive entity names like Customer, Vendor, Account, and Sales Order. The mapping requires a crosswalk covering hundreds of tables. Mine has built-in knowledge of GP's naming conventions and maps them to NetSuite entities automatically."
+      },
+      {
+        "question": "Why choose NetSuite over Dynamics 365 when migrating from GP?",
+        "answer": "Companies choose NetSuite over D365 for several reasons: unified ERP/CRM on a single platform, Oracle's cloud infrastructure, simpler administration, or PE portfolio standardization on NetSuite. NetSuite's mid-market focus aligns well with companies that found GP adequate but need cloud-native capabilities. Mine supports both paths — the data conversion approach differs significantly between D365 and NetSuite targets."
+      },
+      {
+        "question": "How does Mine handle GP's third-party ISV data?",
+        "answer": "Mine profiles your entire GP SQL database and identifies tables belonging to ISV modules like Mekorma, Binary Stream, and SalesPad. Each is cataloged with a recommendation: migrate to NetSuite (with target mapping), archive (export and store), or rebuild (document for NetSuite-native alternative). This prevents ISV data from being silently lost during migration."
+      },
+      {
+        "question": "How much does a Dynamics GP to NetSuite migration cost?",
+        "answer": "GP-to-NetSuite migrations typically cost $300K–1.2M including the NetSuite implementation, with data conversion representing 20–30% of the total. The main cost drivers are chart of accounts restructuring, ISV data complexity, and historical transaction depth. Mine reduces the data conversion portion by 40–50% through automated table mapping and dimensional analysis."
+      }
+    ],
+    "keywords": {
+      "primary": "Dynamics GP to NetSuite data migration",
+      "secondary": ["migrate Dynamics GP to NetSuite", "GP to NetSuite migration tool", "Dynamics GP to NetSuite ETL", "GP to NetSuite upgrade"],
+      "long_tail": ["how to migrate data from Dynamics GP to NetSuite", "GP table names to NetSuite entities", "Dynamics GP to NetSuite migration cost", "Dynamics GP to NetSuite migration timeline", "GP chart of accounts to NetSuite"]
+    },
+    "related_slugs": ["dynamics-gp-to-dynamics-365", "quickbooks-to-netsuite", "sage-intacct-to-netsuite", "oracle-ebs-to-netsuite"],
+    "is_published": true,
+    "display_order": 26
+  },
+  {
+    "slug": "zoho-crm-to-salesforce",
+    "source_system": "Zoho CRM",
+    "target_system": "Salesforce",
+    "source_slug": "zoho-crm",
+    "target_slug": "salesforce",
+    "source_category": "CRM",
+    "target_category": "CRM",
+    "meta_title": "Zoho CRM to Salesforce Data Migration | Mine",
+    "meta_description": "Automate your Zoho CRM to Salesforce data migration. AI-powered mapping for leads, contacts, deals, and custom modules. Migrate in weeks.",
+    "hero_headline": "Zoho CRM to Salesforce Data Migration",
+    "hero_subheadline": "Outgrowing Zoho CRM? Mine automates the field mapping between Zoho's module-based model and Salesforce's object architecture — preserving deals, custom modules, workflows, and engagement history.",
+    "bridge_paragraph": "Zoho CRM uses a module-based architecture with Leads, Contacts, Accounts, Deals, and custom modules, while Salesforce uses a similar but more rigidly typed object model with stricter field validation, record types, and complex sharing rules. Mine maps Zoho modules to Salesforce objects automatically — translating field types, picklist values, and lookup relationships.",
+    "overview_paragraphs": [
+      "Zoho CRM to Salesforce is the classic CRM upgrade migration. Companies typically outgrow Zoho when they need Salesforce's ecosystem — AppExchange integrations, CPQ, Marketing Cloud, or Einstein AI capabilities that Zoho doesn't match. This migration is common when companies raise funding and need enterprise-grade CRM, when sales teams scale beyond 50 reps and need advanced territory management, or after M&A events where the acquiring company standardizes on Salesforce.",
+      "Despite similar concepts (both have Leads, Contacts, Accounts, Deals/Opportunities), the field-level implementation differs. Zoho's custom modules map to Salesforce custom objects but with different relationship patterns. Zoho's Blueprint automation maps to Salesforce's Process Builder or Flow, but the logic must be rebuilt. Zoho's multi-currency handling, scoring rules, and territory management features have different Salesforce equivalents. Zoho's API field names don't match Salesforce API names even for conceptually identical fields.",
+      "Companies typically use Salesforce Data Loader or third-party tools like Import2 or Trujay. The field mapping, picklist alignment, and custom module translation still require significant manual effort — especially for Zoho instances with extensive customization."
+    ],
+    "challenges": [
+      {
+        "title": "Zoho custom modules to Salesforce custom objects",
+        "description": "Zoho's custom modules with lookup fields, related lists, and subforms must be translated to Salesforce custom objects with lookup/master-detail relationships and related lists. The relationship patterns differ — Zoho's subforms have no direct Salesforce equivalent and may need child custom objects or multi-select fields."
+      },
+      {
+        "title": "Picklist and multi-select field alignment",
+        "description": "Zoho picklist values and multi-select values may not match Salesforce picklist options. Dependent picklists in Zoho use a different dependency model than Salesforce's controlling-dependent picklist pattern. Each field requires value-by-value alignment with decisions about renamed, merged, or deprecated values."
+      },
+      {
+        "title": "Blueprint to Salesforce automation translation",
+        "description": "Zoho's Blueprint process automation defines multi-stage processes with transition rules and field validations. Salesforce uses Sales Processes, Flow, and validation rules for similar functionality. The automation logic doesn't migrate — it must be rebuilt, but Mine documents which fields and values each Blueprint references."
+      },
+      {
+        "title": "Zoho-specific features without Salesforce equivalents",
+        "description": "Zoho's Zia AI scoring, Canvas design views, and Kiosk Studio have no direct Salesforce equivalents. Data associated with these features (AI scores, custom view configurations) needs to be either archived, mapped to custom fields, or dropped. Mine identifies all Zoho-specific data and categorizes its migration path."
+      }
+    ],
+    "data_objects": [
+      { "source_object": "Leads", "target_object": "Lead", "notes": "Lead scoring translation" },
+      { "source_object": "Contacts", "target_object": "Contact", "notes": "Field name differences" },
+      { "source_object": "Accounts", "target_object": "Account", "notes": "Account hierarchy" },
+      { "source_object": "Deals", "target_object": "Opportunity", "notes": "Pipeline stage mapping" },
+      { "source_object": "Products", "target_object": "Product2 / PricebookEntry", "notes": "Price book structure" },
+      { "source_object": "Quotes", "target_object": "Quote", "notes": "Quote-to-opportunity link" },
+      { "source_object": "Tasks / Events", "target_object": "Task / Event", "notes": "Activity records" },
+      { "source_object": "Calls", "target_object": "Task (Call type)", "notes": "Call logging" },
+      { "source_object": "Notes", "target_object": "ContentNote", "notes": "Note attachments" },
+      { "source_object": "Custom Modules", "target_object": "Custom Objects", "notes": "Individual analysis" }
+    ],
+    "how_mine_helps": [
+      "Mine auto-maps Zoho modules to Salesforce objects with field-level precision — detecting API name mismatches (e.g., Zoho's 'Deal_Name' to Salesforce's 'Name' on Opportunity) and proposing correct field mappings.",
+      "Custom modules are profiled with their lookup fields, subforms, and related lists, then mapped to Salesforce custom objects with appropriate relationship types and field configurations.",
+      "Picklist values are extracted from Zoho and aligned with Salesforce picklist options — with exact match validation and a value translation table generated for every picklist field.",
+      "Mine catalogs all Blueprint, workflow, and scoring rule field references, generating a dependency report so your Salesforce admin knows exactly which Flows and validation rules to build."
+    ],
+    "migration_stats": {
+      "manual_timeline": "2–4 months",
+      "mine_timeline": "2–3 weeks",
+      "manual_cost": "$50K–200K",
+      "cost_reduction": "40–50%",
+      "manual_team": "1–3 consultants",
+      "mine_team": "1 internal resource"
+    },
+    "faqs": [
+      {
+        "question": "How long does a Zoho CRM to Salesforce data migration take?",
+        "answer": "A typical Zoho-to-Salesforce migration takes 2–4 months with traditional approaches. Simple Zoho instances with standard modules migrate faster, while heavily customized instances with custom modules, Blueprints, and integrations take longer. Mine reduces the data conversion to 2–3 weeks by automating field mapping, picklist alignment, and custom module translation."
+      },
+      {
+        "question": "What data can be migrated from Zoho CRM to Salesforce?",
+        "answer": "Core modules migrate well: Leads, Contacts, Accounts, Deals (to Opportunities), Products, Quotes, Tasks, Events, and Notes. Custom modules can migrate to Salesforce custom objects. Zoho-specific features like Zia AI scores, Canvas views, and Kiosk Studio configurations don't migrate directly — their data can be preserved in custom fields. Mine profiles every module and field to build a complete migration map."
+      },
+      {
+        "question": "Do Zoho custom modules work in Salesforce?",
+        "answer": "Zoho custom modules map to Salesforce custom objects, but the translation isn't one-to-one. Zoho subforms may need to become child objects, lookup fields become Salesforce lookups or master-detail relationships, and related lists must be reconfigured. Mine analyzes each custom module's structure and proposes the Salesforce equivalent with appropriate field types and relationships."
+      },
+      {
+        "question": "How do Zoho Deals map to Salesforce Opportunities?",
+        "answer": "Zoho Deals map to Salesforce Opportunities with stage-to-stage translation. Zoho's pipeline stages become Salesforce opportunity stages within a Sales Process, with probability values assigned based on your historical conversion data. Multi-pipeline setups in Zoho map to Salesforce record types with different Sales Processes. Mine generates the complete pipeline configuration."
+      },
+      {
+        "question": "How much does a Zoho CRM to Salesforce migration cost?",
+        "answer": "Zoho-to-Salesforce migrations typically cost $50K–200K depending on customization complexity, data volume, and whether custom modules need to migrate. The Salesforce licensing cost is the larger expense — migration data conversion is typically 15–25% of the total project. Mine reduces the data conversion cost by 40–50%."
+      }
+    ],
+    "keywords": {
+      "primary": "Zoho CRM to Salesforce data migration",
+      "secondary": ["migrate Zoho to Salesforce", "Zoho CRM Salesforce migration tool", "Zoho to SFDC ETL", "Zoho CRM to Salesforce upgrade"],
+      "long_tail": ["how to migrate data from Zoho CRM to Salesforce", "Zoho to Salesforce field mapping", "Zoho deals to Salesforce opportunities", "Zoho CRM to Salesforce migration cost", "Zoho custom modules to Salesforce"]
+    },
+    "related_slugs": ["zoho-crm-to-hubspot", "salesforce-to-zoho-crm", "hubspot-to-salesforce", "siebel-to-salesforce"],
+    "is_published": true,
+    "display_order": 27
+  },
+  {
+    "slug": "zoho-crm-to-hubspot",
+    "source_system": "Zoho CRM",
+    "target_system": "HubSpot",
+    "source_slug": "zoho-crm",
+    "target_slug": "hubspot",
+    "source_category": "CRM",
+    "target_category": "CRM",
+    "meta_title": "Zoho CRM to HubSpot Data Migration | Mine",
+    "meta_description": "Automate your Zoho CRM to HubSpot data migration. AI-powered mapping for leads, contacts, deals, and custom modules. Migrate in weeks.",
+    "hero_headline": "Zoho CRM to HubSpot Data Migration",
+    "hero_subheadline": "Switching from Zoho to HubSpot? Mine automates the field-to-property mapping between Zoho's module structure and HubSpot's flexible property model — preserving deals, contacts, and engagement history.",
+    "bridge_paragraph": "Zoho CRM uses structured modules with typed fields and lookup relationships, while HubSpot uses a more flexible property-based model where any contact or company can have hundreds of custom properties. Mine translates Zoho's module-based schema to HubSpot's property model — analyzing actual data content to determine the optimal property type for each field.",
+    "overview_paragraphs": [
+      "Zoho CRM to HubSpot migrations are driven by companies wanting HubSpot's integrated marketing automation, content management, and modern user experience. While Zoho offers CRM plus separate marketing tools, HubSpot provides a unified platform where marketing, sales, and service data live in one system. This migration is common among marketing-driven companies that want tighter lead-to-close attribution, companies consolidating Zoho CRM + Mailchimp/other tools into HubSpot's all-in-one platform, and growing teams that prefer HubSpot's user experience.",
+      "The migration is technically straightforward compared to ERP migrations but has specific challenges. Zoho's structured field types (picklists, lookups, multi-select) must map to HubSpot's property types (dropdown, single-line text, multiple checkboxes). Zoho custom modules require HubSpot Enterprise tier for custom objects. Zoho's Deal stages map to HubSpot's Deal pipeline stages but with different probability models. Engagement history (emails, calls, tasks) uses different association patterns.",
+      "Companies typically use HubSpot's native import tool or third-party migration services. The field mapping and picklist alignment work is manual — and custom module migration requires HubSpot Enterprise, which many companies discover only after starting the migration planning."
+    ],
+    "challenges": [
+      {
+        "title": "Zoho field types to HubSpot property types",
+        "description": "Zoho uses typed fields with strict validation (currency with decimal precision, lookup relationships with referential integrity). HubSpot properties are more flexible but less structured. A Zoho Currency field becomes a HubSpot Number property, losing the currency type. Zoho's lookup fields become HubSpot associations with different cardinality rules."
+      },
+      {
+        "title": "Custom modules require HubSpot Enterprise",
+        "description": "Zoho custom modules with lookup fields and related lists can only migrate to HubSpot if you're on the Enterprise tier (which supports custom objects). Companies on HubSpot Professional must either model custom module data using standard objects with custom properties, archive it, or upgrade. Mine profiles your custom modules and recommends the minimum HubSpot tier needed."
+      },
+      {
+        "title": "Deal pipeline and stage mapping",
+        "description": "Zoho's Deal pipelines with weighted probability and multiple pipelines map to HubSpot's deal pipelines with different stage probability models. Zoho's Blueprint transitions don't have a direct HubSpot equivalent — they must be rebuilt using HubSpot's deal stage automation or workflows."
+      },
+      {
+        "title": "Zoho scoring rules to HubSpot lead scoring",
+        "description": "Zoho's scoring rules use field-based criteria to assign scores to Leads and Contacts. HubSpot has its own lead scoring system with different criteria structures. The scores themselves can be migrated as custom properties, but the scoring logic must be rebuilt in HubSpot's scoring tool."
+      }
+    ],
+    "data_objects": [
+      { "source_object": "Leads", "target_object": "Contact (lifecycle: Lead)", "notes": "No separate Lead object in HubSpot" },
+      { "source_object": "Contacts", "target_object": "Contact", "notes": "Property type mapping" },
+      { "source_object": "Accounts", "target_object": "Company", "notes": "Account to Company" },
+      { "source_object": "Deals", "target_object": "Deal", "notes": "Pipeline stage mapping" },
+      { "source_object": "Products", "target_object": "Product", "notes": "Simplified pricing" },
+      { "source_object": "Tasks / Events", "target_object": "Task / Meeting", "notes": "Activity type routing" },
+      { "source_object": "Calls", "target_object": "Call engagement", "notes": "Call logging" },
+      { "source_object": "Notes", "target_object": "Note engagement", "notes": "Note association" },
+      { "source_object": "Emails", "target_object": "Email engagement", "notes": "Thread history" },
+      { "source_object": "Custom Modules", "target_object": "Custom Objects (Enterprise)", "notes": "Tier requirement" }
+    ],
+    "how_mine_helps": [
+      "Mine maps Zoho fields to HubSpot properties with type translation — detecting where Zoho's stricter typing needs to be relaxed for HubSpot's property model and where custom property types are needed.",
+      "Custom modules are profiled and classified — Mine identifies which need HubSpot Enterprise custom objects vs. which can be modeled using standard objects with custom properties, helping you determine the right HubSpot tier.",
+      "Deal pipeline stages are mapped with probability alignment and Blueprint transition logic documented for HubSpot workflow rebuilding.",
+      "Mine generates a complete Zoho-to-HubSpot field map that works directly with HubSpot's import tool — eliminating the manual mapping spreadsheet."
+    ],
+    "migration_stats": {
+      "manual_timeline": "1–3 months",
+      "mine_timeline": "1–3 weeks",
+      "manual_cost": "$30K–120K",
+      "cost_reduction": "40–50%",
+      "manual_team": "1–2 consultants",
+      "mine_team": "1 internal resource"
+    },
+    "faqs": [
+      {
+        "question": "How long does a Zoho CRM to HubSpot data migration take?",
+        "answer": "A typical Zoho-to-HubSpot migration takes 1–3 months with traditional approaches. Simple migrations with standard modules can be faster; instances with custom modules and extensive automation take longer. Mine reduces the data conversion to 1–3 weeks by automating field-to-property mapping and picklist alignment."
+      },
+      {
+        "question": "Do I need HubSpot Enterprise to migrate from Zoho CRM?",
+        "answer": "Only if you have Zoho custom modules that need to become HubSpot custom objects. If your Zoho instance uses only standard modules (Leads, Contacts, Accounts, Deals), HubSpot Professional is sufficient. Mine profiles your custom modules and tells you exactly which HubSpot tier you need before you commit to a purchase."
+      },
+      {
+        "question": "How do Zoho Leads work in HubSpot?",
+        "answer": "HubSpot doesn't have a separate Lead object — all people are Contacts with a lifecycle stage. Zoho Leads become HubSpot Contacts with lifecycle stage set to 'Lead'. Converted Zoho Leads are matched to their Account/Contact pairs. Mine generates routing rules based on Lead status and conversion history."
+      },
+      {
+        "question": "Can Zoho engagement history migrate to HubSpot?",
+        "answer": "Yes. Zoho email logs, call records, task completions, and notes migrate to HubSpot's engagement model — emails, calls, tasks, and notes respectively. Timestamps and contact/company associations are preserved. Mine maps the engagement types and association patterns automatically."
+      },
+      {
+        "question": "How much does a Zoho CRM to HubSpot migration cost?",
+        "answer": "Zoho-to-HubSpot migrations typically cost $30K–120K depending on data volume and customization. The HubSpot subscription cost often exceeds the migration cost. The biggest cost variable is whether you need Enterprise tier for custom objects. Mine reduces the data conversion portion by 40–50%."
+      }
+    ],
+    "keywords": {
+      "primary": "Zoho CRM to HubSpot data migration",
+      "secondary": ["migrate Zoho to HubSpot", "Zoho CRM HubSpot migration tool", "Zoho to HubSpot ETL", "Zoho to HubSpot CRM switch"],
+      "long_tail": ["how to migrate data from Zoho CRM to HubSpot", "Zoho to HubSpot field mapping", "Zoho deals to HubSpot deals", "Zoho CRM to HubSpot migration cost", "Zoho custom modules to HubSpot"]
+    },
+    "related_slugs": ["zoho-crm-to-salesforce", "salesforce-to-hubspot", "hubspot-to-salesforce", "netsuite-to-hubspot"],
+    "is_published": true,
+    "display_order": 28
+  },
+  {
+    "slug": "salesforce-to-zoho-crm",
+    "source_system": "Salesforce",
+    "target_system": "Zoho CRM",
+    "source_slug": "salesforce",
+    "target_slug": "zoho-crm",
+    "source_category": "CRM",
+    "target_category": "CRM",
+    "meta_title": "Salesforce to Zoho CRM Data Migration | Mine",
+    "meta_description": "Automate your Salesforce to Zoho CRM data migration. AI-powered mapping for accounts, contacts, opportunities, and custom objects. Cut costs, keep data.",
+    "hero_headline": "Salesforce to Zoho CRM Data Migration",
+    "hero_subheadline": "Right-sizing your CRM? Mine automates the mapping from Salesforce's complex object model to Zoho's streamlined module architecture — preserving contacts, deals, custom objects, and activity history while cutting licensing costs.",
+    "bridge_paragraph": "Salesforce uses a rigidly typed object model with validation rules, Apex triggers, record types, and complex sharing rules, while Zoho CRM uses a simpler module-based architecture with Blueprints and custom modules. Mine translates Salesforce's enterprise complexity into Zoho's streamlined model — ensuring nothing critical is lost when simplifying your CRM stack.",
+    "overview_paragraphs": [
+      "Salesforce to Zoho CRM migrations are cost-driven. Companies paying $150–300 per user per month for Salesforce Enterprise often find they're using 20% of the features. Zoho CRM offers similar core functionality at $14–52 per user per month. This migration is common among SMBs that were sold Salesforce during growth but now need to optimize spend, companies where sales teams use basic CRM features without advanced Salesforce capabilities, and startups that inherited Salesforce from a previous regime.",
+      "The technical challenge is going from more complex to less complex without losing data. Salesforce custom objects with master-detail relationships, roll-up summaries, and cross-object formula fields have no direct Zoho equivalent. Salesforce's validation rules, Apex triggers, and Flow automation must be rebuilt using Zoho's Blueprint, workflow rules, and Deluge scripting. Record types — which control page layouts and picklist values in Salesforce — don't exist in Zoho and need alternative modeling.",
+      "Companies typically export from Salesforce via Data Loader and import to Zoho using Zoho's import wizard. The bigger challenge isn't moving the data — it's deciding what to simplify, what to preserve, and what to retire from Salesforce's more complex architecture."
+    ],
+    "challenges": [
+      {
+        "title": "Salesforce record types to Zoho alternatives",
+        "description": "Salesforce record types control which picklist values, page layouts, and sales processes apply to each record. Zoho has no native record type concept. Alternatives include Zoho's Layout Rules, custom picklist fields that filter other fields, or separate modules. Each record type usage pattern needs individual analysis."
+      },
+      {
+        "title": "Custom object complexity reduction",
+        "description": "Salesforce custom objects with master-detail relationships and roll-up summary fields must be translated to Zoho custom modules with lookup relationships. Roll-up summaries don't exist in Zoho — they need Deluge custom functions or manual workarounds. Some Salesforce custom objects may be better modeled as Zoho subforms rather than separate modules."
+      },
+      {
+        "title": "Apex and Flow automation translation",
+        "description": "Salesforce's Apex code, validation rules, and Flows contain business logic that must be rebuilt in Zoho using Blueprints, workflow rules, and Deluge scripts. Mine doesn't migrate the automation logic but catalogs every field referenced by Salesforce automation, so the Zoho admin knows exactly what to rebuild."
+      },
+      {
+        "title": "Engagement and activity history volume",
+        "description": "Mature Salesforce orgs accumulate millions of Task, Event, and EmailMessage records. Zoho's import tool has practical limits on activity data volume. Deciding how much history to migrate vs. archive requires analysis of activity volume, recency, and reporting requirements."
+      }
+    ],
+    "data_objects": [
+      { "source_object": "Account", "target_object": "Accounts", "notes": "Hierarchy preservation" },
+      { "source_object": "Contact", "target_object": "Contacts", "notes": "Contact roles to Zoho roles" },
+      { "source_object": "Lead", "target_object": "Leads", "notes": "Lead status mapping" },
+      { "source_object": "Opportunity", "target_object": "Deals", "notes": "Stage and pipeline mapping" },
+      { "source_object": "OpportunityLineItem", "target_object": "Deal Products", "notes": "Product association" },
+      { "source_object": "Product2", "target_object": "Products", "notes": "Price book simplification" },
+      { "source_object": "Case", "target_object": "Cases (Desk)", "notes": "May need Zoho Desk" },
+      { "source_object": "Task / Event", "target_object": "Tasks / Events", "notes": "Activity migration" },
+      { "source_object": "Campaign", "target_object": "Campaigns", "notes": "Campaign members" },
+      { "source_object": "Custom Objects", "target_object": "Custom Modules", "notes": "Complexity reduction" }
+    ],
+    "how_mine_helps": [
+      "Mine profiles every Salesforce object and field, then generates a mapping to Zoho modules — flagging where Salesforce complexity needs to be simplified and proposing the Zoho alternative for each pattern.",
+      "Record type usage is analyzed across your Salesforce data. Mine recommends whether each record type becomes a Zoho Layout Rule, a custom picklist filter, or a separate module.",
+      "Custom objects with master-detail relationships are mapped to Zoho custom modules or subforms based on data volume and relationship complexity.",
+      "Mine catalogs all Apex, Flow, and validation rule field dependencies — generating a rebuild checklist for your Zoho admin to implement using Blueprints and Deluge."
+    ],
+    "migration_stats": {
+      "manual_timeline": "2–4 months",
+      "mine_timeline": "2–3 weeks",
+      "manual_cost": "$50K–200K",
+      "cost_reduction": "40–50%",
+      "manual_team": "1–3 consultants",
+      "mine_team": "1 internal resource"
+    },
+    "faqs": [
+      {
+        "question": "How long does a Salesforce to Zoho CRM data migration take?",
+        "answer": "A typical Salesforce-to-Zoho migration takes 2–4 months. The data conversion itself is straightforward, but the bigger challenge is deciding what Salesforce complexity to simplify, preserve, or retire. Apex automation and record type logic need to be rebuilt in Zoho. Mine reduces the data conversion to 2–3 weeks and generates the automation dependency documentation to accelerate the rebuild."
+      },
+      {
+        "question": "Will we lose functionality moving from Salesforce to Zoho?",
+        "answer": "Some Salesforce-specific features don't have Zoho equivalents — record types, roll-up summary fields, and Apex triggers. But most core CRM functionality exists in both platforms. The key is identifying which Salesforce features your team actually uses vs. which were configured but never adopted. Mine profiles your Salesforce usage and flags which features need Zoho alternatives vs. which can be safely retired."
+      },
+      {
+        "question": "How do Salesforce record types work in Zoho?",
+        "answer": "Zoho doesn't have record types. Alternatives include Layout Rules (controlling which fields appear based on picklist values), separate modules for fundamentally different record types, or custom picklist fields that filter related fields. Mine analyzes how each Salesforce record type is actually used and recommends the optimal Zoho approach."
+      },
+      {
+        "question": "How much can we save by switching from Salesforce to Zoho?",
+        "answer": "Most companies save 60–80% on CRM licensing by switching from Salesforce Enterprise ($165/user/month) to Zoho CRM Enterprise ($40/user/month). For a 50-person sales team, that's $75K–100K annually. The migration cost ($50K–200K) is typically recovered within the first year of Zoho licensing savings."
+      },
+      {
+        "question": "How much does a Salesforce to Zoho CRM migration cost?",
+        "answer": "Salesforce-to-Zoho migrations typically cost $50K–200K depending on custom object complexity, automation rebuild effort, and data volume. The migration cost is usually dwarfed by the annual licensing savings. Mine reduces the data conversion cost by 40–50% by automating field mapping, record type analysis, and automation dependency documentation."
+      }
+    ],
+    "keywords": {
+      "primary": "Salesforce to Zoho CRM data migration",
+      "secondary": ["migrate Salesforce to Zoho", "Salesforce to Zoho CRM migration tool", "SFDC to Zoho ETL", "Salesforce to Zoho CRM switch"],
+      "long_tail": ["how to migrate data from Salesforce to Zoho CRM", "Salesforce to Zoho field mapping", "Salesforce to Zoho migration cost", "Salesforce to Zoho CRM migration timeline", "Salesforce record types in Zoho"]
+    },
+    "related_slugs": ["zoho-crm-to-salesforce", "salesforce-to-hubspot", "salesforce-to-dynamics-365", "salesforce-to-netsuite"],
+    "is_published": true,
+    "display_order": 29
+  },
+  {
+    "slug": "shopify-to-netsuite",
+    "source_system": "Shopify",
+    "target_system": "NetSuite",
+    "source_slug": "shopify",
+    "target_slug": "netsuite",
+    "source_category": "Platform",
+    "target_category": "ERP",
+    "meta_title": "Shopify to NetSuite Data Migration | Mine",
+    "meta_description": "Automate your Shopify to NetSuite data migration. AI-powered mapping for products, orders, customers, and inventory into NetSuite ERP.",
+    "hero_headline": "Shopify to NetSuite Data Migration",
+    "hero_subheadline": "Connecting your Shopify storefront to NetSuite ERP? Mine automates the data mapping between Shopify's commerce model and NetSuite's ERP entity structure — products, customers, orders, inventory, and fulfillment data.",
+    "bridge_paragraph": "Shopify stores product, customer, and order data in a commerce-optimized model with variants, collections, and fulfillments, while NetSuite uses a traditional ERP entity structure with Items, Customers, Sales Orders, and Inventory Details. Mine maps Shopify's ecommerce data model to NetSuite's ERP structure — handling the product variant-to-matrix item translation, customer deduplication, and order type mapping.",
+    "overview_paragraphs": [
+      "Shopify to NetSuite is the most common ecommerce-to-ERP migration. Growing DTC brands that started on Shopify eventually need ERP capabilities — inventory management across warehouses, purchase orders, financial consolidation, and multi-channel order management that Shopify alone can't handle. This migration typically happens at the $5M–50M revenue stage when manual processes and spreadsheet-based inventory tracking break down.",
+      "The technical challenge is translating Shopify's commerce-centric data model to NetSuite's ERP structure. Shopify Products with Variants map to NetSuite Matrix Items or individual Item records depending on variant complexity. Shopify's customer model is order-centric (customers are often created per order) while NetSuite's is entity-centric. Order data must be restructured from Shopify's flat order model to NetSuite's Sales Order → Invoice → Fulfillment transaction chain. Shopify's discount codes, gift cards, and refund model don't have direct NetSuite equivalents.",
+      "Companies typically set up a real-time integration (Celigo, FarApp) for ongoing sync, but the initial historical data migration — products, customers, and order history — still requires a bulk data conversion effort that's often underestimated."
+    ],
+    "challenges": [
+      {
+        "title": "Product variants to NetSuite item structure",
+        "description": "Shopify products with variants (size, color, material) can be modeled in NetSuite as matrix items (parent item with size/color dimensions) or individual items with a parent-child relationship. The choice depends on how you manage inventory and purchasing in NetSuite. Products with more than 3 variant options exceed NetSuite's matrix dimensions and need alternative modeling."
+      },
+      {
+        "title": "Customer deduplication",
+        "description": "Shopify creates customer records liberally — guest checkouts, account creations, and order-based customer records can create duplicates. NetSuite requires clean, deduplicated customer records. Email-based matching catches most duplicates, but variations in name, address, and phone across orders require fuzzy matching logic."
+      },
+      {
+        "title": "Order model translation",
+        "description": "Shopify's flat order model (order → line items → fulfillments → refunds) must map to NetSuite's transactional chain (Sales Order → Item Fulfillment → Invoice → Cash Sale → Credit Memo). Each Shopify order type (standard, draft, POS) maps to different NetSuite transaction types. Partial fulfillments and partial refunds add complexity."
+      },
+      {
+        "title": "Discount and pricing model differences",
+        "description": "Shopify's discount codes, automatic discounts, and gift cards use a different model than NetSuite's promotion codes, price levels, and gift certificate items. Migrating historical order data with accurate discount representation in NetSuite requires translating Shopify's discount allocations to NetSuite's pricing adjustments."
+      }
+    ],
+    "data_objects": [
+      { "source_object": "Products / Variants", "target_object": "Item (Inventory / Matrix)", "notes": "Variant-to-matrix decision" },
+      { "source_object": "Collections", "target_object": "Item Category / Group", "notes": "Smart vs. manual collections" },
+      { "source_object": "Customers", "target_object": "Customer", "notes": "Deduplication required" },
+      { "source_object": "Orders", "target_object": "Sales Order / Cash Sale", "notes": "Transaction type routing" },
+      { "source_object": "Order Line Items", "target_object": "Item lines on transaction", "notes": "Discount allocation" },
+      { "source_object": "Fulfillments", "target_object": "Item Fulfillment", "notes": "Tracking numbers" },
+      { "source_object": "Refunds", "target_object": "Credit Memo / Customer Refund", "notes": "Partial refund handling" },
+      { "source_object": "Inventory Levels", "target_object": "Inventory Adjustment", "notes": "Location mapping" },
+      { "source_object": "Gift Cards", "target_object": "Gift Certificate Item", "notes": "Balance tracking" },
+      { "source_object": "Discount Codes", "target_object": "Promotion Code", "notes": "Discount type mapping" }
+    ],
+    "how_mine_helps": [
+      "Mine profiles your Shopify product catalog and recommends the optimal NetSuite item structure — matrix items for products with 1–3 variant axes, individual items for complex variants, with parent-child relationships preserved.",
+      "Customer records are deduplicated using email-based matching plus fuzzy matching on name and address — generating a merge map before any data loads into NetSuite.",
+      "Shopify orders are automatically routed to the correct NetSuite transaction type — Sales Orders for unfulfilled, Cash Sales for completed, with fulfillments and refunds mapped to their NetSuite transaction counterparts.",
+      "Mine validates inventory quantities and order totals after migration — ensuring Shopify and NetSuite balances match before you cut over."
+    ],
+    "migration_stats": {
+      "manual_timeline": "2–4 months",
+      "mine_timeline": "2–4 weeks",
+      "manual_cost": "$80K–300K",
+      "cost_reduction": "40–50%",
+      "manual_team": "2–3 consultants",
+      "mine_team": "1 internal resource"
+    },
+    "faqs": [
+      {
+        "question": "How long does a Shopify to NetSuite data migration take?",
+        "answer": "The initial historical data migration typically takes 2–4 months with traditional approaches. This includes product catalog conversion, customer deduplication, and order history migration. The timeline depends on SKU count, order volume, and variant complexity. Mine reduces this to 2–4 weeks. Note that ongoing real-time sync (for new orders) is a separate integration project."
+      },
+      {
+        "question": "Should Shopify products become NetSuite matrix items or individual items?",
+        "answer": "It depends on your variant structure. Products with 1–3 variant axes (size, color) work well as NetSuite matrix items. Products with more than 3 variant options or complex variant-specific pricing work better as individual items with parent-child relationships. Mine analyzes your product catalog and recommends the optimal structure based on your actual variant patterns."
+      },
+      {
+        "question": "How does Mine handle Shopify customer duplicates?",
+        "answer": "Mine deduplicates Shopify customers using email-based matching as the primary key, then fuzzy matching on name, phone, and address for guest checkout records without emails. A merge map is generated showing which Shopify records consolidate into each NetSuite customer. You review and approve before any data loads."
+      },
+      {
+        "question": "Do we need to migrate all Shopify order history to NetSuite?",
+        "answer": "Not necessarily. Most companies migrate 1–2 years of order history for reporting continuity, plus all open/unfulfilled orders. Older orders can be archived or migrated as summary records. Mine analyzes your order volume and recommends the optimal cutover strategy with data volume projections for each approach."
+      },
+      {
+        "question": "How much does a Shopify to NetSuite migration cost?",
+        "answer": "Shopify-to-NetSuite migrations typically cost $80K–300K as part of a NetSuite implementation, with data conversion representing 15–25% of the total. The cost depends on SKU count, order history volume, and whether you're also integrating for ongoing sync. Mine reduces the initial data conversion cost by 40–50%."
+      }
+    ],
+    "keywords": {
+      "primary": "Shopify to NetSuite data migration",
+      "secondary": ["migrate Shopify to NetSuite", "Shopify NetSuite migration tool", "Shopify to NetSuite ETL", "Shopify to NetSuite ERP migration"],
+      "long_tail": ["how to migrate data from Shopify to NetSuite", "Shopify products to NetSuite items", "Shopify to NetSuite order migration", "Shopify to NetSuite migration cost", "Shopify to NetSuite migration timeline"]
+    },
+    "related_slugs": ["shopify-to-salesforce", "quickbooks-to-netsuite", "oracle-ebs-to-netsuite", "sage-intacct-to-netsuite"],
+    "is_published": true,
+    "display_order": 30
+  },
+  {
+    "slug": "shopify-to-salesforce",
+    "source_system": "Shopify",
+    "target_system": "Salesforce",
+    "source_slug": "shopify",
+    "target_slug": "salesforce",
+    "source_category": "Platform",
+    "target_category": "CRM",
+    "meta_title": "Shopify to Salesforce Data Migration | Mine",
+    "meta_description": "Automate your Shopify to Salesforce data migration. Map products, customers, and orders into Salesforce for B2B commerce and customer 360.",
+    "hero_headline": "Shopify to Salesforce Data Migration",
+    "hero_subheadline": "Building a customer 360 in Salesforce from your Shopify data? Mine automates the mapping between Shopify's commerce model and Salesforce's CRM objects — customers, products, orders, and purchase history.",
+    "bridge_paragraph": "Shopify stores commerce data in a product-variant-order model optimized for ecommerce, while Salesforce organizes data around Accounts, Contacts, Opportunities, and Cases designed for B2B relationships. Mine bridges these fundamentally different models — transforming Shopify's transactional commerce data into Salesforce's relationship-centric CRM structure.",
+    "overview_paragraphs": [
+      "Shopify to Salesforce migrations happen when ecommerce companies want to build a unified customer view. B2B commerce companies often use Shopify for their online store but need Salesforce to manage wholesale accounts, sales rep relationships, and customer service. DTC brands moving into B2B need Salesforce to manage their growing enterprise customer base. Companies adopting Salesforce Commerce Cloud also need to migrate historical Shopify data into the Salesforce ecosystem.",
+      "The fundamental challenge is translating Shopify's transactional model to Salesforce's relational model. Shopify thinks in orders and line items; Salesforce thinks in accounts, opportunities, and activities. A Shopify customer becomes a Salesforce Account + Contact. Shopify orders might become Salesforce Opportunities (for pipeline tracking) or custom objects (for order history). Product data maps to Salesforce Products but with different variant and pricing structures.",
+      "Companies typically handle this through custom Salesforce development or middleware integration. The initial historical data migration — converting years of Shopify orders into Salesforce's CRM model — is a one-time effort that's often underscoped."
+    ],
+    "challenges": [
+      {
+        "title": "Transactional model to relational model conversion",
+        "description": "Shopify's data is order-centric: everything flows from orders. Salesforce is account-centric: everything flows from the customer relationship. Converting Shopify's flat customer-order structure into Salesforce's Account → Contact → Opportunity → Order architecture requires determining which Shopify data becomes which Salesforce object."
+      },
+      {
+        "title": "Customer identity resolution",
+        "description": "Shopify customers may have multiple accounts (guest checkout, registered account, POS). Salesforce needs a clean Account-Contact structure. Resolving Shopify's multiple customer records into unified Salesforce Accounts with Contacts requires email-based deduplication plus business name matching for B2B customers."
+      },
+      {
+        "title": "Order history representation in Salesforce",
+        "description": "Salesforce doesn't have a native Order History object that mirrors Shopify's order model. Options include: Salesforce Orders (limited functionality), custom objects, Opportunities (if tracking for pipeline), or external objects. The choice depends on how you plan to use order history in Salesforce — reporting, customer service, or sales intelligence."
+      },
+      {
+        "title": "Product variant structure differences",
+        "description": "Shopify variants (size/color/material per product) have no Salesforce equivalent. Salesforce Products are flat with optional price book entries. Variants may become individual Salesforce Products, custom product attributes, or a custom variant object depending on your Salesforce commerce architecture."
+      }
+    ],
+    "data_objects": [
+      { "source_object": "Customers", "target_object": "Account + Contact", "notes": "Deduplication and split" },
+      { "source_object": "Products / Variants", "target_object": "Product2", "notes": "Variant flattening" },
+      { "source_object": "Orders", "target_object": "Opportunity / Custom Object", "notes": "Depends on architecture" },
+      { "source_object": "Order Line Items", "target_object": "OpportunityLineItem / Custom", "notes": "Product association" },
+      { "source_object": "Collections", "target_object": "Product Family / Custom", "notes": "Category mapping" },
+      { "source_object": "Customer Tags", "target_object": "Account fields / Picklists", "notes": "Segmentation data" },
+      { "source_object": "Fulfillments", "target_object": "Custom Object / Activity", "notes": "Shipping history" },
+      { "source_object": "Refunds", "target_object": "Custom Object / Case", "notes": "Return tracking" },
+      { "source_object": "Discount Usage", "target_object": "Custom fields", "notes": "Promotion history" }
+    ],
+    "how_mine_helps": [
+      "Mine transforms Shopify's order-centric data into Salesforce's account-centric model — creating Account and Contact records from Shopify customer data with deduplication and B2B/B2C classification.",
+      "Product variants are analyzed and mapped to the optimal Salesforce Product structure — individual Products, custom attributes, or a variant custom object based on your catalog complexity.",
+      "Order history is mapped to your chosen Salesforce architecture — Opportunities, custom Order objects, or Salesforce Orders — with line items, discounts, and fulfillment data preserved.",
+      "Mine generates customer purchase summaries as Account-level custom fields — total orders, lifetime value, last purchase date, favorite categories — giving your sales team immediate customer intelligence."
+    ],
+    "migration_stats": {
+      "manual_timeline": "2–4 months",
+      "mine_timeline": "2–4 weeks",
+      "manual_cost": "$80K–250K",
+      "cost_reduction": "40–50%",
+      "manual_team": "2–3 consultants",
+      "mine_team": "1 internal resource"
+    },
+    "faqs": [
+      {
+        "question": "How long does a Shopify to Salesforce data migration take?",
+        "answer": "The initial historical migration takes 2–4 months with traditional approaches, depending on order volume and Salesforce architecture decisions. The timeline is driven more by Salesforce design decisions (how to model orders, which objects to use) than by data volume. Mine reduces the data conversion to 2–4 weeks once the target architecture is defined."
+      },
+      {
+        "question": "Should Shopify orders become Salesforce Opportunities or custom objects?",
+        "answer": "It depends on your use case. If you want order history for pipeline reporting and sales forecasting, Opportunities work. If you need detailed order management with fulfillment tracking, a custom Order object is better. If you're on Salesforce Commerce Cloud, use Salesforce Orders. Mine supports all three approaches and generates the appropriate mapping for whichever you choose."
+      },
+      {
+        "question": "How does Mine handle Shopify's B2C customers in Salesforce's B2B model?",
+        "answer": "Mine creates Person Accounts (if enabled) for B2C customers or Account + Contact pairs for B2B. For mixed B2B/B2C, Mine classifies customers based on order patterns — businesses get full Account/Contact structures while individual consumers get Person Accounts or simplified records."
+      },
+      {
+        "question": "Can Mine calculate customer lifetime value from Shopify data?",
+        "answer": "Yes. Mine aggregates Shopify order data into customer-level metrics — total orders, lifetime revenue, average order value, first and last purchase dates, top product categories — and maps these to Salesforce Account custom fields. This gives your sales team immediate customer intelligence without manual reporting."
+      },
+      {
+        "question": "How much does a Shopify to Salesforce migration cost?",
+        "answer": "Shopify-to-Salesforce migrations typically cost $80K–250K including Salesforce design and implementation. Data conversion is 20–30% of the total. The cost depends on order history volume, whether you need custom objects, and how complex your product variant structure is. Mine reduces the data conversion cost by 40–50%."
+      }
+    ],
+    "keywords": {
+      "primary": "Shopify to Salesforce data migration",
+      "secondary": ["migrate Shopify to Salesforce", "Shopify Salesforce migration tool", "Shopify to Salesforce ETL", "Shopify to Salesforce CRM migration"],
+      "long_tail": ["how to migrate data from Shopify to Salesforce", "Shopify customers to Salesforce accounts", "Shopify orders to Salesforce opportunities", "Shopify to Salesforce migration cost", "Shopify to Salesforce migration timeline"]
+    },
+    "related_slugs": ["shopify-to-netsuite", "hubspot-to-salesforce", "zoho-crm-to-salesforce", "legacy-database-to-salesforce"],
+    "is_published": true,
+    "display_order": 31
+  },
+  {
+    "slug": "sap-hr-to-workday",
+    "source_system": "SAP ECC HR",
+    "target_system": "Workday",
+    "source_slug": "sap-hr",
+    "target_slug": "workday",
+    "source_category": "ERP",
+    "target_category": "Cloud",
+    "meta_title": "SAP HR to Workday Data Migration | Mine",
+    "meta_description": "Automate your SAP ECC HR to Workday data migration. AI-powered mapping for employee master, org structure, payroll, and benefits data.",
+    "hero_headline": "SAP ECC HR to Workday Data Migration",
+    "hero_subheadline": "Moving from SAP HCM to Workday? Mine automates the mapping between SAP's infotype-based HR data model and Workday's worker-centric architecture — preserving employee history, org structures, compensation, and benefits.",
+    "bridge_paragraph": "SAP ECC HR stores employee data across infotypes — PA0001 (organizational assignment), PA0002 (personal data), PA0006 (addresses), PA0008 (pay) — each representing a time-dependent data slice. Workday uses a fundamentally different worker-centric model where all data relates to a worker record through effective-dated business processes. Mine translates SAP's infotype architecture to Workday's worker model automatically.",
+    "overview_paragraphs": [
+      "SAP ECC HR to Workday is one of the largest and most common HCM migration corridors. Companies migrate because Workday offers a modern cloud-native HR platform with superior employee self-service, analytics, and user experience compared to SAP's aging HCM module. This migration is often timed with broader SAP simplification efforts — companies moving to S/4HANA sometimes carve out HR/HCM to Workday rather than migrating it to SAP SuccessFactors.",
+      "The technical complexity is driven by SAP's infotype architecture. SAP stores HR data in over 100 infotypes (PA0001 for org assignment, PA0002 for personal data, PA0006 for addresses, PA0008 for basic pay, PA0014 for recurring deductions, PA0021 for family members). Each infotype has time-dependent records (effective dates). Workday uses a completely different data model — workers with staffing events, compensation plans, and benefit elections organized through business processes. The structural translation is non-trivial.",
+      "These migrations are typically managed by HR consulting firms (Deloitte, Mercer, Accenture) over 12–18 months. The data conversion workstream — mapping infotypes to Workday objects, converting time-dependent records, and validating payroll continuity — is one of the most labor-intensive parts of the program."
+    ],
+    "challenges": [
+      {
+        "title": "Infotype architecture to Workday worker model",
+        "description": "SAP stores HR data across 100+ infotypes, each with its own table structure and time-dependency rules. Workday organizes all data around the worker record through business processes and effective-dated events. Translating infotype snapshots into Workday's event-based history requires mapping each infotype to the correct Workday business process and reconstructing the event timeline."
+      },
+      {
+        "title": "Organizational structure translation",
+        "description": "SAP uses organizational units (org units), positions, and jobs in an Enterprise Structure. Workday uses supervisory organizations, positions, and job profiles in a different hierarchy model. The org structure mapping affects reporting lines, security, and business process routing — it must be architected before employee data can migrate."
+      },
+      {
+        "title": "Compensation and payroll continuity",
+        "description": "SAP pay scale structures (PA0008), recurring deductions (PA0014), and wage types must map to Workday compensation plans, earning codes, and deduction codes. Payroll continuity across the cutover — ensuring employees are paid correctly in the first Workday payroll run — is the highest-risk element of the migration."
+      },
+      {
+        "title": "Historical data and time-dependent records",
+        "description": "SAP infotypes store full history with begin/end dates for every change. Workday uses effective-dated transactions. Deciding how much history to migrate (full career history vs. current snapshot plus recent changes) significantly impacts timeline and complexity. Each historical infotype record must be converted to a Workday effective-dated transaction."
+      }
+    ],
+    "data_objects": [
+      { "source_object": "PA0001 (Org Assignment)", "target_object": "Worker / Position", "notes": "Org unit to supervisory org" },
+      { "source_object": "PA0002 (Personal Data)", "target_object": "Worker Personal Info", "notes": "Name, DOB, gender" },
+      { "source_object": "PA0006 (Addresses)", "target_object": "Worker Address", "notes": "Address types" },
+      { "source_object": "PA0008 (Basic Pay)", "target_object": "Compensation Plan", "notes": "Pay scale to comp plan" },
+      { "source_object": "PA0014 (Recurring Ded.)", "target_object": "Deduction", "notes": "Deduction code mapping" },
+      { "source_object": "PA0021 (Family Members)", "target_object": "Dependent", "notes": "Benefits dependents" },
+      { "source_object": "PA0105 (Communication)", "target_object": "Worker Contact Info", "notes": "Email, phone" },
+      { "source_object": "PA0041 (Date Specs)", "target_object": "Worker History Events", "notes": "Service dates" },
+      { "source_object": "HRP1000/1001 (Org Units)", "target_object": "Supervisory Organization", "notes": "Org hierarchy" },
+      { "source_object": "T527X (Positions)", "target_object": "Position", "notes": "Position management" },
+      { "source_object": "PA0167 (Benefits)", "target_object": "Benefit Election", "notes": "Plan enrollment" }
+    ],
+    "how_mine_helps": [
+      "Mine profiles all SAP infotypes and maps each to the corresponding Workday worker object — PA0001 to organizational assignment, PA0002 to personal data, PA0008 to compensation plan — with field-level mapping including custom infotype extensions.",
+      "SAP org structures (org units, positions, jobs) are mapped to Workday's supervisory organization hierarchy with reporting line preservation and position management translation.",
+      "Compensation data across PA0008 (basic pay), PA0014 (deductions), and custom wage types is mapped to Workday compensation plans, earning codes, and deduction codes with payroll continuity validation.",
+      "Mine generates effective-dated transaction history from SAP's time-dependent infotype records — reconstructing the Workday event timeline that business processes require."
+    ],
+    "migration_stats": {
+      "manual_timeline": "12–18 months",
+      "mine_timeline": "6–10 weeks",
+      "manual_cost": "$2M–8M",
+      "cost_reduction": "40–50%",
+      "manual_team": "8–15 consultants",
+      "mine_team": "2–4 internal resources"
+    },
+    "faqs": [
+      {
+        "question": "How long does an SAP HR to Workday data migration take?",
+        "answer": "A typical SAP HR to Workday migration takes 12–18 months end-to-end, with data conversion running 4–8 months. The timeline depends on infotype complexity, historical depth, number of country-specific payroll configurations, and the scope of benefits data. Mine reduces the data conversion portion to 6–10 weeks."
+      },
+      {
+        "question": "What SAP HR infotypes need to migrate to Workday?",
+        "answer": "Core infotypes include PA0001 (org assignment), PA0002 (personal data), PA0006 (addresses), PA0008 (basic pay), PA0014 (recurring deductions), PA0021 (family/dependents), PA0105 (communication), and PA0167 (benefits). Custom infotypes (9000-series) and country-specific infotypes need individual analysis. Mine profiles all active infotypes and recommends which to migrate, archive, or skip."
+      },
+      {
+        "question": "How much employee history should we migrate to Workday?",
+        "answer": "Most companies migrate 3–5 years of detailed transaction history plus a current snapshot for all active employees. Full career history migration is possible but significantly increases complexity and timeline. The decision depends on reporting requirements, compliance needs, and whether historical data is needed for Workday analytics. Mine analyzes your infotype history volume and recommends the optimal depth."
+      },
+      {
+        "question": "What are the biggest risks in SAP HR to Workday migration?",
+        "answer": "The three highest-risk areas are: payroll continuity across the cutover (employees must be paid correctly on the first Workday payroll run), benefits enrollment accuracy (especially during open enrollment periods), and organizational hierarchy integrity (incorrect reporting lines affect security and approvals). Mine validates all three areas with automated reconciliation checks."
+      },
+      {
+        "question": "How much does an SAP HR to Workday migration cost?",
+        "answer": "SAP HR-to-Workday migrations typically cost $2M–8M through consulting firms, with data conversion representing 25–35% of the total. The cost scales with employee count, country/payroll complexity, and historical depth. Mine reduces the data conversion cost by 40–50% through automated infotype profiling, mapping, and validation."
+      }
+    ],
+    "keywords": {
+      "primary": "SAP HR to Workday data migration",
+      "secondary": ["migrate SAP HCM to Workday", "SAP HR Workday migration tool", "SAP infotypes to Workday", "SAP HCM to Workday ETL"],
+      "long_tail": ["how to migrate data from SAP HR to Workday", "SAP infotype to Workday mapping", "SAP HR to Workday migration cost", "SAP HR to Workday migration timeline", "SAP PA0001 to Workday worker"]
+    },
+    "related_slugs": ["sap-ecc-to-sap-s4hana", "oracle-hr-to-workday", "sap-ecc-to-dynamics-365", "sap-ecc-to-salesforce"],
+    "is_published": true,
+    "display_order": 32
+  },
+  {
+    "slug": "oracle-hr-to-workday",
+    "source_system": "Oracle EBS HR",
+    "target_system": "Workday",
+    "source_slug": "oracle-hr",
+    "target_slug": "workday",
+    "source_category": "ERP",
+    "target_category": "Cloud",
+    "meta_title": "Oracle HRMS to Workday Data Migration | Mine",
+    "meta_description": "Automate your Oracle EBS HRMS to Workday data migration. AI-powered mapping for employee master, org hierarchy, payroll, and benefits.",
+    "hero_headline": "Oracle EBS HR to Workday Data Migration",
+    "hero_subheadline": "Moving from Oracle HRMS to Workday? Mine automates the mapping between Oracle's HR tables and Workday's worker-centric model — preserving employee records, organizational hierarchies, compensation, and benefits enrollment.",
+    "bridge_paragraph": "Oracle EBS HRMS stores employee data across PER_ALL_PEOPLE_F (personal data), PER_ALL_ASSIGNMENTS_F (assignments), PER_ADDRESSES (addresses), and PAY_ELEMENT_ENTRIES_F (payroll elements), while Workday uses a unified worker record with effective-dated business processes. Mine maps Oracle's normalized HR tables to Workday's worker model with full history translation.",
+    "overview_paragraphs": [
+      "Oracle EBS HRMS to Workday is a major HCM migration corridor, second only to SAP HR-to-Workday in volume. Companies migrate because Oracle's on-premise HRMS is aging, requires expensive DBA support, and lacks the modern employee experience that Workday provides. This migration often happens alongside broader Oracle EBS retirement — companies may move financials to Oracle Cloud or another ERP while carving out HR to Workday.",
+      "Oracle HRMS uses a different data model than SAP's infotype approach but presents similar migration challenges. Employee data is spread across PER_ALL_PEOPLE_F (personal data with date tracking), PER_ALL_ASSIGNMENTS_F (job assignments), PER_ADDRESSES (addresses), PER_PAY_PROPOSALS (salary), and PAY_ELEMENT_ENTRIES_F (payroll elements). Each table uses effective dating. Oracle's organization hierarchy (HR_ALL_ORGANIZATION_UNITS) must map to Workday's supervisory organization model.",
+      "These migrations are managed by HR consulting firms over 12–18 months. Oracle's complex date-tracked tables, custom DFFs on HR tables, and country-specific legislation make the data conversion workstream particularly labor-intensive."
+    ],
+    "challenges": [
+      {
+        "title": "Oracle date-tracked tables to Workday effective dates",
+        "description": "Oracle HRMS uses date-tracked tables (EFFECTIVE_START_DATE / EFFECTIVE_END_DATE on PER_ALL_PEOPLE_F, PER_ALL_ASSIGNMENTS_F) that store full history of every change. Workday uses effective-dated transactions within business processes. Converting Oracle's date-tracked records to Workday's event-based history requires careful timeline reconstruction."
+      },
+      {
+        "title": "Oracle org hierarchy to Workday supervisory organizations",
+        "description": "Oracle uses HR_ALL_ORGANIZATION_UNITS with a parent-child hierarchy and multiple organization classifications. Workday uses supervisory organizations with a different hierarchy model. The mapping affects reporting lines, security groups, and approval chains — and must be designed before employee data migrates."
+      },
+      {
+        "title": "Payroll element entries to Workday earnings and deductions",
+        "description": "Oracle's payroll uses element types and element entries (PAY_ELEMENT_ENTRIES_F) with complex input values. Workday uses compensation plans, earning codes, and deduction codes. The element-to-earning/deduction mapping must preserve payroll calculation accuracy for the first Workday pay run."
+      },
+      {
+        "title": "Oracle DFFs on HR tables",
+        "description": "Oracle HRMS tables commonly have Descriptive Flexfields storing custom HR data (employee classification, union membership, custom leave balances). Each DFF segment must be mapped to a Workday custom field or custom object. Mine reads the DFF metadata from Oracle's repository to decode what each attribute column stores."
+      }
+    ],
+    "data_objects": [
+      { "source_object": "PER_ALL_PEOPLE_F", "target_object": "Worker Personal Info", "notes": "Date-tracked personal data" },
+      { "source_object": "PER_ALL_ASSIGNMENTS_F", "target_object": "Worker Position/Job", "notes": "Assignment history" },
+      { "source_object": "PER_ADDRESSES", "target_object": "Worker Address", "notes": "Address types" },
+      { "source_object": "PER_PAY_PROPOSALS", "target_object": "Compensation Plan", "notes": "Salary history" },
+      { "source_object": "PAY_ELEMENT_ENTRIES_F", "target_object": "Earnings/Deductions", "notes": "Payroll elements" },
+      { "source_object": "PER_CONTACT_RELATIONSHIPS", "target_object": "Dependent/Emergency Contact", "notes": "Relationship types" },
+      { "source_object": "BEN_PRTT_ENRT_RSLT_F", "target_object": "Benefit Election", "notes": "Benefits enrollment" },
+      { "source_object": "HR_ALL_ORGANIZATION_UNITS", "target_object": "Supervisory Organization", "notes": "Org hierarchy" },
+      { "source_object": "PER_ALL_POSITIONS", "target_object": "Position", "notes": "Position management" },
+      { "source_object": "PER_ABSENCE_ATTENDANCES", "target_object": "Leave of Absence / Time Off", "notes": "Absence history" }
+    ],
+    "how_mine_helps": [
+      "Mine profiles all Oracle HRMS date-tracked tables and reconstructs the event timeline for Workday — converting Oracle's begin/end date records into Workday's effective-dated business process events.",
+      "Oracle org hierarchies are mapped to Workday supervisory organizations with reporting line validation and position management alignment.",
+      "Payroll element entries are mapped to Workday earnings and deduction codes with input value translation — and Mine validates pay calculation accuracy against Oracle's payroll results before cutover.",
+      "Oracle DFFs on HR tables are profiled from the repository metadata and mapped to Workday custom fields — each DFF context-segment combination gets its own mapping rule."
+    ],
+    "migration_stats": {
+      "manual_timeline": "12–18 months",
+      "mine_timeline": "6–10 weeks",
+      "manual_cost": "$1.5M–6M",
+      "cost_reduction": "40–50%",
+      "manual_team": "6–12 consultants",
+      "mine_team": "2–3 internal resources"
+    },
+    "faqs": [
+      {
+        "question": "How long does an Oracle HRMS to Workday data migration take?",
+        "answer": "A typical Oracle HRMS to Workday migration takes 12–18 months end-to-end. The data conversion workstream runs 4–6 months in a traditional approach. Timeline depends on employee count, country/legislation complexity, and historical depth requirements. Mine reduces the data conversion to 6–10 weeks."
+      },
+      {
+        "question": "What Oracle HR tables need to migrate to Workday?",
+        "answer": "Core tables include PER_ALL_PEOPLE_F (personal data), PER_ALL_ASSIGNMENTS_F (job assignments), PER_ADDRESSES, PER_PAY_PROPOSALS (salary), PAY_ELEMENT_ENTRIES_F (payroll), PER_CONTACT_RELATIONSHIPS (dependents), BEN_PRTT_ENRT_RSLT_F (benefits), and HR_ALL_ORGANIZATION_UNITS (org hierarchy). Custom tables and DFFs on these tables also need analysis. Mine profiles your entire HR schema."
+      },
+      {
+        "question": "How does Mine handle Oracle's date-tracked tables?",
+        "answer": "Mine reads the effective start and end dates on each Oracle HR record and reconstructs the change history as Workday effective-dated transactions. For example, if an employee's assignment changed three times in PA_ALL_ASSIGNMENTS_F, Mine creates three Workday staffing events with the correct effective dates."
+      },
+      {
+        "question": "What about Oracle DFFs on HR tables?",
+        "answer": "Mine reads the Oracle DFF repository metadata to understand what each ATTRIBUTE column stores on HR tables. Each context-segment combination is mapped to a Workday custom field with appropriate data type and validation. This is critical because Oracle HR DFFs often contain compliance-sensitive data like EEO classifications or union memberships."
+      },
+      {
+        "question": "How much does an Oracle HRMS to Workday migration cost?",
+        "answer": "Oracle HRMS-to-Workday migrations typically cost $1.5M–6M through consulting firms, depending on employee count and country complexity. Data conversion is 25–35% of the total. Mine reduces the data conversion cost by 40–50% through automated table profiling, date-tracked history conversion, and payroll validation."
+      }
+    ],
+    "keywords": {
+      "primary": "Oracle HRMS to Workday data migration",
+      "secondary": ["migrate Oracle HR to Workday", "Oracle HRMS Workday migration tool", "Oracle EBS HR to Workday ETL", "Oracle HCM to Workday migration"],
+      "long_tail": ["how to migrate data from Oracle HR to Workday", "Oracle HR tables to Workday mapping", "Oracle HRMS to Workday migration cost", "Oracle HRMS to Workday migration timeline", "Oracle PER_ALL_PEOPLE_F to Workday"]
+    },
+    "related_slugs": ["sap-hr-to-workday", "oracle-ebs-to-oracle-cloud", "oracle-ebs-to-netsuite", "oracle-ebs-to-salesforce"],
+    "is_published": true,
+    "display_order": 33
+  },
+  {
+    "slug": "dynamics-365-hr-to-workday",
+    "source_system": "Microsoft Dynamics 365 HR",
+    "target_system": "Workday",
+    "source_slug": "dynamics-365-hr",
+    "target_slug": "workday",
+    "source_category": "ERP",
+    "target_category": "Cloud",
+    "meta_title": "Dynamics 365 HR to Workday Data Migration | Mine",
+    "meta_description": "Automate your Dynamics 365 Human Resources to Workday data migration. AI-powered mapping for workers, positions, compensation, and benefits.",
+    "hero_headline": "Dynamics 365 HR to Workday Data Migration",
+    "hero_subheadline": "Moving from Dynamics 365 Human Resources to Workday? Mine automates the mapping between D365's Dataverse-based HR model and Workday's worker-centric architecture.",
+    "bridge_paragraph": "Dynamics 365 Human Resources stores worker data in Dataverse entities (HcmWorker, HcmPosition, HcmJob) with the global address book for contacts, while Workday uses a unified worker record with effective-dated business processes. Mine translates D365's entity-based HR model to Workday's event-driven architecture automatically.",
+    "overview_paragraphs": [
+      "Dynamics 365 HR to Workday migrations happen when companies decide that a purpose-built HCM platform better serves their HR needs than Microsoft's HR module. Workday's depth in talent management, workforce planning, learning, and analytics often exceeds what D365 HR provides. This migration is common at companies with 2,000+ employees where HR complexity justifies a dedicated HCM platform, or where the company's HR strategy emphasizes employee experience and people analytics.",
+      "The migration translates D365's Dataverse HR entities to Workday's worker model. D365 uses HcmWorker, HcmPosition, HcmJob, and HcmCompensation entities with the global address book. Workday's data model is fundamentally different — workers, positions, and jobs exist within supervisory organizations with effective-dated business processes governing every change. D365's compensation and benefits entities map to Workday's compensation plans and benefit elections through different structural patterns.",
+      "Companies typically manage this migration with HR consulting firms, using D365 data entities for extraction and Workday's Enterprise Interface Builder (EIB) for loading. The structural translation and validation work is where most of the effort goes."
+    ],
+    "challenges": [
+      {
+        "title": "D365 Dataverse entities to Workday worker model",
+        "description": "D365 HR uses Dataverse entities (HcmWorker, HcmEmployment, HcmPositionWorkerAssignment) with effective-dated records. Workday uses a different effective-dating model within business processes. The entity-to-worker translation must preserve employment history while restructuring the data into Workday's event-based timeline."
+      },
+      {
+        "title": "Global address book to Workday contacts",
+        "description": "D365 uses a global address book (DirPartyTable, LogisticsPostalAddress, LogisticsElectronicAddress) shared across HR, finance, and operations. Workday has its own worker contact model. Extracting HR-relevant address data from D365's shared model requires filtering out non-HR party records."
+      },
+      {
+        "title": "Benefits enrollment translation",
+        "description": "D365 HR benefits enrollment data (HcmBenefitPlan, HcmWorkerEnrollment) uses a different plan and enrollment model than Workday's benefit election framework. Plan types, coverage levels, and dependent enrollment rules must be mapped between the platforms."
+      },
+      {
+        "title": "Leave and absence model differences",
+        "description": "D365 HR tracks leave through leave plans, leave types, and leave balances with accrual rules. Workday uses absence plans with different accrual calculation methods. Leave balance carryover during migration requires careful point-in-time calculation to ensure employees don't lose accrued time off."
+      }
+    ],
+    "data_objects": [
+      { "source_object": "HcmWorker", "target_object": "Worker", "notes": "Core worker record" },
+      { "source_object": "HcmPosition", "target_object": "Position", "notes": "Position management" },
+      { "source_object": "HcmJob", "target_object": "Job Profile", "notes": "Job catalog" },
+      { "source_object": "HcmCompFixedPlan", "target_object": "Compensation Plan", "notes": "Fixed compensation" },
+      { "source_object": "HcmWorkerEnrollment", "target_object": "Benefit Election", "notes": "Benefits enrollment" },
+      { "source_object": "HcmEmployment", "target_object": "Staffing Event", "notes": "Employment history" },
+      { "source_object": "DirPartyTable (addresses)", "target_object": "Worker Address", "notes": "Filter from GAB" },
+      { "source_object": "HcmLeaveBalance", "target_object": "Time Off Balance", "notes": "Accrual carryover" },
+      { "source_object": "HcmDepartment", "target_object": "Supervisory Organization", "notes": "Org hierarchy" },
+      { "source_object": "HcmPersonSkill", "target_object": "Worker Skill", "notes": "Skills and certifications" }
+    ],
+    "how_mine_helps": [
+      "Mine maps D365 Dataverse HR entities to Workday worker objects — HcmWorker to Worker, HcmPosition to Position, HcmEmployment to Staffing Events — with effective date translation between the two models.",
+      "Global address book data is filtered to extract only HR-relevant addresses and contacts, then mapped to Workday's worker contact model.",
+      "Compensation and benefits enrollment data is translated between D365's entity model and Workday's plan-election framework with plan mapping tables generated automatically.",
+      "Leave balances are calculated as of cutover date with accrual reconciliation — ensuring no employee loses time off during the transition."
+    ],
+    "migration_stats": {
+      "manual_timeline": "6–12 months",
+      "mine_timeline": "4–8 weeks",
+      "manual_cost": "$500K–2M",
+      "cost_reduction": "40–50%",
+      "manual_team": "4–8 consultants",
+      "mine_team": "1–2 internal resources"
+    },
+    "faqs": [
+      {
+        "question": "How long does a Dynamics 365 HR to Workday migration take?",
+        "answer": "A typical D365 HR to Workday migration takes 6–12 months end-to-end. The data conversion workstream runs 2–4 months in traditional approaches. Timeline depends on employee count, benefits complexity, and historical depth. Mine reduces the data conversion to 4–8 weeks."
+      },
+      {
+        "question": "Why move from D365 HR to Workday?",
+        "answer": "Companies typically choose Workday when they need deeper talent management, workforce planning, learning management, or people analytics than D365 HR provides. At scale (2,000+ employees), Workday's purpose-built HCM platform often delivers more value than D365's HR module. Mine supports whichever direction you choose."
+      },
+      {
+        "question": "How does Mine handle D365's global address book data?",
+        "answer": "D365's global address book is shared across HR, finance, and operations. Mine filters to extract only HR-relevant party records (employees, dependents, emergency contacts) and maps their addresses and contact information to Workday's worker-specific contact model."
+      },
+      {
+        "question": "What about leave balance carryover?",
+        "answer": "Mine calculates each employee's leave balance as of the cutover date based on D365's accrual data, then loads the correct opening balance into Workday. This ensures no employee loses accrued time off. Accrual rule translation is documented so Workday's absence plans can be configured to match."
+      },
+      {
+        "question": "How much does a D365 HR to Workday migration cost?",
+        "answer": "D365 HR-to-Workday migrations typically cost $500K–2M through consulting firms. Data conversion is 20–30% of the total. The cost depends on employee count, benefits complexity, and whether you're migrating performance review and talent data. Mine reduces the data conversion cost by 40–50%."
+      }
+    ],
+    "keywords": {
+      "primary": "Dynamics 365 HR to Workday data migration",
+      "secondary": ["migrate D365 HR to Workday", "Dynamics 365 Human Resources Workday migration", "D365 HR to Workday ETL", "Microsoft HR to Workday migration"],
+      "long_tail": ["how to migrate data from Dynamics 365 HR to Workday", "D365 HcmWorker to Workday mapping", "Dynamics 365 HR to Workday migration cost", "D365 HR to Workday migration timeline"]
+    },
+    "related_slugs": ["sap-hr-to-workday", "oracle-hr-to-workday", "dynamics-gp-to-dynamics-365", "dynamics-ax-to-dynamics-365"],
+    "is_published": true,
+    "display_order": 34
+  },
+  {
+    "slug": "salesforce-to-servicenow",
+    "source_system": "Salesforce",
+    "target_system": "ServiceNow",
+    "source_slug": "salesforce",
+    "target_slug": "servicenow",
+    "source_category": "CRM",
+    "target_category": "Platform",
+    "meta_title": "Salesforce to ServiceNow Data Migration | Mine",
+    "meta_description": "Automate your Salesforce to ServiceNow data migration. AI-powered mapping for cases, accounts, contacts, and knowledge articles into ITSM.",
+    "hero_headline": "Salesforce to ServiceNow Data Migration",
+    "hero_subheadline": "Moving service operations from Salesforce to ServiceNow? Mine automates the mapping between Salesforce's Case model and ServiceNow's Incident/Request architecture — preserving case history, SLAs, and knowledge base content.",
+    "bridge_paragraph": "Salesforce stores service data in Cases, Knowledge Articles, and Entitlements with Omni-Channel routing, while ServiceNow uses Incidents, Requests, Problems, and Changes in an ITIL-aligned service management model. Mine translates Salesforce's CRM-centric service model to ServiceNow's ITSM architecture — mapping Cases to the correct ServiceNow table based on case type and category.",
+    "overview_paragraphs": [
+      "Salesforce to ServiceNow migrations happen when companies want to consolidate service operations on a purpose-built ITSM platform. While Salesforce Service Cloud handles customer service well, companies with complex IT service management needs — incident management, change management, CMDB, asset management — increasingly move to ServiceNow. This migration is common in IT-centric organizations, companies adopting ITIL frameworks, and enterprises that want to separate customer-facing CRM (Salesforce) from internal IT service management (ServiceNow).",
+      "The technical challenge is translating Salesforce's CRM service model to ServiceNow's ITIL-aligned model. Salesforce Cases are generic service records; ServiceNow separates Incidents, Service Requests, Problems, and Changes into distinct tables with different workflows. Salesforce Knowledge Articles map to ServiceNow's Knowledge Base but with different versioning and publication models. Entitlements and SLA management work differently between platforms.",
+      "Companies typically manage this migration during ServiceNow implementation. The data conversion — especially case history classification into ServiceNow's ITIL categories — requires business analysis alongside technical mapping."
+    ],
+    "challenges": [
+      {
+        "title": "Case-to-Incident/Request classification",
+        "description": "Salesforce Cases are a single object type used for all service interactions. ServiceNow separates Incidents (break/fix), Service Requests (standard requests), Problems (root cause), and Changes (planned modifications) into distinct tables. Each Salesforce Case must be classified into the correct ServiceNow table based on case type, category, or custom fields."
+      },
+      {
+        "title": "Knowledge base migration and versioning",
+        "description": "Salesforce Knowledge Articles use a versioning model with draft, published, and archived states plus article types. ServiceNow Knowledge uses a different versioning and workflow model with knowledge bases, categories, and articles. The article content, metadata, and version history must be migrated with correct categorization."
+      },
+      {
+        "title": "SLA and entitlement model differences",
+        "description": "Salesforce Entitlements and Milestones track SLA compliance for Cases. ServiceNow uses SLA Definitions with different measurement mechanisms, escalation rules, and pause/resume logic. Migrating historical SLA data while maintaining compliance reporting continuity requires careful mapping of the SLA measurement model."
+      },
+      {
+        "title": "User and assignment model translation",
+        "description": "Salesforce uses Queues, Assignment Rules, and Omni-Channel for case routing. ServiceNow uses Assignment Groups, Assignment Rules, and Flow Designer. The routing logic must be rebuilt, and historical case ownership must be mapped from Salesforce Users to ServiceNow sys_user records."
+      }
+    ],
+    "data_objects": [
+      { "source_object": "Case", "target_object": "Incident / Request / Problem", "notes": "Type-based routing" },
+      { "source_object": "Case Comment", "target_object": "Work Note / Comment", "notes": "Internal vs. customer" },
+      { "source_object": "Knowledge Article", "target_object": "Knowledge Article (kb_knowledge)", "notes": "Version migration" },
+      { "source_object": "Account", "target_object": "Company (core_company)", "notes": "Customer reference" },
+      { "source_object": "Contact", "target_object": "Contact (customer_contact)", "notes": "Caller/requester" },
+      { "source_object": "Entitlement", "target_object": "SLA Definition", "notes": "SLA model differences" },
+      { "source_object": "Task (related)", "target_object": "Task (sn_task)", "notes": "Related tasks" },
+      { "source_object": "Attachment", "target_object": "Attachment (sys_attachment)", "notes": "File migration" },
+      { "source_object": "Queue", "target_object": "Assignment Group", "notes": "Routing configuration" }
+    ],
+    "how_mine_helps": [
+      "Mine classifies Salesforce Cases into ServiceNow Incidents, Requests, Problems, or Changes based on case type, category, and custom field analysis — generating routing rules you approve before migration.",
+      "Knowledge Articles are mapped with content, metadata, categorization, and version history preserved — translated from Salesforce's article type model to ServiceNow's knowledge base structure.",
+      "Case comments are classified as ServiceNow Work Notes (internal) or Additional Comments (customer-facing) based on Salesforce's public/private comment flags.",
+      "Mine generates a complete User-to-sys_user mapping with Queue-to-Assignment-Group translation for the service desk routing configuration."
+    ],
+    "migration_stats": {
+      "manual_timeline": "3–6 months",
+      "mine_timeline": "3–5 weeks",
+      "manual_cost": "$200K–600K",
+      "cost_reduction": "40–50%",
+      "manual_team": "3–5 consultants",
+      "mine_team": "1–2 internal resources"
+    },
+    "faqs": [
+      {
+        "question": "How long does a Salesforce to ServiceNow data migration take?",
+        "answer": "A typical Salesforce-to-ServiceNow migration takes 3–6 months. The biggest time investment is classifying Salesforce Cases into ServiceNow's ITIL categories (Incident, Request, Problem, Change). The data conversion itself is straightforward once classification rules are defined. Mine reduces the data conversion to 3–5 weeks."
+      },
+      {
+        "question": "How do Salesforce Cases map to ServiceNow?",
+        "answer": "Salesforce Cases don't map to a single ServiceNow table. Break/fix issues become Incidents, standard service requests become Requests, root cause investigations become Problems, and planned changes become Changes. Mine analyzes your Case data — types, categories, custom fields — and proposes classification rules for each ServiceNow table."
+      },
+      {
+        "question": "Can Salesforce Knowledge Articles migrate to ServiceNow?",
+        "answer": "Yes. Salesforce Knowledge Articles migrate to ServiceNow's Knowledge Base (kb_knowledge) with content, metadata, and categorization. Version history can be preserved. Mine maps Salesforce article types to ServiceNow knowledge categories and handles the content format translation."
+      },
+      {
+        "question": "What about Salesforce Service Cloud features not in ServiceNow?",
+        "answer": "Some Salesforce Service Cloud features (Omni-Channel routing, Einstein Case Classification) need ServiceNow equivalents (Agent Workspace, Predictive Intelligence). Mine doesn't migrate the automation but documents which Salesforce features your team uses and their ServiceNow alternatives."
+      },
+      {
+        "question": "How much does a Salesforce to ServiceNow migration cost?",
+        "answer": "Salesforce-to-ServiceNow migrations typically cost $200K–600K depending on case history volume, knowledge base size, and integration complexity. Data conversion is 20–30% of the total. Mine reduces that portion by 40–50%."
+      }
+    ],
+    "keywords": {
+      "primary": "Salesforce to ServiceNow data migration",
+      "secondary": ["migrate Salesforce to ServiceNow", "Salesforce ServiceNow migration tool", "Salesforce to ServiceNow ETL", "Salesforce cases to ServiceNow incidents"],
+      "long_tail": ["how to migrate data from Salesforce to ServiceNow", "Salesforce to ServiceNow field mapping", "Salesforce cases to ServiceNow incidents mapping", "Salesforce to ServiceNow migration cost", "Salesforce to ServiceNow migration timeline"]
+    },
+    "related_slugs": ["servicenow-to-salesforce", "salesforce-to-dynamics-365", "jira-to-servicenow", "salesforce-to-hubspot"],
+    "is_published": true,
+    "display_order": 35
+  },
+  {
+    "slug": "servicenow-to-salesforce",
+    "source_system": "ServiceNow",
+    "target_system": "Salesforce",
+    "source_slug": "servicenow",
+    "target_slug": "salesforce",
+    "source_category": "Platform",
+    "target_category": "CRM",
+    "meta_title": "ServiceNow to Salesforce Data Migration | Mine",
+    "meta_description": "Automate your ServiceNow to Salesforce data migration. Map incidents, requests, and CMDB data into Salesforce for a unified customer 360.",
+    "hero_headline": "ServiceNow to Salesforce Data Migration",
+    "hero_subheadline": "Building a customer 360 by bringing service data into Salesforce? Mine automates the mapping between ServiceNow's ITSM tables and Salesforce's Service Cloud — incidents to cases, CI data to assets, and knowledge articles.",
+    "bridge_paragraph": "ServiceNow stores service data across ITIL-aligned tables — Incidents (incident), Service Requests (sc_request), Problems (problem), and Changes (change_request) — while Salesforce uses a single Case object for all service interactions. Mine collapses ServiceNow's multi-table ITSM model into Salesforce's unified Case architecture with type and category fields preserving the ITIL classification.",
+    "overview_paragraphs": [
+      "ServiceNow to Salesforce migrations happen when companies want a unified customer view that includes service data. While ServiceNow excels at IT service management, companies increasingly want customer-facing service interactions managed in Salesforce — alongside sales, marketing, and account data. This migration is common when companies adopt Salesforce Service Cloud for customer support while keeping ServiceNow for internal IT, or when companies consolidate service platforms during M&A.",
+      "The technical challenge is collapsing ServiceNow's ITIL-separated tables back into Salesforce's unified Case model. ServiceNow Incidents, Requests, Problems, and Changes are distinct tables with different fields and workflows. Salesforce uses Cases with record types and categories to distinguish between service types. The CMDB (Configuration Management Database) data may migrate to Salesforce Assets or custom objects. ServiceNow's Flow Designer automation must be rebuilt using Salesforce Flows.",
+      "Companies typically use middleware (MuleSoft, Dell Boomi) or direct API integration. The data mapping — especially for large ServiceNow instances with millions of incidents and complex CMDB relationships — requires careful scope definition."
+    ],
+    "challenges": [
+      {
+        "title": "Multi-table ITSM model to unified Case object",
+        "description": "ServiceNow's Incidents, Requests, Problems, and Changes are separate tables with different field sets. Salesforce uses a single Case object with record types. Merging multiple ServiceNow tables into one Salesforce object requires a unified field mapping that accommodates different source schemas — each ServiceNow table has unique fields that need corresponding Salesforce Case fields."
+      },
+      {
+        "title": "CMDB data representation in Salesforce",
+        "description": "ServiceNow's CMDB stores configuration items (servers, applications, network devices) with complex relationships. Salesforce has an Asset object but it's designed for customer-owned assets, not IT infrastructure. CMDB data may need custom Salesforce objects or integration with an external CMDB rather than full migration."
+      },
+      {
+        "title": "Assignment group to Queue/Team mapping",
+        "description": "ServiceNow uses assignment groups with group membership, skills, and on-call schedules. Salesforce uses Queues and Omni-Channel Skills-Based Routing. The routing model translation affects how cases are assigned post-migration."
+      },
+      {
+        "title": "Service catalog to Salesforce alternative",
+        "description": "ServiceNow's Service Catalog with catalog items, variable sets, and approval workflows has no direct Salesforce equivalent. Catalog data may be migrated to Salesforce Knowledge Articles, custom objects, or Salesforce's Service Catalog (if using CSM). The approach depends on your Salesforce architecture."
+      }
+    ],
+    "data_objects": [
+      { "source_object": "Incident", "target_object": "Case (Record Type: Incident)", "notes": "ITIL to Case type" },
+      { "source_object": "Service Request (sc_request)", "target_object": "Case (Record Type: Request)", "notes": "Request items" },
+      { "source_object": "Problem", "target_object": "Case (Record Type: Problem)", "notes": "Root cause data" },
+      { "source_object": "Knowledge Article (kb_knowledge)", "target_object": "Knowledge Article", "notes": "Content migration" },
+      { "source_object": "Company (core_company)", "target_object": "Account", "notes": "Customer records" },
+      { "source_object": "Contact (customer_contact)", "target_object": "Contact", "notes": "Requester/caller" },
+      { "source_object": "CI (cmdb_ci)", "target_object": "Asset / Custom Object", "notes": "CMDB scope decision" },
+      { "source_object": "Work Notes", "target_object": "Case Comment (internal)", "notes": "Internal notes" },
+      { "source_object": "Attachment (sys_attachment)", "target_object": "Files / ContentDocument", "notes": "File migration" }
+    ],
+    "how_mine_helps": [
+      "Mine merges ServiceNow's multi-table ITSM data into Salesforce's unified Case object — mapping Incidents, Requests, and Problems to Case record types with a unified field mapping that accommodates each source table's unique fields.",
+      "Knowledge articles are migrated with content, categorization, and metadata preserved — ServiceNow knowledge bases map to Salesforce Knowledge article types.",
+      "CMDB data is profiled and classified — Mine recommends which CIs should become Salesforce Assets, which need custom objects, and which should stay in ServiceNow with API integration.",
+      "Mine generates a complete sys_user-to-User mapping with assignment group-to-Queue translation for the service routing configuration."
+    ],
+    "migration_stats": {
+      "manual_timeline": "3–6 months",
+      "mine_timeline": "3–5 weeks",
+      "manual_cost": "$200K–600K",
+      "cost_reduction": "40–50%",
+      "manual_team": "3–5 consultants",
+      "mine_team": "1–2 internal resources"
+    },
+    "faqs": [
+      {
+        "question": "How long does a ServiceNow to Salesforce data migration take?",
+        "answer": "A typical ServiceNow-to-Salesforce migration takes 3–6 months. Timeline depends on incident volume, CMDB scope, and knowledge base size. The classification mapping (which ServiceNow tables map to which Salesforce Case record types) requires business analysis. Mine reduces the data conversion to 3–5 weeks."
+      },
+      {
+        "question": "How do ServiceNow Incidents become Salesforce Cases?",
+        "answer": "ServiceNow Incidents map to Salesforce Cases with a specific record type (e.g., 'Incident'). Fields like priority, category, subcategory, and assignment group translate to Salesforce Case fields. ServiceNow-specific fields (business service, CI) may need custom Salesforce fields. Mine generates the complete field mapping with record type configuration."
+      },
+      {
+        "question": "Should CMDB data migrate to Salesforce?",
+        "answer": "It depends. Customer-facing assets (products they own, subscriptions they use) fit Salesforce's Asset model. Internal IT infrastructure (servers, networks) typically stays in ServiceNow or another CMDB. Mine profiles your CMDB and classifies each CI type with a migration recommendation."
+      },
+      {
+        "question": "Can ServiceNow Knowledge Articles migrate to Salesforce?",
+        "answer": "Yes. ServiceNow kb_knowledge articles map to Salesforce Knowledge articles with content, categories, and metadata. Version history and article state (draft/published/retired) are translated. Mine handles the content format conversion and categorization mapping."
+      },
+      {
+        "question": "How much does a ServiceNow to Salesforce migration cost?",
+        "answer": "ServiceNow-to-Salesforce migrations cost $200K–600K depending on data volume and CMDB scope. Data conversion is 20–30% of the total. The biggest cost driver is incident history volume — large enterprises may have millions of historical records. Mine reduces the data conversion cost by 40–50%."
+      }
+    ],
+    "keywords": {
+      "primary": "ServiceNow to Salesforce data migration",
+      "secondary": ["migrate ServiceNow to Salesforce", "ServiceNow Salesforce migration tool", "ServiceNow to Salesforce ETL", "ServiceNow incidents to Salesforce cases"],
+      "long_tail": ["how to migrate data from ServiceNow to Salesforce", "ServiceNow to Salesforce field mapping", "ServiceNow incidents to Salesforce cases", "ServiceNow to Salesforce migration cost", "ServiceNow to Salesforce migration timeline"]
+    },
+    "related_slugs": ["salesforce-to-servicenow", "jira-to-servicenow", "jira-to-salesforce", "siebel-to-salesforce"],
+    "is_published": true,
+    "display_order": 36
+  },
+  {
+    "slug": "jira-to-servicenow",
+    "source_system": "Jira",
+    "target_system": "ServiceNow",
+    "source_slug": "jira",
+    "target_slug": "servicenow",
+    "source_category": "Platform",
+    "target_category": "Platform",
+    "meta_title": "Jira to ServiceNow Data Migration | Mine",
+    "meta_description": "Automate your Jira to ServiceNow data migration. Map issues, workflows, and custom fields into ServiceNow ITSM incidents and requests.",
+    "hero_headline": "Jira to ServiceNow Data Migration",
+    "hero_subheadline": "Consolidating from Jira to ServiceNow? Mine automates the mapping between Jira's issue-based model and ServiceNow's ITIL-aligned service management tables — preserving issue history, custom fields, and workflow states.",
+    "bridge_paragraph": "Jira stores work items as Issues with configurable issue types, workflows, and custom fields in a project-based hierarchy, while ServiceNow uses ITIL-aligned tables — Incidents, Requests, Problems, Changes — with assignment groups and SLA management. Mine translates Jira's flexible issue tracking model to ServiceNow's structured ITSM framework automatically.",
+    "overview_paragraphs": [
+      "Jira to ServiceNow migrations happen when companies outgrow Jira's IT service management capabilities and need enterprise ITSM. While Jira Service Management handles basic ITSM, companies with complex change management, CMDB requirements, or ITIL maturity goals often migrate to ServiceNow. This is common at the 1,000+ employee scale where IT operations complexity justifies ServiceNow's enterprise platform, or after M&A when standardizing on a single ITSM tool.",
+      "The technical challenge is mapping Jira's flexible, project-based issue model to ServiceNow's structured, ITIL-aligned tables. Jira issues are classified by issue type and live within projects. ServiceNow separates data across distinct tables (incident, sc_request, change_request) with different field sets. Jira's customizable workflows with transitions map to ServiceNow's state flows. Custom fields, components, and labels need ServiceNow equivalents. Jira's sprint and agile data has no ServiceNow ITSM equivalent.",
+      "Companies typically manage this migration during ServiceNow implementation. The issue classification (which Jira issues become which ServiceNow records) and custom field translation are the most labor-intensive parts."
+    ],
+    "challenges": [
+      {
+        "title": "Issue type to ServiceNow table routing",
+        "description": "Jira issue types (Bug, Story, Task, Epic, Service Request, Incident) must route to the correct ServiceNow table. Standard Jira Service Management types map naturally (Incident → incident, Service Request → sc_request), but custom issue types and subtasks require analysis. The routing decision must be made per project and issue type combination."
+      },
+      {
+        "title": "Workflow state to ServiceNow state mapping",
+        "description": "Jira workflows are highly customizable — each project and issue type can have different workflow states and transitions. ServiceNow uses standardized state flows per table (New → In Progress → Resolved → Closed for incidents). Mapping custom Jira workflow states to ServiceNow's fixed state model requires consolidation of non-standard states."
+      },
+      {
+        "title": "Custom fields and screen configurations",
+        "description": "Jira allows unlimited custom fields with screen-level control over which fields appear for which issue types. ServiceNow uses dictionary entries and form layouts. Each Jira custom field needs a ServiceNow equivalent — either a standard field, a variable in the service catalog, or a custom field on the appropriate table."
+      },
+      {
+        "title": "Agile and sprint data",
+        "description": "Jira's agile boards, sprints, story points, and velocity data have no ServiceNow ITSM equivalent. If the team uses agile methodology, this data may be archived, migrated to ServiceNow's Agile Development module (if licensed), or kept in a separate system. Mine flags agile-specific data and recommends the handling approach."
+      }
+    ],
+    "data_objects": [
+      { "source_object": "Issue (Incident type)", "target_object": "Incident", "notes": "Type-based routing" },
+      { "source_object": "Issue (Service Request)", "target_object": "Service Request (sc_request)", "notes": "Catalog item mapping" },
+      { "source_object": "Issue (Change)", "target_object": "Change Request", "notes": "Change management" },
+      { "source_object": "Issue (Bug/Story)", "target_object": "Problem / Enhancement", "notes": "Classification decision" },
+      { "source_object": "Comment", "target_object": "Work Note / Comment", "notes": "Internal vs. public" },
+      { "source_object": "Attachment", "target_object": "Attachment (sys_attachment)", "notes": "File migration" },
+      { "source_object": "Component", "target_object": "Service / CI Reference", "notes": "Configuration item link" },
+      { "source_object": "Custom Fields", "target_object": "Table fields / Variables", "notes": "Individual mapping" },
+      { "source_object": "Project", "target_object": "Assignment Group / Category", "notes": "Routing context" },
+      { "source_object": "Worklog", "target_object": "Time Entry", "notes": "Time tracking" }
+    ],
+    "how_mine_helps": [
+      "Mine classifies Jira issues into ServiceNow tables based on issue type, project, and custom field analysis — Incidents to incident, Service Requests to sc_request, Changes to change_request — with routing rules you approve.",
+      "Custom Jira workflows are mapped to ServiceNow state flows with state consolidation rules for non-standard workflow states that don't have ServiceNow equivalents.",
+      "Custom fields are profiled and mapped to ServiceNow dictionary entries — with recommendations for which become table fields, service catalog variables, or ServiceNow custom fields.",
+      "Mine preserves the full issue history — comments, status changes, assignee changes, and worklogs — translated to ServiceNow's activity log format."
+    ],
+    "migration_stats": {
+      "manual_timeline": "2–4 months",
+      "mine_timeline": "2–4 weeks",
+      "manual_cost": "$100K–400K",
+      "cost_reduction": "40–50%",
+      "manual_team": "2–4 consultants",
+      "mine_team": "1 internal resource"
+    },
+    "faqs": [
+      {
+        "question": "How long does a Jira to ServiceNow data migration take?",
+        "answer": "A typical Jira-to-ServiceNow migration takes 2–4 months. The data conversion itself is fast; the time is spent classifying issue types into ServiceNow tables and mapping custom workflows. Mine reduces the data conversion to 2–4 weeks once classification decisions are made."
+      },
+      {
+        "question": "How do Jira issues map to ServiceNow?",
+        "answer": "Jira issue types route to different ServiceNow tables: Incidents → incident table, Service Requests → sc_request, Changes → change_request, Bugs/Stories may become Problems or Enhancement Requests. The mapping depends on how your team uses Jira — Mine analyzes your actual issue data and proposes routing rules."
+      },
+      {
+        "question": "What happens to Jira's agile data in ServiceNow?",
+        "answer": "Jira sprints, story points, and velocity data don't have standard ServiceNow ITSM equivalents. Options include: migrating to ServiceNow Agile Development (if licensed), archiving the agile data, or keeping it in a project management tool. Mine flags all agile-specific data and documents the handling recommendation."
+      },
+      {
+        "question": "Can Jira custom workflows work in ServiceNow?",
+        "answer": "Jira's custom workflow states must be consolidated into ServiceNow's standardized state flows. ServiceNow incidents have fixed states (New, In Progress, On Hold, Resolved, Closed). Custom Jira states that don't match must be mapped to the nearest ServiceNow equivalent. Mine generates the state mapping and flags states that require business decisions."
+      },
+      {
+        "question": "How much does a Jira to ServiceNow migration cost?",
+        "answer": "Jira-to-ServiceNow migrations cost $100K–400K depending on issue volume, custom field complexity, and the number of distinct workflows. Data conversion is 15–25% of the total ServiceNow implementation. Mine reduces that portion by 40–50%."
+      }
+    ],
+    "keywords": {
+      "primary": "Jira to ServiceNow data migration",
+      "secondary": ["migrate Jira to ServiceNow", "Jira ServiceNow migration tool", "Jira to ServiceNow ETL", "Jira Service Management to ServiceNow"],
+      "long_tail": ["how to migrate data from Jira to ServiceNow", "Jira issues to ServiceNow incidents", "Jira to ServiceNow field mapping", "Jira to ServiceNow migration cost", "Jira to ServiceNow migration timeline"]
+    },
+    "related_slugs": ["servicenow-to-jira", "jira-to-salesforce", "salesforce-to-servicenow", "servicenow-to-salesforce"],
+    "is_published": true,
+    "display_order": 37
+  },
+  {
+    "slug": "jira-to-salesforce",
+    "source_system": "Jira",
+    "target_system": "Salesforce",
+    "source_slug": "jira",
+    "target_slug": "salesforce",
+    "source_category": "Platform",
+    "target_category": "CRM",
+    "meta_title": "Jira to Salesforce Data Migration | Mine",
+    "meta_description": "Automate your Jira to Salesforce data migration. Map issues, bugs, and feature requests into Salesforce Cases or custom objects for customer 360.",
+    "hero_headline": "Jira to Salesforce Data Migration",
+    "hero_subheadline": "Bringing product and support data into Salesforce? Mine automates the mapping between Jira's issue model and Salesforce's Case and custom object architecture — connecting tickets to customers, accounts, and deals.",
+    "bridge_paragraph": "Jira stores work items as Issues in a project-based hierarchy with custom fields, workflows, and agile boards, while Salesforce organizes data around Accounts, Contacts, Cases, and Opportunities. Mine maps Jira's issue tracking data to Salesforce's customer-centric model — linking tickets to customer records and enriching the customer 360 with product feedback data.",
+    "overview_paragraphs": [
+      "Jira to Salesforce migrations happen when companies want product feedback and support data visible in their CRM. Product-led growth companies need sales teams to see bug reports, feature requests, and support tickets associated with each customer account. Companies consolidating support from Jira Service Management to Salesforce Service Cloud need to migrate ticket history. M&A events sometimes require merging a Jira-based support operation into a Salesforce-based one.",
+      "The fundamental challenge is connecting Jira's project-centric data to Salesforce's customer-centric model. Jira issues exist within projects and typically reference reporters and assignees but not customer accounts. Salesforce Cases are linked to Accounts and Contacts. Creating the customer-to-issue association — especially when Jira reporters are email addresses without formal account relationships — requires identity resolution and account matching.",
+      "Companies typically build a Jira-Salesforce integration for ongoing sync, but historical data migration requires a one-time bulk conversion. The account matching and issue classification work is manual without automation."
+    ],
+    "challenges": [
+      {
+        "title": "Issue-to-Case or custom object routing",
+        "description": "Jira issues may become Salesforce Cases (for support tickets), custom objects (for feature requests or bugs), or Opportunity-related records (for product feedback influencing deals). The routing depends on your Salesforce architecture. Mine analyzes issue types and labels to propose the optimal routing."
+      },
+      {
+        "title": "Customer identity resolution",
+        "description": "Jira reporters are typically email addresses or usernames without Account associations. Salesforce Cases need Account and Contact links. Matching Jira reporters to Salesforce Contacts by email — and resolving ambiguous matches where the email domain maps to multiple Accounts — requires fuzzy matching and business rules."
+      },
+      {
+        "title": "Workflow state to Case status mapping",
+        "description": "Jira's custom workflow states (To Do, In Progress, Code Review, QA, Done) must map to Salesforce's simpler Case statuses (New, Working, Escalated, Closed). The state consolidation requires decisions about which Jira states map to which Salesforce statuses."
+      },
+      {
+        "title": "Jira-specific metadata with no Salesforce equivalent",
+        "description": "Jira story points, sprint membership, components, and velocity data have no Salesforce CRM equivalent. This metadata must be either archived, stored in custom fields for reference, or dropped. Mine catalogs all Jira-specific metadata and recommends handling for each."
+      }
+    ],
+    "data_objects": [
+      { "source_object": "Issue (Support type)", "target_object": "Case", "notes": "Service ticket migration" },
+      { "source_object": "Issue (Bug)", "target_object": "Case or Custom Object", "notes": "Architecture decision" },
+      { "source_object": "Issue (Feature Request)", "target_object": "Custom Object / Idea", "notes": "Product feedback" },
+      { "source_object": "Comment", "target_object": "Case Comment / Chatter", "notes": "Activity history" },
+      { "source_object": "Attachment", "target_object": "ContentDocument / Files", "notes": "File migration" },
+      { "source_object": "Reporter", "target_object": "Contact (matched)", "notes": "Identity resolution" },
+      { "source_object": "Labels / Components", "target_object": "Case fields / Picklists", "notes": "Classification" },
+      { "source_object": "Worklog", "target_object": "Time tracking custom fields", "notes": "Effort data" }
+    ],
+    "how_mine_helps": [
+      "Mine routes Jira issues to the correct Salesforce object based on issue type, project, and label analysis — support tickets to Cases, bugs to custom objects, feature requests to Ideas or custom objects.",
+      "Reporter emails are matched to Salesforce Contacts with domain-based Account resolution — linking every migrated issue to the correct customer Account and Contact.",
+      "Custom workflow states are consolidated into Salesforce Case statuses with a state mapping table you approve before migration.",
+      "Mine generates customer-level aggregations — total tickets, open bugs, feature request count — as Account custom fields for immediate sales team visibility."
+    ],
+    "migration_stats": {
+      "manual_timeline": "2–4 months",
+      "mine_timeline": "2–3 weeks",
+      "manual_cost": "$80K–250K",
+      "cost_reduction": "40–50%",
+      "manual_team": "2–3 consultants",
+      "mine_team": "1 internal resource"
+    },
+    "faqs": [
+      {
+        "question": "How long does a Jira to Salesforce data migration take?",
+        "answer": "A typical Jira-to-Salesforce migration takes 2–4 months. The customer identity resolution (matching Jira reporters to Salesforce Contacts) and issue classification (which issues become Cases vs. custom objects) are the time-intensive steps. Mine reduces the data conversion to 2–3 weeks."
+      },
+      {
+        "question": "How does Mine match Jira reporters to Salesforce Contacts?",
+        "answer": "Mine extracts reporter email addresses from Jira and matches them to Salesforce Contact records. Email-exact matches are automatic. For ambiguous cases (email domain matches multiple Accounts), Mine presents options for manual resolution. Unmatched reporters can create new Contacts or be flagged for review."
+      },
+      {
+        "question": "Should Jira bugs become Salesforce Cases or custom objects?",
+        "answer": "It depends on your use case. If support teams need to track bugs alongside customer tickets, Cases with a 'Bug' record type work well. If product teams need detailed bug tracking with fields like severity, reproduction steps, and release version, a custom Bug object is better. Mine supports both approaches."
+      },
+      {
+        "question": "What about ongoing Jira-Salesforce sync after migration?",
+        "answer": "Mine focuses on the initial historical data migration. For ongoing sync, you'll need an integration tool (Jira-Salesforce connector, MuleSoft, or custom API). Mine's field mapping documentation accelerates the integration setup because the field-to-field crosswalk is already defined."
+      },
+      {
+        "question": "How much does a Jira to Salesforce migration cost?",
+        "answer": "Jira-to-Salesforce migrations cost $80K–250K depending on issue volume, custom field complexity, and the depth of customer identity resolution needed. Data conversion is 20–30% of the total. Mine reduces that portion by 40–50%."
+      }
+    ],
+    "keywords": {
+      "primary": "Jira to Salesforce data migration",
+      "secondary": ["migrate Jira to Salesforce", "Jira Salesforce migration tool", "Jira to Salesforce ETL", "Jira issues to Salesforce cases"],
+      "long_tail": ["how to migrate data from Jira to Salesforce", "Jira to Salesforce field mapping", "Jira issues to Salesforce cases mapping", "Jira to Salesforce migration cost", "Jira to Salesforce migration timeline"]
+    },
+    "related_slugs": ["jira-to-servicenow", "servicenow-to-salesforce", "salesforce-to-servicenow", "legacy-database-to-salesforce"],
+    "is_published": true,
+    "display_order": 38
+  },
+  {
+    "slug": "servicenow-to-jira",
+    "source_system": "ServiceNow",
+    "target_system": "Jira",
+    "source_slug": "servicenow",
+    "target_slug": "jira",
+    "source_category": "Platform",
+    "target_category": "Platform",
+    "meta_title": "ServiceNow to Jira Data Migration | Mine",
+    "meta_description": "Automate your ServiceNow to Jira data migration. Map incidents, requests, and changes into Jira Service Management issues.",
+    "hero_headline": "ServiceNow to Jira Data Migration",
+    "hero_subheadline": "Right-sizing from ServiceNow to Jira? Mine automates the mapping between ServiceNow's ITIL tables and Jira's flexible issue model — preserving incident history, custom fields, and resolution data.",
+    "bridge_paragraph": "ServiceNow stores service data across ITIL-aligned tables (incident, sc_request, problem, change_request) with complex CMDB relationships, while Jira uses a flexible issue-based model with configurable issue types and workflows. Mine translates ServiceNow's structured ITSM data into Jira's more flexible project-based model.",
+    "overview_paragraphs": [
+      "ServiceNow to Jira migrations happen when companies decide they're overpaying for ServiceNow's enterprise platform. Mid-market companies that adopted ServiceNow during growth may find Jira Service Management provides sufficient ITSM capability at a fraction of the cost. Engineering-led organizations often prefer Jira's developer experience and native integration with Jira Software for development workflow continuity. This migration is also common when PE firms optimize portfolio company tech spend.",
+      "The migration involves translating ServiceNow's structured, ITIL-aligned multi-table model into Jira's more flexible single-table approach. ServiceNow's Incidents, Requests, Problems, and Changes — each with specific fields, SLAs, and workflows — must be consolidated into Jira issue types within projects. ServiceNow's CMDB and service catalog have limited Jira equivalents. The SLA management and approval workflow models differ significantly.",
+      "Companies typically manage this during a Jira Service Management deployment. The issue type design, workflow configuration, and custom field setup in Jira must be completed before data migration can begin."
+    ],
+    "challenges": [
+      {
+        "title": "ITIL tables to Jira issue types",
+        "description": "ServiceNow's distinct tables (incident, sc_request, problem, change_request) must merge into Jira's issue type model within a single project or multiple projects. Each ServiceNow table has unique fields that need Jira custom field equivalents. The structural simplification requires decisions about what level of ITIL separation to preserve in Jira."
+      },
+      {
+        "title": "SLA management translation",
+        "description": "ServiceNow's SLA management (SLA Definitions, Task SLAs, retroactive start) is more sophisticated than Jira's SLA capabilities. Jira Service Management supports SLAs but with fewer configuration options. Some ServiceNow SLA scenarios may not be fully replicable in Jira."
+      },
+      {
+        "title": "CMDB and service catalog scope",
+        "description": "ServiceNow's CMDB and service catalog are major platform features with no Jira equivalent. CMDB data typically stays in a separate tool or is archived. Service catalog items may become Jira request types with custom forms, but the approval workflow complexity is reduced."
+      },
+      {
+        "title": "State flow standardization",
+        "description": "ServiceNow has fixed state flows per table that may have been customized. Jira workflows are fully flexible but must be configured from scratch. Mapping ServiceNow states to Jira workflow statuses — including custom states and branching transitions — requires workflow design before data migration."
+      }
+    ],
+    "data_objects": [
+      { "source_object": "Incident", "target_object": "Issue (Incident type)", "notes": "Core ITSM data" },
+      { "source_object": "Service Request", "target_object": "Issue (Service Request type)", "notes": "Request items" },
+      { "source_object": "Problem", "target_object": "Issue (Problem type)", "notes": "Root cause tracking" },
+      { "source_object": "Change Request", "target_object": "Issue (Change type)", "notes": "Change management" },
+      { "source_object": "Work Note / Comment", "target_object": "Comment", "notes": "Internal vs. public" },
+      { "source_object": "Attachment", "target_object": "Attachment", "notes": "File migration" },
+      { "source_object": "Assignment Group", "target_object": "Project / Component", "notes": "Routing context" },
+      { "source_object": "Custom Fields", "target_object": "Custom Fields", "notes": "Field-by-field mapping" },
+      { "source_object": "Knowledge Article", "target_object": "Confluence (if available)", "notes": "Knowledge base" }
+    ],
+    "how_mine_helps": [
+      "Mine maps ServiceNow's multi-table ITSM data into Jira issue types — Incidents, Requests, Problems, and Changes each become distinct Jira issue types with field mappings tailored to each source table.",
+      "ServiceNow state flows are translated to Jira workflow configurations — Mine generates the workflow definition including states, transitions, and conditions based on your ServiceNow state model.",
+      "Custom fields from each ServiceNow table are profiled and mapped to Jira custom fields with type translation (choice lists to select lists, reference fields to user pickers, etc.).",
+      "Mine preserves the full audit trail — work notes, state changes, assignment changes, and timestamps — translated into Jira's comment and changelog format."
+    ],
+    "migration_stats": {
+      "manual_timeline": "2–4 months",
+      "mine_timeline": "2–4 weeks",
+      "manual_cost": "$100K–350K",
+      "cost_reduction": "40–50%",
+      "manual_team": "2–4 consultants",
+      "mine_team": "1 internal resource"
+    },
+    "faqs": [
+      {
+        "question": "How long does a ServiceNow to Jira data migration take?",
+        "answer": "A typical ServiceNow-to-Jira migration takes 2–4 months. The Jira workflow design and issue type configuration must happen before data migration. The data conversion itself — once the target model is defined — takes 2–4 weeks with Mine. Total timeline depends on how quickly your team makes the ITSM architecture decisions."
+      },
+      {
+        "question": "Why move from ServiceNow to Jira?",
+        "answer": "Common reasons include cost reduction (Jira Service Management is significantly cheaper than ServiceNow), developer preference (Jira integrates natively with software development workflows), and simplification (mid-market companies may not need ServiceNow's enterprise complexity). Mine supports the migration regardless of the business rationale."
+      },
+      {
+        "question": "What happens to ServiceNow's CMDB data?",
+        "answer": "Jira doesn't have a native CMDB equivalent. Options include: maintaining the CMDB in a separate tool (like Device42 or Snipe-IT), importing CI data into Jira assets (if using Jira Assets/Insight), or archiving the CMDB data. Mine profiles your CMDB and recommends the handling approach."
+      },
+      {
+        "question": "Can ServiceNow SLAs work in Jira?",
+        "answer": "Jira Service Management supports SLA management but with fewer options than ServiceNow. Basic SLAs (time to first response, time to resolution) translate well. Complex SLAs with retroactive start, multiple conditions, or cascading escalations may need simplification. Mine documents your ServiceNow SLA configuration so the Jira team can recreate what's possible."
+      },
+      {
+        "question": "How much does a ServiceNow to Jira migration cost?",
+        "answer": "ServiceNow-to-Jira migrations cost $100K–350K depending on data volume and configuration complexity. The cost savings on licensing ($50K–200K+ annually for mid-market companies) typically justify the migration investment within the first year. Mine reduces the data conversion cost by 40–50%."
+      }
+    ],
+    "keywords": {
+      "primary": "ServiceNow to Jira data migration",
+      "secondary": ["migrate ServiceNow to Jira", "ServiceNow Jira migration tool", "ServiceNow to Jira Service Management", "ServiceNow to Jira ETL"],
+      "long_tail": ["how to migrate data from ServiceNow to Jira", "ServiceNow incidents to Jira issues", "ServiceNow to Jira field mapping", "ServiceNow to Jira migration cost", "ServiceNow to Jira migration timeline"]
+    },
+    "related_slugs": ["jira-to-servicenow", "jira-to-salesforce", "salesforce-to-servicenow", "servicenow-to-salesforce"],
+    "is_published": true,
+    "display_order": 39
+  },
+  {
+    "slug": "legacy-database-to-netsuite",
+    "source_system": "Legacy Database",
+    "target_system": "NetSuite",
+    "source_slug": "legacy-database",
+    "target_slug": "netsuite",
+    "source_category": "Database",
+    "target_category": "ERP",
+    "meta_title": "Legacy Database to NetSuite Data Migration | Mine",
+    "meta_description": "Automate your legacy database to NetSuite data migration. AI-powered schema profiling for custom databases, Access, FoxPro, and homegrown systems.",
+    "hero_headline": "Legacy Database to NetSuite Data Migration",
+    "hero_subheadline": "Replacing a homegrown system with NetSuite? Mine profiles any relational database and automates the mapping to NetSuite's entity model — even when there's no documentation, no ERD, and cryptic column names.",
+    "bridge_paragraph": "Legacy databases — custom SQL Server apps, Access databases, FoxPro, FileMaker — have no standard schema, undocumented relationships, and years of accumulated data quality issues. NetSuite expects clean, structured entity data. Mine bridges this gap by inferring your legacy schema from data patterns and mapping it to NetSuite's Customer, Vendor, Item, and Transaction records automatically.",
+    "overview_paragraphs": [
+      "Legacy database to NetSuite migrations happen when companies replace homegrown ERP-like systems with a proper cloud ERP. The source might be a 15-year-old Access database, a custom SQL Server application, a FoxPro system, or flat files from a decommissioned system. Companies make this move when the legacy system's developer leaves, when the technology becomes unsupported, or when the business outgrows manual processes.",
+      "Every legacy database migration is unique because there's no standard schema. Table relationships must be inferred from foreign keys (if they exist), data types are often inconsistent, and business logic lives in application code rather than database constraints. Field naming conventions are unpredictable — the same concept (a customer) might span multiple tables with no obvious join path. This makes profiling and mapping the most expensive part of the project.",
+      "Companies typically hire a database developer to reverse-engineer the schema and a NetSuite consultant to build the import. This manual approach takes 4–8 months for databases with 50–200 tables."
+    ],
+    "challenges": [
+      {
+        "title": "Undocumented schema discovery",
+        "description": "Legacy databases rarely have ERD documentation or data dictionaries. Table names may be cryptic (TBL_CUST, FLD_01), relationships may not use foreign keys, and the same data may exist in multiple locations. Mine infers relationships from data patterns — matching column values across tables to discover implicit joins."
+      },
+      {
+        "title": "Data type inconsistencies",
+        "description": "Legacy databases commonly store dates as strings, phone numbers as integers, currencies without decimals, and booleans as Y/N or 1/0. NetSuite expects properly typed data. Every field needs content analysis to determine the correct NetSuite field type."
+      },
+      {
+        "title": "Composite tables requiring decomposition",
+        "description": "A legacy 'Customers' table might contain what NetSuite separates into Customers, Contacts, and Addresses. A 'Transactions' table might mix orders, invoices, and payments with a type column. Decomposing these composite structures into NetSuite's entity model requires business logic decisions."
+      },
+      {
+        "title": "No referential integrity enforcement",
+        "description": "Legacy databases often have orphaned records, broken references, and inconsistent foreign keys. NetSuite enforces referential integrity. Data quality issues must be identified and remediated before loading into NetSuite — or the import will fail with reference errors."
+      }
+    ],
+    "data_objects": [
+      { "source_object": "Customers / Clients table", "target_object": "Customer", "notes": "May need decomposition" },
+      { "source_object": "Contacts / People table", "target_object": "Contact (sub-record)", "notes": "Deduplication needed" },
+      { "source_object": "Products / Services table", "target_object": "Item", "notes": "Item type classification" },
+      { "source_object": "Orders / Sales table", "target_object": "Sales Order / Invoice", "notes": "Transaction type routing" },
+      { "source_object": "Invoices / Billing table", "target_object": "Invoice / Cash Sale", "notes": "AR documents" },
+      { "source_object": "Vendors / Suppliers", "target_object": "Vendor", "notes": "Payment terms mapping" },
+      { "source_object": "Chart of Accounts / GL", "target_object": "Account + Dimensions", "notes": "COA restructuring" },
+      { "source_object": "Inventory table", "target_object": "Inventory Adjustment", "notes": "Quantity balances" },
+      { "source_object": "Employees table", "target_object": "Employee", "notes": "HR data" },
+      { "source_object": "Categories / Types table", "target_object": "Custom Lists", "notes": "Lookup to list" }
+    ],
+    "how_mine_helps": [
+      "Mine profiles any relational database and infers table relationships from data patterns — even when foreign keys aren't defined and documentation doesn't exist. The result is a complete data dictionary and ERD you likely don't have.",
+      "Field content analysis determines the correct NetSuite field type for each column — not based on the schema declaration but on actual data values sampled from your database.",
+      "Composite tables are detected and decomposition rules are proposed — splitting source rows into multiple NetSuite entities with correct relationships and subsidiary assignments.",
+      "Mine generates a complete data quality report before migration — duplicates, orphans, type mismatches, and encoding issues — so problems are fixed before reaching NetSuite."
+    ],
+    "migration_stats": {
+      "manual_timeline": "4–8 months",
+      "mine_timeline": "3–6 weeks",
+      "manual_cost": "$200K–800K",
+      "cost_reduction": "40–50%",
+      "manual_team": "3–6 consultants",
+      "mine_team": "1–2 internal resources"
+    },
+    "faqs": [
+      {
+        "question": "How long does a legacy database to NetSuite migration take?",
+        "answer": "Legacy-to-NetSuite migrations typically take 4–8 months with traditional approaches. The bulk of time is spent on schema discovery — understanding what's in the database before you can map it. Mine reduces this to 3–6 weeks by automating schema profiling, relationship inference, and field mapping."
+      },
+      {
+        "question": "What if our legacy database has no documentation?",
+        "answer": "This is the most common scenario and exactly what Mine is built for. Mine connects to your database, profiles every table and column, analyzes data distributions, and infers relationships by matching column values across tables. It generates the data dictionary and ERD that you don't have."
+      },
+      {
+        "question": "What database types does Mine support?",
+        "answer": "Mine supports SQL Server, MySQL, PostgreSQL, Oracle, SQLite, and Microsoft Access directly. For FoxPro, FileMaker, or mainframe exports, you export to CSV and Mine profiles the files with the same depth. The analysis quality is the same regardless of source format."
+      },
+      {
+        "question": "How does Mine handle data quality issues in legacy databases?",
+        "answer": "Mine runs a comprehensive quality scan before migration — detecting duplicates, orphaned references, type mismatches, encoding issues, and null patterns. Each issue is categorized by severity with a remediation recommendation. NetSuite imports fail on referential integrity violations, so catching these early is critical."
+      },
+      {
+        "question": "How much does a legacy database to NetSuite migration cost?",
+        "answer": "Legacy-to-NetSuite migrations cost $200K–800K depending on database size, complexity, and data quality. Schema discovery and mapping often cost more than the actual data loading because someone has to reverse-engineer an undocumented system. Mine reduces the total cost by 40–50% by automating the discovery phase."
+      }
+    ],
+    "keywords": {
+      "primary": "legacy database to NetSuite data migration",
+      "secondary": ["migrate legacy database to NetSuite", "custom database to NetSuite migration", "Access to NetSuite migration tool", "legacy system to NetSuite ETL"],
+      "long_tail": ["how to migrate data from legacy database to NetSuite", "custom database to NetSuite field mapping", "legacy database to NetSuite migration cost", "Access database to NetSuite migration", "FoxPro to NetSuite data migration"]
+    },
+    "related_slugs": ["legacy-database-to-salesforce", "legacy-database-to-dynamics-365", "quickbooks-to-netsuite", "oracle-ebs-to-netsuite"],
+    "is_published": true,
+    "display_order": 40
+  },
+  {
+    "slug": "legacy-database-to-dynamics-365",
+    "source_system": "Legacy Database",
+    "target_system": "Microsoft Dynamics 365",
+    "source_slug": "legacy-database",
+    "target_slug": "dynamics-365",
+    "source_category": "Database",
+    "target_category": "ERP",
+    "meta_title": "Legacy Database to Dynamics 365 Data Migration | Mine",
+    "meta_description": "Automate your legacy database to Dynamics 365 data migration. AI-powered schema profiling for custom databases, Access, and homegrown systems.",
+    "hero_headline": "Legacy Database to Dynamics 365 Data Migration",
+    "hero_subheadline": "Replacing a homegrown system with Dynamics 365? Mine profiles any relational database and automates the mapping to D365 data entities — even when there's no documentation.",
+    "bridge_paragraph": "Legacy databases have no standard schema — custom SQL Server apps, Access databases, and homegrown systems each use unique table structures with undocumented relationships. Dynamics 365 requires data imported through specific data entities with typed fields and referential integrity. Mine bridges this gap by inferring your legacy schema and mapping it to D365's entity framework automatically.",
+    "overview_paragraphs": [
+      "Legacy database to Dynamics 365 migrations happen when companies on homegrown or obsolete systems choose Microsoft's ERP platform. This is common for Microsoft-aligned organizations — companies already running Office 365, Azure, and SQL Server see D365 as a natural extension. The legacy system might be a custom .NET application with a SQL Server backend, an Access database, or flat files from a decommissioned system.",
+      "The migration challenge is two-fold: first, reverse-engineering the legacy schema (which is unique to every company), and second, mapping it to D365's structured data entity framework. D365 data entities have strict field typing, mandatory fields, and referential integrity requirements that legacy databases typically don't enforce. The gap between the two must be bridged with transformation logic.",
+      "Companies typically hire a database consultant and a D365 implementation partner. The schema discovery and mapping work is entirely manual — often the most expensive part of the D365 implementation."
+    ],
+    "challenges": [
+      {
+        "title": "Schema discovery without documentation",
+        "description": "Legacy databases rarely have ERDs or data dictionaries. Mine profiles every table, column, and data pattern to build the documentation that doesn't exist — then uses this to generate D365 data entity mappings."
+      },
+      {
+        "title": "Data entity matching",
+        "description": "D365 uses specific data entities (CustCustomerV3Entity, VendVendorV2Entity, etc.) as import interfaces. Matching legacy tables to the correct D365 data entity — and handling fields that don't surface in standard entities — requires knowledge of both the legacy schema and D365's entity catalog."
+      },
+      {
+        "title": "Data type and format conversion",
+        "description": "Legacy databases store data inconsistently — dates as strings, numbers as text, currencies without precision. D365 data entities expect properly typed data in specific formats. Every field needs content analysis and transformation rules."
+      },
+      {
+        "title": "Referential integrity enforcement",
+        "description": "D365 enforces foreign key relationships between data entities. Legacy databases may have orphaned records and broken references. Data quality issues must be resolved before D365 import — or the entity loads will fail."
+      }
+    ],
+    "data_objects": [
+      { "source_object": "Customers table", "target_object": "CustCustomerV3Entity", "notes": "Schema discovery" },
+      { "source_object": "Vendors table", "target_object": "VendVendorV2Entity", "notes": "Supplier data" },
+      { "source_object": "Products table", "target_object": "ReleasedProductV2Entity", "notes": "Item type mapping" },
+      { "source_object": "Orders table", "target_object": "SalesOrderHeaderV2Entity", "notes": "Transaction routing" },
+      { "source_object": "Invoices table", "target_object": "Vendor/Customer Invoice Entity", "notes": "AP/AR" },
+      { "source_object": "GL / Accounts table", "target_object": "MainAccount / Dimensions", "notes": "COA creation" },
+      { "source_object": "Employees table", "target_object": "HcmWorkerEntity", "notes": "HR data" },
+      { "source_object": "Inventory table", "target_object": "Inventory Journal Entity", "notes": "Opening balances" },
+      { "source_object": "Contacts table", "target_object": "DirPartyTable contacts", "notes": "Address book" }
+    ],
+    "how_mine_helps": [
+      "Mine profiles any relational database and generates a complete data dictionary — table structures, column types, data distributions, and inferred relationships — providing the documentation that doesn't exist.",
+      "Legacy tables are mapped to D365 data entities automatically — CustCustomerV3Entity, VendVendorV2Entity, ReleasedProductV2Entity — with field-level type translation and mandatory field defaulting.",
+      "Data quality issues are detected before migration — duplicates, orphans, type inconsistencies, and format mismatches — so problems are fixed before hitting D365's referential integrity checks.",
+      "Mine generates the D365 data entity import files in the correct format with proper loading sequence — ensuring reference data loads before transactional data."
+    ],
+    "migration_stats": {
+      "manual_timeline": "4–8 months",
+      "mine_timeline": "3–6 weeks",
+      "manual_cost": "$200K–800K",
+      "cost_reduction": "40–50%",
+      "manual_team": "3–6 consultants",
+      "mine_team": "1–2 internal resources"
+    },
+    "faqs": [
+      {
+        "question": "How long does a legacy database to Dynamics 365 migration take?",
+        "answer": "Legacy-to-D365 migrations take 4–8 months with traditional approaches. The majority of time is schema discovery and mapping — understanding what's in the legacy database before you can design the D365 data entity imports. Mine reduces this to 3–6 weeks through automated profiling and entity matching."
+      },
+      {
+        "question": "What database types does Mine support?",
+        "answer": "Mine supports SQL Server, MySQL, PostgreSQL, Oracle, SQLite, and Access directly. For other formats (FoxPro, FileMaker, mainframe exports), export to CSV and Mine profiles the files with the same analytical depth."
+      },
+      {
+        "question": "Does Mine support both D365 F&O and Business Central?",
+        "answer": "Yes. Mine generates different mappings depending on your target — F&O data entities for Finance & Operations, or AL-based import formats for Business Central. You select the target during setup."
+      },
+      {
+        "question": "How does Mine handle legacy data with no foreign keys?",
+        "answer": "Mine infers relationships by analyzing column name patterns and matching data values across tables. If a 'customer_id' in an Orders table matches values in a 'Customers' table, Mine identifies this as an implicit foreign key and uses it in the D365 mapping."
+      },
+      {
+        "question": "How much does a legacy database to D365 migration cost?",
+        "answer": "Legacy-to-D365 migrations cost $200K–800K depending on database complexity and D365 target (F&O is more complex than Business Central). Schema discovery typically costs more than data loading. Mine reduces the total by 40–50% by automating the most expensive phase."
+      }
+    ],
+    "keywords": {
+      "primary": "legacy database to Dynamics 365 data migration",
+      "secondary": ["migrate legacy database to D365", "custom database to Dynamics 365 migration", "legacy system to D365 ETL", "Access to Dynamics 365 migration"],
+      "long_tail": ["how to migrate data from legacy database to Dynamics 365", "custom database to D365 field mapping", "legacy database to D365 migration cost", "legacy system to Dynamics 365 migration timeline"]
+    },
+    "related_slugs": ["legacy-database-to-salesforce", "legacy-database-to-netsuite", "dynamics-gp-to-dynamics-365", "quickbooks-to-dynamics-365"],
+    "is_published": true,
+    "display_order": 41
+  },
+  {
+    "slug": "legacy-database-to-hubspot",
+    "source_system": "Legacy Database",
+    "target_system": "HubSpot",
+    "source_slug": "legacy-database",
+    "target_slug": "hubspot",
+    "source_category": "Database",
+    "target_category": "CRM",
+    "meta_title": "Legacy Database to HubSpot Data Migration | Mine",
+    "meta_description": "Automate your legacy database to HubSpot data migration. AI-powered schema profiling for custom CRMs, Access databases, and homegrown systems.",
+    "hero_headline": "Legacy Database to HubSpot Data Migration",
+    "hero_subheadline": "Replacing a homegrown CRM with HubSpot? Mine profiles any database and automates the mapping to HubSpot's contact, company, and deal model — even when the source has no documentation.",
+    "bridge_paragraph": "Homegrown CRMs and custom databases store customer data in unique, undocumented schemas — tables named 'tbl_contacts' or 'cust_master' with cryptic columns and no referential integrity. HubSpot expects clean contacts, companies, and deals with properly typed properties. Mine infers your legacy schema and maps it to HubSpot's object model automatically.",
+    "overview_paragraphs": [
+      "Legacy database to HubSpot migrations happen when companies finally replace homegrown CRM systems. The source might be a custom Access database, a FileMaker solution, a SQL-backed internal tool, or even complex spreadsheets that function as a CRM. Companies make this move when the legacy system's limitations block growth — no email integration, no pipeline visibility, no mobile access, no marketing automation.",
+      "Every homegrown CRM is unique, which makes the migration unpredictable. Tables might combine contacts and companies in a single record. 'Status' fields might contain decades of inconsistent values. Phone numbers might be stored as integers, dates as strings, and notes as unlimited text blobs. HubSpot has a clean, structured property model that won't accept this data as-is.",
+      "Companies often underestimate this migration. 'It's just contacts and deals' turns into months of data cleaning, deduplication, and restructuring. The discovery phase — understanding what's actually in the database — is where Mine saves the most time."
+    ],
+    "challenges": [
+      {
+        "title": "Undocumented schema with no standard model",
+        "description": "Every homegrown CRM is different. There's no standard table structure to reference. Mine profiles the database, infers the entity model, and generates the documentation that doesn't exist — then maps discovered entities to HubSpot's Contact/Company/Deal model."
+      },
+      {
+        "title": "Composite records requiring decomposition",
+        "description": "A legacy 'Clients' table might combine what HubSpot separates into Companies (organizations) and Contacts (people). A 'Sales' table might mix opportunities, quotes, and invoices. Mine detects composite structures and proposes decomposition rules."
+      },
+      {
+        "title": "Data quality accumulated over years",
+        "description": "Legacy CRMs accumulate duplicate records, inconsistent formats, orphaned entries, and test data mixed with production data. HubSpot imports fail silently on bad data — duplicates create confusion, wrong types cause property errors. Mine runs a comprehensive quality scan before migration."
+      },
+      {
+        "title": "Property type matching",
+        "description": "Legacy databases store everything as text. HubSpot has specific property types — single-line text, number, date, dropdown, multiple checkboxes. Every legacy field needs content analysis to determine the correct HubSpot property type and create the property before import."
+      }
+    ],
+    "data_objects": [
+      { "source_object": "Clients / Companies table", "target_object": "Company", "notes": "May need decomposition" },
+      { "source_object": "Contacts / People table", "target_object": "Contact", "notes": "Deduplication needed" },
+      { "source_object": "Sales / Opportunities table", "target_object": "Deal", "notes": "Pipeline design" },
+      { "source_object": "Products / Services", "target_object": "Product", "notes": "Catalog normalization" },
+      { "source_object": "Activities / Notes", "target_object": "Note / Call / Email engagement", "notes": "Type routing" },
+      { "source_object": "Categories / Tags", "target_object": "Contact/Company properties", "notes": "Segmentation" },
+      { "source_object": "Tasks / Follow-ups", "target_object": "Task", "notes": "Activity records" },
+      { "source_object": "Documents / Attachments", "target_object": "File / Note attachment", "notes": "File migration" }
+    ],
+    "how_mine_helps": [
+      "Mine profiles any database and generates a complete entity map — inferring which tables represent contacts, companies, deals, and activities based on data patterns, not documentation.",
+      "Composite records are detected and decomposed — a 'Clients' table that mixes companies and people is split into separate HubSpot Companies and Contacts with correct associations.",
+      "Data quality issues are scanned before migration — duplicates, format inconsistencies, orphaned records, and property type mismatches are all flagged with remediation recommendations.",
+      "Mine generates HubSpot-ready import files with correct property types — creating the custom properties in the right format before the import runs."
+    ],
+    "migration_stats": {
+      "manual_timeline": "2–6 months",
+      "mine_timeline": "2–4 weeks",
+      "manual_cost": "$50K–250K",
+      "cost_reduction": "40–50%",
+      "manual_team": "1–3 consultants",
+      "mine_team": "1 internal resource"
+    },
+    "faqs": [
+      {
+        "question": "How long does a legacy database to HubSpot migration take?",
+        "answer": "Legacy-to-HubSpot migrations take 2–6 months with traditional approaches. The timeline is dominated by schema discovery and data cleaning — understanding what's in the database and fixing quality issues before import. Mine reduces this to 2–4 weeks by automating profiling, quality scanning, and property mapping."
+      },
+      {
+        "question": "What if our homegrown CRM has no documentation?",
+        "answer": "This is the norm, not the exception. Mine connects to your database, profiles every table and column, and infers the entity model from data patterns. It generates the documentation that doesn't exist — including a data dictionary, relationship map, and quality report."
+      },
+      {
+        "question": "Can Mine handle an Access database or spreadsheet?",
+        "answer": "Yes. Mine supports direct connection to Access databases and accepts CSV/Excel exports from any source. Spreadsheet-based CRMs with multiple tabs are profiled the same way — Mine identifies entities, relationships, and quality issues regardless of the source format."
+      },
+      {
+        "question": "How does Mine handle duplicate records?",
+        "answer": "Mine detects duplicates using email matching (primary), fuzzy name matching, phone number normalization, and address comparison. A deduplication report shows which records should be merged, with the recommended 'winner' record based on data completeness. You approve the merge rules before migration."
+      },
+      {
+        "question": "How much does a legacy database to HubSpot migration cost?",
+        "answer": "Legacy-to-HubSpot migrations cost $50K–250K depending on database size, complexity, and data quality. Smaller Access databases with clean data are at the low end; large SQL databases with years of accumulated quality issues are at the high end. Mine reduces the cost by 40–50%."
+      }
+    ],
+    "keywords": {
+      "primary": "legacy database to HubSpot data migration",
+      "secondary": ["migrate legacy database to HubSpot", "custom CRM to HubSpot migration", "Access to HubSpot migration tool", "homegrown CRM to HubSpot"],
+      "long_tail": ["how to migrate data from legacy database to HubSpot", "custom database to HubSpot field mapping", "legacy CRM to HubSpot migration cost", "Access database to HubSpot migration", "homegrown CRM to HubSpot migration timeline"]
+    },
+    "related_slugs": ["legacy-database-to-salesforce", "legacy-database-to-netsuite", "zoho-crm-to-hubspot", "salesforce-to-hubspot"],
+    "is_published": true,
+    "display_order": 42
+  },
+  {
+    "slug": "sage-intacct-to-salesforce",
+    "source_system": "Sage Intacct",
+    "target_system": "Salesforce",
+    "source_slug": "sage-intacct",
+    "target_slug": "salesforce",
+    "source_category": "ERP",
+    "target_category": "CRM",
+    "meta_title": "Sage Intacct to Salesforce Data Migration | Mine",
+    "meta_description": "Automate your Sage Intacct to Salesforce data migration. AI-powered mapping for customers, contacts, and transaction data into Salesforce CRM.",
+    "hero_headline": "Sage Intacct to Salesforce Data Migration",
+    "hero_subheadline": "Bringing your Intacct customer data into Salesforce? Mine automates the mapping between Intacct's entity model and Salesforce's CRM objects — extracting CRM-relevant data from your ERP and structuring it for sales team productivity.",
+    "bridge_paragraph": "Sage Intacct stores customer data in a financial-first model — customers with billing addresses, payment terms, and transaction history — while Salesforce organizes data around Accounts, Contacts, Opportunities, and Activities designed for sales engagement. Mine extracts CRM-relevant fields from Intacct's financial records and maps them to Salesforce's relationship-centric model.",
+    "overview_paragraphs": [
+      "Sage Intacct to Salesforce migrations happen when companies adopt Salesforce as their CRM while keeping Intacct as their ERP. Intacct's customer records contain both financial data (payment terms, credit limits, AR history) and CRM-relevant data (contacts, addresses, industry classification). The migration extracts the CRM layer and structures it for Salesforce. This is common when companies realize their sales team needs a dedicated CRM rather than working from ERP customer records.",
+      "The technical challenge is separating CRM-relevant data from financial data in Intacct's unified model. Intacct's customer records are financial-first — designed for invoicing and AR management. Salesforce's Account records are relationship-first — designed for sales pipeline and customer engagement. The overlap (company name, address, contacts) must be migrated while the financial-only data stays in Intacct. Custom dimensions and fields add complexity.",
+      "Companies typically handle this during Salesforce implementation, using CSV exports from Intacct. The field selection and mapping work is manual — determining which Intacct fields are CRM-relevant requires field-by-field analysis."
+    ],
+    "challenges": [
+      {
+        "title": "Separating CRM data from financial data",
+        "description": "Intacct customer records combine financial data (payment terms, credit limit, tax exempt status) with CRM-relevant data (contacts, addresses, industry). Migrating to Salesforce means deciding which fields are CRM-relevant and which stay in Intacct. Mine profiles each field and classifies it by CRM relevance."
+      },
+      {
+        "title": "Dimensional data in Salesforce",
+        "description": "Intacct's user-defined dimensions (territory, region, segment) may be CRM-relevant for Salesforce reporting. Mapping Intacct dimensions to Salesforce Account fields, picklists, or custom fields requires analysis of how each dimension is used."
+      },
+      {
+        "title": "Transaction history representation",
+        "description": "Intacct AR transactions (invoices, payments, credit memos) don't have a direct Salesforce equivalent. Sales teams may want order history visible on Account records. This might mean custom objects, roll-up fields showing lifetime value, or an Intacct-Salesforce integration for live data."
+      },
+      {
+        "title": "Multi-entity customer handling",
+        "description": "Intacct multi-entity customers may have different data per entity — different contacts, addresses, and transaction history. Salesforce has no native multi-entity concept. Mine analyzes entity-specific customer data and proposes consolidation or segmentation strategies."
+      }
+    ],
+    "data_objects": [
+      { "source_object": "Customer", "target_object": "Account", "notes": "Filter to CRM fields" },
+      { "source_object": "Contact", "target_object": "Contact", "notes": "Contact roles" },
+      { "source_object": "Customer Address", "target_object": "Account Address fields", "notes": "Billing/shipping" },
+      { "source_object": "AR Invoice (summary)", "target_object": "Account custom fields", "notes": "Lifetime value calc" },
+      { "source_object": "Dimensions (territory/region)", "target_object": "Account picklists/fields", "notes": "Classification" },
+      { "source_object": "Project / Contract", "target_object": "Opportunity", "notes": "Pipeline data" },
+      { "source_object": "Item (product catalog)", "target_object": "Product2", "notes": "Product master" },
+      { "source_object": "Notes / Attachments", "target_object": "ContentNote / File", "notes": "Activity data" }
+    ],
+    "how_mine_helps": [
+      "Mine profiles every Intacct customer field and classifies it as CRM-relevant (migrate to Salesforce) or financial-only (stays in Intacct) — generating a clean Account mapping that includes only what the sales team needs.",
+      "User-defined dimensions are analyzed for CRM relevance and mapped to Salesforce Account fields, picklists, or custom objects based on cardinality and usage patterns.",
+      "AR transaction data is summarized into Account-level metrics — total invoices, lifetime value, days sales outstanding, last payment date — and mapped to Salesforce custom fields for immediate sales visibility.",
+      "Multi-entity customer data is analyzed and consolidation rules are proposed — whether to merge entities into a single Account or create a parent-child Account hierarchy in Salesforce."
+    ],
+    "migration_stats": {
+      "manual_timeline": "2–4 months",
+      "mine_timeline": "2–3 weeks",
+      "manual_cost": "$80K–250K",
+      "cost_reduction": "40–50%",
+      "manual_team": "2–3 consultants",
+      "mine_team": "1 internal resource"
+    },
+    "faqs": [
+      {
+        "question": "How long does a Sage Intacct to Salesforce migration take?",
+        "answer": "A typical Intacct-to-Salesforce migration takes 2–4 months with traditional approaches. The timeline depends on customer count, dimension complexity, and whether you're migrating transaction summaries. Mine reduces the data conversion to 2–3 weeks."
+      },
+      {
+        "question": "Should we migrate all Intacct customer fields to Salesforce?",
+        "answer": "No — financial-only fields (payment terms, credit limits, tax status) should stay in Intacct. Mine profiles every field and recommends which to migrate based on CRM relevance. You approve the field selection before mapping."
+      },
+      {
+        "question": "How does Mine handle Intacct's multi-entity customers?",
+        "answer": "Mine analyzes entity-specific customer data and proposes Salesforce strategies: consolidate entities into one Account with custom fields for entity context, or create parent-child Account hierarchies. The approach depends on how your sales team segments customers."
+      },
+      {
+        "question": "Can we get Intacct transaction history in Salesforce?",
+        "answer": "Mine doesn't migrate full transaction detail into Salesforce, but it generates customer-level summaries — total invoices, lifetime revenue, average payment terms, outstanding AR — as Salesforce Account custom fields. For live transaction data, you'll need an ongoing Intacct-Salesforce integration."
+      },
+      {
+        "question": "How much does a Sage Intacct to Salesforce migration cost?",
+        "answer": "Intacct-to-Salesforce migrations cost $80K–250K including Salesforce design work. Data conversion is 15–25% of the total. The main cost drivers are customer volume, dimensional complexity, and whether you're migrating projects/contracts as Opportunities. Mine reduces the data conversion cost by 40–50%."
+      }
+    ],
+    "keywords": {
+      "primary": "Sage Intacct to Salesforce data migration",
+      "secondary": ["migrate Sage Intacct to Salesforce", "Intacct to Salesforce migration tool", "Sage Intacct to SFDC ETL", "Intacct CRM to Salesforce"],
+      "long_tail": ["how to migrate data from Sage Intacct to Salesforce", "Intacct customers to Salesforce accounts", "Sage Intacct to Salesforce migration cost", "Intacct to Salesforce migration timeline"]
+    },
+    "related_slugs": ["sage-intacct-to-netsuite", "sage-intacct-to-dynamics-365", "netsuite-to-salesforce", "quickbooks-to-netsuite"],
+    "is_published": true,
+    "display_order": 43
+  }
+]
