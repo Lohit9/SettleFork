@@ -301,14 +301,6 @@ export async function getProjectsWithStats(): Promise<ProjectWithStats[]> {
       }
     }
   })
-  // Collect NOT NULL target field IDs per project (via table_mapping → project)
-  ;(notNullTargetFields || []).forEach((f) => {
-    const tms = (tableMappings || []).filter((tm) => tm.target_table_id === f.table_id)
-    for (const tm of tms) {
-      const b = buckets.get(tm.project_id)
-      if (b) b.notNullTargetFieldIds.add(f.id)
-    }
-  })
   ;(qualityIssues || []).forEach((qi) => {
     const b = buckets.get(qi.project_id)
     if (!b) return
