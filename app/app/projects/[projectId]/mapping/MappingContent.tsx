@@ -2045,16 +2045,18 @@ export default function MappingContent({ projectId, initialData }: Props) {
     () => allFMs.filter((fm) => !fm.is_contributing && fm.status === 'approved').length,
     [allFMs]
   )
-  // Unmapped tab: unique source fields with no active (non-rejected) mapping
+  // Unmapped tab: unmapped source fields + unmapped target fields across all tables
   const unmappedCount = useMemo(() => {
+    const activeSrcIds = new Set(allFMs.filter((fm) => fm.status !== 'rejected').map((fm) => fm.source_field_id))
+    const activeTgtIds = new Set(allFMs.filter((fm) => fm.status !== 'rejected').map((fm) => fm.target_field_id))
     const sourceTableIds = new Set(tableMappings.map((tm) => tm.source_table_id))
-    const srcFieldCount = Object.entries(allFieldsByTable)
-      .filter(([tid]) => sourceTableIds.has(tid))
-      .reduce((sum, [, fields]) => sum + fields.length, 0)
-    const coveredIds = new Set(
-      allFMs.filter((fm) => fm.status !== 'rejected').map((fm) => fm.source_field_id)
-    )
-    return Math.max(0, srcFieldCount - coveredIds.size)
+    const targetTableIds = new Set(tableMappings.map((tm) => tm.target_table_id))
+    let count = 0
+    for (const [tid, fields] of Object.entries(allFieldsByTable)) {
+      if (sourceTableIds.has(tid)) count += fields.filter((f) => !activeSrcIds.has(f.id)).length
+      if (targetTableIds.has(tid)) count += fields.filter((f) => !activeTgtIds.has(f.id)).length
+    }
+    return count
   }, [tableMappings, allFieldsByTable, allFMs])
 
   // Many-to-one count: primary rows that have at least one contributing row
