@@ -1,6 +1,7 @@
 'use server'
 
 import { createClient } from '@/lib/supabase/server'
+import { supabaseAdmin } from '@/lib/supabase/admin'
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -266,8 +267,11 @@ export async function getFieldProfiles(tableId: string): Promise<ProfilingData |
 
 export interface TargetFieldConstraint {
   name: string
+  data_type: string
   is_nullable: boolean
   is_primary_key: boolean
+  is_foreign_key: boolean
+  fk_reference: string | null
   check_constraint: CheckConstraint | null
 }
 
@@ -276,16 +280,77 @@ export async function getTargetFieldConstraints(tableId: string): Promise<Target
 
   const { data: fields } = await supabase
     .from('fields')
-    .select('name, is_nullable, is_primary_key, check_constraint, ordinal_position')
+    .select('name, data_type, is_nullable, is_primary_key, is_foreign_key, fk_reference, check_constraint, ordinal_position')
     .eq('table_id', tableId)
     .order('ordinal_position', { ascending: true })
 
   return (fields ?? []).map((f) => ({
     name: f.name,
+    data_type: f.data_type ?? '',
     is_nullable: f.is_nullable,
     is_primary_key: f.is_primary_key,
+    is_foreign_key: f.is_foreign_key ?? false,
+    fk_reference: f.fk_reference ?? null,
     check_constraint: (f.check_constraint as CheckConstraint | null) ?? null,
   }))
+}
+
+/**
+ * Returns all distinct staged values for a specific field in a parent target table.
+ * Used to pre-load valid FK parent IDs for client-side referential integrity checks
+ * in the Data Preview staged view.
+ *
+ * Returns an empty array when the parent table hasn't been staged yet — callers
+ * should skip FK checking for that field in that case.
+ */
+export async function getStagedParentValues(
+  projectId: string,
+  parentTableName: string,
+  parentFieldName: string,
+): Promise<string[]> {
+  const supabase = await createClient()
+  const { data: { user } } = await supabase.auth.getUser()
+  if (!user) return []
+
+  // Find all non-rejected table mappings for this project
+  const { data: tms } = await supabaseAdmin
+    .from('table_mappings')
+    .select('id, target_table_id')
+    .eq('project_id', projectId)
+    .neq('status', 'rejected')
+
+  if (!tms || tms.length === 0) return []
+
+  // Resolve target table names
+  const targetTableIds = [...new Set(tms.map((tm) => tm.target_table_id))]
+  const { data: targetTables } = await supabaseAdmin
+    .from('tables')
+    .select('id, name')
+    .in('id', targetTableIds)
+
+  const match = (targetTables ?? []).find(
+    (t) => t.name.toLowerCase() === parentTableName.toLowerCase()
+  )
+  if (!match) return []
+
+  const mapping = tms.find((tm) => tm.target_table_id === match.id)
+  if (!mapping) return []
+
+  // Pull distinct values of the parent field from staged_data_rows
+  const { data: rows } = await supabaseAdmin
+    .from('staged_data_rows')
+    .select('transformed_row_data')
+    .eq('table_mapping_id', mapping.id)
+
+  const valueSet = new Set<string>()
+  for (const row of rows ?? []) {
+    const val = (row.transformed_row_data as Record<string, unknown>)?.[parentFieldName]
+    if (val !== null && val !== undefined) {
+      valueSet.add(String(val).trim())
+    }
+  }
+
+  return [...valueSet]
 }
 
 // ─── Schema context for AI (includes sample values from profiles) ─────────────
