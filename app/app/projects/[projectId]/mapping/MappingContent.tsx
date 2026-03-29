@@ -1252,7 +1252,8 @@ function TableMappingCard({
   const srcDs = tm.sourceTable?.dataset
   const tgtDs = tm.targetTable?.dataset
   const activeSrcIds = new Set(tm.fieldMappings.filter((fm) => fm.status !== 'rejected').map((fm) => fm.source_field_id).filter(Boolean))
-  const activeTgtIds = new Set(tm.fieldMappings.filter((fm) => fm.status !== 'rejected').map((fm) => fm.target_field_id))
+  // Value assignments (source_field_id = null) do not count as "covering" a target field
+  const activeTgtIds = new Set(tm.fieldMappings.filter((fm) => fm.status !== 'rejected' && fm.source_field_id !== null).map((fm) => fm.target_field_id))
   const mappedSrcIds = new Set(tm.fieldMappings.map((fm) => fm.source_field_id).filter(Boolean))
   const mappedTgtIds = new Set(tm.fieldMappings.map((fm) => fm.target_field_id))
   const allSrcFields = allFieldsByTable[tm.source_table_id] ?? []
@@ -2087,7 +2088,8 @@ export default function MappingContent({ projectId, initialData }: Props) {
   const needsReviewCount = useMemo(() => {
     const mappingCount = allFMs.filter((fm) => !fm.is_contributing && fm.status === 'needs_review').length
     const activeSrcIds = new Set(allFMs.filter((fm) => fm.status !== 'rejected' && fm.source_field_id).map((fm) => fm.source_field_id as string))
-    const activeTgtIds = new Set(allFMs.filter((fm) => fm.status !== 'rejected').map((fm) => fm.target_field_id))
+    // Value assignments (source_field_id = null) do not count as covering a target field
+    const activeTgtIds = new Set(allFMs.filter((fm) => fm.status !== 'rejected' && fm.source_field_id !== null).map((fm) => fm.target_field_id))
     const sourceTableIds = new Set(tableMappings.map((tm) => tm.source_table_id))
     const targetTableIds = new Set(tableMappings.map((tm) => tm.target_table_id))
     let unmappedUnacked = 0
@@ -2103,16 +2105,18 @@ export default function MappingContent({ projectId, initialData }: Props) {
   )
   const unmappedCount = useMemo(() => {
     const activeSrcIds = new Set(allFMs.filter((fm) => fm.status !== 'rejected' && fm.source_field_id).map((fm) => fm.source_field_id as string))
-    const activeTgtIds = new Set(allFMs.filter((fm) => fm.status !== 'rejected').map((fm) => fm.target_field_id))
+    // Value assignments (source_field_id = null) do not count as covering a target field
+    const activeTgtIds = new Set(allFMs.filter((fm) => fm.status !== 'rejected' && fm.source_field_id !== null).map((fm) => fm.target_field_id))
     const sourceTableIds = new Set(tableMappings.map((tm) => tm.source_table_id))
     const targetTableIds = new Set(tableMappings.map((tm) => tm.target_table_id))
     let count = 0
     for (const [tid, fields] of Object.entries(allFieldsByTable)) {
       if (sourceTableIds.has(tid)) count += fields.filter((f) => !activeSrcIds.has(f.id) && !acknowledgedIds.has(f.id)).length
-      if (targetTableIds.has(tid)) count += fields.filter((f) => !activeTgtIds.has(f.id) && !acknowledgedIds.has(f.id)).length
+      // Acknowledged fields still count as unmapped — acknowledgment means "I know, it's intentional"
+      if (targetTableIds.has(tid)) count += fields.filter((f) => !activeTgtIds.has(f.id)).length
     }
     return count
-  }, [tableMappings, allFieldsByTable, allFMs, acknowledgedIds])
+  }, [tableMappings, allFieldsByTable, allFMs])
 
   // Many-to-one count: primary rows that have at least one contributing row
   const manyToOneCount = useMemo(() => {
@@ -2140,7 +2144,8 @@ export default function MappingContent({ projectId, initialData }: Props) {
     switch (activeFilter) {
       case 'needs_review': {
         const activeSrcIds = new Set(allFMs.filter((fm) => fm.status !== 'rejected' && fm.source_field_id).map((fm) => fm.source_field_id as string))
-        const activeTgtIds = new Set(allFMs.filter((fm) => fm.status !== 'rejected').map((fm) => fm.target_field_id))
+        // Value assignments (source_field_id = null) do not count as covering a target field
+        const activeTgtIds = new Set(allFMs.filter((fm) => fm.status !== 'rejected' && fm.source_field_id !== null).map((fm) => fm.target_field_id))
         return tableMappings
           .filter((tm) => {
             const hasNeedsReview = tm.fieldMappings.some((fm) => !fm.is_contributing && fm.status === 'needs_review')
@@ -2165,7 +2170,8 @@ export default function MappingContent({ projectId, initialData }: Props) {
         return tableMappings
           .filter((tm) => {
             const activeSrcIds = new Set(tm.fieldMappings.filter((fm) => fm.status !== 'rejected' && fm.source_field_id).map((fm) => fm.source_field_id as string))
-            const activeTgtIds = new Set(tm.fieldMappings.filter((fm) => fm.status !== 'rejected').map((fm) => fm.target_field_id))
+            // Value assignments (source_field_id = null) do not count as covering a target field
+            const activeTgtIds = new Set(tm.fieldMappings.filter((fm) => fm.status !== 'rejected' && fm.source_field_id !== null).map((fm) => fm.target_field_id))
             const allSrc = allFieldsByTable[tm.source_table_id] ?? []
             const allTgt = allFieldsByTable[tm.target_table_id] ?? []
             return allSrc.some((f) => !activeSrcIds.has(f.id)) || allTgt.some((f) => !activeTgtIds.has(f.id))
