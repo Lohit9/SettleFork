@@ -49,12 +49,15 @@ export interface BlockingIssue {
 // When fieldId is supplied the results are narrowed to:
 //   - issues for that specific field  (field_id = fieldId)
 //   - table-level issues with no field (field_id IS NULL) for the same table
+// When resolvedFieldIds is supplied, issues for those fields are excluded —
+// they are "resolved by transform" and should not trigger the staging warning.
 // Used to show a warning popup before staging when bad source data exists.
 
 export async function getBlockingSourceIssues(
   projectId: string,
   tableIds?: string[],
-  fieldId?: string
+  fieldId?: string,
+  resolvedFieldIds?: string[]
 ): Promise<BlockingIssue[]> {
   const supabase = await createClient()
   const {
@@ -65,7 +68,7 @@ export async function getBlockingSourceIssues(
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   let query = (supabase as any)
     .from('quality_issues')
-    .select('id, title, description, affected_records, table_id, field_id, tables(name, row_count)')
+    .select('id, title, description, affected_records, table_id, field_id, issue_kind, tables(name, row_count)')
     .eq('project_id', projectId)
     .eq('stage', 'source')
     .eq('severity', 'blocking')
@@ -82,17 +85,36 @@ export async function getBlockingSourceIssues(
 
   const { data } = await query
 
+  const resolvedSet = new Set(resolvedFieldIds ?? [])
+
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  return (data ?? []).map((issue: any) => ({
-    id: issue.id,
-    title: issue.title,
-    description: issue.description,
-    affected_records: issue.affected_records ?? 0,
-    table_id: issue.table_id,
-    table_name: issue.tables?.name ?? null,
-    table_total_rows: issue.tables?.row_count ?? 0,
-    field_id: issue.field_id,
-  }))
+  return (data ?? [])
+    .filter((issue: any) => {
+      // Never suppress structural issues (null PKs, orphaned FKs) even if the
+      // field has a transform — transforms can't fix missing/orphaned records.
+      const desc = (issue.description ?? '').toLowerCase()
+      const title = (issue.title ?? '').toLowerCase()
+      if (issue.issue_kind === 'null_primary_key') return true
+      if (issue.issue_kind === 'orphaned_fk') return true
+      if (issue.issue_kind === 'referential_integrity') return true
+      if (desc.includes('null') && (desc.includes('primary key') || desc.includes('primary_key'))) return true
+      if (desc.includes('orphan') || title.includes('orphan')) return true
+      if (desc.includes('referential') || title.includes('referential')) return true
+      // Exclude issues whose field is resolved by an approved transform
+      if (issue.field_id && resolvedSet.has(issue.field_id)) return false
+      return true
+    })
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    .map((issue: any) => ({
+      id: issue.id,
+      title: issue.title,
+      description: issue.description,
+      affected_records: issue.affected_records ?? 0,
+      table_id: issue.table_id,
+      table_name: issue.tables?.name ?? null,
+      table_total_rows: issue.tables?.row_count ?? 0,
+      field_id: issue.field_id,
+    }))
 }
 
 // ── getSourceIssuesForField ───────────────────────────────────────────────────

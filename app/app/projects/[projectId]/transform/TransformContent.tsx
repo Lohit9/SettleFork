@@ -34,6 +34,7 @@ import { createValueAssignment } from '@/lib/actions/mappings'
 import type { TransformPageData, DatasetGroup, TableGroup, FieldItem, FullTransformTestResult, UnmappedTargetField } from '@/lib/actions/transformations'
 import { stageAllData, getBlockingSourceIssues, getSourceIssuesForField, checkProjectStaleness } from '@/lib/actions/staging'
 import type { BlockingIssue, FieldSourceIssue } from '@/lib/actions/staging'
+import { getResolvedSourceFieldIds } from '@/lib/quality/resolved-by-transform'
 import { sourcePreviewValueMatchesIssues, maxAffectedRecordsForField } from '@/lib/quality/preview-source-issue-match'
 import StagingWarningPopup from '@/components/StagingWarningPopup'
 
@@ -673,10 +674,12 @@ export default function TransformContent({ projectId, initialData }: Props) {
     const sourceFieldId = selectedContext?.field.sourceFieldId ?? undefined
     setIsCheckingIssues(true)
     try {
+      const resolvedFieldIds = await getResolvedSourceFieldIds(projectId).catch(() => [] as string[])
       const issues = await getBlockingSourceIssues(
         projectId,
         sourceTableId ? [sourceTableId] : undefined,
-        sourceFieldId   // field-scoped: only show issues for this field
+        sourceFieldId,  // field-scoped: only show issues for this field
+        resolvedFieldIds
       )
       if (issues.length > 0) {
         setStagingBlockingIssues(issues)
@@ -764,7 +767,8 @@ export default function TransformContent({ projectId, initialData }: Props) {
     )
     setIsCheckingIssues(true)
     try {
-      const issues = await getBlockingSourceIssues(projectId, allSourceTableIds)
+      const resolvedFieldIds = await getResolvedSourceFieldIds(projectId).catch(() => [] as string[])
+      const issues = await getBlockingSourceIssues(projectId, allSourceTableIds, undefined, resolvedFieldIds)
       if (issues.length > 0) {
         setStagingBlockingIssues(issues)
         setStagingProceedLabel('Stage All — Review Flagged Rows')

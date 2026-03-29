@@ -39,6 +39,11 @@ interface Props {
   allDatasets: DatasetStub[]
   /** Fix history pre-fetched server-side to avoid N+1 per IssueCard */
   initialFixHistory?: FixHistory[]
+  /**
+   * Source field IDs that have an approved mapping with a saved transform
+   * (or needs_transformation = false). Used to compute "Resolved by Transform" state.
+   */
+  resolvedSourceFieldIds?: string[]
   /** Pre-set filter values from URL search params (deep-links from Transform/staging warning popup) */
   initialFilterTableId?: string
   initialFilterFieldId?: string
@@ -1682,6 +1687,7 @@ export default function DataQualityContent({
   hasMappings,
   allDatasets,
   initialFixHistory,
+  resolvedSourceFieldIds,
   initialFilterTableId,
   initialFilterFieldId,
   initialFilterSeverity,
@@ -1704,6 +1710,8 @@ export default function DataQualityContent({
   const [stagingToast, setStagingToast] = useState<string | null>(null)
   // Shown after a fix is applied to remind the user staged data is now outdated
   const [fixAppliedNote, setFixAppliedNote] = useState(false)
+  // Collapsed state for the "Resolved by Transform" section in the issue list
+  const [showResolvedSection, setShowResolvedSection] = useState(false)
   const issueRefs = useRef<Record<string, HTMLDivElement>>({})
 
   // ── Filter state — initialized from URL search params when deep-linking ──
@@ -1729,6 +1737,39 @@ export default function DataQualityContent({
       : 'open'
   )
 
+  // ── "Resolved by Transform" helpers ──────────────────────────────────────
+
+  // Set of source field IDs that have an approved mapping with a saved transform.
+  // Built once from the server-provided prop; refreshed on router.refresh().
+  const resolvedFieldIdSet = useMemo(
+    () => new Set(resolvedSourceFieldIds ?? []),
+    [resolvedSourceFieldIds]
+  )
+
+  // Issue types that can NEVER be auto-resolved by transforms — structural
+  // problems (missing PKs, orphaned FKs) that a transform expression can't fix.
+  function isNeverResolvable(issue: QualityIssue): boolean {
+    const desc = (issue.description ?? '').toLowerCase()
+    const title = (issue.title ?? '').toLowerCase()
+    if (issue.issue_kind === 'null_primary_key') return true
+    if (issue.issue_kind === 'orphaned_fk') return true
+    if (issue.issue_kind === 'referential_integrity') return true
+    // Fallback: description-based heuristics for older issues without issue_kind
+    if (desc.includes('null') && (desc.includes('primary key') || desc.includes('primary_key'))) return true
+    if (desc.includes('orphan') || title.includes('orphan')) return true
+    if (desc.includes('referential') || title.includes('referential')) return true
+    return false
+  }
+
+  // Returns 'resolved' for source issues whose field has an approved transform.
+  // Returns the original severity for everything else (target issues are never touched).
+  function getEffectiveState(issue: QualityIssue): 'blocking' | 'warning' | 'resolved' {
+    if (issue.stage !== 'source') return issue.severity
+    if (isNeverResolvable(issue)) return issue.severity
+    if (issue.field_id && resolvedFieldIdSet.has(issue.field_id)) return 'resolved'
+    return issue.severity
+  }
+
   // ── Derived data ─────────────────────────────────────────────────────────
 
   function isTargetReady(stage: string) {
@@ -1748,8 +1789,9 @@ export default function DataQualityContent({
     [issues, tableNameById]
   )
 
-  // Stage breakdown for the readiness dashboard (always all open issues)
-  const { sourceOpen, targetReadyOpen, sourceBlocking, sourceWarning, targetBlocking, targetWarning } =
+  // Stage breakdown for the readiness dashboard (always all open issues).
+  // Source counts use getEffectiveState to exclude transform-resolved issues.
+  const { sourceOpen, targetReadyOpen, sourceBlocking, sourceWarning, sourceResolved, targetBlocking, targetWarning } =
     useMemo(() => {
       const openIssues = issues.filter(i => i.status === 'open')
       const src = openIssues.filter(i => i.stage === 'source')
@@ -1757,40 +1799,70 @@ export default function DataQualityContent({
       return {
         sourceOpen: src,
         targetReadyOpen: tgt,
-        sourceBlocking: src.filter(i => i.severity === 'blocking').length,
-        sourceWarning: src.filter(i => i.severity === 'warning').length,
+        sourceBlocking: src.filter(i => getEffectiveState(i) === 'blocking').length,
+        sourceWarning: src.filter(i => getEffectiveState(i) === 'warning').length,
+        sourceResolved: src.filter(i => getEffectiveState(i) === 'resolved').length,
         targetBlocking: tgt.filter(i => i.severity === 'blocking').length,
         targetWarning: tgt.filter(i => i.severity === 'warning').length,
       }
-    }, [issues])
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [issues, resolvedFieldIdSet])
 
-  // Filtered issues for the list — open first, then fixed, then accepted_risk;
-  // within each group: blocking before warning, then by affected records descending.
+  // Filtered issues split into unresolved and resolved-by-transform.
+  // "Resolved by Transform" issues are source issues whose field has an approved
+  // transform — they're shown collapsed at the bottom, separate from open issues.
   const statusOrder: Record<string, number> = { open: 0, fixed: 1, accepted_risk: 2 }
-  const filteredIssues = useMemo(
-    () =>
-      issues
-        .filter(issue => {
-          if (filterStage === 'source' && issue.stage !== 'source') return false
-          if (filterStage === 'target_ready' && !isTargetReady(issue.stage)) return false
-          if (filterSeverity !== 'all' && issue.severity !== filterSeverity) return false
-          if (filterTableId !== 'all' && issue.table_id !== filterTableId) return false
-          if (filterFieldId !== 'all' && issue.field_id !== filterFieldId) return false
-          if (filterStatus !== 'all' && issue.status !== filterStatus) return false
-          return true
-        })
-        .sort((a, b) => {
-          const aOrder = statusOrder[a.status] ?? 0
-          const bOrder = statusOrder[b.status] ?? 0
-          if (aOrder !== bOrder) return aOrder - bOrder
-          if (a.severity !== b.severity) return a.severity === 'blocking' ? -1 : 1
-          return (b.affected_records ?? 0) - (a.affected_records ?? 0)
-        }),
-    [issues, filterStage, filterSeverity, filterTableId, filterFieldId, filterStatus]
-  )
+
+  const { filteredIssues, filteredResolvedIssues } = useMemo(() => {
+    const baseFiltered = issues.filter(issue => {
+      if (filterStage === 'source' && issue.stage !== 'source') return false
+      if (filterStage === 'target_ready' && !isTargetReady(issue.stage)) return false
+      if (filterSeverity !== 'all' && issue.severity !== filterSeverity) return false
+      if (filterTableId !== 'all' && issue.table_id !== filterTableId) return false
+      if (filterFieldId !== 'all' && issue.field_id !== filterFieldId) return false
+      if (filterStatus !== 'all' && issue.status !== filterStatus) return false
+      return true
+    })
+
+    const sortFn = (a: QualityIssue, b: QualityIssue) => {
+      const aOrder = statusOrder[a.status] ?? 0
+      const bOrder = statusOrder[b.status] ?? 0
+      if (aOrder !== bOrder) return aOrder - bOrder
+      if (a.severity !== b.severity) return a.severity === 'blocking' ? -1 : 1
+      return (b.affected_records ?? 0) - (a.affected_records ?? 0)
+    }
+
+    // Separate resolved (source + transform exists + still open) from everything else.
+    // Only open source issues can be "resolved by transform" — already-fixed/accepted
+    // issues stay in their normal bucket.
+    const unresolved: QualityIssue[] = []
+    const resolved: QualityIssue[] = []
+
+    for (const issue of baseFiltered) {
+      if (
+        issue.status === 'open' &&
+        issue.stage === 'source' &&
+        getEffectiveState(issue) === 'resolved'
+      ) {
+        resolved.push(issue)
+      } else {
+        unresolved.push(issue)
+      }
+    }
+
+    return {
+      filteredIssues: unresolved.sort(sortFn),
+      filteredResolvedIssues: resolved.sort((a, b) =>
+        (b.affected_records ?? 0) - (a.affected_records ?? 0)
+      ),
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [issues, filterStage, filterSeverity, filterTableId, filterFieldId, filterStatus, resolvedFieldIdSet])
 
   const hasActiveFilters =
     filterStage !== 'all' || filterSeverity !== 'all' || filterTableId !== 'all' || filterFieldId !== 'all' || filterStatus !== 'open'
+
+  const totalVisibleIssues = filteredIssues.length + filteredResolvedIssues.length
 
   function resetFilters() {
     setFilterStage('all')
@@ -2049,12 +2121,24 @@ export default function DataQualityContent({
                       <span className="font-medium text-gray-600">Source:</span>
                       {' '}
                       {sourceBlocking === 0 && sourceWarning === 0 ? (
-                        <span className="text-green-600">No open issues</span>
+                        sourceResolved > 0 ? (
+                          <span className="text-green-600">
+                            {sourceResolved} resolved by transform
+                          </span>
+                        ) : (
+                          <span className="text-green-600">No open issues</span>
+                        )
                       ) : (
                         <>
                           {sourceBlocking > 0 && <span className="text-red-500">{sourceBlocking} blocking</span>}
                           {sourceBlocking > 0 && sourceWarning > 0 && ' · '}
                           {sourceWarning > 0 && <span className="text-amber-500">{sourceWarning} warnings</span>}
+                          {sourceResolved > 0 && (
+                            <span className="text-green-600">
+                              {(sourceBlocking > 0 || sourceWarning > 0) ? ' · ' : ''}
+                              {sourceResolved} resolved
+                            </span>
+                          )}
                         </>
                       )}
                     </span>
@@ -2201,7 +2285,12 @@ export default function DataQualityContent({
 
               <div className="ml-auto flex items-center gap-3">
                 <span className="text-sm text-gray-500">
-                  Showing <span className="font-medium text-gray-700">{filteredIssues.length}</span> issues
+                  Showing <span className="font-medium text-gray-700">{totalVisibleIssues}</span> issues
+                  {filteredResolvedIssues.length > 0 && (
+                    <span className="text-green-600 ml-1">
+                      ({filteredResolvedIssues.length} resolved by transform)
+                    </span>
+                  )}
                 </span>
                 {hasActiveFilters && (
                   <button
@@ -2249,7 +2338,7 @@ export default function DataQualityContent({
           )}
 
           {/* ── Issue List ── */}
-          {filteredIssues.length === 0 ? (
+          {filteredIssues.length === 0 && filteredResolvedIssues.length === 0 ? (
             <div className="bg-white rounded-xl border border-gray-200 shadow-sm p-10 text-center">
               <div className="text-3xl mb-3">✓</div>
               {hasActiveFilters ? (
@@ -2281,6 +2370,63 @@ export default function DataQualityContent({
                   />
                 </div>
               ))}
+
+              {/* ── Resolved by Transform section ── */}
+              {filteredResolvedIssues.length > 0 && (
+                <div className="bg-white rounded-xl border border-green-200 shadow-sm overflow-hidden">
+                  {/* Collapsible header */}
+                  <button
+                    onClick={() => setShowResolvedSection(v => !v)}
+                    className="w-full flex items-center gap-3 px-5 py-3.5 hover:bg-green-50/50 transition-colors text-left"
+                  >
+                    <span className="w-2 h-2 rounded-full bg-green-500 flex-shrink-0" />
+                    <span className="text-sm font-medium text-green-700">
+                      Resolved by Transform ({filteredResolvedIssues.length})
+                    </span>
+                    <span className="text-xs text-gray-400 ml-1">
+                      — source issues addressed by an approved transformation
+                    </span>
+                    <span className="ml-auto text-gray-400 text-xs">
+                      {showResolvedSection ? '▼' : '▶'}
+                    </span>
+                  </button>
+
+                  {/* Expandable rows */}
+                  {showResolvedSection && (
+                    <div className="border-t border-green-100 divide-y divide-green-50">
+                      {filteredResolvedIssues.map(issue => (
+                        <div
+                          key={issue.id}
+                          className="flex items-center gap-3 px-5 py-2.5 bg-green-50/40"
+                        >
+                          <span className="text-green-500 flex-shrink-0 text-sm">✓</span>
+                          <div className="flex-1 min-w-0">
+                            <p className="text-sm font-medium text-green-900 truncate">
+                              {issue.title}
+                            </p>
+                            <p className="text-xs text-green-700 truncate">
+                              {issue.description}
+                              {issue.affected_records > 0 && (
+                                <span className="text-green-500 ml-1">
+                                  · {issue.affected_records.toLocaleString()} rows
+                                </span>
+                              )}
+                            </p>
+                          </div>
+                          <span className="flex-shrink-0 text-xs font-medium text-green-600 bg-green-100 border border-green-200 px-2 py-0.5 rounded-full whitespace-nowrap">
+                            Transform applied
+                          </span>
+                          {issue.severity === 'blocking' && (
+                            <span className="flex-shrink-0 text-xs text-gray-400 line-through">
+                              blocking
+                            </span>
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              )}
             </div>
           )}
 
