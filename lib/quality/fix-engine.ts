@@ -67,28 +67,50 @@ CRITICAL SQL CONSTRAINTS:
 DATE FORMAT FIX RULE — CRITICAL:
 When fixing date format issues (non-ISO dates, mixed formats), NEVER use a single TO_DATE(field, 'format') call.
 A single format will crash on mixed data (e.g., "22/11/2025" fails with MM/DD/YYYY because month=22).
-Use a CASE + regex approach with one WHEN branch per format:
+Use a CASE + regex approach with one WHEN branch per format.
+
+CRITICAL — NULL SAFETY: NEVER wrap the CASE in to_jsonb() directly, because to_jsonb(NULL) produces SQL NULL
+which makes jsonb_set return NULL for the entire row_data, violating the NOT NULL constraint.
+Instead, use an OUTER CASE at the SET level so rows with unparseable dates keep their original value:
 
   UPDATE data_rows
-  SET row_data = jsonb_set(row_data, '{FieldName}', to_jsonb(
-    CASE
-      WHEN row_data->>'FieldName' IS NULL OR TRIM(row_data->>'FieldName') = '' THEN NULL
-      WHEN row_data->>'FieldName' ~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}' THEN row_data->>'FieldName'
-      WHEN row_data->>'FieldName' ~ '^[0-9]{4}/[0-9]' THEN TO_CHAR(TO_DATE(row_data->>'FieldName', 'YYYY/MM/DD'), 'YYYY-MM-DD')
-      WHEN row_data->>'FieldName' ~ '^[0-9]{1,2}/[0-9]{1,2}/[0-9]{4}$' AND SPLIT_PART(row_data->>'FieldName', '/', 1)::int > 12 THEN TO_CHAR(TO_DATE(row_data->>'FieldName', 'DD/MM/YYYY'), 'YYYY-MM-DD')
-      WHEN row_data->>'FieldName' ~ '^[0-9]{1,2}/[0-9]{1,2}/[0-9]{4}$' THEN TO_CHAR(TO_DATE(row_data->>'FieldName', 'MM/DD/YYYY'), 'YYYY-MM-DD')
-      WHEN row_data->>'FieldName' ~ '^[0-9]{1,2}/[0-9]{1,2}/[0-9]{2}$' THEN TO_CHAR(TO_DATE(row_data->>'FieldName', 'MM/DD/YY'), 'YYYY-MM-DD')
-      WHEN row_data->>'FieldName' ~ '^[0-9]{1,2}-[0-9]{1,2}-[0-9]{4}$' AND SPLIT_PART(row_data->>'FieldName', '-', 1)::int > 12 THEN TO_CHAR(TO_DATE(row_data->>'FieldName', 'DD-MM-YYYY'), 'YYYY-MM-DD')
-      WHEN row_data->>'FieldName' ~ '^[0-9]{1,2}-[0-9]{1,2}-[0-9]{4}$' THEN TO_CHAR(TO_DATE(row_data->>'FieldName', 'MM-DD-YYYY'), 'YYYY-MM-DD')
-      WHEN row_data->>'FieldName' ~* '(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)' THEN TO_CHAR((row_data->>'FieldName')::date, 'YYYY-MM-DD')
-      ELSE NULL
-    END
-  ))
+  SET row_data = CASE
+    WHEN (
+      CASE
+        WHEN row_data->>'FieldName' ~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}' THEN row_data->>'FieldName'
+        WHEN row_data->>'FieldName' ~ '^[0-9]{4}/[0-9]' THEN TO_CHAR(TO_DATE(row_data->>'FieldName', 'YYYY/MM/DD'), 'YYYY-MM-DD')
+        WHEN row_data->>'FieldName' ~ '^[0-9]{1,2}/[0-9]{1,2}/[0-9]{4}$' AND SPLIT_PART(row_data->>'FieldName', '/', 1)::int > 12 THEN TO_CHAR(TO_DATE(row_data->>'FieldName', 'DD/MM/YYYY'), 'YYYY-MM-DD')
+        WHEN row_data->>'FieldName' ~ '^[0-9]{1,2}/[0-9]{1,2}/[0-9]{4}$' THEN TO_CHAR(TO_DATE(row_data->>'FieldName', 'MM/DD/YYYY'), 'YYYY-MM-DD')
+        WHEN row_data->>'FieldName' ~ '^[0-9]{1,2}/[0-9]{1,2}/[0-9]{2}$' THEN TO_CHAR(TO_DATE(row_data->>'FieldName', 'MM/DD/YY'), 'YYYY-MM-DD')
+        WHEN row_data->>'FieldName' ~ '^[0-9]{1,2}-[0-9]{1,2}-[0-9]{4}$' AND SPLIT_PART(row_data->>'FieldName', '-', 1)::int > 12 THEN TO_CHAR(TO_DATE(row_data->>'FieldName', 'DD-MM-YYYY'), 'YYYY-MM-DD')
+        WHEN row_data->>'FieldName' ~ '^[0-9]{1,2}-[0-9]{1,2}-[0-9]{4}$' THEN TO_CHAR(TO_DATE(row_data->>'FieldName', 'MM-DD-YYYY'), 'YYYY-MM-DD')
+        WHEN row_data->>'FieldName' ~* '(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)' THEN TO_CHAR((row_data->>'FieldName')::date, 'YYYY-MM-DD')
+        ELSE NULL
+      END
+    ) IS NOT NULL
+      THEN jsonb_set(row_data, '{FieldName}', to_jsonb((
+        CASE
+          WHEN row_data->>'FieldName' ~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}' THEN row_data->>'FieldName'
+          WHEN row_data->>'FieldName' ~ '^[0-9]{4}/[0-9]' THEN TO_CHAR(TO_DATE(row_data->>'FieldName', 'YYYY/MM/DD'), 'YYYY-MM-DD')
+          WHEN row_data->>'FieldName' ~ '^[0-9]{1,2}/[0-9]{1,2}/[0-9]{4}$' AND SPLIT_PART(row_data->>'FieldName', '/', 1)::int > 12 THEN TO_CHAR(TO_DATE(row_data->>'FieldName', 'DD/MM/YYYY'), 'YYYY-MM-DD')
+          WHEN row_data->>'FieldName' ~ '^[0-9]{1,2}/[0-9]{1,2}/[0-9]{4}$' THEN TO_CHAR(TO_DATE(row_data->>'FieldName', 'MM/DD/YYYY'), 'YYYY-MM-DD')
+          WHEN row_data->>'FieldName' ~ '^[0-9]{1,2}/[0-9]{1,2}/[0-9]{2}$' THEN TO_CHAR(TO_DATE(row_data->>'FieldName', 'MM/DD/YY'), 'YYYY-MM-DD')
+          WHEN row_data->>'FieldName' ~ '^[0-9]{1,2}-[0-9]{1,2}-[0-9]{4}$' AND SPLIT_PART(row_data->>'FieldName', '-', 1)::int > 12 THEN TO_CHAR(TO_DATE(row_data->>'FieldName', 'DD-MM-YYYY'), 'YYYY-MM-DD')
+          WHEN row_data->>'FieldName' ~ '^[0-9]{1,2}-[0-9]{1,2}-[0-9]{4}$' THEN TO_CHAR(TO_DATE(row_data->>'FieldName', 'MM-DD-YYYY'), 'YYYY-MM-DD')
+          WHEN row_data->>'FieldName' ~* '(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)' THEN TO_CHAR((row_data->>'FieldName')::date, 'YYYY-MM-DD')
+          ELSE NULL
+        END
+      )))
+    ELSE row_data
+  END
   WHERE table_id = '<uuid>'
     AND row_data->>'FieldName' IS NOT NULL
+    AND row_data->>'FieldName' != ''
     AND row_data->>'FieldName' !~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}';
 
-Replace FieldName with the actual field name. Include only WHEN branches for formats in the sample data.
+The outer CASE checks if the conversion succeeds (IS NOT NULL). If yes, it updates the field.
+If no (truly unparseable value), it leaves row_data unchanged — avoiding the NOT NULL constraint violation.
+Replace FieldName with the actual field name. Remove WHEN branches not needed for this data.
 
 WINDOW FUNCTION RULE — VERY IMPORTANT:
 PostgreSQL does NOT allow window functions (ROW_NUMBER, RANK, DENSE_RANK, LAG, LEAD,
