@@ -972,7 +972,7 @@ function VerifiedFixesSection({
   fixes: VerifiedFix[]
   tableNameById: Map<string, string>
 }) {
-  const [expanded, setExpanded] = useState(true)
+  const [expanded, setExpanded] = useState(false)
 
   return (
     <div className="bg-white rounded-xl border border-blue-200 shadow-sm overflow-hidden">
@@ -2442,6 +2442,11 @@ export default function DataQualityContent({
                 </div>
               ))}
 
+              {/* ── Verified Fixes section (post-rescan reconciliation) ── */}
+              {filteredVerifiedFixes.length > 0 && (
+                <VerifiedFixesSection fixes={filteredVerifiedFixes} tableNameById={tableNameById} />
+              )}
+
               {/* ── Resolved by Transform section ── */}
               {filteredResolvedIssues.length > 0 && (
                 <div className="bg-white rounded-xl border border-green-200 shadow-sm overflow-hidden">
@@ -2499,12 +2504,6 @@ export default function DataQualityContent({
                 </div>
               )}
             </div>
-          )}
-
-          {/* ── Verified Fixes section (post-rescan reconciliation) ── */}
-          {/* Show when filterStatus is 'fixed' or 'all' and there are verified fixes */}
-          {(filterStatus === 'fixed' || filterStatus === 'all') && filteredVerifiedFixes.length > 0 && (
-            <VerifiedFixesSection fixes={filteredVerifiedFixes} tableNameById={tableNameById} />
           )}
 
           {/* Proceed to Mapping CTA */}
