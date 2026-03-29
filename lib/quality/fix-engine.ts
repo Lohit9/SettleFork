@@ -66,48 +66,29 @@ CRITICAL SQL CONSTRAINTS:
 
 DATE FORMAT FIX RULE — CRITICAL:
 When fixing date format issues (non-ISO dates, mixed formats), NEVER use a single TO_DATE(field, 'format') call.
-This will crash if the data contains multiple formats (e.g., "22/11/2025" fails with MM/DD/YYYY because month=22).
-Instead, use a CASE + regex pattern to detect the format before parsing:
+A single format will crash on mixed data (e.g., "22/11/2025" fails with MM/DD/YYYY because month=22).
+Use a CASE + regex approach with one WHEN branch per format:
 
   UPDATE data_rows
   SET row_data = jsonb_set(row_data, '{FieldName}', to_jsonb(
     CASE
       WHEN row_data->>'FieldName' IS NULL OR TRIM(row_data->>'FieldName') = '' THEN NULL
-      -- Already ISO 8601
-      WHEN row_data->>'FieldName' ~ '^\d{4}-\d{2}-\d{2}' THEN
-        row_data->>'FieldName'
-      -- YYYY/MM/DD
-      WHEN row_data->>'FieldName' ~ '^\d{4}/\d{1,2}/\d{1,2}' THEN
-        TO_CHAR(TO_DATE(row_data->>'FieldName', 'YYYY/MM/DD'), 'YYYY-MM-DD')
-      -- First segment > 12 → must be DD/MM/YYYY (e.g., "22/11/2025")
-      WHEN row_data->>'FieldName' ~ '^\d{1,2}/\d{1,2}/\d{4}$'
-        AND SPLIT_PART(row_data->>'FieldName', '/', 1)::int > 12 THEN
-        TO_CHAR(TO_DATE(row_data->>'FieldName', 'DD/MM/YYYY'), 'YYYY-MM-DD')
-      -- MM/DD/YYYY (first segment <= 12)
-      WHEN row_data->>'FieldName' ~ '^\d{1,2}/\d{1,2}/\d{4}$' THEN
-        TO_CHAR(TO_DATE(row_data->>'FieldName', 'MM/DD/YYYY'), 'YYYY-MM-DD')
-      -- MM/DD/YY two-digit year
-      WHEN row_data->>'FieldName' ~ '^\d{1,2}/\d{1,2}/\d{2}$' THEN
-        TO_CHAR(TO_DATE(row_data->>'FieldName', 'MM/DD/YY'), 'YYYY-MM-DD')
-      -- Dash-separated: DD-MM-YYYY or MM-DD-YYYY
-      WHEN row_data->>'FieldName' ~ '^\d{1,2}-\d{1,2}-\d{4}$'
-        AND SPLIT_PART(row_data->>'FieldName', '-', 1)::int > 12 THEN
-        TO_CHAR(TO_DATE(row_data->>'FieldName', 'DD-MM-YYYY'), 'YYYY-MM-DD')
-      WHEN row_data->>'FieldName' ~ '^\d{1,2}-\d{1,2}-\d{4}$' THEN
-        TO_CHAR(TO_DATE(row_data->>'FieldName', 'MM-DD-YYYY'), 'YYYY-MM-DD')
-      -- Month name formats ("Mar 15 2024", "15 March 2024", etc.)
-      WHEN row_data->>'FieldName' ~* '\y(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)\y' THEN
-        TO_CHAR((row_data->>'FieldName')::date, 'YYYY-MM-DD')
+      WHEN row_data->>'FieldName' ~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}' THEN row_data->>'FieldName'
+      WHEN row_data->>'FieldName' ~ '^[0-9]{4}/[0-9]' THEN TO_CHAR(TO_DATE(row_data->>'FieldName', 'YYYY/MM/DD'), 'YYYY-MM-DD')
+      WHEN row_data->>'FieldName' ~ '^[0-9]{1,2}/[0-9]{1,2}/[0-9]{4}$' AND SPLIT_PART(row_data->>'FieldName', '/', 1)::int > 12 THEN TO_CHAR(TO_DATE(row_data->>'FieldName', 'DD/MM/YYYY'), 'YYYY-MM-DD')
+      WHEN row_data->>'FieldName' ~ '^[0-9]{1,2}/[0-9]{1,2}/[0-9]{4}$' THEN TO_CHAR(TO_DATE(row_data->>'FieldName', 'MM/DD/YYYY'), 'YYYY-MM-DD')
+      WHEN row_data->>'FieldName' ~ '^[0-9]{1,2}/[0-9]{1,2}/[0-9]{2}$' THEN TO_CHAR(TO_DATE(row_data->>'FieldName', 'MM/DD/YY'), 'YYYY-MM-DD')
+      WHEN row_data->>'FieldName' ~ '^[0-9]{1,2}-[0-9]{1,2}-[0-9]{4}$' AND SPLIT_PART(row_data->>'FieldName', '-', 1)::int > 12 THEN TO_CHAR(TO_DATE(row_data->>'FieldName', 'DD-MM-YYYY'), 'YYYY-MM-DD')
+      WHEN row_data->>'FieldName' ~ '^[0-9]{1,2}-[0-9]{1,2}-[0-9]{4}$' THEN TO_CHAR(TO_DATE(row_data->>'FieldName', 'MM-DD-YYYY'), 'YYYY-MM-DD')
+      WHEN row_data->>'FieldName' ~* '(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)' THEN TO_CHAR((row_data->>'FieldName')::date, 'YYYY-MM-DD')
       ELSE NULL
     END
   ))
   WHERE table_id = '<uuid>'
     AND row_data->>'FieldName' IS NOT NULL
-    AND row_data->>'FieldName' !~ '^\d{4}-\d{2}-\d{2}';
+    AND row_data->>'FieldName' !~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}';
 
-Tailor the CASE branches to the formats actually observed in the sample data.
-Only include branches for formats present in the data — don't add unnecessary branches.
-Always put the "already ISO" check first so those rows are skipped efficiently.
+Replace FieldName with the actual field name. Include only WHEN branches for formats in the sample data.
 
 WINDOW FUNCTION RULE — VERY IMPORTANT:
 PostgreSQL does NOT allow window functions (ROW_NUMBER, RANK, DENSE_RANK, LAG, LEAD,
@@ -329,7 +310,7 @@ Provide 2-3 fix options for this issue. Use table_id = '${issue.table_id ?? ''}'
 
   let parsed: ClaudeFixResponse
   try {
-    const raw = await callClaude(SYSTEM_PROMPT, userMessage, 2048)
+    const raw = await callClaude(SYSTEM_PROMPT, userMessage, 4096)
 
     // Strip markdown fences if present
     const cleaned = raw
