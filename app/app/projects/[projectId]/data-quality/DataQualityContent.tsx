@@ -575,12 +575,26 @@ function IssueCard({
                   </div>
                 ))}
                 <div className="pt-1 border-t border-indigo-100 flex items-center justify-between gap-3">
-                  <button
-                    onClick={() => setShowCustomFix(true)}
-                    className="flex items-center gap-1.5 px-3 py-1.5 text-sm border border-gray-300 text-gray-700 rounded-lg hover:bg-gray-50 transition-colors"
-                  >
-                    ✎ Write a Custom Fix
-                  </button>
+                  <div className="flex items-center gap-2">
+                    <button
+                      onClick={() => setShowCustomFix(true)}
+                      className="flex items-center gap-1.5 px-3 py-1.5 text-sm border border-gray-300 text-gray-700 rounded-lg hover:bg-gray-50 transition-colors"
+                    >
+                      ✎ Write a Custom Fix
+                    </button>
+                    <button
+                      onClick={handleGenerateFix}
+                      disabled={generatingFix}
+                      className="flex items-center gap-1.5 px-3 py-1.5 text-sm border border-gray-300 text-gray-500 rounded-lg hover:bg-gray-50 disabled:opacity-50 transition-colors"
+                      title="Re-generate fix suggestions with latest AI"
+                    >
+                      {generatingFix ? (
+                        <><span className="w-3 h-3 border-2 border-gray-300 border-t-gray-500 rounded-full animate-spin" />Regenerating…</>
+                      ) : (
+                        <>↻ Regenerate</>
+                      )}
+                    </button>
+                  </div>
                   <button
                     onClick={() => setShowAcceptModal(true)}
                     className="text-sm text-gray-500 hover:text-gray-700 underline"
