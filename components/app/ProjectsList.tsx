@@ -104,9 +104,9 @@ function ProjectCard({ project, onUpdate }: { project: ProjectWithStats; onUpdat
             </p>
           </div>
 
-          {/* Readiness score */}
+          {/* Readiness score — only shown when meaningfully > 0 */}
           <div className="text-right flex-shrink-0">
-            {score !== null ? (
+            {score !== null && score > 0 ? (
               <>
                 <div className={`text-2xl font-semibold leading-none ${scoreColor}`}>{score}%</div>
                 <div className="text-[11px] text-gray-400 mt-0.5">Readiness</div>
@@ -339,7 +339,7 @@ export function ProjectsList({ initialProjects }: ProjectsListProps) {
   const activeCount = projects.filter((p) => p.status === 'active').length
   const completedCount = projects.filter((p) => p.status === 'completed').length
   const totalBlocking = projects.reduce((s, p) => s + p.blockingIssueCount, 0)
-  const scoredProjects = projects.filter((p) => p.readinessScore !== null)
+  const scoredProjects = projects.filter((p) => p.readinessScore !== null && p.readinessScore > 0)
   const avgReadiness =
     scoredProjects.length > 0
       ? Math.round(scoredProjects.reduce((s, p) => s + (p.readinessScore ?? 0), 0) / scoredProjects.length)
