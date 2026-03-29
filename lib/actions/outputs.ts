@@ -390,7 +390,18 @@ export async function getOutputsPageData(projectId: string): Promise<OutputsPage
   const mappingColor: PhaseColor = mappingPct >= 80 ? 'green' : mappingPct >= 50 ? 'yellow' : 'red'
   const transformColor: PhaseColor =
     totalTransformScope === 0 ? 'gray' : completedTransforms >= totalTransformScope ? 'green' : completedTransforms > 0 ? 'yellow' : 'red'
-  const validationColor: PhaseColor = readinessScore >= 80 ? 'green' : readinessScore >= 50 ? 'yellow' : 'red'
+  // Ready is green only when ALL 4 prior phases are green — a high readiness score
+  // alone is not sufficient if Validate still has blocking issues or transforms are pending.
+  const allPriorPhasesGreen =
+    dataIngestion === 'complete' &&
+    mappingColor === 'green' &&
+    (transformColor === 'green' || transformColor === 'gray') &&
+    dataQualityColor === 'green'
+  const validationColor: PhaseColor = allPriorPhasesGreen
+    ? 'green'
+    : readinessScore >= 50
+    ? 'yellow'
+    : 'red'
 
   const completedCount =
     (dataIngestion === 'complete' ? 1 : 0) +
