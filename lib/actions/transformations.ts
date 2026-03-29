@@ -402,41 +402,32 @@ Example template (adapt branches to actual sample data, remove unused branches):
 
   CASE
     WHEN field IS NULL OR TRIM(field) = '' THEN NULL
-    -- Already ISO 8601 (YYYY-MM-DD)
-    WHEN field ~ '^\d{4}-\d{2}-\d{2}' THEN
-      SUBSTRING(field FROM 1 FOR 10)
+    -- Already ISO 8601 (YYYY-MM-DD) — pass through
+    WHEN field ~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}' THEN SUBSTRING(field FROM 1 FOR 10)
     -- YYYY/MM/DD
-    WHEN field ~ '^\d{4}/\d{1,2}/\d{1,2}' THEN
-      TO_CHAR(TO_DATE(field, 'YYYY/MM/DD'), 'YYYY-MM-DD')
-    -- Slash-separated 4-digit year, first part > 12 → must be DD/MM/YYYY (e.g. 22/11/2025)
-    WHEN field ~ '^\d{1,2}/\d{1,2}/\d{4}$' AND SPLIT_PART(field, '/', 1)::int > 12 THEN
-      TO_CHAR(TO_DATE(field, 'DD/MM/YYYY'), 'YYYY-MM-DD')
-    -- Slash-separated 4-digit year, first part <= 12 → MM/DD/YYYY (e.g. 03/06/2027)
-    WHEN field ~ '^\d{1,2}/\d{1,2}/\d{4}$' THEN
-      TO_CHAR(TO_DATE(field, 'MM/DD/YYYY'), 'YYYY-MM-DD')
-    -- Slash-separated 2-digit year → MM/DD/YY (e.g. 08/15/22)
-    WHEN field ~ '^\d{1,2}/\d{1,2}/\d{2}$' THEN
-      TO_CHAR(TO_DATE(field, 'MM/DD/YY'), 'YYYY-MM-DD')
-    -- Dash-separated 4-digit year, first part > 12 → DD-MM-YYYY (e.g. 13-09-2026)
-    WHEN field ~ '^\d{1,2}-\d{1,2}-\d{4}$' AND SPLIT_PART(field, '-', 1)::int > 12 THEN
-      TO_CHAR(TO_DATE(field, 'DD-MM-YYYY'), 'YYYY-MM-DD')
-    -- Dash-separated 4-digit year, first part <= 12 → MM-DD-YYYY (e.g. 05-31-2026)
-    WHEN field ~ '^\d{1,2}-\d{1,2}-\d{4}$' THEN
-      TO_CHAR(TO_DATE(field, 'MM-DD-YYYY'), 'YYYY-MM-DD')
-    -- Dash-separated 2-digit year → MM-DD-YY
-    WHEN field ~ '^\d{1,2}-\d{1,2}-\d{2}$' THEN
-      TO_CHAR(TO_DATE(field, 'MM-DD-YY'), 'YYYY-MM-DD')
-    -- Month name abbreviation (Mar 15 2024, 15 March 2024, March 15, 2024)
-    WHEN field ~* '\y(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)\y' THEN
-      TO_CHAR((field)::date, 'YYYY-MM-DD')
+    WHEN field ~ '^[0-9]{4}/[0-9]' THEN TO_CHAR(TO_DATE(field, 'YYYY/MM/DD'), 'YYYY-MM-DD')
+    -- Slash 4-digit year: first part > 12 → DD/MM/YYYY (e.g. 22/11/2025)
+    WHEN field ~ '^[0-9]{1,2}/[0-9]{1,2}/[0-9]{4}$' AND SPLIT_PART(field, '/', 1)::int > 12 THEN TO_CHAR(TO_DATE(field, 'DD/MM/YYYY'), 'YYYY-MM-DD')
+    -- Slash 4-digit year: first part <= 12 → MM/DD/YYYY (e.g. 03/06/2027)
+    WHEN field ~ '^[0-9]{1,2}/[0-9]{1,2}/[0-9]{4}$' THEN TO_CHAR(TO_DATE(field, 'MM/DD/YYYY'), 'YYYY-MM-DD')
+    -- Slash 2-digit year → MM/DD/YY (e.g. 08/15/22)
+    WHEN field ~ '^[0-9]{1,2}/[0-9]{1,2}/[0-9]{2}$' THEN TO_CHAR(TO_DATE(field, 'MM/DD/YY'), 'YYYY-MM-DD')
+    -- Dash 4-digit year: first part > 12 → DD-MM-YYYY (e.g. 13-09-2026)
+    WHEN field ~ '^[0-9]{1,2}-[0-9]{1,2}-[0-9]{4}$' AND SPLIT_PART(field, '-', 1)::int > 12 THEN TO_CHAR(TO_DATE(field, 'DD-MM-YYYY'), 'YYYY-MM-DD')
+    -- Dash 4-digit year: first part <= 12 → MM-DD-YYYY (e.g. 05-31-2026)
+    WHEN field ~ '^[0-9]{1,2}-[0-9]{1,2}-[0-9]{4}$' THEN TO_CHAR(TO_DATE(field, 'MM-DD-YYYY'), 'YYYY-MM-DD')
+    -- Dash 2-digit year → MM-DD-YY
+    WHEN field ~ '^[0-9]{1,2}-[0-9]{1,2}-[0-9]{2}$' THEN TO_CHAR(TO_DATE(field, 'MM-DD-YY'), 'YYYY-MM-DD')
+    -- Month name (Mar 15 2024, 15 March 2024, March 15 2024)
+    WHEN field ~* '(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)' THEN TO_CHAR((field)::date, 'YYYY-MM-DD')
     ELSE NULL
   END
 
 Rules:
-- Include only the WHEN branches that match formats actually observed in the sample data.
-- Always include the ISO passthrough branch (YYYY-MM-DD) and ELSE NULL.
-- Each WHEN branch uses its own dedicated TO_DATE format string — never mix separators in one call.
-- The "first part > 12" check disambiguates DD/MM from MM/DD without nesting CASEs.
+- Include only WHEN branches for formats actually observed in the sample data. Remove unused branches.
+- Always keep the ISO passthrough branch and ELSE NULL.
+- Never mix separators in a single TO_DATE call — use separate WHEN branches.
+- The SPLIT_PART "first part > 12" check disambiguates DD/MM from MM/DD without nested CASEs.
 
 If documentation is provided, follow the exact value mappings and transformation rules specified in the business rules. Do not invent mappings that contradict the documentation. If the documentation specifies edge cases or special handling, include them in the expression.
 
