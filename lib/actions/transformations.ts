@@ -168,7 +168,7 @@ export async function getTransformData(
           .from('field_profiles')
           .select('field_id, sample_values, cardinality, null_percentage, format_issues_count')
           .in('field_id', allSourceFieldIds)
-      : Promise.resolve({ data: [] as typeof fieldProfiles, error: null }),
+      : Promise.resolve({ data: [] as Array<{ field_id: string; sample_values: string[] | null; cardinality: number | null; null_percentage: number | null; format_issues_count: number | null }>, error: null }),
     supabase
       .from('transformations')
       .select('*')
