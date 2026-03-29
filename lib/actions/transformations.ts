@@ -158,7 +158,7 @@ export async function getTransformData(
           .select('id, name, data_type, inferred_type, is_nullable, table_id, ordinal_position')
           .in('id', allSourceFieldIds)
           .order('ordinal_position', { ascending: true })
-      : Promise.resolve({ data: [] as typeof sourceFields, error: null }),
+      : Promise.resolve({ data: [] as Array<{ id: string; name: string; data_type: string; inferred_type: string | null; is_nullable: boolean; table_id: string; ordinal_position: number }>, error: null }),
     supabase
       .from('fields')
       .select('id, name, data_type, inferred_type, is_nullable, is_primary_key, check_constraint')
