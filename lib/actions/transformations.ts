@@ -15,9 +15,9 @@ export { fieldNeedsTransform, wrapFieldRefsInJsonb }
 
 export interface FieldItem {
   fieldMappingId: string
-  sourceFieldId: string
-  sourceFieldName: string
-  sourceFieldDataType: string
+  sourceFieldId: string | null
+  sourceFieldName: string | null
+  sourceFieldDataType: string | null
   sourceFieldInferredType: string | null
   sourceFieldIsNullable: boolean
   targetFieldId: string
@@ -26,7 +26,8 @@ export interface FieldItem {
   targetFieldInferredType: string | null
   targetFieldIsNullable: boolean
   targetFieldIsPrimaryKey: boolean
-  sourceTableId: string
+  sourceTableId: string | null
+  isValueAssignment: boolean
   typeCompatibility: string | null
   confidence: number | null
   /** AI-generated reasoning from the field mapping (why this mapping was made) */
@@ -43,11 +44,14 @@ export interface FieldItem {
   isContributing: boolean
   /** Additional source fields that contribute to the same target (for primary mappings only) */
   contributingSourceFields: { id: string; name: string; data_type: string }[]
+  /** Target field check constraint (for value assignments — helps guide value selection) */
+  targetCheckConstraint?: { type: string; allowedValues?: string[]; pattern?: string; raw?: string } | null
 }
 
 export interface TableGroup {
   tableMappingId: string
   sourceTableId: string
+  targetTableId: string
   sourceTableName: string
   targetTableName: string
   fields: FieldItem[]
@@ -137,7 +141,7 @@ export async function getTransformData(
     return { datasets: [], schemaDocText: '', hasMappings: true, unmappedNotNullTargetFields: [], unmappedNullableTargetFields: [] }
   }
 
-  const allSourceFieldIds = fieldMappings.map((fm) => fm.source_field_id)
+  const allSourceFieldIds = fieldMappings.map((fm) => fm.source_field_id).filter((id): id is string => id !== null)
   const allTargetFieldIds = fieldMappings.map((fm) => fm.target_field_id)
   const allFieldMappingIds = fieldMappings.map((fm) => fm.id)
 
@@ -148,19 +152,23 @@ export async function getTransformData(
     { data: fieldProfiles },
     { data: transformations },
   ] = await Promise.all([
+    allSourceFieldIds.length > 0
+      ? supabase
+          .from('fields')
+          .select('id, name, data_type, inferred_type, is_nullable, table_id, ordinal_position')
+          .in('id', allSourceFieldIds)
+          .order('ordinal_position', { ascending: true })
+      : Promise.resolve({ data: [] as typeof sourceFields, error: null }),
     supabase
       .from('fields')
-      .select('id, name, data_type, inferred_type, is_nullable, table_id, ordinal_position')
-      .in('id', allSourceFieldIds)
-      .order('ordinal_position', { ascending: true }),
-    supabase
-      .from('fields')
-      .select('id, name, data_type, inferred_type, is_nullable, is_primary_key')
+      .select('id, name, data_type, inferred_type, is_nullable, is_primary_key, check_constraint')
       .in('id', allTargetFieldIds),
-    supabase
-      .from('field_profiles')
-      .select('field_id, sample_values, cardinality, null_percentage, format_issues_count')
-      .in('field_id', allSourceFieldIds),
+    allSourceFieldIds.length > 0
+      ? supabase
+          .from('field_profiles')
+          .select('field_id, sample_values, cardinality, null_percentage, format_issues_count')
+          .in('field_id', allSourceFieldIds)
+      : Promise.resolve({ data: [] as typeof fieldProfiles, error: null }),
     supabase
       .from('transformations')
       .select('*')
@@ -227,6 +235,7 @@ export async function getTransformData(
     const contributingByTarget = new Map<string, { id: string; name: string; data_type: string }[]>()
     for (const fm of fms) {
       if (!(fm as typeof fm & { is_contributing?: boolean }).is_contributing) continue
+      if (!fm.source_field_id) continue
       const srcField = srcFieldById.get(fm.source_field_id)
       if (!srcField) continue
       const list = contributingByTarget.get(fm.target_field_id) ?? []
@@ -235,23 +244,26 @@ export async function getTransformData(
     }
 
     for (const fm of fms) {
-      const srcField = srcFieldById.get(fm.source_field_id)
       const tgtField = tgtFieldById.get(fm.target_field_id)
-      if (!srcField || !tgtField) continue
+      if (!tgtField) continue
+
+      const isValueAssignment = fm.source_field_id === null
+      const srcField = fm.source_field_id ? srcFieldById.get(fm.source_field_id) : null
+      if (!isValueAssignment && !srcField) continue
 
       const isContributing = !!(fm as typeof fm & { is_contributing?: boolean }).is_contributing
 
-      const profile = profileByFieldId.get(fm.source_field_id)
+      const profile = fm.source_field_id ? profileByFieldId.get(fm.source_field_id) : null
       const transformation = transformByFMId.get(fm.id) ?? null
 
       const fmWithFlags = fm as typeof fm & { ai_reasoning?: string | null; needs_transformation?: boolean | null }
 
-      const needsTransform = fieldNeedsTransform({
+      const needsTransform = isValueAssignment ? true : fieldNeedsTransform({
         typeCompatibility: fm.type_compatibility,
         confidence: fm.confidence,
-        sourceDataType: srcField.data_type,
+        sourceDataType: srcField!.data_type,
         targetDataType: tgtField.data_type,
-        sourceFieldName: srcField.name,
+        sourceFieldName: srcField!.name,
         targetFieldName: tgtField.name,
         hasTransformation: transformation !== null,
         needsTransformation: fmWithFlags.needs_transformation ?? null,
@@ -260,18 +272,19 @@ export async function getTransformData(
       const fmTyped = fmWithFlags
       fields.push({
         fieldMappingId: fm.id,
-        sourceFieldId: srcField.id,
-        sourceFieldName: srcField.name,
-        sourceFieldDataType: srcField.data_type,
-        sourceFieldInferredType: srcField.inferred_type,
-        sourceFieldIsNullable: srcField.is_nullable,
+        sourceFieldId: srcField?.id ?? null,
+        sourceFieldName: srcField?.name ?? null,
+        sourceFieldDataType: srcField?.data_type ?? null,
+        sourceFieldInferredType: srcField?.inferred_type ?? null,
+        sourceFieldIsNullable: srcField?.is_nullable ?? true,
         targetFieldId: tgtField.id,
         targetFieldName: tgtField.name,
         targetFieldDataType: tgtField.data_type,
         targetFieldInferredType: tgtField.inferred_type,
         targetFieldIsNullable: tgtField.is_nullable,
         targetFieldIsPrimaryKey: !!(tgtField as typeof tgtField & { is_primary_key?: boolean }).is_primary_key,
-        sourceTableId: srcField.table_id,
+        sourceTableId: srcField?.table_id ?? null,
+        isValueAssignment,
         typeCompatibility: fm.type_compatibility,
         confidence: fm.confidence,
         aiReasoning: fmTyped.ai_reasoning ?? null,
@@ -282,21 +295,27 @@ export async function getTransformData(
         needsTransform,
         transformation,
         isContributing,
-        // Primary mappings carry the contributing field list; contributing mappings have []
         contributingSourceFields: isContributing ? [] : (contributingByTarget.get(fm.target_field_id) ?? []),
+        targetCheckConstraint: isValueAssignment ? ((tgtField as typeof tgtField & { check_constraint?: unknown }).check_constraint as FieldItem['targetCheckConstraint'] ?? null) : null,
       })
     }
 
     if (fields.length > 0) {
-      // Sort by source field's ordinal_position so the sidebar follows CSV upload order
+      // Sort: mapped fields by source ordinal_position, value assignments at end by target name
       fields.sort((a, b) => {
-        const sfA = srcFieldById.get(a.sourceFieldId) as { ordinal_position?: number } | undefined
-        const sfB = srcFieldById.get(b.sourceFieldId) as { ordinal_position?: number } | undefined
+        if (a.isValueAssignment && !b.isValueAssignment) return 1
+        if (!a.isValueAssignment && b.isValueAssignment) return -1
+        if (a.isValueAssignment && b.isValueAssignment) {
+          return a.targetFieldName.localeCompare(b.targetFieldName)
+        }
+        const sfA = a.sourceFieldId ? srcFieldById.get(a.sourceFieldId) as { ordinal_position?: number } | undefined : undefined
+        const sfB = b.sourceFieldId ? srcFieldById.get(b.sourceFieldId) as { ordinal_position?: number } | undefined : undefined
         return (sfA?.ordinal_position ?? 9999) - (sfB?.ordinal_position ?? 9999)
       })
       dsGroup.tables.push({
         tableMappingId: tm.id,
         sourceTableId: tm.source_table_id,
+        targetTableId: tm.target_table_id,
         sourceTableName: srcTable.name,
         targetTableName: tgtTable.name,
         fields,
@@ -466,20 +485,17 @@ export async function generateTransform(
     .single()
   if (!projectCheck) return { success: false, error: 'Access denied' }
 
-  // Fetch fields
-  const [{ data: srcField }, { data: tgtField }] = await Promise.all([
-    supabase
-      .from('fields')
-      .select('id, name, data_type, inferred_type, is_nullable, table_id')
-      .eq('id', fm.source_field_id)
-      .single(),
-    supabase
-      .from('fields')
-      .select('id, name, data_type, inferred_type, is_nullable')
-      .eq('id', fm.target_field_id)
-      .single(),
+  // Fetch fields — source may be null for value assignments
+  const isValueAssignment = fm.source_field_id === null
+  const [srcFieldResult, { data: tgtField }] = await Promise.all([
+    fm.source_field_id
+      ? supabase.from('fields').select('id, name, data_type, inferred_type, is_nullable, table_id').eq('id', fm.source_field_id).single()
+      : Promise.resolve({ data: null, error: null }),
+    supabase.from('fields').select('id, name, data_type, inferred_type, is_nullable').eq('id', fm.target_field_id).single(),
   ])
-  if (!srcField || !tgtField) return { success: false, error: 'Fields not found' }
+  const srcField = srcFieldResult.data
+  if (!isValueAssignment && !srcField) return { success: false, error: 'Source field not found' }
+  if (!tgtField) return { success: false, error: 'Target field not found' }
 
   // Fetch tables
   const [{ data: srcTable }, { data: tgtTable }] = await Promise.all([
@@ -496,10 +512,10 @@ export async function generateTransform(
     .eq('is_contributing', true)
     .neq('status', 'rejected')
 
-  const contributingFieldIds = (contributingFMs ?? []).map((c) => c.source_field_id)
+  const contributingFieldIds = (contributingFMs ?? []).map((c) => c.source_field_id).filter((id): id is string => id !== null)
 
-  // Build rich AI context — include primary + contributing source fields + target + docs
-  const allSourceFieldIds = [srcField.id, ...contributingFieldIds]
+  // Build rich AI context
+  const allSourceFieldIds = srcField ? [srcField.id, ...contributingFieldIds] : contributingFieldIds
   const txCtx = await buildAIContext(tm.project_id, {
     tableIds: [tm.source_table_id, tm.target_table_id],
     fieldIds: [...allSourceFieldIds, tgtField.id],
@@ -515,7 +531,7 @@ export async function generateTransform(
 
   // Find field contexts (source has distribution data; target is DDL-only so profile is empty)
   const allSrcCtxFields = txCtx.source_tables.flatMap((t) => t.fields)
-  const srcFieldCtx = allSrcCtxFields.find((f) => f.name === srcField.name)
+  const srcFieldCtx = srcField ? allSrcCtxFields.find((f) => f.name === srcField.name) : null
   const tgtFieldCtx = txCtx.target_tables.flatMap((t) => t.fields).find((f) => f.name === tgtField.name)
 
   // Fetch contributing field metadata for the prompt
@@ -541,7 +557,7 @@ export async function generateTransform(
       contributingSourcesBlock = `\n<contributing_source_fields>
 This is a MANY-TO-ONE mapping. Multiple source fields must be combined into a single target field value.
 
-Primary source field: ${srcField.name} (${srcField.data_type})
+${srcField ? `Primary source field: ${srcField.name} (${srcField.data_type})` : 'No primary source field — this is a value assignment.'}
 Contributing source fields:
 ${lines.join('\n')}
 ${combinationHint ? `\nCombination hint: ${combinationHint}` : ''}
@@ -553,10 +569,10 @@ Handle nulls gracefully — if one source field is null, use the remaining field
   }
 
   // Build user message
-  const userMessage = `<source_field>
-${srcFieldCtx ? formatFieldForPrompt(srcFieldCtx) : `${srcField.name} (${srcField.data_type})\n  Nullable: ${srcField.is_nullable}`}
-Table: ${srcTable?.name ?? ''}
-</source_field>
+  const sourceBlock = isValueAssignment
+    ? `<source_field>\nNo source field — this is a VALUE ASSIGNMENT.\nDefine a constant, expression, or function that produces the value for the target field.\nDo NOT reference row_data unless you know the source table columns.\nTable: ${srcTable?.name ?? ''}\n</source_field>`
+    : `<source_field>\n${srcFieldCtx ? formatFieldForPrompt(srcFieldCtx) : `${srcField!.name} (${srcField!.data_type})\n  Nullable: ${srcField!.is_nullable}`}\nTable: ${srcTable?.name ?? ''}\n</source_field>`
+  const userMessage = `${sourceBlock}
 ${contributingSourcesBlock}
 <target_field>
 Field: ${tgtTableName}.${tgtField.name}
@@ -591,9 +607,10 @@ Generate the SQL transformation expression.`
 
   if (!sql) return { success: false, error: 'AI returned empty SQL. Please try again.' }
 
-  // Deterministically wrap with NULL guard — ensures NULL/empty source values
-  // always produce NULL output regardless of how Claude wrote the CASE expression
-  sql = wrapWithNullGuard(sql, srcField.name)
+  // Deterministically wrap with NULL guard — skipped for value assignments (no source field)
+  if (srcField) {
+    sql = wrapWithNullGuard(sql, srcField.name)
+  }
 
   // Store or update the transformation record
   const { data: existing } = await supabase
@@ -767,17 +784,16 @@ export async function runFullTransformTest(
     .single()
   if (!transformation?.generated_sql) return { success: false, error: 'No transform SQL found. Generate a transform first.' }
 
-  const { data: srcField } = await supabase
-    .from('fields')
-    .select('id, name, table_id')
-    .eq('id', fm.source_field_id)
-    .single()
-  if (!srcField) return { success: false, error: 'Source field not found' }
+  const srcField = fm.source_field_id
+    ? (await supabase.from('fields').select('id, name, table_id').eq('id', fm.source_field_id).single()).data
+    : null
+  if (fm.source_field_id && !srcField) return { success: false, error: 'Source field not found' }
 
+  const sourceTableId = srcField?.table_id ?? tm.source_table_id
   const { data: allSourceFields } = await supabase
     .from('fields')
     .select('name')
-    .eq('table_id', srcField.table_id)
+    .eq('table_id', sourceTableId)
   const fieldNames = (allSourceFields ?? []).map((f) => f.name)
 
   const wrappedSql = wrapFieldRefsInJsonb(transformation.generated_sql.replace(/;+$/, '').trim(), fieldNames)
@@ -786,8 +802,8 @@ export async function runFullTransformTest(
     'execute_transform_full_test',
     {
       p_expression: wrappedSql,
-      p_table_id: srcField.table_id,
-      p_source_field: srcField.name,
+      p_table_id: sourceTableId,
+      p_source_field: srcField?.name ?? '_none_',
     }
   )
 
@@ -864,42 +880,52 @@ export async function testTransformation(
     .single()
   if (!projectCheck) return { success: false, error: 'Access denied' }
 
-  // Get source field info
-  const { data: srcField } = await supabase
-    .from('fields')
-    .select('id, name, table_id')
-    .eq('id', fm.source_field_id)
-    .single()
-  if (!srcField) return { success: false, error: 'Source field not found' }
+  // Value assignments have no source field — for constants/expressions we can evaluate directly
+  const isValueAssignment = fm.source_field_id === null
+
+  // Get source field info (if it exists)
+  const srcField = fm.source_field_id
+    ? (await supabase.from('fields').select('id, name, table_id').eq('id', fm.source_field_id).single()).data
+    : null
+  if (!isValueAssignment && !srcField) return { success: false, error: 'Source field not found' }
 
   // Get all field names in source table for JSONB wrapping
+  const sourceTableId = srcField?.table_id ?? tm.source_table_id
   const { data: allSourceFields } = await supabase
     .from('fields')
     .select('name')
-    .eq('table_id', srcField.table_id)
+    .eq('table_id', sourceTableId)
 
   const fieldNames = (allSourceFields ?? []).map((f) => f.name)
 
-  // Wrap bare field refs with JSONB access
+  // Wrap bare field refs with JSONB access (no-op for pure constants)
   const wrappedSql = wrapFieldRefsInJsonb(sql.trim(), fieldNames)
 
-  // Build source field list: primary + contributing (for many-to-one mappings)
-  const sourceFieldNames = [srcField.name, ...(contributingFieldNames ?? [])]
+  // For value assignments, evaluate the expression against source table rows
+  const sourceFieldNames = srcField ? [srcField.name, ...(contributingFieldNames ?? [])] : (contributingFieldNames ?? [])
   const useMultiField = sourceFieldNames.length > 1
 
-  // Execute via RPC — uses supabaseAdmin since execute_transform_test is SECURITY DEFINER
+  // Execute via RPC
   const { data: rpcResult, error: rpcErr } = useMultiField
     ? await supabaseAdmin.rpc('execute_transform_test', {
         p_expression: wrappedSql,
-        p_table_id: srcField.table_id,
+        p_table_id: sourceTableId,
         p_source_fields: sourceFieldNames,
         p_limit: 20,
       })
+    : sourceFieldNames.length === 1
+    ? await supabaseAdmin.rpc('execute_transform_test', {
+        p_expression: wrappedSql,
+        p_table_id: sourceTableId,
+        p_source_field: sourceFieldNames[0],
+        p_limit: 20,
+      })
+    // Value assignment with no source fields — evaluate expression against source table
     : await supabaseAdmin.rpc('execute_transform_test', {
         p_expression: wrappedSql,
-        p_table_id: srcField.table_id,
-        p_source_field: srcField.name,
-        p_limit: 20,
+        p_table_id: sourceTableId,
+        p_source_field: '_none_',
+        p_limit: 10,
       })
 
   if (rpcErr) {
@@ -935,16 +961,16 @@ export async function testTransformation(
   }
 
   // Log the test event with source → target field names
-  const [{ data: srcFldLog }, { data: tgtFldLog }] = await Promise.all([
-    supabase.from('fields').select('name').eq('id', fm.source_field_id).single(),
-    supabase.from('fields').select('name').eq('id', fm.target_field_id).single(),
-  ])
+  const srcFldLog = fm.source_field_id
+    ? (await supabase.from('fields').select('name').eq('id', fm.source_field_id).single()).data
+    : null
+  const { data: tgtFldLog } = await supabase.from('fields').select('name').eq('id', fm.target_field_id).single()
   await logActivity(
     tm.project_id,
     'transform_tested',
-    `Transform tested: ${srcFldLog?.name ?? '?'} \u2192 ${tgtFldLog?.name ?? '?'}`,
+    `Transform tested: ${srcFldLog?.name ?? '[value]'} \u2192 ${tgtFldLog?.name ?? '?'}`,
     'transform',
-    { transformation_id: transformationId, source_field: srcFldLog?.name, target_field: tgtFldLog?.name }
+    { transformation_id: transformationId, source_field: srcFldLog?.name ?? null, target_field: tgtFldLog?.name }
   )
 
   return { success: true, results, transformationId }
@@ -1087,20 +1113,21 @@ export async function applyTransform(
     .single()
   if (!projectCheck) return { success: false, rowsAffected: 0, error: 'Access denied' }
 
-  // Fetch source and target field names
-  const [{ data: srcField }, { data: tgtField }] = await Promise.all([
-    supabase.from('fields').select('id, name, table_id').eq('id', fm.source_field_id).single(),
-    supabase.from('fields').select('id, name').eq('id', fm.target_field_id).single(),
-  ])
-  if (!srcField || !tgtField) {
-    return { success: false, rowsAffected: 0, error: 'Fields not found' }
-  }
+  // Fetch source and target field names — source may be null for value assignments
+  const srcField = fm.source_field_id
+    ? (await supabase.from('fields').select('id, name, table_id').eq('id', fm.source_field_id).single()).data
+    : null
+  const { data: tgtField } = await supabase.from('fields').select('id, name').eq('id', fm.target_field_id).single()
+  if (!tgtField) return { success: false, rowsAffected: 0, error: 'Target field not found' }
+  if (!fm.source_field_id && !srcField) { /* value assignment — ok */ }
+  else if (!srcField) return { success: false, rowsAffected: 0, error: 'Source field not found' }
 
   // All source field names for JSONB rewriting
+  const sourceTableId = srcField?.table_id ?? tm.source_table_id
   const { data: allSourceFields } = await supabase
     .from('fields')
     .select('name')
-    .eq('table_id', srcField.table_id)
+    .eq('table_id', sourceTableId)
   const fieldNames = (allSourceFields ?? []).map((f) => f.name)
 
   const wrappedSql = wrapFieldRefsInJsonb(sql.replace(/;+$/, '').trim(), fieldNames)
@@ -1148,11 +1175,11 @@ export async function applyTransform(
   await logActivity(
     tm.project_id,
     'transform_applied',
-    `Transform applied: ${srcField.name} \u2192 ${tgtField.name} — ${appliedRows} row${appliedRows !== 1 ? 's' : ''}`,
+    `Transform applied: ${srcField?.name ?? '[value]'} \u2192 ${tgtField.name} — ${appliedRows} row${appliedRows !== 1 ? 's' : ''}`,
     'transform',
     {
       field_mapping_id: fieldMappingId,
-      source_field: srcField.name,
+      source_field: srcField?.name ?? null,
       target_field: tgtField.name,
       rows_affected: appliedRows,
     }
@@ -1206,29 +1233,27 @@ export async function previewTransformDistinct(
     .single()
   if (!projectCheck) return { success: false, error: 'Access denied' }
 
-  const { data: srcField } = await supabase
-    .from('fields')
-    .select('id, name, table_id')
-    .eq('id', fm.source_field_id)
-    .single()
-  if (!srcField) return { success: false, error: 'Source field not found' }
+  const srcField = fm.source_field_id
+    ? (await supabase.from('fields').select('id, name, table_id').eq('id', fm.source_field_id).single()).data
+    : null
+  if (fm.source_field_id && !srcField) return { success: false, error: 'Source field not found' }
 
+  const sourceTableId = srcField?.table_id ?? tm.source_table_id
   const { data: allSourceFields } = await supabase
     .from('fields')
     .select('name')
-    .eq('table_id', srcField.table_id)
+    .eq('table_id', sourceTableId)
   const fieldNames = (allSourceFields ?? []).map((f) => f.name)
 
   const wrappedSql = wrapFieldRefsInJsonb(sql.replace(/;+$/, '').trim(), fieldNames)
 
-  // Build the array of source field names for the preview columns
-  // Primary field first, then any contributing fields
-  const sourceFields = [srcField.name, ...(contributingFieldNames ?? [])]
+  const sourceFields = srcField ? [srcField.name, ...(contributingFieldNames ?? [])] : (contributingFieldNames ?? [])
+  if (sourceFields.length === 0) sourceFields.push('_none_')
 
   const { data: rpcResult, error: rpcErr } = await supabaseAdmin.rpc(
     'execute_transform_test_distinct',
     {
-      p_table_id: srcField.table_id,
+      p_table_id: sourceTableId,
       p_source_fields: sourceFields,
       p_transform_sql: wrappedSql,
       p_limit: 200,
@@ -1315,16 +1340,17 @@ export async function suggestTransformDescription(
     .single()
   if (!projectCheck) return { success: false, error: 'Access denied' }
 
-  const [{ data: srcField }, { data: tgtField }] = await Promise.all([
-    supabase.from('fields').select('id, name, data_type, inferred_type, is_nullable').eq('id', fm.source_field_id).single(),
-    supabase.from('fields').select('id, name, data_type, inferred_type, is_nullable').eq('id', fm.target_field_id).single(),
-  ])
-  if (!srcField || !tgtField) return { success: false, error: 'Fields not found' }
+  const srcField = fm.source_field_id
+    ? (await supabase.from('fields').select('id, name, data_type, inferred_type, is_nullable').eq('id', fm.source_field_id).single()).data
+    : null
+  const { data: tgtField } = await supabase.from('fields').select('id, name, data_type, inferred_type, is_nullable').eq('id', fm.target_field_id).single()
+  if (fm.source_field_id && !srcField) return { success: false, error: 'Source field not found' }
+  if (!tgtField) return { success: false, error: 'Target field not found' }
 
-  // Build AI context for field distributions and documents
+  const fieldIds = srcField ? [srcField.id, tgtField.id] : [tgtField.id]
   const ctx = await buildAIContext(tm.project_id, {
     tableIds: [tm.source_table_id, tm.target_table_id],
-    fieldIds: [srcField.id, tgtField.id],
+    fieldIds,
     includeProfilingStats: true,
     includeValueDistributions: true,
     includeSampleValues: true,
@@ -1332,15 +1358,17 @@ export async function suggestTransformDescription(
     maxDistributionValues: 20,
   }, user.id)
 
-  const srcFieldCtx = ctx.source_tables.flatMap((t) => t.fields).find((f) => f.name === srcField.name)
+  const srcFieldCtx = srcField ? ctx.source_tables.flatMap((t) => t.fields).find((f) => f.name === srcField.name) : null
   const tgtFieldCtx = ctx.target_tables.flatMap((t) => t.fields).find((f) => f.name === tgtField.name)
   const docsBlock = formatDocumentsForPrompt(ctx.documents)
 
   const fmWithReasoning = fm as typeof fm & { ai_reasoning?: string | null }
 
-  const userMessage = `<source_field>
-${srcFieldCtx ? formatFieldForPrompt(srcFieldCtx) : `${srcField.name} (${srcField.data_type})\n  Nullable: ${srcField.is_nullable}`}
-</source_field>
+  const sourceBlock = srcField
+    ? `<source_field>\n${srcFieldCtx ? formatFieldForPrompt(srcFieldCtx) : `${srcField.name} (${srcField.data_type})\n  Nullable: ${srcField.is_nullable}`}\n</source_field>`
+    : `<source_field>\nNo source field — this is a value assignment. Define a constant or expression for the target field.\n</source_field>`
+
+  const userMessage = `${sourceBlock}
 
 <target_field>
 ${tgtField.name} (${tgtField.data_type}${tgtField.inferred_type ? `, ${tgtField.inferred_type}` : ''})

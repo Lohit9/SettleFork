@@ -228,7 +228,7 @@ export async function stageAllData(projectId: string): Promise<{
 
       if (!fms || fms.length === 0) continue
 
-      const srcFieldIds = fms.map((fm) => fm.source_field_id)
+      const srcFieldIds = fms.map((fm) => fm.source_field_id).filter((id): id is string => id !== null)
       const tgtFieldIds = fms.map((fm) => fm.target_field_id)
       const fmIds = fms.map((fm) => fm.id)
 
@@ -238,7 +238,9 @@ export async function stageAllData(projectId: string): Promise<{
         { data: allSrcFields },
         { data: transforms },
       ] = await Promise.all([
-        supabaseAdmin.from('fields').select('id, name').in('id', srcFieldIds),
+        srcFieldIds.length > 0
+          ? supabaseAdmin.from('fields').select('id, name').in('id', srcFieldIds)
+          : Promise.resolve({ data: [], error: null }),
         supabaseAdmin.from('fields').select('id, name').in('id', tgtFieldIds),
         supabaseAdmin.from('fields').select('name').eq('table_id', tm.source_table_id),
         supabaseAdmin
@@ -265,22 +267,32 @@ export async function stageAllData(projectId: string): Promise<{
 
       for (const fm of fms) {
         if (fm.is_contributing) continue
-        const srcField = srcById.get(fm.source_field_id)
+        const isValueAssignment = fm.source_field_id === null
+        const srcField = fm.source_field_id ? srcById.get(fm.source_field_id) : null
         const tgtField = tgtById.get(fm.target_field_id)
-        if (!srcField || !tgtField) continue
+        if (!isValueAssignment && !srcField) continue
+        if (!tgtField) continue
 
         const keyLiteral = `'${tgtField.name.replace(/'/g, "''")}'`
         const transformSql = transformByFMId.get(fm.id)
-        const escapedSrc = srcField.name.replace(/'/g, "''")
+        const escapedSrc = srcField ? srcField.name.replace(/'/g, "''") : ''
 
         let valueExpr: string
-        if (transformSql) {
+        if (isValueAssignment) {
+          if (transformSql) {
+            const wrappedTransform = wrapFieldRefsInJsonb(
+              transformSql.replace(/;+$/, '').trim(),
+              allSrcFieldNames
+            )
+            valueExpr = `(${wrappedTransform})`
+          } else {
+            valueExpr = `NULL`
+          }
+        } else if (transformSql) {
           const wrappedTransform = wrapFieldRefsInJsonb(
             transformSql.replace(/;+$/, '').trim(),
             allSrcFieldNames
           )
-          // Per-field NULL guard: if source is null/empty → null, else apply transform.
-          // This prevents transform expressions that don't handle NULLs from crashing.
           valueExpr = `CASE WHEN (row_data->>'${escapedSrc}') IS NULL OR TRIM(COALESCE(row_data->>'${escapedSrc}', '')) = '' THEN NULL ELSE (${wrappedTransform}) END`
         } else {
           valueExpr = `row_data->>'${escapedSrc}'`
@@ -604,12 +616,14 @@ export async function getStagedDataPreview(
 
   if (!fms || fms.length === 0) return { rows: [], totalRows: 0, stagedFields: [], rowIssues: [], flaggedFields: {}, totalFlaggedRows: 0 }
 
-  const srcIds = fms.map((fm) => fm.source_field_id)
+  const srcIds = fms.map((fm) => fm.source_field_id).filter((id): id is string => id !== null)
   const tgtIds = fms.map((fm) => fm.target_field_id)
   const fmIds = fms.map((fm) => fm.id)
 
   const [{ data: srcFields }, { data: tgtFields }] = await Promise.all([
-    supabase.from('fields').select('id, name').in('id', srcIds),
+    srcIds.length > 0
+      ? supabase.from('fields').select('id, name').in('id', srcIds)
+      : Promise.resolve({ data: [] as { id: string; name: string }[], error: null }),
     supabase.from('fields').select('id, name').in('id', tgtIds),
   ])
 
@@ -618,15 +632,20 @@ export async function getStagedDataPreview(
 
   // targetFieldName → sourceFieldName (for passthrough lookup)
   const fieldMap = new Map<string, string>()
+  // target field names for value assignments (source_field_id is null)
+  const valueAssignmentTargetNames = new Set<string>()
   // fieldMappingId → targetFieldName (for stagedFields computation)
   const tgtNameByFMId = new Map<string, string>()
   for (const fm of fms) {
-    const src = srcNameById.get(fm.source_field_id)
     const tgt = tgtNameById.get(fm.target_field_id)
-    if (src && tgt) {
-      fieldMap.set(tgt, src)
-      tgtNameByFMId.set(fm.id, tgt)
+    if (!tgt) continue
+    if (fm.source_field_id) {
+      const src = srcNameById.get(fm.source_field_id)
+      if (src) fieldMap.set(tgt, src)
+    } else {
+      valueAssignmentTargetNames.add(tgt)
     }
+    tgtNameByFMId.set(fm.id, tgt)
   }
 
   // ── 2. Check whether staging has been run ─────────────────────────────────
@@ -686,8 +705,13 @@ export async function getStagedDataPreview(
       const source = (row.source_row_data ?? {}) as Record<string, unknown>
       const transformed = (row.transformed_row_data ?? {}) as Record<string, unknown>
       const merged: Record<string, unknown> = {}
+      // Regular mapped fields: prefer transformed value, fall back to source passthrough
       for (const [tgt, src] of fieldMap) {
         merged[tgt] = tgt in transformed ? transformed[tgt] : (source[src] ?? null)
+      }
+      // Value assignments (no source field): read from transformed_row_data only
+      for (const tgtName of valueAssignmentTargetNames) {
+        merged[tgtName] = tgtName in transformed ? transformed[tgtName] : null
       }
       return merged
     })
@@ -725,6 +749,10 @@ export async function getStagedDataPreview(
       const merged: Record<string, unknown> = {}
       for (const [tgt, src] of fieldMap) {
         merged[tgt] = source[src] ?? null
+      }
+      // Value assignments have no source — show null in passthrough mode
+      for (const tgtName of valueAssignmentTargetNames) {
+        merged[tgtName] = null
       }
       return merged
     })

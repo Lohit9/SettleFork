@@ -389,16 +389,14 @@ export async function runSourceDataChecks(
       (field.inferred_type ?? '').toLowerCase() === 'date'
 
     if (isDateField) {
-      // Load the profile to get format_issues_count (non-ISO but recognisable date patterns)
-      const { data: fp } = await supabaseAdmin
-        .from('field_profiles')
-        .select('format_issues_count')
-        .eq('field_id', field.id)
-        .maybeSingle()
+      // Non-ISO but parseable date formats (WARNING) — uses live RPC for accurate count
+      // covering MM/DD/YYYY, DD-MM-YYYY, "Mar 15 2024", "15 March 2024", YYYY/MM/DD, etc.
+      const nonIsoDateCount = await rpcCount('dq_non_iso_date_count', {
+        p_table_id: tableId,
+        p_field_name: field.name,
+      })
 
-      const profileFormatIssues = fp?.format_issues_count ?? 0
-
-      if (profileFormatIssues > 0) {
+      if (nonIsoDateCount > 0) {
         issuesToInsert.push(
           makeIssue({
             project_id: projectId,
@@ -407,15 +405,16 @@ export async function runSourceDataChecks(
             stage: 'source',
             severity: 'warning',
             title: fieldTitle,
-            description: `Non-ISO date formats detected in ${profileFormatIssues} records. Mixed formats (MM/DD/YYYY, DD-MM-YY, etc.) found — transform to ISO 8601 (YYYY-MM-DD) before loading.`,
-            affected_records: profileFormatIssues,
+            description: `Non-standard date formats in ${nonIsoDateCount} records — transform to ISO 8601 (YYYY-MM-DD) before loading. Common patterns: MM/DD/YYYY, DD-MM-YY, "Mar 15 2024".`,
+            affected_records: nonIsoDateCount,
             issue_kind: 'non_iso_date',
             detection_source: detectionSource,
           })
         )
       }
 
-      // Completely unrecognisable date strings (blocking — cannot be parsed at load time)
+      // Truly unparseable date strings (BLOCKING) — random text, "N/A", "TBD", etc.
+      // After migration 042, month-name and numeric formats are excluded from this count.
       const invalidDateCount = await rpcCount('dq_invalid_date_string_count', {
         p_table_id: tableId,
         p_field_name: field.name,
@@ -429,7 +428,7 @@ export async function runSourceDataChecks(
             stage: 'source',
             severity: 'blocking',
             title: fieldTitle,
-            description: `Invalid date strings in ${invalidDateCount} records — values are not recognisable as any date format and will fail on load.`,
+            description: `Unparseable date values in ${invalidDateCount} records — not recognisable as any date format and will fail on load.`,
             affected_records: Number(invalidDateCount),
             issue_kind: 'invalid_date_string',
             detection_source: detectionSource,

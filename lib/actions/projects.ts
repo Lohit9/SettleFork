@@ -159,7 +159,7 @@ export async function getProjectsWithStats(): Promise<ProjectWithStats[]> {
           .select('id, table_mapping_id, status, is_contributing, source_field_id, target_field_id, needs_transformation')
           .in('table_mapping_id', tableMappingIds)
       : Promise.resolve({
-          data: [] as { id: string; table_mapping_id: string; status: string; is_contributing: boolean; source_field_id: string; target_field_id: string; needs_transformation: boolean | null }[],
+          data: [] as { id: string; table_mapping_id: string; status: string; is_contributing: boolean; source_field_id: string | null; target_field_id: string; needs_transformation: boolean | null }[],
           error: null,
         }),
     allTargetTableIds.length > 0
@@ -291,7 +291,7 @@ export async function getProjectsWithStats(): Promise<ProjectWithStats[]> {
     if (fm.status !== 'rejected') {
       b.mappedFieldCount++
     }
-    if (fm.status !== 'rejected') b.mappedSourceFieldIds.add(fm.source_field_id)
+    if (fm.status !== 'rejected' && fm.source_field_id) b.mappedSourceFieldIds.add(fm.source_field_id)
     if (!fm.is_contributing) {
       b.primaryMappingCount++
       if (fm.status !== 'approved') b.allPrimaryApproved = false

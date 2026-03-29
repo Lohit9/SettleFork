@@ -110,11 +110,17 @@ export function countFormatIssues(
 
   const dateKeywords = ['date', 'created', 'updated', 'modified', 'dob', 'birth', 'start', 'end', 'expir']
   if (dateKeywords.some((k) => lowerName.includes(k))) {
-    return values.filter(
-      (v) =>
-        !/^\d{4}-\d{2}-\d{2}/.test(v) &&
-        /\d{1,2}[\/\-]\d{1,2}[\/\-]\d{2,4}/.test(v)
-    ).length
+    return values.filter((v) => {
+      const trimmed = v.trim()
+      if (/^\d{4}-\d{2}-\d{2}/.test(trimmed)) return false  // already ISO — no issue
+      // Numeric slash/dash/dot (MM/DD/YYYY, DD-MM-YYYY, etc.)
+      if (/\d{1,2}[\/\-\.]\d{1,2}[\/\-\.]\d{2,4}/.test(trimmed)) return true
+      // YYYY/MM/DD or YYYY.MM.DD
+      if (/^\d{4}[\/\.]\d{1,2}[\/\.]\d{1,2}/.test(trimmed)) return true
+      // Month name abbreviations or full names (Mar 15, 2024 / 15 March 2024 / etc.)
+      if (/\b(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec|january|february|march|april|june|july|august|september|october|november|december)\b/i.test(trimmed)) return true
+      return false
+    }).length
   }
 
   if (lowerName.includes('email') || lowerName.includes('e_mail')) {

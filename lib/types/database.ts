@@ -95,7 +95,7 @@ export interface TableMapping {
 export interface FieldMapping {
   id: string
   table_mapping_id: string
-  source_field_id: string
+  source_field_id: string | null
   target_field_id: string
   confidence: number | null
   status: 'needs_review' | 'approved' | 'rejected'
