@@ -9,6 +9,8 @@ import { addValidationRule, addValidationRuleFromNL, executeCustomRules, deleteV
 import { generateManualFix, applyManualFix, previewManualFix } from '@/lib/actions/manual-fix'
 import { computeReadinessScore } from '@/lib/quality/readiness-score'
 import { stageAllData } from '@/lib/actions/staging'
+import { getVerifiedFixes } from '@/lib/quality/fix-reconciliation'
+import type { VerifiedFix } from '@/lib/quality/fix-reconciliation'
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -958,6 +960,71 @@ function AddRuleModal({
   )
 }
 
+// ── Verified Fixes Section ────────────────────────────────────────────────────
+// Shown in the issue list when filterStatus is 'fixed' or 'all'.
+// Displays fix_history entries whose quality_issue_id was set to NULL by a
+// rescan — meaning the original issue row was deleted (successfully resolved).
+
+function VerifiedFixesSection({
+  fixes,
+  tableNameById,
+}: {
+  fixes: VerifiedFix[]
+  tableNameById: Map<string, string>
+}) {
+  const [expanded, setExpanded] = useState(true)
+
+  return (
+    <div className="bg-white rounded-xl border border-blue-200 shadow-sm overflow-hidden">
+      {/* Header */}
+      <button
+        onClick={() => setExpanded(e => !e)}
+        className="w-full flex items-center justify-between gap-3 px-5 py-3.5 hover:bg-blue-50/40 transition-colors text-left"
+      >
+        <div className="flex items-center gap-2.5">
+          <span className="w-2 h-2 rounded-full bg-blue-500 flex-shrink-0" />
+          <span className="text-sm font-semibold text-blue-800">
+            Verified Fixed ({fixes.length})
+          </span>
+          <span className="text-xs text-blue-500 font-normal">
+            — confirmed by rescan
+          </span>
+        </div>
+        <span className="text-xs text-gray-400">{expanded ? '▼' : '▶'}</span>
+      </button>
+
+      {expanded && (
+        <div className="border-t border-blue-100 divide-y divide-blue-50">
+          {fixes.map((fix) => {
+            const tableName = tableNameById.get(fix.tableId) ?? fix.tableId
+            return (
+              <div key={fix.id} className="flex items-start gap-3 px-5 py-3 bg-blue-50/30">
+                <span className="text-blue-500 flex-shrink-0 mt-0.5 text-sm">✓</span>
+                <div className="flex-1 min-w-0">
+                  <p className="text-sm font-medium text-blue-900 truncate">
+                    {tableName}
+                  </p>
+                  <p className="text-xs text-blue-700 mt-0.5 line-clamp-2">
+                    {fix.fixDescription}
+                  </p>
+                  <p className="text-xs text-gray-400 mt-0.5">
+                    {fix.affectedRowCount.toLocaleString()} row{fix.affectedRowCount !== 1 ? 's' : ''} fixed
+                    {' · '}
+                    {new Date(fix.appliedAt).toLocaleDateString()}
+                  </p>
+                </div>
+                <span className="flex-shrink-0 text-xs font-medium text-blue-600 bg-blue-100 border border-blue-200 px-2 py-0.5 rounded-full whitespace-nowrap">
+                  Verified fixed
+                </span>
+              </div>
+            )
+          })}
+        </div>
+      )}
+    </div>
+  )
+}
+
 // ── Fix History Panel ─────────────────────────────────────────────────────────
 
 function FixHistoryPanel({
@@ -1862,7 +1929,26 @@ export default function DataQualityContent({
   const hasActiveFilters =
     filterStage !== 'all' || filterSeverity !== 'all' || filterTableId !== 'all' || filterFieldId !== 'all' || filterStatus !== 'open'
 
-  const totalVisibleIssues = filteredIssues.length + filteredResolvedIssues.length
+  // ── Verified fixes (fix_history reconciliation) ───────────────────────────
+  // fix_history entries where quality_issue_id IS NULL mean the original issue
+  // row was deleted by a rescan — i.e., the fix was applied and then the data
+  // was rescanned.  These no longer appear in quality_issues, so they're
+  // invisible in the normal issue list.  We surface them separately.
+  const verifiedFixes = useMemo<VerifiedFix[]>(
+    () => getVerifiedFixes(fixHistory),
+    [fixHistory]
+  )
+
+  // Apply the table filter to verified fixes (no stage/severity applicable)
+  const filteredVerifiedFixes = useMemo<VerifiedFix[]>(() => {
+    if (filterTableId !== 'all') {
+      return verifiedFixes.filter((f) => f.tableId === filterTableId)
+    }
+    return verifiedFixes
+  }, [verifiedFixes, filterTableId])
+
+  const totalVisibleIssues = filteredIssues.length + filteredResolvedIssues.length +
+    (filterStatus === 'fixed' || filterStatus === 'all' ? filteredVerifiedFixes.length : 0)
 
   function resetFilters() {
     setFilterStage('all')
@@ -2093,14 +2179,14 @@ export default function DataQualityContent({
                 <div className="flex items-center justify-around gap-4">
                   <div className="flex flex-col items-center gap-0.5">
                     <span className="text-3xl font-bold text-red-600 tabular-nums">
-                      {readiness.blocking_count}
+                      {sourceBlocking + targetBlocking}
                     </span>
                     <p className="text-sm font-semibold text-gray-700">Blocking</p>
                   </div>
                   <div className="w-px h-10 bg-gray-200 shrink-0" />
                   <div className="flex flex-col items-center gap-0.5">
                     <span className="text-3xl font-bold text-amber-500 tabular-nums">
-                      {readiness.warning_count}
+                      {sourceWarning + targetWarning}
                     </span>
                     <p className="text-sm font-semibold text-gray-700">Warnings</p>
                   </div>
@@ -2285,10 +2371,15 @@ export default function DataQualityContent({
 
               <div className="ml-auto flex items-center gap-3">
                 <span className="text-sm text-gray-500">
-                  Showing <span className="font-medium text-gray-700">{totalVisibleIssues}</span> issues
+                  Showing <span className="font-medium text-gray-700">{totalVisibleIssues}</span> items
                   {filteredResolvedIssues.length > 0 && (
                     <span className="text-green-600 ml-1">
-                      ({filteredResolvedIssues.length} resolved by transform)
+                      · {filteredResolvedIssues.length} resolved by transform
+                    </span>
+                  )}
+                  {(filterStatus === 'fixed' || filterStatus === 'all') && filteredVerifiedFixes.length > 0 && (
+                    <span className="text-blue-600 ml-1">
+                      · {filteredVerifiedFixes.length} verified fixed
                     </span>
                   )}
                 </span>
@@ -2304,27 +2395,6 @@ export default function DataQualityContent({
             </div>
           </div>
 
-          {/* Resolved issues hint — visible only when viewing Open filter and resolved issues exist */}
-          {filterStatus === 'open' && (issues.filter(i => i.status === 'fixed').length > 0 || issues.filter(i => i.status === 'accepted_risk').length > 0) && (
-            <div className="flex items-center gap-1.5 text-xs text-gray-400 px-1">
-              {issues.filter(i => i.status === 'fixed').length > 0 && (
-                <span>{issues.filter(i => i.status === 'fixed').length} fixed</span>
-              )}
-              {issues.filter(i => i.status === 'fixed').length > 0 && issues.filter(i => i.status === 'accepted_risk').length > 0 && (
-                <span>·</span>
-              )}
-              {issues.filter(i => i.status === 'accepted_risk').length > 0 && (
-                <span>{issues.filter(i => i.status === 'accepted_risk').length} accepted risk</span>
-              )}
-              <span>·</span>
-              <button
-                onClick={() => setFilterStatus('all')}
-                className="text-indigo-500 hover:text-indigo-700 underline"
-              >
-                show all
-              </button>
-            </div>
-          )}
 
           {/* ── Target-Ready empty state (contextual) ── */}
           {filterStage === 'target_ready' && targetReadyOpen.length === 0 && (
@@ -2338,7 +2408,8 @@ export default function DataQualityContent({
           )}
 
           {/* ── Issue List ── */}
-          {filteredIssues.length === 0 && filteredResolvedIssues.length === 0 ? (
+          {filteredIssues.length === 0 && filteredResolvedIssues.length === 0 &&
+           (filterStatus !== 'fixed' && filterStatus !== 'all' || filteredVerifiedFixes.length === 0) ? (
             <div className="bg-white rounded-xl border border-gray-200 shadow-sm p-10 text-center">
               <div className="text-3xl mb-3">✓</div>
               {hasActiveFilters ? (
@@ -2428,6 +2499,12 @@ export default function DataQualityContent({
                 </div>
               )}
             </div>
+          )}
+
+          {/* ── Verified Fixes section (post-rescan reconciliation) ── */}
+          {/* Show when filterStatus is 'fixed' or 'all' and there are verified fixes */}
+          {(filterStatus === 'fixed' || filterStatus === 'all') && filteredVerifiedFixes.length > 0 && (
+            <VerifiedFixesSection fixes={filteredVerifiedFixes} tableNameById={tableNameById} />
           )}
 
           {/* Proceed to Mapping CTA */}
