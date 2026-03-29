@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useMemo } from 'react'
 import { useRouter } from 'next/navigation'
-import { getDataPreview, getTargetFieldConstraints } from '@/lib/actions/data-overview'
+import { getDataPreview, getTargetFieldConstraints, getStagedParentValues } from '@/lib/actions/data-overview'
 import { getStagedMappings, getStagedDataPreview, checkStagingFreshness, stageAllData } from '@/lib/actions/staging'
 import type { TableOption, TargetFieldConstraint } from '@/lib/actions/data-overview'
 import type { StagedMappingOption } from '@/lib/actions/staging'
@@ -45,6 +45,12 @@ export default function DataPreview({ projectId, tables }: DataPreviewProps) {
   const [stagedFields, setStagedFields] = useState<string[]>([])
   /** Target field constraints for live constraint checking in the staged view */
   const [targetFieldConstraints, setTargetFieldConstraints] = useState<TargetFieldConstraint[]>([])
+  /**
+   * Valid FK parent values keyed by target field name.
+   * Only populated for FK fields whose parent table has been staged.
+   * If a field name is missing from this map, FK checking is skipped for it.
+   */
+  const [validFKValues, setValidFKValues] = useState<Map<string, Set<string>>>(new Map())
   /** Staleness info for the selected mapping */
   const [stalenessInfo, setStalenessInfo] = useState<{
     isStale: boolean
@@ -125,6 +131,47 @@ export default function DataPreview({ projectId, tables }: DataPreviewProps) {
       .then(setTargetFieldConstraints)
       .catch(() => setTargetFieldConstraints([]))
   }, [selectedMappingId, stagedMappings])
+
+  // Pre-load valid FK parent values for each FK field in the current target table.
+  // This runs once per mapping selection and feeds the DataTable's FK integrity check.
+  useEffect(() => {
+    const fkFields = targetFieldConstraints.filter(
+      (f) => f.is_foreign_key && f.fk_reference
+    )
+
+    if (fkFields.length === 0) {
+      setValidFKValues(new Map())
+      return
+    }
+
+    async function loadFKValues() {
+      const newMap = new Map<string, Set<string>>()
+
+      await Promise.all(
+        fkFields.map(async (field) => {
+          // fk_reference format: "TABLE_NAME.field_name"
+          const [parentTableName, parentFieldName] = (field.fk_reference ?? '').split('.')
+          if (!parentTableName || !parentFieldName) return
+
+          const values = await getStagedParentValues(
+            projectId,
+            parentTableName,
+            parentFieldName
+          ).catch(() => [] as string[])
+
+          // Only add to map if we actually got data — empty means parent not yet staged
+          if (values.length > 0) {
+            newMap.set(field.name, new Set(values))
+          }
+        })
+      )
+
+      setValidFKValues(newMap)
+    }
+
+    loadFKValues()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [targetFieldConstraints, projectId])
 
   async function fetchStagedPage(mappingId: string, p: number) {
     setStagedLoading(true)
@@ -356,6 +403,7 @@ export default function DataPreview({ projectId, tables }: DataPreviewProps) {
                 badge="Target format"
                 stagedFields={stagedFields}
                 targetFields={targetFieldConstraints}
+                validFKValues={validFKValues}
                 onNavigateToValidate={() => {
                   const params = new URLSearchParams({
                     stage: 'target-ready',
@@ -376,6 +424,12 @@ export default function DataPreview({ projectId, tables }: DataPreviewProps) {
 
 // ── Shared DataTable sub-component ────────────────────────────────────────────
 
+/** Parse max character length from VARCHAR(N) or CHAR(N) data type strings. */
+function getMaxLength(dataType: string): number | null {
+  const match = dataType.match(/(?:VAR)?CHAR\s*\(\s*(\d+)\s*\)/i)
+  return match ? parseInt(match[1], 10) : null
+}
+
 function DataTable({
   columns,
   rows,
@@ -390,6 +444,7 @@ function DataTable({
   badge,
   stagedFields,
   targetFields,
+  validFKValues,
   onNavigateToValidate,
 }: {
   columns: string[]
@@ -411,10 +466,16 @@ function DataTable({
   stagedFields?: string[]
   /**
    * Target schema field constraints. When provided, cells are checked client-side
-   * against NOT NULL and CHECK constraints. Only used in the staged/transformed view.
+   * against NOT NULL, length, and CHECK constraints. Only used in the staged/transformed view.
    * Source view never receives this prop.
    */
   targetFields?: TargetFieldConstraint[]
+  /**
+   * Valid FK parent values keyed by target field name.
+   * Only populated for FK fields whose parent table has been staged.
+   * If a field name is absent, FK checking is skipped for it.
+   */
+  validFKValues?: Map<string, Set<string>>
   onNavigateToValidate?: () => void
 }) {
   const stagedSet = stagedFields !== undefined ? new Set(stagedFields) : null
@@ -422,7 +483,13 @@ function DataTable({
 
   // ── Client-side constraint checking ───────────────────────────────────────
   // Runs only when targetFields is provided (transformed view).
-  // For each visible row x column, produces a violation message or undefined.
+  // Evaluation order per cell:
+  //   1. NOT NULL check
+  //   2. VARCHAR/CHAR length check
+  //   3. CHECK in_list
+  //   4. CHECK regex
+  //   5. CHECK range
+  //   6. FK referential integrity
   const cellFlags = useMemo<Map<string, string>[]>(() => {
     if (!targetFields || targetFields.length === 0) return rows.map(() => new Map())
 
@@ -436,40 +503,77 @@ function DataTable({
         if (!field) continue
 
         const rawVal = row[col]
-        const strVal = rawVal == null ? '' : String(rawVal).trim()
+        // Normalise to a trimmed string or null
+        const strVal = rawVal == null ? null : String(rawVal).trim()
+        const isEmpty = strVal === null || strVal === ''
 
-        // NOT NULL violation — skip auto-generated PKs as they may legitimately be absent
-        if (!field.is_nullable && !field.is_primary_key && (rawVal == null || strVal === '')) {
+        // 1. NOT NULL — skip auto-generated PKs which may legitimately be absent
+        if (!field.is_nullable && !field.is_primary_key && isEmpty) {
           flags.set(col, `${col} is NOT NULL in target but value is empty`)
           continue
         }
 
-        // Skip constraint checks for empty values or fields without constraints
-        if (!strVal || !field.check_constraint) continue
+        // All further checks only apply when a value is present
+        if (isEmpty) continue
 
-        const cc = field.check_constraint
+        // 2. VARCHAR / CHAR length
+        const maxLen = getMaxLength(field.data_type)
+        if (maxLen !== null && strVal!.length > maxLen) {
+          flags.set(
+            col,
+            `Value is ${strVal!.length} chars, max allowed is ${maxLen} (${field.data_type})`
+          )
+          continue
+        }
 
-        if (cc.type === 'in_list') {
-          if (!cc.allowedValues.includes(strVal)) {
-            const preview = cc.allowedValues.slice(0, 5).join(', ')
-            const more = cc.allowedValues.length > 5 ? ` (+${cc.allowedValues.length - 5} more)` : ''
-            flags.set(col, `"${strVal}" not in allowed values: ${preview}${more}`)
-          }
-        } else if (cc.type === 'regex' && cc.pattern) {
-          try {
-            if (!new RegExp(cc.pattern).test(strVal)) {
-              flags.set(col, `"${strVal}" doesn't match pattern ${cc.pattern}`)
+        // 3–5. CHECK constraints
+        if (field.check_constraint) {
+          const cc = field.check_constraint
+
+          if (cc.type === 'in_list') {
+            if (!cc.allowedValues.includes(strVal!)) {
+              const preview = cc.allowedValues.slice(0, 5).join(', ')
+              const more = cc.allowedValues.length > 5 ? ` (+${cc.allowedValues.length - 5} more)` : ''
+              flags.set(col, `"${strVal}" not in allowed values: ${preview}${more}`)
             }
-          } catch {
-            // Invalid regex pattern — skip
+            continue
           }
-        } else if (cc.type === 'range') {
-          const numVal = parseFloat(strVal)
-          if (!isNaN(numVal)) {
-            if (cc.min !== undefined && numVal < cc.min) {
-              flags.set(col, `Value ${numVal} is below minimum ${cc.min}`)
-            } else if (cc.max !== undefined && numVal > cc.max) {
-              flags.set(col, `Value ${numVal} exceeds maximum ${cc.max}`)
+
+          if (cc.type === 'regex' && cc.pattern) {
+            try {
+              if (!new RegExp(cc.pattern).test(strVal!)) {
+                flags.set(col, `"${strVal}" doesn't match pattern ${cc.pattern}`)
+              }
+            } catch {
+              // Invalid regex pattern — skip
+            }
+            continue
+          }
+
+          if (cc.type === 'range') {
+            const numVal = parseFloat(strVal!)
+            if (!isNaN(numVal)) {
+              if (cc.min !== undefined && numVal < cc.min) {
+                flags.set(col, `Value ${numVal} is below minimum ${cc.min}`)
+              } else if (cc.max !== undefined && numVal > cc.max) {
+                flags.set(col, `Value ${numVal} exceeds maximum ${cc.max}`)
+              }
+            }
+            continue
+          }
+        }
+
+        // 6. FK referential integrity — only when parent data is available
+        if (validFKValues) {
+          const validSet = validFKValues.get(col)
+          if (validSet) {
+            // Trim both sides to handle CHAR-padded values
+            const trimmed = strVal!.trim()
+            const matched =
+              validSet.has(trimmed) ||
+              [...validSet].some((v) => v.trim() === trimmed)
+            if (!matched) {
+              flags.set(col, `Orphaned FK: "${trimmed}" not found in parent table`)
             }
           }
         }
@@ -477,7 +581,7 @@ function DataTable({
 
       return flags
     })
-  }, [rows, columns, targetFields])
+  }, [rows, columns, targetFields, validFKValues])
 
   // Derive per-column flagged counts and total flagged rows for the current page
   const constraintFlaggedFields = useMemo<Record<string, number>>(() => {
