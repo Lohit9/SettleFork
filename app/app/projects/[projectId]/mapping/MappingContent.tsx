@@ -1401,7 +1401,7 @@ function TableMappingCard({
                 if (rendered.has(fm.id)) return null
                 rendered.add(fm.id)
 
-                if (!fm.is_contributing && oneToManySrcIds.has(fm.source_field_id)) {
+                if (!fm.is_contributing && fm.source_field_id && oneToManySrcIds.has(fm.source_field_id)) {
                   const groupRows = visibleFMs.filter(
                     (f) => f.source_field_id === fm.source_field_id && !f.is_contributing
                   )
