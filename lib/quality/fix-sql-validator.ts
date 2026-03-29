@@ -16,9 +16,25 @@ const SYSTEM_TABLE_PATTERN = /(pg_catalog|pg_class|information_schema|auth\.|sto
 const APP_TABLE_PATTERN =
   /\b(projects|datasets|tables|fields|field_profiles|schema_documents|table_mappings|field_mappings|quality_issues|validation_rules|fix_history)\b/i
 const COMMENT_PATTERN = /(--|\/\*)/
-// LIMIT/FETCH/OFFSET in fix SQL could silently cap rows updated to less than the full set.
-// Fix operations must always apply to every matching row — no partial runs allowed.
+// LIMIT/FETCH/OFFSET on the OUTER statement could silently cap rows updated to less than the
+// full set. Fix operations must always apply to every matching row — no partial runs allowed.
+// Note: LIMIT inside subqueries is fine (e.g. LIMIT 1 to look up a reference row), so we
+// strip subquery content before checking.
 const LIMIT_PATTERN = /\b(LIMIT|FETCH\s+FIRST|FETCH\s+NEXT|OFFSET)\b/i
+
+/** Remove all parenthesised subquery content from a SQL string so that LIMIT checks only
+ *  match the outer statement, not LIMIT clauses inside subqueries or CTEs. */
+function stripSubqueries(sql: string): string {
+  let result = ''
+  let depth = 0
+  for (let i = 0; i < sql.length; i++) {
+    const ch = sql[i]
+    if (ch === '(') { depth++; continue }
+    if (ch === ')') { if (depth > 0) depth--; continue }
+    if (depth === 0) result += ch
+  }
+  return result
+}
 
 export function validateFixSQL(sql: string, tableId: string): FixSQLValidationResult {
   if (!sql || typeof sql !== 'string') {
@@ -78,13 +94,16 @@ export function validateFixSQL(sql: string, tableId: string): FixSQLValidationRe
     return { safe: false, reason: 'SQL comments are not allowed in fix SQL' }
   }
 
-  // No LIMIT/FETCH/OFFSET — fix SQL must apply to every matching row, never a partial subset
-  if (LIMIT_PATTERN.test(trimmed)) {
+  // No LIMIT/FETCH/OFFSET on the outer statement — fix must apply to every matching row.
+  // Strip string literals and subquery parens first so LIMIT inside a subquery (e.g.
+  // "WHERE table_id = (SELECT table_id FROM data_rows WHERE ... LIMIT 1)") is not flagged.
+  const outerSql = stripSubqueries(trimmed.replace(/'[^']*'/g, "''"))
+  if (LIMIT_PATTERN.test(outerSql)) {
     return {
       safe: false,
       reason:
-        'Fix SQL must not contain LIMIT, FETCH, or OFFSET — fix operations must apply to all matching rows. ' +
-        'Remove the LIMIT clause and use a plain WHERE condition instead.',
+        'Fix SQL must not contain LIMIT, FETCH, or OFFSET on the outer UPDATE/DELETE — fix operations must apply to all matching rows. ' +
+        'Move LIMIT inside a subquery if you need to look up a reference row.',
     }
   }
 
