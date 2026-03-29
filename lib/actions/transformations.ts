@@ -1271,7 +1271,7 @@ export async function previewTransformDistinct(
     if (bv && (bv as { _error?: boolean })._error) {
       return { before: null, beforeValues: {} as Record<string, string | null>, after: r.after_value != null ? String(r.after_value) : null, count: 0 }
     }
-    const primaryVal = bv ? (bv[srcField.name] ?? null) : null
+    const primaryVal = bv && srcField ? (bv[srcField.name] ?? null) : null
     return {
       before: primaryVal != null ? String(primaryVal) : null,
       beforeValues: (bv ?? {}) as Record<string, string | null>,
