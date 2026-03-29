@@ -151,8 +151,9 @@ export default function OutputsContent({ projectId, initialData }: Props) {
     return { status: 'idle', sqlContent: null, signedUrl: null, version: null, generatedAt: null, error: null }
   })
 
-  // Decisions log
-  const [showAllDecisions, setShowAllDecisions] = useState(false)
+  // Decisions log drawer
+  const [showDecisionsDrawer, setShowDecisionsDrawer] = useState(false)
+  const [decisionsTypeFilter, setDecisionsTypeFilter] = useState<string>('all')
 
   // Toast
   const [toast, setToast] = useState<ToastState | null>(null)
@@ -309,7 +310,10 @@ export default function OutputsContent({ projectId, initialData }: Props) {
   // ── Computed values ─────────────────────────────────────────────────────
 
   const { phases, metrics, decisions, outstanding, existingOutputs } = data
-  const displayedDecisions = showAllDecisions ? decisions : decisions.slice(0, 8)
+  const previewDecisions = decisions.slice(0, 8)
+  const filteredDecisions = decisionsTypeFilter === 'all'
+    ? decisions
+    : decisions.filter((d) => d.type === decisionsTypeFilter)
   const hasOutstanding = outstanding.unmappedSourceFields > 0 || outstanding.blockingIssues > 0 || outstanding.fieldsNeedingTransformWork > 0 || outstanding.untestedTransforms > 0 || outstanding.testedTransforms > 0
   const canGenerateGold = data.hasMappings && data.hasSourceData
 
@@ -433,7 +437,7 @@ export default function OutputsContent({ projectId, initialData }: Props) {
                   <span className="text-xs text-gray-400">{data.totalDecisions} total</span>
                 </div>
                 <div className="space-y-2">
-                  {displayedDecisions.map((entry) => (
+                  {previewDecisions.map((entry) => (
                     <div key={entry.id} className="flex items-start gap-3">
                       <div className={`w-2 h-2 rounded-full mt-1.5 flex-shrink-0 ${decisionDotColor(entry.type)}`} />
                       <div className="flex-1 min-w-0">
@@ -446,11 +450,80 @@ export default function OutputsContent({ projectId, initialData }: Props) {
                 {decisions.length > 8 && (
                   <button
                     className="mt-3 text-xs text-indigo-600 hover:text-indigo-700 font-medium"
-                    onClick={() => setShowAllDecisions((v) => !v)}
+                    onClick={() => setShowDecisionsDrawer(true)}
                   >
-                    {showAllDecisions ? 'Show less' : `Show all ${decisions.length} decisions`}
+                    View full log ({decisions.length}) →
                   </button>
                 )}
+              </div>
+            )}
+
+            {/* Decisions log drawer */}
+            {showDecisionsDrawer && (
+              <div className="fixed inset-0 z-40 flex items-center justify-end bg-black/30 p-4">
+                <div className="bg-white rounded-xl shadow-2xl w-full max-w-lg h-full max-h-[90vh] flex flex-col">
+                  {/* Drawer header */}
+                  <div className="flex items-center justify-between px-5 py-4 border-b border-gray-100 flex-shrink-0">
+                    <div>
+                      <h3 className="font-semibold text-gray-900">Decisions & Actions Log</h3>
+                      <p className="text-xs text-gray-400 mt-0.5">{data.totalDecisions} total events</p>
+                    </div>
+                    <button
+                      onClick={() => setShowDecisionsDrawer(false)}
+                      className="text-gray-400 hover:text-gray-600 text-xl leading-none"
+                    >
+                      ×
+                    </button>
+                  </div>
+
+                  {/* Type filter tabs */}
+                  <div className="flex items-center gap-1 px-5 py-3 border-b border-gray-100 flex-shrink-0 flex-wrap">
+                    {[
+                      { key: 'all', label: 'All' },
+                      { key: 'system', label: 'Scans & Staging' },
+                      { key: 'fix', label: 'Fixes' },
+                      { key: 'transform', label: 'Transforms' },
+                      { key: 'mapping', label: 'Mappings' },
+                      { key: 'data', label: 'Data' },
+                      { key: 'validation', label: 'Validation' },
+                    ].filter(tab => tab.key === 'all' || decisions.some(d => d.type === tab.key))
+                      .map((tab) => (
+                        <button
+                          key={tab.key}
+                          onClick={() => setDecisionsTypeFilter(tab.key)}
+                          className={`px-2.5 py-1 rounded-full text-xs font-medium transition-colors ${
+                            decisionsTypeFilter === tab.key
+                              ? 'bg-indigo-600 text-white'
+                              : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
+                          }`}
+                        >
+                          {tab.label}
+                          {tab.key !== 'all' && (
+                            <span className="ml-1 opacity-70">
+                              {decisions.filter(d => d.type === tab.key).length}
+                            </span>
+                          )}
+                        </button>
+                      ))}
+                  </div>
+
+                  {/* Scrollable list */}
+                  <div className="flex-1 overflow-y-auto px-5 py-3 space-y-2.5">
+                    {filteredDecisions.length === 0 ? (
+                      <p className="text-sm text-gray-400 text-center py-8">No events of this type.</p>
+                    ) : filteredDecisions.map((entry) => (
+                      <div key={entry.id} className="flex items-start gap-3">
+                        <div className={`w-2 h-2 rounded-full mt-1.5 flex-shrink-0 ${decisionDotColor(entry.type)}`} />
+                        <div className="flex-1 min-w-0">
+                          <p className="text-xs text-gray-700">{entry.label}</p>
+                        </div>
+                        <span className="text-[10px] text-gray-400 flex-shrink-0 whitespace-nowrap">
+                          {fmtDateTime(entry.timestamp)}
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
               </div>
             )}
 
