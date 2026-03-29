@@ -7,6 +7,7 @@ import { checkAIRateLimit } from '@/lib/ai/rate-limit'
 import { buildAIContext, formatFieldForPrompt, formatDocumentsForPrompt } from '@/lib/ai/context-builder'
 import { fieldNeedsTransform, wrapFieldRefsInJsonb } from '@/lib/utils/transform-helpers'
 import { logActivity } from '@/lib/actions/activity-log'
+import { revalidatePath } from 'next/cache'
 import type { Transformation } from '@/lib/types/database'
 
 export { fieldNeedsTransform, wrapFieldRefsInJsonb }
@@ -1434,4 +1435,41 @@ ${ctx.intelligence_context ? ctx.intelligence_context + '\n\n' : ''}Suggest a tr
   }
 
   return { success: true, suggestion: suggestion.trim() }
+}
+
+// ── Dismiss / reinstate needs_transformation ──────────────────────────────────
+
+/**
+ * Marks a field mapping as NOT needing transformation.
+ * Used when the AI incorrectly flagged a direct-passthrough field.
+ * Does NOT delete any existing transformation record.
+ */
+export async function dismissTransformNeeded(
+  projectId: string,
+  fieldMappingId: string,
+): Promise<void> {
+  const supabase = await createClient()
+  const { error } = await supabase
+    .from('field_mappings')
+    .update({ needs_transformation: false })
+    .eq('id', fieldMappingId)
+  if (error) throw new Error(`Failed to dismiss transform: ${error.message}`)
+  revalidatePath(`/app/projects/${projectId}`, 'layout')
+}
+
+/**
+ * Reinstates a field mapping as needing transformation.
+ * Used to undo a previous dismissal.
+ */
+export async function reinstateTransformNeeded(
+  projectId: string,
+  fieldMappingId: string,
+): Promise<void> {
+  const supabase = await createClient()
+  const { error } = await supabase
+    .from('field_mappings')
+    .update({ needs_transformation: true })
+    .eq('id', fieldMappingId)
+  if (error) throw new Error(`Failed to reinstate transform: ${error.message}`)
+  revalidatePath(`/app/projects/${projectId}`, 'layout')
 }

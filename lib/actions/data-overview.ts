@@ -262,6 +262,32 @@ export async function getFieldProfiles(tableId: string): Promise<ProfilingData |
   }
 }
 
+// ─── Target field constraints for staged-data preview ────────────────────────
+
+export interface TargetFieldConstraint {
+  name: string
+  is_nullable: boolean
+  is_primary_key: boolean
+  check_constraint: CheckConstraint | null
+}
+
+export async function getTargetFieldConstraints(tableId: string): Promise<TargetFieldConstraint[]> {
+  const supabase = await createClient()
+
+  const { data: fields } = await supabase
+    .from('fields')
+    .select('name, is_nullable, is_primary_key, check_constraint, ordinal_position')
+    .eq('table_id', tableId)
+    .order('ordinal_position', { ascending: true })
+
+  return (fields ?? []).map((f) => ({
+    name: f.name,
+    is_nullable: f.is_nullable,
+    is_primary_key: f.is_primary_key,
+    check_constraint: (f.check_constraint as CheckConstraint | null) ?? null,
+  }))
+}
+
 // ─── Schema context for AI (includes sample values from profiles) ─────────────
 
 export interface FieldWithSamples {

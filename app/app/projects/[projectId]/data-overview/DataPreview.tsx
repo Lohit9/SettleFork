@@ -1,11 +1,11 @@
 'use client'
 
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useMemo } from 'react'
 import { useRouter } from 'next/navigation'
-import { getDataPreview } from '@/lib/actions/data-overview'
+import { getDataPreview, getTargetFieldConstraints } from '@/lib/actions/data-overview'
 import { getStagedMappings, getStagedDataPreview, checkStagingFreshness, stageAllData } from '@/lib/actions/staging'
-import type { TableOption } from '@/lib/actions/data-overview'
-import type { StagedMappingOption, RowIssue } from '@/lib/actions/staging'
+import type { TableOption, TargetFieldConstraint } from '@/lib/actions/data-overview'
+import type { StagedMappingOption } from '@/lib/actions/staging'
 import { AlertTriangle } from '@/components/icons'
 
 interface DataPreviewProps {
@@ -43,12 +43,8 @@ export default function DataPreview({ projectId, tables }: DataPreviewProps) {
   const [stagedError, setStagedError] = useState<string | null>(null)
   /** Target field names that have an applied transformation (from transformations table) */
   const [stagedFields, setStagedFields] = useState<string[]>([])
-  /** Per-row issue arrays for the current page (parallel to stagedRows) */
-  const [rowIssues, setRowIssues] = useState<RowIssue[][]>([])
-  /** Issue count per target field across ALL staged rows (not just current page) */
-  const [flaggedFields, setFlaggedFields] = useState<Record<string, number>>({})
-  /** Total rows with at least one issue across the entire mapping */
-  const [totalFlaggedRowsAll, setTotalFlaggedRowsAll] = useState(0)
+  /** Target field constraints for live constraint checking in the staged view */
+  const [targetFieldConstraints, setTargetFieldConstraints] = useState<TargetFieldConstraint[]>([])
   /** Staleness info for the selected mapping */
   const [stalenessInfo, setStalenessInfo] = useState<{
     isStale: boolean
@@ -107,11 +103,28 @@ export default function DataPreview({ projectId, tables }: DataPreviewProps) {
       setStagedPage(1)
       setStalenessInfo(null)
       fetchStagedPage(selectedMappingId, 1)
-      // Check staleness for this mapping in parallel
       checkStagingFreshness(selectedMappingId).then(setStalenessInfo).catch(() => {})
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedMappingId, viewMode])
+
+  // Fetch target field constraints whenever the selected mapping or staged mappings change.
+  // This runs client-side: once we know the targetTableId for the selected mapping we
+  // pull the field-level nullability and CHECK constraint metadata for the staged view.
+  useEffect(() => {
+    if (!selectedMappingId || !stagedMappings.length) {
+      setTargetFieldConstraints([])
+      return
+    }
+    const mapping = stagedMappings.find((m) => m.tableMappingId === selectedMappingId)
+    if (!mapping?.targetTableId) {
+      setTargetFieldConstraints([])
+      return
+    }
+    getTargetFieldConstraints(mapping.targetTableId)
+      .then(setTargetFieldConstraints)
+      .catch(() => setTargetFieldConstraints([]))
+  }, [selectedMappingId, stagedMappings])
 
   async function fetchStagedPage(mappingId: string, p: number) {
     setStagedLoading(true)
@@ -121,9 +134,8 @@ export default function DataPreview({ projectId, tables }: DataPreviewProps) {
       setStagedRows(result.rows)
       setStagedTotal(result.totalRows)
       setStagedFields(result.stagedFields)
-      setRowIssues(result.rowIssues)
-      setFlaggedFields(result.flaggedFields)
-      setTotalFlaggedRowsAll(result.totalFlaggedRows)
+      // rowIssues / flaggedFields from the server are cross-referenced source issues
+      // and are intentionally NOT used — constraint checking is done client-side below.
     } catch (e) {
       setStagedError(e instanceof Error ? e.message : 'Failed to load transformed data')
     } finally {
@@ -153,8 +165,6 @@ export default function DataPreview({ projectId, tables }: DataPreviewProps) {
   }
 
   // ── Helpers ────────────────────────────────────────────────────────────────
-  // Use field order from the fields table (ordinal_position) rather than
-  // Object.keys() on JSONB, which gives arbitrary hash order.
   const columns = selectedTable?.fieldNames ?? (rows.length > 0 ? Object.keys(rows[0]) : [])
   const totalPages = Math.ceil(totalRows / PAGE_SIZE)
 
@@ -232,6 +242,7 @@ export default function DataPreview({ projectId, tables }: DataPreviewProps) {
               <p className="text-sm text-gray-500">Select a table to preview data.</p>
             </div>
           ) : (
+            /* Source view: no flags, no targetFields — just raw data */
             <DataTable
               columns={columns}
               rows={rows}
@@ -330,6 +341,7 @@ export default function DataPreview({ projectId, tables }: DataPreviewProps) {
                 </div>
               )}
 
+              {/* Transformed view: targetFields drives client-side constraint checking */}
               <DataTable
                 columns={stagedColumns}
                 rows={stagedRows}
@@ -343,14 +355,16 @@ export default function DataPreview({ projectId, tables }: DataPreviewProps) {
                 label="Transformed Data Preview"
                 badge="Target format"
                 stagedFields={stagedFields}
-                rowIssues={rowIssues}
-                flaggedFields={flaggedFields}
-                totalFlaggedRows={totalFlaggedRowsAll}
-                onNavigateToValidate={() =>
-                  router.push(
-                    `/app/projects/${projectId}/data-quality?stage=source&severity=blocking&status=open`
-                  )
-                }
+                targetFields={targetFieldConstraints}
+                onNavigateToValidate={() => {
+                  const params = new URLSearchParams({
+                    stage: 'target-ready',
+                    severity: 'blocking',
+                    status: 'open',
+                  })
+                  if (stagedTargetTable?.id) params.set('tableId', stagedTargetTable.id)
+                  router.push(`/app/projects/${projectId}/data-quality?${params.toString()}`)
+                }}
               />
             </>
           )}
@@ -375,9 +389,7 @@ function DataTable({
   label,
   badge,
   stagedFields,
-  rowIssues,
-  flaggedFields,
-  totalFlaggedRows,
+  targetFields,
   onNavigateToValidate,
 }: {
   columns: string[]
@@ -395,49 +407,101 @@ function DataTable({
    * When provided (even as an empty array) the table is in "transformed mode":
    * - Fields in this set are "transformed" (bold)
    * - All other fields are "passthrough" (muted)
-   * - Three-state cell rendering is always active
    */
   stagedFields?: string[]
-  /** Per-row issue arrays for the current page (parallel to rows) */
-  rowIssues?: RowIssue[][]
-  /** Issue count per target field across ALL staged rows — drives column header badges */
-  flaggedFields?: Record<string, number>
-  /** Total rows with at least one issue across the entire mapping */
-  totalFlaggedRows?: number
+  /**
+   * Target schema field constraints. When provided, cells are checked client-side
+   * against NOT NULL and CHECK constraints. Only used in the staged/transformed view.
+   * Source view never receives this prop.
+   */
+  targetFields?: TargetFieldConstraint[]
   onNavigateToValidate?: () => void
 }) {
-  // showDiff is true whenever stagedFields is provided (i.e. transformed mode).
-  // We intentionally do NOT gate on stagedFields.length > 0 or < columns.length
-  // so that "0 transformed · N passthrough" and "N transformed · 0 passthrough"
-  // also render correctly with full three-state styling.
   const stagedSet = stagedFields !== undefined ? new Set(stagedFields) : null
   const showDiff = stagedSet !== null
-  const hasFlaggedRows = (totalFlaggedRows ?? 0) > 0
 
-  // Build flagged field summaries for the summary banner.
-  // Counts come from flaggedFields (server, all pages).
-  // Issue-type labels are inferred from the current page's rowIssues — the type
-  // is consistent for a given field across pages, so sampling the current page
-  // is reliable. Fields not seen this page default to the generic "issues" label.
-  const fieldLabelFromPage = new Map<string, string>()
-  for (const issueArr of rowIssues ?? []) {
-    for (const issue of issueArr) {
-      if (!fieldLabelFromPage.has(issue.field)) {
-        fieldLabelFromPage.set(
-          issue.field,
-          issue.issue === 'null_primary_key'
-            ? 'null PKs'
-            : issue.issue === 'null_required_field'
-            ? 'null required'
-            : 'issues'
-        )
+  // ── Client-side constraint checking ───────────────────────────────────────
+  // Runs only when targetFields is provided (transformed view).
+  // For each visible row x column, produces a violation message or undefined.
+  const cellFlags = useMemo<Map<string, string>[]>(() => {
+    if (!targetFields || targetFields.length === 0) return rows.map(() => new Map())
+
+    const fieldMap = new Map(targetFields.map((f) => [f.name, f]))
+
+    return rows.map((row) => {
+      const flags = new Map<string, string>()
+
+      for (const col of columns) {
+        const field = fieldMap.get(col)
+        if (!field) continue
+
+        const rawVal = row[col]
+        const strVal = rawVal == null ? '' : String(rawVal).trim()
+
+        // NOT NULL violation — skip auto-generated PKs as they may legitimately be absent
+        if (!field.is_nullable && !field.is_primary_key && (rawVal == null || strVal === '')) {
+          flags.set(col, `${col} is NOT NULL in target but value is empty`)
+          continue
+        }
+
+        // Skip constraint checks for empty values or fields without constraints
+        if (!strVal || !field.check_constraint) continue
+
+        const cc = field.check_constraint
+
+        if (cc.type === 'in_list') {
+          if (!cc.allowedValues.includes(strVal)) {
+            const preview = cc.allowedValues.slice(0, 5).join(', ')
+            const more = cc.allowedValues.length > 5 ? ` (+${cc.allowedValues.length - 5} more)` : ''
+            flags.set(col, `"${strVal}" not in allowed values: ${preview}${more}`)
+          }
+        } else if (cc.type === 'regex' && cc.pattern) {
+          try {
+            if (!new RegExp(cc.pattern).test(strVal)) {
+              flags.set(col, `"${strVal}" doesn't match pattern ${cc.pattern}`)
+            }
+          } catch {
+            // Invalid regex pattern — skip
+          }
+        } else if (cc.type === 'range') {
+          const numVal = parseFloat(strVal)
+          if (!isNaN(numVal)) {
+            if (cc.min !== undefined && numVal < cc.min) {
+              flags.set(col, `Value ${numVal} is below minimum ${cc.min}`)
+            } else if (cc.max !== undefined && numVal > cc.max) {
+              flags.set(col, `Value ${numVal} exceeds maximum ${cc.max}`)
+            }
+          }
+        }
+      }
+
+      return flags
+    })
+  }, [rows, columns, targetFields])
+
+  // Derive per-column flagged counts and total flagged rows for the current page
+  const constraintFlaggedFields = useMemo<Record<string, number>>(() => {
+    const counts: Record<string, number> = {}
+    for (const rowFlags of cellFlags) {
+      for (const [field] of rowFlags) {
+        counts[field] = (counts[field] ?? 0) + 1
       }
     }
-  }
-  const flaggedFieldSummaries = Object.entries(flaggedFields ?? {}).map(([field, count]) => ({
+    return counts
+  }, [cellFlags])
+
+  const constraintFlaggedRowCount = useMemo(
+    () => cellFlags.filter((m) => m.size > 0).length,
+    [cellFlags]
+  )
+
+  // Only show the flags banner when we're in transformed mode with target constraints loaded
+  const hasFlaggedRows = targetFields && targetFields.length > 0 && constraintFlaggedRowCount > 0
+
+  // Build the banner summary: field name + count for flagged columns
+  const flaggedFieldSummaries = Object.entries(constraintFlaggedFields).map(([field, count]) => ({
     field,
     count,
-    issueType: fieldLabelFromPage.get(field) ?? 'issues',
   }))
 
   function renderPagination(className?: string) {
@@ -504,19 +568,22 @@ function DataTable({
         )}
       </div>
 
-      {/* ── Flagged rows summary banner ──────────────────────────────────────── */}
+      {/* ── Constraint violations banner (transformed view only) ─────────────── */}
       {hasFlaggedRows && (
         <div className="px-5 py-2.5 bg-red-50 border-b border-red-200 flex items-center gap-2 text-sm">
           <AlertTriangle className="w-4 h-4 text-red-500 flex-shrink-0" />
           <span className="text-red-800">
-            <strong>{totalFlaggedRows} row{totalFlaggedRows !== 1 ? 's' : ''} flagged</strong>
+            <strong>
+              {constraintFlaggedRowCount} row{constraintFlaggedRowCount !== 1 ? 's' : ''} on this page
+              have constraint violations
+            </strong>
             {flaggedFieldSummaries.length > 0 && (
               <span className="text-red-700">
                 {' — '}
                 {flaggedFieldSummaries.slice(0, 4).map((f, i) => (
                   <span key={f.field}>
                     {i > 0 && ', '}
-                    {f.field}: {f.count} {f.issueType}
+                    {f.field}: {f.count}
                   </span>
                 ))}
                 {flaggedFieldSummaries.length > 4 && (
@@ -553,7 +620,7 @@ function DataTable({
                 <tr>
                   {columns.map((col) => {
                     const isTransformed = stagedSet ? stagedSet.has(col) : true
-                    const fieldIssueCount = flaggedFields?.[col] ?? 0
+                    const fieldIssueCount = constraintFlaggedFields[col] ?? 0
                     return (
                       <th
                         key={col}
@@ -566,7 +633,7 @@ function DataTable({
                         }`}
                         title={
                           fieldIssueCount > 0
-                            ? `${fieldIssueCount} row${fieldIssueCount !== 1 ? 's' : ''} have issues in this column`
+                            ? `${fieldIssueCount} row${fieldIssueCount !== 1 ? 's' : ''} have constraint violations in this column`
                             : showDiff
                             ? isTransformed
                               ? 'Transform applied'
@@ -575,14 +642,14 @@ function DataTable({
                         }
                       >
                         {col}
-                        {/* Green dot for transformed columns with no issues */}
+                        {/* Green dot for transformed columns with no violations */}
                         {showDiff && isTransformed && fieldIssueCount === 0 && (
                           <span
                             className="ml-1.5 inline-block align-middle rounded-full bg-green-500"
                             style={{ width: 6, height: 6 }}
                           />
                         )}
-                        {/* Red warning badge for columns with issues */}
+                        {/* Red warning badge for columns with constraint violations */}
                         {fieldIssueCount > 0 && (
                           <span className="ml-1.5 text-red-500 text-[10px] font-medium align-middle bg-red-100 px-1 rounded">
                             ⚠ {fieldIssueCount}
@@ -595,10 +662,10 @@ function DataTable({
               </thead>
               <tbody>
                 {rows.map((row, i) => {
-                  const issues = rowIssues?.[i] ?? []
-                  const issueFieldSet = new Set(issues.map((iss) => iss.field))
-                  // Apply a subtle row tint only when the MAJORITY of columns have issues
-                  const majorityFlagged = new Set(issues.map((iss) => iss.field)).size > columns.length / 2
+                  const rowFlags = cellFlags[i] ?? new Map<string, string>()
+                  const flaggedColCount = rowFlags.size
+                  // Subtle row tint only when the majority of columns are flagged
+                  const majorityFlagged = flaggedColCount > columns.length / 2
                   return (
                     <tr
                       key={i}
@@ -608,8 +675,8 @@ function DataTable({
                     >
                       {columns.map((col) => {
                         const isTransformed = stagedSet ? stagedSet.has(col) : true
-                        const cellHasIssue = issueFieldSet.has(col)
-                        const issueForCell = issues.find((iss) => iss.field === col)
+                        const violationMsg = rowFlags.get(col)
+                        const cellHasIssue = Boolean(violationMsg)
                         return (
                           <td
                             key={col}
@@ -622,7 +689,7 @@ function DataTable({
                                 ? 'font-medium text-gray-900'
                                 : 'text-gray-700'
                             }`}
-                            title={issueForCell?.description}
+                            title={violationMsg}
                           >
                             {row[col] == null ? (
                               cellHasIssue ? (
@@ -663,7 +730,7 @@ function DataTable({
                 {' in muted · '}
                 <strong className="text-gray-700 font-medium">Transformed</strong>
                 {' in bold · '}
-                <span className="text-red-500">Issues</span>
+                <span className="text-red-500">Violations</span>
                 {' in red'}
               </span>
             ) : (

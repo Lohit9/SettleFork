@@ -27,6 +27,8 @@ import {
   applyTransform,
   previewTransformDistinct,
   suggestTransformDescription,
+  dismissTransformNeeded,
+  reinstateTransformNeeded,
 } from '@/lib/actions/transformations'
 import { createValueAssignment } from '@/lib/actions/mappings'
 import type { TransformPageData, DatasetGroup, TableGroup, FieldItem, FullTransformTestResult, UnmappedTargetField } from '@/lib/actions/transformations'
@@ -197,6 +199,7 @@ export default function TransformContent({ projectId, initialData }: Props) {
   const [isApplying, startApplying] = useTransition()
   const [isStaging, startStaging] = useTransition()
   const [isSuggesting, startSuggesting] = useTransition()
+  const [isDismissing, setIsDismissing] = useState(false)
 
   // Staging warning popup — shown when blocking source issues exist before staging
   const [showStagingWarning, setShowStagingWarning] = useState(false)
@@ -823,6 +826,23 @@ export default function TransformContent({ projectId, initialData }: Props) {
           fields: tbl.fields.map((f) => {
             if (f.fieldMappingId !== fmId || !f.transformation) return f
             return { ...f, transformation: { ...f.transformation, status } }
+          }),
+        })),
+      })),
+    }))
+  }
+
+  /** Patches the in-memory data tree after dismiss/reinstate so sidebar badge + counts update instantly. */
+  function refreshFieldNeedsTransform(fmId: string, needsTransform: boolean) {
+    setData((prev) => ({
+      ...prev,
+      datasets: prev.datasets.map((ds) => ({
+        ...ds,
+        tables: ds.tables.map((tbl) => ({
+          ...tbl,
+          fields: tbl.fields.map((f) => {
+            if (f.fieldMappingId !== fmId) return f
+            return { ...f, needsTransform }
           }),
         })),
       })),
@@ -1584,6 +1604,36 @@ export default function TransformContent({ projectId, initialData }: Props) {
                             Clear
                           </button>
                         </div>
+
+                        {/* Dismiss — only for standard mapped fields with no saved transform and AI flagged it */}
+                        {selectedContext.field.needsTransform &&
+                          !selectedContext.field.transformation &&
+                          !localTransform?.sql &&
+                          !selectedContext.field.isValueAssignment && (
+                          <div className="mt-4 pt-4 border-t border-gray-100">
+                            <button
+                              onClick={async () => {
+                                const fmId = selectedContext.field.fieldMappingId
+                                setIsDismissing(true)
+                                try {
+                                  await dismissTransformNeeded(projectId, fmId)
+                                  refreshFieldNeedsTransform(fmId, false)
+                                } catch {
+                                  showToast('Could not dismiss. Try again.', 'error')
+                                } finally {
+                                  setIsDismissing(false)
+                                }
+                              }}
+                              disabled={isDismissing}
+                              className="text-sm text-gray-500 hover:text-gray-700 underline underline-offset-2 decoration-gray-300 hover:decoration-gray-500 transition-colors disabled:opacity-50"
+                            >
+                              {isDismissing ? 'Saving…' : 'Mark as no transform needed'}
+                            </button>
+                            <p className="text-xs text-gray-400 mt-1">
+                              This field will be mapped directly without transformation.
+                            </p>
+                          </div>
+                        )}
                       </>
                     ) : (
                       <>
@@ -1658,16 +1708,35 @@ export default function TransformContent({ projectId, initialData }: Props) {
                     </div>
                   )}
 
-                  {/* No transform needed info */}
-                  {!selectedContext.field.needsTransform && !localTransform?.sql && (
+                  {/* No transform needed info — also shown after user dismisses */}
+                  {!selectedContext.field.needsTransform && !localTransform?.sql &&
+                    !selectedContext.field.isValueAssignment && (
                     <div className="bg-blue-50 border border-blue-200 rounded-lg p-4">
                       <div className="flex items-start gap-2">
                         <AlertCircle className="w-4 h-4 text-blue-600 mt-0.5 flex-shrink-0" />
-                        <div>
+                        <div className="flex-1 min-w-0">
                           <p className="text-sm font-medium text-blue-900">No transformation needed</p>
                           <p className="text-xs text-blue-700 mt-0.5">
-                            This field maps directly. Use the form above to add a transform if needed.
+                            This field will be mapped directly to the target without transformation.
                           </p>
+                          <button
+                            onClick={async () => {
+                              const fmId = selectedContext.field.fieldMappingId
+                              setIsDismissing(true)
+                              try {
+                                await reinstateTransformNeeded(projectId, fmId)
+                                refreshFieldNeedsTransform(fmId, true)
+                              } catch {
+                                showToast('Could not reinstate. Try again.', 'error')
+                              } finally {
+                                setIsDismissing(false)
+                              }
+                            }}
+                            disabled={isDismissing}
+                            className="mt-2 text-xs text-blue-600 hover:text-blue-800 underline underline-offset-2 disabled:opacity-50 transition-colors"
+                          >
+                            {isDismissing ? 'Saving…' : 'Actually, I need a transform for this field'}
+                          </button>
                         </div>
                       </div>
                     </div>
