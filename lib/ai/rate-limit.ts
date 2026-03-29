@@ -7,7 +7,7 @@ interface RateLimitRecord {
 }
 
 const userCallCounts = new Map<string, RateLimitRecord>()
-const MAX_CALLS_PER_HOUR = 20
+const MAX_CALLS_PER_HOUR = 100
 
 export interface RateLimitResult {
   allowed: boolean
