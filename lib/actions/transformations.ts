@@ -382,15 +382,51 @@ CRITICAL RULES:
 
 Common transformation patterns:
 - Value mapping: CASE WHEN field = 'X' THEN 'Y' WHEN field = 'Z' THEN 'W' ELSE 'OTHER' END
-- Type casting: field::integer, field::date, field::numeric
+- Type casting: field::integer, field::numeric (avoid bare ::date — use TO_DATE with explicit format instead)
 - String operations: UPPER(field), LOWER(field), TRIM(field), LEFT(field, 10)
 - Concatenation: field1 || '-' || field2
 - Null handling: COALESCE(field, 'default')
-- Date formatting: TO_CHAR(field::date, 'YYYY-MM-DD')
 - Substring: SUBSTRING(field FROM 1 FOR 10)
 - Regex replace: REGEXP_REPLACE(field, 'pattern', 'replacement')
 - Hash: MD5(field)
 - Truncation: LEFT(field, 10) or SUBSTRING(field FROM 1 FOR 10)
+
+DATE FORMATTING — CRITICAL RULES:
+NEVER use bare ::date casts or TO_CHAR(field::date, ...) — these fail when data contains mixed formats.
+NEVER call TO_DATE(field, 'MM/DD/YYYY') on data that may contain DD/MM/YYYY values — month=22 will crash.
+ALWAYS use a CASE + regex approach that detects the format before parsing:
+
+  CASE
+    WHEN field IS NULL OR TRIM(field) = '' THEN NULL
+    -- Already ISO 8601
+    WHEN field ~ '^\d{4}-\d{2}-\d{2}' THEN
+      TO_CHAR(TO_DATE(SUBSTRING(field FROM 1 FOR 10), 'YYYY-MM-DD'), 'YYYY-MM-DD')
+    -- YYYY/MM/DD or YYYY.MM.DD
+    WHEN field ~ '^\d{4}[/\.]\d{1,2}[/\.]\d{1,2}' THEN
+      TO_CHAR(TO_DATE(REGEXP_REPLACE(field, '[/\.]', '-', 'g'), 'YYYY-MM-DD'), 'YYYY-MM-DD')
+    -- MM/DD/YYYY or MM-DD-YYYY where first segment <= 12 (could be month)
+    -- Distinguish from DD/MM by checking if day part > 12 (then it must be DD/MM)
+    WHEN field ~ '^\d{1,2}[/\-]\d{1,2}[/\-]\d{4}$' THEN
+      CASE
+        WHEN SPLIT_PART(field, CASE WHEN field ~ '/' THEN '/' ELSE '-' END, 1)::int > 12 THEN
+          -- First segment > 12 → must be DD/MM/YYYY
+          TO_CHAR(TO_DATE(field, 'DD/MM/YYYY'), 'YYYY-MM-DD')
+        ELSE
+          -- Assume MM/DD/YYYY (adjust to DD/MM/YYYY if business context says otherwise)
+          TO_CHAR(TO_DATE(field, 'MM/DD/YYYY'), 'YYYY-MM-DD')
+      END
+    -- MM/DD/YY or MM-DD-YY (2-digit year)
+    WHEN field ~ '^\d{1,2}[/\-]\d{1,2}[/\-]\d{2}$' THEN
+      TO_CHAR(TO_DATE(field, 'MM/DD/YY'), 'YYYY-MM-DD')
+    -- Month name: "Mar 15 2024", "15 March 2024", "March 15, 2024"
+    WHEN field ~* '\y(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)\y' THEN
+      TO_CHAR(field::date, 'YYYY-MM-DD')
+    ELSE NULL
+  END
+
+Adapt the CASE branches to match the actual formats observed in the sample data.
+If the sample only shows a subset of these formats, include only the relevant branches plus an ELSE NULL.
+The separator detection (/ vs -) must match the actual separator in the data — don't mix formats in a single TO_DATE call.
 
 If documentation is provided, follow the exact value mappings and transformation rules specified in the business rules. Do not invent mappings that contradict the documentation. If the documentation specifies edge cases or special handling, include them in the expression.
 
