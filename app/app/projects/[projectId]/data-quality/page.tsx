@@ -3,6 +3,7 @@ import { createClient } from '@/lib/supabase/server'
 import { getQualityIssues, getFixHistory } from '@/lib/actions/quality-fixes'
 import { getValidationRules } from '@/lib/actions/validation-rules'
 import { computeReadinessScore } from '@/lib/quality/readiness-score'
+import { getResolvedSourceFieldIds } from '@/lib/quality/resolved-by-transform'
 import { supabaseAdmin } from '@/lib/supabase/admin'
 import DataQualityContent from './DataQualityContent'
 
@@ -28,7 +29,7 @@ export default async function DataQualityPage({ params, searchParams }: PageProp
   if (!user) notFound()
 
   // Parallel data fetch — fix history fetched once here to avoid N+1 per IssueCard
-  const [{ issues, hasMappings }, validationRules, readiness, tablesData, initialFixHistory] = await Promise.all([
+  const [{ issues, hasMappings }, validationRules, readiness, tablesData, initialFixHistory, resolvedSourceFieldIds] = await Promise.all([
     getQualityIssues(projectId),
     getValidationRules(projectId),
     computeReadinessScore(projectId),
@@ -38,6 +39,8 @@ export default async function DataQualityPage({ params, searchParams }: PageProp
       .select('id, role, name, tables(id, name, fields(id, name, data_type, inferred_type))')
       .eq('project_id', projectId),
     getFixHistory(projectId),
+    // Source field IDs whose issues are resolved by an approved transform
+    getResolvedSourceFieldIds(projectId).catch(() => [] as string[]),
   ])
 
   const allDatasets = (tablesData.data ?? []) as Array<{
@@ -60,6 +63,7 @@ export default async function DataQualityPage({ params, searchParams }: PageProp
       hasMappings={hasMappings}
       allDatasets={allDatasets}
       initialFixHistory={initialFixHistory}
+      resolvedSourceFieldIds={resolvedSourceFieldIds}
       initialFilterTableId={sp.tableId}
       initialFilterFieldId={sp.fieldId}
       initialFilterSeverity={sp.severity}
