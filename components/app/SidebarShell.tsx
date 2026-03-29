@@ -137,7 +137,7 @@ export default function SidebarShell({ children }: SidebarShellProps) {
                   className={`
                     flex items-center rounded-lg transition-colors
                     ${expanded ? 'gap-3 px-3 py-2 w-full' : 'justify-center w-10 h-10 mx-auto'}
-                    ${isActive ? 'bg-[#4F46E5] text-white' : 'text-gray-500 hover:text-gray-700 hover:bg-gray-100'}
+                    ${isActive ? 'bg-indigo-600 text-white' : 'text-gray-500 hover:text-gray-700 hover:bg-gray-100'}
                   `}
                 >
                   <Icon className="w-5 h-5 flex-shrink-0" />

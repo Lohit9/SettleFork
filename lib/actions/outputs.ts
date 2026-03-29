@@ -217,7 +217,7 @@ export async function getOutputsPageData(projectId: string): Promise<OutputsPage
   ] = await Promise.all([
     supabaseAdmin.from('datasets').select('id, role, name').eq('project_id', projectId),
     supabaseAdmin.from('table_mappings').select('id, status').eq('project_id', projectId).neq('status', 'rejected'),
-    supabaseAdmin.from('quality_issues').select('id, severity, status, title, created_at').eq('project_id', projectId),
+    supabaseAdmin.from('quality_issues').select('id, severity, status, title, description, field_id, stage, issue_kind, created_at').eq('project_id', projectId),
     supabaseAdmin.from('fix_history').select('id, fix_description, affected_row_count, applied_at').eq('project_id', projectId).eq('status', 'applied').order('applied_at', { ascending: false }).limit(20),
     supabaseAdmin.from('validation_rules').select('id, name, created_at').eq('project_id', projectId).order('created_at', { ascending: false }).limit(10),
     supabaseAdmin.from('outputs').select('*').eq('project_id', projectId).order('generated_at', { ascending: false }),
@@ -249,7 +249,7 @@ export async function getOutputsPageData(projectId: string): Promise<OutputsPage
       nonRejectedTMIds.length > 0
         ? supabaseAdmin
             .from('field_mappings')
-            .select('id, status, source_field_id, target_field_id, confidence, created_at, is_contributing')
+            .select('id, status, source_field_id, target_field_id, confidence, created_at, is_contributing, needs_transformation')
             .in('table_mapping_id', nonRejectedTMIds)
         : Promise.resolve({ data: [] }),
     ])
@@ -257,8 +257,8 @@ export async function getOutputsPageData(projectId: string): Promise<OutputsPage
   const allFMIds = (rawFieldMappings ?? []).map((fm) => fm.id)
   const approvedFMs = (rawFieldMappings ?? []).filter((fm) => fm.status === 'approved')
 
-  // Round 4: Transforms + flagged field_mapping IDs
-  const [{ data: transformRows }, { data: flaggedFMRows }] = await Promise.all([
+  // Round 4: Transforms + flagged field_mapping IDs + dismissed field_mapping IDs
+  const [{ data: transformRows }, { data: flaggedFMRows }, { data: dismissedFMRows }] = await Promise.all([
     allFMIds.length > 0
       ? supabaseAdmin.from('transformations').select('id, field_mapping_id, status, description, created_at').in('field_mapping_id', allFMIds)
       : Promise.resolve({ data: [] }),
@@ -268,6 +268,15 @@ export async function getOutputsPageData(projectId: string): Promise<OutputsPage
           .select('id')
           .in('table_mapping_id', nonRejectedTMIds)
           .eq('needs_transformation', true)
+      : Promise.resolve({ data: [] }),
+    // Dismissed fields (needs_transformation = false) must be excluded from the
+    // transform scope denominator — they have no transform requirement.
+    nonRejectedTMIds.length > 0
+      ? supabaseAdmin
+          .from('field_mappings')
+          .select('id')
+          .in('table_mapping_id', nonRejectedTMIds)
+          .eq('needs_transformation', false)
       : Promise.resolve({ data: [] }),
   ])
 
@@ -284,24 +293,79 @@ export async function getOutputsPageData(projectId: string): Promise<OutputsPage
   const approvedFieldMappingCount = mappedSrcIds.size   // unique source fields with at least one approved mapping
   const targetFieldCoverageCount = coveredTargetFieldIds.size
 
-  const openBlocking = (qualityIssueRows ?? []).filter((q) => q.severity === 'blocking' && q.status === 'open').length
-  const openWarnings = (qualityIssueRows ?? []).filter((q) => q.severity === 'warning' && q.status === 'open').length
-
   const allTransforms = transformRows ?? []
   // Build ID sets for precise set-math
   const fmIdsWithTransforms = new Set(allTransforms.map((t) => t.field_mapping_id))
   const flaggedFMIds = new Set((flaggedFMRows ?? []).map((fm) => fm.id))
-  // DENOMINATOR: flagged fields ∪ fields with a transform record (passthrough fields the user chose to transform)
-  const passthroughWithRecord = [...fmIdsWithTransforms].filter((id) => !flaggedFMIds.has(id)).length
+  // Dismissed fields (needs_transformation = false) are excluded from scope —
+  // they have no transform requirement, even if they have a stale transform record.
+  const dismissedFMIds = new Set((dismissedFMRows ?? []).map((fm) => fm.id))
+  // DENOMINATOR: flagged fields ∪ fields with a transform record (user-initiated optional transforms)
+  // Exclude dismissed fields so they don't inflate the denominator.
+  const passthroughWithRecord = [...fmIdsWithTransforms].filter(
+    (id) => !flaggedFMIds.has(id) && !dismissedFMIds.has(id),
+  ).length
   const totalTransformScope = flaggedFMIds.size + passthroughWithRecord
+
+  // Compute resolved source field IDs (mirrors getResolvedSourceFieldIds logic).
+  // A source field is "resolved by transform" when its approved primary mapping
+  // either has needs_transformation=false OR has at least one transform record.
+  const resolvedSourceFieldIds = new Set<string>()
+  for (const fm of approvedPrimaryFMs) {
+    const sfId = (fm as { source_field_id?: string | null }).source_field_id
+    if (!sfId) continue
+    const hasTransform = fmIdsWithTransforms.has(fm.id)
+    const noTransformNeeded = (fm as { needs_transformation?: boolean | null }).needs_transformation === false
+    if (hasTransform || noTransformNeeded) resolvedSourceFieldIds.add(sfId)
+  }
+
+  // Helper matching the isNeverResolvable check in DataQualityContent
+  function isNeverResolvable(q: { issue_kind?: string | null; description?: string | null; title?: string | null }): boolean {
+    const desc = (q.description ?? '').toLowerCase()
+    const title = (q.title ?? '').toLowerCase()
+    if (q.issue_kind === 'null_primary_key') return true
+    if (q.issue_kind === 'orphaned_fk') return true
+    if (q.issue_kind === 'referential_integrity') return true
+    if (desc.includes('null') && (desc.includes('primary key') || desc.includes('primary_key'))) return true
+    if (desc.includes('orphan') || title.includes('orphan')) return true
+    if (desc.includes('referential') || title.includes('referential')) return true
+    return false
+  }
+
+  const openIssues = (qualityIssueRows ?? []).filter((q) => q.status === 'open')
+  const openBlocking = openIssues.filter((q) => {
+    if (q.severity !== 'blocking') return false
+    // Source issues that are resolved by transform don't count as blocking
+    if (
+      q.stage === 'source' &&
+      !isNeverResolvable(q) &&
+      q.field_id &&
+      resolvedSourceFieldIds.has(q.field_id)
+    ) return false
+    return true
+  }).length
+  const openWarnings = openIssues.filter((q) => {
+    if (q.severity !== 'warning') return false
+    // Source warnings resolved by transform don't count
+    if (
+      q.stage === 'source' &&
+      !isNeverResolvable(q) &&
+      q.field_id &&
+      resolvedSourceFieldIds.has(q.field_id)
+    ) return false
+    return true
+  }).length
+  // Scope-filtered transforms — exclude dismissed fields from all counts so the
+  // numerator and denominator stay in sync (dismissed fields have no transform requirement).
+  const scopedTransforms = allTransforms.filter((t) => !dismissedFMIds.has(t.field_mapping_id))
   // NUMERATOR: transforms fully applied to staged data
-  const completedTransforms = allTransforms.filter((t) => t.status === 'applied').length
+  const completedTransforms = scopedTransforms.filter((t) => t.status === 'applied').length
   // OUTSTANDING 1: flagged fields with NO transform record at all (the orange "Transform" badge fields)
   const fieldsNeedingTransformWork = [...flaggedFMIds].filter((id) => !fmIdsWithTransforms.has(id)).length
   // OUTSTANDING 2: transform records in draft state (SQL not yet written/saved)
-  const draftTransforms = allTransforms.filter((t) => t.status === 'draft').length
+  const draftTransforms = scopedTransforms.filter((t) => t.status === 'draft').length
   // OUTSTANDING 3: transforms tested but not yet applied to staged data
-  const testedTransforms = allTransforms.filter((t) => t.status === 'tested').length
+  const testedTransforms = scopedTransforms.filter((t) => t.status === 'tested').length
   // (untestedTransforms kept for backward compat — the old "saved" bucket — renamed to draftTransforms above)
   const untestedTransforms = draftTransforms
 
