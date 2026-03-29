@@ -22,7 +22,7 @@ interface TargetFieldRow {
 interface FieldMappingRow {
   id: string
   table_mapping_id: string
-  source_field_id: string
+  source_field_id: string | null
   target_field_id: string
   confidence: number | null
   needs_transformation: boolean | null
@@ -447,12 +447,17 @@ export async function generateExecutionPackage(
 
       const fieldLines: string[] = []
       for (const fm of fms) {
-        const srcField = sourceFieldMap.get(fm.source_field_id)
         const tgtField = targetFieldMap.get(fm.target_field_id) as TargetFieldRow | undefined
-        if (!srcField || !tgtField) continue
+        if (!tgtField) continue
+
+        const isValueAssignment = fm.source_field_id === null
+        const srcField = fm.source_field_id ? sourceFieldMap.get(fm.source_field_id) : null
+        if (!isValueAssignment && !srcField) continue
 
         const conf = fm.confidence != null ? ` [confidence: ${Math.round(fm.confidence * 100)}%]` : ''
-        let line = `  - ${srcField.name} (${srcField.data_type}) → ${tgtField.name} (${tgtField.data_type})${conf}`
+        let line = isValueAssignment
+          ? `  - [Value Assignment] → ${tgtField.name} (${tgtField.data_type})`
+          : `  - ${srcField!.name} (${srcField!.data_type}) → ${tgtField.name} (${tgtField.data_type})${conf}`
 
         const transform = transformByFMId.get(fm.id)
         if (transform?.generated_sql) {
@@ -461,6 +466,8 @@ export async function generateExecutionPackage(
           if (transform.description) {
             line += `\n    Description: ${transform.description}`
           }
+        } else if (isValueAssignment) {
+          line += `\n    ⚠ No value expression defined yet`
         } else if (fm.needs_transformation) {
           line += `\n    ⚠ Needs transformation (no SQL defined yet)`
         }

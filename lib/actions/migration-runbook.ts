@@ -163,7 +163,7 @@ export async function generateMigrationRunbook(
     supabaseAdmin
       .from('field_mappings')
       .select(
-        'id, table_mapping_id, status, needs_transformation, source_field:fields!field_mappings_source_field_id_fkey(id, name, data_type), target_field:fields!field_mappings_target_field_id_fkey(id, name, data_type, is_foreign_key, fk_reference)'
+        'id, table_mapping_id, status, needs_transformation, source_field_id, source_field:fields!field_mappings_source_field_id_fkey(id, name, data_type), target_field:fields!field_mappings_target_field_id_fkey(id, name, data_type, is_foreign_key, fk_reference)'
       )
       .in('table_mapping_id', tmIds),
   ])
@@ -240,12 +240,19 @@ export async function generateMigrationRunbook(
     const fields = fms.filter((fm) => fm.table_mapping_id === tm.id)
     mappingBlock += `\n${src.name} → ${tgt.name} (${fields.length} fields)\n`
     for (const fm of fields.slice(0, 20)) {
-      const srcF = fm.source_field as unknown as { name: string; data_type: string } | null
       const tgtF = fm.target_field as unknown as { name: string; data_type: string } | null
-      if (!srcF || !tgtF) continue
+      if (!tgtF) continue
+      const srcF = fm.source_field as unknown as { name: string; data_type: string } | null
+      const srcLabel =
+        fm.source_field_id == null
+          ? '[Value Assignment]'
+          : srcF
+            ? `${srcF.name} (${srcF.data_type})`
+            : null
+      if (srcLabel === null) continue
       const t = transformByFMId.get(fm.id)
       const xform = t ? ` | Transform: ${t.description ?? t.generated_sql?.slice(0, 60) ?? 'yes'}` : ''
-      mappingBlock += `  ${srcF.name} (${srcF.data_type}) → ${tgtF.name} (${tgtF.data_type})${xform}\n`
+      mappingBlock += `  ${srcLabel} → ${tgtF.name} (${tgtF.data_type})${xform}\n`
     }
   }
 
@@ -255,7 +262,11 @@ export async function generateMigrationRunbook(
     .slice(0, 30)
     .map((t) => {
       const fm = fms.find((f) => f.id === t.field_mapping_id)
-      const src = (fm?.source_field as unknown as { name: string } | null)?.name ?? '?'
+      const src = !fm
+        ? '?'
+        : fm.source_field_id == null
+          ? '[Value Assignment]'
+          : (fm.source_field as unknown as { name: string } | null)?.name ?? '?'
       const tgt = (fm?.target_field as unknown as { name: string } | null)?.name ?? '?'
       return `  ${src} → ${tgt}: ${t.description ?? ''}\n    SQL: ${(t.generated_sql ?? '').slice(0, 100)}`
     })

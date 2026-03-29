@@ -274,7 +274,7 @@ export async function getOutputsPageData(projectId: string): Promise<OutputsPage
   // ── Metrics ───────────────────────────────────────────────────────────────
 
   const totalSourceFields = (sourceFieldRows ?? []).length
-  const mappedSrcIds = new Set(approvedFMs.map((fm) => fm.source_field_id))
+  const mappedSrcIds = new Set(approvedFMs.map((fm) => fm.source_field_id).filter((id): id is string => id !== null))
   const unmappedSourceFields = Math.max(0, totalSourceFields - mappedSrcIds.size)
 
   // Deduplicated counts — contributing rows share the same target as their primary;
@@ -467,12 +467,12 @@ export async function generateGoldStandardCSVs(projectId: string): Promise<{
 
         if (!approvedFMs || approvedFMs.length === 0) continue
 
-        const srcFieldIds = approvedFMs.map((fm) => fm.source_field_id)
+        const srcFieldIds = approvedFMs.map((fm) => fm.source_field_id).filter((id): id is string => id !== null)
         const tgtFieldIds = approvedFMs.map((fm) => fm.target_field_id)
         const fmIds = approvedFMs.map((fm) => fm.id)
 
         const [{ data: srcFields }, { data: tgtFields }, { data: allSrcFields }, { data: transforms }] = await Promise.all([
-          supabaseAdmin.from('fields').select('id, name').in('id', srcFieldIds),
+          srcFieldIds.length > 0 ? supabaseAdmin.from('fields').select('id, name').in('id', srcFieldIds) : Promise.resolve({ data: [] }),
           supabaseAdmin.from('fields').select('id, name').in('id', tgtFieldIds),
           supabaseAdmin.from('fields').select('name').eq('table_id', tm.source_table_id),
           supabaseAdmin.from('transformations').select('field_mapping_id, generated_sql').in('field_mapping_id', fmIds),
@@ -487,19 +487,22 @@ export async function generateGoldStandardCSVs(projectId: string): Promise<{
         targetFieldNames = []
 
         for (const fm of approvedFMs) {
-          const srcField = srcById.get(fm.source_field_id)
+          const srcField = fm.source_field_id ? srcById.get(fm.source_field_id) : null
           const tgtField = tgtById.get(fm.target_field_id)
-          if (!srcField || !tgtField) continue
+          if (!tgtField) continue
 
           const tgtAlias = `"${tgtField.name.replace(/"/g, '""')}"`
+          const transformSql = transformByFMId.get(fm.id)
+
+          if (!srcField && !transformSql) continue
+
           targetFieldNames.push(tgtField.name)
 
-          const transformSql = transformByFMId.get(fm.id)
           if (transformSql) {
             const wrapped = wrapFieldRefsInJsonb(transformSql.replace(/;+$/, '').trim(), allSrcFieldNames)
             columns.push(`${wrapped} AS ${tgtAlias}`)
           } else {
-            const escaped = srcField.name.replace(/'/g, "''")
+            const escaped = srcField!.name.replace(/'/g, "''")
             columns.push(`row_data->>'${escaped}' AS ${tgtAlias}`)
           }
         }
@@ -612,12 +615,12 @@ export async function generateSQLLoadScripts(projectId: string): Promise<{
 
         if (!approvedFMs || approvedFMs.length === 0) continue
 
-        const srcFieldIds = approvedFMs.map((fm) => fm.source_field_id)
+        const srcFieldIds = approvedFMs.map((fm) => fm.source_field_id).filter((id): id is string => id !== null)
         const tgtFieldIds = approvedFMs.map((fm) => fm.target_field_id)
         const fmIds = approvedFMs.map((fm) => fm.id)
 
         const [{ data: srcFields }, { data: tgtFields }, { data: allSrcFields }, { data: transforms }] = await Promise.all([
-          supabaseAdmin.from('fields').select('id, name').in('id', srcFieldIds),
+          srcFieldIds.length > 0 ? supabaseAdmin.from('fields').select('id, name').in('id', srcFieldIds) : Promise.resolve({ data: [] }),
           supabaseAdmin.from('fields').select('id, name').in('id', tgtFieldIds),
           supabaseAdmin.from('fields').select('name').eq('table_id', tm.source_table_id),
           supabaseAdmin.from('transformations').select('field_mapping_id, generated_sql').in('field_mapping_id', fmIds),
@@ -632,17 +635,18 @@ export async function generateSQLLoadScripts(projectId: string): Promise<{
         targetFieldNames = []
 
         for (const fm of approvedFMs) {
-          const srcField = srcById.get(fm.source_field_id)
+          const srcField = fm.source_field_id ? srcById.get(fm.source_field_id) : null
           const tgtField = tgtById.get(fm.target_field_id)
-          if (!srcField || !tgtField) continue
-          targetFieldNames.push(tgtField.name)
+          if (!tgtField) continue
           const tgtAlias = `"${tgtField.name.replace(/"/g, '""')}"`
           const transformSql = transformByFMId.get(fm.id)
+          if (!srcField && !transformSql) continue
+          targetFieldNames.push(tgtField.name)
           if (transformSql) {
             const wrapped = wrapFieldRefsInJsonb(transformSql.replace(/;+$/, '').trim(), allSrcFieldNames)
             columns.push(`${wrapped} AS ${tgtAlias}`)
           } else {
-            const escaped = srcField.name.replace(/'/g, "''")
+            const escaped = srcField!.name.replace(/'/g, "''")
             columns.push(`row_data->>'${escaped}' AS ${tgtAlias}`)
           }
         }
@@ -840,8 +844,9 @@ Status: ${readinessLabel}
 
 <mapping_summary>
 Total source fields: ${totalSourceFields}
-Approved field mappings: ${new Set(approvedFMs.map((fm) => fm.source_field_id)).size} source fields → ${new Set(approvedFMs.filter((fm) => !(fm as { is_contributing?: boolean }).is_contributing).map((fm) => (fm as { target_field_id?: string }).target_field_id)).size} target fields (${totalSourceFields > 0 ? Math.round((new Set(approvedFMs.map((fm) => fm.source_field_id)).size / totalSourceFields) * 100) : 0}% source coverage)
-Unmapped source fields: ${totalSourceFields - new Set(approvedFMs.map((fm) => fm.source_field_id)).size}
+Approved field mappings: ${new Set(approvedFMs.map((fm) => fm.source_field_id).filter((id): id is string => id !== null)).size} source fields → ${new Set(approvedFMs.filter((fm) => !(fm as { is_contributing?: boolean }).is_contributing).map((fm) => (fm as { target_field_id?: string }).target_field_id)).size} target fields (${totalSourceFields > 0 ? Math.round((new Set(approvedFMs.map((fm) => fm.source_field_id).filter((id): id is string => id !== null)).size / totalSourceFields) * 100) : 0}% source coverage)
+Value assignments (no source field): ${approvedFMs.filter((fm) => fm.source_field_id === null).length}
+Unmapped source fields: ${totalSourceFields - new Set(approvedFMs.map((fm) => fm.source_field_id).filter((id): id is string => id !== null)).size}
 Approved table mappings: ${(tableMappings ?? []).filter((tm) => tm.status === 'approved').length}
 Rejected mappings: ${(fieldMappings ?? []).filter((fm) => fm.status === 'rejected').length}
 Average confidence: ${avgConfidence}%
@@ -955,7 +960,7 @@ export async function generateMappingFile(
 
   const tableById = new Map((allTables ?? []).map((t) => [t.id, t]))
   const fmIds = (fieldMappings ?? []).map((fm) => fm.id)
-  const allFieldIds = [...new Set([...(fieldMappings ?? []).map((fm) => fm.source_field_id), ...(fieldMappings ?? []).map((fm) => fm.target_field_id)])]
+  const allFieldIds = [...new Set([...(fieldMappings ?? []).map((fm) => fm.source_field_id).filter((id): id is string => id !== null), ...(fieldMappings ?? []).map((fm) => fm.target_field_id)])]
 
   const [{ data: allFields }, { data: transforms }] = await Promise.all([
     allFieldIds.length > 0 ? supabaseAdmin.from('fields').select('id, name, data_type, table_id').in('id', allFieldIds) : Promise.resolve({ data: [] }),
@@ -973,16 +978,17 @@ export async function generateMappingFile(
     const rows: Record<string, unknown>[] = []
 
     for (const fm of fieldMappings ?? []) {
-      const srcField = fieldById.get(fm.source_field_id)
+      const srcField = fm.source_field_id ? fieldById.get(fm.source_field_id) : null
       const tgtField = fieldById.get(fm.target_field_id)
-      const srcTable = tableById.get(srcField?.table_id ?? '')
-      const tgtTable = tableById.get(tgtField?.table_id ?? '')
-      if (!srcField || !tgtField) continue
+      if (!tgtField) continue
+
+      const srcTable = srcField ? tableById.get(srcField.table_id) : null
+      const tgtTable = tableById.get(tgtField.table_id ?? '')
 
       rows.push({
         source_table: srcTable?.name ?? '',
-        source_field: srcField.name,
-        source_type: srcField.data_type,
+        source_field: srcField ? srcField.name : '[Value Assignment]',
+        source_type: srcField ? srcField.data_type : '',
         target_table: tgtTable?.name ?? '',
         target_field: tgtField.name,
         target_type: tgtField.data_type,
@@ -1002,10 +1008,10 @@ export async function generateMappingFile(
       const fms = (fieldMappings ?? [])
         .filter((fm) => fm.table_mapping_id === tm.id)
         .map((fm) => {
-          const sf = fieldById.get(fm.source_field_id)
+          const sf = fm.source_field_id ? fieldById.get(fm.source_field_id) : null
           const tf = fieldById.get(fm.target_field_id)
           return {
-            source_field: sf?.name ?? '',
+            source_field: sf?.name ?? (fm.source_field_id === null ? '[Value Assignment]' : ''),
             source_type: sf?.data_type ?? '',
             target_field: tf?.name ?? '',
             target_type: tf?.data_type ?? '',
@@ -1092,7 +1098,7 @@ export async function generateTransformSpecs(
     return { success: false, error: 'No transformations found.' }
   }
 
-  const allFieldIds = [...new Set([...(fieldMappings ?? []).map((fm) => fm.source_field_id), ...(fieldMappings ?? []).map((fm) => fm.target_field_id)])]
+  const allFieldIds = [...new Set([...(fieldMappings ?? []).map((fm) => fm.source_field_id).filter((id): id is string => id !== null), ...(fieldMappings ?? []).map((fm) => fm.target_field_id)])]
   const tableIds = [...new Set([...(tableMappings ?? []).map((tm) => tm.source_table_id), ...(tableMappings ?? []).map((tm) => tm.target_table_id)])]
 
   const [{ data: allFields }, { data: allTables }] = await Promise.all([
@@ -1120,13 +1126,14 @@ export async function generateTransformSpecs(
     const fm = fmById.get(t.field_mapping_id)
     if (!fm) continue
     const tm = tmById.get(fm.table_mapping_id)
-    const srcField = fieldById.get(fm.source_field_id)
+    const srcField = fm.source_field_id ? fieldById.get(fm.source_field_id) : null
     const tgtField = fieldById.get(fm.target_field_id)
     const srcTable = tm ? tableById.get(tm.source_table_id) : null
     const tgtTable = tm ? tableById.get(tm.target_table_id) : null
     const statusMark = t.status === 'saved' ? '✓ Saved' : t.status === 'tested' ? '◎ Tested' : '○ Draft'
 
-    lines.push(`-- Source: ${srcTable?.name ?? '?'}.${srcField?.name ?? '?'} → Target: ${tgtTable?.name ?? '?'}.${tgtField?.name ?? '?'}`)
+    const srcLabel = srcField ? `${srcTable?.name ?? '?'}.${srcField.name}` : '[Value Assignment]'
+    lines.push(`-- Source: ${srcLabel} → Target: ${tgtTable?.name ?? '?'}.${tgtField?.name ?? '?'}`)
     if (t.description) lines.push(`-- Description: ${t.description}`)
     lines.push(`-- Status: ${statusMark}`)
     lines.push(t.generated_sql)

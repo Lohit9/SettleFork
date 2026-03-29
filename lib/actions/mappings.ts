@@ -41,7 +41,7 @@ interface ClaudeResponse {
 export interface RichFieldMapping {
   id: string
   table_mapping_id: string
-  source_field_id: string
+  source_field_id: string | null
   target_field_id: string
   confidence: number | null
   status: 'needs_review' | 'approved' | 'rejected'
@@ -594,9 +594,9 @@ export async function getMappings(projectId: string): Promise<MappingsResult | n
 
     const fieldMappings: RichFieldMapping[] = fms
       .map((fm) => {
-        const srcField = fieldMap.get(fm.source_field_id) ?? null
+        const srcField = fm.source_field_id ? (fieldMap.get(fm.source_field_id) ?? null) : null
         const tgtField = fieldMap.get(fm.target_field_id) ?? null
-        const srcProfile = profileMap.get(fm.source_field_id)
+        const srcProfile = fm.source_field_id ? profileMap.get(fm.source_field_id) : undefined
         const tgtProfile = profileMap.get(fm.target_field_id)
 
         const toSamples = (p: typeof srcProfile) =>
@@ -627,10 +627,11 @@ export async function getMappings(projectId: string): Promise<MappingsResult | n
           sourceFieldNullPercentage: (srcProfile as { null_percentage?: number } | undefined)?.null_percentage ?? 0,
         }
       })
-      // Sort by source field's ordinal_position so mapping rows follow CSV upload order
       .sort((a, b) => {
-        const posA = fieldMap.get(a.source_field_id)?.ordinal_position ?? 9999
-        const posB = fieldMap.get(b.source_field_id)?.ordinal_position ?? 9999
+        if (!a.source_field_id && b.source_field_id) return 1
+        if (a.source_field_id && !b.source_field_id) return -1
+        const posA = a.source_field_id ? (fieldMap.get(a.source_field_id)?.ordinal_position ?? 9999) : 9999
+        const posB = b.source_field_id ? (fieldMap.get(b.source_field_id)?.ordinal_position ?? 9999) : 9999
         return posA - posB
       })
 
@@ -665,7 +666,7 @@ export async function getMappings(projectId: string): Promise<MappingsResult | n
   // Only non-rejected mappings count as "active" — a field whose only mapping
   // is rejected should appear in the Unmapped tab and coverage indicator
   const mappedSourceFieldIds = new Set(
-    (rawFMs ?? []).filter((fm) => fm.status !== 'rejected').map((fm) => fm.source_field_id)
+    (rawFMs ?? []).filter((fm) => fm.status !== 'rejected' && fm.source_field_id).map((fm) => fm.source_field_id as string)
   )
   const mappedTargetFieldIds = new Set(
     (rawFMs ?? []).filter((fm) => fm.status !== 'rejected').map((fm) => fm.target_field_id)
@@ -790,16 +791,16 @@ export async function updateFieldMappingStatus(
           .select('project_id')
           .eq('id', fmBefore.table_mapping_id)
           .single()
-        const [{ data: srcFld }, { data: tgtFld }] = await Promise.all([
-          supabase.from('fields').select('name').eq('id', fmBefore.source_field_id).single(),
-          supabase.from('fields').select('name').eq('id', fmBefore.target_field_id).single(),
-        ])
+        const srcFld = fmBefore.source_field_id
+          ? (await supabase.from('fields').select('name').eq('id', fmBefore.source_field_id).single()).data
+          : null
+        const { data: tgtFld } = await supabase.from('fields').select('name').eq('id', fmBefore.target_field_id).single()
         if (tm) {
           const confNote = fmBefore.confidence ? ` (${Math.round(fmBefore.confidence)}% confidence)` : ''
           await logActivity(
             tm.project_id,
             status === 'approved' ? 'mapping_approved' : 'mapping_rejected',
-            `Mapping ${status}: ${srcFld?.name ?? '?'} \u2192 ${tgtFld?.name ?? '?'}${status === 'approved' ? confNote : ''}`,
+            `Mapping ${status}: ${srcFld?.name ?? '[value]'} \u2192 ${tgtFld?.name ?? '?'}${status === 'approved' ? confNote : ''}`,
             'mapping',
             {
               field_mapping_id: fieldMappingId,
@@ -1173,7 +1174,7 @@ export async function suggestRemainingMappings(
   if (!proj) return { success: false, newMappingsCount: 0, error: 'Not authorized' }
 
   const { data: existingFMs } = await supabase.from('field_mappings').select('source_field_id, target_field_id').eq('table_mapping_id', tableMappingId)
-  const mappedSrcIds = new Set((existingFMs ?? []).map((fm) => fm.source_field_id))
+  const mappedSrcIds = new Set((existingFMs ?? []).filter((fm) => fm.source_field_id).map((fm) => fm.source_field_id as string))
   const mappedTgtIds = new Set((existingFMs ?? []).map((fm) => fm.target_field_id))
 
   const { data: allSrcF } = await supabase.from('fields')
@@ -1291,8 +1292,8 @@ ${remCtx.intelligence_context ? remCtx.intelligence_context + '\n\n' : ''}CRITIC
       .from('field_mappings')
       .select('source_field_id')
       .eq('table_mapping_id', tableMappingId)
-    const alreadyMappedSrcIds = new Set((latestFMs ?? []).map((fm) => fm.source_field_id))
-    const safeInserts = inserts.filter((i) => !alreadyMappedSrcIds.has(i.source_field_id as string))
+    const alreadyMappedSrcIds = new Set((latestFMs ?? []).filter((fm) => fm.source_field_id).map((fm) => fm.source_field_id as string))
+    const safeInserts = inserts.filter((i) => !i.source_field_id || !alreadyMappedSrcIds.has(i.source_field_id as string))
 
     if (safeInserts.length > 0) {
       await supabase.from('field_mappings').insert(safeInserts)
@@ -1378,4 +1379,46 @@ export async function mapUnmappedField(
 
   if (fmErr) return { success: false, error: fmErr.message }
   return { success: true }
+}
+
+// ─── Value Assignment — field_mapping with NULL source_field_id ──────────────
+
+export async function createValueAssignment(
+  projectId: string,
+  tableMappingId: string,
+  targetFieldId: string
+): Promise<{ success: boolean; fieldMappingId?: string; error?: string }> {
+  const supabase = await createClient()
+  const { data: { user } } = await supabase.auth.getUser()
+  if (!user) return { success: false, error: 'Not authenticated' }
+
+  const { data: existing } = await supabase
+    .from('field_mappings')
+    .select('id')
+    .eq('table_mapping_id', tableMappingId)
+    .eq('target_field_id', targetFieldId)
+    .is('source_field_id', null)
+    .maybeSingle()
+
+  if (existing) return { success: true, fieldMappingId: existing.id }
+
+  const { data, error } = await supabase
+    .from('field_mappings')
+    .insert({
+      table_mapping_id: tableMappingId,
+      source_field_id: null,
+      target_field_id: targetFieldId,
+      confidence: 100,
+      status: 'approved',
+      ai_reasoning: 'Value assignment — no source field. User will define the value in Transform.',
+      needs_transformation: true,
+      is_contributing: false,
+    })
+    .select('id')
+    .single()
+
+  if (error) return { success: false, error: error.message }
+
+  revalidatePath(`/app/projects/${projectId}`, 'layout')
+  return { success: true, fieldMappingId: data.id }
 }

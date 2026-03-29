@@ -500,7 +500,7 @@ export async function extractMigrationIntelligence(projectId: string): Promise<{
       supabaseAdmin
         .from('field_mappings')
         .select(
-          'id, table_mapping_id, confidence, needs_transformation, source_field:fields!field_mappings_source_field_id_fkey(id, name, data_type, inferred_type), target_field:fields!field_mappings_target_field_id_fkey(id, name, data_type, is_nullable, is_primary_key, is_foreign_key)'
+          'id, table_mapping_id, confidence, needs_transformation, source_field_id, source_field:fields!field_mappings_source_field_id_fkey(id, name, data_type, inferred_type), target_field:fields!field_mappings_target_field_id_fkey(id, name, data_type, is_nullable, is_primary_key, is_foreign_key)'
         )
         .in('table_mapping_id', tableMappingIds),
     ])
@@ -541,9 +541,11 @@ export async function extractMigrationIntelligence(projectId: string): Promise<{
           if (!t.generated_sql) continue
           const fm = fieldMappings.find((f) => f.id === t.field_mapping_id)
           if (!fm) continue
-          const src = fm.source_field as unknown as { name: string; data_type: string } | null
           const tgt = fm.target_field as unknown as { name: string; data_type: string } | null
-          if (!src || !tgt) continue
+          if (!tgt) continue
+          if (fm.source_field_id == null) continue
+          const src = fm.source_field as unknown as { name: string; data_type: string } | null
+          if (!src) continue
 
           appliedTransforms.push({
             sourceFieldType: src.data_type,
@@ -601,15 +603,22 @@ export async function extractMigrationIntelligence(projectId: string): Promise<{
 
       const fields = fieldMappings.filter((fm) => fm.table_mapping_id === tm.id)
       for (const fm of fields) {
-        const src = fm.source_field as unknown as { name: string; data_type: string; inferred_type: string | null } | null
         const tgt = fm.target_field as unknown as { name: string; data_type: string; is_nullable: boolean } | null
-        if (!src || !tgt) continue
+        if (!tgt) continue
+        const src = fm.source_field as unknown as { name: string; data_type: string; inferred_type: string | null } | null
+        const srcDisplay =
+          fm.source_field_id == null
+            ? '[Value Assignment]'
+            : src
+              ? `${src.name} (${src.data_type}${src.inferred_type ? '/' + src.inferred_type : ''})`
+              : null
+        if (srcDisplay === null) continue
 
         const transform = transformsByFieldMappingId.get(fm.id)
         const confidence = fm.confidence != null ? Math.round(fm.confidence * 100) : '?'
         const needsTransform = fm.needs_transformation ? 'yes' : 'no'
 
-        mappingsSection += `  - ${src.name} (${src.data_type}${src.inferred_type ? '/' + src.inferred_type : ''}) → ${tgt.name} (${tgt.data_type})\n`
+        mappingsSection += `  - ${srcDisplay} → ${tgt.name} (${tgt.data_type})\n`
         mappingsSection += `    Confidence: ${confidence}% | Needs transform: ${needsTransform}\n`
 
         if (transform) {
@@ -623,7 +632,11 @@ export async function extractMigrationIntelligence(projectId: string): Promise<{
     let transformsSection = ''
     for (const t of allTransforms) {
       const fm = fieldMappings.find((f) => f.id === t.field_mapping_id)
-      const src = (fm?.source_field as unknown as { name: string } | null)?.name ?? 'unknown'
+      const src = !fm
+        ? 'unknown'
+        : fm.source_field_id == null
+          ? '[Value Assignment]'
+          : (fm.source_field as unknown as { name: string } | null)?.name ?? 'unknown'
       const tgt = (fm?.target_field as unknown as { name: string } | null)?.name ?? 'unknown'
       transformsSection += `  - ${src} → ${tgt}: ${t.description ?? 'n/a'}\n    SQL: ${t.generated_sql ?? 'n/a'}\n    Status: ${t.status}\n`
     }

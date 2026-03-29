@@ -28,6 +28,7 @@ import {
   previewTransformDistinct,
   suggestTransformDescription,
 } from '@/lib/actions/transformations'
+import { createValueAssignment } from '@/lib/actions/mappings'
 import type { TransformPageData, DatasetGroup, TableGroup, FieldItem, FullTransformTestResult, UnmappedTargetField } from '@/lib/actions/transformations'
 import { stageAllData, getBlockingSourceIssues, getSourceIssuesForField, checkProjectStaleness } from '@/lib/actions/staging'
 import type { BlockingIssue, FieldSourceIssue } from '@/lib/actions/staging'
@@ -131,6 +132,10 @@ function getTargetConstraintHint(field: FieldItem): string {
 }
 
 function getSmartPlaceholder(field: FieldItem): string {
+  if (field.isValueAssignment) {
+    return `e.g., "Always set to 'FIRM'" or "Generate as 'TC-' followed by a sequential number"`
+  }
+
   const compat = (field.typeCompatibility ?? '').toLowerCase()
   const reason = (field.aiReasoning ?? '').toLowerCase()
   const src = field.sourceFieldName
@@ -211,6 +216,16 @@ export default function TransformContent({ projectId, initialData }: Props) {
 
   // Unmapped NOT NULL target fields — sidebar selection
   const [selectedUnmappedFieldId, setSelectedUnmappedFieldId] = useState<string | null>(null)
+  // Unmapped field value-assignment editor state
+  const [unmappedDescription, setUnmappedDescription] = useState('')
+  const [unmappedSql, setUnmappedSql] = useState('')
+  const [unmappedSqlSource, setUnmappedSqlSource] = useState<'ai' | 'manual' | null>(null)
+  const [unmappedGenerating, setUnmappedGenerating] = useState(false)
+  const [unmappedSuggesting, setUnmappedSuggesting] = useState(false)
+  const [unmappedSaving, setUnmappedSaving] = useState(false)
+  const [unmappedSqlExpanded, setUnmappedSqlExpanded] = useState(false)
+  const [unmappedPreviewRows, setUnmappedPreviewRows] = useState<{ after: string | null }[]>([])
+  const [unmappedFieldMappingId, setUnmappedFieldMappingId] = useState<string | null>(null)
 
   // Sidebar filter
   const [sidebarFilter, setSidebarFilter] = useState<TransformFilter>('all')
@@ -467,7 +482,9 @@ export default function TransformContent({ projectId, initialData }: Props) {
 
       // Load open source issues for this field asynchronously (for preview row flagging)
       setFieldSourceIssues([])
-      getSourceIssuesForField(projectId, field.sourceFieldId).then(setFieldSourceIssues).catch(() => {})
+      if (field.sourceFieldId) {
+        getSourceIssuesForField(projectId, field.sourceFieldId).then(setFieldSourceIssues).catch(() => {})
+      }
 
       if (field.transformation) {
         setLocalTransform({
@@ -647,7 +664,7 @@ export default function TransformContent({ projectId, initialData }: Props) {
 
     // Check for blocking issues scoped to THIS specific source field (+ table-level issues)
     const sourceTableId = selectedContext?.table.sourceTableId
-    const sourceFieldId = selectedContext?.field.sourceFieldId
+    const sourceFieldId = selectedContext?.field.sourceFieldId ?? undefined
     setIsCheckingIssues(true)
     try {
       const issues = await getBlockingSourceIssues(
@@ -1034,6 +1051,12 @@ export default function TransformContent({ projectId, initialData }: Props) {
                   onSelectUnmappedField={(id) => {
                     setSelectedUnmappedFieldId(id)
                     setSelectedMappingId(null)
+                    setUnmappedDescription('')
+                    setUnmappedSql('')
+                    setUnmappedSqlSource(null)
+                    setUnmappedSqlExpanded(false)
+                    setUnmappedPreviewRows([])
+                    setUnmappedFieldMappingId(null)
                   }}
                 />
               ))
@@ -1056,6 +1079,12 @@ export default function TransformContent({ projectId, initialData }: Props) {
                     onClick={() => {
                       setSelectedUnmappedFieldId(field.id)
                       setSelectedMappingId(null)
+                      setUnmappedDescription('')
+                      setUnmappedSql('')
+                      setUnmappedSqlSource(null)
+                      setUnmappedSqlExpanded(false)
+                      setUnmappedPreviewRows([])
+                      setUnmappedFieldMappingId(null)
                     }}
                   >
                     <span className="w-2 h-2 rounded-full bg-amber-400 flex-shrink-0" />
@@ -1075,50 +1104,284 @@ export default function TransformContent({ projectId, initialData }: Props) {
               ?? data.unmappedNullableTargetFields.find((f) => f.id === selectedUnmappedFieldId)
             if (!field) return null
             const isRequired = !field.is_nullable
+            const checkConstraint = field.check_constraint as { type?: string; allowedValues?: string[]; pattern?: string } | null
+
+            // Lazily ensure a field_mapping exists; returns its ID
+            const ensureFieldMapping = async (): Promise<string | null> => {
+              if (unmappedFieldMappingId) return unmappedFieldMappingId
+              let tableMappingId: string | null = null
+              for (const ds of data.datasets) {
+                for (const t of ds.tables) {
+                  if (t.targetTableId === field.table_id) { tableMappingId = t.tableMappingId; break }
+                }
+                if (tableMappingId) break
+              }
+              if (!tableMappingId) return null
+              const result = await createValueAssignment(projectId, tableMappingId, field.id)
+              if (!result.success || !result.fieldMappingId) return null
+              setUnmappedFieldMappingId(result.fieldMappingId)
+              return result.fieldMappingId
+            }
+
+            const handleUnmappedSuggest = async () => {
+              setUnmappedSuggesting(true)
+              try {
+                const fmId = await ensureFieldMapping()
+                if (!fmId) return
+                const result = await suggestTransformDescription(fmId)
+                if (result.suggestion) setUnmappedDescription(result.suggestion)
+              } finally {
+                setUnmappedSuggesting(false)
+              }
+            }
+
+            const handleUnmappedGenerate = async () => {
+              if (!unmappedDescription.trim()) return
+              setUnmappedGenerating(true)
+              try {
+                const fmId = await ensureFieldMapping()
+                if (!fmId) return
+                const genResult = await generateTransform(fmId, unmappedDescription)
+                if (genResult.sql) {
+                  setUnmappedSql(genResult.sql)
+                  setUnmappedSqlSource('ai')
+                  setUnmappedSqlExpanded(true)
+                  const prev = await previewTransformDistinct(fmId, genResult.sql)
+                  if (prev.results) setUnmappedPreviewRows(prev.results.map((r) => ({ after: r.after })))
+                }
+              } finally {
+                setUnmappedGenerating(false)
+              }
+            }
+
+            const handleUnmappedSave = async () => {
+              if (!unmappedFieldMappingId || !unmappedSql.trim()) return
+              setUnmappedSaving(true)
+              try {
+                const { createClient } = await import('@/lib/supabase/client')
+                const sb = createClient()
+                const { data: tfData } = await sb.from('transformations').select('id').eq('field_mapping_id', unmappedFieldMappingId).maybeSingle()
+                if (tfData?.id) {
+                  await autoSaveTransform(tfData.id, unmappedSql, unmappedDescription)
+                }
+                router.refresh()
+                setSelectedMappingId(unmappedFieldMappingId)
+                setSelectedUnmappedFieldId(null)
+              } finally {
+                setUnmappedSaving(false)
+              }
+            }
+
+            const smartPlaceholder = checkConstraint?.type === 'in_list' && checkConstraint.allowedValues?.length
+              ? `e.g. "Always set to '${checkConstraint.allowedValues[0]}'" or "Use FIRM for law firms, CORP for corporations"`
+              : isRequired
+                ? `e.g. "Always set to 'DEFAULT'", "Use current timestamp", "Generate a UUID"`
+                : `e.g. "Leave as NULL", "Set to empty string", "Use current date"`
+
             return (
-              <div className="flex-1 flex items-start justify-center p-8">
-                <div className={`max-w-lg w-full rounded-lg p-6 ${isRequired ? 'bg-amber-50 border border-amber-200' : 'bg-gray-50 border border-gray-200'}`}>
-                  <div className="flex items-center gap-2 mb-4">
-                    <span className={`w-3 h-3 rounded-full ${isRequired ? 'bg-amber-400' : 'bg-gray-300'}`} />
-                    <span className={`text-lg font-semibold ${isRequired ? 'text-amber-800' : 'text-gray-700'}`}>
-                      {isRequired ? 'Unmapped Required Field' : 'Unmapped Optional Field'}
-                    </span>
+              <div className="flex-1 flex flex-col min-h-0">
+                {/* Header — same as regular transform editor header */}
+                <div className="bg-white border-b border-gray-200 px-6 py-3 flex items-center justify-between flex-shrink-0">
+                  <div className="flex items-center gap-3 min-w-0">
+                    <span className="text-sm font-semibold text-gray-900 flex-shrink-0">Define Value</span>
+                    <span className="text-xs font-medium px-2 py-0.5 rounded-full bg-purple-100 text-purple-700 flex-shrink-0">Value Assignment</span>
+                    <div className="flex items-center gap-1.5 text-sm text-gray-500 flex-wrap min-w-0">
+                      <span className="font-medium text-gray-700 truncate">{field.name}</span>
+                      <span className="text-gray-400 text-xs">{field.data_type}</span>
+                      {isRequired && <span className="text-amber-600 text-xs">NOT NULL</span>}
+                      {field.table_name && <span className="text-gray-400 text-xs">· {field.table_name}</span>}
+                    </div>
                   </div>
-                  <div className="space-y-3 text-sm text-gray-700">
-                    <div className={`bg-white rounded-md p-3 border ${isRequired ? 'border-amber-100' : 'border-gray-100'}`}>
-                      <p className="font-medium text-gray-900">{field.name}</p>
-                      <p className="text-gray-500 text-xs mt-0.5">
-                        {field.data_type} · {isRequired ? 'NOT NULL' : 'NULLABLE'}{field.table_name ? ` · ${field.table_name}` : ''}
-                      </p>
-                      {field.check_constraint?.type === 'in_list' && (field.check_constraint as { allowedValues?: string[] }).allowedValues && (
-                        <div className="mt-2 flex flex-wrap gap-1">
-                          {((field.check_constraint as { allowedValues: string[] }).allowedValues).map((v: string) => (
-                            <span key={v} className="text-[10px] px-1.5 py-0.5 bg-blue-50 text-blue-700 rounded font-mono">{v}</span>
-                          ))}
+                </div>
+
+                {/* Scrollable editor body */}
+                <div className="flex-1 overflow-auto p-5 space-y-4">
+
+                  {/* Description card — identical structure to regular transform NL description card */}
+                  <div className="bg-white rounded-lg border border-gray-200 p-4">
+                    <label className="block text-sm font-medium text-gray-900 mb-2">
+                      Describe the value this field should receive
+                    </label>
+                    {/* Context hints — replaces multi-source hint */}
+                    <div className="mb-3 space-y-2">
+                      <div className="px-3 py-2 bg-purple-50 border border-purple-100 rounded-lg text-xs text-purple-700">
+                        <span className="font-medium">No source field mapped.</span>{' '}
+                        {isRequired
+                          ? 'This required field needs a value for every record. Describe a constant, expression, or rule.'
+                          : 'This optional field has no source mapping. Define a value or leave it to default to NULL.'}
+                      </div>
+                      {checkConstraint?.type === 'in_list' && checkConstraint.allowedValues && (
+                        <div className="px-3 py-2 bg-blue-50 border border-blue-100 rounded-lg text-xs text-blue-700">
+                          <span className="font-medium">Allowed values:</span>{' '}
+                          <span className="font-mono">{checkConstraint.allowedValues.join(', ')}</span>
                         </div>
                       )}
-                      {field.check_constraint?.type === 'regex' && (field.check_constraint as { pattern?: string }).pattern && (
-                        <p className="mt-1 text-xs text-purple-600 font-mono">Pattern: {(field.check_constraint as { pattern: string }).pattern}</p>
+                      {checkConstraint?.type === 'regex' && checkConstraint.pattern && (
+                        <div className="px-3 py-2 bg-blue-50 border border-blue-100 rounded-lg text-xs text-blue-700">
+                          <span className="font-medium">Pattern constraint:</span>{' '}
+                          <span className="font-mono">{checkConstraint.pattern}</span>
+                        </div>
                       )}
                     </div>
-                    {isRequired ? (
-                      <>
-                        <p>This target field is <strong>NOT NULL</strong> but has no source field mapped to it. A value must be provided for every record.</p>
-                        <div className="space-y-2 text-gray-600">
-                          <p className="font-medium text-gray-700">Options:</p>
-                          <div className="flex items-start gap-2">
-                            <span className="text-blue-500 mt-0.5">1.</span>
-                            <p>Go to the <strong>Mapping</strong> tab and map a source field to this target field.</p>
-                          </div>
-                          <div className="flex items-start gap-2">
-                            <span className="text-blue-500 mt-0.5">2.</span>
-                            <p>The <strong>Execution Package</strong> will auto-generate a default value based on the field type and constraints when you generate it.</p>
-                          </div>
+                    <Textarea
+                      value={unmappedDescription}
+                      onChange={(e) => setUnmappedDescription(e.target.value)}
+                      placeholder={smartPlaceholder}
+                      className="min-h-20 resize-none text-sm"
+                      onKeyDown={(e) => { if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) handleUnmappedGenerate() }}
+                    />
+                    {/* Action row — same layout as regular editor */}
+                    <div className="mt-3 flex items-center gap-2 flex-wrap">
+                      <Button
+                        variant="outline"
+                        className="gap-1.5 text-sm border-gray-300 text-gray-700 hover:text-indigo-700 hover:border-indigo-300 hover:bg-indigo-50"
+                        onClick={handleUnmappedSuggest}
+                        disabled={unmappedSuggesting || unmappedGenerating}
+                      >
+                        {unmappedSuggesting
+                          ? <span className="w-3.5 h-3.5 border-2 border-gray-400 border-t-indigo-500 rounded-full animate-spin" />
+                          : <Sparkles className="w-3.5 h-3.5" />}
+                        {unmappedSuggesting ? 'Suggesting...' : 'AI Suggest'}
+                      </Button>
+                      <Button
+                        className="bg-[#4F46E5] hover:bg-[#4338CA] text-white gap-2"
+                        onClick={handleUnmappedGenerate}
+                        disabled={unmappedGenerating || unmappedSuggesting || !unmappedDescription.trim()}
+                      >
+                        <RefreshCw className={`w-4 h-4 ${unmappedGenerating ? 'animate-spin' : ''}`} />
+                        {unmappedGenerating ? 'Generating...' : 'Generate SQL'}
+                      </Button>
+                      <button
+                        className="text-sm text-gray-500 hover:text-gray-700 underline-offset-2 hover:underline"
+                        onClick={() => { setUnmappedDescription(''); setUnmappedSql(''); setUnmappedSqlSource(null); setUnmappedPreviewRows([]) }}
+                      >
+                        Clear
+                      </button>
+                    </div>
+                  </div>
+
+                  {/* Generated SQL — collapsible, same as regular editor */}
+                  {unmappedSql && (
+                    <div className="bg-white rounded-lg border border-gray-200">
+                      <button
+                        type="button"
+                        onClick={() => setUnmappedSqlExpanded((v) => !v)}
+                        className="w-full px-4 py-2.5 flex items-center justify-between hover:bg-gray-50 transition-colors"
+                      >
+                        <div className="flex items-center gap-2">
+                          <span className="text-sm font-semibold text-gray-900">Generated SQL</span>
+                          {unmappedSqlSource === 'ai' && (
+                            <span className="text-[10px] font-medium px-1.5 py-0.5 rounded-full bg-indigo-100 text-indigo-700">AI-Generated</span>
+                          )}
                         </div>
-                      </>
-                    ) : (
-                      <p>This target field is <strong>nullable</strong> and has no source field mapped to it. It will be left as <code className="text-xs bg-gray-100 px-1 py-0.5 rounded">NULL</code> during migration unless you map a source field to it.</p>
-                    )}
+                        <span className="text-xs text-gray-400">{unmappedSqlExpanded ? 'Hide ▴' : 'Show ▾'}</span>
+                      </button>
+                      {unmappedSqlExpanded && (
+                        <div className="p-4 border-t border-gray-100">
+                          <textarea
+                            value={unmappedSql}
+                            onChange={(e) => { setUnmappedSql(e.target.value); setUnmappedSqlSource('manual') }}
+                            className="w-full font-mono text-xs text-gray-800 bg-gray-50 rounded border border-gray-200 p-3 resize-none focus:outline-none focus:ring-2 focus:ring-[#4F46E5]/30 focus:border-[#4F46E5]"
+                            rows={Math.max(2, unmappedSql.split('\n').length + 1)}
+                            spellCheck={false}
+                          />
+                        </div>
+                      )}
+                    </div>
+                  )}
+
+                  {/* Value Preview — simplified table, target column only (no source) */}
+                  {unmappedSql && (
+                    <div className="bg-white rounded-lg border border-gray-200 overflow-hidden">
+                      <div className="px-4 py-2.5 border-b border-gray-100 flex items-center justify-between">
+                        <span className="text-sm font-semibold text-gray-900">Value Preview</span>
+                        {unmappedPreviewRows.length > 0 && (
+                          <span className="text-xs text-green-600 flex items-center gap-1">
+                            <span className="w-1.5 h-1.5 rounded-full bg-green-500" />
+                            Live
+                          </span>
+                        )}
+                      </div>
+                      <table className="w-full text-sm">
+                        <thead>
+                          <tr className="bg-gray-50 border-b border-gray-100">
+                            <th className="text-left px-4 py-2 text-xs font-medium text-gray-500">
+                              Target ({field.name})
+                            </th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {unmappedPreviewRows.length > 0 ? (
+                            unmappedPreviewRows.slice(0, 8).map((row, i) => (
+                              <tr key={i} className="border-b border-gray-50 last:border-0 hover:bg-gray-50/50">
+                                <td className="px-4 py-2 font-mono text-xs text-green-600">
+                                  {row.after != null ? String(row.after) : <span className="italic text-gray-400">null</span>}
+                                </td>
+                              </tr>
+                            ))
+                          ) : (
+                            <tr>
+                              <td className="px-4 py-6 text-center text-xs text-gray-400">
+                                Run <strong>Generate SQL</strong> to preview the output
+                              </td>
+                            </tr>
+                          )}
+                        </tbody>
+                      </table>
+                    </div>
+                  )}
+
+                </div>
+
+                {/* Pinned action bar — same structure as Test+Apply bar */}
+                {unmappedSql && (
+                  <div className="flex-shrink-0 z-10 border-t border-gray-200 bg-white px-4 py-3 flex items-center gap-3 shadow-[0_-2px_8px_rgba(0,0,0,0.06)]">
+                    <Button
+                      className="bg-[#4F46E5] hover:bg-[#4338CA] text-white gap-2 flex-1"
+                      onClick={handleUnmappedSave}
+                      disabled={unmappedSaving}
+                    >
+                      {unmappedSaving ? (
+                        <span className="flex items-center gap-2">
+                          <span className="w-3.5 h-3.5 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+                          Saving…
+                        </span>
+                      ) : (
+                        <>
+                          <Database className="w-3.5 h-3.5" />
+                          Save Value
+                        </>
+                      )}
+                    </Button>
+                  </div>
+                )}
+
+                {/* Footer — same as regular editor footer */}
+                <div className="border-t border-gray-200 bg-white px-6 py-3 flex items-center justify-between flex-shrink-0">
+                  <span className="text-xs text-gray-400">
+                    Use <strong>Save Value</strong> to persist the expression, then <strong>Stage All Data</strong> to apply it.
+                  </span>
+                  <div className="flex flex-col items-end gap-1">
+                    {stagingError && <p className="text-xs text-red-600 max-w-xs text-right">{stagingError}</p>}
+                    <Button
+                      className="bg-[#4F46E5] hover:bg-[#4338CA] text-white disabled:opacity-60"
+                      disabled={isStaging}
+                      onClick={() => {
+                        setStagingError(null)
+                        startStaging(async () => {
+                          const result = await stageAllData(projectId)
+                          if (!result.success && result.error) { setStagingError(result.error); return }
+                          router.push(`/app/projects/${projectId}/data-quality`)
+                        })
+                      }}
+                    >
+                      {isStaging ? (
+                        <span className="flex items-center gap-2">
+                          <span className="w-3.5 h-3.5 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+                          Staging…
+                        </span>
+                      ) : 'Continue to Validation'}
+                    </Button>
                   </div>
                 </div>
               </div>
@@ -1140,9 +1403,23 @@ export default function TransformContent({ projectId, initialData }: Props) {
               {/* Split panel header */}
               <div className="bg-white border-b border-gray-200 px-6 py-3 flex items-center justify-between flex-shrink-0">
                 <div className="flex items-center gap-3 min-w-0">
-                  <span className="text-sm font-semibold text-gray-900 flex-shrink-0">Transform Field</span>
-                  {selectedContext.field.contributingSourceFields.length > 0 ? (
+                  {selectedContext.field.isValueAssignment ? (
                     <>
+                      <span className="text-sm font-semibold text-gray-900 flex-shrink-0">Define Value</span>
+                      <span className="text-xs font-medium px-2 py-0.5 rounded-full bg-purple-100 text-purple-700 flex-shrink-0">
+                        Value Assignment
+                      </span>
+                      <div className="flex items-center gap-1.5 text-sm text-gray-500">
+                        <span className="font-medium text-gray-700">{selectedContext.field.targetFieldName}</span>
+                        <span className="text-gray-400 text-xs">{selectedContext.field.targetFieldDataType}</span>
+                        {!selectedContext.field.targetFieldIsNullable && (
+                          <span className="text-amber-600 text-xs">NOT NULL</span>
+                        )}
+                      </div>
+                    </>
+                  ) : selectedContext.field.contributingSourceFields.length > 0 ? (
+                    <>
+                      <span className="text-sm font-semibold text-gray-900 flex-shrink-0">Transform Field</span>
                       <span className="text-xs font-medium px-2 py-0.5 rounded-full bg-blue-100 text-blue-700 flex-shrink-0">
                         Many-to-One
                       </span>
@@ -1159,15 +1436,18 @@ export default function TransformContent({ projectId, initialData }: Props) {
                       </div>
                     </>
                   ) : (
-                    <div className="flex items-center gap-1.5 text-sm text-gray-500">
-                      <span className="font-medium text-gray-700">
-                        {selectedContext.table.sourceTableName}.{selectedContext.field.sourceFieldName}
-                      </span>
-                      <ArrowRight className="w-3.5 h-3.5 text-gray-400" />
-                      <span className="font-medium text-gray-700">
-                        {selectedContext.field.targetFieldName}
-                      </span>
-                    </div>
+                    <>
+                      <span className="text-sm font-semibold text-gray-900 flex-shrink-0">Transform Field</span>
+                      <div className="flex items-center gap-1.5 text-sm text-gray-500">
+                        <span className="font-medium text-gray-700">
+                          {selectedContext.table.sourceTableName}.{selectedContext.field.sourceFieldName}
+                        </span>
+                        <ArrowRight className="w-3.5 h-3.5 text-gray-400" />
+                        <span className="font-medium text-gray-700">
+                          {selectedContext.field.targetFieldName}
+                        </span>
+                      </div>
+                    </>
                   )}
                 </div>
                 <div className="flex items-center gap-2 flex-shrink-0">
@@ -1194,8 +1474,28 @@ export default function TransformContent({ projectId, initialData }: Props) {
                   {/* NL Description — first interactive element */}
                   <div className="bg-white rounded-lg border border-gray-200 p-4">
                     <label className="block text-sm font-medium text-gray-900 mb-2">
-                      Describe how this field should be transformed
+                      {selectedContext.field.isValueAssignment
+                        ? 'Describe the value this field should receive'
+                        : 'Describe how this field should be transformed'}
                     </label>
+                    {selectedContext.field.isValueAssignment && (
+                      <div className="mb-3 space-y-2">
+                        <div className="px-3 py-2 bg-purple-50 border border-purple-100 rounded-lg text-xs text-purple-700">
+                          <span className="font-medium">Value assignment.</span> This target field has no source mapping.
+                          Describe a constant, expression, or rule to generate the value
+                          (e.g., <code className="bg-purple-100 px-1 rounded">&apos;FIRM&apos;</code> or <code className="bg-purple-100 px-1 rounded">&apos;TC-&apos; || row_number()</code>).
+                        </div>
+                        {selectedContext.field.targetCheckConstraint?.type === 'in_list' &&
+                          (selectedContext.field.targetCheckConstraint as { allowedValues?: string[] }).allowedValues && (
+                          <div className="px-3 py-2 bg-blue-50 border border-blue-100 rounded-lg text-xs text-blue-700">
+                            <span className="font-medium">Allowed values:</span>{' '}
+                            <span className="font-mono">
+                              {((selectedContext.field.targetCheckConstraint as { allowedValues: string[] }).allowedValues).join(', ')}
+                            </span>
+                          </div>
+                        )}
+                      </div>
+                    )}
                     {selectedContext?.field.contributingSourceFields && selectedContext.field.contributingSourceFields.length > 0 && (
                       <div className="mb-3 px-3 py-2 bg-indigo-50 border border-indigo-100 rounded-lg text-xs text-indigo-700">
                         <span className="font-medium">Multi-source mapping.</span> This field also receives data from:{' '}
@@ -1435,17 +1735,20 @@ export default function TransformContent({ projectId, initialData }: Props) {
 
                 {(() => {
                   // Determine all source columns for this mapping
-                  const srcColumns = [
-                    selectedContext.field.sourceFieldName,
-                    ...selectedContext.field.contributingSourceFields.map((f) => f.name),
-                  ]
+                  const isValueAssignment = selectedContext.field.isValueAssignment
+                  const srcColumns = isValueAssignment
+                    ? []
+                    : [
+                        selectedContext.field.sourceFieldName,
+                        ...selectedContext.field.contributingSourceFields.map((f) => f.name),
+                      ].filter(Boolean) as string[]
                   const isManyToOne = srcColumns.length > 1
 
                   return (
                 <table className="w-full text-sm">
                   <thead>
                     <tr className="border-b border-gray-100 bg-gray-50/50">
-                      {isManyToOne ? (
+                      {isValueAssignment ? null : isManyToOne ? (
                         srcColumns.map((colName, colIdx) => (
                           <th key={colName} className="text-left px-4 py-2.5 text-xs font-medium text-gray-500">
                             {colName}{colIdx === 0 ? <span className="text-blue-400 ml-1 font-normal">(primary)</span> : null}
@@ -1456,7 +1759,7 @@ export default function TransformContent({ projectId, initialData }: Props) {
                           Source ({selectedContext.field.sourceFieldName})
                         </th>
                       )}
-                      <th className="px-1 py-2.5 w-6" />
+                      {!isValueAssignment && <th className="px-1 py-2.5 w-6" />}
                       <th className="text-left px-4 py-2.5 text-xs font-medium text-gray-500 w-1/2">
                         <span>Target ({selectedContext.field.targetFieldName})</span>
                         {previewResults.length > 0 && !previewError && (
@@ -1476,8 +1779,7 @@ export default function TransformContent({ projectId, initialData }: Props) {
                               isIssueRow ? 'bg-amber-50' : 'hover:bg-gray-50/50'
                             }`}
                           >
-                            {isManyToOne ? (
-                              // Many-to-one: one column per source field, reading from beforeValues
+                            {isValueAssignment ? null : isManyToOne ? (
                               srcColumns.map((colName) => {
                                 const val = row.beforeValues ? (row.beforeValues[colName] ?? null) : null
                                 return (
@@ -1507,7 +1809,7 @@ export default function TransformContent({ projectId, initialData }: Props) {
                                 )}
                               </td>
                             )}
-                            <td className="px-1 py-2 text-center text-gray-300 text-xs align-top">→</td>
+                            {!isValueAssignment && <td className="px-1 py-2 text-center text-gray-300 text-xs align-top">→</td>}
                             <td className={`px-4 py-2 font-mono text-xs align-top ${isIssueRow ? 'text-red-400' : 'text-gray-900'}`}>
                               <span className="flex items-center gap-1.5 flex-wrap">
                                 {row.after != null ? (
@@ -1913,9 +2215,9 @@ function TableNode({
       {expanded && (
         <div className="bg-gray-50 border-t border-gray-100">
           {filteredFields.map((field) => {
-            const oneToManyCount = primaryFields.filter(
-              (f) => f.sourceFieldId === field.sourceFieldId
-            ).length
+            const oneToManyCount = field.sourceFieldId
+              ? primaryFields.filter((f) => f.sourceFieldId === field.sourceFieldId).length
+              : 0
             return (
               <FieldRow
                 key={field.fieldMappingId}
@@ -1977,6 +2279,44 @@ function FieldRow({ field, isSelected, onSelect, oneToManyCount = 1 }: {
   const status = field.transformation?.status
   const isOneToMany = oneToManyCount > 1
 
+  if (field.isValueAssignment) {
+    return (
+      <button
+        onClick={onSelect}
+        className={`w-full px-3 py-2.5 border-b border-gray-100 last:border-0 text-left transition-colors ${
+          isSelected
+            ? 'bg-purple-50 border-l-2 border-l-purple-400'
+            : 'border-l-2 border-l-transparent hover:bg-gray-100'
+        }`}
+      >
+        <div className="flex items-start justify-between gap-2 mb-0.5">
+          <div className="flex items-center gap-1.5 min-w-0 flex-1">
+            <span className="text-purple-500 text-xs font-mono flex-shrink-0">ƒ</span>
+            <span className="text-xs font-semibold text-purple-700 truncate">{field.targetFieldName}</span>
+          </div>
+          <div className="flex items-center gap-1 flex-shrink-0">
+            {status === 'applied' ? (
+              <Badge className="bg-green-100 text-green-700 hover:bg-green-100 border border-green-200 text-[10px] px-1.5 py-0">
+                Transformed
+              </Badge>
+            ) : field.transformation ? (
+              <Badge className="bg-purple-100 text-purple-700 hover:bg-purple-100 border border-purple-200 text-[10px] px-1.5 py-0">
+                Saved
+              </Badge>
+            ) : (
+              <Badge className="bg-purple-100 text-purple-700 hover:bg-purple-100 border border-purple-200 text-[10px] px-1.5 py-0">
+                Define
+              </Badge>
+            )}
+          </div>
+        </div>
+        <div className="flex items-center gap-1 pl-4">
+          <span className="text-[10px] text-purple-400">value assignment</span>
+        </div>
+      </button>
+    )
+  }
+
   return (
     <button
       onClick={onSelect}
@@ -2008,7 +2348,6 @@ function FieldRow({ field, isSelected, onSelect, oneToManyCount = 1 }: {
           )}
         </div>
         <div className="flex items-center gap-1 flex-shrink-0">
-          {/* Status icon */}
           {status === 'applied' && (
             <span title="Applied to staged data"><CheckCircle2 className="w-3.5 h-3.5 text-green-500" /></span>
           )}
@@ -2017,7 +2356,6 @@ function FieldRow({ field, isSelected, onSelect, oneToManyCount = 1 }: {
               <AlertCircle className="w-3.5 h-3.5 text-amber-500" />
             </span>
           )}
-          {/* Four-state badge: Transform → Saved → Tested → Transformed */}
           {status === 'applied' ? (
             <Badge className="bg-green-100 text-green-700 hover:bg-green-100 border border-green-200 text-[10px] px-1.5 py-0">
               Transformed
