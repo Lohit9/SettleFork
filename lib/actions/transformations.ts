@@ -379,6 +379,11 @@ CRITICAL RULES:
 8. Handle edge cases (unexpected values) with an ELSE clause in CASE statements
 9. Be precise — map actual sample values from the data, not generic patterns
 10. Do NOT use window functions (ROW_NUMBER, RANK, etc.) — they are not allowed in expressions
+11. LPAD / RPAD require TEXT as their first argument. ALWAYS cast numeric/integer/bigint expressions
+    to text before passing to LPAD or RPAD:
+    CORRECT: LPAD(some_number::text, 7, '0')
+    WRONG:   LPAD(some_number, 7, '0')  ← crashes with "function lpad(bigint, integer, unknown) does not exist"
+    This applies to row_number, any integer column, ROW_NUMBER() results, etc.
 
 Common transformation patterns:
 - Value mapping: CASE WHEN field = 'X' THEN 'Y' WHEN field = 'Z' THEN 'W' ELSE 'OTHER' END

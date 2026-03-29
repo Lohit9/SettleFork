@@ -236,6 +236,8 @@ export default function TransformContent({ projectId, initialData }: Props) {
   const [whyExpanded, setWhyExpanded] = useState(false)
   // AI Suggest: confirm before replacing existing textarea content
   const [showReplaceConfirm, setShowReplaceConfirm] = useState<string | null>(null)
+  // Input mode: 'ai' = describe + generate via Claude; 'sql' = write expression directly
+  const [inputMode, setInputMode] = useState<'ai' | 'sql'>('ai')
 
   // Auto-save refs — use refs so handleSelectField can access latest values without stale closure
   const localTransformRef = useRef<LocalTransform | null>(null)
@@ -473,6 +475,7 @@ export default function TransformContent({ projectId, initialData }: Props) {
       setSqlExpanded(false)
       setWhyExpanded(false)
       setSaveStatus('idle')
+      setInputMode('ai')
       isDirtyRef.current = false
 
       const found = findField(data.datasets, fieldMappingId)
@@ -1471,81 +1474,144 @@ export default function TransformContent({ projectId, initialData }: Props) {
               <div className="flex-1 flex flex-col min-h-0">
                 <div className="flex-1 overflow-auto p-5 space-y-4">
 
-                  {/* NL Description — first interactive element */}
+                  {/* NL Description / Direct SQL — first interactive element */}
                   <div className="bg-white rounded-lg border border-gray-200 p-4">
-                    <label className="block text-sm font-medium text-gray-900 mb-2">
-                      {selectedContext.field.isValueAssignment
-                        ? 'Describe the value this field should receive'
-                        : 'Describe how this field should be transformed'}
-                    </label>
-                    {selectedContext.field.isValueAssignment && (
-                      <div className="mb-3 space-y-2">
-                        <div className="px-3 py-2 bg-purple-50 border border-purple-100 rounded-lg text-xs text-purple-700">
-                          <span className="font-medium">Value assignment.</span> This target field has no source mapping.
-                          Describe a constant, expression, or rule to generate the value
-                          (e.g., <code className="bg-purple-100 px-1 rounded">&apos;FIRM&apos;</code> or <code className="bg-purple-100 px-1 rounded">&apos;TC-&apos; || row_number()</code>).
-                        </div>
-                        {selectedContext.field.targetCheckConstraint?.type === 'in_list' &&
-                          (selectedContext.field.targetCheckConstraint as { allowedValues?: string[] }).allowedValues && (
-                          <div className="px-3 py-2 bg-blue-50 border border-blue-100 rounded-lg text-xs text-blue-700">
-                            <span className="font-medium">Allowed values:</span>{' '}
-                            <span className="font-mono">
-                              {((selectedContext.field.targetCheckConstraint as { allowedValues: string[] }).allowedValues).join(', ')}
-                            </span>
+                    {/* Header row: label + mode toggle */}
+                    <div className="flex items-center justify-between mb-2">
+                      <label className="text-sm font-medium text-gray-900">
+                        {inputMode === 'sql'
+                          ? 'Write SQL expression directly'
+                          : selectedContext.field.isValueAssignment
+                          ? 'Describe the value this field should receive'
+                          : 'Describe how this field should be transformed'}
+                      </label>
+                      <div className="flex rounded-lg border border-gray-200 overflow-hidden flex-shrink-0 ml-3">
+                        <button
+                          onClick={() => setInputMode('ai')}
+                          className={`px-2.5 py-1 text-xs font-medium transition-colors ${
+                            inputMode === 'ai'
+                              ? 'bg-indigo-600 text-white'
+                              : 'bg-white text-gray-600 hover:bg-gray-50'
+                          }`}
+                        >
+                          AI-Assisted
+                        </button>
+                        <button
+                          onClick={() => {
+                            setInputMode('sql')
+                            // Expand the SQL view immediately so user sees what they're editing
+                            if (localTransform?.sql) setSqlExpanded(true)
+                          }}
+                          className={`px-2.5 py-1 text-xs font-medium border-l border-gray-200 transition-colors ${
+                            inputMode === 'sql'
+                              ? 'bg-indigo-600 text-white'
+                              : 'bg-white text-gray-600 hover:bg-gray-50'
+                          }`}
+                        >
+                          SQL
+                        </button>
+                      </div>
+                    </div>
+
+                    {inputMode === 'ai' ? (
+                      <>
+                        {/* Context hints */}
+                        {selectedContext.field.isValueAssignment && (
+                          <div className="mb-3 space-y-2">
+                            <div className="px-3 py-2 bg-purple-50 border border-purple-100 rounded-lg text-xs text-purple-700">
+                              <span className="font-medium">Value assignment.</span> This target field has no source mapping.
+                              Describe a constant, expression, or rule to generate the value
+                              (e.g., <code className="bg-purple-100 px-1 rounded">&apos;FIRM&apos;</code> or <code className="bg-purple-100 px-1 rounded">&apos;TC-&apos; || row_number()</code>).
+                            </div>
+                            {selectedContext.field.targetCheckConstraint?.type === 'in_list' &&
+                              (selectedContext.field.targetCheckConstraint as { allowedValues?: string[] }).allowedValues && (
+                              <div className="px-3 py-2 bg-blue-50 border border-blue-100 rounded-lg text-xs text-blue-700">
+                                <span className="font-medium">Allowed values:</span>{' '}
+                                <span className="font-mono">
+                                  {((selectedContext.field.targetCheckConstraint as { allowedValues: string[] }).allowedValues).join(', ')}
+                                </span>
+                              </div>
+                            )}
                           </div>
                         )}
-                      </div>
-                    )}
-                    {selectedContext?.field.contributingSourceFields && selectedContext.field.contributingSourceFields.length > 0 && (
-                      <div className="mb-3 px-3 py-2 bg-indigo-50 border border-indigo-100 rounded-lg text-xs text-indigo-700">
-                        <span className="font-medium">Multi-source mapping.</span> This field also receives data from:{' '}
-                        <span className="font-mono">
-                          {selectedContext.field.contributingSourceFields.map((f) => f.name).join(', ')}
-                        </span>
-                        . Write a transform that combines all source fields
-                        (e.g., <code className="bg-indigo-100 px-1 rounded">CONCAT(first_name, &apos; &apos;, last_name)</code>).
-                      </div>
-                    )}
-                    <Textarea
-                      value={localTransform?.description ?? ''}
-                      onChange={(e) => {
-                        setLocalTransform((prev) =>
-                          prev ? { ...prev, description: e.target.value } : null
-                        )
-                        scheduleAutoSave()
-                      }}
-                      placeholder={getSmartPlaceholder(selectedContext.field)}
-                      className="min-h-20 resize-none text-sm"
-                    />
-                    <div className="mt-3 flex items-center gap-2 flex-wrap">
-                      <Button
-                        variant="outline"
-                        className="gap-1.5 text-sm border-gray-300 text-gray-700 hover:text-indigo-700 hover:border-indigo-300 hover:bg-indigo-50"
-                        onClick={handleSuggest}
-                        disabled={isSuggesting || isGenerating}
-                      >
-                        {isSuggesting ? (
-                          <span className="w-3.5 h-3.5 border-2 border-gray-400 border-t-indigo-500 rounded-full animate-spin" />
-                        ) : (
-                          <Sparkles className="w-3.5 h-3.5" />
+                        {selectedContext?.field.contributingSourceFields && selectedContext.field.contributingSourceFields.length > 0 && (
+                          <div className="mb-3 px-3 py-2 bg-indigo-50 border border-indigo-100 rounded-lg text-xs text-indigo-700">
+                            <span className="font-medium">Multi-source mapping.</span> This field also receives data from:{' '}
+                            <span className="font-mono">
+                              {selectedContext.field.contributingSourceFields.map((f) => f.name).join(', ')}
+                            </span>
+                            . Write a transform that combines all source fields
+                            (e.g., <code className="bg-indigo-100 px-1 rounded">CONCAT(first_name, &apos; &apos;, last_name)</code>).
+                          </div>
                         )}
-                        {isSuggesting ? 'Suggesting...' : 'AI Suggest'}
-                      </Button>
-                      <Button
-                        className="bg-[#4F46E5] hover:bg-[#4338CA] text-white gap-2"
-                        onClick={handleGenerate}
-                        disabled={isGenerating || isSuggesting}
-                      >
-                        <RefreshCw className={`w-4 h-4 ${isGenerating ? 'animate-spin' : ''}`} />
-                        {isGenerating ? 'Generating...' : 'Generate Transform'}
-                      </Button>
-                      <button
-                        className="text-sm text-gray-500 hover:text-gray-700 underline-offset-2 hover:underline"
-                        onClick={handleClear}
-                      >
-                        Clear
-                      </button>
-                    </div>
+                        <Textarea
+                          value={localTransform?.description ?? ''}
+                          onChange={(e) => {
+                            setLocalTransform((prev) =>
+                              prev ? { ...prev, description: e.target.value } : null
+                            )
+                            scheduleAutoSave()
+                          }}
+                          placeholder={getSmartPlaceholder(selectedContext.field)}
+                          className="min-h-20 resize-none text-sm"
+                        />
+                        <div className="mt-3 flex items-center gap-2 flex-wrap">
+                          <Button
+                            variant="outline"
+                            className="gap-1.5 text-sm border-gray-300 text-gray-700 hover:text-indigo-700 hover:border-indigo-300 hover:bg-indigo-50"
+                            onClick={handleSuggest}
+                            disabled={isSuggesting || isGenerating}
+                          >
+                            {isSuggesting ? (
+                              <span className="w-3.5 h-3.5 border-2 border-gray-400 border-t-indigo-500 rounded-full animate-spin" />
+                            ) : (
+                              <Sparkles className="w-3.5 h-3.5" />
+                            )}
+                            {isSuggesting ? 'Suggesting...' : 'AI Suggest'}
+                          </Button>
+                          <Button
+                            className="bg-[#4F46E5] hover:bg-[#4338CA] text-white gap-2"
+                            onClick={handleGenerate}
+                            disabled={isGenerating || isSuggesting}
+                          >
+                            <RefreshCw className={`w-4 h-4 ${isGenerating ? 'animate-spin' : ''}`} />
+                            {isGenerating ? 'Generating...' : 'Generate Transform'}
+                          </Button>
+                          <button
+                            className="text-sm text-gray-500 hover:text-gray-700 underline-offset-2 hover:underline"
+                            onClick={handleClear}
+                          >
+                            Clear
+                          </button>
+                        </div>
+                      </>
+                    ) : (
+                      <>
+                        {/* Direct SQL mode — write expression without AI */}
+                        <div className="mb-2 px-3 py-2 bg-gray-50 border border-gray-200 rounded-lg text-xs text-gray-600">
+                          Write a PostgreSQL expression for a single row. Use bare field names —
+                          e.g. <code className="bg-gray-100 px-1 rounded font-mono">UPPER(TRIM(lead_attorney))</code> or{' '}
+                          <code className="bg-gray-100 px-1 rounded font-mono">LEFT(MD5(LOWER(TRIM(lead_attorney))), 12)</code>.
+                          The system wraps field references in JSONB automatically.
+                        </div>
+                        <textarea
+                          value={localTransform?.sql ?? ''}
+                          onChange={(e) => handleSqlChange(e.target.value)}
+                          placeholder={`e.g., UPPER(TRIM(${selectedContext.field.sourceFieldName ?? 'field_name'}))`}
+                          rows={4}
+                          spellCheck={false}
+                          className="w-full font-mono text-sm text-gray-800 bg-white border border-gray-300 rounded-lg px-3 py-2.5 resize-none focus:outline-none focus:ring-2 focus:ring-indigo-500/30 focus:border-indigo-500 placeholder-gray-400"
+                        />
+                        <div className="mt-3 flex items-center gap-2">
+                          <button
+                            className="text-sm text-gray-500 hover:text-gray-700 underline-offset-2 hover:underline"
+                            onClick={handleClear}
+                          >
+                            Clear
+                          </button>
+                        </div>
+                      </>
+                    )}
                   </div>
 
                   {/* Why Transform? — collapsible reference block, collapsed by default */}
@@ -1620,8 +1686,8 @@ export default function TransformContent({ projectId, initialData }: Props) {
                 </div>
               )}
 
-              {/* Generated SQL — collapsed by default, toggle to expand */}
-              {localTransform?.sql && (
+              {/* Generated SQL — collapsed by default, toggle to expand (hidden in direct SQL mode) */}
+              {localTransform?.sql && inputMode === 'ai' && (
                 <div className="bg-white rounded-lg border border-gray-200">
                   <button
                     type="button"
