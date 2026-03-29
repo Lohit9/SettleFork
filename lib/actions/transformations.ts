@@ -394,39 +394,49 @@ Common transformation patterns:
 DATE FORMATTING — CRITICAL RULES:
 NEVER use bare ::date casts or TO_CHAR(field::date, ...) — these fail when data contains mixed formats.
 NEVER call TO_DATE(field, 'MM/DD/YYYY') on data that may contain DD/MM/YYYY values — month=22 will crash.
-ALWAYS use a CASE + regex approach that detects the format before parsing:
+ALWAYS use a CASE + regex approach that detects the format before parsing.
+Each WHEN branch must target ONE specific format with its own separator and format string.
+NEVER nest a CASE expression inside a SPLIT_PART argument — use separate WHEN branches instead.
+
+Example template (adapt branches to actual sample data, remove unused branches):
 
   CASE
     WHEN field IS NULL OR TRIM(field) = '' THEN NULL
-    -- Already ISO 8601
+    -- Already ISO 8601 (YYYY-MM-DD)
     WHEN field ~ '^\d{4}-\d{2}-\d{2}' THEN
-      TO_CHAR(TO_DATE(SUBSTRING(field FROM 1 FOR 10), 'YYYY-MM-DD'), 'YYYY-MM-DD')
-    -- YYYY/MM/DD or YYYY.MM.DD
-    WHEN field ~ '^\d{4}[/\.]\d{1,2}[/\.]\d{1,2}' THEN
-      TO_CHAR(TO_DATE(REGEXP_REPLACE(field, '[/\.]', '-', 'g'), 'YYYY-MM-DD'), 'YYYY-MM-DD')
-    -- MM/DD/YYYY or MM-DD-YYYY where first segment <= 12 (could be month)
-    -- Distinguish from DD/MM by checking if day part > 12 (then it must be DD/MM)
-    WHEN field ~ '^\d{1,2}[/\-]\d{1,2}[/\-]\d{4}$' THEN
-      CASE
-        WHEN SPLIT_PART(field, CASE WHEN field ~ '/' THEN '/' ELSE '-' END, 1)::int > 12 THEN
-          -- First segment > 12 → must be DD/MM/YYYY
-          TO_CHAR(TO_DATE(field, 'DD/MM/YYYY'), 'YYYY-MM-DD')
-        ELSE
-          -- Assume MM/DD/YYYY (adjust to DD/MM/YYYY if business context says otherwise)
-          TO_CHAR(TO_DATE(field, 'MM/DD/YYYY'), 'YYYY-MM-DD')
-      END
-    -- MM/DD/YY or MM-DD-YY (2-digit year)
-    WHEN field ~ '^\d{1,2}[/\-]\d{1,2}[/\-]\d{2}$' THEN
+      SUBSTRING(field FROM 1 FOR 10)
+    -- YYYY/MM/DD
+    WHEN field ~ '^\d{4}/\d{1,2}/\d{1,2}' THEN
+      TO_CHAR(TO_DATE(field, 'YYYY/MM/DD'), 'YYYY-MM-DD')
+    -- Slash-separated 4-digit year, first part > 12 → must be DD/MM/YYYY (e.g. 22/11/2025)
+    WHEN field ~ '^\d{1,2}/\d{1,2}/\d{4}$' AND SPLIT_PART(field, '/', 1)::int > 12 THEN
+      TO_CHAR(TO_DATE(field, 'DD/MM/YYYY'), 'YYYY-MM-DD')
+    -- Slash-separated 4-digit year, first part <= 12 → MM/DD/YYYY (e.g. 03/06/2027)
+    WHEN field ~ '^\d{1,2}/\d{1,2}/\d{4}$' THEN
+      TO_CHAR(TO_DATE(field, 'MM/DD/YYYY'), 'YYYY-MM-DD')
+    -- Slash-separated 2-digit year → MM/DD/YY (e.g. 08/15/22)
+    WHEN field ~ '^\d{1,2}/\d{1,2}/\d{2}$' THEN
       TO_CHAR(TO_DATE(field, 'MM/DD/YY'), 'YYYY-MM-DD')
-    -- Month name: "Mar 15 2024", "15 March 2024", "March 15, 2024"
+    -- Dash-separated 4-digit year, first part > 12 → DD-MM-YYYY (e.g. 13-09-2026)
+    WHEN field ~ '^\d{1,2}-\d{1,2}-\d{4}$' AND SPLIT_PART(field, '-', 1)::int > 12 THEN
+      TO_CHAR(TO_DATE(field, 'DD-MM-YYYY'), 'YYYY-MM-DD')
+    -- Dash-separated 4-digit year, first part <= 12 → MM-DD-YYYY (e.g. 05-31-2026)
+    WHEN field ~ '^\d{1,2}-\d{1,2}-\d{4}$' THEN
+      TO_CHAR(TO_DATE(field, 'MM-DD-YYYY'), 'YYYY-MM-DD')
+    -- Dash-separated 2-digit year → MM-DD-YY
+    WHEN field ~ '^\d{1,2}-\d{1,2}-\d{2}$' THEN
+      TO_CHAR(TO_DATE(field, 'MM-DD-YY'), 'YYYY-MM-DD')
+    -- Month name abbreviation (Mar 15 2024, 15 March 2024, March 15, 2024)
     WHEN field ~* '\y(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)\y' THEN
-      TO_CHAR(field::date, 'YYYY-MM-DD')
+      TO_CHAR((field)::date, 'YYYY-MM-DD')
     ELSE NULL
   END
 
-Adapt the CASE branches to match the actual formats observed in the sample data.
-If the sample only shows a subset of these formats, include only the relevant branches plus an ELSE NULL.
-The separator detection (/ vs -) must match the actual separator in the data — don't mix formats in a single TO_DATE call.
+Rules:
+- Include only the WHEN branches that match formats actually observed in the sample data.
+- Always include the ISO passthrough branch (YYYY-MM-DD) and ELSE NULL.
+- Each WHEN branch uses its own dedicated TO_DATE format string — never mix separators in one call.
+- The "first part > 12" check disambiguates DD/MM from MM/DD without nesting CASEs.
 
 If documentation is provided, follow the exact value mappings and transformation rules specified in the business rules. Do not invent mappings that contradict the documentation. If the documentation specifies edge cases or special handling, include them in the expression.
 
