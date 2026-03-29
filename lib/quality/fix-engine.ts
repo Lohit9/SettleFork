@@ -48,10 +48,28 @@ D) Fix nulls / empty values with a default:
   WHERE table_id = '<table_uuid>'
     AND (row_data->>'FieldName' IS NULL OR row_data->>'FieldName' = '')
 
-E) Numeric fix (cast-safe):
+E) Numeric fix — CAST-SAFE (CRITICAL):
+NEVER cast row_data->>'Field' directly to numeric in a WHERE clause or SET clause without first
+checking the value is actually numeric. A bare ::numeric cast on a non-numeric value (empty string,
+"N/A", text) will throw "invalid input syntax for type numeric" and abort the entire operation.
+
+WRONG — crashes on any non-numeric row:
+  WHERE table_id = '<uuid>' AND (row_data->>'Price')::numeric < 0
+
+CORRECT — regex guard before cast:
   UPDATE data_rows
-  SET row_data = jsonb_set(row_data, '{Price}', to_jsonb(1300.0))
-  WHERE table_id = '<table_uuid>' AND (row_data->>'Price')::numeric < 1300
+  SET row_data = jsonb_set(
+    row_data, '{Price}',
+    to_jsonb(ABS((row_data->>'Price')::numeric))
+  )
+  WHERE table_id = '<table_uuid>'
+    AND row_data->>'Price' ~ '^-?[0-9]+(\.[0-9]+)?$'
+    AND (row_data->>'Price')::numeric < 0
+
+The regex '^-?[0-9]+(\.[0-9]+)?$' matches plain integers and decimals (negative or positive).
+Adjust the regex if the field can use scientific notation or currency symbols.
+ALWAYS include this regex guard before ANY ::numeric (or ::integer, ::float) cast — in both
+the WHERE clause AND the SET clause expression.
 
 CRITICAL SQL CONSTRAINTS:
 - SQL must ALWAYS include WHERE table_id = '<the exact uuid provided in context>'
@@ -111,6 +129,11 @@ Instead, use an OUTER CASE at the SET level so rows with unparseable dates keep 
 The outer CASE checks if the conversion succeeds (IS NOT NULL). If yes, it updates the field.
 If no (truly unparseable value), it leaves row_data unchanged — avoiding the NOT NULL constraint violation.
 Replace FieldName with the actual field name. Remove WHEN branches not needed for this data.
+
+LPAD / RPAD CAST RULE:
+LPAD and RPAD require TEXT as their first argument. Always cast numeric values to text first:
+  CORRECT: LPAD(some_number::text, 7, '0')
+  WRONG:   LPAD(some_number, 7, '0')  ← crashes with "function lpad(bigint, integer, unknown) does not exist"
 
 WINDOW FUNCTION RULE — VERY IMPORTANT:
 PostgreSQL does NOT allow window functions (ROW_NUMBER, RANK, DENSE_RANK, LAG, LEAD,
