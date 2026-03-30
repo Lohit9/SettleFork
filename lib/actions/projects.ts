@@ -138,7 +138,7 @@ export async function getProjectsWithStats(): Promise<ProjectWithStats[]> {
       .in('project_id', projectIds),
     supabase
       .from('quality_issues')
-      .select('project_id, severity, status')
+      .select('project_id, severity, status, field_id, stage, issue_kind, description')
       .in('project_id', projectIds),
     supabase.from('outputs').select('project_id').in('project_id', projectIds),
     supabase.from('field_acknowledgments').select('project_id, field_id').in('project_id', projectIds),
@@ -301,14 +301,55 @@ export async function getProjectsWithStats(): Promise<ProjectWithStats[]> {
       }
     }
   })
+  // Build per-project set of source field IDs resolved by transform — mirrors the
+  // logic in lib/quality/resolved-by-transform.ts and lib/actions/outputs.ts.
+  // A source field is resolved when its approved primary mapping either has
+  // needs_transformation=false OR has at least one transform record.
+  const fmIdsWithTransform = new Set((transformations || []).map((t) => t.field_mapping_id))
+  const resolvedSourceFieldIdsByProject = new Map<string, Set<string>>()
+  ;(fieldMappings || []).forEach((fm) => {
+    if (!fm.source_field_id || fm.status !== 'approved' || fm.is_contributing) return
+    const pid = tmToProject.get(fm.table_mapping_id)
+    if (!pid) return
+    const hasTransform = fmIdsWithTransform.has(fm.id)
+    const noTransformNeeded = fm.needs_transformation === false
+    if (hasTransform || noTransformNeeded) {
+      if (!resolvedSourceFieldIdsByProject.has(pid)) resolvedSourceFieldIdsByProject.set(pid, new Set())
+      resolvedSourceFieldIdsByProject.get(pid)!.add(fm.source_field_id)
+    }
+  })
+
+  // Mirrors isNeverResolvable() in DataQualityContent — structural issues that
+  // a transform expression cannot fix regardless of field mapping state.
+  function isNeverResolvable(qi: { issue_kind?: string | null; description?: string | null }): boolean {
+    const desc = (qi.description ?? '').toLowerCase()
+    if (qi.issue_kind === 'null_primary_key') return true
+    if (qi.issue_kind === 'orphaned_fk') return true
+    if (qi.issue_kind === 'referential_integrity') return true
+    if (desc.includes('null') && (desc.includes('primary key') || desc.includes('primary_key'))) return true
+    if (desc.includes('orphan')) return true
+    if (desc.includes('referential')) return true
+    return false
+  }
+
   ;(qualityIssues || []).forEach((qi) => {
     const b = buckets.get(qi.project_id)
     if (!b) return
     b.totalQualityIssues++
     if (qi.status === 'fixed' || qi.status === 'accepted_risk') b.resolvedQualityIssues++
     if (qi.status === 'open') {
-      if (qi.severity === 'blocking') b.blockingIssueCount++
-      else if (qi.severity === 'warning') b.warningCount++
+      // Source issues whose field has an approved transform are resolved — exclude
+      // from counts, matching the Validate page and Migration Center logic.
+      const resolvedByTransform =
+        qi.stage === 'source' &&
+        !isNeverResolvable(qi) &&
+        qi.field_id != null &&
+        (resolvedSourceFieldIdsByProject.get(qi.project_id)?.has(qi.field_id) ?? false)
+
+      if (!resolvedByTransform) {
+        if (qi.severity === 'blocking') b.blockingIssueCount++
+        else if (qi.severity === 'warning') b.warningCount++
+      }
     }
   })
   ;(transformations || []).forEach((t) => {
