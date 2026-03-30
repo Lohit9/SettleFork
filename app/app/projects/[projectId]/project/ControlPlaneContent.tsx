@@ -5,6 +5,7 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { FileText, Upload, CheckCircle2, X, AlertCircle } from '@/components/icons'
 import { IngestionCard } from './IngestionCard'
+import { PageHeader } from '@/components/app/PageHeader'
 import {
   uploadSchemaDocument,
   deleteSchemaDocument,
@@ -21,12 +22,12 @@ interface DocUploadState {
 
 interface ControlPlaneContentProps {
   projectId: string
+  projectName: string
   sourceDatasets: DatasetWithTableStats[]
   targetDatasets: DatasetWithTableStats[]
   initialSourceDocs: SchemaDocument[]
   initialTargetDocs: SchemaDocument[]
   initialContextDocs: SchemaDocument[]
-  // dataset IDs used as the schema doc target (first of each role)
   primarySourceDatasetId: string | null
   primaryTargetDatasetId: string | null
 }
@@ -282,6 +283,7 @@ function BusinessContextSection({
 
 export function ControlPlaneContent({
   projectId,
+  projectName,
   sourceDatasets,
   targetDatasets,
   initialSourceDocs,
@@ -304,14 +306,14 @@ export function ControlPlaneContent({
   }
 
   return (
-    <div className="flex-1 bg-gray-50 p-8">
+    <div className="flex-1 bg-gray-50 flex flex-col min-h-0">
+      <PageHeader
+        projectName={projectName}
+        title="Project Setup"
+        subtitle="Configure source and target system connections"
+      />
+      <div className="flex-1 overflow-auto p-8">
       <div className="max-w-6xl mx-auto space-y-8">
-        {/* Page Header */}
-        <div>
-          <h1 className="text-2xl font-semibold text-gray-900 mb-1">Control Plane</h1>
-          <p className="text-sm text-gray-500">Configure source and target system connections</p>
-        </div>
-
         {/* Data Ingestion */}
         <div className="space-y-4">
           <h2 className="text-lg font-semibold text-gray-900">Data Ingestion</h2>
@@ -369,6 +371,7 @@ export function ControlPlaneContent({
             <DocList docs={contextDocs} onDelete={handleDeleteContextDoc} />
           </CardContent>
         </Card>
+      </div>
       </div>
     </div>
   )

@@ -54,7 +54,7 @@ interface NavigationProps {
 }
 
 const makeNavItems = (projectId?: string) => [
-  { id: 'control-plane', label: 'Control Plane',    icon: FileText,        href: projectId ? `/app/projects/${projectId}` : '#',                   exact: true },
+  { id: 'project-setup', label: 'Project Setup',     icon: FileText,        href: projectId ? `/app/projects/${projectId}` : '#',                   exact: true },
   { id: 'data-overview', label: 'Data Overview',    icon: Database,        href: projectId ? `/app/projects/${projectId}/data-overview` : '#' },
   { id: 'mapping',       label: 'Mapping',          icon: GitBranch,       href: projectId ? `/app/projects/${projectId}/mapping` : '#' },
   { id: 'transform',     label: 'Transform',        icon: Code,            href: projectId ? `/app/projects/${projectId}/transform` : '#' },

@@ -27,6 +27,7 @@ export default async function MappingPage({ params }: Props) {
   return (
     <MappingContent
       projectId={projectId}
+      projectName={project.name}
       initialData={result}
     />
   )

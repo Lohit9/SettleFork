@@ -14,7 +14,7 @@ export default async function ControlPlanePage({
 
   const { data: project } = await supabase
     .from('projects')
-    .select('id')
+    .select('id, name')
     .eq('id', projectId)
     .single()
 
@@ -37,6 +37,7 @@ export default async function ControlPlanePage({
   return (
     <ControlPlaneContent
       projectId={projectId}
+      projectName={project.name}
       sourceDatasets={sourceDatasets}
       targetDatasets={targetDatasets}
       initialSourceDocs={sourceDocs}

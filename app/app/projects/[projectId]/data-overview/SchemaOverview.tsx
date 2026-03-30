@@ -388,7 +388,7 @@ function SchemaPanel({
           <div className="px-5 py-10 text-center">
             <p className="text-sm text-gray-500">No schemas uploaded yet.</p>
             <a href={`/app/projects/${projectId}`} className="text-xs text-indigo-600 hover:underline mt-1 inline-block">
-              Go to Control Plane to upload CSV files
+              Go to Project Setup to upload CSV files
             </a>
           </div>
         ) : (

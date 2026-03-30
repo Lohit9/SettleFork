@@ -97,7 +97,7 @@ export default function GettingStartedPage() {
               <BulletList items={[
                 'Click + New Project from the Projects page',
                 'Give it a name, source system label, and target system label',
-                'You\'ll land in the Control Plane — your project\'s command center',
+                'You\'ll land in Project Setup — your project\'s command center',
               ]} />
               <Tip>
                 Name projects descriptively. If you&apos;re running multiple migrations for the same
@@ -113,7 +113,7 @@ export default function GettingStartedPage() {
                 <h2 className="text-lg font-medium text-gray-900">Upload your source data</h2>
               </div>
               <p className="text-sm text-gray-600 leading-relaxed max-w-2xl">
-                In the Control Plane, select <strong>CSV Upload</strong> as your source ingestion method.
+                In Project Setup, select <strong>CSV Upload</strong> as your source ingestion method.
                 Upload one CSV per table — each file becomes a table in your source schema.
               </p>
               <BulletList items={[
