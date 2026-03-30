@@ -338,12 +338,6 @@ export function ProjectsList({ initialProjects }: ProjectsListProps) {
 
   const activeCount = projects.filter((p) => p.status === 'active').length
   const completedCount = projects.filter((p) => p.status === 'completed').length
-  const totalBlocking = projects.reduce((s, p) => s + p.blockingIssueCount, 0)
-  const scoredProjects = projects.filter((p) => p.readinessScore !== null && p.readinessScore > 0)
-  const avgReadiness =
-    scoredProjects.length > 0
-      ? Math.round(scoredProjects.reduce((s, p) => s + (p.readinessScore ?? 0), 0) / scoredProjects.length)
-      : null
 
   const TABS: { id: FilterTab; label: string; count: number }[] = [
     { id: 'all', label: 'All', count: projects.length },
@@ -377,40 +371,6 @@ export function ProjectsList({ initialProjects }: ProjectsListProps) {
               <Plus className="w-3.5 h-3.5" />
               New Project
             </Button>
-          </div>
-        </div>
-
-        {/* Summary stats */}
-        <div className="grid grid-cols-4 gap-3 mb-5">
-          <div className="bg-gray-50 border border-gray-200 rounded-lg p-3">
-            <div className="text-xs text-gray-500 mb-1">Total projects</div>
-            <div className="text-xl font-semibold text-gray-900">{projects.length}</div>
-          </div>
-          <div className="bg-gray-50 border border-gray-200 rounded-lg p-3">
-            <div className="text-xs text-gray-500 mb-1">Active</div>
-            <div className="text-xl font-semibold text-green-600">{activeCount}</div>
-          </div>
-          <div className="bg-gray-50 border border-gray-200 rounded-lg p-3">
-            <div className="text-xs text-gray-500 mb-1">Blocking issues</div>
-            <div className={`text-xl font-semibold ${totalBlocking > 0 ? 'text-orange-500' : 'text-gray-900'}`}>
-              {totalBlocking}
-            </div>
-          </div>
-          <div className="bg-gray-50 border border-gray-200 rounded-lg p-3">
-            <div className="text-xs text-gray-500 mb-1">Avg. readiness</div>
-            <div
-              className={`text-xl font-semibold ${
-                avgReadiness === null
-                  ? 'text-gray-400'
-                  : avgReadiness >= 90
-                    ? 'text-green-600'
-                    : avgReadiness >= 60
-                      ? 'text-amber-500'
-                      : 'text-red-500'
-              }`}
-            >
-              {avgReadiness !== null ? `${avgReadiness}%` : '—'}
-            </div>
           </div>
         </div>
 
