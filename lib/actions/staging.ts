@@ -5,6 +5,7 @@ import { supabaseAdmin } from '@/lib/supabase/admin'
 import { wrapFieldRefsInJsonb } from '@/lib/utils/transform-helpers'
 import { flagStagedRowIssues } from '@/lib/actions/staged-row-flags'
 import { logActivity } from '@/lib/actions/activity-log'
+import { revalidatePath } from 'next/cache'
 
 // ── Public types ──────────────────────────────────────────────────────────────
 
@@ -391,6 +392,7 @@ export async function stageAllData(projectId: string): Promise<{
     { total_rows: totalRows, table_count: results.length }
   )
 
+  revalidatePath(`/app/projects/${projectId}`, 'layout')
   return { success: true, tables: results }
 }
 
