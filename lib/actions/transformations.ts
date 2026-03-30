@@ -996,10 +996,13 @@ export async function testTransformation(
   let transformationId: string | undefined
 
   if (existing) {
+    // Never downgrade an applied transform — the auto-preview calls this function
+    // on field selection, which would overwrite 'applied' → 'tested'.
     await supabase
       .from('transformations')
       .update({ status: 'tested', test_results: results })
       .eq('id', existing.id)
+      .neq('status', 'applied')
     transformationId = existing.id
   }
 
@@ -1228,6 +1231,7 @@ export async function applyTransform(
     }
   )
 
+  revalidatePath(`/app/projects/${tm.project_id}`, 'layout')
   return { success: true, rowsAffected: appliedRows }
 }
 
