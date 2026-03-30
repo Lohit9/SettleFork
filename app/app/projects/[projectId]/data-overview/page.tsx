@@ -1,6 +1,7 @@
 import { notFound } from 'next/navigation'
 import { createClient } from '@/lib/supabase/server'
 import { getProjectSchema, getAllTablesForProject } from '@/lib/actions/data-overview'
+import { PageHeader } from '@/components/app/PageHeader'
 import DataOverviewContent from './DataOverviewContent'
 
 interface Props {
@@ -28,12 +29,11 @@ export default async function DataOverviewPage({ params }: Props) {
 
   return (
     <div className="flex flex-col flex-1 min-h-0 bg-gray-50">
-      {/* Page header */}
-      <div className="bg-white border-b border-gray-200 px-6 py-4">
-        <h1 className="text-xl font-semibold text-gray-900">Data Overview</h1>
-        <p className="text-sm text-gray-500 mt-0.5">Explore source and target data structures</p>
-      </div>
-
+      <PageHeader
+        projectName={project.name}
+        title="Data Overview"
+        subtitle="Explore source and target data structures"
+      />
       <DataOverviewContent projectId={projectId} schema={schema} tables={tables} />
     </div>
   )

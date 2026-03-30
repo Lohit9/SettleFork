@@ -9,6 +9,7 @@ import { addValidationRule, addValidationRuleFromNL, executeCustomRules, deleteV
 import { generateManualFix, applyManualFix, previewManualFix } from '@/lib/actions/manual-fix'
 import { computeReadinessScore } from '@/lib/quality/readiness-score'
 import { CheckCircle } from '@/components/icons'
+import { PageHeader } from '@/components/app/PageHeader'
 import { stageAllData } from '@/lib/actions/staging'
 import { getVerifiedFixes } from '@/lib/quality/fix-reconciliation'
 import type { VerifiedFix } from '@/lib/quality/fix-reconciliation'
@@ -35,6 +36,7 @@ interface DatasetStub {
 
 interface Props {
   projectId: string
+  projectName: string
   initialIssues: QualityIssue[]
   initialReadiness: ReadinessScore
   initialRules: ValidationRule[]
@@ -1695,6 +1697,7 @@ function IssueFixModal({
 
 export default function DataQualityContent({
   projectId,
+  projectName,
   initialIssues,
   initialReadiness,
   initialRules,
@@ -2009,53 +2012,47 @@ export default function DataQualityContent({
       )}
 
       {/* Page Header */}
-      <div className="border-b border-gray-200 bg-white px-6 py-4">
-        <div className="flex items-start justify-between">
-          <div>
-            <h1 className="text-2xl font-semibold text-gray-900">Validate</h1>
-            <p className="text-sm text-gray-500 mt-0.5">Data quality monitoring and migration readiness</p>
-          </div>
-          <div className="flex items-center gap-2">
-            <button
-              onClick={() => setShowHistory(true)}
-              className="px-3 py-1.5 text-sm border border-gray-300 rounded-lg text-gray-600 hover:bg-gray-50"
-            >
-              Fix History
-            </button>
-            <button
-              onClick={() => setShowAddRule(true)}
-              className="px-3 py-1.5 text-sm border border-indigo-300 rounded-lg text-indigo-700 hover:bg-indigo-50"
-            >
-              + Add Rule
-            </button>
-            <button
-              onClick={() => setShowCreateFix(true)}
-              className="px-3 py-1.5 text-sm border border-violet-300 rounded-lg text-violet-700 hover:bg-violet-50"
-            >
-              + Create Fix
-            </button>
-            <button
-              onClick={handleRegenerateStagedData}
-              disabled={isRestaging || scanning}
-              className="px-3 py-1.5 text-sm border border-violet-300 rounded-lg text-violet-700 hover:bg-violet-50 disabled:opacity-50 flex items-center gap-1.5"
-              title="Re-apply saved transformations to generate fresh staged data for target-ready validation"
-            >
-              {isRestaging ? (
-                <><span className="w-3 h-3 border-2 border-violet-400/30 border-t-violet-600 rounded-full animate-spin" />Staging…</>
-              ) : (
-                '↻ Regenerate Staged Data'
-              )}
-            </button>
-            <button
-              onClick={handleRunFullScan}
-              disabled={scanning || isRestaging}
-              className="px-4 py-1.5 text-sm bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 disabled:opacity-50 flex items-center gap-2"
-            >
-              {scanning ? <><span className="w-3.5 h-3.5 border-2 border-white/30 border-t-white rounded-full animate-spin" />Scanning…</> : '⊙ Run Full Scan'}
-            </button>
-          </div>
+      <PageHeader projectName={projectName} title="Validate" subtitle="Data quality monitoring and migration readiness">
+        <div className="flex items-center gap-2 flex-shrink-0">
+          <button
+            onClick={() => setShowHistory(true)}
+            className="px-3 py-1.5 text-sm border border-gray-300 rounded-lg text-gray-600 hover:bg-gray-50"
+          >
+            Fix History
+          </button>
+          <button
+            onClick={() => setShowAddRule(true)}
+            className="px-3 py-1.5 text-sm border border-indigo-300 rounded-lg text-indigo-700 hover:bg-indigo-50"
+          >
+            + Add Rule
+          </button>
+          <button
+            onClick={() => setShowCreateFix(true)}
+            className="px-3 py-1.5 text-sm border border-violet-300 rounded-lg text-violet-700 hover:bg-violet-50"
+          >
+            + Create Fix
+          </button>
+          <button
+            onClick={handleRegenerateStagedData}
+            disabled={isRestaging || scanning}
+            className="px-3 py-1.5 text-sm border border-violet-300 rounded-lg text-violet-700 hover:bg-violet-50 disabled:opacity-50 flex items-center gap-1.5"
+            title="Re-apply saved transformations to generate fresh staged data for target-ready validation"
+          >
+            {isRestaging ? (
+              <><span className="w-3 h-3 border-2 border-violet-400/30 border-t-violet-600 rounded-full animate-spin" />Staging…</>
+            ) : (
+              '↻ Regenerate Staged Data'
+            )}
+          </button>
+          <button
+            onClick={handleRunFullScan}
+            disabled={scanning || isRestaging}
+            className="px-4 py-1.5 text-sm bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 disabled:opacity-50 flex items-center gap-2"
+          >
+            {scanning ? <><span className="w-3.5 h-3.5 border-2 border-white/30 border-t-white rounded-full animate-spin" />Scanning…</> : '⊙ Run Full Scan'}
+          </button>
         </div>
-      </div>
+      </PageHeader>
 
       <div className="flex-1 overflow-auto">
         <div className="p-6 space-y-6 max-w-5xl mx-auto">

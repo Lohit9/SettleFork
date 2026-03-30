@@ -26,5 +26,5 @@ export default async function OutputsPage({ params }: PageProps) {
 
   const pageData = await getOutputsPageData(projectId)
 
-  return <OutputsContent projectId={projectId} initialData={pageData} />
+  return <OutputsContent projectId={projectId} projectName={project.name} initialData={pageData} />
 }

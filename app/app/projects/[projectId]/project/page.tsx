@@ -15,7 +15,7 @@ export default async function ControlPlanePage({
   // Verify project ownership (RLS handles this, but we also want a 404 on missing)
   const { data: project } = await supabase
     .from('projects')
-    .select('id')
+    .select('id, name')
     .eq('id', projectId)
     .single()
 
@@ -40,6 +40,7 @@ export default async function ControlPlanePage({
   return (
     <ControlPlaneContent
       projectId={projectId}
+      projectName={project.name}
       sourceDatasets={sourceDatasets}
       targetDatasets={targetDatasets}
       initialSourceDocs={sourceDocs}

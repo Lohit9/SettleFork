@@ -349,7 +349,7 @@ export async function revertFix(
       success: false,
       error:
         'Cannot revert — no data snapshot was taken for this fix. ' +
-        'Re-upload the original CSV from Control Plane to restore data.',
+        'Re-upload the original CSV from Project Setup to restore data.',
     }
   }
 
@@ -379,7 +379,7 @@ export async function revertFix(
       success: false,
       error:
         'No snapshot found for this fix. This fix was applied before snapshot-based revert ' +
-        'was added. Re-upload the original CSV from Control Plane to restore data.',
+        'was added. Re-upload the original CSV from Project Setup to restore data.',
     }
   }
 

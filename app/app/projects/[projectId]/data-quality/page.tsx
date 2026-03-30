@@ -29,7 +29,7 @@ export default async function DataQualityPage({ params, searchParams }: PageProp
   if (!user) notFound()
 
   // Parallel data fetch — fix history fetched once here to avoid N+1 per IssueCard
-  const [{ issues, hasMappings }, validationRules, readiness, tablesData, initialFixHistory, resolvedSourceFieldIds] = await Promise.all([
+  const [{ issues, hasMappings }, validationRules, readiness, tablesData, initialFixHistory, resolvedSourceFieldIds, projectResult] = await Promise.all([
     getQualityIssues(projectId),
     getValidationRules(projectId),
     computeReadinessScore(projectId),
@@ -41,6 +41,7 @@ export default async function DataQualityPage({ params, searchParams }: PageProp
     getFixHistory(projectId),
     // Source field IDs whose issues are resolved by an approved transform
     getResolvedSourceFieldIds(projectId).catch(() => [] as string[]),
+    supabase.from('projects').select('name').eq('id', projectId).single(),
   ])
 
   const allDatasets = (tablesData.data ?? []) as Array<{
@@ -57,6 +58,7 @@ export default async function DataQualityPage({ params, searchParams }: PageProp
   return (
     <DataQualityContent
       projectId={projectId}
+      projectName={projectResult.data?.name ?? ''}
       initialIssues={issues}
       initialReadiness={readiness}
       initialRules={validationRules}

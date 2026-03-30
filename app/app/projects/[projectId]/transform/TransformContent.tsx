@@ -4,6 +4,7 @@ import { useState, useEffect, useTransition, useCallback, useRef, useMemo } from
 import { useRouter } from 'next/navigation'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
+import { PageHeader } from '@/components/app/PageHeader'
 import { Textarea } from '@/components/ui/textarea'
 import {
   RefreshCw,
@@ -42,6 +43,7 @@ import StagingWarningPopup from '@/components/StagingWarningPopup'
 
 interface Props {
   projectId: string
+  projectName: string
   initialData: TransformPageData
 }
 
@@ -157,7 +159,7 @@ function getSmartPlaceholder(field: FieldItem): string {
 
 // ── TransformContent ──────────────────────────────────────────────────────────
 
-export default function TransformContent({ projectId, initialData }: Props) {
+export default function TransformContent({ projectId, projectName, initialData }: Props) {
   const router = useRouter()
   const [data, setData] = useState<TransformPageData>(initialData)
   const [selectedMappingId, setSelectedMappingId] = useState<string | null>(null)
@@ -912,18 +914,21 @@ export default function TransformContent({ projectId, initialData }: Props) {
 
   if (!data.hasMappings) {
     return (
-      <div className="flex-1 flex items-center justify-center p-8">
-        <div className="text-center max-w-md">
-          <div className="w-16 h-16 bg-gray-100 rounded-full flex items-center justify-center mx-auto mb-4">
-            <ArrowRight className="w-8 h-8 text-gray-400" />
+      <div className="h-full bg-gray-50 flex flex-col overflow-hidden relative">
+        <PageHeader projectName={projectName} title="Transform" subtitle="Define transformation logic for mapped fields" />
+        <div className="flex-1 flex items-center justify-center p-8">
+          <div className="text-center max-w-md">
+            <div className="w-16 h-16 bg-gray-100 rounded-full flex items-center justify-center mx-auto mb-4">
+              <ArrowRight className="w-8 h-8 text-gray-400" />
+            </div>
+            <h3 className="text-lg font-semibold text-gray-900 mb-2">No mappings found</h3>
+            <p className="text-sm text-gray-600 mb-4">
+              Generate mappings in the Mapping tab to enable transformations.
+            </p>
+            <Button variant="outline" onClick={() => router.push(`/app/projects/${projectId}/mapping`)}>
+              Go to Mapping
+            </Button>
           </div>
-          <h3 className="text-lg font-semibold text-gray-900 mb-2">No mappings found</h3>
-          <p className="text-sm text-gray-600 mb-4">
-            Generate mappings in the Mapping tab to enable transformations.
-          </p>
-          <Button variant="outline" onClick={() => router.push(`/app/projects/${projectId}/mapping`)}>
-            Go to Mapping
-          </Button>
         </div>
       </div>
     )
@@ -946,14 +951,12 @@ export default function TransformContent({ projectId, initialData }: Props) {
       )}
 
       {/* ── Top bar ────────────────────────────────────────────────────────── */}
-      <div className="bg-white border-b border-gray-200 px-6 py-4 flex items-center justify-between flex-shrink-0">
-        <div>
-          <h1 className="text-xl font-semibold text-gray-900">Select Fields to Transform</h1>
-          <p className="text-sm text-gray-500 mt-0.5">
-            {needsTransformCount} field{needsTransformCount !== 1 ? 's' : ''} require transformation
-          </p>
-        </div>
-        <div className="flex items-center gap-3">
+      <PageHeader
+        projectName={projectName}
+        title="Transform"
+        subtitle={`${needsTransformCount} field${needsTransformCount !== 1 ? 's' : ''} require transformation`}
+      >
+        <div className="flex items-center gap-3 flex-shrink-0">
           {stagingError && (
             <p className="text-xs text-red-600 max-w-xs text-right">{stagingError}</p>
           )}
@@ -987,7 +990,7 @@ export default function TransformContent({ projectId, initialData }: Props) {
             ) : 'Stage All Data'}
           </Button>
         </div>
-      </div>
+      </PageHeader>
 
       {/* DISABLED: Source-data staleness banner — will re-enable later */}
       {/* {staleTableMappingIds.size > 0 && (

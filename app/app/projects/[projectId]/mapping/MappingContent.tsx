@@ -3,6 +3,7 @@
 import { useState, useMemo, useTransition, useCallback, useEffect, useRef } from 'react'
 import { useRouter } from 'next/navigation'
 import { Check, CheckCircle, Pencil, X, ChevronDown, ChevronRight, ArrowRight, Plus } from '@/components/icons'
+import { PageHeader } from '@/components/app/PageHeader'
 import {
   updateFieldMappingStatus,
   editFieldMapping,
@@ -33,6 +34,7 @@ import { acknowledgeField, removeAcknowledgment } from '@/lib/actions/field-ackn
 
 interface Props {
   projectId: string
+  projectName: string
   initialData: MappingsResult | null
 }
 
@@ -2056,7 +2058,7 @@ function UnmappedView({
 
 // ─── Main Component ───────────────────────────────────────────────────────────
 
-export default function MappingContent({ projectId, initialData }: Props) {
+export default function MappingContent({ projectId, projectName, initialData }: Props) {
   const router = useRouter()
   const [, startTransition] = useTransition()
 
@@ -2379,7 +2381,10 @@ export default function MappingContent({ projectId, initialData }: Props) {
 
   if (tableMappings.length === 0) {
     return (
-      <div className="px-6 py-8 max-w-2xl mx-auto">
+      <div className="flex-1 bg-gray-50 flex flex-col min-h-0">
+        <PageHeader projectName={projectName} title="Mapping" subtitle="Review and approve field mappings" />
+        <div className="flex-1 overflow-auto">
+        <div className="px-6 py-8 max-w-2xl mx-auto">
         <div className="text-center mb-8">
           <div className="w-16 h-16 rounded-full bg-indigo-50 flex items-center justify-center mx-auto mb-4">
             <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" className="text-indigo-400">
@@ -2399,11 +2404,16 @@ export default function MappingContent({ projectId, initialData }: Props) {
           onDone={() => refreshData()}
         />
       </div>
+      </div>
+      </div>
     )
   }
 
   return (
-    <div className="px-6 py-6 space-y-5">
+    <div className="flex-1 bg-gray-50 flex flex-col min-h-0">
+      <PageHeader projectName={projectName} title="Mapping" subtitle="Review and approve field mappings" />
+      <div className="flex-1 overflow-auto">
+      <div className="px-6 py-6 space-y-5">
       {/* Progress bar */}
       <MappingProgress
         tableMappings={tableMappings}
@@ -2603,6 +2613,8 @@ export default function MappingContent({ projectId, initialData }: Props) {
           onCancel={() => setRegenerateConfirmTarget(null)}
         />
       )}
+    </div>
+    </div>
     </div>
   )
 }

@@ -16,6 +16,7 @@ import {
   Sparkles,
   FileText,
 } from '@/components/icons'
+import { PageHeader } from '@/components/app/PageHeader'
 import {
   generateGoldStandardCSVs,
   generateSQLLoadScripts,
@@ -34,6 +35,7 @@ import { markProjectComplete } from '@/lib/actions/projects'
 
 interface Props {
   projectId: string
+  projectName: string
   initialData: OutputsPageData
 }
 
@@ -118,7 +120,7 @@ function fmtDateTime(iso: string) {
 
 // ── OutputsContent ────────────────────────────────────────────────────────────
 
-export default function OutputsContent({ projectId, initialData }: Props) {
+export default function OutputsContent({ projectId, projectName, initialData }: Props) {
   const router = useRouter()
   const [data] = useState<OutputsPageData>(initialData)
 
@@ -321,7 +323,7 @@ export default function OutputsContent({ projectId, initialData }: Props) {
   // ── Render ──────────────────────────────────────────────────────────────
 
   return (
-    <div className="flex-1 overflow-auto bg-gray-50">
+    <div className="flex-1 bg-gray-50 flex flex-col min-h-0">
       {/* Toast */}
       {toast && (
         <div className={`fixed bottom-6 right-6 z-50 px-4 py-3 rounded-lg shadow-lg text-sm font-medium ${toast.type === 'success' ? 'bg-green-600 text-white' : 'bg-red-600 text-white'}`}>
@@ -329,14 +331,15 @@ export default function OutputsContent({ projectId, initialData }: Props) {
         </div>
       )}
 
+      <PageHeader projectName={projectName} title="Migration Center" subtitle="Your migration deliverables and project status" />
+
+      <div className="flex-1 overflow-auto">
       <div className="max-w-5xl mx-auto p-6 pb-16 space-y-6">
 
         {/* ════════════════════════════════════════════════════
             SECTION 1 — MIGRATION STATUS DASHBOARD
         ════════════════════════════════════════════════════ */}
         <div>
-          <h1 className="text-2xl font-semibold text-gray-900 mb-1">Migration Center</h1>
-          <p className="text-sm text-gray-500 mb-5">Your migration deliverables and project status</p>
 
           {/* ── Compact stat cards ─────────────────────────────────────────── */}
           <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-4">
@@ -939,6 +942,7 @@ export default function OutputsContent({ projectId, initialData }: Props) {
           </Button>
         </div>
 
+      </div>
       </div>
     </div>
   )

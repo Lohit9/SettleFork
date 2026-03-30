@@ -29,6 +29,7 @@ export default async function TransformPage({ params }: PageProps) {
   return (
     <TransformContent
       projectId={projectId}
+      projectName={project.name}
       initialData={transformData}
     />
   )
