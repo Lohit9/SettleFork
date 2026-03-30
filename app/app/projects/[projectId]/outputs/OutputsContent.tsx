@@ -14,6 +14,7 @@ import {
   ArrowRight,
   Zap,
   Sparkles,
+  FileText,
 } from '@/components/icons'
 import {
   generateGoldStandardCSVs,
@@ -310,7 +311,7 @@ export default function OutputsContent({ projectId, initialData }: Props) {
   // ── Computed values ─────────────────────────────────────────────────────
 
   const { phases, metrics, decisions, outstanding, existingOutputs } = data
-  const previewDecisions = decisions.slice(0, 8)
+  const previewDecisions = decisions.slice(0, 3)
   const filteredDecisions = decisionsTypeFilter === 'all'
     ? decisions
     : decisions.filter((d) => d.type === decisionsTypeFilter)
@@ -334,267 +335,245 @@ export default function OutputsContent({ projectId, initialData }: Props) {
             SECTION 1 — MIGRATION STATUS DASHBOARD
         ════════════════════════════════════════════════════ */}
         <div>
-          <h1 className="text-2xl font-bold text-gray-900 mb-1">Migration Center</h1>
+          <h1 className="text-2xl font-semibold text-gray-900 mb-1">Migration Center</h1>
           <p className="text-sm text-gray-500 mb-5">Your migration deliverables and project status</p>
 
-          <div className="bg-white border border-gray-200 rounded-xl shadow-sm overflow-hidden">
-            <div className="px-6 py-5 border-b border-gray-100">
-              <div className="flex items-center justify-between mb-1">
-                <h2 className="text-base font-semibold text-gray-900">Migration Status</h2>
-                <span className="text-sm text-gray-500">{phases.completedCount} of 5 phases complete</span>
-              </div>
-              <div className="w-full h-1.5 bg-gray-100 rounded-full overflow-hidden mt-3">
-                <div className="h-full bg-[#4F46E5] rounded-full transition-all" style={{ width: `${(phases.completedCount / 5) * 100}%` }} />
-              </div>
-            </div>
-
-            {/* Phase progress bar */}
-            <div className="px-6 py-5 border-b border-gray-100">
-              <div className="flex items-center gap-1">
-                {[
-                  { id: 'ingestion', label: 'Data Ingestion', color: phases.dataIngestion === 'complete' ? 'green' : 'gray' },
-                  { id: 'mapping', label: 'Mapping', color: phases.mapping },
-                  { id: 'transforms', label: 'Transform', color: phases.transformations },
-                  { id: 'quality', label: 'Validate', color: phases.dataQuality },
-                  { id: 'validation', label: 'Ready', color: phases.validation },
-                ].map((phase, i, arr) => {
-                  const colors = phaseColor(phase.color)
-                  return (
-                    <div key={phase.id} className="flex items-center flex-1">
-                      <div className="flex-1 flex flex-col items-center gap-1.5">
-                        <div className={`w-7 h-7 rounded-full flex items-center justify-center ${colors.bg}`}>
-                          {(phase.color === 'green') ? (
-                            <CheckCircle2 className="w-4 h-4 text-white" />
-                          ) : (
-                            <span className="text-white text-xs font-bold">{i + 1}</span>
-                          )}
-                        </div>
-                        <span className={`text-[10px] font-medium text-center leading-tight ${colors.text}`}>{phase.label}</span>
-                      </div>
-                      {i < arr.length - 1 && <div className="h-0.5 flex-1 bg-gray-200 mb-4 mx-1" />}
-                    </div>
-                  )
-                })}
-              </div>
-            </div>
-
-            {/* Key metrics */}
-            <div className="grid grid-cols-4 divide-x divide-gray-100 border-b border-gray-100">
-              {/* Readiness */}
-              <div className={`px-5 py-4 ${readinessBg(metrics.readinessStatus)} border-l-0`}>
-                <p className="text-xs text-gray-500 font-medium mb-1">Migration Readiness</p>
-                <p className={`text-2xl font-bold ${readinessColor(metrics.readinessStatus)}`}>{metrics.readinessScore}%</p>
-                <p className={`text-xs font-medium mt-0.5 ${readinessColor(metrics.readinessStatus)}`}>
+          {/* ── Compact stat cards ─────────────────────────────────────────── */}
+          <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-4">
+            {/* Migration Readiness — headline metric */}
+            <div className={`rounded-xl border border-gray-200 shadow-sm bg-white p-4 border-l-4 ${
+              metrics.readinessStatus === 'ready' ? 'border-l-green-500' :
+              metrics.readinessStatus === 'at_risk' ? 'border-l-amber-400' :
+              'border-l-red-500'
+            }`}>
+              <p className="text-xs font-medium text-gray-500 uppercase tracking-wide mb-1.5">Migration Readiness</p>
+              <div className="flex items-baseline gap-1.5">
+                <span className={`text-2xl font-semibold ${readinessColor(metrics.readinessStatus)}`}>{metrics.readinessScore}%</span>
+                <span className={`text-sm font-medium ${readinessColor(metrics.readinessStatus)}`}>
                   {metrics.readinessStatus === 'ready' ? 'Ready' : metrics.readinessStatus === 'at_risk' ? 'At Risk' : 'Not Ready'}
-                </p>
-              </div>
-
-              {/* Mapping coverage */}
-              <div className="px-5 py-4">
-                <p className="text-xs text-gray-500 font-medium mb-1">Mapping Coverage</p>
-                <p className="text-2xl font-bold text-gray-900">{metrics.approvedFieldMappings}<span className="text-sm font-normal text-gray-400"> / {metrics.totalSourceFields}</span></p>
-                <div className="mt-2 h-1.5 bg-gray-100 rounded-full overflow-hidden">
-                  <div className="h-full bg-indigo-500 rounded-full" style={{ width: `${metrics.totalSourceFields > 0 ? Math.round((metrics.approvedFieldMappings / metrics.totalSourceFields) * 100) : 0}%` }} />
-                </div>
-                <p className="text-xs text-gray-400 mt-1">{metrics.totalSourceFields > 0 ? Math.round((metrics.approvedFieldMappings / metrics.totalSourceFields) * 100) : 0}% fields approved</p>
-              </div>
-
-              {/* Quality issues */}
-              <div className="px-5 py-4">
-                <p className="text-xs text-gray-500 font-medium mb-1">Quality Issues</p>
-                {metrics.openBlocking === 0 && metrics.openWarnings === 0 ? (
-                  <p className="text-2xl font-bold text-green-600">Clear</p>
-                ) : (
-                  <p className="text-2xl font-bold text-gray-900">
-                    {metrics.openBlocking > 0 && <span className="text-red-600">{metrics.openBlocking} blocking</span>}
-                    {metrics.openBlocking > 0 && metrics.openWarnings > 0 && <span className="text-gray-300">, </span>}
-                    {metrics.openWarnings > 0 && <span className="text-yellow-600 text-lg">{metrics.openWarnings} warn</span>}
-                  </p>
-                )}
-                <p className="text-xs text-gray-400 mt-1">
-                  {metrics.openBlocking === 0 && metrics.openWarnings === 0 ? 'No open issues' : 'open issues'}
-                </p>
-              </div>
-
-              {/* Transforms */}
-              <div className="px-5 py-4">
-                <p className="text-xs text-gray-500 font-medium mb-1">Transforms</p>
-                <p className="text-2xl font-bold text-gray-900">{metrics.completedTransforms}<span className="text-sm font-normal text-gray-400"> / {metrics.totalTransforms}</span></p>
-                {metrics.totalTransforms > 0 && (
-                  <div className="mt-2 h-1.5 bg-gray-100 rounded-full overflow-hidden">
-                    <div className="h-full bg-purple-500 rounded-full" style={{ width: `${Math.round((metrics.completedTransforms / metrics.totalTransforms) * 100)}%` }} />
-                  </div>
-                )}
-                <p className="text-xs text-gray-400 mt-1">{metrics.totalTransforms === 0 ? 'None needed' : 'complete'}</p>
+                </span>
               </div>
             </div>
 
-            {/* Decisions log */}
-            {decisions.length > 0 && (
-              <div className="px-6 py-5 border-b border-gray-100">
-                <div className="flex items-center justify-between mb-3">
-                  <h3 className="text-sm font-semibold text-gray-800">Decisions & Actions Log</h3>
-                  <span className="text-xs text-gray-400">{data.totalDecisions} total</span>
-                </div>
-                <div className="space-y-2">
-                  {previewDecisions.map((entry) => (
-                    <div key={entry.id} className="flex items-start gap-3">
-                      <div className={`w-2 h-2 rounded-full mt-1.5 flex-shrink-0 ${decisionDotColor(entry.type)}`} />
-                      <div className="flex-1 min-w-0">
-                        <p className="text-xs text-gray-700 truncate">{entry.label}</p>
-                      </div>
-                      <span className="text-[10px] text-gray-400 flex-shrink-0">{fmtDate(entry.timestamp)}</span>
-                    </div>
-                  ))}
-                </div>
-                {decisions.length > 8 && (
-                  <button
-                    className="mt-3 text-xs text-indigo-600 hover:text-indigo-700 font-medium"
-                    onClick={() => setShowDecisionsDrawer(true)}
-                  >
-                    View full log ({decisions.length}) →
-                  </button>
-                )}
+            {/* Mapping Coverage */}
+            <div className="rounded-xl border border-gray-200 shadow-sm bg-white p-4">
+              <p className="text-xs font-medium text-gray-500 uppercase tracking-wide mb-1.5">Mapping Coverage</p>
+              <div className="flex items-baseline gap-1">
+                <span className="text-2xl font-semibold text-gray-900">{metrics.approvedFieldMappings}</span>
+                <span className="text-sm text-gray-400">/ {metrics.totalSourceFields}</span>
               </div>
-            )}
-
-            {/* Decisions log drawer */}
-            {showDecisionsDrawer && (
-              <div className="fixed inset-0 z-40 flex items-center justify-end bg-black/30 p-4">
-                <div className="bg-white rounded-xl shadow-2xl w-full max-w-lg h-full max-h-[90vh] flex flex-col">
-                  {/* Drawer header */}
-                  <div className="flex items-center justify-between px-5 py-4 border-b border-gray-100 flex-shrink-0">
-                    <div>
-                      <h3 className="font-semibold text-gray-900">Decisions & Actions Log</h3>
-                      <p className="text-xs text-gray-400 mt-0.5">{data.totalDecisions} total events</p>
-                    </div>
-                    <button
-                      onClick={() => setShowDecisionsDrawer(false)}
-                      className="text-gray-400 hover:text-gray-600 text-xl leading-none"
-                    >
-                      ×
-                    </button>
-                  </div>
-
-                  {/* Type filter tabs */}
-                  <div className="flex items-center gap-1 px-5 py-3 border-b border-gray-100 flex-shrink-0 flex-wrap">
-                    {[
-                      { key: 'all', label: 'All' },
-                      { key: 'system', label: 'Scans & Staging' },
-                      { key: 'fix', label: 'Fixes' },
-                      { key: 'transform', label: 'Transforms' },
-                      { key: 'mapping', label: 'Mappings' },
-                      { key: 'data', label: 'Data' },
-                      { key: 'validation', label: 'Validation' },
-                    ].filter(tab => tab.key === 'all' || decisions.some(d => d.type === tab.key))
-                      .map((tab) => (
-                        <button
-                          key={tab.key}
-                          onClick={() => setDecisionsTypeFilter(tab.key)}
-                          className={`px-2.5 py-1 rounded-full text-xs font-medium transition-colors ${
-                            decisionsTypeFilter === tab.key
-                              ? 'bg-indigo-600 text-white'
-                              : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
-                          }`}
-                        >
-                          {tab.label}
-                          {tab.key !== 'all' && (
-                            <span className="ml-1 opacity-70">
-                              {decisions.filter(d => d.type === tab.key).length}
-                            </span>
-                          )}
-                        </button>
-                      ))}
-                  </div>
-
-                  {/* Scrollable list */}
-                  <div className="flex-1 overflow-y-auto px-5 py-3 space-y-2.5">
-                    {filteredDecisions.length === 0 ? (
-                      <p className="text-sm text-gray-400 text-center py-8">No events of this type.</p>
-                    ) : filteredDecisions.map((entry) => (
-                      <div key={entry.id} className="flex items-start gap-3">
-                        <div className={`w-2 h-2 rounded-full mt-1.5 flex-shrink-0 ${decisionDotColor(entry.type)}`} />
-                        <div className="flex-1 min-w-0">
-                          <p className="text-xs text-gray-700">{entry.label}</p>
-                        </div>
-                        <span className="text-[10px] text-gray-400 flex-shrink-0 whitespace-nowrap">
-                          {fmtDateTime(entry.timestamp)}
-                        </span>
-                      </div>
-                    ))}
-                  </div>
-                </div>
+              <div className="mt-2 h-1.5 bg-gray-100 rounded-full overflow-hidden">
+                <div className="h-full bg-indigo-500 rounded-full" style={{ width: `${metrics.totalSourceFields > 0 ? Math.round((metrics.approvedFieldMappings / metrics.totalSourceFields) * 100) : 0}%` }} />
               </div>
-            )}
+            </div>
 
-            {/* Outstanding items */}
-            <div className="px-6 py-5">
-              <h3 className="text-sm font-semibold text-gray-800 mb-3">Outstanding Items</h3>
-              {!hasOutstanding ? (
-                <div className="flex items-center gap-2 text-green-600">
-                  <CheckCircle2 className="w-4 h-4" />
-                  <span className="text-sm font-medium">All items resolved — ready to generate outputs</span>
-                </div>
+            {/* Quality Issues */}
+            <div className={`rounded-xl border shadow-sm bg-white p-4 ${
+              metrics.openBlocking > 0 ? 'border-gray-200 border-l-4 border-l-red-500' : 'border-gray-200'
+            }`}>
+              <p className="text-xs font-medium text-gray-500 uppercase tracking-wide mb-1.5">Quality Issues</p>
+              {metrics.openBlocking === 0 && metrics.openWarnings === 0 ? (
+                <span className="text-2xl font-semibold text-green-600">Clean</span>
               ) : (
-                <div className="space-y-2">
-                  {outstanding.unmappedSourceFields > 0 && (
-                    <div className="flex items-center justify-between">
-                      <div className="flex items-center gap-2">
-                        <div className="w-2 h-2 rounded-full bg-yellow-400" />
-                        <span className="text-sm text-gray-700">{outstanding.unmappedSourceFields} unmapped source field{outstanding.unmappedSourceFields !== 1 ? 's' : ''}</span>
-                      </div>
-                      <a href={`/app/projects/${projectId}/mapping`} className="text-xs text-indigo-600 hover:underline">Go to Mapping →</a>
-                    </div>
+                <div className="flex items-baseline gap-2 flex-wrap">
+                  {metrics.openBlocking > 0 && (
+                    <>
+                      <span className="text-2xl font-semibold text-red-600">{metrics.openBlocking}</span>
+                      <span className="text-sm text-red-600">blocking</span>
+                    </>
                   )}
-                  {outstanding.blockingIssues > 0 && (
-                    <div className="flex items-center justify-between">
-                      <div className="flex items-center gap-2">
-                        <div className="w-2 h-2 rounded-full bg-red-500" />
-                        <span className="text-sm text-gray-700">{outstanding.blockingIssues} blocking quality issue{outstanding.blockingIssues !== 1 ? 's' : ''}</span>
-                      </div>
-                      <a href={`/app/projects/${projectId}/data-quality`} className="text-xs text-indigo-600 hover:underline">Go to Validate →</a>
-                    </div>
-                  )}
-                  {outstanding.fieldsNeedingTransformWork > 0 && (
-                    <div className="flex items-center justify-between">
-                      <div className="flex items-center gap-2">
-                        <div className="w-2 h-2 rounded-full bg-purple-400" />
-                        <span className="text-sm text-gray-700">{outstanding.fieldsNeedingTransformWork} field{outstanding.fieldsNeedingTransformWork !== 1 ? 's' : ''} need transformation</span>
-                      </div>
-                      <a href={`/app/projects/${projectId}/transform`} className="text-xs text-indigo-600 hover:underline">Go to Transform →</a>
-                    </div>
-                  )}
-                  {outstanding.untestedTransforms > 0 && (
-                    <div className="flex items-center justify-between">
-                      <div className="flex items-center gap-2">
-                        <div className="w-2 h-2 rounded-full bg-orange-400" />
-                        <span className="text-sm text-gray-700">{outstanding.untestedTransforms} transform{outstanding.untestedTransforms !== 1 ? 's' : ''} need testing</span>
-                      </div>
-                      <a href={`/app/projects/${projectId}/transform`} className="text-xs text-indigo-600 hover:underline">Go to Transform →</a>
-                    </div>
-                  )}
-                  {outstanding.testedTransforms > 0 && (
-                    <div className="flex items-center justify-between">
-                      <div className="flex items-center gap-2">
-                        <div className="w-2 h-2 rounded-full bg-blue-400" />
-                        <span className="text-sm text-gray-700">{outstanding.testedTransforms} transform{outstanding.testedTransforms !== 1 ? 's' : ''} need applying</span>
-                      </div>
-                      <a href={`/app/projects/${projectId}/transform`} className="text-xs text-indigo-600 hover:underline">Go to Transform →</a>
-                    </div>
+                  {metrics.openWarnings > 0 && (
+                    <>
+                      {metrics.openBlocking > 0 && <span className="text-gray-300">·</span>}
+                      <span className="text-sm text-amber-600">{metrics.openWarnings} warnings</span>
+                    </>
                   )}
                 </div>
               )}
             </div>
+
+            {/* Transforms */}
+            <div className="rounded-xl border border-gray-200 shadow-sm bg-white p-4">
+              <p className="text-xs font-medium text-gray-500 uppercase tracking-wide mb-1.5">Transforms</p>
+              <div className="flex items-baseline gap-1">
+                <span className="text-2xl font-semibold text-gray-900">{metrics.completedTransforms}</span>
+                <span className="text-sm text-gray-400">/ {metrics.totalTransforms}</span>
+              </div>
+              {metrics.totalTransforms > 0 && (
+                <div className="mt-2 h-1.5 bg-gray-100 rounded-full overflow-hidden">
+                  <div className="h-full bg-purple-500 rounded-full" style={{ width: `${Math.round((metrics.completedTransforms / metrics.totalTransforms) * 100)}%` }} />
+                </div>
+              )}
+            </div>
           </div>
+
+          {/* ── Outstanding items ──────────────────────────────────────────── */}
+          {hasOutstanding ? (
+            <div className="bg-red-50 border border-red-200 rounded-xl p-4 mb-4">
+              <div className="flex items-center gap-2 mb-2.5">
+                <AlertCircle className="w-4 h-4 text-red-600 flex-shrink-0" />
+                <span className="text-sm font-semibold text-red-800">Outstanding Items</span>
+              </div>
+              <div className="space-y-2">
+                {outstanding.unmappedSourceFields > 0 && (
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-2">
+                      <span className="w-1.5 h-1.5 rounded-full bg-amber-500 flex-shrink-0" />
+                      <span className="text-sm text-red-700">{outstanding.unmappedSourceFields} unmapped source field{outstanding.unmappedSourceFields !== 1 ? 's' : ''}</span>
+                    </div>
+                    <a href={`/app/projects/${projectId}/mapping`} className="text-xs text-red-600 hover:text-red-800 font-medium">Go to Mapping →</a>
+                  </div>
+                )}
+                {outstanding.blockingIssues > 0 && (
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-2">
+                      <span className="w-1.5 h-1.5 rounded-full bg-red-500 flex-shrink-0" />
+                      <span className="text-sm text-red-700">{outstanding.blockingIssues} blocking quality issue{outstanding.blockingIssues !== 1 ? 's' : ''}</span>
+                    </div>
+                    <a href={`/app/projects/${projectId}/data-quality`} className="text-xs text-red-600 hover:text-red-800 font-medium">Go to Validate →</a>
+                  </div>
+                )}
+                {outstanding.fieldsNeedingTransformWork > 0 && (
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-2">
+                      <span className="w-1.5 h-1.5 rounded-full bg-purple-400 flex-shrink-0" />
+                      <span className="text-sm text-red-700">{outstanding.fieldsNeedingTransformWork} field{outstanding.fieldsNeedingTransformWork !== 1 ? 's' : ''} need transformation</span>
+                    </div>
+                    <a href={`/app/projects/${projectId}/transform`} className="text-xs text-red-600 hover:text-red-800 font-medium">Go to Transform →</a>
+                  </div>
+                )}
+                {outstanding.untestedTransforms > 0 && (
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-2">
+                      <span className="w-1.5 h-1.5 rounded-full bg-orange-400 flex-shrink-0" />
+                      <span className="text-sm text-red-700">{outstanding.untestedTransforms} transform{outstanding.untestedTransforms !== 1 ? 's' : ''} need testing</span>
+                    </div>
+                    <a href={`/app/projects/${projectId}/transform`} className="text-xs text-red-600 hover:text-red-800 font-medium">Go to Transform →</a>
+                  </div>
+                )}
+                {outstanding.testedTransforms > 0 && (
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-2">
+                      <span className="w-1.5 h-1.5 rounded-full bg-blue-400 flex-shrink-0" />
+                      <span className="text-sm text-red-700">{outstanding.testedTransforms} transform{outstanding.testedTransforms !== 1 ? 's' : ''} need applying</span>
+                    </div>
+                    <a href={`/app/projects/${projectId}/transform`} className="text-xs text-red-600 hover:text-red-800 font-medium">Go to Transform →</a>
+                  </div>
+                )}
+              </div>
+            </div>
+          ) : (
+            <div className="flex items-center gap-2 text-green-600 mb-4">
+              <CheckCircle2 className="w-4 h-4 flex-shrink-0" />
+              <span className="text-sm font-medium">All items resolved — ready to generate outputs</span>
+            </div>
+          )}
+
+          {/* ── Decisions log ──────────────────────────────────────────────── */}
+          {decisions.length > 0 && (
+            <div className="bg-white border border-gray-200 rounded-xl shadow-sm p-5">
+              <div className="flex items-center justify-between mb-3">
+                <h3 className="text-sm font-semibold text-gray-800">Decisions & Actions Log</h3>
+                <span className="text-xs text-gray-400">{data.totalDecisions} total</span>
+              </div>
+              <div className="space-y-2">
+                {previewDecisions.map((entry) => (
+                  <div key={entry.id} className="flex items-start gap-3">
+                    <div className={`w-2 h-2 rounded-full mt-1.5 flex-shrink-0 ${decisionDotColor(entry.type)}`} />
+                    <div className="flex-1 min-w-0">
+                      <p className="text-xs text-gray-700 truncate">{entry.label}</p>
+                    </div>
+                    <span className="text-[10px] text-gray-400 flex-shrink-0">{fmtDate(entry.timestamp)}</span>
+                  </div>
+                ))}
+              </div>
+              {decisions.length > 3 && (
+                <button
+                  className="mt-3 text-xs text-indigo-600 hover:text-indigo-700 font-medium"
+                  onClick={() => setShowDecisionsDrawer(true)}
+                >
+                  View all {decisions.length} entries →
+                </button>
+              )}
+            </div>
+          )}
+
+          {/* Decisions log drawer */}
+          {showDecisionsDrawer && (
+            <div className="fixed inset-0 z-40 flex items-center justify-end bg-black/30 p-4">
+              <div className="bg-white rounded-xl shadow-2xl w-full max-w-lg h-full max-h-[90vh] flex flex-col">
+                <div className="flex items-center justify-between px-5 py-4 border-b border-gray-100 flex-shrink-0">
+                  <div>
+                    <h3 className="font-semibold text-gray-900">Decisions & Actions Log</h3>
+                    <p className="text-xs text-gray-400 mt-0.5">{data.totalDecisions} total events</p>
+                  </div>
+                  <button
+                    onClick={() => setShowDecisionsDrawer(false)}
+                    className="text-gray-400 hover:text-gray-600 text-xl leading-none"
+                  >
+                    ×
+                  </button>
+                </div>
+                <div className="flex items-center gap-1 px-5 py-3 border-b border-gray-100 flex-shrink-0 flex-wrap">
+                  {[
+                    { key: 'all', label: 'All' },
+                    { key: 'system', label: 'Scans & Staging' },
+                    { key: 'fix', label: 'Fixes' },
+                    { key: 'transform', label: 'Transforms' },
+                    { key: 'mapping', label: 'Mappings' },
+                    { key: 'data', label: 'Data' },
+                    { key: 'validation', label: 'Validation' },
+                  ].filter(tab => tab.key === 'all' || decisions.some(d => d.type === tab.key))
+                    .map((tab) => (
+                      <button
+                        key={tab.key}
+                        onClick={() => setDecisionsTypeFilter(tab.key)}
+                        className={`px-2.5 py-1 rounded-full text-xs font-medium transition-colors ${
+                          decisionsTypeFilter === tab.key
+                            ? 'bg-indigo-600 text-white'
+                            : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
+                        }`}
+                      >
+                        {tab.label}
+                        {tab.key !== 'all' && (
+                          <span className="ml-1 opacity-70">
+                            {decisions.filter(d => d.type === tab.key).length}
+                          </span>
+                        )}
+                      </button>
+                    ))}
+                </div>
+                <div className="flex-1 overflow-y-auto px-5 py-3 space-y-2.5">
+                  {filteredDecisions.length === 0 ? (
+                    <p className="text-sm text-gray-400 text-center py-8">No events of this type.</p>
+                  ) : filteredDecisions.map((entry) => (
+                    <div key={entry.id} className="flex items-start gap-3">
+                      <div className={`w-2 h-2 rounded-full mt-1.5 flex-shrink-0 ${decisionDotColor(entry.type)}`} />
+                      <div className="flex-1 min-w-0">
+                        <p className="text-xs text-gray-700">{entry.label}</p>
+                      </div>
+                      <span className="text-[10px] text-gray-400 flex-shrink-0 whitespace-nowrap">
+                        {fmtDateTime(entry.timestamp)}
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            </div>
+          )}
         </div>
 
         {/* ════════════════════════════════════════════════════
             SECTION 2 — MIGRATION EXECUTION PACKAGE (hero deliverable)
         ════════════════════════════════════════════════════ */}
+        <div className="border-t border-gray-200 pt-6 -mt-2">
+          <h2 className="text-lg font-semibold text-gray-900 mb-4">Deliverables</h2>
+        </div>
+
         <div>
           <div className="flex items-center gap-2 mb-3">
-            <Zap className="w-5 h-5 text-blue-600" />
-            <h2 className="text-lg font-bold text-gray-900">Migration Execution Package</h2>
+            <FileText className="w-5 h-5 text-indigo-600" />
+            <h2 className="text-lg font-semibold text-gray-900">Migration Execution Package</h2>
           </div>
 
           {/* Accent card: left-border + subtle blue tint to signal primary deliverable */}
@@ -701,7 +680,7 @@ export default function OutputsContent({ projectId, initialData }: Props) {
         <div>
           <div className="flex items-start justify-between mb-4">
             <div>
-              <h2 className="text-lg font-bold text-gray-900">Gold Standard Files</h2>
+              <h2 className="text-lg font-semibold text-gray-900">Gold Standard Files</h2>
               <p className="text-sm text-gray-500 mt-0.5">Production-ready data files with all transformations applied, ready to load into your target system</p>
             </div>
           </div>
@@ -825,7 +804,7 @@ export default function OutputsContent({ projectId, initialData }: Props) {
         <div>
           <div className="flex items-start justify-between mb-4">
             <div>
-              <h2 className="text-lg font-bold text-gray-900">Deliverable Package</h2>
+              <h2 className="text-lg font-semibold text-gray-900">Deliverable Package</h2>
               <p className="text-sm text-gray-500 mt-0.5">Migration documentation and reports for stakeholders, QA, and project records</p>
             </div>
             <Button
