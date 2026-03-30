@@ -2,7 +2,7 @@
 
 import { useState, useMemo, useTransition, useCallback, useEffect, useRef } from 'react'
 import { useRouter } from 'next/navigation'
-import { Check, Pencil, X, ChevronDown, ChevronRight, ArrowRight, Plus } from '@/components/icons'
+import { Check, CheckCircle, Pencil, X, ChevronDown, ChevronRight, ArrowRight, Plus } from '@/components/icons'
 import {
   updateFieldMappingStatus,
   editFieldMapping,
@@ -392,7 +392,7 @@ function MappingProgress({
       <div className="flex items-center gap-6 text-sm">
         <div className="flex items-center gap-1.5">
           {addressedTarget >= totalTargetFields ? (
-            <span className="text-green-600 text-base leading-none">✅</span>
+            <CheckCircle className="w-4 h-4 text-green-600 flex-shrink-0" />
           ) : (
             <span className="w-2 h-2 rounded-full bg-amber-400 inline-block flex-shrink-0" />
           )}
@@ -402,7 +402,7 @@ function MappingProgress({
         </div>
         <div className="flex items-center gap-1.5">
           {addressedSource >= totalSourceFields ? (
-            <span className="text-green-600 text-base leading-none">✅</span>
+            <CheckCircle className="w-4 h-4 text-green-600 flex-shrink-0" />
           ) : (
             <span className="w-2 h-2 rounded-full bg-blue-400 inline-block flex-shrink-0" />
           )}
