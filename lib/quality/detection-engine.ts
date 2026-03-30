@@ -606,7 +606,7 @@ export async function runInFlightChecks(projectId: string): Promise<void> {
         target_table_id
       ),
       source_field:fields!source_field_id(id, name, data_type, inferred_type, is_nullable, is_primary_key, table_id),
-      target_field:fields!target_field_id(id, name, data_type, is_nullable, table_id)
+      target_field:fields!target_field_id(id, name, data_type, is_nullable, is_foreign_key, fk_reference, table_id)
     `
     )
     .eq('table_mappings.project_id', projectId)
@@ -615,7 +615,7 @@ export async function runInFlightChecks(projectId: string): Promise<void> {
 
   type TMRow = { project_id: string; source_table_id: string; target_table_id: string }
   type SFRow = { id: string; name: string; data_type: string; inferred_type: string | null; is_nullable: boolean; is_primary_key: boolean; table_id: string }
-  type TFRow = { id: string; name: string; data_type: string; is_nullable: boolean; table_id: string }
+  type TFRow = { id: string; name: string; data_type: string; is_nullable: boolean; is_foreign_key: boolean; fk_reference: string | null; table_id: string }
 
   // Determine which table_mappings have staged data (transforms applied)
   const uniqueMappingIds = [
@@ -642,6 +642,17 @@ export async function runInFlightChecks(projectId: string): Promise<void> {
     .select('id, name')
     .in('id', targetTableIds)
   const targetTableMap = new Map((targetTables ?? []).map((t) => [t.id, t.name]))
+
+  // Build reverse map: target table name (uppercase) → table_mapping_id
+  // Used for FK parent lookup in Check 10.
+  const targetNameToMappingId = new Map<string, string>()
+  for (const fm of fieldMappings) {
+    const tm = fm.table_mappings as unknown as { project_id: string; source_table_id: string; target_table_id: string }
+    const tName = targetTableMap.get(tm.target_table_id)
+    if (tName && !targetNameToMappingId.has(tName.toUpperCase())) {
+      targetNameToMappingId.set(tName.toUpperCase(), fm.table_mapping_id)
+    }
+  }
 
   // Fetch source table names
   const sourceTableIds = [
@@ -763,6 +774,47 @@ export async function runInFlightChecks(projectId: string): Promise<void> {
             detection_source: 'manual_scan',
           })
         )
+      }
+    }
+
+    // ── Check 10: FK referential integrity against staged parent data (BLOCKING)
+    // Only runs when both the child and parent table mappings have been staged.
+    if (hasStaged && tf.is_foreign_key && tf.fk_reference) {
+      const [parentTableName, parentFieldName] = tf.fk_reference.split('.')
+      if (parentTableName && parentFieldName) {
+        const parentMappingId = targetNameToMappingId.get(parentTableName.toUpperCase())
+        if (parentMappingId && stagedMappingIds.has(parentMappingId)) {
+          const orphanCount = await rpcCount('dq_staged_orphaned_fk_count', {
+            p_child_mapping_id: fm.table_mapping_id,
+            p_child_field: tf.name,
+            p_parent_mapping_id: parentMappingId,
+            p_parent_field: parentFieldName,
+          })
+          if (orphanCount > 0) {
+            const samples = await rpcSamples('dq_staged_orphaned_fk_samples', {
+              p_child_mapping_id: fm.table_mapping_id,
+              p_child_field: tf.name,
+              p_parent_mapping_id: parentMappingId,
+              p_parent_field: parentFieldName,
+              p_limit: 5,
+            })
+            issuesToInsert.push(
+              makeIssue({
+                project_id: projectId,
+                table_id: tm.target_table_id,
+                field_id: tf.id,
+                stage: 'in_flight',
+                severity: 'blocking',
+                title: `${targetTableName}.${tf.name}`,
+                description: `Referential integrity violation: ${orphanCount} staged record${orphanCount !== 1 ? 's' : ''} in ${targetTableName}.${tf.name} reference values not found in staged ${parentTableName}.${parentFieldName} — these records will fail on load`,
+                affected_records: Number(orphanCount),
+                affected_rows_sample: samples,
+                issue_kind: 'orphaned_fk',
+                detection_source: 'manual_scan',
+              })
+            )
+          }
+        }
       }
     }
 

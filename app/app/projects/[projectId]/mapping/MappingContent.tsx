@@ -398,7 +398,7 @@ function MappingProgress({
           )}
           <span className={addressedTarget >= totalTargetFields ? 'text-green-700' : 'text-amber-700'}>
             {addressedTarget}/{totalTargetFields} target fields
-          </span>
+        </span>
         </div>
         <div className="flex items-center gap-1.5">
           {addressedSource >= totalSourceFields ? (
@@ -869,41 +869,41 @@ function InlineAddFieldRow({
 
         {/* Primary source + target selects */}
         <div className="flex items-center gap-3">
-          <select
-            value={srcFieldId}
-            onChange={(e) => setSrcFieldId(e.target.value)}
-            className="flex-1 border border-gray-200 rounded-lg px-2.5 py-1.5 text-xs text-gray-900 bg-white focus:outline-none focus:ring-2 focus:ring-indigo-500"
-          >
+        <select
+          value={srcFieldId}
+          onChange={(e) => setSrcFieldId(e.target.value)}
+          className="flex-1 border border-gray-200 rounded-lg px-2.5 py-1.5 text-xs text-gray-900 bg-white focus:outline-none focus:ring-2 focus:ring-indigo-500"
+        >
             <option value="">{mappingType === 'many_to_one' ? 'Primary source field…' : 'Source field…'}</option>
-            {allSrcFields.map((f) => (
-              <option key={f.id} value={f.id}>
+          {allSrcFields.map((f) => (
+            <option key={f.id} value={f.id}>
                 {f.name} — {f.data_type}{activelymappedSrcIds.has(f.id) ? ' (mapped)' : ''}
-              </option>
-            ))}
-          </select>
-          <ArrowRight className="w-3 h-3 text-gray-400 flex-shrink-0" />
-          <select
-            value={tgtFieldId}
-            onChange={(e) => setTgtFieldId(e.target.value)}
-            className="flex-1 border border-gray-200 rounded-lg px-2.5 py-1.5 text-xs text-gray-900 bg-white focus:outline-none focus:ring-2 focus:ring-indigo-500"
-          >
+            </option>
+          ))}
+        </select>
+        <ArrowRight className="w-3 h-3 text-gray-400 flex-shrink-0" />
+        <select
+          value={tgtFieldId}
+          onChange={(e) => setTgtFieldId(e.target.value)}
+          className="flex-1 border border-gray-200 rounded-lg px-2.5 py-1.5 text-xs text-gray-900 bg-white focus:outline-none focus:ring-2 focus:ring-indigo-500"
+        >
             <option value="">{mappingType === 'one_to_many' ? 'Primary target field…' : 'Target field…'}</option>
-            {allTgtFields.map((f) => (
-              <option key={f.id} value={f.id}>
-                {f.name} — {f.data_type}{mappedTgtIds.has(f.id) ? ' ✓' : ''}
-              </option>
-            ))}
-          </select>
-          <button
-            onClick={handleAdd}
-            disabled={!srcFieldId || !tgtFieldId || pending}
-            className="px-3 py-1.5 text-xs font-medium text-white bg-indigo-600 rounded-lg hover:bg-indigo-700 disabled:opacity-40 flex-shrink-0"
-          >
-            {pending ? '…' : 'Add'}
-          </button>
-          <button onClick={onCancel} className="text-gray-400 hover:text-gray-600 flex-shrink-0">
-            <X className="w-3.5 h-3.5" />
-          </button>
+          {allTgtFields.map((f) => (
+            <option key={f.id} value={f.id}>
+              {f.name} — {f.data_type}{mappedTgtIds.has(f.id) ? ' ✓' : ''}
+            </option>
+          ))}
+        </select>
+        <button
+          onClick={handleAdd}
+          disabled={!srcFieldId || !tgtFieldId || pending}
+          className="px-3 py-1.5 text-xs font-medium text-white bg-indigo-600 rounded-lg hover:bg-indigo-700 disabled:opacity-40 flex-shrink-0"
+        >
+          {pending ? '…' : 'Add'}
+        </button>
+        <button onClick={onCancel} className="text-gray-400 hover:text-gray-600 flex-shrink-0">
+          <X className="w-3.5 h-3.5" />
+        </button>
         </div>
 
         {/* Many-to-one: additional contributing source fields */}
@@ -1048,15 +1048,15 @@ function FieldMappingRow({
   const oneToManyCount = !fm.is_contributing && fm.source_field_id
     ? allTMFMs.filter(
         (f) => f.source_field_id === fm.source_field_id && !f.is_contributing && f.status !== 'rejected'
-      ).length
+  ).length
     : 0
   const isOneToMany = oneToManyCount > 1
 
   // Value assignment rows — no source field, purple accent
   const isValueAssignment = fm.source_field_id === null
   if (isValueAssignment) {
-    return (
-      <div
+  return (
+    <div
         className={`flex items-center px-5 py-3 hover:bg-gray-50 cursor-pointer transition-colors border-l-2 border-l-purple-400 ${isApproved ? 'bg-purple-50/40' : ''}`}
         onClick={onSelect}
       >
@@ -1122,10 +1122,10 @@ function FieldMappingRow({
         {isManyToOne ? (
           <div className="flex flex-col min-w-0 flex-1">
             <div className="flex items-center gap-1.5">
-              <span className={`text-sm truncate ${isRejected ? 'line-through text-gray-400' : 'text-gray-900'}`}>
-                {fm.sourceField?.name ?? '—'}
-              </span>
-              <span
+        <span className={`text-sm truncate ${isRejected ? 'line-through text-gray-400' : 'text-gray-900'}`}>
+          {fm.sourceField?.name ?? '—'}
+        </span>
+          <span
                 title={`Many-to-one: ${fm.sourceField?.name} + ${contributingFMs.map(c => c.sourceField?.name).join(', ')} → ${fm.targetField?.name}`}
                 className="flex-shrink-0 text-[10px] font-medium px-1.5 py-0.5 rounded-full bg-blue-100 text-blue-700 border border-blue-200"
               >
@@ -1147,7 +1147,7 @@ function FieldMappingRow({
                 className="flex-shrink-0 text-[10px] font-medium px-1.5 py-0.5 rounded-full bg-purple-100 text-purple-700 border border-purple-200"
               >
                 1→{oneToManyCount}
-              </span>
+          </span>
             )}
           </>
         )}
@@ -1384,16 +1384,16 @@ function TableMappingCard({
               if (oneToManySrcIds.size === 0) {
                 // No one-to-many groups — render normally
                 return visibleFMs.map((fm) => (
-                  <FieldMappingRow
-                    key={fm.id}
-                    fm={fm}
-                    allTMFMs={tm.fieldMappings}
-                    onSelect={() => onSelectFM(fm)}
-                    onApprove={() => onApproveFM(fm.id)}
-                    onReject={() => onRejectFM(fm.id)}
-                    onDelete={() => onDeleteFM(fm.id)}
-                  />
-                ))
+              <FieldMappingRow
+                key={fm.id}
+                fm={fm}
+                allTMFMs={tm.fieldMappings}
+                onSelect={() => onSelectFM(fm)}
+                onApprove={() => onApproveFM(fm.id)}
+                onReject={() => onRejectFM(fm.id)}
+                onDelete={() => onDeleteFM(fm.id)}
+              />
+            ))
               }
 
               // Render with one-to-many groups wrapped in purple containers
@@ -1772,19 +1772,19 @@ function MappingDetailsPanel({
             )}
           </div>
         ) : (
-          <div className="flex items-center gap-2">
-            <div className="flex-1 min-w-0">
-              <p className="text-xs text-gray-500 mb-0.5">Source Field</p>
-              <p className="font-semibold text-gray-900 text-sm truncate">{fm.sourceField?.name ?? '—'}</p>
-              <p className="text-xs text-gray-400">{fm.sourceField?.data_type}</p>
-            </div>
-            <ArrowRight className="w-4 h-4 text-gray-400 flex-shrink-0" />
-            <div className="flex-1 min-w-0 text-right">
-              <p className="text-xs text-gray-500 mb-0.5">Target Field</p>
-              <p className="font-semibold text-gray-900 text-sm truncate">{fm.targetField?.name ?? '—'}</p>
-              <p className="text-xs text-gray-400">{fm.targetField?.data_type}</p>
-            </div>
+        <div className="flex items-center gap-2">
+          <div className="flex-1 min-w-0">
+            <p className="text-xs text-gray-500 mb-0.5">Source Field</p>
+            <p className="font-semibold text-gray-900 text-sm truncate">{fm.sourceField?.name ?? '—'}</p>
+            <p className="text-xs text-gray-400">{fm.sourceField?.data_type}</p>
           </div>
+          <ArrowRight className="w-4 h-4 text-gray-400 flex-shrink-0" />
+          <div className="flex-1 min-w-0 text-right">
+            <p className="text-xs text-gray-500 mb-0.5">Target Field</p>
+            <p className="font-semibold text-gray-900 text-sm truncate">{fm.targetField?.name ?? '—'}</p>
+            <p className="text-xs text-gray-400">{fm.targetField?.data_type}</p>
+          </div>
+        </div>
         )}
 
         {/* Confidence bar */}

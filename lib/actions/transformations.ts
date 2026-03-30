@@ -885,7 +885,8 @@ export async function runFullTransformTest(
 export async function testTransformation(
   fieldMappingId: string,
   sql: string,
-  contributingFieldNames?: string[]
+  contributingFieldNames?: string[],
+  options?: { silent?: boolean }
 ): Promise<{
   success: boolean
   results?: { before: string | null; after: string | null; beforeValues?: Record<string, string | null> }[]
@@ -1006,18 +1007,20 @@ export async function testTransformation(
     transformationId = existing.id
   }
 
-  // Log the test event with source → target field names
-  const srcFldLog = fm.source_field_id
-    ? (await supabase.from('fields').select('name').eq('id', fm.source_field_id).single()).data
-    : null
-  const { data: tgtFldLog } = await supabase.from('fields').select('name').eq('id', fm.target_field_id).single()
-  await logActivity(
-    tm.project_id,
-    'transform_tested',
-    `Transform tested: ${srcFldLog?.name ?? '[value]'} \u2192 ${tgtFldLog?.name ?? '?'}`,
-    'transform',
-    { transformation_id: transformationId, source_field: srcFldLog?.name ?? null, target_field: tgtFldLog?.name }
-  )
+  // Only log explicit user-initiated tests — not the background auto-preview
+  if (!options?.silent) {
+    const srcFldLog = fm.source_field_id
+      ? (await supabase.from('fields').select('name').eq('id', fm.source_field_id).single()).data
+      : null
+    const { data: tgtFldLog } = await supabase.from('fields').select('name').eq('id', fm.target_field_id).single()
+    await logActivity(
+      tm.project_id,
+      'transform_tested',
+      `Transform tested: ${srcFldLog?.name ?? '[value]'} \u2192 ${tgtFldLog?.name ?? '?'}`,
+      'transform',
+      { transformation_id: transformationId, source_field: srcFldLog?.name ?? null, target_field: tgtFldLog?.name }
+    )
+  }
 
   return { success: true, results, transformationId }
 }

@@ -221,7 +221,7 @@ export async function getOutputsPageData(projectId: string): Promise<OutputsPage
     supabaseAdmin.from('fix_history').select('id, fix_description, affected_row_count, applied_at').eq('project_id', projectId).eq('status', 'applied').order('applied_at', { ascending: false }).limit(20),
     supabaseAdmin.from('validation_rules').select('id, name, created_at').eq('project_id', projectId).order('created_at', { ascending: false }).limit(10),
     supabaseAdmin.from('outputs').select('*').eq('project_id', projectId).order('generated_at', { ascending: false }),
-    supabaseAdmin.from('activity_log').select('id, action_type, description, category, metadata, created_at').eq('project_id', projectId).order('created_at', { ascending: false }).limit(50),
+    supabaseAdmin.from('activity_log').select('id, action_type, description, category, metadata, created_at').eq('project_id', projectId).order('created_at', { ascending: false }).limit(200),
   ])
 
   const sourceDataset = datasets?.find((d) => d.role === 'source') ?? null

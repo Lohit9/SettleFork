@@ -346,7 +346,8 @@ export default function TransformContent({ projectId, initialData }: Props) {
           const result = await testTransformation(
             selectedMappingId,
             sql,
-            contributingNames.length > 0 ? contributingNames : undefined
+            contributingNames.length > 0 ? contributingNames : undefined,
+            { silent: true }
           )
           if (result.success && result.results) {
             setPreviewResults(result.results)
