@@ -105,19 +105,12 @@ function ProjectCard({ project, onUpdate }: { project: ProjectWithStats; onUpdat
           </div>
 
           {/* Readiness score — only shown when meaningfully > 0 */}
-          <div className="text-right flex-shrink-0">
-            {score !== null && score > 0 ? (
-              <>
-                <div className={`text-2xl font-semibold leading-none ${scoreColor}`}>{score}%</div>
-                <div className="text-[11px] text-gray-400 mt-0.5">Readiness</div>
-              </>
-            ) : (
-              <>
-                <div className="text-sm font-medium text-gray-400 leading-none">—</div>
-                <div className="text-[11px] text-gray-400 mt-0.5">Not scanned</div>
-              </>
-            )}
-          </div>
+          {score !== null && score > 0 && (
+            <div className="text-right flex-shrink-0">
+              <div className={`text-2xl font-semibold leading-none ${scoreColor}`}>{score}%</div>
+              <div className="text-[11px] text-gray-400 mt-0.5">Readiness</div>
+            </div>
+          )}
         </div>
 
         {/* Phase progress bar */}
