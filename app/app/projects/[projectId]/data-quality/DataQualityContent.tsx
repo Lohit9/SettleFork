@@ -8,6 +8,7 @@ import { generateFixSuggestions } from '@/lib/quality/fix-engine'
 import { addValidationRule, addValidationRuleFromNL, executeCustomRules, deleteValidationRule } from '@/lib/actions/validation-rules'
 import { generateManualFix, applyManualFix, previewManualFix } from '@/lib/actions/manual-fix'
 import { computeReadinessScore } from '@/lib/quality/readiness-score'
+import { CheckCircle } from '@/components/icons'
 import { stageAllData } from '@/lib/actions/staging'
 import { getVerifiedFixes } from '@/lib/quality/fix-reconciliation'
 import type { VerifiedFix } from '@/lib/quality/fix-reconciliation'
@@ -63,60 +64,6 @@ function riskColor(r: string) {
   if (r === 'low') return 'bg-green-100 text-green-800'
   if (r === 'medium') return 'bg-amber-100 text-amber-800'
   return 'bg-red-100 text-red-800'
-}
-function scoreColor(score: number) {
-  if (score >= 80) return '#16a34a'
-  if (score >= 50) return '#d97706'
-  return '#dc2626'
-}
-
-// ── Readiness Gauge (SVG arc) ─────────────────────────────────────────────────
-
-function ReadinessGauge({ score, status }: { score: number; status: string }) {
-  const r = 54
-  const cx = 70
-  const cy = 70
-  const circumference = Math.PI * r  // half circle
-  const progress = (score / 100) * circumference
-  const color = scoreColor(score)
-
-  const statusLabel =
-    status === 'ready' ? 'Ready' : status === 'at_risk' ? 'At Risk' : 'Not Ready'
-  const statusBg =
-    status === 'ready' ? 'text-green-700' : status === 'at_risk' ? 'text-amber-700' : 'text-red-700'
-
-  return (
-    <div className="flex flex-col items-center">
-      <svg width="140" height="80" viewBox="0 0 140 85">
-        {/* Track */}
-        <path
-          d={`M ${cx - r} ${cy} A ${r} ${r} 0 0 1 ${cx + r} ${cy}`}
-          fill="none"
-          stroke="#e5e7eb"
-          strokeWidth="12"
-          strokeLinecap="round"
-        />
-        {/* Progress */}
-        <path
-          d={`M ${cx - r} ${cy} A ${r} ${r} 0 0 1 ${cx + r} ${cy}`}
-          fill="none"
-          stroke={color}
-          strokeWidth="12"
-          strokeLinecap="round"
-          strokeDasharray={`${progress} ${circumference}`}
-          style={{ transition: 'stroke-dasharray 0.8s ease' }}
-        />
-        {/* Score text */}
-        <text x={cx} y={cy - 8} textAnchor="middle" fontSize="22" fontWeight="700" fill={color}>
-          {score}%
-        </text>
-        <text x={cx} y={cy + 8} textAnchor="middle" fontSize="10" fill="#6b7280">
-          Migration Readiness
-        </text>
-      </svg>
-      <span className={`text-sm font-semibold mt-1 ${statusBg}`}>{statusLabel}</span>
-    </div>
-  )
 }
 
 // ── SQL Modal ─────────────────────────────────────────────────────────────────
@@ -2167,88 +2114,149 @@ export default function DataQualityContent({
           )}
 
           {/* ── Migration Readiness Dashboard ── */}
-          <div className="bg-white rounded-xl border border-gray-200 shadow-sm px-6 py-5">
-            <div className="flex items-center gap-8">
-              {/* Left: Gauge — hero metric */}
-              <div className="flex flex-col items-center justify-center shrink-0">
-                <ReadinessGauge score={readiness.score} status={readiness.status} />
-              </div>
+          {(() => {
+            const blockingCount = sourceBlocking + targetBlocking
+            const warningCount = sourceWarning + targetWarning
+            const readyCount = readiness.ready_field_count
+            const totalIssueCount = blockingCount + warningCount + readyCount
+            const score = readiness.score
+            const statusLabel =
+              readiness.status === 'ready' ? 'Ready' :
+              readiness.status === 'at_risk' ? 'Needs Attention' :
+              'Not Ready'
+            const statusColor =
+              readiness.status === 'ready' ? 'text-green-600' :
+              readiness.status === 'at_risk' ? 'text-amber-600' :
+              'text-red-600'
 
-              {/* Right: Compact stat row */}
-              <div className="flex-1 min-w-0">
-                <div className="flex items-center justify-around gap-4">
-                  <div className="flex flex-col items-center gap-0.5">
-                    <span className="text-3xl font-bold text-red-600 tabular-nums">
-                      {sourceBlocking + targetBlocking}
-                    </span>
-                    <p className="text-sm font-semibold text-gray-700">Blocking</p>
-                  </div>
-                  <div className="w-px h-10 bg-gray-200 shrink-0" />
-                  <div className="flex flex-col items-center gap-0.5">
-                    <span className="text-3xl font-bold text-amber-500 tabular-nums">
-                      {sourceWarning + targetWarning}
-                    </span>
-                    <p className="text-sm font-semibold text-gray-700">Warnings</p>
-                  </div>
-                  <div className="w-px h-10 bg-gray-200 shrink-0" />
-                  <div className="flex flex-col items-center gap-0.5">
-                    <span className="text-3xl font-bold text-green-600 tabular-nums">
-                      {readiness.ready_field_count}
-                    </span>
-                    <p className="text-sm font-semibold text-gray-700">Ready</p>
-                  </div>
-                </div>
+            return (
+              <div className="bg-white rounded-xl border border-gray-200 shadow-sm px-6 py-5">
+                {totalIssueCount === 0 || score === 100 ? (
+                  /* ── 100% ready state ── */
+                  <>
+                    <div className="flex items-center gap-3">
+                      <CheckCircle className="w-6 h-6 text-green-600 flex-shrink-0" />
+                      <div>
+                        <div className="flex items-baseline gap-2">
+                          <span className="text-2xl font-semibold text-gray-900">100%</span>
+                          <span className="text-sm font-medium text-green-600">Ready</span>
+                        </div>
+                        <p className="text-sm text-gray-500 mt-0.5">
+                          All validation checks passed — migration package is ready to execute
+                        </p>
+                      </div>
+                    </div>
+                    <div className="mt-3 h-2 bg-green-500 rounded-full" />
+                  </>
+                ) : (
+                  /* ── Normal summary bar ── */
+                  <>
+                    <div className="flex flex-wrap items-start justify-between gap-4">
+                      {/* Score */}
+                      <div className="flex-shrink-0">
+                        <div className="flex items-baseline gap-2">
+                          <span className="text-3xl font-semibold text-gray-900">{score}%</span>
+                          <span className={`text-sm font-medium ${statusColor}`}>{statusLabel}</span>
+                        </div>
+                        <p className="text-sm text-gray-500 mt-0.5">Migration Readiness</p>
+                      </div>
 
-                {/* Per-stage breakdown */}
-                <div className="mt-4 pt-3 border-t border-gray-100 flex flex-wrap gap-x-6 gap-y-1 text-xs text-gray-500">
-                  <div className="flex items-center gap-1.5">
-                    <span className="w-1.5 h-1.5 rounded-full bg-blue-400 shrink-0" />
-                    <span>
-                      <span className="font-medium text-gray-600">Source:</span>
-                      {' '}
-                      {sourceBlocking === 0 && sourceWarning === 0 ? (
-                        sourceResolved > 0 ? (
-                          <span className="text-green-600">
-                            {sourceResolved} resolved by transform
-                          </span>
-                        ) : (
-                          <span className="text-green-600">No open issues</span>
-                        )
-                      ) : (
-                        <>
-                          {sourceBlocking > 0 && <span className="text-red-500">{sourceBlocking} blocking</span>}
-                          {sourceBlocking > 0 && sourceWarning > 0 && ' · '}
-                          {sourceWarning > 0 && <span className="text-amber-500">{sourceWarning} warnings</span>}
-                          {sourceResolved > 0 && (
-                            <span className="text-green-600">
-                              {(sourceBlocking > 0 || sourceWarning > 0) ? ' · ' : ''}
-                              {sourceResolved} resolved
-                            </span>
+                      {/* Stat counts */}
+                      <div className="flex items-center gap-6 flex-wrap">
+                        {blockingCount > 0 && (
+                          <div className="flex items-center gap-2">
+                            <span className="w-2 h-2 rounded-full bg-red-500 flex-shrink-0" />
+                            <span className="text-sm font-semibold text-red-700 tabular-nums">{blockingCount}</span>
+                            <span className="text-sm text-gray-500">Blocking</span>
+                          </div>
+                        )}
+                        {warningCount > 0 && (
+                          <div className="flex items-center gap-2">
+                            <span className="w-2 h-2 rounded-full bg-amber-400 flex-shrink-0" />
+                            <span className="text-sm font-semibold text-amber-700 tabular-nums">{warningCount}</span>
+                            <span className="text-sm text-gray-500">Warnings</span>
+                          </div>
+                        )}
+                        <div className="flex items-center gap-2">
+                          <span className="w-2 h-2 rounded-full bg-green-500 flex-shrink-0" />
+                          <span className="text-sm font-semibold text-green-700 tabular-nums">{readyCount}</span>
+                          <span className="text-sm text-gray-500">Ready</span>
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* Proportional progress bar */}
+                    <div className="mt-4 h-2 bg-gray-100 rounded-full overflow-hidden flex">
+                      {blockingCount > 0 && (
+                        <div
+                          className="h-full bg-red-500"
+                          style={{ width: `${Math.round((blockingCount / totalIssueCount) * 100)}%` }}
+                        />
+                      )}
+                      {warningCount > 0 && (
+                        <div
+                          className="h-full bg-amber-400"
+                          style={{ width: `${Math.round((warningCount / totalIssueCount) * 100)}%` }}
+                        />
+                      )}
+                      {readyCount > 0 && (
+                        <div
+                          className="h-full bg-green-500"
+                          style={{ width: `${Math.round((readyCount / totalIssueCount) * 100)}%` }}
+                        />
+                      )}
+                    </div>
+
+                    {/* Per-stage breakdown */}
+                    <div className="mt-3 flex flex-wrap gap-x-6 gap-y-1 text-xs text-gray-500">
+                      <div className="flex items-center gap-1.5">
+                        <span className="w-1.5 h-1.5 rounded-full bg-blue-400 shrink-0" />
+                        <span>
+                          <span className="font-medium text-gray-600">Source:</span>
+                          {' '}
+                          {sourceBlocking === 0 && sourceWarning === 0 ? (
+                            sourceResolved > 0 ? (
+                              <span className="text-green-600">{sourceResolved} resolved by transform</span>
+                            ) : (
+                              <span className="text-green-600">No open issues</span>
+                            )
+                          ) : (
+                            <>
+                              {sourceBlocking > 0 && <span className="text-red-500">{sourceBlocking} blocking</span>}
+                              {sourceBlocking > 0 && sourceWarning > 0 && ' · '}
+                              {sourceWarning > 0 && <span className="text-amber-500">{sourceWarning} warnings</span>}
+                              {sourceResolved > 0 && (
+                                <span className="text-green-600">
+                                  {(sourceBlocking > 0 || sourceWarning > 0) ? ' · ' : ''}
+                                  {sourceResolved} resolved
+                                </span>
+                              )}
+                            </>
                           )}
-                        </>
-                      )}
-                    </span>
-                  </div>
-                  <div className="flex items-center gap-1.5">
-                    <span className="w-1.5 h-1.5 rounded-full bg-purple-400 shrink-0" />
-                    <span>
-                      <span className="font-medium text-gray-600">Target-Ready:</span>
-                      {' '}
-                      {targetBlocking === 0 && targetWarning === 0 ? (
-                        <span className="text-green-600">No open issues</span>
-                      ) : (
-                        <>
-                          {targetBlocking > 0 && <span className="text-red-500">{targetBlocking} blocking</span>}
-                          {targetBlocking > 0 && targetWarning > 0 && ' · '}
-                          {targetWarning > 0 && <span className="text-amber-500">{targetWarning} warnings</span>}
-                        </>
-                      )}
-                    </span>
-                  </div>
-                </div>
+                        </span>
+                      </div>
+                      <div className="flex items-center gap-1.5">
+                        <span className="w-1.5 h-1.5 rounded-full bg-purple-400 shrink-0" />
+                        <span>
+                          <span className="font-medium text-gray-600">Target-Ready:</span>
+                          {' '}
+                          {targetBlocking === 0 && targetWarning === 0 ? (
+                            <span className="text-green-600">No open issues</span>
+                          ) : (
+                            <>
+                              {targetBlocking > 0 && <span className="text-red-500">{targetBlocking} blocking</span>}
+                              {targetBlocking > 0 && targetWarning > 0 && ' · '}
+                              {targetWarning > 0 && <span className="text-amber-500">{targetWarning} warnings</span>}
+                            </>
+                          )}
+                        </span>
+                      </div>
+                    </div>
+                  </>
+                )}
               </div>
-            </div>
-          </div>
+            )
+          })()}
 
           {/* ── Active Validation Rules ── */}
           {rules.length > 0 && (
