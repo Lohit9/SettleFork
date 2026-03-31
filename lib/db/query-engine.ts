@@ -19,7 +19,9 @@ export interface QueryEngineResult {
   rowCount: number
   friendlySQL: string    // the SQL the user wrote / Claude generated (friendly names)
   executedSQL: string    // the rewritten JSONB query that was actually executed
-  error?: string
+  error?: string         // friendly user-facing message
+  hint?: string          // actionable suggestion for the user
+  rawError?: string      // original PostgreSQL error for technical details
 }
 
 // ─── Column ordering helper ───────────────────────────────────────────────────
@@ -63,6 +65,106 @@ function sortColumnsByOrdinalPosition(
   const extras = rawColumns.filter((c) => !orderedSet.has(c))
 
   return [...ordered, ...extras]
+}
+
+// ─── Error parser ─────────────────────────────────────────────────────────────
+
+function parseQueryError(rawError: string): { message: string; hint?: string } {
+  // Type mismatch — e.g. "operator does not exist: text > integer"
+  if (rawError.includes('operator does not exist')) {
+    const match = rawError.match(/operator does not exist: (\w+) [<>=!]+ (\w+)/)
+    if (match) {
+      const castTarget = match[2] === 'integer' ? 'numeric' : match[2]
+      return {
+        message: `Can't compare ${match[1]} with ${match[2]} — these are different data types.`,
+        hint: `Try casting the column: CAST(column_name AS ${castTarget})`,
+      }
+    }
+    return {
+      message: 'A type mismatch occurred — two columns with incompatible data types were compared.',
+      hint: 'Check the data types of the columns involved and use CAST() if needed.',
+    }
+  }
+
+  // Relation doesn't exist
+  if (rawError.includes('relation') && rawError.includes('does not exist')) {
+    const match = rawError.match(/relation "?([^"]+)"? does not exist/)
+    return {
+      message: `Table "${match?.[1] ?? 'unknown'}" was not found.`,
+      hint: 'Check the Available Tables panel on the right for valid table names.',
+    }
+  }
+
+  // Column doesn't exist
+  if (rawError.includes('column') && rawError.includes('does not exist')) {
+    const match = rawError.match(/column "?([^"]+)"? does not exist/)
+    return {
+      message: `Column "${match?.[1] ?? 'unknown'}" was not found in the specified table.`,
+      hint: 'Click a table name in the sidebar to see available columns.',
+    }
+  }
+
+  // Syntax error
+  if (rawError.includes('syntax error')) {
+    return {
+      message: "There's a syntax error in the generated query.",
+      hint: 'Try rephrasing your question, or switch to SQL mode for direct control.',
+    }
+  }
+
+  // Permission denied / non-SELECT attempt
+  if (rawError.includes('permission denied')) {
+    return {
+      message: 'This query type is not allowed for safety reasons.',
+      hint: 'Only SELECT queries are permitted. Data modification is not allowed.',
+    }
+  }
+
+  // Timeout
+  if (rawError.includes('statement timeout') || rawError.includes('canceling statement')) {
+    return {
+      message: 'The query took too long and was cancelled.',
+      hint: 'Try adding a LIMIT clause or narrowing your search criteria.',
+    }
+  }
+
+  // Division by zero
+  if (rawError.includes('division by zero')) {
+    return {
+      message: 'Division by zero encountered in the query.',
+      hint: 'Wrap the divisor in a NULLIF check: NULLIF(divisor, 0)',
+    }
+  }
+
+  // Invalid cast / cannot cast
+  if (rawError.includes('invalid input syntax') || rawError.includes('cannot cast')) {
+    const match = rawError.match(/invalid input syntax for (?:type )?(\w+): "([^"]+)"/)
+    if (match) {
+      return {
+        message: `"${match[2]}" couldn't be converted to ${match[1]}.`,
+        hint: 'Some values in this column may not match the expected format. Try using NULLIF(TRIM(...), \'\')::' + match[1],
+      }
+    }
+    return {
+      message: 'A value in the query could not be converted to the expected data type.',
+      hint: 'Use defensive casting: NULLIF(TRIM(column_name), \'\')::numeric',
+    }
+  }
+
+  // Ambiguous column
+  if (rawError.includes('ambiguous')) {
+    const match = rawError.match(/column reference "([^"]+)" is ambiguous/)
+    return {
+      message: `Column "${match?.[1] ?? 'unknown'}" is ambiguous — it exists in multiple tables.`,
+      hint: 'Prefix the column with its table name: tablename."ColumnName"',
+    }
+  }
+
+  // Fallback — frame it politely, preserve the raw message as a hint
+  return {
+    message: 'The query could not be executed.',
+    hint: rawError,
+  }
 }
 
 // ─── Main entry point ─────────────────────────────────────────────────────────
@@ -116,7 +218,9 @@ export async function executeQuery(
     const tableIds = mappings.map((m) => m.tableId)
     const result = await executeViaRPC(executedSQL, tableIds)
     if (!result.success) {
-      return { ...empty, executedSQL, error: result.error }
+      const rawErr = result.error ?? 'Query execution failed'
+      const parsed = parseQueryError(rawErr)
+      return { ...empty, executedSQL, error: parsed.message, hint: parsed.hint, rawError: rawErr }
     }
 
     const rows = result.rows ?? []
@@ -137,7 +241,9 @@ export async function executeQuery(
     }
   } catch (e) {
     console.error('[executeQuery]', e)
-    return { ...empty, error: e instanceof Error ? e.message : 'Unexpected error' }
+    const rawErr = e instanceof Error ? e.message : 'Unexpected error'
+    const parsed = parseQueryError(rawErr)
+    return { ...empty, error: parsed.message, hint: parsed.hint, rawError: rawErr }
   }
 }
 
@@ -235,12 +341,7 @@ async function executeViaRPC(
     })
 
     if (error) {
-      const msg = error.message ?? 'Query execution failed'
-      // Sanitize Postgres internals from the error message
-      const sanitized = msg
-        .replace(/relation ".*?" does not exist/gi, 'Column or table not found')
-        .replace(/column ".*?" does not exist/gi, 'Column not found — check field name spelling and quotes')
-      return { success: false, error: sanitized }
+      return { success: false, error: error.message ?? 'Query execution failed' }
     }
 
     return { success: true, rows: Array.isArray(data) ? data : [] }

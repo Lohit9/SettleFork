@@ -135,7 +135,8 @@ export async function getProjectsWithStats(): Promise<ProjectWithStats[]> {
     supabase
       .from('table_mappings')
       .select('id, project_id, target_table_id')
-      .in('project_id', projectIds),
+      .in('project_id', projectIds)
+      .neq('status', 'rejected'),
     supabase
       .from('quality_issues')
       .select('project_id, severity, status, field_id, stage, issue_kind, description')
@@ -221,6 +222,8 @@ export async function getProjectsWithStats(): Promise<ProjectWithStats[]> {
     // Transform phase: track needs_transformation coverage
     needsTransformIds: Set<string>
     coveredTransformIds: Set<string>
+    // Dedup guard for target field counting
+    countedTargetFieldIds: Set<string>
   }
   const buckets = new Map<string, Bucket>()
   projectIds.forEach((id) =>
@@ -246,6 +249,7 @@ export async function getProjectsWithStats(): Promise<ProjectWithStats[]> {
       totalTargetFieldCount: 0,
       needsTransformIds: new Set(),
       coveredTransformIds: new Set(),
+      countedTargetFieldIds: new Set(),
     })
   )
 
@@ -272,12 +276,17 @@ export async function getProjectsWithStats(): Promise<ProjectWithStats[]> {
       targetTableToProject.set(t.id, pid)
     }
   })
-  // Count target fields per project (via table mapping target tables)
+  // Count target fields per project (via table mapping target tables).
+  // Use countedTargetFieldIds to avoid double-counting when multiple source
+  // tables map to the same target table.
   ;(allTargetFields || []).forEach((f) => {
     const tms = (tableMappings || []).filter((tm) => tm.target_table_id === f.table_id)
     for (const tm of tms) {
       const b = buckets.get(tm.project_id)
-      if (b) b.totalTargetFieldCount++
+      if (b && !b.countedTargetFieldIds.has(f.id)) {
+        b.totalTargetFieldCount++
+        b.countedTargetFieldIds.add(f.id)
+      }
     }
   })
   ;(fieldAcks || []).forEach((fa) => {
@@ -421,6 +430,8 @@ export async function getProjectsWithStats(): Promise<ProjectWithStats[]> {
       warningCount: b.warningCount,
       totalTransforms: b.totalTransforms,
       savedTransforms: b.savedTransforms,
+      needsTransformCount: b.needsTransformIds.size,
+      coveredTransformCount: b.coveredTransformIds.size,
       readinessScore,
       currentPhase,
       outputCount: b.outputCount,

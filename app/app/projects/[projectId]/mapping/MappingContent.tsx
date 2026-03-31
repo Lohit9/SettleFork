@@ -3,6 +3,7 @@
 import { useState, useMemo, useTransition, useCallback, useEffect, useRef } from 'react'
 import { useRouter } from 'next/navigation'
 import { Check, CheckCircle, Pencil, X, ChevronDown, ChevronRight, ArrowRight, Plus } from '@/components/icons'
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { PageHeader } from '@/components/app/PageHeader'
 import {
   updateFieldMappingStatus,
@@ -83,7 +84,7 @@ function StatusBadge({ status }: { status: RichTableMapping['status'] }) {
 // Trash icon inline
 function TrashIcon({ className = '' }: { className?: string }) {
   return (
-    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className}>
+    <svg className={`w-4 h-4 ${className}`} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
       <polyline points="3 6 5 6 21 6" /><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2" />
     </svg>
   )
@@ -248,7 +249,7 @@ function GenerateMappingsPanel({
 
       <div className="flex items-center justify-between">
         {onCancel ? (
-          <button onClick={onCancel} className="px-4 py-2 text-sm font-medium text-gray-700 border border-gray-200 rounded-lg hover:bg-gray-50 transition-colors">
+          <button onClick={onCancel} className="px-4 py-2 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-lg hover:bg-gray-50 transition-colors">
             Cancel
           </button>
         ) : <div />}
@@ -299,8 +300,8 @@ function RegenerateConfirmDialog({
           </div>
         </div>
         <div className="flex gap-3">
-          <button onClick={onCancel} className="flex-1 px-4 py-2.5 text-sm font-medium text-gray-700 border border-gray-200 rounded-lg hover:bg-gray-50">Cancel</button>
-          <button onClick={onConfirm} className="flex-1 px-4 py-2.5 text-sm font-medium text-white bg-amber-600 rounded-lg hover:bg-amber-700">Regenerate</button>
+          <button onClick={onCancel} className="flex-1 px-4 py-2.5 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-lg hover:bg-gray-50 transition-colors">Cancel</button>
+          <button onClick={onConfirm} className="flex-1 px-4 py-2.5 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-lg hover:bg-gray-50 transition-colors">Regenerate</button>
         </div>
       </div>
     </div>
@@ -441,8 +442,8 @@ function DeleteConfirmDialog({
           </div>
         </div>
         <div className="flex gap-3">
-          <button onClick={onCancel} className="flex-1 px-4 py-2.5 text-sm font-medium text-gray-700 border border-gray-200 rounded-lg hover:bg-gray-50">Cancel</button>
-          <button onClick={onConfirm} className="flex-1 px-4 py-2.5 text-sm font-medium text-white bg-red-600 rounded-lg hover:bg-red-700">Remove</button>
+          <button onClick={onCancel} className="flex-1 px-4 py-2.5 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-lg hover:bg-gray-50 transition-colors">Cancel</button>
+          <button onClick={onConfirm} className="flex-1 px-4 py-2.5 text-sm font-medium text-white bg-red-600 rounded-lg hover:bg-red-700 transition-colors">Remove</button>
         </div>
       </div>
     </div>
@@ -494,17 +495,29 @@ function AddMappingModal({
         <div className="px-6 py-5 space-y-4">
           <div>
             <label className="block text-xs font-medium text-gray-600 mb-1.5">Source Table</label>
-            <select value={sourceTableId} onChange={(e) => setSourceTableId(e.target.value)} disabled={pending} className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:opacity-60">
-              <option value="">Select source table…</option>
-              {allSourceTables.map((t) => <option key={t.id} value={t.id}>{t.datasetName}.{t.name}</option>)}
-            </select>
+            <Select value={sourceTableId} onValueChange={(val) => setSourceTableId(val)} disabled={pending}>
+              <SelectTrigger className="h-9 text-sm w-full">
+                <SelectValue placeholder="Select source table…" />
+              </SelectTrigger>
+              <SelectContent>
+                {allSourceTables.map((t) => (
+                  <SelectItem key={t.id} value={t.id}>{t.datasetName}.{t.name}</SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
           </div>
           <div>
             <label className="block text-xs font-medium text-gray-600 mb-1.5">Target Table</label>
-            <select value={targetTableId} onChange={(e) => setTargetTableId(e.target.value)} disabled={pending} className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:opacity-60">
-              <option value="">Select target table…</option>
-              {allTargetTables.map((t) => <option key={t.id} value={t.id}>{t.datasetName}.{t.name}</option>)}
-            </select>
+            <Select value={targetTableId} onValueChange={(val) => setTargetTableId(val)} disabled={pending}>
+              <SelectTrigger className="h-9 text-sm w-full">
+                <SelectValue placeholder="Select target table…" />
+              </SelectTrigger>
+              <SelectContent>
+                {allTargetTables.map((t) => (
+                  <SelectItem key={t.id} value={t.id}>{t.datasetName}.{t.name}</SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
           </div>
           {generatingFields && (
             <div className="flex items-center gap-2.5 px-3 py-2.5 bg-blue-50 border border-blue-100 rounded-lg text-xs text-blue-700">
@@ -515,7 +528,7 @@ function AddMappingModal({
           {error && <p className="text-xs text-red-600">{error}</p>}
         </div>
         <div className="flex gap-3 px-6 py-4 border-t border-gray-100">
-          <button onClick={onClose} disabled={pending} className="flex-1 px-4 py-2 text-sm font-medium text-gray-700 border border-gray-200 rounded-lg hover:bg-gray-50 disabled:opacity-40">Cancel</button>
+          <button onClick={onClose} disabled={pending} className="flex-1 px-4 py-2 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-lg hover:bg-gray-50 transition-colors disabled:opacity-40">Cancel</button>
           <button onClick={handleAdd} disabled={!sourceTableId || !targetTableId || pending} className="flex-1 px-4 py-2 text-sm font-medium text-white bg-blue-600 rounded-lg hover:bg-blue-700 disabled:opacity-40">
             {pending ? (generatingFields ? 'Generating fields…' : 'Adding…') : 'Add Mapping'}
           </button>
@@ -793,12 +806,12 @@ function InlineAddFieldRow({
               Don&apos;t show this warning again
             </label>
             <div className="flex justify-end gap-3">
-              <button onClick={cancelDialog} className="px-4 py-2 text-sm font-medium text-gray-700 hover:text-gray-900">
+              <button onClick={cancelDialog} className="px-4 py-2 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-lg hover:bg-gray-50 transition-colors">
                 Cancel
               </button>
               <button
                 onClick={confirmMultiTarget}
-                className="px-4 py-2 text-sm font-medium text-white bg-amber-500 hover:bg-amber-600 rounded-lg"
+                className="px-4 py-2 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-lg hover:bg-gray-50 transition-colors"
               >
                 Map Anyway
               </button>
@@ -827,7 +840,7 @@ function InlineAddFieldRow({
               </div>
             </div>
             <div className="flex justify-end gap-3">
-              <button onClick={cancelDialog} className="px-4 py-2 text-sm font-medium text-gray-700 hover:text-gray-900">
+              <button onClick={cancelDialog} className="px-4 py-2 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-lg hover:bg-gray-50 transition-colors">
                 Cancel
               </button>
               <button
@@ -871,31 +884,31 @@ function InlineAddFieldRow({
 
         {/* Primary source + target selects */}
         <div className="flex items-center gap-3">
-        <select
-          value={srcFieldId}
-          onChange={(e) => setSrcFieldId(e.target.value)}
-          className="flex-1 border border-gray-200 rounded-lg px-2.5 py-1.5 text-xs text-gray-900 bg-white focus:outline-none focus:ring-2 focus:ring-blue-500"
-        >
-            <option value="">{mappingType === 'many_to_one' ? 'Primary source field…' : 'Source field…'}</option>
-          {allSrcFields.map((f) => (
-            <option key={f.id} value={f.id}>
+        <Select value={srcFieldId} onValueChange={(val) => setSrcFieldId(val)}>
+          <SelectTrigger className="flex-1 h-8 text-xs">
+            <SelectValue placeholder={mappingType === 'many_to_one' ? 'Primary source field…' : 'Source field…'} />
+          </SelectTrigger>
+          <SelectContent>
+            {allSrcFields.map((f) => (
+              <SelectItem key={f.id} value={f.id}>
                 {f.name} — {f.data_type}{activelymappedSrcIds.has(f.id) ? ' (mapped)' : ''}
-            </option>
-          ))}
-        </select>
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
         <ArrowRight className="w-3 h-3 text-gray-400 flex-shrink-0" />
-        <select
-          value={tgtFieldId}
-          onChange={(e) => setTgtFieldId(e.target.value)}
-          className="flex-1 border border-gray-200 rounded-lg px-2.5 py-1.5 text-xs text-gray-900 bg-white focus:outline-none focus:ring-2 focus:ring-blue-500"
-        >
-            <option value="">{mappingType === 'one_to_many' ? 'Primary target field…' : 'Target field…'}</option>
-          {allTgtFields.map((f) => (
-            <option key={f.id} value={f.id}>
-              {f.name} — {f.data_type}{mappedTgtIds.has(f.id) ? ' ✓' : ''}
-            </option>
-          ))}
-        </select>
+        <Select value={tgtFieldId} onValueChange={(val) => setTgtFieldId(val)}>
+          <SelectTrigger className="flex-1 h-8 text-xs">
+            <SelectValue placeholder={mappingType === 'one_to_many' ? 'Primary target field…' : 'Target field…'} />
+          </SelectTrigger>
+          <SelectContent>
+            {allTgtFields.map((f) => (
+              <SelectItem key={f.id} value={f.id}>
+                {f.name} — {f.data_type}{mappedTgtIds.has(f.id) ? ' ✓' : ''}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
         <button
           onClick={handleAdd}
           disabled={!srcFieldId || !tgtFieldId || pending}
@@ -915,21 +928,24 @@ function InlineAddFieldRow({
             {contributingFieldIds.map((cfId, idx) => (
               <div key={idx} className="flex items-center gap-2">
                 <span className="text-gray-300 text-xs">↳</span>
-                <select
+                <Select
                   value={cfId}
-                  onChange={(e) => {
+                  onValueChange={(val) => {
                     const updated = [...contributingFieldIds]
-                    updated[idx] = e.target.value
+                    updated[idx] = val
                     setContributingFieldIds(updated)
                   }}
-                  className="flex-1 border border-blue-200 rounded-lg px-2 py-1 text-xs text-gray-900 bg-white focus:outline-none focus:ring-2 focus:ring-blue-400"
                 >
-                  <option value="">Select contributing field…</option>
-                  {allSrcFields
-                    .filter((f) => f.id !== srcFieldId && !contributingFieldIds.filter((_, i) => i !== idx).includes(f.id))
-                    .map((f) => <option key={f.id} value={f.id}>{f.name} — {f.data_type}</option>)
-                  }
-                </select>
+                  <SelectTrigger className="flex-1 h-7 text-xs border-blue-200">
+                    <SelectValue placeholder="Select contributing field…" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {allSrcFields
+                      .filter((f) => f.id !== srcFieldId && !contributingFieldIds.filter((_, i) => i !== idx).includes(f.id))
+                      .map((f) => <SelectItem key={f.id} value={f.id}>{f.name} — {f.data_type}</SelectItem>)
+                    }
+                  </SelectContent>
+                </Select>
                 <button
                   type="button"
                   onClick={() => setContributingFieldIds((ids) => ids.filter((_, i) => i !== idx))}
@@ -969,21 +985,24 @@ function InlineAddFieldRow({
             {additionalTargetIds.map((tfId, idx) => (
               <div key={idx} className="flex items-center gap-2">
                 <span className="text-gray-300 text-xs">↳</span>
-                <select
+                <Select
                   value={tfId}
-                  onChange={(e) => {
+                  onValueChange={(val) => {
                     const updated = [...additionalTargetIds]
-                    updated[idx] = e.target.value
+                    updated[idx] = val
                     setAdditionalTargetIds(updated)
                   }}
-                  className="flex-1 border border-purple-200 rounded-lg px-2 py-1 text-xs text-gray-900 bg-white focus:outline-none focus:ring-2 focus:ring-purple-400"
                 >
-                  <option value="">Select target field…</option>
-                  {allTgtFields
-                    .filter((f) => f.id !== tgtFieldId && !additionalTargetIds.filter((_, i) => i !== idx).includes(f.id))
-                    .map((f) => <option key={f.id} value={f.id}>{f.name} — {f.data_type}</option>)
-                  }
-                </select>
+                  <SelectTrigger className="flex-1 h-7 text-xs border-purple-200">
+                    <SelectValue placeholder="Select target field…" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {allTgtFields
+                      .filter((f) => f.id !== tgtFieldId && !additionalTargetIds.filter((_, i) => i !== idx).includes(f.id))
+                      .map((f) => <SelectItem key={f.id} value={f.id}>{f.name} — {f.data_type}</SelectItem>)
+                    }
+                  </SelectContent>
+                </Select>
                 <button
                   type="button"
                   onClick={() => setAdditionalTargetIds((ids) => ids.filter((_, i) => i !== idx))}
@@ -1174,17 +1193,17 @@ function FieldMappingRow({
             </span>
           )}
         </div>
-        <div className="flex items-center gap-0.5" onClick={(e) => e.stopPropagation()}>
-          <button onClick={onApprove} title="Accept" className={`p-1 rounded transition-colors ${isApproved ? 'text-green-600' : 'text-gray-300 hover:text-green-600 hover:bg-green-50'}`}>
-            <Check className="w-3.5 h-3.5" />
+        <div className="flex items-center gap-1" onClick={(e) => e.stopPropagation()}>
+          <button onClick={onApprove} title="Accept" className={`p-1.5 rounded-md transition-colors ${isApproved ? 'text-green-600' : 'text-gray-300 hover:text-green-600 hover:bg-green-50'}`}>
+            <Check className="w-4 h-4" />
           </button>
-          <button onClick={onSelect} title="Edit" className="p-1 rounded text-gray-300 hover:text-blue-600 hover:bg-blue-50 transition-colors">
-            <Pencil className="w-3.5 h-3.5" />
+          <button onClick={onSelect} title="Edit" className="p-1.5 rounded-md text-gray-300 hover:text-blue-600 hover:bg-blue-50 transition-colors">
+            <Pencil className="w-4 h-4" />
           </button>
-          <button onClick={onReject} title={isRejected ? 'Mark needs review' : 'Reject'} className={`p-1 rounded transition-colors ${isRejected ? 'text-red-500' : 'text-gray-300 hover:text-red-500 hover:bg-red-50'}`}>
-            <X className="w-3.5 h-3.5" />
+          <button onClick={onReject} title={isRejected ? 'Mark needs review' : 'Reject'} className={`p-1.5 rounded-md transition-colors ${isRejected ? 'text-red-500' : 'text-gray-300 hover:text-red-500 hover:bg-red-50'}`}>
+            <X className="w-4 h-4" />
           </button>
-          <button onClick={onDelete} title="Delete permanently" className="p-1 rounded text-gray-300 hover:text-red-600 hover:bg-red-50 transition-colors">
+          <button onClick={onDelete} title="Delete permanently" className="p-1.5 rounded-md text-gray-300 hover:text-red-600 hover:bg-red-50 transition-colors">
             <TrashIcon className="text-inherit" />
           </button>
         </div>
@@ -1858,16 +1877,22 @@ function MappingDetailsPanel({
           </div>
           {editSrcMode ? (
             <>
-              <select
-                value={newSrcId ?? undefined}
-                onChange={(e) => setNewSrcId(e.target.value)}
-                className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+              <Select
+                value={newSrcId ?? fm.source_field_id ?? ''}
+                onValueChange={(val) => setNewSrcId(val)}
               >
-                <option value={fm.source_field_id}>{fm.sourceField?.name} (current)</option>
-                {allSrcFields.filter((f) => f.id !== fm.source_field_id && !mappedSrcIds.has(f.id)).map((f) => (
-                  <option key={f.id} value={f.id}>{f.name} ({f.data_type})</option>
-                ))}
-              </select>
+                <SelectTrigger className="h-9 text-sm w-full">
+                  <SelectValue placeholder="Select source field…" />
+                </SelectTrigger>
+                <SelectContent>
+                  {fm.source_field_id && (
+                    <SelectItem value={fm.source_field_id}>{fm.sourceField?.name} (current)</SelectItem>
+                  )}
+                  {allSrcFields.filter((f) => f.id !== fm.source_field_id && !mappedSrcIds.has(f.id)).map((f) => (
+                    <SelectItem key={f.id} value={f.id}>{f.name} ({f.data_type})</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
               <div className="flex gap-2 mt-2">
                 <button onClick={handleEditSrc} disabled={pending} className="flex-1 px-3 py-1.5 text-xs font-medium text-white bg-blue-600 rounded-lg disabled:opacity-40">
                   {pending ? '…' : 'Save'}
@@ -1892,18 +1917,22 @@ function MappingDetailsPanel({
           </div>
           {editTgtMode ? (
             <>
-              <select
-                value={newTgtId}
-                onChange={(e) => setNewTgtId(e.target.value)}
-                className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+              <Select
+                value={newTgtId ?? ''}
+                onValueChange={(val) => setNewTgtId(val)}
               >
-                <option value={fm.target_field_id}>{fm.targetField?.name} (current)</option>
-                {allTgtFields.filter((f) => f.id !== fm.target_field_id).map((f) => (
-                  <option key={f.id} value={f.id}>
-                    {f.name} ({f.data_type}){mappedTgtIds.has(f.id) ? ' ⚠ already mapped' : ''}
-                  </option>
-                ))}
-              </select>
+                <SelectTrigger className="h-9 text-sm w-full">
+                  <SelectValue placeholder="Select target field…" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value={fm.target_field_id}>{fm.targetField?.name} (current)</SelectItem>
+                  {allTgtFields.filter((f) => f.id !== fm.target_field_id).map((f) => (
+                    <SelectItem key={f.id} value={f.id}>
+                      {f.name} ({f.data_type}){mappedTgtIds.has(f.id) ? ' ⚠ already mapped' : ''}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
               <div className="flex gap-2 mt-2">
                 <button onClick={handleEditTgt} disabled={pending} className="flex-1 px-3 py-1.5 text-xs font-medium text-white bg-blue-600 rounded-lg disabled:opacity-40">
                   {pending ? '…' : 'Save'}
@@ -2006,16 +2035,16 @@ function UnmappedView({
                 </div>
                 {mappingFor === f.id && (
                   <div className="mt-2 flex gap-2">
-                    <select
-                      value={selectedTgtId}
-                      onChange={(e) => setSelectedTgtId(e.target.value)}
-                      className="flex-1 border border-gray-200 rounded px-2 py-1 text-xs focus:outline-none focus:ring-2 focus:ring-blue-500"
-                    >
-                      <option value="">Select target field…</option>
-                      {unmappedTarget.map((tf) => (
-                        <option key={tf.id} value={tf.id}>{tf.table?.name}.{tf.name} ({tf.data_type})</option>
-                      ))}
-                    </select>
+                    <Select value={selectedTgtId} onValueChange={(val) => setSelectedTgtId(val)}>
+                      <SelectTrigger className="flex-1 h-7 text-xs">
+                        <SelectValue placeholder="Select target field…" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {unmappedTarget.map((tf) => (
+                          <SelectItem key={tf.id} value={tf.id}>{tf.table?.name}.{tf.name} ({tf.data_type})</SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
                     <button
                       onClick={() => handleMap(f.id)}
                       disabled={!selectedTgtId || pending}
@@ -2425,9 +2454,9 @@ export default function MappingContent({ projectId, projectName, initialData }: 
       {(sourceDatasetName || targetDatasetName) && (
         <div className="flex items-center gap-3">
           <span className="text-sm font-semibold text-blue-700 bg-blue-50 px-3 py-1.5 rounded-lg">{sourceDatasetName}</span>
-          <div className="flex items-center gap-1 text-gray-400">
-            <div className="w-8 border-t border-dashed border-gray-300" />
-            <ArrowRight className="w-4 h-4" />
+          <div className="flex items-center gap-0 text-gray-400">
+            <div className="w-10 border-t-2 border-dashed border-gray-300" />
+            <ArrowRight className="w-4 h-4 text-gray-400" />
           </div>
           <span className="text-sm font-semibold text-purple-700 bg-purple-50 px-3 py-1.5 rounded-lg">{targetDatasetName}</span>
         </div>

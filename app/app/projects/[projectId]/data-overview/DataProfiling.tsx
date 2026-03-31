@@ -3,6 +3,7 @@
 import { useState, useEffect } from 'react'
 import { getFieldProfiles } from '@/lib/actions/data-overview'
 import type { TableOption, ProfilingData } from '@/lib/actions/data-overview'
+import { Select, SelectContent, SelectGroup, SelectItem, SelectLabel, SelectTrigger, SelectValue } from '@/components/ui/select'
 
 interface DataProfilingProps {
   tables: TableOption[]
@@ -82,19 +83,24 @@ export default function DataProfiling({ tables }: DataProfilingProps) {
       {/* Table selector */}
       <div className="flex items-center gap-3">
         <label className="text-sm font-medium text-gray-700 whitespace-nowrap">Select Table:</label>
-        <select
+        <Select
           value={selectedTableId}
-          onChange={(e) => setSelectedTableId(e.target.value)}
-          className="border border-gray-300 rounded-lg px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+          onValueChange={(val) => setSelectedTableId(val)}
         >
-          {datasetOrder.map((dsName) => (
-            <optgroup key={dsName} label={dsName}>
-              {tablesByDataset.get(dsName)!.map((t) => (
-                <option key={t.id} value={t.id}>{t.name}</option>
-              ))}
-            </optgroup>
-          ))}
-        </select>
+          <SelectTrigger className="h-9 text-sm w-[240px]">
+            <SelectValue placeholder="Select table…" />
+          </SelectTrigger>
+          <SelectContent>
+            {datasetOrder.map((dsName) => (
+              <SelectGroup key={dsName}>
+                <SelectLabel>{dsName}</SelectLabel>
+                {tablesByDataset.get(dsName)!.map((t) => (
+                  <SelectItem key={t.id} value={t.id}>{t.name}</SelectItem>
+                ))}
+              </SelectGroup>
+            ))}
+          </SelectContent>
+        </Select>
       </div>
 
       {!selectedTableId ? (
@@ -103,7 +109,7 @@ export default function DataProfiling({ tables }: DataProfilingProps) {
         </div>
       ) : loading ? (
         <div className="bg-white border border-gray-200 rounded-xl p-10 text-center">
-          <div className="inline-block w-5 h-5 border-2 border-blue-600 border-t-transparent rounded-full animate-spin" />
+          <div className="inline-block w-5 h-5 border-2 border-indigo-600 border-t-transparent rounded-full animate-spin" />
         </div>
       ) : error ? (
         <div className="bg-white border border-gray-200 rounded-xl p-6 text-center text-sm text-red-600">{error}</div>

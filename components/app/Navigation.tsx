@@ -33,10 +33,11 @@ function getUserInitials(name?: string | null, email?: string | null): string {
 // CSS tooltip shown only when sidebar is collapsed
 function Tip({ label, children }: { label: string; children: React.ReactNode }) {
   return (
-    <div className="relative group/tip">
+    <div className="relative group">
       {children}
-      <div className="absolute left-full ml-2 top-1/2 -translate-y-1/2 px-2 py-1 bg-gray-900 text-white text-xs rounded-md opacity-0 group-hover/tip:opacity-100 transition-opacity pointer-events-none whitespace-nowrap z-50">
+      <div className="absolute left-full ml-2 top-1/2 -translate-y-1/2 px-2 py-1 bg-gray-900 text-white text-xs rounded-md whitespace-nowrap opacity-0 pointer-events-none group-hover:opacity-100 transition-opacity duration-150 z-50">
         {label}
+        <div className="absolute right-full top-1/2 -translate-y-1/2 border-4 border-transparent border-r-gray-900" />
       </div>
     </div>
   )
@@ -189,7 +190,7 @@ export function Navigation({
             <div className="mt-2 pt-2 border-t border-gray-100 px-2">
               <div className="text-[10px] uppercase tracking-widest text-gray-400 mb-1">Current Project</div>
               <div className="flex items-center gap-1 group/proj">
-                <div className="text-sm font-medium text-gray-900 truncate flex-1 min-w-0">{projectName}</div>
+                <div className="line-clamp-2 flex-1 min-w-0 leading-tight text-sm font-medium text-gray-900">{projectName}</div>
                 <div className="flex-shrink-0 opacity-0 group-hover/proj:opacity-100 transition-opacity">
                   <ProjectMenu
                     project={{
@@ -205,9 +206,9 @@ export function Navigation({
               </div>
               {(sourceSystemName || targetSystemName) && (
                 <div className="mt-1 flex items-center gap-1 text-xs text-gray-500">
-                  <span className="truncate max-w-[75px]">{sourceSystemName}</span>
+                  <span className="truncate max-w-[90px]">{sourceSystemName}</span>
                   <span className="flex-shrink-0">→</span>
-                  <span className="truncate max-w-[75px]">{targetSystemName}</span>
+                  <span className="truncate max-w-[90px]">{targetSystemName}</span>
                 </div>
               )}
             </div>
@@ -271,7 +272,7 @@ export function Navigation({
       </nav>
 
       {/* Spacer */}
-      <div className="flex-1 min-h-0" />
+      <div className="flex-1 min-h-[40px]" />
 
       {/* Bottom app nav */}
       <div className="flex-shrink-0 px-2 pb-1">

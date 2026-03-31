@@ -9,6 +9,7 @@ import { addValidationRule, addValidationRuleFromNL, executeCustomRules, deleteV
 import { generateManualFix, applyManualFix, previewManualFix } from '@/lib/actions/manual-fix'
 import { computeReadinessScore } from '@/lib/quality/readiness-score'
 import { CheckCircle } from '@/components/icons'
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { PageHeader } from '@/components/app/PageHeader'
 import { stageAllData } from '@/lib/actions/staging'
 import { getVerifiedFixes } from '@/lib/quality/fix-reconciliation'
@@ -112,7 +113,7 @@ function ConfirmModal({
         <h3 className="font-semibold text-gray-900 mb-2">{title}</h3>
         <p className="text-sm text-gray-600 mb-6">{message}</p>
         <div className="flex gap-3 justify-end">
-          <button onClick={onCancel} disabled={loading} className="px-4 py-2 text-sm border border-gray-300 rounded-lg hover:bg-gray-50 disabled:opacity-50">
+          <button onClick={onCancel} disabled={loading} className="px-4 py-2 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-lg hover:bg-gray-50 transition-colors disabled:opacity-50">
             Cancel
           </button>
           <button onClick={onConfirm} disabled={loading}
@@ -324,8 +325,8 @@ function IssueCard({
               className="w-full text-sm border rounded-lg p-2 h-24 resize-none focus:outline-none focus:ring-2 focus:ring-blue-500"
             />
             <div className="flex gap-3 justify-end mt-4">
-              <button onClick={() => setShowAcceptModal(false)} className="px-4 py-2 text-sm border border-gray-300 rounded-lg hover:bg-gray-50">Cancel</button>
-              <button onClick={handleAcceptRisk} className="px-4 py-2 text-sm bg-gray-700 text-white rounded-lg hover:bg-gray-800">Accept Risk</button>
+              <button onClick={() => setShowAcceptModal(false)} className="px-4 py-2 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-lg hover:bg-gray-50 transition-colors">Cancel</button>
+              <button onClick={handleAcceptRisk} className="text-gray-500 hover:text-gray-700 underline text-sm transition-colors">Accept Risk</button>
             </div>
           </div>
         </div>
@@ -707,31 +708,35 @@ function AddRuleModal({
           <div>
             <label className="text-xs font-semibold text-gray-500 uppercase tracking-wide">Step 1: Select Table & Field</label>
             <div className="mt-1.5 grid grid-cols-2 gap-2">
-              <select
+              <Select
                 value={selectedTableId}
-                onChange={e => { setSelectedTableId(e.target.value); setSelectedFieldId('') }}
-                className="text-sm border rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                onValueChange={(val) => { setSelectedTableId(val); setSelectedFieldId('') }}
               >
-                <option value="">Select table…</option>
-                {allDatasets.map(ds => (
-                  <optgroup key={ds.id} label={`${ds.name} (${ds.role})`}>
-                    {ds.tables.map(t => (
-                      <option key={t.id} value={t.id}>{t.name}</option>
-                    ))}
-                  </optgroup>
-                ))}
-              </select>
-              <select
+                <SelectTrigger className="h-9 text-sm w-full">
+                  <SelectValue placeholder="Select table…" />
+                </SelectTrigger>
+                <SelectContent>
+                  {allDatasets.map(ds => (
+                    ds.tables.map(t => (
+                      <SelectItem key={t.id} value={t.id}>{ds.name} — {t.name}</SelectItem>
+                    ))
+                  ))}
+                </SelectContent>
+              </Select>
+              <Select
                 value={selectedFieldId}
-                onChange={e => setSelectedFieldId(e.target.value)}
+                onValueChange={(val) => setSelectedFieldId(val)}
                 disabled={!selectedTableId}
-                className="text-sm border rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:opacity-50"
               >
-                <option value="">Select field…</option>
-                {selectedTable?.fields.map(f => (
-                  <option key={f.id} value={f.id}>{f.name} ({f.data_type})</option>
-                ))}
-              </select>
+                <SelectTrigger className="h-9 text-sm w-full">
+                  <SelectValue placeholder="Select field…" />
+                </SelectTrigger>
+                <SelectContent>
+                  {selectedTable?.fields.map(f => (
+                    <SelectItem key={f.id} value={f.id}>{f.name} ({f.data_type})</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
             </div>
           </div>
 
@@ -836,13 +841,19 @@ function AddRuleModal({
                 placeholder="Rule name"
                 className="w-full text-sm border rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500"
               />
-              <select
+              <Select
                 value={manualType}
-                onChange={e => { setManualType(e.target.value); setManualConfig({}) }}
-                className="w-full text-sm border rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                onValueChange={(val) => { setManualType(val); setManualConfig({}) }}
               >
-                {ruleTypeOptions.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
-              </select>
+                <SelectTrigger className="h-9 text-sm w-full">
+                  <SelectValue placeholder="Select rule type…" />
+                </SelectTrigger>
+                <SelectContent>
+                  {ruleTypeOptions.map(o => (
+                    <SelectItem key={o.value} value={o.value}>{o.label}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
 
               {/* Dynamic config based on type */}
               {manualType === 'min_value' && (
@@ -1014,7 +1025,7 @@ function FixHistoryPanel({
     <>
       {showSQL && <SQLModal sql={showSQL} onClose={() => setShowSQL(null)} />}
       <div className="fixed inset-0 z-40 flex items-center justify-end bg-black/30 p-4">
-        <div className="bg-white rounded-xl shadow-2xl w-full max-w-lg h-full max-h-[90vh] flex flex-col">
+        <div className="bg-white rounded-xl shadow-2xl w-full max-w-xl h-full max-h-[90vh] flex flex-col">
           <div className="flex items-center justify-between p-4 border-b">
             <h3 className="font-semibold text-gray-900">Fix History</h3>
             <button onClick={onClose} className="text-gray-400 hover:text-gray-600 text-xl">×</button>
@@ -1246,31 +1257,36 @@ function CreateManualFixModal({
           {/* Step 1: Select scope */}
           <div className="space-y-2">
             <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide">Step 1 — Select scope</p>
-            <select
+            <Select
               value={tableId}
-              onChange={e => { setTableId(e.target.value); setFieldId(''); setGeneratedSql(''); setSqlText(''); setSqlValidated(false) }}
-              className="w-full text-sm border rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500"
+              onValueChange={(val) => { setTableId(val); setFieldId(''); setGeneratedSql(''); setSqlText(''); setSqlValidated(false) }}
             >
-              <option value="">Select table…</option>
-              {allDatasets.map(ds => (
-                <optgroup key={ds.id} label={`${ds.name} (${ds.role})`}>
-                  {ds.tables.map(t => (
-                    <option key={t.id} value={t.id}>{t.name}</option>
-                  ))}
-                </optgroup>
-              ))}
-            </select>
-            {selectedTable && (
-              <select
-                value={fieldId}
-                onChange={e => setFieldId(e.target.value)}
-                className="w-full text-sm border rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500"
-              >
-                <option value="">Entire table (all fields)</option>
-                {selectedTable.fields.map(f => (
-                  <option key={f.id} value={f.id}>{f.name} ({f.inferred_type ?? f.data_type})</option>
+              <SelectTrigger className="h-9 text-sm w-full">
+                <SelectValue placeholder="Select table…" />
+              </SelectTrigger>
+              <SelectContent>
+                {allDatasets.map(ds => (
+                  ds.tables.map(t => (
+                    <SelectItem key={t.id} value={t.id}>{ds.name} — {t.name}</SelectItem>
+                  ))
                 ))}
-              </select>
+              </SelectContent>
+            </Select>
+            {selectedTable && (
+              <Select
+                value={fieldId || '__all__'}
+                onValueChange={(val) => setFieldId(val === '__all__' ? '' : val)}
+              >
+                <SelectTrigger className="h-9 text-sm w-full">
+                  <SelectValue placeholder="Entire table (all fields)" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="__all__">Entire table (all fields)</SelectItem>
+                  {selectedTable.fields.map(f => (
+                    <SelectItem key={f.id} value={f.id}>{f.name} ({f.inferred_type ?? f.data_type})</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
             )}
           </div>
 
@@ -1389,7 +1405,7 @@ function CreateManualFixModal({
 
         {/* Footer */}
         <div className="p-4 border-t shrink-0 flex justify-end">
-          <button onClick={onClose} className="px-4 py-2 text-sm border border-gray-300 rounded-lg hover:bg-gray-50">
+          <button onClick={onClose} className="px-4 py-2 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-lg hover:bg-gray-50 transition-colors">
             Cancel
           </button>
         </div>
@@ -1672,7 +1688,7 @@ function IssueFixModal({
           <div className="p-4 border-t shrink-0 flex justify-end gap-2">
             <button
               onClick={onClose}
-              className="px-4 py-2 text-sm border border-gray-300 rounded-lg hover:bg-gray-50"
+              className="px-4 py-2 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-lg hover:bg-gray-50 transition-colors"
             >
               Cancel
             </button>
@@ -2269,7 +2285,11 @@ export default function DataQualityContent({
                       <span className={`shrink-0 text-xs px-2 py-0.5 rounded-full ${rule.severity === 'blocking' ? 'bg-red-100 text-red-700' : 'bg-amber-100 text-amber-700'}`}>
                         {rule.severity}
                       </span>
-                      <span className="font-medium text-gray-900 truncate">{rule.name}</span>
+                      <span className="font-medium text-gray-900 truncate">
+                        {rule.table_id && tableNameById.get(rule.table_id) ? (
+                          <><span className="text-gray-400">{tableNameById.get(rule.table_id)}.</span>{rule.name}</>
+                        ) : rule.name}
+                      </span>
                       <span className="text-gray-400 text-xs truncate">{rule.rule_type}</span>
                       {rule.is_ai_generated && (
                         <span title={rule.ai_original_prompt ?? ''} className="text-xs px-1.5 py-0.5 rounded bg-blue-50 text-blue-700 border border-blue-100">✦ AI</span>
@@ -2313,15 +2333,19 @@ export default function DataQualityContent({
               {/* Stage */}
               <div className="flex items-center gap-2">
                 <label className="text-xs font-medium text-gray-500 whitespace-nowrap">Stage</label>
-                <select
+                <Select
                   value={filterStage}
-                  onChange={e => setFilterStage(e.target.value as typeof filterStage)}
-                  className="text-sm border border-gray-200 rounded-lg px-2.5 py-1.5 focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white"
+                  onValueChange={(val) => setFilterStage(val as typeof filterStage)}
                 >
-                  <option value="all">All</option>
-                  <option value="source">Source</option>
-                  <option value="target_ready">Target-Ready</option>
-                </select>
+                  <SelectTrigger className="h-8 text-xs w-[140px]">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="all">All</SelectItem>
+                    <SelectItem value="source">Source</SelectItem>
+                    <SelectItem value="target_ready">Target-Ready</SelectItem>
+                  </SelectContent>
+                </Select>
               </div>
 
               <div className="w-px h-4 bg-gray-200" />
@@ -2329,15 +2353,19 @@ export default function DataQualityContent({
               {/* Severity */}
               <div className="flex items-center gap-2">
                 <label className="text-xs font-medium text-gray-500 whitespace-nowrap">Severity</label>
-                <select
+                <Select
                   value={filterSeverity}
-                  onChange={e => setFilterSeverity(e.target.value as typeof filterSeverity)}
-                  className="text-sm border border-gray-200 rounded-lg px-2.5 py-1.5 focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white"
+                  onValueChange={(val) => setFilterSeverity(val as typeof filterSeverity)}
                 >
-                  <option value="all">All</option>
-                  <option value="blocking">Blocking</option>
-                  <option value="warning">Warning</option>
-                </select>
+                  <SelectTrigger className="h-8 text-xs w-[140px]">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="all">All</SelectItem>
+                    <SelectItem value="blocking">Blocking</SelectItem>
+                    <SelectItem value="warning">Warning</SelectItem>
+                  </SelectContent>
+                </Select>
               </div>
 
               <div className="w-px h-4 bg-gray-200" />
@@ -2345,16 +2373,20 @@ export default function DataQualityContent({
               {/* Table */}
               <div className="flex items-center gap-2">
                 <label className="text-xs font-medium text-gray-500 whitespace-nowrap">Table</label>
-                <select
+                <Select
                   value={filterTableId}
-                  onChange={e => setFilterTableId(e.target.value)}
-                  className="text-sm border border-gray-200 rounded-lg px-2.5 py-1.5 focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white"
+                  onValueChange={(val) => setFilterTableId(val)}
                 >
-                  <option value="all">All</option>
-                  {tablesWithIssues.map(t => (
-                    <option key={t.id} value={t.id}>{t.name}</option>
-                  ))}
-                </select>
+                  <SelectTrigger className="h-8 text-xs w-[140px]">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="all">All</SelectItem>
+                    {tablesWithIssues.map(t => (
+                      <SelectItem key={t.id} value={t.id}>{t.name}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
               </div>
 
               <div className="w-px h-4 bg-gray-200" />
@@ -2362,16 +2394,20 @@ export default function DataQualityContent({
               {/* Status */}
               <div className="flex items-center gap-2">
                 <label className="text-xs font-medium text-gray-500 whitespace-nowrap">Status</label>
-                <select
+                <Select
                   value={filterStatus}
-                  onChange={e => setFilterStatus(e.target.value as typeof filterStatus)}
-                  className="text-sm border border-gray-200 rounded-lg px-2.5 py-1.5 focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white"
+                  onValueChange={(val) => setFilterStatus(val as typeof filterStatus)}
                 >
-                  <option value="open">Open</option>
-                  <option value="all">All</option>
-                  <option value="fixed">Fixed</option>
-                  <option value="accepted_risk">Accepted Risk</option>
-                </select>
+                  <SelectTrigger className="h-8 text-xs w-[140px]">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="open">Open</SelectItem>
+                    <SelectItem value="all">All</SelectItem>
+                    <SelectItem value="fixed">Fixed</SelectItem>
+                    <SelectItem value="accepted_risk">Accepted Risk</SelectItem>
+                  </SelectContent>
+                </Select>
               </div>
 
               <div className="ml-auto flex items-center gap-3">
@@ -2511,13 +2547,13 @@ export default function DataQualityContent({
             </div>
           )}
 
-          {/* Proceed to Mapping CTA */}
+          {/* Continue to Migration Center CTA */}
           <div className="flex justify-end pb-4">
             <button
-              onClick={() => router.push(`/app/projects/${projectId}/mapping`)}
+              onClick={() => router.push(`/app/projects/${projectId}/outputs`)}
               className="px-5 py-2.5 text-sm bg-blue-600 text-white rounded-lg hover:bg-blue-700 font-medium"
             >
-              Proceed to Mapping →
+              Continue to Migration Center →
             </button>
           </div>
         </div>

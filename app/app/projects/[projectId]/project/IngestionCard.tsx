@@ -7,6 +7,7 @@ import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Upload, CheckCircle2, AlertCircle, RefreshCw } from '@/components/icons'
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { uploadCSV } from '@/lib/actions/csv'
 import { createDataset, getTablesForDataset } from '@/lib/actions/datasets'
 import { parseDDLFile, confirmDDLSchema } from '@/lib/actions/ddl-upload'
@@ -388,21 +389,19 @@ export function IngestionCard({ type, title, projectId, initialDatasets }: Inges
         {/* ── Method Selector ───────────────────────────────────────────── */}
         <div className="space-y-2">
           <Label htmlFor={`${type}-method`}>Data ingestion method</Label>
-          <select
-            id={`${type}-method`}
+          <Select
             value={method ?? ''}
-            onChange={(e) =>
-              handleMethodChange(
-                e.target.value === '' ? null : (e.target.value as IngestMethod)
-              )
-            }
-            className="w-full h-9 rounded-md border border-gray-300 px-3 py-1 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+            onValueChange={(val) => handleMethodChange(val === '' ? null : (val as IngestMethod))}
           >
-            <option value="">Select method</option>
-            <option value="csv">CSV Upload</option>
-            <option value="ddl">DDL / Schema Upload</option>
-            <option value="db">Database Connection</option>
-          </select>
+            <SelectTrigger id={`${type}-method`} className="h-9 text-sm w-full">
+              <SelectValue placeholder="Select method" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="csv">CSV Upload</SelectItem>
+              <SelectItem value="ddl">DDL / Schema Upload</SelectItem>
+              <SelectItem value="db">Database Connection</SelectItem>
+            </SelectContent>
+          </Select>
         </div>
 
         {/* No method selected */}
@@ -439,7 +438,7 @@ export function IngestionCard({ type, title, projectId, initialDatasets }: Inges
               </div>
               <div className="flex gap-3">
                 <Button variant="outline" disabled>Test Connection</Button>
-                <Button disabled className="bg-blue-600 text-white">Connect Database</Button>
+                <Button disabled className="bg-[#4F46E5] text-white">Connect Database</Button>
               </div>
             </div>
           </div>
@@ -449,20 +448,20 @@ export function IngestionCard({ type, title, projectId, initialDatasets }: Inges
         {(method === 'csv' || method === 'ddl') && (
           <div className="space-y-2">
             <Label htmlFor={`${type}-dataset`}>Schema</Label>
-            <select
-              id={`${type}-dataset`}
+            <Select
               value={selectedDatasetId ?? ''}
-              onChange={(e) => handleDatasetSelect(e.target.value)}
-              className="w-full h-9 rounded-md border border-gray-300 px-3 py-1 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+              onValueChange={(val) => handleDatasetSelect(val)}
             >
-              <option value="">Select schema</option>
-              {datasets.map((d) => (
-                <option key={d.id} value={d.id}>
-                  {d.name}
-                </option>
-              ))}
-              <option value="new">+ Add new schema</option>
-            </select>
+              <SelectTrigger id={`${type}-dataset`} className="h-9 text-sm w-full">
+                <SelectValue placeholder="Select schema" />
+              </SelectTrigger>
+              <SelectContent>
+                {datasets.map((d) => (
+                  <SelectItem key={d.id} value={d.id}>{d.name}</SelectItem>
+                ))}
+                <SelectItem value="new">+ Add new schema</SelectItem>
+              </SelectContent>
+            </Select>
 
             {showNewDatasetInput && (
               <div className="flex gap-2">
@@ -477,7 +476,7 @@ export function IngestionCard({ type, title, projectId, initialDatasets }: Inges
                   size="sm"
                   onClick={handleSaveNewDataset}
                   disabled={!newDatasetName.trim() || creatingDataset}
-                  className="bg-blue-600 hover:bg-blue-700 text-white"
+                  className="bg-[#4F46E5] hover:bg-[#4338CA] text-white"
                 >
                   {creatingDataset ? 'Saving…' : 'Save'}
                 </Button>
@@ -499,21 +498,22 @@ export function IngestionCard({ type, title, projectId, initialDatasets }: Inges
             {/* Step 2: Table selector */}
             <div className="space-y-2">
               <Label htmlFor={`${type}-table`}>Table</Label>
-              <select
-                id={`${type}-table`}
+              <Select
                 value={selectedTableId ?? ''}
-                onChange={(e) => handleTableSelect(e.target.value)}
-                className="w-full h-9 rounded-md border border-gray-300 px-3 py-1 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                onValueChange={(val) => handleTableSelect(val)}
               >
-                <option value="">Select table</option>
-                {selectedDataset?.tables.map((t) => (
-                  <option key={t.id} value={t.id}>
-                    {t.name}
-                    {t.row_count > 0 ? ` (${t.row_count.toLocaleString()} rows)` : ''}
-                  </option>
-                ))}
-                <option value="new">+ Add new table</option>
-              </select>
+                <SelectTrigger id={`${type}-table`} className="h-9 text-sm w-full">
+                  <SelectValue placeholder="Select table" />
+                </SelectTrigger>
+                <SelectContent>
+                  {selectedDataset?.tables.map((t) => (
+                    <SelectItem key={t.id} value={t.id}>
+                      {t.name}{t.row_count > 0 ? ` (${t.row_count.toLocaleString()} rows)` : ''}
+                    </SelectItem>
+                  ))}
+                  <SelectItem value="new">+ Add new table</SelectItem>
+                </SelectContent>
+              </Select>
 
               {showNewTableInput && (
                 <div className="flex gap-2">
@@ -528,7 +528,7 @@ export function IngestionCard({ type, title, projectId, initialDatasets }: Inges
                     size="sm"
                     onClick={handleSaveNewTable}
                     disabled={!newTableName.trim()}
-                    className="bg-blue-600 hover:bg-blue-700 text-white"
+                    className="bg-[#4F46E5] hover:bg-[#4338CA] text-white"
                   >
                     Save
                   </Button>
@@ -595,16 +595,16 @@ export function IngestionCard({ type, title, projectId, initialDatasets }: Inges
                     onDrop={handleDrop}
                     onDragOver={handleDragOver}
                     onDragLeave={handleDragLeave}
-                    className={`border-2 border-dashed rounded-xl p-8 text-center transition-colors ${
+                    className={`border-2 border-dashed rounded-lg p-8 text-center transition-colors ${
                       isDragOver
-                        ? 'border-blue-600 bg-blue-50'
+                        ? 'border-[#4F46E5] bg-indigo-50'
                         : 'border-gray-300 hover:border-gray-400'
                     }`}
                   >
                     {uploadState.status === 'uploading' && (
                       <div className="space-y-3">
                         <div className="flex justify-center">
-                          <svg className="animate-spin w-8 h-8 text-blue-600" fill="none" viewBox="0 0 24 24">
+                          <svg className="animate-spin w-8 h-8 text-[#4F46E5]" fill="none" viewBox="0 0 24 24">
                             <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
                             <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v4l3-3-3-3v4a8 8 0 00-8 8h4z" />
                           </svg>
@@ -733,16 +733,16 @@ export function IngestionCard({ type, title, projectId, initialDatasets }: Inges
                 onDrop={handleDDLDrop}
                 onDragOver={(e) => { e.preventDefault(); setDdl((s) => ({ ...s, isDragOver: true })) }}
                 onDragLeave={() => setDdl((s) => ({ ...s, isDragOver: false }))}
-                className={`border-2 border-dashed rounded-xl p-8 text-center transition-colors ${
+                className={`border-2 border-dashed rounded-lg p-8 text-center transition-colors ${
                   ddl.isDragOver
-                    ? 'border-blue-600 bg-blue-50'
+                    ? 'border-[#4F46E5] bg-indigo-50'
                     : 'border-gray-300 hover:border-gray-400'
                 }`}
               >
                 {ddl.parsing ? (
                   <div className="space-y-3">
                     <div className="flex justify-center">
-                      <svg className="animate-spin w-8 h-8 text-blue-600" fill="none" viewBox="0 0 24 24">
+                      <svg className="animate-spin w-8 h-8 text-[#4F46E5]" fill="none" viewBox="0 0 24 24">
                         <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
                         <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v4l3-3-3-3v4a8 8 0 00-8 8h4z" />
                       </svg>
@@ -810,7 +810,7 @@ export function IngestionCard({ type, title, projectId, initialDatasets }: Inges
             {/* Saved confirmation */}
             {ddl.step === 'saved' && (
               <div className="space-y-3">
-                <div className="flex items-center gap-3 rounded-xl bg-green-50 border border-green-200 px-4 py-3">
+                <div className="flex items-center gap-3 rounded-lg bg-green-50 border border-green-200 px-4 py-3">
                   <CheckCircle2 className="w-6 h-6 text-green-600 shrink-0" />
                   <div>
                     <p className="text-sm font-medium text-green-800">

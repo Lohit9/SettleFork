@@ -4,6 +4,7 @@ import { useState, useTransition } from 'react'
 import { useSearchParams } from 'next/navigation'
 import Link from 'next/link'
 import { submitAccessRequest } from '@/lib/actions/invites'
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 
 const CALENDLY = 'https://calendly.com/mine-ai/demo'
 
@@ -116,7 +117,7 @@ export default function RequestAccessForm() {
                 href={CALENDLY}
                 target="_blank"
                 rel="noopener noreferrer"
-                className="block w-full bg-blue-600 hover:bg-blue-700 text-white font-semibold py-3 rounded-xl transition-all text-sm text-center mb-3"
+                className="block w-full bg-[#2563EB] hover:bg-[#1D4ED8] text-white font-semibold py-3 rounded-xl transition-all text-sm text-center mb-3"
               >
                 Book a Demo
               </a>
@@ -188,17 +189,22 @@ export default function RequestAccessForm() {
             </Field>
 
             <Field label="What best describes you?" required error={fieldErrors.role_type}>
-              <select
+              <Select
                 value={form.role_type}
-                onChange={set('role_type')}
-                className={inputCls(fieldErrors.role_type)}
+                onValueChange={(val) => {
+                  setForm((prev) => ({ ...prev, role_type: val }))
+                  if (fieldErrors.role_type) setFieldErrors((prev) => ({ ...prev, role_type: '' }))
+                }}
               >
-                {ROLE_OPTIONS.map((o) => (
-                  <option key={o.value} value={o.value} disabled={o.value === ''}>
-                    {o.label}
-                  </option>
-                ))}
-              </select>
+                <SelectTrigger className={inputCls(fieldErrors.role_type)}>
+                  <SelectValue placeholder="Select one…" />
+                </SelectTrigger>
+                <SelectContent>
+                  {ROLE_OPTIONS.filter((o) => o.value !== '').map((o) => (
+                    <SelectItem key={o.value} value={o.value}>{o.label}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
             </Field>
 
             <Field label="What systems are involved?" hint="Optional">
@@ -224,7 +230,7 @@ export default function RequestAccessForm() {
             <button
               type="submit"
               disabled={isPending}
-              className="w-full bg-blue-600 hover:bg-blue-700 disabled:opacity-60 text-white font-semibold py-3.5 rounded-xl transition-all text-sm mt-2"
+              className="w-full bg-[#2563EB] hover:bg-[#1D4ED8] disabled:opacity-60 text-white font-semibold py-3.5 rounded-xl transition-all text-sm mt-2"
             >
               {isPending ? 'Submitting…' : isAssessment ? 'Get Your Free Assessment' : 'Get Your Assessment'}
             </button>

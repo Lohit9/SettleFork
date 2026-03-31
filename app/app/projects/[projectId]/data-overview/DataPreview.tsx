@@ -7,6 +7,7 @@ import { getStagedMappings, getStagedDataPreview, checkStagingFreshness, stageAl
 import type { TableOption, TargetFieldConstraint } from '@/lib/actions/data-overview'
 import type { StagedMappingOption } from '@/lib/actions/staging'
 import { AlertTriangle } from '@/components/icons'
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 
 interface DataPreviewProps {
   projectId: string
@@ -264,19 +265,21 @@ export default function DataPreview({ projectId, tables }: DataPreviewProps) {
           {/* Table selector */}
           <div className="flex items-center gap-3">
             <label className="text-sm font-medium text-gray-700 whitespace-nowrap">Select Table:</label>
-            <select
+            <Select
               value={selectedTableId}
-              onChange={(e) => setSelectedTableId(e.target.value)}
-              className="border border-gray-300 rounded-lg px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
+              onValueChange={(val) => setSelectedTableId(val)}
             >
-              {datasetOrder.map((dsName) => (
-                <optgroup key={dsName} label={dsName}>
-                  {tablesByDataset.get(dsName)!.map((t) => (
-                    <option key={t.id} value={t.id}>{t.name}</option>
-                  ))}
-                </optgroup>
-              ))}
-            </select>
+              <SelectTrigger className="h-9 text-sm w-[240px]">
+                <SelectValue placeholder="Select table…" />
+              </SelectTrigger>
+              <SelectContent>
+                {datasetOrder.map((dsName) => (
+                  tablesByDataset.get(dsName)!.map((t) => (
+                    <SelectItem key={t.id} value={t.id}>{dsName} — {t.name}</SelectItem>
+                  ))
+                ))}
+              </SelectContent>
+            </Select>
             {selectedTable && (
               <span className="text-xs text-gray-400">
                 {selectedTable.row_count.toLocaleString()} rows
@@ -327,17 +330,21 @@ export default function DataPreview({ projectId, tables }: DataPreviewProps) {
               {/* Mapping selector */}
               <div className="flex items-center gap-3 flex-wrap">
                 <label className="text-sm font-medium text-gray-700 whitespace-nowrap">Target Table:</label>
-                <select
+                <Select
                   value={selectedMappingId}
-                  onChange={(e) => setSelectedMappingId(e.target.value)}
-                  className="border border-gray-300 rounded-lg px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                  onValueChange={(val) => setSelectedMappingId(val)}
                 >
-                  {stagedMappings.map((m) => (
-                    <option key={m.tableMappingId} value={m.tableMappingId}>
-                      {m.targetTableName} ← {m.sourceTableName}
-                    </option>
-                  ))}
-                </select>
+                  <SelectTrigger className="h-9 text-sm w-[240px]">
+                    <SelectValue placeholder="Select mapping…" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {stagedMappings.map((m) => (
+                      <SelectItem key={m.tableMappingId} value={m.tableMappingId}>
+                        {m.targetTableName} ← {m.sourceTableName}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
                 {selectedMapping && (
                   <span className="text-xs text-gray-400">
                     {selectedMapping.rowCount.toLocaleString()} rows
