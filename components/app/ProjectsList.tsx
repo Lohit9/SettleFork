@@ -86,11 +86,11 @@ function ProjectCard({ project, onUpdate }: { project: ProjectWithStats; onUpdat
             <div className="flex items-center gap-2 mb-1">
               <span className="text-base font-medium text-gray-900 truncate">{project.name}</span>
               {isCompleted ? (
-                <Badge className="bg-green-100 text-green-700 hover:bg-green-100 text-[11px] px-1.5 py-0 flex-shrink-0">
+                <Badge className="bg-green-100 text-green-700 hover:bg-green-100 text-xs px-1.5 py-0 flex-shrink-0">
                   Completed
                 </Badge>
               ) : (
-                <Badge className="bg-blue-100 text-blue-700 hover:bg-blue-100 text-[11px] px-1.5 py-0 flex-shrink-0">
+                <Badge className="bg-blue-100 text-blue-700 hover:bg-blue-100 text-xs px-1.5 py-0 flex-shrink-0">
                   Active
                 </Badge>
               )}
@@ -108,7 +108,7 @@ function ProjectCard({ project, onUpdate }: { project: ProjectWithStats; onUpdat
           {score !== null && score > 0 && (
             <div className="text-right flex-shrink-0">
               <div className={`text-2xl font-semibold leading-none ${scoreColor}`}>{score}%</div>
-              <div className="text-[11px] text-gray-400 mt-0.5">Readiness</div>
+              <div className="text-xs text-gray-400 mt-0.5">Readiness</div>
             </div>
           )}
         </div>
@@ -241,7 +241,7 @@ function NewProjectForm({ onCancel, onCreated }: { onCancel: () => void; onCreat
           <Button
             onClick={handleCreate}
             disabled={!projectName.trim() || !sourceSystem.trim() || !targetSystem.trim() || isPending}
-            className="bg-[#4F46E5] hover:bg-[#4338CA] text-white disabled:opacity-50"
+            className="bg-blue-600 hover:bg-blue-700 text-white disabled:opacity-50"
           >
             {isPending ? 'Creating…' : 'Create Project'}
           </Button>
@@ -262,7 +262,7 @@ function WelcomeModal({ onDismiss }: { onDismiss: () => void }) {
       <div className="bg-white rounded-2xl shadow-xl w-full max-w-[440px] p-8 text-center">
         {/* Logo / icon */}
         <div className="flex justify-center mb-5">
-          <div className="w-12 h-12 rounded-xl bg-[#4F46E5] flex items-center justify-center">
+          <div className="w-12 h-12 rounded-xl bg-blue-600 flex items-center justify-center">
             <span className="text-white text-xl font-bold leading-none">M</span>
           </div>
         </div>
@@ -279,7 +279,7 @@ function WelcomeModal({ onDismiss }: { onDismiss: () => void }) {
 
         <Button
           onClick={onDismiss}
-          className="w-full bg-[#4F46E5] hover:bg-[#4338CA] text-white font-medium"
+          className="w-full bg-blue-600 hover:bg-blue-700 text-white font-medium"
         >
           Get Started
         </Button>
@@ -354,12 +354,12 @@ export function ProjectsList({ initialProjects }: ProjectsListProps) {
                 value={search}
                 onChange={(e) => setSearch(e.target.value)}
                 placeholder="Search projects…"
-                className="h-9 pl-9 pr-3 w-52 bg-gray-50 border border-gray-200 rounded-lg text-sm text-gray-900 placeholder:text-gray-400 focus:outline-none focus:ring-2 focus:ring-[#4F46E5] focus:border-[#4F46E5] transition-colors"
+                className="h-9 pl-9 pr-3 w-52 bg-gray-50 border border-gray-200 rounded-lg text-sm text-gray-900 placeholder:text-gray-400 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-600 transition-colors"
               />
             </div>
             <Button
               onClick={() => setShowCreate(true)}
-              className="bg-[#4F46E5] hover:bg-[#4338CA] text-white h-9 px-4 gap-1.5 text-sm"
+              className="bg-blue-600 hover:bg-blue-700 text-white h-9 px-4 gap-1.5 text-sm"
             >
               <Plus className="w-3.5 h-3.5" />
               New Project
@@ -375,15 +375,15 @@ export function ProjectsList({ initialProjects }: ProjectsListProps) {
               onClick={() => setActiveFilter(tab.id)}
               className={`px-3 pb-3 text-sm font-medium flex items-center gap-1.5 border-b-2 transition-colors ${
                 activeFilter === tab.id
-                  ? 'border-[#4F46E5] text-[#4F46E5]'
+                  ? 'border-blue-600 text-blue-600'
                   : 'border-transparent text-gray-500 hover:text-gray-700'
               }`}
             >
               {tab.label}
               <span
-                className={`text-[11px] px-1.5 py-0.5 rounded-full ${
+                className={`text-xs px-1.5 py-0.5 rounded-full ${
                   activeFilter === tab.id
-                    ? 'bg-indigo-100 text-indigo-700'
+                    ? 'bg-blue-100 text-blue-700'
                     : 'bg-gray-100 text-gray-500'
                 }`}
               >
@@ -412,7 +412,7 @@ export function ProjectsList({ initialProjects }: ProjectsListProps) {
             {!search && (
               <Button
                 onClick={() => setShowCreate(true)}
-                className="bg-[#4F46E5] hover:bg-[#4338CA] text-white gap-2"
+                className="bg-blue-600 hover:bg-blue-700 text-white gap-2"
               >
                 <Plus className="w-3.5 h-3.5" />
                 Create your first project

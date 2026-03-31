@@ -774,7 +774,11 @@ function DataTable({
                     <tr
                       key={i}
                       className={`border-b border-gray-100 last:border-b-0 ${
-                        majorityFlagged ? 'bg-red-50/50' : 'hover:bg-gray-50'
+                        majorityFlagged
+                          ? 'bg-red-50/50'
+                          : showDiff
+                          ? 'hover:bg-gray-50 even:bg-gray-50/30'
+                          : 'hover:bg-gray-50 even:bg-gray-50/50'
                       }`}
                     >
                       {columns.map((col) => {

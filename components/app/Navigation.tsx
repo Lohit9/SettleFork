@@ -148,7 +148,7 @@ export function Navigation({
     <aside
       className={`
         fixed top-0 left-0 h-screen z-40 flex flex-col
-        bg-white border-r border-gray-200
+        bg-white border-r border-slate-200
         transition-all duration-200 ease-in-out overflow-hidden
         ${expanded ? 'w-[220px] shadow-xl shadow-gray-900/10' : 'w-[60px] shadow-none'}
       `}
@@ -215,8 +215,8 @@ export function Navigation({
         ) : (
           <div className="flex justify-center mt-1">
             <Tip label={projectTooltip || 'Project'}>
-              <div className="w-9 h-9 rounded-full bg-purple-100 flex items-center justify-center cursor-default">
-                <span className="text-xs font-semibold text-purple-700">{projectInitials}</span>
+              <div className="w-9 h-9 rounded-full bg-blue-100 flex items-center justify-center cursor-default">
+                <span className="text-xs font-semibold text-blue-600">{projectInitials}</span>
               </div>
             </Tip>
           </div>
@@ -239,7 +239,7 @@ export function Navigation({
                 className={`
                   flex items-center rounded-lg transition-colors
                   ${expanded ? 'gap-3 px-3 py-2 w-full' : 'justify-center w-10 h-10 mx-auto'}
-                  ${isActive ? 'bg-[#4F46E5] text-white' : 'text-gray-600 hover:bg-gray-100'}
+                  ${isActive ? 'bg-blue-600 text-white font-medium' : 'text-slate-500 hover:bg-slate-50 hover:text-slate-700'}
                 `}
               >
                 <span className="relative flex-shrink-0">
@@ -252,7 +252,7 @@ export function Navigation({
                   <>
                     <span className="flex-1 text-sm whitespace-nowrap">{item.label}</span>
                     {hasBadge && (
-                      <span className={`text-xs font-semibold px-1.5 py-0.5 rounded-full flex-shrink-0 ${isActive ? 'bg-white/20 text-white' : 'bg-red-100 text-red-700'}`}>
+                      <span className="text-xs font-semibold px-1.5 py-0.5 rounded-full flex-shrink-0 bg-red-100 text-red-700">
                         {blockingIssueCount}
                       </span>
                     )}
@@ -277,11 +277,13 @@ export function Navigation({
       <div className="flex-shrink-0 px-2 pb-1">
         <div className="space-y-0.5">
           {BOTTOM_NAV.map(({ label, href, Icon }) => {
+            const isBottomActive = pathname === href
             const btn = (
               <Link
                 href={href}
-                className={`flex items-center rounded-lg transition-colors text-gray-500 hover:text-gray-700 hover:bg-gray-100
-                  ${expanded ? 'gap-3 px-3 py-2 w-full' : 'justify-center w-10 h-10 mx-auto'}`}
+                className={`flex items-center rounded-lg transition-colors
+                  ${expanded ? 'gap-3 px-3 py-2 w-full' : 'justify-center w-10 h-10 mx-auto'}
+                  ${isBottomActive ? 'bg-blue-600 text-white font-medium' : 'text-slate-500 hover:text-slate-700 hover:bg-slate-50'}`}
               >
                 <Icon className="w-5 h-5 flex-shrink-0" />
                 {expanded && <span className="text-sm whitespace-nowrap">{label}</span>}
@@ -307,7 +309,7 @@ export function Navigation({
             onClick={openPopover}
             className="flex items-center gap-2.5 w-full px-2 py-1.5 rounded-lg hover:bg-gray-100 transition-colors"
           >
-            <div className="w-8 h-8 rounded-full bg-purple-600 flex items-center justify-center flex-shrink-0">
+            <div className="w-8 h-8 rounded-full bg-blue-500 flex items-center justify-center flex-shrink-0">
               <span className="text-xs font-semibold text-white">{userInitials}</span>
             </div>
             <span className="text-sm text-gray-700 truncate max-w-[120px]">{displayName}</span>
@@ -319,7 +321,7 @@ export function Navigation({
               onClick={openPopover}
               className="w-10 h-10 flex items-center justify-center hover:bg-gray-100 rounded-lg transition-colors"
             >
-              <div className="w-8 h-8 rounded-full bg-purple-600 flex items-center justify-center">
+              <div className="w-8 h-8 rounded-full bg-blue-500 flex items-center justify-center">
                 <span className="text-xs font-semibold text-white">{userInitials}</span>
               </div>
             </button>

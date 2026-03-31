@@ -116,7 +116,7 @@ export default function RequestAccessForm() {
                 href={CALENDLY}
                 target="_blank"
                 rel="noopener noreferrer"
-                className="block w-full bg-[#2563EB] hover:bg-[#1D4ED8] text-white font-semibold py-3 rounded-xl transition-all text-sm text-center mb-3"
+                className="block w-full bg-blue-600 hover:bg-blue-700 text-white font-semibold py-3 rounded-xl transition-all text-sm text-center mb-3"
               >
                 Book a Demo
               </a>
@@ -224,7 +224,7 @@ export default function RequestAccessForm() {
             <button
               type="submit"
               disabled={isPending}
-              className="w-full bg-[#2563EB] hover:bg-[#1D4ED8] disabled:opacity-60 text-white font-semibold py-3.5 rounded-xl transition-all text-sm mt-2"
+              className="w-full bg-blue-600 hover:bg-blue-700 disabled:opacity-60 text-white font-semibold py-3.5 rounded-xl transition-all text-sm mt-2"
             >
               {isPending ? 'Submitting…' : isAssessment ? 'Get Your Free Assessment' : 'Get Your Assessment'}
             </button>

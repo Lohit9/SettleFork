@@ -15,10 +15,10 @@ export default function ProductScreenshot({ sourceSystem, targetSystem }: Produc
     <div className="rounded-2xl overflow-hidden shadow-2xl border border-mine-slate-200">
       {/* Top bar */}
       <div className="h-9 bg-mine-slate-100 flex items-center px-3 gap-1.5 border-b border-mine-slate-200">
-        <span className="w-2.5 h-2.5 rounded-full bg-[#EF4444]" />
-        <span className="w-2.5 h-2.5 rounded-full bg-[#F59E0B]" />
-        <span className="w-2.5 h-2.5 rounded-full bg-[#22C55E]" />
-        <span className="text-mine-slate-400 text-[11px] ml-2">
+        <span className="w-2.5 h-2.5 rounded-full bg-red-500" />
+        <span className="w-2.5 h-2.5 rounded-full bg-amber-500" />
+        <span className="w-2.5 h-2.5 rounded-full bg-green-500" />
+        <span className="text-mine-slate-400 text-xs ml-2">
           {sourceSystem} → {targetSystem} mapping
         </span>
       </div>

@@ -133,7 +133,7 @@ export default function StagingWarningPopup({ issues, proceedLabel = 'Stage All 
         <div className="px-6 py-4 border-t border-gray-100 flex flex-col sm:flex-row gap-3">
           <button
             onClick={onFixIssues}
-            className="flex-1 px-4 py-2.5 rounded-lg bg-[#4F46E5] hover:bg-[#4338CA] text-sm font-medium text-white transition-colors text-left"
+            className="flex-1 px-4 py-2.5 rounded-lg bg-blue-600 hover:bg-blue-700 text-sm font-medium text-white transition-colors text-left"
           >
             <div className="font-semibold">Fix Issues →</div>
             <div className="text-xs text-white/70 font-normal mt-0.5">

@@ -81,10 +81,10 @@ export default function HowItWorksPage() {
         <div className="max-w-5xl mx-auto py-24 px-6">
 
           {/* Hero */}
-          <h1 className="text-4xl lg:text-5xl font-bold text-[#0F172A] tracking-tight mb-4 text-center">
+          <h1 className="text-4xl lg:text-5xl font-bold text-slate-900 tracking-tight mb-4 text-center">
             How Mine works
           </h1>
-          <p className="text-lg text-[#64748B] leading-relaxed text-center max-w-2xl mx-auto mb-16">
+          <p className="text-lg text-slate-500 leading-relaxed text-center max-w-2xl mx-auto mb-16">
             An autonomous, multi-agent workflow that handles the full migration lifecycle — from schema profiling to production-ready load files.
           </p>
 
@@ -92,15 +92,15 @@ export default function HowItWorksPage() {
           {STEPS.map((step, i) => {
             const flipped = i % 2 === 1
             return (
-              <div key={step.n} className="border-t border-[#F1F5F9] py-16">
+              <div key={step.n} className="border-t border-slate-100 py-16">
                 <div className={`grid grid-cols-1 lg:grid-cols-2 gap-12 items-center ${flipped ? 'lg:[direction:rtl]' : ''}`}>
                   {/* Text */}
                   <div className={flipped ? 'lg:[direction:ltr]' : ''}>
-                    <div className="text-6xl font-bold text-[#DBEAFE] leading-none mb-2 select-none">
+                    <div className="text-6xl font-bold text-blue-100 leading-none mb-2 select-none">
                       {step.n}
                     </div>
-                    <h2 className="text-2xl font-bold text-[#0F172A] mb-3">{step.title}</h2>
-                    <p className="text-[#475569] leading-relaxed">{step.description}</p>
+                    <h2 className="text-2xl font-bold text-slate-900 mb-3">{step.title}</h2>
+                    <p className="text-slate-600 leading-relaxed">{step.description}</p>
                   </div>
                   {/* Visual */}
                   <div className={flipped ? 'lg:[direction:ltr]' : ''}>
@@ -112,15 +112,15 @@ export default function HowItWorksPage() {
           })}
 
           {/* Bottom CTA */}
-          <div className="bg-[#F8FAFC] rounded-2xl p-12 text-center mt-16">
-            <h2 className="text-2xl font-bold text-[#0F172A] mb-3">Ready to see it in action?</h2>
-            <p className="text-[#64748B] mb-6">
+          <div className="bg-slate-50 rounded-2xl p-12 text-center mt-16">
+            <h2 className="text-2xl font-bold text-slate-900 mb-3">Ready to see it in action?</h2>
+            <p className="text-slate-500 mb-6">
               Connect your schema and get your first mapping in under an hour.
             </p>
             <div className="flex flex-wrap justify-center gap-3">
               <Link
                 href="/request-access"
-                className="bg-[#2563EB] hover:bg-[#1D4ED8] text-white font-semibold px-8 py-3.5 rounded-xl shadow-lg shadow-blue-600/20 hover:-translate-y-0.5 transition-all text-sm"
+                className="bg-blue-600 hover:bg-blue-700 text-white font-semibold px-8 py-3.5 rounded-xl shadow-lg shadow-blue-600/20 hover:-translate-y-0.5 transition-all text-sm"
               >
                 Request Access
               </Link>
@@ -128,7 +128,7 @@ export default function HowItWorksPage() {
                 href="https://calendly.com/mine-ai/demo"
                 target="_blank"
                 rel="noopener noreferrer"
-                className="border border-[#CBD5E1] text-[#0F172A] font-medium px-8 py-3.5 rounded-xl hover:border-[#2563EB] hover:text-[#2563EB] transition-all text-sm"
+                className="border border-slate-300 text-slate-900 font-medium px-8 py-3.5 rounded-xl hover:border-blue-600 hover:text-blue-600 transition-all text-sm"
               >
                 Book a Demo
               </a>

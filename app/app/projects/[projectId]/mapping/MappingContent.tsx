@@ -96,7 +96,7 @@ function TableSelector({
   tables,
   selected,
   onToggle,
-  colorClass = 'text-indigo-600',
+  colorClass = 'text-blue-600',
 }: {
   title: string
   tables: { id: string; name: string; datasetName: string }[]
@@ -133,7 +133,7 @@ function TableSelector({
                 type="checkbox"
                 checked={selected.has(t.id)}
                 onChange={() => onToggle(t.id)}
-                className={`w-4 h-4 rounded border-gray-300 focus:ring-2 focus:ring-indigo-500 cursor-pointer`}
+                className={`w-4 h-4 rounded border-gray-300 focus:ring-2 focus:ring-blue-500 cursor-pointer`}
               />
               <span className="text-sm text-gray-800 group-hover:text-gray-900">{t.name}</span>
               {t.datasetName && (
@@ -215,7 +215,7 @@ function GenerateMappingsPanel({
       {generating && (
         <div className="absolute inset-0 bg-white/95 flex items-center justify-center z-10 rounded-xl">
           <div className="text-center px-4">
-            <div className="w-10 h-10 border-4 border-indigo-600 border-t-transparent rounded-full animate-spin mx-auto mb-3" />
+            <div className="w-10 h-10 border-4 border-blue-600 border-t-transparent rounded-full animate-spin mx-auto mb-3" />
             <p className="font-semibold text-gray-900 text-sm">Generating AI-powered mappings…</p>
             <p className="text-xs text-gray-500 mt-1">Analyzing schemas and sample data. This may take 15–30 seconds.</p>
           </div>
@@ -228,7 +228,7 @@ function GenerateMappingsPanel({
           tables={sourceTables}
           selected={selectedSrc}
           onToggle={toggleSrc}
-          colorClass="text-indigo-600"
+          colorClass="text-blue-600"
         />
         <TableSelector
           title="Target Tables"
@@ -255,7 +255,7 @@ function GenerateMappingsPanel({
         <button
           onClick={handleGenerate}
           disabled={!canGenerate || generating}
-          className="px-5 py-2.5 text-sm font-medium text-white bg-indigo-600 rounded-lg hover:bg-indigo-700 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+          className="px-5 py-2.5 text-sm font-medium text-white bg-blue-600 rounded-lg hover:bg-blue-700 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
         >
           {generating ? 'Generating…' : 'Generate Mappings'}
         </button>
@@ -494,21 +494,21 @@ function AddMappingModal({
         <div className="px-6 py-5 space-y-4">
           <div>
             <label className="block text-xs font-medium text-gray-600 mb-1.5">Source Table</label>
-            <select value={sourceTableId} onChange={(e) => setSourceTableId(e.target.value)} disabled={pending} className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500 disabled:opacity-60">
+            <select value={sourceTableId} onChange={(e) => setSourceTableId(e.target.value)} disabled={pending} className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:opacity-60">
               <option value="">Select source table…</option>
               {allSourceTables.map((t) => <option key={t.id} value={t.id}>{t.datasetName}.{t.name}</option>)}
             </select>
           </div>
           <div>
             <label className="block text-xs font-medium text-gray-600 mb-1.5">Target Table</label>
-            <select value={targetTableId} onChange={(e) => setTargetTableId(e.target.value)} disabled={pending} className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500 disabled:opacity-60">
+            <select value={targetTableId} onChange={(e) => setTargetTableId(e.target.value)} disabled={pending} className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:opacity-60">
               <option value="">Select target table…</option>
               {allTargetTables.map((t) => <option key={t.id} value={t.id}>{t.datasetName}.{t.name}</option>)}
             </select>
           </div>
           {generatingFields && (
-            <div className="flex items-center gap-2.5 px-3 py-2.5 bg-indigo-50 border border-indigo-100 rounded-lg text-xs text-indigo-700">
-              <span className="w-3.5 h-3.5 border-2 border-indigo-500 border-t-transparent rounded-full animate-spin flex-shrink-0" />
+            <div className="flex items-center gap-2.5 px-3 py-2.5 bg-blue-50 border border-blue-100 rounded-lg text-xs text-blue-700">
+              <span className="w-3.5 h-3.5 border-2 border-blue-500 border-t-transparent rounded-full animate-spin flex-shrink-0" />
               Generating field mappings with AI… this may take 15–30 seconds.
             </div>
           )}
@@ -516,7 +516,7 @@ function AddMappingModal({
         </div>
         <div className="flex gap-3 px-6 py-4 border-t border-gray-100">
           <button onClick={onClose} disabled={pending} className="flex-1 px-4 py-2 text-sm font-medium text-gray-700 border border-gray-200 rounded-lg hover:bg-gray-50 disabled:opacity-40">Cancel</button>
-          <button onClick={handleAdd} disabled={!sourceTableId || !targetTableId || pending} className="flex-1 px-4 py-2 text-sm font-medium text-white bg-indigo-600 rounded-lg hover:bg-indigo-700 disabled:opacity-40">
+          <button onClick={handleAdd} disabled={!sourceTableId || !targetTableId || pending} className="flex-1 px-4 py-2 text-sm font-medium text-white bg-blue-600 rounded-lg hover:bg-blue-700 disabled:opacity-40">
             {pending ? (generatingFields ? 'Generating fields…' : 'Adding…') : 'Add Mapping'}
           </button>
         </div>
@@ -788,7 +788,7 @@ function InlineAddFieldRow({
                 type="checkbox"
                 checked={suppressMTWChecked}
                 onChange={(e) => setSuppressMTWChecked(e.target.checked)}
-                className="rounded border-gray-300 text-indigo-600 focus:ring-indigo-500"
+                className="rounded border-gray-300 text-blue-600 focus:ring-blue-500"
               />
               Don&apos;t show this warning again
             </label>
@@ -832,7 +832,7 @@ function InlineAddFieldRow({
               </button>
               <button
                 onClick={confirmMultiSource}
-                className="px-4 py-2 text-sm font-medium text-white bg-indigo-600 hover:bg-indigo-700 rounded-lg"
+                className="px-4 py-2 text-sm font-medium text-white bg-blue-600 hover:bg-blue-700 rounded-lg"
               >
                 Add Contributing Mapping
               </button>
@@ -841,7 +841,7 @@ function InlineAddFieldRow({
         </div>
       )}
 
-      <div className="px-5 py-3 bg-indigo-50/40 border-t border-indigo-100 space-y-2.5">
+      <div className="px-5 py-3 bg-blue-50/40 border-t border-blue-100 space-y-2.5">
         {/* Mapping type selector */}
         <div className="flex items-center gap-2">
           <span className="text-xs text-gray-500 flex-shrink-0">Type:</span>
@@ -874,7 +874,7 @@ function InlineAddFieldRow({
         <select
           value={srcFieldId}
           onChange={(e) => setSrcFieldId(e.target.value)}
-          className="flex-1 border border-gray-200 rounded-lg px-2.5 py-1.5 text-xs text-gray-900 bg-white focus:outline-none focus:ring-2 focus:ring-indigo-500"
+          className="flex-1 border border-gray-200 rounded-lg px-2.5 py-1.5 text-xs text-gray-900 bg-white focus:outline-none focus:ring-2 focus:ring-blue-500"
         >
             <option value="">{mappingType === 'many_to_one' ? 'Primary source field…' : 'Source field…'}</option>
           {allSrcFields.map((f) => (
@@ -887,7 +887,7 @@ function InlineAddFieldRow({
         <select
           value={tgtFieldId}
           onChange={(e) => setTgtFieldId(e.target.value)}
-          className="flex-1 border border-gray-200 rounded-lg px-2.5 py-1.5 text-xs text-gray-900 bg-white focus:outline-none focus:ring-2 focus:ring-indigo-500"
+          className="flex-1 border border-gray-200 rounded-lg px-2.5 py-1.5 text-xs text-gray-900 bg-white focus:outline-none focus:ring-2 focus:ring-blue-500"
         >
             <option value="">{mappingType === 'one_to_many' ? 'Primary target field…' : 'Target field…'}</option>
           {allTgtFields.map((f) => (
@@ -899,7 +899,7 @@ function InlineAddFieldRow({
         <button
           onClick={handleAdd}
           disabled={!srcFieldId || !tgtFieldId || pending}
-          className="px-3 py-1.5 text-xs font-medium text-white bg-indigo-600 rounded-lg hover:bg-indigo-700 disabled:opacity-40 flex-shrink-0"
+          className="px-3 py-1.5 text-xs font-medium text-white bg-blue-600 rounded-lg hover:bg-blue-700 disabled:opacity-40 flex-shrink-0"
         >
           {pending ? '…' : 'Add'}
         </button>
@@ -1168,7 +1168,7 @@ function FieldMappingRow({
           {isManyToOne && (
             <span
               title={`${fm.targetField?.name} receives from ${contributingFMs.length + 1} source fields combined`}
-              className="flex-shrink-0 text-[10px] font-medium px-1.5 py-0.5 rounded-full bg-indigo-100 text-indigo-600 border border-indigo-200"
+              className="flex-shrink-0 text-[10px] font-medium px-1.5 py-0.5 rounded-full bg-blue-100 text-blue-600 border border-blue-200"
             >
               many→1
             </span>
@@ -1178,7 +1178,7 @@ function FieldMappingRow({
           <button onClick={onApprove} title="Accept" className={`p-1 rounded transition-colors ${isApproved ? 'text-green-600' : 'text-gray-300 hover:text-green-600 hover:bg-green-50'}`}>
             <Check className="w-3.5 h-3.5" />
           </button>
-          <button onClick={onSelect} title="Edit" className="p-1 rounded text-gray-300 hover:text-indigo-600 hover:bg-indigo-50 transition-colors">
+          <button onClick={onSelect} title="Edit" className="p-1 rounded text-gray-300 hover:text-blue-600 hover:bg-blue-50 transition-colors">
             <Pencil className="w-3.5 h-3.5" />
           </button>
           <button onClick={onReject} title={isRejected ? 'Mark needs review' : 'Reject'} className={`p-1 rounded transition-colors ${isRejected ? 'text-red-500' : 'text-gray-300 hover:text-red-500 hover:bg-red-50'}`}>
@@ -1287,8 +1287,8 @@ function TableMappingCard({
             </p>
           </div>
           <div className="flex items-center px-3 flex-shrink-0">
-            <div className="w-6 border-t-2 border-dashed border-indigo-200" />
-            <ArrowRight className="w-4 h-4 text-indigo-400 -ml-1" />
+            <div className="w-6 border-t-2 border-dashed border-blue-200" />
+            <ArrowRight className="w-4 h-4 text-blue-400 -ml-1" />
           </div>
           <div className="flex-1 min-w-0 text-right">
             <p className="text-xs text-gray-400 mb-0.5 truncate">{tgtDs?.name}</p>
@@ -1323,11 +1323,11 @@ function TableMappingCard({
             onClick={onRegenerate}
             disabled={regeneratingThis}
             title="Regenerate field mappings with AI"
-            className="flex items-center gap-1 px-2 py-1 text-xs font-medium text-indigo-600 bg-indigo-50 hover:bg-indigo-100 rounded transition-colors disabled:opacity-50"
+            className="flex items-center gap-1 px-2 py-1 text-xs font-medium text-blue-600 bg-blue-50 hover:bg-blue-100 rounded transition-colors disabled:opacity-50"
           >
             {regeneratingThis ? (
               <>
-                <span className="w-2.5 h-2.5 border-2 border-indigo-400 border-t-transparent rounded-full animate-spin" />
+                <span className="w-2.5 h-2.5 border-2 border-blue-400 border-t-transparent rounded-full animate-spin" />
                 Regenerating…
               </>
             ) : (
@@ -1589,7 +1589,7 @@ function TableMappingCard({
             {!showAddRow && (
               <button
                 onClick={() => { setAddAfterUnmappedId(null); onShowAddRow(); }}
-                className="flex items-center gap-1.5 text-xs font-medium text-indigo-600 hover:text-indigo-800 transition-colors"
+                className="flex items-center gap-1.5 text-xs font-medium text-blue-600 hover:text-blue-800 transition-colors"
               >
                 <Plus className="w-3.5 h-3.5" />
                 Add Field Mapping
@@ -1836,7 +1836,7 @@ function MappingDetailsPanel({
             {fm.sourceFieldSamples.length > 0 && (
               <div className="flex items-start gap-2 mb-1">
                 <span className="text-xs text-gray-500 w-12 flex-shrink-0 pt-0.5">Source:</span>
-                <div className="flex flex-wrap gap-1">{fm.sourceFieldSamples.map((v, i) => <span key={i} className="text-xs bg-indigo-50 text-indigo-700 px-1.5 py-0.5 rounded">{v}</span>)}</div>
+                <div className="flex flex-wrap gap-1">{fm.sourceFieldSamples.map((v, i) => <span key={i} className="text-xs bg-blue-50 text-blue-700 px-1.5 py-0.5 rounded">{v}</span>)}</div>
               </div>
             )}
             {fm.targetFieldSamples.length > 0 && (
@@ -1853,7 +1853,7 @@ function MappingDetailsPanel({
           <div className="flex items-center justify-between mb-1">
             <p className="text-xs font-medium text-gray-600">Change Source Field</p>
             {!editSrcMode && (
-              <button onClick={() => setEditSrcMode(true)} className="text-xs text-indigo-600 hover:text-indigo-800">Change</button>
+              <button onClick={() => setEditSrcMode(true)} className="text-xs text-blue-600 hover:text-blue-800">Change</button>
             )}
           </div>
           {editSrcMode ? (
@@ -1861,7 +1861,7 @@ function MappingDetailsPanel({
               <select
                 value={newSrcId ?? undefined}
                 onChange={(e) => setNewSrcId(e.target.value)}
-                className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
               >
                 <option value={fm.source_field_id}>{fm.sourceField?.name} (current)</option>
                 {allSrcFields.filter((f) => f.id !== fm.source_field_id && !mappedSrcIds.has(f.id)).map((f) => (
@@ -1869,7 +1869,7 @@ function MappingDetailsPanel({
                 ))}
               </select>
               <div className="flex gap-2 mt-2">
-                <button onClick={handleEditSrc} disabled={pending} className="flex-1 px-3 py-1.5 text-xs font-medium text-white bg-indigo-600 rounded-lg disabled:opacity-40">
+                <button onClick={handleEditSrc} disabled={pending} className="flex-1 px-3 py-1.5 text-xs font-medium text-white bg-blue-600 rounded-lg disabled:opacity-40">
                   {pending ? '…' : 'Save'}
                 </button>
                 <button onClick={() => { setEditSrcMode(false); setNewSrcId(fm.source_field_id) }} className="flex-1 px-3 py-1.5 text-xs font-medium text-gray-700 border border-gray-200 rounded-lg">
@@ -1887,7 +1887,7 @@ function MappingDetailsPanel({
           <div className="flex items-center justify-between mb-1">
             <p className="text-xs font-medium text-gray-600">Change Target Field</p>
             {!editTgtMode && (
-              <button onClick={() => setEditTgtMode(true)} className="text-xs text-indigo-600 hover:text-indigo-800">Change</button>
+              <button onClick={() => setEditTgtMode(true)} className="text-xs text-blue-600 hover:text-blue-800">Change</button>
             )}
           </div>
           {editTgtMode ? (
@@ -1895,7 +1895,7 @@ function MappingDetailsPanel({
               <select
                 value={newTgtId}
                 onChange={(e) => setNewTgtId(e.target.value)}
-                className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
               >
                 <option value={fm.target_field_id}>{fm.targetField?.name} (current)</option>
                 {allTgtFields.filter((f) => f.id !== fm.target_field_id).map((f) => (
@@ -1905,7 +1905,7 @@ function MappingDetailsPanel({
                 ))}
               </select>
               <div className="flex gap-2 mt-2">
-                <button onClick={handleEditTgt} disabled={pending} className="flex-1 px-3 py-1.5 text-xs font-medium text-white bg-indigo-600 rounded-lg disabled:opacity-40">
+                <button onClick={handleEditTgt} disabled={pending} className="flex-1 px-3 py-1.5 text-xs font-medium text-white bg-blue-600 rounded-lg disabled:opacity-40">
                   {pending ? '…' : 'Save'}
                 </button>
                 <button onClick={() => { setEditTgtMode(false); setNewTgtId(fm.target_field_id) }} className="flex-1 px-3 py-1.5 text-xs font-medium text-gray-700 border border-gray-200 rounded-lg">
@@ -1978,7 +1978,7 @@ function UnmappedView({
       {/* Unmapped source */}
       <div>
         <h3 className="text-sm font-semibold text-gray-700 mb-3 flex items-center gap-2">
-          <span className="w-2 h-2 rounded-full bg-indigo-400" />
+          <span className="w-2 h-2 rounded-full bg-blue-400" />
           Unmapped Source Fields
           <span className="text-xs font-normal text-gray-400">({unmappedSource.length})</span>
         </h3>
@@ -1987,7 +1987,7 @@ function UnmappedView({
         ) : (
           <div className="space-y-2">
             {unmappedSource.map((f) => (
-              <div key={f.id} className="px-3 py-2.5 bg-indigo-50/60 border border-indigo-100 rounded-lg">
+              <div key={f.id} className="px-3 py-2.5 bg-blue-50/60 border border-blue-100 rounded-lg">
                 <div className="flex items-center justify-between gap-2">
                   <div className="min-w-0">
                     <p className="text-sm font-medium text-gray-800 truncate">{f.table?.name}.{f.name}</p>
@@ -1998,7 +1998,7 @@ function UnmappedView({
                   ) : (
                     <button
                       onClick={() => { setMappingFor(f.id); setSelectedTgtId('') }}
-                      className="text-xs font-medium text-indigo-600 hover:text-indigo-800 whitespace-nowrap"
+                      className="text-xs font-medium text-blue-600 hover:text-blue-800 whitespace-nowrap"
                     >
                       Map to →
                     </button>
@@ -2009,7 +2009,7 @@ function UnmappedView({
                     <select
                       value={selectedTgtId}
                       onChange={(e) => setSelectedTgtId(e.target.value)}
-                      className="flex-1 border border-gray-200 rounded px-2 py-1 text-xs focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                      className="flex-1 border border-gray-200 rounded px-2 py-1 text-xs focus:outline-none focus:ring-2 focus:ring-blue-500"
                     >
                       <option value="">Select target field…</option>
                       {unmappedTarget.map((tf) => (
@@ -2019,7 +2019,7 @@ function UnmappedView({
                     <button
                       onClick={() => handleMap(f.id)}
                       disabled={!selectedTgtId || pending}
-                      className="px-2.5 py-1 text-xs font-medium text-white bg-indigo-600 rounded hover:bg-indigo-700 disabled:opacity-40"
+                      className="px-2.5 py-1 text-xs font-medium text-white bg-blue-600 rounded hover:bg-blue-700 disabled:opacity-40"
                     >
                       Map
                     </button>
@@ -2386,8 +2386,8 @@ export default function MappingContent({ projectId, projectName, initialData }: 
         <div className="flex-1 overflow-auto">
         <div className="px-6 py-8 max-w-2xl mx-auto">
         <div className="text-center mb-8">
-          <div className="w-16 h-16 rounded-full bg-indigo-50 flex items-center justify-center mx-auto mb-4">
-            <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" className="text-indigo-400">
+          <div className="w-16 h-16 rounded-full bg-blue-50 flex items-center justify-center mx-auto mb-4">
+            <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" className="text-blue-400">
               <path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71" />
               <path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71" />
             </svg>
@@ -2424,7 +2424,7 @@ export default function MappingContent({ projectId, projectName, initialData }: 
       {/* Source ↔ Target header */}
       {(sourceDatasetName || targetDatasetName) && (
         <div className="flex items-center gap-3">
-          <span className="text-sm font-semibold text-indigo-700 bg-indigo-50 px-3 py-1.5 rounded-lg">{sourceDatasetName}</span>
+          <span className="text-sm font-semibold text-blue-700 bg-blue-50 px-3 py-1.5 rounded-lg">{sourceDatasetName}</span>
           <div className="flex items-center gap-1 text-gray-400">
             <div className="w-8 border-t border-dashed border-gray-300" />
             <ArrowRight className="w-4 h-4" />
@@ -2535,14 +2535,14 @@ export default function MappingContent({ projectId, projectName, initialData }: 
       {/* Bottom bar */}
       <div className="flex items-center justify-between pt-2 border-t border-gray-100">
         <div className="flex items-center gap-3">
-          <button onClick={() => setShowAddModal(true)} className="flex items-center gap-2 text-sm font-medium text-gray-600 hover:text-indigo-700 transition-colors">
+          <button onClick={() => setShowAddModal(true)} className="flex items-center gap-2 text-sm font-medium text-gray-600 hover:text-blue-700 transition-colors">
             <Plus className="w-4 h-4" />
             Add New Mapping
           </button>
           {unmappedSourceTablesForModal.length > 0 && unmappedTargetTablesForModal.length > 0 && (
             <button
               onClick={() => setShowGenerateModal(true)}
-              className="flex items-center gap-1.5 text-sm font-medium text-indigo-600 hover:text-indigo-800 transition-colors"
+              className="flex items-center gap-1.5 text-sm font-medium text-blue-600 hover:text-blue-800 transition-colors"
             >
               <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
                 <polyline points="23 4 23 10 17 10" /><polyline points="1 20 1 14 7 14" />
@@ -2552,7 +2552,7 @@ export default function MappingContent({ projectId, projectName, initialData }: 
             </button>
           )}
         </div>
-        <button onClick={() => router.push(`/app/projects/${projectId}/transform`)} className="px-5 py-2.5 text-sm font-medium text-white bg-indigo-600 rounded-lg hover:bg-indigo-700 transition-colors">
+        <button onClick={() => router.push(`/app/projects/${projectId}/transform`)} className="px-5 py-2.5 text-sm font-medium text-white bg-blue-600 rounded-lg hover:bg-blue-700 transition-colors">
           Proceed to Transform →
         </button>
       </div>

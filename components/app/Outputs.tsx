@@ -62,11 +62,11 @@ export function Outputs({ projectId }: OutputsProps) {
             return (
               <div
                 key={output.id}
-                className="bg-white rounded-lg border border-gray-200 p-6"
+                className="bg-white rounded-xl border border-gray-200 p-6"
               >
                 <div className="flex items-start gap-4">
                   <div className="w-12 h-12 bg-blue-50 rounded-lg flex items-center justify-center flex-shrink-0">
-                    <Icon className="w-6 h-6 text-[#4F46E5]" />
+                    <Icon className="w-6 h-6 text-blue-600" />
                   </div>
 
                   <div className="flex-1 min-w-0">
@@ -115,7 +115,7 @@ export function Outputs({ projectId }: OutputsProps) {
           })}
         </div>
 
-        <div className="mt-8 bg-white rounded-lg border border-gray-200 p-6 max-w-4xl">
+        <div className="mt-8 bg-white rounded-xl border border-gray-200 p-6 max-w-4xl">
           <h3 className="text-sm font-semibold text-gray-900 mb-3">Next Steps</h3>
           <ul className="space-y-2 text-sm text-gray-600">
             <li className="flex items-start gap-2">

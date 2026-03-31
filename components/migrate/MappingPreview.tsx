@@ -35,9 +35,9 @@ export default function MappingPreview({ dataObjects, sourceSystem, targetSystem
     <div ref={containerRef} className="bg-mine-slate-900 rounded-2xl overflow-hidden shadow-2xl">
       {/* Top bar */}
       <div className="h-10 bg-mine-slate-800 flex items-center px-4 gap-2 border-b border-mine-slate-700">
-        <span className="w-2.5 h-2.5 rounded-full bg-[#EF4444]" />
-        <span className="w-2.5 h-2.5 rounded-full bg-[#F59E0B]" />
-        <span className="w-2.5 h-2.5 rounded-full bg-[#22C55E]" />
+        <span className="w-2.5 h-2.5 rounded-full bg-red-500" />
+        <span className="w-2.5 h-2.5 rounded-full bg-amber-500" />
+        <span className="w-2.5 h-2.5 rounded-full bg-green-500" />
         <span className="text-mine-slate-400 text-xs ml-2 font-mono">
           mine — {sourceSystem} → {targetSystem}
         </span>
@@ -47,9 +47,9 @@ export default function MappingPreview({ dataObjects, sourceSystem, targetSystem
       <div className="p-5">
         {/* Header */}
         <div className="grid grid-cols-[1fr_24px_1fr] gap-x-3 pb-3 border-b border-mine-slate-700">
-          <span className="text-[10px] uppercase tracking-widest text-mine-slate-500">Source</span>
+          <span className="text-2xs uppercase tracking-widest text-mine-slate-500">Source</span>
           <span />
-          <span className="text-[10px] uppercase tracking-widest text-mine-slate-500">Target</span>
+          <span className="text-2xs uppercase tracking-widest text-mine-slate-500">Target</span>
         </div>
 
         {/* Rows */}

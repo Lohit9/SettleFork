@@ -157,11 +157,11 @@ function SchemaDocSection({
         onDrop={(e) => { e.preventDefault(); setState((s) => ({ ...s, isDragOver: false })); const f = e.dataTransfer.files[0]; if (f) doUpload(f) }}
         onDragOver={(e) => { e.preventDefault(); setState((s) => ({ ...s, isDragOver: true })) }}
         onDragLeave={() => setState((s) => ({ ...s, isDragOver: false }))}
-        className={`border-2 border-dashed rounded-lg p-5 text-center transition-colors ${state.isDragOver ? 'border-indigo-500 bg-indigo-50' : 'border-gray-300 hover:border-gray-400'}`}
+        className={`border-2 border-dashed rounded-xl p-5 text-center transition-colors ${state.isDragOver ? 'border-blue-500 bg-blue-50' : 'border-gray-300 hover:border-gray-400'}`}
       >
         {state.uploading ? (
           <div className="space-y-1">
-            <svg className="animate-spin w-6 h-6 text-indigo-600 mx-auto" fill="none" viewBox="0 0 24 24">
+            <svg className="animate-spin w-6 h-6 text-blue-600 mx-auto" fill="none" viewBox="0 0 24 24">
               <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
               <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v4l3-3-3-3v4a8 8 0 00-8 8h4z" />
             </svg>
@@ -247,7 +247,7 @@ function BusinessContextSection({
       onDrop={(e) => { e.preventDefault(); setState((s) => ({ ...s, isDragOver: false })); const f = e.dataTransfer.files[0]; if (f) doUpload(f) }}
       onDragOver={(e) => { e.preventDefault(); setState((s) => ({ ...s, isDragOver: true })) }}
       onDragLeave={() => setState((s) => ({ ...s, isDragOver: false }))}
-      className={`border-2 border-dashed rounded-lg p-6 text-center transition-colors ${state.isDragOver ? 'border-violet-500 bg-violet-50' : 'border-gray-300 hover:border-gray-400'}`}
+      className={`border-2 border-dashed rounded-xl p-6 text-center transition-colors ${state.isDragOver ? 'border-violet-500 bg-violet-50' : 'border-gray-300 hover:border-gray-400'}`}
     >
       {state.uploading ? (
         <div className="space-y-1">
@@ -306,7 +306,7 @@ export function ControlPlaneContent({
   }
 
   return (
-    <div className="flex-1 bg-gray-50 flex flex-col min-h-0">
+    <div className="flex-1 bg-slate-50 flex flex-col min-h-0">
       <PageHeader
         projectName={projectName}
         title="Project Setup"

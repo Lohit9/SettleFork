@@ -3,7 +3,7 @@ import Image from 'next/image'
 
 export default function ProjectNotFound() {
   return (
-    <div className="min-h-screen flex items-center justify-center bg-gray-50 px-4">
+    <div className="min-h-screen flex items-center justify-center bg-slate-50 px-4">
       <div className="text-center max-w-sm">
         {/* Logo */}
         <div className="flex justify-center mb-8">
@@ -56,7 +56,7 @@ export default function ProjectNotFound() {
         <div className="flex items-center justify-center gap-3">
           <Link
             href="/app/projects"
-            className="px-4 py-2 text-sm bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 font-medium transition-colors"
+            className="px-4 py-2 text-sm bg-blue-600 text-white rounded-lg hover:bg-blue-700 font-medium transition-colors"
           >
             ← Back to Projects
           </Link>

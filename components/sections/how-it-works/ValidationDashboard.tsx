@@ -49,13 +49,13 @@ export default function ValidationDashboard() {
   const stroke = gaugeStroke(score)
 
   return (
-    <div ref={ref} className="bg-[#0F172A] rounded-xl overflow-hidden font-mono text-xs">
+    <div ref={ref} className="bg-slate-900 rounded-xl overflow-hidden font-mono text-xs">
       {/* Title bar */}
-      <div className="flex items-center gap-1.5 px-4 py-2.5 border-b border-[#1E293B]">
-        <div className="w-2 h-2 rounded-full bg-[#EF4444]" />
-        <div className="w-2 h-2 rounded-full bg-[#F59E0B]" />
-        <div className="w-2 h-2 rounded-full bg-[#22C55E]" />
-        <span className="text-[#64748B] text-[11px] ml-2">
+      <div className="flex items-center gap-1.5 px-4 py-2.5 border-b border-slate-800">
+        <div className="w-2 h-2 rounded-full bg-red-500" />
+        <div className="w-2 h-2 rounded-full bg-amber-500" />
+        <div className="w-2 h-2 rounded-full bg-green-500" />
+        <span className="text-slate-500 text-xs ml-2">
           Validation dashboard — customers migration
         </span>
       </div>
@@ -90,7 +90,7 @@ export default function ValidationDashboard() {
               <span className="text-white text-xl font-semibold leading-none font-sans">
                 {score}
               </span>
-              <span className="text-[#64748B] text-[8px] tracking-widest mt-0.5 font-sans">
+              <span className="text-slate-500 text-2xs tracking-widest mt-0.5 font-sans">
                 READY
               </span>
             </div>
@@ -98,10 +98,10 @@ export default function ValidationDashboard() {
 
           {/* Description */}
           <div>
-            <p className="text-[#E2E8F0] text-sm font-medium font-sans leading-snug">
+            <p className="text-slate-200 text-sm font-medium font-sans leading-snug">
               Migration readiness score
             </p>
-            <p className="text-[#64748B] text-xs mt-1 font-sans">
+            <p className="text-slate-500 text-xs mt-1 font-sans">
               9 blocking issues remaining before go-live
             </p>
           </div>
@@ -110,10 +110,10 @@ export default function ValidationDashboard() {
         {/* Checklist */}
         <div>
           {CHECKS.map((check) => (
-            <div key={check.name} className="flex items-center gap-3 py-2 border-t border-[#1E293B]">
+            <div key={check.name} className="flex items-center gap-3 py-2 border-t border-slate-800">
               <span className="text-sm leading-none">{check.icon}</span>
-              <span className="text-[#CBD5E1] text-xs flex-1 font-sans">{check.name}</span>
-              <span className="text-[#64748B] text-xs font-mono">{check.count}</span>
+              <span className="text-slate-300 text-xs flex-1 font-sans">{check.name}</span>
+              <span className="text-slate-500 text-xs font-mono">{check.count}</span>
             </div>
           ))}
         </div>

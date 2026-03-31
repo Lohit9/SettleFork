@@ -81,7 +81,7 @@ function FieldEditModal({
             <input
               value={name}
               onChange={(e) => setName(e.target.value)}
-              className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
+              className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
             />
           </div>
 
@@ -93,7 +93,7 @@ function FieldEditModal({
                 onChange={(e) => {
                   if (e.target.value !== '__custom') setDataType(e.target.value)
                 }}
-                className="flex-1 border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                className="flex-1 border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
               >
                 {COMMON_TYPES.map((t) => (
                   <option key={t} value={t}>{t}</option>
@@ -106,7 +106,7 @@ function FieldEditModal({
                 value={dataType}
                 onChange={(e) => setDataType(e.target.value)}
                 placeholder="Custom type"
-                className="flex-1 border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                className="flex-1 border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
               />
             </div>
           </div>
@@ -117,7 +117,7 @@ function FieldEditModal({
                 type="checkbox"
                 checked={isNullable}
                 onChange={(e) => setIsNullable(e.target.checked)}
-                className="w-4 h-4 rounded border-gray-300 text-indigo-600 focus:ring-indigo-500"
+                className="w-4 h-4 rounded border-gray-300 text-blue-600 focus:ring-blue-500"
               />
               Nullable
             </label>
@@ -129,7 +129,7 @@ function FieldEditModal({
                   setIsPK(e.target.checked)
                   if (e.target.checked) setIsFK(false)
                 }}
-                className="w-4 h-4 rounded border-gray-300 text-indigo-600 focus:ring-indigo-500"
+                className="w-4 h-4 rounded border-gray-300 text-blue-600 focus:ring-blue-500"
               />
               Primary Key
             </label>
@@ -141,7 +141,7 @@ function FieldEditModal({
                   setIsFK(e.target.checked)
                   if (e.target.checked) setIsPK(false)
                 }}
-                className="w-4 h-4 rounded border-gray-300 text-indigo-600 focus:ring-indigo-500"
+                className="w-4 h-4 rounded border-gray-300 text-blue-600 focus:ring-blue-500"
               />
               Foreign Key
             </label>
@@ -160,7 +160,7 @@ function FieldEditModal({
           <button
             onClick={handleSave}
             disabled={saving || !name.trim()}
-            className="px-4 py-2 text-sm text-white bg-indigo-600 rounded-lg hover:bg-indigo-700 disabled:opacity-50"
+            className="px-4 py-2 text-sm text-white bg-blue-600 rounded-lg hover:bg-blue-700 disabled:opacity-50"
           >
             {saving ? 'Saving…' : 'Save'}
           </button>
@@ -361,14 +361,14 @@ function SchemaPanel({
         <div className="flex items-center gap-3">
           <button
             onClick={() => onSelectAll(allTableIds)}
-            className="text-xs text-indigo-600 hover:text-indigo-800 font-medium"
+            className="text-xs text-blue-600 hover:text-blue-800 font-medium"
           >
             Select All
           </button>
           <span className="text-gray-300">|</span>
           <button
             onClick={() => onDeselectAll(allTableIds)}
-            className="text-xs text-indigo-600 hover:text-indigo-800 font-medium"
+            className="text-xs text-blue-600 hover:text-blue-800 font-medium"
           >
             Deselect All
           </button>
@@ -387,7 +387,7 @@ function SchemaPanel({
         {totalTables === 0 ? (
           <div className="px-5 py-10 text-center">
             <p className="text-sm text-gray-500">No schemas uploaded yet.</p>
-            <a href={`/app/projects/${projectId}`} className="text-xs text-indigo-600 hover:underline mt-1 inline-block">
+            <a href={`/app/projects/${projectId}`} className="text-xs text-blue-600 hover:underline mt-1 inline-block">
               Go to Project Setup to upload CSV files
             </a>
           </div>
@@ -418,7 +418,7 @@ function SchemaPanel({
                         type="checkbox"
                         checked={isSelected}
                         onChange={() => onToggleTable(table.id)}
-                        className="w-4 h-4 rounded border-gray-300 text-indigo-600 focus:ring-indigo-500 cursor-pointer"
+                        className="w-4 h-4 rounded border-gray-300 text-blue-600 focus:ring-blue-500 cursor-pointer"
                       />
                       <button
                         onClick={() => toggle(table.id)}
@@ -471,7 +471,7 @@ function SchemaPanel({
                                   </td>
                                   <td className="px-3 py-2 text-center">
                                     {f.is_primary_key ? (
-                                      <span className="text-xs font-semibold text-indigo-600">PK</span>
+                                      <span className="text-xs font-semibold text-blue-600">PK</span>
                                     ) : f.is_foreign_key ? (
                                       <span className="text-xs font-semibold text-amber-600">FK</span>
                                     ) : (
@@ -605,7 +605,7 @@ export default function SchemaOverview({ projectId, source, target }: SchemaOver
       {generating && (
         <div className="absolute inset-0 bg-white/95 flex flex-col items-center justify-center z-20 rounded-xl border border-gray-200">
           <div className="flex flex-col items-center gap-4 text-center px-8">
-            <div className="w-12 h-12 border-4 border-indigo-600 border-t-transparent rounded-full animate-spin" />
+            <div className="w-12 h-12 border-4 border-blue-600 border-t-transparent rounded-full animate-spin" />
             <div>
               <p className="font-semibold text-gray-900">Generating AI-powered mappings…</p>
               <p className="text-sm text-gray-500 mt-1">
@@ -622,8 +622,8 @@ export default function SchemaOverview({ projectId, source, target }: SchemaOver
         <div className="absolute inset-0 bg-white/90 flex items-center justify-center z-20 rounded-xl">
           <div className="bg-white border border-gray-200 rounded-xl shadow-lg p-6 mx-6 w-full max-w-sm">
             <div className="flex items-start gap-3 mb-4">
-              <div className="w-9 h-9 rounded-full bg-indigo-50 flex items-center justify-center flex-shrink-0 mt-0.5">
-                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="text-indigo-600">
+              <div className="w-9 h-9 rounded-full bg-blue-50 flex items-center justify-center flex-shrink-0 mt-0.5">
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="text-blue-600">
                   <path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71" />
                   <path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71" />
                 </svg>
@@ -637,7 +637,7 @@ export default function SchemaOverview({ projectId, source, target }: SchemaOver
                 </p>
               </div>
             </div>
-            <div className="bg-blue-50 border border-blue-100 rounded-lg px-3 py-2.5 mb-5 text-xs text-blue-800">
+            <div className="bg-blue-50 border border-blue-100 rounded-xl px-3 py-2.5 mb-5 text-xs text-blue-800">
               New mappings will be generated for these tables. Existing mappings are preserved. This may take 15–30 seconds.
             </div>
             <div className="flex gap-3">
@@ -649,7 +649,7 @@ export default function SchemaOverview({ projectId, source, target }: SchemaOver
               </button>
               <button
                 onClick={confirmGenerate}
-                className="flex-1 px-4 py-2.5 text-sm font-medium text-white bg-indigo-600 rounded-lg hover:bg-indigo-700 transition-colors"
+                className="flex-1 px-4 py-2.5 text-sm font-medium text-white bg-blue-600 rounded-lg hover:bg-blue-700 transition-colors"
               >
                 Generate
               </button>
@@ -680,7 +680,7 @@ export default function SchemaOverview({ projectId, source, target }: SchemaOver
       </div>
 
       {genNotice && (
-        <div className="flex items-start gap-2.5 px-4 py-3 bg-blue-50 border border-blue-200 rounded-lg">
+        <div className="flex items-start gap-2.5 px-4 py-3 bg-blue-50 border border-blue-200 rounded-xl">
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="text-blue-500 flex-shrink-0 mt-0.5">
             <circle cx="12" cy="12" r="10" /><line x1="12" y1="8" x2="12" y2="12" /><line x1="12" y1="16" x2="12.01" y2="16" />
           </svg>
@@ -697,7 +697,7 @@ export default function SchemaOverview({ projectId, source, target }: SchemaOver
       )}
 
       {genError && (
-        <div className="flex items-start gap-2.5 px-4 py-3 bg-red-50 border border-red-200 rounded-lg">
+        <div className="flex items-start gap-2.5 px-4 py-3 bg-red-50 border border-red-200 rounded-xl">
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="text-red-500 flex-shrink-0 mt-0.5">
             <circle cx="12" cy="12" r="10" /><line x1="12" y1="8" x2="12" y2="12" /><line x1="12" y1="16" x2="12.01" y2="16" />
           </svg>
@@ -718,7 +718,7 @@ export default function SchemaOverview({ projectId, source, target }: SchemaOver
           onClick={handleGenerateMappingsClick}
           disabled={!canGenerate || generating || navigating}
           title={!canGenerate ? 'Select at least one source and one target table' : undefined}
-          className="px-5 py-2.5 text-sm font-medium text-white bg-indigo-600 rounded-lg hover:bg-indigo-700 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+          className="px-5 py-2.5 text-sm font-medium text-white bg-blue-600 rounded-lg hover:bg-blue-700 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
         >
           {generating ? 'Generating…' : navigating ? 'Going to Mapping…' : 'Generate Mappings'}
         </button>

@@ -9,7 +9,7 @@ export default function OutputsLoading() {
         </div>
         <div className="flex items-center gap-2">
           <div className="h-9 w-40 bg-gray-100 rounded-lg" />
-          <div className="h-9 w-44 bg-indigo-100 rounded-lg" />
+          <div className="h-9 w-44 bg-blue-100 rounded-lg" />
         </div>
       </div>
 

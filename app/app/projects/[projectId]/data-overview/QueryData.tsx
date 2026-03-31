@@ -102,8 +102,8 @@ export default function QueryData({ projectId, tables }: QueryDataProps) {
   return (
     <div className="flex flex-col gap-4">
       {/* Info banner */}
-      <div className="bg-indigo-50 border border-indigo-100 rounded-xl px-5 py-3">
-        <p className="text-sm text-indigo-700">
+      <div className="bg-blue-50 border border-blue-100 rounded-xl px-5 py-3">
+        <p className="text-sm text-blue-700">
           Use this to explore and understand data. This does not modify data.
         </p>
       </div>
@@ -122,7 +122,7 @@ export default function QueryData({ projectId, tables }: QueryDataProps) {
                   onClick={() => handleModeChange('nl')}
                   className={`px-3 py-1.5 text-xs font-medium transition-colors ${
                     mode === 'nl'
-                      ? 'bg-indigo-600 text-white'
+                      ? 'bg-blue-600 text-white'
                       : 'bg-white text-gray-600 hover:bg-gray-50'
                   }`}
                 >
@@ -132,7 +132,7 @@ export default function QueryData({ projectId, tables }: QueryDataProps) {
                   onClick={() => handleModeChange('sql')}
                   className={`px-3 py-1.5 text-xs font-medium transition-colors border-l border-gray-200 ${
                     mode === 'sql'
-                      ? 'bg-indigo-600 text-white'
+                      ? 'bg-blue-600 text-white'
                       : 'bg-white text-gray-600 hover:bg-gray-50'
                   }`}
                 >
@@ -151,7 +151,7 @@ export default function QueryData({ projectId, tables }: QueryDataProps) {
                   onKeyDown={(e) => e.key === 'Enter' && handleExecute()}
                   placeholder={nlPlaceholder}
                   disabled={tables.length === 0}
-                  className="w-full border border-gray-300 rounded-lg px-4 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500 placeholder-gray-400 disabled:bg-gray-50"
+                  className="w-full border border-gray-300 rounded-lg px-4 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 placeholder-gray-400 disabled:bg-gray-50"
                 />
               ) : (
                 <textarea
@@ -160,14 +160,14 @@ export default function QueryData({ projectId, tables }: QueryDataProps) {
                   placeholder={sqlPlaceholder}
                   rows={6}
                   disabled={tables.length === 0}
-                  className="w-full border border-gray-300 rounded-lg px-4 py-3 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-indigo-500 placeholder-gray-400 resize-none disabled:bg-gray-50"
+                  className="w-full border border-gray-300 rounded-lg px-4 py-3 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-blue-500 placeholder-gray-400 resize-none disabled:bg-gray-50"
                 />
               )}
 
               <button
                 onClick={handleExecute}
                 disabled={loading || !input.trim() || tables.length === 0}
-                className="mt-3 px-4 py-2 text-sm font-medium text-white bg-indigo-600 rounded-lg hover:bg-indigo-700 disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2"
+                className="mt-3 px-4 py-2 text-sm font-medium text-white bg-blue-600 rounded-lg hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2"
               >
                 {loading ? (
                   <>
@@ -282,7 +282,7 @@ export default function QueryData({ projectId, tables }: QueryDataProps) {
                       {pageRows.map((row, i) => (
                         <tr
                           key={pageStart + i}
-                          className="border-b border-gray-100 last:border-b-0 hover:bg-gray-50"
+                          className="border-b border-gray-100 last:border-b-0 hover:bg-gray-50 even:bg-gray-50/50"
                         >
                           {result!.columns.map((col) => (
                             <td
@@ -324,7 +324,7 @@ export default function QueryData({ projectId, tables }: QueryDataProps) {
                             onClick={() => setResultsPage(p)}
                             className={`px-2 py-1 rounded border ${
                               p === resultsPage
-                                ? 'bg-indigo-600 text-white border-indigo-600'
+                                ? 'bg-blue-600 text-white border-blue-600'
                                 : 'border-gray-200 hover:bg-gray-50'
                             }`}
                           >
@@ -432,7 +432,7 @@ function TableReferenceItem({ table }: { table: TableOption }) {
         </button>
         <button
           onClick={() => copy(table.friendlyName, table.id)}
-          className="text-xs font-mono text-indigo-600 hover:text-indigo-800 text-left flex-1 truncate"
+          className="text-xs font-mono text-blue-600 hover:text-blue-800 text-left flex-1 truncate"
           title={`Click to copy: ${table.friendlyName}`}
         >
           {table.friendlyName}
@@ -451,7 +451,7 @@ function TableReferenceItem({ table }: { table: TableOption }) {
               <div key={fieldName} className="flex items-center justify-between gap-1">
                 <button
                   onClick={() => copy(`"${fieldName}"`, `field-${table.id}-${fieldName}`)}
-                  className="text-xs font-mono text-gray-600 hover:text-indigo-600 text-left truncate"
+                  className="text-xs font-mono text-gray-600 hover:text-blue-600 text-left truncate"
                   title={`Click to copy: "${fieldName}"`}
                 >
                   &quot;{fieldName}&quot;

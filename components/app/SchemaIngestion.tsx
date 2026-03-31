@@ -189,7 +189,7 @@ export function SchemaIngestion({ projectId }: SchemaIngestionProps) {
     const selectedCount = schema.tables.filter(t => t.selected).length;
     
     return (
-      <div className="flex-1 bg-white rounded-lg border border-gray-200 flex flex-col">
+      <div className="flex-1 bg-white rounded-xl border border-gray-200 flex flex-col">
         <div className="border-b border-gray-200 p-4">
           <div className="flex items-center justify-between mb-3">
             <h2 className="text-sm font-semibold text-gray-900">{title}</h2>
@@ -203,7 +203,7 @@ export function SchemaIngestion({ projectId }: SchemaIngestionProps) {
             <div className="flex gap-2">
               <button
                 onClick={onSelectAll}
-                className="text-[#4F46E5] hover:underline"
+                className="text-blue-600 hover:underline"
               >
                 Select All
               </button>
@@ -219,7 +219,7 @@ export function SchemaIngestion({ projectId }: SchemaIngestionProps) {
         </div>
 
         <div className="flex-1 overflow-auto p-4">
-          <div className="border border-gray-200 rounded-lg mb-2">
+          <div className="border border-gray-200 rounded-xl mb-2">
             <button
               onClick={onToggleDb}
               className="w-full flex items-center gap-2 p-3 hover:bg-gray-50 transition-colors"
@@ -229,13 +229,13 @@ export function SchemaIngestion({ projectId }: SchemaIngestionProps) {
               ) : (
                 <ChevronRight className="w-4 h-4 text-gray-500" />
               )}
-              <span className="text-sm font-semibold text-[#4F46E5]">{schema.database}</span>
+              <span className="text-sm font-semibold text-blue-600">{schema.database}</span>
             </button>
 
             {expandedDb && (
               <div className="border-t border-gray-200 p-3 space-y-2">
                 {schema.tables.map((table) => (
-                  <div key={table.name} className="border border-gray-200 rounded-lg">
+                  <div key={table.name} className="border border-gray-200 rounded-xl">
                     <div className="flex items-center gap-2 p-3 hover:bg-gray-50 transition-colors">
                       <Checkbox
                         checked={table.selected}
@@ -337,7 +337,7 @@ export function SchemaIngestion({ projectId }: SchemaIngestionProps) {
       <div className="border-t border-gray-200 bg-white p-6 flex justify-end">
         <Button
           onClick={handleNext}
-          className="bg-[#4F46E5] hover:bg-[#4338CA] text-white"
+          className="bg-blue-600 hover:bg-blue-700 text-white"
         >
           Generate Mappings
         </Button>

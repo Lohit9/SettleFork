@@ -118,7 +118,7 @@ export function DDLSchemaReview({
         {tables.map((table, tIdx) => (
           <div
             key={tIdx}
-            className="border border-gray-200 rounded-lg overflow-hidden"
+            className="border border-gray-200 rounded-xl overflow-hidden"
           >
             {/* Table header */}
             <div className="flex items-center gap-2 px-3 py-2 bg-gray-50 border-b border-gray-200">
@@ -193,7 +193,7 @@ export function DDLSchemaReview({
                               isNullable: e.target.checked,
                             })
                           }
-                          className="accent-indigo-600"
+                          className="accent-blue-600"
                         />
                       </td>
                       <td className="px-2 py-1 text-center">
@@ -208,7 +208,7 @@ export function DDLSchemaReview({
                                 : field.isNullable,
                             })
                           }
-                          className="accent-indigo-600"
+                          className="accent-blue-600"
                         />
                       </td>
                       <td className="px-2 py-1 text-center">
@@ -220,7 +220,7 @@ export function DDLSchemaReview({
                               isForeignKey: e.target.checked,
                             })
                           }
-                          className="accent-indigo-600"
+                          className="accent-blue-600"
                         />
                       </td>
                       <td className="px-2 py-1 text-center">
@@ -242,7 +242,7 @@ export function DDLSchemaReview({
             <div className="px-3 py-2 border-t border-gray-100">
               <button
                 onClick={() => addField(tIdx)}
-                className="text-xs text-indigo-600 hover:text-indigo-800 hover:underline"
+                className="text-xs text-blue-600 hover:text-blue-800 hover:underline"
               >
                 + Add field
               </button>
@@ -256,7 +256,7 @@ export function DDLSchemaReview({
         <Button
           onClick={() => onConfirm(tables)}
           disabled={saving || tables.length === 0}
-          className="bg-[#4F46E5] hover:bg-[#4338CA] text-white"
+          className="bg-blue-600 hover:bg-blue-700 text-white"
         >
           {saving ? (
             <span className="flex items-center gap-2">

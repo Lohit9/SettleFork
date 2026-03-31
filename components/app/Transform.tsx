@@ -178,7 +178,7 @@ export function Transform({ projectId }: TransformProps) {
         </div>
 
         <div className="flex-1 overflow-auto p-4">
-          <div className="border border-gray-200 rounded-lg">
+          <div className="border border-gray-200 rounded-xl">
             <button
               onClick={() => setExpandedDb(!expandedDb)}
               className="w-full flex items-center gap-2 p-3 hover:bg-gray-50 transition-colors"
@@ -188,13 +188,13 @@ export function Transform({ projectId }: TransformProps) {
               ) : (
                 <ChevronRight className="w-4 h-4 text-gray-500" />
               )}
-              <span className="text-sm font-semibold text-[#4F46E5]">SALESFORCE_PROD</span>
+              <span className="text-sm font-semibold text-blue-600">SALESFORCE_PROD</span>
             </button>
 
             {expandedDb && (
               <div className="border-t border-gray-200 p-3 space-y-2">
                 {transforms.map((table, tableIndex) => (
-                  <div key={table.sourceTable} className="border border-gray-200 rounded-lg">
+                  <div key={table.sourceTable} className="border border-gray-200 rounded-xl">
                     <button
                       onClick={() => toggleTable(table.sourceTable)}
                       className="w-full flex items-center justify-between p-3 hover:bg-gray-50 transition-colors"
@@ -229,7 +229,7 @@ export function Transform({ projectId }: TransformProps) {
                                 w-full p-3 border-b border-gray-200 last:border-0 
                                 transition-colors text-left
                                 ${isSelected 
-                                  ? 'bg-blue-50 border-l-4 border-l-[#4F46E5]' 
+                                  ? 'bg-blue-50 border-l-4 border-l-blue-600' 
                                   : 'hover:bg-gray-100 border-l-4 border-l-transparent'
                                 }
                               `}
@@ -286,7 +286,7 @@ export function Transform({ projectId }: TransformProps) {
             </div>
 
             <div className="flex-1 overflow-auto p-6 space-y-6">
-              <div className="bg-white rounded-lg border border-gray-200 p-6">
+              <div className="bg-white rounded-xl border border-gray-200 p-6">
                 <label className="block text-sm font-medium text-gray-900 mb-3">
                   Describe how this field should be transformed
                 </label>
@@ -297,7 +297,7 @@ export function Transform({ projectId }: TransformProps) {
                   className="min-h-32 resize-none"
                 />
                 <div className="mt-4 flex gap-2">
-                  <Button className="bg-[#4F46E5] hover:bg-[#4338CA] text-white gap-2">
+                  <Button className="bg-blue-600 hover:bg-blue-700 text-white gap-2">
                     <RefreshCw className="w-4 h-4" />
                     Generate Transform
                   </Button>
@@ -308,7 +308,7 @@ export function Transform({ projectId }: TransformProps) {
               </div>
 
               {selectedTransform.sql && (
-                <div className="bg-white rounded-lg border border-gray-200">
+                <div className="bg-white rounded-xl border border-gray-200">
                   <div className="p-4 border-b border-gray-200 flex items-center justify-between">
                     <div className="flex items-center gap-3">
                       <h3 className="text-sm font-semibold text-gray-900">Generated SQL</h3>
@@ -347,7 +347,7 @@ export function Transform({ projectId }: TransformProps) {
               )}
 
               {selectedTransform.sql && (
-                <div className="bg-white rounded-lg border border-gray-200">
+                <div className="bg-white rounded-xl border border-gray-200">
                   <div className="p-4 border-b border-gray-200 flex items-center justify-between">
                     <h3 className="text-sm font-semibold text-gray-900">Test Transformation</h3>
                     <Button size="sm" variant="outline" className="gap-2">
@@ -382,7 +382,7 @@ export function Transform({ projectId }: TransformProps) {
               )}
 
               {!selectedTransform.hasTransform && (
-                <div className="bg-blue-50 border border-blue-200 rounded-lg p-4">
+                <div className="bg-blue-50 border border-blue-200 rounded-xl p-4">
                   <div className="flex items-start gap-2">
                     <AlertCircle className="w-4 h-4 text-blue-600 mt-0.5 flex-shrink-0" />
                     <div>
@@ -404,7 +404,7 @@ export function Transform({ projectId }: TransformProps) {
               </Button>
               <Button
                 onClick={handleNext}
-                className="bg-[#4F46E5] hover:bg-[#4338CA] text-white"
+                className="bg-blue-600 hover:bg-blue-700 text-white"
               >
                 Continue to Validation
               </Button>

@@ -27,7 +27,7 @@ export function ProjectSetup({ onNext }: ProjectSetupProps) {
       <div className="max-w-2xl">
         <h1 className="text-2xl font-semibold text-gray-900 mb-8">Create Project</h1>
         
-        <div className="bg-white rounded-lg border border-gray-200 p-8">
+        <div className="bg-white rounded-xl border border-gray-200 p-8">
           <div className="space-y-6">
             <div>
               <Label htmlFor="project-name" className="text-sm text-gray-700 mb-1.5 block">
@@ -86,7 +86,7 @@ export function ProjectSetup({ onNext }: ProjectSetupProps) {
             <Button
               onClick={handleCreate}
               disabled={!projectName || !sourceSystem || !targetSystem}
-              className="bg-[#4F46E5] hover:bg-[#4338CA] text-white"
+              className="bg-blue-600 hover:bg-blue-700 text-white"
             >
               Create Project
             </Button>
