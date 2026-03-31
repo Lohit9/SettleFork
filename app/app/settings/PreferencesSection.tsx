@@ -10,7 +10,7 @@ function ToggleSwitch({ enabled, onChange }: { enabled: boolean; onChange: (v: b
       aria-checked={enabled}
       onClick={() => onChange(!enabled)}
       className={`relative inline-flex h-5 w-9 flex-shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 focus:outline-none ${
-        enabled ? 'bg-[#4F46E5]' : 'bg-gray-200'
+        enabled ? 'bg-blue-600' : 'bg-gray-200'
       }`}
     >
       <span

@@ -85,7 +85,7 @@ export function ProjectsDashboard({ onSelectProject }: ProjectsDashboardProps) {
           </div>
           <Button
             onClick={() => setShowCreateProject(true)}
-            className="bg-[#4F46E5] hover:bg-[#4338CA] text-white gap-2"
+            className="bg-blue-600 hover:bg-blue-700 text-white gap-2"
           >
             <Plus className="w-4 h-4" />
             Create Project
@@ -99,12 +99,12 @@ export function ProjectsDashboard({ onSelectProject }: ProjectsDashboardProps) {
             <Link
               key={project.id}
               href={`/app/projects/${project.id}/schemas`}
-              className="bg-white rounded-lg border border-gray-200 p-6 text-left hover:border-[#4F46E5] hover:shadow-sm transition-all group block"
+              className="bg-white rounded-xl border border-gray-200 p-6 text-left hover:border-blue-600 hover:shadow-sm transition-all group block"
             >
               <div className="flex items-start justify-between mb-4">
                 <div className="flex-1">
                   <div className="flex items-center gap-3 mb-2">
-                    <h3 className="text-lg font-semibold text-gray-900 group-hover:text-[#4F46E5] transition-colors">
+                    <h3 className="text-lg font-semibold text-gray-900 group-hover:text-blue-600 transition-colors">
                       {project.name}
                     </h3>
                     {getStatusBadge(project.status)}
@@ -115,7 +115,7 @@ export function ProjectsDashboard({ onSelectProject }: ProjectsDashboardProps) {
                     <span>{project.targetSystem}</span>
                   </div>
                 </div>
-                <ArrowRight className="w-5 h-5 text-gray-400 group-hover:text-[#4F46E5] transition-colors" />
+                <ArrowRight className="w-5 h-5 text-gray-400 group-hover:text-blue-600 transition-colors" />
               </div>
 
               <div className="flex flex-wrap gap-4 text-xs text-gray-500">

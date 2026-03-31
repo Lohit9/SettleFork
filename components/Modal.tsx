@@ -87,7 +87,6 @@ export function SignUpModal({ isOpen, onClose }: { isOpen: boolean; onClose: () 
         return
       }
 
-      console.log('Sign up saved successfully')
       setIsLoading(false)
       setSubmitted(true)
       setTimeout(() => {
@@ -115,7 +114,7 @@ export function SignUpModal({ isOpen, onClose }: { isOpen: boolean; onClose: () 
             id="name"
             value={formData.name}
             onChange={(e) => setFormData({ ...formData, name: e.target.value })}
-            className="w-full px-3 py-2 border border-slate-300 rounded-md focus:outline-none focus:ring-2 focus:ring-indigo-500"
+            className="w-full px-3 py-2 border border-slate-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
           />
         </div>
         <div>
@@ -128,7 +127,7 @@ export function SignUpModal({ isOpen, onClose }: { isOpen: boolean; onClose: () 
             required
             value={formData.email}
             onChange={(e) => setFormData({ ...formData, email: e.target.value })}
-            className="w-full px-3 py-2 border border-slate-300 rounded-md focus:outline-none focus:ring-2 focus:ring-indigo-500"
+            className="w-full px-3 py-2 border border-slate-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
           />
         </div>
         <div>
@@ -140,7 +139,7 @@ export function SignUpModal({ isOpen, onClose }: { isOpen: boolean; onClose: () 
             id="company"
             value={formData.company}
             onChange={(e) => setFormData({ ...formData, company: e.target.value })}
-            className="w-full px-3 py-2 border border-slate-300 rounded-md focus:outline-none focus:ring-2 focus:ring-indigo-500"
+            className="w-full px-3 py-2 border border-slate-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
           />
         </div>
         {error && (
@@ -156,7 +155,7 @@ export function SignUpModal({ isOpen, onClose }: { isOpen: boolean; onClose: () 
           <button
             type="submit"
             disabled={isLoading}
-            className="w-full bg-indigo-600 text-white py-2 px-4 rounded-md hover:bg-indigo-700 transition-colors font-medium disabled:opacity-50 disabled:cursor-not-allowed"
+            className="w-full bg-blue-600 text-white py-2 px-4 rounded-md hover:bg-blue-700 transition-colors font-medium disabled:opacity-50 disabled:cursor-not-allowed"
           >
             {isLoading ? 'Submitting...' : 'Submit'}
           </button>
@@ -197,7 +196,6 @@ export function ContactModal({ isOpen, onClose }: { isOpen: boolean; onClose: ()
         throw new Error(data.error || 'Failed to send message')
       }
 
-      console.log('Contact form submitted:', data)
       setIsLoading(false)
       setSubmitted(true)
       setTimeout(() => {
@@ -226,7 +224,7 @@ export function ContactModal({ isOpen, onClose }: { isOpen: boolean; onClose: ()
             required
             value={formData.name}
             onChange={(e) => setFormData({ ...formData, name: e.target.value })}
-            className="w-full px-3 py-2 border border-slate-300 rounded-md focus:outline-none focus:ring-2 focus:ring-indigo-500"
+            className="w-full px-3 py-2 border border-slate-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
           />
         </div>
         <div>
@@ -239,7 +237,7 @@ export function ContactModal({ isOpen, onClose }: { isOpen: boolean; onClose: ()
             required
             value={formData.email}
             onChange={(e) => setFormData({ ...formData, email: e.target.value })}
-            className="w-full px-3 py-2 border border-slate-300 rounded-md focus:outline-none focus:ring-2 focus:ring-indigo-500"
+            className="w-full px-3 py-2 border border-slate-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
           />
         </div>
         <div>
@@ -252,7 +250,7 @@ export function ContactModal({ isOpen, onClose }: { isOpen: boolean; onClose: ()
             required
             value={formData.company}
             onChange={(e) => setFormData({ ...formData, company: e.target.value })}
-            className="w-full px-3 py-2 border border-slate-300 rounded-md focus:outline-none focus:ring-2 focus:ring-indigo-500"
+            className="w-full px-3 py-2 border border-slate-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
           />
         </div>
         <div>
@@ -265,7 +263,7 @@ export function ContactModal({ isOpen, onClose }: { isOpen: boolean; onClose: ()
             rows={4}
             value={formData.message}
             onChange={(e) => setFormData({ ...formData, message: e.target.value })}
-            className="w-full px-3 py-2 border border-slate-300 rounded-md focus:outline-none focus:ring-2 focus:ring-indigo-500"
+            className="w-full px-3 py-2 border border-slate-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
           />
         </div>
         {error && (
@@ -281,7 +279,7 @@ export function ContactModal({ isOpen, onClose }: { isOpen: boolean; onClose: ()
           <button
             type="submit"
             disabled={isLoading}
-            className="w-full bg-indigo-600 text-white py-2 px-4 rounded-md hover:bg-indigo-700 transition-colors font-medium disabled:opacity-50 disabled:cursor-not-allowed"
+            className="w-full bg-blue-600 text-white py-2 px-4 rounded-md hover:bg-blue-700 transition-colors font-medium disabled:opacity-50 disabled:cursor-not-allowed"
           >
             {isLoading ? 'Sending...' : 'Submit'}
           </button>

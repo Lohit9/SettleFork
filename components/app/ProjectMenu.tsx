@@ -264,7 +264,7 @@ export function ProjectMenu({ project, onUpdate }: ProjectMenuProps) {
             <Button
               onClick={handleRename}
               disabled={!newName.trim() || isPending}
-              className="bg-[#4F46E5] hover:bg-[#4338CA] text-white disabled:opacity-50"
+              className="bg-blue-600 hover:bg-blue-700 text-white disabled:opacity-50"
             >
               {isPending ? 'Saving…' : 'Save'}
             </Button>
@@ -299,7 +299,7 @@ export function ProjectMenu({ project, onUpdate }: ProjectMenuProps) {
             <Button
               onClick={handleLabels}
               disabled={!srcLabel.trim() || !tgtLabel.trim() || isPending}
-              className="bg-[#4F46E5] hover:bg-[#4338CA] text-white disabled:opacity-50"
+              className="bg-blue-600 hover:bg-blue-700 text-white disabled:opacity-50"
             >
               {isPending ? 'Saving…' : 'Save'}
             </Button>

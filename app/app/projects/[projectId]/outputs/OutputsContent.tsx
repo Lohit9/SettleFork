@@ -93,7 +93,7 @@ function decisionIcon(type: string) {
 function decisionDotColor(type: string) {
   switch (type) {
     case 'fix': return 'bg-green-500'         // fixes applied/reverted
-    case 'mapping': return 'bg-indigo-500'    // mapping decisions
+    case 'mapping': return 'bg-blue-500'    // mapping decisions
     case 'transform': return 'bg-purple-500'  // transform events
     case 'validation': return 'bg-amber-500'  // rules, risk accepted
     case 'data': return 'bg-blue-500'         // uploads
@@ -366,7 +366,7 @@ export default function OutputsContent({ projectId, projectName, initialData }: 
                 <span className="text-sm text-gray-400">/ {metrics.totalSourceFields}</span>
               </div>
               <div className="mt-2 h-1.5 bg-gray-100 rounded-full overflow-hidden">
-                <div className="h-full bg-indigo-500 rounded-full" style={{ width: `${metrics.totalSourceFields > 0 ? Math.round((metrics.approvedFieldMappings / metrics.totalSourceFields) * 100) : 0}%` }} />
+                <div className="h-full bg-blue-500 rounded-full" style={{ width: `${metrics.totalSourceFields > 0 ? Math.round((metrics.approvedFieldMappings / metrics.totalSourceFields) * 100) : 0}%` }} />
               </div>
             </div>
 
@@ -492,7 +492,7 @@ export default function OutputsContent({ projectId, projectName, initialData }: 
               </div>
               {decisions.length > 3 && (
                 <button
-                  className="mt-3 text-xs text-indigo-600 hover:text-indigo-700 font-medium"
+                  className="mt-3 text-xs text-blue-600 hover:text-blue-700 font-medium"
                   onClick={() => setShowDecisionsDrawer(true)}
                 >
                   View all {decisions.length} entries →
@@ -533,7 +533,7 @@ export default function OutputsContent({ projectId, projectName, initialData }: 
                         onClick={() => setDecisionsTypeFilter(tab.key)}
                         className={`px-2.5 py-1 rounded-full text-xs font-medium transition-colors ${
                           decisionsTypeFilter === tab.key
-                            ? 'bg-indigo-600 text-white'
+                            ? 'bg-blue-600 text-white'
                             : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
                         }`}
                       >
@@ -575,7 +575,7 @@ export default function OutputsContent({ projectId, projectName, initialData }: 
 
         <div>
           <div className="flex items-center gap-2 mb-3">
-            <FileText className="w-5 h-5 text-indigo-600" />
+            <FileText className="w-5 h-5 text-blue-600" />
             <h2 className="text-lg font-semibold text-gray-900">Migration Execution Package</h2>
           </div>
 
@@ -604,7 +604,7 @@ export default function OutputsContent({ projectId, projectName, initialData }: 
             {/* IDLE */}
             {executionPackage.status === 'idle' && (
               <Button
-                className="bg-[#4F46E5] hover:bg-[#4338CA] text-white gap-2"
+                className="bg-blue-600 hover:bg-blue-700 text-white gap-2"
                 onClick={handleGenerateExecutionPackage}
                 disabled={!data.hasMappings}
               >
@@ -643,7 +643,7 @@ export default function OutputsContent({ projectId, projectName, initialData }: 
                 </div>
                 <div className="flex items-center gap-3 flex-wrap">
                   <Button
-                    className="bg-[#4F46E5] hover:bg-[#4338CA] text-white gap-2"
+                    className="bg-blue-600 hover:bg-blue-700 text-white gap-2"
                     onClick={handleDownloadExecutionPackage}
                   >
                     <Download className="w-4 h-4" />
@@ -725,7 +725,7 @@ export default function OutputsContent({ projectId, projectName, initialData }: 
                 </div>
 
                 <Button
-                  className="bg-[#4F46E5] hover:bg-[#4338CA] text-white gap-2 ml-auto"
+                  className="bg-blue-600 hover:bg-blue-700 text-white gap-2 ml-auto"
                   onClick={handleGenerateGold}
                   disabled={isGeneratingGold || !canGenerateGold}
                 >
@@ -746,7 +746,7 @@ export default function OutputsContent({ projectId, projectName, initialData }: 
                       <div>
                         <div className="flex items-center gap-2 mb-1">
                           <span className="text-sm font-semibold text-gray-900">{file.tableName}</span>
-                          <Badge className="bg-indigo-100 text-indigo-700 hover:bg-indigo-100 border-indigo-200 text-[10px]">
+                          <Badge className="bg-blue-100 text-blue-700 hover:bg-blue-100 border-blue-200 text-[10px]">
                             {goldFormat.toUpperCase()}
                           </Badge>
                           <Badge className="bg-gray-100 text-gray-500 hover:bg-gray-100 border-gray-200 text-[10px]">
@@ -759,7 +759,7 @@ export default function OutputsContent({ projectId, projectName, initialData }: 
                         href={file.downloadUrl}
                         target="_blank"
                         rel="noopener noreferrer"
-                        className="flex items-center gap-1.5 px-3 py-1.5 text-sm font-medium text-indigo-600 hover:text-indigo-700 border border-indigo-200 rounded-lg hover:bg-indigo-50 transition-colors"
+                        className="flex items-center gap-1.5 px-3 py-1.5 text-sm font-medium text-blue-600 hover:text-blue-700 border border-blue-200 rounded-lg hover:bg-blue-50 transition-colors"
                       >
                         <Download className="w-4 h-4" />
                         Download
@@ -787,7 +787,7 @@ export default function OutputsContent({ projectId, projectName, initialData }: 
                             <p className="text-xs text-gray-400 mt-0.5">{fmtDateTime(o.generated_at)}</p>
                           </div>
                           {o.signedUrl && (
-                            <a href={o.signedUrl} target="_blank" rel="noopener noreferrer" className="text-xs text-indigo-600 hover:underline flex items-center gap-1">
+                            <a href={o.signedUrl} target="_blank" rel="noopener noreferrer" className="text-xs text-blue-600 hover:underline flex items-center gap-1">
                               <Download className="w-3 h-3" />Download
                             </a>
                           )}
@@ -916,7 +916,7 @@ export default function OutputsContent({ projectId, projectName, initialData }: 
               'Schedule production cutover once the test load is verified',
             ].map((step, i) => (
               <div key={i} className="flex items-start gap-3">
-                <div className="w-6 h-6 rounded-full bg-indigo-100 text-indigo-700 text-xs font-bold flex items-center justify-center flex-shrink-0 mt-0.5">
+                <div className="w-6 h-6 rounded-full bg-blue-100 text-blue-700 text-xs font-bold flex items-center justify-center flex-shrink-0 mt-0.5">
                   {i + 1}
                 </div>
                 <p className="text-sm text-gray-700">{step}</p>
@@ -1014,7 +1014,7 @@ function DeliverableCard({ title, description, icon, formats, state, stateMap, i
                   href={activeState?.downloadUrl ?? existingOutput?.signedUrl ?? '#'}
                   target="_blank"
                   rel="noopener noreferrer"
-                  className="flex items-center gap-1.5 px-3 py-1.5 text-sm font-medium text-indigo-600 hover:text-indigo-700 border border-indigo-200 rounded-lg hover:bg-indigo-50 transition-colors"
+                  className="flex items-center gap-1.5 px-3 py-1.5 text-sm font-medium text-blue-600 hover:text-blue-700 border border-blue-200 rounded-lg hover:bg-blue-50 transition-colors"
                 >
                   <Download className="w-3.5 h-3.5" />
                   {formats[0]?.label ?? 'Download'}
@@ -1042,7 +1042,7 @@ function DeliverableCard({ title, description, icon, formats, state, stateMap, i
               <div key={fmt.key} className="flex items-center gap-1">
                 {dlUrl && (
                   <a href={dlUrl} target="_blank" rel="noopener noreferrer"
-                    className="flex items-center gap-1 px-2.5 py-1.5 text-xs font-medium text-indigo-600 border border-indigo-200 rounded-lg hover:bg-indigo-50">
+                    className="flex items-center gap-1 px-2.5 py-1.5 text-xs font-medium text-blue-600 border border-blue-200 rounded-lg hover:bg-blue-50">
                     <Download className="w-3 h-3" />{fmt.ext.toUpperCase()}
                   </a>
                 )}

@@ -17,13 +17,13 @@ function confColor(conf: number): string {
 
 export default function MappingTable() {
   return (
-    <div className="bg-[#0F172A] rounded-xl overflow-hidden font-mono text-xs">
+    <div className="bg-slate-900 rounded-xl overflow-hidden font-mono text-xs">
       {/* Title bar */}
-      <div className="flex items-center gap-1.5 px-4 py-2.5 border-b border-[#1E293B]">
-        <div className="w-2 h-2 rounded-full bg-[#EF4444]" />
-        <div className="w-2 h-2 rounded-full bg-[#F59E0B]" />
-        <div className="w-2 h-2 rounded-full bg-[#22C55E]" />
-        <span className="text-[#64748B] text-[11px] ml-2">
+      <div className="flex items-center gap-1.5 px-4 py-2.5 border-b border-slate-800">
+        <div className="w-2 h-2 rounded-full bg-red-500" />
+        <div className="w-2 h-2 rounded-full bg-amber-500" />
+        <div className="w-2 h-2 rounded-full bg-green-500" />
+        <span className="text-slate-500 text-xs ml-2">
           Auto-mapping — customers → Salesforce Account
         </span>
       </div>
@@ -31,9 +31,9 @@ export default function MappingTable() {
       {/* Table */}
       <div className="px-4 py-3">
         {/* Header */}
-        <div className="grid grid-cols-[1.4fr_0.3fr_1.4fr_0.55fr_1.6fr] border-b border-[#1E293B] pb-2 mb-1">
+        <div className="grid grid-cols-[1.4fr_0.3fr_1.4fr_0.55fr_1.6fr] border-b border-slate-800 pb-2 mb-1">
           {['Source', '', 'Target', 'Conf.', 'Transform'].map((h, i) => (
-            <span key={i} className="text-[#64748B] text-[10px] uppercase tracking-widest">
+            <span key={i} className="text-slate-500 text-2xs uppercase tracking-widest">
               {h}
             </span>
           ))}
@@ -43,12 +43,12 @@ export default function MappingTable() {
         {ROWS.map((row) => (
           <div
             key={row.source}
-            className={`grid grid-cols-[1.4fr_0.3fr_1.4fr_0.55fr_1.6fr] py-2 border-b border-[#1E293B] last:border-b-0 ${
+            className={`grid grid-cols-[1.4fr_0.3fr_1.4fr_0.55fr_1.6fr] py-2 border-b border-slate-800 last:border-b-0 ${
               row.conf <= 75 ? 'bg-yellow-500/5' : ''
             }`}
           >
             <span className="text-blue-300">{row.source}</span>
-            <span className="text-[#475569]">→</span>
+            <span className="text-slate-600">→</span>
             <span className="text-cyan-300">{row.target}</span>
             <span className="flex items-center gap-1.5">
               <span
@@ -57,15 +57,15 @@ export default function MappingTable() {
               />
               <span style={{ color: confColor(row.conf) }}>{row.conf}%</span>
             </span>
-            <span className="text-[#64748B] text-[11px] truncate">{row.transform}</span>
+            <span className="text-slate-500 text-xs truncate">{row.transform}</span>
           </div>
         ))}
 
         {/* Summary */}
-        <div className="flex gap-4 mt-3 pt-2.5 border-t border-[#1E293B]">
-          <span className="text-[11px] text-green-400">● 2,688 auto-mapped</span>
-          <span className="text-[11px] text-yellow-400">● 47 need review</span>
-          <span className="text-[11px] text-red-400">● 12 unmapped</span>
+        <div className="flex gap-4 mt-3 pt-2.5 border-t border-slate-800">
+          <span className="text-xs text-green-400">● 2,688 auto-mapped</span>
+          <span className="text-xs text-yellow-400">● 47 need review</span>
+          <span className="text-xs text-red-400">● 12 unmapped</span>
         </div>
       </div>
     </div>

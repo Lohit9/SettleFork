@@ -383,7 +383,7 @@ export default async function MigrationPageRoute({
                       </div>
                     </div>
                     <div className="border-t border-mine-slate-600 mt-6 pt-4">
-                      <p className="text-[10px] uppercase tracking-widest text-mine-slate-400 mb-3">Typically requires</p>
+                      <p className="text-2xs uppercase tracking-widest text-mine-slate-400 mb-3">Typically requires</p>
                       <div className="grid grid-cols-2 gap-x-4 gap-y-1">
                         {[
                           'Manual field mapping in spreadsheets',
@@ -404,7 +404,7 @@ export default async function MigrationPageRoute({
                   <div className="bg-mine-blue-600 rounded-xl p-8 h-full flex flex-col">
                     <div className="flex items-start justify-between mb-6">
                       <p className="text-lg font-semibold text-blue-100">With Mine</p>
-                      <span className="text-[10px] text-blue-200/60 uppercase tracking-widest">
+                      <span className="text-2xs text-blue-200/60 uppercase tracking-widest">
                         Enterprise benchmarks
                       </span>
                     </div>
@@ -423,7 +423,7 @@ export default async function MigrationPageRoute({
                       </div>
                     </div>
                     <div className="border-t border-blue-400/30 mt-6 pt-4">
-                      <p className="text-[10px] uppercase tracking-widest text-blue-200/60 mb-3">Included</p>
+                      <p className="text-2xs uppercase tracking-widest text-blue-200/60 mb-3">Included</p>
                       <div className="grid grid-cols-2 gap-x-4 gap-y-1">
                         {[
                           'Schema profiling & analysis',

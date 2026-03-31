@@ -223,7 +223,7 @@ export function MappingReview({ projectId }: MappingReviewProps) {
               variant={filter === 'needs-review' ? 'default' : 'outline'}
               size="sm"
               onClick={() => setFilter('needs-review')}
-              className={filter === 'needs-review' ? 'bg-[#4F46E5] hover:bg-[#4338CA]' : ''}
+              className={filter === 'needs-review' ? 'bg-blue-600 hover:bg-blue-700' : ''}
             >
               Needs Review
             </Button>
@@ -231,7 +231,7 @@ export function MappingReview({ projectId }: MappingReviewProps) {
               variant={filter === 'high-confidence' ? 'default' : 'outline'}
               size="sm"
               onClick={() => setFilter('high-confidence')}
-              className={filter === 'high-confidence' ? 'bg-[#4F46E5] hover:bg-[#4338CA]' : ''}
+              className={filter === 'high-confidence' ? 'bg-blue-600 hover:bg-blue-700' : ''}
             >
               High Confidence
             </Button>
@@ -239,7 +239,7 @@ export function MappingReview({ projectId }: MappingReviewProps) {
               variant={filter === 'unmapped' ? 'default' : 'outline'}
               size="sm"
               onClick={() => setFilter('unmapped')}
-              className={filter === 'unmapped' ? 'bg-[#4F46E5] hover:bg-[#4338CA]' : ''}
+              className={filter === 'unmapped' ? 'bg-blue-600 hover:bg-blue-700' : ''}
             >
               Unmapped
             </Button>
@@ -247,7 +247,7 @@ export function MappingReview({ projectId }: MappingReviewProps) {
               variant={filter === 'all' ? 'default' : 'outline'}
               size="sm"
               onClick={() => setFilter('all')}
-              className={filter === 'all' ? 'bg-[#4F46E5] hover:bg-[#4338CA]' : ''}
+              className={filter === 'all' ? 'bg-blue-600 hover:bg-blue-700' : ''}
             >
               All
             </Button>
@@ -256,20 +256,20 @@ export function MappingReview({ projectId }: MappingReviewProps) {
 
         <div className="flex-1 overflow-auto p-6">
           <div className="grid grid-cols-[1fr_80px_1fr] gap-4 mb-6">
-            <div className="text-sm font-semibold text-[#4F46E5]">SALESFORCE_PROD</div>
+            <div className="text-sm font-semibold text-blue-600">SALESFORCE_PROD</div>
             <div></div>
-            <div className="text-sm font-semibold text-[#4F46E5]">SAP_S4HANA</div>
+            <div className="text-sm font-semibold text-blue-600">SAP_S4HANA</div>
           </div>
 
           <div className="space-y-4">
             {filteredMappings.map((tableMapping) => (
-              <div key={tableMapping.sourceTable} className="bg-white rounded-lg border border-gray-200">
+              <div key={tableMapping.sourceTable} className="bg-white rounded-xl border border-gray-200">
                 <div className="border-b border-gray-200 bg-gray-50">
                   <div className="grid grid-cols-[1fr_80px_1fr] gap-4 p-4 items-center">
                     <div className="flex items-center gap-3">
                       <button
                         onClick={() => toggleTable(tableMapping.sourceTable)}
-                        className="flex items-center gap-2 hover:text-[#4F46E5] transition-colors"
+                        className="flex items-center gap-2 hover:text-blue-600 transition-colors"
                       >
                         {expandedTables.has(tableMapping.sourceTable) ? (
                           <ChevronDown className="w-4 h-4 text-gray-500" />
@@ -310,7 +310,7 @@ export function MappingReview({ projectId }: MappingReviewProps) {
                     {tableMapping.fieldMappings.map((fieldMapping) => (
                       <div
                         key={fieldMapping.sourceField}
-                        className="grid grid-cols-[1fr_80px_1fr_100px] gap-4 items-center p-3 rounded-lg border border-gray-200 hover:border-[#4F46E5] hover:bg-blue-50 transition-all cursor-pointer"
+                        className="grid grid-cols-[1fr_80px_1fr_100px] gap-4 items-center p-3 rounded-lg border border-gray-200 hover:border-blue-600 hover:bg-blue-50 transition-all cursor-pointer"
                         onClick={() => setSelectedMapping(fieldMapping)}
                       >
                         <div className="flex items-center gap-2">
@@ -382,7 +382,7 @@ export function MappingReview({ projectId }: MappingReviewProps) {
         <div className="border-t border-gray-200 bg-white p-6 flex justify-end">
           <Button
             onClick={handleNext}
-            className="bg-[#4F46E5] hover:bg-[#4338CA] text-white"
+            className="bg-blue-600 hover:bg-blue-700 text-white"
           >
             Proceed to Transform
           </Button>
@@ -435,7 +435,7 @@ export function MappingReview({ projectId }: MappingReviewProps) {
             </div>
 
             {selectedMapping.reasoning && (
-              <div className="bg-blue-50 border border-blue-200 rounded-lg p-4">
+              <div className="bg-blue-50 border border-blue-200 rounded-xl p-4">
                 <div className="flex items-start gap-2">
                   <AlertCircle className="w-4 h-4 text-blue-600 mt-0.5 flex-shrink-0" />
                   <div>

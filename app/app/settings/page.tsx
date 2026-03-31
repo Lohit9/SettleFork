@@ -67,7 +67,7 @@ export default async function SettingsPage() {
           <div className="bg-white border border-gray-200 rounded-xl p-5">
             <div className="flex items-center gap-4 mb-4">
               {/* Avatar */}
-              <div className="w-14 h-14 rounded-full bg-[#6C5CE7] flex items-center justify-center flex-shrink-0">
+              <div className="w-14 h-14 rounded-full bg-blue-600 flex items-center justify-center flex-shrink-0">
                 <span className="text-white font-medium text-lg">{initials}</span>
               </div>
               <div className="flex-1 min-w-0">
@@ -100,7 +100,7 @@ export default async function SettingsPage() {
                 <p className="text-xs text-gray-500 mb-0.5">Plan</p>
                 <p className="text-sm text-gray-900 flex items-center gap-1.5">
                   Early Access
-                  <span className="text-[11px] bg-blue-100 text-blue-700 px-1.5 py-0.5 rounded font-medium">
+                  <span className="text-xs bg-blue-100 text-blue-700 px-1.5 py-0.5 rounded font-medium">
                     Beta
                   </span>
                 </p>

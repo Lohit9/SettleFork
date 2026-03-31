@@ -18,7 +18,7 @@ function HeroFlow() {
   }, [])
 
   return (
-    <div className="bg-[#0F172A] rounded-2xl p-6 w-full shadow-2xl shadow-slate-900/40">
+    <div className="bg-slate-900 rounded-2xl p-6 w-full shadow-2xl shadow-slate-900/40">
       {/* Title bar */}
       <div className="flex items-center gap-2 mb-6">
         <div className="flex gap-1.5">
@@ -26,7 +26,7 @@ function HeroFlow() {
           <div className="w-2.5 h-2.5 rounded-full bg-yellow-500/80" />
           <div className="w-2.5 h-2.5 rounded-full bg-green-500/80" />
         </div>
-        <span className="text-[#64748B] text-xs ml-2 font-mono">
+        <span className="text-slate-500 text-xs ml-2 font-mono">
           mine — enterprise data migration
         </span>
       </div>
@@ -64,7 +64,7 @@ function HeroFlow() {
             />
           ))}
           <div
-            className={`mt-1 text-[9px] font-bold tracking-widest px-1.5 py-0.5 rounded transition-all duration-300 ${
+            className={`mt-1 text-2xs font-bold tracking-widest px-1.5 py-0.5 rounded transition-all duration-300 ${
               step >= 1
                 ? 'text-blue-300 bg-blue-500/20 border border-blue-500/30'
                 : 'text-slate-600 bg-slate-800 border border-slate-700'
@@ -99,21 +99,21 @@ function HeroFlow() {
             step >= 1 ? 'text-blue-400' : 'text-slate-600'
           }`}
         >
-          <span className="text-[8px]">●</span> Profiled
+          <span className="text-2xs">●</span> Profiled
         </span>
         <span
           className={`flex items-center gap-1.5 text-xs font-medium transition-colors duration-300 ${
-            step >= 2 ? 'text-indigo-400' : 'text-slate-600'
+            step >= 2 ? 'text-blue-400' : 'text-slate-600'
           }`}
         >
-          <span className="text-[8px]">●</span> Mapped
+          <span className="text-2xs">●</span> Mapped
         </span>
         <span
           className={`flex items-center gap-1.5 text-xs font-medium transition-colors duration-300 ${
             step >= 3 ? 'text-teal-400' : 'text-slate-600'
           }`}
         >
-          <span className="text-[8px]">●</span> Validated
+          <span className="text-2xs">●</span> Validated
         </span>
       </div>
     </div>
@@ -128,20 +128,20 @@ export default function Hero() {
 
           {/* Left: Text */}
           <ScrollReveal>
-            <p className="text-xs font-semibold uppercase tracking-widest text-[#2563EB] mb-4">
+            <p className="text-xs font-semibold uppercase tracking-widest text-blue-600 mb-4">
               AI-Native Data Migration
             </p>
-            <h1 className="text-5xl lg:text-[3.25rem] font-bold text-[#0F172A] leading-[1.12] tracking-tight mb-5">
+            <h1 className="text-5xl lg:text-[3.25rem] font-bold text-slate-900 leading-[1.12] tracking-tight mb-5">
               The autonomous engine for your data migration.
             </h1>
-            <p className="text-lg text-[#475569] leading-relaxed max-w-lg mb-8">
+            <p className="text-lg text-slate-600 leading-relaxed max-w-lg mb-8">
               Mine turns data migration from a labor-driven service into an autonomous, reusable product. Cut time and cost by 40–50% while reducing go-live risk.
             </p>
 
             <div className="flex flex-wrap gap-3 mb-3">
               <Link
                 href="/request-access"
-                className="bg-[#2563EB] hover:bg-[#1D4ED8] text-white font-semibold px-8 py-3.5 rounded-xl shadow-lg shadow-blue-600/20 hover:-translate-y-0.5 transition-all text-sm"
+                className="bg-blue-600 hover:bg-blue-700 text-white font-semibold px-8 py-3.5 rounded-xl shadow-lg shadow-blue-600/20 hover:-translate-y-0.5 transition-all text-sm"
               >
                 Request Access
               </Link>
@@ -149,13 +149,13 @@ export default function Hero() {
                 href="https://calendly.com/mine-ai/demo"
                 target="_blank"
                 rel="noopener noreferrer"
-                className="border border-[#CBD5E1] text-[#0F172A] font-medium px-8 py-3.5 rounded-xl hover:border-[#2563EB] hover:text-[#2563EB] transition-all text-sm"
+                className="border border-slate-300 text-slate-900 font-medium px-8 py-3.5 rounded-xl hover:border-blue-600 hover:text-blue-600 transition-all text-sm"
               >
                 Book a Demo
               </a>
             </div>
 
-            <p className="text-xs text-[#94A3B8] mt-1">
+            <p className="text-xs text-slate-400 mt-1">
               Currently onboarding design partners for enterprise migrations
             </p>
           </ScrollReveal>
@@ -169,14 +169,14 @@ export default function Hero() {
         {/* Logo bar */}
         <ScrollReveal delay={0.1}>
           <div className="mt-16">
-            <p className="text-center text-xs uppercase tracking-widest text-[#94A3B8] mb-5">
+            <p className="text-center text-xs uppercase tracking-widest text-slate-400 mb-5">
               Designed for migrations from
             </p>
             <div className="flex flex-wrap justify-center gap-12">
               {['Salesforce', 'SAP', 'Oracle', 'NetSuite', 'SQL Server'].map((name) => (
                 <span
                   key={name}
-                  className="text-sm font-bold text-[#0F172A] opacity-30 hover:opacity-60 transition-opacity tracking-tight cursor-default"
+                  className="text-sm font-bold text-slate-900 opacity-30 hover:opacity-60 transition-opacity tracking-tight cursor-default"
                 >
                   {name}
                 </span>

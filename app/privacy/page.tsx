@@ -39,7 +39,7 @@ export default function PrivacyPage() {
           </p>
         </div>
 
-        <div className="prose prose-gray max-w-none text-[15px] leading-relaxed">
+        <div className="prose prose-gray max-w-none text-sm leading-relaxed">
 
           <p>
             Mine (&ldquo;we,&rdquo; &ldquo;us,&rdquo; or &ldquo;our&rdquo;) operates the trymine.ai platform
@@ -159,7 +159,7 @@ export default function PrivacyPage() {
             </ul>
             <p>
               To exercise any of these rights, contact us at{' '}
-              <a href="mailto:privacy@trymine.ai" className="text-indigo-600 hover:underline">
+              <a href="mailto:privacy@trymine.ai" className="text-blue-600 hover:underline">
                 privacy@trymine.ai
               </a>
               .
@@ -193,13 +193,13 @@ export default function PrivacyPage() {
             <ul>
               <li>
                 <strong>Email:</strong>{' '}
-                <a href="mailto:privacy@trymine.ai" className="text-indigo-600 hover:underline">
+                <a href="mailto:privacy@trymine.ai" className="text-blue-600 hover:underline">
                   privacy@trymine.ai
                 </a>
               </li>
               <li>
                 <strong>Website:</strong>{' '}
-                <a href="https://trymine.ai" className="text-indigo-600 hover:underline">
+                <a href="https://trymine.ai" className="text-blue-600 hover:underline">
                   trymine.ai
                 </a>
               </li>
@@ -245,7 +245,7 @@ function Section({
 function SubSection({ title, children }: { title: string; children: React.ReactNode }) {
   return (
     <div className="mt-4">
-      <h3 className="text-base font-semibold text-indigo-700 mb-1">{title}</h3>
+      <h3 className="text-base font-semibold text-blue-700 mb-1">{title}</h3>
       <div className="text-gray-700">{children}</div>
     </div>
   )

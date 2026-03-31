@@ -41,13 +41,13 @@ export default function SchemaTable() {
   }, [isInView])
 
   return (
-    <div ref={ref} className="bg-[#0F172A] rounded-xl overflow-hidden font-mono text-xs">
+    <div ref={ref} className="bg-slate-900 rounded-xl overflow-hidden font-mono text-xs">
       {/* Title bar */}
-      <div className="flex items-center gap-1.5 px-4 py-2.5 border-b border-[#1E293B]">
-        <div className="w-2 h-2 rounded-full bg-[#EF4444]" />
-        <div className="w-2 h-2 rounded-full bg-[#F59E0B]" />
-        <div className="w-2 h-2 rounded-full bg-[#22C55E]" />
-        <span className="text-[#64748B] text-[11px] ml-2">
+      <div className="flex items-center gap-1.5 px-4 py-2.5 border-b border-slate-800">
+        <div className="w-2 h-2 rounded-full bg-red-500" />
+        <div className="w-2 h-2 rounded-full bg-amber-500" />
+        <div className="w-2 h-2 rounded-full bg-green-500" />
+        <span className="text-slate-500 text-xs ml-2">
           Schema profiler — legacy_waste_mgmt.customers
         </span>
       </div>
@@ -55,9 +55,9 @@ export default function SchemaTable() {
       {/* Table */}
       <div className="px-4 py-3">
         {/* Header */}
-        <div className="grid grid-cols-[1.6fr_1.4fr_0.6fr_2fr] border-b border-[#1E293B] pb-2 mb-1">
+        <div className="grid grid-cols-[1.6fr_1.4fr_0.6fr_2fr] border-b border-slate-800 pb-2 mb-1">
           {['Field', 'Type', 'Nulls', 'Sample values'].map((h) => (
-            <span key={h} className="text-[#64748B] text-[10px] uppercase tracking-widest">
+            <span key={h} className="text-slate-500 text-2xs uppercase tracking-widest">
               {h}
             </span>
           ))}
@@ -67,13 +67,13 @@ export default function SchemaTable() {
         {ROWS.map((row, i) => (
           <div
             key={row.field}
-            className="grid grid-cols-[1.6fr_1.4fr_0.6fr_2fr] py-2 border-b border-[#1E293B] last:border-b-0 transition-opacity duration-300"
+            className="grid grid-cols-[1.6fr_1.4fr_0.6fr_2fr] py-2 border-b border-slate-800 last:border-b-0 transition-opacity duration-300"
             style={{ opacity: i < visibleCount ? 1 : 0 }}
           >
             <span className="text-blue-300">{row.field}</span>
-            <span className="text-[#94A3B8]">{row.type}</span>
+            <span className="text-slate-400">{row.type}</span>
             <span className={nullColor(row.nullPct)}>{row.nullPct}</span>
-            <span className="text-[#64748B] truncate">{row.sample}</span>
+            <span className="text-slate-500 truncate">{row.sample}</span>
           </div>
         ))}
 
@@ -82,7 +82,7 @@ export default function SchemaTable() {
           className="bg-teal-600/10 rounded-lg p-2 mt-3 transition-opacity duration-500"
           style={{ opacity: showBanner ? 1 : 0 }}
         >
-          <span className="text-teal-300 text-[11px]">
+          <span className="text-teal-300 text-xs">
             ✓ Profiled 240 tables · 3,412 fields · 847K rows in 14 seconds
           </span>
         </div>

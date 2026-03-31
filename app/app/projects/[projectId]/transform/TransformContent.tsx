@@ -972,7 +972,7 @@ export default function TransformContent({ projectId, projectName, initialData }
           </Button>
           <Button
             size="sm"
-            className="bg-[#4F46E5] hover:bg-[#4338CA] text-white gap-2"
+            className="bg-blue-600 hover:bg-blue-700 text-white gap-2"
             onClick={handleStageAll}
             disabled={isStaging || isAutoGen || isCheckingIssues}
           >
@@ -1022,7 +1022,7 @@ export default function TransformContent({ projectId, projectName, initialData }
             >
               <span>{activeFilterLabel}</span>
               <div className="flex items-center gap-1.5">
-                <span className="text-[10px] bg-indigo-100 text-indigo-700 px-1.5 py-0.5 rounded-full font-semibold">
+                <span className="text-[10px] bg-blue-100 text-blue-700 px-1.5 py-0.5 rounded-full font-semibold">
                   {filterCounts[sidebarFilter]}
                 </span>
                 <ChevronDown className={`w-3.5 h-3.5 text-gray-400 transition-transform ${filterOpen ? 'rotate-180' : ''}`} />
@@ -1036,13 +1036,13 @@ export default function TransformContent({ projectId, projectName, initialData }
                     onClick={() => { setSidebarFilter(opt.key); setFilterOpen(false) }}
                     className={`w-full flex items-center justify-between px-3 py-2 text-xs transition-colors ${
                       sidebarFilter === opt.key
-                        ? 'bg-indigo-50 text-indigo-700 font-medium'
+                        ? 'bg-blue-50 text-blue-700 font-medium'
                         : 'text-gray-600 hover:bg-gray-50'
                     }`}
                   >
                     <div className="flex items-center gap-2">
                       {sidebarFilter === opt.key && (
-                        <svg className="w-3 h-3 text-indigo-600" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={3}>
+                        <svg className="w-3 h-3 text-blue-600" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={3}>
                           <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
                         </svg>
                       )}
@@ -1265,17 +1265,17 @@ export default function TransformContent({ projectId, projectName, initialData }
                     <div className="mt-3 flex items-center gap-2 flex-wrap">
                       <Button
                         variant="outline"
-                        className="gap-1.5 text-sm border-gray-300 text-gray-700 hover:text-indigo-700 hover:border-indigo-300 hover:bg-indigo-50"
+                        className="gap-1.5 text-sm border-gray-300 text-gray-700 hover:text-blue-700 hover:border-blue-300 hover:bg-blue-50"
                         onClick={handleUnmappedSuggest}
                         disabled={unmappedSuggesting || unmappedGenerating}
                       >
                         {unmappedSuggesting
-                          ? <span className="w-3.5 h-3.5 border-2 border-gray-400 border-t-indigo-500 rounded-full animate-spin" />
+                          ? <span className="w-3.5 h-3.5 border-2 border-gray-400 border-t-blue-500 rounded-full animate-spin" />
                           : <Sparkles className="w-3.5 h-3.5" />}
                         {unmappedSuggesting ? 'Suggesting...' : 'AI Suggest'}
                       </Button>
                       <Button
-                        className="bg-[#4F46E5] hover:bg-[#4338CA] text-white gap-2"
+                        className="bg-blue-600 hover:bg-blue-700 text-white gap-2"
                         onClick={handleUnmappedGenerate}
                         disabled={unmappedGenerating || unmappedSuggesting || !unmappedDescription.trim()}
                       >
@@ -1302,7 +1302,7 @@ export default function TransformContent({ projectId, projectName, initialData }
                         <div className="flex items-center gap-2">
                           <span className="text-sm font-semibold text-gray-900">Generated SQL</span>
                           {unmappedSqlSource === 'ai' && (
-                            <span className="text-[10px] font-medium px-1.5 py-0.5 rounded-full bg-indigo-100 text-indigo-700">AI-Generated</span>
+                            <span className="text-[10px] font-medium px-1.5 py-0.5 rounded-full bg-blue-100 text-blue-700">AI-Generated</span>
                           )}
                         </div>
                         <span className="text-xs text-gray-400">{unmappedSqlExpanded ? 'Hide ▴' : 'Show ▾'}</span>
@@ -1312,7 +1312,7 @@ export default function TransformContent({ projectId, projectName, initialData }
                           <textarea
                             value={unmappedSql}
                             onChange={(e) => { setUnmappedSql(e.target.value); setUnmappedSqlSource('manual') }}
-                            className="w-full font-mono text-xs text-gray-800 bg-gray-50 rounded border border-gray-200 p-3 resize-none focus:outline-none focus:ring-2 focus:ring-[#4F46E5]/30 focus:border-[#4F46E5]"
+                            className="w-full font-mono text-xs text-gray-800 bg-gray-50 rounded border border-gray-200 p-3 resize-none focus:outline-none focus:ring-2 focus:ring-blue-500/30 focus:border-blue-500"
                             rows={Math.max(2, unmappedSql.split('\n').length + 1)}
                             spellCheck={false}
                           />
@@ -1368,7 +1368,7 @@ export default function TransformContent({ projectId, projectName, initialData }
                 {unmappedSql && (
                   <div className="flex-shrink-0 z-10 border-t border-gray-200 bg-white px-4 py-3 flex items-center gap-3 shadow-[0_-2px_8px_rgba(0,0,0,0.06)]">
                     <Button
-                      className="bg-[#4F46E5] hover:bg-[#4338CA] text-white gap-2 flex-1"
+                      className="bg-blue-600 hover:bg-blue-700 text-white gap-2 flex-1"
                       onClick={handleUnmappedSave}
                       disabled={unmappedSaving}
                     >
@@ -1395,7 +1395,7 @@ export default function TransformContent({ projectId, projectName, initialData }
                   <div className="flex flex-col items-end gap-1">
                     {stagingError && <p className="text-xs text-red-600 max-w-xs text-right">{stagingError}</p>}
                     <Button
-                      className="bg-[#4F46E5] hover:bg-[#4338CA] text-white disabled:opacity-60"
+                      className="bg-blue-600 hover:bg-blue-700 text-white disabled:opacity-60"
                       disabled={isStaging}
                       onClick={() => {
                         setStagingError(null)
@@ -1518,7 +1518,7 @@ export default function TransformContent({ projectId, projectName, initialData }
                           onClick={() => setInputMode('ai')}
                           className={`px-2.5 py-1 text-xs font-medium transition-colors ${
                             inputMode === 'ai'
-                              ? 'bg-indigo-600 text-white'
+                              ? 'bg-blue-600 text-white'
                               : 'bg-white text-gray-600 hover:bg-gray-50'
                           }`}
                         >
@@ -1532,7 +1532,7 @@ export default function TransformContent({ projectId, projectName, initialData }
                           }}
                           className={`px-2.5 py-1 text-xs font-medium border-l border-gray-200 transition-colors ${
                             inputMode === 'sql'
-                              ? 'bg-indigo-600 text-white'
+                              ? 'bg-blue-600 text-white'
                               : 'bg-white text-gray-600 hover:bg-gray-50'
                           }`}
                         >
@@ -1563,13 +1563,13 @@ export default function TransformContent({ projectId, projectName, initialData }
                           </div>
                         )}
                         {selectedContext?.field.contributingSourceFields && selectedContext.field.contributingSourceFields.length > 0 && (
-                          <div className="mb-3 px-3 py-2 bg-indigo-50 border border-indigo-100 rounded-lg text-xs text-indigo-700">
+                          <div className="mb-3 px-3 py-2 bg-blue-50 border border-blue-100 rounded-lg text-xs text-blue-700">
                             <span className="font-medium">Multi-source mapping.</span> This field also receives data from:{' '}
                             <span className="font-mono">
                               {selectedContext.field.contributingSourceFields.map((f) => f.name).join(', ')}
                             </span>
                             . Write a transform that combines all source fields
-                            (e.g., <code className="bg-indigo-100 px-1 rounded">CONCAT(first_name, &apos; &apos;, last_name)</code>).
+                            (e.g., <code className="bg-blue-100 px-1 rounded">CONCAT(first_name, &apos; &apos;, last_name)</code>).
                           </div>
                         )}
                         <Textarea
@@ -1586,19 +1586,19 @@ export default function TransformContent({ projectId, projectName, initialData }
                         <div className="mt-3 flex items-center gap-2 flex-wrap">
                           <Button
                             variant="outline"
-                            className="gap-1.5 text-sm border-gray-300 text-gray-700 hover:text-indigo-700 hover:border-indigo-300 hover:bg-indigo-50"
+                            className="gap-1.5 text-sm border-gray-300 text-gray-700 hover:text-blue-700 hover:border-blue-300 hover:bg-blue-50"
                             onClick={handleSuggest}
                             disabled={isSuggesting || isGenerating}
                           >
                             {isSuggesting ? (
-                              <span className="w-3.5 h-3.5 border-2 border-gray-400 border-t-indigo-500 rounded-full animate-spin" />
+                              <span className="w-3.5 h-3.5 border-2 border-gray-400 border-t-blue-500 rounded-full animate-spin" />
                             ) : (
                               <Sparkles className="w-3.5 h-3.5" />
                             )}
                             {isSuggesting ? 'Suggesting...' : 'AI Suggest'}
                           </Button>
                           <Button
-                            className="bg-[#4F46E5] hover:bg-[#4338CA] text-white gap-2"
+                            className="bg-blue-600 hover:bg-blue-700 text-white gap-2"
                             onClick={handleGenerate}
                             disabled={isGenerating || isSuggesting}
                           >
@@ -1658,7 +1658,7 @@ export default function TransformContent({ projectId, projectName, initialData }
                           placeholder={`e.g., UPPER(TRIM(${selectedContext.field.sourceFieldName ?? 'field_name'}))`}
                           rows={4}
                           spellCheck={false}
-                          className="w-full font-mono text-sm text-gray-800 bg-white border border-gray-300 rounded-lg px-3 py-2.5 resize-none focus:outline-none focus:ring-2 focus:ring-indigo-500/30 focus:border-indigo-500 placeholder-gray-400"
+                          className="w-full font-mono text-sm text-gray-800 bg-white border border-gray-300 rounded-lg px-3 py-2.5 resize-none focus:outline-none focus:ring-2 focus:ring-blue-500/30 focus:border-blue-500 placeholder-gray-400"
                         />
                         <div className="mt-3 flex items-center gap-2">
                           <button
@@ -1784,7 +1784,7 @@ export default function TransformContent({ projectId, projectName, initialData }
                       <textarea
                         value={localTransform.sql}
                         onChange={(e) => handleSqlChange(e.target.value)}
-                        className="w-full font-mono text-xs text-gray-800 bg-gray-50 rounded border border-gray-200 p-3 resize-none focus:outline-none focus:ring-2 focus:ring-[#4F46E5]/30 focus:border-[#4F46E5]"
+                        className="w-full font-mono text-xs text-gray-800 bg-gray-50 rounded border border-gray-200 p-3 resize-none focus:outline-none focus:ring-2 focus:ring-blue-500/30 focus:border-blue-500"
                         rows={Math.max(4, localTransform.sql.split('\n').length + 1)}
                         spellCheck={false}
                       />
@@ -1835,7 +1835,7 @@ export default function TransformContent({ projectId, projectName, initialData }
                   <div className="flex items-center gap-2">
                     <span className="text-sm font-semibold text-gray-900">Data Preview</span>
                     {previewLoading && (
-                      <span className="w-3.5 h-3.5 border-2 border-indigo-500 border-t-transparent rounded-full animate-spin" />
+                      <span className="w-3.5 h-3.5 border-2 border-blue-500 border-t-transparent rounded-full animate-spin" />
                     )}
                     {hasFieldIssues && issueCount > 0 && !previewLoading && (
                       <span className="text-xs text-amber-600">
@@ -2039,7 +2039,7 @@ export default function TransformContent({ projectId, projectName, initialData }
                     </div>
                     <button
                       onClick={() => router.push(validateUrl)}
-                      className="text-xs text-indigo-600 hover:text-indigo-800 font-medium whitespace-nowrap"
+                      className="text-xs text-blue-600 hover:text-blue-800 font-medium whitespace-nowrap"
                     >
                       Fix in Validate tab →
                     </button>
@@ -2108,7 +2108,7 @@ export default function TransformContent({ projectId, projectName, initialData }
                     <div className="px-4 py-2.5 border-t border-red-200 bg-red-50/80 flex items-center gap-3">
                       <span className="text-xs text-red-600 flex-1">Fix the transform logic above, then re-test.</span>
                       <button
-                        className="text-xs font-medium text-indigo-700 hover:text-indigo-900 underline-offset-2 hover:underline"
+                        className="text-xs font-medium text-blue-700 hover:text-blue-900 underline-offset-2 hover:underline"
                         onClick={() => {
                           // Allow applying anyway (e.g., skip bad rows)
                           setLocalTransform((prev) => prev ? { ...prev, status: 'tested' } : null)
@@ -2130,13 +2130,13 @@ export default function TransformContent({ projectId, projectName, initialData }
                     {/* Test Transform */}
                     <Button
                       variant="outline"
-                      className="gap-2 border-gray-300 text-gray-700 hover:border-indigo-400 hover:text-indigo-700 hover:bg-indigo-50"
+                      className="gap-2 border-gray-300 text-gray-700 hover:border-blue-400 hover:text-blue-700 hover:bg-blue-50"
                       onClick={handleTest}
                       disabled={isTesting || !localTransform?.transformationId}
                     >
                       {isTesting ? (
                         <span className="flex items-center gap-2">
-                          <span className="w-3.5 h-3.5 border-2 border-gray-400 border-t-indigo-600 rounded-full animate-spin" />
+                          <span className="w-3.5 h-3.5 border-2 border-gray-400 border-t-blue-600 rounded-full animate-spin" />
                           Testing...
                         </span>
                       ) : (
@@ -2148,7 +2148,7 @@ export default function TransformContent({ projectId, projectName, initialData }
                     </Button>
                     {/* Apply Transform — only enabled after successful test */}
                     <Button
-                      className="bg-[#4F46E5] hover:bg-[#4338CA] text-white gap-2 flex-1 disabled:opacity-50 disabled:cursor-not-allowed"
+                      className="bg-blue-600 hover:bg-blue-700 text-white gap-2 flex-1 disabled:opacity-50 disabled:cursor-not-allowed"
                       onClick={handleApply}
                       disabled={isApplying || isCheckingIssues || !localTransform?.transformationId || localTransform.status !== 'tested'}
                       title={localTransform.status !== 'tested' ? 'Run "Test Transform" first' : undefined}
@@ -2185,7 +2185,7 @@ export default function TransformContent({ projectId, projectName, initialData }
                 <p className="text-xs text-red-600 max-w-xs text-right">{stagingError}</p>
               )}
               <Button
-                className="bg-[#4F46E5] hover:bg-[#4338CA] text-white disabled:opacity-60"
+                className="bg-blue-600 hover:bg-blue-700 text-white disabled:opacity-60"
                 disabled={isStaging}
                 onClick={() => {
                   setStagingError(null)
@@ -2229,7 +2229,7 @@ export default function TransformContent({ projectId, projectName, initialData }
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/30">
           <div className="bg-white rounded-xl shadow-xl p-6 max-w-md w-full mx-4">
             <h3 className="text-base font-semibold text-gray-900 mb-2 flex items-center gap-2">
-              <Sparkles className="w-4 h-4 text-indigo-500" />
+              <Sparkles className="w-4 h-4 text-blue-500" />
               Replace current description?
             </h3>
             <p className="text-sm text-gray-500 mb-3">AI suggestion:</p>
@@ -2238,7 +2238,7 @@ export default function TransformContent({ projectId, projectName, initialData }
             </div>
             <div className="flex gap-3 justify-end">
               <Button variant="outline" size="sm" onClick={() => setShowReplaceConfirm(null)}>Keep current</Button>
-              <Button size="sm" className="bg-[#4F46E5] hover:bg-[#4338CA] text-white" onClick={applyReplaceConfirm}>
+              <Button size="sm" className="bg-blue-600 hover:bg-blue-700 text-white" onClick={applyReplaceConfirm}>
                 Use suggestion
               </Button>
             </div>
@@ -2276,7 +2276,7 @@ function DatasetNode({
         className="w-full flex items-center gap-2 px-3 py-2.5 bg-white hover:bg-gray-50 transition-colors"
       >
         {expanded ? <ChevronDown className="w-4 h-4 text-gray-500 flex-shrink-0" /> : <ChevronRight className="w-4 h-4 text-gray-500 flex-shrink-0" />}
-        <span className="text-xs font-bold text-[#4F46E5] truncate uppercase tracking-wide">
+        <span className="text-xs font-bold text-blue-600 truncate uppercase tracking-wide">
           {dataset.datasetName}
         </span>
       </button>
@@ -2465,7 +2465,7 @@ function FieldRow({ field, isSelected, onSelect, oneToManyCount = 1 }: {
       onClick={onSelect}
       className={`w-full px-3 py-2.5 border-b border-gray-100 last:border-0 text-left transition-colors ${
         isSelected
-          ? 'bg-indigo-50 border-l-2 border-l-[#4F46E5]'
+          ? 'bg-blue-50 border-l-2 border-l-blue-600'
           : 'border-l-2 border-l-transparent hover:bg-gray-100'
       }`}
     >

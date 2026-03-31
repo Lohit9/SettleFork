@@ -396,7 +396,7 @@ export function IngestionCard({ type, title, projectId, initialDatasets }: Inges
                 e.target.value === '' ? null : (e.target.value as IngestMethod)
               )
             }
-            className="w-full h-9 rounded-md border border-gray-300 px-3 py-1 text-sm focus:outline-none focus:ring-2 focus:ring-[#4F46E5]"
+            className="w-full h-9 rounded-md border border-gray-300 px-3 py-1 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
           >
             <option value="">Select method</option>
             <option value="csv">CSV Upload</option>
@@ -439,7 +439,7 @@ export function IngestionCard({ type, title, projectId, initialDatasets }: Inges
               </div>
               <div className="flex gap-3">
                 <Button variant="outline" disabled>Test Connection</Button>
-                <Button disabled className="bg-[#4F46E5] text-white">Connect Database</Button>
+                <Button disabled className="bg-blue-600 text-white">Connect Database</Button>
               </div>
             </div>
           </div>
@@ -453,7 +453,7 @@ export function IngestionCard({ type, title, projectId, initialDatasets }: Inges
               id={`${type}-dataset`}
               value={selectedDatasetId ?? ''}
               onChange={(e) => handleDatasetSelect(e.target.value)}
-              className="w-full h-9 rounded-md border border-gray-300 px-3 py-1 text-sm focus:outline-none focus:ring-2 focus:ring-[#4F46E5]"
+              className="w-full h-9 rounded-md border border-gray-300 px-3 py-1 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
             >
               <option value="">Select schema</option>
               {datasets.map((d) => (
@@ -477,7 +477,7 @@ export function IngestionCard({ type, title, projectId, initialDatasets }: Inges
                   size="sm"
                   onClick={handleSaveNewDataset}
                   disabled={!newDatasetName.trim() || creatingDataset}
-                  className="bg-[#4F46E5] hover:bg-[#4338CA] text-white"
+                  className="bg-blue-600 hover:bg-blue-700 text-white"
                 >
                   {creatingDataset ? 'Saving…' : 'Save'}
                 </Button>
@@ -503,7 +503,7 @@ export function IngestionCard({ type, title, projectId, initialDatasets }: Inges
                 id={`${type}-table`}
                 value={selectedTableId ?? ''}
                 onChange={(e) => handleTableSelect(e.target.value)}
-                className="w-full h-9 rounded-md border border-gray-300 px-3 py-1 text-sm focus:outline-none focus:ring-2 focus:ring-[#4F46E5]"
+                className="w-full h-9 rounded-md border border-gray-300 px-3 py-1 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
               >
                 <option value="">Select table</option>
                 {selectedDataset?.tables.map((t) => (
@@ -528,7 +528,7 @@ export function IngestionCard({ type, title, projectId, initialDatasets }: Inges
                     size="sm"
                     onClick={handleSaveNewTable}
                     disabled={!newTableName.trim()}
-                    className="bg-[#4F46E5] hover:bg-[#4338CA] text-white"
+                    className="bg-blue-600 hover:bg-blue-700 text-white"
                   >
                     Save
                   </Button>
@@ -595,16 +595,16 @@ export function IngestionCard({ type, title, projectId, initialDatasets }: Inges
                     onDrop={handleDrop}
                     onDragOver={handleDragOver}
                     onDragLeave={handleDragLeave}
-                    className={`border-2 border-dashed rounded-lg p-8 text-center transition-colors ${
+                    className={`border-2 border-dashed rounded-xl p-8 text-center transition-colors ${
                       isDragOver
-                        ? 'border-[#4F46E5] bg-indigo-50'
+                        ? 'border-blue-600 bg-blue-50'
                         : 'border-gray-300 hover:border-gray-400'
                     }`}
                   >
                     {uploadState.status === 'uploading' && (
                       <div className="space-y-3">
                         <div className="flex justify-center">
-                          <svg className="animate-spin w-8 h-8 text-[#4F46E5]" fill="none" viewBox="0 0 24 24">
+                          <svg className="animate-spin w-8 h-8 text-blue-600" fill="none" viewBox="0 0 24 24">
                             <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
                             <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v4l3-3-3-3v4a8 8 0 00-8 8h4z" />
                           </svg>
@@ -733,16 +733,16 @@ export function IngestionCard({ type, title, projectId, initialDatasets }: Inges
                 onDrop={handleDDLDrop}
                 onDragOver={(e) => { e.preventDefault(); setDdl((s) => ({ ...s, isDragOver: true })) }}
                 onDragLeave={() => setDdl((s) => ({ ...s, isDragOver: false }))}
-                className={`border-2 border-dashed rounded-lg p-8 text-center transition-colors ${
+                className={`border-2 border-dashed rounded-xl p-8 text-center transition-colors ${
                   ddl.isDragOver
-                    ? 'border-[#4F46E5] bg-indigo-50'
+                    ? 'border-blue-600 bg-blue-50'
                     : 'border-gray-300 hover:border-gray-400'
                 }`}
               >
                 {ddl.parsing ? (
                   <div className="space-y-3">
                     <div className="flex justify-center">
-                      <svg className="animate-spin w-8 h-8 text-[#4F46E5]" fill="none" viewBox="0 0 24 24">
+                      <svg className="animate-spin w-8 h-8 text-blue-600" fill="none" viewBox="0 0 24 24">
                         <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
                         <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v4l3-3-3-3v4a8 8 0 00-8 8h4z" />
                       </svg>
@@ -810,7 +810,7 @@ export function IngestionCard({ type, title, projectId, initialDatasets }: Inges
             {/* Saved confirmation */}
             {ddl.step === 'saved' && (
               <div className="space-y-3">
-                <div className="flex items-center gap-3 rounded-lg bg-green-50 border border-green-200 px-4 py-3">
+                <div className="flex items-center gap-3 rounded-xl bg-green-50 border border-green-200 px-4 py-3">
                   <CheckCircle2 className="w-6 h-6 text-green-600 shrink-0" />
                   <div>
                     <p className="text-sm font-medium text-green-800">

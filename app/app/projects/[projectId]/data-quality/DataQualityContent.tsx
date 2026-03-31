@@ -90,7 +90,7 @@ function SQLModal({ sql, onClose }: { sql: string; onClose: () => void }) {
         <div className="flex gap-2 p-4 border-t">
           <button
             onClick={() => { navigator.clipboard.writeText(sql); setCopied(true); setTimeout(() => setCopied(false), 2000) }}
-            className="px-4 py-2 text-sm bg-indigo-600 text-white rounded-lg hover:bg-indigo-700"
+            className="px-4 py-2 text-sm bg-blue-600 text-white rounded-lg hover:bg-blue-700"
           >
             {copied ? '✓ Copied' : 'Copy SQL'}
           </button>
@@ -116,7 +116,7 @@ function ConfirmModal({
             Cancel
           </button>
           <button onClick={onConfirm} disabled={loading}
-            className="px-4 py-2 text-sm bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 disabled:opacity-50 flex items-center gap-2">
+            className="px-4 py-2 text-sm bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50 flex items-center gap-2">
             {loading && <span className="w-3.5 h-3.5 border-2 border-white/30 border-t-white rounded-full animate-spin" />}
             {confirmLabel}
           </button>
@@ -321,7 +321,7 @@ function IssueCard({
               value={riskReason}
               onChange={e => setRiskReason(e.target.value)}
               placeholder="e.g., This field is not used in the target system..."
-              className="w-full text-sm border rounded-lg p-2 h-24 resize-none focus:outline-none focus:ring-2 focus:ring-indigo-500"
+              className="w-full text-sm border rounded-lg p-2 h-24 resize-none focus:outline-none focus:ring-2 focus:ring-blue-500"
             />
             <div className="flex gap-3 justify-end mt-4">
               <button onClick={() => setShowAcceptModal(false)} className="px-4 py-2 text-sm border border-gray-300 rounded-lg hover:bg-gray-50">Cancel</button>
@@ -371,7 +371,7 @@ function IssueCard({
                     ✦ AI
                   </span>
                 ) : issue.detection_source === 'custom_rule' || issue.detection_type === 'custom_rule' ? (
-                  <span className="px-1.5 py-0.5 rounded text-[10px] bg-indigo-50 text-indigo-700 border border-indigo-200">
+                  <span className="px-1.5 py-0.5 rounded text-[10px] bg-blue-50 text-blue-700 border border-blue-200">
                     ✦ Custom Rule
                   </span>
                 ) : (
@@ -465,7 +465,7 @@ function IssueCard({
 
         {/* AI Fix Section */}
         {!isFixed && !isAccepted && (
-          <div className="mx-4 mb-4 rounded-lg bg-gradient-to-br from-indigo-50 to-blue-50 border border-indigo-200 p-4">
+          <div className="mx-4 mb-4 rounded-lg bg-gradient-to-br from-blue-50 to-blue-50 border border-blue-200 p-4">
             <div className="flex items-center gap-2 mb-3">
               <span className="text-sm font-semibold text-gray-900">✦ AI-Suggested Fix</span>
             </div>
@@ -479,10 +479,10 @@ function IssueCard({
                 <button
                   onClick={handleGenerateFix}
                   disabled={generatingFix}
-                  className="flex items-center gap-2 px-4 py-2 text-sm border border-indigo-400 text-indigo-700 rounded-lg hover:bg-indigo-100 disabled:opacity-50 transition-colors"
+                  className="flex items-center gap-2 px-4 py-2 text-sm border border-blue-400 text-blue-700 rounded-lg hover:bg-blue-100 disabled:opacity-50 transition-colors"
                 >
                   {generatingFix ? (
-                    <><span className="w-3.5 h-3.5 border-2 border-indigo-300 border-t-indigo-600 rounded-full animate-spin" />Generating suggestions…</>
+                    <><span className="w-3.5 h-3.5 border-2 border-blue-300 border-t-blue-600 rounded-full animate-spin" />Generating suggestions…</>
                   ) : (
                     <>✦ Generate Fix Suggestions</>
                   )}
@@ -497,7 +497,7 @@ function IssueCard({
             ) : (
               <div className="space-y-3">
                 {(issue.ai_fix_options ?? []).map((opt, idx) => (
-                  <div key={idx} className="bg-white rounded-lg border border-indigo-100 p-3 space-y-2">
+                  <div key={idx} className="bg-white rounded-lg border border-blue-100 p-3 space-y-2">
                     <div className="flex items-start justify-between gap-2">
                       <div className="flex-1">
                         <p className="text-sm font-semibold text-gray-900">Option {String.fromCharCode(65 + idx)}: {opt.label}</p>
@@ -516,21 +516,21 @@ function IssueCard({
                       <button
                         onClick={() => setConfirmApply({ idx, fix: opt })}
                         disabled={applyingIdx !== null}
-                        className="px-3 py-1.5 text-xs bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 disabled:opacity-50 flex items-center gap-1.5"
+                        className="px-3 py-1.5 text-xs bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50 flex items-center gap-1.5"
                       >
                         {applyingIdx === idx && <span className="w-3 h-3 border-2 border-white/30 border-t-white rounded-full animate-spin" />}
                         Apply Fix
                       </button>
                       <button
                         onClick={() => setShowSQL(opt.sql)}
-                        className="text-xs text-indigo-600 hover:text-indigo-800 underline"
+                        className="text-xs text-blue-600 hover:text-blue-800 underline"
                       >
                         View SQL
                       </button>
                     </div>
                   </div>
                 ))}
-                <div className="pt-1 border-t border-indigo-100 flex items-center justify-between gap-3">
+                <div className="pt-1 border-t border-blue-100 flex items-center justify-between gap-3">
                   <div className="flex items-center gap-2">
                     <button
                       onClick={() => setShowCustomFix(true)}
@@ -710,7 +710,7 @@ function AddRuleModal({
               <select
                 value={selectedTableId}
                 onChange={e => { setSelectedTableId(e.target.value); setSelectedFieldId('') }}
-                className="text-sm border rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                className="text-sm border rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500"
               >
                 <option value="">Select table…</option>
                 {allDatasets.map(ds => (
@@ -725,7 +725,7 @@ function AddRuleModal({
                 value={selectedFieldId}
                 onChange={e => setSelectedFieldId(e.target.value)}
                 disabled={!selectedTableId}
-                className="text-sm border rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-indigo-500 disabled:opacity-50"
+                className="text-sm border rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:opacity-50"
               >
                 <option value="">Select field…</option>
                 {selectedTable?.fields.map(f => (
@@ -741,13 +741,13 @@ function AddRuleModal({
             <div className="mt-1.5 flex rounded-lg border overflow-hidden">
               <button
                 onClick={() => setMode('nl')}
-                className={`flex-1 text-sm py-2 ${mode === 'nl' ? 'bg-indigo-600 text-white' : 'bg-white text-gray-600 hover:bg-gray-50'}`}
+                className={`flex-1 text-sm py-2 ${mode === 'nl' ? 'bg-blue-600 text-white' : 'bg-white text-gray-600 hover:bg-gray-50'}`}
               >
                 ✦ Natural Language
               </button>
               <button
                 onClick={() => setMode('manual')}
-                className={`flex-1 text-sm py-2 ${mode === 'manual' ? 'bg-indigo-600 text-white' : 'bg-white text-gray-600 hover:bg-gray-50'}`}
+                className={`flex-1 text-sm py-2 ${mode === 'manual' ? 'bg-blue-600 text-white' : 'bg-white text-gray-600 hover:bg-gray-50'}`}
               >
                 Manual
               </button>
@@ -760,7 +760,7 @@ function AddRuleModal({
             generatedRule ? (
               <div className="space-y-3">
                 <p className="text-xs font-semibold text-gray-500 uppercase">Generated Rule — Review</p>
-                <div className="bg-indigo-50 rounded-lg border border-indigo-200 p-3 space-y-2 text-sm">
+                <div className="bg-blue-50 rounded-lg border border-blue-200 p-3 space-y-2 text-sm">
                   <p><strong>Name:</strong> {generatedRule.name}</p>
                   <p><strong>Type:</strong> {generatedRule.rule_type}</p>
                   <p><strong>Config:</strong> {JSON.stringify(generatedRule.rule_config)}</p>
@@ -786,7 +786,7 @@ function AddRuleModal({
                   <button
                     onClick={handleAcceptGenerated}
                     disabled={loading}
-                    className="flex-1 px-4 py-2 text-sm bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 disabled:opacity-50 flex items-center justify-center gap-2"
+                    className="flex-1 px-4 py-2 text-sm bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50 flex items-center justify-center gap-2"
                   >
                     {loading ? <><span className="w-3.5 h-3.5 border-2 border-white/30 border-t-white rounded-full animate-spin" />Saving…</> : 'Save Rule'}
                   </button>
@@ -817,12 +817,12 @@ function AddRuleModal({
                   value={nlPrompt}
                   onChange={e => setNlPrompt(e.target.value)}
                   placeholder="e.g., Revenue should never be negative"
-                  className="w-full text-sm border rounded-lg p-3 h-24 resize-none focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                  className="w-full text-sm border rounded-lg p-3 h-24 resize-none focus:outline-none focus:ring-2 focus:ring-blue-500"
                 />
                 <button
                   onClick={handleGenerateNL}
                   disabled={loading || !selectedFieldId || !nlPrompt.trim()}
-                  className="w-full px-4 py-2 text-sm bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 disabled:opacity-50 flex items-center justify-center gap-2"
+                  className="w-full px-4 py-2 text-sm bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50 flex items-center justify-center gap-2"
                 >
                   {loading ? <><span className="w-3.5 h-3.5 border-2 border-white/30 border-t-white rounded-full animate-spin" />Generating…</> : '✦ Generate Rule'}
                 </button>
@@ -834,12 +834,12 @@ function AddRuleModal({
                 value={manualName}
                 onChange={e => setManualName(e.target.value)}
                 placeholder="Rule name"
-                className="w-full text-sm border rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                className="w-full text-sm border rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500"
               />
               <select
                 value={manualType}
                 onChange={e => { setManualType(e.target.value); setManualConfig({}) }}
-                className="w-full text-sm border rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                className="w-full text-sm border rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500"
               >
                 {ruleTypeOptions.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
               </select>
@@ -847,39 +847,39 @@ function AddRuleModal({
               {/* Dynamic config based on type */}
               {manualType === 'min_value' && (
                 <input type="number" placeholder="Minimum value" onChange={e => setManualConfig({ min: Number(e.target.value) })}
-                  className="w-full text-sm border rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-indigo-500" />
+                  className="w-full text-sm border rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500" />
               )}
               {manualType === 'max_value' && (
                 <input type="number" placeholder="Maximum value" onChange={e => setManualConfig({ max: Number(e.target.value) })}
-                  className="w-full text-sm border rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-indigo-500" />
+                  className="w-full text-sm border rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500" />
               )}
               {manualType === 'max_length' && (
                 <input type="number" placeholder="Maximum length" onChange={e => setManualConfig({ max_length: Number(e.target.value) })}
-                  className="w-full text-sm border rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-indigo-500" />
+                  className="w-full text-sm border rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500" />
               )}
               {manualType === 'min_length' && (
                 <input type="number" placeholder="Minimum length" onChange={e => setManualConfig({ min_length: Number(e.target.value) })}
-                  className="w-full text-sm border rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-indigo-500" />
+                  className="w-full text-sm border rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500" />
               )}
               {manualType === 'regex' && (
                 <input placeholder="Regex pattern (e.g. ^[A-Z]{2}\\d{4}$)" onChange={e => setManualConfig({ pattern: e.target.value })}
-                  className="w-full text-sm border rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-indigo-500" />
+                  className="w-full text-sm border rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500" />
               )}
               {manualType === 'allowed_values' && (
                 <input placeholder="Comma-separated values (e.g. Active, Inactive)" onChange={e => setManualConfig({ values: e.target.value.split(',').map(v => v.trim()) })}
-                  className="w-full text-sm border rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-indigo-500" />
+                  className="w-full text-sm border rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500" />
               )}
               {manualType === 'range' && (
                 <div className="grid grid-cols-2 gap-2">
                   <input type="number" placeholder="Min" onChange={e => setManualConfig(c => ({ ...c, min: Number(e.target.value) }))}
-                    className="text-sm border rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-indigo-500" />
+                    className="text-sm border rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500" />
                   <input type="number" placeholder="Max" onChange={e => setManualConfig(c => ({ ...c, max: Number(e.target.value) }))}
-                    className="text-sm border rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-indigo-500" />
+                    className="text-sm border rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500" />
                 </div>
               )}
               {(manualType === 'date_after' || manualType === 'date_before') && (
                 <input type="date" onChange={e => setManualConfig({ date: e.target.value })}
-                  className="w-full text-sm border rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-indigo-500" />
+                  className="w-full text-sm border rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500" />
               )}
 
               <div className="flex gap-3">
@@ -897,7 +897,7 @@ function AddRuleModal({
               <button
                 onClick={handleSaveManual}
                 disabled={loading}
-                className="w-full px-4 py-2 text-sm bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 disabled:opacity-50 flex items-center justify-center gap-2"
+                className="w-full px-4 py-2 text-sm bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50 flex items-center justify-center gap-2"
               >
                 {loading ? <><span className="w-3.5 h-3.5 border-2 border-white/30 border-t-white rounded-full animate-spin" />Saving…</> : 'Save Rule'}
               </button>
@@ -1046,7 +1046,7 @@ function FixHistoryPanel({
                 </div>
                 <p className="text-gray-500 text-xs">{entry.affected_row_count.toLocaleString()} rows affected · {new Date(entry.applied_at).toLocaleString()}</p>
                 <div className="flex gap-3 pt-1 items-center">
-                  <button onClick={() => setShowSQL(entry.fix_sql)} className="text-xs text-indigo-600 underline hover:text-indigo-800">View SQL</button>
+                  <button onClick={() => setShowSQL(entry.fix_sql)} className="text-xs text-blue-600 underline hover:text-blue-800">View SQL</button>
                   {entry.status === 'applied' && (
                     entry.snapshot_failed ? (
                       <span
@@ -1249,7 +1249,7 @@ function CreateManualFixModal({
             <select
               value={tableId}
               onChange={e => { setTableId(e.target.value); setFieldId(''); setGeneratedSql(''); setSqlText(''); setSqlValidated(false) }}
-              className="w-full text-sm border rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-indigo-500"
+              className="w-full text-sm border rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500"
             >
               <option value="">Select table…</option>
               {allDatasets.map(ds => (
@@ -1264,7 +1264,7 @@ function CreateManualFixModal({
               <select
                 value={fieldId}
                 onChange={e => setFieldId(e.target.value)}
-                className="w-full text-sm border rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                className="w-full text-sm border rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500"
               >
                 <option value="">Entire table (all fields)</option>
                 {selectedTable.fields.map(f => (
@@ -1283,13 +1283,13 @@ function CreateManualFixModal({
               <div className="flex rounded-lg border border-gray-200 overflow-hidden text-sm">
                 <button
                   onClick={() => handleModeSwitch('nl')}
-                  className={`flex-1 py-2 flex items-center justify-center gap-1.5 transition-colors ${mode === 'nl' ? 'bg-indigo-600 text-white' : 'text-gray-600 hover:bg-gray-50'}`}
+                  className={`flex-1 py-2 flex items-center justify-center gap-1.5 transition-colors ${mode === 'nl' ? 'bg-blue-600 text-white' : 'text-gray-600 hover:bg-gray-50'}`}
                 >
                   <span>✦</span> Natural Language
                 </button>
                 <button
                   onClick={() => handleModeSwitch('sql')}
-                  className={`flex-1 py-2 flex items-center justify-center gap-1.5 transition-colors ${mode === 'sql' ? 'bg-indigo-600 text-white' : 'text-gray-600 hover:bg-gray-50'}`}
+                  className={`flex-1 py-2 flex items-center justify-center gap-1.5 transition-colors ${mode === 'sql' ? 'bg-blue-600 text-white' : 'text-gray-600 hover:bg-gray-50'}`}
                 >
                   <span className="font-mono">{`</>`}</span> SQL Editor
                 </button>
@@ -1301,12 +1301,12 @@ function CreateManualFixModal({
                     value={nlDescription}
                     onChange={e => { setNlDescription(e.target.value); setGeneratedSql('') }}
                     placeholder={"e.g., Set all null Industry values to 'UNKNOWN'\ne.g., Delete all rows where Status is 'Archived'\ne.g., Convert all phone numbers to E.164 format"}
-                    className="w-full text-sm border rounded-lg p-3 h-24 resize-none focus:outline-none focus:ring-2 focus:ring-indigo-500 font-normal"
+                    className="w-full text-sm border rounded-lg p-3 h-24 resize-none focus:outline-none focus:ring-2 focus:ring-blue-500 font-normal"
                   />
                   <button
                     onClick={handleGenerateFix}
                     disabled={generating || !nlDescription.trim()}
-                    className="w-full px-4 py-2 text-sm bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 disabled:opacity-50 flex items-center justify-center gap-2"
+                    className="w-full px-4 py-2 text-sm bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50 flex items-center justify-center gap-2"
                   >
                     {generating ? (
                       <><span className="w-3.5 h-3.5 border-2 border-white/30 border-t-white rounded-full animate-spin" />Generating fix…</>
@@ -1315,13 +1315,13 @@ function CreateManualFixModal({
 
                   {/* Generated SQL review panel */}
                   {generatedSql && (
-                    <div className="space-y-3 border border-indigo-200 rounded-lg p-3 bg-indigo-50">
-                      <p className="text-xs font-semibold text-indigo-700">Generated SQL — Review before applying</p>
+                    <div className="space-y-3 border border-blue-200 rounded-lg p-3 bg-blue-50">
+                      <p className="text-xs font-semibold text-blue-700">Generated SQL — Review before applying</p>
                       <pre className="bg-gray-950 text-green-300 rounded-lg p-3 text-xs overflow-x-auto whitespace-pre-wrap font-mono">
                         {generatedSql}
                       </pre>
                       {estimatedRows !== null && (
-                        <p className="text-xs text-indigo-700">
+                        <p className="text-xs text-blue-700">
                           Estimated rows affected: <strong>{estimatedRows.toLocaleString()}</strong>
                         </p>
                       )}
@@ -1329,7 +1329,7 @@ function CreateManualFixModal({
                         <button
                           onClick={() => handleApplyNL()}
                           disabled={isApplying}
-                          className="flex-1 px-3 py-1.5 text-sm bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 disabled:opacity-50 flex items-center justify-center gap-2"
+                          className="flex-1 px-3 py-1.5 text-sm bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50 flex items-center justify-center gap-2"
                         >
                           {isApplying ? (
                             <><span className="w-3.5 h-3.5 border-2 border-white/30 border-t-white rounded-full animate-spin" />Applying…</>
@@ -1337,7 +1337,7 @@ function CreateManualFixModal({
                         </button>
                         <button
                           onClick={() => handleModeSwitch('sql')}
-                          className="px-3 py-1.5 text-sm border border-indigo-300 text-indigo-700 rounded-lg hover:bg-indigo-100"
+                          className="px-3 py-1.5 text-sm border border-blue-300 text-blue-700 rounded-lg hover:bg-blue-100"
                         >
                           Edit SQL
                         </button>
@@ -1351,7 +1351,7 @@ function CreateManualFixModal({
                     value={sqlText}
                     onChange={e => { setSqlText(e.target.value); setSqlValidated(false); setValidationError(null) }}
                     placeholder={`UPDATE data_rows\nSET row_data = jsonb_set(row_data, '{Industry}', '"UNKNOWN"')\nWHERE table_id = '${tableId}'\n  AND (row_data->>'Industry' IS NULL)`}
-                    className="w-full text-sm border rounded-lg p-3 h-36 resize-none focus:outline-none focus:ring-2 focus:ring-indigo-500 font-mono"
+                    className="w-full text-sm border rounded-lg p-3 h-36 resize-none focus:outline-none focus:ring-2 focus:ring-blue-500 font-mono"
                   />
                   {validationError && (
                     <p className="text-xs text-red-600 bg-red-50 border border-red-200 rounded px-2 py-1">{validationError}</p>
@@ -1374,7 +1374,7 @@ function CreateManualFixModal({
                     <button
                       onClick={() => handleApplySQL()}
                       disabled={!sqlValidated || isApplying}
-                      className="flex-1 px-3 py-1.5 text-sm bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 disabled:opacity-50 flex items-center justify-center gap-2"
+                      className="flex-1 px-3 py-1.5 text-sm bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50 flex items-center justify-center gap-2"
                     >
                       {isApplying ? (
                         <><span className="w-3.5 h-3.5 border-2 border-white/30 border-t-white rounded-full animate-spin" />Applying…</>
@@ -1592,7 +1592,7 @@ function IssueFixModal({
                   <textarea
                     value={nlDescription}
                     onChange={(e) => setNlDescription(e.target.value)}
-                    className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm resize-none focus:ring-2 focus:ring-indigo-500 focus:border-transparent"
+                    className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm resize-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
                     rows={3}
                     placeholder={`e.g., "Delete the ${issue.affected_records} orphaned records" or "Set null values to a default"`}
                   />
@@ -1608,7 +1608,7 @@ function IssueFixModal({
                   <button
                     onClick={handleGenerateSQL}
                     disabled={!nlDescription.trim() || isGenerating}
-                    className="px-4 py-1.5 text-sm bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 disabled:opacity-50"
+                    className="px-4 py-1.5 text-sm bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50"
                   >
                     {isGenerating ? 'Generating…' : 'Generate SQL'}
                   </button>
@@ -1634,7 +1634,7 @@ function IssueFixModal({
                           setSqlText(generatedSql)
                           setMode('sql')
                         }}
-                        className="text-xs text-indigo-400 hover:text-indigo-300"
+                        className="text-xs text-blue-400 hover:text-blue-300"
                       >
                         Edit SQL →
                       </button>
@@ -1653,7 +1653,7 @@ function IssueFixModal({
                 <textarea
                   value={sqlText}
                   onChange={(e) => setSqlText(e.target.value)}
-                  className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm font-mono resize-none bg-gray-50 focus:ring-2 focus:ring-indigo-500"
+                  className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm font-mono resize-none bg-gray-50 focus:ring-2 focus:ring-blue-500"
                   rows={7}
                   placeholder={`UPDATE data_rows\nSET row_data = ...\nWHERE table_id = '${tableId}'\nAND ...`}
                 />
@@ -1679,7 +1679,7 @@ function IssueFixModal({
             <button
               onClick={() => handleApply()}
               disabled={isApplying || !canApply}
-              className="px-4 py-2 text-sm bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 disabled:opacity-50 flex items-center gap-2"
+              className="px-4 py-2 text-sm bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50 flex items-center gap-2"
             >
               {isApplying && (
                 <span className="w-3.5 h-3.5 border-2 border-white/30 border-t-white rounded-full animate-spin" />
@@ -2016,30 +2016,30 @@ export default function DataQualityContent({
         <div className="flex items-center gap-2 flex-shrink-0">
           <button
             onClick={() => setShowHistory(true)}
-            className="px-3 py-1.5 text-sm border border-gray-300 rounded-lg text-gray-600 hover:bg-gray-50"
+            className="bg-slate-50 border border-slate-200 text-slate-500 font-medium hover:bg-slate-100 rounded-lg px-4 py-2 text-sm"
           >
             Fix History
           </button>
           <button
             onClick={() => setShowAddRule(true)}
-            className="px-3 py-1.5 text-sm border border-indigo-300 rounded-lg text-indigo-700 hover:bg-indigo-50"
+            className="bg-white border border-slate-200 text-slate-700 font-medium hover:bg-slate-50 hover:border-slate-300 rounded-lg px-4 py-2 text-sm"
           >
             + Add Rule
           </button>
           <button
             onClick={() => setShowCreateFix(true)}
-            className="px-3 py-1.5 text-sm border border-violet-300 rounded-lg text-violet-700 hover:bg-violet-50"
+            className="bg-white border border-slate-200 text-slate-700 font-medium hover:bg-slate-50 hover:border-slate-300 rounded-lg px-4 py-2 text-sm"
           >
             + Create Fix
           </button>
           <button
             onClick={handleRegenerateStagedData}
             disabled={isRestaging || scanning}
-            className="px-3 py-1.5 text-sm border border-violet-300 rounded-lg text-violet-700 hover:bg-violet-50 disabled:opacity-50 flex items-center gap-1.5"
+            className="bg-slate-50 border border-slate-200 text-slate-500 font-medium hover:bg-slate-100 rounded-lg px-4 py-2 text-sm disabled:opacity-50 flex items-center gap-1.5"
             title="Re-apply saved transformations to generate fresh staged data for target-ready validation"
           >
             {isRestaging ? (
-              <><span className="w-3 h-3 border-2 border-violet-400/30 border-t-violet-600 rounded-full animate-spin" />Staging…</>
+              <><span className="w-3 h-3 border-2 border-slate-400/30 border-t-slate-600 rounded-full animate-spin" />Staging…</>
             ) : (
               '↻ Regenerate Staged Data'
             )}
@@ -2047,7 +2047,7 @@ export default function DataQualityContent({
           <button
             onClick={handleRunFullScan}
             disabled={scanning || isRestaging}
-            className="px-4 py-1.5 text-sm bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 disabled:opacity-50 flex items-center gap-2"
+            className="px-4 py-1.5 text-sm bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50 flex items-center gap-2"
           >
             {scanning ? <><span className="w-3.5 h-3.5 border-2 border-white/30 border-t-white rounded-full animate-spin" />Scanning…</> : '⊙ Run Full Scan'}
           </button>
@@ -2264,7 +2264,7 @@ export default function DataQualityContent({
               </summary>
               <div className="px-5 pb-4 space-y-2 border-t pt-3">
                 {rules.map(rule => (
-                  <div key={rule.id} className="flex items-center justify-between text-sm py-1.5 border-b border-gray-100 last:border-0">
+                  <div key={rule.id} className="flex items-center justify-between text-sm py-1.5 px-2 -mx-2 rounded border-b border-gray-100 last:border-0 hover:bg-gray-50 cursor-default">
                     <div className="flex items-center gap-2 min-w-0">
                       <span className={`shrink-0 text-xs px-2 py-0.5 rounded-full ${rule.severity === 'blocking' ? 'bg-red-100 text-red-700' : 'bg-amber-100 text-amber-700'}`}>
                         {rule.severity}
@@ -2272,7 +2272,7 @@ export default function DataQualityContent({
                       <span className="font-medium text-gray-900 truncate">{rule.name}</span>
                       <span className="text-gray-400 text-xs truncate">{rule.rule_type}</span>
                       {rule.is_ai_generated && (
-                        <span title={rule.ai_original_prompt ?? ''} className="text-xs px-1.5 py-0.5 rounded bg-indigo-50 text-indigo-700 border border-indigo-100">✦ AI</span>
+                        <span title={rule.ai_original_prompt ?? ''} className="text-xs px-1.5 py-0.5 rounded bg-blue-50 text-blue-700 border border-blue-100">✦ AI</span>
                       )}
                     </div>
                     <div className="flex items-center gap-2 shrink-0">
@@ -2287,7 +2287,7 @@ export default function DataQualityContent({
                           setIssues(freshIssues.issues)
                           setReadiness(freshScore)
                         }}
-                        className="text-xs text-indigo-600 hover:text-indigo-800 underline"
+                        className="text-xs text-blue-600 hover:text-blue-800 underline"
                       >
                         Run
                       </button>
@@ -2316,7 +2316,7 @@ export default function DataQualityContent({
                 <select
                   value={filterStage}
                   onChange={e => setFilterStage(e.target.value as typeof filterStage)}
-                  className="text-sm border border-gray-200 rounded-lg px-2.5 py-1.5 focus:outline-none focus:ring-2 focus:ring-indigo-500 bg-white"
+                  className="text-sm border border-gray-200 rounded-lg px-2.5 py-1.5 focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white"
                 >
                   <option value="all">All</option>
                   <option value="source">Source</option>
@@ -2332,7 +2332,7 @@ export default function DataQualityContent({
                 <select
                   value={filterSeverity}
                   onChange={e => setFilterSeverity(e.target.value as typeof filterSeverity)}
-                  className="text-sm border border-gray-200 rounded-lg px-2.5 py-1.5 focus:outline-none focus:ring-2 focus:ring-indigo-500 bg-white"
+                  className="text-sm border border-gray-200 rounded-lg px-2.5 py-1.5 focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white"
                 >
                   <option value="all">All</option>
                   <option value="blocking">Blocking</option>
@@ -2348,7 +2348,7 @@ export default function DataQualityContent({
                 <select
                   value={filterTableId}
                   onChange={e => setFilterTableId(e.target.value)}
-                  className="text-sm border border-gray-200 rounded-lg px-2.5 py-1.5 focus:outline-none focus:ring-2 focus:ring-indigo-500 bg-white"
+                  className="text-sm border border-gray-200 rounded-lg px-2.5 py-1.5 focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white"
                 >
                   <option value="all">All</option>
                   {tablesWithIssues.map(t => (
@@ -2365,7 +2365,7 @@ export default function DataQualityContent({
                 <select
                   value={filterStatus}
                   onChange={e => setFilterStatus(e.target.value as typeof filterStatus)}
-                  className="text-sm border border-gray-200 rounded-lg px-2.5 py-1.5 focus:outline-none focus:ring-2 focus:ring-indigo-500 bg-white"
+                  className="text-sm border border-gray-200 rounded-lg px-2.5 py-1.5 focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white"
                 >
                   <option value="open">Open</option>
                   <option value="all">All</option>
@@ -2391,7 +2391,7 @@ export default function DataQualityContent({
                 {hasActiveFilters && (
                   <button
                     onClick={resetFilters}
-                    className="text-xs text-indigo-600 hover:text-indigo-800 hover:underline"
+                    className="text-xs text-blue-600 hover:text-blue-800 hover:underline"
                   >
                     Reset filters
                   </button>
@@ -2515,7 +2515,7 @@ export default function DataQualityContent({
           <div className="flex justify-end pb-4">
             <button
               onClick={() => router.push(`/app/projects/${projectId}/mapping`)}
-              className="px-5 py-2.5 text-sm bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 font-medium"
+              className="px-5 py-2.5 text-sm bg-blue-600 text-white rounded-lg hover:bg-blue-700 font-medium"
             >
               Proceed to Mapping →
             </button>
