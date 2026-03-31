@@ -251,6 +251,8 @@ export interface ProjectWithStats {
   warningCount: number
   totalTransforms: number
   savedTransforms: number
+  needsTransformCount: number
+  coveredTransformCount: number
   readinessScore: number | null
   currentPhase: number
   outputCount: number

@@ -2148,7 +2148,7 @@ export default function TransformContent({ projectId, projectName, initialData }
                     </Button>
                     {/* Apply Transform — only enabled after successful test */}
                     <Button
-                      className="bg-blue-600 hover:bg-blue-700 text-white gap-2 flex-1 disabled:opacity-50 disabled:cursor-not-allowed"
+                      className="bg-blue-600 hover:bg-blue-700 text-white gap-2 px-6 disabled:opacity-50 disabled:cursor-not-allowed"
                       onClick={handleApply}
                       disabled={isApplying || isCheckingIssues || !localTransform?.transformationId || localTransform.status !== 'tested'}
                       title={localTransform.status !== 'tested' ? 'Run "Test Transform" first' : undefined}

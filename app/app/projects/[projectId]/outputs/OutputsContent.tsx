@@ -16,6 +16,7 @@ import {
   Sparkles,
   FileText,
 } from '@/components/icons'
+import { Link2, Code, ShieldCheck, Database, Settings } from 'lucide-react'
 import { PageHeader } from '@/components/app/PageHeader'
 import {
   generateGoldStandardCSVs,
@@ -92,13 +93,31 @@ function decisionIcon(type: string) {
 
 function decisionDotColor(type: string) {
   switch (type) {
-    case 'fix': return 'bg-green-500'         // fixes applied/reverted
-    case 'mapping': return 'bg-blue-500'    // mapping decisions
-    case 'transform': return 'bg-purple-500'  // transform events
-    case 'validation': return 'bg-amber-500'  // rules, risk accepted
-    case 'data': return 'bg-blue-500'         // uploads
-    case 'system': return 'bg-gray-500'       // scans, staging
+    case 'fix': return 'bg-green-500'
+    case 'mapping': return 'bg-blue-500'
+    case 'transform': return 'bg-purple-500'
+    case 'validation': return 'bg-amber-500'
+    case 'data': return 'bg-blue-500'
+    case 'system': return 'bg-gray-500'
     default: return 'bg-gray-400'
+  }
+}
+
+function DecisionIcon({ type }: { type: string }) {
+  switch (type) {
+    case 'mapping':
+      return <Link2 className="w-3.5 h-3.5 text-blue-500 flex-shrink-0 mt-0.5" />
+    case 'transform':
+      return <Code className="w-3.5 h-3.5 text-purple-500 flex-shrink-0 mt-0.5" />
+    case 'fix':
+    case 'validation':
+      return <ShieldCheck className="w-3.5 h-3.5 text-green-500 flex-shrink-0 mt-0.5" />
+    case 'data':
+      return <Database className="w-3.5 h-3.5 text-blue-500 flex-shrink-0 mt-0.5" />
+    case 'system':
+      return <Settings className="w-3.5 h-3.5 text-gray-400 flex-shrink-0 mt-0.5" />
+    default:
+      return <span className="w-2 h-2 rounded-full mt-1.5 flex-shrink-0 bg-gray-400" />
   }
 }
 
@@ -344,12 +363,15 @@ export default function OutputsContent({ projectId, projectName, initialData }: 
           {/* ── Compact stat cards ─────────────────────────────────────────── */}
           <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-4">
             {/* Migration Readiness — headline metric */}
-            <div className={`rounded-xl border border-gray-200 shadow-sm bg-white p-4 border-l-4 ${
-              metrics.readinessStatus === 'ready' ? 'border-l-green-500' :
-              metrics.readinessStatus === 'at_risk' ? 'border-l-amber-400' :
-              'border-l-red-500'
-            }`}>
-              <p className="text-xs font-medium text-gray-500 uppercase tracking-wide mb-1.5">Migration Readiness</p>
+            <div className="rounded-xl border border-gray-200 bg-white p-5">
+              <div className="flex items-center gap-1.5 mb-2">
+                <span className={`w-2 h-2 rounded-full flex-shrink-0 ${
+                  metrics.readinessStatus === 'ready' ? 'bg-green-500' :
+                  metrics.readinessStatus === 'at_risk' ? 'bg-amber-400' :
+                  'bg-red-500'
+                }`} />
+                <p className="text-xs font-medium text-gray-500 uppercase tracking-wide">Migration Readiness</p>
+              </div>
               <div className="flex items-baseline gap-1.5">
                 <span className={`text-2xl font-semibold ${readinessColor(metrics.readinessStatus)}`}>{metrics.readinessScore}%</span>
                 <span className={`text-sm font-medium ${readinessColor(metrics.readinessStatus)}`}>
@@ -359,8 +381,11 @@ export default function OutputsContent({ projectId, projectName, initialData }: 
             </div>
 
             {/* Mapping Coverage */}
-            <div className="rounded-xl border border-gray-200 shadow-sm bg-white p-4">
-              <p className="text-xs font-medium text-gray-500 uppercase tracking-wide mb-1.5">Mapping Coverage</p>
+            <div className="rounded-xl border border-gray-200 bg-white p-5">
+              <div className="flex items-center gap-1.5 mb-2">
+                <span className="w-2 h-2 rounded-full bg-blue-500 flex-shrink-0" />
+                <p className="text-xs font-medium text-gray-500 uppercase tracking-wide">Mapping Coverage</p>
+              </div>
               <div className="flex items-baseline gap-1">
                 <span className="text-2xl font-semibold text-gray-900">{metrics.approvedFieldMappings}</span>
                 <span className="text-sm text-gray-400">/ {metrics.totalSourceFields}</span>
@@ -371,10 +396,13 @@ export default function OutputsContent({ projectId, projectName, initialData }: 
             </div>
 
             {/* Quality Issues */}
-            <div className={`rounded-xl border shadow-sm bg-white p-4 ${
-              metrics.openBlocking > 0 ? 'border-gray-200 border-l-4 border-l-red-500' : 'border-gray-200'
-            }`}>
-              <p className="text-xs font-medium text-gray-500 uppercase tracking-wide mb-1.5">Quality Issues</p>
+            <div className="rounded-xl border border-gray-200 bg-white p-5">
+              <div className="flex items-center gap-1.5 mb-2">
+                <span className={`w-2 h-2 rounded-full flex-shrink-0 ${
+                  metrics.openBlocking > 0 ? 'bg-red-500' : 'bg-green-500'
+                }`} />
+                <p className="text-xs font-medium text-gray-500 uppercase tracking-wide">Quality Issues</p>
+              </div>
               {metrics.openBlocking === 0 && metrics.openWarnings === 0 ? (
                 <span className="text-2xl font-semibold text-green-600">Clean</span>
               ) : (
@@ -396,8 +424,11 @@ export default function OutputsContent({ projectId, projectName, initialData }: 
             </div>
 
             {/* Transforms */}
-            <div className="rounded-xl border border-gray-200 shadow-sm bg-white p-4">
-              <p className="text-xs font-medium text-gray-500 uppercase tracking-wide mb-1.5">Transforms</p>
+            <div className="rounded-xl border border-gray-200 bg-white p-5">
+              <div className="flex items-center gap-1.5 mb-2">
+                <span className="w-2 h-2 rounded-full bg-purple-500 flex-shrink-0" />
+                <p className="text-xs font-medium text-gray-500 uppercase tracking-wide">Transforms</p>
+              </div>
               <div className="flex items-baseline gap-1">
                 <span className="text-2xl font-semibold text-gray-900">{metrics.completedTransforms}</span>
                 <span className="text-sm text-gray-400">/ {metrics.totalTransforms}</span>
@@ -481,8 +512,8 @@ export default function OutputsContent({ projectId, projectName, initialData }: 
               </div>
               <div className="space-y-2">
                 {previewDecisions.map((entry) => (
-                  <div key={entry.id} className="flex items-start gap-3">
-                    <div className={`w-2 h-2 rounded-full mt-1.5 flex-shrink-0 ${decisionDotColor(entry.type)}`} />
+                  <div key={entry.id} className="flex items-start gap-2.5">
+                    <DecisionIcon type={entry.type} />
                     <div className="flex-1 min-w-0">
                       <p className="text-xs text-gray-700 truncate">{entry.label}</p>
                     </div>
@@ -550,8 +581,8 @@ export default function OutputsContent({ projectId, projectName, initialData }: 
                   {filteredDecisions.length === 0 ? (
                     <p className="text-sm text-gray-400 text-center py-8">No events of this type.</p>
                   ) : filteredDecisions.map((entry) => (
-                    <div key={entry.id} className="flex items-start gap-3">
-                      <div className={`w-2 h-2 rounded-full mt-1.5 flex-shrink-0 ${decisionDotColor(entry.type)}`} />
+                    <div key={entry.id} className="flex items-start gap-2.5">
+                      <DecisionIcon type={entry.type} />
                       <div className="flex-1 min-w-0">
                         <p className="text-xs text-gray-700">{entry.label}</p>
                       </div>

@@ -185,12 +185,26 @@ export default function QueryData({ projectId, tables }: QueryDataProps) {
 
           {/* Error banners */}
           {result && !result.success && (
-            <div className="bg-red-50 border border-red-200 rounded-xl px-5 py-3">
+            <div className="bg-red-50 border border-red-200 rounded-xl px-5 py-4">
               <p className="text-sm font-medium text-red-700">{result.error}</p>
+              {result.hint && result.hint !== result.error && result.hint !== result.rawError && (
+                <p className="text-sm text-red-600 mt-1.5">{result.hint}</p>
+              )}
               {result.friendlySQL && mode === 'nl' && (
-                <p className="text-xs text-red-500 mt-1">
-                  Generated SQL: <code className="font-mono">{result.friendlySQL}</code>
+                <p className="text-xs text-red-500 mt-2">
+                  Generated SQL:{' '}
+                  <code className="font-mono bg-red-100 px-1 py-0.5 rounded">{result.friendlySQL}</code>
                 </p>
+              )}
+              {result.rawError && result.rawError !== result.error && (
+                <details className="mt-3">
+                  <summary className="text-xs text-red-400 cursor-pointer select-none hover:text-red-500 transition-colors">
+                    Technical details
+                  </summary>
+                  <p className="text-xs text-red-400 mt-1.5 font-mono bg-red-100/60 px-3 py-2 rounded-lg break-all">
+                    {result.rawError}
+                  </p>
+                </details>
               )}
             </div>
           )}

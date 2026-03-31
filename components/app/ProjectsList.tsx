@@ -64,8 +64,8 @@ function ProjectCard({ project, onUpdate }: { project: ProjectWithStats; onUpdat
     stats.push({ label: `Warnings: ${project.warningCount}`, color: 'text-amber-600' })
   }
 
-  if (project.totalTransforms > 0) {
-    stats.push({ label: `Transforms: ${project.savedTransforms}/${project.totalTransforms} saved` })
+  if (project.needsTransformCount > 0) {
+    stats.push({ label: `Transforms: ${project.coveredTransformCount}/${project.needsTransformCount} saved` })
   }
 
   if (isCompleted && project.outputCount > 0) {

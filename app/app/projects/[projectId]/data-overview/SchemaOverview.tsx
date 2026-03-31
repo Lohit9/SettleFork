@@ -3,6 +3,7 @@
 import { useState, useTransition } from 'react'
 import { useRouter } from 'next/navigation'
 import { ChevronDown, ChevronRight, Upload, Check, Pencil } from '@/components/icons'
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { updateField } from '@/lib/actions/fields'
 import { generateMappings } from '@/lib/actions/mappings'
 import { enrichSchemaFromDocs } from '@/lib/actions/schema-enrichment'
@@ -88,20 +89,24 @@ function FieldEditModal({
           <div>
             <label className="block text-xs font-medium text-gray-700 mb-1">Data Type</label>
             <div className="flex gap-2">
-              <select
+              <Select
                 value={COMMON_TYPES.includes(dataType) ? dataType : '__custom'}
-                onChange={(e) => {
-                  if (e.target.value !== '__custom') setDataType(e.target.value)
+                onValueChange={(val) => {
+                  if (val !== '__custom') setDataType(val)
                 }}
-                className="flex-1 border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
               >
-                {COMMON_TYPES.map((t) => (
-                  <option key={t} value={t}>{t}</option>
-                ))}
-                {!COMMON_TYPES.includes(dataType) && (
-                  <option value="__custom">{dataType}</option>
-                )}
-              </select>
+                <SelectTrigger className="flex-1 h-9 text-sm">
+                  <SelectValue placeholder="Select type…" />
+                </SelectTrigger>
+                <SelectContent>
+                  {COMMON_TYPES.map((t) => (
+                    <SelectItem key={t} value={t}>{t}</SelectItem>
+                  ))}
+                  {!COMMON_TYPES.includes(dataType) && (
+                    <SelectItem value="__custom">{dataType}</SelectItem>
+                  )}
+                </SelectContent>
+              </Select>
               <input
                 value={dataType}
                 onChange={(e) => setDataType(e.target.value)}

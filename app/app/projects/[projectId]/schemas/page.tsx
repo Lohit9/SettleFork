@@ -10,6 +10,7 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Textarea } from '@/components/ui/textarea'
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 
 export default function DataOverviewPage() {
   const params = useParams()
@@ -24,7 +25,7 @@ export default function DataOverviewPage() {
   ]
 
   return (
-    <div className="flex-1 bg-slate-50 flex flex-col">
+    <div className="flex-1 bg-gray-50 flex flex-col">
       {/* Page Header */}
       <div className="border-b border-gray-200 bg-white p-6">
         <h1 className="text-2xl font-semibold text-gray-900 mb-2">Data Overview</h1>
@@ -96,18 +97,16 @@ function DataPreviewTab() {
         <Label htmlFor="preview-table-select" className="text-sm font-medium text-gray-700">
           Select Table:
         </Label>
-        <select
-          id="preview-table-select"
-          value={selectedTable}
-          onChange={(e) => setSelectedTable(e.target.value)}
-          className="h-9 rounded-md border border-gray-300 px-3 py-1 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
-        >
-          {tables.map((table) => (
-            <option key={table} value={table}>
-              {table}
-            </option>
-          ))}
-        </select>
+        <Select value={selectedTable} onValueChange={(val) => setSelectedTable(val)}>
+          <SelectTrigger id="preview-table-select" className="h-9 text-sm w-[240px]">
+            <SelectValue placeholder="Select table…" />
+          </SelectTrigger>
+          <SelectContent>
+            {tables.map((table) => (
+              <SelectItem key={table} value={table}>{table}</SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
       </div>
 
       <Card>
@@ -156,8 +155,10 @@ function QueryDataTab() {
 
   const handleExecute = () => {
     if (queryMode === 'natural') {
+      console.log('Natural language query:', naturalQuery)
       // TODO: Wire to backend
     } else {
+      console.log('SQL query:', sqlQuery)
       // TODO: Wire to backend
     }
   }
@@ -165,7 +166,7 @@ function QueryDataTab() {
   return (
     <div className="p-6 space-y-4">
       {/* Info Banner */}
-      <div className="bg-blue-50 border border-blue-200 rounded-xl p-4">
+      <div className="bg-blue-50 border border-blue-200 rounded-lg p-4">
         <p className="text-sm text-blue-800">
           Use this to explore and understand data. This does not modify data.
         </p>
@@ -180,7 +181,7 @@ function QueryDataTab() {
                 onClick={() => setQueryMode('natural')}
                 className={`px-3 py-1 text-sm font-medium rounded-md transition-colors ${
                   queryMode === 'natural'
-                    ? 'bg-blue-600 text-white'
+                    ? 'bg-[#4F46E5] text-white'
                     : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
                 }`}
               >
@@ -190,7 +191,7 @@ function QueryDataTab() {
                 onClick={() => setQueryMode('sql')}
                 className={`px-3 py-1 text-sm font-medium rounded-md transition-colors ${
                   queryMode === 'sql'
-                    ? 'bg-blue-600 text-white'
+                    ? 'bg-[#4F46E5] text-white'
                     : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
                 }`}
               >
@@ -209,7 +210,7 @@ function QueryDataTab() {
               />
               <Button
                 onClick={handleExecute}
-                className="bg-blue-600 hover:bg-blue-700 text-white"
+                className="bg-[#4F46E5] hover:bg-[#4338CA] text-white"
                 disabled={!naturalQuery.trim()}
               >
                 Generate & Execute Query
@@ -225,7 +226,7 @@ function QueryDataTab() {
               />
               <Button
                 onClick={handleExecute}
-                className="bg-blue-600 hover:bg-blue-700 text-white"
+                className="bg-[#4F46E5] hover:bg-[#4338CA] text-white"
                 disabled={!sqlQuery.trim()}
               >
                 Execute Query
@@ -279,18 +280,16 @@ function DataProfilingTab() {
         <Label htmlFor="profiling-table-select" className="text-sm font-medium text-gray-700">
           Select Table:
         </Label>
-        <select
-          id="profiling-table-select"
-          value={selectedTable}
-          onChange={(e) => setSelectedTable(e.target.value)}
-          className="h-9 rounded-md border border-gray-300 px-3 py-1 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
-        >
-          {tables.map((table) => (
-            <option key={table} value={table}>
-              {table}
-            </option>
-          ))}
-        </select>
+        <Select value={selectedTable} onValueChange={(val) => setSelectedTable(val)}>
+          <SelectTrigger id="profiling-table-select" className="h-9 text-sm w-[240px]">
+            <SelectValue placeholder="Select table…" />
+          </SelectTrigger>
+          <SelectContent>
+            {tables.map((table) => (
+              <SelectItem key={table} value={table}>{table}</SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
       </div>
 
       {/* Summary Metrics */}
