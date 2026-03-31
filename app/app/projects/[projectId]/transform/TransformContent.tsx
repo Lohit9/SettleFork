@@ -38,6 +38,9 @@ import type { BlockingIssue, FieldSourceIssue } from '@/lib/actions/staging'
 import { getResolvedSourceFieldIds } from '@/lib/quality/resolved-by-transform'
 import { sourcePreviewValueMatchesIssues, maxAffectedRecordsForField } from '@/lib/quality/preview-source-issue-match'
 import StagingWarningPopup from '@/components/StagingWarningPopup'
+import FKCascadePrompt from '@/components/app/FKCascadePrompt'
+import { findFKDependents, cascadeTransformToFKs } from '@/lib/actions/fk-cascade'
+import type { FKDependent } from '@/lib/actions/fk-cascade'
 
 // ── Types ──────────────────────────────────────────────────────────────────────
 
@@ -213,6 +216,17 @@ export default function TransformContent({ projectId, projectName, initialData }
   const pendingStagingFnRef = useRef<(() => void) | null>(null)
   // Deep-link URL for "Fix Issues →" button in the popup
   const fixIssuesUrlRef = useRef<string>(`/app/projects/${projectId}/data-quality?stage=source&severity=blocking&status=open`)
+
+  // FK cascade prompt — shown after applying a transform to a PK field
+  const [showFKCascade, setShowFKCascade] = useState(false)
+  const [fkCascadeData, setFKCascadeData] = useState<{
+    pkTableName: string
+    pkFieldName: string
+    pkTransformSQL: string
+    dependents: FKDependent[]
+  } | null>(null)
+  // Rows affected from the just-completed apply — held until cascade prompt resolves
+  const pendingApplyRowsRef = useRef<number>(0)
 
   // Staleness — table mapping IDs where source data was changed after last staging run
   const [staleTableMappingIds, setStaleTableMappingIds] = useState<Set<string>>(new Set())
@@ -661,6 +675,32 @@ export default function TransformContent({ projectId, projectName, initialData }
       setLocalTransform((prev) => prev ? { ...prev, status: 'applied' } : null)
       refreshFieldStatus(fmId, 'applied')
       setApplyResult({ rowsAffected: result.rowsAffected })
+
+      // Check if this is a PK field with FK dependents — prompt cascade if so
+      const currentField = findField(data.datasets, fmId)?.field
+      if (currentField?.targetFieldIsPrimaryKey) {
+        const { dependents, pkTableName, pkFieldName } = await findFKDependents(
+          projectId,
+          currentField.targetFieldId
+        )
+        // Only surface dependents that are mappable and not already applied
+        const relevant = dependents.filter(
+          (d) => d.fieldMappingId !== null &&
+                 (!d.hasExistingTransform || d.existingTransformStatus !== 'applied')
+        )
+        if (relevant.length > 0) {
+          pendingApplyRowsRef.current = result.rowsAffected
+          setFKCascadeData({
+            pkTableName,
+            pkFieldName,
+            pkTransformSQL: sql,
+            dependents: relevant,
+          })
+          setShowFKCascade(true)
+          return // toast shown after cascade prompt resolves
+        }
+      }
+
       showToast(`Applied to ${result.rowsAffected.toLocaleString()} rows`, 'success')
     })
   }
@@ -722,6 +762,59 @@ export default function TransformContent({ projectId, projectName, initialData }
   function handleWarningCancel() {
     setShowStagingWarning(false)
     pendingStagingFnRef.current = null
+  }
+
+  // ── FK Cascade handlers ───────────────────────────────────────────────────
+
+  async function handleFKCascade(selectedFmIds: string[]) {
+    if (!fkCascadeData || selectedFmIds.length === 0) {
+      handleFKCascadeSkip()
+      return
+    }
+
+    const result = await cascadeTransformToFKs(
+      selectedFmIds,
+      fkCascadeData.pkTransformSQL,
+      localTransform?.description ?? '',
+      fkCascadeData.pkTableName,
+      fkCascadeData.pkFieldName
+    )
+
+    setShowFKCascade(false)
+    const rows = pendingApplyRowsRef.current
+    pendingApplyRowsRef.current = 0
+    setFKCascadeData(null)
+
+    if (result.success && result.cascadedCount > 0) {
+      // Refresh sidebar badges for cascaded fields — show as 'applied' (green Transformed)
+      for (const fmId of selectedFmIds) {
+        refreshFieldTransformation(
+          fmId,
+          null,
+          fkCascadeData.pkTransformSQL,
+          'ai',
+          `Cascaded from ${fkCascadeData.pkTableName}.${fkCascadeData.pkFieldName}: ${localTransform?.description ?? ''}`,
+          'applied'
+        )
+      }
+      showToast(
+        `Applied to ${rows.toLocaleString()} rows. Cascaded and applied to ${result.cascadedCount} FK field${result.cascadedCount > 1 ? 's' : ''}.`,
+        'success'
+      )
+    } else {
+      showToast(
+        `Applied to ${rows.toLocaleString()} rows. Cascade failed — add transforms to FK fields manually.`,
+        'error'
+      )
+    }
+  }
+
+  function handleFKCascadeSkip() {
+    const rows = pendingApplyRowsRef.current
+    pendingApplyRowsRef.current = 0
+    setShowFKCascade(false)
+    setFKCascadeData(null)
+    showToast(`Applied to ${rows.toLocaleString()} rows`, 'success')
   }
 
   // ── Auto-Generate All ─────────────────────────────────────────────────────
@@ -2221,6 +2314,18 @@ export default function TransformContent({ projectId, projectName, initialData }
           onProceed={handleWarningProceed}
           onFixIssues={handleWarningFixIssues}
           onCancel={handleWarningCancel}
+        />
+      )}
+
+      {/* FK cascade prompt — shown after applying a transform to a PK field */}
+      {showFKCascade && fkCascadeData && (
+        <FKCascadePrompt
+          pkTableName={fkCascadeData.pkTableName}
+          pkFieldName={fkCascadeData.pkFieldName}
+          pkTransformSQL={fkCascadeData.pkTransformSQL}
+          dependents={fkCascadeData.dependents}
+          onCascade={handleFKCascade}
+          onSkip={handleFKCascadeSkip}
         />
       )}
 
