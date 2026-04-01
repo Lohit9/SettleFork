@@ -8,7 +8,7 @@ import { Label } from '@/components/ui/label'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Upload, CheckCircle2, AlertCircle, RefreshCw } from '@/components/icons'
 import { Database, Loader2, AlertTriangle, XCircle } from 'lucide-react'
-import { testConnection, listRemoteTables, listTablesForConnection, getConnectionForDataset, disconnectDatabase, resyncTables } from '@/lib/actions/db-connector'
+import { testConnection, listRemoteTables, listMssqlSchemas, listTablesForConnection, getConnectionForDataset, disconnectDatabase, resyncTables } from '@/lib/actions/db-connector'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { uploadCSV } from '@/lib/actions/csv'
 import { createDataset, getTablesForDataset } from '@/lib/actions/datasets'
@@ -110,6 +110,12 @@ export function IngestionCard({ type, title, projectId, initialDatasets, initial
   const [dbUser, setDbUser] = useState('')
   const [dbPassword, setDbPassword] = useState('')
   const [dbSslMode, setDbSslMode] = useState('require')
+  // MS SQL-specific encryption options
+  const [dbEncrypt, setDbEncrypt] = useState(true)
+  const [dbTrustCert, setDbTrustCert] = useState(false)
+  // MS SQL schema picker
+  const [dbSchema, setDbSchema] = useState('dbo')
+  const [schemas, setSchemas] = useState<string[]>([])
   const [connectionStatus, setConnectionStatus] = useState<'idle' | 'testing' | 'success' | 'error'>('idle')
   const [connectionError, setConnectionError] = useState<string | null>(null)
   const [remoteTables, setRemoteTables] = useState<{ name: string; estimatedRows: number }[] | null>(null)
@@ -147,8 +153,8 @@ export function IngestionCard({ type, title, projectId, initialDatasets, initial
     setMethod(newMethod)
     setDdl(INITIAL_DDL)
     setUploadState({ status: 'idle' })
-    // Reset DB connector state — view will be determined by useEffect
-    setConnectionView('loading')
+    // Reset DB connector state — start on form; useEffect upgrades to 'connected' if a connection exists
+    setConnectionView('form')
     setExistingConnection(null)
     setConnectionStatus('idle')
     setConnectionError(null)
@@ -163,6 +169,10 @@ export function IngestionCard({ type, title, projectId, initialDatasets, initial
     setAddMoreTables(null)
     setAddMoreSelected([])
     setAddMoreError(null)
+    setDbEncrypt(true)
+    setDbTrustCert(false)
+    setDbSchema('dbo')
+    setSchemas([])
   }
 
   // ── Auto-detect ingestion method on mount / dataset change ───────────────
@@ -227,20 +237,55 @@ export function IngestionCard({ type, title, projectId, initialDatasets, initial
   const handleDbTypeSelect = (t: 'postgresql' | 'mysql' | 'mssql') => {
     setDbType(t)
     setDbPort(t === 'postgresql' ? 5432 : t === 'mysql' ? 3306 : 1433)
+    // Reset connection state when switching types
+    setConnectionStatus('idle')
+    setConnectionError(null)
+    setRemoteTables(null)
+    setSelectedRemoteTables([])
+    setSchemas([])
+    setDbSchema('dbo')
+  }
+
+  // Map MS SQL encrypt/trustCert checkboxes to the sslMode string the server action expects
+  const getMssqlSslMode = () => {
+    if (!dbEncrypt) return 'disable'
+    if (dbTrustCert) return 'require'
+    return 'verify-full'
   }
 
   const handleTestConnection = async () => {
     setConnectionStatus('testing')
     setConnectionError(null)
+    const sslMode = dbType === 'mssql' ? getMssqlSslMode() : dbSslMode
+
     const result = await testConnection({
       host: dbHost, port: dbPort, database: dbName,
-      username: dbUser, password: dbPassword, sslMode: dbSslMode,
+      username: dbUser, password: dbPassword, sslMode,
+      dbType,
     })
     if (result.success) {
       setConnectionStatus('success')
+
+      // For MS SQL: fetch available schemas, then list tables in the selected one
+      if (dbType === 'mssql') {
+        const schemasResult = await listMssqlSchemas({
+          host: dbHost, port: dbPort, database: dbName,
+          username: dbUser, password: dbPassword, sslMode,
+        })
+        if (schemasResult.success && schemasResult.schemas) {
+          setSchemas(schemasResult.schemas)
+          // Keep dbSchema as 'dbo' unless dbo isn't available
+          if (!schemasResult.schemas.includes(dbSchema)) {
+            setDbSchema(schemasResult.schemas[0] ?? 'dbo')
+          }
+        }
+      }
+
       const tablesResult = await listRemoteTables({
         host: dbHost, port: dbPort, database: dbName,
-        username: dbUser, password: dbPassword, sslMode: dbSslMode,
+        username: dbUser, password: dbPassword, sslMode,
+        dbType,
+        schema: dbType === 'mssql' ? dbSchema : undefined,
       })
       if (tablesResult.success && tablesResult.tables) {
         setRemoteTables(tablesResult.tables)
@@ -250,6 +295,24 @@ export function IngestionCard({ type, title, projectId, initialDatasets, initial
     } else {
       setConnectionStatus('error')
       setConnectionError(result.error ?? 'Connection failed')
+    }
+  }
+
+  // Re-fetch tables when the MS SQL schema picker changes
+  const handleSchemaChange = async (newSchema: string) => {
+    setDbSchema(newSchema)
+    setSelectedRemoteTables([])
+    const sslMode = getMssqlSslMode()
+    const tablesResult = await listRemoteTables({
+      host: dbHost, port: dbPort, database: dbName,
+      username: dbUser, password: dbPassword, sslMode,
+      dbType: 'mssql',
+      schema: newSchema,
+    })
+    if (tablesResult.success && tablesResult.tables) {
+      setRemoteTables(tablesResult.tables)
+    } else {
+      setRemoteTables([])
     }
   }
 
@@ -274,8 +337,11 @@ export function IngestionCard({ type, title, projectId, initialDatasets, initial
         body: JSON.stringify({
           projectId, role: type, datasetId,
           host: dbHost, port: dbPort, database: dbName,
-          username: dbUser, password: dbPassword, sslMode: dbSslMode,
+          username: dbUser, password: dbPassword,
+          sslMode: dbType === 'mssql' ? getMssqlSslMode() : dbSslMode,
           selectedTables: selectedRemoteTables,
+          dbType,
+          ...(dbType === 'mssql' ? { schema: dbSchema } : {}),
         }),
       })
       const result = await response.json()
@@ -769,12 +835,6 @@ export function IngestionCard({ type, title, projectId, initialDatasets, initial
                       </button>
                     ))}
                   </div>
-                  {dbType !== 'postgresql' && (
-                    <p className="text-xs text-amber-600 flex items-center gap-1">
-                      <AlertTriangle className="w-3 h-3" />
-                      {dbType === 'mysql' ? 'MySQL' : 'MS SQL Server'} support is coming soon. Only PostgreSQL is available today.
-                    </p>
-                  )}
                 </div>
 
                 {/* Connection form */}
@@ -787,7 +847,7 @@ export function IngestionCard({ type, title, projectId, initialDatasets, initial
                         placeholder="db.example.com"
                         value={dbHost}
                         onChange={(e) => setDbHost(e.target.value)}
-                        disabled={connectionStatus === 'testing' || importing || dbType !== 'postgresql'}
+                        disabled={connectionStatus === 'testing' || importing}
                       />
                     </div>
                     <div className="space-y-1">
@@ -796,7 +856,7 @@ export function IngestionCard({ type, title, projectId, initialDatasets, initial
                         type="number"
                         value={dbPort}
                         onChange={(e) => setDbPort(Number(e.target.value))}
-                        disabled={connectionStatus === 'testing' || importing || dbType !== 'postgresql'}
+                        disabled={connectionStatus === 'testing' || importing}
                       />
                     </div>
                   </div>
@@ -808,7 +868,7 @@ export function IngestionCard({ type, title, projectId, initialDatasets, initial
                       placeholder="my_database"
                       value={dbName}
                       onChange={(e) => setDbName(e.target.value)}
-                      disabled={connectionStatus === 'testing' || importing || dbType !== 'postgresql'}
+                      disabled={connectionStatus === 'testing' || importing}
                     />
                   </div>
 
@@ -820,7 +880,7 @@ export function IngestionCard({ type, title, projectId, initialDatasets, initial
                         placeholder="readonly_user"
                         value={dbUser}
                         onChange={(e) => setDbUser(e.target.value)}
-                        disabled={connectionStatus === 'testing' || importing || dbType !== 'postgresql'}
+                        disabled={connectionStatus === 'testing' || importing}
                       />
                     </div>
                     <div className="space-y-1">
@@ -830,30 +890,60 @@ export function IngestionCard({ type, title, projectId, initialDatasets, initial
                         placeholder="••••••••"
                         value={dbPassword}
                         onChange={(e) => setDbPassword(e.target.value)}
-                        disabled={connectionStatus === 'testing' || importing || dbType !== 'postgresql'}
+                        disabled={connectionStatus === 'testing' || importing}
                       />
                     </div>
                   </div>
 
-                  {/* SSL Mode */}
-                  <div className="space-y-1">
-                    <Label>SSL Mode</Label>
-                    <Select
-                      value={dbSslMode}
-                      onValueChange={setDbSslMode}
-                      disabled={connectionStatus === 'testing' || importing || dbType !== 'postgresql'}
-                    >
-                      <SelectTrigger className="h-9 text-sm w-full">
-                        <SelectValue />
-                      </SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value="require">require (recommended)</SelectItem>
-                        <SelectItem value="disable">disable</SelectItem>
-                        <SelectItem value="verify-ca">verify-ca</SelectItem>
-                        <SelectItem value="verify-full">verify-full</SelectItem>
-                      </SelectContent>
-                    </Select>
-                  </div>
+                  {/* SSL Mode (PostgreSQL) / Encryption options (MS SQL) */}
+                  {dbType === 'mssql' ? (
+                    <div className="space-y-2">
+                      <Label>Encryption</Label>
+                      <div className="flex flex-col gap-2">
+                        <label className="flex items-center gap-2 cursor-pointer">
+                          <input
+                            type="checkbox"
+                            checked={dbEncrypt}
+                            onChange={(e) => setDbEncrypt(e.target.checked)}
+                            disabled={connectionStatus === 'testing' || importing}
+                            className="w-4 h-4 rounded border-gray-300 text-blue-600 focus:ring-blue-500"
+                          />
+                          <span className="text-sm text-gray-700">Encrypt connection</span>
+                          <span className="text-xs text-gray-400">(recommended)</span>
+                        </label>
+                        <label className="flex items-center gap-2 cursor-pointer">
+                          <input
+                            type="checkbox"
+                            checked={dbTrustCert}
+                            onChange={(e) => setDbTrustCert(e.target.checked)}
+                            disabled={connectionStatus === 'testing' || importing || !dbEncrypt}
+                            className="w-4 h-4 rounded border-gray-300 text-blue-600 focus:ring-blue-500"
+                          />
+                          <span className="text-sm text-gray-700">Trust server certificate</span>
+                          <span className="text-xs text-gray-400">(for self-signed / Azure)</span>
+                        </label>
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="space-y-1">
+                      <Label>SSL Mode</Label>
+                      <Select
+                        value={dbSslMode}
+                        onValueChange={setDbSslMode}
+                        disabled={connectionStatus === 'testing' || importing}
+                      >
+                        <SelectTrigger className="h-9 text-sm w-full">
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="require">require (recommended)</SelectItem>
+                          <SelectItem value="disable">disable</SelectItem>
+                          <SelectItem value="verify-ca">verify-ca</SelectItem>
+                          <SelectItem value="verify-full">verify-full</SelectItem>
+                        </SelectContent>
+                      </Select>
+                    </div>
+                  )}
 
                   {/* Test Connection button */}
                   <div className="flex items-center gap-3">
@@ -861,7 +951,7 @@ export function IngestionCard({ type, title, projectId, initialDatasets, initial
                       size="sm"
                       variant="outline"
                       onClick={handleTestConnection}
-                      disabled={dbType !== 'postgresql' || !dbHost || !dbName || !dbUser || !dbPassword || connectionStatus === 'testing' || importing}
+                      disabled={!dbHost || !dbName || !dbUser || !dbPassword || connectionStatus === 'testing' || importing}
                     >
                       {connectionStatus === 'testing' ? (
                         <span className="flex items-center gap-1.5">
@@ -894,6 +984,23 @@ export function IngestionCard({ type, title, projectId, initialDatasets, initial
                   )}
                 </div>
 
+                {/* MS SQL schema picker — shown after successful connection when multiple schemas exist */}
+                {dbType === 'mssql' && connectionStatus === 'success' && schemas.length > 1 && (
+                  <div className="space-y-1">
+                    <Label>Schema</Label>
+                    <Select value={dbSchema} onValueChange={handleSchemaChange}>
+                      <SelectTrigger className="h-9 text-sm w-full">
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {schemas.map((s) => (
+                          <SelectItem key={s} value={s}>{s}</SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                )}
+
                 {/* Table selection */}
                 {connectionStatus === 'success' && remoteTables && (
                   <div className="space-y-3 border-t border-gray-100 pt-4">
@@ -909,7 +1016,9 @@ export function IngestionCard({ type, title, projectId, initialDatasets, initial
                       </div>
                     </div>
                     {remoteTables.length === 0 ? (
-                      <p className="text-sm text-gray-400 text-center py-4">No public tables found in this database.</p>
+                      <p className="text-sm text-gray-400 text-center py-4">
+                        No tables found in schema &quot;{dbType === 'mssql' ? dbSchema : 'public'}&quot;.
+                      </p>
                     ) : (
                       <div className="max-h-[280px] overflow-y-auto rounded-md border border-gray-200 divide-y divide-gray-100">
                         {remoteTables.map((table) => (
@@ -998,7 +1107,12 @@ export function IngestionCard({ type, title, projectId, initialDatasets, initial
                     ['Port', String(existingConnection.port)],
                     ['Database', existingConnection.database_name],
                     ['Username', existingConnection.username],
-                    ['SSL Mode', existingConnection.ssl_mode],
+                    [
+                      existingConnection.db_type === 'mssql' ? 'Encryption' : 'SSL Mode',
+                      existingConnection.db_type === 'mssql'
+                        ? (existingConnection.ssl_mode === 'disable' ? 'Off' : existingConnection.ssl_mode === 'verify-full' ? 'Encrypted (verify cert)' : 'Encrypted (trust cert)')
+                        : existingConnection.ssl_mode,
+                    ],
                     ['Password', '••••••••••'],
                   ].map(([label, value]) => (
                     <div key={label}>
@@ -1129,7 +1243,7 @@ export function IngestionCard({ type, title, projectId, initialDatasets, initial
                 ) : addMoreTables !== null ? (
                   <>
                     {addMoreTables.length === 0 ? (
-                      <p className="text-sm text-gray-400 text-center py-4">No public tables found in this database.</p>
+                      <p className="text-sm text-gray-400 text-center py-4">No tables found in this database.</p>
                     ) : (
                       <>
                         <div className="flex justify-end gap-3 text-xs text-blue-600">

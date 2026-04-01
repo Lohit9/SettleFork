@@ -4,6 +4,8 @@ import { revalidatePath } from 'next/cache'
 import { createClient } from '@/lib/supabase/server'
 import { Project, Dataset, ProjectWithDatasets, ProjectWithStats } from '@/lib/types/database'
 import { extractMigrationIntelligence } from '@/lib/actions/migration-intelligence'
+import { logActivity } from '@/lib/actions/activity-log'
+import { supabaseAdmin } from '@/lib/supabase/admin'
 
 export async function updateProjectLabels(
   projectId: string,
@@ -78,7 +80,7 @@ export async function getProject(projectId: string): Promise<ProjectWithDatasets
 
 export async function updateProject(
   projectId: string,
-  updates: { name?: string; description?: string; status?: string }
+  updates: { name?: string; description?: string; status?: string; completed_at?: string | null; archived_at?: string | null }
 ): Promise<Project> {
   const supabase = await createClient()
   const { data, error } = await supabase
@@ -423,6 +425,8 @@ export async function getProjectsWithStats(): Promise<ProjectWithStats[]> {
       status: project.status as 'active' | 'completed' | 'archived',
       created_at: project.created_at,
       updated_at: project.updated_at,
+      completed_at: project.completed_at ?? null,
+      archived_at: project.archived_at ?? null,
       totalSourceFields: b.totalSourceFields,
       mappedFieldCount: b.mappedFieldCount,
       totalRows: b.totalRows,
@@ -445,7 +449,7 @@ export async function getProjectsWithStats(): Promise<ProjectWithStats[]> {
  * completion response and failures are logged but not surfaced to the user.
  */
 export async function markProjectComplete(projectId: string): Promise<Project> {
-  const project = await updateProject(projectId, { status: 'completed' })
+  const project = await updateProject(projectId, { status: 'completed', completed_at: new Date().toISOString() })
 
   // Fire intelligence extraction in the background — non-blocking and failure-safe
   try {
@@ -457,4 +461,182 @@ export async function markProjectComplete(projectId: string): Promise<Project> {
   }
 
   return project
+}
+
+export async function reactivateProject(projectId: string): Promise<{ success: boolean; error?: string }> {
+  try {
+    const supabase = await createClient()
+    const { data: project, error: fetchError } = await supabase
+      .from('projects')
+      .select('status')
+      .eq('id', projectId)
+      .single()
+
+    if (fetchError || !project) return { success: false, error: 'Project not found' }
+    if (project.status === 'archived') return { success: false, error: 'Archived projects cannot be reactivated' }
+    if (project.status === 'active') return { success: true }
+
+    const { error } = await supabase
+      .from('projects')
+      .update({ status: 'active', completed_at: null, updated_at: new Date().toISOString() })
+      .eq('id', projectId)
+      .eq('status', 'completed')
+
+    if (error) return { success: false, error: error.message }
+
+    revalidatePath('/app/projects')
+    return { success: true }
+  } catch (err) {
+    return { success: false, error: err instanceof Error ? err.message : 'Failed to reactivate project' }
+  }
+}
+
+export async function archiveProject(projectId: string): Promise<{ success: boolean; error?: string }> {
+  try {
+    const supabase = await createClient()
+    const { data: { user } } = await supabase.auth.getUser()
+
+    // Verify project exists and is not already archived
+    const { data: project, error: fetchError } = await supabase
+      .from('projects')
+      .select('id, status')
+      .eq('id', projectId)
+      .single()
+
+    if (fetchError || !project) return { success: false, error: 'Project not found' }
+    if (project.status === 'archived') return { success: false, error: 'Project is already archived' }
+
+    // Fetch dataset IDs once — reused across multiple purge steps
+    const { data: allDatasets } = await supabaseAdmin
+      .from('datasets')
+      .select('id')
+      .eq('project_id', projectId)
+    const datasetIds = (allDatasets ?? []).map((d) => d.id)
+
+    // Fetch table IDs once — reused for data_rows and field_profiles
+    const { data: allTables } = datasetIds.length > 0
+      ? await supabaseAdmin.from('tables').select('id, csv_storage_path').in('dataset_id', datasetIds)
+      : { data: [] }
+    const tableIds = (allTables ?? []).map((t) => t.id)
+
+    // ── Step 1: Purge data_rows in batches ────────────────────────────────────
+    let totalDeleted = 0
+    if (tableIds.length > 0) {
+      let keepDeleting = true
+      while (keepDeleting) {
+        const { data: ids, error: idsError } = await supabaseAdmin
+          .from('data_rows')
+          .select('id')
+          .in('table_id', tableIds)
+          .limit(10000)
+
+        if (idsError || !ids || ids.length === 0) {
+          keepDeleting = false
+          break
+        }
+
+        const { error: deleteError } = await supabaseAdmin
+          .from('data_rows')
+          .delete()
+          .in('id', ids.map((r) => r.id))
+
+        if (deleteError) {
+          console.error('[archiveProject] Error deleting data_rows batch:', deleteError)
+          keepDeleting = false
+        } else {
+          totalDeleted += ids.length
+          if (ids.length < 10000) keepDeleting = false
+        }
+      }
+    }
+
+    // ── Step 2: Purge CSV files from storage ──────────────────────────────────
+    try {
+      const tablesWithPaths = (allTables ?? []).filter((t) => t.csv_storage_path != null)
+
+      if (tablesWithPaths.length > 0) {
+        const paths = tablesWithPaths
+          .map((t) => t.csv_storage_path as string)
+          .filter(Boolean)
+
+        if (paths.length > 0) {
+          await supabaseAdmin.storage.from('project-files').remove(paths)
+        }
+
+        await supabaseAdmin
+          .from('tables')
+          .update({ csv_storage_path: null })
+          .in('id', tablesWithPaths.map((t) => t.id))
+      }
+    } catch (storageErr) {
+      console.error('[archiveProject] Error purging CSV storage files:', storageErr)
+    }
+
+    // ── Step 3: Purge db_connections ─────────────────────────────────────────
+    try {
+      await supabaseAdmin.from('db_connections').delete().eq('project_id', projectId)
+    } catch (connErr) {
+      console.error('[archiveProject] Error deleting db_connections:', connErr)
+    }
+
+    // ── Step 4: Null out sensitive field_profiles columns ────────────────────
+    try {
+      if (tableIds.length > 0) {
+        const { data: fieldIds } = await supabaseAdmin
+          .from('fields')
+          .select('id')
+          .in('table_id', tableIds)
+
+        if (fieldIds && fieldIds.length > 0) {
+          for (let i = 0; i < fieldIds.length; i += 500) {
+            const batch = fieldIds.slice(i, i + 500).map((f) => f.id)
+            await supabaseAdmin
+              .from('field_profiles')
+              .update({ sample_values: null, min_value: null, max_value: null, value_distribution: null })
+              .in('field_id', batch)
+          }
+        }
+      }
+    } catch (profileErr) {
+      console.error('[archiveProject] Error nulling field_profiles:', profileErr)
+    }
+
+    // ── Step 5: Zero out table row counts ────────────────────────────────────
+    try {
+      if (datasetIds.length > 0) {
+        await supabaseAdmin
+          .from('tables')
+          .update({ row_count: 0 })
+          .in('dataset_id', datasetIds)
+      }
+    } catch (rowCountErr) {
+      console.error('[archiveProject] Error zeroing row counts:', rowCountErr)
+    }
+
+    // ── Step 6: Mark project as archived ─────────────────────────────────────
+    const now = new Date().toISOString()
+    const { error: archiveError } = await supabaseAdmin
+      .from('projects')
+      .update({ status: 'archived', archived_at: now, updated_at: now })
+      .eq('id', projectId)
+
+    if (archiveError) return { success: false, error: archiveError.message }
+
+    // ── Step 7: Log the archival ──────────────────────────────────────────────
+    if (user) {
+      await logActivity(
+        projectId,
+        'project_archived',
+        `Project archived. Uploaded data purged. ${totalDeleted} data rows removed.`,
+        'system',
+        { data_rows_deleted: totalDeleted }
+      )
+    }
+
+    revalidatePath('/app/projects')
+    return { success: true }
+  } catch (err) {
+    console.error('[archiveProject] Unexpected error:', err)
+    return { success: false, error: err instanceof Error ? err.message : 'Failed to archive project' }
+  }
 }

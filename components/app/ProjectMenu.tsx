@@ -6,7 +6,7 @@ import { useRouter } from 'next/navigation'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Button } from '@/components/ui/button'
-import { updateProject, updateProjectLabels, deleteProject } from '@/lib/actions/projects'
+import { updateProject, updateProjectLabels, deleteProject, markProjectComplete, reactivateProject } from '@/lib/actions/projects'
 
 // ── types ──────────────────────────────────────────────────────────────────
 
@@ -179,9 +179,12 @@ export function ProjectMenu({ project, onUpdate }: ProjectMenuProps) {
 
   const handleToggleStatus = () => {
     setIsOpen(false)
-    const newStatus = project.status === 'completed' ? 'active' : 'completed'
     startTransition(async () => {
-      await updateProject(project.id, { status: newStatus })
+      if (project.status === 'completed') {
+        await reactivateProject(project.id)
+      } else {
+        await markProjectComplete(project.id)
+      }
       refresh()
     })
   }
@@ -264,7 +267,7 @@ export function ProjectMenu({ project, onUpdate }: ProjectMenuProps) {
             <Button
               onClick={handleRename}
               disabled={!newName.trim() || isPending}
-              className="bg-blue-600 hover:bg-blue-700 text-white disabled:opacity-50"
+              className="bg-[#4F46E5] hover:bg-[#4338CA] text-white disabled:opacity-50"
             >
               {isPending ? 'Saving…' : 'Save'}
             </Button>
@@ -299,7 +302,7 @@ export function ProjectMenu({ project, onUpdate }: ProjectMenuProps) {
             <Button
               onClick={handleLabels}
               disabled={!srcLabel.trim() || !tgtLabel.trim() || isPending}
-              className="bg-blue-600 hover:bg-blue-700 text-white disabled:opacity-50"
+              className="bg-[#4F46E5] hover:bg-[#4338CA] text-white disabled:opacity-50"
             >
               {isPending ? 'Saving…' : 'Save'}
             </Button>

@@ -6,6 +6,8 @@ export interface Project {
   status: 'active' | 'completed' | 'archived'
   created_at: string
   updated_at: string
+  completed_at: string | null
+  archived_at: string | null
 }
 
 export interface Dataset {
@@ -244,6 +246,8 @@ export interface ProjectWithStats {
   status: 'active' | 'completed' | 'archived'
   created_at: string
   updated_at: string
+  completed_at: string | null
+  archived_at: string | null
   totalSourceFields: number
   mappedFieldCount: number
   totalRows: number
