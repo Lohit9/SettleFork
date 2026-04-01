@@ -5,6 +5,7 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { changePassword } from '@/lib/actions/auth'
+import { MFAEnrollment } from '@/components/app/settings/MFAEnrollment'
 
 function Modal({
   title,
@@ -90,7 +91,7 @@ export function SecuritySection() {
             <p className="text-sm font-medium text-gray-900">Two-factor authentication</p>
             <p className="text-xs text-gray-500 mt-0.5">Add an extra layer of security to your account</p>
           </div>
-          <span className="text-xs bg-gray-100 text-gray-500 px-2.5 py-1 rounded-full">Coming soon</span>
+          <MFAEnrollment />
         </div>
 
         <div className="px-5 py-3.5 flex items-center justify-between">
@@ -159,7 +160,7 @@ export function SecuritySection() {
                 <Button
                   onClick={handleSave}
                   disabled={!newPassword || !confirmPassword || isPending}
-                  className="bg-blue-600 hover:bg-blue-700 text-white disabled:opacity-50"
+                  className="bg-[#4F46E5] hover:bg-[#4338CA] text-white disabled:opacity-50"
                 >
                   {isPending ? 'Saving…' : 'Save'}
                 </Button>

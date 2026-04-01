@@ -54,6 +54,33 @@ export async function middleware(request: NextRequest) {
       url.pathname = '/verify-email'
       return NextResponse.redirect(url)
     }
+
+    // MFA step-up: user has enrolled TOTP but hasn't verified this session
+    const { data: aalData } = await supabase.auth.mfa.getAuthenticatorAssuranceLevel()
+    if (aalData && aalData.nextLevel === 'aal2' && aalData.currentLevel !== 'aal2') {
+      const url = request.nextUrl.clone()
+      url.pathname = '/auth/mfa-verify'
+      url.searchParams.set('redirect', pathname)
+      return NextResponse.redirect(url)
+    }
+  }
+
+  // ── /auth/mfa-verify page ─────────────────────────────────────────────────
+  if (pathname === '/auth/mfa-verify') {
+    if (!user) {
+      const url = request.nextUrl.clone()
+      url.pathname = '/login'
+      return NextResponse.redirect(url)
+    }
+    // Already at aal2 — no need for the challenge page
+    const { data: aalData } = await supabase.auth.mfa.getAuthenticatorAssuranceLevel()
+    if (aalData && aalData.currentLevel === 'aal2') {
+      const redirectTarget = request.nextUrl.searchParams.get('redirect') || '/app/projects'
+      const url = request.nextUrl.clone()
+      url.pathname = redirectTarget
+      url.searchParams.delete('redirect')
+      return NextResponse.redirect(url)
+    }
   }
 
   // ── /verify-email page ────────────────────────────────────────────────────
