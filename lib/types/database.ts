@@ -274,3 +274,33 @@ export interface MigrationIntelligence {
   created_at: string
   updated_at: string
 }
+
+export interface DBConnection {
+  id: string
+  project_id: string
+  dataset_id: string
+  db_type: 'postgresql' | 'mysql' | 'mssql'
+  host: string
+  port: number
+  database_name: string
+  username: string
+  password_encrypted: string
+  ssl_mode: 'disable' | 'require' | 'verify-ca' | 'verify-full'
+  status: 'connected' | 'failed' | 'disconnected'
+  last_connected_at: string | null
+  created_at: string
+  updated_at: string
+}
+
+// Safe version for client — password_encrypted is excluded
+export interface DBConnectionInfo {
+  id: string
+  db_type: 'postgresql' | 'mysql' | 'mssql'
+  host: string
+  port: number
+  database_name: string
+  username: string
+  ssl_mode: string
+  status: string
+  last_connected_at: string | null
+}
