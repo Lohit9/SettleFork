@@ -1,18 +1,21 @@
 'use client'
 
-import { useState, useRef, useCallback } from 'react'
+import { useState, useRef, useCallback, useEffect } from 'react'
 import { useRouter } from 'next/navigation'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Upload, CheckCircle2, AlertCircle, RefreshCw } from '@/components/icons'
+import { Database, Loader2, AlertTriangle, XCircle } from 'lucide-react'
+import { testConnection, listRemoteTables, listTablesForConnection, getConnectionForDataset, disconnectDatabase, resyncTables } from '@/lib/actions/db-connector'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { uploadCSV } from '@/lib/actions/csv'
 import { createDataset, getTablesForDataset } from '@/lib/actions/datasets'
 import { parseDDLFile, confirmDDLSchema } from '@/lib/actions/ddl-upload'
 import type { ParsedTable } from '@/lib/parsers/ddl-parser'
 import type { DatasetWithTableStats, TableStats } from '@/lib/actions/datasets'
+import type { DBConnectionInfo } from '@/lib/types/database'
 import { DDLSchemaReview } from './DDLSchemaReview'
 
 type IngestMethod = 'csv' | 'ddl' | 'db' | null
@@ -85,6 +88,43 @@ export function IngestionCard({ type, title, projectId, initialDatasets }: Inges
 
   const [ddl, setDdl] = useState<DDLState>(INITIAL_DDL)
 
+  // ── DB Connector state ────────────────────────────────────────────────────
+  // Connection view: 'loading' while checking, 'form' = State A, 'connected' = State B, 'adding' = State C
+  const [connectionView, setConnectionView] = useState<'loading' | 'form' | 'connected' | 'adding'>('loading')
+  const [existingConnection, setExistingConnection] = useState<DBConnectionInfo | null>(null)
+  const [dbType, setDbType] = useState<'postgresql' | 'mysql' | 'mssql'>('postgresql')
+
+  // State A: new connection form
+  const [dbHost, setDbHost] = useState('')
+  const [dbPort, setDbPort] = useState(5432)
+  const [dbName, setDbName] = useState('')
+  const [dbUser, setDbUser] = useState('')
+  const [dbPassword, setDbPassword] = useState('')
+  const [dbSslMode, setDbSslMode] = useState('require')
+  const [connectionStatus, setConnectionStatus] = useState<'idle' | 'testing' | 'success' | 'error'>('idle')
+  const [connectionError, setConnectionError] = useState<string | null>(null)
+  const [remoteTables, setRemoteTables] = useState<{ name: string; estimatedRows: number }[] | null>(null)
+  const [selectedRemoteTables, setSelectedRemoteTables] = useState<string[]>([])
+  const [importing, setImporting] = useState(false)
+  const [importProgress, setImportProgress] = useState<string | null>(null)
+  const [importComplete, setImportComplete] = useState(false)
+  const [dbDatasetId, setDbDatasetId] = useState<string | null>(null)
+
+  // State B: connected view
+  const [disconnectConfirm, setDisconnectConfirm] = useState(false)
+  const [disconnecting, setDisconnecting] = useState(false)
+
+  // State B/C: re-sync state (keyed by table name for individual re-syncs, or 'all')
+  const [resyncingAll, setResyncingAll] = useState(false)
+  const [resyncingTable, setResyncingTable] = useState<string | null>(null)
+  const [resyncMessage, setResyncMessage] = useState<string | null>(null)
+
+  // State C: adding more tables
+  const [addMoreTables, setAddMoreTables] = useState<{ name: string; estimatedRows: number }[] | null>(null)
+  const [addMoreSelected, setAddMoreSelected] = useState<string[]>([])
+  const [addMoreLoading, setAddMoreLoading] = useState(false)
+  const [addMoreError, setAddMoreError] = useState<string | null>(null)
+
   const fileInputRef = useRef<HTMLInputElement>(null)
   const ddlFileInputRef = useRef<HTMLInputElement>(null)
 
@@ -98,6 +138,231 @@ export function IngestionCard({ type, title, projectId, initialDatasets }: Inges
     setMethod(newMethod)
     setDdl(INITIAL_DDL)
     setUploadState({ status: 'idle' })
+    // Reset DB connector state — view will be determined by useEffect
+    setConnectionView('loading')
+    setExistingConnection(null)
+    setConnectionStatus('idle')
+    setConnectionError(null)
+    setRemoteTables(null)
+    setSelectedRemoteTables([])
+    setImporting(false)
+    setImportProgress(null)
+    setImportComplete(false)
+    setDbDatasetId(null)
+    setDisconnectConfirm(false)
+    setResyncMessage(null)
+    setAddMoreTables(null)
+    setAddMoreSelected([])
+    setAddMoreError(null)
+  }
+
+  // ── DB Connector: load connection on mount / method change ───────────────
+
+  useEffect(() => {
+    if (method !== 'db') return
+    const datasetId = selectedDatasetId
+    if (!datasetId) {
+      setConnectionView('form')
+      return
+    }
+    setConnectionView('loading')
+    getConnectionForDataset(datasetId).then((result) => {
+      if (result.connection) {
+        setExistingConnection(result.connection)
+        setDbType(result.connection.db_type)
+        setConnectionView('connected')
+      } else {
+        setConnectionView('form')
+      }
+    }).catch(() => setConnectionView('form'))
+  }, [method, selectedDatasetId])
+
+  // ── DB Connector handlers — State A ──────────────────────────────────────
+
+  const handleDbTypeSelect = (t: 'postgresql' | 'mysql' | 'mssql') => {
+    setDbType(t)
+    setDbPort(t === 'postgresql' ? 5432 : t === 'mysql' ? 3306 : 1433)
+  }
+
+  const handleTestConnection = async () => {
+    setConnectionStatus('testing')
+    setConnectionError(null)
+    const result = await testConnection({
+      host: dbHost, port: dbPort, database: dbName,
+      username: dbUser, password: dbPassword, sslMode: dbSslMode,
+    })
+    if (result.success) {
+      setConnectionStatus('success')
+      const tablesResult = await listRemoteTables({
+        host: dbHost, port: dbPort, database: dbName,
+        username: dbUser, password: dbPassword, sslMode: dbSslMode,
+      })
+      if (tablesResult.success && tablesResult.tables) {
+        setRemoteTables(tablesResult.tables)
+      } else {
+        setRemoteTables([])
+      }
+    } else {
+      setConnectionStatus('error')
+      setConnectionError(result.error ?? 'Connection failed')
+    }
+  }
+
+  const handleImport = async () => {
+    if (selectedRemoteTables.length === 0) return
+    setImporting(true)
+    setConnectionError(null)
+    setImportProgress(`Connecting to ${dbName}…`)
+    try {
+      let datasetId = dbDatasetId ?? selectedDatasetId
+      if (!datasetId) {
+        const created = await createDataset(projectId, type, dbName)
+        datasetId = created.id
+        setDbDatasetId(datasetId)
+        const newDs: DatasetWithTableStats = { id: created.id, name: created.name, role: type, tables: [] }
+        setDatasets((prev) => [...prev, newDs])
+      }
+      setImportProgress(`Importing ${selectedRemoteTables.length} table(s)… This may take up to a minute.`)
+      const response = await fetch('/api/db-import', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          projectId, role: type, datasetId,
+          host: dbHost, port: dbPort, database: dbName,
+          username: dbUser, password: dbPassword, sslMode: dbSslMode,
+          selectedTables: selectedRemoteTables,
+        }),
+      })
+      const result = await response.json()
+      if (result.success) {
+        // Transition to State B: reload connection info
+        const connResult = await getConnectionForDataset(datasetId)
+        if (connResult.connection) {
+          setExistingConnection(connResult.connection)
+          setConnectionView('connected')
+        } else {
+          setImportComplete(true)
+        }
+        router.refresh()
+      } else {
+        setConnectionError(result.error ?? 'Import failed')
+      }
+    } catch (err) {
+      setConnectionError(err instanceof Error ? err.message : 'Import failed. Please try again.')
+    } finally {
+      setImporting(false)
+      setImportProgress(null)
+    }
+  }
+
+  // ── DB Connector handlers — State B ──────────────────────────────────────
+
+  const handleConfirmDisconnect = async () => {
+    if (!existingConnection || !selectedDatasetId) return
+    setDisconnecting(true)
+    const result = await disconnectDatabase(selectedDatasetId, projectId)
+    if (result.success) {
+      setExistingConnection(null)
+      setDisconnectConfirm(false)
+      setConnectionView('form')
+      setDbHost(''); setDbPort(5432); setDbName(''); setDbUser(''); setDbPassword(''); setDbSslMode('require')
+      setConnectionStatus('idle'); setConnectionError(null)
+      setRemoteTables(null); setSelectedRemoteTables([])
+      setImportComplete(false)
+      router.refresh()
+    } else {
+      setDisconnectConfirm(false)
+      setResyncMessage(result.error ?? 'Disconnect failed.')
+    }
+    setDisconnecting(false)
+  }
+
+  const handleResyncAll = async () => {
+    if (!existingConnection || !selectedDatasetId) return
+    const tableNames = (selectedDataset?.tables ?? []).map((t) => t.name)
+    if (tableNames.length === 0) return
+    setResyncingAll(true)
+    setResyncMessage(null)
+    const result = await resyncTables({
+      connectionId: existingConnection.id,
+      datasetId: selectedDatasetId,
+      projectId,
+      role: type,
+      tableNames,
+    })
+    if (result.success) {
+      setResyncMessage(`Re-synced ${result.tablesImported} table${result.tablesImported !== 1 ? 's' : ''} successfully.`)
+      const connResult = await getConnectionForDataset(selectedDatasetId)
+      if (connResult.connection) setExistingConnection(connResult.connection)
+      router.refresh()
+    } else {
+      setResyncMessage(result.error ?? 'Re-sync failed.')
+    }
+    setResyncingAll(false)
+  }
+
+  const handleResyncOne = async (tableName: string) => {
+    if (!existingConnection || !selectedDatasetId) return
+    setResyncingTable(tableName)
+    setResyncMessage(null)
+    const result = await resyncTables({
+      connectionId: existingConnection.id,
+      datasetId: selectedDatasetId,
+      projectId,
+      role: type,
+      tableNames: [tableName],
+    })
+    if (result.success) {
+      setResyncMessage(`"${tableName}" re-synced successfully.`)
+      router.refresh()
+    } else {
+      setResyncMessage(result.error ?? 'Re-sync failed.')
+    }
+    setResyncingTable(null)
+  }
+
+  // ── DB Connector handlers — State C ──────────────────────────────────────
+
+  const handleOpenAddMore = async () => {
+    if (!existingConnection) return
+    setAddMoreError(null)
+    setAddMoreLoading(true)
+    setConnectionView('adding')
+    setAddMoreSelected([])
+    // Use server-side action that decrypts stored credentials — password never sent to client
+    const tablesResult = await listTablesForConnection(existingConnection.id)
+      .catch(() => ({ success: false as const, tables: undefined, error: 'Could not list tables.' }))
+    if (tablesResult.success && tablesResult.tables) {
+      setAddMoreTables(tablesResult.tables)
+    } else {
+      setAddMoreTables([])
+      setAddMoreError(tablesResult.error ?? 'Could not retrieve table list.')
+    }
+    setAddMoreLoading(false)
+  }
+
+  const handleAddMoreImport = async () => {
+    if (!existingConnection || !selectedDatasetId || addMoreSelected.length === 0) return
+    setAddMoreLoading(true)
+    setAddMoreError(null)
+    const result = await resyncTables({
+      connectionId: existingConnection.id,
+      datasetId: selectedDatasetId,
+      projectId,
+      role: type,
+      tableNames: addMoreSelected,
+    })
+    if (result.success) {
+      const connResult = await getConnectionForDataset(selectedDatasetId)
+      if (connResult.connection) setExistingConnection(connResult.connection)
+      setConnectionView('connected')
+      setAddMoreTables(null)
+      setAddMoreSelected([])
+      router.refresh()
+    } else {
+      setAddMoreError(result.error ?? 'Import failed.')
+    }
+    setAddMoreLoading(false)
   }
 
   // ── Dataset handlers ──────────────────────────────────────────────────────
@@ -411,36 +676,484 @@ export function IngestionCard({ type, title, projectId, initialDatasets }: Inges
           </div>
         )}
 
-        {/* ── Database Connection — coming soon ─────────────────────────── */}
+        {/* ── Database Connection ────────────────────────────────────────── */}
         {method === 'db' && (
           <div className="space-y-4">
-            <div className="rounded-md border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
-              Database connections are coming soon. Use CSV Upload or DDL / Schema Upload for now.
-            </div>
-            <div className="space-y-3 opacity-50 pointer-events-none">
-              <div className="grid grid-cols-2 gap-3">
-                <div className="space-y-1">
-                  <Label>Host</Label>
-                  <Input disabled placeholder="localhost" className="cursor-not-allowed" />
+
+            {/* Loading skeleton */}
+            {connectionView === 'loading' && (
+              <div className="space-y-2 animate-pulse">
+                <div className="h-4 w-32 bg-gray-200 rounded" />
+                <div className="h-9 w-full bg-gray-100 rounded" />
+                <div className="h-9 w-full bg-gray-100 rounded" />
+              </div>
+            )}
+
+            {/* ── State A: No connection — DB type picker + form ──────────── */}
+            {connectionView === 'form' && (
+              <div className="space-y-4">
+                {/* DB type picker */}
+                <div className="space-y-2">
+                  <p className="text-xs font-medium text-gray-500 uppercase tracking-wide">Database type</p>
+                  <div className="flex gap-2">
+                    {([
+                      { id: 'postgresql', label: 'PostgreSQL' },
+                      { id: 'mysql', label: 'MySQL' },
+                      { id: 'mssql', label: 'MS SQL Server' },
+                    ] as const).map((db) => (
+                      <button
+                        key={db.id}
+                        onClick={() => handleDbTypeSelect(db.id)}
+                        className={`flex flex-col items-center justify-center gap-1.5 px-4 py-3 rounded-lg border-2 text-sm font-medium transition-colors cursor-pointer flex-1 ${
+                          dbType === db.id
+                            ? 'border-blue-600 bg-blue-50 text-blue-700'
+                            : 'border-gray-200 bg-white text-gray-600 hover:border-gray-300 hover:bg-gray-50'
+                        }`}
+                      >
+                        <Database className={`w-4 h-4 ${dbType === db.id ? 'text-blue-600' : 'text-gray-400'}`} />
+                        <span className="text-xs">{db.label}</span>
+                      </button>
+                    ))}
+                  </div>
+                  {dbType !== 'postgresql' && (
+                    <p className="text-xs text-amber-600 flex items-center gap-1">
+                      <AlertTriangle className="w-3 h-3" />
+                      {dbType === 'mysql' ? 'MySQL' : 'MS SQL Server'} support is coming soon. Only PostgreSQL is available today.
+                    </p>
+                  )}
                 </div>
-                <div className="space-y-1">
-                  <Label>Port</Label>
-                  <Input disabled placeholder="5432" className="cursor-not-allowed" />
+
+                {/* Connection form */}
+                <div className="space-y-3">
+                  {/* Host + Port */}
+                  <div className="grid grid-cols-[1fr_100px] gap-3">
+                    <div className="space-y-1">
+                      <Label>Host</Label>
+                      <Input
+                        placeholder="db.example.com"
+                        value={dbHost}
+                        onChange={(e) => setDbHost(e.target.value)}
+                        disabled={connectionStatus === 'testing' || importing || dbType !== 'postgresql'}
+                      />
+                    </div>
+                    <div className="space-y-1">
+                      <Label>Port</Label>
+                      <Input
+                        type="number"
+                        value={dbPort}
+                        onChange={(e) => setDbPort(Number(e.target.value))}
+                        disabled={connectionStatus === 'testing' || importing || dbType !== 'postgresql'}
+                      />
+                    </div>
+                  </div>
+
+                  {/* Database name */}
+                  <div className="space-y-1">
+                    <Label>Database Name</Label>
+                    <Input
+                      placeholder="my_database"
+                      value={dbName}
+                      onChange={(e) => setDbName(e.target.value)}
+                      disabled={connectionStatus === 'testing' || importing || dbType !== 'postgresql'}
+                    />
+                  </div>
+
+                  {/* Username + Password */}
+                  <div className="grid grid-cols-2 gap-3">
+                    <div className="space-y-1">
+                      <Label>Username</Label>
+                      <Input
+                        placeholder="readonly_user"
+                        value={dbUser}
+                        onChange={(e) => setDbUser(e.target.value)}
+                        disabled={connectionStatus === 'testing' || importing || dbType !== 'postgresql'}
+                      />
+                    </div>
+                    <div className="space-y-1">
+                      <Label>Password</Label>
+                      <Input
+                        type="password"
+                        placeholder="••••••••"
+                        value={dbPassword}
+                        onChange={(e) => setDbPassword(e.target.value)}
+                        disabled={connectionStatus === 'testing' || importing || dbType !== 'postgresql'}
+                      />
+                    </div>
+                  </div>
+
+                  {/* SSL Mode */}
+                  <div className="space-y-1">
+                    <Label>SSL Mode</Label>
+                    <Select
+                      value={dbSslMode}
+                      onValueChange={setDbSslMode}
+                      disabled={connectionStatus === 'testing' || importing || dbType !== 'postgresql'}
+                    >
+                      <SelectTrigger className="h-9 text-sm w-full">
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="require">require (recommended)</SelectItem>
+                        <SelectItem value="disable">disable</SelectItem>
+                        <SelectItem value="verify-ca">verify-ca</SelectItem>
+                        <SelectItem value="verify-full">verify-full</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
+
+                  {/* Test Connection button */}
+                  <div className="flex items-center gap-3">
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      onClick={handleTestConnection}
+                      disabled={dbType !== 'postgresql' || !dbHost || !dbName || !dbUser || !dbPassword || connectionStatus === 'testing' || importing}
+                    >
+                      {connectionStatus === 'testing' ? (
+                        <span className="flex items-center gap-1.5">
+                          <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                          Testing…
+                        </span>
+                      ) : (
+                        'Test Connection'
+                      )}
+                    </Button>
+                    {connectionStatus === 'success' && (
+                      <span className="flex items-center gap-1.5 text-sm text-green-700 font-medium">
+                        <CheckCircle2 className="w-4 h-4" />
+                        Connected — {remoteTables?.length ?? 0} table{remoteTables?.length !== 1 ? 's' : ''} found
+                      </span>
+                    )}
+                  </div>
+
+                  {connectionStatus === 'error' && connectionError && (
+                    <div className="flex items-start gap-2 rounded-md border border-red-200 bg-red-50 px-3 py-2.5 text-sm text-red-700">
+                      <XCircle className="w-4 h-4 mt-0.5 flex-shrink-0" />
+                      {connectionError}
+                    </div>
+                  )}
+                  {!importing && connectionError && connectionStatus === 'success' && (
+                    <div className="flex items-start gap-2 rounded-md border border-red-200 bg-red-50 px-3 py-2.5 text-sm text-red-700">
+                      <XCircle className="w-4 h-4 mt-0.5 flex-shrink-0" />
+                      {connectionError}
+                    </div>
+                  )}
                 </div>
+
+                {/* Table selection */}
+                {connectionStatus === 'success' && remoteTables && (
+                  <div className="space-y-3 border-t border-gray-100 pt-4">
+                    <div className="flex items-center justify-between">
+                      <p className="text-sm font-medium text-gray-800">Select Tables to Import</p>
+                      <div className="flex gap-3 text-xs text-blue-600">
+                        <button onClick={() => setSelectedRemoteTables(remoteTables.map((t) => t.name))} className="hover:underline">
+                          Select All
+                        </button>
+                        <button onClick={() => setSelectedRemoteTables([])} className="hover:underline">
+                          Deselect All
+                        </button>
+                      </div>
+                    </div>
+                    {remoteTables.length === 0 ? (
+                      <p className="text-sm text-gray-400 text-center py-4">No public tables found in this database.</p>
+                    ) : (
+                      <div className="max-h-[280px] overflow-y-auto rounded-md border border-gray-200 divide-y divide-gray-100">
+                        {remoteTables.map((table) => (
+                          <label key={table.name} className="flex items-center gap-3 px-3 py-2.5 hover:bg-gray-50 cursor-pointer">
+                            <input
+                              type="checkbox"
+                              checked={selectedRemoteTables.includes(table.name)}
+                              onChange={(e) =>
+                                setSelectedRemoteTables((prev) =>
+                                  e.target.checked ? [...prev, table.name] : prev.filter((n) => n !== table.name)
+                                )
+                              }
+                              className="w-4 h-4 rounded border-gray-300 text-blue-600 focus:ring-blue-500"
+                            />
+                            <span className="flex-1 text-sm font-mono text-gray-800">{table.name}</span>
+                            <span className="text-xs text-gray-400 tabular-nums">~{table.estimatedRows.toLocaleString()} rows</span>
+                            {table.estimatedRows > 100_000 && (
+                              <span className="flex items-center gap-0.5 text-xs text-amber-600">
+                                <AlertTriangle className="w-3 h-3" />
+                                capped at 100K
+                              </span>
+                            )}
+                          </label>
+                        ))}
+                      </div>
+                    )}
+                    <div className="flex items-center gap-3">
+                      <Button
+                        size="sm"
+                        onClick={handleImport}
+                        disabled={selectedRemoteTables.length === 0 || importing}
+                        className="bg-blue-600 hover:bg-blue-700 text-white disabled:opacity-50"
+                      >
+                        {importing ? (
+                          <span className="flex items-center gap-1.5">
+                            <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                            Importing…
+                          </span>
+                        ) : (
+                          `Import Selected Tables (${selectedRemoteTables.length})`
+                        )}
+                      </Button>
+                      {importing && importProgress && (
+                        <span className="text-xs text-gray-500">{importProgress}</span>
+                      )}
+                    </div>
+                  </div>
+                )}
               </div>
-              <div className="space-y-1">
-                <Label>Database Name</Label>
-                <Input disabled placeholder="my_database" className="cursor-not-allowed" />
+            )}
+
+            {/* ── State B: Connection exists — connected view ──────────────── */}
+            {connectionView === 'connected' && existingConnection && (
+              <div className="space-y-4">
+                {/* Connection header */}
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-2">
+                    <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-blue-100 text-blue-700 uppercase tracking-wide">
+                      {existingConnection.db_type === 'postgresql' ? 'PostgreSQL'
+                        : existingConnection.db_type === 'mysql' ? 'MySQL'
+                        : 'MS SQL Server'}
+                    </span>
+                    {existingConnection.status === 'connected' ? (
+                      <span className="flex items-center gap-1 text-xs text-green-700">
+                        <span className="w-1.5 h-1.5 rounded-full bg-green-500 inline-block" />
+                        Connected
+                      </span>
+                    ) : (
+                      <span className="flex items-center gap-1 text-xs text-red-600">
+                        <span className="w-1.5 h-1.5 rounded-full bg-red-500 inline-block" />
+                        {existingConnection.status === 'failed' ? 'Failed' : 'Disconnected'}
+                      </span>
+                    )}
+                  </div>
+                  {existingConnection.last_connected_at && (
+                    <span className="text-xs text-gray-400">
+                      Last synced {new Date(existingConnection.last_connected_at).toLocaleDateString(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })}
+                    </span>
+                  )}
+                </div>
+
+                {/* Connection details */}
+                <div className="rounded-md border border-gray-200 bg-gray-50 px-4 py-3 grid grid-cols-2 gap-x-6 gap-y-2">
+                  {[
+                    ['Host', existingConnection.host],
+                    ['Port', String(existingConnection.port)],
+                    ['Database', existingConnection.database_name],
+                    ['Username', existingConnection.username],
+                    ['SSL Mode', existingConnection.ssl_mode],
+                    ['Password', '••••••••••'],
+                  ].map(([label, value]) => (
+                    <div key={label}>
+                      <span className="text-xs text-slate-500">{label}</span>
+                      <p className="text-sm font-medium text-slate-900 truncate">{value}</p>
+                    </div>
+                  ))}
+                </div>
+
+                {/* Imported tables */}
+                <div className="space-y-2">
+                  <p className="text-sm font-medium text-gray-800">
+                    Imported Tables ({selectedDataset?.tables.length ?? 0})
+                  </p>
+                  {(selectedDataset?.tables.length ?? 0) === 0 ? (
+                    <p className="text-xs text-gray-400 py-2">No tables imported yet.</p>
+                  ) : (
+                    <div className="rounded-md border border-gray-200 divide-y divide-gray-100">
+                      {(selectedDataset?.tables ?? []).map((table) => (
+                        <div key={table.id} className="flex items-center gap-3 px-3 py-2.5">
+                          <span className="flex-1 text-sm font-mono font-medium text-gray-800">{table.name}</span>
+                          <span className="text-xs text-gray-400 tabular-nums">{table.row_count.toLocaleString()} rows</span>
+                          <span className="text-xs text-gray-400">{table.field_count} fields</span>
+                          <button
+                            onClick={() => handleResyncOne(table.name)}
+                            disabled={resyncingTable === table.name || resyncingAll}
+                            title="Re-sync this table"
+                            className="p-1 rounded hover:bg-gray-100 text-gray-400 hover:text-gray-600 disabled:opacity-40 transition-colors"
+                          >
+                            {resyncingTable === table.name
+                              ? <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                              : <RefreshCw className="w-3.5 h-3.5" />
+                            }
+                          </button>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+
+                {/* Re-sync feedback */}
+                {resyncMessage && (
+                  <p className="text-xs text-gray-600 bg-gray-50 border border-gray-200 rounded px-3 py-2">{resyncMessage}</p>
+                )}
+
+                {/* Action row */}
+                {!disconnectConfirm ? (
+                  <div className="flex items-center gap-3 flex-wrap">
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      onClick={handleOpenAddMore}
+                      disabled={resyncingAll}
+                    >
+                      Add More Tables
+                    </Button>
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      onClick={handleResyncAll}
+                      disabled={resyncingAll || (selectedDataset?.tables.length ?? 0) === 0}
+                    >
+                      {resyncingAll ? (
+                        <span className="flex items-center gap-1.5">
+                          <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                          Re-syncing…
+                        </span>
+                      ) : (
+                        'Re-sync All'
+                      )}
+                    </Button>
+                    <button
+                      onClick={() => setDisconnectConfirm(true)}
+                      className="text-xs text-red-600 hover:underline ml-auto"
+                    >
+                      Disconnect
+                    </button>
+                  </div>
+                ) : (
+                  <div className="rounded-md border border-red-200 bg-red-50 px-4 py-3 space-y-2">
+                    <p className="text-sm font-medium text-red-800">Disconnect and delete data?</p>
+                    <p className="text-xs text-red-700">
+                      This will remove the database connection and delete all imported tables, fields, and data rows
+                      for this {type}. This cannot be undone.
+                    </p>
+                    <div className="flex gap-2 pt-1">
+                      <Button
+                        size="sm"
+                        onClick={handleConfirmDisconnect}
+                        disabled={disconnecting}
+                        className="bg-red-600 hover:bg-red-700 text-white"
+                      >
+                        {disconnecting ? (
+                          <span className="flex items-center gap-1.5"><Loader2 className="w-3.5 h-3.5 animate-spin" />Disconnecting…</span>
+                        ) : (
+                          'Disconnect & Delete Data'
+                        )}
+                      </Button>
+                      <Button size="sm" variant="outline" onClick={() => setDisconnectConfirm(false)} disabled={disconnecting}>
+                        Cancel
+                      </Button>
+                    </div>
+                  </div>
+                )}
               </div>
-              <div className="space-y-1">
-                <Label>Username</Label>
-                <Input disabled placeholder="admin" className="cursor-not-allowed" />
+            )}
+
+            {/* ── State C: Add more tables ──────────────────────────────────── */}
+            {connectionView === 'adding' && existingConnection && (
+              <div className="space-y-4">
+                <div className="flex items-center justify-between">
+                  <p className="text-sm font-medium text-gray-800">Add More Tables</p>
+                  <button onClick={() => setConnectionView('connected')} className="text-xs text-gray-500 hover:underline">
+                    ← Back
+                  </button>
+                </div>
+
+                {addMoreLoading ? (
+                  <div className="flex items-center gap-2 text-sm text-gray-500 py-4">
+                    <Loader2 className="w-4 h-4 animate-spin" />
+                    Loading available tables…
+                  </div>
+                ) : addMoreError ? (
+                  <div className="flex items-start gap-2 rounded-md border border-red-200 bg-red-50 px-3 py-2.5 text-sm text-red-700">
+                    <XCircle className="w-4 h-4 mt-0.5 flex-shrink-0" />
+                    {addMoreError}
+                  </div>
+                ) : addMoreTables !== null ? (
+                  <>
+                    {addMoreTables.length === 0 ? (
+                      <p className="text-sm text-gray-400 text-center py-4">No public tables found in this database.</p>
+                    ) : (
+                      <>
+                        <div className="flex justify-end gap-3 text-xs text-blue-600">
+                          <button
+                            onClick={() =>
+                              setAddMoreSelected(
+                                addMoreTables
+                                  .filter((t) => !(selectedDataset?.tables ?? []).some((i) => i.name === t.name))
+                                  .map((t) => t.name)
+                              )
+                            }
+                            className="hover:underline"
+                          >
+                            Select New
+                          </button>
+                          <button onClick={() => setAddMoreSelected([])} className="hover:underline">
+                            Deselect All
+                          </button>
+                        </div>
+                        <div className="max-h-[280px] overflow-y-auto rounded-md border border-gray-200 divide-y divide-gray-100">
+                          {addMoreTables.map((table) => {
+                            const alreadyImported = (selectedDataset?.tables ?? []).some((t) => t.name === table.name)
+                            return (
+                              <label
+                                key={table.name}
+                                className={`flex items-center gap-3 px-3 py-2.5 ${alreadyImported ? 'opacity-50 cursor-not-allowed' : 'hover:bg-gray-50 cursor-pointer'}`}
+                              >
+                                <input
+                                  type="checkbox"
+                                  checked={alreadyImported || addMoreSelected.includes(table.name)}
+                                  disabled={alreadyImported}
+                                  onChange={(e) =>
+                                    !alreadyImported && setAddMoreSelected((prev) =>
+                                      e.target.checked ? [...prev, table.name] : prev.filter((n) => n !== table.name)
+                                    )
+                                  }
+                                  className="w-4 h-4 rounded border-gray-300 text-blue-600 focus:ring-blue-500"
+                                />
+                                <span className="flex-1 text-sm font-mono text-gray-800">{table.name}</span>
+                                {alreadyImported ? (
+                                  <span className="text-xs text-gray-400 italic">already imported</span>
+                                ) : (
+                                  <span className="text-xs text-gray-400 tabular-nums">~{table.estimatedRows.toLocaleString()} rows</span>
+                                )}
+                              </label>
+                            )
+                          })}
+                        </div>
+                        {addMoreError && (
+                          <div className="flex items-start gap-2 rounded-md border border-red-200 bg-red-50 px-3 py-2.5 text-sm text-red-700">
+                            <XCircle className="w-4 h-4 mt-0.5 flex-shrink-0" />
+                            {addMoreError}
+                          </div>
+                        )}
+                        <div className="flex items-center gap-3">
+                          <Button
+                            size="sm"
+                            onClick={handleAddMoreImport}
+                            disabled={addMoreSelected.length === 0 || addMoreLoading}
+                            className="bg-blue-600 hover:bg-blue-700 text-white disabled:opacity-50"
+                          >
+                            {addMoreLoading ? (
+                              <span className="flex items-center gap-1.5"><Loader2 className="w-3.5 h-3.5 animate-spin" />Importing…</span>
+                            ) : (
+                              `Import Selected (${addMoreSelected.length})`
+                            )}
+                          </Button>
+                          <Button size="sm" variant="outline" onClick={() => setConnectionView('connected')}>
+                            Cancel
+                          </Button>
+                        </div>
+                      </>
+                    )}
+                  </>
+                ) : null}
               </div>
-              <div className="flex gap-3">
-                <Button variant="outline" disabled>Test Connection</Button>
-                <Button disabled className="bg-[#4F46E5] text-white">Connect Database</Button>
-              </div>
-            </div>
+            )}
+
           </div>
         )}
 

@@ -5,8 +5,9 @@ P1="sk-""ant-"
 P2="SUPABASE_SERVICE""_ROLE_KEY=ey"
 P3="sb_""secret_"
 P4="ANTHROPIC_API""_KEY=sk-"
+P5="DB_ENCRYPTION""_KEY="
 
-if git diff --cached --diff-filter=ACM | grep '^+' | grep -qE "(${P1}|${P2}|${P3}|${P4})"; then
+if git diff --cached --diff-filter=ACM | grep '^+' | grep -qE "(${P1}|${P2}|${P3}|${P4}|${P5})"; then
   echo ""
   echo "ERROR: Possible API key or secret detected in staged files."
   echo "Remove the secret before committing."
