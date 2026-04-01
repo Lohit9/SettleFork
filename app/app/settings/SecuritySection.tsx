@@ -108,6 +108,14 @@ export function SecuritySection() {
             Manage
           </Button>
         </div>
+
+        <div className="px-5 py-3.5 flex items-center justify-between">
+          <div>
+            <p className="text-sm font-medium text-gray-900">Session timeout</p>
+            <p className="text-xs text-gray-500 mt-0.5">Sessions automatically expire after 30 minutes of inactivity</p>
+          </div>
+          <span className="text-sm text-gray-500 tabular-nums">30 minutes</span>
+        </div>
       </div>
 
       {showModal && (

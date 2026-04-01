@@ -1,6 +1,7 @@
 'use client'
 
-import { useState, useEffect, useRef } from 'react'
+import { useState, useEffect, useRef, useCallback } from 'react'
+import { useIdleTimeout } from '@/lib/hooks/useIdleTimeout'
 import { createPortal } from 'react-dom'
 import Link from 'next/link'
 import { usePathname, useRouter } from 'next/navigation'
@@ -50,6 +51,15 @@ export default function SidebarShell({ children }: SidebarShellProps) {
 
   const avatarRef = useRef<HTMLButtonElement>(null)
   const popoverRef = useRef<HTMLDivElement>(null)
+
+  // ── Idle session timeout ───────────────────────────────────────────────────
+  const handleIdleTimeout = useCallback(async () => {
+    const supabase = createClient()
+    await supabase.auth.signOut()
+    router.push('/login?reason=timeout')
+  }, [router])
+
+  useIdleTimeout(handleIdleTimeout)
 
   // Fetch user data
   useEffect(() => {
@@ -137,7 +147,7 @@ export default function SidebarShell({ children }: SidebarShellProps) {
                   className={`
                     flex items-center rounded-lg transition-colors
                     ${expanded ? 'gap-3 px-3 py-2 w-full' : 'justify-center w-10 h-10 mx-auto'}
-                    ${isActive ? 'bg-blue-600 text-white' : 'text-gray-500 hover:text-gray-700 hover:bg-gray-100'}
+                    ${isActive ? 'bg-indigo-600 text-white' : 'text-gray-500 hover:text-gray-700 hover:bg-gray-100'}
                   `}
                 >
                   <Icon className="w-5 h-5 flex-shrink-0" />
@@ -164,7 +174,7 @@ export default function SidebarShell({ children }: SidebarShellProps) {
               onClick={openPopover}
               className="flex items-center gap-2.5 w-full px-2 py-1.5 rounded-lg hover:bg-gray-100 transition-colors"
             >
-              <div className="w-8 h-8 rounded-full bg-blue-600 flex items-center justify-center flex-shrink-0">
+              <div className="w-8 h-8 rounded-full bg-purple-600 flex items-center justify-center flex-shrink-0">
                 <span className="text-xs font-semibold text-white">{initials}</span>
               </div>
               <span className="text-sm text-gray-700 truncate max-w-[120px]">{displayName}</span>
@@ -176,7 +186,7 @@ export default function SidebarShell({ children }: SidebarShellProps) {
                 onClick={openPopover}
                 className="w-10 h-10 flex items-center justify-center hover:bg-gray-100 rounded-lg transition-colors"
               >
-                <div className="w-8 h-8 rounded-full bg-blue-600 flex items-center justify-center">
+                <div className="w-8 h-8 rounded-full bg-purple-600 flex items-center justify-center">
                   <span className="text-xs font-semibold text-white">{initials}</span>
                 </div>
               </button>

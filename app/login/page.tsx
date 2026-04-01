@@ -14,6 +14,7 @@ import { Alert } from '@/components/ui/alert'
 function LoginContent() {
   const router = useRouter()
   const searchParams = useSearchParams()
+  const reason = searchParams.get('reason')
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
   const [loading, setLoading] = useState(false)
@@ -65,6 +66,11 @@ function LoginContent() {
       }}
     >
       <form onSubmit={handleSubmit} className="space-y-4">
+        {reason === 'timeout' && (
+          <div className="mb-4 rounded-md bg-amber-50 border border-amber-200 px-4 py-3 text-sm text-amber-700">
+            Your session has expired due to inactivity. Please sign in again.
+          </div>
+        )}
         {error && (
           <Alert variant="destructive" onClose={() => setError(null)}>
             {error}
