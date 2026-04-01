@@ -56,18 +56,30 @@ export function parseExcelToText(buffer: Buffer): string {
     const hasDataRows = dataRows.length >= 1
     const isHeader = firstRowHasAllCells && hasDataRows
 
-    const formatRow = (row: unknown[]) =>
-      row.map((cell) => String(cell ?? '').trim()).join(' | ')
+    const formatRow = (row: unknown[]): string | null => {
+      const cells = row.map((cell) => String(cell ?? '').trim())
+      // Right-trim trailing empty cells
+      while (cells.length > 0 && cells[cells.length - 1] === '') {
+        cells.pop()
+      }
+      if (cells.length === 0) return null
+      return cells.join(' | ')
+    }
 
     if (isHeader) {
-      lines.push(formatRow(firstRow))
-      lines.push('---')
+      const headerLine = formatRow(firstRow)
+      if (headerLine) {
+        lines.push(headerLine)
+        lines.push('---')
+      }
       for (const row of dataRows) {
-        lines.push(formatRow(row))
+        const line = formatRow(row)
+        if (line) lines.push(line)
       }
     } else {
       for (const row of nonEmptyRows) {
-        lines.push(formatRow(row))
+        const line = formatRow(row)
+        if (line) lines.push(line)
       }
     }
 
