@@ -13,7 +13,7 @@ import {
   uploadBusinessContextDoc,
 } from '@/lib/actions/schema-documents'
 import type { DatasetWithTableStats } from '@/lib/actions/datasets'
-import type { SchemaDocument } from '@/lib/types/database'
+import type { DBConnectionInfo, SchemaDocument } from '@/lib/types/database'
 
 interface DocUploadState {
   uploading: boolean
@@ -31,6 +31,7 @@ interface ControlPlaneContentProps {
   initialContextDocs: SchemaDocument[]
   primarySourceDatasetId: string | null
   primaryTargetDatasetId: string | null
+  initialConnections: Record<string, DBConnectionInfo>
 }
 
 function humanFileSize(bytes: number | null): string {
@@ -295,6 +296,7 @@ export function ControlPlaneContent({
   initialContextDocs,
   primarySourceDatasetId,
   primaryTargetDatasetId,
+  initialConnections,
 }: ControlPlaneContentProps) {
   const [sourceDocs, setSourceDocs] = useState<SchemaDocument[]>(initialSourceDocs)
   const [targetDocs, setTargetDocs] = useState<SchemaDocument[]>(initialTargetDocs)
@@ -322,8 +324,20 @@ export function ControlPlaneContent({
         <div className="space-y-4">
           <h2 className="text-lg font-semibold text-gray-900">Data Ingestion</h2>
           <div className="grid md:grid-cols-2 gap-6">
-            <IngestionCard type="source" title="Source Schema" projectId={projectId} initialDatasets={sourceDatasets} />
-            <IngestionCard type="target" title="Target Schema" projectId={projectId} initialDatasets={targetDatasets} />
+            <IngestionCard
+              type="source"
+              title="Source Schema"
+              projectId={projectId}
+              initialDatasets={sourceDatasets}
+              initialConnection={primarySourceDatasetId ? (initialConnections?.[primarySourceDatasetId] ?? null) : null}
+            />
+            <IngestionCard
+              type="target"
+              title="Target Schema"
+              projectId={projectId}
+              initialDatasets={targetDatasets}
+              initialConnection={primaryTargetDatasetId ? (initialConnections?.[primaryTargetDatasetId] ?? null) : null}
+            />
           </div>
         </div>
 

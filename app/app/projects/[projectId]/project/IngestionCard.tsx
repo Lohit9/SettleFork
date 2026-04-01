@@ -63,9 +63,10 @@ interface IngestionCardProps {
   title: string
   projectId: string
   initialDatasets: DatasetWithTableStats[]
+  initialConnection?: DBConnectionInfo | null
 }
 
-export function IngestionCard({ type, title, projectId, initialDatasets }: IngestionCardProps) {
+export function IngestionCard({ type, title, projectId, initialDatasets, initialConnection = null }: IngestionCardProps) {
   const router = useRouter()
   const [datasets, setDatasets] = useState<DatasetWithTableStats[]>(initialDatasets)
   const [selectedDatasetId, setSelectedDatasetId] = useState<string | null>(
@@ -79,7 +80,10 @@ export function IngestionCard({ type, title, projectId, initialDatasets }: Inges
   const [newTableName, setNewTableName] = useState('')
   const [showNewTableInput, setShowNewTableInput] = useState(false)
 
-  const [method, setMethod] = useState<IngestMethod>(null)
+  const [method, setMethod] = useState<IngestMethod>(() => {
+    if (initialConnection) return 'db'
+    return null // let the useEffect handle async detection
+  })
   const [isDragOver, setIsDragOver] = useState(false)
   const [uploadState, setUploadState] = useState<UploadState>({ status: 'idle' })
   const [showReplaceConfirm, setShowReplaceConfirm] = useState(false)
@@ -90,9 +94,14 @@ export function IngestionCard({ type, title, projectId, initialDatasets }: Inges
 
   // ── DB Connector state ────────────────────────────────────────────────────
   // Connection view: 'loading' while checking, 'form' = State A, 'connected' = State B, 'adding' = State C
-  const [connectionView, setConnectionView] = useState<'loading' | 'form' | 'connected' | 'adding'>('loading')
-  const [existingConnection, setExistingConnection] = useState<DBConnectionInfo | null>(null)
-  const [dbType, setDbType] = useState<'postgresql' | 'mysql' | 'mssql'>('postgresql')
+  // If the server passed an initialConnection, skip loading entirely and show connected view immediately.
+  const [connectionView, setConnectionView] = useState<'loading' | 'form' | 'connected' | 'adding'>(
+    initialConnection ? 'connected' : 'form'
+  )
+  const [existingConnection, setExistingConnection] = useState<DBConnectionInfo | null>(initialConnection ?? null)
+  const [dbType, setDbType] = useState<'postgresql' | 'mysql' | 'mssql'>(
+    initialConnection?.db_type ?? 'postgresql'
+  )
 
   // State A: new connection form
   const [dbHost, setDbHost] = useState('')
@@ -156,26 +165,62 @@ export function IngestionCard({ type, title, projectId, initialDatasets }: Inges
     setAddMoreError(null)
   }
 
-  // ── DB Connector: load connection on mount / method change ───────────────
+  // ── Auto-detect ingestion method on mount / dataset change ───────────────
+  // Priority: initialConnection prop → async DB check → CSV → DDL → null
 
   useEffect(() => {
-    if (method !== 'db') return
-    const datasetId = selectedDatasetId
-    if (!datasetId) {
-      setConnectionView('form')
+    if (!selectedDatasetId) return
+
+    const dataset = datasets.find((ds) => ds.id === selectedDatasetId)
+
+    // 1. Server-side prop is present — instant, no async needed
+    if (initialConnection) {
+      setMethod('db')
+      setExistingConnection(initialConnection)
+      setDbType(initialConnection.db_type)
+      setConnectionView('connected')
       return
     }
-    setConnectionView('loading')
-    getConnectionForDataset(datasetId).then((result) => {
+
+    // 2. No server prop — check DB connection asynchronously
+    //    This covers the RSC serialization edge case and is the authoritative DB check
+    getConnectionForDataset(selectedDatasetId).then((result) => {
       if (result.connection) {
+        setMethod('db')
         setExistingConnection(result.connection)
         setDbType(result.connection.db_type)
         setConnectionView('connected')
-      } else {
-        setConnectionView('form')
+        return
       }
-    }).catch(() => setConnectionView('form'))
-  }, [method, selectedDatasetId])
+
+      // 3. No DB connection — check for CSV (non-null csv_storage_path is the reliable signal)
+      if (dataset?.tables?.some((t) => t.csv_storage_path)) {
+        setMethod('csv')
+        setConnectionView('form')
+        return
+      }
+
+      // 4. Tables exist but all have csv_storage_path: null — DDL import
+      if ((dataset?.tables?.length ?? 0) > 0) {
+        setMethod('ddl')
+        setConnectionView('form')
+        return
+      }
+
+      // 5. No data at all — leave as null, show method selector
+      setMethod(null)
+      setConnectionView('form')
+    }).catch(() => {
+      // On network/auth error fall back to table-based detection
+      if (dataset?.tables?.some((t) => t.csv_storage_path)) {
+        setMethod('csv')
+      } else if ((dataset?.tables?.length ?? 0) > 0) {
+        setMethod('ddl')
+      }
+      setConnectionView('form')
+    })
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedDatasetId, initialConnection])
 
   // ── DB Connector handlers — State A ──────────────────────────────────────
 
@@ -235,6 +280,15 @@ export function IngestionCard({ type, title, projectId, initialDatasets }: Inges
       })
       const result = await response.json()
       if (result.success) {
+        // Refresh local datasets state immediately so connected view shows tables without a page reload
+        try {
+          const freshTables = await getTablesForDataset(datasetId)
+          setDatasets((prev) =>
+            prev.map((ds) => (ds.id === datasetId ? { ...ds, tables: freshTables } : ds))
+          )
+        } catch {
+          // non-fatal — tables will appear after router.refresh()
+        }
         // Transition to State B: reload connection info
         const connResult = await getConnectionForDataset(datasetId)
         if (connResult.connection) {
