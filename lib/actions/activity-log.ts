@@ -22,6 +22,7 @@ export type ActionType =
   | 'source_uploaded'
   | 'target_uploaded'
   | 'doc_uploaded'
+  | 'project_archived'
 
 export type ActionCategory = 'fix' | 'mapping' | 'transform' | 'validation' | 'data' | 'system'
 

@@ -7,7 +7,7 @@ export async function POST(request: Request) {
     const params = await request.json()
 
     // Validate required fields
-    const required = ['projectId', 'role', 'datasetId', 'host', 'port', 'database', 'username', 'password', 'sslMode', 'selectedTables']
+    const required = ['projectId', 'role', 'datasetId', 'host', 'port', 'database', 'username', 'password', 'sslMode', 'selectedTables', 'dbType']
     for (const field of required) {
       if (params[field] === undefined || params[field] === null || params[field] === '') {
         return Response.json({ success: false, error: `Missing required field: ${field}` }, { status: 400 })
@@ -16,6 +16,11 @@ export async function POST(request: Request) {
 
     if (!Array.isArray(params.selectedTables) || params.selectedTables.length === 0) {
       return Response.json({ success: false, error: 'selectedTables must be a non-empty array' }, { status: 400 })
+    }
+
+    const validDbTypes = ['postgresql', 'mssql', 'mysql']
+    if (!validDbTypes.includes(params.dbType)) {
+      return Response.json({ success: false, error: `Invalid dbType. Must be one of: ${validDbTypes.join(', ')}` }, { status: 400 })
     }
 
     const result = await saveConnectionAndIntrospect({
@@ -29,6 +34,9 @@ export async function POST(request: Request) {
       password: String(params.password),
       sslMode: String(params.sslMode),
       selectedTables: params.selectedTables as string[],
+      dbType: params.dbType as 'postgresql' | 'mssql' | 'mysql',
+      // Optional: user-selected schema (MSSQL only, defaults to 'dbo' server-side)
+      ...(params.schema ? { schema: String(params.schema) } : {}),
     })
 
     return Response.json(result)
