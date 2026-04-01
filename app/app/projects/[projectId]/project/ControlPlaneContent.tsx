@@ -4,6 +4,7 @@ import { useState, useRef } from 'react'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { FileText, Upload, CheckCircle2, X, AlertCircle } from '@/components/icons'
+import { FileSpreadsheet } from 'lucide-react'
 import { IngestionCard } from './IngestionCard'
 import { PageHeader } from '@/components/app/PageHeader'
 import {
@@ -41,6 +42,9 @@ function humanFileSize(bytes: number | null): string {
 
 function fileIcon(filename: string): React.ReactNode {
   const ext = filename.toLowerCase().split('.').pop()
+  if (ext === 'xlsx' || ext === 'xls' || ext === 'xlsb') {
+    return <FileSpreadsheet className="w-4 h-4 text-green-600 flex-shrink-0" />
+  }
   const color =
     ext === 'pdf'
       ? 'text-red-500'

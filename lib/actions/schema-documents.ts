@@ -214,8 +214,13 @@ export async function uploadBusinessContextDoc(
         }
       } else if (['.sql', '.ddl', '.txt', '.csv'].includes(ext)) {
         extractedText = (await file.text()).trim() || null
+      } else if (['.xlsx', '.xls', '.xlsb'].includes(ext)) {
+        const { parseExcelToText } = await import('@/lib/parsers/excel')
+        const buffer = Buffer.from(await file.arrayBuffer())
+        const parsed = parseExcelToText(buffer)
+        extractedText = parsed || null
       }
-      // .xlsx, .docx, .png, .jpg: text extraction deferred
+      // .docx, .png, .jpg: text extraction deferred
     } catch (parseErr) {
       console.error('[uploadBusinessContextDoc] text extraction failed:', parseErr)
     }
