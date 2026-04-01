@@ -31,7 +31,7 @@ interface ControlPlaneContentProps {
   initialContextDocs: SchemaDocument[]
   primarySourceDatasetId: string | null
   primaryTargetDatasetId: string | null
-  initialConnections: Record<string, DBConnectionInfo>
+  initialConnections?: Record<string, DBConnectionInfo>
 }
 
 function humanFileSize(bytes: number | null): string {
@@ -296,7 +296,7 @@ export function ControlPlaneContent({
   initialContextDocs,
   primarySourceDatasetId,
   primaryTargetDatasetId,
-  initialConnections,
+  initialConnections = {},
 }: ControlPlaneContentProps) {
   const [sourceDocs, setSourceDocs] = useState<SchemaDocument[]>(initialSourceDocs)
   const [targetDocs, setTargetDocs] = useState<SchemaDocument[]>(initialTargetDocs)
