@@ -59,6 +59,7 @@ export interface ExistingOutput {
   file_storage_path: string | null
   signedUrl: string | null
   tableName: string | null
+  dialect: string | null
 }
 
 export interface OutputsPageData {

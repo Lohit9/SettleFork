@@ -5,6 +5,13 @@ import { useRouter } from 'next/navigation'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select'
+import {
   CheckCircle2,
   AlertCircle,
   ChevronDown,
@@ -31,6 +38,8 @@ import type { OutputsPageData, GeneratedFile, ExistingOutput } from '@/lib/actio
 import { generateExecutionPackage, getExecutionPackageUrl } from '@/lib/actions/execution-package'
 import { generateMigrationRunbook } from '@/lib/actions/migration-runbook'
 import { markProjectComplete } from '@/lib/actions/projects'
+import { SQL_DIALECTS } from '@/lib/types/database'
+import type { SqlDialect } from '@/lib/types/database'
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -39,6 +48,7 @@ interface Props {
   projectName: string
   initialData: OutputsPageData
   isArchived?: boolean
+  targetDbType?: SqlDialect
 }
 
 interface DeliverableState {
@@ -54,6 +64,7 @@ interface ExecutionPackageState {
   version: string | null
   generatedAt: string | null
   error: string | null
+  dialect: SqlDialect | null
 }
 
 type ToastState = { message: string; type: 'success' | 'error' }
@@ -140,9 +151,12 @@ function fmtDateTime(iso: string) {
 
 // ── OutputsContent ────────────────────────────────────────────────────────────
 
-export default function OutputsContent({ projectId, projectName, initialData, isArchived = false }: Props) {
+export default function OutputsContent({ projectId, projectName, initialData, isArchived = false, targetDbType = 'postgresql' }: Props) {
   const router = useRouter()
   const [data] = useState<OutputsPageData>(initialData)
+
+  // SQL dialect selector
+  const [sqlDialect, setSqlDialect] = useState<SqlDialect>(targetDbType)
 
   // Gold standard
   const [goldFormat, setGoldFormat] = useState<'csv' | 'sql'>('csv')
@@ -169,9 +183,10 @@ export default function OutputsContent({ projectId, projectName, initialData, is
         version: existing.version,
         generatedAt: existing.generated_at,
         error: null,
+        dialect: (existing.dialect as SqlDialect | null) ?? null,
       }
     }
-    return { status: 'idle', sqlContent: null, signedUrl: null, version: null, generatedAt: null, error: null }
+    return { status: 'idle', sqlContent: null, signedUrl: null, version: null, generatedAt: null, error: null, dialect: null }
   })
 
   // Decisions log drawer
@@ -208,7 +223,7 @@ export default function OutputsContent({ projectId, projectName, initialData, is
   async function handleGenerateExecutionPackage() {
     setExecutionPackage((prev) => ({ ...prev, status: 'generating', error: null }))
     try {
-      const result = await generateExecutionPackage(projectId)
+      const result = await generateExecutionPackage(projectId, sqlDialect)
       if (result.success) {
         setExecutionPackage({
           status: 'generated',
@@ -217,6 +232,7 @@ export default function OutputsContent({ projectId, projectName, initialData, is
           version: result.version,
           generatedAt: new Date().toISOString(),
           error: null,
+          dialect: result.dialect,
         })
         showToast('Execution package generated successfully', 'success')
       } else {
@@ -237,6 +253,11 @@ export default function OutputsContent({ projectId, projectName, initialData, is
     }
   }
 
+  function buildDownloadFilename() {
+    const dialectSuffix = executionPackage.dialect ?? sqlDialect
+    return `migration_execution_package_v${executionPackage.version ?? '1.0'}_${dialectSuffix}.sql`
+  }
+
   async function handleDownloadExecutionPackage() {
     // Option B: in-memory blob download (no extra round-trip) when content is available
     if (executionPackage.sqlContent) {
@@ -244,7 +265,7 @@ export default function OutputsContent({ projectId, projectName, initialData, is
       const url = URL.createObjectURL(blob)
       const a = document.createElement('a')
       a.href = url
-      a.download = `migration_execution_package_v${executionPackage.version ?? '1.0'}.sql`
+      a.download = buildDownloadFilename()
       document.body.appendChild(a)
       a.click()
       document.body.removeChild(a)
@@ -260,7 +281,7 @@ export default function OutputsContent({ projectId, projectName, initialData, is
         const downloadUrl = URL.createObjectURL(blob)
         const a = document.createElement('a')
         a.href = downloadUrl
-        a.download = `${projectName.replace(/\s+/g, '_')}_execution_package.sql`
+        a.download = buildDownloadFilename()
         document.body.appendChild(a)
         a.click()
         document.body.removeChild(a)
@@ -646,6 +667,28 @@ export default function OutputsContent({ projectId, projectName, initialData, is
               </div>
             )}
 
+            {/* Dialect selector — shown when not generating, not archived */}
+            {executionPackage.status !== 'generating' && !isArchived && (
+              <div className="mb-4">
+                <label className="block text-xs font-medium text-gray-500 mb-1.5">Target SQL Dialect</label>
+                <Select value={sqlDialect} onValueChange={(v) => setSqlDialect(v as SqlDialect)}>
+                  <SelectTrigger className="w-64 h-8 text-sm">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {SQL_DIALECTS.map((d) => (
+                      <SelectItem key={d.id} value={d.id}>
+                        <div>
+                          <span className="font-medium">{d.label}</span>
+                          <span className="block text-xs text-gray-400">{d.description}</span>
+                        </div>
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+            )}
+
             {/* IDLE */}
             {executionPackage.status === 'idle' && !isArchived && (
               <Button
@@ -674,12 +717,17 @@ export default function OutputsContent({ projectId, projectName, initialData, is
             {/* GENERATED */}
             {executionPackage.status === 'generated' && (
               <div>
-                <div className="flex items-center gap-2 mb-4">
+                <div className="flex items-center gap-2 mb-4 flex-wrap">
                   <CheckCircle2 className="w-4 h-4 text-green-600 flex-shrink-0" />
                   <span className="text-sm font-medium text-green-700">Generated</span>
                   {executionPackage.version && (
                     <span className="text-xs text-gray-500 bg-gray-100 px-2 py-0.5 rounded-full border border-gray-200">
                       v{executionPackage.version}
+                    </span>
+                  )}
+                  {executionPackage.dialect && (
+                    <span className="text-xs text-blue-700 bg-blue-50 px-2 py-0.5 rounded-full border border-blue-200">
+                      {SQL_DIALECTS.find((d) => d.id === executionPackage.dialect)?.label ?? executionPackage.dialect}
                     </span>
                   )}
                   {executionPackage.generatedAt && (
