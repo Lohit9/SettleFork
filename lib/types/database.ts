@@ -282,6 +282,7 @@ export interface MigrationIntelligence {
 // ── SQL Dialect ───────────────────────────────────────────────────────────────
 
 export type SqlDialect = 'postgresql' | 'tsql' | 'mysql'
+export type ExecutionPackageFormat = 'single_file' | 'per_table'
 
 export interface SqlDialectInfo {
   id: SqlDialect
