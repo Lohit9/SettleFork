@@ -4,6 +4,7 @@ import { createClient } from '@/lib/supabase/server'
 import { supabaseAdmin } from '@/lib/supabase/admin'
 import { callClaude } from '@/lib/ai/claude'
 import { checkAIRateLimit } from '@/lib/ai/rate-limit'
+import type { SqlDialect } from '@/lib/types/database'
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -51,6 +52,7 @@ export interface ExecutionPackageResult {
   sqlContent: string
   storagePath: string
   version: string
+  dialect: SqlDialect
 }
 
 export interface ExecutionPackageError {
@@ -168,6 +170,81 @@ function computeLoadOrder(
   }))
 }
 
+// ── Dialect instructions ───────────────────────────────────────────────────────
+
+function getDialectInstructions(dialect: SqlDialect): string {
+  if (dialect === 'tsql') {
+    return `SQL DIALECT: T-SQL (Microsoft SQL Server)
+- Use [bracket] identifiers for table and column names: [table_name].[column_name]
+- Use GETDATE() for current timestamp, SYSDATETIME() for high precision
+- Use ISNULL() or COALESCE() for null handling
+- Use + for string concatenation, or CONCAT()
+- Use TOP N instead of LIMIT (place after SELECT: SELECT TOP 100 * FROM ...)
+- Use IDENTITY(1,1) for auto-increment
+- Use MERGE ... WHEN MATCHED THEN UPDATE WHEN NOT MATCHED THEN INSERT for upserts
+- Use CAST(x AS NVARCHAR(MAX)), CAST(x AS INT), etc. for type casting (no :: syntax)
+- Use BIT type (1/0) instead of BOOLEAN
+- Use DATETIME2, DATETIMEOFFSET for datetime
+- Use IF NOT EXISTS (SELECT * FROM sys.indexes WHERE name = 'idx_name') CREATE INDEX ...
+- Use INSERT INTO ... VALUES for data loading
+- Use BEGIN TRANSACTION; ... COMMIT TRANSACTION; for transactions
+- Use -- for single-line comments
+- Use NVARCHAR instead of VARCHAR for Unicode text
+- Use SET NOCOUNT ON at the start of scripts
+- Use GO as batch separator between major sections`
+  }
+
+  if (dialect === 'mysql') {
+    return `SQL DIALECT: MySQL
+- Use backtick identifiers for table and column names: \`table_name\`.\`column_name\`
+- Use NOW() for current timestamp
+- Use COALESCE() or IFNULL() for null handling
+- Use CONCAT() for string concatenation (|| is not supported by default)
+- Use LIMIT N for row limiting
+- Use AUTO_INCREMENT for auto-increment
+- Use INSERT ... ON DUPLICATE KEY UPDATE for upserts
+- Use CAST(x AS CHAR), CAST(x AS SIGNED), etc. for type casting (no :: syntax)
+- Use TINYINT(1) for boolean (TRUE/FALSE are aliases for 1/0)
+- Use DATETIME for datetime
+- Use CREATE INDEX IF NOT EXISTS (MySQL 8.0+)
+- Use INSERT INTO ... VALUES for data loading
+- Use START TRANSACTION; ... COMMIT; for transactions
+- Use -- for single-line comments (with space after --)
+- Use utf8mb4 charset for Unicode text`
+  }
+
+  return `SQL DIALECT: PostgreSQL
+- Use double-quoted identifiers for table and column names: "table_name"."column_name"
+- Use NOW() for current timestamp
+- Use COALESCE() for null handling
+- Use || for string concatenation, or CONCAT()
+- Use LIMIT N for row limiting
+- Use SERIAL or GENERATED ALWAYS AS IDENTITY for auto-increment
+- Use ON CONFLICT ... DO UPDATE for upserts
+- Use CAST(x AS TEXT), field::integer, field::text, etc. for type casting
+- Use BOOLEAN type (TRUE/FALSE)
+- Use TIMESTAMP, TIMESTAMPTZ for datetime
+- Use BEGIN; ... COMMIT; for transactions
+- Use -- for single-line comments`
+}
+
+function getTransformAdaptationInstruction(dialect: SqlDialect): string {
+  if (dialect === 'postgresql') return ''
+  const concatExample = dialect === 'tsql'
+    ? "field1 + '-' + field2 for T-SQL"
+    : "CONCAT(field1, '-', field2) for MySQL"
+  const castExample = dialect === 'tsql'
+    ? 'CAST(field AS INT) for T-SQL'
+    : 'CAST(field AS SIGNED) for MySQL'
+  return `
+IMPORTANT — TRANSFORM ADAPTATION REQUIRED: The transformation SQL expressions provided in the approved mappings below are written in PostgreSQL syntax (using ::type casting, || for concatenation, REGEXP_REPLACE, SUBSTRING(x FROM y FOR z), etc.). You MUST adapt them to the target dialect syntax when incorporating them into the migration script. Do NOT embed the PostgreSQL expressions verbatim. Translate to equivalent target dialect syntax. Examples:
+- field::integer → ${castExample}
+- field1 || '-' || field2 → ${concatExample}
+- field::text → CAST(field AS NVARCHAR(MAX)) / CAST(field AS CHAR)
+- REGEXP_REPLACE(field, pattern, repl) → REPLACE() chain or equivalent
+- SUBSTRING(field FROM 1 FOR 10) → SUBSTRING(field, 1, 10)`
+}
+
 // ── System prompt ─────────────────────────────────────────────────────────────
 
 const EXECUTION_PACKAGE_SYSTEM_PROMPT = `You are an expert data migration engineer generating a production-ready SQL migration execution package.
@@ -214,7 +291,8 @@ SECTION 4 SPECIFIC RULES:
 // ── Main server action ────────────────────────────────────────────────────────
 
 export async function generateExecutionPackage(
-  projectId: string
+  projectId: string,
+  dialect: SqlDialect = 'postgresql'
 ): Promise<ExecutionPackageResult | ExecutionPackageError> {
   try {
     // ── 1. Auth + ownership ──────────────────────────────────────────────────
@@ -613,9 +691,15 @@ SECTION 5 — ROLLBACK
 
     // ── Call Claude ───────────────────────────────────────────────────────────
 
+    // Build dialect-aware system prompt
+    const dialectSystemPrompt = EXECUTION_PACKAGE_SYSTEM_PROMPT
+      + '\n\n'
+      + getDialectInstructions(dialect)
+      + getTransformAdaptationInstruction(dialect)
+
     let rawSql: string
     try {
-      rawSql = await callClaude(EXECUTION_PACKAGE_SYSTEM_PROMPT, userMessage, 16000)
+      rawSql = await callClaude(dialectSystemPrompt, userMessage, 16000)
     } catch (err) {
       console.error('[generateExecutionPackage] Claude call failed:', err)
       return { success: false, error: 'Failed to generate execution package. Please try again.' }
@@ -627,11 +711,18 @@ SECTION 5 — ROLLBACK
 
     // ── Post-process: prepend header ──────────────────────────────────────────
 
+    const dialectLabels: Record<SqlDialect, string> = {
+      postgresql: 'PostgreSQL',
+      tsql: 'T-SQL (MS SQL Server)',
+      mysql: 'MySQL',
+    }
+
     const header = `-- ============================================================
 -- MIGRATION EXECUTION PACKAGE
 -- ${sourceDataset?.name ?? 'Source'} → ${targetDataset?.name ?? 'Target'}
 -- Generated by Mine | ${now}
 -- Project: ${project.name}
+-- Dialect: ${dialectLabels[dialect]}
 -- ============================================================
 --
 -- This package contains all SQL needed to execute the migration.
@@ -649,7 +740,7 @@ SECTION 5 — ROLLBACK
     // ── Upload to storage + record in outputs table ───────────────────────────
 
     const version = await getNextVersionStr(projectId, 'execution_package', 'sql')
-    const relativePath = `outputs/execution-package/migration_execution_package_v${version}.sql`
+    const relativePath = `outputs/execution-package/migration_execution_package_v${version}_${dialect}.sql`
     const fullStoragePath = `${user.id}/${projectId}/${relativePath}`
 
     await supabaseAdmin.storage.from('project-files').upload(
@@ -662,6 +753,7 @@ SECTION 5 — ROLLBACK
       project_id: projectId,
       type: 'execution_package',
       format: 'sql',
+      dialect,
       version,
       file_storage_path: fullStoragePath,
     })
@@ -671,6 +763,7 @@ SECTION 5 — ROLLBACK
       sqlContent: finalSql,
       storagePath: fullStoragePath,
       version,
+      dialect,
     }
   } catch (err) {
     console.error('[generateExecutionPackage] Unexpected error:', err)

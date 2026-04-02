@@ -2,6 +2,7 @@ import { notFound } from 'next/navigation'
 import { createClient } from '@/lib/supabase/server'
 import { getOutputsPageData } from '@/lib/actions/outputs'
 import OutputsContent from './OutputsContent'
+import type { SqlDialect } from '@/lib/types/database'
 
 interface PageProps {
   params: Promise<{ projectId: string }>
@@ -27,5 +28,25 @@ export default async function OutputsPage({ params }: PageProps) {
   const pageData = await getOutputsPageData(projectId)
   const isArchived = project.status === 'archived'
 
-  return <OutputsContent projectId={projectId} projectName={project.name} initialData={pageData} isArchived={isArchived} />
+  // Detect target DB type for smart dialect default
+  let targetDbType: SqlDialect = 'postgresql'
+  if (pageData.targetDataset) {
+    const { data: conn } = await supabase
+      .from('db_connections')
+      .select('db_type')
+      .eq('dataset_id', pageData.targetDataset.id)
+      .maybeSingle()
+    if (conn?.db_type === 'mssql') targetDbType = 'tsql'
+    else if (conn?.db_type === 'mysql') targetDbType = 'mysql'
+  }
+
+  return (
+    <OutputsContent
+      projectId={projectId}
+      projectName={project.name}
+      initialData={pageData}
+      isArchived={isArchived}
+      targetDbType={targetDbType}
+    />
+  )
 }

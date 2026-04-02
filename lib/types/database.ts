@@ -279,6 +279,24 @@ export interface MigrationIntelligence {
   updated_at: string
 }
 
+// ── SQL Dialect ───────────────────────────────────────────────────────────────
+
+export type SqlDialect = 'postgresql' | 'tsql' | 'mysql'
+
+export interface SqlDialectInfo {
+  id: SqlDialect
+  label: string
+  description: string
+}
+
+export const SQL_DIALECTS: SqlDialectInfo[] = [
+  { id: 'postgresql', label: 'PostgreSQL', description: 'PostgreSQL, Amazon RDS, Aurora PostgreSQL, Supabase' },
+  { id: 'tsql', label: 'T-SQL (MS SQL Server)', description: 'Microsoft SQL Server, Azure SQL Database' },
+  { id: 'mysql', label: 'MySQL', description: 'MySQL, Amazon Aurora MySQL, MariaDB' },
+]
+
+// ── DB Connection ──────────────────────────────────────────────────────────────
+
 export interface DBConnection {
   id: string
   project_id: string
