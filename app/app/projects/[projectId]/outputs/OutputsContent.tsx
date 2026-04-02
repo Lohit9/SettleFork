@@ -251,10 +251,23 @@ export default function OutputsContent({ projectId, projectName, initialData, is
       URL.revokeObjectURL(url)
       return
     }
-    // Option A fallback: fetch a fresh signed URL (e.g. after page refresh)
+    // Option A fallback: fetch a fresh signed URL (e.g. after page refresh), then blob-download it
     const result = await getExecutionPackageUrl(projectId)
     if (result.url) {
-      window.open(result.url, '_blank')
+      try {
+        const response = await fetch(result.url)
+        const blob = await response.blob()
+        const downloadUrl = URL.createObjectURL(blob)
+        const a = document.createElement('a')
+        a.href = downloadUrl
+        a.download = `${projectName.replace(/\s+/g, '_')}_execution_package.sql`
+        document.body.appendChild(a)
+        a.click()
+        document.body.removeChild(a)
+        URL.revokeObjectURL(downloadUrl)
+      } catch {
+        window.open(result.url, '_blank')
+      }
     } else {
       showToast('Could not generate download link. Please try regenerating.', 'error')
     }
