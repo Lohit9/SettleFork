@@ -18,13 +18,14 @@ export default async function OutputsPage({ params }: PageProps) {
 
   const { data: project } = await supabase
     .from('projects')
-    .select('id, name')
+    .select('id, name, status')
     .eq('id', projectId)
     .eq('user_id', user.id)
     .single()
   if (!project) notFound()
 
   const pageData = await getOutputsPageData(projectId)
+  const isArchived = project.status === 'archived'
 
-  return <OutputsContent projectId={projectId} projectName={project.name} initialData={pageData} />
+  return <OutputsContent projectId={projectId} projectName={project.name} initialData={pageData} isArchived={isArchived} />
 }

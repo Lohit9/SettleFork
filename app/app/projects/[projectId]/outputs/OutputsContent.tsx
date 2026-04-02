@@ -38,6 +38,7 @@ interface Props {
   projectId: string
   projectName: string
   initialData: OutputsPageData
+  isArchived?: boolean
 }
 
 interface DeliverableState {
@@ -139,7 +140,7 @@ function fmtDateTime(iso: string) {
 
 // ── OutputsContent ────────────────────────────────────────────────────────────
 
-export default function OutputsContent({ projectId, projectName, initialData }: Props) {
+export default function OutputsContent({ projectId, projectName, initialData, isArchived = false }: Props) {
   const router = useRouter()
   const [data] = useState<OutputsPageData>(initialData)
 
@@ -633,7 +634,7 @@ export default function OutputsContent({ projectId, projectName, initialData }: 
             )}
 
             {/* IDLE */}
-            {executionPackage.status === 'idle' && (
+            {executionPackage.status === 'idle' && !isArchived && (
               <Button
                 className="bg-blue-600 hover:bg-blue-700 text-white gap-2"
                 onClick={handleGenerateExecutionPackage}
@@ -680,14 +681,16 @@ export default function OutputsContent({ projectId, projectName, initialData }: 
                     <Download className="w-4 h-4" />
                     Download .sql
                   </Button>
-                  <Button
-                    variant="outline"
-                    className="gap-2"
-                    onClick={handleGenerateExecutionPackage}
-                  >
-                    <RefreshCw className="w-3.5 h-3.5" />
-                    Regenerate
-                  </Button>
+                  {!isArchived && (
+                    <Button
+                      variant="outline"
+                      className="gap-2"
+                      onClick={handleGenerateExecutionPackage}
+                    >
+                      <RefreshCw className="w-3.5 h-3.5" />
+                      Regenerate
+                    </Button>
+                  )}
                 </div>
               </div>
             )}
@@ -699,10 +702,12 @@ export default function OutputsContent({ projectId, projectName, initialData }: 
                   <AlertCircle className="w-4 h-4 text-red-500 flex-shrink-0" />
                   <span className="text-sm text-red-700">{executionPackage.error}</span>
                 </div>
-                <Button variant="outline" className="gap-2" onClick={handleGenerateExecutionPackage}>
-                  <RefreshCw className="w-3.5 h-3.5" />
-                  Try Again
-                </Button>
+                {!isArchived && (
+                  <Button variant="outline" className="gap-2" onClick={handleGenerateExecutionPackage}>
+                    <RefreshCw className="w-3.5 h-3.5" />
+                    Try Again
+                  </Button>
+                )}
               </div>
             )}
           </div>
@@ -755,14 +760,16 @@ export default function OutputsContent({ projectId, projectName, initialData }: 
                   ))}
                 </div>
 
-                <Button
-                  className="bg-blue-600 hover:bg-blue-700 text-white gap-2 ml-auto"
-                  onClick={handleGenerateGold}
-                  disabled={isGeneratingGold || !canGenerateGold}
-                >
-                  <Zap className="w-4 h-4" />
-                  {isGeneratingGold ? goldProgress ?? 'Generating…' : `Generate Gold Standard ${goldFormat === 'csv' ? 'CSVs' : 'SQL Scripts'}`}
-                </Button>
+                {!isArchived && (
+                  <Button
+                    className="bg-blue-600 hover:bg-blue-700 text-white gap-2 ml-auto"
+                    onClick={handleGenerateGold}
+                    disabled={isGeneratingGold || !canGenerateGold}
+                  >
+                    <Zap className="w-4 h-4" />
+                    {isGeneratingGold ? goldProgress ?? 'Generating…' : `Generate Gold Standard ${goldFormat === 'csv' ? 'CSVs' : 'SQL Scripts'}`}
+                  </Button>
+                )}
               </div>
 
               {!canGenerateGold && (
@@ -841,16 +848,18 @@ export default function OutputsContent({ projectId, projectName, initialData }: 
               <h2 className="text-lg font-semibold text-gray-900">Deliverable Package</h2>
               <p className="text-sm text-gray-500 mt-0.5">Migration documentation and reports for stakeholders, QA, and project records</p>
             </div>
-            <Button
-              variant="outline"
-              size="sm"
-              className="gap-2 flex-shrink-0 mt-1"
-              onClick={handleGenerateAll}
-              disabled={generatingKey !== null}
-            >
-              <Sparkles className="w-3.5 h-3.5" />
-              {allGenProgress ?? 'Generate All Deliverables'}
-            </Button>
+            {!isArchived && (
+              <Button
+                variant="outline"
+                size="sm"
+                className="gap-2 flex-shrink-0 mt-1"
+                onClick={handleGenerateAll}
+                disabled={generatingKey !== null}
+              >
+                <Sparkles className="w-3.5 h-3.5" />
+                {allGenProgress ?? 'Generate All Deliverables'}
+              </Button>
+            )}
           </div>
 
           <div className="space-y-3">
@@ -864,6 +873,7 @@ export default function OutputsContent({ projectId, projectName, initialData }: 
               isGenerating={generatingKey === 'runbook_docx'}
               onGenerate={() => handleGenerateDeliverable('runbook_docx')}
               existingOutput={existingOutputs.find((o) => o.type === 'migration_runbook')}
+              isArchived={isArchived}
             />
 
             {/* Readiness Report */}
@@ -876,6 +886,7 @@ export default function OutputsContent({ projectId, projectName, initialData }: 
               isGenerating={generatingKey === 'readiness_report'}
               onGenerate={() => handleGenerateDeliverable('readiness_report')}
               existingOutput={existingOutputs.find((o) => o.type === 'readiness_report')}
+              isArchived={isArchived}
             />
 
             {/* Mapping File */}
@@ -891,6 +902,7 @@ export default function OutputsContent({ projectId, projectName, initialData }: 
               isGenerating={generatingKey === 'mapping_csv' || generatingKey === 'mapping_json'}
               onGenerateMap={(key) => handleGenerateDeliverable(key)}
               existingOutput={existingOutputs.find((o) => o.type === 'mapping_file')}
+              isArchived={isArchived}
             />
 
             {/* Transform Specs */}
@@ -903,6 +915,7 @@ export default function OutputsContent({ projectId, projectName, initialData }: 
               isGenerating={generatingKey === 'transform_specs'}
               onGenerate={() => handleGenerateDeliverable('transform_specs')}
               existingOutput={existingOutputs.find((o) => o.type === 'transformation_specs')}
+              isArchived={isArchived}
             />
 
             {/* Fix Log */}
@@ -915,6 +928,7 @@ export default function OutputsContent({ projectId, projectName, initialData }: 
               isGenerating={generatingKey === 'fix_log'}
               onGenerate={() => handleGenerateDeliverable('fix_log')}
               existingOutput={existingOutputs.find((o) => o.type === 'fix_log')}
+              isArchived={isArchived}
             />
 
             {/* Data Dictionary */}
@@ -929,6 +943,7 @@ export default function OutputsContent({ projectId, projectName, initialData }: 
               isGenerating={generatingKey === 'data_dictionary'}
               onGenerate={() => handleGenerateDeliverable('data_dictionary')}
               existingOutput={existingOutputs.find((o) => o.type === 'data_dictionary')}
+              isArchived={isArchived}
             />
           </div>
         </div>
@@ -998,9 +1013,10 @@ interface DeliverableCardProps {
   onGenerate?: () => void
   onGenerateMap?: (key: string) => void
   existingOutput?: ExistingOutput
+  isArchived?: boolean
 }
 
-function DeliverableCard({ title, description, icon, formats, state, stateMap, isGenerating, onGenerate, onGenerateMap, existingOutput }: DeliverableCardProps) {
+function DeliverableCard({ title, description, icon, formats, state, stateMap, isGenerating, onGenerate, onGenerateMap, existingOutput, isArchived = false }: DeliverableCardProps) {
   const hasMultiple = formats.length > 1
 
   const getState = (key: string) => (stateMap ? stateMap[key] : state)
@@ -1051,16 +1067,18 @@ function DeliverableCard({ title, description, icon, formats, state, stateMap, i
                   {formats[0]?.label ?? 'Download'}
                 </a>
               )}
-              <Button
-                size="sm"
-                variant="outline"
-                onClick={onGenerate}
-                disabled={isGenerating}
-                className="gap-1.5"
-              >
-                <RefreshCw className={`w-3.5 h-3.5 ${isGenerating ? 'animate-spin' : ''}`} />
-                {isGenerating ? 'Generating…' : activeState || existingOutput ? 'Regenerate' : 'Generate'}
-              </Button>
+              {!isArchived && (
+                <Button
+                  size="sm"
+                  variant="outline"
+                  onClick={onGenerate}
+                  disabled={isGenerating}
+                  className="gap-1.5"
+                >
+                  <RefreshCw className={`w-3.5 h-3.5 ${isGenerating ? 'animate-spin' : ''}`} />
+                  {isGenerating ? 'Generating…' : activeState || existingOutput ? 'Regenerate' : 'Generate'}
+                </Button>
+              )}
             </>
           )}
 
@@ -1077,13 +1095,15 @@ function DeliverableCard({ title, description, icon, formats, state, stateMap, i
                     <Download className="w-3 h-3" />{fmt.ext.toUpperCase()}
                   </a>
                 )}
-                <Button size="sm" variant="outline" className="text-xs gap-1 py-1 h-7"
-                  onClick={() => onGenerateMap?.(fmt.key)}
-                  disabled={isGenerating}
-                >
-                  <RefreshCw className={`w-3 h-3 ${isGenerating ? 'animate-spin' : ''}`} />
-                  {fmtState ? 'Regen' : fmt.ext.toUpperCase()}
-                </Button>
+                {!isArchived && (
+                  <Button size="sm" variant="outline" className="text-xs gap-1 py-1 h-7"
+                    onClick={() => onGenerateMap?.(fmt.key)}
+                    disabled={isGenerating}
+                  >
+                    <RefreshCw className={`w-3 h-3 ${isGenerating ? 'animate-spin' : ''}`} />
+                    {fmtState ? 'Regen' : fmt.ext.toUpperCase()}
+                  </Button>
+                )}
               </div>
             )
           })}

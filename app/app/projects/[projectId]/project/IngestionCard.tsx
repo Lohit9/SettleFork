@@ -64,9 +64,10 @@ interface IngestionCardProps {
   projectId: string
   initialDatasets: DatasetWithTableStats[]
   initialConnection?: DBConnectionInfo | null
+  isArchived?: boolean
 }
 
-export function IngestionCard({ type, title, projectId, initialDatasets, initialConnection = null }: IngestionCardProps) {
+export function IngestionCard({ type, title, projectId, initialDatasets, initialConnection = null, isArchived = false }: IngestionCardProps) {
   const router = useRouter()
   const [datasets, setDatasets] = useState<DatasetWithTableStats[]>(initialDatasets)
   const [selectedDatasetId, setSelectedDatasetId] = useState<string | null>(
@@ -797,7 +798,13 @@ export function IngestionCard({ type, title, projectId, initialDatasets, initial
         )}
 
         {/* ── Database Connection ────────────────────────────────────────── */}
-        {method === 'db' && (
+        {method === 'db' && isArchived && (
+          <div className="rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
+            Database connection was removed during archival. The imported table schemas are preserved below.
+          </div>
+        )}
+
+        {method === 'db' && !isArchived && (
           <div className="space-y-4">
 
             {/* Loading skeleton */}

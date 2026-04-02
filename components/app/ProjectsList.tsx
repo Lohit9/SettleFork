@@ -32,10 +32,33 @@ function formatDate(dateStr: string): string {
   return new Date(dateStr).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })
 }
 
+// ── Auto-archive countdown helper ───────────────────────────────────────────
+
+function AutoArchiveCountdown({ completedAt }: { completedAt: string | null }) {
+  if (!completedAt) return null
+  const daysElapsed = Math.floor((Date.now() - new Date(completedAt).getTime()) / 86400000)
+  const daysRemaining = 90 - daysElapsed
+  if (daysRemaining <= 0) return null
+
+  const color =
+    daysRemaining <= 7
+      ? 'text-red-500'
+      : daysRemaining <= 14
+        ? 'text-amber-500'
+        : 'text-gray-400'
+
+  return (
+    <span className={`text-xs ${color}`}>
+      Auto-archives in {daysRemaining} day{daysRemaining !== 1 ? 's' : ''}
+    </span>
+  )
+}
+
 // ── ProjectCard ─────────────────────────────────────────────────────────────
 
 function ProjectCard({ project, onUpdate }: { project: ProjectWithStats; onUpdate: () => void }) {
   const isCompleted = project.status === 'completed'
+  const isArchived = project.status === 'archived'
   const score = project.readinessScore
 
   const scoreColor =
@@ -47,91 +70,121 @@ function ProjectCard({ project, onUpdate }: { project: ProjectWithStats; onUpdat
           ? 'text-amber-500'
           : 'text-red-500'
 
-  // Bottom stats chips
+  // Bottom stats chips — not shown for archived (data is purged)
   const stats: { label: string; color?: string }[] = []
 
-  if (project.mappedFieldCount > 0 || project.totalSourceFields > 0) {
-    stats.push({ label: `Mapped: ${project.mappedFieldCount}/${project.totalSourceFields} fields` })
-  } else if (project.totalRows > 0) {
-    stats.push({ label: `Rows: ${project.totalRows.toLocaleString()}` })
+  if (!isArchived) {
+    if (project.mappedFieldCount > 0 || project.totalSourceFields > 0) {
+      stats.push({ label: `Mapped: ${project.mappedFieldCount}/${project.totalSourceFields} fields` })
+    } else if (project.totalRows > 0) {
+      stats.push({ label: `Rows: ${project.totalRows.toLocaleString()}` })
+    }
+
+    if (project.blockingIssueCount > 0) {
+      stats.push({ label: `Blocking: ${project.blockingIssueCount}`, color: 'text-red-600' })
+    }
+
+    if (project.warningCount > 0) {
+      stats.push({ label: `Warnings: ${project.warningCount}`, color: 'text-amber-600' })
+    }
+
+    if (project.needsTransformCount > 0) {
+      stats.push({ label: `Transforms: ${project.coveredTransformCount}/${project.needsTransformCount} saved` })
+    }
+
+    if (isCompleted && project.outputCount > 0) {
+      stats.push({ label: `Deliverables: ${project.outputCount} generated` })
+    }
   }
 
-  if (project.blockingIssueCount > 0) {
-    stats.push({ label: `Blocking: ${project.blockingIssueCount}`, color: 'text-red-600' })
-  }
+  const cardContent = (
+    <>
+      {/* Top row */}
+      <div className="flex items-start justify-between gap-4 mb-4">
+        <div className="flex-1 min-w-0">
+          <div className="flex items-center gap-2 mb-1">
+            <span className={`text-base font-medium truncate ${isArchived ? 'text-gray-500' : 'text-gray-900'}`}>
+              {project.name}
+            </span>
+            {isArchived ? (
+              <Badge className="bg-gray-100 text-gray-500 hover:bg-gray-100 text-xs px-1.5 py-0 flex-shrink-0">
+                Archived
+              </Badge>
+            ) : isCompleted ? (
+              <Badge className="bg-green-100 text-green-700 hover:bg-green-100 text-xs px-1.5 py-0 flex-shrink-0">
+                Completed
+              </Badge>
+            ) : (
+              <Badge className="bg-blue-100 text-blue-700 hover:bg-blue-100 text-xs px-1.5 py-0 flex-shrink-0">
+                Active
+              </Badge>
+            )}
+            {isCompleted && <AutoArchiveCountdown completedAt={project.completed_at} />}
+          </div>
+          <p className="text-xs text-gray-400 truncate">
+            {project.source_label} → {project.target_label}
+            <span className="mx-1.5">·</span>
+            Created {formatDate(project.created_at)}
+            {isArchived && project.archived_at ? (
+              <>
+                <span className="mx-1.5">·</span>
+                Archived {formatDate(project.archived_at)}
+              </>
+            ) : (
+              <>
+                <span className="mx-1.5">·</span>
+                Last updated {formatRelativeTime(project.updated_at)}
+              </>
+            )}
+            {isArchived && (
+              <>
+                <span className="mx-1.5">·</span>
+                <span className="text-gray-400">Data purged</span>
+              </>
+            )}
+          </p>
+        </div>
 
-  if (project.warningCount > 0) {
-    stats.push({ label: `Warnings: ${project.warningCount}`, color: 'text-amber-600' })
-  }
+        {/* Readiness score — only shown for non-archived when meaningfully > 0 */}
+        {!isArchived && score !== null && score > 0 && (
+          <div className="text-right flex-shrink-0">
+            <div className={`text-2xl font-semibold leading-none ${scoreColor}`}>{score}%</div>
+            <div className="text-xs text-gray-400 mt-0.5">Readiness</div>
+          </div>
+        )}
+      </div>
 
-  if (project.needsTransformCount > 0) {
-    stats.push({ label: `Transforms: ${project.coveredTransformCount}/${project.needsTransformCount} saved` })
-  }
+      {/* Phase progress bar */}
+      <div className="mb-3">
+        <PhaseProgressBar currentPhase={project.currentPhase} showLabels />
+      </div>
 
-  if (isCompleted && project.outputCount > 0) {
-    stats.push({ label: `Deliverables: ${project.outputCount} generated` })
-  }
+      {/* Bottom stats */}
+      {stats.length > 0 && (
+        <div className="flex flex-wrap items-center gap-x-0 gap-y-1 text-xs text-gray-500">
+          {stats.map((s, i) => (
+            <span key={i} className="flex items-center">
+              {i > 0 && <span className="mx-2.5 text-gray-300">|</span>}
+              <span className={s.color ?? 'text-gray-500'}>{s.label}</span>
+            </span>
+          ))}
+        </div>
+      )}
+    </>
+  )
 
   return (
-    <div className="relative group/card">
+    <div className={`relative group/card ${isArchived ? 'opacity-70' : ''}`}>
       <Link
         href={`/app/projects/${project.id}`}
         className={`block bg-white border border-gray-200 rounded-xl p-5 pr-12 hover:border-gray-300 hover:shadow-sm transition-all ${
           isCompleted ? 'opacity-75' : ''
         }`}
       >
-        {/* Top row */}
-        <div className="flex items-start justify-between gap-4 mb-4">
-          <div className="flex-1 min-w-0">
-            <div className="flex items-center gap-2 mb-1">
-              <span className="text-base font-medium text-gray-900 truncate">{project.name}</span>
-              {isCompleted ? (
-                <Badge className="bg-green-100 text-green-700 hover:bg-green-100 text-xs px-1.5 py-0 flex-shrink-0">
-                  Completed
-                </Badge>
-              ) : (
-                <Badge className="bg-blue-100 text-blue-700 hover:bg-blue-100 text-xs px-1.5 py-0 flex-shrink-0">
-                  Active
-                </Badge>
-              )}
-            </div>
-            <p className="text-xs text-gray-400 truncate">
-              {project.source_label} → {project.target_label}
-              <span className="mx-1.5">·</span>
-              Created {formatDate(project.created_at)}
-              <span className="mx-1.5">·</span>
-              Last updated {formatRelativeTime(project.updated_at)}
-            </p>
-          </div>
-
-          {/* Readiness score — only shown when meaningfully > 0 */}
-          {score !== null && score > 0 && (
-            <div className="text-right flex-shrink-0">
-              <div className={`text-2xl font-semibold leading-none ${scoreColor}`}>{score}%</div>
-              <div className="text-xs text-gray-400 mt-0.5">Readiness</div>
-            </div>
-          )}
-        </div>
-
-        {/* Phase progress bar */}
-        <div className="mb-3">
-          <PhaseProgressBar currentPhase={project.currentPhase} showLabels />
-        </div>
-
-        {/* Bottom stats */}
-        {stats.length > 0 && (
-          <div className="flex flex-wrap items-center gap-x-0 gap-y-1 text-xs text-gray-500">
-            {stats.map((s, i) => (
-              <span key={i} className="flex items-center">
-                {i > 0 && <span className="mx-2.5 text-gray-300">|</span>}
-                <span className={s.color ?? 'text-gray-500'}>{s.label}</span>
-              </span>
-            ))}
-          </div>
-        )}
+        {cardContent}
       </Link>
 
-      {/* Three-dot menu — floats above the card link */}
+      {/* Three-dot menu — floats above the card */}
       <div className="absolute top-4 right-4 opacity-0 group-hover/card:opacity-100 transition-opacity">
         <ProjectMenu
           project={{
@@ -140,6 +193,7 @@ function ProjectCard({ project, onUpdate }: { project: ProjectWithStats; onUpdat
             source_label: project.source_label,
             target_label: project.target_label,
             status: project.status,
+            completed_at: project.completed_at,
           }}
           onUpdate={onUpdate}
         />
@@ -290,7 +344,7 @@ function WelcomeModal({ onDismiss }: { onDismiss: () => void }) {
 
 // ── Main component ──────────────────────────────────────────────────────────
 
-type FilterTab = 'all' | 'active' | 'completed'
+type FilterTab = 'all' | 'active' | 'completed' | 'archived'
 
 interface ProjectsListProps {
   initialProjects: ProjectWithStats[]
@@ -320,22 +374,25 @@ export function ProjectsList({ initialProjects }: ProjectsListProps) {
   const [search, setSearch] = useState('')
   const [showCreate, setShowCreate] = useState(false)
 
+  const activeCount = projects.filter((p) => p.status === 'active').length
+  const completedCount = projects.filter((p) => p.status === 'completed').length
+  const archivedCount = projects.filter((p) => p.status === 'archived').length
+
   const filtered = projects.filter((p) => {
     const matchesFilter =
-      activeFilter === 'all' ||
+      (activeFilter === 'all' && p.status !== 'archived') ||
       (activeFilter === 'active' && p.status === 'active') ||
-      (activeFilter === 'completed' && p.status === 'completed')
+      (activeFilter === 'completed' && p.status === 'completed') ||
+      (activeFilter === 'archived' && p.status === 'archived')
     const matchesSearch = search.trim() === '' || p.name.toLowerCase().includes(search.toLowerCase())
     return matchesFilter && matchesSearch
   })
 
-  const activeCount = projects.filter((p) => p.status === 'active').length
-  const completedCount = projects.filter((p) => p.status === 'completed').length
-
   const TABS: { id: FilterTab; label: string; count: number }[] = [
-    { id: 'all', label: 'All', count: projects.length },
+    { id: 'all', label: 'All', count: activeCount + completedCount },
     { id: 'active', label: 'Active', count: activeCount },
     { id: 'completed', label: 'Completed', count: completedCount },
+    { id: 'archived', label: 'Archived', count: archivedCount },
   ]
 
   return (
@@ -402,14 +459,24 @@ export function ProjectsList({ initialProjects }: ProjectsListProps) {
               <Database className="w-6 h-6 text-gray-400" />
             </div>
             <h3 className="text-base font-medium text-gray-900 mb-2">
-              {search ? 'No projects match your search' : 'No projects yet'}
+              {search
+                ? 'No projects match your search'
+                : activeFilter === 'archived'
+                  ? 'No archived projects'
+                  : activeFilter === 'completed'
+                    ? 'No completed projects'
+                    : 'No projects yet'}
             </h3>
             <p className="text-sm text-gray-500 mb-6 max-w-xs">
               {search
                 ? 'Try a different search term.'
-                : 'Create your first data migration project to get started.'}
+                : activeFilter === 'archived'
+                  ? 'Completed projects are automatically archived after 90 days of inactivity.'
+                  : activeFilter === 'completed'
+                    ? 'Mark a project as complete when the migration is finished.'
+                    : 'Create your first data migration project to get started.'}
             </p>
-            {!search && (
+            {!search && activeFilter !== 'archived' && activeFilter !== 'completed' && (
               <Button
                 onClick={() => setShowCreate(true)}
                 className="bg-blue-600 hover:bg-blue-700 text-white gap-2"

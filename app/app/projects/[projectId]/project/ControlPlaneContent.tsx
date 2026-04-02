@@ -32,6 +32,7 @@ interface ControlPlaneContentProps {
   primarySourceDatasetId: string | null
   primaryTargetDatasetId: string | null
   initialConnections?: Record<string, DBConnectionInfo>
+  isArchived?: boolean
 }
 
 function humanFileSize(bytes: number | null): string {
@@ -297,6 +298,7 @@ export function ControlPlaneContent({
   primarySourceDatasetId,
   primaryTargetDatasetId,
   initialConnections = {},
+  isArchived = false,
 }: ControlPlaneContentProps) {
   const [sourceDocs, setSourceDocs] = useState<SchemaDocument[]>(initialSourceDocs)
   const [targetDocs, setTargetDocs] = useState<SchemaDocument[]>(initialTargetDocs)
@@ -330,6 +332,7 @@ export function ControlPlaneContent({
               projectId={projectId}
               initialDatasets={sourceDatasets}
               initialConnection={primarySourceDatasetId ? (initialConnections?.[primarySourceDatasetId] ?? null) : null}
+              isArchived={isArchived}
             />
             <IngestionCard
               type="target"
@@ -337,6 +340,7 @@ export function ControlPlaneContent({
               projectId={projectId}
               initialDatasets={targetDatasets}
               initialConnection={primaryTargetDatasetId ? (initialConnections?.[primaryTargetDatasetId] ?? null) : null}
+              isArchived={isArchived}
             />
           </div>
         </div>

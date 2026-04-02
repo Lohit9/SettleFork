@@ -18,19 +18,21 @@ export default async function TransformPage({ params }: PageProps) {
 
   const { data: project } = await supabase
     .from('projects')
-    .select('id, name')
+    .select('id, name, status')
     .eq('id', projectId)
     .eq('user_id', user.id)
     .single()
   if (!project) notFound()
 
   const transformData = await getTransformData(projectId)
+  const isArchived = project.status === 'archived'
 
   return (
     <TransformContent
       projectId={projectId}
       projectName={project.name}
       initialData={transformData}
+      isArchived={isArchived}
     />
   )
 }

@@ -62,6 +62,13 @@ export default async function ProjectLayout({
     // Non-fatal
   }
 
+  const isArchived = project.status === 'archived'
+  const archivedDate = (project as { archived_at?: string | null }).archived_at
+    ? new Date((project as { archived_at: string }).archived_at).toLocaleDateString('en-US', {
+        month: 'long', day: 'numeric', year: 'numeric',
+      })
+    : null
+
   return (
     <div className="h-screen bg-gray-50 overflow-hidden">
       <Navigation
@@ -72,7 +79,21 @@ export default async function ProjectLayout({
         blockingIssueCount={blockingIssueCount}
         projectStatus={project.status ?? 'active'}
       />
-      <div className="h-full pl-[60px] overflow-auto">{children}</div>
+      <div className="h-full pl-[60px] overflow-auto flex flex-col">
+        {isArchived && (
+          <div className="flex-shrink-0 bg-amber-50 border-b border-amber-200 px-6 py-2.5 flex items-center gap-2.5 text-sm text-amber-800">
+            <svg className="w-4 h-4 text-amber-600 flex-shrink-0" fill="none" stroke="currentColor" strokeWidth="1.5" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" d="M20.25 7.5l-.625 10.632a2.25 2.25 0 01-2.247 2.118H6.622a2.25 2.25 0 01-2.247-2.118L3.75 7.5M10 11.25h4M3.375 7.5h17.25c.621 0 1.125-.504 1.125-1.125v-1.5c0-.621-.504-1.125-1.125-1.125H3.375c-.621 0-1.125.504-1.125 1.125v1.5c0 .621.504 1.125 1.125 1.125z" />
+            </svg>
+            <span>
+              <span className="font-medium">This project is archived.</span>
+              {' '}Source data has been purged. Mappings, transformations, and outputs are preserved as read-only.
+              {archivedDate && <span className="ml-2 text-amber-600">Archived on {archivedDate}.</span>}
+            </span>
+          </div>
+        )}
+        <div className="flex-1 min-h-0 overflow-auto">{children}</div>
+      </div>
     </div>
   )
 }

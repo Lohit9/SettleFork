@@ -7,6 +7,7 @@ import { Select, SelectContent, SelectGroup, SelectItem, SelectLabel, SelectTrig
 
 interface DataProfilingProps {
   tables: TableOption[]
+  isArchived?: boolean
 }
 
 function StatCard({
@@ -28,9 +29,10 @@ function StatCard({
   )
 }
 
-export default function DataProfiling({ tables }: DataProfilingProps) {
-  // Only tables with uploaded CSV data have profiling stats — filter out DDL-only tables
-  const profilableTables = tables.filter((t) => t.row_count > 0)
+export default function DataProfiling({ tables, isArchived = false }: DataProfilingProps) {
+  // For archived projects, show all tables (row_count is zeroed but aggregate stats are preserved)
+  // For active projects, only tables with data have profiling stats
+  const profilableTables = isArchived ? tables : tables.filter((t) => t.row_count > 0)
 
   const [selectedTableId, setSelectedTableId] = useState<string>(profilableTables[0]?.id ?? '')
   const [data, setData] = useState<ProfilingData | null>(null)

@@ -16,11 +16,13 @@ export default async function ControlPlanePage({
   // Verify project ownership (RLS handles this, but we also want a 404 on missing)
   const { data: project } = await supabase
     .from('projects')
-    .select('id, name')
+    .select('id, name, status')
     .eq('id', projectId)
     .single()
 
   if (!project) notFound()
+
+  const isArchived = project.status === 'archived'
 
   // Fetch datasets + their tables (with field counts) for both roles
   const [sourceDatasets, targetDatasets] = await Promise.all([
@@ -74,6 +76,7 @@ export default async function ControlPlanePage({
       primarySourceDatasetId={primarySourceDatasetId}
       primaryTargetDatasetId={primaryTargetDatasetId}
       initialConnections={initialConnections}
+      isArchived={isArchived}
     />
   )
 }

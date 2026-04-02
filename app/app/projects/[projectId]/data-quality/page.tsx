@@ -41,7 +41,7 @@ export default async function DataQualityPage({ params, searchParams }: PageProp
     getFixHistory(projectId),
     // Source field IDs whose issues are resolved by an approved transform
     getResolvedSourceFieldIds(projectId).catch(() => [] as string[]),
-    supabase.from('projects').select('name').eq('id', projectId).single(),
+    supabase.from('projects').select('name, status').eq('id', projectId).single(),
   ])
 
   const allDatasets = (tablesData.data ?? []) as Array<{
@@ -54,6 +54,8 @@ export default async function DataQualityPage({ params, searchParams }: PageProp
       fields: Array<{ id: string; name: string; data_type: string; inferred_type: string | null }>
     }>
   }>
+
+  const isArchived = projectResult.data?.status === 'archived'
 
   return (
     <DataQualityContent
@@ -71,6 +73,7 @@ export default async function DataQualityPage({ params, searchParams }: PageProp
       initialFilterSeverity={sp.severity}
       initialFilterStatus={sp.status}
       initialFilterStage={sp.stage}
+      isArchived={isArchived}
     />
   )
 }

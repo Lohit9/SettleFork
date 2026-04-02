@@ -21,9 +21,11 @@ interface DataOverviewContentProps {
   projectId: string
   schema: ProjectSchema
   tables: TableOption[]
+  isArchived?: boolean
+  archivedAt?: string | null
 }
 
-export default function DataOverviewContent({ projectId, schema, tables }: DataOverviewContentProps) {
+export default function DataOverviewContent({ projectId, schema, tables, isArchived = false, archivedAt }: DataOverviewContentProps) {
   const [activeTab, setActiveTab] = useState<TabId>('schema')
 
   return (
@@ -39,7 +41,7 @@ export default function DataOverviewContent({ projectId, schema, tables }: DataO
                 onClick={() => setActiveTab(id)}
                 className={`flex items-center gap-2 px-4 py-3.5 text-sm font-medium border-b-2 transition-colors -mb-px ${
                   active
-                    ? 'border-blue-600 text-blue-600'
+                    ? 'border-indigo-600 text-indigo-600'
                     : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
                 }`}
               >
@@ -60,9 +62,9 @@ export default function DataOverviewContent({ projectId, schema, tables }: DataO
             target={schema.target}
           />
         )}
-        {activeTab === 'preview' && <DataPreview projectId={projectId} tables={tables} />}
-        {activeTab === 'query' && <QueryData projectId={projectId} tables={tables} />}
-        {activeTab === 'profiling' && <DataProfiling tables={tables} />}
+        {activeTab === 'preview' && <DataPreview projectId={projectId} tables={tables} isArchived={isArchived} archivedAt={archivedAt} />}
+        {activeTab === 'query' && <QueryData projectId={projectId} tables={tables} isArchived={isArchived} />}
+        {activeTab === 'profiling' && <DataProfiling tables={tables} isArchived={isArchived} />}
       </div>
     </div>
   )

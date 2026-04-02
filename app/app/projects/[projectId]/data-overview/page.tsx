@@ -15,11 +15,13 @@ export default async function DataOverviewPage({ params }: Props) {
   // Verify project ownership
   const { data: project } = await supabase
     .from('projects')
-    .select('id, name')
+    .select('id, name, status, archived_at')
     .eq('id', projectId)
     .single()
 
   if (!project) notFound()
+
+  const isArchived = project.status === 'archived'
 
   // Fetch all schema data and table list in parallel
   const [schema, tables] = await Promise.all([
@@ -34,7 +36,13 @@ export default async function DataOverviewPage({ params }: Props) {
         title="Data Overview"
         subtitle="Explore source and target data structures"
       />
-      <DataOverviewContent projectId={projectId} schema={schema} tables={tables} />
+      <DataOverviewContent
+        projectId={projectId}
+        schema={schema}
+        tables={tables}
+        isArchived={isArchived}
+        archivedAt={(project as { archived_at?: string | null }).archived_at ?? null}
+      />
     </div>
   )
 }

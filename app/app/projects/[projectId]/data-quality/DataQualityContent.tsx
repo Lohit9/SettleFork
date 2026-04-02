@@ -56,6 +56,7 @@ interface Props {
   initialFilterSeverity?: string
   initialFilterStatus?: string
   initialFilterStage?: string
+  isArchived?: boolean
 }
 
 // ── Small helpers ─────────────────────────────────────────────────────────────
@@ -155,10 +156,12 @@ function IssueCard({
   issue,
   onUpdate,
   prefetchedFixHistory,
+  isArchived = false,
 }: {
   issue: QualityIssue
   onUpdate: (updated: QualityIssue) => void
   prefetchedFixHistory?: FixHistory[]
+  isArchived?: boolean
 }) {
   const [generatingFix, startGenerating] = useTransition()
   const [applyingIdx, setApplyingIdx] = useState<number | null>(null)
@@ -282,6 +285,7 @@ function IssueCard({
           issue={issue}
           projectId={issue.project_id}
           onClose={() => setShowCustomFix(false)}
+          isArchived={isArchived}
           onFixApplied={(updated, rowsAffected) => {
             setShowCustomFix(false)
             onUpdate(updated)
@@ -465,7 +469,7 @@ function IssueCard({
         )}
 
         {/* AI Fix Section */}
-        {!isFixed && !isAccepted && (
+        {!isFixed && !isAccepted && !isArchived && (
           <div className="mx-4 mb-4 rounded-lg bg-gradient-to-br from-blue-50 to-blue-50 border border-blue-200 p-4">
             <div className="flex items-center gap-2 mb-3">
               <span className="text-sm font-semibold text-gray-900">✦ AI-Suggested Fix</span>
@@ -514,14 +518,16 @@ function IssueCard({
                       <p className="text-gray-500"><span className="font-medium text-gray-700">Estimated rows:</span> {opt.estimated_rows_affected?.toLocaleString() ?? 'Unknown'}</p>
                     </div>
                     <div className="flex items-center gap-3 pt-1">
-                      <button
-                        onClick={() => setConfirmApply({ idx, fix: opt })}
-                        disabled={applyingIdx !== null}
-                        className="px-3 py-1.5 text-xs bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50 flex items-center gap-1.5"
-                      >
-                        {applyingIdx === idx && <span className="w-3 h-3 border-2 border-white/30 border-t-white rounded-full animate-spin" />}
-                        Apply Fix
-                      </button>
+                      {!isArchived && (
+                        <button
+                          onClick={() => setConfirmApply({ idx, fix: opt })}
+                          disabled={applyingIdx !== null}
+                          className="px-3 py-1.5 text-xs bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50 flex items-center gap-1.5"
+                        >
+                          {applyingIdx === idx && <span className="w-3 h-3 border-2 border-white/30 border-t-white rounded-full animate-spin" />}
+                          Apply Fix
+                        </button>
+                      )}
                       <button
                         onClick={() => setShowSQL(opt.sql)}
                         className="text-xs text-blue-600 hover:text-blue-800 underline"
@@ -1342,15 +1348,17 @@ function CreateManualFixModal({
                         </p>
                       )}
                       <div className="flex gap-2">
-                        <button
-                          onClick={() => handleApplyNL()}
-                          disabled={isApplying}
-                          className="flex-1 px-3 py-1.5 text-sm bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50 flex items-center justify-center gap-2"
-                        >
-                          {isApplying ? (
-                            <><span className="w-3.5 h-3.5 border-2 border-white/30 border-t-white rounded-full animate-spin" />Applying…</>
-                          ) : 'Apply Fix'}
-                        </button>
+                        {!isArchived && (
+                          <button
+                            onClick={() => handleApplyNL()}
+                            disabled={isApplying}
+                            className="flex-1 px-3 py-1.5 text-sm bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50 flex items-center justify-center gap-2"
+                          >
+                            {isApplying ? (
+                              <><span className="w-3.5 h-3.5 border-2 border-white/30 border-t-white rounded-full animate-spin" />Applying…</>
+                            ) : 'Apply Fix'}
+                          </button>
+                        )}
                         <button
                           onClick={() => handleModeSwitch('sql')}
                           className="px-3 py-1.5 text-sm border border-blue-300 text-blue-700 rounded-lg hover:bg-blue-100"
@@ -1387,15 +1395,17 @@ function CreateManualFixModal({
                         <><span className="w-3 h-3 border-2 border-gray-300 border-t-gray-600 rounded-full animate-spin" />Validating…</>
                       ) : 'Validate & Preview'}
                     </button>
-                    <button
-                      onClick={() => handleApplySQL()}
-                      disabled={!sqlValidated || isApplying}
-                      className="flex-1 px-3 py-1.5 text-sm bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50 flex items-center justify-center gap-2"
-                    >
-                      {isApplying ? (
-                        <><span className="w-3.5 h-3.5 border-2 border-white/30 border-t-white rounded-full animate-spin" />Applying…</>
-                      ) : 'Apply Fix'}
-                    </button>
+                    {!isArchived && (
+                      <button
+                        onClick={() => handleApplySQL()}
+                        disabled={!sqlValidated || isApplying}
+                        className="flex-1 px-3 py-1.5 text-sm bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50 flex items-center justify-center gap-2"
+                      >
+                        {isApplying ? (
+                          <><span className="w-3.5 h-3.5 border-2 border-white/30 border-t-white rounded-full animate-spin" />Applying…</>
+                        ) : 'Apply Fix'}
+                      </button>
+                    )}
                   </div>
                 </div>
               )}
@@ -1425,11 +1435,13 @@ function IssueFixModal({
   projectId,
   onClose,
   onFixApplied,
+  isArchived = false,
 }: {
   issue: QualityIssue
   projectId: string
   onClose: () => void
   onFixApplied: (updated: QualityIssue, rowsAffected?: number) => void
+  isArchived?: boolean
 }) {
   const [mode, setMode] = useState<'nl' | 'sql'>('nl')
   const [nlDescription, setNlDescription] = useState('')
@@ -1692,16 +1704,18 @@ function IssueFixModal({
             >
               Cancel
             </button>
-            <button
-              onClick={() => handleApply()}
-              disabled={isApplying || !canApply}
-              className="px-4 py-2 text-sm bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50 flex items-center gap-2"
-            >
-              {isApplying && (
-                <span className="w-3.5 h-3.5 border-2 border-white/30 border-t-white rounded-full animate-spin" />
-              )}
-              {isApplying ? 'Applying…' : 'Apply Fix'}
-            </button>
+            {!isArchived && (
+              <button
+                onClick={() => handleApply()}
+                disabled={isApplying || !canApply}
+                className="px-4 py-2 text-sm bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50 flex items-center gap-2"
+              >
+                {isApplying && (
+                  <span className="w-3.5 h-3.5 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+                )}
+                {isApplying ? 'Applying…' : 'Apply Fix'}
+              </button>
+            )}
           </div>
         </div>
       </div>
@@ -1726,6 +1740,7 @@ export default function DataQualityContent({
   initialFilterSeverity,
   initialFilterStatus,
   initialFilterStage,
+  isArchived = false,
 }: Props) {
   const router = useRouter()
   const [issues, setIssues] = useState<QualityIssue[]>(initialIssues)
@@ -2060,13 +2075,15 @@ export default function DataQualityContent({
               '↻ Regenerate Staged Data'
             )}
           </button>
-          <button
-            onClick={handleRunFullScan}
-            disabled={scanning || isRestaging}
-            className="px-4 py-1.5 text-sm bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50 flex items-center gap-2"
-          >
-            {scanning ? <><span className="w-3.5 h-3.5 border-2 border-white/30 border-t-white rounded-full animate-spin" />Scanning…</> : '⊙ Run Full Scan'}
-          </button>
+          {!isArchived && (
+            <button
+              onClick={handleRunFullScan}
+              disabled={scanning || isRestaging}
+              className="px-4 py-1.5 text-sm bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50 flex items-center gap-2"
+            >
+              {scanning ? <><span className="w-3.5 h-3.5 border-2 border-white/30 border-t-white rounded-full animate-spin" />Scanning…</> : '⊙ Run Full Scan'}
+            </button>
+          )}
         </div>
       </PageHeader>
 
@@ -2479,6 +2496,7 @@ export default function DataQualityContent({
                     issue={issue}
                     onUpdate={handleIssueUpdate}
                     prefetchedFixHistory={fixHistory.length > 0 ? fixHistory : undefined}
+                    isArchived={isArchived}
                   />
                 </div>
               ))}
