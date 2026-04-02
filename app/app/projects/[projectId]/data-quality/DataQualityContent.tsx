@@ -1099,11 +1099,13 @@ function CreateManualFixModal({
   allDatasets,
   onClose,
   onApplied,
+  isArchived = false,
 }: {
   projectId: string
   allDatasets: DatasetStub[]
   onClose: () => void
   onApplied: () => void
+  isArchived?: boolean
 }) {
   const [mode, setMode] = useState<'nl' | 'sql'>('nl')
   const [tableId, setTableId] = useState('')
@@ -2036,6 +2038,7 @@ export default function DataQualityContent({
           projectId={projectId}
           allDatasets={allDatasets}
           onClose={() => setShowCreateFix(false)}
+          isArchived={isArchived}
           onApplied={async () => {
             showToast('Manual fix applied — view it in Fix History')
           }}
