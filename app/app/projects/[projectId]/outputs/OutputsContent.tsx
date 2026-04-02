@@ -23,7 +23,8 @@ import {
   Sparkles,
   FileText,
 } from '@/components/icons'
-import { Link2, Code, ShieldCheck, Database, Settings } from 'lucide-react'
+import { Link2, Code, ShieldCheck, Database, Settings, Copy, Check, PackageOpen, Eye, EyeOff, ClipboardCheck } from 'lucide-react'
+import { Checkbox } from '@/components/ui/checkbox'
 import { PageHeader } from '@/components/app/PageHeader'
 import {
   generateGoldStandardCSVs,
@@ -35,11 +36,17 @@ import {
   generateDataDictionary,
 } from '@/lib/actions/outputs'
 import type { OutputsPageData, GeneratedFile, ExistingOutput } from '@/lib/actions/outputs'
-import { generateExecutionPackage, getExecutionPackageUrl } from '@/lib/actions/execution-package'
+import {
+  generateExecutionPackage,
+  generateExecutionPackageWithFormat,
+  getExecutionPackageUrl,
+  getCompartmentalizedPackageUrls,
+} from '@/lib/actions/execution-package'
+import type { CompartmentalizedFile } from '@/lib/actions/execution-package'
 import { generateMigrationRunbook } from '@/lib/actions/migration-runbook'
 import { markProjectComplete } from '@/lib/actions/projects'
 import { SQL_DIALECTS } from '@/lib/types/database'
-import type { SqlDialect } from '@/lib/types/database'
+import type { SqlDialect, ExecutionPackageFormat } from '@/lib/types/database'
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -61,6 +68,21 @@ interface ExecutionPackageState {
   status: 'idle' | 'generating' | 'generated' | 'error'
   sqlContent: string | null
   signedUrl: string | null
+  version: string | null
+  generatedAt: string | null
+  error: string | null
+  dialect: SqlDialect | null
+}
+
+interface CompartmentalizedFileState extends CompartmentalizedFile {
+  signedUrl: string | null
+}
+
+interface CompartmentalizedPackageState {
+  status: 'idle' | 'generating' | 'generated' | 'error'
+  files: CompartmentalizedFileState[]
+  zipStoragePath: string | null
+  zipSignedUrl: string | null
   version: string | null
   generatedAt: string | null
   error: string | null
@@ -172,9 +194,17 @@ export default function OutputsContent({ projectId, projectName, initialData, is
   const [generatingKey, setGeneratingKey] = useState<string | null>(null)
   const [allGenProgress, setAllGenProgress] = useState<string | null>(null)
 
-  // Execution package
-  const [executionPackage, setExecutionPackage] = useState<ExecutionPackageState>(() => {
+  // Output format: 'single_file' (monolithic) | 'per_table' (compartmentalized)
+  const [outputFormat, setOutputFormat] = useState<ExecutionPackageFormat>(() => {
     const existing = initialData.existingOutputs.find((o) => o.type === 'execution_package')
+    return existing?.format === 'per_table' ? 'per_table' : 'single_file'
+  })
+
+  // Execution package — single-file mode
+  const [executionPackage, setExecutionPackage] = useState<ExecutionPackageState>(() => {
+    const existing = initialData.existingOutputs.find(
+      (o) => o.type === 'execution_package' && o.format !== 'per_table'
+    )
     if (existing) {
       return {
         status: 'generated',
@@ -188,6 +218,42 @@ export default function OutputsContent({ projectId, projectName, initialData, is
     }
     return { status: 'idle', sqlContent: null, signedUrl: null, version: null, generatedAt: null, error: null, dialect: null }
   })
+
+  // Execution package — per-table mode
+  const emptyCompartmentalized: CompartmentalizedPackageState = {
+    status: 'idle', files: [], zipStoragePath: null, zipSignedUrl: null,
+    version: null, generatedAt: null, error: null, dialect: null,
+  }
+  const [compartmentalized, setCompartmentalized] = useState<CompartmentalizedPackageState>(() => {
+    const existing = initialData.existingOutputs.find(
+      (o) => o.type === 'execution_package' && o.format === 'per_table'
+    )
+    if (existing) {
+      return {
+        status: 'generated',
+        files: [],
+        zipStoragePath: existing.file_storage_path,
+        zipSignedUrl: existing.signedUrl,
+        version: existing.version,
+        generatedAt: existing.generated_at,
+        error: null,
+        dialect: (existing.dialect as SqlDialect | null) ?? null,
+      }
+    }
+    return emptyCompartmentalized
+  })
+
+  // Per-table preview: which filename is expanded
+  const [previewFilename, setPreviewFilename] = useState<string | null>(null)
+  // Per-table file content cache: filename → content string
+  const [fileContentCache, setFileContentCache] = useState<Record<string, string>>({})
+  const [previewLoading, setPreviewLoading] = useState(false)
+  // Copy-to-clipboard confirmation
+  const [copied, setCopied] = useState(false)
+  // Selected files for selective ZIP download
+  const [selectedFiles, setSelectedFiles] = useState<Set<string>>(new Set())
+  // Selective download is in progress
+  const [selectiveDownloading, setSelectiveDownloading] = useState(false)
 
   // Decisions log drawer
   const [showDecisionsDrawer, setShowDecisionsDrawer] = useState(false)
@@ -221,6 +287,37 @@ export default function OutputsContent({ projectId, projectName, initialData, is
   // ── Execution package handlers ──────────────────────────────────────────
 
   async function handleGenerateExecutionPackage() {
+    if (outputFormat === 'per_table') {
+      // ── Compartmentalized path ──────────────────────────────────────────
+      setCompartmentalized((prev) => ({ ...prev, status: 'generating', error: null }))
+      try {
+        const result = await generateExecutionPackageWithFormat(projectId, sqlDialect, 'per_table')
+        if (result.success && 'files' in result) {
+          setCompartmentalized({
+            status: 'generated',
+            files: result.files.map((f) => ({ ...f, signedUrl: null })),
+            zipStoragePath: result.zipStoragePath,
+            zipSignedUrl: null,
+            version: result.version,
+            generatedAt: new Date().toISOString(),
+            error: null,
+            dialect: result.dialect,
+          })
+          setSelectedFiles(new Set())
+          showToast(`Generated ${result.files.length} script files`, 'success')
+        } else {
+          const errMsg = 'error' in result ? (result.error ?? 'Generation failed') : 'Generation failed'
+          setCompartmentalized((prev) => ({ ...prev, status: 'error', error: errMsg }))
+          showToast(errMsg, 'error')
+        }
+      } catch {
+        setCompartmentalized((prev) => ({ ...prev, status: 'error', error: 'An unexpected error occurred. Please try again.' }))
+        showToast('An unexpected error occurred', 'error')
+      }
+      return
+    }
+
+    // ── Single-file path (unchanged) ─────────────────────────────────────
     setExecutionPackage((prev) => ({ ...prev, status: 'generating', error: null }))
     try {
       const result = await generateExecutionPackage(projectId, sqlDialect)
@@ -259,7 +356,6 @@ export default function OutputsContent({ projectId, projectName, initialData, is
   }
 
   async function handleDownloadExecutionPackage() {
-    // Option B: in-memory blob download (no extra round-trip) when content is available
     if (executionPackage.sqlContent) {
       const blob = new Blob([executionPackage.sqlContent], { type: 'application/sql' })
       const url = URL.createObjectURL(blob)
@@ -272,7 +368,6 @@ export default function OutputsContent({ projectId, projectName, initialData, is
       URL.revokeObjectURL(url)
       return
     }
-    // Option A fallback: fetch a fresh signed URL (e.g. after page refresh), then blob-download it
     const result = await getExecutionPackageUrl(projectId)
     if (result.url) {
       try {
@@ -291,6 +386,189 @@ export default function OutputsContent({ projectId, projectName, initialData, is
       }
     } else {
       showToast('Could not generate download link. Please try regenerating.', 'error')
+    }
+  }
+
+  // ── Compartmentalized download handlers ─────────────────────────────────
+
+  async function resolveZipUrl(): Promise<string | null> {
+    if (compartmentalized.zipSignedUrl) return compartmentalized.zipSignedUrl
+    const result = await getCompartmentalizedPackageUrls(projectId)
+    if (result.zipUrl) {
+      setCompartmentalized((prev) => ({ ...prev, zipSignedUrl: result.zipUrl! }))
+      // Also populate per-file signed URLs for later use
+      if (result.files) {
+        setCompartmentalized((prev) => ({
+          ...prev,
+          files: prev.files.map((f) => {
+            const found = result.files!.find((rf) => rf.filename === f.filename)
+            return found ? { ...f, signedUrl: found.url } : f
+          }),
+        }))
+      }
+      return result.zipUrl
+    }
+    return null
+  }
+
+  async function handleDownloadZip() {
+    const url = await resolveZipUrl()
+    if (!url) { showToast('Could not generate download link.', 'error'); return }
+    const dialectSuffix = compartmentalized.dialect ?? sqlDialect
+    const filename = `${projectName.replace(/\s+/g, '_')}_migration_scripts_v${compartmentalized.version ?? '1.0'}_${dialectSuffix}.zip`
+    try {
+      const response = await fetch(url)
+      const blob = await response.blob()
+      const dlUrl = URL.createObjectURL(blob)
+      const a = document.createElement('a')
+      a.href = dlUrl
+      a.download = filename
+      document.body.appendChild(a)
+      a.click()
+      document.body.removeChild(a)
+      URL.revokeObjectURL(dlUrl)
+    } catch {
+      window.open(url, '_blank')
+    }
+  }
+
+  async function handleDownloadFile(file: CompartmentalizedFileState) {
+    // In-memory content available (just generated)
+    if (file.content) {
+      const blob = new Blob([file.content], { type: 'text/plain' })
+      const url = URL.createObjectURL(blob)
+      const a = document.createElement('a')
+      a.href = url
+      a.download = file.filename
+      document.body.appendChild(a)
+      a.click()
+      document.body.removeChild(a)
+      URL.revokeObjectURL(url)
+      return
+    }
+    // Use signed URL (after page refresh)
+    let url = file.signedUrl
+    if (!url) {
+      const result = await getCompartmentalizedPackageUrls(projectId)
+      const found = result.files?.find((rf) => rf.filename === file.filename)
+      url = found?.url ?? null
+      if (url) {
+        setCompartmentalized((prev) => ({
+          ...prev,
+          files: prev.files.map((f) => f.filename === file.filename ? { ...f, signedUrl: url! } : f),
+        }))
+      }
+    }
+    if (url) {
+      try {
+        const response = await fetch(url)
+        const blob = await response.blob()
+        const dlUrl = URL.createObjectURL(blob)
+        const a = document.createElement('a')
+        a.href = dlUrl
+        a.download = file.filename
+        document.body.appendChild(a)
+        a.click()
+        document.body.removeChild(a)
+        URL.revokeObjectURL(dlUrl)
+      } catch {
+        window.open(url, '_blank')
+      }
+    } else {
+      showToast('Could not generate download link.', 'error')
+    }
+  }
+
+  async function handleDownloadSelected() {
+    if (selectedFiles.size === 0) return
+    setSelectiveDownloading(true)
+    try {
+      const JSZip = (await import('jszip')).default
+      const zip = new JSZip()
+      for (const filename of selectedFiles) {
+        const file = compartmentalized.files.find((f) => f.filename === filename)
+        if (!file) continue
+        let content = file.content
+        if (!content) {
+          // Fetch from signed URL
+          let url = file.signedUrl
+          if (!url) {
+            const result = await getCompartmentalizedPackageUrls(projectId)
+            url = result.files?.find((rf) => rf.filename === filename)?.url ?? null
+          }
+          if (url) {
+            const response = await fetch(url)
+            content = await response.text()
+          }
+        }
+        if (content) zip.file(filename, content)
+      }
+      const dialectSuffix = compartmentalized.dialect ?? sqlDialect
+      const zipBuffer = await zip.generateAsync({ type: 'blob' })
+      const dlUrl = URL.createObjectURL(zipBuffer)
+      const a = document.createElement('a')
+      a.href = dlUrl
+      a.download = `selected_scripts_${dialectSuffix}.zip`
+      document.body.appendChild(a)
+      a.click()
+      document.body.removeChild(a)
+      URL.revokeObjectURL(dlUrl)
+    } catch {
+      showToast('Could not create ZIP for selected files.', 'error')
+    } finally {
+      setSelectiveDownloading(false)
+    }
+  }
+
+  async function handlePreviewFile(filename: string) {
+    // Toggle: clicking the same file closes it
+    if (previewFilename === filename) {
+      setPreviewFilename(null)
+      return
+    }
+    setPreviewFilename(filename)
+    // Return early if already cached
+    if (fileContentCache[filename]) return
+
+    // Check in-memory content first
+    const file = compartmentalized.files.find((f) => f.filename === filename)
+    if (file?.content) {
+      setFileContentCache((prev) => ({ ...prev, [filename]: file.content }))
+      return
+    }
+
+    // Fetch from signed URL
+    setPreviewLoading(true)
+    try {
+      let url = file?.signedUrl ?? null
+      if (!url) {
+        const result = await getCompartmentalizedPackageUrls(projectId)
+        const found = result.files?.find((rf) => rf.filename === filename)
+        url = found?.url ?? null
+        if (url && file) {
+          setCompartmentalized((prev) => ({
+            ...prev,
+            files: prev.files.map((f) => f.filename === filename ? { ...f, signedUrl: url! } : f),
+          }))
+        }
+      }
+      if (url) {
+        const response = await fetch(url)
+        const text = await response.text()
+        setFileContentCache((prev) => ({ ...prev, [filename]: text }))
+      }
+    } finally {
+      setPreviewLoading(false)
+    }
+  }
+
+  async function handleCopyToClipboard(content: string) {
+    try {
+      await navigator.clipboard.writeText(content)
+      setCopied(true)
+      setTimeout(() => setCopied(false), 2000)
+    } catch {
+      showToast('Could not copy to clipboard', 'error')
     }
   }
 
@@ -356,9 +634,12 @@ export default function OutputsContent({ projectId, projectName, initialData, is
       await handleGenerateDeliverable(step.key)
     }
 
-    // Also generate the execution package as part of "Generate All"
+    // Also generate the single-file execution package as part of "Generate All"
     setAllGenProgress('Generating execution package…')
+    const savedFormat = outputFormat
+    setOutputFormat('single_file')
     await handleGenerateExecutionPackage()
+    setOutputFormat(savedFormat)
 
     setAllGenProgress(null)
     showToast('All deliverables generated', 'success')
@@ -667,109 +948,311 @@ export default function OutputsContent({ projectId, projectName, initialData, is
               </div>
             )}
 
-            {/* Dialect selector — shown when not generating, not archived */}
-            {executionPackage.status !== 'generating' && !isArchived && (
-              <div className="mb-4">
-                <label className="block text-xs font-medium text-gray-500 mb-1.5">Target SQL Dialect</label>
-                <Select value={sqlDialect} onValueChange={(v) => setSqlDialect(v as SqlDialect)}>
-                  <SelectTrigger className="w-64 h-8 text-sm">
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {SQL_DIALECTS.map((d) => (
-                      <SelectItem key={d.id} value={d.id}>
-                        <div>
-                          <span className="font-medium">{d.label}</span>
-                          <span className="block text-xs text-gray-400">{d.description}</span>
-                        </div>
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </div>
-            )}
-
-            {/* IDLE */}
-            {executionPackage.status === 'idle' && !isArchived && (
-              <Button
-                className="bg-blue-600 hover:bg-blue-700 text-white gap-2"
-                onClick={handleGenerateExecutionPackage}
-                disabled={!data.hasMappings}
-              >
-                <Zap className="w-4 h-4" />
-                Generate Execution Package
-              </Button>
-            )}
-
-            {/* GENERATING */}
-            {executionPackage.status === 'generating' && (
-              <div className="flex items-center gap-3">
-                <RefreshCw className="w-5 h-5 text-blue-600 animate-spin flex-shrink-0" />
+            {/* Generation Settings — dialect + format selectors */}
+            {!isArchived && (outputFormat === 'single_file' ? executionPackage.status !== 'generating' : compartmentalized.status !== 'generating') && (
+              <div className="mb-5 flex flex-wrap items-end gap-4">
                 <div>
-                  <p className="text-sm font-medium text-gray-800">Generating execution package…</p>
-                  <p className="text-xs text-gray-500 mt-0.5">
-                    Assembling extract, transform, load, and validation scripts. This may take 15–30 seconds.
-                  </p>
+                  <label className="block text-xs font-medium text-gray-500 mb-1.5">Target SQL Dialect</label>
+                  <Select value={sqlDialect} onValueChange={(v) => setSqlDialect(v as SqlDialect)}>
+                    <SelectTrigger className="w-56 h-8 text-sm">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {SQL_DIALECTS.map((d) => (
+                        <SelectItem key={d.id} value={d.id}>
+                          <div>
+                            <span className="font-medium">{d.label}</span>
+                            <span className="block text-xs text-gray-400">{d.description}</span>
+                          </div>
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+
+                <div>
+                  <label className="block text-xs font-medium text-gray-500 mb-1.5">Output Format</label>
+                  <div className="flex items-center bg-gray-100 rounded-lg p-1 gap-1">
+                    {(['single_file', 'per_table'] as const).map((fmt) => (
+                      <button
+                        key={fmt}
+                        onClick={() => setOutputFormat(fmt)}
+                        className={`px-3 py-1.5 rounded-md text-sm font-medium transition-colors whitespace-nowrap ${outputFormat === fmt ? 'bg-white text-gray-900 shadow-sm' : 'text-gray-500 hover:text-gray-700'}`}
+                      >
+                        {fmt === 'single_file' ? 'Single File' : 'Per-Table Scripts'}
+                      </button>
+                    ))}
+                  </div>
                 </div>
               </div>
             )}
 
-            {/* GENERATED */}
-            {executionPackage.status === 'generated' && (
-              <div>
-                <div className="flex items-center gap-2 mb-4 flex-wrap">
-                  <CheckCircle2 className="w-4 h-4 text-green-600 flex-shrink-0" />
-                  <span className="text-sm font-medium text-green-700">Generated</span>
-                  {executionPackage.version && (
-                    <span className="text-xs text-gray-500 bg-gray-100 px-2 py-0.5 rounded-full border border-gray-200">
-                      v{executionPackage.version}
-                    </span>
-                  )}
-                  {executionPackage.dialect && (
-                    <span className="text-xs text-blue-700 bg-blue-50 px-2 py-0.5 rounded-full border border-blue-200">
-                      {SQL_DIALECTS.find((d) => d.id === executionPackage.dialect)?.label ?? executionPackage.dialect}
-                    </span>
-                  )}
-                  {executionPackage.generatedAt && (
-                    <span className="text-xs text-gray-400">{fmtDateTime(executionPackage.generatedAt)}</span>
-                  )}
-                </div>
-                <div className="flex items-center gap-3 flex-wrap">
+            {/* ── SINGLE-FILE PATH ──────────────────────────────────────────── */}
+            {outputFormat === 'single_file' && (
+              <>
+                {/* IDLE */}
+                {executionPackage.status === 'idle' && !isArchived && (
                   <Button
                     className="bg-blue-600 hover:bg-blue-700 text-white gap-2"
-                    onClick={handleDownloadExecutionPackage}
+                    onClick={handleGenerateExecutionPackage}
+                    disabled={!data.hasMappings}
                   >
-                    <Download className="w-4 h-4" />
-                    Download .sql
-                  </Button>
-                  {!isArchived && (
-                    <Button
-                      variant="outline"
-                      className="gap-2"
-                      onClick={handleGenerateExecutionPackage}
-                    >
-                      <RefreshCw className="w-3.5 h-3.5" />
-                      Regenerate
-                    </Button>
-                  )}
-                </div>
-              </div>
-            )}
-
-            {/* ERROR */}
-            {executionPackage.status === 'error' && (
-              <div>
-                <div className="flex items-center gap-2 mb-3">
-                  <AlertCircle className="w-4 h-4 text-red-500 flex-shrink-0" />
-                  <span className="text-sm text-red-700">{executionPackage.error}</span>
-                </div>
-                {!isArchived && (
-                  <Button variant="outline" className="gap-2" onClick={handleGenerateExecutionPackage}>
-                    <RefreshCw className="w-3.5 h-3.5" />
-                    Try Again
+                    <Zap className="w-4 h-4" />
+                    Generate Execution Package
                   </Button>
                 )}
-              </div>
+
+                {/* GENERATING */}
+                {executionPackage.status === 'generating' && (
+                  <div className="flex items-center gap-3">
+                    <RefreshCw className="w-5 h-5 text-blue-600 animate-spin flex-shrink-0" />
+                    <div>
+                      <p className="text-sm font-medium text-gray-800">Generating execution package…</p>
+                      <p className="text-xs text-gray-500 mt-0.5">Assembling extract, transform, load, and validation scripts. This may take 15–30 seconds.</p>
+                    </div>
+                  </div>
+                )}
+
+                {/* GENERATED */}
+                {executionPackage.status === 'generated' && (
+                  <div>
+                    <div className="flex items-center gap-2 mb-4 flex-wrap">
+                      <CheckCircle2 className="w-4 h-4 text-green-600 flex-shrink-0" />
+                      <span className="text-sm font-medium text-green-700">Generated</span>
+                      {executionPackage.version && (
+                        <span className="text-xs text-gray-500 bg-gray-100 px-2 py-0.5 rounded-full border border-gray-200">
+                          v{executionPackage.version}
+                        </span>
+                      )}
+                      {executionPackage.dialect && (
+                        <span className="text-xs text-blue-700 bg-blue-50 px-2 py-0.5 rounded-full border border-blue-200">
+                          {SQL_DIALECTS.find((d) => d.id === executionPackage.dialect)?.label ?? executionPackage.dialect}
+                        </span>
+                      )}
+                      {executionPackage.generatedAt && (
+                        <span className="text-xs text-gray-400">{fmtDateTime(executionPackage.generatedAt)}</span>
+                      )}
+                    </div>
+                    <div className="flex items-center gap-3 flex-wrap">
+                      <Button className="bg-blue-600 hover:bg-blue-700 text-white gap-2" onClick={handleDownloadExecutionPackage}>
+                        <Download className="w-4 h-4" />
+                        Download .sql
+                      </Button>
+                      {!isArchived && (
+                        <Button variant="outline" className="gap-2" onClick={handleGenerateExecutionPackage}>
+                          <RefreshCw className="w-3.5 h-3.5" />
+                          Regenerate
+                        </Button>
+                      )}
+                    </div>
+                  </div>
+                )}
+
+                {/* ERROR */}
+                {executionPackage.status === 'error' && (
+                  <div>
+                    <div className="flex items-center gap-2 mb-3">
+                      <AlertCircle className="w-4 h-4 text-red-500 flex-shrink-0" />
+                      <span className="text-sm text-red-700">{executionPackage.error}</span>
+                    </div>
+                    {!isArchived && (
+                      <Button variant="outline" className="gap-2" onClick={handleGenerateExecutionPackage}>
+                        <RefreshCw className="w-3.5 h-3.5" />
+                        Try Again
+                      </Button>
+                    )}
+                  </div>
+                )}
+              </>
+            )}
+
+            {/* ── PER-TABLE PATH ────────────────────────────────────────────── */}
+            {outputFormat === 'per_table' && (
+              <>
+                {/* IDLE */}
+                {compartmentalized.status === 'idle' && !isArchived && (
+                  <Button
+                    className="bg-blue-600 hover:bg-blue-700 text-white gap-2"
+                    onClick={handleGenerateExecutionPackage}
+                    disabled={!data.hasMappings}
+                  >
+                    <PackageOpen className="w-4 h-4" />
+                    Generate Per-Table Scripts
+                  </Button>
+                )}
+
+                {/* GENERATING */}
+                {compartmentalized.status === 'generating' && (
+                  <div className="flex items-center gap-3">
+                    <RefreshCw className="w-5 h-5 text-blue-600 animate-spin flex-shrink-0" />
+                    <div>
+                      <p className="text-sm font-medium text-gray-800">Generating per-table scripts…</p>
+                      <p className="text-xs text-gray-500 mt-0.5">Creating individual SQL files for each table. This may take 30–60 seconds.</p>
+                    </div>
+                  </div>
+                )}
+
+                {/* GENERATED */}
+                {compartmentalized.status === 'generated' && (
+                  <div>
+                    {/* Header row */}
+                    <div className="flex items-center justify-between mb-4 flex-wrap gap-3">
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <CheckCircle2 className="w-4 h-4 text-green-600 flex-shrink-0" />
+                        <span className="text-sm font-medium text-green-700">
+                          Generated Scripts ({compartmentalized.files.length} files)
+                        </span>
+                        {compartmentalized.version && (
+                          <span className="text-xs text-gray-500 bg-gray-100 px-2 py-0.5 rounded-full border border-gray-200">
+                            v{compartmentalized.version}
+                          </span>
+                        )}
+                        {compartmentalized.dialect && (
+                          <span className="text-xs text-blue-700 bg-blue-50 px-2 py-0.5 rounded-full border border-blue-200">
+                            {SQL_DIALECTS.find((d) => d.id === compartmentalized.dialect)?.label ?? compartmentalized.dialect}
+                          </span>
+                        )}
+                        {compartmentalized.generatedAt && (
+                          <span className="text-xs text-gray-400">{fmtDateTime(compartmentalized.generatedAt)}</span>
+                        )}
+                      </div>
+                      <div className="flex items-center gap-2">
+                        {selectedFiles.size > 0 && (
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            className="gap-1.5 text-sm"
+                            onClick={handleDownloadSelected}
+                            disabled={selectiveDownloading}
+                          >
+                            {selectiveDownloading
+                              ? <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                              : <Download className="w-3.5 h-3.5" />
+                            }
+                            Download Selected ({selectedFiles.size})
+                          </Button>
+                        )}
+                        <Button className="bg-blue-600 hover:bg-blue-700 text-white gap-2" size="sm" onClick={handleDownloadZip}>
+                          <Download className="w-4 h-4" />
+                          Download All (ZIP)
+                        </Button>
+                        {!isArchived && (
+                          <Button variant="outline" size="sm" className="gap-1.5" onClick={handleGenerateExecutionPackage}>
+                            <RefreshCw className="w-3.5 h-3.5" />
+                            Regenerate
+                          </Button>
+                        )}
+                      </div>
+                    </div>
+
+                    {/* File list */}
+                    <div className="border border-gray-200 rounded-lg overflow-hidden">
+                      {/* Table header */}
+                      <div className="grid grid-cols-[32px_1fr_110px_auto] gap-2 px-4 py-2 bg-gray-50 border-b border-gray-200 text-xs font-medium text-gray-500">
+                        <div />
+                        <div>File</div>
+                        <div>Type</div>
+                        <div>Actions</div>
+                      </div>
+
+                      {compartmentalized.files.map((file, idx) => {
+                        const isOpen = previewFilename === file.filename
+                        const cachedContent = fileContentCache[file.filename]
+                        const typeInfo = (() => {
+                          switch (file.type) {
+                            case 'checklist': return { label: 'Checklist', cls: 'bg-blue-100 text-blue-700 border-blue-200' }
+                            case 'table_script': return { label: 'Table Load', cls: 'bg-green-100 text-green-700 border-green-200' }
+                            case 'validation': return { label: 'Validation', cls: 'bg-amber-100 text-amber-700 border-amber-200' }
+                            case 'rollback': return { label: 'Rollback', cls: 'bg-red-100 text-red-700 border-red-200' }
+                            default: return { label: file.type, cls: 'bg-gray-100 text-gray-600 border-gray-200' }
+                          }
+                        })()
+
+                        return (
+                          <div key={file.filename} className={idx > 0 ? 'border-t border-gray-100' : ''}>
+                            {/* Row */}
+                            <div className="grid grid-cols-[32px_1fr_110px_auto] gap-2 items-center px-4 py-2.5 hover:bg-gray-50/70 transition-colors">
+                              <Checkbox
+                                checked={selectedFiles.has(file.filename)}
+                                onCheckedChange={(checked) => {
+                                  setSelectedFiles((prev) => {
+                                    const next = new Set(prev)
+                                    checked ? next.add(file.filename) : next.delete(file.filename)
+                                    return next
+                                  })
+                                }}
+                              />
+                              <span className="font-mono text-xs text-gray-800 truncate">{file.filename}</span>
+                              <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-[11px] font-medium border ${typeInfo.cls} w-fit`}>
+                                {typeInfo.label}
+                              </span>
+                              <div className="flex items-center gap-3">
+                                <button
+                                  onClick={() => handlePreviewFile(file.filename)}
+                                  className="flex items-center gap-1 text-xs text-blue-600 hover:text-blue-800 font-medium"
+                                >
+                                  {isOpen ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
+                                  {isOpen ? 'Close' : 'Preview'}
+                                </button>
+                                <button
+                                  onClick={() => handleDownloadFile(file)}
+                                  className="flex items-center gap-1 text-xs text-gray-500 hover:text-gray-800 font-medium"
+                                >
+                                  <Download className="w-3.5 h-3.5" />
+                                  Download
+                                </button>
+                              </div>
+                            </div>
+
+                            {/* Inline preview */}
+                            {isOpen && (
+                              <div className="border-t border-gray-100 bg-slate-900 rounded-b-none">
+                                <div className="flex items-center justify-between px-4 py-2 border-b border-slate-700">
+                                  <span className="text-xs font-mono text-slate-400">{file.filename}</span>
+                                  <button
+                                    onClick={() => handleCopyToClipboard(cachedContent ?? '')}
+                                    disabled={!cachedContent}
+                                    className="flex items-center gap-1.5 text-xs text-slate-400 hover:text-slate-200 transition-colors disabled:opacity-40"
+                                  >
+                                    {copied ? <Check className="w-3.5 h-3.5 text-green-400" /> : <Copy className="w-3.5 h-3.5" />}
+                                    {copied ? 'Copied!' : 'Copy'}
+                                  </button>
+                                </div>
+                                {previewLoading && !cachedContent ? (
+                                  <div className="flex items-center gap-2 px-4 py-6 text-slate-400 text-sm">
+                                    <RefreshCw className="w-4 h-4 animate-spin" />
+                                    Loading file content…
+                                  </div>
+                                ) : (
+                                  <pre className="text-green-300 text-xs font-mono p-4 overflow-x-auto max-h-96 whitespace-pre-wrap leading-relaxed">
+                                    {cachedContent ?? '-- No content available'}
+                                  </pre>
+                                )}
+                              </div>
+                            )}
+                          </div>
+                        )
+                      })}
+                    </div>
+                  </div>
+                )}
+
+                {/* ERROR */}
+                {compartmentalized.status === 'error' && (
+                  <div>
+                    <div className="flex items-center gap-2 mb-3">
+                      <AlertCircle className="w-4 h-4 text-red-500 flex-shrink-0" />
+                      <span className="text-sm text-red-700">{compartmentalized.error}</span>
+                    </div>
+                    {!isArchived && (
+                      <Button variant="outline" className="gap-2" onClick={handleGenerateExecutionPackage}>
+                        <RefreshCw className="w-3.5 h-3.5" />
+                        Try Again
+                      </Button>
+                    )}
+                  </div>
+                )}
+              </>
             )}
           </div>
         </div>
