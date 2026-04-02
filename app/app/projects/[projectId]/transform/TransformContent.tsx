@@ -48,6 +48,7 @@ interface Props {
   projectId: string
   projectName: string
   initialData: TransformPageData
+  isArchived?: boolean
 }
 
 type LocalStatus = 'draft' | 'tested' | 'applied' | 'stale'
@@ -162,7 +163,7 @@ function getSmartPlaceholder(field: FieldItem): string {
 
 // ── TransformContent ──────────────────────────────────────────────────────────
 
-export default function TransformContent({ projectId, projectName, initialData }: Props) {
+export default function TransformContent({ projectId, projectName, initialData, isArchived = false }: Props) {
   const router = useRouter()
   const [data, setData] = useState<TransformPageData>(initialData)
   const [selectedMappingId, setSelectedMappingId] = useState<string | null>(null)
@@ -2217,8 +2218,15 @@ export default function TransformContent({ projectId, projectName, initialData }
               </div>
             )}
 
+                {/* Archived: show read-only notice above action bar */}
+                {isArchived && (
+                  <div className="flex-shrink-0 border-t border-amber-200 bg-amber-50 px-4 py-2.5 text-xs text-amber-700">
+                    Transform testing is not available for archived projects. The transformation logic is preserved but cannot be tested without source data.
+                  </div>
+                )}
+
                 {/* Pinned action bar — flex-shrink-0 keeps it visible below the scroll area */}
-                {localTransform?.sql && (
+                {localTransform?.sql && !isArchived && (
                   <div className="flex-shrink-0 z-10 border-t border-gray-200 bg-white px-4 py-3 flex items-center gap-3 shadow-[0_-2px_8px_rgba(0,0,0,0.06)]">
                     {/* Test Transform */}
                     <Button

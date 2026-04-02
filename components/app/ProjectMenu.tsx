@@ -6,7 +6,8 @@ import { useRouter } from 'next/navigation'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Button } from '@/components/ui/button'
-import { updateProject, updateProjectLabels, deleteProject, markProjectComplete, reactivateProject } from '@/lib/actions/projects'
+import { updateProject, updateProjectLabels, deleteProject, markProjectComplete, reactivateProject, archiveProject } from '@/lib/actions/projects'
+import { getExecutionPackageUrl } from '@/lib/actions/execution-package'
 
 // ── types ──────────────────────────────────────────────────────────────────
 
@@ -16,6 +17,7 @@ export interface ProjectMenuProject {
   source_label: string
   target_label: string
   status: string
+  completed_at?: string | null
 }
 
 interface ProjectMenuProps {
@@ -31,11 +33,11 @@ function Modal({
   children,
 }: {
   title: string
-  onClose: () => void
+  onClose?: () => void
   children: React.ReactNode
 }) {
   useEffect(() => {
-    function onKey(e: KeyboardEvent) { if (e.key === 'Escape') onClose() }
+    function onKey(e: KeyboardEvent) { if (e.key === 'Escape') onClose?.() }
     document.addEventListener('keydown', onKey)
     return () => document.removeEventListener('keydown', onKey)
   }, [onClose])
@@ -43,7 +45,7 @@ function Modal({
   return (
     <div
       className="fixed inset-0 bg-black/40 flex items-center justify-center z-[300] p-4"
-      onMouseDown={(e) => { if (e.target === e.currentTarget) onClose() }}
+      onMouseDown={(e) => { if (e.target === e.currentTarget) onClose?.() }}
     >
       <div className="bg-white border border-gray-200 rounded-xl shadow-xl w-full max-w-md p-6">
         <h2 className="text-base font-semibold text-gray-900 mb-4">{title}</h2>
@@ -99,13 +101,17 @@ export function ProjectMenu({ project, onUpdate }: ProjectMenuProps) {
   const router = useRouter()
   const [isOpen, setIsOpen] = useState(false)
   const [dropCoords, setDropCoords] = useState({ top: 0, left: 0 })
-  const [modal, setModal] = useState<'rename' | 'labels' | 'delete' | null>(null)
+  const [modal, setModal] = useState<'rename' | 'labels' | 'delete' | 'archive' | null>(null)
 
   // rename state
   const [newName, setNewName] = useState(project.name)
   // labels state
   const [srcLabel, setSrcLabel] = useState(project.source_label)
   const [tgtLabel, setTgtLabel] = useState(project.target_label)
+
+  const [archiveLoading, setArchiveLoading] = useState(false)
+  const [archiveError, setArchiveError] = useState<string | null>(null)
+  const [outputUrl, setOutputUrl] = useState<string | null | undefined>(undefined) // undefined = not yet checked, null = none
 
   const [isPending, startTransition] = useTransition()
   const triggerRef = useRef<HTMLButtonElement>(null)
@@ -148,10 +154,18 @@ export function ProjectMenu({ project, onUpdate }: ProjectMenuProps) {
     setIsOpen(o => !o)
   }
 
-  const openModal = (m: 'rename' | 'labels' | 'delete') => {
+  const openModal = (m: 'rename' | 'labels' | 'delete' | 'archive') => {
     setIsOpen(false)
     if (m === 'rename') setNewName(project.name)
     if (m === 'labels') { setSrcLabel(project.source_label); setTgtLabel(project.target_label) }
+    if (m === 'archive') {
+      setArchiveError(null)
+      setOutputUrl(undefined)
+      // Pre-check whether an execution package exists
+      getExecutionPackageUrl(project.id).then((result) => {
+        setOutputUrl(result.url ?? null)
+      }).catch(() => setOutputUrl(null))
+    }
     setModal(m)
   }
 
@@ -198,7 +212,21 @@ export function ProjectMenu({ project, onUpdate }: ProjectMenuProps) {
     })
   }
 
+  const handleArchive = async () => {
+    setArchiveLoading(true)
+    setArchiveError(null)
+    const result = await archiveProject(project.id)
+    setArchiveLoading(false)
+    if (result.success) {
+      closeModal()
+      refresh()
+    } else {
+      setArchiveError(result.error ?? 'Failed to archive project')
+    }
+  }
+
   const isCompleted = project.status === 'completed'
+  const isArchived = project.status === 'archived'
 
   return (
     <>
@@ -219,26 +247,35 @@ export function ProjectMenu({ project, onUpdate }: ProjectMenuProps) {
           className="fixed w-52 bg-white border border-gray-200 rounded-xl shadow-lg z-[200] py-1.5"
           style={{ top: dropCoords.top, left: dropCoords.left }}
         >
-          <MenuItem
-            icon={<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5"><path d="M11.5 2.5l2 2-8 8H3.5v-2l8-8z"/></svg>}
-            label="Rename"
-            onClick={() => openModal('rename')}
-          />
-          <MenuItem
-            icon={<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5"><rect x="2" y="5" width="12" height="9" rx="1"/><path d="M5 5V4a3 3 0 016 0v1"/></svg>}
-            label="Edit labels"
-            onClick={() => openModal('labels')}
-          />
-          <MenuItem
-            icon={
-              isCompleted
-                ? <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5"><path d="M2 8a6 6 0 0110.5-4M14 8a6 6 0 01-10.5 4"/><path d="M12 4l2 2-2 2M4 12l-2-2 2-2"/></svg>
-                : <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5"><circle cx="8" cy="8" r="6"/><path d="M5 8l2 2 4-4"/></svg>
-            }
-            label={isCompleted ? 'Reactivate' : 'Mark as completed'}
-            onClick={handleToggleStatus}
-          />
-          <div className="border-t border-gray-100 my-1" />
+          {!isArchived && (
+            <>
+              <MenuItem
+                icon={<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5"><path d="M11.5 2.5l2 2-8 8H3.5v-2l8-8z"/></svg>}
+                label="Rename"
+                onClick={() => openModal('rename')}
+              />
+              <MenuItem
+                icon={<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5"><rect x="2" y="5" width="12" height="9" rx="1"/><path d="M5 5V4a3 3 0 016 0v1"/></svg>}
+                label="Edit labels"
+                onClick={() => openModal('labels')}
+              />
+              <MenuItem
+                icon={
+                  isCompleted
+                    ? <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5"><path d="M2 8a6 6 0 0110.5-4M14 8a6 6 0 01-10.5 4"/><path d="M12 4l2 2-2 2M4 12l-2-2 2-2"/></svg>
+                    : <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5"><circle cx="8" cy="8" r="6"/><path d="M5 8l2 2 4-4"/></svg>
+                }
+                label={isCompleted ? 'Reactivate' : 'Mark as completed'}
+                onClick={handleToggleStatus}
+              />
+              <MenuItem
+                icon={<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5"><path d="M2 12V6l4-4h5l3 3v7a1 1 0 01-1 1H3a1 1 0 01-1-1z"/><path d="M6 2v4H2"/><path d="M8 9v3M8 7v.5"/></svg>}
+                label="Archive project"
+                onClick={() => openModal('archive')}
+              />
+              <div className="border-t border-gray-100 my-1" />
+            </>
+          )}
           <MenuItem
             icon={<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5"><path d="M3 4h10M6 4V3h4v1M13 4l-.75 9H3.75L3 4"/><path d="M6.5 7v4M9.5 7v4"/></svg>}
             label="Delete project"
@@ -329,6 +366,81 @@ export function ProjectMenu({ project, onUpdate }: ProjectMenuProps) {
               {isPending ? 'Deleting…' : 'Delete project'}
             </Button>
           </div>
+        </Modal>
+      )}
+
+      {/* Archive confirmation modal */}
+      {modal === 'archive' && (
+        <Modal title="Archive Project" onClose={archiveLoading ? undefined : closeModal}>
+          <p className="text-sm text-gray-600 mb-3">
+            Archiving will permanently delete all uploaded data and database connections from{' '}
+            <span className="font-medium text-gray-900">&ldquo;{project.name}&rdquo;</span>.
+          </p>
+          <div className="mb-4 bg-gray-50 border border-gray-200 rounded-lg p-3">
+            <p className="text-xs font-medium text-gray-700 mb-1.5">The following will be preserved:</p>
+            <ul className="text-xs text-gray-500 space-y-0.5 list-disc list-inside">
+              <li>Source and target schema structure</li>
+              <li>Field mappings and transformation logic</li>
+              <li>Validation results and quality decisions</li>
+              <li>Generated outputs and execution packages</li>
+            </ul>
+          </div>
+          <p className="text-xs text-gray-400 mb-5">This action cannot be undone.</p>
+
+          {archiveError && (
+            <div className="mb-4 p-3 bg-red-50 border border-red-200 rounded-lg text-sm text-red-700">
+              {archiveError}
+            </div>
+          )}
+
+          {archiveLoading ? (
+            <div className="flex items-center justify-center gap-2 py-2 text-sm text-gray-500">
+              <svg className="animate-spin w-4 h-4 text-gray-400" fill="none" viewBox="0 0 24 24">
+                <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8z" />
+              </svg>
+              Archiving project and purging data…
+            </div>
+          ) : (
+            <div className="flex flex-col gap-2">
+              {outputUrl && (
+                <button
+                  onClick={async () => {
+                    try {
+                      const response = await fetch(outputUrl)
+                      const blob = await response.blob()
+                      const downloadUrl = URL.createObjectURL(blob)
+                      const a = document.createElement('a')
+                      a.href = downloadUrl
+                      a.download = `${project.name.replace(/\s+/g, '_')}_execution_package.sql`
+                      document.body.appendChild(a)
+                      a.click()
+                      document.body.removeChild(a)
+                      URL.revokeObjectURL(downloadUrl)
+                    } catch {
+                      // Fallback to opening in new tab if download fails
+                      window.open(outputUrl, '_blank')
+                    }
+                  }}
+                  className="flex items-center justify-center gap-1.5 w-full px-4 py-2 text-sm font-medium text-blue-600 border border-blue-200 rounded-lg hover:bg-blue-50 transition-colors"
+                >
+                  <svg className="w-4 h-4" fill="none" stroke="currentColor" strokeWidth="1.5" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M3 16.5v2.25A2.25 2.25 0 005.25 21h13.5A2.25 2.25 0 0021 18.75V16.5M16.5 12L12 16.5m0 0L7.5 12m4.5 4.5V3" />
+                  </svg>
+                  Download Outputs First
+                </button>
+              )}
+              <div className="flex justify-end gap-2 mt-1">
+                <Button variant="ghost" onClick={closeModal} className="text-gray-600">Cancel</Button>
+                <Button
+                  onClick={handleArchive}
+                  className="bg-red-600 hover:bg-red-700 text-white disabled:opacity-50"
+                >
+                  Archive Project
+                </Button>
+              </div>
+            </div>
+          )}
         </Modal>
       )}
     </>

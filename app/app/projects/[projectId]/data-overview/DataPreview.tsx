@@ -12,11 +12,13 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 interface DataPreviewProps {
   projectId: string
   tables: TableOption[]
+  isArchived?: boolean
+  archivedAt?: string | null
 }
 
 const PAGE_SIZE = 10
 
-export default function DataPreview({ projectId, tables }: DataPreviewProps) {
+export default function DataPreview({ projectId, tables, isArchived = false, archivedAt }: DataPreviewProps) {
   const router = useRouter()
 
   // ── View mode ──────────────────────────────────────────────────────────────
@@ -231,6 +233,24 @@ export default function DataPreview({ projectId, tables }: DataPreviewProps) {
       datasetOrder.push(t.datasetName)
     }
     tablesByDataset.get(t.datasetName)!.push(t)
+  }
+
+  if (isArchived) {
+    const purgeDate = archivedAt
+      ? new Date(archivedAt).toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' })
+      : null
+    return (
+      <div className="flex flex-col items-center justify-center py-24 text-center">
+        <svg className="w-10 h-10 text-gray-300 mb-4" fill="none" stroke="currentColor" strokeWidth="1.5" viewBox="0 0 24 24">
+          <path strokeLinecap="round" strokeLinejoin="round" d="M20.25 7.5l-.625 10.632a2.25 2.25 0 01-2.247 2.118H6.622a2.25 2.25 0 01-2.247-2.118L3.75 7.5M10 11.25h4M3.375 7.5h17.25c.621 0 1.125-.504 1.125-1.125v-1.5c0-.621-.504-1.125-1.125-1.125H3.375c-.621 0-1.125.504-1.125 1.125v1.5c0 .621.504 1.125 1.125 1.125z" />
+        </svg>
+        <h3 className="text-base font-medium text-gray-700 mb-1.5">Data preview is not available</h3>
+        <p className="text-sm text-gray-500 max-w-sm">
+          Source data was purged{purgeDate ? ` on ${purgeDate}` : ' when this project was archived'}.
+          Schema structure and field definitions are still available in Schema Overview.
+        </p>
+      </div>
+    )
   }
 
   return (

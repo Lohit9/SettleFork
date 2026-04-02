@@ -9,11 +9,12 @@ import type { TableOption } from '@/lib/actions/data-overview'
 interface QueryDataProps {
   projectId: string
   tables: TableOption[]
+  isArchived?: boolean
 }
 
 type QueryMode = 'nl' | 'sql'
 
-export default function QueryData({ projectId, tables }: QueryDataProps) {
+export default function QueryData({ projectId, tables, isArchived = false }: QueryDataProps) {
   const [mode, setMode] = useState<QueryMode>('nl')
   const [input, setInput] = useState('')
   const [loading, setLoading] = useState(false)
@@ -98,6 +99,20 @@ export default function QueryData({ projectId, tables }: QueryDataProps) {
     tables.length > 0
       ? `SELECT * FROM ${tables[0].friendlyName} LIMIT 10`
       : 'Upload CSV files first to enable querying'
+
+  if (isArchived) {
+    return (
+      <div className="flex flex-col items-center justify-center py-24 text-center">
+        <svg className="w-10 h-10 text-gray-300 mb-4" fill="none" stroke="currentColor" strokeWidth="1.5" viewBox="0 0 24 24">
+          <path strokeLinecap="round" strokeLinejoin="round" d="M21 21l-5.197-5.197m0 0A7.5 7.5 0 105.196 5.196a7.5 7.5 0 0010.607 10.607z" />
+        </svg>
+        <h3 className="text-base font-medium text-gray-700 mb-1.5">Query functionality is not available</h3>
+        <p className="text-sm text-gray-500 max-w-sm">
+          Query Data is not available for archived projects. Source data was purged during archival.
+        </p>
+      </div>
+    )
+  }
 
   return (
     <div className="flex flex-col gap-4">

@@ -514,39 +514,25 @@ export async function archiveProject(projectId: string): Promise<{ success: bool
     const datasetIds = (allDatasets ?? []).map((d) => d.id)
 
     // Fetch table IDs once — reused for data_rows and field_profiles
-    const { data: allTables } = datasetIds.length > 0
+    const { data: allTables, error: tablesError } = datasetIds.length > 0
       ? await supabaseAdmin.from('tables').select('id, csv_storage_path').in('dataset_id', datasetIds)
-      : { data: [] }
+      : { data: [], error: null }
+    if (tablesError) {
+      console.error('[archiveProject] Error fetching tables:', tablesError)
+    }
     const tableIds = (allTables ?? []).map((t) => t.id)
 
-    // ── Step 1: Purge data_rows in batches ────────────────────────────────────
-    let totalDeleted = 0
+    // ── Step 1: Purge data_rows ───────────────────────────────────────────────
     if (tableIds.length > 0) {
-      let keepDeleting = true
-      while (keepDeleting) {
-        const { data: ids, error: idsError } = await supabaseAdmin
-          .from('data_rows')
-          .select('id')
-          .in('table_id', tableIds)
-          .limit(10000)
+      const { error: deleteError, count } = await supabaseAdmin
+        .from('data_rows')
+        .delete({ count: 'exact' })
+        .in('table_id', tableIds)
 
-        if (idsError || !ids || ids.length === 0) {
-          keepDeleting = false
-          break
-        }
-
-        const { error: deleteError } = await supabaseAdmin
-          .from('data_rows')
-          .delete()
-          .in('id', ids.map((r) => r.id))
-
-        if (deleteError) {
-          console.error('[archiveProject] Error deleting data_rows batch:', deleteError)
-          keepDeleting = false
-        } else {
-          totalDeleted += ids.length
-          if (ids.length < 10000) keepDeleting = false
-        }
+      if (deleteError) {
+        console.error('[archiveProject] Error deleting data_rows:', deleteError)
+      } else {
+        console.log(`[archiveProject] Deleted ${count} data_rows`)
       }
     }
 
@@ -627,9 +613,9 @@ export async function archiveProject(projectId: string): Promise<{ success: bool
       await logActivity(
         projectId,
         'project_archived',
-        `Project archived. Uploaded data purged. ${totalDeleted} data rows removed.`,
+        `Project archived. Uploaded data purged.`,
         'system',
-        { data_rows_deleted: totalDeleted }
+        {}
       )
     }
 
