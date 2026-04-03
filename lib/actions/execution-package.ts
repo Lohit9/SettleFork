@@ -124,6 +124,78 @@ function detectDialect(content: string, expected: SqlDialect): boolean {
 }
 
 /**
+ * Sanitize Claude's JSON response to fix unescaped characters inside string values.
+ * Claude sometimes emits raw double quotes inside JSON "content" fields when generating
+ * SQL with double-quoted identifiers (PostgreSQL) or comments containing quotes.
+ *
+ * Strategy: try parsing as-is first. If that fails, scan "content" field values
+ * character by character, escaping any interior double quote that isn't the real
+ * closing quote (identified by being followed by whitespace then , } or ]).
+ */
+function sanitizeClaudeJson(raw: string): string {
+  try {
+    JSON.parse(raw)
+    return raw
+  } catch {
+    // Needs sanitization
+  }
+
+  let sanitized = ''
+  let i = 0
+  while (i < raw.length) {
+    const contentMatch = raw.indexOf('"content"', i)
+    if (contentMatch === -1) {
+      sanitized += raw.slice(i)
+      break
+    }
+
+    sanitized += raw.slice(i, contentMatch)
+    i = contentMatch
+
+    const colonPos = raw.indexOf(':', i + 9)
+    if (colonPos === -1) { sanitized += raw.slice(i); break }
+    const openQuote = raw.indexOf('"', colonPos + 1)
+    if (openQuote === -1) { sanitized += raw.slice(i); break }
+
+    sanitized += raw.slice(i, openQuote + 1)
+    i = openQuote + 1
+
+    let j = i
+    while (j < raw.length) {
+      if (raw[j] === '\\') {
+        sanitized += raw[j] + (raw[j + 1] || '')
+        j += 2
+        continue
+      }
+      if (raw[j] === '"') {
+        let k = j + 1
+        while (k < raw.length && (raw[k] === ' ' || raw[k] === '\n' || raw[k] === '\r' || raw[k] === '\t')) k++
+        if (k >= raw.length || raw[k] === ',' || raw[k] === '}' || raw[k] === ']') {
+          sanitized += '"'
+          i = j + 1
+          break
+        } else {
+          sanitized += '\\"'
+          j++
+          continue
+        }
+      }
+      sanitized += raw[j]
+      j++
+    }
+  }
+
+  try {
+    JSON.parse(sanitized)
+    console.log('[sanitizeClaudeJson] Successfully sanitized JSON')
+    return sanitized
+  } catch (e) {
+    console.error('[sanitizeClaudeJson] Sanitization failed, returning original:', e)
+    return raw
+  }
+}
+
+/**
  * Splits a monolithic 6-section SQL script into per-table file content.
  * Anchors on SECTION N markers and INSERT INTO STG_ statements per table.
  */
@@ -480,7 +552,7 @@ JSON STRUCTURE:
     {
       "filename": "00_pre_migration_checklist.sql",
       "type": "checklist",
-      "content": "-- PRE-MIGRATION CHECKLIST\\n...\\n-- CREATE STAGING TABLES\\n...\\n-- TRUNCATE STAGING TABLES\\n..."
+      "content": "-- SECTION 1: ISSUE REVIEW\\n-- [BLOCKING] ...\\n-- SOURCE COUNTS ...\\n\\n-- SECTION 2: CREATE STAGING TABLES\\nCREATE TABLE IF NOT EXISTS ...\\n\\n-- SECTION 3: TRUNCATE STAGING TABLES\\nTRUNCATE TABLE ..."
     },
     {
       "filename": "TABLE_PLACEHOLDER",
@@ -517,24 +589,42 @@ SQL FORMATTING RULES:
 - Do NOT reference variables, temp tables, or state from other files.
 
 FILE 1 — Pre-Migration Checklist (00_pre_migration_checklist.sql):
-Part 1 — Issue Review (SQL comments ONLY, no executable SQL):
-- List all open blocking issues with severity and record counts.
-- Include fix SQL for each issue as commented-out SQL (ready to uncomment and run).
-- The fix SQL examples in the checklist MUST use the target SQL dialect syntax specified in the dialect rules below. Adapt any fix SQL to the target dialect — use dialect-appropriate identifier quoting, string functions, and operators. Do NOT use PostgreSQL-specific syntax (like "double quotes", TRIM(), ~, !~) when the target dialect is T-SQL or MySQL.
-- List accepted risks with notes.
-- Show source record counts per table.
+This file has THREE distinct sections. Sections 2 and 3 contain EXECUTABLE SQL, not comments.
+
+SECTION 1 — ISSUE REVIEW (SQL comments only, no executable statements):
+- List all BLOCKING issues as SQL comments with fix SQL shown as commented-out code.
+- The fix SQL examples MUST use the target SQL dialect syntax specified in the dialect rules below. Adapt any fix SQL to the target dialect — use dialect-appropriate identifier quoting, string functions, and operators. Do NOT use PostgreSQL-specific syntax (like "double quotes", TRIM(), ~, !~) when the target dialect is T-SQL or MySQL.
+- List all WARNINGS as SQL comments.
+- List accepted risks with notes as SQL comments.
+- List SOURCE RECORD COUNTS as SQL comments (one per table).
 - Check every NOT NULL target field: if any mapping could produce NULL for that field, flag it here.
+- This section is informational only — everything is commented out.
 
-Part 2 — CREATE STAGING TABLES (executable SQL):
-- Output CREATE TABLE IF NOT EXISTS STG_{target_table} for EVERY target table.
-- Each staging table mirrors the target schema exactly: same columns, same data types, same NOT NULL constraints.
-- Do NOT include foreign key constraints on staging tables. Staging tables omit FKs because tables load in dependency order and FKs would fail during partial loads.
+SECTION 2 — CREATE STAGING TABLES (EXECUTABLE SQL — NOT comments):
+⚠️ THIS SECTION MUST CONTAIN EXECUTABLE SQL STATEMENTS, NOT COMMENTS.
+- Output one CREATE TABLE IF NOT EXISTS statement for EVERY target table's staging equivalent.
+- Staging table name = STG_ + target table name (e.g., STG_TC_MATTERS for TC_MATTERS).
+- Each CREATE TABLE must include ALL columns from the target schema with their exact data types and NOT NULL constraints.
+- Do NOT include FOREIGN KEY constraints on staging tables.
 - Do NOT include indexes, triggers, or defaults that reference other tables.
-- Use dialect-appropriate syntax for CREATE TABLE IF NOT EXISTS.
+- Use dialect-appropriate CREATE TABLE IF NOT EXISTS syntax.
+- Tables must be created in FK dependency order (parents before children).
+- Example for PostgreSQL:
+  CREATE TABLE IF NOT EXISTS "STG_TC_MATTERS" (
+      "matter_id" VARCHAR(255) NOT NULL,
+      "matter_name" VARCHAR(500) NOT NULL,
+      "status_cd" VARCHAR(4),
+      ...
+  );
 
-Part 3 — TRUNCATE STAGING TABLES (executable SQL):
-- TRUNCATE all STG_ tables in REVERSE FK dependency order to ensure idempotent re-runs.
-- Use dialect-appropriate TRUNCATE syntax.
+SECTION 3 — TRUNCATE STAGING TABLES (EXECUTABLE SQL — NOT comments):
+⚠️ THIS SECTION MUST CONTAIN EXECUTABLE SQL STATEMENTS, NOT COMMENTS.
+- Output one TRUNCATE TABLE statement for EVERY staging table.
+- Truncate in REVERSE FK dependency order (children first, then parents).
+- Use dialect-appropriate TRUNCATE syntax (PostgreSQL: TRUNCATE TABLE "STG_TC_MATTERS"; T-SQL: TRUNCATE TABLE [STG_TC_MATTERS]; MySQL: TRUNCATE TABLE \`STG_TC_MATTERS\`;).
+- This ensures the migration scripts can be re-run without producing duplicates.
+
+If Section 2 or Section 3 is empty or contains only comments, the output is INVALID.
 
 FILE 2..N — Per-Table Scripts (one per target table, in FK dependency order provided):
 Each table file has FOUR sections:
@@ -1515,7 +1605,9 @@ The "files" array must contain entries in this order:
         }
       }
 
-      const parsed = JSON.parse(cleaned) as { files: ClaudeFileEntry[] }
+      console.log('[generateCompartmentalizedPackage] Attempting JSON parse, length:', cleaned.length)
+      const sanitized = sanitizeClaudeJson(cleaned)
+      const parsed = JSON.parse(sanitized) as { files: ClaudeFileEntry[] }
       if (!Array.isArray(parsed.files)) throw new Error('Missing files array')
       claudeFiles = parsed.files
       console.log('[generateCompartmentalizedPackage] Parsed', claudeFiles.length, 'files successfully')
