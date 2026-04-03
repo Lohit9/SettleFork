@@ -28,7 +28,8 @@ export async function createProject(
   name: string,
   sourceSystemName: string = 'Source System',
   targetSystemName: string = 'Target System',
-  description?: string
+  description?: string,
+  orgId?: string
 ): Promise<Project> {
   const supabase = await createClient()
   const {
@@ -37,13 +38,38 @@ export async function createProject(
 
   if (!user) throw new Error('Not authenticated')
 
+  // Resolve org_id: use provided orgId, or fall back to user's first org
+  let resolvedOrgId = orgId
+  if (!resolvedOrgId) {
+    const { data: membership } = await supabase
+      .from('org_memberships')
+      .select('org_id')
+      .eq('user_id', user.id)
+      .limit(1)
+      .single()
+    resolvedOrgId = membership?.org_id
+  }
+
+  if (!resolvedOrgId) throw new Error('No organization found. Please contact support.')
+
   const { data: project, error } = await supabase
     .from('projects')
-    .insert({ name, description: description || null, user_id: user.id })
+    .insert({
+      name,
+      description: description || null,
+      user_id: user.id,
+      org_id: resolvedOrgId,
+      created_by: user.id,
+    })
     .select()
     .single()
 
   if (error || !project) throw new Error(error?.message || 'Failed to create project')
+
+  // Add the creating user as project owner
+  await supabase
+    .from('project_members')
+    .insert({ project_id: project.id, user_id: user.id, role: 'owner', assigned_by: user.id })
 
   const { error: datasetError } = await supabase.from('datasets').insert([
     { project_id: project.id, role: 'source', name: sourceSystemName },
@@ -82,6 +108,11 @@ export async function updateProject(
   projectId: string,
   updates: { name?: string; description?: string; status?: string; completed_at?: string | null; archived_at?: string | null }
 ): Promise<Project> {
+  const { checkProjectPermission } = await import('@/lib/actions/role-resolution')
+  if (!(await checkProjectPermission(projectId, 'editor'))) {
+    throw new Error('Insufficient permissions')
+  }
+
   const supabase = await createClient()
   const { data, error } = await supabase
     .from('projects')
@@ -95,19 +126,29 @@ export async function updateProject(
 }
 
 export async function deleteProject(projectId: string): Promise<void> {
+  const { checkProjectPermission } = await import('@/lib/actions/role-resolution')
+  if (!(await checkProjectPermission(projectId, 'admin'))) {
+    throw new Error('Insufficient permissions. Admin role required.')
+  }
+
   const supabase = await createClient()
   const { error } = await supabase.from('projects').delete().eq('id', projectId)
   if (error) throw new Error(error.message)
 }
 
-export async function getProjectsWithStats(): Promise<ProjectWithStats[]> {
+export async function getProjectsWithStats(orgId?: string): Promise<ProjectWithStats[]> {
   const supabase = await createClient()
 
-  // Round 1: projects with their datasets
-  const { data: projects, error } = await supabase
+  let query = supabase
     .from('projects')
     .select('*, datasets(id, role, name)')
     .order('created_at', { ascending: false })
+
+  if (orgId) {
+    query = query.eq('org_id', orgId)
+  }
+
+  const { data: projects, error } = await query
 
   if (error || !projects || projects.length === 0) return []
 
@@ -493,6 +534,11 @@ export async function reactivateProject(projectId: string): Promise<{ success: b
 
 export async function archiveProject(projectId: string): Promise<{ success: boolean; error?: string }> {
   try {
+    const { checkProjectPermission } = await import('@/lib/actions/role-resolution')
+    if (!(await checkProjectPermission(projectId, 'admin'))) {
+      return { success: false, error: 'Insufficient permissions. Admin role required.' }
+    }
+
     const supabase = await createClient()
     const { data: { user } } = await supabase.auth.getUser()
 

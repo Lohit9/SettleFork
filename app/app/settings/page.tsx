@@ -44,21 +44,37 @@ export default async function SettingsPage() {
     <SidebarShell>
       <div className="flex-1 bg-gray-50 min-h-screen">
         {/* Header */}
-        <div className="border-b border-gray-200 bg-white px-8 py-5 flex items-center justify-between">
-          <div>
-            <h1 className="text-xl font-semibold text-gray-900">Settings</h1>
-            <p className="text-sm text-gray-500 mt-0.5">Manage your account and preferences</p>
+        <div className="border-b border-gray-200 bg-white">
+          <div className="px-8 py-5 flex items-center justify-between">
+            <div>
+              <h1 className="text-xl font-semibold text-gray-900">Settings</h1>
+              <p className="text-sm text-gray-500 mt-0.5">Manage your account and preferences</p>
+            </div>
+            <form action={signOut}>
+              <Button
+                type="submit"
+                variant="outline"
+                size="sm"
+                className="border-red-300 text-red-600 hover:bg-red-50 hover:border-red-400 text-sm"
+              >
+                Sign out
+              </Button>
+            </form>
           </div>
-          <form action={signOut}>
-            <Button
-              type="submit"
-              variant="outline"
-              size="sm"
-              className="border-red-300 text-red-600 hover:bg-red-50 hover:border-red-400 text-sm"
+          <div className="px-8 flex gap-6">
+            <a
+              href="/app/settings"
+              className="pb-2.5 text-sm font-medium text-blue-600 border-b-2 border-blue-600"
             >
-              Sign out
-            </Button>
-          </form>
+              General
+            </a>
+            <a
+              href="/app/settings/members"
+              className="pb-2.5 text-sm font-medium text-gray-500 hover:text-gray-700 border-b-2 border-transparent"
+            >
+              Members
+            </a>
+          </div>
         </div>
 
         {/* Content */}
@@ -67,7 +83,7 @@ export default async function SettingsPage() {
           <div className="bg-white border border-gray-200 rounded-xl p-5">
             <div className="flex items-center gap-4 mb-4">
               {/* Avatar */}
-              <div className="w-14 h-14 rounded-full bg-blue-600 flex items-center justify-center flex-shrink-0">
+              <div className="w-14 h-14 rounded-full bg-[#6C5CE7] flex items-center justify-center flex-shrink-0">
                 <span className="text-white font-medium text-lg">{initials}</span>
               </div>
               <div className="flex-1 min-w-0">
@@ -100,7 +116,7 @@ export default async function SettingsPage() {
                 <p className="text-xs text-gray-500 mb-0.5">Plan</p>
                 <p className="text-sm text-gray-900 flex items-center gap-1.5">
                   Early Access
-                  <span className="text-xs bg-blue-100 text-blue-700 px-1.5 py-0.5 rounded font-medium">
+                  <span className="text-[11px] bg-blue-100 text-blue-700 px-1.5 py-0.5 rounded font-medium">
                     Beta
                   </span>
                 </p>

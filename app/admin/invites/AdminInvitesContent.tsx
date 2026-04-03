@@ -141,7 +141,7 @@ function RequestsSection({ initialRequests }: { initialRequests: AccessRequest[]
             onClick={() => setFilter(t)}
             className={`px-3 pb-2.5 text-sm font-medium capitalize border-b-2 transition-colors ${
               filter === t
-                ? 'border-blue-600 text-blue-600'
+                ? 'border-[#4F46E5] text-[#4F46E5]'
                 : 'border-transparent text-gray-500 hover:text-gray-700'
             }`}
           >
@@ -193,7 +193,7 @@ function RequestsSection({ initialRequests }: { initialRequests: AccessRequest[]
                     <button
                       onClick={() => handleApprove(req)}
                       disabled={isPending}
-                      className="text-xs bg-blue-600 hover:bg-blue-700 text-white px-3 py-1.5 rounded-lg font-medium transition-colors disabled:opacity-50"
+                      className="text-xs bg-[#4F46E5] hover:bg-[#4338CA] text-white px-3 py-1.5 rounded-lg font-medium transition-colors disabled:opacity-50"
                     >
                       Approve & Send Invite
                     </button>
@@ -291,7 +291,7 @@ function InvitesSection({ initialInvites }: { initialInvites: Invite[] }) {
         <h2 className="text-base font-semibold text-gray-900">Invite Codes</h2>
         <button
           onClick={() => { setShowForm((o) => !o); setGeneratedResult(null) }}
-          className="text-sm bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg font-medium transition-colors"
+          className="text-sm bg-[#4F46E5] hover:bg-[#4338CA] text-white px-4 py-2 rounded-lg font-medium transition-colors"
         >
           {showForm ? 'Cancel' : 'Generate New Invite'}
         </button>
@@ -314,7 +314,7 @@ function InvitesSection({ initialInvites }: { initialInvites: Invite[] }) {
                 />
                 <button
                   onClick={() => copyUrl(generatedResult.url)}
-                  className="text-sm bg-blue-600 text-white px-3 py-2 rounded-lg font-medium whitespace-nowrap"
+                  className="text-sm bg-[#4F46E5] text-white px-3 py-2 rounded-lg font-medium whitespace-nowrap"
                 >
                   Copy link
                 </button>
@@ -340,7 +340,7 @@ function InvitesSection({ initialInvites }: { initialInvites: Invite[] }) {
               <button
                 onClick={handleGenerate}
                 disabled={isPending}
-                className="text-sm bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white px-5 py-2 rounded-lg font-medium transition-colors"
+                className="text-sm bg-[#4F46E5] hover:bg-[#4338CA] disabled:opacity-50 text-white px-5 py-2 rounded-lg font-medium transition-colors"
               >
                 {isPending ? 'Generating…' : 'Generate'}
               </button>
@@ -417,6 +417,20 @@ export default function AdminInvitesContent({
 }) {
   return (
     <div className="space-y-10">
+      <div className="bg-amber-50 border border-amber-200 rounded-xl px-5 py-4 flex items-center justify-between">
+        <div>
+          <p className="text-sm font-medium text-amber-800">Legacy invite system</p>
+          <p className="text-xs text-amber-600 mt-0.5">
+            Use <span className="font-semibold">Organizations → Invite Member</span> for new invites.
+          </p>
+        </div>
+        <a
+          href="/admin/organizations"
+          className="text-sm bg-amber-600 hover:bg-amber-700 text-white px-4 py-2 rounded-lg font-medium transition-colors"
+        >
+          Go to Organizations
+        </a>
+      </div>
       <RequestsSection initialRequests={requests} />
       <InvitesSection initialInvites={invites} />
     </div>

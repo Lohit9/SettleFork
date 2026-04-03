@@ -701,6 +701,11 @@ export async function generateExecutionPackage(
     } = await supabase.auth.getUser()
     if (!user) return { success: false, error: 'Not authenticated' }
 
+    const { checkProjectPermission } = await import('@/lib/actions/role-resolution')
+    if (!(await checkProjectPermission(projectId, 'editor'))) {
+      return { success: false, error: 'Insufficient permissions' }
+    }
+
     const rateLimit = checkAIRateLimit(user.id)
     if (!rateLimit.allowed) return { success: false, error: rateLimit.error ?? 'Rate limit exceeded' }
 
@@ -1199,6 +1204,11 @@ export async function generateCompartmentalizedPackage(
       data: { user },
     } = await supabase.auth.getUser()
     if (!user) return { success: false, error: 'Not authenticated' }
+
+    const { checkProjectPermission } = await import('@/lib/actions/role-resolution')
+    if (!(await checkProjectPermission(projectId, 'editor'))) {
+      return { success: false, error: 'Insufficient permissions' }
+    }
 
     const rateLimit = checkAIRateLimit(user.id)
     if (!rateLimit.allowed) return { success: false, error: rateLimit.error ?? 'Rate limit exceeded' }

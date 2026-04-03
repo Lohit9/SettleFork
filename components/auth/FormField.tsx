@@ -11,6 +11,7 @@ interface FormFieldProps {
   error?: string
   required?: boolean
   autoComplete?: string
+  disabled?: boolean
 }
 
 export default function FormField({
@@ -23,6 +24,7 @@ export default function FormField({
   error,
   required,
   autoComplete,
+  disabled,
 }: FormFieldProps) {
   return (
     <div className="space-y-2">
@@ -39,7 +41,8 @@ export default function FormField({
         onChange={onChange}
         required={required}
         autoComplete={autoComplete}
-        className={error ? 'border-red-300 focus:ring-red-500' : ''}
+        disabled={disabled}
+        className={`${error ? 'border-red-300 focus:ring-red-500' : ''} ${disabled ? 'bg-gray-50 text-gray-500' : ''}`}
       />
       {error && <p className="text-sm text-red-600">{error}</p>}
     </div>

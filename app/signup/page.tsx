@@ -4,6 +4,7 @@ import { Suspense, useEffect, useRef, useState, useTransition } from 'react'
 import { useRouter, useSearchParams } from 'next/navigation'
 import Link from 'next/link'
 import { signUpWithBotProtection } from '@/lib/actions/auth'
+import { getInviteByToken } from '@/lib/actions/org-invites'
 import AuthCard from '@/components/auth/AuthCard'
 import FormField from '@/components/auth/FormField'
 import { Button } from '@/components/ui/button'
@@ -14,6 +15,9 @@ function SignupContent() {
   const searchParams = useSearchParams()
   const [isPending, startTransition] = useTransition()
 
+  const orgToken = searchParams.get('token')
+  const legacyInvite = searchParams.get('invite')
+
   const [formData, setFormData] = useState({
     inviteCode: '',
     fullName: '',
@@ -23,20 +27,38 @@ function SignupContent() {
   })
   const [error, setError] = useState<string | null>(null)
   const [success, setSuccess] = useState(false)
+  const [orgInviteInfo, setOrgInviteInfo] = useState<{ orgName: string; role: string; email: string } | null>(null)
 
-  // Bot protection: record when the page loaded
   const loadedAtRef = useRef<number>(0)
   useEffect(() => {
     loadedAtRef.current = Date.now()
   }, [])
 
-  // Pre-fill invite code from ?invite= URL param
+  // Org invite token: fetch invite details
   useEffect(() => {
-    const invite = searchParams.get('invite')
-    if (invite) {
-      setFormData((prev) => ({ ...prev, inviteCode: invite.toUpperCase() }))
+    if (orgToken) {
+      getInviteByToken(orgToken).then(({ invite }) => {
+        if (invite) {
+          setOrgInviteInfo({ orgName: invite.org_name || 'the organization', role: invite.role, email: invite.email })
+          setFormData((prev) => ({ ...prev, email: invite.email }))
+        }
+      })
     }
-  }, [searchParams])
+  }, [orgToken])
+
+  // Legacy invite code: pre-fill from ?invite= param
+  useEffect(() => {
+    if (!orgToken && legacyInvite) {
+      setFormData((prev) => ({ ...prev, inviteCode: legacyInvite.toUpperCase() }))
+    }
+  }, [orgToken, legacyInvite])
+
+  // No token and no invite code → redirect to request access
+  useEffect(() => {
+    if (!orgToken && !legacyInvite) {
+      router.replace('/request-access')
+    }
+  }, [orgToken, legacyInvite, router])
 
   const set = (field: keyof typeof formData) =>
     (e: React.ChangeEvent<HTMLInputElement>) =>
@@ -46,7 +68,8 @@ function SignupContent() {
     e.preventDefault()
     setError(null)
 
-    if (!formData.inviteCode.trim()) {
+    const isOrgFlow = !!orgToken
+    if (!isOrgFlow && !formData.inviteCode.trim()) {
       setError('An invite code is required to sign up.')
       return
     }
@@ -63,7 +86,6 @@ function SignupContent() {
       return
     }
 
-    // Client-side honeypot check
     const form = e.currentTarget
     const honeypotEl = form.elements.namedItem('website') as HTMLInputElement | null
     if (honeypotEl?.value) {
@@ -73,7 +95,9 @@ function SignupContent() {
 
     startTransition(async () => {
       const result = await signUpWithBotProtection({
-        inviteCode: formData.inviteCode.trim().toUpperCase(),
+        ...(isOrgFlow
+          ? { inviteToken: orgToken!, inviteCode: '' }
+          : { inviteCode: formData.inviteCode.trim().toUpperCase() }),
         fullName: formData.fullName,
         email: formData.email,
         password: formData.password,
@@ -111,11 +135,13 @@ function SignupContent() {
   return (
     <AuthCard
       title="Create your account"
-      subtitle="You'll need an invite code to get started"
+      subtitle={orgInviteInfo
+        ? `Join ${orgInviteInfo.orgName} as ${orgInviteInfo.role}`
+        : "You'll need an invite code to get started"}
       footer={{
         text: 'Already have an account?',
         linkText: 'Sign in',
-        linkHref: '/login',
+        linkHref: orgToken ? `/login?redirect=/invite/${orgToken}` : '/login',
       }}
     >
       <form onSubmit={handleSubmit} className="space-y-4">
@@ -134,37 +160,47 @@ function SignupContent() {
           </Alert>
         )}
 
+        {orgInviteInfo && (
+          <div className="bg-blue-50 border border-blue-100 rounded-lg px-4 py-3">
+            <p className="text-sm text-blue-800">
+              You&apos;ve been invited to join <span className="font-semibold">{orgInviteInfo.orgName}</span> as a <span className="font-semibold capitalize">{orgInviteInfo.role}</span>.
+            </p>
+          </div>
+        )}
+
         {/* Honeypot — hidden from real users */}
         <div aria-hidden="true" style={{ display: 'none' }}>
           <label htmlFor="website">Website</label>
           <input id="website" name="website" type="text" tabIndex={-1} autoComplete="off" />
         </div>
 
-        {/* Invite code */}
-        <div className="space-y-1.5">
-          <FormField
-            label="Invite code"
-            name="inviteCode"
-            placeholder="MINE-XXXXXX"
-            value={formData.inviteCode}
-            onChange={(e) =>
-              setFormData((prev) => ({
-                ...prev,
-                inviteCode: e.target.value.toUpperCase(),
-              }))
-            }
-            required
-            autoComplete="off"
-          />
-          {!searchParams.get('invite') && (
-            <p className="text-xs text-gray-500">
-              Don&apos;t have an invite code?{' '}
-              <Link href="/request-access" className="text-blue-600 hover:text-blue-700 font-medium">
-                Request access
-              </Link>
-            </p>
-          )}
-        </div>
+        {/* Legacy invite code — only shown when no org token */}
+        {!orgToken && (
+          <div className="space-y-1.5">
+            <FormField
+              label="Invite code"
+              name="inviteCode"
+              placeholder="MINE-XXXXXX"
+              value={formData.inviteCode}
+              onChange={(e) =>
+                setFormData((prev) => ({
+                  ...prev,
+                  inviteCode: e.target.value.toUpperCase(),
+                }))
+              }
+              required
+              autoComplete="off"
+            />
+            {!legacyInvite && (
+              <p className="text-xs text-gray-500">
+                Don&apos;t have an invite code?{' '}
+                <Link href="/request-access" className="text-blue-600 hover:text-blue-700 font-medium">
+                  Request access
+                </Link>
+              </p>
+            )}
+          </div>
+        )}
 
         <FormField
           label="Full name"
@@ -185,6 +221,7 @@ function SignupContent() {
           onChange={set('email')}
           required
           autoComplete="email"
+          disabled={!!orgInviteInfo}
         />
 
         <FormField
@@ -210,7 +247,11 @@ function SignupContent() {
         />
 
         <Button type="submit" variant="default" size="lg" className="w-full" disabled={isPending}>
-          {isPending ? 'Creating account…' : 'Create account'}
+          {isPending
+            ? 'Creating account…'
+            : orgToken
+              ? 'Create Account & Join'
+              : 'Create account'}
         </Button>
       </form>
     </AuthCard>

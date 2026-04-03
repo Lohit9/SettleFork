@@ -66,6 +66,11 @@ export default async function AdminInvitesPage() {
             </span>
           </div>
           <div className="flex items-center gap-4 text-sm text-gray-500">
+            <span className="text-blue-600 font-medium">Invites</span>
+            <Link href="/admin/organizations" className="text-gray-600 hover:text-gray-900 font-medium">
+              Organizations
+            </Link>
+            <span className="text-gray-300">|</span>
             <span>{user.email}</span>
             <Link
               href="/app/projects"

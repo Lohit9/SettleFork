@@ -217,7 +217,8 @@ function NewProjectForm({ onCancel, onCreated }: { onCancel: () => void; onCreat
     setError(null)
     startTransition(async () => {
       try {
-        const newProject = await createProject(projectName, sourceSystem, targetSystem, notes || undefined)
+        const activeOrgId = document.cookie.match(/mine-active-org=([^;]+)/)?.[1]
+        const newProject = await createProject(projectName, sourceSystem, targetSystem, notes || undefined, activeOrgId)
         onCreated(newProject.id)
       } catch (err) {
         setError(err instanceof Error ? err.message : 'Failed to create project')

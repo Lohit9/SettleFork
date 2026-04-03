@@ -508,7 +508,12 @@ export async function generateGoldStandardCSVs(projectId: string): Promise<{
   } = await supabase.auth.getUser()
   if (!user) return { success: false, files: [], error: 'Not authenticated' }
 
-  const { data: project } = await supabase.from('projects').select('id').eq('id', projectId).eq('user_id', user.id).single()
+  const { checkProjectPermission } = await import('@/lib/actions/role-resolution')
+  if (!(await checkProjectPermission(projectId, 'editor'))) {
+    return { success: false, files: [], error: 'Insufficient permissions' }
+  }
+
+  const { data: project } = await supabase.from('projects').select('id').eq('id', projectId).single()
   if (!project) return { success: false, files: [], error: 'Access denied' }
 
   // Get approved table mappings with source/target table info
@@ -657,7 +662,12 @@ export async function generateSQLLoadScripts(projectId: string): Promise<{
   } = await supabase.auth.getUser()
   if (!user) return { success: false, files: [], error: 'Not authenticated' }
 
-  const { data: project } = await supabase.from('projects').select('id').eq('id', projectId).eq('user_id', user.id).single()
+  const { checkProjectPermission: checkPerm } = await import('@/lib/actions/role-resolution')
+  if (!(await checkPerm(projectId, 'editor'))) {
+    return { success: false, files: [], error: 'Insufficient permissions' }
+  }
+
+  const { data: project } = await supabase.from('projects').select('id').eq('id', projectId).single()
   if (!project) return { success: false, files: [], error: 'Access denied' }
 
   const { data: approvedTMs } = await supabaseAdmin
@@ -836,10 +846,15 @@ export async function generateReadinessReport(
   } = await supabase.auth.getUser()
   if (!user) return { success: false, error: 'Not authenticated' }
 
+  const { checkProjectPermission: checkPerm } = await import('@/lib/actions/role-resolution')
+  if (!(await checkPerm(projectId, 'editor'))) {
+    return { success: false, error: 'Insufficient permissions' }
+  }
+
   const rateLimit = checkAIRateLimit(user.id)
   if (!rateLimit.allowed) return { success: false, error: rateLimit.error }
 
-  const { data: project } = await supabase.from('projects').select('id, name').eq('id', projectId).eq('user_id', user.id).single()
+  const { data: project } = await supabase.from('projects').select('id, name').eq('id', projectId).single()
   if (!project) return { success: false, error: 'Access denied' }
 
   // Gather all context for the report
@@ -1037,7 +1052,10 @@ export async function generateMappingFile(
   } = await supabase.auth.getUser()
   if (!user) return { success: false, error: 'Not authenticated' }
 
-  const { data: project } = await supabase.from('projects').select('id, name').eq('id', projectId).eq('user_id', user.id).single()
+  const { checkProjectPermission: chk } = await import('@/lib/actions/role-resolution')
+  if (!(await chk(projectId, 'editor'))) return { success: false, error: 'Insufficient permissions' }
+
+  const { data: project } = await supabase.from('projects').select('id, name').eq('id', projectId).single()
   if (!project) return { success: false, error: 'Access denied' }
 
   const { data: datasets } = await supabaseAdmin.from('datasets').select('id, role, name').eq('project_id', projectId)
@@ -1177,7 +1195,10 @@ export async function generateTransformSpecs(
   } = await supabase.auth.getUser()
   if (!user) return { success: false, error: 'Not authenticated' }
 
-  const { data: project } = await supabase.from('projects').select('id, name').eq('id', projectId).eq('user_id', user.id).single()
+  const { checkProjectPermission: chk } = await import('@/lib/actions/role-resolution')
+  if (!(await chk(projectId, 'editor'))) return { success: false, error: 'Insufficient permissions' }
+
+  const { data: project } = await supabase.from('projects').select('id, name').eq('id', projectId).single()
   if (!project) return { success: false, error: 'Access denied' }
 
   const { data: tableMappings } = await supabaseAdmin
@@ -1272,7 +1293,10 @@ export async function generateFixLog(
   } = await supabase.auth.getUser()
   if (!user) return { success: false, error: 'Not authenticated' }
 
-  const { data: project } = await supabase.from('projects').select('id').eq('id', projectId).eq('user_id', user.id).single()
+  const { checkProjectPermission: chk } = await import('@/lib/actions/role-resolution')
+  if (!(await chk(projectId, 'editor'))) return { success: false, error: 'Insufficient permissions' }
+
+  const { data: project } = await supabase.from('projects').select('id').eq('id', projectId).single()
   if (!project) return { success: false, error: 'Access denied' }
 
   const { data: fixHistory } = await supabaseAdmin
@@ -1349,7 +1373,10 @@ export async function generateDataDictionary(
   } = await supabase.auth.getUser()
   if (!user) return { success: false, error: 'Not authenticated' }
 
-  const { data: project } = await supabase.from('projects').select('id, name').eq('id', projectId).eq('user_id', user.id).single()
+  const { checkProjectPermission: chk } = await import('@/lib/actions/role-resolution')
+  if (!(await chk(projectId, 'editor'))) return { success: false, error: 'Insufficient permissions' }
+
+  const { data: project } = await supabase.from('projects').select('id, name').eq('id', projectId).single()
   if (!project) return { success: false, error: 'Access denied' }
 
   const { data: datasets } = await supabaseAdmin.from('datasets').select('id, role, name').eq('project_id', projectId)
