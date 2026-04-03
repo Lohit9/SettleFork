@@ -177,8 +177,14 @@ export default function OutputsContent({ projectId, projectName, initialData, is
   const router = useRouter()
   const [data] = useState<OutputsPageData>(initialData)
 
-  // SQL dialect selector
-  const [sqlDialect, setSqlDialect] = useState<SqlDialect>(targetDbType)
+  // SQL dialect selector — default to the most recently generated dialect, then target DB type
+  const [sqlDialect, setSqlDialect] = useState<SqlDialect>(() => {
+    const existing = initialData.existingOutputs.find(
+      (o) => o.type === 'execution_package'
+    )
+    if (existing?.dialect) return existing.dialect as SqlDialect
+    return targetDbType
+  })
 
   // Gold standard
   const [goldFormat, setGoldFormat] = useState<'csv' | 'sql'>('csv')
@@ -197,7 +203,7 @@ export default function OutputsContent({ projectId, projectName, initialData, is
   // Output format: 'single_file' (monolithic) | 'per_table' (compartmentalized)
   const [outputFormat, setOutputFormat] = useState<ExecutionPackageFormat>(() => {
     const existing = initialData.existingOutputs.find((o) => o.type === 'execution_package')
-    return existing?.format === 'per_table' ? 'per_table' : 'single_file'
+    return existing?.format === 'single_file' ? 'single_file' : 'per_table'
   })
 
   // Execution package — single-file mode
@@ -229,9 +235,21 @@ export default function OutputsContent({ projectId, projectName, initialData, is
       (o) => o.type === 'execution_package' && o.format === 'per_table'
     )
     if (existing) {
+      // File list was reconstructed server-side from the metadata JSONB column
+      // to avoid passing raw JSONB through RSC serialization.
+      const files: CompartmentalizedFileState[] = (existing.reconstructedFiles ?? []).map((f) => ({
+        filename: f.filename,
+        type: f.type as CompartmentalizedFile['type'],
+        content: '',
+        table_name: f.tableName ?? undefined,
+        load_order: f.loadOrder ?? undefined,
+        dependencies: undefined,
+        storagePath: f.storagePath ?? '',
+        signedUrl: null,
+      }))
       return {
         status: 'generated',
-        files: [],
+        files,
         zipStoragePath: existing.file_storage_path,
         zipSignedUrl: existing.signedUrl,
         version: existing.version,
@@ -291,6 +309,7 @@ export default function OutputsContent({ projectId, projectName, initialData, is
       // ── Compartmentalized path ──────────────────────────────────────────
       setCompartmentalized((prev) => ({ ...prev, status: 'generating', error: null }))
       try {
+        console.log('[UI] sqlDialect:', sqlDialect, 'outputFormat:', outputFormat)
         const result = await generateExecutionPackageWithFormat(projectId, sqlDialect, 'per_table')
         if (result.success && 'files' in result) {
           setCompartmentalized({
@@ -304,6 +323,8 @@ export default function OutputsContent({ projectId, projectName, initialData, is
             dialect: result.dialect,
           })
           setSelectedFiles(new Set())
+          setFileContentCache({})
+          setPreviewFilename(null)
           showToast(`Generated ${result.files.length} script files`, 'success')
         } else {
           const errMsg = 'error' in result ? (result.error ?? 'Generation failed') : 'Generation failed'
@@ -391,19 +412,37 @@ export default function OutputsContent({ projectId, projectName, initialData, is
 
   // ── Compartmentalized download handlers ─────────────────────────────────
 
+  async function safeGetPackageUrls() {
+    if (typeof getCompartmentalizedPackageUrls !== 'function') {
+      console.error('[OutputsContent] getCompartmentalizedPackageUrls is not available — server action reference lost after hydration')
+      return { error: 'Server action unavailable. Please reload the page.' } as Awaited<ReturnType<typeof getCompartmentalizedPackageUrls>>
+    }
+    return getCompartmentalizedPackageUrls(projectId)
+  }
+
   async function resolveZipUrl(): Promise<string | null> {
     if (compartmentalized.zipSignedUrl) return compartmentalized.zipSignedUrl
-    const result = await getCompartmentalizedPackageUrls(projectId)
+    const result = await safeGetPackageUrls()
     if (result.zipUrl) {
       setCompartmentalized((prev) => ({ ...prev, zipSignedUrl: result.zipUrl! }))
-      // Also populate per-file signed URLs for later use
-      if (result.files) {
+      if (result.files && result.files.length > 0) {
         setCompartmentalized((prev) => ({
           ...prev,
-          files: prev.files.map((f) => {
-            const found = result.files!.find((rf) => rf.filename === f.filename)
-            return found ? { ...f, signedUrl: found.url } : f
-          }),
+          files: prev.files.length === 0
+            // No files in state (metadata init may have had no storage_path) — construct from result
+            ? result.files!.map((rf) => ({
+                filename: rf.filename,
+                type: rf.type as CompartmentalizedFile['type'],
+                content: '',
+                table_name: rf.table_name,
+                storagePath: '',
+                signedUrl: rf.url,
+              }))
+            // Files already in state — just merge in the signed URLs
+            : prev.files.map((f) => {
+                const found = result.files!.find((rf) => rf.filename === f.filename)
+                return found ? { ...f, signedUrl: found.url } : f
+              }),
         }))
       }
       return result.zipUrl
@@ -449,7 +488,7 @@ export default function OutputsContent({ projectId, projectName, initialData, is
     // Use signed URL (after page refresh)
     let url = file.signedUrl
     if (!url) {
-      const result = await getCompartmentalizedPackageUrls(projectId)
+      const result = await safeGetPackageUrls()
       const found = result.files?.find((rf) => rf.filename === file.filename)
       url = found?.url ?? null
       if (url) {
@@ -493,7 +532,7 @@ export default function OutputsContent({ projectId, projectName, initialData, is
           // Fetch from signed URL
           let url = file.signedUrl
           if (!url) {
-            const result = await getCompartmentalizedPackageUrls(projectId)
+            const result = await safeGetPackageUrls()
             url = result.files?.find((rf) => rf.filename === filename)?.url ?? null
           }
           if (url) {
@@ -542,7 +581,7 @@ export default function OutputsContent({ projectId, projectName, initialData, is
     try {
       let url = file?.signedUrl ?? null
       if (!url) {
-        const result = await getCompartmentalizedPackageUrls(projectId)
+        const result = await safeGetPackageUrls()
         const found = result.files?.find((rf) => rf.filename === filename)
         url = found?.url ?? null
         if (url && file) {
@@ -973,7 +1012,7 @@ export default function OutputsContent({ projectId, projectName, initialData, is
                 <div>
                   <label className="block text-xs font-medium text-gray-500 mb-1.5">Output Format</label>
                   <div className="flex items-center bg-gray-100 rounded-lg p-1 gap-1">
-                    {(['single_file', 'per_table'] as const).map((fmt) => (
+                    {(['per_table', 'single_file'] as const).map((fmt) => (
                       <button
                         key={fmt}
                         onClick={() => setOutputFormat(fmt)}
@@ -1161,8 +1200,9 @@ export default function OutputsContent({ projectId, projectName, initialData, is
                         const typeInfo = (() => {
                           switch (file.type) {
                             case 'checklist': return { label: 'Checklist', cls: 'bg-blue-100 text-blue-700 border-blue-200' }
-                            case 'table_script': return { label: 'Table Load', cls: 'bg-green-100 text-green-700 border-green-200' }
+                            case 'table_script': return { label: 'Table Stage', cls: 'bg-green-100 text-green-700 border-green-200' }
                             case 'validation': return { label: 'Validation', cls: 'bg-amber-100 text-amber-700 border-amber-200' }
+                            case 'promote': return { label: 'Promote', cls: 'bg-purple-100 text-purple-700 border-purple-200' }
                             case 'rollback': return { label: 'Rollback', cls: 'bg-red-100 text-red-700 border-red-200' }
                             default: return { label: file.type, cls: 'bg-gray-100 text-gray-600 border-gray-200' }
                           }

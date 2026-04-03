@@ -50,6 +50,14 @@ export interface OutstandingItems {
   testedTransforms: number
 }
 
+export interface ReconstructedFile {
+  filename: string
+  type: string
+  tableName: string | null
+  loadOrder: number | null
+  storagePath: string
+}
+
 export interface ExistingOutput {
   id: string
   type: string
@@ -60,6 +68,7 @@ export interface ExistingOutput {
   signedUrl: string | null
   tableName: string | null
   dialect: string | null
+  reconstructedFiles?: ReconstructedFile[]
 }
 
 export interface OutputsPageData {
@@ -436,7 +445,24 @@ export async function getOutputsPageData(projectId: string): Promise<OutputsPage
       const tableName = o.file_storage_path
         ? o.file_storage_path.split('/').pop()?.replace(/_v[\d.]+\.(csv|sql|md|json)$/, '') ?? null
         : null
-      return { ...o, signedUrl, tableName }
+
+      // For per-table outputs, reconstruct a clean file manifest from metadata
+      // so we never pass raw JSONB through RSC serialization.
+      let reconstructedFiles: ReconstructedFile[] | undefined
+      if (o.format === 'per_table' && o.metadata) {
+        const meta = o.metadata as { files?: Array<{ filename?: string; type?: string; table_name?: string | null; load_order?: number | null; storage_path?: string }> }
+        reconstructedFiles = (meta.files ?? []).map((f) => ({
+          filename: f.filename ?? '',
+          type: f.type ?? 'table_script',
+          tableName: f.table_name ?? null,
+          loadOrder: f.load_order ?? null,
+          storagePath: f.storage_path ?? '',
+        }))
+      }
+
+      // Strip metadata from the output — only pass clean, flat data to the client
+      const { metadata: _stripped, ...safeOutput } = o
+      return { ...safeOutput, signedUrl, tableName, reconstructedFiles }
     })
   )
 
