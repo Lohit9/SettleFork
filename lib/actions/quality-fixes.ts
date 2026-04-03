@@ -483,11 +483,15 @@ export async function runFullScan(
   } = await supabase.auth.getUser()
   if (!user) return { success: false, issueCount: 0, error: 'Not authenticated' }
 
+  const { checkProjectPermission } = await import('@/lib/actions/role-resolution')
+  if (!(await checkProjectPermission(projectId, 'editor'))) {
+    return { success: false, issueCount: 0, error: 'Insufficient permissions' }
+  }
+
   const { data: project } = await supabase
     .from('projects')
     .select('id')
     .eq('id', projectId)
-    .eq('user_id', user.id)
     .single()
   if (!project) return { success: false, issueCount: 0, error: 'Project not found or access denied' }
 

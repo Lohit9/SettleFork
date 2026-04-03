@@ -168,7 +168,7 @@ export async function updateAccessRequestStatus(
   return { success: true }
 }
 
-// ── admin: approve request + generate invite in one action ────────────────
+// ── admin: approve request + create org + send org invite ─────────────────
 
 export async function approveAndGenerateInvite(
   requestId: string
@@ -185,42 +185,62 @@ export async function approveAndGenerateInvite(
     return { code: '', signupUrl: '', error: 'Access request not found.' }
   }
 
-  const code = await uniqueCode()
+  // Create an organization for this company
+  const orgName = request.company?.trim() || `${request.name}'s Workspace`
+  const slug = orgName.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '')
+    + '-' + Math.random().toString(36).slice(2, 6)
 
-  const { error: inviteError } = await supabaseAdmin.from('invites').insert({
-    code,
-    email: request.email,
-    name: request.name,
-    company: request.company,
-    created_by: user.id,
+  const { data: org, error: orgError } = await supabaseAdmin
+    .from('organizations')
+    .insert({ name: orgName, slug, created_by: user.id })
+    .select()
+    .single()
+
+  if (orgError || !org) {
+    return { code: '', signupUrl: '', error: orgError?.message || 'Failed to create organization.' }
+  }
+
+  // Create an org invite for the requester
+  const token = crypto.randomUUID()
+  const expiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString()
+
+  const { error: inviteError } = await supabaseAdmin.from('org_invites').insert({
+    org_id: org.id,
+    email: request.email.toLowerCase(),
+    role: 'editor',
+    token,
+    invited_by: user.id,
+    expires_at: expiresAt,
   })
 
   if (inviteError) return { code: '', signupUrl: '', error: inviteError.message }
 
+  // Approve the access request
   await supabaseAdmin
     .from('access_requests')
     .update({ status: 'approved' })
     .eq('id', requestId)
 
-  const signupUrl = `${APP_URL}/signup?invite=${code}`
+  const signupUrl = `${APP_URL}/invite/${token}`
 
-  // Fire invite email (non-blocking — clipboard copy is the fallback)
+  // Send org invite email
   try {
     await fetch(`${APP_URL}/api/notify-access-request`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        type: 'invite',
-        name: request.name,
+        type: 'org-invite',
         email: request.email,
-        company: request.company,
-        signup_url: signupUrl,
+        orgName: org.name,
+        role: 'editor',
+        inviterName: 'Kaan',
+        token,
       }),
     })
   } catch (err) {
-    console.error('Invite email failed (non-blocking):', err)
+    console.error('Org invite email failed (non-blocking):', err)
   }
 
   revalidatePath('/admin/invites')
-  return { code, signupUrl }
+  return { code: token, signupUrl }
 }

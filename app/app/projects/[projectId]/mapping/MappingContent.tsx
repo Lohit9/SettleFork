@@ -30,6 +30,7 @@ import type {
   FieldAcknowledgmentRow,
 } from '@/lib/actions/mappings'
 import { acknowledgeField, removeAcknowledgment } from '@/lib/actions/field-acknowledgments'
+import { useProjectRole } from '@/lib/hooks/useProjectRole'
 
 // ─── Props ────────────────────────────────────────────────────────────────────
 
@@ -1043,16 +1044,28 @@ function InlineAddFieldRow({
 
 // ─── Field Mapping Row ────────────────────────────────────────────────────────
 
+function RoleTooltip({ children, show, role }: { children: React.ReactNode; show: boolean; role: string }) {
+  if (!show) return <>{children}</>
+  return (
+    <div className="relative group/role-tip inline-flex">
+      {children}
+      <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-1.5 px-2.5 py-1 bg-gray-900 text-white text-[11px] rounded-md opacity-0 group-hover/role-tip:opacity-100 transition-opacity pointer-events-none whitespace-nowrap z-50">
+        You need {role} access to perform this action
+      </div>
+    </div>
+  )
+}
+
 function FieldMappingRow({
-  fm, allTMFMs, onSelect, onApprove, onReject, onDelete,
+  fm, allTMFMs, onSelect, onApprove, onReject, onDelete, canReview = true,
 }: {
   fm: RichFieldMapping
-  /** All field mappings in this table mapping — used to compute multi-target/source badges */
   allTMFMs: RichFieldMapping[]
   onSelect: () => void
   onApprove: () => void
   onReject: () => void
   onDelete: () => void
+  canReview?: boolean
 }) {
   const isApproved = fm.status === 'approved'
   const isRejected = fm.status === 'rejected'
@@ -1194,15 +1207,19 @@ function FieldMappingRow({
           )}
         </div>
         <div className="flex items-center gap-1" onClick={(e) => e.stopPropagation()}>
-          <button onClick={onApprove} title="Accept" className={`p-1.5 rounded-md transition-colors ${isApproved ? 'text-green-600' : 'text-gray-300 hover:text-green-600 hover:bg-green-50'}`}>
-            <Check className="w-4 h-4" />
-          </button>
+          <RoleTooltip show={!canReview} role="reviewer">
+            <button onClick={canReview ? onApprove : undefined} disabled={!canReview} title="Accept" className={`p-1.5 rounded-md transition-colors disabled:opacity-40 disabled:cursor-not-allowed ${isApproved ? 'text-green-600' : 'text-gray-300 hover:text-green-600 hover:bg-green-50'}`}>
+              <Check className="w-4 h-4" />
+            </button>
+          </RoleTooltip>
           <button onClick={onSelect} title="Edit" className="p-1.5 rounded-md text-gray-300 hover:text-blue-600 hover:bg-blue-50 transition-colors">
             <Pencil className="w-4 h-4" />
           </button>
-          <button onClick={onReject} title={isRejected ? 'Mark needs review' : 'Reject'} className={`p-1.5 rounded-md transition-colors ${isRejected ? 'text-red-500' : 'text-gray-300 hover:text-red-500 hover:bg-red-50'}`}>
-            <X className="w-4 h-4" />
-          </button>
+          <RoleTooltip show={!canReview} role="reviewer">
+            <button onClick={canReview ? onReject : undefined} disabled={!canReview} title={isRejected ? 'Mark needs review' : 'Reject'} className={`p-1.5 rounded-md transition-colors disabled:opacity-40 disabled:cursor-not-allowed ${isRejected ? 'text-red-500' : 'text-gray-300 hover:text-red-500 hover:bg-red-50'}`}>
+              <X className="w-4 h-4" />
+            </button>
+          </RoleTooltip>
           <button onClick={onDelete} title="Delete permanently" className="p-1.5 rounded-md text-gray-300 hover:text-red-600 hover:bg-red-50 transition-colors">
             <TrashIcon className="text-inherit" />
           </button>
@@ -1241,6 +1258,7 @@ function TableMappingCard({
   acknowledgments,
   projectId,
   onAcknowledgmentChanged,
+  canReview = true,
 }: {
   tm: RichTableMapping
   expanded: boolean
@@ -1268,6 +1286,7 @@ function TableMappingCard({
   acknowledgments: FieldAcknowledgmentRow[]
   projectId: string
   onAcknowledgmentChanged: () => void
+  canReview?: boolean
 }) {
   const router = useRouter()
   const srcDs = tm.sourceTable?.dataset
@@ -1324,20 +1343,26 @@ function TableMappingCard({
 
         {/* Table-level actions */}
         <div className="flex items-center gap-1 ml-3" onClick={(e) => e.stopPropagation()}>
-          <button
-            onClick={onApproveAll}
-            title="Approve all field mappings"
-            className="px-2 py-1 text-xs font-medium text-green-700 bg-green-50 hover:bg-green-100 rounded transition-colors"
-          >
-            Approve All
-          </button>
-          <button
-            onClick={onRejectAll}
-            title="Reject all field mappings"
-            className="px-2 py-1 text-xs font-medium text-gray-600 bg-gray-100 hover:bg-gray-200 rounded transition-colors"
-          >
-            Reject All
-          </button>
+          <RoleTooltip show={!canReview} role="reviewer">
+            <button
+              onClick={canReview ? onApproveAll : undefined}
+              disabled={!canReview}
+              title="Approve all field mappings"
+              className="px-2 py-1 text-xs font-medium text-green-700 bg-green-50 hover:bg-green-100 rounded transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+            >
+              Approve All
+            </button>
+          </RoleTooltip>
+          <RoleTooltip show={!canReview} role="reviewer">
+            <button
+              onClick={canReview ? onRejectAll : undefined}
+              disabled={!canReview}
+              title="Reject all field mappings"
+              className="px-2 py-1 text-xs font-medium text-gray-600 bg-gray-100 hover:bg-gray-200 rounded transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+            >
+              Reject All
+            </button>
+          </RoleTooltip>
           <button
             onClick={onRegenerate}
             disabled={regeneratingThis}
@@ -1413,6 +1438,7 @@ function TableMappingCard({
                 onApprove={() => onApproveFM(fm.id)}
                 onReject={() => onRejectFM(fm.id)}
                 onDelete={() => onDeleteFM(fm.id)}
+                canReview={canReview}
               />
             ))
               }
@@ -1443,6 +1469,7 @@ function TableMappingCard({
                           onApprove={() => onApproveFM(row.id)}
                           onReject={() => onRejectFM(row.id)}
                           onDelete={() => onDeleteFM(row.id)}
+                          canReview={canReview}
                         />
                       ))}
                     </div>
@@ -1458,6 +1485,7 @@ function TableMappingCard({
                     onApprove={() => onApproveFM(fm.id)}
                     onReject={() => onRejectFM(fm.id)}
                     onDelete={() => onDeleteFM(fm.id)}
+                    canReview={canReview}
                   />
                 )
               })
@@ -2089,6 +2117,8 @@ function UnmappedView({
 
 export default function MappingContent({ projectId, projectName, initialData }: Props) {
   const router = useRouter()
+  const { can: canRole } = useProjectRole(projectId)
+  const canReview = canRole('review')
   const [, startTransition] = useTransition()
 
   const [data, setData] = useState<MappingsResult | null>(initialData)
@@ -2488,18 +2518,20 @@ export default function MappingContent({ projectId, projectName, initialData }: 
           hcConfirmCount !== null ? (
             <div className="flex items-center gap-2 px-3 py-2 bg-green-50 border border-green-200 rounded-lg">
               <span className="text-xs text-green-800">Approve {hcConfirmCount} mapping{hcConfirmCount !== 1 ? 's' : ''}?</span>
-              <button onClick={handleApproveHighConf} disabled={approvingHC} className="text-xs font-medium text-white bg-green-600 px-2.5 py-1 rounded hover:bg-green-700 disabled:opacity-40">Confirm</button>
+              <button onClick={handleApproveHighConf} disabled={approvingHC || !canReview} className="text-xs font-medium text-white bg-green-600 px-2.5 py-1 rounded hover:bg-green-700 disabled:opacity-40">Confirm</button>
               <button onClick={() => setHcConfirmCount(null)} className="text-xs text-gray-500 hover:text-gray-700">Cancel</button>
             </div>
           ) : (
-            <button
-              onClick={handleApproveHighConf}
-              disabled={approvingHC}
-              className="flex items-center gap-1.5 px-3 py-2 text-sm font-medium text-green-700 bg-green-50 border border-green-200 rounded-lg hover:bg-green-100 transition-colors disabled:opacity-40"
-            >
-              <Check className="w-3.5 h-3.5" />
-              Approve All High Confidence ({hcFMCount})
-            </button>
+            <RoleTooltip show={!canReview} role="reviewer">
+              <button
+                onClick={canReview ? handleApproveHighConf : undefined}
+                disabled={approvingHC || !canReview}
+                className="flex items-center gap-1.5 px-3 py-2 text-sm font-medium text-green-700 bg-green-50 border border-green-200 rounded-lg hover:bg-green-100 transition-colors disabled:opacity-40"
+              >
+                <Check className="w-3.5 h-3.5" />
+                Approve All High Confidence ({hcFMCount})
+              </button>
+            </RoleTooltip>
           )
         )}
       </div>
@@ -2541,6 +2573,7 @@ export default function MappingContent({ projectId, projectName, initialData }: 
                 acknowledgments={acknowledgments}
                 projectId={projectId}
                 onAcknowledgmentChanged={refreshData}
+                canReview={canReview}
               />
             ))
           )}

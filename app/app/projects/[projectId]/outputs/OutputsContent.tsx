@@ -47,6 +47,7 @@ import { generateMigrationRunbook } from '@/lib/actions/migration-runbook'
 import { markProjectComplete } from '@/lib/actions/projects'
 import { SQL_DIALECTS } from '@/lib/types/database'
 import type { SqlDialect, ExecutionPackageFormat } from '@/lib/types/database'
+import { useProjectRole } from '@/lib/hooks/useProjectRole'
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -173,8 +174,22 @@ function fmtDateTime(iso: string) {
 
 // ── OutputsContent ────────────────────────────────────────────────────────────
 
+function RoleTooltip({ children, show, role }: { children: React.ReactNode; show: boolean; role: string }) {
+  if (!show) return <>{children}</>
+  return (
+    <div className="relative group/role-tip inline-flex">
+      {children}
+      <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-1.5 px-2.5 py-1 bg-gray-900 text-white text-[11px] rounded-md opacity-0 group-hover/role-tip:opacity-100 transition-opacity pointer-events-none whitespace-nowrap z-50">
+        You need {role} access to perform this action
+      </div>
+    </div>
+  )
+}
+
 export default function OutputsContent({ projectId, projectName, initialData, isArchived = false, targetDbType = 'postgresql' }: Props) {
   const router = useRouter()
+  const { can: canRole } = useProjectRole(projectId)
+  const canEdit = canRole('edit')
   const [data] = useState<OutputsPageData>(initialData)
 
   // SQL dialect selector — default to the most recently generated dialect, then target DB type
@@ -1031,14 +1046,16 @@ export default function OutputsContent({ projectId, projectName, initialData, is
               <>
                 {/* IDLE */}
                 {executionPackage.status === 'idle' && !isArchived && (
-                  <Button
-                    className="bg-blue-600 hover:bg-blue-700 text-white gap-2"
-                    onClick={handleGenerateExecutionPackage}
-                    disabled={!data.hasMappings}
-                  >
-                    <Zap className="w-4 h-4" />
-                    Generate Execution Package
-                  </Button>
+                  <RoleTooltip show={!canEdit} role="editor">
+                    <Button
+                      className="bg-blue-600 hover:bg-blue-700 text-white gap-2"
+                      onClick={handleGenerateExecutionPackage}
+                      disabled={!data.hasMappings || !canEdit}
+                    >
+                      <Zap className="w-4 h-4" />
+                      Generate Execution Package
+                    </Button>
+                  </RoleTooltip>
                 )}
 
                 {/* GENERATING */}
@@ -1078,10 +1095,12 @@ export default function OutputsContent({ projectId, projectName, initialData, is
                         Download .sql
                       </Button>
                       {!isArchived && (
-                        <Button variant="outline" className="gap-2" onClick={handleGenerateExecutionPackage}>
-                          <RefreshCw className="w-3.5 h-3.5" />
-                          Regenerate
-                        </Button>
+                        <RoleTooltip show={!canEdit} role="editor">
+                          <Button variant="outline" className="gap-2" onClick={handleGenerateExecutionPackage} disabled={!canEdit}>
+                            <RefreshCw className="w-3.5 h-3.5" />
+                            Regenerate
+                          </Button>
+                        </RoleTooltip>
                       )}
                     </div>
                   </div>
@@ -1095,10 +1114,12 @@ export default function OutputsContent({ projectId, projectName, initialData, is
                       <span className="text-sm text-red-700">{executionPackage.error}</span>
                     </div>
                     {!isArchived && (
-                      <Button variant="outline" className="gap-2" onClick={handleGenerateExecutionPackage}>
-                        <RefreshCw className="w-3.5 h-3.5" />
-                        Try Again
-                      </Button>
+                      <RoleTooltip show={!canEdit} role="editor">
+                        <Button variant="outline" className="gap-2" onClick={handleGenerateExecutionPackage} disabled={!canEdit}>
+                          <RefreshCw className="w-3.5 h-3.5" />
+                          Try Again
+                        </Button>
+                      </RoleTooltip>
                     )}
                   </div>
                 )}
@@ -1110,14 +1131,16 @@ export default function OutputsContent({ projectId, projectName, initialData, is
               <>
                 {/* IDLE */}
                 {compartmentalized.status === 'idle' && !isArchived && (
-                  <Button
-                    className="bg-blue-600 hover:bg-blue-700 text-white gap-2"
-                    onClick={handleGenerateExecutionPackage}
-                    disabled={!data.hasMappings}
-                  >
-                    <PackageOpen className="w-4 h-4" />
-                    Generate Per-Table Scripts
-                  </Button>
+                  <RoleTooltip show={!canEdit} role="editor">
+                    <Button
+                      className="bg-blue-600 hover:bg-blue-700 text-white gap-2"
+                      onClick={handleGenerateExecutionPackage}
+                      disabled={!data.hasMappings || !canEdit}
+                    >
+                      <PackageOpen className="w-4 h-4" />
+                      Generate Per-Table Scripts
+                    </Button>
+                  </RoleTooltip>
                 )}
 
                 {/* GENERATING */}
@@ -1176,10 +1199,12 @@ export default function OutputsContent({ projectId, projectName, initialData, is
                           Download All (ZIP)
                         </Button>
                         {!isArchived && (
-                          <Button variant="outline" size="sm" className="gap-1.5" onClick={handleGenerateExecutionPackage}>
-                            <RefreshCw className="w-3.5 h-3.5" />
-                            Regenerate
-                          </Button>
+                          <RoleTooltip show={!canEdit} role="editor">
+                            <Button variant="outline" size="sm" className="gap-1.5" onClick={handleGenerateExecutionPackage} disabled={!canEdit}>
+                              <RefreshCw className="w-3.5 h-3.5" />
+                              Regenerate
+                            </Button>
+                          </RoleTooltip>
                         )}
                       </div>
                     </div>
@@ -1285,10 +1310,12 @@ export default function OutputsContent({ projectId, projectName, initialData, is
                       <span className="text-sm text-red-700">{compartmentalized.error}</span>
                     </div>
                     {!isArchived && (
-                      <Button variant="outline" className="gap-2" onClick={handleGenerateExecutionPackage}>
-                        <RefreshCw className="w-3.5 h-3.5" />
-                        Try Again
-                      </Button>
+                      <RoleTooltip show={!canEdit} role="editor">
+                        <Button variant="outline" className="gap-2" onClick={handleGenerateExecutionPackage} disabled={!canEdit}>
+                          <RefreshCw className="w-3.5 h-3.5" />
+                          Try Again
+                        </Button>
+                      </RoleTooltip>
                     )}
                   </div>
                 )}
@@ -1345,14 +1372,16 @@ export default function OutputsContent({ projectId, projectName, initialData, is
                 </div>
 
                 {!isArchived && (
-                  <Button
-                    className="bg-blue-600 hover:bg-blue-700 text-white gap-2 ml-auto"
-                    onClick={handleGenerateGold}
-                    disabled={isGeneratingGold || !canGenerateGold}
-                  >
-                    <Zap className="w-4 h-4" />
-                    {isGeneratingGold ? goldProgress ?? 'Generating…' : `Generate Gold Standard ${goldFormat === 'csv' ? 'CSVs' : 'SQL Scripts'}`}
-                  </Button>
+                  <RoleTooltip show={!canEdit} role="editor">
+                    <Button
+                      className="bg-blue-600 hover:bg-blue-700 text-white gap-2 ml-auto"
+                      onClick={handleGenerateGold}
+                      disabled={isGeneratingGold || !canGenerateGold || !canEdit}
+                    >
+                      <Zap className="w-4 h-4" />
+                      {isGeneratingGold ? goldProgress ?? 'Generating…' : `Generate Gold Standard ${goldFormat === 'csv' ? 'CSVs' : 'SQL Scripts'}`}
+                    </Button>
+                  </RoleTooltip>
                 )}
               </div>
 
@@ -1433,16 +1462,18 @@ export default function OutputsContent({ projectId, projectName, initialData, is
               <p className="text-sm text-gray-500 mt-0.5">Migration documentation and reports for stakeholders, QA, and project records</p>
             </div>
             {!isArchived && (
-              <Button
-                variant="outline"
-                size="sm"
-                className="gap-2 flex-shrink-0 mt-1"
-                onClick={handleGenerateAll}
-                disabled={generatingKey !== null}
-              >
-                <Sparkles className="w-3.5 h-3.5" />
-                {allGenProgress ?? 'Generate All Deliverables'}
-              </Button>
+              <RoleTooltip show={!canEdit} role="editor">
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="gap-2 flex-shrink-0 mt-1"
+                  onClick={handleGenerateAll}
+                  disabled={generatingKey !== null || !canEdit}
+                >
+                  <Sparkles className="w-3.5 h-3.5" />
+                  {allGenProgress ?? 'Generate All Deliverables'}
+                </Button>
+              </RoleTooltip>
             )}
           </div>
 

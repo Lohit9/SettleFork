@@ -195,6 +195,41 @@ export async function POST(request: Request) {
       return NextResponse.json({ success: true })
     }
 
+    // ── Org invite: invite user to join an organization ─────────────────
+    if (type === 'org-invite') {
+      const { orgName, role: inviteRole, inviterName, token } = body
+      const acceptUrl = `${process.env.NEXT_PUBLIC_APP_URL ?? 'https://trymine.ai'}/invite/${token}`
+
+      await resend.emails.send({
+        from: FROM_KAAN,
+        to: email,
+        replyTo: 'info@trymine.ai',
+        subject: `You've been invited to join ${orgName} on Mine`,
+        html: `
+          <div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; max-width: 520px; color: #1a1a2e; line-height: 1.7;">
+            <div style="display: flex; align-items: center; gap: 10px; margin-bottom: 24px;">
+              <div style="width: 28px; height: 28px; background: #2563EB; border-radius: 6px; display: inline-flex; align-items: center; justify-content: center;">
+                <span style="color: white; font-size: 14px; font-weight: bold; line-height: 1;">M</span>
+              </div>
+              <span style="font-size: 16px; font-weight: 700; color: #0F172A;">Mine</span>
+            </div>
+            <p style="margin: 0 0 16px 0;">${inviterName || 'A team member'} invited you to join <strong>${orgName}</strong> as a <strong>${inviteRole || 'viewer'}</strong>.</p>
+            <p style="margin: 0 0 24px 0;">Click below to accept the invitation:</p>
+            <p style="margin: 0 0 24px 0;">
+              <a href="${acceptUrl}"
+                 style="display: inline-block; background: #2563EB; color: white; padding: 12px 28px; text-decoration: none; border-radius: 6px; font-weight: 600; font-size: 16px;">
+                Accept Invite
+              </a>
+            </p>
+            <p style="margin: 0 0 16px 0; color: #666; font-size: 14px;">This invite expires in 7 days. If you don't have a Mine account yet, you'll be prompted to create one.</p>
+            <p style="margin: 0; color: #334155;">Best,<br/>Kaan Dincer<br/>Founder, Mine</p>
+            <p style="margin-top: 24px; font-size: 12px; color: #94A3B8;">Mine · trymine.ai</p>
+          </div>
+        `,
+      })
+      return NextResponse.json({ success: true })
+    }
+
     // ── Invite approved: email to user + admin confirmation ──────────────
     if (type === 'invite') {
       const { signup_url } = body

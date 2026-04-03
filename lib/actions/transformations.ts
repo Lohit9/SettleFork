@@ -512,7 +512,7 @@ export async function generateTransform(
     .single()
   if (!fm) return { success: false, error: 'Field mapping not found' }
 
-  // Verify ownership through table_mapping → project
+  // Verify access through table_mapping → project
   const { data: tm } = await supabase
     .from('table_mappings')
     .select('id, project_id, source_table_id, target_table_id')
@@ -520,13 +520,10 @@ export async function generateTransform(
     .single()
   if (!tm) return { success: false, error: 'Mapping not found' }
 
-  const { data: projectCheck } = await supabase
-    .from('projects')
-    .select('id')
-    .eq('id', tm.project_id)
-    .eq('user_id', user.id)
-    .single()
-  if (!projectCheck) return { success: false, error: 'Access denied' }
+  const { checkProjectPermission } = await import('@/lib/actions/role-resolution')
+  if (!(await checkProjectPermission(tm.project_id, 'editor'))) {
+    return { success: false, error: 'Insufficient permissions' }
+  }
 
   // Fetch fields — source may be null for value assignments
   const isValueAssignment = fm.source_field_id === null
@@ -1061,12 +1058,15 @@ export async function autoGenerateAllTransforms(
   } = await supabase.auth.getUser()
   if (!user) return { success: false, generated: 0, failed: 0, error: 'Not authenticated' }
 
-  // Verify project ownership
+  const { checkProjectPermission: checkPerm } = await import('@/lib/actions/role-resolution')
+  if (!(await checkPerm(projectId, 'editor'))) {
+    return { success: false, generated: 0, failed: 0, error: 'Insufficient permissions' }
+  }
+
   const { data: project } = await supabase
     .from('projects')
     .select('id')
     .eq('id', projectId)
-    .eq('user_id', user.id)
     .single()
   if (!project) return { success: false, generated: 0, failed: 0, error: 'Project not found' }
 

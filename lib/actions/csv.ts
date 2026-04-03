@@ -28,6 +28,13 @@ export async function uploadCSV(formData: FormData): Promise<UploadCSVResult> {
     const projectId = formData.get('projectId') as string
     const role = formData.get('role') as 'source' | 'target'
     const datasetId = formData.get('datasetId') as string
+
+    if (projectId) {
+      const { checkProjectPermission } = await import('@/lib/actions/role-resolution')
+      if (!(await checkProjectPermission(projectId, 'editor'))) {
+        return { success: false, error: 'Insufficient permissions' }
+      }
+    }
     const tableName = formData.get('tableName') as string
 
     if (!file || !projectId || !role || !datasetId || !tableName) {

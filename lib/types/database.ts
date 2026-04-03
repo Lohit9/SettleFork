@@ -1,9 +1,12 @@
 export interface Project {
   id: string
   user_id: string
+  org_id: string
+  created_by: string | null
   name: string
   description: string | null
   status: 'active' | 'completed' | 'archived'
+  visibility: 'org' | 'private'
   created_at: string
   updated_at: string
   completed_at: string | null
@@ -241,6 +244,7 @@ export type ProjectWithDatasets = Project & { datasets: Dataset[] }
 export interface ProjectWithStats {
   id: string
   name: string
+  org_id?: string
   source_label: string
   target_label: string
   status: 'active' | 'completed' | 'archived'

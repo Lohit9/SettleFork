@@ -939,11 +939,16 @@ export async function saveConnectionAndIntrospect(params: {
   const schema = params.schema ?? (dbType === 'mssql' ? 'dbo' : dbType === 'mysql' ? params.database : 'public')
   const supabase = await createClient()
 
-  // ── Step 1: Auth check ────────────────────────────────────────────────────
+  // ── Step 1: Auth + permission check ──────────────────────────────────────
   const {
     data: { user },
   } = await supabase.auth.getUser()
   if (!user) return { success: false, error: 'Not authenticated' }
+
+  const { checkProjectPermission } = await import('@/lib/actions/role-resolution')
+  if (!(await checkProjectPermission(projectId, 'editor'))) {
+    return { success: false, error: 'Insufficient permissions' }
+  }
 
   // ── Step 2: Save / update connection credentials ──────────────────────────
   const { error: upsertErr } = await supabase

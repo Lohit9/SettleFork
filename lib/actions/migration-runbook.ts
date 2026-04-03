@@ -106,15 +106,19 @@ export async function generateMigrationRunbook(
   } = await supabase.auth.getUser()
   if (!user) return { success: false, error: 'Not authenticated' }
 
+  const { checkProjectPermission } = await import('@/lib/actions/role-resolution')
+  if (!(await checkProjectPermission(projectId, 'editor'))) {
+    return { success: false, error: 'Insufficient permissions' }
+  }
+
   const rateLimit = checkAIRateLimit(user.id)
   if (!rateLimit.allowed) return { success: false, error: rateLimit.error }
 
-  // ── Ownership ───────────────────────────────────────────────────────────────
+  // ── Access check ────────────────────────────────────────────────────────────
   const { data: project } = await supabase
     .from('projects')
     .select('id, name')
     .eq('id', projectId)
-    .eq('user_id', user.id)
     .single()
   if (!project) return { success: false, error: 'Access denied' }
 

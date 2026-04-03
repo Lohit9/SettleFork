@@ -201,12 +201,15 @@ export async function stageAllData(projectId: string): Promise<{
   } = await supabase.auth.getUser()
   if (!user) return { success: false, tables: [], error: 'Not authenticated' }
 
-  // Verify project ownership via RLS
+  const { checkProjectPermission } = await import('@/lib/actions/role-resolution')
+  if (!(await checkProjectPermission(projectId, 'editor'))) {
+    return { success: false, tables: [], error: 'Insufficient permissions' }
+  }
+
   const { data: project } = await supabase
     .from('projects')
     .select('id')
     .eq('id', projectId)
-    .eq('user_id', user.id)
     .single()
   if (!project) return { success: false, tables: [], error: 'Access denied' }
 

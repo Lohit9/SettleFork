@@ -8,6 +8,7 @@ import { Label } from '@/components/ui/label'
 import { Button } from '@/components/ui/button'
 import { updateProject, updateProjectLabels, deleteProject, markProjectComplete, reactivateProject, archiveProject } from '@/lib/actions/projects'
 import { getExecutionPackageUrl } from '@/lib/actions/execution-package'
+import { useProjectRole } from '@/lib/hooks/useProjectRole'
 
 // ── types ──────────────────────────────────────────────────────────────────
 
@@ -99,6 +100,8 @@ function MenuItem({
 
 export function ProjectMenu({ project, onUpdate }: ProjectMenuProps) {
   const router = useRouter()
+  const { can: canRole } = useProjectRole(project.id)
+  const canManage = canRole('manage')
   const [isOpen, setIsOpen] = useState(false)
   const [dropCoords, setDropCoords] = useState({ top: 0, left: 0 })
   const [modal, setModal] = useState<'rename' | 'labels' | 'delete' | 'archive' | null>(null)
@@ -268,20 +271,24 @@ export function ProjectMenu({ project, onUpdate }: ProjectMenuProps) {
                 label={isCompleted ? 'Reactivate' : 'Mark as completed'}
                 onClick={handleToggleStatus}
               />
-              <MenuItem
-                icon={<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5"><path d="M2 12V6l4-4h5l3 3v7a1 1 0 01-1 1H3a1 1 0 01-1-1z"/><path d="M6 2v4H2"/><path d="M8 9v3M8 7v.5"/></svg>}
-                label="Archive project"
-                onClick={() => openModal('archive')}
-              />
+              {canManage && (
+                <MenuItem
+                  icon={<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5"><path d="M2 12V6l4-4h5l3 3v7a1 1 0 01-1 1H3a1 1 0 01-1-1z"/><path d="M6 2v4H2"/><path d="M8 9v3M8 7v.5"/></svg>}
+                  label="Archive project"
+                  onClick={() => openModal('archive')}
+                />
+              )}
               <div className="border-t border-gray-100 my-1" />
             </>
           )}
-          <MenuItem
-            icon={<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5"><path d="M3 4h10M6 4V3h4v1M13 4l-.75 9H3.75L3 4"/><path d="M6.5 7v4M9.5 7v4"/></svg>}
-            label="Delete project"
-            onClick={() => openModal('delete')}
-            danger
-          />
+          {canManage && (
+            <MenuItem
+              icon={<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5"><path d="M3 4h10M6 4V3h4v1M13 4l-.75 9H3.75L3 4"/><path d="M6.5 7v4M9.5 7v4"/></svg>}
+              label="Delete project"
+              onClick={() => openModal('delete')}
+              danger
+            />
+          )}
         </div>,
         document.body
       )}

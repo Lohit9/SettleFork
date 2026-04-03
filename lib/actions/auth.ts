@@ -6,6 +6,8 @@ import { revalidatePath } from 'next/cache'
 import { headers } from 'next/headers'
 import { checkSignupRateLimit } from '@/lib/auth/signup-rate-limit'
 import { validateInviteCode, markInviteUsed } from '@/lib/actions/invites'
+import { acceptInvite } from '@/lib/actions/org-invites'
+import { createOrganization } from '@/lib/actions/organizations'
 import { Resend } from 'resend'
 
 const resend = new Resend(process.env.RESEND_API_KEY)
@@ -26,8 +28,10 @@ export interface SignUpPayload {
   password: string
   companySize?: string
   role?: string
-  /** Invite code — required for access. */
+  /** Legacy invite code — required for access when no org invite token. */
   inviteCode: string
+  /** Org invite token — if present, user joins the inviting org instead of creating a personal one. */
+  inviteToken?: string
   /** Honeypot field — must be empty. Hidden from real users. */
   website: string
   /** Unix ms timestamp of when the signup page loaded, as a string. */
@@ -65,10 +69,13 @@ export async function signUpWithBotProtection(payload: SignUpPayload): Promise<S
     return { success: false, error: rateLimit.error }
   }
 
-  // 4. Validate invite code.
-  const invite = await validateInviteCode(payload.inviteCode)
-  if (!invite.valid) {
-    return { success: false, error: invite.error }
+  // 4. Validate invite code (skip if org invite token is present).
+  const hasOrgInviteToken = !!payload.inviteToken?.trim()
+  if (!hasOrgInviteToken) {
+    const invite = await validateInviteCode(payload.inviteCode)
+    if (!invite.valid) {
+      return { success: false, error: invite.error }
+    }
   }
 
   // 5. Actual Supabase signup.
@@ -102,17 +109,46 @@ export async function signUpWithBotProtection(payload: SignUpPayload): Promise<S
     return { success: false, error: 'Unable to create account. Please try again.' }
   }
 
-  // 6. Mark invite as used (atomic guard prevents double-use).
+  // 6. Handle org membership + mark legacy invite as used.
   if (authData.user) {
-    await markInviteUsed(payload.inviteCode, authData.user.id)
+    if (hasOrgInviteToken) {
+      // Org invite: accept the invite (creates org_memberships row). No personal org needed.
+      try {
+        await acceptInvite(payload.inviteToken!, authData.user.id)
+      } catch (err) {
+        console.error('Failed to accept org invite during signup (non-blocking):', err)
+      }
+    } else {
+      // Legacy invite code path: mark invite used + create a personal org for this user
+      await markInviteUsed(payload.inviteCode, authData.user.id)
 
-    // 7. Fetch invite details (name/company) for the notification email.
-    //    Non-blocking — failure here must never affect the signup result.
+      try {
+        // createOrganization uses the RLS-enforced client — since we just signed up,
+        // the session may not be ready yet. Use supabaseAdmin to create the personal org.
+        const displayName = payload.fullName?.trim() || payload.email.split('@')[0]
+        const slug = 'ws-' + Math.random().toString(36).slice(2, 14)
+        const { data: newOrg } = await supabaseAdmin
+          .from('organizations')
+          .insert({ name: `${displayName}'s Workspace`, slug, created_by: authData.user.id })
+          .select()
+          .single()
+
+        if (newOrg) {
+          await supabaseAdmin
+            .from('org_memberships')
+            .insert({ org_id: newOrg.id, user_id: authData.user.id, role: 'owner' })
+        }
+      } catch (orgErr) {
+        console.error('Failed to create personal org during signup (non-blocking):', orgErr)
+      }
+    }
+
+    // 7. Send admin notification email (non-blocking).
     try {
       const { data: invite } = await supabaseAdmin
         .from('invites')
         .select('name, company')
-        .eq('code', payload.inviteCode.trim().toUpperCase())
+        .eq('code', (payload.inviteCode || '').trim().toUpperCase())
         .maybeSingle()
 
       await resend.emails.send({
@@ -130,8 +166,8 @@ export async function signUpWithBotProtection(payload: SignUpPayload): Promise<S
                   <td style="padding: 10px 14px; font-size: 13px; color: #0F172A; border-bottom: 1px solid #E2E8F0;">${invite?.name || payload.fullName || 'Not provided'}</td></tr>
               <tr><td style="padding: 10px 14px; font-size: 13px; font-weight: 600; color: #475569; border-bottom: 1px solid #E2E8F0;">Company</td>
                   <td style="padding: 10px 14px; font-size: 13px; color: #0F172A; border-bottom: 1px solid #E2E8F0;">${invite?.company || 'Not provided'}</td></tr>
-              <tr><td style="padding: 10px 14px; font-size: 13px; font-weight: 600; color: #475569;">Invite Code</td>
-                  <td style="padding: 10px 14px; font-size: 13px; font-family: monospace; color: #0F172A;">${payload.inviteCode}</td></tr>
+              <tr><td style="padding: 10px 14px; font-size: 13px; font-weight: 600; color: #475569;">Signup Method</td>
+                  <td style="padding: 10px 14px; font-size: 13px; font-family: monospace; color: #0F172A;">${hasOrgInviteToken ? 'Org invite' : payload.inviteCode}</td></tr>
             </table>
             <p style="margin-top: 16px; font-size: 14px; color: #475569;">They can now log in. Reach out to schedule their onboarding session.</p>
             <div style="margin-top: 16px;">
