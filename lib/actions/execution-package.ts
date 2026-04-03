@@ -63,7 +63,7 @@ export interface ExecutionPackageError {
 
 export interface CompartmentalizedFile {
   filename: string
-  type: 'checklist' | 'table_script' | 'validation' | 'rollback'
+  type: 'checklist' | 'table_script' | 'validation' | 'promote' | 'rollback'
   content: string
   table_name?: string
   load_order?: number
@@ -98,6 +98,111 @@ async function getNextVersionStr(projectId: string, type: string, format: string
     .limit(1)
     .maybeSingle()
   return data ? nextVersionStr(data.version) : '1.0'
+}
+
+/**
+ * Returns true if the SQL content appears to use the expected dialect's identifier style.
+ * Used to validate Claude's compartmentalized output before accepting it.
+ */
+function detectDialect(content: string, expected: SqlDialect): boolean {
+  const hasBrackets = /\[[A-Za-z_]/.test(content)
+  const hasBackticks = /`[A-Za-z_]/.test(content)
+  const hasDoubleQuotes = /"[A-Za-z_]/.test(content)
+  const hasPgCast = content.includes('::')
+  const hasPgRegex = / ~ /.test(content) || / ~\* /.test(content)
+  const hasPgFunctions = /\b(SPLIT_PART|TO_DATE|TO_CHAR|INITCAP|REGEXP_REPLACE)\b/.test(content)
+  const hasTsqlFunctions = /\b(CHARINDEX|HASHBYTES|PATINDEX|ISNUMERIC|LEN|GETDATE)\b/.test(content)
+
+  if (expected === 'tsql') {
+    return hasBrackets && !hasPgCast && !hasPgRegex && !hasPgFunctions && !hasBackticks
+  }
+  if (expected === 'mysql') {
+    return hasBackticks && !hasPgCast && !hasPgRegex && !hasPgFunctions && !hasBrackets && !hasTsqlFunctions
+  }
+  // postgresql
+  return (hasDoubleQuotes || hasPgCast) && !hasBrackets && !hasBackticks
+}
+
+/**
+ * Splits a monolithic 6-section SQL script into per-table file content.
+ * Anchors on SECTION N markers and INSERT INTO STG_ statements per table.
+ */
+function splitMonolithicSQL(
+  sql: string,
+  loadOrder: LoadOrderEntry[]
+): { checklist: string; tableSections: Map<string, string>; validation: string; promote: string; rollback: string } {
+  const tableSections = new Map<string, string>()
+
+  // Locate section boundaries using "SECTION N" anywhere in a comment line
+  const sectionBounds: Array<{ num: number; start: number }> = []
+  const secRe = /--[^\n]*SECTION\s+(\d+)[^\n]*/gi
+  let secMatch: RegExpExecArray | null
+  while ((secMatch = secRe.exec(sql)) !== null) {
+    const num = parseInt(secMatch[1])
+    if (!sectionBounds.find((s) => s.num === num)) {
+      sectionBounds.push({ num, start: secMatch.index })
+    }
+  }
+  sectionBounds.sort((a, b) => a.start - b.start)
+
+  const getSectionContent = (n: number): string => {
+    const idx = sectionBounds.findIndex((s) => s.num === n)
+    if (idx === -1) return ''
+    const start = sectionBounds[idx].start
+    const end = idx + 1 < sectionBounds.length ? sectionBounds[idx + 1].start : sql.length
+    return sql.slice(start, end).trim()
+  }
+
+  const sec3 = getSectionContent(3)
+
+  // Within section 3, split per table anchoring on INSERT INTO STG_<tableName> (any quoting style)
+  for (let i = 0; i < loadOrder.length; i++) {
+    const tableName = loadOrder[i].tableName
+    const nextTableName = i + 1 < loadOrder.length ? loadOrder[i + 1].tableName : null
+
+    // Match INSERT INTO STG_ with bracket, backtick, double-quote, or unquoted identifiers
+    const esc = tableName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+    const insertRe = new RegExp(
+      `INSERT\\s+INTO\\s+(?:\\[STG_${esc}\\]|\`STG_${esc}\`|"STG_${esc}"|STG_${esc})(?:\\s|\\()`,
+      'i'
+    )
+    const insertMatch = insertRe.exec(sec3)
+    if (!insertMatch) {
+      tableSections.set(tableName, `-- No staging script found for STG_${tableName} in fallback generation.\n`)
+      continue
+    }
+
+    // Walk back from the INSERT to the nearest comment separator line
+    const beforeInsert = sec3.slice(0, insertMatch.index)
+    const lastCommentIdx = beforeInsert.lastIndexOf('\n--')
+    const tableStart = lastCommentIdx > 0 ? lastCommentIdx + 1 : insertMatch.index
+
+    let tableEnd = sec3.length
+    if (nextTableName) {
+      const escNext = nextTableName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+      const nextInsertRe = new RegExp(
+        `INSERT\\s+INTO\\s+(?:\\[STG_${escNext}\\]|\`STG_${escNext}\`|"STG_${escNext}"|STG_${escNext})(?:\\s|\\()`,
+        'i'
+      )
+      const nextMatch = nextInsertRe.exec(sec3.slice(tableStart + 1))
+      if (nextMatch) {
+        const nextAbsolute = tableStart + 1 + nextMatch.index
+        const beforeNext = sec3.slice(tableStart, nextAbsolute)
+        const lastSepBeforeNext = beforeNext.lastIndexOf('\n--')
+        tableEnd = lastSepBeforeNext > 0 ? tableStart + lastSepBeforeNext + 1 : nextAbsolute
+      }
+    }
+
+    tableSections.set(tableName, sec3.slice(tableStart, tableEnd).trim())
+  }
+
+  return {
+    checklist: getSectionContent(1),
+    tableSections,
+    validation: getSectionContent(4),
+    promote: getSectionContent(5),
+    rollback: getSectionContent(6),
+  }
 }
 
 // ── FK Dependency Resolution ──────────────────────────────────────────────────
@@ -266,7 +371,15 @@ IMPORTANT — TRANSFORM ADAPTATION REQUIRED: The transformation SQL expressions 
 
 // ── System prompt ─────────────────────────────────────────────────────────────
 
-const EXECUTION_PACKAGE_SYSTEM_PROMPT = `You are an expert data migration engineer generating a production-ready SQL migration execution package.
+const EXECUTION_PACKAGE_SYSTEM_PROMPT = `You are an expert data migration engineer generating a production-ready SQL migration execution package using a three-phase ETL pattern: Source → Staging → Target.
+
+CRITICAL STAGING RULES:
+- ALL transform-and-load scripts (Section 3) insert into STAGING tables (STG_ prefix), NEVER directly into target tables.
+- Staging table names are ALWAYS STG_ + target table name (e.g., STG_TC_MATTERS for target TC_MATTERS).
+- Staging tables mirror target schema exactly (same columns, same types, same NOT NULL) but WITHOUT foreign key constraints.
+- The ONLY section that writes to target tables is Section 5 (Promote to Target).
+- Section 5 uses INSERT INTO {target} SELECT * FROM STG_{target} — no transforms, no CASE statements.
+- Dialect identifier quoting applies to staging tables identically.
 
 OUTPUT FORMAT RULES:
 - Output ONLY valid SQL with comments. No markdown, no code fences, no explanatory text outside SQL comments.
@@ -293,8 +406,12 @@ FILTERING RULES:
 - NEVER apply date or numeric filters on raw VARCHAR source fields using string comparison. Date/numeric filters must be applied AFTER type conversion, or within the INSERT...SELECT statement where the transformation has already been applied.
 - Child table extracts and loads MUST account for parent table filters. If parent records are excluded (e.g., by status or date cutoff), their child records must ALSO be excluded — even if the child's FK value is technically valid in the source. Use subqueries: WHERE parent_fk IN (SELECT pk FROM parent_table WHERE <same parent filters>).
 
+SECTION 1 SPECIFIC RULES:
+- In addition to issue listing and risk assessment, include executable SQL to CREATE staging tables (CREATE TABLE IF NOT EXISTS STG_{target_table} mirroring target schema without FKs) and TRUNCATE them for idempotent re-runs.
+
 SECTION 3 SPECIFIC RULES:
-- Generate complete INSERT INTO target_table (col1, col2, ...) SELECT expr1, expr2, ... FROM source_table WHERE ... statements.
+- Generate complete INSERT INTO STG_{target_table} (col1, col2, ...) SELECT expr1, expr2, ... FROM source_table WHERE ... statements.
+- The INSERT target is ALWAYS the staging table (STG_ prefix), NEVER the target table directly.
 - Each target table gets its own INSERT...SELECT block.
 - Order the blocks by the FK-dependency load order provided.
 - Align column expressions vertically for readability.
@@ -302,14 +419,58 @@ SECTION 3 SPECIFIC RULES:
 - Include a -- comment above each expression naming the source→target field mapping.
 
 SECTION 4 SPECIFIC RULES:
-- For record count reconciliation, use independent COUNT queries (one for source with filters, one for target), presented side by side. Do NOT use JOINed reconciliation.
-- For aggregate reconciliation (sums of amounts), use independent SUM queries on source vs target. Do NOT join source and target rows for comparison — this is fragile and error-prone.
-- For FK integrity checks, use LEFT JOIN ... WHERE parent.pk IS NULL pattern.
-- For CHECK constraint validation, use WHERE column NOT IN (...allowed values...) pattern.`
+- For record count reconciliation, use independent COUNT queries (one for source with filters, one for STG_{target_table}), presented side by side. Do NOT use JOINed reconciliation.
+- For aggregate reconciliation (sums of amounts), use independent SUM queries on source vs STG_ tables. Do NOT join source and staging rows for comparison — this is fragile and error-prone.
+- For FK integrity checks, use LEFT JOIN across STG_ tables: STG_{child} LEFT JOIN STG_{parent} WHERE STG_{parent}.pk IS NULL pattern.
+- For CHECK constraint validation, use WHERE column NOT IN (...allowed values...) pattern on STG_ tables.
+- End with: -- ⚠️ REVIEW ALL RESULTS ABOVE. DO NOT PROCEED TO PROMOTION (Section 5) UNLESS ALL CHECKS PASS.
+
+SECTION 5 SPECIFIC RULES:
+- Wrap all inserts in a single transaction (dialect-appropriate).
+- For each target table in FK dependency order: INSERT INTO {target_table} SELECT * FROM STG_{target_table}.
+- No transforms, no CASE statements — clean column-for-column copy from staging to target.
+- After all inserts: post-promotion row count verification confirming target count = staging count for each table.
+- Transaction ends with ROLLBACK by default — NOT COMMIT.
+- Include: -- ⚠️ CHANGE ROLLBACK TO COMMIT ONLY AFTER VERIFYING ALL POST-PROMOTION COUNTS MATCH.
+
+SECTION 6 SPECIFIC RULES:
+- DELETE FROM all target tables in REVERSE FK dependency order.
+- TRUNCATE all STG_ tables after target deletions.
+- Post-rollback verification: confirm both target and staging tables are empty.
+- Wrap in transaction with ROLLBACK (not COMMIT).`
+
+// ── Monolithic fallback instructions (used when compartmentalized output has wrong dialect) ──────
+
+const MONOLITHIC_FALLBACK_INSTRUCTIONS = `## Instructions
+Generate a SQL migration execution package with exactly 6 sections using the Source → Staging → Target pattern.
+Each section MUST start with a SQL block comment header that includes "SECTION N" (e.g., -- ===... SECTION 1 — PRE-MIGRATION CHECKLIST ===...).
+Use exactly these section labels:
+
+SECTION 1 — PRE-MIGRATION CHECKLIST
+SECTION 2 — EXTRACT QUERIES
+SECTION 3 — TRANSFORMATION & STAGING SCRIPTS
+SECTION 4 — POST-STAGING VALIDATION
+SECTION 5 — PROMOTE TO TARGET
+SECTION 6 — ROLLBACK
+
+In SECTION 1, include CREATE TABLE IF NOT EXISTS STG_{target_table} for every target table (mirroring target schema without FKs) and TRUNCATE all STG_ tables.
+In SECTION 3, add a SQL comment header line containing the exact table name before each INSERT INTO STG_{target_table} block. ALL inserts go to staging tables (STG_ prefix), NEVER directly to target tables.
+In SECTION 5, INSERT INTO {target_table} SELECT * FROM STG_{target_table} for each table in FK dependency order, wrapped in a transaction with ROLLBACK (not COMMIT).
+In SECTION 6, DELETE from target tables in reverse FK order, then TRUNCATE all STG_ tables.
+Generate one INSERT INTO block per target table in the FK-dependency load order listed above.
+Output ONLY valid SQL with comments. No markdown, no code fences, no JSON.`
 
 // ── Compartmentalized system prompt ───────────────────────────────────────────
 
-const COMPARTMENTALIZED_SYSTEM_PROMPT = `You are an expert data migration engineer generating production-ready, compartmentalized SQL migration scripts.
+const COMPARTMENTALIZED_SYSTEM_PROMPT = `You are an expert data migration engineer generating production-ready, compartmentalized SQL migration scripts using a three-phase ETL pattern: Source → Staging → Target.
+
+CRITICAL STAGING RULES:
+- NEVER insert directly into target tables in per-table scripts (files 01–N). ALL transforms write to STG_ staging tables.
+- Staging table names are ALWAYS STG_ prefixed to the target table name (e.g., STG_TC_MATTERS for target TC_MATTERS).
+- Staging tables mirror the target schema exactly (same columns, same types, same NOT NULL constraints) but WITHOUT foreign key constraints.
+- The ONLY file that writes to target tables is the Promote file.
+- The Promote file uses INSERT INTO {target} SELECT * FROM STG_{target} — no transforms, no CASE statements.
+- Dialect identifier quoting applies to staging tables identically (T-SQL: [STG_TC_MATTERS], MySQL: \`STG_TC_MATTERS\`, PostgreSQL: "STG_TC_MATTERS").
 
 OUTPUT FORMAT: Return ONLY a valid JSON object — no markdown fences, no preamble, no explanation outside the JSON.
 
@@ -319,18 +480,23 @@ JSON STRUCTURE:
     {
       "filename": "00_pre_migration_checklist.sql",
       "type": "checklist",
-      "content": "-- PRE-MIGRATION CHECKLIST\\n..."
+      "content": "-- PRE-MIGRATION CHECKLIST\\n...\\n-- CREATE STAGING TABLES\\n...\\n-- TRUNCATE STAGING TABLES\\n..."
     },
     {
       "filename": "TABLE_PLACEHOLDER",
       "type": "table_script",
       "table_name": "ACTUAL_TABLE_NAME",
-      "content": "-- SECTION A: EXTRACT QUERY\\n...\\n-- SECTION B: TRANSFORM & LOAD\\n...\\n-- SECTION C: TABLE VALIDATION\\n...\\n-- SECTION D: TABLE ROLLBACK\\n..."
+      "content": "-- SECTION A: EXTRACT QUERY\\n...\\n-- SECTION B: TRANSFORM & STAGE\\n...\\n-- SECTION C: STAGING VALIDATION\\n...\\n-- SECTION D: TABLE ROLLBACK\\n..."
     },
     {
       "filename": "VALIDATION_PLACEHOLDER",
       "type": "validation",
-      "content": "-- POST-LOAD VALIDATION\\n..."
+      "content": "-- POST-STAGING VALIDATION\\n..."
+    },
+    {
+      "filename": "PROMOTE_PLACEHOLDER",
+      "type": "promote",
+      "content": "-- PROMOTE TO TARGET\\n..."
     },
     {
       "filename": "99_full_rollback.sql",
@@ -340,7 +506,7 @@ JSON STRUCTURE:
   ]
 }
 
-FILE NUMBERING: Use placeholder filenames for table scripts and the validation file — the caller assigns the numeric prefix (01_, 02_, etc.) based on FK dependency order. Use "00_pre_migration_checklist.sql" and "99_full_rollback.sql" as-is.
+FILE NUMBERING: Use placeholder filenames for table scripts, the validation file, and the promote file — the caller assigns the numeric prefix (01_, 02_, etc.) based on FK dependency order. Use "00_pre_migration_checklist.sql" and "99_full_rollback.sql" as-is.
 
 SQL FORMATTING RULES:
 - Format all SQL with proper indentation and line breaks.
@@ -351,12 +517,24 @@ SQL FORMATTING RULES:
 - Do NOT reference variables, temp tables, or state from other files.
 
 FILE 1 — Pre-Migration Checklist (00_pre_migration_checklist.sql):
-- SQL comments ONLY — no executable SQL.
+Part 1 — Issue Review (SQL comments ONLY, no executable SQL):
 - List all open blocking issues with severity and record counts.
 - Include fix SQL for each issue as commented-out SQL (ready to uncomment and run).
+- The fix SQL examples in the checklist MUST use the target SQL dialect syntax specified in the dialect rules below. Adapt any fix SQL to the target dialect — use dialect-appropriate identifier quoting, string functions, and operators. Do NOT use PostgreSQL-specific syntax (like "double quotes", TRIM(), ~, !~) when the target dialect is T-SQL or MySQL.
 - List accepted risks with notes.
 - Show source record counts per table.
 - Check every NOT NULL target field: if any mapping could produce NULL for that field, flag it here.
+
+Part 2 — CREATE STAGING TABLES (executable SQL):
+- Output CREATE TABLE IF NOT EXISTS STG_{target_table} for EVERY target table.
+- Each staging table mirrors the target schema exactly: same columns, same data types, same NOT NULL constraints.
+- Do NOT include foreign key constraints on staging tables. Staging tables omit FKs because tables load in dependency order and FKs would fail during partial loads.
+- Do NOT include indexes, triggers, or defaults that reference other tables.
+- Use dialect-appropriate syntax for CREATE TABLE IF NOT EXISTS.
+
+Part 3 — TRUNCATE STAGING TABLES (executable SQL):
+- TRUNCATE all STG_ tables in REVERSE FK dependency order to ensure idempotent re-runs.
+- Use dialect-appropriate TRUNCATE syntax.
 
 FILE 2..N — Per-Table Scripts (one per target table, in FK dependency order provided):
 Each table file has FOUR sections:
@@ -367,32 +545,45 @@ SECTION A — EXTRACT QUERY
 - For child tables: include WHERE parent_fk IN (SELECT pk FROM parent WHERE <same parent filters>).
 - Add a comment above each WHERE clause explaining the filter.
 
-SECTION B — TRANSFORM & LOAD
-- A complete INSERT INTO target_table (cols) SELECT exprs FROM source WHERE <filters>.
+SECTION B — TRANSFORM & STAGE
+- A complete INSERT INTO STG_{target_table} (cols) SELECT exprs FROM source WHERE <filters>.
+- The INSERT target is the STAGING table (STG_ prefix), NEVER the target table directly.
 - Use the EXACT approved transformation SQL verbatim for fields that have it.
 - For fields without transform SQL: generate appropriate type casting or direct mapping.
 - For NOT NULL target fields where source can be NULL: use COALESCE with a sensible default.
 - Format each column expression on its own line with a comment.
 
-SECTION C — TABLE VALIDATION
-- Row count check: two independent SELECT COUNT(*) queries — one on source (same filters as Section B), one on target.
-- Sample spot-check: SELECT the first 5 rows from the target table (LIMIT 5 / TOP 5 per dialect).
+SECTION C — STAGING VALIDATION
+- Row count check: two independent SELECT COUNT(*) queries — one on source (same filters as Section B), one on STG_{target_table}.
+- Sample spot-check: SELECT the first 5 rows from STG_{target_table} using the dialect-appropriate syntax (LIMIT 5 for PostgreSQL/MySQL, TOP 5 for T-SQL).
+- Do NOT check FK integrity here — that is cross-table and belongs in the Post-Staging Validation file.
 
 SECTION D — TABLE ROLLBACK
-- A DELETE FROM [target_table] statement.
-- Scope to only rows loaded by this script if a reliable WHERE clause exists (e.g., WHERE pk IN (SELECT pk FROM source WHERE ...)).
-- If no reliable scoping exists: DELETE FROM [target_table] — with a prominent comment warning this deletes ALL rows.
+- A TRUNCATE TABLE STG_{target_table} statement (use dialect-appropriate identifier quoting).
+- This rolls back staging only — target tables are untouched at this stage.
 
-FILE N+1 — Post-Load Validation (numbered after last table):
-- Cross-table record count reconciliation: SELECT COUNT(*) source vs target for every table.
-- FK integrity checks: LEFT JOIN parent WHERE parent.pk IS NULL pattern for every FK relationship.
-- CHECK constraint validation: WHERE field NOT IN (...) pattern for every picklist field.
-- NOT NULL checks: SELECT COUNT(*) WHERE field IS NULL for every NOT NULL target field.
-- Aggregate reconciliation: independent SUM queries for key numeric fields.
+FILE N+1 — Post-Staging Validation (numbered after last table):
+- Cross-table record count reconciliation: SELECT COUNT(*) source vs STG_{target_table} for every table.
+- FK integrity checks across staging tables: LEFT JOIN STG_{parent} WHERE STG_{parent}.pk IS NULL pattern for every FK relationship (e.g., STG_TC_TIMEKEEPERS.org_id references STG_TC_ORGANIZATIONS.org_id).
+- CHECK constraint validation: WHERE field NOT IN (...) pattern for every picklist field, querying STG_ tables.
+- NOT NULL checks: SELECT COUNT(*) WHERE field IS NULL for every NOT NULL target field, querying STG_ tables.
+- Aggregate reconciliation: independent SUM queries for key numeric fields, querying STG_ tables.
+- End with a prominent comment: -- ⚠️ REVIEW ALL RESULTS ABOVE. DO NOT PROCEED TO PROMOTION (next file) UNLESS ALL CHECKS PASS.
+
+FILE N+2 — Promote to Target (type: "promote"):
+- Header comment block explaining this file promotes validated staging data to production target tables.
+- Wrap ALL inserts in a single transaction (dialect-appropriate).
+- For each target table in FK dependency order: INSERT INTO {target_table} SELECT * FROM STG_{target_table}.
+- No transforms, no CASE statements, no WHERE clauses — just a clean column-for-column copy from staging to target.
+- After all inserts: post-promotion row count verification — SELECT COUNT(*) from each target table and each STG_ table, confirming they match.
+- Transaction ends with ROLLBACK by default — NOT COMMIT.
+- Prominent comment: -- ⚠️ CHANGE ROLLBACK TO COMMIT ONLY AFTER VERIFYING ALL POST-PROMOTION COUNTS MATCH.
 
 FILE 99 — Full Rollback (99_full_rollback.sql):
 - DELETE FROM statements for ALL target tables in REVERSE FK dependency order (children first, then parents).
 - Each DELETE on its own line with a comment identifying the table.
+- After all target table deletions: TRUNCATE all STG_ tables in reverse dependency order.
+- Post-rollback verification: SELECT COUNT(*) checks confirming BOTH target tables AND staging tables are empty.
 - Wrap in a transaction (dialect-appropriate) with ROLLBACK not COMMIT — engineer must explicitly change to COMMIT.
 - Include a prominent warning comment block at the top.
 
@@ -748,7 +939,8 @@ ${acceptedRisksText}
 ${loadOrderText}
 
 ## Instructions
-Generate a SQL migration execution package with exactly 5 sections:
+Generate a SQL migration execution package with exactly 6 sections using the Source → Staging → Target pattern.
+ALL transform-and-load scripts insert into STAGING tables (STG_ prefix), NEVER directly into target tables. The ONLY section that writes to target tables is Section 5 (Promote to Target).
 
 SECTION 1 — PRE-MIGRATION CHECKLIST
 - List all open blocking issues as SQL comments with severity and record counts.
@@ -756,6 +948,8 @@ SECTION 1 — PRE-MIGRATION CHECKLIST
 - List all accepted risks as comments.
 - Include a comment block with total source record counts per table.
 - CRITICAL: Check every NOT NULL target field. If any source mapping or transformation could produce NULL for a NOT NULL target field, flag it here as a blocking issue with the specific field name and estimated affected row count.
+- CREATE STAGING TABLES: Output CREATE TABLE IF NOT EXISTS STG_{target_table} for every target table. Schema mirrors target exactly (same columns, same types, same NOT NULL) but WITHOUT foreign key constraints.
+- TRUNCATE STAGING TABLES: TRUNCATE all STG_ tables in reverse dependency order for idempotent re-runs.
 
 SECTION 2 — EXTRACT QUERIES
 - One SELECT query per source table.
@@ -765,10 +959,10 @@ SECTION 2 — EXTRACT QUERIES
 - For child tables, include a WHERE clause that filters to only records whose FK exists in the parent table AFTER the parent's own filters are applied. Example: WHERE customer_id IN (SELECT customer_id FROM Customers WHERE customer_id IS NOT NULL AND status != 'Archived')
 - Add a comment above each WHERE clause explaining the filter criterion and which business rule it implements.
 
-SECTION 3 — TRANSFORMATION & LOAD SCRIPTS
+SECTION 3 — TRANSFORMATION & STAGING SCRIPTS
 - Generate scripts in the load order specified above.
 - For EACH target table, generate a complete:
-    INSERT INTO target_table (col1, col2, ...)
+    INSERT INTO STG_{target_table} (col1, col2, ...)
     SELECT
         -- source_field → target_field: description
         transform_expression AS col1,
@@ -778,6 +972,7 @@ SECTION 3 — TRANSFORMATION & LOAD SCRIPTS
         ...
     FROM source_table
     WHERE <filters>;
+- The INSERT target is ALWAYS the staging table (STG_ prefix), NEVER the target table directly.
 - Use the EXACT approved transformation SQL for fields that have it — embed verbatim.
 - For fields without explicit transforms, generate appropriate type casting or direct mapping.
 - For NOT NULL target fields where the source can be NULL, use COALESCE with a sensible default.
@@ -786,23 +981,34 @@ SECTION 3 — TRANSFORMATION & LOAD SCRIPTS
 - Date-range filters (e.g., close_date >= '2020-01-01') MUST be applied AFTER date parsing/conversion, not on the raw VARCHAR. Use a subquery or CTE if needed.
 - Format each column expression on its own line with a descriptive comment.
 
-SECTION 4 — POST-LOAD VALIDATION
-Generate these validation queries:
+SECTION 4 — POST-STAGING VALIDATION
+Generate these validation queries against STAGING tables (STG_ prefix):
 - Record count reconciliation: For each table mapping, generate TWO independent queries side by side:
     SELECT 'Source: table_name' AS label, COUNT(*) AS row_count FROM source_table WHERE <same filters as Section 3>;
-    SELECT 'Target: table_name' AS label, COUNT(*) AS row_count FROM target_table;
-- FK integrity checks: For every FK relationship in the target schema:
-    SELECT 'Orphaned records in child_table.fk_field' AS check_name, COUNT(*) AS violations FROM child_table c LEFT JOIN parent_table p ON c.fk = p.pk WHERE p.pk IS NULL;
+    SELECT 'Staging: table_name' AS label, COUNT(*) AS row_count FROM STG_{target_table};
+- FK integrity checks across staging tables: For every FK relationship:
+    SELECT 'Orphaned records in STG_child.fk_field' AS check_name, COUNT(*) AS violations FROM STG_{child_table} c LEFT JOIN STG_{parent_table} p ON c.fk = p.pk WHERE p.pk IS NULL;
 - CHECK constraint validation: For every picklist/code field with a CHECK constraint:
-    SELECT 'Invalid values in table.field' AS check_name, field_name, COUNT(*) AS violations FROM table WHERE field NOT IN ('val1', 'val2', ...) GROUP BY field_name;
+    SELECT 'Invalid values in STG_table.field' AS check_name, field_name, COUNT(*) AS violations FROM STG_{table} WHERE field NOT IN ('val1', 'val2', ...) GROUP BY field_name;
 - NOT NULL checks: For every NOT NULL target field:
-    SELECT 'NULL violations in table.field' AS check_name, COUNT(*) AS violations FROM table WHERE field IS NULL;
+    SELECT 'NULL violations in STG_table.field' AS check_name, COUNT(*) AS violations FROM STG_{table} WHERE field IS NULL;
 - Aggregate reconciliation: For key numeric fields (amounts, revenues), generate independent SUM queries:
     SELECT 'Source total: field' AS label, SUM(cleaned_expression) AS total FROM source_table WHERE <filters>;
-    SELECT 'Target total: field' AS label, SUM(field) AS total FROM target_table;
+    SELECT 'Staging total: field' AS label, SUM(field) AS total FROM STG_{target_table};
+- End with: -- ⚠️ REVIEW ALL RESULTS ABOVE. DO NOT PROCEED TO PROMOTION (Section 5) UNLESS ALL CHECKS PASS.
 
-SECTION 5 — ROLLBACK
+SECTION 5 — PROMOTE TO TARGET
+- Wrap all inserts in a single transaction (dialect-appropriate).
+- For each target table in FK dependency order: INSERT INTO {target_table} SELECT * FROM STG_{target_table}.
+- No transforms, no CASE statements — clean column-for-column copy from staging to target.
+- After all inserts: post-promotion row count verification confirming target count = staging count for each table.
+- Transaction ends with ROLLBACK by default — NOT COMMIT.
+- Include: -- ⚠️ CHANGE ROLLBACK TO COMMIT ONLY AFTER VERIFYING ALL POST-PROMOTION COUNTS MATCH.
+
+SECTION 6 — ROLLBACK
 - Generate DELETE FROM statements for each target table in REVERSE load order (to respect FK constraints).
+- After all target table deletions: TRUNCATE all STG_ tables in reverse dependency order.
+- Post-rollback verification: SELECT COUNT(*) checks confirming both target and staging tables are empty.
 - Wrap in BEGIN / ROLLBACK (not COMMIT) so the engineer must explicitly change ROLLBACK to COMMIT.
 - Include a prominent warning comment block at the top of this section.`
 
@@ -895,6 +1101,7 @@ export async function generateCompartmentalizedPackage(
   dialect: SqlDialect = 'postgresql'
 ): Promise<CompartmentalizedPackageResult | ExecutionPackageError> {
   try {
+    console.log('[COMPARTMENTALIZED] dialect received:', dialect)
     // ── 1. Auth + ownership ──────────────────────────────────────────────────
 
     const supabase = await createClient()
@@ -1079,7 +1286,7 @@ export async function generateCompartmentalizedPackage(
       ? openBlocking.map((q) => {
           let line = `- [BLOCKING] ${q.title}: ${q.description} (${q.affected_records} records)`
           if (q.generated_sql) {
-            line += `\n  Fix SQL (available, not yet applied): ${q.generated_sql.replace(/\n/g, ' ')}`
+            line += `\n  Fix SQL (PostgreSQL syntax — adapt to target dialect): ${q.generated_sql.replace(/\n/g, ' ')}`
           }
           return line
         }).join('\n')
@@ -1185,6 +1392,8 @@ export async function generateCompartmentalizedPackage(
     // ── Assemble the user prompt ────────────────────────────────────────────
 
     const now = new Date().toISOString()
+    const dialectLabel = dialect === 'tsql' ? 'T-SQL (MS SQL Server)' : dialect === 'mysql' ? 'MySQL' : 'PostgreSQL'
+    const identifierStyle = dialect === 'tsql' ? '[bracket] identifiers' : dialect === 'mysql' ? 'backtick identifiers' : 'double-quote identifiers'
 
     const userMessage = `## Project
 Migration: ${sourceDataset?.name ?? 'Unknown'} → ${targetDataset?.name ?? 'Unknown'}
@@ -1223,13 +1432,17 @@ ${loadOrderText}
 ${(approvedTMs ?? []).length} approved table mappings, ${totalFieldMappings} field mappings, ${totalTransformRules} transformation rules.
 
 ## Instructions
-Generate the compartmentalized migration scripts following the system prompt rules exactly.
+⚠️ CRITICAL: ALL SQL in ALL files MUST use ${dialectLabel} syntax with ${identifierStyle} for ALL identifiers. Do NOT use PostgreSQL-specific syntax (::type casting, ~, ||, TRIM(), REGEXP_REPLACE, SPLIT_PART, TO_DATE, INITCAP) regardless of what syntax appears in the Transform SQL or Quality Issue examples above. Adapt ALL SQL expressions to ${dialectLabel}.
+
+Generate the compartmentalized migration scripts using the Source → Staging → Target pattern, following the system prompt rules exactly.
+ALL per-table INSERT statements MUST target STG_{target_table} staging tables, NEVER the target tables directly.
 Return one entry per target table (in the load order listed above, using the table names exactly as listed).
 The "files" array must contain entries in this order:
-1. Pre-migration checklist (type: "checklist")
-2. One entry per target table in the order listed above (type: "table_script") — use the exact table name in "table_name"
-3. Post-load validation (type: "validation")
-4. Full rollback (type: "rollback")`
+1. Pre-migration checklist with CREATE/TRUNCATE staging tables (type: "checklist")
+2. One entry per target table in the order listed above (type: "table_script") — use the exact table name in "table_name". Section B inserts into STG_{target_table}.
+3. Post-staging validation against STG_ tables (type: "validation")
+4. Promote to target — INSERT INTO {target} SELECT * FROM STG_{target} for each table (type: "promote")
+5. Full rollback — DELETE target tables + TRUNCATE staging tables (type: "rollback")`
 
     // ── Call Claude ───────────────────────────────────────────────────────────
 
@@ -1239,11 +1452,13 @@ The "files" array must contain entries in this order:
       + getTransformAdaptationInstruction(dialect)
 
     let rawResponse: string
+    console.log('[COMPARTMENTALIZED] dialectInstructions first 100 chars:', getDialectInstructions(dialect).slice(0, 100))
+    console.log('[COMPARTMENTALIZED] CRITICAL reminder dialect:', dialectLabel)
     try {
       // Must use streaming — the Anthropic SDK refuses non-streaming calls when max_tokens is
       // large enough that estimated generation time could exceed 10 minutes.
       // 32000 tokens gives enough budget for 6-10 tables of JSON-wrapped SQL.
-      rawResponse = await callClaudeStreaming(dialectSystemPrompt, userMessage, 32000)
+      rawResponse = await callClaudeStreaming(dialectSystemPrompt, userMessage, 64000)
     } catch (err) {
       console.error('[generateCompartmentalizedPackage] Claude call failed:', err)
       return { success: false, error: 'Failed to generate compartmentalized package. Please try again.' }
@@ -1327,6 +1542,7 @@ The "files" array must contain entries in this order:
 
     const checklist = claudeFiles.find((f) => f.type === 'checklist')
     const validation = claudeFiles.find((f) => f.type === 'validation')
+    const promote = claudeFiles.find((f) => f.type === 'promote')
     const rollback = claudeFiles.find((f) => f.type === 'rollback')
 
     const orderedTableFiles: ClaudeFileEntry[] = []
@@ -1363,12 +1579,17 @@ The "files" array must contain entries in this order:
     orderedTableFiles.forEach((f, idx) => {
       const num = String(idx + 1).padStart(2, '0')
       const safeName = (f.table_name ?? `table_${idx + 1}`).replace(/[^A-Za-z0-9_]/g, '_')
-      assembledFiles.push({ ...f, assignedFilename: `${num}_${safeName}_load.sql` })
+      assembledFiles.push({ ...f, assignedFilename: `${num}_STG_${safeName}_stage.sql` })
     })
 
-    const validationNum = String(orderedTableFiles.length + 1).padStart(2, '0')
+    const validationNum = orderedTableFiles.length + 1
     if (validation) {
-      assembledFiles.push({ ...validation, assignedFilename: `${validationNum}_post_load_validation.sql` })
+      assembledFiles.push({ ...validation, assignedFilename: `${String(validationNum).padStart(2, '0')}_post_staging_validation.sql` })
+    }
+
+    if (promote) {
+      const promoteNum = String(validationNum + 1).padStart(2, '0')
+      assembledFiles.push({ ...promote, assignedFilename: `${promoteNum}_promote_to_target.sql` })
     }
 
     if (rollback) {
@@ -1379,12 +1600,116 @@ The "files" array must contain entries in this order:
       return { success: false, error: 'No files were generated. Please try again.' }
     }
 
+    // ── Dialect validation + monolithic fallback ──────────────────────────────
+    //
+    // Check the first table file's content for the expected identifier style.
+    // If Claude generated the wrong dialect (long-context attention decay),
+    // re-generate using the proven monolithic generator and split the output
+    // into per-table files in code.
+
+    const tableFiles = assembledFiles.filter((f) => f.type === 'table_script')
+    const failedCount = tableFiles.filter((f) => !detectDialect(f.content, dialect)).length
+    if (failedCount > 0) {
+      console.warn(
+        `[generateCompartmentalizedPackage] Dialect validation failed: ${failedCount}/${tableFiles.length} files have wrong dialect (expected ${dialect}) — triggering monolithic fallback`
+      )
+
+      // Build a monolithic user message: reuse the assembled data sections,
+      // swap the ## Instructions block for the 6-section monolithic format.
+      const instructionIdx = userMessage.indexOf('## Instructions')
+      const baseMessage = instructionIdx !== -1 ? userMessage.slice(0, instructionIdx) : userMessage
+      const monoUserMessage = baseMessage + MONOLITHIC_FALLBACK_INSTRUCTIONS
+
+      const monoDialectSystemPrompt = EXECUTION_PACKAGE_SYSTEM_PROMPT
+        + '\n\n'
+        + getDialectInstructions(dialect)
+        + getTransformAdaptationInstruction(dialect)
+
+      let monoSql = ''
+      try {
+        monoSql = await callClaude(monoDialectSystemPrompt, monoUserMessage, 16000)
+        console.log('[generateCompartmentalizedPackage] Monolithic fallback SQL length:', monoSql.length)
+      } catch (fallbackErr) {
+        console.error('[generateCompartmentalizedPackage] Monolithic fallback call failed:', fallbackErr)
+        return { success: false, error: 'Dialect conversion failed. Please try again or use Single File format.' }
+      }
+
+      if (monoSql && monoSql.trim().length > 100) {
+        const split = splitMonolithicSQL(monoSql, loadOrder)
+
+        // Replace assembledFiles contents with the split monolithic sections
+        assembledFiles.splice(0)
+
+        if (split.checklist) {
+          assembledFiles.push({
+            filename: '00_pre_migration_checklist.sql',
+            type: 'checklist',
+            content: split.checklist,
+            assignedFilename: '00_pre_migration_checklist.sql',
+          })
+        }
+
+        orderedTableFiles.forEach((f, idx) => {
+          const num = String(idx + 1).padStart(2, '0')
+          const safeName = (f.table_name ?? `table_${idx + 1}`).replace(/[^A-Za-z0-9_]/g, '_')
+          const assignedFilename = `${num}_STG_${safeName}_stage.sql`
+          const tableContent =
+            split.tableSections.get(f.table_name ?? '') ??
+            `-- No staging script found for STG_${f.table_name} in fallback generation.\n`
+          assembledFiles.push({
+            filename: assignedFilename,
+            type: 'table_script',
+            content: tableContent,
+            table_name: f.table_name,
+            dependencies: f.dependencies,
+            assignedFilename,
+          })
+        })
+
+        const fbValidationNum = orderedTableFiles.length + 1
+        if (split.validation) {
+          const vName = `${String(fbValidationNum).padStart(2, '0')}_post_staging_validation.sql`
+          assembledFiles.push({
+            filename: vName,
+            type: 'validation',
+            content: split.validation,
+            assignedFilename: vName,
+          })
+        }
+
+        if (split.promote) {
+          const pName = `${String(fbValidationNum + 1).padStart(2, '0')}_promote_to_target.sql`
+          assembledFiles.push({
+            filename: pName,
+            type: 'promote',
+            content: split.promote,
+            assignedFilename: pName,
+          })
+        }
+
+        if (split.rollback) {
+          assembledFiles.push({
+            filename: '99_full_rollback.sql',
+            type: 'rollback',
+            content: split.rollback,
+            assignedFilename: '99_full_rollback.sql',
+          })
+        }
+
+        console.log(
+          '[generateCompartmentalizedPackage] Fallback complete — rebuilt',
+          assembledFiles.length, 'files from monolithic SQL'
+        )
+      }
+    }
+
     // ── Upload to storage ─────────────────────────────────────────────────────
 
     const version = await getNextVersionStr(projectId, 'execution_package', 'per_table')
     const versionFolder = `${user.id}/${projectId}/outputs/execution-package-v${version}_${dialect}`
 
     const uploadedFiles: CompartmentalizedFile[] = []
+    let tableScriptIndex = 0
 
     for (const f of assembledFiles) {
       const storagePath = `${versionFolder}/${f.assignedFilename}`
@@ -1393,12 +1718,14 @@ The "files" array must contain entries in this order:
         Buffer.from(f.content, 'utf-8'),
         { contentType: 'text/plain; charset=utf-8', upsert: true }
       )
+      const isTable = f.type === 'table_script'
+      if (isTable) tableScriptIndex++
       uploadedFiles.push({
         filename: f.assignedFilename,
         type: f.type as CompartmentalizedFile['type'],
         content: f.content,
         table_name: f.table_name,
-        load_order: f.type === 'table_script' ? orderedTableFiles.indexOf(f) + 1 : undefined,
+        load_order: isTable ? tableScriptIndex : undefined,
         dependencies: f.dependencies,
         storagePath,
       })
