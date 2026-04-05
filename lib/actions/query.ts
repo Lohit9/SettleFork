@@ -34,21 +34,21 @@ function saveQueryHistory(params: {
   executionTimeMs?: number
   error?: string
 }): void {
-  supabaseAdmin
-    .from('query_history')
-    .insert({
-      project_id: params.projectId,
-      user_id: params.userId,
-      mode: params.mode,
-      input: params.input,
-      generated_sql: params.generatedSql ?? null,
-      executed_sql: params.executedSql ?? null,
-      row_count: params.rowCount ?? null,
-      execution_time_ms: params.executionTimeMs ?? null,
-      error: params.error ?? null,
-    })
-    .then(() => {})
-    .catch((err) => console.error('[saveQueryHistory]', err))
+  Promise.resolve(
+    supabaseAdmin
+      .from('query_history')
+      .insert({
+        project_id: params.projectId,
+        user_id: params.userId,
+        mode: params.mode,
+        input: params.input,
+        generated_sql: params.generatedSql ?? null,
+        executed_sql: params.executedSql ?? null,
+        row_count: params.rowCount ?? null,
+        execution_time_ms: params.executionTimeMs ?? null,
+        error: params.error ?? null,
+      })
+  ).catch((err) => console.error('[saveQueryHistory]', err))
 }
 
 // ─── NL → SQL via Claude → Query Engine ──────────────────────────────────────
