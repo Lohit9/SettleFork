@@ -80,7 +80,7 @@ export default function InviteClient({ token, orgName, role, inviterName, email,
         return
       }
       if (result.requiresEmailVerification) {
-        router.push('/login?message=verify-email')
+        router.push('/verify-email')
         return
       }
       router.push('/app/projects')

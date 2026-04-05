@@ -169,17 +169,22 @@ export async function signUpWithBotProtection(payload: SignUpPayload): Promise<S
       html: adminHtml,
     }).catch((err) => console.error('Signup notification email failed (non-blocking):', err))
 
-    // 8. Send welcome email to the new user (non-blocking, fire-and-forget).
-    const firstName = displayName.split(' ')[0]
-    const { subject: welcomeSubject, html: welcomeHtml } = welcomeEmail(firstName, resolvedOrgName)
+    // 8. Send welcome email — only if email verification is NOT required.
+    // When verification is required, the welcome email is sent in the auth callback
+    // after the user clicks the confirmation link.
+    const requiresVerification = !!(authData.user && !authData.session)
+    if (!requiresVerification) {
+      const firstName = displayName.split(' ')[0]
+      const { subject: welcomeSubject, html: welcomeHtml } = welcomeEmail(firstName, resolvedOrgName)
 
-    resend.emails.send({
-      from: 'Kaan from Mine <info@trymine.ai>',
-      to: payload.email,
-      replyTo: 'info@trymine.ai',
-      subject: welcomeSubject,
-      html: welcomeHtml,
-    }).catch((err) => console.error('Welcome email failed (non-blocking):', err))
+      resend.emails.send({
+        from: 'Kaan from Mine <info@trymine.ai>',
+        to: payload.email,
+        replyTo: 'info@trymine.ai',
+        subject: welcomeSubject,
+        html: welcomeHtml,
+      }).catch((err) => console.error('Welcome email failed (non-blocking):', err))
+    }
   }
 
   // user present but no session → email confirmation required

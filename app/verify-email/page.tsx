@@ -75,17 +75,17 @@ function VerifyEmailContent() {
 
   return (
     <AuthCard
-      title="Verify Your Email"
-      subtitle="One more step before you can access your account"
+      title="Almost there!"
+      subtitle="Check your inbox to activate your account"
     >
       <Alert variant="default">
-        We sent a verification link to <strong>{userEmail ?? 'your email address'}</strong>. Click
-        the link in that email to activate your account.
+        We sent a verification link to <strong>{userEmail ?? 'your email address'}</strong>.
+        Click the link in that email to activate your account.
       </Alert>
 
       {resendState === 'sent' && (
         <Alert variant="success">
-          Verification email resent — please check your inbox (and spam folder).
+          Verification email resent — check your inbox and spam folder.
         </Alert>
       )}
       {resendState === 'error' && (
@@ -94,30 +94,30 @@ function VerifyEmailContent() {
         </Alert>
       )}
 
-      <div className="space-y-3">
-        <Button
-          variant="default"
-          size="lg"
-          className="w-full"
-          onClick={handleResend}
-          disabled={isPending || resendState === 'sent'}
-        >
-          {isPending ? 'Sending...' : resendState === 'sent' ? 'Email sent ✓' : 'Resend Verification Email'}
-        </Button>
+      <Button
+        variant="default"
+        size="lg"
+        className="w-full"
+        onClick={handleResend}
+        disabled={isPending || resendState === 'sent'}
+      >
+        {isPending ? 'Sending...' : resendState === 'sent' ? 'Email sent ✓' : 'Resend Verification Email'}
+      </Button>
 
-        <Button
-          variant="outline"
-          size="lg"
-          className="w-full"
+      <p className="text-center text-xs text-gray-500">
+        Didn&apos;t receive it? Check your spam folder or try resending.
+      </p>
+
+      <p className="text-center text-xs text-gray-500">
+        Wrong account?{' '}
+        <button
+          className="text-blue-600 hover:underline"
           onClick={handleSignOut}
           disabled={isPending}
         >
-          Sign out and use a different account
-        </Button>
-      </div>
-
-      <p className="text-center text-xs text-gray-500">
-        Already verified?{' '}
+          Sign out
+        </button>
+        {' · '}
         <button
           className="text-blue-600 hover:underline"
           onClick={() => router.push('/login')}

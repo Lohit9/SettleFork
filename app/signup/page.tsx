@@ -96,7 +96,7 @@ function SignupContent() {
       }
 
       if (result.requiresEmailVerification) {
-        setSuccess(true)
+        router.push('/verify-email')
       } else {
         router.push('/app/projects')
         router.refresh()

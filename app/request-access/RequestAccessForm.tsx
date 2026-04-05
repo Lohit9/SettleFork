@@ -6,7 +6,7 @@ import Link from 'next/link'
 import { submitAccessRequest } from '@/lib/actions/invites'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 
-const CALENDLY = 'https://calendly.com/mine-ai/demo'
+const CALENDLY = process.env.NEXT_PUBLIC_CALENDLY_SCOPING_URL || 'https://calendly.com/mine-ai/migration-scoping-call'
 
 const ROLE_OPTIONS = [
   { value: '', label: 'Select one…' },
@@ -106,12 +106,12 @@ export default function RequestAccessForm() {
             <h1 className="text-2xl font-bold text-gray-900 mb-2">Thanks, {submittedName}!</h1>
             <p className="text-gray-500 text-sm leading-relaxed mb-8">
               We&apos;re reviewing your request and will be in touch at{' '}
-              <span className="font-medium text-gray-700">{submittedEmail}</span> within 24 hours.
+              <span className="font-medium text-gray-700">{submittedEmail}</span> within 48 hours.
             </p>
 
             <div className="border-t border-gray-100 pt-7">
               <p className="text-sm font-medium text-gray-700 mb-4">
-                Want to see Mine in action right away?
+                Want to get started sooner?
               </p>
               <a
                 href={CALENDLY}
@@ -119,7 +119,7 @@ export default function RequestAccessForm() {
                 rel="noopener noreferrer"
                 className="block w-full bg-[#2563EB] hover:bg-[#1D4ED8] text-white font-semibold py-3 rounded-xl transition-all text-sm text-center mb-3"
               >
-                Book a Demo
+                Book a Scoping Call
               </a>
               <Link href="/" className="block text-sm text-gray-500 hover:text-gray-700 transition-colors">
                 ← Back to home
