@@ -13,7 +13,7 @@ import {
 } from '@/components/ui/select'
 import { adminCreateOrganization, adminGetOrgMembers } from '@/lib/actions/organizations'
 import { adminCreateOrgInvite, adminGetPendingInvites, adminRevokeInvite } from '@/lib/actions/org-invites'
-import type { OrgMembership, OrgInvite, OrgRole } from '@/lib/types/organizations'
+import type { OrgInvite, OrgRole } from '@/lib/types/organizations'
 
 interface OrgRow {
   id: string
@@ -39,8 +39,10 @@ function Toast({ message, onClose }: { message: string; onClose: () => void }) {
   )
 }
 
+type AdminMember = { id: string; user_id: string; role: OrgRole; joined_at: string; user_name: string; user_email: string }
+
 function OrgDetail({ org }: { org: OrgRow }) {
-  const [members, setMembers] = useState<OrgMembership[]>([])
+  const [members, setMembers] = useState<AdminMember[]>([])
   const [invites, setInvites] = useState<OrgInvite[]>([])
   const [inviteEmail, setInviteEmail] = useState('')
   const [inviteRole, setInviteRole] = useState<OrgRole>('owner')
