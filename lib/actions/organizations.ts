@@ -310,5 +310,43 @@ export async function updateOrganization(
   if (error) return { success: false, error: error.message }
 
   revalidatePath('/app/settings')
+  revalidatePath('/app/settings/organization')
+  return { success: true }
+}
+
+export async function leaveOrganization(
+  orgId: string
+): Promise<{ success: boolean; error?: string }> {
+  const supabase = await createClient()
+  const { data: { user } } = await supabase.auth.getUser()
+  if (!user) return { success: false, error: 'Not authenticated' }
+
+  // Check if user is the last owner — block leaving if so
+  const { data: owners } = await supabase
+    .from('org_memberships')
+    .select('user_id')
+    .eq('org_id', orgId)
+    .eq('role', 'owner')
+
+  const isLastOwner =
+    (owners ?? []).length === 1 && owners![0].user_id === user.id
+
+  if (isLastOwner) {
+    return {
+      success: false,
+      error: 'You are the only owner. Transfer ownership to another member before leaving.',
+    }
+  }
+
+  const { error } = await supabase
+    .from('org_memberships')
+    .delete()
+    .eq('org_id', orgId)
+    .eq('user_id', user.id)
+
+  if (error) return { success: false, error: error.message }
+
+  revalidatePath('/app/settings/organization')
+  revalidatePath('/app/projects')
   return { success: true }
 }

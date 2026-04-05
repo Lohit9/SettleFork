@@ -46,7 +46,7 @@ function Tip({ label, children }: { label: string; children: React.ReactNode }) 
 const NAV_ITEMS = [
   { label: 'Home',     href: '/app/projects', Icon: Home,       matchFn: (p: string) => p === '/app/projects' || p === '/app' },
   { label: 'Support',  href: '/app/support',  Icon: HelpCircle, matchFn: (p: string) => p.startsWith('/app/support') },
-  { label: 'Settings', href: '/app/settings', Icon: Settings,   matchFn: (p: string) => p === '/app/settings' || p === '/app/profile' },
+  { label: 'Settings', href: '/app/settings', Icon: Settings,   matchFn: (p: string) => p.startsWith('/app/settings') || p === '/app/profile' },
 ]
 
 export default function SidebarShell({
