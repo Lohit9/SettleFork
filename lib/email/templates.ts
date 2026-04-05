@@ -151,8 +151,8 @@ export function accessRequestConfirmationEmail(
   isAssessment: boolean
 ): { subject: string; html: string } {
   const bodyText = isAssessment
-    ? "I'm reviewing your migration details and will follow up within 48 hours."
-    : "Thanks for your interest in Mine. I'll review your request and follow up within 48 hours."
+    ? "Thanks for submitting your migration details. I'll review your request and get back to you within 48 hours."
+    : "Thanks for your interest in Mine. I'll review your request and get back to you within 48 hours."
 
   return {
     subject: isAssessment
@@ -162,14 +162,14 @@ export function accessRequestConfirmationEmail(
       body: `
         <p style="margin:0 0 16px;">Hi ${firstName},</p>
         <p style="margin:0 0 16px;">${bodyText}</p>
-        <p style="margin:0 0 16px;">If you'd like to chat sooner:</p>
-        <p style="margin:0 0 24px;">
+        <p style="margin:0 0 16px;">If you'd like to book time sooner:</p>
+        <p style="margin:0 0 16px;">
           <a href="${CALENDLY_SCOPING}"
              style="display:inline-block;background:#2563EB;color:white;font-weight:600;font-size:15px;padding:12px 28px;border-radius:8px;text-decoration:none;">
             Book a Scoping Call
           </a>
         </p>
-        <p style="margin:0 0 16px;color:#64748b;">Otherwise, I'll be in touch soon — just reply to this email anytime.</p>
+        <p style="margin:0 0 16px;color:#64748b;">Otherwise, I'll be in touch soon. Feel free to reply to this email anytime.</p>
       `,
       signOff: { name: 'Kaan Dincer', title: 'Founder & CEO, Mine' },
     }),
