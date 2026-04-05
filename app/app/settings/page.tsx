@@ -67,10 +67,10 @@ export default async function SettingsPage() {
               General
             </a>
             <a
-              href="/app/settings/members"
+              href="/app/settings/organization"
               className="pb-2.5 text-sm font-medium text-gray-500 hover:text-gray-700 border-b-2 border-transparent"
             >
-              Members
+              Organization
             </a>
           </div>
         </div>
