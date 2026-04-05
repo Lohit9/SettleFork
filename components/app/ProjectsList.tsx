@@ -8,7 +8,7 @@ import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Textarea } from '@/components/ui/textarea'
 import { Badge } from '@/components/ui/badge'
-import { Plus, Database, Search } from '@/components/icons'
+import { Plus, Database, Search, Layers, FileText } from '@/components/icons'
 import { PhaseProgressBar } from '@/components/app/PhaseProgressBar'
 import { createProject } from '@/lib/actions/projects'
 import { ProjectWithStats } from '@/lib/types/database'
@@ -308,13 +308,13 @@ function NewProjectForm({ onCancel, onCreated }: { onCancel: () => void; onCreat
 
 // ── Welcome modal (first-time users) ─────────────────────────────────────
 
-function WelcomeModal({ onDismiss }: { onDismiss: () => void }) {
+function WelcomeModal({ onDismiss, onGetStarted }: { onDismiss: () => void; onGetStarted: () => void }) {
   return (
     <div
       className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 px-4"
       onMouseDown={(e) => { if (e.target === e.currentTarget) onDismiss() }}
     >
-      <div className="bg-white rounded-2xl shadow-xl w-full max-w-[440px] p-8 text-center">
+      <div className="bg-white rounded-2xl shadow-xl w-full max-w-[460px] p-8">
         {/* Logo / icon */}
         <div className="flex justify-center mb-5">
           <div className="w-12 h-12 rounded-xl bg-blue-600 flex items-center justify-center">
@@ -322,21 +322,44 @@ function WelcomeModal({ onDismiss }: { onDismiss: () => void }) {
           </div>
         </div>
 
-        <h2 className="text-xl font-semibold text-gray-900 mb-3">Welcome to Mine!</h2>
-        <p className="text-sm text-gray-600 leading-relaxed mb-3">
-          Your account is ready. You can start exploring right away — create a project,
-          upload data, and see what Mine can do.
+        <h2 className="text-xl font-semibold text-gray-900 mb-4 text-center">Welcome to Mine</h2>
+
+        <p className="text-sm text-gray-500 mb-5 text-center">
+          Your workspace is ready. Here&apos;s how to get started:
         </p>
-        <p className="text-sm text-gray-500 leading-relaxed mb-7">
-          Our team will reach out within 24 hours to schedule a guided onboarding session
-          where we&apos;ll set up your first migration project together.
+
+        <ol className="space-y-3 mb-6 text-left">
+          <li className="flex gap-3">
+            <span className="flex-shrink-0 w-5 h-5 rounded-full bg-blue-100 text-blue-700 text-xs font-semibold flex items-center justify-center mt-0.5">1</span>
+            <span className="text-sm text-gray-700">
+              <span className="font-medium">Create a project</span> — give your migration a name and select your source and target systems
+            </span>
+          </li>
+          <li className="flex gap-3">
+            <span className="flex-shrink-0 w-5 h-5 rounded-full bg-blue-100 text-blue-700 text-xs font-semibold flex items-center justify-center mt-0.5">2</span>
+            <span className="text-sm text-gray-700">
+              <span className="font-medium">Upload your data</span> — CSV files or connect directly to your database
+            </span>
+          </li>
+          <li className="flex gap-3">
+            <span className="flex-shrink-0 w-5 h-5 rounded-full bg-blue-100 text-blue-700 text-xs font-semibold flex items-center justify-center mt-0.5">3</span>
+            <span className="text-sm text-gray-700">
+              <span className="font-medium">Mine will take it from here</span> — we&apos;ll profile your data, generate mappings, and identify quality issues automatically
+            </span>
+          </li>
+        </ol>
+
+        <p className="text-xs text-gray-400 text-center mb-6">
+          If you need help, reach out anytime at{' '}
+          <a href="mailto:info@trymine.ai" className="text-blue-600 hover:underline">info@trymine.ai</a>
+          {' '}or reply to your invite email.
         </p>
 
         <Button
-          onClick={onDismiss}
+          onClick={onGetStarted}
           className="w-full bg-blue-600 hover:bg-blue-700 text-white font-medium"
         >
-          Get Started
+          Create Your First Project
         </Button>
       </div>
     </div>
@@ -372,6 +395,12 @@ export function ProjectsList({ initialProjects, activeOrgRole }: ProjectsListPro
   const dismissWelcome = () => {
     localStorage.setItem('mine_welcome_dismissed', 'true')
     setShowWelcome(false)
+  }
+
+  const getStarted = () => {
+    localStorage.setItem('mine_welcome_dismissed', 'true')
+    setShowWelcome(false)
+    setShowCreate(true)
   }
   const [activeFilter, setActiveFilter] = useState<FilterTab>('all')
   const [search, setSearch] = useState('')
@@ -459,36 +488,62 @@ export function ProjectsList({ initialProjects, activeOrgRole }: ProjectsListPro
       {/* Project list */}
       <div className="flex-1 px-8 py-6">
         {filtered.length === 0 ? (
-          <div className="flex flex-col items-center justify-center py-24 text-center">
-            <div className="w-14 h-14 bg-gray-100 rounded-full flex items-center justify-center mb-4">
-              <Database className="w-6 h-6 text-gray-400" />
-            </div>
-            <h3 className="text-base font-medium text-gray-900 mb-2">
-              {search
-                ? 'No projects match your search'
-                : activeFilter === 'archived'
-                  ? 'No archived projects'
-                  : activeFilter === 'completed'
-                    ? 'No completed projects'
-                    : 'No projects yet'}
-            </h3>
-            <p className="text-sm text-gray-500 mb-6 max-w-xs">
-              {search
-                ? 'Try a different search term.'
-                : activeFilter === 'archived'
-                  ? 'Completed projects are automatically archived after 90 days of inactivity.'
-                  : activeFilter === 'completed'
-                    ? 'Mark a project as complete when the migration is finished.'
-                    : 'Create your first data migration project to get started.'}
-            </p>
-            {!search && activeFilter !== 'archived' && activeFilter !== 'completed' && (
-              <Button
-                onClick={() => setShowCreate(true)}
-                className="bg-blue-600 hover:bg-blue-700 text-white gap-2"
-              >
-                <Plus className="w-3.5 h-3.5" />
-                Create your first project
-              </Button>
+          <div className="flex flex-col items-center justify-center py-16 text-center">
+            {/* Non-"all" empty states — compact */}
+            {(search || activeFilter === 'archived' || activeFilter === 'completed') ? (
+              <>
+                <div className="w-14 h-14 bg-gray-100 rounded-full flex items-center justify-center mb-4">
+                  <Database className="w-6 h-6 text-gray-400" />
+                </div>
+                <h3 className="text-base font-medium text-gray-900 mb-2">
+                  {search
+                    ? 'No projects match your search'
+                    : activeFilter === 'archived'
+                      ? 'No archived projects'
+                      : 'No completed projects'}
+                </h3>
+                <p className="text-sm text-gray-500 max-w-xs">
+                  {search
+                    ? 'Try a different search term.'
+                    : activeFilter === 'archived'
+                      ? 'Completed projects are automatically archived after 90 days.'
+                      : 'Mark a project as complete when the migration is finished.'}
+                </p>
+              </>
+            ) : (
+              /* First project — rich empty state */
+              <div className="max-w-md mx-auto">
+                <div className="w-12 h-12 bg-blue-50 rounded-xl flex items-center justify-center mx-auto mb-4">
+                  <Layers className="h-6 w-6 text-blue-600" />
+                </div>
+                <h3 className="text-lg font-semibold text-slate-900 mb-2">Create your first project</h3>
+                <p className="text-sm text-slate-500 mb-6">
+                  A project represents one migration — from source system to target system.
+                  Start by uploading a CSV file or connecting to your database.
+                </p>
+                {canCreateProject && (
+                  <Button
+                    onClick={() => setShowCreate(true)}
+                    className="bg-blue-600 hover:bg-blue-700 text-white gap-2"
+                  >
+                    <Plus className="w-3.5 h-3.5" />
+                    New Project
+                  </Button>
+                )}
+                <div className="mt-8 text-left border-t border-gray-100 pt-6">
+                  <p className="text-xs font-medium text-slate-400 uppercase tracking-wide mb-3">What you&apos;ll need</p>
+                  <ul className="text-sm text-slate-600 space-y-2">
+                    <li className="flex items-start gap-2">
+                      <FileText className="h-4 w-4 text-slate-400 mt-0.5 shrink-0" />
+                      Source data — CSV exports or database connection credentials
+                    </li>
+                    <li className="flex items-start gap-2">
+                      <Database className="h-4 w-4 text-slate-400 mt-0.5 shrink-0" />
+                      Target schema — DDL, ERD, or data dictionary of your target system
+                    </li>
+                  </ul>
+                </div>
+              </div>
             )}
           </div>
         ) : (
@@ -507,7 +562,7 @@ export function ProjectsList({ initialProjects, activeOrgRole }: ProjectsListPro
         />
       )}
 
-      {showWelcome && <WelcomeModal onDismiss={dismissWelcome} />}
+      {showWelcome && <WelcomeModal onDismiss={dismissWelcome} onGetStarted={getStarted} />}
     </div>
   )
 }

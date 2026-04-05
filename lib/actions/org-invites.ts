@@ -5,7 +5,10 @@ import { revalidatePath } from 'next/cache'
 import { createClient } from '@/lib/supabase/server'
 import { supabaseAdmin } from '@/lib/supabase/admin'
 import type { OrgInvite, OrgRole } from '@/lib/types/organizations'
+import { Resend } from 'resend'
+import { orgInviteEmail } from '@/lib/email/templates'
 
+const resend = new Resend(process.env.RESEND_API_KEY)
 const APP_URL = process.env.NEXT_PUBLIC_APP_URL ?? 'https://trymine.ai'
 
 export async function createOrgInvite(
@@ -64,27 +67,21 @@ export async function createOrgInvite(
     .single()
 
   const inviterName = user.user_metadata?.full_name || user.email || 'A team member'
+  const { subject, html } = orgInviteEmail({
+    orgName: org?.name ?? 'your team',
+    role,
+    inviterName,
+    token: invite.token,
+    appUrl: APP_URL,
+  })
 
-  try {
-    const res = await fetch(`${APP_URL}/api/notify-access-request`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        type: 'org-invite',
-        email: email.trim().toLowerCase(),
-        orgName: org?.name ?? 'your team',
-        role,
-        inviterName,
-        token: invite.token,
-      }),
-    })
-    if (!res.ok) {
-      const errBody = await res.text()
-      console.error('[createOrgInvite] Email send failed:', res.status, errBody)
-    }
-  } catch (err) {
-    console.error('[createOrgInvite] Email fetch failed:', err)
-  }
+  resend.emails.send({
+    from: 'Kaan from Mine <info@trymine.ai>',
+    to: email.trim().toLowerCase(),
+    replyTo: 'info@trymine.ai',
+    subject,
+    html,
+  }).catch((err) => console.error('[createOrgInvite] Email send failed:', err))
 
   revalidatePath('/app/settings')
   return { invite: invite as OrgInvite }
@@ -143,27 +140,21 @@ export async function adminCreateOrgInvite(
     .single()
 
   const inviterName = user.user_metadata?.full_name || user.email || 'Mine Admin'
+  const { subject, html } = orgInviteEmail({
+    orgName: org?.name ?? 'your team',
+    role,
+    inviterName,
+    token: invite.token,
+    appUrl: APP_URL,
+  })
 
-  try {
-    const res = await fetch(`${APP_URL}/api/notify-access-request`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        type: 'org-invite',
-        email: email.trim().toLowerCase(),
-        orgName: org?.name ?? 'your team',
-        role,
-        inviterName,
-        token: invite.token,
-      }),
-    })
-    if (!res.ok) {
-      const errBody = await res.text()
-      console.error('[adminCreateOrgInvite] Email send failed:', res.status, errBody)
-    }
-  } catch (err) {
-    console.error('[adminCreateOrgInvite] Email fetch failed:', err)
-  }
+  resend.emails.send({
+    from: 'Kaan from Mine <info@trymine.ai>',
+    to: email.trim().toLowerCase(),
+    replyTo: 'info@trymine.ai',
+    subject,
+    html,
+  }).catch((err) => console.error('[adminCreateOrgInvite] Email send failed:', err))
 
   return { invite: invite as OrgInvite }
 }

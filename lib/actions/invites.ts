@@ -173,7 +173,9 @@ export async function updateAccessRequestStatus(
 // ── admin: approve request + create org + send org invite ─────────────────
 
 export async function approveAndGenerateInvite(
-  requestId: string
+  requestId: string,
+  orgNameOverride?: string,
+  roleOverride: 'owner' | 'admin' | 'editor' | 'viewer' = 'owner'
 ): Promise<{ code: string; signupUrl: string; error?: string }> {
   const user = await assertAdmin()
   if (!user) return { code: '', signupUrl: '', error: 'Not authorized' }
@@ -189,7 +191,7 @@ export async function approveAndGenerateInvite(
   }
 
   // Create an organization for this company
-  const orgName = request.company?.trim() || `${request.name}'s Workspace`
+  const orgName = orgNameOverride?.trim() || request.company?.trim() || `${request.name}'s Workspace`
   const slug = orgName.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '')
     + '-' + Math.random().toString(36).slice(2, 6)
 
@@ -210,7 +212,7 @@ export async function approveAndGenerateInvite(
   const { error: inviteError } = await supabaseAdmin.from('org_invites').insert({
     org_id: org.id,
     email: request.email.toLowerCase(),
-    role: 'editor',
+    role: roleOverride,
     token,
     invited_by: user.id,
     expires_at: expiresAt,
@@ -226,24 +228,27 @@ export async function approveAndGenerateInvite(
 
   const signupUrl = `${APP_URL}/invite/${token}`
 
-  // Send org invite email
-  try {
-    await fetch(`${APP_URL}/api/notify-access-request`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        type: 'org-invite',
-        email: request.email,
-        orgName: org.name,
-        role: 'editor',
-        inviterName: 'Kaan',
-        token,
-      }),
-    })
-  } catch (err) {
-    console.error('Org invite email failed (non-blocking):', err)
-  }
+  // Send org invite email (non-blocking)
+  const { Resend } = await import('resend')
+  const { orgInviteEmail } = await import('@/lib/email/templates')
+  const resend = new Resend(process.env.RESEND_API_KEY)
+  const recipientFirstName = request.name?.split(' ')[0] || undefined
+  const { subject, html } = orgInviteEmail({
+    recipientName: recipientFirstName,
+    orgName: org.name,
+    role: roleOverride,
+    inviterName: 'Kaan',
+    token,
+    appUrl: APP_URL,
+  })
+  resend.emails.send({
+    from: 'Kaan from Mine <info@trymine.ai>',
+    to: request.email,
+    replyTo: 'info@trymine.ai',
+    subject,
+    html,
+  }).catch((err: unknown) => console.error('Org invite email failed (non-blocking):', err))
 
-  revalidatePath('/admin/invites')
+  revalidatePath('/admin')
   return { code: token, signupUrl }
 }

@@ -7,8 +7,8 @@ import { headers } from 'next/headers'
 import { checkSignupRateLimit } from '@/lib/auth/signup-rate-limit'
 import { validateInviteCode, markInviteUsed } from '@/lib/actions/invites'
 import { acceptInvite } from '@/lib/actions/org-invites'
-import { createOrganization } from '@/lib/actions/organizations'
 import { Resend } from 'resend'
+import { adminSignupEmail, welcomeEmail } from '@/lib/email/templates'
 
 const resend = new Resend(process.env.RESEND_API_KEY)
 const APP_URL = process.env.NEXT_PUBLIC_APP_URL ?? 'https://trymine.ai'
@@ -111,10 +111,15 @@ export async function signUpWithBotProtection(payload: SignUpPayload): Promise<S
 
   // 6. Handle org membership + mark legacy invite as used.
   if (authData.user) {
+    const displayName = payload.fullName?.trim() || payload.email.split('@')[0]
+    let resolvedOrgName = `${displayName}'s Workspace`
+
     if (hasOrgInviteToken) {
       // Org invite: accept the invite (creates org_memberships row). No personal org needed.
       try {
-        await acceptInvite(payload.inviteToken!, authData.user.id)
+        const acceptResult = await acceptInvite(payload.inviteToken!, authData.user.id)
+        // Try to resolve org name for the welcome email
+        if ((acceptResult as any)?.orgName) resolvedOrgName = (acceptResult as any).orgName
       } catch (err) {
         console.error('Failed to accept org invite during signup (non-blocking):', err)
       }
@@ -125,11 +130,10 @@ export async function signUpWithBotProtection(payload: SignUpPayload): Promise<S
       try {
         // createOrganization uses the RLS-enforced client — since we just signed up,
         // the session may not be ready yet. Use supabaseAdmin to create the personal org.
-        const displayName = payload.fullName?.trim() || payload.email.split('@')[0]
         const slug = 'ws-' + Math.random().toString(36).slice(2, 14)
         const { data: newOrg } = await supabaseAdmin
           .from('organizations')
-          .insert({ name: `${displayName}'s Workspace`, slug, created_by: authData.user.id })
+          .insert({ name: resolvedOrgName, slug, created_by: authData.user.id })
           .select()
           .single()
 
@@ -144,44 +148,38 @@ export async function signUpWithBotProtection(payload: SignUpPayload): Promise<S
     }
 
     // 7. Send admin notification email (non-blocking).
-    try {
-      const { data: invite } = await supabaseAdmin
-        .from('invites')
-        .select('name, company')
-        .eq('code', (payload.inviteCode || '').trim().toUpperCase())
-        .maybeSingle()
+    const { data: invite } = await supabaseAdmin
+      .from('invites')
+      .select('name, company')
+      .eq('code', (payload.inviteCode || '').trim().toUpperCase())
+      .maybeSingle()
 
-      await resend.emails.send({
-        from: 'Mine Notifications <info@trymine.ai>',
-        to: 'info@trymine.ai',
-        replyTo: 'info@trymine.ai',
-        subject: `New Mine Signup: ${payload.email}`,
-        html: `
-          <div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; max-width: 600px; padding: 24px;">
-            <h2 style="font-size: 20px; font-weight: 700; color: #0F172A; margin: 0 0 16px 0;">New User Signed Up</h2>
-            <table style="width: 100%; border-collapse: collapse; border: 1px solid #E2E8F0;">
-              <tr><td style="padding: 10px 14px; font-size: 13px; font-weight: 600; color: #475569; border-bottom: 1px solid #E2E8F0;">Email</td>
-                  <td style="padding: 10px 14px; font-size: 13px; border-bottom: 1px solid #E2E8F0;"><a href="mailto:${payload.email}" style="color:#2563EB;">${payload.email}</a></td></tr>
-              <tr><td style="padding: 10px 14px; font-size: 13px; font-weight: 600; color: #475569; border-bottom: 1px solid #E2E8F0;">Name</td>
-                  <td style="padding: 10px 14px; font-size: 13px; color: #0F172A; border-bottom: 1px solid #E2E8F0;">${invite?.name || payload.fullName || 'Not provided'}</td></tr>
-              <tr><td style="padding: 10px 14px; font-size: 13px; font-weight: 600; color: #475569; border-bottom: 1px solid #E2E8F0;">Company</td>
-                  <td style="padding: 10px 14px; font-size: 13px; color: #0F172A; border-bottom: 1px solid #E2E8F0;">${invite?.company || 'Not provided'}</td></tr>
-              <tr><td style="padding: 10px 14px; font-size: 13px; font-weight: 600; color: #475569;">Signup Method</td>
-                  <td style="padding: 10px 14px; font-size: 13px; font-family: monospace; color: #0F172A;">${hasOrgInviteToken ? 'Org invite' : payload.inviteCode}</td></tr>
-            </table>
-            <p style="margin-top: 16px; font-size: 14px; color: #475569;">They can now log in. Reach out to schedule their onboarding session.</p>
-            <div style="margin-top: 16px;">
-              <a href="${APP_URL}/admin/invites"
-                 style="display: inline-block; background: #4F46E5; color: white; padding: 11px 22px; text-decoration: none; border-radius: 8px; font-size: 14px; font-weight: 600;">
-                View Admin Dashboard →
-              </a>
-            </div>
-          </div>
-        `,
-      })
-    } catch (notifyErr) {
-      console.error('Signup notification email failed (non-blocking):', notifyErr)
-    }
+    const { subject: adminSubject, html: adminHtml } = adminSignupEmail({
+      email: payload.email,
+      name: invite?.name || payload.fullName || 'Not provided',
+      company: invite?.company || payload.companyName || undefined,
+      method: hasOrgInviteToken ? 'Org invite' : (payload.inviteCode || 'Unknown'),
+    })
+
+    resend.emails.send({
+      from: 'Mine Notifications <info@trymine.ai>',
+      to: 'info@trymine.ai',
+      replyTo: 'info@trymine.ai',
+      subject: adminSubject,
+      html: adminHtml,
+    }).catch((err) => console.error('Signup notification email failed (non-blocking):', err))
+
+    // 8. Send welcome email to the new user (non-blocking, fire-and-forget).
+    const firstName = displayName.split(' ')[0]
+    const { subject: welcomeSubject, html: welcomeHtml } = welcomeEmail(firstName, resolvedOrgName)
+
+    resend.emails.send({
+      from: 'Kaan from Mine <info@trymine.ai>',
+      to: payload.email,
+      replyTo: 'info@trymine.ai',
+      subject: welcomeSubject,
+      html: welcomeHtml,
+    }).catch((err) => console.error('Welcome email failed (non-blocking):', err))
   }
 
   // user present but no session → email confirmation required

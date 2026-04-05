@@ -16,10 +16,8 @@ function SignupContent() {
   const [isPending, startTransition] = useTransition()
 
   const orgToken = searchParams.get('token')
-  const legacyInvite = searchParams.get('invite')
 
   const [formData, setFormData] = useState({
-    inviteCode: '',
     fullName: '',
     email: '',
     password: '',
@@ -34,7 +32,14 @@ function SignupContent() {
     loadedAtRef.current = Date.now()
   }, [])
 
-  // Org invite token: fetch invite details
+  // No org invite token → redirect to request access
+  useEffect(() => {
+    if (!orgToken) {
+      router.replace('/request-access')
+    }
+  }, [orgToken, router])
+
+  // Org invite token: fetch invite details and pre-fill email
   useEffect(() => {
     if (orgToken) {
       getInviteByToken(orgToken).then(({ invite }) => {
@@ -46,20 +51,6 @@ function SignupContent() {
     }
   }, [orgToken])
 
-  // Legacy invite code: pre-fill from ?invite= param
-  useEffect(() => {
-    if (!orgToken && legacyInvite) {
-      setFormData((prev) => ({ ...prev, inviteCode: legacyInvite.toUpperCase() }))
-    }
-  }, [orgToken, legacyInvite])
-
-  // No token and no invite code → redirect to request access
-  useEffect(() => {
-    if (!orgToken && !legacyInvite) {
-      router.replace('/request-access')
-    }
-  }, [orgToken, legacyInvite, router])
-
   const set = (field: keyof typeof formData) =>
     (e: React.ChangeEvent<HTMLInputElement>) =>
       setFormData((prev) => ({ ...prev, [field]: e.target.value }))
@@ -68,11 +59,6 @@ function SignupContent() {
     e.preventDefault()
     setError(null)
 
-    const isOrgFlow = !!orgToken
-    if (!isOrgFlow && !formData.inviteCode.trim()) {
-      setError('An invite code is required to sign up.')
-      return
-    }
     if (!formData.fullName || !formData.email || !formData.password) {
       setError('Please fill in all required fields.')
       return
@@ -95,9 +81,8 @@ function SignupContent() {
 
     startTransition(async () => {
       const result = await signUpWithBotProtection({
-        ...(isOrgFlow
-          ? { inviteToken: orgToken!, inviteCode: '' }
-          : { inviteCode: formData.inviteCode.trim().toUpperCase() }),
+        inviteToken: orgToken!,
+        inviteCode: '',
         fullName: formData.fullName,
         email: formData.email,
         password: formData.password,
@@ -132,38 +117,34 @@ function SignupContent() {
     )
   }
 
+  // While redirecting (no token case) show nothing meaningful
+  if (!orgToken) return null
+
   return (
     <AuthCard
       title="Create your account"
       subtitle={orgInviteInfo
         ? `Join ${orgInviteInfo.orgName} as ${orgInviteInfo.role}`
-        : "You'll need an invite code to get started"}
+        : 'Accept your invite and create an account'}
       footer={{
         text: 'Already have an account?',
         linkText: 'Sign in',
-        linkHref: orgToken ? `/login?redirect=/invite/${orgToken}` : '/login',
+        linkHref: `/login?redirect=/invite/${orgToken}`,
       }}
     >
       <form onSubmit={handleSubmit} className="space-y-4">
         {error && (
           <Alert variant="destructive" onClose={() => setError(null)}>
-            {error.includes('request-access') || error.includes('trymine.ai/request') ? (
-              <>
-                {error.split('trymine.ai/request-access')[0]}
-                <Link href="/request-access" className="underline font-medium">
-                  request early access
-                </Link>
-              </>
-            ) : (
-              error
-            )}
+            {error}
           </Alert>
         )}
 
         {orgInviteInfo && (
           <div className="bg-blue-50 border border-blue-100 rounded-lg px-4 py-3">
             <p className="text-sm text-blue-800">
-              You&apos;ve been invited to join <span className="font-semibold">{orgInviteInfo.orgName}</span> as a <span className="font-semibold capitalize">{orgInviteInfo.role}</span>.
+              You&apos;ve been invited to join{' '}
+              <span className="font-semibold">{orgInviteInfo.orgName}</span> as a{' '}
+              <span className="font-semibold capitalize">{orgInviteInfo.role}</span>.
             </p>
           </div>
         )}
@@ -173,34 +154,6 @@ function SignupContent() {
           <label htmlFor="website">Website</label>
           <input id="website" name="website" type="text" tabIndex={-1} autoComplete="off" />
         </div>
-
-        {/* Legacy invite code — only shown when no org token */}
-        {!orgToken && (
-          <div className="space-y-1.5">
-            <FormField
-              label="Invite code"
-              name="inviteCode"
-              placeholder="MINE-XXXXXX"
-              value={formData.inviteCode}
-              onChange={(e) =>
-                setFormData((prev) => ({
-                  ...prev,
-                  inviteCode: e.target.value.toUpperCase(),
-                }))
-              }
-              required
-              autoComplete="off"
-            />
-            {!legacyInvite && (
-              <p className="text-xs text-gray-500">
-                Don&apos;t have an invite code?{' '}
-                <Link href="/request-access" className="text-blue-600 hover:text-blue-700 font-medium">
-                  Request access
-                </Link>
-              </p>
-            )}
-          </div>
-        )}
 
         <FormField
           label="Full name"
@@ -247,11 +200,7 @@ function SignupContent() {
         />
 
         <Button type="submit" variant="default" size="lg" className="w-full" disabled={isPending}>
-          {isPending
-            ? 'Creating account…'
-            : orgToken
-              ? 'Create Account & Join'
-              : 'Create account'}
+          {isPending ? 'Creating account…' : 'Create Account & Join'}
         </Button>
       </form>
     </AuthCard>
