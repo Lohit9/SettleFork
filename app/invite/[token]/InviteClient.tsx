@@ -42,6 +42,7 @@ export default function InviteClient({ token, orgName, role, inviterName, email,
   // Signup form state
   const [fullName, setFullName] = useState('')
   const [password, setPassword] = useState('')
+  const [confirmPassword, setConfirmPassword] = useState('')
 
   const handleAccept = () => {
     if (!userId) return
@@ -59,6 +60,14 @@ export default function InviteClient({ token, orgName, role, inviterName, email,
   const handleSignupAndJoin = (e: React.FormEvent) => {
     e.preventDefault()
     if (!fullName.trim() || !password) return
+    if (password.length < 8) {
+      setError('Password must be at least 8 characters')
+      return
+    }
+    if (password !== confirmPassword) {
+      setError('Passwords do not match')
+      return
+    }
     setError(null)
     startTransition(async () => {
       const result = await signUpWithBotProtection({
@@ -183,9 +192,21 @@ export default function InviteClient({ token, orgName, role, inviterName, email,
                 className="mt-1"
               />
             </div>
+            <div>
+              <Label htmlFor="confirmPassword" className="text-sm font-medium text-gray-700">Confirm Password</Label>
+              <Input
+                id="confirmPassword"
+                type="password"
+                value={confirmPassword}
+                onChange={(e) => setConfirmPassword(e.target.value)}
+                placeholder="Confirm your password"
+                required
+                className="mt-1"
+              />
+            </div>
             <Button
               type="submit"
-              disabled={isPending || !fullName.trim() || password.length < 8}
+              disabled={isPending || !fullName.trim() || password.length < 8 || !confirmPassword}
               className="w-full bg-blue-600 hover:bg-blue-700 text-white"
             >
               {isPending ? 'Creating account...' : 'Create Account & Join'}
