@@ -2,6 +2,8 @@
 
 import { revalidatePath } from 'next/cache'
 import { createClient } from '@/lib/supabase/server'
+import { supabaseAdmin } from '@/lib/supabase/admin'
+import { requireProjectPermission } from '@/lib/actions/role-resolution'
 import { callClaude } from '@/lib/ai/claude'
 import { checkAIRateLimit } from '@/lib/ai/rate-limit'
 import { buildAIContext, formatSchemaForPrompt, formatDocumentsForPrompt } from '@/lib/ai/context-builder'
@@ -536,12 +538,10 @@ export async function getMappings(projectId: string): Promise<MappingsResult | n
   const { data: { user } } = await supabase.auth.getUser()
   if (!user) return null
 
-  // Verify project ownership
   const { data: project } = await supabase
     .from('projects')
     .select('id')
     .eq('id', projectId)
-    .eq('user_id', user.id)
     .single()
   if (!project) return null
 
@@ -736,6 +736,11 @@ export async function updateFieldMappingStatus(
   const { data: { user } } = await supabase.auth.getUser()
   if (!user) return { success: false, error: 'Not authenticated' }
 
+  const { data: fmLookup } = await supabaseAdmin.from('field_mappings').select('table_mapping_id, table_mappings!inner(project_id)').eq('id', fieldMappingId).single()
+  if (!fmLookup) return { success: false, error: 'Mapping not found' }
+  const perm = await requireProjectPermission((fmLookup as any).table_mappings.project_id, 'editor')
+  if (!perm.allowed) return { success: false, error: perm.error }
+
   // Fetch the FM before updating so we can run promotion logic and logging
   const { data: fmBefore } = await supabase
     .from('field_mappings')
@@ -833,6 +838,11 @@ export async function updateTableMappingStatus(
   const { data: { user } } = await supabase.auth.getUser()
   if (!user) return { success: false, error: 'Not authenticated' }
 
+  const { data: tmLookup } = await supabaseAdmin.from('table_mappings').select('project_id').eq('id', tableMappingId).single()
+  if (!tmLookup) return { success: false, error: 'Table mapping not found' }
+  const perm = await requireProjectPermission(tmLookup.project_id, 'editor')
+  if (!perm.allowed) return { success: false, error: perm.error }
+
   const { error } = await supabase
     .from('table_mappings')
     .update({ status })
@@ -857,6 +867,11 @@ export async function editFieldMapping(
   const { data: { user } } = await supabase.auth.getUser()
   if (!user) return { success: false, error: 'Not authenticated' }
 
+  const { data: fmLookup } = await supabaseAdmin.from('field_mappings').select('table_mapping_id, table_mappings!inner(project_id)').eq('id', fieldMappingId).single()
+  if (!fmLookup) return { success: false, error: 'Mapping not found' }
+  const perm = await requireProjectPermission((fmLookup as any).table_mappings.project_id, 'editor')
+  if (!perm.allowed) return { success: false, error: perm.error }
+
   const { error } = await supabase
     .from('field_mappings')
     .update({ ...updates, status: 'needs_review' })
@@ -878,6 +893,11 @@ export async function addManualFieldMapping(
   const supabase = await createClient()
   const { data: { user } } = await supabase.auth.getUser()
   if (!user) return { success: false, error: 'Not authenticated' }
+
+  const { data: tmLookup } = await supabaseAdmin.from('table_mappings').select('project_id').eq('id', tableMappingId).single()
+  if (!tmLookup) return { success: false, error: 'Table mapping not found' }
+  const perm = await requireProjectPermission(tmLookup.project_id, 'editor')
+  if (!perm.allowed) return { success: false, error: perm.error }
 
   const defaultReasoning = isContributing ? 'Contributing source — manually mapped by user' : 'Manually mapped by user'
   const { data, error } = await supabase
@@ -913,11 +933,13 @@ export async function addManualTableMapping(
   const { data: { user } } = await supabase.auth.getUser()
   if (!user) return { success: false, error: 'Not authenticated' }
 
+  const perm = await requireProjectPermission(projectId, 'editor')
+  if (!perm.allowed) return { success: false, error: perm.error }
+
   const { data: project } = await supabase
     .from('projects')
     .select('id')
     .eq('id', projectId)
-    .eq('user_id', user.id)
     .single()
   if (!project) return { success: false, error: 'Project not found' }
 
@@ -972,21 +994,14 @@ export async function regenerateFieldMappings(
   const { data: { user } } = await supabase.auth.getUser()
   if (!user) return { success: false, fieldCount: 0, error: 'Not authenticated' }
 
-  // Verify ownership by tracing through project
-  const { data: tm } = await supabase
+  const { data: tm } = await supabaseAdmin
     .from('table_mappings')
     .select('id, project_id')
     .eq('id', tableMappingId)
     .single()
   if (!tm) return { success: false, fieldCount: 0, error: 'Table mapping not found' }
-
-  const { data: proj } = await supabase
-    .from('projects')
-    .select('id')
-    .eq('id', tm.project_id)
-    .eq('user_id', user.id)
-    .single()
-  if (!proj) return { success: false, fieldCount: 0, error: 'Access denied' }
+  const perm = await requireProjectPermission(tm.project_id, 'editor')
+  if (!perm.allowed) return { success: false, fieldCount: 0, error: perm.error }
 
   // Delete all existing field mappings for this table pair
   const { error: deleteError } = await supabase
@@ -1025,6 +1040,11 @@ export async function deleteFieldMapping(
   const supabase = await createClient()
   const { data: { user } } = await supabase.auth.getUser()
   if (!user) return { success: false, error: 'Not authenticated' }
+
+  const { data: fmLookupDel } = await supabaseAdmin.from('field_mappings').select('table_mapping_id, table_mappings!inner(project_id)').eq('id', fieldMappingId).single()
+  if (!fmLookupDel) return { success: false, error: 'Mapping not found' }
+  const perm = await requireProjectPermission((fmLookupDel as any).table_mappings.project_id, 'editor')
+  if (!perm.allowed) return { success: false, error: perm.error }
 
   // Fetch before deleting so we can promote a contributor and revalidate
   const { data: fmBefore } = await supabase
@@ -1075,7 +1095,10 @@ export async function deleteTableMapping(
   const { data: { user } } = await supabase.auth.getUser()
   if (!user) return { success: false, error: 'Not authenticated' }
 
-  const { data: tm } = await supabase.from('table_mappings').select('project_id').eq('id', tableMappingId).single()
+  const { data: tm } = await supabaseAdmin.from('table_mappings').select('project_id').eq('id', tableMappingId).single()
+  if (!tm) return { success: false, error: 'Table mapping not found' }
+  const perm = await requireProjectPermission(tm.project_id, 'editor')
+  if (!perm.allowed) return { success: false, error: perm.error }
 
   const { error } = await supabase.from('table_mappings').delete().eq('id', tableMappingId)
   if (error) return { success: false, error: error.message }
@@ -1094,6 +1117,11 @@ export async function approveAllFieldMappings(
   const { data: { user } } = await supabase.auth.getUser()
   if (!user) return { success: false, error: 'Not authenticated' }
 
+  const { data: tmLookupApprove } = await supabaseAdmin.from('table_mappings').select('project_id').eq('id', tableMappingId).single()
+  if (!tmLookupApprove) return { success: false, error: 'Table mapping not found' }
+  const perm = await requireProjectPermission(tmLookupApprove.project_id, 'editor')
+  if (!perm.allowed) return { success: false, error: perm.error }
+
   const { error: fmErr } = await supabase
     .from('field_mappings').update({ status: 'approved' }).eq('table_mapping_id', tableMappingId)
   if (fmErr) return { success: false, error: fmErr.message }
@@ -1110,6 +1138,11 @@ export async function rejectAllFieldMappings(
   const supabase = await createClient()
   const { data: { user } } = await supabase.auth.getUser()
   if (!user) return { success: false, error: 'Not authenticated' }
+
+  const { data: tmLookupReject } = await supabaseAdmin.from('table_mappings').select('project_id').eq('id', tableMappingId).single()
+  if (!tmLookupReject) return { success: false, error: 'Table mapping not found' }
+  const perm = await requireProjectPermission(tmLookupReject.project_id, 'editor')
+  if (!perm.allowed) return { success: false, error: perm.error }
 
   const { error } = await supabase
     .from('field_mappings').update({ status: 'rejected' }).eq('table_mapping_id', tableMappingId)
@@ -1130,6 +1163,9 @@ export async function approveHighConfidenceMappings(
   const supabase = await createClient()
   const { data: { user } } = await supabase.auth.getUser()
   if (!user) return { success: false, count: 0, error: 'Not authenticated' }
+
+  const perm = await requireProjectPermission(projectId, 'editor')
+  if (!perm.allowed) return { success: false, count: 0, error: perm.error }
 
   const { data: tms } = await supabase.from('table_mappings').select('id').eq('project_id', projectId)
   if (!tms?.length) return { success: true, count: 0 }
@@ -1172,9 +1208,8 @@ export async function suggestRemainingMappings(
 
   const { data: tm } = await supabase.from('table_mappings').select('*').eq('id', tableMappingId).single()
   if (!tm) return { success: false, newMappingsCount: 0, error: 'Table mapping not found' }
-
-  const { data: proj } = await supabase.from('projects').select('id').eq('id', tm.project_id).eq('user_id', user.id).single()
-  if (!proj) return { success: false, newMappingsCount: 0, error: 'Not authorized' }
+  const perm = await requireProjectPermission(tm.project_id, 'editor')
+  if (!perm.allowed) return { success: false, newMappingsCount: 0, error: perm.error }
 
   const { data: existingFMs } = await supabase.from('field_mappings').select('source_field_id, target_field_id').eq('table_mapping_id', tableMappingId)
   const mappedSrcIds = new Set((existingFMs ?? []).filter((fm) => fm.source_field_id).map((fm) => fm.source_field_id as string))
@@ -1345,8 +1380,8 @@ export async function mapUnmappedField(
   const { data: { user } } = await supabase.auth.getUser()
   if (!user) return { success: false, error: 'Not authenticated' }
 
-  const { data: proj } = await supabase.from('projects').select('id').eq('id', projectId).eq('user_id', user.id).single()
-  if (!proj) return { success: false, error: 'Not authorized' }
+  const perm = await requireProjectPermission(projectId, 'editor')
+  if (!perm.allowed) return { success: false, error: perm.error }
 
   const { data: sf } = await supabase.from('fields').select('table_id').eq('id', sourceFieldId).single()
   const { data: tf } = await supabase.from('fields').select('table_id').eq('id', targetFieldId).single()
@@ -1394,6 +1429,9 @@ export async function createValueAssignment(
   const supabase = await createClient()
   const { data: { user } } = await supabase.auth.getUser()
   if (!user) return { success: false, error: 'Not authenticated' }
+
+  const perm = await requireProjectPermission(projectId, 'editor')
+  if (!perm.allowed) return { success: false, error: perm.error }
 
   const { data: existing } = await supabase
     .from('field_mappings')

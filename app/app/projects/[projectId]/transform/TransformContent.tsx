@@ -41,6 +41,8 @@ import StagingWarningPopup from '@/components/StagingWarningPopup'
 import FKCascadePrompt from '@/components/app/FKCascadePrompt'
 import { findFKDependents, cascadeTransformToFKs } from '@/lib/actions/fk-cascade'
 import type { FKDependent } from '@/lib/actions/fk-cascade'
+import { useProjectRole } from '@/lib/hooks/useProjectRole'
+import { RoleTooltip } from '@/components/app/RoleTooltip'
 
 // ── Types ──────────────────────────────────────────────────────────────────────
 
@@ -165,6 +167,8 @@ function getSmartPlaceholder(field: FieldItem): string {
 
 export default function TransformContent({ projectId, projectName, initialData, isArchived = false }: Props) {
   const router = useRouter()
+  const { can } = useProjectRole(projectId)
+  const canEdit = can('edit')
   const [data, setData] = useState<TransformPageData>(initialData)
   const [selectedMappingId, setSelectedMappingId] = useState<string | null>(null)
   const [expandedDatasets, setExpandedDatasets] = useState<Set<string>>(
@@ -346,7 +350,7 @@ export default function TransformContent({ projectId, projectName, initialData, 
 
     previewTimeout.current = setTimeout(async () => {
       try {
-        if (previewMode === 'distinct') {
+        if (previewMode === 'distinct' || !canEdit) {
           const result = await previewTransformDistinct(
             selectedMappingId,
             sql,
@@ -438,14 +442,19 @@ export default function TransformContent({ projectId, projectName, initialData, 
     try {
       const result = await autoSaveTransform(lt.transformationId, lt.sql, lt.description, lt.status)
       if (result.success) {
-        // Patch the in-memory tree so handleSelectField reads fresh data on field switch
         refreshFieldTransformContent(lt.transformationId, lt.sql, lt.description, lt.status)
+        setSaveStatus('saved')
+        if (savedFadeTimer.current) clearTimeout(savedFadeTimer.current)
+        savedFadeTimer.current = setTimeout(() => setSaveStatus('idle'), 2500)
+      } else {
+        isDirtyRef.current = true
+        setSaveStatus('idle')
+        showToast(result.error ?? 'Auto-save failed', 'error')
       }
-      setSaveStatus('saved')
-      if (savedFadeTimer.current) clearTimeout(savedFadeTimer.current)
-      savedFadeTimer.current = setTimeout(() => setSaveStatus('idle'), 2500)
     } catch {
+      isDirtyRef.current = true
       setSaveStatus('idle')
+      showToast('Auto-save failed', 'error')
     }
   }
 
@@ -464,8 +473,11 @@ export default function TransformContent({ projectId, projectName, initialData, 
       const fmId = selectedMappingIdRef.current
       if (autoSaveTimerRef.current) clearTimeout(autoSaveTimerRef.current)
       if (isDirtyRef.current && lt?.transformationId && fmId) {
-        // Fire-and-forget — don't block unmount
-        autoSaveTransform(lt.transformationId, lt.sql, lt.description, lt.status).catch(() => {})
+        autoSaveTransform(lt.transformationId, lt.sql, lt.description, lt.status)
+          .then((r) => {
+            if (!r.success) showToast(r.error ?? 'Auto-save failed', 'error')
+          })
+          .catch(() => showToast('Auto-save failed', 'error'))
       }
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -773,13 +785,23 @@ export default function TransformContent({ projectId, projectName, initialData, 
       return
     }
 
-    const result = await cascadeTransformToFKs(
-      selectedFmIds,
-      fkCascadeData.pkTransformSQL,
-      localTransform?.description ?? '',
-      fkCascadeData.pkTableName,
-      fkCascadeData.pkFieldName
-    )
+    const pkSnapshot = fkCascadeData
+    let result: { success: boolean; cascadedCount: number; error?: string }
+    try {
+      result = await cascadeTransformToFKs(
+        selectedFmIds,
+        pkSnapshot.pkTransformSQL,
+        localTransform?.description ?? '',
+        pkSnapshot.pkTableName,
+        pkSnapshot.pkFieldName
+      )
+    } catch {
+      setShowFKCascade(false)
+      setFKCascadeData(null)
+      pendingApplyRowsRef.current = 0
+      showToast('Cascade failed — add transforms to FK fields manually.', 'error')
+      return
+    }
 
     setShowFKCascade(false)
     const rows = pendingApplyRowsRef.current
@@ -787,14 +809,13 @@ export default function TransformContent({ projectId, projectName, initialData, 
     setFKCascadeData(null)
 
     if (result.success && result.cascadedCount > 0) {
-      // Refresh sidebar badges for cascaded fields — show as 'applied' (green Transformed)
       for (const fmId of selectedFmIds) {
         refreshFieldTransformation(
           fmId,
           null,
-          fkCascadeData.pkTransformSQL,
+          pkSnapshot.pkTransformSQL,
           'ai',
-          `Cascaded from ${fkCascadeData.pkTableName}.${fkCascadeData.pkFieldName}: ${localTransform?.description ?? ''}`,
+          `Cascaded from ${pkSnapshot.pkTableName}.${pkSnapshot.pkFieldName}: ${localTransform?.description ?? ''}`,
           'applied'
         )
       }
@@ -804,7 +825,9 @@ export default function TransformContent({ projectId, projectName, initialData, 
       )
     } else {
       showToast(
-        `Applied to ${rows.toLocaleString()} rows. Cascade failed — add transforms to FK fields manually.`,
+        result.error
+          ? `Applied to ${rows.toLocaleString()} rows. ${result.error}`
+          : `Applied to ${rows.toLocaleString()} rows. Cascade failed — add transforms to FK fields manually.`,
         'error'
       )
     }
@@ -838,12 +861,14 @@ export default function TransformContent({ projectId, projectName, initialData, 
 
   function executeStageAll() {
     startStaging(async () => {
-      const result = await stageAllData(projectId)
-      if (!result.success && result.error) {
-        setStagingError(result.error)
-        showToast('Staging failed: ' + result.error, 'error')
-        return
-      }
+      try {
+        const result = await stageAllData(projectId)
+        if (!result.success) {
+          const msg = result.error ?? 'Staging failed'
+          setStagingError(msg)
+          showToast('Staging failed: ' + msg, 'error')
+          return
+        }
       const totalRows = result.tables.reduce((s, t) => s + t.rowCount, 0)
       const flaggedRows = result.tables.reduce((s, t) => s + t.flaggedRows, 0)
       const flagMsg = flaggedRows > 0 ? ` · ${flaggedRows.toLocaleString()} row${flaggedRows !== 1 ? 's' : ''} flagged` : ''
@@ -853,6 +878,11 @@ export default function TransformContent({ projectId, projectName, initialData, 
       )
       setStaleTableMappingIds(new Set())
       router.refresh()
+      } catch (e) {
+        const msg = e instanceof Error ? e.message : 'Staging failed'
+        setStagingError(msg)
+        showToast(msg, 'error')
+      }
     })
   }
 
@@ -1054,22 +1084,25 @@ export default function TransformContent({ projectId, projectName, initialData, 
           {stagingError && (
             <p className="text-xs text-red-600 max-w-xs text-right">{stagingError}</p>
           )}
-          <Button
-            size="sm"
-            variant="outline"
-            className="gap-2 text-xs"
-            onClick={handleAutoGenerate}
-            disabled={isAutoGen || isStaging}
-          >
-            <Zap className="w-3 h-3" />
-            {isAutoGen ? (autoGenProgress ?? 'Generating...') : 'Auto-Generate All Transforms'}
-          </Button>
-          <Button
-            size="sm"
-            className="bg-blue-600 hover:bg-blue-700 text-white gap-2"
-            onClick={handleStageAll}
-            disabled={isStaging || isAutoGen || isCheckingIssues}
-          >
+          <RoleTooltip allowed={canEdit} requiredRole="Editor">
+            <Button
+              size="sm"
+              variant="outline"
+              className="gap-2 text-xs"
+              onClick={handleAutoGenerate}
+              disabled={isAutoGen || isStaging || !canEdit}
+            >
+              <Zap className="w-3 h-3" />
+              {isAutoGen ? (autoGenProgress ?? 'Generating...') : 'Auto-Generate All Transforms'}
+            </Button>
+          </RoleTooltip>
+          <RoleTooltip allowed={canEdit} requiredRole="Editor">
+            <Button
+              size="sm"
+              className="bg-blue-600 hover:bg-blue-700 text-white gap-2"
+              onClick={handleStageAll}
+              disabled={isStaging || isAutoGen || isCheckingIssues || !canEdit}
+            >
             <Database className="w-3 h-3" />
             {isCheckingIssues ? (
               <span className="flex items-center gap-1.5">
@@ -1083,6 +1116,7 @@ export default function TransformContent({ projectId, projectName, initialData, 
               </span>
             ) : 'Stage All Data'}
           </Button>
+          </RoleTooltip>
         </div>
       </PageHeader>
 
@@ -1243,7 +1277,12 @@ export default function TransformContent({ projectId, projectName, initialData, 
               }
               if (!tableMappingId) return null
               const result = await createValueAssignment(projectId, tableMappingId, field.id)
-              if (!result.success || !result.fieldMappingId) return null
+              if (!result.success || !result.fieldMappingId) {
+                if (!result.success) {
+                  showToast(result.error ?? 'Could not create value assignment', 'error')
+                }
+                return null
+              }
               setUnmappedFieldMappingId(result.fieldMappingId)
               return result.fieldMappingId
             }
@@ -1254,7 +1293,11 @@ export default function TransformContent({ projectId, projectName, initialData, 
                 const fmId = await ensureFieldMapping()
                 if (!fmId) return
                 const result = await suggestTransformDescription(fmId)
-                if (result.suggestion) setUnmappedDescription(result.suggestion)
+                if (!result.success || !result.suggestion) {
+                  showToast(result.error ?? 'Could not generate suggestion.', 'error')
+                  return
+                }
+                setUnmappedDescription(result.suggestion)
               } finally {
                 setUnmappedSuggesting(false)
               }
@@ -1267,13 +1310,19 @@ export default function TransformContent({ projectId, projectName, initialData, 
                 const fmId = await ensureFieldMapping()
                 if (!fmId) return
                 const genResult = await generateTransform(fmId, unmappedDescription)
-                if (genResult.sql) {
-                  setUnmappedSql(genResult.sql)
-                  setUnmappedSqlSource('ai')
-                  setUnmappedSqlExpanded(true)
-                  const prev = await previewTransformDistinct(fmId, genResult.sql)
-                  if (prev.results) setUnmappedPreviewRows(prev.results.map((r) => ({ after: r.after })))
+                if (!genResult.success || !genResult.sql) {
+                  showToast(genResult.error ?? 'Generation failed', 'error')
+                  return
                 }
+                setUnmappedSql(genResult.sql)
+                setUnmappedSqlSource('ai')
+                setUnmappedSqlExpanded(true)
+                const prev = await previewTransformDistinct(fmId, genResult.sql)
+                if (!prev.success) {
+                  showToast(prev.error ?? 'Preview failed', 'error')
+                  return
+                }
+                if (prev.results) setUnmappedPreviewRows(prev.results.map((r) => ({ after: r.after })))
               } finally {
                 setUnmappedGenerating(false)
               }
@@ -1287,7 +1336,11 @@ export default function TransformContent({ projectId, projectName, initialData, 
                 const sb = createClient()
                 const { data: tfData } = await sb.from('transformations').select('id').eq('field_mapping_id', unmappedFieldMappingId).maybeSingle()
                 if (tfData?.id) {
-                  await autoSaveTransform(tfData.id, unmappedSql, unmappedDescription)
+                  const saveRes = await autoSaveTransform(tfData.id, unmappedSql, unmappedDescription)
+                  if (!saveRes.success) {
+                    showToast(saveRes.error ?? 'Save failed', 'error')
+                    return
+                  }
                 }
                 router.refresh()
                 setSelectedMappingId(unmappedFieldMappingId)
@@ -1352,36 +1405,43 @@ export default function TransformContent({ projectId, projectName, initialData, 
                       value={unmappedDescription}
                       onChange={(e) => setUnmappedDescription(e.target.value)}
                       placeholder={smartPlaceholder}
-                      className="min-h-20 resize-none text-sm"
+                      readOnly={!canEdit}
+                      className={`min-h-20 resize-none text-sm ${!canEdit ? 'opacity-60 cursor-not-allowed' : ''}`}
                       onKeyDown={(e) => { if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) handleUnmappedGenerate() }}
                     />
                     {/* Action row — same layout as regular editor */}
                     <div className="mt-3 flex items-center gap-2 flex-wrap">
-                      <Button
-                        variant="outline"
-                        className="gap-1.5 text-sm border-gray-300 text-gray-700 hover:text-blue-700 hover:border-blue-300 hover:bg-blue-50"
-                        onClick={handleUnmappedSuggest}
-                        disabled={unmappedSuggesting || unmappedGenerating}
-                      >
-                        {unmappedSuggesting
-                          ? <span className="w-3.5 h-3.5 border-2 border-gray-400 border-t-blue-500 rounded-full animate-spin" />
-                          : <Sparkles className="w-3.5 h-3.5" />}
-                        {unmappedSuggesting ? 'Suggesting...' : 'AI Suggest'}
-                      </Button>
-                      <Button
-                        className="bg-blue-600 hover:bg-blue-700 text-white gap-2"
-                        onClick={handleUnmappedGenerate}
-                        disabled={unmappedGenerating || unmappedSuggesting || !unmappedDescription.trim()}
-                      >
+                      <RoleTooltip allowed={canEdit} requiredRole="Editor">
+                        <Button
+                          variant="outline"
+                          className="gap-1.5 text-sm border-gray-300 text-gray-700 hover:text-blue-700 hover:border-blue-300 hover:bg-blue-50"
+                          onClick={handleUnmappedSuggest}
+                          disabled={unmappedSuggesting || unmappedGenerating || !canEdit}
+                        >
+                          {unmappedSuggesting
+                            ? <span className="w-3.5 h-3.5 border-2 border-gray-400 border-t-blue-500 rounded-full animate-spin" />
+                            : <Sparkles className="w-3.5 h-3.5" />}
+                          {unmappedSuggesting ? 'Suggesting...' : 'AI Suggest'}
+                        </Button>
+                      </RoleTooltip>
+                      <RoleTooltip allowed={canEdit} requiredRole="Editor">
+                        <Button
+                          className="bg-blue-600 hover:bg-blue-700 text-white gap-2"
+                          onClick={handleUnmappedGenerate}
+                          disabled={unmappedGenerating || unmappedSuggesting || !unmappedDescription.trim() || !canEdit}
+                        >
                         <RefreshCw className={`w-4 h-4 ${unmappedGenerating ? 'animate-spin' : ''}`} />
                         {unmappedGenerating ? 'Generating...' : 'Generate SQL'}
-                      </Button>
-                      <button
-                        className="text-sm text-gray-500 hover:text-gray-700 underline-offset-2 hover:underline"
-                        onClick={() => { setUnmappedDescription(''); setUnmappedSql(''); setUnmappedSqlSource(null); setUnmappedPreviewRows([]) }}
-                      >
-                        Clear
-                      </button>
+                        </Button>
+                      </RoleTooltip>
+                      {canEdit && (
+                        <button
+                          className="text-sm text-gray-500 hover:text-gray-700 underline-offset-2 hover:underline"
+                          onClick={() => { setUnmappedDescription(''); setUnmappedSql(''); setUnmappedSqlSource(null); setUnmappedPreviewRows([]) }}
+                        >
+                          Clear
+                        </button>
+                      )}
                     </div>
                   </div>
 
@@ -1406,7 +1466,8 @@ export default function TransformContent({ projectId, projectName, initialData, 
                           <textarea
                             value={unmappedSql}
                             onChange={(e) => { setUnmappedSql(e.target.value); setUnmappedSqlSource('manual') }}
-                            className="w-full font-mono text-xs text-gray-800 bg-gray-50 rounded border border-gray-200 p-3 resize-none focus:outline-none focus:ring-2 focus:ring-blue-500/30 focus:border-blue-500"
+                            readOnly={!canEdit}
+                            className={`w-full font-mono text-xs text-gray-800 bg-gray-50 rounded border border-gray-200 p-3 resize-none focus:outline-none focus:ring-2 focus:ring-blue-500/30 focus:border-blue-500 ${!canEdit ? 'opacity-60 cursor-not-allowed' : ''}`}
                             rows={Math.max(2, unmappedSql.split('\n').length + 1)}
                             spellCheck={false}
                           />
@@ -1461,14 +1522,15 @@ export default function TransformContent({ projectId, projectName, initialData, 
                 {/* Pinned action bar — same structure as Test+Apply bar */}
                 {unmappedSql && (
                   <div className="flex-shrink-0 z-10 border-t border-gray-200 bg-white px-4 py-3 flex items-center gap-3 shadow-[0_-2px_8px_rgba(0,0,0,0.06)]">
-                    <Button
-                      className="bg-blue-600 hover:bg-blue-700 text-white gap-2 flex-1"
-                      onClick={handleUnmappedSave}
-                      disabled={unmappedSaving}
-                    >
-                      {unmappedSaving ? (
-                        <span className="flex items-center gap-2">
-                          <span className="w-3.5 h-3.5 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+                    <RoleTooltip allowed={canEdit} requiredRole="Editor">
+                      <Button
+                        className="bg-blue-600 hover:bg-blue-700 text-white gap-2 flex-1"
+                        onClick={handleUnmappedSave}
+                        disabled={unmappedSaving || !canEdit}
+                      >
+                        {unmappedSaving ? (
+                          <span className="flex items-center gap-2">
+                            <span className="w-3.5 h-3.5 border-2 border-white/30 border-t-white rounded-full animate-spin" />
                           Saving…
                         </span>
                       ) : (
@@ -1477,7 +1539,8 @@ export default function TransformContent({ projectId, projectName, initialData, 
                           Save Value
                         </>
                       )}
-                    </Button>
+                      </Button>
+                    </RoleTooltip>
                   </div>
                 )}
 
@@ -1488,25 +1551,38 @@ export default function TransformContent({ projectId, projectName, initialData, 
                   </span>
                   <div className="flex flex-col items-end gap-1">
                     {stagingError && <p className="text-xs text-red-600 max-w-xs text-right">{stagingError}</p>}
-                    <Button
-                      className="bg-blue-600 hover:bg-blue-700 text-white disabled:opacity-60"
-                      disabled={isStaging}
-                      onClick={() => {
-                        setStagingError(null)
-                        startStaging(async () => {
-                          const result = await stageAllData(projectId)
-                          if (!result.success && result.error) { setStagingError(result.error); return }
-                          router.push(`/app/projects/${projectId}/data-quality`)
-                        })
-                      }}
-                    >
-                      {isStaging ? (
-                        <span className="flex items-center gap-2">
-                          <span className="w-3.5 h-3.5 border-2 border-white/30 border-t-white rounded-full animate-spin" />
-                          Staging…
-                        </span>
-                      ) : 'Continue to Validation'}
-                    </Button>
+                    <RoleTooltip allowed={canEdit} requiredRole="Editor">
+                      <Button
+                        className="bg-blue-600 hover:bg-blue-700 text-white disabled:opacity-60"
+                        disabled={isStaging || !canEdit}
+                        onClick={() => {
+                          setStagingError(null)
+                          startStaging(async () => {
+                            try {
+                              const result = await stageAllData(projectId)
+                              if (!result.success) {
+                                const msg = result.error ?? 'Staging failed'
+                                setStagingError(msg)
+                                showToast(msg, 'error')
+                                return
+                              }
+                              router.push(`/app/projects/${projectId}/data-quality`)
+                            } catch (e) {
+                              const msg = e instanceof Error ? e.message : 'Staging failed'
+                              setStagingError(msg)
+                              showToast(msg, 'error')
+                            }
+                          })
+                        }}
+                      >
+                        {isStaging ? (
+                          <span className="flex items-center gap-2">
+                            <span className="w-3.5 h-3.5 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+                            Staging…
+                          </span>
+                        ) : 'Continue to Validation'}
+                      </Button>
+                    </RoleTooltip>
                   </div>
                 </div>
               </div>
@@ -1675,36 +1751,43 @@ export default function TransformContent({ projectId, projectName, initialData, 
                             scheduleAutoSave()
                           }}
                           placeholder={getSmartPlaceholder(selectedContext.field)}
-                          className="min-h-20 resize-none text-sm"
+                          readOnly={!canEdit}
+                          className={`min-h-20 resize-none text-sm ${!canEdit ? 'opacity-60 cursor-not-allowed' : ''}`}
                         />
                         <div className="mt-3 flex items-center gap-2 flex-wrap">
-                          <Button
-                            variant="outline"
-                            className="gap-1.5 text-sm border-gray-300 text-gray-700 hover:text-blue-700 hover:border-blue-300 hover:bg-blue-50"
-                            onClick={handleSuggest}
-                            disabled={isSuggesting || isGenerating}
-                          >
-                            {isSuggesting ? (
-                              <span className="w-3.5 h-3.5 border-2 border-gray-400 border-t-blue-500 rounded-full animate-spin" />
-                            ) : (
-                              <Sparkles className="w-3.5 h-3.5" />
-                            )}
-                            {isSuggesting ? 'Suggesting...' : 'AI Suggest'}
-                          </Button>
-                          <Button
-                            className="bg-blue-600 hover:bg-blue-700 text-white gap-2"
-                            onClick={handleGenerate}
-                            disabled={isGenerating || isSuggesting}
-                          >
+                          <RoleTooltip allowed={canEdit} requiredRole="Editor">
+                            <Button
+                              variant="outline"
+                              className="gap-1.5 text-sm border-gray-300 text-gray-700 hover:text-blue-700 hover:border-blue-300 hover:bg-blue-50"
+                              onClick={handleSuggest}
+                              disabled={isSuggesting || isGenerating || !canEdit}
+                            >
+                              {isSuggesting ? (
+                                <span className="w-3.5 h-3.5 border-2 border-gray-400 border-t-blue-500 rounded-full animate-spin" />
+                              ) : (
+                                <Sparkles className="w-3.5 h-3.5" />
+                              )}
+                              {isSuggesting ? 'Suggesting...' : 'AI Suggest'}
+                            </Button>
+                          </RoleTooltip>
+                          <RoleTooltip allowed={canEdit} requiredRole="Editor">
+                            <Button
+                              className="bg-blue-600 hover:bg-blue-700 text-white gap-2"
+                              onClick={handleGenerate}
+                              disabled={isGenerating || isSuggesting || !canEdit}
+                            >
                             <RefreshCw className={`w-4 h-4 ${isGenerating ? 'animate-spin' : ''}`} />
                             {isGenerating ? 'Generating...' : 'Generate Transform'}
                           </Button>
-                          <button
-                            className="text-sm text-gray-500 hover:text-gray-700 underline-offset-2 hover:underline"
-                            onClick={handleClear}
-                          >
-                            Clear
-                          </button>
+                          </RoleTooltip>
+                          {canEdit && (
+                            <button
+                              className="text-sm text-gray-500 hover:text-gray-700 underline-offset-2 hover:underline"
+                              onClick={handleClear}
+                            >
+                              Clear
+                            </button>
+                          )}
                         </div>
 
                         {/* Dismiss — only for standard mapped fields with no saved transform and AI flagged it */}
@@ -1718,15 +1801,19 @@ export default function TransformContent({ projectId, projectName, initialData, 
                                 const fmId = selectedContext.field.fieldMappingId
                                 setIsDismissing(true)
                                 try {
-                                  await dismissTransformNeeded(projectId, fmId)
-                                  refreshFieldNeedsTransform(fmId, false)
+                                  const result = await dismissTransformNeeded(projectId, fmId)
+                                  if (!result.success) {
+                                    showToast(result.error || 'Could not dismiss. Try again.', 'error')
+                                  } else {
+                                    refreshFieldNeedsTransform(fmId, false)
+                                  }
                                 } catch {
                                   showToast('Could not dismiss. Try again.', 'error')
                                 } finally {
                                   setIsDismissing(false)
                                 }
                               }}
-                              disabled={isDismissing}
+                              disabled={isDismissing || !canEdit}
                               className="text-sm text-gray-500 hover:text-gray-700 underline underline-offset-2 decoration-gray-300 hover:decoration-gray-500 transition-colors disabled:opacity-50"
                             >
                               {isDismissing ? 'Saving…' : 'Mark as no transform needed'}
@@ -1752,16 +1839,19 @@ export default function TransformContent({ projectId, projectName, initialData, 
                           placeholder={`e.g., UPPER(TRIM(${selectedContext.field.sourceFieldName ?? 'field_name'}))`}
                           rows={4}
                           spellCheck={false}
-                          className="w-full font-mono text-sm text-gray-800 bg-white border border-gray-300 rounded-lg px-3 py-2.5 resize-none focus:outline-none focus:ring-2 focus:ring-blue-500/30 focus:border-blue-500 placeholder-gray-400"
+                          readOnly={!canEdit}
+                          className={`w-full font-mono text-sm text-gray-800 bg-white border border-gray-300 rounded-lg px-3 py-2.5 resize-none focus:outline-none focus:ring-2 focus:ring-blue-500/30 focus:border-blue-500 placeholder-gray-400 ${!canEdit ? 'opacity-60 cursor-not-allowed' : ''}`}
                         />
-                        <div className="mt-3 flex items-center gap-2">
-                          <button
-                            className="text-sm text-gray-500 hover:text-gray-700 underline-offset-2 hover:underline"
-                            onClick={handleClear}
-                          >
-                            Clear
-                          </button>
-                        </div>
+                        {canEdit && (
+                          <div className="mt-3 flex items-center gap-2">
+                            <button
+                              className="text-sm text-gray-500 hover:text-gray-700 underline-offset-2 hover:underline"
+                              onClick={handleClear}
+                            >
+                              Clear
+                            </button>
+                          </div>
+                        )}
                       </>
                     )}
                   </div>
@@ -1826,15 +1916,19 @@ export default function TransformContent({ projectId, projectName, initialData, 
                               const fmId = selectedContext.field.fieldMappingId
                               setIsDismissing(true)
                               try {
-                                await reinstateTransformNeeded(projectId, fmId)
-                                refreshFieldNeedsTransform(fmId, true)
+                                const result = await reinstateTransformNeeded(projectId, fmId)
+                                if (!result.success) {
+                                  showToast(result.error || 'Could not reinstate. Try again.', 'error')
+                                } else {
+                                  refreshFieldNeedsTransform(fmId, true)
+                                }
                               } catch {
                                 showToast('Could not reinstate. Try again.', 'error')
                               } finally {
                                 setIsDismissing(false)
                               }
                             }}
-                            disabled={isDismissing}
+                            disabled={isDismissing || !canEdit}
                             className="mt-2 text-xs text-blue-600 hover:text-blue-800 underline underline-offset-2 disabled:opacity-50 transition-colors"
                           >
                             {isDismissing ? 'Saving…' : 'Actually, I need a transform for this field'}
@@ -2229,30 +2323,33 @@ export default function TransformContent({ projectId, projectName, initialData, 
                 {localTransform?.sql && !isArchived && (
                   <div className="flex-shrink-0 z-10 border-t border-gray-200 bg-white px-4 py-3 flex items-center gap-3 shadow-[0_-2px_8px_rgba(0,0,0,0.06)]">
                     {/* Test Transform */}
-                    <Button
-                      variant="outline"
-                      className="gap-2 border-gray-300 text-gray-700 hover:border-blue-400 hover:text-blue-700 hover:bg-blue-50"
-                      onClick={handleTest}
-                      disabled={isTesting || !localTransform?.transformationId}
-                    >
-                      {isTesting ? (
-                        <span className="flex items-center gap-2">
-                          <span className="w-3.5 h-3.5 border-2 border-gray-400 border-t-blue-600 rounded-full animate-spin" />
-                          Testing...
-                        </span>
-                      ) : (
-                        <>
-                          <Play className="w-3.5 h-3.5" />
-                          Test Transform
-                        </>
-                      )}
-                    </Button>
+                    <RoleTooltip allowed={canEdit} requiredRole="Editor">
+                      <Button
+                        variant="outline"
+                        className="gap-2 border-gray-300 text-gray-700 hover:border-blue-400 hover:text-blue-700 hover:bg-blue-50"
+                        onClick={handleTest}
+                        disabled={isTesting || !localTransform?.transformationId || !canEdit}
+                      >
+                        {isTesting ? (
+                          <span className="flex items-center gap-2">
+                            <span className="w-3.5 h-3.5 border-2 border-gray-400 border-t-blue-600 rounded-full animate-spin" />
+                            Testing...
+                          </span>
+                        ) : (
+                          <>
+                            <Play className="w-3.5 h-3.5" />
+                            Test Transform
+                          </>
+                        )}
+                      </Button>
+                    </RoleTooltip>
                     {/* Apply Transform — only enabled after successful test */}
-                    <Button
-                      className="bg-blue-600 hover:bg-blue-700 text-white gap-2 px-6 disabled:opacity-50 disabled:cursor-not-allowed"
-                      onClick={handleApply}
-                      disabled={isApplying || isCheckingIssues || !localTransform?.transformationId || localTransform.status !== 'tested'}
-                      title={localTransform.status !== 'tested' ? 'Run "Test Transform" first' : undefined}
+                    <RoleTooltip allowed={canEdit} requiredRole="Editor">
+                      <Button
+                        className="bg-blue-600 hover:bg-blue-700 text-white gap-2 px-6 disabled:opacity-50 disabled:cursor-not-allowed"
+                        onClick={handleApply}
+                        disabled={isApplying || isCheckingIssues || !localTransform?.transformationId || localTransform.status !== 'tested' || !canEdit}
+                        title={localTransform.status !== 'tested' ? 'Run "Test Transform" first' : undefined}
                     >
                       {isCheckingIssues ? (
                         <span className="flex items-center gap-2">
@@ -2271,6 +2368,7 @@ export default function TransformContent({ projectId, projectName, initialData, 
                         </>
                       )}
                     </Button>
+                    </RoleTooltip>
                   </div>
                 )}
               </div>
@@ -2285,28 +2383,38 @@ export default function TransformContent({ projectId, projectName, initialData, 
               {stagingError && (
                 <p className="text-xs text-red-600 max-w-xs text-right">{stagingError}</p>
               )}
-              <Button
-                className="bg-blue-600 hover:bg-blue-700 text-white disabled:opacity-60"
-                disabled={isStaging}
-                onClick={() => {
-                  setStagingError(null)
-                  startStaging(async () => {
-                    const result = await stageAllData(projectId)
-                    if (!result.success && result.error) {
-                      setStagingError(result.error)
-                      return
-                    }
-                    router.push(`/app/projects/${projectId}/data-quality`)
-                  })
-                }}
-              >
-                {isStaging ? (
-                  <span className="flex items-center gap-2">
-                    <span className="w-3.5 h-3.5 border-2 border-white/30 border-t-white rounded-full animate-spin" />
-                    Staging…
-                  </span>
-                ) : 'Continue to Validation'}
-              </Button>
+              <RoleTooltip allowed={canEdit} requiredRole="Editor">
+                <Button
+                  className="bg-blue-600 hover:bg-blue-700 text-white disabled:opacity-60"
+                  disabled={isStaging || !canEdit}
+                  onClick={() => {
+                    setStagingError(null)
+                    startStaging(async () => {
+                      try {
+                        const result = await stageAllData(projectId)
+                        if (!result.success) {
+                          const msg = result.error ?? 'Staging failed'
+                          setStagingError(msg)
+                          showToast(msg, 'error')
+                          return
+                        }
+                        router.push(`/app/projects/${projectId}/data-quality`)
+                      } catch (e) {
+                        const msg = e instanceof Error ? e.message : 'Staging failed'
+                        setStagingError(msg)
+                        showToast(msg, 'error')
+                      }
+                    })
+                  }}
+                >
+                  {isStaging ? (
+                    <span className="flex items-center gap-2">
+                      <span className="w-3.5 h-3.5 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+                      Staging…
+                    </span>
+                  ) : 'Continue to Validation'}
+                </Button>
+              </RoleTooltip>
             </div>
           </div>
         </>

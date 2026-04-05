@@ -1,6 +1,8 @@
 'use server'
 
 import { createClient } from '@/lib/supabase/server'
+import { supabaseAdmin } from '@/lib/supabase/admin'
+import { requireProjectPermission } from '@/lib/actions/role-resolution'
 import { SchemaDocument } from '@/lib/types/database'
 import { validateSchemaDocUpload } from '@/lib/upload/validate'
 import { logActivity } from '@/lib/actions/activity-log'
@@ -26,6 +28,9 @@ export async function uploadSchemaDocument(formData: FormData): Promise<UploadSc
     if (!file || !projectId || !datasetId) {
       return { success: false, error: 'Missing required fields' }
     }
+
+    const perm = await requireProjectPermission(projectId, 'editor')
+    if (!perm.allowed) return { success: false, error: perm.error }
 
     const validation = validateSchemaDocUpload(file)
     if (!validation.valid) return { success: false, error: validation.reason }
@@ -119,27 +124,37 @@ export async function uploadSchemaDocument(formData: FormData): Promise<UploadSc
   }
 }
 
-export async function deleteSchemaDocument(documentId: string): Promise<void> {
+export async function deleteSchemaDocument(documentId: string): Promise<{ success: boolean; error?: string }> {
   const supabase = await createClient()
   const {
     data: { user },
   } = await supabase.auth.getUser()
-  if (!user) throw new Error('Not authenticated')
+  if (!user) return { success: false, error: 'Not authenticated' }
 
-  const { data: doc } = await supabase
+  const { data: doc } = await supabaseAdmin
     .from('schema_documents')
-    .select('file_storage_path')
+    .select('file_storage_path, project_id, dataset_id')
     .eq('id', documentId)
     .single()
 
-  if (!doc) throw new Error('Document not found')
+  if (!doc) return { success: false, error: 'Document not found' }
+
+  let projectId = doc.project_id
+  if (!projectId && doc.dataset_id) {
+    const { data: ds } = await supabaseAdmin.from('datasets').select('project_id').eq('id', doc.dataset_id).single()
+    projectId = ds?.project_id
+  }
+  if (!projectId) return { success: false, error: 'Cannot resolve project for this document' }
+  const perm = await requireProjectPermission(projectId, 'editor')
+  if (!perm.allowed) return { success: false, error: perm.error }
 
   // Delete from storage
   await supabase.storage.from('project-files').remove([doc.file_storage_path])
 
   // Delete DB record (RLS ensures user owns it)
   const { error } = await supabase.from('schema_documents').delete().eq('id', documentId)
-  if (error) throw new Error(error.message)
+  if (error) return { success: false, error: error.message }
+  return { success: true }
 }
 
 export async function getSchemaDocuments(datasetId: string): Promise<SchemaDocument[]> {
@@ -178,12 +193,13 @@ export async function uploadBusinessContextDoc(
 
     if (!file || !projectId) return { success: false, error: 'Missing required fields' }
 
-    // Verify project ownership
+    const perm = await requireProjectPermission(projectId, 'editor')
+    if (!perm.allowed) return { success: false, error: perm.error }
+
     const { data: project } = await supabase
       .from('projects')
       .select('id')
       .eq('id', projectId)
-      .eq('user_id', user.id)
       .single()
     if (!project) return { success: false, error: 'Project not found or access denied' }
 

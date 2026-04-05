@@ -538,7 +538,6 @@ export async function getStagedMappings(projectId: string): Promise<StagedMappin
     .from('projects')
     .select('id')
     .eq('id', projectId)
-    .eq('user_id', user.id)
     .single()
   if (!project) return []
 

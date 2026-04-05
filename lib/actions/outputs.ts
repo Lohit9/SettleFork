@@ -206,12 +206,10 @@ export async function getOutputsPageData(projectId: string): Promise<OutputsPage
     }
   }
 
-  // Verify project ownership
   const { data: project } = await supabase
     .from('projects')
     .select('id, name')
     .eq('id', projectId)
-    .eq('user_id', user.id)
     .single()
   if (!project) throw new Error('Project not found')
 

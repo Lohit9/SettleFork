@@ -5,6 +5,7 @@ import sql from 'mssql'
 import mysql from 'mysql2/promise'
 import { revalidatePath } from 'next/cache'
 import { createClient } from '@/lib/supabase/server'
+import { requireProjectPermission } from '@/lib/actions/role-resolution'
 import { encrypt, decrypt } from '@/lib/utils/encryption'
 import type { DBConnectionInfo } from '@/lib/types/database'
 import { computeValueDistribution, computeMinMax, countFormatIssues } from '@/lib/utils/profiling'
@@ -1180,6 +1181,8 @@ export async function disconnectDatabase(
   datasetId: string,
   projectId: string
 ): Promise<{ success: boolean; error?: string }> {
+  const perm = await requireProjectPermission(projectId, 'editor')
+  if (!perm.allowed) return { success: false, error: perm.error }
   const supabase = await createClient()
 
   // Delete all tables for this dataset (cascades to fields, data_rows, field_profiles)
@@ -1216,6 +1219,8 @@ export async function resyncTables(params: {
   tableNames: string[]
 }): Promise<{ success: boolean; error?: string; tablesImported?: number }> {
   const { connectionId, datasetId, projectId, role, tableNames } = params
+  const perm = await requireProjectPermission(projectId, 'editor')
+  if (!perm.allowed) return { success: false, error: perm.error }
   const supabase = await createClient()
 
   // Load stored credentials (with password)

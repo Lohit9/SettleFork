@@ -1,5 +1,4 @@
 import Link from 'next/link'
-import SidebarShell from '@/components/app/SidebarShell'
 import { CheckCircle, RefreshCw, Download } from '@/components/icons'
 
 // ── Inline SVGs for icons not in the custom icon lib ─────────────────────────
@@ -129,8 +128,7 @@ const FAQS = [
 
 export default function SupportPage() {
   return (
-    <SidebarShell>
-      <div className="flex-1 bg-slate-50 min-h-screen overflow-auto">
+    <div className="flex-1 bg-gray-50 min-h-screen overflow-auto">
         <div className="max-w-3xl mx-auto py-10 px-6 space-y-8">
 
           {/* ── Hero header ───────────────────────────────────────────────── */}
@@ -143,7 +141,7 @@ export default function SupportPage() {
               <input
                 type="text"
                 placeholder="Search for help…"
-                className="w-full h-10 px-4 bg-white border border-gray-200 rounded-lg text-sm text-gray-900 placeholder:text-gray-400 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-600 transition-colors"
+                className="w-full h-10 px-4 bg-white border border-gray-200 rounded-lg text-sm text-gray-900 placeholder:text-gray-400 focus:outline-none focus:ring-2 focus:ring-[#4F46E5] focus:border-[#4F46E5] transition-colors"
                 readOnly
               />
             </div>
@@ -234,7 +232,7 @@ export default function SupportPage() {
               </p>
               <a
                 href="mailto:info@trymine.ai"
-                className="text-sm text-blue-600 hover:underline"
+                className="text-sm text-[#4F46E5] hover:underline"
               >
                 info@trymine.ai
               </a>
@@ -247,7 +245,7 @@ export default function SupportPage() {
               </p>
               <a
                 href="mailto:feedback@trymine.ai"
-                className="text-sm text-blue-600 hover:underline"
+                className="text-sm text-[#4F46E5] hover:underline"
               >
                 Share feedback
               </a>
@@ -265,6 +263,5 @@ export default function SupportPage() {
 
         </div>
       </div>
-    </SidebarShell>
   )
 }

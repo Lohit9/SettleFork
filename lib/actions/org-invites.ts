@@ -90,6 +90,84 @@ export async function createOrgInvite(
   return { invite: invite as OrgInvite }
 }
 
+export async function adminCreateOrgInvite(
+  orgId: string,
+  email: string,
+  role: OrgRole
+): Promise<{ invite: OrgInvite | null; error?: string }> {
+  const supabase = await createClient()
+  const { data: { user } } = await supabase.auth.getUser()
+  if (!user) return { invite: null, error: 'Not authenticated' }
+
+  const ADMIN_EMAILS = ['kaandincer1@gmail.com']
+  if (!ADMIN_EMAILS.includes(user.email ?? '')) {
+    return { invite: null, error: 'Not a platform admin' }
+  }
+
+  const { data: existingUser } = await supabaseAdmin.auth.admin.listUsers({ perPage: 1000 })
+  const inviteeId = existingUser?.users?.find((u) => u.email?.toLowerCase() === email.toLowerCase())?.id
+
+  if (inviteeId) {
+    const { data: existingMember } = await supabaseAdmin
+      .from('org_memberships')
+      .select('id')
+      .eq('org_id', orgId)
+      .eq('user_id', inviteeId)
+      .maybeSingle()
+
+    if (existingMember) {
+      return { invite: null, error: 'This user is already a member of the organization' }
+    }
+  }
+
+  const token = randomUUID().replace(/-/g, '') + randomUUID().replace(/-/g, '').slice(0, 32)
+
+  const { data: invite, error } = await supabaseAdmin
+    .from('org_invites')
+    .insert({
+      org_id: orgId,
+      email: email.trim().toLowerCase(),
+      role,
+      token: token.slice(0, 64),
+      invited_by: user.id,
+    })
+    .select()
+    .single()
+
+  if (error || !invite) return { invite: null, error: error?.message ?? 'Failed to create invite' }
+
+  const { data: org } = await supabaseAdmin
+    .from('organizations')
+    .select('name')
+    .eq('id', orgId)
+    .single()
+
+  const inviterName = user.user_metadata?.full_name || user.email || 'Mine Admin'
+
+  try {
+    const res = await fetch(`${APP_URL}/api/notify-access-request`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        type: 'org-invite',
+        email: email.trim().toLowerCase(),
+        orgName: org?.name ?? 'your team',
+        role,
+        inviterName,
+        token: invite.token,
+      }),
+    })
+    if (!res.ok) {
+      const errBody = await res.text()
+      console.error('[adminCreateOrgInvite] Email send failed:', res.status, errBody)
+    }
+  } catch (err) {
+    console.error('[adminCreateOrgInvite] Email fetch failed:', err)
+  }
+
+  return { invite: invite as OrgInvite }
+}
+
 export async function getPendingInvites(
   orgId: string
 ): Promise<{ invites: OrgInvite[]; error?: string }> {
@@ -149,6 +227,51 @@ export async function getInviteByToken(
   }
 
   return { invite }
+}
+
+export async function adminGetPendingInvites(
+  orgId: string
+): Promise<{ success: boolean; error?: string; invites: OrgInvite[] }> {
+  const supabase = await createClient()
+  const { data: { user } } = await supabase.auth.getUser()
+  if (!user) return { success: false, error: 'Not authenticated', invites: [] }
+
+  const ADMIN_EMAILS = ['kaandincer1@gmail.com']
+  if (!ADMIN_EMAILS.includes(user.email ?? '')) {
+    return { success: false, error: 'Not a platform admin', invites: [] }
+  }
+
+  const { data, error } = await supabaseAdmin
+    .from('org_invites')
+    .select('*')
+    .eq('org_id', orgId)
+    .is('accepted_at', null)
+    .gt('expires_at', new Date().toISOString())
+    .order('created_at', { ascending: false })
+
+  if (error) return { success: false, error: error.message, invites: [] }
+  return { success: true, invites: (data ?? []) as OrgInvite[] }
+}
+
+export async function adminRevokeInvite(
+  inviteId: string
+): Promise<{ success: boolean; error?: string }> {
+  const supabase = await createClient()
+  const { data: { user } } = await supabase.auth.getUser()
+  if (!user) return { success: false, error: 'Not authenticated' }
+
+  const ADMIN_EMAILS = ['kaandincer1@gmail.com']
+  if (!ADMIN_EMAILS.includes(user.email ?? '')) {
+    return { success: false, error: 'Not a platform admin' }
+  }
+
+  const { error } = await supabaseAdmin
+    .from('org_invites')
+    .delete()
+    .eq('id', inviteId)
+
+  if (error) return { success: false, error: error.message }
+  return { success: true }
 }
 
 export async function acceptInvite(

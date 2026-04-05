@@ -1,7 +1,6 @@
 import { redirect } from 'next/navigation'
 import { createClient } from '@/lib/supabase/server'
 import { signOut } from '@/lib/actions/auth'
-import SidebarShell from '@/components/app/SidebarShell'
 import { Button } from '@/components/ui/button'
 import MembersContent from './MembersContent'
 
@@ -27,8 +26,7 @@ export default async function MembersPage() {
   const activeOrg = memberships.find((m) => m.org_id === cookieOrgId) ?? memberships[0]
 
   return (
-    <SidebarShell>
-      <div className="flex-1 bg-gray-50 min-h-screen">
+    <div className="flex-1 bg-gray-50 min-h-screen">
         <div className="border-b border-gray-200 bg-white">
           <div className="px-8 py-5 flex items-center justify-between">
             <div>
@@ -66,10 +64,9 @@ export default async function MembersPage() {
           <MembersContent
             orgId={activeOrg.org_id}
             currentUserId={user.id}
-            currentUserRole={activeOrg.role as 'owner' | 'admin' | 'editor' | 'reviewer' | 'viewer'}
+            currentUserRole={activeOrg.role as 'owner' | 'admin' | 'editor' | 'viewer'}
           />
         </div>
       </div>
-    </SidebarShell>
   )
 }

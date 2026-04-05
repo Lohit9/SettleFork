@@ -574,12 +574,10 @@ export async function runInFlightChecks(projectId: string): Promise<void> {
   } = await supabase.auth.getUser()
   if (!user) throw new Error('Not authenticated')
 
-  // Verify project ownership
   const { data: project } = await supabaseAdmin
     .from('projects')
     .select('id')
     .eq('id', projectId)
-    .eq('user_id', user.id)
     .single()
   if (!project) throw new Error('Project not found or access denied')
 

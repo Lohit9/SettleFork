@@ -48,6 +48,7 @@ import { markProjectComplete } from '@/lib/actions/projects'
 import { SQL_DIALECTS } from '@/lib/types/database'
 import type { SqlDialect, ExecutionPackageFormat } from '@/lib/types/database'
 import { useProjectRole } from '@/lib/hooks/useProjectRole'
+import { RoleTooltip } from '@/components/app/RoleTooltip'
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -174,17 +175,7 @@ function fmtDateTime(iso: string) {
 
 // ── OutputsContent ────────────────────────────────────────────────────────────
 
-function RoleTooltip({ children, show, role }: { children: React.ReactNode; show: boolean; role: string }) {
-  if (!show) return <>{children}</>
-  return (
-    <div className="relative group/role-tip inline-flex">
-      {children}
-      <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-1.5 px-2.5 py-1 bg-gray-900 text-white text-[11px] rounded-md opacity-0 group-hover/role-tip:opacity-100 transition-opacity pointer-events-none whitespace-nowrap z-50">
-        You need {role} access to perform this action
-      </div>
-    </div>
-  )
-}
+// RoleTooltip is imported from @/components/app/RoleTooltip
 
 export default function OutputsContent({ projectId, projectName, initialData, isArchived = false, targetDbType = 'postgresql' }: Props) {
   const router = useRouter()
@@ -309,7 +300,13 @@ export default function OutputsContent({ projectId, projectName, initialData, is
         ? await generateGoldStandardCSVs(projectId)
         : await generateSQLLoadScripts(projectId)
       setGoldProgress(null)
-      if (!result.success && result.error) { showToast(result.error, 'error'); return }
+      if (!result.success) {
+        const msg =
+          result.error ??
+          (result.errors?.length ? result.errors.join('; ') : 'Generation failed')
+        showToast(msg, 'error')
+        return
+      }
       if (result.files.length === 0) { showToast('No files generated — check that mappings are approved.', 'error'); return }
       setGoldFiles(result.files)
       if (result.errors?.length) showToast(`Generated ${result.files.length} file(s) with ${result.errors.length} error(s).`, 'error')
@@ -319,7 +316,7 @@ export default function OutputsContent({ projectId, projectName, initialData, is
 
   // ── Execution package handlers ──────────────────────────────────────────
 
-  async function handleGenerateExecutionPackage() {
+  async function handleGenerateExecutionPackage(): Promise<boolean> {
     if (outputFormat === 'per_table') {
       // ── Compartmentalized path ──────────────────────────────────────────
       setCompartmentalized((prev) => ({ ...prev, status: 'generating', error: null }))
@@ -341,16 +338,17 @@ export default function OutputsContent({ projectId, projectName, initialData, is
           setFileContentCache({})
           setPreviewFilename(null)
           showToast(`Generated ${result.files.length} script files`, 'success')
-        } else {
-          const errMsg = 'error' in result ? (result.error ?? 'Generation failed') : 'Generation failed'
-          setCompartmentalized((prev) => ({ ...prev, status: 'error', error: errMsg }))
-          showToast(errMsg, 'error')
+          return true
         }
+        const errMsg = 'error' in result ? (result.error ?? 'Generation failed') : 'Generation failed'
+        setCompartmentalized((prev) => ({ ...prev, status: 'error', error: errMsg }))
+        showToast(errMsg, 'error')
+        return false
       } catch {
         setCompartmentalized((prev) => ({ ...prev, status: 'error', error: 'An unexpected error occurred. Please try again.' }))
         showToast('An unexpected error occurred', 'error')
+        return false
       }
-      return
     }
 
     // ── Single-file path (unchanged) ─────────────────────────────────────
@@ -368,14 +366,15 @@ export default function OutputsContent({ projectId, projectName, initialData, is
           dialect: result.dialect,
         })
         showToast('Execution package generated successfully', 'success')
-      } else {
-        setExecutionPackage((prev) => ({
-          ...prev,
-          status: 'error',
-          error: result.error ?? 'Failed to generate execution package',
-        }))
-        showToast(result.error ?? 'Generation failed', 'error')
+        return true
       }
+      setExecutionPackage((prev) => ({
+        ...prev,
+        status: 'error',
+        error: result.error ?? 'Failed to generate execution package',
+      }))
+      showToast(result.error ?? 'Generation failed', 'error')
+      return false
     } catch {
       setExecutionPackage((prev) => ({
         ...prev,
@@ -383,6 +382,7 @@ export default function OutputsContent({ projectId, projectName, initialData, is
         error: 'An unexpected error occurred. Please try again.',
       }))
       showToast('An unexpected error occurred', 'error')
+      return false
     }
   }
 
@@ -421,7 +421,7 @@ export default function OutputsContent({ projectId, projectName, initialData, is
         window.open(result.url, '_blank')
       }
     } else {
-      showToast('Could not generate download link. Please try regenerating.', 'error')
+      showToast(result.error ?? 'Could not generate download link. Please try regenerating.', 'error')
     }
   }
 
@@ -435,9 +435,12 @@ export default function OutputsContent({ projectId, projectName, initialData, is
     return getCompartmentalizedPackageUrls(projectId)
   }
 
-  async function resolveZipUrl(): Promise<string | null> {
-    if (compartmentalized.zipSignedUrl) return compartmentalized.zipSignedUrl
+  async function resolveZipUrl(): Promise<{ url: string | null; error?: string }> {
+    if (compartmentalized.zipSignedUrl) return { url: compartmentalized.zipSignedUrl }
     const result = await safeGetPackageUrls()
+    if (result.error && !result.zipUrl) {
+      return { url: null, error: result.error }
+    }
     if (result.zipUrl) {
       setCompartmentalized((prev) => ({ ...prev, zipSignedUrl: result.zipUrl! }))
       if (result.files && result.files.length > 0) {
@@ -460,14 +463,14 @@ export default function OutputsContent({ projectId, projectName, initialData, is
               }),
         }))
       }
-      return result.zipUrl
+      return { url: result.zipUrl }
     }
-    return null
+    return { url: null, error: result.error }
   }
 
   async function handleDownloadZip() {
-    const url = await resolveZipUrl()
-    if (!url) { showToast('Could not generate download link.', 'error'); return }
+    const { url, error } = await resolveZipUrl()
+    if (!url) { showToast(error ?? 'Could not generate download link.', 'error'); return }
     const dialectSuffix = compartmentalized.dialect ?? sqlDialect
     const filename = `${projectName.replace(/\s+/g, '_')}_migration_scripts_v${compartmentalized.version ?? '1.0'}_${dialectSuffix}.zip`
     try {
@@ -504,6 +507,10 @@ export default function OutputsContent({ projectId, projectName, initialData, is
     let url = file.signedUrl
     if (!url) {
       const result = await safeGetPackageUrls()
+      if (result.error) {
+        showToast(result.error, 'error')
+        return
+      }
       const found = result.files?.find((rf) => rf.filename === file.filename)
       url = found?.url ?? null
       if (url) {
@@ -548,6 +555,10 @@ export default function OutputsContent({ projectId, projectName, initialData, is
           let url = file.signedUrl
           if (!url) {
             const result = await safeGetPackageUrls()
+            if (result.error) {
+              showToast(result.error, 'error')
+              return
+            }
             url = result.files?.find((rf) => rf.filename === filename)?.url ?? null
           }
           if (url) {
@@ -597,6 +608,10 @@ export default function OutputsContent({ projectId, projectName, initialData, is
       let url = file?.signedUrl ?? null
       if (!url) {
         const result = await safeGetPackageUrls()
+        if (result.error) {
+          showToast(result.error, 'error')
+          return
+        }
         const found = result.files?.find((rf) => rf.filename === filename)
         url = found?.url ?? null
         if (url && file) {
@@ -610,6 +625,8 @@ export default function OutputsContent({ projectId, projectName, initialData, is
         const response = await fetch(url)
         const text = await response.text()
         setFileContentCache((prev) => ({ ...prev, [filename]: text }))
+      } else {
+        showToast('Could not load file content.', 'error')
       }
     } finally {
       setPreviewLoading(false)
@@ -629,7 +646,7 @@ export default function OutputsContent({ projectId, projectName, initialData, is
   // ── Deliverable handler ─────────────────────────────────────────────────
 
   const handleGenerateDeliverable = useCallback(
-    async (key: string) => {
+    async (key: string): Promise<boolean> => {
       setGeneratingKey(key)
       const [type, format] = key.split('_') as [string, string]
 
@@ -660,13 +677,14 @@ export default function OutputsContent({ projectId, projectName, initialData, is
       setGeneratingKey(null)
       if (!result.success || !result.downloadUrl) {
         showToast(result.error ?? 'Generation failed', 'error')
-        return
+        return false
       }
       setDeliverableMap((prev) => ({
         ...prev,
         [key]: { downloadUrl: result.downloadUrl!, version: result.version ?? '1.0', generatedAt: new Date().toISOString() },
       }))
       showToast('Generated successfully', 'success')
+      return true
     },
     [projectId]
   )
@@ -683,20 +701,29 @@ export default function OutputsContent({ projectId, projectName, initialData, is
       { key: 'data_dictionary', label: 'Generating data dictionary…' },
     ]
 
+    let anyDeliverableFailed = false
     for (const step of steps) {
       setAllGenProgress(step.label)
-      await handleGenerateDeliverable(step.key)
+      const ok = await handleGenerateDeliverable(step.key)
+      if (!ok) anyDeliverableFailed = true
     }
 
     // Also generate the single-file execution package as part of "Generate All"
     setAllGenProgress('Generating execution package…')
     const savedFormat = outputFormat
     setOutputFormat('single_file')
-    await handleGenerateExecutionPackage()
+    const packageOk = await handleGenerateExecutionPackage()
     setOutputFormat(savedFormat)
 
     setAllGenProgress(null)
-    showToast('All deliverables generated', 'success')
+    if (anyDeliverableFailed || !packageOk) {
+      showToast(
+        'One or more steps failed. See the messages above.',
+        'error'
+      )
+    } else {
+      showToast('All deliverables generated', 'success')
+    }
   }
 
   // ── Computed values ─────────────────────────────────────────────────────
@@ -1046,7 +1073,7 @@ export default function OutputsContent({ projectId, projectName, initialData, is
               <>
                 {/* IDLE */}
                 {executionPackage.status === 'idle' && !isArchived && (
-                  <RoleTooltip show={!canEdit} role="editor">
+                  <RoleTooltip allowed={canEdit} requiredRole="Editor">
                     <Button
                       className="bg-blue-600 hover:bg-blue-700 text-white gap-2"
                       onClick={handleGenerateExecutionPackage}
@@ -1095,7 +1122,7 @@ export default function OutputsContent({ projectId, projectName, initialData, is
                         Download .sql
                       </Button>
                       {!isArchived && (
-                        <RoleTooltip show={!canEdit} role="editor">
+                        <RoleTooltip allowed={canEdit} requiredRole="Editor">
                           <Button variant="outline" className="gap-2" onClick={handleGenerateExecutionPackage} disabled={!canEdit}>
                             <RefreshCw className="w-3.5 h-3.5" />
                             Regenerate
@@ -1114,7 +1141,7 @@ export default function OutputsContent({ projectId, projectName, initialData, is
                       <span className="text-sm text-red-700">{executionPackage.error}</span>
                     </div>
                     {!isArchived && (
-                      <RoleTooltip show={!canEdit} role="editor">
+                      <RoleTooltip allowed={canEdit} requiredRole="Editor">
                         <Button variant="outline" className="gap-2" onClick={handleGenerateExecutionPackage} disabled={!canEdit}>
                           <RefreshCw className="w-3.5 h-3.5" />
                           Try Again
@@ -1131,7 +1158,7 @@ export default function OutputsContent({ projectId, projectName, initialData, is
               <>
                 {/* IDLE */}
                 {compartmentalized.status === 'idle' && !isArchived && (
-                  <RoleTooltip show={!canEdit} role="editor">
+                  <RoleTooltip allowed={canEdit} requiredRole="Editor">
                     <Button
                       className="bg-blue-600 hover:bg-blue-700 text-white gap-2"
                       onClick={handleGenerateExecutionPackage}
@@ -1199,7 +1226,7 @@ export default function OutputsContent({ projectId, projectName, initialData, is
                           Download All (ZIP)
                         </Button>
                         {!isArchived && (
-                          <RoleTooltip show={!canEdit} role="editor">
+                          <RoleTooltip allowed={canEdit} requiredRole="Editor">
                             <Button variant="outline" size="sm" className="gap-1.5" onClick={handleGenerateExecutionPackage} disabled={!canEdit}>
                               <RefreshCw className="w-3.5 h-3.5" />
                               Regenerate
@@ -1310,7 +1337,7 @@ export default function OutputsContent({ projectId, projectName, initialData, is
                       <span className="text-sm text-red-700">{compartmentalized.error}</span>
                     </div>
                     {!isArchived && (
-                      <RoleTooltip show={!canEdit} role="editor">
+                      <RoleTooltip allowed={canEdit} requiredRole="Editor">
                         <Button variant="outline" className="gap-2" onClick={handleGenerateExecutionPackage} disabled={!canEdit}>
                           <RefreshCw className="w-3.5 h-3.5" />
                           Try Again
@@ -1372,7 +1399,7 @@ export default function OutputsContent({ projectId, projectName, initialData, is
                 </div>
 
                 {!isArchived && (
-                  <RoleTooltip show={!canEdit} role="editor">
+                  <RoleTooltip allowed={canEdit} requiredRole="Editor">
                     <Button
                       className="bg-blue-600 hover:bg-blue-700 text-white gap-2 ml-auto"
                       onClick={handleGenerateGold}
@@ -1462,7 +1489,7 @@ export default function OutputsContent({ projectId, projectName, initialData, is
               <p className="text-sm text-gray-500 mt-0.5">Migration documentation and reports for stakeholders, QA, and project records</p>
             </div>
             {!isArchived && (
-              <RoleTooltip show={!canEdit} role="editor">
+              <RoleTooltip allowed={canEdit} requiredRole="Editor">
                 <Button
                   variant="outline"
                   size="sm"

@@ -101,6 +101,7 @@ function MenuItem({
 export function ProjectMenu({ project, onUpdate }: ProjectMenuProps) {
   const router = useRouter()
   const { can: canRole } = useProjectRole(project.id)
+  const canEdit = canRole('edit')
   const canManage = canRole('manage')
   const [isOpen, setIsOpen] = useState(false)
   const [dropCoords, setDropCoords] = useState({ top: 0, left: 0 })
@@ -117,6 +118,7 @@ export function ProjectMenu({ project, onUpdate }: ProjectMenuProps) {
   const [outputUrl, setOutputUrl] = useState<string | null | undefined>(undefined) // undefined = not yet checked, null = none
 
   const [isPending, startTransition] = useTransition()
+  const [actionError, setActionError] = useState<string | null>(null)
   const triggerRef = useRef<HTMLButtonElement>(null)
   const dropRef = useRef<HTMLDivElement>(null)
 
@@ -159,6 +161,7 @@ export function ProjectMenu({ project, onUpdate }: ProjectMenuProps) {
 
   const openModal = (m: 'rename' | 'labels' | 'delete' | 'archive') => {
     setIsOpen(false)
+    setActionError(null)
     if (m === 'rename') setNewName(project.name)
     if (m === 'labels') { setSrcLabel(project.source_label); setTgtLabel(project.target_label) }
     if (m === 'archive') {
@@ -178,8 +181,10 @@ export function ProjectMenu({ project, onUpdate }: ProjectMenuProps) {
 
   const handleRename = () => {
     if (!newName.trim()) return
+    setActionError(null)
     startTransition(async () => {
-      await updateProject(project.id, { name: newName.trim() })
+      const result = await updateProject(project.id, { name: newName.trim() })
+      if (!result.success) { setActionError(result.error ?? 'Failed to rename project'); return }
       closeModal()
       refresh()
     })
@@ -207,8 +212,10 @@ export function ProjectMenu({ project, onUpdate }: ProjectMenuProps) {
   }
 
   const handleDelete = () => {
+    setActionError(null)
     startTransition(async () => {
-      await deleteProject(project.id)
+      const result = await deleteProject(project.id)
+      if (!result.success) { setActionError(result.error ?? 'Failed to delete project'); return }
       closeModal()
       router.push('/app/projects')
       router.refresh()
@@ -231,6 +238,9 @@ export function ProjectMenu({ project, onUpdate }: ProjectMenuProps) {
   const isCompleted = project.status === 'completed'
   const isArchived = project.status === 'archived'
 
+  // Hide the entire menu for viewers — no actionable items remain
+  if (!canEdit && !canManage) return null
+
   return (
     <>
       {/* Trigger */}
@@ -252,25 +262,29 @@ export function ProjectMenu({ project, onUpdate }: ProjectMenuProps) {
         >
           {!isArchived && (
             <>
-              <MenuItem
-                icon={<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5"><path d="M11.5 2.5l2 2-8 8H3.5v-2l8-8z"/></svg>}
-                label="Rename"
-                onClick={() => openModal('rename')}
-              />
-              <MenuItem
-                icon={<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5"><rect x="2" y="5" width="12" height="9" rx="1"/><path d="M5 5V4a3 3 0 016 0v1"/></svg>}
-                label="Edit labels"
-                onClick={() => openModal('labels')}
-              />
-              <MenuItem
-                icon={
-                  isCompleted
-                    ? <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5"><path d="M2 8a6 6 0 0110.5-4M14 8a6 6 0 01-10.5 4"/><path d="M12 4l2 2-2 2M4 12l-2-2 2-2"/></svg>
-                    : <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5"><circle cx="8" cy="8" r="6"/><path d="M5 8l2 2 4-4"/></svg>
-                }
-                label={isCompleted ? 'Reactivate' : 'Mark as completed'}
-                onClick={handleToggleStatus}
-              />
+              {canEdit && (
+                <>
+                  <MenuItem
+                    icon={<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5"><path d="M11.5 2.5l2 2-8 8H3.5v-2l8-8z"/></svg>}
+                    label="Rename"
+                    onClick={() => openModal('rename')}
+                  />
+                  <MenuItem
+                    icon={<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5"><rect x="2" y="5" width="12" height="9" rx="1"/><path d="M5 5V4a3 3 0 016 0v1"/></svg>}
+                    label="Edit labels"
+                    onClick={() => openModal('labels')}
+                  />
+                  <MenuItem
+                    icon={
+                      isCompleted
+                        ? <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5"><path d="M2 8a6 6 0 0110.5-4M14 8a6 6 0 01-10.5 4"/><path d="M12 4l2 2-2 2M4 12l-2-2 2-2"/></svg>
+                        : <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5"><circle cx="8" cy="8" r="6"/><path d="M5 8l2 2 4-4"/></svg>
+                    }
+                    label={isCompleted ? 'Reactivate' : 'Mark as completed'}
+                    onClick={handleToggleStatus}
+                  />
+                </>
+              )}
               {canManage && (
                 <MenuItem
                   icon={<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5"><path d="M2 12V6l4-4h5l3 3v7a1 1 0 01-1 1H3a1 1 0 01-1-1z"/><path d="M6 2v4H2"/><path d="M8 9v3M8 7v.5"/></svg>}
@@ -278,7 +292,7 @@ export function ProjectMenu({ project, onUpdate }: ProjectMenuProps) {
                   onClick={() => openModal('archive')}
                 />
               )}
-              <div className="border-t border-gray-100 my-1" />
+              {(canEdit || canManage) && <div className="border-t border-gray-100 my-1" />}
             </>
           )}
           {canManage && (
@@ -296,6 +310,9 @@ export function ProjectMenu({ project, onUpdate }: ProjectMenuProps) {
       {/* Rename modal */}
       {modal === 'rename' && (
         <Modal title="Rename project" onClose={closeModal}>
+          {actionError && (
+            <div className="mb-3 rounded-md bg-red-50 border border-red-200 px-3 py-2 text-sm text-red-700">{actionError}</div>
+          )}
           <div className="mb-4">
             <Label className="text-sm text-gray-700 mb-1.5 block">Project name</Label>
             <Input
@@ -357,6 +374,9 @@ export function ProjectMenu({ project, onUpdate }: ProjectMenuProps) {
       {/* Delete confirmation modal */}
       {modal === 'delete' && (
         <Modal title="Delete project" onClose={closeModal}>
+          {actionError && (
+            <div className="mb-3 rounded-md bg-red-50 border border-red-200 px-3 py-2 text-sm text-red-700">{actionError}</div>
+          )}
           <p className="text-sm text-gray-600 mb-2">
             Are you sure you want to delete <span className="font-medium text-gray-900">&ldquo;{project.name}&rdquo;</span>?
           </p>

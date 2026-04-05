@@ -216,13 +216,13 @@ function NewProjectForm({ onCancel, onCreated }: { onCancel: () => void; onCreat
     if (!projectName.trim() || !sourceSystem.trim() || !targetSystem.trim()) return
     setError(null)
     startTransition(async () => {
-      try {
-        const activeOrgId = document.cookie.match(/mine-active-org=([^;]+)/)?.[1]
-        const newProject = await createProject(projectName, sourceSystem, targetSystem, notes || undefined, activeOrgId)
-        onCreated(newProject.id)
-      } catch (err) {
-        setError(err instanceof Error ? err.message : 'Failed to create project')
+      const activeOrgId = document.cookie.match(/mine-active-org=([^;]+)/)?.[1]
+      const result = await createProject(projectName, sourceSystem, targetSystem, notes || undefined, activeOrgId)
+      if (!result.success || !result.data) {
+        setError(result.error ?? 'Failed to create project')
+        return
       }
+      onCreated(result.data.id)
     })
   }
 
@@ -349,9 +349,11 @@ type FilterTab = 'all' | 'active' | 'completed' | 'archived'
 
 interface ProjectsListProps {
   initialProjects: ProjectWithStats[]
+  activeOrgRole?: string
 }
 
-export function ProjectsList({ initialProjects }: ProjectsListProps) {
+export function ProjectsList({ initialProjects, activeOrgRole }: ProjectsListProps) {
+  const canCreateProject = activeOrgRole !== 'viewer'
   const router = useRouter()
   const [projects, setProjects] = useState<ProjectWithStats[]>(initialProjects)
   const [showWelcome, setShowWelcome] = useState(false)
@@ -415,13 +417,15 @@ export function ProjectsList({ initialProjects }: ProjectsListProps) {
                 className="h-9 pl-9 pr-3 w-52 bg-gray-50 border border-gray-200 rounded-lg text-sm text-gray-900 placeholder:text-gray-400 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-600 transition-colors"
               />
             </div>
-            <Button
-              onClick={() => setShowCreate(true)}
-              className="bg-blue-600 hover:bg-blue-700 text-white h-9 px-4 gap-1.5 text-sm"
-            >
-              <Plus className="w-3.5 h-3.5" />
-              New Project
-            </Button>
+            {canCreateProject && (
+              <Button
+                onClick={() => setShowCreate(true)}
+                className="bg-blue-600 hover:bg-blue-700 text-white h-9 px-4 gap-1.5 text-sm"
+              >
+                <Plus className="w-3.5 h-3.5" />
+                New Project
+              </Button>
+            )}
           </div>
         </div>
 

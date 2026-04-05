@@ -20,7 +20,6 @@ export default async function TransformPage({ params }: PageProps) {
     .from('projects')
     .select('id, name, status')
     .eq('id', projectId)
-    .eq('user_id', user.id)
     .single()
   if (!project) notFound()
 

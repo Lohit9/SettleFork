@@ -5,6 +5,7 @@ import { useRouter } from 'next/navigation'
 import { ChevronDown, ChevronRight, Upload, Check, Pencil } from '@/components/icons'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { updateField } from '@/lib/actions/fields'
+import { useProjectRole } from '@/lib/hooks/useProjectRole'
 import { generateMappings } from '@/lib/actions/mappings'
 import { enrichSchemaFromDocs } from '@/lib/actions/schema-enrichment'
 import type { DatasetSchemaData, FieldData, CheckConstraint } from '@/lib/actions/data-overview'
@@ -56,13 +57,17 @@ function FieldEditModal({
     setError(null)
     startSaving(async () => {
       try {
-        await updateField(field.id, {
+        const result = await updateField(field.id, {
           name,
           data_type: dataType,
           is_nullable: isNullable,
           is_primary_key: isPK,
           is_foreign_key: isFK,
         })
+        if (!result.success) {
+          setError(result.error || 'Save failed')
+          return
+        }
         onSave({ ...field, name, data_type: dataType, is_nullable: isNullable, is_primary_key: isPK, is_foreign_key: isFK })
         onClose()
       } catch (e) {
@@ -312,6 +317,9 @@ function SchemaPanel({
   onDeselectAll: (ids: string[]) => void
   projectId: string
 }) {
+  const { can } = useProjectRole(projectId)
+  const canEdit = can('edit')
+
   const allTableIds = datasets.flatMap((ds) => ds.tables.map((t) => t.id))
   const totalTables = allTableIds.length
   const selectedCount = allTableIds.filter((id) => selectedTables.has(id)).length
@@ -487,13 +495,15 @@ function SchemaPanel({
                                     <ConstraintBadge constraint={f.check_constraint ?? null} />
                                   </td>
                                   <td className="pr-3">
-                                    <button
-                                      onClick={() => setEditingField(f)}
-                                      className="opacity-0 group-hover:opacity-100 transition-opacity p-1 rounded hover:bg-gray-200"
-                                      title="Edit field"
-                                    >
-                                      <Pencil className="w-3 h-3 text-gray-400" />
-                                    </button>
+                                    {canEdit && (
+                                      <button
+                                        onClick={() => setEditingField(f)}
+                                        className="opacity-0 group-hover:opacity-100 transition-opacity p-1 rounded hover:bg-gray-200"
+                                        title="Edit field"
+                                      >
+                                        <Pencil className="w-3 h-3 text-gray-400" />
+                                      </button>
+                                    )}
                                   </td>
                                 </tr>
                               )

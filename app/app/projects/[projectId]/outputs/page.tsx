@@ -21,7 +21,6 @@ export default async function OutputsPage({ params }: PageProps) {
     .from('projects')
     .select('id, name, status')
     .eq('id', projectId)
-    .eq('user_id', user.id)
     .single()
   if (!project) notFound()
 

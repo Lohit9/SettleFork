@@ -50,9 +50,10 @@ export async function checkProjectPermission(
 export async function requireProjectPermission(
   projectId: string,
   minRole: OrgRole
-): Promise<void> {
+): Promise<{ allowed: boolean; error?: string }> {
   const allowed = await checkProjectPermission(projectId, minRole)
   if (!allowed) {
-    throw new Error(`Insufficient permissions. Required role: ${minRole}`)
+    return { allowed: false, error: `Insufficient permissions. Required role: ${minRole}` }
   }
+  return { allowed: true }
 }

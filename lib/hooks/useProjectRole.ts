@@ -17,11 +17,10 @@ export function useProjectRole(projectId: string) {
     }).catch(() => setIsLoading(false))
   }, [projectId])
 
-  const can = (action: 'view' | 'review' | 'edit' | 'manage'): boolean => {
+  const can = (action: 'view' | 'edit' | 'manage'): boolean => {
     if (!role) return false
     const minRole: Record<string, OrgRole> = {
       view: 'viewer',
-      review: 'reviewer',
       edit: 'editor',
       manage: 'admin',
     }

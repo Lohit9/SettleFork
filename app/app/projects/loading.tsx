@@ -1,13 +1,10 @@
-import SidebarShell from '@/components/app/SidebarShell'
-
 function Skeleton({ className }: { className?: string }) {
   return <div className={`animate-pulse bg-gray-200 rounded ${className ?? ''}`} />
 }
 
 export default function ProjectsLoading() {
   return (
-    <SidebarShell>
-      <div className="flex-1 bg-gray-50 min-h-screen">
+    <div className="flex-1 bg-gray-50 min-h-screen">
         {/* Header */}
         <div className="border-b border-gray-200 bg-white px-8 pt-6 pb-5 space-y-5">
           <div className="flex items-center justify-between">
@@ -62,6 +59,5 @@ export default function ProjectsLoading() {
           ))}
         </div>
       </div>
-    </SidebarShell>
   )
 }

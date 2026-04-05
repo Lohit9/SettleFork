@@ -17,6 +17,8 @@ import type { ParsedTable } from '@/lib/parsers/ddl-parser'
 import type { DatasetWithTableStats, TableStats } from '@/lib/actions/datasets'
 import type { DBConnectionInfo } from '@/lib/types/database'
 import { DDLSchemaReview } from './DDLSchemaReview'
+import { useProjectRole } from '@/lib/hooks/useProjectRole'
+import { RoleTooltip } from '@/components/app/RoleTooltip'
 
 type IngestMethod = 'csv' | 'ddl' | 'db' | null
 
@@ -69,6 +71,8 @@ interface IngestionCardProps {
 
 export function IngestionCard({ type, title, projectId, initialDatasets, initialConnection = null, isArchived = false }: IngestionCardProps) {
   const router = useRouter()
+  const { can } = useProjectRole(projectId)
+  const canEdit = can('edit')
   const [datasets, setDatasets] = useState<DatasetWithTableStats[]>(initialDatasets)
   const [selectedDatasetId, setSelectedDatasetId] = useState<string | null>(
     initialDatasets[0]?.id ?? null
@@ -1053,21 +1057,23 @@ export function IngestionCard({ type, title, projectId, initialDatasets, initial
                       </div>
                     )}
                     <div className="flex items-center gap-3">
-                      <Button
-                        size="sm"
-                        onClick={handleImport}
-                        disabled={selectedRemoteTables.length === 0 || importing}
-                        className="bg-blue-600 hover:bg-blue-700 text-white disabled:opacity-50"
-                      >
-                        {importing ? (
-                          <span className="flex items-center gap-1.5">
-                            <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                            Importing…
-                          </span>
-                        ) : (
-                          `Import Selected Tables (${selectedRemoteTables.length})`
-                        )}
-                      </Button>
+                      <RoleTooltip allowed={canEdit} requiredRole="Editor">
+                        <Button
+                          size="sm"
+                          onClick={handleImport}
+                          disabled={selectedRemoteTables.length === 0 || importing || !canEdit}
+                          className="bg-blue-600 hover:bg-blue-700 text-white disabled:opacity-50"
+                        >
+                          {importing ? (
+                            <span className="flex items-center gap-1.5">
+                              <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                              Importing…
+                            </span>
+                          ) : (
+                            `Import Selected Tables (${selectedRemoteTables.length})`
+                          )}
+                        </Button>
+                      </RoleTooltip>
                       {importing && importProgress && (
                         <span className="text-xs text-gray-500">{importProgress}</span>
                       )}
@@ -1145,8 +1151,8 @@ export function IngestionCard({ type, title, projectId, initialDatasets, initial
                           <span className="text-xs text-gray-400">{table.field_count} fields</span>
                           <button
                             onClick={() => handleResyncOne(table.name)}
-                            disabled={resyncingTable === table.name || resyncingAll}
-                            title="Re-sync this table"
+                            disabled={resyncingTable === table.name || resyncingAll || !canEdit}
+                            title={canEdit ? 'Re-sync this table' : 'Editor access required'}
                             className="p-1 rounded hover:bg-gray-100 text-gray-400 hover:text-gray-600 disabled:opacity-40 transition-colors"
                           >
                             {resyncingTable === table.name
@@ -1168,20 +1174,23 @@ export function IngestionCard({ type, title, projectId, initialDatasets, initial
                 {/* Action row */}
                 {!disconnectConfirm ? (
                   <div className="flex items-center gap-3 flex-wrap">
-                    <Button
-                      size="sm"
-                      variant="outline"
-                      onClick={handleOpenAddMore}
-                      disabled={resyncingAll}
-                    >
-                      Add More Tables
-                    </Button>
-                    <Button
-                      size="sm"
-                      variant="outline"
-                      onClick={handleResyncAll}
-                      disabled={resyncingAll || (selectedDataset?.tables.length ?? 0) === 0}
-                    >
+                    <RoleTooltip allowed={canEdit} requiredRole="Editor">
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        onClick={handleOpenAddMore}
+                        disabled={resyncingAll || !canEdit}
+                      >
+                        Add More Tables
+                      </Button>
+                    </RoleTooltip>
+                    <RoleTooltip allowed={canEdit} requiredRole="Editor">
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        onClick={handleResyncAll}
+                        disabled={resyncingAll || (selectedDataset?.tables.length ?? 0) === 0 || !canEdit}
+                      >
                       {resyncingAll ? (
                         <span className="flex items-center gap-1.5">
                           <Loader2 className="w-3.5 h-3.5 animate-spin" />
@@ -1190,13 +1199,17 @@ export function IngestionCard({ type, title, projectId, initialDatasets, initial
                       ) : (
                         'Re-sync All'
                       )}
-                    </Button>
-                    <button
-                      onClick={() => setDisconnectConfirm(true)}
-                      className="text-xs text-red-600 hover:underline ml-auto"
-                    >
-                      Disconnect
-                    </button>
+                      </Button>
+                    </RoleTooltip>
+                    <RoleTooltip allowed={canEdit} requiredRole="Editor">
+                      <button
+                        onClick={canEdit ? () => setDisconnectConfirm(true) : undefined}
+                        disabled={!canEdit}
+                        className="text-xs text-red-600 hover:underline ml-auto disabled:opacity-40 disabled:cursor-not-allowed"
+                      >
+                        Disconnect
+                      </button>
+                    </RoleTooltip>
                   </div>
                 ) : (
                   <div className="rounded-md border border-red-200 bg-red-50 px-4 py-3 space-y-2">
@@ -1559,14 +1572,17 @@ export function IngestionCard({ type, title, projectId, initialDatasets, initial
                             One CSV per table · Max 10MB · Up to 100,000 rows
                           </p>
                         </div>
-                        <Button
-                          variant="outline"
-                          size="sm"
-                          type="button"
-                          onClick={() => fileInputRef.current?.click()}
-                        >
-                          Select File
-                        </Button>
+                        <RoleTooltip allowed={canEdit} requiredRole="Editor">
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            type="button"
+                            onClick={() => fileInputRef.current?.click()}
+                            disabled={!canEdit}
+                          >
+                            Select File
+                          </Button>
+                        </RoleTooltip>
                       </div>
                     )}
                   </div>
@@ -1671,14 +1687,17 @@ export function IngestionCard({ type, title, projectId, initialDatasets, initial
                         Supports standard SQL, SQL Server, Oracle, SAP HANA, MySQL, PostgreSQL
                       </p>
                     </div>
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      type="button"
-                      onClick={() => ddlFileInputRef.current?.click()}
-                    >
-                      Select File
-                    </Button>
+                    <RoleTooltip allowed={canEdit} requiredRole="Editor">
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        type="button"
+                        onClick={() => ddlFileInputRef.current?.click()}
+                        disabled={!canEdit}
+                      >
+                        Select File
+                      </Button>
+                    </RoleTooltip>
                   </div>
                 )}
               </div>

@@ -1,5 +1,6 @@
 import { Suspense } from 'react'
 import { createClient } from '@/lib/supabase/server'
+import { supabaseAdmin } from '@/lib/supabase/admin'
 import { getInviteByToken } from '@/lib/actions/org-invites'
 import InviteClient from './InviteClient'
 
@@ -13,6 +14,16 @@ export default async function InvitePage({ params }: Props) {
 
   const supabase = await createClient()
   const { data: { user } } = await supabase.auth.getUser()
+
+  // Server-side check: does this email already have a Mine account?
+  // Done server-side to avoid exposing user existence to the public via client calls.
+  let emailExists = false
+  if (invite && !user) {
+    const { data: existingUsers } = await supabaseAdmin.auth.admin.listUsers({ perPage: 1000 })
+    emailExists = existingUsers?.users?.some(
+      (u) => u.email?.toLowerCase() === invite.email.toLowerCase()
+    ) ?? false
+  }
 
   if (error || !invite) {
     return (
@@ -63,6 +74,7 @@ export default async function InvitePage({ params }: Props) {
           email={invite.email}
           isLoggedIn={!!user}
           userId={user?.id}
+          emailExists={emailExists}
         />
       </Suspense>
     </Shell>
