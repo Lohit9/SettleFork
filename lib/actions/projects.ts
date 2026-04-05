@@ -500,8 +500,9 @@ export async function getProjectsWithStats(orgId?: string): Promise<ProjectWithS
  * extraction. The extraction is fire-and-forget — it never blocks the
  * completion response and failures are logged but not surfaced to the user.
  */
-export async function markProjectComplete(projectId: string): Promise<Project> {
-  const project = await updateProject(projectId, { status: 'completed', completed_at: new Date().toISOString() })
+export async function markProjectComplete(projectId: string): Promise<{ success: boolean; data?: Project; error?: string }> {
+  const result = await updateProject(projectId, { status: 'completed', completed_at: new Date().toISOString() })
+  if (!result.success) return result
 
   // Fire intelligence extraction in the background — non-blocking and failure-safe
   try {
@@ -512,7 +513,7 @@ export async function markProjectComplete(projectId: string): Promise<Project> {
     console.error('Migration intelligence extraction failed (non-critical):', err)
   }
 
-  return project
+  return result
 }
 
 export async function reactivateProject(projectId: string): Promise<{ success: boolean; error?: string }> {
