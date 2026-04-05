@@ -11,18 +11,32 @@ export default async function ProjectsPage() {
   const supabase = await createClient()
   const { data: { user } } = await supabase.auth.getUser()
 
+  // Resolve org role — don't depend solely on the cookie.
+  // New users have no cookie yet; fall back to owner org then first org.
   let activeOrgRole: OrgRole = 'viewer'
-  if (user && activeOrgId) {
-    const { data: membership } = await supabase
+  let resolvedOrgId = activeOrgId
+
+  if (user) {
+    const { data: memberships } = await supabase
       .from('org_memberships')
-      .select('role')
-      .eq('org_id', activeOrgId)
+      .select('role, org_id')
       .eq('user_id', user.id)
-      .single()
-    if (membership?.role) activeOrgRole = membership.role as OrgRole
+
+    if (memberships && memberships.length > 0) {
+      const membership = activeOrgId
+        ? (memberships.find((m) => m.org_id === activeOrgId) ??
+           memberships.find((m) => m.role === 'owner') ??
+           memberships[0])
+        : (memberships.find((m) => m.role === 'owner') ?? memberships[0])
+
+      if (membership) {
+        activeOrgRole = membership.role as OrgRole
+        resolvedOrgId = membership.org_id
+      }
+    }
   }
 
-  const projects = await getProjectsWithStats(activeOrgId)
+  const projects = await getProjectsWithStats(resolvedOrgId)
 
   return <ProjectsList initialProjects={projects} activeOrgRole={activeOrgRole} />
 }
