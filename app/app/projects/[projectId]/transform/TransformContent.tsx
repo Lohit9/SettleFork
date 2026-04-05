@@ -46,6 +46,16 @@ import { findFKDependents, cascadeTransformToFKs } from '@/lib/actions/fk-cascad
 import type { FKDependent } from '@/lib/actions/fk-cascade'
 import { useProjectRole } from '@/lib/hooks/useProjectRole'
 import { RoleTooltip } from '@/components/app/RoleTooltip'
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from '@/components/ui/alert-dialog'
 
 // ── Types ──────────────────────────────────────────────────────────────────────
 
@@ -211,6 +221,7 @@ export default function TransformContent({ projectId, projectName, initialData, 
     totalRows: number
   } | null>(null)
   const [isReverting, setIsReverting] = useState(false)
+  const [showRevertDialog, setShowRevertDialog] = useState(false)
   const [toast, setToast] = useState<{ message: string; type: 'success' | 'error' } | null>(null)
   const [stagingError, setStagingError] = useState<string | null>(null)
 
@@ -782,9 +793,13 @@ export default function TransformContent({ projectId, projectName, initialData, 
 
   // ── Staging warning popup actions ─────────────────────────────────────────
 
-  async function handleRevert() {
+  function handleRevert() {
+    setShowRevertDialog(true)
+  }
+
+  async function confirmRevert() {
+    setShowRevertDialog(false)
     if (!selectedMappingId) return
-    if (!confirm('This will remove staged data for this field. Continue?')) return
     setIsReverting(true)
     try {
       const result = await revertTransform(selectedMappingId)
@@ -2544,6 +2559,27 @@ export default function TransformContent({ projectId, projectName, initialData, 
           onCancel={handleWarningCancel}
         />
       )}
+
+      {/* Revert confirmation dialog */}
+      <AlertDialog open={showRevertDialog} onOpenChange={setShowRevertDialog}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Revert staged data?</AlertDialogTitle>
+            <AlertDialogDescription>
+              This will remove the staged transformation data for this field and reset it back to tested status. Other fields will not be affected.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={confirmRevert}
+              className="bg-red-600 hover:bg-red-700 text-white focus-visible:ring-red-600"
+            >
+              Revert
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
 
       {/* FK cascade prompt — shown after applying a transform to a PK field */}
       {showFKCascade && fkCascadeData && (
