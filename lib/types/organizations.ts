@@ -1,10 +1,9 @@
-export type OrgRole = 'owner' | 'admin' | 'editor' | 'reviewer' | 'viewer'
+export type OrgRole = 'owner' | 'admin' | 'editor' | 'viewer'
 
 export const ROLE_HIERARCHY: Record<OrgRole, number> = {
-  owner: 5,
-  admin: 4,
-  editor: 3,
-  reviewer: 2,
+  owner: 4,
+  admin: 3,
+  editor: 2,
   viewer: 1,
 }
 

@@ -1,5 +1,4 @@
 import Link from 'next/link'
-import SidebarShell from '@/components/app/SidebarShell'
 
 function BoxIcon({ className }: { className?: string }) {
   return (
@@ -54,8 +53,7 @@ function BulletList({ items }: { items: string[] }) {
 
 export default function GettingStartedPage() {
   return (
-    <SidebarShell>
-      <div className="flex-1 bg-gray-50 min-h-screen overflow-auto">
+    <div className="flex-1 bg-gray-50 min-h-screen overflow-auto">
         <div className="max-w-3xl mx-auto py-8 px-6">
 
           {/* Back link */}
@@ -203,6 +201,5 @@ export default function GettingStartedPage() {
 
         </div>
       </div>
-    </SidebarShell>
   )
 }

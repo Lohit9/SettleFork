@@ -13,7 +13,6 @@ const ROLE_LABELS: Record<OrgRole, string> = {
   owner: 'Owner',
   admin: 'Admin',
   editor: 'Editor',
-  reviewer: 'Reviewer',
   viewer: 'Viewer',
 }
 
@@ -21,7 +20,6 @@ const ROLE_COLORS: Record<OrgRole, string> = {
   owner: 'bg-purple-100 text-purple-700',
   admin: 'bg-blue-100 text-blue-700',
   editor: 'bg-green-100 text-green-700',
-  reviewer: 'bg-amber-100 text-amber-700',
   viewer: 'bg-gray-100 text-gray-600',
 }
 
@@ -33,9 +31,10 @@ interface InviteClientProps {
   email: string
   isLoggedIn: boolean
   userId?: string
+  emailExists?: boolean
 }
 
-export default function InviteClient({ token, orgName, role, inviterName, email, isLoggedIn, userId }: InviteClientProps) {
+export default function InviteClient({ token, orgName, role, inviterName, email, isLoggedIn, userId, emailExists = false }: InviteClientProps) {
   const router = useRouter()
   const [isPending, startTransition] = useTransition()
   const [error, setError] = useState<string | null>(null)
@@ -72,7 +71,12 @@ export default function InviteClient({ token, orgName, role, inviterName, email,
         loadedAt: String(Date.now() - 10000),
       })
       if (!result.success) {
-        setError(result.error ?? 'Failed to create account')
+        if (result.error?.toLowerCase().includes('already exists') || result.error?.toLowerCase().includes('already registered')) {
+          setError(`An account with this email already exists. Please log in instead.`)
+          // Surface the login link via the error state — user will see it below
+        } else {
+          setError(result.error ?? 'Failed to create account')
+        }
         return
       }
       if (result.requiresEmailVerification) {
@@ -105,10 +109,19 @@ export default function InviteClient({ token, orgName, role, inviterName, email,
       {error && (
         <div className="mb-4 rounded-md bg-red-50 border border-red-200 px-4 py-3 text-sm text-red-700">
           {error}
+          {(error.toLowerCase().includes('already exists') || error.toLowerCase().includes('already registered') || error.toLowerCase().includes('log in instead')) && (
+            <span>
+              {' '}
+              <a href={`/login?redirect=/invite/${token}`} className="font-medium underline hover:text-red-900">
+                Log in here
+              </a>
+            </span>
+          )}
         </div>
       )}
 
       {isLoggedIn ? (
+        /* State 1: Already logged in — show Accept button */
         <Button
           onClick={handleAccept}
           disabled={isPending}
@@ -116,7 +129,22 @@ export default function InviteClient({ token, orgName, role, inviterName, email,
         >
           {isPending ? 'Joining...' : 'Accept Invite & Join'}
         </Button>
+      ) : emailExists ? (
+        /* State 2: Not logged in, but email has an existing account — prompt login */
+        <>
+          <div className="border-t border-gray-200 my-5" />
+          <div className="rounded-lg bg-amber-50 border border-amber-200 px-4 py-3 text-sm text-amber-800 mb-4">
+            You already have a Mine account with this email address. Log in to accept this invite.
+          </div>
+          <a
+            href={`/login?redirect=/invite/${token}`}
+            className="flex items-center justify-center w-full h-10 px-4 rounded-lg bg-blue-600 hover:bg-blue-700 text-white text-sm font-medium transition-colors"
+          >
+            Log In to Accept
+          </a>
+        </>
       ) : (
+        /* State 3: Not logged in, new email — show signup form */
         <>
           <div className="border-t border-gray-200 my-5" />
           <p className="text-sm text-gray-600 mb-4 text-center">Create your account to join</p>

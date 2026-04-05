@@ -15,6 +15,7 @@ import { stageAllData } from '@/lib/actions/staging'
 import { getVerifiedFixes } from '@/lib/quality/fix-reconciliation'
 import type { VerifiedFix } from '@/lib/quality/fix-reconciliation'
 import { useProjectRole } from '@/lib/hooks/useProjectRole'
+import { RoleTooltip } from '@/components/app/RoleTooltip'
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -153,17 +154,7 @@ function RotateCcwIcon({ className }: { className?: string }) {
 
 // ── Issue Card ────────────────────────────────────────────────────────────────
 
-function RoleTooltip({ children, show, role }: { children: React.ReactNode; show: boolean; role: string }) {
-  if (!show) return <>{children}</>
-  return (
-    <div className="relative group/role-tip inline-flex">
-      {children}
-      <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-1.5 px-2.5 py-1 bg-gray-900 text-white text-[11px] rounded-md opacity-0 group-hover/role-tip:opacity-100 transition-opacity pointer-events-none whitespace-nowrap z-50">
-        You need {role} access to perform this action
-      </div>
-    </div>
-  )
-}
+// RoleTooltip is imported from @/components/app/RoleTooltip
 
 function IssueCard({
   issue,
@@ -182,7 +173,7 @@ function IssueCard({
   const [applyingIdx, setApplyingIdx] = useState<number | null>(null)
   const [reverting, setReverting] = useState(false)
   const [error, setError] = useState<string | null>(null)
-  const [toast, setToast] = useState<string | null>(null)
+  const [toast, setToast] = useState<{ message: string; variant: 'success' | 'error' } | null>(null)
   const [showSQL, setShowSQL] = useState<string | null>(null)
   const [confirmApply, setConfirmApply] = useState<{ idx: number; fix: FixOption } | null>(null)
   const [confirmNoSnapshot, setConfirmNoSnapshot] = useState<number | null>(null)
@@ -214,8 +205,8 @@ function IssueCard({
     }
   }, [issue.status, issue.id, issue.project_id, prefetchedFixHistory])
 
-  function showToast(msg: string) {
-    setToast(msg)
+  function showToast(msg: string, variant: 'success' | 'error' = 'success') {
+    setToast({ message: msg, variant })
     setTimeout(() => setToast(null), 3500)
   }
 
@@ -254,12 +245,15 @@ function IssueCard({
   }
 
   async function handleAcceptRisk() {
+    setError(null)
     const res = await acceptRisk(issue.id, riskReason || undefined)
-    setShowAcceptModal(false)
-    setRiskReason('')
     if (res.success) {
+      setShowAcceptModal(false)
+      setRiskReason('')
       showToast('Risk accepted')
       onUpdate({ ...issue, status: 'accepted_risk' })
+    } else {
+      showToast(res.error ?? 'Could not accept risk', 'error')
     }
   }
 
@@ -535,7 +529,7 @@ function IssueCard({
                     </div>
                     <div className="flex items-center gap-3 pt-1">
                       {!isArchived && (
-                        <RoleTooltip show={!canEdit} role="editor">
+                        <RoleTooltip allowed={canEdit} requiredRole="Editor">
                           <button
                             onClick={() => setConfirmApply({ idx, fix: opt })}
                             disabled={applyingIdx !== null || !canEdit}
@@ -557,49 +551,66 @@ function IssueCard({
                 ))}
                 <div className="pt-1 border-t border-blue-100 flex items-center justify-between gap-3">
                   <div className="flex items-center gap-2">
-                    <button
-                      onClick={() => setShowCustomFix(true)}
-                      className="flex items-center gap-1.5 px-3 py-1.5 text-sm border border-gray-300 text-gray-700 rounded-lg hover:bg-gray-50 transition-colors"
-                    >
-                      ✎ Write a Custom Fix
-                    </button>
-                    <button
-                      onClick={handleGenerateFix}
-                      disabled={generatingFix}
-                      className="flex items-center gap-1.5 px-3 py-1.5 text-sm border border-gray-300 text-gray-500 rounded-lg hover:bg-gray-50 disabled:opacity-50 transition-colors"
-                      title="Re-generate fix suggestions with latest AI"
-                    >
+                    <RoleTooltip allowed={canEdit} requiredRole="Editor">
+                      <button
+                        onClick={canEdit ? () => setShowCustomFix(true) : undefined}
+                        disabled={!canEdit}
+                        className="flex items-center gap-1.5 px-3 py-1.5 text-sm border border-gray-300 text-gray-700 rounded-lg hover:bg-gray-50 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+                      >
+                        ✎ Write a Custom Fix
+                      </button>
+                    </RoleTooltip>
+                    <RoleTooltip allowed={canEdit} requiredRole="Editor">
+                      <button
+                        onClick={canEdit ? handleGenerateFix : undefined}
+                        disabled={generatingFix || !canEdit}
+                        className="flex items-center gap-1.5 px-3 py-1.5 text-sm border border-gray-300 text-gray-500 rounded-lg hover:bg-gray-50 disabled:opacity-50 transition-colors"
+                        title="Re-generate fix suggestions with latest AI"
+                      >
                       {generatingFix ? (
                         <><span className="w-3 h-3 border-2 border-gray-300 border-t-gray-500 rounded-full animate-spin" />Regenerating…</>
                       ) : (
                         <>↻ Regenerate</>
                       )}
-                    </button>
+                      </button>
+                    </RoleTooltip>
                   </div>
-                  <button
-                    onClick={() => setShowAcceptModal(true)}
-                    className="text-sm text-gray-500 hover:text-gray-700 underline"
-                  >
-                    Accept Risk
-                  </button>
+                  <RoleTooltip allowed={canEdit} requiredRole="Editor">
+                    <button
+                      onClick={canEdit ? () => setShowAcceptModal(true) : undefined}
+                      disabled={!canEdit}
+                      className="text-sm text-gray-500 hover:text-gray-700 underline disabled:opacity-40 disabled:cursor-not-allowed"
+                    >
+                      Accept Risk
+                    </button>
+                  </RoleTooltip>
                 </div>
               </div>
             )}
 
             {!hasOptions && !generatingFix && (
-              <button
-                onClick={() => setShowAcceptModal(true)}
-                className="mt-2 text-sm text-gray-500 hover:text-gray-700 underline"
-              >
-                Accept Risk
-              </button>
+              <RoleTooltip allowed={canEdit} requiredRole="Editor">
+                <button
+                  onClick={canEdit ? () => setShowAcceptModal(true) : undefined}
+                  disabled={!canEdit}
+                  className="mt-2 text-sm text-gray-500 hover:text-gray-700 underline disabled:opacity-40 disabled:cursor-not-allowed"
+                >
+                  Accept Risk
+                </button>
+              </RoleTooltip>
             )}
           </div>
         )}
 
         {toast && (
-          <div className="mx-4 mb-3 px-3 py-2 bg-green-50 text-green-700 text-sm rounded-lg border border-green-200">
-            {toast}
+          <div
+            className={`mx-4 mb-3 px-3 py-2 text-sm rounded-lg border ${
+              toast.variant === 'success'
+                ? 'bg-green-50 text-green-700 border-green-200'
+                : 'bg-red-50 text-red-700 border-red-200'
+            }`}
+          >
+            {toast.message}
           </div>
         )}
       </div>
@@ -1371,7 +1382,7 @@ function CreateManualFixModal({
                       )}
                       <div className="flex gap-2">
                         {!isArchived && (
-                          <RoleTooltip show={!canEdit} role="editor">
+                          <RoleTooltip allowed={canEdit} requiredRole="Editor">
                             <button
                               onClick={() => handleApplyNL()}
                               disabled={isApplying || !canEdit}
@@ -1420,7 +1431,7 @@ function CreateManualFixModal({
                       ) : 'Validate & Preview'}
                     </button>
                     {!isArchived && (
-                      <RoleTooltip show={!canEdit} role="editor">
+                      <RoleTooltip allowed={canEdit} requiredRole="Editor">
                         <button
                           onClick={() => handleApplySQL()}
                           disabled={!sqlValidated || isApplying || !canEdit}
@@ -1547,7 +1558,14 @@ function IssueFixModal({
       }
 
       // Mark the linked quality issue as fixed and link the fix_history row
-      await markIssueFixed(issue.id, result.fixHistoryId)
+      const marked = await markIssueFixed(issue.id, result.fixHistoryId)
+      if (!marked.success) {
+        setError(
+          marked.error ??
+            'Fix was applied but updating the issue failed. Check Fix History and refresh the page.'
+        )
+        return
+      }
 
       onFixApplied({ ...issue, status: 'fixed' }, result.rowsAffected)
     } finally {
@@ -1733,7 +1751,7 @@ function IssueFixModal({
               Cancel
             </button>
             {!isArchived && (
-              <RoleTooltip show={!canEdit} role="editor">
+              <RoleTooltip allowed={canEdit} requiredRole="Editor">
                 <button
                   onClick={() => handleApply()}
                   disabled={isApplying || !canApply || !canEdit}
@@ -2110,13 +2128,15 @@ export default function DataQualityContent({
             )}
           </button>
           {!isArchived && (
-            <button
-              onClick={handleRunFullScan}
-              disabled={scanning || isRestaging}
-              className="px-4 py-1.5 text-sm bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50 flex items-center gap-2"
-            >
-              {scanning ? <><span className="w-3.5 h-3.5 border-2 border-white/30 border-t-white rounded-full animate-spin" />Scanning…</> : '⊙ Run Full Scan'}
-            </button>
+            <RoleTooltip allowed={canEdit} requiredRole="Editor">
+              <button
+                onClick={canEdit ? handleRunFullScan : undefined}
+                disabled={scanning || isRestaging || !canEdit}
+                className="px-4 py-1.5 text-sm bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50 flex items-center gap-2"
+              >
+                {scanning ? <><span className="w-3.5 h-3.5 border-2 border-white/30 border-t-white rounded-full animate-spin" />Scanning…</> : '⊙ Run Full Scan'}
+              </button>
+            </RoleTooltip>
           )}
         </div>
       </PageHeader>

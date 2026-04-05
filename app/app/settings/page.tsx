@@ -1,7 +1,6 @@
 import { redirect } from 'next/navigation'
 import { createClient } from '@/lib/supabase/server'
 import { signOut } from '@/lib/actions/auth'
-import SidebarShell from '@/components/app/SidebarShell'
 import { Button } from '@/components/ui/button'
 import { SecuritySection } from './SecuritySection'
 import { PreferencesSection } from './PreferencesSection'
@@ -41,8 +40,7 @@ export default async function SettingsPage() {
   const isVerified = !!user.email_confirmed_at
 
   return (
-    <SidebarShell>
-      <div className="flex-1 bg-gray-50 min-h-screen">
+    <div className="flex-1 bg-gray-50 min-h-screen">
         {/* Header */}
         <div className="border-b border-gray-200 bg-white">
           <div className="px-8 py-5 flex items-center justify-between">
@@ -163,7 +161,6 @@ export default async function SettingsPage() {
           <DangerZoneSection />
         </div>
       </div>
-    </SidebarShell>
   )
 }
 

@@ -257,7 +257,6 @@ export async function addValidationRuleFromNL(
     .from('projects')
     .select('id')
     .eq('id', projectId)
-    .eq('user_id', user.id)
     .single()
   if (!project) return { success: false, error: 'Project not found or access denied' }
 

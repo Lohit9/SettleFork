@@ -8,16 +8,19 @@ import { usePathname, useRouter } from 'next/navigation'
 import { Home, HelpCircle, Settings } from '@/components/icons'
 import { createClient } from '@/lib/supabase/client'
 import { signOut } from '@/lib/actions/auth'
-import { getOrganizationsForUser } from '@/lib/actions/organizations'
 import type { Organization } from '@/lib/types/organizations'
 import type { OrgRole } from '@/lib/types/organizations'
 
-interface SidebarShellProps {
-  children: React.ReactNode
-}
-
 interface OrgWithRole extends Organization {
   role: OrgRole
+}
+
+interface SidebarShellProps {
+  children: React.ReactNode
+  initialOrgs: OrgWithRole[]
+  initialActiveOrgId: string | null
+  initialUserName: string
+  initialUserEmail: string
 }
 
 function getUserInitials(name?: string | null, email?: string | null): string {
@@ -46,19 +49,26 @@ const NAV_ITEMS = [
   { label: 'Settings', href: '/app/settings', Icon: Settings,   matchFn: (p: string) => p === '/app/settings' || p === '/app/profile' },
 ]
 
-export default function SidebarShell({ children }: SidebarShellProps) {
+export default function SidebarShell({
+  children,
+  initialOrgs,
+  initialActiveOrgId,
+  initialUserName,
+  initialUserEmail,
+}: SidebarShellProps) {
   const pathname = usePathname()
   const router = useRouter()
 
   const [isHovered, setIsHovered] = useState(false)
   const [isPopoverOpen, setIsPopoverOpen] = useState(false)
   const [popoverCoords, setPopoverCoords] = useState({ bottom: 0, left: 0 })
-  const [userName, setUserName] = useState<string | null>(null)
-  const [userEmail, setUserEmail] = useState<string | null>(null)
+  // Seeded from server — no loading flash
+  const [userName] = useState<string>(initialUserName)
+  const [userEmail] = useState<string>(initialUserEmail)
 
-  // Org switcher state
-  const [orgs, setOrgs] = useState<OrgWithRole[]>([])
-  const [activeOrgId, setActiveOrgId] = useState<string | null>(null)
+  // Org switcher state — seeded from server
+  const [orgs] = useState<OrgWithRole[]>(initialOrgs)
+  const [activeOrgId, setActiveOrgId] = useState<string | null>(initialActiveOrgId)
   const [isOrgPopoverOpen, setIsOrgPopoverOpen] = useState(false)
   const [orgPopoverCoords, setOrgPopoverCoords] = useState({ top: 0, left: 0 })
   const orgBtnRef = useRef<HTMLButtonElement>(null)
@@ -75,28 +85,6 @@ export default function SidebarShell({ children }: SidebarShellProps) {
   }, [router])
 
   useIdleTimeout(handleIdleTimeout)
-
-  // Fetch user data + orgs
-  useEffect(() => {
-    const supabase = createClient()
-    supabase.auth.getUser().then(({ data: { user } }) => {
-      if (user) {
-        setUserName(user.user_metadata?.full_name ?? null)
-        setUserEmail(user.email ?? null)
-      }
-    })
-
-    getOrganizationsForUser().then(({ orgs: userOrgs }) => {
-      setOrgs(userOrgs)
-      const cookieOrgId = document.cookie.match(/mine-active-org=([^;]+)/)?.[1]
-      if (cookieOrgId && userOrgs.some((o) => o.id === cookieOrgId)) {
-        setActiveOrgId(cookieOrgId)
-      } else if (userOrgs.length > 0) {
-        setActiveOrgId(userOrgs[0].id)
-        document.cookie = `mine-active-org=${userOrgs[0].id};path=/;max-age=${365 * 24 * 60 * 60}`
-      }
-    })
-  }, [])
 
   // Close popover on outside click
   useEffect(() => {
@@ -173,6 +161,7 @@ export default function SidebarShell({ children }: SidebarShellProps) {
     setIsOrgPopoverOpen(false)
     document.cookie = `mine-active-org=${orgId};path=/;max-age=${365 * 24 * 60 * 60}`
     router.push('/app/projects')
+    router.refresh()
   }
 
   const expanded = isHovered

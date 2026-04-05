@@ -45,9 +45,11 @@ function LoginContent() {
         return
       }
 
-      // Redirect to the original destination or /app/projects
-      const redirect = searchParams.get('redirect') || '/app/projects'
-      router.push(redirect)
+      // Redirect to the original destination or /app/projects.
+      // Validate starts with / to prevent open-redirect attacks.
+      const rawRedirect = searchParams.get('redirect')
+      const safeRedirect = rawRedirect?.startsWith('/') ? rawRedirect : '/app/projects'
+      router.push(safeRedirect)
       router.refresh()
     } catch (err) {
       setError('An unexpected error occurred. Please try again.')

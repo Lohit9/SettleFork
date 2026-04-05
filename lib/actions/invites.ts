@@ -41,7 +41,7 @@ async function assertAdmin() {
   const supabase = await createClient()
   const { data: { user } } = await supabase.auth.getUser()
   if (!user || !ADMIN_EMAILS.includes(user.email ?? '')) {
-    throw new Error('Unauthorized')
+    return null
   }
   return user
 }
@@ -133,6 +133,7 @@ export async function generateInviteCode(
   company?: string
 ): Promise<{ code: string; signupUrl: string; error?: string }> {
   const user = await assertAdmin()
+  if (!user) return { code: '', signupUrl: '', error: 'Not authorized' }
 
   const code = await uniqueCode()
 
@@ -156,7 +157,8 @@ export async function updateAccessRequestStatus(
   requestId: string,
   status: 'contacted' | 'approved' | 'declined'
 ): Promise<{ success: boolean; error?: string }> {
-  await assertAdmin()
+  const adminUser = await assertAdmin()
+  if (!adminUser) return { success: false, error: 'Not authorized' }
 
   const { error } = await supabaseAdmin
     .from('access_requests')
@@ -174,6 +176,7 @@ export async function approveAndGenerateInvite(
   requestId: string
 ): Promise<{ code: string; signupUrl: string; error?: string }> {
   const user = await assertAdmin()
+  if (!user) return { code: '', signupUrl: '', error: 'Not authorized' }
 
   const { data: request, error: fetchError } = await supabaseAdmin
     .from('access_requests')

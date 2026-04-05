@@ -31,6 +31,7 @@ import type {
 } from '@/lib/actions/mappings'
 import { acknowledgeField, removeAcknowledgment } from '@/lib/actions/field-acknowledgments'
 import { useProjectRole } from '@/lib/hooks/useProjectRole'
+import { RoleTooltip } from '@/components/app/RoleTooltip'
 
 // ─── Props ────────────────────────────────────────────────────────────────────
 
@@ -160,12 +161,14 @@ function GenerateMappingsPanel({
   targetTables,
   onDone,
   onCancel,
+  canEdit = true,
 }: {
   projectId: string
   sourceTables: { id: string; name: string; datasetName: string }[]
   targetTables: { id: string; name: string; datasetName: string }[]
   onDone: (result: { generated: number; skipped: number; message?: string }) => void
   onCancel?: () => void
+  canEdit?: boolean
 }) {
   const [selectedSrc, setSelectedSrc] = useState<Set<string>>(
     () => new Set(sourceTables.map((t) => t.id))
@@ -254,13 +257,15 @@ function GenerateMappingsPanel({
             Cancel
           </button>
         ) : <div />}
-        <button
-          onClick={handleGenerate}
-          disabled={!canGenerate || generating}
-          className="px-5 py-2.5 text-sm font-medium text-white bg-blue-600 rounded-lg hover:bg-blue-700 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
-        >
-          {generating ? 'Generating…' : 'Generate Mappings'}
-        </button>
+        <RoleTooltip allowed={canEdit} requiredRole="Editor">
+          <button
+            onClick={handleGenerate}
+            disabled={!canGenerate || generating || !canEdit}
+            className="px-5 py-2.5 text-sm font-medium text-white bg-blue-600 rounded-lg hover:bg-blue-700 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+          >
+            {generating ? 'Generating…' : 'Generate Mappings'}
+          </button>
+        </RoleTooltip>
       </div>
     </div>
   )
@@ -478,8 +483,16 @@ function AddMappingModal({
 
       // Step 2: Auto-generate field mappings with AI
       setGeneratingFields(true)
-      await suggestRemainingMappings(result.data!.id)
+      const suggestResult = await suggestRemainingMappings(result.data!.id)
       setGeneratingFields(false)
+      if (!suggestResult.success) {
+        setError(
+          suggestResult.error ??
+            'Field suggestion failed. The table mapping was added — open the card and use “Suggest remaining”.'
+        )
+        onAdded()
+        return
+      }
 
       onAdded()
       onClose()
@@ -550,6 +563,7 @@ function InlineAddFieldRow({
   allFieldsByTable,
   onAdded,
   onCancel,
+  onSync,
   initialSourceFieldId,
   initialTargetFieldId,
 }: {
@@ -557,6 +571,8 @@ function InlineAddFieldRow({
   allFieldsByTable: Record<string, SimpleField[]>
   onAdded: (newFM: RichFieldMapping) => void
   onCancel: () => void
+  /** Resync from server after a partial failure (e.g. primary row saved but contributing adds failed). */
+  onSync?: () => void
   initialSourceFieldId?: string
   initialTargetFieldId?: string
 }) {
@@ -664,7 +680,12 @@ function InlineAddFieldRow({
       const primaryResult = await addManualFieldMapping(tm.id, srcFieldId, tgtFieldId, false, primaryReasoning)
       if (!primaryResult.success) { setError(primaryResult.error ?? 'Failed'); return }
       for (const cfId of contributingFieldIds.filter((id) => id !== '')) {
-        await addManualFieldMapping(tm.id, cfId, tgtFieldId, true)
+        const cr = await addManualFieldMapping(tm.id, cfId, tgtFieldId, true)
+        if (!cr.success) {
+          setError(cr.error ?? 'Failed to add contributing field')
+          onSync?.()
+          return
+        }
       }
       const newFM: RichFieldMapping = {
         id: primaryResult.data!.id,
@@ -693,7 +714,12 @@ function InlineAddFieldRow({
       const primaryResult = await addManualFieldMapping(tm.id, srcFieldId, tgtFieldId, false, primaryReasoning)
       if (!primaryResult.success) { setError(primaryResult.error ?? 'Failed'); return }
       for (const tfId of additionalTargetIds.filter((id) => id !== '')) {
-        await addManualFieldMapping(tm.id, srcFieldId, tfId, false)
+        const tr = await addManualFieldMapping(tm.id, srcFieldId, tfId, false)
+        if (!tr.success) {
+          setError(tr.error ?? 'Failed to add additional target mapping')
+          onSync?.()
+          return
+        }
       }
       const newFM: RichFieldMapping = {
         id: primaryResult.data!.id,
@@ -1044,20 +1070,10 @@ function InlineAddFieldRow({
 
 // ─── Field Mapping Row ────────────────────────────────────────────────────────
 
-function RoleTooltip({ children, show, role }: { children: React.ReactNode; show: boolean; role: string }) {
-  if (!show) return <>{children}</>
-  return (
-    <div className="relative group/role-tip inline-flex">
-      {children}
-      <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-1.5 px-2.5 py-1 bg-gray-900 text-white text-[11px] rounded-md opacity-0 group-hover/role-tip:opacity-100 transition-opacity pointer-events-none whitespace-nowrap z-50">
-        You need {role} access to perform this action
-      </div>
-    </div>
-  )
-}
+// RoleTooltip is imported from @/components/app/RoleTooltip
 
 function FieldMappingRow({
-  fm, allTMFMs, onSelect, onApprove, onReject, onDelete, canReview = true,
+  fm, allTMFMs, onSelect, onApprove, onReject, onDelete, canEdit = true,
 }: {
   fm: RichFieldMapping
   allTMFMs: RichFieldMapping[]
@@ -1065,7 +1081,7 @@ function FieldMappingRow({
   onApprove: () => void
   onReject: () => void
   onDelete: () => void
-  canReview?: boolean
+  canEdit?: boolean
 }) {
   const isApproved = fm.status === 'approved'
   const isRejected = fm.status === 'rejected'
@@ -1108,7 +1124,7 @@ function FieldMappingRow({
             <span className="text-sm font-medium text-gray-900 truncate">{fm.targetField?.name ?? '—'}</span>
           </div>
           <div className="flex items-center gap-0.5 flex-shrink-0">
-            <button onClick={(e) => { e.stopPropagation(); onDelete(); }} className="p-1 rounded transition-colors text-gray-300 hover:text-red-500 hover:bg-red-50" title="Remove value assignment">
+            <button onClick={(e) => { e.stopPropagation(); if (canEdit) onDelete(); }} disabled={!canEdit} className="p-1 rounded transition-colors text-gray-300 hover:text-red-500 hover:bg-red-50 disabled:opacity-40 disabled:cursor-not-allowed" title="Remove value assignment">
               <X className="w-3.5 h-3.5" />
             </button>
           </div>
@@ -1207,22 +1223,26 @@ function FieldMappingRow({
           )}
         </div>
         <div className="flex items-center gap-1" onClick={(e) => e.stopPropagation()}>
-          <RoleTooltip show={!canReview} role="reviewer">
-            <button onClick={canReview ? onApprove : undefined} disabled={!canReview} title="Accept" className={`p-1.5 rounded-md transition-colors disabled:opacity-40 disabled:cursor-not-allowed ${isApproved ? 'text-green-600' : 'text-gray-300 hover:text-green-600 hover:bg-green-50'}`}>
+          <RoleTooltip allowed={canEdit} requiredRole="Editor">
+            <button onClick={canEdit ? onApprove : undefined} disabled={!canEdit} title="Accept" className={`p-1.5 rounded-md transition-colors disabled:opacity-40 disabled:cursor-not-allowed ${isApproved ? 'text-green-600' : 'text-gray-300 hover:text-green-600 hover:bg-green-50'}`}>
               <Check className="w-4 h-4" />
             </button>
           </RoleTooltip>
-          <button onClick={onSelect} title="Edit" className="p-1.5 rounded-md text-gray-300 hover:text-blue-600 hover:bg-blue-50 transition-colors">
-            <Pencil className="w-4 h-4" />
-          </button>
-          <RoleTooltip show={!canReview} role="reviewer">
-            <button onClick={canReview ? onReject : undefined} disabled={!canReview} title={isRejected ? 'Mark needs review' : 'Reject'} className={`p-1.5 rounded-md transition-colors disabled:opacity-40 disabled:cursor-not-allowed ${isRejected ? 'text-red-500' : 'text-gray-300 hover:text-red-500 hover:bg-red-50'}`}>
+          <RoleTooltip allowed={canEdit} requiredRole="Editor">
+            <button onClick={canEdit ? onSelect : undefined} disabled={!canEdit} title="Edit" className="p-1.5 rounded-md text-gray-300 hover:text-blue-600 hover:bg-blue-50 transition-colors disabled:opacity-40 disabled:cursor-not-allowed">
+              <Pencil className="w-4 h-4" />
+            </button>
+          </RoleTooltip>
+          <RoleTooltip allowed={canEdit} requiredRole="Editor">
+            <button onClick={canEdit ? onReject : undefined} disabled={!canEdit} title={isRejected ? 'Mark needs review' : 'Reject'} className={`p-1.5 rounded-md transition-colors disabled:opacity-40 disabled:cursor-not-allowed ${isRejected ? 'text-red-500' : 'text-gray-300 hover:text-red-500 hover:bg-red-50'}`}>
               <X className="w-4 h-4" />
             </button>
           </RoleTooltip>
-          <button onClick={onDelete} title="Delete permanently" className="p-1.5 rounded-md text-gray-300 hover:text-red-600 hover:bg-red-50 transition-colors">
-            <TrashIcon className="text-inherit" />
-          </button>
+          <RoleTooltip allowed={canEdit} requiredRole="Editor">
+            <button onClick={canEdit ? onDelete : undefined} disabled={!canEdit} title="Delete permanently" className="p-1.5 rounded-md text-gray-300 hover:text-red-600 hover:bg-red-50 transition-colors disabled:opacity-40 disabled:cursor-not-allowed">
+              <TrashIcon className="text-inherit" />
+            </button>
+          </RoleTooltip>
         </div>
       </div>
     </div>
@@ -1246,6 +1266,7 @@ function TableMappingCard({
   onShowAddRow,
   onHideAddRow,
   onFieldAdded,
+  onMappingsSync,
   allFieldsByTable,
   suggestingThis,
   onSuggestRemaining,
@@ -1258,7 +1279,7 @@ function TableMappingCard({
   acknowledgments,
   projectId,
   onAcknowledgmentChanged,
-  canReview = true,
+  canEdit = true,
 }: {
   tm: RichTableMapping
   expanded: boolean
@@ -1274,6 +1295,7 @@ function TableMappingCard({
   onShowAddRow: () => void
   onHideAddRow: () => void
   onFieldAdded: (fm: RichFieldMapping) => void
+  onMappingsSync?: () => void
   allFieldsByTable: Record<string, SimpleField[]>
   suggestingThis: boolean
   onSuggestRemaining: () => void
@@ -1286,7 +1308,7 @@ function TableMappingCard({
   acknowledgments: FieldAcknowledgmentRow[]
   projectId: string
   onAcknowledgmentChanged: () => void
-  canReview?: boolean
+  canEdit?: boolean
 }) {
   const router = useRouter()
   const srcDs = tm.sourceTable?.dataset
@@ -1343,54 +1365,59 @@ function TableMappingCard({
 
         {/* Table-level actions */}
         <div className="flex items-center gap-1 ml-3" onClick={(e) => e.stopPropagation()}>
-          <RoleTooltip show={!canReview} role="reviewer">
+          <RoleTooltip allowed={canEdit} requiredRole="Editor">
             <button
-              onClick={canReview ? onApproveAll : undefined}
-              disabled={!canReview}
+              onClick={canEdit ? onApproveAll : undefined}
+              disabled={!canEdit}
               title="Approve all field mappings"
               className="px-2 py-1 text-xs font-medium text-green-700 bg-green-50 hover:bg-green-100 rounded transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
             >
               Approve All
             </button>
           </RoleTooltip>
-          <RoleTooltip show={!canReview} role="reviewer">
+          <RoleTooltip allowed={canEdit} requiredRole="Editor">
             <button
-              onClick={canReview ? onRejectAll : undefined}
-              disabled={!canReview}
+              onClick={canEdit ? onRejectAll : undefined}
+              disabled={!canEdit}
               title="Reject all field mappings"
               className="px-2 py-1 text-xs font-medium text-gray-600 bg-gray-100 hover:bg-gray-200 rounded transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
             >
               Reject All
             </button>
           </RoleTooltip>
-          <button
-            onClick={onRegenerate}
-            disabled={regeneratingThis}
-            title="Regenerate field mappings with AI"
-            className="flex items-center gap-1 px-2 py-1 text-xs font-medium text-blue-600 bg-blue-50 hover:bg-blue-100 rounded transition-colors disabled:opacity-50"
-          >
-            {regeneratingThis ? (
-              <>
-                <span className="w-2.5 h-2.5 border-2 border-blue-400 border-t-transparent rounded-full animate-spin" />
-                Regenerating…
-              </>
-            ) : (
-              <>
-                <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
-                  <polyline points="23 4 23 10 17 10" /><polyline points="1 20 1 14 7 14" />
-                  <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15" />
-                </svg>
-                Regenerate
-              </>
-            )}
-          </button>
-          <button
-            onClick={onDeleteTM}
-            title="Delete this table mapping"
-            className="p-1.5 text-gray-400 hover:text-red-600 hover:bg-red-50 rounded transition-colors"
-          >
+          <RoleTooltip allowed={canEdit} requiredRole="Editor">
+            <button
+              onClick={canEdit ? onRegenerate : undefined}
+              disabled={regeneratingThis || !canEdit}
+              title="Regenerate field mappings with AI"
+              className="flex items-center gap-1 px-2 py-1 text-xs font-medium text-blue-600 bg-blue-50 hover:bg-blue-100 rounded transition-colors disabled:opacity-50"
+            >
+              {regeneratingThis ? (
+                <>
+                  <span className="w-2.5 h-2.5 border-2 border-blue-400 border-t-transparent rounded-full animate-spin" />
+                  Regenerating…
+                </>
+              ) : (
+                <>
+                  <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
+                    <polyline points="23 4 23 10 17 10" /><polyline points="1 20 1 14 7 14" />
+                    <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15" />
+                  </svg>
+                  Regenerate
+                </>
+              )}
+            </button>
+          </RoleTooltip>
+          <RoleTooltip allowed={canEdit} requiredRole="Editor">
+            <button
+              onClick={canEdit ? onDeleteTM : undefined}
+              disabled={!canEdit}
+              title="Delete this table mapping"
+              className="p-1.5 text-gray-400 hover:text-red-600 hover:bg-red-50 rounded transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+            >
             <TrashIcon />
           </button>
+          </RoleTooltip>
         </div>
       </div>
 
@@ -1438,7 +1465,8 @@ function TableMappingCard({
                 onApprove={() => onApproveFM(fm.id)}
                 onReject={() => onRejectFM(fm.id)}
                 onDelete={() => onDeleteFM(fm.id)}
-                canReview={canReview}
+                canEdit={canEdit}
+                canEdit={canEdit}
               />
             ))
               }
@@ -1469,7 +1497,8 @@ function TableMappingCard({
                           onApprove={() => onApproveFM(row.id)}
                           onReject={() => onRejectFM(row.id)}
                           onDelete={() => onDeleteFM(row.id)}
-                          canReview={canReview}
+                          canEdit={canEdit}
+                          canEdit={canEdit}
                         />
                       ))}
                     </div>
@@ -1485,7 +1514,8 @@ function TableMappingCard({
                     onApprove={() => onApproveFM(fm.id)}
                     onReject={() => onRejectFM(fm.id)}
                     onDelete={() => onDeleteFM(fm.id)}
-                    canReview={canReview}
+                    canEdit={canEdit}
+                    canEdit={canEdit}
                   />
                 )
               })
@@ -1517,39 +1547,42 @@ function TableMappingCard({
                           <span className="text-[10px] font-medium text-amber-600 bg-amber-50 px-1.5 py-0.5 rounded flex-shrink-0">NOT NULL</span>
                         )}
                       </div>
-                      <div className="flex items-center gap-0.5 flex-shrink-0" onClick={(e) => e.stopPropagation()}>
-                        <button
-                          onClick={() => { setAddAfterUnmappedId(field.id); onShowAddRow(); }}
-                          className="text-xs text-blue-600 hover:text-blue-800 font-medium px-2 py-1 rounded hover:bg-blue-50 transition-colors whitespace-nowrap"
-                        >
-                          + Map
-                        </button>
-                        {ack ? (
+                      {canEdit && (
+                        <div className="flex items-center gap-0.5 flex-shrink-0" onClick={(e) => e.stopPropagation()}>
                           <button
-                            onClick={async () => { await removeAcknowledgment(projectId, field.id); onAcknowledgmentChanged(); }}
-                            title="Remove acknowledgment"
-                            className="p-1 rounded transition-colors text-red-400 hover:text-red-600 hover:bg-red-50"
+                            onClick={() => { setAddAfterUnmappedId(field.id); onShowAddRow(); }}
+                            className="text-xs text-blue-600 hover:text-blue-800 font-medium px-2 py-1 rounded hover:bg-blue-50 transition-colors whitespace-nowrap"
                           >
-                            <X className="w-3.5 h-3.5" />
+                            + Map
                           </button>
-                        ) : (
-                          <button
-                            onClick={async () => { await acknowledgeField(projectId, field.id, 'target', 'acknowledged'); onAcknowledgmentChanged(); }}
-                            title="Acknowledge"
-                            className="p-1 rounded transition-colors text-gray-300 hover:text-green-600 hover:bg-green-50"
-                          >
-                            <Check className="w-3.5 h-3.5" />
-                          </button>
-                        )}
-                      </div>
+                          {ack ? (
+                            <button
+                              onClick={async () => { await removeAcknowledgment(projectId, field.id); onAcknowledgmentChanged(); }}
+                              title="Remove acknowledgment"
+                              className="p-1 rounded transition-colors text-red-400 hover:text-red-600 hover:bg-red-50"
+                            >
+                              <X className="w-3.5 h-3.5" />
+                            </button>
+                          ) : (
+                            <button
+                              onClick={async () => { await acknowledgeField(projectId, field.id, 'target', 'acknowledged'); onAcknowledgmentChanged(); }}
+                              title="Acknowledge"
+                              className="p-1 rounded transition-colors text-gray-300 hover:text-green-600 hover:bg-green-50"
+                            >
+                              <Check className="w-3.5 h-3.5" />
+                            </button>
+                          )}
+                        </div>
+                      )}
                     </div>
-                    {showAddRow && addAfterUnmappedId === field.id && (
+                    {canEdit && showAddRow && addAfterUnmappedId === field.id && (
                       <InlineAddFieldRow
                         tm={tm}
                         allFieldsByTable={allFieldsByTable}
                         initialTargetFieldId={field.id}
                         onAdded={(fm) => { setAddAfterUnmappedId(null); onFieldAdded(fm); }}
                         onCancel={() => { setAddAfterUnmappedId(null); onHideAddRow(); }}
+                        onSync={onMappingsSync}
                       />
                     )}
                   </div>
@@ -1580,39 +1613,42 @@ function TableMappingCard({
                       <div className="w-[36%] flex items-center gap-2">
                         <span className="text-xs italic text-gray-300">Not migrated</span>
                       </div>
-                      <div className="flex items-center gap-0.5 flex-shrink-0" onClick={(e) => e.stopPropagation()}>
-                        <button
-                          onClick={() => { setAddAfterUnmappedId(field.id); onShowAddRow(); }}
-                          className="text-xs text-blue-600 hover:text-blue-800 font-medium px-2 py-1 rounded hover:bg-blue-50 transition-colors whitespace-nowrap"
-                        >
-                          + Map
-                        </button>
-                        {ack ? (
+                      {canEdit && (
+                        <div className="flex items-center gap-0.5 flex-shrink-0" onClick={(e) => e.stopPropagation()}>
                           <button
-                            onClick={async () => { await removeAcknowledgment(projectId, field.id); onAcknowledgmentChanged(); }}
-                            title="Remove acknowledgment"
-                            className="p-1 rounded transition-colors text-red-400 hover:text-red-600 hover:bg-red-50"
+                            onClick={() => { setAddAfterUnmappedId(field.id); onShowAddRow(); }}
+                            className="text-xs text-blue-600 hover:text-blue-800 font-medium px-2 py-1 rounded hover:bg-blue-50 transition-colors whitespace-nowrap"
                           >
-                            <X className="w-3.5 h-3.5" />
+                            + Map
                           </button>
-                        ) : (
-                          <button
-                            onClick={async () => { await acknowledgeField(projectId, field.id, 'source', 'acknowledged'); onAcknowledgmentChanged(); }}
-                            title="Acknowledge"
-                            className="p-1 rounded transition-colors text-gray-300 hover:text-green-600 hover:bg-green-50"
-                          >
-                            <Check className="w-3.5 h-3.5" />
-                          </button>
-                        )}
-                      </div>
+                          {ack ? (
+                            <button
+                              onClick={async () => { await removeAcknowledgment(projectId, field.id); onAcknowledgmentChanged(); }}
+                              title="Remove acknowledgment"
+                              className="p-1 rounded transition-colors text-red-400 hover:text-red-600 hover:bg-red-50"
+                            >
+                              <X className="w-3.5 h-3.5" />
+                            </button>
+                          ) : (
+                            <button
+                              onClick={async () => { await acknowledgeField(projectId, field.id, 'source', 'acknowledged'); onAcknowledgmentChanged(); }}
+                              title="Acknowledge"
+                              className="p-1 rounded transition-colors text-gray-300 hover:text-green-600 hover:bg-green-50"
+                            >
+                              <Check className="w-3.5 h-3.5" />
+                            </button>
+                          )}
+                        </div>
+                      )}
                     </div>
-                    {showAddRow && addAfterUnmappedId === field.id && (
+                    {canEdit && showAddRow && addAfterUnmappedId === field.id && (
                       <InlineAddFieldRow
                         tm={tm}
                         allFieldsByTable={allFieldsByTable}
                         initialSourceFieldId={field.id}
                         onAdded={(fm) => { setAddAfterUnmappedId(null); onFieldAdded(fm); }}
                         onCancel={() => { setAddAfterUnmappedId(null); onHideAddRow(); }}
+                        onSync={onMappingsSync}
                       />
                     )}
                   </div>
@@ -1628,25 +1664,30 @@ function TableMappingCard({
               allFieldsByTable={allFieldsByTable}
               onAdded={onFieldAdded}
               onCancel={onHideAddRow}
+              onSync={onMappingsSync}
             />
           )}
 
           {/* Bottom action bar */}
           <div className="flex items-center gap-3 px-5 py-3 border-t border-gray-100 bg-gray-50/50">
             {!showAddRow && (
-              <button
-                onClick={() => { setAddAfterUnmappedId(null); onShowAddRow(); }}
-                className="flex items-center gap-1.5 text-xs font-medium text-blue-600 hover:text-blue-800 transition-colors"
-              >
-                <Plus className="w-3.5 h-3.5" />
-                Add Field Mapping
-              </button>
+              <RoleTooltip allowed={canEdit} requiredRole="Editor">
+                <button
+                  onClick={canEdit ? () => { setAddAfterUnmappedId(null); onShowAddRow(); } : undefined}
+                  disabled={!canEdit}
+                  className="flex items-center gap-1.5 text-xs font-medium text-blue-600 hover:text-blue-800 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+                >
+                  <Plus className="w-3.5 h-3.5" />
+                  Add Field Mapping
+                </button>
+              </RoleTooltip>
             )}
             {hasUnmapped && (
-              <button
-                onClick={onSuggestRemaining}
-                disabled={suggestingThis}
-                className="flex items-center gap-1.5 text-xs font-medium text-gray-600 hover:text-gray-900 border border-gray-200 bg-white hover:bg-gray-50 px-2.5 py-1 rounded-lg transition-colors disabled:opacity-50"
+              <RoleTooltip allowed={canEdit} requiredRole="Editor">
+                <button
+                  onClick={canEdit ? onSuggestRemaining : undefined}
+                  disabled={suggestingThis || !canEdit}
+                  className="flex items-center gap-1.5 text-xs font-medium text-gray-600 hover:text-gray-900 border border-gray-200 bg-white hover:bg-gray-50 px-2.5 py-1 rounded-lg transition-colors disabled:opacity-50"
               >
                 {suggestingThis ? (
                   <>
@@ -1660,6 +1701,7 @@ function TableMappingCard({
                   </>
                 )}
               </button>
+              </RoleTooltip>
             )}
           </div>
         </div>
@@ -2115,10 +2157,12 @@ function UnmappedView({
 
 // ─── Main Component ───────────────────────────────────────────────────────────
 
+type ToastState = { message: string; type: 'success' | 'error' }
+
 export default function MappingContent({ projectId, projectName, initialData }: Props) {
   const router = useRouter()
   const { can: canRole } = useProjectRole(projectId)
-  const canReview = canRole('review')
+  const canEdit = canRole('edit')
   const [, startTransition] = useTransition()
 
   const [data, setData] = useState<MappingsResult | null>(initialData)
@@ -2140,6 +2184,12 @@ export default function MappingContent({ projectId, projectName, initialData }: 
   const [suggestingTMId, setSuggestingTMId] = useState<string | null>(null)
   const [approvingHC, setApprovingHC] = useState(false)
   const [hcConfirmCount, setHcConfirmCount] = useState<number | null>(null)
+
+  const [toast, setToast] = useState<ToastState | null>(null)
+  function showToast(message: string, type: ToastState['type']) {
+    setToast({ message, type })
+    setTimeout(() => setToast(null), 4000)
+  }
 
   // Tab counts
   const allFMs = useMemo(() => tableMappings.flatMap((tm) => tm.fieldMappings), [tableMappings])
@@ -2307,7 +2357,10 @@ export default function MappingContent({ projectId, projectName, initialData }: 
     updateFM(fmId, { status: 'approved' })
     startTransition(async () => {
       const r = await updateFieldMappingStatus(fmId, 'approved')
-      if (!r.success) updateFM(fmId, { status: 'needs_review' })
+      if (!r.success) {
+        updateFM(fmId, { status: 'needs_review' })
+        showToast(r.error ?? 'Could not approve mapping', 'error')
+      }
       // Sync unmapped lists: approving a field removes it from the coverage gap
       else refreshData()
     })
@@ -2319,7 +2372,10 @@ export default function MappingContent({ projectId, projectName, initialData }: 
     updateFM(fmId, { status: newStatus })
     startTransition(async () => {
       const r = await updateFieldMappingStatus(fmId, newStatus)
-      if (!r.success) updateFM(fmId, { status: fm?.status ?? 'needs_review' })
+      if (!r.success) {
+        updateFM(fmId, { status: fm?.status ?? 'needs_review' })
+        showToast(r.error ?? 'Could not update mapping status', 'error')
+      }
       // Sync unmapped lists: rejecting a mapping may expose a coverage gap
       else refreshData()
     })
@@ -2329,7 +2385,8 @@ export default function MappingContent({ projectId, projectName, initialData }: 
     setTableMappings((prev) => prev.map((tm) => ({ ...tm, fieldMappings: tm.fieldMappings.filter((fm) => fm.id !== fmId) })))
     if (selectedFM?.id === fmId) setSelectedFM(null)
     startTransition(async () => {
-      await deleteFieldMapping(fmId)
+      const r = await deleteFieldMapping(fmId)
+      if (!r.success) showToast(r.error ?? 'Could not delete field mapping', 'error')
       // Sync unmapped lists: deleting a mapping may expose a coverage gap
       refreshData()
     })
@@ -2361,14 +2418,16 @@ export default function MappingContent({ projectId, projectName, initialData }: 
     startTransition(async () => {
       const r = await editFieldMapping(fmId, { ...updates, confidence: null, ai_reasoning: patch.ai_reasoning ?? undefined })
       // Sync unmapped lists: editing source_field_id changes which fields are covered
-      if (r.success) refreshData()
+      if (!r.success) showToast(r.error ?? 'Could not update field mapping', 'error')
+      refreshData()
     })
   }
 
   function handleApproveAll(tmId: string) {
     setTableMappings((prev) => prev.map((tm) => tm.id !== tmId ? tm : { ...tm, status: 'approved', fieldMappings: tm.fieldMappings.map((fm) => ({ ...fm, status: 'approved' as const })) }))
     startTransition(async () => {
-      await approveAllFieldMappings(tmId)
+      const r = await approveAllFieldMappings(tmId)
+      if (!r.success) showToast(r.error ?? 'Could not approve all field mappings', 'error')
       refreshData()
     })
   }
@@ -2376,7 +2435,8 @@ export default function MappingContent({ projectId, projectName, initialData }: 
   function handleRejectAll(tmId: string) {
     setTableMappings((prev) => prev.map((tm) => tm.id !== tmId ? tm : { ...tm, fieldMappings: tm.fieldMappings.map((fm) => ({ ...fm, status: 'rejected' as const })) }))
     startTransition(async () => {
-      await rejectAllFieldMappings(tmId)
+      const r = await rejectAllFieldMappings(tmId)
+      if (!r.success) showToast(r.error ?? 'Could not reject all field mappings', 'error')
       // Sync unmapped lists: rejecting all may expose multiple coverage gaps
       refreshData()
     })
@@ -2388,7 +2448,11 @@ export default function MappingContent({ projectId, projectName, initialData }: 
     setTableMappings((prev) => prev.filter((tm) => tm.id !== id))
     if (selectedFM?.table_mapping_id === id) setSelectedFM(null)
     setDeleteTMTarget(null)
-    startTransition(async () => { await deleteTableMapping(id); refreshData() })
+    startTransition(async () => {
+      const r = await deleteTableMapping(id)
+      if (!r.success) showToast(r.error ?? 'Could not delete table mapping', 'error')
+      refreshData()
+    })
   }
 
   function handleFieldAdded(tmId: string, newFM: RichFieldMapping) {
@@ -2401,7 +2465,11 @@ export default function MappingContent({ projectId, projectName, initialData }: 
     setSuggestingTMId(tmId)
     const result = await suggestRemainingMappings(tmId)
     setSuggestingTMId(null)
-    if (result.success && result.newMappingsCount > 0) refreshData()
+    if (!result.success) {
+      showToast(result.error ?? 'Could not suggest remaining mappings', 'error')
+      return
+    }
+    if (result.newMappingsCount > 0) refreshData()
   }
 
   async function handleRegenerate(tmId: string) {
@@ -2409,7 +2477,11 @@ export default function MappingContent({ projectId, projectName, initialData }: 
     setRegeneratingTMId(tmId)
     const result = await regenerateFieldMappings(tmId)
     setRegeneratingTMId(null)
-    if (result.success) refreshData()
+    if (!result.success) {
+      showToast(result.error ?? 'Could not regenerate field mappings', 'error')
+      return
+    }
+    refreshData()
   }
 
   // Tables not yet in any existing mapping — used for "Generate More" modal
@@ -2434,13 +2506,26 @@ export default function MappingContent({ projectId, projectName, initialData }: 
     startTransition(async () => {
       const r = await approveHighConfidenceMappings(projectId, 85)
       setApprovingHC(false)
-      if (r.success) refreshData()
+      if (!r.success) {
+        showToast(r.error ?? 'Could not approve high-confidence mappings', 'error')
+        return
+      }
+      refreshData()
     })
   }
 
   if (tableMappings.length === 0) {
     return (
       <div className="flex-1 bg-gray-50 flex flex-col min-h-0">
+        {toast && (
+          <div
+            className={`fixed bottom-6 right-6 z-50 px-4 py-3 rounded-lg shadow-lg text-sm font-medium ${
+              toast.type === 'success' ? 'bg-green-600 text-white' : 'bg-red-600 text-white'
+            }`}
+          >
+            {toast.message}
+          </div>
+        )}
         <PageHeader projectName={projectName} title="Mapping" subtitle="Review and approve field mappings" />
         <div className="flex-1 overflow-auto">
         <div className="px-6 py-8 max-w-2xl mx-auto">
@@ -2461,6 +2546,7 @@ export default function MappingContent({ projectId, projectName, initialData }: 
           sourceTables={data?.allSourceTables ?? []}
           targetTables={data?.allTargetTables ?? []}
           onDone={() => refreshData()}
+          canEdit={canEdit}
         />
       </div>
       </div>
@@ -2470,6 +2556,15 @@ export default function MappingContent({ projectId, projectName, initialData }: 
 
   return (
     <div className="flex-1 bg-gray-50 flex flex-col min-h-0">
+      {toast && (
+        <div
+          className={`fixed bottom-6 right-6 z-50 px-4 py-3 rounded-lg shadow-lg text-sm font-medium ${
+            toast.type === 'success' ? 'bg-green-600 text-white' : 'bg-red-600 text-white'
+          }`}
+        >
+          {toast.message}
+        </div>
+      )}
       <PageHeader projectName={projectName} title="Mapping" subtitle="Review and approve field mappings" />
       <div className="flex-1 overflow-auto">
       <div className="px-6 py-6 space-y-5">
@@ -2518,14 +2613,14 @@ export default function MappingContent({ projectId, projectName, initialData }: 
           hcConfirmCount !== null ? (
             <div className="flex items-center gap-2 px-3 py-2 bg-green-50 border border-green-200 rounded-lg">
               <span className="text-xs text-green-800">Approve {hcConfirmCount} mapping{hcConfirmCount !== 1 ? 's' : ''}?</span>
-              <button onClick={handleApproveHighConf} disabled={approvingHC || !canReview} className="text-xs font-medium text-white bg-green-600 px-2.5 py-1 rounded hover:bg-green-700 disabled:opacity-40">Confirm</button>
+              <button onClick={handleApproveHighConf} disabled={approvingHC || !canEdit} className="text-xs font-medium text-white bg-green-600 px-2.5 py-1 rounded hover:bg-green-700 disabled:opacity-40">Confirm</button>
               <button onClick={() => setHcConfirmCount(null)} className="text-xs text-gray-500 hover:text-gray-700">Cancel</button>
             </div>
           ) : (
-            <RoleTooltip show={!canReview} role="reviewer">
+            <RoleTooltip allowed={canEdit} requiredRole="Editor">
               <button
-                onClick={canReview ? handleApproveHighConf : undefined}
-                disabled={approvingHC || !canReview}
+                onClick={canEdit ? handleApproveHighConf : undefined}
+                disabled={approvingHC || !canEdit}
                 className="flex items-center gap-1.5 px-3 py-2 text-sm font-medium text-green-700 bg-green-50 border border-green-200 rounded-lg hover:bg-green-100 transition-colors disabled:opacity-40"
               >
                 <Check className="w-3.5 h-3.5" />
@@ -2561,6 +2656,7 @@ export default function MappingContent({ projectId, projectName, initialData }: 
                 onShowAddRow={() => { setAddRowForTMId(tm.id); setExpandedIds((p) => new Set([...p, tm.id])) }}
                 onHideAddRow={() => setAddRowForTMId(null)}
                 onFieldAdded={(fm) => handleFieldAdded(tm.id, fm)}
+                onMappingsSync={refreshData}
                 allFieldsByTable={allFieldsByTable}
                 suggestingThis={suggestingTMId === tm.id}
                 onSuggestRemaining={() => handleSuggestRemaining(tm.id)}
@@ -2573,7 +2669,8 @@ export default function MappingContent({ projectId, projectName, initialData }: 
                 acknowledgments={acknowledgments}
                 projectId={projectId}
                 onAcknowledgmentChanged={refreshData}
-                canReview={canReview}
+                canEdit={canEdit}
+                canEdit={canEdit}
               />
             ))
           )}
@@ -2597,21 +2694,26 @@ export default function MappingContent({ projectId, projectName, initialData }: 
       {/* Bottom bar */}
       <div className="flex items-center justify-between pt-2 border-t border-gray-100">
         <div className="flex items-center gap-3">
-          <button onClick={() => setShowAddModal(true)} className="flex items-center gap-2 text-sm font-medium text-gray-600 hover:text-blue-700 transition-colors">
-            <Plus className="w-4 h-4" />
-            Add New Mapping
-          </button>
-          {unmappedSourceTablesForModal.length > 0 && unmappedTargetTablesForModal.length > 0 && (
-            <button
-              onClick={() => setShowGenerateModal(true)}
-              className="flex items-center gap-1.5 text-sm font-medium text-blue-600 hover:text-blue-800 transition-colors"
-            >
-              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                <polyline points="23 4 23 10 17 10" /><polyline points="1 20 1 14 7 14" />
-                <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15" />
-              </svg>
-              Generate More Mappings
+          <RoleTooltip allowed={canEdit} requiredRole="Editor">
+            <button onClick={canEdit ? () => setShowAddModal(true) : undefined} disabled={!canEdit} className="flex items-center gap-2 text-sm font-medium text-gray-600 hover:text-blue-700 transition-colors disabled:opacity-40 disabled:cursor-not-allowed">
+              <Plus className="w-4 h-4" />
+              Add New Mapping
             </button>
+          </RoleTooltip>
+          {unmappedSourceTablesForModal.length > 0 && unmappedTargetTablesForModal.length > 0 && (
+            <RoleTooltip allowed={canEdit} requiredRole="Editor">
+              <button
+                onClick={canEdit ? () => setShowGenerateModal(true) : undefined}
+                disabled={!canEdit}
+                className="flex items-center gap-1.5 text-sm font-medium text-blue-600 hover:text-blue-800 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+              >
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                  <polyline points="23 4 23 10 17 10" /><polyline points="1 20 1 14 7 14" />
+                  <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15" />
+                </svg>
+                Generate More Mappings
+              </button>
+            </RoleTooltip>
           )}
         </div>
         <button onClick={() => router.push(`/app/projects/${projectId}/transform`)} className="px-5 py-2.5 text-sm font-medium text-white bg-blue-600 rounded-lg hover:bg-blue-700 transition-colors">
@@ -2652,6 +2754,7 @@ export default function MappingContent({ projectId, projectName, initialData }: 
                   if (generated > 0) refreshData()
                 }}
                 onCancel={() => setShowGenerateModal(false)}
+                canEdit={canEdit}
               />
             </div>
           </div>

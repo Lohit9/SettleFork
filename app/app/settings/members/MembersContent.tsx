@@ -15,13 +15,12 @@ import { getOrgMembers, updateMemberRole, removeMember } from '@/lib/actions/org
 import { createOrgInvite, getPendingInvites, revokeInvite } from '@/lib/actions/org-invites'
 import type { OrgMembership, OrgInvite, OrgRole } from '@/lib/types/organizations'
 
-const ROLE_OPTIONS: OrgRole[] = ['owner', 'admin', 'editor', 'reviewer', 'viewer']
+const ROLE_OPTIONS: OrgRole[] = ['owner', 'admin', 'editor', 'viewer']
 
 const ROLE_BADGE: Record<OrgRole, string> = {
   owner: 'bg-purple-100 text-purple-700',
   admin: 'bg-blue-100 text-blue-700',
   editor: 'bg-green-100 text-green-700',
-  reviewer: 'bg-amber-100 text-amber-700',
   viewer: 'bg-gray-100 text-gray-600',
 }
 

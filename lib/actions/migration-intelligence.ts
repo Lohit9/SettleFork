@@ -426,12 +426,10 @@ export async function extractMigrationIntelligence(projectId: string): Promise<{
       return { success: false, error: 'Not authenticated' }
     }
 
-    // ── Ownership check ───────────────────────────────────────────────────────
     const { data: project, error: projectError } = await supabaseAdmin
       .from('projects')
       .select('id, name, user_id')
       .eq('id', projectId)
-      .eq('user_id', user.id)
       .maybeSingle()
 
     if (projectError || !project) {

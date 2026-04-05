@@ -2,6 +2,7 @@
 
 import { createClient } from '@/lib/supabase/server'
 import { supabaseAdmin } from '@/lib/supabase/admin'
+import { requireProjectPermission } from '@/lib/actions/role-resolution'
 import { callClaude } from '@/lib/ai/claude'
 import { checkAIRateLimit } from '@/lib/ai/rate-limit'
 import { buildAIContext, formatFieldForPrompt, formatDocumentsForPrompt } from '@/lib/ai/context-builder'
@@ -94,12 +95,10 @@ export async function getTransformData(
   } = await supabase.auth.getUser()
   if (!user) return { datasets: [], schemaDocText: '', hasMappings: false, unmappedNotNullTargetFields: [], unmappedNullableTargetFields: [] }
 
-  // Verify project ownership
   const { data: project } = await supabase
     .from('projects')
     .select('id')
     .eq('id', projectId)
-    .eq('user_id', user.id)
     .single()
   if (!project) return { datasets: [], schemaDocText: '', hasMappings: false, unmappedNotNullTargetFields: [], unmappedNullableTargetFields: [] }
 
@@ -706,6 +705,11 @@ export async function updateTransformSQL(
   } = await supabase.auth.getUser()
   if (!user) return { success: false, error: 'Not authenticated' }
 
+  const { data: txLookup } = await supabaseAdmin.from('transformations').select('field_mapping_id, field_mappings!inner(table_mapping_id, table_mappings!inner(project_id))').eq('id', transformationId).single()
+  if (!txLookup) return { success: false, error: 'Transformation not found' }
+  const perm = await requireProjectPermission((txLookup as any).field_mappings.table_mappings.project_id, 'editor')
+  if (!perm.allowed) return { success: false, error: perm.error }
+
   const cleanSql = sql.replace(/;+$/, '').trim()
   if (!cleanSql) return { success: false, error: 'SQL cannot be empty' }
 
@@ -747,6 +751,11 @@ export async function autoSaveTransform(
     data: { user },
   } = await supabase.auth.getUser()
   if (!user) return { success: false, error: 'Not authenticated' }
+
+  const { data: txLookupAS } = await supabaseAdmin.from('transformations').select('field_mapping_id, field_mappings!inner(table_mapping_id, table_mappings!inner(project_id))').eq('id', transformationId).single()
+  if (!txLookupAS) return { success: false, error: 'Transformation not found' }
+  const perm = await requireProjectPermission((txLookupAS as any).field_mappings.table_mappings.project_id, 'editor')
+  if (!perm.allowed) return { success: false, error: perm.error }
 
   const cleanSql = sql.replace(/;+$/, '').trim()
 
@@ -807,14 +816,8 @@ export async function runFullTransformTest(
     .eq('id', fm.table_mapping_id)
     .single()
   if (!tm) return { success: false, error: 'Table mapping not found' }
-
-  const { data: projectCheck } = await supabase
-    .from('projects')
-    .select('id')
-    .eq('id', tm.project_id)
-    .eq('user_id', user.id)
-    .single()
-  if (!projectCheck) return { success: false, error: 'Access denied' }
+  const perm = await requireProjectPermission(tm.project_id, 'editor')
+  if (!perm.allowed) return { success: false, error: perm.error }
 
   // Load the current transformation record
   const { data: transformation } = await supabase
@@ -912,14 +915,8 @@ export async function testTransformation(
     .eq('id', fm.table_mapping_id)
     .single()
   if (!tm) return { success: false, error: 'Table mapping not found' }
-
-  const { data: projectCheck } = await supabase
-    .from('projects')
-    .select('id')
-    .eq('id', tm.project_id)
-    .eq('user_id', user.id)
-    .single()
-  if (!projectCheck) return { success: false, error: 'Access denied' }
+  const perm = await requireProjectPermission(tm.project_id, 'editor')
+  if (!perm.allowed) return { success: false, error: perm.error }
 
   // Value assignments have no source field — for constants/expressions we can evaluate directly
   const isValueAssignment = fm.source_field_id === null
@@ -1032,6 +1029,11 @@ export async function saveTransformation(
     data: { user },
   } = await supabase.auth.getUser()
   if (!user) return { success: false, error: 'Not authenticated' }
+
+  const { data: txLookupSave } = await supabaseAdmin.from('transformations').select('field_mapping_id, field_mappings!inner(table_mapping_id, table_mappings!inner(project_id))').eq('id', transformationId).single()
+  if (!txLookupSave) return { success: false, error: 'Transformation not found' }
+  const perm = await requireProjectPermission((txLookupSave as any).field_mappings.table_mappings.project_id, 'editor')
+  if (!perm.allowed) return { success: false, error: perm.error }
 
   const { error } = await supabase
     .from('transformations')
@@ -1153,14 +1155,8 @@ export async function applyTransform(
     .eq('id', fm.table_mapping_id)
     .single()
   if (!tm) return { success: false, rowsAffected: 0, error: 'Table mapping not found' }
-
-  const { data: projectCheck } = await supabase
-    .from('projects')
-    .select('id')
-    .eq('id', tm.project_id)
-    .eq('user_id', user.id)
-    .single()
-  if (!projectCheck) return { success: false, rowsAffected: 0, error: 'Access denied' }
+  const perm = await requireProjectPermission(tm.project_id, 'editor')
+  if (!perm.allowed) return { success: false, rowsAffected: 0, error: perm.error }
 
   // Fetch source and target field names — source may be null for value assignments
   const srcField = fm.source_field_id
@@ -1274,14 +1270,8 @@ export async function previewTransformDistinct(
     .eq('id', fm.table_mapping_id)
     .single()
   if (!tm) return { success: false, error: 'Table mapping not found' }
-
-  const { data: projectCheck } = await supabase
-    .from('projects')
-    .select('id')
-    .eq('id', tm.project_id)
-    .eq('user_id', user.id)
-    .single()
-  if (!projectCheck) return { success: false, error: 'Access denied' }
+  const perm = await requireProjectPermission(tm.project_id, 'viewer')
+  if (!perm.allowed) return { success: false, error: perm.error }
 
   const srcField = fm.source_field_id
     ? (await supabase.from('fields').select('id, name, table_id').eq('id', fm.source_field_id).single()).data
@@ -1381,14 +1371,8 @@ export async function suggestTransformDescription(
     .eq('id', fm.table_mapping_id)
     .single()
   if (!tm) return { success: false, error: 'Mapping not found' }
-
-  const { data: projectCheck } = await supabase
-    .from('projects')
-    .select('id')
-    .eq('id', tm.project_id)
-    .eq('user_id', user.id)
-    .single()
-  if (!projectCheck) return { success: false, error: 'Access denied' }
+  const perm = await requireProjectPermission(tm.project_id, 'editor')
+  if (!perm.allowed) return { success: false, error: perm.error }
 
   const srcField = fm.source_field_id
     ? (await supabase.from('fields').select('id, name, data_type, inferred_type, is_nullable').eq('id', fm.source_field_id).single()).data
@@ -1454,7 +1438,9 @@ ${ctx.intelligence_context ? ctx.intelligence_context + '\n\n' : ''}Suggest a tr
 export async function dismissTransformNeeded(
   projectId: string,
   fieldMappingId: string,
-): Promise<void> {
+): Promise<{ success: boolean; error?: string }> {
+  const perm = await requireProjectPermission(projectId, 'editor')
+  if (!perm.allowed) return { success: false, error: perm.error }
   const supabase = await createClient()
   const { error } = await supabase
     .from('field_mappings')
@@ -1462,6 +1448,7 @@ export async function dismissTransformNeeded(
     .eq('id', fieldMappingId)
   if (error) throw new Error(`Failed to dismiss transform: ${error.message}`)
   revalidatePath(`/app/projects/${projectId}`, 'layout')
+  return { success: true }
 }
 
 /**
@@ -1471,7 +1458,9 @@ export async function dismissTransformNeeded(
 export async function reinstateTransformNeeded(
   projectId: string,
   fieldMappingId: string,
-): Promise<void> {
+): Promise<{ success: boolean; error?: string }> {
+  const perm = await requireProjectPermission(projectId, 'editor')
+  if (!perm.allowed) return { success: false, error: perm.error }
   const supabase = await createClient()
   const { error } = await supabase
     .from('field_mappings')
@@ -1479,4 +1468,5 @@ export async function reinstateTransformNeeded(
     .eq('id', fieldMappingId)
   if (error) throw new Error(`Failed to reinstate transform: ${error.message}`)
   revalidatePath(`/app/projects/${projectId}`, 'layout')
+  return { success: true }
 }

@@ -2,6 +2,7 @@
 
 import { supabaseAdmin } from '@/lib/supabase/admin'
 import { createClient } from '@/lib/supabase/server'
+import { requireProjectPermission } from '@/lib/actions/role-resolution'
 import { validateFixSQL } from '@/lib/quality/fix-sql-validator'
 import { countFormatIssues } from '@/lib/utils/profiling'
 import { runSourceDataChecks } from '@/lib/quality/detection-engine'
@@ -13,22 +14,16 @@ import type { QualityIssue, FixHistory } from '@/lib/types/database'
 
 type RLSClient = Awaited<ReturnType<typeof createClient>>
 
-// Verifies the issue exists and belongs to the authenticated user.
-// Uses the RLS client so ownership is enforced by Postgres policy.
 async function verifyIssueAccess(
   supabase: RLSClient,
-  issueId: string,
-  userId: string
+  issueId: string
 ): Promise<QualityIssue | null> {
   const { data } = await supabase
     .from('quality_issues')
-    .select('*, projects!inner(user_id)')
+    .select('*')
     .eq('id', issueId)
     .single()
-
-  if (!data) return null
-  if ((data as unknown as { projects: { user_id: string } }).projects?.user_id !== userId) return null
-  return data as QualityIssue
+  return data as QualityIssue | null
 }
 
 /**
@@ -108,8 +103,10 @@ export async function applyFix(
   } = await supabase.auth.getUser()
   if (!user) return { success: false, error: 'Not authenticated' }
 
-  const issue = await verifyIssueAccess(supabase, issueId, user.id)
+  const issue = await verifyIssueAccess(supabase, issueId)
   if (!issue) return { success: false, error: 'Issue not found or access denied' }
+  const perm = await requireProjectPermission(issue.project_id, 'editor')
+  if (!perm.allowed) return { success: false, error: perm.error }
 
   if (!issue.ai_fix_options || fixOptionIndex >= issue.ai_fix_options.length) {
     return { success: false, error: 'Invalid fix option selected' }
@@ -270,8 +267,10 @@ export async function acceptRisk(
   } = await supabase.auth.getUser()
   if (!user) return { success: false, error: 'Not authenticated' }
 
-  const issue = await verifyIssueAccess(supabase, issueId, user.id)
+  const issue = await verifyIssueAccess(supabase, issueId)
   if (!issue) return { success: false, error: 'Issue not found or access denied' }
+  const perm = await requireProjectPermission(issue.project_id, 'editor')
+  if (!perm.allowed) return { success: false, error: perm.error }
 
   if (!issue.table_id) return { success: false, error: 'Issue has no associated table' }
 
@@ -315,14 +314,13 @@ export async function revertFix(
 
   const { data: histRecord } = await supabase
     .from('fix_history')
-    .select('*, projects!inner(user_id)')
+    .select('*')
     .eq('id', fixHistoryId)
     .single()
 
   if (!histRecord) return { success: false, error: 'Fix history record not found' }
-  if ((histRecord as unknown as { projects: { user_id: string } }).projects?.user_id !== user.id) {
-    return { success: false, error: 'Access denied' }
-  }
+  const perm = await requireProjectPermission(histRecord.project_id, 'editor')
+  if (!perm.allowed) return { success: false, error: perm.error }
 
   if (histRecord.status === 'reverted') {
     return { success: false, error: 'This fix has already been reverted' }
@@ -641,8 +639,10 @@ export async function markIssueFixed(
   } = await supabase.auth.getUser()
   if (!user) return { success: false, error: 'Not authenticated' }
 
-  const issue = await verifyIssueAccess(supabase, issueId, user.id)
+  const issue = await verifyIssueAccess(supabase, issueId)
   if (!issue) return { success: false, error: 'Issue not found or access denied' }
+  const perm = await requireProjectPermission(issue.project_id, 'editor')
+  if (!perm.allowed) return { success: false, error: perm.error }
 
   const { error: updateErr } = await supabase
     .from('quality_issues')

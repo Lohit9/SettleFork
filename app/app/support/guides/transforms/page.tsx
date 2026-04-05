@@ -1,10 +1,9 @@
 import Link from 'next/link'
-import SidebarShell from '@/components/app/SidebarShell'
 import { RefreshCw } from '@/components/icons'
 
 function StepBadge({ n }: { n: number }) {
   return (
-    <div className="w-7 h-7 rounded-full bg-blue-100 text-blue-700 flex items-center justify-center text-sm font-medium flex-shrink-0">
+    <div className="w-7 h-7 rounded-full bg-indigo-100 text-indigo-700 flex items-center justify-center text-sm font-medium flex-shrink-0">
       {n}
     </div>
   )
@@ -46,8 +45,7 @@ function ExampleList({ items }: { items: string[] }) {
 
 export default function TransformsGuidePage() {
   return (
-    <SidebarShell>
-      <div className="flex-1 bg-slate-50 min-h-screen overflow-auto">
+    <div className="flex-1 bg-gray-50 min-h-screen overflow-auto">
         <div className="max-w-3xl mx-auto py-8 px-6">
 
           {/* Back link */}
@@ -131,7 +129,7 @@ export default function TransformsGuidePage() {
               </div>
               <p className="text-sm text-gray-600 leading-relaxed max-w-2xl">
                 The generated SQL appears below your description with an{' '}
-                <span className="text-xs bg-blue-100 text-blue-700 px-1.5 py-0.5 rounded font-medium">AI-Generated</span>{' '}
+                <span className="text-xs bg-indigo-100 text-indigo-700 px-1.5 py-0.5 rounded font-medium">AI-Generated</span>{' '}
                 badge. You can:
               </p>
               <BulletList items={[
@@ -203,7 +201,7 @@ export default function TransformsGuidePage() {
             <p className="text-sm text-gray-500 mb-4">Open a project and navigate to the Transform tab.</p>
             <Link
               href="/app/projects"
-              className="inline-flex items-center gap-1.5 bg-blue-600 hover:bg-blue-700 text-white text-sm font-medium px-5 py-2.5 rounded-lg transition-colors"
+              className="inline-flex items-center gap-1.5 bg-[#4F46E5] hover:bg-[#4338CA] text-white text-sm font-medium px-5 py-2.5 rounded-lg transition-colors"
             >
               Open Transform →
             </Link>
@@ -211,6 +209,5 @@ export default function TransformsGuidePage() {
 
         </div>
       </div>
-    </SidebarShell>
   )
 }

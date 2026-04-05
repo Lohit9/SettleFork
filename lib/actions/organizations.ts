@@ -15,6 +15,29 @@ function slugify(name: string): string {
   return `${base}-${suffix}`
 }
 
+export async function adminCreateOrganization(
+  name: string
+): Promise<{ org: Organization | null; error?: string }> {
+  const supabase = await createClient()
+  const { data: { user } } = await supabase.auth.getUser()
+  if (!user) return { org: null, error: 'Not authenticated' }
+
+  const trimmed = name.trim()
+  if (!trimmed) return { org: null, error: 'Organization name is required' }
+
+  const slug = slugify(trimmed)
+
+  const { data: org, error: orgErr } = await supabaseAdmin
+    .from('organizations')
+    .insert({ name: trimmed, slug, created_by: user.id })
+    .select()
+    .single()
+
+  if (orgErr || !org) return { org: null, error: orgErr?.message ?? 'Failed to create organization' }
+
+  return { org: org as Organization }
+}
+
 export async function createOrganization(
   name: string
 ): Promise<{ org: Organization | null; error?: string }> {
@@ -60,6 +83,7 @@ export async function getOrganizationsForUser(): Promise<{
     .from('org_memberships')
     .select('role, organizations(id, name, slug, created_at, created_by)')
     .eq('user_id', user.id)
+    .order('joined_at', { ascending: true })
 
   if (error) return { orgs: [], error: error.message }
 
@@ -217,6 +241,56 @@ export async function removeMember(
 
   revalidatePath('/app/settings')
   return { success: true }
+}
+
+export async function adminGetOrgMembers(orgId: string): Promise<{
+  success: boolean
+  error?: string
+  members: Array<{ id: string; user_id: string; role: OrgRole; joined_at: string; user_name: string; user_email: string }>
+}> {
+  const supabase = await createClient()
+  const { data: { user } } = await supabase.auth.getUser()
+  if (!user) return { success: false, error: 'Not authenticated', members: [] }
+
+  const ADMIN_EMAILS = ['kaandincer1@gmail.com']
+  if (!ADMIN_EMAILS.includes(user.email ?? '')) {
+    return { success: false, error: 'Not a platform admin', members: [] }
+  }
+
+  // Step 1: Get memberships — no join (profiles has no direct FK from org_memberships)
+  const { data, error } = await supabaseAdmin
+    .from('org_memberships')
+    .select('id, role, joined_at, user_id')
+    .eq('org_id', orgId)
+    .order('joined_at', { ascending: true })
+
+  if (error) return { success: false, error: error.message, members: [] }
+  if (!data || data.length === 0) return { success: true, members: [] }
+
+  // Step 2: Fetch profile names via direct PK lookup
+  const userIds = data.map((m) => m.user_id)
+  const { data: profiles } = await supabaseAdmin
+    .from('profiles')
+    .select('id, full_name')
+    .in('id', userIds)
+
+  const nameMap = new Map((profiles ?? []).map((p) => [p.id, p.full_name]))
+
+  // Step 3: Fetch emails from auth.users
+  const { data: authUsers } = await supabaseAdmin.auth.admin.listUsers({ perPage: 1000 })
+  const emailMap = new Map((authUsers?.users ?? []).map((u) => [u.id, u.email]))
+
+  // Step 4: Assemble
+  const members = data.map((m) => ({
+    id: m.id,
+    user_id: m.user_id,
+    role: m.role as OrgRole,
+    joined_at: m.joined_at,
+    user_name: nameMap.get(m.user_id) ?? 'Unknown',
+    user_email: emailMap.get(m.user_id) ?? 'Unknown',
+  }))
+
+  return { success: true, members }
 }
 
 export async function updateOrganization(

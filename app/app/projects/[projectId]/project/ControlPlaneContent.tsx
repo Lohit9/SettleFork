@@ -7,6 +7,8 @@ import { FileText, Upload, CheckCircle2, X, AlertCircle } from '@/components/ico
 import { FileSpreadsheet } from 'lucide-react'
 import { IngestionCard } from './IngestionCard'
 import { PageHeader } from '@/components/app/PageHeader'
+import { useProjectRole } from '@/lib/hooks/useProjectRole'
+import { RoleTooltip } from '@/components/app/RoleTooltip'
 import {
   uploadSchemaDocument,
   deleteSchemaDocument,
@@ -63,9 +65,11 @@ function fileIcon(filename: string): React.ReactNode {
 function DocList({
   docs,
   onDelete,
+  canEdit = true,
 }: {
   docs: SchemaDocument[]
   onDelete: (id: string) => void
+  canEdit?: boolean
 }) {
   if (docs.length === 0) return null
   return (
@@ -86,13 +90,16 @@ function DocList({
           </div>
           <div className="flex items-center gap-2 flex-shrink-0 ml-2">
             <CheckCircle2 className="w-4 h-4 text-green-500" />
-            <button
-              onClick={() => onDelete(doc.id)}
-              className="text-gray-400 hover:text-red-500 transition-colors"
-              title="Delete"
-            >
-              <X className="w-4 h-4" />
-            </button>
+            <RoleTooltip allowed={canEdit} requiredRole="Editor">
+              <button
+                onClick={canEdit ? () => onDelete(doc.id) : undefined}
+                disabled={!canEdit}
+                className="text-gray-400 hover:text-red-500 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+                title="Delete"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </RoleTooltip>
           </div>
         </div>
       ))}
@@ -108,12 +115,14 @@ function SchemaDocSection({
   datasetId,
   projectId,
   onDocsChange,
+  canEdit = true,
 }: {
   label: string
   docs: SchemaDocument[]
   datasetId: string | null
   projectId: string
   onDocsChange: (docs: SchemaDocument[]) => void
+  canEdit?: boolean
 }) {
   const [state, setState] = useState<DocUploadState>({ uploading: false, error: null, isDragOver: false })
   const fileInputRef = useRef<HTMLInputElement>(null)
@@ -147,12 +156,12 @@ function SchemaDocSection({
   }
 
   const handleDelete = async (docId: string) => {
-    try {
-      await deleteSchemaDocument(docId)
-      onDocsChange(docs.filter((d) => d.id !== docId))
-    } catch (err) {
-      console.error('[deleteSchemaDocument]', err)
+    const result = await deleteSchemaDocument(docId)
+    if (!result.success) {
+      console.error('[deleteSchemaDocument]', result.error)
+      return
     }
+    onDocsChange(docs.filter((d) => d.id !== docId))
   }
 
   return (
@@ -180,10 +189,12 @@ function SchemaDocSection({
             <p className="text-xs text-gray-400">PDF, SQL, DDL, TXT, PNG, JPG · Max 20MB</p>
             <input ref={fileInputRef} type="file" accept={ACCEPTED} className="hidden"
               onChange={(e) => { const f = e.target.files?.[0]; if (f) doUpload(f); e.target.value = '' }} />
-            <Button variant="outline" size="sm" type="button"
-              onClick={() => fileInputRef.current?.click()} disabled={!datasetId}>
-              Upload Files
-            </Button>
+            <RoleTooltip allowed={canEdit} requiredRole="Editor">
+              <Button variant="outline" size="sm" type="button"
+                onClick={() => fileInputRef.current?.click()} disabled={!datasetId || !canEdit}>
+                Upload Files
+              </Button>
+            </RoleTooltip>
           </div>
         )}
       </div>
@@ -194,7 +205,7 @@ function SchemaDocSection({
         </div>
       )}
 
-      <DocList docs={docs} onDelete={handleDelete} />
+      <DocList docs={docs} onDelete={handleDelete} canEdit={canEdit} />
     </div>
   )
 }
@@ -205,10 +216,12 @@ function BusinessContextSection({
   docs,
   projectId,
   onDocsChange,
+  canEdit = true,
 }: {
   docs: SchemaDocument[]
   projectId: string
   onDocsChange: (docs: SchemaDocument[]) => void
+  canEdit?: boolean
 }) {
   const [state, setState] = useState<DocUploadState>({ uploading: false, error: null, isDragOver: false })
   const fileInputRef = useRef<HTMLInputElement>(null)
@@ -240,12 +253,12 @@ function BusinessContextSection({
   }
 
   const handleDelete = async (docId: string) => {
-    try {
-      await deleteSchemaDocument(docId)
-      onDocsChange(docs.filter((d) => d.id !== docId))
-    } catch (err) {
-      console.error('[deleteSchemaDocument]', err)
+    const result = await deleteSchemaDocument(docId)
+    if (!result.success) {
+      console.error('[deleteSchemaDocument]', result.error)
+      return
     }
+    onDocsChange(docs.filter((d) => d.id !== docId))
   }
 
   return (
@@ -270,9 +283,11 @@ function BusinessContextSection({
           <p className="text-xs text-gray-400">PDF, DOCX, TXT, XLSX, CSV · Max 20MB</p>
           <input ref={fileInputRef} type="file" accept={ACCEPTED} className="hidden"
             onChange={(e) => { const f = e.target.files?.[0]; if (f) doUpload(f); e.target.value = '' }} />
-          <Button variant="outline" size="sm" type="button" onClick={() => fileInputRef.current?.click()}>
-            Upload Files
-          </Button>
+          <RoleTooltip allowed={canEdit} requiredRole="Editor">
+            <Button variant="outline" size="sm" type="button" onClick={() => fileInputRef.current?.click()} disabled={!canEdit}>
+              Upload Files
+            </Button>
+          </RoleTooltip>
         </div>
       )}
 
@@ -300,17 +315,20 @@ export function ControlPlaneContent({
   initialConnections = {},
   isArchived = false,
 }: ControlPlaneContentProps) {
+  const { can } = useProjectRole(projectId)
+  const canEdit = can('edit')
+
   const [sourceDocs, setSourceDocs] = useState<SchemaDocument[]>(initialSourceDocs)
   const [targetDocs, setTargetDocs] = useState<SchemaDocument[]>(initialTargetDocs)
   const [contextDocs, setContextDocs] = useState<SchemaDocument[]>(initialContextDocs)
 
   const handleDeleteContextDoc = async (docId: string) => {
-    try {
-      await deleteSchemaDocument(docId)
-      setContextDocs((prev) => prev.filter((d) => d.id !== docId))
-    } catch (err) {
-      console.error('[deleteSchemaDocument]', err)
+    const result = await deleteSchemaDocument(docId)
+    if (!result.success) {
+      console.error('[deleteSchemaDocument]', result.error)
+      return
     }
+    setContextDocs((prev) => prev.filter((d) => d.id !== docId))
   }
 
   return (
@@ -362,6 +380,7 @@ export function ControlPlaneContent({
                 datasetId={primarySourceDatasetId}
                 projectId={projectId}
                 onDocsChange={setSourceDocs}
+                canEdit={canEdit}
               />
               <SchemaDocSection
                 label="Target Schema Files"
@@ -369,6 +388,7 @@ export function ControlPlaneContent({
                 datasetId={primaryTargetDatasetId}
                 projectId={projectId}
                 onDocsChange={setTargetDocs}
+                canEdit={canEdit}
               />
             </div>
           </CardContent>
@@ -389,8 +409,9 @@ export function ControlPlaneContent({
               docs={contextDocs}
               projectId={projectId}
               onDocsChange={setContextDocs}
+              canEdit={canEdit}
             />
-            <DocList docs={contextDocs} onDelete={handleDeleteContextDoc} />
+            <DocList docs={contextDocs} onDelete={handleDeleteContextDoc} canEdit={canEdit} />
           </CardContent>
         </Card>
       </div>

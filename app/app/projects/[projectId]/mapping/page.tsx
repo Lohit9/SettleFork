@@ -18,7 +18,6 @@ export default async function MappingPage({ params }: Props) {
     .from('projects')
     .select('id, name')
     .eq('id', projectId)
-    .eq('user_id', user.id)
     .single()
   if (!project) notFound()
 

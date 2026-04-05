@@ -2,6 +2,7 @@
 
 import { supabaseAdmin } from '@/lib/supabase/admin'
 import { createClient } from '@/lib/supabase/server'
+import { requireProjectPermission } from '@/lib/actions/role-resolution'
 import { validateFixSQL } from '@/lib/quality/fix-sql-validator'
 import { countFormatIssues, computeValueDistribution, computeMinMax } from '@/lib/utils/profiling'
 import { callClaude } from '@/lib/ai/claude'
@@ -83,6 +84,9 @@ export async function generateManualFix(
   } = await supabase.auth.getUser()
   if (!user) return { sql: '', estimatedRows: 0, error: 'Not authenticated' }
 
+  const perm = await requireProjectPermission(projectId, 'editor')
+  if (!perm.allowed) return { sql: '', estimatedRows: 0, error: perm.error }
+
   if (!checkAIRateLimit(user.id)) {
     return {
       sql: '',
@@ -91,12 +95,10 @@ export async function generateManualFix(
     }
   }
 
-  // Fix 1: use RLS client for project/table ownership checks
   const { data: proj } = await supabase
     .from('projects')
     .select('id')
     .eq('id', projectId)
-    .eq('user_id', user.id)
     .single()
   if (!proj) return { sql: '', estimatedRows: 0, error: 'Project not found or access denied' }
 
@@ -257,11 +259,13 @@ export async function applyManualFix(
   } = await supabase.auth.getUser()
   if (!user) return { success: false, rowsAffected: 0, error: 'Not authenticated' }
 
+  const perm = await requireProjectPermission(projectId, 'editor')
+  if (!perm.allowed) return { success: false, rowsAffected: 0, error: perm.error }
+
   const { data: proj } = await supabase
     .from('projects')
     .select('id')
     .eq('id', projectId)
-    .eq('user_id', user.id)
     .single()
   if (!proj) return { success: false, rowsAffected: 0, error: 'Project not found or access denied' }
 
@@ -451,11 +455,13 @@ export async function previewManualFix(
   } = await supabase.auth.getUser()
   if (!user) return { valid: false, estimatedRows: 0, error: 'Not authenticated' }
 
+  const perm = await requireProjectPermission(projectId, 'editor')
+  if (!perm.allowed) return { valid: false, estimatedRows: 0, error: perm.error }
+
   const { data: proj } = await supabase
     .from('projects')
     .select('id')
     .eq('id', projectId)
-    .eq('user_id', user.id)
     .single()
   if (!proj) return { valid: false, estimatedRows: 0, error: 'Project not found' }
 

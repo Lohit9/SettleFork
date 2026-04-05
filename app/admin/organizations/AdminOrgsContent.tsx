@@ -11,8 +11,8 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select'
-import { createOrganization, getOrgMembers } from '@/lib/actions/organizations'
-import { createOrgInvite, getPendingInvites, revokeInvite } from '@/lib/actions/org-invites'
+import { adminCreateOrganization, adminGetOrgMembers } from '@/lib/actions/organizations'
+import { adminCreateOrgInvite, adminGetPendingInvites, adminRevokeInvite } from '@/lib/actions/org-invites'
 import type { OrgMembership, OrgInvite, OrgRole } from '@/lib/types/organizations'
 
 interface OrgRow {
@@ -24,7 +24,7 @@ interface OrgRow {
   project_count: number
 }
 
-const ROLE_OPTIONS: OrgRole[] = ['owner', 'admin', 'editor', 'reviewer', 'viewer']
+const ROLE_OPTIONS: OrgRole[] = ['owner', 'admin', 'editor', 'viewer']
 
 function fmt(dateStr: string) {
   return new Date(dateStr).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })
@@ -43,13 +43,17 @@ function OrgDetail({ org }: { org: OrgRow }) {
   const [members, setMembers] = useState<OrgMembership[]>([])
   const [invites, setInvites] = useState<OrgInvite[]>([])
   const [inviteEmail, setInviteEmail] = useState('')
-  const [inviteRole, setInviteRole] = useState<OrgRole>('editor')
+  const [inviteRole, setInviteRole] = useState<OrgRole>('owner')
   const [isPending, startTransition] = useTransition()
   const [toast, setToast] = useState<string | null>(null)
 
   useEffect(() => {
-    getOrgMembers(org.id).then(({ members: m }) => setMembers(m))
-    getPendingInvites(org.id).then(({ invites: inv }) => setInvites(inv))
+    adminGetOrgMembers(org.id).then(({ members: m }) => {
+      setMembers(m)
+      // Once members load: if org already has members, default role to editor instead of owner
+      if (m.length > 0) setInviteRole('editor')
+    })
+    adminGetPendingInvites(org.id).then(({ invites: inv }) => setInvites(inv))
   }, [org.id])
 
   const showToast = (msg: string) => {
@@ -61,28 +65,36 @@ function OrgDetail({ org }: { org: OrgRow }) {
     e.preventDefault()
     if (!inviteEmail.trim()) return
     startTransition(async () => {
-      const result = await createOrgInvite(org.id, inviteEmail.trim(), inviteRole)
+      const result = await adminCreateOrgInvite(org.id, inviteEmail.trim(), inviteRole)
       if (result.error) {
         showToast(`Error: ${result.error}`)
         return
       }
       showToast(`Invite sent to ${inviteEmail.trim()}`)
       setInviteEmail('')
+      // After first invite sent, subsequent invites default to editor
       setInviteRole('editor')
-      getPendingInvites(org.id).then(({ invites: inv }) => setInvites(inv))
+      adminGetPendingInvites(org.id).then(({ invites: inv }) => setInvites(inv))
     })
   }
 
   const handleRevoke = (inviteId: string) => {
     startTransition(async () => {
-      await revokeInvite(inviteId)
+      await adminRevokeInvite(inviteId)
       setInvites((prev) => prev.filter((i) => i.id !== inviteId))
     })
   }
 
+  const isEmpty = members.length === 0 && invites.length === 0
+
   return (
     <div className="mt-3 space-y-4 pl-4 border-l-2 border-blue-200">
       {/* Invite form */}
+      {isEmpty && (
+        <p className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2">
+          This org has no members. The first invite will be sent as <strong>Owner</strong> — the invited user becomes the org owner.
+        </p>
+      )}
       <form onSubmit={handleInvite} className="flex gap-2 items-end">
         <div className="flex-1">
           <Label className="text-xs text-gray-500">Email</Label>
@@ -172,13 +184,13 @@ export default function AdminOrgsContent({ initialOrgs }: { initialOrgs: OrgRow[
     e.preventDefault()
     if (!newOrgName.trim()) return
     startTransition(async () => {
-      const result = await createOrganization(newOrgName.trim())
+      const result = await adminCreateOrganization(newOrgName.trim())
       if (result.error) {
         showToast(`Error: ${result.error}`)
         return
       }
       if (result.org) {
-        setOrgs((prev) => [{ ...result.org!, member_count: 1, project_count: 0 }, ...prev])
+        setOrgs((prev) => [{ ...result.org!, member_count: 0, project_count: 0 }, ...prev])
         showToast(`Created "${result.org.name}" (${result.org.slug})`)
         setNewOrgName('')
       }

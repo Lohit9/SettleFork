@@ -713,7 +713,6 @@ export async function generateExecutionPackage(
       .from('projects')
       .select('id, name')
       .eq('id', projectId)
-      .eq('user_id', user.id)
       .single()
     if (!project) return { success: false, error: 'Access denied' }
 
@@ -1217,7 +1216,6 @@ export async function generateCompartmentalizedPackage(
       .from('projects')
       .select('id, name')
       .eq('id', projectId)
-      .eq('user_id', user.id)
       .single()
     if (!project) return { success: false, error: 'Access denied' }
 
@@ -1916,7 +1914,6 @@ export async function getCompartmentalizedPackageUrls(projectId: string): Promis
     .from('projects')
     .select('id')
     .eq('id', projectId)
-    .eq('user_id', user.id)
     .single()
   if (!project) return { error: 'Access denied' }
 
@@ -1984,7 +1981,6 @@ export async function getExecutionPackageUrl(projectId: string): Promise<{
     .from('projects')
     .select('id')
     .eq('id', projectId)
-    .eq('user_id', user.id)
     .single()
   if (!project) return { error: 'Access denied' }
 

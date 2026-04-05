@@ -1,6 +1,8 @@
 'use server'
 
 import { createClient } from '@/lib/supabase/server'
+import { supabaseAdmin } from '@/lib/supabase/admin'
+import { requireProjectPermission } from '@/lib/actions/role-resolution'
 import { Field } from '@/lib/types/database'
 
 export async function updateField(
@@ -14,28 +16,22 @@ export async function updateField(
     is_foreign_key?: boolean
     fk_reference?: string | null
   }
-): Promise<Field> {
+): Promise<{ success: boolean; data?: Field; error?: string }> {
   const supabase = await createClient()
   const {
     data: { user },
   } = await supabase.auth.getUser()
-  if (!user) throw new Error('Not authenticated')
+  if (!user) return { success: false, error: 'Not authenticated' }
 
-  // Verify the field belongs to a project owned by the current user
-  const { data: field } = await supabase
+  const { data: fieldLookup } = await supabaseAdmin
     .from('fields')
-    .select(
-      `id, table_id,
-       tables!inner(dataset_id,
-         datasets!inner(project_id,
-           projects!inner(user_id)
-         )
-       )`
-    )
+    .select('id, tables!inner(datasets!inner(project_id))')
     .eq('id', fieldId)
     .single()
-
-  if (!field) throw new Error('Field not found')
+  if (!fieldLookup) return { success: false, error: 'Field not found' }
+  const projectId = (fieldLookup as any).tables.datasets.project_id
+  const perm = await requireProjectPermission(projectId, 'editor')
+  if (!perm.allowed) return { success: false, error: perm.error }
 
   // Mark as manually edited — manual takes precedence over doc_enriched or inferred
   const { data: updated, error } = await supabase
@@ -45,6 +41,6 @@ export async function updateField(
     .select()
     .single()
 
-  if (error || !updated) throw new Error(error?.message || 'Failed to update field')
-  return updated as Field
+  if (error || !updated) return { success: false, error: error?.message || 'Failed to update field' }
+  return { success: true, data: updated as Field }
 }
