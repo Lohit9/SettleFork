@@ -85,18 +85,20 @@ export async function middleware(request: NextRequest) {
 
   // ── /verify-email page ────────────────────────────────────────────────────
   if (pathname === '/verify-email') {
-    if (!user) {
-      // Not signed in at all — go to login
-      const url = request.nextUrl.clone()
-      url.pathname = '/login'
-      return NextResponse.redirect(url)
+    // Allow unauthenticated access — new users who just signed up with email
+    // verification enabled have no session yet and must reach this page.
+    if (user) {
+      if (user.email_confirmed_at) {
+        // Fully authenticated and verified — no need to be here
+        const url = request.nextUrl.clone()
+        url.pathname = '/app/projects'
+        url.searchParams.delete('verified')
+        return NextResponse.redirect(url)
+      }
+      // User exists but email not confirmed — let them through
     }
-    if (user.email_confirmed_at) {
-      // Already verified — go to app
-      const url = request.nextUrl.clone()
-      url.pathname = '/app/projects'
-      return NextResponse.redirect(url)
-    }
+    // No user at all — let them through (just signed up, no session yet)
+    return NextResponse.next()
   }
 
   // ── Redirect verified + authenticated users away from auth pages ──────────

@@ -166,7 +166,7 @@ export function accessRequestConfirmationEmail(
         <p style="margin:0 0 16px;">
           <a href="${CALENDLY_SCOPING}"
              style="display:inline-block;background:#2563EB;color:white;font-weight:600;font-size:15px;padding:12px 28px;border-radius:8px;text-decoration:none;">
-            Book a Scoping Call
+            Book a Call
           </a>
         </p>
         <p style="margin:0 0 16px;color:#64748b;">Otherwise, I'll be in touch soon. Feel free to reply to this email anytime.</p>

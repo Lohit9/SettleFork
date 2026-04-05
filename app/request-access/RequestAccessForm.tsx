@@ -119,7 +119,7 @@ export default function RequestAccessForm() {
                 rel="noopener noreferrer"
                 className="block w-full bg-[#2563EB] hover:bg-[#1D4ED8] text-white font-semibold py-3 rounded-xl transition-all text-sm text-center mb-3"
               >
-                Book a Scoping Call
+                Book a Call
               </a>
               <Link href="/" className="block text-sm text-gray-500 hover:text-gray-700 transition-colors">
                 ← Back to home
