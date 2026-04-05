@@ -22,6 +22,9 @@ export interface QueryEngineResult {
   error?: string         // friendly user-facing message
   hint?: string          // actionable suggestion for the user
   rawError?: string      // original PostgreSQL error for technical details
+  retried?: boolean      // true if this result came from an auto-retry
+  originalError?: string // the error from the first attempt (when retried)
+  originalSQL?: string   // the SQL that failed on the first attempt (when retried)
 }
 
 // ─── Column ordering helper ───────────────────────────────────────────────────
@@ -281,13 +284,13 @@ export async function getTableMappingsForProject(
     .in('table_id', tableIds)
     .order('ordinal_position', { ascending: true })
 
-  // Fetch sample values and null rates so the NL prompt can see actual data formatting
+  // Fetch full profiling stats — used to build the enriched NL prompt context
   const fieldIds = (fields ?? []).map((f) => f.id)
   const { data: profiles } =
     fieldIds.length > 0
       ? await supabase
           .from('field_profiles')
-          .select('field_id, sample_values, null_percentage, format_issues')
+          .select('field_id, sample_values, null_percentage, format_issues_count, value_distribution, cardinality, min_value, max_value')
           .in('field_id', fieldIds)
       : { data: [] }
 
@@ -295,7 +298,17 @@ export async function getTableMappingsForProject(
     (profiles ?? []).map((p) => [p.field_id, p])
   )
 
-  const fieldsByTable = new Map<string, { name: string; dataType: string; sampleValues?: string[]; nullPercentage?: number; formatIssues?: number }[]>()
+  const fieldsByTable = new Map<string, {
+    name: string
+    dataType: string
+    sampleValues?: string[]
+    nullPercentage?: number
+    formatIssues?: number
+    cardinality?: number
+    valueDistribution?: Array<{ value: string; count: number }>
+    minValue?: string
+    maxValue?: string
+  }[]>()
   for (const f of fields || []) {
     const profile = profileByFieldId.get(f.id)
     const list = fieldsByTable.get(f.table_id) ?? []
@@ -306,7 +319,13 @@ export async function getTableMappingsForProject(
         ? (profile.sample_values as unknown[]).slice(0, 5).map((v) => String(v ?? ''))
         : undefined,
       nullPercentage: profile?.null_percentage ?? undefined,
-      formatIssues: profile?.format_issues ?? undefined,
+      formatIssues: profile?.format_issues_count ?? undefined,
+      cardinality: profile?.cardinality ?? undefined,
+      valueDistribution: Array.isArray(profile?.value_distribution)
+        ? (profile.value_distribution as Array<{ value: string; count: number }>)
+        : undefined,
+      minValue: profile?.min_value ?? undefined,
+      maxValue: profile?.max_value ?? undefined,
     })
     fieldsByTable.set(f.table_id, list)
   }

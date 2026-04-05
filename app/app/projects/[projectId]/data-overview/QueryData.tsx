@@ -1,9 +1,16 @@
 'use client'
 
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useTransition } from 'react'
 import { Copy, ChevronDown, ChevronRight } from '@/components/icons'
-import { executeNLQuery, executeSQLQuery, backfillFriendlyNames } from '@/lib/actions/query'
-import type { QueryEngineResult } from '@/lib/actions/query'
+import {
+  executeNLQuery,
+  executeSQLQuery,
+  backfillFriendlyNames,
+  getQueryHistory,
+  clearQueryHistory,
+  generateSuggestedQueries,
+} from '@/lib/actions/query'
+import type { QueryEngineResult, QueryHistoryEntry } from '@/lib/actions/query'
 import type { TableOption } from '@/lib/actions/data-overview'
 
 interface QueryDataProps {
@@ -14,6 +21,18 @@ interface QueryDataProps {
 
 type QueryMode = 'nl' | 'sql'
 
+function timeAgo(dateStr: string): string {
+  const seconds = Math.floor((Date.now() - new Date(dateStr).getTime()) / 1000)
+  if (seconds < 60) return 'just now'
+  const minutes = Math.floor(seconds / 60)
+  if (minutes < 60) return `${minutes}m ago`
+  const hours = Math.floor(minutes / 60)
+  if (hours < 24) return `${hours}h ago`
+  const days = Math.floor(hours / 24)
+  if (days < 7) return `${days}d ago`
+  return new Date(dateStr).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
+}
+
 export default function QueryData({ projectId, tables, isArchived = false }: QueryDataProps) {
   const [mode, setMode] = useState<QueryMode>('nl')
   const [input, setInput] = useState('')
@@ -21,9 +40,48 @@ export default function QueryData({ projectId, tables, isArchived = false }: Que
   const [result, setResult] = useState<QueryEngineResult | null>(null)
   const [resultsPage, setResultsPage] = useState(1)
   const [executedSQLExpanded, setExecutedSQLExpanded] = useState(false)
+  const [showRetryDetails, setShowRetryDetails] = useState(false)
   const RESULTS_PAGE_SIZE = 10
   const [tablesExpanded, setTablesExpanded] = useState(true)
   const [copied, setCopied] = useState<'friendly' | 'executed' | null>(null)
+
+  // Suggested queries state
+  const [suggestions, setSuggestions] = useState<string[]>([])
+  const [suggestionsLoading, setSuggestionsLoading] = useState(false)
+
+  // History state
+  const [history, setHistory] = useState<QueryHistoryEntry[]>([])
+  const [historyExpanded, setHistoryExpanded] = useState(false)
+  const [historyLoaded, setHistoryLoaded] = useState(false)
+  const [clearingHistory, startClearTransition] = useTransition()
+
+  // Load history on mount
+  useEffect(() => {
+    getQueryHistory(projectId, 20)
+      .then((entries) => {
+        setHistory(entries)
+        setHistoryLoaded(true)
+      })
+      .catch(() => setHistoryLoaded(true))
+  }, [projectId])
+
+  // Generate suggested queries once on mount — cached in state for the session
+  useEffect(() => {
+    if (tables.length === 0) return
+    setSuggestionsLoading(true)
+    const summary = tables.map((t) => ({
+      name: t.name,
+      fieldNames: t.fieldNames,
+      rowCount: t.row_count,
+      role: t.role,
+    }))
+    generateSuggestedQueries(projectId, summary)
+      .then(setSuggestions)
+      .catch(() => {})
+      .finally(() => setSuggestionsLoading(false))
+  // Run once — tables is stable after server render
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [projectId])
 
   // Trigger backfill on mount for tables that predate this feature
   useEffect(() => {
@@ -45,15 +103,33 @@ export default function QueryData({ projectId, tables, isArchived = false }: Que
     setLoading(true)
     setResult(null)
 
+    const question = input.trim()
+    const queryMode = mode
+    const startTime = Date.now()
+
     try {
       const res =
-        mode === 'nl'
-          ? await executeNLQuery(projectId, input.trim())
-          : await executeSQLQuery(projectId, input.trim())
+        queryMode === 'nl'
+          ? await executeNLQuery(projectId, question)
+          : await executeSQLQuery(projectId, question)
       setResult(res)
       setResultsPage(1)
       setExecutedSQLExpanded(false)
+      setShowRetryDetails(false)
+
+      // Optimistically prepend to local history
+      const optimisticEntry: QueryHistoryEntry = {
+        id: `optimistic-${startTime}`,
+        mode: queryMode,
+        input: question,
+        generated_sql: queryMode === 'nl' ? (res.friendlySQL || null) : null,
+        row_count: res.success ? res.rowCount : null,
+        error: res.error ?? null,
+        created_at: new Date().toISOString(),
+      }
+      setHistory((prev) => [optimisticEntry, ...prev].slice(0, 20))
     } catch (e) {
+      const errorMsg = e instanceof Error ? e.message : 'Unexpected error'
       setResult({
         success: false,
         columns: [],
@@ -61,11 +137,36 @@ export default function QueryData({ projectId, tables, isArchived = false }: Que
         rowCount: 0,
         friendlySQL: input,
         executedSQL: '',
-        error: e instanceof Error ? e.message : 'Unexpected error',
+        error: errorMsg,
       })
+      const optimisticEntry: QueryHistoryEntry = {
+        id: `optimistic-${startTime}`,
+        mode: queryMode,
+        input: question,
+        generated_sql: null,
+        row_count: null,
+        error: errorMsg,
+        created_at: new Date().toISOString(),
+      }
+      setHistory((prev) => [optimisticEntry, ...prev].slice(0, 20))
     } finally {
       setLoading(false)
     }
+  }
+
+  function handleHistoryClick(entry: QueryHistoryEntry) {
+    // Re-populate input — does NOT auto-execute
+    setMode(entry.mode)
+    setInput(entry.input)
+    // Scroll to top of editor by clearing result
+    setResult(null)
+  }
+
+  function handleClearHistory() {
+    startClearTransition(async () => {
+      await clearQueryHistory(projectId)
+      setHistory([])
+    })
   }
 
   function copyText(text: string, key: 'friendly' | 'executed') {
@@ -179,6 +280,28 @@ export default function QueryData({ projectId, tables, isArchived = false }: Que
                 />
               )}
 
+              {/* Suggestion chips — shown when NL input is empty */}
+              {mode === 'nl' && input.trim() === '' && (
+                <div className="flex flex-wrap gap-2 mt-3">
+                  {suggestionsLoading
+                    ? Array.from({ length: 4 }).map((_, i) => (
+                        <div
+                          key={i}
+                          className="h-8 w-48 bg-slate-100 rounded-full animate-pulse"
+                        />
+                      ))
+                    : suggestions.map((s, i) => (
+                        <button
+                          key={i}
+                          onClick={() => setInput(s)}
+                          className="text-sm px-3 py-1.5 rounded-full border border-slate-200 text-slate-600 hover:bg-slate-50 hover:border-blue-300 transition-colors"
+                        >
+                          {s}
+                        </button>
+                      ))}
+                </div>
+              )}
+
               <button
                 onClick={handleExecute}
                 disabled={loading || !input.trim() || tables.length === 0}
@@ -197,6 +320,102 @@ export default function QueryData({ projectId, tables, isArchived = false }: Que
               </button>
             </div>
           </div>
+
+          {/* ── Query History ──────────────────────────────────────────────── */}
+          {historyLoaded && history.length > 0 && (
+            <div className="bg-white border border-gray-200 rounded-xl overflow-hidden">
+              {/* History header — toggle */}
+              <button
+                onClick={() => setHistoryExpanded((v) => !v)}
+                className="w-full px-5 py-3 flex items-center justify-between hover:bg-gray-50 transition-colors"
+              >
+                <div className="flex items-center gap-2">
+                  <span className="text-sm font-semibold text-gray-900">Recent Queries</span>
+                  <span className="text-xs bg-gray-100 text-gray-500 px-2 py-0.5 rounded-full font-medium">
+                    {history.length}
+                  </span>
+                </div>
+                {historyExpanded ? (
+                  <ChevronDown className="w-4 h-4 text-gray-400" />
+                ) : (
+                  <ChevronRight className="w-4 h-4 text-gray-400" />
+                )}
+              </button>
+
+              {historyExpanded && (
+                <>
+                  <div className="border-t border-gray-100 divide-y divide-gray-50">
+                    {history.map((entry) => (
+                      <button
+                        key={entry.id}
+                        onClick={() => handleHistoryClick(entry)}
+                        className="w-full text-left px-5 py-2.5 hover:bg-gray-50 transition-colors group flex items-start gap-3"
+                        title="Click to load this query"
+                      >
+                        {/* Status dot */}
+                        <span
+                          className={`mt-1.5 w-1.5 h-1.5 rounded-full flex-shrink-0 ${
+                            entry.error ? 'bg-red-400' : 'bg-green-400'
+                          }`}
+                        />
+
+                        {/* Query text */}
+                        <span className="flex-1 min-w-0">
+                          <span className="text-xs text-gray-800 font-mono leading-relaxed line-clamp-1 group-hover:text-blue-700 transition-colors">
+                            {entry.input.length > 100
+                              ? entry.input.slice(0, 100) + '…'
+                              : entry.input}
+                          </span>
+                          {entry.error && (
+                            <span className="text-[10px] text-red-500 mt-0.5 block truncate">
+                              {entry.error.length > 80 ? entry.error.slice(0, 80) + '…' : entry.error}
+                            </span>
+                          )}
+                        </span>
+
+                        {/* Right side: badges + time */}
+                        <span className="flex items-center gap-1.5 flex-shrink-0 mt-0.5">
+                          {/* Mode badge */}
+                          <span
+                            className={`text-[10px] px-1.5 py-0.5 rounded font-medium ${
+                              entry.mode === 'nl'
+                                ? 'bg-purple-100 text-purple-600'
+                                : 'bg-gray-100 text-gray-500'
+                            }`}
+                          >
+                            {entry.mode === 'nl' ? 'NL' : 'SQL'}
+                          </span>
+
+                          {/* Row count */}
+                          {entry.row_count !== null && !entry.error && (
+                            <span className="text-[10px] text-gray-400">
+                              {entry.row_count.toLocaleString()} row{entry.row_count !== 1 ? 's' : ''}
+                            </span>
+                          )}
+
+                          {/* Timestamp */}
+                          <span className="text-[10px] text-gray-400 tabular-nums">
+                            {timeAgo(entry.created_at)}
+                          </span>
+                        </span>
+                      </button>
+                    ))}
+                  </div>
+
+                  {/* Clear history */}
+                  <div className="border-t border-gray-100 px-5 py-2.5 flex justify-end">
+                    <button
+                      onClick={handleClearHistory}
+                      disabled={clearingHistory}
+                      className="text-xs text-gray-400 hover:text-red-500 transition-colors disabled:opacity-50"
+                    >
+                      {clearingHistory ? 'Clearing…' : 'Clear history'}
+                    </button>
+                  </div>
+                </>
+              )}
+            </div>
+          )}
 
           {/* Error banners */}
           {result && !result.success && (
@@ -221,6 +440,43 @@ export default function QueryData({ projectId, tables, isArchived = false }: Que
                   </p>
                 </details>
               )}
+            </div>
+          )}
+
+          {/* Auto-retry notice */}
+          {result?.retried && (
+            <div className="flex items-center gap-2 text-sm text-amber-700 bg-amber-50 border border-amber-200 rounded-xl px-4 py-2.5">
+              <svg className="w-4 h-4 flex-shrink-0" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+              </svg>
+              <span>Query was automatically corrected after an initial error.</span>
+              <button
+                onClick={() => setShowRetryDetails((v) => !v)}
+                className="ml-auto text-amber-800 underline text-xs flex-shrink-0"
+              >
+                {showRetryDetails ? 'Hide details' : 'View details'}
+              </button>
+            </div>
+          )}
+
+          {showRetryDetails && result?.retried && (
+            <div className="text-xs bg-slate-50 border border-slate-200 rounded-xl px-4 py-3 space-y-3">
+              <div>
+                <span className="font-semibold text-slate-600 uppercase tracking-wide text-[10px]">Original SQL (failed)</span>
+                <pre className="mt-1 text-red-600 font-mono whitespace-pre-wrap break-all bg-red-50 rounded-lg px-3 py-2">
+                  {result.originalSQL}
+                </pre>
+              </div>
+              <div>
+                <span className="font-semibold text-slate-600 uppercase tracking-wide text-[10px]">Error</span>
+                <p className="mt-1 text-red-600 font-mono bg-red-50 rounded-lg px-3 py-2">{result.originalError}</p>
+              </div>
+              <div>
+                <span className="font-semibold text-slate-600 uppercase tracking-wide text-[10px]">Corrected SQL</span>
+                <pre className="mt-1 text-green-700 font-mono whitespace-pre-wrap break-all bg-green-50 rounded-lg px-3 py-2">
+                  {result.friendlySQL}
+                </pre>
+              </div>
             </div>
           )}
 
