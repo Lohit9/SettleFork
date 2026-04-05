@@ -18,6 +18,7 @@ import {
   Database,
   Sparkles,
   Play,
+  Undo2,
 } from '@/components/icons'
 import {
   generateTransform,
@@ -26,6 +27,8 @@ import {
   testTransformation,
   autoGenerateAllTransforms,
   applyTransform,
+  revertTransform,
+  getStagedPreviewForField,
   previewTransformDistinct,
   suggestTransformDescription,
   dismissTransformNeeded,
@@ -202,6 +205,12 @@ export default function TransformContent({ projectId, projectName, initialData, 
   // Action states
   const [autoGenProgress, setAutoGenProgress] = useState<string | null>(null)
   const [applyResult, setApplyResult] = useState<{ rowsAffected: number } | null>(null)
+  const [showStagedPreview, setShowStagedPreview] = useState(false)
+  const [stagedPreview, setStagedPreview] = useState<{
+    rows: Array<{ sourceValue: string | null; targetValue: string | null }>
+    totalRows: number
+  } | null>(null)
+  const [isReverting, setIsReverting] = useState(false)
   const [toast, setToast] = useState<{ message: string; type: 'success' | 'error' } | null>(null)
   const [stagingError, setStagingError] = useState<string | null>(null)
 
@@ -506,6 +515,8 @@ export default function TransformContent({ projectId, projectName, initialData, 
       setPreviewMode('sample')
       setApplyResult(null)
       setTestResult(null)
+      setShowStagedPreview(false)
+      setStagedPreview(null)
       setSqlExpanded(false)
       setWhyExpanded(false)
       setSaveStatus('idle')
@@ -555,6 +566,8 @@ export default function TransformContent({ projectId, projectName, initialData, 
     setPreviewError(null)
     setApplyResult(null)
     setTestResult(null)
+    setShowStagedPreview(false)
+    setStagedPreview(null)
     isDirtyRef.current = false
   }
 
@@ -600,8 +613,10 @@ export default function TransformContent({ projectId, projectName, initialData, 
     const desc = localTransform.description.trim()
     if (!desc) { showToast('Enter a description first', 'error'); return }
 
+    const existingSQL = localTransform.sql?.trim() || null
+
     startGenerating(async () => {
-      const result = await generateTransform(selectedMappingId, desc)
+      const result = await generateTransform(selectedMappingId, desc, existingSQL)
       if (!result.success || !result.sql) {
         showToast(result.error ?? 'Generation failed', 'error')
         return
@@ -689,6 +704,14 @@ export default function TransformContent({ projectId, projectName, initialData, 
       refreshFieldStatus(fmId, 'applied')
       setApplyResult({ rowsAffected: result.rowsAffected })
 
+      // Fetch staged preview to show in Data Preview section
+      getStagedPreviewForField(fmId).then((staged) => {
+        if (staged.success && staged.rows) {
+          setStagedPreview({ rows: staged.rows, totalRows: staged.totalRows ?? 0 })
+          setShowStagedPreview(true)
+        }
+      }).catch(() => {})
+
       // Check if this is a PK field with FK dependents — prompt cascade if so
       const currentField = findField(data.datasets, fmId)?.field
       if (currentField?.targetFieldIsPrimaryKey) {
@@ -758,6 +781,27 @@ export default function TransformContent({ projectId, projectName, initialData, 
   }
 
   // ── Staging warning popup actions ─────────────────────────────────────────
+
+  async function handleRevert() {
+    if (!selectedMappingId) return
+    if (!confirm('This will remove staged data for this field. Continue?')) return
+    setIsReverting(true)
+    try {
+      const result = await revertTransform(selectedMappingId)
+      if (result.success) {
+        setLocalTransform((prev) => prev ? { ...prev, status: 'tested' } : prev)
+        refreshFieldStatus(selectedMappingId, 'tested')
+        setShowStagedPreview(false)
+        setStagedPreview(null)
+        setApplyResult(null)
+        showToast(`Reverted ${result.rowsAffected} staged rows`, 'success')
+      } else {
+        showToast(result.error ?? 'Revert failed', 'error')
+      }
+    } finally {
+      setIsReverting(false)
+    }
+  }
 
   function handleWarningProceed() {
     setShowStagingWarning(false)
@@ -1309,7 +1353,8 @@ export default function TransformContent({ projectId, projectName, initialData, 
               try {
                 const fmId = await ensureFieldMapping()
                 if (!fmId) return
-                const genResult = await generateTransform(fmId, unmappedDescription)
+                const existingUnmappedSQL = unmappedSql?.trim() || null
+                const genResult = await generateTransform(fmId, unmappedDescription, existingUnmappedSQL)
                 if (!genResult.success || !genResult.sql) {
                   showToast(genResult.error ?? 'Generation failed', 'error')
                   return
@@ -2022,49 +2067,101 @@ export default function TransformContent({ projectId, projectName, initialData, 
                 <div className="flex items-center justify-between px-4 py-3 bg-gray-50 border-b border-gray-200">
                   <div className="flex items-center gap-2">
                     <span className="text-sm font-semibold text-gray-900">Data Preview</span>
-                    {previewLoading && (
+                    {showStagedPreview ? (
+                      <span className="text-xs px-2 py-0.5 rounded-full bg-green-100 text-green-700 font-medium">
+                        Staged ✓
+                      </span>
+                    ) : (
+                      <span className="text-xs px-2 py-0.5 rounded-full bg-blue-100 text-blue-700 font-medium">
+                        Live
+                      </span>
+                    )}
+                    {previewLoading && !showStagedPreview && (
                       <span className="w-3.5 h-3.5 border-2 border-blue-500 border-t-transparent rounded-full animate-spin" />
                     )}
-                    {hasFieldIssues && issueCount > 0 && !previewLoading && (
+                    {!showStagedPreview && hasFieldIssues && issueCount > 0 && !previewLoading && (
                       <span className="text-xs text-amber-600">
                         · {issueCount.toLocaleString()} rows have source issues
                       </span>
                     )}
-                    {elseIndices.size > 0 && !previewLoading && (
+                    {!showStagedPreview && elseIndices.size > 0 && !previewLoading && (
                       <span className="text-xs text-amber-600">
                         · {elseIndices.size} may hit ELSE clause
                       </span>
                     )}
+                    {showStagedPreview && stagedPreview && (
+                      <span className="text-xs text-gray-500">
+                        · {stagedPreview.totalRows.toLocaleString()} rows staged
+                      </span>
+                    )}
                   </div>
-                  {localTransform?.sql && (
-                    <div className="flex items-center gap-1 bg-white border border-gray-200 rounded-md p-0.5">
+                  <div className="flex items-center gap-2">
+                    {showStagedPreview && (
                       <button
-                        onClick={() => setPreviewMode('sample')}
-                        className={`px-2.5 py-1 text-xs font-medium rounded transition-colors ${
-                          previewMode === 'sample' ? 'bg-gray-100 text-gray-800' : 'text-gray-500 hover:text-gray-700'
-                        }`}
+                        onClick={() => setShowStagedPreview(false)}
+                        className="text-xs text-gray-500 hover:text-gray-700 underline-offset-2 hover:underline"
                       >
-                        Sample
+                        Show live
                       </button>
-                      <button
-                        onClick={() => setPreviewMode('distinct')}
-                        className={`px-2.5 py-1 text-xs font-medium rounded transition-colors ${
-                          previewMode === 'distinct' ? 'bg-gray-100 text-gray-800' : 'text-gray-500 hover:text-gray-700'
-                        }`}
-                      >
-                        Distinct
-                      </button>
-                    </div>
-                  )}
+                    )}
+                    {localTransform?.sql && !showStagedPreview && (
+                      <div className="flex items-center gap-1 bg-white border border-gray-200 rounded-md p-0.5">
+                        <button
+                          onClick={() => setPreviewMode('sample')}
+                          className={`px-2.5 py-1 text-xs font-medium rounded transition-colors ${
+                            previewMode === 'sample' ? 'bg-gray-100 text-gray-800' : 'text-gray-500 hover:text-gray-700'
+                          }`}
+                        >
+                          Sample
+                        </button>
+                        <button
+                          onClick={() => setPreviewMode('distinct')}
+                          className={`px-2.5 py-1 text-xs font-medium rounded transition-colors ${
+                            previewMode === 'distinct' ? 'bg-gray-100 text-gray-800' : 'text-gray-500 hover:text-gray-700'
+                          }`}
+                        >
+                          Distinct
+                        </button>
+                      </div>
+                    )}
+                  </div>
                 </div>
 
-                {previewError && (
+                {previewError && !showStagedPreview && (
                   <div className="px-4 py-2.5 bg-red-50 border-b border-red-100">
                     <p className="text-xs text-red-700 font-mono break-all">{previewError}</p>
                   </div>
                 )}
 
-                {(() => {
+                {showStagedPreview && stagedPreview ? (
+                  <table className="w-full text-sm">
+                    <thead>
+                      <tr className="border-b border-gray-100 bg-gray-50/50">
+                        <th className="text-left px-4 py-2.5 text-xs font-medium text-gray-500 w-1/2">
+                          Source ({selectedContext.field.sourceFieldName})
+                        </th>
+                        <th className="px-1 py-2.5 w-6" />
+                        <th className="text-left px-4 py-2.5 text-xs font-medium text-gray-500 w-1/2">
+                          Target ({selectedContext.field.targetFieldName})
+                          <span className="ml-2 text-green-600 font-normal normal-case">✓ Staged</span>
+                        </th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {stagedPreview.rows.map((row, i) => (
+                        <tr key={i} className="border-b border-gray-100 last:border-0 hover:bg-gray-50/50">
+                          <td className="px-4 py-2 font-mono text-xs align-top text-gray-500">
+                            {row.sourceValue != null ? String(row.sourceValue) : <span className="italic text-gray-400">null</span>}
+                          </td>
+                          <td className="px-1 py-2 text-center text-gray-300 text-xs align-top">→</td>
+                          <td className="px-4 py-2 font-mono text-xs align-top text-green-700">
+                            {row.targetValue != null ? String(row.targetValue) : <span className="italic text-gray-400 font-normal">null</span>}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                ) : (() => {
                   // Determine all source columns for this mapping
                   const isValueAssignment = selectedContext.field.isValueAssignment
                   const srcColumns = isValueAssignment
@@ -2245,7 +2342,7 @@ export default function TransformContent({ projectId, projectName, initialData, 
 
             {/* Test results section */}
             {testResult && (
-              <div className={`mx-5 mb-4 rounded-lg border text-sm ${testResult.failedRows === 0 ? 'bg-green-50 border-green-200' : 'bg-red-50 border-red-200'}`}>
+              <div className={`mx-5 mb-4 rounded-lg border text-sm ${testResult.failedRows === 0 ? 'bg-green-50 border-green-200' : 'bg-amber-50 border-amber-200'}`}>
                 <div className="flex items-center gap-2 px-4 py-3">
                   {testResult.failedRows === 0 ? (
                     <>
@@ -2259,46 +2356,50 @@ export default function TransformContent({ projectId, projectName, initialData, 
                     </>
                   ) : (
                     <>
-                      <AlertCircle className="w-4 h-4 text-red-600 flex-shrink-0" />
-                      <span className="font-medium text-red-800">
-                        {testResult.failedRows.toLocaleString()} of {testResult.totalRows.toLocaleString()} rows failed
+                      <AlertTriangle className="w-4 h-4 text-amber-600 flex-shrink-0" />
+                      <span className="font-medium text-amber-800">
+                        {testResult.passedRows?.toLocaleString() ?? (testResult.totalRows - testResult.failedRows).toLocaleString()} of {testResult.totalRows.toLocaleString()} rows passed — {testResult.failedRows.toLocaleString()} failures
                       </span>
                     </>
                   )}
                 </div>
                 {testResult.failedRows > 0 && testResult.failures.length > 0 && (
-                  <div className="border-t border-red-200">
+                  <details className="border-t border-amber-200">
+                    <summary className="px-4 py-2 text-xs text-amber-700 cursor-pointer hover:bg-amber-100/50">
+                      View failed values ({Math.min(testResult.failures.length, 20)} shown)
+                    </summary>
                     <table className="w-full text-xs">
                       <thead>
-                        <tr className="bg-red-100/60">
-                          <th className="text-left px-4 py-1.5 font-medium text-red-700 w-16">Row</th>
-                          <th className="text-left px-4 py-1.5 font-medium text-red-700 w-40">Source Value</th>
-                          <th className="text-left px-4 py-1.5 font-medium text-red-700">Error</th>
+                        <tr className="bg-amber-100/60">
+                          <th className="text-left px-4 py-1.5 font-medium text-amber-700 w-16">Row</th>
+                          <th className="text-left px-4 py-1.5 font-medium text-amber-700 w-40">Source Value</th>
+                          <th className="text-left px-4 py-1.5 font-medium text-amber-700">Error</th>
                         </tr>
                       </thead>
-                      <tbody>
-                        {testResult.failures.map((f, i) => (
-                          <tr key={i} className="border-t border-red-200/60">
-                            <td className="px-4 py-1.5 text-red-600 font-mono">{f.rowNumber}</td>
-                            <td className="px-4 py-1.5 font-mono text-red-700 truncate max-w-[10rem]">{f.sourceValue || <em className="text-red-400">empty</em>}</td>
-                            <td className="px-4 py-1.5 text-red-600 truncate">{f.errorMessage}</td>
+                      <tbody className="max-h-40 overflow-y-auto">
+                        {testResult.failures.slice(0, 20).map((f, i) => (
+                          <tr key={i} className="border-t border-amber-200/60">
+                            <td className="px-4 py-1.5 text-amber-600 font-mono">{f.rowNumber}</td>
+                            <td className="px-4 py-1.5 font-mono text-amber-700 truncate max-w-[10rem]">
+                              <code className="bg-amber-100 px-1 rounded">{f.sourceValue || ''}</code>
+                            </td>
+                            <td className="px-4 py-1.5 text-amber-600 truncate">— {f.errorMessage}</td>
                           </tr>
                         ))}
                         {testResult.failedRows > testResult.failures.length && (
-                          <tr className="border-t border-red-200/60">
-                            <td colSpan={3} className="px-4 py-1.5 text-red-500 italic">
+                          <tr className="border-t border-amber-200/60">
+                            <td colSpan={3} className="px-4 py-1.5 text-amber-500 italic">
                               ... and {(testResult.failedRows - testResult.failures.length).toLocaleString()} more failures
                             </td>
                           </tr>
                         )}
                       </tbody>
                     </table>
-                    <div className="px-4 py-2.5 border-t border-red-200 bg-red-50/80 flex items-center gap-3">
-                      <span className="text-xs text-red-600 flex-1">Fix the transform logic above, then re-test.</span>
+                    <div className="px-4 py-2.5 border-t border-amber-200 bg-amber-50/80 flex items-center gap-3">
+                      <span className="text-xs text-amber-600 flex-1">Fix the transform logic above, then re-test.</span>
                       <button
                         className="text-xs font-medium text-blue-700 hover:text-blue-900 underline-offset-2 hover:underline"
                         onClick={() => {
-                          // Allow applying anyway (e.g., skip bad rows)
                           setLocalTransform((prev) => prev ? { ...prev, status: 'tested' } : null)
                           setTestResult(null)
                           showToast('Test override — Apply will skip failed rows.', 'success')
@@ -2307,7 +2408,7 @@ export default function TransformContent({ projectId, projectName, initialData, 
                         Apply Anyway (skip {testResult.failedRows} failed rows)
                       </button>
                     </div>
-                  </div>
+                  </details>
                 )}
               </div>
             )}
@@ -2369,6 +2470,17 @@ export default function TransformContent({ projectId, projectName, initialData, 
                       )}
                     </Button>
                     </RoleTooltip>
+                    {/* Revert — only when status is applied */}
+                    {localTransform?.status === 'applied' && canEdit && (
+                      <button
+                        onClick={handleRevert}
+                        disabled={isReverting}
+                        className="text-sm text-red-600 hover:text-red-800 flex items-center gap-1 ml-1 disabled:opacity-50 disabled:cursor-not-allowed"
+                      >
+                        <Undo2 className="w-4 h-4" />
+                        {isReverting ? 'Reverting…' : 'Revert'}
+                      </button>
+                    )}
                   </div>
                 )}
               </div>
@@ -2661,7 +2773,7 @@ function FieldRow({ field, isSelected, onSelect, oneToManyCount = 1 }: {
           <div className="flex items-center gap-1 flex-shrink-0">
             {status === 'applied' ? (
               <Badge className="bg-green-100 text-green-700 hover:bg-green-100 border border-green-200 text-[10px] px-1.5 py-0">
-                Transformed
+                Staged ✓
               </Badge>
             ) : field.transformation ? (
               <Badge className="bg-purple-100 text-purple-700 hover:bg-purple-100 border border-purple-200 text-[10px] px-1.5 py-0">
@@ -2713,7 +2825,7 @@ function FieldRow({ field, isSelected, onSelect, oneToManyCount = 1 }: {
         </div>
         <div className="flex items-center gap-1 flex-shrink-0">
           {status === 'applied' && (
-            <span title="Applied to staged data"><CheckCircle2 className="w-3.5 h-3.5 text-green-500" /></span>
+            <span title="Data staged"><CheckCircle2 className="w-3.5 h-3.5 text-green-500" /></span>
           )}
           {status === 'stale' && (
             <span title="Transform edited after apply — re-apply needed">
@@ -2722,7 +2834,7 @@ function FieldRow({ field, isSelected, onSelect, oneToManyCount = 1 }: {
           )}
           {status === 'applied' ? (
             <Badge className="bg-green-100 text-green-700 hover:bg-green-100 border border-green-200 text-[10px] px-1.5 py-0">
-              Transformed
+              Staged ✓
             </Badge>
           ) : status === 'tested' ? (
             <Badge className="bg-teal-100 text-teal-700 hover:bg-teal-100 border border-teal-200 text-[10px] px-1.5 py-0">

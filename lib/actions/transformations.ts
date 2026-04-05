@@ -444,6 +444,15 @@ The user's natural language description is the AUTHORITATIVE specification for t
 - The value distribution and sample data are provided so you can write CORRECT SQL (proper quoting, case handling, edge cases) — NOT so you can expand the user's specification with additional mappings.
 - It is ALWAYS better to under-engineer (strict adherence to user's words + ELSE catch-all) than to over-engineer (inventing mappings the user didn't ask for).
 
+ITERATIVE REFINEMENT (when <existing_sql> is provided):
+- A previous SQL expression was already generated for this field mapping
+- The user updated their description and wants the SQL modified, not rewritten from scratch
+- Preserve the CASE WHEN structure, variable naming, null handling, and overall approach
+- Only modify the specific parts that the new description requires
+- Keep existing edge case handling (null checks, TRIM, type casting) even if the new description doesn't mention them — they were added for a reason
+- If the new description fundamentally changes the transformation approach, you may rewrite entirely
+- If no <existing_sql> block is present, generate from scratch as usual
+
 NULL HANDLING:
 Always preserve NULL and empty values unless the user explicitly instructs you to convert them. When generating CASE expressions or any conditional logic, add a NULL/empty guard as the FIRST condition:
   CASE
@@ -489,7 +498,8 @@ function wrapWithNullGuard(sql: string, sourceFieldName: string): string {
 
 export async function generateTransform(
   fieldMappingId: string,
-  description: string
+  description: string,
+  existingSQL?: string | null
 ): Promise<{ success: boolean; sql?: string; transformationId?: string; error?: string }> {
   const supabase = await createClient()
   const {
@@ -607,6 +617,25 @@ Handle nulls gracefully — if one source field is null, use the remaining field
     }
   }
 
+  // Build optional iteration block (only when refining an existing transform)
+  let iterationBlock = ''
+  if (existingSQL && existingSQL.trim().length > 0) {
+    iterationBlock = `<existing_sql>
+${existingSQL.trim()}
+</existing_sql>
+
+<iteration_instruction>
+The user has updated their description. Modify the existing SQL expression above to match the new description.
+- Preserve the existing structure, CASE WHEN patterns, and null handling where possible
+- Only change what the new description specifically requires
+- If the existing SQL handles edge cases (null checks, trim, type casting) that the new description doesn't mention, KEEP them
+- If the new description contradicts the existing SQL, follow the new description
+- If the new description adds a requirement, add it to the existing SQL rather than rewriting
+</iteration_instruction>
+
+`
+  }
+
   // Build user message
   const sourceBlock = isValueAssignment
     ? `<source_field>\nNo source field — this is a VALUE ASSIGNMENT.\nDefine a constant, expression, or function that produces the value for the target field.\nDo NOT reference row_data unless you know the source table columns.\nTable: ${srcTable?.name ?? ''}\n</source_field>`
@@ -624,7 +653,7 @@ ${tgtFieldCtx && tgtFieldCtx.cardinality > 0 ? `Distinct values: ${tgtFieldCtx.c
 ${fm.type_compatibility ?? 'Not specified'}
 </type_compatibility>
 ${transformDocBlock}
-${txCtx.intelligence_context ? txCtx.intelligence_context + '\n\n' : ''}<description>
+${txCtx.intelligence_context ? txCtx.intelligence_context + '\n\n' : ''}${iterationBlock}<description>
 ${description}
 </description>
 
@@ -632,7 +661,7 @@ Generate the SQL transformation expression.`
 
   let rawSql: string
   try {
-    rawSql = await callClaude(TRANSFORM_SYSTEM_PROMPT, userMessage, 1024)
+    rawSql = await callClaude(TRANSFORM_SYSTEM_PROMPT, userMessage, 2048)
   } catch (err) {
     return { success: false, error: 'AI generation failed. Please try again.' }
   }
@@ -1232,6 +1261,130 @@ export async function applyTransform(
 
   revalidatePath(`/app/projects/${tm.project_id}`, 'layout')
   return { success: true, rowsAffected: appliedRows }
+}
+
+// ── revertTransform ───────────────────────────────────────────────────────────
+// Removes a single target field's staged value from all staged_data_rows for
+// the table mapping, then resets the transformation status back to 'tested'.
+// Uses the revert_field_transform RPC which applies jsonb - text operator so
+// only rows that actually carry the key are touched.
+
+export async function revertTransform(
+  fieldMappingId: string
+): Promise<{ success: boolean; rowsAffected: number; error?: string }> {
+  const supabase = await createClient()
+  const {
+    data: { user },
+  } = await supabase.auth.getUser()
+  if (!user) return { success: false, rowsAffected: 0, error: 'Not authenticated' }
+
+  // Resolve field mapping → table mapping → project (for permission check)
+  const { data: fm } = await supabaseAdmin
+    .from('field_mappings')
+    .select('id, target_field_id, table_mapping_id, table_mappings!inner(project_id)')
+    .eq('id', fieldMappingId)
+    .single()
+
+  if (!fm) return { success: false, rowsAffected: 0, error: 'Field mapping not found' }
+
+  const projectId = (fm as unknown as { table_mappings: { project_id: string } }).table_mappings.project_id
+  const perm = await requireProjectPermission(projectId, 'editor')
+  if (!perm.allowed) return { success: false, rowsAffected: 0, error: perm.error }
+
+  // Look up the target field's name — staged_data_rows uses the field name as the JSONB key
+  const { data: tgtField } = await supabaseAdmin
+    .from('fields')
+    .select('name')
+    .eq('id', fm.target_field_id)
+    .single()
+
+  if (!tgtField) return { success: false, rowsAffected: 0, error: 'Target field not found' }
+
+  const { data, error: rpcErr } = await supabaseAdmin.rpc('revert_field_transform', {
+    p_table_mapping_id: fm.table_mapping_id,
+    p_target_field_name: tgtField.name,
+  })
+
+  if (rpcErr) return { success: false, rowsAffected: 0, error: rpcErr.message }
+
+  // Reset transform status from 'applied' back to 'tested'
+  await supabaseAdmin
+    .from('transformations')
+    .update({ status: 'tested' })
+    .eq('field_mapping_id', fieldMappingId)
+    .eq('status', 'applied')
+
+  revalidatePath(`/app/projects/${projectId}`, 'layout')
+  return { success: true, rowsAffected: (data as number) ?? 0 }
+}
+
+// ── getStagedPreviewForField ──────────────────────────────────────────────────
+// Reads a sample of staged_data_rows and extracts the source → target pair for
+// a specific field mapping. Used by the Transform Data Preview after Apply so
+// the user sees real staged values rather than a re-executed live SQL preview.
+
+export async function getStagedPreviewForField(
+  fieldMappingId: string,
+  limit = 20
+): Promise<{
+  success: boolean
+  rows?: Array<{ sourceValue: string | null; targetValue: string | null }>
+  totalRows?: number
+  error?: string
+}> {
+  const supabase = await createClient()
+  const {
+    data: { user },
+  } = await supabase.auth.getUser()
+  if (!user) return { success: false, error: 'Not authenticated' }
+
+  // Resolve source/target field IDs and table mapping
+  const { data: fm } = await supabase
+    .from('field_mappings')
+    .select('source_field_id, target_field_id, table_mapping_id')
+    .eq('id', fieldMappingId)
+    .single()
+
+  if (!fm) return { success: false, error: 'Field mapping not found' }
+
+  // Resolve both field names in parallel
+  const [srcResult, tgtResult] = await Promise.all([
+    fm.source_field_id
+      ? supabase.from('fields').select('name').eq('id', fm.source_field_id).single()
+      : Promise.resolve({ data: null }),
+    supabase.from('fields').select('name').eq('id', fm.target_field_id).single(),
+  ])
+
+  if (!tgtResult.data) return { success: false, error: 'Target field not found' }
+  const srcFieldName = srcResult.data?.name ?? null
+  const tgtFieldName = tgtResult.data.name
+
+  // Count total staged rows for this table mapping
+  const { count } = await supabase
+    .from('staged_data_rows')
+    .select('id', { count: 'exact', head: true })
+    .eq('table_mapping_id', fm.table_mapping_id)
+
+  // Fetch a page of staged rows
+  const { data: rows, error } = await supabase
+    .from('staged_data_rows')
+    .select('source_row_data, transformed_row_data')
+    .eq('table_mapping_id', fm.table_mapping_id)
+    .order('row_number', { ascending: true })
+    .limit(limit)
+
+  if (error) return { success: false, error: error.message }
+
+  const mapped = (rows ?? []).map((r) => ({
+    sourceValue:
+      srcFieldName != null
+        ? ((r.source_row_data as Record<string, unknown>)?.[srcFieldName] ?? null)?.toString() ?? null
+        : null,
+    targetValue:
+      ((r.transformed_row_data as Record<string, unknown>)?.[tgtFieldName] ?? null)?.toString() ?? null,
+  }))
+
+  return { success: true, rows: mapped, totalRows: count ?? 0 }
 }
 
 // ── previewTransformDistinct ──────────────────────────────────────────────────

@@ -25,9 +25,13 @@ export interface TableMapping {
   fields: {
     name: string
     dataType: string
-    sampleValues?: string[]   // up to 5 samples from field_profiles — used by NL prompt
-    nullPercentage?: number   // from field_profiles — used by NL prompt
-    formatIssues?: number     // count of rows with formatting problems — used by NL prompt
+    sampleValues?: string[]
+    nullPercentage?: number
+    formatIssues?: number
+    cardinality?: number
+    valueDistribution?: Array<{ value: string; count: number }>
+    minValue?: string
+    maxValue?: string
   }[]
 }
 
