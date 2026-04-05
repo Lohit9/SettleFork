@@ -3,7 +3,7 @@
 import { Suspense, useEffect, useState, useTransition } from 'react'
 import { useRouter, useSearchParams } from 'next/navigation'
 import { createClient } from '@/lib/supabase/client'
-import { resendVerificationEmail, signOut } from '@/lib/actions/auth'
+import { resendVerificationEmail } from '@/lib/actions/auth'
 import AuthCard from '@/components/auth/AuthCard'
 import { Button } from '@/components/ui/button'
 import { Alert } from '@/components/ui/alert'
@@ -36,14 +36,6 @@ function VerifyEmailContent() {
     startTransition(async () => {
       const result = await resendVerificationEmail()
       setResendState(result.success ? 'sent' : 'error')
-    })
-  }
-
-  const handleSignOut = () => {
-    startTransition(async () => {
-      await signOut()
-      router.push('/login')
-      router.refresh()
     })
   }
 
@@ -106,24 +98,6 @@ function VerifyEmailContent() {
 
       <p className="text-center text-xs text-gray-500">
         Didn&apos;t receive it? Check your spam folder or try resending.
-      </p>
-
-      <p className="text-center text-xs text-gray-500">
-        Wrong account?{' '}
-        <button
-          className="text-blue-600 hover:underline"
-          onClick={handleSignOut}
-          disabled={isPending}
-        >
-          Sign out
-        </button>
-        {' · '}
-        <button
-          className="text-blue-600 hover:underline"
-          onClick={() => router.push('/login')}
-        >
-          Sign in
-        </button>
       </p>
     </AuthCard>
   )

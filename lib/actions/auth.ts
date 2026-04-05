@@ -84,6 +84,7 @@ export async function signUpWithBotProtection(payload: SignUpPayload): Promise<S
     email: payload.email,
     password: payload.password,
     options: {
+      emailRedirectTo: `${APP_URL}/api/auth/callback?type=signup`,
       data: {
         full_name: payload.fullName,
         company_name: payload.companyName ?? '',
