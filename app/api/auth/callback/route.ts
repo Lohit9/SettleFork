@@ -42,7 +42,7 @@ export async function GET(request: Request) {
           html,
         }).catch((err) => console.error('[auth callback] Welcome email failed:', err))
 
-        return NextResponse.redirect(new URL('/verify-email?verified=true', requestUrl.origin))
+        return NextResponse.redirect(new URL('/app/projects', requestUrl.origin))
       }
 
       // Handle password reset
