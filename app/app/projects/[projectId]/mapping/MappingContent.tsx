@@ -1466,7 +1466,6 @@ function TableMappingCard({
                 onReject={() => onRejectFM(fm.id)}
                 onDelete={() => onDeleteFM(fm.id)}
                 canEdit={canEdit}
-                canEdit={canEdit}
               />
             ))
               }
@@ -1498,7 +1497,6 @@ function TableMappingCard({
                           onReject={() => onRejectFM(row.id)}
                           onDelete={() => onDeleteFM(row.id)}
                           canEdit={canEdit}
-                          canEdit={canEdit}
                         />
                       ))}
                     </div>
@@ -1514,7 +1512,6 @@ function TableMappingCard({
                     onApprove={() => onApproveFM(fm.id)}
                     onReject={() => onRejectFM(fm.id)}
                     onDelete={() => onDeleteFM(fm.id)}
-                    canEdit={canEdit}
                     canEdit={canEdit}
                   />
                 )
@@ -2669,7 +2666,6 @@ export default function MappingContent({ projectId, projectName, initialData }: 
                 acknowledgments={acknowledgments}
                 projectId={projectId}
                 onAcknowledgmentChanged={refreshData}
-                canEdit={canEdit}
                 canEdit={canEdit}
               />
             ))
