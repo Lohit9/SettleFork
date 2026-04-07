@@ -393,7 +393,39 @@ export async function executeCustomRules(
   if (!tableData) return { success: false, newIssues: 0, warnings: [], error: 'Table not found' }
   const tableName = tableData.name
   const datasetRole = (tableData as unknown as { datasets: { role: string } }).datasets?.role ?? 'source'
-  const stage: 'source' | 'in_flight' = datasetRole === 'source' ? 'source' : 'in_flight'
+
+  // Look up table_mapping_id — join column differs for source vs target tables
+  let tableMappingId: string | null = null
+  let hasStaged = false
+
+  const mappingColumn = datasetRole === 'source' ? 'source_table_id' : 'target_table_id'
+  const { data: tMapping } = await supabaseAdmin
+    .from('table_mappings')
+    .select('id')
+    .eq(mappingColumn, tableId)
+    .eq('project_id', projectId)
+    .maybeSingle()
+
+  tableMappingId = tMapping?.id ?? null
+
+  if (tableMappingId) {
+    const { count: stagedCount } = await supabaseAdmin
+      .from('staged_data_rows')
+      .select('id', { count: 'exact', head: true })
+      .eq('table_mapping_id', tableMappingId)
+      .limit(1)
+    hasStaged = (stagedCount ?? 0) > 0
+  }
+
+  // Target tables have no rows in data_rows — skip entirely until staged
+  if (datasetRole === 'target' && !hasStaged) {
+    console.log(`[executeCustomRules] Skipping rules for target table ${tableName} (${tableId}) — not yet staged`)
+    return { success: true, newIssues: 0, warnings: [] }
+  }
+
+  // Issues from staged data are in_flight; source data issues are source
+  const stage: 'source' | 'in_flight' =
+    hasStaged || datasetRole === 'target' ? 'in_flight' : 'source'
 
   // Fix 1: use RLS client for validation_rules SELECT
   const { data: allMatchedRules } = await supabase
@@ -419,6 +451,21 @@ export async function executeCustomRules(
 
   if (rules.length === 0) return { success: true, newIssues: 0, warnings: [] }
 
+  // Helper: run a rule via dq_custom_rule_staged RPC
+  async function stagedCount(
+    fieldName: string,
+    operator: string,
+    value?: string | null
+  ): Promise<number> {
+    const { data: cnt } = await supabaseAdmin.rpc('dq_custom_rule_staged', {
+      p_table_mapping_id: tableMappingId,
+      p_field_name: fieldName,
+      p_operator: operator,
+      p_value: value ?? null,
+    })
+    return Number(cnt ?? 0)
+  }
+
   const issuesToInsert: Omit<QualityIssue, 'id' | 'created_at'>[] = []
   const warnings: string[] = []
 
@@ -440,122 +487,142 @@ export async function executeCustomRules(
     const cfg = rule.rule_config as Record<string, unknown>
 
     try {
-    switch (rule.rule_type) {
-      case 'not_null':
-        if (fieldId) {
-          // Admin required: SECURITY DEFINER RPC that reads data_rows
-          const { data: cnt } = await supabaseAdmin.rpc('dq_null_count', {
-            p_table_id: tableId,
-            p_field: fieldName,
-          })
-          violationCount = Number(cnt ?? 0)
-        }
-        break
+      switch (rule.rule_type) {
+        case 'not_null':
+          if (fieldId) {
+            if (hasStaged && tableMappingId) {
+              violationCount = await stagedCount(fieldName, 'is_null')
+            } else if (datasetRole === 'source') {
+              const { data: cnt } = await supabaseAdmin.rpc('dq_null_count', {
+                p_table_id: tableId,
+                p_field: fieldName,
+              })
+              violationCount = Number(cnt ?? 0)
+            }
+            // Target table, not staged: nothing to check — violationCount stays 0
+          }
+          break
 
-      case 'unique':
-        if (fieldId) {
-          // Admin required: SECURITY DEFINER RPC that reads data_rows
-          const { data: cnt } = await supabaseAdmin.rpc('dq_duplicate_count', {
-            p_table_id: tableId,
-            p_field: fieldName,
-          })
-          violationCount = Number(cnt ?? 0)
-        }
-        break
-
-      case 'min_value':
-        if (fieldId && cfg.min !== undefined) {
-          // Admin required: SECURITY DEFINER RPC that reads data_rows
-          const { data: cnt } = await supabaseAdmin.rpc('dq_below_min_count', {
-            p_table_id: tableId,
-            p_field: fieldName,
-            p_min: Number(cfg.min),
-          })
-          violationCount = Number(cnt ?? 0)
-        }
-        break
-
-      case 'max_value':
-        if (fieldId && cfg.max !== undefined) {
-          // Admin required: SECURITY DEFINER RPC that reads data_rows
-          const { data: cnt } = await supabaseAdmin.rpc('dq_above_max_count', {
-            p_table_id: tableId,
-            p_field: fieldName,
-            p_max: Number(cfg.max),
-          })
-          violationCount = Number(cnt ?? 0)
-        }
-        break
-
-      case 'min_length':
-        if (fieldId && cfg.min_length !== undefined) {
-          // Admin required: SECURITY DEFINER RPC that reads data_rows
-          const { data: cnt } = await supabaseAdmin.rpc('dq_below_min_length_count', {
-            p_table_id: tableId,
-            p_field: fieldName,
-            p_min_length: Number(cfg.min_length),
-          })
-          violationCount = Number(cnt ?? 0)
-        }
-        break
-
-      case 'max_length':
-        if (fieldId && cfg.max_length !== undefined) {
-          // Admin required: SECURITY DEFINER RPC that reads data_rows
-          const { data: cnt } = await supabaseAdmin.rpc('dq_length_exceeded_count', {
-            p_table_id: tableId,
-            p_field: fieldName,
-            p_max: Number(cfg.max_length),
-          })
-          violationCount = Number(cnt ?? 0)
-        }
-        break
-
-      case 'allowed_values':
-        if (fieldId && Array.isArray(cfg.values) && cfg.values.length > 0) {
-          // Admin required: SECURITY DEFINER RPC that reads data_rows
-          const { data: cnt } = await supabaseAdmin.rpc('dq_not_in_allowed_count', {
-            p_table_id: tableId,
-            p_field: fieldName,
-            p_values: cfg.values as string[],
-          })
-          violationCount = Number(cnt ?? 0)
-        }
-        break
-
-      case 'regex':
-        if (fieldId && cfg.pattern) {
-          // Admin required: SECURITY DEFINER RPC that reads data_rows
-          const { data: cnt } = await supabaseAdmin.rpc('dq_regex_mismatch_count', {
-            p_table_id: tableId,
-            p_field: fieldName,
-            p_pattern: String(cfg.pattern),
-          })
-          violationCount = Number(cnt ?? 0)
-        }
-        break
-
-      case 'custom_sql':
-        if (cfg.sql) {
-          const sqlStr = String(cfg.sql)
-          const validation = validateFixSQL(sqlStr, tableId)
-          if (!validation.safe) break
-          try {
-            // Admin required: SECURITY DEFINER RPC that reads data_rows
-            const { data: cnt } = await supabaseAdmin.rpc('execute_data_fix', {
-              p_sql: sqlStr,
+        case 'unique':
+          // Uniqueness check against staged_data_rows is not yet supported
+          if (fieldId && datasetRole === 'source') {
+            const { data: cnt } = await supabaseAdmin.rpc('dq_duplicate_count', {
               p_table_id: tableId,
+              p_field: fieldName,
             })
             violationCount = Number(cnt ?? 0)
-          } catch {
-            // Ignore errors from invalid custom SQL
           }
-        }
-        break
+          break
 
-      default:
-        continue
-    }
+        case 'min_value':
+          if (fieldId && cfg.min !== undefined) {
+            if (hasStaged && tableMappingId) {
+              violationCount = await stagedCount(fieldName, 'less_than', String(cfg.min))
+            } else if (datasetRole === 'source') {
+              const { data: cnt } = await supabaseAdmin.rpc('dq_below_min_count', {
+                p_table_id: tableId,
+                p_field: fieldName,
+                p_min: Number(cfg.min),
+              })
+              violationCount = Number(cnt ?? 0)
+            }
+          }
+          break
+
+        case 'max_value':
+          if (fieldId && cfg.max !== undefined) {
+            if (hasStaged && tableMappingId) {
+              violationCount = await stagedCount(fieldName, 'greater_than', String(cfg.max))
+            } else if (datasetRole === 'source') {
+              const { data: cnt } = await supabaseAdmin.rpc('dq_above_max_count', {
+                p_table_id: tableId,
+                p_field: fieldName,
+                p_max: Number(cfg.max),
+              })
+              violationCount = Number(cnt ?? 0)
+            }
+          }
+          break
+
+        case 'min_length':
+          if (fieldId && cfg.min_length !== undefined) {
+            if (hasStaged && tableMappingId) {
+              violationCount = await stagedCount(fieldName, 'below_min_length', String(cfg.min_length))
+            } else if (datasetRole === 'source') {
+              const { data: cnt } = await supabaseAdmin.rpc('dq_below_min_length_count', {
+                p_table_id: tableId,
+                p_field: fieldName,
+                p_min_length: Number(cfg.min_length),
+              })
+              violationCount = Number(cnt ?? 0)
+            }
+          }
+          break
+
+        case 'max_length':
+          if (fieldId && cfg.max_length !== undefined) {
+            if (hasStaged && tableMappingId) {
+              violationCount = await stagedCount(fieldName, 'above_max_length', String(cfg.max_length))
+            } else if (datasetRole === 'source') {
+              const { data: cnt } = await supabaseAdmin.rpc('dq_length_exceeded_count', {
+                p_table_id: tableId,
+                p_field: fieldName,
+                p_max: Number(cfg.max_length),
+              })
+              violationCount = Number(cnt ?? 0)
+            }
+          }
+          break
+
+        case 'allowed_values':
+          // Multi-value check against staged_data_rows not yet supported; source only
+          if (fieldId && datasetRole === 'source' && Array.isArray(cfg.values) && cfg.values.length > 0) {
+            const { data: cnt } = await supabaseAdmin.rpc('dq_not_in_allowed_count', {
+              p_table_id: tableId,
+              p_field: fieldName,
+              p_values: cfg.values as string[],
+            })
+            violationCount = Number(cnt ?? 0)
+          }
+          break
+
+        case 'regex':
+          if (fieldId && cfg.pattern) {
+            if (hasStaged && tableMappingId) {
+              // not_matches_regex counts rows that DON'T match — i.e., violations
+              violationCount = await stagedCount(fieldName, 'not_matches_regex', String(cfg.pattern))
+            } else if (datasetRole === 'source') {
+              const { data: cnt } = await supabaseAdmin.rpc('dq_regex_mismatch_count', {
+                p_table_id: tableId,
+                p_field: fieldName,
+                p_pattern: String(cfg.pattern),
+              })
+              violationCount = Number(cnt ?? 0)
+            }
+          }
+          break
+
+        case 'custom_sql':
+          // custom_sql operates on data_rows — source only
+          if (cfg.sql && datasetRole === 'source') {
+            const sqlStr = String(cfg.sql)
+            const validation = validateFixSQL(sqlStr, tableId)
+            if (!validation.safe) break
+            try {
+              const { data: cnt } = await supabaseAdmin.rpc('execute_data_fix', {
+                p_sql: sqlStr,
+                p_table_id: tableId,
+              })
+              violationCount = Number(cnt ?? 0)
+            } catch {
+              // Ignore errors from invalid custom SQL
+            }
+          }
+          break
+
+        default:
+          continue
+      }
     } catch (err) {
       const errMsg = err instanceof Error ? err.message : String(err)
       console.warn(`[validation-rules] Rule "${rule.name}" (${rule.rule_type}) failed on field "${fieldName}":`, errMsg)

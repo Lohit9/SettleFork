@@ -284,7 +284,7 @@ If documentation is provided, use it to:
 - Identify exact value mappings (industry codes, stage values, status values)
 - Understand target field constraints (picklist values, required formats, NOT NULL fields)
 - Flag fields that need specific transformation logic based on documented rules
-- Set higher confidence scores when documentation confirms a mapping
+- Set higher confidence scores when documentation confirms a mapping from a business logic perspective. If documentation describes different data types or constraints than the structured schema, always follow the structured schema — it reflects the user's latest configuration.
 
 CRITICAL: Respond with ONLY valid JSON, no markdown, no backticks, no explanation outside the JSON structure.`
 

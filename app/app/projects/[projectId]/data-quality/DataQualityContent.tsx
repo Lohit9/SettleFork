@@ -518,6 +518,33 @@ function IssueCard({
                 </p>
               )}
 
+              {/* Root cause attribution */}
+              {issue.root_cause && (
+                <div className="flex items-start gap-2 mt-2 text-xs">
+                  <span className="text-slate-400 shrink-0 pt-px">Root cause:</span>
+                  <span className="text-slate-600">{issue.root_cause}</span>
+                </div>
+              )}
+              {issue.root_cause_breakdown && (
+                <div className="flex flex-wrap gap-3 mt-1 text-[11px]">
+                  {issue.root_cause_breakdown.source_data > 0 && (
+                    <span className="text-slate-500">
+                      {issue.root_cause_breakdown.source_data.toLocaleString()} from source data
+                    </span>
+                  )}
+                  {issue.root_cause_breakdown.transform_error > 0 && (
+                    <span className="text-amber-600">
+                      {issue.root_cause_breakdown.transform_error.toLocaleString()} from transform
+                    </span>
+                  )}
+                  {issue.root_cause_breakdown.missing_transform > 0 && (
+                    <span className="text-purple-600">
+                      {issue.root_cause_breakdown.missing_transform.toLocaleString()} missing transform
+                    </span>
+                  )}
+                </div>
+              )}
+
               {/* View affected rows toggle */}
               {issue.affected_records > 0 && (
                 <button
@@ -2022,157 +2049,149 @@ export default function DataQualityContent({
   const [stagingToast, setStagingToast] = useState<string | null>(null)
   // Shown after a fix is applied to remind the user staged data is now outdated
   const [fixAppliedNote, setFixAppliedNote] = useState(false)
-  // Collapsed state for the "Resolved by Transform" section in the issue list
-  const [showResolvedSection, setShowResolvedSection] = useState(false)
   const issueRefs = useRef<Record<string, HTMLDivElement>>({})
 
-  // ── Filter state — initialized from URL search params when deep-linking ──
-  const validStages = ['all', 'source', 'target_ready'] as const
+  // ── Filter state ─────────────────────────────────────────────────────────
   const validSeverities = ['all', 'blocking', 'warning'] as const
   const validStatuses = ['all', 'open', 'fixed', 'accepted_risk'] as const
 
-  const [filterStage, setFilterStage] = useState<'all' | 'source' | 'target_ready'>(
-    validStages.includes(initialFilterStage as 'all' | 'source' | 'target_ready')
-      ? (initialFilterStage as 'all' | 'source' | 'target_ready')
-      : 'all'
-  )
   const [filterSeverity, setFilterSeverity] = useState<'all' | 'blocking' | 'warning'>(
     validSeverities.includes(initialFilterSeverity as 'all' | 'blocking' | 'warning')
       ? (initialFilterSeverity as 'all' | 'blocking' | 'warning')
       : 'all'
   )
   const [filterTableId, setFilterTableId] = useState<string>(initialFilterTableId ?? 'all')
-  const [filterFieldId, setFilterFieldId] = useState<string>(initialFilterFieldId ?? 'all')
   const [filterStatus, setFilterStatus] = useState<'all' | 'open' | 'fixed' | 'accepted_risk'>(
     validStatuses.includes(initialFilterStatus as 'all' | 'open' | 'fixed' | 'accepted_risk')
       ? (initialFilterStatus as 'all' | 'open' | 'fixed' | 'accepted_risk')
       : 'open'
   )
-
-  // ── "Resolved by Transform" helpers ──────────────────────────────────────
-
-  // Set of source field IDs that have an approved mapping with a saved transform.
-  // Built once from the server-provided prop; refreshed on router.refresh().
-  const resolvedFieldIdSet = useMemo(
-    () => new Set(resolvedSourceFieldIds ?? []),
-    [resolvedSourceFieldIds]
-  )
-
-  // Issue types that can NEVER be auto-resolved by transforms — structural
-  // problems (missing PKs, orphaned FKs) that a transform expression can't fix.
-  function isNeverResolvable(issue: QualityIssue): boolean {
-    const desc = (issue.description ?? '').toLowerCase()
-    const title = (issue.title ?? '').toLowerCase()
-    if (issue.issue_kind === 'null_primary_key') return true
-    if (issue.issue_kind === 'orphaned_fk') return true
-    if (issue.issue_kind === 'referential_integrity') return true
-    // Fallback: description-based heuristics for older issues without issue_kind
-    if (desc.includes('null') && (desc.includes('primary key') || desc.includes('primary_key'))) return true
-    if (desc.includes('orphan') || title.includes('orphan')) return true
-    if (desc.includes('referential') || title.includes('referential')) return true
-    return false
-  }
-
-  // Returns 'resolved' for source issues whose field has an approved transform.
-  // Returns the original severity for everything else (target issues are never touched).
-  function getEffectiveState(issue: QualityIssue): 'blocking' | 'warning' | 'resolved' {
-    if (issue.stage !== 'source') return issue.severity
-    if (isNeverResolvable(issue)) return issue.severity
-    if (issue.field_id && resolvedFieldIdSet.has(issue.field_id)) return 'resolved'
-    return issue.severity
-  }
+  const [filterRootCause, setFilterRootCause] = useState<'all' | 'source_data' | 'transform_error' | 'missing_transform'>('all')
+  const [searchQuery, setSearchQuery] = useState('')
+  const [expandedTables, setExpandedTables] = useState<Set<string>>(new Set())
 
   // ── Derived data ─────────────────────────────────────────────────────────
 
-  function isTargetReady(stage: string) {
-    return stage === 'in_flight' || stage === 'target'
-  }
+  // All target tables from allDatasets
+  const targetTables = useMemo(
+    () => allDatasets.filter(d => d.role === 'target').flatMap(d => d.tables),
+    [allDatasets]
+  )
 
-  // Tables that appear in issues (for Table filter dropdown)
+  // Table name lookup (all tables, used in filter dropdowns and verified fixes)
   const tableNameById = useMemo(
     () => new Map<string, string>(allDatasets.flatMap(ds => ds.tables.map(t => [t.id, t.name]))),
     [allDatasets]
   )
-  const tablesWithIssues = useMemo(
-    () =>
-      [...new Set(issues.filter(i => i.table_id).map(i => i.table_id!))]
-        .map(id => ({ id, name: tableNameById.get(id) ?? id }))
-        .sort((a, b) => a.name.localeCompare(b.name)),
-    [issues, tableNameById]
+
+  // In-flight issues only (source issues live in Data Profiling)
+  const inFlightIssues = useMemo(
+    () => issues.filter(i => i.stage === 'in_flight'),
+    [issues]
   )
 
-  // Stage breakdown for the readiness dashboard (always all open issues).
-  // Source counts use getEffectiveState to exclude transform-resolved issues.
-  const { sourceOpen, targetReadyOpen, sourceBlocking, sourceWarning, sourceResolved, targetBlocking, targetWarning } =
-    useMemo(() => {
-      const openIssues = issues.filter(i => i.status === 'open')
-      const src = openIssues.filter(i => i.stage === 'source')
-      const tgt = openIssues.filter(i => isTargetReady(i.stage))
-      return {
-        sourceOpen: src,
-        targetReadyOpen: tgt,
-        sourceBlocking: src.filter(i => getEffectiveState(i) === 'blocking').length,
-        sourceWarning: src.filter(i => getEffectiveState(i) === 'warning').length,
-        sourceResolved: src.filter(i => getEffectiveState(i) === 'resolved').length,
-        targetBlocking: tgt.filter(i => i.severity === 'blocking').length,
-        targetWarning: tgt.filter(i => i.severity === 'warning').length,
-      }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [issues, resolvedFieldIdSet])
+  // Target tables that have at least one in-flight issue = considered staged/validated
+  const stagedTargetTableIds = useMemo(
+    () => new Set(inFlightIssues.map(i => i.table_id).filter(Boolean) as string[]),
+    [inFlightIssues]
+  )
 
-  // Filtered issues split into unresolved and resolved-by-transform.
-  // "Resolved by Transform" issues are source issues whose field has an approved
-  // transform — they're shown collapsed at the bottom, separate from open issues.
+  // Unstaged target tables (no in-flight issues recorded yet)
+  const unstagedTables = useMemo(
+    () => targetTables.filter(t => !stagedTargetTableIds.has(t.id)),
+    [targetTables, stagedTargetTableIds]
+  )
+
+  // Readiness counts (in-flight open issues only)
+  const { inFlightBlocking, inFlightWarning } = useMemo(() => {
+    const open = inFlightIssues.filter(i => i.status === 'open')
+    return {
+      inFlightBlocking: open.filter(i => i.severity === 'blocking').length,
+      inFlightWarning: open.filter(i => i.severity === 'warning').length,
+    }
+  }, [inFlightIssues])
+
+  // Table groups: in-flight issues grouped by target table, with filters applied
   const statusOrder: Record<string, number> = { open: 0, fixed: 1, accepted_risk: 2 }
 
-  const { filteredIssues, filteredResolvedIssues } = useMemo(() => {
-    const baseFiltered = issues.filter(issue => {
-      if (filterStage === 'source' && issue.stage !== 'source') return false
-      if (filterStage === 'target_ready' && !isTargetReady(issue.stage)) return false
+  const sortFn = (a: QualityIssue, b: QualityIssue) => {
+    const aOrder = statusOrder[a.status] ?? 0
+    const bOrder = statusOrder[b.status] ?? 0
+    if (aOrder !== bOrder) return aOrder - bOrder
+    if (a.severity !== b.severity) return a.severity === 'blocking' ? -1 : 1
+    return (b.affected_records ?? 0) - (a.affected_records ?? 0)
+  }
+
+  interface TableGroup {
+    tableId: string
+    tableName: string
+    isStaged: boolean
+    blocking: number
+    warnings: number
+    issues: QualityIssue[]
+  }
+
+  const tableGroups = useMemo<TableGroup[]>(() => {
+    const issuesByTable = new Map<string, QualityIssue[]>()
+    for (const issue of inFlightIssues) {
+      if (!issue.table_id) continue
+      // Apply filters
+      if (filterSeverity !== 'all' && issue.severity !== filterSeverity) continue
+      if (filterTableId !== 'all' && issue.table_id !== filterTableId) continue
+      if (filterStatus !== 'all' && issue.status !== filterStatus) continue
+      if (filterRootCause !== 'all') {
+        const bd = issue.root_cause_breakdown
+        if (!bd || (bd[filterRootCause] ?? 0) === 0) continue
+      }
+      if (searchQuery.trim()) {
+        const q = searchQuery.toLowerCase()
+        const fieldPart = (issue.title ?? '').split('.').pop()?.toLowerCase() ?? ''
+        if (!fieldPart.includes(q) && !(issue.description ?? '').toLowerCase().includes(q)) continue
+      }
+      const list = issuesByTable.get(issue.table_id) ?? []
+      list.push(issue)
+      issuesByTable.set(issue.table_id, list)
+    }
+
+    return targetTables.map(t => {
+      const tableIssues = (issuesByTable.get(t.id) ?? []).sort(sortFn)
+      return {
+        tableId: t.id,
+        tableName: t.name,
+        isStaged: stagedTargetTableIds.has(t.id),
+        blocking: tableIssues.filter(i => i.severity === 'blocking').length,
+        warnings: tableIssues.filter(i => i.severity === 'warning').length,
+        issues: tableIssues,
+      }
+    })
+  }, [inFlightIssues, targetTables, stagedTargetTableIds, filterSeverity, filterTableId, filterStatus, filterRootCause, searchQuery])
+
+  // Tables with issues visible after filtering (for "no results" detection)
+  const tablesWithVisibleIssues = tableGroups.filter(g => g.isStaged && g.issues.length > 0)
+
+  // Flat filtered list for verified-fixes section (uses all issues)
+  const filteredIssues = useMemo(() => {
+    return inFlightIssues.filter(issue => {
       if (filterSeverity !== 'all' && issue.severity !== filterSeverity) return false
       if (filterTableId !== 'all' && issue.table_id !== filterTableId) return false
-      if (filterFieldId !== 'all' && issue.field_id !== filterFieldId) return false
       if (filterStatus !== 'all' && issue.status !== filterStatus) return false
       return true
-    })
-
-    const sortFn = (a: QualityIssue, b: QualityIssue) => {
-      const aOrder = statusOrder[a.status] ?? 0
-      const bOrder = statusOrder[b.status] ?? 0
-      if (aOrder !== bOrder) return aOrder - bOrder
-      if (a.severity !== b.severity) return a.severity === 'blocking' ? -1 : 1
-      return (b.affected_records ?? 0) - (a.affected_records ?? 0)
-    }
-
-    // Separate resolved (source + transform exists + still open) from everything else.
-    // Only open source issues can be "resolved by transform" — already-fixed/accepted
-    // issues stay in their normal bucket.
-    const unresolved: QualityIssue[] = []
-    const resolved: QualityIssue[] = []
-
-    for (const issue of baseFiltered) {
-      if (
-        issue.status === 'open' &&
-        issue.stage === 'source' &&
-        getEffectiveState(issue) === 'resolved'
-      ) {
-        resolved.push(issue)
-      } else {
-        unresolved.push(issue)
-      }
-    }
-
-    return {
-      filteredIssues: unresolved.sort(sortFn),
-      filteredResolvedIssues: resolved.sort((a, b) =>
-        (b.affected_records ?? 0) - (a.affected_records ?? 0)
-      ),
-    }
+    }).sort(sortFn)
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [issues, filterStage, filterSeverity, filterTableId, filterFieldId, filterStatus, resolvedFieldIdSet])
+  }, [inFlightIssues, filterSeverity, filterTableId, filterStatus])
 
   const hasActiveFilters =
-    filterStage !== 'all' || filterSeverity !== 'all' || filterTableId !== 'all' || filterFieldId !== 'all' || filterStatus !== 'open'
+    filterSeverity !== 'all' || filterTableId !== 'all' || filterStatus !== 'open' ||
+    filterRootCause !== 'all' || searchQuery.trim() !== ''
+
+  // Tables that appear in in-flight issues (for Table filter dropdown)
+  const tablesWithIssues = useMemo(
+    () =>
+      [...new Set(inFlightIssues.filter(i => i.table_id).map(i => i.table_id!))]
+        .map(id => ({ id, name: tableNameById.get(id) ?? id }))
+        .sort((a, b) => a.name.localeCompare(b.name)),
+    [inFlightIssues, tableNameById]
+  )
 
   // ── Verified fixes (fix_history reconciliation) ───────────────────────────
   // fix_history entries where quality_issue_id IS NULL mean the original issue
@@ -2192,15 +2211,21 @@ export default function DataQualityContent({
     return verifiedFixes
   }, [verifiedFixes, filterTableId])
 
-  const totalVisibleIssues = filteredIssues.length + filteredResolvedIssues.length +
-    (filterStatus === 'fixed' || filterStatus === 'all' ? filteredVerifiedFixes.length : 0)
-
   function resetFilters() {
-    setFilterStage('all')
     setFilterSeverity('all')
     setFilterTableId('all')
-    setFilterFieldId('all')
     setFilterStatus('open')
+    setFilterRootCause('all')
+    setSearchQuery('')
+  }
+
+  function toggleTable(tableId: string) {
+    setExpandedTables(prev => {
+      const next = new Set(prev)
+      if (next.has(tableId)) next.delete(tableId)
+      else next.add(tableId)
+      return next
+    })
   }
 
   function showToast(msg: string) {
@@ -2270,6 +2295,12 @@ export default function DataQualityContent({
 
   function scrollToIssue(issueId: string) {
     setFilterStatus('open')
+    // Expand all table groups so the issue is visible
+    setExpandedTables(prev => {
+      const next = new Set(prev)
+      targetTables.forEach(t => next.add(t.id))
+      return next
+    })
     setTimeout(() => {
       issueRefs.current[issueId]?.scrollIntoView({ behavior: 'smooth', block: 'center' })
     }, 100)
@@ -2411,150 +2442,32 @@ export default function DataQualityContent({
             </div>
           )}
 
-          {/* ── Migration Readiness Dashboard ── */}
-          {(() => {
-            const blockingCount = sourceBlocking + targetBlocking
-            const warningCount = sourceWarning + targetWarning
-            const readyCount = readiness.ready_field_count
-            const totalIssueCount = blockingCount + warningCount + readyCount
-            const score = readiness.score
-            const statusLabel =
-              readiness.status === 'ready' ? 'Ready' :
-              readiness.status === 'at_risk' ? 'Needs Attention' :
-              'Not Ready'
-            const statusColor =
-              readiness.status === 'ready' ? 'text-green-600' :
-              readiness.status === 'at_risk' ? 'text-amber-600' :
-              'text-red-600'
-
-            return (
-              <div className="bg-white rounded-xl border border-gray-200 shadow-sm px-6 py-5">
-                {totalIssueCount === 0 || score === 100 ? (
-                  /* ── 100% ready state ── */
-                  <>
-                    <div className="flex items-center gap-3">
-                      <CheckCircle className="w-6 h-6 text-green-600 flex-shrink-0" />
-                      <div>
-                        <div className="flex items-baseline gap-2">
-                          <span className="text-2xl font-semibold text-gray-900">100%</span>
-                          <span className="text-sm font-medium text-green-600">Ready</span>
-                        </div>
-                        <p className="text-sm text-gray-500 mt-0.5">
-                          All validation checks passed — migration package is ready to execute
-                        </p>
-                      </div>
-                    </div>
-                    <div className="mt-3 h-2 bg-green-500 rounded-full" />
-                  </>
-                ) : (
-                  /* ── Normal summary bar ── */
-                  <>
-                    <div className="flex flex-wrap items-start justify-between gap-4">
-                      {/* Score */}
-                      <div className="flex-shrink-0">
-                        <div className="flex items-baseline gap-2">
-                          <span className="text-3xl font-semibold text-gray-900">{score}%</span>
-                          <span className={`text-sm font-medium ${statusColor}`}>{statusLabel}</span>
-                        </div>
-                        <p className="text-sm text-gray-500 mt-0.5">Migration Readiness</p>
-                      </div>
-
-                      {/* Stat counts */}
-                      <div className="flex items-center gap-6 flex-wrap">
-                        {blockingCount > 0 && (
-                          <div className="flex items-center gap-2">
-                            <span className="w-2 h-2 rounded-full bg-red-500 flex-shrink-0" />
-                            <span className="text-sm font-semibold text-red-700 tabular-nums">{blockingCount}</span>
-                            <span className="text-sm text-gray-500">Blocking</span>
-                          </div>
-                        )}
-                        {warningCount > 0 && (
-                          <div className="flex items-center gap-2">
-                            <span className="w-2 h-2 rounded-full bg-amber-400 flex-shrink-0" />
-                            <span className="text-sm font-semibold text-amber-700 tabular-nums">{warningCount}</span>
-                            <span className="text-sm text-gray-500">Warnings</span>
-                          </div>
-                        )}
-                        <div className="flex items-center gap-2">
-                          <span className="w-2 h-2 rounded-full bg-green-500 flex-shrink-0" />
-                          <span className="text-sm font-semibold text-green-700 tabular-nums">{readyCount}</span>
-                          <span className="text-sm text-gray-500">Ready</span>
-                        </div>
-                      </div>
-                    </div>
-
-                    {/* Proportional progress bar */}
-                    <div className="mt-4 h-2 bg-gray-100 rounded-full overflow-hidden flex">
-                      {blockingCount > 0 && (
-                        <div
-                          className="h-full bg-red-500"
-                          style={{ width: `${Math.round((blockingCount / totalIssueCount) * 100)}%` }}
-                        />
-                      )}
-                      {warningCount > 0 && (
-                        <div
-                          className="h-full bg-amber-400"
-                          style={{ width: `${Math.round((warningCount / totalIssueCount) * 100)}%` }}
-                        />
-                      )}
-                      {readyCount > 0 && (
-                        <div
-                          className="h-full bg-green-500"
-                          style={{ width: `${Math.round((readyCount / totalIssueCount) * 100)}%` }}
-                        />
-                      )}
-                    </div>
-
-                    {/* Per-stage breakdown */}
-                    <div className="mt-3 flex flex-wrap gap-x-6 gap-y-1 text-xs text-gray-500">
-                      <div className="flex items-center gap-1.5">
-                        <span className="w-1.5 h-1.5 rounded-full bg-blue-400 shrink-0" />
-                        <span>
-                          <span className="font-medium text-gray-600">Source:</span>
-                          {' '}
-                          {sourceBlocking === 0 && sourceWarning === 0 ? (
-                            sourceResolved > 0 ? (
-                              <span className="text-green-600">{sourceResolved} resolved by transform</span>
-                            ) : (
-                              <span className="text-green-600">No open issues</span>
-                            )
-                          ) : (
-                            <>
-                              {sourceBlocking > 0 && <span className="text-red-500">{sourceBlocking} blocking</span>}
-                              {sourceBlocking > 0 && sourceWarning > 0 && ' · '}
-                              {sourceWarning > 0 && <span className="text-amber-500">{sourceWarning} warnings</span>}
-                              {sourceResolved > 0 && (
-                                <span className="text-green-600">
-                                  {(sourceBlocking > 0 || sourceWarning > 0) ? ' · ' : ''}
-                                  {sourceResolved} resolved
-                                </span>
-                              )}
-                            </>
-                          )}
-                        </span>
-                      </div>
-                      <div className="flex items-center gap-1.5">
-                        <span className="w-1.5 h-1.5 rounded-full bg-purple-400 shrink-0" />
-                        <span>
-                          <span className="font-medium text-gray-600">Target-Ready:</span>
-                          {' '}
-                          {targetBlocking === 0 && targetWarning === 0 ? (
-                            <span className="text-green-600">No open issues</span>
-                          ) : (
-                            <>
-                              {targetBlocking > 0 && <span className="text-red-500">{targetBlocking} blocking</span>}
-                              {targetBlocking > 0 && targetWarning > 0 && ' · '}
-                              {targetWarning > 0 && <span className="text-amber-500">{targetWarning} warnings</span>}
-                            </>
-                          )}
-                        </span>
-                      </div>
-                    </div>
-                  </>
-                )}
-              </div>
-            )
-          })()}
+          {/* ── Migration Readiness Banner ── */}
+          <div className="bg-white border border-gray-200 rounded-xl px-5 py-4 shadow-sm">
+            <h2 className="text-sm font-semibold text-slate-900 mb-1.5">Migration Readiness</h2>
+            <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-sm">
+              {inFlightBlocking > 0 ? (
+                <span className="text-red-600 font-medium">{inFlightBlocking} blocking</span>
+              ) : (
+                <span className="text-green-600 font-medium flex items-center gap-1">
+                  <CheckCircle className="w-4 h-4" /> No blocking issues
+                </span>
+              )}
+              <span className="text-slate-300">·</span>
+              <span className={inFlightWarning > 0 ? 'text-amber-600' : 'text-slate-400'}>
+                {inFlightWarning} warning{inFlightWarning !== 1 ? 's' : ''}
+              </span>
+              <span className="text-slate-300">·</span>
+              <span className="text-slate-500">
+                {stagedTargetTableIds.size} of {targetTables.length} table{targetTables.length !== 1 ? 's' : ''} staged
+              </span>
+            </div>
+            {unstagedTables.length > 0 && (
+              <p className="text-xs text-slate-400 mt-1.5">
+                Not yet staged: {unstagedTables.map(t => t.name).join(', ')}
+              </p>
+            )}
+          </div>
 
           {/* ── Active Validation Rules ── */}
           {rules.length > 0 && (
@@ -2615,26 +2528,6 @@ export default function DataQualityContent({
           {/* ── Filter Bar ── */}
           <div className="bg-white rounded-xl border border-gray-200 shadow-sm px-4 py-3">
             <div className="flex flex-wrap items-center gap-3">
-              {/* Stage */}
-              <div className="flex items-center gap-2">
-                <label className="text-xs font-medium text-gray-500 whitespace-nowrap">Stage</label>
-                <Select
-                  value={filterStage}
-                  onValueChange={(val) => setFilterStage(val as typeof filterStage)}
-                >
-                  <SelectTrigger className="h-8 text-xs w-[140px]">
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="all">All</SelectItem>
-                    <SelectItem value="source">Source</SelectItem>
-                    <SelectItem value="target_ready">Target-Ready</SelectItem>
-                  </SelectContent>
-                </Select>
-              </div>
-
-              <div className="w-px h-4 bg-gray-200" />
-
               {/* Severity */}
               <div className="flex items-center gap-2">
                 <label className="text-xs font-medium text-gray-500 whitespace-nowrap">Severity</label>
@@ -2642,7 +2535,7 @@ export default function DataQualityContent({
                   value={filterSeverity}
                   onValueChange={(val) => setFilterSeverity(val as typeof filterSeverity)}
                 >
-                  <SelectTrigger className="h-8 text-xs w-[140px]">
+                  <SelectTrigger className="h-8 text-xs w-[130px]">
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
@@ -2655,21 +2548,21 @@ export default function DataQualityContent({
 
               <div className="w-px h-4 bg-gray-200" />
 
-              {/* Table */}
+              {/* Root Cause */}
               <div className="flex items-center gap-2">
-                <label className="text-xs font-medium text-gray-500 whitespace-nowrap">Table</label>
+                <label className="text-xs font-medium text-gray-500 whitespace-nowrap">Root Cause</label>
                 <Select
-                  value={filterTableId}
-                  onValueChange={(val) => setFilterTableId(val)}
+                  value={filterRootCause}
+                  onValueChange={(val) => setFilterRootCause(val as typeof filterRootCause)}
                 >
-                  <SelectTrigger className="h-8 text-xs w-[140px]">
+                  <SelectTrigger className="h-8 text-xs w-[160px]">
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
-                    <SelectItem value="all">All</SelectItem>
-                    {tablesWithIssues.map(t => (
-                      <SelectItem key={t.id} value={t.id}>{t.name}</SelectItem>
-                    ))}
+                    <SelectItem value="all">All Root Causes</SelectItem>
+                    <SelectItem value="source_data">Source Data</SelectItem>
+                    <SelectItem value="transform_error">Transform Error</SelectItem>
+                    <SelectItem value="missing_transform">Missing Transform</SelectItem>
                   </SelectContent>
                 </Select>
               </div>
@@ -2683,7 +2576,7 @@ export default function DataQualityContent({
                   value={filterStatus}
                   onValueChange={(val) => setFilterStatus(val as typeof filterStatus)}
                 >
-                  <SelectTrigger className="h-8 text-xs w-[140px]">
+                  <SelectTrigger className="h-8 text-xs w-[130px]">
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
@@ -2695,19 +2588,22 @@ export default function DataQualityContent({
                 </Select>
               </div>
 
+              <div className="w-px h-4 bg-gray-200" />
+
+              {/* Search */}
+              <input
+                type="text"
+                placeholder="Search by field…"
+                value={searchQuery}
+                onChange={e => setSearchQuery(e.target.value)}
+                className="h-8 text-xs border border-gray-200 rounded-md px-3 w-44 focus:outline-none focus:ring-1 focus:ring-blue-400"
+              />
+
               <div className="ml-auto flex items-center gap-3">
                 <span className="text-sm text-gray-500">
-                  Showing <span className="font-medium text-gray-700">{totalVisibleIssues}</span> items
-                  {filteredResolvedIssues.length > 0 && (
-                    <span className="text-green-600 ml-1">
-                      · {filteredResolvedIssues.length} resolved by transform
-                    </span>
-                  )}
-                  {(filterStatus === 'fixed' || filterStatus === 'all') && filteredVerifiedFixes.length > 0 && (
-                    <span className="text-blue-600 ml-1">
-                      · {filteredVerifiedFixes.length} verified fixed
-                    </span>
-                  )}
+                  {tablesWithVisibleIssues.length > 0
+                    ? <><span className="font-medium text-gray-700">{tablesWithVisibleIssues.reduce((s, g) => s + g.issues.length, 0)}</span> issues in {tablesWithVisibleIssues.length} table{tablesWithVisibleIssues.length !== 1 ? 's' : ''}</>
+                    : 'No matching issues'}
                 </span>
                 {hasActiveFilters && (
                   <button
@@ -2721,115 +2617,94 @@ export default function DataQualityContent({
             </div>
           </div>
 
-
-          {/* ── Target-Ready empty state (contextual) ── */}
-          {filterStage === 'target_ready' && targetReadyOpen.length === 0 && (
-            <div className="bg-blue-50 border border-blue-200 rounded-xl px-4 py-4 flex items-start gap-3">
-              <span className="text-blue-500 mt-0.5 shrink-0">ℹ</span>
-              <div className="text-sm text-blue-800">
-                <p className="font-medium mb-1">No target-ready issues detected.</p>
-                <p>Target-ready checks validate your transformed data against target field constraints. Click <strong>↻ Regenerate Staged Data</strong> to apply transforms, then <strong>⊙ Run Full Scan</strong> to detect issues.</p>
-              </div>
+          {/* ── Table-Grouped Issue List ── */}
+          {targetTables.length === 0 ? (
+            <div className="bg-white rounded-xl border border-gray-200 shadow-sm p-10 text-center">
+              <p className="text-sm text-gray-500">No target tables found. Add a target schema to begin validation.</p>
             </div>
-          )}
-
-          {/* ── Issue List ── */}
-          {filteredIssues.length === 0 && filteredResolvedIssues.length === 0 &&
-           (filterStatus !== 'fixed' && filterStatus !== 'all' || filteredVerifiedFixes.length === 0) ? (
+          ) : tablesWithVisibleIssues.length === 0 && tableGroups.every(g => !g.isStaged || g.issues.length === 0) && hasActiveFilters ? (
             <div className="bg-white rounded-xl border border-gray-200 shadow-sm p-10 text-center">
               <div className="text-3xl mb-3">✓</div>
-              {hasActiveFilters ? (
-                <>
-                  <p className="font-medium text-gray-700 mb-1">No issues match your filters</p>
-                  <p className="text-sm text-gray-500 mb-4">Try adjusting the filters above to see more results.</p>
-                  <button
-                    onClick={resetFilters}
-                    className="px-4 py-2 text-sm border border-gray-300 rounded-lg text-gray-600 hover:bg-gray-50"
-                  >
-                    Reset filters
-                  </button>
-                </>
-              ) : (
-                <p className="text-sm text-gray-500">No issues detected. Upload a CSV and run a scan to check data quality.</p>
-              )}
+              <p className="font-medium text-gray-700 mb-1">No issues match your filters</p>
+              <p className="text-sm text-gray-500 mb-4">Try adjusting the filters above to see more results.</p>
+              <button onClick={resetFilters} className="px-4 py-2 text-sm border border-gray-300 rounded-lg text-gray-600 hover:bg-gray-50">
+                Reset filters
+              </button>
             </div>
           ) : (
-            <div className="space-y-4">
-              {filteredIssues.map(issue => (
-                <div
-                  key={issue.id}
-                  ref={el => { if (el) issueRefs.current[issue.id] = el }}
-                >
-                  <IssueCard
-                    issue={issue}
-                    onUpdate={handleIssueUpdate}
-                    prefetchedFixHistory={fixHistory.length > 0 ? fixHistory : undefined}
-                    isArchived={isArchived}
-                    canEdit={canEdit}
-                  />
+            <div className="space-y-3">
+              {tableGroups.map(group => (
+                <div key={group.tableId} className="border border-gray-200 rounded-xl overflow-hidden bg-white shadow-sm">
+                  {/* Table header — always visible */}
+                  <button
+                    onClick={() => toggleTable(group.tableId)}
+                    className="w-full flex items-center justify-between px-5 py-3 bg-slate-50 hover:bg-slate-100 transition-colors"
+                  >
+                    <div className="flex items-center gap-3 min-w-0">
+                      <ChevronRight className={`h-4 w-4 text-slate-400 flex-shrink-0 transition-transform ${expandedTables.has(group.tableId) ? 'rotate-90' : ''}`} />
+                      <span className="text-sm font-semibold text-slate-900 truncate">{group.tableName}</span>
+                      {group.isStaged ? (
+                        <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-green-100 text-green-700 flex-shrink-0">staged</span>
+                      ) : (
+                        <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-slate-100 text-slate-500 flex-shrink-0">not staged</span>
+                      )}
+                    </div>
+                    <div className="flex items-center gap-3 text-xs flex-shrink-0 ml-3">
+                      {!group.isStaged ? (
+                        <span className="text-slate-400">pending</span>
+                      ) : group.blocking === 0 && group.warnings === 0 ? (
+                        <span className="text-green-600 font-medium">✓ All checks passed</span>
+                      ) : (
+                        <>
+                          {group.blocking > 0 && (
+                            <span className="text-red-600 font-medium">{group.blocking} blocking</span>
+                          )}
+                          {group.warnings > 0 && (
+                            <span className="text-amber-600">{group.warnings} warning{group.warnings !== 1 ? 's' : ''}</span>
+                          )}
+                        </>
+                      )}
+                    </div>
+                  </button>
+
+                  {/* Issue cards — shown when expanded */}
+                  {expandedTables.has(group.tableId) && (
+                    group.isStaged ? (
+                      group.issues.length === 0 ? (
+                        <div className="px-5 py-4 text-sm text-green-600 border-t border-gray-100">
+                          All validation checks passed for this table.
+                        </div>
+                      ) : (
+                        <div className="divide-y divide-gray-100 border-t border-gray-100">
+                          {group.issues.map(issue => (
+                            <div
+                              key={issue.id}
+                              ref={el => { if (el) issueRefs.current[issue.id] = el }}
+                              className="px-4 py-3"
+                            >
+                              <IssueCard
+                                issue={issue}
+                                onUpdate={handleIssueUpdate}
+                                prefetchedFixHistory={fixHistory.length > 0 ? fixHistory : undefined}
+                                isArchived={isArchived}
+                                canEdit={canEdit}
+                              />
+                            </div>
+                          ))}
+                        </div>
+                      )
+                    ) : (
+                      <div className="px-5 py-4 text-xs text-slate-400 border-t border-gray-100">
+                        Stage this table&apos;s transforms to run validation checks. Use <strong>↻ Regenerate Staged Data</strong> on the Transform page, then <strong>⊙ Run Full Scan</strong>.
+                      </div>
+                    )
+                  )}
                 </div>
               ))}
 
               {/* ── Verified Fixes section (post-rescan reconciliation) ── */}
               {filteredVerifiedFixes.length > 0 && (
                 <VerifiedFixesSection fixes={filteredVerifiedFixes} tableNameById={tableNameById} />
-              )}
-
-              {/* ── Resolved by Transform section ── */}
-              {filteredResolvedIssues.length > 0 && (
-                <div className="bg-white rounded-xl border border-green-200 shadow-sm overflow-hidden">
-                  {/* Collapsible header */}
-                  <button
-                    onClick={() => setShowResolvedSection(v => !v)}
-                    className="w-full flex items-center gap-3 px-5 py-3.5 hover:bg-green-50/50 transition-colors text-left"
-                  >
-                    <span className="w-2 h-2 rounded-full bg-green-500 flex-shrink-0" />
-                    <span className="text-sm font-medium text-green-700">
-                      Resolved by Transform ({filteredResolvedIssues.length})
-                    </span>
-                    <span className="text-xs text-gray-400 ml-1">
-                      — source issues addressed by an approved transformation
-                    </span>
-                    <span className="ml-auto text-gray-400 text-xs">
-                      {showResolvedSection ? '▼' : '▶'}
-                    </span>
-                  </button>
-
-                  {/* Expandable rows */}
-                  {showResolvedSection && (
-                    <div className="border-t border-green-100 divide-y divide-green-50">
-                      {filteredResolvedIssues.map(issue => (
-                        <div
-                          key={issue.id}
-                          className="flex items-center gap-3 px-5 py-2.5 bg-green-50/40"
-                        >
-                          <span className="text-green-500 flex-shrink-0 text-sm">✓</span>
-                          <div className="flex-1 min-w-0">
-                            <p className="text-sm font-medium text-green-900 truncate">
-                              {issue.title}
-                            </p>
-                            <p className="text-xs text-green-700 truncate">
-                              {issue.description}
-                              {issue.affected_records > 0 && (
-                                <span className="text-green-500 ml-1">
-                                  · {issue.affected_records.toLocaleString()} rows
-                                </span>
-                              )}
-                            </p>
-                          </div>
-                          <span className="flex-shrink-0 text-xs font-medium text-green-600 bg-green-100 border border-green-200 px-2 py-0.5 rounded-full whitespace-nowrap">
-                            Transform applied
-                          </span>
-                          {issue.severity === 'blocking' && (
-                            <span className="flex-shrink-0 text-xs text-gray-400 line-through">
-                              blocking
-                            </span>
-                          )}
-                        </div>
-                      ))}
-                    </div>
-                  )}
-                </div>
               )}
             </div>
           )}

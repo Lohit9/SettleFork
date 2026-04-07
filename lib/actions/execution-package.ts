@@ -1013,7 +1013,10 @@ ${targetSchemaLines.join('\n')}
 ## Approved Mappings
 ${mappingSections.join('\n\n') || '(no approved table mappings)'}
 
-## Business Rules & Documentation
+## Reference Documentation
+The following documents provide business context, naming conventions, and domain knowledge.
+If they describe different data types, constraints, or nullability than the Target Schema above, follow the Target Schema — it reflects the user's latest configuration.
+
 ${docBlock || '(no documentation uploaded)'}
 
 ## Data Quality Summary
@@ -1507,7 +1510,10 @@ ${targetSchemaLines.join('\n')}
 ## Approved Mappings
 ${mappingSections.join('\n\n') || '(no approved table mappings)'}
 
-## Business Rules & Documentation
+## Reference Documentation
+The following documents provide business context, naming conventions, and domain knowledge.
+If they describe different data types, constraints, or nullability than the Target Schema above, follow the Target Schema — it reflects the user's latest configuration.
+
 ${docBlock || '(no documentation uploaded)'}
 
 ## Data Quality Summary

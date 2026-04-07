@@ -71,6 +71,20 @@ export async function uploadSchemaDocument(formData: FormData): Promise<UploadSc
       console.error('[uploadSchemaDocument] text extraction failed:', parseErr)
     }
 
+    // Replace any existing document with the same filename — delete-before-insert
+    // (storage already uses upsert:true so only the DB row needs replacing)
+    const { data: existingDoc } = await supabase
+      .from('schema_documents')
+      .select('id')
+      .eq('dataset_id', datasetId)
+      .eq('filename', sanitizedFilename)
+      .maybeSingle()
+
+    if (existingDoc) {
+      await supabase.from('schema_documents').delete().eq('id', existingDoc.id)
+      console.log(`[uploadSchemaDocument] Replacing existing document: ${sanitizedFilename}`)
+    }
+
     // Create DB record — schema docs are dataset-scoped, doc_type = 'schema'
     const { data: doc, error: dbError } = await supabase
       .from('schema_documents')

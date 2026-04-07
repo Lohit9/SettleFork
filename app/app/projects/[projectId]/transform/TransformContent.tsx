@@ -37,6 +37,7 @@ import {
 import { createValueAssignment } from '@/lib/actions/mappings'
 import type { TransformPageData, DatasetGroup, TableGroup, FieldItem, FullTransformTestResult, UnmappedTargetField } from '@/lib/actions/transformations'
 import { stageAllData, getBlockingSourceIssues, getSourceIssuesForField, checkProjectStaleness } from '@/lib/actions/staging'
+import { triggerStagedValidation } from '@/lib/actions/quality-fixes'
 import type { BlockingIssue, FieldSourceIssue } from '@/lib/actions/staging'
 import { getResolvedSourceFieldIds } from '@/lib/quality/resolved-by-transform'
 import { sourcePreviewValueMatchesIssues, maxAffectedRecordsForField } from '@/lib/quality/preview-source-issue-match'
@@ -222,7 +223,7 @@ export default function TransformContent({ projectId, projectName, initialData, 
   } | null>(null)
   const [isReverting, setIsReverting] = useState(false)
   const [showRevertDialog, setShowRevertDialog] = useState(false)
-  const [toast, setToast] = useState<{ message: string; type: 'success' | 'error' } | null>(null)
+  const [toast, setToast] = useState<{ message: string; type: 'success' | 'error' | 'info' } | null>(null)
   const [stagingError, setStagingError] = useState<string | null>(null)
 
   const [isGenerating, startGenerating] = useTransition()
@@ -505,7 +506,7 @@ export default function TransformContent({ projectId, projectName, initialData, 
 
   // ── Toast helper ──────────────────────────────────────────────────────────
 
-  function showToast(message: string, type: 'success' | 'error') {
+  function showToast(message: string, type: 'success' | 'error' | 'info' = 'success') {
     setToast({ message, type })
     setTimeout(() => setToast(null), 4000)
   }
@@ -954,15 +955,35 @@ export default function TransformContent({ projectId, projectName, initialData, 
           showToast('Staging failed: ' + msg, 'error')
           return
         }
-      const totalRows = result.tables.reduce((s, t) => s + t.rowCount, 0)
-      const flaggedRows = result.tables.reduce((s, t) => s + t.flaggedRows, 0)
-      const flagMsg = flaggedRows > 0 ? ` · ${flaggedRows.toLocaleString()} row${flaggedRows !== 1 ? 's' : ''} flagged` : ''
-      showToast(
-        `Staged ${totalRows.toLocaleString()} rows across ${result.tables.length} table${result.tables.length !== 1 ? 's' : ''}${flagMsg}`,
-        'success'
-      )
-      setStaleTableMappingIds(new Set())
-      router.refresh()
+
+        const totalRows = result.tables.reduce((s, t) => s + t.rowCount, 0)
+        const flaggedRows = result.tables.reduce((s, t) => s + t.flaggedRows, 0)
+        const flagMsg = flaggedRows > 0 ? ` · ${flaggedRows.toLocaleString()} row${flaggedRows !== 1 ? 's' : ''} flagged` : ''
+        const baseMsg = `Staged ${totalRows.toLocaleString()} rows across ${result.tables.length} table${result.tables.length !== 1 ? 's' : ''}${flagMsg}`
+
+        // Auto-run lightweight staged validation (no AI credits, fast SQL only)
+        try {
+          const validationResult = await triggerStagedValidation(projectId)
+          if (validationResult.success) {
+            const n = validationResult.issuesFound
+            if (n > 0) {
+              showToast(
+                `${baseMsg} · ${n} issue${n !== 1 ? 's' : ''} found — check the Validate tab`,
+                'info'
+              )
+            } else {
+              showToast(`${baseMsg} · All validation checks passed`, 'success')
+            }
+          } else {
+            showToast(baseMsg, 'success')
+          }
+        } catch {
+          // Validation failure is non-blocking — staging already succeeded
+          showToast(baseMsg, 'success')
+        }
+
+        setStaleTableMappingIds(new Set())
+        router.refresh()
       } catch (e) {
         const msg = e instanceof Error ? e.message : 'Staging failed'
         setStagingError(msg)
@@ -1152,8 +1173,10 @@ export default function TransformContent({ projectId, projectName, initialData, 
 
       {/* Toast */}
       {toast && (
-        <div className={`fixed bottom-6 right-6 z-50 px-4 py-3 rounded-lg shadow-lg text-sm font-medium ${
-          toast.type === 'success' ? 'bg-green-600 text-white' : 'bg-red-600 text-white'
+        <div className={`fixed bottom-6 right-6 z-50 px-4 py-3 rounded-lg shadow-lg text-sm font-medium max-w-sm ${
+          toast.type === 'success' ? 'bg-green-600 text-white'
+          : toast.type === 'info' ? 'bg-blue-600 text-white'
+          : 'bg-red-600 text-white'
         }`}>
           {toast.message}
         </div>

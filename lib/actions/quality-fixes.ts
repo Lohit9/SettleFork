@@ -856,3 +856,14 @@ export async function getAffectedRowsForIssue(
   }
 }
 
+// ── Staged validation server action ──────────────────────────────────────────
+// Thin wrapper so client components can call runStagedValidation as a server
+// action without needing direct access to detection-engine (non-server-action file).
+
+export async function triggerStagedValidation(
+  projectId: string
+): Promise<{ success: boolean; issuesFound: number; error?: string }> {
+  const { runStagedValidation } = await import('@/lib/quality/detection-engine')
+  return runStagedValidation(projectId)
+}
+

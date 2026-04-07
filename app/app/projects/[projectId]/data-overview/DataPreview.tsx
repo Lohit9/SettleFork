@@ -14,11 +14,12 @@ interface DataPreviewProps {
   tables: TableOption[]
   isArchived?: boolean
   archivedAt?: string | null
+  initialSelectedTableId?: string
 }
 
 const PAGE_SIZE = 10
 
-export default function DataPreview({ projectId, tables, isArchived = false, archivedAt }: DataPreviewProps) {
+export default function DataPreview({ projectId, tables, isArchived = false, archivedAt, initialSelectedTableId }: DataPreviewProps) {
   const router = useRouter()
 
   // ── View mode ──────────────────────────────────────────────────────────────
@@ -28,7 +29,9 @@ export default function DataPreview({ projectId, tables, isArchived = false, arc
   const sourceTables = tables.filter((t) => t.role === 'source')
 
   // ── Source mode state ──────────────────────────────────────────────────────
-  const [selectedTableId, setSelectedTableId] = useState<string>(sourceTables[0]?.id ?? '')
+  const [selectedTableId, setSelectedTableId] = useState<string>(
+    initialSelectedTableId ?? sourceTables[0]?.id ?? ''
+  )
   const [page, setPage] = useState(1)
   const [rows, setRows] = useState<Record<string, unknown>[]>([])
   const [totalRows, setTotalRows] = useState(0)

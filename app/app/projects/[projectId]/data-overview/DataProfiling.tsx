@@ -1,13 +1,27 @@
 'use client'
 
-import { useState, useEffect } from 'react'
-import { getFieldProfiles } from '@/lib/actions/data-overview'
+import { useState, useEffect, useRef } from 'react'
+import { useRouter } from 'next/navigation'
+import { getFieldProfiles, getFieldQualityIssues } from '@/lib/actions/data-overview'
 import type { TableOption, ProfilingData } from '@/lib/actions/data-overview'
 import { Select, SelectContent, SelectGroup, SelectItem, SelectLabel, SelectTrigger, SelectValue } from '@/components/ui/select'
+import { X } from '@/components/icons'
 
 interface DataProfilingProps {
+  projectId: string
   tables: TableOption[]
   isArchived?: boolean
+  onNavigateToPreview?: (tableId: string) => void
+}
+
+type FieldIssue = {
+  id: string
+  severity: string
+  title: string
+  description: string
+  affected_records: number
+  issue_kind: string | null
+  status: string
 }
 
 function StatCard({
@@ -29,9 +43,14 @@ function StatCard({
   )
 }
 
-export default function DataProfiling({ tables, isArchived = false }: DataProfilingProps) {
-  // For archived projects, show all tables (row_count is zeroed but aggregate stats are preserved)
-  // For active projects, only tables with data have profiling stats
+export default function DataProfiling({
+  projectId,
+  tables,
+  isArchived = false,
+  onNavigateToPreview,
+}: DataProfilingProps) {
+  const router = useRouter()
+
   const profilableTables = isArchived ? tables : tables.filter((t) => t.row_count > 0)
 
   const [selectedTableId, setSelectedTableId] = useState<string>(profilableTables[0]?.id ?? '')
@@ -39,16 +58,44 @@ export default function DataProfiling({ tables, isArchived = false }: DataProfil
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
+  // ── Quality issues popover ──────────────────────────────────────────────────
+  const [openQualityPopover, setOpenQualityPopover] = useState<string | null>(null)
+  const [popoverIssues, setPopoverIssues] = useState<FieldIssue[]>([])
+  const [loadingIssues, setLoadingIssues] = useState(false)
+  const popoverRef = useRef<HTMLDivElement>(null)
+
   useEffect(() => {
     if (!selectedTableId) return
     fetchProfile(selectedTableId)
+    setOpenQualityPopover(null)
   }, [selectedTableId])
+
+  useEffect(() => {
+    if (!openQualityPopover) return
+    setLoadingIssues(true)
+    setPopoverIssues([])
+    getFieldQualityIssues(projectId, openQualityPopover)
+      .then(({ issues }) => setPopoverIssues(issues))
+      .finally(() => setLoadingIssues(false))
+  }, [openQualityPopover, projectId])
+
+  // Close popover on outside click
+  useEffect(() => {
+    if (!openQualityPopover) return
+    function handleClick(e: MouseEvent) {
+      if (popoverRef.current && !popoverRef.current.contains(e.target as Node)) {
+        setOpenQualityPopover(null)
+      }
+    }
+    document.addEventListener('mousedown', handleClick)
+    return () => document.removeEventListener('mousedown', handleClick)
+  }, [openQualityPopover])
 
   async function fetchProfile(tableId: string) {
     setLoading(true)
     setError(null)
     try {
-      const result = await getFieldProfiles(tableId)
+      const result = await getFieldProfiles(projectId, tableId)
       setData(result)
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Failed to load profiling data')
@@ -56,6 +103,21 @@ export default function DataProfiling({ tables, isArchived = false }: DataProfil
       setLoading(false)
     }
   }
+
+  function navigateToDataPreview(tableId: string) {
+    setOpenQualityPopover(null)
+    if (onNavigateToPreview) {
+      onNavigateToPreview(tableId)
+    } else {
+      router.push(
+        `/app/projects/${projectId}/data-overview?tab=preview&tableId=${tableId}`
+      )
+    }
+  }
+
+  // Total quality issues across all fields in the current table
+  const totalQualityIssues = data?.fields.reduce((s, f) => s + f.qualityIssues.total, 0) ?? 0
+  const hasBlocking = data?.fields.some((f) => f.qualityIssues.blocking > 0) ?? false
 
   // Group profilable tables for the dropdown
   const datasetOrder: string[] = []
@@ -126,9 +188,9 @@ export default function DataProfiling({ tables, isArchived = false }: DataProfil
             <StatCard label="Total Rows" value={data.table.row_count} />
             <StatCard label="Total Fields" value={data.fields.length} />
             <StatCard
-              label="Format Issues"
-              value={data.totalFormatIssues}
-              red={data.totalFormatIssues > 0}
+              label="Data Quality Issues"
+              value={totalQualityIssues > 0 ? totalQualityIssues : data.totalFormatIssues}
+              red={(totalQualityIssues > 0 && hasBlocking) || (totalQualityIssues === 0 && data.totalFormatIssues > 0)}
             />
           </div>
 
@@ -148,7 +210,7 @@ export default function DataProfiling({ tables, isArchived = false }: DataProfil
                     <th className="text-right px-5 py-3 text-xs font-semibold text-gray-700">Null %</th>
                     <th className="text-right px-5 py-3 text-xs font-semibold text-gray-700">Cardinality</th>
                     <th className="text-right px-5 py-3 text-xs font-semibold text-gray-700">Unique %</th>
-                    <th className="text-right px-5 py-3 text-xs font-semibold text-gray-700">Format Issues</th>
+                    <th className="text-right px-5 py-3 text-xs font-semibold text-gray-700">Data Quality</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -164,8 +226,104 @@ export default function DataProfiling({ tables, isArchived = false }: DataProfil
                       <td className="px-5 py-3 text-right text-gray-600">
                         {f.unique_percentage.toFixed(1)}%
                       </td>
-                      <td className={`px-5 py-3 text-right font-semibold ${f.format_issues_count > 0 ? 'text-red-500' : 'text-gray-400'}`}>
-                        {f.format_issues_count}
+                      <td className="px-5 py-3 text-right">
+                        <div className="relative inline-block">
+                          {f.qualityIssues.total > 0 ? (
+                            <button
+                              onClick={() =>
+                                setOpenQualityPopover(
+                                  openQualityPopover === f.id ? null : f.id
+                                )
+                              }
+                              className={`text-xs font-medium border-b border-dashed cursor-pointer ${
+                                f.qualityIssues.blocking > 0
+                                  ? 'text-red-600 border-red-300 hover:text-red-800'
+                                  : 'text-amber-600 border-amber-300 hover:text-amber-800'
+                              }`}
+                            >
+                              {f.qualityIssues.total} issue{f.qualityIssues.total !== 1 ? 's' : ''}{' '}
+                              {f.qualityIssues.blocking > 0 ? '⛔' : '⚠'}
+                            </button>
+                          ) : f.format_issues_count > 0 ? (
+                            <span className="text-xs text-amber-500">
+                              {f.format_issues_count} format
+                            </span>
+                          ) : (
+                            <span className="text-xs text-gray-400">—</span>
+                          )}
+
+                          {/* Quality issues popover */}
+                          {openQualityPopover === f.id && (
+                            <div
+                              ref={popoverRef}
+                              className="absolute right-0 top-full mt-2 z-50 w-80 bg-white rounded-lg shadow-lg border border-slate-200"
+                            >
+                              <div className="flex items-center justify-between px-4 pt-4 pb-3">
+                                <h4 className="text-sm font-semibold text-slate-900">
+                                  {f.name}
+                                  <span className="ml-1.5 font-normal text-slate-500">
+                                    — {f.qualityIssues.total} issue{f.qualityIssues.total !== 1 ? 's' : ''}
+                                  </span>
+                                </h4>
+                                <button
+                                  onClick={() => setOpenQualityPopover(null)}
+                                  className="text-slate-400 hover:text-slate-600 shrink-0"
+                                >
+                                  <X className="h-4 w-4" />
+                                </button>
+                              </div>
+
+                              <div className="px-4 pb-3 max-h-72 overflow-y-auto">
+                                {loadingIssues ? (
+                                  <div className="flex items-center gap-2 py-3 text-xs text-slate-400">
+                                    <span className="w-3.5 h-3.5 border-2 border-slate-200 border-t-slate-400 rounded-full animate-spin" />
+                                    Loading…
+                                  </div>
+                                ) : (
+                                  <div className="space-y-3">
+                                    {popoverIssues.map((issue) => (
+                                      <div key={issue.id} className="text-xs">
+                                        <div className="flex items-start gap-1.5">
+                                          <span
+                                            className={`mt-0.5 shrink-0 ${
+                                              issue.severity === 'blocking'
+                                                ? 'text-red-500'
+                                                : 'text-amber-500'
+                                            }`}
+                                          >
+                                            {issue.severity === 'blocking' ? '⛔' : '⚠'}
+                                          </span>
+                                          <div>
+                                            <p className="text-slate-700 leading-relaxed">
+                                              {issue.description}
+                                            </p>
+                                            {issue.affected_records > 0 && (
+                                              <p className="text-slate-400 mt-0.5">
+                                                {issue.affected_records.toLocaleString()} record{issue.affected_records !== 1 ? 's' : ''}
+                                              </p>
+                                            )}
+                                          </div>
+                                        </div>
+                                      </div>
+                                    ))}
+                                  </div>
+                                )}
+                              </div>
+
+                              <div className="px-4 py-3 border-t border-slate-100 flex items-center justify-between gap-2">
+                                <p className="text-[11px] text-slate-400 leading-tight">
+                                  Source issues · re-validated after staging
+                                </p>
+                                <button
+                                  onClick={() => navigateToDataPreview(selectedTableId)}
+                                  className="text-xs text-blue-600 hover:text-blue-800 font-medium whitespace-nowrap shrink-0"
+                                >
+                                  View in Data Preview →
+                                </button>
+                              </div>
+                            </div>
+                          )}
+                        </div>
                       </td>
                     </tr>
                   ))}

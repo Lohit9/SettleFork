@@ -146,6 +146,10 @@ export interface QualityIssue {
   /** Added by migration 024 — machine-readable issue category used by flag_staged_rows_for_issue */
   issue_kind?: string | null
   validation_rule_id: string | null
+  /** Added by migration 056 — human-readable root cause attribution */
+  root_cause?: string | null
+  /** Added by migration 056 — breakdown: { source_data, transform_error, missing_transform } */
+  root_cause_breakdown?: { source_data: number; transform_error: number; missing_transform: number } | null
   created_at: string
 }
 

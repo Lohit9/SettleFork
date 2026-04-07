@@ -433,6 +433,8 @@ export function formatSchemaForPrompt(tables: TableContext[], label: string): st
   if (tables.length === 0) return ''
 
   let output = `<${label}_schema>\n`
+  output += `Current ${label} schema — source of truth for data types, constraints, nullability, and relationships.\n`
+  output += `If documentation below describes different structural definitions, this schema takes precedence.\n\n`
 
   for (const table of tables) {
     output += `\nTable: ${table.dataset_name}.${table.table_name} (${table.row_count} rows)\n`
@@ -493,12 +495,16 @@ export function formatDocumentsForPrompt(docs: DocumentContext): string {
     'The following documentation was uploaded for this migration project. ' +
     'Use it to inform mappings, transformations, and recommendations.\n\n'
 
-  // ── Schema documentation (structural truth) ───────────────────────────────
+  // ── Schema documentation (reference context) ─────────────────────────────
   if (hasSchema) {
     output += '<schema_documentation>\n'
     output +=
-      'These are authoritative schema documents (DDL scripts, ERDs, data dictionaries). ' +
-      'They define the formal structure of the source and target systems.\n\n'
+      'These are reference schema documents (DDL scripts, ERDs, data dictionaries) uploaded at the start of the project. ' +
+      'They provide business context, naming conventions, valid code values, and domain knowledge.\n\n' +
+      'IMPORTANT: If these documents describe a different data type, constraint, nullability, or relationship ' +
+      'than the structured <source_schema> or <target_schema> sections, ALWAYS follow the structured schema. ' +
+      "The structured schema reflects the user's latest configuration and is the source of truth for all structural definitions. " +
+      'Use these documents only for business rules, valid value lists, naming conventions, and domain context.\n\n'
 
     if (docs.source_documents.length > 0) {
       output += '<source_schema>\n'

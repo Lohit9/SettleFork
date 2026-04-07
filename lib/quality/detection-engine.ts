@@ -734,6 +734,13 @@ export async function runInFlightChecks(projectId: string): Promise<void> {
     .in('id', sourceTableIds)
   const sourceTableMap = new Map((sourceTables ?? []).map((t) => [t.id, t.name]))
 
+  // Lookup: table_mapping_id → source_table_id (used for FK root cause computation)
+  const mappingIdToSourceTableId = new Map<string, string>()
+  for (const fm of fieldMappings) {
+    const tmData = fm.table_mappings as unknown as TMRow
+    mappingIdToSourceTableId.set(fm.table_mapping_id, tmData.source_table_id)
+  }
+
   const issuesToInsert: Omit<QualityIssue, 'id' | 'created_at'>[] = []
 
   for (const fm of fieldMappings) {
@@ -791,6 +798,24 @@ export async function runInFlightChecks(projectId: string): Promise<void> {
 
       if (exceededCount > 0) {
         const dataNote = hasStaged ? '' : ' (checked against source data — stage transforms for transformed validation)'
+
+        let rcRootCause: string | undefined
+        let rcBreakdown: QualityIssue['root_cause_breakdown']
+
+        if (hasStaged) {
+          const sourceExceededCount = await rpcCount('dq_length_exceeded_count', {
+            p_table_id: tm.source_table_id,
+            p_field: sf.name,
+            p_max: maxLen,
+          })
+          const rcSourceOrigin = Math.min(sourceExceededCount, exceededCount)
+          const rcTransformOrigin = Math.max(0, exceededCount - sourceExceededCount)
+          rcRootCause = rcTransformOrigin > 0
+            ? `Transform error — transform output exceeds ${maxLen} chars`
+            : `Source data — values already exceeded ${maxLen} chars at source`
+          rcBreakdown = { source_data: rcSourceOrigin, transform_error: rcTransformOrigin, missing_transform: 0 }
+        }
+
         issuesToInsert.push(
           makeIssue({
             project_id: projectId,
@@ -803,6 +828,8 @@ export async function runInFlightChecks(projectId: string): Promise<void> {
             affected_records: Number(exceededCount),
             affected_rows_sample: samples,
             detection_source: 'manual_scan',
+            root_cause: rcRootCause,
+            root_cause_breakdown: rcBreakdown,
           })
         )
       }
@@ -866,6 +893,26 @@ export async function runInFlightChecks(projectId: string): Promise<void> {
               p_parent_field: parentFieldName,
               p_limit: 5,
             })
+
+            // Root cause: check if the same orphans existed in source data
+            let rcRootCause: string | undefined
+            let rcBreakdown: QualityIssue['root_cause_breakdown']
+            const parentSourceTableId = mappingIdToSourceTableId.get(parentMappingId)
+            if (parentSourceTableId) {
+              const sourceOrphanCount = await rpcCount('dq_orphaned_fk_count', {
+                p_source_table_id: tm.source_table_id,
+                p_source_field: sf.name,
+                p_target_table_id: parentSourceTableId,
+                p_target_field: parentFieldName,
+              })
+              const rcSourceOrigin = Math.min(sourceOrphanCount, orphanCount)
+              const rcTransformOrigin = Math.max(0, orphanCount - sourceOrphanCount)
+              rcRootCause = rcSourceOrigin > 0
+                ? `Source data — ${rcSourceOrigin} orphaned reference${rcSourceOrigin !== 1 ? 's' : ''} existed in source`
+                : 'Transform error — transform produced values not matching parent table'
+              rcBreakdown = { source_data: rcSourceOrigin, transform_error: rcTransformOrigin, missing_transform: 0 }
+            }
+
             issuesToInsert.push(
               makeIssue({
                 project_id: projectId,
@@ -879,6 +926,8 @@ export async function runInFlightChecks(projectId: string): Promise<void> {
                 affected_rows_sample: samples,
                 issue_kind: 'orphaned_fk',
                 detection_source: 'manual_scan',
+                root_cause: rcRootCause,
+                root_cause_breakdown: rcBreakdown,
               })
             )
           }
@@ -903,6 +952,38 @@ export async function runInFlightChecks(projectId: string): Promise<void> {
       }
       if (nullCount > 0) {
         const dataNote = hasStaged ? '' : ' (checked against source data — stage transforms for transformed validation)'
+
+        let rcRootCause: string | undefined
+        let rcBreakdown: QualityIssue['root_cause_breakdown']
+
+        if (hasStaged) {
+          // Root cause: compare against source null count
+          const sourceNullCount = await rpcCount('dq_null_count', {
+            p_table_id: tm.source_table_id,
+            p_field: sf.name,
+          })
+          const rcSourceOrigin = Math.min(sourceNullCount, nullCount)
+          const rcTransformOrigin = Math.max(0, nullCount - sourceNullCount)
+          rcRootCause =
+            rcTransformOrigin > 0 && rcSourceOrigin > 0
+              ? `${rcSourceOrigin} from source data, ${rcTransformOrigin} introduced by transform`
+              : rcTransformOrigin > 0
+                ? 'Transform error — source values were valid but transform produced null'
+                : 'Source data — values were null at source'
+          rcBreakdown = { source_data: rcSourceOrigin, transform_error: rcTransformOrigin, missing_transform: 0 }
+        } else {
+          // Missing transform detection: source has nulls but no applied transform
+          const { data: transform } = await supabaseAdmin
+            .from('transformations')
+            .select('id, status')
+            .eq('field_mapping_id', fm.id)
+            .maybeSingle()
+          if (!transform || transform.status === 'draft') {
+            rcRootCause = 'Missing transform — source has null values and no transform is applied to handle them'
+            rcBreakdown = { source_data: nullCount, transform_error: 0, missing_transform: nullCount }
+          }
+        }
+
         issuesToInsert.push(
           makeIssue({
             project_id: projectId,
@@ -914,6 +995,8 @@ export async function runInFlightChecks(projectId: string): Promise<void> {
             description: `Target field ${targetTableName}.${tf.name} is non-nullable but has ${nullCount} null/empty values after transformation — these records will fail on load${dataNote}`,
             affected_records: Number(nullCount),
             detection_source: 'manual_scan',
+            root_cause: rcRootCause,
+            root_cause_breakdown: rcBreakdown,
           })
         )
       }
@@ -976,5 +1059,66 @@ export async function runInFlightChecks(projectId: string): Promise<void> {
     if (error) {
       console.error('[detection] Failed to insert in-flight issues:', error.message)
     }
+  }
+}
+
+// ── STAGED VALIDATION ─────────────────────────────────────────────────────────
+
+/**
+ * Lightweight scan that only validates staged (in-flight) data.
+ * Re-runs the 5 in-flight checks plus custom rules against staged_data_rows.
+ * Much faster than runFullScan — typically 1-3 seconds for a typical project.
+ * Preserves source-stage issues; only in_flight issues are refreshed.
+ */
+export async function runStagedValidation(
+  projectId: string
+): Promise<{ success: boolean; issuesFound: number; error?: string }> {
+  try {
+    // runInFlightChecks already deletes auto/manual_scan in_flight issues internally.
+    // Separately clear custom_rule in_flight issues so they get re-evaluated below.
+    await supabaseAdmin
+      .from('quality_issues')
+      .delete()
+      .eq('project_id', projectId)
+      .eq('stage', 'in_flight')
+      .eq('detection_source', 'custom_rule')
+
+    // Run structural in-flight checks (handles its own auto/manual_scan deletion)
+    await runInFlightChecks(projectId)
+
+    // Re-run custom rules for each source table that has validation rules
+    const { data: ruleRows } = await supabaseAdmin
+      .from('validation_rules')
+      .select('table_id')
+      .eq('project_id', projectId)
+      .not('table_id', 'is', null)
+
+    const uniqueTableIds = [
+      ...new Set(
+        (ruleRows ?? []).map((r) => r.table_id).filter((id): id is string => !!id)
+      ),
+    ]
+
+    if (uniqueTableIds.length > 0) {
+      // Dynamic import avoids circular dependency (validation-rules imports nothing from here)
+      const { executeCustomRules } = await import('@/lib/actions/validation-rules')
+      for (const tableId of uniqueTableIds) {
+        await executeCustomRules(projectId, tableId)
+      }
+    }
+
+    // Count all open in-flight issues after the refresh
+    const { count } = await supabaseAdmin
+      .from('quality_issues')
+      .select('id', { count: 'exact', head: true })
+      .eq('project_id', projectId)
+      .eq('stage', 'in_flight')
+      .eq('status', 'open')
+
+    return { success: true, issuesFound: count ?? 0 }
+  } catch (err) {
+    const error = err instanceof Error ? err.message : String(err)
+    console.error('[detection] runStagedValidation error:', error)
+    return { success: false, issuesFound: 0, error }
   }
 }

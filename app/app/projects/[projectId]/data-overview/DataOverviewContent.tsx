@@ -26,6 +26,7 @@ interface DataOverviewContentProps {
   initialTab?: TabId
   initialQuery?: string
   initialQueryMode?: 'nl' | 'sql'
+  initialTableId?: string
 }
 
 export default function DataOverviewContent({
@@ -37,8 +38,18 @@ export default function DataOverviewContent({
   initialTab,
   initialQuery,
   initialQueryMode,
+  initialTableId,
 }: DataOverviewContentProps) {
   const [activeTab, setActiveTab] = useState<TabId>(initialTab ?? 'schema')
+  // Shared selected table ID for Data Preview — lifted so profiling can drive it
+  const [selectedPreviewTableId, setSelectedPreviewTableId] = useState<string | undefined>(
+    initialTableId
+  )
+
+  function handleNavigateToPreview(tableId: string) {
+    setSelectedPreviewTableId(tableId)
+    setActiveTab('preview')
+  }
 
   return (
     <div className="flex flex-col flex-1 min-h-0">
@@ -74,7 +85,15 @@ export default function DataOverviewContent({
             target={schema.target}
           />
         )}
-        {activeTab === 'preview' && <DataPreview projectId={projectId} tables={tables} isArchived={isArchived} archivedAt={archivedAt} />}
+        {activeTab === 'preview' && (
+          <DataPreview
+            projectId={projectId}
+            tables={tables}
+            isArchived={isArchived}
+            archivedAt={archivedAt}
+            initialSelectedTableId={selectedPreviewTableId}
+          />
+        )}
         {activeTab === 'query' && (
           <QueryData
             projectId={projectId}
@@ -84,7 +103,14 @@ export default function DataOverviewContent({
             initialMode={initialQueryMode}
           />
         )}
-        {activeTab === 'profiling' && <DataProfiling tables={tables} isArchived={isArchived} />}
+        {activeTab === 'profiling' && (
+          <DataProfiling
+            projectId={projectId}
+            tables={tables}
+            isArchived={isArchived}
+            onNavigateToPreview={handleNavigateToPreview}
+          />
+        )}
       </div>
     </div>
   )

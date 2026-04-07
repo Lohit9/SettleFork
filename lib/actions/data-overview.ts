@@ -55,6 +55,12 @@ export interface TableOption {
   fieldNames: string[]
 }
 
+export interface FieldQualitySummary {
+  total: number
+  blocking: number
+  warning: number
+}
+
 export interface ProfilingData {
   table: { id: string; name: string; row_count: number }
   fields: Array<{
@@ -66,6 +72,7 @@ export interface ProfilingData {
     unique_percentage: number
     format_issues_count: number
     ordinal_position: number
+    qualityIssues: FieldQualitySummary
   }>
   totalFormatIssues: number
 }
@@ -215,7 +222,53 @@ export async function getDataPreview(
 
 // ─── Field profiles ───────────────────────────────────────────────────────────
 
-export async function getFieldProfiles(tableId: string): Promise<ProfilingData | null> {
+export async function getFieldQualitySummary(
+  projectId: string,
+  tableId: string
+): Promise<Map<string, FieldQualitySummary>> {
+  const supabase = await createClient()
+
+  const { data: issues } = await supabase
+    .from('quality_issues')
+    .select('field_id, severity')
+    .eq('project_id', projectId)
+    .eq('table_id', tableId)
+    .eq('stage', 'source')
+    .neq('status', 'fixed')
+
+  const summary = new Map<string, FieldQualitySummary>()
+  for (const issue of issues ?? []) {
+    if (!issue.field_id) continue
+    const entry = summary.get(issue.field_id) ?? { total: 0, blocking: 0, warning: 0 }
+    entry.total++
+    if (issue.severity === 'blocking') entry.blocking++
+    else entry.warning++
+    summary.set(issue.field_id, entry)
+  }
+
+  return summary
+}
+
+export async function getFieldQualityIssues(
+  projectId: string,
+  fieldId: string
+): Promise<{ issues: Array<{ id: string; severity: string; title: string; description: string; affected_records: number; issue_kind: string | null; status: string }> }> {
+  const supabase = await createClient()
+
+  const { data: issues } = await supabase
+    .from('quality_issues')
+    .select('id, severity, title, description, affected_records, issue_kind, status')
+    .eq('project_id', projectId)
+    .eq('field_id', fieldId)
+    .eq('stage', 'source')
+    .neq('status', 'fixed')
+    .order('severity', { ascending: true })
+    .order('affected_records', { ascending: false })
+
+  return { issues: issues ?? [] }
+}
+
+export async function getFieldProfiles(projectId: string, tableId: string): Promise<ProfilingData | null> {
   const supabase = await createClient()
 
   const { data: table } = await supabase
@@ -235,12 +288,16 @@ export async function getFieldProfiles(tableId: string): Promise<ProfilingData |
   if (!fields?.length) return { table, fields: [], totalFormatIssues: 0 }
 
   const fieldIds = fields.map((f) => f.id)
-  const { data: profiles } = await supabase
-    .from('field_profiles')
-    .select('field_id, null_percentage, cardinality, unique_percentage, format_issues_count')
-    .in('field_id', fieldIds)
 
-  const profileByFieldId = new Map((profiles || []).map((p) => [p.field_id, p]))
+  const [profileResults, qualitySummary] = await Promise.all([
+    supabase
+      .from('field_profiles')
+      .select('field_id, null_percentage, cardinality, unique_percentage, format_issues_count')
+      .in('field_id', fieldIds),
+    getFieldQualitySummary(projectId, tableId),
+  ])
+
+  const profileByFieldId = new Map((profileResults.data || []).map((p) => [p.field_id, p]))
 
   const enriched = fields.map((f) => {
     const p = profileByFieldId.get(f.id)
@@ -253,6 +310,7 @@ export async function getFieldProfiles(tableId: string): Promise<ProfilingData |
       cardinality: p?.cardinality ?? 0,
       unique_percentage: p?.unique_percentage ?? 0,
       format_issues_count: p?.format_issues_count ?? 0,
+      qualityIssues: qualitySummary.get(f.id) ?? { total: 0, blocking: 0, warning: 0 },
     }
   })
 

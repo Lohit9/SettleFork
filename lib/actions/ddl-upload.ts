@@ -348,6 +348,19 @@ export async function confirmDDLSchema(
     const blob = new Blob([ddlContent], { type: 'text/plain' })
     await supabase.storage.from('project-files').upload(storagePath, blob, { upsert: true })
 
+    // Replace any existing document with the same filename — delete-before-insert
+    const { data: existingDoc } = await supabase
+      .from('schema_documents')
+      .select('id')
+      .eq('dataset_id', datasetId)
+      .eq('filename', sanitizedFilename)
+      .maybeSingle()
+
+    if (existingDoc) {
+      await supabase.from('schema_documents').delete().eq('id', existingDoc.id)
+      console.log(`[confirmDDLSchema] Replacing existing DDL document: ${sanitizedFilename}`)
+    }
+
     await supabase.from('schema_documents').insert({
       dataset_id: datasetId,
       filename: sanitizedFilename,
@@ -367,7 +380,7 @@ export async function confirmDDLSchema(
 
 // ── Helper: infer a basic type category from a DDL type string ────────────────
 
-function inferBasicType(dataType: string): string | null {
+export function inferBasicType(dataType: string): string | null {
   const upper = dataType.toUpperCase()
   if (/^(INT|INTEGER|BIGINT|SMALLINT|TINYINT|INT2|INT4|INT8|INT64|NUMBER\s*\(\s*\d+\s*,\s*0\s*\))/.test(upper)) return 'integer'
   if (/^(FLOAT|DOUBLE|REAL|DECIMAL|NUMERIC|NUMBER|MONEY|SMALLMONEY)/.test(upper)) return 'decimal'

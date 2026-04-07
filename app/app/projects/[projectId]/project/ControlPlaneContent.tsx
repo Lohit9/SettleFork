@@ -369,7 +369,7 @@ export function ControlPlaneContent({
             <CardTitle>Schema Documentation</CardTitle>
             <p className="text-sm text-gray-500">
               DDL scripts, ERDs, data dictionaries, and schema specifications. Used to verify and
-              enrich inferred schemas — these are the authoritative source for structural metadata.
+              enrich inferred schemas with business context, naming conventions, and domain knowledge from these documents.
             </p>
           </CardHeader>
           <CardContent>
