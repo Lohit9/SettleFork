@@ -3,6 +3,7 @@
 import { createClient } from '@/lib/supabase/server'
 import { supabaseAdmin } from '@/lib/supabase/admin'
 import { callClaude } from '@/lib/ai/claude'
+import { extractSelectSQL } from '@/lib/ai/sql-extractor'
 import { checkAIRateLimit } from '@/lib/ai/rate-limit'
 import { buildAIContext, formatDocumentsForPrompt } from '@/lib/ai/context-builder'
 import { executeQuery, getTableMappingsForProject, type QueryEngineResult } from '@/lib/db/query-engine'
@@ -200,7 +201,11 @@ Generate a SELECT query answering the question above. Before casting or filterin
 
   let generatedSQL: string
   try {
-    generatedSQL = stripFences(await callClaude(systemPrompt, userMessage))
+    const rawResponse = await callClaude(systemPrompt, userMessage)
+    generatedSQL = extractSelectSQL(rawResponse)
+    if (generatedSQL !== rawResponse.trim()) {
+      console.log('[executeNLQuery] SQL extracted from mixed response, raw length:', rawResponse.length, 'extracted length:', generatedSQL.length)
+    }
   } catch {
     return { ...empty, error: 'AI service unavailable. Please try again.' }
   }
@@ -247,7 +252,11 @@ Return ONLY the corrected raw SQL query — no explanation, no markdown, no back
 
       let retriedSQL: string
       try {
-        retriedSQL = stripFences(await callClaude(systemPrompt, retryUserMessage))
+        const rawRetry = await callClaude(systemPrompt, retryUserMessage)
+        retriedSQL = extractSelectSQL(rawRetry)
+        if (retriedSQL !== rawRetry.trim()) {
+          console.log('[executeNLQuery] SQL extracted from mixed retry response, raw length:', rawRetry.length, 'extracted length:', retriedSQL.length)
+        }
       } catch {
         // Claude unavailable for retry — fall through to return original error
         saveQueryHistory({

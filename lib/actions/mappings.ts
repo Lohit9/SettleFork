@@ -8,6 +8,9 @@ import { callClaude } from '@/lib/ai/claude'
 import { checkAIRateLimit } from '@/lib/ai/rate-limit'
 import { buildAIContext, formatSchemaForPrompt, formatDocumentsForPrompt } from '@/lib/ai/context-builder'
 import { logActivity } from '@/lib/actions/activity-log'
+import { resetFieldTransform, resetAllTransformsForTable, checkFieldMappingHasTransform } from '@/lib/actions/transformations'
+
+export { checkFieldMappingHasTransform }
 
 // ─── Claude Response Types ─────────────────────────────────────────────────────
 
@@ -858,11 +861,13 @@ export async function editFieldMapping(
   fieldMappingId: string,
   updates: {
     target_field_id?: string
+    source_field_id?: string
     confidence?: number | null
     ai_reasoning?: string
     type_compatibility?: string | null
+    is_contributing?: boolean
   }
-): Promise<{ success: boolean; error?: string }> {
+): Promise<{ success: boolean; transformReset?: boolean; stagedRowsReverted?: number; valueAssignmentReplaced?: boolean; becameContributing?: boolean; promotedContributor?: boolean; fkDependentsReset?: number; error?: string }> {
   const supabase = await createClient()
   const { data: { user } } = await supabase.auth.getUser()
   if (!user) return { success: false, error: 'Not authenticated' }
@@ -872,13 +877,125 @@ export async function editFieldMapping(
   const perm = await requireProjectPermission((fmLookup as any).table_mappings.project_id, 'editor')
   if (!perm.allowed) return { success: false, error: perm.error }
 
+  // If the source or target field is changing, reset the existing transform and
+  // revert any staged data that was written under the old field mapping.
+  let transformReset = false
+  let stagedRowsReverted = 0
+  let valueAssignmentReplaced = false
+  let promotedContributor = false
+  let fkDependentsReset = 0
+
+  if (updates.target_field_id || updates.source_field_id) {
+    const resetResult = await resetFieldTransform(fieldMappingId)
+    transformReset = resetResult.hadTransform
+    stagedRowsReverted = resetResult.rowsReverted
+    fkDependentsReset = resetResult.fkDependentsReset ?? 0
+    stagedRowsReverted += resetResult.fkRowsReverted ?? 0
+  }
+
+  // If target is changing, handle old-target cleanup and new-target conflicts
+  if (updates.target_field_id) {
+    const tableMappingId = fmLookup.table_mapping_id
+
+    // ── B: Handle the OLD target's contributors ────────────────────────────
+    // Fetch current state before the update so we know what we're leaving behind
+    const { data: currentFM } = await supabaseAdmin
+      .from('field_mappings')
+      .select('target_field_id, is_contributing')
+      .eq('id', fieldMappingId)
+      .single()
+
+    if (currentFM && updates.target_field_id !== currentFM.target_field_id) {
+      if (!currentFM.is_contributing) {
+        // This mapping is the PRIMARY for the old target — look for contributors to promote
+        const { data: oldContributors } = await supabaseAdmin
+          .from('field_mappings')
+          .select('id')
+          .eq('table_mapping_id', tableMappingId)
+          .eq('target_field_id', currentFM.target_field_id)
+          .eq('is_contributing', true)
+          .neq('status', 'rejected')
+          .order('created_at', { ascending: true })
+
+        if (oldContributors && oldContributors.length > 0) {
+          // Promote the oldest contributor to primary
+          await supabaseAdmin
+            .from('field_mappings')
+            .update({ is_contributing: false })
+            .eq('id', oldContributors[0].id)
+          // Reset its transform — it's now the primary and needs fresh SQL
+          await resetFieldTransform(oldContributors[0].id)
+          promotedContributor = true
+        }
+      } else {
+        // This mapping is a CONTRIBUTOR leaving the old target.
+        // Reset the primary's transform since it's losing a contributing source.
+        const { data: oldPrimary } = await supabaseAdmin
+          .from('field_mappings')
+          .select('id')
+          .eq('table_mapping_id', tableMappingId)
+          .eq('target_field_id', currentFM.target_field_id)
+          .eq('is_contributing', false)
+          .neq('status', 'rejected')
+          .limit(1)
+
+        if (oldPrimary && oldPrimary.length > 0) {
+          const oldPrimaryReset = await resetFieldTransform(oldPrimary[0].id)
+          stagedRowsReverted += oldPrimaryReset.rowsReverted
+        }
+      }
+    }
+
+    // ── A: Determine is_contributing for the NEW target ───────────────────
+    // Replace any value assignment on the new target first
+    const vaResult = await replaceValueAssignment(tableMappingId, updates.target_field_id)
+    if (vaResult.transformReset) valueAssignmentReplaced = true
+    stagedRowsReverted += vaResult.rowsReverted
+
+    // Check if the new target already has a primary (after VA removal)
+    const { data: existingPrimary } = await supabaseAdmin
+      .from('field_mappings')
+      .select('id')
+      .eq('table_mapping_id', tableMappingId)
+      .eq('target_field_id', updates.target_field_id)
+      .eq('is_contributing', false)
+      .neq('status', 'rejected')
+      .neq('id', fieldMappingId)
+      .limit(1)
+
+    if (existingPrimary && existingPrimary.length > 0) {
+      // New target already has a primary — incoming becomes contributing
+      updates.is_contributing = true
+      // Reset the existing primary's transform since its inputs are growing
+      const conflict = await handleTargetFieldConflict(tableMappingId, updates.target_field_id, fieldMappingId)
+      for (const existing of conflict.existingMappings) {
+        if (!existing.isValueAssignment && existing.hasTransform) {
+          const existingReset = await resetFieldTransform(existing.id)
+          stagedRowsReverted += existingReset.rowsReverted
+        }
+      }
+    } else {
+      // No existing primary — incoming is the primary
+      updates.is_contributing = false
+    }
+  }
+
   const { error } = await supabase
     .from('field_mappings')
     .update({ ...updates, status: 'needs_review' })
     .eq('id', fieldMappingId)
 
   if (error) return { success: false, error: error.message }
-  return { success: true }
+
+  return {
+    success: true,
+    transformReset,
+    stagedRowsReverted,
+    valueAssignmentReplaced,
+    becameContributing: updates.is_contributing === true,
+    promotedContributor,
+    fkDependentsReset,
+  }
 }
 
 // ─── addManualFieldMapping ────────────────────────────────────────────────────
@@ -898,6 +1015,11 @@ export async function addManualFieldMapping(
   if (!tmLookup) return { success: false, error: 'Table mapping not found' }
   const perm = await requireProjectPermission(tmLookup.project_id, 'editor')
   if (!perm.allowed) return { success: false, error: perm.error }
+
+  // Replace any value assignment on the target before creating the real mapping
+  if (!isContributing) {
+    await replaceValueAssignment(tableMappingId, targetFieldId)
+  }
 
   const defaultReasoning = isContributing ? 'Contributing source — manually mapped by user' : 'Manually mapped by user'
   const { data, error } = await supabase
@@ -989,7 +1111,7 @@ export async function addManualTableMapping(
  */
 export async function regenerateFieldMappings(
   tableMappingId: string
-): Promise<{ success: boolean; fieldCount: number; error?: string }> {
+): Promise<{ success: boolean; fieldCount: number; transformsReset?: number; stagedRowsReverted?: number; error?: string }> {
   const supabase = await createClient()
   const { data: { user } } = await supabase.auth.getUser()
   if (!user) return { success: false, fieldCount: 0, error: 'Not authenticated' }
@@ -1003,7 +1125,14 @@ export async function regenerateFieldMappings(
   const perm = await requireProjectPermission(tm.project_id, 'editor')
   if (!perm.allowed) return { success: false, fieldCount: 0, error: perm.error }
 
+  // Clear staged data BEFORE deleting field mappings.
+  // Cascade on field_mapping → transformations handles the transform rows, but
+  // staged_data_rows is only linked to table_mappings (no per-field-mapping FK),
+  // so stale JSONB keys would persist without this explicit cleanup.
+  const resetResult = await resetAllTransformsForTable(tableMappingId)
+
   // Delete all existing field mappings for this table pair
+  // (cascade-deletes their transformations rows automatically)
   const { error: deleteError } = await supabase
     .from('field_mappings')
     .delete()
@@ -1025,9 +1154,17 @@ export async function regenerateFieldMappings(
 
   // Regenerate: with all fields now unmapped, suggestRemainingMappings generates all
   const result = await suggestRemainingMappings(tableMappingId)
+
+  // Safety net: repair any is_contributing inconsistencies the AI may have introduced
+  if (result.success) {
+    await cleanupOrphanedContributors(tableMappingId)
+  }
+
   return {
     success: result.success,
     fieldCount: result.newMappingsCount,
+    transformsReset: resetResult.transformsReset,
+    stagedRowsReverted: resetResult.stagedRowsReverted,
     error: result.error,
   }
 }
@@ -1036,7 +1173,7 @@ export async function regenerateFieldMappings(
 
 export async function deleteFieldMapping(
   fieldMappingId: string
-): Promise<{ success: boolean; error?: string }> {
+): Promise<{ success: boolean; transformReset?: boolean; stagedRowsReverted?: number; error?: string }> {
   const supabase = await createClient()
   const { data: { user } } = await supabase.auth.getUser()
   if (!user) return { success: false, error: 'Not authenticated' }
@@ -1052,6 +1189,11 @@ export async function deleteFieldMapping(
     .select('table_mapping_id, target_field_id, is_contributing, table_mappings!inner(project_id)')
     .eq('id', fieldMappingId)
     .single()
+
+  // Revert staged JSONB key BEFORE deleting — resetFieldTransform needs the field mapping
+  // row to exist so it can resolve target_field_id → field name for the RPC call.
+  // The transform row itself will be cascade-deleted when the field mapping is deleted.
+  const resetResult = await resetFieldTransform(fieldMappingId)
 
   const { error } = await supabase
     .from('field_mappings')
@@ -1083,7 +1225,11 @@ export async function deleteFieldMapping(
   const pid = (fmBefore?.table_mappings as unknown as { project_id: string })?.project_id
   if (pid) revalidatePath(`/app/projects/${pid}/transform`)
 
-  return { success: true }
+  return {
+    success: true,
+    transformReset: resetResult.hadTransform,
+    stagedRowsReverted: resetResult.rowsReverted,
+  }
 }
 
 // ─── deleteTableMapping ───────────────────────────────────────────────────────
@@ -1405,6 +1551,11 @@ export async function mapUnmappedField(
     tmId = newTM.id
   }
 
+  // Replace any value assignment on the target before creating the real mapping
+  if (!isContributing) {
+    await replaceValueAssignment(tmId, targetFieldId)
+  }
+
   const { error: fmErr } = await supabase.from('field_mappings').insert({
     table_mapping_id: tmId,
     source_field_id: sourceFieldId,
@@ -1417,6 +1568,84 @@ export async function mapUnmappedField(
 
   if (fmErr) return { success: false, error: fmErr.message }
   return { success: true }
+}
+
+// ─── handleTargetFieldConflict ───────────────────────────────────────────────
+
+export async function handleTargetFieldConflict(
+  tableMappingId: string,
+  targetFieldId: string,
+  incomingFieldMappingId?: string
+): Promise<{
+  hasConflict: boolean
+  conflictType: 'none' | 'value_assignment' | 'field_mapping' | 'both'
+  existingMappings: Array<{ id: string; sourceFieldName: string | null; isValueAssignment: boolean; hasTransform: boolean; hasStaged: boolean }>
+}> {
+  const { data: existing } = await supabaseAdmin
+    .from('field_mappings')
+    .select('id, source_field_id, is_contributing, status, fields!field_mappings_source_field_id_fkey(name)')
+    .eq('table_mapping_id', tableMappingId)
+    .eq('target_field_id', targetFieldId)
+    .eq('is_contributing', false)
+    .neq('status', 'rejected')
+
+  const conflicts = (existing ?? []).filter((fm) => fm.id !== incomingFieldMappingId)
+
+  if (conflicts.length === 0) {
+    return { hasConflict: false, conflictType: 'none', existingMappings: [] }
+  }
+
+  const enriched = await Promise.all(conflicts.map(async (fm) => {
+    const isValueAssignment = fm.source_field_id === null
+    const check = await checkFieldMappingHasTransform(fm.id)
+    return {
+      id: fm.id,
+      sourceFieldName: isValueAssignment ? null : ((fm as any).fields?.name ?? 'Unknown') as string | null,
+      isValueAssignment,
+      hasTransform: check.hasTransform,
+      hasStaged: check.hasStaged,
+    }
+  }))
+
+  const hasVA = enriched.some((e) => e.isValueAssignment)
+  const hasFM = enriched.some((e) => !e.isValueAssignment)
+
+  return {
+    hasConflict: true,
+    conflictType: hasVA && hasFM ? 'both' : hasVA ? 'value_assignment' : 'field_mapping',
+    existingMappings: enriched,
+  }
+}
+
+// ─── replaceValueAssignment ───────────────────────────────────────────────────
+
+export async function replaceValueAssignment(
+  tableMappingId: string,
+  targetFieldId: string
+): Promise<{ success: boolean; transformReset: boolean; rowsReverted: number }> {
+  const { data: va } = await supabaseAdmin
+    .from('field_mappings')
+    .select('id')
+    .eq('table_mapping_id', tableMappingId)
+    .eq('target_field_id', targetFieldId)
+    .is('source_field_id', null)
+    .eq('is_contributing', false)
+    .maybeSingle()
+
+  if (!va) return { success: true, transformReset: false, rowsReverted: 0 }
+
+  const resetResult = await resetFieldTransform(va.id)
+
+  await supabaseAdmin
+    .from('field_mappings')
+    .delete()
+    .eq('id', va.id)
+
+  return {
+    success: true,
+    transformReset: resetResult.hadTransform,
+    rowsReverted: resetResult.rowsReverted,
+  }
 }
 
 // ─── Value Assignment — field_mapping with NULL source_field_id ──────────────
@@ -1433,15 +1662,25 @@ export async function createValueAssignment(
   const perm = await requireProjectPermission(projectId, 'editor')
   if (!perm.allowed) return { success: false, error: perm.error }
 
-  const { data: existing } = await supabase
+  // Check all non-rejected primary mappings on this target (value assignments and regular)
+  const { data: existingPrimary } = await supabase
     .from('field_mappings')
-    .select('id')
+    .select('id, source_field_id')
     .eq('table_mapping_id', tableMappingId)
     .eq('target_field_id', targetFieldId)
-    .is('source_field_id', null)
-    .maybeSingle()
+    .eq('is_contributing', false)
+    .neq('status', 'rejected')
 
-  if (existing) return { success: true, fieldMappingId: existing.id }
+  const existingVA = (existingPrimary ?? []).find((fm) => fm.source_field_id === null)
+  if (existingVA) return { success: true, fieldMappingId: existingVA.id }
+
+  const existingFM = (existingPrimary ?? []).find((fm) => fm.source_field_id !== null)
+  if (existingFM) {
+    return {
+      success: false,
+      error: 'This target field already has a field mapping. Remove the mapping first to add a value assignment.',
+    }
+  }
 
   const { data, error } = await supabase
     .from('field_mappings')
@@ -1462,4 +1701,61 @@ export async function createValueAssignment(
 
   revalidatePath(`/app/projects/${projectId}`, 'layout')
   return { success: true, fieldMappingId: data.id }
+}
+
+// ─── cleanupOrphanedContributors ──────────────────────────────────────────────
+// Repairs two classes of is_contributing inconsistency for a given table mapping:
+//   1. Targets with contributing rows but no primary → promote the oldest contributor
+//   2. Targets with more than one non-contributing primary → demote extras to contributing
+// Can be called after bulk AI regeneration or as a manual admin repair.
+
+export async function cleanupOrphanedContributors(
+  tableMappingId: string
+): Promise<{ promoted: number; demoted: number }> {
+  const { data: allFMs } = await supabaseAdmin
+    .from('field_mappings')
+    .select('id, target_field_id, is_contributing, status, created_at')
+    .eq('table_mapping_id', tableMappingId)
+    .neq('status', 'rejected')
+    .order('created_at', { ascending: true })
+
+  if (!allFMs) return { promoted: 0, demoted: 0 }
+
+  // Group by target_field_id
+  const byTarget = new Map<string, typeof allFMs>()
+  for (const fm of allFMs) {
+    const list = byTarget.get(fm.target_field_id) ?? []
+    list.push(fm)
+    byTarget.set(fm.target_field_id, list)
+  }
+
+  let promoted = 0
+  let demoted = 0
+
+  for (const [, fms] of byTarget) {
+    const primaries = fms.filter((f) => !f.is_contributing)
+    const contributors = fms.filter((f) => f.is_contributing)
+
+    if (primaries.length === 0 && contributors.length > 0) {
+      // No primary exists — promote the oldest contributor (already sorted by created_at)
+      await supabaseAdmin
+        .from('field_mappings')
+        .update({ is_contributing: false })
+        .eq('id', contributors[0].id)
+      promoted++
+    }
+
+    if (primaries.length > 1) {
+      // Multiple non-contributing primaries — keep oldest, demote the rest to contributors
+      for (let i = 1; i < primaries.length; i++) {
+        await supabaseAdmin
+          .from('field_mappings')
+          .update({ is_contributing: true })
+          .eq('id', primaries[i].id)
+        demoted++
+      }
+    }
+  }
+
+  return { promoted, demoted }
 }

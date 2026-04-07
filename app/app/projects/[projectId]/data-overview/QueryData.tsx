@@ -722,8 +722,18 @@ function TableReferenceItem({ table }: { table: TableOption }) {
         >
           {table.friendlyName}
         </button>
-        {copied === table.id && (
+        {copied === table.id ? (
           <span className="text-xs text-green-500 flex-shrink-0">copied</span>
+        ) : (
+          <span
+            className={`text-xs flex-shrink-0 px-1 rounded ${
+              table.role === 'target'
+                ? 'text-violet-400 bg-violet-50'
+                : 'text-slate-400 bg-slate-50'
+            }`}
+          >
+            {table.role === 'target' ? 'staged' : 'source'}
+          </span>
         )}
       </div>
 

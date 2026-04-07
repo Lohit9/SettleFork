@@ -19,25 +19,61 @@
  *  - UNION / INTERSECT / EXCEPT
  */
 
+export interface TableMappingField {
+  name: string
+  dataType: string
+  sampleValues?: string[]
+  nullPercentage?: number
+  formatIssues?: number
+  cardinality?: number
+  valueDistribution?: Array<{ value: string; count: number }>
+  minValue?: string
+  maxValue?: string
+}
+
 export interface TableMapping {
-  friendlyName: string   // "softpak.prices"
-  tableId: string        // UUID
-  fields: {
-    name: string
-    dataType: string
-    sampleValues?: string[]
-    nullPercentage?: number
-    formatIssues?: number
-    cardinality?: number
-    valueDistribution?: Array<{ value: string; count: number }>
-    minValue?: string
-    maxValue?: string
-  }[]
+  friendlyName: string           // "softpak.prices"
+  tableId: string                // UUID of the source/target table
+  datasetRole: 'source' | 'target'
+  /** Only set for target tables — the table_mappings.id for staged_data_rows lookups */
+  tableMappingId?: string | null
+  fields: TableMappingField[]
 }
 
 export interface RewriteResult {
   rewrittenSQL: string
   error?: string
+}
+
+// ─── Data source helpers ──────────────────────────────────────────────────────
+
+/** Physical table name to query: staged_data_rows for target, data_rows for source */
+function rowDataSource(m: TableMapping): 'data_rows' | 'staged_data_rows' {
+  return m.datasetRole === 'target' && m.tableMappingId ? 'staged_data_rows' : 'data_rows'
+}
+
+/** WHERE condition to scope a query to one logical table's rows */
+function rowIdCondition(m: TableMapping, tableRef: string | null): string {
+  const prefix = tableRef ? `${tableRef}.` : ''
+  if (m.datasetRole === 'target' && m.tableMappingId) {
+    return `${prefix}table_mapping_id = '${m.tableMappingId}'`
+  }
+  return `${prefix}table_id = '${m.tableId}'`
+}
+
+/**
+ * Column extraction expression.
+ * - Source tables: TRIM(tableRef.row_data->>'field')
+ * - Target tables: COALESCE(TRIM(tableRef.transformed_row_data->>'field'), TRIM(tableRef.source_row_data->>'field'))
+ *   The COALESCE gives precedence to the explicitly transformed value, falling back to the
+ *   original source value for passthrough fields that haven't been transformed yet.
+ */
+function colExtractExpr(fieldName: string, tableRef: string | null, m: TableMapping): string {
+  const prefix = tableRef ? `${tableRef}.` : ''
+  if (m.datasetRole === 'target' && m.tableMappingId) {
+    return `COALESCE(TRIM(${prefix}transformed_row_data->>'${fieldName}'), TRIM(${prefix}source_row_data->>'${fieldName}'))`
+  }
+  return `TRIM(${prefix}row_data->>'${fieldName}')`
 }
 
 // ─── Public entry point ───────────────────────────────────────────────────────
@@ -119,7 +155,7 @@ export function rewriteQuery(sql: string, tableMappings: TableMapping[]): Rewrit
   if (!selectMatch) return err('Could not parse SELECT clause.')
   const selectList = selectMatch[1].trim()
 
-  // Rewrite SELECT columns
+  // Rewrite SELECT columns — pass primary context for unqualified column refs
   const rewrittenSelect = rewriteSelectList(selectList, fromRefKey, fromMapping, aliasMap)
   if (rewrittenSelect.startsWith('ERROR:')) return err(rewrittenSelect.slice(6).trim())
 
@@ -130,24 +166,24 @@ export function rewriteQuery(sql: string, tableMappings: TableMapping[]): Rewrit
   const orderByMatch = /\bORDER\s+BY\s+([\s\S]+?)(?=\s*\bLIMIT\b|$)/i.exec(trimmed)
   const limitMatch = /\bLIMIT\s+\d+/i.exec(trimmed)
 
-  // Build FROM clause
+  // Build FROM clause — data_rows for source tables, staged_data_rows for target tables
   const fromAliasPart = fromAlias ? ` ${fromAlias}` : ''
-  const fromClause = `FROM data_rows${fromAliasPart}`
+  const fromClause = `FROM ${rowDataSource(fromMapping)}${fromAliasPart}`
 
-  // Build JOIN clauses
+  // Build JOIN clauses — each join table routes to its own data source
   const joinClauses: string[] = joinParts.map((jp) => {
     const aliasPart = jp.alias ? ` ${jp.alias}` : ''
-    const tableIdCond = `${jp.alias ? jp.alias + '.' : ''}table_id = '${jp.mapping.tableId}'`
-    const rewrittenOn = jp.onClause ? transformColRefs(jp.onClause, aliasMap) : ''
+    const tableIdCond = rowIdCondition(jp.mapping, jp.alias ?? jp.refKey)
+    const rewrittenOn = jp.onClause ? transformColRefs(jp.onClause, aliasMap, fromRefKey) : ''
     const onFull = rewrittenOn ? `${tableIdCond} AND ${rewrittenOn}` : tableIdCond
-    return `${jp.type} data_rows${aliasPart} ON ${onFull}`
+    return `${jp.type} ${rowDataSource(jp.mapping)}${aliasPart} ON ${onFull}`
   })
 
-  // Build WHERE clause — must always include primary table_id
-  const primaryTableIdCond = `${fromAlias ? fromAlias + '.' : ''}table_id = '${fromMapping.tableId}'`
+  // Build WHERE clause — must always include primary table scope condition
+  const primaryTableIdCond = rowIdCondition(fromMapping, fromAlias)
   let whereClause: string
   if (whereMatch) {
-    const rewrittenWhere = transformColRefs(whereMatch[1].trim(), aliasMap)
+    const rewrittenWhere = transformColRefs(whereMatch[1].trim(), aliasMap, fromRefKey)
     whereClause = `WHERE ${primaryTableIdCond} AND ${rewrittenWhere}`
   } else {
     whereClause = `WHERE ${primaryTableIdCond}`
@@ -155,13 +191,13 @@ export function rewriteQuery(sql: string, tableMappings: TableMapping[]): Rewrit
 
   // Rewrite GROUP BY, HAVING, ORDER BY
   const groupByClause = groupByMatch
-    ? `GROUP BY ${transformColRefs(groupByMatch[1].trim(), aliasMap)}`
+    ? `GROUP BY ${transformColRefs(groupByMatch[1].trim(), aliasMap, fromRefKey)}`
     : ''
   const havingClause = havingMatch
-    ? `HAVING ${transformColRefs(havingMatch[1].trim(), aliasMap)}`
+    ? `HAVING ${transformColRefs(havingMatch[1].trim(), aliasMap, fromRefKey)}`
     : ''
   const orderByClause = orderByMatch
-    ? `ORDER BY ${transformColRefs(orderByMatch[1].trim(), aliasMap)}`
+    ? `ORDER BY ${transformColRefs(orderByMatch[1].trim(), aliasMap, fromRefKey)}`
     : ''
 
   const parts = [
@@ -192,83 +228,110 @@ function rewriteSelectList(
       return `ERROR: Use explicit columns with JOINs (e.g., SELECT p."Price", c."Name")`
     }
     return primaryMapping.fields
-      .map((f) => `TRIM(row_data->>'${f.name}') AS "${f.name}"`)
+      .map((f) => `${colExtractExpr(f.name, null, primaryMapping)} AS "${f.name}"`)
       .join(', ')
   }
 
   // SELECT alias.* → expand that alias's columns
   const aliasStar = /^([\w]+)\.\*$/.exec(selectList)
   if (aliasStar) {
-    const entry = aliasMap.get(aliasStar[1].toLowerCase())
+    const refKey = aliasStar[1].toLowerCase()
+    const entry = aliasMap.get(refKey)
     if (entry) {
-      const prefix = entry.alias ? `${entry.alias}.` : ''
       return entry.mapping.fields
-        .map((f) => `TRIM(${prefix}row_data->>'${f.name}') AS "${f.name}"`)
+        .map((f) => `${colExtractExpr(f.name, refKey, entry.mapping)} AS "${f.name}"`)
         .join(', ')
     }
   }
 
   // Transform column list
   const cols = splitByComma(selectList)
-  return cols.map((col) => rewriteSelectColumn(col.trim(), aliasMap)).join(', ')
+  return cols.map((col) => rewriteSelectColumn(col.trim(), aliasMap, primaryRefKey, primaryMapping)).join(', ')
 }
 
 function rewriteSelectColumn(
   col: string,
-  aliasMap: Map<string, { mapping: TableMapping; alias: string | null }>
+  aliasMap: Map<string, { mapping: TableMapping; alias: string | null }>,
+  primaryRefKey: string,
+  primaryMapping: TableMapping
 ): string {
   // col AS alias → rewrite col, keep alias
   const asMatch = /^([\s\S]+?)\s+AS\s+([\w"]+)$/i.exec(col)
   if (asMatch) {
-    return `${transformColRefs(asMatch[1].trim(), aliasMap)} AS ${asMatch[2]}`
+    return `${transformColRefs(asMatch[1].trim(), aliasMap, primaryRefKey)} AS ${asMatch[2]}`
   }
 
-  // Simple quoted column: "FieldName" → TRIM(row_data->>'FieldName') AS "FieldName"
+  // Simple quoted column: "FieldName" or alias."FieldName"
   const simpleQuoted = /^(?:([\w]+)\.)?"([^"]+)"$/.exec(col)
   if (simpleQuoted) {
-    const alias = simpleQuoted[1]
+    const tableRef = simpleQuoted[1] ?? null
     const fieldName = simpleQuoted[2]
-    if (alias) {
-      return `TRIM(${alias}.row_data->>'${fieldName}') AS "${fieldName}"`
+    if (tableRef) {
+      const entry = aliasMap.get(tableRef.toLowerCase())
+      const mapping = entry?.mapping ?? primaryMapping
+      return `${colExtractExpr(fieldName, tableRef, mapping)} AS "${fieldName}"`
     }
-    return `TRIM(row_data->>'${fieldName}') AS "${fieldName}"`
+    return `${colExtractExpr(fieldName, null, primaryMapping)} AS "${fieldName}"`
   }
 
   // Otherwise transform as expression (aggregate, cast, etc.)
-  return transformColRefs(col, aliasMap)
+  return transformColRefs(col, aliasMap, primaryRefKey)
 }
 
 // ─── Column reference transformation ─────────────────────────────────────────
 //
 // Applied in order (most specific first to avoid double-replacement):
-//  1. alias."col"::type  → (TRIM(alias.row_data->>'col'))::type
-//  2. "col"::type        → (TRIM(row_data->>'col'))::type
-//  3. alias."col"        → TRIM(alias.row_data->>'col')
-//  4. "col"              → TRIM(row_data->>'col')
+//  1. alias."col"::type  → (colExtractExpr)::type
+//  2. "col"::type        → (colExtractExpr)::type  (uses primary mapping)
+//  3. alias."col"        → colExtractExpr
+//  4. "col"              → colExtractExpr           (uses primary mapping)
+//
+// For source tables: colExtractExpr = TRIM(ref.row_data->>'col')
+// For target tables: colExtractExpr = COALESCE(TRIM(ref.transformed_row_data->>'col'), TRIM(ref.source_row_data->>'col'))
 //
 // TRIM() is applied to every field extraction to handle leading/trailing
 // whitespace in stored values, which would otherwise break numeric casts.
 
 function transformColRefs(
   text: string,
-  _aliasMap: Map<string, { mapping: TableMapping; alias: string | null }>
+  aliasMap: Map<string, { mapping: TableMapping; alias: string | null }>,
+  primaryRefKey: string
 ): string {
   let result = text
+
+  // Helper: resolve mapping for a table reference (alias or table name)
+  const resolve = (tableRef: string) =>
+    aliasMap.get(tableRef.toLowerCase())?.mapping ??
+    aliasMap.get(primaryRefKey)?.mapping
 
   // 1. alias."col"::type
   result = result.replace(
     /\b([\w]+)\."([^"]+)"::([\w()]+)/g,
-    "(TRIM($1.row_data->>'$2'))::$3"
+    (_, tableRef, fieldName, cast) => {
+      const m = resolve(tableRef)
+      const expr = m ? colExtractExpr(fieldName, tableRef, m) : `TRIM(${tableRef}.row_data->>'${fieldName}')`
+      return `(${expr})::${cast}`
+    }
   )
 
   // 2. "col"::type (no alias)
-  result = result.replace(/"([^"]+)"::([\w()]+)/g, "(TRIM(row_data->>'$1'))::$2")
+  result = result.replace(/"([^"]+)"::([\w()]+)/g, (_, fieldName, cast) => {
+    const m = aliasMap.get(primaryRefKey)?.mapping
+    const expr = m ? colExtractExpr(fieldName, null, m) : `TRIM(row_data->>'${fieldName}')`
+    return `(${expr})::${cast}`
+  })
 
   // 3. alias."col" (no cast)
-  result = result.replace(/\b([\w]+)\."([^"]+)"/g, "TRIM($1.row_data->>'$2')")
+  result = result.replace(/\b([\w]+)\."([^"]+)"/g, (_, tableRef, fieldName) => {
+    const m = resolve(tableRef)
+    return m ? colExtractExpr(fieldName, tableRef, m) : `TRIM(${tableRef}.row_data->>'${fieldName}')`
+  })
 
   // 4. "col" (no alias, no cast) — must come last
-  result = result.replace(/"([^"]+)"/g, "TRIM(row_data->>'$1')")
+  result = result.replace(/"([^"]+)"/g, (_, fieldName) => {
+    const m = aliasMap.get(primaryRefKey)?.mapping
+    return m ? colExtractExpr(fieldName, null, m) : `TRIM(row_data->>'${fieldName}')`
+  })
 
   return result
 }

@@ -3,6 +3,7 @@
 import { createClient } from '@/lib/supabase/server'
 import { supabaseAdmin } from '@/lib/supabase/admin'
 import { wrapFieldRefsInJsonb } from '@/lib/utils/transform-helpers'
+import { resetFieldTransform } from '@/lib/actions/transformations'
 
 export interface FKDependent {
   fieldId: string
@@ -284,4 +285,154 @@ export async function cascadeTransformToFKs(
   }
 
   return { success: true, cascadedCount }
+}
+
+/**
+ * When a PK field's mapping or transform is reset, also reset the transforms
+ * on all FK fields that reference it — they produce values that must remain
+ * consistent with the PK (e.g. matter_id format across TC_MATTERS / TC_INVOICES).
+ *
+ * Called from resetFieldTransform via dynamic import to avoid a circular
+ * dependency between transformations.ts and fk-cascade.ts.
+ * Pass { skipFKCascade: true } when calling resetFieldTransform internally
+ * to prevent infinite recursion.
+ */
+export async function resetFKDependentTransforms(
+  projectId: string,
+  targetFieldId: string
+): Promise<{ success: boolean; dependentsReset: number; stagedRowsReverted: number }> {
+  // 1. Confirm this target field is a PK — only PKs have FK dependents
+  const { data: targetField } = await supabaseAdmin
+    .from('fields')
+    .select('id, name, is_primary_key')
+    .eq('id', targetFieldId)
+    .single()
+
+  if (!targetField?.is_primary_key) {
+    return { success: true, dependentsReset: 0, stagedRowsReverted: 0 }
+  }
+
+  // 2. Find all FK fields that reference this PK (reuses existing findFKDependents)
+  const { dependents } = await findFKDependents(projectId, targetFieldId)
+
+  if (!dependents || dependents.length === 0) {
+    return { success: true, dependentsReset: 0, stagedRowsReverted: 0 }
+  }
+
+  // 3. Reset each FK dependent that has a field mapping and a transform
+  let dependentsReset = 0
+  let stagedRowsReverted = 0
+
+  for (const dep of dependents) {
+    if (!dep.fieldMappingId) continue
+    if (!dep.hasExistingTransform) continue
+
+    // Pass skipFKCascade: true to avoid infinite recursion
+    const resetResult = await resetFieldTransform(dep.fieldMappingId, { skipFKCascade: true })
+    if (resetResult.hadTransform) dependentsReset++
+    stagedRowsReverted += resetResult.rowsReverted
+  }
+
+  return { success: true, dependentsReset, stagedRowsReverted }
+}
+
+/**
+ * When a PK transform is regenerated or its mapping changes, mark FK dependent
+ * transforms as 'stale' rather than deleting them. This preserves the SQL for
+ * reference (the user can re-test or re-cascade) while making it clear the
+ * transform may no longer produce values consistent with the PK.
+ * Staged data for stale transforms is reverted — stale output shouldn't stay
+ * in staged_data_rows since it may not match the new PK format.
+ */
+export async function staleFKDependentTransforms(
+  projectId: string,
+  targetFieldId: string
+): Promise<{ success: boolean; dependentsStaled: number; stagedRowsReverted: number }> {
+  const { data: targetField } = await supabaseAdmin
+    .from('fields')
+    .select('id, name, is_primary_key')
+    .eq('id', targetFieldId)
+    .single()
+
+  if (!targetField?.is_primary_key) {
+    return { success: true, dependentsStaled: 0, stagedRowsReverted: 0 }
+  }
+
+  const { dependents } = await findFKDependents(projectId, targetFieldId)
+  if (!dependents || dependents.length === 0) {
+    return { success: true, dependentsStaled: 0, stagedRowsReverted: 0 }
+  }
+
+  let dependentsStaled = 0
+  let stagedRowsReverted = 0
+
+  for (const dep of dependents) {
+    if (!dep.fieldMappingId) continue
+    if (!dep.hasExistingTransform) continue
+
+    // Mark the transform as stale — keep the SQL for reference
+    await supabaseAdmin
+      .from('transformations')
+      .update({ status: 'stale' })
+      .eq('field_mapping_id', dep.fieldMappingId)
+
+    // Revert staged data: stale output shouldn't remain in staged_data_rows
+    if (dep.existingTransformStatus === 'applied') {
+      const { data: fmData } = await supabaseAdmin
+        .from('field_mappings')
+        .select('table_mapping_id, target_field_id, fields!field_mappings_target_field_id_fkey(name)')
+        .eq('id', dep.fieldMappingId)
+        .single()
+
+      if (fmData) {
+        const targetFieldName = (fmData as unknown as { fields: { name: string } | null }).fields?.name
+        if (targetFieldName) {
+          const { data: count } = await supabaseAdmin.rpc('revert_field_transform', {
+            p_table_mapping_id: fmData.table_mapping_id,
+            p_target_field_name: targetFieldName,
+          })
+          stagedRowsReverted += (count as number) ?? 0
+        }
+      }
+    }
+
+    dependentsStaled++
+  }
+
+  return { success: true, dependentsStaled, stagedRowsReverted }
+}
+
+/**
+ * Lightweight pre-edit check used by the Mapping page before saving a source
+ * field change. Returns the FK dependent count so the UI can warn the user that
+ * changing a PK's source will stale all dependent FK transforms.
+ */
+export async function checkPKSourceChangeImpact(
+  fieldMappingId: string
+): Promise<{ isPK: boolean; fkDependentCount: number; dependentNames: string[] }> {
+  const { data: fm } = await supabaseAdmin
+    .from('field_mappings')
+    .select('target_field_id, table_mappings!inner(project_id)')
+    .eq('id', fieldMappingId)
+    .single()
+
+  if (!fm) return { isPK: false, fkDependentCount: 0, dependentNames: [] }
+
+  const { data: tgtField } = await supabaseAdmin
+    .from('fields')
+    .select('is_primary_key')
+    .eq('id', fm.target_field_id)
+    .single()
+
+  if (!tgtField?.is_primary_key) return { isPK: false, fkDependentCount: 0, dependentNames: [] }
+
+  const projectId = (fm as unknown as { table_mappings: { project_id: string } }).table_mappings.project_id
+  const { dependents } = await findFKDependents(projectId, fm.target_field_id)
+  const mapped = dependents.filter((d) => d.fieldMappingId !== null)
+
+  return {
+    isPK: true,
+    fkDependentCount: mapped.length,
+    dependentNames: mapped.map((d) => `${d.tableName}.${d.fieldName}`),
+  }
 }

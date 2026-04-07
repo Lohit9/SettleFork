@@ -218,8 +218,17 @@ export async function executeQuery(
     }
 
     // 5. Execute via Supabase RPC
-    const tableIds = mappings.map((m) => m.tableId)
-    const result = await executeViaRPC(executedSQL, tableIds)
+    // Merge source tableIds and target tableMappingIds into a single whitelist array.
+    // The RPC validates keywords only, so both UUID types are safe to pass together.
+    const sourceTableIds = mappings
+      .filter((m) => m.datasetRole === 'source')
+      .map((m) => m.tableId)
+    const targetMappingIds = mappings
+      .filter((m) => m.datasetRole === 'target' && m.tableMappingId)
+      .map((m) => m.tableMappingId!)
+    const allAllowedIds = [...sourceTableIds, ...targetMappingIds]
+
+    const result = await executeViaRPC(executedSQL, allAllowedIds)
     if (!result.success) {
       const rawErr = result.error ?? 'Query execution failed'
       const parsed = parseQueryError(rawErr)
@@ -234,6 +243,22 @@ export async function executeQuery(
     // so we just need to find which mapping's fields appear in this result set.
     const orderedColumns = sortColumnsByOrdinalPosition(rawColumns, mappings)
 
+    // If the query returned zero rows against a target table, give the user a
+    // helpful hint — they likely haven't staged their transforms yet.
+    let stagedHint: string | undefined
+    if (rows.length === 0) {
+      const queriedTargetTables = mappings.filter(
+        (m) =>
+          m.datasetRole === 'target' &&
+          m.tableMappingId &&
+          executedSQL.includes(m.tableMappingId)
+      )
+      if (queriedTargetTables.length > 0) {
+        stagedHint =
+          'This is a target table. Stage your transforms first using "Stage All Data" on the Transform page to populate it with data.'
+      }
+    }
+
     return {
       success: true,
       columns: orderedColumns,
@@ -241,6 +266,7 @@ export async function executeQuery(
       rowCount: rows.length,
       friendlySQL,
       executedSQL,
+      hint: stagedHint,
     }
   } catch (e) {
     console.error('[executeQuery]', e)
@@ -261,13 +287,14 @@ export async function getTableMappingsForProject(
   // Fetch tables with friendly_name (RLS ensures ownership)
   const { data: datasets } = await supabase
     .from('datasets')
-    .select('id, name')
+    .select('id, name, role')
     .eq('project_id', projectId)
 
   if (!datasets?.length) return []
 
   const datasetIds = datasets.map((d) => d.id)
   const datasetNames = new Map(datasets.map((d) => [d.id, d.name]))
+  const datasetRoles = new Map(datasets.map((d) => [d.id, (d.role ?? 'source') as 'source' | 'target']))
 
   const { data: tables } = await supabase
     .from('tables')
@@ -330,16 +357,37 @@ export async function getTableMappingsForProject(
     fieldsByTable.set(f.table_id, list)
   }
 
+  // For target tables, look up table_mapping_id from table_mappings
+  const targetTableIds = tables
+    .filter((t) => datasetRoles.get(t.dataset_id) === 'target')
+    .map((t) => t.id)
+
+  const tableMappingIdByTableId = new Map<string, string>()
+  if (targetTableIds.length > 0) {
+    const { data: tmRows } = await supabase
+      .from('table_mappings')
+      .select('id, target_table_id')
+      .eq('project_id', projectId)
+      .in('target_table_id', targetTableIds)
+
+    for (const row of tmRows ?? []) {
+      if (row.target_table_id) tableMappingIdByTableId.set(row.target_table_id, row.id)
+    }
+  }
+
   // Compute friendly_name on the fly if not stored yet (handles old tables)
   return tables.map((t) => {
     const dsName = datasetNames.get(t.dataset_id) ?? 'unknown'
     const friendlyName =
       t.friendly_name ??
       `${dsName.toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '')}.${t.name.toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '')}`
+    const datasetRole = datasetRoles.get(t.dataset_id) ?? 'source'
 
     return {
       friendlyName,
       tableId: t.id,
+      datasetRole,
+      tableMappingId: datasetRole === 'target' ? (tableMappingIdByTableId.get(t.id) ?? null) : null,
       fields: fieldsByTable.get(t.id) ?? [],
     }
   })

@@ -715,6 +715,8 @@ export default function TransformContent({ projectId, projectName, initialData, 
       refreshFieldStatus(fmId, 'applied')
       setApplyResult({ rowsAffected: result.rowsAffected })
 
+      console.log('[FK CASCADE] 1. Apply succeeded for fmId:', fmId)
+
       // Fetch staged preview to show in Data Preview section
       getStagedPreviewForField(fmId).then((staged) => {
         if (staged.success && staged.rows) {
@@ -724,18 +726,40 @@ export default function TransformContent({ projectId, projectName, initialData, 
       }).catch(() => {})
 
       // Check if this is a PK field with FK dependents — prompt cascade if so
-      const currentField = findField(data.datasets, fmId)?.field
+      console.log('[FK CASCADE] 2. data.datasets length:', data.datasets?.length)
+      const fieldResult = findField(data.datasets, fmId)
+      console.log('[FK CASCADE] 3. findField result:', fieldResult ? {
+        name: fieldResult.field?.targetFieldName,
+        isPK: fieldResult.field?.targetFieldIsPrimaryKey,
+        targetFieldId: fieldResult.field?.targetFieldId,
+      } : 'NULL - field not found')
+      const currentField = fieldResult?.field
       if (currentField?.targetFieldIsPrimaryKey) {
+        console.log('[FK CASCADE] 2b. Entered PK check block')
         const { dependents, pkTableName, pkFieldName } = await findFKDependents(
           projectId,
           currentField.targetFieldId
         )
+        console.log('[FK CASCADE] 4. findFKDependents result:', {
+          dependentCount: dependents.length,
+          pkTableName,
+          pkFieldName,
+          dependents: dependents.map((d) => ({
+            table: d.tableName, field: d.fieldName,
+            fmId: d.fieldMappingId,
+            hasTransform: d.hasExistingTransform,
+            status: d.existingTransformStatus,
+          })),
+        })
         // Only surface dependents that are mappable and not already applied
         const relevant = dependents.filter(
           (d) => d.fieldMappingId !== null &&
                  (!d.hasExistingTransform || d.existingTransformStatus !== 'applied')
         )
+        console.log('[FK CASCADE] 5. relevant count:', relevant.length,
+          'filtered out:', dependents.length - relevant.length)
         if (relevant.length > 0) {
+          console.log('[FK CASCADE] 6. Showing cascade prompt')
           pendingApplyRowsRef.current = result.rowsAffected
           setFKCascadeData({
             pkTableName,
@@ -746,6 +770,8 @@ export default function TransformContent({ projectId, projectName, initialData, 
           setShowFKCascade(true)
           return // toast shown after cascade prompt resolves
         }
+      } else {
+        console.log('[FK CASCADE] 2b. SKIPPED - not a PK field, isPK:', currentField?.targetFieldIsPrimaryKey)
       }
 
       showToast(`Applied to ${result.rowsAffected.toLocaleString()} rows`, 'success')
@@ -1338,7 +1364,11 @@ export default function TransformContent({ projectId, projectName, initialData, 
               const result = await createValueAssignment(projectId, tableMappingId, field.id)
               if (!result.success || !result.fieldMappingId) {
                 if (!result.success) {
-                  showToast(result.error ?? 'Could not create value assignment', 'error')
+                  if (result.error?.includes('already has a field mapping')) {
+                    showToast('This target field already has a field mapping. Remove it first to add a value assignment.', 'error')
+                  } else {
+                    showToast(result.error ?? 'Could not create value assignment', 'error')
+                  }
                 }
                 return null
               }
@@ -2000,12 +2030,12 @@ export default function TransformContent({ projectId, projectName, initialData, 
 
               {/* Stale warning banner */}
               {localTransform?.status === 'stale' && (
-                <div className="bg-yellow-50 border border-yellow-300 rounded-lg p-3">
-                  <div className="flex items-start gap-2">
-                    <AlertCircle className="w-4 h-4 text-yellow-600 mt-0.5 flex-shrink-0" />
-                    <p className="text-sm text-yellow-800">
-                      Transform has been modified since last apply.
-                      Click <strong>Apply Transform</strong> to update the staged data.
+                <div className="bg-amber-50 border border-amber-200 rounded-md px-4 py-3 flex items-start gap-2">
+                  <AlertTriangle className="h-5 w-5 text-amber-600 mt-0.5 shrink-0" />
+                  <div>
+                    <p className="text-sm font-medium text-amber-800">This transform may be outdated</p>
+                    <p className="text-xs text-amber-700 mt-1">
+                      The parent field&apos;s transform has changed. Regenerate this transform or re-cascade from the parent to ensure referential integrity.
                     </p>
                   </div>
                 </div>
@@ -2726,20 +2756,81 @@ function TableNode({
       </button>
       {expanded && (
         <div className="bg-gray-50 border-t border-gray-100">
-          {filteredFields.map((field) => {
-            const oneToManyCount = field.sourceFieldId
-              ? primaryFields.filter((f) => f.sourceFieldId === field.sourceFieldId).length
-              : 0
-            return (
-              <FieldRow
-                key={field.fieldMappingId}
-                field={field}
-                isSelected={selectedMappingId === field.fieldMappingId}
-                onSelect={() => onSelectField(field.fieldMappingId)}
-                oneToManyCount={oneToManyCount}
-              />
+          {(() => {
+            // Detect one-to-many groups within the filtered list
+            const srcCounts = new Map<string, number>()
+            for (const f of filteredFields) {
+              if (!f.sourceFieldId) continue
+              srcCounts.set(f.sourceFieldId, (srcCounts.get(f.sourceFieldId) ?? 0) + 1)
+            }
+            const oneToManySrcIds = new Set(
+              [...srcCounts.entries()].filter(([, c]) => c > 1).map(([id]) => id)
             )
-          })}
+
+            if (oneToManySrcIds.size === 0) {
+              // No one-to-many groups — render flat list
+              return filteredFields.map((field) => {
+                const oneToManyCount = field.sourceFieldId
+                  ? primaryFields.filter((f) => f.sourceFieldId === field.sourceFieldId).length
+                  : 0
+                return (
+                  <FieldRow
+                    key={field.fieldMappingId}
+                    field={field}
+                    isSelected={selectedMappingId === field.fieldMappingId}
+                    onSelect={() => onSelectField(field.fieldMappingId)}
+                    oneToManyCount={oneToManyCount}
+                  />
+                )
+              })
+            }
+
+            // Render with one-to-many groups wrapped in purple containers
+            const rendered = new Set<string>()
+            return filteredFields.map((field) => {
+              if (rendered.has(field.fieldMappingId)) return null
+              rendered.add(field.fieldMappingId)
+
+              if (field.sourceFieldId && oneToManySrcIds.has(field.sourceFieldId)) {
+                const groupFields = filteredFields.filter(
+                  (f) => f.sourceFieldId === field.sourceFieldId
+                )
+                groupFields.forEach((f) => rendered.add(f.fieldMappingId))
+
+                // Use full primaryFields count for the badge (unaffected by active filter)
+                const groupCount = primaryFields.filter(
+                  (f) => f.sourceFieldId === field.sourceFieldId
+                ).length
+
+                return (
+                  <div key={`otm-${field.sourceFieldId}`} className="border-l-2 border-purple-200 my-0.5">
+                    <div className="text-[11px] text-purple-600 font-medium px-3 py-1 bg-purple-50/50">
+                      Split: {field.sourceFieldName} → {groupCount} target fields
+                    </div>
+                    {groupFields.map((gf) => (
+                      <FieldRow
+                        key={gf.fieldMappingId}
+                        field={gf}
+                        isSelected={selectedMappingId === gf.fieldMappingId}
+                        onSelect={() => onSelectField(gf.fieldMappingId)}
+                        oneToManyCount={groupCount}
+                      />
+                    ))}
+                  </div>
+                )
+              }
+
+              return (
+                <FieldRow
+                  key={field.fieldMappingId}
+                  field={field}
+                  isSelected={selectedMappingId === field.fieldMappingId}
+                  onSelect={() => onSelectField(field.fieldMappingId)}
+                  oneToManyCount={0}
+                />
+              )
+            }).filter(Boolean)
+          })()}
 
           {/* Unmapped target fields — same layout as FieldRow */}
           {[...unmappedNotNull, ...unmappedNullable].map((field) => {
@@ -2871,6 +2962,10 @@ function FieldRow({ field, isSelected, onSelect, oneToManyCount = 1 }: {
           {status === 'applied' ? (
             <Badge className="bg-green-100 text-green-700 hover:bg-green-100 border border-green-200 text-[10px] px-1.5 py-0">
               Staged ✓
+            </Badge>
+          ) : status === 'stale' ? (
+            <Badge className="bg-amber-100 text-amber-700 hover:bg-amber-100 border border-amber-200 text-[10px] px-1.5 py-0">
+              Stale ⚠
             </Badge>
           ) : status === 'tested' ? (
             <Badge className="bg-teal-100 text-teal-700 hover:bg-teal-100 border border-teal-200 text-[10px] px-1.5 py-0">

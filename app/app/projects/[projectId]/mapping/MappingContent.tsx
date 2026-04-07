@@ -20,7 +20,11 @@ import {
   generateMappings,
   mapUnmappedField,
   getMappings,
+  checkFieldMappingHasTransform,
+  handleTargetFieldConflict,
 } from '@/lib/actions/mappings'
+import { checkPKSourceChangeImpact } from '@/lib/actions/fk-cascade'
+import { TransformResetWarning } from '@/components/app/TransformResetWarning'
 import type {
   MappingsResult,
   RichTableMapping,
@@ -301,7 +305,7 @@ function RegenerateConfirmDialog({
             <p className="text-sm text-gray-600">
               This will replace all {fieldCount > 0 ? `${fieldCount} ` : ''}field mapping{fieldCount !== 1 ? 's' : ''} for{' '}
               <span className="font-medium text-gray-800">{sourceTableName} → {targetTableName}</span>.
-              Any approved or edited mappings will be lost.
+              Any approved mappings, generated transforms, and staged data will be cleared.
             </p>
           </div>
         </div>
@@ -1314,8 +1318,7 @@ function TableMappingCard({
   const srcDs = tm.sourceTable?.dataset
   const tgtDs = tm.targetTable?.dataset
   const activeSrcIds = new Set(tm.fieldMappings.filter((fm) => fm.status !== 'rejected').map((fm) => fm.source_field_id).filter(Boolean))
-  // Value assignments (source_field_id = null) do not count as "covering" a target field
-  const activeTgtIds = new Set(tm.fieldMappings.filter((fm) => fm.status !== 'rejected' && fm.source_field_id !== null).map((fm) => fm.target_field_id))
+  const activeTgtIds = new Set(tm.fieldMappings.filter((fm) => fm.status !== 'rejected' && !fm.is_contributing).map((fm) => fm.target_field_id))
   const mappedSrcIds = new Set(tm.fieldMappings.map((fm) => fm.source_field_id).filter(Boolean))
   const mappedTgtIds = new Set(tm.fieldMappings.map((fm) => fm.target_field_id))
   const allSrcFields = allFieldsByTable[tm.source_table_id] ?? []
@@ -1955,8 +1958,10 @@ function MappingDetailsPanel({
                   {fm.source_field_id && (
                     <SelectItem value={fm.source_field_id}>{fm.sourceField?.name} (current)</SelectItem>
                   )}
-                  {allSrcFields.filter((f) => f.id !== fm.source_field_id && !mappedSrcIds.has(f.id)).map((f) => (
-                    <SelectItem key={f.id} value={f.id}>{f.name} ({f.data_type})</SelectItem>
+                  {allSrcFields.filter((f) => f.id !== fm.source_field_id).map((f) => (
+                    <SelectItem key={f.id} value={f.id}>
+                      {f.name} ({f.data_type}){mappedSrcIds.has(f.id) ? ' ⚠ already used' : ''}
+                    </SelectItem>
                   ))}
                 </SelectContent>
               </Select>
@@ -2178,6 +2183,24 @@ export default function MappingContent({ projectId, projectName, initialData }: 
   const [deleteTMTarget, setDeleteTMTarget] = useState<RichTableMapping | null>(null)
   const [regenerateConfirmTarget, setRegenerateConfirmTarget] = useState<RichTableMapping | null>(null)
   const [regeneratingTMId, setRegeneratingTMId] = useState<string | null>(null)
+
+  // Transform-reset / conflict warning dialog — shown before re-map, delete, or regenerate
+  const [resetWarning, setResetWarning] = useState<{
+    open: boolean
+    fieldMappingId: string
+    fieldName: string
+    hasTransform: boolean
+    hasStagedData: boolean
+    action: 'remap' | 'delete' | 'regenerate'
+    affectedCount?: number
+    hasValueAssignment?: boolean
+    createsMultiSource?: boolean
+    conflictDetails?: Array<{ sourceFieldName: string | null; isValueAssignment: boolean }>
+    isPKSourceChange?: boolean
+    fkDependentCount?: number
+    fkDependentNames?: string[]
+    pendingAction: () => void
+  } | null>(null)
   const [suggestingTMId, setSuggestingTMId] = useState<string | null>(null)
   const [approvingHC, setApprovingHC] = useState(false)
   const [hcConfirmCount, setHcConfirmCount] = useState<number | null>(null)
@@ -2196,8 +2219,7 @@ export default function MappingContent({ projectId, projectName, initialData }: 
   const needsReviewCount = useMemo(() => {
     const mappingCount = allFMs.filter((fm) => !fm.is_contributing && fm.status === 'needs_review').length
     const activeSrcIds = new Set(allFMs.filter((fm) => fm.status !== 'rejected' && fm.source_field_id).map((fm) => fm.source_field_id as string))
-    // Value assignments (source_field_id = null) do not count as covering a target field
-    const activeTgtIds = new Set(allFMs.filter((fm) => fm.status !== 'rejected' && fm.source_field_id !== null).map((fm) => fm.target_field_id))
+    const activeTgtIds = new Set(allFMs.filter((fm) => fm.status !== 'rejected' && !fm.is_contributing).map((fm) => fm.target_field_id))
     const sourceTableIds = new Set(tableMappings.map((tm) => tm.source_table_id))
     const targetTableIds = new Set(tableMappings.map((tm) => tm.target_table_id))
     let unmappedUnacked = 0
@@ -2213,8 +2235,7 @@ export default function MappingContent({ projectId, projectName, initialData }: 
   )
   const unmappedCount = useMemo(() => {
     const activeSrcIds = new Set(allFMs.filter((fm) => fm.status !== 'rejected' && fm.source_field_id).map((fm) => fm.source_field_id as string))
-    // Value assignments (source_field_id = null) do not count as covering a target field
-    const activeTgtIds = new Set(allFMs.filter((fm) => fm.status !== 'rejected' && fm.source_field_id !== null).map((fm) => fm.target_field_id))
+    const activeTgtIds = new Set(allFMs.filter((fm) => fm.status !== 'rejected' && !fm.is_contributing).map((fm) => fm.target_field_id))
     const sourceTableIds = new Set(tableMappings.map((tm) => tm.source_table_id))
     const targetTableIds = new Set(tableMappings.map((tm) => tm.target_table_id))
     let count = 0
@@ -2378,18 +2399,50 @@ export default function MappingContent({ projectId, projectName, initialData }: 
     })
   }
 
-  function handleDeleteFM(fmId: string) {
+  // Execute the delete immediately — called once the user has confirmed any warnings.
+  function executeDeleteFM(fmId: string) {
     setTableMappings((prev) => prev.map((tm) => ({ ...tm, fieldMappings: tm.fieldMappings.filter((fm) => fm.id !== fmId) })))
     if (selectedFM?.id === fmId) setSelectedFM(null)
     startTransition(async () => {
       const r = await deleteFieldMapping(fmId)
-      if (!r.success) showToast(r.error ?? 'Could not delete field mapping', 'error')
-      // Sync unmapped lists: deleting a mapping may expose a coverage gap
+      if (!r.success) {
+        showToast(r.error ?? 'Could not delete field mapping', 'error')
+      } else if (r.transformReset) {
+        const stagedMsg = r.stagedRowsReverted && r.stagedRowsReverted > 0
+          ? ` ${r.stagedRowsReverted} staged rows reverted.`
+          : ''
+        showToast(`Mapping deleted. Transform cleared.${stagedMsg}`, 'info')
+      }
       refreshData()
     })
   }
 
-  function handleEditFM(fmId: string, updates: { source_field_id?: string; target_field_id?: string }) {
+  // Check for an existing transform before deleting. If one is found, show the
+  // warning dialog so the user understands their staged data will be removed too.
+  async function handleDeleteFM(fmId: string) {
+    const check = await checkFieldMappingHasTransform(fmId)
+    if (check.hasTransform) {
+      const fm = allFMs.find((f) => f.id === fmId)
+      const fieldLabel = fm?.sourceField?.name && fm?.targetField?.name
+        ? `${fm.sourceField.name} → ${fm.targetField.name}`
+        : fm?.targetField?.name ?? 'this field'
+      setResetWarning({
+        open: true,
+        fieldMappingId: fmId,
+        fieldName: fieldLabel,
+        hasTransform: true,
+        hasStagedData: check.hasStaged,
+        action: 'delete',
+        pendingAction: () => executeDeleteFM(fmId),
+      })
+      return
+    }
+    // No transform — delete immediately, no extra confirmation needed
+    executeDeleteFM(fmId)
+  }
+
+  // Apply the edit optimistically and persist it — called once the user has confirmed warnings.
+  function executeEditFM(fmId: string, updates: { source_field_id?: string; target_field_id?: string }) {
     const parentTM = tableMappings.find((tm) => tm.fieldMappings.some((fm) => fm.id === fmId))
     const oldFM = allFMs.find((f) => f.id === fmId)
 
@@ -2414,10 +2467,75 @@ export default function MappingContent({ projectId, projectName, initialData }: 
     updateFM(fmId, patch)
     startTransition(async () => {
       const r = await editFieldMapping(fmId, { ...updates, confidence: null, ai_reasoning: patch.ai_reasoning ?? undefined })
-      // Sync unmapped lists: editing source_field_id changes which fields are covered
-      if (!r.success) showToast(r.error ?? 'Could not update field mapping', 'error')
+      if (!r.success) {
+        showToast(r.error ?? 'Could not update field mapping', 'error')
+      } else {
+        const messages: string[] = ['Mapping updated.']
+        if (r.valueAssignmentReplaced) messages.push('Value assignment replaced.')
+        if (r.transformReset) messages.push('Transform reset.')
+        if (r.fkDependentsReset && r.fkDependentsReset > 0) messages.push(`${r.fkDependentsReset} FK dependent transform(s) also reset.`)
+        if (r.stagedRowsReverted && r.stagedRowsReverted > 0) messages.push(`${r.stagedRowsReverted} staged rows reverted.`)
+        if (messages.length > 1) showToast(messages.join(' '), 'info')
+      }
       refreshData()
     })
+  }
+
+  // Check for transforms and target-field conflicts before applying a source/target change.
+  // Shows a warning dialog if anything would be reset or replaced; otherwise proceeds directly.
+  async function handleEditFM(fmId: string, updates: { source_field_id?: string; target_field_id?: string }) {
+    if (updates.target_field_id || updates.source_field_id) {
+      const transformCheck = await checkFieldMappingHasTransform(fmId)
+
+      // If target is changing, also look for conflicts on the new target
+      let conflictInfo: Awaited<ReturnType<typeof handleTargetFieldConflict>> | null = null
+      if (updates.target_field_id) {
+        const fm = allFMs.find((f) => f.id === fmId)
+        const tmId = fm?.table_mapping_id
+        if (tmId) {
+          const conflict = await handleTargetFieldConflict(tmId, updates.target_field_id, fmId)
+          if (conflict.hasConflict) conflictInfo = conflict
+        }
+      }
+
+      // If source is changing, check whether this is a PK field with FK dependents
+      let pkImpact: Awaited<ReturnType<typeof checkPKSourceChangeImpact>> | null = null
+      if (updates.source_field_id) {
+        pkImpact = await checkPKSourceChangeImpact(fmId)
+      }
+
+      const hasValueAssignment = conflictInfo?.existingMappings.some((m) => m.isValueAssignment) ?? false
+      const createsMultiSource = conflictInfo?.existingMappings.some((m) => !m.isValueAssignment) ?? false
+      const conflictHasTransform = conflictInfo?.existingMappings.some((m) => m.hasTransform) ?? false
+      const hasFKImpact = (pkImpact?.fkDependentCount ?? 0) > 0
+
+      const needsWarning = transformCheck.hasTransform || conflictHasTransform || hasValueAssignment || hasFKImpact
+
+      if (needsWarning) {
+        const fm = allFMs.find((f) => f.id === fmId)
+        const fieldLabel = fm?.sourceField?.name && fm?.targetField?.name
+          ? `${fm.sourceField.name} → ${fm.targetField.name}`
+          : fm?.targetField?.name ?? 'this field'
+        setResetWarning({
+          open: true,
+          fieldMappingId: fmId,
+          fieldName: fieldLabel,
+          hasTransform: transformCheck.hasTransform,
+          hasStagedData: transformCheck.hasStaged,
+          action: 'remap',
+          hasValueAssignment,
+          createsMultiSource,
+          conflictDetails: conflictInfo?.existingMappings ?? [],
+          isPKSourceChange: pkImpact?.isPK && !!updates.source_field_id,
+          fkDependentCount: pkImpact?.fkDependentCount ?? 0,
+          fkDependentNames: pkImpact?.dependentNames ?? [],
+          pendingAction: () => executeEditFM(fmId, updates),
+        })
+        return
+      }
+    }
+    // No transform, no conflicts — proceed directly
+    executeEditFM(fmId, updates)
   }
 
   function handleApproveAll(tmId: string) {
@@ -2477,6 +2595,15 @@ export default function MappingContent({ projectId, projectName, initialData }: 
     if (!result.success) {
       showToast(result.error ?? 'Could not regenerate field mappings', 'error')
       return
+    }
+    if (result.transformsReset && result.transformsReset > 0) {
+      const stagedMsg = result.stagedRowsReverted && result.stagedRowsReverted > 0
+        ? ` ${result.stagedRowsReverted} staged rows cleared.`
+        : ''
+      showToast(
+        `Regenerated. ${result.transformsReset} transform${result.transformsReset !== 1 ? 's' : ''} reset.${stagedMsg}`,
+        'info'
+      )
     }
     refreshData()
   }
@@ -2772,6 +2899,28 @@ export default function MappingContent({ projectId, projectName, initialData }: 
           fieldCount={regenerateConfirmTarget.fieldMappings.length}
           onConfirm={() => handleRegenerate(regenerateConfirmTarget.id)}
           onCancel={() => setRegenerateConfirmTarget(null)}
+        />
+      )}
+
+      {resetWarning && (
+        <TransformResetWarning
+          open={resetWarning.open}
+          onOpenChange={(open) => { if (!open) setResetWarning(null) }}
+          onConfirm={() => {
+            resetWarning.pendingAction()
+            setResetWarning(null)
+          }}
+          action={resetWarning.action}
+          fieldName={resetWarning.fieldName}
+          hasTransform={resetWarning.hasTransform}
+          hasStagedData={resetWarning.hasStagedData}
+          affectedCount={resetWarning.affectedCount}
+          hasValueAssignment={resetWarning.hasValueAssignment}
+          createsMultiSource={resetWarning.createsMultiSource}
+          conflictDetails={resetWarning.conflictDetails}
+          isPKSourceChange={resetWarning.isPKSourceChange}
+          fkDependentCount={resetWarning.fkDependentCount}
+          fkDependentNames={resetWarning.fkDependentNames}
         />
       )}
     </div>

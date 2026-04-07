@@ -135,6 +135,11 @@ export default function FKCascadePrompt({
             })}
           </div>
 
+          <p className="text-xs text-slate-500 mt-2">
+            Cascading copies the primary key&apos;s transform logic to these fields.
+            Verify that each FK field&apos;s source data matches the expected format before staging.
+          </p>
+
           <p className="text-xs text-gray-500 pt-1">
             Cascaded transforms will be{' '}
             <span className="font-medium text-gray-600">applied immediately</span>{' '}

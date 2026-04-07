@@ -4,6 +4,7 @@ import { createClient } from '@/lib/supabase/server'
 import { supabaseAdmin } from '@/lib/supabase/admin'
 import { requireProjectPermission } from '@/lib/actions/role-resolution'
 import { callClaude } from '@/lib/ai/claude'
+import { extractTransformSQL } from '@/lib/ai/sql-extractor'
 import { checkAIRateLimit } from '@/lib/ai/rate-limit'
 import { buildAIContext, formatFieldForPrompt, formatDocumentsForPrompt } from '@/lib/ai/context-builder'
 import { fieldNeedsTransform, wrapFieldRefsInJsonb } from '@/lib/utils/transform-helpers'
@@ -666,12 +667,11 @@ Generate the SQL transformation expression.`
     return { success: false, error: 'AI generation failed. Please try again.' }
   }
 
-  // Clean the response: strip markdown fences, trim, remove trailing semicolons
-  let sql = rawSql.trim()
-  if (sql.startsWith('```')) {
-    sql = sql.replace(/^```(?:sql)?\n?/, '').replace(/\n?```$/, '').trim()
+  // Clean the response: extract SQL, strip fences/preamble/trailing text, remove semicolons
+  let sql = extractTransformSQL(rawSql)
+  if (sql !== rawSql.trim()) {
+    console.log('[generateTransform] SQL extracted from mixed response, raw length:', rawSql.length, 'extracted length:', sql.length)
   }
-  sql = sql.replace(/;+$/, '').trim()
 
   if (!sql) return { success: false, error: 'AI returned empty SQL. Please try again.' }
 
@@ -717,6 +717,30 @@ Generate the SQL transformation expression.`
       .single()
     if (insertErr || !created) return { success: false, error: 'Failed to save transformation' }
     transformationId = created.id
+  }
+
+  // If this field is a PK, regenerating its transform may invalidate FK dependents.
+  // Stale (not delete) their transforms so users can see and address the inconsistency.
+  const { data: fmForPK } = await supabaseAdmin
+    .from('field_mappings')
+    .select('target_field_id, table_mappings!inner(project_id)')
+    .eq('id', fieldMappingId)
+    .single()
+
+  if (fmForPK) {
+    const { data: tgtField } = await supabaseAdmin
+      .from('fields')
+      .select('is_primary_key')
+      .eq('id', fmForPK.target_field_id)
+      .single()
+
+    if (tgtField?.is_primary_key) {
+      const { staleFKDependentTransforms } = await import('@/lib/actions/fk-cascade')
+      await staleFKDependentTransforms(
+        (fmForPK as unknown as { table_mappings: { project_id: string } }).table_mappings.project_id,
+        fmForPK.target_field_id
+      )
+    }
   }
 
   return { success: true, sql, transformationId }
@@ -1622,4 +1646,143 @@ export async function reinstateTransformNeeded(
   if (error) throw new Error(`Failed to reinstate transform: ${error.message}`)
   revalidatePath(`/app/projects/${projectId}`, 'layout')
   return { success: true }
+}
+
+// ── resetFieldTransform ───────────────────────────────────────────────────────
+// Removes the transform row for a field mapping and, if the transform was
+// already applied, reverts the staged JSONB key on all staged_data_rows for
+// the parent table mapping. Called before editing or deleting a field mapping
+// so that stale SQL and orphaned staged keys are never left behind.
+
+export async function resetFieldTransform(
+  fieldMappingId: string,
+  options?: { skipFKCascade?: boolean }
+): Promise<{
+  success: boolean
+  hadTransform: boolean
+  hadStagedData: boolean
+  rowsReverted: number
+  fkDependentsReset?: number
+  fkRowsReverted?: number
+  error?: string
+}> {
+  // 1. Look up field mapping to get target field name and table mapping id
+  const { data: fm } = await supabaseAdmin
+    .from('field_mappings')
+    .select('id, table_mapping_id, target_field_id, fields!field_mappings_target_field_id_fkey(name), table_mappings!inner(project_id)')
+    .eq('id', fieldMappingId)
+    .single()
+
+  if (!fm) return { success: true, hadTransform: false, hadStagedData: false, rowsReverted: 0 }
+
+  // 2. Check if a transform exists
+  const { data: transform } = await supabaseAdmin
+    .from('transformations')
+    .select('id, status')
+    .eq('field_mapping_id', fieldMappingId)
+    .maybeSingle()
+
+  if (!transform) {
+    return { success: true, hadTransform: false, hadStagedData: false, rowsReverted: 0 }
+  }
+
+  let hadStagedData = false
+  let rowsReverted = 0
+
+  // 3. If transform was applied, revert the staged JSONB key using the RPC
+  if (transform.status === 'applied') {
+    const targetFieldName = (fm as unknown as { fields: { name: string } | null }).fields?.name
+    if (targetFieldName) {
+      const { data: count } = await supabaseAdmin.rpc('revert_field_transform', {
+        p_table_mapping_id: fm.table_mapping_id,
+        p_target_field_name: targetFieldName,
+      })
+      hadStagedData = true
+      rowsReverted = (count as number) ?? 0
+    }
+  }
+
+  // 4. Delete the transform row — clean slate for the new mapping
+  await supabaseAdmin
+    .from('transformations')
+    .delete()
+    .eq('field_mapping_id', fieldMappingId)
+
+  // 5. If this is a PK field, mark FK dependent transforms as stale.
+  // Using stale (not delete) preserves the SQL for reference while signalling
+  // the user that the FK transform may no longer match the new PK format.
+  // Dynamic import avoids a circular dependency between transformations.ts and
+  // fk-cascade.ts. skipFKCascade prevents infinite recursion when called from
+  // within staleFKDependentTransforms itself.
+  let fkDependentsReset = 0
+  let fkRowsReverted = 0
+
+  if (!options?.skipFKCascade) {
+    const projectId = (fm as unknown as { table_mappings: { project_id: string } }).table_mappings?.project_id
+    if (projectId && fm.target_field_id) {
+      const { staleFKDependentTransforms } = await import('@/lib/actions/fk-cascade')
+      const fkResult = await staleFKDependentTransforms(projectId, fm.target_field_id)
+      fkDependentsReset = fkResult.dependentsStaled
+      fkRowsReverted = fkResult.stagedRowsReverted
+    }
+  }
+
+  return { success: true, hadTransform: true, hadStagedData, rowsReverted, fkDependentsReset, fkRowsReverted }
+}
+
+// ── checkFieldMappingHasTransform ─────────────────────────────────────────────
+// Lightweight check used by the UI before showing a re-map confirmation dialog.
+
+export async function checkFieldMappingHasTransform(
+  fieldMappingId: string
+): Promise<{ hasTransform: boolean; status?: string; hasStaged: boolean }> {
+  const { data: transform } = await supabaseAdmin
+    .from('transformations')
+    .select('id, status')
+    .eq('field_mapping_id', fieldMappingId)
+    .maybeSingle()
+
+  return {
+    hasTransform: !!transform,
+    status: transform?.status ?? undefined,
+    hasStaged: transform?.status === 'applied',
+  }
+}
+
+// ── resetAllTransformsForTable ────────────────────────────────────────────────
+// Clears all staged_data_rows for a table mapping before bulk-deleting its
+// field mappings. The transforms themselves are cascade-deleted by the caller
+// when field_mappings are deleted. This function handles the staged data gap
+// that cascade does not cover (staged_data_rows links to table_mappings, not
+// field_mappings, so no cascade fires from field_mapping deletion).
+
+export async function resetAllTransformsForTable(
+  tableMappingId: string
+): Promise<{ success: boolean; transformsReset: number; stagedRowsReverted: number; error?: string }> {
+  // 1. Count transforms about to be cascade-deleted (informational)
+  const { data: fieldMappings } = await supabaseAdmin
+    .from('field_mappings')
+    .select('id')
+    .eq('table_mapping_id', tableMappingId)
+
+  const fmIds = (fieldMappings ?? []).map((fm) => fm.id)
+
+  const { count: transformCount } = await supabaseAdmin
+    .from('transformations')
+    .select('id', { count: 'exact', head: true })
+    .in('field_mapping_id', fmIds.length > 0 ? fmIds : ['none'])
+
+  // 2. Delete all staged rows for this table mapping in one shot.
+  //    This is correct — we're wiping and regenerating all field mappings,
+  //    so all staged data is by definition stale regardless of per-field status.
+  const { count: stagedCount } = await supabaseAdmin
+    .from('staged_data_rows')
+    .delete({ count: 'exact' })
+    .eq('table_mapping_id', tableMappingId)
+
+  return {
+    success: true,
+    transformsReset: transformCount ?? 0,
+    stagedRowsReverted: stagedCount ?? 0,
+  }
 }
