@@ -2602,7 +2602,7 @@ export default function MappingContent({ projectId, projectName, initialData }: 
         : ''
       showToast(
         `Regenerated. ${result.transformsReset} transform${result.transformsReset !== 1 ? 's' : ''} reset.${stagedMsg}`,
-        'info'
+        'success'
       )
     }
     refreshData()
