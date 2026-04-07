@@ -2411,7 +2411,7 @@ export default function MappingContent({ projectId, projectName, initialData }: 
         const stagedMsg = r.stagedRowsReverted && r.stagedRowsReverted > 0
           ? ` ${r.stagedRowsReverted} staged rows reverted.`
           : ''
-        showToast(`Mapping deleted. Transform cleared.${stagedMsg}`, 'info')
+        showToast(`Mapping deleted. Transform cleared.${stagedMsg}`, 'success')
       }
       refreshData()
     })
@@ -2475,7 +2475,7 @@ export default function MappingContent({ projectId, projectName, initialData }: 
         if (r.transformReset) messages.push('Transform reset.')
         if (r.fkDependentsReset && r.fkDependentsReset > 0) messages.push(`${r.fkDependentsReset} FK dependent transform(s) also reset.`)
         if (r.stagedRowsReverted && r.stagedRowsReverted > 0) messages.push(`${r.stagedRowsReverted} staged rows reverted.`)
-        if (messages.length > 1) showToast(messages.join(' '), 'info')
+        if (messages.length > 1) showToast(messages.join(' '), 'success')
       }
       refreshData()
     })
