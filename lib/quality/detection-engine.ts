@@ -232,6 +232,12 @@ export async function runSourceDataChecks(
         p_field: field.name,
       })
       if (mismatchCount > 0) {
+        const samples = await rpcSamples('dq_field_issue_samples', {
+          p_table_id: tableId,
+          p_field_name: field.name,
+          p_condition: 'type_integer',
+          p_limit: 5,
+        })
         issuesToInsert.push(
           makeIssue({
             project_id: projectId,
@@ -243,6 +249,7 @@ export async function runSourceDataChecks(
             description: `Type mismatch: ${mismatchCount} values in ${field.name} are not valid integers`,
             affected_records: Number(mismatchCount),
             issue_kind: 'type_mismatch_integer',
+            affected_rows_sample: samples,
             detection_source: detectionSource,
           })
         )
@@ -253,6 +260,12 @@ export async function runSourceDataChecks(
         p_field: field.name,
       })
       if (mismatchCount > 0) {
+        const samples = await rpcSamples('dq_field_issue_samples', {
+          p_table_id: tableId,
+          p_field_name: field.name,
+          p_condition: 'type_numeric',
+          p_limit: 5,
+        })
         issuesToInsert.push(
           makeIssue({
             project_id: projectId,
@@ -264,6 +277,7 @@ export async function runSourceDataChecks(
             description: `Type mismatch: ${mismatchCount} values in ${field.name} are not valid numbers`,
             affected_records: Number(mismatchCount),
             issue_kind: 'type_mismatch_numeric',
+            affected_rows_sample: samples,
             detection_source: detectionSource,
           })
         )
@@ -277,6 +291,12 @@ export async function runSourceDataChecks(
         p_field: field.name,
       })
       if (invalidCount > 0) {
+        const samples = await rpcSamples('dq_field_issue_samples', {
+          p_table_id: tableId,
+          p_field_name: field.name,
+          p_condition: 'format_email',
+          p_limit: 5,
+        })
         issuesToInsert.push(
           makeIssue({
             project_id: projectId,
@@ -288,6 +308,7 @@ export async function runSourceDataChecks(
             description: `Invalid email format detected in ${invalidCount} records`,
             affected_records: Number(invalidCount),
             issue_kind: 'email_format',
+            affected_rows_sample: samples,
             detection_source: detectionSource,
           })
         )
@@ -298,6 +319,12 @@ export async function runSourceDataChecks(
         p_field: field.name,
       })
       if (invalidCount > 0) {
+        const samples = await rpcSamples('dq_field_issue_samples', {
+          p_table_id: tableId,
+          p_field_name: field.name,
+          p_condition: 'format_phone',
+          p_limit: 5,
+        })
         issuesToInsert.push(
           makeIssue({
             project_id: projectId,
@@ -309,6 +336,7 @@ export async function runSourceDataChecks(
             description: `Invalid phone format detected in ${invalidCount} records`,
             affected_records: Number(invalidCount),
             issue_kind: 'phone_format',
+            affected_rows_sample: samples,
             detection_source: detectionSource,
           })
         )
@@ -336,6 +364,13 @@ export async function runSourceDataChecks(
             p_target_field: refFieldName,
           })
           if (orphanCount > 0) {
+            const samples = await rpcSamples('dq_orphaned_fk_samples', {
+              p_table_id: tableId,
+              p_field_name: field.name,
+              p_ref_table_id: refTableData.id,
+              p_ref_field_name: refFieldName,
+              p_limit: 5,
+            })
             issuesToInsert.push(
               makeIssue({
                 project_id: projectId,
@@ -347,6 +382,7 @@ export async function runSourceDataChecks(
                 description: `Referential integrity violation: ${orphanCount} orphaned records in ${field.name} referencing non-existent ${refTableName}.${refFieldName}`,
                 affected_records: Number(orphanCount),
                 issue_kind: 'orphaned_fk',
+                affected_rows_sample: samples,
                 detection_source: detectionSource,
               })
             )
@@ -363,6 +399,11 @@ export async function runSourceDataChecks(
       })
       const nullRate = (Number(nullCount) / totalRows) * 100
       if (nullRate > 50 && nullCount > 0) {
+        const samples = await rpcSamples('dq_null_samples', {
+          p_table_id: tableId,
+          p_field: field.name,
+          p_limit: 5,
+        })
         issuesToInsert.push(
           makeIssue({
             project_id: projectId,
@@ -374,6 +415,7 @@ export async function runSourceDataChecks(
             description: `High null rate (${Math.round(nullRate)}%) in ${field.name} — review if this data should be populated`,
             affected_records: Number(nullCount),
             issue_kind: 'high_null_rate',
+            affected_rows_sample: samples,
             detection_source: detectionSource,
           })
         )
@@ -397,6 +439,12 @@ export async function runSourceDataChecks(
       })
 
       if (nonIsoDateCount > 0) {
+        const samples = await rpcSamples('dq_field_issue_samples', {
+          p_table_id: tableId,
+          p_field_name: field.name,
+          p_condition: 'non_iso_date',
+          p_limit: 5,
+        })
         issuesToInsert.push(
           makeIssue({
             project_id: projectId,
@@ -408,6 +456,7 @@ export async function runSourceDataChecks(
             description: `Non-standard date formats in ${nonIsoDateCount} records — transform to ISO 8601 (YYYY-MM-DD) before loading. Common patterns: MM/DD/YYYY, DD-MM-YY, "Mar 15 2024".`,
             affected_records: nonIsoDateCount,
             issue_kind: 'non_iso_date',
+            affected_rows_sample: samples,
             detection_source: detectionSource,
           })
         )
@@ -420,6 +469,12 @@ export async function runSourceDataChecks(
         p_field_name: field.name,
       })
       if (invalidDateCount > 0) {
+        const samples = await rpcSamples('dq_field_issue_samples', {
+          p_table_id: tableId,
+          p_field_name: field.name,
+          p_condition: 'invalid_date',
+          p_limit: 5,
+        })
         issuesToInsert.push(
           makeIssue({
             project_id: projectId,
@@ -431,6 +486,7 @@ export async function runSourceDataChecks(
             description: `Unparseable date values in ${invalidDateCount} records — not recognisable as any date format and will fail on load.`,
             affected_records: Number(invalidDateCount),
             issue_kind: 'invalid_date_string',
+            affected_rows_sample: samples,
             detection_source: detectionSource,
           })
         )
@@ -450,6 +506,12 @@ export async function runSourceDataChecks(
         p_field_name: field.name,
       })
       if (currencyFmtCount > 0) {
+        const samples = await rpcSamples('dq_field_issue_samples', {
+          p_table_id: tableId,
+          p_field_name: field.name,
+          p_condition: 'format_currency',
+          p_limit: 5,
+        })
         issuesToInsert.push(
           makeIssue({
             project_id: projectId,
@@ -461,6 +523,7 @@ export async function runSourceDataChecks(
             description: `Currency formatting detected in ${currencyFmtCount} records ($ signs or commas). Strip formatting before casting to a numeric target field.`,
             affected_records: Number(currencyFmtCount),
             issue_kind: 'currency_format',
+            affected_rows_sample: samples,
             detection_source: detectionSource,
           })
         )
@@ -472,6 +535,12 @@ export async function runSourceDataChecks(
         p_field_name: field.name,
       })
       if (negativeCount > 0) {
+        const samples = await rpcSamples('dq_field_issue_samples', {
+          p_table_id: tableId,
+          p_field_name: field.name,
+          p_condition: 'negative_value',
+          p_limit: 5,
+        })
         issuesToInsert.push(
           makeIssue({
             project_id: projectId,
@@ -483,6 +552,7 @@ export async function runSourceDataChecks(
             description: `Negative values found in ${negativeCount} records. Revenue/amount fields typically should not contain negative values — verify these are intentional credits or adjustments.`,
             affected_records: Number(negativeCount),
             issue_kind: 'negative_value',
+            affected_rows_sample: samples,
             detection_source: detectionSource,
           })
         )

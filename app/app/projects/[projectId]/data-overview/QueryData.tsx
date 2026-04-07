@@ -17,6 +17,8 @@ interface QueryDataProps {
   projectId: string
   tables: TableOption[]
   isArchived?: boolean
+  initialQuery?: string
+  initialMode?: 'nl' | 'sql'
 }
 
 type QueryMode = 'nl' | 'sql'
@@ -33,9 +35,9 @@ function timeAgo(dateStr: string): string {
   return new Date(dateStr).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
 }
 
-export default function QueryData({ projectId, tables, isArchived = false }: QueryDataProps) {
-  const [mode, setMode] = useState<QueryMode>('nl')
-  const [input, setInput] = useState('')
+export default function QueryData({ projectId, tables, isArchived = false, initialQuery, initialMode }: QueryDataProps) {
+  const [mode, setMode] = useState<QueryMode>(initialMode ?? 'nl')
+  const [input, setInput] = useState(initialQuery ?? '')
   const [loading, setLoading] = useState(false)
   const [result, setResult] = useState<QueryEngineResult | null>(null)
   const [resultsPage, setResultsPage] = useState(1)

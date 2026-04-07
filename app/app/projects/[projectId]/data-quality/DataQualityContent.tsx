@@ -3,12 +3,12 @@
 import { useState, useEffect, useTransition, useRef, useMemo } from 'react'
 import { useRouter } from 'next/navigation'
 import type { QualityIssue, FixOption, ReadinessScore, ValidationRule, FixHistory } from '@/lib/types/database'
-import { applyFix, acceptRisk, revertFix, runFullScan, getQualityIssues, getFixHistory, markIssueFixed } from '@/lib/actions/quality-fixes'
+import { applyFix, acceptRisk, revertFix, runFullScan, getQualityIssues, getFixHistory, markIssueFixed, getAffectedRowsForIssue } from '@/lib/actions/quality-fixes'
 import { generateFixSuggestions } from '@/lib/quality/fix-engine'
 import { addValidationRule, addValidationRuleFromNL, executeCustomRules, deleteValidationRule } from '@/lib/actions/validation-rules'
 import { generateManualFix, applyManualFix, previewManualFix } from '@/lib/actions/manual-fix'
 import { computeReadinessScore } from '@/lib/quality/readiness-score'
-import { CheckCircle } from '@/components/icons'
+import { CheckCircle, ChevronRight, ExternalLink } from '@/components/icons'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { PageHeader } from '@/components/app/PageHeader'
 import { stageAllData } from '@/lib/actions/staging'
@@ -152,6 +152,43 @@ function RotateCcwIcon({ className }: { className?: string }) {
   )
 }
 
+// ── Issue Card helpers ────────────────────────────────────────────────────────
+
+function buildDiagnosticQuery(issue: {
+  field_name: string
+  issue_kind: string | null
+  tableName: string
+}): string | null {
+  const { tableName, field_name: field, issue_kind } = issue
+  if (!tableName || !field) return null
+  switch (issue_kind) {
+    case 'null_pk':
+    case 'null_required':
+    case 'high_null_rate':
+      return `SELECT * FROM ${tableName} WHERE "${field}" IS NULL OR TRIM("${field}") = ''`
+    case 'duplicate_pk':
+      return `SELECT "${field}", COUNT(*) AS count FROM ${tableName} GROUP BY "${field}" HAVING COUNT(*) > 1 ORDER BY count DESC`
+    case 'orphaned_fk':
+      return `SELECT * FROM ${tableName} WHERE "${field}" IS NOT NULL AND TRIM("${field}") <> '' LIMIT 50`
+    case 'currency_format':
+      return `SELECT "${field}" FROM ${tableName} WHERE "${field}" LIKE '%$%' OR "${field}" LIKE '%,%' LIMIT 50`
+    case 'email_format':
+      return `SELECT "${field}" FROM ${tableName} WHERE "${field}" IS NOT NULL AND "${field}" NOT LIKE '%@%.%' LIMIT 50`
+    case 'phone_format':
+      return `SELECT "${field}" FROM ${tableName} WHERE "${field}" IS NOT NULL LIMIT 50`
+    case 'type_mismatch_integer':
+    case 'type_mismatch_numeric':
+      return `SELECT "${field}" FROM ${tableName} WHERE "${field}" IS NOT NULL ORDER BY "${field}" LIMIT 50`
+    case 'negative_value':
+      return `SELECT "${field}" FROM ${tableName} WHERE "${field}" LIKE '-%' OR "${field}" LIKE '(%' LIMIT 50`
+    case 'non_iso_date':
+    case 'invalid_date_string':
+      return `SELECT "${field}" FROM ${tableName} WHERE "${field}" IS NOT NULL LIMIT 50`
+    default:
+      return `SELECT * FROM ${tableName} WHERE "${field}" IS NOT NULL LIMIT 50`
+  }
+}
+
 // ── Issue Card ────────────────────────────────────────────────────────────────
 
 // RoleTooltip is imported from @/components/app/RoleTooltip
@@ -184,6 +221,73 @@ function IssueCard({
   // When prefetchedFixHistory is provided (server-prefetched), derive fixDetails directly.
   // Otherwise fall back to a client-side fetch to stay backward-compatible.
   const [fetchedFixDetails, setFetchedFixDetails] = useState<FixHistory | null>(null)
+
+  // ── Affected rows preview ────────────────────────────────────────────────
+  const [showSample, setShowSample] = useState(false)
+  const [extraRows, setExtraRows] = useState<Record<string, unknown>[] | null>(null)
+  const [loadingMore, setLoadingMore] = useState(false)
+
+  const router = useRouter()
+
+  const sampleRows = (issue.affected_rows_sample as Record<string, unknown>[] | null) ?? []
+  const displayRows = extraRows ?? sampleRows
+
+  const titleParts = issue.title?.split('.') ?? []
+  const fieldName = titleParts.length >= 2 ? titleParts[titleParts.length - 1] : ''
+  const tableName = titleParts.length >= 2 ? titleParts[0] : ''
+
+  const sampleColumns = useMemo(() => {
+    if (displayRows.length === 0) return []
+    const allCols = Object.keys(displayRows[0])
+    const sorted = allCols.filter(c => c === fieldName).concat(allCols.filter(c => c !== fieldName))
+    return sorted.slice(0, 6)
+  }, [displayRows, fieldName])
+
+  const diagnosticQuery = useMemo(() => {
+    const tbl = issue.title?.split('.')[0] ?? ''
+    const fld = issue.title?.split('.').pop() ?? ''
+
+    // Try the typed builder first
+    if (issue.issue_kind && tbl && fld) {
+      return buildDiagnosticQuery({ table_id: issue.table_id ?? '', field_name: fld, issue_kind: issue.issue_kind, tableName: tbl })
+    }
+
+    // Fallback: derive query from title/description when issue_kind is missing
+    if (tbl && fld) {
+      const desc = (issue.description ?? '').toLowerCase()
+      if (desc.includes('null') || desc.includes('empty')) {
+        return `SELECT * FROM ${tbl} WHERE "${fld}" IS NULL OR TRIM("${fld}") = ''`
+      }
+      if (desc.includes('orphan') || desc.includes('referential')) {
+        return `SELECT * FROM ${tbl} WHERE "${fld}" IS NOT NULL LIMIT 50`
+      }
+      if (desc.includes('duplicate')) {
+        return `SELECT "${fld}", COUNT(*) AS count FROM ${tbl} GROUP BY "${fld}" HAVING COUNT(*) > 1`
+      }
+      return `SELECT * FROM ${tbl} LIMIT 50`
+    }
+
+    return null
+  }, [issue])
+
+  const handleLoadMore = async () => {
+    setLoadingMore(true)
+    try {
+      const result = await getAffectedRowsForIssue(issue.id, 20)
+      if (result.success && result.rows.length > 0) {
+        setExtraRows(result.rows)
+      }
+    } catch {
+      // silently fail — user still sees the initial sample
+    } finally {
+      setLoadingMore(false)
+    }
+  }
+
+  const navigateToQueryData = (query: string) => {
+    const params = new URLSearchParams({ tab: 'query', q: query, mode: 'sql' })
+    router.push(`/app/projects/${issue.project_id}/data-overview?${params.toString()}`)
+  }
 
   const fixDetails: FixHistory | null = prefetchedFixHistory
     ? (prefetchedFixHistory.find(
@@ -412,6 +516,116 @@ function IssueCard({
                 <p className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded px-2 py-1 mt-2">
                   <strong>Impact:</strong> {issue.downstream_impact}
                 </p>
+              )}
+
+              {/* View affected rows toggle */}
+              {issue.affected_records > 0 && (
+                <button
+                  onClick={() => setShowSample(s => !s)}
+                  className="flex items-center gap-1.5 text-xs text-blue-600 hover:text-blue-800 font-medium mt-2"
+                >
+                  <ChevronRight className={`h-3.5 w-3.5 transition-transform ${showSample ? 'rotate-90' : ''}`} />
+                  View affected rows ({issue.affected_records.toLocaleString()})
+                </button>
+              )}
+
+              {/* Affected rows preview panel */}
+              {showSample && displayRows.length === 0 && (
+                <div className="mt-3 px-4 py-3 bg-slate-50 rounded-md text-xs text-slate-500 border space-y-2">
+                  <p>Sample data not available for this issue.</p>
+                  <div className="flex items-center gap-3 flex-wrap">
+                    {diagnosticQuery && (
+                      <button
+                        onClick={() => navigateToQueryData(diagnosticQuery)}
+                        className="text-blue-600 hover:text-blue-800 font-medium"
+                      >
+                        View affected rows in Query Data →
+                      </button>
+                    )}
+                    <button
+                      onClick={async () => {
+                        setLoadingMore(true)
+                        try {
+                          const result = await getAffectedRowsForIssue(issue.id, 5)
+                          if (result.success && result.rows.length > 0) {
+                            setExtraRows(result.rows)
+                          }
+                        } finally {
+                          setLoadingMore(false)
+                        }
+                      }}
+                      disabled={loadingMore}
+                      className="text-blue-600 hover:text-blue-800 font-medium disabled:opacity-50"
+                    >
+                      {loadingMore ? 'Loading…' : 'Load samples now'}
+                    </button>
+                  </div>
+                </div>
+              )}
+
+              {showSample && displayRows.length > 0 && (
+                <div className="mt-3 border rounded-md overflow-hidden">
+                  <div className="overflow-x-auto max-h-64 overflow-y-auto">
+                    <table className="w-full text-xs">
+                      <thead className="bg-slate-50 sticky top-0">
+                        <tr>
+                          {sampleColumns.map(col => (
+                            <th key={col} className="px-3 py-2 text-left font-medium text-slate-600 border-b whitespace-nowrap">
+                              {col}
+                              {col === fieldName && (
+                                <span className="ml-1 text-red-500">●</span>
+                              )}
+                            </th>
+                          ))}
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {displayRows.map((row, i) => (
+                          <tr key={i} className="border-b last:border-0 hover:bg-slate-50/50">
+                            {sampleColumns.map(col => (
+                              <td key={col} className={`px-3 py-1.5 font-mono ${
+                                col === fieldName ? 'text-red-700 bg-red-50/50 font-medium' : 'text-slate-700'
+                              }`}>
+                                {row[col] === null || row[col] === undefined || row[col] === ''
+                                  ? <span className="text-slate-300 italic">null</span>
+                                  : String(row[col]).length > 40
+                                    ? String(row[col]).slice(0, 40) + '…'
+                                    : String(row[col])
+                                }
+                              </td>
+                            ))}
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+
+                  <div className="px-3 py-2 bg-slate-50 border-t flex items-center justify-between gap-2">
+                    <span className="text-xs text-slate-500">
+                      Showing {displayRows.length} of {issue.affected_records.toLocaleString()} affected rows
+                    </span>
+                    <div className="flex items-center gap-3">
+                      {issue.affected_records > displayRows.length && (
+                        <button
+                          onClick={handleLoadMore}
+                          disabled={loadingMore}
+                          className="text-xs text-blue-600 hover:text-blue-800 font-medium disabled:opacity-50"
+                        >
+                          {loadingMore ? 'Loading…' : 'Load more'}
+                        </button>
+                      )}
+                      {diagnosticQuery && (
+                        <button
+                          onClick={() => navigateToQueryData(diagnosticQuery)}
+                          className="text-xs text-blue-600 hover:text-blue-800 font-medium flex items-center gap-1"
+                        >
+                          Show all in Query Data
+                          <ExternalLink className="h-3 w-3" />
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                </div>
               )}
             </div>
 

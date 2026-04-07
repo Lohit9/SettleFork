@@ -6,6 +6,7 @@ import { requireProjectPermission } from '@/lib/actions/role-resolution'
 import { validateFixSQL } from '@/lib/quality/fix-sql-validator'
 import { countFormatIssues } from '@/lib/utils/profiling'
 import { runSourceDataChecks } from '@/lib/quality/detection-engine'
+import { mapIssueKindToCondition } from '@/lib/quality/diagnostic-queries'
 import { executeCustomRules } from '@/lib/actions/validation-rules'
 import { logActivity } from '@/lib/actions/activity-log'
 import type { QualityIssue, FixHistory } from '@/lib/types/database'
@@ -748,3 +749,110 @@ async function recomputeFieldProfile(fieldId: string, tableId: string): Promise<
     { onConflict: 'field_id' }
   )
 }
+
+// ── lazy-load affected rows for a quality issue ────────────────────────────────
+
+/**
+ * Fetches affected rows for a quality issue on demand.
+ * For most issue types, delegates to the dq_field_issue_samples RPC.
+ * For orphaned_fk issues, resolves the FK reference and uses dq_orphaned_fk_samples.
+ */
+export async function getAffectedRowsForIssue(
+  issueId: string,
+  limit: number = 20,
+  offset: number = 0
+): Promise<{ success: boolean; rows: Record<string, unknown>[]; total: number; error?: string }> {
+  const supabase = await createClient()
+  const {
+    data: { user },
+  } = await supabase.auth.getUser()
+  if (!user) return { success: false, rows: [], total: 0, error: 'Not authenticated' }
+
+  const { data: issue } = await supabase
+    .from('quality_issues')
+    .select('id, project_id, table_id, field_id, issue_kind, affected_records')
+    .eq('id', issueId)
+    .single()
+
+  if (!issue) return { success: false, rows: [], total: 0, error: 'Issue not found' }
+
+  // Verify the user has access to this project
+  const perm = await requireProjectPermission(issue.project_id, 'viewer')
+  if (!perm.allowed) return { success: false, rows: [], total: 0, error: perm.error }
+
+  if (!issue.field_id || !issue.table_id) {
+    return { success: false, rows: [], total: 0, error: 'Cannot determine field context' }
+  }
+
+  const { data: field } = await supabaseAdmin
+    .from('fields')
+    .select('name, fk_reference')
+    .eq('id', issue.field_id)
+    .single()
+
+  if (!field?.name) {
+    return { success: false, rows: [], total: 0, error: 'Field not found' }
+  }
+
+  // Orphaned FK: resolve reference and use specialised RPC
+  if (issue.issue_kind === 'orphaned_fk' && field.fk_reference) {
+    const parts = field.fk_reference.split('.')
+    const refFieldName = parts[parts.length - 1]
+    const refTableName = parts[parts.length - 2]
+
+    if (refTableName && refFieldName) {
+      // Scope ref-table lookup to the same dataset as the source table
+      const { data: srcTable } = await supabaseAdmin
+        .from('tables')
+        .select('dataset_id')
+        .eq('id', issue.table_id)
+        .single()
+
+      const { data: refTable } = await supabaseAdmin
+        .from('tables')
+        .select('id')
+        .eq('name', refTableName)
+        .eq('dataset_id', srcTable?.dataset_id ?? '')
+        .maybeSingle()
+
+      if (refTable) {
+        const { data: rows, error: rpcErr } = await supabaseAdmin.rpc('dq_orphaned_fk_samples', {
+          p_table_id: issue.table_id,
+          p_field_name: field.name,
+          p_ref_table_id: refTable.id,
+          p_ref_field_name: refFieldName,
+          p_limit: limit,
+        })
+
+        if (rpcErr) {
+          return { success: false, rows: [], total: issue.affected_records ?? 0, error: rpcErr.message }
+        }
+        return {
+          success: true,
+          rows: Array.isArray(rows) ? rows : [],
+          total: issue.affected_records ?? 0,
+        }
+      }
+    }
+  }
+
+  // All other issue types: use the generic field issue samples RPC
+  const condition = mapIssueKindToCondition(issue.issue_kind)
+  const { data: rows, error: rpcErr } = await supabaseAdmin.rpc('dq_field_issue_samples', {
+    p_table_id: issue.table_id,
+    p_field_name: field.name,
+    p_condition: condition,
+    p_limit: limit,
+  })
+
+  if (rpcErr) {
+    return { success: false, rows: [], total: issue.affected_records ?? 0, error: rpcErr.message }
+  }
+
+  return {
+    success: true,
+    rows: Array.isArray(rows) ? rows : [],
+    total: issue.affected_records ?? 0,
+  }
+}
+

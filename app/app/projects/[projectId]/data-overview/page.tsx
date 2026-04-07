@@ -6,10 +6,12 @@ import DataOverviewContent from './DataOverviewContent'
 
 interface Props {
   params: Promise<{ projectId: string }>
+  searchParams: Promise<{ tab?: string; q?: string; mode?: string }>
 }
 
-export default async function DataOverviewPage({ params }: Props) {
+export default async function DataOverviewPage({ params, searchParams }: Props) {
   const { projectId } = await params
+  const { tab, q, mode } = await searchParams
   const supabase = await createClient()
 
   // Verify project ownership
@@ -42,6 +44,9 @@ export default async function DataOverviewPage({ params }: Props) {
         tables={tables}
         isArchived={isArchived}
         archivedAt={(project as { archived_at?: string | null }).archived_at ?? null}
+        initialTab={tab as 'schema' | 'preview' | 'query' | 'profiling' | undefined}
+        initialQuery={q}
+        initialQueryMode={mode as 'nl' | 'sql' | undefined}
       />
     </div>
   )

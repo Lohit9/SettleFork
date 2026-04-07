@@ -23,10 +23,22 @@ interface DataOverviewContentProps {
   tables: TableOption[]
   isArchived?: boolean
   archivedAt?: string | null
+  initialTab?: TabId
+  initialQuery?: string
+  initialQueryMode?: 'nl' | 'sql'
 }
 
-export default function DataOverviewContent({ projectId, schema, tables, isArchived = false, archivedAt }: DataOverviewContentProps) {
-  const [activeTab, setActiveTab] = useState<TabId>('schema')
+export default function DataOverviewContent({
+  projectId,
+  schema,
+  tables,
+  isArchived = false,
+  archivedAt,
+  initialTab,
+  initialQuery,
+  initialQueryMode,
+}: DataOverviewContentProps) {
+  const [activeTab, setActiveTab] = useState<TabId>(initialTab ?? 'schema')
 
   return (
     <div className="flex flex-col flex-1 min-h-0">
@@ -63,7 +75,15 @@ export default function DataOverviewContent({ projectId, schema, tables, isArchi
           />
         )}
         {activeTab === 'preview' && <DataPreview projectId={projectId} tables={tables} isArchived={isArchived} archivedAt={archivedAt} />}
-        {activeTab === 'query' && <QueryData projectId={projectId} tables={tables} isArchived={isArchived} />}
+        {activeTab === 'query' && (
+          <QueryData
+            projectId={projectId}
+            tables={tables}
+            isArchived={isArchived}
+            initialQuery={initialQuery}
+            initialMode={initialQueryMode}
+          />
+        )}
         {activeTab === 'profiling' && <DataProfiling tables={tables} isArchived={isArchived} />}
       </div>
     </div>
