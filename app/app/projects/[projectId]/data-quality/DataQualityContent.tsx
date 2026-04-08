@@ -249,7 +249,7 @@ function IssueCard({
 
     // Try the typed builder first
     if (issue.issue_kind && tbl && fld) {
-      return buildDiagnosticQuery({ table_id: issue.table_id ?? '', field_name: fld, issue_kind: issue.issue_kind, tableName: tbl })
+      return buildDiagnosticQuery({ field_name: fld, issue_kind: issue.issue_kind, tableName: tbl })
     }
 
     // Fallback: derive query from title/description when issue_kind is missing
