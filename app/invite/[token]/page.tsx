@@ -15,7 +15,7 @@ export default async function InvitePage({ params }: Props) {
   const supabase = await createClient()
   const { data: { user } } = await supabase.auth.getUser()
 
-  // Server-side check: does this email already have a Mine account?
+  // Server-side check: does this email already have a Settle account?
   // Done server-side to avoid exposing user existence to the public via client calls.
   let emailExists = false
   if (invite && !user) {
@@ -87,7 +87,7 @@ function Shell({ children }: { children: React.ReactNode }) {
       <div className="w-full max-w-md">
         <div className="mb-8 flex justify-center">
           <a href="/">
-            <img src="/Mine Logo no background.png" alt="Mine" className="h-10 w-auto" />
+            <img src="/images/logos/settle-logo-full.svg" alt="Settle" className="h-8 w-auto" />
           </a>
         </div>
         <div className="bg-white border border-gray-200 rounded-xl shadow-sm p-6">

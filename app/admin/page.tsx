@@ -68,7 +68,7 @@ export default async function AdminPage() {
       <header className="bg-white border-b border-gray-200 px-6 py-3">
         <div className="max-w-5xl mx-auto flex items-center gap-3">
           <Link href="/">
-            <img src="/Mine Logo no background.png" alt="Mine" className="h-7 w-auto" />
+            <img src="/images/logos/settle-logo-full.svg" alt="Settle" className="h-7 w-auto" />
           </Link>
           <span className="text-xs font-semibold bg-purple-100 text-purple-700 px-2 py-0.5 rounded-full">
             Admin

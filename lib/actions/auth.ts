@@ -11,7 +11,7 @@ import { Resend } from 'resend'
 import { adminSignupEmail, welcomeEmail } from '@/lib/email/templates'
 
 const resend = new Resend(process.env.RESEND_API_KEY)
-const APP_URL = process.env.NEXT_PUBLIC_APP_URL ?? 'https://trymine.ai'
+const APP_URL = process.env.NEXT_PUBLIC_APP_URL ?? 'https://usesettle.ai'
 
 export async function signOut() {
   const supabase = await createClient()
@@ -163,9 +163,9 @@ export async function signUpWithBotProtection(payload: SignUpPayload): Promise<S
     })
 
     resend.emails.send({
-      from: 'Mine Notifications <info@trymine.ai>',
-      to: 'info@trymine.ai',
-      replyTo: 'info@trymine.ai',
+      from: 'Settle Notifications <info@usesettle.ai>',
+      to: 'info@usesettle.ai',
+      replyTo: 'info@usesettle.ai',
       subject: adminSubject,
       html: adminHtml,
     }).catch((err) => console.error('Signup notification email failed (non-blocking):', err))
@@ -179,9 +179,9 @@ export async function signUpWithBotProtection(payload: SignUpPayload): Promise<S
       const { subject: welcomeSubject, html: welcomeHtml } = welcomeEmail(firstName, resolvedOrgName)
 
       resend.emails.send({
-        from: 'Kaan from Mine <info@trymine.ai>',
+        from: 'Kaan from Settle <info@usesettle.ai>',
         to: payload.email,
-        replyTo: 'info@trymine.ai',
+        replyTo: 'info@usesettle.ai',
         subject: welcomeSubject,
         html: welcomeHtml,
       }).catch((err) => console.error('Welcome email failed (non-blocking):', err))

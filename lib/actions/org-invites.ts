@@ -9,7 +9,7 @@ import { Resend } from 'resend'
 import { orgInviteEmail } from '@/lib/email/templates'
 
 const resend = new Resend(process.env.RESEND_API_KEY)
-const APP_URL = process.env.NEXT_PUBLIC_APP_URL ?? 'https://trymine.ai'
+const APP_URL = process.env.NEXT_PUBLIC_APP_URL ?? 'https://usesettle.ai'
 
 export async function createOrgInvite(
   orgId: string,
@@ -76,9 +76,9 @@ export async function createOrgInvite(
   })
 
   resend.emails.send({
-    from: 'Kaan from Mine <info@trymine.ai>',
+    from: 'Kaan from Settle <info@usesettle.ai>',
     to: email.trim().toLowerCase(),
-    replyTo: 'info@trymine.ai',
+    replyTo: 'info@usesettle.ai',
     subject,
     html,
   }).catch((err) => console.error('[createOrgInvite] Email send failed:', err))
@@ -139,7 +139,7 @@ export async function adminCreateOrgInvite(
     .eq('id', orgId)
     .single()
 
-  const inviterName = user.user_metadata?.full_name || user.email || 'Mine Admin'
+  const inviterName = user.user_metadata?.full_name || user.email || 'Settle Admin'
   const { subject, html } = orgInviteEmail({
     orgName: org?.name ?? 'your team',
     role,
@@ -149,9 +149,9 @@ export async function adminCreateOrgInvite(
   })
 
   resend.emails.send({
-    from: 'Kaan from Mine <info@trymine.ai>',
+    from: 'Kaan from Settle <info@usesettle.ai>',
     to: email.trim().toLowerCase(),
-    replyTo: 'info@trymine.ai',
+    replyTo: 'info@usesettle.ai',
     subject,
     html,
   }).catch((err) => console.error('[adminCreateOrgInvite] Email send failed:', err))

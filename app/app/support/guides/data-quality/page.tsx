@@ -62,7 +62,7 @@ export default function DataQualityGuidePage() {
             <div>
               <h1 className="text-2xl font-semibold text-gray-900">Data quality &amp; validation</h1>
               <p className="text-sm text-gray-500 mt-1">
-                Understand how Mine finds issues, suggests fixes, and tracks your migration readiness
+                Understand how Settle finds issues, suggests fixes, and tracks your migration readiness
               </p>
             </div>
           </div>
@@ -110,7 +110,7 @@ export default function DataQualityGuidePage() {
                 <h2 className="text-lg font-medium text-gray-900">Source vs. In-flight vs. Target validation</h2>
               </div>
               <p className="text-sm text-gray-600 leading-relaxed max-w-2xl">
-                Mine validates your data at three stages, each shown in its own tab:
+                Settle validates your data at three stages, each shown in its own tab:
               </p>
               <BulletList items={[
                 <><strong>Source Data</strong> — issues in your raw uploaded data before any transformation. Examples: null primary keys, duplicate IDs, invalid email formats, inconsistent date formats.</>,
@@ -118,8 +118,8 @@ export default function DataQualityGuidePage() {
                 <><strong>Target Data</strong> — post-load reconciliation checks (coming in a future release).</>,
               ]} />
               <Tip>
-                In-flight validation is Mine&apos;s biggest differentiator. Most tools only check source
-                data. Mine checks whether your data will actually survive the load into the target
+                In-flight validation is Settle&apos;s biggest differentiator. Most tools only check source
+                data. Settle checks whether your data will actually survive the load into the target
                 system — catching issues that would otherwise surface as load failures.
               </Tip>
             </div>
@@ -159,11 +159,11 @@ export default function DataQualityGuidePage() {
                 <h2 className="text-lg font-medium text-gray-900">Custom validation rules</h2>
               </div>
               <p className="text-sm text-gray-600 leading-relaxed max-w-2xl">
-                Click <strong>+ Add Rule</strong> to define your own validation rules beyond Mine&apos;s
+                Click <strong>+ Add Rule</strong> to define your own validation rules beyond Settle&apos;s
                 built-in checks. Two modes:
               </p>
               <BulletList items={[
-                'Natural Language — describe the rule in plain English (e.g., "Revenue should never be negative") and Mine generates the validation logic',
+                'Natural Language — describe the rule in plain English (e.g., "Revenue should never be negative") and Settle generates the validation logic',
                 'Manual — select a rule type (Not Null, Min Value, Max Value, Pattern, etc.) and configure parameters directly',
               ]} />
               <p className="text-sm text-gray-600 leading-relaxed max-w-2xl mt-3">
@@ -179,7 +179,7 @@ export default function DataQualityGuidePage() {
                 <h2 className="text-lg font-medium text-gray-900">Fix History and reverting changes</h2>
               </div>
               <p className="text-sm text-gray-600 leading-relaxed max-w-2xl">
-                Every fix Mine applies is tracked in the <strong>Fix History</strong> panel (top-right
+                Every fix Settle applies is tracked in the <strong>Fix History</strong> panel (top-right
                 button on the Validate page). Each entry shows:
               </p>
               <BulletList items={[
@@ -189,7 +189,7 @@ export default function DataQualityGuidePage() {
                 'A Revert option that restores the exact original values',
               ]} />
               <p className="text-sm text-gray-600 leading-relaxed max-w-2xl mt-3">
-                Mine snapshots every affected row before applying a fix. Reverting restores the
+                Settle snapshots every affected row before applying a fix. Reverting restores the
                 complete pre-fix state — not an approximation.
               </p>
             </div>

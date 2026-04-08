@@ -12,7 +12,8 @@ export default async function OrganizationSettingsPage() {
   if (!user) redirect('/login')
 
   const cookieStore = await cookies()
-  const activeOrgId = cookieStore.get('mine-active-org')?.value
+  const activeOrgId = cookieStore.get('settle-active-org')?.value
+    ?? cookieStore.get('mine-active-org')?.value
 
   // Get all user memberships to resolve active org
   const { data: memberships } = await supabase

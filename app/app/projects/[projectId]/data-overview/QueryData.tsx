@@ -240,7 +240,7 @@ export default function QueryData({ projectId, tables, isArchived = false, initi
                   onClick={() => handleModeChange('nl')}
                   className={`px-3 py-1.5 text-xs font-medium transition-colors ${
                     mode === 'nl'
-                      ? 'bg-blue-600 text-white'
+                      ? 'bg-[#2358D4] text-white'
                       : 'bg-white text-gray-600 hover:bg-gray-50'
                   }`}
                 >
@@ -250,7 +250,7 @@ export default function QueryData({ projectId, tables, isArchived = false, initi
                   onClick={() => handleModeChange('sql')}
                   className={`px-3 py-1.5 text-xs font-medium transition-colors border-l border-gray-200 ${
                     mode === 'sql'
-                      ? 'bg-blue-600 text-white'
+                      ? 'bg-[#2358D4] text-white'
                       : 'bg-white text-gray-600 hover:bg-gray-50'
                   }`}
                 >
@@ -307,7 +307,7 @@ export default function QueryData({ projectId, tables, isArchived = false, initi
               <button
                 onClick={handleExecute}
                 disabled={loading || !input.trim() || tables.length === 0}
-                className="mt-3 px-4 py-2 text-sm font-medium text-white bg-blue-600 rounded-lg hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2"
+                className="mt-3 px-4 py-2 text-sm font-medium text-white bg-[#2358D4] rounded-lg hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2"
               >
                 {loading ? (
                   <>
@@ -611,7 +611,7 @@ export default function QueryData({ projectId, tables, isArchived = false, initi
                             onClick={() => setResultsPage(p)}
                             className={`px-2 py-1 rounded border ${
                               p === resultsPage
-                                ? 'bg-blue-600 text-white border-blue-600'
+                                ? 'bg-[#2358D4] text-white border-blue-600'
                                 : 'border-gray-200 hover:bg-gray-50'
                             }`}
                           >

@@ -96,7 +96,7 @@ export default async function SettingsPage() {
             <div className="border-t border-gray-100 pt-4 grid grid-cols-2 gap-x-8 gap-y-4">
               <div>
                 <p className="text-xs text-gray-500 mb-0.5">Organization</p>
-                <p className="text-sm text-gray-900">Mine (Personal)</p>
+                <p className="text-sm text-gray-900">Settle (Personal)</p>
               </div>
               <div>
                 <p className="text-xs text-gray-500 mb-0.5">Account created</p>
@@ -143,7 +143,7 @@ export default async function SettingsPage() {
                 </span>
               </div>
               <p className="text-sm text-gray-500">
-                Generate API keys to integrate Mine with your CI/CD pipeline or custom tooling. API
+                Generate API keys to integrate Settle with your CI/CD pipeline or custom tooling. API
                 access will be available in a future release.
               </p>
             </div>

@@ -1,6 +1,6 @@
-# Mine — AI-Native Data Migration Platform
+# Settle — AI-Native Data Migration Platform
 # Architecture: Next.js App Router + Supabase (auth, DB, storage) + Claude API
-# Deployed on Vercel at trymine.ai
+# Deployed on Vercel at usesettle.ai
 
 ## Stack Rules
 - Next.js App Router with Server Components by default, 'use client' only when needed

@@ -1175,7 +1175,7 @@ export default function TransformContent({ projectId, projectName, initialData, 
       {toast && (
         <div className={`fixed bottom-6 right-6 z-50 px-4 py-3 rounded-lg shadow-lg text-sm font-medium max-w-sm ${
           toast.type === 'success' ? 'bg-green-600 text-white'
-          : toast.type === 'info' ? 'bg-blue-600 text-white'
+          : toast.type === 'info' ? 'bg-[#2358D4] text-white'
           : 'bg-red-600 text-white'
         }`}>
           {toast.message}
@@ -1207,7 +1207,7 @@ export default function TransformContent({ projectId, projectName, initialData, 
           <RoleTooltip allowed={canEdit} requiredRole="Editor">
             <Button
               size="sm"
-              className="bg-blue-600 hover:bg-blue-700 text-white gap-2"
+              className="bg-[#2358D4] hover:bg-blue-700 text-white gap-2"
               onClick={handleStageAll}
               disabled={isStaging || isAutoGen || isCheckingIssues || !canEdit}
             >
@@ -1539,7 +1539,7 @@ export default function TransformContent({ projectId, projectName, initialData, 
                       </RoleTooltip>
                       <RoleTooltip allowed={canEdit} requiredRole="Editor">
                         <Button
-                          className="bg-blue-600 hover:bg-blue-700 text-white gap-2"
+                          className="bg-[#2358D4] hover:bg-blue-700 text-white gap-2"
                           onClick={handleUnmappedGenerate}
                           disabled={unmappedGenerating || unmappedSuggesting || !unmappedDescription.trim() || !canEdit}
                         >
@@ -1637,7 +1637,7 @@ export default function TransformContent({ projectId, projectName, initialData, 
                   <div className="flex-shrink-0 z-10 border-t border-gray-200 bg-white px-4 py-3 flex items-center gap-3 shadow-[0_-2px_8px_rgba(0,0,0,0.06)]">
                     <RoleTooltip allowed={canEdit} requiredRole="Editor">
                       <Button
-                        className="bg-blue-600 hover:bg-blue-700 text-white gap-2 flex-1"
+                        className="bg-[#2358D4] hover:bg-blue-700 text-white gap-2 flex-1"
                         onClick={handleUnmappedSave}
                         disabled={unmappedSaving || !canEdit}
                       >
@@ -1666,7 +1666,7 @@ export default function TransformContent({ projectId, projectName, initialData, 
                     {stagingError && <p className="text-xs text-red-600 max-w-xs text-right">{stagingError}</p>}
                     <RoleTooltip allowed={canEdit} requiredRole="Editor">
                       <Button
-                        className="bg-blue-600 hover:bg-blue-700 text-white disabled:opacity-60"
+                        className="bg-[#2358D4] hover:bg-blue-700 text-white disabled:opacity-60"
                         disabled={isStaging || !canEdit}
                         onClick={() => {
                           setStagingError(null)
@@ -1801,7 +1801,7 @@ export default function TransformContent({ projectId, projectName, initialData, 
                           onClick={() => setInputMode('ai')}
                           className={`px-2.5 py-1 text-xs font-medium transition-colors ${
                             inputMode === 'ai'
-                              ? 'bg-blue-600 text-white'
+                              ? 'bg-[#2358D4] text-white'
                               : 'bg-white text-gray-600 hover:bg-gray-50'
                           }`}
                         >
@@ -1815,7 +1815,7 @@ export default function TransformContent({ projectId, projectName, initialData, 
                           }}
                           className={`px-2.5 py-1 text-xs font-medium border-l border-gray-200 transition-colors ${
                             inputMode === 'sql'
-                              ? 'bg-blue-600 text-white'
+                              ? 'bg-[#2358D4] text-white'
                               : 'bg-white text-gray-600 hover:bg-gray-50'
                           }`}
                         >
@@ -1885,7 +1885,7 @@ export default function TransformContent({ projectId, projectName, initialData, 
                           </RoleTooltip>
                           <RoleTooltip allowed={canEdit} requiredRole="Editor">
                             <Button
-                              className="bg-blue-600 hover:bg-blue-700 text-white gap-2"
+                              className="bg-[#2358D4] hover:bg-blue-700 text-white gap-2"
                               onClick={handleGenerate}
                               disabled={isGenerating || isSuggesting || !canEdit}
                             >
@@ -2515,7 +2515,7 @@ export default function TransformContent({ projectId, projectName, initialData, 
                     {/* Apply Transform — only enabled after successful test */}
                     <RoleTooltip allowed={canEdit} requiredRole="Editor">
                       <Button
-                        className="bg-blue-600 hover:bg-blue-700 text-white gap-2 px-6 disabled:opacity-50 disabled:cursor-not-allowed"
+                        className="bg-[#2358D4] hover:bg-blue-700 text-white gap-2 px-6 disabled:opacity-50 disabled:cursor-not-allowed"
                         onClick={handleApply}
                         disabled={isApplying || isCheckingIssues || !localTransform?.transformationId || localTransform.status !== 'tested' || !canEdit}
                         title={localTransform.status !== 'tested' ? 'Run "Test Transform" first' : undefined}
@@ -2565,7 +2565,7 @@ export default function TransformContent({ projectId, projectName, initialData, 
               )}
               <RoleTooltip allowed={canEdit} requiredRole="Editor">
                 <Button
-                  className="bg-blue-600 hover:bg-blue-700 text-white disabled:opacity-60"
+                  className="bg-[#2358D4] hover:bg-blue-700 text-white disabled:opacity-60"
                   disabled={isStaging || !canEdit}
                   onClick={() => {
                     setStagingError(null)
@@ -2660,7 +2660,7 @@ export default function TransformContent({ projectId, projectName, initialData, 
             </div>
             <div className="flex gap-3 justify-end">
               <Button variant="outline" size="sm" onClick={() => setShowReplaceConfirm(null)}>Keep current</Button>
-              <Button size="sm" className="bg-blue-600 hover:bg-blue-700 text-white" onClick={applyReplaceConfirm}>
+              <Button size="sm" className="bg-[#2358D4] hover:bg-blue-700 text-white" onClick={applyReplaceConfirm}>
                 Use suggestion
               </Button>
             </div>

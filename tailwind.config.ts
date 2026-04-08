@@ -13,14 +13,14 @@ const config: Config = {
         mono: ['var(--font-jetbrains-mono)', '"JetBrains Mono"', '"Fira Code"', 'monospace'],
       },
       colors: {
-        mine: {
+        settle: {
           blue: {
             50: '#EFF6FF',
             100: '#DBEAFE',
             200: '#BFDBFE',
             400: '#60A5FA',
-            500: '#3B82F6',
-            600: '#2563EB',
+            500: '#2358D4',
+            600: '#2358D4',
             700: '#1D4ED8',
             900: '#1E3A5F',
           },

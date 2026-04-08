@@ -5,7 +5,7 @@ import { supabaseAdmin } from '@/lib/supabase/admin'
 import { requireProjectPermission } from '@/lib/actions/role-resolution'
 import { Field } from '@/lib/types/database'
 import { countFormatIssues } from '@/lib/utils/profiling'
-import { inferBasicType } from '@/lib/actions/ddl-upload'
+import { inferBasicType } from '@/lib/utils/infer-basic-type'
 
 type FieldUpdates = {
   name?: string

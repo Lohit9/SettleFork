@@ -59,7 +59,7 @@ function LoginContent() {
 
   return (
     <AuthCard
-      title="Sign in to Mine"
+      title="Sign in to Settle"
       subtitle="Access your data migration projects"
       footer={{
         text: "Don't have an account?",
@@ -123,7 +123,7 @@ export default function LoginPage() {
   return (
     <Suspense
       fallback={
-        <AuthCard title="Sign in to Mine" subtitle="Loading...">
+        <AuthCard title="Sign in to Settle" subtitle="Loading...">
           <div className="text-center">
             <div className="mb-4 h-8 w-8 animate-spin rounded-full border-4 border-blue-600 border-t-transparent mx-auto"></div>
           </div>

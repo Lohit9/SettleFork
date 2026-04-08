@@ -6,9 +6,13 @@ const dmSans = DM_Sans({ subsets: ['latin'], variable: '--font-dm-sans' })
 const jetbrainsMono = JetBrains_Mono({ subsets: ['latin'], variable: '--font-jetbrains-mono' })
 
 export const metadata: Metadata = {
-  title: 'Mine - AI-Native Data Migration Automation',
-  description: 'The autonomous engine for your data migration. Cut time and cost by 40–50% while reducing go-live risk.',
+  title: 'Settle — AI-Native Data Migration Platform',
+  description: 'Settle automates enterprise data migration. AI agents profile schemas, map fields, generate transformations, and validate data quality — cutting time and cost by 40–50%.',
   viewport: 'width=device-width, initial-scale=1',
+  icons: {
+    icon: '/images/logos/settle-logo-mark-dark.png',
+    apple: '/images/logos/settle-logo-mark-dark.png',
+  },
 }
 
 export default function RootLayout({

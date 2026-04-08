@@ -1,4 +1,4 @@
-# MINE Authentication System
+# Settle Authentication System
 
 Production-grade authentication system using Supabase Auth with Next.js App Router.
 
@@ -43,16 +43,16 @@ In your Supabase Dashboard → Authentication → URL Configuration:
 
 **Site URL:**
 - Local: `http://localhost:3000`
-- Production: `https://www.trymine.ai`
+- Production: `https://www.usesettle.ai`
 
 **Redirect URLs:**
 Add these redirect URLs:
 - `http://localhost:3000/api/auth/callback`
-- `https://www.trymine.ai/api/auth/callback`
+- `https://www.usesettle.ai/api/auth/callback`
 - `http://localhost:3000/reset-password`
-- `https://www.trymine.ai/reset-password`
+- `https://www.usesettle.ai/reset-password`
 - `http://localhost:3000/verify-email`
-- `https://www.trymine.ai/verify-email`
+- `https://www.usesettle.ai/verify-email`
 
 ### 3. Enable Email Verification
 

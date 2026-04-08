@@ -130,10 +130,10 @@ function decisionIcon(type: string) {
 function decisionDotColor(type: string) {
   switch (type) {
     case 'fix': return 'bg-green-500'
-    case 'mapping': return 'bg-blue-500'
+    case 'mapping': return 'bg-[#2358D4]'
     case 'transform': return 'bg-purple-500'
     case 'validation': return 'bg-amber-500'
-    case 'data': return 'bg-blue-500'
+    case 'data': return 'bg-[#2358D4]'
     case 'system': return 'bg-gray-500'
     default: return 'bg-gray-400'
   }
@@ -780,7 +780,7 @@ export default function OutputsContent({ projectId, projectName, initialData, is
             {/* Mapping Coverage */}
             <div className="rounded-xl border border-gray-200 bg-white p-5">
               <div className="flex items-center gap-1.5 mb-2">
-                <span className="w-2 h-2 rounded-full bg-blue-500 flex-shrink-0" />
+                <span className="w-2 h-2 rounded-full bg-[#2358D4] flex-shrink-0" />
                 <p className="text-xs font-medium text-gray-500 uppercase tracking-wide">Mapping Coverage</p>
               </div>
               <div className="flex items-baseline gap-1">
@@ -788,7 +788,7 @@ export default function OutputsContent({ projectId, projectName, initialData, is
                 <span className="text-sm text-gray-400">/ {metrics.totalSourceFields}</span>
               </div>
               <div className="mt-2 h-1.5 bg-gray-100 rounded-full overflow-hidden">
-                <div className="h-full bg-blue-500 rounded-full" style={{ width: `${metrics.totalSourceFields > 0 ? Math.round((metrics.approvedFieldMappings / metrics.totalSourceFields) * 100) : 0}%` }} />
+                <div className="h-full bg-[#2358D4] rounded-full" style={{ width: `${metrics.totalSourceFields > 0 ? Math.round((metrics.approvedFieldMappings / metrics.totalSourceFields) * 100) : 0}%` }} />
               </div>
             </div>
 
@@ -961,7 +961,7 @@ export default function OutputsContent({ projectId, projectName, initialData, is
                         onClick={() => setDecisionsTypeFilter(tab.key)}
                         className={`px-2.5 py-1 rounded-full text-xs font-medium transition-colors ${
                           decisionsTypeFilter === tab.key
-                            ? 'bg-blue-600 text-white'
+                            ? 'bg-[#2358D4] text-white'
                             : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
                         }`}
                       >
@@ -1075,7 +1075,7 @@ export default function OutputsContent({ projectId, projectName, initialData, is
                 {executionPackage.status === 'idle' && !isArchived && (
                   <RoleTooltip allowed={canEdit} requiredRole="Editor">
                     <Button
-                      className="bg-blue-600 hover:bg-blue-700 text-white gap-2"
+                      className="bg-[#2358D4] hover:bg-blue-700 text-white gap-2"
                       onClick={handleGenerateExecutionPackage}
                       disabled={!data.hasMappings || !canEdit}
                     >
@@ -1117,7 +1117,7 @@ export default function OutputsContent({ projectId, projectName, initialData, is
                       )}
                     </div>
                     <div className="flex items-center gap-3 flex-wrap">
-                      <Button className="bg-blue-600 hover:bg-blue-700 text-white gap-2" onClick={handleDownloadExecutionPackage}>
+                      <Button className="bg-[#2358D4] hover:bg-blue-700 text-white gap-2" onClick={handleDownloadExecutionPackage}>
                         <Download className="w-4 h-4" />
                         Download .sql
                       </Button>
@@ -1160,7 +1160,7 @@ export default function OutputsContent({ projectId, projectName, initialData, is
                 {compartmentalized.status === 'idle' && !isArchived && (
                   <RoleTooltip allowed={canEdit} requiredRole="Editor">
                     <Button
-                      className="bg-blue-600 hover:bg-blue-700 text-white gap-2"
+                      className="bg-[#2358D4] hover:bg-blue-700 text-white gap-2"
                       onClick={handleGenerateExecutionPackage}
                       disabled={!data.hasMappings || !canEdit}
                     >
@@ -1221,7 +1221,7 @@ export default function OutputsContent({ projectId, projectName, initialData, is
                             Download Selected ({selectedFiles.size})
                           </Button>
                         )}
-                        <Button className="bg-blue-600 hover:bg-blue-700 text-white gap-2" size="sm" onClick={handleDownloadZip}>
+                        <Button className="bg-[#2358D4] hover:bg-blue-700 text-white gap-2" size="sm" onClick={handleDownloadZip}>
                           <Download className="w-4 h-4" />
                           Download All (ZIP)
                         </Button>
@@ -1401,7 +1401,7 @@ export default function OutputsContent({ projectId, projectName, initialData, is
                 {!isArchived && (
                   <RoleTooltip allowed={canEdit} requiredRole="Editor">
                     <Button
-                      className="bg-blue-600 hover:bg-blue-700 text-white gap-2 ml-auto"
+                      className="bg-[#2358D4] hover:bg-blue-700 text-white gap-2 ml-auto"
                       onClick={handleGenerateGold}
                       disabled={isGeneratingGold || !canGenerateGold || !canEdit}
                     >

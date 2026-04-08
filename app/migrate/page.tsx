@@ -9,10 +9,10 @@ import MigrationDirectory from '@/components/migrate/MigrationDirectory'
 export const revalidate = 3600
 
 export const metadata: Metadata = {
-  title: 'Data Migration Paths | Mine',
+  title: 'Data Migration Paths | Settle',
   description:
-    'Explore automated migration paths for SAP, Oracle, NetSuite, Salesforce, and more. AI-powered schema mapping and validation.',
-  alternates: { canonical: 'https://trymine.ai/migrate' },
+    'Explore Settle\'s automated migration paths for SAP, Oracle, NetSuite, Salesforce, and more. AI-powered schema mapping and validation.',
+  alternates: { canonical: 'https://usesettle.ai/migrate' },
 }
 
 interface MigrationPageRow {
@@ -49,11 +49,11 @@ export default async function MigrateIndexPage() {
       <main>
         {/* ── Hero ─────────────────────────────────────────────── */}
         <section className="max-w-2xl mx-auto py-12 px-6 text-center">
-          <h1 className="text-4xl font-bold text-mine-slate-900 tracking-tight mb-4">
+          <h1 className="text-4xl font-bold text-settle-slate-900 tracking-tight mb-4">
             Data Migration Paths
           </h1>
-          <p className="text-lg text-mine-slate-500 leading-relaxed">
-            Explore Mine's automated migration paths across enterprise systems. Filter by source or target to find yours.
+          <p className="text-lg text-settle-slate-500 leading-relaxed">
+            Explore Settle's automated migration paths across enterprise systems. Filter by source or target to find yours.
           </p>
         </section>
 
@@ -62,15 +62,15 @@ export default async function MigrateIndexPage() {
 
         {/* ── Bottom CTA ───────────────────────────────────────── */}
         <section className="py-12 px-6 text-center">
-          <p className="text-lg font-medium text-mine-slate-700">
+          <p className="text-lg font-medium text-settle-slate-700">
             Don't see your migration path?
           </p>
-          <p className="text-sm text-mine-slate-500 mt-2">
-            Mine supports any source-to-target combination. Tell us about your migration.
+          <p className="text-sm text-settle-slate-500 mt-2">
+            Settle supports any source-to-target combination. Tell us about your migration.
           </p>
           <Link
             href="/request-access?ref=assessment"
-            className="inline-block bg-mine-blue-600 hover:bg-mine-blue-700 text-white text-sm font-semibold px-6 py-3 rounded-lg transition-all hover:-translate-y-0.5 hover:shadow-lg hover:shadow-blue-600/25 mt-4"
+            className="inline-block bg-settle-blue-600 hover:bg-settle-blue-700 text-white text-sm font-semibold px-6 py-3 rounded-lg transition-all hover:-translate-y-0.5 hover:shadow-lg hover:shadow-blue-600/25 mt-4"
           >
             Get Your Free Assessment
           </Link>

@@ -110,9 +110,9 @@ function MFAChallengeContent() {
         <div className="mb-8 flex justify-center">
           <Link href="/">
             <img
-              src="/Mine Logo no background.png"
-              alt="Mine"
-              className="h-10 w-auto"
+              src="/images/logos/settle-logo-full.svg"
+              alt="Settle"
+              className="h-8 w-auto"
             />
           </Link>
         </div>

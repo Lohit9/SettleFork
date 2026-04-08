@@ -6,7 +6,7 @@ import Link from 'next/link'
 import { submitAccessRequest } from '@/lib/actions/invites'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 
-const CALENDLY = process.env.NEXT_PUBLIC_CALENDLY_SCOPING_URL || 'https://calendly.com/mine-ai/migration-scoping-call'
+const CALENDLY = process.env.NEXT_PUBLIC_CALENDLY_SCOPING_URL || 'https://calendly.com/settle-ai/migration-scoping-call'
 
 const ROLE_OPTIONS = [
   { value: '', label: 'Select one…' },
@@ -78,7 +78,7 @@ export default function RequestAccessForm() {
       })
 
       if (!result.success) {
-        setError(result.error ?? 'Something went wrong. Please try again or email us at kaan@trymine.ai')
+        setError(result.error ?? 'Something went wrong. Please try again or email us at kaan@usesettle.ai')
         return
       }
 
@@ -93,7 +93,7 @@ export default function RequestAccessForm() {
       <div className="min-h-screen bg-gray-50 flex items-center justify-center px-4 py-16">
         <div className="w-full max-w-md text-center">
           <Link href="/" className="inline-block mb-8">
-            <img src="/Mine Logo no background.png" alt="Mine" className="h-10 w-auto mx-auto" />
+            <img src="/images/logos/settle-logo-full.svg" alt="Settle" className="h-8 w-auto mx-auto" />
           </Link>
 
           <div className="bg-white rounded-2xl border border-gray-200 shadow-sm p-10">
@@ -117,7 +117,7 @@ export default function RequestAccessForm() {
                 href={CALENDLY}
                 target="_blank"
                 rel="noopener noreferrer"
-                className="block w-full bg-[#2563EB] hover:bg-[#1D4ED8] text-white font-semibold py-3 rounded-xl transition-all text-sm text-center mb-3"
+                className="block w-full bg-[#2358D4] hover:bg-[#1D4ED8] text-white font-semibold py-3 rounded-xl transition-all text-sm text-center mb-3"
               >
                 Book a Call
               </a>
@@ -135,7 +135,7 @@ export default function RequestAccessForm() {
     <div className="min-h-screen bg-gray-50 flex items-center justify-center px-4 py-16">
       <div className="w-full max-w-lg">
         <Link href="/" className="inline-block mb-8">
-          <img src="/Mine Logo no background.png" alt="Mine" className="h-10 w-auto mx-auto" />
+          <img src="/images/logos/settle-logo-full.svg" alt="Settle" className="h-8 w-auto mx-auto" />
         </Link>
 
         <div className="bg-white rounded-2xl border border-gray-200 shadow-sm p-8 lg:p-10">
@@ -232,7 +232,7 @@ export default function RequestAccessForm() {
             <button
               type="submit"
               disabled={isPending}
-              className="w-full bg-[#2563EB] hover:bg-[#1D4ED8] disabled:opacity-60 text-white font-semibold py-3.5 rounded-xl transition-all text-sm mt-2"
+              className="w-full bg-[#2358D4] hover:bg-[#1D4ED8] disabled:opacity-60 text-white font-semibold py-3.5 rounded-xl transition-all text-sm mt-2"
             >
               {isPending ? 'Submitting…' : 'Request Access'}
             </button>

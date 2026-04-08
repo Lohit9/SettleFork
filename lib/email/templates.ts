@@ -1,12 +1,12 @@
 /**
- * Shared email templates for Mine.
+ * Shared email templates for Settle.
  * All emails use emailLayout() for consistent branding.
  * Admin notifications use adminEmailLayout() for data-table style.
  */
 
-const APP_URL = process.env.NEXT_PUBLIC_APP_URL ?? 'https://trymine.ai'
+const APP_URL = process.env.NEXT_PUBLIC_APP_URL ?? 'https://usesettle.ai'
 const CALENDLY_SCOPING =
-  process.env.NEXT_PUBLIC_CALENDLY_SCOPING_URL ?? 'https://calendly.com/mine-ai/migration-scoping-call'
+  process.env.NEXT_PUBLIC_CALENDLY_SCOPING_URL ?? 'https://calendly.com/settle-ai/migration-scoping-call'
 
 // ── Shared layout ─────────────────────────────────────────────────────────────
 
@@ -31,7 +31,7 @@ export function emailLayout({
   signOff,
   showFooter = true,
 }: LayoutOptions): string {
-  const defaultSignOff: SignOff = { name: 'Kaan Dincer', title: 'Founder & CEO, Mine' }
+  const defaultSignOff: SignOff = { name: 'Kaan Dincer', title: 'Founder & CEO, Settle' }
   const resolvedSignOff = signOff === null ? null : (signOff ?? defaultSignOff)
 
   return `<!DOCTYPE html>
@@ -39,7 +39,7 @@ export function emailLayout({
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Mine</title>
+  <title>Settle</title>
 </head>
 <body style="margin:0;padding:0;background-color:#f8fafc;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;">
   <table width="100%" cellpadding="0" cellspacing="0" style="background-color:#f8fafc;padding:40px 20px;">
@@ -49,10 +49,14 @@ export function emailLayout({
         <!-- Logo header -->
         <tr><td style="padding-bottom:24px;">
           <table cellpadding="0" cellspacing="0"><tr>
-            <td style="width:28px;height:28px;background:#2563EB;border-radius:6px;text-align:center;vertical-align:middle;">
-              <span style="color:white;font-weight:700;font-size:16px;line-height:28px;">M</span>
+            <td style="vertical-align:middle;">
+              <svg width="32" height="26" viewBox="0 0 32 26" xmlns="http://www.w3.org/2000/svg">
+                <rect x="0" y="0"  width="22" height="5" rx="2" fill="#1E293B" fill-opacity="0.3"/>
+                <rect x="3" y="10" width="22" height="5" rx="2" fill="#1E293B" fill-opacity="0.6"/>
+                <rect x="6" y="20" width="22" height="5" rx="2" fill="#1E293B"/>
+              </svg>
             </td>
-            <td style="padding-left:8px;font-size:18px;font-weight:600;color:#1e293b;vertical-align:middle;">Mine</td>
+            <td style="padding-left:10px;font-size:18px;font-weight:600;color:#1e293b;vertical-align:middle;">Settle</td>
           </tr></table>
         </td></tr>
 
@@ -68,7 +72,7 @@ export function emailLayout({
         <!-- CTA button -->
         <tr><td style="padding:28px 0 8px;">
           <a href="${ctaUrl}"
-             style="display:inline-block;background:#2563EB;color:white;font-weight:600;font-size:15px;padding:13px 28px;border-radius:8px;text-decoration:none;letter-spacing:0.01em;">
+             style="display:inline-block;background:#2358D4;color:white;font-weight:600;font-size:15px;padding:13px 28px;border-radius:8px;text-decoration:none;letter-spacing:0.01em;">
             ${ctaText}
           </a>
         </td></tr>
@@ -89,8 +93,8 @@ export function emailLayout({
         <!-- Footer -->
         <tr><td style="padding-top:32px;border-top:1px solid #e2e8f0;margin-top:32px;">
           <p style="margin:0;font-size:13px;color:#94a3b8;line-height:20px;">
-            Mine &middot; AI-native data migration<br>
-            <a href="https://trymine.ai" style="color:#94a3b8;text-decoration:none;">trymine.ai</a>
+            Settle &middot; AI-native data migration<br>
+            <a href="https://usesettle.ai" style="color:#94a3b8;text-decoration:none;">usesettle.ai</a>
           </p>
         </td></tr>
         ` : ''}
@@ -152,12 +156,12 @@ export function accessRequestConfirmationEmail(
 ): { subject: string; html: string } {
   const bodyText = isAssessment
     ? "Thanks for submitting your migration details. I'll review your request and get back to you within 48 hours."
-    : "Thanks for your interest in Mine. I'll review your request and get back to you within 48 hours."
+    : "Thanks for your interest in Settle. I'll review your request and get back to you within 48 hours."
 
   return {
     subject: isAssessment
-      ? 'Your migration assessment is underway — Mine'
-      : 'We received your request — Mine',
+      ? 'Your migration assessment is underway — Settle'
+      : 'We received your request — Settle',
     html: emailLayout({
       body: `
         <p style="margin:0 0 16px;">Hi ${firstName},</p>
@@ -165,13 +169,13 @@ export function accessRequestConfirmationEmail(
         <p style="margin:0 0 16px;">If you'd like to book time sooner:</p>
         <p style="margin:0 0 16px;">
           <a href="${CALENDLY_SCOPING}"
-             style="display:inline-block;background:#2563EB;color:white;font-weight:600;font-size:15px;padding:12px 28px;border-radius:8px;text-decoration:none;">
+             style="display:inline-block;background:#2358D4;color:white;font-weight:600;font-size:15px;padding:12px 28px;border-radius:8px;text-decoration:none;">
             Book a Call
           </a>
         </p>
         <p style="margin:0 0 16px;color:#64748b;">Otherwise, I'll be in touch soon. Feel free to reply to this email anytime.</p>
       `,
-      signOff: { name: 'Kaan Dincer', title: 'Founder & CEO, Mine' },
+      signOff: { name: 'Kaan Dincer', title: 'Founder & CEO, Settle' },
     }),
   }
 }
@@ -194,22 +198,22 @@ export function orgInviteEmail(params: {
     ? `an ${params.role}`
     : `a ${params.role}`
 
-  const joinPhrase = params.orgName.toLowerCase() === 'mine'
-    ? `join Mine as <strong>${roleWithArticle}</strong>`
-    : `join <strong>${params.orgName}</strong> on Mine as <strong>${roleWithArticle}</strong>`
+  const joinPhrase = params.orgName.toLowerCase() === 'settle'
+    ? `join Settle as <strong>${roleWithArticle}</strong>`
+    : `join <strong>${params.orgName}</strong> on Settle as <strong>${roleWithArticle}</strong>`
 
   return {
-    subject: `You've been invited to join ${params.orgName} on Mine`,
+    subject: `You've been invited to join ${params.orgName} on Settle`,
     html: emailLayout({
       body: `
         <p style="margin:0 0 16px;">${greeting}</p>
         <p style="margin:0 0 16px;">You've been invited to ${joinPhrase}.</p>
-        <p style="margin:0 0 16px;">Click below to accept the invite. If you don't have a Mine account yet, you'll be able to create one.</p>
+        <p style="margin:0 0 16px;">Click below to accept the invite. If you don't have a Settle account yet, you'll be able to create one.</p>
         <p style="margin:0 0 4px;font-size:13px;color:#94a3b8;">This invite expires in 7 days.</p>
       `,
       ctaText: 'Accept Invite',
       ctaUrl: acceptUrl,
-      signOff: { name: 'Kaan Dincer', title: 'Founder & CEO, Mine' },
+      signOff: { name: 'Kaan Dincer', title: 'Founder & CEO, Settle' },
     }),
   }
 }
@@ -221,7 +225,7 @@ export function welcomeEmail(
   orgName: string
 ): { subject: string; html: string } {
   return {
-    subject: `Welcome to Mine — you're all set`,
+    subject: `Welcome to Settle — you're all set`,
     html: emailLayout({
       body: `
         <p style="margin:0 0 16px;">Hi ${firstName},</p>
@@ -230,13 +234,13 @@ export function welcomeEmail(
         <ol style="margin:0 0 20px;padding-left:20px;color:#334155;font-size:15px;line-height:26px;">
           <li style="margin-bottom:6px;">Create a project and name your migration</li>
           <li style="margin-bottom:6px;">Upload your source data (CSV) or connect your database</li>
-          <li style="margin-bottom:6px;">Mine profiles your data and generates field mappings automatically</li>
+          <li style="margin-bottom:6px;">Settle profiles your data and generates field mappings automatically</li>
         </ol>
         <p style="margin:0 0 16px;">If you have any questions, just reply to this email.</p>
       `,
-      ctaText: 'Go to Mine',
+      ctaText: 'Go to Settle',
       ctaUrl: `${APP_URL}/app/projects`,
-      signOff: { name: 'Kaan Dincer', title: 'Founder & CEO, Mine' },
+      signOff: { name: 'Kaan Dincer', title: 'Founder & CEO, Settle' },
     }),
   }
 }
@@ -261,10 +265,10 @@ export function adminAccessRequestEmail(data: {
     subject,
     html: adminEmailLayout({
       title: `New Access Request from ${data.name}`,
-      subtitle: 'Someone just requested access to Mine.',
+      subtitle: 'Someone just requested access to Settle.',
       fields: [
         { label: 'Name', value: data.name },
-        { label: 'Email', value: `<a href="mailto:${data.email}" style="color:#2563eb;text-decoration:none;">${data.email}</a>` },
+        { label: 'Email', value: `<a href="mailto:${data.email}" style="color:#2358D4;text-decoration:none;">${data.email}</a>` },
         { label: 'Company', value: data.company },
         { label: 'Role', value: data.roleType },
         ...(data.systemsInvolved
@@ -290,12 +294,12 @@ export function adminSignupEmail(data: {
   method: string
 }): { subject: string; html: string } {
   return {
-    subject: `New Mine Signup: ${data.email}`,
+    subject: `New Settle Signup: ${data.email}`,
     html: adminEmailLayout({
       title: `New Signup: ${data.name}`,
-      subtitle: 'A new user just created their Mine account.',
+      subtitle: 'A new user just created their Settle account.',
       fields: [
-        { label: 'Email', value: `<a href="mailto:${data.email}" style="color:#2563eb;text-decoration:none;">${data.email}</a>` },
+        { label: 'Email', value: `<a href="mailto:${data.email}" style="color:#2358D4;text-decoration:none;">${data.email}</a>` },
         { label: 'Name', value: data.name || 'Not provided' },
         ...(data.company ? [{ label: 'Company', value: data.company }] : []),
         { label: 'Method', value: `<code style="font-family:monospace;">${data.method}</code>` },

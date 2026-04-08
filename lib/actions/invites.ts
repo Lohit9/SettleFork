@@ -12,12 +12,12 @@ const ADMIN_EMAILS = ['kaandincer1@gmail.com']
 const SAFE_CHARS = 'ABCDEFGHJKMNPQRSTUVWXYZ23456789'
 
 const APP_URL =
-  process.env.NEXT_PUBLIC_APP_URL ?? 'https://trymine.ai'
+  process.env.NEXT_PUBLIC_APP_URL ?? 'https://usesettle.ai'
 
 // ── helpers ───────────────────────────────────────────────────────────────
 
 function generateCode(): string {
-  let code = 'MINE-'
+  let code = 'SETTLE-'
   for (let i = 0; i < 6; i++) {
     code += SAFE_CHARS[Math.floor(Math.random() * SAFE_CHARS.length)]
   }
@@ -64,16 +64,16 @@ export async function validateInviteCode(code: string): Promise<{
     .maybeSingle()
 
   if (error || !data) {
-    return { valid: false, error: 'Invalid invite code. Need access? Request it at trymine.ai/request-access' }
+    return { valid: false, error: 'Invalid invite code. Need access? Request it at usesettle.ai/request-access' }
   }
   if (data.status === 'used') {
     return { valid: false, error: 'This invite code has already been used.' }
   }
   if (data.status === 'expired' || new Date(data.expires_at) < new Date()) {
-    return { valid: false, error: 'This invite code has expired. Request fresh access at trymine.ai/request-access' }
+    return { valid: false, error: 'This invite code has expired. Request fresh access at usesettle.ai/request-access' }
   }
   if (data.status !== 'pending') {
-    return { valid: false, error: 'Invalid or expired invite code. Need access? Request it at trymine.ai/request-access' }
+    return { valid: false, error: 'Invalid or expired invite code. Need access? Request it at usesettle.ai/request-access' }
   }
 
   return { valid: true, inviteId: data.id }
@@ -108,7 +108,7 @@ export async function submitAccessRequest(data: {
   })
 
   if (error) {
-    return { success: false, error: 'Something went wrong. Please try again or email us at kaan@trymine.ai' }
+    return { success: false, error: 'Something went wrong. Please try again or email us at kaan@usesettle.ai' }
   }
 
   // Fire notification (non-blocking)
@@ -242,9 +242,9 @@ export async function approveAndGenerateInvite(
     appUrl: APP_URL,
   })
   resend.emails.send({
-    from: 'Kaan from Mine <info@trymine.ai>',
+    from: 'Kaan from Settle <info@usesettle.ai>',
     to: request.email,
-    replyTo: 'info@trymine.ai',
+    replyTo: 'info@usesettle.ai',
     subject,
     html,
   }).catch((err: unknown) => console.error('Org invite email failed (non-blocking):', err))

@@ -143,7 +143,7 @@ export default function InviteClient({ token, orgName, role, inviterName, email,
         <>
           <div className="border-t border-gray-200 my-5" />
           <div className="rounded-lg bg-amber-50 border border-amber-200 px-4 py-3 text-sm text-amber-800 mb-4">
-            You already have a Mine account with this email address. Log in to accept this invite.
+            You already have a Settle account with this email address. Log in to accept this invite.
           </div>
           <a
             href={`/login?redirect=/invite/${token}`}

@@ -3,19 +3,18 @@ import Image from 'next/image'
 
 export default function ProjectNotFound() {
   return (
-    <div className="min-h-screen flex items-center justify-center bg-slate-50 px-4">
+    <div className="min-h-screen flex items-center justify-center bg-gray-50 px-4">
       <div className="text-center max-w-sm">
         {/* Logo */}
         <div className="flex justify-center mb-8">
-          <Link href="/" className="flex items-center gap-2.5">
+          <Link href="/">
             <Image
-              src="/Mine Logo no background.png"
-              alt="Mine"
-              width={32}
+              src="/images/logos/settle-logo-full.svg"
+              alt="Settle"
+              width={144}
               height={32}
               className="h-8 w-auto"
             />
-            <span className="text-xl font-bold tracking-tight text-gray-900">Mine</span>
           </Link>
         </div>
 
@@ -56,7 +55,7 @@ export default function ProjectNotFound() {
         <div className="flex items-center justify-center gap-3">
           <Link
             href="/app/projects"
-            className="px-4 py-2 text-sm bg-blue-600 text-white rounded-lg hover:bg-blue-700 font-medium transition-colors"
+            className="px-4 py-2 text-sm bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 font-medium transition-colors"
           >
             ← Back to Projects
           </Link>

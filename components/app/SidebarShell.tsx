@@ -159,7 +159,7 @@ export default function SidebarShell({
   const switchOrg = (orgId: string) => {
     setActiveOrgId(orgId)
     setIsOrgPopoverOpen(false)
-    document.cookie = `mine-active-org=${orgId};path=/;max-age=${365 * 24 * 60 * 60}`
+    document.cookie = `settle-active-org=${orgId};path=/;max-age=${365 * 24 * 60 * 60}`
     router.push('/app/projects')
     router.refresh()
   }
@@ -184,8 +184,11 @@ export default function SidebarShell({
         {/* Logo */}
         <div className="flex-shrink-0 h-14 border-b border-gray-200 flex items-center px-3">
           <Link href="/app/projects" className="flex items-center gap-2.5 min-w-0">
-            <img src="/Mine Logo no background.png" alt="Mine" className="h-7 w-auto flex-shrink-0" />
-            {expanded && <span className="text-lg font-bold tracking-tight text-gray-900 whitespace-nowrap">Mine</span>}
+            {expanded ? (
+              <img src="/images/logos/settle-logo-full.svg" alt="Settle" className="h-7 w-auto" />
+            ) : (
+              <img src="/images/logos/settle-logo-mark.png" alt="Settle" className="h-7 w-7 object-contain" />
+            )}
           </Link>
         </div>
 
@@ -241,7 +244,7 @@ export default function SidebarShell({
                   className={`
                     flex items-center rounded-lg transition-colors
                     ${expanded ? 'gap-3 px-3 py-2 w-full' : 'justify-center w-10 h-10 mx-auto'}
-                    ${isActive ? 'bg-blue-600 text-white' : 'text-gray-500 hover:text-gray-700 hover:bg-gray-100'}
+                    ${isActive ? 'bg-[#2358D4] text-white' : 'text-gray-500 hover:text-gray-700 hover:bg-gray-100'}
                   `}
                 >
                   <Icon className="w-5 h-5 flex-shrink-0" />
@@ -268,7 +271,7 @@ export default function SidebarShell({
               onClick={openPopover}
               className="flex items-center gap-2.5 w-full px-2 py-1.5 rounded-lg hover:bg-gray-100 transition-colors"
             >
-              <div className="w-8 h-8 rounded-full bg-blue-600 flex items-center justify-center flex-shrink-0">
+              <div className="w-8 h-8 rounded-full bg-[#2358D4] flex items-center justify-center flex-shrink-0">
                 <span className="text-xs font-semibold text-white">{initials}</span>
               </div>
               <span className="text-sm text-gray-700 truncate max-w-[120px]">{displayName}</span>
@@ -280,7 +283,7 @@ export default function SidebarShell({
                 onClick={openPopover}
                 className="w-10 h-10 flex items-center justify-center hover:bg-gray-100 rounded-lg transition-colors"
               >
-                <div className="w-8 h-8 rounded-full bg-blue-600 flex items-center justify-center">
+                <div className="w-8 h-8 rounded-full bg-[#2358D4] flex items-center justify-center">
                   <span className="text-xs font-semibold text-white">{initials}</span>
                 </div>
               </button>

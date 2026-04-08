@@ -2,7 +2,7 @@ import { ImageResponse } from 'next/og'
 import { createClient } from '@supabase/supabase-js'
 
 export const runtime = 'edge'
-export const alt = 'Mine — AI-powered data migration'
+export const alt = 'Settle — AI-powered data migration'
 export const size = { width: 1200, height: 630 }
 export const contentType = 'image/png'
 
@@ -49,7 +49,7 @@ export default async function OGImage({ params }: { params: Promise<{ slug: stri
               width: '36px',
               height: '36px',
               borderRadius: '8px',
-              backgroundColor: '#2563EB',
+              backgroundColor: '#2358D4',
               display: 'flex',
               alignItems: 'center',
               justifyContent: 'center',
@@ -58,9 +58,9 @@ export default async function OGImage({ params }: { params: Promise<{ slug: stri
               fontWeight: 700,
             }}
           >
-            M
+            S
           </div>
-          <span style={{ color: 'white', fontSize: '24px', fontWeight: 700 }}>Mine</span>
+          <span style={{ color: 'white', fontSize: '24px', fontWeight: 700 }}>Settle</span>
         </div>
 
         {/* Center content */}
@@ -82,7 +82,7 @@ export default async function OGImage({ params }: { params: Promise<{ slug: stri
             style={{
               width: '120px',
               height: '3px',
-              backgroundColor: '#2563EB',
+              backgroundColor: '#2358D4',
               borderRadius: '4px',
               marginTop: '28px',
               marginBottom: '28px',
@@ -97,7 +97,7 @@ export default async function OGImage({ params }: { params: Promise<{ slug: stri
         {/* Footer URL */}
         <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
           <span style={{ color: '#64748B', fontSize: '16px' }}>
-            trymine.ai/migrate/{slug}
+            usesettle.ai/migrate/{slug}
           </span>
         </div>
       </div>

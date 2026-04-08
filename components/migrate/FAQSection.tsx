@@ -16,18 +16,18 @@ export default function FAQSection({ faqs }: FAQSectionProps) {
   const [openIndex, setOpenIndex] = useState<number>(0)
 
   return (
-    <div className="divide-y divide-mine-slate-200">
+    <div className="divide-y divide-settle-slate-200">
       {faqs.map((faq, i) => {
         const isOpen = openIndex === i
         return (
-          <div key={i} className="border-b border-mine-slate-200">
+          <div key={i} className="border-b border-settle-slate-200">
             <button
               onClick={() => setOpenIndex(isOpen ? -1 : i)}
               className="w-full flex items-center justify-between py-5 text-left gap-4"
             >
               <span
                 className={`text-base font-medium transition-colors ${
-                  isOpen ? 'text-mine-blue-600' : 'text-mine-slate-900 hover:text-mine-blue-600'
+                  isOpen ? 'text-settle-blue-600' : 'text-settle-slate-900 hover:text-settle-blue-600'
                 }`}
               >
                 {faq.question}
@@ -35,7 +35,7 @@ export default function FAQSection({ faqs }: FAQSectionProps) {
               <motion.span
                 animate={{ rotate: isOpen ? 45 : 0 }}
                 transition={{ duration: 0.2, ease: [0.22, 1, 0.36, 1] }}
-                className="shrink-0 text-mine-slate-400"
+                className="shrink-0 text-settle-slate-400"
               >
                 <svg
                   className="w-5 h-5"
@@ -59,7 +59,7 @@ export default function FAQSection({ faqs }: FAQSectionProps) {
                   transition={{ duration: 0.28, ease: [0.22, 1, 0.36, 1] }}
                   style={{ overflow: 'hidden' }}
                 >
-                  <p className="text-sm text-mine-slate-500 leading-relaxed pb-5">
+                  <p className="text-sm text-settle-slate-500 leading-relaxed pb-5">
                     {faq.answer}
                   </p>
                 </motion.div>

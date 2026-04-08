@@ -216,7 +216,8 @@ function NewProjectForm({ onCancel, onCreated }: { onCancel: () => void; onCreat
     if (!projectName.trim() || !sourceSystem.trim() || !targetSystem.trim()) return
     setError(null)
     startTransition(async () => {
-      const activeOrgId = document.cookie.match(/mine-active-org=([^;]+)/)?.[1]
+      const activeOrgId = document.cookie.match(/settle-active-org=([^;]+)/)?.[1]
+        ?? document.cookie.match(/mine-active-org=([^;]+)/)?.[1]
       const result = await createProject(projectName, sourceSystem, targetSystem, notes || undefined, activeOrgId)
       if (!result.success || !result.data) {
         setError(result.error ?? 'Failed to create project')
@@ -296,7 +297,7 @@ function NewProjectForm({ onCancel, onCreated }: { onCancel: () => void; onCreat
           <Button
             onClick={handleCreate}
             disabled={!projectName.trim() || !sourceSystem.trim() || !targetSystem.trim() || isPending}
-            className="bg-blue-600 hover:bg-blue-700 text-white disabled:opacity-50"
+            className="bg-[#2358D4] hover:bg-blue-700 text-white disabled:opacity-50"
           >
             {isPending ? 'Creating…' : 'Create Project'}
           </Button>
@@ -317,12 +318,12 @@ function WelcomeModal({ onDismiss, onGetStarted }: { onDismiss: () => void; onGe
       <div className="bg-white rounded-2xl shadow-xl w-full max-w-[460px] p-8">
         {/* Logo / icon */}
         <div className="flex justify-center mb-5">
-          <div className="w-12 h-12 rounded-xl bg-blue-600 flex items-center justify-center">
-            <span className="text-white text-xl font-bold leading-none">M</span>
+          <div className="w-12 h-12 rounded-xl bg-[#2358D4] flex items-center justify-center">
+            <span className="text-white text-xl font-bold leading-none">S</span>
           </div>
         </div>
 
-        <h2 className="text-xl font-semibold text-gray-900 mb-4 text-center">Welcome to Mine</h2>
+        <h2 className="text-xl font-semibold text-gray-900 mb-4 text-center">Welcome to Settle</h2>
 
         <p className="text-sm text-gray-500 mb-5 text-center">
           Your workspace is ready. Here&apos;s how to get started:
@@ -344,20 +345,20 @@ function WelcomeModal({ onDismiss, onGetStarted }: { onDismiss: () => void; onGe
           <li className="flex gap-3">
             <span className="flex-shrink-0 w-5 h-5 rounded-full bg-blue-100 text-blue-700 text-xs font-semibold flex items-center justify-center mt-0.5">3</span>
             <span className="text-sm text-gray-700">
-              <span className="font-medium">Mine will take it from here</span> — we&apos;ll profile your data, generate mappings, and identify quality issues automatically
+              <span className="font-medium">Settle will take it from here</span> — we&apos;ll profile your data, generate mappings, and identify quality issues automatically
             </span>
           </li>
         </ol>
 
         <p className="text-xs text-gray-400 text-center mb-6">
           If you need help, reach out anytime at{' '}
-          <a href="mailto:info@trymine.ai" className="text-blue-600 hover:underline">info@trymine.ai</a>
+          <a href="mailto:info@usesettle.ai" className="text-blue-600 hover:underline">info@usesettle.ai</a>
           {' '}or reply to your invite email.
         </p>
 
         <Button
           onClick={onGetStarted}
-          className="w-full bg-blue-600 hover:bg-blue-700 text-white font-medium"
+          className="w-full bg-[#2358D4] hover:bg-blue-700 text-white font-medium"
         >
           Create Your First Project
         </Button>
@@ -387,18 +388,19 @@ export function ProjectsList({ initialProjects, activeOrgRole }: ProjectsListPro
   // Show welcome modal for first-time users (zero projects, never dismissed)
   useEffect(() => {
     if (initialProjects.length === 0) {
-      const dismissed = localStorage.getItem('mine_welcome_dismissed')
+      const dismissed = localStorage.getItem('settle_welcome_dismissed')
+        ?? localStorage.getItem('mine_welcome_dismissed')
       if (!dismissed) setShowWelcome(true)
     }
   }, [initialProjects.length])
 
   const dismissWelcome = () => {
-    localStorage.setItem('mine_welcome_dismissed', 'true')
+    localStorage.setItem('settle_welcome_dismissed', 'true')
     setShowWelcome(false)
   }
 
   const getStarted = () => {
-    localStorage.setItem('mine_welcome_dismissed', 'true')
+    localStorage.setItem('settle_welcome_dismissed', 'true')
     setShowWelcome(false)
     setShowCreate(true)
   }
@@ -449,7 +451,7 @@ export function ProjectsList({ initialProjects, activeOrgRole }: ProjectsListPro
             {canCreateProject && (
               <Button
                 onClick={() => setShowCreate(true)}
-                className="bg-blue-600 hover:bg-blue-700 text-white h-9 px-4 gap-1.5 text-sm"
+                className="bg-[#2358D4] hover:bg-blue-700 text-white h-9 px-4 gap-1.5 text-sm"
               >
                 <Plus className="w-3.5 h-3.5" />
                 New Project
@@ -524,7 +526,7 @@ export function ProjectsList({ initialProjects, activeOrgRole }: ProjectsListPro
                 {canCreateProject && (
                   <Button
                     onClick={() => setShowCreate(true)}
-                    className="bg-blue-600 hover:bg-blue-700 text-white gap-2"
+                    className="bg-[#2358D4] hover:bg-blue-700 text-white gap-2"
                   >
                     <Plus className="w-3.5 h-3.5" />
                     New Project

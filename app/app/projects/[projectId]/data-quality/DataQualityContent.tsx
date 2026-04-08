@@ -94,7 +94,7 @@ function SQLModal({ sql, onClose }: { sql: string; onClose: () => void }) {
         <div className="flex gap-2 p-4 border-t">
           <button
             onClick={() => { navigator.clipboard.writeText(sql); setCopied(true); setTimeout(() => setCopied(false), 2000) }}
-            className="px-4 py-2 text-sm bg-blue-600 text-white rounded-lg hover:bg-blue-700"
+            className="px-4 py-2 text-sm bg-[#2358D4] text-white rounded-lg hover:bg-blue-700"
           >
             {copied ? '✓ Copied' : 'Copy SQL'}
           </button>
@@ -120,7 +120,7 @@ function ConfirmModal({
             Cancel
           </button>
           <button onClick={onConfirm} disabled={loading}
-            className="px-4 py-2 text-sm bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50 flex items-center gap-2">
+            className="px-4 py-2 text-sm bg-[#2358D4] text-white rounded-lg hover:bg-blue-700 disabled:opacity-50 flex items-center gap-2">
             {loading && <span className="w-3.5 h-3.5 border-2 border-white/30 border-t-white rounded-full animate-spin" />}
             {confirmLabel}
           </button>
@@ -774,7 +774,7 @@ function IssueCard({
                           <button
                             onClick={() => setConfirmApply({ idx, fix: opt })}
                             disabled={applyingIdx !== null || !canEdit}
-                            className="px-3 py-1.5 text-xs bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50 flex items-center gap-1.5"
+                            className="px-3 py-1.5 text-xs bg-[#2358D4] text-white rounded-lg hover:bg-blue-700 disabled:opacity-50 flex items-center gap-1.5"
                           >
                             {applyingIdx === idx && <span className="w-3 h-3 border-2 border-white/30 border-t-white rounded-full animate-spin" />}
                             Apply Fix
@@ -1022,13 +1022,13 @@ function AddRuleModal({
             <div className="mt-1.5 flex rounded-lg border overflow-hidden">
               <button
                 onClick={() => setMode('nl')}
-                className={`flex-1 text-sm py-2 ${mode === 'nl' ? 'bg-blue-600 text-white' : 'bg-white text-gray-600 hover:bg-gray-50'}`}
+                className={`flex-1 text-sm py-2 ${mode === 'nl' ? 'bg-[#2358D4] text-white' : 'bg-white text-gray-600 hover:bg-gray-50'}`}
               >
                 ✦ Natural Language
               </button>
               <button
                 onClick={() => setMode('manual')}
-                className={`flex-1 text-sm py-2 ${mode === 'manual' ? 'bg-blue-600 text-white' : 'bg-white text-gray-600 hover:bg-gray-50'}`}
+                className={`flex-1 text-sm py-2 ${mode === 'manual' ? 'bg-[#2358D4] text-white' : 'bg-white text-gray-600 hover:bg-gray-50'}`}
               >
                 Manual
               </button>
@@ -1067,7 +1067,7 @@ function AddRuleModal({
                   <button
                     onClick={handleAcceptGenerated}
                     disabled={loading}
-                    className="flex-1 px-4 py-2 text-sm bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50 flex items-center justify-center gap-2"
+                    className="flex-1 px-4 py-2 text-sm bg-[#2358D4] text-white rounded-lg hover:bg-blue-700 disabled:opacity-50 flex items-center justify-center gap-2"
                   >
                     {loading ? <><span className="w-3.5 h-3.5 border-2 border-white/30 border-t-white rounded-full animate-spin" />Saving…</> : 'Save Rule'}
                   </button>
@@ -1103,7 +1103,7 @@ function AddRuleModal({
                 <button
                   onClick={handleGenerateNL}
                   disabled={loading || !selectedFieldId || !nlPrompt.trim()}
-                  className="w-full px-4 py-2 text-sm bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50 flex items-center justify-center gap-2"
+                  className="w-full px-4 py-2 text-sm bg-[#2358D4] text-white rounded-lg hover:bg-blue-700 disabled:opacity-50 flex items-center justify-center gap-2"
                 >
                   {loading ? <><span className="w-3.5 h-3.5 border-2 border-white/30 border-t-white rounded-full animate-spin" />Generating…</> : '✦ Generate Rule'}
                 </button>
@@ -1184,7 +1184,7 @@ function AddRuleModal({
               <button
                 onClick={handleSaveManual}
                 disabled={loading}
-                className="w-full px-4 py-2 text-sm bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50 flex items-center justify-center gap-2"
+                className="w-full px-4 py-2 text-sm bg-[#2358D4] text-white rounded-lg hover:bg-blue-700 disabled:opacity-50 flex items-center justify-center gap-2"
               >
                 {loading ? <><span className="w-3.5 h-3.5 border-2 border-white/30 border-t-white rounded-full animate-spin" />Saving…</> : 'Save Rule'}
               </button>
@@ -1218,7 +1218,7 @@ function VerifiedFixesSection({
         className="w-full flex items-center justify-between gap-3 px-5 py-3.5 hover:bg-blue-50/40 transition-colors text-left"
       >
         <div className="flex items-center gap-2.5">
-          <span className="w-2 h-2 rounded-full bg-blue-500 flex-shrink-0" />
+          <span className="w-2 h-2 rounded-full bg-[#2358D4] flex-shrink-0" />
           <span className="text-sm font-semibold text-blue-800">
             Verified Fixed ({fixes.length})
           </span>
@@ -1579,13 +1579,13 @@ function CreateManualFixModal({
               <div className="flex rounded-lg border border-gray-200 overflow-hidden text-sm">
                 <button
                   onClick={() => handleModeSwitch('nl')}
-                  className={`flex-1 py-2 flex items-center justify-center gap-1.5 transition-colors ${mode === 'nl' ? 'bg-blue-600 text-white' : 'text-gray-600 hover:bg-gray-50'}`}
+                  className={`flex-1 py-2 flex items-center justify-center gap-1.5 transition-colors ${mode === 'nl' ? 'bg-[#2358D4] text-white' : 'text-gray-600 hover:bg-gray-50'}`}
                 >
                   <span>✦</span> Natural Language
                 </button>
                 <button
                   onClick={() => handleModeSwitch('sql')}
-                  className={`flex-1 py-2 flex items-center justify-center gap-1.5 transition-colors ${mode === 'sql' ? 'bg-blue-600 text-white' : 'text-gray-600 hover:bg-gray-50'}`}
+                  className={`flex-1 py-2 flex items-center justify-center gap-1.5 transition-colors ${mode === 'sql' ? 'bg-[#2358D4] text-white' : 'text-gray-600 hover:bg-gray-50'}`}
                 >
                   <span className="font-mono">{`</>`}</span> SQL Editor
                 </button>
@@ -1602,7 +1602,7 @@ function CreateManualFixModal({
                   <button
                     onClick={handleGenerateFix}
                     disabled={generating || !nlDescription.trim()}
-                    className="w-full px-4 py-2 text-sm bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50 flex items-center justify-center gap-2"
+                    className="w-full px-4 py-2 text-sm bg-[#2358D4] text-white rounded-lg hover:bg-blue-700 disabled:opacity-50 flex items-center justify-center gap-2"
                   >
                     {generating ? (
                       <><span className="w-3.5 h-3.5 border-2 border-white/30 border-t-white rounded-full animate-spin" />Generating fix…</>
@@ -1627,7 +1627,7 @@ function CreateManualFixModal({
                             <button
                               onClick={() => handleApplyNL()}
                               disabled={isApplying || !canEdit}
-                              className="flex-1 px-3 py-1.5 text-sm bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50 flex items-center justify-center gap-2"
+                              className="flex-1 px-3 py-1.5 text-sm bg-[#2358D4] text-white rounded-lg hover:bg-blue-700 disabled:opacity-50 flex items-center justify-center gap-2"
                             >
                               {isApplying ? (
                                 <><span className="w-3.5 h-3.5 border-2 border-white/30 border-t-white rounded-full animate-spin" />Applying…</>
@@ -1676,7 +1676,7 @@ function CreateManualFixModal({
                         <button
                           onClick={() => handleApplySQL()}
                           disabled={!sqlValidated || isApplying || !canEdit}
-                          className="flex-1 px-3 py-1.5 text-sm bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50 flex items-center justify-center gap-2"
+                          className="flex-1 px-3 py-1.5 text-sm bg-[#2358D4] text-white rounded-lg hover:bg-blue-700 disabled:opacity-50 flex items-center justify-center gap-2"
                         >
                           {isApplying ? (
                             <><span className="w-3.5 h-3.5 border-2 border-white/30 border-t-white rounded-full animate-spin" />Applying…</>
@@ -1923,7 +1923,7 @@ function IssueFixModal({
                   <button
                     onClick={handleGenerateSQL}
                     disabled={!nlDescription.trim() || isGenerating}
-                    className="px-4 py-1.5 text-sm bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50"
+                    className="px-4 py-1.5 text-sm bg-[#2358D4] text-white rounded-lg hover:bg-blue-700 disabled:opacity-50"
                   >
                     {isGenerating ? 'Generating…' : 'Generate SQL'}
                   </button>
@@ -1996,7 +1996,7 @@ function IssueFixModal({
                 <button
                   onClick={() => handleApply()}
                   disabled={isApplying || !canApply || !canEdit}
-                  className="px-4 py-2 text-sm bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50 flex items-center gap-2"
+                  className="px-4 py-2 text-sm bg-[#2358D4] text-white rounded-lg hover:bg-blue-700 disabled:opacity-50 flex items-center gap-2"
                 >
                   {isApplying && (
                     <span className="w-3.5 h-3.5 border-2 border-white/30 border-t-white rounded-full animate-spin" />
@@ -2377,7 +2377,7 @@ export default function DataQualityContent({
               <button
                 onClick={canEdit ? handleRunFullScan : undefined}
                 disabled={scanning || isRestaging || !canEdit}
-                className="px-4 py-1.5 text-sm bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50 flex items-center gap-2"
+                className="px-4 py-1.5 text-sm bg-[#2358D4] text-white rounded-lg hover:bg-blue-700 disabled:opacity-50 flex items-center gap-2"
               >
                 {scanning ? <><span className="w-3.5 h-3.5 border-2 border-white/30 border-t-white rounded-full animate-spin" />Scanning…</> : '⊙ Run Full Scan'}
               </button>
@@ -2713,7 +2713,7 @@ export default function DataQualityContent({
           <div className="flex justify-end pb-4">
             <button
               onClick={() => router.push(`/app/projects/${projectId}/outputs`)}
-              className="px-5 py-2.5 text-sm bg-blue-600 text-white rounded-lg hover:bg-blue-700 font-medium"
+              className="px-5 py-2.5 text-sm bg-[#2358D4] text-white rounded-lg hover:bg-blue-700 font-medium"
             >
               Continue to Migration Center →
             </button>

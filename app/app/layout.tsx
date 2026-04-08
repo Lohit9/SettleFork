@@ -37,7 +37,8 @@ export default async function AppLayout({
 
   // Resolve active org from cookie — same logic previously done client-side
   const cookieStore = await cookies()
-  const cookieOrgId = cookieStore.get('mine-active-org')?.value
+  const cookieOrgId = cookieStore.get('settle-active-org')?.value
+    ?? cookieStore.get('mine-active-org')?.value
   const resolvedActiveOrgId =
     (cookieOrgId && orgs.some((o) => o.id === cookieOrgId) ? cookieOrgId : null) ??
     orgs.find((o) => o.role === 'owner')?.id ??

@@ -23,7 +23,7 @@ const VOLUME_OPTIONS = [
 ]
 
 const INPUT_CLASS =
-  'w-full px-4 py-3 rounded-xl border border-mine-slate-200 text-sm text-mine-slate-900 bg-white placeholder:text-mine-slate-300 focus:outline-none focus:border-mine-blue-500 focus:ring-2 focus:ring-blue-500/20 transition-all'
+  'w-full px-4 py-3 rounded-xl border border-settle-slate-200 text-sm text-settle-slate-900 bg-white placeholder:text-settle-slate-300 focus:outline-none focus:border-settle-blue-500 focus:ring-2 focus:ring-blue-500/20 transition-all'
 
 interface LeadCaptureFormProps {
   sourceSystem: string
@@ -77,9 +77,9 @@ export default function LeadCaptureForm({ sourceSystem, targetSystem, slug }: Le
   if (isSubmitted) {
     return (
       <div className="flex flex-col items-center gap-4 py-8">
-        <div className="w-12 h-12 rounded-full bg-mine-teal-50 flex items-center justify-center">
+        <div className="w-12 h-12 rounded-full bg-settle-teal-50 flex items-center justify-center">
           <svg
-            className="w-6 h-6 text-mine-teal-600"
+            className="w-6 h-6 text-settle-teal-600"
             fill="none"
             viewBox="0 0 24 24"
             stroke="currentColor"
@@ -88,10 +88,10 @@ export default function LeadCaptureForm({ sourceSystem, targetSystem, slug }: Le
             <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
           </svg>
         </div>
-        <p className="text-mine-slate-900 font-semibold text-lg">
+        <p className="text-settle-slate-900 font-semibold text-lg">
           Thanks! We'll be in touch within 24 hours.
         </p>
-        <p className="text-mine-slate-500 text-sm text-center">
+        <p className="text-settle-slate-500 text-sm text-center">
           We'll reach out to {email} about your {sourceSystem} → {targetSystem} migration.
         </p>
       </div>
@@ -100,7 +100,7 @@ export default function LeadCaptureForm({ sourceSystem, targetSystem, slug }: Le
 
   return (
     <div>
-      <p className="text-xs text-mine-slate-400 text-center mb-4 max-w-lg mx-auto italic">
+      <p className="text-xs text-settle-slate-400 text-center mb-4 max-w-lg mx-auto italic">
         You'll receive a preliminary mapping analysis showing how your source objects map to your target schema, with confidence scores and flagged risk areas.
       </p>
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
@@ -155,7 +155,7 @@ export default function LeadCaptureForm({ sourceSystem, targetSystem, slug }: Le
       <button
         onClick={handleSubmit}
         disabled={isSubmitting}
-        className="w-full bg-mine-blue-600 hover:bg-mine-blue-500 disabled:opacity-60 disabled:cursor-not-allowed text-white font-semibold py-3.5 rounded-xl transition-all hover:-translate-y-0.5 hover:shadow-lg hover:shadow-blue-600/25 mt-2"
+        className="w-full bg-settle-blue-600 hover:bg-settle-blue-700 disabled:opacity-60 disabled:cursor-not-allowed text-white font-semibold py-3.5 rounded-xl transition-all hover:-translate-y-0.5 hover:shadow-lg hover:shadow-blue-600/25 mt-2"
       >
         {isSubmitting ? 'Submitting…' : 'Get Your Free Assessment'}
       </button>

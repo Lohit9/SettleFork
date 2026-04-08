@@ -18,11 +18,11 @@ export default function AuthCard({ children, title, subtitle, footer }: AuthCard
       <div className="w-full max-w-md">
         {/* Logo */}
         <div className="mb-8 flex justify-center">
-          <Link href="/">
+          <Link href="/" className="flex items-center justify-center">
             <img
-              src="/Mine Logo no background.png"
-              alt="Mine - AI-Native Data Migration Automation"
-              className="h-10 w-auto"
+              src="/images/logos/settle-logo-full.svg"
+              alt="Settle"
+              className="h-8 w-auto mx-auto"
             />
           </Link>
         </div>

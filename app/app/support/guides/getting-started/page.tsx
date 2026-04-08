@@ -71,7 +71,7 @@ export default function GettingStartedPage() {
               <BoxIcon className="text-blue-600" />
             </div>
             <div>
-              <h1 className="text-2xl font-semibold text-gray-900">Getting started with Mine</h1>
+              <h1 className="text-2xl font-semibold text-gray-900">Getting started with Settle</h1>
               <p className="text-sm text-gray-500 mt-1">
                 Go from raw data to AI-powered field mappings in under 5 minutes
               </p>
@@ -115,13 +115,13 @@ export default function GettingStartedPage() {
                 Upload one CSV per table — each file becomes a table in your source schema.
               </p>
               <BulletList items={[
-                'Mine auto-detects column names, data types, primary keys, and foreign key relationships',
+                'Settle auto-detects column names, data types, primary keys, and foreign key relationships',
                 'You\'ll see a confirmation with row count and field count after each upload',
                 'Max file size: 10MB per CSV, up to 100,000 rows per table',
               ]} />
               <Tip>
                 Upload schema documentation too (PDFs, DDL files, ERD diagrams) in the Schema
-                Documents section below. Mine uses these to make smarter mapping suggestions.
+                Documents section below. Settle uses these to make smarter mapping suggestions.
               </Tip>
             </div>
 
@@ -138,8 +138,8 @@ export default function GettingStartedPage() {
                 containing your target system&apos;s CREATE TABLE statements.
               </p>
               <BulletList items={[
-                'Mine parses standard SQL, SQL Server, Oracle, SAP HANA, MySQL, and PostgreSQL dialects',
-                'If parsing fails, Mine\'s AI fallback will interpret non-standard syntax',
+                'Settle parses standard SQL, SQL Server, Oracle, SAP HANA, MySQL, and PostgreSQL dialects',
+                'If parsing fails, Settle\'s AI fallback will interpret non-standard syntax',
                 'You can also upload CSVs for the target side if you don\'t have DDL files',
               ]} />
             </div>
@@ -169,7 +169,7 @@ export default function GettingStartedPage() {
                 <h2 className="text-lg font-medium text-gray-900">Generate AI mappings</h2>
               </div>
               <p className="text-sm text-gray-600 leading-relaxed max-w-2xl">
-                Click <strong>Generate Mappings</strong> from the Schema Overview tab. Mine&apos;s AI
+                Click <strong>Generate Mappings</strong> from the Schema Overview tab. Settle&apos;s AI
                 analyzes field names, data types, sample values, and your uploaded documentation to
                 propose source-to-target field mappings.
               </p>
@@ -180,7 +180,7 @@ export default function GettingStartedPage() {
                 'Click Proceed to Transform when you\'re satisfied',
               ]} />
               <Tip>
-                You don&apos;t need to approve every mapping before moving forward. Mine works
+                You don&apos;t need to approve every mapping before moving forward. Settle works
                 iteratively — you can come back and refine mappings at any point.
               </Tip>
             </div>

@@ -564,7 +564,7 @@ export default function AdminContent({
       {/* Page header */}
       <div className="flex items-center justify-between mb-6">
         <div>
-          <h1 className="text-2xl font-bold text-slate-900">Mine Admin</h1>
+          <h1 className="text-2xl font-bold text-slate-900">Settle Admin</h1>
           <p className="text-sm text-slate-500 mt-1">Manage access requests and organizations.</p>
         </div>
         <div className="flex items-center gap-3 text-sm">

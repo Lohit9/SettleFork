@@ -80,7 +80,7 @@ export default function TransformsGuidePage() {
                 <h2 className="text-lg font-medium text-gray-900">When you need a transform</h2>
               </div>
               <p className="text-sm text-gray-600 leading-relaxed max-w-2xl">
-                Not every field needs a transformation. Mine flags fields that do need one — typically
+                Not every field needs a transformation. Settle flags fields that do need one — typically
                 because:
               </p>
               <BulletList items={[
@@ -112,12 +112,12 @@ export default function TransformsGuidePage() {
                 'Extract the year from the date string',
               ]} />
               <p className="text-sm text-gray-600 leading-relaxed max-w-2xl mt-3">
-                Click <strong>Generate Transform</strong> and Mine produces a SQL expression (CASE
+                Click <strong>Generate Transform</strong> and Settle produces a SQL expression (CASE
                 statement, function call, etc.).
               </p>
               <Tip>
                 Be specific. &quot;Clean up the dates&quot; is vague. &quot;Convert dates from MM/DD/YYYY format
-                to YYYY-MM-DD&quot; gives Mine exactly what it needs.
+                to YYYY-MM-DD&quot; gives Settle exactly what it needs.
               </Tip>
             </div>
 
@@ -180,7 +180,7 @@ export default function TransformsGuidePage() {
               <BulletList items={[
                 'Apply Transform — applies the transform to all rows and updates the staged data. The sidebar icon updates to a green ✅ Applied indicator.',
                 'Save — stores the transform without applying it to staged data. The sidebar shows a 💾 Saved indicator.',
-                'You can also use Auto-Generate All Transforms to have Mine generate transforms for every flagged field at once.',
+                'You can also use Auto-Generate All Transforms to have Settle generate transforms for every flagged field at once.',
               ]} />
               <p className="text-sm text-gray-600 leading-relaxed max-w-2xl mt-3">
                 When all transforms are ready, click <strong>Continue to Validation</strong> to move

@@ -103,16 +103,16 @@ const DOC_CATEGORIES = [
 
 const FAQS = [
   {
-    q: 'Which source systems does Mine support?',
-    a: 'Mine currently supports CSV uploads for any source system and DDL/SQL schema parsing for Salesforce, SAP, Oracle, SQL Server, MySQL, PostgreSQL, and NetSuite. Direct database connections are on the roadmap.',
+    q: 'Which source systems does Settle support?',
+    a: 'Settle currently supports CSV uploads for any source system and DDL/SQL schema parsing for Salesforce, SAP, Oracle, SQL Server, MySQL, PostgreSQL, and NetSuite. Direct database connections are on the roadmap.',
   },
   {
     q: 'How does AI mapping work?',
-    a: 'Mine analyzes field names, data types, sample values, and uploaded schema documentation to propose source-to-target field mappings with confidence scores. Every AI suggestion is a proposal — you review, approve, edit, or reject before anything is applied.',
+    a: 'Settle analyzes field names, data types, sample values, and uploaded schema documentation to propose source-to-target field mappings with confidence scores. Every AI suggestion is a proposal — you review, approve, edit, or reject before anything is applied.',
   },
   {
     q: 'Can I revert a data fix?',
-    a: 'Yes. Every fix is fully reversible. Mine snapshots the complete pre-fix state of every affected row before applying changes. You can revert any fix from the Fix History panel to restore exact original values.',
+    a: 'Yes. Every fix is fully reversible. Settle snapshots the complete pre-fix state of every affected row before applying changes. You can revert any fix from the Fix History panel to restore exact original values.',
   },
   {
     q: 'What does the Migration Readiness Score measure?',
@@ -231,20 +231,20 @@ export default function SupportPage() {
                 Need help with your migration? Our team typically responds within a few hours.
               </p>
               <a
-                href="mailto:info@trymine.ai"
+                href="mailto:info@usesettle.ai"
                 className="text-sm text-[#4F46E5] hover:underline"
               >
-                info@trymine.ai
+                info@usesettle.ai
               </a>
             </div>
 
             <div className="bg-white border border-gray-200 rounded-xl p-5">
               <p className="text-sm font-medium text-gray-900 mb-1.5">Request a feature</p>
               <p className="text-xs text-gray-500 leading-relaxed mb-3">
-                Have an idea for how Mine could work better for your team? We&apos;d love to hear it.
+                Have an idea for how Settle could work better for your team? We&apos;d love to hear it.
               </p>
               <a
-                href="mailto:feedback@trymine.ai"
+                href="mailto:feedback@usesettle.ai"
                 className="text-sm text-[#4F46E5] hover:underline"
               >
                 Share feedback
@@ -254,7 +254,7 @@ export default function SupportPage() {
 
           {/* ── Footer ────────────────────────────────────────────────────── */}
           <div className="text-center text-xs text-gray-400 pb-2">
-            Mine v0.1.0
+            Settle v0.1.0
             <span className="mx-2">·</span>
             <span className="hover:text-gray-600 cursor-pointer">Release notes</span>
             <span className="mx-2">·</span>

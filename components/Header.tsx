@@ -9,7 +9,7 @@ const NAV_LINKS = [
   { label: 'Migrations',  href: '/migrate' },
 ]
 
-const CALENDLY = 'https://calendly.com/mine-ai/demo'
+const CALENDLY = 'https://calendly.com/settle-ai/demo'
 
 export default function Header() {
   const [mobileOpen, setMobileOpen] = useState(false)
@@ -29,11 +29,10 @@ export default function Header() {
           {/* Logo */}
           <Link href="/" className="flex items-center gap-2.5" onClick={closeMenu}>
             <img
-              src="/Mine Logo no background.png"
-              alt="Mine"
+              src="/images/logos/settle-logo-full.svg"
+              alt="Settle"
               className="h-7 w-auto"
             />
-            <span className="text-lg font-bold tracking-tight text-slate-900">Mine</span>
           </Link>
 
           {/* Desktop nav */}
@@ -42,7 +41,7 @@ export default function Header() {
               <Link
                 key={link.href}
                 href={link.href}
-                className="text-sm font-medium text-slate-400 hover:text-slate-700 transition-colors"
+                className="text-sm font-medium text-[#94A3B8] hover:text-[#334155] transition-colors"
               >
                 {link.label}
               </Link>
@@ -50,7 +49,7 @@ export default function Header() {
 
             <Link
               href="/login"
-              className="text-sm font-medium text-slate-400 hover:text-slate-700 transition-colors"
+              className="text-sm font-medium text-[#94A3B8] hover:text-[#334155] transition-colors"
             >
               Login
             </Link>
@@ -60,7 +59,7 @@ export default function Header() {
               href={CALENDLY}
               target="_blank"
               rel="noopener noreferrer"
-              className="border border-slate-300 text-slate-700 hover:border-blue-600 hover:text-blue-600 text-sm font-medium px-5 py-2 rounded-lg transition-all"
+              className="border border-[#CBD5E1] text-[#334155] hover:border-[#2358D4] hover:text-[#2358D4] text-sm font-medium px-5 py-2 rounded-lg transition-all"
             >
               Book a Demo
             </a>
@@ -68,7 +67,7 @@ export default function Header() {
             {/* Request Access — primary, most prominent */}
             <Link
               href="/request-access"
-              className="bg-blue-600 hover:bg-blue-700 text-white text-sm font-semibold px-5 py-2 rounded-lg transition-all hover:-translate-y-0.5 hover:shadow-lg hover:shadow-blue-600/25"
+              className="bg-[#2358D4] hover:bg-[#1D4ED8] text-white text-sm font-semibold px-5 py-2 rounded-lg transition-all hover:-translate-y-0.5 hover:shadow-lg hover:shadow-blue-600/25"
             >
               Request Access
             </Link>
@@ -80,9 +79,9 @@ export default function Header() {
             onClick={() => setMobileOpen((o) => !o)}
             aria-label="Toggle menu"
           >
-            <span className={`block h-0.5 bg-slate-700 transition-all duration-300 ${mobileOpen ? 'rotate-45 translate-y-2' : ''}`} />
-            <span className={`block h-0.5 bg-slate-700 transition-all duration-300 ${mobileOpen ? 'opacity-0' : ''}`} />
-            <span className={`block h-0.5 bg-slate-700 transition-all duration-300 ${mobileOpen ? '-rotate-45 -translate-y-2' : ''}`} />
+            <span className={`block h-0.5 bg-[#334155] transition-all duration-300 ${mobileOpen ? 'rotate-45 translate-y-2' : ''}`} />
+            <span className={`block h-0.5 bg-[#334155] transition-all duration-300 ${mobileOpen ? 'opacity-0' : ''}`} />
+            <span className={`block h-0.5 bg-[#334155] transition-all duration-300 ${mobileOpen ? '-rotate-45 -translate-y-2' : ''}`} />
           </button>
         </div>
       </div>
@@ -104,7 +103,7 @@ export default function Header() {
                   key={link.href}
                   href={link.href}
                   onClick={closeMenu}
-                  className="text-sm font-medium text-slate-600 hover:text-slate-900 transition-colors py-1"
+                  className="text-sm font-medium text-[#475569] hover:text-[#0F172A] transition-colors py-1"
                 >
                   {link.label}
                 </Link>
@@ -113,7 +112,7 @@ export default function Header() {
                 <Link
                   href="/request-access"
                   onClick={closeMenu}
-                  className="w-full bg-blue-600 hover:bg-blue-700 text-white text-sm font-semibold px-5 py-3 rounded-lg transition-all text-center"
+                  className="w-full bg-[#2358D4] hover:bg-[#1D4ED8] text-white text-sm font-semibold px-5 py-3 rounded-lg transition-all text-center"
                 >
                   Request Access
                 </Link>
@@ -122,14 +121,14 @@ export default function Header() {
                   target="_blank"
                   rel="noopener noreferrer"
                   onClick={closeMenu}
-                  className="w-full border border-slate-300 text-slate-700 text-sm font-medium px-5 py-3 rounded-lg transition-all text-center"
+                  className="w-full border border-[#CBD5E1] text-[#334155] text-sm font-medium px-5 py-3 rounded-lg transition-all text-center"
                 >
                   Book a Demo
                 </a>
                 <Link
                   href="/login"
                   onClick={closeMenu}
-                  className="text-sm font-medium text-slate-400 hover:text-slate-700 transition-colors text-center py-1"
+                  className="text-sm font-medium text-[#94A3B8] hover:text-[#334155] transition-colors text-center py-1"
                 >
                   Login
                 </Link>

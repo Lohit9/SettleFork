@@ -6,7 +6,8 @@ import type { OrgRole } from '@/lib/types/organizations'
 
 export default async function ProjectsPage() {
   const cookieStore = await cookies()
-  const activeOrgId = cookieStore.get('mine-active-org')?.value
+  const activeOrgId = cookieStore.get('settle-active-org')?.value
+    ?? cookieStore.get('mine-active-org')?.value
 
   const supabase = await createClient()
   const { data: { user } } = await supabase.auth.getUser()

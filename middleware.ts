@@ -114,7 +114,7 @@ export async function middleware(request: NextRequest) {
     return NextResponse.redirect(url)
   }
 
-  // ── mine-active-org cookie ──────────────────────────────────────────────────
+  // ── settle-active-org cookie ─────────────────────────────────────────────────
   // Read the active org cookie for UX context. If not set, the sidebar
   // component will default it on first render. No blocking or validation here.
   // RLS handles actual access control.

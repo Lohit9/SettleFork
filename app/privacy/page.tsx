@@ -3,8 +3,8 @@ import Image from 'next/image'
 import type { Metadata } from 'next'
 
 export const metadata: Metadata = {
-  title: 'Privacy Policy — Mine',
-  description: 'Mine privacy policy: how we collect, use, and protect your data.',
+  title: 'Privacy Policy — Settle',
+  description: 'Settle privacy policy: how we collect, use, and protect your data.',
 }
 
 export default function PrivacyPage() {
@@ -15,13 +15,12 @@ export default function PrivacyPage() {
         <div className="max-w-3xl mx-auto flex items-center justify-between">
           <Link href="/" className="flex items-center gap-2">
             <Image
-              src="/Mine Logo no background.png"
-              alt="Mine"
-              width={28}
+              src="/images/logos/settle-logo-full.svg"
+              alt="Settle"
+              width={126}
               height={28}
               className="h-7 w-auto"
             />
-            <span className="font-semibold text-gray-900">Mine</span>
           </Link>
           <Link href="/" className="text-sm text-gray-500 hover:text-gray-700 transition-colors">
             ← Back to Home
@@ -39,10 +38,10 @@ export default function PrivacyPage() {
           </p>
         </div>
 
-        <div className="prose prose-gray max-w-none text-sm leading-relaxed">
+        <div className="prose prose-gray max-w-none text-[15px] leading-relaxed">
 
           <p>
-            Mine (&ldquo;we,&rdquo; &ldquo;us,&rdquo; or &ldquo;our&rdquo;) operates the trymine.ai platform
+            Settle (&ldquo;we,&rdquo; &ldquo;us,&rdquo; or &ldquo;our&rdquo;) operates the usesettle.ai platform
             (&ldquo;the Platform&rdquo;). This Privacy Policy describes how we collect, use, protect, and handle
             information when you use our Platform. We are committed to protecting the privacy and security of your data.
           </p>
@@ -57,8 +56,8 @@ export default function PrivacyPage() {
 
             <SubSection title="Migration Project Data">
               <p>
-                When you use Mine, you may upload data for migration analysis, including source and target schemas,
-                data files (CSV, JSON, DDL), and related documentation. This is the core data Mine processes to
+                When you use Settle, you may upload data for migration analysis, including source and target schemas,
+                data files (CSV, JSON, DDL), and related documentation. This is the core data Settle processes to
                 generate mappings, transformations, and quality analysis.
               </p>
               <p className="mt-3">
@@ -96,7 +95,7 @@ export default function PrivacyPage() {
 
           <Section number="3" title="AI Processing and Data Handling">
             <p>
-              Mine uses the Anthropic Claude API to power AI features such as schema mapping suggestions,
+              Settle uses the Anthropic Claude API to power AI features such as schema mapping suggestions,
               transformation generation, and quality issue detection. When you use these features, relevant portions of
               your project data are sent to Anthropic&rsquo;s API for processing.
             </p>
@@ -159,8 +158,8 @@ export default function PrivacyPage() {
             </ul>
             <p>
               To exercise any of these rights, contact us at{' '}
-              <a href="mailto:privacy@trymine.ai" className="text-blue-600 hover:underline">
-                privacy@trymine.ai
+              <a href="mailto:privacy@usesettle.ai" className="text-indigo-600 hover:underline">
+                privacy@usesettle.ai
               </a>
               .
             </p>
@@ -168,7 +167,7 @@ export default function PrivacyPage() {
 
           <Section number="8" title="Cookies">
             <p>
-              Mine uses essential cookies required for authentication and session management. We do not use third-party
+              Settle uses essential cookies required for authentication and session management. We do not use third-party
               advertising or tracking cookies.
             </p>
           </Section>
@@ -193,14 +192,14 @@ export default function PrivacyPage() {
             <ul>
               <li>
                 <strong>Email:</strong>{' '}
-                <a href="mailto:privacy@trymine.ai" className="text-blue-600 hover:underline">
-                  privacy@trymine.ai
+                <a href="mailto:privacy@usesettle.ai" className="text-indigo-600 hover:underline">
+                  privacy@usesettle.ai
                 </a>
               </li>
               <li>
                 <strong>Website:</strong>{' '}
-                <a href="https://trymine.ai" className="text-blue-600 hover:underline">
-                  trymine.ai
+                <a href="https://usesettle.ai" className="text-indigo-600 hover:underline">
+                  usesettle.ai
                 </a>
               </li>
             </ul>
@@ -211,7 +210,7 @@ export default function PrivacyPage() {
       {/* Footer */}
       <footer className="border-t border-gray-100 py-8 px-6 mt-8">
         <div className="max-w-3xl mx-auto flex items-center justify-between">
-          <span className="text-sm text-gray-400">© 2026 Mine. All rights reserved.</span>
+          <span className="text-sm text-gray-400">© 2026 Settle. All rights reserved.</span>
           <Link href="/" className="text-sm text-gray-400 hover:text-gray-600 transition-colors">
             Back to Home
           </Link>
@@ -245,7 +244,7 @@ function Section({
 function SubSection({ title, children }: { title: string; children: React.ReactNode }) {
   return (
     <div className="mt-4">
-      <h3 className="text-base font-semibold text-blue-700 mb-1">{title}</h3>
+      <h3 className="text-base font-semibold text-indigo-700 mb-1">{title}</h3>
       <div className="text-gray-700">{children}</div>
     </div>
   )

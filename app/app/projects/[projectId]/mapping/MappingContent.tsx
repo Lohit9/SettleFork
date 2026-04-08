@@ -265,7 +265,7 @@ function GenerateMappingsPanel({
           <button
             onClick={handleGenerate}
             disabled={!canGenerate || generating || !canEdit}
-            className="px-5 py-2.5 text-sm font-medium text-white bg-blue-600 rounded-lg hover:bg-blue-700 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+            className="px-5 py-2.5 text-sm font-medium text-white bg-[#2358D4] rounded-lg hover:bg-blue-700 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
           >
             {generating ? 'Generating…' : 'Generate Mappings'}
           </button>
@@ -397,7 +397,7 @@ function MappingProgress({
 
       <div className="w-full h-2 bg-gray-100 rounded-full overflow-hidden">
         <div
-          className={`h-full rounded-full transition-all duration-300 ${isComplete ? 'bg-green-500' : 'bg-blue-500'}`}
+          className={`h-full rounded-full transition-all duration-300 ${isComplete ? 'bg-green-500' : 'bg-[#2358D4]'}`}
           style={{ width: `${progressPct}%` }}
         />
       </div>
@@ -547,7 +547,7 @@ function AddMappingModal({
         </div>
         <div className="flex gap-3 px-6 py-4 border-t border-gray-100">
           <button onClick={onClose} disabled={pending} className="flex-1 px-4 py-2 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-lg hover:bg-gray-50 transition-colors disabled:opacity-40">Cancel</button>
-          <button onClick={handleAdd} disabled={!sourceTableId || !targetTableId || pending} className="flex-1 px-4 py-2 text-sm font-medium text-white bg-blue-600 rounded-lg hover:bg-blue-700 disabled:opacity-40">
+          <button onClick={handleAdd} disabled={!sourceTableId || !targetTableId || pending} className="flex-1 px-4 py-2 text-sm font-medium text-white bg-[#2358D4] rounded-lg hover:bg-blue-700 disabled:opacity-40">
             {pending ? (generatingFields ? 'Generating fields…' : 'Adding…') : 'Add Mapping'}
           </button>
         </div>
@@ -558,7 +558,8 @@ function AddMappingModal({
 
 // ─── Inline Add Field Row ─────────────────────────────────────────────────────
 
-const SUPPRESS_MULTI_TARGET_KEY = 'mine_suppress_multi_target_warning'
+const SUPPRESS_MULTI_TARGET_KEY = 'settle_suppress_multi_target_warning'
+const SUPPRESS_MULTI_TARGET_KEY_LEGACY = 'mine_suppress_multi_target_warning'
 
 type MappingType = 'one_to_one' | 'many_to_one' | 'one_to_many'
 
@@ -605,7 +606,10 @@ function InlineAddFieldRow({
 
   // Read suppress preference from localStorage on mount
   useEffect(() => {
-    setSuppressMTW(localStorage.getItem(SUPPRESS_MULTI_TARGET_KEY) === 'true')
+    setSuppressMTW(
+      localStorage.getItem(SUPPRESS_MULTI_TARGET_KEY) === 'true' ||
+      localStorage.getItem(SUPPRESS_MULTI_TARGET_KEY_LEGACY) === 'true'
+    )
   }, [])
 
   // ALL source fields are available — multi-target is now allowed with a warning
@@ -876,7 +880,7 @@ function InlineAddFieldRow({
               </button>
               <button
                 onClick={confirmMultiSource}
-                className="px-4 py-2 text-sm font-medium text-white bg-blue-600 hover:bg-blue-700 rounded-lg"
+                className="px-4 py-2 text-sm font-medium text-white bg-[#2358D4] hover:bg-blue-700 rounded-lg"
               >
                 Add Contributing Mapping
               </button>
@@ -892,7 +896,7 @@ function InlineAddFieldRow({
           <div className="flex rounded-lg border border-gray-200 overflow-hidden text-[11px]">
             {([
               { key: 'one_to_one', label: '1 → 1', activeClass: 'bg-gray-800 text-white' },
-              { key: 'many_to_one', label: 'Many → 1', activeClass: 'bg-blue-600 text-white' },
+              { key: 'many_to_one', label: 'Many → 1', activeClass: 'bg-[#2358D4] text-white' },
               { key: 'one_to_many', label: '1 → Many', activeClass: 'bg-purple-600 text-white' },
             ] as const).map((opt) => (
               <button
@@ -943,7 +947,7 @@ function InlineAddFieldRow({
         <button
           onClick={handleAdd}
           disabled={!srcFieldId || !tgtFieldId || pending}
-          className="px-3 py-1.5 text-xs font-medium text-white bg-blue-600 rounded-lg hover:bg-blue-700 disabled:opacity-40 flex-shrink-0"
+          className="px-3 py-1.5 text-xs font-medium text-white bg-[#2358D4] rounded-lg hover:bg-blue-700 disabled:opacity-40 flex-shrink-0"
         >
           {pending ? '…' : 'Add'}
         </button>
@@ -1966,7 +1970,7 @@ function MappingDetailsPanel({
                 </SelectContent>
               </Select>
               <div className="flex gap-2 mt-2">
-                <button onClick={handleEditSrc} disabled={pending} className="flex-1 px-3 py-1.5 text-xs font-medium text-white bg-blue-600 rounded-lg disabled:opacity-40">
+                <button onClick={handleEditSrc} disabled={pending} className="flex-1 px-3 py-1.5 text-xs font-medium text-white bg-[#2358D4] rounded-lg disabled:opacity-40">
                   {pending ? '…' : 'Save'}
                 </button>
                 <button onClick={() => { setEditSrcMode(false); setNewSrcId(fm.source_field_id) }} className="flex-1 px-3 py-1.5 text-xs font-medium text-gray-700 border border-gray-200 rounded-lg">
@@ -2006,7 +2010,7 @@ function MappingDetailsPanel({
                 </SelectContent>
               </Select>
               <div className="flex gap-2 mt-2">
-                <button onClick={handleEditTgt} disabled={pending} className="flex-1 px-3 py-1.5 text-xs font-medium text-white bg-blue-600 rounded-lg disabled:opacity-40">
+                <button onClick={handleEditTgt} disabled={pending} className="flex-1 px-3 py-1.5 text-xs font-medium text-white bg-[#2358D4] rounded-lg disabled:opacity-40">
                   {pending ? '…' : 'Save'}
                 </button>
                 <button onClick={() => { setEditTgtMode(false); setNewTgtId(fm.target_field_id) }} className="flex-1 px-3 py-1.5 text-xs font-medium text-gray-700 border border-gray-200 rounded-lg">
@@ -2120,7 +2124,7 @@ function UnmappedView({
                     <button
                       onClick={() => handleMap(f.id)}
                       disabled={!selectedTgtId || pending}
-                      className="px-2.5 py-1 text-xs font-medium text-white bg-blue-600 rounded hover:bg-blue-700 disabled:opacity-40"
+                      className="px-2.5 py-1 text-xs font-medium text-white bg-[#2358D4] rounded hover:bg-blue-700 disabled:opacity-40"
                     >
                       Map
                     </button>
@@ -2839,7 +2843,7 @@ export default function MappingContent({ projectId, projectName, initialData }: 
             </RoleTooltip>
           )}
         </div>
-        <button onClick={() => router.push(`/app/projects/${projectId}/transform`)} className="px-5 py-2.5 text-sm font-medium text-white bg-blue-600 rounded-lg hover:bg-blue-700 transition-colors">
+        <button onClick={() => router.push(`/app/projects/${projectId}/transform`)} className="px-5 py-2.5 text-sm font-medium text-white bg-[#2358D4] rounded-lg hover:bg-blue-700 transition-colors">
           Proceed to Transform →
         </button>
       </div>

@@ -198,6 +198,7 @@ export default function OrganizationSettingsContent({
       return
     }
     // Clear the active org cookie and go to projects (will auto-pick a new org)
+    document.cookie = 'settle-active-org=; path=/; max-age=0'
     document.cookie = 'mine-active-org=; path=/; max-age=0'
     router.push('/app/projects')
     router.refresh()
@@ -246,7 +247,7 @@ export default function OrganizationSettingsContent({
                     !orgName.trim() ||
                     orgName.trim() === org.name
                   }
-                  className="bg-blue-600 hover:bg-blue-700 text-white"
+                  className="bg-[#2358D4] hover:bg-blue-700 text-white"
                 >
                   {orgNameSaving ? 'Saving…' : 'Save'}
                 </Button>
@@ -313,7 +314,7 @@ export default function OrganizationSettingsContent({
             <Button
               type="submit"
               disabled={isPending || !inviteEmail.trim()}
-              className="bg-blue-600 hover:bg-blue-700 text-white whitespace-nowrap"
+              className="bg-[#2358D4] hover:bg-blue-700 text-white whitespace-nowrap"
             >
               {isPending ? 'Sending…' : 'Send Invite'}
             </Button>
@@ -353,7 +354,7 @@ export default function OrganizationSettingsContent({
             return (
               <div key={member.id} className="flex items-center gap-4 px-5 py-3">
                 {/* Avatar */}
-                <div className="w-8 h-8 rounded-full bg-blue-600 flex items-center justify-center flex-shrink-0">
+                <div className="w-8 h-8 rounded-full bg-[#2358D4] flex items-center justify-center flex-shrink-0">
                   <span className="text-xs font-semibold text-white">
                     {(member.user_name || member.user_email || '??')
                       .slice(0, 2)

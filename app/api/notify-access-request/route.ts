@@ -7,9 +7,9 @@ import {
 
 const resend = new Resend(process.env.RESEND_API_KEY)
 
-const FROM_NOTIFICATIONS = 'Mine Notifications <info@trymine.ai>'
-const FROM_KAAN = 'Kaan from Mine <info@trymine.ai>'
-const ADMIN_EMAIL = 'info@trymine.ai'
+const FROM_NOTIFICATIONS = 'Settle Notifications <info@usesettle.ai>'
+const FROM_KAAN = 'Kaan from Settle <info@usesettle.ai>'
+const ADMIN_EMAIL = 'info@usesettle.ai'
 
 // ── in-memory rate limit: max 3 notifications per email per 24h ──────────────
 interface RLEntry { count: number; resetAt: number }

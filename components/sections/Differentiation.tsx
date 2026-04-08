@@ -27,15 +27,15 @@ const MINE_BULLETS = [
 
 export default function Differentiation() {
   return (
-    <section id="why" className="bg-slate-50 py-24 px-6 lg:px-12">
+    <section id="why" className="bg-[#F8FAFC] py-24 px-6 lg:px-12">
       <div className="max-w-7xl mx-auto">
 
         {/* Header */}
         <ScrollReveal>
-          <h2 className="text-4xl font-bold text-slate-900 tracking-tight text-center mb-3">
-            Why Mine is different
+          <h2 className="text-4xl font-bold text-[#0F172A] tracking-tight text-center mb-3">
+            Why Settle is different
           </h2>
-          <p className="text-slate-500 text-base text-center mb-14">
+          <p className="text-[#64748B] text-[17px] text-center mb-14">
             Not another ETL tool. Not another consulting project.
           </p>
         </ScrollReveal>
@@ -44,13 +44,13 @@ export default function Differentiation() {
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-5">
           {MUTED_CARDS.map((card, i) => (
             <ScrollReveal key={card.title} delay={i * 0.1}>
-              <div className="bg-white rounded-2xl p-8 border border-slate-200 h-full opacity-75 hover:-translate-y-1 hover:shadow-lg transition-all duration-300">
-                <h3 className="text-lg font-bold text-slate-600 mb-5">{card.title}</h3>
+              <div className="bg-white rounded-2xl p-8 border border-[#E2E8F0] h-full opacity-75 hover:-translate-y-1 hover:shadow-lg transition-all duration-300">
+                <h3 className="text-lg font-bold text-[#475569] mb-5">{card.title}</h3>
                 <ul className="space-y-3">
                   {card.bullets.map((bullet) => (
                     <li key={bullet} className="flex gap-3">
-                      <span className="text-slate-400 shrink-0 mt-0.5">×</span>
-                      <span className="text-sm text-slate-500 leading-relaxed">{bullet}</span>
+                      <span className="text-[#94A3B8] shrink-0 mt-0.5">×</span>
+                      <span className="text-sm text-[#64748B] leading-relaxed">{bullet}</span>
                     </li>
                   ))}
                 </ul>
@@ -58,15 +58,15 @@ export default function Differentiation() {
             </ScrollReveal>
           ))}
 
-          {/* Mine card */}
+          {/* Settle card */}
           <ScrollReveal delay={0.2}>
-            <div className="bg-white rounded-2xl p-8 border border-blue-600 border-t-[3px] h-full hover:-translate-y-1 hover:shadow-lg transition-all duration-300">
-              <h3 className="text-lg font-bold text-slate-900 mb-5">Mine</h3>
+            <div className="bg-white rounded-2xl p-8 border border-[#2358D4] border-t-[3px] h-full hover:-translate-y-1 hover:shadow-lg transition-all duration-300">
+              <h3 className="text-lg font-bold text-[#0F172A] mb-5">Settle</h3>
               <ul className="space-y-3">
                 {MINE_BULLETS.map((bullet) => (
                   <li key={bullet} className="flex gap-3">
-                    <span className="text-blue-600 font-bold shrink-0 mt-0.5">✓</span>
-                    <span className="text-sm text-slate-700 leading-relaxed">{bullet}</span>
+                    <span className="text-[#2358D4] font-bold shrink-0 mt-0.5">✓</span>
+                    <span className="text-sm text-[#334155] leading-relaxed">{bullet}</span>
                   </li>
                 ))}
               </ul>
@@ -76,7 +76,7 @@ export default function Differentiation() {
 
         {/* Footer quote */}
         <ScrollReveal delay={0.2}>
-          <p className="text-base text-slate-500 italic text-center mt-10">
+          <p className="text-[17px] text-[#64748B] italic text-center mt-10">
             Built to make migrations as routine as deploying a modern web service.
           </p>
         </ScrollReveal>

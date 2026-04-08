@@ -28,7 +28,7 @@ export default function ForgotPasswordPage() {
     try {
       const supabase = createClient()
       const { error: resetError } = await supabase.auth.resetPasswordForEmail(email, {
-        redirectTo: `${origin || process.env.NEXT_PUBLIC_SITE_URL || 'https://www.trymine.ai'}/api/auth/callback?type=recovery`,
+        redirectTo: `${origin || process.env.NEXT_PUBLIC_SITE_URL || 'https://www.usesettle.ai'}/api/auth/callback?type=recovery`,
       })
 
       if (resetError) {

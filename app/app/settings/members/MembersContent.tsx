@@ -174,7 +174,7 @@ export default function MembersContent({ orgId, currentUserId, currentUserRole }
           <Button
             type="submit"
             disabled={isPending || !inviteEmail.trim()}
-            className="bg-blue-600 hover:bg-blue-700 text-white whitespace-nowrap"
+            className="bg-[#2358D4] hover:bg-blue-700 text-white whitespace-nowrap"
           >
             {isPending ? 'Sending...' : 'Send Invite'}
           </Button>
@@ -212,7 +212,7 @@ export default function MembersContent({ orgId, currentUserId, currentUserRole }
             return (
               <div key={member.id} className="flex items-center gap-4 px-5 py-3">
                 {/* Avatar */}
-                <div className="w-8 h-8 rounded-full bg-blue-600 flex items-center justify-center flex-shrink-0">
+                <div className="w-8 h-8 rounded-full bg-[#2358D4] flex items-center justify-center flex-shrink-0">
                   <span className="text-xs font-semibold text-white">
                     {(member.user_name || member.user_email || '??').slice(0, 2).toUpperCase()}
                   </span>

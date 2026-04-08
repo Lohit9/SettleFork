@@ -35,9 +35,9 @@ export async function GET(request: Request) {
 
         const { subject, html } = welcomeEmail(firstName, orgName)
         resend.emails.send({
-          from: 'Kaan from Mine <info@trymine.ai>',
+          from: 'Kaan from Settle <info@usesettle.ai>',
           to: user.email!,
-          replyTo: 'info@trymine.ai',
+          replyTo: 'info@usesettle.ai',
           subject,
           html,
         }).catch((err) => console.error('[auth callback] Welcome email failed:', err))
