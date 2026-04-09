@@ -8,9 +8,9 @@ import MappingTable from './how-it-works/MappingTable'
 import ValidationDashboard from './how-it-works/ValidationDashboard'
 
 const TABS = [
-  '1. Schema understanding',
-  '2. Auto-mapping',
-  '3. Validation & readiness',
+  { fullLabel: '1. Schema understanding', shortLabel: '1. Schema'    },
+  { fullLabel: '2. Auto-mapping',         shortLabel: '2. Mapping'   },
+  { fullLabel: '3. Validation & readiness', shortLabel: '3. Validation' },
 ]
 
 const TAB_CONTENT = [
@@ -38,10 +38,10 @@ export default function HowItWorks() {
 
         {/* Tab bar */}
         <ScrollReveal delay={0.1}>
-          <div className="flex justify-center border-b border-[#E2E8F0] overflow-x-auto gap-0 mb-0">
+          <div className="flex justify-center border-b border-[#E2E8F0] gap-0 mb-0">
             {TABS.map((tab, i) => (
               <button
-                key={tab}
+                key={tab.fullLabel}
                 onClick={() => setActiveTab(i)}
                 className={`px-4 py-3 text-sm font-medium border-b-2 transition-all whitespace-nowrap cursor-pointer bg-transparent ${
                   activeTab === i
@@ -49,7 +49,8 @@ export default function HowItWorks() {
                     : 'text-[#64748B] border-transparent hover:text-[#334155]'
                 }`}
               >
-                {tab}
+                <span className="hidden md:inline">{tab.fullLabel}</span>
+                <span className="md:hidden">{tab.shortLabel}</span>
               </button>
             ))}
           </div>

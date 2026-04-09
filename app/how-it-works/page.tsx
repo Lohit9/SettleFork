@@ -3,6 +3,7 @@ import Image from 'next/image'
 import Link from 'next/link'
 import Header from '@/components/Header'
 import Footer from '@/components/Footer'
+import ScrollReveal from '@/components/ui/ScrollReveal'
 
 export const metadata: Metadata = {
   title: 'How Settle automates data migration — schema profiling to load files',
@@ -144,46 +145,50 @@ export default function HowItWorksPage() {
         <div className="max-w-5xl mx-auto py-24 px-6">
 
           {/* Hero */}
-          <h1 className="text-4xl lg:text-5xl font-bold text-[#0F172A] tracking-tight mb-4 text-center">
-            How Settle works
-          </h1>
-          <p className="text-lg text-[#64748B] leading-relaxed text-center max-w-2xl mx-auto mb-16">
-            An autonomous, multi-agent workflow that handles the full migration lifecycle — from schema profiling to production-ready load files. First mapping proposals in under an hour. Production-ready packages in days, not months.
-          </p>
+          <ScrollReveal>
+            <h1 className="text-4xl lg:text-5xl font-bold text-[#0F172A] tracking-tight mb-4 text-center">
+              How Settle works
+            </h1>
+            <p className="text-lg text-[#64748B] leading-relaxed text-center max-w-2xl mx-auto mb-16">
+              An autonomous, multi-agent workflow that handles the full migration lifecycle — from schema profiling to production-ready load files. First mapping proposals in under an hour. Production-ready packages in days, not months.
+            </p>
+          </ScrollReveal>
 
           {/* Steps */}
           {STEPS.map((step, i) => {
             const flipped = i % 2 === 1
             return (
-              <div key={step.n} className="border-t border-[#F1F5F9] py-16">
-                <div className={`grid grid-cols-1 lg:grid-cols-2 gap-12 items-center ${flipped ? 'lg:[direction:rtl]' : ''}`}>
-                  {/* Text */}
-                  <div className={flipped ? 'lg:[direction:ltr]' : ''}>
-                    <div className="text-6xl font-bold text-[#DBEAFE] leading-none mb-2 select-none">
-                      {step.n}
+              <ScrollReveal key={step.n} delay={i * 0.05}>
+                <div className="border-t border-[#F1F5F9] py-16">
+                  <div className={`grid grid-cols-1 lg:grid-cols-2 gap-12 items-center ${flipped ? 'lg:[direction:rtl]' : ''}`}>
+                    {/* Text */}
+                    <div className={flipped ? 'lg:[direction:ltr]' : ''}>
+                      <div className="text-6xl font-bold text-[#DBEAFE] leading-none mb-2 select-none">
+                        {step.n}
+                      </div>
+                      <h2 className="text-2xl font-bold text-[#0F172A] mb-3">{step.title}</h2>
+                      <p className="text-[#475569] leading-relaxed">{step.description}</p>
                     </div>
-                    <h2 className="text-2xl font-bold text-[#0F172A] mb-3">{step.title}</h2>
-                    <p className="text-[#475569] leading-relaxed">{step.description}</p>
-                  </div>
-                  {/* Visual */}
-                  <div className={flipped ? 'lg:[direction:ltr]' : ''}>
-                    <Screenshot src={step.screenshot} alt={step.alt} />
+                    {/* Visual */}
+                    <div className={flipped ? 'lg:[direction:ltr]' : ''}>
+                      <Screenshot src={step.screenshot} alt={step.alt} />
+                    </div>
                   </div>
                 </div>
-              </div>
+              </ScrollReveal>
             )
           })}
 
           {/* Bottom CTA */}
-          <div className="bg-[#F8FAFC] rounded-2xl p-12 text-center mt-16">
-            <h2 className="text-2xl font-bold text-[#0F172A] mb-3">Ready to see it in action?</h2>
-            <p className="text-[#64748B] mb-6">
-              Connect your schema and get your first mapping in under an hour.
+          <div className="bg-[#0F172A] rounded-2xl p-12 text-center mt-16">
+            <h2 className="text-2xl font-bold text-white mb-3">Ready to see it on your data?</h2>
+            <p className="text-[#CBD5E1] mb-6">
+              Tell us about your migration and get your first mapping proposal in under an hour.
             </p>
             <div className="flex flex-wrap justify-center gap-3">
               <Link
                 href="/request-access"
-                className="bg-[#2358D4] hover:bg-[#1D4ED8] text-white font-semibold px-8 py-3.5 rounded-xl shadow-lg shadow-blue-600/20 hover:-translate-y-0.5 transition-all text-sm"
+                className="bg-[#2358D4] hover:bg-[#1D4ED8] text-white font-semibold px-8 py-3.5 rounded-xl shadow-lg shadow-blue-600/25 hover:-translate-y-0.5 transition-all text-sm"
               >
                 Request Access
               </Link>
@@ -191,7 +196,7 @@ export default function HowItWorksPage() {
                 href="https://calendly.com/settle-ai/demo"
                 target="_blank"
                 rel="noopener noreferrer"
-                className="border border-[#CBD5E1] text-[#0F172A] font-medium px-8 py-3.5 rounded-xl hover:border-[#2358D4] hover:text-[#2358D4] transition-all text-sm"
+                className="border border-slate-600 text-slate-300 font-medium px-8 py-3.5 rounded-xl hover:border-slate-400 hover:text-white transition-all text-sm"
               >
                 Book a Demo
               </a>

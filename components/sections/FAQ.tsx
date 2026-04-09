@@ -37,7 +37,7 @@ export default function FAQ() {
       <div className="max-w-2xl mx-auto">
 
         <ScrollReveal>
-          <h2 className="text-4xl font-bold text-[#0F172A] tracking-tight text-center mb-10">
+          <h2 className="text-4xl font-bold text-[#0F172A] tracking-tight text-center mb-6">
             FAQ
           </h2>
         </ScrollReveal>
