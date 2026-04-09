@@ -1,6 +1,7 @@
 import Link from 'next/link'
-import Image from 'next/image'
 import type { Metadata } from 'next'
+import Header from '@/components/Header'
+import Footer from '@/components/Footer'
 
 export const metadata: Metadata = {
   title: 'Privacy Policy — Settle',
@@ -10,23 +11,7 @@ export const metadata: Metadata = {
 export default function PrivacyPage() {
   return (
     <div className="min-h-screen bg-white">
-      {/* Nav bar */}
-      <header className="border-b border-gray-100 px-6 py-4">
-        <div className="max-w-3xl mx-auto flex items-center justify-between">
-          <Link href="/" className="flex items-center gap-2">
-            <Image
-              src="/images/logos/settle-logo-full.svg"
-              alt="Settle"
-              width={126}
-              height={28}
-              className="h-7 w-auto"
-            />
-          </Link>
-          <Link href="/" className="text-sm text-gray-500 hover:text-gray-700 transition-colors">
-            ← Back to Home
-          </Link>
-        </div>
-      </header>
+      <Header />
 
       {/* Content */}
       <main className="max-w-3xl mx-auto px-6 py-14">
@@ -50,7 +35,7 @@ export default function PrivacyPage() {
             <SubSection title="Account Information">
               <p>
                 When you create an account, we collect your email address and authentication credentials. We use
-                Supabase Authentication, which supports email/password login with email verification.
+                secure email/password authentication with email verification.
               </p>
             </SubSection>
 
@@ -95,12 +80,12 @@ export default function PrivacyPage() {
 
           <Section number="3" title="AI Processing and Data Handling">
             <p>
-              Settle uses the Anthropic Claude API to power AI features such as schema mapping suggestions,
+              Settle uses Anthropic Enterprise LLMs to power AI features such as schema mapping suggestions,
               transformation generation, and quality issue detection. When you use these features, relevant portions of
-              your project data are sent to Anthropic&rsquo;s API for processing.
+              your project data are sent to Anthropic for processing.
             </p>
             <p>
-              Anthropic&rsquo;s API is used under their standard terms of service. We send only the data necessary to
+              Anthropic&rsquo;s services are used under their enterprise terms of service. We send only the data necessary to
               complete each specific AI task — we do not send your full dataset to the AI provider.
             </p>
             <p>
@@ -110,8 +95,8 @@ export default function PrivacyPage() {
 
           <Section number="4" title="Data Storage and Security">
             <p>
-              Your data is stored using Supabase, a managed PostgreSQL platform with row-level security enabled. File
-              uploads (CSVs, DDLs, documents) are stored in Supabase Storage with access controls tied to your
+              Your data is stored on AWS-hosted managed PostgreSQL with row-level security enabled. File
+              uploads (CSVs, DDLs, documents) are stored in encrypted cloud storage with access controls tied to your
               account.
             </p>
             <p>
@@ -132,8 +117,8 @@ export default function PrivacyPage() {
             <p>We share your information only in the following limited circumstances:</p>
             <ul>
               <li>
-                <strong>Service providers:</strong> We use Supabase (database and storage), Anthropic (AI processing),
-                and Vercel (hosting). Each is bound by appropriate data processing terms.
+                <strong>Service providers:</strong> We use AWS (infrastructure and database), Anthropic (AI processing),
+                and Vercel (deployment). Each is bound by appropriate data processing terms.
               </li>
               <li>
                 <strong>Legal requirements:</strong> We may disclose information if required by law, regulation, or
@@ -158,7 +143,7 @@ export default function PrivacyPage() {
             </ul>
             <p>
               To exercise any of these rights, contact us at{' '}
-              <a href="mailto:privacy@usesettle.ai" className="text-indigo-600 hover:underline">
+                <a href="mailto:privacy@usesettle.ai" className="text-[#2358D4] hover:underline">
                 privacy@usesettle.ai
               </a>
               .
@@ -192,13 +177,13 @@ export default function PrivacyPage() {
             <ul>
               <li>
                 <strong>Email:</strong>{' '}
-                <a href="mailto:privacy@usesettle.ai" className="text-indigo-600 hover:underline">
+                <a href="mailto:privacy@usesettle.ai" className="text-[#2358D4] hover:underline">
                   privacy@usesettle.ai
                 </a>
               </li>
               <li>
                 <strong>Website:</strong>{' '}
-                <a href="https://usesettle.ai" className="text-indigo-600 hover:underline">
+                <a href="https://usesettle.ai" className="text-[#2358D4] hover:underline">
                   usesettle.ai
                 </a>
               </li>
@@ -207,15 +192,7 @@ export default function PrivacyPage() {
         </div>
       </main>
 
-      {/* Footer */}
-      <footer className="border-t border-gray-100 py-8 px-6 mt-8">
-        <div className="max-w-3xl mx-auto flex items-center justify-between">
-          <span className="text-sm text-gray-400">© 2026 Settle. All rights reserved.</span>
-          <Link href="/" className="text-sm text-gray-400 hover:text-gray-600 transition-colors">
-            Back to Home
-          </Link>
-        </div>
-      </footer>
+      <Footer />
     </div>
   )
 }
@@ -244,7 +221,7 @@ function Section({
 function SubSection({ title, children }: { title: string; children: React.ReactNode }) {
   return (
     <div className="mt-4">
-      <h3 className="text-base font-semibold text-indigo-700 mb-1">{title}</h3>
+      <h3 className="text-base font-semibold text-[#2358D4] mb-1">{title}</h3>
       <div className="text-gray-700">{children}</div>
     </div>
   )
