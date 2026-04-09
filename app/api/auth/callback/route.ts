@@ -35,7 +35,7 @@ export async function GET(request: Request) {
 
         const { subject, html } = welcomeEmail(firstName, orgName)
         resend.emails.send({
-          from: 'Kaan from Settle <info@usesettle.ai>',
+          from: 'Settle <info@usesettle.ai>',
           to: user.email!,
           replyTo: 'info@usesettle.ai',
           subject,

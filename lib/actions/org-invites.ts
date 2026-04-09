@@ -76,7 +76,7 @@ export async function createOrgInvite(
   })
 
   resend.emails.send({
-    from: 'Kaan from Settle <info@usesettle.ai>',
+    from: 'Settle <info@usesettle.ai>',
     to: email.trim().toLowerCase(),
     replyTo: 'info@usesettle.ai',
     subject,
@@ -149,7 +149,7 @@ export async function adminCreateOrgInvite(
   })
 
   resend.emails.send({
-    from: 'Kaan from Settle <info@usesettle.ai>',
+    from: 'Settle <info@usesettle.ai>',
     to: email.trim().toLowerCase(),
     replyTo: 'info@usesettle.ai',
     subject,

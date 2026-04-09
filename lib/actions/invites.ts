@@ -242,7 +242,7 @@ export async function approveAndGenerateInvite(
     appUrl: APP_URL,
   })
   resend.emails.send({
-    from: 'Kaan from Settle <info@usesettle.ai>',
+    from: 'Settle <info@usesettle.ai>',
     to: request.email,
     replyTo: 'info@usesettle.ai',
     subject,

@@ -163,7 +163,7 @@ export async function signUpWithBotProtection(payload: SignUpPayload): Promise<S
     })
 
     resend.emails.send({
-      from: 'Settle Notifications <info@usesettle.ai>',
+      from: 'Settle <info@usesettle.ai>',
       to: 'info@usesettle.ai',
       replyTo: 'info@usesettle.ai',
       subject: adminSubject,
@@ -179,7 +179,7 @@ export async function signUpWithBotProtection(payload: SignUpPayload): Promise<S
       const { subject: welcomeSubject, html: welcomeHtml } = welcomeEmail(firstName, resolvedOrgName)
 
       resend.emails.send({
-        from: 'Kaan from Settle <info@usesettle.ai>',
+        from: 'Settle <info@usesettle.ai>',
         to: payload.email,
         replyTo: 'info@usesettle.ai',
         subject: welcomeSubject,

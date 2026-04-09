@@ -48,16 +48,9 @@ export function emailLayout({
 
         <!-- Logo header -->
         <tr><td style="padding-bottom:24px;">
-          <table cellpadding="0" cellspacing="0"><tr>
-            <td style="vertical-align:middle;">
-              <svg width="32" height="26" viewBox="0 0 32 26" xmlns="http://www.w3.org/2000/svg">
-                <rect x="0" y="0"  width="22" height="5" rx="2" fill="#1E293B" fill-opacity="0.3"/>
-                <rect x="3" y="10" width="22" height="5" rx="2" fill="#1E293B" fill-opacity="0.6"/>
-                <rect x="6" y="20" width="22" height="5" rx="2" fill="#1E293B"/>
-              </svg>
-            </td>
-            <td style="padding-left:10px;font-size:18px;font-weight:600;color:#1e293b;vertical-align:middle;">Settle</td>
-          </tr></table>
+          <a href="${APP_URL}" style="text-decoration:none;display:inline-block;">
+            <img src="${APP_URL}/images/logos/settle-logo-full.png" alt="Settle" width="120" style="display:block;border:0;height:auto;" />
+          </a>
         </td></tr>
 
         <!-- Divider -->
