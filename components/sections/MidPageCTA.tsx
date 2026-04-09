@@ -10,11 +10,10 @@ export default function MidPageCTA() {
           Ready to see this on your data?
         </p>
         <h2 className="text-2xl font-bold text-[#0F172A] tracking-tight">
-          Upload your schema. Settle maps it in minutes.
+          Tell us about your migration. Settle maps it in minutes.
         </h2>
         <p className="text-[#64748B] text-base leading-relaxed max-w-xl">
-          Tell us about your migration and we'll share a preliminary assessment 
-          within 48 hours — at no cost.
+          Tell us about your migration and we'll follow up within 48 hours — at no cost.
         </p>
         <div className="flex flex-wrap items-center justify-center gap-3 pt-2">
           <Link

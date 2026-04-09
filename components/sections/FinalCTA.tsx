@@ -10,7 +10,7 @@ export default function FinalCTA() {
             Consider it settled.
           </h2>
           <p className="text-[#94A3B8] text-base leading-relaxed mb-9">
-            Tell us about your upcoming migration. We&apos;ll share a preliminary assessment within 48 hours — at no cost.
+            Tell us about your upcoming migration. We&apos;ll follow up within 48 hours — at no cost.
           </p>
 
           <div className="flex flex-wrap justify-center gap-3">

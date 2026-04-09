@@ -33,7 +33,7 @@ export default function FAQ() {
   const toggle = (i: number) => setOpenIndex(openIndex === i ? -1 : i)
 
   return (
-    <section id="faq" className="faq-section py-24 px-6 lg:px-12">
+    <section id="faq" className="faq-section py-16 px-6 lg:px-12">
       <div className="max-w-2xl mx-auto">
 
         <ScrollReveal>

@@ -1,4 +1,5 @@
 import Link from 'next/link'
+import Image from 'next/image'
 
 export default function Footer() {
   return (
@@ -10,12 +11,15 @@ export default function Footer() {
 
           {/* Brand column */}
           <div className="flex flex-col gap-3">
-            <div className="flex items-center gap-2">
-              <div className="w-5 h-5 rounded bg-[#2358D4] flex items-center justify-center shrink-0">
-                <span className="text-white text-[10px] font-bold leading-none">S</span>
-              </div>
-              <span className="text-sm font-semibold text-[#0F172A]">Settle</span>
-            </div>
+            <Link href="/">
+              <Image
+                src="/images/logos/settle-logo-full.svg"
+                alt="Settle"
+                width={100}
+                height={28}
+                className="h-7 w-auto"
+              />
+            </Link>
             <p className="text-sm text-[#64748B] leading-relaxed max-w-[200px]">
               Built for autonomous, AI-native data migration.
             </p>
