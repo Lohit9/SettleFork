@@ -52,10 +52,21 @@ const faqSchema = {
       name: 'How quickly can we get started?',
       acceptedAnswer: {
         '@type': 'Answer',
-        text: 'Connect your source schema and target model, and Settle profiles your data in minutes. First mapping proposals are generated within an hour. Full migration readiness typically takes days, not months.',
+        text: 'First mapping proposals are generated within one hour of connecting your schema. Settle profiles your source data in minutes, and full migration readiness packages are typically delivered in days, not months.',
       },
     },
   ],
+}
+
+const webPageSchema = {
+  '@context': 'https://schema.org',
+  '@type': 'WebPage',
+  name: 'Settle — AI-Native Data Migration',
+  url: 'https://usesettle.ai',
+  speakable: {
+    '@type': 'SpeakableSpecification',
+    cssSelector: ['.hero-description', '.faq-section'],
+  },
 }
 
 export default function Page() {
@@ -68,6 +79,10 @@ export default function Page() {
       <script
         type="application/ld+json"
         dangerouslySetInnerHTML={{ __html: JSON.stringify(faqSchema) }}
+      />
+      <script
+        type="application/ld+json"
+        dangerouslySetInnerHTML={{ __html: JSON.stringify(webPageSchema) }}
       />
       <LandingPageClient />
     </>

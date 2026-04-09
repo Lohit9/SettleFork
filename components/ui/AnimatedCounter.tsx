@@ -16,12 +16,18 @@ function easeOutCubic(t: number): number {
 export function AnimatedCounter({ end, suffix = '', duration = 2000 }: AnimatedCounterProps) {
   const ref = useRef<HTMLSpanElement>(null)
   const isInView = useInView(ref, { once: true, margin: '-60px' })
-  const [count, setCount] = useState(0)
+  // Initialize to `end` so SSR/first paint renders the correct final value.
+  // The animation will reset to 0 and count up after hydration + viewport entry.
+  const [count, setCount] = useState(end)
   const hasAnimated = useRef(false)
 
   useEffect(() => {
     if (!isInView || hasAnimated.current) return
     hasAnimated.current = true
+
+    // Reset to 0 immediately before the animation begins so the count-up
+    // plays from zero visually, while the SSR HTML already held the final value.
+    setCount(0)
 
     const startTime = performance.now()
 

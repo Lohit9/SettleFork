@@ -153,7 +153,7 @@ export function accessRequestConfirmationEmail(
 
   return {
     subject: isAssessment
-      ? 'Your migration assessment is underway — Settle'
+      ? 'We received your migration details — Settle'
       : 'We received your request — Settle',
     html: emailLayout({
       body: `
@@ -251,7 +251,7 @@ export function adminAccessRequestEmail(data: {
   isAssessment?: boolean
 }): { subject: string; html: string } {
   const subject = data.isAssessment
-    ? `🎯 Migration Assessment Request: ${data.company}`
+    ? `🎯 New Migration Lead: ${data.company}`
     : `New Access Request: ${data.company}`
 
   return {

@@ -33,9 +33,9 @@ export default function LandingPageClient() {
         <MetricsBar />
         <HowItWorks />
         <MidPageCTA />
+        <Credibility />
         <Differentiation />
         <Vision />
-        <Credibility />
         <FAQ />
         <FinalCTA />
       </main>

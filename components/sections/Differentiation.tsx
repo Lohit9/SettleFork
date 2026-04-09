@@ -50,7 +50,7 @@ export default function Differentiation() {
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-5">
           {MUTED_CARDS.map((card, i) => (
             <ScrollReveal key={card.title} delay={i * 0.1}>
-              <div className="bg-white rounded-2xl p-8 border border-[#E2E8F0] h-full opacity-75 hover:-translate-y-1 hover:shadow-lg transition-all duration-300">
+              <div className="bg-white rounded-2xl p-8 border border-[#E2E8F0] h-full opacity-50 hover:-translate-y-1 hover:shadow-lg transition-all duration-300">
                 <h3 className="text-lg font-bold text-[#475569] mb-5">{card.title}</h3>
                 <ul className="space-y-3">
                   {card.bullets.map((bullet) => (
@@ -66,7 +66,10 @@ export default function Differentiation() {
 
           {/* Settle card */}
           <ScrollReveal delay={0.2}>
-            <div className="bg-white rounded-2xl p-8 border border-[#2358D4] border-t-[3px] h-full hover:-translate-y-1 hover:shadow-lg transition-all duration-300">
+            <div className="bg-blue-50 rounded-2xl p-8 border border-[#2358D4] border-t-[4px] h-full hover:-translate-y-1 hover:shadow-lg transition-all duration-300">
+              <span className="text-xs font-semibold uppercase tracking-wider text-[#2358D4] mb-2 block">
+                Recommended
+              </span>
               <h3 className="text-lg font-bold text-[#0F172A] mb-5">Settle</h3>
               <ul className="space-y-3">
                 {MINE_BULLETS.map((bullet) => (

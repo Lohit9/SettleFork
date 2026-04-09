@@ -23,7 +23,7 @@ const FAQS = [
   },
   {
     question: 'How quickly can we get started?',
-    answer: 'Connect your source schema and target model, and Settle profiles your data in minutes. First mapping proposals are generated within an hour. Full migration readiness typically takes days, not months.',
+    answer: 'First mapping proposals are generated within one hour of connecting your schema. Settle profiles your source data in minutes, and full migration readiness packages are typically delivered in days, not months.',
   },
 ]
 
@@ -33,7 +33,7 @@ export default function FAQ() {
   const toggle = (i: number) => setOpenIndex(openIndex === i ? -1 : i)
 
   return (
-    <section id="faq" className="py-24 px-6 lg:px-12">
+    <section id="faq" className="faq-section py-24 px-6 lg:px-12">
       <div className="max-w-2xl mx-auto">
 
         <ScrollReveal>

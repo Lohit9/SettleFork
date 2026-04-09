@@ -5,11 +5,12 @@ import { useState, useEffect } from 'react'
 import ScrollReveal from '@/components/ui/ScrollReveal'
 
 const MIGRATION_SYSTEMS = [
-  { name: 'Salesforce', slug: 'salesforce' },
-  { name: 'SAP',        slug: 'sap'        },
-  { name: 'Oracle',     slug: 'oracle'      },
-  { name: 'NetSuite',   slug: 'netsuite'    },
-  { name: 'SQL Server', slug: 'sql server'  },
+  { name: 'Salesforce',             slug: 'Salesforce' },
+  { name: 'SAP S/4HANA',            slug: 'SAP'        },
+  { name: 'NetSuite',               slug: 'Netsuite'   },
+  { name: 'HubSpot',                slug: 'Hubspot'    },
+  { name: 'Microsoft Dynamics 365', slug: 'Dynamics'   },
+  { name: 'Oracle',                 slug: 'Oracle'     },
 ] as const
 
 const SOURCE_FIELDS = ['customer_id', 'cust_name', 'service_addr', 'acct_status']
@@ -142,8 +143,8 @@ export default function Hero() {
             <h1 className="text-5xl lg:text-[3.25rem] font-bold text-[#0F172A] leading-[1.12] tracking-tight mb-5">
               Automate your entire data migration.
             </h1>
-            <p className="text-lg text-[#475569] leading-relaxed max-w-lg mb-8">
-              Settle automates the hardest parts of data migration — schema profiling, field mapping, transformations, and validation. Cut months to weeks. Catch errors before production.
+            <p className="hero-description text-lg text-[#475569] leading-relaxed max-w-lg mb-8">
+              Settle is an AI-native platform that automates enterprise data migration — schema profiling, field mapping, transformations, and validation. Cut months to weeks. Catch errors before production.
             </p>
 
             <div className="flex flex-wrap gap-3 mb-3">
@@ -162,6 +163,10 @@ export default function Hero() {
                 Book a Demo
               </a>
             </div>
+
+            <p className="text-sm text-slate-400 mt-3">
+              We review your migration scope and respond within 48 hours.
+            </p>
 
             {/* Trust signals */}
             <div className="flex flex-wrap items-center justify-center gap-x-6 gap-y-2 pt-4">
@@ -193,6 +198,10 @@ export default function Hero() {
               ))}
             </div>
 
+            <p className="text-sm text-slate-500 mt-4">
+              Built by a former Deloitte data migration lead who managed 66 system integrations for a $3B enterprise.
+            </p>
+
           </ScrollReveal>
 
           {/* Right: Animated product demo */}
@@ -205,13 +214,13 @@ export default function Hero() {
         <ScrollReveal delay={0.1}>
           <div className="mt-16">
             <p className="text-center text-xs uppercase tracking-widest text-[#94A3B8] mb-5">
-              Designed for migrations from
+              Designed for migrations to
             </p>
             <div className="flex flex-wrap justify-center gap-12">
               {MIGRATION_SYSTEMS.map(({ name, slug }) => (
                 <Link
                   key={name}
-                  href={`/migrate?source=${slug}`}
+                  href={`/migrate?target=${slug}`}
                   className="text-sm font-bold text-[#0F172A] opacity-30 hover:opacity-60 transition-opacity tracking-tight cursor-pointer"
                 >
                   {name}

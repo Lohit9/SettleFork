@@ -30,7 +30,7 @@ export default function ProblemSolution({ onHowItWorksClick }: ProblemSolutionPr
               The Problem
             </p>
             <h2 className="text-2xl font-bold text-[#0F172A] leading-snug tracking-tight mb-5">
-              Data migration slows down every transformation.
+              Data migration is still manual, slow, and high-risk.
             </h2>
             <ul className="space-y-4">
               {PROBLEMS.map((text) => (

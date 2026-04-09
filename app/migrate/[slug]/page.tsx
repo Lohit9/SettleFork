@@ -226,7 +226,7 @@ export default async function MigrationPageRoute({
                     href="/request-access?ref=assessment"
                     className="bg-settle-blue-600 hover:bg-settle-blue-700 text-white text-sm font-semibold px-6 py-3 rounded-lg transition-all hover:-translate-y-0.5 hover:shadow-lg hover:shadow-blue-600/25"
                   >
-                    Get Your Free Assessment
+                    Start Your Migration
                   </Link>
                   <a
                     href="https://calendly.com/settle-ai/demo"
@@ -350,7 +350,7 @@ export default async function MigrationPageRoute({
                     href="/request-access?ref=assessment"
                     className="bg-settle-blue-600 hover:bg-settle-blue-700 text-white text-sm font-semibold px-6 py-3 rounded-lg transition-all hover:-translate-y-0.5 hover:shadow-lg hover:shadow-blue-600/25"
                   >
-                    Get Your Free Assessment
+                    Start Your Migration
                   </Link>
                   <a
                     href="https://calendly.com/settle-ai/demo"

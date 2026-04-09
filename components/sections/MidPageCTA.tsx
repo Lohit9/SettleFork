@@ -9,7 +9,7 @@ export default function MidPageCTA() {
         <p className="text-sm font-semibold tracking-widest text-[#3B82F6] uppercase">
           Ready to see this on your data?
         </p>
-        <h2 className="text-2xl font-semibold text-[#0F172A] tracking-tight">
+        <h2 className="text-2xl font-bold text-[#0F172A] tracking-tight">
           Upload your schema. Settle maps it in minutes.
         </h2>
         <p className="text-[#64748B] text-base leading-relaxed max-w-xl">

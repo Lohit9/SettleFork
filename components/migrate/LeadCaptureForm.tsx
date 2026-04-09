@@ -67,6 +67,31 @@ export default function LeadCaptureForm({ sourceSystem, targetSystem, slug }: Le
       })
 
       if (dbError) throw dbError
+
+      // Send confirmation + admin notification emails.
+      // Runs after a successful DB insert; failure here must not block the success state.
+      try {
+        await fetch('/api/notify-access-request', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            name: '',
+            email: email.trim(),
+            company: companyName.trim(),
+            role_type: '',
+            systems_involved: `${sourceSystem} → ${targetSystem}`,
+            additional_notes: [
+              timeline ? `Timeline: ${timeline}` : '',
+              volume ? `Data volume: ${volume}` : '',
+              notes.trim() || '',
+            ].filter(Boolean).join(' | '),
+            ref: 'assessment',
+          }),
+        })
+      } catch (emailError) {
+        console.error('Email notification failed:', emailError)
+      }
+
       setIsSubmitted(true)
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Something went wrong. Please try again.')
@@ -101,7 +126,7 @@ export default function LeadCaptureForm({ sourceSystem, targetSystem, slug }: Le
   return (
     <div>
       <p className="text-xs text-settle-slate-400 text-center mb-4 max-w-lg mx-auto italic">
-        You'll receive a preliminary mapping analysis showing how your source objects map to your target schema, with confidence scores and flagged risk areas.
+        We'll review your migration scope and follow up within 48 hours to discuss next steps.
       </p>
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
         <input
@@ -157,7 +182,7 @@ export default function LeadCaptureForm({ sourceSystem, targetSystem, slug }: Le
         disabled={isSubmitting}
         className="w-full bg-settle-blue-600 hover:bg-settle-blue-700 disabled:opacity-60 disabled:cursor-not-allowed text-white font-semibold py-3.5 rounded-xl transition-all hover:-translate-y-0.5 hover:shadow-lg hover:shadow-blue-600/25 mt-2"
       >
-        {isSubmitting ? 'Submitting…' : 'Get Your Free Assessment'}
+        {isSubmitting ? 'Submitting…' : 'Start Your Migration'}
       </button>
     </div>
   )
