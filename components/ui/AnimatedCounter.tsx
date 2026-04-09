@@ -42,7 +42,7 @@ export function AnimatedCounter({ end, suffix = '', duration = 2000 }: AnimatedC
 
   return (
     <span ref={ref}>
-      {count}{suffix}
+      {count.toLocaleString('en-US')}{suffix}
     </span>
   )
 }

@@ -2,52 +2,103 @@ import Link from 'next/link'
 
 export default function Footer() {
   return (
-    <footer className="border-t border-[#E2E8F0] py-8 px-6 lg:px-12">
-      <div className="max-w-7xl mx-auto">
+    <footer className="border-t border-[#E2E8F0] bg-white">
+      <div className="max-w-6xl mx-auto px-6 py-12">
 
-        {/* Row 1 */}
-        <div className="flex justify-between items-center">
-          <div className="flex items-center gap-2">
-            <div className="w-5 h-5 rounded bg-[#2358D4] flex items-center justify-center shrink-0">
-              <span className="text-white text-[10px] font-bold leading-none">S</span>
+        {/* Top row: logo + tagline left, three link columns right */}
+        <div className="grid grid-cols-1 md:grid-cols-4 gap-8 pb-10 border-b border-[#E2E8F0]">
+
+          {/* Brand column */}
+          <div className="flex flex-col gap-3">
+            <div className="flex items-center gap-2">
+              <div className="w-5 h-5 rounded bg-[#2358D4] flex items-center justify-center shrink-0">
+                <span className="text-white text-[10px] font-bold leading-none">S</span>
+              </div>
+              <span className="text-sm font-semibold text-[#0F172A]">Settle</span>
             </div>
-            <span className="text-[#94A3B8] text-sm">© 2026 Settle.</span>
+            <p className="text-sm text-[#64748B] leading-relaxed max-w-[200px]">
+              Built for autonomous, AI-native data migration.
+            </p>
           </div>
 
-          <div className="flex gap-6">
-            <Link
-              href="/migrate"
-              className="text-[#94A3B8] text-sm hover:text-[#475569] transition-colors"
-            >
-              Migrations
-            </Link>
-            <a
-              href="https://calendly.com/settle-ai/demo"
-              target="_blank"
-              rel="noopener noreferrer"
-              className="text-[#94A3B8] text-sm hover:text-[#475569] transition-colors"
-            >
-              Book a Demo
-            </a>
-            <Link
-              href="/login"
-              className="text-[#94A3B8] text-sm hover:text-[#475569] transition-colors"
-            >
-              Login
-            </Link>
-            <Link
-              href="/privacy"
-              className="text-[#94A3B8] text-sm hover:text-[#475569] transition-colors"
-            >
-              Privacy
-            </Link>
+          {/* Product column */}
+          <div className="flex flex-col gap-3">
+            <p className="text-xs font-semibold tracking-widest text-[#94A3B8] uppercase">
+              Product
+            </p>
+            <nav className="flex flex-col gap-2">
+              <Link href="/how-it-works"
+                    className="text-sm text-[#64748B] hover:text-[#0F172A] transition-colors">
+                How it works
+              </Link>
+              <Link href="/migrate"
+                    className="text-sm text-[#64748B] hover:text-[#0F172A] transition-colors">
+                Migration directory
+              </Link>
+              <Link href="/request-access"
+                    className="text-sm text-[#64748B] hover:text-[#0F172A] transition-colors">
+                Request access
+              </Link>
+            </nav>
           </div>
+
+          {/* Migrations column */}
+          <div className="flex flex-col gap-3">
+            <p className="text-xs font-semibold tracking-widest text-[#94A3B8] uppercase">
+              Migrations
+            </p>
+            <nav className="flex flex-col gap-2">
+              <Link href="/migrate?source=salesforce"
+                    className="text-sm text-[#64748B] hover:text-[#0F172A] transition-colors">
+                Salesforce migrations
+              </Link>
+              <Link href="/migrate?source=sap"
+                    className="text-sm text-[#64748B] hover:text-[#0F172A] transition-colors">
+                SAP migrations
+              </Link>
+              <Link href="/migrate?source=oracle"
+                    className="text-sm text-[#64748B] hover:text-[#0F172A] transition-colors">
+                Oracle migrations
+              </Link>
+              <Link href="/migrate?source=netsuite"
+                    className="text-sm text-[#64748B] hover:text-[#0F172A] transition-colors">
+                NetSuite migrations
+              </Link>
+            </nav>
+          </div>
+
+          {/* Company column */}
+          <div className="flex flex-col gap-3">
+            <p className="text-xs font-semibold tracking-widest text-[#94A3B8] uppercase">
+              Company
+            </p>
+            <nav className="flex flex-col gap-2">
+              <Link href="https://calendly.com/settle-ai/demo"
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="text-sm text-[#64748B] hover:text-[#0F172A] transition-colors">
+                Book a demo
+              </Link>
+              <Link href="/privacy"
+                    className="text-sm text-[#64748B] hover:text-[#0F172A] transition-colors">
+                Privacy policy
+              </Link>
+              <Link href="/login"
+                    className="text-sm text-[#64748B] hover:text-[#0F172A] transition-colors">
+                Login
+              </Link>
+            </nav>
+          </div>
+
         </div>
 
-        {/* Row 2 */}
-        <div className="text-center mt-2">
-          <p className="text-[#CBD5E1] text-xs">
-            Built for autonomous, AI-native data migration.
+        {/* Bottom row: copyright left, tagline right */}
+        <div className="flex flex-col sm:flex-row items-center justify-between pt-6 gap-2">
+          <p className="text-xs text-[#94A3B8]">
+            © {new Date().getFullYear()} Settle. All rights reserved.
+          </p>
+          <p className="text-xs text-[#94A3B8] italic">
+            Consider it settled.
           </p>
         </div>
 

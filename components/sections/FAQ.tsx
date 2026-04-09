@@ -7,7 +7,7 @@ import ScrollReveal from '@/components/ui/ScrollReveal'
 const FAQS = [
   {
     question: 'How does Settle handle data security?',
-    answer: 'Settle runs in your environment or a dedicated cloud instance. Data never leaves your VPC. We support SOC 2 compliance requirements and provide full audit trails for every AI-generated mapping and transformation.',
+    answer: 'Settle is hosted on AWS with AES-256-GCM encryption at rest and in transit. All AI processing uses Anthropic Enterprise LLMs — your data is never used for model training. Every field mapping and transformation carries a full audit trail. SOC 2 Type 2 certification is in progress.',
   },
   {
     question: 'What systems does Settle connect to?',

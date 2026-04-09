@@ -5,8 +5,8 @@ const BASE_URL = 'https://usesettle.ai'
 
 const STATIC_PAGES: MetadataRoute.Sitemap = [
   { url: `${BASE_URL}/`,             lastModified: new Date(), changeFrequency: 'weekly',  priority: 1.0 },
+  { url: `${BASE_URL}/migrate`,      lastModified: new Date(), changeFrequency: 'weekly',  priority: 0.9 },
   { url: `${BASE_URL}/how-it-works`, lastModified: new Date(), changeFrequency: 'monthly', priority: 0.8 },
-  { url: `${BASE_URL}/use-cases`,    lastModified: new Date(), changeFrequency: 'monthly', priority: 0.8 },
 ]
 
 export default async function sitemap(): Promise<MetadataRoute.Sitemap> {

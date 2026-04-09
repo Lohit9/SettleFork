@@ -125,11 +125,20 @@ export async function generateMetadata({
       description: page.meta_description,
       url: canonical,
       type: 'website',
+      images: [
+        {
+          url: 'https://usesettle.ai/images/og-image.png',
+          width: 1200,
+          height: 630,
+          alt: page.meta_title,
+        },
+      ],
     },
     twitter: {
       card: 'summary_large_image',
       title: page.meta_title,
       description: page.meta_description,
+      images: ['https://usesettle.ai/images/og-image.png'],
     },
   }
 }
@@ -176,10 +185,12 @@ export default async function MigrationPageRoute({
 
   return (
     <>
-      <script
-        type="application/ld+json"
-        dangerouslySetInnerHTML={{ __html: JSON.stringify(faqSchema) }}
-      />
+      {(page.faqs ?? []).length > 0 && (
+        <script
+          type="application/ld+json"
+          dangerouslySetInnerHTML={{ __html: JSON.stringify(faqSchema) }}
+        />
+      )}
       <script
         type="application/ld+json"
         dangerouslySetInnerHTML={{ __html: JSON.stringify(breadcrumbSchema) }}
@@ -620,10 +631,10 @@ export default async function MigrationPageRoute({
             <div className="py-6 px-6">
               <p className="max-w-3xl mx-auto text-center text-sm leading-relaxed">
                 <span className="font-semibold text-settle-slate-800">
-                  Built by a team that led SAP, Oracle, and Salesforce data migration programs for Fortune 500 companies at a Big 4 consulting firm.
+                  Built by a former Deloitte Technical Program Manager who managed 66 system integrations for a $3B enterprise — and ran the exact programs this platform is built to automate.
                 </span>{' '}
                 <span className="text-settle-slate-500">
-                  Currently in design partnership with enterprise clients running active migration programs.
+                  Currently onboarding enterprise design partners on active migration programs.
                 </span>
               </p>
             </div>

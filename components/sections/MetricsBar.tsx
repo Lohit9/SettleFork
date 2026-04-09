@@ -2,7 +2,7 @@ import ScrollReveal from '@/components/ui/ScrollReveal'
 import AnimatedCounter from '@/components/ui/AnimatedCounter'
 
 const METRICS = [
-  { end: 70, suffix: '%', label: 'reduction in migration time' },
+  { end: 70, suffix: '%', label: 'faster migration planning' },
   { end: 3412, suffix: '', label: 'fields auto-mapped per project' },
   { end: 87, suffix: '%', label: 'avg. first-pass readiness score' },
 ]

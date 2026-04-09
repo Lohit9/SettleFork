@@ -7,6 +7,8 @@ const MUTED_CARDS = [
       'One-off mapping specs in decks and spreadsheets',
       'Knowledge locked in people, not in a product',
       'Teams rebuilt for every engagement',
+      'Decisions buried in emails and slide decks',
+      'Weeks of discovery before first deliverable',
     ],
   },
   {
@@ -15,6 +17,8 @@ const MUTED_CARDS = [
       'Rule-based, not agent-native',
       'Manual schema and mapping management',
       'Validation bolted on at the end',
+      'No mapping rationale — just execution logs',
+      'Days of pipeline config before first output',
     ],
   },
 ]
@@ -23,6 +27,8 @@ const MINE_BULLETS = [
   'Autonomous multi-agent migration engine',
   'AI-led schema understanding and mapping',
   'Validation engine that catches issues before production',
+  'Full AI decision log per field mapping and transformation',
+  'First mapping proposals generated within the hour',
 ]
 
 export default function Differentiation() {

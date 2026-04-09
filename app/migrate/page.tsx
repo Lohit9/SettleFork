@@ -9,10 +9,33 @@ import MigrationDirectory from '@/components/migrate/MigrationDirectory'
 export const revalidate = 3600
 
 export const metadata: Metadata = {
-  title: 'Data Migration Paths | Settle',
+  title: 'Enterprise data migration paths — automated by AI | Settle',
   description:
-    'Explore Settle\'s automated migration paths for SAP, Oracle, NetSuite, Salesforce, and more. AI-powered schema mapping and validation.',
+    'Browse 100+ automated migration paths across SAP, Oracle EBS, NetSuite, Salesforce, HubSpot, and more. AI-powered schema mapping, SQL generation, and validation — delivered in weeks, not months.',
   alternates: { canonical: 'https://usesettle.ai/migrate' },
+  openGraph: {
+    title: 'Enterprise data migration paths — automated by AI',
+    description:
+      'Browse 100+ automated migration paths. AI-powered schema mapping, SQL generation, and validation across SAP, Oracle, Salesforce, NetSuite, and more.',
+    url: 'https://usesettle.ai/migrate',
+    siteName: 'Settle',
+    type: 'website',
+    images: [
+      {
+        url: 'https://usesettle.ai/images/og-image.png',
+        width: 1200,
+        height: 630,
+        alt: 'Settle — Enterprise data migration paths',
+      },
+    ],
+  },
+  twitter: {
+    card: 'summary_large_image',
+    title: 'Enterprise data migration paths — automated by AI',
+    description:
+      'Browse 100+ automated migration paths. AI-powered schema mapping, SQL generation, and validation across SAP, Oracle, Salesforce, NetSuite, and more.',
+    images: ['https://usesettle.ai/images/og-image.png'],
+  },
 }
 
 interface MigrationPageRow {
@@ -39,26 +62,56 @@ async function getAllMigrationPages(): Promise<MigrationPageRow[]> {
   return (data ?? []) as MigrationPageRow[]
 }
 
-export default async function MigrateIndexPage() {
+export default async function MigrateIndexPage({
+  searchParams,
+}: {
+  searchParams: Record<string, string | string[] | undefined>
+}) {
+  const initialSource = typeof searchParams.source === 'string' ? searchParams.source : ''
+  const initialTarget = typeof searchParams.target === 'string' ? searchParams.target : ''
+
   const pages = await getAllMigrationPages()
+
+  const itemListSchema = {
+    '@context': 'https://schema.org',
+    '@type': 'ItemList',
+    name: 'Enterprise data migration paths automated by Settle',
+    description:
+      'AI-powered migration paths from SAP, Oracle EBS, NetSuite, Salesforce, and more — with automated schema mapping, SQL generation, and validation.',
+    numberOfItems: pages.length,
+    itemListElement: pages.slice(0, 50).map((page, index) => ({
+      '@type': 'ListItem',
+      position: index + 1,
+      name: `${page.source_system} to ${page.target_system} migration`,
+      url: `https://usesettle.ai/migrate/${page.slug}`,
+    })),
+  }
 
   return (
     <div className="min-h-screen bg-white">
+      <script
+        type="application/ld+json"
+        dangerouslySetInnerHTML={{ __html: JSON.stringify(itemListSchema) }}
+      />
       <Header />
 
       <main>
         {/* ── Hero ─────────────────────────────────────────────── */}
         <section className="max-w-2xl mx-auto py-12 px-6 text-center">
           <h1 className="text-4xl font-bold text-settle-slate-900 tracking-tight mb-4">
-            Data Migration Paths
+            Enterprise data migration paths
           </h1>
           <p className="text-lg text-settle-slate-500 leading-relaxed">
-            Explore Settle's automated migration paths across enterprise systems. Filter by source or target to find yours.
+            100+ source-to-target migration paths, automated by AI. Filter by source or target system to find yours.
           </p>
         </section>
 
         {/* ── Directory (client component with filters) ────────── */}
-        <MigrationDirectory pages={pages} />
+        <MigrationDirectory
+            pages={pages}
+            initialSource={initialSource}
+            initialTarget={initialTarget}
+          />
 
         {/* ── Bottom CTA ───────────────────────────────────────── */}
         <section className="py-12 px-6 text-center">

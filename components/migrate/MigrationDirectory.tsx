@@ -2,6 +2,7 @@
 
 import { useMemo, useState, useRef, useEffect } from 'react'
 import Link from 'next/link'
+import { useSearchParams } from 'next/navigation'
 
 interface MigrationPage {
   slug: string
@@ -14,11 +15,22 @@ interface MigrationPage {
 
 interface Props {
   pages: MigrationPage[]
+  initialSource?: string
+  initialTarget?: string
 }
 
-export default function MigrationDirectory({ pages }: Props) {
-  const [sourceFilter, setSourceFilter] = useState('')
-  const [targetFilter, setTargetFilter] = useState('')
+export default function MigrationDirectory({
+  pages,
+  initialSource = '',
+  initialTarget = '',
+}: Props) {
+  const searchParams = useSearchParams()
+  const [sourceFilter, setSourceFilter] = useState(
+    () => searchParams.get('source') ?? initialSource
+  )
+  const [targetFilter, setTargetFilter] = useState(
+    () => searchParams.get('target') ?? initialTarget
+  )
 
   const sourceOptions = useMemo(
     () => [...new Set(pages.map((p) => p.source_system))].sort(),
@@ -33,11 +45,27 @@ export default function MigrationDirectory({ pages }: Props) {
 
   const filteredPages = useMemo(() => {
     return pages.filter((p) => {
-      if (sourceFilter && p.source_system !== sourceFilter) return false
-      if (targetFilter && p.target_system !== targetFilter) return false
+      if (sourceFilter) {
+        // Exact match when the filter value is a known DB option (set via dropdown)
+        // Partial case-insensitive match when it comes from a URL slug
+        const isExactSourceOption = sourceOptions.includes(sourceFilter)
+        if (isExactSourceOption) {
+          if (p.source_system !== sourceFilter) return false
+        } else {
+          if (!p.source_system.toLowerCase().includes(sourceFilter.toLowerCase())) return false
+        }
+      }
+      if (targetFilter) {
+        const isExactTargetOption = targetOptions.includes(targetFilter)
+        if (isExactTargetOption) {
+          if (p.target_system !== targetFilter) return false
+        } else {
+          if (!p.target_system.toLowerCase().includes(targetFilter.toLowerCase())) return false
+        }
+      }
       return true
     })
-  }, [pages, sourceFilter, targetFilter])
+  }, [pages, sourceFilter, targetFilter, sourceOptions, targetOptions])
 
   const groups = useMemo(() => {
     if (hasFilter) return null

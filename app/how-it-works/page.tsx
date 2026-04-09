@@ -5,8 +5,32 @@ import Header from '@/components/Header'
 import Footer from '@/components/Footer'
 
 export const metadata: Metadata = {
-  title: 'How It Works | Settle',
-  description: 'See how Settle automates the full data migration lifecycle from schema profiling to production-ready load files.',
+  title: 'How Settle automates data migration — schema profiling to load files',
+  description:
+    'A step-by-step look at how Settle automates enterprise data migration: AI schema profiling, field mapping with confidence scores, cleansing, ETL generation, and validation — delivering production-ready load files.',
+  openGraph: {
+    title: 'How Settle automates data migration',
+    description:
+      'AI schema profiling, field mapping, cleansing, ETL generation, and validation — the full migration lifecycle automated.',
+    url: 'https://usesettle.ai/how-it-works',
+    siteName: 'Settle',
+    type: 'website',
+    images: [
+      {
+        url: 'https://usesettle.ai/images/og-image.png',
+        width: 1200,
+        height: 630,
+        alt: 'How Settle automates data migration',
+      },
+    ],
+  },
+  twitter: {
+    card: 'summary_large_image',
+    title: 'How Settle automates data migration',
+    description:
+      'AI schema profiling, field mapping, cleansing, ETL generation, and validation — the full migration lifecycle automated.',
+    images: ['https://usesettle.ai/images/og-image.png'],
+  },
 }
 
 const STEPS = [
@@ -14,7 +38,7 @@ const STEPS = [
     n: '01',
     title: 'Schema understanding',
     description:
-      "Settle's agents scan your source systems and learn tables, keys, relationships, and business meaning. Entities and dependencies are mapped automatically. Duplicates and anomalies are flagged before mapping begins.",
+      "Settle's agents scan your source systems and learn tables, keys, relationships, and business meaning. Entities and dependencies are mapped automatically. Duplicates and anomalies are flagged before mapping begins. 240-table schemas with 847K rows profiled in under 14 seconds.",
     screenshot: '/images/how-it-works/schema-overview.png',
     alt: 'Settle schema overview showing source and target system schemas side by side',
   },
@@ -22,7 +46,7 @@ const STEPS = [
     n: '02',
     title: 'Auto-mapping & transformation',
     description:
-      'Settle proposes and refines field-level mappings into your target model. Mapping specs are generated automatically with confidence scores. Ambiguous mappings are surfaced for human review — the AI never acts without visibility.',
+      'Settle proposes and refines field-level mappings into your target model. Mapping specs are generated automatically with confidence scores. Ambiguous mappings are surfaced for human review — the AI never acts without visibility. 90%+ of fields mapped automatically — flagged exceptions sent for human review, not buried in logs.',
     screenshot: '/images/how-it-works/mapping-review.png',
     alt: 'Settle mapping review with AI-generated field mappings and confidence scores',
   },
@@ -30,7 +54,7 @@ const STEPS = [
     n: '03',
     title: 'Cleansing & standardization',
     description:
-      'Cleansing becomes a reusable layer instead of one-off scripts. Address normalization, picklist alignment, deduplication, merge logic, and referential integrity fixes are applied systematically across every load cycle.',
+      'Cleansing becomes a reusable layer instead of one-off scripts. Address normalization, picklist alignment, deduplication, merge logic, and referential integrity fixes are applied systematically across every load cycle. Cleansing rules persist across load cycles — no rebuilding scripts for every run.',
     screenshot: '/images/how-it-works/transform.png',
     alt: 'Settle transform editor with AI-suggested transformations and live data preview',
   },
@@ -38,7 +62,7 @@ const STEPS = [
     n: '04',
     title: 'Generated ETL & loaders',
     description:
-      "Settle outputs production-ready SQL, Python, or API-based loaders. Run them in your environment or Settle's runtime. Parameterize for dev, test, and prod with full audit trails.",
+      "Settle outputs production-ready SQL, Python, or API-based loaders. Run them in your environment or Settle's runtime. Parameterize for dev, test, and prod with full audit trails. Every transformation carries a full audit trail — what changed, why, and which AI decision produced it.",
     screenshot: '/images/how-it-works/migration-center.png',
     alt: 'Settle migration center showing production-ready output files and migration status',
   },
@@ -46,7 +70,7 @@ const STEPS = [
     n: '05',
     title: 'Validation, reconciliation & delta',
     description:
-      'Multi-agent validation ensures safe loads and smooth deltas. Constraint issues, data drift, and schema changes are detected before they break downstream. Each load cycle feeds back into the next — making every iteration faster and safer.',
+      'Multi-agent validation ensures safe loads and smooth deltas. Constraint issues, data drift, and schema changes are detected before they break downstream. Each load cycle feeds back into the next — making every iteration faster and safer. 87% first-pass readiness score across migrations. Blocking issues caught before they reach production.',
     screenshot: '/images/how-it-works/validate.png',
     alt: 'Settle validation dashboard with migration readiness score and AI-suggested fixes',
   },
@@ -75,6 +99,45 @@ function Screenshot({ src, alt }: { src: string; alt: string }) {
 export default function HowItWorksPage() {
   return (
     <div className="min-h-screen bg-white flex flex-col">
+      <script
+        type="application/ld+json"
+        dangerouslySetInnerHTML={{
+          __html: JSON.stringify({
+            '@context': 'https://schema.org',
+            '@type': 'HowTo',
+            name: 'How Settle automates enterprise data migration',
+            description:
+              'A step-by-step breakdown of how Settle automates the full data migration lifecycle — from schema profiling to production-ready load files.',
+            step: [
+              {
+                '@type': 'HowToStep',
+                name: 'Schema understanding',
+                text: "Settle's agents scan your source systems and learn tables, keys, relationships, and business meaning. Entities and dependencies are mapped automatically.",
+              },
+              {
+                '@type': 'HowToStep',
+                name: 'Auto-mapping & transformation',
+                text: 'Settle proposes and refines field-level mappings into your target model with confidence scores. Ambiguous mappings are surfaced for human review.',
+              },
+              {
+                '@type': 'HowToStep',
+                name: 'Cleansing & standardization',
+                text: 'Address normalization, picklist alignment, deduplication, merge logic, and referential integrity fixes are applied systematically across every load cycle.',
+              },
+              {
+                '@type': 'HowToStep',
+                name: 'Generated ETL & loaders',
+                text: 'Settle outputs production-ready SQL, Python, or API-based loaders parameterized for dev, test, and prod environments with full audit trails.',
+              },
+              {
+                '@type': 'HowToStep',
+                name: 'Validation, reconciliation & delta',
+                text: 'Multi-agent validation ensures safe loads and smooth deltas. Constraint issues, data drift, and schema changes are detected before they break downstream.',
+              },
+            ],
+          }),
+        }}
+      />
       <Header />
 
       <main className="flex-1">
@@ -85,7 +148,7 @@ export default function HowItWorksPage() {
             How Settle works
           </h1>
           <p className="text-lg text-[#64748B] leading-relaxed text-center max-w-2xl mx-auto mb-16">
-            An autonomous, multi-agent workflow that handles the full migration lifecycle — from schema profiling to production-ready load files.
+            An autonomous, multi-agent workflow that handles the full migration lifecycle — from schema profiling to production-ready load files. First mapping proposals in under an hour. Production-ready packages in days, not months.
           </p>
 
           {/* Steps */}

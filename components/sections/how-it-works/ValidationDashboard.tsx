@@ -12,7 +12,7 @@ const CHECKS = [
   { icon: '✅', name: 'Referential integrity',        count: '847 / 847' },
   { icon: '⚠️', name: 'Target constraint validation', count: '38 / 47 resolved' },
   { icon: '✅', name: 'Picklist alignment',           count: '24 / 24' },
-  { icon: '🔴', name: 'Null handling',                count: '9 blocking issues' },
+  { icon: '✅', name: 'Null handling',                 count: '127 / 127' },
 ]
 
 function gaugeStroke(score: number): string {
@@ -102,7 +102,7 @@ export default function ValidationDashboard() {
               Migration readiness score
             </p>
             <p className="text-slate-500 text-xs mt-1 font-sans">
-              9 blocking issues remaining before go-live
+              Migration cleared for go-live review
             </p>
           </div>
         </div>
@@ -116,6 +116,13 @@ export default function ValidationDashboard() {
               <span className="text-slate-500 text-xs font-mono">{check.count}</span>
             </div>
           ))}
+        </div>
+
+        {/* Success banner */}
+        <div className="bg-teal-600/10 rounded-lg p-2 mt-3">
+          <span className="text-teal-300 text-xs">
+            ✓ Migration readiness score: 87 · All blocking issues resolved · Ready for load file generation
+          </span>
         </div>
       </div>
     </div>

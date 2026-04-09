@@ -4,6 +4,14 @@ import Link from 'next/link'
 import { useState, useEffect } from 'react'
 import ScrollReveal from '@/components/ui/ScrollReveal'
 
+const MIGRATION_SYSTEMS = [
+  { name: 'Salesforce', slug: 'salesforce' },
+  { name: 'SAP',        slug: 'sap'        },
+  { name: 'Oracle',     slug: 'oracle'      },
+  { name: 'NetSuite',   slug: 'netsuite'    },
+  { name: 'SQL Server', slug: 'sql server'  },
+] as const
+
 const SOURCE_FIELDS = ['customer_id', 'cust_name', 'service_addr', 'acct_status']
 const TARGET_FIELDS = ['AccountId', 'Account.Name', 'ServiceAddress__c', 'Status__c']
 
@@ -155,6 +163,36 @@ export default function Hero() {
               </a>
             </div>
 
+            {/* Trust signals */}
+            <div className="flex flex-wrap items-center justify-center gap-x-6 gap-y-2 pt-4">
+              {[
+                'AWS-hosted',
+                'AES-256-GCM encryption',
+                'Anthropic Enterprise LLMs',
+                'SOC 2 in progress',
+              ].map((badge) => (
+                <span
+                  key={badge}
+                  className="flex items-center gap-1.5 text-xs text-[#94A3B8] font-medium"
+                >
+                  <svg
+                    xmlns="http://www.w3.org/2000/svg"
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    strokeWidth={2}
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    className="w-3 h-3 text-[#22C55E] shrink-0"
+                    aria-hidden="true"
+                  >
+                    <polyline points="20 6 9 17 4 12" />
+                  </svg>
+                  {badge}
+                </span>
+              ))}
+            </div>
+
           </ScrollReveal>
 
           {/* Right: Animated product demo */}
@@ -170,13 +208,14 @@ export default function Hero() {
               Designed for migrations from
             </p>
             <div className="flex flex-wrap justify-center gap-12">
-              {['Salesforce', 'SAP', 'Oracle', 'NetSuite', 'SQL Server'].map((name) => (
-                <span
+              {MIGRATION_SYSTEMS.map(({ name, slug }) => (
+                <Link
                   key={name}
-                  className="text-sm font-bold text-[#0F172A] opacity-30 hover:opacity-60 transition-opacity tracking-tight cursor-default"
+                  href={`/migrate?source=${slug}`}
+                  className="text-sm font-bold text-[#0F172A] opacity-30 hover:opacity-60 transition-opacity tracking-tight cursor-pointer"
                 >
                   {name}
-                </span>
+                </Link>
               ))}
             </div>
           </div>

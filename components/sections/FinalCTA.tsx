@@ -7,10 +7,10 @@ export default function FinalCTA() {
       <div className="max-w-xl mx-auto text-center">
         <ScrollReveal>
           <h2 className="text-4xl font-bold text-white tracking-tight mb-4">
-            Bring autonomy to your next migration
+            Consider it settled.
           </h2>
           <p className="text-[#94A3B8] text-base leading-relaxed mb-9">
-            Tell us about your upcoming migration and we&apos;ll share a preliminary assessment within 48 hours.
+            Tell us about your upcoming migration. We&apos;ll share a preliminary assessment within 48 hours — at no cost.
           </p>
 
           <div className="flex flex-wrap justify-center gap-3">
