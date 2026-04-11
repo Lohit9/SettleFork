@@ -2,9 +2,9 @@ import ScrollReveal from '@/components/ui/ScrollReveal'
 import AnimatedCounter from '@/components/ui/AnimatedCounter'
 
 const METRICS = [
-  { end: 70, suffix: '%', label: 'faster migration planning' },
-  { end: 3412, suffix: '', label: 'fields auto-mapped per project' },
-  { end: 87, suffix: '%', label: 'avg. first-pass readiness score' },
+  { end: 70,  suffix: '%',  prefix: '',    label: 'faster migration planning' },
+  { end: 90,  suffix: '%+', prefix: '',    label: 'auto-mapped fields'        },
+  { end: 50,  suffix: '%',  prefix: '40–', label: 'cost reduction'            },
 ]
 
 export default function MetricsBar() {
@@ -14,7 +14,7 @@ export default function MetricsBar() {
         {METRICS.map((metric, i) => (
           <ScrollReveal key={metric.label} delay={i * 0.1}>
             <div className="text-5xl font-bold text-white tracking-tight">
-              <AnimatedCounter end={metric.end} suffix={metric.suffix} />
+              <AnimatedCounter end={metric.end} suffix={metric.suffix} prefix={metric.prefix} />
             </div>
             <p className="text-slate-500 text-sm mt-2">{metric.label}</p>
           </ScrollReveal>

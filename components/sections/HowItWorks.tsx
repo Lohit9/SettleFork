@@ -75,10 +75,12 @@ export default function HowItWorks() {
 
         {/* Result callout */}
         <ScrollReveal delay={0.2}>
-          <div className="mt-10 p-5 bg-[#ECFDF5] rounded-xl border border-teal-200 flex items-center gap-3">
-            <span className="text-[#0D9488] font-bold text-[15px] shrink-0">Result:</span>
-            <span className="text-[#115E59] text-[15px]">
-              migrations in weeks, not months — with 40–50% lower cost and dramatically reduced risk.
+          <div className="mt-8 max-w-4xl mx-auto px-6 py-4 bg-[#ECFDF5] rounded-xl border border-teal-200 flex items-center justify-center gap-3">
+            <span className="text-xs font-semibold uppercase tracking-wider text-[#0D9488] shrink-0 whitespace-nowrap">
+              Result
+            </span>
+            <span className="text-[#115E59] text-[15px] font-medium">
+              Migrations in weeks, not months — 40–50% lower cost, dramatically reduced risk.
             </span>
           </div>
         </ScrollReveal>

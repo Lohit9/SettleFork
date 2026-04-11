@@ -131,7 +131,7 @@ function HeroFlow() {
 
 export default function Hero() {
   return (
-    <section className="py-20 lg:py-24 bg-white">
+    <section className="pt-20 lg:pt-24 pb-10 lg:pb-12 bg-white">
       <div className="max-w-7xl mx-auto px-6 lg:px-12">
         <div className="grid lg:grid-cols-2 gap-14 items-center">
 
@@ -169,7 +169,7 @@ export default function Hero() {
             </p>
 
             {/* Trust signals */}
-            <div className="flex flex-wrap items-center justify-center gap-x-6 gap-y-2 pt-4">
+            <div className="grid grid-cols-2 gap-x-6 gap-y-2 pt-4 max-w-md">
               {[
                 'AWS-hosted',
                 'AES-256-GCM encryption',
@@ -198,15 +198,15 @@ export default function Hero() {
               ))}
             </div>
 
-            <p className="text-sm text-slate-500 mt-4">
-              Built by a former Deloitte data migration lead who managed 66 system integrations for a $3B enterprise.
-            </p>
 
           </ScrollReveal>
 
           {/* Right: Animated product demo */}
           <ScrollReveal delay={0.15}>
             <HeroFlow />
+            <p className="text-sm text-[#64748B] text-center mt-4">
+              Built by a former Deloitte enterprise data migration lead.
+            </p>
           </ScrollReveal>
         </div>
 
@@ -227,6 +227,7 @@ export default function Hero() {
                 </Link>
               ))}
             </div>
+
           </div>
         </ScrollReveal>
       </div>

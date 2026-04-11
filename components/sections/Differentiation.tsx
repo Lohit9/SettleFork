@@ -25,9 +25,10 @@ const MUTED_CARDS = [
 
 const MINE_BULLETS = [
   'Autonomous multi-agent migration engine',
-  'AI-led schema understanding and mapping',
+  'AI-led schema understanding and field mapping',
+  'AI-generated transformations and cleansing rules',
   'Validation engine that catches issues before production',
-  'Full AI decision log per field mapping and transformation',
+  'Full AI decision log per mapping and transformation',
   'First mapping proposals generated within the hour',
 ]
 

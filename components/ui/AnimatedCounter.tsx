@@ -6,6 +6,7 @@ import { useInView } from 'framer-motion'
 interface AnimatedCounterProps {
   end: number
   suffix?: string
+  prefix?: string
   duration?: number
 }
 
@@ -13,7 +14,7 @@ function easeOutCubic(t: number): number {
   return 1 - Math.pow(1 - t, 3)
 }
 
-export function AnimatedCounter({ end, suffix = '', duration = 2000 }: AnimatedCounterProps) {
+export function AnimatedCounter({ end, suffix = '', prefix = '', duration = 2000 }: AnimatedCounterProps) {
   const ref = useRef<HTMLSpanElement>(null)
   const isInView = useInView(ref, { once: true, margin: '-60px' })
   // Initialize to `end` so SSR/first paint renders the correct final value.
@@ -48,7 +49,7 @@ export function AnimatedCounter({ end, suffix = '', duration = 2000 }: AnimatedC
 
   return (
     <span ref={ref}>
-      {count.toLocaleString('en-US')}{suffix}
+      {prefix}{count.toLocaleString('en-US')}{suffix}
     </span>
   )
 }
