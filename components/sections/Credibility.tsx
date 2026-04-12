@@ -11,7 +11,7 @@ export default function Credibility() {
         <p className="text-[#CBD5E1] text-base leading-relaxed">
           Settle was founded by a former Deloitte Technical Program Manager who led enterprise data migrations across multiple Fortune 500 companies — delivering 70+ system integrations and $50M+ in cumulative project value. Settle is built by a team that ran the exact data migration projects this platform is built to automate. The product is built from the inside out: every workflow reflects how enterprise migrations actually fail, and where automation can prevent it.
         </p>
-        <div className="flex flex-wrap justify-center gap-6 pt-2">
+        <div className="flex flex-col sm:flex-row flex-wrap justify-center gap-6 pt-2">
           {[
             { value: '70+',          label: 'system integrations delivered' },
             { value: 'Fortune 500', label: 'client programs'               },
