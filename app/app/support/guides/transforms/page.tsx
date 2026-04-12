@@ -3,7 +3,7 @@ import { RefreshCw } from '@/components/icons'
 
 function StepBadge({ n }: { n: number }) {
   return (
-    <div className="w-7 h-7 rounded-full bg-indigo-100 text-indigo-700 flex items-center justify-center text-sm font-medium flex-shrink-0">
+    <div className="w-7 h-7 rounded-full bg-blue-100 text-blue-700 flex items-center justify-center text-sm font-medium flex-shrink-0">
       {n}
     </div>
   )
@@ -129,7 +129,7 @@ export default function TransformsGuidePage() {
               </div>
               <p className="text-sm text-gray-600 leading-relaxed max-w-2xl">
                 The generated SQL appears below your description with an{' '}
-                <span className="text-xs bg-indigo-100 text-indigo-700 px-1.5 py-0.5 rounded font-medium">AI-Generated</span>{' '}
+                <span className="text-xs bg-blue-100 text-blue-700 px-1.5 py-0.5 rounded font-medium">AI-Generated</span>{' '}
                 badge. You can:
               </p>
               <BulletList items={[

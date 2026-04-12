@@ -7,7 +7,7 @@ interface PageHeaderProps {
 
 export function PageHeader({ projectName, title, subtitle, children }: PageHeaderProps) {
   return (
-    <div className="bg-white border-b border-gray-200 px-6 py-4 flex-shrink-0">
+    <div className="bg-gray-50/80 border-b border-gray-200 px-6 py-4 flex-shrink-0">
       <p className="text-[11px] font-medium uppercase tracking-widest text-gray-400 truncate max-w-md mb-1">
         {projectName}
       </p>

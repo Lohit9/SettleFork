@@ -80,7 +80,7 @@ function SQLModal({ sql, onClose }: { sql: string; onClose: () => void }) {
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
       <div className="bg-white rounded-xl shadow-2xl w-full max-w-2xl">
         <div className="flex items-center justify-between p-4 border-b">
-          <h3 className="font-semibold text-gray-900">Fix SQL</h3>
+          <h3 className="text-lg font-semibold text-gray-900">Fix SQL</h3>
           <button onClick={onClose} className="text-gray-400 hover:text-gray-600 text-xl">×</button>
         </div>
         <div className="p-4">
@@ -94,7 +94,7 @@ function SQLModal({ sql, onClose }: { sql: string; onClose: () => void }) {
         <div className="flex gap-2 p-4 border-t">
           <button
             onClick={() => { navigator.clipboard.writeText(sql); setCopied(true); setTimeout(() => setCopied(false), 2000) }}
-            className="px-4 py-2 text-sm bg-[#2358D4] text-white rounded-lg hover:bg-blue-700"
+            className="px-4 py-2 text-sm bg-primary text-white rounded-lg hover:bg-primary/90 transition-colors"
           >
             {copied ? '✓ Copied' : 'Copy SQL'}
           </button>
@@ -113,14 +113,14 @@ function ConfirmModal({
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
       <div className="bg-white rounded-xl shadow-2xl w-full max-w-md p-6">
-        <h3 className="font-semibold text-gray-900 mb-2">{title}</h3>
+        <h3 className="text-lg font-semibold text-gray-900 mb-2">{title}</h3>
         <p className="text-sm text-gray-600 mb-6">{message}</p>
         <div className="flex gap-3 justify-end">
           <button onClick={onCancel} disabled={loading} className="px-4 py-2 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-lg hover:bg-gray-50 transition-colors disabled:opacity-50">
             Cancel
           </button>
           <button onClick={onConfirm} disabled={loading}
-            className="px-4 py-2 text-sm bg-[#2358D4] text-white rounded-lg hover:bg-blue-700 disabled:opacity-50 flex items-center gap-2">
+            className="px-4 py-2 text-sm bg-primary text-white rounded-lg hover:bg-primary/90 transition-colors disabled:opacity-50 flex items-center gap-2">
             {loading && <span className="w-3.5 h-3.5 border-2 border-white/30 border-t-white rounded-full animate-spin" />}
             {confirmLabel}
           </button>
@@ -434,7 +434,7 @@ function IssueCard({
       {showAcceptModal && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
           <div className="bg-white rounded-xl shadow-2xl w-full max-w-md p-6">
-            <h3 className="font-semibold text-gray-900 mb-2">Accept Risk</h3>
+            <h3 className="text-lg font-semibold text-gray-900 mb-2">Accept Risk</h3>
             <p className="text-sm text-gray-600 mb-3">Why are you accepting this risk? (optional)</p>
             <textarea
               value={riskReason}
@@ -528,7 +528,7 @@ function IssueCard({
               {issue.root_cause_breakdown && (
                 <div className="flex flex-wrap gap-3 mt-1 text-[11px]">
                   {issue.root_cause_breakdown.source_data > 0 && (
-                    <span className="text-slate-500">
+                    <span className="text-gray-500">
                       {issue.root_cause_breakdown.source_data.toLocaleString()} from source data
                     </span>
                   )}
@@ -558,7 +558,7 @@ function IssueCard({
 
               {/* Affected rows preview panel */}
               {showSample && displayRows.length === 0 && (
-                <div className="mt-3 px-4 py-3 bg-slate-50 rounded-md text-xs text-slate-500 border space-y-2">
+                <div className="mt-3 px-4 py-3 bg-slate-50 rounded-md text-xs text-gray-500 border space-y-2">
                   <p>Sample data not available for this issue.</p>
                   <div className="flex items-center gap-3 flex-wrap">
                     {diagnosticQuery && (
@@ -611,7 +611,7 @@ function IssueCard({
                           <tr key={i} className="border-b last:border-0 hover:bg-slate-50/50">
                             {sampleColumns.map(col => (
                               <td key={col} className={`px-3 py-1.5 font-mono ${
-                                col === fieldName ? 'text-red-700 bg-red-50/50 font-medium' : 'text-slate-700'
+                                col === fieldName ? 'text-red-700 bg-red-50/50 font-medium' : 'text-gray-700'
                               }`}>
                                 {row[col] === null || row[col] === undefined || row[col] === ''
                                   ? <span className="text-slate-300 italic">null</span>
@@ -628,7 +628,7 @@ function IssueCard({
                   </div>
 
                   <div className="px-3 py-2 bg-slate-50 border-t flex items-center justify-between gap-2">
-                    <span className="text-xs text-slate-500">
+                    <span className="text-xs text-gray-500">
                       Showing {displayRows.length} of {issue.affected_records.toLocaleString()} affected rows
                     </span>
                     <div className="flex items-center gap-3">
@@ -774,7 +774,7 @@ function IssueCard({
                           <button
                             onClick={() => setConfirmApply({ idx, fix: opt })}
                             disabled={applyingIdx !== null || !canEdit}
-                            className="px-3 py-1.5 text-xs bg-[#2358D4] text-white rounded-lg hover:bg-blue-700 disabled:opacity-50 flex items-center gap-1.5"
+                            className="px-3 py-1.5 text-xs bg-primary text-white rounded-lg hover:bg-primary/90 transition-colors disabled:opacity-50 flex items-center gap-1.5"
                           >
                             {applyingIdx === idx && <span className="w-3 h-3 border-2 border-white/30 border-t-white rounded-full animate-spin" />}
                             Apply Fix
@@ -976,7 +976,7 @@ function AddRuleModal({
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
       <div className="bg-white rounded-xl shadow-2xl w-full max-w-lg max-h-[85vh] overflow-y-auto">
         <div className="flex items-center justify-between p-5 border-b sticky top-0 bg-white">
-          <h3 className="font-semibold text-gray-900">Add Validation Rule</h3>
+          <h3 className="text-lg font-semibold text-gray-900">Add Validation Rule</h3>
           <button onClick={onClose} className="text-gray-400 hover:text-gray-600 text-xl">×</button>
         </div>
         <div className="p-5 space-y-4">
@@ -1022,13 +1022,13 @@ function AddRuleModal({
             <div className="mt-1.5 flex rounded-lg border overflow-hidden">
               <button
                 onClick={() => setMode('nl')}
-                className={`flex-1 text-sm py-2 ${mode === 'nl' ? 'bg-[#2358D4] text-white' : 'bg-white text-gray-600 hover:bg-gray-50'}`}
+                className={`flex-1 text-sm py-2 ${mode === 'nl' ? 'bg-primary text-white' : 'bg-white text-gray-600 hover:bg-gray-50'}`}
               >
                 ✦ Natural Language
               </button>
               <button
                 onClick={() => setMode('manual')}
-                className={`flex-1 text-sm py-2 ${mode === 'manual' ? 'bg-[#2358D4] text-white' : 'bg-white text-gray-600 hover:bg-gray-50'}`}
+                className={`flex-1 text-sm py-2 ${mode === 'manual' ? 'bg-primary text-white' : 'bg-white text-gray-600 hover:bg-gray-50'}`}
               >
                 Manual
               </button>
@@ -1067,7 +1067,7 @@ function AddRuleModal({
                   <button
                     onClick={handleAcceptGenerated}
                     disabled={loading}
-                    className="flex-1 px-4 py-2 text-sm bg-[#2358D4] text-white rounded-lg hover:bg-blue-700 disabled:opacity-50 flex items-center justify-center gap-2"
+                    className="flex-1 px-4 py-2 text-sm bg-primary text-white rounded-lg hover:bg-primary/90 transition-colors disabled:opacity-50 flex items-center justify-center gap-2"
                   >
                     {loading ? <><span className="w-3.5 h-3.5 border-2 border-white/30 border-t-white rounded-full animate-spin" />Saving…</> : 'Save Rule'}
                   </button>
@@ -1103,7 +1103,7 @@ function AddRuleModal({
                 <button
                   onClick={handleGenerateNL}
                   disabled={loading || !selectedFieldId || !nlPrompt.trim()}
-                  className="w-full px-4 py-2 text-sm bg-[#2358D4] text-white rounded-lg hover:bg-blue-700 disabled:opacity-50 flex items-center justify-center gap-2"
+                  className="w-full px-4 py-2 text-sm bg-primary text-white rounded-lg hover:bg-primary/90 transition-colors disabled:opacity-50 flex items-center justify-center gap-2"
                 >
                   {loading ? <><span className="w-3.5 h-3.5 border-2 border-white/30 border-t-white rounded-full animate-spin" />Generating…</> : '✦ Generate Rule'}
                 </button>
@@ -1184,7 +1184,7 @@ function AddRuleModal({
               <button
                 onClick={handleSaveManual}
                 disabled={loading}
-                className="w-full px-4 py-2 text-sm bg-[#2358D4] text-white rounded-lg hover:bg-blue-700 disabled:opacity-50 flex items-center justify-center gap-2"
+                className="w-full px-4 py-2 text-sm bg-primary text-white rounded-lg hover:bg-primary/90 transition-colors disabled:opacity-50 flex items-center justify-center gap-2"
               >
                 {loading ? <><span className="w-3.5 h-3.5 border-2 border-white/30 border-t-white rounded-full animate-spin" />Saving…</> : 'Save Rule'}
               </button>
@@ -1218,7 +1218,7 @@ function VerifiedFixesSection({
         className="w-full flex items-center justify-between gap-3 px-5 py-3.5 hover:bg-blue-50/40 transition-colors text-left"
       >
         <div className="flex items-center gap-2.5">
-          <span className="w-2 h-2 rounded-full bg-[#2358D4] flex-shrink-0" />
+          <span className="w-2 h-2 rounded-full bg-primary flex-shrink-0" />
           <span className="text-sm font-semibold text-blue-800">
             Verified Fixed ({fixes.length})
           </span>
@@ -1303,7 +1303,7 @@ function FixHistoryPanel({
       <div className="fixed inset-0 z-40 flex items-center justify-end bg-black/30 p-4">
         <div className="bg-white rounded-xl shadow-2xl w-full max-w-xl h-full max-h-[90vh] flex flex-col">
           <div className="flex items-center justify-between p-4 border-b">
-            <h3 className="font-semibold text-gray-900">Fix History</h3>
+            <h3 className="text-lg font-semibold text-gray-900">Fix History</h3>
             <button onClick={onClose} className="text-gray-400 hover:text-gray-600 text-xl">×</button>
           </div>
           <div className="flex-1 overflow-y-auto p-4 space-y-3">
@@ -1404,6 +1404,18 @@ function CreateManualFixModal({
       setSqlText(`UPDATE data_rows\nSET row_data = jsonb_set(row_data, '{FieldName}', '"new_value"')\nWHERE table_id = '${tableId}'`)
     }
   }, [tableId, mode, sqlText])
+
+  useEffect(() => {
+    const handleClickOutside = (e: MouseEvent) => {
+      if (overflowRef.current && !overflowRef.current.contains(e.target as Node)) {
+        setShowOverflowMenu(false)
+      }
+    }
+    if (showOverflowMenu) {
+      document.addEventListener('mousedown', handleClickOutside)
+    }
+    return () => document.removeEventListener('mousedown', handleClickOutside)
+  }, [showOverflowMenu])
 
   function handleModeSwitch(newMode: 'nl' | 'sql') {
     setMode(newMode)
@@ -1522,7 +1534,7 @@ function CreateManualFixModal({
       <div className="bg-white rounded-xl shadow-2xl w-full max-w-xl max-h-[90vh] flex flex-col">
         {/* Header */}
         <div className="flex items-center justify-between p-4 border-b shrink-0">
-          <h3 className="font-semibold text-gray-900">Create Manual Fix</h3>
+          <h3 className="text-lg font-semibold text-gray-900">Create Manual Fix</h3>
           <button onClick={onClose} className="text-gray-400 hover:text-gray-600 text-xl">×</button>
         </div>
 
@@ -1579,13 +1591,13 @@ function CreateManualFixModal({
               <div className="flex rounded-lg border border-gray-200 overflow-hidden text-sm">
                 <button
                   onClick={() => handleModeSwitch('nl')}
-                  className={`flex-1 py-2 flex items-center justify-center gap-1.5 transition-colors ${mode === 'nl' ? 'bg-[#2358D4] text-white' : 'text-gray-600 hover:bg-gray-50'}`}
+                  className={`flex-1 py-2 flex items-center justify-center gap-1.5 transition-colors ${mode === 'nl' ? 'bg-primary text-white' : 'text-gray-600 hover:bg-gray-50'}`}
                 >
                   <span>✦</span> Natural Language
                 </button>
                 <button
                   onClick={() => handleModeSwitch('sql')}
-                  className={`flex-1 py-2 flex items-center justify-center gap-1.5 transition-colors ${mode === 'sql' ? 'bg-[#2358D4] text-white' : 'text-gray-600 hover:bg-gray-50'}`}
+                  className={`flex-1 py-2 flex items-center justify-center gap-1.5 transition-colors ${mode === 'sql' ? 'bg-primary text-white' : 'text-gray-600 hover:bg-gray-50'}`}
                 >
                   <span className="font-mono">{`</>`}</span> SQL Editor
                 </button>
@@ -1602,7 +1614,7 @@ function CreateManualFixModal({
                   <button
                     onClick={handleGenerateFix}
                     disabled={generating || !nlDescription.trim()}
-                    className="w-full px-4 py-2 text-sm bg-[#2358D4] text-white rounded-lg hover:bg-blue-700 disabled:opacity-50 flex items-center justify-center gap-2"
+                    className="w-full px-4 py-2 text-sm bg-primary text-white rounded-lg hover:bg-primary/90 transition-colors disabled:opacity-50 flex items-center justify-center gap-2"
                   >
                     {generating ? (
                       <><span className="w-3.5 h-3.5 border-2 border-white/30 border-t-white rounded-full animate-spin" />Generating fix…</>
@@ -1627,7 +1639,7 @@ function CreateManualFixModal({
                             <button
                               onClick={() => handleApplyNL()}
                               disabled={isApplying || !canEdit}
-                              className="flex-1 px-3 py-1.5 text-sm bg-[#2358D4] text-white rounded-lg hover:bg-blue-700 disabled:opacity-50 flex items-center justify-center gap-2"
+                              className="flex-1 px-3 py-1.5 text-sm bg-primary text-white rounded-lg hover:bg-primary/90 transition-colors disabled:opacity-50 flex items-center justify-center gap-2"
                             >
                               {isApplying ? (
                                 <><span className="w-3.5 h-3.5 border-2 border-white/30 border-t-white rounded-full animate-spin" />Applying…</>
@@ -1676,7 +1688,7 @@ function CreateManualFixModal({
                         <button
                           onClick={() => handleApplySQL()}
                           disabled={!sqlValidated || isApplying || !canEdit}
-                          className="flex-1 px-3 py-1.5 text-sm bg-[#2358D4] text-white rounded-lg hover:bg-blue-700 disabled:opacity-50 flex items-center justify-center gap-2"
+                          className="flex-1 px-3 py-1.5 text-sm bg-primary text-white rounded-lg hover:bg-primary/90 transition-colors disabled:opacity-50 flex items-center justify-center gap-2"
                         >
                           {isApplying ? (
                             <><span className="w-3.5 h-3.5 border-2 border-white/30 border-t-white rounded-full animate-spin" />Applying…</>
@@ -1832,7 +1844,7 @@ function IssueFixModal({
         <div className="bg-white rounded-xl shadow-2xl w-full max-w-xl max-h-[90vh] flex flex-col">
           {/* Header */}
           <div className="flex items-center justify-between p-4 border-b shrink-0">
-            <h3 className="font-semibold text-gray-900">Fix Issue</h3>
+            <h3 className="text-lg font-semibold text-gray-900">Fix Issue</h3>
             <button
               onClick={onClose}
               className="text-gray-400 hover:text-gray-600 text-xl leading-none"
@@ -1923,7 +1935,7 @@ function IssueFixModal({
                   <button
                     onClick={handleGenerateSQL}
                     disabled={!nlDescription.trim() || isGenerating}
-                    className="px-4 py-1.5 text-sm bg-[#2358D4] text-white rounded-lg hover:bg-blue-700 disabled:opacity-50"
+                    className="px-4 py-1.5 text-sm bg-primary text-white rounded-lg hover:bg-primary/90 transition-colors disabled:opacity-50"
                   >
                     {isGenerating ? 'Generating…' : 'Generate SQL'}
                   </button>
@@ -1996,7 +2008,7 @@ function IssueFixModal({
                 <button
                   onClick={() => handleApply()}
                   disabled={isApplying || !canApply || !canEdit}
-                  className="px-4 py-2 text-sm bg-[#2358D4] text-white rounded-lg hover:bg-blue-700 disabled:opacity-50 flex items-center gap-2"
+                  className="px-4 py-2 text-sm bg-primary text-white rounded-lg hover:bg-primary/90 transition-colors disabled:opacity-50 flex items-center gap-2"
                 >
                   {isApplying && (
                     <span className="w-3.5 h-3.5 border-2 border-white/30 border-t-white rounded-full animate-spin" />
@@ -2043,6 +2055,8 @@ export default function DataQualityContent({
   const [showAddRule, setShowAddRule] = useState(false)
   const [showHistory, setShowHistory] = useState(false)
   const [showCreateFix, setShowCreateFix] = useState(false)
+  const [showOverflowMenu, setShowOverflowMenu] = useState(false)
+  const overflowRef = useRef<HTMLDivElement>(null)
   const [scanError, setScanError] = useState<string | null>(null)
   const [scanWarnings, setScanWarnings] = useState<string[]>([])
   const [scanToast, setScanToast] = useState<string | null>(null)
@@ -2342,12 +2356,36 @@ export default function DataQualityContent({
       {/* Page Header */}
       <PageHeader projectName={projectName} title="Validate" subtitle="Data quality monitoring and migration readiness">
         <div className="flex items-center gap-2 flex-shrink-0">
-          <button
-            onClick={() => setShowHistory(true)}
-            className="bg-slate-50 border border-slate-200 text-slate-500 font-medium hover:bg-slate-100 rounded-lg px-4 py-2 text-sm"
-          >
-            Fix History
-          </button>
+          {/* Overflow menu — Fix History + Regenerate */}
+          <div className="relative" ref={overflowRef}>
+            <button
+              onClick={() => setShowOverflowMenu(!showOverflowMenu)}
+              className="p-2 text-slate-400 hover:text-slate-600 hover:bg-slate-100 rounded-lg transition-colors"
+              title="More actions"
+            >
+              <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 20 20">
+                <path d="M10 6a2 2 0 110-4 2 2 0 010 4zM10 12a2 2 0 110-4 2 2 0 010 4zM10 18a2 2 0 110-4 2 2 0 010 4z" />
+              </svg>
+            </button>
+            {showOverflowMenu && (
+              <div className="absolute right-0 top-full mt-1 w-52 bg-white border border-gray-200 rounded-lg shadow-lg z-50 py-1">
+                <button
+                  onClick={() => { setShowHistory(true); setShowOverflowMenu(false) }}
+                  className="w-full text-left px-3 py-2 text-sm text-slate-700 hover:bg-slate-50 flex items-center gap-2"
+                >
+                  Fix History
+                </button>
+                <button
+                  onClick={() => { handleRegenerateStagedData(); setShowOverflowMenu(false) }}
+                  disabled={isRestaging || scanning}
+                  className="w-full text-left px-3 py-2 text-sm text-slate-700 hover:bg-slate-50 flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  {isRestaging ? 'Staging…' : 'Regenerate Staged Data'}
+                </button>
+              </div>
+            )}
+          </div>
+
           <button
             onClick={() => setShowAddRule(true)}
             className="bg-white border border-slate-200 text-slate-700 font-medium hover:bg-slate-50 hover:border-slate-300 rounded-lg px-4 py-2 text-sm"
@@ -2360,24 +2398,12 @@ export default function DataQualityContent({
           >
             + Create Fix
           </button>
-          <button
-            onClick={handleRegenerateStagedData}
-            disabled={isRestaging || scanning}
-            className="bg-slate-50 border border-slate-200 text-slate-500 font-medium hover:bg-slate-100 rounded-lg px-4 py-2 text-sm disabled:opacity-50 flex items-center gap-1.5"
-            title="Re-apply saved transformations to generate fresh staged data for target-ready validation"
-          >
-            {isRestaging ? (
-              <><span className="w-3 h-3 border-2 border-slate-400/30 border-t-slate-600 rounded-full animate-spin" />Staging…</>
-            ) : (
-              '↻ Regenerate Staged Data'
-            )}
-          </button>
           {!isArchived && (
             <RoleTooltip allowed={canEdit} requiredRole="Editor">
               <button
                 onClick={canEdit ? handleRunFullScan : undefined}
                 disabled={scanning || isRestaging || !canEdit}
-                className="px-4 py-1.5 text-sm bg-[#2358D4] text-white rounded-lg hover:bg-blue-700 disabled:opacity-50 flex items-center gap-2"
+                className="px-4 py-1.5 text-sm bg-primary text-white rounded-lg hover:bg-primary/90 transition-colors disabled:opacity-50 flex items-center gap-2"
               >
                 {scanning ? <><span className="w-3.5 h-3.5 border-2 border-white/30 border-t-white rounded-full animate-spin" />Scanning…</> : '⊙ Run Full Scan'}
               </button>
@@ -2444,7 +2470,7 @@ export default function DataQualityContent({
 
           {/* ── Migration Readiness Banner ── */}
           <div className="bg-white border border-gray-200 rounded-xl px-5 py-4 shadow-sm">
-            <h2 className="text-sm font-semibold text-slate-900 mb-1.5">Migration Readiness</h2>
+            <h2 className="text-base font-semibold text-gray-900 mb-1.5">Migration Readiness</h2>
             <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-sm">
               {inFlightBlocking > 0 ? (
                 <span className="text-red-600 font-medium">{inFlightBlocking} blocking</span>
@@ -2453,17 +2479,17 @@ export default function DataQualityContent({
                   <CheckCircle className="w-4 h-4" /> No blocking issues
                 </span>
               )}
-              <span className="text-slate-300">·</span>
-              <span className={inFlightWarning > 0 ? 'text-amber-600' : 'text-slate-400'}>
+              <span className="text-gray-300">·</span>
+              <span className={inFlightWarning > 0 ? 'text-amber-600' : 'text-gray-400'}>
                 {inFlightWarning} warning{inFlightWarning !== 1 ? 's' : ''}
               </span>
-              <span className="text-slate-300">·</span>
-              <span className="text-slate-500">
+              <span className="text-gray-300">·</span>
+              <span className="text-gray-500">
                 {stagedTargetTableIds.size} of {targetTables.length} table{targetTables.length !== 1 ? 's' : ''} staged
               </span>
             </div>
             {unstagedTables.length > 0 && (
-              <p className="text-xs text-slate-400 mt-1.5">
+              <p className="text-xs text-gray-400 mt-1.5">
                 Not yet staged: {unstagedTables.map(t => t.name).join(', ')}
               </p>
             )}
@@ -2472,7 +2498,7 @@ export default function DataQualityContent({
           {/* ── Active Validation Rules ── */}
           {rules.length > 0 && (
             <details className="bg-white rounded-xl border border-gray-200 shadow-sm">
-              <summary className="cursor-pointer px-5 py-3 flex items-center justify-between text-sm font-medium text-gray-700 hover:bg-gray-50 rounded-xl">
+              <summary className="cursor-pointer px-5 py-3 flex items-center justify-between text-sm font-semibold text-gray-900 hover:bg-gray-50 rounded-xl">
                 <span>Active Validation Rules ({rules.length})</span>
                 <span className="text-gray-400 text-xs">Click to expand</span>
               </summary>
@@ -2526,7 +2552,7 @@ export default function DataQualityContent({
           )}
 
           {/* ── Filter Bar ── */}
-          <div className="bg-white rounded-xl border border-gray-200 shadow-sm px-4 py-3">
+          <div className="bg-gray-50/50 rounded-xl border border-gray-200 shadow-sm px-4 py-3">
             <div className="flex flex-wrap items-center gap-3">
               {/* Severity */}
               <div className="flex items-center gap-2">
@@ -2600,11 +2626,11 @@ export default function DataQualityContent({
               />
 
               <div className="ml-auto flex items-center gap-3">
-                <span className="text-sm text-gray-500">
-                  {tablesWithVisibleIssues.length > 0
-                    ? <><span className="font-medium text-gray-700">{tablesWithVisibleIssues.reduce((s, g) => s + g.issues.length, 0)}</span> issues in {tablesWithVisibleIssues.length} table{tablesWithVisibleIssues.length !== 1 ? 's' : ''}</>
-                    : 'No matching issues'}
-                </span>
+                {tablesWithVisibleIssues.length > 0 && (
+                  <span className="text-sm text-gray-500">
+                    <span className="font-medium text-gray-700">{tablesWithVisibleIssues.reduce((s, g) => s + g.issues.length, 0)}</span> issues in {tablesWithVisibleIssues.length} table{tablesWithVisibleIssues.length !== 1 ? 's' : ''}
+                  </span>
+                )}
                 {hasActiveFilters && (
                   <button
                     onClick={resetFilters}
@@ -2622,16 +2648,40 @@ export default function DataQualityContent({
             <div className="bg-white rounded-xl border border-gray-200 shadow-sm p-10 text-center">
               <p className="text-sm text-gray-500">No target tables found. Add a target schema to begin validation.</p>
             </div>
-          ) : tablesWithVisibleIssues.length === 0 && tableGroups.every(g => !g.isStaged || g.issues.length === 0) && hasActiveFilters ? (
-            <div className="bg-white rounded-xl border border-gray-200 shadow-sm p-10 text-center">
-              <div className="text-3xl mb-3">✓</div>
-              <p className="font-medium text-gray-700 mb-1">No issues match your filters</p>
-              <p className="text-sm text-gray-500 mb-4">Try adjusting the filters above to see more results.</p>
-              <button onClick={resetFilters} className="px-4 py-2 text-sm border border-gray-300 rounded-lg text-gray-600 hover:bg-gray-50">
-                Reset filters
-              </button>
-            </div>
           ) : (
+            <>
+              {/* Contextual empty state — shown when no issues are visible */}
+              {tablesWithVisibleIssues.length === 0 && (
+                hasActiveFilters ? (
+                  <div className="text-center py-12 px-4">
+                    <p className="text-sm text-gray-500 mb-2">No issues match your filters</p>
+                    <button onClick={resetFilters} className="text-sm text-primary hover:text-blue-800 font-medium">
+                      Reset filters
+                    </button>
+                  </div>
+                ) : tableGroups.every(g => !g.isStaged) ? (
+                  <div className="text-center py-12 px-4">
+                    <div className="w-12 h-12 rounded-full bg-slate-100 flex items-center justify-center mx-auto mb-3">
+                      <svg className="w-6 h-6 text-slate-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
+                        <path strokeLinecap="round" strokeLinejoin="round" d="M9 12.75L11.25 15 15 9.75m-3-7.036A11.959 11.959 0 013.598 6 11.99 11.99 0 003 9.749c0 5.592 3.824 10.29 9 11.623 5.176-1.332 9-6.03 9-11.622 0-1.31-.21-2.571-.598-3.751h-.152c-3.196 0-6.1-1.248-8.25-3.285z" />
+                      </svg>
+                    </div>
+                    <p className="text-sm font-medium text-gray-700 mb-1">No staged data to validate</p>
+                    <p className="text-xs text-gray-500">Stage your data on the Transform page, then run a full scan to check for issues.</p>
+                  </div>
+                ) : (
+                  <div className="text-center py-12 px-4">
+                    <div className="w-12 h-12 rounded-full bg-green-50 flex items-center justify-center mx-auto mb-3">
+                      <svg className="w-6 h-6 text-green-500" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                        <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
+                      </svg>
+                    </div>
+                    <p className="text-sm font-medium text-gray-700 mb-1">No open issues</p>
+                    <p className="text-xs text-gray-500">All staged tables passed validation. Run a full scan to re-check if you&apos;ve made changes.</p>
+                  </div>
+                )
+              )}
+
             <div className="space-y-3">
               {tableGroups.map(group => (
                 <div key={group.tableId} className="border border-gray-200 rounded-xl overflow-hidden bg-white shadow-sm">
@@ -2642,7 +2692,7 @@ export default function DataQualityContent({
                   >
                     <div className="flex items-center gap-3 min-w-0">
                       <ChevronRight className={`h-4 w-4 text-slate-400 flex-shrink-0 transition-transform ${expandedTables.has(group.tableId) ? 'rotate-90' : ''}`} />
-                      <span className="text-sm font-semibold text-slate-900 truncate">{group.tableName}</span>
+                      <span className="text-sm font-semibold text-gray-900 truncate">{group.tableName}</span>
                       {group.isStaged ? (
                         <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-green-100 text-green-700 flex-shrink-0">staged</span>
                       ) : (
@@ -2707,13 +2757,14 @@ export default function DataQualityContent({
                 <VerifiedFixesSection fixes={filteredVerifiedFixes} tableNameById={tableNameById} />
               )}
             </div>
+            </>
           )}
 
           {/* Continue to Migration Center CTA */}
           <div className="flex justify-end pb-4">
             <button
               onClick={() => router.push(`/app/projects/${projectId}/outputs`)}
-              className="px-5 py-2.5 text-sm bg-[#2358D4] text-white rounded-lg hover:bg-blue-700 font-medium"
+              className="px-5 py-2.5 text-sm bg-primary text-white rounded-lg hover:bg-primary/90 transition-colors font-medium"
             >
               Continue to Migration Center →
             </button>

@@ -297,7 +297,7 @@ function NewProjectForm({ onCancel, onCreated }: { onCancel: () => void; onCreat
           <Button
             onClick={handleCreate}
             disabled={!projectName.trim() || !sourceSystem.trim() || !targetSystem.trim() || isPending}
-            className="bg-[#2358D4] hover:bg-blue-700 text-white disabled:opacity-50"
+            className="bg-primary hover:bg-primary/90 text-white disabled:opacity-50"
           >
             {isPending ? 'Creating…' : 'Create Project'}
           </Button>
@@ -318,7 +318,7 @@ function WelcomeModal({ onDismiss, onGetStarted }: { onDismiss: () => void; onGe
       <div className="bg-white rounded-2xl shadow-xl w-full max-w-[460px] p-8">
         {/* Logo / icon */}
         <div className="flex justify-center mb-5">
-          <div className="w-12 h-12 rounded-xl bg-[#2358D4] flex items-center justify-center">
+          <div className="w-12 h-12 rounded-xl bg-primary flex items-center justify-center">
             <span className="text-white text-xl font-bold leading-none">S</span>
           </div>
         </div>
@@ -358,7 +358,7 @@ function WelcomeModal({ onDismiss, onGetStarted }: { onDismiss: () => void; onGe
 
         <Button
           onClick={onGetStarted}
-          className="w-full bg-[#2358D4] hover:bg-blue-700 text-white font-medium"
+          className="w-full bg-primary hover:bg-primary/90 text-white font-medium"
         >
           Create Your First Project
         </Button>
@@ -451,7 +451,7 @@ export function ProjectsList({ initialProjects, activeOrgRole }: ProjectsListPro
             {canCreateProject && (
               <Button
                 onClick={() => setShowCreate(true)}
-                className="bg-[#2358D4] hover:bg-blue-700 text-white h-9 px-4 gap-1.5 text-sm"
+                className="bg-primary hover:bg-primary/90 text-white h-9 px-4 gap-1.5 text-sm"
               >
                 <Plus className="w-3.5 h-3.5" />
                 New Project
@@ -526,7 +526,7 @@ export function ProjectsList({ initialProjects, activeOrgRole }: ProjectsListPro
                 {canCreateProject && (
                   <Button
                     onClick={() => setShowCreate(true)}
-                    className="bg-[#2358D4] hover:bg-blue-700 text-white gap-2"
+                    className="bg-primary hover:bg-primary/90 text-white gap-2"
                   >
                     <Plus className="w-3.5 h-3.5" />
                     New Project

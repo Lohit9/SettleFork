@@ -337,7 +337,7 @@ export function SchemaIngestion({ projectId }: SchemaIngestionProps) {
       <div className="border-t border-gray-200 bg-white p-6 flex justify-end">
         <Button
           onClick={handleNext}
-          className="bg-blue-600 hover:bg-blue-700 text-white"
+          className="bg-primary hover:bg-primary/90 text-white"
         >
           Generate Mappings
         </Button>

@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useTransition } from 'react'
 import { Copy, ChevronDown, ChevronRight } from '@/components/icons'
+import { createClient } from '@/lib/supabase/client'
 import {
   executeNLQuery,
   executeSQLQuery,
@@ -171,6 +172,17 @@ export default function QueryData({ projectId, tables, isArchived = false, initi
     })
   }
 
+  async function handleDeleteQueryEntry(entryId: string) {
+    const supabase = createClient()
+    const { error } = await supabase
+      .from('query_history')
+      .delete()
+      .eq('id', entryId)
+    if (!error) {
+      setHistory(prev => prev.filter(e => e.id !== entryId))
+    }
+  }
+
   function copyText(text: string, key: 'friendly' | 'executed') {
     navigator.clipboard.writeText(text).then(() => {
       setCopied(key)
@@ -240,7 +252,7 @@ export default function QueryData({ projectId, tables, isArchived = false, initi
                   onClick={() => handleModeChange('nl')}
                   className={`px-3 py-1.5 text-xs font-medium transition-colors ${
                     mode === 'nl'
-                      ? 'bg-[#2358D4] text-white'
+                      ? 'bg-primary text-white'
                       : 'bg-white text-gray-600 hover:bg-gray-50'
                   }`}
                 >
@@ -250,7 +262,7 @@ export default function QueryData({ projectId, tables, isArchived = false, initi
                   onClick={() => handleModeChange('sql')}
                   className={`px-3 py-1.5 text-xs font-medium transition-colors border-l border-gray-200 ${
                     mode === 'sql'
-                      ? 'bg-[#2358D4] text-white'
+                      ? 'bg-primary text-white'
                       : 'bg-white text-gray-600 hover:bg-gray-50'
                   }`}
                 >
@@ -307,7 +319,7 @@ export default function QueryData({ projectId, tables, isArchived = false, initi
               <button
                 onClick={handleExecute}
                 disabled={loading || !input.trim() || tables.length === 0}
-                className="mt-3 px-4 py-2 text-sm font-medium text-white bg-[#2358D4] rounded-lg hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2"
+                className="mt-3 px-4 py-2 text-sm font-medium text-white bg-primary rounded-lg hover:bg-primary/90 transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2"
               >
                 {loading ? (
                   <>
@@ -348,59 +360,77 @@ export default function QueryData({ projectId, tables, isArchived = false, initi
                 <>
                   <div className="border-t border-gray-100 divide-y divide-gray-50">
                     {history.map((entry) => (
-                      <button
+                      <div
                         key={entry.id}
-                        onClick={() => handleHistoryClick(entry)}
-                        className="w-full text-left px-5 py-2.5 hover:bg-gray-50 transition-colors group flex items-start gap-3"
-                        title="Click to load this query"
+                        className={`w-full flex items-start hover:bg-gray-50 transition-colors group${entry.error ? ' opacity-60' : ''}`}
                       >
-                        {/* Status dot */}
-                        <span
-                          className={`mt-1.5 w-1.5 h-1.5 rounded-full flex-shrink-0 ${
-                            entry.error ? 'bg-red-400' : 'bg-green-400'
-                          }`}
-                        />
-
-                        {/* Query text */}
-                        <span className="flex-1 min-w-0">
-                          <span className="text-xs text-gray-800 font-mono leading-relaxed line-clamp-1 group-hover:text-blue-700 transition-colors">
-                            {entry.input.length > 100
-                              ? entry.input.slice(0, 100) + '…'
-                              : entry.input}
-                          </span>
-                          {entry.error && (
-                            <span className="text-[10px] text-red-500 mt-0.5 block truncate">
-                              {entry.error.length > 80 ? entry.error.slice(0, 80) + '…' : entry.error}
-                            </span>
-                          )}
-                        </span>
-
-                        {/* Right side: badges + time */}
-                        <span className="flex items-center gap-1.5 flex-shrink-0 mt-0.5">
-                          {/* Mode badge */}
+                        <button
+                          onClick={() => handleHistoryClick(entry)}
+                          className="flex-1 min-w-0 text-left px-5 py-2.5 flex items-start gap-3"
+                          title="Click to load this query"
+                        >
+                          {/* Status dot */}
                           <span
-                            className={`text-[10px] px-1.5 py-0.5 rounded font-medium ${
-                              entry.mode === 'nl'
-                                ? 'bg-purple-100 text-purple-600'
-                                : 'bg-gray-100 text-gray-500'
+                            className={`mt-1.5 w-1.5 h-1.5 rounded-full flex-shrink-0 ${
+                              entry.error ? 'bg-red-400' : 'bg-green-400'
                             }`}
-                          >
-                            {entry.mode === 'nl' ? 'NL' : 'SQL'}
-                          </span>
+                          />
 
-                          {/* Row count */}
-                          {entry.row_count !== null && !entry.error && (
-                            <span className="text-[10px] text-gray-400">
-                              {entry.row_count.toLocaleString()} row{entry.row_count !== 1 ? 's' : ''}
+                          {/* Query text */}
+                          <span className="flex-1 min-w-0">
+                            <span className={`text-xs font-mono leading-relaxed line-clamp-1 transition-colors ${entry.error ? 'text-gray-400' : 'text-gray-800 group-hover:text-blue-700'}`}>
+                              {entry.input.length > 100
+                                ? entry.input.slice(0, 100) + '…'
+                                : entry.input}
                             </span>
-                          )}
-
-                          {/* Timestamp */}
-                          <span className="text-[10px] text-gray-400 tabular-nums">
-                            {timeAgo(entry.created_at)}
+                            {entry.error && (
+                              <span className="text-[10px] text-red-500 mt-0.5 block truncate">
+                                {entry.error.length > 80 ? entry.error.slice(0, 80) + '…' : entry.error}
+                              </span>
+                            )}
                           </span>
-                        </span>
-                      </button>
+
+                          {/* Right side: badges + time */}
+                          <span className="flex items-center gap-1.5 flex-shrink-0 mt-0.5">
+                            {/* Mode badge */}
+                            <span
+                              className={`text-[10px] px-1.5 py-0.5 rounded font-medium ${
+                                entry.mode === 'nl'
+                                  ? 'bg-purple-100 text-purple-600'
+                                  : 'bg-gray-100 text-gray-500'
+                              }`}
+                            >
+                              {entry.mode === 'nl' ? 'NL' : 'SQL'}
+                            </span>
+
+                            {/* Row count */}
+                            {entry.row_count !== null && !entry.error && (
+                              <span className="text-[10px] text-gray-400">
+                                {entry.row_count.toLocaleString()} row{entry.row_count !== 1 ? 's' : ''}
+                              </span>
+                            )}
+
+                            {/* Timestamp */}
+                            <span className="text-[10px] text-gray-400 tabular-nums">
+                              {timeAgo(entry.created_at)}
+                            </span>
+                          </span>
+                        </button>
+
+                        {/* Per-row delete */}
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation()
+                            handleDeleteQueryEntry(entry.id)
+                          }}
+                          className="opacity-0 group-hover:opacity-100 transition-opacity mr-3 mt-2.5 p-0.5 text-gray-300 hover:text-red-500 flex-shrink-0"
+                          title="Remove from history"
+                        >
+                          <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                            <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
+                          </svg>
+                        </button>
+                      </div>
                     ))}
                   </div>
 
@@ -569,7 +599,7 @@ export default function QueryData({ projectId, tables, isArchived = false, initi
                       {pageRows.map((row, i) => (
                         <tr
                           key={pageStart + i}
-                          className="border-b border-gray-100 last:border-b-0 hover:bg-gray-50 even:bg-gray-50/50"
+                          className="border-b border-gray-100 last:border-b-0 hover:bg-gray-50 even:bg-gray-50/50 transition-colors"
                         >
                           {result!.columns.map((col) => (
                             <td
@@ -611,7 +641,7 @@ export default function QueryData({ projectId, tables, isArchived = false, initi
                             onClick={() => setResultsPage(p)}
                             className={`px-2 py-1 rounded border ${
                               p === resultsPage
-                                ? 'bg-[#2358D4] text-white border-blue-600'
+                                ? 'bg-primary text-white border-blue-600'
                                 : 'border-gray-200 hover:bg-gray-50'
                             }`}
                           >
@@ -646,7 +676,7 @@ export default function QueryData({ projectId, tables, isArchived = false, initi
           <div className="bg-white border border-gray-200 rounded-xl overflow-hidden">
             <button
               onClick={() => setTablesExpanded((v) => !v)}
-              className="w-full px-4 py-3 border-b border-gray-100 flex items-center justify-between hover:bg-gray-50"
+              className="w-full px-4 py-3 border-b border-gray-100 flex items-center justify-between bg-gray-50/50 hover:bg-gray-50"
             >
               <span className="text-xs font-semibold text-gray-700 uppercase tracking-wider">
                 Available Tables

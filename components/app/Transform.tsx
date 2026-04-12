@@ -297,7 +297,7 @@ export function Transform({ projectId }: TransformProps) {
                   className="min-h-32 resize-none"
                 />
                 <div className="mt-4 flex gap-2">
-                  <Button className="bg-blue-600 hover:bg-blue-700 text-white gap-2">
+                  <Button className="bg-primary hover:bg-primary/90 text-white gap-2">
                     <RefreshCw className="w-4 h-4" />
                     Generate Transform
                   </Button>
@@ -404,7 +404,7 @@ export function Transform({ projectId }: TransformProps) {
               </Button>
               <Button
                 onClick={handleNext}
-                className="bg-blue-600 hover:bg-blue-700 text-white"
+                className="bg-primary hover:bg-primary/90 text-white"
               >
                 Continue to Validation
               </Button>

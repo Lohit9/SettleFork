@@ -130,10 +130,10 @@ function decisionIcon(type: string) {
 function decisionDotColor(type: string) {
   switch (type) {
     case 'fix': return 'bg-green-500'
-    case 'mapping': return 'bg-[#2358D4]'
+    case 'mapping': return 'bg-primary'
     case 'transform': return 'bg-purple-500'
     case 'validation': return 'bg-amber-500'
-    case 'data': return 'bg-[#2358D4]'
+    case 'data': return 'bg-primary'
     case 'system': return 'bg-gray-500'
     default: return 'bg-gray-400'
   }
@@ -749,7 +749,7 @@ export default function OutputsContent({ projectId, projectName, initialData, is
 
       <PageHeader projectName={projectName} title="Migration Center" subtitle="Your migration deliverables and project status" />
 
-      <div className="flex-1 overflow-auto">
+      <div className="flex-1">
       <div className="max-w-5xl mx-auto p-6 pb-16 space-y-6">
 
         {/* ════════════════════════════════════════════════════
@@ -780,7 +780,7 @@ export default function OutputsContent({ projectId, projectName, initialData, is
             {/* Mapping Coverage */}
             <div className="rounded-xl border border-gray-200 bg-white p-5">
               <div className="flex items-center gap-1.5 mb-2">
-                <span className="w-2 h-2 rounded-full bg-[#2358D4] flex-shrink-0" />
+                <span className="w-2 h-2 rounded-full bg-primary flex-shrink-0" />
                 <p className="text-xs font-medium text-gray-500 uppercase tracking-wide">Mapping Coverage</p>
               </div>
               <div className="flex items-baseline gap-1">
@@ -788,7 +788,7 @@ export default function OutputsContent({ projectId, projectName, initialData, is
                 <span className="text-sm text-gray-400">/ {metrics.totalSourceFields}</span>
               </div>
               <div className="mt-2 h-1.5 bg-gray-100 rounded-full overflow-hidden">
-                <div className="h-full bg-[#2358D4] rounded-full" style={{ width: `${metrics.totalSourceFields > 0 ? Math.round((metrics.approvedFieldMappings / metrics.totalSourceFields) * 100) : 0}%` }} />
+                <div className="h-full bg-primary rounded-full" style={{ width: `${metrics.totalSourceFields > 0 ? Math.round((metrics.approvedFieldMappings / metrics.totalSourceFields) * 100) : 0}%` }} />
               </div>
             </div>
 
@@ -868,7 +868,7 @@ export default function OutputsContent({ projectId, projectName, initialData, is
                   <div className="flex items-center justify-between">
                     <div className="flex items-center gap-2">
                       <span className="w-1.5 h-1.5 rounded-full bg-purple-400 flex-shrink-0" />
-                      <span className="text-sm text-red-700">{outstanding.fieldsNeedingTransformWork} field{outstanding.fieldsNeedingTransformWork !== 1 ? 's' : ''} need transformation</span>
+                      <span className="text-sm text-red-700">{outstanding.fieldsNeedingTransformWork} field{outstanding.fieldsNeedingTransformWork !== 1 ? 's' : ''} need{outstanding.fieldsNeedingTransformWork === 1 ? 's' : ''} transformation</span>
                     </div>
                     <a href={`/app/projects/${projectId}/transform`} className="text-xs text-red-600 hover:text-red-800 font-medium">Go to Transform →</a>
                   </div>
@@ -877,7 +877,7 @@ export default function OutputsContent({ projectId, projectName, initialData, is
                   <div className="flex items-center justify-between">
                     <div className="flex items-center gap-2">
                       <span className="w-1.5 h-1.5 rounded-full bg-orange-400 flex-shrink-0" />
-                      <span className="text-sm text-red-700">{outstanding.untestedTransforms} transform{outstanding.untestedTransforms !== 1 ? 's' : ''} need testing</span>
+                      <span className="text-sm text-red-700">{outstanding.untestedTransforms} transform{outstanding.untestedTransforms !== 1 ? 's' : ''} need{outstanding.untestedTransforms === 1 ? 's' : ''} testing</span>
                     </div>
                     <a href={`/app/projects/${projectId}/transform`} className="text-xs text-red-600 hover:text-red-800 font-medium">Go to Transform →</a>
                   </div>
@@ -886,7 +886,7 @@ export default function OutputsContent({ projectId, projectName, initialData, is
                   <div className="flex items-center justify-between">
                     <div className="flex items-center gap-2">
                       <span className="w-1.5 h-1.5 rounded-full bg-blue-400 flex-shrink-0" />
-                      <span className="text-sm text-red-700">{outstanding.testedTransforms} transform{outstanding.testedTransforms !== 1 ? 's' : ''} need applying</span>
+                      <span className="text-sm text-red-700">{outstanding.testedTransforms} transform{outstanding.testedTransforms !== 1 ? 's' : ''} need{outstanding.testedTransforms === 1 ? 's' : ''} applying</span>
                     </div>
                     <a href={`/app/projects/${projectId}/transform`} className="text-xs text-red-600 hover:text-red-800 font-medium">Go to Transform →</a>
                   </div>
@@ -935,7 +935,7 @@ export default function OutputsContent({ projectId, projectName, initialData, is
               <div className="bg-white rounded-xl shadow-2xl w-full max-w-lg h-full max-h-[90vh] flex flex-col">
                 <div className="flex items-center justify-between px-5 py-4 border-b border-gray-100 flex-shrink-0">
                   <div>
-                    <h3 className="font-semibold text-gray-900">Decisions & Actions Log</h3>
+                    <h3 className="text-lg font-semibold text-gray-900">Decisions & Actions Log</h3>
                     <p className="text-xs text-gray-400 mt-0.5">{data.totalDecisions} total events</p>
                   </div>
                   <button
@@ -961,7 +961,7 @@ export default function OutputsContent({ projectId, projectName, initialData, is
                         onClick={() => setDecisionsTypeFilter(tab.key)}
                         className={`px-2.5 py-1 rounded-full text-xs font-medium transition-colors ${
                           decisionsTypeFilter === tab.key
-                            ? 'bg-[#2358D4] text-white'
+                            ? 'bg-primary text-white'
                             : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
                         }`}
                       >
@@ -1075,7 +1075,7 @@ export default function OutputsContent({ projectId, projectName, initialData, is
                 {executionPackage.status === 'idle' && !isArchived && (
                   <RoleTooltip allowed={canEdit} requiredRole="Editor">
                     <Button
-                      className="bg-[#2358D4] hover:bg-blue-700 text-white gap-2"
+                      className="bg-primary hover:bg-primary/90 text-white gap-2"
                       onClick={handleGenerateExecutionPackage}
                       disabled={!data.hasMappings || !canEdit}
                     >
@@ -1117,7 +1117,7 @@ export default function OutputsContent({ projectId, projectName, initialData, is
                       )}
                     </div>
                     <div className="flex items-center gap-3 flex-wrap">
-                      <Button className="bg-[#2358D4] hover:bg-blue-700 text-white gap-2" onClick={handleDownloadExecutionPackage}>
+                      <Button className="bg-primary hover:bg-primary/90 text-white gap-2" onClick={handleDownloadExecutionPackage}>
                         <Download className="w-4 h-4" />
                         Download .sql
                       </Button>
@@ -1160,7 +1160,7 @@ export default function OutputsContent({ projectId, projectName, initialData, is
                 {compartmentalized.status === 'idle' && !isArchived && (
                   <RoleTooltip allowed={canEdit} requiredRole="Editor">
                     <Button
-                      className="bg-[#2358D4] hover:bg-blue-700 text-white gap-2"
+                      className="bg-primary hover:bg-primary/90 text-white gap-2"
                       onClick={handleGenerateExecutionPackage}
                       disabled={!data.hasMappings || !canEdit}
                     >
@@ -1221,7 +1221,7 @@ export default function OutputsContent({ projectId, projectName, initialData, is
                             Download Selected ({selectedFiles.size})
                           </Button>
                         )}
-                        <Button className="bg-[#2358D4] hover:bg-blue-700 text-white gap-2" size="sm" onClick={handleDownloadZip}>
+                        <Button className="bg-primary hover:bg-primary/90 text-white gap-2" size="sm" onClick={handleDownloadZip}>
                           <Download className="w-4 h-4" />
                           Download All (ZIP)
                         </Button>
@@ -1239,8 +1239,18 @@ export default function OutputsContent({ projectId, projectName, initialData, is
                     {/* File list */}
                     <div className="border border-gray-200 rounded-lg overflow-hidden">
                       {/* Table header */}
-                      <div className="grid grid-cols-[32px_1fr_110px_auto] gap-2 px-4 py-2 bg-gray-50 border-b border-gray-200 text-xs font-medium text-gray-500">
-                        <div />
+                      <div className="grid grid-cols-[32px_1fr_110px_auto] gap-2 px-4 py-2 bg-gray-50 border-b border-gray-200 text-xs font-medium text-gray-500 items-center">
+                        <Checkbox
+                          checked={compartmentalized.files.length > 0 && selectedFiles.size === compartmentalized.files.length}
+                          onCheckedChange={(checked) => {
+                            if (checked) {
+                              setSelectedFiles(new Set(compartmentalized.files.map(f => f.filename)))
+                            } else {
+                              setSelectedFiles(new Set())
+                            }
+                          }}
+                          className="h-4 w-4"
+                        />
                         <div>File</div>
                         <div>Type</div>
                         <div>Actions</div>
@@ -1401,7 +1411,7 @@ export default function OutputsContent({ projectId, projectName, initialData, is
                 {!isArchived && (
                   <RoleTooltip allowed={canEdit} requiredRole="Editor">
                     <Button
-                      className="bg-[#2358D4] hover:bg-blue-700 text-white gap-2 ml-auto"
+                      className="bg-primary hover:bg-primary/90 text-white gap-2 ml-auto"
                       onClick={handleGenerateGold}
                       disabled={isGeneratingGold || !canGenerateGold || !canEdit}
                     >

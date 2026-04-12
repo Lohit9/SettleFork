@@ -85,7 +85,7 @@ export function ProjectsDashboard({ onSelectProject }: ProjectsDashboardProps) {
           </div>
           <Button
             onClick={() => setShowCreateProject(true)}
-            className="bg-blue-600 hover:bg-blue-700 text-white gap-2"
+            className="bg-primary hover:bg-primary/90 text-white gap-2"
           >
             <Plus className="w-4 h-4" />
             Create Project

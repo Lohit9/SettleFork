@@ -1175,7 +1175,7 @@ export default function TransformContent({ projectId, projectName, initialData, 
       {toast && (
         <div className={`fixed bottom-6 right-6 z-50 px-4 py-3 rounded-lg shadow-lg text-sm font-medium max-w-sm ${
           toast.type === 'success' ? 'bg-green-600 text-white'
-          : toast.type === 'info' ? 'bg-[#2358D4] text-white'
+          : toast.type === 'info' ? 'bg-primary text-white'
           : 'bg-red-600 text-white'
         }`}>
           {toast.message}
@@ -1207,7 +1207,7 @@ export default function TransformContent({ projectId, projectName, initialData, 
           <RoleTooltip allowed={canEdit} requiredRole="Editor">
             <Button
               size="sm"
-              className="bg-[#2358D4] hover:bg-blue-700 text-white gap-2"
+              className="bg-primary hover:bg-primary/90 text-white gap-2"
               onClick={handleStageAll}
               disabled={isStaging || isAutoGen || isCheckingIssues || !canEdit}
             >
@@ -1539,7 +1539,7 @@ export default function TransformContent({ projectId, projectName, initialData, 
                       </RoleTooltip>
                       <RoleTooltip allowed={canEdit} requiredRole="Editor">
                         <Button
-                          className="bg-[#2358D4] hover:bg-blue-700 text-white gap-2"
+                          className="bg-primary hover:bg-primary/90 text-white gap-2"
                           onClick={handleUnmappedGenerate}
                           disabled={unmappedGenerating || unmappedSuggesting || !unmappedDescription.trim() || !canEdit}
                         >
@@ -1637,7 +1637,7 @@ export default function TransformContent({ projectId, projectName, initialData, 
                   <div className="flex-shrink-0 z-10 border-t border-gray-200 bg-white px-4 py-3 flex items-center gap-3 shadow-[0_-2px_8px_rgba(0,0,0,0.06)]">
                     <RoleTooltip allowed={canEdit} requiredRole="Editor">
                       <Button
-                        className="bg-[#2358D4] hover:bg-blue-700 text-white gap-2 flex-1"
+                        className="bg-primary hover:bg-primary/90 text-white gap-2 flex-1"
                         onClick={handleUnmappedSave}
                         disabled={unmappedSaving || !canEdit}
                       >
@@ -1666,7 +1666,7 @@ export default function TransformContent({ projectId, projectName, initialData, 
                     {stagingError && <p className="text-xs text-red-600 max-w-xs text-right">{stagingError}</p>}
                     <RoleTooltip allowed={canEdit} requiredRole="Editor">
                       <Button
-                        className="bg-[#2358D4] hover:bg-blue-700 text-white disabled:opacity-60"
+                        className="bg-primary hover:bg-primary/90 text-white disabled:opacity-60"
                         disabled={isStaging || !canEdit}
                         onClick={() => {
                           setStagingError(null)
@@ -1801,7 +1801,7 @@ export default function TransformContent({ projectId, projectName, initialData, 
                           onClick={() => setInputMode('ai')}
                           className={`px-2.5 py-1 text-xs font-medium transition-colors ${
                             inputMode === 'ai'
-                              ? 'bg-[#2358D4] text-white'
+                              ? 'bg-primary text-white'
                               : 'bg-white text-gray-600 hover:bg-gray-50'
                           }`}
                         >
@@ -1815,7 +1815,7 @@ export default function TransformContent({ projectId, projectName, initialData, 
                           }}
                           className={`px-2.5 py-1 text-xs font-medium border-l border-gray-200 transition-colors ${
                             inputMode === 'sql'
-                              ? 'bg-[#2358D4] text-white'
+                              ? 'bg-primary text-white'
                               : 'bg-white text-gray-600 hover:bg-gray-50'
                           }`}
                         >
@@ -1885,7 +1885,7 @@ export default function TransformContent({ projectId, projectName, initialData, 
                           </RoleTooltip>
                           <RoleTooltip allowed={canEdit} requiredRole="Editor">
                             <Button
-                              className="bg-[#2358D4] hover:bg-blue-700 text-white gap-2"
+                              className="bg-primary hover:bg-primary/90 text-white gap-2"
                               onClick={handleGenerate}
                               disabled={isGenerating || isSuggesting || !canEdit}
                             >
@@ -2515,7 +2515,7 @@ export default function TransformContent({ projectId, projectName, initialData, 
                     {/* Apply Transform — only enabled after successful test */}
                     <RoleTooltip allowed={canEdit} requiredRole="Editor">
                       <Button
-                        className="bg-[#2358D4] hover:bg-blue-700 text-white gap-2 px-6 disabled:opacity-50 disabled:cursor-not-allowed"
+                        className="bg-primary hover:bg-primary/90 text-white gap-2 px-6 disabled:opacity-50 disabled:cursor-not-allowed"
                         onClick={handleApply}
                         disabled={isApplying || isCheckingIssues || !localTransform?.transformationId || localTransform.status !== 'tested' || !canEdit}
                         title={localTransform.status !== 'tested' ? 'Run "Test Transform" first' : undefined}
@@ -2565,7 +2565,7 @@ export default function TransformContent({ projectId, projectName, initialData, 
               )}
               <RoleTooltip allowed={canEdit} requiredRole="Editor">
                 <Button
-                  className="bg-[#2358D4] hover:bg-blue-700 text-white disabled:opacity-60"
+                  className="bg-primary hover:bg-primary/90 text-white disabled:opacity-60"
                   disabled={isStaging || !canEdit}
                   onClick={() => {
                     setStagingError(null)
@@ -2660,7 +2660,7 @@ export default function TransformContent({ projectId, projectName, initialData, 
             </div>
             <div className="flex gap-3 justify-end">
               <Button variant="outline" size="sm" onClick={() => setShowReplaceConfirm(null)}>Keep current</Button>
-              <Button size="sm" className="bg-[#2358D4] hover:bg-blue-700 text-white" onClick={applyReplaceConfirm}>
+              <Button size="sm" className="bg-primary hover:bg-primary/90 text-white" onClick={applyReplaceConfirm}>
                 Use suggestion
               </Button>
             </div>
@@ -2698,7 +2698,7 @@ function DatasetNode({
         className="w-full flex items-center gap-2 px-3 py-2.5 bg-white hover:bg-gray-50 transition-colors"
       >
         {expanded ? <ChevronDown className="w-4 h-4 text-gray-500 flex-shrink-0" /> : <ChevronRight className="w-4 h-4 text-gray-500 flex-shrink-0" />}
-        <span className="text-xs font-bold text-blue-600 truncate uppercase tracking-wide">
+        <span className="text-xs font-bold text-blue-600 truncate uppercase tracking-wide" title={dataset.datasetName}>
           {dataset.datasetName}
         </span>
       </button>
@@ -2770,11 +2770,11 @@ function TableNode({
       >
         <div className="flex items-center gap-2 min-w-0">
           {expanded ? <ChevronDown className="w-3.5 h-3.5 text-gray-400 flex-shrink-0" /> : <ChevronRight className="w-3.5 h-3.5 text-gray-400 flex-shrink-0" />}
-          <span className="text-xs font-semibold text-gray-800 truncate">{table.sourceTableName}</span>
+          <span className="text-xs font-semibold text-gray-800 truncate" title={table.sourceTableName}>{table.sourceTableName}</span>
         </div>
         <div className="flex items-center gap-1 flex-shrink-0 ml-2">
           <ArrowRight className="w-3 h-3 text-gray-400" />
-          <span className="text-xs text-gray-500 truncate max-w-[80px]">{table.targetTableName}</span>
+          <span className="text-xs text-gray-500 truncate max-w-[80px]" title={table.targetTableName}>{table.targetTableName}</span>
         </div>
       </button>
       {expanded && (
@@ -2866,7 +2866,7 @@ function TableNode({
                 className={`w-full px-3 py-2.5 border-b border-gray-100 last:border-0 text-left transition-colors ${
                   isSelected
                     ? isRequired ? 'bg-amber-50 border-l-2 border-l-amber-400' : 'bg-gray-100 border-l-2 border-l-gray-400'
-                    : 'border-l-2 border-l-transparent hover:bg-gray-100'
+                    : 'border-l-2 border-l-transparent hover:bg-gray-50'
                 }`}
               >
                 <div className="flex items-start justify-between gap-2 mb-0.5">
@@ -2912,7 +2912,7 @@ function FieldRow({ field, isSelected, onSelect, oneToManyCount = 1 }: {
         className={`w-full px-3 py-2.5 border-b border-gray-100 last:border-0 text-left transition-colors ${
           isSelected
             ? 'bg-purple-50 border-l-2 border-l-purple-400'
-            : 'border-l-2 border-l-transparent hover:bg-gray-100'
+            : 'border-l-2 border-l-transparent hover:bg-gray-50'
         }`}
       >
         <div className="flex items-start justify-between gap-2 mb-0.5">
@@ -2949,13 +2949,13 @@ function FieldRow({ field, isSelected, onSelect, oneToManyCount = 1 }: {
       className={`w-full px-3 py-2.5 border-b border-gray-100 last:border-0 text-left transition-colors ${
         isSelected
           ? 'bg-blue-50 border-l-2 border-l-blue-600'
-          : 'border-l-2 border-l-transparent hover:bg-gray-100'
+          : 'border-l-2 border-l-transparent hover:bg-gray-50'
       }`}
     >
       <div className="flex items-start justify-between gap-2 mb-0.5">
         <div className="flex items-center gap-1.5 min-w-0 flex-1">
           <div className="w-1.5 h-1.5 rounded-full bg-gray-400 flex-shrink-0 mt-0.5" />
-          <span className="text-xs font-semibold text-gray-900 truncate">{field.sourceFieldName}</span>
+          <span className="text-xs font-semibold text-gray-900 truncate" title={field.sourceFieldName}>{field.sourceFieldName}</span>
           {field.contributingSourceFields.length > 0 && (
             <span
               title={`Many-to-one: also uses ${field.contributingSourceFields.map(f => f.name).join(', ')}`}
@@ -3007,7 +3007,7 @@ function FieldRow({ field, isSelected, onSelect, oneToManyCount = 1 }: {
       </div>
       <div className="flex items-center gap-1 pl-3">
         <ArrowRight className="w-3 h-3 text-gray-400 flex-shrink-0" />
-        <span className="text-[11px] text-gray-500 truncate">{field.targetFieldName}</span>
+        <span className="text-[11px] text-gray-500 truncate" title={field.targetFieldName}>{field.targetFieldName}</span>
       </div>
     </button>
   )

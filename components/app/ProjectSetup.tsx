@@ -86,7 +86,7 @@ export function ProjectSetup({ onNext }: ProjectSetupProps) {
             <Button
               onClick={handleCreate}
               disabled={!projectName || !sourceSystem || !targetSystem}
-              className="bg-blue-600 hover:bg-blue-700 text-white"
+              className="bg-primary hover:bg-primary/90 text-white"
             >
               Create Project
             </Button>

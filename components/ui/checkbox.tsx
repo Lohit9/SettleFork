@@ -36,6 +36,8 @@ function Checkbox({
         checked={checked}
         onChange={handleChange}
         className="sr-only"
+        tabIndex={-1}
+        onFocus={(e) => e.preventDefault()}
         {...props}
       />
       {checked && (

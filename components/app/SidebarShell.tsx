@@ -244,7 +244,7 @@ export default function SidebarShell({
                   className={`
                     flex items-center rounded-lg transition-colors
                     ${expanded ? 'gap-3 px-3 py-2 w-full' : 'justify-center w-10 h-10 mx-auto'}
-                    ${isActive ? 'bg-[#2358D4] text-white' : 'text-gray-500 hover:text-gray-700 hover:bg-gray-100'}
+                    ${isActive ? 'bg-primary text-white' : 'text-gray-500 hover:text-gray-700 hover:bg-gray-100'}
                   `}
                 >
                   <Icon className="w-5 h-5 flex-shrink-0" />
@@ -271,7 +271,7 @@ export default function SidebarShell({
               onClick={openPopover}
               className="flex items-center gap-2.5 w-full px-2 py-1.5 rounded-lg hover:bg-gray-100 transition-colors"
             >
-              <div className="w-8 h-8 rounded-full bg-[#2358D4] flex items-center justify-center flex-shrink-0">
+              <div className="w-8 h-8 rounded-full bg-primary flex items-center justify-center flex-shrink-0">
                 <span className="text-xs font-semibold text-white">{initials}</span>
               </div>
               <span className="text-sm text-gray-700 truncate max-w-[120px]">{displayName}</span>
@@ -283,7 +283,7 @@ export default function SidebarShell({
                 onClick={openPopover}
                 className="w-10 h-10 flex items-center justify-center hover:bg-gray-100 rounded-lg transition-colors"
               >
-                <div className="w-8 h-8 rounded-full bg-[#2358D4] flex items-center justify-center">
+                <div className="w-8 h-8 rounded-full bg-primary flex items-center justify-center">
                   <span className="text-xs font-semibold text-white">{initials}</span>
                 </div>
               </button>

@@ -332,7 +332,7 @@ export function MFAEnrollment() {
               <Button
                 onClick={handleVerify}
                 disabled={code.length !== 6 || isPending}
-                className="bg-blue-600 hover:bg-blue-700 text-white disabled:opacity-50"
+                className="bg-primary hover:bg-primary/90 text-white disabled:opacity-50"
               >
                 {isPending ? (
                   <span className="flex items-center gap-1.5">

@@ -256,7 +256,7 @@ export function DDLSchemaReview({
         <Button
           onClick={() => onConfirm(tables)}
           disabled={saving || tables.length === 0}
-          className="bg-blue-600 hover:bg-blue-700 text-white"
+          className="bg-primary hover:bg-primary/90 text-white"
         >
           {saving ? (
             <span className="flex items-center gap-2">

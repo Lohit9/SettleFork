@@ -394,7 +394,7 @@ function OrgDetail({ org }: { org: OrgRow }) {
           </Select>
         </div>
         <Button type="submit" disabled={isPending} size="sm"
-          className="bg-blue-600 hover:bg-blue-700 text-white h-8 text-xs">
+          className="bg-primary hover:bg-primary/90 text-white h-8 text-xs">
           {isPending ? 'Sending…' : 'Invite'}
         </Button>
       </form>
@@ -475,7 +475,7 @@ function OrgsSection({ initialOrgs }: { initialOrgs: OrgRow[] }) {
               placeholder="Acme Corp" required className="mt-1" />
           </div>
           <Button type="submit" disabled={isPending || !newOrgName.trim()}
-            className="bg-blue-600 hover:bg-blue-700 text-white">
+            className="bg-primary hover:bg-primary/90 text-white">
             {isPending ? 'Creating…' : 'Create Organization'}
           </Button>
         </form>

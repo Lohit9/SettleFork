@@ -1062,7 +1062,7 @@ export function IngestionCard({ type, title, projectId, initialDatasets, initial
                           size="sm"
                           onClick={handleImport}
                           disabled={selectedRemoteTables.length === 0 || importing || !canEdit}
-                          className="bg-blue-600 hover:bg-blue-700 text-white disabled:opacity-50"
+                          className="bg-primary hover:bg-primary/90 text-white disabled:opacity-50"
                         >
                           {importing ? (
                             <span className="flex items-center gap-1.5">
@@ -1323,7 +1323,7 @@ export function IngestionCard({ type, title, projectId, initialDatasets, initial
                             size="sm"
                             onClick={handleAddMoreImport}
                             disabled={addMoreSelected.length === 0 || addMoreLoading}
-                            className="bg-blue-600 hover:bg-blue-700 text-white disabled:opacity-50"
+                            className="bg-primary hover:bg-primary/90 text-white disabled:opacity-50"
                           >
                             {addMoreLoading ? (
                               <span className="flex items-center gap-1.5"><Loader2 className="w-3.5 h-3.5 animate-spin" />Importing…</span>
@@ -1498,14 +1498,14 @@ export function IngestionCard({ type, title, projectId, initialDatasets, initial
                     onDragLeave={handleDragLeave}
                     className={`border-2 border-dashed rounded-lg p-8 text-center transition-colors ${
                       isDragOver
-                        ? 'border-[#4F46E5] bg-indigo-50'
+                        ? 'border-primary bg-blue-50'
                         : 'border-gray-300 hover:border-gray-400'
                     }`}
                   >
                     {uploadState.status === 'uploading' && (
                       <div className="space-y-3">
                         <div className="flex justify-center">
-                          <svg className="animate-spin w-8 h-8 text-[#4F46E5]" fill="none" viewBox="0 0 24 24">
+                          <svg className="animate-spin w-8 h-8 text-primary" fill="none" viewBox="0 0 24 24">
                             <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
                             <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v4l3-3-3-3v4a8 8 0 00-8 8h4z" />
                           </svg>
@@ -1639,14 +1639,14 @@ export function IngestionCard({ type, title, projectId, initialDatasets, initial
                 onDragLeave={() => setDdl((s) => ({ ...s, isDragOver: false }))}
                 className={`border-2 border-dashed rounded-lg p-8 text-center transition-colors ${
                   ddl.isDragOver
-                    ? 'border-[#4F46E5] bg-indigo-50'
+                    ? 'border-primary bg-blue-50'
                     : 'border-gray-300 hover:border-gray-400'
                 }`}
               >
                 {ddl.parsing ? (
                   <div className="space-y-3">
                     <div className="flex justify-center">
-                      <svg className="animate-spin w-8 h-8 text-[#4F46E5]" fill="none" viewBox="0 0 24 24">
+                      <svg className="animate-spin w-8 h-8 text-primary" fill="none" viewBox="0 0 24 24">
                         <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
                         <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v4l3-3-3-3v4a8 8 0 00-8 8h4z" />
                       </svg>

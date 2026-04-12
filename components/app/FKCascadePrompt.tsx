@@ -158,7 +158,7 @@ export default function FKCascadePrompt({
           <button
             onClick={handleCascade}
             disabled={selectedCount === 0}
-            className="px-4 py-2 rounded-lg bg-blue-600 hover:bg-blue-700 text-sm font-medium text-white transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+            className="px-4 py-2 rounded-lg bg-primary hover:bg-primary/90 text-sm font-medium text-white transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
           >
             {selectedCount > 0
               ? `Cascade to ${selectedCount} field${selectedCount > 1 ? 's' : ''}`

@@ -339,7 +339,7 @@ export function ControlPlaneContent({
         subtitle="Configure source and target system connections"
       />
       <div className="flex-1 overflow-auto p-8">
-      <div className="max-w-6xl mx-auto space-y-8">
+      <div className="max-w-5xl mx-auto space-y-6">
         {/* Data Ingestion */}
         <div className="space-y-4">
           <h2 className="text-lg font-semibold text-gray-900">Data Ingestion</h2>

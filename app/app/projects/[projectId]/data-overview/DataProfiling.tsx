@@ -62,7 +62,9 @@ export default function DataProfiling({
   const [openQualityPopover, setOpenQualityPopover] = useState<string | null>(null)
   const [popoverIssues, setPopoverIssues] = useState<FieldIssue[]>([])
   const [loadingIssues, setLoadingIssues] = useState(false)
+  const [popoverPosition, setPopoverPosition] = useState<'below' | 'above'>('below')
   const popoverRef = useRef<HTMLDivElement>(null)
+  const triggerRefs = useRef<Record<string, HTMLButtonElement | null>>({})
 
   useEffect(() => {
     if (!selectedTableId) return
@@ -78,6 +80,18 @@ export default function DataProfiling({
       .then(({ issues }) => setPopoverIssues(issues))
       .finally(() => setLoadingIssues(false))
   }, [openQualityPopover, projectId])
+
+  // Flip popover above trigger when there isn't enough space below
+  useEffect(() => {
+    if (openQualityPopover && triggerRefs.current[openQualityPopover]) {
+      const trigger = triggerRefs.current[openQualityPopover]
+      if (trigger) {
+        const rect = trigger.getBoundingClientRect()
+        const spaceBelow = window.innerHeight - rect.bottom
+        setPopoverPosition(spaceBelow < 300 ? 'above' : 'below')
+      }
+    }
+  }, [openQualityPopover])
 
   // Close popover on outside click
   useEffect(() => {
@@ -173,7 +187,7 @@ export default function DataProfiling({
         </div>
       ) : loading ? (
         <div className="bg-white border border-gray-200 rounded-xl p-10 text-center">
-          <div className="inline-block w-5 h-5 border-2 border-indigo-600 border-t-transparent rounded-full animate-spin" />
+          <div className="inline-block w-5 h-5 border-2 border-primary border-t-transparent rounded-full animate-spin" />
         </div>
       ) : error ? (
         <div className="bg-white border border-gray-200 rounded-xl p-6 text-center text-sm text-red-600">{error}</div>
@@ -195,7 +209,7 @@ export default function DataProfiling({
           </div>
 
           {/* Field-level table */}
-          <div className="bg-white border border-gray-200 rounded-xl overflow-hidden">
+          <div className="bg-white border border-gray-200 rounded-xl" style={{ overflowX: 'clip', overflowY: 'visible' }}>
             <div className="px-5 py-3 border-b border-gray-100">
               <span className="text-sm font-semibold text-gray-900">Field-Level Profiling</span>
             </div>
@@ -215,7 +229,7 @@ export default function DataProfiling({
                 </thead>
                 <tbody>
                   {data.fields.map((f) => (
-                    <tr key={f.id} className="border-b border-gray-100 last:border-b-0 hover:bg-gray-50">
+                    <tr key={f.id} className="border-b border-gray-100 last:border-b-0 hover:bg-gray-50 transition-colors">
                       <td className="px-5 py-3 text-gray-900 font-medium">{f.name}</td>
                       <td className="px-5 py-3 text-right text-gray-600">
                         {f.null_percentage.toFixed(1)}%
@@ -230,6 +244,7 @@ export default function DataProfiling({
                         <div className="relative inline-block">
                           {f.qualityIssues.total > 0 ? (
                             <button
+                              ref={(el) => { triggerRefs.current[f.id] = el }}
                               onClick={() =>
                                 setOpenQualityPopover(
                                   openQualityPopover === f.id ? null : f.id
@@ -249,19 +264,26 @@ export default function DataProfiling({
                               {f.format_issues_count} format
                             </span>
                           ) : (
-                            <span className="text-xs text-gray-400">—</span>
+                            <span className="text-xs text-green-500 flex items-center justify-end gap-1">
+                              <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
+                                <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
+                              </svg>
+                              Clean
+                            </span>
                           )}
 
                           {/* Quality issues popover */}
                           {openQualityPopover === f.id && (
                             <div
                               ref={popoverRef}
-                              className="absolute right-0 top-full mt-2 z-50 w-80 bg-white rounded-lg shadow-lg border border-slate-200"
+                              className={`absolute right-0 z-50 w-80 bg-white rounded-lg shadow-lg border border-slate-200 ${
+                                popoverPosition === 'above' ? 'bottom-full mb-2' : 'top-full mt-2'
+                              }`}
                             >
                               <div className="flex items-center justify-between px-4 pt-4 pb-3">
-                                <h4 className="text-sm font-semibold text-slate-900">
+                                <h4 className="text-sm font-semibold text-gray-900">
                                   {f.name}
-                                  <span className="ml-1.5 font-normal text-slate-500">
+                                  <span className="ml-1.5 font-normal text-gray-500">
                                     — {f.qualityIssues.total} issue{f.qualityIssues.total !== 1 ? 's' : ''}
                                   </span>
                                 </h4>
@@ -275,8 +297,8 @@ export default function DataProfiling({
 
                               <div className="px-4 pb-3 max-h-72 overflow-y-auto">
                                 {loadingIssues ? (
-                                  <div className="flex items-center gap-2 py-3 text-xs text-slate-400">
-                                    <span className="w-3.5 h-3.5 border-2 border-slate-200 border-t-slate-400 rounded-full animate-spin" />
+                                  <div className="flex items-center gap-2 py-3 text-xs text-gray-400">
+                                    <span className="w-3.5 h-3.5 border-2 border-gray-200 border-t-gray-400 rounded-full animate-spin" />
                                     Loading…
                                   </div>
                                 ) : (
@@ -294,11 +316,11 @@ export default function DataProfiling({
                                             {issue.severity === 'blocking' ? '⛔' : '⚠'}
                                           </span>
                                           <div>
-                                            <p className="text-slate-700 leading-relaxed">
+                                            <p className="text-gray-700 leading-relaxed">
                                               {issue.description}
                                             </p>
                                             {issue.affected_records > 0 && (
-                                              <p className="text-slate-400 mt-0.5">
+                                              <p className="text-gray-400 mt-0.5">
                                                 {issue.affected_records.toLocaleString()} record{issue.affected_records !== 1 ? 's' : ''}
                                               </p>
                                             )}
@@ -310,8 +332,8 @@ export default function DataProfiling({
                                 )}
                               </div>
 
-                              <div className="px-4 py-3 border-t border-slate-100 flex items-center justify-between gap-2">
-                                <p className="text-[11px] text-slate-400 leading-tight">
+                              <div className="px-4 py-3 border-t border-gray-100 flex items-center justify-between gap-2">
+                                <p className="text-[11px] text-gray-400 leading-tight">
                                   Source issues · re-validated after staging
                                 </p>
                                 <button

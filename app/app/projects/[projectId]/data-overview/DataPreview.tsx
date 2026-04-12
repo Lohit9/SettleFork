@@ -337,7 +337,7 @@ export default function DataPreview({ projectId, tables, isArchived = false, arc
         <>
           {stagedMappingsLoading ? (
             <div className="flex items-center gap-2 text-sm text-gray-500">
-              <span className="w-4 h-4 border-2 border-indigo-600 border-t-transparent rounded-full animate-spin" />
+              <span className="w-4 h-4 border-2 border-primary border-t-transparent rounded-full animate-spin" />
               Loading transformed data…
             </div>
           ) : stagedMappings.length === 0 ? (
@@ -374,11 +374,11 @@ export default function DataPreview({ projectId, tables, isArchived = false, arc
                     {selectedMapping.isStaged ? (
                       <span className="ml-1 text-green-600 font-medium">· staged</span>
                     ) : (
-                      <span className="ml-1 text-gray-400">· passthrough</span>
+                      <span className="ml-1 text-gray-400">· not staged</span>
                     )}
                     {stagedColumns.length > 0 && (
                       <span className="ml-2 text-gray-400">
-                        · {stagedFields.length} transformed · {stagedColumns.length - stagedFields.length} passthrough
+                        · {stagedFields.length} transformed {stagedFields.length === 1 ? 'field' : 'fields'} · {stagedColumns.length - stagedFields.length} passthrough {(stagedColumns.length - stagedFields.length) === 1 ? 'field' : 'fields'}
                       </span>
                     )}
                   </span>
@@ -657,7 +657,7 @@ function DataTable({
               onClick={() => onGoToPage(p)}
               className={`px-2 py-1 rounded border ${
                 p === page
-                  ? 'bg-indigo-600 text-white border-indigo-600'
+                  ? 'bg-primary text-white border-primary'
                   : 'border-gray-200 hover:bg-gray-50 text-gray-600'
               }`}
             >
@@ -729,7 +729,7 @@ function DataTable({
           {onNavigateToValidate && (
             <button
               onClick={onNavigateToValidate}
-              className="ml-auto text-xs text-indigo-600 hover:text-indigo-800 font-medium whitespace-nowrap"
+              className="ml-auto text-xs text-primary hover:text-blue-800 font-medium whitespace-nowrap"
             >
               Fix in Validate tab →
             </button>
@@ -740,7 +740,7 @@ function DataTable({
       {/* ── Table body ──────────────────────────────────────────────────────── */}
       {loading ? (
         <div className="p-10 text-center">
-          <div className="inline-block w-5 h-5 border-2 border-indigo-600 border-t-transparent rounded-full animate-spin" />
+          <div className="inline-block w-5 h-5 border-2 border-primary border-t-transparent rounded-full animate-spin" />
         </div>
       ) : error ? (
         <div className="p-6 text-center text-sm text-red-600">{error}</div>
@@ -803,7 +803,7 @@ function DataTable({
                   return (
                     <tr
                       key={i}
-                      className={`border-b border-gray-100 last:border-b-0 ${
+                      className={`border-b border-gray-100 last:border-b-0 transition-colors ${
                         majorityFlagged
                           ? 'bg-red-50/50'
                           : showDiff

@@ -223,7 +223,7 @@ export function MappingReview({ projectId }: MappingReviewProps) {
               variant={filter === 'needs-review' ? 'default' : 'outline'}
               size="sm"
               onClick={() => setFilter('needs-review')}
-              className={filter === 'needs-review' ? 'bg-blue-600 hover:bg-blue-700' : ''}
+              className={filter === 'needs-review' ? 'bg-primary hover:bg-primary/90' : ''}
             >
               Needs Review
             </Button>
@@ -231,7 +231,7 @@ export function MappingReview({ projectId }: MappingReviewProps) {
               variant={filter === 'high-confidence' ? 'default' : 'outline'}
               size="sm"
               onClick={() => setFilter('high-confidence')}
-              className={filter === 'high-confidence' ? 'bg-blue-600 hover:bg-blue-700' : ''}
+              className={filter === 'high-confidence' ? 'bg-primary hover:bg-primary/90' : ''}
             >
               High Confidence
             </Button>
@@ -239,7 +239,7 @@ export function MappingReview({ projectId }: MappingReviewProps) {
               variant={filter === 'unmapped' ? 'default' : 'outline'}
               size="sm"
               onClick={() => setFilter('unmapped')}
-              className={filter === 'unmapped' ? 'bg-blue-600 hover:bg-blue-700' : ''}
+              className={filter === 'unmapped' ? 'bg-primary hover:bg-primary/90' : ''}
             >
               Unmapped
             </Button>
@@ -247,7 +247,7 @@ export function MappingReview({ projectId }: MappingReviewProps) {
               variant={filter === 'all' ? 'default' : 'outline'}
               size="sm"
               onClick={() => setFilter('all')}
-              className={filter === 'all' ? 'bg-blue-600 hover:bg-blue-700' : ''}
+              className={filter === 'all' ? 'bg-primary hover:bg-primary/90' : ''}
             >
               All
             </Button>
@@ -382,7 +382,7 @@ export function MappingReview({ projectId }: MappingReviewProps) {
         <div className="border-t border-gray-200 bg-white p-6 flex justify-end">
           <Button
             onClick={handleNext}
-            className="bg-blue-600 hover:bg-blue-700 text-white"
+            className="bg-primary hover:bg-primary/90 text-white"
           >
             Proceed to Transform
           </Button>

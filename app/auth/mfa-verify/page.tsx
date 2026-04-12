@@ -165,7 +165,7 @@ function MFAChallengeContent() {
                 <Button
                   onClick={handleVerify}
                   disabled={code.length !== 6 || loading}
-                  className="w-full bg-blue-600 hover:bg-blue-700 text-white disabled:opacity-50"
+                  className="w-full bg-primary hover:bg-primary/90 text-white disabled:opacity-50"
                   size="lg"
                 >
                   {loading ? (

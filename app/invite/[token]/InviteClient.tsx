@@ -134,7 +134,7 @@ export default function InviteClient({ token, orgName, role, inviterName, email,
         <Button
           onClick={handleAccept}
           disabled={isPending}
-          className="w-full bg-blue-600 hover:bg-blue-700 text-white"
+          className="w-full bg-primary hover:bg-primary/90 text-white"
         >
           {isPending ? 'Joining...' : 'Accept Invite & Join'}
         </Button>
@@ -147,7 +147,7 @@ export default function InviteClient({ token, orgName, role, inviterName, email,
           </div>
           <a
             href={`/login?redirect=/invite/${token}`}
-            className="flex items-center justify-center w-full h-10 px-4 rounded-lg bg-blue-600 hover:bg-blue-700 text-white text-sm font-medium transition-colors"
+            className="flex items-center justify-center w-full h-10 px-4 rounded-lg bg-primary hover:bg-primary/90 text-white text-sm font-medium transition-colors"
           >
             Log In to Accept
           </a>
@@ -207,7 +207,7 @@ export default function InviteClient({ token, orgName, role, inviterName, email,
             <Button
               type="submit"
               disabled={isPending || !fullName.trim() || password.length < 8 || !confirmPassword}
-              className="w-full bg-blue-600 hover:bg-blue-700 text-white"
+              className="w-full bg-primary hover:bg-primary/90 text-white"
             >
               {isPending ? 'Creating account...' : 'Create Account & Join'}
             </Button>
