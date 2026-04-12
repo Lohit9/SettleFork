@@ -11,7 +11,7 @@ const FAQS = [
   },
   {
     question: 'What systems does Settle connect to?',
-    answer: 'Settle is built for enterprise migrations from Salesforce, SAP, Oracle, NetSuite, and custom databases. We support SQL Server, PostgreSQL, and API-based source extraction.',
+    answer: 'Settle connects to major ERP, CRM, HCM, and database platforms — including Salesforce, SAP, Oracle, NetSuite, Microsoft Dynamics 365, and more. We support direct database connections, API-based extraction, and file-based imports (CSV, JSON, DDL).',
   },
   {
     question: 'What if the AI gets a mapping wrong?',

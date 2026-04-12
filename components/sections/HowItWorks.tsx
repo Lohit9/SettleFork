@@ -9,7 +9,7 @@ import ValidationDashboard from './how-it-works/ValidationDashboard'
 
 const TABS = [
   { fullLabel: '1. Schema understanding', shortLabel: '1. Schema'    },
-  { fullLabel: '2. Auto-mapping',         shortLabel: '2. Mapping'   },
+  { fullLabel: '2. Auto-mapping & transformation', shortLabel: '2. Mapping' },
   { fullLabel: '3. Validation & readiness', shortLabel: '3. Validation' },
 ]
 
