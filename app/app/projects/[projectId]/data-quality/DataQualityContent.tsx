@@ -1405,18 +1405,6 @@ function CreateManualFixModal({
     }
   }, [tableId, mode, sqlText])
 
-  useEffect(() => {
-    const handleClickOutside = (e: MouseEvent) => {
-      if (overflowRef.current && !overflowRef.current.contains(e.target as Node)) {
-        setShowOverflowMenu(false)
-      }
-    }
-    if (showOverflowMenu) {
-      document.addEventListener('mousedown', handleClickOutside)
-    }
-    return () => document.removeEventListener('mousedown', handleClickOutside)
-  }, [showOverflowMenu])
-
   function handleModeSwitch(newMode: 'nl' | 'sql') {
     setMode(newMode)
     // Pre-fill SQL editor with generated SQL when switching from NL
@@ -2057,6 +2045,19 @@ export default function DataQualityContent({
   const [showCreateFix, setShowCreateFix] = useState(false)
   const [showOverflowMenu, setShowOverflowMenu] = useState(false)
   const overflowRef = useRef<HTMLDivElement>(null)
+
+  useEffect(() => {
+    const handleClickOutside = (e: MouseEvent) => {
+      if (overflowRef.current && !overflowRef.current.contains(e.target as Node)) {
+        setShowOverflowMenu(false)
+      }
+    }
+    if (showOverflowMenu) {
+      document.addEventListener('mousedown', handleClickOutside)
+    }
+    return () => document.removeEventListener('mousedown', handleClickOutside)
+  }, [showOverflowMenu])
+
   const [scanError, setScanError] = useState<string | null>(null)
   const [scanWarnings, setScanWarnings] = useState<string[]>([])
   const [scanToast, setScanToast] = useState<string | null>(null)
