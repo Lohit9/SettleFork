@@ -32,7 +32,7 @@ export default function HowItWorks() {
             See Settle work end-to-end
           </h2>
           <p className="text-[#64748B] text-[17px] text-center max-w-xl mx-auto mb-12">
-            One Casella migration. 240 tables. 3,412 fields. Watch the autonomous workflow from profiling to production-ready load files.
+            One enterprise migration. 240 tables. 3,412 fields. Watch the autonomous workflow from profiling to production-ready load files.
           </p>
         </ScrollReveal>
 

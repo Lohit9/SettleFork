@@ -99,8 +99,8 @@ export default function GettingStartedPage() {
               ]} />
               <Tip>
                 Name projects descriptively. If you&apos;re running multiple migrations for the same
-                client, include the scope — e.g., &quot;Casella Site 12: SAP to NetSuite&quot; rather than
-                just &quot;Casella Migration.&quot;
+                client, include the scope — e.g., &quot;Site 12: SAP to NetSuite&quot; rather than
+                just &quot;Q1 Migration.&quot;
               </Tip>
             </div>
 

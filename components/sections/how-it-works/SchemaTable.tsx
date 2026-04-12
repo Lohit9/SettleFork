@@ -5,7 +5,7 @@ import { useInView } from 'framer-motion'
 
 const ROWS = [
   { field: 'customer_id',   type: 'INT',            nullPct: '0%',    sample: '10042, 10043, 10044' },
-  { field: 'cust_name',     type: 'VARCHAR(120)',    nullPct: '2.1%',  sample: 'Casella Waste, Republic Svc' },
+  { field: 'cust_name',     type: 'VARCHAR(120)',    nullPct: '2.1%',  sample: 'Acme Corp, Republic Svc' },
   { field: 'service_addr',  type: 'VARCHAR(255)',    nullPct: '14.3%', sample: '142 Main St, PO Box 881' },
   { field: 'acct_status',   type: 'CHAR(1)',         nullPct: '0%',    sample: 'A, I, S, P' },
   { field: 'last_pickup_dt',type: 'DATETIME',        nullPct: '8.7%',  sample: '2024-11-15, 2025-01-02' },
