@@ -2955,7 +2955,7 @@ function FieldRow({ field, isSelected, onSelect, oneToManyCount = 1 }: {
       <div className="flex items-start justify-between gap-2 mb-0.5">
         <div className="flex items-center gap-1.5 min-w-0 flex-1">
           <div className="w-1.5 h-1.5 rounded-full bg-gray-400 flex-shrink-0 mt-0.5" />
-          <span className="text-xs font-semibold text-gray-900 truncate" title={field.sourceFieldName}>{field.sourceFieldName}</span>
+          <span className="text-xs font-semibold text-gray-900 truncate" title={field.sourceFieldName ?? undefined}>{field.sourceFieldName}</span>
           {field.contributingSourceFields.length > 0 && (
             <span
               title={`Many-to-one: also uses ${field.contributingSourceFields.map(f => f.name).join(', ')}`}
@@ -3007,7 +3007,7 @@ function FieldRow({ field, isSelected, onSelect, oneToManyCount = 1 }: {
       </div>
       <div className="flex items-center gap-1 pl-3">
         <ArrowRight className="w-3 h-3 text-gray-400 flex-shrink-0" />
-        <span className="text-[11px] text-gray-500 truncate" title={field.targetFieldName}>{field.targetFieldName}</span>
+        <span className="text-[11px] text-gray-500 truncate" title={field.targetFieldName ?? undefined}>{field.targetFieldName}</span>
       </div>
     </button>
   )
