@@ -228,6 +228,13 @@ export default function Hero() {
               ))}
             </div>
 
+            <Link
+              href="/migrate"
+              className="block text-center text-xs text-[#94A3B8] hover:text-[#2358D4] transition-colors mt-5"
+            >
+              View all 100+ migration paths →
+            </Link>
+
           </div>
         </ScrollReveal>
       </div>
