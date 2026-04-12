@@ -34,7 +34,7 @@ const MINE_BULLETS = [
 
 export default function Differentiation() {
   return (
-    <section id="why" className="bg-[#F8FAFC] py-24 px-6 lg:px-12">
+    <section id="why" className="bg-[#F8FAFC] pt-24 pb-12 px-6 lg:px-12">
       <div className="max-w-7xl mx-auto">
 
         {/* Header */}
