@@ -92,8 +92,11 @@ export function rewriteQuery(sql: string, tableMappings: TableMapping[]): Rewrit
     return err('Subqueries in FROM are not supported. Try using Natural Language mode for complex questions.')
   }
 
+  // Auto-qualify unqualified table names (e.g., "employees" → "techflow.employees")
+  const resolvedSQL = resolveUnqualifiedTableNames(trimmed, tableMappings)
+
   // Extract the primary FROM table
-  const fromMatch = /\bFROM\s+([\w]+\.[\w]+)(?:\s+(?:AS\s+)?(?!(?:WHERE|JOIN|GROUP|ORDER|HAVING|LIMIT|ON)\b)([\w]+))?/i.exec(trimmed)
+  const fromMatch = /\bFROM\s+([\w]+\.[\w]+)(?:\s+(?:AS\s+)?(?!(?:WHERE|JOIN|GROUP|ORDER|HAVING|LIMIT|ON)\b)([\w]+))?/i.exec(resolvedSQL)
   if (!fromMatch) {
     return err('Could not parse FROM clause. Use schema.table format, e.g., SELECT * FROM softpak.prices')
   }
@@ -126,7 +129,7 @@ export function rewriteQuery(sql: string, tableMappings: TableMapping[]): Rewrit
   }> = []
 
   let joinMatch: RegExpExecArray | null
-  while ((joinMatch = joinRe.exec(trimmed)) !== null) {
+  while ((joinMatch = joinRe.exec(resolvedSQL)) !== null) {
     const joinType = joinMatch[1]
     const joinFriendly = joinMatch[2].toLowerCase()
     const joinAlias = joinMatch[3]?.toLowerCase() ?? null
@@ -143,7 +146,7 @@ export function rewriteQuery(sql: string, tableMappings: TableMapping[]): Rewrit
     aliasMap.set(joinRefKey, { mapping: joinMapping, alias: joinAlias })
 
     // Extract ON clause — everything between ON and the next clause keyword or end
-    const afterOn = trimmed.slice(joinMatch.index + joinMatch[0].length)
+    const afterOn = resolvedSQL.slice(joinMatch.index + joinMatch[0].length)
     const onEnd = /\b(?:JOIN|WHERE|GROUP\s+BY|ORDER\s+BY|HAVING|LIMIT)\b/i.exec(afterOn)
     const onClause = onEnd ? afterOn.slice(0, onEnd.index).trim() : afterOn.trim()
 
@@ -151,7 +154,7 @@ export function rewriteQuery(sql: string, tableMappings: TableMapping[]): Rewrit
   }
 
   // Extract SELECT list
-  const selectMatch = /^SELECT\s+([\s\S]+?)\s+FROM\s/i.exec(trimmed)
+  const selectMatch = /^SELECT\s+([\s\S]+?)\s+FROM\s/i.exec(resolvedSQL)
   if (!selectMatch) return err('Could not parse SELECT clause.')
   const selectList = selectMatch[1].trim()
 
@@ -160,11 +163,11 @@ export function rewriteQuery(sql: string, tableMappings: TableMapping[]): Rewrit
   if (rewrittenSelect.startsWith('ERROR:')) return err(rewrittenSelect.slice(6).trim())
 
   // Extract remaining clauses
-  const whereMatch = /\bWHERE\s+([\s\S]+?)(?=\s*\b(?:GROUP\s+BY|ORDER\s+BY|HAVING|LIMIT)\b|$)/i.exec(trimmed)
-  const groupByMatch = /\bGROUP\s+BY\s+([\s\S]+?)(?=\s*\b(?:ORDER\s+BY|HAVING|LIMIT)\b|$)/i.exec(trimmed)
-  const havingMatch = /\bHAVING\s+([\s\S]+?)(?=\s*\b(?:ORDER\s+BY|LIMIT)\b|$)/i.exec(trimmed)
-  const orderByMatch = /\bORDER\s+BY\s+([\s\S]+?)(?=\s*\bLIMIT\b|$)/i.exec(trimmed)
-  const limitMatch = /\bLIMIT\s+\d+/i.exec(trimmed)
+  const whereMatch = /\bWHERE\s+([\s\S]+?)(?=\s*\b(?:GROUP\s+BY|ORDER\s+BY|HAVING|LIMIT)\b|$)/i.exec(resolvedSQL)
+  const groupByMatch = /\bGROUP\s+BY\s+([\s\S]+?)(?=\s*\b(?:ORDER\s+BY|HAVING|LIMIT)\b|$)/i.exec(resolvedSQL)
+  const havingMatch = /\bHAVING\s+([\s\S]+?)(?=\s*\b(?:ORDER\s+BY|LIMIT)\b|$)/i.exec(resolvedSQL)
+  const orderByMatch = /\bORDER\s+BY\s+([\s\S]+?)(?=\s*\bLIMIT\b|$)/i.exec(resolvedSQL)
+  const limitMatch = /\bLIMIT\s+\d+/i.exec(resolvedSQL)
 
   // Build FROM clause — data_rows for source tables, staged_data_rows for target tables
   const fromAliasPart = fromAlias ? ` ${fromAlias}` : ''
@@ -354,6 +357,44 @@ function splitByComma(str: string): string[] {
   }
   if (current.trim()) result.push(current.trim())
   return result
+}
+
+/**
+ * Resolves unqualified table names in SQL to their schema-qualified friendly names.
+ *
+ * If a bare table name (e.g., "employees") appears after FROM or JOIN and matches
+ * exactly one table across all datasets, it's auto-qualified (e.g., "techflow.employees").
+ * If ambiguous (same bare name in multiple datasets), the name is left as-is and the
+ * existing error handling will surface the problem.
+ */
+function resolveUnqualifiedTableNames(
+  sql: string,
+  tableMappings: { friendlyName: string }[]
+): string {
+  // Build a lookup: bare table name → list of matching friendly names
+  const bareNameMap = new Map<string, string[]>()
+  for (const m of tableMappings) {
+    const dotIndex = m.friendlyName.indexOf('.')
+    if (dotIndex === -1) continue
+    const bareName = m.friendlyName.substring(dotIndex + 1).toLowerCase()
+    const existing = bareNameMap.get(bareName) ?? []
+    existing.push(m.friendlyName)
+    bareNameMap.set(bareName, existing)
+  }
+
+  // Replace unqualified table names after FROM and JOIN keywords.
+  // Captures word.word (already qualified) or bare word, then only replaces bare ones.
+  return sql.replace(
+    /\b(FROM|JOIN)\s+([\w]+(?:\.[\w]+)?)/gi,
+    (fullMatch, keyword, tableName) => {
+      if (tableName.includes('.')) return fullMatch
+      const matches = bareNameMap.get(tableName.toLowerCase())
+      if (matches && matches.length === 1) {
+        return `${keyword} ${matches[0]}`
+      }
+      return fullMatch
+    }
+  )
 }
 
 function err(message: string): RewriteResult {
