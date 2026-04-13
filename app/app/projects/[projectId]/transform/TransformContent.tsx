@@ -2999,8 +2999,8 @@ function FieldRow({ field, isSelected, onSelect, oneToManyCount = 1 }: {
               Saved
             </Badge>
           ) : field.needsTransform ? (
-            <Badge className="bg-orange-100 text-orange-700 hover:bg-orange-100 border border-orange-200 text-[10px] px-1.5 py-0">
-              Transform
+            <Badge className="bg-gray-100 text-gray-500 hover:bg-gray-100 border border-gray-200 text-[10px] px-1.5 py-0">
+              Define
             </Badge>
           ) : null}
         </div>

@@ -54,7 +54,7 @@ export default function DataOverviewContent({
   return (
     <div className="flex flex-col flex-1 min-h-0">
       {/* Tab bar */}
-      <div className="border-b border-gray-200 bg-gray-50/80 px-6">
+      <div className="border-b border-gray-200 bg-white pl-2 pr-6">
         <nav className="flex gap-0" aria-label="Data overview tabs">
           {TABS.map(({ id, label, Icon }) => {
             const active = activeTab === id

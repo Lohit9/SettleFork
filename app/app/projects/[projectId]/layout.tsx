@@ -79,7 +79,7 @@ export default async function ProjectLayout({
         blockingIssueCount={blockingIssueCount}
         projectStatus={project.status ?? 'active'}
       />
-      <div className="h-full pl-[60px] overflow-auto flex flex-col">
+      <div className="h-full overflow-auto flex flex-col">
         {isArchived && (
           <div className="flex-shrink-0 bg-amber-50 border-b border-amber-200 px-6 py-2.5 flex items-center gap-2.5 text-sm text-amber-800">
             <svg className="w-4 h-4 text-amber-600 flex-shrink-0" fill="none" stroke="currentColor" strokeWidth="1.5" viewBox="0 0 24 24">

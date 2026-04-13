@@ -1340,10 +1340,9 @@ function TableMappingCard({
   return (
     <div className="border border-gray-200 rounded-xl overflow-hidden">
       {/* Header */}
-      <div className="flex items-center px-5 py-4 hover:bg-gray-50 transition-colors">
+      <div className="group flex items-center px-5 py-4 hover:bg-gray-50 transition-colors">
         <div className="flex items-center gap-2 flex-1 cursor-pointer min-w-0" onClick={onToggle}>
           <div className="flex-1 min-w-0">
-            <p className="text-xs text-gray-400 mb-0.5 truncate">{srcDs?.name}</p>
             <p className="font-semibold text-gray-900 truncate">{tm.sourceTable?.name ?? '—'}</p>
             <p className="text-xs text-gray-500 mt-0.5">
               {hideMappedRows
@@ -1358,7 +1357,6 @@ function TableMappingCard({
             <ArrowRight className="w-4 h-4 text-blue-400 -ml-1" />
           </div>
           <div className="flex-1 min-w-0 text-right">
-            <p className="text-xs text-gray-400 mb-0.5 truncate">{tgtDs?.name}</p>
             <p className="font-semibold text-gray-900 truncate">{tm.targetTable?.name ?? '—'}</p>
             <div className="flex items-center justify-end gap-1.5 mt-1">
               <ConfidenceBadge confidence={tm.confidence} />
@@ -1371,7 +1369,7 @@ function TableMappingCard({
         </div>
 
         {/* Table-level actions */}
-        <div className="flex items-center gap-1 ml-3" onClick={(e) => e.stopPropagation()}>
+        <div className={`flex items-center gap-1 ml-3 ${expanded ? '' : 'opacity-0 group-hover:opacity-100 transition-opacity duration-150'}`} onClick={(e) => e.stopPropagation()}>
           <RoleTooltip allowed={canEdit} requiredRole="Editor">
             <button
               onClick={canEdit ? onApproveAll : undefined}

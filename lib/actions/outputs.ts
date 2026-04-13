@@ -5,7 +5,7 @@ import { supabaseAdmin } from '@/lib/supabase/admin'
 import { callClaude } from '@/lib/ai/claude'
 import { checkAIRateLimit } from '@/lib/ai/rate-limit'
 import { buildAIContext, formatDocumentsForPrompt } from '@/lib/ai/context-builder'
-import { wrapFieldRefsInJsonb } from '@/lib/utils/transform-helpers'
+import { fieldNeedsTransform, wrapFieldRefsInJsonb } from '@/lib/utils/transform-helpers'
 import { buildReadinessDocx } from '@/lib/reports/readiness-report-docx'
 
 // ── Shared types ──────────────────────────────────────────────────────────────
@@ -252,12 +252,12 @@ export async function getOutputsPageData(projectId: string): Promise<OutputsPage
   // Round 3: Fields + field mappings
   const [{ data: sourceFieldRows }, { data: targetFieldRows }, { data: rawFieldMappings }] =
     await Promise.all([
-      supabaseAdmin.from('fields').select('id, name, is_nullable').in('table_id', sourceTableIds),
+      supabaseAdmin.from('fields').select('id, name, data_type, is_nullable').in('table_id', sourceTableIds),
       supabaseAdmin.from('fields').select('id, name, data_type, inferred_type, is_nullable, is_primary_key, is_foreign_key, table_id').in('table_id', targetTableIds),
       nonRejectedTMIds.length > 0
         ? supabaseAdmin
             .from('field_mappings')
-            .select('id, status, source_field_id, target_field_id, confidence, created_at, is_contributing, needs_transformation')
+            .select('id, status, source_field_id, target_field_id, confidence, created_at, is_contributing, needs_transformation, type_compatibility')
             .in('table_mapping_id', nonRejectedTMIds)
         : Promise.resolve({ data: [] }),
     ])
@@ -265,28 +265,10 @@ export async function getOutputsPageData(projectId: string): Promise<OutputsPage
   const allFMIds = (rawFieldMappings ?? []).map((fm) => fm.id)
   const approvedFMs = (rawFieldMappings ?? []).filter((fm) => fm.status === 'approved')
 
-  // Round 4: Transforms + flagged field_mapping IDs + dismissed field_mapping IDs
-  const [{ data: transformRows }, { data: flaggedFMRows }, { data: dismissedFMRows }] = await Promise.all([
-    allFMIds.length > 0
-      ? supabaseAdmin.from('transformations').select('id, field_mapping_id, status, description, created_at').in('field_mapping_id', allFMIds)
-      : Promise.resolve({ data: [] }),
-    nonRejectedTMIds.length > 0
-      ? supabaseAdmin
-          .from('field_mappings')
-          .select('id')
-          .in('table_mapping_id', nonRejectedTMIds)
-          .eq('needs_transformation', true)
-      : Promise.resolve({ data: [] }),
-    // Dismissed fields (needs_transformation = false) must be excluded from the
-    // transform scope denominator — they have no transform requirement.
-    nonRejectedTMIds.length > 0
-      ? supabaseAdmin
-          .from('field_mappings')
-          .select('id')
-          .in('table_mapping_id', nonRejectedTMIds)
-          .eq('needs_transformation', false)
-      : Promise.resolve({ data: [] }),
-  ])
+  // Round 4: Transforms
+  const { data: transformRows } = await (allFMIds.length > 0
+    ? supabaseAdmin.from('transformations').select('id, field_mapping_id, status, description, created_at').in('field_mapping_id', allFMIds)
+    : Promise.resolve({ data: [] }))
 
   // ── Metrics ───────────────────────────────────────────────────────────────
 
@@ -302,18 +284,41 @@ export async function getOutputsPageData(projectId: string): Promise<OutputsPage
   const targetFieldCoverageCount = coveredTargetFieldIds.size
 
   const allTransforms = transformRows ?? []
-  // Build ID sets for precise set-math
   const fmIdsWithTransforms = new Set(allTransforms.map((t) => t.field_mapping_id))
-  const flaggedFMIds = new Set((flaggedFMRows ?? []).map((fm) => fm.id))
-  // Dismissed fields (needs_transformation = false) are excluded from scope —
-  // they have no transform requirement, even if they have a stale transform record.
-  const dismissedFMIds = new Set((dismissedFMRows ?? []).map((fm) => fm.id))
-  // DENOMINATOR: flagged fields ∪ fields with a transform record (user-initiated optional transforms)
-  // Exclude dismissed fields so they don't inflate the denominator.
-  const passthroughWithRecord = [...fmIdsWithTransforms].filter(
-    (id) => !flaggedFMIds.has(id) && !dismissedFMIds.has(id),
-  ).length
-  const totalTransformScope = flaggedFMIds.size + passthroughWithRecord
+  const transformByFmId = new Map(allTransforms.map((t) => [t.field_mapping_id, t]))
+
+  // Build field lookup maps for the fieldNeedsTransform heuristic (matches Transform sidebar logic)
+  const sourceFieldById = new Map((sourceFieldRows ?? []).map((f) => [f.id, f]))
+  const targetFieldById = new Map((targetFieldRows ?? []).map((f) => [f.id, f]))
+
+  // Score every primary (non-contributing) field mapping using the same heuristic as the Transform
+  // sidebar so the Migration Center denominator stays in sync with the sidebar badge count.
+  const scoredFieldMappings = (rawFieldMappings ?? [])
+    .filter((fm) => !(fm as typeof fm & { is_contributing?: boolean }).is_contributing)
+    .map((fm) => {
+      const isValueAssignment = !fm.source_field_id
+      const srcField = fm.source_field_id ? sourceFieldById.get(fm.source_field_id) : null
+      const tgtField = fm.target_field_id ? targetFieldById.get(fm.target_field_id) : null
+      const hasTransformation = fmIdsWithTransforms.has(fm.id)
+      const fmTyped = fm as typeof fm & { needs_transformation?: boolean | null; type_compatibility?: string | null }
+
+      const needsTransform = isValueAssignment ? true : fieldNeedsTransform({
+        typeCompatibility: fmTyped.type_compatibility ?? '',
+        confidence: fm.confidence ?? 0,
+        sourceDataType: (srcField as { data_type?: string } | null)?.data_type ?? '',
+        targetDataType: (tgtField as { data_type?: string } | null)?.data_type ?? '',
+        sourceFieldName: (srcField as { name?: string } | null)?.name ?? '',
+        targetFieldName: (tgtField as { name?: string } | null)?.name ?? '',
+        hasTransformation,
+        needsTransformation: fmTyped.needs_transformation ?? null,
+      })
+
+      return { id: fm.id, needsTransform, hasTransformation }
+    })
+
+  // DENOMINATOR: all primary field mappings where needsTransform is true
+  const fieldsInScope = scoredFieldMappings.filter((fm) => fm.needsTransform)
+  const totalTransformScope = fieldsInScope.length
 
   // Compute resolved source field IDs (mirrors getResolvedSourceFieldIds logic).
   // A source field is "resolved by transform" when its approved primary mapping
@@ -363,18 +368,15 @@ export async function getOutputsPageData(projectId: string): Promise<OutputsPage
     ) return false
     return true
   }).length
-  // Scope-filtered transforms — exclude dismissed fields from all counts so the
-  // numerator and denominator stay in sync (dismissed fields have no transform requirement).
-  const scopedTransforms = allTransforms.filter((t) => !dismissedFMIds.has(t.field_mapping_id))
-  // NUMERATOR: transforms fully applied to staged data
-  const completedTransforms = scopedTransforms.filter((t) => t.status === 'applied').length
-  // OUTSTANDING 1: flagged fields with NO transform record at all (the orange "Transform" badge fields)
-  const fieldsNeedingTransformWork = [...flaggedFMIds].filter((id) => !fmIdsWithTransforms.has(id)).length
-  // OUTSTANDING 2: transform records in draft state (SQL not yet written/saved)
-  const draftTransforms = scopedTransforms.filter((t) => t.status === 'draft').length
-  // OUTSTANDING 3: transforms tested but not yet applied to staged data
-  const testedTransforms = scopedTransforms.filter((t) => t.status === 'tested').length
-  // (untestedTransforms kept for backward compat — the old "saved" bucket — renamed to draftTransforms above)
+  // NUMERATOR: in-scope fields whose transform is fully applied to staged data
+  const completedTransforms = fieldsInScope.filter((fm) => transformByFmId.get(fm.id)?.status === 'applied').length
+  // OUTSTANDING 1: in-scope fields with no transform record at all (orange "Transform" badge)
+  const fieldsNeedingTransformWork = fieldsInScope.filter((fm) => !fm.hasTransformation).length
+  // OUTSTANDING 2: in-scope fields with a draft transform (SQL saved but not tested)
+  const draftTransforms = fieldsInScope.filter((fm) => transformByFmId.get(fm.id)?.status === 'draft').length
+  // OUTSTANDING 3: in-scope fields with a tested transform not yet applied
+  const testedTransforms = fieldsInScope.filter((fm) => transformByFmId.get(fm.id)?.status === 'tested').length
+  // untestedTransforms kept for backward compat (alias for draft bucket)
   const untestedTransforms = draftTransforms
 
   // Readiness score (simplified inline calculation matching readiness-score.ts)
