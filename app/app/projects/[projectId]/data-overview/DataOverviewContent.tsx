@@ -1,6 +1,7 @@
 'use client'
 
-import { useState } from 'react'
+import { useState, useCallback } from 'react'
+import { useSearchParams, useRouter, usePathname } from 'next/navigation'
 import { Database, Eye, Search, BarChart } from '@/components/icons'
 import SchemaOverview from './SchemaOverview'
 import DataPreview from './DataPreview'
@@ -40,15 +41,36 @@ export default function DataOverviewContent({
   initialQueryMode,
   initialTableId,
 }: DataOverviewContentProps) {
-  const [activeTab, setActiveTab] = useState<TabId>(initialTab ?? 'schema')
+  const searchParams = useSearchParams()
+  const router = useRouter()
+  const pathname = usePathname()
+
+  const validTabs: TabId[] = ['schema', 'preview', 'query', 'profiling']
+  const validatedInitialTab = initialTab && validTabs.includes(initialTab) ? initialTab : 'schema'
+  const [activeTab, setActiveTab] = useState<TabId>(validatedInitialTab)
+  const [mountedTabs, setMountedTabs] = useState<Set<TabId>>(
+    new Set(['schema', validatedInitialTab])
+  )
+
   // Shared selected table ID for Data Preview — lifted so profiling can drive it
   const [selectedPreviewTableId, setSelectedPreviewTableId] = useState<string | undefined>(
     initialTableId
   )
 
+  const handleTabChange = useCallback((tab: TabId) => {
+    setMountedTabs((prev) => {
+      if (prev.has(tab)) return prev
+      return new Set([...prev, tab])
+    })
+    setActiveTab(tab)
+    const params = new URLSearchParams(searchParams.toString())
+    params.set('tab', tab)
+    router.replace(`${pathname}?${params.toString()}`, { scroll: false })
+  }, [searchParams, router, pathname])
+
   function handleNavigateToPreview(tableId: string) {
     setSelectedPreviewTableId(tableId)
-    setActiveTab('preview')
+    handleTabChange('preview')
   }
 
   return (
@@ -61,7 +83,7 @@ export default function DataOverviewContent({
             return (
               <button
                 key={id}
-                onClick={() => setActiveTab(id)}
+                onClick={() => handleTabChange(id)}
                 className={`flex items-center gap-2 px-4 py-3.5 text-sm font-medium border-b-2 transition-colors -mb-px ${
                   active
                     ? 'border-primary text-primary'
@@ -76,7 +98,7 @@ export default function DataOverviewContent({
         </nav>
       </div>
 
-      {/* Tab content — all tabs stay mounted; inactive ones are hidden via CSS so local state is preserved */}
+      {/* Tab content — tabs mount on first visit then stay mounted; inactive ones are hidden via CSS */}
       <div className="flex-1 overflow-y-auto">
         <div className={activeTab !== 'schema' ? 'hidden' : 'p-6 flex flex-col flex-1 min-h-0'}>
           <SchemaOverview
@@ -86,30 +108,36 @@ export default function DataOverviewContent({
           />
         </div>
         <div className={activeTab !== 'preview' ? 'hidden' : 'p-6 flex flex-col flex-1 min-h-0'}>
-          <DataPreview
-            projectId={projectId}
-            tables={tables}
-            isArchived={isArchived}
-            archivedAt={archivedAt}
-            initialSelectedTableId={selectedPreviewTableId}
-          />
+          {mountedTabs.has('preview') && (
+            <DataPreview
+              projectId={projectId}
+              tables={tables}
+              isArchived={isArchived}
+              archivedAt={archivedAt}
+              initialSelectedTableId={selectedPreviewTableId}
+            />
+          )}
         </div>
         <div className={activeTab !== 'query' ? 'hidden' : 'p-6 flex flex-col flex-1 min-h-0'}>
-          <QueryData
-            projectId={projectId}
-            tables={tables}
-            isArchived={isArchived}
-            initialQuery={initialQuery}
-            initialMode={initialQueryMode}
-          />
+          {mountedTabs.has('query') && (
+            <QueryData
+              projectId={projectId}
+              tables={tables}
+              isArchived={isArchived}
+              initialQuery={initialQuery}
+              initialMode={initialQueryMode}
+            />
+          )}
         </div>
         <div className={activeTab !== 'profiling' ? 'hidden' : 'p-6 flex flex-col flex-1 min-h-0'}>
-          <DataProfiling
-            projectId={projectId}
-            tables={tables}
-            isArchived={isArchived}
-            onNavigateToPreview={handleNavigateToPreview}
-          />
+          {mountedTabs.has('profiling') && (
+            <DataProfiling
+              projectId={projectId}
+              tables={tables}
+              isArchived={isArchived}
+              onNavigateToPreview={handleNavigateToPreview}
+            />
+          )}
         </div>
       </div>
     </div>
