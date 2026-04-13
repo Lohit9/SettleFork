@@ -14,20 +14,20 @@ export default function FinalCTA() {
           </p>
 
           <div className="flex flex-wrap justify-center gap-3">
-            <Link
-              href="/pricing"
-              className="bg-[#2358D4] hover:bg-[#1D4ED8] text-white font-semibold px-8 py-4 rounded-xl text-base shadow-lg shadow-blue-600/25 hover:-translate-y-0.5 transition-all"
-            >
-              See Pricing
-            </Link>
             <a
               href="https://calendly.com/settle-ai/demo"
               target="_blank"
               rel="noopener noreferrer"
-              className="border border-[#334155] text-[#CBD5E1] font-medium px-8 py-4 rounded-xl text-base hover:border-[#64748B] hover:text-white transition-all"
+              className="bg-[#2358D4] hover:bg-[#1D4ED8] text-white font-semibold px-8 py-4 rounded-xl text-base shadow-lg shadow-blue-600/25 hover:-translate-y-0.5 transition-all"
             >
               Book a Demo
             </a>
+            <Link
+              href="/pricing"
+              className="border border-[#334155] text-[#CBD5E1] font-medium px-8 py-4 rounded-xl text-base hover:border-[#64748B] hover:text-white transition-all"
+            >
+              Get an Estimate
+            </Link>
           </div>
         </ScrollReveal>
       </div>

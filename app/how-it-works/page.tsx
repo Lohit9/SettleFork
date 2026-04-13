@@ -186,20 +186,20 @@ export default function HowItWorksPage() {
               Tell us about your migration and get your first mapping proposal in under an hour.
             </p>
             <div className="flex flex-wrap justify-center gap-3">
-              <Link
-                href="/pricing"
-                className="bg-[#2358D4] hover:bg-[#1D4ED8] text-white font-semibold px-8 py-3.5 rounded-xl shadow-lg shadow-blue-600/25 hover:-translate-y-0.5 transition-all text-sm"
-              >
-                See Pricing
-              </Link>
               <a
                 href="https://calendly.com/settle-ai/demo"
                 target="_blank"
                 rel="noopener noreferrer"
-                className="border border-slate-600 text-slate-300 font-medium px-8 py-3.5 rounded-xl hover:border-slate-400 hover:text-white transition-all text-sm"
+                className="bg-[#2358D4] hover:bg-[#1D4ED8] text-white font-semibold px-8 py-3.5 rounded-xl shadow-lg shadow-blue-600/25 hover:-translate-y-0.5 transition-all text-sm"
               >
                 Book a Demo
               </a>
+              <Link
+                href="/pricing"
+                className="border border-slate-600 text-slate-300 font-medium px-8 py-3.5 rounded-xl hover:border-slate-400 hover:text-white transition-all text-sm"
+              >
+                Get an Estimate
+              </Link>
             </div>
           </div>
 

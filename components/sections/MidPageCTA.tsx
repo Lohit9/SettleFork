@@ -16,19 +16,19 @@ export default function MidPageCTA() {
           Tell us about your migration and we'll follow up within 48 hours — at no cost.
         </p>
         <div className="flex flex-wrap items-center justify-center gap-3 pt-2">
-          <Link
-            href="/pricing"
-            className="inline-flex items-center justify-center px-6 py-3 rounded-lg bg-[#2358D4] text-white text-sm font-semibold hover:bg-[#1D4ED8] transition-colors"
-          >
-            See Pricing
-          </Link>
-          <Link
+          <a
             href="https://calendly.com/settle-ai/demo"
             target="_blank"
             rel="noopener noreferrer"
-            className="inline-flex items-center justify-center px-6 py-3 rounded-lg border border-[#E2E8F0] text-[#0F172A] text-sm font-semibold hover:bg-[#F8FAFC] transition-colors"
+            className="inline-flex items-center justify-center px-6 py-3 rounded-lg bg-[#2358D4] text-white text-sm font-semibold hover:bg-[#1D4ED8] transition-colors"
           >
             Book a Demo
+          </a>
+          <Link
+            href="/pricing"
+            className="inline-flex items-center justify-center px-6 py-3 rounded-lg border border-[#E2E8F0] text-[#0F172A] text-sm font-semibold hover:bg-[#F8FAFC] transition-colors"
+          >
+            Get an Estimate
           </Link>
         </div>
       </div>

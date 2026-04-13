@@ -306,7 +306,7 @@ export function pricingEstimateEmail(
     html: emailLayout({
       body,
       ctaText: 'Book a Scoping Call',
-      ctaUrl: 'https://calendly.com/settle-ai/demo',
+      ctaUrl: CALENDLY_SCOPING,
       signOff: { name: 'Kaan Dincer', title: 'Founder & CEO, Settle' },
     }),
   }

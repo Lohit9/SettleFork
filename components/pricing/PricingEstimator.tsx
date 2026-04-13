@@ -54,7 +54,7 @@ const QUESTIONS = {
   },
 }
 
-const CALENDLY_URL = 'https://calendly.com/settle-ai/demo'
+const CALENDLY_URL = 'https://calendly.com/settle-ai/migration-scoping-call'
 
 function calculatePricing(tables: string, systems: string): PricingResult {
   if (tables === '500+' || (tables === '200-500' && systems === '4+')) {

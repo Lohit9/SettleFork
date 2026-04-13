@@ -148,25 +148,21 @@ export default function Hero() {
             </p>
 
             <div className="flex flex-wrap gap-3 mb-3">
-              <Link
-                href="/pricing"
-                className="bg-[#2358D4] hover:bg-[#1D4ED8] text-white font-semibold px-8 py-3.5 rounded-xl shadow-lg shadow-blue-600/20 hover:-translate-y-0.5 transition-all text-sm"
-              >
-                See Pricing
-              </Link>
               <a
                 href="https://calendly.com/settle-ai/demo"
                 target="_blank"
                 rel="noopener noreferrer"
-                className="border border-[#CBD5E1] text-[#0F172A] font-medium px-8 py-3.5 rounded-xl hover:border-[#2358D4] hover:text-[#2358D4] transition-all text-sm"
+                className="bg-[#2358D4] hover:bg-[#1D4ED8] text-white font-semibold px-8 py-3.5 rounded-xl shadow-lg shadow-blue-600/20 hover:-translate-y-0.5 transition-all text-sm"
               >
                 Book a Demo
               </a>
+              <Link
+                href="/pricing"
+                className="border border-[#CBD5E1] text-[#0F172A] font-medium px-8 py-3.5 rounded-xl hover:border-[#2358D4] hover:text-[#2358D4] transition-all text-sm"
+              >
+                Get an Estimate
+              </Link>
             </div>
-
-            <p className="text-sm text-slate-400 mt-3">
-              We review your migration scope and respond within 48 hours.
-            </p>
 
             {/* Trust signals */}
             <div className="grid grid-cols-2 gap-x-6 gap-y-2 pt-4 max-w-md">

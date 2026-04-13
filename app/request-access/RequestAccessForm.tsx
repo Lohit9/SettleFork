@@ -1,26 +1,12 @@
 'use client'
 
 import { useState, useTransition } from 'react'
-import { useSearchParams } from 'next/navigation'
 import Link from 'next/link'
 import { submitAccessRequest } from '@/lib/actions/invites'
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 
 const CALENDLY = process.env.NEXT_PUBLIC_CALENDLY_SCOPING_URL || 'https://calendly.com/settle-ai/migration-scoping-call'
 
-const ROLE_OPTIONS = [
-  { value: '', label: 'Select one…' },
-  { value: 'Currently in a data migration', label: 'Currently in a data migration' },
-  { value: 'Planning a migration in the next 6 months', label: 'Planning a migration in the next 6 months' },
-  { value: 'Evaluating migration tools', label: 'Evaluating migration tools' },
-  { value: 'Systems integrator or consultant', label: 'Systems integrator or consultant' },
-  { value: 'Other', label: 'Other' },
-]
-
 export default function RequestAccessForm() {
-  const searchParams = useSearchParams()
-  const ref = searchParams.get('ref') || 'general'
-  const isAssessment = ref === 'assessment'
   const [isPending, startTransition] = useTransition()
   const [submitted, setSubmitted] = useState(false)
   const [submittedName, setSubmittedName] = useState('')
@@ -32,13 +18,11 @@ export default function RequestAccessForm() {
     name: '',
     email: '',
     company: '',
-    role_type: '',
-    systems_involved: '',
-    additional_notes: '',
+    notes: '',
   })
 
   const set = (field: keyof typeof form) =>
-    (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement>) => {
+    (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) => {
       setForm((prev) => ({ ...prev, [field]: e.target.value }))
       if (fieldErrors[field]) setFieldErrors((prev) => ({ ...prev, [field]: '' }))
     }
@@ -52,7 +36,6 @@ export default function RequestAccessForm() {
       errs.email = 'Please enter a valid email address.'
     }
     if (!form.company.trim()) errs.company = 'Company is required.'
-    if (!form.role_type) errs.role_type = 'Please select an option.'
     return errs
   }
 
@@ -71,10 +54,8 @@ export default function RequestAccessForm() {
         name: form.name.trim(),
         email: form.email.trim().toLowerCase(),
         company: form.company.trim(),
-        role_type: form.role_type,
-        systems_involved: form.systems_involved || undefined,
-        additional_notes: form.additional_notes || undefined,
-        ref,
+        role_type: 'Platform access request',
+        additional_notes: form.notes || undefined,
       })
 
       if (!result.success) {
@@ -105,8 +86,8 @@ export default function RequestAccessForm() {
 
             <h1 className="text-2xl font-bold text-gray-900 mb-2">Thanks, {submittedName}!</h1>
             <p className="text-gray-500 text-sm leading-relaxed mb-8">
-              We&apos;re reviewing your request and will be in touch at{' '}
-              <span className="font-medium text-gray-700">{submittedEmail}</span> within 48 hours.
+              We&apos;ll set up your account and send login credentials to{' '}
+              <span className="font-medium text-gray-700">{submittedEmail}</span> within 24 hours.
             </p>
 
             <div className="border-t border-gray-100 pt-7">
@@ -141,12 +122,10 @@ export default function RequestAccessForm() {
         <div className="bg-white rounded-2xl border border-gray-200 shadow-sm p-8 lg:p-10">
           <div className="mb-7">
             <h1 className="text-2xl font-bold text-gray-900 mb-2">
-              {isAssessment ? 'Get Your Free Migration Assessment' : 'Tell us about your migration'}
+              Request platform access
             </h1>
             <p className="text-sm text-gray-500 leading-relaxed">
-              {isAssessment
-                ? "We'll review your migration details and follow up within 48 hours."
-                : "We'll review your request and get back to you within 48 hours."}
+              Already talked to us? We&apos;ll set up your account and send login credentials within 24 hours.
             </p>
           </div>
 
@@ -190,41 +169,12 @@ export default function RequestAccessForm() {
               />
             </Field>
 
-            <Field label="What best describes you?" required error={fieldErrors.role_type}>
-              <Select
-                value={form.role_type}
-                onValueChange={(val) => {
-                  setForm((prev) => ({ ...prev, role_type: val }))
-                  if (fieldErrors.role_type) setFieldErrors((prev) => ({ ...prev, role_type: '' }))
-                }}
-              >
-                <SelectTrigger className={inputCls(fieldErrors.role_type)}>
-                  <SelectValue placeholder="Select one…" />
-                </SelectTrigger>
-                <SelectContent>
-                  {ROLE_OPTIONS.filter((o) => o.value !== '').map((o) => (
-                    <SelectItem key={o.value} value={o.value}>{o.label}</SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </Field>
-
-            <Field label="What systems are involved?" hint="Optional">
+            <Field label="Notes" hint="Optional">
               <textarea
                 rows={3}
-                placeholder="e.g., SAP ECC to S/4HANA, Salesforce Classic to Lightning, Legacy CRM to Salesforce…"
-                value={form.systems_involved}
-                onChange={set('systems_involved')}
-                className="w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm text-gray-900 placeholder:text-gray-400 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 resize-none transition"
-              />
-            </Field>
-
-            <Field label="Anything else we should know?" hint="Optional">
-              <textarea
-                rows={3}
-                placeholder="Timeline, team size, specific challenges…"
-                value={form.additional_notes}
-                onChange={set('additional_notes')}
+                placeholder="Any context for your request (optional)"
+                value={form.notes}
+                onChange={set('notes')}
                 className="w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm text-gray-900 placeholder:text-gray-400 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 resize-none transition"
               />
             </Field>

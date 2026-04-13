@@ -26,7 +26,7 @@ export const metadata: Metadata = {
   },
 }
 
-const CALENDLY_URL = 'https://calendly.com/settle-ai/demo'
+const CALENDLY_URL = 'https://calendly.com/settle-ai/migration-scoping-call'
 
 const CONSULTING_ROWS = [
   { label: 'Timeline', value: '3–12 months' },
@@ -159,7 +159,7 @@ export default function PricingPage() {
               rel="noopener noreferrer"
               className="border border-[#475569] text-[#CBD5E1] font-semibold px-8 py-4 rounded-xl hover:bg-[#1E293B] text-base transition-all text-center"
             >
-              Book a Demo
+              Book a Scoping Call
             </Link>
           </div>
         </div>

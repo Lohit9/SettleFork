@@ -25,15 +25,6 @@ const securityHeaders = [
 ]
 
 const nextConfig = {
-  async redirects() {
-    return [
-      {
-        source: '/request-access',
-        destination: '/pricing',
-        permanent: true,
-      },
-    ]
-  },
   async headers() {
     return [{ source: '/(.*)', headers: securityHeaders }]
   },
