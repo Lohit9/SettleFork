@@ -1081,7 +1081,7 @@ function InlineAddFieldRow({
 // RoleTooltip is imported from @/components/app/RoleTooltip
 
 function FieldMappingRow({
-  fm, allTMFMs, onSelect, onApprove, onReject, onDelete, canEdit = true,
+  fm, allTMFMs, onSelect, onApprove, onReject, onDelete, canEdit = true, isSelected = false,
 }: {
   fm: RichFieldMapping
   allTMFMs: RichFieldMapping[]
@@ -1090,6 +1090,7 @@ function FieldMappingRow({
   onReject: () => void
   onDelete: () => void
   canEdit?: boolean
+  isSelected?: boolean
 }) {
   const isApproved = fm.status === 'approved'
   const isRejected = fm.status === 'rejected'
@@ -1115,7 +1116,7 @@ function FieldMappingRow({
   if (isValueAssignment) {
   return (
     <div
-        className={`flex items-center px-5 py-3 hover:bg-gray-50 cursor-pointer transition-colors border-l-2 border-l-purple-400 ${isApproved ? 'bg-purple-50/40' : ''}`}
+        className={`flex items-center px-5 py-3 cursor-pointer transition-colors ${isSelected ? 'bg-blue-50 border-l-[3px] border-l-blue-600' : `hover:bg-gray-50 border-l-2 border-l-purple-400 ${isApproved ? 'bg-purple-50/40' : ''}`}`}
         onClick={onSelect}
       >
         <div className="w-[36%] flex items-center gap-2 min-w-0">
@@ -1145,7 +1146,7 @@ function FieldMappingRow({
   if (fm.is_contributing) {
     return (
       <div
-        className={`flex items-center px-5 py-2 cursor-pointer transition-colors ${isRejected ? 'bg-red-50/20' : 'bg-blue-50/20 hover:bg-blue-50/40'}`}
+        className={`flex items-center px-5 py-2 cursor-pointer transition-colors ${isSelected ? 'bg-blue-100/60 border-l-[3px] border-l-blue-600' : isRejected ? 'bg-red-50/20' : 'bg-blue-50/20 hover:bg-blue-50/40'}`}
         onClick={onSelect}
       >
         <div className="w-[36%] flex items-center gap-2 min-w-0 pl-5">
@@ -1172,7 +1173,7 @@ function FieldMappingRow({
 
   return (
     <div
-      className={`flex items-center px-5 py-3 hover:bg-gray-50 cursor-pointer transition-colors ${isApproved ? 'bg-green-50/60' : isRejected ? 'bg-red-50/30' : ''} ${isManyToOne ? 'border-l-2 border-l-blue-400' : ''}`}
+      className={`flex items-center px-5 py-3 cursor-pointer transition-colors ${isSelected ? 'bg-blue-50 border-l-[3px] border-l-blue-600' : `hover:bg-gray-50 ${isApproved ? 'bg-green-50/60' : isRejected ? 'bg-red-50/30' : ''} ${isManyToOne ? 'border-l-2 border-l-blue-400' : ''}`}`}
       onClick={onSelect}
     >
       <div className="w-[36%] flex items-center gap-2 min-w-0">
@@ -1288,6 +1289,7 @@ function TableMappingCard({
   projectId,
   onAcknowledgmentChanged,
   canEdit = true,
+  selectedFMId = null,
 }: {
   tm: RichTableMapping
   expanded: boolean
@@ -1317,6 +1319,7 @@ function TableMappingCard({
   projectId: string
   onAcknowledgmentChanged: () => void
   canEdit?: boolean
+  selectedFMId?: string | null
 }) {
   const router = useRouter()
   const srcDs = tm.sourceTable?.dataset
@@ -1471,6 +1474,7 @@ function TableMappingCard({
                 onReject={() => onRejectFM(fm.id)}
                 onDelete={() => onDeleteFM(fm.id)}
                 canEdit={canEdit}
+                isSelected={selectedFMId === fm.id}
               />
             ))
               }
@@ -1502,6 +1506,7 @@ function TableMappingCard({
                           onReject={() => onRejectFM(row.id)}
                           onDelete={() => onDeleteFM(row.id)}
                           canEdit={canEdit}
+                          isSelected={selectedFMId === row.id}
                         />
                       ))}
                     </div>
@@ -1518,6 +1523,7 @@ function TableMappingCard({
                     onReject={() => onRejectFM(fm.id)}
                     onDelete={() => onDeleteFM(fm.id)}
                     canEdit={canEdit}
+                    isSelected={selectedFMId === fm.id}
                   />
                 )
               })
@@ -1777,7 +1783,7 @@ function MappingDetailsPanel({
     : null
 
   return (
-    <div className="w-76 flex-shrink-0 bg-white border border-gray-200 rounded-xl overflow-hidden flex flex-col h-fit sticky top-4" style={{ width: '296px' }}>
+    <div className="flex-shrink-0 bg-white border border-gray-200 rounded-xl overflow-hidden flex flex-col h-fit" style={{ minWidth: '340px' }}>
       <div className="flex items-center justify-between px-5 py-4 border-b border-gray-100">
         <h3 className="font-semibold text-gray-900 text-sm">Mapping Details</h3>
         <button onClick={onClose} className="text-gray-400 hover:text-gray-600"><X className="w-4 h-4" /></button>
@@ -2179,6 +2185,8 @@ export default function MappingContent({ projectId, projectName, initialData }: 
   const [activeFilter, setActiveFilter] = useState<FilterTab>('all')
   const [expandedIds, setExpandedIds] = useState<Set<string>>(new Set())
   const [selectedFM, setSelectedFM] = useState<RichFieldMapping | null>(null)
+  const [displayedFM, setDisplayedFM] = useState<RichFieldMapping | null>(null)
+  const [isPanelVisible, setIsPanelVisible] = useState(false)
   const [showAddModal, setShowAddModal] = useState(false)
   const [showGenerateModal, setShowGenerateModal] = useState(false)
   const [addRowForTMId, setAddRowForTMId] = useState<string | null>(null)
@@ -2208,6 +2216,19 @@ export default function MappingContent({ projectId, projectName, initialData }: 
   const [hcConfirmCount, setHcConfirmCount] = useState<number | null>(null)
 
   const [toast, setToast] = useState<ToastState | null>(null)
+
+  // Panel open/close animation: keep the DOM node alive for 200ms on close so the width transition plays out
+  useEffect(() => {
+    if (selectedFM) {
+      setDisplayedFM(selectedFM)
+      requestAnimationFrame(() => setIsPanelVisible(true))
+    } else {
+      setIsPanelVisible(false)
+      const timer = setTimeout(() => setDisplayedFM(null), 200)
+      return () => clearTimeout(timer)
+    }
+  }, [selectedFM])
+
   function showToast(message: string, type: ToastState['type']) {
     setToast({ message, type })
     setTimeout(() => setToast(null), 4000)
@@ -2758,7 +2779,7 @@ export default function MappingContent({ projectId, projectName, initialData }: 
       </div>
 
       {/* Main content */}
-      <div className="flex gap-5 items-start">
+      <div className={`flex items-start transition-all duration-200 ease-in-out ${isPanelVisible ? 'gap-5' : 'gap-0'}`}>
         <div className="flex-1 space-y-3 min-w-0">
           {filteredMappings.length === 0 ? (
             <div className="text-center py-12 text-sm text-gray-400 border border-dashed border-gray-200 rounded-xl">
@@ -2796,24 +2817,34 @@ export default function MappingContent({ projectId, projectName, initialData }: 
                 projectId={projectId}
                 onAcknowledgmentChanged={refreshData}
                 canEdit={canEdit}
+                selectedFMId={selectedFM?.id ?? null}
               />
             ))
           )}
         </div>
 
-        {/* Details panel */}
-        {selectedFM && (
-          <MappingDetailsPanel
-            fm={selectedFM}
-            parentTM={tableMappings.find((tm) => tm.id === selectedFM.table_mapping_id)}
-            allFieldsByTable={allFieldsByTable}
-            onClose={() => setSelectedFM(null)}
-            onApprove={handleApprove}
-            onReject={handleReject}
-            onDelete={handleDeleteFM}
-            onEdit={handleEditFM}
-          />
-        )}
+        {/* Outer: stretches to full flex row height — gives the sticky inner panel travel room */}
+        <div
+          className="self-stretch flex-shrink-0 transition-[width,opacity] duration-200 ease-in-out"
+          style={{ width: isPanelVisible ? '340px' : '0px', opacity: isPanelVisible ? 1 : 0 }}
+        >
+          {/* Inner: sticky + clips content. h-fit inside tall parent = travel room for sticky */}
+          <div className="sticky top-6 overflow-hidden">
+            {displayedFM && (
+              <MappingDetailsPanel
+                key={displayedFM.id}
+                fm={displayedFM}
+                parentTM={tableMappings.find((tm) => tm.id === displayedFM.table_mapping_id)}
+                allFieldsByTable={allFieldsByTable}
+                onClose={() => setSelectedFM(null)}
+                onApprove={handleApprove}
+                onReject={handleReject}
+                onDelete={handleDeleteFM}
+                onEdit={handleEditFM}
+              />
+            )}
+          </div>
+        </div>
       </div>
 
       {/* Bottom bar */}

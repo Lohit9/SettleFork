@@ -104,14 +104,14 @@ export function wrapFieldRefsInJsonb(sql: string, fieldNames: string[]): string 
       // "Table.Field" form — strip the table prefix, keep only the field part
       const fieldPart = dotIdx !== -1 ? inner.slice(dotIdx + 1) : inner
       if (fieldSet.has(fieldPart)) {
-        return `row_data->>'${fieldPart}'`
+        return `(row_data->>'${fieldPart}')`
       }
       return token // unknown identifier — leave as-is
     }
 
     // ── Bare unquoted identifier ──────────────────────────────────────────
     if (fieldSet.has(token)) {
-      return `row_data->>'${token}'`
+      return `(row_data->>'${token}')`
     }
     return token // SQL keyword or unknown name — leave as-is
   })

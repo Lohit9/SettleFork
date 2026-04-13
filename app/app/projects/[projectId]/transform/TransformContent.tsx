@@ -896,14 +896,24 @@ export default function TransformContent({ projectId, projectName, initialData, 
 
     if (result.success && result.cascadedCount > 0) {
       for (const fmId of selectedFmIds) {
+        const cascaded = result.cascadedTransforms?.find((ct) => ct.fieldMappingId === fmId)
         refreshFieldTransformation(
           fmId,
-          null,
+          cascaded?.transformationId ?? null,
           pkSnapshot.pkTransformSQL,
           'ai',
           `Cascaded from ${pkSnapshot.pkTableName}.${pkSnapshot.pkFieldName}: ${localTransform?.description ?? ''}`,
           'applied'
         )
+      }
+      // Refresh staged preview if the currently selected field was one of the cascaded FK fields
+      if (selectedMappingId && selectedFmIds.includes(selectedMappingId)) {
+        getStagedPreviewForField(selectedMappingId).then((staged) => {
+          if (staged.success && staged.rows) {
+            setStagedPreview({ rows: staged.rows, totalRows: staged.totalRows ?? 0 })
+            setShowStagedPreview(true)
+          }
+        }).catch(() => {})
       }
       showToast(
         `Applied to ${rows.toLocaleString()} rows. Cascaded and applied to ${result.cascadedCount} FK field${result.cascadedCount > 1 ? 's' : ''}.`,

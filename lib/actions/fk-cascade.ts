@@ -165,10 +165,11 @@ export async function cascadeTransformToFKs(
   pkTransformDescription: string,
   pkTableName: string,
   pkFieldName: string
-): Promise<{ success: boolean; cascadedCount: number; error?: string }> {
+): Promise<{ success: boolean; cascadedCount: number; cascadedTransforms: Array<{ fieldMappingId: string; transformationId: string }>; error?: string }> {
   const supabase = await createClient()
 
   let cascadedCount = 0
+  const cascadedTransforms: Array<{ fieldMappingId: string; transformationId: string }> = []
   const cascadeDescription = `Cascaded from ${pkTableName}.${pkFieldName}: ${pkTransformDescription}`
 
   for (const fmId of fkFieldMappingIds) {
@@ -180,6 +181,7 @@ export async function cascadeTransformToFKs(
       .maybeSingle()
 
     let upsertError = false
+    let transId: string | null = null
 
     if (existing) {
       const { error } = await supabase
@@ -192,9 +194,9 @@ export async function cascadeTransformToFKs(
           test_results: null,
         })
         .eq('id', existing.id)
-      if (error) { upsertError = true }
+      if (error) { upsertError = true } else { transId = existing.id }
     } else {
-      const { error } = await supabase
+      const { data: inserted, error } = await supabase
         .from('transformations')
         .insert({
           field_mapping_id: fmId,
@@ -204,7 +206,9 @@ export async function cascadeTransformToFKs(
           status: 'applied',
           test_results: null,
         })
-      if (error) { upsertError = true }
+        .select('id')
+        .single()
+      if (error) { upsertError = true } else { transId = inserted.id }
     }
 
     if (upsertError) continue
@@ -282,9 +286,12 @@ export async function cascadeTransformToFKs(
     }
 
     cascadedCount++
+    if (transId) {
+      cascadedTransforms.push({ fieldMappingId: fmId, transformationId: transId })
+    }
   }
 
-  return { success: true, cascadedCount }
+  return { success: true, cascadedCount, cascadedTransforms }
 }
 
 /**
