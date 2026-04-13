@@ -76,16 +76,16 @@ export default function DataOverviewContent({
         </nav>
       </div>
 
-      {/* Tab content */}
-      <div className="flex-1 overflow-y-auto p-6">
-        {activeTab === 'schema' && (
+      {/* Tab content — all tabs stay mounted; inactive ones are hidden via CSS so local state is preserved */}
+      <div className="flex-1 overflow-y-auto">
+        <div className={activeTab !== 'schema' ? 'hidden' : 'p-6 flex flex-col flex-1 min-h-0'}>
           <SchemaOverview
             projectId={projectId}
             source={schema.source}
             target={schema.target}
           />
-        )}
-        {activeTab === 'preview' && (
+        </div>
+        <div className={activeTab !== 'preview' ? 'hidden' : 'p-6 flex flex-col flex-1 min-h-0'}>
           <DataPreview
             projectId={projectId}
             tables={tables}
@@ -93,8 +93,8 @@ export default function DataOverviewContent({
             archivedAt={archivedAt}
             initialSelectedTableId={selectedPreviewTableId}
           />
-        )}
-        {activeTab === 'query' && (
+        </div>
+        <div className={activeTab !== 'query' ? 'hidden' : 'p-6 flex flex-col flex-1 min-h-0'}>
           <QueryData
             projectId={projectId}
             tables={tables}
@@ -102,15 +102,15 @@ export default function DataOverviewContent({
             initialQuery={initialQuery}
             initialMode={initialQueryMode}
           />
-        )}
-        {activeTab === 'profiling' && (
+        </div>
+        <div className={activeTab !== 'profiling' ? 'hidden' : 'p-6 flex flex-col flex-1 min-h-0'}>
           <DataProfiling
             projectId={projectId}
             tables={tables}
             isArchived={isArchived}
             onNavigateToPreview={handleNavigateToPreview}
           />
-        )}
+        </div>
       </div>
     </div>
   )

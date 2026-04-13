@@ -1,5 +1,6 @@
 'use server'
 
+import { revalidatePath } from 'next/cache'
 import { createClient } from '@/lib/supabase/server'
 import { supabaseAdmin } from '@/lib/supabase/admin'
 import { requireProjectPermission } from '@/lib/actions/role-resolution'
@@ -107,6 +108,8 @@ export async function updateField(
     refreshFieldProfiling(fieldId, updated.data_type, updated.inferred_type ?? null)
       .catch((err) => console.error('[updateField] Profiling refresh failed:', err))
   }
+
+  revalidatePath(`/app/projects/${projectId}/data-overview`)
 
   return { success: true, data: updated as Field }
 }

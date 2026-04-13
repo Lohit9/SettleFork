@@ -107,6 +107,7 @@ export async function signUpWithBotProtection(payload: SignUpPayload): Promise<S
         error: 'Password does not meet requirements. Please use a stronger password.',
       }
     }
+    console.error('[signUpWithBotProtection] Supabase signUp error:', signUpError.message, signUpError)
     return { success: false, error: 'Unable to create account. Please try again.' }
   }
 
