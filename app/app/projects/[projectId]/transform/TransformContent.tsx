@@ -872,7 +872,7 @@ export default function TransformContent({ projectId, projectName, initialData, 
     }
 
     const pkSnapshot = fkCascadeData
-    let result: { success: boolean; cascadedCount: number; error?: string }
+    let result: { success: boolean; cascadedCount: number; cascadedTransforms?: Array<{ fieldMappingId: string; transformationId: string }>; error?: string }
     try {
       result = await cascadeTransformToFKs(
         selectedFmIds,
