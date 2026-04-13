@@ -17,10 +17,10 @@ export default function MidPageCTA() {
         </p>
         <div className="flex flex-wrap items-center justify-center gap-3 pt-2">
           <Link
-            href="/request-access"
+            href="/pricing"
             className="inline-flex items-center justify-center px-6 py-3 rounded-lg bg-[#2358D4] text-white text-sm font-semibold hover:bg-[#1D4ED8] transition-colors"
           >
-            Request Access
+            See Pricing
           </Link>
           <Link
             href="https://calendly.com/settle-ai/demo"

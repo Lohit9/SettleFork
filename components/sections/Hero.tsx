@@ -149,10 +149,10 @@ export default function Hero() {
 
             <div className="flex flex-wrap gap-3 mb-3">
               <Link
-                href="/request-access"
+                href="/pricing"
                 className="bg-[#2358D4] hover:bg-[#1D4ED8] text-white font-semibold px-8 py-3.5 rounded-xl shadow-lg shadow-blue-600/20 hover:-translate-y-0.5 transition-all text-sm"
               >
-                Request Access
+                See Pricing
               </Link>
               <a
                 href="https://calendly.com/settle-ai/demo"

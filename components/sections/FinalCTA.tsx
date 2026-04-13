@@ -15,10 +15,10 @@ export default function FinalCTA() {
 
           <div className="flex flex-wrap justify-center gap-3">
             <Link
-              href="/request-access"
+              href="/pricing"
               className="bg-[#2358D4] hover:bg-[#1D4ED8] text-white font-semibold px-8 py-4 rounded-xl text-base shadow-lg shadow-blue-600/25 hover:-translate-y-0.5 transition-all"
             >
-              Request Access
+              See Pricing
             </Link>
             <a
               href="https://calendly.com/settle-ai/demo"

@@ -278,7 +278,86 @@ export function adminAccessRequestEmail(data: {
   }
 }
 
-// ── 5. Admin notification — new signup ────────────────────────────────────────
+// ── 5. Pricing estimate confirmation (to user) ────────────────────────────────
+
+export function pricingEstimateEmail(
+  firstName: string,
+  priceRange: string,
+  tier: string,
+): { subject: string; html: string } {
+  const isEnterprise = tier === 'enterprise'
+
+  const subject = isEnterprise
+    ? 'Your Settle migration inquiry'
+    : `Your Settle migration estimate: ${priceRange}`
+
+  const body = isEnterprise
+    ? `<p style="margin:0 0 16px;">Hi ${firstName},</p>
+       <p style="margin:0 0 16px;">Thanks for your interest in Settle for your enterprise migration. We'll review your requirements and provide a detailed proposal within 48 hours.</p>
+       <p style="margin:0 0 16px;">In the meantime, you can book a scoping call to discuss your migration in detail.</p>`
+    : `<p style="margin:0 0 16px;">Hi ${firstName},</p>
+       <p style="margin:0 0 16px;">Thanks for using the Settle pricing estimator. Based on your migration details, your estimated range is:</p>
+       <p style="margin:0 0 16px;font-size:28px;font-weight:bold;color:#0F172A;text-align:center;">${priceRange}</p>
+       <p style="margin:0 0 16px;">This includes full platform access, guided setup for your first migration, and complete migration delivery — mapping files, transformation SQL, validation reports, and production-ready load packages.</p>
+       <p style="margin:0 0 16px;">I'll review your details and follow up within 24 hours. If you'd like to get started sooner, book a scoping call below.</p>`
+
+  return {
+    subject,
+    html: emailLayout({
+      body,
+      ctaText: 'Book a Scoping Call',
+      ctaUrl: 'https://calendly.com/settle-ai/demo',
+      signOff: { name: 'Kaan Dincer', title: 'Founder & CEO, Settle' },
+    }),
+  }
+}
+
+// ── 6. Admin notification — new pricing estimate lead ─────────────────────────
+
+interface PricingEstimateFields {
+  name: string
+  email: string
+  company: string
+  role?: string
+  system_type: string
+  source_system_count: string
+  table_count_range: string
+  timeline: string
+  computed_tier: string
+  price_range_shown: string
+}
+
+export function adminPricingEstimateEmail(
+  fields: PricingEstimateFields,
+): { subject: string; html: string } {
+  const isEnterprise = fields.computed_tier === 'enterprise'
+
+  return {
+    subject: isEnterprise
+      ? `🏢 Enterprise Migration Inquiry: ${fields.company}`
+      : `💰 New Pricing Estimate: ${fields.company}`,
+    html: adminEmailLayout({
+      title: isEnterprise ? 'Enterprise Migration Inquiry' : 'New Pricing Estimate',
+      subtitle: `${fields.name} from ${fields.company}`,
+      fields: [
+        { label: 'Name', value: fields.name },
+        { label: 'Email', value: fields.email },
+        { label: 'Company', value: fields.company },
+        { label: 'Role', value: fields.role || '—' },
+        { label: 'System Type', value: fields.system_type },
+        { label: 'Source Systems', value: fields.source_system_count },
+        { label: 'Table Count', value: fields.table_count_range },
+        { label: 'Timeline', value: fields.timeline },
+        { label: 'Computed Tier', value: fields.computed_tier },
+        { label: 'Price Shown', value: fields.price_range_shown },
+      ],
+      ctaText: 'View in Supabase',
+      ctaUrl: 'https://supabase.com/dashboard',
+    }),
+  }
+}
+
+// ── 7. Admin notification — new signup ────────────────────────────────────────
 
 export function adminSignupEmail(data: {
   email: string

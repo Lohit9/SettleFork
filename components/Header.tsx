@@ -5,8 +5,9 @@ import Link from 'next/link'
 import { motion, AnimatePresence } from 'framer-motion'
 
 const NAV_LINKS = [
-  { label: 'How It Works',     href: '/how-it-works' },
-  { label: 'Migrations',  href: '/migrate' },
+  { label: 'How It Works', href: '/how-it-works' },
+  { label: 'Migrations',   href: '/migrate' },
+  { label: 'Pricing',      href: '/pricing' },
 ]
 
 const CALENDLY = 'https://calendly.com/settle-ai/demo'
@@ -54,23 +55,14 @@ export default function Header() {
               Login
             </Link>
 
-            {/* Book a Demo — secondary outlined */}
             <a
               href={CALENDLY}
               target="_blank"
               rel="noopener noreferrer"
-              className="border border-[#CBD5E1] text-[#334155] hover:border-[#2358D4] hover:text-[#2358D4] text-sm font-medium px-5 py-2 rounded-lg transition-all"
+              className="bg-[#2358D4] hover:bg-[#1D4ED8] text-white text-sm font-semibold px-5 py-2 rounded-lg transition-all hover:-translate-y-0.5 hover:shadow-lg hover:shadow-blue-600/25"
             >
               Book a Demo
             </a>
-
-            {/* Request Access — primary, most prominent */}
-            <Link
-              href="/request-access"
-              className="bg-[#2358D4] hover:bg-[#1D4ED8] text-white text-sm font-semibold px-5 py-2 rounded-lg transition-all hover:-translate-y-0.5 hover:shadow-lg hover:shadow-blue-600/25"
-            >
-              Request Access
-            </Link>
           </div>
 
           {/* Mobile hamburger */}
@@ -109,19 +101,12 @@ export default function Header() {
                 </Link>
               ))}
               <div className="pt-2 flex flex-col gap-3">
-                <Link
-                  href="/request-access"
-                  onClick={closeMenu}
-                  className="w-full bg-[#2358D4] hover:bg-[#1D4ED8] text-white text-sm font-semibold px-5 py-3 rounded-lg transition-all text-center"
-                >
-                  Request Access
-                </Link>
                 <a
                   href={CALENDLY}
                   target="_blank"
                   rel="noopener noreferrer"
                   onClick={closeMenu}
-                  className="w-full border border-[#CBD5E1] text-[#334155] text-sm font-medium px-5 py-3 rounded-lg transition-all text-center"
+                  className="w-full bg-[#2358D4] hover:bg-[#1D4ED8] text-white text-sm font-semibold px-5 py-3 rounded-lg transition-all text-center"
                 >
                   Book a Demo
                 </a>
