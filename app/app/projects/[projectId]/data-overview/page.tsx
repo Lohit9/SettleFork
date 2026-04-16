@@ -1,6 +1,7 @@
 import { notFound } from 'next/navigation'
 import { createClient } from '@/lib/supabase/server'
 import { getProjectSchema, getAllTablesForProject } from '@/lib/actions/data-overview'
+import { getProject } from '@/lib/actions/projects'
 import { PageHeader } from '@/components/app/PageHeader'
 import DataOverviewContent from './DataOverviewContent'
 
@@ -26,10 +27,18 @@ export default async function DataOverviewPage({ params, searchParams }: Props) 
   const isArchived = project.status === 'archived'
 
   // Fetch all schema data and table list in parallel
-  const [schema, tables] = await Promise.all([
+  const [schema, tables, fullProject] = await Promise.all([
     getProjectSchema(projectId),
     getAllTablesForProject(projectId),
+    getProject(projectId).catch(() => null),
   ])
+
+  const projectInfo = fullProject ? {
+    projectName: fullProject.name,
+    sourceSystem: fullProject.datasets?.find((d) => d.role === 'source')?.name ?? null,
+    targetSystem: fullProject.datasets?.find((d) => d.role === 'target')?.name ?? null,
+    createdAt: fullProject.created_at,
+  } : undefined
 
   return (
     <div className="flex flex-col flex-1 min-h-0 bg-gray-50">
@@ -37,6 +46,7 @@ export default async function DataOverviewPage({ params, searchParams }: Props) 
         projectName={project.name}
         title="Data Overview"
         subtitle="Explore source and target data structures"
+        projectInfo={projectInfo}
       />
       <DataOverviewContent
         projectId={projectId}

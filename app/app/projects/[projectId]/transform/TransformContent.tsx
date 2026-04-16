@@ -5,6 +5,7 @@ import { useRouter } from 'next/navigation'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { PageHeader } from '@/components/app/PageHeader'
+import { type ProjectInfo } from '@/components/app/ProjectInfoPopover'
 import { Textarea } from '@/components/ui/textarea'
 import {
   RefreshCw,
@@ -65,6 +66,7 @@ interface Props {
   projectName: string
   initialData: TransformPageData
   isArchived?: boolean
+  projectInfo?: ProjectInfo
 }
 
 type LocalStatus = 'draft' | 'tested' | 'applied' | 'stale'
@@ -179,7 +181,7 @@ function getSmartPlaceholder(field: FieldItem): string {
 
 // ── TransformContent ──────────────────────────────────────────────────────────
 
-export default function TransformContent({ projectId, projectName, initialData, isArchived = false }: Props) {
+export default function TransformContent({ projectId, projectName, initialData, isArchived = false, projectInfo }: Props) {
   const router = useRouter()
   const { can } = useProjectRole(projectId)
   const canEdit = can('edit')
@@ -1155,7 +1157,7 @@ export default function TransformContent({ projectId, projectName, initialData, 
   if (!data.hasMappings) {
     return (
       <div className="h-full bg-gray-50 flex flex-col overflow-hidden relative">
-        <PageHeader projectName={projectName} title="Transform" subtitle="Define transformation logic for mapped fields" />
+        <PageHeader projectName={projectName} title="Transform" subtitle="Define transformation logic for mapped fields" projectInfo={projectInfo} />
         <div className="flex-1 flex items-center justify-center p-8">
           <div className="text-center max-w-md">
             <div className="w-16 h-16 bg-gray-100 rounded-full flex items-center justify-center mx-auto mb-4">
@@ -1197,6 +1199,7 @@ export default function TransformContent({ projectId, projectName, initialData, 
         projectName={projectName}
         title="Transform"
         subtitle={`${needsTransformCount} field${needsTransformCount !== 1 ? 's' : ''} require transformation`}
+        projectInfo={projectInfo}
       >
         <div className="flex items-center gap-3 flex-shrink-0">
           {stagingError && (

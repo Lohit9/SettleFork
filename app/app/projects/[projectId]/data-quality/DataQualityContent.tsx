@@ -11,6 +11,7 @@ import { computeReadinessScore } from '@/lib/quality/readiness-score'
 import { CheckCircle, ChevronRight, ExternalLink } from '@/components/icons'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { PageHeader } from '@/components/app/PageHeader'
+import { type ProjectInfo } from '@/components/app/ProjectInfoPopover'
 import { stageAllData } from '@/lib/actions/staging'
 import { getVerifiedFixes } from '@/lib/quality/fix-reconciliation'
 import type { VerifiedFix } from '@/lib/quality/fix-reconciliation'
@@ -60,6 +61,7 @@ interface Props {
   initialFilterStatus?: string
   initialFilterStage?: string
   isArchived?: boolean
+  projectInfo?: ProjectInfo
 }
 
 // ── Small helpers ─────────────────────────────────────────────────────────────
@@ -2729,6 +2731,7 @@ export default function DataQualityContent({
   initialFilterStatus,
   initialFilterStage,
   isArchived = false,
+  projectInfo,
 }: Props) {
   const router = useRouter()
   const { can: canRole } = useProjectRole(projectId)
@@ -3089,7 +3092,7 @@ export default function DataQualityContent({
       )}
 
       {/* Page Header */}
-      <PageHeader projectName={projectName} title="Validate" subtitle="Data quality monitoring and migration readiness">
+      <PageHeader projectName={projectName} title="Validate" subtitle="Data quality monitoring and migration readiness" projectInfo={projectInfo}>
         <div className="flex items-center gap-2 flex-shrink-0">
           {/* Overflow menu — Fix History + Regenerate */}
           <div className="relative" ref={overflowRef}>

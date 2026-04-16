@@ -1,3 +1,5 @@
+import { Fragment } from 'react'
+
 const PHASES = ['Ingestion', 'Mapping', 'Transform', 'Validate', 'Complete'] as const
 
 interface PhaseProgressBarProps {
@@ -10,69 +12,51 @@ export function PhaseProgressBar({
   showLabels = false,
 }: PhaseProgressBarProps) {
   return (
-    <div className="w-full">
-      {/* Dot row — flat siblings: dot · line · dot · line · dot · line · dot · line · dot */}
-      <div className="flex items-center">
-        {PHASES.map((phase, i) => {
-          const phaseNum = i + 1
-          const isCompleted = phaseNum < currentPhase
-          const isCurrent = phaseNum === currentPhase
+    <div className="flex items-start w-full">
+      {PHASES.map((phase, i) => {
+        const phaseNum = i + 1
+        const isCompleted = phaseNum < currentPhase
+        const isCurrent = phaseNum === currentPhase
 
-          return (
-            <div key={phase} className="contents">
-              {/* Connector line before each dot except the first */}
-              {i > 0 && (
-                <div
-                  className={`flex-1 h-px ${
-                    isCompleted
-                      ? 'bg-settle-slate-300'
-                      : 'bg-settle-slate-200'
-                  }`}
-                />
-              )}
-
-              {/* Dot */}
-              <div className="flex flex-col items-center flex-shrink-0">
-                <div
-                  className={`w-2 h-2 rounded-full transition-colors ${
-                    isCompleted
-                      ? 'bg-settle-slate-400'
-                      : isCurrent
-                      ? 'bg-settle-blue-500'
-                      : 'bg-settle-slate-200'
-                  }`}
-                />
-              </div>
-            </div>
-          )
-        })}
-      </div>
-
-      {/* Label row — only rendered when showLabels is true */}
-      {showLabels && (
-        <div className="flex mt-1.5">
-          {PHASES.map((phase, i) => {
-            const phaseNum = i + 1
-            const isCompleted = phaseNum < currentPhase
-            const isCurrent = phaseNum === currentPhase
-
-            return (
+        return (
+          <Fragment key={phase}>
+            <div className="flex flex-col items-center flex-shrink-0">
               <div
-                key={phase}
-                className={`flex-1 text-[10px] text-center leading-none ${
-                  isCurrent
-                    ? 'text-settle-blue-500 font-medium'
-                    : isCompleted
-                    ? 'text-settle-slate-400'
-                    : 'text-settle-slate-300'
+                className={`w-2 h-2 rounded-full transition-colors ${
+                  isCompleted
+                    ? 'bg-settle-slate-400'
+                    : isCurrent
+                    ? 'bg-settle-blue-500'
+                    : 'bg-settle-slate-200'
                 }`}
-              >
-                {phase}
-              </div>
-            )
-          })}
-        </div>
-      )}
+              />
+              {showLabels && (
+                <span
+                  className={`text-[10px] text-center mt-1.5 w-16 leading-tight block ${
+                    isCurrent
+                      ? 'text-settle-blue-500 font-medium'
+                      : isCompleted
+                      ? 'text-settle-slate-400'
+                      : 'text-settle-slate-300'
+                  }`}
+                >
+                  {phase}
+                </span>
+              )}
+            </div>
+
+            {i < PHASES.length - 1 && (
+              <div
+                className={`flex-1 h-px self-start mt-[3px] ${
+                  phaseNum + 1 < currentPhase
+                    ? 'bg-settle-slate-300'
+                    : 'bg-settle-slate-200'
+                }`}
+              />
+            )}
+          </Fragment>
+        )
+      })}
     </div>
   )
 }

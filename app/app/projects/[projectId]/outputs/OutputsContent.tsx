@@ -1,7 +1,6 @@
 'use client'
 
 import { useState, useTransition, useCallback } from 'react'
-import { useRouter } from 'next/navigation'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import {
@@ -26,6 +25,7 @@ import {
 import { Link2, Code, ShieldCheck, Database, Settings, Copy, Check, Package, PackageOpen, Eye, EyeOff, ClipboardCheck, BarChart2, GitMerge, Code2, Clock, BookOpen, FileText as FileTextLucide, Info, AlertTriangle } from 'lucide-react'
 import { Checkbox } from '@/components/ui/checkbox'
 import { PageHeader } from '@/components/app/PageHeader'
+import { type ProjectInfo } from '@/components/app/ProjectInfoPopover'
 import {
   generateGoldStandardCSVs,
   generateSQLLoadScripts,
@@ -44,7 +44,6 @@ import {
 } from '@/lib/actions/execution-package'
 import type { CompartmentalizedFile } from '@/lib/actions/execution-package'
 import { generateMigrationRunbook } from '@/lib/actions/migration-runbook'
-import { markProjectComplete } from '@/lib/actions/projects'
 import { SQL_DIALECTS } from '@/lib/types/database'
 import type { SqlDialect, ExecutionPackageFormat } from '@/lib/types/database'
 import { useProjectRole } from '@/lib/hooks/useProjectRole'
@@ -58,6 +57,7 @@ interface Props {
   initialData: OutputsPageData
   isArchived?: boolean
   targetDbType?: SqlDialect
+  projectInfo?: ProjectInfo
 }
 
 interface DeliverableState {
@@ -177,8 +177,7 @@ function fmtDateTime(iso: string) {
 
 // RoleTooltip is imported from @/components/app/RoleTooltip
 
-export default function OutputsContent({ projectId, projectName, initialData, isArchived = false, targetDbType = 'postgresql' }: Props) {
-  const router = useRouter()
+export default function OutputsContent({ projectId, projectName, initialData, isArchived = false, targetDbType = 'postgresql', projectInfo }: Props) {
   const { can: canRole } = useProjectRole(projectId)
   const canEdit = canRole('edit')
   const [data] = useState<OutputsPageData>(initialData)
@@ -196,7 +195,6 @@ export default function OutputsContent({ projectId, projectName, initialData, is
   const [goldFormat, setGoldFormat] = useState<'csv' | 'sql'>('csv')
   const [goldFiles, setGoldFiles] = useState<GeneratedFile[]>([])
   const [isGeneratingGold, startGeneratingGold] = useTransition()
-  const [isCompleting, startCompleting] = useTransition()
   const [goldProgress, setGoldProgress] = useState<string | null>(null)
 
   // Deliverables: keyed by `type_format`
@@ -758,10 +756,10 @@ export default function OutputsContent({ projectId, projectName, initialData, is
         </div>
       )}
 
-      <PageHeader projectName={projectName} title="Migration Center" subtitle="Your migration deliverables and project status" />
+      <PageHeader projectName={projectName} title="Migration Center" subtitle="Your migration deliverables and project status" projectInfo={projectInfo} />
 
       <div className="flex-1 overflow-auto">
-      <div className="max-w-5xl mx-auto p-6 space-y-6">
+      <div className="max-w-5xl mx-auto p-6 pb-16 space-y-6">
 
         {/* ════════════════════════════════════════════════════
             SECTION 1 — MIGRATION STATUS DASHBOARD
@@ -1523,7 +1521,7 @@ export default function OutputsContent({ projectId, projectName, initialData, is
             SECTION 4 — DELIVERABLE PACKAGE
         ════════════════════════════════════════════════════ */}
         <div>
-          <div className="flex items-start justify-between mb-4">
+          <div className="flex items-end justify-between mb-2">
             <div>
               <h2 className="text-lg font-semibold text-gray-900">Deliverable Package</h2>
               <p className="text-sm text-gray-500 mt-0.5">Migration documentation and reports for stakeholders, QA, and project records</p>
@@ -1531,7 +1529,7 @@ export default function OutputsContent({ projectId, projectName, initialData, is
             {!isArchived && (
               <RoleTooltip allowed={canEdit} requiredRole="Editor">
                 <button
-                  className="text-xs text-settle-slate-500 hover:text-settle-slate-700 transition-colors flex items-center gap-1.5 disabled:opacity-40 flex-shrink-0 mt-1"
+                  className="text-xs text-settle-slate-500 hover:text-settle-slate-700 transition-colors flex items-center gap-1.5 disabled:opacity-40 flex-shrink-0"
                   onClick={handleGenerateAll}
                   disabled={generatingKey !== null || !canEdit}
                 >
@@ -1617,44 +1615,6 @@ export default function OutputsContent({ projectId, projectName, initialData, is
                 />
               </div>
             </div>
-          </div>
-        </div>
-
-        {/* ════════════════════════════════════════════════════
-            NEXT STEPS
-        ════════════════════════════════════════════════════ */}
-        <div className="bg-white border border-settle-slate-200 rounded-xl p-5">
-          <h3 className="text-base font-semibold text-gray-900 mb-4">Next Steps</h3>
-          <div className="space-y-3">
-            {[
-              'Review all outputs with your migration team and stakeholders',
-              'Address any blocking issues identified in the readiness report',
-              'Use the Gold Standard files to execute a dry-run load in your test environment',
-              'Validate record counts and data integrity after the test load',
-              'Schedule production cutover once the test load is verified',
-            ].map((step, i) => (
-              <div key={i} className="flex items-start gap-3">
-                <div className="w-5 h-5 rounded-full border border-settle-slate-200 text-settle-slate-500 text-[10px] font-medium flex items-center justify-center flex-shrink-0 mt-0.5">
-                  {i + 1}
-                </div>
-                <p className="text-sm text-gray-700">{step}</p>
-              </div>
-            ))}
-          </div>
-          <div className="mt-4 pt-4 border-t border-settle-slate-100">
-            <Button
-              onClick={() =>
-                startCompleting(async () => {
-                  await markProjectComplete(projectId)
-                  router.push('/app/projects')
-                })
-              }
-              disabled={isCompleting}
-              className="w-full gap-2 bg-green-600 hover:bg-green-700 text-white justify-center"
-            >
-              <CheckCircle2 className="w-4 h-4" />
-              {isCompleting ? 'Completing…' : 'Mark Project as Complete'}
-            </Button>
           </div>
         </div>
 

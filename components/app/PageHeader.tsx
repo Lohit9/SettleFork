@@ -1,11 +1,14 @@
+import { ProjectInfoPopover, type ProjectInfo } from '@/components/app/ProjectInfoPopover'
+
 interface PageHeaderProps {
   projectName: string
   title: string
   subtitle?: string
+  projectInfo?: ProjectInfo
   children?: React.ReactNode
 }
 
-export function PageHeader({ projectName, title, subtitle, children }: PageHeaderProps) {
+export function PageHeader({ projectName, title, subtitle, projectInfo, children }: PageHeaderProps) {
   return (
     <div className="bg-white border-b border-gray-200 pl-2 pr-6 min-h-[60px] flex items-center justify-between gap-4 flex-shrink-0">
       <div className="flex items-center gap-0 min-w-0">
@@ -17,9 +20,12 @@ export function PageHeader({ projectName, title, subtitle, children }: PageHeade
           </>
         )}
       </div>
-      {children && (
+      {(children || projectInfo) && (
         <div className="flex items-center gap-2 flex-shrink-0">
           {children}
+          {projectInfo && (
+            <ProjectInfoPopover info={projectInfo} />
+          )}
         </div>
       )}
     </div>

@@ -59,16 +59,6 @@ function AutoArchiveCountdown({ completedAt }: { completedAt: string | null }) {
 function ProjectCard({ project, onUpdate }: { project: ProjectWithStats; onUpdate: () => void }) {
   const isCompleted = project.status === 'completed'
   const isArchived = project.status === 'archived'
-  const score = project.readinessScore
-
-  const scoreColor =
-    score === null
-      ? 'text-gray-400'
-      : score >= 90
-        ? 'text-green-600'
-        : score >= 60
-          ? 'text-amber-500'
-          : 'text-red-500'
 
   // Bottom stats chips — not shown for archived (data is purged)
   const stats: { label: string; color?: string }[] = []
@@ -133,14 +123,6 @@ function ProjectCard({ project, onUpdate }: { project: ProjectWithStats; onUpdat
             )}
           </p>
         </div>
-
-        {/* Readiness score — only shown for non-archived when meaningfully > 0 */}
-        {!isArchived && score !== null && score > 0 && (
-          <div className="text-right flex-shrink-0">
-            <div className={`text-2xl font-semibold leading-none ${scoreColor}`}>{score}%</div>
-            <div className="text-xs text-gray-400 mt-0.5">Readiness</div>
-          </div>
-        )}
       </div>
 
       {/* Phase progress bar */}

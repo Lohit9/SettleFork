@@ -5,6 +5,7 @@ import { useRouter } from 'next/navigation'
 import { Check, CheckCircle, Pencil, X, ChevronDown, ChevronRight, ArrowRight, Plus } from '@/components/icons'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { PageHeader } from '@/components/app/PageHeader'
+import { type ProjectInfo } from '@/components/app/ProjectInfoPopover'
 import {
   updateFieldMappingStatus,
   editFieldMapping,
@@ -43,6 +44,7 @@ interface Props {
   projectId: string
   projectName: string
   initialData: MappingsResult | null
+  projectInfo?: ProjectInfo
 }
 
 type FilterTab = 'all' | 'needs_review' | 'approved' | 'unmapped' | 'many_to_one' | 'one_to_many'
@@ -2163,7 +2165,7 @@ function UnmappedView({
 
 type ToastState = { message: string; type: 'success' | 'error' }
 
-export default function MappingContent({ projectId, projectName, initialData }: Props) {
+export default function MappingContent({ projectId, projectName, initialData, projectInfo }: Props) {
   const router = useRouter()
   const { can: canRole } = useProjectRole(projectId)
   const canEdit = canRole('edit')
@@ -2667,7 +2669,7 @@ export default function MappingContent({ projectId, projectName, initialData }: 
             {toast.message}
           </div>
         )}
-        <PageHeader projectName={projectName} title="Mapping" subtitle="Review and approve field mappings" />
+        <PageHeader projectName={projectName} title="Mapping" subtitle="Review and approve field mappings" projectInfo={projectInfo} />
         <div className="flex-1 overflow-auto">
         <div className="px-6 py-8 max-w-2xl mx-auto">
         <div className="text-center mb-8">
@@ -2706,7 +2708,7 @@ export default function MappingContent({ projectId, projectName, initialData }: 
           {toast.message}
         </div>
       )}
-      <PageHeader projectName={projectName} title="Mapping" subtitle="Review and approve field mappings" />
+      <PageHeader projectName={projectName} title="Mapping" subtitle="Review and approve field mappings" projectInfo={projectInfo} />
       <div className="flex-1 overflow-auto">
       <div className="px-6 py-6 space-y-6">
       {/* Progress bar */}
