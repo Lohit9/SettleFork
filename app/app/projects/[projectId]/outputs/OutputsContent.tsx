@@ -23,7 +23,7 @@ import {
   Sparkles,
   FileText,
 } from '@/components/icons'
-import { Link2, Code, ShieldCheck, Database, Settings, Copy, Check, PackageOpen, Eye, EyeOff, ClipboardCheck, BarChart2, GitMerge, Code2, Clock, BookOpen, FileText as FileTextLucide, Info, AlertTriangle } from 'lucide-react'
+import { Link2, Code, ShieldCheck, Database, Settings, Copy, Check, Package, PackageOpen, Eye, EyeOff, ClipboardCheck, BarChart2, GitMerge, Code2, Clock, BookOpen, FileText as FileTextLucide, Info, AlertTriangle } from 'lucide-react'
 import { Checkbox } from '@/components/ui/checkbox'
 import { PageHeader } from '@/components/app/PageHeader'
 import {
@@ -278,6 +278,9 @@ export default function OutputsContent({ projectId, projectName, initialData, is
   const [selectedFiles, setSelectedFiles] = useState<Set<string>>(new Set())
   // Selective download is in progress
   const [selectiveDownloading, setSelectiveDownloading] = useState(false)
+  // Per-table file list collapse/expand
+  const [fileListExpanded, setFileListExpanded] = useState(false)
+  const VISIBLE_FILE_COUNT = 4
 
   // Decisions log drawer
   const [showDecisionsDrawer, setShowDecisionsDrawer] = useState(false)
@@ -739,11 +742,9 @@ export default function OutputsContent({ projectId, projectName, initialData, is
   // ── Computed values ─────────────────────────────────────────────────────
 
   const { phases, metrics, decisions, outstanding, existingOutputs } = data
-  const previewDecisions = decisions.slice(0, 3)
   const filteredDecisions = decisionsTypeFilter === 'all'
     ? decisions
     : decisions.filter((d) => d.type === decisionsTypeFilter)
-  const hasOutstanding = outstanding.unmappedSourceFields > 0 || outstanding.blockingIssues > 0 || outstanding.fieldsNeedingTransformWork > 0 || outstanding.untestedTransforms > 0 || outstanding.testedTransforms > 0
   const canGenerateGold = data.hasMappings && data.hasSourceData
 
   // ── Render ──────────────────────────────────────────────────────────────
@@ -768,165 +769,134 @@ export default function OutputsContent({ projectId, projectName, initialData, is
         <div>
 
           {/* ── Compact stat cards ─────────────────────────────────────────── */}
-          <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-4">
-            {/* Migration Readiness — headline metric */}
-            <div className="rounded-xl border border-gray-200 bg-white p-5">
-              <div className="flex items-center gap-1.5 mb-2">
-                <p className="text-xs font-medium text-gray-500 uppercase tracking-wide">Migration Readiness</p>
+          <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 items-stretch mb-4">
+            {/* Card 1 — Mapping Coverage */}
+            <div className="rounded-xl border border-settle-slate-200 bg-white p-4 flex flex-col justify-between gap-3">
+              <div>
+                <p className="text-xs font-medium text-settle-slate-400 uppercase tracking-wide mb-2">Mapping Coverage</p>
+                <div className="flex items-baseline gap-1">
+                  <span className="text-2xl font-semibold text-settle-slate-900">{metrics.approvedFieldMappings}</span>
+                  <span className="text-sm text-settle-slate-400">/ {metrics.totalSourceFields}</span>
+                </div>
+                {outstanding.unmappedSourceFields > 0 ? (
+                  <p className="text-xs text-settle-slate-400 mt-1">{outstanding.unmappedSourceFields} unmapped</p>
+                ) : (
+                  <p className="text-xs text-green-600 mt-1">All fields mapped</p>
+                )}
+                <div className="mt-2 h-0.5 bg-settle-slate-100 rounded-full overflow-hidden">
+                  <div className="h-full bg-settle-slate-400 rounded-full" style={{ width: `${metrics.totalSourceFields > 0 ? Math.round((metrics.approvedFieldMappings / metrics.totalSourceFields) * 100) : 0}%` }} />
+                </div>
               </div>
-              <div className="flex items-baseline gap-1.5">
-                <span className={`text-2xl font-semibold ${readinessColor(metrics.readinessStatus)}`}>{metrics.readinessScore}%</span>
-                <span className={`text-sm font-medium ${readinessColor(metrics.readinessStatus)}`}>
-                  {metrics.readinessStatus === 'ready' ? 'Ready' : metrics.readinessStatus === 'at_risk' ? 'At Risk' : 'Not Ready'}
-                </span>
-              </div>
-            </div>
-
-            {/* Mapping Coverage */}
-            <div className="rounded-xl border border-gray-200 bg-white p-5">
-              <div className="flex items-center gap-1.5 mb-2">
-                <p className="text-xs font-medium text-gray-500 uppercase tracking-wide">Mapping Coverage</p>
-              </div>
-              <div className="flex items-baseline gap-1">
-                <span className="text-2xl font-semibold text-gray-900">{metrics.approvedFieldMappings}</span>
-                <span className="text-sm text-gray-400">/ {metrics.totalSourceFields}</span>
-              </div>
-              <div className="mt-2 h-1.5 bg-gray-100 rounded-full overflow-hidden">
-                <div className="h-full bg-primary rounded-full" style={{ width: `${metrics.totalSourceFields > 0 ? Math.round((metrics.approvedFieldMappings / metrics.totalSourceFields) * 100) : 0}%` }} />
+              <div className="border-t border-settle-slate-100 pt-2.5">
+                <a href={`/app/projects/${projectId}/mapping`} className="text-xs font-medium text-settle-blue-500 hover:text-settle-blue-700 transition-colors inline-flex items-center gap-1">
+                  Go to Mapping
+                  <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><line x1="5" y1="12" x2="19" y2="12"/><polyline points="12 5 19 12 12 19"/></svg>
+                </a>
               </div>
             </div>
 
-            {/* Quality Issues */}
-            <div className="rounded-xl border border-gray-200 bg-white p-5">
-              <div className="flex items-center gap-1.5 mb-2">
-                <p className="text-xs font-medium text-gray-500 uppercase tracking-wide">Quality Issues</p>
-              </div>
-              {metrics.openBlocking === 0 && metrics.openWarnings === 0 ? (
-                <span className="text-2xl font-semibold text-green-600">Clean</span>
-              ) : (
-                <div className="flex items-baseline gap-2 flex-wrap">
-                  {metrics.openBlocking > 0 && (
-                    <>
-                      <span className="text-2xl font-semibold text-red-600">{metrics.openBlocking}</span>
-                      <span className="text-sm text-red-600">blocking</span>
-                    </>
+            {/* Card 2 — Transforms */}
+            <div className="rounded-xl border border-settle-slate-200 bg-white p-4 flex flex-col justify-between gap-3">
+              <div>
+                <p className="text-xs font-medium text-settle-slate-400 uppercase tracking-wide mb-2">Transforms</p>
+                <div className="flex items-baseline gap-1">
+                  <span className="text-2xl font-semibold text-settle-slate-900">{metrics.completedTransforms}</span>
+                  <span className="text-sm text-settle-slate-400">/ {metrics.totalTransforms}</span>
+                </div>
+                <div className="flex items-center gap-1.5 mt-1 flex-wrap">
+                  {outstanding.fieldsNeedingTransformWork > 0 && (
+                    <p className="text-xs text-settle-slate-400">{outstanding.fieldsNeedingTransformWork} need work</p>
                   )}
-                  {metrics.openWarnings > 0 && (
-                    <>
-                      {metrics.openBlocking > 0 && <span className="text-gray-300">·</span>}
-                      <span className="text-sm text-amber-600">{metrics.openWarnings} warnings</span>
-                    </>
+                  {outstanding.fieldsNeedingTransformWork > 0 && (outstanding.untestedTransforms > 0 || outstanding.testedTransforms > 0) && (
+                    <span className="text-settle-slate-300 text-xs">·</span>
+                  )}
+                  {outstanding.untestedTransforms > 0 && (
+                    <p className="text-xs text-settle-slate-400">{outstanding.untestedTransforms} untested</p>
                   )}
                 </div>
-              )}
+                {metrics.totalTransforms > 0 && (
+                  <div className="mt-2 h-0.5 bg-settle-slate-100 rounded-full overflow-hidden">
+                    <div className="h-full bg-settle-slate-400 rounded-full" style={{ width: `${Math.round((metrics.completedTransforms / metrics.totalTransforms) * 100)}%` }} />
+                  </div>
+                )}
+              </div>
+              <div className="border-t border-settle-slate-100 pt-2.5">
+                <a href={`/app/projects/${projectId}/transform`} className="text-xs font-medium text-settle-blue-500 hover:text-settle-blue-700 transition-colors inline-flex items-center gap-1">
+                  Go to Transform
+                  <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><line x1="5" y1="12" x2="19" y2="12"/><polyline points="12 5 19 12 12 19"/></svg>
+                </a>
+              </div>
             </div>
 
-            {/* Transforms */}
-            <div className="rounded-xl border border-gray-200 bg-white p-5">
-              <div className="flex items-center gap-1.5 mb-2">
-                <p className="text-xs font-medium text-gray-500 uppercase tracking-wide">Transforms</p>
+            {/* Card 3 — Quality Issues */}
+            <div className="rounded-xl border border-settle-slate-200 bg-white p-4 flex flex-col justify-between gap-3">
+              <div>
+                <p className="text-xs font-medium text-settle-slate-400 uppercase tracking-wide mb-2">Quality Issues</p>
+                {metrics.openBlocking === 0 && metrics.openWarnings === 0 ? (
+                  <span className="text-2xl font-semibold text-green-600">Clean</span>
+                ) : (
+                  <div className="flex items-baseline gap-2 flex-wrap">
+                    {metrics.openBlocking > 0 && (
+                      <>
+                        <span className="text-2xl font-semibold text-red-600">{metrics.openBlocking}</span>
+                        <span className="text-sm text-red-600">blocking</span>
+                      </>
+                    )}
+                    {metrics.openWarnings > 0 && (
+                      <>
+                        {metrics.openBlocking > 0 && <span className="text-settle-slate-300">·</span>}
+                        <span className="text-sm text-amber-600">{metrics.openWarnings} warnings</span>
+                      </>
+                    )}
+                  </div>
+                )}
               </div>
-              <div className="flex items-baseline gap-1">
-                <span className="text-2xl font-semibold text-gray-900">{metrics.completedTransforms}</span>
-                <span className="text-sm text-gray-400">/ {metrics.totalTransforms}</span>
+              <div className="border-t border-settle-slate-100 pt-2.5">
+                <a href={`/app/projects/${projectId}/data-quality`} className="text-xs font-medium text-settle-blue-500 hover:text-settle-blue-700 transition-colors inline-flex items-center gap-1">
+                  Go to Validate
+                  <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><line x1="5" y1="12" x2="19" y2="12"/><polyline points="12 5 19 12 12 19"/></svg>
+                </a>
               </div>
-              {metrics.totalTransforms > 0 && (
-                <div className="mt-2 h-1.5 bg-gray-100 rounded-full overflow-hidden">
-                  <div className="h-full bg-primary rounded-full" style={{ width: `${Math.round((metrics.completedTransforms / metrics.totalTransforms) * 100)}%` }} />
+            </div>
+
+            {/* Card 4 — Migration Readiness */}
+            <div className="rounded-xl border border-settle-slate-200 bg-white p-4 flex flex-col justify-between gap-3">
+              <div>
+                <p className="text-xs font-medium text-settle-slate-400 uppercase tracking-wide mb-2">Migration Readiness</p>
+                <div className="flex items-baseline gap-1.5">
+                  <span className={`text-2xl font-semibold ${readinessColor(metrics.readinessStatus)}`}>{metrics.readinessScore}%</span>
+                  <span className={`text-sm font-medium ${readinessColor(metrics.readinessStatus)}`}>
+                    {metrics.readinessStatus === 'ready' ? 'Ready' : metrics.readinessStatus === 'at_risk' ? 'At Risk' : 'Not Ready'}
+                  </span>
                 </div>
-              )}
+              </div>
+              <div className="border-t border-settle-slate-100 pt-2.5">
+                <button
+                  onClick={() => {
+                    const el = document.getElementById('readiness-report-section')
+                    el?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+                  }}
+                  className="text-xs font-medium text-settle-blue-500 hover:text-settle-blue-700 transition-colors inline-flex items-center gap-1"
+                >
+                  View Readiness Report
+                  <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><line x1="5" y1="12" x2="19" y2="12"/><polyline points="12 5 19 12 12 19"/></svg>
+                </button>
+              </div>
             </div>
           </div>
 
-          {/* ── Outstanding items ──────────────────────────────────────────── */}
-          {hasOutstanding ? (
-            <div className="bg-white border border-settle-slate-200 rounded-xl p-4 mb-4">
-              <div className="flex items-center gap-2 mb-2.5">
-                <AlertCircle className="w-4 h-4 text-settle-slate-400 flex-shrink-0" />
-                <span className="text-sm font-semibold text-settle-slate-900">Outstanding Items</span>
-              </div>
-              <div className="space-y-2">
-                {outstanding.unmappedSourceFields > 0 && (
-                  <div className="flex items-center justify-between">
-                    <div className="flex items-center gap-2">
-                      <span className="w-1.5 h-1.5 rounded-full bg-settle-slate-400 flex-shrink-0" />
-                      <span className="text-sm text-settle-slate-700">{outstanding.unmappedSourceFields} unmapped source field{outstanding.unmappedSourceFields !== 1 ? 's' : ''}</span>
-                    </div>
-                    <a href={`/app/projects/${projectId}/mapping`} className="text-xs text-settle-blue-500 hover:text-settle-blue-700 font-medium transition-colors">Go to Mapping →</a>
-                  </div>
-                )}
-                {outstanding.blockingIssues > 0 && (
-                  <div className="flex items-center justify-between">
-                    <div className="flex items-center gap-2">
-                      <span className="w-1.5 h-1.5 rounded-full bg-settle-slate-400 flex-shrink-0" />
-                      <span className="text-sm text-settle-slate-700">{outstanding.blockingIssues} blocking quality issue{outstanding.blockingIssues !== 1 ? 's' : ''}</span>
-                    </div>
-                    <a href={`/app/projects/${projectId}/data-quality`} className="text-xs text-settle-blue-500 hover:text-settle-blue-700 font-medium transition-colors">Go to Validate →</a>
-                  </div>
-                )}
-                {outstanding.fieldsNeedingTransformWork > 0 && (
-                  <div className="flex items-center justify-between">
-                    <div className="flex items-center gap-2">
-                      <span className="w-1.5 h-1.5 rounded-full bg-settle-slate-400 flex-shrink-0" />
-                      <span className="text-sm text-settle-slate-700">{outstanding.fieldsNeedingTransformWork} field{outstanding.fieldsNeedingTransformWork !== 1 ? 's' : ''} need{outstanding.fieldsNeedingTransformWork === 1 ? 's' : ''} transformation</span>
-                    </div>
-                    <a href={`/app/projects/${projectId}/transform`} className="text-xs text-settle-blue-500 hover:text-settle-blue-700 font-medium transition-colors">Go to Transform →</a>
-                  </div>
-                )}
-                {outstanding.untestedTransforms > 0 && (
-                  <div className="flex items-center justify-between">
-                    <div className="flex items-center gap-2">
-                      <span className="w-1.5 h-1.5 rounded-full bg-settle-slate-400 flex-shrink-0" />
-                      <span className="text-sm text-settle-slate-700">{outstanding.untestedTransforms} transform{outstanding.untestedTransforms !== 1 ? 's' : ''} need{outstanding.untestedTransforms === 1 ? 's' : ''} testing</span>
-                    </div>
-                    <a href={`/app/projects/${projectId}/transform`} className="text-xs text-settle-blue-500 hover:text-settle-blue-700 font-medium transition-colors">Go to Transform →</a>
-                  </div>
-                )}
-                {outstanding.testedTransforms > 0 && (
-                  <div className="flex items-center justify-between">
-                    <div className="flex items-center gap-2">
-                      <span className="w-1.5 h-1.5 rounded-full bg-settle-slate-400 flex-shrink-0" />
-                      <span className="text-sm text-settle-slate-700">{outstanding.testedTransforms} transform{outstanding.testedTransforms !== 1 ? 's' : ''} need{outstanding.testedTransforms === 1 ? 's' : ''} applying</span>
-                    </div>
-                    <a href={`/app/projects/${projectId}/transform`} className="text-xs text-settle-blue-500 hover:text-settle-blue-700 font-medium transition-colors">Go to Transform →</a>
-                  </div>
-                )}
-              </div>
-            </div>
-          ) : (
-            <div className="flex items-center gap-2 text-green-600 mb-4">
-              <CheckCircle2 className="w-4 h-4 flex-shrink-0" />
-              <span className="text-sm font-medium">All items resolved — ready to generate outputs</span>
-            </div>
-          )}
-
           {/* ── Decisions log ──────────────────────────────────────────────── */}
           {decisions.length > 0 && (
-            <div className="bg-white border border-gray-200 rounded-xl shadow-sm p-5">
-              <div className="flex items-center justify-between mb-3">
-                <h3 className="text-sm font-semibold text-gray-800">Decisions & Actions Log</h3>
-                <span className="text-xs text-gray-400">{data.totalDecisions} total</span>
+            <button
+              onClick={() => setShowDecisionsDrawer(true)}
+              className="w-full flex items-center justify-between px-4 py-3 bg-white border border-settle-slate-200 rounded-xl hover:bg-settle-slate-50 transition-colors group"
+            >
+              <div className="flex items-center gap-2">
+                <span className="text-sm font-medium text-settle-slate-700">Decisions & Actions Log</span>
+                <span className="text-xs text-settle-slate-400">· {data.totalDecisions} total</span>
               </div>
-              <div className="space-y-2">
-                {previewDecisions.map((entry) => (
-                  <div key={entry.id} className="flex items-start gap-2.5">
-                    <DecisionIcon type={entry.type} />
-                    <div className="flex-1 min-w-0">
-                      <p className="text-xs text-gray-700 truncate">{entry.label}</p>
-                    </div>
-                    <span className="text-[10px] text-gray-400 flex-shrink-0">{fmtDate(entry.timestamp)}</span>
-                  </div>
-                ))}
-              </div>
-              {decisions.length > 3 && (
-                <button
-                  className="mt-3 text-xs text-blue-600 hover:text-blue-700 font-medium"
-                  onClick={() => setShowDecisionsDrawer(true)}
-                >
-                  View all {decisions.length} entries →
-                </button>
-              )}
-            </div>
+              <ChevronRight className="w-3.5 h-3.5 text-settle-slate-400 group-hover:text-settle-slate-600 transition-colors" />
+            </button>
           )}
 
           {/* Decisions log drawer */}
@@ -1002,13 +972,15 @@ export default function OutputsContent({ projectId, projectName, initialData, is
         </div>
 
         <div>
-          <div className="flex items-center gap-2 mb-3">
-            <FileText className="w-5 h-5 text-blue-600" />
-            <h2 className="text-lg font-semibold text-gray-900">Migration Execution Package</h2>
+          <div className="flex items-center gap-3 mb-3">
+            <div className="flex items-center justify-center w-8 h-8 rounded-md bg-settle-slate-50 border border-settle-slate-200 flex-shrink-0">
+              <Package size={15} className="text-settle-slate-500" />
+            </div>
+            <h3 className="text-base font-semibold text-settle-slate-900">Migration Execution Package</h3>
           </div>
 
           {/* Accent card: left-border + subtle blue tint to signal primary deliverable */}
-          <div className="bg-gradient-to-r from-blue-50/60 to-white border border-blue-200 border-l-4 border-l-blue-600 rounded-xl shadow-sm p-6">
+          <div className="bg-white border border-settle-slate-200 rounded-xl p-5">
 
             <p className="text-sm text-gray-600 mb-5">
               Complete SQL migration script with extract queries, transformation logic, load scripts,
@@ -1029,8 +1001,8 @@ export default function OutputsContent({ projectId, projectName, initialData, is
               </div>
             )}
 
-            {/* Generation Settings — dialect + format selectors */}
-            {!isArchived && (outputFormat === 'single_file' ? executionPackage.status !== 'generating' : compartmentalized.status !== 'generating') && (
+            {/* Generation Settings — dialect + format selectors (hidden for per_table generated — toolbar takes over) */}
+            {!isArchived && (outputFormat === 'single_file' ? executionPackage.status !== 'generating' : compartmentalized.status !== 'generating' && compartmentalized.status !== 'generated') && (
               <div className="mb-5 flex flex-wrap items-end gap-4">
                 <div>
                   <label className="block text-xs font-medium text-gray-500 mb-1.5">Target SQL Dialect</label>
@@ -1183,78 +1155,117 @@ export default function OutputsContent({ projectId, projectName, initialData, is
 
                 {/* GENERATED */}
                 {compartmentalized.status === 'generated' && (
-                  <div>
-                    {/* Header row */}
-                    <div className="flex items-center justify-between mb-4 flex-wrap gap-3">
-                      <div className="flex items-center gap-2 flex-wrap">
-                        <CheckCircle2 className="w-4 h-4 text-green-600 flex-shrink-0" />
-                        <span className="text-sm font-medium text-green-700">
-                          Generated Scripts ({compartmentalized.files.length} files)
-                        </span>
-                        {compartmentalized.version && (
-                          <span className="text-xs text-gray-500 bg-gray-100 px-2 py-0.5 rounded-full border border-gray-200">
-                            v{compartmentalized.version}
-                          </span>
+                  <div className="border border-settle-slate-200 rounded-lg overflow-hidden">
+                    {/* Toolbar row */}
+                    <div className="flex items-center justify-between gap-3 px-4 py-2.5 border-b border-settle-slate-100 bg-settle-slate-50/50">
+                      <div className="flex items-center gap-2">
+                        <Select value={sqlDialect} onValueChange={(v) => setSqlDialect(v as SqlDialect)}>
+                          <SelectTrigger className="h-7 text-xs w-48 bg-white">
+                            <SelectValue />
+                          </SelectTrigger>
+                          <SelectContent>
+                            {SQL_DIALECTS.map((d) => (
+                              <SelectItem key={d.id} value={d.id}>
+                                <span className="font-medium text-xs">{d.label}</span>
+                              </SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
+
+                        <div className="flex items-center bg-white border border-settle-slate-200 rounded-md overflow-hidden">
+                          {(['per_table', 'single_file'] as const).map((fmt) => (
+                            <button
+                              key={fmt}
+                              onClick={() => setOutputFormat(fmt)}
+                              className={`px-2.5 py-1 text-xs font-medium transition-colors ${
+                                outputFormat === fmt
+                                  ? 'bg-settle-slate-900 text-white'
+                                  : 'text-settle-slate-500 hover:text-settle-slate-700'
+                              }`}
+                            >
+                              {fmt === 'single_file' ? 'Single File' : 'Per-Table'}
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+
+                      <div className="flex items-center gap-2">
+                        {!isArchived && (
+                          <RoleTooltip allowed={canEdit} requiredRole="Editor">
+                            <button
+                              onClick={handleGenerateExecutionPackage}
+                              disabled={!canEdit}
+                              className="text-xs text-settle-slate-500 hover:text-settle-slate-700 transition-colors flex items-center gap-1 disabled:opacity-40"
+                            >
+                              <RefreshCw className="w-3 h-3" />
+                              Regenerate
+                            </button>
+                          </RoleTooltip>
                         )}
+                        <button
+                          onClick={handleDownloadSelected}
+                          disabled={selectedFiles.size === 0 || selectiveDownloading}
+                          className="text-xs font-medium px-3 py-1.5 rounded-md border border-settle-slate-200 bg-white text-settle-slate-600 hover:bg-settle-slate-50 disabled:opacity-40 disabled:cursor-not-allowed transition-colors flex items-center gap-1.5"
+                        >
+                          {selectiveDownloading
+                            ? <RefreshCw className="w-3 h-3 animate-spin" />
+                            : <Download className="w-3 h-3" />
+                          }
+                          {selectedFiles.size > 0
+                            ? `Download (${selectedFiles.size})`
+                            : 'Download Selected'}
+                        </button>
+                        <button
+                          onClick={handleDownloadZip}
+                          className="text-xs font-medium px-3 py-1.5 rounded-md bg-primary text-white hover:bg-primary/90 transition-colors flex items-center gap-1.5"
+                        >
+                          <Download className="w-3 h-3" />
+                          Download All (ZIP)
+                        </button>
+                      </div>
+                    </div>
+
+                    {/* Status bar */}
+                    <div className="flex items-center justify-between px-4 py-2 border-b border-settle-slate-100">
+                      <div className="flex items-center gap-2">
+                        <div className="flex items-center gap-1.5 text-xs text-green-600 font-medium">
+                          <CheckCircle2 className="w-3.5 h-3.5" />
+                          {compartmentalized.files.length} files generated
+                        </div>
+                        <span className="text-settle-slate-200 text-xs">·</span>
                         {compartmentalized.dialect && (
-                          <span className="text-xs text-blue-700 bg-blue-50 px-2 py-0.5 rounded-full border border-blue-200">
+                          <span className="text-[10px] text-settle-slate-500 bg-settle-slate-100 border border-settle-slate-200 rounded px-1.5 py-0.5">
                             {SQL_DIALECTS.find((d) => d.id === compartmentalized.dialect)?.label ?? compartmentalized.dialect}
                           </span>
                         )}
                         {compartmentalized.generatedAt && (
-                          <span className="text-xs text-gray-400">{fmtDateTime(compartmentalized.generatedAt)}</span>
+                          <span className="text-[10px] text-settle-slate-400">
+                            {fmtDateTime(compartmentalized.generatedAt)}
+                          </span>
                         )}
                       </div>
-                      <div className="flex items-center gap-2">
-                        <Button
-                          variant="outline"
-                          size="sm"
-                          className="gap-1.5 text-sm"
-                          onClick={handleDownloadSelected}
-                          disabled={selectedFiles.size === 0 || selectiveDownloading}
-                        >
-                          {selectiveDownloading
-                            ? <RefreshCw className="w-3.5 h-3.5 animate-spin" />
-                            : <Download className="w-3.5 h-3.5" />
-                          }
-                          Download Selected{selectedFiles.size > 0 ? ` (${selectedFiles.size})` : ''}
-                        </Button>
-                        <Button className="bg-primary hover:bg-primary/90 text-white gap-2" size="sm" onClick={handleDownloadZip}>
-                          <Download className="w-4 h-4" />
-                          Download All (ZIP)
-                        </Button>
-                        {!isArchived && (
-                          <RoleTooltip allowed={canEdit} requiredRole="Editor">
-                            <Button variant="outline" size="sm" className="gap-1.5" onClick={handleGenerateExecutionPackage} disabled={!canEdit}>
-                              <RefreshCw className="w-3.5 h-3.5" />
-                              Regenerate
-                            </Button>
-                          </RoleTooltip>
-                        )}
-                      </div>
-                    </div>
-
-                    {/* File list */}
-                    <div className="border border-gray-200 rounded-lg overflow-hidden">
-                      {/* Table header */}
-                      <div className="grid grid-cols-[32px_1fr_110px_auto] gap-2 px-4 py-2 bg-gray-50 border-b border-gray-200 text-xs font-medium text-gray-500 items-center">
+                      <div className="flex items-center gap-1.5">
                         <Checkbox
                           checked={compartmentalized.files.length > 0 && selectedFiles.size === compartmentalized.files.length}
                           onCheckedChange={(checked) => {
                             if (checked) {
-                              setSelectedFiles(new Set(compartmentalized.files.map(f => f.filename)))
+                              setSelectedFiles(new Set(compartmentalized.files.map((f) => f.filename)))
                             } else {
                               setSelectedFiles(new Set())
                             }
                           }}
-                          className="h-4 w-4"
+                          className="h-3.5 w-3.5"
                         />
-                        <div>File</div>
-                        <div>Type</div>
-                        <div>Actions</div>
+                        <span className="text-[10px] text-settle-slate-400">Select all</span>
                       </div>
+                    </div>
 
-                      {compartmentalized.files.map((file, idx) => {
+                    {/* File list — collapsed to VISIBLE_FILE_COUNT, expandable */}
+                    <div className={fileListExpanded ? 'max-h-96 overflow-y-auto' : ''}>
+                      {(fileListExpanded
+                        ? compartmentalized.files
+                        : compartmentalized.files.slice(0, VISIBLE_FILE_COUNT)
+                      ).map((file) => {
                         const isOpen = previewFilename === file.filename
                         const cachedContent = fileContentCache[file.filename]
                         const NEUTRAL_BADGE = 'bg-settle-slate-100 text-settle-slate-600 border-settle-slate-200'
@@ -1270,8 +1281,7 @@ export default function OutputsContent({ projectId, projectName, initialData, is
                         })()
 
                         return (
-                          <div key={file.filename} data-filename={file.filename} className={idx > 0 ? 'border-t border-gray-100' : ''}>
-                            {/* Row */}
+                          <div key={file.filename} data-filename={file.filename} className="border-t border-settle-slate-50">
                             <div className="grid grid-cols-[32px_1fr_110px_auto] gap-2 items-center px-4 py-2.5 hover:bg-gray-50/70 transition-colors">
                               <Checkbox
                                 checked={selectedFiles.has(file.filename)}
@@ -1335,6 +1345,26 @@ export default function OutputsContent({ projectId, projectName, initialData, is
                         )
                       })}
                     </div>
+
+                    {/* Expander row */}
+                    {compartmentalized.files.length > VISIBLE_FILE_COUNT && (
+                      <button
+                        onClick={() => setFileListExpanded((v) => !v)}
+                        className="w-full py-2.5 text-xs text-settle-slate-400 hover:text-settle-slate-600 transition-colors border-t border-settle-slate-100 flex items-center justify-center gap-1.5"
+                      >
+                        {fileListExpanded ? (
+                          <>
+                            <ChevronDown className="w-3 h-3 rotate-180" />
+                            Show less
+                          </>
+                        ) : (
+                          <>
+                            <ChevronDown className="w-3 h-3" />
+                            + {compartmentalized.files.length - VISIBLE_FILE_COUNT} more files · Show all
+                          </>
+                        )}
+                      </button>
+                    )}
                   </div>
                 )}
 
@@ -1361,35 +1391,36 @@ export default function OutputsContent({ projectId, projectName, initialData, is
         </div>
 
         {/* ════════════════════════════════════════════════════
-            SECTION 3 — GOLD STANDARD FILES
+            SECTION 3 — IMPORT-READY FILES
         ════════════════════════════════════════════════════ */}
         <div>
           <div className="flex items-start justify-between mb-4">
             <div>
-              <h2 className="text-lg font-semibold text-gray-900">Gold Standard Files</h2>
-              <p className="text-sm text-gray-500 mt-0.5">Production-ready data files with all transformations applied, ready to load into your target system</p>
+              <h2 className="text-lg font-semibold text-settle-slate-900">Import-Ready Files</h2>
+              <p className="text-sm text-gray-500 mt-0.5">Production-ready data files with all transformations applied</p>
             </div>
           </div>
 
           <div className="bg-white border border-gray-200 rounded-xl shadow-sm overflow-hidden">
             <div className="p-6">
-              {/* Warning banners */}
-              {outstanding.blockingIssues > 0 && (
-                <div className="mb-4 flex gap-2 items-start p-3 bg-white border border-settle-slate-200 rounded-lg text-sm text-settle-slate-700">
-                  <AlertCircle className="w-4 h-4 mt-0.5 flex-shrink-0 text-settle-slate-400" />
-                  <span><span className="font-medium text-settle-slate-900">{outstanding.blockingIssues} blocking quality issue{outstanding.blockingIssues !== 1 ? 's' : ''} remain.</span>{' '}Generated files may contain data that will fail on load. Resolve issues in Validate first.</span>
-                </div>
-              )}
-              {outstanding.unmappedSourceFields > 0 && (
-                <div className="mb-4 flex gap-2 items-start p-3 bg-white border border-settle-slate-200 rounded-lg text-sm text-settle-slate-700">
-                  <Info className="w-4 h-4 mt-0.5 flex-shrink-0 text-settle-slate-400" />
-                  <span><span className="font-medium text-settle-slate-900">{outstanding.unmappedSourceFields} source field{outstanding.unmappedSourceFields !== 1 ? 's are' : ' is'} unmapped</span>{' '}and will not be included in output files.</span>
-                </div>
-              )}
-              {outstanding.untestedTransforms > 0 && (
-                <div className="mb-4 flex gap-2 items-start p-3 bg-white border border-settle-slate-200 rounded-lg text-sm text-settle-slate-700">
-                  <AlertTriangle className="w-4 h-4 mt-0.5 flex-shrink-0 text-settle-slate-400" />
-                  <span><span className="font-medium text-settle-slate-900">{outstanding.untestedTransforms} transformation{outstanding.untestedTransforms !== 1 ? 's have' : ' has'} not been tested.</span>{' '}Review in the Transform tab.</span>
+              {/* Warning strip */}
+              {(outstanding.blockingIssues > 0 || outstanding.unmappedSourceFields > 0 || outstanding.untestedTransforms > 0) && (
+                <div className="mb-3 flex items-start gap-2 px-3 py-2.5 bg-settle-slate-50 border border-settle-slate-200 rounded-lg">
+                  <AlertCircle className="w-3.5 h-3.5 text-settle-slate-400 flex-shrink-0 mt-0.5" />
+                  <p className="text-xs text-settle-slate-600 leading-relaxed">
+                    {[
+                      outstanding.blockingIssues > 0
+                        ? `${outstanding.blockingIssues} blocking issue${outstanding.blockingIssues !== 1 ? 's' : ''}`
+                        : null,
+                      outstanding.unmappedSourceFields > 0
+                        ? `${outstanding.unmappedSourceFields} field${outstanding.unmappedSourceFields !== 1 ? 's' : ''} unmapped`
+                        : null,
+                      outstanding.untestedTransforms > 0
+                        ? `${outstanding.untestedTransforms} transform${outstanding.untestedTransforms !== 1 ? 's' : ''} untested`
+                        : null,
+                    ].filter(Boolean).join(' · ')}{' — '}
+                    <span className="text-settle-slate-500">generated files may not be production-ready</span>
+                  </p>
                 </div>
               )}
 
@@ -1499,110 +1530,100 @@ export default function OutputsContent({ projectId, projectName, initialData, is
             </div>
             {!isArchived && (
               <RoleTooltip allowed={canEdit} requiredRole="Editor">
-                <Button
-                  variant="outline"
-                  size="sm"
-                  className="gap-2 flex-shrink-0 mt-1"
+                <button
+                  className="text-xs text-settle-slate-500 hover:text-settle-slate-700 transition-colors flex items-center gap-1.5 disabled:opacity-40 flex-shrink-0 mt-1"
                   onClick={handleGenerateAll}
                   disabled={generatingKey !== null || !canEdit}
                 >
                   <Sparkles className="w-3.5 h-3.5" />
                   {allGenProgress ?? 'Generate All Deliverables'}
-                </Button>
+                </button>
               </RoleTooltip>
             )}
           </div>
 
-          <div className="space-y-3">
-            {/* Migration Runbook */}
-            <DeliverableCard
-              title="Migration Runbook"
-              description="Complete operational guide with step-by-step execution plan, pre-migration checklist, validation criteria, sign-off lines, and embedded mapping specifications"
-              icon={<FileTextLucide size={15} className="text-settle-slate-500" />}
-              formats={[{ key: 'runbook_docx', label: 'Download Runbook (.docx)', ext: 'docx' }]}
-              state={deliverableMap['runbook_docx']}
-              isGenerating={generatingKey === 'runbook_docx'}
-              onGenerate={() => handleGenerateDeliverable('runbook_docx')}
-              existingOutput={existingOutputs.find((o) => o.type === 'migration_runbook')}
-              isArchived={isArchived}
-            />
+          <div className="bg-white border border-settle-slate-200 rounded-xl overflow-hidden">
+            <div className="grid grid-cols-2 divide-x divide-settle-slate-100">
+              {/* Row 1 */}
+              <div className="border-b border-settle-slate-100">
+                <CompactDeliverableRow
+                  title="Migration Runbook"
+                  shortDescription="Step-by-step execution guide"
+                  icon={<FileTextLucide size={13} className="text-settle-slate-500" />}
+                  onGenerate={() => handleGenerateDeliverable('runbook_docx')}
+                  isGenerating={generatingKey === 'runbook_docx'}
+                  isArchived={isArchived}
+                  canEdit={canEdit}
+                />
+              </div>
+              <div id="readiness-report-section" className="border-b border-settle-slate-100">
+                <CompactDeliverableRow
+                  title="Readiness Report"
+                  shortDescription="Go/no-go recommendation"
+                  icon={<BarChart2 size={13} className="text-settle-slate-500" />}
+                  onGenerate={() => handleGenerateDeliverable('readiness_report')}
+                  isGenerating={generatingKey === 'readiness_report'}
+                  isArchived={isArchived}
+                  canEdit={canEdit}
+                />
+              </div>
 
-            {/* Readiness Report */}
-            <DeliverableCard
-              title="Migration Readiness Report"
-              description="AI-generated executive summary with validation results, risk assessment, and go/no-go recommendation"
-              icon={<BarChart2 size={15} className="text-settle-slate-500" />}
-              formats={[{ key: 'readiness_report', label: 'Download Report (.docx)', ext: 'docx' }]}
-              state={deliverableMap['readiness_report']}
-              isGenerating={generatingKey === 'readiness_report'}
-              onGenerate={() => handleGenerateDeliverable('readiness_report')}
-              existingOutput={existingOutputs.find((o) => o.type === 'readiness_report')}
-              isArchived={isArchived}
-            />
+              {/* Row 2 */}
+              <div className="border-b border-settle-slate-100">
+                <CompactDeliverableRow
+                  title="Mapping File"
+                  shortDescription="Field-to-field mapping spec"
+                  icon={<GitMerge size={13} className="text-settle-slate-500" />}
+                  onGenerateCSV={() => handleGenerateDeliverable('mapping_csv')}
+                  onGenerateJSON={() => handleGenerateDeliverable('mapping_json')}
+                  isGenerating={generatingKey === 'mapping_csv' || generatingKey === 'mapping_json'}
+                  isArchived={isArchived}
+                  canEdit={canEdit}
+                />
+              </div>
+              <div className="border-b border-settle-slate-100">
+                <CompactDeliverableRow
+                  title="Transformation Specs"
+                  shortDescription="SQL transforms with field context"
+                  icon={<Code2 size={13} className="text-settle-slate-500" />}
+                  onGenerate={() => handleGenerateDeliverable('transform_specs')}
+                  isGenerating={generatingKey === 'transform_specs'}
+                  isArchived={isArchived}
+                  canEdit={canEdit}
+                />
+              </div>
 
-            {/* Mapping File */}
-            <DeliverableCard
-              title="Mapping File"
-              description="Complete field-to-field mapping specification with confidence scores and type compatibility"
-              icon={<GitMerge size={15} className="text-settle-slate-500" />}
-              formats={[
-                { key: 'mapping_csv', label: 'Download CSV', ext: 'csv' },
-                { key: 'mapping_json', label: 'Download JSON', ext: 'json' },
-              ]}
-              stateMap={deliverableMap}
-              isGenerating={generatingKey === 'mapping_csv' || generatingKey === 'mapping_json'}
-              onGenerateMap={(key) => handleGenerateDeliverable(key)}
-              existingOutput={existingOutputs.find((o) => o.type === 'mapping_file')}
-              isArchived={isArchived}
-            />
-
-            {/* Transform Specs */}
-            <DeliverableCard
-              title="Transformation Specs"
-              description="SQL transformations with source/target field context, status, and descriptions"
-              icon={<Code2 size={15} className="text-settle-slate-500" />}
-              formats={[{ key: 'transform_specs', label: 'Download SQL', ext: 'sql' }]}
-              state={deliverableMap['transform_specs']}
-              isGenerating={generatingKey === 'transform_specs'}
-              onGenerate={() => handleGenerateDeliverable('transform_specs')}
-              existingOutput={existingOutputs.find((o) => o.type === 'transformation_specs')}
-              isArchived={isArchived}
-            />
-
-            {/* Fix Log */}
-            <DeliverableCard
-              title="Fix Log & Audit Trail"
-              description="Complete chronological record of all data fixes applied and risks accepted"
-              icon={<Clock size={15} className="text-settle-slate-500" />}
-              formats={[{ key: 'fix_log', label: 'Download CSV', ext: 'csv' }]}
-              state={deliverableMap['fix_log']}
-              isGenerating={generatingKey === 'fix_log'}
-              onGenerate={() => handleGenerateDeliverable('fix_log')}
-              existingOutput={existingOutputs.find((o) => o.type === 'fix_log')}
-              isArchived={isArchived}
-            />
-
-            {/* Data Dictionary */}
-            <DeliverableCard
-              title="Data Dictionary"
-              description="Source and target schema documentation with field profiles, data types, and sample values"
-              icon={<BookOpen size={15} className="text-settle-slate-500" />}
-              formats={[
-                { key: 'data_dictionary', label: 'Download CSV', ext: 'csv' },
-              ]}
-              state={deliverableMap['data_dictionary']}
-              isGenerating={generatingKey === 'data_dictionary'}
-              onGenerate={() => handleGenerateDeliverable('data_dictionary')}
-              existingOutput={existingOutputs.find((o) => o.type === 'data_dictionary')}
-              isArchived={isArchived}
-            />
+              {/* Row 3 */}
+              <div>
+                <CompactDeliverableRow
+                  title="Fix Log & Audit Trail"
+                  shortDescription="Chronological record of all fixes"
+                  icon={<Clock size={13} className="text-settle-slate-500" />}
+                  onGenerate={() => handleGenerateDeliverable('fix_log')}
+                  isGenerating={generatingKey === 'fix_log'}
+                  isArchived={isArchived}
+                  canEdit={canEdit}
+                />
+              </div>
+              <div>
+                <CompactDeliverableRow
+                  title="Data Dictionary"
+                  shortDescription="Schema docs with data types"
+                  icon={<BookOpen size={13} className="text-settle-slate-500" />}
+                  onGenerate={() => handleGenerateDeliverable('data_dictionary')}
+                  isGenerating={generatingKey === 'data_dictionary'}
+                  isArchived={isArchived}
+                  canEdit={canEdit}
+                />
+              </div>
+            </div>
           </div>
         </div>
 
         {/* ════════════════════════════════════════════════════
             NEXT STEPS
         ════════════════════════════════════════════════════ */}
-        <div className="bg-white border border-gray-200 rounded-xl shadow-sm p-6">
+        <div className="bg-white border border-settle-slate-200 rounded-xl p-5">
           <h3 className="text-base font-semibold text-gray-900 mb-4">Next Steps</h3>
           <div className="space-y-3">
             {[
@@ -1613,34 +1634,108 @@ export default function OutputsContent({ projectId, projectName, initialData, is
               'Schedule production cutover once the test load is verified',
             ].map((step, i) => (
               <div key={i} className="flex items-start gap-3">
-                <div className="w-6 h-6 rounded-full bg-blue-100 text-blue-700 text-xs font-bold flex items-center justify-center flex-shrink-0 mt-0.5">
+                <div className="w-5 h-5 rounded-full border border-settle-slate-200 text-settle-slate-500 text-[10px] font-medium flex items-center justify-center flex-shrink-0 mt-0.5">
                   {i + 1}
                 </div>
                 <p className="text-sm text-gray-700">{step}</p>
               </div>
             ))}
           </div>
-        </div>
-
-        {/* Mark Project as Complete */}
-        <div className="flex justify-center pt-2">
-          <Button
-            onClick={() =>
-              startCompleting(async () => {
-                await markProjectComplete(projectId)
-                router.push('/app/projects')
-              })
-            }
-            disabled={isCompleting}
-            className="gap-2 bg-green-600 hover:bg-green-700 text-white"
-          >
-            <CheckCircle2 className="w-4 h-4" />
-            {isCompleting ? 'Completing…' : 'Mark Project as Complete'}
-          </Button>
+          <div className="mt-4 pt-4 border-t border-settle-slate-100">
+            <Button
+              onClick={() =>
+                startCompleting(async () => {
+                  await markProjectComplete(projectId)
+                  router.push('/app/projects')
+                })
+              }
+              disabled={isCompleting}
+              className="w-full gap-2 bg-green-600 hover:bg-green-700 text-white justify-center"
+            >
+              <CheckCircle2 className="w-4 h-4" />
+              {isCompleting ? 'Completing…' : 'Mark Project as Complete'}
+            </Button>
+          </div>
         </div>
 
       </div>
       </div>
+    </div>
+  )
+}
+
+// ── CompactDeliverableRow ─────────────────────────────────────────────────────
+
+interface CompactDeliverableRowProps {
+  title: string
+  shortDescription: string
+  icon: React.ReactNode
+  onGenerate?: () => void
+  onGenerateCSV?: () => void
+  onGenerateJSON?: () => void
+  isGenerating: boolean
+  isArchived: boolean
+  canEdit: boolean
+}
+
+function CompactDeliverableRow({
+  title,
+  shortDescription,
+  icon,
+  onGenerate,
+  onGenerateCSV,
+  onGenerateJSON,
+  isGenerating,
+  isArchived,
+  canEdit,
+}: CompactDeliverableRowProps) {
+  return (
+    <div className="flex items-start justify-between gap-3 p-4">
+      <div className="flex items-start gap-3 min-w-0 flex-1">
+        <div className="flex items-center justify-center w-7 h-7 rounded-md bg-settle-slate-50 border border-settle-slate-200 flex-shrink-0 mt-0.5">
+          {icon}
+        </div>
+        <div className="min-w-0">
+          <p className="text-sm font-medium text-settle-slate-900 truncate">{title}</p>
+          <p className="text-xs text-settle-slate-400 mt-0.5">{shortDescription}</p>
+        </div>
+      </div>
+
+      {!isArchived && (
+        <div className="flex items-center gap-2 flex-shrink-0 mt-0.5">
+          {isGenerating ? (
+            <RefreshCw className="w-3.5 h-3.5 text-settle-slate-400 animate-spin" />
+          ) : onGenerateCSV && onGenerateJSON ? (
+            <>
+              <button
+                onClick={onGenerateCSV}
+                disabled={!canEdit}
+                className="text-xs text-settle-slate-500 hover:text-settle-slate-700 disabled:opacity-40 transition-colors flex items-center gap-1"
+              >
+                <RefreshCw className="w-3 h-3" />
+                CSV
+              </button>
+              <button
+                onClick={onGenerateJSON}
+                disabled={!canEdit}
+                className="text-xs text-settle-slate-500 hover:text-settle-slate-700 disabled:opacity-40 transition-colors flex items-center gap-1"
+              >
+                <RefreshCw className="w-3 h-3" />
+                JSON
+              </button>
+            </>
+          ) : (
+            <button
+              onClick={onGenerate}
+              disabled={!canEdit}
+              className="text-xs text-settle-slate-500 hover:text-settle-slate-700 disabled:opacity-40 transition-colors flex items-center gap-1"
+            >
+              <RefreshCw className="w-3 h-3" />
+              Generate
+            </button>
+          )}
+        </div>
+      )}
     </div>
   )
 }
