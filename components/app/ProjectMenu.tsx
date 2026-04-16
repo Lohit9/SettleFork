@@ -84,7 +84,7 @@ function MenuItem({
   return (
     <button
       onClick={onClick}
-      className={`w-full flex items-center gap-2.5 px-3 py-2 text-sm rounded-md transition-colors text-left ${
+      className={`w-full flex items-center gap-2.5 px-3 py-2 text-sm rounded-md transition-colors text-left cursor-pointer ${
         danger
           ? 'text-red-600 hover:bg-red-50'
           : 'text-gray-700 hover:bg-gray-50'

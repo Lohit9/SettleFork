@@ -269,7 +269,7 @@ export default function SidebarShell({
             <button
               ref={avatarRef}
               onClick={openPopover}
-              className="flex items-center gap-2.5 w-full px-2 py-1.5 rounded-lg hover:bg-gray-100 transition-colors"
+              className="flex items-center gap-2.5 w-full px-2 py-1.5 rounded-lg hover:bg-gray-100 transition-colors cursor-pointer"
             >
               <div className="w-8 h-8 rounded-full bg-primary flex items-center justify-center flex-shrink-0">
                 <span className="text-xs font-semibold text-white">{initials}</span>
@@ -281,7 +281,7 @@ export default function SidebarShell({
               <button
                 ref={avatarRef}
                 onClick={openPopover}
-                className="w-10 h-10 flex items-center justify-center hover:bg-gray-100 rounded-lg transition-colors"
+                className="w-10 h-10 flex items-center justify-center hover:bg-gray-100 rounded-lg transition-colors cursor-pointer"
               >
                 <div className="w-8 h-8 rounded-full bg-primary flex items-center justify-center">
                   <span className="text-xs font-semibold text-white">{initials}</span>

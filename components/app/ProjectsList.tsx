@@ -80,16 +80,16 @@ function ProjectCard({ project, onUpdate }: { project: ProjectWithStats; onUpdat
       stats.push({ label: `Rows: ${project.totalRows.toLocaleString()}` })
     }
 
+    if (project.needsTransformCount > 0) {
+      stats.push({ label: `Transforms: ${project.coveredTransformCount}/${project.needsTransformCount}` })
+    }
+
     if (project.blockingIssueCount > 0) {
       stats.push({ label: `Blocking: ${project.blockingIssueCount}`, color: 'text-red-600' })
     }
 
     if (project.warningCount > 0) {
       stats.push({ label: `Warnings: ${project.warningCount}`, color: 'text-amber-600' })
-    }
-
-    if (project.needsTransformCount > 0) {
-      stats.push({ label: `Transforms: ${project.coveredTransformCount}/${project.needsTransformCount} saved` })
     }
 
     if (isCompleted && project.outputCount > 0) {
@@ -102,8 +102,8 @@ function ProjectCard({ project, onUpdate }: { project: ProjectWithStats; onUpdat
       {/* Top row */}
       <div className="flex items-start justify-between gap-4 mb-4">
         <div className="flex-1 min-w-0">
-          <div className="flex items-center gap-2 mb-1">
-            <span className={`text-base font-medium truncate ${isArchived ? 'text-gray-500' : 'text-gray-900'}`}>
+          <div className="flex items-center gap-2 mb-0.5">
+            <span className={`text-sm font-semibold truncate ${isArchived ? 'text-settle-slate-400' : 'text-settle-slate-900'}`}>
               {project.name}
             </span>
             {isArchived ? (
@@ -114,33 +114,22 @@ function ProjectCard({ project, onUpdate }: { project: ProjectWithStats; onUpdat
               <Badge className="bg-green-100 text-green-700 hover:bg-green-100 text-xs px-1.5 py-0 flex-shrink-0">
                 Completed
               </Badge>
-            ) : (
-              <Badge className="bg-blue-100 text-blue-700 hover:bg-blue-100 text-xs px-1.5 py-0 flex-shrink-0">
-                Active
-              </Badge>
-            )}
+            ) : null}
             {isCompleted && <AutoArchiveCountdown completedAt={project.completed_at} />}
           </div>
-          <p className="text-xs text-gray-400 truncate">
-            {project.source_label} → {project.target_label}
-            <span className="mx-1.5">·</span>
-            Created {formatDate(project.created_at)}
+          <p className="text-sm text-settle-slate-600 mb-0.5">
+            {project.source_label}
+            <span className="mx-1.5 text-settle-slate-300">→</span>
+            {project.target_label}
+          </p>
+          <p className="text-xs text-settle-slate-400 mb-3">
             {isArchived && project.archived_at ? (
-              <>
-                <span className="mx-1.5">·</span>
-                Archived {formatDate(project.archived_at)}
-              </>
+              <>Archived {formatDate(project.archived_at)}</>
             ) : (
-              <>
-                <span className="mx-1.5">·</span>
-                Last updated {formatRelativeTime(project.updated_at)}
-              </>
+              <>Updated {formatRelativeTime(project.updated_at)}</>
             )}
             {isArchived && (
-              <>
-                <span className="mx-1.5">·</span>
-                <span className="text-gray-400">Data purged</span>
-              </>
+              <span className="ml-1.5 text-settle-slate-400">· Data purged</span>
             )}
           </p>
         </div>
@@ -369,7 +358,7 @@ function WelcomeModal({ onDismiss, onGetStarted }: { onDismiss: () => void; onGe
 
 // ── Main component ──────────────────────────────────────────────────────────
 
-type FilterTab = 'all' | 'active' | 'completed' | 'archived'
+type FilterTab = 'active' | 'completed' | 'archived'
 
 interface ProjectsListProps {
   initialProjects: ProjectWithStats[]
@@ -404,29 +393,25 @@ export function ProjectsList({ initialProjects, activeOrgRole }: ProjectsListPro
     setShowWelcome(false)
     setShowCreate(true)
   }
-  const [activeFilter, setActiveFilter] = useState<FilterTab>('all')
+  const [activeFilter, setActiveFilter] = useState<FilterTab>('active')
   const [search, setSearch] = useState('')
   const [showCreate, setShowCreate] = useState(false)
 
-  const activeCount = projects.filter((p) => p.status === 'active').length
-  const completedCount = projects.filter((p) => p.status === 'completed').length
-  const archivedCount = projects.filter((p) => p.status === 'archived').length
-
   const filtered = projects.filter((p) => {
     const matchesFilter =
-      (activeFilter === 'all' && p.status !== 'archived') ||
       (activeFilter === 'active' && p.status === 'active') ||
       (activeFilter === 'completed' && p.status === 'completed') ||
       (activeFilter === 'archived' && p.status === 'archived')
-    const matchesSearch = search.trim() === '' || p.name.toLowerCase().includes(search.toLowerCase())
+    const matchesSearch =
+      search.trim() === '' ||
+      p.name.toLowerCase().includes(search.toLowerCase())
     return matchesFilter && matchesSearch
   })
 
-  const TABS: { id: FilterTab; label: string; count: number }[] = [
-    { id: 'all', label: 'All', count: activeCount + completedCount },
-    { id: 'active', label: 'Active', count: activeCount },
-    { id: 'completed', label: 'Completed', count: completedCount },
-    { id: 'archived', label: 'Archived', count: archivedCount },
+  const TABS: { id: FilterTab; label: string }[] = [
+    { id: 'active', label: 'Active' },
+    { id: 'completed', label: 'Completed' },
+    { id: 'archived', label: 'Archived' },
   ]
 
   return (
@@ -461,27 +446,18 @@ export function ProjectsList({ initialProjects, activeOrgRole }: ProjectsListPro
         </div>
 
         {/* Filter tabs */}
-        <div className="flex items-center gap-1">
+        <div className="flex items-center gap-1 border-b border-settle-slate-200">
           {TABS.map((tab) => (
             <button
               key={tab.id}
               onClick={() => setActiveFilter(tab.id)}
-              className={`px-3 pb-3 text-sm font-medium flex items-center gap-1.5 border-b-2 transition-colors ${
+              className={`px-3 py-2.5 text-sm font-medium transition-colors cursor-pointer border-b-2 -mb-px ${
                 activeFilter === tab.id
-                  ? 'border-blue-600 text-blue-600'
-                  : 'border-transparent text-gray-500 hover:text-gray-700'
+                  ? 'border-settle-blue-500 text-settle-slate-900'
+                  : 'border-transparent text-settle-slate-500 hover:text-settle-slate-700'
               }`}
             >
               {tab.label}
-              <span
-                className={`text-xs px-1.5 py-0.5 rounded-full ${
-                  activeFilter === tab.id
-                    ? 'bg-blue-100 text-blue-700'
-                    : 'bg-gray-100 text-gray-500'
-                }`}
-              >
-                {tab.count}
-              </span>
             </button>
           ))}
         </div>
@@ -491,7 +467,7 @@ export function ProjectsList({ initialProjects, activeOrgRole }: ProjectsListPro
       <div className="flex-1 px-8 py-6">
         {filtered.length === 0 ? (
           <div className="flex flex-col items-center justify-center py-16 text-center">
-            {/* Non-"all" empty states — compact */}
+            {/* Filtered empty states — compact */}
             {(search || activeFilter === 'archived' || activeFilter === 'completed') ? (
               <>
                 <div className="w-14 h-14 bg-gray-100 rounded-full flex items-center justify-center mb-4">

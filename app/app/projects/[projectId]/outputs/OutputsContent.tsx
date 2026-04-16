@@ -23,7 +23,7 @@ import {
   Sparkles,
   FileText,
 } from '@/components/icons'
-import { Link2, Code, ShieldCheck, Database, Settings, Copy, Check, PackageOpen, Eye, EyeOff, ClipboardCheck } from 'lucide-react'
+import { Link2, Code, ShieldCheck, Database, Settings, Copy, Check, PackageOpen, Eye, EyeOff, ClipboardCheck, BarChart2, GitMerge, Code2, Clock, BookOpen, FileText as FileTextLucide, Info, AlertTriangle } from 'lucide-react'
 import { Checkbox } from '@/components/ui/checkbox'
 import { PageHeader } from '@/components/app/PageHeader'
 import {
@@ -588,7 +588,17 @@ export default function OutputsContent({ projectId, projectName, initialData, is
   async function handlePreviewFile(filename: string) {
     // Toggle: clicking the same file closes it
     if (previewFilename === filename) {
+      setPreviewLoading(false)
       setPreviewFilename(null)
+      // After React removes the preview panel, the page height shrinks but
+      // the scroll position stays — creating whitespace at the bottom.
+      // Scroll the closed row back into view to correct the scroll offset.
+      requestAnimationFrame(() => {
+        const row = document.querySelector(`[data-filename="${filename}"]`)
+        if (row) {
+          row.scrollIntoView({ block: 'nearest', behavior: 'smooth' })
+        }
+      })
       return
     }
     setPreviewFilename(filename)
@@ -739,7 +749,7 @@ export default function OutputsContent({ projectId, projectName, initialData, is
   // ── Render ──────────────────────────────────────────────────────────────
 
   return (
-    <div className="flex-1 bg-gray-50 flex flex-col min-h-0">
+    <div className="flex-1 h-full bg-gray-50 flex flex-col min-h-0">
       {/* Toast */}
       {toast && (
         <div className={`fixed bottom-6 right-6 z-50 px-4 py-3 rounded-lg shadow-lg text-sm font-medium ${toast.type === 'success' ? 'bg-green-600 text-white' : 'bg-red-600 text-white'}`}>
@@ -749,8 +759,8 @@ export default function OutputsContent({ projectId, projectName, initialData, is
 
       <PageHeader projectName={projectName} title="Migration Center" subtitle="Your migration deliverables and project status" />
 
-      <div className="flex-1">
-      <div className="max-w-5xl mx-auto p-6 pb-16 space-y-6">
+      <div className="flex-1 overflow-auto">
+      <div className="max-w-5xl mx-auto p-6 space-y-6">
 
         {/* ════════════════════════════════════════════════════
             SECTION 1 — MIGRATION STATUS DASHBOARD
@@ -762,11 +772,6 @@ export default function OutputsContent({ projectId, projectName, initialData, is
             {/* Migration Readiness — headline metric */}
             <div className="rounded-xl border border-gray-200 bg-white p-5">
               <div className="flex items-center gap-1.5 mb-2">
-                <span className={`w-2 h-2 rounded-full flex-shrink-0 ${
-                  metrics.readinessStatus === 'ready' ? 'bg-green-500' :
-                  metrics.readinessStatus === 'at_risk' ? 'bg-amber-400' :
-                  'bg-red-500'
-                }`} />
                 <p className="text-xs font-medium text-gray-500 uppercase tracking-wide">Migration Readiness</p>
               </div>
               <div className="flex items-baseline gap-1.5">
@@ -780,7 +785,6 @@ export default function OutputsContent({ projectId, projectName, initialData, is
             {/* Mapping Coverage */}
             <div className="rounded-xl border border-gray-200 bg-white p-5">
               <div className="flex items-center gap-1.5 mb-2">
-                <span className="w-2 h-2 rounded-full bg-primary flex-shrink-0" />
                 <p className="text-xs font-medium text-gray-500 uppercase tracking-wide">Mapping Coverage</p>
               </div>
               <div className="flex items-baseline gap-1">
@@ -795,9 +799,6 @@ export default function OutputsContent({ projectId, projectName, initialData, is
             {/* Quality Issues */}
             <div className="rounded-xl border border-gray-200 bg-white p-5">
               <div className="flex items-center gap-1.5 mb-2">
-                <span className={`w-2 h-2 rounded-full flex-shrink-0 ${
-                  metrics.openBlocking > 0 ? 'bg-red-500' : 'bg-green-500'
-                }`} />
                 <p className="text-xs font-medium text-gray-500 uppercase tracking-wide">Quality Issues</p>
               </div>
               {metrics.openBlocking === 0 && metrics.openWarnings === 0 ? (
@@ -823,7 +824,6 @@ export default function OutputsContent({ projectId, projectName, initialData, is
             {/* Transforms */}
             <div className="rounded-xl border border-gray-200 bg-white p-5">
               <div className="flex items-center gap-1.5 mb-2">
-                <span className="w-2 h-2 rounded-full bg-purple-500 flex-shrink-0" />
                 <p className="text-xs font-medium text-gray-500 uppercase tracking-wide">Transforms</p>
               </div>
               <div className="flex items-baseline gap-1">
@@ -832,7 +832,7 @@ export default function OutputsContent({ projectId, projectName, initialData, is
               </div>
               {metrics.totalTransforms > 0 && (
                 <div className="mt-2 h-1.5 bg-gray-100 rounded-full overflow-hidden">
-                  <div className="h-full bg-purple-500 rounded-full" style={{ width: `${Math.round((metrics.completedTransforms / metrics.totalTransforms) * 100)}%` }} />
+                  <div className="h-full bg-primary rounded-full" style={{ width: `${Math.round((metrics.completedTransforms / metrics.totalTransforms) * 100)}%` }} />
                 </div>
               )}
             </div>
@@ -840,55 +840,55 @@ export default function OutputsContent({ projectId, projectName, initialData, is
 
           {/* ── Outstanding items ──────────────────────────────────────────── */}
           {hasOutstanding ? (
-            <div className="bg-red-50 border border-red-200 rounded-xl p-4 mb-4">
+            <div className="bg-white border border-settle-slate-200 rounded-xl p-4 mb-4">
               <div className="flex items-center gap-2 mb-2.5">
-                <AlertCircle className="w-4 h-4 text-red-600 flex-shrink-0" />
-                <span className="text-sm font-semibold text-red-800">Outstanding Items</span>
+                <AlertCircle className="w-4 h-4 text-settle-slate-400 flex-shrink-0" />
+                <span className="text-sm font-semibold text-settle-slate-900">Outstanding Items</span>
               </div>
               <div className="space-y-2">
                 {outstanding.unmappedSourceFields > 0 && (
                   <div className="flex items-center justify-between">
                     <div className="flex items-center gap-2">
-                      <span className="w-1.5 h-1.5 rounded-full bg-amber-500 flex-shrink-0" />
-                      <span className="text-sm text-red-700">{outstanding.unmappedSourceFields} unmapped source field{outstanding.unmappedSourceFields !== 1 ? 's' : ''}</span>
+                      <span className="w-1.5 h-1.5 rounded-full bg-settle-slate-400 flex-shrink-0" />
+                      <span className="text-sm text-settle-slate-700">{outstanding.unmappedSourceFields} unmapped source field{outstanding.unmappedSourceFields !== 1 ? 's' : ''}</span>
                     </div>
-                    <a href={`/app/projects/${projectId}/mapping`} className="text-xs text-red-600 hover:text-red-800 font-medium">Go to Mapping →</a>
+                    <a href={`/app/projects/${projectId}/mapping`} className="text-xs text-settle-blue-500 hover:text-settle-blue-700 font-medium transition-colors">Go to Mapping →</a>
                   </div>
                 )}
                 {outstanding.blockingIssues > 0 && (
                   <div className="flex items-center justify-between">
                     <div className="flex items-center gap-2">
-                      <span className="w-1.5 h-1.5 rounded-full bg-red-500 flex-shrink-0" />
-                      <span className="text-sm text-red-700">{outstanding.blockingIssues} blocking quality issue{outstanding.blockingIssues !== 1 ? 's' : ''}</span>
+                      <span className="w-1.5 h-1.5 rounded-full bg-settle-slate-400 flex-shrink-0" />
+                      <span className="text-sm text-settle-slate-700">{outstanding.blockingIssues} blocking quality issue{outstanding.blockingIssues !== 1 ? 's' : ''}</span>
                     </div>
-                    <a href={`/app/projects/${projectId}/data-quality`} className="text-xs text-red-600 hover:text-red-800 font-medium">Go to Validate →</a>
+                    <a href={`/app/projects/${projectId}/data-quality`} className="text-xs text-settle-blue-500 hover:text-settle-blue-700 font-medium transition-colors">Go to Validate →</a>
                   </div>
                 )}
                 {outstanding.fieldsNeedingTransformWork > 0 && (
                   <div className="flex items-center justify-between">
                     <div className="flex items-center gap-2">
-                      <span className="w-1.5 h-1.5 rounded-full bg-purple-400 flex-shrink-0" />
-                      <span className="text-sm text-red-700">{outstanding.fieldsNeedingTransformWork} field{outstanding.fieldsNeedingTransformWork !== 1 ? 's' : ''} need{outstanding.fieldsNeedingTransformWork === 1 ? 's' : ''} transformation</span>
+                      <span className="w-1.5 h-1.5 rounded-full bg-settle-slate-400 flex-shrink-0" />
+                      <span className="text-sm text-settle-slate-700">{outstanding.fieldsNeedingTransformWork} field{outstanding.fieldsNeedingTransformWork !== 1 ? 's' : ''} need{outstanding.fieldsNeedingTransformWork === 1 ? 's' : ''} transformation</span>
                     </div>
-                    <a href={`/app/projects/${projectId}/transform`} className="text-xs text-red-600 hover:text-red-800 font-medium">Go to Transform →</a>
+                    <a href={`/app/projects/${projectId}/transform`} className="text-xs text-settle-blue-500 hover:text-settle-blue-700 font-medium transition-colors">Go to Transform →</a>
                   </div>
                 )}
                 {outstanding.untestedTransforms > 0 && (
                   <div className="flex items-center justify-between">
                     <div className="flex items-center gap-2">
-                      <span className="w-1.5 h-1.5 rounded-full bg-orange-400 flex-shrink-0" />
-                      <span className="text-sm text-red-700">{outstanding.untestedTransforms} transform{outstanding.untestedTransforms !== 1 ? 's' : ''} need{outstanding.untestedTransforms === 1 ? 's' : ''} testing</span>
+                      <span className="w-1.5 h-1.5 rounded-full bg-settle-slate-400 flex-shrink-0" />
+                      <span className="text-sm text-settle-slate-700">{outstanding.untestedTransforms} transform{outstanding.untestedTransforms !== 1 ? 's' : ''} need{outstanding.untestedTransforms === 1 ? 's' : ''} testing</span>
                     </div>
-                    <a href={`/app/projects/${projectId}/transform`} className="text-xs text-red-600 hover:text-red-800 font-medium">Go to Transform →</a>
+                    <a href={`/app/projects/${projectId}/transform`} className="text-xs text-settle-blue-500 hover:text-settle-blue-700 font-medium transition-colors">Go to Transform →</a>
                   </div>
                 )}
                 {outstanding.testedTransforms > 0 && (
                   <div className="flex items-center justify-between">
                     <div className="flex items-center gap-2">
-                      <span className="w-1.5 h-1.5 rounded-full bg-blue-400 flex-shrink-0" />
-                      <span className="text-sm text-red-700">{outstanding.testedTransforms} transform{outstanding.testedTransforms !== 1 ? 's' : ''} need{outstanding.testedTransforms === 1 ? 's' : ''} applying</span>
+                      <span className="w-1.5 h-1.5 rounded-full bg-settle-slate-400 flex-shrink-0" />
+                      <span className="text-sm text-settle-slate-700">{outstanding.testedTransforms} transform{outstanding.testedTransforms !== 1 ? 's' : ''} need{outstanding.testedTransforms === 1 ? 's' : ''} applying</span>
                     </div>
-                    <a href={`/app/projects/${projectId}/transform`} className="text-xs text-red-600 hover:text-red-800 font-medium">Go to Transform →</a>
+                    <a href={`/app/projects/${projectId}/transform`} className="text-xs text-settle-blue-500 hover:text-settle-blue-700 font-medium transition-colors">Go to Transform →</a>
                   </div>
                 )}
               </div>
@@ -1206,21 +1206,19 @@ export default function OutputsContent({ projectId, projectName, initialData, is
                         )}
                       </div>
                       <div className="flex items-center gap-2">
-                        {selectedFiles.size > 0 && (
-                          <Button
-                            variant="outline"
-                            size="sm"
-                            className="gap-1.5 text-sm"
-                            onClick={handleDownloadSelected}
-                            disabled={selectiveDownloading}
-                          >
-                            {selectiveDownloading
-                              ? <RefreshCw className="w-3.5 h-3.5 animate-spin" />
-                              : <Download className="w-3.5 h-3.5" />
-                            }
-                            Download Selected ({selectedFiles.size})
-                          </Button>
-                        )}
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          className="gap-1.5 text-sm"
+                          onClick={handleDownloadSelected}
+                          disabled={selectedFiles.size === 0 || selectiveDownloading}
+                        >
+                          {selectiveDownloading
+                            ? <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                            : <Download className="w-3.5 h-3.5" />
+                          }
+                          Download Selected{selectedFiles.size > 0 ? ` (${selectedFiles.size})` : ''}
+                        </Button>
                         <Button className="bg-primary hover:bg-primary/90 text-white gap-2" size="sm" onClick={handleDownloadZip}>
                           <Download className="w-4 h-4" />
                           Download All (ZIP)
@@ -1259,19 +1257,20 @@ export default function OutputsContent({ projectId, projectName, initialData, is
                       {compartmentalized.files.map((file, idx) => {
                         const isOpen = previewFilename === file.filename
                         const cachedContent = fileContentCache[file.filename]
+                        const NEUTRAL_BADGE = 'bg-settle-slate-100 text-settle-slate-600 border-settle-slate-200'
                         const typeInfo = (() => {
                           switch (file.type) {
-                            case 'checklist': return { label: 'Checklist', cls: 'bg-blue-100 text-blue-700 border-blue-200' }
-                            case 'table_script': return { label: 'Table Stage', cls: 'bg-green-100 text-green-700 border-green-200' }
-                            case 'validation': return { label: 'Validation', cls: 'bg-amber-100 text-amber-700 border-amber-200' }
-                            case 'promote': return { label: 'Promote', cls: 'bg-purple-100 text-purple-700 border-purple-200' }
-                            case 'rollback': return { label: 'Rollback', cls: 'bg-red-100 text-red-700 border-red-200' }
-                            default: return { label: file.type, cls: 'bg-gray-100 text-gray-600 border-gray-200' }
+                            case 'checklist':    return { label: 'Checklist',   cls: NEUTRAL_BADGE }
+                            case 'table_script': return { label: 'Table Stage', cls: NEUTRAL_BADGE }
+                            case 'validation':   return { label: 'Validation',  cls: NEUTRAL_BADGE }
+                            case 'promote':      return { label: 'Promote',     cls: NEUTRAL_BADGE }
+                            case 'rollback':     return { label: 'Rollback',    cls: NEUTRAL_BADGE }
+                            default:             return { label: file.type,     cls: NEUTRAL_BADGE }
                           }
                         })()
 
                         return (
-                          <div key={file.filename} className={idx > 0 ? 'border-t border-gray-100' : ''}>
+                          <div key={file.filename} data-filename={file.filename} className={idx > 0 ? 'border-t border-gray-100' : ''}>
                             {/* Row */}
                             <div className="grid grid-cols-[32px_1fr_110px_auto] gap-2 items-center px-4 py-2.5 hover:bg-gray-50/70 transition-colors">
                               <Checkbox
@@ -1376,21 +1375,21 @@ export default function OutputsContent({ projectId, projectName, initialData, is
             <div className="p-6">
               {/* Warning banners */}
               {outstanding.blockingIssues > 0 && (
-                <div className="mb-4 flex gap-2 items-start p-3 bg-red-50 border border-red-200 rounded-lg text-sm text-red-700">
-                  <AlertCircle className="w-4 h-4 mt-0.5 flex-shrink-0" />
-                  <span><strong>{outstanding.blockingIssues} blocking quality issue{outstanding.blockingIssues !== 1 ? 's' : ''} remain.</strong> Generated files may contain data that will fail on load. Resolve issues in Validate first.</span>
+                <div className="mb-4 flex gap-2 items-start p-3 bg-white border border-settle-slate-200 rounded-lg text-sm text-settle-slate-700">
+                  <AlertCircle className="w-4 h-4 mt-0.5 flex-shrink-0 text-settle-slate-400" />
+                  <span><span className="font-medium text-settle-slate-900">{outstanding.blockingIssues} blocking quality issue{outstanding.blockingIssues !== 1 ? 's' : ''} remain.</span>{' '}Generated files may contain data that will fail on load. Resolve issues in Validate first.</span>
                 </div>
               )}
               {outstanding.unmappedSourceFields > 0 && (
-                <div className="mb-4 flex gap-2 items-start p-3 bg-blue-50 border border-blue-200 rounded-lg text-sm text-blue-700">
-                  <AlertCircle className="w-4 h-4 mt-0.5 flex-shrink-0" />
-                  <span>{outstanding.unmappedSourceFields} source field{outstanding.unmappedSourceFields !== 1 ? 's are' : ' is'} unmapped and will not be included in output files.</span>
+                <div className="mb-4 flex gap-2 items-start p-3 bg-white border border-settle-slate-200 rounded-lg text-sm text-settle-slate-700">
+                  <Info className="w-4 h-4 mt-0.5 flex-shrink-0 text-settle-slate-400" />
+                  <span><span className="font-medium text-settle-slate-900">{outstanding.unmappedSourceFields} source field{outstanding.unmappedSourceFields !== 1 ? 's are' : ' is'} unmapped</span>{' '}and will not be included in output files.</span>
                 </div>
               )}
               {outstanding.untestedTransforms > 0 && (
-                <div className="mb-4 flex gap-2 items-start p-3 bg-amber-50 border border-amber-200 rounded-lg text-sm text-amber-700">
-                  <AlertCircle className="w-4 h-4 mt-0.5 flex-shrink-0" />
-                  <span>{outstanding.untestedTransforms} transformation{outstanding.untestedTransforms !== 1 ? 's have' : ' has'} not been tested. Review in the Transform tab.</span>
+                <div className="mb-4 flex gap-2 items-start p-3 bg-white border border-settle-slate-200 rounded-lg text-sm text-settle-slate-700">
+                  <AlertTriangle className="w-4 h-4 mt-0.5 flex-shrink-0 text-settle-slate-400" />
+                  <span><span className="font-medium text-settle-slate-900">{outstanding.untestedTransforms} transformation{outstanding.untestedTransforms !== 1 ? 's have' : ' has'} not been tested.</span>{' '}Review in the Transform tab.</span>
                 </div>
               )}
 
@@ -1519,7 +1518,7 @@ export default function OutputsContent({ projectId, projectName, initialData, is
             <DeliverableCard
               title="Migration Runbook"
               description="Complete operational guide with step-by-step execution plan, pre-migration checklist, validation criteria, sign-off lines, and embedded mapping specifications"
-              icon="📘"
+              icon={<FileTextLucide size={15} className="text-settle-slate-500" />}
               formats={[{ key: 'runbook_docx', label: 'Download Runbook (.docx)', ext: 'docx' }]}
               state={deliverableMap['runbook_docx']}
               isGenerating={generatingKey === 'runbook_docx'}
@@ -1532,7 +1531,7 @@ export default function OutputsContent({ projectId, projectName, initialData, is
             <DeliverableCard
               title="Migration Readiness Report"
               description="AI-generated executive summary with validation results, risk assessment, and go/no-go recommendation"
-              icon="📋"
+              icon={<BarChart2 size={15} className="text-settle-slate-500" />}
               formats={[{ key: 'readiness_report', label: 'Download Report (.docx)', ext: 'docx' }]}
               state={deliverableMap['readiness_report']}
               isGenerating={generatingKey === 'readiness_report'}
@@ -1545,7 +1544,7 @@ export default function OutputsContent({ projectId, projectName, initialData, is
             <DeliverableCard
               title="Mapping File"
               description="Complete field-to-field mapping specification with confidence scores and type compatibility"
-              icon="🗺️"
+              icon={<GitMerge size={15} className="text-settle-slate-500" />}
               formats={[
                 { key: 'mapping_csv', label: 'Download CSV', ext: 'csv' },
                 { key: 'mapping_json', label: 'Download JSON', ext: 'json' },
@@ -1561,7 +1560,7 @@ export default function OutputsContent({ projectId, projectName, initialData, is
             <DeliverableCard
               title="Transformation Specs"
               description="SQL transformations with source/target field context, status, and descriptions"
-              icon="⚙️"
+              icon={<Code2 size={15} className="text-settle-slate-500" />}
               formats={[{ key: 'transform_specs', label: 'Download SQL', ext: 'sql' }]}
               state={deliverableMap['transform_specs']}
               isGenerating={generatingKey === 'transform_specs'}
@@ -1574,7 +1573,7 @@ export default function OutputsContent({ projectId, projectName, initialData, is
             <DeliverableCard
               title="Fix Log & Audit Trail"
               description="Complete chronological record of all data fixes applied and risks accepted"
-              icon="📝"
+              icon={<Clock size={15} className="text-settle-slate-500" />}
               formats={[{ key: 'fix_log', label: 'Download CSV', ext: 'csv' }]}
               state={deliverableMap['fix_log']}
               isGenerating={generatingKey === 'fix_log'}
@@ -1587,7 +1586,7 @@ export default function OutputsContent({ projectId, projectName, initialData, is
             <DeliverableCard
               title="Data Dictionary"
               description="Source and target schema documentation with field profiles, data types, and sample values"
-              icon="📚"
+              icon={<BookOpen size={15} className="text-settle-slate-500" />}
               formats={[
                 { key: 'data_dictionary', label: 'Download CSV', ext: 'csv' },
               ]}
@@ -1657,7 +1656,7 @@ interface FormatSpec {
 interface DeliverableCardProps {
   title: string
   description: string
-  icon: string
+  icon: React.ReactNode
   formats: FormatSpec[]
   state?: DeliverableState
   stateMap?: Record<string, DeliverableState>
@@ -1684,7 +1683,9 @@ function DeliverableCard({ title, description, icon, formats, state, stateMap, i
     <div className="bg-white border border-gray-200 rounded-xl shadow-sm p-5">
       <div className="flex items-start justify-between gap-4">
         <div className="flex items-start gap-3 flex-1 min-w-0">
-          <span className="text-2xl leading-none mt-0.5">{icon}</span>
+          <div className="flex items-center justify-center w-8 h-8 rounded-md bg-settle-slate-50 border border-settle-slate-200 flex-shrink-0">
+            {icon}
+          </div>
           <div className="min-w-0">
             <div className="flex items-center gap-2 mb-1">
               <h3 className="text-sm font-semibold text-gray-900">{title}</h3>

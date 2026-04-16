@@ -339,10 +339,13 @@ export async function applyManualFix(
   // Set affected_row_count from snapshot count first — reliable since dq_snapshot_rows
   // counts in PostgreSQL with no PostgREST row limit
   if (snapshotResult.rowCount > 0) {
-    await supabase
+    const { error: snapshotUpdateError } = await supabaseAdmin
       .from('fix_history')
       .update({ affected_row_count: snapshotResult.rowCount })
       .eq('id', fixHistoryId)
+    if (snapshotUpdateError) {
+      console.error('[applyManualFix] Failed to update snapshot row count:', snapshotUpdateError)
+    }
   }
 
   // Admin required: execute_data_fix is SECURITY DEFINER and modifies data_rows
@@ -358,15 +361,18 @@ export async function applyManualFix(
   }
 
   // Prefer the actual exec count; fall back to snapshot count if execData is unexpected
-  const rowsAffected = typeof execData === 'number' && execData >= 0
-    ? execData
+  const execRowCount = Number(execData ?? -1)
+  const rowsAffected = execRowCount >= 0
+    ? execRowCount
     : snapshotResult.rowCount
 
-  // Fix 1: use RLS client for fix_history UPDATE
-  await supabase
+  const { error: rowCountUpdateError } = await supabaseAdmin
     .from('fix_history')
     .update({ affected_row_count: rowsAffected })
     .eq('id', fixHistoryId)
+  if (rowCountUpdateError) {
+    console.error('[applyManualFix] Failed to update final row count:', rowCountUpdateError)
+  }
 
   // Recompute field profiles for all fields on this table
   try {

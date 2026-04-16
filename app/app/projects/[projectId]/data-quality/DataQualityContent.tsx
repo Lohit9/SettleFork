@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useEffect, useTransition, useRef, useMemo } from 'react'
+import { useState, useEffect, useTransition, useRef, useMemo, useCallback } from 'react'
 import { useRouter } from 'next/navigation'
 import type { QualityIssue, FixOption, ReadinessScore, ValidationRule, FixHistory } from '@/lib/types/database'
 import { applyFix, acceptRisk, revertFix, runFullScan, getQualityIssues, getFixHistory, markIssueFixed, getAffectedRowsForIssue } from '@/lib/actions/quality-fixes'
@@ -16,6 +16,7 @@ import { getVerifiedFixes } from '@/lib/quality/fix-reconciliation'
 import type { VerifiedFix } from '@/lib/quality/fix-reconciliation'
 import { useProjectRole } from '@/lib/hooks/useProjectRole'
 import { RoleTooltip } from '@/components/app/RoleTooltip'
+import { FixDrawer } from '@/components/ui/fix-drawer'
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -189,6 +190,745 @@ function buildDiagnosticQuery(issue: {
   }
 }
 
+// ── Unified Fix Modal ─────────────────────────────────────────────────────────
+
+interface UnifiedFixModalProps {
+  issue: QualityIssue
+  onClose: () => void
+  onUpdate: (updated: QualityIssue) => void
+  initialTab?: 'details' | 'ai' | 'custom'
+  canEdit?: boolean
+}
+
+function UnifiedFixModal({
+  issue,
+  onClose,
+  onUpdate,
+  initialTab = 'details',
+  canEdit = true,
+}: UnifiedFixModalProps) {
+  const [activeTab, setActiveTab] = useState<'details' | 'ai' | 'custom'>(
+    initialTab ?? 'details'
+  )
+  const [customMode, setCustomMode] = useState<'nl' | 'sql'>('nl')
+
+  // AI Suggestions tab state
+  const [generatingFix, setGeneratingFix] = useState(false)
+  const [fixOptions, setFixOptions] = useState<FixOption[] | null>(
+    issue.ai_fix_options ?? null
+  )
+  const [aiConfirmIdx, setAiConfirmIdx] = useState<number | null>(null)
+  const [aiApplying, setAiApplying] = useState(false)
+
+  // NL tab state
+  const [nlDescription, setNlDescription] = useState('')
+  const [generatedSql, setGeneratedSql] = useState('')
+  const [generatingSql, setGeneratingSql] = useState(false)
+
+  // SQL tab state
+  const [sqlInput, setSqlInput] = useState('')
+
+  // Shared apply state
+  const [applyingManual, setApplyingManual] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+
+  // Details tab state
+  const router = useRouter()
+  const [detailsShowSample, setDetailsShowSample] = useState(false)
+  const [detailsExtraRows, setDetailsExtraRows] = useState<
+    Record<string, unknown>[] | null
+  >(null)
+  const [detailsLoadingMore, setDetailsLoadingMore] = useState(false)
+
+  const detailsDisplayRows = useMemo(
+    () =>
+      detailsExtraRows ??
+      (issue.affected_rows_sample as Record<string, unknown>[] | null) ??
+      [],
+    [detailsExtraRows, issue.affected_rows_sample]
+  )
+
+  const detailsDiagnosticQuery = useMemo(() => {
+    const tbl = issue.title?.split('.')[0] ?? ''
+    const fld = issue.title?.split('.').pop() ?? ''
+    if (issue.issue_kind && tbl && fld) {
+      return buildDiagnosticQuery({ field_name: fld, issue_kind: issue.issue_kind, tableName: tbl })
+    }
+    return null
+  }, [issue.title, issue.issue_kind])
+
+  const handleDetailsLoadMore = useCallback(async () => {
+    setDetailsLoadingMore(true)
+    try {
+      const result = await getAffectedRowsForIssue(issue.id, 20)
+      if (result.success && result.rows.length > 0) {
+        setDetailsExtraRows(result.rows)
+      }
+    } finally {
+      setDetailsLoadingMore(false)
+    }
+  }, [issue.id])
+
+  const handleDetailsNavigateToQueryData = useCallback(
+    (sql: string) => {
+      onClose()
+      router.push(
+        `/app/projects/${issue.project_id}/data-overview?tab=query` +
+          `&q=${encodeURIComponent(sql)}&mode=sql`
+      )
+    },
+    [onClose, router, issue.project_id]
+  )
+
+  // Auto-generate AI suggestions when AI tab opens with no options
+  useEffect(() => {
+    if (activeTab === 'ai' && !fixOptions && !generatingFix) {
+      handleGenerateAI()
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeTab])
+
+  async function handleGenerateAI() {
+    setGeneratingFix(true)
+    setError(null)
+    try {
+      await generateFixSuggestions(issue.id)
+      const { issues: refreshed } = await getQualityIssues(issue.project_id)
+      const updated = refreshed.find((i) => i.id === issue.id)
+      if (updated) {
+        onUpdate(updated)
+        setFixOptions(updated.ai_fix_options ?? null)
+      }
+    } catch {
+      setError('Failed to generate suggestions')
+    } finally {
+      setGeneratingFix(false)
+    }
+  }
+
+  async function handleApplyAI(idx: number) {
+    setAiApplying(true)
+    setError(null)
+    try {
+      const result = await applyFix(issue.id, idx)
+      if (!result.success) {
+        setError(result.error ?? 'Fix failed')
+        return
+      }
+      const { issues: refreshed } = await getQualityIssues(issue.project_id)
+      const updated = refreshed.find((i) => i.id === issue.id)
+      if (updated) onUpdate(updated)
+      onClose()
+    } catch {
+      setError('Failed to apply fix')
+    } finally {
+      setAiApplying(false)
+      setAiConfirmIdx(null)
+    }
+  }
+
+  async function handleGenerateSQL() {
+    if (!nlDescription.trim()) return
+    setGeneratingSql(true)
+    setError(null)
+    try {
+      const result = await generateManualFix(
+        issue.project_id,
+        issue.table_id ?? '',
+        issue.field_id ?? null,
+        nlDescription,
+        {
+          title: issue.title,
+          description: issue.description,
+          severity: issue.severity,
+          affectedRecords: issue.affected_records,
+        }
+      )
+      if ('error' in result && result.error) {
+        setError(result.error)
+      } else {
+        setGeneratedSql(result.sql)
+      }
+    } catch {
+      setError('Failed to generate SQL')
+    } finally {
+      setGeneratingSql(false)
+    }
+  }
+
+  async function handleApplyManual(sql: string) {
+    if (!sql.trim()) return
+    setApplyingManual(true)
+    setError(null)
+    try {
+      const desc =
+        nlDescription.trim() || `Custom SQL fix for ${issue.title}`
+      const result = await applyManualFix(
+        issue.project_id,
+        issue.table_id ?? '',
+        sql,
+        desc,
+        false
+      )
+      if (!result.success) {
+        setError(result.error ?? 'Fix failed')
+        return
+      }
+      await markIssueFixed(issue.id, result.fixHistoryId)
+      const { issues: refreshed } = await getQualityIssues(issue.project_id)
+      const updated = refreshed.find((i) => i.id === issue.id)
+      if (updated) onUpdate(updated)
+      onClose()
+    } catch {
+      setError('Failed to apply fix')
+    } finally {
+      setApplyingManual(false)
+    }
+  }
+
+  const TABS: { id: 'details' | 'ai' | 'custom'; label: string }[] = [
+    { id: 'details', label: 'Details' },
+    { id: 'ai', label: 'AI Suggestions' },
+    { id: 'custom', label: 'Custom Fix' },
+  ]
+
+  return (
+    <FixDrawer isOpen={true} onClose={onClose}>
+
+        {/* Header */}
+        <div className="flex items-start justify-between px-5 pt-5 pb-3 border-b border-slate-100">
+          <div className="flex-1 min-w-0 pr-4">
+            <p className="text-xs text-settle-slate-400 mb-0.5">Fix issue</p>
+            <h3 className="text-sm font-semibold text-settle-slate-900 truncate">
+              {issue.title}
+            </h3>
+            <div className="flex items-center gap-1.5 mt-2">
+              <span className={`w-1.5 h-1.5 rounded-full flex-shrink-0 ${
+                issue.severity === 'blocking' ? 'bg-red-500' : 'bg-amber-400'
+              }`} />
+              <span className="text-xs text-settle-slate-500">
+                {getRecordCountLabel(issue)}
+                {getRootCauseCategory(issue) !== null && (
+                  <> · {getRootCauseCategory(issue)}</>
+                )}
+                {buildContextualLabel(issue) !== null && (
+                  <> · {buildContextualLabel(issue)}</>
+                )}
+              </span>
+            </div>
+          </div>
+          <button
+            onClick={onClose}
+            className="text-settle-slate-400 hover:text-settle-slate-600 transition-colors flex-shrink-0 mt-0.5"
+            aria-label="Close"
+          >
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M18 6 6 18M6 6l12 12"/>
+            </svg>
+          </button>
+        </div>
+
+        {/* Tab bar */}
+        <div className="flex border-b border-slate-100 px-5">
+          {TABS.map((tab) => (
+            <button
+              key={tab.id}
+              onClick={() => setActiveTab(tab.id)}
+              className={`py-2.5 px-1 mr-5 text-xs font-medium border-b-2 -mb-px transition-colors ${
+                activeTab === tab.id
+                  ? 'border-settle-blue-500 text-settle-slate-900'
+                  : 'border-transparent text-settle-slate-400 hover:text-settle-slate-600'
+              }`}
+            >
+              {tab.label}
+            </button>
+          ))}
+        </div>
+
+        {/* Tab content */}
+        <div className="flex-1 overflow-y-auto p-5">
+
+          {error && (
+            <div className="bg-red-50 border border-red-200 rounded-lg p-3 text-sm text-red-700 mb-4">
+              {error}
+            </div>
+          )}
+
+          {/* AI Suggestions tab */}
+          {activeTab === 'ai' && (
+            <div>
+              {generatingFix && (
+                <div className="flex items-center gap-2 text-sm text-gray-500 py-8 justify-center">
+                  <span className="w-4 h-4 border-2 border-slate-200 border-t-blue-500 rounded-full animate-spin" />
+                  Generating suggestions…
+                </div>
+              )}
+              {!generatingFix && !fixOptions && (
+                <div className="text-center py-8">
+                  <p className="text-sm text-gray-400 mb-3">
+                    No suggestions generated yet.
+                  </p>
+                  <button
+                    onClick={handleGenerateAI}
+                    className="text-xs font-medium text-blue-500 hover:text-blue-700 transition-colors"
+                  >
+                    Generate now
+                  </button>
+                </div>
+              )}
+              {fixOptions && fixOptions.length > 0 && (
+                <div className="space-y-3">
+                  {fixOptions.map((opt, idx) => (
+                    <div key={idx} className="border border-gray-200 rounded-lg p-4">
+                      <div className="flex items-start justify-between gap-3 mb-2">
+                        <span className="text-xs font-semibold text-gray-700">
+                          Option {String.fromCharCode(65 + idx)}: {opt.label}
+                        </span>
+                        {opt.risk_level && (
+                          <span className={`text-[10px] font-medium px-2 py-0.5 rounded flex-shrink-0 ${
+                            opt.risk_level === 'low'
+                              ? 'bg-green-50 text-green-700 border border-green-200'
+                              : opt.risk_level === 'medium'
+                              ? 'bg-amber-50 text-amber-700 border border-amber-200'
+                              : 'bg-red-50 text-red-700 border border-red-200'
+                          }`}>
+                            {opt.risk_level === 'low' ? 'Low Risk'
+                              : opt.risk_level === 'medium' ? 'Medium Risk'
+                              : 'High Risk'}
+                          </span>
+                        )}
+                      </div>
+                      <p className="text-xs text-gray-600 mb-1">{opt.description}</p>
+                      {opt.tradeoff && (
+                        <p className="text-xs text-gray-500 mb-1">
+                          <span className="font-medium text-gray-700">Tradeoff:</span> {opt.tradeoff}
+                        </p>
+                      )}
+                      {opt.downstream_impact && (
+                        <p className="text-xs text-gray-500 mb-1">
+                          <span className="font-medium text-gray-700">Impact:</span> {opt.downstream_impact}
+                        </p>
+                      )}
+                      {opt.estimated_rows_affected !== undefined && (
+                        <p className="text-xs text-gray-400 mb-3">
+                          Estimated rows: {opt.estimated_rows_affected?.toLocaleString()}
+                        </p>
+                      )}
+                      {aiConfirmIdx === idx ? (
+                        <div className="flex items-center gap-2">
+                          <button
+                            onClick={() => handleApplyAI(idx)}
+                            disabled={aiApplying}
+                            className="text-xs font-medium px-3 py-1.5 rounded-md bg-gray-900 text-white hover:bg-gray-800 disabled:opacity-50 transition-colors"
+                          >
+                            {aiApplying ? 'Applying…' : 'Confirm apply'}
+                          </button>
+                          <button
+                            onClick={() => setAiConfirmIdx(null)}
+                            className="text-xs text-gray-400 hover:text-gray-600 transition-colors"
+                          >
+                            Cancel
+                          </button>
+                        </div>
+                      ) : (
+                        <button
+                          onClick={() => setAiConfirmIdx(idx)}
+                          disabled={!canEdit}
+                          className="text-xs font-medium px-3 py-1.5 rounded-md bg-primary text-white hover:bg-primary/90 disabled:opacity-50 transition-colors"
+                        >
+                          Apply Fix
+                        </button>
+                      )}
+                    </div>
+                  ))}
+                  <button
+                    onClick={handleGenerateAI}
+                    disabled={generatingFix}
+                    className="text-xs text-gray-400 hover:text-gray-600 transition-colors disabled:opacity-50"
+                  >
+                    {generatingFix ? 'Regenerating…' : 'Regenerate suggestions'}
+                  </button>
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* Details tab */}
+          {activeTab === 'details' && (
+            <div className="space-y-5">
+
+              {/* Description */}
+              {issue.description && (
+                <div>
+                  <p className="text-[10px] font-medium text-settle-slate-400 uppercase tracking-wide mb-1.5">
+                    Description
+                  </p>
+                  <p className="text-sm text-settle-slate-700 leading-relaxed">
+                    {issue.description}
+                  </p>
+                </div>
+              )}
+
+              {/* Downstream impact */}
+              {issue.downstream_impact && (
+                <div>
+                  <p className="text-[10px] font-medium text-settle-slate-400 uppercase tracking-wide mb-1.5">
+                    Impact
+                  </p>
+                  <p className="text-sm text-settle-slate-700 leading-relaxed">
+                    {issue.downstream_impact}
+                  </p>
+                </div>
+              )}
+
+              {/* Affected rows */}
+              {issue.affected_records > 0 && (
+                <div>
+                  <button
+                    onClick={() => setDetailsShowSample((s) => !s)}
+                    className="flex items-center gap-1.5 text-xs text-settle-blue-500 hover:text-settle-blue-700 font-medium transition-colors"
+                  >
+                    <ChevronRight
+                      className={`h-3.5 w-3.5 transition-transform duration-150 ${
+                        detailsShowSample ? 'rotate-90' : ''
+                      }`}
+                    />
+                    View affected rows ({issue.affected_records.toLocaleString()})
+                  </button>
+
+                  {/* Empty fallback */}
+                  {detailsShowSample && detailsDisplayRows.length === 0 && (
+                    <div className="mt-3 px-4 py-3 bg-settle-slate-50 rounded-md text-xs text-settle-slate-500 border border-settle-slate-200 space-y-2">
+                      <p>Sample data not available for this issue.</p>
+                      <div className="flex items-center gap-3 flex-wrap">
+                        {detailsDiagnosticQuery && (
+                          <button
+                            onClick={() => handleDetailsNavigateToQueryData(detailsDiagnosticQuery)}
+                            className="text-settle-blue-500 hover:text-settle-blue-700 font-medium transition-colors"
+                          >
+                            View in Query Data →
+                          </button>
+                        )}
+                        <button
+                          onClick={handleDetailsLoadMore}
+                          disabled={detailsLoadingMore}
+                          className="text-settle-blue-500 hover:text-settle-blue-700 font-medium disabled:opacity-50 transition-colors"
+                        >
+                          {detailsLoadingMore ? 'Loading…' : 'Load samples now'}
+                        </button>
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Rows table */}
+                  {detailsShowSample && detailsDisplayRows.length > 0 && (
+                    <div className="mt-3 border border-settle-slate-200 rounded-md overflow-hidden">
+                      <div className="overflow-x-auto max-h-64 overflow-y-auto">
+                        <table className="w-full text-xs">
+                          <thead>
+                            <tr className="bg-settle-slate-50 border-b border-settle-slate-200">
+                              {Object.keys(detailsDisplayRows[0] ?? {}).map((col) => (
+                                <th
+                                  key={col}
+                                  className="px-3 py-2 text-left font-medium text-settle-slate-600 whitespace-nowrap"
+                                >
+                                  {col}
+                                </th>
+                              ))}
+                            </tr>
+                          </thead>
+                          <tbody className="divide-y divide-settle-slate-100">
+                            {detailsDisplayRows.map((row, idx) => (
+                              <tr key={idx} className="hover:bg-settle-slate-50">
+                                {Object.values(row).map((val, colIdx) => (
+                                  <td
+                                    key={colIdx}
+                                    className="px-3 py-2 text-settle-slate-700 whitespace-nowrap font-mono"
+                                  >
+                                    {val === null ? (
+                                      <span className="text-settle-slate-400 italic">null</span>
+                                    ) : (
+                                      String(val)
+                                    )}
+                                  </td>
+                                ))}
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                      <div className="px-3 py-2 bg-settle-slate-50 border-t border-settle-slate-200 flex items-center justify-between gap-2">
+                        <span className="text-[10px] text-settle-slate-400">
+                          Showing {Math.min(detailsDisplayRows.length, issue.affected_records)}{' '}
+                          of {issue.affected_records.toLocaleString()} affected rows
+                        </span>
+                        <div className="flex items-center gap-3">
+                          {issue.affected_records > detailsDisplayRows.length && (
+                            <button
+                              onClick={handleDetailsLoadMore}
+                              disabled={detailsLoadingMore}
+                              className="text-xs text-settle-blue-500 hover:text-settle-blue-700 font-medium disabled:opacity-50 transition-colors"
+                            >
+                              {detailsLoadingMore ? 'Loading…' : 'Load more'}
+                            </button>
+                          )}
+                          {detailsDiagnosticQuery && (
+                            <button
+                              onClick={() => handleDetailsNavigateToQueryData(detailsDiagnosticQuery)}
+                              className="text-xs text-settle-blue-500 hover:text-settle-blue-700 font-medium flex items-center gap-1 transition-colors"
+                            >
+                              Show all in Query Data
+                              <ExternalLink className="h-3 w-3" />
+                            </button>
+                          )}
+                        </div>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              )}
+
+            </div>
+          )}
+
+          {/* Custom Fix tab */}
+          {activeTab === 'custom' && (
+            <div className="space-y-4">
+              {/* Mode toggle */}
+              <div className="flex gap-1 bg-settle-slate-100 rounded-lg p-1">
+                <button
+                  onClick={() => setCustomMode('nl')}
+                  className={`flex-1 py-1.5 px-3 rounded-md text-xs font-medium transition-colors ${
+                    customMode === 'nl'
+                      ? 'bg-white text-settle-slate-900 shadow-sm'
+                      : 'text-settle-slate-500 hover:text-settle-slate-700'
+                  }`}
+                >
+                  Natural Language
+                </button>
+                <button
+                  onClick={() => setCustomMode('sql')}
+                  className={`flex-1 py-1.5 px-3 rounded-md text-xs font-medium transition-colors ${
+                    customMode === 'sql'
+                      ? 'bg-white text-settle-slate-900 shadow-sm'
+                      : 'text-settle-slate-500 hover:text-settle-slate-700'
+                  }`}
+                >
+                  SQL Editor
+                </button>
+              </div>
+
+              {/* Natural Language mode */}
+              {customMode === 'nl' && (
+                <div className="space-y-3">
+                  <div>
+                    <label className="block text-xs font-medium text-settle-slate-700 mb-1.5">
+                      Describe the fix
+                    </label>
+                    <textarea
+                      value={nlDescription}
+                      onChange={(e) => setNlDescription(e.target.value)}
+                      rows={3}
+                      placeholder="e.g. Set all null values to 'UNKNOWN'"
+                      className="w-full text-sm border border-settle-slate-200 rounded-lg px-3 py-2 resize-none focus:outline-none focus:ring-1 focus:ring-settle-blue-500 text-settle-slate-900 placeholder:text-settle-slate-400"
+                    />
+                  </div>
+                  <button
+                    onClick={handleGenerateSQL}
+                    disabled={!nlDescription.trim() || generatingSql}
+                    className="inline-flex items-center gap-1.5 text-xs font-medium px-3 py-1.5 rounded-md bg-primary text-white hover:bg-primary/90 disabled:opacity-50 transition-colors"
+                  >
+                    {generatingSql ? 'Generating…' : '✦ Generate SQL'}
+                  </button>
+                  {generatedSql && (
+                    <div>
+                      <label className="block text-xs font-medium text-settle-slate-700 mb-1.5">
+                        Generated SQL
+                      </label>
+                      <pre className="text-xs bg-settle-slate-50 border border-settle-slate-200 rounded-lg p-3 overflow-x-auto font-mono text-settle-slate-700 whitespace-pre-wrap">
+                        {generatedSql}
+                      </pre>
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {/* SQL Editor mode */}
+              {customMode === 'sql' && (
+                <div>
+                  <label className="block text-xs font-medium text-settle-slate-700 mb-1.5">
+                    SQL expression
+                  </label>
+                  <textarea
+                    value={sqlInput}
+                    onChange={(e) => setSqlInput(e.target.value)}
+                    rows={8}
+                    placeholder="UPDATE table SET field = value WHERE condition"
+                    className="w-full text-xs border border-settle-slate-200 rounded-lg px-3 py-2 resize-none font-mono focus:outline-none focus:ring-1 focus:ring-settle-blue-500 text-settle-slate-900 placeholder:text-settle-slate-400"
+                  />
+                </div>
+              )}
+            </div>
+          )}
+
+        </div>
+
+        {/* Footer */}
+        <div className="flex items-center justify-between px-5 py-4 border-t border-slate-100">
+          <button
+            onClick={onClose}
+            className="text-xs text-gray-500 hover:text-gray-700 transition-colors"
+          >
+            Cancel
+          </button>
+          {activeTab === 'custom' && customMode === 'nl' && generatedSql && (
+            <button
+              onClick={() => handleApplyManual(generatedSql)}
+              disabled={applyingManual || !canEdit}
+              className="text-xs font-medium px-4 py-1.5 rounded-md bg-settle-slate-900 text-white hover:bg-settle-slate-800 disabled:opacity-50 transition-colors"
+            >
+              {applyingManual ? 'Applying…' : 'Apply Fix'}
+            </button>
+          )}
+          {activeTab === 'custom' && customMode === 'sql' && sqlInput.trim() && (
+            <button
+              onClick={() => handleApplyManual(sqlInput)}
+              disabled={applyingManual || !canEdit}
+              className="text-xs font-medium px-4 py-1.5 rounded-md bg-settle-slate-900 text-white hover:bg-settle-slate-800 disabled:opacity-50 transition-colors"
+            >
+              {applyingManual ? 'Applying…' : 'Apply Fix'}
+            </button>
+          )}
+        </div>
+    </FixDrawer>
+  )
+}
+
+// ── Issue Card helpers (pure) ─────────────────────────────────────────────────
+
+function getRecordCountLabel(issue: QualityIssue): string {
+  if (issue.affected_records > 0) {
+    return `${issue.affected_records.toLocaleString()} ${
+      issue.affected_records === 1 ? 'record' : 'records'
+    }`
+  }
+  if (issue.severity === 'blocking') return 'All records'
+  return '0 records'
+}
+
+/**
+ * Generates a specific, contextual label for the third segment of
+ * the issue one-liner. Parses description text for extractable
+ * field/table references rather than using a generic static lookup.
+ *
+ * Returns null when no useful label can be derived — the segment
+ * is then simply omitted from the one-liner.
+ */
+function buildContextualLabel(issue: QualityIssue): string | null {
+  const kind = issue.issue_kind
+  const desc = issue.description ?? ''
+
+  // ── Referential integrity / orphaned FK ────────────────────────
+  if (kind === 'orphaned_fk') {
+    // In-flight pattern:
+    // "...N staged record(s) in Table.field reference values not found
+    //  in staged ParentTable.parentField — these records will fail..."
+    const inflightMatch = desc.match(
+      /not found in staged ([A-Za-z0-9_]+\.[A-Za-z0-9_]+)/
+    )
+    if (inflightMatch?.[1]) {
+      return `FK \u2192 ${inflightMatch[1].split('.')[1] ?? inflightMatch[1]} not found`
+    }
+
+    // Source pattern:
+    // "...orphaned records in field.name referencing non-existent
+    //  RefTable.RefField"
+    const sourceMatch = desc.match(
+      /referencing non-existent ([A-Za-z0-9_]+\.[A-Za-z0-9_]+)/
+    )
+    if (sourceMatch?.[1]) {
+      return `FK \u2192 ${sourceMatch[1].split('.')[1] ?? sourceMatch[1]} not found`
+    }
+
+    return 'FK reference not found'
+  }
+
+  // ── Null / primary key issues ──────────────────────────────────
+  if (kind === 'null_pk' || kind === 'null_primary_key') {
+    return 'Null primary key'
+  }
+  if (kind === 'null_required') {
+    return 'NOT NULL constraint'
+  }
+  if (kind === 'duplicate_pk') {
+    return 'Duplicate primary key'
+  }
+
+  // ── Type mismatches — distinguish int vs numeric ────────────────
+  if (kind === 'type_mismatch_integer') return 'Invalid integer value'
+  if (kind === 'type_mismatch_numeric') return 'Invalid numeric value'
+
+  // ── Format issues ──────────────────────────────────────────────
+  if (kind === 'email_format')    return 'Invalid email format'
+  if (kind === 'phone_format')    return 'Invalid phone format'
+  if (kind === 'currency_format') return 'Currency symbols present'
+  if (kind === 'negative_value')  return 'Negative value'
+  if (kind === 'non_iso_date')    return 'Non-ISO date format'
+  if (kind === 'invalid_date_string') return 'Invalid date string'
+  if (kind === 'high_null_rate')  return '>50% null rate'
+
+  // ── In-flight checks (issue_kind is null) ──────────────────────
+  // These are Check 8–12 in the detection engine — no issue_kind is
+  // set, so we pattern-match on the description string instead.
+  if (!kind) {
+    // String length / VARCHAR truncation
+    if (
+      desc.includes('exceeds') &&
+      (desc.includes('VARCHAR') || desc.includes('char'))
+    ) {
+      const varcharMatch = desc.match(/VARCHAR\((\d+)\)/i)
+      if (varcharMatch?.[1]) return `Exceeds VARCHAR(${varcharMatch[1]})`
+      const charMatch = desc.match(/exceeds (\d+)[\s-]char/)
+      if (charMatch?.[1]) return `Exceeds ${charMatch[1]}-char limit`
+      return 'Exceeds column length'
+    }
+
+    // Missing source mapping — no source mapped, NOT NULL target
+    if (
+      desc.includes('no source mapping') ||
+      desc.includes('has no source mapping')
+    ) {
+      return 'NOT NULL \u00b7 no source mapped'
+    }
+
+    // Nullable target has null values after transform
+    if (
+      desc.includes('non-nullable') ||
+      (desc.includes('null') && desc.includes('fail on load'))
+    ) {
+      return 'Null in NOT NULL target'
+    }
+  }
+
+  return null
+}
+
+function getRootCauseCategory(issue: QualityIssue): string | null {
+  if (issue.root_cause_breakdown) {
+    const { transform_error, missing_transform, source_data } =
+      issue.root_cause_breakdown
+    if (transform_error > 0 && transform_error >= source_data)
+      return 'Transform error'
+    if (missing_transform > 0) return 'Missing transform'
+    if (source_data > 0) return 'Source data'
+  }
+  if (issue.root_cause) {
+    const segment = issue.root_cause.split(' — ')[0]?.trim()
+    return segment || null
+  }
+  return null
+}
+
 // ── Issue Card ────────────────────────────────────────────────────────────────
 
 // RoleTooltip is imported from @/components/app/RoleTooltip
@@ -218,76 +958,11 @@ function IssueCard({
   const [riskReason, setRiskReason] = useState('')
   const [showAcceptModal, setShowAcceptModal] = useState(false)
   const [showCustomFix, setShowCustomFix] = useState(false)
+  const [fixModalOpen, setFixModalOpen] = useState(false)
+  const [fixModalTab, setFixModalTab] = useState<'details' | 'ai' | 'custom'>('details')
   // When prefetchedFixHistory is provided (server-prefetched), derive fixDetails directly.
   // Otherwise fall back to a client-side fetch to stay backward-compatible.
   const [fetchedFixDetails, setFetchedFixDetails] = useState<FixHistory | null>(null)
-
-  // ── Affected rows preview ────────────────────────────────────────────────
-  const [showSample, setShowSample] = useState(false)
-  const [extraRows, setExtraRows] = useState<Record<string, unknown>[] | null>(null)
-  const [loadingMore, setLoadingMore] = useState(false)
-
-  const router = useRouter()
-
-  const sampleRows = (issue.affected_rows_sample as Record<string, unknown>[] | null) ?? []
-  const displayRows = extraRows ?? sampleRows
-
-  const titleParts = issue.title?.split('.') ?? []
-  const fieldName = titleParts.length >= 2 ? titleParts[titleParts.length - 1] : ''
-  const tableName = titleParts.length >= 2 ? titleParts[0] : ''
-
-  const sampleColumns = useMemo(() => {
-    if (displayRows.length === 0) return []
-    const allCols = Object.keys(displayRows[0])
-    const sorted = allCols.filter(c => c === fieldName).concat(allCols.filter(c => c !== fieldName))
-    return sorted.slice(0, 6)
-  }, [displayRows, fieldName])
-
-  const diagnosticQuery = useMemo(() => {
-    const tbl = issue.title?.split('.')[0] ?? ''
-    const fld = issue.title?.split('.').pop() ?? ''
-
-    // Try the typed builder first
-    if (issue.issue_kind && tbl && fld) {
-      return buildDiagnosticQuery({ field_name: fld, issue_kind: issue.issue_kind, tableName: tbl })
-    }
-
-    // Fallback: derive query from title/description when issue_kind is missing
-    if (tbl && fld) {
-      const desc = (issue.description ?? '').toLowerCase()
-      if (desc.includes('null') || desc.includes('empty')) {
-        return `SELECT * FROM ${tbl} WHERE "${fld}" IS NULL OR TRIM("${fld}") = ''`
-      }
-      if (desc.includes('orphan') || desc.includes('referential')) {
-        return `SELECT * FROM ${tbl} WHERE "${fld}" IS NOT NULL LIMIT 50`
-      }
-      if (desc.includes('duplicate')) {
-        return `SELECT "${fld}", COUNT(*) AS count FROM ${tbl} GROUP BY "${fld}" HAVING COUNT(*) > 1`
-      }
-      return `SELECT * FROM ${tbl} LIMIT 50`
-    }
-
-    return null
-  }, [issue])
-
-  const handleLoadMore = async () => {
-    setLoadingMore(true)
-    try {
-      const result = await getAffectedRowsForIssue(issue.id, 20)
-      if (result.success && result.rows.length > 0) {
-        setExtraRows(result.rows)
-      }
-    } catch {
-      // silently fail — user still sees the initial sample
-    } finally {
-      setLoadingMore(false)
-    }
-  }
-
-  const navigateToQueryData = (query: string) => {
-    const params = new URLSearchParams({ tab: 'query', q: query, mode: 'sql' })
-    router.push(`/app/projects/${issue.project_id}/data-overview?${params.toString()}`)
-  }
 
   const fixDetails: FixHistory | null = prefetchedFixHistory
     ? (prefetchedFixHistory.find(
@@ -393,6 +1068,15 @@ function IssueCard({
   return (
     <>
       {showSQL && <SQLModal sql={showSQL} onClose={() => setShowSQL(null)} />}
+      {fixModalOpen && (
+        <UnifiedFixModal
+          issue={issue}
+          onClose={() => setFixModalOpen(false)}
+          onUpdate={onUpdate}
+          initialTab={fixModalTab}
+          canEdit={canEdit}
+        />
+      )}
       {showCustomFix && (
         <IssueFixModal
           issue={issue}
@@ -450,30 +1134,51 @@ function IssueCard({
         </div>
       )}
 
-      <div className={`rounded-xl border shadow-sm overflow-hidden ${
+      <div className={`rounded-xl shadow-sm overflow-hidden transition-shadow ${
         isFixed
-          ? 'bg-green-50/50 border-green-200 border-l-[3px] border-l-green-400'
+          ? 'bg-green-50/50 border border-green-200'
           : isAccepted
-          ? 'bg-amber-50/30 border-amber-200 border-l-[3px] border-l-amber-300'
-          : 'bg-white'
+          ? 'bg-amber-50/30 border border-amber-200'
+          : fixModalOpen
+          ? 'bg-white border border-settle-blue-500 ring-2 ring-settle-blue-500/10'
+          : 'bg-white border border-settle-slate-200'
       }`}>
         {/* Card Header */}
         <div className="p-4 pb-2">
-          <div className="flex items-start gap-3">
+          <div
+            className={`flex items-start gap-3 ${
+              !isFixed && !isAccepted && !isArchived
+                ? 'cursor-pointer hover:bg-settle-slate-50/50 transition-colors'
+                : ''
+            }`}
+            onClick={() => {
+              if (!isFixed && !isAccepted && !isArchived) {
+                setFixModalTab('details')
+                setFixModalOpen(true)
+              }
+            }}
+            role={!isFixed && !isAccepted && !isArchived ? 'button' : undefined}
+            tabIndex={!isFixed && !isAccepted && !isArchived ? 0 : undefined}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter' || e.key === ' ') {
+                e.preventDefault()
+                if (!isFixed && !isAccepted && !isArchived) {
+                  setFixModalTab('details')
+                  setFixModalOpen(true)
+                }
+              }
+            }}
+            aria-label={!isFixed && !isAccepted && !isArchived ? `View details for ${issue.title}` : undefined}
+          >
             <div className="flex-1 min-w-0">
               <div className="flex flex-wrap items-center gap-2 mb-1">
+                <span
+                  className={`w-1.5 h-1.5 rounded-full flex-shrink-0 mt-1 ${
+                    issue.severity === 'blocking' ? 'bg-red-500' : 'bg-amber-400'
+                  }`}
+                  aria-label={issue.severity === 'blocking' ? 'Blocking' : 'Warning'}
+                />
                 <span className="text-sm font-semibold text-gray-900 truncate">{issue.title}</span>
-                {/* Severity badge */}
-                {issue.severity === 'blocking' ? (
-                  <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-red-100 text-red-800 border border-red-200">
-                    <span>⊘</span> Blocking
-                  </span>
-                ) : (
-                  <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-amber-100 text-amber-800 border border-amber-200">
-                    <span>△</span> Warning
-                  </span>
-                )}
-                {/* Status badge */}
                 {isFixed && (
                   <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-green-100 text-green-800 border border-green-200">
                     ✓ Fixed
@@ -484,176 +1189,23 @@ function IssueCard({
                     Risk Accepted
                   </span>
                 )}
-                {/* Detection source */}
-                {(issue.detection_type === 'ai_augmented' || issue.detection_source === 'ai_augmented' as string) ? (
-                  <span className="px-1.5 py-0.5 rounded text-[10px] bg-violet-50 text-violet-700 border border-violet-200">
-                    ✦ AI
-                  </span>
-                ) : issue.detection_source === 'custom_rule' || issue.detection_type === 'custom_rule' ? (
-                  <span className="px-1.5 py-0.5 rounded text-[10px] bg-blue-50 text-blue-700 border border-blue-200">
-                    ✦ Custom Rule
-                  </span>
-                ) : (
-                  <span className="px-1.5 py-0.5 rounded text-[10px] bg-gray-100 text-gray-500 border border-gray-200">
-                    Auto
-                  </span>
+              </div>
+              {/* One-liner metadata: count · root cause · issue type */}
+              <div className="flex items-center flex-wrap gap-x-1.5 gap-y-0.5 text-xs text-settle-slate-500 mt-1">
+                <span>{getRecordCountLabel(issue)}</span>
+                {getRootCauseCategory(issue) !== null && (
+                  <>
+                    <span className="text-settle-slate-300">·</span>
+                    <span>{getRootCauseCategory(issue)}</span>
+                  </>
                 )}
-                {/* Stage badge — derived from issue.stage */}
-                {issue.stage === 'source' && (
-                  <span className="px-1.5 py-0.5 rounded text-[10px] bg-blue-50 text-blue-700 border border-blue-200">
-                    Source
-                  </span>
-                )}
-                {(issue.stage === 'in_flight' || issue.stage === 'target') && (
-                  <span className="px-1.5 py-0.5 rounded text-[10px] bg-purple-50 text-purple-700 border border-purple-200">
-                    Target-Ready
-                  </span>
+                {buildContextualLabel(issue) !== null && (
+                  <>
+                    <span className="text-settle-slate-300">·</span>
+                    <span>{buildContextualLabel(issue)}</span>
+                  </>
                 )}
               </div>
-              <p className="text-sm text-gray-700">{issue.description}</p>
-              <p className="text-xs text-gray-400 mt-1">Affected records: {issue.affected_records.toLocaleString()}</p>
-              {issue.downstream_impact && (
-                <p className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded px-2 py-1 mt-2">
-                  <strong>Impact:</strong> {issue.downstream_impact}
-                </p>
-              )}
-
-              {/* Root cause attribution */}
-              {issue.root_cause && (
-                <div className="flex items-start gap-2 mt-2 text-xs">
-                  <span className="text-slate-400 shrink-0 pt-px">Root cause:</span>
-                  <span className="text-slate-600">{issue.root_cause}</span>
-                </div>
-              )}
-              {issue.root_cause_breakdown && (
-                <div className="flex flex-wrap gap-3 mt-1 text-[11px]">
-                  {issue.root_cause_breakdown.source_data > 0 && (
-                    <span className="text-gray-500">
-                      {issue.root_cause_breakdown.source_data.toLocaleString()} from source data
-                    </span>
-                  )}
-                  {issue.root_cause_breakdown.transform_error > 0 && (
-                    <span className="text-amber-600">
-                      {issue.root_cause_breakdown.transform_error.toLocaleString()} from transform
-                    </span>
-                  )}
-                  {issue.root_cause_breakdown.missing_transform > 0 && (
-                    <span className="text-purple-600">
-                      {issue.root_cause_breakdown.missing_transform.toLocaleString()} missing transform
-                    </span>
-                  )}
-                </div>
-              )}
-
-              {/* View affected rows toggle */}
-              {issue.affected_records > 0 && (
-                <button
-                  onClick={() => setShowSample(s => !s)}
-                  className="flex items-center gap-1.5 text-xs text-blue-600 hover:text-blue-800 font-medium mt-2"
-                >
-                  <ChevronRight className={`h-3.5 w-3.5 transition-transform ${showSample ? 'rotate-90' : ''}`} />
-                  View affected rows ({issue.affected_records.toLocaleString()})
-                </button>
-              )}
-
-              {/* Affected rows preview panel */}
-              {showSample && displayRows.length === 0 && (
-                <div className="mt-3 px-4 py-3 bg-slate-50 rounded-md text-xs text-gray-500 border space-y-2">
-                  <p>Sample data not available for this issue.</p>
-                  <div className="flex items-center gap-3 flex-wrap">
-                    {diagnosticQuery && (
-                      <button
-                        onClick={() => navigateToQueryData(diagnosticQuery)}
-                        className="text-blue-600 hover:text-blue-800 font-medium"
-                      >
-                        View affected rows in Query Data →
-                      </button>
-                    )}
-                    <button
-                      onClick={async () => {
-                        setLoadingMore(true)
-                        try {
-                          const result = await getAffectedRowsForIssue(issue.id, 5)
-                          if (result.success && result.rows.length > 0) {
-                            setExtraRows(result.rows)
-                          }
-                        } finally {
-                          setLoadingMore(false)
-                        }
-                      }}
-                      disabled={loadingMore}
-                      className="text-blue-600 hover:text-blue-800 font-medium disabled:opacity-50"
-                    >
-                      {loadingMore ? 'Loading…' : 'Load samples now'}
-                    </button>
-                  </div>
-                </div>
-              )}
-
-              {showSample && displayRows.length > 0 && (
-                <div className="mt-3 border rounded-md overflow-hidden">
-                  <div className="overflow-x-auto max-h-64 overflow-y-auto">
-                    <table className="w-full text-xs">
-                      <thead className="bg-slate-50 sticky top-0">
-                        <tr>
-                          {sampleColumns.map(col => (
-                            <th key={col} className="px-3 py-2 text-left font-medium text-slate-600 border-b whitespace-nowrap">
-                              {col}
-                              {col === fieldName && (
-                                <span className="ml-1 text-red-500">●</span>
-                              )}
-                            </th>
-                          ))}
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {displayRows.map((row, i) => (
-                          <tr key={i} className="border-b last:border-0 hover:bg-slate-50/50">
-                            {sampleColumns.map(col => (
-                              <td key={col} className={`px-3 py-1.5 font-mono ${
-                                col === fieldName ? 'text-red-700 bg-red-50/50 font-medium' : 'text-gray-700'
-                              }`}>
-                                {row[col] === null || row[col] === undefined || row[col] === ''
-                                  ? <span className="text-slate-300 italic">null</span>
-                                  : String(row[col]).length > 40
-                                    ? String(row[col]).slice(0, 40) + '…'
-                                    : String(row[col])
-                                }
-                              </td>
-                            ))}
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
-                  </div>
-
-                  <div className="px-3 py-2 bg-slate-50 border-t flex items-center justify-between gap-2">
-                    <span className="text-xs text-gray-500">
-                      Showing {displayRows.length} of {issue.affected_records.toLocaleString()} affected rows
-                    </span>
-                    <div className="flex items-center gap-3">
-                      {issue.affected_records > displayRows.length && (
-                        <button
-                          onClick={handleLoadMore}
-                          disabled={loadingMore}
-                          className="text-xs text-blue-600 hover:text-blue-800 font-medium disabled:opacity-50"
-                        >
-                          {loadingMore ? 'Loading…' : 'Load more'}
-                        </button>
-                      )}
-                      {diagnosticQuery && (
-                        <button
-                          onClick={() => navigateToQueryData(diagnosticQuery)}
-                          className="text-xs text-blue-600 hover:text-blue-800 font-medium flex items-center gap-1"
-                        >
-                          Show all in Query Data
-                          <ExternalLink className="h-3 w-3" />
-                        </button>
-                      )}
-                    </div>
-                  </div>
-                </div>
-              )}
             </div>
 
             {/* Revert button — only on fixed or accepted_risk issues */}
@@ -719,127 +1271,24 @@ function IssueCard({
           </div>
         )}
 
-        {/* AI Fix Section */}
+        {/* Fix action row */}
         {!isFixed && !isAccepted && !isArchived && (
-          <div className="mx-4 mb-4 rounded-lg bg-gradient-to-br from-blue-50 to-blue-50 border border-blue-200 p-4">
-            <div className="flex items-center gap-2 mb-3">
-              <span className="text-sm font-semibold text-gray-900">✦ AI-Suggested Fix</span>
-            </div>
-
-            {error && (
-              <p className="text-xs text-red-600 bg-red-50 rounded px-2 py-1 mb-3">{error}</p>
-            )}
-
-            {!hasOptions ? (
-              <div className="flex items-center gap-2 flex-wrap">
-                <button
-                  onClick={handleGenerateFix}
-                  disabled={generatingFix}
-                  className="flex items-center gap-2 px-4 py-2 text-sm border border-blue-400 text-blue-700 rounded-lg hover:bg-blue-100 disabled:opacity-50 transition-colors"
-                >
-                  {generatingFix ? (
-                    <><span className="w-3.5 h-3.5 border-2 border-blue-300 border-t-blue-600 rounded-full animate-spin" />Generating suggestions…</>
-                  ) : (
-                    <>✦ Generate Fix Suggestions</>
-                  )}
-                </button>
-                <button
-                  onClick={() => setShowCustomFix(true)}
-                  className="flex items-center gap-1.5 px-4 py-2 text-sm border border-gray-300 text-gray-700 rounded-lg hover:bg-gray-50 transition-colors"
-                >
-                  ✎ Custom Fix
-                </button>
-              </div>
-            ) : (
-              <div className="space-y-3">
-                {(issue.ai_fix_options ?? []).map((opt, idx) => (
-                  <div key={idx} className="bg-white rounded-lg border border-blue-100 p-3 space-y-2">
-                    <div className="flex items-start justify-between gap-2">
-                      <div className="flex-1">
-                        <p className="text-sm font-semibold text-gray-900">Option {String.fromCharCode(65 + idx)}: {opt.label}</p>
-                        <p className="text-sm text-gray-700 mt-0.5">{opt.description}</p>
-                      </div>
-                      <span className={`text-xs px-2 py-0.5 rounded-full font-medium shrink-0 ${riskColor(opt.risk_level)}`}>
-                        {opt.risk_level.charAt(0).toUpperCase() + opt.risk_level.slice(1)} Risk
-                      </span>
-                    </div>
-                    <div className="text-xs space-y-1">
-                      <p className="text-gray-500"><span className="font-medium text-gray-700">Tradeoff:</span> {opt.tradeoff}</p>
-                      <p className="text-gray-500"><span className="font-medium text-gray-700">Downstream impact:</span> {opt.downstream_impact}</p>
-                      <p className="text-gray-500"><span className="font-medium text-gray-700">Estimated rows:</span> {opt.estimated_rows_affected?.toLocaleString() ?? 'Unknown'}</p>
-                    </div>
-                    <div className="flex items-center gap-3 pt-1">
-                      {!isArchived && (
-                        <RoleTooltip allowed={canEdit} requiredRole="Editor">
-                          <button
-                            onClick={() => setConfirmApply({ idx, fix: opt })}
-                            disabled={applyingIdx !== null || !canEdit}
-                            className="px-3 py-1.5 text-xs bg-primary text-white rounded-lg hover:bg-primary/90 transition-colors disabled:opacity-50 flex items-center gap-1.5"
-                          >
-                            {applyingIdx === idx && <span className="w-3 h-3 border-2 border-white/30 border-t-white rounded-full animate-spin" />}
-                            Apply Fix
-                          </button>
-                        </RoleTooltip>
-                      )}
-                      <button
-                        onClick={() => setShowSQL(opt.sql)}
-                        className="text-xs text-blue-600 hover:text-blue-800 underline"
-                      >
-                        View SQL
-                      </button>
-                    </div>
-                  </div>
-                ))}
-                <div className="pt-1 border-t border-blue-100 flex items-center justify-between gap-3">
-                  <div className="flex items-center gap-2">
-                    <RoleTooltip allowed={canEdit} requiredRole="Editor">
-                      <button
-                        onClick={canEdit ? () => setShowCustomFix(true) : undefined}
-                        disabled={!canEdit}
-                        className="flex items-center gap-1.5 px-3 py-1.5 text-sm border border-gray-300 text-gray-700 rounded-lg hover:bg-gray-50 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
-                      >
-                        ✎ Write a Custom Fix
-                      </button>
-                    </RoleTooltip>
-                    <RoleTooltip allowed={canEdit} requiredRole="Editor">
-                      <button
-                        onClick={canEdit ? handleGenerateFix : undefined}
-                        disabled={generatingFix || !canEdit}
-                        className="flex items-center gap-1.5 px-3 py-1.5 text-sm border border-gray-300 text-gray-500 rounded-lg hover:bg-gray-50 disabled:opacity-50 transition-colors"
-                        title="Re-generate fix suggestions with latest AI"
-                      >
-                      {generatingFix ? (
-                        <><span className="w-3 h-3 border-2 border-gray-300 border-t-gray-500 rounded-full animate-spin" />Regenerating…</>
-                      ) : (
-                        <>↻ Regenerate</>
-                      )}
-                      </button>
-                    </RoleTooltip>
-                  </div>
-                  <RoleTooltip allowed={canEdit} requiredRole="Editor">
-                    <button
-                      onClick={canEdit ? () => setShowAcceptModal(true) : undefined}
-                      disabled={!canEdit}
-                      className="text-sm text-gray-500 hover:text-gray-700 underline disabled:opacity-40 disabled:cursor-not-allowed"
-                    >
-                      Accept Risk
-                    </button>
-                  </RoleTooltip>
-                </div>
-              </div>
-            )}
-
-            {!hasOptions && !generatingFix && (
-              <RoleTooltip allowed={canEdit} requiredRole="Editor">
-                <button
-                  onClick={canEdit ? () => setShowAcceptModal(true) : undefined}
-                  disabled={!canEdit}
-                  className="mt-2 text-sm text-gray-500 hover:text-gray-700 underline disabled:opacity-40 disabled:cursor-not-allowed"
-                >
-                  Accept Risk
-                </button>
-              </RoleTooltip>
-            )}
+          <div className="px-4 py-3 border-t border-slate-100 flex items-center justify-between gap-3" onClick={(e) => e.stopPropagation()}>
+            <button
+              onClick={() => {
+                setFixModalTab('ai')
+                setFixModalOpen(true)
+              }}
+              className="inline-flex items-center gap-1.5 text-xs font-medium px-3 py-1.5 rounded-md bg-primary text-white hover:bg-primary/90 transition-colors"
+            >
+              ✦ Fix
+            </button>
+            <button
+              onClick={() => setShowAcceptModal(true)}
+              className="text-xs text-slate-400 hover:text-slate-600 transition-colors"
+            >
+              Accept Risk
+            </button>
           </div>
         )}
 
@@ -1211,36 +1660,36 @@ function VerifiedFixesSection({
   const [expanded, setExpanded] = useState(false)
 
   return (
-    <div className="bg-white rounded-xl border border-blue-200 shadow-sm overflow-hidden">
+    <div className="bg-white rounded-xl border border-settle-slate-200 shadow-sm overflow-hidden">
       {/* Header */}
       <button
         onClick={() => setExpanded(e => !e)}
-        className="w-full flex items-center justify-between gap-3 px-5 py-3.5 hover:bg-blue-50/40 transition-colors text-left"
+        className="w-full flex items-center justify-between gap-3 px-5 py-3.5 hover:bg-settle-slate-50 transition-colors text-left"
       >
         <div className="flex items-center gap-2.5">
-          <span className="w-2 h-2 rounded-full bg-primary flex-shrink-0" />
-          <span className="text-sm font-semibold text-blue-800">
+          <span className="w-2 h-2 rounded-full bg-green-500 flex-shrink-0" />
+          <span className="text-sm font-semibold text-settle-slate-900">
             Verified Fixed ({fixes.length})
           </span>
-          <span className="text-xs text-blue-500 font-normal">
+          <span className="text-xs text-settle-slate-400 font-normal">
             — confirmed by rescan
           </span>
         </div>
-        <span className="text-xs text-gray-400">{expanded ? '▼' : '▶'}</span>
+        <ChevronRight className={`h-3.5 w-3.5 text-settle-slate-400 transition-transform duration-150 ${expanded ? 'rotate-90' : ''}`} />
       </button>
 
       {expanded && (
-        <div className="border-t border-blue-100 divide-y divide-blue-50">
+        <div className="border-t border-settle-slate-100 divide-y divide-settle-slate-50">
           {fixes.map((fix) => {
             const tableName = tableNameById.get(fix.tableId) ?? fix.tableId
             return (
-              <div key={fix.id} className="flex items-start gap-3 px-5 py-3 bg-blue-50/30">
-                <span className="text-blue-500 flex-shrink-0 mt-0.5 text-sm">✓</span>
+              <div key={fix.id} className="flex items-start gap-3 px-5 py-3 hover:bg-settle-slate-50 transition-colors">
+                <span className="text-green-500 flex-shrink-0 mt-0.5 text-sm">✓</span>
                 <div className="flex-1 min-w-0">
-                  <p className="text-sm font-medium text-blue-900 truncate">
+                  <p className="text-sm font-medium text-settle-slate-900 truncate">
                     {tableName}
                   </p>
-                  <p className="text-xs text-blue-700 mt-0.5 line-clamp-2">
+                  <p className="text-xs text-settle-slate-600 mt-0.5 line-clamp-2">
                     {fix.fixDescription}
                   </p>
                   <p className="text-xs text-gray-400 mt-0.5">
@@ -1249,7 +1698,7 @@ function VerifiedFixesSection({
                     {new Date(fix.appliedAt).toLocaleDateString()}
                   </p>
                 </div>
-                <span className="flex-shrink-0 text-xs font-medium text-blue-600 bg-blue-100 border border-blue-200 px-2 py-0.5 rounded-full whitespace-nowrap">
+                <span className="flex-shrink-0 text-xs font-medium text-green-700 bg-green-50 border border-green-200 px-2 py-0.5 rounded-full whitespace-nowrap">
                   Verified fixed
                 </span>
               </div>
@@ -1267,10 +1716,14 @@ function FixHistoryPanel({
   projectId,
   onClose,
   onIssueReverted,
+  tableNameById,
+  issues,
 }: {
   projectId: string
   onClose: () => void
   onIssueReverted?: (qualityIssueId: string | null) => void
+  tableNameById: Map<string, string>
+  issues: QualityIssue[]
 }) {
   const [history, setHistory] = useState<FixHistory[]>([])
   const [loading, setLoading] = useState(true)
@@ -1282,6 +1735,53 @@ function FixHistoryPanel({
   }, [projectId])
 
   const [revertError, setRevertError] = useState<string | null>(null)
+  const [expandedEntries, setExpandedEntries] = useState<Set<string>>(new Set())
+
+  const toggleExpanded = useCallback((entryId: string) => {
+    setExpandedEntries((prev) => {
+      const next = new Set(prev)
+      if (next.has(entryId)) {
+        next.delete(entryId)
+      } else {
+        next.add(entryId)
+      }
+      return next
+    })
+  }, [])
+
+  const splitDescription = useCallback((desc: string): { short: string; detail: string | null } => {
+    const firstPeriod = desc.search(/\.\s/)
+    if (firstPeriod === -1 || firstPeriod > 120) {
+      if (desc.length <= 120) return { short: desc, detail: null }
+      return { short: desc.slice(0, 120).trimEnd() + '…', detail: desc }
+    }
+    const short = desc.slice(0, firstPeriod + 1)
+    const detail = desc.slice(firstPeriod + 1).trim()
+    return { short, detail: detail.length > 0 ? detail : null }
+  }, [])
+
+  const issueTitleById = useMemo(
+    () => new Map<string, string>(
+      issues
+        .filter((i) => i.id != null)
+        .map((i) => [i.id, i.title])
+    ),
+    [issues]
+  )
+
+  const getEntryLabel = useCallback(
+    (entry: FixHistory): { tableName: string; fieldName: string | null } => {
+      const tableName = tableNameById.get(entry.table_id) ?? 'Unknown table'
+      if (!entry.quality_issue_id) return { tableName, fieldName: null }
+      const issueTitle = issueTitleById.get(entry.quality_issue_id)
+      if (!issueTitle) return { tableName, fieldName: null }
+      const dotIndex = issueTitle.indexOf('.')
+      if (dotIndex === -1) return { tableName, fieldName: null }
+      const fieldName = issueTitle.slice(dotIndex + 1)
+      return { tableName, fieldName: fieldName || null }
+    },
+    [tableNameById, issueTitleById]
+  )
 
   async function handleRevert(id: string) {
     setRevertingId(id)
@@ -1316,45 +1816,117 @@ function FixHistoryPanel({
               <p className="text-sm text-gray-400 text-center py-8">Loading…</p>
             ) : history.length === 0 ? (
               <p className="text-sm text-gray-400 text-center py-8">No fixes applied yet.</p>
-            ) : history.map(entry => (
-              <div key={entry.id} className="border rounded-lg p-3 space-y-1 text-sm">
-                <div className="flex items-start justify-between gap-2">
-                  <p className="font-medium text-gray-900">{entry.fix_description}</p>
-                  <div className="flex flex-col items-end gap-1 shrink-0">
-                    <span className={`text-xs px-2 py-0.5 rounded-full ${entry.status === 'applied' ? 'bg-green-100 text-green-700' : 'bg-gray-100 text-gray-500'}`}>
-                      {entry.status === 'applied' ? 'Applied' : 'Reverted'}
-                    </span>
-                    {entry.fix_option_chosen === 'Manual fix' && (
-                      <span className="text-[10px] px-1.5 py-0.5 rounded bg-violet-100 text-violet-700 border border-violet-200">
-                        Manual
-                      </span>
-                    )}
+            ) : history.map((entry) => {
+              const { tableName, fieldName } = getEntryLabel(entry)
+              const { short, detail } = splitDescription(entry.fix_description)
+              const isExpanded = expandedEntries.has(entry.id)
+              const isReverted = entry.status === 'reverted'
+              const isManual = entry.fix_option_chosen === 'Manual fix'
+              const isRiskAccepted = entry.fix_sql === '-- Risk accepted, no SQL executed'
+
+              return (
+                <div
+                  key={entry.id}
+                  className={`rounded-lg border p-4 space-y-2 ${
+                    isReverted
+                      ? 'border-settle-slate-200 bg-settle-slate-50/50 opacity-60'
+                      : 'border-settle-slate-200 bg-white'
+                  }`}
+                >
+                  {/* Title row: table.field + row count pill + Reverted badge */}
+                  <div className="flex items-start justify-between gap-2">
+                    <div className="min-w-0 flex-1">
+                      <p className="text-xs font-medium text-settle-slate-900 font-mono truncate">
+                        {tableName}
+                        {fieldName && (
+                          <span className="text-settle-slate-400">.</span>
+                        )}
+                        {fieldName && <span>{fieldName}</span>}
+                      </p>
+                    </div>
+                    <div className="flex items-center gap-2 flex-shrink-0">
+                      {!isRiskAccepted && entry.affected_row_count > 0 && (
+                        <span className="text-[10px] font-medium text-settle-slate-500 bg-settle-slate-100 border border-settle-slate-200 px-2 py-0.5 rounded-full whitespace-nowrap">
+                          {entry.affected_row_count.toLocaleString()}{' '}
+                          {entry.affected_row_count === 1 ? 'row' : 'rows'}
+                        </span>
+                      )}
+                      {isReverted && (
+                        <span className="text-[10px] font-medium text-settle-slate-400 bg-settle-slate-100 border border-settle-slate-200 px-2 py-0.5 rounded-full whitespace-nowrap">
+                          Reverted
+                        </span>
+                      )}
+                    </div>
                   </div>
-                </div>
-                <p className="text-gray-500 text-xs">{entry.affected_row_count.toLocaleString()} rows affected · {new Date(entry.applied_at).toLocaleString()}</p>
-                <div className="flex gap-3 pt-1 items-center">
-                  <button onClick={() => setShowSQL(entry.fix_sql)} className="text-xs text-blue-600 underline hover:text-blue-800">View SQL</button>
-                  {entry.status === 'applied' && (
-                    entry.snapshot_failed ? (
-                      <span
-                        title="Cannot revert — no snapshot was taken for this fix. Re-upload the original CSV to restore data."
-                        className="text-xs text-gray-300 cursor-not-allowed select-none"
-                      >
-                        Revert
-                      </span>
-                    ) : (
+
+                  {/* Short description */}
+                  <p className="text-xs text-settle-slate-600 leading-relaxed">
+                    {short}
+                  </p>
+
+                  {/* Expandable detail */}
+                  {detail && (
+                    <div>
+                      {isExpanded && (
+                        <p className="text-xs text-settle-slate-500 leading-relaxed mb-1">
+                          {detail}
+                        </p>
+                      )}
                       <button
-                        onClick={() => handleRevert(entry.id)}
-                        disabled={revertingId === entry.id}
-                        className="text-xs text-red-600 underline hover:text-red-800 disabled:opacity-50"
+                        onClick={() => toggleExpanded(entry.id)}
+                        className="text-[10px] text-settle-slate-400 hover:text-settle-slate-600 transition-colors"
                       >
-                        {revertingId === entry.id ? 'Reverting…' : 'Revert'}
+                        {isExpanded ? 'Show less' : 'Show more'}
                       </button>
-                    )
+                    </div>
+                  )}
+
+                  {/* Metadata line */}
+                  <p className="text-[10px] text-settle-slate-400">
+                    {isRiskAccepted ? 'Risk accepted · ' : ''}
+                    {new Date(entry.applied_at).toLocaleDateString(undefined, {
+                      month: 'short',
+                      day: 'numeric',
+                      hour: '2-digit',
+                      minute: '2-digit',
+                    })}
+                    {isManual && (
+                      <span className="ml-1.5 text-settle-slate-300">· manual</span>
+                    )}
+                  </p>
+
+                  {/* Action links */}
+                  {!isRiskAccepted && (
+                    <div className="flex items-center gap-4 pt-0.5">
+                      <button
+                        onClick={() => setShowSQL(entry.fix_sql)}
+                        className="text-xs text-settle-blue-500 hover:text-settle-blue-700 transition-colors"
+                      >
+                        View SQL
+                      </button>
+                      {entry.status === 'applied' && (
+                        entry.snapshot_failed ? (
+                          <span
+                            title="Cannot revert — snapshot was not captured for this fix"
+                            className="text-xs text-settle-slate-300 cursor-not-allowed select-none"
+                          >
+                            Revert
+                          </span>
+                        ) : (
+                          <button
+                            onClick={() => handleRevert(entry.id)}
+                            disabled={revertingId === entry.id}
+                            className="text-xs text-red-400 hover:text-red-600 disabled:opacity-50 transition-colors"
+                          >
+                            {revertingId === entry.id ? 'Reverting…' : 'Revert'}
+                          </button>
+                        )
+                      )}
+                    </div>
                   )}
                 </div>
-              </div>
-            ))}
+              )
+            })}
           </div>
         </div>
       </div>
@@ -2012,6 +2584,133 @@ function IssueFixModal({
   )
 }
 
+// ── Validation Rules Panel ────────────────────────────────────────────────────
+
+interface ValidationRulesPanelProps {
+  rules: ValidationRule[]
+  projectId: string
+  tableNameById: Map<string, string>
+  onClose: () => void
+  onRunRule: (rule: ValidationRule) => Promise<void>
+  onDeleteRule: (ruleId: string) => void
+}
+
+function ValidationRulesPanel({
+  rules,
+  projectId,
+  tableNameById,
+  onClose,
+  onRunRule,
+  onDeleteRule,
+}: ValidationRulesPanelProps) {
+  return (
+    <FixDrawer isOpen={true} onClose={onClose}>
+      {/* Header */}
+      <div className="flex items-center justify-between px-5 pt-5 pb-4 border-b border-settle-slate-100 flex-shrink-0">
+        <div>
+          <p className="text-xs text-settle-slate-400 mb-0.5">
+            Validation rules
+          </p>
+          <h3 className="text-sm font-semibold text-settle-slate-900">
+            {rules.length} active {rules.length === 1 ? 'rule' : 'rules'}
+          </h3>
+        </div>
+        <button
+          onClick={onClose}
+          className="text-settle-slate-400 hover:text-settle-slate-600 transition-colors"
+          aria-label="Close"
+        >
+          <svg
+            width="16"
+            height="16"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="2"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+          >
+            <path d="M18 6 6 18M6 6l12 12" />
+          </svg>
+        </button>
+      </div>
+
+      {/* Rules list */}
+      <div className="flex-1 overflow-y-auto">
+        {rules.length === 0 ? (
+          <div className="flex flex-col items-center justify-center py-16 text-center px-6">
+            <p className="text-sm text-settle-slate-400">
+              No active validation rules
+            </p>
+          </div>
+        ) : (
+          <div className="divide-y divide-settle-slate-100">
+            {rules.map((rule) => {
+              const tableName = rule.table_id
+                ? (tableNameById.get(rule.table_id) ?? null)
+                : null
+
+              return (
+                <div
+                  key={rule.id}
+                  className="flex items-center justify-between px-5 py-3 hover:bg-settle-slate-50 transition-colors"
+                >
+                  <div className="flex items-center gap-3 min-w-0 flex-1">
+                    <span
+                      className={`w-1.5 h-1.5 rounded-full flex-shrink-0 ${
+                        rule.severity === 'blocking'
+                          ? 'bg-red-500'
+                          : 'bg-amber-400'
+                      }`}
+                      aria-label={rule.severity}
+                    />
+                    <div className="min-w-0">
+                      <p className="text-xs font-medium text-settle-slate-900 truncate">
+                        {tableName && (
+                          <span className="text-settle-slate-400 font-normal">
+                            {tableName}.
+                          </span>
+                        )}
+                        {rule.name}
+                      </p>
+                      <p className="text-[10px] text-settle-slate-400 font-mono mt-0.5">
+                        {rule.rule_type}
+                        {rule.is_ai_generated && (
+                          <span
+                            title={rule.ai_original_prompt ?? ''}
+                            className="ml-1.5 not-italic font-sans text-settle-blue-500"
+                          >
+                            ✦ AI
+                          </span>
+                        )}
+                      </p>
+                    </div>
+                  </div>
+
+                  <div className="flex items-center gap-3 flex-shrink-0 ml-4">
+                    <button
+                      onClick={() => onRunRule(rule)}
+                      className="text-xs text-settle-blue-500 hover:text-settle-blue-700 transition-colors"
+                    >
+                      Run
+                    </button>
+                    <button
+                      onClick={() => onDeleteRule(rule.id)}
+                      className="text-xs text-settle-slate-400 hover:text-red-500 transition-colors"
+                    >
+                      Delete
+                    </button>
+                  </div>
+                </div>
+              )
+            })}
+          </div>
+        )}
+      </div>
+    </FixDrawer>
+  )
+}
+
 // ── Main Component ────────────────────────────────────────────────────────────
 
 export default function DataQualityContent({
@@ -2042,6 +2741,7 @@ export default function DataQualityContent({
   const [isRestaging, startRestaging] = useTransition()
   const [showAddRule, setShowAddRule] = useState(false)
   const [showHistory, setShowHistory] = useState(false)
+  const [showRulesPanel, setShowRulesPanel] = useState(false)
   const [showCreateFix, setShowCreateFix] = useState(false)
   const [showOverflowMenu, setShowOverflowMenu] = useState(false)
   const overflowRef = useRef<HTMLDivElement>(null)
@@ -2308,6 +3008,28 @@ export default function DataQualityContent({
     })
   }
 
+  const handleRunRule = useCallback(
+    async (rule: ValidationRule) => {
+      if (!rule.table_id) return
+      await executeCustomRules(projectId, rule.table_id)
+      const [freshIssues, freshScore] = await Promise.all([
+        getQualityIssues(projectId),
+        computeReadinessScore(projectId),
+      ])
+      setIssues(freshIssues.issues)
+      setReadiness(freshScore)
+    },
+    [projectId]
+  )
+
+  const handleDeleteRule = useCallback(
+    async (ruleId: string) => {
+      await deleteValidationRule(ruleId)
+      setRules((prev) => prev.filter((r) => r.id !== ruleId))
+    },
+    []
+  )
+
   function scrollToIssue(issueId: string) {
     setFilterStatus('open')
     // Expand all table groups so the issue is visible
@@ -2339,6 +3061,18 @@ export default function DataQualityContent({
             const { issues: fresh } = await getQualityIssues(projectId)
             setIssues(fresh)
           }}
+          tableNameById={tableNameById}
+          issues={issues}
+        />
+      )}
+      {showRulesPanel && (
+        <ValidationRulesPanel
+          rules={rules}
+          projectId={projectId}
+          tableNameById={tableNameById}
+          onClose={() => setShowRulesPanel(false)}
+          onRunRule={handleRunRule}
+          onDeleteRule={handleDeleteRule}
         />
       )}
       {showCreateFix && (
@@ -2386,6 +3120,15 @@ export default function DataQualityContent({
               </div>
             )}
           </div>
+
+          {rules.length > 0 && (
+            <button
+              onClick={() => setShowRulesPanel(true)}
+              className="text-sm text-settle-slate-500 hover:text-settle-slate-700 transition-colors"
+            >
+              {rules.length} {rules.length === 1 ? 'rule' : 'rules'}
+            </button>
+          )}
 
           <button
             onClick={() => setShowAddRule(true)}
@@ -2496,68 +3239,13 @@ export default function DataQualityContent({
             )}
           </div>
 
-          {/* ── Active Validation Rules ── */}
-          {rules.length > 0 && (
-            <details className="bg-white rounded-xl border border-gray-200 shadow-sm">
-              <summary className="cursor-pointer px-5 py-3 flex items-center justify-between text-sm font-semibold text-gray-900 hover:bg-gray-50 rounded-xl">
-                <span>Active Validation Rules ({rules.length})</span>
-                <span className="text-gray-400 text-xs">Click to expand</span>
-              </summary>
-              <div className="px-5 pb-4 space-y-2 border-t pt-3">
-                {rules.map(rule => (
-                  <div key={rule.id} className="flex items-center justify-between text-sm py-1.5 px-2 -mx-2 rounded border-b border-gray-100 last:border-0 hover:bg-gray-50 cursor-default">
-                    <div className="flex items-center gap-2 min-w-0">
-                      <span className={`shrink-0 text-xs px-2 py-0.5 rounded-full ${rule.severity === 'blocking' ? 'bg-red-100 text-red-700' : 'bg-amber-100 text-amber-700'}`}>
-                        {rule.severity}
-                      </span>
-                      <span className="font-medium text-gray-900 truncate">
-                        {rule.table_id && tableNameById.get(rule.table_id) ? (
-                          <><span className="text-gray-400">{tableNameById.get(rule.table_id)}.</span>{rule.name}</>
-                        ) : rule.name}
-                      </span>
-                      <span className="text-gray-400 text-xs truncate">{rule.rule_type}</span>
-                      {rule.is_ai_generated && (
-                        <span title={rule.ai_original_prompt ?? ''} className="text-xs px-1.5 py-0.5 rounded bg-blue-50 text-blue-700 border border-blue-100">✦ AI</span>
-                      )}
-                    </div>
-                    <div className="flex items-center gap-2 shrink-0">
-                      <button
-                        onClick={async () => {
-                          if (!rule.table_id) return
-                          await executeCustomRules(projectId, rule.table_id)
-                          const [freshIssues, freshScore] = await Promise.all([
-                            getQualityIssues(projectId),
-                            computeReadinessScore(projectId),
-                          ])
-                          setIssues(freshIssues.issues)
-                          setReadiness(freshScore)
-                        }}
-                        className="text-xs text-blue-600 hover:text-blue-800 underline"
-                      >
-                        Run
-                      </button>
-                      <button
-                        onClick={async () => {
-                          await deleteValidationRule(rule.id)
-                          setRules(prev => prev.filter(r => r.id !== rule.id))
-                        }}
-                        className="text-xs text-red-400 hover:text-red-600"
-                      >
-                        Delete
-                      </button>
-                    </div>
-                  </div>
-                ))}
-              </div>
-            </details>
-          )}
 
           {/* ── Filter Bar ── */}
-          <div className="bg-gray-50/50 rounded-xl border border-gray-200 shadow-sm px-4 py-3">
-            <div className="flex flex-wrap items-center gap-3">
+          <div className="bg-white rounded-xl border border-settle-slate-200 px-4 py-2.5">
+            <div className="flex items-center gap-3 min-w-0">
               {/* Severity */}
               <div className="flex items-center gap-2">
-                <label className="text-xs font-medium text-gray-500 whitespace-nowrap">Severity</label>
+                <label className="text-xs font-medium text-settle-slate-500 whitespace-nowrap">Severity</label>
                 <Select
                   value={filterSeverity}
                   onValueChange={(val) => setFilterSeverity(val as typeof filterSeverity)}
@@ -2577,7 +3265,7 @@ export default function DataQualityContent({
 
               {/* Root Cause */}
               <div className="flex items-center gap-2">
-                <label className="text-xs font-medium text-gray-500 whitespace-nowrap">Root Cause</label>
+                <label className="text-xs font-medium text-settle-slate-500 whitespace-nowrap">Root Cause</label>
                 <Select
                   value={filterRootCause}
                   onValueChange={(val) => setFilterRootCause(val as typeof filterRootCause)}
@@ -2598,7 +3286,7 @@ export default function DataQualityContent({
 
               {/* Status */}
               <div className="flex items-center gap-2">
-                <label className="text-xs font-medium text-gray-500 whitespace-nowrap">Status</label>
+                <label className="text-xs font-medium text-settle-slate-500 whitespace-nowrap">Status</label>
                 <Select
                   value={filterStatus}
                   onValueChange={(val) => setFilterStatus(val as typeof filterStatus)}
@@ -2623,13 +3311,16 @@ export default function DataQualityContent({
                 placeholder="Search by field…"
                 value={searchQuery}
                 onChange={e => setSearchQuery(e.target.value)}
-                className="h-8 text-xs border border-gray-200 rounded-md px-3 w-44 focus:outline-none focus:ring-1 focus:ring-blue-400"
+                className="h-8 text-xs border border-settle-slate-200 rounded-md px-3 w-44 focus:outline-none focus:ring-1 focus:ring-settle-blue-500 text-settle-slate-700 placeholder:text-settle-slate-400"
               />
 
               <div className="ml-auto flex items-center gap-3">
                 {tablesWithVisibleIssues.length > 0 && (
-                  <span className="text-sm text-gray-500">
-                    <span className="font-medium text-gray-700">{tablesWithVisibleIssues.reduce((s, g) => s + g.issues.length, 0)}</span> issues in {tablesWithVisibleIssues.length} table{tablesWithVisibleIssues.length !== 1 ? 's' : ''}
+                  <span className="text-xs text-settle-slate-400 whitespace-nowrap">
+                    <span className="font-medium text-settle-slate-600">{tablesWithVisibleIssues.reduce((s, g) => s + g.issues.length, 0)}</span>
+                    {' '}issues in{' '}
+                    <span className="font-medium text-settle-slate-600">{tablesWithVisibleIssues.length}</span>
+                    {' '}{tablesWithVisibleIssues.length !== 1 ? 'tables' : 'table'}
                   </span>
                 )}
                 {hasActiveFilters && (
@@ -2695,9 +3386,15 @@ export default function DataQualityContent({
                       <ChevronRight className={`h-4 w-4 text-slate-400 flex-shrink-0 transition-transform ${expandedTables.has(group.tableId) ? 'rotate-90' : ''}`} />
                       <span className="text-sm font-semibold text-gray-900 truncate">{group.tableName}</span>
                       {group.isStaged ? (
-                        <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-green-100 text-green-700 flex-shrink-0">staged</span>
+                        <span className="flex items-center gap-1.5 flex-shrink-0">
+                          <span className="w-1.5 h-1.5 rounded-full bg-green-500 flex-shrink-0" />
+                          <span className="text-xs text-settle-slate-500">Staged</span>
+                        </span>
                       ) : (
-                        <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-slate-100 text-slate-500 flex-shrink-0">not staged</span>
+                        <span className="flex items-center gap-1.5 flex-shrink-0">
+                          <span className="w-1.5 h-1.5 rounded-full bg-settle-slate-300 flex-shrink-0" />
+                          <span className="text-xs text-settle-slate-400">Not staged</span>
+                        </span>
                       )}
                     </div>
                     <div className="flex items-center gap-3 text-xs flex-shrink-0 ml-3">

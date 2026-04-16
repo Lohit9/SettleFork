@@ -50,16 +50,12 @@ type FilterTab = 'all' | 'needs_review' | 'approved' | 'unmapped' | 'many_to_one
 // ─── Confidence helpers ───────────────────────────────────────────────────────
 
 function cBg(c: number | null) {
-  if (c === null) return 'bg-gray-100 text-gray-600'
-  if (c >= 75) return 'bg-green-100 text-green-700'
-  if (c >= 50) return 'bg-amber-100 text-amber-700'
-  return 'bg-red-100 text-red-700'
+  if (c === null) return 'bg-settle-slate-100 text-settle-slate-500'
+  return 'bg-settle-slate-100 text-settle-slate-600'
 }
 function cDot(c: number | null) {
-  if (c === null) return 'bg-gray-400'
-  if (c >= 75) return 'bg-green-500'
-  if (c >= 50) return 'bg-amber-500'
-  return 'bg-red-500'
+  if (c === null) return 'bg-settle-slate-200'
+  return 'bg-settle-slate-300'
 }
 function cBar(c: number | null) {
   if (c === null) return 'bg-gray-300'
@@ -68,10 +64,8 @@ function cBar(c: number | null) {
   return 'bg-red-500'
 }
 function cText(c: number | null) {
-  if (c === null) return 'text-gray-500'
-  if (c >= 75) return 'text-green-600'
-  if (c >= 50) return 'text-amber-600'
-  return 'text-red-600'
+  if (c === null) return 'text-settle-slate-400'
+  return 'text-settle-slate-500'
 }
 
 // ─── Small shared components ──────────────────────────────────────────────────
@@ -1186,7 +1180,7 @@ function FieldMappingRow({
         </span>
           <span
                 title={`Many-to-one: ${fm.sourceField?.name} + ${contributingFMs.map(c => c.sourceField?.name).join(', ')} → ${fm.targetField?.name}`}
-                className="flex-shrink-0 text-[10px] font-medium px-1.5 py-0.5 rounded-full bg-blue-100 text-blue-700 border border-blue-200"
+                className="flex-shrink-0 text-[10px] font-medium px-1.5 py-0.5 rounded-full bg-settle-slate-100 text-settle-slate-500 border border-settle-slate-200"
               >
                 +{contributingFMs.length}
               </span>
@@ -1203,7 +1197,7 @@ function FieldMappingRow({
             {isOneToMany && (
               <span
                 title={`One-to-many: ${fm.sourceField?.name} maps to ${oneToManyCount} target fields`}
-                className="flex-shrink-0 text-[10px] font-medium px-1.5 py-0.5 rounded-full bg-purple-100 text-purple-700 border border-purple-200"
+                className="flex-shrink-0 text-[10px] font-medium px-1.5 py-0.5 rounded-full bg-settle-slate-100 text-settle-slate-500 border border-settle-slate-200"
               >
                 1→{oneToManyCount}
           </span>
@@ -1225,7 +1219,7 @@ function FieldMappingRow({
           {isManyToOne && (
             <span
               title={`${fm.targetField?.name} receives from ${contributingFMs.length + 1} source fields combined`}
-              className="flex-shrink-0 text-[10px] font-medium px-1.5 py-0.5 rounded-full bg-blue-100 text-blue-600 border border-blue-200"
+              className="flex-shrink-0 text-[10px] font-medium px-1.5 py-0.5 rounded-full bg-settle-slate-100 text-settle-slate-500 border border-settle-slate-200"
             >
               many→1
             </span>
@@ -1492,8 +1486,8 @@ function TableMappingCard({
                   groupRows.forEach((r) => rendered.add(r.id))
                   const srcName = fm.sourceField?.name ?? '?'
                   return (
-                    <div key={`otm-${fm.source_field_id}`} className="border-l-2 border-purple-200 my-1">
-                      <div className="text-xs text-purple-600 font-medium px-5 py-1 bg-purple-50/50">
+                    <div key={`otm-${fm.source_field_id}`} className="border-l-2 border-settle-slate-200 my-1">
+                      <div className="text-xs text-settle-slate-400 font-medium px-5 py-1">
                         Split: {srcName} → {groupRows.length} target fields
                       </div>
                       {groupRows.map((row) => (
@@ -1899,12 +1893,12 @@ function MappingDetailsPanel({
 
         {/* AI Reasoning */}
         {fm.ai_reasoning && (
-          <div className="bg-blue-50 border border-blue-100 rounded-lg p-3">
+          <div className="bg-settle-slate-50 border border-settle-slate-200 rounded-lg p-3">
             <div className="flex items-center gap-1.5 mb-1.5">
-              <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor" className="text-blue-500"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm1 15h-2v-6h2v6zm0-8h-2V7h2v2z" /></svg>
-              <span className="text-xs font-semibold text-blue-700">AI-Generated</span>
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor" className="text-settle-slate-400"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm1 15h-2v-6h2v6zm0-8h-2V7h2v2z" /></svg>
+              <span className="text-xs font-semibold text-settle-slate-700">AI-Generated</span>
             </div>
-            <p className="text-xs text-blue-800 leading-relaxed">{fm.ai_reasoning}</p>
+            <p className="text-xs text-settle-slate-600 leading-relaxed">{fm.ai_reasoning}</p>
           </div>
         )}
 
@@ -1933,13 +1927,13 @@ function MappingDetailsPanel({
             {fm.sourceFieldSamples.length > 0 && (
               <div className="flex items-start gap-2 mb-1">
                 <span className="text-xs text-gray-500 w-12 flex-shrink-0 pt-0.5">Source:</span>
-                <div className="flex flex-wrap gap-1">{fm.sourceFieldSamples.map((v, i) => <span key={i} className="text-xs bg-blue-50 text-blue-700 px-1.5 py-0.5 rounded">{v}</span>)}</div>
+                <div className="flex flex-wrap gap-1">{fm.sourceFieldSamples.map((v, i) => <span key={i} className="text-xs bg-settle-slate-50 text-settle-slate-600 border border-settle-slate-200 px-1.5 py-0.5 rounded font-mono">{v}</span>)}</div>
               </div>
             )}
             {fm.targetFieldSamples.length > 0 && (
               <div className="flex items-start gap-2">
                 <span className="text-xs text-gray-500 w-12 flex-shrink-0 pt-0.5">Target:</span>
-                <div className="flex flex-wrap gap-1">{fm.targetFieldSamples.map((v, i) => <span key={i} className="text-xs bg-purple-50 text-purple-700 px-1.5 py-0.5 rounded">{v}</span>)}</div>
+                <div className="flex flex-wrap gap-1">{fm.targetFieldSamples.map((v, i) => <span key={i} className="text-xs bg-settle-slate-50 text-settle-slate-600 border border-settle-slate-200 px-1.5 py-0.5 rounded font-mono">{v}</span>)}</div>
               </div>
             )}
           </div>
@@ -2031,7 +2025,7 @@ function MappingDetailsPanel({
       {/* Actions */}
       <div className="px-5 py-4 border-t border-gray-100 space-y-2">
         {fm.status !== 'approved' && (
-          <button onClick={() => { onApprove(fm.id); onClose() }} className="w-full px-4 py-2.5 text-sm font-medium text-white bg-green-600 rounded-lg hover:bg-green-700 transition-colors">
+          <button onClick={() => { onApprove(fm.id); onClose() }} className="w-full px-4 py-2.5 text-sm font-medium text-white bg-settle-slate-900 rounded-lg hover:bg-settle-slate-800 transition-colors">
             Accept Mapping
           </button>
         )}
@@ -2725,12 +2719,12 @@ export default function MappingContent({ projectId, projectName, initialData }: 
       {/* Source ↔ Target header */}
       {(sourceDatasetName || targetDatasetName) && (
         <div className="flex items-center gap-3">
-          <span className="text-sm font-semibold text-blue-700 bg-blue-50 px-3 py-1.5 rounded-lg">{sourceDatasetName}</span>
+          <span className="text-sm font-medium text-settle-slate-700 px-0">{sourceDatasetName}</span>
           <div className="flex items-center gap-0 text-gray-400">
             <div className="w-10 border-t-2 border-dashed border-gray-300" />
             <ArrowRight className="w-4 h-4 text-gray-400" />
           </div>
-          <span className="text-sm font-semibold text-purple-700 bg-purple-50 px-3 py-1.5 rounded-lg">{targetDatasetName}</span>
+          <span className="text-sm font-medium text-settle-slate-700 px-0">{targetDatasetName}</span>
         </div>
       )}
 
@@ -2748,7 +2742,7 @@ export default function MappingContent({ projectId, projectName, initialData }: 
             <button
               key={tab.key}
               onClick={() => setActiveFilter(tab.key)}
-              className={`flex items-center gap-1.5 px-3 py-1.5 text-sm font-medium rounded-lg transition-colors ${activeFilter === tab.key ? 'bg-white text-gray-900 shadow-sm' : 'text-gray-600 hover:text-gray-900'}`}
+              className={`flex items-center gap-1.5 px-3 py-1.5 text-sm font-medium rounded-lg transition-colors cursor-pointer ${activeFilter === tab.key ? 'bg-white text-gray-900 shadow-sm' : 'text-gray-600 hover:text-gray-900'}`}
             >
               {tab.label}
               <span className={`text-xs px-1.5 py-0.5 rounded-full ${tab.cc}`}>{tab.count}</span>

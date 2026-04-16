@@ -189,10 +189,13 @@ export async function applyFix(
   // source because dq_snapshot_rows counts rows directly in PostgreSQL with no PostgREST
   // row limit. We'll overwrite with the execute_data_fix count afterwards.
   if (snapshotResult.rowCount > 0) {
-    await supabase
+    const { error: snapshotUpdateError } = await supabaseAdmin
       .from('fix_history')
       .update({ affected_row_count: snapshotResult.rowCount })
       .eq('id', fixHistoryId)
+    if (snapshotUpdateError) {
+      console.error('[applyFix] Failed to update snapshot row count:', snapshotUpdateError)
+    }
   }
 
   // Admin required: execute_data_fix is SECURITY DEFINER and modifies data_rows
@@ -212,14 +215,18 @@ export async function applyFix(
   // execData is the INT returned by execute_data_fix (GET DIAGNOSTICS ROW_COUNT).
   // Prefer this over the snapshot count for the final value since it reflects what
   // PostgreSQL actually modified (DELETE fixes may differ from the snapshot count).
-  const rowsAffected = typeof execData === 'number' && execData >= 0
-    ? execData
+  const execRowCount = Number(execData ?? -1)
+  const rowsAffected = execRowCount >= 0
+    ? execRowCount
     : snapshotResult.rowCount
 
-  await supabase
+  const { error: rowCountUpdateError } = await supabaseAdmin
     .from('fix_history')
     .update({ affected_row_count: rowsAffected })
     .eq('id', fixHistoryId)
+  if (rowCountUpdateError) {
+    console.error('[applyFix] Failed to update final row count:', rowCountUpdateError)
+  }
 
   await supabase.from('quality_issues').update({ status: 'fixed' }).eq('id', issueId)
 
