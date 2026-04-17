@@ -128,13 +128,11 @@ function TableSelector({
   tables,
   selected,
   onToggle,
-  colorClass = 'text-blue-600',
 }: {
   title: string
   tables: { id: string; name: string; datasetName: string }[]
   selected: Set<string>
   onToggle: (id: string) => void
-  colorClass?: string
 }) {
   const allSelected = tables.length > 0 && tables.every((t) => selected.has(t.id))
   const noneSelected = tables.every((t) => !selected.has(t.id))
@@ -145,29 +143,29 @@ function TableSelector({
   }
 
   return (
-    <div className="border border-gray-100 rounded-lg p-4 flex flex-col">
-      <div className="flex items-center justify-between mb-3">
-        <h4 className="text-sm font-semibold text-gray-800">{title}</h4>
+    <div className="border border-gray-200 rounded-lg flex flex-col">
+      <div className="flex items-center justify-between px-3 py-2.5 border-b border-gray-100">
+        <h4 className="text-sm font-medium text-gray-900">{title}</h4>
         <button
           onClick={toggleAll}
-          className={`text-xs font-medium ${colorClass} hover:opacity-80 transition-opacity`}
+          className="text-xs text-gray-500 hover:text-gray-700 transition-colors"
         >
-          {allSelected ? 'Deselect All' : 'Select All'}
+          {allSelected ? 'Deselect all' : 'Select all'}
         </button>
       </div>
       {tables.length === 0 ? (
-        <p className="text-xs text-gray-400 py-2">No tables available.</p>
+        <p className="text-xs text-gray-400 px-3 py-3">No tables available.</p>
       ) : (
-        <div className="space-y-1.5 overflow-y-auto max-h-48">
+        <div className="divide-y divide-gray-100 overflow-y-auto max-h-56">
           {tables.map((t) => (
-            <label key={t.id} className="flex items-center gap-2.5 cursor-pointer group">
+            <label key={t.id} className="flex items-center gap-3 px-3 py-2.5 hover:bg-gray-50 transition-colors cursor-pointer">
               <input
                 type="checkbox"
                 checked={selected.has(t.id)}
                 onChange={() => onToggle(t.id)}
-                className={`w-4 h-4 rounded border-gray-300 focus:ring-2 focus:ring-blue-500 cursor-pointer`}
+                className="rounded border-gray-300 text-primary focus:ring-primary/20 cursor-pointer"
               />
-              <span className="text-sm text-gray-800 group-hover:text-gray-900">{t.name}</span>
+              <span className="text-sm text-gray-900">{t.name}</span>
               {t.datasetName && (
                 <span className="text-xs text-gray-400 truncate">{t.datasetName}</span>
               )}
@@ -175,7 +173,7 @@ function TableSelector({
           ))}
         </div>
       )}
-      <p className="text-xs text-gray-400 mt-2 pt-2 border-t border-gray-100">
+      <p className="text-xs text-gray-400 px-3 py-2 border-t border-gray-100">
         {selected.size > 0 ? `${Array.from(selected).filter(id => tables.some(t => t.id === id)).length} of ${tables.length} selected` : `${tables.length} table${tables.length !== 1 ? 's' : ''}`}
       </p>
     </div>
@@ -256,20 +254,18 @@ function GenerateMappingsPanel({
         </div>
       )}
 
-      <div className="grid grid-cols-2 gap-4 mb-4">
+      <div className="grid grid-cols-2 gap-5 mb-5">
         <TableSelector
-          title="Source Tables"
+          title="Source tables"
           tables={sourceTables}
           selected={selectedSrc}
           onToggle={toggleSrc}
-          colorClass="text-blue-600"
         />
         <TableSelector
-          title="Target Tables"
+          title="Target tables"
           tables={targetTables}
           selected={selectedTgt}
           onToggle={toggleTgt}
-          colorClass="text-purple-600"
         />
       </div>
 
@@ -3085,19 +3081,10 @@ export default function MappingContent({ projectId, projectName, initialData, pr
         )}
         <PageHeader projectName={projectName} title="Mapping" subtitle="Review and approve field mappings" projectInfo={projectInfo} />
         <div className="flex-1 overflow-auto">
-        <div className="px-6 py-8 max-w-2xl mx-auto">
-        <div className="text-center mb-8">
-          <div className="w-16 h-16 rounded-full bg-blue-50 flex items-center justify-center mx-auto mb-4">
-            <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" className="text-blue-400">
-              <path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71" />
-              <path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71" />
-            </svg>
-          </div>
-          <h3 className="text-lg font-semibold text-gray-900 mb-2">Generate Your Mappings</h3>
-          <p className="text-sm text-gray-500 max-w-xs mx-auto">
-            Select source and target tables below, then click Generate Mappings. AI will analyze your schemas and suggest field-level mappings with confidence scores.
-          </p>
-        </div>
+        <div className="px-6 py-5 max-w-3xl mx-auto">
+        <p className="text-sm text-gray-500 mb-5">
+          Select source and target tables, then generate field-level mappings with AI.
+        </p>
         <GenerateMappingsPanel
           projectId={projectId}
           sourceTables={data?.allSourceTables ?? []}
