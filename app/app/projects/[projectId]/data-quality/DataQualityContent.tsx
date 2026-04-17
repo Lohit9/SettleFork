@@ -482,7 +482,7 @@ function UnifiedFixModal({
               {fixOptions && fixOptions.length > 0 && (
                 <div className="space-y-3">
                   {fixOptions.map((opt, idx) => (
-                    <div key={idx} className="border border-gray-200 rounded-lg p-4">
+                    <div key={idx} className="border border-gray-100 rounded-lg p-4">
                       <div className="flex items-start justify-between gap-3 mb-2">
                         <span className="text-xs font-semibold text-gray-700">
                           Option {String.fromCharCode(65 + idx)}: {opt.label}
@@ -563,7 +563,7 @@ function UnifiedFixModal({
               {/* Description */}
               {issue.description && (
                 <div>
-                  <p className="text-[10px] font-medium text-settle-slate-400 uppercase tracking-wide mb-1.5">
+                  <p className="text-xs font-medium text-gray-500 mb-1.5">
                     Description
                   </p>
                   <p className="text-sm text-settle-slate-700 leading-relaxed">
@@ -575,7 +575,7 @@ function UnifiedFixModal({
               {/* Downstream impact */}
               {issue.downstream_impact && (
                 <div>
-                  <p className="text-[10px] font-medium text-settle-slate-400 uppercase tracking-wide mb-1.5">
+                  <p className="text-xs font-medium text-gray-500 mb-1.5">
                     Impact
                   </p>
                   <p className="text-sm text-settle-slate-700 leading-relaxed">
@@ -601,7 +601,7 @@ function UnifiedFixModal({
 
                   {/* Empty fallback */}
                   {detailsShowSample && detailsDisplayRows.length === 0 && (
-                    <div className="mt-3 px-4 py-3 bg-settle-slate-50 rounded-md text-xs text-settle-slate-500 border border-settle-slate-200 space-y-2">
+                    <div className="mt-3 px-4 py-3 bg-settle-slate-50 rounded-md text-xs text-settle-slate-500 border border-gray-100 space-y-2">
                       <p>Sample data not available for this issue.</p>
                       <div className="flex items-center gap-3 flex-wrap">
                         {detailsDiagnosticQuery && (
@@ -625,11 +625,11 @@ function UnifiedFixModal({
 
                   {/* Rows table */}
                   {detailsShowSample && detailsDisplayRows.length > 0 && (
-                    <div className="mt-3 border border-settle-slate-200 rounded-md overflow-hidden">
+                    <div className="mt-3 border border-gray-100 rounded-md overflow-hidden">
                       <div className="overflow-x-auto max-h-64 overflow-y-auto">
                         <table className="w-full text-xs">
                           <thead>
-                            <tr className="bg-settle-slate-50 border-b border-settle-slate-200">
+                            <tr className="bg-settle-slate-50 border-b border-gray-100">
                               {Object.keys(detailsDisplayRows[0] ?? {}).map((col) => (
                                 <th
                                   key={col}
@@ -660,7 +660,7 @@ function UnifiedFixModal({
                           </tbody>
                         </table>
                       </div>
-                      <div className="px-3 py-2 bg-settle-slate-50 border-t border-settle-slate-200 flex items-center justify-between gap-2">
+                      <div className="px-3 py-2 bg-settle-slate-50 border-t border-gray-100 flex items-center justify-between gap-2">
                         <span className="text-[10px] text-settle-slate-400">
                           Showing {Math.min(detailsDisplayRows.length, issue.affected_records)}{' '}
                           of {issue.affected_records.toLocaleString()} affected rows
@@ -748,7 +748,7 @@ function UnifiedFixModal({
                       <label className="block text-xs font-medium text-settle-slate-700 mb-1.5">
                         Generated SQL
                       </label>
-                      <pre className="text-xs bg-settle-slate-50 border border-settle-slate-200 rounded-lg p-3 overflow-x-auto font-mono text-settle-slate-700 whitespace-pre-wrap">
+                      <pre className="text-xs bg-settle-slate-50 border border-gray-100 rounded-lg p-3 overflow-x-auto font-mono text-settle-slate-700 whitespace-pre-wrap">
                         {generatedSql}
                       </pre>
                     </div>
@@ -1137,14 +1137,14 @@ function IssueCard({
         </div>
       )}
 
-      <div className={`rounded-xl shadow-sm overflow-hidden transition-shadow ${
+      <div className={`rounded-lg shadow-sm overflow-hidden transition-shadow ${
         isFixed
           ? 'bg-green-50/50 border border-green-200'
           : isAccepted
           ? 'bg-amber-50/30 border border-amber-200'
           : fixModalOpen
           ? 'bg-white border border-settle-blue-500 ring-2 ring-settle-blue-500/10'
-          : 'bg-white border border-settle-slate-200'
+          : 'bg-white border border-gray-100'
       }`}>
         {/* Card Header */}
         <div className="p-4 pb-2">
@@ -1188,7 +1188,7 @@ function IssueCard({
                   </span>
                 )}
                 {isAccepted && (
-                  <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-gray-100 text-gray-600 border border-gray-200">
+                  <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-gray-100 text-gray-600 border border-gray-100">
                     Risk Accepted
                   </span>
                 )}
@@ -1434,7 +1434,7 @@ function AddRuleModal({
         <div className="p-5 space-y-4">
           {/* Step 1: Select field */}
           <div>
-            <label className="text-xs font-semibold text-gray-500 uppercase tracking-wide">Step 1: Select Table & Field</label>
+            <label className="text-xs font-medium text-gray-500">Step 1: Select Table & Field</label>
             <div className="mt-1.5 grid grid-cols-2 gap-2">
               <Select
                 value={selectedTableId}
@@ -1470,7 +1470,7 @@ function AddRuleModal({
 
           {/* Step 2: Mode toggle */}
           <div>
-            <label className="text-xs font-semibold text-gray-500 uppercase tracking-wide">Step 2: Define Rule</label>
+            <label className="text-xs font-medium text-gray-500">Step 2: Define Rule</label>
             <div className="mt-1.5 flex rounded-lg border overflow-hidden">
               <button
                 onClick={() => setMode('nl')}
@@ -1663,11 +1663,11 @@ function VerifiedFixesSection({
   const [expanded, setExpanded] = useState(false)
 
   return (
-    <div className="bg-white rounded-xl border border-settle-slate-200 shadow-sm overflow-hidden">
+    <div className="bg-white rounded-lg border border-gray-200 overflow-hidden">
       {/* Header */}
       <button
         onClick={() => setExpanded(e => !e)}
-        className="w-full flex items-center justify-between gap-3 px-5 py-3.5 hover:bg-settle-slate-50 transition-colors text-left"
+        className="w-full flex items-center justify-between gap-3 px-5 py-3.5 bg-gray-50 hover:bg-gray-100 transition-colors text-left"
       >
         <div className="flex items-center gap-2.5">
           <span className="w-2 h-2 rounded-full bg-green-500 flex-shrink-0" />
@@ -2111,7 +2111,7 @@ function CreateManualFixModal({
 
           {/* Step 1: Select scope */}
           <div className="space-y-2">
-            <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide">Step 1 — Select scope</p>
+            <p className="text-xs font-medium text-gray-500">Step 1 — Select scope</p>
             <Select
               value={tableId}
               onValueChange={(val) => { setTableId(val); setFieldId(''); setGeneratedSql(''); setSqlText(''); setSqlValidated(false) }}
@@ -2148,7 +2148,7 @@ function CreateManualFixModal({
           {/* Step 2: Define fix */}
           {tableId && (
             <div className="space-y-3">
-              <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide">Step 2 — Define fix</p>
+              <p className="text-xs font-medium text-gray-500">Step 2 — Define fix</p>
 
               {/* Mode toggle */}
               <div className="flex rounded-lg border border-gray-200 overflow-hidden text-sm">
@@ -2728,32 +2728,22 @@ function ValidateStatPills({
   totalTables: number
 }) {
   return (
-    <div className="flex items-center gap-2 px-5 py-2.5 bg-white border-b border-settle-slate-200 flex-shrink-0">
-      <div className="flex items-center gap-2 px-3 py-1.5 rounded-lg border border-settle-slate-200 bg-white">
-        <span className="text-[10px] font-medium text-settle-slate-400 uppercase tracking-wide">
-          Blocking
-        </span>
-        <span className="text-sm font-medium text-settle-slate-900">
-          {blockingCount}
-        </span>
+    <div className="flex items-center gap-0 px-5 py-2 bg-white flex-shrink-0">
+      <div className="flex items-center gap-1.5 px-3">
+        <span className="text-xs text-gray-500">Blocking</span>
+        <span className="text-sm font-medium text-settle-slate-900">{blockingCount}</span>
       </div>
-      <div className="flex items-center gap-2 px-3 py-1.5 rounded-lg border border-settle-slate-200 bg-white">
-        <span className="text-[10px] font-medium text-settle-slate-400 uppercase tracking-wide">
-          Warnings
-        </span>
-        <span className="text-sm font-medium text-settle-slate-900">
-          {warningCount}
-        </span>
+      <div className="w-px h-4 bg-gray-100 flex-shrink-0" />
+      <div className="flex items-center gap-1.5 px-3">
+        <span className="text-xs text-gray-500">Warnings</span>
+        <span className="text-sm font-medium text-settle-slate-900">{warningCount}</span>
       </div>
-      <div className="flex items-center gap-2 px-3 py-1.5 rounded-lg border border-settle-slate-200 bg-white">
-        <span className="text-[10px] font-medium text-settle-slate-400 uppercase tracking-wide">
-          Staged
-        </span>
+      <div className="w-px h-4 bg-gray-100 flex-shrink-0" />
+      <div className="flex items-center gap-1.5 px-3">
+        <span className="text-xs text-gray-500">Staged</span>
         <span className="text-sm font-medium text-settle-slate-900">
           {stagedCount}
-          <span className="text-settle-slate-400 font-normal text-xs ml-1">
-            / {totalTables}
-          </span>
+          <span className="text-settle-slate-400 font-normal text-xs ml-1">/ {totalTables}</span>
         </span>
       </div>
     </div>
@@ -3168,9 +3158,10 @@ export default function DataQualityContent({
           {rules.length > 0 && (
             <button
               onClick={() => setShowRulesPanel(true)}
-              className="text-sm text-settle-slate-500 hover:text-settle-slate-700 transition-colors"
+              className="flex items-center gap-1 text-sm text-settle-slate-500 hover:text-settle-slate-700 transition-colors"
             >
               {rules.length} {rules.length === 1 ? 'rule' : 'rules'}
+              <ChevronRight className="w-3.5 h-3.5" />
             </button>
           )}
 
@@ -3218,7 +3209,7 @@ export default function DataQualityContent({
       />
 
       {/* ── Filter bar — flush border-b strip ── */}
-      <div className="bg-white border-b border-settle-slate-200 px-5 py-2.5 flex-shrink-0">
+      <div className="bg-white border-b border-gray-100 px-5 py-2.5 flex-shrink-0">
         <div className="flex items-center gap-3 min-w-0">
           {/* Severity */}
           <div className="flex items-center gap-2">
@@ -3238,7 +3229,7 @@ export default function DataQualityContent({
             </Select>
           </div>
 
-          <div className="w-px h-4 bg-gray-200 flex-shrink-0" />
+          <div className="w-px h-4 bg-gray-100 flex-shrink-0" />
 
           {/* Root Cause */}
           <div className="flex items-center gap-2">
@@ -3259,7 +3250,7 @@ export default function DataQualityContent({
             </Select>
           </div>
 
-          <div className="w-px h-4 bg-gray-200 flex-shrink-0" />
+          <div className="w-px h-4 bg-gray-100 flex-shrink-0" />
 
           {/* Status */}
           <div className="flex items-center gap-2">
@@ -3280,7 +3271,7 @@ export default function DataQualityContent({
             </Select>
           </div>
 
-          <div className="w-px h-4 bg-gray-200 flex-shrink-0" />
+          <div className="w-px h-4 bg-gray-100 flex-shrink-0" />
 
           {/* Search */}
           <input
@@ -3370,7 +3361,7 @@ export default function DataQualityContent({
 
           {/* ── Table-Grouped Issue List ── */}
           {targetTables.length === 0 ? (
-            <div className="bg-white rounded-xl border border-gray-200 shadow-sm p-10 text-center">
+            <div className="bg-white rounded-lg border border-gray-100 shadow-sm p-10 text-center">
               <p className="text-sm text-gray-500">No target tables found. Add a target schema to begin validation.</p>
             </div>
           ) : (
@@ -3409,11 +3400,11 @@ export default function DataQualityContent({
 
             <div className="space-y-3">
               {tableGroups.map(group => (
-                <div key={group.tableId} className="border border-gray-200 rounded-xl overflow-hidden bg-white shadow-sm">
+                <div key={group.tableId} className="border border-gray-200 rounded-lg overflow-hidden bg-white">
                   {/* Table header — always visible */}
                   <button
                     onClick={() => toggleTable(group.tableId)}
-                    className="w-full flex items-center justify-between px-5 py-3 bg-slate-50 hover:bg-slate-100 transition-colors"
+                    className="w-full flex items-center justify-between px-5 py-3 bg-white hover:bg-gray-50 transition-colors"
                   >
                     <div className="flex items-center gap-3 min-w-0">
                       <ChevronRight className={`h-4 w-4 text-slate-400 flex-shrink-0 transition-transform ${expandedTables.has(group.tableId) ? 'rotate-90' : ''}`} />
@@ -3491,15 +3482,6 @@ export default function DataQualityContent({
             </>
           )}
 
-          {/* Continue to Migration Center CTA */}
-          <div className="flex justify-end pb-4">
-            <button
-              onClick={() => router.push(`/app/projects/${projectId}/outputs`)}
-              className="px-5 py-2.5 text-sm bg-primary text-white rounded-lg hover:bg-primary/90 transition-colors font-medium"
-            >
-              Continue to Migration Center →
-            </button>
-          </div>
         </div>
       </div>
     </div>

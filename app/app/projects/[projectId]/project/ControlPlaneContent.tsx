@@ -79,7 +79,7 @@ function DocList({
       {docs.map((doc) => (
         <div
           key={doc.id}
-          className="flex items-center justify-between p-2 bg-gray-50 rounded border border-gray-200"
+          className="flex items-center justify-between p-2 bg-gray-50 rounded border border-gray-100"
         >
           <div className="flex items-center gap-2 min-w-0">
             {fileIcon(doc.filename)}
@@ -168,7 +168,7 @@ function SchemaDocSection({
 
   return (
     <div className="space-y-3">
-      <h3 className="text-xs font-semibold text-settle-slate-600 uppercase tracking-wide">{label}</h3>
+      <h3 className="text-xs font-medium text-gray-500">{label}</h3>
 
       <div
         onDrop={(e) => { e.preventDefault(); setState((s) => ({ ...s, isDragOver: false })); const f = e.dataTransfer.files[0]; if (f) doUpload(f) }}
@@ -302,49 +302,6 @@ function BusinessContextSection({
   )
 }
 
-// ── ProjectSetupStatPills ─────────────────────────────────────────────────────
-
-function ProjectSetupStatPills({
-  sourceTableCount,
-  sourceFieldCount,
-  targetTableCount,
-  targetFieldCount,
-  schemaDocCount,
-  contextDocCount,
-}: {
-  sourceTableCount: number
-  sourceFieldCount: number
-  targetTableCount: number
-  targetFieldCount: number
-  schemaDocCount: number
-  contextDocCount: number
-}) {
-  return (
-    <div className="flex items-center gap-2 px-5 py-2.5 bg-white border-b border-settle-slate-200 flex-shrink-0">
-      <div className="flex items-center gap-2 px-3 py-1.5 rounded-lg border border-settle-slate-200 bg-white">
-        <span className="text-[10px] font-medium text-settle-slate-400 uppercase tracking-wide">Source</span>
-        <span className="text-sm font-medium text-settle-slate-900">
-          {sourceTableCount > 0 ? `${sourceTableCount} tables · ${sourceFieldCount} fields` : 'Not configured'}
-        </span>
-      </div>
-      <div className="flex items-center gap-2 px-3 py-1.5 rounded-lg border border-settle-slate-200 bg-white">
-        <span className="text-[10px] font-medium text-settle-slate-400 uppercase tracking-wide">Target</span>
-        <span className="text-sm font-medium text-settle-slate-900">
-          {targetTableCount > 0 ? `${targetTableCount} tables · ${targetFieldCount} fields` : 'Not configured'}
-        </span>
-      </div>
-      <div className="flex items-center gap-2 px-3 py-1.5 rounded-lg border border-settle-slate-200 bg-white">
-        <span className="text-[10px] font-medium text-settle-slate-400 uppercase tracking-wide">Schema docs</span>
-        <span className="text-sm font-medium text-settle-slate-900">{schemaDocCount}</span>
-      </div>
-      <div className="flex items-center gap-2 px-3 py-1.5 rounded-lg border border-settle-slate-200 bg-white">
-        <span className="text-[10px] font-medium text-settle-slate-400 uppercase tracking-wide">Context docs</span>
-        <span className="text-sm font-medium text-settle-slate-900">{contextDocCount}</span>
-      </div>
-    </div>
-  )
-}
-
 // ── CollapsibleSection ────────────────────────────────────────────────────────
 
 function CollapsibleSection({
@@ -365,7 +322,7 @@ function CollapsibleSection({
   children: React.ReactNode
 }) {
   return (
-    <div className="bg-white border border-settle-slate-200 rounded-xl overflow-hidden shadow-sm">
+    <div className="bg-white border border-gray-100 rounded-lg overflow-hidden shadow-sm">
       <button
         type="button"
         onClick={onToggle}
@@ -391,7 +348,7 @@ function CollapsibleSection({
         )}
       </button>
       {isOpen && (
-        <div id={`${id}-panel`} className="border-t border-settle-slate-200 px-5 pb-5">
+        <div id={`${id}-panel`} className="border-t border-gray-100 px-5 pb-5">
           {children}
         </div>
       )}
@@ -459,9 +416,6 @@ export function ControlPlaneContent({
     (sum, ds) => sum + ds.tables.reduce((s, t) => s + (t.field_count ?? 0), 0),
     0
   )
-  const schemaDocCount = sourceDocs.length + targetDocs.length
-  const contextDocCount = contextDocs.length
-
   const sourceBadge = sourceTableCount > 0
     ? `${sourceTableCount} tables · ${sourceFieldCount} fields`
     : undefined
@@ -476,14 +430,6 @@ export function ControlPlaneContent({
         title="Project Setup"
         subtitle="Configure source and target system connections"
         projectInfo={projectInfo}
-      />
-      <ProjectSetupStatPills
-        sourceTableCount={sourceTableCount}
-        sourceFieldCount={sourceFieldCount}
-        targetTableCount={targetTableCount}
-        targetFieldCount={targetFieldCount}
-        schemaDocCount={schemaDocCount}
-        contextDocCount={contextDocCount}
       />
       <div className="flex-1 overflow-auto">
       <div className="px-5 py-4 space-y-3">
@@ -544,7 +490,7 @@ export function ControlPlaneContent({
         >
           <div className="grid md:grid-cols-2 gap-4 pt-3">
             <SchemaDocSection
-              label="Source Schema Files"
+              label="Source schema files"
               docs={sourceDocs}
               datasetId={primarySourceDatasetId}
               projectId={projectId}
@@ -552,7 +498,7 @@ export function ControlPlaneContent({
               canEdit={canEdit}
             />
             <SchemaDocSection
-              label="Target Schema Files"
+              label="Target schema files"
               docs={targetDocs}
               datasetId={primaryTargetDatasetId}
               projectId={projectId}
@@ -582,15 +528,6 @@ export function ControlPlaneContent({
           </div>
         </CollapsibleSection>
 
-        {/* Bottom CTA */}
-        <div className="flex justify-end pb-4">
-          <button
-            onClick={() => router.push(`/app/projects/${projectId}/data-overview`)}
-            className="px-5 py-2.5 text-sm bg-primary text-white rounded-lg hover:bg-primary/90 transition-colors font-medium"
-          >
-            Proceed to Data Overview →
-          </button>
-        </div>
       </div>
       </div>
     </div>

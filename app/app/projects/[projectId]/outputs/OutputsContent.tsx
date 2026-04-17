@@ -100,7 +100,7 @@ function phaseColor(color: string) {
     case 'green': return { bg: 'bg-green-500', text: 'text-green-700', badge: 'bg-green-100 text-green-700 border-green-200' }
     case 'yellow': return { bg: 'bg-yellow-400', text: 'text-yellow-700', badge: 'bg-yellow-100 text-yellow-700 border-yellow-200' }
     case 'red': return { bg: 'bg-red-500', text: 'text-red-700', badge: 'bg-red-100 text-red-700 border-red-200' }
-    default: return { bg: 'bg-gray-300', text: 'text-gray-500', badge: 'bg-gray-100 text-gray-500 border-gray-200' }
+    default: return { bg: 'bg-gray-300', text: 'text-gray-500', badge: 'bg-gray-100 text-gray-500 border-gray-100' }
   }
 }
 
@@ -769,9 +769,9 @@ export default function OutputsContent({ projectId, projectName, initialData, is
           {/* ── Compact stat cards ─────────────────────────────────────────── */}
           <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 items-stretch mb-4">
             {/* Card 1 — Mapping Coverage */}
-            <div className="rounded-xl border border-settle-slate-200 bg-white p-4 flex flex-col justify-between gap-3">
+            <div className="rounded-lg border border-gray-100 bg-white p-4 flex flex-col justify-between gap-3">
               <div>
-                <p className="text-xs font-medium text-settle-slate-400 uppercase tracking-wide mb-2">Mapping Coverage</p>
+                <p className="text-xs text-gray-500 mb-2">Mapping Coverage</p>
                 <div className="flex items-baseline gap-1">
                   <span className="text-2xl font-semibold text-settle-slate-900">{metrics.approvedFieldMappings}</span>
                   <span className="text-sm text-settle-slate-400">/ {metrics.totalSourceFields}</span>
@@ -794,9 +794,9 @@ export default function OutputsContent({ projectId, projectName, initialData, is
             </div>
 
             {/* Card 2 — Transforms */}
-            <div className="rounded-xl border border-settle-slate-200 bg-white p-4 flex flex-col justify-between gap-3">
+            <div className="rounded-lg border border-gray-100 bg-white p-4 flex flex-col justify-between gap-3">
               <div>
-                <p className="text-xs font-medium text-settle-slate-400 uppercase tracking-wide mb-2">Transforms</p>
+                <p className="text-xs text-gray-500 mb-2">Transforms</p>
                 <div className="flex items-baseline gap-1">
                   <span className="text-2xl font-semibold text-settle-slate-900">{metrics.completedTransforms}</span>
                   <span className="text-sm text-settle-slate-400">/ {metrics.totalTransforms}</span>
@@ -827,9 +827,9 @@ export default function OutputsContent({ projectId, projectName, initialData, is
             </div>
 
             {/* Card 3 — Quality Issues */}
-            <div className="rounded-xl border border-settle-slate-200 bg-white p-4 flex flex-col justify-between gap-3">
+            <div className="rounded-lg border border-gray-100 bg-white p-4 flex flex-col justify-between gap-3">
               <div>
-                <p className="text-xs font-medium text-settle-slate-400 uppercase tracking-wide mb-2">Quality Issues</p>
+                <p className="text-xs text-gray-500 mb-2">Quality Issues</p>
                 {metrics.openBlocking === 0 && metrics.openWarnings === 0 ? (
                   <span className="text-2xl font-semibold text-green-600">Clean</span>
                 ) : (
@@ -858,9 +858,9 @@ export default function OutputsContent({ projectId, projectName, initialData, is
             </div>
 
             {/* Card 4 — Migration Readiness */}
-            <div className="rounded-xl border border-settle-slate-200 bg-white p-4 flex flex-col justify-between gap-3">
+            <div className="rounded-lg border border-gray-100 bg-white p-4 flex flex-col justify-between gap-3">
               <div>
-                <p className="text-xs font-medium text-settle-slate-400 uppercase tracking-wide mb-2">Migration Readiness</p>
+                <p className="text-xs text-gray-500 mb-2">Migration Readiness</p>
                 <div className="flex items-baseline gap-1.5">
                   <span className={`text-2xl font-semibold ${readinessColor(metrics.readinessStatus)}`}>{metrics.readinessScore}%</span>
                   <span className={`text-sm font-medium ${readinessColor(metrics.readinessStatus)}`}>
@@ -965,20 +965,20 @@ export default function OutputsContent({ projectId, projectName, initialData, is
         {/* ════════════════════════════════════════════════════
             SECTION 2 — MIGRATION EXECUTION PACKAGE (hero deliverable)
         ════════════════════════════════════════════════════ */}
-        <div className="border-t border-gray-200 pt-6 -mt-2">
+        <div className="border-t border-gray-100 pt-6 -mt-2">
           <h2 className="text-lg font-semibold text-gray-900 mb-4">Deliverables</h2>
         </div>
 
         <div>
           <div className="flex items-center gap-3 mb-3">
-            <div className="flex items-center justify-center w-8 h-8 rounded-md bg-settle-slate-50 border border-settle-slate-200 flex-shrink-0">
+            <div className="flex items-center justify-center w-8 h-8 rounded-md bg-settle-slate-50 border border-gray-100 flex-shrink-0">
               <Package size={15} className="text-settle-slate-500" />
             </div>
             <h3 className="text-base font-semibold text-settle-slate-900">Migration Execution Package</h3>
           </div>
 
           {/* Accent card: left-border + subtle blue tint to signal primary deliverable */}
-          <div className="bg-white border border-settle-slate-200 rounded-xl p-5">
+          <div className="bg-white border border-gray-100 rounded-lg p-5">
 
             <p className="text-sm text-gray-600 mb-5">
               Complete SQL migration script with extract queries, transformation logic, load scripts,
@@ -1073,7 +1073,7 @@ export default function OutputsContent({ projectId, projectName, initialData, is
                       <CheckCircle2 className="w-4 h-4 text-green-600 flex-shrink-0" />
                       <span className="text-sm font-medium text-green-700">Generated</span>
                       {executionPackage.version && (
-                        <span className="text-xs text-gray-500 bg-gray-100 px-2 py-0.5 rounded-full border border-gray-200">
+                        <span className="text-xs text-gray-500 bg-gray-100 px-2 py-0.5 rounded-full border border-gray-100">
                           v{executionPackage.version}
                         </span>
                       )}
@@ -1153,7 +1153,7 @@ export default function OutputsContent({ projectId, projectName, initialData, is
 
                 {/* GENERATED */}
                 {compartmentalized.status === 'generated' && (
-                  <div className="border border-settle-slate-200 rounded-lg overflow-hidden">
+                  <div className="border border-gray-100 rounded-lg overflow-hidden">
                     {/* Toolbar row */}
                     <div className="flex items-center justify-between gap-3 px-4 py-2.5 border-b border-settle-slate-100 bg-settle-slate-50/50">
                       <div className="flex items-center gap-2">
@@ -1170,7 +1170,7 @@ export default function OutputsContent({ projectId, projectName, initialData, is
                           </SelectContent>
                         </Select>
 
-                        <div className="flex items-center bg-white border border-settle-slate-200 rounded-md overflow-hidden">
+                        <div className="flex items-center bg-white border border-gray-100 rounded-md overflow-hidden">
                           {(['per_table', 'single_file'] as const).map((fmt) => (
                             <button
                               key={fmt}
@@ -1232,7 +1232,7 @@ export default function OutputsContent({ projectId, projectName, initialData, is
                         </div>
                         <span className="text-settle-slate-200 text-xs">·</span>
                         {compartmentalized.dialect && (
-                          <span className="text-[10px] text-settle-slate-500 bg-settle-slate-100 border border-settle-slate-200 rounded px-1.5 py-0.5">
+                          <span className="text-[10px] text-settle-slate-500 bg-settle-slate-100 border border-gray-100 rounded px-1.5 py-0.5">
                             {SQL_DIALECTS.find((d) => d.id === compartmentalized.dialect)?.label ?? compartmentalized.dialect}
                           </span>
                         )}
@@ -1266,7 +1266,7 @@ export default function OutputsContent({ projectId, projectName, initialData, is
                       ).map((file) => {
                         const isOpen = previewFilename === file.filename
                         const cachedContent = fileContentCache[file.filename]
-                        const NEUTRAL_BADGE = 'bg-settle-slate-100 text-settle-slate-600 border-settle-slate-200'
+                        const NEUTRAL_BADGE = 'bg-settle-slate-100 text-settle-slate-600 border-gray-100'
                         const typeInfo = (() => {
                           switch (file.type) {
                             case 'checklist':    return { label: 'Checklist',   cls: NEUTRAL_BADGE }
@@ -1399,11 +1399,11 @@ export default function OutputsContent({ projectId, projectName, initialData, is
             </div>
           </div>
 
-          <div className="bg-white border border-gray-200 rounded-xl shadow-sm overflow-hidden">
+          <div className="bg-white border border-gray-100 rounded-lg shadow-sm overflow-hidden">
             <div className="p-6">
               {/* Warning strip */}
               {(outstanding.blockingIssues > 0 || outstanding.unmappedSourceFields > 0 || outstanding.untestedTransforms > 0) && (
-                <div className="mb-3 flex items-start gap-2 px-3 py-2.5 bg-settle-slate-50 border border-settle-slate-200 rounded-lg">
+                <div className="mb-3 flex items-start gap-2 px-3 py-2.5 bg-settle-slate-50 border border-gray-100 rounded-lg">
                   <AlertCircle className="w-3.5 h-3.5 text-settle-slate-400 flex-shrink-0 mt-0.5" />
                   <p className="text-xs text-settle-slate-600 leading-relaxed">
                     {[
@@ -1458,14 +1458,14 @@ export default function OutputsContent({ projectId, projectName, initialData, is
               {goldFiles.length > 0 && (
                 <div className="space-y-3 mt-2">
                   {goldFiles.map((file) => (
-                    <div key={file.outputId} className="flex items-center justify-between p-4 bg-gray-50 border border-gray-200 rounded-lg">
+                    <div key={file.outputId} className="flex items-center justify-between p-4 bg-gray-50 border border-gray-100 rounded-lg">
                       <div>
                         <div className="flex items-center gap-2 mb-1">
                           <span className="text-sm font-semibold text-gray-900">{file.tableName}</span>
                           <Badge className="bg-blue-100 text-blue-700 hover:bg-blue-100 border-blue-200 text-[10px]">
                             {goldFormat.toUpperCase()}
                           </Badge>
-                          <Badge className="bg-gray-100 text-gray-500 hover:bg-gray-100 border-gray-200 text-[10px]">
+                          <Badge className="bg-gray-100 text-gray-500 hover:bg-gray-100 border-gray-100 text-[10px]">
                             v{file.version}
                           </Badge>
                         </div>
@@ -1494,11 +1494,11 @@ export default function OutputsContent({ projectId, projectName, initialData, is
                     <p className="text-xs text-gray-500 mb-3 font-medium">Previously generated</p>
                     <div className="space-y-2">
                       {prevGold.slice(0, 5).map((o) => (
-                        <div key={o.id} className="flex items-center justify-between p-3 bg-gray-50 border border-gray-200 rounded-lg">
+                        <div key={o.id} className="flex items-center justify-between p-3 bg-gray-50 border border-gray-100 rounded-lg">
                           <div>
                             <div className="flex items-center gap-2">
                               <span className="text-sm font-medium text-gray-700">{o.tableName ?? o.file_storage_path?.split('/').pop()}</span>
-                              <Badge className="bg-gray-100 text-gray-500 hover:bg-gray-100 border-gray-200 text-[10px]">v{o.version}</Badge>
+                              <Badge className="bg-gray-100 text-gray-500 hover:bg-gray-100 border-gray-100 text-[10px]">v{o.version}</Badge>
                             </div>
                             <p className="text-xs text-gray-400 mt-0.5">{fmtDateTime(o.generated_at)}</p>
                           </div>
@@ -1540,7 +1540,7 @@ export default function OutputsContent({ projectId, projectName, initialData, is
             )}
           </div>
 
-          <div className="bg-white border border-settle-slate-200 rounded-xl overflow-hidden">
+          <div className="bg-white border border-gray-100 rounded-lg overflow-hidden">
             <div className="grid grid-cols-2 divide-x divide-settle-slate-100">
               {/* Row 1 */}
               <div className="border-b border-settle-slate-100">
@@ -1652,7 +1652,7 @@ function CompactDeliverableRow({
   return (
     <div className="flex items-start justify-between gap-3 p-4">
       <div className="flex items-start gap-3 min-w-0 flex-1">
-        <div className="flex items-center justify-center w-7 h-7 rounded-md bg-settle-slate-50 border border-settle-slate-200 flex-shrink-0 mt-0.5">
+        <div className="flex items-center justify-center w-7 h-7 rounded-md bg-settle-slate-50 border border-gray-100 flex-shrink-0 mt-0.5">
           {icon}
         </div>
         <div className="min-w-0">
@@ -1735,17 +1735,17 @@ function DeliverableCard({ title, description, icon, formats, state, stateMap, i
   const generatedAt = activeState?.generatedAt ?? existingOutput?.generated_at
 
   return (
-    <div className="bg-white border border-gray-200 rounded-xl shadow-sm p-5">
+    <div className="bg-white border border-gray-100 rounded-lg shadow-sm p-5">
       <div className="flex items-start justify-between gap-4">
         <div className="flex items-start gap-3 flex-1 min-w-0">
-          <div className="flex items-center justify-center w-8 h-8 rounded-md bg-settle-slate-50 border border-settle-slate-200 flex-shrink-0">
+          <div className="flex items-center justify-center w-8 h-8 rounded-md bg-settle-slate-50 border border-gray-100 flex-shrink-0">
             {icon}
           </div>
           <div className="min-w-0">
             <div className="flex items-center gap-2 mb-1">
               <h3 className="text-sm font-semibold text-gray-900">{title}</h3>
               {version && (
-                <Badge className="bg-gray-100 text-gray-500 hover:bg-gray-100 border-gray-200 text-[10px]">v{version}</Badge>
+                <Badge className="bg-gray-100 text-gray-500 hover:bg-gray-100 border-gray-100 text-[10px]">v{version}</Badge>
               )}
               {(activeState || existingOutput) && (
                 <Badge className="bg-green-100 text-green-700 hover:bg-green-100 border-green-200 text-[10px]">

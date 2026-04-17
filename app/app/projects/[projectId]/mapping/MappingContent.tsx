@@ -145,7 +145,7 @@ function TableSelector({
   }
 
   return (
-    <div className="border border-gray-200 rounded-xl p-4 flex flex-col">
+    <div className="border border-gray-100 rounded-lg p-4 flex flex-col">
       <div className="flex items-center justify-between mb-3">
         <h4 className="text-sm font-semibold text-gray-800">{title}</h4>
         <button
@@ -247,7 +247,7 @@ function GenerateMappingsPanel({
   return (
     <div className="relative">
       {generating && (
-        <div className="absolute inset-0 bg-white/95 flex items-center justify-center z-10 rounded-xl">
+        <div className="absolute inset-0 bg-white/95 flex items-center justify-center z-10 rounded-lg">
           <div className="text-center px-4">
             <div className="w-10 h-10 border-4 border-blue-600 border-t-transparent rounded-full animate-spin mx-auto mb-3" />
             <p className="font-semibold text-gray-900 text-sm">Generating AI-powered mappings…</p>
@@ -362,28 +362,31 @@ function MappingStatPills({
   targetDatasetName?: string
 }) {
   return (
-    <div className="flex items-center gap-2 px-5 py-2.5 bg-white border-b border-settle-slate-200 flex-shrink-0">
+    <div className="flex items-center gap-0 px-5 py-2 bg-white flex-shrink-0">
       {(sourceDatasetName || targetDatasetName) && (
-        <div className="flex items-center gap-2 mr-4 pr-4 border-r border-settle-slate-200">
+        <div className="flex items-center gap-2 mr-4 pr-4 border-r border-gray-100">
           <span className="text-xs text-settle-slate-500 font-medium">{sourceDatasetName}</span>
           <span className="text-settle-slate-300 text-xs">→</span>
           <span className="text-xs text-settle-slate-500 font-medium">{targetDatasetName}</span>
         </div>
       )}
-      <div className="flex items-center gap-2 px-3 py-1.5 rounded-lg border border-settle-slate-200 bg-white">
-        <span className="text-[10px] font-medium text-settle-slate-400 uppercase tracking-wide">Total</span>
+      <div className="flex items-center gap-1.5 px-3">
+        <span className="text-xs text-gray-500">Total</span>
         <span className="text-sm font-medium text-settle-slate-900">{primaryFMCount}</span>
       </div>
-      <div className="flex items-center gap-2 px-3 py-1.5 rounded-lg border border-settle-slate-200 bg-white">
-        <span className="text-[10px] font-medium text-settle-slate-400 uppercase tracking-wide">Approved</span>
+      <div className="w-px h-4 bg-gray-100 flex-shrink-0" />
+      <div className="flex items-center gap-1.5 px-3">
+        <span className="text-xs text-gray-500">Approved</span>
         <span className="text-sm font-medium text-settle-slate-900">{approvedFMCount}</span>
       </div>
-      <div className="flex items-center gap-2 px-3 py-1.5 rounded-lg border border-settle-slate-200 bg-white">
-        <span className="text-[10px] font-medium text-settle-slate-400 uppercase tracking-wide">Needs Review</span>
+      <div className="w-px h-4 bg-gray-100 flex-shrink-0" />
+      <div className="flex items-center gap-1.5 px-3">
+        <span className="text-xs text-gray-500">Needs Review</span>
         <span className="text-sm font-medium text-settle-slate-900">{needsReviewCount}</span>
       </div>
-      <div className="flex items-center gap-2 px-3 py-1.5 rounded-lg border border-settle-slate-200 bg-white">
-        <span className="text-[10px] font-medium text-settle-slate-400 uppercase tracking-wide">Unmapped</span>
+      <div className="w-px h-4 bg-gray-100 flex-shrink-0" />
+      <div className="flex items-center gap-1.5 px-3">
+        <span className="text-xs text-gray-500">Unmapped</span>
         <span className="text-sm font-medium text-settle-slate-900">{unmappedCount}</span>
       </div>
     </div>
@@ -855,7 +858,7 @@ function InlineAddFieldRow({
         {/* Mapping type selector */}
         <div className="flex items-center gap-2">
           <span className="text-xs text-gray-500 flex-shrink-0">Type:</span>
-          <div className="flex rounded-lg border border-gray-200 overflow-hidden text-[11px]">
+          <div className="flex rounded-lg border border-gray-100 overflow-hidden text-[11px]">
             {([
               { key: 'one_to_one', label: '1 → 1', activeClass: 'bg-gray-800 text-white' },
               { key: 'many_to_one', label: 'Many → 1', activeClass: 'bg-primary text-white' },
@@ -1162,7 +1165,7 @@ function FieldMappingRow({
               </span>
               <span
                 title={`Many-to-one: ${fm.sourceField?.name} + ${contributingFMs.map(c => c.sourceField?.name).join(', ')} → ${fm.targetField?.name}`}
-                className="flex-shrink-0 text-[10px] font-medium px-1.5 py-0.5 rounded-full bg-settle-slate-100 text-settle-slate-500 border border-settle-slate-200"
+                className="flex-shrink-0 text-[10px] font-medium px-1.5 py-0.5 rounded-full bg-gray-100 text-gray-500 border border-gray-100"
               >
                 +{contributingFMs.length}
               </span>
@@ -1179,7 +1182,7 @@ function FieldMappingRow({
             {isOneToMany && (
               <span
                 title={`One-to-many: ${fm.sourceField?.name} maps to ${oneToManyCount} target fields`}
-                className="flex-shrink-0 text-[10px] font-medium px-1.5 py-0.5 rounded-full bg-settle-slate-100 text-settle-slate-500 border border-settle-slate-200"
+                className="flex-shrink-0 text-[10px] font-medium px-1.5 py-0.5 rounded-full bg-gray-100 text-gray-500 border border-gray-100"
               >
                 1→{oneToManyCount}
               </span>
@@ -1276,7 +1279,7 @@ function FieldMappingRow({
           {isManyToOne && (
             <span
               title={`${fm.targetField?.name} receives from ${contributingFMs.length + 1} source fields combined`}
-              className="flex-shrink-0 text-[10px] font-medium px-1.5 py-0.5 rounded-full bg-settle-slate-100 text-settle-slate-500 border border-settle-slate-200"
+              className="flex-shrink-0 text-[10px] font-medium px-1.5 py-0.5 rounded-full bg-gray-100 text-gray-500 border border-gray-100"
             >
               many→1
             </span>
@@ -1395,7 +1398,7 @@ function TableMappingCard({
   const acknowledgedIds = useMemo(() => new Set(acknowledgments.map((a) => a.field_id)), [acknowledgments])
 
   return (
-    <div className="border border-gray-200 rounded-xl overflow-hidden">
+    <div className="border border-gray-200 rounded-lg overflow-hidden bg-white">
       {/* Header */}
       <div className="group flex items-center px-5 py-4 hover:bg-gray-50 transition-colors">
         <div className="flex items-center gap-2 flex-1 cursor-pointer min-w-0" onClick={onToggle}>
@@ -1416,7 +1419,6 @@ function TableMappingCard({
           <div className="flex-1 min-w-0 text-right">
             <p className="font-semibold text-gray-900 truncate">{tm.targetTable?.name ?? '—'}</p>
             <div className="flex items-center justify-end gap-1.5 mt-1">
-              <ConfidenceBadge confidence={tm.confidence} />
               <StatusBadge status={tm.status} />
             </div>
           </div>
@@ -1432,19 +1434,9 @@ function TableMappingCard({
               onClick={canEdit ? onApproveAll : undefined}
               disabled={!canEdit}
               title="Approve all field mappings"
-              className="px-2 py-1 text-xs font-medium text-green-700 bg-green-50 hover:bg-green-100 rounded transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+              className="text-xs font-medium text-gray-600 hover:text-gray-900 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
             >
               Approve All
-            </button>
-          </RoleTooltip>
-          <RoleTooltip allowed={canEdit} requiredRole="Editor">
-            <button
-              onClick={canEdit ? onRejectAll : undefined}
-              disabled={!canEdit}
-              title="Reject all field mappings"
-              className="px-2 py-1 text-xs font-medium text-gray-600 bg-gray-100 hover:bg-gray-200 rounded transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
-            >
-              Reject All
             </button>
           </RoleTooltip>
           <RoleTooltip allowed={canEdit} requiredRole="Editor">
@@ -1452,11 +1444,11 @@ function TableMappingCard({
               onClick={canEdit ? onRegenerate : undefined}
               disabled={regeneratingThis || !canEdit}
               title="Regenerate field mappings with AI"
-              className="flex items-center gap-1 px-2 py-1 text-xs font-medium text-blue-600 bg-blue-50 hover:bg-blue-100 rounded transition-colors disabled:opacity-50"
+              className="flex items-center gap-1 text-xs font-medium text-gray-600 hover:text-gray-900 transition-colors disabled:opacity-50"
             >
               {regeneratingThis ? (
                 <>
-                  <span className="w-2.5 h-2.5 border-2 border-blue-400 border-t-transparent rounded-full animate-spin" />
+                  <span className="w-2.5 h-2.5 border-2 border-gray-400 border-t-transparent rounded-full animate-spin" />
                   Regenerating…
                 </>
               ) : (
@@ -1475,7 +1467,7 @@ function TableMappingCard({
               onClick={canEdit ? onDeleteTM : undefined}
               disabled={!canEdit}
               title="Delete this table mapping"
-              className="p-1.5 text-gray-400 hover:text-red-600 hover:bg-red-50 rounded transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+              className="p-1.5 text-gray-400 hover:text-gray-600 rounded transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
             >
             <TrashIcon />
           </button>
@@ -1489,9 +1481,9 @@ function TableMappingCard({
           {/* Column headers + mapped field rows (hidden when hideMappedRows) */}
           {!hideMappedRows && !(filterVisibleStatus && tm.fieldMappings.every((fm) => fm.status !== filterVisibleStatus)) && (
           <div className="grid grid-cols-[1fr_80px_1fr] items-center px-4 py-2 bg-settle-slate-50 border-b border-settle-slate-100">
-            <div className="text-[10px] font-medium text-settle-slate-400 uppercase tracking-wide">Source Field</div>
-            <div className="text-[10px] font-medium text-settle-slate-400 uppercase tracking-wide text-center overflow-hidden">Conf.</div>
-            <div className="text-[10px] font-medium text-settle-slate-400 uppercase tracking-wide">Target Field</div>
+            <div className="text-xs font-medium text-gray-500">Source Field</div>
+            <div className="text-xs font-medium text-gray-500 text-center overflow-hidden">Conf.</div>
+            <div className="text-xs font-medium text-gray-500">Target Field</div>
           </div>
           )}
 
@@ -1549,7 +1541,7 @@ function TableMappingCard({
                   groupRows.forEach((r) => rendered.add(r.id))
                   const srcName = fm.sourceField?.name ?? '?'
                   return (
-                    <div key={`otm-${fm.source_field_id}`} className="border-l-2 border-settle-slate-200 my-1">
+                    <div key={`otm-${fm.source_field_id}`} className="border-l-2 border-gray-100 my-1">
                       <div className="text-xs text-settle-slate-400 font-medium px-5 py-1">
                         Split: {srcName} → {groupRows.length} target fields
                       </div>
@@ -1595,8 +1587,8 @@ function TableMappingCard({
 
           {/* Inline unmapped target fields */}
           {showInlineUnmapped && unmappedTgtFields.length > 0 && (
-            <div className="border-t border-dashed border-gray-200 mt-2 pt-2">
-              <div className="px-5 py-1.5 text-xs font-medium text-gray-400 uppercase tracking-wide">
+            <div className="border-t border-dashed border-gray-100 mt-2 pt-2">
+              <div className="px-5 py-1.5 text-xs font-medium text-gray-500">
                 Unmapped Target Fields ({unmappedTgtFields.length})
               </div>
               {unmappedTgtFields.map((field) => {
@@ -1664,8 +1656,8 @@ function TableMappingCard({
 
           {/* Inline unmapped source fields */}
           {showInlineUnmapped && unmappedSrcFields.length > 0 && (
-            <div className="border-t border-dashed border-gray-200 mt-1 pt-2">
-              <div className="px-5 py-1.5 text-xs font-medium text-gray-400 uppercase tracking-wide">
+            <div className="border-t border-dashed border-gray-100 mt-1 pt-2">
+              <div className="px-5 py-1.5 text-xs font-medium text-gray-500">
                 Unmapped Source Fields ({unmappedSrcFields.length})
               </div>
               {unmappedSrcFields.map((field) => {
@@ -1980,7 +1972,7 @@ function MappingDetailsPanel({
           <div className="space-y-5">
 
             <div>
-              <p className="text-[10px] font-medium text-settle-slate-400 uppercase tracking-wide mb-2">Confidence</p>
+              <p className="text-xs font-medium text-gray-500 mb-2">Confidence</p>
               <div className="h-1 bg-settle-slate-100 rounded-full overflow-hidden mb-1.5">
                 <div
                   className={`h-full rounded-full ${
@@ -2015,7 +2007,7 @@ function MappingDetailsPanel({
                   onClick={onToggleReasoning}
                   className="flex items-center justify-between w-full text-left py-2 border-t border-settle-slate-100"
                 >
-                  <span className="text-[10px] font-medium text-settle-slate-400 uppercase tracking-wide">AI Reasoning</span>
+                  <span className="text-xs font-medium text-gray-500">AI Reasoning</span>
                   <ChevronRight
                     className={`w-3.5 h-3.5 text-settle-slate-400 transition-transform ${aiReasoningOpen ? 'rotate-90' : ''}`}
                   />
@@ -2028,10 +2020,10 @@ function MappingDetailsPanel({
 
             {fm.similar_fields_considered && fm.similar_fields_considered.length > 0 && (
               <div>
-                <p className="text-[10px] font-medium text-settle-slate-400 uppercase tracking-wide mb-2">Similar Fields Considered</p>
+                <p className="text-xs font-medium text-gray-500 mb-2">Similar Fields Considered</p>
                 <div className="flex flex-wrap gap-1.5">
                   {fm.similar_fields_considered.map((f) => (
-                    <span key={f} className="text-[10px] text-settle-slate-600 bg-settle-slate-50 border border-settle-slate-200 rounded px-2 py-0.5 font-mono">{f}</span>
+                    <span key={f} className="text-[10px] text-settle-slate-600 bg-settle-slate-50 border border-gray-100 rounded px-2 py-0.5 font-mono">{f}</span>
                   ))}
                 </div>
               </div>
@@ -2039,7 +2031,7 @@ function MappingDetailsPanel({
 
             {fm.sourceFieldSamples && fm.sourceFieldSamples.length > 0 && (
               <div>
-                <p className="text-[10px] font-medium text-settle-slate-400 uppercase tracking-wide mb-2">Example Values</p>
+                <p className="text-xs font-medium text-gray-500 mb-2">Example Values</p>
                 <div className="flex items-center gap-2 flex-wrap">
                   {fm.sourceFieldSamples.slice(0, 4).map((v, i, arr) => (
                     <span key={i} className="text-xs text-settle-slate-700">
@@ -2053,7 +2045,7 @@ function MappingDetailsPanel({
 
             {fm.type_compatibility && (
               <div>
-                <p className="text-[10px] font-medium text-settle-slate-400 uppercase tracking-wide mb-1.5">Type Compatibility</p>
+                <p className="text-xs font-medium text-gray-500 mb-1.5">Type Compatibility</p>
                 <p className="text-xs text-settle-slate-600">{fm.type_compatibility}</p>
               </div>
             )}
@@ -2062,7 +2054,7 @@ function MappingDetailsPanel({
 
         {activeTab === 'transform' && (
           <div className="space-y-3">
-            <div className="border border-settle-slate-200 rounded-lg p-4">
+            <div className="border border-gray-100 rounded-lg p-4">
               <p className="text-xs text-settle-slate-400 mb-3">No transform defined</p>
               <button
                 onClick={() => router.push(`/app/projects/${projectId}/transform?fieldMappingId=${fm.id}`)}
@@ -2110,7 +2102,7 @@ function MappingDetailsPanel({
                 )}
 
                 {rejectConfirmOpen && (
-                  <div className="mt-3 p-3 bg-settle-slate-50 border border-settle-slate-200 rounded-lg">
+                  <div className="mt-3 p-3 bg-settle-slate-50 border border-gray-100 rounded-lg">
                     <p className="text-xs text-settle-slate-700 mb-3 leading-relaxed">
                       <span className="font-medium">Unmap {fm.sourceField?.name} → {fm.targetField?.name}?</span>
                       <br />
@@ -3167,7 +3159,7 @@ export default function MappingContent({ projectId, projectName, initialData, pr
       )}
 
       {/* Filter bar — flush border-b strip */}
-      <div className="bg-white border-b border-settle-slate-200 px-5 py-2.5 flex-shrink-0">
+      <div className="bg-white border-b border-gray-100 px-5 py-2.5 flex-shrink-0">
         <div className="flex items-center gap-3 min-w-0">
 
             {/* Table + field filter */}
@@ -3181,7 +3173,7 @@ export default function MappingContent({ projectId, projectName, initialData, pr
               />
             </div>
 
-            <div className="w-px h-4 bg-gray-200 flex-shrink-0" />
+            <div className="w-px h-4 bg-gray-100 flex-shrink-0" />
 
             {/* Status filter */}
             <div className="flex items-center gap-2">
@@ -3202,7 +3194,7 @@ export default function MappingContent({ projectId, projectName, initialData, pr
               </Select>
             </div>
 
-            <div className="w-px h-4 bg-gray-200 flex-shrink-0" />
+            <div className="w-px h-4 bg-gray-100 flex-shrink-0" />
 
             {/* Mapping type filter */}
             <div className="flex items-center gap-2">
@@ -3232,7 +3224,7 @@ export default function MappingContent({ projectId, projectName, initialData, pr
               </Select>
             </div>
 
-            <div className="w-px h-4 bg-gray-200 flex-shrink-0" />
+            <div className="w-px h-4 bg-gray-100 flex-shrink-0" />
 
             {/* Search */}
             <input
@@ -3267,9 +3259,9 @@ export default function MappingContent({ projectId, projectName, initialData, pr
       <div className="flex-1 overflow-auto">
       <div className="px-5 py-4 space-y-3">
       <div className="flex items-start">
-        <div className="flex-1 space-y-3 min-w-0">
+        <div className="flex-1 space-y-2 min-w-0">
           {filteredMappings.length === 0 ? (
-            <div className="text-center py-12 text-sm text-gray-400 border border-dashed border-gray-200 rounded-xl">
+            <div className="text-center py-12 text-sm text-gray-400 border border-dashed border-gray-100 rounded-lg">
               {statusFilter === 'needs_review' ? 'All mappings reviewed and all fields addressed.' : statusFilter === 'approved' ? 'No approved mappings yet.' : statusFilter === 'unmapped' ? 'All fields are mapped or acknowledged.' : mappingTypeFilter === 'many_to_one' ? 'No many-to-one mappings found.' : mappingTypeFilter === 'one_to_many' ? 'No one-to-many mappings found.' : mappingTypeFilter === 'value_assignment' ? 'No value assignments found.' : 'No mappings found.'}
             </div>
           ) : (
@@ -3356,7 +3348,7 @@ export default function MappingContent({ projectId, projectName, initialData, pr
       />
 
       {/* Bottom bar */}
-      <div className="flex items-center justify-between pt-2 border-t border-gray-100">
+      <div className="flex items-center gap-3 pt-2 border-t border-gray-100">
         <div className="flex items-center gap-3">
           <RoleTooltip allowed={canEdit} requiredRole="Editor">
             <button onClick={canEdit ? () => setShowAddModal(true) : undefined} disabled={!canEdit} className="flex items-center gap-2 text-sm font-medium text-gray-600 hover:text-blue-700 transition-colors disabled:opacity-40 disabled:cursor-not-allowed">
@@ -3380,9 +3372,6 @@ export default function MappingContent({ projectId, projectName, initialData, pr
             </RoleTooltip>
           )}
         </div>
-        <button onClick={() => router.push(`/app/projects/${projectId}/transform`)} className="px-5 py-2.5 text-sm font-medium text-white bg-primary rounded-lg hover:bg-primary/90 transition-colors">
-          Proceed to Transform →
-        </button>
       </div>
 
       {/* Modals */}

@@ -7,9 +7,7 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Textarea } from '@/components/ui/textarea'
-import { Badge } from '@/components/ui/badge'
 import { Plus, Database, Search, Layers, FileText } from '@/components/icons'
-import { PhaseProgressBar } from '@/components/app/PhaseProgressBar'
 import { createProject } from '@/lib/actions/projects'
 import { ProjectWithStats } from '@/lib/types/database'
 import { ProjectMenu } from '@/components/app/ProjectMenu'
@@ -89,58 +87,54 @@ function ProjectCard({ project, onUpdate }: { project: ProjectWithStats; onUpdat
 
   const cardContent = (
     <>
-      {/* Top row */}
-      <div className="flex items-start justify-between gap-4 mb-4">
-        <div className="flex-1 min-w-0">
-          <div className="flex items-center gap-2 mb-0.5">
-            <span className={`text-sm font-semibold truncate ${isArchived ? 'text-settle-slate-400' : 'text-settle-slate-900'}`}>
-              {project.name}
-            </span>
-            {isArchived ? (
-              <Badge className="bg-gray-100 text-gray-500 hover:bg-gray-100 text-xs px-1.5 py-0 flex-shrink-0">
-                Archived
-              </Badge>
-            ) : isCompleted ? (
-              <Badge className="bg-green-100 text-green-700 hover:bg-green-100 text-xs px-1.5 py-0 flex-shrink-0">
-                Completed
-              </Badge>
-            ) : null}
-            {isCompleted && <AutoArchiveCountdown completedAt={project.completed_at} />}
+      {/* Row 1: Project name + badges */}
+      <div className="flex items-center gap-2 mb-1">
+        <span className={`text-sm font-semibold truncate ${isArchived ? 'text-gray-400' : 'text-gray-900'}`}>
+          {project.name}
+        </span>
+        {isCompleted && (
+          <span className="text-[10px] font-medium text-green-700 bg-green-50 px-1.5 py-0.5 rounded flex-shrink-0">
+            Completed
+          </span>
+        )}
+        {isArchived && (
+          <span className="text-[10px] font-medium text-gray-500 bg-gray-100 px-1.5 py-0.5 rounded flex-shrink-0">
+            Archived
+          </span>
+        )}
+        {isCompleted && !isArchived && <AutoArchiveCountdown completedAt={project.completed_at} />}
+      </div>
+
+      {/* Row 2: Meta left, stats right */}
+      <div className="flex items-center justify-between">
+        <div className="flex items-center gap-1.5 text-xs text-gray-500">
+          {project.source_label && (
+            <>
+              <span>{project.source_label}</span>
+              <span className="text-gray-300">→</span>
+              <span>{project.target_label}</span>
+              <span className="text-gray-300">·</span>
+            </>
+          )}
+          <span>
+            {isArchived && project.archived_at
+              ? `Archived ${formatDate(project.archived_at)}`
+              : `Updated ${formatRelativeTime(project.updated_at)}`}
+          </span>
+          {isArchived && <span className="text-gray-400">· Data purged</span>}
+        </div>
+
+        {stats.length > 0 && (
+          <div className="flex items-center gap-0 text-xs text-gray-500 flex-shrink-0">
+            {stats.map((s, i) => (
+              <span key={i} className="flex items-center">
+                {i > 0 && <span className="mx-2 text-gray-300">|</span>}
+                <span className={s.color ?? 'text-gray-500'}>{s.label}</span>
+              </span>
+            ))}
           </div>
-          <p className="text-sm text-settle-slate-600 mb-0.5">
-            {project.source_label}
-            <span className="mx-1.5 text-settle-slate-300">→</span>
-            {project.target_label}
-          </p>
-          <p className="text-xs text-settle-slate-400 mb-3">
-            {isArchived && project.archived_at ? (
-              <>Archived {formatDate(project.archived_at)}</>
-            ) : (
-              <>Updated {formatRelativeTime(project.updated_at)}</>
-            )}
-            {isArchived && (
-              <span className="ml-1.5 text-settle-slate-400">· Data purged</span>
-            )}
-          </p>
-        </div>
+        )}
       </div>
-
-      {/* Phase progress bar */}
-      <div className="mb-3">
-        <PhaseProgressBar currentPhase={project.currentPhase} showLabels />
-      </div>
-
-      {/* Bottom stats */}
-      {stats.length > 0 && (
-        <div className="flex flex-wrap items-center gap-x-0 gap-y-1 text-xs text-gray-500">
-          {stats.map((s, i) => (
-            <span key={i} className="flex items-center">
-              {i > 0 && <span className="mx-2.5 text-gray-300">|</span>}
-              <span className={s.color ?? 'text-gray-500'}>{s.label}</span>
-            </span>
-          ))}
-        </div>
-      )}
     </>
   )
 
@@ -148,7 +142,7 @@ function ProjectCard({ project, onUpdate }: { project: ProjectWithStats; onUpdat
     <div className={`relative group/card ${isArchived ? 'opacity-70' : ''}`}>
       <Link
         href={`/app/projects/${project.id}`}
-        className={`block bg-white border border-gray-200 rounded-xl p-5 pr-12 hover:border-gray-300 hover:shadow-sm transition-all ${
+        className={`block bg-white border border-gray-200 rounded-lg px-5 py-3.5 pr-12 hover:border-gray-300 transition-colors ${
           isCompleted ? 'opacity-75' : ''
         }`}
       >
@@ -156,7 +150,7 @@ function ProjectCard({ project, onUpdate }: { project: ProjectWithStats; onUpdat
       </Link>
 
       {/* Three-dot menu — floats above the card */}
-      <div className="absolute top-4 right-4 opacity-0 group-hover/card:opacity-100 transition-opacity">
+      <div className="absolute top-3 right-3 opacity-0 group-hover/card:opacity-100 transition-opacity">
         <ProjectMenu
           project={{
             id: project.id,
@@ -507,7 +501,7 @@ export function ProjectsList({ initialProjects, activeOrgRole }: ProjectsListPro
             )}
           </div>
         ) : (
-          <div className="space-y-3 max-w-5xl">
+          <div className="space-y-2 max-w-5xl">
             {filtered.map((project) => (
               <ProjectCard key={project.id} project={project} onUpdate={() => router.refresh()} />
             ))}

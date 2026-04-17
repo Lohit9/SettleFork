@@ -10,7 +10,7 @@ interface PageHeaderProps {
 
 export function PageHeader({ projectName, title, subtitle, projectInfo, children }: PageHeaderProps) {
   return (
-    <div className="bg-white border-b border-gray-200 pl-2 pr-6 min-h-[60px] flex items-center justify-between gap-4 flex-shrink-0">
+    <div className="bg-white border-b border-gray-100 pl-2 pr-6 min-h-[60px] flex items-center justify-between gap-4 flex-shrink-0">
       <div className="flex items-center gap-0 min-w-0">
         <h1 className="text-base font-semibold text-gray-900 whitespace-nowrap">{title}</h1>
         {projectName && (

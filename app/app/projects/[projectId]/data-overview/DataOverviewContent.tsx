@@ -27,10 +27,6 @@ interface DataOverviewContentProps {
   initialQuery?: string
   initialQueryMode?: 'nl' | 'sql'
   initialTableId?: string
-  sourceTableCount: number
-  sourceFieldCount: number
-  targetTableCount: number
-  targetFieldCount: number
 }
 
 export default function DataOverviewContent({
@@ -43,10 +39,6 @@ export default function DataOverviewContent({
   initialQuery,
   initialQueryMode,
   initialTableId,
-  sourceTableCount,
-  sourceFieldCount,
-  targetTableCount,
-  targetFieldCount,
 }: DataOverviewContentProps) {
   const searchParams = useSearchParams()
   const router = useRouter()
@@ -82,24 +74,8 @@ export default function DataOverviewContent({
 
   return (
     <div className="flex flex-col flex-1 min-h-0">
-      {/* Stat pills */}
-      <div className="flex items-center gap-2 px-5 py-2.5 bg-white border-b border-settle-slate-200 flex-shrink-0">
-        <div className="flex items-center gap-2 px-3 py-1.5 rounded-lg border border-settle-slate-200 bg-white">
-          <span className="text-[10px] font-medium text-settle-slate-400 uppercase tracking-wide">Source</span>
-          <span className="text-sm font-medium text-settle-slate-900">
-            {sourceTableCount} tables · {sourceFieldCount} fields
-          </span>
-        </div>
-        <div className="flex items-center gap-2 px-3 py-1.5 rounded-lg border border-settle-slate-200 bg-white">
-          <span className="text-[10px] font-medium text-settle-slate-400 uppercase tracking-wide">Target</span>
-          <span className="text-sm font-medium text-settle-slate-900">
-            {targetTableCount} tables · {targetFieldCount} fields
-          </span>
-        </div>
-      </div>
-
       {/* Tab bar */}
-      <div className="border-b border-settle-slate-200 bg-white px-5">
+      <div className="border-b border-gray-100 bg-white px-5">
         <nav className="flex gap-0" aria-label="Data overview tabs">
           {TABS.map(({ id, label }) => {
             const active = activeTab === id

@@ -350,7 +350,7 @@ function SchemaPanel({
   }
 
   return (
-    <div className="flex-1 min-w-0 border border-gray-200 rounded-xl bg-white overflow-hidden">
+    <div className="flex-1 min-w-0 border border-gray-100 rounded-lg bg-white overflow-hidden">
       {/* Panel header */}
       <div className="px-5 py-4 border-b border-gray-100 flex items-center justify-between bg-gray-50/50">
         <h2 className="text-sm font-semibold text-gray-900">{title}</h2>
@@ -377,7 +377,7 @@ function SchemaPanel({
             <div key={ds.id}>
               {/* Dataset label */}
               <div className="px-5 py-2 bg-gray-50 border-b border-gray-100">
-                <span className="text-xs font-semibold text-settle-slate-500 uppercase tracking-wide">{ds.name}</span>
+                <span className="text-xs font-medium text-gray-500">{ds.name}</span>
               </div>
 
               {ds.tables.map((table) => {
@@ -421,11 +421,11 @@ function SchemaPanel({
                         <table className="w-full text-xs">
                           <thead>
                             <tr className="border-b border-gray-100">
-                              <th className="text-left px-8 py-2 text-[11px] font-medium text-settle-slate-500 uppercase tracking-wide w-1/4">Field</th>
-                              <th className="text-left px-3 py-2 text-[11px] font-medium text-settle-slate-500 uppercase tracking-wide">Type</th>
-                              <th className="text-center px-3 py-2 text-[11px] font-medium text-settle-slate-500 uppercase tracking-wide">Nullable</th>
-                              <th className="text-center px-3 py-2 text-[11px] font-medium text-settle-slate-500 uppercase tracking-wide">Key</th>
-                              <th className="text-left px-3 py-2 text-[11px] font-medium text-settle-slate-500 uppercase tracking-wide">Constraints</th>
+                              <th className="text-left px-8 py-2 text-xs font-medium text-gray-500 w-1/4">Field</th>
+                              <th className="text-left px-3 py-2 text-xs font-medium text-gray-500">Type</th>
+                              <th className="text-center px-3 py-2 text-xs font-medium text-gray-500">Nullable</th>
+                              <th className="text-center px-3 py-2 text-xs font-medium text-gray-500">Key</th>
+                              <th className="text-left px-3 py-2 text-xs font-medium text-gray-500">Constraints</th>
                               <th className="w-6" />
                             </tr>
                           </thead>

@@ -52,6 +52,7 @@ interface NavigationProps {
   targetSystemName?: string
   blockingIssueCount?: number
   projectStatus?: string
+  initialAvatarUrl?: string | null
 }
 
 const makeNavItems = (projectId?: string) => [
@@ -78,6 +79,7 @@ export function Navigation({
   targetSystemName,
   blockingIssueCount = 0,
   projectStatus = 'active',
+  initialAvatarUrl = null,
 }: NavigationProps) {
   const pathname = usePathname()
   const router = useRouter()
@@ -149,15 +151,15 @@ export function Navigation({
     <aside
       className={`
         fixed top-0 left-0 h-screen z-40 flex flex-col
-        bg-white border-r border-slate-200
+        bg-white border-r border-gray-100
         transition-all duration-200 ease-in-out overflow-hidden
-        ${expanded ? 'w-[220px] shadow-xl shadow-gray-900/10' : 'w-[60px] shadow-none'}
+        ${expanded ? 'w-[220px] shadow-md shadow-gray-900/5' : 'w-[60px] shadow-none'}
       `}
       onMouseEnter={() => setIsHovered(true)}
       onMouseLeave={() => { if (!isPopoverOpen) setIsHovered(false) }}
     >
       {/* Logo */}
-      <div className="flex-shrink-0 h-14 border-b border-gray-200 flex items-center px-3">
+      <div className="flex-shrink-0 h-14 border-b border-gray-100 flex items-center px-3">
         <Link href="/app/projects" className="flex items-center gap-2.5 min-w-0">
           {expanded ? (
             <img src="/images/logos/settle-logo-full.svg" alt="Settle" className="h-7 w-auto" />
@@ -168,7 +170,7 @@ export function Navigation({
       </div>
 
       {/* Back + project info */}
-      <div className="flex-shrink-0 border-b border-gray-200 px-2 py-2">
+      <div className="flex-shrink-0 border-b border-gray-100 px-2 py-2">
         {expanded ? (
           <Link
             href="/app/projects"
@@ -219,8 +221,8 @@ export function Navigation({
         ) : (
           <div className="flex justify-center mt-1">
             <Tip label={projectTooltip || 'Project'}>
-              <div className="w-9 h-9 rounded-full bg-blue-100 flex items-center justify-center cursor-default">
-                <span className="text-xs font-semibold text-blue-600">{projectInitials}</span>
+              <div className="w-8 h-8 rounded-lg bg-gray-100 flex items-center justify-center cursor-default">
+                <span className="text-[11px] font-medium text-gray-600">{projectInitials}</span>
               </div>
             </Tip>
           </div>
@@ -241,13 +243,13 @@ export function Navigation({
               <Link
                 href={item.href}
                 className={`
-                  flex items-center rounded-lg transition-colors
+                  flex items-center rounded-lg transition-colors duration-150
                   ${expanded ? 'gap-3 px-3 py-2 w-full' : 'justify-center w-10 h-10 mx-auto'}
-                  ${isActive ? 'bg-primary text-white font-medium' : 'text-slate-500 hover:bg-slate-50 hover:text-slate-700'}
+                  ${isActive ? 'bg-gray-100 text-gray-900' : 'text-gray-500 hover:bg-gray-50 hover:text-gray-700'}
                 `}
               >
                 <span className="relative flex-shrink-0">
-                  <Icon className="w-5 h-5" />
+                  <Icon className="w-[18px] h-[18px]" />
                   {!expanded && hasBadge && (
                     <span className="absolute -top-1 -right-1 w-2 h-2 rounded-full bg-red-500" />
                   )}
@@ -285,11 +287,11 @@ export function Navigation({
             const btn = (
               <Link
                 href={href}
-                className={`flex items-center rounded-lg transition-colors
+                className={`flex items-center rounded-lg transition-colors duration-150
                   ${expanded ? 'gap-3 px-3 py-2 w-full' : 'justify-center w-10 h-10 mx-auto'}
-                  ${isBottomActive ? 'bg-primary text-white font-medium' : 'text-slate-500 hover:text-slate-700 hover:bg-slate-50'}`}
+                  ${isBottomActive ? 'bg-gray-100 text-gray-900' : 'text-gray-500 hover:bg-gray-50 hover:text-gray-700'}`}
               >
-                <Icon className="w-5 h-5 flex-shrink-0" />
+                <Icon className="w-[18px] h-[18px] flex-shrink-0" />
                 {expanded && <span className="text-sm whitespace-nowrap">{label}</span>}
               </Link>
             )
@@ -303,7 +305,7 @@ export function Navigation({
       </div>
 
       {/* Divider */}
-      <div className="mx-3 my-1.5 border-t border-gray-200 flex-shrink-0" />
+      <div className="mx-3 my-1.5 border-t border-gray-100 flex-shrink-0" />
 
       {/* Avatar */}
       <div className={`flex-shrink-0 pb-4 ${expanded ? 'px-2' : 'flex justify-center'}`}>
@@ -313,9 +315,17 @@ export function Navigation({
             onClick={openPopover}
             className="flex items-center gap-2.5 w-full px-2 py-1.5 rounded-lg hover:bg-gray-100 transition-colors cursor-pointer"
           >
-            <div className="w-8 h-8 rounded-full bg-primary flex items-center justify-center flex-shrink-0">
-              <span className="text-xs font-semibold text-white">{userInitials}</span>
-            </div>
+            {initialAvatarUrl ? (
+              <img
+                src={initialAvatarUrl}
+                alt={displayName}
+                className="w-8 h-8 rounded-full object-cover flex-shrink-0"
+              />
+            ) : (
+              <div className="w-8 h-8 rounded-full bg-primary flex items-center justify-center flex-shrink-0">
+                <span className="text-xs font-semibold text-white">{userInitials}</span>
+              </div>
+            )}
             <span className="text-sm text-gray-700 truncate max-w-[120px]">{displayName}</span>
           </button>
         ) : (
@@ -325,9 +335,17 @@ export function Navigation({
               onClick={openPopover}
               className="w-10 h-10 flex items-center justify-center hover:bg-gray-100 rounded-lg transition-colors cursor-pointer"
             >
-              <div className="w-8 h-8 rounded-full bg-primary flex items-center justify-center">
-                <span className="text-xs font-semibold text-white">{userInitials}</span>
-              </div>
+              {initialAvatarUrl ? (
+                <img
+                  src={initialAvatarUrl}
+                  alt={displayName}
+                  className="w-8 h-8 rounded-full object-cover"
+                />
+              ) : (
+                <div className="w-8 h-8 rounded-full bg-primary flex items-center justify-center">
+                  <span className="text-xs font-semibold text-white">{userInitials}</span>
+                </div>
+              )}
             </button>
           </Tip>
         )}

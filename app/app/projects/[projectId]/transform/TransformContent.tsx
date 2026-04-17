@@ -205,38 +205,25 @@ function TransformStatPills({
   toDefineCount: number
 }) {
   return (
-    <div className="flex items-center gap-2 px-5 py-2.5 bg-white border-b border-settle-slate-200 flex-shrink-0">
-      <div className="flex items-center gap-2 px-3 py-1.5 rounded-lg border border-settle-slate-200 bg-white">
-        <span className="text-[10px] font-medium text-settle-slate-400 uppercase tracking-wide">
-          Total
-        </span>
-        <span className="text-sm font-medium text-settle-slate-900">
-          {totalCount}
-        </span>
+    <div className="flex items-center gap-0 px-5 py-2 bg-white flex-shrink-0">
+      <div className="flex items-center gap-1.5 px-3">
+        <span className="text-xs text-gray-500">Total</span>
+        <span className="text-sm font-medium text-settle-slate-900">{totalCount}</span>
       </div>
-      <div className="flex items-center gap-2 px-3 py-1.5 rounded-lg border border-settle-slate-200 bg-white">
-        <span className="text-[10px] font-medium text-settle-slate-400 uppercase tracking-wide">
-          Applied
-        </span>
-        <span className="text-sm font-medium text-settle-slate-900">
-          {appliedCount}
-        </span>
+      <div className="w-px h-4 bg-gray-100 flex-shrink-0" />
+      <div className="flex items-center gap-1.5 px-3">
+        <span className="text-xs text-gray-500">Applied</span>
+        <span className="text-sm font-medium text-settle-slate-900">{appliedCount}</span>
       </div>
-      <div className="flex items-center gap-2 px-3 py-1.5 rounded-lg border border-settle-slate-200 bg-white">
-        <span className="text-[10px] font-medium text-settle-slate-400 uppercase tracking-wide">
-          In Progress
-        </span>
-        <span className="text-sm font-medium text-settle-slate-900">
-          {inProgressCount}
-        </span>
+      <div className="w-px h-4 bg-gray-100 flex-shrink-0" />
+      <div className="flex items-center gap-1.5 px-3">
+        <span className="text-xs text-gray-500">In Progress</span>
+        <span className="text-sm font-medium text-settle-slate-900">{inProgressCount}</span>
       </div>
-      <div className="flex items-center gap-2 px-3 py-1.5 rounded-lg border border-settle-slate-200 bg-white">
-        <span className="text-[10px] font-medium text-settle-slate-400 uppercase tracking-wide">
-          To Define
-        </span>
-        <span className="text-sm font-medium text-settle-slate-900">
-          {toDefineCount}
-        </span>
+      <div className="w-px h-4 bg-gray-100 flex-shrink-0" />
+      <div className="flex items-center gap-1.5 px-3">
+        <span className="text-xs text-gray-500">To Define</span>
+        <span className="text-sm font-medium text-settle-slate-900">{toDefineCount}</span>
       </div>
     </div>
   )
@@ -1283,12 +1270,12 @@ export default function TransformContent({ projectId, projectName, initialData, 
       </Badge>
     )
     if (s === 'tested') return (
-      <Badge className="bg-settle-slate-100 text-settle-slate-600 hover:bg-settle-slate-100 border border-settle-slate-200">
+      <Badge className="bg-settle-slate-100 text-settle-slate-600 hover:bg-settle-slate-100 border border-gray-100">
         <CheckCircle2 className="w-3 h-3 mr-1" />Tested ✓
       </Badge>
     )
     if (localTransform.sql) return (
-      <Badge className="bg-settle-slate-100 text-settle-slate-500 hover:bg-settle-slate-100 border border-settle-slate-200">
+      <Badge className="bg-settle-slate-100 text-settle-slate-500 hover:bg-settle-slate-100 border border-gray-100">
         Untested
       </Badge>
     )
@@ -1303,7 +1290,7 @@ export default function TransformContent({ projectId, projectName, initialData, 
       </Badge>
     )
     return (
-      <Badge className="text-[10px] text-settle-slate-500 bg-settle-slate-100 border border-settle-slate-200 rounded px-1.5 py-0.5">
+      <Badge className="text-[10px] text-settle-slate-500 bg-settle-slate-100 border border-gray-100 rounded px-1.5 py-0.5">
         Modified
       </Badge>
     )
@@ -1406,7 +1393,7 @@ export default function TransformContent({ projectId, projectName, initialData, 
       />
 
       {/* ── Filter bar — flush border-b strip ── */}
-      <div className="bg-white border-b border-settle-slate-200 px-5 py-2.5 flex-shrink-0">
+      <div className="bg-white border-b border-gray-100 px-5 py-2.5 flex-shrink-0">
         <div className="flex items-center gap-3 min-w-0">
 
           {/* Tables filter */}
@@ -1420,7 +1407,7 @@ export default function TransformContent({ projectId, projectName, initialData, 
             />
           </div>
 
-          <div className="w-px h-4 bg-gray-200 flex-shrink-0" />
+          <div className="w-px h-4 bg-gray-100 flex-shrink-0" />
 
           {/* Status filter */}
           <div className="flex items-center gap-2">
@@ -1442,7 +1429,7 @@ export default function TransformContent({ projectId, projectName, initialData, 
             </Select>
           </div>
 
-          <div className="w-px h-4 bg-gray-200 flex-shrink-0" />
+          <div className="w-px h-4 bg-gray-100 flex-shrink-0" />
 
           {/* Search */}
           <input
@@ -1489,7 +1476,7 @@ export default function TransformContent({ projectId, projectName, initialData, 
       <div className="flex-1 flex overflow-hidden">
 
         {/* ── Left Sidebar ── */}
-        <div className="w-72 bg-white border-r border-gray-200 flex flex-col flex-shrink-0">
+        <div className="w-72 bg-white border-r border-gray-100 flex flex-col flex-shrink-0">
           <div className="flex-1 overflow-auto p-3 space-y-2">
             {data.datasets.length === 0 && filterCounts.unmapped === 0 ? (
               <p className="text-xs text-gray-500 text-center py-8">
@@ -1641,7 +1628,7 @@ export default function TransformContent({ projectId, projectName, initialData, 
             return (
               <div className="flex-1 flex flex-col min-h-0">
                 {/* Header — same as regular transform editor header */}
-                <div className="bg-white border-b border-gray-200 px-6 py-3 flex items-center justify-between flex-shrink-0">
+                <div className="bg-white border-b border-gray-100 px-6 py-3 flex items-center justify-between flex-shrink-0">
                   <div className="flex items-center gap-3 min-w-0">
                     <span className="text-sm font-semibold text-gray-900 flex-shrink-0">Define Value</span>
                     <span className="text-xs font-medium px-2 py-0.5 rounded-full bg-purple-100 text-purple-700 flex-shrink-0">Value Assignment</span>
@@ -1658,7 +1645,7 @@ export default function TransformContent({ projectId, projectName, initialData, 
                 <div className="flex-1 overflow-auto p-5 space-y-4">
 
                   {/* Description card — identical structure to regular transform NL description card */}
-                  <div className="bg-white rounded-lg border border-gray-200 p-4">
+                  <div className="bg-white rounded-lg border border-gray-100 p-4">
                     <label className="block text-sm font-medium text-gray-900 mb-2">
                       Describe the value this field should receive
                     </label>
@@ -1729,7 +1716,7 @@ export default function TransformContent({ projectId, projectName, initialData, 
 
                   {/* Generated SQL — collapsible, same as regular editor */}
                   {unmappedSql && (
-                    <div className="bg-white rounded-lg border border-gray-200">
+                    <div className="bg-white rounded-lg border border-gray-100">
                       <button
                         type="button"
                         onClick={() => setUnmappedSqlExpanded((v) => !v)}
@@ -1760,7 +1747,7 @@ export default function TransformContent({ projectId, projectName, initialData, 
 
                   {/* Value Preview — simplified table, target column only (no source) */}
                   {unmappedSql && (
-                    <div className="bg-white rounded-lg border border-gray-200 overflow-hidden">
+                    <div className="bg-white rounded-lg border border-gray-100 overflow-hidden">
                       <div className="px-4 py-2.5 border-b border-gray-100 flex items-center justify-between">
                         <span className="text-sm font-semibold text-gray-900">Value Preview</span>
                         {unmappedPreviewRows.length > 0 && (
@@ -1803,7 +1790,7 @@ export default function TransformContent({ projectId, projectName, initialData, 
 
                 {/* Pinned action bar — same structure as Test+Apply bar */}
                 {unmappedSql && (
-                  <div className="flex-shrink-0 z-10 border-t border-gray-200 bg-white px-4 py-3 flex items-center gap-3 shadow-[0_-2px_8px_rgba(0,0,0,0.06)]">
+                  <div className="flex-shrink-0 z-10 border-t border-gray-100 bg-white px-4 py-3 flex items-center gap-3 shadow-[0_-2px_8px_rgba(0,0,0,0.06)]">
                     <RoleTooltip allowed={canEdit} requiredRole="Editor">
                       <Button
                         className="bg-primary hover:bg-primary/90 text-white gap-2 flex-1"
@@ -1827,7 +1814,7 @@ export default function TransformContent({ projectId, projectName, initialData, 
                 )}
 
                 {/* Footer — same as regular editor footer */}
-                <div className="border-t border-gray-200 bg-white px-6 py-3 flex items-center justify-between flex-shrink-0">
+                <div className="border-t border-gray-100 bg-white px-6 py-3 flex items-center justify-between flex-shrink-0">
                   <span className="text-xs text-gray-400">
                     Use <strong>Save Value</strong> to persist the expression, then <strong>Stage All Data</strong> to apply it.
                   </span>
@@ -1884,9 +1871,9 @@ export default function TransformContent({ projectId, projectName, initialData, 
           ) : (
             <>
               {/* Split panel header */}
-              <div className="bg-white border-b border-gray-200 px-6 py-3 flex items-center justify-between flex-shrink-0">
+              <div className="bg-white border-b border-gray-100 px-6 py-3 flex items-center justify-between flex-shrink-0">
                 <div className="flex items-center gap-2 flex-wrap min-w-0">
-                  <span className="text-[10px] font-medium text-settle-slate-400 uppercase tracking-wide">
+                  <span className="text-xs font-medium text-gray-500">
                     {selectedContext.field.isValueAssignment ? 'Value Assignment' : 'Transform'}
                   </span>
                   <span className="text-[10px] text-settle-slate-300">·</span>
@@ -1943,7 +1930,7 @@ export default function TransformContent({ projectId, projectName, initialData, 
                 <div className="flex-1 overflow-auto p-5 space-y-4">
 
                   {/* NL Description / Direct SQL — first interactive element */}
-                  <div className="bg-white rounded-lg border border-gray-200 p-4">
+                  <div className="bg-white rounded-lg border border-gray-100 p-4">
                     {/* Header row: label + mode toggle */}
                     <div className="flex items-center justify-between mb-2">
                       <label className="text-sm font-medium text-gray-900">
@@ -1953,7 +1940,7 @@ export default function TransformContent({ projectId, projectName, initialData, 
                           ? 'Describe the value this field should receive'
                           : 'Describe how this field should be transformed'}
                       </label>
-                      <div className="flex rounded-lg border border-gray-200 overflow-hidden flex-shrink-0 ml-3">
+                      <div className="flex rounded-lg border border-gray-100 overflow-hidden flex-shrink-0 ml-3">
                         <button
                           onClick={() => setInputMode('ai')}
                           className={`px-2.5 py-1 text-xs font-medium transition-colors ${
@@ -1969,7 +1956,7 @@ export default function TransformContent({ projectId, projectName, initialData, 
                             setInputMode('sql')
                             if (localTransform?.sql) setSqlExpanded(true)
                           }}
-                          className={`px-2.5 py-1 text-xs font-medium border-l border-gray-200 transition-colors ${
+                          className={`px-2.5 py-1 text-xs font-medium border-l border-gray-100 transition-colors ${
                             inputMode === 'sql'
                               ? 'bg-primary text-white'
                               : 'bg-white text-settle-slate-500 hover:text-settle-slate-700'
@@ -2096,7 +2083,7 @@ export default function TransformContent({ projectId, projectName, initialData, 
                     ) : (
                       <>
                         {/* Direct SQL mode — write expression without AI */}
-                        <div className="mb-2 px-3 py-2 bg-gray-50 border border-gray-200 rounded-lg text-xs text-gray-600">
+                        <div className="mb-2 px-3 py-2 bg-gray-50 border border-gray-100 rounded-lg text-xs text-gray-600">
                           Write a PostgreSQL expression for a single row. Use bare field names —
                           e.g. <code className="bg-gray-100 px-1 rounded font-mono">UPPER(TRIM(lead_attorney))</code> or{' '}
                           <code className="bg-gray-100 px-1 rounded font-mono">LEFT(MD5(LOWER(TRIM(lead_attorney))), 12)</code>.
@@ -2127,7 +2114,7 @@ export default function TransformContent({ projectId, projectName, initialData, 
 
                   {/* Why Transform? — collapsible reference block, collapsed by default */}
                   {selectedContext.field.needsTransform && selectedContext.field.aiReasoning && (
-                    <div className="rounded-lg border border-gray-200 bg-white overflow-hidden">
+                    <div className="rounded-lg border border-gray-100 bg-white overflow-hidden">
                       <button
                         type="button"
                         onClick={() => setWhyExpanded((v) => !v)}
@@ -2222,7 +2209,7 @@ export default function TransformContent({ projectId, projectName, initialData, 
 
               {/* Generated SQL — collapsed by default, toggle to expand (hidden in direct SQL mode) */}
               {localTransform?.sql && inputMode === 'ai' && (
-                <div className="bg-white rounded-lg border border-gray-200">
+                <div className="bg-white rounded-lg border border-gray-100">
                   <button
                     type="button"
                     onClick={() => setSqlExpanded((v) => !v)}
@@ -2287,8 +2274,8 @@ export default function TransformContent({ projectId, projectName, initialData, 
                   `&fieldId=${selectedContext.field.sourceFieldId}`
 
                 return (
-              <div className="border border-gray-200 rounded-lg overflow-hidden bg-white">
-                <div className="flex items-center justify-between px-4 py-3 bg-gray-50 border-b border-gray-200">
+              <div className="border border-gray-100 rounded-lg overflow-hidden bg-white">
+                <div className="flex items-center justify-between px-4 py-3 bg-white border-b border-gray-100">
                   <div className="flex items-center gap-2">
                     <span className="text-sm font-semibold text-gray-900">Data Preview</span>
                     {showStagedPreview ? (
@@ -2329,7 +2316,7 @@ export default function TransformContent({ projectId, projectName, initialData, 
                       </button>
                     )}
                     {localTransform?.sql && !showStagedPreview && (
-                      <div className="flex items-center gap-1 bg-white border border-gray-200 rounded-md p-0.5">
+                      <div className="flex items-center gap-1 bg-white border border-gray-100 rounded-md p-0.5">
                         <button
                           onClick={() => setPreviewMode('sample')}
                           className={`px-2.5 py-1 text-xs font-medium rounded transition-colors ${
@@ -2646,7 +2633,7 @@ export default function TransformContent({ projectId, projectName, initialData, 
 
                 {/* Pinned action bar — flex-shrink-0 keeps it visible below the scroll area */}
                 {localTransform?.sql && !isArchived && (
-                  <div className="flex-shrink-0 z-10 border-t border-gray-200 bg-white px-4 py-3 flex items-center gap-3 shadow-[0_-2px_8px_rgba(0,0,0,0.06)]">
+                  <div className="flex-shrink-0 z-10 border-t border-gray-100 bg-white px-4 py-3 flex items-center gap-3 shadow-[0_-2px_8px_rgba(0,0,0,0.06)]">
                     {/* Test Transform */}
                     <RoleTooltip allowed={canEdit} requiredRole="Editor">
                       <Button
@@ -2710,7 +2697,7 @@ export default function TransformContent({ projectId, projectName, initialData, 
               </div>
 
           {/* Footer — page-level navigation only */}
-          <div className="border-t border-gray-200 bg-white px-6 py-3 flex items-center justify-between flex-shrink-0">
+          <div className="border-t border-gray-100 bg-white px-6 py-3 flex items-center justify-between flex-shrink-0">
             <span className="text-xs text-gray-400">
               Use <strong>Apply Transform</strong> to update staged data for individual fields,
               or <strong>Stage All Data</strong> to rebuild everything at once.
@@ -2850,18 +2837,18 @@ function DatasetNode({
   onSelectUnmappedField: (id: string) => void
 }) {
   return (
-    <div className="border border-gray-200 rounded-lg overflow-hidden">
+    <div className="border border-gray-100 rounded-lg overflow-hidden">
       <button
         onClick={() => onToggleDataset(dataset.datasetId)}
         className="w-full flex items-center gap-2 px-3 py-2.5 bg-white hover:bg-gray-50 transition-colors"
       >
         {expanded ? <ChevronDown className="w-4 h-4 text-gray-500 flex-shrink-0" /> : <ChevronRight className="w-4 h-4 text-gray-500 flex-shrink-0" />}
-        <span className="text-xs font-bold text-blue-600 truncate uppercase tracking-wide" title={dataset.datasetName}>
+        <span className="text-xs font-bold text-blue-600 truncate" title={dataset.datasetName}>
           {dataset.datasetName}
         </span>
       </button>
       {expanded && (
-        <div className="border-t border-gray-200 divide-y divide-gray-100">
+        <div className="border-t border-gray-100 divide-y divide-gray-100">
           {dataset.tables.map((tbl) => (
             <TableNode
               key={tbl.tableMappingId}

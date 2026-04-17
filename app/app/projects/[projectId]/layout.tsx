@@ -22,6 +22,14 @@ export default async function ProjectLayout({
 
   const project = await getProject(projectId).catch(() => notFound())
 
+  const { data: profile } = await supabase
+    .from('profiles')
+    .select('avatar_url')
+    .eq('id', user.id)
+    .maybeSingle()
+
+  const avatarUrl = profile?.avatar_url ?? null
+
   const sourceDataset = project.datasets?.find((d) => d.role === 'source')
   const targetDataset = project.datasets?.find((d) => d.role === 'target')
 
@@ -59,6 +67,7 @@ export default async function ProjectLayout({
         targetSystemName={targetDataset?.name}
         blockingIssueCount={blockingIssueCount}
         projectStatus={project.status ?? 'active'}
+        initialAvatarUrl={avatarUrl}
       />
       <div className="h-full overflow-hidden flex flex-col">
         {isArchived && (

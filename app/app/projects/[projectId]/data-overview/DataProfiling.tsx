@@ -127,7 +127,7 @@ export default function DataProfiling({
 
   if (profilableTables.length === 0) {
     return (
-      <div className="bg-white border border-gray-200 rounded-xl p-10 text-center">
+      <div className="bg-white border border-gray-100 rounded-lg p-10 text-center">
         <p className="text-sm font-medium text-gray-700">No data to profile</p>
         <p className="text-sm text-gray-500 mt-1">
           Upload CSV files as source data to see profiling statistics.
@@ -163,33 +163,33 @@ export default function DataProfiling({
       </div>
 
       {!selectedTableId ? (
-        <div className="bg-white border border-gray-200 rounded-xl p-10 text-center">
+        <div className="bg-white border border-gray-100 rounded-lg p-10 text-center">
           <p className="text-sm text-gray-500">Select a table to view profiling data.</p>
         </div>
       ) : loading ? (
-        <div className="bg-white border border-gray-200 rounded-xl p-10 text-center">
+        <div className="bg-white border border-gray-100 rounded-lg p-10 text-center">
           <div className="inline-block w-5 h-5 border-2 border-primary border-t-transparent rounded-full animate-spin" />
         </div>
       ) : error ? (
-        <div className="bg-white border border-gray-200 rounded-xl p-6 text-center text-sm text-red-600">{error}</div>
+        <div className="bg-white border border-gray-100 rounded-lg p-6 text-center text-sm text-red-600">{error}</div>
       ) : !data ? (
-        <div className="bg-white border border-gray-200 rounded-xl p-10 text-center text-sm text-gray-500">
+        <div className="bg-white border border-gray-100 rounded-lg p-10 text-center text-sm text-gray-500">
           No profiling data found for this table.
         </div>
       ) : (
         <>
           {/* Summary pills */}
           <div className="flex items-center gap-2">
-            <div className="flex items-center gap-2 px-3 py-1.5 rounded-lg border border-settle-slate-200 bg-white">
-              <span className="text-[10px] font-medium text-settle-slate-400 uppercase tracking-wide">Rows</span>
+            <div className="flex items-center gap-2 px-3 py-1.5 rounded-lg border border-gray-100 bg-white">
+              <span className="text-xs text-gray-500">Rows</span>
               <span className="text-sm font-medium text-settle-slate-900">{data.table.row_count.toLocaleString()}</span>
             </div>
-            <div className="flex items-center gap-2 px-3 py-1.5 rounded-lg border border-settle-slate-200 bg-white">
-              <span className="text-[10px] font-medium text-settle-slate-400 uppercase tracking-wide">Fields</span>
+            <div className="flex items-center gap-2 px-3 py-1.5 rounded-lg border border-gray-100 bg-white">
+              <span className="text-xs text-gray-500">Fields</span>
               <span className="text-sm font-medium text-settle-slate-900">{data.fields.length}</span>
             </div>
-            <div className="flex items-center gap-2 px-3 py-1.5 rounded-lg border border-settle-slate-200 bg-white">
-              <span className="text-[10px] font-medium text-settle-slate-400 uppercase tracking-wide">Issues</span>
+            <div className="flex items-center gap-2 px-3 py-1.5 rounded-lg border border-gray-100 bg-white">
+              <span className="text-xs text-gray-500">Issues</span>
               <span className="text-sm font-medium text-settle-slate-900">
                 {totalQualityIssues > 0 ? totalQualityIssues : data.totalFormatIssues}
               </span>
@@ -197,7 +197,7 @@ export default function DataProfiling({
           </div>
 
           {/* Field-level table */}
-          <div className="bg-white border border-gray-200 rounded-xl" style={{ overflowX: 'clip', overflowY: 'visible' }}>
+          <div className="bg-white border border-gray-100 rounded-lg" style={{ overflowX: 'clip', overflowY: 'visible' }}>
             <div className="px-5 py-3 border-b border-gray-100">
               <span className="text-sm font-semibold text-settle-slate-900">Field-level profiling</span>
             </div>
@@ -208,11 +208,11 @@ export default function DataProfiling({
               <table className="w-full text-sm">
                 <thead className="bg-gray-50 border-b border-gray-100">
                   <tr>
-                    <th className="text-left px-5 py-3 text-[11px] font-medium text-settle-slate-500 uppercase tracking-wide">Field name</th>
-                    <th className="text-right px-5 py-3 text-[11px] font-medium text-settle-slate-500 uppercase tracking-wide">Null %</th>
-                    <th className="text-right px-5 py-3 text-[11px] font-medium text-settle-slate-500 uppercase tracking-wide">Cardinality</th>
-                    <th className="text-right px-5 py-3 text-[11px] font-medium text-settle-slate-500 uppercase tracking-wide">Unique %</th>
-                    <th className="text-right px-5 py-3 text-[11px] font-medium text-settle-slate-500 uppercase tracking-wide">Data quality</th>
+                    <th className="text-left px-5 py-3 text-xs font-medium text-gray-500">Field name</th>
+                    <th className="text-right px-5 py-3 text-xs font-medium text-gray-500">Null %</th>
+                    <th className="text-right px-5 py-3 text-xs font-medium text-gray-500">Cardinality</th>
+                    <th className="text-right px-5 py-3 text-xs font-medium text-gray-500">Unique %</th>
+                    <th className="text-right px-5 py-3 text-xs font-medium text-gray-500">Data quality</th>
                   </tr>
                 </thead>
                 <tbody>

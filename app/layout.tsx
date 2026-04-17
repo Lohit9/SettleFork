@@ -1,15 +1,19 @@
-import type { Metadata } from 'next'
+import type { Metadata, Viewport } from 'next'
 import { DM_Sans, JetBrains_Mono } from 'next/font/google'
 import './globals.css'
 
 const dmSans = DM_Sans({ subsets: ['latin'], variable: '--font-dm-sans' })
 const jetbrainsMono = JetBrains_Mono({ subsets: ['latin'], variable: '--font-jetbrains-mono' })
 
+export const viewport: Viewport = {
+  width: 'device-width',
+  initialScale: 1,
+}
+
 export const metadata: Metadata = {
   title: 'Settle — AI-Native Data Migration Platform',
   description:
     'Settle automates enterprise data migrations — AI maps fields, generates SQL, validates data quality, and delivers production-ready load files. 40–50% cost reduction. 3,412 fields auto-mapped per project.',
-  viewport: 'width=device-width, initial-scale=1',
   icons: {
     icon: '/images/logos/settle-logo-mark-dark.png',
     apple: '/images/logos/settle-logo-mark-dark.png',
