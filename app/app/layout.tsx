@@ -17,6 +17,14 @@ export default async function AppLayout({
     redirect('/login?redirect=' + encodeURIComponent('/app/projects'))
   }
 
+  const { data: profile } = await supabase
+    .from('profiles')
+    .select('avatar_url')
+    .eq('id', user.id)
+    .maybeSingle()
+
+  const avatarUrl = profile?.avatar_url ?? null
+
   // Fetch orgs server-side — eliminates client round-trip on every page load
   const { data: memberships } = await supabase
     .from('org_memberships')
@@ -54,6 +62,7 @@ export default async function AppLayout({
       initialActiveOrgId={resolvedActiveOrgId}
       initialUserName={userName}
       initialUserEmail={userEmail}
+      initialAvatarUrl={avatarUrl}
     >
       {children}
     </SidebarShell>

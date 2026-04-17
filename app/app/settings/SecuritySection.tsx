@@ -168,7 +168,7 @@ export function SecuritySection() {
                 <Button
                   onClick={handleSave}
                   disabled={!newPassword || !confirmPassword || isPending}
-                  className="bg-[#4F46E5] hover:bg-[#4338CA] text-white disabled:opacity-50"
+                  className="bg-primary hover:bg-primary/90 text-white disabled:opacity-50"
                 >
                   {isPending ? 'Saving…' : 'Save'}
                 </Button>

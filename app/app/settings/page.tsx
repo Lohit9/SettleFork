@@ -1,20 +1,13 @@
 import { redirect } from 'next/navigation'
+import { cookies } from 'next/headers'
 import { createClient } from '@/lib/supabase/server'
 import { signOut } from '@/lib/actions/auth'
+import { getUserOrganizationsWithCounts, getUserPreferences } from '@/lib/actions/profile'
 import { Button } from '@/components/ui/button'
 import { SecuritySection } from './SecuritySection'
-import { PreferencesSection } from './PreferencesSection'
+import { NewPreferencesSection } from './NewPreferencesSection'
 import { DangerZoneSection } from './DangerZoneSection'
-import { EditButton } from './EditButton'
-
-function getInitials(fullName: string | null | undefined, email: string): string {
-  if (fullName?.trim()) {
-    const parts = fullName.trim().split(/\s+/)
-    if (parts.length >= 2) return (parts[0][0] + parts[parts.length - 1][0]).toUpperCase()
-    return parts[0].slice(0, 2).toUpperCase()
-  }
-  return email.slice(0, 2).toUpperCase()
-}
+import { ProfileCard } from './ProfileCard'
 
 function formatDate(dateStr: string): string {
   return new Date(dateStr).toLocaleDateString('en-US', {
@@ -36,8 +29,16 @@ export default async function SettingsPage() {
 
   const fullName: string | null =
     profile?.full_name || user.user_metadata?.full_name || null
-  const initials = getInitials(fullName, user.email ?? '')
   const isVerified = !!user.email_confirmed_at
+
+  const userOrgs = await getUserOrganizationsWithCounts()
+  const cookieStore = await cookies()
+  const activeOrgId = cookieStore.get('settle-active-org')?.value
+    ?? cookieStore.get('mine-active-org')?.value
+    ?? null
+  const currentOrg = userOrgs.find((o) => o.id === activeOrgId) ?? userOrgs[0]
+
+  const preferences = await getUserPreferences()
 
   return (
     <div className="flex-1 bg-gray-50 min-h-screen">
@@ -78,49 +79,56 @@ export default async function SettingsPage() {
         {/* Content */}
         <div className="px-8 py-6 max-w-3xl space-y-4">
           {/* Account */}
-          <div className="bg-white border border-gray-200 rounded-xl p-5">
-            <div className="flex items-center gap-4 mb-4">
-              {/* Avatar */}
-              <div className="w-14 h-14 rounded-full bg-[#6C5CE7] flex items-center justify-center flex-shrink-0">
-                <span className="text-white font-medium text-lg">{initials}</span>
-              </div>
-              <div className="flex-1 min-w-0">
-                <p className="text-sm font-medium text-gray-900 truncate">
-                  {fullName || user.email}
-                </p>
-                <p className="text-sm text-gray-500 truncate">{user.email}</p>
-              </div>
-              <EditButton />
-            </div>
+          <ProfileCard
+            initialName={fullName}
+            email={user.email ?? ''}
+            initialAvatarUrl={profile?.avatar_url ?? null}
+            isVerified={isVerified}
+            orgName={currentOrg?.name ?? 'Personal'}
+            createdAt={formatDate(user.created_at)}
+          />
 
-            <div className="border-t border-gray-100 pt-4 grid grid-cols-2 gap-x-8 gap-y-4">
-              <div>
-                <p className="text-xs text-gray-500 mb-0.5">Organization</p>
-                <p className="text-sm text-gray-900">Settle (Personal)</p>
-              </div>
-              <div>
-                <p className="text-xs text-gray-500 mb-0.5">Account created</p>
-                <p className="text-sm text-gray-900">{formatDate(user.created_at)}</p>
-              </div>
-              <div>
-                <p className="text-xs text-gray-500 mb-0.5">Email status</p>
-                {isVerified ? (
-                  <p className="text-sm font-medium text-green-600">Verified</p>
-                ) : (
-                  <p className="text-sm font-medium text-amber-600">Unverified</p>
-                )}
-              </div>
-              <div>
-                <p className="text-xs text-gray-500 mb-0.5">Plan</p>
-                <p className="text-sm text-gray-900 flex items-center gap-1.5">
-                  Early Access
-                  <span className="text-[11px] bg-blue-100 text-blue-700 px-1.5 py-0.5 rounded font-medium">
-                    Beta
-                  </span>
-                </p>
+          {/* Your Organizations */}
+          {userOrgs.length > 0 && (
+            <div>
+              <p className="text-xs font-semibold text-gray-400 uppercase tracking-wider mb-2 px-1">
+                Your organizations
+              </p>
+              <div className="bg-white border border-gray-200 rounded-xl divide-y divide-gray-100">
+                {userOrgs.map((org) => {
+                  const isCurrent =
+                    org.id === activeOrgId ||
+                    (!activeOrgId && userOrgs[0]?.id === org.id)
+                  return (
+                    <div key={org.id} className="flex items-center gap-3 px-5 py-3">
+                      <div className="w-8 h-8 rounded-lg bg-primary/10 text-primary flex items-center justify-center text-xs font-semibold flex-shrink-0">
+                        {org.name[0]?.toUpperCase() ?? '?'}
+                      </div>
+                      <div className="flex-1 min-w-0">
+                        <p className="text-sm font-medium text-gray-900 truncate">{org.name}</p>
+                        <p className="text-xs text-gray-500">
+                          {org.role.charAt(0).toUpperCase() + org.role.slice(1)} ·{' '}
+                          {org.memberCount} {org.memberCount === 1 ? 'member' : 'members'}
+                        </p>
+                      </div>
+                      {isCurrent ? (
+                        <span className="text-[10px] font-medium text-green-700 bg-green-50 px-2 py-0.5 rounded-full flex-shrink-0">
+                          Current
+                        </span>
+                      ) : (
+                        <a
+                          href={`/app/settings/organization?switch=${org.id}`}
+                          className="text-xs text-primary hover:text-primary/80 font-medium transition-colors flex-shrink-0"
+                        >
+                          Switch →
+                        </a>
+                      )}
+                    </div>
+                  )
+                })}
               </div>
             </div>
-          </div>
+          )}
 
           {/* Security */}
           <div>
@@ -154,7 +162,7 @@ export default async function SettingsPage() {
             <p className="text-xs font-semibold text-gray-400 uppercase tracking-wider mb-2 px-1">
               Preferences
             </p>
-            <PreferencesSection />
+            <NewPreferencesSection initialPreferences={preferences} />
           </div>
 
           {/* Danger Zone */}
@@ -163,4 +171,3 @@ export default async function SettingsPage() {
       </div>
   )
 }
-

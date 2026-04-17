@@ -21,6 +21,7 @@ interface SidebarShellProps {
   initialActiveOrgId: string | null
   initialUserName: string
   initialUserEmail: string
+  initialAvatarUrl?: string | null
 }
 
 function getUserInitials(name?: string | null, email?: string | null): string {
@@ -55,6 +56,7 @@ export default function SidebarShell({
   initialActiveOrgId,
   initialUserName,
   initialUserEmail,
+  initialAvatarUrl,
 }: SidebarShellProps) {
   const pathname = usePathname()
   const router = useRouter()
@@ -271,9 +273,17 @@ export default function SidebarShell({
               onClick={openPopover}
               className="flex items-center gap-2.5 w-full px-2 py-1.5 rounded-lg hover:bg-gray-100 transition-colors cursor-pointer"
             >
-              <div className="w-8 h-8 rounded-full bg-primary flex items-center justify-center flex-shrink-0">
-                <span className="text-xs font-semibold text-white">{initials}</span>
-              </div>
+              {initialAvatarUrl ? (
+                <img
+                  src={initialAvatarUrl}
+                  alt={displayName}
+                  className="w-8 h-8 rounded-full object-cover flex-shrink-0"
+                />
+              ) : (
+                <div className="w-8 h-8 rounded-full bg-primary flex items-center justify-center flex-shrink-0">
+                  <span className="text-xs font-semibold text-white">{initials}</span>
+                </div>
+              )}
               <span className="text-sm text-gray-700 truncate max-w-[120px]">{displayName}</span>
             </button>
           ) : (
@@ -283,9 +293,17 @@ export default function SidebarShell({
                 onClick={openPopover}
                 className="w-10 h-10 flex items-center justify-center hover:bg-gray-100 rounded-lg transition-colors cursor-pointer"
               >
-                <div className="w-8 h-8 rounded-full bg-primary flex items-center justify-center">
-                  <span className="text-xs font-semibold text-white">{initials}</span>
-                </div>
+                {initialAvatarUrl ? (
+                  <img
+                    src={initialAvatarUrl}
+                    alt={displayName}
+                    className="w-8 h-8 rounded-full object-cover flex-shrink-0"
+                  />
+                ) : (
+                  <div className="w-8 h-8 rounded-full bg-primary flex items-center justify-center flex-shrink-0">
+                    <span className="text-xs font-semibold text-white">{initials}</span>
+                  </div>
+                )}
               </button>
             </Tip>
           )}
