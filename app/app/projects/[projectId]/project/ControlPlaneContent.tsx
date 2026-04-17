@@ -1,9 +1,9 @@
 'use client'
 
-import { useState, useRef } from 'react'
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
+import { useState, useRef, useCallback } from 'react'
+import { useRouter } from 'next/navigation'
 import { Button } from '@/components/ui/button'
-import { FileText, Upload, CheckCircle2, X, AlertCircle } from '@/components/icons'
+import { FileText, Upload, CheckCircle2, X, AlertCircle, ChevronRight } from '@/components/icons'
 import { FileSpreadsheet } from 'lucide-react'
 import { IngestionCard } from './IngestionCard'
 import { PageHeader } from '@/components/app/PageHeader'
@@ -168,13 +168,13 @@ function SchemaDocSection({
 
   return (
     <div className="space-y-3">
-      <h3 className="text-sm font-semibold text-gray-900">{label}</h3>
+      <h3 className="text-xs font-semibold text-settle-slate-600 uppercase tracking-wide">{label}</h3>
 
       <div
         onDrop={(e) => { e.preventDefault(); setState((s) => ({ ...s, isDragOver: false })); const f = e.dataTransfer.files[0]; if (f) doUpload(f) }}
         onDragOver={(e) => { e.preventDefault(); setState((s) => ({ ...s, isDragOver: true })) }}
         onDragLeave={() => setState((s) => ({ ...s, isDragOver: false }))}
-        className={`border-2 border-dashed rounded-xl p-5 text-center transition-colors ${state.isDragOver ? 'border-blue-500 bg-blue-50' : 'border-gray-300 hover:border-gray-400'}`}
+        className={`border-[1.5px] border-dashed rounded-lg p-4 text-center transition-colors ${state.isDragOver ? 'border-blue-500 bg-blue-50' : 'border-settle-slate-300 hover:border-settle-slate-400'}`}
       >
         {state.uploading ? (
           <div className="space-y-1">
@@ -186,9 +186,9 @@ function SchemaDocSection({
           </div>
         ) : (
           <div className="space-y-1.5">
-            <Upload className="w-6 h-6 text-gray-400 mx-auto" />
-            <p className="text-xs text-gray-500">Upload DDL, ERD, or data dictionary files</p>
-            <p className="text-xs text-gray-400">PDF, SQL, DDL, TXT, PNG, JPG · Max 20MB</p>
+            <Upload className="w-5 h-5 text-settle-slate-400 mx-auto" />
+            <p className="text-xs font-medium text-settle-slate-600">Upload DDL, ERD, or data dictionary files</p>
+            <p className="text-[10px] text-settle-slate-400">PDF, SQL, DDL, TXT, PNG, JPG · Max 20MB</p>
             <input ref={fileInputRef} type="file" accept={ACCEPTED} className="hidden"
               onChange={(e) => { const f = e.target.files?.[0]; if (f) doUpload(f); e.target.value = '' }} />
             <RoleTooltip allowed={canEdit} requiredRole="Editor">
@@ -268,7 +268,7 @@ function BusinessContextSection({
       onDrop={(e) => { e.preventDefault(); setState((s) => ({ ...s, isDragOver: false })); const f = e.dataTransfer.files[0]; if (f) doUpload(f) }}
       onDragOver={(e) => { e.preventDefault(); setState((s) => ({ ...s, isDragOver: true })) }}
       onDragLeave={() => setState((s) => ({ ...s, isDragOver: false }))}
-      className={`border-2 border-dashed rounded-xl p-6 text-center transition-colors ${state.isDragOver ? 'border-violet-500 bg-violet-50' : 'border-gray-300 hover:border-gray-400'}`}
+      className={`border-[1.5px] border-dashed rounded-lg p-4 text-center transition-colors ${state.isDragOver ? 'border-blue-500 bg-blue-50' : 'border-settle-slate-300 hover:border-settle-slate-400'}`}
     >
       {state.uploading ? (
         <div className="space-y-1">
@@ -280,9 +280,9 @@ function BusinessContextSection({
         </div>
       ) : (
         <div className="space-y-1.5">
-          <FileText className="w-6 h-6 text-gray-400 mx-auto" />
-          <p className="text-xs text-gray-600">Upload business rules, migration requirements, or other context documents</p>
-          <p className="text-xs text-gray-400">PDF, DOCX, TXT, XLSX, CSV · Max 20MB</p>
+          <FileText className="w-5 h-5 text-settle-slate-400 mx-auto" />
+          <p className="text-xs font-medium text-settle-slate-600">Upload business rules, migration requirements, or other context documents</p>
+          <p className="text-[10px] text-settle-slate-400">PDF, DOCX, TXT, XLSX, CSV · Max 20MB</p>
           <input ref={fileInputRef} type="file" accept={ACCEPTED} className="hidden"
             onChange={(e) => { const f = e.target.files?.[0]; if (f) doUpload(f); e.target.value = '' }} />
           <RoleTooltip allowed={canEdit} requiredRole="Editor">
@@ -296,6 +296,103 @@ function BusinessContextSection({
       {state.error && (
         <div className="flex items-center justify-center gap-2 text-red-600 text-xs mt-2">
           <AlertCircle className="w-3 h-3" />{state.error}
+        </div>
+      )}
+    </div>
+  )
+}
+
+// ── ProjectSetupStatPills ─────────────────────────────────────────────────────
+
+function ProjectSetupStatPills({
+  sourceTableCount,
+  sourceFieldCount,
+  targetTableCount,
+  targetFieldCount,
+  schemaDocCount,
+  contextDocCount,
+}: {
+  sourceTableCount: number
+  sourceFieldCount: number
+  targetTableCount: number
+  targetFieldCount: number
+  schemaDocCount: number
+  contextDocCount: number
+}) {
+  return (
+    <div className="flex items-center gap-2 px-5 py-2.5 bg-white border-b border-settle-slate-200 flex-shrink-0">
+      <div className="flex items-center gap-2 px-3 py-1.5 rounded-lg border border-settle-slate-200 bg-white">
+        <span className="text-[10px] font-medium text-settle-slate-400 uppercase tracking-wide">Source</span>
+        <span className="text-sm font-medium text-settle-slate-900">
+          {sourceTableCount > 0 ? `${sourceTableCount} tables · ${sourceFieldCount} fields` : 'Not configured'}
+        </span>
+      </div>
+      <div className="flex items-center gap-2 px-3 py-1.5 rounded-lg border border-settle-slate-200 bg-white">
+        <span className="text-[10px] font-medium text-settle-slate-400 uppercase tracking-wide">Target</span>
+        <span className="text-sm font-medium text-settle-slate-900">
+          {targetTableCount > 0 ? `${targetTableCount} tables · ${targetFieldCount} fields` : 'Not configured'}
+        </span>
+      </div>
+      <div className="flex items-center gap-2 px-3 py-1.5 rounded-lg border border-settle-slate-200 bg-white">
+        <span className="text-[10px] font-medium text-settle-slate-400 uppercase tracking-wide">Schema docs</span>
+        <span className="text-sm font-medium text-settle-slate-900">{schemaDocCount}</span>
+      </div>
+      <div className="flex items-center gap-2 px-3 py-1.5 rounded-lg border border-settle-slate-200 bg-white">
+        <span className="text-[10px] font-medium text-settle-slate-400 uppercase tracking-wide">Context docs</span>
+        <span className="text-sm font-medium text-settle-slate-900">{contextDocCount}</span>
+      </div>
+    </div>
+  )
+}
+
+// ── CollapsibleSection ────────────────────────────────────────────────────────
+
+function CollapsibleSection({
+  id,
+  title,
+  badge,
+  description,
+  isOpen,
+  onToggle,
+  children,
+}: {
+  id: string
+  title: string
+  badge?: string
+  description?: string
+  isOpen: boolean
+  onToggle: () => void
+  children: React.ReactNode
+}) {
+  return (
+    <div className="bg-white border border-settle-slate-200 rounded-xl overflow-hidden shadow-sm">
+      <button
+        type="button"
+        onClick={onToggle}
+        aria-expanded={isOpen}
+        aria-controls={`${id}-panel`}
+        className="w-full flex items-center gap-2.5 px-4 py-3 text-left hover:bg-settle-slate-50 transition-colors"
+      >
+        <ChevronRight
+          className={`w-3.5 h-3.5 text-settle-slate-400 flex-shrink-0 transition-transform ${
+            isOpen ? 'rotate-90' : ''
+          }`}
+        />
+        <span className="text-sm font-semibold text-settle-slate-900">{title}</span>
+        {badge && (
+          <span className="text-[10px] font-medium text-settle-slate-500 bg-settle-slate-100 px-2 py-0.5 rounded-full">
+            {badge}
+          </span>
+        )}
+        {description && (
+          <span className="text-[11px] text-settle-slate-400 ml-auto truncate max-w-[50%]">
+            {description}
+          </span>
+        )}
+      </button>
+      {isOpen && (
+        <div id={`${id}-panel`} className="border-t border-settle-slate-200 px-5 pb-5">
+          {children}
         </div>
       )}
     </div>
@@ -325,6 +422,24 @@ export function ControlPlaneContent({
   const [targetDocs, setTargetDocs] = useState<SchemaDocument[]>(initialTargetDocs)
   const [contextDocs, setContextDocs] = useState<SchemaDocument[]>(initialContextDocs)
 
+  const router = useRouter()
+
+  const [openSections, setOpenSections] = useState<Set<string>>(
+    new Set(['source', 'target', 'schema-docs', 'business-context'])
+  )
+
+  const toggleSection = useCallback((id: string) => {
+    setOpenSections((prev) => {
+      const next = new Set(prev)
+      if (next.has(id)) {
+        next.delete(id)
+      } else {
+        next.add(id)
+      }
+      return next
+    })
+  }, [])
+
   const handleDeleteContextDoc = async (docId: string) => {
     const result = await deleteSchemaDocument(docId)
     if (!result.success) {
@@ -334,81 +449,129 @@ export function ControlPlaneContent({
     setContextDocs((prev) => prev.filter((d) => d.id !== docId))
   }
 
+  const sourceTableCount = sourceDatasets.reduce((sum, ds) => sum + ds.tables.length, 0)
+  const sourceFieldCount = sourceDatasets.reduce(
+    (sum, ds) => sum + ds.tables.reduce((s, t) => s + (t.field_count ?? 0), 0),
+    0
+  )
+  const targetTableCount = targetDatasets.reduce((sum, ds) => sum + ds.tables.length, 0)
+  const targetFieldCount = targetDatasets.reduce(
+    (sum, ds) => sum + ds.tables.reduce((s, t) => s + (t.field_count ?? 0), 0),
+    0
+  )
+  const schemaDocCount = sourceDocs.length + targetDocs.length
+  const contextDocCount = contextDocs.length
+
+  const sourceBadge = sourceTableCount > 0
+    ? `${sourceTableCount} tables · ${sourceFieldCount} fields`
+    : undefined
+  const targetBadge = targetTableCount > 0
+    ? `${targetTableCount} tables · ${targetFieldCount} fields`
+    : undefined
+
   return (
-    <div className="flex-1 bg-slate-50 flex flex-col min-h-0">
+    <div className="flex-1 bg-gray-50 flex flex-col min-h-0">
       <PageHeader
         projectName={projectName}
         title="Project Setup"
         subtitle="Configure source and target system connections"
         projectInfo={projectInfo}
       />
-      <div className="flex-1 overflow-auto p-8">
-      <div className="max-w-5xl mx-auto space-y-6">
-        {/* Data Ingestion */}
-        <div className="space-y-4">
-          <h2 className="text-lg font-semibold text-gray-900">Data Ingestion</h2>
-          <div className="grid md:grid-cols-2 gap-6">
-            <IngestionCard
-              type="source"
-              title="Source Schema"
-              projectId={projectId}
-              initialDatasets={sourceDatasets}
-              initialConnection={primarySourceDatasetId ? (initialConnections?.[primarySourceDatasetId] ?? null) : null}
-              isArchived={isArchived}
-            />
-            <IngestionCard
-              type="target"
-              title="Target Schema"
-              projectId={projectId}
-              initialDatasets={targetDatasets}
-              initialConnection={primaryTargetDatasetId ? (initialConnections?.[primaryTargetDatasetId] ?? null) : null}
-              isArchived={isArchived}
-            />
-          </div>
+      <ProjectSetupStatPills
+        sourceTableCount={sourceTableCount}
+        sourceFieldCount={sourceFieldCount}
+        targetTableCount={targetTableCount}
+        targetFieldCount={targetFieldCount}
+        schemaDocCount={schemaDocCount}
+        contextDocCount={contextDocCount}
+      />
+      <div className="flex-1 overflow-auto">
+      <div className="px-5 py-4 space-y-3">
+        {/* Source / Target systems */}
+        <div className={`grid md:grid-cols-2 gap-3 ${
+          openSections.has('source') && openSections.has('target')
+            ? 'items-stretch'
+            : 'items-start'
+        }`}>
+          <CollapsibleSection
+            id="source"
+            title="Source system"
+            badge={sourceBadge}
+            description="Read-only access"
+            isOpen={openSections.has('source')}
+            onToggle={() => toggleSection('source')}
+          >
+            <div className="pt-3">
+              <IngestionCard
+                type="source"
+                title="Source System"
+                projectId={projectId}
+                initialDatasets={sourceDatasets}
+                initialConnection={primarySourceDatasetId ? (initialConnections?.[primarySourceDatasetId] ?? null) : null}
+                isArchived={isArchived}
+              />
+            </div>
+          </CollapsibleSection>
+
+          <CollapsibleSection
+            id="target"
+            title="Target system"
+            badge={targetBadge}
+            isOpen={openSections.has('target')}
+            onToggle={() => toggleSection('target')}
+          >
+            <div className="pt-3">
+              <IngestionCard
+                type="target"
+                title="Target System"
+                projectId={projectId}
+                initialDatasets={targetDatasets}
+                initialConnection={primaryTargetDatasetId ? (initialConnections?.[primaryTargetDatasetId] ?? null) : null}
+                isArchived={isArchived}
+              />
+            </div>
+          </CollapsibleSection>
         </div>
 
         {/* Schema Documentation */}
-        <Card>
-          <CardHeader>
-            <CardTitle>Schema Documentation</CardTitle>
-            <p className="text-sm text-gray-500">
-              DDL scripts, ERDs, data dictionaries, and schema specifications. Used to verify and
-              enrich inferred schemas with business context, naming conventions, and domain knowledge from these documents.
-            </p>
-          </CardHeader>
-          <CardContent>
-            <div className="grid md:grid-cols-2 gap-8">
-              <SchemaDocSection
-                label="Source Schema Files"
-                docs={sourceDocs}
-                datasetId={primarySourceDatasetId}
-                projectId={projectId}
-                onDocsChange={setSourceDocs}
-                canEdit={canEdit}
-              />
-              <SchemaDocSection
-                label="Target Schema Files"
-                docs={targetDocs}
-                datasetId={primaryTargetDatasetId}
-                projectId={projectId}
-                onDocsChange={setTargetDocs}
-                canEdit={canEdit}
-              />
-            </div>
-          </CardContent>
-        </Card>
+        <CollapsibleSection
+          id="schema-docs"
+          title="Schema documentation"
+          badge={`${sourceDocs.length + targetDocs.length} files`}
+          description="DDL scripts, ERDs, data dictionaries, schema specifications"
+          isOpen={openSections.has('schema-docs')}
+          onToggle={() => toggleSection('schema-docs')}
+        >
+          <div className="grid md:grid-cols-2 gap-4 pt-3">
+            <SchemaDocSection
+              label="Source Schema Files"
+              docs={sourceDocs}
+              datasetId={primarySourceDatasetId}
+              projectId={projectId}
+              onDocsChange={setSourceDocs}
+              canEdit={canEdit}
+            />
+            <SchemaDocSection
+              label="Target Schema Files"
+              docs={targetDocs}
+              datasetId={primaryTargetDatasetId}
+              projectId={projectId}
+              onDocsChange={setTargetDocs}
+              canEdit={canEdit}
+            />
+          </div>
+        </CollapsibleSection>
 
         {/* Business Context */}
-        <Card>
-          <CardHeader>
-            <CardTitle>Business Context &amp; Migration Rules</CardTitle>
-            <p className="text-sm text-gray-500">
-              Migration requirements, business rules, value mappings, and stakeholder specifications.
-              Used to improve mapping and transformation accuracy — these inform AI reasoning but do
-              not override structural schema metadata.
-            </p>
-          </CardHeader>
-          <CardContent className="space-y-4">
+        <CollapsibleSection
+          id="business-context"
+          title="Business context & migration rules"
+          badge={`${contextDocs.length} files`}
+          description="Informs AI reasoning — does not override structural metadata"
+          isOpen={openSections.has('business-context')}
+          onToggle={() => toggleSection('business-context')}
+        >
+          <div className="space-y-4 pt-3">
             <BusinessContextSection
               docs={contextDocs}
               projectId={projectId}
@@ -416,8 +579,18 @@ export function ControlPlaneContent({
               canEdit={canEdit}
             />
             <DocList docs={contextDocs} onDelete={handleDeleteContextDoc} canEdit={canEdit} />
-          </CardContent>
-        </Card>
+          </div>
+        </CollapsibleSection>
+
+        {/* Bottom CTA */}
+        <div className="flex justify-end pb-4">
+          <button
+            onClick={() => router.push(`/app/projects/${projectId}/data-overview`)}
+            className="px-5 py-2.5 text-sm bg-primary text-white rounded-lg hover:bg-primary/90 transition-colors font-medium"
+          >
+            Proceed to Data Overview →
+          </button>
+        </div>
       </div>
       </div>
     </div>

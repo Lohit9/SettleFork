@@ -8,8 +8,9 @@ import { generateFixSuggestions } from '@/lib/quality/fix-engine'
 import { addValidationRule, addValidationRuleFromNL, executeCustomRules, deleteValidationRule } from '@/lib/actions/validation-rules'
 import { generateManualFix, applyManualFix, previewManualFix } from '@/lib/actions/manual-fix'
 import { computeReadinessScore } from '@/lib/quality/readiness-score'
-import { CheckCircle, ChevronRight, ExternalLink } from '@/components/icons'
+import { ChevronRight, ExternalLink } from '@/components/icons'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
+import { Button } from '@/components/ui/button'
 import { PageHeader } from '@/components/app/PageHeader'
 import { type ProjectInfo } from '@/components/app/ProjectInfoPopover'
 import { stageAllData } from '@/lib/actions/staging'
@@ -2713,6 +2714,52 @@ function ValidationRulesPanel({
   )
 }
 
+// ── ValidateStatPills ─────────────────────────────────────────────────────────
+
+function ValidateStatPills({
+  blockingCount,
+  warningCount,
+  stagedCount,
+  totalTables,
+}: {
+  blockingCount: number
+  warningCount: number
+  stagedCount: number
+  totalTables: number
+}) {
+  return (
+    <div className="flex items-center gap-2 px-5 py-2.5 bg-white border-b border-settle-slate-200 flex-shrink-0">
+      <div className="flex items-center gap-2 px-3 py-1.5 rounded-lg border border-settle-slate-200 bg-white">
+        <span className="text-[10px] font-medium text-settle-slate-400 uppercase tracking-wide">
+          Blocking
+        </span>
+        <span className="text-sm font-medium text-settle-slate-900">
+          {blockingCount}
+        </span>
+      </div>
+      <div className="flex items-center gap-2 px-3 py-1.5 rounded-lg border border-settle-slate-200 bg-white">
+        <span className="text-[10px] font-medium text-settle-slate-400 uppercase tracking-wide">
+          Warnings
+        </span>
+        <span className="text-sm font-medium text-settle-slate-900">
+          {warningCount}
+        </span>
+      </div>
+      <div className="flex items-center gap-2 px-3 py-1.5 rounded-lg border border-settle-slate-200 bg-white">
+        <span className="text-[10px] font-medium text-settle-slate-400 uppercase tracking-wide">
+          Staged
+        </span>
+        <span className="text-sm font-medium text-settle-slate-900">
+          {stagedCount}
+          <span className="text-settle-slate-400 font-normal text-xs ml-1">
+            / {totalTables}
+          </span>
+        </span>
+      </div>
+    </div>
+  )
+}
+
 // ── Main Component ────────────────────────────────────────────────────────────
 
 export default function DataQualityContent({
@@ -2812,12 +2859,6 @@ export default function DataQualityContent({
   const stagedTargetTableIds = useMemo(
     () => new Set(inFlightIssues.map(i => i.table_id).filter(Boolean) as string[]),
     [inFlightIssues]
-  )
-
-  // Unstaged target tables (no in-flight issues recorded yet)
-  const unstagedTables = useMemo(
-    () => targetTables.filter(t => !stagedTargetTableIds.has(t.id)),
-    [targetTables, stagedTargetTableIds]
   )
 
   // Readiness counts (in-flight open issues only)
@@ -3093,7 +3134,7 @@ export default function DataQualityContent({
 
       {/* Page Header */}
       <PageHeader projectName={projectName} title="Validate" subtitle="Data quality monitoring and migration readiness" projectInfo={projectInfo}>
-        <div className="flex items-center gap-2 flex-shrink-0">
+        <div className="flex items-center gap-3 flex-shrink-0">
           {/* Overflow menu — Fix History + Regenerate */}
           <div className="relative" ref={overflowRef}>
             <button
@@ -3133,34 +3174,146 @@ export default function DataQualityContent({
             </button>
           )}
 
-          <button
+          <Button
+            size="sm"
+            variant="outline"
             onClick={() => setShowAddRule(true)}
-            className="bg-white border border-slate-200 text-slate-700 font-medium hover:bg-slate-50 hover:border-slate-300 rounded-lg px-4 py-2 text-sm"
           >
             + Add Rule
-          </button>
-          <button
+          </Button>
+          <Button
+            size="sm"
+            variant="outline"
             onClick={() => setShowCreateFix(true)}
-            className="bg-white border border-slate-200 text-slate-700 font-medium hover:bg-slate-50 hover:border-slate-300 rounded-lg px-4 py-2 text-sm"
           >
             + Create Fix
-          </button>
+          </Button>
           {!isArchived && (
             <RoleTooltip allowed={canEdit} requiredRole="Editor">
-              <button
+              <Button
+                size="sm"
+                className="bg-primary hover:bg-primary/90 text-white gap-2"
                 onClick={canEdit ? handleRunFullScan : undefined}
                 disabled={scanning || isRestaging || !canEdit}
-                className="px-4 py-1.5 text-sm bg-primary text-white rounded-lg hover:bg-primary/90 transition-colors disabled:opacity-50 flex items-center gap-2"
               >
-                {scanning ? <><span className="w-3.5 h-3.5 border-2 border-white/30 border-t-white rounded-full animate-spin" />Scanning…</> : '⊙ Run Full Scan'}
-              </button>
+                {scanning ? (
+                  <>
+                    <span className="w-3.5 h-3.5 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+                    Scanning…
+                  </>
+                ) : (
+                  '⊙ Run Full Scan'
+                )}
+              </Button>
             </RoleTooltip>
           )}
         </div>
       </PageHeader>
 
+      <ValidateStatPills
+        blockingCount={inFlightBlocking}
+        warningCount={inFlightWarning}
+        stagedCount={stagedTargetTableIds.size}
+        totalTables={targetTables.length}
+      />
+
+      {/* ── Filter bar — flush border-b strip ── */}
+      <div className="bg-white border-b border-settle-slate-200 px-5 py-2.5 flex-shrink-0">
+        <div className="flex items-center gap-3 min-w-0">
+          {/* Severity */}
+          <div className="flex items-center gap-2">
+            <label className="text-xs font-medium text-settle-slate-500 whitespace-nowrap">Severity</label>
+            <Select
+              value={filterSeverity}
+              onValueChange={(val) => setFilterSeverity(val as typeof filterSeverity)}
+            >
+              <SelectTrigger className="h-8 text-xs w-[130px]">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">All</SelectItem>
+                <SelectItem value="blocking">Blocking</SelectItem>
+                <SelectItem value="warning">Warning</SelectItem>
+              </SelectContent>
+            </Select>
+          </div>
+
+          <div className="w-px h-4 bg-gray-200 flex-shrink-0" />
+
+          {/* Root Cause */}
+          <div className="flex items-center gap-2">
+            <label className="text-xs font-medium text-settle-slate-500 whitespace-nowrap">Root Cause</label>
+            <Select
+              value={filterRootCause}
+              onValueChange={(val) => setFilterRootCause(val as typeof filterRootCause)}
+            >
+              <SelectTrigger className="h-8 text-xs w-[160px]">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">All Root Causes</SelectItem>
+                <SelectItem value="source_data">Source Data</SelectItem>
+                <SelectItem value="transform_error">Transform Error</SelectItem>
+                <SelectItem value="missing_transform">Missing Transform</SelectItem>
+              </SelectContent>
+            </Select>
+          </div>
+
+          <div className="w-px h-4 bg-gray-200 flex-shrink-0" />
+
+          {/* Status */}
+          <div className="flex items-center gap-2">
+            <label className="text-xs font-medium text-settle-slate-500 whitespace-nowrap">Status</label>
+            <Select
+              value={filterStatus}
+              onValueChange={(val) => setFilterStatus(val as typeof filterStatus)}
+            >
+              <SelectTrigger className="h-8 text-xs w-[130px]">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="open">Open</SelectItem>
+                <SelectItem value="all">All</SelectItem>
+                <SelectItem value="fixed">Fixed</SelectItem>
+                <SelectItem value="accepted_risk">Accepted Risk</SelectItem>
+              </SelectContent>
+            </Select>
+          </div>
+
+          <div className="w-px h-4 bg-gray-200 flex-shrink-0" />
+
+          {/* Search */}
+          <input
+            type="text"
+            placeholder="Search by field…"
+            value={searchQuery}
+            onChange={e => setSearchQuery(e.target.value)}
+            className="h-8 text-xs border border-settle-slate-200 rounded-md px-3 w-44 focus:outline-none focus:ring-1 focus:ring-settle-blue-500 text-settle-slate-700 placeholder:text-settle-slate-400"
+          />
+
+          <div className="ml-auto flex items-center gap-3 flex-shrink-0">
+            {tablesWithVisibleIssues.length > 0 && (
+              <span className="text-xs text-settle-slate-400 whitespace-nowrap">
+                <span className="font-medium text-settle-slate-600">{tablesWithVisibleIssues.reduce((s, g) => s + g.issues.length, 0)}</span>
+                {' '}issues in{' '}
+                <span className="font-medium text-settle-slate-600">{tablesWithVisibleIssues.length}</span>
+                {' '}{tablesWithVisibleIssues.length !== 1 ? 'tables' : 'table'}
+              </span>
+            )}
+            {hasActiveFilters && (
+              <button
+                onClick={resetFilters}
+                className="text-xs text-blue-600 hover:text-blue-800 hover:underline whitespace-nowrap"
+              >
+                Reset filters
+              </button>
+            )}
+          </div>
+        </div>
+      </div>
+
       <div className="flex-1 overflow-auto">
-        <div className="p-6 space-y-6 max-w-5xl mx-auto">
+        <div className="px-5 py-4 space-y-3">
 
           {/* Notifications */}
           {scanError && (
@@ -3214,129 +3367,6 @@ export default function DataQualityContent({
               </button>
             </div>
           )}
-
-          {/* ── Migration Readiness Banner ── */}
-          <div className="bg-white border border-gray-200 rounded-xl px-5 py-4 shadow-sm">
-            <h2 className="text-base font-semibold text-gray-900 mb-1.5">Migration Readiness</h2>
-            <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-sm">
-              {inFlightBlocking > 0 ? (
-                <span className="text-red-600 font-medium">{inFlightBlocking} blocking</span>
-              ) : (
-                <span className="text-green-600 font-medium flex items-center gap-1">
-                  <CheckCircle className="w-4 h-4" /> No blocking issues
-                </span>
-              )}
-              <span className="text-gray-300">·</span>
-              <span className={inFlightWarning > 0 ? 'text-amber-600' : 'text-gray-400'}>
-                {inFlightWarning} warning{inFlightWarning !== 1 ? 's' : ''}
-              </span>
-              <span className="text-gray-300">·</span>
-              <span className="text-gray-500">
-                {stagedTargetTableIds.size} of {targetTables.length} table{targetTables.length !== 1 ? 's' : ''} staged
-              </span>
-            </div>
-            {unstagedTables.length > 0 && (
-              <p className="text-xs text-gray-400 mt-1.5">
-                Not yet staged: {unstagedTables.map(t => t.name).join(', ')}
-              </p>
-            )}
-          </div>
-
-
-          {/* ── Filter Bar ── */}
-          <div className="bg-white rounded-xl border border-settle-slate-200 px-4 py-2.5">
-            <div className="flex items-center gap-3 min-w-0">
-              {/* Severity */}
-              <div className="flex items-center gap-2">
-                <label className="text-xs font-medium text-settle-slate-500 whitespace-nowrap">Severity</label>
-                <Select
-                  value={filterSeverity}
-                  onValueChange={(val) => setFilterSeverity(val as typeof filterSeverity)}
-                >
-                  <SelectTrigger className="h-8 text-xs w-[130px]">
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="all">All</SelectItem>
-                    <SelectItem value="blocking">Blocking</SelectItem>
-                    <SelectItem value="warning">Warning</SelectItem>
-                  </SelectContent>
-                </Select>
-              </div>
-
-              <div className="w-px h-4 bg-gray-200" />
-
-              {/* Root Cause */}
-              <div className="flex items-center gap-2">
-                <label className="text-xs font-medium text-settle-slate-500 whitespace-nowrap">Root Cause</label>
-                <Select
-                  value={filterRootCause}
-                  onValueChange={(val) => setFilterRootCause(val as typeof filterRootCause)}
-                >
-                  <SelectTrigger className="h-8 text-xs w-[160px]">
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="all">All Root Causes</SelectItem>
-                    <SelectItem value="source_data">Source Data</SelectItem>
-                    <SelectItem value="transform_error">Transform Error</SelectItem>
-                    <SelectItem value="missing_transform">Missing Transform</SelectItem>
-                  </SelectContent>
-                </Select>
-              </div>
-
-              <div className="w-px h-4 bg-gray-200" />
-
-              {/* Status */}
-              <div className="flex items-center gap-2">
-                <label className="text-xs font-medium text-settle-slate-500 whitespace-nowrap">Status</label>
-                <Select
-                  value={filterStatus}
-                  onValueChange={(val) => setFilterStatus(val as typeof filterStatus)}
-                >
-                  <SelectTrigger className="h-8 text-xs w-[130px]">
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="open">Open</SelectItem>
-                    <SelectItem value="all">All</SelectItem>
-                    <SelectItem value="fixed">Fixed</SelectItem>
-                    <SelectItem value="accepted_risk">Accepted Risk</SelectItem>
-                  </SelectContent>
-                </Select>
-              </div>
-
-              <div className="w-px h-4 bg-gray-200" />
-
-              {/* Search */}
-              <input
-                type="text"
-                placeholder="Search by field…"
-                value={searchQuery}
-                onChange={e => setSearchQuery(e.target.value)}
-                className="h-8 text-xs border border-settle-slate-200 rounded-md px-3 w-44 focus:outline-none focus:ring-1 focus:ring-settle-blue-500 text-settle-slate-700 placeholder:text-settle-slate-400"
-              />
-
-              <div className="ml-auto flex items-center gap-3">
-                {tablesWithVisibleIssues.length > 0 && (
-                  <span className="text-xs text-settle-slate-400 whitespace-nowrap">
-                    <span className="font-medium text-settle-slate-600">{tablesWithVisibleIssues.reduce((s, g) => s + g.issues.length, 0)}</span>
-                    {' '}issues in{' '}
-                    <span className="font-medium text-settle-slate-600">{tablesWithVisibleIssues.length}</span>
-                    {' '}{tablesWithVisibleIssues.length !== 1 ? 'tables' : 'table'}
-                  </span>
-                )}
-                {hasActiveFilters && (
-                  <button
-                    onClick={resetFilters}
-                    className="text-xs text-blue-600 hover:text-blue-800 hover:underline"
-                  >
-                    Reset filters
-                  </button>
-                )}
-              </div>
-            </div>
-          </div>
 
           {/* ── Table-Grouped Issue List ── */}
           {targetTables.length === 0 ? (

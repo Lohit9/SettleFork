@@ -287,7 +287,7 @@ export default function DataPreview({ projectId, tables, isArchived = false, arc
         <>
           {/* Table selector */}
           <div className="flex items-center gap-3">
-            <label className="text-sm font-medium text-gray-700 whitespace-nowrap">Select Table:</label>
+            <label className="text-[11px] font-medium text-settle-slate-500 whitespace-nowrap">Select Table:</label>
             <Select
               value={selectedTableId}
               onValueChange={(val) => setSelectedTableId(val)}
@@ -352,7 +352,7 @@ export default function DataPreview({ projectId, tables, isArchived = false, arc
             <>
               {/* Mapping selector */}
               <div className="flex items-center gap-3 flex-wrap">
-                <label className="text-sm font-medium text-gray-700 whitespace-nowrap">Target Table:</label>
+                <label className="text-[11px] font-medium text-settle-slate-500 whitespace-nowrap">Target Table:</label>
                 <Select
                   value={selectedMappingId}
                   onValueChange={(val) => setSelectedMappingId(val)}

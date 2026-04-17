@@ -1,7 +1,7 @@
 'use client'
 
 import { useState, useTransition } from 'react'
-import { ChevronDown, ChevronRight, Upload, Check, Pencil } from '@/components/icons'
+import { ChevronRight, Upload, Check, Pencil } from '@/components/icons'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { updateField } from '@/lib/actions/fields'
 import { useProjectRole } from '@/lib/hooks/useProjectRole'
@@ -377,7 +377,7 @@ function SchemaPanel({
             <div key={ds.id}>
               {/* Dataset label */}
               <div className="px-5 py-2 bg-gray-50 border-b border-gray-100">
-                <span className="text-xs font-semibold text-gray-500 uppercase tracking-wider">{ds.name}</span>
+                <span className="text-xs font-semibold text-settle-slate-500 uppercase tracking-wide">{ds.name}</span>
               </div>
 
               {ds.tables.map((table) => {
@@ -398,11 +398,11 @@ function SchemaPanel({
                         onClick={() => toggle(table.id)}
                         className="flex items-center gap-2 flex-1 text-left min-w-0"
                       >
-                        {isExpanded ? (
-                          <ChevronDown className="w-4 h-4 text-gray-400 flex-shrink-0" />
-                        ) : (
-                          <ChevronRight className="w-4 h-4 text-gray-400 flex-shrink-0" />
-                        )}
+                        <ChevronRight
+                          className={`w-4 h-4 text-settle-slate-400 flex-shrink-0 transition-transform ${
+                            isExpanded ? 'rotate-90' : ''
+                          }`}
+                        />
                         <span className="text-sm font-medium text-gray-900">{table.name}</span>
                         <span className="ml-auto text-xs text-gray-500 shrink-0">{table.fields.length} fields</span>
                       </button>
@@ -421,11 +421,11 @@ function SchemaPanel({
                         <table className="w-full text-xs">
                           <thead>
                             <tr className="border-b border-gray-100">
-                              <th className="text-left px-8 py-2 text-gray-500 font-medium w-1/4">Field</th>
-                              <th className="text-left px-3 py-2 text-gray-500 font-medium">Type</th>
-                              <th className="text-center px-3 py-2 text-gray-500 font-medium">Nullable</th>
-                              <th className="text-center px-3 py-2 text-gray-500 font-medium">Key</th>
-                              <th className="text-left px-3 py-2 text-gray-500 font-medium">Constraints</th>
+                              <th className="text-left px-8 py-2 text-[11px] font-medium text-settle-slate-500 uppercase tracking-wide w-1/4">Field</th>
+                              <th className="text-left px-3 py-2 text-[11px] font-medium text-settle-slate-500 uppercase tracking-wide">Type</th>
+                              <th className="text-center px-3 py-2 text-[11px] font-medium text-settle-slate-500 uppercase tracking-wide">Nullable</th>
+                              <th className="text-center px-3 py-2 text-[11px] font-medium text-settle-slate-500 uppercase tracking-wide">Key</th>
+                              <th className="text-left px-3 py-2 text-[11px] font-medium text-settle-slate-500 uppercase tracking-wide">Constraints</th>
                               <th className="w-6" />
                             </tr>
                           </thead>
@@ -434,7 +434,7 @@ function SchemaPanel({
                               const f = fieldOverrides.get(rawField.id) ?? rawField
                               return (
                                 <tr key={f.id} className="border-b border-gray-100 last:border-b-0 hover:bg-white transition-colors group">
-                                  <td className="px-8 py-2 text-gray-900 font-medium">{f.name}</td>
+                                  <td className="px-8 py-2 text-gray-900 font-medium font-mono">{f.name}</td>
                                   <td className="px-3 py-2 text-gray-600 font-mono">{f.data_type}</td>
                                   <td className="px-3 py-2 text-center">
                                     {f.is_nullable ? (
@@ -501,12 +501,12 @@ export default function SchemaOverview({ projectId, source, target }: SchemaOver
   return (
     <div className="flex gap-4 flex-1">
       <SchemaPanel
-        title="Source Schema"
+        title="Source System"
         datasets={source}
         projectId={projectId}
       />
       <SchemaPanel
-        title="Target Schema"
+        title="Target System"
         datasets={target}
         projectId={projectId}
       />

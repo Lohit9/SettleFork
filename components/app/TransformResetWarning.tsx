@@ -120,7 +120,7 @@ export function TransformResetWarning({
           <AlertDialogDescription className="whitespace-pre-line">{description}</AlertDialogDescription>
         </AlertDialogHeader>
         <AlertDialogFooter>
-          <AlertDialogCancel>Cancel</AlertDialogCancel>
+          <AlertDialogCancel onClick={() => onOpenChange(false)}>Cancel</AlertDialogCancel>
           <AlertDialogAction
             onClick={onConfirm}
             className="bg-red-600 hover:bg-red-700 text-white"

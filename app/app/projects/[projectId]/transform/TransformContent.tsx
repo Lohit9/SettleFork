@@ -1,9 +1,16 @@
 'use client'
 
 import { useState, useEffect, useTransition, useCallback, useRef, useMemo } from 'react'
-import { useRouter } from 'next/navigation'
+import { useRouter, useSearchParams } from 'next/navigation'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select'
 import { PageHeader } from '@/components/app/PageHeader'
 import { type ProjectInfo } from '@/components/app/ProjectInfoPopover'
 import { Textarea } from '@/components/ui/textarea'
@@ -48,6 +55,11 @@ import { findFKDependents, cascadeTransformToFKs } from '@/lib/actions/fk-cascad
 import type { FKDependent } from '@/lib/actions/fk-cascade'
 import { useProjectRole } from '@/lib/hooks/useProjectRole'
 import { RoleTooltip } from '@/components/app/RoleTooltip'
+import {
+  TableFieldFilter,
+  type FilterTable,
+  type TableFieldSelection,
+} from '@/components/app/TableFieldFilter'
 import {
   AlertDialog,
   AlertDialogAction,
@@ -179,10 +191,62 @@ function getSmartPlaceholder(field: FieldItem): string {
   return `e.g., "Describe how ${src} should be transformed for ${tgt}"`
 }
 
+// ── TransformStatPills ────────────────────────────────────────────────────────
+
+function TransformStatPills({
+  totalCount,
+  appliedCount,
+  inProgressCount,
+  toDefineCount,
+}: {
+  totalCount: number
+  appliedCount: number
+  inProgressCount: number
+  toDefineCount: number
+}) {
+  return (
+    <div className="flex items-center gap-2 px-5 py-2.5 bg-white border-b border-settle-slate-200 flex-shrink-0">
+      <div className="flex items-center gap-2 px-3 py-1.5 rounded-lg border border-settle-slate-200 bg-white">
+        <span className="text-[10px] font-medium text-settle-slate-400 uppercase tracking-wide">
+          Total
+        </span>
+        <span className="text-sm font-medium text-settle-slate-900">
+          {totalCount}
+        </span>
+      </div>
+      <div className="flex items-center gap-2 px-3 py-1.5 rounded-lg border border-settle-slate-200 bg-white">
+        <span className="text-[10px] font-medium text-settle-slate-400 uppercase tracking-wide">
+          Applied
+        </span>
+        <span className="text-sm font-medium text-settle-slate-900">
+          {appliedCount}
+        </span>
+      </div>
+      <div className="flex items-center gap-2 px-3 py-1.5 rounded-lg border border-settle-slate-200 bg-white">
+        <span className="text-[10px] font-medium text-settle-slate-400 uppercase tracking-wide">
+          In Progress
+        </span>
+        <span className="text-sm font-medium text-settle-slate-900">
+          {inProgressCount}
+        </span>
+      </div>
+      <div className="flex items-center gap-2 px-3 py-1.5 rounded-lg border border-settle-slate-200 bg-white">
+        <span className="text-[10px] font-medium text-settle-slate-400 uppercase tracking-wide">
+          To Define
+        </span>
+        <span className="text-sm font-medium text-settle-slate-900">
+          {toDefineCount}
+        </span>
+      </div>
+    </div>
+  )
+}
+
 // ── TransformContent ──────────────────────────────────────────────────────────
 
 export default function TransformContent({ projectId, projectName, initialData, isArchived = false, projectInfo }: Props) {
   const router = useRouter()
+  const searchParams = useSearchParams()
   const { can } = useProjectRole(projectId)
   const canEdit = can('edit')
   const [data, setData] = useState<TransformPageData>(initialData)
@@ -277,8 +341,75 @@ export default function TransformContent({ projectId, projectName, initialData, 
 
   // Sidebar filter
   const [sidebarFilter, setSidebarFilter] = useState<TransformFilter>('all')
-  const [filterOpen, setFilterOpen] = useState(false)
-  const filterRef = useRef<HTMLDivElement>(null)
+  const [sidebarSearchQuery, setSidebarSearchQuery] = useState('')
+
+  // Table / field multi-select filter (shared with URL)
+  const [tableFieldSelection, setTableFieldSelection] =
+    useState<TableFieldSelection>({
+      selectedFieldIds: null,
+      selectedTableIds: new Set(),
+    })
+
+  // Sync selection to URL on change (preserves other query params)
+  const handleTableSelectionChange = useCallback(
+    (next: TableFieldSelection) => {
+      setTableFieldSelection(next)
+      const params = new URLSearchParams(searchParams.toString())
+      if (next.selectedFieldIds && next.selectedFieldIds.size > 0) {
+        params.set('fields', [...next.selectedFieldIds].join(','))
+      } else {
+        params.delete('fields')
+      }
+      router.replace(
+        `/app/projects/${projectId}/transform?${params.toString()}`
+      )
+    },
+    [searchParams, router, projectId]
+  )
+
+  // Read initial selection from URL on mount
+  useEffect(() => {
+    const fields = searchParams.get('fields')
+    if (!fields) return
+    const ids = new Set(fields.split(',').filter(Boolean))
+    const tableIds = new Set<string>()
+    for (const ds of data.datasets) {
+      for (const t of ds.tables) {
+        if (t.fields.some((f) => ids.has(f.fieldMappingId))) {
+          tableIds.add(t.tableMappingId)
+        }
+      }
+    }
+    setTableFieldSelection({
+      selectedFieldIds: ids,
+      selectedTableIds: tableIds,
+    })
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
+  const hasActiveTransformFilters = useMemo(
+    () =>
+      (tableFieldSelection.selectedFieldIds !== null &&
+        tableFieldSelection.selectedFieldIds.size > 0) ||
+      sidebarFilter !== 'all' ||
+      sidebarSearchQuery.trim() !== '',
+    [tableFieldSelection, sidebarFilter, sidebarSearchQuery]
+  )
+
+  const resetTransformFilters = useCallback(() => {
+    setTableFieldSelection({
+      selectedFieldIds: null,
+      selectedTableIds: new Set(),
+    })
+    setSidebarFilter('all')
+    setSidebarSearchQuery('')
+    const params = new URLSearchParams(searchParams.toString())
+    params.delete('fields')
+    const qs = params.toString()
+    router.replace(
+      `/app/projects/${projectId}/transform${qs ? `?${qs}` : ''}`
+    )
+  }, [searchParams, router, projectId])
 
   // "Why transform?" collapsible (collapsed by default — it's reference info)
   const [whyExpanded, setWhyExpanded] = useState(false)
@@ -298,30 +429,48 @@ export default function TransformContent({ projectId, projectName, initialData, 
   useEffect(() => { localTransformRef.current = localTransform }, [localTransform])
   useEffect(() => { selectedMappingIdRef.current = selectedMappingId }, [selectedMappingId])
 
-  // Close filter dropdown on click outside
+  // Auto-select field from URL query param (e.g. when navigating from mapping drawer)
   useEffect(() => {
-    function handleClick(e: MouseEvent) {
-      if (filterRef.current && !filterRef.current.contains(e.target as Node)) setFilterOpen(false)
+    const fmId = searchParams.get('fieldMappingId')
+    if (fmId && fmId !== selectedMappingId) {
+      setSelectedMappingId(fmId)
     }
-    document.addEventListener('mousedown', handleClick)
-    return () => document.removeEventListener('mousedown', handleClick)
-  }, [])
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [searchParams])
 
   const needsTransformCount = useMemo(() => countNeedsTransform(data.datasets), [data.datasets])
 
-  // Per-table unmapped field lookups (keyed by target table name)
+  // Per-table unmapped field lookups (keyed by target table id)
   const unmappedByTargetTable = useMemo(() => {
     const map: Record<string, { notNull: UnmappedTargetField[]; nullable: UnmappedTargetField[] }> = {}
     for (const f of data.unmappedNotNullTargetFields) {
-      if (!map[f.table_name]) map[f.table_name] = { notNull: [], nullable: [] }
-      map[f.table_name].notNull.push(f)
+      if (!map[f.table_id]) map[f.table_id] = { notNull: [], nullable: [] }
+      map[f.table_id].notNull.push(f)
     }
     for (const f of data.unmappedNullableTargetFields) {
-      if (!map[f.table_name]) map[f.table_name] = { notNull: [], nullable: [] }
-      map[f.table_name].nullable.push(f)
+      if (!map[f.table_id]) map[f.table_id] = { notNull: [], nullable: [] }
+      map[f.table_id].nullable.push(f)
     }
     return map
   }, [data.unmappedNotNullTargetFields, data.unmappedNullableTargetFields])
+
+  // Shape datasets into FilterTable[] for TableFieldFilter
+  const filterTables = useMemo(
+    (): FilterTable[] =>
+      data.datasets.flatMap((ds) =>
+        ds.tables.map((t) => ({
+          id: t.tableMappingId,
+          label: `${t.sourceTableName} → ${t.targetTableName}`,
+          fields: t.fields
+            .filter((f) => !f.isContributing)
+            .map((f) => ({
+              id: f.fieldMappingId,
+              label: `${f.sourceFieldName ?? 'unmapped'} → ${f.targetFieldName}`,
+            })),
+        }))
+      ),
+    [data.datasets]
+  )
 
   // Filter counts
   const allFieldsFlat = useMemo(() => data.datasets.flatMap((ds) => ds.tables.flatMap((t) => t.fields)), [data.datasets])
@@ -337,14 +486,22 @@ export default function TransformContent({ projectId, projectName, initialData, 
     }
   }, [allFieldsFlat, data.unmappedNotNullTargetFields.length, data.unmappedNullableTargetFields.length])
 
-  const filterOptions: { key: TransformFilter; label: string }[] = [
-    { key: 'all', label: 'All Fields' },
-    { key: 'needs_transform', label: 'Needs Transform' },
-    { key: 'has_transform', label: 'Has Transform' },
-    { key: 'unmapped', label: 'Unmapped' },
-    { key: 'applied', label: 'Applied' },
-  ]
-  const activeFilterLabel = filterOptions.find((o) => o.key === sidebarFilter)?.label ?? 'All Fields'
+  const sidebarSummary = useMemo(() => {
+    const applied = filterCounts.applied
+    const needsTransform = filterCounts.needs_transform
+    const hasTransform = filterCounts.has_transform - applied
+    const parts: string[] = []
+    if (applied > 0) parts.push(`${applied} applied`)
+    if (needsTransform > 0) parts.push(`${needsTransform} to define`)
+    if (hasTransform > 0) parts.push(`${hasTransform} in progress`)
+    return parts.join(' · ')
+  }, [filterCounts])
+
+  const inProgressCount = useMemo(
+    () => filterCounts.has_transform - filterCounts.applied,
+    [filterCounts.has_transform, filterCounts.applied]
+  )
+
 
   // DISABLED: Source-data staleness check — will re-enable with per-field tracking later
   // useEffect(() => {
@@ -1126,12 +1283,12 @@ export default function TransformContent({ projectId, projectName, initialData, 
       </Badge>
     )
     if (s === 'tested') return (
-      <Badge className="bg-green-100 text-green-700 hover:bg-green-100 border border-green-200">
+      <Badge className="bg-settle-slate-100 text-settle-slate-600 hover:bg-settle-slate-100 border border-settle-slate-200">
         <CheckCircle2 className="w-3 h-3 mr-1" />Tested ✓
       </Badge>
     )
     if (localTransform.sql) return (
-      <Badge className="bg-gray-100 text-gray-500 hover:bg-gray-100 border border-gray-200">
+      <Badge className="bg-settle-slate-100 text-settle-slate-500 hover:bg-settle-slate-100 border border-settle-slate-200">
         Untested
       </Badge>
     )
@@ -1141,12 +1298,12 @@ export default function TransformContent({ projectId, projectName, initialData, 
   function sqlBadge() {
     if (!localTransform || localTransform.badge === 'none') return null
     if (localTransform.badge === 'ai') return (
-      <Badge className="bg-amber-100 text-amber-700 hover:bg-amber-100 border border-amber-200 text-xs">
+      <Badge className="text-[10px] text-settle-blue-500 bg-blue-50 border border-blue-100 rounded px-1.5 py-0.5">
         AI-Generated
       </Badge>
     )
     return (
-      <Badge className="bg-gray-100 text-gray-600 hover:bg-gray-100 border border-gray-200 text-xs">
+      <Badge className="text-[10px] text-settle-slate-500 bg-settle-slate-100 border border-settle-slate-200 rounded px-1.5 py-0.5">
         Modified
       </Badge>
     )
@@ -1241,6 +1398,76 @@ export default function TransformContent({ projectId, projectName, initialData, 
         </div>
       </PageHeader>
 
+      <TransformStatPills
+        totalCount={filterCounts.all}
+        appliedCount={filterCounts.applied}
+        inProgressCount={inProgressCount}
+        toDefineCount={filterCounts.needs_transform}
+      />
+
+      {/* ── Filter bar — flush border-b strip ── */}
+      <div className="bg-white border-b border-settle-slate-200 px-5 py-2.5 flex-shrink-0">
+        <div className="flex items-center gap-3 min-w-0">
+
+          {/* Tables filter */}
+          <div className="flex items-center gap-2">
+            <label className="text-xs font-medium text-settle-slate-500 whitespace-nowrap">Tables</label>
+            <TableFieldFilter
+              tables={filterTables}
+              value={tableFieldSelection}
+              onChange={handleTableSelectionChange}
+              allLabel="All Tables"
+            />
+          </div>
+
+          <div className="w-px h-4 bg-gray-200 flex-shrink-0" />
+
+          {/* Status filter */}
+          <div className="flex items-center gap-2">
+            <label className="text-xs font-medium text-settle-slate-500 whitespace-nowrap">Status</label>
+            <Select
+              value={sidebarFilter}
+              onValueChange={(val) => setSidebarFilter(val as typeof sidebarFilter)}
+            >
+              <SelectTrigger className="h-8 text-xs w-[130px]">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">All</SelectItem>
+                <SelectItem value="needs_transform">To Define</SelectItem>
+                <SelectItem value="has_transform">Saved</SelectItem>
+                <SelectItem value="applied">Applied</SelectItem>
+                <SelectItem value="unmapped">Unmapped</SelectItem>
+              </SelectContent>
+            </Select>
+          </div>
+
+          <div className="w-px h-4 bg-gray-200 flex-shrink-0" />
+
+          {/* Search */}
+          <input
+            type="text"
+            placeholder="Search fields…"
+            value={sidebarSearchQuery}
+            onChange={(e) => setSidebarSearchQuery(e.target.value)}
+            className="h-8 text-xs border border-settle-slate-200 rounded-md px-3 w-44 focus:outline-none focus:ring-1 focus:ring-settle-blue-500 text-settle-slate-700 placeholder:text-settle-slate-400"
+          />
+
+          {/* Right: reset */}
+          <div className="ml-auto flex items-center gap-3 flex-shrink-0">
+            {hasActiveTransformFilters && (
+              <button
+                onClick={resetTransformFilters}
+                className="text-xs text-blue-600 hover:text-blue-800 hover:underline whitespace-nowrap"
+              >
+                Reset filters
+              </button>
+            )}
+          </div>
+
+        </div>
+      </div>
+
       {/* DISABLED: Source-data staleness banner — will re-enable later */}
       {/* {staleTableMappingIds.size > 0 && (
         <div className="bg-amber-50 border-b border-amber-200 px-6 py-2.5 flex items-center justify-between flex-shrink-0">
@@ -1263,47 +1490,6 @@ export default function TransformContent({ projectId, projectName, initialData, 
 
         {/* ── Left Sidebar ── */}
         <div className="w-72 bg-white border-r border-gray-200 flex flex-col flex-shrink-0">
-          {/* Filter dropdown */}
-          <div className="relative px-3 pt-3 pb-2" ref={filterRef}>
-            <button
-              onClick={() => setFilterOpen((v) => !v)}
-              className="w-full flex items-center justify-between px-3 py-2 bg-gray-50 border border-gray-200 rounded-lg text-xs font-medium text-gray-700 hover:bg-gray-100 transition-colors"
-            >
-              <span>{activeFilterLabel}</span>
-              <div className="flex items-center gap-1.5">
-                <span className="text-[10px] bg-blue-100 text-blue-700 px-1.5 py-0.5 rounded-full font-semibold">
-                  {filterCounts[sidebarFilter]}
-                </span>
-                <ChevronDown className={`w-3.5 h-3.5 text-gray-400 transition-transform ${filterOpen ? 'rotate-180' : ''}`} />
-              </div>
-            </button>
-            {filterOpen && (
-              <div className="absolute left-3 right-3 top-full mt-1 bg-white border border-gray-200 rounded-lg shadow-lg z-20 py-1">
-                {filterOptions.map((opt) => (
-                  <button
-                    key={opt.key}
-                    onClick={() => { setSidebarFilter(opt.key); setFilterOpen(false) }}
-                    className={`w-full flex items-center justify-between px-3 py-2 text-xs transition-colors ${
-                      sidebarFilter === opt.key
-                        ? 'bg-blue-50 text-blue-700 font-medium'
-                        : 'text-gray-600 hover:bg-gray-50'
-                    }`}
-                  >
-                    <div className="flex items-center gap-2">
-                      {sidebarFilter === opt.key && (
-                        <svg className="w-3 h-3 text-blue-600" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={3}>
-                          <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
-                        </svg>
-                      )}
-                      <span className={sidebarFilter !== opt.key ? 'ml-5' : ''}>{opt.label}</span>
-                    </div>
-                    <span className="text-[10px] text-gray-400">{filterCounts[opt.key]}</span>
-                  </button>
-                ))}
-              </div>
-            )}
-          </div>
-
           <div className="flex-1 overflow-auto p-3 space-y-2">
             {data.datasets.length === 0 && filterCounts.unmapped === 0 ? (
               <p className="text-xs text-gray-500 text-center py-8">
@@ -1321,6 +1507,8 @@ export default function TransformContent({ projectId, projectName, initialData, 
                   staleTableMappingIds={staleTableMappingIds}
                   unmappedByTargetTable={unmappedByTargetTable}
                   filter={sidebarFilter}
+                  searchQuery={sidebarSearchQuery}
+                  selectedFieldIds={tableFieldSelection.selectedFieldIds}
                   onToggleDataset={(id) => setExpandedDatasets((prev) => {
                     const next = new Set(prev); next.has(id) ? next.delete(id) : next.add(id); return next
                   })}
@@ -1342,38 +1530,6 @@ export default function TransformContent({ projectId, projectName, initialData, 
               ))
             )}
 
-            {/* Need Values — unmapped NOT NULL target fields (standalone section) */}
-            {sidebarFilter !== 'unmapped' && data.unmappedNotNullTargetFields.length > 0 && (
-              <div className="mt-4 border-t border-dashed border-gray-200 pt-3">
-                <div className="px-4 text-xs font-medium text-amber-600 uppercase tracking-wide mb-2">
-                  Need Values ({data.unmappedNotNullTargetFields.length})
-                </div>
-                {data.unmappedNotNullTargetFields.map((field) => (
-                  <div
-                    key={field.id}
-                    className={`flex items-center gap-2 px-4 py-1.5 text-sm cursor-pointer rounded mx-2 transition-colors ${
-                      selectedUnmappedFieldId === field.id
-                        ? 'bg-amber-100 text-amber-800'
-                        : 'text-gray-500 hover:bg-amber-50'
-                    }`}
-                    onClick={() => {
-                      setSelectedUnmappedFieldId(field.id)
-                      setSelectedMappingId(null)
-                      setUnmappedDescription('')
-                      setUnmappedSql('')
-                      setUnmappedSqlSource(null)
-                      setUnmappedSqlExpanded(false)
-                      setUnmappedPreviewRows([])
-                      setUnmappedFieldMappingId(null)
-                    }}
-                  >
-                    <span className="w-2 h-2 rounded-full bg-amber-400 flex-shrink-0" />
-                    <span className="truncate">{field.name}</span>
-                    <span className="text-[10px] text-amber-500 ml-auto flex-shrink-0">NOT NULL</span>
-                  </div>
-                ))}
-              </div>
-            )}
           </div>
         </div>
 
@@ -1729,53 +1885,41 @@ export default function TransformContent({ projectId, projectName, initialData, 
             <>
               {/* Split panel header */}
               <div className="bg-white border-b border-gray-200 px-6 py-3 flex items-center justify-between flex-shrink-0">
-                <div className="flex items-center gap-3 min-w-0">
+                <div className="flex items-center gap-2 flex-wrap min-w-0">
+                  <span className="text-[10px] font-medium text-settle-slate-400 uppercase tracking-wide">
+                    {selectedContext.field.isValueAssignment ? 'Value Assignment' : 'Transform'}
+                  </span>
+                  <span className="text-[10px] text-settle-slate-300">·</span>
                   {selectedContext.field.isValueAssignment ? (
                     <>
-                      <span className="text-sm font-semibold text-gray-900 flex-shrink-0">Define Value</span>
-                      <span className="text-xs font-medium px-2 py-0.5 rounded-full bg-purple-100 text-purple-700 flex-shrink-0">
-                        Value Assignment
-                      </span>
-                      <div className="flex items-center gap-1.5 text-sm text-gray-500">
-                        <span className="font-medium text-gray-700">{selectedContext.field.targetFieldName}</span>
-                        <span className="text-gray-400 text-xs">{selectedContext.field.targetFieldDataType}</span>
-                        {!selectedContext.field.targetFieldIsNullable && (
-                          <span className="text-amber-600 text-xs">NOT NULL</span>
-                        )}
-                      </div>
+                      <span className="text-xs font-medium text-settle-slate-900 font-mono">{selectedContext.field.targetFieldName}</span>
+                      <span className="text-[10px] text-settle-slate-400">{selectedContext.field.targetFieldDataType}</span>
+                      {!selectedContext.field.targetFieldIsNullable && (
+                        <span className="text-[10px] text-amber-600">NOT NULL</span>
+                      )}
                     </>
                   ) : selectedContext.field.contributingSourceFields.length > 0 ? (
                     <>
-                      <span className="text-sm font-semibold text-gray-900 flex-shrink-0">Transform Field</span>
-                      <span className="text-xs font-medium px-2 py-0.5 rounded-full bg-blue-100 text-blue-700 flex-shrink-0">
-                        Many-to-One
-                      </span>
-                      <div className="flex items-center gap-1 text-sm text-gray-500 min-w-0 flex-wrap">
-                        <span className="font-medium text-gray-700">{selectedContext.field.sourceFieldName}</span>
-                        {selectedContext.field.contributingSourceFields.map((cf, idx) => (
-                          <span key={idx} className="flex items-center gap-1">
-                            <span className="text-gray-400">,</span>
-                            <span className="font-medium text-gray-700">{cf.name}</span>
-                          </span>
-                        ))}
-                        <ArrowRight className="w-3.5 h-3.5 text-gray-400 flex-shrink-0 mx-0.5" />
-                        <span className="font-medium text-gray-700">{selectedContext.field.targetFieldName}</span>
-                      </div>
+                      <span className="text-xs font-medium text-settle-slate-900 font-mono">{selectedContext.field.sourceFieldName}</span>
+                      {selectedContext.field.contributingSourceFields.map((cf, idx) => (
+                        <span key={idx} className="text-xs font-medium text-settle-slate-900 font-mono">, {cf.name}</span>
+                      ))}
+                      <ArrowRight className="w-3 h-3 text-settle-slate-300" />
+                      <span className="text-xs font-medium text-settle-slate-900 font-mono">{selectedContext.field.targetFieldName}</span>
                     </>
                   ) : (
                     <>
-                      <span className="text-sm font-semibold text-gray-900 flex-shrink-0">Transform Field</span>
-                      <div className="flex items-center gap-1.5 text-sm text-gray-500">
-                        <span className="font-medium text-gray-700">
-                          {selectedContext.table.sourceTableName}.{selectedContext.field.sourceFieldName}
-                        </span>
-                        <ArrowRight className="w-3.5 h-3.5 text-gray-400" />
-                        <span className="font-medium text-gray-700">
-                          {selectedContext.field.targetFieldName}
-                        </span>
-                      </div>
+                      <span className="text-xs font-medium text-settle-slate-900 font-mono">{selectedContext.field.sourceFieldName}</span>
+                      <ArrowRight className="w-3 h-3 text-settle-slate-300" />
+                      <span className="text-xs font-medium text-settle-slate-900 font-mono">{selectedContext.field.targetFieldName}</span>
                     </>
                   )}
+                  <button
+                    onClick={() => router.push(`/app/projects/${projectId}/mapping?fieldMappingId=${selectedMappingId}`)}
+                    className="text-[10px] text-settle-blue-500 hover:text-settle-blue-700 transition-colors"
+                  >
+                    · View Mapping →
+                  </button>
                 </div>
                 <div className="flex items-center gap-2 flex-shrink-0">
                   {/* Auto-save indicator */}
@@ -1815,7 +1959,7 @@ export default function TransformContent({ projectId, projectName, initialData, 
                           className={`px-2.5 py-1 text-xs font-medium transition-colors ${
                             inputMode === 'ai'
                               ? 'bg-primary text-white'
-                              : 'bg-white text-gray-600 hover:bg-gray-50'
+                              : 'bg-white text-settle-slate-500 hover:text-settle-slate-700'
                           }`}
                         >
                           AI-Assisted
@@ -1823,13 +1967,12 @@ export default function TransformContent({ projectId, projectName, initialData, 
                         <button
                           onClick={() => {
                             setInputMode('sql')
-                            // Expand the SQL view immediately so user sees what they're editing
                             if (localTransform?.sql) setSqlExpanded(true)
                           }}
                           className={`px-2.5 py-1 text-xs font-medium border-l border-gray-200 transition-colors ${
                             inputMode === 'sql'
                               ? 'bg-primary text-white'
-                              : 'bg-white text-gray-600 hover:bg-gray-50'
+                              : 'bg-white text-settle-slate-500 hover:text-settle-slate-700'
                           }`}
                         >
                           SQL
@@ -2688,7 +2831,7 @@ export default function TransformContent({ projectId, projectName, initialData, 
 
 function DatasetNode({
   dataset, expanded, expandedTables, selectedMappingId, selectedUnmappedFieldId,
-  staleTableMappingIds, unmappedByTargetTable, filter,
+  staleTableMappingIds, unmappedByTargetTable, filter, searchQuery, selectedFieldIds,
   onToggleDataset, onToggleTable, onSelectField, onSelectUnmappedField,
 }: {
   dataset: DatasetGroup
@@ -2699,6 +2842,8 @@ function DatasetNode({
   staleTableMappingIds: Set<string>
   unmappedByTargetTable: Record<string, { notNull: UnmappedTargetField[]; nullable: UnmappedTargetField[] }>
   filter: TransformFilter
+  searchQuery: string
+  selectedFieldIds: Set<string> | null
   onToggleDataset: (id: string) => void
   onToggleTable: (id: string) => void
   onSelectField: (id: string) => void
@@ -2725,8 +2870,10 @@ function DatasetNode({
               selectedMappingId={selectedMappingId}
               selectedUnmappedFieldId={selectedUnmappedFieldId}
               isTableStale={staleTableMappingIds.has(tbl.tableMappingId)}
-              unmappedFields={unmappedByTargetTable[tbl.targetTableName]}
+              unmappedFields={unmappedByTargetTable[tbl.targetTableId]}
               filter={filter}
+              searchQuery={searchQuery}
+              selectedFieldIds={selectedFieldIds}
               onToggle={() => onToggleTable(tbl.tableMappingId)}
               onSelectField={onSelectField}
               onSelectUnmappedField={onSelectUnmappedField}
@@ -2742,7 +2889,7 @@ function DatasetNode({
 
 function TableNode({
   table, expanded, selectedMappingId, selectedUnmappedFieldId, isTableStale,
-  unmappedFields, filter, onToggle, onSelectField, onSelectUnmappedField,
+  unmappedFields, filter, searchQuery, selectedFieldIds, onToggle, onSelectField, onSelectUnmappedField,
 }: {
   table: TableGroup
   expanded: boolean
@@ -2751,6 +2898,8 @@ function TableNode({
   isTableStale: boolean
   unmappedFields?: { notNull: UnmappedTargetField[]; nullable: UnmappedTargetField[] }
   filter: TransformFilter
+  searchQuery: string
+  selectedFieldIds: Set<string> | null
   onToggle: () => void
   onSelectField: (id: string) => void
   onSelectUnmappedField: (id: string) => void
@@ -2759,6 +2908,14 @@ function TableNode({
 
   // Apply filter to mapped fields
   const filteredFields = primaryFields.filter((f) => {
+    // Table / field multi-select filter
+    if (
+      selectedFieldIds !== null &&
+      selectedFieldIds.size > 0 &&
+      !selectedFieldIds.has(f.fieldMappingId)
+    ) {
+      return false
+    }
     switch (filter) {
       case 'needs_transform': return f.needsTransform
       case 'has_transform': return f.transformation !== null
@@ -2766,11 +2923,26 @@ function TableNode({
       case 'unmapped': return false
       default: return true
     }
+  }).filter((field) => {
+    if (!searchQuery.trim()) return true
+    const q = searchQuery.toLowerCase()
+    return (
+      (field.sourceFieldName ?? '').toLowerCase().includes(q) ||
+      field.targetFieldName.toLowerCase().includes(q)
+    )
   })
 
-  const showUnmapped = filter === 'all' || filter === 'unmapped'
-  const unmappedNotNull = showUnmapped ? (unmappedFields?.notNull ?? []) : []
-  const unmappedNullable = showUnmapped ? (unmappedFields?.nullable ?? []) : []
+  const showUnmapped =
+    filter === 'all' ||
+    filter === 'unmapped' ||
+    filter === 'needs_transform'
+  const searchFilter = (f: UnmappedTargetField) => {
+    if (!searchQuery.trim()) return true
+    const q = searchQuery.toLowerCase()
+    return f.name.toLowerCase().includes(q) || f.table_name.toLowerCase().includes(q)
+  }
+  const unmappedNotNull = showUnmapped ? (unmappedFields?.notNull ?? []).filter(searchFilter) : []
+  const unmappedNullable = showUnmapped ? (unmappedFields?.nullable ?? []).filter(searchFilter) : []
   const totalVisible = filteredFields.length + unmappedNotNull.length + unmappedNullable.length
 
   if (totalVisible === 0) return null
@@ -2779,15 +2951,18 @@ function TableNode({
     <div>
       <button
         onClick={onToggle}
-        className="w-full flex items-center justify-between px-3 py-2.5 bg-white hover:bg-gray-50 transition-colors"
+        className="w-full flex items-center justify-between px-3 py-2 bg-white hover:bg-settle-slate-50 transition-colors border-b border-settle-slate-100"
       >
         <div className="flex items-center gap-2 min-w-0">
-          {expanded ? <ChevronDown className="w-3.5 h-3.5 text-gray-400 flex-shrink-0" /> : <ChevronRight className="w-3.5 h-3.5 text-gray-400 flex-shrink-0" />}
-          <span className="text-xs font-semibold text-gray-800 truncate" title={table.sourceTableName}>{table.sourceTableName}</span>
-        </div>
-        <div className="flex items-center gap-1 flex-shrink-0 ml-2">
-          <ArrowRight className="w-3 h-3 text-gray-400" />
-          <span className="text-xs text-gray-500 truncate max-w-[80px]" title={table.targetTableName}>{table.targetTableName}</span>
+          {expanded
+            ? <ChevronDown className="w-3 h-3 text-settle-slate-400 flex-shrink-0" />
+            : <ChevronRight className="w-3 h-3 text-settle-slate-400 flex-shrink-0" />
+          }
+          <div className="flex items-center gap-1.5 min-w-0">
+            <span className="text-[11px] font-medium text-settle-slate-900 truncate">{table.sourceTableName}</span>
+            <ArrowRight className="w-3 h-3 text-settle-slate-300 flex-shrink-0" />
+            <span className="text-[11px] text-settle-slate-500 truncate">{table.targetTableName}</span>
+          </div>
         </div>
       </button>
       {expanded && (
@@ -2876,27 +3051,28 @@ function TableNode({
               <button
                 key={field.id}
                 onClick={() => onSelectUnmappedField(field.id)}
-                className={`w-full px-3 py-2.5 border-b border-gray-100 last:border-0 text-left transition-colors ${
+                className={`w-full px-3 py-2 text-left transition-colors border-b border-settle-slate-50 flex items-start gap-2 ${
                   isSelected
-                    ? isRequired ? 'bg-amber-50 border-l-2 border-l-amber-400' : 'bg-gray-100 border-l-2 border-l-gray-400'
-                    : 'border-l-2 border-l-transparent hover:bg-gray-50'
+                    ? 'bg-blue-50 border-l-2 border-l-settle-blue-500'
+                    : 'hover:bg-settle-slate-50'
                 }`}
               >
-                <div className="flex items-start justify-between gap-2 mb-0.5">
-                  <div className="flex items-center gap-1.5 min-w-0 flex-1">
-                    <div className={`w-1.5 h-1.5 rounded-full flex-shrink-0 mt-0.5 ${isRequired ? 'bg-amber-400' : 'bg-gray-300'}`} />
-                    <span className={`text-xs font-semibold truncate ${isRequired ? 'text-gray-900' : 'text-gray-500'}`}>{field.name}</span>
+                <span className={`w-1.5 h-1.5 rounded-full flex-shrink-0 mt-1.5 ${
+                  isRequired ? 'bg-amber-400' : 'bg-settle-slate-300'
+                }`} />
+                <div className="flex-1 min-w-0">
+                  <div className="flex items-center justify-between gap-1 mb-0.5">
+                    <span className="text-[11px] font-medium text-settle-slate-900 font-mono truncate">{field.name}</span>
+                    <span className={`text-[10px] flex-shrink-0 ${
+                      isRequired ? 'text-amber-600' : 'text-settle-slate-400'
+                    }`}>
+                      {isRequired ? 'Define' : ''}
+                    </span>
                   </div>
-                  <Badge className={`text-[10px] px-1.5 py-0 flex-shrink-0 ${
-                    isRequired
-                      ? 'bg-amber-100 text-amber-700 hover:bg-amber-100 border border-amber-200'
-                      : 'bg-gray-100 text-gray-500 hover:bg-gray-100 border border-gray-200'
-                  }`}>
-                    {isRequired ? 'Required' : 'Unmapped'}
-                  </Badge>
-                </div>
-                <div className="flex items-center gap-1 pl-3">
-                  <span className="text-[11px] text-gray-400 italic">No source mapped</span>
+                  <div className="flex items-center gap-1">
+                    <ArrowRight className="w-2.5 h-2.5 text-settle-slate-300 flex-shrink-0" />
+                    <span className="text-[10px] text-settle-slate-400 font-mono truncate">No source mapped</span>
+                  </div>
                 </div>
               </button>
             )
@@ -2959,68 +3135,79 @@ function FieldRow({ field, isSelected, onSelect, oneToManyCount = 1 }: {
   return (
     <button
       onClick={onSelect}
-      className={`w-full px-3 py-2.5 border-b border-gray-100 last:border-0 text-left transition-colors ${
+      className={`w-full px-3 py-2 text-left transition-colors border-b border-settle-slate-50 flex items-start gap-2 ${
         isSelected
-          ? 'bg-blue-50 border-l-2 border-l-blue-600'
-          : 'border-l-2 border-l-transparent hover:bg-gray-50'
+          ? 'bg-blue-50 border-l-2 border-l-settle-blue-500'
+          : 'hover:bg-settle-slate-50'
       }`}
     >
-      <div className="flex items-start justify-between gap-2 mb-0.5">
-        <div className="flex items-center gap-1.5 min-w-0 flex-1">
-          <div className="w-1.5 h-1.5 rounded-full bg-gray-400 flex-shrink-0 mt-0.5" />
-          <span className="text-xs font-semibold text-gray-900 truncate" title={field.sourceFieldName ?? undefined}>{field.sourceFieldName}</span>
-          {field.contributingSourceFields.length > 0 && (
-            <span
-              title={`Many-to-one: also uses ${field.contributingSourceFields.map(f => f.name).join(', ')}`}
-              className="flex-shrink-0 text-[10px] font-medium text-blue-600 bg-blue-50 px-1 rounded"
-            >
-              +{field.contributingSourceFields.length}
+      {/* Status dot */}
+      <span
+        className={`w-1.5 h-1.5 rounded-full flex-shrink-0 mt-1.5 ${
+          status === 'applied'
+            ? 'bg-green-500'
+            : status === 'stale'
+            ? 'bg-amber-400'
+            : field.transformation !== null
+            ? 'bg-amber-400'
+            : field.needsTransform === true
+            ? 'bg-amber-400'
+            : 'bg-settle-slate-300'
+        }`}
+      />
+
+      {/* Field info */}
+      <div className="flex-1 min-w-0">
+        <div className="flex items-center justify-between gap-1 mb-0.5">
+          <div className="flex items-center gap-1.5 min-w-0">
+            <span className="text-[11px] font-medium text-settle-slate-900 font-mono truncate" title={field.sourceFieldName ?? undefined}>
+              {field.sourceFieldName}
             </span>
-          )}
-          {isOneToMany && (
-            <span
-              title={`One-to-many: ${field.sourceFieldName} maps to ${oneToManyCount} target fields`}
-              className="flex-shrink-0 text-[10px] font-medium text-purple-600 bg-purple-50 px-1 rounded"
-            >
-              1→{oneToManyCount}
-            </span>
-          )}
+            {field.contributingSourceFields.length > 0 && (
+              <span
+                title={`Many-to-one: also uses ${field.contributingSourceFields.map(f => f.name).join(', ')}`}
+                className="flex-shrink-0 text-[10px] font-medium text-blue-600 bg-blue-50 px-1 rounded"
+              >
+                +{field.contributingSourceFields.length}
+              </span>
+            )}
+            {isOneToMany && (
+              <span
+                title={`One-to-many: ${field.sourceFieldName} maps to ${oneToManyCount} target fields`}
+                className="flex-shrink-0 text-[10px] font-medium text-purple-600 bg-purple-50 px-1 rounded"
+              >
+                1→{oneToManyCount}
+              </span>
+            )}
+          </div>
+          <span className={`text-[10px] flex-shrink-0 ${
+            status === 'applied'
+              ? 'text-green-600'
+              : status === 'stale'
+              ? 'text-amber-600'
+              : field.transformation !== null
+              ? 'text-settle-slate-500'
+              : field.needsTransform === true
+              ? 'text-amber-600'
+              : 'text-settle-slate-400'
+          }`}>
+            {status === 'applied'
+              ? 'Applied'
+              : status === 'stale'
+              ? 'Stale ⚠'
+              : field.transformation !== null
+              ? 'Saved'
+              : field.needsTransform === true
+              ? 'Define'
+              : ''}
+          </span>
         </div>
-        <div className="flex items-center gap-1 flex-shrink-0">
-          {status === 'applied' && (
-            <span title="Data staged"><CheckCircle2 className="w-3.5 h-3.5 text-green-500" /></span>
-          )}
-          {status === 'stale' && (
-            <span title="Transform edited after apply — re-apply needed">
-              <AlertCircle className="w-3.5 h-3.5 text-amber-500" />
-            </span>
-          )}
-          {status === 'applied' ? (
-            <Badge className="bg-green-100 text-green-700 hover:bg-green-100 border border-green-200 text-[10px] px-1.5 py-0">
-              Staged ✓
-            </Badge>
-          ) : status === 'stale' ? (
-            <Badge className="bg-amber-100 text-amber-700 hover:bg-amber-100 border border-amber-200 text-[10px] px-1.5 py-0">
-              Stale ⚠
-            </Badge>
-          ) : status === 'tested' ? (
-            <Badge className="bg-teal-100 text-teal-700 hover:bg-teal-100 border border-teal-200 text-[10px] px-1.5 py-0">
-              Tested
-            </Badge>
-          ) : field.transformation ? (
-            <Badge className="bg-blue-100 text-blue-700 hover:bg-blue-100 border border-blue-200 text-[10px] px-1.5 py-0">
-              Saved
-            </Badge>
-          ) : field.needsTransform ? (
-            <Badge className="bg-gray-100 text-gray-500 hover:bg-gray-100 border border-gray-200 text-[10px] px-1.5 py-0">
-              Define
-            </Badge>
-          ) : null}
+        <div className="flex items-center gap-1">
+          <ArrowRight className="w-2.5 h-2.5 text-settle-slate-300 flex-shrink-0" />
+          <span className="text-[10px] text-settle-slate-400 font-mono truncate" title={field.targetFieldName ?? undefined}>
+            {field.targetFieldName}
+          </span>
         </div>
-      </div>
-      <div className="flex items-center gap-1 pl-3">
-        <ArrowRight className="w-3 h-3 text-gray-400 flex-shrink-0" />
-        <span className="text-[11px] text-gray-500 truncate" title={field.targetFieldName ?? undefined}>{field.targetFieldName}</span>
       </div>
     </button>
   )

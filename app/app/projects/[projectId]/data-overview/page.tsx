@@ -40,6 +40,15 @@ export default async function DataOverviewPage({ params, searchParams }: Props) 
     createdAt: fullProject.created_at,
   } : undefined
 
+  const sourceTableCount = schema.source.flatMap((d) => d.tables).length
+  const sourceFieldCount = schema.source
+    .flatMap((d) => d.tables)
+    .reduce((n, t) => n + t.fields.length, 0)
+  const targetTableCount = schema.target.flatMap((d) => d.tables).length
+  const targetFieldCount = schema.target
+    .flatMap((d) => d.tables)
+    .reduce((n, t) => n + t.fields.length, 0)
+
   return (
     <div className="flex flex-col flex-1 min-h-0 bg-gray-50">
       <PageHeader
@@ -58,6 +67,10 @@ export default async function DataOverviewPage({ params, searchParams }: Props) 
         initialQuery={q}
         initialQueryMode={mode as 'nl' | 'sql' | undefined}
         initialTableId={tableId}
+        sourceTableCount={sourceTableCount}
+        sourceFieldCount={sourceFieldCount}
+        targetTableCount={targetTableCount}
+        targetFieldCount={targetFieldCount}
       />
     </div>
   )

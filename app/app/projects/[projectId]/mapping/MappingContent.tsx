@@ -1,7 +1,12 @@
 'use client'
 
 import { useState, useMemo, useTransition, useCallback, useEffect, useRef } from 'react'
-import { useRouter } from 'next/navigation'
+import { useRouter, useSearchParams } from 'next/navigation'
+import {
+  TableFieldFilter,
+  type FilterTable,
+  type TableFieldSelection,
+} from '@/components/app/TableFieldFilter'
 import { Check, CheckCircle, Pencil, X, ChevronDown, ChevronRight, ArrowRight, Plus } from '@/components/icons'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { PageHeader } from '@/components/app/PageHeader'
@@ -37,6 +42,8 @@ import type {
 import { acknowledgeField, removeAcknowledgment } from '@/lib/actions/field-acknowledgments'
 import { useProjectRole } from '@/lib/hooks/useProjectRole'
 import { RoleTooltip } from '@/components/app/RoleTooltip'
+import { FieldPicker, type PickerField } from '@/components/app/FieldPicker'
+import { FixDrawer } from '@/components/ui/fix-drawer'
 
 // ─── Props ────────────────────────────────────────────────────────────────────
 
@@ -47,7 +54,7 @@ interface Props {
   projectInfo?: ProjectInfo
 }
 
-type FilterTab = 'all' | 'needs_review' | 'approved' | 'unmapped' | 'many_to_one' | 'one_to_many'
+type StatusFilter = 'all' | 'needs_review' | 'approved' | 'unmapped'
 
 // ─── Confidence helpers ───────────────────────────────────────────────────────
 
@@ -78,8 +85,30 @@ function ConfidenceBadge({ confidence }: { confidence: number | null }) {
 }
 
 function StatusBadge({ status }: { status: RichTableMapping['status'] }) {
-  if (status === 'approved') return <span className="px-2 py-0.5 text-xs font-semibold rounded-full bg-green-50 text-green-700 border border-green-200">Approved</span>
-  if (status === 'rejected') return <span className="px-2 py-0.5 text-xs font-semibold rounded-full bg-red-50 text-red-700 border border-red-200">Rejected</span>
+  if (status === 'approved') {
+    return (
+      <div className="flex items-center gap-1.5">
+        <span className="w-1.5 h-1.5 rounded-full bg-green-500 flex-shrink-0" />
+        <span className="text-xs text-settle-slate-500">Approved</span>
+      </div>
+    )
+  }
+  if (status === 'needs_review') {
+    return (
+      <div className="flex items-center gap-1.5">
+        <span className="w-1.5 h-1.5 rounded-full bg-amber-400 flex-shrink-0" />
+        <span className="text-xs text-settle-slate-500">Needs Review</span>
+      </div>
+    )
+  }
+  if (status === 'rejected') {
+    return (
+      <div className="flex items-center gap-1.5">
+        <span className="w-1.5 h-1.5 rounded-full bg-settle-slate-300 flex-shrink-0" />
+        <span className="text-xs text-settle-slate-400">Rejected</span>
+      </div>
+    )
+  }
   return null
 }
 
@@ -315,110 +344,47 @@ function RegenerateConfirmDialog({
 }
 
 
-// ─── Mapping Progress Bar ─────────────────────────────────────────────────────
+// ─── Mapping Stat Pills ──────────────────────────────────────────────────────
 
-function MappingProgress({
-  tableMappings,
-  allFieldsByTable,
-  acknowledgments,
+function MappingStatPills({
+  primaryFMCount,
+  approvedFMCount,
+  needsReviewCount,
+  unmappedCount,
+  sourceDatasetName,
+  targetDatasetName,
 }: {
-  tableMappings: RichTableMapping[]
-  allFieldsByTable: Record<string, SimpleField[]>
-  acknowledgments: FieldAcknowledgmentRow[]
+  primaryFMCount: number
+  approvedFMCount: number
+  needsReviewCount: number
+  unmappedCount: number
+  sourceDatasetName?: string
+  targetDatasetName?: string
 }) {
-  const allFMs = tableMappings.flatMap((tm) => tm.fieldMappings)
-
-  const sourceTableIds = new Set(tableMappings.map((tm) => tm.source_table_id))
-  const targetTableIds = new Set(tableMappings.map((tm) => tm.target_table_id))
-
-  const totalSourceFields = Object.entries(allFieldsByTable)
-    .filter(([tid]) => sourceTableIds.has(tid))
-    .reduce((sum, [, fields]) => sum + fields.length, 0)
-  const totalTargetFields = Object.entries(allFieldsByTable)
-    .filter(([tid]) => targetTableIds.has(tid))
-    .reduce((sum, [, fields]) => sum + fields.length, 0)
-  const totalFields = totalSourceFields + totalTargetFields
-
-  const mappedSourceIds = new Set(
-    allFMs.filter((fm) => fm.status !== 'rejected' && fm.source_field_id).map((fm) => fm.source_field_id as string)
-  )
-  const mappedTargetIds = new Set(
-    allFMs.filter((fm) => !fm.is_contributing && fm.status !== 'rejected').map((fm) => fm.target_field_id)
-  )
-  const acknowledgedIds = new Set(acknowledgments.map((a) => a.field_id))
-
-  let addressedSource = 0
-  for (const [tid, fields] of Object.entries(allFieldsByTable)) {
-    if (!sourceTableIds.has(tid)) continue
-    for (const f of fields) {
-      if (mappedSourceIds.has(f.id) || acknowledgedIds.has(f.id)) addressedSource++
-    }
-  }
-  let addressedTarget = 0
-  for (const [tid, fields] of Object.entries(allFieldsByTable)) {
-    if (!targetTableIds.has(tid)) continue
-    for (const f of fields) {
-      if (mappedTargetIds.has(f.id) || acknowledgedIds.has(f.id)) addressedTarget++
-    }
-  }
-
-  const totalAddressed = addressedSource + addressedTarget
-  const progressPct = totalFields > 0 ? Math.round((totalAddressed / totalFields) * 100) : 0
-  const isComplete = totalAddressed >= totalFields
-  const remaining = totalFields - totalAddressed
-
-  if (totalFields === 0) return null
-
   return (
-    <div className="bg-white border border-gray-200 rounded-xl px-5 py-4 space-y-3">
-      <div className="flex items-center justify-between">
-        <span className="text-sm font-medium text-gray-700">Field Coverage</span>
-        <div className="text-sm text-gray-600 whitespace-nowrap">
-          {isComplete ? (
-            <>
-              <span className="font-semibold text-gray-900">{totalAddressed}/{totalFields}</span>
-              <span className="text-gray-500"> fields addressed</span>
-              <span className="ml-1 text-green-600">✓</span>
-            </>
-          ) : (
-            <>
-              <span className="font-semibold text-gray-900">{totalAddressed}/{totalFields}</span>
-              <span className="text-gray-500"> fields addressed</span>
-              <span className="text-gray-400 mx-1">·</span>
-              <span className="text-amber-600">{remaining} remaining</span>
-            </>
-          )}
+    <div className="flex items-center gap-2 px-5 py-2.5 bg-white border-b border-settle-slate-200 flex-shrink-0">
+      {(sourceDatasetName || targetDatasetName) && (
+        <div className="flex items-center gap-2 mr-4 pr-4 border-r border-settle-slate-200">
+          <span className="text-xs text-settle-slate-500 font-medium">{sourceDatasetName}</span>
+          <span className="text-settle-slate-300 text-xs">→</span>
+          <span className="text-xs text-settle-slate-500 font-medium">{targetDatasetName}</span>
         </div>
+      )}
+      <div className="flex items-center gap-2 px-3 py-1.5 rounded-lg border border-settle-slate-200 bg-white">
+        <span className="text-[10px] font-medium text-settle-slate-400 uppercase tracking-wide">Total</span>
+        <span className="text-sm font-medium text-settle-slate-900">{primaryFMCount}</span>
       </div>
-
-      <div className="w-full h-2 bg-gray-100 rounded-full overflow-hidden">
-        <div
-          className={`h-full rounded-full transition-all duration-300 ${isComplete ? 'bg-green-500' : 'bg-primary'}`}
-          style={{ width: `${progressPct}%` }}
-        />
+      <div className="flex items-center gap-2 px-3 py-1.5 rounded-lg border border-settle-slate-200 bg-white">
+        <span className="text-[10px] font-medium text-settle-slate-400 uppercase tracking-wide">Approved</span>
+        <span className="text-sm font-medium text-settle-slate-900">{approvedFMCount}</span>
       </div>
-
-      <div className="flex items-center gap-6 text-sm">
-        <div className="flex items-center gap-1.5">
-          {addressedTarget >= totalTargetFields ? (
-            <CheckCircle className="w-4 h-4 text-green-600 flex-shrink-0" />
-          ) : (
-            <span className="w-2 h-2 rounded-full bg-amber-400 inline-block flex-shrink-0" />
-          )}
-          <span className={addressedTarget >= totalTargetFields ? 'text-green-700' : 'text-amber-700'}>
-            {addressedTarget}/{totalTargetFields} target fields
-        </span>
-        </div>
-        <div className="flex items-center gap-1.5">
-          {addressedSource >= totalSourceFields ? (
-            <CheckCircle className="w-4 h-4 text-green-600 flex-shrink-0" />
-          ) : (
-            <span className="w-2 h-2 rounded-full bg-blue-400 inline-block flex-shrink-0" />
-          )}
-          <span className={addressedSource >= totalSourceFields ? 'text-green-700' : 'text-gray-600'}>
-            {addressedSource}/{totalSourceFields} source fields
-          </span>
-        </div>
+      <div className="flex items-center gap-2 px-3 py-1.5 rounded-lg border border-settle-slate-200 bg-white">
+        <span className="text-[10px] font-medium text-settle-slate-400 uppercase tracking-wide">Needs Review</span>
+        <span className="text-sm font-medium text-settle-slate-900">{needsReviewCount}</span>
+      </div>
+      <div className="flex items-center gap-2 px-3 py-1.5 rounded-lg border border-settle-slate-200 bg-white">
+        <span className="text-[10px] font-medium text-settle-slate-400 uppercase tracking-wide">Unmapped</span>
+        <span className="text-sm font-medium text-settle-slate-900">{unmappedCount}</span>
       </div>
     </div>
   )
@@ -1078,6 +1044,7 @@ function InlineAddFieldRow({
 
 function FieldMappingRow({
   fm, allTMFMs, onSelect, onApprove, onReject, onDelete, canEdit = true, isSelected = false,
+  onEditTarget, targetTableFields, targetTableName,
 }: {
   fm: RichFieldMapping
   allTMFMs: RichFieldMapping[]
@@ -1087,7 +1054,12 @@ function FieldMappingRow({
   onDelete: () => void
   canEdit?: boolean
   isSelected?: boolean
+  onEditTarget?: (fieldId: string) => void
+  targetTableFields?: PickerField[]
+  targetTableName?: string
 }) {
+  const [isEditingTarget, setIsEditingTarget] = useState(false)
+  const targetCellRef = useRef<HTMLDivElement>(null)
   const isApproved = fm.status === 'approved'
   const isRejected = fm.status === 'rejected'
 
@@ -1169,18 +1141,26 @@ function FieldMappingRow({
 
   return (
     <div
-      className={`flex items-center px-5 py-3 cursor-pointer transition-colors ${isSelected ? 'bg-blue-50 border-l-[3px] border-l-blue-600' : `hover:bg-gray-50 ${isApproved ? 'bg-green-50/60' : isRejected ? 'bg-red-50/30' : ''} ${isManyToOne ? 'border-l-2 border-l-blue-400' : ''}`}`}
+      className={`grid grid-cols-[1fr_80px_1fr] items-center px-4 py-0 min-h-[40px] cursor-pointer transition-colors group ${isSelected ? 'bg-blue-50 border-l-2 border-settle-blue-500' : 'hover:bg-settle-slate-50'} ${fm.status === 'rejected' ? 'opacity-50' : ''}`}
       onClick={onSelect}
     >
-      <div className="w-[36%] flex items-center gap-2 min-w-0">
-        <span className={`w-2 h-2 rounded-full flex-shrink-0 ${cDot(fm.confidence)}`} />
+      <div className="flex items-center gap-2 min-w-0 pr-2">
+        <span
+          className={`w-1.5 h-1.5 rounded-full flex-shrink-0 ${
+            fm.status === 'approved'
+              ? 'bg-green-500'
+              : fm.status === 'needs_review'
+              ? 'bg-amber-400'
+              : 'bg-settle-slate-300'
+          }`}
+        />
         {isManyToOne ? (
           <div className="flex flex-col min-w-0 flex-1">
             <div className="flex items-center gap-1.5">
-        <span className={`text-sm truncate ${isRejected ? 'line-through text-gray-400' : 'text-gray-900'}`}>
-          {fm.sourceField?.name ?? '—'}
-        </span>
-          <span
+              <span className="text-xs text-settle-slate-900 font-mono truncate">
+                {fm.sourceField?.name ?? <span className="text-settle-slate-400 italic">unmapped</span>}
+              </span>
+              <span
                 title={`Many-to-one: ${fm.sourceField?.name} + ${contributingFMs.map(c => c.sourceField?.name).join(', ')} → ${fm.targetField?.name}`}
                 className="flex-shrink-0 text-[10px] font-medium px-1.5 py-0.5 rounded-full bg-settle-slate-100 text-settle-slate-500 border border-settle-slate-200"
               >
@@ -1193,8 +1173,8 @@ function FieldMappingRow({
           </div>
         ) : (
           <>
-            <span className={`text-sm truncate ${isRejected ? 'line-through text-gray-400' : 'text-gray-900'}`}>
-              {fm.sourceField?.name ?? '—'}
+            <span className="text-xs text-settle-slate-900 font-mono truncate">
+              {fm.sourceField?.name ?? <span className="text-settle-slate-400 italic">unmapped</span>}
             </span>
             {isOneToMany && (
               <span
@@ -1202,22 +1182,97 @@ function FieldMappingRow({
                 className="flex-shrink-0 text-[10px] font-medium px-1.5 py-0.5 rounded-full bg-settle-slate-100 text-settle-slate-500 border border-settle-slate-200"
               >
                 1→{oneToManyCount}
-          </span>
+              </span>
             )}
           </>
         )}
       </div>
-      <div className="w-[28%] flex items-center justify-center gap-1">
-        <span className={`text-xs font-semibold ${cText(fm.confidence)}`}>{fm.confidence !== null ? `${fm.confidence}%` : '—'}</span>
-        <ArrowRight className="w-3 h-3 text-gray-300" />
-      </div>
-      <div className="w-[36%] flex items-center justify-between gap-2 min-w-0">
-        <div className="flex items-center gap-1.5 min-w-0 flex-1">
-          <span className={`w-2 h-2 rounded-full flex-shrink-0 ${cDot(fm.confidence)}`} />
-          <span className={`text-sm truncate ${isRejected ? 'line-through text-gray-400' : 'text-gray-900'}`}>
-            {fm.targetField?.name ?? '—'}
+
+      <div className="flex items-center justify-center">
+        {fm.confidence != null ? (
+          <span className={`text-xs ${
+            fm.confidence >= 90
+              ? 'text-green-600'
+              : fm.confidence >= 75
+              ? 'text-amber-600'
+              : 'text-settle-slate-400'
+          }`}>
+            {Math.round(fm.confidence)}%
           </span>
-          {/* Primary multi-source badge (when contributing rows exist) */}
+        ) : (
+          <span className="text-xs text-settle-slate-300">—</span>
+        )}
+      </div>
+
+      <div className="flex items-center justify-between gap-2 min-w-0 pl-2">
+        <div className="flex items-center gap-2 min-w-0 flex-1">
+          <span
+            className={`w-1.5 h-1.5 rounded-full flex-shrink-0 ${
+              fm.status === 'approved'
+                ? 'bg-green-500'
+                : fm.status === 'needs_review'
+                ? 'bg-amber-400'
+                : 'bg-settle-slate-300'
+            }`}
+          />
+          {onEditTarget && targetTableFields ? (
+            <div className="relative flex-1 min-w-0" ref={targetCellRef}>
+              <button
+                onClick={(e) => {
+                  e.stopPropagation()
+                  e.preventDefault()
+                  setIsEditingTarget((v) => !v)
+                }}
+                className={`text-xs font-mono truncate text-left w-full flex items-center gap-1 transition-colors group/edit ${
+                  isEditingTarget
+                    ? 'text-settle-blue-600'
+                    : 'text-settle-slate-900 hover:text-settle-blue-600'
+                }`}
+                title="Click to change target field"
+              >
+                <span className="truncate">
+                  {fm.targetField?.name ?? (
+                    <span className="text-settle-slate-400 italic font-sans">no target</span>
+                  )}
+                </span>
+                <svg
+                  className={`w-3 h-3 flex-shrink-0 transition-opacity ${
+                    isEditingTarget
+                      ? 'opacity-100 text-settle-blue-600'
+                      : 'opacity-0 group-hover/edit:opacity-60 text-settle-slate-400'
+                  }`}
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="2"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                >
+                  <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7" />
+                  <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z" />
+                </svg>
+              </button>
+              {isEditingTarget && (
+                <FieldPicker
+                  tableName={targetTableName ?? ''}
+                  fields={targetTableFields}
+                  selectedFieldId={fm.target_field_id}
+                  onSelect={(field) => {
+                    onEditTarget(field.id)
+                    setIsEditingTarget(false)
+                  }}
+                  onClose={() => setIsEditingTarget(false)}
+                  anchorRef={targetCellRef as React.RefObject<HTMLElement>}
+                />
+              )}
+            </div>
+          ) : (
+            <span className="text-xs font-mono truncate text-settle-slate-900 flex-1 min-w-0">
+              {fm.targetField?.name ?? (
+                <span className="text-settle-slate-400 italic font-sans">no target</span>
+              )}
+            </span>
+          )}
           {isManyToOne && (
             <span
               title={`${fm.targetField?.name} receives from ${contributingFMs.length + 1} source fields combined`}
@@ -1227,27 +1282,26 @@ function FieldMappingRow({
             </span>
           )}
         </div>
-        <div className="flex items-center gap-1" onClick={(e) => e.stopPropagation()}>
-          <RoleTooltip allowed={canEdit} requiredRole="Editor">
-            <button onClick={canEdit ? onApprove : undefined} disabled={!canEdit} title="Accept" className={`p-1.5 rounded-md transition-colors disabled:opacity-40 disabled:cursor-not-allowed ${isApproved ? 'text-green-600' : 'text-gray-300 hover:text-green-600 hover:bg-green-50'}`}>
-              <Check className="w-4 h-4" />
+
+        <div className="flex items-center gap-1 flex-shrink-0 opacity-0 group-hover:opacity-100 transition-opacity" onClick={(e) => e.stopPropagation()}>
+          {canEdit && fm.status !== 'approved' && (
+            <button
+              onClick={(e) => { e.stopPropagation(); onApprove() }}
+              title="Approve mapping"
+              className="w-6 h-6 flex items-center justify-center rounded text-green-600 hover:bg-green-50 transition-colors"
+            >
+              <Check className="w-3.5 h-3.5" />
             </button>
-          </RoleTooltip>
-          <RoleTooltip allowed={canEdit} requiredRole="Editor">
-            <button onClick={canEdit ? onSelect : undefined} disabled={!canEdit} title="Edit" className="p-1.5 rounded-md text-gray-300 hover:text-blue-600 hover:bg-blue-50 transition-colors disabled:opacity-40 disabled:cursor-not-allowed">
-              <Pencil className="w-4 h-4" />
+          )}
+          {canEdit && (
+            <button
+              onClick={(e) => { e.stopPropagation(); onReject() }}
+              title="Reject mapping"
+              className="w-6 h-6 flex items-center justify-center rounded text-settle-slate-400 hover:text-red-500 hover:bg-red-50 transition-colors"
+            >
+              <X className="w-3.5 h-3.5" />
             </button>
-          </RoleTooltip>
-          <RoleTooltip allowed={canEdit} requiredRole="Editor">
-            <button onClick={canEdit ? onReject : undefined} disabled={!canEdit} title={isRejected ? 'Mark needs review' : 'Reject'} className={`p-1.5 rounded-md transition-colors disabled:opacity-40 disabled:cursor-not-allowed ${isRejected ? 'text-red-500' : 'text-gray-300 hover:text-red-500 hover:bg-red-50'}`}>
-              <X className="w-4 h-4" />
-            </button>
-          </RoleTooltip>
-          <RoleTooltip allowed={canEdit} requiredRole="Editor">
-            <button onClick={canEdit ? onDelete : undefined} disabled={!canEdit} title="Delete permanently" className="p-1.5 rounded-md text-gray-300 hover:text-red-600 hover:bg-red-50 transition-colors disabled:opacity-40 disabled:cursor-not-allowed">
-              <TrashIcon className="text-inherit" />
-            </button>
-          </RoleTooltip>
+          )}
         </div>
       </div>
     </div>
@@ -1286,6 +1340,8 @@ function TableMappingCard({
   onAcknowledgmentChanged,
   canEdit = true,
   selectedFMId = null,
+  tableNameById,
+  onEditFieldTarget,
 }: {
   tm: RichTableMapping
   expanded: boolean
@@ -1316,6 +1372,8 @@ function TableMappingCard({
   onAcknowledgmentChanged: () => void
   canEdit?: boolean
   selectedFMId?: string | null
+  tableNameById: Map<string, string>
+  onEditFieldTarget: (fmId: string, newTargetFieldId: string) => void
 }) {
   const router = useRouter()
   const srcDs = tm.sourceTable?.dataset
@@ -1430,10 +1488,10 @@ function TableMappingCard({
         <div className="border-t border-gray-100">
           {/* Column headers + mapped field rows (hidden when hideMappedRows) */}
           {!hideMappedRows && !(filterVisibleStatus && tm.fieldMappings.every((fm) => fm.status !== filterVisibleStatus)) && (
-          <div className="flex items-center px-5 py-2 bg-gray-50 border-b border-gray-100">
-            <div className="w-[36%] text-xs font-medium text-gray-500">Source Field</div>
-            <div className="w-[28%] text-center text-xs font-medium text-gray-500">Confidence</div>
-            <div className="w-[36%] text-xs font-medium text-gray-500">Target Field</div>
+          <div className="grid grid-cols-[1fr_80px_1fr] items-center px-4 py-2 bg-settle-slate-50 border-b border-settle-slate-100">
+            <div className="text-[10px] font-medium text-settle-slate-400 uppercase tracking-wide">Source Field</div>
+            <div className="text-[10px] font-medium text-settle-slate-400 uppercase tracking-wide text-center overflow-hidden">Conf.</div>
+            <div className="text-[10px] font-medium text-settle-slate-400 uppercase tracking-wide">Target Field</div>
           </div>
           )}
 
@@ -1471,6 +1529,9 @@ function TableMappingCard({
                 onDelete={() => onDeleteFM(fm.id)}
                 canEdit={canEdit}
                 isSelected={selectedFMId === fm.id}
+                onEditTarget={(fieldId) => onEditFieldTarget(fm.id, fieldId)}
+                targetTableFields={allFieldsByTable[tm.target_table_id] ?? []}
+                targetTableName={tableNameById.get(tm.target_table_id) ?? ''}
               />
             ))
               }
@@ -1503,6 +1564,9 @@ function TableMappingCard({
                           onDelete={() => onDeleteFM(row.id)}
                           canEdit={canEdit}
                           isSelected={selectedFMId === row.id}
+                          onEditTarget={(fieldId) => onEditFieldTarget(row.id, fieldId)}
+                          targetTableFields={allFieldsByTable[tm.target_table_id] ?? []}
+                          targetTableName={tableNameById.get(tm.target_table_id) ?? ''}
                         />
                       ))}
                     </div>
@@ -1520,6 +1584,9 @@ function TableMappingCard({
                     onDelete={() => onDeleteFM(fm.id)}
                     canEdit={canEdit}
                     isSelected={selectedFMId === fm.id}
+                    onEditTarget={(fieldId) => onEditFieldTarget(fm.id, fieldId)}
+                    targetTableFields={allFieldsByTable[tm.target_table_id] ?? []}
+                    targetTableName={tableNameById.get(tm.target_table_id) ?? ''}
                   />
                 )
               })
@@ -1718,327 +1785,376 @@ function TableMappingCard({
 
 function MappingDetailsPanel({
   fm,
-  parentTM,
-  allFieldsByTable,
+  isOpen,
   onClose,
   onApprove,
   onReject,
-  onDelete,
-  onEdit,
+  onChangeSource,
+  onChangeTarget,
+  onRemove,
+  projectId,
+  tableMappingId,
+  allFieldsByTable,
+  canEdit,
+  aiReasoningOpen,
+  onToggleReasoning,
+  rejectConfirmOpen,
+  onRequestReject,
+  onCloseRejectConfirm,
+  onRemap,
+  sourceTableFields,
+  sourceTableName,
+  targetTableFields,
+  targetTableName,
 }: {
-  fm: RichFieldMapping
-  parentTM: RichTableMapping | undefined
-  allFieldsByTable: Record<string, SimpleField[]>
+  fm: RichFieldMapping | null
+  isOpen: boolean
   onClose: () => void
-  onApprove: (id: string) => void
-  onReject: (id: string) => void
-  onDelete: (id: string) => void
-  onEdit: (id: string, updates: { source_field_id?: string; target_field_id?: string }) => void
+  onApprove: () => void
+  onReject: () => void
+  onChangeSource: (fieldId: string) => void
+  onChangeTarget: (fieldId: string) => void
+  onRemove: () => void
+  projectId: string
+  tableMappingId: string
+  allFieldsByTable: Record<string, SimpleField[]>
+  canEdit: boolean
+  aiReasoningOpen: boolean
+  onToggleReasoning: () => void
+  rejectConfirmOpen: boolean
+  onRequestReject: () => void
+  onCloseRejectConfirm: () => void
+  onRemap: () => void
+  sourceTableFields: PickerField[]
+  sourceTableName: string
+  targetTableFields: PickerField[]
+  targetTableName: string
 }) {
-  const [editSrcMode, setEditSrcMode] = useState(false)
-  const [editTgtMode, setEditTgtMode] = useState(false)
-  const [newSrcId, setNewSrcId] = useState(fm.source_field_id)
-  const [newTgtId, setNewTgtId] = useState(fm.target_field_id)
-  const [pending, startTransition] = useTransition()
+  const router = useRouter()
+  const [isEditingSource, setIsEditingSource] = useState(false)
+  const [isEditingTarget, setIsEditingTarget] = useState(false)
+  const [activeTab, setActiveTab] = useState<'details' | 'transform' | 'actions'>('details')
+  const sourceFieldRef = useRef<HTMLDivElement>(null)
+  const targetFieldRef = useRef<HTMLDivElement>(null)
 
-  const mappedSrcIds = new Set(parentTM?.fieldMappings.filter((f) => f.id !== fm.id).map((f) => f.source_field_id) ?? [])
-  const mappedTgtIds = new Set(parentTM?.fieldMappings.filter((f) => f.id !== fm.id).map((f) => f.target_field_id) ?? [])
-  const allSrcFields = allFieldsByTable[parentTM?.source_table_id ?? ''] ?? []
-  const allTgtFields = allFieldsByTable[parentTM?.target_table_id ?? ''] ?? []
+  useEffect(() => {
+    setIsEditingSource(false)
+    setIsEditingTarget(false)
+    setActiveTab('details')
+  }, [fm?.id])
 
-  function handleEditTgt() {
-    if (!newTgtId || newTgtId === fm.target_field_id) { setEditTgtMode(false); return }
-    startTransition(async () => {
-      onEdit(fm.id, { target_field_id: newTgtId })
-      setEditTgtMode(false)
-    })
-  }
-
-  function handleEditSrc() {
-    if (!newSrcId || newSrcId === fm.source_field_id) { setEditSrcMode(false); return }
-    startTransition(async () => {
-      onEdit(fm.id, { source_field_id: newSrcId })
-      setEditSrcMode(false)
-    })
-  }
-
-  const confidence = fm.confidence
-  const similarFields = fm.similar_fields_considered ?? []
-
-  // Compute contributing FMs from the parent table mapping
-  const allParentFMs = parentTM?.fieldMappings ?? []
-  const contributingFMs = !fm.is_contributing
-    ? allParentFMs.filter(
-        (f) => f.target_field_id === fm.target_field_id && f.id !== fm.id && f.is_contributing && f.status !== 'rejected'
-      )
-    : []
-  const isManyToOne = contributingFMs.length > 0
-  // Primary FM for this target field (when viewing a contributing row)
-  const primaryFM = fm.is_contributing
-    ? allParentFMs.find((f) => f.target_field_id === fm.target_field_id && !f.is_contributing)
-    : null
+  if (!fm) return null
 
   return (
-    <div className="flex-shrink-0 bg-white border border-gray-200 rounded-xl overflow-hidden flex flex-col h-fit" style={{ minWidth: '340px' }}>
-      <div className="flex items-center justify-between px-5 py-4 border-b border-gray-100">
-        <h3 className="font-semibold text-gray-900 text-sm">Mapping Details</h3>
-        <button onClick={onClose} className="text-gray-400 hover:text-gray-600"><X className="w-4 h-4" /></button>
-      </div>
+    <FixDrawer isOpen={isOpen} onClose={onClose}>
 
-      <div className="px-5 py-4 space-y-4 overflow-y-auto max-h-[70vh]">
-        {/* Contributing row — show info directing to primary */}
-        {fm.is_contributing && (
-          <div className="p-3 bg-blue-50 border border-blue-100 rounded-lg text-sm text-blue-700 leading-relaxed">
-            <p className="font-medium mb-1">Contributing Field</p>
-            <p className="text-xs text-blue-600">
-              This field contributes to a many-to-one mapping. The transformation SQL is managed on the primary mapping
-              {primaryFM ? <> for <strong>{primaryFM.sourceField?.name ?? '?'} → {fm.targetField?.name ?? '?'}</strong></> : null}.
-            </p>
-          </div>
-        )}
+      {/* Header */}
+      <div className="flex items-start justify-between px-5 pt-5 pb-3 border-b border-settle-slate-100 flex-shrink-0">
+        <div className="flex-1 min-w-0 pr-3">
+          <p className="text-xs text-settle-slate-400 mb-0.5">Field mapping</p>
 
-        {/* Source → Target display */}
-        {isManyToOne ? (
-          <div>
-            <div className="flex items-center gap-2 mb-2">
-              <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide">Source Fields</p>
-              <span className="text-xs font-medium px-2 py-0.5 rounded-full bg-blue-100 text-blue-700">
-                Many-to-One
-              </span>
-            </div>
-            <div className="space-y-2">
-              {/* Primary source */}
-              <div className="flex items-start gap-2">
-                <span className="w-2 h-2 rounded-full bg-green-500 flex-shrink-0 mt-1.5" />
-                <div className="min-w-0 flex-1">
-                  <p className="text-sm font-medium text-gray-900 truncate">{fm.sourceField?.name ?? '—'}</p>
-                  <p className="text-xs text-gray-400">
-                    {fm.sourceField?.data_type}
-                    <span className="text-gray-300"> · </span>
-                    primary
-                    {fm.sourceFieldNullPercentage > 0 && (
-                      <span className="ml-1">· null: {fm.sourceFieldNullPercentage.toFixed(0)}%</span>
-                    )}
-                  </p>
-                  {fm.sourceFieldSamples.length > 0 && (
-                    <p className="text-xs text-gray-400 mt-0.5 truncate">
-                      e.g. {fm.sourceFieldSamples.slice(0, 3).map(v => `"${v}"`).join(', ')}
-                    </p>
+          <div className="flex items-center gap-2 mb-2">
+            <div ref={sourceFieldRef} className="relative">
+              {canEdit ? (
+                <button
+                  onClick={() => setIsEditingSource((v) => !v)}
+                  className={`text-sm font-semibold font-mono truncate max-w-[140px] text-left transition-colors ${
+                    isEditingSource
+                      ? 'text-settle-blue-600'
+                      : 'text-settle-slate-900 hover:text-settle-blue-600 hover:underline'
+                  }`}
+                  title="Click to change source field"
+                >
+                  {fm.sourceField?.name ?? (
+                    <span className="italic font-sans text-settle-slate-400">unmapped</span>
                   )}
-                </div>
-              </div>
-              {/* Contributing sources */}
-              {contributingFMs.map((cf) => (
-                <div key={cf.id} className="flex items-start gap-2">
-                  <span className="w-2 h-2 rounded-full bg-blue-400 flex-shrink-0 mt-1.5" />
-                  <div className="min-w-0 flex-1">
-                    <p className="text-sm font-medium text-gray-700 truncate">{cf.sourceField?.name ?? '—'}</p>
-                    <p className="text-xs text-gray-400">
-                      {cf.sourceField?.data_type}
-                      <span className="text-gray-300"> · </span>
-                      contributing
-                      {cf.sourceFieldNullPercentage > 0 && (
-                        <span className="ml-1">· null: {cf.sourceFieldNullPercentage.toFixed(0)}%</span>
-                      )}
-                    </p>
-                    {cf.sourceFieldSamples.length > 0 && (
-                      <p className="text-xs text-gray-400 mt-0.5 truncate">
-                        e.g. {cf.sourceFieldSamples.slice(0, 3).map(v => `"${v}"`).join(', ')}
-                      </p>
-                    )}
-                  </div>
-                </div>
-              ))}
+                </button>
+              ) : (
+                <span className="text-sm font-semibold font-mono text-settle-slate-900">
+                  {fm.sourceField?.name ?? '—'}
+                </span>
+              )}
+              {isEditingSource && (
+                <FieldPicker
+                  tableName={sourceTableName}
+                  fields={sourceTableFields}
+                  selectedFieldId={fm.source_field_id}
+                  onSelect={(field) => {
+                    onChangeSource(field.id)
+                    setIsEditingSource(false)
+                  }}
+                  onClose={() => setIsEditingSource(false)}
+                  anchorRef={sourceFieldRef as React.RefObject<HTMLElement>}
+                />
+              )}
             </div>
-            <div className="flex items-center gap-2 mt-3 pt-3 border-t border-gray-100">
-              <ArrowRight className="w-4 h-4 text-gray-400 flex-shrink-0" />
-              <div className="min-w-0 flex-1">
-                <p className="text-xs text-gray-500 mb-0.5">Target Field</p>
-                <p className="font-semibold text-gray-900 text-sm truncate">{fm.targetField?.name ?? '—'}</p>
-                <p className="text-xs text-gray-400">{fm.targetField?.data_type}</p>
-              </div>
+
+            <span className="text-settle-slate-300 flex-shrink-0 text-sm">→</span>
+
+            <div ref={targetFieldRef} className="relative">
+              {canEdit ? (
+                <button
+                  onClick={() => setIsEditingTarget((v) => !v)}
+                  className={`text-sm font-semibold font-mono truncate max-w-[140px] text-left transition-colors ${
+                    isEditingTarget
+                      ? 'text-settle-blue-600'
+                      : 'text-settle-slate-900 hover:text-settle-blue-600 hover:underline'
+                  }`}
+                  title="Click to change target field"
+                >
+                  {fm.targetField?.name ?? '—'}
+                </button>
+              ) : (
+                <span className="text-sm font-semibold font-mono text-settle-slate-900">
+                  {fm.targetField?.name ?? '—'}
+                </span>
+              )}
+              {isEditingTarget && (
+                <FieldPicker
+                  tableName={targetTableName}
+                  fields={targetTableFields}
+                  selectedFieldId={fm.target_field_id}
+                  onSelect={(field) => {
+                    onChangeTarget(field.id)
+                    setIsEditingTarget(false)
+                  }}
+                  onClose={() => setIsEditingTarget(false)}
+                  anchorRef={targetFieldRef as React.RefObject<HTMLElement>}
+                />
+              )}
             </div>
-            {/* Combination hint from ai_reasoning */}
-            {fm.ai_reasoning?.includes('[Combination:') && (
-              <div className="mt-2 p-2 bg-blue-50 rounded text-xs text-blue-700">
-                <span className="font-medium">Hint: </span>
-                {fm.ai_reasoning.match(/\[Combination: (.*?)\]/)?.[1]}
-              </div>
-            )}
           </div>
-        ) : (
-        <div className="flex items-center gap-2">
-          <div className="flex-1 min-w-0">
-            <p className="text-xs text-gray-500 mb-0.5">Source Field</p>
-            <p className="font-semibold text-gray-900 text-sm truncate">{fm.sourceField?.name ?? '—'}</p>
-            <p className="text-xs text-gray-400">{fm.sourceField?.data_type}</p>
-          </div>
-          <ArrowRight className="w-4 h-4 text-gray-400 flex-shrink-0" />
-          <div className="flex-1 min-w-0 text-right">
-            <p className="text-xs text-gray-500 mb-0.5">Target Field</p>
-            <p className="font-semibold text-gray-900 text-sm truncate">{fm.targetField?.name ?? '—'}</p>
-            <p className="text-xs text-gray-400">{fm.targetField?.data_type}</p>
+
+          <div className="flex items-center gap-1.5">
+            <span
+              className={`w-1.5 h-1.5 rounded-full flex-shrink-0 ${
+                fm.status === 'approved'
+                  ? 'bg-green-500'
+                  : fm.status === 'needs_review'
+                  ? 'bg-amber-400'
+                  : 'bg-settle-slate-300'
+              }`}
+            />
+            <span className="text-xs text-settle-slate-500">
+              {fm.confidence != null
+                ? `${Math.round(fm.confidence)}% confidence`
+                : 'No confidence score'}
+              {fm.sourceField?.data_type ? ` · ${fm.sourceField.data_type}` : ''}
+              {fm.targetField?.data_type ? ` → ${fm.targetField.data_type}` : ''}
+            </span>
           </div>
         </div>
-        )}
 
-        {/* Confidence bar */}
-        <div>
-          <div className="flex items-center justify-between mb-1.5">
-            <span className="text-xs text-gray-500">Confidence</span>
-            <span className={`text-xs font-bold ${cText(confidence)}`}>{confidence !== null ? `${confidence}%` : '—'}</span>
-          </div>
-          <div className="w-full bg-gray-100 rounded-full h-2">
-            <div className={`h-2 rounded-full transition-all ${cBar(confidence)}`} style={{ width: `${confidence ?? 0}%` }} />
-          </div>
-        </div>
-
-        {/* AI Reasoning */}
-        {fm.ai_reasoning && (
-          <div className="bg-settle-slate-50 border border-settle-slate-200 rounded-lg p-3">
-            <div className="flex items-center gap-1.5 mb-1.5">
-              <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor" className="text-settle-slate-400"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm1 15h-2v-6h2v6zm0-8h-2V7h2v2z" /></svg>
-              <span className="text-xs font-semibold text-settle-slate-700">AI-Generated</span>
-            </div>
-            <p className="text-xs text-settle-slate-600 leading-relaxed">{fm.ai_reasoning}</p>
-          </div>
-        )}
-
-        {/* Similar fields */}
-        {similarFields.length > 0 && (
-          <div>
-            <p className="text-xs font-medium text-gray-600 mb-1.5">Similar Fields Considered</p>
-            <div className="flex flex-wrap gap-1">
-              {similarFields.map((f, i) => <span key={i} className="px-2 py-0.5 bg-gray-100 text-gray-600 text-xs rounded">{f}</span>)}
-            </div>
-          </div>
-        )}
-
-        {/* Type compatibility */}
-        {fm.type_compatibility && (
-          <div>
-            <p className="text-xs font-medium text-gray-600 mb-1">Type Compatibility</p>
-            <p className="text-xs text-gray-700 bg-gray-50 rounded-lg px-3 py-2 font-mono leading-relaxed">{fm.type_compatibility}</p>
-          </div>
-        )}
-
-        {/* Example values */}
-        {(fm.sourceFieldSamples.length > 0 || fm.targetFieldSamples.length > 0) && (
-          <div>
-            <p className="text-xs font-medium text-gray-600 mb-1.5">Example Values</p>
-            {fm.sourceFieldSamples.length > 0 && (
-              <div className="flex items-start gap-2 mb-1">
-                <span className="text-xs text-gray-500 w-12 flex-shrink-0 pt-0.5">Source:</span>
-                <div className="flex flex-wrap gap-1">{fm.sourceFieldSamples.map((v, i) => <span key={i} className="text-xs bg-settle-slate-50 text-settle-slate-600 border border-settle-slate-200 px-1.5 py-0.5 rounded font-mono">{v}</span>)}</div>
-              </div>
-            )}
-            {fm.targetFieldSamples.length > 0 && (
-              <div className="flex items-start gap-2">
-                <span className="text-xs text-gray-500 w-12 flex-shrink-0 pt-0.5">Target:</span>
-                <div className="flex flex-wrap gap-1">{fm.targetFieldSamples.map((v, i) => <span key={i} className="text-xs bg-settle-slate-50 text-settle-slate-600 border border-settle-slate-200 px-1.5 py-0.5 rounded font-mono">{v}</span>)}</div>
-              </div>
-            )}
-          </div>
-        )}
-
-        {/* Change Source Field — hidden for value assignments */}
-        {fm.source_field_id !== null && <div>
-          <div className="flex items-center justify-between mb-1">
-            <p className="text-xs font-medium text-gray-600">Change Source Field</p>
-            {!editSrcMode && (
-              <button onClick={() => setEditSrcMode(true)} className="text-xs text-blue-600 hover:text-blue-800">Change</button>
-            )}
-          </div>
-          {editSrcMode ? (
-            <>
-              <Select
-                value={newSrcId ?? fm.source_field_id ?? ''}
-                onValueChange={(val) => setNewSrcId(val)}
-              >
-                <SelectTrigger className="h-9 text-sm w-full">
-                  <SelectValue placeholder="Select source field…" />
-                </SelectTrigger>
-                <SelectContent>
-                  {fm.source_field_id && (
-                    <SelectItem value={fm.source_field_id}>{fm.sourceField?.name} (current)</SelectItem>
-                  )}
-                  {allSrcFields.filter((f) => f.id !== fm.source_field_id).map((f) => (
-                    <SelectItem key={f.id} value={f.id}>
-                      {f.name} ({f.data_type}){mappedSrcIds.has(f.id) ? ' ⚠ already used' : ''}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-              <div className="flex gap-2 mt-2">
-                <button onClick={handleEditSrc} disabled={pending} className="flex-1 px-3 py-1.5 text-xs font-medium text-white bg-primary rounded-lg disabled:opacity-40">
-                  {pending ? '…' : 'Save'}
-                </button>
-                <button onClick={() => { setEditSrcMode(false); setNewSrcId(fm.source_field_id) }} className="flex-1 px-3 py-1.5 text-xs font-medium text-gray-700 border border-gray-200 rounded-lg">
-                  Cancel
-                </button>
-              </div>
-            </>
-          ) : (
-            <p className="text-xs text-gray-500 bg-gray-50 rounded px-2 py-1.5">{fm.sourceField?.name ?? '—'}</p>
-          )}
-        </div>}
-
-        {/* Change Target Field */}
-        <div>
-          <div className="flex items-center justify-between mb-1">
-            <p className="text-xs font-medium text-gray-600">Change Target Field</p>
-            {!editTgtMode && (
-              <button onClick={() => setEditTgtMode(true)} className="text-xs text-blue-600 hover:text-blue-800">Change</button>
-            )}
-          </div>
-          {editTgtMode ? (
-            <>
-              <Select
-                value={newTgtId ?? ''}
-                onValueChange={(val) => setNewTgtId(val)}
-              >
-                <SelectTrigger className="h-9 text-sm w-full">
-                  <SelectValue placeholder="Select target field…" />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value={fm.target_field_id}>{fm.targetField?.name} (current)</SelectItem>
-                  {allTgtFields.filter((f) => f.id !== fm.target_field_id).map((f) => (
-                    <SelectItem key={f.id} value={f.id}>
-                      {f.name} ({f.data_type}){mappedTgtIds.has(f.id) ? ' ⚠ already mapped' : ''}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-              <div className="flex gap-2 mt-2">
-                <button onClick={handleEditTgt} disabled={pending} className="flex-1 px-3 py-1.5 text-xs font-medium text-white bg-primary rounded-lg disabled:opacity-40">
-                  {pending ? '…' : 'Save'}
-                </button>
-                <button onClick={() => { setEditTgtMode(false); setNewTgtId(fm.target_field_id) }} className="flex-1 px-3 py-1.5 text-xs font-medium text-gray-700 border border-gray-200 rounded-lg">
-                  Cancel
-                </button>
-              </div>
-            </>
-          ) : (
-            <p className="text-xs text-gray-500 bg-gray-50 rounded px-2 py-1.5">{fm.targetField?.name ?? '—'}</p>
-          )}
-        </div>
-      </div>
-
-      {/* Actions */}
-      <div className="px-5 py-4 border-t border-gray-100 space-y-2">
-        {fm.status !== 'approved' && (
-          <button onClick={() => { onApprove(fm.id); onClose() }} className="w-full px-4 py-2.5 text-sm font-medium text-white bg-settle-slate-900 rounded-lg hover:bg-settle-slate-800 transition-colors">
-            Accept Mapping
-          </button>
-        )}
         <button
-          onClick={() => { onDelete(fm.id); onClose() }}
-          className="w-full text-sm text-red-600 hover:text-red-700 py-1"
+          onClick={onClose}
+          className="text-settle-slate-400 hover:text-settle-slate-600 transition-colors flex-shrink-0"
+          aria-label="Close"
         >
-          Remove Mapping
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            <path d="M18 6 6 18M6 6l12 12" />
+          </svg>
         </button>
       </div>
-    </div>
+
+      {/* Tab bar */}
+      <div className="flex border-b border-settle-slate-100 px-5 flex-shrink-0">
+        {(['details', 'transform', 'actions'] as const).map((tab) => (
+          <button
+            key={tab}
+            onClick={() => setActiveTab(tab)}
+            className={`py-2.5 px-1 mr-5 text-xs font-medium border-b-2 -mb-px transition-colors ${
+              activeTab === tab
+                ? 'border-settle-blue-500 text-settle-slate-900'
+                : 'border-transparent text-settle-slate-400 hover:text-settle-slate-600'
+            }`}
+          >
+            {tab === 'details' ? 'Details' : tab === 'transform' ? 'Transform' : 'Actions'}
+          </button>
+        ))}
+      </div>
+
+      {/* Tab content */}
+      <div className="flex-1 overflow-y-auto px-5 py-4">
+
+        {activeTab === 'details' && (
+          <div className="space-y-5">
+
+            <div>
+              <p className="text-[10px] font-medium text-settle-slate-400 uppercase tracking-wide mb-2">Confidence</p>
+              <div className="h-1 bg-settle-slate-100 rounded-full overflow-hidden mb-1.5">
+                <div
+                  className={`h-full rounded-full ${
+                    (fm.confidence ?? 0) >= 90
+                      ? 'bg-green-500'
+                      : (fm.confidence ?? 0) >= 75
+                      ? 'bg-amber-400'
+                      : 'bg-settle-slate-300'
+                  }`}
+                  style={{ width: `${Math.round(fm.confidence ?? 0)}%` }}
+                />
+              </div>
+              <div className="flex items-center justify-between">
+                <span className={`text-xs font-medium ${
+                  (fm.confidence ?? 0) >= 90
+                    ? 'text-green-600'
+                    : (fm.confidence ?? 0) >= 75
+                    ? 'text-amber-600'
+                    : 'text-settle-slate-500'
+                }`}>
+                  {fm.confidence != null ? `${Math.round(fm.confidence)}%` : '—'}
+                </span>
+                <span className="text-[10px] text-settle-blue-500 bg-blue-50 border border-blue-100 rounded px-1.5 py-0.5">
+                  ✦ AI-Generated
+                </span>
+              </div>
+            </div>
+
+            {fm.ai_reasoning && (
+              <div>
+                <button
+                  onClick={onToggleReasoning}
+                  className="flex items-center justify-between w-full text-left py-2 border-t border-settle-slate-100"
+                >
+                  <span className="text-[10px] font-medium text-settle-slate-400 uppercase tracking-wide">AI Reasoning</span>
+                  <ChevronRight
+                    className={`w-3.5 h-3.5 text-settle-slate-400 transition-transform ${aiReasoningOpen ? 'rotate-90' : ''}`}
+                  />
+                </button>
+                {aiReasoningOpen && (
+                  <p className="text-xs text-settle-slate-600 leading-relaxed mt-1.5">{fm.ai_reasoning}</p>
+                )}
+              </div>
+            )}
+
+            {fm.similar_fields_considered && fm.similar_fields_considered.length > 0 && (
+              <div>
+                <p className="text-[10px] font-medium text-settle-slate-400 uppercase tracking-wide mb-2">Similar Fields Considered</p>
+                <div className="flex flex-wrap gap-1.5">
+                  {fm.similar_fields_considered.map((f) => (
+                    <span key={f} className="text-[10px] text-settle-slate-600 bg-settle-slate-50 border border-settle-slate-200 rounded px-2 py-0.5 font-mono">{f}</span>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {fm.sourceFieldSamples && fm.sourceFieldSamples.length > 0 && (
+              <div>
+                <p className="text-[10px] font-medium text-settle-slate-400 uppercase tracking-wide mb-2">Example Values</p>
+                <div className="flex items-center gap-2 flex-wrap">
+                  {fm.sourceFieldSamples.slice(0, 4).map((v, i, arr) => (
+                    <span key={i} className="text-xs text-settle-slate-700">
+                      {v}
+                      {i < arr.length - 1 && <span className="text-settle-slate-300 ml-2">·</span>}
+                    </span>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {fm.type_compatibility && (
+              <div>
+                <p className="text-[10px] font-medium text-settle-slate-400 uppercase tracking-wide mb-1.5">Type Compatibility</p>
+                <p className="text-xs text-settle-slate-600">{fm.type_compatibility}</p>
+              </div>
+            )}
+          </div>
+        )}
+
+        {activeTab === 'transform' && (
+          <div className="space-y-3">
+            <div className="border border-settle-slate-200 rounded-lg p-4">
+              <p className="text-xs text-settle-slate-400 mb-3">No transform defined</p>
+              <button
+                onClick={() => router.push(`/app/projects/${projectId}/transform?fieldMappingId=${fm.id}`)}
+                className="text-xs font-medium text-settle-blue-500 hover:text-settle-blue-700 transition-colors"
+              >
+                Define Transform →
+              </button>
+            </div>
+          </div>
+        )}
+
+        {activeTab === 'actions' && (
+          <div className="space-y-3">
+
+            {canEdit && fm.status !== 'approved' && (
+              <button
+                onClick={onApprove}
+                className="w-full h-9 text-sm font-medium rounded-lg bg-settle-blue-500 text-white hover:bg-settle-blue-600 transition-colors"
+              >
+                ✓ Approve Mapping
+              </button>
+            )}
+            {fm.status === 'approved' && (
+              <div className="w-full h-9 flex items-center justify-center text-sm font-medium text-green-600 bg-green-50 rounded-lg border border-green-200">
+                ✓ Approved
+              </div>
+            )}
+
+            {canEdit && (
+              <div>
+                {fm.status !== 'rejected' ? (
+                  <button
+                    onClick={onRequestReject}
+                    className="w-full h-9 text-sm font-medium rounded-lg border border-settle-slate-200 bg-white text-red-500 hover:bg-red-50 transition-colors"
+                  >
+                    Reject Mapping
+                  </button>
+                ) : (
+                  <button
+                    onClick={onReject}
+                    className="w-full h-9 text-sm font-medium rounded-lg border border-settle-slate-200 bg-white text-settle-slate-600 hover:bg-settle-slate-50 transition-colors"
+                  >
+                    Un-reject
+                  </button>
+                )}
+
+                {rejectConfirmOpen && (
+                  <div className="mt-3 p-3 bg-settle-slate-50 border border-settle-slate-200 rounded-lg">
+                    <p className="text-xs text-settle-slate-700 mb-3 leading-relaxed">
+                      <span className="font-medium">Unmap {fm.sourceField?.name} → {fm.targetField?.name}?</span>
+                      <br />
+                      Both fields will return to unmapped status.
+                    </p>
+                    <div className="flex gap-2">
+                      <button
+                        onClick={() => { onReject(); onCloseRejectConfirm() }}
+                        className="flex-1 h-7 text-xs font-medium rounded-md bg-red-500 text-white hover:bg-red-600 transition-colors"
+                      >
+                        Unmap
+                      </button>
+                      <button
+                        onClick={onRemap}
+                        className="flex-1 h-7 text-xs font-medium rounded-md border border-settle-slate-200 bg-white text-settle-slate-700 hover:bg-settle-slate-50 transition-colors"
+                      >
+                        Remap Instead
+                      </button>
+                      <button
+                        onClick={onCloseRejectConfirm}
+                        className="h-7 px-3 text-xs text-settle-slate-400 hover:text-settle-slate-600 transition-colors"
+                      >
+                        Cancel
+                      </button>
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
+
+            {canEdit && (
+              <div className="pt-2 border-t border-settle-slate-100">
+                <button
+                  onClick={onRemove}
+                  className="text-xs text-settle-slate-400 hover:text-red-500 transition-colors"
+                >
+                  Remove Mapping
+                </button>
+              </div>
+            )}
+          </div>
+        )}
+      </div>
+    </FixDrawer>
   )
 }
 
@@ -2178,7 +2294,49 @@ export default function MappingContent({ projectId, projectName, initialData, pr
   const [acknowledgments, setAcknowledgments] = useState<FieldAcknowledgmentRow[]>(initialData?.acknowledgments ?? [])
   const allFieldsByTable = data?.allFieldsByTable ?? {}
 
-  const [activeFilter, setActiveFilter] = useState<FilterTab>('all')
+  const searchParams = useSearchParams()
+
+  // Helper: build TableFieldSelection from a Set of field IDs
+  const buildTableSelectionFromFieldIds = useCallback(
+    (
+      fieldIds: Set<string>,
+      tms: RichTableMapping[]
+    ): TableFieldSelection => {
+      const tableIds = new Set<string>()
+      for (const tm of tms) {
+        if (tm.fieldMappings.some((fm) => fieldIds.has(fm.id))) {
+          tableIds.add(tm.id)
+        }
+      }
+      return { selectedFieldIds: fieldIds, selectedTableIds: tableIds }
+    },
+    []
+  )
+
+  // Read initial filter state from URL params (only on mount)
+  const initialTableSelection = useMemo((): TableFieldSelection => {
+    const fields = searchParams.get('fields')
+    if (!fields) {
+      return { selectedFieldIds: null, selectedTableIds: new Set() }
+    }
+    const ids = new Set(fields.split(',').filter(Boolean))
+    return buildTableSelectionFromFieldIds(ids, tableMappings)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
+  const [statusFilter, setStatusFilter] = useState<StatusFilter>(
+    (searchParams.get('status') as StatusFilter) ?? 'all'
+  )
+  const [tableFieldSelection, setTableFieldSelection] =
+    useState<TableFieldSelection>(initialTableSelection)
+  const [mappingTypeFilter, setMappingTypeFilter] = useState<
+    'all' | 'one_to_one' | 'many_to_one' | 'one_to_many' | 'value_assignment'
+  >((searchParams.get('type') as 'all' | 'one_to_one' | 'many_to_one' | 'one_to_many' | 'value_assignment') ?? 'all')
+  const [fieldSearchQuery, setFieldSearchQuery] = useState(
+    searchParams.get('q') ?? ''
+  )
+  const [aiReasoningOpen, setAiReasoningOpen] = useState(false)
+  const [rejectConfirmOpen, setRejectConfirmOpen] = useState(false)
   const [expandedIds, setExpandedIds] = useState<Set<string>>(new Set())
   const [selectedFM, setSelectedFM] = useState<RichFieldMapping | null>(null)
   const [displayedFM, setDisplayedFM] = useState<RichFieldMapping | null>(null)
@@ -2212,10 +2370,15 @@ export default function MappingContent({ projectId, projectName, initialData, pr
   const [hcConfirmCount, setHcConfirmCount] = useState<number | null>(null)
 
   const [toast, setToast] = useState<ToastState | null>(null)
+  const isInlineEditingRef = useRef(false)
 
   // Panel open/close animation: keep the DOM node alive for 200ms on close so the width transition plays out
   useEffect(() => {
     if (selectedFM) {
+      if (isInlineEditingRef.current) {
+        isInlineEditingRef.current = false
+        return
+      }
       setDisplayedFM(selectedFM)
       requestAnimationFrame(() => setIsPanelVisible(true))
     } else {
@@ -2285,51 +2448,258 @@ export default function MappingContent({ projectId, projectName, initialData, pr
     return [...sourceCounts.values()].filter((c) => c > 1).reduce((sum, c) => sum + c, 0)
   }, [allFMs])
 
+  const oneToOneCount = useMemo(() => {
+    // Source field IDs that appear in 2+ primary non-rejected
+    // mappings (these are one-to-many sources — exclude them)
+    const multiSourceIds = new Set<string>()
+    const sourceCounts = new Map<string, number>()
+    for (const fm of allFMs.filter(
+      (f) =>
+        !f.is_contributing &&
+        f.status !== 'rejected' &&
+        f.source_field_id
+    )) {
+      const count =
+        (sourceCounts.get(fm.source_field_id!) ?? 0) + 1
+      sourceCounts.set(fm.source_field_id!, count)
+      if (count > 1) multiSourceIds.add(fm.source_field_id!)
+    }
+
+    // Target field IDs that have contributing rows
+    // (these are many-to-one targets — exclude them)
+    const manyToOneTargetIds = new Set<string>(
+      allFMs
+        .filter(
+          (f) => f.is_contributing && f.status !== 'rejected'
+        )
+        .map((f) => f.target_field_id)
+    )
+
+    return allFMs.filter(
+      (fm) =>
+        !fm.is_contributing &&
+        fm.status !== 'rejected' &&
+        fm.source_field_id !== null &&
+        !multiSourceIds.has(fm.source_field_id!) &&
+        !manyToOneTargetIds.has(fm.target_field_id)
+    ).length
+  }, [allFMs])
+
+  const valueAssignmentCount = useMemo(
+    () => allFMs.filter((fm) => fm.source_field_id === null && fm.status !== 'rejected').length,
+    [allFMs]
+  )
+
   // High-confidence count for bulk approve button
   const hcFMCount = useMemo(() => allFMs.filter((fm) => fm.status === 'needs_review' && (fm.confidence ?? 0) >= 85).length, [allFMs])
 
+  // Sync filter state to URL (uses replace — does not add history entry)
+  const syncFiltersToUrl = useCallback(
+    (
+      tableSelection: TableFieldSelection,
+      status: StatusFilter,
+      type: typeof mappingTypeFilter,
+      search: string
+    ) => {
+      const params = new URLSearchParams()
+      if (
+        tableSelection.selectedFieldIds &&
+        tableSelection.selectedFieldIds.size > 0
+      ) {
+        params.set(
+          'fields',
+          [...tableSelection.selectedFieldIds].join(',')
+        )
+      }
+      if (status !== 'all') params.set('status', status)
+      if (type !== 'all') params.set('type', type)
+      if (search.trim()) params.set('q', search)
+      const qs = params.toString()
+      router.replace(
+        `/app/projects/${projectId}/mapping${qs ? `?${qs}` : ''}`
+      )
+    },
+    [router, projectId]
+  )
+
+  const handleTableSelectionChange = useCallback(
+    (next: TableFieldSelection) => {
+      setTableFieldSelection(next)
+      syncFiltersToUrl(next, statusFilter, mappingTypeFilter, fieldSearchQuery)
+    },
+    [statusFilter, mappingTypeFilter, fieldSearchQuery, syncFiltersToUrl]
+  )
+
+  const handleStatusChange = useCallback(
+    (next: StatusFilter) => {
+      setStatusFilter(next)
+      syncFiltersToUrl(tableFieldSelection, next, mappingTypeFilter, fieldSearchQuery)
+    },
+    [tableFieldSelection, mappingTypeFilter, fieldSearchQuery, syncFiltersToUrl]
+  )
+
+  const handleTypeChange = useCallback(
+    (next: typeof mappingTypeFilter) => {
+      setMappingTypeFilter(next)
+      syncFiltersToUrl(tableFieldSelection, statusFilter, next, fieldSearchQuery)
+    },
+    [tableFieldSelection, statusFilter, fieldSearchQuery, syncFiltersToUrl]
+  )
+
+  const handleSearchChange = useCallback(
+    (next: string) => {
+      setFieldSearchQuery(next)
+      syncFiltersToUrl(tableFieldSelection, statusFilter, mappingTypeFilter, next)
+    },
+    [tableFieldSelection, statusFilter, mappingTypeFilter, syncFiltersToUrl]
+  )
+
+  // Shape tableMappings into FilterTable[] for TableFieldFilter
+  const filterTables = useMemo(
+    (): FilterTable[] =>
+      tableMappings.map((tm) => ({
+        id: tm.id,
+        label: `${tm.sourceTable?.name ?? '?'} → ${tm.targetTable?.name ?? '?'}`,
+        fields: tm.fieldMappings
+          .filter((fm) => !fm.is_contributing)
+          .map((fm) => ({
+            id: fm.id,
+            label: `${fm.sourceField?.name ?? 'unmapped'} → ${fm.targetField?.name ?? '?'}`,
+          })),
+      })),
+    [tableMappings]
+  )
+
+  const hasActiveFilters = useMemo(
+    () =>
+      (tableFieldSelection.selectedFieldIds !== null &&
+        tableFieldSelection.selectedFieldIds.size > 0) ||
+      statusFilter !== 'all' ||
+      mappingTypeFilter !== 'all' ||
+      fieldSearchQuery.trim() !== '',
+    [tableFieldSelection, statusFilter, mappingTypeFilter, fieldSearchQuery]
+  )
+
+  const resetFilters = useCallback(() => {
+    const empty: TableFieldSelection = {
+      selectedFieldIds: null,
+      selectedTableIds: new Set(),
+    }
+    setTableFieldSelection(empty)
+    setStatusFilter('all')
+    setMappingTypeFilter('all')
+    setFieldSearchQuery('')
+    router.replace(`/app/projects/${projectId}/mapping`)
+  }, [router, projectId])
+
   const filteredMappings = useMemo(() => {
-    switch (activeFilter) {
+    let result = tableMappings
+
+    // ── Table / field multi-selection filter
+    if (
+      tableFieldSelection.selectedFieldIds !== null &&
+      tableFieldSelection.selectedFieldIds.size > 0
+    ) {
+      result = result
+        .map((tm) => ({
+          ...tm,
+          fieldMappings: tm.fieldMappings.filter((fm) =>
+            tableFieldSelection.selectedFieldIds!.has(fm.id)
+          ),
+        }))
+        .filter(
+          (tm) =>
+            tm.fieldMappings.length > 0 ||
+            // Keep table visible if any of its fields are selected
+            // even if all are filtered out by other conditions
+            tableFieldSelection.selectedTableIds.has(tm.id)
+        )
+    }
+
+    // ── Status filter
+    switch (statusFilter) {
       case 'needs_review': {
         const activeSrcIds = new Set(allFMs.filter((fm) => fm.status !== 'rejected' && fm.source_field_id).map((fm) => fm.source_field_id as string))
-        // Value assignments (source_field_id = null) do not count as covering a target field
         const activeTgtIds = new Set(allFMs.filter((fm) => fm.status !== 'rejected' && fm.source_field_id !== null).map((fm) => fm.target_field_id))
-        return tableMappings
-          .filter((tm) => {
-            const hasNeedsReview = tm.fieldMappings.some((fm) => !fm.is_contributing && fm.status === 'needs_review')
-            if (hasNeedsReview) return true
-            const srcFields = allFieldsByTable[tm.source_table_id] ?? []
-            const tgtFields = allFieldsByTable[tm.target_table_id] ?? []
-            const hasUnackedSrc = srcFields.some((f) => !activeSrcIds.has(f.id) && !acknowledgedIds.has(f.id))
-            const hasUnackedTgt = tgtFields.some((f) => !activeTgtIds.has(f.id) && !acknowledgedIds.has(f.id))
-            return hasUnackedSrc || hasUnackedTgt
-          })
+        result = result.filter((tm) => {
+          const hasNeedsReview = tm.fieldMappings.some((fm) => !fm.is_contributing && fm.status === 'needs_review')
+          if (hasNeedsReview) return true
+          const srcFields = allFieldsByTable[tm.source_table_id] ?? []
+          const tgtFields = allFieldsByTable[tm.target_table_id] ?? []
+          const hasUnackedSrc = srcFields.some((f) => !activeSrcIds.has(f.id) && !acknowledgedIds.has(f.id))
+          const hasUnackedTgt = tgtFields.some((f) => !activeTgtIds.has(f.id) && !acknowledgedIds.has(f.id))
+          return hasUnackedSrc || hasUnackedTgt
+        })
+        break
       }
       case 'approved':
-        return tableMappings
+        result = result
           .map((tm) => ({
             ...tm,
             fieldMappings: tm.fieldMappings.filter((fm) => !fm.is_contributing && fm.status === 'approved'),
           }))
           .filter((tm) => tm.fieldMappings.length > 0)
-      case 'all':
-        return tableMappings
+        break
       case 'unmapped': {
-        return tableMappings
-          .filter((tm) => {
-            const activeSrcIds = new Set(tm.fieldMappings.filter((fm) => fm.status !== 'rejected' && fm.source_field_id).map((fm) => fm.source_field_id as string))
-            // Value assignments (source_field_id = null) do not count as covering a target field
-            const activeTgtIds = new Set(tm.fieldMappings.filter((fm) => fm.status !== 'rejected' && fm.source_field_id !== null).map((fm) => fm.target_field_id))
-            const allSrc = allFieldsByTable[tm.source_table_id] ?? []
-            const allTgt = allFieldsByTable[tm.target_table_id] ?? []
-            return allSrc.some((f) => !activeSrcIds.has(f.id)) || allTgt.some((f) => !activeTgtIds.has(f.id))
-          })
+        result = result.filter((tm) => {
+          const activeSrcIds = new Set(tm.fieldMappings.filter((fm) => fm.status !== 'rejected' && fm.source_field_id).map((fm) => fm.source_field_id as string))
+          const activeTgtIds = new Set(tm.fieldMappings.filter((fm) => fm.status !== 'rejected' && fm.source_field_id !== null).map((fm) => fm.target_field_id))
+          const allSrc = allFieldsByTable[tm.source_table_id] ?? []
+          const allTgt = allFieldsByTable[tm.target_table_id] ?? []
+          return allSrc.some((f) => !activeSrcIds.has(f.id)) || allTgt.some((f) => !activeTgtIds.has(f.id))
+        })
+        break
+      }
+      default:
+        break
+    }
+
+    // ── Mapping type filter
+    switch (mappingTypeFilter) {
+      case 'one_to_one': {
+        const sourceCounts = new Map<string, number>()
+        for (const fm of allFMs.filter(
+          (f) =>
+            !f.is_contributing &&
+            f.status !== 'rejected' &&
+            f.source_field_id
+        )) {
+          sourceCounts.set(
+            fm.source_field_id!,
+            (sourceCounts.get(fm.source_field_id!) ?? 0) + 1
+          )
+        }
+        const multiSourceIds = new Set(
+          [...sourceCounts.entries()]
+            .filter(([, c]) => c > 1)
+            .map(([id]) => id)
+        )
+        const manyToOneTargetIds = new Set<string>(
+          allFMs
+            .filter(
+              (f) => f.is_contributing && f.status !== 'rejected'
+            )
+            .map((f) => f.target_field_id)
+        )
+        result = result
+          .map((tm) => ({
+            ...tm,
+            fieldMappings: tm.fieldMappings.filter(
+              (fm) =>
+                !fm.is_contributing &&
+                fm.status !== 'rejected' &&
+                fm.source_field_id !== null &&
+                !multiSourceIds.has(fm.source_field_id!) &&
+                !manyToOneTargetIds.has(fm.target_field_id)
+            ),
+          }))
+          .filter((tm) => tm.fieldMappings.length > 0)
+        break
       }
       case 'many_to_one':
-        return tableMappings
+        result = result
           .map((tm) => {
             const filtered = tm.fieldMappings.filter((fm) => {
-              // Include primary rows that have contributing rows, plus their contributing rows
               if (fm.is_contributing) {
                 return tm.fieldMappings.some(
                   (f) => f.target_field_id === fm.target_field_id && !f.is_contributing && f.id !== fm.id && f.status !== 'rejected'
@@ -2342,26 +2712,70 @@ export default function MappingContent({ projectId, projectName, initialData, pr
             return { ...tm, fieldMappings: filtered }
           })
           .filter((tm) => tm.fieldMappings.length > 0)
-      case 'one_to_many':
-        return tableMappings
-          .map((tm) => {
-            const filtered = tm.fieldMappings.filter((fm) => {
-              if (fm.is_contributing || !fm.source_field_id) return false
-              const sameSourceCount = tm.fieldMappings.filter(
-                (f) => f.source_field_id === fm.source_field_id && !f.is_contributing && f.status !== 'rejected'
-              ).length
-              return sameSourceCount > 1
-            })
-            return { ...tm, fieldMappings: filtered }
-          })
+        break
+      case 'one_to_many': {
+        const srcCounts = new Map<string, number>()
+        for (const fm of allFMs.filter((f) => !f.is_contributing && f.status !== 'rejected' && f.source_field_id)) {
+          srcCounts.set(fm.source_field_id!, (srcCounts.get(fm.source_field_id!) ?? 0) + 1)
+        }
+        const multiSrcIds = new Set(
+          [...srcCounts.entries()].filter(([, c]) => c > 1).map(([id]) => id)
+        )
+        result = result
+          .map((tm) => ({
+            ...tm,
+            fieldMappings: tm.fieldMappings.filter(
+              (fm) => fm.source_field_id && multiSrcIds.has(fm.source_field_id)
+            ),
+          }))
           .filter((tm) => tm.fieldMappings.length > 0)
+        break
+      }
+      case 'value_assignment':
+        result = result
+          .map((tm) => ({
+            ...tm,
+            fieldMappings: tm.fieldMappings.filter(
+              (fm) => fm.source_field_id === null && fm.status !== 'rejected'
+            ),
+          }))
+          .filter((tm) => tm.fieldMappings.length > 0)
+        break
       default:
-        return []
+        break
     }
-  }, [tableMappings, activeFilter, allFieldsByTable])
+
+    // ── Text search
+    if (fieldSearchQuery.trim()) {
+      const q = fieldSearchQuery.toLowerCase().trim()
+      result = result.filter((tm) =>
+        tm.sourceTable?.name.toLowerCase().includes(q) ||
+        tm.targetTable?.name.toLowerCase().includes(q) ||
+        tm.fieldMappings.some(
+          (fm) =>
+            fm.sourceField?.name.toLowerCase().includes(q) ||
+            fm.targetField?.name.toLowerCase().includes(q)
+        )
+      )
+    }
+
+    return result
+  }, [tableMappings, tableFieldSelection, statusFilter, mappingTypeFilter, fieldSearchQuery, allFMs, allFieldsByTable, acknowledgedIds])
 
   const sourceDatasetName = tableMappings[0]?.sourceTable?.dataset?.name ?? ''
   const targetDatasetName = tableMappings[0]?.targetTable?.dataset?.name ?? ''
+
+  const tableNameById = useMemo(() => {
+    const map = new Map<string, string>()
+    for (const t of data?.allSourceTables ?? []) map.set(t.id, t.name)
+    for (const t of data?.allTargetTables ?? []) map.set(t.id, t.name)
+    return map
+  }, [data?.allSourceTables, data?.allTargetTables])
+
+  const displayedTM = useMemo(
+    () => tableMappings.find((tm) => tm.id === displayedFM?.table_mapping_id) ?? null,
+    [tableMappings, displayedFM?.table_mapping_id]
+  )
 
   const refreshData = useCallback(() => {
     startTransition(async () => {
@@ -2497,7 +2911,15 @@ export default function MappingContent({ projectId, projectName, initialData, pr
         if (messages.length > 1) showToast(messages.join(' '), 'success')
       }
       refreshData()
+      isInlineEditingRef.current = false
     })
+  }
+
+  function handleInlineEditTarget(fmId: string, newTargetFieldId: string) {
+    isInlineEditingRef.current = true
+    setSelectedFM(null)
+    setIsPanelVisible(false)
+    handleEditFM(fmId, { target_field_id: newTargetFieldId })
   }
 
   // Check for transforms and target-field conflicts before applying a source/target change.
@@ -2698,7 +3120,7 @@ export default function MappingContent({ projectId, projectName, initialData, pr
   }
 
   return (
-    <div className="flex-1 bg-gray-50 flex flex-col min-h-0">
+    <div className="flex-1 bg-gray-50 flex flex-col min-h-0 overflow-hidden">
       {toast && (
         <div
           className={`fixed bottom-6 right-6 z-50 px-4 py-3 rounded-lg shadow-lg text-sm font-medium ${
@@ -2709,51 +3131,21 @@ export default function MappingContent({ projectId, projectName, initialData, pr
         </div>
       )}
       <PageHeader projectName={projectName} title="Mapping" subtitle="Review and approve field mappings" projectInfo={projectInfo} />
-      <div className="flex-1 overflow-auto">
-      <div className="px-6 py-6 space-y-6">
-      {/* Progress bar */}
-      <MappingProgress
-        tableMappings={tableMappings}
-        allFieldsByTable={allFieldsByTable}
-        acknowledgments={acknowledgments}
+
+      {/* Stat pills — flush toolbar */}
+      <MappingStatPills
+        primaryFMCount={primaryFMCount}
+        approvedFMCount={approvedFMCount}
+        needsReviewCount={needsReviewCount}
+        unmappedCount={unmappedCount}
+        sourceDatasetName={sourceDatasetName}
+        targetDatasetName={targetDatasetName}
       />
 
-      {/* Source ↔ Target header */}
-      {(sourceDatasetName || targetDatasetName) && (
-        <div className="flex items-center gap-3">
-          <span className="text-sm font-medium text-settle-slate-700 px-0">{sourceDatasetName}</span>
-          <div className="flex items-center gap-0 text-gray-400">
-            <div className="w-10 border-t-2 border-dashed border-gray-300" />
-            <ArrowRight className="w-4 h-4 text-gray-400" />
-          </div>
-          <span className="text-sm font-medium text-settle-slate-700 px-0">{targetDatasetName}</span>
-        </div>
-      )}
-
-      {/* Filter tabs + bulk approve */}
-      <div className="flex items-center justify-between">
-        <div className="flex items-center gap-1 p-1 bg-gray-100 rounded-xl">
-          {([
-            { key: 'all', label: 'All', count: primaryFMCount, cc: 'bg-gray-200 text-gray-600' },
-            { key: 'needs_review', label: 'Needs Review', count: needsReviewCount, cc: 'bg-amber-100 text-amber-700' },
-            { key: 'approved', label: 'Approved', count: approvedFMCount, cc: 'bg-green-100 text-green-700' },
-            { key: 'unmapped', label: 'Unmapped', count: unmappedCount, cc: 'bg-gray-200 text-gray-600' },
-            ...(manyToOneCount > 0 ? [{ key: 'many_to_one' as const, label: 'Many→One', count: manyToOneCount, cc: 'bg-blue-100 text-blue-700' }] : []),
-            ...(oneToManyCount > 0 ? [{ key: 'one_to_many' as const, label: 'One→Many', count: oneToManyCount, cc: 'bg-purple-100 text-purple-700' }] : []),
-          ] as const).map((tab) => (
-            <button
-              key={tab.key}
-              onClick={() => setActiveFilter(tab.key)}
-              className={`flex items-center gap-1.5 px-3 py-1.5 text-sm font-medium rounded-lg transition-colors cursor-pointer ${activeFilter === tab.key ? 'bg-white text-gray-900 shadow-sm' : 'text-gray-600 hover:text-gray-900'}`}
-            >
-              {tab.label}
-              <span className={`text-xs px-1.5 py-0.5 rounded-full ${tab.cc}`}>{tab.count}</span>
-            </button>
-          ))}
-        </div>
-
-        {hcFMCount > 0 && (
-          hcConfirmCount !== null ? (
+      {/* Bulk approve action — sits above the filter card (when applicable) */}
+      {hcFMCount > 0 && (
+        <div className="px-5 pt-3 flex justify-end flex-shrink-0">
+          {hcConfirmCount !== null ? (
             <div className="flex items-center gap-2 px-3 py-2 bg-green-50 border border-green-200 rounded-lg">
               <span className="text-xs text-green-800">Approve {hcConfirmCount} mapping{hcConfirmCount !== 1 ? 's' : ''}?</span>
               <button onClick={handleApproveHighConf} disabled={approvingHC || !canEdit} className="text-xs font-medium text-white bg-green-600 px-2.5 py-1 rounded hover:bg-green-700 disabled:opacity-40">Confirm</button>
@@ -2770,16 +3162,115 @@ export default function MappingContent({ projectId, projectName, initialData, pr
                 Approve All High Confidence ({hcFMCount})
               </button>
             </RoleTooltip>
-          )
-        )}
+          )}
+        </div>
+      )}
+
+      {/* Filter bar — flush border-b strip */}
+      <div className="bg-white border-b border-settle-slate-200 px-5 py-2.5 flex-shrink-0">
+        <div className="flex items-center gap-3 min-w-0">
+
+            {/* Table + field filter */}
+            <div className="flex items-center gap-2">
+              <label className="text-xs font-medium text-settle-slate-500 whitespace-nowrap">Tables</label>
+              <TableFieldFilter
+                tables={filterTables}
+                value={tableFieldSelection}
+                onChange={handleTableSelectionChange}
+                allLabel="All Tables"
+              />
+            </div>
+
+            <div className="w-px h-4 bg-gray-200 flex-shrink-0" />
+
+            {/* Status filter */}
+            <div className="flex items-center gap-2">
+              <label className="text-xs font-medium text-settle-slate-500 whitespace-nowrap">Status</label>
+              <Select
+                value={statusFilter}
+                onValueChange={(val) => handleStatusChange(val as StatusFilter)}
+              >
+                <SelectTrigger className="h-8 text-xs w-[130px]">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">All</SelectItem>
+                  <SelectItem value="needs_review">Needs Review</SelectItem>
+                  <SelectItem value="approved">Approved</SelectItem>
+                  <SelectItem value="unmapped">Unmapped</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+
+            <div className="w-px h-4 bg-gray-200 flex-shrink-0" />
+
+            {/* Mapping type filter */}
+            <div className="flex items-center gap-2">
+              <label className="text-xs font-medium text-settle-slate-500 whitespace-nowrap">Type</label>
+              <Select
+                value={mappingTypeFilter}
+                onValueChange={(val) => handleTypeChange(val as typeof mappingTypeFilter)}
+              >
+                <SelectTrigger className="h-8 text-xs w-[150px]">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">All Types</SelectItem>
+                  {oneToOneCount > 0 && (
+                    <SelectItem value="one_to_one">One→One ({oneToOneCount})</SelectItem>
+                  )}
+                  {manyToOneCount > 0 && (
+                    <SelectItem value="many_to_one">Many→One ({manyToOneCount})</SelectItem>
+                  )}
+                  {oneToManyCount > 0 && (
+                    <SelectItem value="one_to_many">One→Many ({oneToManyCount})</SelectItem>
+                  )}
+                  {valueAssignmentCount > 0 && (
+                    <SelectItem value="value_assignment">Value Assignment</SelectItem>
+                  )}
+                </SelectContent>
+              </Select>
+            </div>
+
+            <div className="w-px h-4 bg-gray-200 flex-shrink-0" />
+
+            {/* Search */}
+            <input
+              type="text"
+              placeholder="Search fields…"
+              value={fieldSearchQuery}
+              onChange={(e) => handleSearchChange(e.target.value)}
+              className="h-8 text-xs border border-settle-slate-200 rounded-md px-3 w-44 focus:outline-none focus:ring-1 focus:ring-settle-blue-500 text-settle-slate-700 placeholder:text-settle-slate-400"
+            />
+
+            {/* Right: count + reset */}
+            <div className="ml-auto flex items-center gap-3 flex-shrink-0">
+              <span className="text-xs text-settle-slate-400 whitespace-nowrap">
+                <span className="font-medium text-settle-slate-600">{filteredMappings.length}</span>
+                {' '}
+                {filteredMappings.length === 1 ? 'table' : 'tables'}
+              </span>
+              {hasActiveFilters && (
+                <button
+                  onClick={resetFilters}
+                  className="text-xs text-blue-600 hover:text-blue-800 hover:underline whitespace-nowrap"
+                >
+                  Reset filters
+                </button>
+              )}
+            </div>
+
+          </div>
       </div>
 
-      {/* Main content */}
-      <div className={`flex items-start transition-all duration-200 ease-in-out ${isPanelVisible ? 'gap-5' : 'gap-0'}`}>
+      {/* Scrollable content */}
+      <div className="flex-1 overflow-auto">
+      <div className="px-5 py-4 space-y-3">
+      <div className="flex items-start">
         <div className="flex-1 space-y-3 min-w-0">
           {filteredMappings.length === 0 ? (
             <div className="text-center py-12 text-sm text-gray-400 border border-dashed border-gray-200 rounded-xl">
-              {activeFilter === 'needs_review' ? 'All mappings reviewed and all fields addressed.' : activeFilter === 'approved' ? 'No approved mappings yet.' : activeFilter === 'unmapped' ? 'All fields are mapped or acknowledged.' : activeFilter === 'many_to_one' ? 'No many-to-one mappings found.' : activeFilter === 'one_to_many' ? 'No one-to-many mappings found.' : 'No mappings found.'}
+              {statusFilter === 'needs_review' ? 'All mappings reviewed and all fields addressed.' : statusFilter === 'approved' ? 'No approved mappings yet.' : statusFilter === 'unmapped' ? 'All fields are mapped or acknowledged.' : mappingTypeFilter === 'many_to_one' ? 'No many-to-one mappings found.' : mappingTypeFilter === 'one_to_many' ? 'No one-to-many mappings found.' : mappingTypeFilter === 'value_assignment' ? 'No value assignments found.' : 'No mappings found.'}
             </div>
           ) : (
             filteredMappings.map((tm) => (
@@ -2805,43 +3296,64 @@ export default function MappingContent({ projectId, projectName, initialData, pr
                 onSuggestRemaining={() => handleSuggestRemaining(tm.id)}
                 regeneratingThis={regeneratingTMId === tm.id}
                 onRegenerate={() => setRegenerateConfirmTarget(tm)}
-                showContributingRows={activeFilter === 'many_to_one'}
-                showInlineUnmapped={activeFilter === 'all' || activeFilter === 'unmapped' || activeFilter === 'needs_review'}
-                hideMappedRows={activeFilter === 'unmapped'}
-                filterVisibleStatus={activeFilter === 'needs_review' ? 'needs_review' : undefined}
+                showContributingRows={mappingTypeFilter === 'many_to_one'}
+                showInlineUnmapped={statusFilter === 'all' || statusFilter === 'unmapped' || statusFilter === 'needs_review'}
+                hideMappedRows={statusFilter === 'unmapped'}
+                filterVisibleStatus={statusFilter === 'needs_review' ? 'needs_review' : undefined}
                 acknowledgments={acknowledgments}
                 projectId={projectId}
                 onAcknowledgmentChanged={refreshData}
                 canEdit={canEdit}
                 selectedFMId={selectedFM?.id ?? null}
+                tableNameById={tableNameById}
+                onEditFieldTarget={handleInlineEditTarget}
               />
             ))
           )}
         </div>
 
-        {/* Outer: stretches to full flex row height — gives the sticky inner panel travel room */}
-        <div
-          className="self-stretch flex-shrink-0 transition-[width,opacity] duration-200 ease-in-out"
-          style={{ width: isPanelVisible ? '340px' : '0px', opacity: isPanelVisible ? 1 : 0 }}
-        >
-          {/* Inner: sticky + clips content. h-fit inside tall parent = travel room for sticky */}
-          <div className="sticky top-6 overflow-hidden">
-            {displayedFM && (
-              <MappingDetailsPanel
-                key={displayedFM.id}
-                fm={displayedFM}
-                parentTM={tableMappings.find((tm) => tm.id === displayedFM.table_mapping_id)}
-                allFieldsByTable={allFieldsByTable}
-                onClose={() => setSelectedFM(null)}
-                onApprove={handleApprove}
-                onReject={handleReject}
-                onDelete={handleDeleteFM}
-                onEdit={handleEditFM}
-              />
-            )}
-          </div>
-        </div>
       </div>
+
+      <MappingDetailsPanel
+        fm={displayedFM}
+        isOpen={isPanelVisible}
+        onClose={() => {
+          setIsPanelVisible(false)
+          setRejectConfirmOpen(false)
+          setTimeout(() => setSelectedFM(null), 200)
+        }}
+        onApprove={() => {
+          if (displayedFM) handleApprove(displayedFM.id)
+        }}
+        onReject={() => {
+          if (displayedFM) handleReject(displayedFM.id)
+        }}
+        onChangeSource={(fieldId) => {
+          if (displayedFM) handleEditFM(displayedFM.id, { source_field_id: fieldId })
+        }}
+        onChangeTarget={(fieldId) => {
+          if (displayedFM) handleEditFM(displayedFM.id, { target_field_id: fieldId })
+        }}
+        onRemove={() => {
+          if (displayedFM) handleDeleteFM(displayedFM.id)
+        }}
+        projectId={projectId}
+        tableMappingId={displayedFM?.table_mapping_id ?? ''}
+        allFieldsByTable={allFieldsByTable}
+        canEdit={canEdit}
+        aiReasoningOpen={aiReasoningOpen}
+        onToggleReasoning={() => setAiReasoningOpen((v) => !v)}
+        rejectConfirmOpen={rejectConfirmOpen}
+        onRequestReject={() => setRejectConfirmOpen(true)}
+        onCloseRejectConfirm={() => setRejectConfirmOpen(false)}
+        onRemap={() => {
+          setRejectConfirmOpen(false)
+        }}
+        sourceTableFields={allFieldsByTable[displayedTM?.source_table_id ?? ''] ?? []}
+        sourceTableName={tableNameById.get(displayedTM?.source_table_id ?? '') ?? ''}
+        targetTableFields={allFieldsByTable[displayedTM?.target_table_id ?? ''] ?? []}
+        targetTableName={tableNameById.get(displayedTM?.target_table_id ?? '') ?? ''}
+      />
 
       {/* Bottom bar */}
       <div className="flex items-center justify-between pt-2 border-t border-gray-100">

@@ -5,7 +5,6 @@ import { useRouter } from 'next/navigation'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Upload, CheckCircle2, AlertCircle, RefreshCw } from '@/components/icons'
 import { Database, Loader2, AlertTriangle, XCircle } from 'lucide-react'
 import { testConnection, listRemoteTables, listMssqlSchemas, listTablesForConnection, getConnectionForDataset, disconnectDatabase, resyncTables } from '@/lib/actions/db-connector'
@@ -763,22 +762,11 @@ export function IngestionCard({ type, title, projectId, initialDatasets, initial
   const showDDLSection = method === 'ddl' && selectedDatasetId
 
   return (
-    <Card className="border-gray-200">
-      <CardHeader>
-        <div className="flex items-center justify-between">
-          <CardTitle className="text-base">{title}</CardTitle>
-          {type === 'source' && (
-            <span className="text-xs text-gray-500 bg-gray-100 px-2 py-1 rounded">
-              Read-only access
-            </span>
-          )}
-        </div>
-      </CardHeader>
-      <CardContent className="space-y-5">
+    <div className="space-y-5">
 
         {/* ── Method Selector ───────────────────────────────────────────── */}
         <div className="space-y-2">
-          <Label htmlFor={`${type}-method`}>Data ingestion method</Label>
+          <Label htmlFor={`${type}-method`} className="text-[11px] font-medium text-settle-slate-500">Data ingestion method</Label>
           <Select
             value={method ?? ''}
             onValueChange={(val) => handleMethodChange(val === '' ? null : (val as IngestMethod))}
@@ -853,7 +841,7 @@ export function IngestionCard({ type, title, projectId, initialDatasets, initial
                   {/* Host + Port */}
                   <div className="grid grid-cols-[1fr_100px] gap-3">
                     <div className="space-y-1">
-                      <Label>Host</Label>
+                      <Label className="text-[11px] font-medium text-settle-slate-500">Host</Label>
                       <Input
                         placeholder="db.example.com"
                         value={dbHost}
@@ -862,7 +850,7 @@ export function IngestionCard({ type, title, projectId, initialDatasets, initial
                       />
                     </div>
                     <div className="space-y-1">
-                      <Label>Port</Label>
+                      <Label className="text-[11px] font-medium text-settle-slate-500">Port</Label>
                       <Input
                         type="number"
                         value={dbPort}
@@ -874,7 +862,7 @@ export function IngestionCard({ type, title, projectId, initialDatasets, initial
 
                   {/* Database name */}
                   <div className="space-y-1">
-                    <Label>Database Name</Label>
+                    <Label className="text-[11px] font-medium text-settle-slate-500">Database Name</Label>
                     <Input
                       placeholder="my_database"
                       value={dbName}
@@ -886,7 +874,7 @@ export function IngestionCard({ type, title, projectId, initialDatasets, initial
                   {/* Username + Password */}
                   <div className="grid grid-cols-2 gap-3">
                     <div className="space-y-1">
-                      <Label>Username</Label>
+                      <Label className="text-[11px] font-medium text-settle-slate-500">Username</Label>
                       <Input
                         placeholder="readonly_user"
                         value={dbUser}
@@ -895,7 +883,7 @@ export function IngestionCard({ type, title, projectId, initialDatasets, initial
                       />
                     </div>
                     <div className="space-y-1">
-                      <Label>Password</Label>
+                      <Label className="text-[11px] font-medium text-settle-slate-500">Password</Label>
                       <Input
                         type="password"
                         placeholder="••••••••"
@@ -909,7 +897,7 @@ export function IngestionCard({ type, title, projectId, initialDatasets, initial
                   {/* SSL Mode (PostgreSQL) / Encryption options (MS SQL) */}
                   {dbType === 'mssql' ? (
                     <div className="space-y-2">
-                      <Label>Encryption</Label>
+                      <Label className="text-[11px] font-medium text-settle-slate-500">Encryption</Label>
                       <div className="flex flex-col gap-2">
                         <label className="flex items-center gap-2 cursor-pointer">
                           <input
@@ -937,7 +925,7 @@ export function IngestionCard({ type, title, projectId, initialDatasets, initial
                     </div>
                   ) : (
                     <div className="space-y-1">
-                      <Label>SSL Mode</Label>
+                      <Label className="text-[11px] font-medium text-settle-slate-500">SSL Mode</Label>
                       <Select
                         value={dbSslMode}
                         onValueChange={setDbSslMode}
@@ -998,7 +986,7 @@ export function IngestionCard({ type, title, projectId, initialDatasets, initial
                 {/* MS SQL schema picker — shown after successful connection when multiple schemas exist */}
                 {dbType === 'mssql' && connectionStatus === 'success' && schemas.length > 1 && (
                   <div className="space-y-1">
-                    <Label>Schema</Label>
+                    <Label className="text-[11px] font-medium text-settle-slate-500">Schema</Label>
                     <Select value={dbSchema} onValueChange={handleSchemaChange}>
                       <SelectTrigger className="h-9 text-sm w-full">
                         <SelectValue />
@@ -1348,26 +1336,26 @@ export function IngestionCard({ type, title, projectId, initialDatasets, initial
         {/* ── Shared: Dataset / Schema selector (CSV + DDL) ─────────────── */}
         {(method === 'csv' || method === 'ddl') && (
           <div className="space-y-2">
-            <Label htmlFor={`${type}-dataset`}>Schema</Label>
+            <Label htmlFor={`${type}-dataset`} className="text-[11px] font-medium text-settle-slate-500">Database</Label>
             <Select
               value={selectedDatasetId ?? ''}
               onValueChange={(val) => handleDatasetSelect(val)}
             >
               <SelectTrigger id={`${type}-dataset`} className="h-9 text-sm w-full">
-                <SelectValue placeholder="Select schema" />
+                <SelectValue placeholder="Select database" />
               </SelectTrigger>
               <SelectContent>
                 {datasets.map((d) => (
                   <SelectItem key={d.id} value={d.id}>{d.name}</SelectItem>
                 ))}
-                <SelectItem value="new">+ Add new schema</SelectItem>
+                <SelectItem value="new">+ Add new database</SelectItem>
               </SelectContent>
             </Select>
 
             {showNewDatasetInput && (
               <div className="flex gap-2">
                 <Input
-                  placeholder="Schema name (e.g. SAP_S4HANA)"
+                  placeholder="Database name (e.g. SAP_S4HANA)"
                   value={newDatasetName}
                   onChange={(e) => setNewDatasetName(e.target.value)}
                   onKeyDown={(e) => e.key === 'Enter' && handleSaveNewDataset()}
@@ -1377,7 +1365,7 @@ export function IngestionCard({ type, title, projectId, initialDatasets, initial
                   size="sm"
                   onClick={handleSaveNewDataset}
                   disabled={!newDatasetName.trim() || creatingDataset}
-                  className="bg-[#4F46E5] hover:bg-[#4338CA] text-white"
+                  className="bg-primary hover:bg-primary/90 text-white"
                 >
                   {creatingDataset ? 'Saving…' : 'Save'}
                 </Button>
@@ -1398,7 +1386,7 @@ export function IngestionCard({ type, title, projectId, initialDatasets, initial
           <div className="space-y-5">
             {/* Step 2: Table selector */}
             <div className="space-y-2">
-              <Label htmlFor={`${type}-table`}>Table</Label>
+              <Label htmlFor={`${type}-table`} className="text-[11px] font-medium text-settle-slate-500">Table</Label>
               <Select
                 value={selectedTableId ?? ''}
                 onValueChange={(val) => handleTableSelect(val)}
@@ -1429,7 +1417,7 @@ export function IngestionCard({ type, title, projectId, initialDatasets, initial
                     size="sm"
                     onClick={handleSaveNewTable}
                     disabled={!newTableName.trim()}
-                    className="bg-[#4F46E5] hover:bg-[#4338CA] text-white"
+                    className="bg-primary hover:bg-primary/90 text-white"
                   >
                     Save
                   </Button>
@@ -1496,10 +1484,10 @@ export function IngestionCard({ type, title, projectId, initialDatasets, initial
                     onDrop={handleDrop}
                     onDragOver={handleDragOver}
                     onDragLeave={handleDragLeave}
-                    className={`border-2 border-dashed rounded-lg p-8 text-center transition-colors ${
+                    className={`border-[1.5px] border-dashed rounded-lg p-4 text-center transition-colors ${
                       isDragOver
-                        ? 'border-primary bg-blue-50'
-                        : 'border-gray-300 hover:border-gray-400'
+                        ? 'border-blue-500 bg-blue-50'
+                        : 'border-settle-slate-300 hover:border-settle-slate-400'
                     }`}
                   >
                     {uploadState.status === 'uploading' && (
@@ -1559,16 +1547,16 @@ export function IngestionCard({ type, title, projectId, initialDatasets, initial
 
                     {uploadState.status === 'idle' && (
                       <div className="space-y-3">
-                        <Upload className="w-10 h-10 text-gray-400 mx-auto" />
+                        <Upload className="w-5 h-5 text-settle-slate-400 mx-auto" />
                         <div>
-                          <p className="text-sm font-medium text-gray-700">
+                          <p className="text-xs font-medium text-settle-slate-600">
                             {isDragOver
                               ? 'Drop file here'
                               : tableHasData
                               ? 'Drop CSV to re-upload'
                               : 'Drop CSV here or click to select'}
                           </p>
-                          <p className="text-xs text-gray-400 mt-1">
+                          <p className="text-[10px] text-settle-slate-400 mt-1">
                             One CSV per table · Max 10MB · Up to 100,000 rows
                           </p>
                         </div>
@@ -1637,10 +1625,10 @@ export function IngestionCard({ type, title, projectId, initialDatasets, initial
                 onDrop={handleDDLDrop}
                 onDragOver={(e) => { e.preventDefault(); setDdl((s) => ({ ...s, isDragOver: true })) }}
                 onDragLeave={() => setDdl((s) => ({ ...s, isDragOver: false }))}
-                className={`border-2 border-dashed rounded-lg p-8 text-center transition-colors ${
+                className={`border-[1.5px] border-dashed rounded-lg p-4 text-center transition-colors ${
                   ddl.isDragOver
-                    ? 'border-primary bg-blue-50'
-                    : 'border-gray-300 hover:border-gray-400'
+                    ? 'border-blue-500 bg-blue-50'
+                    : 'border-settle-slate-300 hover:border-settle-slate-400'
                 }`}
               >
                 {ddl.parsing ? (
@@ -1673,17 +1661,17 @@ export function IngestionCard({ type, title, projectId, initialDatasets, initial
                   </div>
                 ) : (
                   <div className="space-y-3">
-                    <Upload className="w-10 h-10 text-gray-400 mx-auto" />
+                    <Upload className="w-5 h-5 text-settle-slate-400 mx-auto" />
                     <div>
-                      <p className="text-sm font-medium text-gray-700">
+                      <p className="text-xs font-medium text-settle-slate-600">
                         {ddl.isDragOver
                           ? 'Drop DDL file here'
                           : 'Drop DDL / SQL file here or click to select'}
                       </p>
-                      <p className="text-xs text-gray-400 mt-1">
+                      <p className="text-[10px] text-settle-slate-400 mt-1">
                         Accepted: .sql, .ddl, .txt · Max 2 MB
                       </p>
-                      <p className="text-xs text-gray-400 mt-0.5">
+                      <p className="text-[10px] text-settle-slate-400 mt-0.5">
                         Supports standard SQL, SQL Server, Oracle, SAP HANA, MySQL, PostgreSQL
                       </p>
                     </div>
@@ -1757,7 +1745,6 @@ export function IngestionCard({ type, title, projectId, initialDatasets, initial
           </div>
         )}
 
-      </CardContent>
-    </Card>
+    </div>
   )
 }

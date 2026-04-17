@@ -2,7 +2,6 @@
 
 import { useState, useCallback } from 'react'
 import { useSearchParams, useRouter, usePathname } from 'next/navigation'
-import { Database, Eye, Search, BarChart } from '@/components/icons'
 import SchemaOverview from './SchemaOverview'
 import DataPreview from './DataPreview'
 import DataProfiling from './DataProfiling'
@@ -11,11 +10,11 @@ import type { ProjectSchema, TableOption } from '@/lib/actions/data-overview'
 
 type TabId = 'schema' | 'preview' | 'query' | 'profiling'
 
-const TABS: { id: TabId; label: string; Icon: React.ComponentType<{ className?: string }> }[] = [
-  { id: 'schema', label: 'Schema Overview', Icon: Database },
-  { id: 'preview', label: 'Data Preview', Icon: Eye },
-  { id: 'query', label: 'Query Data', Icon: Search },
-  { id: 'profiling', label: 'Data Profiling', Icon: BarChart },
+const TABS: { id: TabId; label: string }[] = [
+  { id: 'schema', label: 'Schema Overview' },
+  { id: 'preview', label: 'Data Preview' },
+  { id: 'query', label: 'Query Data' },
+  { id: 'profiling', label: 'Data Profiling' },
 ]
 
 interface DataOverviewContentProps {
@@ -28,6 +27,10 @@ interface DataOverviewContentProps {
   initialQuery?: string
   initialQueryMode?: 'nl' | 'sql'
   initialTableId?: string
+  sourceTableCount: number
+  sourceFieldCount: number
+  targetTableCount: number
+  targetFieldCount: number
 }
 
 export default function DataOverviewContent({
@@ -40,6 +43,10 @@ export default function DataOverviewContent({
   initialQuery,
   initialQueryMode,
   initialTableId,
+  sourceTableCount,
+  sourceFieldCount,
+  targetTableCount,
+  targetFieldCount,
 }: DataOverviewContentProps) {
   const searchParams = useSearchParams()
   const router = useRouter()
@@ -75,22 +82,37 @@ export default function DataOverviewContent({
 
   return (
     <div className="flex flex-col flex-1 min-h-0">
+      {/* Stat pills */}
+      <div className="flex items-center gap-2 px-5 py-2.5 bg-white border-b border-settle-slate-200 flex-shrink-0">
+        <div className="flex items-center gap-2 px-3 py-1.5 rounded-lg border border-settle-slate-200 bg-white">
+          <span className="text-[10px] font-medium text-settle-slate-400 uppercase tracking-wide">Source</span>
+          <span className="text-sm font-medium text-settle-slate-900">
+            {sourceTableCount} tables · {sourceFieldCount} fields
+          </span>
+        </div>
+        <div className="flex items-center gap-2 px-3 py-1.5 rounded-lg border border-settle-slate-200 bg-white">
+          <span className="text-[10px] font-medium text-settle-slate-400 uppercase tracking-wide">Target</span>
+          <span className="text-sm font-medium text-settle-slate-900">
+            {targetTableCount} tables · {targetFieldCount} fields
+          </span>
+        </div>
+      </div>
+
       {/* Tab bar */}
-      <div className="border-b border-gray-200 bg-white pl-2 pr-6">
+      <div className="border-b border-settle-slate-200 bg-white px-5">
         <nav className="flex gap-0" aria-label="Data overview tabs">
-          {TABS.map(({ id, label, Icon }) => {
+          {TABS.map(({ id, label }) => {
             const active = activeTab === id
             return (
               <button
                 key={id}
                 onClick={() => handleTabChange(id)}
-                className={`flex items-center gap-2 px-4 py-3.5 text-sm font-medium border-b-2 transition-colors -mb-px ${
+                className={`px-4 py-3 text-sm font-medium border-b-2 transition-colors -mb-px ${
                   active
                     ? 'border-primary text-primary'
                     : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
                 }`}
               >
-                <Icon className="w-4 h-4" />
                 {label}
               </button>
             )
