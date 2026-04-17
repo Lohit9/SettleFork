@@ -111,7 +111,7 @@ export default function SupportPage() {
                 Email us
               </a>
               <a
-                href="https://calendly.com/settle-ai/migration-scoping-call"
+                href="https://calendly.com/settle-ai/settle-onboarding-support"
                 target="_blank"
                 rel="noopener noreferrer"
                 className="flex items-center gap-2 h-9 px-4 text-sm font-medium bg-primary text-white rounded-lg hover:bg-primary/90 transition-colors"
