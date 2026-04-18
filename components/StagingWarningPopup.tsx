@@ -1,6 +1,7 @@
 'use client'
 
 import type { BlockingIssue } from '@/lib/actions/staging'
+import { AlertTriangle } from '@/components/icons'
 
 interface Props {
   issues: BlockingIssue[]
@@ -53,7 +54,7 @@ export default function StagingWarningPopup({ issues, proceedLabel = 'Stage All 
         <div className="px-6 pt-6 pb-4 border-b border-gray-100">
           <div className="flex items-start gap-3">
             <div className="w-9 h-9 rounded-full bg-amber-100 flex items-center justify-center flex-shrink-0 mt-0.5">
-              <span className="text-amber-600 text-lg leading-none">⚠</span>
+              <AlertTriangle className="w-5 h-5 text-amber-600" />
             </div>
             <div>
               <h2
@@ -109,7 +110,8 @@ export default function StagingWarningPopup({ issues, proceedLabel = 'Stage All 
 
                 {breachesThreshold && pct && (
                   <div className="flex items-start gap-2 bg-red-50 border border-red-200 rounded-lg px-3 py-2 text-xs text-red-700">
-                    <span className="font-medium">⚠ This affects {pct}% of records</span>
+                    <AlertTriangle className="w-4 h-4 text-red-500 shrink-0 mt-0.5" />
+                    <span className="font-medium">This affects {pct}% of records</span>
                     <span className="text-red-500">(above the 2% acceptable threshold).</span>
                     <span>Consider fixing before proceeding.</span>
                   </div>

@@ -5,7 +5,7 @@ import { useRouter } from 'next/navigation'
 import { getFieldProfiles, getFieldQualityIssues } from '@/lib/actions/data-overview'
 import type { TableOption, ProfilingData } from '@/lib/actions/data-overview'
 import { Select, SelectContent, SelectGroup, SelectItem, SelectLabel, SelectTrigger, SelectValue } from '@/components/ui/select'
-import { X } from '@/components/icons'
+import { X, AlertTriangle } from '@/components/icons'
 
 interface DataProfilingProps {
   projectId: string
@@ -317,7 +317,7 @@ export default function DataProfiling({
                                 ) : showFormatFallback ? (
                                   <div className="text-xs">
                                     <div className="flex items-start gap-1.5">
-                                      <span className="mt-0.5 shrink-0 text-amber-500">⚠</span>
+                                      <AlertTriangle className="w-4 h-4 text-amber-500 shrink-0 mt-0.5" />
                                       <div>
                                         <p className="text-gray-700 leading-relaxed">
                                           {f.format_issues_count.toLocaleString()} value{f.format_issues_count !== 1 ? 's' : ''} don&apos;t match the expected format for type <span className="font-mono">{f.data_type}</span>.
@@ -333,15 +333,11 @@ export default function DataProfiling({
                                     {popoverIssues.map((issue) => (
                                       <div key={issue.id} className="text-xs">
                                         <div className="flex items-start gap-1.5">
-                                          <span
-                                            className={`mt-0.5 shrink-0 ${
-                                              issue.severity === 'blocking'
-                                                ? 'text-red-500'
-                                                : 'text-amber-500'
-                                            }`}
-                                          >
-                                            {issue.severity === 'blocking' ? '⛔' : '⚠'}
-                                          </span>
+                                          {issue.severity === 'blocking' ? (
+                                            <AlertTriangle className="w-4 h-4 text-red-500 shrink-0 mt-0.5" />
+                                          ) : (
+                                            <AlertTriangle className="w-4 h-4 text-amber-500 shrink-0 mt-0.5" />
+                                          )}
                                           <div>
                                             <p className="text-gray-700 leading-relaxed">
                                               {issue.description}

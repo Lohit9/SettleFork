@@ -8,7 +8,7 @@ import { generateFixSuggestions } from '@/lib/quality/fix-engine'
 import { addValidationRule, addValidationRuleFromNL, executeCustomRules, deleteValidationRule } from '@/lib/actions/validation-rules'
 import { generateManualFix, applyManualFix, previewManualFix } from '@/lib/actions/manual-fix'
 import { computeReadinessScore } from '@/lib/quality/readiness-score'
-import { ChevronRight, ExternalLink } from '@/components/icons'
+import { ChevronRight, ExternalLink, AlertTriangle } from '@/components/icons'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Button } from '@/components/ui/button'
 import { PageHeader } from '@/components/app/PageHeader'
@@ -3320,7 +3320,7 @@ export default function DataQualityContent({
                   <ul className="text-sm text-amber-700 space-y-1">
                     {scanWarnings.map((w, i) => (
                       <li key={i} className="flex items-start gap-2">
-                        <span className="text-amber-500 mt-0.5">⚠</span>
+                        <AlertTriangle className="w-4 h-4 text-amber-500 shrink-0 mt-0.5" />
                         <span>{w}</span>
                       </li>
                     ))}
