@@ -24,6 +24,61 @@ type FieldIssue = {
   status: string
 }
 
+type ProfileField = ProfilingData['fields'][number]
+
+/**
+ * Schema-aware issues derived from enriched structural metadata + the
+ * upload-time profile. These are approximate (sample-values based) and
+ * intentionally only surface when no materialised `quality_issues` rows
+ * exist for the field — `runSourceDataChecks` is the authoritative source
+ * once staging has run.
+ */
+type SchemaAwareIssue =
+  | { kind: 'not_null'; affected: number }
+  | { kind: 'check_in_list'; violations: string[]; totalSamples: number }
+
+function deriveSchemaAwareIssues(f: ProfileField): SchemaAwareIssue[] {
+  const out: SchemaAwareIssue[] = []
+
+  if (!f.is_nullable && f.null_percentage > 0) {
+    const affected =
+      f.null_count > 0
+        ? f.null_count
+        : Math.max(1, Math.ceil((f.total_rows * f.null_percentage) / 100))
+    out.push({ kind: 'not_null', affected })
+  }
+
+  const cc = f.check_constraint
+  if (cc && cc.type === 'in_list' && cc.allowedValues?.length) {
+    const allowed = new Set(cc.allowedValues.map((v) => v.toLowerCase()))
+    const samples = f.sample_values ?? []
+    const violations: string[] = []
+    for (const raw of samples) {
+      if (raw === null || raw === undefined) continue
+      const s = String(raw).trim()
+      if (!s) continue
+      if (!allowed.has(s.toLowerCase())) violations.push(s)
+    }
+    if (violations.length > 0) {
+      out.push({ kind: 'check_in_list', violations, totalSamples: samples.length })
+    }
+  }
+
+  return out
+}
+
+/**
+ * Returns the number rendered in the "Data quality" column for a field.
+ * Priority cascade:
+ *   1. materialised quality_issues rows (authoritative post-staging)
+ *   2. upload-time format_issues_count + schema-aware approximations
+ * This keeps the top "Issues" counter aligned with the per-row display.
+ */
+function displayIssueCount(f: ProfileField, schemaAwareCount: number): number {
+  if (f.qualityIssues.total > 0) return f.qualityIssues.total
+  return f.format_issues_count + schemaAwareCount
+}
+
 export default function DataProfiling({
   projectId,
   tables,
@@ -112,14 +167,15 @@ export default function DataProfiling({
 
   // Total issues across all fields in the current table. Uses the same
   // per-field logic as the "Data quality" column: prefer the quality_issues
-  // row count when present, otherwise fall back to field_profiles.format_issues_count.
-  // This keeps the top counter consistent with what's visible in the column —
+  // row count when present, otherwise fall back to format_issues_count plus
+  // schema-aware approximations (NOT NULL violations, CHECK IN-list misses).
+  // This keeps the top counter aligned with what's visible in the column —
   // without it, a single quality_issues row anywhere in the table would hide
-  // every field's format_issues_count from the total.
-  const totalQualityIssues = data?.fields.reduce(
-    (s, f) => s + (f.qualityIssues.total > 0 ? f.qualityIssues.total : f.format_issues_count),
-    0
-  ) ?? 0
+  // every field's upload-time findings from the total.
+  const totalQualityIssues = data?.fields.reduce((s, f) => {
+    const schemaAware = deriveSchemaAwareIssues(f).length
+    return s + displayIssueCount(f, schemaAware)
+  }, 0) ?? 0
   const hasBlocking = data?.fields.some((f) => f.qualityIssues.blocking > 0) ?? false
 
   // Group profilable tables for the dropdown
@@ -229,9 +285,47 @@ export default function DataProfiling({
                   </tr>
                 </thead>
                 <tbody>
-                  {data.fields.map((f) => (
+                  {data.fields.map((f) => {
+                    const schemaAwareIssues = deriveSchemaAwareIssues(f)
+                    const displayCount = displayIssueCount(f, schemaAwareIssues.length)
+                    const hasStructuralViolation = schemaAwareIssues.length > 0
+                    // Blocking (red) if quality_issues flagged blocking OR a structural
+                    // violation was detected from enriched metadata. Format-only misses
+                    // stay amber.
+                    const isBlockingTone =
+                      f.qualityIssues.blocking > 0 || hasStructuralViolation
+                    // Fallback popover body covers the pre-staging case where no
+                    // quality_issues rows exist yet but we detected upload-time issues.
+                    const hasFallbackContent =
+                      f.format_issues_count > 0 || schemaAwareIssues.length > 0
+                    return (
                     <tr key={f.id} className="border-b border-gray-100 last:border-b-0 hover:bg-gray-50 transition-colors">
-                      <td className="px-5 py-3 text-settle-slate-900 font-mono text-sm">{f.name}</td>
+                      <td className="px-5 py-3 text-settle-slate-900 font-mono text-sm">
+                        <div className="flex items-center gap-1.5 flex-wrap">
+                          <span>{f.name}</span>
+                          {f.is_primary_key && (
+                            <span
+                              title="Primary key"
+                              className="inline-flex items-center rounded px-1.5 py-0 text-[10px] font-semibold tracking-wide font-sans bg-indigo-50 text-indigo-700 border border-indigo-100"
+                            >
+                              PK
+                            </span>
+                          )}
+                          {f.is_foreign_key && (
+                            <span
+                              title={f.fk_reference ? `References ${f.fk_reference}` : 'Foreign key'}
+                              className="inline-flex items-center rounded px-1.5 py-0 text-[10px] font-semibold tracking-wide font-sans bg-sky-50 text-sky-700 border border-sky-100"
+                            >
+                              FK
+                            </span>
+                          )}
+                        </div>
+                        {f.is_foreign_key && f.fk_reference && (
+                          <div className="mt-0.5 text-[11px] font-sans font-normal text-settle-slate-400">
+                            → {f.fk_reference}
+                          </div>
+                        )}
+                      </td>
                       <td className="px-5 py-3 text-right text-sm text-settle-slate-600">
                         {f.null_percentage.toFixed(1)}%
                       </td>
@@ -243,49 +337,34 @@ export default function DataProfiling({
                       </td>
                       <td className="px-5 py-3 text-right">
                         <div className="relative inline-block">
-                          {(() => {
-                            // Unified display count: prefer materialised quality_issues rows,
-                            // fall back to upload-time format_issues_count. Both paths open the
-                            // same popover; the popover body branches on which data exists.
-                            const displayCount =
-                              f.qualityIssues.total > 0
-                                ? f.qualityIssues.total
-                                : f.format_issues_count
-                            if (displayCount === 0) {
-                              return <span className="text-sm text-settle-slate-300">—</span>
-                            }
-                            return (
-                              <button
-                                ref={(el) => { triggerRefs.current[f.id] = el }}
-                                onClick={() =>
-                                  setOpenQualityPopover(
-                                    openQualityPopover === f.id ? null : f.id
-                                  )
-                                }
-                                className={`text-sm cursor-pointer ${
-                                  f.qualityIssues.blocking > 0
-                                    ? 'text-red-600 hover:text-red-800'
-                                    : 'text-amber-600 hover:text-amber-800'
-                                }`}
-                              >
-                                {displayCount} {displayCount === 1 ? 'issue' : 'issues'}
-                              </button>
-                            )
-                          })()}
+                          {displayCount === 0 ? (
+                            <span className="text-sm text-settle-slate-300">—</span>
+                          ) : (
+                            <button
+                              ref={(el) => { triggerRefs.current[f.id] = el }}
+                              onClick={() =>
+                                setOpenQualityPopover(
+                                  openQualityPopover === f.id ? null : f.id
+                                )
+                              }
+                              className={`text-sm cursor-pointer ${
+                                isBlockingTone
+                                  ? 'text-red-600 hover:text-red-800'
+                                  : 'text-amber-600 hover:text-amber-800'
+                              }`}
+                            >
+                              {displayCount} {displayCount === 1 ? 'issue' : 'issues'}
+                            </button>
+                          )}
 
                           {/* Quality issues popover */}
                           {openQualityPopover === f.id && (() => {
-                            const displayCount =
-                              f.qualityIssues.total > 0
-                                ? f.qualityIssues.total
-                                : f.format_issues_count
-                            // Show the format-only fallback when no quality_issues rows
-                            // have been materialised for this field but the upload-time
-                            // profiling flagged format violations.
-                            const showFormatFallback =
+                            // Show the upload-time fallback (format + schema-aware) when
+                            // no quality_issues rows have been materialised for this field.
+                            const showFallback =
                               !loadingIssues &&
                               popoverIssues.length === 0 &&
-                              f.format_issues_count > 0
+                              hasFallbackContent
                             return (
                             <div
                               ref={popoverRef}
@@ -314,19 +393,51 @@ export default function DataProfiling({
                                     <span className="w-3.5 h-3.5 border-2 border-gray-200 border-t-gray-400 rounded-full animate-spin" />
                                     Loading…
                                   </div>
-                                ) : showFormatFallback ? (
-                                  <div className="text-xs">
-                                    <div className="flex items-start gap-1.5">
-                                      <AlertTriangle className="w-4 h-4 text-amber-500 shrink-0 mt-0.5" />
-                                      <div>
-                                        <p className="text-gray-700 leading-relaxed">
-                                          {f.format_issues_count.toLocaleString()} value{f.format_issues_count !== 1 ? 's' : ''} don&apos;t match the expected format for type <span className="font-mono">{f.data_type}</span>.
-                                        </p>
-                                        <p className="text-gray-400 mt-0.5">
-                                          Open Data Preview to inspect the offending values.
-                                        </p>
+                                ) : showFallback ? (
+                                  <div className="space-y-3 text-xs">
+                                    {schemaAwareIssues.map((issue, idx) => (
+                                      <div key={`sa-${idx}`}>
+                                        <div className="flex items-start gap-1.5">
+                                          <AlertTriangle className="w-4 h-4 text-red-500 shrink-0 mt-0.5" />
+                                          <div>
+                                            {issue.kind === 'not_null' ? (
+                                              <>
+                                                <p className="text-gray-700 leading-relaxed">
+                                                  Schema says <span className="font-mono">NOT NULL</span> but ~{issue.affected.toLocaleString()} row{issue.affected !== 1 ? 's' : ''} have null values.
+                                                </p>
+                                                <p className="text-gray-400 mt-0.5">
+                                                  Structural violation · {f.schema_source.replace('_', ' ')}
+                                                </p>
+                                              </>
+                                            ) : (
+                                              <>
+                                                <p className="text-gray-700 leading-relaxed">
+                                                  Sample values outside the allowed list: <span className="font-mono">{issue.violations.slice(0, 3).map((v) => v.length > 20 ? `${v.slice(0, 20)}…` : v).join(', ')}</span>{issue.violations.length > 3 && ` (+${issue.violations.length - 3} more)`}
+                                                </p>
+                                                <p className="text-gray-400 mt-0.5">
+                                                  Approximate — based on {issue.totalSamples} sampled value{issue.totalSamples !== 1 ? 's' : ''}. Run validation for an exact count.
+                                                </p>
+                                              </>
+                                            )}
+                                          </div>
+                                        </div>
                                       </div>
-                                    </div>
+                                    ))}
+                                    {f.format_issues_count > 0 && (
+                                      <div>
+                                        <div className="flex items-start gap-1.5">
+                                          <AlertTriangle className="w-4 h-4 text-amber-500 shrink-0 mt-0.5" />
+                                          <div>
+                                            <p className="text-gray-700 leading-relaxed">
+                                              {f.format_issues_count.toLocaleString()} value{f.format_issues_count !== 1 ? 's' : ''} don&apos;t match the expected format for type <span className="font-mono">{f.data_type}</span>.
+                                            </p>
+                                            <p className="text-gray-400 mt-0.5">
+                                              Format issue · detected at upload
+                                            </p>
+                                          </div>
+                                        </div>
+                                      </div>
+                                    )}
                                   </div>
                                 ) : (
                                   <div className="space-y-3">
@@ -357,8 +468,8 @@ export default function DataProfiling({
 
                               <div className="px-4 py-3 border-t border-gray-100 flex items-center justify-between gap-2">
                                 <p className="text-[11px] text-gray-400 leading-tight">
-                                  {showFormatFallback
-                                    ? 'Format issues · detected at upload'
+                                  {showFallback
+                                    ? 'Upload-time findings · re-check after staging'
                                     : 'Source issues · re-validated after staging'}
                                 </p>
                                 <button
@@ -374,7 +485,8 @@ export default function DataProfiling({
                         </div>
                       </td>
                     </tr>
-                  ))}
+                    )
+                  })}
                 </tbody>
               </table>
             )}

@@ -5,7 +5,7 @@ import { supabaseAdmin } from '@/lib/supabase/admin'
 import { callClaude, callClaudeStreaming } from '@/lib/ai/claude'
 import { checkAIRateLimit } from '@/lib/ai/rate-limit'
 import JSZip from 'jszip'
-import type { SqlDialect, ExecutionPackageFormat } from '@/lib/types/database'
+import type { CheckConstraint, SqlDialect, ExecutionPackageFormat } from '@/lib/types/database'
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -18,6 +18,7 @@ interface TargetFieldRow {
   is_primary_key: boolean
   is_foreign_key: boolean
   fk_reference: string | null
+  check_constraint: CheckConstraint | null
   ordinal_position: number
 }
 
@@ -80,6 +81,73 @@ export interface CompartmentalizedPackageResult {
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
+
+/**
+ * Render one target-field line for the LLM prompt's Target Schema section.
+ * Includes NOT NULL / PK / FK→ref / CHECK flags. Shared by the monolithic and
+ * compartmentalized package generators so both prompts stay in sync.
+ *
+ * CHECK shapes (lib/types/database.ts CheckConstraint):
+ *   - in_list → "CHECK IN (val1, val2, …)"
+ *   - regex   → "CHECK REGEX: ^pattern$"
+ *   - range   → "CHECK RANGE >=min <=max"
+ *   - custom  → "CHECK(raw clause)"
+ */
+function formatTargetFieldLine(f: TargetFieldRow): string {
+  const flags: string[] = []
+  if (!f.is_nullable) flags.push('NOT NULL')
+  if (f.is_primary_key) flags.push('PK')
+  if (f.is_foreign_key && f.fk_reference) flags.push(`FK→${f.fk_reference}`)
+  if (f.check_constraint) {
+    const cc = f.check_constraint
+    if (cc.type === 'in_list' && cc.allowedValues?.length) {
+      flags.push(`CHECK IN (${cc.allowedValues.join(', ')})`)
+    } else if (cc.type === 'regex' && cc.pattern) {
+      flags.push(`CHECK REGEX: ${cc.pattern}`)
+    } else if (cc.type === 'range') {
+      const parts: string[] = []
+      if (cc.min !== undefined) parts.push(`>=${cc.min}`)
+      if (cc.max !== undefined) parts.push(`<=${cc.max}`)
+      if (parts.length > 0) flags.push(`CHECK RANGE ${parts.join(' ')}`)
+    } else if (cc.raw) {
+      flags.push(`CHECK(${cc.raw})`)
+    }
+  }
+  return `  - ${f.name} ${f.data_type}${flags.length ? ' ' + flags.join(' ') : ''}`
+}
+
+/**
+ * Render one validation_rules row for the LLM prompt's Data Quality section.
+ * Surfaces the name, severity, and — critically — the rule_config values so
+ * Claude can render the actual allowed-list / pattern / range into CHECK SQL
+ * instead of just acknowledging "there is a rule".
+ */
+function formatValidationRuleLine(rule: {
+  name: string
+  description: string | null
+  rule_type: string
+  severity: string
+  rule_config?: Record<string, unknown> | null
+}): string {
+  let ruleDesc = `- [${rule.severity}] ${rule.name} (${rule.rule_type})`
+  if (rule.description) ruleDesc += ` — ${rule.description}`
+  if (rule.rule_config) {
+    const cfg = rule.rule_config as Record<string, unknown>
+    if (Array.isArray(cfg.values) && cfg.values.length > 0) {
+      ruleDesc += ` Values: ${(cfg.values as unknown[]).map((v) => String(v)).join(', ')}`
+    }
+    if (typeof cfg.pattern === 'string' && cfg.pattern.length > 0) {
+      ruleDesc += ` Pattern: ${cfg.pattern}`
+    }
+    if (cfg.min !== undefined || cfg.max !== undefined) {
+      ruleDesc += ` Range: ${cfg.min ?? ''}..${cfg.max ?? ''}`
+    }
+    if (typeof cfg.fk_reference === 'string' && cfg.fk_reference.length > 0) {
+      ruleDesc += ` FK→${cfg.fk_reference}`
+    }
+  }
+  return ruleDesc
+}
 
 function nextVersionStr(current: string): string {
   const parts = current.split('.')
@@ -736,7 +804,7 @@ export async function generateExecutionPackage(
         .eq('project_id', projectId),
       supabaseAdmin
         .from('validation_rules')
-        .select('id, name, description, rule_type, severity')
+        .select('id, name, description, rule_type, severity, rule_config')
         .eq('project_id', projectId),
     ])
 
@@ -802,7 +870,7 @@ export async function generateExecutionPackage(
       targetTableIds.length > 0
         ? supabaseAdmin
             .from('fields')
-            .select('id, table_id, name, data_type, is_nullable, is_primary_key, is_foreign_key, fk_reference, ordinal_position')
+            .select('id, table_id, name, data_type, is_nullable, is_primary_key, is_foreign_key, fk_reference, check_constraint, ordinal_position')
             .in('table_id', targetTableIds)
             .order('ordinal_position', { ascending: true })
         : Promise.resolve({ data: [] }),
@@ -903,6 +971,12 @@ export async function generateExecutionPackage(
         ).join('\n')
       : '  None.'
 
+    const validationRulesText = (validationRuleRows ?? []).length > 0
+      ? (validationRuleRows ?? [])
+          .map((r) => formatValidationRuleLine(r as Parameters<typeof formatValidationRuleLine>[0]))
+          .join('\n')
+      : '  None.'
+
     // ── Build mapping sections ────────────────────────────────────────────────
 
     // Group field mappings by table mapping
@@ -978,11 +1052,7 @@ export async function generateExecutionPackage(
       targetSchemaLines.push(`### ${entry.tableName}`)
       targetSchemaLines.push('Fields:')
       for (const f of fields) {
-        const flags: string[] = []
-        if (!f.is_nullable) flags.push('NOT NULL')
-        if (f.is_primary_key) flags.push('PK')
-        if (f.is_foreign_key && f.fk_reference) flags.push(`FK→${f.fk_reference}`)
-        targetSchemaLines.push(`  - ${f.name} ${f.data_type}${flags.length ? ' ' + flags.join(' ') : ''}`)
+        targetSchemaLines.push(formatTargetFieldLine(f))
       }
     }
 
@@ -1031,6 +1101,10 @@ ${blockingIssuesText}
 
 ### Accepted Risks
 ${acceptedRisksText}
+
+### Active Validation Rules
+Use each rule's values/pattern/range verbatim when emitting CHECK / guard SQL. Blocking rules violated by staged rows must halt promotion.
+${validationRulesText}
 
 ## Load Order (FK-dependency resolved)
 ${loadOrderText}
@@ -1242,7 +1316,7 @@ export async function generateCompartmentalizedPackage(
         .eq('project_id', projectId),
       supabaseAdmin
         .from('validation_rules')
-        .select('id, name, description, rule_type, severity')
+        .select('id, name, description, rule_type, severity, rule_config')
         .eq('project_id', projectId),
     ])
 
@@ -1303,7 +1377,7 @@ export async function generateCompartmentalizedPackage(
       targetTableIds.length > 0
         ? supabaseAdmin
             .from('fields')
-            .select('id, table_id, name, data_type, is_nullable, is_primary_key, is_foreign_key, fk_reference, ordinal_position')
+            .select('id, table_id, name, data_type, is_nullable, is_primary_key, is_foreign_key, fk_reference, check_constraint, ordinal_position')
             .in('table_id', targetTableIds)
             .order('ordinal_position', { ascending: true })
         : Promise.resolve({ data: [] }),
@@ -1399,6 +1473,12 @@ export async function generateCompartmentalizedPackage(
         ).join('\n')
       : '  None.'
 
+    const validationRulesText = (validationRuleRows ?? []).length > 0
+      ? (validationRuleRows ?? [])
+          .map((r) => formatValidationRuleLine(r as Parameters<typeof formatValidationRuleLine>[0]))
+          .join('\n')
+      : '  None.'
+
     // ── Build mapping sections ──────────────────────────────────────────────
 
     const fmsByTM = new Map<string, FieldMappingRow[]>()
@@ -1473,11 +1553,7 @@ export async function generateCompartmentalizedPackage(
       targetSchemaLines.push(`### ${entry.tableName}`)
       targetSchemaLines.push('Fields:')
       for (const f of fields) {
-        const flags: string[] = []
-        if (!f.is_nullable) flags.push('NOT NULL')
-        if (f.is_primary_key) flags.push('PK')
-        if (f.is_foreign_key && f.fk_reference) flags.push(`FK→${f.fk_reference}`)
-        targetSchemaLines.push(`  - ${f.name} ${f.data_type}${flags.length ? ' ' + flags.join(' ') : ''}`)
+        targetSchemaLines.push(formatTargetFieldLine(f))
       }
     }
 
@@ -1528,6 +1604,10 @@ ${blockingIssuesText}
 
 ### Accepted Risks
 ${acceptedRisksText}
+
+### Active Validation Rules
+Use each rule's values/pattern/range verbatim when emitting CHECK / guard SQL. Blocking rules violated by staged rows must halt promotion.
+${validationRulesText}
 
 ## Load Order (FK-dependency resolved)
 ${loadOrderText}

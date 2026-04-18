@@ -1,6 +1,6 @@
 import { createClient } from '@/lib/supabase/server'
 import { supabaseAdmin } from '@/lib/supabase/admin'
-import type { MigrationIntelligence } from '@/lib/types/database'
+import type { CheckConstraint, FieldSchemaSource, MigrationIntelligence } from '@/lib/types/database'
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -11,6 +11,18 @@ export interface FieldContext {
   is_nullable: boolean
   is_primary_key: boolean
   is_foreign_key: boolean
+  // Full FK target in "Table.field" form. Populated for all fk=true fields
+  // written by any layer that knows the referent (ddl_parsed, cross_table_inferred,
+  // doc_enriched, manual). Null if is_foreign_key is false or the layer never
+  // resolved the target. Surfaced in the mapping/transform prompt as `FK→Table.field`.
+  fk_reference: string | null
+  // Typed CHECK constraint shape (see lib/types/database.ts). Surfaced in the
+  // prompt as `CHECK IN (...)`, `CHECK REGEX: ...`, or `CHECK RANGE (...)` so
+  // the AI knows the target domain / source domain when proposing mappings.
+  check_constraint: CheckConstraint | null
+  // Provenance label. Not emitted in the prompt today, but carried on the
+  // context so future heuristics (confidence weighting, skip rules) can use it.
+  schema_source: FieldSchemaSource
   // Profiling stats (computed across ALL rows during upload):
   null_percentage: number
   cardinality: number
@@ -136,7 +148,7 @@ export async function buildAIContext(
   // 4. Get fields (optionally filtered to specific IDs)
   const fieldBaseQuery = supabase
     .from('fields')
-    .select('id, table_id, name, data_type, inferred_type, is_nullable, is_primary_key, is_foreign_key, ordinal_position')
+    .select('id, table_id, name, data_type, inferred_type, is_nullable, is_primary_key, is_foreign_key, fk_reference, check_constraint, schema_source, ordinal_position')
     .in('table_id', tableIds.length ? tableIds : ['__none__'])
     .order('ordinal_position', { ascending: true })
 
@@ -238,6 +250,12 @@ export async function buildAIContext(
             const rawDist = (profile?.value_distribution ?? []) as { value: string; count: number }[]
             const rawSamples = (profile?.sample_values ?? []) as unknown[]
 
+            const rawField = field as typeof field & {
+              fk_reference?: string | null
+              check_constraint?: CheckConstraint | null
+              schema_source?: FieldSchemaSource | string | null
+            }
+
             const ctx: FieldContext = {
               name: field.name,
               data_type: field.data_type,
@@ -245,6 +263,9 @@ export async function buildAIContext(
               is_nullable: field.is_nullable,
               is_primary_key: field.is_primary_key,
               is_foreign_key: field.is_foreign_key,
+              fk_reference: rawField.fk_reference ?? null,
+              check_constraint: (rawField.check_constraint as CheckConstraint | null) ?? null,
+              schema_source: (rawField.schema_source as FieldSchemaSource) ?? 'inferred',
               null_percentage: (profile?.null_percentage as number) ?? 0,
               cardinality: (profile?.cardinality as number) ?? 0,
               unique_percentage: (profile?.unique_percentage as number) ?? 0,
@@ -425,6 +446,36 @@ Treat ★ patterns as possibilities to consider.
 // ── Formatters ────────────────────────────────────────────────────────────────
 
 /**
+ * Render a typed CheckConstraint as a compact, prompt-friendly flag.
+ * Returns null if there is no constraint or it can't be rendered meaningfully.
+ * Long IN lists are truncated to the first 10 values to keep token usage down.
+ */
+function formatCheckConstraintFlag(cc: CheckConstraint | null | undefined): string | null {
+  if (!cc) return null
+  if (cc.type === 'in_list' && cc.allowedValues && cc.allowedValues.length > 0) {
+    const MAX = 10
+    const values = cc.allowedValues
+    const shown = values.slice(0, MAX).join(', ')
+    const overflow = values.length > MAX ? `, ... and ${values.length - MAX} more` : ''
+    return `CHECK IN (${shown}${overflow})`
+  }
+  if (cc.type === 'regex' && cc.pattern) {
+    return `CHECK REGEX: ${cc.pattern}`
+  }
+  if (cc.type === 'range') {
+    const parts: string[] = []
+    if (cc.min !== undefined) parts.push(`min: ${cc.min}`)
+    if (cc.max !== undefined) parts.push(`max: ${cc.max}`)
+    if (parts.length === 0) return null
+    return `CHECK RANGE (${parts.join(', ')})`
+  }
+  if (cc.raw) {
+    return `CHECK: ${cc.raw}`
+  }
+  return null
+}
+
+/**
  * Format schema context for a Claude prompt.
  * Shows field metadata, profiling stats, and value distributions.
  * The `label` is used in the XML wrapper tags (e.g., "source" → <source_schema>).
@@ -441,14 +492,16 @@ export function formatSchemaForPrompt(tables: TableContext[], label: string): st
     output += 'Fields:\n'
 
     for (const field of table.fields) {
-      const flags = [
-        field.is_primary_key ? 'PK' : null,
-        field.is_foreign_key ? 'FK' : null,
-        field.is_nullable ? 'nullable' : 'NOT NULL',
-        field.inferred_type ? `semantic:${field.inferred_type}` : null,
-      ]
-        .filter(Boolean)
-        .join(', ')
+      const flagList: string[] = []
+      if (field.is_primary_key) flagList.push('PK')
+      if (field.is_foreign_key) {
+        flagList.push(field.fk_reference ? `FK→${field.fk_reference}` : 'FK')
+      }
+      flagList.push(field.is_nullable ? 'nullable' : 'NOT NULL')
+      if (field.inferred_type) flagList.push(`semantic:${field.inferred_type}`)
+      const checkFlag = formatCheckConstraintFlag(field.check_constraint)
+      if (checkFlag) flagList.push(checkFlag)
+      const flags = flagList.join(', ')
 
       output += `  - ${field.name} (${field.data_type}) [${flags}]\n`
 
@@ -549,14 +602,16 @@ export function formatDocumentsForPrompt(docs: DocumentContext): string {
  * Shows complete value distribution when available.
  */
 export function formatFieldForPrompt(field: FieldContext): string {
-  const flags = [
-    field.is_primary_key ? 'PK' : null,
-    field.is_foreign_key ? 'FK' : null,
-    field.is_nullable ? 'nullable' : 'NOT NULL',
-    field.inferred_type ? `semantic:${field.inferred_type}` : null,
-  ]
-    .filter(Boolean)
-    .join(', ')
+  const flagList: string[] = []
+  if (field.is_primary_key) flagList.push('PK')
+  if (field.is_foreign_key) {
+    flagList.push(field.fk_reference ? `FK→${field.fk_reference}` : 'FK')
+  }
+  flagList.push(field.is_nullable ? 'nullable' : 'NOT NULL')
+  if (field.inferred_type) flagList.push(`semantic:${field.inferred_type}`)
+  const checkFlag = formatCheckConstraintFlag(field.check_constraint)
+  if (checkFlag) flagList.push(checkFlag)
+  const flags = flagList.join(', ')
 
   let output = `${field.name} (${field.data_type}) [${flags}]\n`
   output += `  Null: ${field.null_percentage.toFixed(1)}%, Distinct: ${field.cardinality}, Format Issues: ${field.format_issues_count}\n`

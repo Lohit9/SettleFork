@@ -2,6 +2,7 @@
 
 import { createClient } from '@/lib/supabase/server'
 import { supabaseAdmin } from '@/lib/supabase/admin'
+import type { FieldSchemaSource } from '@/lib/types/database'
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -21,7 +22,9 @@ export interface FieldData {
   is_foreign_key: boolean
   fk_reference: string | null
   ordinal_position: number
-  schema_source: 'inferred' | 'doc_enriched' | 'manual'
+  // Use the canonical union from lib/types/database.ts so this stays in sync
+  // as new provenance labels are added (e.g. 'ddl_parsed', 'cross_table_inferred').
+  schema_source: FieldSchemaSource
   check_constraint: CheckConstraint | null
 }
 
@@ -67,11 +70,25 @@ export interface ProfilingData {
     id: string
     name: string
     data_type: string
+    inferred_type: string | null
     null_percentage: number
+    null_count: number
+    total_rows: number
     cardinality: number
     unique_percentage: number
     format_issues_count: number
     ordinal_position: number
+    is_nullable: boolean
+    is_primary_key: boolean
+    is_foreign_key: boolean
+    fk_reference: string | null
+    check_constraint: CheckConstraint | null
+    schema_source: FieldSchemaSource
+    /**
+     * Up-to-N distinct values seen at upload time. Used by Data Profiling to
+     * approximate CHECK-constraint violations without re-reading data_rows.
+     */
+    sample_values: unknown[]
     qualityIssues: FieldQualitySummary
   }>
   totalFormatIssues: number
@@ -132,7 +149,7 @@ export async function getProjectSchema(projectId: string): Promise<ProjectSchema
             is_foreign_key: f.is_foreign_key,
             fk_reference: f.fk_reference,
             ordinal_position: f.ordinal_position,
-            schema_source: (f.schema_source as 'inferred' | 'doc_enriched' | 'manual') ?? 'inferred',
+            schema_source: (f.schema_source as FieldSchemaSource) ?? 'inferred',
             check_constraint: (f.check_constraint as CheckConstraint | null) ?? null,
           })),
       })),
@@ -281,7 +298,9 @@ export async function getFieldProfiles(projectId: string, tableId: string): Prom
 
   const { data: fields } = await supabase
     .from('fields')
-    .select('id, name, data_type, ordinal_position')
+    .select(
+      'id, name, data_type, inferred_type, is_nullable, is_primary_key, is_foreign_key, fk_reference, check_constraint, schema_source, ordinal_position',
+    )
     .eq('table_id', tableId)
     .order('ordinal_position', { ascending: true })
 
@@ -292,7 +311,9 @@ export async function getFieldProfiles(projectId: string, tableId: string): Prom
   const [profileResults, qualitySummary] = await Promise.all([
     supabase
       .from('field_profiles')
-      .select('field_id, null_percentage, cardinality, unique_percentage, format_issues_count')
+      .select(
+        'field_id, total_rows, null_count, null_percentage, cardinality, unique_percentage, format_issues_count, sample_values',
+      )
       .in('field_id', fieldIds),
     getFieldQualitySummary(projectId, tableId),
   ])
@@ -305,11 +326,21 @@ export async function getFieldProfiles(projectId: string, tableId: string): Prom
       id: f.id,
       name: f.name,
       data_type: f.data_type,
+      inferred_type: f.inferred_type ?? null,
       ordinal_position: f.ordinal_position,
       null_percentage: p?.null_percentage ?? 0,
+      null_count: p?.null_count ?? 0,
+      total_rows: p?.total_rows ?? table.row_count ?? 0,
       cardinality: p?.cardinality ?? 0,
       unique_percentage: p?.unique_percentage ?? 0,
       format_issues_count: p?.format_issues_count ?? 0,
+      is_nullable: f.is_nullable,
+      is_primary_key: f.is_primary_key,
+      is_foreign_key: f.is_foreign_key ?? false,
+      fk_reference: f.fk_reference ?? null,
+      check_constraint: (f.check_constraint as CheckConstraint | null) ?? null,
+      schema_source: (f.schema_source as FieldSchemaSource) ?? 'inferred',
+      sample_values: Array.isArray(p?.sample_values) ? (p?.sample_values as unknown[]) : [],
       qualityIssues: qualitySummary.get(f.id) ?? { total: 0, blocking: 0, warning: 0 },
     }
   })

@@ -176,14 +176,14 @@ export async function generateMappings(
     // Fetch fields
     const { data: sourceFields, error: sfErr } = await supabase
       .from('fields')
-      .select('id, table_id, name, data_type, inferred_type, is_nullable, is_primary_key, is_foreign_key')
+      .select('id, table_id, name, data_type, inferred_type, is_nullable, is_primary_key, is_foreign_key, fk_reference, check_constraint')
       .in('table_id', sourceTableIds)
       .order('ordinal_position', { ascending: true })
     if (sfErr) throw sfErr
 
     const { data: targetFields, error: tfErr } = await supabase
       .from('fields')
-      .select('id, table_id, name, data_type, inferred_type, is_nullable, is_primary_key, is_foreign_key')
+      .select('id, table_id, name, data_type, inferred_type, is_nullable, is_primary_key, is_foreign_key, fk_reference, check_constraint')
       .in('table_id', targetTableIds)
       .order('ordinal_position', { ascending: true })
     if (tfErr) throw tfErr

@@ -311,8 +311,10 @@ export default function DataPreview({ projectId, tables, isArchived = false, arc
           </div>
 
           {!selectedTableId ? (
-            <div className="bg-white border border-gray-200 rounded-xl p-10 text-center">
-              <p className="text-sm text-gray-500">Select a table to preview data.</p>
+            <div className="flex-1 flex items-center justify-center p-8">
+              <div className="text-center">
+                <p className="text-sm text-gray-500">Select a table to preview data.</p>
+              </div>
             </div>
           ) : (
             /* Source view: no flags, no targetFields — just raw data */
@@ -341,12 +343,13 @@ export default function DataPreview({ projectId, tables, isArchived = false, arc
               Loading transformed data…
             </div>
           ) : stagedMappings.length === 0 ? (
-            <div className="bg-white border border-gray-200 rounded-xl p-10 text-center">
-              <div className="text-3xl mb-3">🔄</div>
-              <p className="font-medium text-gray-700 mb-1">No mappings yet</p>
-              <p className="text-sm text-gray-500 max-w-sm mx-auto">
-                Complete the <strong>Mapping</strong> step first to see how your source data maps to the target schema.
-              </p>
+            <div className="flex-1 flex items-center justify-center p-8">
+              <div className="text-center">
+                <p className="text-sm font-medium text-gray-900 mb-1">No mappings yet</p>
+                <p className="text-sm text-gray-500">
+                  Complete the Mapping step to see how your source data maps to the target schema.
+                </p>
+              </div>
             </div>
           ) : (
             <>

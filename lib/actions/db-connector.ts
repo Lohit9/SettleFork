@@ -10,6 +10,7 @@ import { encrypt, decrypt } from '@/lib/utils/encryption'
 import type { DBConnectionInfo } from '@/lib/types/database'
 import { computeValueDistribution, computeMinMax, countFormatIssues } from '@/lib/utils/profiling'
 import { logActivity } from '@/lib/actions/activity-log'
+import { parseCheckConstraint } from '@/lib/parsers/ddl-parser'
 
 // ── PostgreSQL connection helpers ─────────────────────────────────────────────
 
@@ -755,6 +756,14 @@ async function importTableFromClient({
         : mapPgType(col.data_type, col.character_maximum_length, col.numeric_precision, col.numeric_scale)
     const inferredType = inferSemanticType(col.column_name, col.data_type)
     const checkClause = checkMap.get(col.column_name) ?? null
+    // Route through the same structured parser used by the DDL uploader so the
+    // UI's ConstraintBadge receives a typed shape (in_list / regex / range /
+    // custom) instead of the old untyped { raw } blob. Dialect quirks: Postgres
+    // normalises `status IN ('A','B')` to `(status)::text = ANY (ARRAY[...])`
+    // and MySQL prefixes string literals with charset hints (e.g. `_utf8mb4`);
+    // both currently fall through to { type: 'custom', raw } — still strictly
+    // better than an untyped blob, and leaves the door open to dialect-aware
+    // normalisation later without having to change the downstream consumers.
     return {
       name: col.column_name,
       data_type: dataType,
@@ -764,7 +773,11 @@ async function importTableFromClient({
       is_foreign_key: fkMap.has(col.column_name),
       fk_reference: fkMap.get(col.column_name) ?? null,
       ordinal_position: col.ordinal_position,
-      check_constraint: checkClause ? { raw: checkClause } : null,
+      check_constraint: checkClause ? parseCheckConstraint(checkClause) : null,
+      // Introspected via information_schema — equivalent structural authority
+      // to an uploaded DDL script, so we share the 'ddl_parsed' provenance
+      // label rather than minting a new value. Requires migration 063.
+      schema_source: 'ddl_parsed' as const,
     }
   })
 
@@ -827,6 +840,111 @@ async function importTableFromClient({
     await supabase.from('tables').delete().eq('id', tableId)
     console.warn(`[db-connector] Failed to insert fields for "${tableName}":`, fieldsErr?.message)
     return false
+  }
+
+  // ── Auto-seed validation rules from CHECK constraints ───────────────────
+  // Mirrors the seeding loop in lib/actions/ddl-upload.ts (confirmDDLSchema).
+  // rule_config keys MUST match the shapes read by executeCustomRules and
+  // validateRuleConfig in lib/actions/validation-rules.ts. Canonical shapes:
+  //   allowed_values → { values: string[] }
+  //   regex          → { pattern: string }
+  //   range          → { min: number, max: number }
+  //   min_value      → { min: number }
+  //   max_value      → { max: number }
+  // We insert directly (bypassing addValidationRule) because this is a bulk
+  // seed. The enclosing `importTableFromClient` drops the existing table row
+  // before this call (see "Delete existing record (cascade)" above), and the
+  // validation_rules FK cascades on field/table deletion, so no dedup query
+  // is needed — old rules for this table are already gone.
+  const fieldIdByName = new Map(createdFields.map((f) => [f.name, f.id]))
+  const validationRuleInserts: Array<{
+    project_id: string
+    table_id: string
+    field_id: string
+    name: string
+    rule_type: string
+    rule_config: Record<string, unknown>
+    severity: 'blocking'
+    is_ai_generated: boolean
+  }> = []
+
+  for (const f of fields) {
+    const constraint = f.check_constraint
+    if (!constraint) continue
+    const fieldId = fieldIdByName.get(f.name)
+    if (!fieldId) continue
+
+    if (constraint.type === 'in_list' && constraint.allowedValues.length > 0) {
+      validationRuleInserts.push({
+        project_id: projectId,
+        table_id: tableId,
+        field_id: fieldId,
+        name: `${f.name}: allowed values (from DB)`,
+        rule_type: 'allowed_values',
+        rule_config: { values: constraint.allowedValues },
+        severity: 'blocking',
+        is_ai_generated: false,
+      })
+    } else if (constraint.type === 'regex' && constraint.pattern) {
+      validationRuleInserts.push({
+        project_id: projectId,
+        table_id: tableId,
+        field_id: fieldId,
+        name: `${f.name}: format validation (from DB)`,
+        rule_type: 'regex',
+        rule_config: { pattern: constraint.pattern },
+        severity: 'blocking',
+        is_ai_generated: false,
+      })
+    } else if (constraint.type === 'range') {
+      if (constraint.min !== undefined && constraint.max !== undefined) {
+        validationRuleInserts.push({
+          project_id: projectId,
+          table_id: tableId,
+          field_id: fieldId,
+          name: `${f.name}: value range (from DB)`,
+          rule_type: 'range',
+          rule_config: { min: constraint.min, max: constraint.max },
+          severity: 'blocking',
+          is_ai_generated: false,
+        })
+      } else if (constraint.min !== undefined) {
+        validationRuleInserts.push({
+          project_id: projectId,
+          table_id: tableId,
+          field_id: fieldId,
+          name: `${f.name}: minimum value (from DB)`,
+          rule_type: 'min_value',
+          rule_config: { min: constraint.min },
+          severity: 'blocking',
+          is_ai_generated: false,
+        })
+      } else if (constraint.max !== undefined) {
+        validationRuleInserts.push({
+          project_id: projectId,
+          table_id: tableId,
+          field_id: fieldId,
+          name: `${f.name}: maximum value (from DB)`,
+          rule_type: 'max_value',
+          rule_config: { max: constraint.max },
+          severity: 'blocking',
+          is_ai_generated: false,
+        })
+      }
+    }
+    // 'custom' constraints aren't machine-checkable — skip seeding.
+  }
+
+  if (validationRuleInserts.length > 0) {
+    const { error: rulesError } = await supabase
+      .from('validation_rules')
+      .insert(validationRuleInserts)
+    if (rulesError) {
+      console.warn(`[db-connector] Failed to auto-seed validation rules for "${tableName}":`, rulesError.message)
+      // Non-blocking — import succeeds even if rule seeding fails
+    } else {
+      console.log(`[db-connector] Auto-seeded ${validationRuleInserts.length} validation rules from CHECK constraints for "${tableName}"`)
+    }
   }
 
   // Stringify + batch insert data_rows

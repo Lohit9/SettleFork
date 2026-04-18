@@ -36,6 +36,17 @@ export type CheckConstraint =
   | { type: 'range'; min?: number; max?: number; raw: string }
   | { type: 'custom'; raw: string }
 
+// Provenance label for a field's structural metadata. Added in migration 020,
+// expanded in migration 063 to include 'ddl_parsed' and 'cross_table_inferred'.
+// Precedence for overwrite protection (highest → lowest authority):
+//   'manual' > 'doc_enriched' > 'cross_table_inferred' > 'ddl_parsed' > 'inferred'
+export type FieldSchemaSource =
+  | 'inferred'
+  | 'ddl_parsed'
+  | 'cross_table_inferred'
+  | 'doc_enriched'
+  | 'manual'
+
 export interface Field {
   id: string
   table_id: string
@@ -49,6 +60,7 @@ export interface Field {
   ordinal_position: number
   created_at: string
   check_constraint: CheckConstraint | null
+  schema_source: FieldSchemaSource
 }
 
 export interface DataRow {

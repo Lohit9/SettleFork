@@ -180,7 +180,10 @@ export async function confirmDDLSchema(
       continue
     }
 
-    // Build field records — includes check_constraint from parsed DDL
+    // Build field records — includes check_constraint from parsed DDL.
+    // schema_source = 'ddl_parsed' because the metadata came from an
+    // authoritative DDL script (not from sampling CSV values). Requires
+    // migration 063 which expanded the schema_source CHECK constraint.
     const fieldRecords = parsedTable.fields.map((f, idx) => ({
       table_id: newTable.id,
       name: f.name,
@@ -192,6 +195,7 @@ export async function confirmDDLSchema(
       fk_reference: f.fkReference,
       ordinal_position: idx + 1,
       check_constraint: f.checkConstraint ?? null,
+      schema_source: 'ddl_parsed' as const,
     }))
 
     const { data: insertedFields, error: fieldsErr } = await supabase
@@ -236,6 +240,16 @@ export async function confirmDDLSchema(
     is_ai_generated: boolean
   }> = []
 
+  // rule_config keys MUST match the shapes read by executeCustomRules and
+  // validateRuleConfig in lib/actions/validation-rules.ts. Canonical shapes:
+  //   allowed_values → { values: string[] }
+  //   regex          → { pattern: string }
+  //   range          → { min: number, max: number }
+  //   min_value      → { min: number }
+  //   max_value      → { max: number }
+  // We insert directly (bypassing addValidationRule) because this is a bulk
+  // seed, but that means any key drift here silently yields zero violations
+  // at scan time. Update validation-rules.ts in lockstep if you change keys.
   for (const { parsedTable, tableId, fieldIdByName } of seededTables) {
     for (const field of parsedTable.fields) {
       const constraint = field.checkConstraint
@@ -253,7 +267,7 @@ export async function confirmDDLSchema(
             field_id: fieldId,
             name: ruleName,
             rule_type: 'allowed_values',
-            rule_config: { allowed_values: constraint.allowedValues },
+            rule_config: { values: constraint.allowedValues },
             severity: 'blocking',
             is_ai_generated: false,
           })
@@ -339,6 +353,26 @@ export async function confirmDDLSchema(
 
   if (tableCount === 0) {
     return { success: false, error: 'Failed to save any tables — check the console for details.' }
+  }
+
+  // ── Cross-table FK inference ───────────────────────────────────────────────
+  // All tables for this dataset have now been inserted in one transactional
+  // batch, so this is the natural single "done" point to scan for implicit
+  // FK relationships between them. Only fields with schema_source='inferred'
+  // are touched, so DDL-declared FKs (schema_source='ddl_parsed') remain
+  // authoritative. Non-fatal — detection and execution still function on the
+  // explicit DDL FKs if this fails.
+  try {
+    const { inferCrossTableFKs } = await import('@/lib/quality/fk-inference')
+    const result = await inferCrossTableFKs(projectId, datasetId)
+    if (result.inferred.length > 0) {
+      console.log(`[confirmDDLSchema] FK inference added ${result.inferred.length} cross-table FK(s)`)
+    }
+    if (result.errors.length > 0) {
+      console.warn('[confirmDDLSchema] FK inference completed with errors:', result.errors)
+    }
+  } catch (inferErr) {
+    console.warn('[confirmDDLSchema] FK inference failed (non-fatal):', inferErr)
   }
 
   // Store original DDL as a schema document for AI context

@@ -541,11 +541,18 @@ export async function generateTransform(
     fm.source_field_id
       ? supabase.from('fields').select('id, name, data_type, inferred_type, is_nullable, table_id').eq('id', fm.source_field_id).single()
       : Promise.resolve({ data: null, error: null }),
-    supabase.from('fields').select('id, name, data_type, inferred_type, is_nullable').eq('id', fm.target_field_id).single(),
+    supabase.from('fields').select('id, name, data_type, inferred_type, is_nullable, check_constraint').eq('id', fm.target_field_id).single(),
   ])
   const srcField = srcFieldResult.data
   if (!isValueAssignment && !srcField) return { success: false, error: 'Source field not found' }
   if (!tgtField) return { success: false, error: 'Target field not found' }
+  // Narrow the loosely-typed check_constraint JSONB into our canonical typed shape
+  // so the prompt builder below can key on cc.type safely.
+  const tgtCheckConstraint = (tgtField as typeof tgtField & { check_constraint?: unknown })
+    .check_constraint as
+      | { type: string; allowedValues?: string[]; pattern?: string; min?: number; max?: number; raw?: string }
+      | null
+      | undefined
 
   // Fetch tables
   const [{ data: srcTable }, { data: tgtTable }] = await Promise.all([
@@ -637,6 +644,30 @@ The user has updated their description. Modify the existing SQL expression above
 `
   }
 
+  // Target CHECK constraint line — tells the AI the exact value domain so CASE/mapping
+  // SQL emits the right literals instead of guessing from source sample values.
+  const checkConstraintLine = (() => {
+    const cc = tgtCheckConstraint
+    if (!cc) return ''
+    if (cc.type === 'in_list' && cc.allowedValues && cc.allowedValues.length > 0) {
+      return `\nAllowed values: ${JSON.stringify(cc.allowedValues)}`
+    }
+    if (cc.type === 'regex' && cc.pattern) {
+      return `\nValue pattern (regex): ${cc.pattern}`
+    }
+    if (cc.type === 'range') {
+      const parts: string[] = []
+      if (cc.min !== undefined) parts.push(`min: ${cc.min}`)
+      if (cc.max !== undefined) parts.push(`max: ${cc.max}`)
+      if (parts.length === 0) return ''
+      return `\nValue range: ${parts.join(', ')}`
+    }
+    if (cc.raw) {
+      return `\nCHECK constraint: ${cc.raw}`
+    }
+    return ''
+  })()
+
   // Build user message
   const sourceBlock = isValueAssignment
     ? `<source_field>\nNo source field — this is a VALUE ASSIGNMENT.\nDefine a constant, expression, or function that produces the value for the target field.\nDo NOT reference row_data unless you know the source table columns.\nTable: ${srcTable?.name ?? ''}\n</source_field>`
@@ -646,7 +677,7 @@ ${contributingSourcesBlock}
 <target_field>
 Field: ${tgtTableName}.${tgtField.name}
 Type: ${tgtField.data_type}${tgtField.inferred_type ? ` (${tgtField.inferred_type})` : ''}
-Nullable: ${tgtField.is_nullable}
+Nullable: ${tgtField.is_nullable}${checkConstraintLine}
 ${tgtFieldCtx && tgtFieldCtx.cardinality > 0 ? `Distinct values: ${tgtFieldCtx.cardinality}` : ''}
 </target_field>
 

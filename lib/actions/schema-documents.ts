@@ -61,14 +61,112 @@ export async function uploadSchemaDocument(formData: FormData): Promise<UploadSc
         if (!extractedText) {
           console.warn('[uploadSchemaDocument] No text extracted from PDF (may be scanned/image-only):', sanitizedFilename)
         }
-      } else if (['.sql', '.ddl', '.txt'].includes(ext)) {
+      } else if (['.sql', '.ddl', '.txt', '.csv'].includes(ext)) {
         extractedText = (await file.text()).trim() || null
+      } else if (['.xlsx', '.xls', '.xlsb'].includes(ext)) {
+        // Excel schema exports: flatten all sheets to text so Claude can read
+        // them in DDL conversion. Same parser used by uploadBusinessContextDoc.
+        const { parseExcelToText } = await import('@/lib/parsers/excel')
+        const buffer = Buffer.from(await file.arrayBuffer())
+        extractedText = parseExcelToText(buffer) || null
       }
       // .doc/.docx: deferred (no parser in MVP)
-      // .png/.jpg/.jpeg: OCR deferred
+      // .png/.jpg/.jpeg: OCR deferred — falls through convertDocToDDL as a
+      //                  graceful no-op until we add vision/OCR.
     } catch (parseErr) {
       // Non-fatal — still save the file, just without extracted text
       console.error('[uploadSchemaDocument] text extraction failed:', parseErr)
+    }
+
+    // Deterministic DDL merge BEFORE AI enrichment: if this file is SQL/DDL/
+    // plaintext, run parseDDL on the extracted text and fold any CREATE TABLE
+    // declarations into existing fields (schema_source = 'ddl_parsed'). This
+    // happens *before* enrichAllTablesInDataset below so that AI enrichment
+    // sees the updated rows and the priority cascade blocks it from clobbering
+    // DDL-declared metadata (canOverride('ddl_parsed','doc_enriched') = false).
+    // Non-DDL text (e.g. a data dictionary prose .txt) parses to zero tables
+    // and is a silent no-op — the file still gets stored and enriched as usual.
+    if (extractedText && ['.sql', '.ddl', '.txt'].includes(ext)) {
+      try {
+        const { data: dataset, error: datasetErr } = await supabaseAdmin
+          .from('datasets')
+          .select('role')
+          .eq('id', datasetId)
+          .single()
+
+        if (datasetErr) {
+          console.warn('[uploadSchemaDocument] dataset lookup for DDL merge failed:', datasetErr.message)
+        } else if (dataset?.role === 'source' || dataset?.role === 'target') {
+          const { mergeConstraintsFromDDL } = await import('@/lib/actions/schema-merge')
+          const mergeResult = await mergeConstraintsFromDDL(
+            datasetId,
+            projectId,
+            extractedText,
+            dataset.role,
+            'ddl_parsed'
+          )
+          console.log(
+            `[DDL Merge] ${sanitizedFilename}: ${mergeResult.fieldsUpdated} updated, ${mergeResult.fieldsSkipped} skipped, ${mergeResult.fieldsAdded} added, ${mergeResult.rulesSeeded} rules seeded`
+          )
+          if (mergeResult.errors.length > 0) {
+            console.warn('[DDL Merge] non-fatal errors:', mergeResult.errors)
+          }
+        }
+      } catch (mergeErr) {
+        // Never let a merge failure abort the upload — the file is still saved
+        // and enrichment will still run.
+        console.warn('[uploadSchemaDocument] DDL merge failed (non-fatal):', mergeErr)
+      }
+    } else if (
+      extractedText &&
+      ['.pdf', '.xlsx', '.xls', '.xlsb', '.csv', '.docx', '.doc', '.png', '.jpg', '.jpeg'].includes(ext)
+    ) {
+      // AI-assisted DDL conversion for non-DDL formats. Claude reads the
+      // extracted text and emits PostgreSQL CREATE TABLE statements, which we
+      // then hand to the same deterministic merge pipeline used for real DDL
+      // uploads. Stamped 'doc_enriched' (not 'ddl_parsed') because the text
+      // went through an AI translation step — a real DDL upload later will
+      // win against these merges (priority cascade: ddl_parsed > doc_enriched).
+      //
+      // Everything here is best-effort. A Claude failure, an unparseable
+      // output, or a missing dataset role all degrade silently to the
+      // existing AI enrichment path below — the upload itself never fails.
+      try {
+        const { convertDocToDDL } = await import('@/lib/ai/ddl-conversion')
+        const convertedDDL = await convertDocToDDL(extractedText)
+
+        if (convertedDDL) {
+          const { data: dataset, error: datasetErr } = await supabaseAdmin
+            .from('datasets')
+            .select('role')
+            .eq('id', datasetId)
+            .single()
+
+          if (datasetErr) {
+            console.warn(
+              '[DDL Convert] dataset lookup failed:',
+              datasetErr.message
+            )
+          } else if (dataset?.role === 'source' || dataset?.role === 'target') {
+            const { mergeConstraintsFromDDL } = await import('@/lib/actions/schema-merge')
+            const mergeResult = await mergeConstraintsFromDDL(
+              datasetId,
+              projectId,
+              convertedDDL,
+              dataset.role,
+              'doc_enriched'
+            )
+            console.log(
+              `[DDL Convert] ${sanitizedFilename}: ${mergeResult.fieldsUpdated} updated, ${mergeResult.fieldsSkipped} skipped, ${mergeResult.fieldsAdded} added, ${mergeResult.rulesSeeded} rules seeded`
+            )
+            if (mergeResult.errors.length > 0) {
+              console.warn('[DDL Convert] non-fatal merge errors:', mergeResult.errors)
+            }
+          }
+        }
+      } catch (convertErr) {
+        console.warn('[uploadSchemaDocument] DDL conversion failed (non-fatal):', convertErr)
+      }
     }
 
     // Replace any existing document with the same filename — delete-before-insert
@@ -242,7 +340,10 @@ export async function uploadBusinessContextDoc(
         if (!extractedText) {
           console.warn('[uploadBusinessContextDoc] No text extracted from PDF (may be scanned/image-only):', sanitizedFilename)
         }
-      } else if (['.sql', '.ddl', '.txt', '.csv'].includes(ext)) {
+      } else if (['.sql', '.ddl', '.txt', '.md', '.csv'].includes(ext)) {
+        // Markdown is treated as plain text for enrichment — Claude ignores
+        // heading/list formatting and reads the prose directly. Same branch
+        // as .txt because the file is UTF-8 text from our perspective.
         extractedText = (await file.text()).trim() || null
       } else if (['.xlsx', '.xls', '.xlsb'].includes(ext)) {
         const { parseExcelToText } = await import('@/lib/parsers/excel')
@@ -272,6 +373,54 @@ export async function uploadBusinessContextDoc(
     if (dbError || !doc) {
       await supabase.storage.from('project-files').remove([storagePath])
       return { success: false, error: dbError?.message || 'Failed to create document record' }
+    }
+
+    // Trigger schema enrichment across every dataset in the project.
+    // Business-context docs are project-scoped (dataset_id = NULL), so unlike
+    // Schema Documentation uploads there's no single dataset to target. We
+    // walk each dataset and enrich its tables; enrichSchemaFromDocs (see
+    // schema-enrichment.ts Step 2) pulls business_context docs via
+    // project_id, so the rules a user just uploaded will be in Claude's
+    // context window on the very next enrichment pass.
+    //
+    // Gated on extractedText — a scanned PDF or image with no OCR output
+    // provides nothing to enrich from, so we'd just spend Claude tokens
+    // repeating the previous enrichment result.
+    //
+    // Any failure here is non-fatal: the document is already stored and the
+    // user's upload succeeded. Enrichment can be retried later manually.
+    if (extractedText) {
+      try {
+        const { data: datasets } = await supabaseAdmin
+          .from('datasets')
+          .select('id')
+          .eq('project_id', projectId)
+
+        if (datasets && datasets.length > 0) {
+          const { enrichAllTablesInDataset } = await import(
+            '@/lib/actions/schema-enrichment'
+          )
+          for (const ds of datasets) {
+            try {
+              const result = await enrichAllTablesInDataset(ds.id)
+              if (result.totalCorrections > 0) {
+                console.log(
+                  `[Business Context] Enrichment: ${result.totalCorrections} field(s) corrected across ${result.tableCount} table(s) in dataset ${ds.id}`
+                )
+              }
+            } catch (perDsErr) {
+              console.error(
+                `[Business Context] Enrichment failed for dataset ${ds.id}:`,
+                perDsErr
+              )
+              // Continue to remaining datasets.
+            }
+          }
+        }
+      } catch (err) {
+        console.error('[Business Context] Enrichment failed:', err)
+        // Non-fatal — document is still stored successfully.
+      }
     }
 
     await logActivity(

@@ -102,14 +102,9 @@ export async function uploadCSV(formData: FormData): Promise<UploadCSVResult> {
     })
 
     // ── Step 5: Infer schema ──────────────────────────────────────────────────
-    // Fetch sibling tables so FK detection can verify the referenced table exists
-    const { data: siblingTables } = await supabase
-      .from('tables')
-      .select('name')
-      .eq('dataset_id', datasetId)
-
-    const existingTables = (siblingTables ?? []).map((t) => ({ name: t.name }))
-
+    // Only value-observable facts are derived here: data_type, inferred_type,
+    // and is_nullable (from observed blanks). Structural metadata (PK/FK) is
+    // deliberately not inferred from CSV — see the comment inside the map.
     const sampleRows = sanitizedRows.slice(0, 100)
     const inferredFields = headers.map((header, index) => {
       const values = sampleRows
@@ -118,7 +113,22 @@ export async function uploadCSV(formData: FormData): Promise<UploadCSVResult> {
 
       const { dataType, inferredType } = inferColumnType(header, values)
       const isNullable = values.length < sampleRows.length
-      const { isPrimaryKey, isForeignKey, fkReference } = detectKeyType(header, tableName, values, existingTables)
+
+      // CSV files carry no structural metadata — a column's header and value
+      // distribution aren't evidence of PK-ness or FK-ness. Column-name
+      // heuristics produced wrong answers on legacy schemas (e.g. NMLS_ID /
+      // TELLER_ID mis-flagged as PK while BRANCH_NO / CIF_NO / OFFICER_CD
+      // were missed). PK/FK determination is deferred to the higher-priority
+      // layers in the schema_source cascade (see lib/utils/schema-priority.ts):
+      //   - ddl_parsed           (uploaded DDL or DB connector introspection)
+      //   - doc_enriched         (AI reading schema documentation)
+      //   - cross_table_inferred (value-overlap matching once real PKs exist)
+      //   - manual               (user edit in Schema Overview)
+      // Each of those layers operates on actual evidence; CSV upload should
+      // not plant false positives for them to overwrite.
+      const isPrimaryKey = false
+      const isForeignKey = false
+      const fkReference = null
 
       return {
         name: header,
@@ -261,6 +271,30 @@ export async function uploadCSV(formData: FormData): Promise<UploadCSVResult> {
       console.warn('[csv] Schema enrichment failed (non-fatal):', enrichErr)
     }
 
+    // ── Step 13: Cross-table FK inference ────────────────────────────────────
+    // Each CSV upload is a separate server-action call, so there is no single
+    // "all CSVs done" hook. Instead, we run inference after every upload and
+    // rely on its idempotent write contract (Step 2 filter in fk-inference.ts):
+    //   - is_foreign_key=false and schema_source='inferred' only, so detections
+    //     from earlier uploads won't be reconsidered and DDL/doc/manual labels
+    //     are never overwritten.
+    //   - First upload is a no-op (one table, nothing to cross-reference).
+    //   - By the final upload the registry has every sibling PK available.
+    // Placed AFTER enrichment so any PKs that enrichment just elevated
+    // (schema_source='doc_enriched') participate in the registry as PK targets.
+    try {
+      const { inferCrossTableFKs } = await import('@/lib/quality/fk-inference')
+      const result = await inferCrossTableFKs(projectId, datasetId)
+      if (result.inferred.length > 0) {
+        console.log(`[csv] FK inference added ${result.inferred.length} cross-table FK(s) after "${tableName}"`)
+      }
+      if (result.errors.length > 0) {
+        console.warn('[csv] FK inference completed with errors:', result.errors)
+      }
+    } catch (inferErr) {
+      console.warn('[csv] FK inference failed (non-fatal):', inferErr)
+    }
+
     const actionType = role === 'source' ? 'source_uploaded' : 'target_uploaded'
     await logActivity(
       projectId,
@@ -399,6 +433,22 @@ function inferColumnType(
   return { dataType: `VARCHAR(${roundedLen})`, inferredType: null }
 }
 
+// DEPRECATED: PK/FK detection removed from CSV upload.
+// Structural metadata is now handled by DDL merge, cross-table inference,
+// AI enrichment, and manual edit. This function is preserved for reference
+// but not called.
+//
+// Context: column-name + uniqueness heuristics produced wrong answers on
+// legacy schemas — e.g. NMLS_ID and TELLER_ID were mis-flagged as PK while
+// the real PKs (BRANCH_NO, CIF_NO, OFFICER_CD) were missed because they
+// don't end in "_id". Rather than extend the heuristic, CSV upload now
+// defers PK/FK determination entirely to layers that work from authoritative
+// evidence (see lib/utils/schema-priority.ts):
+//   - ddl_parsed           (uploaded DDL / DB connector introspection)
+//   - doc_enriched         (AI reading schema documentation)
+//   - cross_table_inferred (value-overlap matching once real PKs exist)
+//   - manual               (user edit in Schema Overview)
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
 function detectKeyType(
   fieldName: string,
   tableName: string,

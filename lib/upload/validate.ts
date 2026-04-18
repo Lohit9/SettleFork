@@ -39,7 +39,24 @@ export function validateSchemaDocUpload(file: File): SchemaDocValidationResult {
     return { valid: false, reason: 'File exceeds 20MB limit' }
   }
 
-  const allowedExtensions = ['.pdf', '.ddl', '.sql', '.txt', '.doc', '.docx', '.png', '.jpg', '.jpeg']
+  // .xlsx/.xls/.xlsb and .csv accept Excel / CSV schema exports: these go
+  // through AI-powered DDL conversion (lib/ai/ddl-conversion.ts) on the
+  // server, since parseDDL won't recognise a spreadsheet directly.
+  const allowedExtensions = [
+    '.pdf',
+    '.ddl',
+    '.sql',
+    '.txt',
+    '.doc',
+    '.docx',
+    '.xlsx',
+    '.xls',
+    '.xlsb',
+    '.csv',
+    '.png',
+    '.jpg',
+    '.jpeg',
+  ]
   const ext = file.name.toLowerCase().match(/\.[^.]+$/)?.[0]
   if (!ext || !allowedExtensions.includes(ext)) {
     return {

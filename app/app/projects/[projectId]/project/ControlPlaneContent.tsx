@@ -227,7 +227,7 @@ function BusinessContextSection({
 }) {
   const [state, setState] = useState<DocUploadState>({ uploading: false, error: null, isDragOver: false })
   const fileInputRef = useRef<HTMLInputElement>(null)
-  const ACCEPTED = '.pdf,.txt,.doc,.docx,.xlsx,.csv,.png,.jpg,.jpeg'
+  const ACCEPTED = '.pdf,.txt,.md,.doc,.docx,.xlsx,.csv,.png,.jpg,.jpeg'
 
   const doUpload = async (file: File) => {
     setState((s) => ({ ...s, uploading: true, error: null }))
@@ -282,7 +282,7 @@ function BusinessContextSection({
         <div className="space-y-1.5">
           <FileText className="w-5 h-5 text-settle-slate-400 mx-auto" />
           <p className="text-xs font-medium text-settle-slate-600">Upload business rules, migration requirements, or other context documents</p>
-          <p className="text-[10px] text-settle-slate-400">PDF, DOCX, TXT, XLSX, CSV · Max 20MB</p>
+          <p className="text-[10px] text-settle-slate-400">PDF, DOCX, TXT, MD, XLSX, CSV · Max 20MB</p>
           <input ref={fileInputRef} type="file" accept={ACCEPTED} className="hidden"
             onChange={(e) => { const f = e.target.files?.[0]; if (f) doUpload(f); e.target.value = '' }} />
           <RoleTooltip allowed={canEdit} requiredRole="Editor">
