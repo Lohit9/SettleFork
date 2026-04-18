@@ -198,7 +198,7 @@ export default function Hero() {
           </ScrollReveal>
 
           {/* Right: Animated product demo */}
-          <ScrollReveal delay={0.15}>
+          <ScrollReveal delay={0.15} className="max-w-md mx-auto lg:max-w-none">
             <HeroFlow />
             <p className="text-sm text-[#64748B] text-center mt-4">
               Built by a former Deloitte enterprise data migration lead.
