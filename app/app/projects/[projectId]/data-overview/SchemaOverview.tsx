@@ -1,12 +1,12 @@
 'use client'
 
 import { useState, useTransition } from 'react'
-import { ChevronRight, Upload, Check, Pencil } from '@/components/icons'
+import { ChevronRight, Check, Pencil, Search } from '@/components/icons'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { updateField } from '@/lib/actions/fields'
 import { useProjectRole } from '@/lib/hooks/useProjectRole'
 import { enrichSchemaFromDocs } from '@/lib/actions/schema-enrichment'
-import type { DatasetSchemaData, FieldData, CheckConstraint } from '@/lib/actions/data-overview'
+import type { DatasetSchemaData, TableData, FieldData, CheckConstraint } from '@/lib/actions/data-overview'
 
 interface SchemaOverviewProps {
   projectId: string
@@ -34,10 +34,14 @@ const COMMON_TYPES = [
 
 function FieldEditModal({
   field,
+  fkOptions,
   onClose,
   onSave,
 }: {
   field: FieldData
+  /** PK options for the dropdown, in canonical "TABLE.FIELD" form.
+   *  Scoped to the editing field's own dataset, with its own table excluded. */
+  fkOptions: string[]
   onClose: () => void
   onSave: (updated: FieldData) => void
 }) {
@@ -46,8 +50,15 @@ function FieldEditModal({
   const [isNullable, setIsNullable] = useState(field.is_nullable)
   const [isPK, setIsPK] = useState(field.is_primary_key)
   const [isFK, setIsFK] = useState(field.is_foreign_key)
+  const [fkRef, setFkRef] = useState(field.fk_reference ?? '')
   const [saving, startSaving] = useTransition()
   const [error, setError] = useState<string | null>(null)
+
+  // Canonical server-side FK reference: empty string becomes null, trimmed
+  // string otherwise, and always null when the FK flag is off. Mirrors the
+  // PK↔FK mutual-exclusion enforced by the checkbox handlers below so that
+  // "unchecking FK" and "checking PK" both clear the reference.
+  const fkReferenceToPersist = isFK ? (fkRef.trim() || null) : null
 
   function handleSave() {
     setError(null)
@@ -59,12 +70,21 @@ function FieldEditModal({
           is_nullable: isNullable,
           is_primary_key: isPK,
           is_foreign_key: isFK,
+          fk_reference: fkReferenceToPersist,
         })
         if (!result.success) {
           setError(result.error || 'Save failed')
           return
         }
-        onSave({ ...field, name, data_type: dataType, is_nullable: isNullable, is_primary_key: isPK, is_foreign_key: isFK })
+        onSave({
+          ...field,
+          name,
+          data_type: dataType,
+          is_nullable: isNullable,
+          is_primary_key: isPK,
+          is_foreign_key: isFK,
+          fk_reference: fkReferenceToPersist,
+        })
         onClose()
       } catch (e) {
         setError(e instanceof Error ? e.message : 'Save failed')
@@ -132,8 +152,14 @@ function FieldEditModal({
                 type="checkbox"
                 checked={isPK}
                 onChange={(e) => {
-                  setIsPK(e.target.checked)
-                  if (e.target.checked) setIsFK(false)
+                  const next = e.target.checked
+                  setIsPK(next)
+                  if (next) {
+                    // PK ⇒ not FK. Clear the reference input too so a later
+                    // save doesn't persist a stale FK target from before.
+                    setIsFK(false)
+                    setFkRef('')
+                  }
                 }}
                 className="w-4 h-4 rounded border-gray-300 text-blue-600 focus:ring-blue-500"
               />
@@ -144,14 +170,61 @@ function FieldEditModal({
                 type="checkbox"
                 checked={isFK}
                 onChange={(e) => {
-                  setIsFK(e.target.checked)
-                  if (e.target.checked) setIsPK(false)
+                  const next = e.target.checked
+                  setIsFK(next)
+                  if (next) {
+                    setIsPK(false)
+                  } else {
+                    // Per spec: unchecking FK clears the reference input.
+                    setFkRef('')
+                  }
                 }}
                 className="w-4 h-4 rounded border-gray-300 text-blue-600 focus:ring-blue-500"
               />
               Foreign Key
             </label>
           </div>
+
+          {isFK && (
+            <div>
+              <label className="block text-xs font-medium text-gray-700 mb-1">
+                References
+              </label>
+              <div className="flex gap-2">
+                <Select
+                  value={fkOptions.includes(fkRef) ? fkRef : '__custom'}
+                  onValueChange={(val) => {
+                    if (val !== '__custom') setFkRef(val)
+                  }}
+                >
+                  <SelectTrigger className="flex-1 h-9 text-sm">
+                    <SelectValue placeholder={fkOptions.length > 0 ? 'Select target…' : 'No PKs in this dataset'} />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {fkOptions.map((opt) => (
+                      <SelectItem key={opt} value={opt}>
+                        {opt}
+                      </SelectItem>
+                    ))}
+                    {fkRef && !fkOptions.includes(fkRef) && (
+                      <SelectItem value="__custom">{fkRef}</SelectItem>
+                    )}
+                  </SelectContent>
+                </Select>
+                <input
+                  value={fkRef}
+                  onChange={(e) => setFkRef(e.target.value)}
+                  placeholder="TableName.field_name"
+                  className="flex-1 border border-gray-300 rounded-lg px-3 py-2 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-blue-500"
+                />
+              </div>
+              {!fkRef.trim() && (
+                <p className="mt-1.5 text-[11px] text-amber-600">
+                  Specify the referenced table and field for validation to work.
+                </p>
+              )}
+            </div>
+          )}
         </div>
 
         {error && <p className="mt-3 text-xs text-red-600">{error}</p>}
@@ -310,6 +383,35 @@ function SchemaPanel({
 
   const totalTables = datasets.reduce((sum, ds) => sum + ds.tables.length, 0)
 
+  const [search, setSearch] = useState('')
+
+  // Search filter: drill dataset → table → field. A table-name match shows
+  // the whole table; otherwise only fields whose names match are kept. Empty
+  // tables and datasets are pruned so the UI doesn't render hollow sections.
+  const searchLower = search.trim().toLowerCase()
+  const isSearching = searchLower.length > 0
+
+  const filteredDatasets: DatasetSchemaData[] = !isSearching
+    ? datasets
+    : datasets
+        .map((ds) => {
+          const filteredTables = ds.tables
+            .map((table): TableData | null => {
+              const tableNameMatch = table.name.toLowerCase().includes(searchLower)
+              if (tableNameMatch) return table
+              const matchingFields = table.fields.filter((f) =>
+                f.name.toLowerCase().includes(searchLower)
+              )
+              if (matchingFields.length > 0) return { ...table, fields: matchingFields }
+              return null
+            })
+            .filter((t): t is TableData => t !== null)
+          return filteredTables.length > 0 ? { ...ds, tables: filteredTables } : null
+        })
+        .filter((ds): ds is DatasetSchemaData => ds !== null)
+
+  const totalFilteredTables = filteredDatasets.reduce((sum, ds) => sum + ds.tables.length, 0)
+
   const [expanded, setExpanded] = useState<Set<string>>(new Set())
   const [fieldOverrides, setFieldOverrides] = useState<Map<string, FieldData>>(new Map())
   const [editingField, setEditingField] = useState<FieldData | null>(null)
@@ -328,6 +430,37 @@ function SchemaPanel({
 
   function handleFieldSaved(updated: FieldData) {
     setFieldOverrides((prev) => new Map(prev).set(updated.id, { ...updated, schema_source: 'manual' }))
+  }
+
+  /**
+   * Compute FK reference options for the field being edited. Scope matches
+   * the cross-table inference engine (lib/quality/fk-inference.ts):
+   *   - Same dataset as the editing field (panel holds either source or
+   *     target datasets, never both, so we're already naturally scoped by
+   *     role — we further narrow to the specific dataset the field lives in).
+   *   - Excludes PKs in the field's OWN table (a column doesn't reference
+   *     its own row).
+   *   - Reflects the panel's unsaved overrides so a user who just flipped a
+   *     field to PK in this session sees it as an option immediately.
+   */
+  function buildFkOptions(target: FieldData): string[] {
+    const ownerDataset = datasets.find((ds) =>
+      ds.tables.some((t) => t.fields.some((f) => f.id === target.id))
+    )
+    if (!ownerDataset) return []
+    const ownerTable = ownerDataset.tables.find((t) =>
+      t.fields.some((f) => f.id === target.id)
+    )
+    const options: string[] = []
+    for (const t of ownerDataset.tables) {
+      if (ownerTable && t.id === ownerTable.id) continue
+      for (const rawField of t.fields) {
+        const f = fieldOverrides.get(rawField.id) ?? rawField
+        if (!f.is_primary_key) continue
+        options.push(`${t.name}.${f.name}`)
+      }
+    }
+    return options.sort((a, b) => a.localeCompare(b))
   }
 
   async function handleReanalyze(datasetId: string, tableId: string) {
@@ -351,16 +484,19 @@ function SchemaPanel({
 
   return (
     <div className="flex-1 min-w-0 border border-gray-100 rounded-lg bg-white overflow-hidden">
-      {/* Panel header */}
-      <div className="px-5 py-4 border-b border-gray-100 flex items-center justify-between bg-gray-50/50">
-        <h2 className="text-sm font-semibold text-gray-900">{title}</h2>
-        <a
-          href={`/app/projects/${projectId}`}
-          className="flex items-center gap-1.5 text-xs text-gray-600 border border-gray-300 rounded-lg px-2.5 py-1.5 hover:bg-gray-50"
-        >
-          <Upload className="w-3.5 h-3.5" />
-          Upload
-        </a>
+      {/* Panel header — title + per-panel search */}
+      <div className="px-4 py-2.5 border-b border-gray-100 flex items-center gap-3 bg-gray-50/50">
+        <h2 className="text-sm font-semibold text-gray-900 flex-shrink-0">{title}</h2>
+        <div className="relative w-36 flex-shrink-0 ml-auto">
+          <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-gray-400 pointer-events-none" />
+          <input
+            type="text"
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            placeholder="Search..."
+            className="w-full h-7 pl-8 pr-3 text-xs bg-white border border-gray-200 rounded-md placeholder:text-gray-400 focus:outline-none focus:ring-2 focus:ring-primary/20 focus:border-primary/40 transition-colors"
+          />
+        </div>
       </div>
 
       {/* Tables grouped by dataset */}
@@ -372,8 +508,12 @@ function SchemaPanel({
               Go to Project Setup to upload CSV files
             </a>
           </div>
+        ) : totalFilteredTables === 0 ? (
+          <div className="px-5 py-8 text-center">
+            <p className="text-sm text-gray-500">No tables or fields matching &ldquo;{search}&rdquo;</p>
+          </div>
         ) : (
-          datasets.map((ds) => (
+          filteredDatasets.map((ds) => (
             <div key={ds.id}>
               {/* Dataset label */}
               <div className="px-5 py-2 bg-gray-50 border-b border-gray-100">
@@ -381,7 +521,7 @@ function SchemaPanel({
               </div>
 
               {ds.tables.map((table) => {
-                const isExpanded = expanded.has(table.id)
+                const isExpanded = expanded.has(table.id) || isSearching
                 const isEnriching = enrichingTableId === table.id
                 const toast = enrichToast?.tableId === table.id ? enrichToast.msg : null
 
@@ -484,6 +624,7 @@ function SchemaPanel({
       {editingField && (
         <FieldEditModal
           field={editingField}
+          fkOptions={buildFkOptions(editingField)}
           onClose={() => setEditingField(null)}
           onSave={(updated) => {
             handleFieldSaved(updated)
@@ -499,17 +640,9 @@ function SchemaPanel({
 
 export default function SchemaOverview({ projectId, source, target }: SchemaOverviewProps) {
   return (
-    <div className="flex gap-4 flex-1">
-      <SchemaPanel
-        title="Source System"
-        datasets={source}
-        projectId={projectId}
-      />
-      <SchemaPanel
-        title="Target System"
-        datasets={target}
-        projectId={projectId}
-      />
+    <div className="flex gap-4 flex-1 min-h-0">
+      <SchemaPanel title="Source System" datasets={source} projectId={projectId} />
+      <SchemaPanel title="Target System" datasets={target} projectId={projectId} />
     </div>
   )
 }
