@@ -110,8 +110,16 @@ export default function DataProfiling({
     }
   }
 
-  // Total quality issues across all fields in the current table
-  const totalQualityIssues = data?.fields.reduce((s, f) => s + f.qualityIssues.total, 0) ?? 0
+  // Total issues across all fields in the current table. Uses the same
+  // per-field logic as the "Data quality" column: prefer the quality_issues
+  // row count when present, otherwise fall back to field_profiles.format_issues_count.
+  // This keeps the top counter consistent with what's visible in the column —
+  // without it, a single quality_issues row anywhere in the table would hide
+  // every field's format_issues_count from the total.
+  const totalQualityIssues = data?.fields.reduce(
+    (s, f) => s + (f.qualityIssues.total > 0 ? f.qualityIssues.total : f.format_issues_count),
+    0
+  ) ?? 0
   const hasBlocking = data?.fields.some((f) => f.qualityIssues.blocking > 0) ?? false
 
   // Group profilable tables for the dropdown
@@ -127,12 +135,13 @@ export default function DataProfiling({
 
   if (profilableTables.length === 0) {
     return (
-      <div className="bg-white border border-gray-100 rounded-lg p-10 text-center">
-        <p className="text-sm font-medium text-gray-700">No data to profile</p>
-        <p className="text-sm text-gray-500 mt-1">
-          Upload CSV files as source data to see profiling statistics.
-          Tables created from DDL files do not have row data.
-        </p>
+      <div className="flex-1 flex items-center justify-center p-8">
+        <div className="text-center">
+          <p className="text-sm font-medium text-gray-900 mb-1">No data to profile</p>
+          <p className="text-sm text-gray-500">
+            Upload CSV files as source data to see profiling statistics. Tables created from DDL files do not have row data.
+          </p>
+        </div>
       </div>
     )
   }
@@ -163,8 +172,10 @@ export default function DataProfiling({
       </div>
 
       {!selectedTableId ? (
-        <div className="bg-white border border-gray-100 rounded-lg p-10 text-center">
-          <p className="text-sm text-gray-500">Select a table to view profiling data.</p>
+        <div className="flex-1 flex items-center justify-center p-8">
+          <div className="text-center">
+            <p className="text-sm text-gray-500">Select a table to view profiling data.</p>
+          </div>
         </div>
       ) : loading ? (
         <div className="bg-white border border-gray-100 rounded-lg p-10 text-center">
@@ -173,8 +184,10 @@ export default function DataProfiling({
       ) : error ? (
         <div className="bg-white border border-gray-100 rounded-lg p-6 text-center text-sm text-red-600">{error}</div>
       ) : !data ? (
-        <div className="bg-white border border-gray-100 rounded-lg p-10 text-center text-sm text-gray-500">
-          No profiling data found for this table.
+        <div className="flex-1 flex items-center justify-center p-8">
+          <div className="text-center">
+            <p className="text-sm text-gray-500">No profiling data found for this table.</p>
+          </div>
         </div>
       ) : (
         <>
@@ -191,7 +204,7 @@ export default function DataProfiling({
             <div className="flex items-center gap-2 px-3 py-1.5 rounded-lg border border-gray-100 bg-white">
               <span className="text-xs text-gray-500">Issues</span>
               <span className="text-sm font-medium text-settle-slate-900">
-                {totalQualityIssues > 0 ? totalQualityIssues : data.totalFormatIssues}
+                {totalQualityIssues}
               </span>
             </div>
           </div>
@@ -230,32 +243,50 @@ export default function DataProfiling({
                       </td>
                       <td className="px-5 py-3 text-right">
                         <div className="relative inline-block">
-                          {f.qualityIssues.total > 0 ? (
-                            <button
-                              ref={(el) => { triggerRefs.current[f.id] = el }}
-                              onClick={() =>
-                                setOpenQualityPopover(
-                                  openQualityPopover === f.id ? null : f.id
-                                )
-                              }
-                              className={`text-sm cursor-pointer ${
-                                f.qualityIssues.blocking > 0
-                                  ? 'text-red-600 hover:text-red-800'
-                                  : 'text-amber-600 hover:text-amber-800'
-                              }`}
-                            >
-                              {f.qualityIssues.total} {f.qualityIssues.total === 1 ? 'issue' : 'issues'}
-                            </button>
-                          ) : f.format_issues_count > 0 ? (
-                            <span className="text-sm text-amber-600">
-                              {f.format_issues_count} {f.format_issues_count === 1 ? 'issue' : 'issues'}
-                            </span>
-                          ) : (
-                            <span className="text-sm text-settle-slate-300">—</span>
-                          )}
+                          {(() => {
+                            // Unified display count: prefer materialised quality_issues rows,
+                            // fall back to upload-time format_issues_count. Both paths open the
+                            // same popover; the popover body branches on which data exists.
+                            const displayCount =
+                              f.qualityIssues.total > 0
+                                ? f.qualityIssues.total
+                                : f.format_issues_count
+                            if (displayCount === 0) {
+                              return <span className="text-sm text-settle-slate-300">—</span>
+                            }
+                            return (
+                              <button
+                                ref={(el) => { triggerRefs.current[f.id] = el }}
+                                onClick={() =>
+                                  setOpenQualityPopover(
+                                    openQualityPopover === f.id ? null : f.id
+                                  )
+                                }
+                                className={`text-sm cursor-pointer ${
+                                  f.qualityIssues.blocking > 0
+                                    ? 'text-red-600 hover:text-red-800'
+                                    : 'text-amber-600 hover:text-amber-800'
+                                }`}
+                              >
+                                {displayCount} {displayCount === 1 ? 'issue' : 'issues'}
+                              </button>
+                            )
+                          })()}
 
                           {/* Quality issues popover */}
-                          {openQualityPopover === f.id && (
+                          {openQualityPopover === f.id && (() => {
+                            const displayCount =
+                              f.qualityIssues.total > 0
+                                ? f.qualityIssues.total
+                                : f.format_issues_count
+                            // Show the format-only fallback when no quality_issues rows
+                            // have been materialised for this field but the upload-time
+                            // profiling flagged format violations.
+                            const showFormatFallback =
+                              !loadingIssues &&
+                              popoverIssues.length === 0 &&
+                              f.format_issues_count > 0
+                            return (
                             <div
                               ref={popoverRef}
                               className={`absolute right-0 z-50 w-80 bg-white rounded-lg shadow-lg border border-slate-200 ${
@@ -266,7 +297,7 @@ export default function DataProfiling({
                                 <h4 className="text-sm font-semibold text-gray-900">
                                   {f.name}
                                   <span className="ml-1.5 font-normal text-gray-500">
-                                    — {f.qualityIssues.total} issue{f.qualityIssues.total !== 1 ? 's' : ''}
+                                    — {displayCount} issue{displayCount !== 1 ? 's' : ''}
                                   </span>
                                 </h4>
                                 <button
@@ -282,6 +313,20 @@ export default function DataProfiling({
                                   <div className="flex items-center gap-2 py-3 text-xs text-gray-400">
                                     <span className="w-3.5 h-3.5 border-2 border-gray-200 border-t-gray-400 rounded-full animate-spin" />
                                     Loading…
+                                  </div>
+                                ) : showFormatFallback ? (
+                                  <div className="text-xs">
+                                    <div className="flex items-start gap-1.5">
+                                      <span className="mt-0.5 shrink-0 text-amber-500">⚠</span>
+                                      <div>
+                                        <p className="text-gray-700 leading-relaxed">
+                                          {f.format_issues_count.toLocaleString()} value{f.format_issues_count !== 1 ? 's' : ''} don&apos;t match the expected format for type <span className="font-mono">{f.data_type}</span>.
+                                        </p>
+                                        <p className="text-gray-400 mt-0.5">
+                                          Open Data Preview to inspect the offending values.
+                                        </p>
+                                      </div>
+                                    </div>
                                   </div>
                                 ) : (
                                   <div className="space-y-3">
@@ -316,7 +361,9 @@ export default function DataProfiling({
 
                               <div className="px-4 py-3 border-t border-gray-100 flex items-center justify-between gap-2">
                                 <p className="text-[11px] text-gray-400 leading-tight">
-                                  Source issues · re-validated after staging
+                                  {showFormatFallback
+                                    ? 'Format issues · detected at upload'
+                                    : 'Source issues · re-validated after staging'}
                                 </p>
                                 <button
                                   onClick={() => navigateToDataPreview(selectedTableId)}
@@ -326,7 +373,8 @@ export default function DataProfiling({
                                 </button>
                               </div>
                             </div>
-                          )}
+                            )
+                          })()}
                         </div>
                       </td>
                     </tr>
