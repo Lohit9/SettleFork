@@ -1424,7 +1424,7 @@ function TableMappingCard({
         </div>
 
         {/* Table-level actions */}
-        <div className={`flex items-center gap-1 ml-3 ${expanded ? '' : 'opacity-0 group-hover:opacity-100 transition-opacity duration-150'}`} onClick={(e) => e.stopPropagation()}>
+        <div className={`flex items-center gap-2 ml-3 ${expanded ? '' : 'opacity-0 group-hover:opacity-100 transition-opacity duration-150'}`} onClick={(e) => e.stopPropagation()}>
           <RoleTooltip allowed={canEdit} requiredRole="Editor">
             <button
               onClick={canEdit ? onApproveAll : undefined}
@@ -1435,6 +1435,7 @@ function TableMappingCard({
               Approve All
             </button>
           </RoleTooltip>
+          <div className="w-px h-3.5 bg-gray-200 flex-shrink-0" />
           <RoleTooltip allowed={canEdit} requiredRole="Editor">
             <button
               onClick={canEdit ? onRegenerate : undefined}
@@ -1458,6 +1459,7 @@ function TableMappingCard({
               )}
             </button>
           </RoleTooltip>
+          <div className="w-px h-3.5 bg-gray-200 flex-shrink-0" />
           <RoleTooltip allowed={canEdit} requiredRole="Editor">
             <button
               onClick={canEdit ? onDeleteTM : undefined}
