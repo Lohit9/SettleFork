@@ -231,13 +231,6 @@ export default function QueryData({ projectId, tables, isArchived = false, initi
 
   return (
     <div className="flex flex-col gap-4">
-      {/* Info banner */}
-      <div className="bg-blue-50 border border-blue-100 rounded-xl px-5 py-3">
-        <p className="text-sm text-blue-700">
-          Use this to explore and understand data. This does not modify data.
-        </p>
-      </div>
-
       <div className="flex gap-4 items-start">
         {/* Main editor column */}
         <div className="flex-1 min-w-0 flex flex-col gap-4">
