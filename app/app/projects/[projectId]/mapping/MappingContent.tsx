@@ -605,6 +605,7 @@ function InlineAddFieldRow({
         sourceFieldSamples: [],
         targetFieldSamples: [],
         sourceFieldNullPercentage: 0,
+        transformation: null,
       }
       onAdded(newFM)
       setSrcFieldId('')
@@ -669,6 +670,7 @@ function InlineAddFieldRow({
         sourceFieldSamples: [],
         targetFieldSamples: [],
         sourceFieldNullPercentage: 0,
+        transformation: null,
       }
       onAdded(newFM)
       setSrcFieldId(''); setTgtFieldId(''); setContributingFieldIds([]); setCombinationHint('')
@@ -703,6 +705,7 @@ function InlineAddFieldRow({
         sourceFieldSamples: [],
         targetFieldSamples: [],
         sourceFieldNullPercentage: 0,
+        transformation: null,
       }
       onAdded(newFM)
       setSrcFieldId(''); setTgtFieldId(''); setAdditionalTargetIds([]); setSplitHint('')
@@ -1477,6 +1480,7 @@ function TableMappingCard({
         sourceFieldSamples: [],
         targetFieldSamples: [],
         sourceFieldNullPercentage: 0,
+        transformation: null,
       }
       onFieldAdded(newFM)
     } catch {
@@ -3545,6 +3549,7 @@ export default function MappingContent({ projectId, projectName, initialData, pr
         sourceFieldSamples: [],
         targetFieldSamples: [],
         sourceFieldNullPercentage: 0,
+        transformation: null,
       }
       setTableMappings((prev) =>
         prev.map((tm) =>
