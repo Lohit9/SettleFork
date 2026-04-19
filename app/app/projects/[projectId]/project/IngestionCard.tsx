@@ -1491,18 +1491,13 @@ export function IngestionCard({ type, title, projectId, initialDatasets, initial
                     }`}
                   >
                     {uploadState.status === 'uploading' && (
-                      <div className="space-y-3">
-                        <div className="flex justify-center">
-                          <svg className="animate-spin w-8 h-8 text-primary" fill="none" viewBox="0 0 24 24">
-                            <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
-                            <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v4l3-3-3-3v4a8 8 0 00-8 8h4z" />
-                          </svg>
+                      <div className="flex flex-col items-center justify-center h-full py-8">
+                        <div className="flex items-center gap-2.5">
+                          <div className="w-4 h-4 border-2 border-primary/30 border-t-primary rounded-full animate-spin flex-shrink-0" />
+                          <span className="text-sm text-gray-700">Uploading {uploadState.filename}...</span>
                         </div>
-                        <p className="text-sm text-gray-600">
-                          Uploading <span className="font-medium">{uploadState.filename}</span>…
-                        </p>
-                        <p className="text-xs text-gray-400">
-                          Inferring schema and storing rows. Large files may take a moment.
+                        <p className="text-xs text-gray-400 mt-1.5 ml-[26px]">
+                          Inferring schema · this may take a moment
                         </p>
                       </div>
                     )}
@@ -1632,18 +1627,13 @@ export function IngestionCard({ type, title, projectId, initialDatasets, initial
                 }`}
               >
                 {ddl.parsing ? (
-                  <div className="space-y-3">
-                    <div className="flex justify-center">
-                      <svg className="animate-spin w-8 h-8 text-primary" fill="none" viewBox="0 0 24 24">
-                        <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
-                        <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v4l3-3-3-3v4a8 8 0 00-8 8h4z" />
-                      </svg>
+                  <div className="flex flex-col items-center justify-center py-8">
+                    <div className="flex items-center gap-2.5">
+                      <div className="w-4 h-4 border-2 border-primary/30 border-t-primary rounded-full animate-spin flex-shrink-0" />
+                      <span className="text-sm text-gray-700">Parsing {ddl.filename ?? 'file'}...</span>
                     </div>
-                    <p className="text-sm text-gray-600">
-                      Parsing <span className="font-medium">{ddl.filename}</span>…
-                    </p>
-                    <p className="text-xs text-gray-400">
-                      Extracting table and field definitions from your DDL.
+                    <p className="text-xs text-gray-400 mt-1.5 ml-[26px]">
+                      Extracting tables and fields · this may take a moment
                     </p>
                   </div>
                 ) : ddl.error ? (

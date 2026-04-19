@@ -61,6 +61,9 @@ export interface Field {
   created_at: string
   check_constraint: CheckConstraint | null
   schema_source: FieldSchemaSource
+  /** Added by migration 064 — raw DEFAULT expression from DDL / information_schema.
+   *  NULL means no default. Stored verbatim (e.g. "CURRENT_TIMESTAMP", "0.00"). */
+  default_value: string | null
 }
 
 export interface DataRow {
@@ -195,6 +198,8 @@ export interface FixHistory {
   applied_by: string
   applied_at: string
   reverted_at: string | null
+  /** Joined from quality_issues via quality_issue_id (null if issue was deleted) */
+  quality_issues?: { title: string } | null
 }
 
 export interface FixSnapshot {
@@ -214,6 +219,15 @@ export interface ReadinessScore {
   total_fields_checked: number
   unmapped_required_count: number
   top_issues: QualityIssue[]
+  // Weighted 5-factor breakdown. All values in points (max listed after each):
+  // mapping (20), transform (25), blocking (40), warnings (5), staging (10).
+  components?: {
+    mapping: number
+    transform: number
+    blocking: number
+    warnings: number
+    staging: number
+  }
 }
 
 export interface Transformation {

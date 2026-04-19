@@ -371,6 +371,25 @@ User's rule: "${naturalLanguageRule}"`
   return { success: true, rule: savedRule }
 }
 
+// Maps a validation rule_type to the machine-readable issue_kind we record
+// on quality_issues. Populated so the Validate page can render a stable
+// chip-3 label via buildContextualLabel without fragile description matching.
+// Keys MUST match the rule_type strings handled in the switch below.
+const RULE_TYPE_TO_ISSUE_KIND: Record<string, string> = {
+  allowed_values: 'value_not_in_allowed_list',
+  not_null: 'null_required',
+  regex: 'format_violation',
+  min_length: 'length_violation',
+  max_length: 'length_violation',
+  min_value: 'range_violation',
+  max_value: 'range_violation',
+  range: 'range_violation',
+  date_after: 'range_violation',
+  date_before: 'range_violation',
+  unique: 'duplicate_value',
+  custom_sql: 'custom_rule_violation',
+}
+
 // ── execute custom rules for a table ─────────────────────────────────────────
 
 export async function executeCustomRules(
@@ -423,9 +442,13 @@ export async function executeCustomRules(
     return { success: true, newIssues: 0, warnings: [] }
   }
 
-  // Issues from staged data are in_flight; source data issues are source
+  // Stage is determined strictly by dataset role: source-table rules always
+  // produce source-stage issues (they belong in Data Profiling), target-table
+  // rules always produce in-flight issues (they belong in Validate). Staging
+  // state is NOT part of this decision — a source table with a staged
+  // mapping is still reporting source observations.
   const stage: 'source' | 'in_flight' =
-    hasStaged || datasetRole === 'target' ? 'in_flight' : 'source'
+    datasetRole === 'target' ? 'in_flight' : 'source'
 
   // Fix 1: use RLS client for validation_rules SELECT
   const { data: allMatchedRules } = await supabase
@@ -450,6 +473,58 @@ export async function executeCustomRules(
   })
 
   if (rules.length === 0) return { success: true, newIssues: 0, warnings: [] }
+
+  // Batch-fetch field_mappings + transformations for every rule that targets a
+  // field, so we can attribute root_cause_breakdown at insert time without a
+  // per-issue round-trip. Rules can be attached to either a source field
+  // (custom user rules) or a target field (DDL-seeded CHECK-constraint rules).
+  const ruleFieldIds = rules
+    .map((r) => r.field_id)
+    .filter((id): id is string => Boolean(id))
+
+  type FmRow = {
+    id: string
+    source_field_id: string | null
+    target_field_id: string | null
+    needs_transformation: boolean | null
+  }
+  const fmByFieldId = new Map<string, FmRow>()
+  let fmIds: string[] = []
+
+  if (ruleFieldIds.length > 0) {
+    const { data: fmRowsSource } = await supabaseAdmin
+      .from('field_mappings')
+      .select('id, source_field_id, target_field_id, needs_transformation, status')
+      .in('source_field_id', ruleFieldIds)
+      .neq('status', 'rejected')
+    const { data: fmRowsTarget } = await supabaseAdmin
+      .from('field_mappings')
+      .select('id, source_field_id, target_field_id, needs_transformation, status')
+      .in('target_field_id', ruleFieldIds)
+      .neq('status', 'rejected')
+
+    const fmRows = [...(fmRowsSource ?? []), ...(fmRowsTarget ?? [])] as FmRow[]
+    for (const fm of fmRows) {
+      if (fm.source_field_id && ruleFieldIds.includes(fm.source_field_id)) {
+        fmByFieldId.set(fm.source_field_id, fm)
+      }
+      if (fm.target_field_id && ruleFieldIds.includes(fm.target_field_id)) {
+        fmByFieldId.set(fm.target_field_id, fm)
+      }
+    }
+    fmIds = [...new Set(fmRows.map((fm) => fm.id))]
+  }
+
+  const txByFmId = new Map<string, { status: string }>()
+  if (fmIds.length > 0) {
+    const { data: txRows } = await supabaseAdmin
+      .from('transformations')
+      .select('field_mapping_id, status')
+      .in('field_mapping_id', fmIds)
+    for (const tx of txRows ?? []) {
+      txByFmId.set(tx.field_mapping_id as string, { status: tx.status as string })
+    }
+  }
 
   // Helper: run a rule via dq_custom_rule_staged RPC
   async function stagedCount(
@@ -490,7 +565,7 @@ export async function executeCustomRules(
       switch (rule.rule_type) {
         case 'not_null':
           if (fieldId) {
-            if (hasStaged && tableMappingId) {
+            if (hasStaged && tableMappingId && datasetRole === 'target') {
               violationCount = await stagedCount(fieldName, 'is_null')
             } else if (datasetRole === 'source') {
               const { data: cnt } = await supabaseAdmin.rpc('dq_null_count', {
@@ -516,7 +591,7 @@ export async function executeCustomRules(
 
         case 'min_value':
           if (fieldId && cfg.min !== undefined) {
-            if (hasStaged && tableMappingId) {
+            if (hasStaged && tableMappingId && datasetRole === 'target') {
               violationCount = await stagedCount(fieldName, 'less_than', String(cfg.min))
             } else if (datasetRole === 'source') {
               const { data: cnt } = await supabaseAdmin.rpc('dq_below_min_count', {
@@ -531,7 +606,7 @@ export async function executeCustomRules(
 
         case 'max_value':
           if (fieldId && cfg.max !== undefined) {
-            if (hasStaged && tableMappingId) {
+            if (hasStaged && tableMappingId && datasetRole === 'target') {
               violationCount = await stagedCount(fieldName, 'greater_than', String(cfg.max))
             } else if (datasetRole === 'source') {
               const { data: cnt } = await supabaseAdmin.rpc('dq_above_max_count', {
@@ -546,7 +621,7 @@ export async function executeCustomRules(
 
         case 'min_length':
           if (fieldId && cfg.min_length !== undefined) {
-            if (hasStaged && tableMappingId) {
+            if (hasStaged && tableMappingId && datasetRole === 'target') {
               violationCount = await stagedCount(fieldName, 'below_min_length', String(cfg.min_length))
             } else if (datasetRole === 'source') {
               const { data: cnt } = await supabaseAdmin.rpc('dq_below_min_length_count', {
@@ -561,7 +636,7 @@ export async function executeCustomRules(
 
         case 'max_length':
           if (fieldId && cfg.max_length !== undefined) {
-            if (hasStaged && tableMappingId) {
+            if (hasStaged && tableMappingId && datasetRole === 'target') {
               violationCount = await stagedCount(fieldName, 'above_max_length', String(cfg.max_length))
             } else if (datasetRole === 'source') {
               const { data: cnt } = await supabaseAdmin.rpc('dq_length_exceeded_count', {
@@ -575,20 +650,31 @@ export async function executeCustomRules(
           break
 
         case 'allowed_values':
-          // Multi-value check against staged_data_rows not yet supported; source only
-          if (fieldId && datasetRole === 'source' && Array.isArray(cfg.values) && cfg.values.length > 0) {
-            const { data: cnt } = await supabaseAdmin.rpc('dq_not_in_allowed_count', {
-              p_table_id: tableId,
-              p_field: fieldName,
-              p_values: cfg.values as string[],
-            })
-            violationCount = Number(cnt ?? 0)
+          if (fieldId && Array.isArray(cfg.values) && cfg.values.length > 0) {
+            if (hasStaged && tableMappingId && datasetRole === 'target') {
+              // Staged path: evaluates transformed_row_data (with source fallback)
+              // via dq_custom_rule_staged's 'not_in_list' operator (migration 065).
+              // Target-only — source-table rules use the source-data RPC below
+              // so they produce stage='source' issues visible in Data Profiling.
+              violationCount = await stagedCount(
+                fieldName,
+                'not_in_list',
+                JSON.stringify(cfg.values as string[])
+              )
+            } else if (datasetRole === 'source') {
+              const { data: cnt } = await supabaseAdmin.rpc('dq_not_in_allowed_count', {
+                p_table_id: tableId,
+                p_field: fieldName,
+                p_values: cfg.values as string[],
+              })
+              violationCount = Number(cnt ?? 0)
+            }
           }
           break
 
         case 'regex':
           if (fieldId && cfg.pattern) {
-            if (hasStaged && tableMappingId) {
+            if (hasStaged && tableMappingId && datasetRole === 'target') {
               // not_matches_regex counts rows that DON'T match — i.e., violations
               violationCount = await stagedCount(fieldName, 'not_matches_regex', String(cfg.pattern))
             } else if (datasetRole === 'source') {
@@ -637,6 +723,42 @@ export async function executeCustomRules(
     }
 
     if (violationCount > 0) {
+      // Root cause attribution:
+      //   - unique / custom_sql / no field_id → always source_data
+      //   - field with an applied transform → transform_error (transform didn't
+      //     fully resolve the issue)
+      //   - field with a mapping but no applied transform → missing_transform
+      //   - field with no mapping info → source_data (best-effort fallback)
+      let rootCauseBreakdown: {
+        source_data: number
+        transform_error: number
+        missing_transform: number
+      } = { source_data: violationCount, transform_error: 0, missing_transform: 0 }
+
+      if (
+        rule.rule_type !== 'unique' &&
+        rule.rule_type !== 'custom_sql' &&
+        fieldId
+      ) {
+        const fm = fmByFieldId.get(fieldId)
+        if (fm) {
+          const hasApplied = txByFmId.get(fm.id)?.status === 'applied'
+          if (hasApplied) {
+            rootCauseBreakdown = {
+              source_data: 0,
+              transform_error: violationCount,
+              missing_transform: 0,
+            }
+          } else {
+            rootCauseBreakdown = {
+              source_data: 0,
+              transform_error: 0,
+              missing_transform: violationCount,
+            }
+          }
+        }
+      }
+
       issuesToInsert.push({
         project_id: projectId,
         table_id: tableId,
@@ -654,8 +776,29 @@ export async function executeCustomRules(
         status: 'open',
         detection_source: 'custom_rule',
         validation_rule_id: rule.id,
+        issue_kind: RULE_TYPE_TO_ISSUE_KIND[rule.rule_type] ?? null,
+        root_cause_breakdown: rootCauseBreakdown,
       })
     }
+  }
+
+  // Delete any pre-existing custom_rule issues for the specific rules we just
+  // evaluated before inserting fresh ones. This prevents:
+  //   (a) duplicates from repeated scans / "Run rule" clicks — executeCustomRules
+  //       has no upsert logic, so each invocation would otherwise append;
+  //   (b) stale issues for rules that now pass — if a rule previously produced
+  //       violations but currently finds none, its old quality_issues row would
+  //       linger as a ghost. Scoped by validation_rule_id so we don't disturb
+  //       issues tied to other rules (including in runFullScan's loop over
+  //       many tables).
+  const evaluatedRuleIds = (rules as ValidationRule[]).map((r) => r.id)
+  if (evaluatedRuleIds.length > 0) {
+    await supabaseAdmin
+      .from('quality_issues')
+      .delete()
+      .eq('project_id', projectId)
+      .eq('detection_source', 'custom_rule')
+      .in('validation_rule_id', evaluatedRuleIds)
   }
 
   if (issuesToInsert.length > 0) {

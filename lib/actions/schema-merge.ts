@@ -218,6 +218,7 @@ export async function mergeConstraintsFromDDL(
       fk_reference: string | null
       ordinal_position: number
       check_constraint: CheckConstraint | null
+      default_value: string | null
       schema_source: SchemaSource
     }
     const newFields: NewFieldInsert[] = []
@@ -238,12 +239,13 @@ export async function mergeConstraintsFromDDL(
             name: pf.name,
             data_type: pf.dataType,
             inferred_type: inferBasicType(pf.dataType),
-            is_nullable: pf.isNullable,
+            is_nullable: pf.isPrimaryKey ? false : pf.isNullable,
             is_primary_key: pf.isPrimaryKey,
             is_foreign_key: pf.isForeignKey,
             fk_reference: pf.fkReference,
             ordinal_position: maxOrdinal,
             check_constraint: pf.checkConstraint ?? null,
+            default_value: pf.defaultValue ?? null,
             schema_source: schemaSourceOverride,
           })
           if (pf.checkConstraint) {
@@ -276,13 +278,19 @@ export async function mergeConstraintsFromDDL(
       }
 
       const updates = {
-        is_nullable: pf.isNullable,
+        is_nullable: pf.isPrimaryKey ? false : pf.isNullable,
         is_primary_key: pf.isPrimaryKey,
         is_foreign_key: pf.isForeignKey,
         fk_reference: pf.fkReference,
         data_type: pf.dataType,
         inferred_type: inferBasicType(pf.dataType),
         check_constraint: pf.checkConstraint ?? null,
+        // Merged alongside the other structural columns: a DDL doc is an
+        // authoritative source for defaults too, not just nullability /
+        // constraints. The existing schema_source priority guard on the
+        // UPDATE below applies unchanged (a 'manual' row still can't be
+        // clobbered by a DDL-doc merge).
+        default_value: pf.defaultValue ?? null,
         schema_source: schemaSourceOverride,
       }
 

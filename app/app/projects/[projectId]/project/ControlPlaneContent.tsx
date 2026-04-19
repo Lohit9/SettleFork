@@ -22,6 +22,7 @@ interface DocUploadState {
   uploading: boolean
   error: string | null
   isDragOver: boolean
+  filename?: string
 }
 
 interface ControlPlaneContentProps {
@@ -132,7 +133,7 @@ function SchemaDocSection({
 
   const doUpload = async (file: File) => {
     if (!datasetId) return
-    setState((s) => ({ ...s, uploading: true, error: null }))
+    setState((s) => ({ ...s, uploading: true, error: null, filename: file.name }))
     const fd = new FormData()
     fd.append('file', file)
     fd.append('projectId', projectId)
@@ -177,12 +178,14 @@ function SchemaDocSection({
         className={`border-[1.5px] border-dashed rounded-lg p-4 text-center transition-colors ${state.isDragOver ? 'border-blue-500 bg-blue-50' : 'border-settle-slate-300 hover:border-settle-slate-400'}`}
       >
         {state.uploading ? (
-          <div className="space-y-1">
-            <svg className="animate-spin w-6 h-6 text-blue-600 mx-auto" fill="none" viewBox="0 0 24 24">
-              <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
-              <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v4l3-3-3-3v4a8 8 0 00-8 8h4z" />
-            </svg>
-            <p className="text-xs text-gray-500">Uploading…</p>
+          <div className="flex flex-col items-center justify-center py-6">
+            <div className="flex items-center gap-2.5">
+              <div className="w-4 h-4 border-2 border-primary/30 border-t-primary rounded-full animate-spin flex-shrink-0" />
+              <span className="text-sm text-gray-700">Uploading {state.filename ?? 'file'}...</span>
+            </div>
+            <p className="text-xs text-gray-400 mt-1.5 ml-[26px]">
+              Processing document · this may take a moment
+            </p>
           </div>
         ) : (
           <div className="space-y-1.5">
@@ -230,7 +233,7 @@ function BusinessContextSection({
   const ACCEPTED = '.pdf,.txt,.md,.doc,.docx,.xlsx,.csv,.png,.jpg,.jpeg'
 
   const doUpload = async (file: File) => {
-    setState((s) => ({ ...s, uploading: true, error: null }))
+    setState((s) => ({ ...s, uploading: true, error: null, filename: file.name }))
     const fd = new FormData()
     fd.append('file', file)
     fd.append('projectId', projectId)
@@ -271,12 +274,14 @@ function BusinessContextSection({
       className={`border-[1.5px] border-dashed rounded-lg p-4 text-center transition-colors ${state.isDragOver ? 'border-blue-500 bg-blue-50' : 'border-settle-slate-300 hover:border-settle-slate-400'}`}
     >
       {state.uploading ? (
-        <div className="space-y-1">
-          <svg className="animate-spin w-6 h-6 text-violet-600 mx-auto" fill="none" viewBox="0 0 24 24">
-            <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
-            <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v4l3-3-3-3v4a8 8 0 00-8 8h4z" />
-          </svg>
-          <p className="text-xs text-gray-500">Uploading…</p>
+        <div className="flex flex-col items-center justify-center py-6">
+          <div className="flex items-center gap-2.5">
+            <div className="w-4 h-4 border-2 border-primary/30 border-t-primary rounded-full animate-spin flex-shrink-0" />
+            <span className="text-sm text-gray-700">Uploading {state.filename ?? 'file'}...</span>
+          </div>
+          <p className="text-xs text-gray-400 mt-1.5 ml-[26px]">
+            Indexing for AI context · this may take a moment
+          </p>
         </div>
       ) : (
         <div className="space-y-1.5">

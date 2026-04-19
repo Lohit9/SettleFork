@@ -85,7 +85,7 @@ function makeIssue(
     detection_source?: QualityIssue['detection_source']
   }
 ): Omit<QualityIssue, 'id' | 'created_at'> {
-  return {
+  const base: Omit<QualityIssue, 'id' | 'created_at'> = {
     ai_suggested_fix: null,
     ai_fix_options: null,
     downstream_impact: null,
@@ -97,6 +97,20 @@ function makeIssue(
     issue_kind: null,
     ...overrides,
   }
+
+  // Source-stage issues are always source data by definition — raw CSV / DB
+  // data observed before any transform is applied. Auto-populate the breakdown
+  // when the caller didn't set one explicitly so the UI's Root Cause filter
+  // and chip render correctly.
+  if (base.stage === 'source' && !base.root_cause_breakdown) {
+    base.root_cause_breakdown = {
+      source_data: overrides.affected_records,
+      transform_error: 0,
+      missing_transform: 0,
+    }
+  }
+
+  return base
 }
 
 // ── SOURCE DATA CHECKS ────────────────────────────────────────────────────────
@@ -668,6 +682,7 @@ export async function runInFlightChecks(projectId: string): Promise<void> {
       source_field_id,
       target_field_id,
       table_mapping_id,
+      needs_transformation,
       table_mappings!inner(
         project_id,
         source_table_id,
@@ -680,6 +695,45 @@ export async function runInFlightChecks(projectId: string): Promise<void> {
     .eq('table_mappings.project_id', projectId)
 
   if (!fieldMappings || fieldMappings.length === 0) return
+
+  // Pre-fetch transformations for all field_mappings so per-issue root-cause
+  // attribution is a map lookup rather than a per-issue query.
+  const fmIds = fieldMappings.map((fm) => fm.id)
+  const { data: transforms } = await supabaseAdmin
+    .from('transformations')
+    .select('field_mapping_id, status')
+    .in('field_mapping_id', fmIds)
+  const transformByFmId = new Map(
+    (transforms ?? []).map((t) => [t.field_mapping_id as string, t as { field_mapping_id: string; status: string }])
+  )
+
+  // Computes a clean root_cause_breakdown with exactly one non-zero bucket:
+  //   - Transform applied → split source vs transform error by comparing staged
+  //     to source violation counts (pre-existing logic).
+  //   - needs_transformation = true, no applied transform → missing_transform.
+  //   - Otherwise → source_data (no transform needed, or transform not applicable).
+  function computeRootCause(
+    fm: { id: string; needs_transformation?: boolean | null },
+    sourceCount: number,
+    stagedCount: number,
+    hasStaged: boolean
+  ): { source_data: number; transform_error: number; missing_transform: number } {
+    const transform = transformByFmId.get(fm.id)
+    const hasApplied = transform?.status === 'applied'
+    const needsTransform = fm.needs_transformation === true
+
+    if (hasStaged && hasApplied) {
+      const sourceOrigin = Math.min(sourceCount, stagedCount)
+      const transformOrigin = Math.max(0, stagedCount - sourceCount)
+      return { source_data: sourceOrigin, transform_error: transformOrigin, missing_transform: 0 }
+    }
+
+    if (needsTransform && !hasApplied) {
+      return { source_data: 0, transform_error: 0, missing_transform: stagedCount }
+    }
+
+    return { source_data: stagedCount, transform_error: 0, missing_transform: 0 }
+  }
 
   type TMRow = { project_id: string; source_table_id: string; target_table_id: string }
   type SFRow = { id: string; name: string; data_type: string; inferred_type: string | null; is_nullable: boolean; is_primary_key: boolean; table_id: string }
@@ -799,21 +853,26 @@ export async function runInFlightChecks(projectId: string): Promise<void> {
       if (exceededCount > 0) {
         const dataNote = hasStaged ? '' : ' (checked against source data — stage transforms for transformed validation)'
 
-        let rcRootCause: string | undefined
-        let rcBreakdown: QualityIssue['root_cause_breakdown']
-
+        // Always compute a clean breakdown via the helper.
+        // When not staged, sourceCount == stagedCount == exceededCount, so the
+        // helper routes to missing_transform (if needs_transformation) or source_data.
+        let sourceExceededCount = exceededCount
         if (hasStaged) {
-          const sourceExceededCount = await rpcCount('dq_length_exceeded_count', {
+          sourceExceededCount = await rpcCount('dq_length_exceeded_count', {
             p_table_id: tm.source_table_id,
             p_field: sf.name,
             p_max: maxLen,
           })
-          const rcSourceOrigin = Math.min(sourceExceededCount, exceededCount)
-          const rcTransformOrigin = Math.max(0, exceededCount - sourceExceededCount)
-          rcRootCause = rcTransformOrigin > 0
-            ? `Transform error — transform output exceeds ${maxLen} chars`
-            : `Source data — values already exceeded ${maxLen} chars at source`
-          rcBreakdown = { source_data: rcSourceOrigin, transform_error: rcTransformOrigin, missing_transform: 0 }
+        }
+        const rcBreakdown = computeRootCause(fm, sourceExceededCount, exceededCount, hasStaged)
+
+        let rcRootCause: string | undefined
+        if (rcBreakdown.transform_error > 0) {
+          rcRootCause = `Transform error — transform output exceeds ${maxLen} chars`
+        } else if (rcBreakdown.missing_transform > 0) {
+          rcRootCause = `Missing transform — values exceed ${maxLen} chars and no transform is applied to shorten them`
+        } else {
+          rcRootCause = `Source data — values already exceed ${maxLen} chars at source`
         }
 
         issuesToInsert.push(
@@ -827,6 +886,7 @@ export async function runInFlightChecks(projectId: string): Promise<void> {
             description: `Transformed ${tf.name} values exceed target field limit (${maxLen} chars) — ${exceededCount} records affected${dataNote}`,
             affected_records: Number(exceededCount),
             affected_rows_sample: samples,
+            issue_kind: 'length_overflow',
             detection_source: 'manual_scan',
             root_cause: rcRootCause,
             root_cause_breakdown: rcBreakdown,
@@ -866,7 +926,9 @@ export async function runInFlightChecks(projectId: string): Promise<void> {
             title: `${targetTableName}.${tf.name}`,
             description: `Case inconsistency: ${hasStaged ? 'transformed' : 'source'} values contain lowercase, target expects uppercase — ${mixedCount} records affected`,
             affected_records: Number(mixedCount),
+            issue_kind: 'case_inconsistency',
             detection_source: 'manual_scan',
+            root_cause_breakdown: { source_data: Number(mixedCount), transform_error: 0, missing_transform: 0 },
           })
         )
       }
@@ -953,35 +1015,26 @@ export async function runInFlightChecks(projectId: string): Promise<void> {
       if (nullCount > 0) {
         const dataNote = hasStaged ? '' : ' (checked against source data — stage transforms for transformed validation)'
 
-        let rcRootCause: string | undefined
-        let rcBreakdown: QualityIssue['root_cause_breakdown']
-
+        // Always compute a clean breakdown via the helper. Fetch the source
+        // null count for the split when staged; otherwise sourceCount == stagedCount.
+        let sourceNullCount = nullCount
         if (hasStaged) {
-          // Root cause: compare against source null count
-          const sourceNullCount = await rpcCount('dq_null_count', {
+          sourceNullCount = await rpcCount('dq_null_count', {
             p_table_id: tm.source_table_id,
             p_field: sf.name,
           })
-          const rcSourceOrigin = Math.min(sourceNullCount, nullCount)
-          const rcTransformOrigin = Math.max(0, nullCount - sourceNullCount)
-          rcRootCause =
-            rcTransformOrigin > 0 && rcSourceOrigin > 0
-              ? `${rcSourceOrigin} from source data, ${rcTransformOrigin} introduced by transform`
-              : rcTransformOrigin > 0
-                ? 'Transform error — source values were valid but transform produced null'
-                : 'Source data — values were null at source'
-          rcBreakdown = { source_data: rcSourceOrigin, transform_error: rcTransformOrigin, missing_transform: 0 }
+        }
+        const rcBreakdown = computeRootCause(fm, sourceNullCount, nullCount, hasStaged)
+
+        let rcRootCause: string | undefined
+        if (rcBreakdown.transform_error > 0 && rcBreakdown.source_data > 0) {
+          rcRootCause = `${rcBreakdown.source_data} from source data, ${rcBreakdown.transform_error} introduced by transform`
+        } else if (rcBreakdown.transform_error > 0) {
+          rcRootCause = 'Transform error — source values were valid but transform produced null'
+        } else if (rcBreakdown.missing_transform > 0) {
+          rcRootCause = 'Missing transform — source has null values and no transform is applied to handle them'
         } else {
-          // Missing transform detection: source has nulls but no applied transform
-          const { data: transform } = await supabaseAdmin
-            .from('transformations')
-            .select('id, status')
-            .eq('field_mapping_id', fm.id)
-            .maybeSingle()
-          if (!transform || transform.status === 'draft') {
-            rcRootCause = 'Missing transform — source has null values and no transform is applied to handle them'
-            rcBreakdown = { source_data: nullCount, transform_error: 0, missing_transform: nullCount }
-          }
+          rcRootCause = 'Source data — values were null at source'
         }
 
         issuesToInsert.push(
@@ -994,6 +1047,7 @@ export async function runInFlightChecks(projectId: string): Promise<void> {
             title: hasStaged ? `${targetTableName}.${tf.name}` : fieldTitle,
             description: `Target field ${targetTableName}.${tf.name} is non-nullable but has ${nullCount} null/empty values after transformation — these records will fail on load${dataNote}`,
             affected_records: Number(nullCount),
+            issue_kind: 'null_required',
             detection_source: 'manual_scan',
             root_cause: rcRootCause,
             root_cause_breakdown: rcBreakdown,
@@ -1045,7 +1099,14 @@ export async function runInFlightChecks(projectId: string): Promise<void> {
                 title: `${tbl.name}.${rf.name}`,
                 description: `Required target field ${tbl.name}.${rf.name} has no source mapping — all records will fail on load unless a default value is provided`,
                 affected_records: 0,
+                issue_kind: 'unmapped_required',
                 detection_source: 'manual_scan',
+                // By definition: an unmapped required field is always a missing
+                // mapping/transform. affected_records is 0 (no data flows at all),
+                // so use 1 as a symbolic count to surface the "Missing transform"
+                // chip in the UI.
+                root_cause: 'Missing transform — required target field has no source mapping',
+                root_cause_breakdown: { source_data: 0, transform_error: 0, missing_transform: 1 },
               })
             )
           }

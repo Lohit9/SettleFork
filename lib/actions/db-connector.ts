@@ -768,12 +768,19 @@ async function importTableFromClient({
       name: col.column_name,
       data_type: dataType,
       inferred_type: inferredType,
-      is_nullable: col.is_nullable === 'YES',
+      is_nullable: pkSet.has(col.column_name) ? false : col.is_nullable === 'YES',
       is_primary_key: pkSet.has(col.column_name),
       is_foreign_key: fkMap.has(col.column_name),
       fk_reference: fkMap.get(col.column_name) ?? null,
       ordinal_position: col.ordinal_position,
       check_constraint: checkClause ? parseCheckConstraint(checkClause) : null,
+      // information_schema.column_default — stored verbatim (e.g.
+      // "'active'::text" on PG, "CURRENT_TIMESTAMP" on MySQL). We don't
+      // attempt to unwrap dialect-specific casts here; the UI layer just
+      // cares whether the column has a default, and the dialect-aware
+      // execution package regenerates DDL from its own rendering path.
+      // Column added by migration 064.
+      default_value: col.column_default ?? null,
       // Introspected via information_schema — equivalent structural authority
       // to an uploaded DDL script, so we share the 'ddl_parsed' provenance
       // label rather than minting a new value. Requires migration 063.

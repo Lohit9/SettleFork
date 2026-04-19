@@ -207,7 +207,7 @@ function TransformStatPills({
   return (
     <div className="flex items-center gap-0 px-5 py-2 bg-white flex-shrink-0">
       <div className="flex items-center gap-1.5 px-3">
-        <span className="text-xs text-gray-500">Total</span>
+        <span className="text-xs text-gray-500">Needs Transform</span>
         <span className="text-sm font-medium text-settle-slate-900">{totalCount}</span>
       </div>
       <div className="w-px h-4 bg-gray-100 flex-shrink-0" />
@@ -476,11 +476,12 @@ export default function TransformContent({ projectId, projectName, initialData, 
   const sidebarSummary = useMemo(() => {
     const applied = filterCounts.applied
     const needsTransform = filterCounts.needs_transform
-    const hasTransform = filterCounts.has_transform - applied
+    const inProgress = filterCounts.has_transform - applied
+    const toDefine = needsTransform - filterCounts.has_transform
     const parts: string[] = []
     if (applied > 0) parts.push(`${applied} applied`)
-    if (needsTransform > 0) parts.push(`${needsTransform} to define`)
-    if (hasTransform > 0) parts.push(`${hasTransform} in progress`)
+    if (inProgress > 0) parts.push(`${inProgress} in progress`)
+    if (toDefine > 0) parts.push(`${toDefine} to define`)
     return parts.join(' · ')
   }, [filterCounts])
 
@@ -1386,10 +1387,10 @@ export default function TransformContent({ projectId, projectName, initialData, 
       </PageHeader>
 
       <TransformStatPills
-        totalCount={filterCounts.all}
+        totalCount={filterCounts.needs_transform}
         appliedCount={filterCounts.applied}
         inProgressCount={inProgressCount}
-        toDefineCount={filterCounts.needs_transform}
+        toDefineCount={filterCounts.needs_transform - filterCounts.has_transform}
       />
 
       {/* ── Filter bar — flush border-b strip ── */}
@@ -1922,6 +1923,44 @@ export default function TransformContent({ projectId, projectName, initialData, 
                     </span>
                   )}
                   {statusBadge()}
+                  {!selectedContext.field.isValueAssignment && !selectedContext.field.transformation && (
+                    <label className="flex items-center gap-1.5 cursor-pointer select-none">
+                      <span className="text-xs text-gray-400">Transform</span>
+                      <button
+                        role="switch"
+                        aria-checked={selectedContext.field.needsTransform}
+                        disabled={isDismissing || !canEdit}
+                        onClick={async () => {
+                          const fmId = selectedContext.field.fieldMappingId
+                          const currentlyNeeds = selectedContext.field.needsTransform
+                          setIsDismissing(true)
+                          try {
+                            const result = currentlyNeeds
+                              ? await dismissTransformNeeded(projectId, fmId)
+                              : await reinstateTransformNeeded(projectId, fmId)
+                            if (!result.success) {
+                              showToast(result.error || 'Could not update. Try again.', 'error')
+                            } else {
+                              refreshFieldNeedsTransform(fmId, !currentlyNeeds)
+                            }
+                          } catch {
+                            showToast('Could not update. Try again.', 'error')
+                          } finally {
+                            setIsDismissing(false)
+                          }
+                        }}
+                        className={`relative inline-flex h-4 w-7 items-center rounded-full transition-colors duration-150 disabled:opacity-50 ${
+                          selectedContext.field.needsTransform ? 'bg-primary' : 'bg-gray-200'
+                        }`}
+                      >
+                        <span
+                          className={`inline-block h-3 w-3 rounded-full bg-white transition-transform duration-150 shadow-sm ${
+                            selectedContext.field.needsTransform ? 'translate-x-3.5' : 'translate-x-0.5'
+                          }`}
+                        />
+                      </button>
+                    </label>
+                  )}
                 </div>
               </div>
 
@@ -1929,6 +1968,8 @@ export default function TransformContent({ projectId, projectName, initialData, 
               <div className="flex-1 flex flex-col min-h-0">
                 <div className="flex-1 overflow-auto p-5 space-y-4">
 
+                  {selectedContext.field.needsTransform ? (
+                    <>
                   {/* NL Description / Direct SQL — first interactive element */}
                   <div className="bg-white rounded-lg border border-gray-100 p-4">
                     {/* Header row: label + mode toggle */}
@@ -2045,50 +2086,9 @@ export default function TransformContent({ projectId, projectName, initialData, 
                             </button>
                           )}
                         </div>
-
-                        {/* Dismiss — only for standard mapped fields with no saved transform and AI flagged it */}
-                        {selectedContext.field.needsTransform &&
-                          !selectedContext.field.transformation &&
-                          !localTransform?.sql &&
-                          !selectedContext.field.isValueAssignment && (
-                          <div className="mt-4 pt-4 border-t border-gray-100">
-                            <button
-                              onClick={async () => {
-                                const fmId = selectedContext.field.fieldMappingId
-                                setIsDismissing(true)
-                                try {
-                                  const result = await dismissTransformNeeded(projectId, fmId)
-                                  if (!result.success) {
-                                    showToast(result.error || 'Could not dismiss. Try again.', 'error')
-                                  } else {
-                                    refreshFieldNeedsTransform(fmId, false)
-                                  }
-                                } catch {
-                                  showToast('Could not dismiss. Try again.', 'error')
-                                } finally {
-                                  setIsDismissing(false)
-                                }
-                              }}
-                              disabled={isDismissing || !canEdit}
-                              className="text-sm text-gray-500 hover:text-gray-700 underline underline-offset-2 decoration-gray-300 hover:decoration-gray-500 transition-colors disabled:opacity-50"
-                            >
-                              {isDismissing ? 'Saving…' : 'Mark as no transform needed'}
-                            </button>
-                            <p className="text-xs text-gray-400 mt-1">
-                              This field will be mapped directly without transformation.
-                            </p>
-                          </div>
-                        )}
                       </>
                     ) : (
                       <>
-                        {/* Direct SQL mode — write expression without AI */}
-                        <div className="mb-2 px-3 py-2 bg-gray-50 border border-gray-100 rounded-lg text-xs text-gray-600">
-                          Write a PostgreSQL expression for a single row. Use bare field names —
-                          e.g. <code className="bg-gray-100 px-1 rounded font-mono">UPPER(TRIM(lead_attorney))</code> or{' '}
-                          <code className="bg-gray-100 px-1 rounded font-mono">LEFT(MD5(LOWER(TRIM(lead_attorney))), 12)</code>.
-                          The system wraps field references in JSONB automatically.
-                        </div>
                         <textarea
                           value={localTransform?.sql ?? ''}
                           onChange={(e) => handleSqlChange(e.target.value)}
@@ -2113,7 +2113,7 @@ export default function TransformContent({ projectId, projectName, initialData, 
                   </div>
 
                   {/* Why Transform? — collapsible reference block, collapsed by default */}
-                  {selectedContext.field.needsTransform && selectedContext.field.aiReasoning && (
+                  {selectedContext.field.aiReasoning && (
                     <div className="rounded-lg border border-gray-100 bg-white overflow-hidden">
                       <button
                         type="button"
@@ -2155,43 +2155,11 @@ export default function TransformContent({ projectId, projectName, initialData, 
                       )}
                     </div>
                   )}
-
-                  {/* No transform needed info — also shown after user dismisses */}
-                  {!selectedContext.field.needsTransform && !localTransform?.sql &&
-                    !selectedContext.field.isValueAssignment && (
-                    <div className="bg-blue-50 border border-blue-200 rounded-lg p-4">
-                      <div className="flex items-start gap-2">
-                        <AlertCircle className="w-4 h-4 text-blue-600 mt-0.5 flex-shrink-0" />
-                        <div className="flex-1 min-w-0">
-                          <p className="text-sm font-medium text-blue-900">No transformation needed</p>
-                          <p className="text-xs text-blue-700 mt-0.5">
-                            This field will be mapped directly to the target without transformation.
-                          </p>
-                          <button
-                            onClick={async () => {
-                              const fmId = selectedContext.field.fieldMappingId
-                              setIsDismissing(true)
-                              try {
-                                const result = await reinstateTransformNeeded(projectId, fmId)
-                                if (!result.success) {
-                                  showToast(result.error || 'Could not reinstate. Try again.', 'error')
-                                } else {
-                                  refreshFieldNeedsTransform(fmId, true)
-                                }
-                              } catch {
-                                showToast('Could not reinstate. Try again.', 'error')
-                              } finally {
-                                setIsDismissing(false)
-                              }
-                            }}
-                            disabled={isDismissing || !canEdit}
-                            className="mt-2 text-xs text-blue-600 hover:text-blue-800 underline underline-offset-2 disabled:opacity-50 transition-colors"
-                          >
-                            {isDismissing ? 'Saving…' : 'Actually, I need a transform for this field'}
-                          </button>
-                        </div>
-                      </div>
-                    </div>
+                    </>
+                  ) : (
+                    <p className="text-sm text-gray-400 py-3">
+                      Mapped directly without transformation.
+                    </p>
                   )}
 
               {/* Stale warning banner */}

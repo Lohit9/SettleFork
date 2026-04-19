@@ -196,8 +196,10 @@ function parseColumnDef(def: string): ParsedField | null {
 
   const flags = remainder.toUpperCase()
 
-  const isNullable = !/\bNOT\s+NULL\b/.test(flags)
+  let isNullable = !/\bNOT\s+NULL\b/.test(flags)
   const isPrimaryKey = /\bPRIMARY\s+KEY\b/.test(flags)
+  // PRIMARY KEY implies NOT NULL per SQL standard
+  if (isPrimaryKey) isNullable = false
   const isForeignKey = /\bREFERENCES\b/.test(flags)
 
   let fkReference: string | null = null

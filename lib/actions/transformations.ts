@@ -75,6 +75,9 @@ export interface UnmappedTargetField {
   table_id: string
   table_name: string
   check_constraint: { type: string; allowedValues?: string[]; pattern?: string; raw?: string } | null
+  /** Raw DEFAULT expression (migration 064). When set, a NOT NULL column
+   *  is no longer "required" for mapping coverage — the DB auto-populates. */
+  default_value: string | null
 }
 
 export interface TransformPageData {
@@ -328,7 +331,7 @@ export async function getTransformData(
   const allTargetTableIds = [...new Set(tms.map((tm) => tm.target_table_id))]
   const { data: allTgtFieldRows } = await supabase
     .from('fields')
-    .select('id, name, data_type, is_nullable, is_primary_key, table_id, check_constraint')
+    .select('id, name, data_type, is_nullable, is_primary_key, table_id, check_constraint, default_value')
     .in('table_id', allTargetTableIds.length > 0 ? allTargetTableIds : ['__none__'])
     .order('ordinal_position', { ascending: true })
 
@@ -350,10 +353,24 @@ export async function getTransformData(
     table_id: f.table_id,
     table_name: tgtTableNameById.get(f.table_id) ?? '',
     check_constraint: f.check_constraint as UnmappedTargetField['check_constraint'],
+    default_value: (f as { default_value?: string | null }).default_value ?? null,
   })
 
-  const unmappedNotNullTargetFields = allUnmapped.filter((f) => !f.is_nullable).map(toUnmapped)
-  const unmappedNullableTargetFields = allUnmapped.filter((f) => f.is_nullable).map(toUnmapped)
+  // A column with a DEFAULT expression (migration 064) will auto-populate on
+  // INSERT even when unmapped, so it does NOT belong in the "blocking"
+  // NOT-NULL bucket that the transform page uses to gate readiness. We
+  // still want to surface it in the UI — callers can render it in the
+  // nullable/soft bucket and tag it as "has default" off `default_value`.
+  const hasDefault = (f: typeof allUnmapped[number]) => {
+    const dv = (f as { default_value?: string | null }).default_value
+    return dv != null && String(dv).length > 0
+  }
+  const unmappedNotNullTargetFields = allUnmapped
+    .filter((f) => !f.is_nullable && !hasDefault(f))
+    .map(toUnmapped)
+  const unmappedNullableTargetFields = allUnmapped
+    .filter((f) => f.is_nullable || hasDefault(f))
+    .map(toUnmapped)
 
   return {
     datasets: [...datasetGroupMap.values()],

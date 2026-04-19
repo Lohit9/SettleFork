@@ -6,6 +6,7 @@ import { callClaude } from '@/lib/ai/claude'
 import { checkAIRateLimit } from '@/lib/ai/rate-limit'
 import { buildMigrationRunbook } from '@/lib/reports/migration-runbook-docx'
 import type { RunbookData } from '@/lib/reports/migration-runbook-docx'
+import { computeReadinessScore } from '@/lib/quality/readiness-score'
 
 // ── Load-order helper (Kahn's topological sort on FK deps) ────────────────────
 
@@ -176,13 +177,6 @@ export async function generateMigrationRunbook(
   const fms = fieldMappings ?? []
   const fmIds = fms.map((fm) => fm.id)
 
-  // srcFields needs allTables resolved first (can't be in the same Promise.all)
-  const srcTableIds = tables.filter((t) => t.dataset_id === srcDs?.id).map((t) => t.id)
-  const { data: srcFields } =
-    srcTableIds.length > 0
-      ? await supabaseAdmin.from('fields').select('id').in('table_id', srcTableIds)
-      : { data: [] as { id: string }[] }
-
   // ── Parallel data fetch (hop 3) ─────────────────────────────────────────────
   const [{ data: transformations }, { data: targetFieldsFull }] = await Promise.all([
     fmIds.length > 0
@@ -212,11 +206,13 @@ export async function generateMigrationRunbook(
   const tableById = new Map(tables.map((t) => [t.id, t]))
 
   const totalSourceRecords = srcTables.reduce((s, t) => s + (t.row_count ?? 0), 0)
-  const totalSourceFields = (srcFields ?? []).length
   const openBlocking = (qualityIssues ?? []).filter((q) => q.severity === 'blocking' && q.status === 'open').length
   const openWarnings = (qualityIssues ?? []).filter((q) => q.severity === 'warning' && q.status === 'open').length
-  const safeTotalFields = Math.max(totalSourceFields, 1)
-  const readinessScore = Math.max(0, Math.round(100 - Math.min((openBlocking / safeTotalFields) * 60, 60) - Math.min((openWarnings / safeTotalFields) * 20, 20)))
+
+  // Single source of truth: delegate to the shared readiness helper so the
+  // runbook's migrationReadinessPercent matches the Migration Center card.
+  const readiness = await computeReadinessScore(projectId)
+  const readinessScore = readiness.score
 
   const qIssues = qualityIssues ?? []
   const issuesFixed = qIssues.filter((q) => q.status === 'fixed').length

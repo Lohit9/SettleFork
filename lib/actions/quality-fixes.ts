@@ -7,6 +7,7 @@ import { validateFixSQL } from '@/lib/quality/fix-sql-validator'
 import { countFormatIssues } from '@/lib/utils/profiling'
 import { runSourceDataChecks } from '@/lib/quality/detection-engine'
 import { mapIssueKindToCondition } from '@/lib/quality/diagnostic-queries'
+import { resolveFixTarget } from '@/lib/quality/fix-target'
 import { executeCustomRules } from '@/lib/actions/validation-rules'
 import { logActivity } from '@/lib/actions/activity-log'
 import type { QualityIssue, FixHistory } from '@/lib/types/database'
@@ -114,9 +115,31 @@ export async function applyFix(
   }
 
   const chosenFix = issue.ai_fix_options[fixOptionIndex]
-  const tableId = issue.table_id
 
-  if (!tableId) return { success: false, error: 'Issue has no associated table' }
+  if (!issue.table_id) return { success: false, error: 'Issue has no associated table' }
+
+  // Resolve the effective fix target. For in-flight issues this routes from
+  // the target table (empty data_rows) to the source table + source field
+  // name so the fix actually hits real rows. generateFixSuggestions uses the
+  // same resolver, so the AI-generated SQL references the source table_id.
+  const fixTarget = await resolveFixTarget({
+    id: issue.id,
+    project_id: issue.project_id,
+    stage: issue.stage,
+    table_id: issue.table_id,
+    field_id: issue.field_id,
+  })
+
+  if (issue.stage === 'in_flight' && !fixTarget.routedToSource) {
+    return {
+      success: false,
+      error:
+        `This in-flight issue cannot be fixed as a row-level data fix — ${fixTarget.routingBlockedReason ?? 'no source mapping'}. ` +
+        'Add a source mapping or default value to resolve it.',
+    }
+  }
+
+  const tableId = fixTarget.tableId
 
   const validation = validateFixSQL(chosenFix.sql, tableId)
   if (!validation.safe) {
@@ -236,7 +259,10 @@ export async function applyFix(
     .update({ data_modified_at: new Date().toISOString() })
     .eq('id', tableId)
 
-  if (issue.stage === 'source') {
+  // Re-run source-data checks against the table we just modified (source
+  // table for both source-stage issues and in-flight fixes that routed to
+  // source) so the scan picks up the new state.
+  if (issue.stage === 'source' || fixTarget.routedToSource) {
     try {
       await runSourceDataChecks(issue.project_id, tableId, 'manual_scan')
     } catch {
@@ -244,9 +270,13 @@ export async function applyFix(
     }
   }
 
-  if (issue.field_id) {
+  // Recompute the profile of the field that was actually modified — use the
+  // effective (source) field id when the fix was routed, so the profile
+  // stays consistent with the data that changed.
+  const profileFieldId = fixTarget.routedToSource ? fixTarget.fieldId : issue.field_id
+  if (profileFieldId) {
     try {
-      await recomputeFieldProfile(issue.field_id, tableId)
+      await recomputeFieldProfile(profileFieldId, tableId)
     } catch {
       // Non-critical
     }
@@ -471,7 +501,7 @@ export async function getFixHistory(
 
   const { data } = await supabase
     .from('fix_history')
-    .select('*')
+    .select('*, quality_issues(title)')
     .eq('project_id', projectId)
     .order('applied_at', { ascending: false })
 
@@ -517,6 +547,20 @@ export async function runFullScan(
     .in('dataset_id', sourceDatasetIds)
 
   const tableIds = (sourceTables ?? []).map((t) => t.id)
+
+  // Clear all pre-existing custom_rule quality_issues for this project before
+  // re-running rules. executeCustomRules is pure insert with no dedup, so each
+  // scan would otherwise accumulate a fresh copy of every violation. This
+  // mirrors the cleanup runStagedValidation already does (see
+  // detection-engine.ts runStagedValidation) but covers both source and
+  // in_flight stages since runFullScan re-evaluates rules for both roles.
+  // Scope is strictly project_id + detection_source='custom_rule' — auto and
+  // manual_scan issues are handled by runSourceDataChecks and runInFlightChecks.
+  await supabaseAdmin
+    .from('quality_issues')
+    .delete()
+    .eq('project_id', projectId)
+    .eq('detection_source', 'custom_rule')
 
   for (const tid of tableIds) {
     const tableName = (sourceTables ?? []).find((t) => t.id === tid)?.name ?? tid
@@ -608,28 +652,61 @@ export async function runFullScan(
 
 export async function getQualityIssues(
   projectId: string
-): Promise<{ issues: QualityIssue[]; hasMappings: boolean }> {
+): Promise<{
+  issues: QualityIssue[]
+  hasMappings: boolean
+  stagedTargetTableIds: string[]
+}> {
   const supabase = await createClient()
   const {
     data: { user },
   } = await supabase.auth.getUser()
-  if (!user) return { issues: [], hasMappings: false }
+  if (!user) return { issues: [], hasMappings: false, stagedTargetTableIds: [] }
 
-  const { data: issues } = await supabase
-    .from('quality_issues')
-    .select('*')
-    .eq('project_id', projectId)
-    .order('severity', { ascending: true })
-    .order('affected_records', { ascending: false })
+  const [{ data: issues }, { data: tableMappings }] = await Promise.all([
+    supabase
+      .from('quality_issues')
+      .select('*')
+      .eq('project_id', projectId)
+      .order('severity', { ascending: true })
+      .order('affected_records', { ascending: false }),
+    supabase
+      .from('table_mappings')
+      .select('id, target_table_id')
+      .eq('project_id', projectId),
+  ])
 
-  const { count: mappingCount } = await supabase
-    .from('table_mappings')
-    .select('*', { count: 'exact', head: true })
-    .eq('project_id', projectId)
+  const mappings = (tableMappings ?? []) as Array<{ id: string; target_table_id: string | null }>
+
+  // "Staged" = the table_mapping has at least one row in staged_data_rows.
+  // This is the authoritative signal for the Validate page "Staged" badge —
+  // it must NOT be inferred from quality_issues (a clean table has no issues
+  // but can still be staged).
+  const stagedChecks = await Promise.all(
+    mappings.map(async (tm) => {
+      const { count } = await supabase
+        .from('staged_data_rows')
+        .select('id', { count: 'exact', head: true })
+        .eq('table_mapping_id', tm.id)
+      return {
+        targetTableId: tm.target_table_id,
+        hasStaged: (count ?? 0) > 0,
+      }
+    })
+  )
+
+  const stagedTargetTableIds = [
+    ...new Set(
+      stagedChecks
+        .filter((c) => c.hasStaged && c.targetTableId)
+        .map((c) => c.targetTableId as string)
+    ),
+  ]
 
   return {
     issues: (issues as QualityIssue[]) ?? [],
-    hasMappings: (mappingCount ?? 0) > 0,
+    hasMappings: mappings.length > 0,
+    stagedTargetTableIds,
   }
 }
 
@@ -761,8 +838,18 @@ async function recomputeFieldProfile(fieldId: string, tableId: string): Promise<
 
 /**
  * Fetches affected rows for a quality issue on demand.
- * For most issue types, delegates to the dq_field_issue_samples RPC.
- * For orphaned_fk issues, resolves the FK reference and uses dq_orphaned_fk_samples.
+ *
+ * Routing by issue.stage:
+ *   - in_flight: first tries staged_data_rows via dq_staged_field_issue_samples
+ *     / dq_staged_orphaned_fk_samples (issue.table_id / field.name already
+ *     match transformed_row_data's target-keyed payload). If staged rows are
+ *     empty or the mapping has no staged data yet, routes target → source via
+ *     resolveFixTarget and falls back to data_rows / dq_field_issue_samples
+ *     using the resolved source table_id and source field name. In-flight
+ *     issues without a source mapping (e.g. Check 12 "required target field
+ *     with no mapping") return an empty list cleanly.
+ *   - source: queries data_rows directly using the issue's own table_id and
+ *     field name. No routing needed since those already point at source.
  */
 export async function getAffectedRowsForIssue(
   issueId: string,
@@ -777,7 +864,7 @@ export async function getAffectedRowsForIssue(
 
   const { data: issue } = await supabase
     .from('quality_issues')
-    .select('id, project_id, table_id, field_id, issue_kind, affected_records')
+    .select('id, project_id, table_id, field_id, issue_kind, affected_records, stage')
     .eq('id', issueId)
     .single()
 
@@ -801,31 +888,175 @@ export async function getAffectedRowsForIssue(
     return { success: false, rows: [], total: 0, error: 'Field not found' }
   }
 
-  // Orphaned FK: resolve reference and use specialised RPC
+  // ── In-flight (staged) path ────────────────────────────────────────────────
+  // For stage='in_flight' issues, table_id / field_id point at the TARGET side.
+  // Samples live in staged_data_rows under the relevant table_mapping. Only take
+  // this branch when a table_mapping exists AND has at least one staged row;
+  // otherwise fall through to the data_rows path below (which handles the
+  // !hasStaged fallback case in detection-engine Check 11, where the issue was
+  // written with the SOURCE table_id/field_id).
+  if (issue.stage === 'in_flight') {
+    const { data: tm } = await supabaseAdmin
+      .from('table_mappings')
+      .select('id')
+      .eq('target_table_id', issue.table_id)
+      .eq('project_id', issue.project_id)
+      .maybeSingle()
+
+    if (tm) {
+      const { count: stagedCount } = await supabaseAdmin
+        .from('staged_data_rows')
+        .select('id', { count: 'exact', head: true })
+        .eq('table_mapping_id', tm.id)
+
+      if ((stagedCount ?? 0) > 0) {
+        // Orphaned FK: walk to the parent mapping and use the staged-aware RPC
+        if (issue.issue_kind === 'orphaned_fk' && field.fk_reference) {
+          const parts = field.fk_reference.split('.')
+          const parentFieldName = parts[parts.length - 1]
+          const parentTableName = parts[parts.length - 2]
+
+          if (parentTableName && parentFieldName) {
+            // Find the parent target table in the same target dataset
+            const { data: childTargetTable } = await supabaseAdmin
+              .from('tables')
+              .select('dataset_id')
+              .eq('id', issue.table_id)
+              .single()
+
+            const { data: parentTargetTable } = await supabaseAdmin
+              .from('tables')
+              .select('id')
+              .eq('dataset_id', childTargetTable?.dataset_id ?? '')
+              .ilike('name', parentTableName)
+              .maybeSingle()
+
+            if (parentTargetTable) {
+              const { data: parentMapping } = await supabaseAdmin
+                .from('table_mappings')
+                .select('id')
+                .eq('project_id', issue.project_id)
+                .eq('target_table_id', parentTargetTable.id)
+                .maybeSingle()
+
+              if (parentMapping) {
+                const { data: rows, error: rpcErr } = await supabaseAdmin.rpc(
+                  'dq_staged_orphaned_fk_samples',
+                  {
+                    p_child_mapping_id: tm.id,
+                    p_child_field: field.name,
+                    p_parent_mapping_id: parentMapping.id,
+                    p_parent_field: parentFieldName,
+                    p_limit: limit,
+                  }
+                )
+
+                if (rpcErr) {
+                  return {
+                    success: false,
+                    rows: [],
+                    total: issue.affected_records ?? 0,
+                    error: rpcErr.message,
+                  }
+                }
+                return {
+                  success: true,
+                  rows: Array.isArray(rows) ? rows : [],
+                  total: issue.affected_records ?? 0,
+                }
+              }
+            }
+          }
+        }
+
+        // Generic staged samples — null, format, type, etc.
+        const condition = mapIssueKindToCondition(issue.issue_kind)
+        const { data: rows, error: rpcErr } = await supabaseAdmin.rpc(
+          'dq_staged_field_issue_samples',
+          {
+            p_table_mapping_id: tm.id,
+            p_field_name: field.name,
+            p_condition: condition,
+            p_limit: limit,
+          }
+        )
+
+        if (rpcErr) {
+          return {
+            success: false,
+            rows: [],
+            total: issue.affected_records ?? 0,
+            error: rpcErr.message,
+          }
+        }
+        const stagedRows = Array.isArray(rows) ? rows : []
+        if (stagedRows.length > 0) {
+          return {
+            success: true,
+            rows: stagedRows,
+            total: issue.affected_records ?? 0,
+          }
+        }
+        // Staged RPC returned nothing — fall through to the source path so we
+        // still show the user the underlying source rows responsible for the
+        // issue. Staged data can legitimately be empty after a transform that
+        // filters out the bad rows, even though the source rows still exist.
+      }
+    }
+    // No mapping or no staged rows → fall through to data_rows path.
+  }
+
+  // ── Source / data_rows path ────────────────────────────────────────────────
+  // For in-flight issues we must translate the stored target table_id /
+  // field name into the matching source table_id / source field name before
+  // hitting data_rows (whose table_id is always a source table id and whose
+  // JSONB keys are source field names). resolveFixTarget handles the routing
+  // and returns the raw issue ids for source-stage issues.
+  const fixTarget = await resolveFixTarget({
+    id: issue.id,
+    project_id: issue.project_id,
+    stage: issue.stage,
+    table_id: issue.table_id,
+    field_id: issue.field_id,
+  })
+
+  // In-flight issues with no source mapping (e.g. Check 12 "required target
+  // field with no mapping") have nothing to sample from data_rows — return
+  // empty cleanly instead of running a query that cannot match.
+  if (issue.stage === 'in_flight' && !fixTarget.routedToSource) {
+    return { success: true, rows: [], total: issue.affected_records ?? 0 }
+  }
+
+  const resolvedTableId = fixTarget.tableId
+  const resolvedFieldName = fixTarget.fieldName ?? field.name
+
+  // Orphaned FK: resolve reference and use specialised RPC.
+  // fk_reference is defined on the TARGET field; for in-flight issues we need
+  // to look up the referenced table within the SOURCE dataset so it lines up
+  // with data_rows (which only exists for source tables).
   if (issue.issue_kind === 'orphaned_fk' && field.fk_reference) {
     const parts = field.fk_reference.split('.')
     const refFieldName = parts[parts.length - 1]
     const refTableName = parts[parts.length - 2]
 
     if (refTableName && refFieldName) {
-      // Scope ref-table lookup to the same dataset as the source table
-      const { data: srcTable } = await supabaseAdmin
+      const { data: anchorTable } = await supabaseAdmin
         .from('tables')
         .select('dataset_id')
-        .eq('id', issue.table_id)
+        .eq('id', resolvedTableId)
         .single()
 
       const { data: refTable } = await supabaseAdmin
         .from('tables')
         .select('id')
         .eq('name', refTableName)
-        .eq('dataset_id', srcTable?.dataset_id ?? '')
+        .eq('dataset_id', anchorTable?.dataset_id ?? '')
         .maybeSingle()
 
       if (refTable) {
         const { data: rows, error: rpcErr } = await supabaseAdmin.rpc('dq_orphaned_fk_samples', {
-          p_table_id: issue.table_id,
-          p_field_name: field.name,
+          p_table_id: resolvedTableId,
+          p_field_name: resolvedFieldName,
           p_ref_table_id: refTable.id,
           p_ref_field_name: refFieldName,
           p_limit: limit,
@@ -841,13 +1072,21 @@ export async function getAffectedRowsForIssue(
         }
       }
     }
+    // No matching ref table in this dataset. For in-flight issues this is
+    // expected (fk_reference points at target parent table, which has no
+    // source counterpart by that name) — staged path is the authoritative
+    // source for orphaned_fk samples in that case. Return empty cleanly
+    // rather than falling through to the null-value generic RPC.
+    if (issue.stage === 'in_flight') {
+      return { success: true, rows: [], total: issue.affected_records ?? 0 }
+    }
   }
 
   // All other issue types: use the generic field issue samples RPC
   const condition = mapIssueKindToCondition(issue.issue_kind)
   const { data: rows, error: rpcErr } = await supabaseAdmin.rpc('dq_field_issue_samples', {
-    p_table_id: issue.table_id,
-    p_field_name: field.name,
+    p_table_id: resolvedTableId,
+    p_field_name: resolvedFieldName,
     p_condition: condition,
     p_limit: limit,
   })

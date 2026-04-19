@@ -397,6 +397,14 @@ export async function getProjectsWithStats(orgId?: string): Promise<ProjectWithS
     const src = datasets.find((d) => d.role === 'source')
     const tgt = datasets.find((d) => d.role === 'target')
 
+    // NOTE: This is a "quality-resolution %" (fixed/accepted vs total issues),
+    // NOT the weighted 5-factor Migration Readiness score computed by
+    // `calculateReadinessScore` in lib/quality/readiness-formula.ts. It is
+    // kept here only because (a) the project list intentionally avoids the
+    // expensive per-project query fan-out that the real readiness score
+    // requires, and (b) nothing in the UI currently renders this field. If
+    // this ever becomes user-visible, rename it to `qualityResolutionPercent`
+    // or replace it with `computeReadinessScore(project.id)` behind a cache.
     const readinessScore =
       b.totalQualityIssues === 0
         ? null

@@ -7,6 +7,8 @@ import { checkAIRateLimit } from '@/lib/ai/rate-limit'
 import { buildAIContext, formatDocumentsForPrompt } from '@/lib/ai/context-builder'
 import { fieldNeedsTransform, wrapFieldRefsInJsonb } from '@/lib/utils/transform-helpers'
 import { buildReadinessDocx } from '@/lib/reports/readiness-report-docx'
+import { calculateReadinessScore, type ReadinessComponents } from '@/lib/quality/readiness-formula'
+import { computeReadinessScore } from '@/lib/quality/readiness-score'
 
 // ── Shared types ──────────────────────────────────────────────────────────────
 
@@ -24,12 +26,15 @@ export interface PhaseStatus {
 export interface OutputsMetrics {
   readinessScore: number
   readinessStatus: 'ready' | 'at_risk' | 'not_ready'
+  readinessComponents: ReadinessComponents
   approvedFieldMappings: number
-  totalSourceFields: number
+  totalFieldMappings: number
   openBlocking: number
   openWarnings: number
   completedTransforms: number
   totalTransforms: number
+  stagedTables: number
+  totalTargetTables: number
 }
 
 export type DecisionType = 'fix' | 'mapping' | 'transform' | 'validation' | 'data' | 'system'
@@ -195,7 +200,19 @@ export async function getOutputsPageData(projectId: string): Promise<OutputsPage
       targetTableCount: 0,
       totalSourceRows: 0,
       phases: { dataIngestion: 'incomplete', dataQuality: 'gray', mapping: 'red', transformations: 'gray', validation: 'red', completedCount: 0 },
-      metrics: { readinessScore: 0, readinessStatus: 'not_ready', approvedFieldMappings: 0, totalSourceFields: 0, openBlocking: 0, openWarnings: 0, completedTransforms: 0, totalTransforms: 0 },
+      metrics: {
+        readinessScore: 0,
+        readinessStatus: 'not_ready',
+        readinessComponents: { mapping: 0, transform: 0, blocking: 0, warnings: 0, staging: 0 },
+        approvedFieldMappings: 0,
+        totalFieldMappings: 0,
+        openBlocking: 0,
+        openWarnings: 0,
+        completedTransforms: 0,
+        totalTransforms: 0,
+        stagedTables: 0,
+        totalTargetTables: 0,
+      },
       decisions: [],
       totalDecisions: 0,
       outstanding: { unmappedSourceFields: 0, blockingIssues: 0, fieldsNeedingTransformWork: 0, untestedTransforms: 0, testedTransforms: 0 },
@@ -222,6 +239,7 @@ export async function getOutputsPageData(projectId: string): Promise<OutputsPage
     { data: validationRuleRows },
     { data: outputRows },
     { data: activityRows },
+    { data: acknowledgmentRows },
   ] = await Promise.all([
     supabaseAdmin.from('datasets').select('id, role, name').eq('project_id', projectId),
     supabaseAdmin.from('table_mappings').select('id, status').eq('project_id', projectId).neq('status', 'rejected'),
@@ -230,6 +248,7 @@ export async function getOutputsPageData(projectId: string): Promise<OutputsPage
     supabaseAdmin.from('validation_rules').select('id, name, created_at').eq('project_id', projectId).order('created_at', { ascending: false }).limit(10),
     supabaseAdmin.from('outputs').select('*').eq('project_id', projectId).order('generated_at', { ascending: false }),
     supabaseAdmin.from('activity_log').select('id, action_type, description, category, metadata, created_at').eq('project_id', projectId).order('created_at', { ascending: false }).limit(200),
+    supabaseAdmin.from('field_acknowledgments').select('field_id').eq('project_id', projectId),
   ])
 
   const sourceDataset = datasets?.find((d) => d.role === 'source') ?? null
@@ -253,12 +272,13 @@ export async function getOutputsPageData(projectId: string): Promise<OutputsPage
   const [{ data: sourceFieldRows }, { data: targetFieldRows }, { data: rawFieldMappings }] =
     await Promise.all([
       supabaseAdmin.from('fields').select('id, name, data_type, is_nullable').in('table_id', sourceTableIds),
-      supabaseAdmin.from('fields').select('id, name, data_type, inferred_type, is_nullable, is_primary_key, is_foreign_key, table_id').in('table_id', targetTableIds),
+      supabaseAdmin.from('fields').select('id, name, data_type, inferred_type, is_nullable, is_primary_key, is_foreign_key, table_id, default_value').in('table_id', targetTableIds),
       nonRejectedTMIds.length > 0
         ? supabaseAdmin
             .from('field_mappings')
             .select('id, status, source_field_id, target_field_id, confidence, created_at, is_contributing, needs_transformation, type_compatibility')
             .in('table_mapping_id', nonRejectedTMIds)
+            .neq('status', 'rejected')
         : Promise.resolve({ data: [] }),
     ])
 
@@ -272,16 +292,60 @@ export async function getOutputsPageData(projectId: string): Promise<OutputsPage
 
   // ── Metrics ───────────────────────────────────────────────────────────────
 
+  // totalSourceFields is retained purely as the denominator for the readiness
+  // score's blocking/warning penalty scaling (see computeReadinessScore). It
+  // is NOT the Mapping Coverage denominator.
   const totalSourceFields = (sourceFieldRows ?? []).length
-  const mappedSrcIds = new Set(approvedFMs.map((fm) => fm.source_field_id).filter((id): id is string => id !== null))
-  const unmappedSourceFields = Math.max(0, totalSourceFields - mappedSrcIds.size)
 
-  // Deduplicated counts — contributing rows share the same target as their primary;
-  // counting rows inflates both the source and target coverage metrics.
-  const approvedPrimaryFMs = approvedFMs.filter((fm) => !(fm as { is_contributing?: boolean }).is_contributing)
-  const coveredTargetFieldIds = new Set(approvedPrimaryFMs.map((fm) => fm.target_field_id))
-  const approvedFieldMappingCount = mappedSrcIds.size   // unique source fields with at least one approved mapping
-  const targetFieldCoverageCount = coveredTargetFieldIds.size
+  // ── Mapping Coverage: mirror MappingContent.tsx headerStats exactly ──
+  // Each primary (non-contributing, non-rejected) field_mapping is 1 visual
+  // review row. Each unmapped (and not acknowledged) source/target field adds
+  // 1 row. Acknowledged fields count as "approved" and are added to both
+  // total and approved.
+  const primaryFMs = (rawFieldMappings ?? []).filter(
+    (fm) => !(fm as { is_contributing?: boolean }).is_contributing && fm.status !== 'rejected'
+  )
+  const approvedPrimaryFMs = primaryFMs.filter((fm) => fm.status === 'approved')
+
+  // Source field IDs covered by a primary OR contributing row (contributors
+  // are folded into the primary's visual row, so their source field is
+  // "handled" and must not show up in Unmapped).
+  const mappedSourceIds = new Set<string>(
+    primaryFMs.filter((fm) => fm.source_field_id).map((fm) => fm.source_field_id as string)
+  )
+  for (const fm of rawFieldMappings ?? []) {
+    const isContributing = (fm as { is_contributing?: boolean }).is_contributing
+    if (isContributing && fm.status !== 'rejected' && fm.source_field_id) {
+      mappedSourceIds.add(fm.source_field_id)
+    }
+  }
+  const primaryMappedTargetIds = new Set(primaryFMs.map((fm) => fm.target_field_id))
+
+  const acknowledgedIds = new Set(
+    (acknowledgmentRows ?? []).map((a) => a.field_id)
+  )
+
+  let unmappedSourceCount = 0
+  let unmappedTargetCount = 0
+  let acknowledgedCount = 0
+
+  for (const f of sourceFieldRows ?? []) {
+    if (!mappedSourceIds.has(f.id)) {
+      if (acknowledgedIds.has(f.id)) acknowledgedCount++
+      else unmappedSourceCount++
+    }
+  }
+  for (const f of targetFieldRows ?? []) {
+    if (!primaryMappedTargetIds.has(f.id)) {
+      if (acknowledgedIds.has(f.id)) acknowledgedCount++
+      else unmappedTargetCount++
+    }
+  }
+
+  const mappingTotal =
+    primaryFMs.length + unmappedSourceCount + unmappedTargetCount + acknowledgedCount
+  const mappingApproved = approvedPrimaryFMs.length + acknowledgedCount
+  const mappingUnmapped = unmappedSourceCount + unmappedTargetCount
 
   const allTransforms = transformRows ?? []
   const fmIdsWithTransforms = new Set(allTransforms.map((t) => t.field_mapping_id))
@@ -345,7 +409,9 @@ export async function getOutputsPageData(projectId: string): Promise<OutputsPage
     return false
   }
 
-  const openIssues = (qualityIssueRows ?? []).filter((q) => q.status === 'open')
+  const openIssues = (qualityIssueRows ?? []).filter(
+    (q) => q.status === 'open' && q.stage === 'in_flight'
+  )
   const openBlocking = openIssues.filter((q) => {
     if (q.severity !== 'blocking') return false
     // Source issues that are resolved by transform don't count as blocking
@@ -379,24 +445,45 @@ export async function getOutputsPageData(projectId: string): Promise<OutputsPage
   // untestedTransforms kept for backward compat (alias for draft bucket)
   const untestedTransforms = draftTransforms
 
-  // Readiness score (simplified inline calculation matching readiness-score.ts)
-  const requiredTargetFields = (targetFieldRows ?? []).filter((f) => !f.is_nullable)
-  const mappedTargetIds = new Set(approvedFMs.map((fm) => fm.target_field_id))
-  const unmappedRequiredCount = requiredTargetFields.filter((f) => !mappedTargetIds.has(f.id)).length
-  const totalRequiredCount = Math.max(requiredTargetFields.length, 1)
-  const safeTotalFields = Math.max(totalSourceFields, 1)
-  const blockingPenalty = Math.min((openBlocking / safeTotalFields) * 60, 60)
-  const warningPenalty = Math.min((openWarnings / safeTotalFields) * 20, 20)
-  const unmappedPenalty = Math.min((unmappedRequiredCount / totalRequiredCount) * 20, 20)
-  const readinessScore = Math.max(0, Math.round(100 - blockingPenalty - warningPenalty - unmappedPenalty))
-  const readinessStatus: 'ready' | 'at_risk' | 'not_ready' =
-    readinessScore >= 80 ? 'ready' : readinessScore >= 50 ? 'at_risk' : 'not_ready'
+  // Staging coverage — count target tables (via non-rejected table mappings)
+  // that have at least one row in staged_data_rows. Parallelized head-count
+  // queries avoid pulling row payloads.
+  const stagingCountResults = nonRejectedTMIds.length > 0
+    ? await Promise.all(
+        nonRejectedTMIds.map((tmId) =>
+          supabaseAdmin
+            .from('staged_data_rows')
+            .select('id', { count: 'exact', head: true })
+            .eq('table_mapping_id', tmId)
+        )
+      )
+    : []
+  const stagedTables = stagingCountResults.filter((r) => (r.count ?? 0) > 0).length
+  const totalTargetTables = targetTables.length
+
+  // Readiness score — single source of truth is `calculateReadinessScore`
+  // (lib/quality/readiness-formula.ts). computeReadinessScore, the migration
+  // runbook, and the readiness report all call the same helper with the same
+  // inputs so every surface shows the same number.
+  const readinessResult = calculateReadinessScore({
+    mappingApproved,
+    mappingTotal,
+    transformApplied: completedTransforms,
+    transformScope: totalTransformScope,
+    openBlocking,
+    openWarnings,
+    totalFields: totalSourceFields,
+    stagedTables,
+    totalTables: totalTargetTables,
+  })
+  const readinessScore = readinessResult.score
+  const readinessStatus = readinessResult.status
 
   // ── Phase statuses ────────────────────────────────────────────────────────
 
   const dataIngestion = sourceTables.length > 0 && targetTables.length > 0 ? 'complete' : ('incomplete' as const)
   const dataQualityColor: PhaseColor = openBlocking === 0 ? 'green' : openBlocking < 5 ? 'yellow' : 'red'
-  const mappingPct = totalSourceFields > 0 ? (approvedFieldMappingCount / totalSourceFields) * 100 : 0
+  const mappingPct = mappingTotal > 0 ? (mappingApproved / mappingTotal) * 100 : 0
   const mappingColor: PhaseColor = mappingPct >= 80 ? 'green' : mappingPct >= 50 ? 'yellow' : 'red'
   const transformColor: PhaseColor =
     totalTransformScope === 0 ? 'gray' : completedTransforms >= totalTransformScope ? 'green' : completedTransforms > 0 ? 'yellow' : 'red'
@@ -477,16 +564,19 @@ export async function getOutputsPageData(projectId: string): Promise<OutputsPage
     metrics: {
       readinessScore,
       readinessStatus,
-      approvedFieldMappings: approvedFieldMappingCount,
-      totalSourceFields,
+      readinessComponents: readinessResult.components,
+      approvedFieldMappings: mappingApproved,
+      totalFieldMappings: mappingTotal,
       openBlocking,
       openWarnings,
       completedTransforms,
       totalTransforms: totalTransformScope,
+      stagedTables,
+      totalTargetTables,
     },
     decisions: allDecisions,
     totalDecisions: allDecisions.length,
-    outstanding: { unmappedSourceFields, blockingIssues: openBlocking, fieldsNeedingTransformWork, untestedTransforms, testedTransforms },
+    outstanding: { unmappedSourceFields: mappingUnmapped, blockingIssues: openBlocking, fieldsNeedingTransformWork, untestedTransforms, testedTransforms },
     existingOutputs,
     hasMappings: rawFieldMappings !== null && (rawFieldMappings ?? []).length > 0,
     hasSourceData: sourceTables.length > 0,
@@ -911,11 +1001,18 @@ export async function generateReadinessReport(
   const savedTransforms = (transforms ?? []).filter((t) => t.status === 'saved').length
   const totalSourceRows = srcTables.reduce((s, t) => s + (t.row_count ?? 0), 0)
 
-  const safeTotalFields = Math.max(totalSourceFields, 1)
-  const blockingPenalty = Math.min((openBlocking / safeTotalFields) * 60, 60)
-  const warningPenalty = Math.min((openWarnings / safeTotalFields) * 20, 20)
-  const readinessScore = Math.max(0, Math.round(100 - blockingPenalty - warningPenalty))
-  const readinessLabel = readinessScore >= 80 ? 'Ready' : readinessScore >= 50 ? 'Ready with Conditions' : 'Not Ready'
+  // Use the shared readiness helper so this report's score always matches the
+  // Migration Center card and the Validate page. Note: the open-issue counts
+  // above describe the full backlog for the Claude prompt; they intentionally
+  // are not the same filter as the score (which is in-flight only).
+  const readiness = await computeReadinessScore(projectId)
+  const readinessScore = readiness.score
+  const readinessLabel =
+    readiness.status === 'ready'
+      ? 'Ready'
+      : readiness.status === 'at_risk'
+      ? 'Ready with Conditions'
+      : 'Not Ready'
 
   const openIssuesDetail = (qualityIssues ?? [])
     .filter((q) => q.status === 'open')

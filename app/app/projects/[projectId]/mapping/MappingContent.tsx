@@ -20,7 +20,6 @@ import {
   deleteTableMapping,
   approveAllFieldMappings,
   rejectAllFieldMappings,
-  approveHighConfidenceMappings,
   suggestRemainingMappings,
   regenerateFieldMappings,
   generateMappings,
@@ -343,22 +342,20 @@ function RegenerateConfirmDialog({
 // ─── Mapping Stat Pills ──────────────────────────────────────────────────────
 
 function MappingStatPills({
-  primaryFMCount,
-  approvedFMCount,
-  needsReviewCount,
-  unmappedCount,
+  total,
+  approved,
+  needsReview,
   sourceDatasetName,
   targetDatasetName,
 }: {
-  primaryFMCount: number
-  approvedFMCount: number
-  needsReviewCount: number
-  unmappedCount: number
+  total: number
+  approved: number
+  needsReview: number
   sourceDatasetName?: string
   targetDatasetName?: string
 }) {
   return (
-    <div className="flex items-center gap-0 px-5 py-2 bg-white flex-shrink-0">
+    <div className="flex items-center px-5 py-2 bg-white flex-shrink-0">
       {(sourceDatasetName || targetDatasetName) && (
         <div className="flex items-center gap-2 mr-4 pr-4 border-r border-gray-100">
           <span className="text-xs text-settle-slate-500 font-medium">{sourceDatasetName}</span>
@@ -366,24 +363,23 @@ function MappingStatPills({
           <span className="text-xs text-settle-slate-500 font-medium">{targetDatasetName}</span>
         </div>
       )}
-      <div className="flex items-center gap-1.5 px-3">
-        <span className="text-xs text-gray-500">Total</span>
-        <span className="text-sm font-medium text-settle-slate-900">{primaryFMCount}</span>
-      </div>
-      <div className="w-px h-4 bg-gray-100 flex-shrink-0" />
-      <div className="flex items-center gap-1.5 px-3">
-        <span className="text-xs text-gray-500">Approved</span>
-        <span className="text-sm font-medium text-settle-slate-900">{approvedFMCount}</span>
-      </div>
-      <div className="w-px h-4 bg-gray-100 flex-shrink-0" />
-      <div className="flex items-center gap-1.5 px-3">
-        <span className="text-xs text-gray-500">Needs Review</span>
-        <span className="text-sm font-medium text-settle-slate-900">{needsReviewCount}</span>
-      </div>
-      <div className="w-px h-4 bg-gray-100 flex-shrink-0" />
-      <div className="flex items-center gap-1.5 px-3">
-        <span className="text-xs text-gray-500">Unmapped</span>
-        <span className="text-sm font-medium text-settle-slate-900">{unmappedCount}</span>
+      <div className="flex items-center gap-3 text-sm text-settle-slate-600">
+        <span>
+          Total{' '}
+          <span className="font-semibold text-settle-slate-900">{total}</span>
+        </span>
+        <span className="text-settle-slate-300">·</span>
+        <span className="flex items-center gap-1.5">
+          <span className="w-1.5 h-1.5 rounded-full bg-green-500" />
+          Approved{' '}
+          <span className="font-semibold text-settle-slate-900">{approved}</span>
+        </span>
+        <span className="text-settle-slate-300">·</span>
+        <span className="flex items-center gap-1.5">
+          <span className="w-1.5 h-1.5 rounded-full bg-amber-400" />
+          Needs Review{' '}
+          <span className="font-semibold text-settle-slate-900">{needsReview}</span>
+        </span>
       </div>
     </div>
   )
@@ -1037,12 +1033,57 @@ function InlineAddFieldRow({
   )
 }
 
+// ─── Source Field Chip ────────────────────────────────────────────────────────
+
+/**
+ * One equal-peer chip for a source field inside a many-to-one mapping. Every
+ * contributor to a target column is rendered as one of these — including the
+ * row physically marked `is_contributing = false` (the DB's "primary" is an
+ * implementation detail, not a user-facing concept). The × button removes
+ * just that peer's field_mappings row; if the removed row happened to be the
+ * primary, the server and the optimistic patch both promote the first
+ * remaining contributor so the mapping survives unbroken.
+ */
+function SourceFieldChip({
+  name,
+  onRemove,
+  disabled = false,
+  title,
+}: {
+  name: string
+  onRemove?: () => void
+  disabled?: boolean
+  title?: string
+}) {
+  return (
+    <span
+      className="inline-flex items-center gap-1 flex-shrink-0 text-xs font-mono px-1.5 py-0.5 rounded-md border border-gray-200 bg-white text-settle-slate-800"
+      title={title ?? name}
+    >
+      <span className="truncate max-w-[110px]">{name}</span>
+      {onRemove && !disabled && (
+        <button
+          type="button"
+          onClick={(e) => {
+            e.stopPropagation()
+            onRemove()
+          }}
+          title={`Remove ${name} from this mapping`}
+          className="flex items-center justify-center w-3.5 h-3.5 rounded text-settle-slate-300 hover:text-red-500 hover:bg-red-50 transition-colors"
+        >
+          <X className="w-3 h-3" />
+        </button>
+      )}
+    </span>
+  )
+}
+
 // ─── Field Mapping Row ────────────────────────────────────────────────────────
 
 // RoleTooltip is imported from @/components/app/RoleTooltip
 
 function FieldMappingRow({
-  fm, allTMFMs, onSelect, onApprove, onReject, onDelete, canEdit = true, isSelected = false,
+  fm, allTMFMs, onSelect, onApprove, onReject, onDelete, onDeleteFM, canEdit = true, isSelected = false,
   onEditTarget, targetTableFields, targetTableName,
 }: {
   fm: RichFieldMapping
@@ -1051,6 +1092,9 @@ function FieldMappingRow({
   onApprove: () => void
   onReject: () => void
   onDelete: () => void
+  /** Deletes a specific peer field_mapping (used by per-chip × buttons on
+   *  many-to-one rows). Distinct from `onDelete` which is bound to this row. */
+  onDeleteFM?: (fmId: string) => void
   canEdit?: boolean
   isSelected?: boolean
   onEditTarget?: (fieldId: string) => void
@@ -1154,21 +1198,26 @@ function FieldMappingRow({
           }`}
         />
         {isManyToOne ? (
-          <div className="flex flex-col min-w-0 flex-1">
-            <div className="flex items-center gap-1.5">
-              <span className="text-xs text-settle-slate-900 font-mono truncate">
-                {fm.sourceField?.name ?? <span className="text-settle-slate-400 italic">unmapped</span>}
-              </span>
-              <span
-                title={`Many-to-one: ${fm.sourceField?.name} + ${contributingFMs.map(c => c.sourceField?.name).join(', ')} → ${fm.targetField?.name}`}
-                className="flex-shrink-0 text-[10px] font-medium px-1.5 py-0.5 rounded-full bg-gray-100 text-gray-500 border border-gray-100"
-              >
-                +{contributingFMs.length}
-              </span>
-            </div>
-            <div className="text-[10px] text-gray-400 truncate mt-0.5">
-              {contributingFMs.map((c) => c.sourceField?.name ?? '?').join(', ')}
-            </div>
+          // All peers (primary + contributors) render as equal chips. Each
+          // chip can be removed independently via its own × button: deleting
+          // the primary chip is handled by the server + executeDeleteFM's
+          // optimistic patch, which promote the first remaining contributor
+          // so the mapping stays intact instead of briefly flickering away.
+          // If only one chip remains after a removal the row naturally falls
+          // back to the 1:1 render path on the next `refreshData()` tick.
+          <div className="flex flex-wrap items-center gap-1 min-w-0 flex-1">
+            {[fm, ...contributingFMs].map((peer) => (
+              <SourceFieldChip
+                key={peer.id}
+                name={peer.sourceField?.name ?? '?'}
+                onRemove={
+                  canEdit && onDeleteFM
+                    ? () => onDeleteFM(peer.id)
+                    : undefined
+                }
+                title={`${peer.sourceField?.name ?? '?'} — one of ${contributingFMs.length + 1} source fields combining into ${fm.targetField?.name ?? 'target'}`}
+              />
+            ))}
           </div>
         ) : (
           <>
@@ -1295,7 +1344,7 @@ function FieldMappingRow({
           {canEdit && (
             <button
               onClick={(e) => { e.stopPropagation(); onReject() }}
-              title="Reject mapping"
+              title={fm.status === 'rejected' ? 'Un-reject mapping' : 'Remove mapping'}
               className="w-6 h-6 flex items-center justify-center rounded text-settle-slate-400 hover:text-red-500 hover:bg-red-50 transition-colors"
             >
               <X className="w-3.5 h-3.5" />
@@ -1335,12 +1384,13 @@ function TableMappingCard({
   hideMappedRows,
   filterVisibleStatus,
   acknowledgments,
-  projectId,
-  onAcknowledgmentChanged,
+  onAcknowledge,
+  onRemoveAcknowledgment,
   canEdit = true,
   selectedFMId = null,
   tableNameById,
   onEditFieldTarget,
+  onError,
 }: {
   tm: RichTableMapping
   expanded: boolean
@@ -1367,12 +1417,13 @@ function TableMappingCard({
   hideMappedRows?: boolean
   filterVisibleStatus?: string
   acknowledgments: FieldAcknowledgmentRow[]
-  projectId: string
-  onAcknowledgmentChanged: () => void
+  onAcknowledge: (fieldId: string, side: 'source' | 'target') => void
+  onRemoveAcknowledgment: (fieldId: string) => void
   canEdit?: boolean
   selectedFMId?: string | null
   tableNameById: Map<string, string>
   onEditFieldTarget: (fmId: string, newTargetFieldId: string) => void
+  onError?: (message: string) => void
 }) {
   const router = useRouter()
   const srcDs = tm.sourceTable?.dataset
@@ -1389,9 +1440,49 @@ function TableMappingCard({
   const unmappedTgtFields = allTgtFields.filter((f) => !activeTgtIds.has(f.id))
   const unmappedSrcFields = allSrcFields.filter((f) => !activeSrcIds.has(f.id))
 
-  // Track which unmapped field's "+ Map" was clicked so InlineAddFieldRow renders right below it
-  const [addAfterUnmappedId, setAddAfterUnmappedId] = useState<string | null>(null)
+  // Track which unmapped field's "+ Map" was clicked — drives the inline
+  // FieldPicker dropdown for the common 1→1 quick-mapping case. Advanced
+  // cases (many-to-one, one-to-many, value assignments) still flow through
+  // the full InlineAddFieldRow at the bottom of the card.
+  const [mapPickerFieldId, setMapPickerFieldId] = useState<string | null>(null)
+  const mapPickerRef = useRef<HTMLButtonElement | null>(null)
   const acknowledgedIds = useMemo(() => new Set(acknowledgments.map((a) => a.field_id)), [acknowledgments])
+
+  // Quick-map helper: persists a 1→1 mapping via addManualFieldMapping and
+  // synthesises the RichFieldMapping for the optimistic patch (same shape
+  // InlineAddFieldRow builds at the one_to_one path).
+  async function quickMap(sourceFieldId: string, targetFieldId: string) {
+    const sf = allSrcFields.find((f) => f.id === sourceFieldId)
+    const tf = allTgtFields.find((f) => f.id === targetFieldId)
+    try {
+      const result = await addManualFieldMapping(tm.id, sourceFieldId, targetFieldId, false)
+      if (!result.success || !result.data) {
+        onError?.(result.error ?? 'Failed to create mapping')
+        return
+      }
+      const newFM: RichFieldMapping = {
+        id: result.data.id,
+        table_mapping_id: tm.id,
+        source_field_id: sourceFieldId,
+        target_field_id: targetFieldId,
+        confidence: 100,
+        status: 'approved',
+        ai_reasoning: 'Manually mapped by user',
+        similar_fields_considered: null,
+        type_compatibility: null,
+        is_contributing: result.data.is_contributing,
+        created_at: new Date().toISOString(),
+        sourceField: sf ? { id: sf.id, name: sf.name, data_type: sf.data_type, inferred_type: null } : null,
+        targetField: tf ? { id: tf.id, name: tf.name, data_type: tf.data_type, inferred_type: null } : null,
+        sourceFieldSamples: [],
+        targetFieldSamples: [],
+        sourceFieldNullPercentage: 0,
+      }
+      onFieldAdded(newFM)
+    } catch {
+      onError?.('Failed to create mapping')
+    }
+  }
 
   return (
     <div className="border border-gray-200 rounded-lg overflow-hidden bg-white">
@@ -1405,7 +1496,7 @@ function TableMappingCard({
                 ? `${unmappedTgtFields.length + unmappedSrcFields.length} unmapped`
                 : filterVisibleStatus
                   ? `${tm.fieldMappings.filter((fm) => !fm.is_contributing && fm.status === filterVisibleStatus).length} to review · ${unmappedTgtFields.length + unmappedSrcFields.length} unmapped`
-                  : `${tm.fieldMappings.length} field${tm.fieldMappings.length !== 1 ? 's' : ''}`}
+                  : `${allSrcFields.length} field${allSrcFields.length !== 1 ? 's' : ''}`}
             </p>
           </div>
           <div className="flex items-center px-3 flex-shrink-0">
@@ -1414,7 +1505,10 @@ function TableMappingCard({
           </div>
           <div className="flex-1 min-w-0 text-right">
             <p className="font-semibold text-gray-900 truncate">{tm.targetTable?.name ?? '—'}</p>
-            <div className="flex items-center justify-end gap-1.5 mt-1">
+            <div className="flex items-center justify-end gap-3 mt-0.5">
+              <span className="text-xs text-gray-500">
+                {allTgtFields.length} field{allTgtFields.length !== 1 ? 's' : ''}
+              </span>
               <StatusBadge status={tm.status} />
             </div>
           </div>
@@ -1489,9 +1583,15 @@ function TableMappingCard({
             <div className="px-5 py-4 text-sm text-gray-400 text-center">No field mappings yet.</div>
           ) : !hideMappedRows ? (
             (() => {
-              let visibleFMs = showContributingRows
-                ? tm.fieldMappings
-                : tm.fieldMappings.filter((fm) => !fm.is_contributing)
+              // Contributors are always rendered inside the primary row as
+              // peer chips (see SourceFieldChip). Surfacing them as separate
+              // indented rows in addition would duplicate the information,
+              // so we unconditionally filter them out of the row list. The
+              // `showContributingRows` prop is kept on the signature for
+              // backward compatibility with call sites but no longer drives
+              // display here.
+              void showContributingRows
+              let visibleFMs = tm.fieldMappings.filter((fm) => !fm.is_contributing && fm.status !== 'rejected')
               if (filterVisibleStatus) {
                 visibleFMs = visibleFMs.filter((fm) => fm.status === filterVisibleStatus)
               }
@@ -1517,6 +1617,7 @@ function TableMappingCard({
                 onApprove={() => onApproveFM(fm.id)}
                 onReject={() => onRejectFM(fm.id)}
                 onDelete={() => onDeleteFM(fm.id)}
+                onDeleteFM={onDeleteFM}
                 canEdit={canEdit}
                 isSelected={selectedFMId === fm.id}
                 onEditTarget={(fieldId) => onEditFieldTarget(fm.id, fieldId)}
@@ -1552,6 +1653,7 @@ function TableMappingCard({
                           onApprove={() => onApproveFM(row.id)}
                           onReject={() => onRejectFM(row.id)}
                           onDelete={() => onDeleteFM(row.id)}
+                          onDeleteFM={onDeleteFM}
                           canEdit={canEdit}
                           isSelected={selectedFMId === row.id}
                           onEditTarget={(fieldId) => onEditFieldTarget(row.id, fieldId)}
@@ -1572,6 +1674,7 @@ function TableMappingCard({
                     onApprove={() => onApproveFM(fm.id)}
                     onReject={() => onRejectFM(fm.id)}
                     onDelete={() => onDeleteFM(fm.id)}
+                    onDeleteFM={onDeleteFM}
                     canEdit={canEdit}
                     isSelected={selectedFMId === fm.id}
                     onEditTarget={(fieldId) => onEditFieldTarget(fm.id, fieldId)}
@@ -1585,67 +1688,76 @@ function TableMappingCard({
 
           {/* Inline unmapped target fields */}
           {showInlineUnmapped && unmappedTgtFields.length > 0 && (
-            <div className="border-t border-dashed border-gray-100 mt-2 pt-2">
-              <div className="px-5 py-1.5 text-xs font-medium text-gray-500">
-                Unmapped Target Fields ({unmappedTgtFields.length})
-              </div>
+            <div className="border-t border-gray-100">
               {unmappedTgtFields.map((field) => {
                 const ack = acknowledgments.find((a) => a.field_id === field.id)
                 return (
                   <div key={field.id}>
-                    <div className={`flex items-center px-5 py-3 hover:bg-gray-50 transition-colors ${ack ? 'bg-green-50/60' : ''}`}>
-                      <div className="w-[36%] flex items-center gap-2">
-                        <span className="text-xs italic text-gray-300">No source field</span>
+                    <div className="group grid grid-cols-[1fr_80px_1fr] items-center px-4 py-0 min-h-[40px] transition-colors hover:bg-settle-slate-50">
+                      <div className="flex items-center gap-2 min-w-0 pr-2">
+                        <span className="w-1.5 h-1.5 rounded-full flex-shrink-0 bg-settle-slate-300" />
+                        <span className="text-xs text-settle-slate-400 font-mono italic">—</span>
                       </div>
-                      <div className="w-[28%] text-center">
-                        <span className="text-xs text-gray-300">—</span>
+                      <div className="flex items-center justify-center">
+                        <span className="text-xs text-settle-slate-300">—</span>
                       </div>
-                      <div className="w-[36%] flex items-center gap-2 min-w-0">
-                        <span className={`w-2 h-2 rounded-full flex-shrink-0 ${ack ? 'bg-green-500' : field.is_nullable !== false ? 'bg-gray-300' : 'bg-amber-400'}`} />
-                        <span className={`text-sm truncate ${ack ? 'text-gray-600' : 'text-gray-500'}`}>{field.name}</span>
-                        <span className="text-xs text-gray-400 flex-shrink-0">{field.data_type}</span>
-                        {!ack && field.is_nullable === false && (
-                          <span className="text-[10px] font-medium text-amber-600 bg-amber-50 px-1.5 py-0.5 rounded flex-shrink-0">NOT NULL</span>
+                      <div className="flex items-center justify-between gap-2 min-w-0 pl-2">
+                        <div className="flex items-center gap-2 min-w-0 flex-1">
+                          <span className={`w-1.5 h-1.5 rounded-full flex-shrink-0 ${ack ? 'bg-green-500' : 'bg-amber-400'}`} />
+                          <span className="text-xs font-mono truncate text-settle-slate-900">{field.name}</span>
+                          <UnmappedTargetIndicator field={field} />
+                        </div>
+                        {canEdit && (
+                          <div className="flex items-center gap-0.5 flex-shrink-0 opacity-0 group-hover:opacity-100 transition-opacity" onClick={(e) => e.stopPropagation()}>
+                            <button
+                              ref={mapPickerFieldId === field.id ? mapPickerRef : undefined}
+                              onClick={(e) => {
+                                e.stopPropagation()
+                                setMapPickerFieldId((prev) => prev === field.id ? null : field.id)
+                              }}
+                              className="text-xs text-gray-500 hover:text-gray-700 font-medium transition-colors whitespace-nowrap"
+                            >
+                              + Map
+                            </button>
+                            {mapPickerFieldId === field.id && (
+                              <FieldPicker
+                                tableName={tm.sourceTable?.name ?? 'Source'}
+                                fields={unmappedSrcFields.map((f) => ({
+                                  id: f.id,
+                                  name: f.name,
+                                  data_type: f.data_type,
+                                  is_nullable: f.is_nullable,
+                                }))}
+                                selectedFieldId={null}
+                                onSelect={(srcField) => {
+                                  setMapPickerFieldId(null)
+                                  void quickMap(srcField.id, field.id)
+                                }}
+                                onClose={() => setMapPickerFieldId(null)}
+                                anchorRef={mapPickerRef as React.RefObject<HTMLElement>}
+                              />
+                            )}
+                            {ack ? (
+                              <button
+                                onClick={() => onRemoveAcknowledgment(field.id)}
+                                title="Remove acknowledgment"
+                                className="p-1 rounded transition-colors text-gray-400 hover:text-gray-600"
+                              >
+                                <X className="w-3.5 h-3.5" />
+                              </button>
+                            ) : (
+                              <button
+                                onClick={() => onAcknowledge(field.id, 'target')}
+                                title="Acknowledge"
+                                className="p-1 rounded transition-colors text-gray-400 hover:text-gray-600"
+                              >
+                                <Check className="w-3.5 h-3.5" />
+                              </button>
+                            )}
+                          </div>
                         )}
                       </div>
-                      {canEdit && (
-                        <div className="flex items-center gap-0.5 flex-shrink-0" onClick={(e) => e.stopPropagation()}>
-                          <button
-                            onClick={() => { setAddAfterUnmappedId(field.id); onShowAddRow(); }}
-                            className="text-xs text-blue-600 hover:text-blue-800 font-medium px-2 py-1 rounded hover:bg-blue-50 transition-colors whitespace-nowrap"
-                          >
-                            + Map
-                          </button>
-                          {ack ? (
-                            <button
-                              onClick={async () => { await removeAcknowledgment(projectId, field.id); onAcknowledgmentChanged(); }}
-                              title="Remove acknowledgment"
-                              className="p-1 rounded transition-colors text-red-400 hover:text-red-600 hover:bg-red-50"
-                            >
-                              <X className="w-3.5 h-3.5" />
-                            </button>
-                          ) : (
-                            <button
-                              onClick={async () => { await acknowledgeField(projectId, field.id, 'target', 'acknowledged'); onAcknowledgmentChanged(); }}
-                              title="Acknowledge"
-                              className="p-1 rounded transition-colors text-gray-300 hover:text-green-600 hover:bg-green-50"
-                            >
-                              <Check className="w-3.5 h-3.5" />
-                            </button>
-                          )}
-                        </div>
-                      )}
                     </div>
-                    {canEdit && showAddRow && addAfterUnmappedId === field.id && (
-                      <InlineAddFieldRow
-                        tm={tm}
-                        allFieldsByTable={allFieldsByTable}
-                        initialTargetFieldId={field.id}
-                        onAdded={(fm) => { setAddAfterUnmappedId(null); onFieldAdded(fm); }}
-                        onCancel={() => { setAddAfterUnmappedId(null); onHideAddRow(); }}
-                        onSync={onMappingsSync}
-                      />
-                    )}
                   </div>
                 )
               })}
@@ -1654,72 +1766,86 @@ function TableMappingCard({
 
           {/* Inline unmapped source fields */}
           {showInlineUnmapped && unmappedSrcFields.length > 0 && (
-            <div className="border-t border-dashed border-gray-100 mt-1 pt-2">
-              <div className="px-5 py-1.5 text-xs font-medium text-gray-500">
-                Unmapped Source Fields ({unmappedSrcFields.length})
-              </div>
+            <div className="border-t border-gray-100">
               {unmappedSrcFields.map((field) => {
                 const ack = acknowledgments.find((a) => a.field_id === field.id)
                 return (
                   <div key={field.id}>
-                    <div className={`flex items-center px-5 py-3 hover:bg-gray-50 transition-colors ${ack ? 'bg-green-50/60' : ''}`}>
-                      <div className="w-[36%] flex items-center gap-2 min-w-0">
-                        <span className={`w-2 h-2 rounded-full flex-shrink-0 ${ack ? 'bg-green-500' : 'bg-gray-300'}`} />
-                        <span className={`text-sm truncate ${ack ? 'text-gray-600' : 'text-gray-500'}`}>{field.name}</span>
-                        <span className="text-xs text-gray-400 flex-shrink-0">{field.data_type}</span>
+                    <div className="group grid grid-cols-[1fr_80px_1fr] items-center px-4 py-0 min-h-[40px] transition-colors hover:bg-settle-slate-50">
+                      <div className="flex items-center gap-2 min-w-0 pr-2">
+                        <span className={`w-1.5 h-1.5 rounded-full flex-shrink-0 ${ack ? 'bg-green-500' : 'bg-amber-400'}`} />
+                        <span className="text-xs font-mono truncate text-settle-slate-900">{field.name}</span>
                       </div>
-                      <div className="w-[28%] text-center">
-                        <span className="text-xs text-gray-300">—</span>
+                      <div className="flex items-center justify-center">
+                        <span className="text-xs text-settle-slate-300">—</span>
                       </div>
-                      <div className="w-[36%] flex items-center gap-2">
-                        <span className="text-xs italic text-gray-300">Not migrated</span>
-                      </div>
-                      {canEdit && (
-                        <div className="flex items-center gap-0.5 flex-shrink-0" onClick={(e) => e.stopPropagation()}>
-                          <button
-                            onClick={() => { setAddAfterUnmappedId(field.id); onShowAddRow(); }}
-                            className="text-xs text-blue-600 hover:text-blue-800 font-medium px-2 py-1 rounded hover:bg-blue-50 transition-colors whitespace-nowrap"
-                          >
-                            + Map
-                          </button>
-                          {ack ? (
-                            <button
-                              onClick={async () => { await removeAcknowledgment(projectId, field.id); onAcknowledgmentChanged(); }}
-                              title="Remove acknowledgment"
-                              className="p-1 rounded transition-colors text-red-400 hover:text-red-600 hover:bg-red-50"
-                            >
-                              <X className="w-3.5 h-3.5" />
-                            </button>
-                          ) : (
-                            <button
-                              onClick={async () => { await acknowledgeField(projectId, field.id, 'source', 'acknowledged'); onAcknowledgmentChanged(); }}
-                              title="Acknowledge"
-                              className="p-1 rounded transition-colors text-gray-300 hover:text-green-600 hover:bg-green-50"
-                            >
-                              <Check className="w-3.5 h-3.5" />
-                            </button>
-                          )}
+                      <div className="flex items-center justify-between gap-2 min-w-0 pl-2">
+                        <div className="flex items-center gap-2 min-w-0 flex-1">
+                          <span className="w-1.5 h-1.5 rounded-full flex-shrink-0 bg-settle-slate-300" />
+                          <span className="text-xs text-settle-slate-400 font-mono italic">—</span>
                         </div>
-                      )}
+                        {canEdit && (
+                          <div className="flex items-center gap-0.5 flex-shrink-0 opacity-0 group-hover:opacity-100 transition-opacity" onClick={(e) => e.stopPropagation()}>
+                            <button
+                              ref={mapPickerFieldId === field.id ? mapPickerRef : undefined}
+                              onClick={(e) => {
+                                e.stopPropagation()
+                                setMapPickerFieldId((prev) => prev === field.id ? null : field.id)
+                              }}
+                              className="text-xs text-gray-500 hover:text-gray-700 font-medium transition-colors whitespace-nowrap"
+                            >
+                              + Map
+                            </button>
+                            {mapPickerFieldId === field.id && (
+                              <FieldPicker
+                                tableName={tm.targetTable?.name ?? 'Target'}
+                                fields={unmappedTgtFields.map((f) => ({
+                                  id: f.id,
+                                  name: f.name,
+                                  data_type: f.data_type,
+                                  is_nullable: f.is_nullable,
+                                }))}
+                                selectedFieldId={null}
+                                onSelect={(tgtField) => {
+                                  setMapPickerFieldId(null)
+                                  void quickMap(field.id, tgtField.id)
+                                }}
+                                onClose={() => setMapPickerFieldId(null)}
+                                anchorRef={mapPickerRef as React.RefObject<HTMLElement>}
+                              />
+                            )}
+                            {ack ? (
+                              <button
+                                onClick={() => onRemoveAcknowledgment(field.id)}
+                                title="Remove acknowledgment"
+                                className="p-1 rounded transition-colors text-gray-400 hover:text-gray-600"
+                              >
+                                <X className="w-3.5 h-3.5" />
+                              </button>
+                            ) : (
+                              <button
+                                onClick={() => onAcknowledge(field.id, 'source')}
+                                title="Acknowledge"
+                                className="p-1 rounded transition-colors text-gray-400 hover:text-gray-600"
+                              >
+                                <Check className="w-3.5 h-3.5" />
+                              </button>
+                            )}
+                          </div>
+                        )}
+                      </div>
                     </div>
-                    {canEdit && showAddRow && addAfterUnmappedId === field.id && (
-                      <InlineAddFieldRow
-                        tm={tm}
-                        allFieldsByTable={allFieldsByTable}
-                        initialSourceFieldId={field.id}
-                        onAdded={(fm) => { setAddAfterUnmappedId(null); onFieldAdded(fm); }}
-                        onCancel={() => { setAddAfterUnmappedId(null); onHideAddRow(); }}
-                        onSync={onMappingsSync}
-                      />
-                    )}
                   </div>
                 )
               })}
             </div>
           )}
 
-          {/* Inline add field row — only at bottom when triggered from "Add Field Mapping" button (not from unmapped rows) */}
-          {showAddRow && !addAfterUnmappedId && (
+          {/* Inline add field row — rendered at bottom when "Add Field
+              Mapping" is clicked. Used for advanced mapping types
+              (many-to-one, one-to-many). The common 1→1 quick-map flow on
+              unmapped rows goes through the FieldPicker instead. */}
+          {showAddRow && (
             <InlineAddFieldRow
               tm={tm}
               allFieldsByTable={allFieldsByTable}
@@ -1734,7 +1860,7 @@ function TableMappingCard({
             {!showAddRow && (
               <RoleTooltip allowed={canEdit} requiredRole="Editor">
                 <button
-                  onClick={canEdit ? () => { setAddAfterUnmappedId(null); onShowAddRow(); } : undefined}
+                  onClick={canEdit ? onShowAddRow : undefined}
                   disabled={!canEdit}
                   className="flex items-center gap-1.5 text-xs font-medium text-blue-600 hover:text-blue-800 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
                 >
@@ -1775,6 +1901,7 @@ function TableMappingCard({
 
 function MappingDetailsPanel({
   fm,
+  peerFMs,
   isOpen,
   onClose,
   onApprove,
@@ -1782,6 +1909,8 @@ function MappingDetailsPanel({
   onChangeSource,
   onChangeTarget,
   onRemove,
+  onRemovePeer,
+  onAddContributor,
   projectId,
   tableMappingId,
   allFieldsByTable,
@@ -1798,6 +1927,10 @@ function MappingDetailsPanel({
   targetTableName,
 }: {
   fm: RichFieldMapping | null
+  /** All non-rejected field_mappings on the same TM that share this mapping's
+   *  target field. For a 1:1 mapping this is just `[fm]`; for a many-to-one
+   *  it includes the primary and every contributor. */
+  peerFMs: RichFieldMapping[]
   isOpen: boolean
   onClose: () => void
   onApprove: () => void
@@ -1805,6 +1938,13 @@ function MappingDetailsPanel({
   onChangeSource: (fieldId: string) => void
   onChangeTarget: (fieldId: string) => void
   onRemove: () => void
+  /** Deletes a single peer (one of the contributors or the primary) without
+   *  touching the other peers — used by the per-row × buttons in the
+   *  Source-fields section of a many-to-one mapping. */
+  onRemovePeer: (fmId: string) => void
+  /** Adds a new contributor to the current target, creating a new
+   *  field_mappings row with is_contributing = true. */
+  onAddContributor: (sourceFieldId: string) => void
   projectId: string
   tableMappingId: string
   allFieldsByTable: Record<string, SimpleField[]>
@@ -1823,17 +1963,35 @@ function MappingDetailsPanel({
   const router = useRouter()
   const [isEditingSource, setIsEditingSource] = useState(false)
   const [isEditingTarget, setIsEditingTarget] = useState(false)
+  const [isAddingContributor, setIsAddingContributor] = useState(false)
   const [activeTab, setActiveTab] = useState<'details' | 'transform' | 'actions'>('details')
   const sourceFieldRef = useRef<HTMLDivElement>(null)
   const targetFieldRef = useRef<HTMLDivElement>(null)
+  const addContribRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
     setIsEditingSource(false)
     setIsEditingTarget(false)
+    setIsAddingContributor(false)
     setActiveTab('details')
   }, [fm?.id])
 
   if (!fm) return null
+
+  // A many-to-one lives across multiple field_mappings rows sharing the
+  // same target; if we see more than one peer on this target the panel
+  // renders the equal-peer Source-fields section. Peers are presented in
+  // insertion order so the list feels stable across edits.
+  const isManyToOne = peerFMs.length > 1
+  const peerSourceFieldIds = new Set(
+    peerFMs.map((p) => p.source_field_id).filter((id): id is string => !!id)
+  )
+  // Candidates for "Add field" = any source field in this TM's source table
+  // not already contributing to this target. Value-assignment peers (no
+  // source_field_id) don't block anything.
+  const availableContributorFields = sourceTableFields.filter(
+    (f) => !peerSourceFieldIds.has(f.id)
+  )
 
   return (
     <FixDrawer isOpen={isOpen} onClose={onClose}>
@@ -1843,9 +2001,23 @@ function MappingDetailsPanel({
         <div className="flex-1 min-w-0 pr-3">
           <p className="text-xs text-settle-slate-400 mb-0.5">Field mapping</p>
 
-          <div className="flex items-center gap-2 mb-2">
+          <div className="flex items-center gap-2 mb-2 flex-wrap">
             <div ref={sourceFieldRef} className="relative">
-              {canEdit ? (
+              {isManyToOne ? (
+                // For a many-to-one, the "source" is a combination of many
+                // fields; editing a single one via FieldPicker would be
+                // ambiguous (which peer to replace?). We expose peer-level
+                // edits via the Source-fields section below instead and
+                // render the header name purely as a readout.
+                <span
+                  className="text-sm font-semibold font-mono text-settle-slate-900"
+                  title={peerFMs.map((p) => p.sourceField?.name ?? '?').join(' + ')}
+                >
+                  {peerFMs
+                    .map((p) => p.sourceField?.name ?? '?')
+                    .join(' + ')}
+                </span>
+              ) : canEdit ? (
                 <button
                   onClick={() => setIsEditingSource((v) => !v)}
                   className={`text-sm font-semibold font-mono truncate max-w-[140px] text-left transition-colors ${
@@ -1864,7 +2036,7 @@ function MappingDetailsPanel({
                   {fm.sourceField?.name ?? '—'}
                 </span>
               )}
-              {isEditingSource && (
+              {!isManyToOne && isEditingSource && (
                 <FieldPicker
                   tableName={sourceTableName}
                   fields={sourceTableFields}
@@ -1913,6 +2085,15 @@ function MappingDetailsPanel({
                 />
               )}
             </div>
+
+            {isManyToOne && (
+              <span
+                title={`${peerFMs.length} source fields combine into ${fm.targetField?.name}`}
+                className="flex-shrink-0 text-[10px] font-medium px-1.5 py-0.5 rounded-full bg-gray-100 text-gray-500 border border-gray-100"
+              >
+                many→1
+              </span>
+            )}
           </div>
 
           <div className="flex items-center gap-1.5">
@@ -1968,6 +2149,81 @@ function MappingDetailsPanel({
 
         {activeTab === 'details' && (
           <div className="space-y-5">
+
+            {isManyToOne && (
+              // Equal-peer Source-fields section for many-to-one. Each peer
+              // renders with its own × so contributors can be trimmed
+              // independently — the last remaining peer cannot be removed
+              // from here (that would orphan the target; use Actions →
+              // Remove Mapping instead). "Add field" spawns a FieldPicker
+              // scoped to source fields not already contributing.
+              <div>
+                <div className="flex items-center justify-between mb-2">
+                  <p className="text-xs font-medium text-gray-500">Source fields</p>
+                  <span className="text-[10px] text-settle-slate-400">
+                    {peerFMs.length} combine → {fm.targetField?.name ?? 'target'}
+                  </span>
+                </div>
+                <div className="space-y-1.5">
+                  {peerFMs.map((peer) => (
+                    <div
+                      key={peer.id}
+                      className="flex items-center justify-between gap-2 px-2.5 py-1.5 rounded-md border border-gray-100 bg-settle-slate-50/60"
+                    >
+                      <div className="flex items-center gap-2 min-w-0">
+                        <span className="text-xs font-mono text-settle-slate-900 truncate">
+                          {peer.sourceField?.name ?? '—'}
+                        </span>
+                        {peer.sourceField?.data_type && (
+                          <span className="text-[10px] text-settle-slate-400 flex-shrink-0">
+                            {peer.sourceField.data_type}
+                          </span>
+                        )}
+                      </div>
+                      {canEdit && peerFMs.length > 1 && (
+                        <button
+                          type="button"
+                          onClick={() => onRemovePeer(peer.id)}
+                          title={`Remove ${peer.sourceField?.name ?? 'this field'} from this mapping`}
+                          className="flex-shrink-0 w-5 h-5 flex items-center justify-center rounded text-settle-slate-400 hover:text-red-500 hover:bg-red-50 transition-colors"
+                        >
+                          <X className="w-3 h-3" />
+                        </button>
+                      )}
+                    </div>
+                  ))}
+                </div>
+                {canEdit && availableContributorFields.length > 0 && (
+                  <div ref={addContribRef} className="relative mt-2">
+                    <button
+                      type="button"
+                      onClick={() => setIsAddingContributor((v) => !v)}
+                      className="text-xs font-medium text-settle-blue-500 hover:text-settle-blue-700 transition-colors"
+                    >
+                      {isAddingContributor ? 'Cancel' : '+ Add field'}
+                    </button>
+                    {isAddingContributor && (
+                      <FieldPicker
+                        tableName={sourceTableName}
+                        fields={availableContributorFields}
+                        selectedFieldId={null}
+                        onSelect={(field) => {
+                          onAddContributor(field.id)
+                          setIsAddingContributor(false)
+                        }}
+                        onClose={() => setIsAddingContributor(false)}
+                        anchorRef={addContribRef as React.RefObject<HTMLElement>}
+                      />
+                    )}
+                  </div>
+                )}
+                {canEdit && availableContributorFields.length === 0 && (
+                  <p className="mt-2 text-[11px] text-settle-slate-400">
+                    All source fields are already contributing to this target.
+                  </p>
+                )}
+              </div>
+            )}
 
             <div>
               <p className="text-xs font-medium text-gray-500 mb-2">Confidence</p>
@@ -2148,6 +2404,30 @@ function MappingDetailsPanel({
   )
 }
 
+// ─── Unmapped target indicator ────────────────────────────────────────────────
+
+/**
+ * Visual cue rendered next to an unmapped *target* field name, classifying
+ * why the user should (or shouldn't) care about the gap:
+ *
+ *  - `default_value` present         → muted "has default" pill. The column
+ *                                      will auto-populate on INSERT, so
+ *                                      leaving it unmapped is fine.
+ *  - `is_nullable === false` & no    → amber "required" warning. The column
+ *     default                          is NOT NULL with no default, so an
+ *                                      INSERT without this mapping will fail.
+ *  - Nullable, no default            → no indicator. Nullable unmapped
+ *                                      columns are a silent allowed case.
+ *
+ * Renders nothing when the field is missing the metadata we'd need to
+ * classify (e.g. older rows migrated in before migration 064). We deliberately
+ * fail silent rather than guessing — a false "required" badge would be worse
+ * than no badge.
+ */
+function UnmappedTargetIndicator(_: { field: Pick<SimpleField, 'default_value' | 'is_nullable'> }) {
+  return null
+}
+
 // ─── Unmapped Fields View ─────────────────────────────────────────────────────
 
 function UnmappedView({
@@ -2256,7 +2536,10 @@ function UnmappedView({
           <div className="space-y-2">
             {unmappedTarget.map((f) => (
               <div key={f.id} className="px-3 py-2.5 bg-purple-50/60 border border-purple-100 rounded-lg">
-                <p className="text-sm font-medium text-gray-800 truncate">{f.table?.name}.{f.name}</p>
+                <div className="flex items-center gap-2 min-w-0">
+                  <p className="text-sm font-medium text-gray-800 truncate">{f.table?.name}.{f.name}</p>
+                  <UnmappedTargetIndicator field={f} />
+                </div>
                 <p className="text-xs text-gray-500">{f.data_type}</p>
               </div>
             ))}
@@ -2356,11 +2639,18 @@ export default function MappingContent({ projectId, projectName, initialData, pr
     pendingAction: () => void
   } | null>(null)
   const [suggestingTMId, setSuggestingTMId] = useState<string | null>(null)
-  const [approvingHC, setApprovingHC] = useState(false)
-  const [hcConfirmCount, setHcConfirmCount] = useState<number | null>(null)
 
   const [toast, setToast] = useState<ToastState | null>(null)
   const isInlineEditingRef = useRef(false)
+
+  // Debounced refresh plumbing — rapid-fire ack/unack clicks used to spawn
+  // one getMappings() per click, whose responses could arrive out of order
+  // and flicker stale state back over fresh state. The timer coalesces a
+  // click storm into one fetch 500ms after the last click; the version
+  // counter guards against the tail case where an older in-flight fetch
+  // resolves after a newer one was already applied.
+  const refreshTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const refreshVersionRef = useRef(0)
 
   // Panel open/close animation: keep the DOM node alive for 200ms on close so the width transition plays out
   useEffect(() => {
@@ -2385,39 +2675,66 @@ export default function MappingContent({ projectId, projectName, initialData, pr
 
   // Tab counts
   const allFMs = useMemo(() => tableMappings.flatMap((tm) => tm.fieldMappings), [tableMappings])
-  const primaryFMCount = useMemo(() => allFMs.filter((fm) => !fm.is_contributing).length, [allFMs])
   const acknowledgedIds = useMemo(() => new Set(acknowledgments.map((a) => a.field_id)), [acknowledgments])
-  // Needs review: primary mapping rows with status 'needs_review' + unacknowledged unmapped fields
-  const needsReviewCount = useMemo(() => {
-    const mappingCount = allFMs.filter((fm) => !fm.is_contributing && fm.status === 'needs_review').length
-    const activeSrcIds = new Set(allFMs.filter((fm) => fm.status !== 'rejected' && fm.source_field_id).map((fm) => fm.source_field_id as string))
-    const activeTgtIds = new Set(allFMs.filter((fm) => fm.status !== 'rejected' && !fm.is_contributing).map((fm) => fm.target_field_id))
+
+  // Header stats — one count per VISUAL review row the user sees:
+  //   - Each primary (non-contributing, non-rejected) field_mapping is 1 row
+  //     → many-to-one contributes 1 (primary only; contributors render inside
+  //       the same row as chips), one-to-many contributes N (one primary per
+  //       split target).
+  //   - Each unmapped source or target field is 1 row.
+  // Approved = approved primaries + acknowledged unmapped fields (both are
+  // "reviewed"). Needs Review = everything else (including acknowledged
+  // unmapped counted into Total but into Approved, so it subtracts out).
+  const headerStats = useMemo(() => {
     const sourceTableIds = new Set(tableMappings.map((tm) => tm.source_table_id))
     const targetTableIds = new Set(tableMappings.map((tm) => tm.target_table_id))
-    let unmappedUnacked = 0
-    for (const [tid, fields] of Object.entries(allFieldsByTable)) {
-      if (sourceTableIds.has(tid)) unmappedUnacked += fields.filter((f) => !activeSrcIds.has(f.id) && !acknowledgedIds.has(f.id)).length
-      if (targetTableIds.has(tid)) unmappedUnacked += fields.filter((f) => !activeTgtIds.has(f.id) && !acknowledgedIds.has(f.id)).length
+
+    const primaryFMs = allFMs.filter((fm) => !fm.is_contributing && fm.status !== 'rejected')
+    const approvedPrimaryFMs = primaryFMs.filter((fm) => fm.status === 'approved').length
+
+    // Source ids covered by a primary OR a non-rejected contributing row.
+    // Contributors are folded into the primary's visual row, so their source
+    // field is "handled" and must not show up in Unmapped.
+    const mappedSourceIds = new Set<string>(
+      primaryFMs.filter((fm) => fm.source_field_id).map((fm) => fm.source_field_id as string)
+    )
+    for (const fm of allFMs) {
+      if (fm.is_contributing && fm.status !== 'rejected' && fm.source_field_id) {
+        mappedSourceIds.add(fm.source_field_id)
+      }
     }
-    return mappingCount + unmappedUnacked
-  }, [allFMs, tableMappings, allFieldsByTable, acknowledgedIds])
-  const approvedFMCount = useMemo(
-    () => allFMs.filter((fm) => !fm.is_contributing && fm.status === 'approved').length,
-    [allFMs]
-  )
-  const unmappedCount = useMemo(() => {
-    const activeSrcIds = new Set(allFMs.filter((fm) => fm.status !== 'rejected' && fm.source_field_id).map((fm) => fm.source_field_id as string))
-    const activeTgtIds = new Set(allFMs.filter((fm) => fm.status !== 'rejected' && !fm.is_contributing).map((fm) => fm.target_field_id))
-    const sourceTableIds = new Set(tableMappings.map((tm) => tm.source_table_id))
-    const targetTableIds = new Set(tableMappings.map((tm) => tm.target_table_id))
-    let count = 0
-    for (const [tid, fields] of Object.entries(allFieldsByTable)) {
-      if (sourceTableIds.has(tid)) count += fields.filter((f) => !activeSrcIds.has(f.id) && !acknowledgedIds.has(f.id)).length
-      // Acknowledged fields still count as unmapped — acknowledgment means "I know, it's intentional"
-      if (targetTableIds.has(tid)) count += fields.filter((f) => !activeTgtIds.has(f.id)).length
+    const mappedTargetIds = new Set(primaryFMs.map((fm) => fm.target_field_id))
+
+    let unmappedSourceCount = 0
+    let unmappedTargetCount = 0
+    let acknowledgedCount = 0
+
+    for (const [tableId, fields] of Object.entries(allFieldsByTable)) {
+      if (sourceTableIds.has(tableId)) {
+        for (const field of fields) {
+          if (!mappedSourceIds.has(field.id)) {
+            if (acknowledgedIds.has(field.id)) acknowledgedCount++
+            else unmappedSourceCount++
+          }
+        }
+      }
+      if (targetTableIds.has(tableId)) {
+        for (const field of fields) {
+          if (!mappedTargetIds.has(field.id)) {
+            if (acknowledgedIds.has(field.id)) acknowledgedCount++
+            else unmappedTargetCount++
+          }
+        }
+      }
     }
-    return count
-  }, [tableMappings, allFieldsByTable, allFMs])
+
+    const total = primaryFMs.length + unmappedSourceCount + unmappedTargetCount + acknowledgedCount
+    const approved = approvedPrimaryFMs + acknowledgedCount
+    const needsReview = total - approved
+
+    return { total, approved, needsReview }
+  }, [tableMappings, allFieldsByTable, allFMs, acknowledgedIds])
 
   // Many-to-one count: primary rows that have at least one contributing row
   const manyToOneCount = useMemo(() => {
@@ -2479,9 +2796,6 @@ export default function MappingContent({ projectId, projectName, initialData, pr
     () => allFMs.filter((fm) => fm.source_field_id === null && fm.status !== 'rejected').length,
     [allFMs]
   )
-
-  // High-confidence count for bulk approve button
-  const hcFMCount = useMemo(() => allFMs.filter((fm) => fm.status === 'needs_review' && (fm.confidence ?? 0) >= 85).length, [allFMs])
 
   // Sync filter state to URL (uses replace — does not add history entry)
   const syncFiltersToUrl = useCallback(
@@ -2767,6 +3081,20 @@ export default function MappingContent({ projectId, projectName, initialData, pr
     [tableMappings, displayedFM?.table_mapping_id]
   )
 
+  // Peers are every non-rejected field_mapping on this TM that shares the
+  // selected mapping's target_field_id. For a 1:1 mapping this collapses
+  // to `[displayedFM]`; for a many-to-one it yields the primary + every
+  // contributor, which is what the Source-fields section of the detail
+  // panel (and its per-peer × / Add-field controls) operates over.
+  const displayedPeerFMs = useMemo<RichFieldMapping[]>(() => {
+    if (!displayedFM || !displayedTM) return displayedFM ? [displayedFM] : []
+    return displayedTM.fieldMappings.filter(
+      (f) =>
+        f.target_field_id === displayedFM.target_field_id &&
+        f.status !== 'rejected'
+    )
+  }, [displayedFM, displayedTM])
+
   const refreshData = useCallback(() => {
     startTransition(async () => {
       const fresh = await getMappings(projectId)
@@ -2779,6 +3107,89 @@ export default function MappingContent({ projectId, projectName, initialData, pr
       }
     })
   }, [projectId])
+
+  // Debounced + version-guarded variant for click-storm paths (ack / unack).
+  // Each call resets the 500ms timer; only the trailing call actually hits
+  // the server, and its response is only applied if no newer refresh has
+  // been requested in the meantime. Other one-shot callers (approve, delete,
+  // regenerate, modals) stay on the immediate `refreshData`.
+  const debouncedRefresh = useCallback(() => {
+    if (refreshTimerRef.current) clearTimeout(refreshTimerRef.current)
+    refreshTimerRef.current = setTimeout(() => {
+      const version = ++refreshVersionRef.current
+      startTransition(async () => {
+        const fresh = await getMappings(projectId)
+        if (fresh && refreshVersionRef.current === version) {
+          setData(fresh)
+          setTableMappings(fresh.tableMappings)
+          setUnmappedSource(fresh.unmappedSourceFields)
+          setUnmappedTarget(fresh.unmappedTargetFields)
+          setAcknowledgments(fresh.acknowledgments)
+        }
+      })
+    }, 500)
+  }, [projectId])
+
+  // Clear any pending debounced refresh on unmount so the timeout doesn't
+  // fire against a dead component and trigger a setState-on-unmounted warning.
+  useEffect(() => {
+    return () => {
+      if (refreshTimerRef.current) clearTimeout(refreshTimerRef.current)
+    }
+  }, [])
+
+  // Optimistic ack handlers — mirror the handleApprove / executeDeleteFM
+  // pattern elsewhere in this file. The field-level status dot reads
+  // directly from `acknowledgments`, so patching local state here turns
+  // the dot green on the same frame as the click; refreshData() then
+  // reconciles with the server-computed TM.status and coverage counts.
+  const handleAcknowledge = useCallback(
+    (fieldId: string, side: 'source' | 'target') => {
+      const optimisticAck: FieldAcknowledgmentRow = {
+        id: `optimistic-${fieldId}`,
+        project_id: projectId,
+        field_id: fieldId,
+        side,
+        reason: 'acknowledged',
+        notes: null,
+        acknowledged_at: new Date().toISOString(),
+      }
+      setAcknowledgments((prev) =>
+        prev.some((a) => a.field_id === fieldId) ? prev : [...prev, optimisticAck]
+      )
+
+      startTransition(async () => {
+        try {
+          await acknowledgeField(projectId, fieldId, side, 'acknowledged')
+          debouncedRefresh()
+        } catch {
+          setAcknowledgments((prev) => prev.filter((a) => a.field_id !== fieldId))
+          setToast({ message: 'Could not acknowledge field', type: 'error' })
+          setTimeout(() => setToast(null), 4000)
+        }
+      })
+    },
+    [projectId, debouncedRefresh]
+  )
+
+  const handleRemoveAcknowledgment = useCallback(
+    (fieldId: string) => {
+      const previous = acknowledgments
+      setAcknowledgments((prev) => prev.filter((a) => a.field_id !== fieldId))
+
+      startTransition(async () => {
+        try {
+          await removeAcknowledgment(projectId, fieldId)
+          debouncedRefresh()
+        } catch {
+          setAcknowledgments(previous)
+          setToast({ message: 'Could not remove acknowledgment', type: 'error' })
+          setTimeout(() => setToast(null), 4000)
+        }
+      })
+    },
+    [projectId, debouncedRefresh, acknowledgments]
+  )
 
   function toggleExpand(id: string) {
     setExpandedIds((prev) => {
@@ -2809,22 +3220,55 @@ export default function MappingContent({ projectId, projectName, initialData, pr
 
   function handleReject(fmId: string) {
     const fm = allFMs.find((f) => f.id === fmId)
-    const newStatus = fm?.status === 'rejected' ? 'needs_review' : 'rejected'
-    updateFM(fmId, { status: newStatus })
-    startTransition(async () => {
-      const r = await updateFieldMappingStatus(fmId, newStatus)
-      if (!r.success) {
-        updateFM(fmId, { status: fm?.status ?? 'needs_review' })
-        showToast(r.error ?? 'Could not update mapping status', 'error')
-      }
-      // Sync unmapped lists: rejecting a mapping may expose a coverage gap
-      else refreshData()
-    })
+
+    // Legacy path: a row already persisted as 'rejected' (pre-fix data) gets
+    // un-rejected back to needs_review. New UI never produces rejected rows.
+    if (fm?.status === 'rejected') {
+      updateFM(fmId, { status: 'needs_review' })
+      startTransition(async () => {
+        const r = await updateFieldMappingStatus(fmId, 'needs_review')
+        if (!r.success) {
+          updateFM(fmId, { status: 'rejected' })
+          showToast(r.error ?? 'Could not update mapping status', 'error')
+        } else refreshData()
+      })
+      return
+    }
+
+    // New behavior: rejecting = deleting. No ghost rows. The row is removed
+    // from the DB; freed source/target fields re-surface in the unmapped
+    // sections via refreshData(). handleDeleteFM handles the transform-reset
+    // warning if the mapping has staged data behind it.
+    handleDeleteFM(fmId)
   }
 
   // Execute the delete immediately — called once the user has confirmed any warnings.
   function executeDeleteFM(fmId: string) {
-    setTableMappings((prev) => prev.map((tm) => ({ ...tm, fieldMappings: tm.fieldMappings.filter((fm) => fm.id !== fmId) })))
+    // Optimistic patch that mirrors deleteFieldMapping's server-side logic:
+    // if we're removing the primary of a many-to-one group, the first
+    // remaining non-rejected contributor is promoted in place by flipping
+    // its is_contributing flag off. Without this promotion the row would
+    // flicker out of the list (the render filter hides contributor-only
+    // rows) until refreshData() completes — visually confusing when the
+    // user is just trimming one peer out of a group.
+    setTableMappings((prev) =>
+      prev.map((tm) => {
+        const deleted = tm.fieldMappings.find((fm) => fm.id === fmId)
+        const remaining = tm.fieldMappings.filter((fm) => fm.id !== fmId)
+        if (deleted && !deleted.is_contributing) {
+          const promoteIdx = remaining.findIndex(
+            (fm) =>
+              fm.target_field_id === deleted.target_field_id &&
+              fm.is_contributing &&
+              fm.status !== 'rejected'
+          )
+          if (promoteIdx !== -1) {
+            remaining[promoteIdx] = { ...remaining[promoteIdx], is_contributing: false }
+          }
+        }
+        return { ...tm, fieldMappings: remaining }
+      })
+    )
     if (selectedFM?.id === fmId) setSelectedFM(null)
     startTransition(async () => {
       const r = await deleteFieldMapping(fmId)
@@ -3007,6 +3451,68 @@ export default function MappingContent({ projectId, projectName, initialData, pr
     refreshData()
   }
 
+  // Adds a contributor to an existing mapping (many-to-one). Because we're
+  // only *growing* the source side of an already-approved target mapping
+  // (target hasn't changed, at least one peer remains, nothing else shifts),
+  // this operation intentionally does NOT push the table_mapping back into
+  // "Needs Review" — the server's addManualFieldMapping never touches
+  // table_mappings.status, and this optimistic patch keeps the table's
+  // existing status as-is. Only actions that alter which target columns
+  // are covered (new target, removed target, regenerate) should demote the
+  // table.
+  function handleAddContributor(
+    tmId: string,
+    sourceFieldId: string,
+    targetFieldId: string
+  ) {
+    const srcField = (allFieldsByTable[
+      tableMappings.find((tm) => tm.id === tmId)?.source_table_id ?? ''
+    ] ?? []).find((f) => f.id === sourceFieldId)
+    const tgtField = (allFieldsByTable[
+      tableMappings.find((tm) => tm.id === tmId)?.target_table_id ?? ''
+    ] ?? []).find((f) => f.id === targetFieldId)
+
+    startTransition(async () => {
+      const result = await addManualFieldMapping(tmId, sourceFieldId, targetFieldId, true)
+      if (!result.success) {
+        showToast(result.error ?? 'Could not add contributor', 'error')
+        return
+      }
+
+      // Optimistic patch so the new chip appears in the row/panel before
+      // the refetch completes. The authoritative record will arrive on
+      // refreshData() below.
+      const newFM: RichFieldMapping = {
+        id: result.data!.id,
+        table_mapping_id: tmId,
+        source_field_id: sourceFieldId,
+        target_field_id: targetFieldId,
+        confidence: 100,
+        status: 'approved',
+        ai_reasoning: 'Contributing source — manually added from detail panel',
+        similar_fields_considered: null,
+        type_compatibility: null,
+        is_contributing: true,
+        created_at: new Date().toISOString(),
+        sourceField: srcField
+          ? { id: srcField.id, name: srcField.name, data_type: srcField.data_type, inferred_type: null }
+          : null,
+        targetField: tgtField
+          ? { id: tgtField.id, name: tgtField.name, data_type: tgtField.data_type, inferred_type: null }
+          : null,
+        sourceFieldSamples: [],
+        targetFieldSamples: [],
+        sourceFieldNullPercentage: 0,
+      }
+      setTableMappings((prev) =>
+        prev.map((tm) =>
+          tm.id !== tmId ? tm : { ...tm, fieldMappings: [...tm.fieldMappings, newFM] }
+        )
+      )
+      refreshData()
+    })
+  }
+
   async function handleSuggestRemaining(tmId: string) {
     setSuggestingTMId(tmId)
     const result = await suggestRemainingMappings(tmId)
@@ -3050,24 +3556,6 @@ export default function MappingContent({ projectId, projectName, initialData, pr
     () => (data?.allTargetTables ?? []).filter((t) => !mappedTargetIds.has(t.id)),
     [data?.allTargetTables, mappedTargetIds]
   )
-
-  function handleApproveHighConf() {
-    if (hcConfirmCount === null) {
-      setHcConfirmCount(hcFMCount)
-      return
-    }
-    setApprovingHC(true)
-    setHcConfirmCount(null)
-    startTransition(async () => {
-      const r = await approveHighConfidenceMappings(projectId, 85)
-      setApprovingHC(false)
-      if (!r.success) {
-        showToast(r.error ?? 'Could not approve high-confidence mappings', 'error')
-        return
-      }
-      refreshData()
-    })
-  }
 
   if (tableMappings.length === 0) {
     return (
@@ -3115,37 +3603,12 @@ export default function MappingContent({ projectId, projectName, initialData, pr
 
       {/* Stat pills — flush toolbar */}
       <MappingStatPills
-        primaryFMCount={primaryFMCount}
-        approvedFMCount={approvedFMCount}
-        needsReviewCount={needsReviewCount}
-        unmappedCount={unmappedCount}
+        total={headerStats.total}
+        approved={headerStats.approved}
+        needsReview={headerStats.needsReview}
         sourceDatasetName={sourceDatasetName}
         targetDatasetName={targetDatasetName}
       />
-
-      {/* Bulk approve action — sits above the filter card (when applicable) */}
-      {hcFMCount > 0 && (
-        <div className="px-5 pt-3 flex justify-end flex-shrink-0">
-          {hcConfirmCount !== null ? (
-            <div className="flex items-center gap-2 px-3 py-2 bg-green-50 border border-green-200 rounded-lg">
-              <span className="text-xs text-green-800">Approve {hcConfirmCount} mapping{hcConfirmCount !== 1 ? 's' : ''}?</span>
-              <button onClick={handleApproveHighConf} disabled={approvingHC || !canEdit} className="text-xs font-medium text-white bg-green-600 px-2.5 py-1 rounded hover:bg-green-700 disabled:opacity-40">Confirm</button>
-              <button onClick={() => setHcConfirmCount(null)} className="text-xs text-gray-500 hover:text-gray-700">Cancel</button>
-            </div>
-          ) : (
-            <RoleTooltip allowed={canEdit} requiredRole="Editor">
-              <button
-                onClick={canEdit ? handleApproveHighConf : undefined}
-                disabled={approvingHC || !canEdit}
-                className="flex items-center gap-1.5 px-3 py-2 text-sm font-medium text-green-700 bg-green-50 border border-green-200 rounded-lg hover:bg-green-100 transition-colors disabled:opacity-40"
-              >
-                <Check className="w-3.5 h-3.5" />
-                Approve All High Confidence ({hcFMCount})
-              </button>
-            </RoleTooltip>
-          )}
-        </div>
-      )}
 
       {/* Filter bar — flush border-b strip */}
       <div className="bg-white border-b border-gray-100 px-5 py-2.5 flex-shrink-0">
@@ -3282,12 +3745,13 @@ export default function MappingContent({ projectId, projectName, initialData, pr
                 hideMappedRows={statusFilter === 'unmapped'}
                 filterVisibleStatus={statusFilter === 'needs_review' ? 'needs_review' : undefined}
                 acknowledgments={acknowledgments}
-                projectId={projectId}
-                onAcknowledgmentChanged={refreshData}
+                onAcknowledge={handleAcknowledge}
+                onRemoveAcknowledgment={handleRemoveAcknowledgment}
                 canEdit={canEdit}
                 selectedFMId={selectedFM?.id ?? null}
                 tableNameById={tableNameById}
                 onEditFieldTarget={handleInlineEditTarget}
+                onError={(msg) => showToast(msg, 'error')}
               />
             ))
           )}
@@ -3297,6 +3761,7 @@ export default function MappingContent({ projectId, projectName, initialData, pr
 
       <MappingDetailsPanel
         fm={displayedFM}
+        peerFMs={displayedPeerFMs}
         isOpen={isPanelVisible}
         onClose={() => {
           setIsPanelVisible(false)
@@ -3317,6 +3782,12 @@ export default function MappingContent({ projectId, projectName, initialData, pr
         }}
         onRemove={() => {
           if (displayedFM) handleDeleteFM(displayedFM.id)
+        }}
+        onRemovePeer={(fmId) => handleDeleteFM(fmId)}
+        onAddContributor={(sourceFieldId) => {
+          if (displayedFM && displayedTM) {
+            handleAddContributor(displayedTM.id, sourceFieldId, displayedFM.target_field_id)
+          }
         }}
         projectId={projectId}
         tableMappingId={displayedFM?.table_mapping_id ?? ''}

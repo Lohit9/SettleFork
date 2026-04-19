@@ -47,6 +47,12 @@ interface Props {
   initialReadiness: ReadinessScore
   initialRules: ValidationRule[]
   hasMappings: boolean
+  /**
+   * Target table IDs that have at least one row in staged_data_rows.
+   * Authoritative signal for the "Staged" badge — derived from staging state,
+   * NOT from quality_issues presence (a clean table has no issues but can be staged).
+   */
+  initialStagedTargetTableIds: string[]
   allDatasets: DatasetStub[]
   /** Fix history pre-fetched server-side to avoid N+1 per IssueCard */
   initialFixHistory?: FixHistory[]
@@ -242,6 +248,10 @@ function UnifiedFixModal({
     Record<string, unknown>[] | null
   >(null)
   const [detailsLoadingMore, setDetailsLoadingMore] = useState(false)
+  // Tracks whether a lazy-load attempt returned zero rows, so the empty-state
+  // copy can distinguish "haven't tried yet" from "tried and found nothing".
+  const [detailsSamplesTried, setDetailsSamplesTried] = useState(false)
+  const [detailsSamplesError, setDetailsSamplesError] = useState<string | null>(null)
 
   const detailsDisplayRows = useMemo(
     () =>
@@ -262,11 +272,17 @@ function UnifiedFixModal({
 
   const handleDetailsLoadMore = useCallback(async () => {
     setDetailsLoadingMore(true)
+    setDetailsSamplesError(null)
     try {
       const result = await getAffectedRowsForIssue(issue.id, 20)
-      if (result.success && result.rows.length > 0) {
-        setDetailsExtraRows(result.rows)
+      setDetailsSamplesTried(true)
+      if (!result.success) {
+        setDetailsSamplesError(result.error ?? 'Failed to load samples')
+        return
       }
+      // Always commit the result — including [] — so the empty-state UI can
+      // reflect "tried and found nothing" instead of silently no-op'ing.
+      setDetailsExtraRows(result.rows)
     } finally {
       setDetailsLoadingMore(false)
     }
@@ -602,7 +618,18 @@ function UnifiedFixModal({
                   {/* Empty fallback */}
                   {detailsShowSample && detailsDisplayRows.length === 0 && (
                     <div className="mt-3 px-4 py-3 bg-settle-slate-50 rounded-md text-xs text-settle-slate-500 border border-gray-100 space-y-2">
-                      <p>Sample data not available for this issue.</p>
+                      {detailsSamplesError ? (
+                        <p className="text-red-600">
+                          Failed to load samples: {detailsSamplesError}
+                        </p>
+                      ) : detailsSamplesTried ? (
+                        <p>
+                          No matching rows found. The underlying data may have
+                          already been fixed — try re-running the scan.
+                        </p>
+                      ) : (
+                        <p>Sample data not available for this issue.</p>
+                      )}
                       <div className="flex items-center gap-3 flex-wrap">
                         {detailsDiagnosticQuery && (
                           <button
@@ -617,7 +644,11 @@ function UnifiedFixModal({
                           disabled={detailsLoadingMore}
                           className="text-settle-blue-500 hover:text-settle-blue-700 font-medium disabled:opacity-50 transition-colors"
                         >
-                          {detailsLoadingMore ? 'Loading…' : 'Load samples now'}
+                          {detailsLoadingMore
+                            ? 'Loading…'
+                            : detailsSamplesTried
+                              ? 'Retry'
+                              : 'Load samples now'}
                         </button>
                       </div>
                     </div>
@@ -880,23 +911,47 @@ function buildContextualLabel(issue: QualityIssue): string | null {
   if (kind === 'invalid_date_string') return 'Invalid date string'
   if (kind === 'high_null_rate')  return '>50% null rate'
 
-  // ── In-flight checks (issue_kind is null) ──────────────────────
-  // These are Check 8–12 in the detection engine — no issue_kind is
-  // set, so we pattern-match on the description string instead.
+  // ── In-flight checks (detection-engine.ts) ─────────────────────
+  // Checks 8, 9, 11, 12 set these kinds so labels render reliably
+  // without parsing description strings.
+  if (kind === 'length_overflow') {
+    const varcharMatch = desc.match(/VARCHAR\((\d+)\)/i)
+    if (varcharMatch?.[1]) return `Exceeds VARCHAR(${varcharMatch[1]})`
+    const charMatch = desc.match(/\((\d+)\s*chars?\)/i)
+    if (charMatch?.[1]) return `Exceeds ${charMatch[1]}-char limit`
+    return 'Exceeds column length'
+  }
+  if (kind === 'case_inconsistency')  return 'Case inconsistency'
+  if (kind === 'unmapped_required')   return 'NOT NULL \u00b7 no source mapped'
+
+  // ── Custom validation-rule issues (validation-rules.ts) ────────
+  // Keys match RULE_TYPE_TO_ISSUE_KIND in that file.
+  if (kind === 'value_not_in_allowed_list') return 'Value not in allowed list'
+  if (kind === 'format_violation')          return 'Format violation'
+  if (kind === 'length_violation')          return 'Length violation'
+  if (kind === 'range_violation')           return 'Range violation'
+  if (kind === 'duplicate_value')           return 'Duplicate value'
+  if (kind === 'custom_rule_violation')     return 'Custom rule violation'
+
+  // ── Legacy in-flight checks (issue_kind is null) ───────────────
+  // Older rows pre-dating the issue_kind rollout still rely on
+  // description pattern matching. The "exceed"/"exceeds" check
+  // accepts both verb forms — detection-engine writes "values
+  // exceed" (plural subject) so the singular-only check missed it.
   if (!kind) {
-    // String length / VARCHAR truncation
     if (
-      desc.includes('exceeds') &&
+      (desc.includes('exceed') || desc.includes('exceeds')) &&
       (desc.includes('VARCHAR') || desc.includes('char'))
     ) {
       const varcharMatch = desc.match(/VARCHAR\((\d+)\)/i)
       if (varcharMatch?.[1]) return `Exceeds VARCHAR(${varcharMatch[1]})`
-      const charMatch = desc.match(/exceeds (\d+)[\s-]char/)
+      const charMatch = desc.match(/\((\d+)\s*chars?\)/i)
       if (charMatch?.[1]) return `Exceeds ${charMatch[1]}-char limit`
+      const exceedsCharMatch = desc.match(/exceeds?\s+(\d+)[\s-]char/i)
+      if (exceedsCharMatch?.[1]) return `Exceeds ${exceedsCharMatch[1]}-char limit`
       return 'Exceeds column length'
     }
 
-    // Missing source mapping — no source mapped, NOT NULL target
     if (
       desc.includes('no source mapping') ||
       desc.includes('has no source mapping')
@@ -904,7 +959,6 @@ function buildContextualLabel(issue: QualityIssue): string | null {
       return 'NOT NULL \u00b7 no source mapped'
     }
 
-    // Nullable target has null values after transform
     if (
       desc.includes('non-nullable') ||
       (desc.includes('null') && desc.includes('fail on load'))
@@ -920,6 +974,10 @@ function getRootCauseCategory(issue: QualityIssue): string | null {
   if (issue.root_cause_breakdown) {
     const { transform_error, missing_transform, source_data } =
       issue.root_cause_breakdown
+    // Missing transform is the most actionable signal; surface it first when
+    // it's the sole non-zero bucket so it isn't preempted by a zeroed-out
+    // transform_error with an equal source_data count.
+    if (missing_transform > 0 && transform_error === 0) return 'Missing transform'
     if (transform_error > 0 && transform_error >= source_data)
       return 'Transform error'
     if (missing_transform > 0) return 'Missing transform'
@@ -1775,8 +1833,11 @@ function FixHistoryPanel({
   const getEntryLabel = useCallback(
     (entry: FixHistory): { tableName: string; fieldName: string | null } => {
       const tableName = tableNameById.get(entry.table_id) ?? 'Unknown table'
-      if (!entry.quality_issue_id) return { tableName, fieldName: null }
-      const issueTitle = issueTitleById.get(entry.quality_issue_id)
+
+      // Prefer the joined issue title (survives even if issue isn't in current state)
+      const issueTitle = entry.quality_issues?.title
+        ?? (entry.quality_issue_id ? issueTitleById.get(entry.quality_issue_id) : null)
+
       if (!issueTitle) return { tableName, fieldName: null }
       const dotIndex = issueTitle.indexOf('.')
       if (dotIndex === -1) return { tableName, fieldName: null }
@@ -2759,6 +2820,7 @@ export default function DataQualityContent({
   initialReadiness,
   initialRules,
   hasMappings,
+  initialStagedTargetTableIds,
   allDatasets,
   initialFixHistory,
   resolvedSourceFieldIds,
@@ -2774,6 +2836,9 @@ export default function DataQualityContent({
   const { can: canRole } = useProjectRole(projectId)
   const canEdit = canRole('edit')
   const [issues, setIssues] = useState<QualityIssue[]>(initialIssues)
+  const [stagedTargetTableIdsState, setStagedTargetTableIdsState] = useState<string[]>(
+    initialStagedTargetTableIds
+  )
   const [readiness, setReadiness] = useState<ReadinessScore>(initialReadiness)
   const [rules, setRules] = useState<ValidationRule[]>(initialRules)
   const [fixHistory, setFixHistory] = useState<FixHistory[]>(initialFixHistory ?? [])
@@ -2845,20 +2910,13 @@ export default function DataQualityContent({
     [issues]
   )
 
-  // Target tables that have at least one in-flight issue = considered staged/validated
+  // Target tables that have staged data (rows in staged_data_rows for their
+  // table_mapping). This is the authoritative "Staged" signal — a clean table
+  // with zero quality issues is still "Staged" if the transforms have been run.
   const stagedTargetTableIds = useMemo(
-    () => new Set(inFlightIssues.map(i => i.table_id).filter(Boolean) as string[]),
-    [inFlightIssues]
+    () => new Set(stagedTargetTableIdsState),
+    [stagedTargetTableIdsState]
   )
-
-  // Readiness counts (in-flight open issues only)
-  const { inFlightBlocking, inFlightWarning } = useMemo(() => {
-    const open = inFlightIssues.filter(i => i.status === 'open')
-    return {
-      inFlightBlocking: open.filter(i => i.severity === 'blocking').length,
-      inFlightWarning: open.filter(i => i.severity === 'warning').length,
-    }
-  }, [inFlightIssues])
 
   // Table groups: in-flight issues grouped by target table, with filters applied
   const statusOrder: Record<string, number> = { open: 0, fixed: 1, accepted_risk: 2 }
@@ -2917,6 +2975,19 @@ export default function DataQualityContent({
 
   // Tables with issues visible after filtering (for "no results" detection)
   const tablesWithVisibleIssues = tableGroups.filter(g => g.isStaged && g.issues.length > 0)
+
+  // Header counts derived from the same groups that render below, so the
+  // "Blocking / Warnings" pills always match the per-table totals the user sees.
+  const { visibleBlocking, visibleWarnings } = useMemo(() => {
+    let blocking = 0
+    let warnings = 0
+    for (const g of tableGroups) {
+      if (!g.isStaged) continue
+      blocking += g.blocking
+      warnings += g.warnings
+    }
+    return { visibleBlocking: blocking, visibleWarnings: warnings }
+  }, [tableGroups])
 
   // Flat filtered list for verified-fixes section (uses all issues)
   const filteredIssues = useMemo(() => {
@@ -2991,6 +3062,10 @@ export default function DataQualityContent({
         setStagingToast(`Staged data regenerated — ${total.toLocaleString()} rows across ${result.tables.length} table(s)`)
         setFixAppliedNote(false)
         setTimeout(() => setStagingToast(null), 4000)
+        // Refresh which tables are staged so the "Staged" badges reflect the
+        // new staging state without requiring a page reload.
+        const { stagedTargetTableIds: freshStaged } = await getQualityIssues(projectId)
+        setStagedTargetTableIdsState(freshStaged)
       } else {
         setStagingToast(`Staging failed: ${result.error ?? 'Unknown error'}`)
         setTimeout(() => setStagingToast(null), 5000)
@@ -3027,6 +3102,7 @@ export default function DataQualityContent({
         computeReadinessScore(projectId),
       ])
       setIssues(freshIssues.issues)
+      setStagedTargetTableIdsState(freshIssues.stagedTargetTableIds)
       setReadiness(freshScore)
       if (res.warnings && res.warnings.length > 0) {
         setScanWarnings(res.warnings)
@@ -3051,6 +3127,7 @@ export default function DataQualityContent({
         computeReadinessScore(projectId),
       ])
       setIssues(freshIssues.issues)
+      setStagedTargetTableIdsState(freshIssues.stagedTargetTableIds)
       setReadiness(freshScore)
     },
     [projectId]
@@ -3092,8 +3169,9 @@ export default function DataQualityContent({
           projectId={projectId}
           onClose={() => setShowHistory(false)}
           onIssueReverted={async () => {
-            const { issues: fresh } = await getQualityIssues(projectId)
+            const { issues: fresh, stagedTargetTableIds: freshStaged } = await getQualityIssues(projectId)
             setIssues(fresh)
+            setStagedTargetTableIdsState(freshStaged)
           }}
           tableNameById={tableNameById}
           issues={issues}
@@ -3202,8 +3280,8 @@ export default function DataQualityContent({
       </PageHeader>
 
       <ValidateStatPills
-        blockingCount={inFlightBlocking}
-        warningCount={inFlightWarning}
+        blockingCount={visibleBlocking}
+        warningCount={visibleWarnings}
         stagedCount={stagedTargetTableIds.size}
         totalTables={targetTables.length}
       />

@@ -83,6 +83,13 @@ export interface UnmappedField {
   data_type: string
   table_id: string
   table: { id: string; name: string } | null
+  /** Whether the underlying column is declared NULLable. Drives the
+   *  "required — needs mapping" warning on unmapped target rows. */
+  is_nullable?: boolean
+  /** Raw DEFAULT expression from the target DDL (migration 064). When set,
+   *  the target column will auto-populate on INSERT even if unmapped, so
+   *  the UI shows a muted "has default" hint rather than a warning. */
+  default_value?: string | null
 }
 
 export interface SimpleField {
@@ -90,6 +97,10 @@ export interface SimpleField {
   name: string
   data_type: string
   is_nullable?: boolean
+  /** Raw DEFAULT from DDL / information_schema (migration 064). Used by
+   *  the mapping UI to distinguish "unmapped but self-populating" target
+   *  fields from "unmapped and will fail on INSERT" target fields. */
+  default_value?: string | null
 }
 
 export interface FieldAcknowledgmentRow {
@@ -121,11 +132,419 @@ function parseClaudeJSON(raw: string): ClaudeResponse {
   if (cleaned.startsWith('```')) {
     cleaned = cleaned.replace(/^```(?:json)?\n?/, '').replace(/\n?```$/, '').trim()
   }
-  const parsed = JSON.parse(cleaned)
-  if (!parsed.table_mappings || !Array.isArray(parsed.table_mappings)) {
-    throw new Error('Invalid response: missing table_mappings array')
+
+  try {
+    const parsed = JSON.parse(cleaned)
+    if (!parsed.table_mappings || !Array.isArray(parsed.table_mappings)) {
+      throw new Error('Invalid response: missing table_mappings array')
+    }
+    return parsed as ClaudeResponse
+  } catch (err) {
+    // If the response looks truncated (long, and doesn't close its outer
+    // container), surface that up front so logs point at the real cause
+    // before the caller's retry path runs.
+    const trimmed = cleaned.trimEnd()
+    const isLikelyTruncation =
+      cleaned.length > 500 && !trimmed.endsWith('}') && !trimmed.endsWith(']')
+
+    if (isLikelyTruncation) {
+      console.error(
+        `[Mapping] Response appears truncated (${cleaned.length} chars). ` +
+          `Last 100 chars: "${cleaned.slice(-100)}"`
+      )
+    }
+
+    throw err
   }
-  return parsed as ClaudeResponse
+}
+
+// ─── Shared mapping-generation helpers ────────────────────────────────────────
+
+/**
+ * Strip a dataset/table prefix from a qualified name (e.g., "trux.prices" → "prices"
+ * or "ARTICLE_PRICES.PRICE" → "PRICE") and normalize to lowercase. Used to make
+ * Claude's response tolerant of occasional qualified-name drift.
+ */
+function bareTableName(s: string | null | undefined): string {
+  if (!s || typeof s !== 'string') return ''
+  const parts = s.split('.')
+  return parts[parts.length - 1].toLowerCase().trim()
+}
+
+/**
+ * The canonical system prompt for AI mapping generation. Used by BOTH the
+ * initial generation path (generateMappings) and the regeneration path
+ * (runMappingGenerationForPair). Keeping this as a shared module-level const
+ * guarantees the two paths produce identical quality — particularly around
+ * many-to-one and one-to-many pattern detection. Do not duplicate this string.
+ */
+const MAPPING_GENERATION_SYSTEM_PROMPT = `You are an enterprise data migration expert specializing in source-to-target schema mapping. Given source and target database schemas with sample data and optional documentation context, generate comprehensive mapping suggestions.
+
+For each mapping, provide:
+- A confidence score (0-100) based on how certain you are about the match
+- Brief reasoning explaining WHY this mapping makes sense
+- Alternative target fields you considered
+- Type compatibility assessment — describe what specific conversion or validation is needed, not just whether types match. Examples: "VARCHAR → DECIMAL — strip $ and commas, parse to number", "VARCHAR → BOOLEAN — normalize Y/N/yes/no/1/0 to TRUE/FALSE", "VARCHAR(200) → VARCHAR(120) — truncation needed, 12 values exceed limit". If no conversion is needed, write "direct compatible — no conversion needed".
+- Whether a transformation will be needed (see transformation rules below)
+
+TRANSFORMATION RULES — A field needs_transformation = true if ANY of these apply:
+1. DATA TYPE CONVERSION: Source data type must change to fit target (VARCHAR → DECIMAL, VARCHAR → DATE, VARCHAR → BOOLEAN, etc.)
+2. VALUE MAPPING: Source values must be translated to different target values (e.g., "Won" → "Closed Won", "Technology" → "TECH"). Look at the value distribution — if source values don't match expected target picklist/enum values from documentation, this needs transformation.
+3. FORMAT STANDARDIZATION: Source values are in inconsistent or wrong format for target (mixed date formats like "01/15/2024" and "2024-01-15" → ISO only, phone numbers needing E.164, currency strings like "$1,234.56" → numeric).
+4. ID FORMAT CHANGE: Source uses one ID scheme, target uses another (e.g., "CUST-00001" → Salesforce 18-char alphanumeric ID).
+5. BOOLEAN NORMALIZATION: Source uses mixed representations (Y/N, yes/no, 1/0, true/false) and target expects a specific boolean format. Check the value distribution for mixed boolean-like values.
+6. CASING / CAPITALIZATION: Source values need systematic casing changes (e.g., "john" or "JOHN" → "John" for proper name fields). Check sample values for inconsistent casing.
+7. TRUNCATION: Source values exceed target field's max length.
+8. COMPUTATION: Target value must be derived (stripping currency symbols, concatenating fields, splitting fields).
+9. FOREIGN KEY REFORMAT: A FK field whose referenced PK is being transformed (if customer_id → Account.Id changes format, then contact.customer_id → Contact.AccountId also needs transformation to stay consistent).
+
+A field DOES NOT need transformation for:
+- Naming convention differences only (snake_case vs camelCase, lowercase vs PascalCase) when data values pass through unchanged
+- Minor type aliasing where data is compatible without conversion (TEXT vs VARCHAR, VARCHAR(100) vs VARCHAR(255) when no values exceed the smaller limit)
+- Fields where source and target are semantically identical and values can be copied directly
+
+MULTI-FIELD MAPPING PATTERNS:
+
+You MUST detect and correctly map these patterns:
+
+MANY-TO-ONE (multiple source fields → one target field):
+When multiple source fields should be combined into a single target field, set:
+- mapping_type: "many_to_one"
+- source_field: the FIRST/PRIMARY source field name
+- contributing_source_fields: array of ADDITIONAL source field names (do NOT repeat the primary)
+- combination_hint: brief description of how to combine (e.g., "Concatenate with space separator")
+- needs_transformation: true (always true for many-to-one)
+
+Common many-to-one patterns:
+- first_name + last_name → full_name, name, display_name, primary_contact
+- street + city + state + zip → full_address, address
+- date_field + time_field → datetime
+- Any name component fields → a single combined name field
+
+IMPORTANT: Return many-to-one as a SINGLE mapping entry (not separate entries for each source field). The contributing_source_fields array tells the system which other fields to include.
+
+ONE-TO-MANY (one source field → multiple target fields):
+When a single source field should be split into multiple target fields, create SEPARATE mapping entries for EACH target field, each with:
+- mapping_type: "one_to_many"
+- source_field: the SAME source field name in each entry
+- target_field: DIFFERENT target field in each entry
+- split_hint: description of what part to extract (e.g., "Extract first name", "Extract last name")
+- needs_transformation: true (always true for one-to-many)
+
+Common one-to-many patterns:
+- full_name → first_name, last_name
+- full_address → street, city, state, zip
+- datetime → date, time
+
+IMPORTANT: Each split target gets its OWN mapping entry in the field_mappings array. They share the same source_field but have different target_field values.
+
+If a mapping is standard one-to-one, either omit mapping_type or set it to "one_to_one". Do NOT include contributing_source_fields or split_hint for one-to-one mappings.
+
+TABLE-LEVEL MATCHING — WHEN TO EMIT A table_mapping:
+
+You process ONE source table per request, but the migration contains OTHER source tables that will be processed in separate requests. When the user message includes an <other_source_tables> block, use that list to decide which targets actually deserve a mapping from the current source.
+
+Rules for emitting table_mappings:
+
+1. PRIMARY-MATCH RULE: Only emit a table_mapping when the current source table is the best (or a strong secondary) semantic match for the target. If another source table listed in <other_source_tables> is clearly a better primary match for a target — based on name similarity, field overlap, or business meaning — DO NOT emit a table_mapping to that target from the current source. Let the better-matching source table claim it when its own batch runs.
+
+2. LOOKUP / REFERENCE TABLES: Narrow source tables whose shape is a code + description (typically 2-4 columns like CODE + DESC, ID + NAME, TYPE + LABEL — e.g., STATUS_CODES, COUNTRY_CODES, CURRENCY_CODES, PRODUCT_TYPES) represent enumerated reference data. They should map to AT MOST ONE target — the target table that stores the SAME enumeration (e.g., STATUS_CODES → account_status, COUNTRY_CODES → countries). They MUST NOT map to entity tables (customers, accounts, orders, contacts) even when an entity table has a matching status/type/code column — that column is populated via a foreign-key join at the field level, not by copying rows from the lookup table into the entity. Emitting a lookup → entity table_mapping is almost always wrong.
+
+3. ENTITY TABLES: Wide tables representing business entities (e.g., CIF_MASTER → customers, ACCT_MASTER → accounts) should map to their corresponding entity target. Legitimate one-to-many entity mappings exist (denormalization, splitting), but each must have clear field-level overlap — not just one or two coincidental columns.
+
+4. WEAK-OVERLAP RULE: If the current source has weak field overlap with a candidate target (fewer than roughly a third of the source's non-trivial fields map, OR only generic fields like id / name / created_at / updated_at match), DO NOT emit a table_mapping to that target — the target almost certainly belongs to a different source table. It is better to emit zero table_mappings for the current source than to emit low-quality mappings that the user will have to reject.
+
+5. When in doubt between two candidate targets, pick the ONE target whose name and field set most closely mirrors the current source, and skip the others.
+
+Scoring guidelines:
+- 90-100: Near-certain match (identical names, same types, same business meaning)
+- 75-89: High confidence (similar names, compatible types, clear business alignment)
+- 50-74: Moderate confidence (partial name match, type conversion needed, or ambiguous business meaning)
+- Below 50: Low confidence (weak signals, multiple possible targets)
+
+Consider these signals when mapping:
+- Field name similarity (camelCase vs UPPER_SNAKE_CASE conventions)
+- Data type compatibility
+- Business meaning and context from documentation
+- Common enterprise patterns (Id→ID, Name→NAME, Email→EMAIL_ADDRESS)
+- Primary/foreign key relationships
+- Cardinality and value patterns from sample data
+- Field position and grouping within tables
+
+If documentation is provided, use it to:
+- Identify exact value mappings (industry codes, stage values, status values)
+- Understand target field constraints (picklist values, required formats, NOT NULL fields)
+- Flag fields that need specific transformation logic based on documented rules
+- Set higher confidence scores when documentation confirms a mapping from a business logic perspective. If documentation describes different data types or constraints than the structured schema, always follow the structured schema — it reflects the user's latest configuration.
+
+CRITICAL: Respond with ONLY valid JSON, no markdown, no backticks, no explanation outside the JSON structure.`
+
+/**
+ * Build the user-facing message for a mapping generation Claude call.
+ * Shared by generateMappings (which may render multiple target tables in
+ * `targetSection`) and runMappingGenerationForPair (which renders a single
+ * target). The JSON structure, CRITICAL RULES, and example rows are
+ * identical in both paths to guarantee consistent output quality.
+ */
+function buildMappingUserMessage(args: {
+  sourceSection: string
+  targetSection: string
+  docBlock: string
+  intelligenceCtx: string | null
+  /** Optional cross-table awareness block listing the OTHER source tables
+   *  in this migration (field names only) so Claude can avoid emitting
+   *  spurious table_mappings when another source is a better primary match. */
+  otherSourcesBlock?: string | null
+}): string {
+  const { sourceSection, targetSection, docBlock, intelligenceCtx, otherSourcesBlock } = args
+  return `${sourceSection}
+${targetSection}
+${docBlock}
+${intelligenceCtx ? intelligenceCtx + '\n\n' : ''}${otherSourcesBlock ? otherSourcesBlock + '\n\n' : ''}Generate source-to-target mappings. Respond with this exact JSON structure.
+
+CRITICAL RULES FOR THE JSON:
+- "source_table" must be ONLY the table name (e.g., "prices") — NOT the qualified name (NOT "trux.prices")
+- "target_table" must be ONLY the table name (e.g., "ARTICLE_PRICES") — NOT "dataset.ARTICLE_PRICES"
+- "source_field" must be ONLY the field name (e.g., "item_price") — NOT "prices.item_price"
+- "target_field" must be ONLY the field name (e.g., "PRICE") — NOT "ARTICLE_PRICES.PRICE"
+
+{
+  "table_mappings": [
+    {
+      "source_table": "prices",
+      "target_table": "ARTICLE_PRICES",
+      "confidence": 88,
+      "reasoning": "Both tables store pricing information for items/articles...",
+        "field_mappings": [
+          {
+            "source_field": "item_price",
+            "target_field": "PRICE",
+            "confidence": 85,
+            "reasoning": "Direct price field mapping, DECIMAL to DECIMAL compatible",
+            "similar_fields_considered": ["UNIT_PRICE", "BASE_PRICE"],
+            "type_compatibility": "DECIMAL(10,2) → DECIMAL(15,4) — target has higher precision",
+            "needs_transformation": true
+          },
+          {
+            "source_field": "contact_first",
+            "target_field": "CONTACT_NAME",
+            "confidence": 90,
+            "reasoning": "First and last name components should be combined into full name",
+            "type_compatibility": "VARCHAR(50) + VARCHAR(50) → VARCHAR(100)",
+            "needs_transformation": true,
+            "mapping_type": "many_to_one",
+            "contributing_source_fields": ["contact_last"],
+            "combination_hint": "Concatenate first and last name with space separator"
+          }
+        ]
+    }
+  ]
+}
+
+Map ALL source fields to their best target match. If a source field has no reasonable target match, omit it.`
+}
+
+/**
+ * Run AI mapping generation for a single (source_table, target_table) pair
+ * against an EXISTING table_mapping row, writing new field_mappings (primary
+ * + is_contributing rows for many-to-one, separate rows per target for
+ * one-to-many) all at status='needs_review'.
+ *
+ * This is the "full-quality" generation path used by regenerateFieldMappings.
+ * It deliberately uses the same system prompt, same user-message template,
+ * same AI context options, and same insert logic as generateMappings — the
+ * only difference is that it is scoped to a single pair and reuses the
+ * caller's tableMappingId instead of creating a new table_mappings row.
+ */
+async function runMappingGenerationForPair(args: {
+  supabase: Awaited<ReturnType<typeof createClient>>
+  userId: string
+  projectId: string
+  tableMappingId: string
+  sourceTableId: string
+  targetTableId: string
+}): Promise<{ inserted: number; error?: string }> {
+  const { supabase, userId, projectId, tableMappingId, sourceTableId, targetTableId } = args
+
+  try {
+    // Fetch source + target table metadata (for name-based response matching)
+    const [{ data: sourceTables, error: stErr }, { data: targetTables, error: ttErr }] = await Promise.all([
+      supabase
+        .from('tables')
+        .select('id, name, dataset_id, datasets(id, name)')
+        .eq('id', sourceTableId),
+      supabase
+        .from('tables')
+        .select('id, name, dataset_id, datasets(id, name)')
+        .eq('id', targetTableId),
+    ])
+    if (stErr) return { inserted: 0, error: stErr.message }
+    if (ttErr) return { inserted: 0, error: ttErr.message }
+    if (!sourceTables?.length || !targetTables?.length) {
+      return { inserted: 0, error: 'Source or target table not found' }
+    }
+
+    // Fetch source + target fields for name→id resolution during insert
+    const [{ data: sourceFields, error: sfErr }, { data: targetFields, error: tfErr }] = await Promise.all([
+      supabase
+        .from('fields')
+        .select('id, table_id, name, data_type, inferred_type, is_nullable, is_primary_key, is_foreign_key, fk_reference, check_constraint')
+        .eq('table_id', sourceTableId)
+        .order('ordinal_position', { ascending: true }),
+      supabase
+        .from('fields')
+        .select('id, table_id, name, data_type, inferred_type, is_nullable, is_primary_key, is_foreign_key, fk_reference, check_constraint')
+        .eq('table_id', targetTableId)
+        .order('ordinal_position', { ascending: true }),
+    ])
+    if (sfErr) return { inserted: 0, error: sfErr.message }
+    if (tfErr) return { inserted: 0, error: tfErr.message }
+
+    // Rich AI context — IDENTICAL options to generateMappings so regenerate
+    // output quality matches initial generation.
+    const aiCtx = await buildAIContext(projectId, {
+      tableIds: [sourceTableId, targetTableId],
+      includeProfilingStats: true,
+      includeValueDistributions: true,
+      includeSampleValues: true,
+      includeDocuments: true,
+      maxDistributionValues: 15,
+      maxSampleValues: 5,
+    }, userId)
+
+    const sourceCtx = aiCtx.source_tables[0]
+    if (!sourceCtx) {
+      return { inserted: 0, error: 'Source table context could not be built' }
+    }
+
+    const sourceSection = formatSchemaForPrompt([sourceCtx], 'source')
+    const targetSection = formatSchemaForPrompt(aiCtx.target_tables, 'target')
+    const docBlock = formatDocumentsForPrompt(aiCtx.documents)
+    const userMessage = buildMappingUserMessage({
+      sourceSection,
+      targetSection,
+      docBlock,
+      intelligenceCtx: aiCtx.intelligence_context ?? null,
+    })
+
+    // Same token budget as generateMappings' per-batch calls so large schemas
+    // (hundreds of fields) don't truncate mid-JSON.
+    const PER_BATCH_MAX_TOKENS = 16000
+
+    let raw: string
+    try {
+      raw = await callClaude(MAPPING_GENERATION_SYSTEM_PROMPT, userMessage, PER_BATCH_MAX_TOKENS)
+    } catch (err) {
+      console.error(`[Mapping] Claude call failed for pair ${sourceTables[0].name} → ${targetTables[0].name}:`, err)
+      return { inserted: 0, error: err instanceof Error ? err.message : 'Claude call failed' }
+    }
+
+    let parsedResponse: ClaudeResponse
+    try {
+      parsedResponse = parseClaudeJSON(raw)
+    } catch {
+      // Retry once asking Claude to repair the JSON — same budget as the
+      // original call so the repair isn't itself truncated.
+      try {
+        const retryRaw = await callClaude(
+          'You are a JSON repair tool. Return ONLY valid JSON, nothing else.',
+          `The previous response was malformed JSON. Fix it and return ONLY the corrected JSON:\n\n${raw}`,
+          PER_BATCH_MAX_TOKENS
+        )
+        parsedResponse = parseClaudeJSON(retryRaw)
+      } catch (retryErr) {
+        console.error(`[Mapping] Failed to parse response for pair ${sourceTables[0].name} → ${targetTables[0].name} after retry:`, retryErr)
+        return { inserted: 0, error: 'AI returned invalid response. Please try again.' }
+      }
+    }
+
+    // Name→id lookup maps (case-insensitive, bare name)
+    const srcFieldMap = new Map((sourceFields ?? []).map((f) => [f.name.toLowerCase(), f]))
+    const tgtFieldMap = new Map((targetFields ?? []).map((f) => [f.name.toLowerCase(), f]))
+
+    const srcTableKey = sourceTables[0].name.toLowerCase()
+    const tgtTableKey = targetTables[0].name.toLowerCase()
+
+    // Build inserts across all table_mappings in the response that match our
+    // pair. Claude usually returns a single TM for a single-pair call, but
+    // be defensive about unexpected extras.
+    const fieldInserts: Record<string, unknown>[] = []
+
+    for (const tm of parsedResponse.table_mappings ?? []) {
+      if (!tm.source_table || !tm.target_table) continue
+      if (bareTableName(tm.source_table) !== srcTableKey || bareTableName(tm.target_table) !== tgtTableKey) {
+        console.warn(`[mappings] Skipping unexpected TM in single-pair response: "${tm.source_table}" → "${tm.target_table}"`)
+        continue
+      }
+
+      for (const fm of tm.field_mappings ?? []) {
+        const srcFieldKey = bareTableName(fm.source_field)
+        const tgtFieldKey = bareTableName(fm.target_field)
+        const srcField = srcFieldMap.get(srcFieldKey)
+        const tgtField = tgtFieldMap.get(tgtFieldKey)
+        if (!srcField || !tgtField) {
+          console.warn(`[mappings] Field no match: "${fm.source_field}" → "${fm.target_field}"`)
+          continue
+        }
+
+        const mappingType = fm.mapping_type || 'one_to_one'
+
+        let reasoningText = fm.reasoning
+        if (fm.combination_hint) reasoningText += ` [Combination: ${fm.combination_hint}]`
+        if (fm.split_hint) reasoningText += ` [Split: ${fm.split_hint}]`
+
+        // Primary row (always inserted). For one-to-many, each target gets
+        // its own primary row here because Claude emits a separate entry
+        // per target sharing the same source_field.
+        fieldInserts.push({
+          table_mapping_id: tableMappingId,
+          source_field_id: srcField.id,
+          target_field_id: tgtField.id,
+          confidence: fm.confidence,
+          status: 'needs_review',
+          ai_reasoning: reasoningText,
+          similar_fields_considered: fm.similar_fields_considered ?? [],
+          type_compatibility: fm.type_compatibility ?? null,
+          needs_transformation: fm.needs_transformation ?? (mappingType !== 'one_to_one' ? true : null),
+          is_contributing: false,
+        })
+
+        // Many-to-one: emit is_contributing rows for each additional source
+        // field pointing at the same target.
+        if (mappingType === 'many_to_one' && fm.contributing_source_fields?.length) {
+          for (const contribFieldName of fm.contributing_source_fields) {
+            const contribField = srcFieldMap.get(bareTableName(contribFieldName))
+            if (!contribField) {
+              console.warn(`[mappings] Contributing field "${contribFieldName}" not found in source table — skipping`)
+              continue
+            }
+            fieldInserts.push({
+              table_mapping_id: tableMappingId,
+              source_field_id: contribField.id,
+              target_field_id: tgtField.id,
+              confidence: fm.confidence,
+              status: 'needs_review',
+              ai_reasoning: `Contributing field for many-to-one: ${fm.source_field} + ${contribFieldName} → ${fm.target_field}. ${fm.combination_hint ?? ''}`.trim(),
+              similar_fields_considered: [],
+              type_compatibility: fm.type_compatibility ?? null,
+              needs_transformation: false,
+              is_contributing: true,
+            })
+          }
+        }
+      }
+    }
+
+    if (fieldInserts.length > 0) {
+      const { error: insErr } = await supabase.from('field_mappings').insert(fieldInserts)
+      if (insErr) return { inserted: 0, error: insErr.message }
+    }
+
+    return { inserted: fieldInserts.length }
+  } catch (err) {
+    console.error('runMappingGenerationForPair error:', err)
+    return { inserted: 0, error: err instanceof Error ? err.message : 'Mapping generation failed' }
+  }
 }
 
 // ─── generateMappings ─────────────────────────────────────────────────────────
@@ -199,155 +618,108 @@ export async function generateMappings(
       maxSampleValues: 5,
     }, user.id)
 
-    const sourceSection = formatSchemaForPrompt(aiCtx.source_tables, 'source')
+    // Target schema + docs + intelligence are constant across all batches —
+    // render them once. Source schema is rebuilt per-batch inside the loop.
     const targetSection = formatSchemaForPrompt(aiCtx.target_tables, 'target')
     const docBlock = formatDocumentsForPrompt(aiCtx.documents)
 
-    const systemPrompt = `You are an enterprise data migration expert specializing in source-to-target schema mapping. Given source and target database schemas with sample data and optional documentation context, generate comprehensive mapping suggestions.
-
-For each mapping, provide:
-- A confidence score (0-100) based on how certain you are about the match
-- Brief reasoning explaining WHY this mapping makes sense
-- Alternative target fields you considered
-- Type compatibility assessment — describe what specific conversion or validation is needed, not just whether types match. Examples: "VARCHAR → DECIMAL — strip $ and commas, parse to number", "VARCHAR → BOOLEAN — normalize Y/N/yes/no/1/0 to TRUE/FALSE", "VARCHAR(200) → VARCHAR(120) — truncation needed, 12 values exceed limit". If no conversion is needed, write "direct compatible — no conversion needed".
-- Whether a transformation will be needed (see transformation rules below)
-
-TRANSFORMATION RULES — A field needs_transformation = true if ANY of these apply:
-1. DATA TYPE CONVERSION: Source data type must change to fit target (VARCHAR → DECIMAL, VARCHAR → DATE, VARCHAR → BOOLEAN, etc.)
-2. VALUE MAPPING: Source values must be translated to different target values (e.g., "Won" → "Closed Won", "Technology" → "TECH"). Look at the value distribution — if source values don't match expected target picklist/enum values from documentation, this needs transformation.
-3. FORMAT STANDARDIZATION: Source values are in inconsistent or wrong format for target (mixed date formats like "01/15/2024" and "2024-01-15" → ISO only, phone numbers needing E.164, currency strings like "$1,234.56" → numeric).
-4. ID FORMAT CHANGE: Source uses one ID scheme, target uses another (e.g., "CUST-00001" → Salesforce 18-char alphanumeric ID).
-5. BOOLEAN NORMALIZATION: Source uses mixed representations (Y/N, yes/no, 1/0, true/false) and target expects a specific boolean format. Check the value distribution for mixed boolean-like values.
-6. CASING / CAPITALIZATION: Source values need systematic casing changes (e.g., "john" or "JOHN" → "John" for proper name fields). Check sample values for inconsistent casing.
-7. TRUNCATION: Source values exceed target field's max length.
-8. COMPUTATION: Target value must be derived (stripping currency symbols, concatenating fields, splitting fields).
-9. FOREIGN KEY REFORMAT: A FK field whose referenced PK is being transformed (if customer_id → Account.Id changes format, then contact.customer_id → Contact.AccountId also needs transformation to stay consistent).
-
-A field DOES NOT need transformation for:
-- Naming convention differences only (snake_case vs camelCase, lowercase vs PascalCase) when data values pass through unchanged
-- Minor type aliasing where data is compatible without conversion (TEXT vs VARCHAR, VARCHAR(100) vs VARCHAR(255) when no values exceed the smaller limit)
-- Fields where source and target are semantically identical and values can be copied directly
-
-MULTI-FIELD MAPPING PATTERNS:
-
-You MUST detect and correctly map these patterns:
-
-MANY-TO-ONE (multiple source fields → one target field):
-When multiple source fields should be combined into a single target field, set:
-- mapping_type: "many_to_one"
-- source_field: the FIRST/PRIMARY source field name
-- contributing_source_fields: array of ADDITIONAL source field names (do NOT repeat the primary)
-- combination_hint: brief description of how to combine (e.g., "Concatenate with space separator")
-- needs_transformation: true (always true for many-to-one)
-
-Common many-to-one patterns:
-- first_name + last_name → full_name, name, display_name, primary_contact
-- street + city + state + zip → full_address, address
-- date_field + time_field → datetime
-- Any name component fields → a single combined name field
-
-IMPORTANT: Return many-to-one as a SINGLE mapping entry (not separate entries for each source field). The contributing_source_fields array tells the system which other fields to include.
-
-ONE-TO-MANY (one source field → multiple target fields):
-When a single source field should be split into multiple target fields, create SEPARATE mapping entries for EACH target field, each with:
-- mapping_type: "one_to_many"
-- source_field: the SAME source field name in each entry
-- target_field: DIFFERENT target field in each entry
-- split_hint: description of what part to extract (e.g., "Extract first name", "Extract last name")
-- needs_transformation: true (always true for one-to-many)
-
-Common one-to-many patterns:
-- full_name → first_name, last_name
-- full_address → street, city, state, zip
-- datetime → date, time
-
-IMPORTANT: Each split target gets its OWN mapping entry in the field_mappings array. They share the same source_field but have different target_field values.
-
-If a mapping is standard one-to-one, either omit mapping_type or set it to "one_to_one". Do NOT include contributing_source_fields or split_hint for one-to-one mappings.
-
-Scoring guidelines:
-- 90-100: Near-certain match (identical names, same types, same business meaning)
-- 75-89: High confidence (similar names, compatible types, clear business alignment)
-- 50-74: Moderate confidence (partial name match, type conversion needed, or ambiguous business meaning)
-- Below 50: Low confidence (weak signals, multiple possible targets)
-
-Consider these signals when mapping:
-- Field name similarity (camelCase vs UPPER_SNAKE_CASE conventions)
-- Data type compatibility
-- Business meaning and context from documentation
-- Common enterprise patterns (Id→ID, Name→NAME, Email→EMAIL_ADDRESS)
-- Primary/foreign key relationships
-- Cardinality and value patterns from sample data
-- Field position and grouping within tables
-
-If documentation is provided, use it to:
-- Identify exact value mappings (industry codes, stage values, status values)
-- Understand target field constraints (picklist values, required formats, NOT NULL fields)
-- Flag fields that need specific transformation logic based on documented rules
-- Set higher confidence scores when documentation confirms a mapping from a business logic perspective. If documentation describes different data types or constraints than the structured schema, always follow the structured schema — it reflects the user's latest configuration.
-
-CRITICAL: Respond with ONLY valid JSON, no markdown, no backticks, no explanation outside the JSON structure.`
-
-    const userMessage = `${sourceSection}
-${targetSection}
-${docBlock}
-${aiCtx.intelligence_context ? aiCtx.intelligence_context + '\n\n' : ''}Generate source-to-target mappings. Respond with this exact JSON structure.
-
-CRITICAL RULES FOR THE JSON:
-- "source_table" must be ONLY the table name (e.g., "prices") — NOT the qualified name (NOT "trux.prices")
-- "target_table" must be ONLY the table name (e.g., "ARTICLE_PRICES") — NOT "dataset.ARTICLE_PRICES"
-- "source_field" must be ONLY the field name (e.g., "item_price") — NOT "prices.item_price"
-- "target_field" must be ONLY the field name (e.g., "PRICE") — NOT "ARTICLE_PRICES.PRICE"
-
-{
-  "table_mappings": [
-    {
-      "source_table": "prices",
-      "target_table": "ARTICLE_PRICES",
-      "confidence": 88,
-      "reasoning": "Both tables store pricing information for items/articles...",
-        "field_mappings": [
-          {
-            "source_field": "item_price",
-            "target_field": "PRICE",
-            "confidence": 85,
-            "reasoning": "Direct price field mapping, DECIMAL to DECIMAL compatible",
-            "similar_fields_considered": ["UNIT_PRICE", "BASE_PRICE"],
-            "type_compatibility": "DECIMAL(10,2) → DECIMAL(15,4) — target has higher precision",
-            "needs_transformation": true
-          },
-          {
-            "source_field": "contact_first",
-            "target_field": "CONTACT_NAME",
-            "confidence": 90,
-            "reasoning": "First and last name components should be combined into full name",
-            "type_compatibility": "VARCHAR(50) + VARCHAR(50) → VARCHAR(100)",
-            "needs_transformation": true,
-            "mapping_type": "many_to_one",
-            "contributing_source_fields": ["contact_last"],
-            "combination_hint": "Concatenate first and last name with space separator"
-          }
-        ]
+    // Cross-table awareness: compact field-name-only listing of EVERY source
+    // table, indexed by table id. The per-batch loop uses this to render an
+    // <other_source_tables> block excluding the current source so Claude can
+    // decline to map e.g. STATUS_CODES → customers when CIF_MASTER is the
+    // obvious primary match for customers.
+    const sourceFieldNamesByTableId = new Map<string, string[]>()
+    for (const f of sourceFields ?? []) {
+      const list = sourceFieldNamesByTableId.get(f.table_id) ?? []
+      list.push(f.name)
+      sourceFieldNamesByTableId.set(f.table_id, list)
     }
-  ]
-}
+    const sourceTableRowsByNameKey = new Map(
+      (sourceTables ?? []).map((t) => [t.name.toLowerCase(), t])
+    )
 
-Map ALL source fields to their best target match. If a source field has no reasonable target match, omit it.`
+    // Batch by source table — one Claude call per source table against ALL
+    // target tables. Bounds each response well under the max_tokens cap so
+    // large schemas (8×8 with hundreds of fields) don't truncate mid-JSON.
+    const PER_BATCH_MAX_TOKENS = 16000
+    const allTableMappings: ClaudeTableMapping[] = []
+    const sourceTablesForBatching = aiCtx.source_tables
 
-    // Call Claude — use 8192 tokens so large schemas don't get truncated
-    let parsedResponse: ClaudeResponse
-    const claudeRaw = await callClaude(systemPrompt, userMessage, 8192)
-
-    try {
-      parsedResponse = parseClaudeJSON(claudeRaw)
-    } catch {
-      // Retry once asking Claude to fix the JSON
-      const retryRaw = await callClaude(
-        'You are a JSON repair tool. Return ONLY valid JSON, nothing else.',
-        `The previous response was malformed JSON. Fix it and return ONLY the corrected JSON:\n\n${claudeRaw}`
+    for (let i = 0; i < sourceTablesForBatching.length; i++) {
+      const sourceCtx = sourceTablesForBatching[i]
+      console.log(
+        `[Mapping] Generating mappings for ${sourceCtx.table_name} ` +
+          `(${i + 1}/${sourceTablesForBatching.length})...`
       )
-      parsedResponse = parseClaudeJSON(retryRaw)
+
+      const sourceSection = formatSchemaForPrompt([sourceCtx], 'source')
+
+      // Build the cross-table awareness block for this batch. Skip if this
+      // is the only source table — the block would be empty and the primary-
+      // match rule in the system prompt is moot with a single source.
+      const currentSourceRow = sourceTableRowsByNameKey.get(sourceCtx.table_name.toLowerCase())
+      const otherSourcesList = (sourceTables ?? [])
+        .filter((st) => st.id !== currentSourceRow?.id)
+        .map((st) => {
+          const fields = sourceFieldNamesByTableId.get(st.id) ?? []
+          return `  - ${st.name} (${fields.join(', ')})`
+        })
+        .join('\n')
+
+      const otherSourcesBlock = otherSourcesList
+        ? `<other_source_tables>
+These other source tables also exist in this migration and will be processed separately in their own requests. Use this information to decide whether the current source table (${sourceCtx.table_name}) is the best primary match for each target table. If another source table listed below is clearly a better primary match for a target, do NOT create a table_mapping to that target from ${sourceCtx.table_name} — let the better-matching source claim it in its own batch.
+
+See the TABLE-LEVEL MATCHING rules in the system prompt for lookup/reference tables vs entity tables and weak-overlap handling.
+
+${otherSourcesList}
+</other_source_tables>`
+        : ''
+
+      const batchUserMessage = buildMappingUserMessage({
+        sourceSection,
+        targetSection,
+        docBlock,
+        intelligenceCtx: aiCtx.intelligence_context ?? null,
+        otherSourcesBlock,
+      })
+
+      let batchRaw: string
+      try {
+        batchRaw = await callClaude(MAPPING_GENERATION_SYSTEM_PROMPT, batchUserMessage, PER_BATCH_MAX_TOKENS)
+      } catch (err) {
+        console.error(
+          `[Mapping] Claude call failed for source table ${sourceCtx.table_name}:`,
+          err
+        )
+        continue
+      }
+
+      try {
+        const batchParsed = parseClaudeJSON(batchRaw)
+        allTableMappings.push(...(batchParsed.table_mappings ?? []))
+      } catch {
+        // Retry once asking Claude to fix the JSON — use the same token
+        // budget as the original call so the repair isn't itself truncated.
+        try {
+          const retryRaw = await callClaude(
+            'You are a JSON repair tool. Return ONLY valid JSON, nothing else.',
+            `The previous response was malformed JSON. Fix it and return ONLY the corrected JSON:\n\n${batchRaw}`,
+            PER_BATCH_MAX_TOKENS
+          )
+          const retryParsed = parseClaudeJSON(retryRaw)
+          allTableMappings.push(...(retryParsed.table_mappings ?? []))
+        } catch (retryErr) {
+          console.error(
+            `[Mapping] Failed to parse mappings for source table ${sourceCtx.table_name} after retry:`,
+            retryErr
+          )
+          // Continue with other source tables — don't fail the entire batch
+        }
+      }
     }
+
+    const parsedResponse: ClaudeResponse = { table_mappings: allTableMappings }
 
     // Additive generation — fetch existing pairs so we can skip them instead of deleting
     const { data: existingMappingPairs } = await supabase
@@ -359,13 +731,6 @@ Map ALL source fields to their best target match. If a source field has no reaso
       (existingMappingPairs ?? []).map((m) => `${m.source_table_id}::${m.target_table_id}`)
     )
     let skippedCount = 0
-
-    // Normalize: strip dataset prefix if Claude returns "dataset.table" or "dataset.field"
-    function bareTableName(s: string | null | undefined): string {
-      if (!s || typeof s !== 'string') return ''
-      const parts = s.split('.')
-      return parts[parts.length - 1].toLowerCase().trim()
-    }
 
     // Build lookup maps for name matching (case-insensitive, bare name only)
     const sourceTableMap = new Map(
@@ -578,7 +943,7 @@ export async function getMappings(projectId: string): Promise<MappingsResult | n
   // Hop 4: fields with their profiles embedded — single query instead of two sequential ones
   const { data: allFields } = await supabase
     .from('fields')
-    .select('id, table_id, name, data_type, inferred_type, is_nullable, is_primary_key, is_foreign_key, ordinal_position, field_profiles(field_id, sample_values)')
+    .select('id, table_id, name, data_type, inferred_type, is_nullable, is_primary_key, is_foreign_key, ordinal_position, default_value, field_profiles(field_id, sample_values)')
     .in('table_id', tableIds.length ? tableIds : ['__none__'])
     .order('ordinal_position', { ascending: true })
 
@@ -721,12 +1086,114 @@ export async function getMappings(projectId: string): Promise<MappingsResult | n
   for (const t of allTables ?? []) {
     allFieldsByTable[t.id] = (allFields ?? [])
       .filter((f) => f.table_id === t.id)
-      .map((f) => ({ id: f.id, name: f.name, data_type: f.data_type, is_nullable: f.is_nullable ?? true }))
+      .map((f) => ({
+        id: f.id,
+        name: f.name,
+        data_type: f.data_type,
+        is_nullable: f.is_nullable ?? true,
+        // Surfaced so the mapping UI can render the "has default" hint
+        // and the "required" warning without an extra round-trip.
+        default_value: (f as { default_value?: string | null }).default_value ?? null,
+      }))
   }
 
   const acknowledgments: FieldAcknowledgmentRow[] = (rawAcks ?? []) as FieldAcknowledgmentRow[]
 
   return { tableMappings, unmappedSourceFields, unmappedTargetFields, allSourceTables, allTargetTables, allFieldsByTable, acknowledgments }
+}
+
+// ─── recomputeTableMappingStatus ──────────────────────────────────────────────
+
+/**
+ * Re-evaluates a table mapping's status after a child field_mapping was
+ * deleted, rejected, approved, or an acknowledgment was added/removed.
+ * Unifies promote and demote paths so TM.status always reflects the
+ * current truth of its non-rejected FMs + target-field coverage.
+ *
+ * Rule: TM is `approved` iff
+ *   (a) it has at least one non-rejected FM, AND
+ *   (b) every non-rejected FM is `approved`, AND
+ *   (c) every target field on the target table is either covered by a
+ *       non-rejected FM or acknowledged in field_acknowledgments.
+ * Otherwise it is `needs_review`.
+ *
+ * Rejected FM rows are ignored — under the rejection-is-deletion UX
+ * they are legacy ghosts that must not block either direction.
+ */
+export async function recomputeTableMappingStatus(
+  supabase: Awaited<ReturnType<typeof createClient>>,
+  tableMappingId: string
+): Promise<void> {
+  // 1. Every non-rejected FM on the TM must be approved.
+  const { data: siblings } = await supabase
+    .from('field_mappings')
+    .select('status, target_field_id, source_field_id')
+    .eq('table_mapping_id', tableMappingId)
+    .neq('status', 'rejected')
+
+  const rows = siblings ?? []
+  const allMappingsApproved = rows.length > 0 && rows.every((s) => s.status === 'approved')
+
+  // 2. Every target field must be mapped or acknowledged.
+  // 3. Every source field must be mapped or acknowledged (else it would
+  //    silently drop during migration).
+  let allTargetFieldsCovered = true
+  let allSourceFieldsCovered = true
+  const { data: tm } = await supabase
+    .from('table_mappings')
+    .select('target_table_id, source_table_id, project_id')
+    .eq('id', tableMappingId)
+    .single()
+
+  if (tm) {
+    const { data: targetFields } = await supabase
+      .from('fields')
+      .select('id')
+      .eq('table_id', tm.target_table_id)
+
+    const mappedTargetIds = new Set(
+      rows.map((r) => r.target_field_id).filter((id): id is string => Boolean(id))
+    )
+
+    const { data: acks } = await supabase
+      .from('field_acknowledgments')
+      .select('field_id')
+      .eq('project_id', tm.project_id)
+
+    const acknowledgedIds = new Set((acks ?? []).map((a) => a.field_id))
+
+    const uncoveredFields = (targetFields ?? []).filter(
+      (f) => !mappedTargetIds.has(f.id) && !acknowledgedIds.has(f.id)
+    )
+
+    allTargetFieldsCovered = uncoveredFields.length === 0
+
+    const { data: sourceFields } = await supabase
+      .from('fields')
+      .select('id')
+      .eq('table_id', tm.source_table_id)
+
+    // Contributing rows carry source_field_id too, so they count as "mapped"
+    // on the source side — matching the unmapped-source computation in
+    // getMappings and MappingContent.
+    const mappedSourceIds = new Set(
+      rows.map((r) => r.source_field_id).filter((id): id is string => Boolean(id))
+    )
+
+    const uncoveredSourceFields = (sourceFields ?? []).filter(
+      (f) => !mappedSourceIds.has(f.id) && !acknowledgedIds.has(f.id)
+    )
+
+    allSourceFieldsCovered = uncoveredSourceFields.length === 0
+  }
+
+  const shouldBeApproved =
+    allMappingsApproved && allTargetFieldsCovered && allSourceFieldsCovered
+
+  await supabase
+    .from('table_mappings')
+    .update({ status: shouldBeApproved ? 'approved' : 'needs_review' })
+    .eq('id', tableMappingId)
 }
 
 // ─── updateFieldMappingStatus ─────────────────────────────────────────────────
@@ -779,20 +1246,22 @@ export async function updateFieldMappingStatus(
       }
     }
 
-    // Auto-approve table mapping if all field mappings are approved
-    if (status === 'approved') {
-      const { data: siblings } = await supabase
+    // Propagate status to contributors so the user's decision on the primary
+    // covers the whole many-to-one group. Without this, contributors stuck at
+    // 'needs_review' block table auto-promotion forever, because the chip UI
+    // no longer exposes per-contributor approve buttons.
+    if (!fmBefore.is_contributing && (status === 'approved' || status === 'rejected')) {
+      await supabase
         .from('field_mappings')
-        .select('status')
+        .update({ status })
         .eq('table_mapping_id', fmBefore.table_mapping_id)
-
-      if (siblings && siblings.every((s) => s.status === 'approved')) {
-        await supabase
-          .from('table_mappings')
-          .update({ status: 'approved' })
-          .eq('id', fmBefore.table_mapping_id)
-      }
+        .eq('target_field_id', fmBefore.target_field_id)
+        .eq('is_contributing', true)
     }
+
+    // Re-evaluate table mapping status (promote or demote) so it reflects the
+    // current state of non-rejected children after this write.
+    await recomputeTableMappingStatus(supabase, fmBefore.table_mapping_id)
 
     // Log mapping approval / rejection
     if (status === 'approved' || status === 'rejected') {
@@ -1152,20 +1621,114 @@ export async function regenerateFieldMappings(
     return { success: false, fieldCount: 0, error: 'Could not clear existing field mappings. Please try again.' }
   }
 
-  // Regenerate: with all fields now unmapped, suggestRemainingMappings generates all
-  const result = await suggestRemainingMappings(tableMappingId)
+  // Regeneration is a "start fresh" action — the user is explicitly asking to
+  // re-evaluate the whole table. Clear any acknowledgments on both the target
+  // and source table's fields so previously-dismissed unmapped columns get
+  // re-surfaced for review, and demote the TM to `needs_review` so the status
+  // badge reflects the fact that the old mappings are gone before the AI
+  // produces new ones. (Without this reset the TM would keep whatever status
+  // it had pre-regenerate, e.g. a stale `approved`.)
+  const { data: tmMeta } = await supabase
+    .from('table_mappings')
+    .select('source_table_id, target_table_id, project_id')
+    .eq('id', tableMappingId)
+    .single()
+
+  if (tmMeta) {
+    const { data: targetFields } = await supabase
+      .from('fields')
+      .select('id')
+      .eq('table_id', tmMeta.target_table_id)
+
+    const targetFieldIds = (targetFields ?? []).map((f) => f.id)
+    if (targetFieldIds.length > 0) {
+      await supabase
+        .from('field_acknowledgments')
+        .delete()
+        .eq('project_id', tmMeta.project_id)
+        .in('field_id', targetFieldIds)
+    }
+
+    const { data: sourceFields } = await supabase
+      .from('fields')
+      .select('id')
+      .eq('table_id', tmMeta.source_table_id)
+
+    const sourceFieldIds = (sourceFields ?? []).map((f) => f.id)
+    if (sourceFieldIds.length > 0) {
+      await supabase
+        .from('field_acknowledgments')
+        .delete()
+        .eq('project_id', tmMeta.project_id)
+        .in('field_id', sourceFieldIds)
+    }
+  }
+
+  await supabase
+    .from('table_mappings')
+    .update({ status: 'needs_review' })
+    .eq('id', tableMappingId)
+
+  if (!tmMeta) {
+    return { success: false, fieldCount: 0, error: 'Table mapping metadata not available' }
+  }
+
+  // Rate-limit the AI call the same way generateMappings and
+  // suggestRemainingMappings do — regenerate makes one Claude call.
+  const rateLimit = checkAIRateLimit(user.id)
+  if (!rateLimit.allowed) {
+    return { success: false, fieldCount: 0, error: rateLimit.error }
+  }
+
+  // Regenerate using the SHARED full-quality generation helper. This uses the
+  // same system prompt, same AI context options, and same insert logic as
+  // the initial generateMappings path, so many-to-one (FNAME+LNAME+MI →
+  // full_name) and one-to-many (FULL_ADDR → street/city/state/zip) patterns
+  // are preserved on regeneration.
+  const genResult = await runMappingGenerationForPair({
+    supabase,
+    userId: user.id,
+    projectId: tmMeta.project_id,
+    tableMappingId,
+    sourceTableId: tmMeta.source_table_id,
+    targetTableId: tmMeta.target_table_id,
+  })
+
+  // Recompute table-level confidence from all newly-inserted field mappings.
+  // Mirrors suggestRemainingMappings's behavior — the TM's old confidence is
+  // now meaningless because we just rebuilt the field mappings from scratch.
+  if (!genResult.error && genResult.inserted > 0) {
+    const { data: allFMs } = await supabase
+      .from('field_mappings')
+      .select('confidence')
+      .eq('table_mapping_id', tableMappingId)
+
+    const confidences = (allFMs ?? [])
+      .map((fm) => fm.confidence)
+      .filter((c): c is number => c !== null && c !== undefined)
+
+    if (confidences.length > 0) {
+      const avgConfidence = Math.round(
+        confidences.reduce((sum, c) => sum + c, 0) / confidences.length
+      )
+      await supabase
+        .from('table_mappings')
+        .update({ confidence: avgConfidence })
+        .eq('id', tableMappingId)
+    }
+  }
 
   // Safety net: repair any is_contributing inconsistencies the AI may have introduced
-  if (result.success) {
+  if (!genResult.error) {
     await cleanupOrphanedContributors(tableMappingId)
   }
 
   return {
-    success: result.success,
-    fieldCount: result.newMappingsCount,
+    success: !genResult.error,
+    fieldCount: genResult.inserted,
     transformsReset: resetResult.transformsReset,
     stagedRowsReverted: resetResult.stagedRowsReverted,
-    error: result.error,
+    error: genResult.error,
   }
 }
 
@@ -1222,6 +1785,13 @@ export async function deleteFieldMapping(
     }
   }
 
+  // Re-evaluate TM status after the deletion: coverage may have dropped
+  // (demote to needs_review) or the deleted row may have been the last
+  // needs_review holdout (stay / promote to approved).
+  if (fmBefore?.table_mapping_id) {
+    await recomputeTableMappingStatus(supabase, fmBefore.table_mapping_id)
+  }
+
   const pid = (fmBefore?.table_mappings as unknown as { project_id: string })?.project_id
   if (pid) revalidatePath(`/app/projects/${pid}/transform`)
 
@@ -1268,10 +1838,107 @@ export async function approveAllFieldMappings(
   const perm = await requireProjectPermission(tmLookupApprove.project_id, 'editor')
   if (!perm.allowed) return { success: false, error: perm.error }
 
+  // Purge legacy rejected ghost rows before the force-approve. Under the
+  // current UX, clicking ✕ deletes a mapping outright — so any row still
+  // carrying status='rejected' is a pre-fix ghost that the UI no longer
+  // surfaces but that would otherwise resurrect on the next refetch and
+  // keep blocking downstream auto-approve paths (updateFieldMappingStatus,
+  // autoApproveHighConfidence). "Approve All" is an explicit user intent
+  // to approve everything on this table, so lazy-cleaning them here is
+  // safe and idempotent.
+  await supabase
+    .from('field_mappings')
+    .delete()
+    .eq('table_mapping_id', tableMappingId)
+    .eq('status', 'rejected')
+
   const { error: fmErr } = await supabase
     .from('field_mappings').update({ status: 'approved' }).eq('table_mapping_id', tableMappingId)
   if (fmErr) return { success: false, error: fmErr.message }
 
+  // "Approve All" is an explicit user intent to approve the ENTIRE table,
+  // including the target columns that never got a mapping AND the source
+  // columns that will be silently dropped. Auto-acknowledge every unmapped
+  // field on both sides so the ack-aware recomputeTableMappingStatus rules
+  // — every target and source field must be mapped or acknowledged — are
+  // satisfied. Uses reason='approved_via_approve_all' so we can tell these
+  // bulk acks apart from manual ✓-clicks later if needed.
+  const { data: tm } = await supabase
+    .from('table_mappings')
+    .select('target_table_id, source_table_id, project_id')
+    .eq('id', tableMappingId)
+    .single()
+
+  if (tm) {
+    const { data: targetFields } = await supabase
+      .from('fields')
+      .select('id')
+      .eq('table_id', tm.target_table_id)
+
+    const { data: mappedFMs } = await supabase
+      .from('field_mappings')
+      .select('target_field_id, source_field_id')
+      .eq('table_mapping_id', tableMappingId)
+      .neq('status', 'rejected')
+
+    const mappedTargetIds = new Set(
+      (mappedFMs ?? []).map((fm) => fm.target_field_id).filter((id): id is string => Boolean(id))
+    )
+
+    const unmappedTargetFields = (targetFields ?? []).filter((f) => !mappedTargetIds.has(f.id))
+
+    if (unmappedTargetFields.length > 0) {
+      const ackRows = unmappedTargetFields.map((f) => ({
+        project_id: tm.project_id,
+        field_id: f.id,
+        side: 'target' as const,
+        reason: 'approved_via_approve_all',
+        acknowledged_by: user.id,
+        acknowledged_at: new Date().toISOString(),
+      }))
+
+      await supabase
+        .from('field_acknowledgments')
+        .upsert(ackRows, { onConflict: 'project_id,field_id' })
+    }
+
+    // Mirror on the source side: any source column without a non-rejected FM
+    // (primary or contributing) would otherwise be silently dropped during
+    // migration, so the user's "approve all" must acknowledge them too.
+    const { data: sourceFields } = await supabase
+      .from('fields')
+      .select('id')
+      .eq('table_id', tm.source_table_id)
+
+    const mappedSourceIds = new Set(
+      (mappedFMs ?? [])
+        .map((fm) => fm.source_field_id)
+        .filter((id): id is string => Boolean(id))
+    )
+
+    const unmappedSourceFields = (sourceFields ?? []).filter((f) => !mappedSourceIds.has(f.id))
+
+    if (unmappedSourceFields.length > 0) {
+      const ackRows = unmappedSourceFields.map((f) => ({
+        project_id: tm.project_id,
+        field_id: f.id,
+        side: 'source' as const,
+        reason: 'approved_via_approve_all',
+        acknowledged_by: user.id,
+        acknowledged_at: new Date().toISOString(),
+      }))
+
+      await supabase
+        .from('field_acknowledgments')
+        .upsert(ackRows, { onConflict: 'project_id,field_id' })
+    }
+  }
+
+  // Safe to force-approve now: all FMs are approved AND every unmapped field
+  // on both sides is acknowledged, so the TM satisfies recomputeTableMappingStatus's
+  // full rule (approved FMs + target coverage + source coverage). Using a
+  // direct update instead of calling the recompute helper is a minor perf win
+  // (skips the re-reads) and matches the original "explicit user intent" semantics.
   await supabase.from('table_mappings').update({ status: 'approved' }).eq('id', tableMappingId)
   return { success: true }
 }
@@ -1293,6 +1960,10 @@ export async function rejectAllFieldMappings(
   const { error } = await supabase
     .from('field_mappings').update({ status: 'rejected' }).eq('table_mapping_id', tableMappingId)
   if (error) return { success: false, error: error.message }
+
+  // All children just became rejected — TM has zero non-rejected FMs and
+  // must demote to needs_review so the UI reflects the lost coverage.
+  await recomputeTableMappingStatus(supabase, tableMappingId)
 
   const { data: tm } = await supabase.from('table_mappings').select('project_id').eq('id', tableMappingId).single()
   if (tm) revalidatePath(`/app/projects/${tm.project_id}/transform`)
@@ -1328,10 +1999,16 @@ export async function approveHighConfidenceMappings(
   if (error) return { success: false, count: 0, error: error.message }
   const count = updated?.length ?? 0
 
-  // Auto-approve TMs where all FMs are now approved
+  // Auto-approve TMs where all FMs are now approved. Same rationale as
+  // updateFieldMappingStatus: rejected ghost rows are excluded so they
+  // don't block promotion. Contributors still count.
   const affectedTMIds = [...new Set((updated ?? []).map((fm) => fm.table_mapping_id))]
   for (const tmId of affectedTMIds) {
-    const { data: siblings } = await supabase.from('field_mappings').select('status').eq('table_mapping_id', tmId)
+    const { data: siblings } = await supabase
+      .from('field_mappings')
+      .select('status')
+      .eq('table_mapping_id', tmId)
+      .neq('status', 'rejected')
     if (siblings?.every((s) => s.status === 'approved')) {
       await supabase.from('table_mappings').update({ status: 'approved' }).eq('id', tmId)
     }

@@ -16,52 +16,99 @@ export function fieldNeedsTransform(params: {
     confidence,
     sourceDataType,
     targetDataType,
-    sourceFieldName,
-    targetFieldName,
     hasTransformation,
     needsTransformation,
   } = params
 
+  // Normalize types into coarse families for the "skip flagging" heuristic.
+  // Used ONLY by the direct-compatible passthrough check below — not by any
+  // real data-type handling. The goal is: when Claude says "direct compatible"
+  // at high confidence, source and target should agree on the broad family
+  // (both strings, both numbers, etc.) regardless of length/precision or the
+  // specific dialect spelling. Previously this asymmetrically stripped
+  // varchar(n) → varchar but left char(n) → char(n), which caused every
+  // CSV-sourced (VARCHAR(N)) column mapped to a CHAR(n) target to fall out of
+  // the exception even when the AI had explicitly said no conversion was
+  // needed.
+  const normalizeType = (t: string): string => {
+    const lower = t.toLowerCase().trim()
+
+    // String family → 'string'
+    // Covers: varchar(n), char(n), bpchar(n), nvarchar(n), nchar(n),
+    // character varying(n), text, clob, string
+    if (
+      /^(varchar|character varying|char|bpchar|nvarchar|nchar)(\(\d+\))?$/.test(lower) ||
+      lower === 'text' ||
+      lower === 'clob' ||
+      lower === 'string'
+    ) {
+      return 'string'
+    }
+
+    // Numeric family → 'number'
+    // Covers: int, integer, bigint, smallint, tinyint, int2, int4, int8,
+    // serial variants, decimal(n,m), numeric(n,m), float, double, real,
+    // float4, float8, double precision, money
+    if (
+      /^(int|integer|bigint|smallint|tinyint|int[248]|serial|bigserial)$/.test(lower) ||
+      /^(decimal|numeric|float|double|real|float[48]|double precision|money)(\(\d+,?\d*\))?$/.test(lower)
+    ) {
+      return 'number'
+    }
+
+    // Boolean family → 'boolean'
+    if (/^(bool|boolean|bit)$/.test(lower)) {
+      return 'boolean'
+    }
+
+    // Timestamp family → 'timestamp'
+    if (/^(timestamp|timestamptz|timestamp with(out)? time zone|datetime|datetime2)$/.test(lower)) {
+      return 'timestamp'
+    }
+
+    // Date family → 'date'
+    if (lower === 'date') {
+      return 'date'
+    }
+
+    return lower
+  }
+
+  const compat = (typeCompatibility ?? '').toLowerCase()
+
   // 1. If a transformation already exists, always show the badge
   if (hasTransformation) return true
 
-  // 2. If Claude explicitly assessed this field, trust its judgment
+  // 2. If Claude explicitly flagged this field as NOT needing transformation,
+  //    trust that — unless the type_compatibility text contradicts it with a
+  //    known transformation keyword (defensive: catches prompt drift where the
+  //    AI writes "uppercase needed" but forgot to set the flag).
+  if (needsTransformation === false) {
+    if (
+      /needs|truncat|convers|mapping|hash|transform|convert|strip|normalize|reformat|parse|standardize|cast|uppercase|lowercase|format|clean|splits|concat|combine|extract|pad|trim|decode/.test(
+        compat,
+      )
+    ) {
+      return true
+    }
+    return false
+  }
   if (needsTransformation === true) return true
-  if (needsTransformation === false) return false
 
-  // 3. Fallback heuristic (manually created mappings or suggestRemainingMappings where needs_transformation is null)
+  // 3. NULL means Claude didn't explicitly assess (manual mappings or older
+  //    mapping runs). Default to "needs transform" — it's safer to surface a
+  //    false positive (the user can dismiss via "Mark as no transform needed")
+  //    than to hide a false negative the user can't easily discover.
+  //    Exception: high-confidence, same-type, explicitly "direct compatible"
+  //    passthroughs are safe to skip.
+  const typesMatch = normalizeType(sourceDataType) === normalizeType(targetDataType)
+  const isDirectCompatible = /direct compatible|no conversion needed|compatible.?no/.test(compat)
 
-  if (confidence !== null && confidence < 75) return true
+  if (isDirectCompatible && typesMatch && confidence !== null && confidence >= 90) {
+    return false
+  }
 
-  const compat = (typeCompatibility ?? '').toLowerCase()
-  // Check for explicit "no conversion needed" signal first
-  if (/direct compatible|no conversion needed|compatible.?no/.test(compat)) return false
-  // Check for transformation signals
-  if (/needs|truncat|convers|mapping|hash|transform|convert|strip|normalize|reformat|parse/.test(compat))
-    return true
-
-  // Normalize types for comparison — don't flag text vs varchar mismatches
-  const normalizeType = (t: string): string =>
-    t
-      .toLowerCase()
-      .replace(/varchar\(\d+\)/g, 'varchar')
-      .replace(/character varying(\(\d+\))?/g, 'varchar')
-      .replace(/^text$/g, 'varchar')
-      .replace(/decimal\(\d+,?\d*\)/g, 'decimal')
-      .replace(/numeric\(\d+,?\d*\)/g, 'decimal')
-      .trim()
-
-  if (normalizeType(sourceDataType) !== normalizeType(targetDataType)) return true
-
-  const srcUp = sourceFieldName.toUpperCase()
-  const tgtUp = targetFieldName.toUpperCase()
-  if (
-    (tgtUp.endsWith('_CODE') && !srcUp.endsWith('_CODE')) ||
-    (tgtUp.endsWith('_TYPE') && !srcUp.endsWith('_TYPE'))
-  )
-    return true
-
-  return false
+  return true
 }
 
 // ── JSONB field reference rewriting ──────────────────────────────────────────

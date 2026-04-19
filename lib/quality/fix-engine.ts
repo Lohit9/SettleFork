@@ -14,6 +14,7 @@ import { createClient } from '@/lib/supabase/server'
 import { callClaude } from '@/lib/ai/claude'
 import { checkAIRateLimit } from '@/lib/ai/rate-limit'
 import { buildAIContext, formatFieldForPrompt, formatDocumentsForPrompt } from '@/lib/ai/context-builder'
+import { resolveFixTarget } from '@/lib/quality/fix-target'
 import type { FixOption } from '@/lib/types/database'
 
 const SYSTEM_PROMPT = `You are a senior enterprise data migration consultant. A data quality issue has been detected in a migration project. Your job is to:
@@ -215,8 +216,37 @@ export async function generateFixSuggestions(
     return { success: false, error: 'Access denied' }
   }
 
+  // Resolve the effective fix target — for in-flight issues this routes from
+  // the (empty) target table to the source table + source field name so the
+  // generated SQL operates on real data_rows. applyFix() uses the same
+  // resolver, so the table_id it validates against will match what we put in
+  // the prompt.
+  const fixTarget = await resolveFixTarget({
+    id: issue.id as string,
+    project_id: issue.project_id as string,
+    stage: issue.stage as 'source' | 'in_flight' | 'target',
+    table_id: (issue.table_id as string | null) ?? null,
+    field_id: (issue.field_id as string | null) ?? null,
+  })
+
+  if (issue.stage === 'in_flight' && !fixTarget.routedToSource) {
+    return {
+      success: false,
+      error:
+        `Cannot generate fix suggestions — ${fixTarget.routingBlockedReason ?? 'no source mapping for this target field'}. ` +
+        'This issue must be resolved by adding a mapping or default value rather than a data fix.',
+    }
+  }
+
+  const effectiveTableId = fixTarget.tableId
+  const effectiveFieldId = fixTarget.fieldId
+
   // Build rich AI context for the affected field: value distributions + docs
-  // Uses RLS client since ownership has already been verified above
+  // Uses RLS client since ownership has already been verified above.
+  // Routing note: for in-flight issues we feed the context builder the
+  // SOURCE table/field (effectiveTableId/effectiveFieldId) so profiling
+  // stats and value distributions reflect the actual rows the fix will
+  // operate on.
   let fieldContext = 'No field information available.'
   let tableName = 'unknown'
   let fixDocBlock = ''
@@ -224,8 +254,8 @@ export async function generateFixSuggestions(
   if (issue.project_id) {
     try {
       const fixCtx = await buildAIContext(issue.project_id as string, {
-        tableIds: issue.table_id ? [issue.table_id as string] : [],
-        fieldIds: issue.field_id ? [issue.field_id as string] : [],
+        tableIds: effectiveTableId ? [effectiveTableId] : [],
+        fieldIds: effectiveFieldId ? [effectiveFieldId] : [],
         includeProfilingStats: true,
         includeValueDistributions: true,
         includeSampleValues: true,
@@ -250,42 +280,56 @@ export async function generateFixSuggestions(
       fixDocBlock = formatDocumentsForPrompt(fixCtx.documents)
     } catch {
       // Fall back to admin fetch if context builder fails (e.g., no dataset for this table)
-      if (issue.field_id) {
+      if (effectiveFieldId) {
         const { data: field } = await supabaseAdmin
           .from('fields')
           .select('name, data_type, inferred_type, is_nullable, is_primary_key')
-          .eq('id', issue.field_id)
+          .eq('id', effectiveFieldId)
           .single()
         if (field) {
           fieldContext = `Field: ${field.name}\nType: ${field.data_type} (inferred: ${field.inferred_type ?? 'unknown'})\nNullable: ${field.is_nullable}`
         }
       }
-      if (issue.table_id) {
-        const { data: table } = await supabaseAdmin.from('tables').select('name').eq('id', issue.table_id).single()
+      if (effectiveTableId) {
+        const { data: table } = await supabaseAdmin.from('tables').select('name').eq('id', effectiveTableId).single()
         if (table) tableName = table.name
       }
     }
   } else {
     // No project_id — fall back to direct admin queries
-    if (issue.field_id) {
+    if (effectiveFieldId) {
       const { data: field } = await supabaseAdmin
         .from('fields')
         .select('name, data_type, inferred_type, is_nullable, is_primary_key')
-        .eq('id', issue.field_id)
+        .eq('id', effectiveFieldId)
         .single()
       if (field) {
         fieldContext = `Field: ${field.name}\nType: ${field.data_type} (inferred: ${field.inferred_type ?? 'unknown'})\nNullable: ${field.is_nullable}`
       }
     }
-    if (issue.table_id) {
-      const { data: table } = await supabaseAdmin.from('tables').select('name').eq('id', issue.table_id).single()
+    if (effectiveTableId) {
+      const { data: table } = await supabaseAdmin.from('tables').select('name').eq('id', effectiveTableId).single()
       if (table) tableName = table.name
     }
   }
 
-  // Fetch target mapping context (still via admin since field_mappings may not have RLS for this join)
+  // Target-side context: what constraint is being violated. For source-stage
+  // issues this is the downstream mapping (source→target). For in-flight
+  // issues we already know target constraints — look them up by the
+  // ORIGINAL target field_id stored on the issue.
   let targetContext = 'No target mapping exists yet.'
-  if (issue.field_id) {
+  if (fixTarget.routedToSource && issue.field_id) {
+    const { data: tf } = await supabaseAdmin
+      .from('fields')
+      .select('name, data_type, is_nullable')
+      .eq('id', issue.field_id as string)
+      .single()
+    if (tf) {
+      targetContext = `Target field: ${tf.name} (${tf.data_type})
+Target nullable: ${tf.is_nullable}
+Note: the fix must operate on the SOURCE table above (${tableName}) since target tables have no data.`
+    }
+  } else if (issue.field_id) {
     const { data: fmData } = await supabaseAdmin
       .from('field_mappings')
       .select(`
@@ -325,12 +369,16 @@ Target nullable: ${tf.is_nullable}`
       ? JSON.stringify(sampleRows.slice(0, 10), null, 2)
       : 'No sample rows captured.'
 
+  const routingNote = fixTarget.routedToSource
+    ? `\nRouting: this in-flight issue was detected on the target field, but the fix must operate on the SOURCE table ('${tableName}') because target tables have no rows. Use the source field name shown in field_context in all JSONB expressions.`
+    : ''
+
   const userMessage = `<issue>
 Issue: ${issue.title} — ${issue.description}
 Severity: ${issue.severity}
 Stage: ${issue.stage}
 Affected records: ${issue.affected_records}
-Table ID: ${issue.table_id ?? 'unknown'}
+Table ID: ${effectiveTableId}${routingNote}
 </issue>
 
 <field_context>
@@ -351,7 +399,7 @@ ${fixDocBlock}
 ${otherIssues}
 </other_issues>
 
-Provide 2-3 fix options for this issue. Use table_id = '${issue.table_id ?? ''}' in all SQL WHERE clauses.`
+Provide 2-3 fix options for this issue. Use table_id = '${effectiveTableId}' in all SQL WHERE clauses.`
 
   let parsed: ClaudeFixResponse
   try {

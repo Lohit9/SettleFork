@@ -54,7 +54,10 @@ export function FieldPicker({
       if (!anchorRef?.current) return
       const rect = anchorRef.current.getBoundingClientRect()
       const viewportHeight = window.innerHeight
+      const viewportWidth = window.innerWidth
       const pickerHeight = 280
+      const pickerWidth = Math.max(rect.width, 240)
+      const margin = 8
       const spaceBelow = viewportHeight - rect.bottom
 
       setPosition({
@@ -62,8 +65,8 @@ export function FieldPicker({
           spaceBelow >= pickerHeight
             ? rect.bottom + 4
             : rect.top - pickerHeight - 4,
-        left: rect.left,
-        width: Math.max(rect.width, 240),
+        left: Math.max(margin, Math.min(rect.left, viewportWidth - pickerWidth - margin)),
+        width: pickerWidth,
       })
     }
 

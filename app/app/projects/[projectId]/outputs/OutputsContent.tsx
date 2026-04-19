@@ -774,7 +774,7 @@ export default function OutputsContent({ projectId, projectName, initialData, is
                 <p className="text-xs text-gray-500 mb-2">Mapping Coverage</p>
                 <div className="flex items-baseline gap-1">
                   <span className="text-2xl font-semibold text-settle-slate-900">{metrics.approvedFieldMappings}</span>
-                  <span className="text-sm text-settle-slate-400">/ {metrics.totalSourceFields}</span>
+                  <span className="text-sm text-settle-slate-400">/ {metrics.totalFieldMappings}</span>
                 </div>
                 {outstanding.unmappedSourceFields > 0 ? (
                   <p className="text-xs text-settle-slate-400 mt-1">{outstanding.unmappedSourceFields} unmapped</p>
@@ -782,7 +782,7 @@ export default function OutputsContent({ projectId, projectName, initialData, is
                   <p className="text-xs text-green-600 mt-1">All fields mapped</p>
                 )}
                 <div className="mt-2 h-0.5 bg-settle-slate-100 rounded-full overflow-hidden">
-                  <div className="h-full bg-settle-slate-400 rounded-full" style={{ width: `${metrics.totalSourceFields > 0 ? Math.round((metrics.approvedFieldMappings / metrics.totalSourceFields) * 100) : 0}%` }} />
+                  <div className="h-full bg-settle-slate-400 rounded-full" style={{ width: `${metrics.totalFieldMappings > 0 ? Math.round((metrics.approvedFieldMappings / metrics.totalFieldMappings) * 100) : 0}%` }} />
                 </div>
               </div>
               <div className="border-t border-settle-slate-100 pt-2.5">

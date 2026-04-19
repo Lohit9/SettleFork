@@ -30,7 +30,7 @@ export default async function DataQualityPage({ params, searchParams }: PageProp
   if (!user) notFound()
 
   // Parallel data fetch — fix history fetched once here to avoid N+1 per IssueCard
-  const [{ issues, hasMappings }, validationRules, readiness, tablesData, initialFixHistory, resolvedSourceFieldIds, projectResult, project] = await Promise.all([
+  const [{ issues, hasMappings, stagedTargetTableIds }, validationRules, readiness, tablesData, initialFixHistory, resolvedSourceFieldIds, projectResult, project] = await Promise.all([
     getQualityIssues(projectId),
     getValidationRules(projectId),
     computeReadinessScore(projectId),
@@ -74,6 +74,7 @@ export default async function DataQualityPage({ params, searchParams }: PageProp
       initialReadiness={readiness}
       initialRules={validationRules}
       hasMappings={hasMappings}
+      initialStagedTargetTableIds={stagedTargetTableIds}
       allDatasets={allDatasets}
       initialFixHistory={initialFixHistory}
       resolvedSourceFieldIds={resolvedSourceFieldIds}

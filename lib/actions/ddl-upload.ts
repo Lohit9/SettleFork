@@ -189,12 +189,15 @@ export async function confirmDDLSchema(
       name: f.name,
       data_type: f.dataType,
       inferred_type: inferBasicType(f.dataType),
-      is_nullable: f.isNullable,
+      is_nullable: f.isPrimaryKey ? false : f.isNullable,
       is_primary_key: f.isPrimaryKey,
       is_foreign_key: f.isForeignKey,
       fk_reference: f.fkReference,
       ordinal_position: idx + 1,
       check_constraint: f.checkConstraint ?? null,
+      // Raw DEFAULT expression (ParsedField.defaultValue — already extracted
+      // by the DDL parser; migration 064 added the column to persist it).
+      default_value: f.defaultValue ?? null,
       schema_source: 'ddl_parsed' as const,
     }))
 
