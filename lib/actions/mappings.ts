@@ -61,6 +61,16 @@ export interface RichFieldMapping {
   sourceFieldSamples: string[]
   targetFieldSamples: string[]
   sourceFieldNullPercentage: number
+  /** Transformation currently defined for this mapping, or null if none.
+   *  Populated by getMappings() via a parallel fetch against the
+   *  transformations table so the Mapping detail panel can reflect
+   *  transform state without a second round-trip. */
+  transformation: {
+    id: string
+    status: 'draft' | 'tested' | 'saved' | 'applied' | 'stale'
+    description: string | null
+    generated_sql: string | null
+  } | null
 }
 
 export interface RichTableMapping {
@@ -939,13 +949,29 @@ export async function getMappings(projectId: string): Promise<MappingsResult | n
 
   const tableMap = new Map((allTables ?? []).map((t) => [t.id, t]))
   const tableIds = (allTables ?? []).map((t) => t.id)
+  const fmIds = (rawFMs ?? []).map((fm) => fm.id)
 
-  // Hop 4: fields with their profiles embedded — single query instead of two sequential ones
-  const { data: allFields } = await supabase
-    .from('fields')
-    .select('id, table_id, name, data_type, inferred_type, is_nullable, is_primary_key, is_foreign_key, ordinal_position, default_value, field_profiles(field_id, sample_values)')
-    .in('table_id', tableIds.length ? tableIds : ['__none__'])
-    .order('ordinal_position', { ascending: true })
+  // Hop 4: fields (with profiles embedded) + transformations — run in parallel
+  type TransformationRow = {
+    id: string
+    field_mapping_id: string
+    status: string
+    description: string | null
+    generated_sql: string | null
+  }
+  const [{ data: allFields }, { data: rawTransformations }] = await Promise.all([
+    supabase
+      .from('fields')
+      .select('id, table_id, name, data_type, inferred_type, is_nullable, is_primary_key, is_foreign_key, ordinal_position, default_value, field_profiles(field_id, sample_values)')
+      .in('table_id', tableIds.length ? tableIds : ['__none__'])
+      .order('ordinal_position', { ascending: true }),
+    fmIds.length > 0
+      ? supabase
+          .from('transformations')
+          .select('id, field_mapping_id, status, description, generated_sql')
+          .in('field_mapping_id', fmIds)
+      : Promise.resolve({ data: [] as TransformationRow[] }),
+  ])
 
   const fieldMap = new Map((allFields ?? []).map((f) => [f.id, f]))
   const profileMap = new Map(
@@ -956,6 +982,34 @@ export async function getMappings(projectId: string): Promise<MappingsResult | n
       })
       .filter((entry): entry is [string, { field_id: string; sample_values: unknown }] => entry !== null)
   )
+
+  // Index transformations by field_mapping_id. When more than one transformation
+  // row exists for the same field_mapping (rare — can happen briefly during
+  // regenerate/apply races), pick the one whose status ranks highest so the
+  // detail panel reflects the most "live" state (applied wins over drafts, etc).
+  const TRANSFORM_STATUS_RANK: Record<string, number> = {
+    applied: 5,
+    stale: 4,
+    tested: 3,
+    saved: 2,
+    draft: 1,
+  }
+  type FMTransformation = NonNullable<RichFieldMapping['transformation']>
+  const transformByFMId = new Map<string, FMTransformation>()
+  for (const tr of (rawTransformations ?? []) as TransformationRow[]) {
+    const next: FMTransformation = {
+      id: tr.id,
+      status: tr.status as FMTransformation['status'],
+      description: tr.description,
+      generated_sql: tr.generated_sql,
+    }
+    const prev = transformByFMId.get(tr.field_mapping_id)
+    const prevRank = prev ? (TRANSFORM_STATUS_RANK[prev.status] ?? 0) : -1
+    const nextRank = TRANSFORM_STATUS_RANK[next.status] ?? 0
+    if (!prev || nextRank > prevRank) {
+      transformByFMId.set(tr.field_mapping_id, next)
+    }
+  }
 
   // Join table mappings with related data
   const tableMappings: RichTableMapping[] = (rawTMs ?? []).map((tm) => {
@@ -996,6 +1050,7 @@ export async function getMappings(projectId: string): Promise<MappingsResult | n
           sourceFieldSamples: toSamples(srcProfile),
           targetFieldSamples: toSamples(tgtProfile),
           sourceFieldNullPercentage: (srcProfile as { null_percentage?: number } | undefined)?.null_percentage ?? 0,
+          transformation: transformByFMId.get(fm.id) ?? null,
         }
       })
       .sort((a, b) => {

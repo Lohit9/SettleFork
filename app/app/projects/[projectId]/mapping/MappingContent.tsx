@@ -2308,15 +2308,57 @@ function MappingDetailsPanel({
 
         {activeTab === 'transform' && (
           <div className="space-y-3">
-            <div className="border border-gray-100 rounded-lg p-4">
-              <p className="text-xs text-settle-slate-400 mb-3">No transform defined</p>
-              <button
-                onClick={() => router.push(`/app/projects/${projectId}/transform?fieldMappingId=${fm.id}`)}
-                className="text-xs font-medium text-settle-blue-500 hover:text-settle-blue-700 transition-colors"
-              >
-                Define Transform →
-              </button>
-            </div>
+            {fm.transformation ? (
+              <div className="border border-gray-100 rounded-lg p-4 space-y-3">
+                <div className="flex items-center justify-between">
+                  <span className="text-xs font-medium text-settle-slate-600">Transform</span>
+                  <span
+                    className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium ${
+                      fm.transformation.status === 'applied'
+                        ? 'bg-green-50 text-green-700'
+                        : fm.transformation.status === 'tested'
+                        ? 'bg-blue-50 text-blue-700'
+                        : fm.transformation.status === 'saved'
+                        ? 'bg-amber-50 text-amber-700'
+                        : fm.transformation.status === 'stale'
+                        ? 'bg-red-50 text-red-700'
+                        : 'bg-gray-50 text-gray-600'
+                    }`}
+                  >
+                    {fm.transformation.status.charAt(0).toUpperCase() + fm.transformation.status.slice(1)}
+                  </span>
+                </div>
+
+                {fm.transformation.description && (
+                  <p className="text-xs text-settle-slate-500">{fm.transformation.description}</p>
+                )}
+
+                {fm.transformation.generated_sql && (
+                  <pre className="text-xs bg-gray-50 rounded p-2 overflow-x-auto max-h-32 text-settle-slate-600 font-mono whitespace-pre-wrap">
+                    {fm.transformation.generated_sql.length > 300
+                      ? fm.transformation.generated_sql.slice(0, 300) + '...'
+                      : fm.transformation.generated_sql}
+                  </pre>
+                )}
+
+                <button
+                  onClick={() => router.push(`/app/projects/${projectId}/transform?fieldMappingId=${fm.id}`)}
+                  className="text-xs font-medium text-settle-blue-500 hover:text-settle-blue-700 transition-colors"
+                >
+                  View in Transform →
+                </button>
+              </div>
+            ) : (
+              <div className="border border-gray-100 rounded-lg p-4">
+                <p className="text-xs text-settle-slate-400 mb-3">No transform defined</p>
+                <button
+                  onClick={() => router.push(`/app/projects/${projectId}/transform?fieldMappingId=${fm.id}`)}
+                  className="text-xs font-medium text-settle-blue-500 hover:text-settle-blue-700 transition-colors"
+                >
+                  Define Transform →
+                </button>
+              </div>
+            )}
           </div>
         )}
 
