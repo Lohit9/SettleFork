@@ -21,10 +21,6 @@ Last updated: 2026-04-20
       pattern with `findAuthUserByEmail` helper across 5 call sites. 
       Has a silent correctness ceiling at 1000 users. 
       (Scheduled: 2026-04-20, separate PR before SSO Prompt A)
-- [ ] Remove dead code: `createOrganization` function in 
-      `lib/actions/organizations.ts:42-73` and stale comment in 
-      `lib/actions/auth.ts:133`. 
-      (Scheduled: 2026-04-20)
 - [ ] SSO epic — Prompt A (migration, types, admin API surface, 
       bookmark app endpoint). (Scheduled: 2026-04-20)
 - [ ] SSO epic — Prompt B (middleware + login + callback with 
@@ -110,3 +106,13 @@ to "Planned" or "Rejected" once a decision is made.)_
   - Include Security: email delivered 2026-04-19; follow up via 
     contact form Thursday 2026-04-24 if no reply.
   - Doyensec: email sent 2026-04-19; awaiting response.
+
+---
+
+## Completed
+
+- [x] 2026-04-20 — Removed dead code: `createOrganization` function in 
+      `lib/actions/organizations.ts` (unreachable since commit b752919, 
+      all call sites migrated to `adminCreateOrganization` or inlined 
+      `supabaseAdmin` inserts) + stale comment cleanup in 
+      `lib/actions/auth.ts:133`. Commit: 5b1b89c.
