@@ -1,19 +1,15 @@
 import { redirect } from 'next/navigation'
 import Link from 'next/link'
-import { createClient } from '@/lib/supabase/server'
 import { supabaseAdmin } from '@/lib/supabase/admin'
+import { requirePlatformAdmin } from '@/lib/auth/platform-admin'
 import AdminContent, { AccessRequest, OrgRow } from './AdminContent'
-
-const ADMIN_EMAILS = ['kaandincer1@gmail.com']
 
 export const dynamic = 'force-dynamic'
 
 export default async function AdminPage() {
   // ── Auth ──────────────────────────────────────────────────────────────────
-  const supabase = await createClient()
-  const { data: { user } } = await supabase.auth.getUser()
-
-  if (!user || !ADMIN_EMAILS.includes(user.email ?? '')) {
+  const admin = await requirePlatformAdmin()
+  if (!admin.ok) {
     redirect('/')
   }
 
@@ -78,7 +74,7 @@ export default async function AdminPage() {
 
       {/* Content */}
       <main className="max-w-5xl mx-auto px-6 py-8">
-        <AdminContent requests={requests} orgs={orgs} adminEmail={user.email ?? ''} />
+        <AdminContent requests={requests} orgs={orgs} adminEmail={admin.email ?? ''} />
       </main>
     </div>
   )

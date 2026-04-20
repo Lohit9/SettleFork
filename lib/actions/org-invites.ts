@@ -4,6 +4,7 @@ import { randomUUID } from 'crypto'
 import { revalidatePath } from 'next/cache'
 import { createClient } from '@/lib/supabase/server'
 import { supabaseAdmin } from '@/lib/supabase/admin'
+import { requirePlatformAdmin } from '@/lib/auth/platform-admin'
 import type { OrgInvite, OrgRole } from '@/lib/types/organizations'
 import { Resend } from 'resend'
 import { orgInviteEmail } from '@/lib/email/templates'
@@ -92,13 +93,9 @@ export async function adminCreateOrgInvite(
   email: string,
   role: OrgRole
 ): Promise<{ invite: OrgInvite | null; error?: string }> {
-  const supabase = await createClient()
-  const { data: { user } } = await supabase.auth.getUser()
-  if (!user) return { invite: null, error: 'Not authenticated' }
-
-  const ADMIN_EMAILS = ['kaandincer1@gmail.com']
-  if (!ADMIN_EMAILS.includes(user.email ?? '')) {
-    return { invite: null, error: 'Not a platform admin' }
+  const admin = await requirePlatformAdmin()
+  if (!admin.ok) {
+    return { invite: null, error: admin.error }
   }
 
   const { data: existingUser } = await supabaseAdmin.auth.admin.listUsers({ perPage: 1000 })
@@ -126,7 +123,7 @@ export async function adminCreateOrgInvite(
       email: email.trim().toLowerCase(),
       role,
       token: token.slice(0, 64),
-      invited_by: user.id,
+      invited_by: admin.userId,
     })
     .select()
     .single()
@@ -139,7 +136,7 @@ export async function adminCreateOrgInvite(
     .eq('id', orgId)
     .single()
 
-  const inviterName = user.user_metadata?.full_name || user.email || 'Settle Admin'
+  const inviterName = admin.email || 'Settle Admin'
   const { subject, html } = orgInviteEmail({
     orgName: org?.name ?? 'your team',
     role,
@@ -223,13 +220,9 @@ export async function getInviteByToken(
 export async function adminGetPendingInvites(
   orgId: string
 ): Promise<{ success: boolean; error?: string; invites: OrgInvite[] }> {
-  const supabase = await createClient()
-  const { data: { user } } = await supabase.auth.getUser()
-  if (!user) return { success: false, error: 'Not authenticated', invites: [] }
-
-  const ADMIN_EMAILS = ['kaandincer1@gmail.com']
-  if (!ADMIN_EMAILS.includes(user.email ?? '')) {
-    return { success: false, error: 'Not a platform admin', invites: [] }
+  const admin = await requirePlatformAdmin()
+  if (!admin.ok) {
+    return { success: false, error: admin.error, invites: [] }
   }
 
   const { data, error } = await supabaseAdmin
@@ -247,13 +240,9 @@ export async function adminGetPendingInvites(
 export async function adminRevokeInvite(
   inviteId: string
 ): Promise<{ success: boolean; error?: string }> {
-  const supabase = await createClient()
-  const { data: { user } } = await supabase.auth.getUser()
-  if (!user) return { success: false, error: 'Not authenticated' }
-
-  const ADMIN_EMAILS = ['kaandincer1@gmail.com']
-  if (!ADMIN_EMAILS.includes(user.email ?? '')) {
-    return { success: false, error: 'Not a platform admin' }
+  const admin = await requirePlatformAdmin()
+  if (!admin.ok) {
+    return { success: false, error: admin.error }
   }
 
   const { error } = await supabaseAdmin

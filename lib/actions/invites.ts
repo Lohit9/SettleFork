@@ -1,12 +1,10 @@
 'use server'
 
 import { revalidatePath } from 'next/cache'
-import { createClient } from '@/lib/supabase/server'
 import { supabaseAdmin } from '@/lib/supabase/admin'
+import { requirePlatformAdmin } from '@/lib/auth/platform-admin'
 
 // ── constants ─────────────────────────────────────────────────────────────
-
-const ADMIN_EMAILS = ['kaandincer1@gmail.com']
 
 // Safe chars: exclude 0/O, 1/I/L to avoid confusion
 const SAFE_CHARS = 'ABCDEFGHJKMNPQRSTUVWXYZ23456789'
@@ -37,13 +35,10 @@ async function uniqueCode(): Promise<string> {
   throw new Error('Could not generate a unique invite code. Please try again.')
 }
 
-async function assertAdmin() {
-  const supabase = await createClient()
-  const { data: { user } } = await supabase.auth.getUser()
-  if (!user || !ADMIN_EMAILS.includes(user.email ?? '')) {
-    return null
-  }
-  return user
+async function assertAdmin(): Promise<{ id: string; email: string | null } | null> {
+  const admin = await requirePlatformAdmin()
+  if (!admin.ok) return null
+  return { id: admin.userId, email: admin.email }
 }
 
 // ── public: invite validation (called from signup flow) ───────────────────

@@ -3,6 +3,7 @@
 import { revalidatePath } from 'next/cache'
 import { createClient } from '@/lib/supabase/server'
 import { supabaseAdmin } from '@/lib/supabase/admin'
+import { requirePlatformAdmin } from '@/lib/auth/platform-admin'
 import type { Organization, OrgMembership, OrgRole } from '@/lib/types/organizations'
 
 function slugify(name: string): string {
@@ -248,13 +249,9 @@ export async function adminGetOrgMembers(orgId: string): Promise<{
   error?: string
   members: Array<{ id: string; user_id: string; role: OrgRole; joined_at: string; user_name: string; user_email: string }>
 }> {
-  const supabase = await createClient()
-  const { data: { user } } = await supabase.auth.getUser()
-  if (!user) return { success: false, error: 'Not authenticated', members: [] }
-
-  const ADMIN_EMAILS = ['kaandincer1@gmail.com']
-  if (!ADMIN_EMAILS.includes(user.email ?? '')) {
-    return { success: false, error: 'Not a platform admin', members: [] }
+  const admin = await requirePlatformAdmin()
+  if (!admin.ok) {
+    return { success: false, error: admin.error, members: [] }
   }
 
   // Step 1: Get memberships — no join (profiles has no direct FK from org_memberships)
