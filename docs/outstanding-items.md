@@ -106,6 +106,10 @@ to "Planned" or "Rejected" once a decision is made.)_
   - Include Security: email delivered 2026-04-19; follow up via 
     contact form Thursday 2026-04-24 if no reply.
   - Doyensec: email sent 2026-04-19; awaiting response.
+- GitHub repo renamed from `kaandincer/mine` → `kaandincer/settle` on 
+  2026-04-20 to align with product rebrand. Local remote updated same 
+  day. Old URL still redirects temporarily; reliance on redirect 
+  deprecated.
 
 ---
 
