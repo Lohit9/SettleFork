@@ -39,39 +39,6 @@ export async function adminCreateOrganization(
   return { org: org as Organization }
 }
 
-export async function createOrganization(
-  name: string
-): Promise<{ org: Organization | null; error?: string }> {
-  const supabase = await createClient()
-  const { data: { user } } = await supabase.auth.getUser()
-  if (!user) return { org: null, error: 'Not authenticated' }
-
-  const trimmed = name.trim()
-  if (!trimmed) return { org: null, error: 'Organization name is required' }
-
-  const slug = slugify(trimmed)
-
-  const { data: org, error: orgErr } = await supabase
-    .from('organizations')
-    .insert({ name: trimmed, slug, created_by: user.id })
-    .select()
-    .single()
-
-  if (orgErr || !org) return { org: null, error: orgErr?.message ?? 'Failed to create organization' }
-
-  const { error: memErr } = await supabase
-    .from('org_memberships')
-    .insert({ org_id: org.id, user_id: user.id, role: 'owner' })
-
-  if (memErr) {
-    await supabaseAdmin.from('organizations').delete().eq('id', org.id)
-    return { org: null, error: memErr.message }
-  }
-
-  revalidatePath('/app/projects')
-  return { org: org as Organization }
-}
-
 export async function getOrganizationsForUser(): Promise<{
   orgs: Array<Organization & { role: OrgRole }>
   error?: string
