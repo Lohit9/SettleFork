@@ -44,6 +44,7 @@ import {
 } from '@/lib/actions/execution-package'
 import type { CompartmentalizedFile } from '@/lib/actions/execution-package'
 import { generateMigrationRunbook } from '@/lib/actions/migration-runbook'
+import { getDeliverableUrl, type DeliverableKey } from '@/lib/actions/deliverables'
 import { SQL_DIALECTS } from '@/lib/types/database'
 import type { SqlDialect, ExecutionPackageFormat } from '@/lib/types/database'
 import { useProjectRole } from '@/lib/hooks/useProjectRole'
@@ -173,6 +174,76 @@ function fmtDateTime(iso: string) {
   }
 }
 
+// Per-deliverable metadata used by the download pipeline:
+//  - `ext`       drives the filename extension
+//  - `mimeType`  hints the browser Blob MIME for named downloads
+//  - `basename`  is used when constructing the saved filename so the user
+//                sees a self-describing file on disk (e.g. migration_runbook_v1.docx).
+// Keys match the UI deliverable keys (e.g. 'runbook_docx', 'mapping_csv').
+const DELIVERABLE_META: Record<string, { ext: string; mimeType: string; basename: string }> = {
+  runbook_docx:      { ext: 'docx', mimeType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document', basename: 'migration_runbook' },
+  readiness_report:  { ext: 'docx', mimeType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document', basename: 'readiness_report' },
+  mapping_csv:       { ext: 'csv',  mimeType: 'text/csv',                                                                basename: 'mapping_file' },
+  mapping_json:      { ext: 'json', mimeType: 'application/json',                                                        basename: 'mapping_file' },
+  transform_specs:   { ext: 'sql',  mimeType: 'application/sql',                                                         basename: 'transformation_specs' },
+  fix_log:           { ext: 'csv',  mimeType: 'text/csv',                                                                basename: 'fix_log' },
+  data_dictionary:   { ext: 'csv',  mimeType: 'text/csv',                                                                basename: 'data_dictionary' },
+}
+
+function buildDeliverableFilename(key: string, version: string | undefined): string {
+  const meta = DELIVERABLE_META[key]
+  if (!meta) return `deliverable_v${version ?? '1'}`
+  return `${meta.basename}_v${version ?? '1'}.${meta.ext}`
+}
+
+// Attempts a blob-based download of a signed URL. Returns `true` when the
+// file was fetched successfully and the browser was cued to save it.
+// Non-throwing: any fetch failure (HTTP error, network, CORS, expired URL)
+// resolves to `false` so the caller can advance to a fallback strategy.
+async function tryDownloadFromUrl(
+  url: string,
+  filename: string,
+  mimeType: string | undefined
+): Promise<boolean> {
+  try {
+    const response = await fetch(url)
+    if (!response.ok) return false
+    const raw = await response.blob()
+    const blob = mimeType ? new Blob([raw], { type: mimeType }) : raw
+    const objectUrl = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = objectUrl
+    a.download = filename
+    document.body.appendChild(a)
+    a.click()
+    document.body.removeChild(a)
+    URL.revokeObjectURL(objectUrl)
+    return true
+  } catch {
+    return false
+  }
+}
+
+// Relative "time ago" with graceful absolute fallback past 24h.
+// Keeps the UI honest about staleness without requiring a date-fns dependency.
+function timeAgo(iso: string) {
+  try {
+    const then = new Date(iso).getTime()
+    if (Number.isNaN(then)) return iso
+    const diffMs = Date.now() - then
+    if (diffMs < 0) return 'just now'
+    const sec = Math.floor(diffMs / 1000)
+    if (sec < 45) return 'just now'
+    const min = Math.floor(sec / 60)
+    if (min < 60) return `${min}m ago`
+    const hr = Math.floor(min / 60)
+    if (hr < 24) return `${hr}h ago`
+    return fmtDateTime(iso)
+  } catch {
+    return iso
+  }
+}
+
 // ── OutputsContent ────────────────────────────────────────────────────────────
 
 // RoleTooltip is imported from @/components/app/RoleTooltip
@@ -201,7 +272,17 @@ export default function OutputsContent({ projectId, projectName, initialData, is
   const [deliverableMap, setDeliverableMap] = useState<Record<string, DeliverableState>>(
     () => buildInitialDeliverableMap(initialData.existingOutputs)
   )
-  const [generatingKey, setGeneratingKey] = useState<string | null>(null)
+  // Tracks which deliverable(s) are currently generating. A `Set` (rather
+  // than a single string) lets the Mapping row kick off CSV and JSON
+  // generations concurrently without the UI conflating the two spinners.
+  const [generatingKeys, setGeneratingKeys] = useState<Set<string>>(() => new Set())
+  // Tracks which deliverable is currently being downloaded so the row can
+  // show a spinner during the blob fetch and prevent double-clicks on slow links.
+  const [downloadingKey, setDownloadingKey] = useState<string | null>(null)
+  // Per-deliverable generation error, surfaced inline in the row so the
+  // message persists even after the transient toast fades. Cleared on
+  // successful retry.
+  const [errorMap, setErrorMap] = useState<Record<string, string>>({})
   const [allGenProgress, setAllGenProgress] = useState<string | null>(null)
 
   // Output format: 'single_file' (monolithic) | 'per_table' (compartmentalized)
@@ -658,7 +739,19 @@ export default function OutputsContent({ projectId, projectName, initialData, is
 
   const handleGenerateDeliverable = useCallback(
     async (key: string): Promise<boolean> => {
-      setGeneratingKey(key)
+      setGeneratingKeys((prev) => {
+        const next = new Set(prev)
+        next.add(key)
+        return next
+      })
+      // Clear any prior error for this key as soon as a retry starts —
+      // prevents stale red banners from lingering during a new attempt.
+      setErrorMap((prev) => {
+        if (!(key in prev)) return prev
+        const { [key]: _removed, ...rest } = prev
+        return rest
+      })
+
       const [type, format] = key.split('_') as [string, string]
 
       let result: { success: boolean; downloadUrl?: string; version?: string; error?: string }
@@ -685,9 +778,17 @@ export default function OutputsContent({ projectId, projectName, initialData, is
         result = { success: false, error: String(err) }
       }
 
-      setGeneratingKey(null)
+      setGeneratingKeys((prev) => {
+        if (!prev.has(key)) return prev
+        const next = new Set(prev)
+        next.delete(key)
+        return next
+      })
+
       if (!result.success || !result.downloadUrl) {
-        showToast(result.error ?? 'Generation failed', 'error')
+        const message = result.error ?? 'Generation failed'
+        setErrorMap((prev) => ({ ...prev, [key]: message }))
+        showToast(message, 'error')
         return false
       }
       setDeliverableMap((prev) => ({
@@ -700,23 +801,81 @@ export default function OutputsContent({ projectId, projectName, initialData, is
     [projectId]
   )
 
+  // ── Deliverable download ────────────────────────────────────────────────
+  // Downloads a previously generated deliverable as a blob with a descriptive
+  // filename. Uses a three-tier strategy so that downloads remain durable
+  // even when cached signed URLs have expired:
+  //   1. Cached URL (fresh-from-generation or SSR-hydrated)
+  //   2. Server-side refresh via `getDeliverableUrl` (mints a new 1h URL)
+  //   3. Open-in-new-tab fallback so the user always has a path to the file
+  // The `downloadingKey` state prevents double-clicks and drives the row's
+  // download spinner.
+  const handleDownloadDeliverable = useCallback(
+    async (key: string): Promise<void> => {
+      const meta = DELIVERABLE_META[key]
+      const state = deliverableMap[key]
+      const filename = buildDeliverableFilename(key, state?.version)
+
+      setDownloadingKey(key)
+      try {
+        // Tier 1: try cached signed URL
+        if (state?.downloadUrl && (await tryDownloadFromUrl(state.downloadUrl, filename, meta?.mimeType))) {
+          return
+        }
+
+        // Tier 2: refresh signed URL server-side
+        const fresh = await getDeliverableUrl(projectId, key as DeliverableKey)
+        if (!fresh.url) {
+          showToast(fresh.error ?? 'Could not refresh download link. Please regenerate this deliverable.', 'error')
+          return
+        }
+        // Cache the fresh URL for subsequent clicks in this session.
+        setDeliverableMap((prev) => {
+          const existing = prev[key]
+          if (!existing) {
+            return {
+              ...prev,
+              [key]: {
+                downloadUrl: fresh.url!,
+                version: fresh.version ?? '1.0',
+                generatedAt: fresh.generatedAt ?? new Date().toISOString(),
+              },
+            }
+          }
+          return { ...prev, [key]: { ...existing, downloadUrl: fresh.url! } }
+        })
+
+        if (await tryDownloadFromUrl(fresh.url, filename, meta?.mimeType)) {
+          return
+        }
+
+        // Tier 3: fall back to opening the URL in a new tab
+        window.open(fresh.url, '_blank', 'noopener,noreferrer')
+        showToast('Your browser blocked the direct download — the file was opened in a new tab.', 'error')
+      } finally {
+        setDownloadingKey(null)
+      }
+    },
+    [deliverableMap, projectId]
+  )
+
   // ── Generate all deliverables sequentially ──────────────────────────────
 
   async function handleGenerateAll() {
-    const steps: { key: string; label: string }[] = [
-      { key: 'runbook_docx', label: 'Generating migration runbook…' },
-      { key: 'readiness_report', label: 'Generating readiness report…' },
-      { key: 'mapping_csv', label: 'Generating mapping file…' },
-      { key: 'transform_specs', label: 'Generating transformation specs…' },
-      { key: 'fix_log', label: 'Generating fix log…' },
-      { key: 'data_dictionary', label: 'Generating data dictionary…' },
+    const steps: { key: string; label: string; progress: string }[] = [
+      { key: 'runbook_docx',     label: 'Migration Runbook',       progress: 'Generating migration runbook…' },
+      { key: 'readiness_report', label: 'Readiness Report',        progress: 'Generating readiness report…' },
+      { key: 'mapping_csv',      label: 'Mapping File',            progress: 'Generating mapping file…' },
+      { key: 'transform_specs',  label: 'Transformation Specs',    progress: 'Generating transformation specs…' },
+      { key: 'fix_log',          label: 'Fix Log',                 progress: 'Generating fix log…' },
+      { key: 'data_dictionary',  label: 'Data Dictionary',         progress: 'Generating data dictionary…' },
     ]
 
-    let anyDeliverableFailed = false
+    const failedLabels: string[] = []
     for (const step of steps) {
-      setAllGenProgress(step.label)
+      setAllGenProgress(step.progress)
       const ok = await handleGenerateDeliverable(step.key)
-      if (!ok) anyDeliverableFailed = true
+      if (!ok) failedLabels.push(step.label)
     }
 
     // Also generate the single-file execution package as part of "Generate All"
@@ -725,13 +884,11 @@ export default function OutputsContent({ projectId, projectName, initialData, is
     setOutputFormat('single_file')
     const packageOk = await handleGenerateExecutionPackage()
     setOutputFormat(savedFormat)
+    if (!packageOk) failedLabels.push('Execution Package')
 
     setAllGenProgress(null)
-    if (anyDeliverableFailed || !packageOk) {
-      showToast(
-        'One or more steps failed. See the messages above.',
-        'error'
-      )
+    if (failedLabels.length > 0) {
+      showToast(`Failed: ${failedLabels.join(', ')}. See individual rows for details.`, 'error')
     } else {
       showToast('All deliverables generated', 'success')
     }
@@ -1531,7 +1688,7 @@ export default function OutputsContent({ projectId, projectName, initialData, is
                 <button
                   className="text-xs text-settle-slate-500 hover:text-settle-slate-700 transition-colors flex items-center gap-1.5 disabled:opacity-40 flex-shrink-0"
                   onClick={handleGenerateAll}
-                  disabled={generatingKey !== null || !canEdit}
+                  disabled={generatingKeys.size > 0 || !canEdit}
                 >
                   <Sparkles className="w-3.5 h-3.5" />
                   {allGenProgress ?? 'Generate All Deliverables'}
@@ -1548,8 +1705,12 @@ export default function OutputsContent({ projectId, projectName, initialData, is
                   title="Migration Runbook"
                   shortDescription="Step-by-step execution guide"
                   icon={<FileTextLucide size={13} className="text-settle-slate-500" />}
+                  state={deliverableMap['runbook_docx']}
+                  error={errorMap['runbook_docx']}
                   onGenerate={() => handleGenerateDeliverable('runbook_docx')}
-                  isGenerating={generatingKey === 'runbook_docx'}
+                  onDownload={() => handleDownloadDeliverable('runbook_docx')}
+                  isGenerating={generatingKeys.has('runbook_docx')}
+                  isDownloading={downloadingKey === 'runbook_docx'}
                   isArchived={isArchived}
                   canEdit={canEdit}
                 />
@@ -1559,8 +1720,12 @@ export default function OutputsContent({ projectId, projectName, initialData, is
                   title="Readiness Report"
                   shortDescription="Go/no-go recommendation"
                   icon={<BarChart2 size={13} className="text-settle-slate-500" />}
+                  state={deliverableMap['readiness_report']}
+                  error={errorMap['readiness_report']}
                   onGenerate={() => handleGenerateDeliverable('readiness_report')}
-                  isGenerating={generatingKey === 'readiness_report'}
+                  onDownload={() => handleDownloadDeliverable('readiness_report')}
+                  isGenerating={generatingKeys.has('readiness_report')}
+                  isDownloading={downloadingKey === 'readiness_report'}
                   isArchived={isArchived}
                   canEdit={canEdit}
                 />
@@ -1572,9 +1737,18 @@ export default function OutputsContent({ projectId, projectName, initialData, is
                   title="Mapping File"
                   shortDescription="Field-to-field mapping spec"
                   icon={<GitMerge size={13} className="text-settle-slate-500" />}
+                  csvState={deliverableMap['mapping_csv']}
+                  jsonState={deliverableMap['mapping_json']}
+                  csvError={errorMap['mapping_csv']}
+                  jsonError={errorMap['mapping_json']}
                   onGenerateCSV={() => handleGenerateDeliverable('mapping_csv')}
                   onGenerateJSON={() => handleGenerateDeliverable('mapping_json')}
-                  isGenerating={generatingKey === 'mapping_csv' || generatingKey === 'mapping_json'}
+                  onDownloadCSV={() => handleDownloadDeliverable('mapping_csv')}
+                  onDownloadJSON={() => handleDownloadDeliverable('mapping_json')}
+                  isGeneratingCSV={generatingKeys.has('mapping_csv')}
+                  isGeneratingJSON={generatingKeys.has('mapping_json')}
+                  isDownloadingCSV={downloadingKey === 'mapping_csv'}
+                  isDownloadingJSON={downloadingKey === 'mapping_json'}
                   isArchived={isArchived}
                   canEdit={canEdit}
                 />
@@ -1584,8 +1758,12 @@ export default function OutputsContent({ projectId, projectName, initialData, is
                   title="Transformation Specs"
                   shortDescription="SQL transforms with field context"
                   icon={<Code2 size={13} className="text-settle-slate-500" />}
+                  state={deliverableMap['transform_specs']}
+                  error={errorMap['transform_specs']}
                   onGenerate={() => handleGenerateDeliverable('transform_specs')}
-                  isGenerating={generatingKey === 'transform_specs'}
+                  onDownload={() => handleDownloadDeliverable('transform_specs')}
+                  isGenerating={generatingKeys.has('transform_specs')}
+                  isDownloading={downloadingKey === 'transform_specs'}
                   isArchived={isArchived}
                   canEdit={canEdit}
                 />
@@ -1597,8 +1775,12 @@ export default function OutputsContent({ projectId, projectName, initialData, is
                   title="Fix Log & Audit Trail"
                   shortDescription="Chronological record of all fixes"
                   icon={<Clock size={13} className="text-settle-slate-500" />}
+                  state={deliverableMap['fix_log']}
+                  error={errorMap['fix_log']}
                   onGenerate={() => handleGenerateDeliverable('fix_log')}
-                  isGenerating={generatingKey === 'fix_log'}
+                  onDownload={() => handleDownloadDeliverable('fix_log')}
+                  isGenerating={generatingKeys.has('fix_log')}
+                  isDownloading={downloadingKey === 'fix_log'}
                   isArchived={isArchived}
                   canEdit={canEdit}
                 />
@@ -1608,8 +1790,12 @@ export default function OutputsContent({ projectId, projectName, initialData, is
                   title="Data Dictionary"
                   shortDescription="Schema docs with data types"
                   icon={<BookOpen size={13} className="text-settle-slate-500" />}
+                  state={deliverableMap['data_dictionary']}
+                  error={errorMap['data_dictionary']}
                   onGenerate={() => handleGenerateDeliverable('data_dictionary')}
-                  isGenerating={generatingKey === 'data_dictionary'}
+                  onDownload={() => handleDownloadDeliverable('data_dictionary')}
+                  isGenerating={generatingKeys.has('data_dictionary')}
+                  isDownloading={downloadingKey === 'data_dictionary'}
                   isArchived={isArchived}
                   canEdit={canEdit}
                 />
@@ -1625,220 +1811,340 @@ export default function OutputsContent({ projectId, projectName, initialData, is
 }
 
 // ── CompactDeliverableRow ─────────────────────────────────────────────────────
+//
+// Renders a single deliverable row in the Deliverable Package grid. Each row
+// has four visual states:
+//
+//   1. Idle      — unified "Generate" control
+//   2. Generating — spinner + "Generating…" label
+//   3. Generated — green "Generated" pill + version pill + relative timestamp
+//                  + primary "Download" button + ghost Regenerate icon
+//   4. Dual-format (Mapping File only) — two independent sub-rows for CSV /
+//                                        JSON, each with its own state
+//
+// The component is intentionally dumb: all state is passed in via props so
+// that the parent owns both generation and download lifecycle (enabling
+// shared toasts, signed-URL refresh, and role gating).
 
 interface CompactDeliverableRowProps {
   title: string
   shortDescription: string
   icon: React.ReactNode
-  onGenerate?: () => void
-  onGenerateCSV?: () => void
-  onGenerateJSON?: () => void
-  isGenerating: boolean
   isArchived: boolean
   canEdit: boolean
+
+  // Single-format deliverable (all rows except Mapping File).
+  state?: DeliverableState
+  error?: string
+  onGenerate?: () => void
+  onDownload?: () => void
+  isGenerating?: boolean
+  isDownloading?: boolean
+
+  // Dual-format deliverable (Mapping File — CSV and JSON are tracked independently).
+  csvState?: DeliverableState
+  jsonState?: DeliverableState
+  csvError?: string
+  jsonError?: string
+  onGenerateCSV?: () => void
+  onGenerateJSON?: () => void
+  onDownloadCSV?: () => void
+  onDownloadJSON?: () => void
+  isGeneratingCSV?: boolean
+  isGeneratingJSON?: boolean
+  isDownloadingCSV?: boolean
+  isDownloadingJSON?: boolean
 }
 
-function CompactDeliverableRow({
-  title,
-  shortDescription,
-  icon,
-  onGenerate,
-  onGenerateCSV,
-  onGenerateJSON,
-  isGenerating,
-  isArchived,
-  canEdit,
-}: CompactDeliverableRowProps) {
+function CompactDeliverableRow(props: CompactDeliverableRowProps) {
+  const { title, shortDescription, icon, isArchived, canEdit } = props
+  const isDualFormat =
+    typeof props.onGenerateCSV === 'function' && typeof props.onGenerateJSON === 'function'
+
+  // ── Dual-format (Mapping File) ───────────────────────────────────────────
+  if (isDualFormat) {
+    return (
+      <div className="p-4">
+        <div className="flex items-start gap-3">
+          <div className="flex items-center justify-center w-7 h-7 rounded-md bg-settle-slate-50 border border-gray-100 flex-shrink-0 mt-0.5">
+            {icon}
+          </div>
+          <div className="min-w-0 flex-1">
+            <p className="text-sm font-medium text-settle-slate-900 truncate">{title}</p>
+            <p className="text-xs text-settle-slate-400 mt-0.5">{shortDescription}</p>
+          </div>
+        </div>
+        {!isArchived && (
+          <div className="mt-2 pl-10 space-y-1.5">
+            <DeliverableFormatSubRow
+              format="CSV"
+              state={props.csvState}
+              error={props.csvError}
+              onGenerate={props.onGenerateCSV!}
+              onDownload={props.onDownloadCSV}
+              isGenerating={Boolean(props.isGeneratingCSV)}
+              isDownloading={Boolean(props.isDownloadingCSV)}
+              canEdit={canEdit}
+            />
+            <DeliverableFormatSubRow
+              format="JSON"
+              state={props.jsonState}
+              error={props.jsonError}
+              onGenerate={props.onGenerateJSON!}
+              onDownload={props.onDownloadJSON}
+              isGenerating={Boolean(props.isGeneratingJSON)}
+              isDownloading={Boolean(props.isDownloadingJSON)}
+              canEdit={canEdit}
+            />
+          </div>
+        )}
+      </div>
+    )
+  }
+
+  // ── Single-format layout ─────────────────────────────────────────────────
+  const { state, error, onGenerate, onDownload, isGenerating, isDownloading } = props
+  const hasGenerated = Boolean(state?.downloadUrl)
+  const showError = Boolean(error) && !isGenerating
+
   return (
-    <div className="flex items-start justify-between gap-3 p-4">
-      <div className="flex items-start gap-3 min-w-0 flex-1">
-        <div className="flex items-center justify-center w-7 h-7 rounded-md bg-settle-slate-50 border border-gray-100 flex-shrink-0 mt-0.5">
-          {icon}
+    <div className="p-4">
+      <div className="flex items-start justify-between gap-3">
+        <div className="flex items-start gap-3 min-w-0 flex-1">
+          <div className="flex items-center justify-center w-7 h-7 rounded-md bg-settle-slate-50 border border-gray-100 flex-shrink-0 mt-0.5">
+            {icon}
+          </div>
+          <div className="min-w-0">
+            <div className="flex items-center gap-1.5 flex-wrap">
+              <p className="text-sm font-medium text-settle-slate-900 truncate">{title}</p>
+              {hasGenerated && state?.version && (
+                <span className="inline-flex items-center px-1.5 py-0.5 rounded-full text-[10px] font-medium bg-gray-100 text-gray-600 border border-gray-200 whitespace-nowrap">
+                  v{state.version}
+                </span>
+              )}
+            </div>
+            <p className="text-xs text-settle-slate-400 mt-0.5 truncate">
+              {hasGenerated && state?.generatedAt
+                ? `Generated ${timeAgo(state.generatedAt)}`
+                : shortDescription}
+            </p>
+          </div>
         </div>
-        <div className="min-w-0">
-          <p className="text-sm font-medium text-settle-slate-900 truncate">{title}</p>
-          <p className="text-xs text-settle-slate-400 mt-0.5">{shortDescription}</p>
-        </div>
+
+        {!isArchived && (
+          <div className="flex items-center gap-2 flex-shrink-0 mt-0.5">
+            {isGenerating ? (
+              <div className="flex items-center gap-1.5 text-xs text-settle-slate-400">
+                <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                <span>Generating…</span>
+              </div>
+            ) : hasGenerated ? (
+              <>
+                <button
+                  type="button"
+                  onClick={onDownload}
+                  disabled={isDownloading || !onDownload}
+                  aria-label={`Download ${title}`}
+                  className="flex items-center gap-1 text-xs text-gray-500 hover:text-gray-800 font-medium disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+                >
+                  {isDownloading
+                    ? <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                    : <Download className="w-3.5 h-3.5" />
+                  }
+                  Download
+                </button>
+                <button
+                  type="button"
+                  onClick={onGenerate}
+                  disabled={!canEdit || !onGenerate}
+                  aria-label={`Regenerate ${title}`}
+                  className="flex items-center gap-1 text-xs text-gray-500 hover:text-gray-800 font-medium disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+                >
+                  <RefreshCw className="w-3.5 h-3.5" />
+                  Regenerate
+                </button>
+              </>
+            ) : showError ? (
+              <button
+                type="button"
+                onClick={onGenerate}
+                disabled={!canEdit || !onGenerate}
+                className="inline-flex items-center gap-1 text-xs font-medium text-red-600 hover:text-red-700 disabled:opacity-40 transition-colors"
+              >
+                <RefreshCw className="w-3 h-3" />
+                Try Again
+              </button>
+            ) : (
+              <button
+                type="button"
+                onClick={onGenerate}
+                disabled={!canEdit || !onGenerate}
+                className="text-xs text-settle-slate-500 hover:text-settle-slate-700 disabled:opacity-40 transition-colors flex items-center gap-1"
+              >
+                <RefreshCw className="w-3 h-3" />
+                Generate
+              </button>
+            )}
+          </div>
+        )}
       </div>
 
-      {!isArchived && (
-        <div className="flex items-center gap-2 flex-shrink-0 mt-0.5">
-          {isGenerating ? (
-            <RefreshCw className="w-3.5 h-3.5 text-settle-slate-400 animate-spin" />
-          ) : onGenerateCSV && onGenerateJSON ? (
-            <>
-              <button
-                onClick={onGenerateCSV}
-                disabled={!canEdit}
-                className="text-xs text-settle-slate-500 hover:text-settle-slate-700 disabled:opacity-40 transition-colors flex items-center gap-1"
-              >
-                <RefreshCw className="w-3 h-3" />
-                CSV
-              </button>
-              <button
-                onClick={onGenerateJSON}
-                disabled={!canEdit}
-                className="text-xs text-settle-slate-500 hover:text-settle-slate-700 disabled:opacity-40 transition-colors flex items-center gap-1"
-              >
-                <RefreshCw className="w-3 h-3" />
-                JSON
-              </button>
-            </>
-          ) : (
-            <button
-              onClick={onGenerate}
-              disabled={!canEdit}
-              className="text-xs text-settle-slate-500 hover:text-settle-slate-700 disabled:opacity-40 transition-colors flex items-center gap-1"
-            >
-              <RefreshCw className="w-3 h-3" />
-              Generate
-            </button>
-          )}
+      {showError && (
+        <div className="mt-2 ml-10 flex items-start gap-1.5 text-[11px] text-red-700 bg-red-50 border border-red-100 rounded-md px-2 py-1.5">
+          <AlertCircle className="w-3 h-3 mt-0.5 flex-shrink-0 text-red-500" />
+          <span className="break-words">{error}</span>
         </div>
       )}
     </div>
   )
 }
 
-// ── DeliverableCard ───────────────────────────────────────────────────────────
+// ── DeliverableFormatSubRow ───────────────────────────────────────────────────
+//
+// Sub-row used inside the dual-format Mapping File row. Each format (CSV /
+// JSON) tracks its own generation and download lifecycle so a user can
+// produce either or both independently without the UI conflating them.
 
-interface FormatSpec {
-  key: string
-  label: string
-  ext: string
-}
-
-interface DeliverableCardProps {
-  title: string
-  description: string
-  icon: React.ReactNode
-  formats: FormatSpec[]
+interface DeliverableFormatSubRowProps {
+  format: 'CSV' | 'JSON'
   state?: DeliverableState
-  stateMap?: Record<string, DeliverableState>
+  error?: string
+  onGenerate: () => void
+  onDownload?: () => void
   isGenerating: boolean
-  onGenerate?: () => void
-  onGenerateMap?: (key: string) => void
-  existingOutput?: ExistingOutput
-  isArchived?: boolean
+  isDownloading: boolean
+  canEdit: boolean
 }
 
-function DeliverableCard({ title, description, icon, formats, state, stateMap, isGenerating, onGenerate, onGenerateMap, existingOutput, isArchived = false }: DeliverableCardProps) {
-  const hasMultiple = formats.length > 1
-
-  const getState = (key: string) => (stateMap ? stateMap[key] : state)
-
-  const activeState = hasMultiple
-    ? formats.map((f) => getState(f.key)).find(Boolean)
-    : state
-
-  const version = activeState?.version ?? existingOutput?.version
-  const generatedAt = activeState?.generatedAt ?? existingOutput?.generated_at
+function DeliverableFormatSubRow({
+  format,
+  state,
+  error,
+  onGenerate,
+  onDownload,
+  isGenerating,
+  isDownloading,
+  canEdit,
+}: DeliverableFormatSubRowProps) {
+  const hasGenerated = Boolean(state?.downloadUrl)
+  const showError = Boolean(error) && !isGenerating
 
   return (
-    <div className="bg-white border border-gray-100 rounded-lg shadow-sm p-5">
-      <div className="flex items-start justify-between gap-4">
-        <div className="flex items-start gap-3 flex-1 min-w-0">
-          <div className="flex items-center justify-center w-8 h-8 rounded-md bg-settle-slate-50 border border-gray-100 flex-shrink-0">
-            {icon}
-          </div>
-          <div className="min-w-0">
-            <div className="flex items-center gap-2 mb-1">
-              <h3 className="text-sm font-semibold text-gray-900">{title}</h3>
-              {version && (
-                <Badge className="bg-gray-100 text-gray-500 hover:bg-gray-100 border-gray-100 text-[10px]">v{version}</Badge>
-              )}
-              {(activeState || existingOutput) && (
-                <Badge className="bg-green-100 text-green-700 hover:bg-green-100 border-green-200 text-[10px]">
-                  <CheckCircle2 className="w-2.5 h-2.5 mr-1" />Generated
-                </Badge>
-              )}
-            </div>
-            <p className="text-xs text-gray-500 leading-relaxed">{description}</p>
-            {generatedAt && (
-              <p className="text-[10px] text-gray-400 mt-1">Last generated {fmtDateTime(generatedAt)}</p>
-            )}
-          </div>
+    <div>
+      <div className="flex items-center justify-between gap-2">
+        <div className="flex items-center gap-1.5 min-w-0">
+          <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-semibold text-settle-slate-600 bg-settle-slate-100 border border-settle-slate-200">
+            {format}
+          </span>
+          {hasGenerated && state?.version && (
+            <span className="text-[10px] text-settle-slate-400">v{state.version}</span>
+          )}
+          {hasGenerated && state?.generatedAt && (
+            <span className="text-[10px] text-settle-slate-400">· {timeAgo(state.generatedAt)}</span>
+          )}
         </div>
 
-        <div className="flex items-center gap-2 flex-shrink-0">
-          {/* Download buttons for existing outputs */}
-          {!hasMultiple && (
+        <div className="flex items-center gap-1.5 flex-shrink-0">
+          {isGenerating ? (
+            <div className="flex items-center gap-1 text-[11px] text-settle-slate-400">
+              <RefreshCw className="w-3 h-3 animate-spin" />
+              <span>Generating…</span>
+            </div>
+          ) : hasGenerated ? (
             <>
-              {(activeState?.downloadUrl ?? existingOutput?.signedUrl) && (
-                <a
-                  href={activeState?.downloadUrl ?? existingOutput?.signedUrl ?? '#'}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="flex items-center gap-1.5 px-3 py-1.5 text-sm font-medium text-blue-600 hover:text-blue-700 border border-blue-200 rounded-lg hover:bg-blue-50 transition-colors"
-                >
-                  <Download className="w-3.5 h-3.5" />
-                  {formats[0]?.label ?? 'Download'}
-                </a>
-              )}
-              {!isArchived && (
-                <Button
-                  size="sm"
-                  variant="outline"
-                  onClick={onGenerate}
-                  disabled={isGenerating}
-                  className="gap-1.5"
-                >
-                  <RefreshCw className={`w-3.5 h-3.5 ${isGenerating ? 'animate-spin' : ''}`} />
-                  {isGenerating ? 'Generating…' : activeState || existingOutput ? 'Regenerate' : 'Generate'}
-                </Button>
-              )}
+              <button
+                type="button"
+                onClick={onDownload}
+                disabled={isDownloading || !onDownload}
+                aria-label={`Download ${format}`}
+                className="flex items-center gap-1 text-xs text-gray-500 hover:text-gray-800 font-medium disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+              >
+                {isDownloading
+                  ? <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                  : <Download className="w-3.5 h-3.5" />
+                }
+                Download
+              </button>
+              <button
+                type="button"
+                onClick={onGenerate}
+                disabled={!canEdit}
+                aria-label={`Regenerate ${format}`}
+                className="flex items-center gap-1 text-xs text-gray-500 hover:text-gray-800 font-medium disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+              >
+                <RefreshCw className="w-3.5 h-3.5" />
+                Regenerate
+              </button>
             </>
+          ) : showError ? (
+            <button
+              type="button"
+              onClick={onGenerate}
+              disabled={!canEdit}
+              className="inline-flex items-center gap-1 text-[11px] font-medium text-red-600 hover:text-red-700 disabled:opacity-40 transition-colors"
+            >
+              <RefreshCw className="w-2.5 h-2.5" />
+              Try Again
+            </button>
+          ) : (
+            <button
+              type="button"
+              onClick={onGenerate}
+              disabled={!canEdit}
+              className="text-[11px] text-settle-slate-500 hover:text-settle-slate-700 disabled:opacity-40 transition-colors flex items-center gap-1"
+            >
+              <RefreshCw className="w-2.5 h-2.5" />
+              Generate {format}
+            </button>
           )}
-
-          {/* Multi-format buttons */}
-          {hasMultiple && formats.map((fmt) => {
-            const fmtState = getState(fmt.key)
-            const existingFmt = existingOutput // simplified: same existing output for all
-            const dlUrl = fmtState?.downloadUrl ?? (fmt.key.endsWith('json') && existingFmt?.format === 'json' ? existingFmt.signedUrl : fmt.key.endsWith('csv') && existingFmt?.format === 'csv' ? existingFmt.signedUrl : undefined)
-            return (
-              <div key={fmt.key} className="flex items-center gap-1">
-                {dlUrl && (
-                  <a href={dlUrl} target="_blank" rel="noopener noreferrer"
-                    className="flex items-center gap-1 px-2.5 py-1.5 text-xs font-medium text-blue-600 border border-blue-200 rounded-lg hover:bg-blue-50">
-                    <Download className="w-3 h-3" />{fmt.ext.toUpperCase()}
-                  </a>
-                )}
-                {!isArchived && (
-                  <Button size="sm" variant="outline" className="text-xs gap-1 py-1 h-7"
-                    onClick={() => onGenerateMap?.(fmt.key)}
-                    disabled={isGenerating}
-                  >
-                    <RefreshCw className={`w-3 h-3 ${isGenerating ? 'animate-spin' : ''}`} />
-                    {fmtState ? 'Regen' : fmt.ext.toUpperCase()}
-                  </Button>
-                )}
-              </div>
-            )
-          })}
         </div>
       </div>
+
+      {showError && (
+        <div className="mt-1 flex items-start gap-1 text-[11px] text-red-700 bg-red-50 border border-red-100 rounded-md px-2 py-1">
+          <AlertCircle className="w-3 h-3 mt-0.5 flex-shrink-0 text-red-500" />
+          <span className="break-words">{error}</span>
+        </div>
+      )}
     </div>
   )
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
+// Rehydrate the deliverable state from previously generated outputs.
+// The UI key format is `<type>_<format>` so that multi-format deliverables
+// (e.g. Mapping File has both CSV and JSON variants) are tracked independently.
+// For each UI key we keep only the latest generation by `generated_at`.
 function buildInitialDeliverableMap(outputs: ExistingOutput[]): Record<string, DeliverableState> {
   const map: Record<string, DeliverableState> = {}
-  const typeToKey: Record<string, string> = {
-    migration_runbook: 'runbook_docx',
-    readiness_report: 'readiness_report',
-    mapping_file: 'mapping_csv',
-    transformation_specs: 'transform_specs',
-    fix_log: 'fix_log',
-    data_dictionary: 'data_dictionary',
+
+  const resolveKey = (o: ExistingOutput): string | null => {
+    switch (o.type) {
+      case 'migration_runbook':
+        return 'runbook_docx'
+      case 'readiness_report':
+        return 'readiness_report'
+      case 'mapping_file':
+        // Format-aware: CSV and JSON mapping exports are surfaced as separate rows.
+        return o.format === 'json' ? 'mapping_json' : 'mapping_csv'
+      case 'transformation_specs':
+        return 'transform_specs'
+      case 'fix_log':
+        return 'fix_log'
+      case 'data_dictionary':
+        return 'data_dictionary'
+      default:
+        return null
+    }
   }
+
   for (const o of outputs) {
-    const key = typeToKey[o.type]
-    if (key && o.signedUrl) {
-      if (!map[key] || new Date(o.generated_at) > new Date(map[key].generatedAt)) {
-        map[key] = { downloadUrl: o.signedUrl, version: o.version, generatedAt: o.generated_at }
-      }
+    const key = resolveKey(o)
+    if (!key || !o.signedUrl) continue
+    const existing = map[key]
+    if (!existing || new Date(o.generated_at) > new Date(existing.generatedAt)) {
+      map[key] = { downloadUrl: o.signedUrl, version: o.version, generatedAt: o.generated_at }
     }
   }
   return map
