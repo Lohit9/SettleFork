@@ -17,10 +17,20 @@ Last updated: 2026-04-20
 ## Engineering — Tier 1 (near-term)
 
 ### Security
-- [ ] Replace `supabase.auth.admin.listUsers({ perPage: 1000 })` 
-      pattern with `findAuthUserByEmail` helper across 5 call sites. 
-      Has a silent correctness ceiling at 1000 users. 
-      (Scheduled: 2026-04-20, separate PR before SSO Prompt A)
+- [ ] listUsers refactor: replace `supabase.auth.admin.listUsers({ 
+      perPage: 1000 })` pattern across 5 call sites. Design finalized 
+      as 3 helpers (`findAuthUserByEmail` / `authUserExistsByEmail` / 
+      `getAuthEmailsByIds`) backed by SECURITY DEFINER RPCs in 
+      migration 069. Split into 3 sequential commits by risk / file:
+        - Commit 3.1 ✅ `getOrgMembers` + `adminGetOrgMembers` 
+          (`lib/actions/organizations.ts`, `getAuthEmailsByIds`)
+        - Commit 3.2 ⏳ `createOrgInvite` + `adminCreateOrgInvite` 
+          (`lib/actions/org-invites.ts`, `findAuthUserByEmail`)
+        - Commit 3.3 ⏳ InvitePage (`app/invite/[token]/page.tsx`, 
+          `authUserExistsByEmail` + removes orphaned `supabaseAdmin` 
+          import)
+      Silent correctness ceiling at 1000 users is the root issue; 
+      above 1000 users, emails for later members silently disappear.
 - [ ] SSO epic — Prompt A (migration, types, admin API surface, 
       bookmark app endpoint). (Scheduled: 2026-04-20)
 - [ ] SSO epic — Prompt B (middleware + login + callback with 
@@ -38,6 +48,21 @@ Last updated: 2026-04-20
 - [ ] Subprocessors page. Item 1.H.
 - [ ] Per-org IP allowlisting (middleware-enforced). Item 1.I.
 - [ ] Data residency documentation. Item 1.J.
+- [ ] Configure ESLint for the project. Currently no `.eslintrc.*` 
+      file exists; CI would have no style enforcement beyond `tsc`. 
+      Add `@typescript-eslint/recommended` + `next/core-web-vitals` + 
+      a minimal prettier config. Low urgency but should be in place 
+      before the pen test engagement (May 12) since vendors often 
+      check for linting hygiene as a code-quality signal.
+- [ ] Replace the `'none'` sentinel pattern in `createOrgInvite` 
+      (`lib/actions/org-invites.ts`, preserved in Commit 3.2 of the 
+      listUsers refactor). Currently `.eq('user_id', 
+      existingAuthUser?.id ?? 'none')` relies on a UUID-cast error to 
+      silently return no match. Should be replaced with an explicit 
+      early-return or `if (existingAuthUser) { ... }` gate. Low 
+      urgency, low risk, but removes a latent foot-gun. Defer until 
+      after Commit 3.3 ships so the git history of the listUsers 
+      refactor stays clean.
 
 ### Planned Tier 2
 - [ ] MFA enforcement policy (grace period, recovery codes).
@@ -102,10 +127,15 @@ to "Planned" or "Rejected" once a decision is made.)_
 - Anthropic zero-retention email sent 2026-04-19, awaiting response 
   (follow up 2026-04-27 if no reply).
 - Pen test vendor outreach in flight:
-  - Cobalt: contact form submitted; demo scheduled 2026-04-21.
-  - Include Security: email delivered 2026-04-19; follow up via 
-    contact form Thursday 2026-04-24 if no reply.
-  - Doyensec: email sent 2026-04-19; awaiting response.
+  - Cobalt: demo rescheduled to 2026-04-21 (tomorrow). Prep doc 
+    prepared; will debrief post-call.
+  - Include Security: email delivered 2026-04-19; no response yet. 
+    Follow up via contact form if no reply by Thursday 2026-04-24.
+  - Doyensec: email sent 2026-04-19 with updated tier commitment 
+    scope; awaiting response.
+  - Latacora: skipped (business model mismatch — they sell retained 
+    security teams, not one-off pen tests).
+  - 4th vendor: decided to skip after Cobalt demo was booked.
 - GitHub repo renamed from `kaandincer/mine` → `kaandincer/settle` on 
   2026-04-20 to align with product rebrand. Local remote updated same 
   day. Old URL still redirects temporarily; reliance on redirect 
@@ -120,3 +150,16 @@ to "Planned" or "Rejected" once a decision is made.)_
       all call sites migrated to `adminCreateOrganization` or inlined 
       `supabaseAdmin` inserts) + stale comment cleanup in 
       `lib/actions/auth.ts:133`. Commit: 5b1b89c.
+- [x] 2026-04-20 — Rebased dev onto main to pull in OutputsContent 
+      hotfix (commit b1c3c21). Dev is now a strict superset of main; 
+      future dev→main merges will be clean fast-forwards.
+- [x] 2026-04-20 — Migration 069: created `find_auth_user_by_email` + 
+      `get_auth_emails_by_ids` SECURITY DEFINER RPCs. Applied to 
+      production Supabase. Commit: 89a520b (now 89a520b post-rebase).
+- [x] 2026-04-20 — Added `lib/auth/users.ts` helper module 
+      (`findAuthUserByEmail`, `authUserExistsByEmail`, 
+      `getAuthEmailsByIds`). Commit: 0bf0873.
+- [x] 2026-04-20 — Commit 3.1 of listUsers refactor: replaced 
+      `listUsers` scan in `getOrgMembers` + `adminGetOrgMembers` 
+      (`lib/actions/organizations.ts`) with `getAuthEmailsByIds`. 
+      Commit: 9f542f5.
