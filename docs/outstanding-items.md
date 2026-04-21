@@ -17,8 +17,6 @@ Last updated: 2026-04-20
 ## Engineering — Tier 1 (near-term, pilot-blocking)
 
 ### Security
-- [ ] SSO epic — Prompt A (migration, types, admin API surface, 
-      bookmark app endpoint). (Scheduled: 2026-04-21)
 - [ ] SSO epic — Prompt B (middleware + login + callback with 
       dedupe-on-login). (Scheduled: 2026-04-21)
 - [ ] SSO epic — Prompt C (invite flow + identity linking). 
@@ -470,3 +468,16 @@ next worked on; seed content from Cursor/Claude analysis done
       All grants are `service_role`-only except `is_sso_user` (also 
       `authenticated`, for middleware). Verified V1–V10 post-apply. 
       Commit: 4d909ab (Prompt A1 of SSO epic).
+- [x] 2026-04-21 — SSO Prompt A complete (A1 + A2). Migration 070 
+      + types + call-site propagation + 5 new application files:
+        - `lib/sso/gotrue-admin.ts` (GoTrue REST helper)
+        - `lib/sso/email-hash.ts` (pure sync SHA-256 hash utility)
+        - `lib/actions/sso-audit.ts` (audit event emitter)
+        - `lib/actions/sso.ts` (8 server actions for SSO admin)
+        - `app/sso/start/route.ts` (IdP-initiated bookmark endpoint)
+      Locked 27 design decisions across A1 + A2 sessions. All 
+      admin-gated actions use `requirePlatformAdmin()`. 
+      `checkSSOEnabledForEmail` is the only public action; logs 
+      `email_hash` per call for observability. RPC grants 
+      `service_role`-only except `is_sso_user` (`authenticated`). 
+      Commits: 4d909ab (A1), b4bf5cf (A2).
