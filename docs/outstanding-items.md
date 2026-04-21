@@ -177,6 +177,37 @@ Tracks alongside the Tier 1 security epic above.
 
 ---
 
+## Testing tasks
+
+Validation work deferred until a later stage has enough surface area 
+to exercise it. Items here are not bugs — they are known-unknowns 
+that need empirical confirmation.
+
+### SSO (Prompt D or post-Prompt D)
+- [ ] Validate GoTrue error response shapes against real API responses. 
+      A2's defensive error parser handles unknown shapes by extracting 
+      any available message fields, but the exact shape of each 
+      failure mode (duplicate domain, malformed metadata, invalid 
+      entity ID) is not empirically verified. Test during first real 
+      IdP configuration in Prompt D or earlier if a vendor conversation 
+      requires a live demo.
+- [ ] Validate PKCE cookie persistence across `/sso/start` → IdP → 
+      `/api/auth/callback` flow. SDK source analysis confirmed the 
+      flow should work, but `@supabase/ssr` issue #55 documents a 
+      known class of PKCE cookie bugs. Real test requires full SAML 
+      round-trip; first real SSO login in Prompt D will surface any 
+      issues. Symptom of failure: callback errors with "missing code 
+      verifier."
+- [ ] End-to-end SSO flow validation with real IdP. Okta developer 
+      tenant recommended (free, quick setup). Alternatives: Azure AD 
+      tenant, Google Workspace test domain. Test scope: configure 
+      provider via `/admin/sso`, log in via SSO, verify session 
+      cookie, verify `sso_identity_links` row created, verify 
+      `sso.login.success` audit event emitted. Do during Prompt D 
+      smoke testing.
+
+---
+
 ## Open design questions
 
 Design-level decisions that need to be made before certain work 
