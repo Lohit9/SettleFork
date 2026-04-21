@@ -17,20 +17,6 @@ Last updated: 2026-04-20
 ## Engineering — Tier 1 (near-term)
 
 ### Security
-- [ ] listUsers refactor: replace `supabase.auth.admin.listUsers({ 
-      perPage: 1000 })` pattern across 5 call sites. Design finalized 
-      as 3 helpers (`findAuthUserByEmail` / `authUserExistsByEmail` / 
-      `getAuthEmailsByIds`) backed by SECURITY DEFINER RPCs in 
-      migration 069. Split into 3 sequential commits by risk / file:
-        - Commit 3.1 ✅ `getOrgMembers` + `adminGetOrgMembers` 
-          (`lib/actions/organizations.ts`, `getAuthEmailsByIds`)
-        - Commit 3.2 ⏳ `createOrgInvite` + `adminCreateOrgInvite` 
-          (`lib/actions/org-invites.ts`, `findAuthUserByEmail`)
-        - Commit 3.3 ⏳ InvitePage (`app/invite/[token]/page.tsx`, 
-          `authUserExistsByEmail` + removes orphaned `supabaseAdmin` 
-          import)
-      Silent correctness ceiling at 1000 users is the root issue; 
-      above 1000 users, emails for later members silently disappear.
 - [ ] SSO epic — Prompt A (migration, types, admin API surface, 
       bookmark app endpoint). (Scheduled: 2026-04-20)
 - [ ] SSO epic — Prompt B (middleware + login + callback with 
@@ -163,3 +149,11 @@ to "Planned" or "Rejected" once a decision is made.)_
       `listUsers` scan in `getOrgMembers` + `adminGetOrgMembers` 
       (`lib/actions/organizations.ts`) with `getAuthEmailsByIds`. 
       Commit: 9f542f5.
+- [x] 2026-04-20 — Completed listUsers refactor: all 5 call sites 
+      migrated to SECURITY DEFINER RPC-backed helpers from 
+      `lib/auth/users.ts`. Commits: 9f542f5 (org member listings), 
+      <commit-3.2-hash> (invite creation pre-check), 
+      <commit-3.3-hash> (public invite page). Silent correctness 
+      ceiling at 1000 users eliminated; all `auth.users` access now 
+      flows through 3 named, audited RPCs with EXECUTE granted only 
+      to `service_role`.
