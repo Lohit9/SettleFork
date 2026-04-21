@@ -126,6 +126,11 @@ to "Planned" or "Rejected" once a decision is made.)_
   2026-04-20 to align with product rebrand. Local remote updated same 
   day. Old URL still redirects temporarily; reliance on redirect 
   deprecated.
+- 2026-04-20: Full day of security engineering — completed listUsers 
+  refactor (migration 069, lib/auth/users.ts, 3 refactor commits), 
+  createOrganization dead code removal, dev rebased onto main. 15 
+  commits on dev ahead of main. SSO epic starts 2026-04-21 after 
+  Cobalt call.
 
 ---
 
