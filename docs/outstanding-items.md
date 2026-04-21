@@ -427,3 +427,15 @@ next worked on; seed content from Cursor/Claude analysis done
       users eliminated; all `auth.users` access now flows 
       through 3 named, audited RPCs with EXECUTE granted only 
       to `service_role`.
+- [x] 2026-04-21 — Migration 070 applied to production: SAML 2.0 
+      SSO foundation. Adds `sso_providers`, `sso_domains`, 
+      `sso_identity_links`, `sso_audit_events` tables + 6 SECURITY 
+      DEFINER RPCs (`lookup_sso_provider_for_domain`, 
+      `provision_user_via_jit`, `mark_identity_sso_linked`, 
+      `is_sso_user`, `get_auth_identity_providers`, 
+      `count_password_only_users_in_org`) + SSO columns on 
+      `organizations` / `org_memberships` / `org_invites` + 
+      SELECT-only RLS policies + `sso_audit_events` placeholder. 
+      All grants are `service_role`-only except `is_sso_user` (also 
+      `authenticated`, for middleware). Verified V1–V10 post-apply. 
+      Commit: 4d909ab (Prompt A1 of SSO epic).
