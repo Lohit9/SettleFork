@@ -64,6 +64,29 @@ export type IdPType = 'okta' | 'entra' | 'google' | 'generic'
 export type ProvisioningSource = 'invite' | 'jit' | 'admin' | 'signup'
 export type ExpectedAuthMethod = 'password' | 'sso'
 
+/**
+ * SAML attribute mapping shape matching Supabase GoTrue's
+ * expected structure. Each key in `keys` is a claim name as it
+ * will appear in the issued JWT; the value describes how to
+ * extract it from the SAML assertion.
+ *
+ * Example:
+ *   {
+ *     keys: {
+ *       email: { name: "http://schemas.xmlsoap.org/ws/2005/05/identity/claims/emailaddress" },
+ *       full_name: { name: "http://schemas.xmlsoap.org/ws/2005/05/identity/claims/name" }
+ *     }
+ *   }
+ */
+export interface SAMLAttributeMapping {
+  keys: Record<string, {
+    name: string
+    array?: boolean
+    default?: unknown
+    names?: string[]
+  }>
+}
+
 export interface SSOProvider {
   id: string
   org_id: string
@@ -74,7 +97,7 @@ export interface SSOProvider {
   metadata_xml: string | null
   acs_url: string
   sp_entity_id: string
-  attribute_mapping: Record<string, string>
+  attribute_mapping: SAMLAttributeMapping
   created_at: string
   created_by: string | null
   updated_at: string
