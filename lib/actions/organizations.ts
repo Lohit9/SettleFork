@@ -70,7 +70,7 @@ export async function getOrgMembers(
 
   const { data, error } = await supabase
     .from('org_memberships')
-    .select('id, org_id, user_id, role, joined_at')
+    .select('id, org_id, user_id, role, joined_at, provisioning_source')
     .eq('org_id', orgId)
     .order('joined_at', { ascending: true })
 
