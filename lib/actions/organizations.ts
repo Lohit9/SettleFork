@@ -4,6 +4,7 @@ import { revalidatePath } from 'next/cache'
 import { createClient } from '@/lib/supabase/server'
 import { supabaseAdmin } from '@/lib/supabase/admin'
 import { requirePlatformAdmin } from '@/lib/auth/platform-admin'
+import { getAuthEmailsByIds } from '@/lib/auth/users'
 import type { Organization, OrgMembership, OrgRole } from '@/lib/types/organizations'
 
 function slugify(name: string): string {
@@ -81,10 +82,9 @@ export async function getOrgMembers(
     .select('id, full_name')
     .in('id', userIds.length > 0 ? userIds : ['none'])
 
-  const { data: authUsers } = await supabaseAdmin.auth.admin.listUsers({ perPage: 1000 })
+  const emailMap = await getAuthEmailsByIds(userIds)
 
   const profileMap = new Map((profiles ?? []).map((p) => [p.id, p.full_name]))
-  const emailMap = new Map((authUsers?.users ?? []).map((u) => [u.id, u.email]))
 
   const members: OrgMembership[] = (data ?? []).map((m) => ({
     ...m,
@@ -240,9 +240,8 @@ export async function adminGetOrgMembers(orgId: string): Promise<{
 
   const nameMap = new Map((profiles ?? []).map((p) => [p.id, p.full_name]))
 
-  // Step 3: Fetch emails from auth.users
-  const { data: authUsers } = await supabaseAdmin.auth.admin.listUsers({ perPage: 1000 })
-  const emailMap = new Map((authUsers?.users ?? []).map((u) => [u.id, u.email]))
+  // Step 3: Fetch emails from auth.users via SECURITY DEFINER RPC
+  const emailMap = await getAuthEmailsByIds(userIds)
 
   // Step 4: Assemble
   const members = data.map((m) => ({
