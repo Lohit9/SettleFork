@@ -152,8 +152,8 @@ to "Planned" or "Rejected" once a decision is made.)_
 - [x] 2026-04-20 — Completed listUsers refactor: all 5 call sites 
       migrated to SECURITY DEFINER RPC-backed helpers from 
       `lib/auth/users.ts`. Commits: 9f542f5 (org member listings), 
-      <commit-3.2-hash> (invite creation pre-check), 
-      <commit-3.3-hash> (public invite page). Silent correctness 
+      0809b6a (invite creation pre-check), 
+      a87c029 (public invite page). Silent correctness 
       ceiling at 1000 users eliminated; all `auth.users` access now 
       flows through 3 named, audited RPCs with EXECUTE granted only 
       to `service_role`.
