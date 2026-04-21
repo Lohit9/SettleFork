@@ -54,6 +54,18 @@ Last updated: 2026-04-20
 - [ ] RBAC refinement (granular permissions per resource).
 - [ ] Encryption key rotation program for DB connector credentials.
 - [ ] GDPR data deletion path (cascading deletes, retention carve-outs).
+- [ ] Tighten `project_members` SELECT RLS policy. Current policy 
+      (`org_members_can_view_project_members`, 050:255-256) allows 
+      any user with project access to see all other project 
+      members. When cross-org guest access is enabled (future 
+      feature), this becomes a cross-tenant information leak — 
+      external guests would see full employee directory of the 
+      hosting org for any shared project. Mitigation: SECURITY 
+      DEFINER helper that returns the full list for org members 
+      but restricts external guests to seeing only their own row + 
+      project admin info. Not urgent today (no code path exercises 
+      the cross-org case) but should ship before guest access UX. 
+      Flag for pen test scope documentation.
 - [ ] ISMS policy documentation (security, access control, incident 
       response, acceptable use, data classification, change management).
 - [ ] DR/BCP documentation (RTO/RPO, restore tests, failover).
@@ -155,6 +167,13 @@ Tracks alongside the Tier 1 security epic above.
       would tighten it up.
 - [ ] T-SQL date parsing precision (see Sprint 9 item for full 
       refactor).
+- [ ] `project_members.role` column allows NULL (original 050:44 
+      schema doesn't declare NOT NULL). `role-resolution.ts:21` has 
+      a latent fall-through: NULL role short-circuits to 
+      `org_memberships` fallback rather than treating the 
+      `project_members` row as authoritative. Unintentional; almost 
+      certainly bug. Fix: migration to add NOT NULL constraint 
+      after auditing for any existing NULL rows.
 
 ---
 
@@ -269,6 +288,20 @@ can begin. Decisions made here graduate into sprint items.
 - [ ] SAML request signing + encrypted assertions. Verify 
       Supabase Pro support; document for regulated customers.
 - [ ] OIDC support (SAML-only at launch; add if customer asks).
+- [ ] Cross-org guest project access (external collaborators via 
+      SSO). Enable customers (e.g., platform vendors like Rootstock, 
+      consultancies) to invite users from external organizations to 
+      specific projects without granting full org membership. 
+      Pattern modeled on Microsoft Teams B2B guest, Slack Connect, 
+      Notion guests, Figma external viewers. Seven-point security 
+      model: guest identity in home tenant / explicit guest badge / 
+      scoped access / bilateral admin controls / bilateral audit 
+      logging / SCIM revocation propagation / separate license 
+      counting. Scope-dependent, multi-sprint effort. Build when a 
+      customer (likely Rootstock-type platform vendor or 
+      consultancy) explicitly requests it. Current schema supports 
+      it at RLS level; UI, invite flow, audit, and admin controls 
+      all need building.
 
 ### Product features (customer-triggered or post-funding)
 - [ ] Oracle PL/SQL dialect support — large enterprises, 
