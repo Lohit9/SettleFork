@@ -5,6 +5,7 @@ import { revalidatePath } from 'next/cache'
 import { createClient } from '@/lib/supabase/server'
 import { supabaseAdmin } from '@/lib/supabase/admin'
 import { requirePlatformAdmin } from '@/lib/auth/platform-admin'
+import { findAuthUserByEmail } from '@/lib/auth/users'
 import type { OrgInvite, OrgRole } from '@/lib/types/organizations'
 import { Resend } from 'resend'
 import { orgInviteEmail } from '@/lib/email/templates'
@@ -32,13 +33,12 @@ export async function createOrgInvite(
     return { invite: null, error: 'Only owners and admins can invite members' }
   }
 
+  const existingAuthUser = await findAuthUserByEmail(email)
   const { data: existingMember } = await supabaseAdmin
     .from('org_memberships')
     .select('id')
     .eq('org_id', orgId)
-    .eq('user_id', (
-      await supabaseAdmin.auth.admin.listUsers({ perPage: 1000 })
-    ).data?.users?.find((u) => u.email?.toLowerCase() === email.toLowerCase())?.id ?? 'none')
+    .eq('user_id', existingAuthUser?.id ?? 'none')
     .maybeSingle()
 
   if (existingMember) {
@@ -98,8 +98,8 @@ export async function adminCreateOrgInvite(
     return { invite: null, error: admin.error }
   }
 
-  const { data: existingUser } = await supabaseAdmin.auth.admin.listUsers({ perPage: 1000 })
-  const inviteeId = existingUser?.users?.find((u) => u.email?.toLowerCase() === email.toLowerCase())?.id
+  const existingAuthUser = await findAuthUserByEmail(email)
+  const inviteeId = existingAuthUser?.id
 
   if (inviteeId) {
     const { data: existingMember } = await supabaseAdmin
