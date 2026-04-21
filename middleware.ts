@@ -38,6 +38,37 @@ export async function middleware(request: NextRequest) {
 
   const { pathname } = request.nextUrl
 
+  // ── SSO state (single RPC per request, reused below) ─────────────────────
+  // Computed once per request for authenticated users. The /app/* branch
+  // reads sso_required / is_sso_already for the enforcement gate and MFA
+  // bypass; the /auth/mfa-verify branch reads is_sso_already for the
+  // short-circuit. On RPC error we fail CLOSED for enforcement (treat as
+  // no-strict-org so we do not lock out a user on a flaky DB hop) but
+  // leave the existing MFA check in force (also fail-open for bypass,
+  // so TOTP still protects the session).
+  let ssoState: {
+    sso_required: boolean
+    effective_mode: string
+    strict_org_ids: string[]
+    is_sso_already: boolean
+  } | null = null
+
+  if (user) {
+    const { data: enforceRow, error: enforceErr } = await supabase.rpc(
+      'enforce_sso_on_login',
+      { p_user_id: user.id }
+    )
+    if (enforceErr) {
+      console.error('[middleware] enforce_sso_on_login failed:', {
+        userId: user.id,
+        error: enforceErr.message,
+      })
+      ssoState = null
+    } else {
+      ssoState = Array.isArray(enforceRow) ? enforceRow[0] : enforceRow
+    }
+  }
+
   // ── Protect /app/* routes ─────────────────────────────────────────────────
   if (pathname.startsWith('/app')) {
     if (!user) {
@@ -55,13 +86,32 @@ export async function middleware(request: NextRequest) {
       return NextResponse.redirect(url)
     }
 
-    // MFA step-up: user has enrolled TOTP but hasn't verified this session
-    const { data: aalData } = await supabase.auth.mfa.getAuthenticatorAssuranceLevel()
-    if (aalData && aalData.nextLevel === 'aal2' && aalData.currentLevel !== 'aal2') {
+    // SSO enforcement (decisions 2, 15, 33): if the user belongs to a
+    // strict-SSO org but is not authenticated via SSO, force sign-out
+    // and bounce to /login with a reason code.
+    if (ssoState?.sso_required && !ssoState?.is_sso_already) {
+      console.info('[middleware] SSO enforcement: signing out user', {
+        userId: user.id,
+        strictOrgIds: ssoState.strict_org_ids,
+      })
+      await supabase.auth.signOut()
       const url = request.nextUrl.clone()
-      url.pathname = '/auth/mfa-verify'
-      url.searchParams.set('redirect', pathname)
+      url.pathname = '/login'
+      url.searchParams.set('reason', 'sso_required')
+      url.searchParams.delete('redirect')
       return NextResponse.redirect(url)
+    }
+
+    // MFA step-up: user has enrolled TOTP but hasn't verified this session.
+    // Bypassed for SSO users (locked decision 8, 34).
+    if (!ssoState?.is_sso_already) {
+      const { data: aalData } = await supabase.auth.mfa.getAuthenticatorAssuranceLevel()
+      if (aalData && aalData.nextLevel === 'aal2' && aalData.currentLevel !== 'aal2') {
+        const url = request.nextUrl.clone()
+        url.pathname = '/auth/mfa-verify'
+        url.searchParams.set('redirect', pathname)
+        return NextResponse.redirect(url)
+      }
     }
   }
 
@@ -72,6 +122,23 @@ export async function middleware(request: NextRequest) {
       url.pathname = '/login'
       return NextResponse.redirect(url)
     }
+
+    // SSO users bypass the MFA challenge entirely (locked decision 34).
+    // Handles the edge case where a user enrolled TOTP before their
+    // account was linked as SSO — without this short-circuit they would
+    // be stuck on a challenge page they cannot satisfy.
+    if (ssoState?.is_sso_already) {
+      const redirectTarget = request.nextUrl.searchParams.get('redirect') || '/app/projects'
+      const safeTarget =
+        redirectTarget.startsWith('/') && !redirectTarget.startsWith('//')
+          ? redirectTarget
+          : '/app/projects'
+      const url = request.nextUrl.clone()
+      url.pathname = safeTarget
+      url.search = ''
+      return NextResponse.redirect(url)
+    }
+
     // Already at aal2 — no need for the challenge page
     const { data: aalData } = await supabase.auth.mfa.getAuthenticatorAssuranceLevel()
     if (aalData && aalData.currentLevel === 'aal2') {

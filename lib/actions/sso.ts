@@ -1028,6 +1028,7 @@ export async function removeDomainAllowlist(
 export async function checkSSOEnabledForEmail(email: string): Promise<{
   required: boolean
   orgId?: string
+  orgSlug?: string
   providerId?: string
   enforcementMode?: EnforcementMode
 }> {
@@ -1057,6 +1058,7 @@ export async function checkSSOEnabledForEmail(email: string): Promise<{
     org_id: string
     sso_provider_id: string
     enforcement_mode: string
+    org_slug: string
   }>
 
   if (rows.length === 0) {
@@ -1067,6 +1069,7 @@ export async function checkSSOEnabledForEmail(email: string): Promise<{
   return {
     required: true,
     orgId: row.org_id,
+    orgSlug: row.org_slug,
     providerId: row.sso_provider_id,
     enforcementMode: row.enforcement_mode as EnforcementMode,
   }
