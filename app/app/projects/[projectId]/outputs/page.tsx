@@ -36,6 +36,8 @@ export default async function OutputsPage({ params }: PageProps) {
     sourceSystem: fullProject.datasets?.find((d) => d.role === 'source')?.name ?? null,
     targetSystem: fullProject.datasets?.find((d) => d.role === 'target')?.name ?? null,
     createdAt: fullProject.created_at,
+    useMappingRedesign: fullProject.use_mapping_redesign,
+    maintenanceMode: fullProject.maintenance_mode,
   } : undefined
 
   // Detect target DB type for smart dialect default

@@ -8,6 +8,10 @@ export interface ProjectInfo {
   sourceSystem: string | null
   targetSystem: string | null
   createdAt: string
+  // Mapping redesign feature flags (migration 073). Optional for back-compat
+  // with any call site that constructs ProjectInfo before adoption is complete.
+  useMappingRedesign?: boolean
+  maintenanceMode?: boolean
 }
 
 export function ProjectInfoPopover({ info }: { info: ProjectInfo }) {

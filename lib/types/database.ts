@@ -11,6 +11,12 @@ export interface Project {
   updated_at: string
   completed_at: string | null
   archived_at: string | null
+  // Phase 3+ mapping redesign rollout gate. Per-project canary flag.
+  // Added in migration 073; dropped after full rollout per spec.
+  use_mapping_redesign: boolean
+  // Transient deployment-window flag that blocks mapping writes during the
+  // Phase 1+2 migration. Added in migration 073; dropped after migration complete.
+  maintenance_mode: boolean
 }
 
 export interface Dataset {

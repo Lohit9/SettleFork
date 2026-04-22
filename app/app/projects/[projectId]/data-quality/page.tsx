@@ -64,6 +64,8 @@ export default async function DataQualityPage({ params, searchParams }: PageProp
     sourceSystem: project.datasets?.find((d) => d.role === 'source')?.name ?? null,
     targetSystem: project.datasets?.find((d) => d.role === 'target')?.name ?? null,
     createdAt: project.created_at,
+    useMappingRedesign: project.use_mapping_redesign,
+    maintenanceMode: project.maintenance_mode,
   } : undefined
 
   return (
