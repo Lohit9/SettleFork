@@ -55,7 +55,12 @@ CREATE TABLE target_field_mappings (
   project_id UUID NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
   target_field_id UUID NOT NULL REFERENCES fields(id) ON DELETE CASCADE,
   
-  -- Overall mapping metadata
+  -- Overall mapping confidence.
+  -- For mapped targets (has mapping_sources): derived as 
+  --   min(mapping_sources.confidence) at insert/update time
+  -- For value assignments (no mapping_sources): stored directly 
+  --   as AI-produced confidence for the custom SQL
+  -- For acknowledged targets: NULL
   confidence NUMERIC(5,2),
   status TEXT NOT NULL DEFAULT 'needs_review'
     CHECK (status IN ('needs_review', 'approved', 'rejected')),
@@ -104,7 +109,10 @@ CREATE TABLE mapping_sources (
   source_table_id UUID 
     REFERENCES tables(id) ON DELETE CASCADE,
   
-  -- Per-source metadata
+  -- Per-source confidence: how certain the AI is that this source field 
+  -- correctly contributes to the target, considering any join relationship.
+  -- LLM produces per-source confidences; target-level confidence on 
+  -- target_field_mappings is derived as min() of all source confidences.
   confidence NUMERIC(5,2),
   ai_reasoning TEXT,
   similar_fields_considered JSONB,
@@ -177,6 +185,48 @@ The new model supports four distinct mapping shapes, distinguishable by their `t
 **Target acknowledgment example**: `target.legacy_field_x` acknowledged as unmapped has `is_acknowledged=true`, `combination_type=null`, `combination_sql=null`, and zero `mapping_sources` rows.
 
 The two are semantically distinct: the value assignment produces a computed value per row; the acknowledgment produces no output at all.
+
+### Confidence semantics
+
+Confidence is tracked at two levels with distinct roles:
+
+**Per-source confidence** (`mapping_sources.confidence`): how confident the AI is that a specific source field correctly contributes to the target. Considers the field's semantic match, type compatibility, and any required join relationship. Produced by the AI per source in the LLM output.
+
+**Target-level confidence** (`target_field_mappings.confidence`): the overall confidence in the mapping. Computed deterministically:
+
+- **Mapped targets**: `MIN(mapping_sources.confidence)` across all contributing sources. Captures the weakest link — if any source or join is uncertain, the mapping is uncertain.
+- **Value assignments**: stored directly from the LLM's assessment of the custom SQL expression.
+- **Acknowledged targets**: NULL.
+
+**Recomputation rule**: whenever `mapping_sources` rows are inserted, updated, or deleted for a given `target_field_mapping_id`, the parent `target_field_mappings.confidence` recomputes via trigger or in the server action that performs the write. Cleanest implementation is a trigger:
+
+```sql
+CREATE FUNCTION recompute_target_field_mapping_confidence()
+RETURNS TRIGGER LANGUAGE plpgsql AS $$
+BEGIN
+  UPDATE target_field_mappings tfm
+  SET confidence = (
+    SELECT MIN(confidence) 
+    FROM mapping_sources 
+    WHERE target_field_mapping_id = tfm.id
+  )
+  WHERE tfm.id = COALESCE(NEW.target_field_mapping_id, OLD.target_field_mapping_id)
+    AND NOT tfm.is_acknowledged
+    AND tfm.combination_type <> 'custom_sql';  -- preserve value-assignment direct value
+  RETURN NULL;
+END $$;
+
+CREATE TRIGGER mapping_sources_confidence_recompute
+AFTER INSERT OR UPDATE OR DELETE ON mapping_sources
+FOR EACH ROW EXECUTE FUNCTION recompute_target_field_mapping_confidence();
+```
+
+**UI display rules**:
+
+- Main page row confidence column: `target_field_mappings.confidence` (single number per row)
+- Expanded row per-source lines: `mapping_sources.confidence` (one per contributing source)
+- Drawer Details tab: `target_field_mappings.confidence` prominently displayed
+- Drawer Source tab per-source cards: `mapping_sources.confidence` on each source
 
 ### Tables that remain
 
@@ -1032,25 +1082,64 @@ For each target field, propose a mapping:
   - If no reasonable source exists, propose acknowledgment
 
 Output format (JSON):
+```
+
+```json
 {
   "mappings": [
     {
-      "target_field": "accounts.full_customer_profile",
+      "target_field": "full_customer_profile",
+      "target_table": "accounts",
       "sources": [
-        { "table": "CustomerMaster", "field": "Name" },
-        { "table": "Contact", "field": "FirstName",
-          "join": { "via_field": "CustomerMaster.PrimaryContactID",
-                    "to_field": "Contact.ContactID" } },
-        ...
+        {
+          "source_field": "Name",
+          "source_table": "CustomerMaster",
+          "confidence": 95,
+          "reasoning": "Direct name match to target's primary identifier component"
+        },
+        {
+          "source_field": "FirstName",
+          "source_table": "Contact",
+          "confidence": 88,
+          "reasoning": "Contact.FirstName contributes to full customer name via join",
+          "join": {
+            "via_source_table": "CustomerMaster",
+            "via_fk_field":     "PrimaryContactID",
+            "to_fk_field":      "ContactID"
+          }
+        }
       ],
-      "combination": "concat_space",
-      "confidence": 82,
+      "combination_type": "concat_space",
+      "combination_sql": null,
       "reasoning": "..."
     },
-    ...
+    {
+      "target_field": "migrated_at",
+      "target_table": "accounts",
+      "sources": [],
+      "combination_type": "custom_sql",
+      "combination_sql": "CURRENT_TIMESTAMP",
+      "confidence": 95,
+      "reasoning": "Target requires a migration timestamp; CURRENT_TIMESTAMP is the canonical value"
+    },
+    {
+      "target_field": "legacy_notes",
+      "target_table": "accounts",
+      "sources": [],
+      "is_acknowledged": true,
+      "acknowledgment_reason": "No equivalent in source; intentionally unmapped",
+      "reasoning": "..."
+    }
   ]
 }
 ```
+
+**Notes on format**:
+
+- **Mapped targets**: `confidence` on each `sources[i]`, no top-level `confidence`
+- **Value assignments**: top-level `confidence` (no sources)
+- **Acknowledgments**: no `confidence` (null in DB)
+- Target-level confidence for mapped targets is computed server-side as `min(sources[*].confidence)`
 
 ### Context window management
 
@@ -1137,16 +1226,107 @@ Same as single-source, with additional validation:
 
 | Phase | Scope | Effort | Dependencies | Risk |
 |---|---|---|---|---|
-| 0 | Founder decisions (all resolved 2026-04-21) | Complete | — | — |
-| 1 | Data model migration: new tables, RLS, data migration, new RPCs (`dq_create_target_field_mapping`, `dq_replace_mapping_sources`, `dq_acknowledge_target`, `dq_apply_field_transform_joined`) | 2 days | Phase 0 | HIGH — post-commit rollback requires PITR |
-| 2 | Server actions rewrite + test harness setup: ~23 files, ~2700 LOC. Ships with Phase 1 atomically. | 5 days | Phase 1 | MEDIUM — comprehensive rewrite |
-| 2a | Back-compat shim in `MappingContent.tsx` | 0.5 days | Phase 2 | LOW |
-| 3 | UI: filter row + row layout (Rules 1-6) + expand-in-place | 2 days | Phase 2a | LOW |
-| 3b | UI: drawer redesign (3 tabs, persistent footer) | 2 days | Phase 3 | LOW |
-| 4a | LLM prompt update + A/B validation + new output parsing | 1.5 days | Phase 3b | MEDIUM — AI quality risk |
-| 4b | Cross-table authoring in Source tab | 1.5 days | Phase 4a | MEDIUM — new user-facing capability |
+| 0 | Founder decisions (complete 2026-04-21) | Complete | — | — |
+| 1a | Feature flag infrastructure + test harness setup | 2 days | Phase 0 | LOW |
+| 1b | Data model migration (new tables, RLS, data migration with verification, confidence trigger) + new RPCs | 2 days | Phase 1a | HIGH — post-commit rollback requires PITR |
+| 2 | Server actions rewrite: `mappings.ts`, `transformations.ts`, `fk-cascade.ts`, `outputs.ts`, `execution-package.ts`, `lib/quality/*`, `field-acknowledgments.ts`. Includes LLM prompt update for new format, but cross-table remains flag-gated. Ships atomically with Phase 1b. | 5 days | Phase 1b | MEDIUM |
+| 2a | Back-compat shim. Ships with Phase 2. | 0.5 days | Phase 2 | LOW |
+| 3a | UI: filter row redesign (remove Type, add Source Table, rename Tables → Target Tables) + URL param updates | 1 day | Phase 2a live | LOW |
+| 3b+3c | UI: main page row redesign + drawer redesign (shipped together to avoid inconsistent intermediate state). Includes monochrome `TableBadge` primitive, new `FieldMappingRow`, persistent drawer footer, three tabs. Ships behind feature flag. | 4 days | Phase 3a | MEDIUM |
+| 3-A11y | Minimum accessibility baseline: `aria-label` on icon buttons, `aria-labelledby` on drawer, sr-only text on status indicators, `focus-visible` rings. Shipped as part of Phase 3b+3c. | 0.5 days | Phase 3b+3c | LOW |
+| 4-LLM-Validation | A/B validation of new LLM prompt against Heritage Core. Threshold: 90%+ match rate on non-cross-table mappings. | 1 day | Phase 3b+3c | MEDIUM — quality gate |
+| 4a | LLM prompt update for cross-table awareness + parser for new output format. Feature flag enables cross-table generation on canary project. | 1.5 days | Phase 4-LLM-Validation | MEDIUM |
+| 4b | Cross-table authoring in Source tab: cross-table field picker, join editor, live preview with joins | 1.5 days | Phase 4a | MEDIUM |
+| 5-Cleanup | Remove shim, delete `UnmappedView`, `UnmappedTargetIndicator`, legacy localStorage keys. Drop feature flag column once all projects migrated. | 0.5 days | Phase 4b stable | LOW |
 
-**Total**: ~14-15 focused engineering days plus deployment overhead.
+**Total**: ~19 focused engineering days including cleanup and A11y baseline.
+
+## Back-compatibility shim limitations
+
+During Phase 2a, a shim translates the new data model back into the old `RichFieldMapping` shape so the unchanged `MappingContent.tsx` and `TransformContent.tsx` continue to render. The shim is removed after Phase 3 ships.
+
+### What the shim handles gracefully
+
+- **Simple 1:1 mappings**: one `mapping_source` row → one `RichFieldMapping` row with `is_contributing=false`
+- **Many-to-one within one source table**: N `mapping_sources` → N `RichFieldMapping` rows, one with `is_contributing=false`, others with `is_contributing=true`. Rendering identical to current UI.
+- **Value assignments** (zero-source `custom_sql`): one `RichFieldMapping` row with `source_field_id=null`. Rendering identical to current UI.
+- **Target-side acknowledgments**: preserved via `FieldAcknowledgmentRow` synthesis from `target_field_mappings.is_acknowledged=true` rows.
+- **Source-side acknowledgments**: synthesized from `source_field_acknowledgments` table.
+- **Approval state**: `target_field_mappings.status` copied to every generated `RichFieldMapping` row.
+
+### What the shim cannot represent (blocked by feature flag)
+
+**Cross-table mappings**: a target whose `mapping_sources` span multiple source tables cannot be faithfully rendered in the old UI's table-centric structure. The shim would have to either hide some sources (data loss visually) or emit phantom `table_mapping` groupings (visually broken).
+
+Mitigation: cross-table mapping creation is gated behind `projects.use_mapping_redesign = true`. The shim only runs when the flag is false, and in that state cross-table mappings do not exist. The shim never encounters a case it cannot handle.
+
+**Per-source confidence variation**: the old UI only displays one confidence per row. The shim exposes target-level confidence (min of sources) on every generated row. Users lose visibility into per-source confidence during Phase 2a, but the old UI never showed it anyway.
+
+**Join annotations**: the old UI has no place to display join information. Acceptable because cross-table is flag-gated off.
+
+### Shim implementation contract
+
+Single adapter module: `lib/compat/mapping-shim.ts`. Exports functions that convert new-model query results into `RichFieldMapping` and `RichTableMapping` shapes:
+
+```ts
+export function shimTargetFieldMappingToRichFieldMappings(
+  tfm: TargetFieldMappingRow,
+  sources: MappingSourceRow[],
+  transformation: TransformationRow | null,
+  fields: Record<string, FieldRow>
+): RichFieldMapping[]
+
+export function shimToMappingsResult(
+  targetFieldMappings: TargetFieldMappingRow[],
+  mappingSources: MappingSourceRow[],
+  sourceAcks: SourceFieldAcknowledgmentRow[],
+  // ...other inputs
+): MappingsResult
+```
+
+The shim is pure translation; no business logic. Unit-tested as part of Phase 2 test harness.
+
+### Removal
+
+Phase 3c completion removes the shim. `MappingContent.tsx` and `TransformContent.tsx` read the new model directly. `lib/compat/mapping-shim.ts` is deleted.
+
+## Cleanup items
+
+Items to remove during Phase 5-Cleanup:
+
+### Code deletions
+
+- `UnmappedView` component (`app/app/projects/[projectId]/mapping/MappingContent.tsx:2479`) — unreferenced
+- `UnmappedTargetIndicator` component (same file, line 2473) — stub returning null
+- `InlineAddFieldRow` component (same file, line 523) — replaced by drawer Source tab
+- `lib/compat/mapping-shim.ts` — no longer needed after Phase 3 UI reads new model directly
+- `SUPPRESS_MULTI_TARGET_KEY` and `SUPPRESS_MULTI_TARGET_KEY_LEGACY` localStorage keys (lines 518-519) — orphaned after `InlineAddFieldRow` retires
+
+### Database cleanup
+
+- `projects.use_mapping_redesign` column — dropped after all projects stable on new UI for 30+ days
+- `projects.maintenance_mode` column — dropped after migration window confirmed complete
+- `fm_to_tfm_map` temp table — dropped automatically at end of migration transaction
+
+### URL parameter compatibility
+
+- Transform page reads both `?fieldMappingId=` (old) and `?targetFieldMappingId=` (new) during Phase 3+4. Old param support removed in Phase 5-Cleanup after 30+ days of new URL usage.
+
+### Migration file blocklist updates
+
+The following migrations contain user-SQL safety blocklists that should be extended to include `target_field_mappings|mapping_sources` defensively:
+
+- `supabase/migrations/006_data_quality.sql:339`
+- `supabase/migrations/011_transform_test_rpc.sql:37`
+- `supabase/migrations/014_transform_apply.sql:123`
+- `supabase/migrations/019_transform_full_test_rpc.sql:41`
+- `supabase/migrations/026_execute_data_fix_allow_cte.sql:43`
+- `supabase/migrations/035_transform_preview_multi_field.sql:51`
+- `supabase/migrations/040_transform_test_multi_field.sql:38`
+- `supabase/migrations/043_null_safe_apply_and_window_guard.sql:147`
+- `supabase/migrations/061_fix_distinct_preview_groupby.sql:48`
+
+These are low-severity — current regex uses word boundaries so `target_field_mappings` doesn't accidentally match `field_mappings`. Update as part of migration 073 or as a separate defensive-pass migration 074.
 
 ## Deployment strategy
 
@@ -1192,6 +1372,146 @@ The migration executes during a scheduled maintenance window to eliminate in-fli
 ### Canary approach
 
 First migration targets Kaan's internal "Heritage Core → Nymbus Core" project only. The migration SQL accepts an optional `p_project_id` parameter; when provided, data migration steps scope with `WHERE project_id = p_project_id`. After 72 hours of clean operation on the canary project, run the full migration for remaining projects.
+
+## Feature flag infrastructure
+
+A per-project feature flag gates both the migration deployment safety and the redesigned UI rollout. Single flag serves three purposes:
+
+### Schema
+
+Add column to existing `projects` table:
+
+```sql
+ALTER TABLE public.projects 
+  ADD COLUMN use_mapping_redesign BOOLEAN NOT NULL DEFAULT FALSE;
+
+CREATE INDEX idx_projects_use_mapping_redesign 
+  ON projects(use_mapping_redesign) 
+  WHERE use_mapping_redesign = true;
+```
+
+Partial index is optimized for the common case (most projects off, few on during canary).
+
+### Three uses of the flag
+
+**Use 1: Deployment write-block.** During the migration window, all mapping write-path server actions check `projects.use_mapping_redesign = false` AND return a maintenance-mode error. After migration completes and backend is deployed, flag remains `false` (no change to user experience; old UI on new backend via shim).
+
+**Use 2: UI redesign rollout.** When flag flips to `true` for a project, that project's users see the redesigned mapping page. Flag off: users see the shimmed old UI on the new backend.
+
+**Use 3: Cross-table gating.** Cross-table mapping generation and authoring are disabled when flag is `false`. This prevents the shim from ever encountering cross-table mappings it cannot render correctly. When flag flips to `true`, the new UI can render cross-table; when flag is `false`, AI generation proposes same-table mappings only.
+
+### Client access pattern
+
+```ts
+// lib/hooks/useMappingRedesignEnabled.ts
+export function useMappingRedesignEnabled(projectInfo: ProjectInfo): boolean {
+  return projectInfo.use_mapping_redesign === true
+}
+```
+
+Flag propagates from `projects` row through `getProject` server action into `ProjectInfo` already passed as prop to client components. No separate fetch needed.
+
+### Server-side check
+
+Write-path server actions include a guard:
+
+```ts
+async function assertMappingWritesEnabled(projectId: string) {
+  const { data } = await supabase
+    .from('projects')
+    .select('use_mapping_redesign, maintenance_mode')
+    .eq('id', projectId)
+    .single()
+  if (data?.maintenance_mode) {
+    throw new Error('Mapping writes are temporarily disabled for scheduled maintenance')
+  }
+}
+```
+
+(Note: `maintenance_mode` is a separate transient column for the deployment window; distinct from `use_mapping_redesign` which is the redesign toggle.)
+
+### Canary rollout sequence
+
+1. Migration runs with `maintenance_mode=true` on all projects; `use_mapping_redesign=false`
+2. Backend deploys; `maintenance_mode` flipped to `false`
+3. Old UI continues to work via shim
+4. Heritage Core project: `use_mapping_redesign=true` manually
+5. 72-hour observation period
+6. Remaining projects enabled in batches of 10
+7. After all projects enabled and stable, flag column can eventually be dropped (post-cleanup)
+
+## Platform scope
+
+**Supported**: desktop browsers at viewport width ≥1024px.
+
+**Not supported for v1**: mobile and tablet viewports (<1024px). A static banner appears below 1024px width directing users to use a desktop browser. No mobile-responsive layouts are shipped.
+
+**Rationale**: Settle is a data engineering tool used during structured migration work. Users are engineers, data migration specialists, or project managers operating on laptops or larger displays. Mobile access is not a validated use case and adding responsive layouts would add several days to Phase 3 implementation for speculative value.
+
+**Future consideration**: if a pilot customer demonstrates a mobile use case (e.g., a manager reviewing mappings during a standup), responsive layouts become a v2 scope item.
+
+## Accessibility scope
+
+Phase 3 ships with minimum baseline accessibility. Comprehensive WCAG AA compliance is deferred to a later sprint, scoped when a pilot customer's procurement review requires it.
+
+### Minimum baseline (Phase 3 required scope)
+
+- `aria-label` on every icon-only button (close buttons, chevrons, overflow menus, status indicators)
+- `aria-labelledby` on drawer and modal containers
+- Screen-reader text (`sr-only` span) accompanying status dots explaining the status ("Approved", "Needs Review", "Rejected")
+- `:focus-visible` ring styling on all interactive elements using a consistent focus indicator
+- Semantic HTML: `<button>` for actions, `<nav>` where appropriate, `<table>` or `role="grid"` considered for the mapping list
+- Escape key closes drawers and modals (already works via `FixDrawer` — preserve)
+
+### Deferred to post-Phase 4 A11y sprint
+
+- Focus trap inside drawer (Tab key cycles within drawer, not page behind)
+- Keyboard navigation between rows (j/k, arrow keys)
+- Comprehensive screen reader testing across JAWS, NVDA, VoiceOver
+- Color contrast audit and remediation
+- Full ARIA live region support for toast notifications
+- Reduced motion support (`prefers-reduced-motion`)
+
+### Testing approach
+
+No automated A11y testing in Phase 3. Manual smoke test of keyboard navigation (Tab through page, Escape closes drawer, focus ring visible) as part of QA pass.
+
+Future: add `@axe-core/react` or equivalent to CI for automated regression detection once Vitest harness is established.
+
+## Keyboard shortcuts
+
+**v1 scope**: no new keyboard shortcuts beyond what exists today (Escape closes drawer and pickers). Net-new keyboard navigation patterns are deferred.
+
+**Existing shortcuts preserved**:
+
+- Escape closes drawer (`FixDrawer`)
+- Escape closes `FieldPicker` and `TableFieldFilter` portals
+- Tab navigates interactive elements in default DOM order
+
+**Deferred to v2** (documented but not implemented):
+
+- `/` to focus search input
+- `j`/`k` or arrow keys to navigate between rows
+- `a` to approve selected row, `r` to reject
+- `e` to expand/collapse selected row
+- `o` or Enter to open drawer for selected row
+
+These are nice-to-haves that enterprise users may eventually request. Deferred to keep Phase 3 scope focused on core redesign.
+
+## Virtualization
+
+**Decision**: defer. Render via naive `.map()` in Phase 3.
+
+**Rationale**: current production projects have manageable row counts:
+
+- Heritage Core: 19 fields per target table (116 total)
+- Rootstock-scale estimate: ~30 tables × ~30 fields = 900 rows (spread across tables)
+
+Virtualization adds complexity (library integration, scroll-position state management, focus restoration during scroll) and risks introducing bugs in a Phase 3 that's already touching a large surface.
+
+**Trigger for revisiting**: if profiling shows a measurable rendering problem — expanded target table with 100+ fields taking >200ms to render, or noticeable scroll jank — add `@tanstack/react-virtual` scoped to the expanded body of `TableMappingCard` only. No whole-page virtualization.
+
+**Measurement approach**: add React DevTools Profiler measurements on the canary project during Phase 3 QA. If render times are acceptable, skip virtualization. If not, add as a focused follow-up.
 
 ## Test harness
 
@@ -1310,23 +1630,32 @@ This spec is the result of 23 locked design decisions (numbers 45-67 in the proj
 
 Full decision history maintained separately in project conversation context.
 
-## Open questions for implementation
+## Open questions — resolved
 
-These surfaced during design and need resolution during the Cursor investigation phase:
+All implementation open questions resolved via Investigation 1 and 2:
 
-1. **Existing approval data**: how many projects in production have approved mappings that the migration will transform? (Informs migration testing approach.)
+| Question | Resolution |
+|---|---|
+| Source-side acknowledgments | Separate `source_field_acknowledgments` table (D-1) |
+| Value assignments | Zero-source `target_field_mappings` with `custom_sql` combination (D-2) |
+| Deployment strategy | Scheduled downtime window, 24h notice (D-3) |
+| Test harness | Vitest + 2 days setup + integration tests in Phase 2 (D-4) |
+| LLM prompt transition | Atomic flip, no dual-format period (D-5) |
+| Canary project | Heritage Core → Nymbus Core first (D-6) |
+| `transformations.field_mapping_id` rename | Atomic in-place rename via add-backfill-drop pattern (D-7) |
+| Feature flag mechanism | Per-project boolean `projects.use_mapping_redesign` |
+| Mobile responsiveness | Desktop-only for v1 (≥1024px) |
+| Virtualization | Defer, profile-first if needed |
+| Keyboard shortcuts | Defer to v2, Escape preserved |
+| Accessibility scope | Minimum baseline in Phase 3, comprehensive deferred |
+| Badge styling | Monochrome `<TableBadge>` primitive; border + `bg-white` + slate text |
+| Confidence scoring | Per-source stored, target-level derived as `min(sources)` for mapped targets, stored directly for value assignments |
+| LLM output format | Per-source confidences only on mapped targets; top-level confidence on value assignments only |
+| Cross-table during shim period | Gated behind feature flag; shim never encounters cross-table |
+| Remove Mapping location | Three-dot overflow menu next to footer buttons |
+| Transform page URL param | Read both old and new during transition; write new only |
 
-2. **Concurrent edit handling**: does the existing app have a pattern for concurrent edits to shared resources, or is this new territory?
-
-3. **Large schema performance**: does the current page render 200+ field mappings without performance issues? Should we add virtualization?
-
-4. **Test coverage**: confirmed no test infrastructure exists. Should we add minimal test harness as part of this feature, or defer?
-
-5. **FK inference quality**: how reliable is the current FK inference pipeline in practice? Cross-table mapping quality depends on it.
-
-6. **LLM prompt size**: do full source schemas fit within the per-call token budget with the existing batching strategy?
-
-These are investigation targets for the next phase.
+No outstanding open questions. Implementation can proceed.
 
 ## Non-goals
 
