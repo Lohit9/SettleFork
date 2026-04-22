@@ -40,45 +40,66 @@ Results filtered to exclude:
 
 All remaining references are real breakages waiting for Prompt 3b/3c/3d.
 
-### Prompt 3b scope — `lib/actions/transformations.ts` + `lib/actions/fk-cascade.ts`
+### Prompt 3b scope — `lib/actions/transformations.ts` + `lib/actions/fk-cascade.ts` — ✅ COMPLETE
 
-| File                              | Line  | Description                                                         |
-| --------------------------------- | ----- | ------------------------------------------------------------------- |
-| `lib/actions/transformations.ts`  | 138   | Load source/target for a single transform via FM join               |
-| `lib/actions/transformations.ts`  | 536   | Check if a transform has a generated_sql for its FM                 |
-| `lib/actions/transformations.ts`  | 582   | Fetch sibling FMs on the same TM for staged-data dependency sweep   |
-| `lib/actions/transformations.ts`  | 625   | Resolve FM.target_field_id → field name for JSONB key               |
-| `lib/actions/transformations.ts`  | 773   | Transform preview join through FM → fields                          |
-| `lib/actions/transformations.ts`  | 811   | Permission resolution via `txLookup.field_mappings.table_mappings`  |
-| `lib/actions/transformations.ts`  | 858   | Permission resolution — `applyStagedTransform` path                 |
-| `lib/actions/transformations.ts`  | 908   | Load FM row for transform metadata binding                          |
-| `lib/actions/transformations.ts`  | 1007  | FM lookup for `saveFieldTransform`                                  |
-| `lib/actions/transformations.ts`  | 1136  | Permission lookup in `saveFieldTransform`                           |
-| `lib/actions/transformations.ts`  | 1247  | FM → field resolution for `resetFieldTransform`                     |
-| `lib/actions/transformations.ts`  | 1355  | FM-level staged-row revert                                          |
-| `lib/actions/transformations.ts`  | 1415  | FM list for `resetAllTransformsForTable`                            |
-| `lib/actions/transformations.ts`  | 1486  | Per-FM transform row fetch                                          |
-| `lib/actions/transformations.ts`  | 1587  | FM list for table-scoped transform enumeration                      |
-| `lib/actions/transformations.ts`  | 1671  | FM lookup in `resetFieldTransform` (legacy path)                    |
-| `lib/actions/transformations.ts`  | 1691  | FM row hydrate for reset                                            |
-| `lib/actions/transformations.ts`  | 1719  | FM row hydrate — alt branch                                         |
-| `lib/actions/transformations.ts`  | 1812  | FM → field join for transform apply                                 |
-| `lib/actions/fk-cascade.ts`       | 111   | FM enumeration to detect FK dependents                              |
-| `lib/actions/fk-cascade.ts`       | 218   | FM → source_field_id for cascade planning                           |
-| `lib/actions/fk-cascade.ts`       | 224   | Sibling-FM probe for cascade                                        |
-| `lib/actions/fk-cascade.ts`       | 389   | FM batch fetch for cascade apply                                    |
-| `lib/actions/fk-cascade.ts`       | 421   | FM-based post-cascade verify                                        |
+Both modules were fully rewritten against the new data model. Key outcomes:
 
-New model mapping: every `field_mappings` read → `target_field_mappings` +
-`mapping_sources`. Every `field_mappings.is_contributing` → inverse of
-`mapping_sources.ordinal == 0`. Every `field_mappings.source_field_id /
-target_field_id` → the corresponding column on the mapping_source / TFM.
+- `lib/actions/transformations.ts` now queries `target_field_mappings` +
+  `mapping_sources` exclusively. The legacy `field_mapping_id` column has
+  been replaced by `target_field_mapping_id` everywhere. A
+  `toLegacyTransformation` adapter keeps the exported `Transformation`
+  type stable for out-of-scope consumers (outputs.ts, execution-package.ts,
+  quality/\*) so those modules continue to type-check until Prompt 3c/3d.
+- `lib/actions/fk-cascade.ts` now walks dependents via
+  `target_field_mappings` and skips Value Assignments (custom_sql),
+  rejected mappings, acknowledged targets, and TFMs with zero
+  `mapping_sources` (Gate 2 Precision P1).
+- ID semantics (Gate 2 Option 2-narrow): `transformations.ts` contains a
+  private `resolveTfmId` helper that accepts both bare TFM UUIDs and
+  composite shimmed ids (`tfm::ms`). `fk-cascade.ts` does NOT import from
+  `lib/compat/mapping-shim`; it inlines a minimal composite-id stripper
+  with a documented link to `SHIMMED_ID_SEPARATOR`.
+- Apply RPC wiring (Gate 2 Q2 + G-a):
+  - Mapped TFMs → `dq_apply_field_transform_joined(tfm_id, target_name, sql, NULL)`.
+  - Value Assignments → legacy `dq_apply_field_transform` looped over every
+    TM sharing the VA's target table. A dedicated `dq_apply_value_assignment`
+    RPC is deferred to Prompt 3c.
+  - `cascadeTransformToFKs` uses `dq_apply_field_transform_joined`
+    exclusively (cascade never targets VAs by construction).
+- Maintenance guard wiring: every UI-facing write threads through
+  `guardWrites(projectId, …)`. `dismissTransformNeeded` /
+  `reinstateTransformNeeded` call `assertMappingWritesEnabled` directly
+  to preserve the throw-on-error contract (Gate 2 Q4). The internal
+  helpers `resetFieldTransform`, `resetAllTransformsForTable`,
+  `resetFKDependentTransforms`, `staleFKDependentTransforms` are
+  deliberately unguarded — they are only called from already-guarded
+  paths.
 
-The `resetFieldTransform(fieldMappingId)` signature needs to be preserved
-but internally reinterpret `fieldMappingId` as a TFM UUID (per Gate-2
-Design Call D). All callers in the rewritten `mappings.ts` already pass
-a TFM UUID — the rewrite of `transformations.ts` is the last thing to make
-this end-to-end functional.
+Migration 075 (executed 2026-04-22 against production) added
+`target_field_mappings.needs_transformation` and backfilled from
+`field_mappings_backup_074`, filtering out rejected primary FMs and
+acknowledged TFMs.
+
+Tests added:
+
+- `tests/actions/transforms-guard-sweep.test.ts` — 12 UI-facing write
+  paths verified to route through the maintenance guard, plus a canary
+  count and per-helper unguarded-is-intentional assertions.
+- `tests/actions/transforms-refinements.test.ts` — R1–R7 source-level
+  invariants (resolveTfmId semantics, apply RPC wiring, cascade RPC
+  purity, `needs_transformation` column location, findFKDependents
+  filters, header invariant documentation, logging convention).
+- `tests/integration/transformations-unique-invariant.test.ts` —
+  env-gated live-data check that every `target_field_mapping_id` has at
+  most one transformation row (Gate 2 Q3 3a).
+- `tests/integration/transforms-heritage.test.ts` — env-gated read-only
+  smoke test for `getTransformData` shape + uniqueness + unmapped-field
+  non-overlap against the Heritage canary.
+
+The write-lifecycle end-to-end (create mapping → attach transform →
+apply → cascade on source change) is covered by manual canary QA rather
+than an automated test — running a rollback-safe write cycle against
+production in CI is judged worse than the manual smoke test.
 
 ### Prompt 3c scope — `lib/actions/outputs.ts` + `lib/actions/execution-package.ts`
 
@@ -118,36 +139,112 @@ this end-to-end functional.
 
 ## Call-site preservation (from `lib/actions/mappings.ts`)
 
-Per Gate-2 Design Call D, the rewritten `mappings.ts` still calls three
-functions in the unmodified `transformations.ts`:
+The three functions that `mappings.ts` calls in `transformations.ts`
+(`resetFieldTransform`, `resetAllTransformsForTable`,
+`checkFieldMappingHasTransform`) are now rewritten against the new data
+model as of Prompt 3b. TFM UUID semantics are preserved — callers still
+pass the TFM id, and `resolveTfmId` handles the composite contributor
+form defensively.
 
-- `resetFieldTransform(tfmId)` — called from `editFieldMapping`,
-  `deleteFieldMapping`, and `replaceValueAssignment`. Will fail at runtime
-  until Prompt 3b rewrites it to query `target_field_mappings` instead of
-  the dropped `field_mappings` table.
-- `resetAllTransformsForTable(tableMappingId)` — called from
-  `regenerateFieldMappings`. Same status.
-- `checkFieldMappingHasTransform(tfmId)` — re-exported from `mappings.ts`
-  for the drawer UI. Prompt 3b will flip the implementation.
+## Known caveats (Prompt 3b)
 
-The rewritten `mappings.ts` passes TFM UUIDs to these functions; Prompt 3b
-must preserve that semantics during the rewrite.
+1. **Value Assignment apply uses the legacy RPC.** `applyTransform` for
+   a VA TFM loops every TM whose `target_table_id` matches the VA's
+   target field and calls the legacy `dq_apply_field_transform` RPC for
+   each. `dq_apply_field_transform_joined` rejects zero-source TFMs by
+   design, so the legacy call-path stays in use until a dedicated
+   `dq_apply_value_assignment` RPC lands in Prompt 3c alongside the
+   `outputs.ts` rewrite. Nothing is currently broken — the legacy RPC
+   still exists in the DB and works; the wiring is simply heavier than
+   it needs to be.
 
-## Verification status
+2. **`flagStagedRowIssues` call site preserved in try/catch.**
+   `lib/actions/staged-row-flags.ts` still queries legacy
+   `field_mappings` and is out of scope until Prompt 3d. Its call site
+   inside `applyTransform` is wrapped in `try/catch` so the apply
+   succeeds even when the flagging pass throws.
+
+3. **`toLegacyTransformation` adapter — semantic lie, scheduled deletion.**
+   Location: `lib/actions/transformations.ts`, private function
+   `toLegacyTransformation(row: TransformationRow): Transformation`.
+
+   What it does: takes a new-model `TransformationRow` (which keys on
+   `target_field_mapping_id`) and coerces it into the legacy
+   `Transformation` interface from `lib/types/database.ts`, populating
+   the legacy `field_mapping_id` field with the **TFM id** instead of a
+   real (now-dropped) `field_mappings.id`. Every `FieldItem.transformation`
+   surfaced by `getTransformData` routes through this adapter before
+   being returned.
+
+   Why it exists: the legacy `Transformation` TypeScript interface is
+   imported by 10+ out-of-scope consumers (`outputs.ts`,
+   `execution-package.ts`, `lib/quality/*`, `migration-intelligence.ts`,
+   `migration-runbook.ts`, `ai-quality-detection.ts`, `validation-rules.ts`,
+   `staging.ts`, `staged-row-flags.ts`, `projects.ts`). Changing the
+   interface in Prompt 3b would cascade a TypeScript-error storm across
+   all of them while their bodies are still operating on the legacy
+   data model. The adapter keeps the interface stable so those files
+   continue to type-check until Prompt 3c/3d rewrites their bodies.
+
+   Why it is a semantic lie: downstream readers see `.field_mapping_id`
+   and (reasonably) infer it identifies a row in the dropped
+   `field_mappings` table. It actually identifies a row in
+   `target_field_mappings`. The two id spaces have no overlap post-074,
+   so any caller that joins on the wrong table will return zero rows
+   silently.
+
+   Current dependants that consume `Transformation.field_mapping_id`
+   with the new TFM-id semantics:
+   - `lib/actions/transformations.ts` itself (internally stable; always
+     the same id it started with).
+   - `FieldItem.transformation` in `getTransformData` payloads — consumed
+     by `app/app/projects/[projectId]/transform/TransformContent.tsx`,
+     which never cross-references the id against `field_mappings`
+     (it only uses it as an opaque handle for `applyTransform` /
+     `revertTransform` calls, both of which flow back through
+     `resolveTfmId`).
+   - Any of the 10 out-of-scope modules that already query
+     `transformations.field_mapping_id` — all of which are broken at
+     runtime regardless, because they also reference the dropped
+     `field_mappings` / `field_acknowledgments` tables.
+
+   **REMOVAL REQUIREMENT (DO NOT SHIP PAST PROMPT 3d):** when the
+   Prompt 3c and Prompt 3d rewrites complete, `toLegacyTransformation`
+   and the legacy `Transformation` interface in `lib/types/database.ts`
+   must both be deleted. Downstream code should read
+   `transformations.target_field_mapping_id` directly (matching the
+   actual DB column name). Carrying a permanent
+   "looks-like-FM-id-but-actually-TFM-id" semantic shim past Phase 2 is
+   a maintenance liability — future engineers will read
+   `.field_mapping_id` and write code that depends on the wrong
+   identity semantics. The deletion should land in the same commit that
+   closes out Prompt 3d; a tracking TODO inside the adapter's header
+   comment reminds the commit author.
+
+4. **`suggestTransformDescription` context building.** The AI context
+   pulls from `target_field_mappings` + `mapping_sources` directly; the
+   prompt text is unchanged from the legacy shape. If a future Prompt
+   wants to exploit the new model (e.g., include combination_type /
+   combination_sql hints), that will be a targeted edit rather than a
+   structural change.
+
+## Verification status (Prompt 3b close-out)
 
 - `npx tsc --noEmit` — passes (0 errors).
 - `npm run build` — passes.
-- `npx vitest run tests/` — 78 tests pass across 7 files (4 env-gated
+- `npx vitest run tests/` — 116 tests pass across 8 files (10 env-gated
   integration tests skip without Heritage credentials).
-- Parameterised guard sweep covers all 15 write paths in
-  `lib/actions/mappings.ts` + `lib/actions/field-acknowledgments.ts`.
-- `computeOrphanedTfmsForTmDelete` (pure helper extracted from
-  `deleteTableMapping`) covered by 5 behavioural unit tests including the
-  two-TM scenario required by Gate-3 Item 2.
+- Parameterised guard sweep covers 15 mapping write paths + 12
+  transform/cascade write paths (27 total).
+- `computeOrphanedTfmsForTmDelete` covered by 5 behavioural unit tests.
+- Source-level refinement tests pin the seven Gate-2 decisions (R1–R7)
+  in `transforms-refinements.test.ts`.
 
-Runtime breakage is confined to the out-of-scope modules listed above.
-The mapping read path (`getMappings`), the guard wiring, and the shim
-are fully wired and exercised by the test suite.
+Runtime breakage is confined to Prompt 3c/3d modules
+(`outputs.ts`, `execution-package.ts`, `lib/quality/*`, and the six
+quality-adjacent actions listed below). The transform read path
+(`getTransformData`), apply path (mapped + VA), revert path, reset path,
+and FK cascade path are all fully wired.
 
 ## Test coverage debt (accepted at Gate-3 Item 3)
 

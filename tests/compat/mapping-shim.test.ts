@@ -124,6 +124,7 @@ function baseTfm(overrides: Partial<TargetFieldMappingRow> = {}): TargetFieldMap
     acknowledgment_reason: null,
     combination_type: 'single',
     combination_sql: null,
+    needs_transformation: null,
     created_at: '2026-04-02T00:00:00Z',
     updated_at: '2026-04-02T00:00:00Z',
     ...overrides,
