@@ -1,0 +1,135 @@
+{
+  "project": "Fixture Project",
+  "version": "1.0",
+  "table_mappings": [
+    {
+      "source": {
+        "table": "s_customers",
+        "dataset": "Legacy CRM"
+      },
+      "target": {
+        "table": "t_customers",
+        "dataset": "Modern ERP"
+      },
+      "confidence": null,
+      "status": "approved",
+      "reasoning": null,
+      "field_mappings": [
+        {
+          "source_field": "s_id",
+          "source_type": "integer",
+          "target_field": "t_customer_id",
+          "target_type": "integer",
+          "confidence": 95,
+          "status": "approved",
+          "type_compatibility": null,
+          "reasoning": "Direct primary key mapping.",
+          "needs_transform": true
+        },
+        {
+          "source_field": "s_first_name",
+          "source_type": "text",
+          "target_field": "t_full_name",
+          "target_type": "text",
+          "confidence": 80,
+          "status": "approved",
+          "type_compatibility": null,
+          "reasoning": "Concatenate first name and last name with a space separator.",
+          "needs_transform": true
+        },
+        {
+          "source_field": "s_last_name",
+          "source_type": "text",
+          "target_field": "t_full_name",
+          "target_type": "text",
+          "confidence": 80,
+          "status": "approved",
+          "type_compatibility": "exact",
+          "reasoning": null,
+          "needs_transform": true
+        },
+        {
+          "source_field": "s_email",
+          "source_type": "text",
+          "target_field": "t_email_norm",
+          "target_type": "text",
+          "confidence": 90,
+          "status": "approved",
+          "type_compatibility": null,
+          "reasoning": "Normalize email to lowercase; user dismissed stricter validation.",
+          "needs_transform": true
+        },
+        {
+          "source_field": "[Value Assignment]",
+          "source_type": "",
+          "target_field": "t_tenant_id",
+          "target_type": "uuid",
+          "confidence": null,
+          "status": "approved",
+          "type_compatibility": null,
+          "reasoning": "Tenant ID hardcoded per deployment instance.",
+          "needs_transform": true
+        },
+        {
+          "source_field": "s_legacy_flag",
+          "source_type": "text",
+          "target_field": "t_deprecated_flag",
+          "target_type": "text",
+          "confidence": 40,
+          "status": "rejected",
+          "type_compatibility": null,
+          "reasoning": "Weak match; user rejected.",
+          "needs_transform": false
+        }
+      ]
+    },
+    {
+      "source": {
+        "table": "s_orders",
+        "dataset": "Legacy CRM"
+      },
+      "target": {
+        "table": "t_orders",
+        "dataset": "Modern ERP"
+      },
+      "confidence": null,
+      "status": "approved",
+      "reasoning": null,
+      "field_mappings": [
+        {
+          "source_field": "so_id",
+          "source_type": "integer",
+          "target_field": "t_order_id",
+          "target_type": "integer",
+          "confidence": 95,
+          "status": "approved",
+          "type_compatibility": null,
+          "reasoning": null,
+          "needs_transform": true
+        },
+        {
+          "source_field": "so_customer_id",
+          "source_type": "integer",
+          "target_field": "t_customer_fk",
+          "target_type": "integer",
+          "confidence": 92,
+          "status": "approved",
+          "type_compatibility": null,
+          "reasoning": "FK mapped direct to source customer id.",
+          "needs_transform": true
+        },
+        {
+          "source_field": "so_total_cents",
+          "source_type": "integer",
+          "target_field": "t_amount_dollars",
+          "target_type": "numeric(10,2)",
+          "confidence": 88,
+          "status": "approved",
+          "type_compatibility": null,
+          "reasoning": "Divide cents by 100 to express dollars.",
+          "needs_transform": true
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,10 @@
+source_table,source_field,source_type,target_table,target_field,target_type,confidence,status,reasoning,needs_transform
+s_customers,s_id,integer,t_customers,t_customer_id,integer,95,approved,Direct primary key mapping.,true
+s_customers,s_first_name,text,t_customers,t_full_name,text,80,approved,Concatenate first name and last name with a space separator.,true
+s_customers,s_last_name,text,t_customers,t_full_name,text,80,approved,,true
+s_customers,s_email,text,t_customers,t_email_norm,text,90,approved,Normalize email to lowercase; user dismissed stricter validation.,true
+,[Value Assignment],,t_customers,t_tenant_id,uuid,,approved,Tenant ID hardcoded per deployment instance.,true
+s_customers,s_legacy_flag,text,t_customers,t_deprecated_flag,text,40,rejected,Weak match; user rejected.,false
+s_orders,so_id,integer,t_orders,t_order_id,integer,95,approved,,true
+s_orders,so_customer_id,integer,t_orders,t_customer_fk,integer,92,approved,FK mapped direct to source customer id.,true
+s_orders,so_total_cents,integer,t_orders,t_amount_dollars,"numeric(10,2)",88,approved,Divide cents by 100 to express dollars.,true
