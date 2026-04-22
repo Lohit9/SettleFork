@@ -101,26 +101,128 @@ apply → cascade on source change) is covered by manual canary QA rather
 than an automated test — running a rollback-safe write cycle against
 production in CI is judged worse than the manual smoke test.
 
-### Prompt 3c scope — `lib/actions/outputs.ts` + `lib/actions/execution-package.ts`
+### Prompt 3c scope — `lib/actions/outputs.ts` + `lib/actions/execution-package.ts` + `lib/quality/readiness-score.ts` — ✅ COMPLETE
 
-| File                              | Line  | Description                                                    |
-| --------------------------------- | ----- | -------------------------------------------------------------- |
-| `lib/actions/outputs.ts`          | 251   | Ack join — fetch `field_acknowledgments` for project rollup    |
-| `lib/actions/outputs.ts`          | 278   | FM enumeration for migration output catalog                    |
-| `lib/actions/outputs.ts`          | 660   | FM → target field list for output manifest                     |
-| `lib/actions/outputs.ts`          | 813   | FM row for JSONB-shape output                                  |
-| `lib/actions/outputs.ts`          | 981   | FM status filter (non-rejected TMs) for export                 |
-| `lib/actions/outputs.ts`          | 1175  | FM batch fetch for export bundle                               |
-| `lib/actions/outputs.ts`          | 1309  | FM → (source_field, target_field, TM) tuple for package        |
-| `lib/actions/execution-package.ts`| 829   | FM enumeration for apply plan                                  |
-| `lib/actions/execution-package.ts`| 1339  | FM → field join for SQL stitching                              |
+All three modules rewritten against the new data model. Key outcomes:
+
+- `lib/actions/outputs.ts` is now a thin orchestrator. Data fetching lives in
+  a new private `hydrateProjectData` helper; output generation delegates to
+  six pure translators in `lib/actions/_outputs-translators.ts`
+  (`buildMappingCsvRows`, `buildMappingJsonGroups`, `buildTransformSpecsLines`,
+  `buildGoldStandardSelectSQL`, `buildSqlLoadScriptInserts`,
+  `buildReadinessReportPrompt`). Persisting server actions follow the
+  `__Internal`-function pattern with a `__skipPersistence` flag; the exported
+  wrappers always pass `false`.
+- `lib/actions/execution-package.ts` + its extracted
+  `lib/actions/_execution-package-prompt.ts` module rewritten analogously.
+- `lib/quality/readiness-score.ts` rewritten to query
+  `target_field_mappings` + `mapping_sources` + `source_field_acknowledgments`
+  + bare-ack TFMs. The scoring formula itself (`readiness-formula.ts`) is
+  unchanged per D6.
+- TM ↔ TFM pairing centralised in `lib/actions/_outputs-helpers.ts`
+  (`groupTfmsByTableMapping`, `enumerateFieldPairs`, `isValueAssignment`)
+  so outputs + exec-package + (indirectly, via the same rules inlined)
+  readiness never drift.
+- **D1 multi-source fallback bug fixed.** Legacy `generateGoldStandardCSVs`
+  / `generateSQLLoadScripts` fallback SQL emitted one column per MS row,
+  producing duplicate aliases on concat_\* TFMs without a saved
+  transformation (e.g. two columns aliased `t_full_name`). The rewrite
+  emits one column per primary TFM and, for concat_\* / multi-source TFMs
+  without a transformation, emits a warning and skips the column instead
+  of generating invalid SQL. Regression test:
+  `tests/outputs/gold-standard-select.golden.test.ts › T9 D1 regression`.
+- **`rows.toLocaleString()` bug fixed.** Legacy SQL load scripts rendered
+  `Rows: [object Object],[object Object],…` because the row-array
+  (not `rows.length`) was stringified. Fixed in
+  `buildSqlLoadScriptInserts`. Regression test:
+  `tests/outputs/sql-load-inserts.golden.test.ts › T10 rows-header regression`.
+- **D10 `toLegacyTransformation` preserved.** The adapter in
+  `lib/actions/transformations.ts` is unchanged (0 diff since
+  commit `24f7ad8`). Scheduled deletion moves to Prompt 3d, at which point
+  every remaining consumer of the legacy `Transformation.field_mapping_id`
+  semantic lie must be audited and migrated.
+
+Tests added (Prompt 3c):
+
+- `tests/outputs/outputs-helpers.unit.test.ts` — 13 assertions covering
+  the fixture's 10 coverage cases (A1–A10) plus orphan-skip behaviour.
+- `tests/outputs/mapping-file.csv.golden.test.ts`,
+  `mapping-file.json.golden.test.ts`, `transform-specs.golden.test.ts`,
+  `gold-standard-select.golden.test.ts`, `sql-load-inserts.golden.test.ts`,
+  `readiness-report-prompt.golden.test.ts` — six translator-level golden
+  fixtures.
+- `tests/outputs/execution-package-prompt.monolithic.golden.test.ts`,
+  `execution-package-prompt.compartmentalized.golden.test.ts` — LLM prompt
+  golden fixtures for both generation modes.
+- `tests/outputs/rejected-tfm-audit-trail.test.ts` — Test 11: eight
+  inclusion/exclusion assertions proving rejected TFMs appear in
+  audit-trail exports (CSV, JSON) and never in execution artifacts
+  (transform-specs, gold-standard-select, SQL load inserts, readiness
+  prompt, both exec-package variants). Exercised by the 2026-04-22 TFM-9
+  fixture relocation (see `tests/fixtures/outputs/README.md`).
+- `tests/outputs/confidence-formatting.test.ts` — regression guard
+  against the Gate 3 Item 1 `9500%` bug.
+- `tests/outputs/no-legacy-table-refs.test.ts` — Test 13: source-level
+  grep proving the three rewritten files contain zero
+  `.from('field_mappings' | 'field_acknowledgments')` references.
+- `tests/outputs/guard-absence.test.ts` — Test 14: source-level grep
+  enforcing D8 (no `assertMappingWritesEnabled` in output-generation
+  files).
+- `tests/integration/outputs-heritage.test.ts` — Test 17: env-gated
+  heritage integration for `generateMappingFile` + `getOutputsPageData`.
+  Includes Flag 1's bounds-based plausibility assertions on Heritage
+  Core metrics with verification-query comments showing how to
+  re-baseline to exact hard-coded values.
+- `tests/integration/readiness-score-heritage.test.ts` — Test 15:
+  env-gated shape-and-soundness suite for `computeReadinessScore`.
+
+Known coverage gaps (accepted, tracked here):
+
+- **`__skipPersistence` flag not exercised by a dedicated test** (the
+  originally-planned Test 12). The flag is consumed only by the private
+  `generateXInternal` functions, which cannot be exported from a
+  `'use server'` file without becoming server actions. Exposing them
+  would either break the `'use server'` contract or require splitting
+  `outputs.ts` into a pure helper module + a thin server-action
+  wrapper — a refactor deferred to future work. The flag's effect is
+  indirectly covered by the golden tests (which exercise the
+  translators, which is where all output content is assembled).
+- **`tests/quality/no-drift.test.ts`** (originally-planned Test 16).
+  Deferred to pre-commit discipline — the git-diff-based assertion is
+  awkward inside Vitest (requires spawning git as a subprocess with
+  parameters that vary per branch/rebase state), and a single-founder
+  team does not benefit from automating what a 5-second manual check
+  catches. Before committing any Prompt 3c/3d work, run:
+
+  ```sh
+  git diff --name-only HEAD -- lib/quality/
+  ```
+
+  and verify the output matches scope expectations:
+
+  - **Prompt 3c**: `lib/quality/readiness-score.ts` only (and
+    incidentally `readiness-formula.ts` if the formula itself changes,
+    though 3c leaves it untouched).
+  - **Prompt 3d**: `lib/quality/readiness-score.ts` +
+    `lib/quality/fix-target.ts` + `lib/quality/fix-engine.ts` +
+    `lib/quality/detection-engine.ts` +
+    `lib/quality/resolved-by-transform.ts`.
+
+  If the diff shows any `lib/quality/` file not in the expected list,
+  STOP and reconcile before committing — an unexpected file indicates
+  either scope creep or accidental drift.
+- **Fixture-based unit test for `computeReadinessScore`** (the
+  originally-planned Test 15's fixture variant). Same `'use server'`
+  constraint as `__skipPersistence`: the wrapper cannot be called in
+  isolation without mocking `supabaseAdmin`, which would require a
+  query-builder fake the codebase doesn't have (see "Test coverage
+  debt" section). Shape/soundness + numeric plausibility is covered by
+  the env-gated heritage test against live data.
 
 ### Prompt 3d scope — `lib/quality/*` + quality-adjacent actions
 
 | File                                  | Line  | Description                                                    |
 | ------------------------------------- | ----- | -------------------------------------------------------------- |
-| `lib/quality/readiness-score.ts`      | 36    | `field_acknowledgments` read for project coverage              |
-| `lib/quality/readiness-score.ts`      | 65    | FM enumeration for mapped-vs-total calc                        |
 | `lib/quality/fix-target.ts`           | 109   | FM → target field lookup for fix suggestion                    |
 | `lib/quality/fix-engine.ts`           | 334   | FM → staged row hydration for fix apply                        |
 | `lib/quality/detection-engine.ts`     | 678   | FM enumeration for "un-mapped target with non-null constraint" |
@@ -228,23 +330,109 @@ form defensively.
    combination_sql hints), that will be a targeted edit rather than a
    structural change.
 
-## Verification status (Prompt 3b close-out)
+## Bugs fixed in Prompt 3c
+
+Separate from the data-model rewrite itself, Prompt 3c repairs latent
+bugs that the rewrite exposed. Each fix lands in the same commit as the
+corresponding rewrite step, with a code comment at the repair site and a
+regression test pinning the new behaviour.
+
+1. **Confidence-formatter bug — render stored integer directly.**
+   Production stores `target_field_mappings.confidence`,
+   `mapping_sources.confidence`, and (pre-074) `field_mappings.confidence`
+   as 0–100 integer-valued numerics. Verified via live query during
+   Prompt 3c Gate 3 Concern 1: `min=40, max=100, avg≈91` across
+   `n=763/774/776` rows (TFM / MS / backup tables respectively).
+
+   Three formatter sites previously applied `Math.round(c * 100)` under
+   the incorrect assumption that `c` was a 0–1 fraction, producing
+   absurd rendered strings such as `[confidence: 9500%]` in every Claude
+   execution-package prompt and every customer-facing migration
+   intelligence report. The buggy formula lived in:
+
+   - `lib/actions/_execution-package-prompt.ts:693` (monolithic +
+     compartmentalized mapping sections, primary TFM line).
+   - `lib/actions/_execution-package-prompt.ts:724` (same file,
+     contributor MS lines).
+   - `lib/actions/migration-intelligence.ts:616` (project-level LLM
+     context block — technically quiescent post-074 because the file
+     still reads the dropped `field_mappings` table, but fixed here so
+     Prompt 3d's rewrite inherits the correct formula).
+
+   `lib/actions/outputs.ts:1212,1235,1246` was already correct
+   (`Math.round(confidence)` with no multiplier), and `readiness-score.ts`
+   + UI components (`MappingContent.tsx`, `TransformContent.tsx`) had
+   always treated the value as 0–100. This was a clean, isolated
+   formatter bug, not a data-semantic inconsistency — the verdict was
+   confirmed by a full-codebase audit of every `.confidence` reader
+   (Gate 3 Item 1 grep sweep).
+
+   Fix: remove the `* 100` multiplier at all three sites; add a verbatim
+   justification comment above each site pointing future maintainers at
+   this doc entry. Regression test
+   `tests/outputs/confidence-formatting.test.ts` asserts that no
+   prompt-assembly path emits a three-digit-plus percentage (other than
+   exactly `100%`), that `9500%` specifically never appears, and that
+   the fixture continues to exercise realistic 40–99 values. Golden
+   fixtures regenerated 2026-04-22; the monolithic and compartmentalized
+   expected.md files now show the correct `[confidence: 95%]`-style
+   strings.
+
+   The founder overruled Gate 2's byte-for-byte preservation rule for
+   this specific case on the grounds that preserving a real,
+   customer-visible defect purely to hold golden-fixture diffs to zero
+   bytes is the wrong trade. Byte-equivalence exists to prevent
+   accidental drift, not to calcify pre-existing bugs.
+
+2. **`rows.toLocaleString()` → `rows.length.toLocaleString()` in SQL
+   load scripts.** Legacy `generateSQLLoadScripts` emitted a header line
+   reading `-- Rows: [object Object],[object Object],…` because it called
+   `toLocaleString` on the row-array (JavaScript implicitly stringifies
+   each element via `Array.prototype.toString` → `Object.prototype.toString`).
+   The obvious intent is a row count — fixed at the single fix-site
+   inside `buildSqlLoadScriptInserts`
+   (`lib/actions/_outputs-translators.ts`) with a comment citing the
+   repair. Regression test:
+   `tests/outputs/sql-load-inserts.golden.test.ts › T10 rows-header regression`.
+
+3. **D1 multi-source fallback duplicate-alias bug in gold-standard /
+   SQL-load fallback SQL.** Legacy fallback path iterated every approved
+   MS row and emitted a column aliased `<target_field_name>` for each,
+   generating invalid SQL (`SELECT … AS t_full_name, … AS t_full_name`
+   inside one projection) on any concat_\* TFM lacking a saved
+   transformation. Rewrite emits one column per primary TFM; for
+   multi-source TFMs without a transformation, logs a warning and skips
+   the column. Regression test:
+   `tests/outputs/gold-standard-select.golden.test.ts › T9 D1 regression`.
+
+## Verification status (Prompt 3c close-out)
 
 - `npx tsc --noEmit` — passes (0 errors).
-- `npm run build` — passes.
-- `npx vitest run tests/` — 116 tests pass across 8 files (10 env-gated
-  integration tests skip without Heritage credentials).
-- Parameterised guard sweep covers 15 mapping write paths + 12
-  transform/cascade write paths (27 total).
-- `computeOrphanedTfmsForTmDelete` covered by 5 behavioural unit tests.
-- Source-level refinement tests pin the seven Gate-2 decisions (R1–R7)
-  in `transforms-refinements.test.ts`.
+- `npm run build` — PENDING (final run at Gate 4 pre-commit).
+- `npx vitest run tests/` — 169 tests pass across 21 files (21 env-gated
+  integration tests skip without Heritage credentials; total suite size
+  190 tests).
+- Output translators pinned via eight golden-fixture test files in
+  `tests/fixtures/outputs/` covering CSV, JSON, transform specs, gold
+  standard SELECT, SQL load inserts, readiness-report prompt, and both
+  execution-package prompt variants.
+- TM ↔ TFM pairing covered by 13 assertions in `outputs-helpers.unit.test.ts`
+  (A1–A10 coverage cases).
+- Rejected-TFM audit-trail contract pinned by 8 assertions
+  (`rejected-tfm-audit-trail.test.ts` — Test 11).
+- Three latent bugs (confidence formatter, `rows.toLocaleString()`, D1
+  duplicate alias) fixed with dedicated regression tests.
+- Source-level guards enforce absence of legacy table references
+  (`no-legacy-table-refs.test.ts`) and absence of
+  `assertMappingWritesEnabled` calls (`guard-absence.test.ts`) in all
+  three rewritten files.
 
-Runtime breakage is confined to Prompt 3c/3d modules
-(`outputs.ts`, `execution-package.ts`, `lib/quality/*`, and the six
-quality-adjacent actions listed below). The transform read path
-(`getTransformData`), apply path (mapped + VA), revert path, reset path,
-and FK cascade path are all fully wired.
+Runtime breakage is confined to Prompt 3d modules (`lib/quality/*`
+minus `readiness-score.ts` + `readiness-formula.ts`, and the six
+quality-adjacent actions listed above). The outputs read/write path,
+execution-package generation, readiness-score computation, transform
+apply/revert/reset/cascade, and mapping CRUD are all fully wired on the
+new data model.
 
 ## Test coverage debt (accepted at Gate-3 Item 3)
 

@@ -613,7 +613,13 @@ export async function extractMigrationIntelligence(projectId: string): Promise<{
         if (srcDisplay === null) continue
 
         const transform = transformsByFieldMappingId.get(fm.id)
-        const confidence = fm.confidence != null ? Math.round(fm.confidence * 100) : '?'
+        // Confidence is stored as 0-100 integer in target_field_mappings
+        // and mapping_sources. Legacy formatter did Math.round(c * 100)
+        // under the incorrect assumption that c was a 0-1 fraction,
+        // producing absurd values like "9500%" in Claude prompts and
+        // customer-facing execution packages. Fixed in Prompt 3c
+        // (2026-04-22) — we now render the stored integer directly.
+        const confidence = fm.confidence != null ? Math.round(fm.confidence) : '?'
         const needsTransform = fm.needs_transformation ? 'yes' : 'no'
 
         mappingsSection += `  - ${srcDisplay} → ${tgt.name} (${tgt.data_type})\n`
