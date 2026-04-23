@@ -20,10 +20,10 @@ import { describe, it, expect } from 'vitest'
  *   CAPTURE mode (always runs when env is present)
  *     Calls `getProjectsWithStats()`, picks out the canary project by
  *     id, logs a copy-pasteable JSON block, and passes unconditionally.
- *     Use this block to populate SNAPSHOT_2026_04_22 below when the
+ *     Use this block to populate SNAPSHOT_2026_04_23 below when the
  *     3D-14 integration pass runs.
  *
- *   PINNED mode (activates when SNAPSHOT_2026_04_22 !== null)
+ *   PINNED mode (activates when SNAPSHOT_2026_04_23 !== null)
  *     Exact-equals assertion against every metric in the snapshot.
  *     Drift fails loudly and points the operator at the re-baseline
  *     procedure.
@@ -56,7 +56,7 @@ import { describe, it, expect } from 'vitest'
  * How to re-baseline
  * -------------------
  * When Heritage Core mapping data changes (new mappings approved,
- * acknowledgments flipped, TMs rejected), SNAPSHOT_2026_04_22 becomes
+ * acknowledgments flipped, TMs rejected), SNAPSHOT_2026_04_23 becomes
  * stale. Re-baseline by:
  *   1. Run this test locally with PROJECTS_HERITAGE_PROJECT_ID set.
  *      The CAPTURE block prints a full JSON snapshot.
@@ -66,15 +66,21 @@ import { describe, it, expect } from 'vitest'
  *            AND status != 'rejected'
  *            AND NOT (is_acknowledged AND combination_type IS NULL);
  *      The result must match `mappedFieldCount` in the snapshot.
- *   3. Copy the JSON into SNAPSHOT_2026_04_22 and rename to the new
+ *   3. Copy the JSON into SNAPSHOT_2026_04_23 and rename to the new
  *      capture date (SNAPSHOT_YYYY_MM_DD). Update pinned assertions.
  *   4. If SQL and `getProjectsWithStats` disagree, STOP — you have a
  *      rollup bug. Do not update the snapshot until the underlying
  *      aggregation is fixed.
  *
  * Re-baseline history:
- *   - 2026-04-22 — SCAFFOLD. SNAPSHOT_2026_04_22 is null; 3D-14 will
- *     populate it after running CAPTURE against Heritage Core.
+ *   - 2026-04-22 — SCAFFOLD. Populated after running CAPTURE against
+ *     Heritage Core on the same day.
+ *   - 2026-04-23 — Prompt B re-baseline. `blockingIssueCount` switched
+ *     to the resolution-suppressed figure, five canonical
+ *     `computeProjectStats` fields added, and a latent URL-length bug
+ *     in the Round-4 transformations fetch fixed (unmasking the true
+ *     `totalTransforms`/`savedTransforms`/`coveredTransformCount`). See
+ *     the SNAPSHOT_2026_04_23 docblock below for the full rationale.
  */
 
 // This test requires explicit opt-in via
@@ -112,6 +118,18 @@ interface HeritageProjectsSnapshot {
   savedTransforms: number
   needsTransformCount: number
   coveredTransformCount: number
+  // ── Prompt B additions ──────────────────────────────────────────────
+  //
+  // These five fields are the canonical `computeProjectStats` numbers
+  // the Projects Dashboard card now renders. Pinning them here keeps
+  // the snapshot honest: if the shared helper's formulas ever drift,
+  // CI fails loudly against Heritage Core numbers the user has
+  // visually verified against the Migration Center page.
+  mappingApproved: number
+  mappingTotal: number
+  transformApplied: number
+  transformScope: number
+  transformNeedsWork: number
   readinessScore: number | null
   currentPhase: number
   outputCount: number
@@ -120,33 +138,71 @@ interface HeritageProjectsSnapshot {
 
 // ─── Pinned snapshot ─────────────────────────────────────────────────────────
 
-const SNAPSHOT_2026_04_22: HeritageProjectsSnapshot = {
-  // Captured 2026-04-22 against Heritage Core (6622ddf1) after
-  // Prompt 3d Option A + Path A refactor of getProjectsWithStats.
+const SNAPSHOT_2026_04_23: HeritageProjectsSnapshot = {
+  // Re-baselined 2026-04-23 against Heritage Core (6622ddf1) as part of
+  // the Prompt B card/helper alignment work. Three independent changes
+  // shifted numbers from the prior 2026-04-22 capture:
   //
-  // Re-baseline required after any of:
-  //   - Manual data operations on Heritage Core project
-  //   - Schema changes affecting TFM/MS/transformations tables
-  //   - getProjectsWithStats rollup logic changes
-  //   - Detection-engine scans that mutate in-flight quality_issues
-  //     (shifts blockingIssueCount/readinessScore)
+  //   1. (Expected, Prompt B) `blockingIssueCount` now reads
+  //      `computeProjectStats.openBlockingResolutionSuppressed` instead
+  //      of the naive in-flight count. For Heritage the resolution-
+  //      suppressed figure is 38 — it matches the Migration Center
+  //      card exactly, which was the entire point of the Prompt B
+  //      re-wire. The previous `10` was the stale `b.blockingIssueCount`
+  //      from the aggregation loop.
   //
-  // If this snapshot drifts: run the CAPTURE test, verify new values
-  // are expected, update this constant with a dated comment
-  // explaining the drift cause.
+  //   2. (Expected, Prompt B) Canonical stats (`mappingApproved`,
+  //      `mappingTotal`, `transformApplied`, `transformScope`,
+  //      `transformNeedsWork`) were added as new fields and now populate
+  //      from the shared `computeProjectStats` helper. Values
+  //      (116/116, 7/36, 29) match Migration Center's
+  //      `approvedFieldMappings`/`totalFieldMappings`/
+  //      `completedTransforms`/`totalTransforms`/
+  //      `fieldsNeedingTransformWork` byte-for-byte.
+  //
+  //   3. (Latent bug fix) `totalTransforms` / `savedTransforms` /
+  //      `coveredTransformCount` jumped from 0 to 7 / 7 / 5. Root cause
+  //      was the Round-4 `.in('target_field_mapping_id', tfmIds)` filter
+  //      silently failing with "Bad Request" once `tfmIds` exceeded the
+  //      PostgREST URL-length ceiling (Heritage org has 734 TFMs).
+  //      Switching the fetch to an embedded `target_field_mappings!inner
+  //      (project_id)` filter on `projectIds` makes the filter
+  //      URL-length-safe and finally reveals the transformations the
+  //      DB actually contains. The 2026-04-22 snapshot's
+  //      `totalTransforms: 0` masked this bug.
+  //
+  //   4. (Data drift) `mappedFieldCount` 100→102, `outputCount` 11→13,
+  //      `readinessScore` 4→0 reflect legitimate Heritage data changes
+  //      since the prior capture (additional mappings, new outputs, new
+  //      quality issues lowering the quality-resolution %).
+  //
+  // Verification: Migration Center snapshot (outputs-heritage.test.ts,
+  // captured at the same time) shows
+  //   approvedFieldMappings: 116, totalFieldMappings: 116,
+  //   completedTransforms: 7,   totalTransforms: 36,
+  //   openBlocking: 38,         openWarnings: 0
+  // which matches this snapshot's (mappingApproved, mappingTotal,
+  // transformApplied, transformScope, blockingIssueCount, warningCount)
+  // exactly — proving the card and Migration Center now render the same
+  // canonical numbers.
   projectId: "6622ddf1-47bd-4e48-ac2a-5b109a25bc13",
   totalSourceFields: 99,
-  mappedFieldCount: 100,
+  mappedFieldCount: 102,
   totalRows: 864,
-  blockingIssueCount: 10,
+  blockingIssueCount: 38,
   warningCount: 0,
-  totalTransforms: 0,
-  savedTransforms: 0,
+  totalTransforms: 7,
+  savedTransforms: 7,
   needsTransformCount: 34,
-  coveredTransformCount: 0,
-  readinessScore: 4,
+  coveredTransformCount: 5,
+  mappingApproved: 116,
+  mappingTotal: 116,
+  transformApplied: 7,
+  transformScope: 36,
+  transformNeedsWork: 29,
+  readinessScore: 0,
   currentPhase: 3,
-  outputCount: 11,
+  outputCount: 13,
   status: "active",
 }
 
@@ -196,6 +252,11 @@ async function captureHeritageSnapshot(): Promise<HeritageProjectsSnapshot> {
     savedTransforms: row.savedTransforms,
     needsTransformCount: row.needsTransformCount,
     coveredTransformCount: row.coveredTransformCount,
+    mappingApproved: row.mappingApproved,
+    mappingTotal: row.mappingTotal,
+    transformApplied: row.transformApplied,
+    transformScope: row.transformScope,
+    transformNeedsWork: row.transformNeedsWork,
     readinessScore: row.readinessScore,
     currentPhase: row.currentPhase,
     outputCount: row.outputCount,
@@ -230,9 +291,9 @@ const pinnedDescribeFn = PINNED_READY ? describe : describe.skip
 pinnedDescribeFn(
   '[integration] getProjectsWithStats against Heritage Core — pinned assertions',
   () => {
-    it('per-project stats match SNAPSHOT_2026_04_22 exactly', async () => {
+    it('per-project stats match SNAPSHOT_2026_04_23 exactly', async () => {
       const snapshot = await captureHeritageSnapshot()
-      expect(snapshot).toEqual(SNAPSHOT_2026_04_22)
+      expect(snapshot).toEqual(SNAPSHOT_2026_04_23)
     }, 60_000)
   },
 )

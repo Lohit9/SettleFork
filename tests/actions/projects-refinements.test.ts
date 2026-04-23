@@ -185,14 +185,24 @@ describe('[projects refinements] Round 3 — TFM + mapping_sources fetch', () =>
     expect(code).not.toMatch(/\.in\(\s*['"]table_mapping_id['"]/)
   })
 
-  it('selects TFM columns needed for rollup (id, project_id, target_field_id, status, is_acknowledged, combination_type, needs_transformation)', () => {
+  it('selects TFM columns needed for rollup (id, project_id, target_field_id, confidence, status, is_acknowledged, combination_type, needs_transformation)', () => {
+    // Prompt B widened the projection with `confidence` so the shared
+    // `computeProjectStats` helper can call `fieldNeedsTransform` with
+    // the real confidence score (vs. a zero-defaulted fallback). The
+    // regex pins the column order to catch accidental truncation.
     expect(code).toMatch(
-      /\.select\(\s*['"]id,\s*project_id,\s*target_field_id,\s*status,\s*is_acknowledged,\s*combination_type,\s*needs_transformation/
+      /\.select\(\s*['"]id,\s*project_id,\s*target_field_id,\s*confidence,\s*status,\s*is_acknowledged,\s*combination_type,\s*needs_transformation/
     )
   })
 
-  it('nests mapping_sources(source_field_id, ordinal) for the source-field union', () => {
-    expect(code).toMatch(/mapping_sources\(\s*source_field_id,\s*ordinal\s*\)/)
+  it('nests mapping_sources(source_field_id, ordinal, type_compatibility) for the source-field union + transform scope heuristic', () => {
+    // Prompt B widened the nested projection with `type_compatibility`
+    // so the shared `computeProjectStats` helper can feed the AI-prose
+    // compat text into `fieldNeedsTransform`. Without it the heuristic
+    // receives an empty string and under-reports scope.
+    expect(code).toMatch(
+      /mapping_sources\(\s*source_field_id,\s*ordinal,\s*type_compatibility\s*\)/
+    )
   })
 
   it('binds to tfmRows (not legacy fieldMappings)', () => {
@@ -204,26 +214,49 @@ describe('[projects refinements] Round 3 — TFM + mapping_sources fetch', () =>
   })
 })
 
-// ── Round 4: transformations column rename ───────────────────────────────────
+// ── Round 4: transformations embedded-join filter ────────────────────────────
 
-describe('[projects refinements] Round 4 — transformations column rename', () => {
+describe('[projects refinements] Round 4 — transformations fetch', () => {
   const body = round4Slice()
   const code = stripComments(body)
 
-  it('selects target_field_mapping_id (NOT field_mapping_id)', () => {
-    expect(code).toMatch(/\.select\(\s*['"]target_field_mapping_id,\s*status['"]\s*\)/)
+  it('selects target_field_mapping_id + status (NOT legacy field_mapping_id)', () => {
+    // Prompt B widened the SELECT with an embedded
+    // `target_field_mappings!inner(project_id)` relationship so we can
+    // filter by project_id without overflowing the URL with TFM UUIDs.
+    // The two legacy columns are still the first entries.
+    expect(code).toMatch(
+      /\.select\(\s*[`'"]target_field_mapping_id,\s*status,\s*target_field_mappings!inner\(project_id\)[`'"]/
+    )
   })
 
-  it('filters by target_field_mapping_id (NOT field_mapping_id)', () => {
-    expect(code).toMatch(/\.in\(\s*['"]target_field_mapping_id['"]\s*,\s*tfmIds\s*\)/)
+  it('filters via embedded target_field_mappings.project_id (URL-length-safe)', () => {
+    // Previous implementation filtered by `.in('target_field_mapping_id',
+    // tfmIds)` which silently returned 0 rows once the org accumulated
+    // more than ~300 TFMs (PostgREST URL ceiling). The embedded
+    // inner-join on project_id stays short because `projectIds` scales
+    // with # of projects per org (single digits), not # of TFMs.
+    expect(code).toMatch(
+      /\.in\(\s*['"]target_field_mappings\.project_id['"]\s*,\s*projectIds\s*\)/
+    )
   })
 
-  it('guards on tfmIds.length > 0 (preserved zero-length skip)', () => {
-    expect(code).toMatch(/tfmIds\.length\s*>\s*0/)
+  it('guards on projectIds.length > 0 (preserved zero-length skip)', () => {
+    expect(code).toMatch(/projectIds\.length\s*>\s*0/)
   })
 
-  it('empty-data type annotation uses the new target_field_mapping_id column', () => {
-    expect(code).toMatch(/target_field_mapping_id:\s*string;\s*status:\s*string/)
+  it('does NOT use the legacy .in(target_field_mapping_id, tfmIds) pattern', () => {
+    // Regression guard: if someone reintroduces the per-TFM filter the
+    // URL-length bug returns immediately for any org with >300 TFMs.
+    expect(code).not.toMatch(
+      /\.in\(\s*['"]target_field_mapping_id['"]\s*,\s*tfmIds\s*\)/
+    )
+  })
+
+  it('empty-data type annotation declares the embedded relationship', () => {
+    expect(code).toMatch(
+      /target_field_mapping_id:\s*string[\s\S]*?status:\s*string[\s\S]*?target_field_mappings:\s*\{\s*project_id:\s*string\s*\}/
+    )
   })
 })
 
@@ -388,10 +421,14 @@ describe('[projects refinements] TfmRollupRow type', () => {
     expect(code).toMatch(/needs_transformation:\s*boolean\s*\|\s*null/)
   })
 
-  it('declares nested mapping_sources array with source_field_id + ordinal', () => {
+  it('declares nested mapping_sources array with source_field_id + ordinal + type_compatibility', () => {
+    // Prompt B widened both the SELECT and the type so the shared
+    // `computeProjectStats` helper gets enough context for
+    // `fieldNeedsTransform` (which reads `type_compatibility` on the
+    // primary MS row).
     const code = stripComments(SRC)
     expect(code).toMatch(
-      /mapping_sources:\s*Array<\{\s*source_field_id:\s*string\s*\|\s*null;\s*ordinal:\s*number\s*\}>/
+      /mapping_sources:\s*Array<\s*\{[\s\S]*?source_field_id:\s*string\s*\|\s*null[\s\S]*?ordinal:\s*number[\s\S]*?type_compatibility:\s*string\s*\|\s*null[\s\S]*?\}\s*>/
     )
   })
 })

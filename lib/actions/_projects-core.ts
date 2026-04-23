@@ -102,6 +102,7 @@
 
 import type { SupabaseClient } from '@supabase/supabase-js'
 import type { Dataset, ProjectWithStats } from '@/lib/types/database'
+import { computeProjectStats } from '@/lib/quality/stat-formulas'
 
 /**
  * TFM row shape used by the `getProjectsWithStatsInternal` aggregation.
@@ -109,16 +110,26 @@ import type { Dataset, ProjectWithStats } from '@/lib/types/database'
  * `target_field_id`, `needs_transformation`) plus new-model fields
  * needed to identify bare-acks (`is_acknowledged`, `combination_type`)
  * and source-field contributors via the nested `mapping_sources` array.
+ *
+ * `confidence` + `type_compatibility` were added in Prompt B to feed the
+ * canonical `computeProjectStats` helper — the `fieldNeedsTransform`
+ * heuristic reads both to short-circuit the "same-family, direct
+ * compatible at high confidence" passthrough case.
  */
 export type TfmRollupRow = {
   id: string
   project_id: string
   target_field_id: string
-  status: string
+  confidence: number | null
+  status: 'needs_review' | 'approved' | 'rejected'
   is_acknowledged: boolean
   combination_type: string | null
   needs_transformation: boolean | null
-  mapping_sources: Array<{ source_field_id: string | null; ordinal: number }>
+  mapping_sources: Array<{
+    source_field_id: string | null
+    ordinal: number
+    type_compatibility: string | null
+  }>
 }
 
 export async function getProjectsWithStatsInternal(
@@ -165,9 +176,12 @@ export async function getProjectsWithStatsInternal(
       .select('id, project_id, target_table_id')
       .in('project_id', projectIds)
       .neq('status', 'rejected'),
+    // `title` was added in Prompt B so the helper's `isNeverResolvable`
+    // check can read both description and title when deciding whether a
+    // resolved-source-field suppression applies.
     supabase
       .from('quality_issues')
-      .select('project_id, severity, status, field_id, stage, issue_kind, description')
+      .select('project_id, severity, status, field_id, stage, issue_kind, description, title')
       .in('project_id', projectIds),
     supabase.from('outputs').select('project_id').in('project_id', projectIds),
     // Q5 union part 1: source-side acks live in their own table.
@@ -178,41 +192,81 @@ export async function getProjectsWithStatsInternal(
   ])
 
   const sourceTableIds = (sourceTables || []).map((t) => t.id)
-  const allTargetTableIds = [...new Set((tableMappings || []).map((tm) => tm.target_table_id))]
+  // Every table in the target dataset — this is what Migration Center
+  // and the canonical `computeProjectStats` helper consider the "total
+  // target field" universe. Prompt B switched the target-field fetch
+  // from `tableMappings.target_table_id` (which is narrower: only
+  // tables referenced by an approved TM) to this broader set so the
+  // card's mapping ratio matches Migration Center exactly.
+  const targetTableIds = (targetTables || []).map((t) => t.id)
+  // Legacy helper: target tables referenced by at least one non-rejected
+  // TM. Still used below to feed `totalTargetFieldCount` (which in turn
+  // drives the phase-progression `mappingDone` calc) so we don't
+  // accidentally shift phase transitions on projects whose target
+  // dataset has unmapped tables.
+  const mappedTargetTableIds = new Set((tableMappings || []).map((tm) => tm.target_table_id))
 
   // Round 3: source fields, target_field_mappings (+ nested mapping_sources),
   // ALL target fields (for counting).
   const [{ data: fields }, { data: tfmRows }, { data: allTargetFields }] = await Promise.all([
     sourceTableIds.length > 0
-      ? supabase.from('fields').select('id, table_id').in('table_id', sourceTableIds)
-      : Promise.resolve({ data: [] as { id: string; table_id: string }[], error: null }),
+      ? supabase.from('fields').select('id, name, data_type, table_id').in('table_id', sourceTableIds)
+      : Promise.resolve({
+          data: [] as { id: string; name: string | null; data_type: string | null; table_id: string }[],
+          error: null,
+        }),
     projectIds.length > 0
       ? supabase
           .from('target_field_mappings')
           .select(
-            'id, project_id, target_field_id, status, is_acknowledged, combination_type, needs_transformation, mapping_sources(source_field_id, ordinal)'
+            'id, project_id, target_field_id, confidence, status, is_acknowledged, combination_type, needs_transformation, mapping_sources(source_field_id, ordinal, type_compatibility)'
           )
           .in('project_id', projectIds)
       : Promise.resolve({
           data: [] as TfmRollupRow[],
           error: null,
         }),
-    allTargetTableIds.length > 0
-      ? supabase.from('fields').select('id, table_id').in('table_id', allTargetTableIds)
-      : Promise.resolve({ data: [] as { id: string; table_id: string }[], error: null }),
+    targetTableIds.length > 0
+      ? supabase.from('fields').select('id, name, data_type, table_id').in('table_id', targetTableIds)
+      : Promise.resolve({
+          data: [] as { id: string; name: string | null; data_type: string | null; table_id: string }[],
+          error: null,
+        }),
   ])
 
   const tfms = (tfmRows ?? []) as unknown as TfmRollupRow[]
   const tfmIds = tfms.map((t) => t.id)
 
-  // Round 4: transformations (column rename: field_mapping_id → target_field_mapping_id).
+  // Round 4: transformations (column rename: field_mapping_id →
+  // target_field_mapping_id).
+  //
+  // Filtering strategy: use a PostgREST embedded inner-join on
+  // `target_field_mappings!inner(project_id)` so the `.in(...)` clause
+  // stays short (projectIds is O(# projects in the org) — single digits
+  // in practice), instead of listing every TFM id. The previous
+  // `.in('target_field_mapping_id', tfmIds)` approach silently returned
+  // zero rows once `tfmIds` crossed the PostgREST URL length ceiling
+  // (~300 UUIDs). That had been masking the dashboard card's
+  // `totalTransforms` / `savedTransforms` figures as 0 even for
+  // projects with many applied transforms — latent since before Prompt
+  // B, and the reason the pre-Prompt-B heritage snapshot captured
+  // `totalTransforms: 0` despite 28 transformations existing in the
+  // org.
   const { data: transformations } =
-    tfmIds.length > 0
+    projectIds.length > 0
       ? await supabase
           .from('transformations')
-          .select('target_field_mapping_id, status')
-          .in('target_field_mapping_id', tfmIds)
-      : { data: [] as { target_field_mapping_id: string; status: string }[] }
+          .select(
+            'target_field_mapping_id, status, target_field_mappings!inner(project_id)',
+          )
+          .in('target_field_mappings.project_id', projectIds)
+      : {
+          data: [] as Array<{
+            target_field_mapping_id: string
+            status: string
+            target_field_mappings: { project_id: string } | null
+          }>,
+        }
 
   // Build lookup maps
   const datasetToProject = new Map<string, string>()
@@ -314,10 +368,15 @@ export async function getProjectsWithStatsInternal(
       targetTableToProject.set(t.id, pid)
     }
   })
-  // Count target fields per project (via table mapping target tables).
-  // Use countedTargetFieldIds to avoid double-counting when multiple source
-  // tables map to the same target table.
+  // Count target fields per project for the phase-progression
+  // `mappingDone` calc. Scope remains "tables referenced by a
+  // non-rejected TM" (legacy semantics) even though `allTargetFields`
+  // now covers every table in the target dataset; that broader set is
+  // for the canonical helper below. Restricting the count via
+  // `mappedTargetTableIds` preserves phase behavior for projects whose
+  // target dataset has unmapped tables.
   ;(allTargetFields || []).forEach((f) => {
+    if (!mappedTargetTableIds.has(f.table_id)) return
     const tms = (tableMappings || []).filter((tm) => tm.target_table_id === f.table_id)
     for (const tm of tms) {
       const b = buckets.get(tm.project_id)
@@ -403,8 +462,133 @@ export async function getProjectsWithStatsInternal(
     if (b) b.outputCount++
   })
 
+  // ── Per-project slices for the canonical `computeProjectStats` ───────
+  //
+  // The helper in `lib/quality/stat-formulas.ts` is the single source of
+  // truth for mapping / transform / blocking counts shared with the
+  // Migration Center page and the readiness scorer. We feed it
+  // per-project slices of the already-fetched bulk data — no additional
+  // round trips — and stash each result keyed by project id so the
+  // `.map(...)` below can stamp the canonical figures onto every
+  // `ProjectWithStats` without re-doing work.
+  //
+  // Slicing strategy: build a router from TFM id → project_id, then
+  // bucket mapping_sources / transformations by project in a single
+  // pass each. Same O(N) we already paid for the legacy buckets above.
+  type ProjectSlices = {
+    tfms: TfmRollupRow[]
+    mappingSources: Array<{
+      target_field_mapping_id: string
+      source_field_id: string | null
+      ordinal: number
+      type_compatibility: string | null
+    }>
+    transforms: Array<{ target_field_mapping_id: string; status: string | null }>
+    sourceFields: Array<{ id: string; name: string | null; data_type: string | null }>
+    targetFields: Array<{ id: string; name: string | null; data_type: string | null }>
+    sourceAckFieldIds: string[]
+    qualityIssues: Array<{
+      status: string
+      stage: string
+      severity: string
+      field_id: string | null
+      issue_kind: string | null
+      description: string | null
+      title: string | null
+    }>
+  }
+  const slices = new Map<string, ProjectSlices>()
+  projectIds.forEach((id) =>
+    slices.set(id, {
+      tfms: [],
+      mappingSources: [],
+      transforms: [],
+      sourceFields: [],
+      targetFields: [],
+      sourceAckFieldIds: [],
+      qualityIssues: [],
+    })
+  )
+
+  // Route source fields to projects via tableToProject (already built).
+  ;(fields || []).forEach((f) => {
+    const pid = tableToProject.get(f.table_id)
+    if (!pid) return
+    slices.get(pid)!.sourceFields.push({ id: f.id, name: f.name, data_type: f.data_type })
+  })
+  // Route target fields via the dataset → project map. `allTargetFields`
+  // covers every target-dataset table, which is exactly what the helper
+  // expects (matches Migration Center's `targetFieldRows`).
+  const targetTableToProjectAll = new Map<string, string>()
+  ;(targetTables || []).forEach((t) => {
+    const pid = datasetToProject.get(t.dataset_id)
+    if (pid) targetTableToProjectAll.set(t.id, pid)
+  })
+  ;(allTargetFields || []).forEach((f) => {
+    const pid = targetTableToProjectAll.get(f.table_id)
+    if (!pid) return
+    slices.get(pid)!.targetFields.push({ id: f.id, name: f.name, data_type: f.data_type })
+  })
+  tfms.forEach((tfm) => {
+    const s = slices.get(tfm.project_id)
+    if (!s) return
+    s.tfms.push(tfm)
+    for (const ms of tfm.mapping_sources ?? []) {
+      s.mappingSources.push({
+        target_field_mapping_id: tfm.id,
+        source_field_id: ms.source_field_id,
+        ordinal: ms.ordinal,
+        type_compatibility: ms.type_compatibility,
+      })
+    }
+  })
+  ;(transformations || []).forEach((t) => {
+    const pid = tfmToProject.get(t.target_field_mapping_id)
+    if (!pid) return
+    slices.get(pid)!.transforms.push({
+      target_field_mapping_id: t.target_field_mapping_id,
+      status: t.status,
+    })
+  })
+  ;(sourceFieldAcks || []).forEach((a) => {
+    const s = slices.get(a.project_id)
+    if (s) s.sourceAckFieldIds.push(a.source_field_id)
+  })
+  ;(qualityIssues || []).forEach((qi) => {
+    const s = slices.get(qi.project_id)
+    if (!s) return
+    s.qualityIssues.push({
+      status: qi.status,
+      stage: qi.stage,
+      severity: qi.severity,
+      field_id: qi.field_id,
+      issue_kind: qi.issue_kind,
+      description: qi.description,
+      title: (qi as { title: string | null }).title,
+    })
+  })
+
+  // One helper call per project; all inputs come from the slices above.
+  const statsByProject = new Map<string, ReturnType<typeof computeProjectStats>>()
+  for (const pid of projectIds) {
+    const s = slices.get(pid)!
+    statsByProject.set(
+      pid,
+      computeProjectStats({
+        tfms: s.tfms,
+        mappingSources: s.mappingSources,
+        sourceFields: s.sourceFields,
+        targetFields: s.targetFields,
+        sourceAckFieldIds: s.sourceAckFieldIds,
+        transforms: s.transforms,
+        qualityIssues: s.qualityIssues,
+      })
+    )
+  }
+
   return projects.map((project) => {
     const b = buckets.get(project.id)!
+    const stats = statsByProject.get(project.id)!
     const datasets = (project.datasets || []) as Dataset[]
     const src = datasets.find((d) => d.role === 'source')
     const tgt = datasets.find((d) => d.role === 'target')
@@ -461,12 +645,29 @@ export async function getProjectsWithStatsInternal(
       totalSourceFields: b.totalSourceFields,
       mappedFieldCount: b.mappedFieldCount,
       totalRows: b.totalRows,
-      blockingIssueCount: b.blockingIssueCount,
+      // Prompt B: switched from the naive in-flight blocking count
+      // (legacy `b.blockingIssueCount`) to the resolution-suppressed
+      // figure from `computeProjectStats`. This matches the Migration
+      // Center card exactly — when a user dismisses a source field or
+      // applies a transform, the dashboard card drops the blocking
+      // count in lockstep instead of going stale until the next scan.
+      blockingIssueCount: stats.openBlockingResolutionSuppressed,
       warningCount: b.warningCount,
       totalTransforms: b.totalTransforms,
       savedTransforms: b.savedTransforms,
       needsTransformCount: b.needsTransformIds.size,
       coveredTransformCount: b.coveredTransformIds.size,
+      // ── Canonical card stats (Prompt B) ───────────────────────────
+      // Single source of truth: `computeProjectStats`. The Projects
+      // Dashboard card renders these directly; Migration Center renders
+      // them via `getOutputsPageDataCore`. Any future formula change
+      // lands in `lib/quality/stat-formulas.ts` and propagates to both
+      // surfaces automatically.
+      mappingApproved: stats.mappingApproved,
+      mappingTotal: stats.mappingTotal,
+      transformApplied: stats.transformApplied,
+      transformScope: stats.transformScope,
+      transformNeedsWork: stats.transformNeedsWork,
       readinessScore,
       currentPhase,
       outputCount: b.outputCount,

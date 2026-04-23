@@ -62,22 +62,26 @@ function ProjectCard({ project, onUpdate }: { project: ProjectWithStats; onUpdat
   const stats: { label: string; color?: string }[] = []
 
   if (!isArchived) {
-    if (project.mappedFieldCount > 0 || project.totalSourceFields > 0) {
-      stats.push({ label: `Mapped: ${project.mappedFieldCount}/${project.totalSourceFields} fields` })
+    // Prompt B: the card now renders the same mapping / transform /
+    // blocking figures as the Migration Center page. All three come
+    // from `computeProjectStats` (lib/quality/stat-formulas.ts) via
+    // `getProjectsWithStatsInternal`, which populates `mappingApproved`
+    // / `mappingTotal` / `transformApplied` / `transformScope` / a
+    // resolution-suppressed `blockingIssueCount` on `ProjectWithStats`.
+    // Any future formula change lands in the helper and propagates
+    // here automatically — no more dashboard-vs-Migration-Center drift.
+    if (project.mappingTotal > 0) {
+      stats.push({ label: `Mapped: ${project.mappingApproved}/${project.mappingTotal} fields` })
     } else if (project.totalRows > 0) {
       stats.push({ label: `Rows: ${project.totalRows.toLocaleString()}` })
     }
 
-    if (project.needsTransformCount > 0) {
-      stats.push({ label: `Transforms: ${project.coveredTransformCount}/${project.needsTransformCount}` })
+    if (project.transformScope > 0) {
+      stats.push({ label: `Transforms: ${project.transformApplied}/${project.transformScope}` })
     }
 
     if (project.blockingIssueCount > 0) {
       stats.push({ label: `Blocking: ${project.blockingIssueCount}`, color: 'text-red-600' })
-    }
-
-    if (project.warningCount > 0) {
-      stats.push({ label: `Warnings: ${project.warningCount}`, color: 'text-amber-600' })
     }
 
     if (isCompleted && project.outputCount > 0) {
