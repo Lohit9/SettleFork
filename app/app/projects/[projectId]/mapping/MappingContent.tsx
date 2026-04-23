@@ -45,6 +45,7 @@ import { FieldPicker, type PickerField } from '@/components/app/FieldPicker'
 import { FixDrawer } from '@/components/ui/fix-drawer'
 import { useMappingRedesignEnabled } from '@/lib/hooks/useMappingRedesignEnabled'
 import MappingRedesignContent from './redesign/MappingContent'
+import type { MappingsForRedesignResult } from '@/lib/types/mappings-for-redesign'
 
 // ─── Props ────────────────────────────────────────────────────────────────────
 
@@ -52,6 +53,12 @@ interface Props {
   projectId: string
   projectName: string
   initialData: MappingsResult | null
+  // Phase 3 Gap 4b: the redesigned read-path payload. Populated by
+  // `page.tsx` only when `projects.use_mapping_redesign === true`;
+  // null on the legacy branch. The legacy UI below does not consume
+  // this prop — it is threaded directly into the redesign component
+  // inside the dispatch gate.
+  initialRedesignData: MappingsForRedesignResult | null
   projectInfo?: ProjectInfo
 }
 
@@ -2602,7 +2609,13 @@ function UnmappedView({
 
 type ToastState = { message: string; type: 'success' | 'error' }
 
-export default function MappingContent({ projectId, projectName, initialData, projectInfo }: Props) {
+export default function MappingContent({
+  projectId,
+  projectName,
+  initialData,
+  initialRedesignData,
+  projectInfo,
+}: Props) {
   // ── Phase 3 redesign dispatch ─────────────────────────────────────────────
   // When `projects.use_mapping_redesign` is true for this project, render the
   // new UI from `./redesign/MappingContent`. Otherwise fall through to the
@@ -2623,6 +2636,7 @@ export default function MappingContent({ projectId, projectName, initialData, pr
         projectId={projectId}
         projectName={projectName}
         projectInfo={projectInfo}
+        initialRedesignData={initialRedesignData}
       />
     )
   }

@@ -1,8 +1,11 @@
 import { notFound } from 'next/navigation'
 import { createClient } from '@/lib/supabase/server'
 import { getMappings } from '@/lib/actions/mappings'
+import { getMappingsForRedesign } from '@/lib/actions/mappings-for-redesign'
 import { getProject } from '@/lib/actions/projects'
 import MappingContent from './MappingContent'
+import type { MappingsResult } from '@/lib/actions/mappings'
+import type { MappingsForRedesignResult } from '@/lib/types/mappings-for-redesign'
 
 interface Props {
   params: Promise<{ projectId: string }>
@@ -15,15 +18,31 @@ export default async function MappingPage({ params }: Props) {
   const { data: { user } } = await supabase.auth.getUser()
   if (!user) notFound()
 
-  const [projectResult, result] = await Promise.all([
-    supabase.from('projects').select('id, name').eq('id', projectId).single(),
-    getMappings(projectId),
-  ])
+  const projectResult = await supabase
+    .from('projects')
+    .select('id, name, use_mapping_redesign')
+    .eq('id', projectId)
+    .single()
 
   const project = projectResult.data
   if (!project) notFound()
 
-  const fullProject = await getProject(projectId).catch(() => null)
+  // Phase 3 dispatch: branch at the server-component level so we fetch
+  // exactly one read path per render. Per design §8.2 the legacy
+  // `getMappings` and the new `getMappingsForRedesign` are both
+  // callable in parallel during Phase 3+4, but a given render picks one.
+  const useRedesign = project.use_mapping_redesign === true
+
+  const [legacyResult, redesignResult, fullProject] = await Promise.all([
+    useRedesign
+      ? Promise.resolve<MappingsResult | null>(null)
+      : getMappings(projectId),
+    useRedesign
+      ? getMappingsForRedesign(projectId)
+      : Promise.resolve<MappingsForRedesignResult | null>(null),
+    getProject(projectId).catch(() => null),
+  ])
+
   const projectInfo = fullProject ? {
     projectName: fullProject.name,
     sourceSystem: fullProject.datasets?.find((d) => d.role === 'source')?.name ?? null,
@@ -37,7 +56,8 @@ export default async function MappingPage({ params }: Props) {
     <MappingContent
       projectId={projectId}
       projectName={project.name}
-      initialData={result}
+      initialData={legacyResult}
+      initialRedesignData={redesignResult}
       projectInfo={projectInfo}
     />
   )

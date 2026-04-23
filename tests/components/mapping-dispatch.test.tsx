@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { render, screen } from '@testing-library/react'
 import type { ProjectInfo } from '@/components/app/ProjectInfoPopover'
 import type { MappingsResult } from '@/lib/actions/mappings'
+import type { MappingsForRedesignResult } from '@/lib/types/mappings-for-redesign'
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Phase 3 Gap 1 — mapping dispatch test harness.
@@ -128,6 +129,7 @@ describe('MappingContent dispatch (Phase 3 flag gate)', () => {
         projectId="proj-123"
         projectName="Heritage Core"
         initialData={null as MappingsResult | null}
+        initialRedesignData={null as MappingsForRedesignResult | null}
         projectInfo={{ ...baseProjectInfo, useMappingRedesign: true }}
       />
     )
@@ -149,6 +151,7 @@ describe('MappingContent dispatch (Phase 3 flag gate)', () => {
         projectId="proj-123"
         projectName="Heritage Core"
         initialData={null as MappingsResult | null}
+        initialRedesignData={null as MappingsForRedesignResult | null}
         projectInfo={{ ...baseProjectInfo, useMappingRedesign: false }}
       />
     )
@@ -166,6 +169,7 @@ describe('MappingContent dispatch (Phase 3 flag gate)', () => {
         projectId="proj-123"
         projectName="Heritage Core"
         initialData={null as MappingsResult | null}
+        initialRedesignData={null as MappingsForRedesignResult | null}
         projectInfo={baseProjectInfo}
       />
     )
@@ -183,6 +187,7 @@ describe('MappingContent dispatch (Phase 3 flag gate)', () => {
         projectId="proj-123"
         projectName="Heritage Core"
         initialData={null as MappingsResult | null}
+        initialRedesignData={null as MappingsForRedesignResult | null}
       />
     )
 
