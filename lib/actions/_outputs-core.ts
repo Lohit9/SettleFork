@@ -22,7 +22,7 @@ import { buildAIContext, formatDocumentsForPrompt } from '@/lib/ai/context-build
 import { buildReadinessDocx } from '@/lib/reports/readiness-report-docx'
 import { computeReadinessScore } from '@/lib/quality/readiness-score'
 import { calculateReadinessScore, type ReadinessComponents } from '@/lib/quality/readiness-formula'
-import { fieldNeedsTransform } from '@/lib/utils/transform-helpers'
+import { computeProjectStats } from '@/lib/quality/stat-formulas'
 import type {
   MappingSourceRow,
   SourceFieldAcknowledgmentRow,
@@ -1060,127 +1060,44 @@ export async function getOutputsPageDataCore(projectId: string): Promise<Outputs
 
   const totalSourceFields = (sourceFieldRows ?? []).length
 
-  const primaryTfms = nonRejectedTfms.filter((t) => !(t.is_acknowledged && t.combination_type === null))
-  const approvedPrimaryTfms = primaryTfms.filter((t) => t.status === 'approved')
-
-  const mappedSourceIds = new Set<string>()
-  for (const tfm of primaryTfms) {
-    for (const ms of msByTfmId.get(tfm.id) ?? []) {
-      if (ms.source_field_id) mappedSourceIds.add(ms.source_field_id)
-    }
-  }
-  const primaryMappedTargetIds = new Set(primaryTfms.map((t) => t.target_field_id))
-
-  const targetAckFieldIds = new Set(
-    tfms.filter((t) => t.is_acknowledged && t.combination_type === null).map((t) => t.target_field_id),
-  )
-  const sourceAckFieldIds = new Set((sourceAckRows ?? []).map((a) => a.source_field_id))
-  const acknowledgedFieldIds = new Set<string>([...sourceAckFieldIds, ...targetAckFieldIds])
-
-  let unmappedSourceCount = 0
-  let unmappedTargetCount = 0
-  let acknowledgedCount = 0
-
-  for (const f of sourceFieldRows ?? []) {
-    if (!mappedSourceIds.has(f.id)) {
-      if (acknowledgedFieldIds.has(f.id)) acknowledgedCount++
-      else unmappedSourceCount++
-    }
-  }
-  for (const f of targetFieldRows ?? []) {
-    if (!primaryMappedTargetIds.has(f.id)) {
-      if (acknowledgedFieldIds.has(f.id)) acknowledgedCount++
-      else unmappedTargetCount++
-    }
-  }
-
-  const mappingTotal =
-    primaryTfms.length + unmappedSourceCount + unmappedTargetCount + acknowledgedCount
-  const mappingApproved = approvedPrimaryTfms.length + acknowledgedCount
-  const mappingUnmapped = unmappedSourceCount + unmappedTargetCount
-
-  const allTransforms = transformRows ?? []
-  const tfmIdsWithTransforms = new Set(allTransforms.map((t) => t.target_field_mapping_id))
-  const transformByTfmId = new Map(allTransforms.map((t) => [t.target_field_mapping_id, t]))
-
-  const sourceFieldByIdLocal = new Map((sourceFieldRows ?? []).map((f) => [f.id, f]))
-  const targetFieldByIdLocal = new Map((targetFieldRows ?? []).map((f) => [f.id, f]))
-
-  const scoredTfms = primaryTfms.map((tfm) => {
-    const msList = msByTfmId.get(tfm.id) ?? []
-    const primary = msList.find((m) => m.ordinal === 0) ?? null
-    const isValueAssignment = primary === null && tfm.combination_type === 'custom_sql'
-    const srcField = primary?.source_field_id ? sourceFieldByIdLocal.get(primary.source_field_id) : null
-    const tgtField = targetFieldByIdLocal.get(tfm.target_field_id) ?? null
-    const hasTransformation = tfmIdsWithTransforms.has(tfm.id)
-
-    const needsTransform = isValueAssignment
-      ? true
-      : fieldNeedsTransform({
-          typeCompatibility: primary?.type_compatibility ?? '',
-          confidence: tfm.confidence ?? 0,
-          sourceDataType: (srcField as { data_type?: string } | null)?.data_type ?? '',
-          targetDataType: (tgtField as { data_type?: string } | null)?.data_type ?? '',
-          sourceFieldName: (srcField as { name?: string } | null)?.name ?? '',
-          targetFieldName: (tgtField as { name?: string } | null)?.name ?? '',
-          hasTransformation,
-          needsTransformation: tfm.needs_transformation ?? null,
-        })
-
-    return { id: tfm.id, needsTransform, hasTransformation }
+  // Mapping / transform / quality-issue counts now come from the canonical
+  // `computeProjectStats` helper (`lib/quality/stat-formulas.ts`). The helper
+  // also powers `computeReadinessScore` and (post Prompt B) the Projects
+  // Dashboard card, so any future change to these formulas lands in exactly
+  // one place. See the helper's file header for the full historical rationale.
+  const stats = computeProjectStats({
+    tfms,
+    mappingSources: (msRows ?? []).map((m) => ({
+      target_field_mapping_id: m.target_field_mapping_id,
+      source_field_id: m.source_field_id,
+      ordinal: m.ordinal,
+      type_compatibility: m.type_compatibility,
+    })),
+    sourceFields: (sourceFieldRows ?? []).map((f) => ({ id: f.id, name: f.name, data_type: f.data_type })),
+    targetFields: (targetFieldRows ?? []).map((f) => ({ id: f.id, name: f.name, data_type: f.data_type })),
+    sourceAckFieldIds: (sourceAckRows ?? []).map((a) => a.source_field_id),
+    transforms: (transformRows ?? []).map((t) => ({
+      target_field_mapping_id: t.target_field_mapping_id,
+      status: t.status,
+    })),
+    qualityIssues: qualityIssueRows ?? [],
   })
 
-  const fieldsInScope = scoredTfms.filter((t) => t.needsTransform)
-  const totalTransformScope = fieldsInScope.length
-
-  const resolvedSourceFieldIds = new Set<string>()
-  for (const tfm of approvedPrimaryTfms) {
-    const primary = (msByTfmId.get(tfm.id) ?? []).find((m) => m.ordinal === 0)
-    const sfId = primary?.source_field_id
-    if (!sfId) continue
-    const hasTransform = tfmIdsWithTransforms.has(tfm.id)
-    const noTransformNeeded = tfm.needs_transformation === false
-    if (hasTransform || noTransformNeeded) resolvedSourceFieldIds.add(sfId)
-  }
-
-  function isNeverResolvable(q: {
-    issue_kind?: string | null
-    description?: string | null
-    title?: string | null
-  }): boolean {
-    const desc = (q.description ?? '').toLowerCase()
-    const title = (q.title ?? '').toLowerCase()
-    if (q.issue_kind === 'null_primary_key') return true
-    if (q.issue_kind === 'orphaned_fk') return true
-    if (q.issue_kind === 'referential_integrity') return true
-    if (desc.includes('null') && (desc.includes('primary key') || desc.includes('primary_key'))) return true
-    if (desc.includes('orphan') || title.includes('orphan')) return true
-    if (desc.includes('referential') || title.includes('referential')) return true
-    return false
-  }
-
-  const openIssues = (qualityIssueRows ?? []).filter((q) => q.status === 'open' && q.stage === 'in_flight')
-  const openBlocking = openIssues.filter((q) => {
-    if (q.severity !== 'blocking') return false
-    if (q.stage === 'source' && !isNeverResolvable(q) && q.field_id && resolvedSourceFieldIds.has(q.field_id)) {
-      return false
-    }
-    return true
-  }).length
-  const openWarnings = openIssues.filter((q) => {
-    if (q.severity !== 'warning') return false
-    if (q.stage === 'source' && !isNeverResolvable(q) && q.field_id && resolvedSourceFieldIds.has(q.field_id)) {
-      return false
-    }
-    return true
-  }).length
-
-  const completedTransforms = fieldsInScope.filter(
-    (t) => transformByTfmId.get(t.id)?.status === 'applied',
-  ).length
-  const fieldsNeedingTransformWork = fieldsInScope.filter((t) => !t.hasTransformation).length
-  const draftTransforms = fieldsInScope.filter((t) => transformByTfmId.get(t.id)?.status === 'draft').length
-  const testedTransforms = fieldsInScope.filter((t) => transformByTfmId.get(t.id)?.status === 'tested').length
+  // The Migration Center's card uses the resolution-suppressed counts so
+  // blocking-issue totals drop immediately when a user resolves a source
+  // field via dismissal or transform application. Readiness-score.ts
+  // separately picks the naive counts to preserve historic behavior; the
+  // drift is documented on `ProjectStats.openBlocking`.
+  const mappingApproved = stats.mappingApproved
+  const mappingTotal = stats.mappingTotal
+  const mappingUnmapped = stats.mappingUnmapped
+  const completedTransforms = stats.transformApplied
+  const totalTransformScope = stats.transformScope
+  const fieldsNeedingTransformWork = stats.transformNeedsWork
+  const draftTransforms = stats.transformDraft
+  const testedTransforms = stats.transformTested
+  const openBlocking = stats.openBlockingResolutionSuppressed
+  const openWarnings = stats.openWarningsResolutionSuppressed
   const untestedTransforms = draftTransforms
 
   const stagingCountResults = nonRejectedTMIds.length > 0

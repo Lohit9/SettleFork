@@ -1,4 +1,29 @@
 // ── Heuristic: does a field mapping need transformation? ─────────────────────
+//
+// Evaluation order (intentional — do not reorder without reading migration 075):
+//
+//   1. `needsTransformation === false` → return false.
+//      Per migration 075 semantics this value is authoritative:
+//        FALSE = explicit user dismissal; this value is authoritative and
+//                must not be overridden by heuristics.
+//      User intent is the top-priority signal. It wins over stale
+//      transformation rows, AI compatibility prose, and every fallback
+//      heuristic below.
+//
+//   2. `hasTransformation` → return true.
+//      A transformation row exists, so the field is in-scope regardless of
+//      any AI signal. (Reached only when needs_transformation is NULL or
+//      TRUE — a user dismissal short-circuits above.)
+//
+//   3. `needsTransformation === true` → return true.
+//      AI / FK-cascade / user reinstatement explicitly flagged the field.
+//
+//   4. `needsTransformation === null` → type-family fallback.
+//      Not yet assessed (manual mappings, older mapping runs, newly
+//      created TFMs). Default to "needs transform" since a false positive
+//      is recoverable via the dismiss toggle while a false negative is
+//      invisible; the same-type direct-compatible passthrough carve-out
+//      skips obvious no-op mappings.
 
 export function fieldNeedsTransform(params: {
   typeCompatibility: string | null
@@ -8,7 +33,13 @@ export function fieldNeedsTransform(params: {
   sourceFieldName: string
   targetFieldName: string
   hasTransformation: boolean
-  /** From field_mappings.needs_transformation when set by mapping generation */
+  /**
+   * From `target_field_mappings.needs_transformation` (migration 075).
+   *   NULL  = not yet assessed
+   *   TRUE  = AI / FK-cascade / user-reinstated flag
+   *   FALSE = explicit user dismissal; this value is authoritative and
+   *           must not be overridden by heuristics.
+   */
   needsTransformation?: boolean | null
 }): boolean {
   const {
@@ -74,33 +105,22 @@ export function fieldNeedsTransform(params: {
     return lower
   }
 
-  const compat = (typeCompatibility ?? '').toLowerCase()
+  // Step 1 — Explicit user dismissal wins over every other signal. See
+  // migration 075 header for the documented semantic. This check MUST come
+  // before the `hasTransformation` short-circuit so that a user who
+  // dismisses after a transformation was ever applied still gets their
+  // intent honored across refreshes and readiness-score recomputes.
+  if (needsTransformation === false) return false
 
-  // 1. If a transformation already exists, always show the badge
+  // Step 2 — A transformation row exists; the field is in-scope.
   if (hasTransformation) return true
 
-  // 2. If Claude explicitly flagged this field as NOT needing transformation,
-  //    trust that — unless the type_compatibility text contradicts it with a
-  //    known transformation keyword (defensive: catches prompt drift where the
-  //    AI writes "uppercase needed" but forgot to set the flag).
-  if (needsTransformation === false) {
-    if (
-      /needs|truncat|convers|mapping|hash|transform|convert|strip|normalize|reformat|parse|standardize|cast|uppercase|lowercase|format|clean|splits|concat|combine|extract|pad|trim|decode/.test(
-        compat,
-      )
-    ) {
-      return true
-    }
-    return false
-  }
+  // Step 3 — Explicit positive flag (AI, FK cascade, user reinstatement).
   if (needsTransformation === true) return true
 
-  // 3. NULL means Claude didn't explicitly assess (manual mappings or older
-  //    mapping runs). Default to "needs transform" — it's safer to surface a
-  //    false positive (the user can dismiss via "Mark as no transform needed")
-  //    than to hide a false negative the user can't easily discover.
-  //    Exception: high-confidence, same-type, explicitly "direct compatible"
-  //    passthroughs are safe to skip.
+  // Step 4 — Not yet assessed. Default to "needs transform" unless this is
+  // a high-confidence same-type explicit-direct-compatible passthrough.
+  const compat = (typeCompatibility ?? '').toLowerCase()
   const typesMatch = normalizeType(sourceDataType) === normalizeType(targetDataType)
   const isDirectCompatible = /direct compatible|no conversion needed|compatible.?no/.test(compat)
 

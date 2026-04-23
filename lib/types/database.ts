@@ -283,15 +283,60 @@ export interface ProjectWithStats {
   updated_at: string
   completed_at: string | null
   archived_at: string | null
+  // ── Legacy counts (retained for backward compatibility) ──────────────
+  //
+  // These fields pre-date the `computeProjectStats` extraction and used
+  // to drive the Projects Dashboard card directly, before Prompt B
+  // rewired the card to the canonical numbers below. They remain on the
+  // type for two reasons:
+  //   1. Existing integration snapshot tests (e.g.
+  //      `tests/integration/projects-heritage.test.ts`) pin them; a
+  //      future cleanup pass that drops them must re-baseline every
+  //      snapshot in lockstep.
+  //   2. Internal consumers (phase-transition heuristics, misc rollups)
+  //      still read `mappedFieldCount` / `totalSourceFields` /
+  //      `needsTransformCount` / `coveredTransformCount`. Removing them
+  //      now would fan change noise across the dashboard code.
+  //
+  // Do NOT add new card stats here — extend the canonical block below.
   totalSourceFields: number
   mappedFieldCount: number
   totalRows: number
+  /**
+   * Count of `open + in_flight + blocking` quality issues, with
+   * source-field resolution suppression applied (see
+   * `ProjectStats.openBlockingResolutionSuppressed` in
+   * `lib/quality/stat-formulas.ts`). Post Prompt B this matches the
+   * Migration Center card's blocking figure exactly.
+   *
+   * The naive (pre-suppression) count is not exposed on this type; the
+   * Projects Dashboard card is the only consumer and always wants the
+   * user-visible figure.
+   */
   blockingIssueCount: number
   warningCount: number
   totalTransforms: number
   savedTransforms: number
   needsTransformCount: number
   coveredTransformCount: number
+  // ── Canonical card stats (from `computeProjectStats`) ────────────────
+  //
+  // Added in Prompt B. These are the same numbers the Migration Center
+  // page shows, so the dashboard card and the project's own outputs
+  // page can never drift again. All five come from a single
+  // `computeProjectStats` call per project; see
+  // `lib/quality/stat-formulas.ts` for the formulas.
+  /** Approved primary TFMs + acknowledged-unmapped fields on either side. */
+  mappingApproved: number
+  /** Every mapping slot (primaries + unmapped + acks). Always ≥ mappingApproved. */
+  mappingTotal: number
+  /** In-scope TFMs whose transformation row has status='applied'. */
+  transformApplied: number
+  /** Primary TFMs the `fieldNeedsTransform` heuristic flags as needing
+   *  a transform (VAs are always in scope). */
+  transformScope: number
+  /** In-scope TFMs with no transformation row at all (status-agnostic). */
+  transformNeedsWork: number
   readinessScore: number | null
   currentPhase: number
   outputCount: number

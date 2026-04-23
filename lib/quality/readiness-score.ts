@@ -44,7 +44,7 @@
 import { supabaseAdmin } from '@/lib/supabase/admin'
 import type { ReadinessScore, QualityIssue } from '@/lib/types/database'
 import { calculateReadinessScore } from '@/lib/quality/readiness-formula'
-import { fieldNeedsTransform } from '@/lib/utils/transform-helpers'
+import { computeProjectStats } from '@/lib/quality/stat-formulas'
 import type { MappingSourceRow, TargetFieldMappingRow } from '@/lib/types/mapping-redesign'
 
 export async function computeReadinessScore(projectId: string): Promise<ReadinessScore> {
@@ -141,113 +141,36 @@ export async function computeReadinessScore(projectId: string): Promise<Readines
       : Promise.resolve([] as Array<{ count: number | null }>),
   ])
 
-  // ── Mapping stats — mirrors getOutputsPageData + MappingContent header ─
+  // ── Mapping / transform / quality-issue stats ──────────────────────────
   //
-  // `primaryTfms`: non-rejected TFMs that represent actual (or value-assigned)
-  // target-field mappings. Bare acks (is_acknowledged=true AND
-  // combination_type IS NULL) are excluded because they count as
-  // "acknowledged unmapped target field", not as a mapping.
-  const nonRejectedTfms = tfms.filter((t) => t.status !== 'rejected')
-  const primaryTfms = nonRejectedTfms.filter(
-    (t) => !(t.is_acknowledged && t.combination_type === null),
-  )
-  const approvedPrimaryTfms = primaryTfms.filter((t) => t.status === 'approved')
-
-  // Group MS by TFM for primary-row lookups (ordinal=0).
-  const msByTfmId = new Map<string, MappingSourceRow[]>()
-  for (const ms of mappingSources) {
-    if (!tfmIdSet.has(ms.target_field_mapping_id)) continue
-    const list = msByTfmId.get(ms.target_field_mapping_id) ?? []
-    list.push(ms)
-    msByTfmId.set(ms.target_field_mapping_id, list)
-  }
-  for (const list of msByTfmId.values()) list.sort((a, b) => a.ordinal - b.ordinal)
-
-  // A source field counts as "mapped" if ANY non-rejected TFM has an MS row
-  // pointing at it (primary OR contributor). Mirrors the legacy FM union.
-  const mappedSourceIds = new Set<string>()
-  for (const tfm of nonRejectedTfms) {
-    for (const ms of msByTfmId.get(tfm.id) ?? []) {
-      if (ms.source_field_id) mappedSourceIds.add(ms.source_field_id)
-    }
-  }
-
-  const primaryMappedTargetIds = new Set(primaryTfms.map((t) => t.target_field_id))
-
-  // Acknowledged IDs come from two sources:
-  //   - source_field_acknowledgments (source fields)
-  //   - bare-ack TFMs (target fields)
-  const sourceAckFieldIds = new Set((sourceAckRows ?? []).map((a) => a.source_field_id))
-  const targetAckFieldIds = new Set(
-    tfms.filter((t) => t.is_acknowledged && t.combination_type === null).map((t) => t.target_field_id),
-  )
-  const acknowledgedIds = new Set<string>([...sourceAckFieldIds, ...targetAckFieldIds])
-
-  let unmappedSourceCount = 0
-  let unmappedTargetCount = 0
-  let acknowledgedCount = 0
-  for (const f of sourceFieldRows ?? []) {
-    if (!mappedSourceIds.has(f.id)) {
-      if (acknowledgedIds.has(f.id)) acknowledgedCount++
-      else unmappedSourceCount++
-    }
-  }
-  for (const f of targetFieldRows ?? []) {
-    if (!primaryMappedTargetIds.has(f.id)) {
-      if (acknowledgedIds.has(f.id)) acknowledgedCount++
-      else unmappedTargetCount++
-    }
-  }
-  const mappingTotal =
-    primaryTfms.length + unmappedSourceCount + unmappedTargetCount + acknowledgedCount
-  const mappingApproved = approvedPrimaryTfms.length + acknowledgedCount
-
-  // ── Transform scope — mirrors getOutputsPageData heuristic ─────────────
-  const allTransforms = transformRows ?? []
-  const tfmIdsWithTransforms = new Set(allTransforms.map((t) => t.target_field_mapping_id))
-  const transformByTfmId = new Map(allTransforms.map((t) => [t.target_field_mapping_id, t]))
-
-  const sourceFieldById = new Map((sourceFieldRows ?? []).map((f) => [f.id, f]))
-  const targetFieldById = new Map((targetFieldRows ?? []).map((f) => [f.id, f]))
-
-  // Evaluate fieldNeedsTransform against the primary MS row (ordinal=0) for
-  // each TFM. VAs (no MS) are forced to needsTransform=true (identical to
-  // the legacy `!fm.source_field_id ? true : …` branch).
-  const scoredTfms = primaryTfms.map((tfm) => {
-    const msList = msByTfmId.get(tfm.id) ?? []
-    const primary = msList.find((m) => m.ordinal === 0) ?? null
-    const isValueAssignment = primary === null && tfm.combination_type === 'custom_sql'
-    const srcField = primary?.source_field_id ? sourceFieldById.get(primary.source_field_id) : null
-    const tgtField = tfm.target_field_id ? targetFieldById.get(tfm.target_field_id) : null
-    const hasTransformation = tfmIdsWithTransforms.has(tfm.id)
-
-    const needsTransform = isValueAssignment
-      ? true
-      : fieldNeedsTransform({
-          typeCompatibility: primary?.type_compatibility ?? '',
-          confidence: tfm.confidence ?? 0,
-          sourceDataType: srcField?.data_type ?? '',
-          targetDataType: tgtField?.data_type ?? '',
-          sourceFieldName: srcField?.name ?? '',
-          targetFieldName: tgtField?.name ?? '',
-          hasTransformation,
-          needsTransformation: tfm.needs_transformation ?? null,
-        })
-
-    return { id: tfm.id, needsTransform }
+  // Single source of truth: `computeProjectStats` (lib/quality/stat-formulas.ts).
+  // That helper owns the formulas shared by `getOutputsPageDataCore`, this
+  // readiness scorer, and (post Prompt B) the Projects Dashboard card.
+  //
+  // This wrapper uses the *naive* open-issue counts for the readiness
+  // formula — not the resolution-suppressed ones the Migration Center card
+  // uses — preserving the pre-extraction behavior exactly. The helper
+  // exposes both flavors so each caller picks deliberately.
+  const issues = (qualityIssueRows ?? []) as QualityIssue[]
+  const stats = computeProjectStats({
+    tfms,
+    mappingSources,
+    sourceFields: (sourceFieldRows ?? []).map((f) => ({ id: f.id, name: f.name, data_type: f.data_type })),
+    targetFields: (targetFieldRows ?? []).map((f) => ({ id: f.id, name: f.name, data_type: f.data_type })),
+    sourceAckFieldIds: (sourceAckRows ?? []).map((a) => a.source_field_id),
+    transforms: (transformRows ?? []).map((t) => ({
+      target_field_mapping_id: t.target_field_mapping_id,
+      status: t.status,
+    })),
+    qualityIssues: issues,
   })
 
-  const fieldsInScope = scoredTfms.filter((t) => t.needsTransform)
-  const transformScope = fieldsInScope.length
-  const transformApplied = fieldsInScope.filter(
-    (t) => transformByTfmId.get(t.id)?.status === 'applied',
-  ).length
-
-  // ── Quality issues — in-flight only, mirrors Migration Center ──────────
-  const issues = (qualityIssueRows ?? []) as QualityIssue[]
-  const openInFlight = issues.filter((q) => q.status === 'open' && q.stage === 'in_flight')
-  const openBlocking = openInFlight.filter((q) => q.severity === 'blocking').length
-  const openWarnings = openInFlight.filter((q) => q.severity === 'warning').length
+  const mappingApproved = stats.mappingApproved
+  const mappingTotal = stats.mappingTotal
+  const transformApplied = stats.transformApplied
+  const transformScope = stats.transformScope
+  const openBlocking = stats.openBlocking
+  const openWarnings = stats.openWarnings
 
   // ── Staging ────────────────────────────────────────────────────────────
   const stagedTables = stagingCountResults.filter((r) => (r.count ?? 0) > 0).length
