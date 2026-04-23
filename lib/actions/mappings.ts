@@ -336,6 +336,7 @@ Map ALL source fields to their best target match. If a source field has no reaso
 // (runMappingGenerationForPair) so both paths produce the same DB shape.
 
 interface ClaudeTmPersistArgs {
+  supabase: Awaited<ReturnType<typeof createClient>>
   projectId: string
   tableMappingId: string
   sourceFieldMap: Map<string, { id: string; name: string }>
@@ -348,6 +349,7 @@ async function persistClaudeFieldMappingsForTM(
   args: ClaudeTmPersistArgs,
 ): Promise<{ inserted: number }> {
   const {
+    supabase,
     projectId,
     sourceFieldMap,
     targetFieldMap,
@@ -443,7 +445,7 @@ async function persistClaudeFieldMappingsForTM(
       })),
     ]
 
-    const { error } = await supabaseAdmin.rpc('dq_create_target_field_mapping', {
+    const { error } = await supabase.rpc('dq_create_target_field_mapping', {
       p_project_id: projectId,
       p_target_field_id: entry.targetFieldId,
       p_sources: sources,
@@ -572,6 +574,7 @@ async function runMappingGenerationForPair(args: {
         continue
       }
       const { inserted } = await persistClaudeFieldMappingsForTM({
+        supabase,
         projectId,
         tableMappingId,
         sourceFieldMap: srcFieldMap,
@@ -797,6 +800,7 @@ ${otherSourcesList}
         storedCount++
 
         await persistClaudeFieldMappingsForTM({
+          supabase,
           projectId,
           tableMappingId: insertedTM.id,
           sourceFieldMap: sourceFieldsByTable.get(srcTable.id) ?? new Map(),
@@ -1703,7 +1707,17 @@ export async function addManualFieldMapping(
     }
 
     // Primary path.
-    if (existingTfm && existingTfm.status !== 'rejected' && !existingTfm.is_acknowledged) {
+    // Bare-ack TFM (acknowledged with no combination_type) blocks new
+    // primary mapping creation due to unique (project_id, target_field_id)
+    // constraint. Delete the bare-ack first; it has no mapping_sources
+    // or transformations that would FK-cascade.
+    if (existingTfm && existingTfm.is_acknowledged && existingTfm.combination_type === null) {
+      const { error: delErr } = await supabaseAdmin
+        .from('target_field_mappings')
+        .delete()
+        .eq('id', existingTfm.id)
+      if (delErr) return { success: false, error: delErr.message, errorCode: 'INTERNAL' }
+    } else if (existingTfm && existingTfm.status !== 'rejected' && !existingTfm.is_acknowledged) {
       if (existingTfm.combination_type === 'custom_sql') {
         // VA conflict — delete it, then create fresh TFM.
         await replaceValueAssignment('', targetFieldId)
@@ -1740,7 +1754,7 @@ export async function addManualFieldMapping(
     }
 
     // Fresh TFM via RPC (handles primary + zero contributors).
-    const { data: newTfmId, error: rpcErr } = await supabaseAdmin.rpc('dq_create_target_field_mapping', {
+    const { data: newTfmId, error: rpcErr } = await supabase.rpc('dq_create_target_field_mapping', {
       p_project_id: tm.project_id,
       p_target_field_id: targetFieldId,
       p_sources: [
@@ -2206,7 +2220,17 @@ export async function createValueAssignment(
       .eq('target_field_id', targetFieldId)
       .maybeSingle()
 
-    if (existing && existing.status !== 'rejected' && !existing.is_acknowledged) {
+    // Bare-ack TFM (acknowledged with no combination_type) blocks new
+    // VA creation due to unique (project_id, target_field_id) constraint.
+    // Delete the bare-ack first; it has no mapping_sources or transformations
+    // that would FK-cascade.
+    if (existing && existing.is_acknowledged && existing.combination_type === null) {
+      const { error: delErr } = await supabaseAdmin
+        .from('target_field_mappings')
+        .delete()
+        .eq('id', existing.id)
+      if (delErr) return { success: false, error: delErr.message, errorCode: 'INTERNAL' }
+    } else if (existing && existing.status !== 'rejected' && !existing.is_acknowledged) {
       if (existing.combination_type === 'custom_sql') {
         // Already a VA — return its id.
         return { success: true, fieldMappingId: existing.id }
@@ -2218,7 +2242,7 @@ export async function createValueAssignment(
       }
     }
 
-    const { data: newId, error: rpcErr } = await supabaseAdmin.rpc('dq_create_target_field_mapping', {
+    const { data: newId, error: rpcErr } = await supabase.rpc('dq_create_target_field_mapping', {
       p_project_id: projectId,
       p_target_field_id: targetFieldId,
       p_sources: [],
@@ -2905,6 +2929,7 @@ ${remCtx.intelligence_context ? remCtx.intelligence_context + '\n\n' : ''}CRITIC
     })
 
     const persistRes = await persistClaudeFieldMappingsForTM({
+      supabase,
       projectId: tm.project_id,
       tableMappingId,
       sourceFieldMap: srcFMap,

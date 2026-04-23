@@ -863,6 +863,17 @@ export default function TransformContent({ projectId, projectName, initialData, 
       refreshFieldStatus(fmId, 'applied')
       setApplyResult({ rowsAffected: result.rowsAffected })
 
+      // Invalidate the client-side Router Cache so sibling routes (notably
+      // /data-overview → DataPreview) refetch on next navigation. The server
+      // action already calls revalidatePath('layout') which clears the Full
+      // Route Cache, but without this client-side refresh the back-forward
+      // cache can serve the pre-apply DataPreview subtree — manifesting as
+      // the "click Apply twice" bug confirmed on Heritage Core 2026-04-21.
+      // Additive: existing in-memory patches (setLocalTransform /
+      // refreshFieldStatus) still run so the Transform tab itself updates
+      // instantly without waiting for the RSC payload.
+      router.refresh()
+
       console.log('[FK CASCADE] 1. Apply succeeded for fmId:', fmId)
 
       // Fetch staged preview to show in Data Preview section
@@ -1605,6 +1616,7 @@ export default function TransformContent({ projectId, projectName, initialData, 
                 const { createClient } = await import('@/lib/supabase/client')
                 const sb = createClient()
                 const { data: tfData } = await sb.from('transformations').select('id').eq('target_field_mapping_id', unmappedFieldMappingId).maybeSingle()
+                const transformationId: string | null = tfData?.id ?? null
                 if (tfData?.id) {
                   const saveRes = await autoSaveTransform(tfData.id, unmappedSql, unmappedDescription)
                   if (!saveRes.success) {
@@ -1612,8 +1624,84 @@ export default function TransformContent({ projectId, projectName, initialData, 
                     return
                   }
                 }
-                router.refresh()
-                setSelectedMappingId(unmappedFieldMappingId)
+
+                // Splice the new VA TFM into the in-memory data tree so
+                // findField() can locate it for the right-pane editor.
+                // Mirrors getTransformData's server-side VA emission shape
+                // (transformations.ts :: getTransformData, FieldItem block
+                // ~line 690) and the inline TransformationRow synthesis in
+                // refreshFieldTransformation. Replaces router.refresh(),
+                // which wouldn't propagate into local `data` state because
+                // there is no initialData→data useEffect sync.
+                const fmId = unmappedFieldMappingId
+                const newItem: FieldItem = {
+                  fieldMappingId: fmId,
+                  sourceFieldId: null,
+                  sourceFieldName: null,
+                  sourceFieldDataType: null,
+                  sourceFieldInferredType: null,
+                  sourceFieldIsNullable: true,
+                  targetFieldId: field.id,
+                  targetFieldName: field.name,
+                  targetFieldDataType: field.data_type,
+                  targetFieldInferredType: null,
+                  targetFieldIsNullable: field.is_nullable,
+                  targetFieldIsPrimaryKey: field.is_primary_key,
+                  sourceTableId: null,
+                  isValueAssignment: true,
+                  typeCompatibility: null,
+                  confidence: null,
+                  aiReasoning: null,
+                  nullPercentage: 0,
+                  formatIssuesCount: 0,
+                  sampleValues: [],
+                  cardinality: 0,
+                  needsTransform: true,
+                  transformation: transformationId
+                    ? {
+                        id: transformationId,
+                        target_field_mapping_id: fmId,
+                        description: unmappedDescription,
+                        generated_sql: unmappedSql,
+                        is_ai_generated: unmappedSqlSource === 'ai',
+                        test_results: null,
+                        status: 'draft',
+                        created_at: new Date().toISOString(),
+                      }
+                    : null,
+                  isContributing: false,
+                  contributingSourceFields: [],
+                  targetCheckConstraint: field.check_constraint,
+                }
+
+                setData((prev) => ({
+                  ...prev,
+                  datasets: prev.datasets.map((ds) => ({
+                    ...ds,
+                    tables: ds.tables.map((tbl) => {
+                      if (tbl.targetTableId !== field.table_id) return tbl
+                      const without = tbl.fields.filter((f) => f.fieldMappingId !== fmId)
+                      const merged = [...without, newItem]
+                      // Stable sort matching getTransformData's comparator:
+                      // VAs after mapped fields, VAs alphabetised by target
+                      // name; mapped fields' relative order preserved
+                      // (ES2019 stable sort).
+                      merged.sort((a, b) => {
+                        if (a.isValueAssignment && !b.isValueAssignment) return 1
+                        if (!a.isValueAssignment && b.isValueAssignment) return -1
+                        if (a.isValueAssignment && b.isValueAssignment) {
+                          return a.targetFieldName.localeCompare(b.targetFieldName)
+                        }
+                        return 0
+                      })
+                      return { ...tbl, fields: merged }
+                    }),
+                  })),
+                  unmappedNotNullTargetFields: prev.unmappedNotNullTargetFields.filter((f) => f.id !== field.id),
+                  unmappedNullableTargetFields: prev.unmappedNullableTargetFields.filter((f) => f.id !== field.id),
+                }))
+
+                setSelectedMappingId(fmId)
                 setSelectedUnmappedFieldId(null)
               } finally {
                 setUnmappedSaving(false)

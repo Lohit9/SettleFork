@@ -1746,7 +1746,7 @@ export async function applyTransform(
       const fieldNames = (allSourceFields ?? []).map((f) => f.name)
       const wrappedSql = wrapFieldRefsInJsonb(sql.replace(/;+$/, '').trim(), fieldNames)
 
-      const { data: rowsAffected, error: rpcErr } = await supabaseAdmin.rpc(
+      const { data: rowsAffected, error: rpcErr } = await supabase.rpc(
         'dq_apply_field_transform_joined',
         {
           p_target_field_mapping_id: ctx.tfm.id,
@@ -1787,7 +1787,7 @@ export async function applyTransform(
 
         const hasExistingStaged = (stagedCount ?? 0) > 0
 
-        const { data: rowsAffected, error: rpcErr } = await supabaseAdmin.rpc(
+        const { data: rowsAffected, error: rpcErr } = await supabase.rpc(
           'dq_apply_field_transform',
           {
             p_table_mapping_id: tm.id,

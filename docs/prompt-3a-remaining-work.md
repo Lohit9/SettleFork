@@ -152,6 +152,43 @@ cleanup pass after Phase 2 closes out.
    flag to `true`, you must also attach a one-paragraph release note
    explaining why and when it flips back.
 
+4. **`Made-with: Cursor` auto-injected commit trailer.** Every
+   agent-authored commit in this repo since the Phase 0 commit
+   (`d1a72e9`) has a `Made-with: Cursor` trailer appended to its
+   message body, regardless of whether the commit message passed
+   to `git commit` included it. Confirmed by inspecting all five
+   prior Phase 2 commits (`d1a72e9`, `0da1a9c`, `1bc609b`,
+   `24f7ad8`, `2790524`) and the Phase 2 close-out commit
+   (`9abe17c`). Investigated at commit time: no husky
+   `prepare-commit-msg` hook, no `commit.template`, no
+   `core.hooksPath` override, no `.git/hooks/prepare-commit-msg`.
+   Most likely source is the Cursor agent environment itself
+   appending the trailer to every `git commit` the agent
+   invokes. Decision during Prompt 3d Gate 4: leave the trailer
+   on existing commits (rewriting published history is worse
+   than the trailer's cosmetic cost) and track this item for a
+   future investigation.
+
+   Cleanup plan: locate the injection site (likely a Cursor
+   workspace-level or user-level config in
+   `~/.cursor/`), decide whether to (a) disable injection
+   globally, (b) allowlist the trailer as the project's standard
+   attribution format and stop treating it as noise, or (c) add
+   a project-level commit-msg hook that strips the trailer before
+   the commit lands. Low priority; zero functional impact.
+
+5. **Heredoc `$` escaping in commit messages.** Commit `9abe17c`
+   contains a literal `\${tfm.id}:contrib:\${ordinal}` in the
+   body where the intended rendering was
+   `${tfm.id}:contrib:${ordinal}`. Cause: over-cautious
+   backslash-escaping of `$` inside a single-quoted heredoc
+   (`<<'EOF'`), which passes content verbatim and does not
+   require escapes. Cosmetic only; the canonical documentation
+   of the design pattern lives in the `_projects-core.ts` /
+   `migration-intelligence.ts` header docblocks (rendered
+   correctly there). No action required unless a future
+   cleanup amends the commit for other reasons.
+
 ## Scope recap
 
 Prompt 3a rewrote:

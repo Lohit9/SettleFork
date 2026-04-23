@@ -451,7 +451,7 @@ export async function cascadeTransformToFKs(
       const wrappedSql = wrapFieldRefsInJsonb(strippedSql, fieldNames)
 
       // ── 3. Apply via dq_apply_field_transform_joined ──────────────────────
-      const { error: rpcErr } = await supabaseAdmin.rpc(
+      const { error: rpcErr } = await supabase.rpc(
         'dq_apply_field_transform_joined',
         {
           p_target_field_mapping_id: tfmId,
