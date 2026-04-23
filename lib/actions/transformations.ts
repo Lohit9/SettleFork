@@ -1289,6 +1289,129 @@ export async function updateTransformSQL(
   })
 }
 
+// ─── ensureValueAssignment ────────────────────────────────────────────────────
+//
+// Idempotent commit-trigger for Value Assignment fields (Variant C of the
+// Deferred-Creation pattern, introduced in Phase C2 of the VA UI unification).
+// Atomically guarantees both sides of a VA's two-row identity exist:
+//
+//   1. A `target_field_mappings` row with `combination_type='custom_sql'` and
+//      zero `mapping_sources` — delegated to `createValueAssignment` so the
+//      bare-ack deletion logic (mappings.ts :: createValueAssignment, ~L2203)
+//      stays in one place. The id returned is always the NEW TFM id: if a
+//      bare-ack TFM was present, `createValueAssignment` DELETEs it (FK
+//      CASCADE drops any orphan `transformations` row per migration 074
+//      :: ADD COLUMN target_field_mapping_id … ON DELETE CASCADE) before
+//      inserting a fresh VA TFM via the `dq_create_target_field_mapping` RPC.
+//
+//   2. A `transformations` row keyed on the NEW TFM id, with the caller's
+//      initial `sql` / `description` (or empty strings when omitted). Status
+//      is always 'draft'; `is_ai_generated` is false unless the caller is
+//      explicitly capturing AI-generated SQL. Re-calls that find an existing
+//      row are a no-op — callers are expected to update via the dedicated
+//      write paths (`generateTransform`, `updateTransformSQL`,
+//      `autoSaveTransform`) rather than re-seeding.
+//
+// This is the single entry point for the three Variant C commit triggers —
+// AI Suggest, Generate SQL, Test Transform — from `TransformContent.tsx`.
+// Each trigger calls the client-side `ensureValueAssignmentOnce` wrapper,
+// which dedupes concurrent invocations (Race 3A) via an in-flight ref.
+//
+// BARE-ACK INVARIANT (verified by the Phase C2 DB integrity test):
+//   The `transformationId` returned in the response object ALWAYS keys on
+//   the VA TFM's id — never on a pre-existing bare-ack id — because
+//   `createValueAssignment` returns the post-delete, post-insert id and we
+//   upsert `transformations` strictly on that id. No orphan
+//   `transformations` row can survive a bare-ack → VA transition.
+
+export async function ensureValueAssignment(
+  projectId: string,
+  tableMappingId: string,
+  targetFieldId: string,
+  initialSql?: string | null,
+  initialDescription?: string | null,
+): Promise<{
+  success: boolean
+  fieldMappingId?: string
+  transformationId?: string
+  error?: string
+  errorCode?: TransformWriteErrorCode
+}> {
+  const supabase = await createClient()
+  const {
+    data: { user },
+  } = await supabase.auth.getUser()
+  if (!user) return { success: false, error: 'Not authenticated', errorCode: 'PERMISSION_DENIED' }
+
+  const perm = await requireProjectPermission(projectId, 'editor')
+  if (!perm.allowed) return { success: false, error: perm.error, errorCode: 'PERMISSION_DENIED' }
+
+  return guardWrites(projectId, async () => {
+    // Dynamic import: `mappings.ts` imports symbols from this file at the
+    // module top (resetFieldTransform, checkFieldMappingHasTransform, …), so
+    // a top-level `import { createValueAssignment } from '@/lib/actions/mappings'`
+    // would form an import cycle. Deferring via dynamic import keeps both
+    // modules initialisable in any order.
+    const { createValueAssignment } = await import('@/lib/actions/mappings')
+
+    const vaResult = await createValueAssignment(projectId, tableMappingId, targetFieldId)
+    if (!vaResult.success || !vaResult.fieldMappingId) {
+      return {
+        success: false,
+        error: vaResult.error ?? 'Could not create value assignment',
+        errorCode:
+          vaResult.errorCode === 'MAINTENANCE_MODE'
+            ? 'MAINTENANCE_MODE'
+            : vaResult.errorCode === 'PERMISSION_DENIED'
+            ? 'PERMISSION_DENIED'
+            : vaResult.errorCode === 'VALIDATION'
+            ? 'VALIDATION'
+            : 'INTERNAL',
+      }
+    }
+
+    const fieldMappingId = vaResult.fieldMappingId
+
+    // Idempotent: skip the transformations insert if a row already exists
+    // for this TFM id. Callers update through the dedicated write paths
+    // (`generateTransform`, `updateTransformSQL`, `autoSaveTransform`) —
+    // not through re-seeding.
+    const { data: existingTx } = await supabaseAdmin
+      .from('transformations')
+      .select('id')
+      .eq('target_field_mapping_id', fieldMappingId)
+      .maybeSingle<Pick<TransformationRow, 'id'>>()
+
+    if (existingTx) {
+      return { success: true, fieldMappingId, transformationId: existingTx.id }
+    }
+
+    const { data: created, error: insertErr } = await supabaseAdmin
+      .from('transformations')
+      .insert({
+        target_field_mapping_id: fieldMappingId,
+        description: (initialDescription ?? '').trim() || null,
+        generated_sql: initialSql ?? '',
+        is_ai_generated: false,
+        status: 'draft' as TransformationStatus,
+        test_results: null,
+      })
+      .select('id')
+      .single<Pick<TransformationRow, 'id'>>()
+
+    if (insertErr || !created) {
+      return {
+        success: false,
+        error: insertErr?.message ?? 'Failed to create transformation row',
+        errorCode: 'INTERNAL',
+      }
+    }
+
+    revalidatePath(`/app/projects/${projectId}`, 'layout')
+    return { success: true, fieldMappingId, transformationId: created.id }
+  })
+}
+
 // ─── autoSaveTransform ────────────────────────────────────────────────────────
 // Persists sql, description, and optionally status. Used by the client-side
 // debounced auto-save while the user is editing in the Transform tab.

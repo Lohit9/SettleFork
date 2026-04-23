@@ -1,5 +1,40 @@
 'use client'
 
+// ─────────────────────────────────────────────────────────────────────────────
+// TransformContent — Transform tab editor (Phase 2, mapping redesign).
+// ─────────────────────────────────────────────────────────────────────────────
+//
+// BUG B HISTORICAL CONTEXT (C1 diagnostic, 2026-04-21; closed by C2, 2026-04-23)
+//
+//   Symptom: after generating a VA SQL + clicking "Save Value" + "Apply",
+//   the sidebar badge briefly showed "Applied" but reverted to "Saved" on
+//   any tab-switch, inviting users to double-apply (activity_log captured
+//   TFM fa67fca9... applied twice 35 min apart).
+//
+//   Client-side root cause: the old `handleUnmappedSave` spliced a new
+//   FieldItem into `data.datasets` but did not re-initialise `localTransform`
+//   for the now-selected mapped-field UI, so every subsequent
+//   `setLocalTransform((prev) => prev ? … : null)` was a no-op. Combined
+//   with a splice routing bug (appended to every matching TM instead of the
+//   first), the sidebar badge drifted from the DB on every RSC refetch.
+//
+//   Hypotheses rejected by the DB diagnostic:
+//   - B1 (server status fails to persist) — ruled out; `transformations.status`
+//     was correctly 'applied' on every inspected VA.
+//   - B4 (Router Cache serves a stale RSC prefetch) — ruled out; C1 runtime
+//     instrumentation (removed in C2) reported fresh DB state on every tab
+//     transition.
+//
+//   C1 fix (applied 2026-04-21): splice route correction + explicit
+//   `setLocalTransform` in `handleUnmappedSave` before flipping selection.
+//   C2 fix (this file, 2026-04-23): deleted `handleUnmappedSave` entirely in
+//   favour of the Deferred-Creation Pattern (Variant C) — unmapped rows now
+//   render through the unified mapped-field UI using a synthesised
+//   placeholder FieldItem, and TFM creation is deferred to the three
+//   explicit commit triggers (AI Suggest, Generate SQL, Test Transform),
+//   each routed through `ensureValueAssignment` server action. This removes
+//   the entire client-side state-stomping surface that made Bug B possible.
+
 import { useState, useEffect, useTransition, useCallback, useRef, useMemo } from 'react'
 import { useRouter, useSearchParams } from 'next/navigation'
 import { Badge } from '@/components/ui/badge'
@@ -41,8 +76,8 @@ import {
   suggestTransformDescription,
   dismissTransformNeeded,
   reinstateTransformNeeded,
+  ensureValueAssignment,
 } from '@/lib/actions/transformations'
-import { createValueAssignment } from '@/lib/actions/mappings'
 import type { TransformPageData, DatasetGroup, TableGroup, FieldItem, FullTransformTestResult, UnmappedTargetField } from '@/lib/actions/transformations'
 import { stageAllData, getBlockingSourceIssues, getSourceIssuesForField, checkProjectStaleness } from '@/lib/actions/staging'
 import { triggerStagedValidation } from '@/lib/actions/quality-fixes'
@@ -313,18 +348,17 @@ export default function TransformContent({ projectId, projectName, initialData, 
   // Open source quality issues for the currently selected field (for Data Preview flagging)
   const [fieldSourceIssues, setFieldSourceIssues] = useState<FieldSourceIssue[]>([])
 
-  // Unmapped NOT NULL target fields — sidebar selection
-  const [selectedUnmappedFieldId, setSelectedUnmappedFieldId] = useState<string | null>(null)
-  // Unmapped field value-assignment editor state
-  const [unmappedDescription, setUnmappedDescription] = useState('')
-  const [unmappedSql, setUnmappedSql] = useState('')
-  const [unmappedSqlSource, setUnmappedSqlSource] = useState<'ai' | 'manual' | null>(null)
-  const [unmappedGenerating, setUnmappedGenerating] = useState(false)
-  const [unmappedSuggesting, setUnmappedSuggesting] = useState(false)
-  const [unmappedSaving, setUnmappedSaving] = useState(false)
-  const [unmappedSqlExpanded, setUnmappedSqlExpanded] = useState(false)
-  const [unmappedPreviewRows, setUnmappedPreviewRows] = useState<{ after: string | null }[]>([])
-  const [unmappedFieldMappingId, setUnmappedFieldMappingId] = useState<string | null>(null)
+  // Pending VA commit — dedupe concurrent `ensureValueAssignment` calls.
+  // Variant C Race 3A fix (C2): the three commit triggers (AI Suggest,
+  // Generate SQL, Test Transform) can fire back-to-back before the server
+  // returns. We keep one in-flight promise keyed by selectedMappingId so
+  // all concurrent callers share the same fmId/transformationId result.
+  const vaCommitInFlightRef = useRef<Map<string, Promise<{
+    success: boolean
+    fieldMappingId?: string
+    transformationId?: string
+    error?: string
+  }>>>(new Map())
 
   // Sidebar filter
   const [sidebarFilter, setSidebarFilter] = useState<TransformFilter>('all')
@@ -503,7 +537,12 @@ export default function TransformContent({ projectId, projectName, initialData, 
 
   useEffect(() => {
     const sql = localTransform?.sql
-    if (!sql?.trim() || !selectedMappingId) {
+    // Variant C (C2) auto-preview gate: skip preview when we're on a
+    // pending-sentinel selection (no transformationId yet). The preview
+    // RPCs key on target_field_mapping_id and would 404 on `pending:…`;
+    // auto-preview resumes automatically once `ensureValueAssignmentOnce`
+    // swaps `selectedMappingId` to the real TFM id.
+    if (!sql?.trim() || !selectedMappingId || !localTransform?.transformationId) {
       setPreviewResults([])
       setPreviewError(null)
       return
@@ -558,7 +597,7 @@ export default function TransformContent({ projectId, projectName, initialData, 
       if (previewTimeout.current) clearTimeout(previewTimeout.current)
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [localTransform?.sql, selectedMappingId, previewMode])
+  }, [localTransform?.sql, localTransform?.transformationId, selectedMappingId, previewMode])
 
   // ── Auto-save helpers ─────────────────────────────────────────────────────
 
@@ -668,7 +707,6 @@ export default function TransformContent({ projectId, projectName, initialData, 
       await flushAutoSave()
 
       setSelectedMappingId(fieldMappingId)
-      setSelectedUnmappedFieldId(null)
       setPreviewResults([])
       setPreviewError(null)
       setPreviewMode('sample')
@@ -715,6 +753,220 @@ export default function TransformContent({ projectId, projectName, initialData, 
     [data.datasets]
   )
 
+  // ── Select an unmapped target field (Variant C placeholder) ───────────────
+  //
+  // Sets `selectedMappingId` to a `pending:<targetFieldId>` sentinel so the
+  // mapped-field UI renders a unified shell without persisting anything yet.
+  // The three commit triggers (Suggest / Generate / Test) route through
+  // `ensureValueAssignmentOnce` to materialise the real TFM + transformations
+  // row when the user shows real intent.
+  const handleSelectUnmapped = useCallback(
+    async (targetFieldId: string) => {
+      if (autoSaveTimerRef.current) clearTimeout(autoSaveTimerRef.current)
+      await flushAutoSave()
+
+      setSelectedMappingId(`pending:${targetFieldId}`)
+      setPreviewResults([])
+      setPreviewError(null)
+      setPreviewMode('sample')
+      setApplyResult(null)
+      setTestResult(null)
+      setShowStagedPreview(false)
+      setStagedPreview(null)
+      setSqlExpanded(false)
+      setWhyExpanded(false)
+      setSaveStatus('idle')
+      setInputMode('ai')
+      setFieldSourceIssues([])
+      isDirtyRef.current = false
+      // Placeholder localTransform — transformationId stays null until a
+      // commit trigger fires. Without this, the Textarea onChange update
+      // (which uses `prev ? … : null`) would be a no-op.
+      setLocalTransform({
+        transformationId: null,
+        description: '',
+        sql: '',
+        badge: 'none',
+        status: 'draft',
+      })
+    },
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    []
+  )
+
+  // ── Variant C commit trigger: ensure a VA TFM + transformations row ───────
+  //
+  // Single entry point for the three commit triggers (AI Suggest, Generate
+  // SQL, Test Transform) when the current selection is a `pending:` sentinel.
+  // Races handled:
+  //   3A (multi-fire): an in-flight ref keyed on the pending id dedupes
+  //      concurrent calls — all three triggers await the same promise.
+  //   3B (buffered keystrokes): description from `localTransformRef.current`
+  //      is captured AT CALL TIME, not from stale closure.
+  //   3C (auto-save timing): `autoSaveTimerRef` is flushed before the
+  //      commit so no stale sql/desc from a prior debounce lingers, and the
+  //      commit always uses the freshly-typed values.
+  //   3D (concurrent clicks): `useTransition`'s isPending flag on each
+  //      trigger gates the button disable; plus the in-flight ref bucket.
+  //
+  // Returns { fieldMappingId, transformationId } on success, or null on
+  // failure (a toast has already been shown).
+  const ensureValueAssignmentOnce = useCallback(
+    async (pendingSentinel: string): Promise<{ fieldMappingId: string; transformationId: string } | null> => {
+      const targetFieldId = pendingSentinel.startsWith('pending:')
+        ? pendingSentinel.slice('pending:'.length)
+        : null
+      if (!targetFieldId) return null
+
+      const existing = vaCommitInFlightRef.current.get(pendingSentinel)
+      if (existing) {
+        const r = await existing
+        if (r.success && r.fieldMappingId && r.transformationId) {
+          return { fieldMappingId: r.fieldMappingId, transformationId: r.transformationId }
+        }
+        return null
+      }
+
+      const uf =
+        data.unmappedNotNullTargetFields.find((f) => f.id === targetFieldId) ??
+        data.unmappedNullableTargetFields.find((f) => f.id === targetFieldId)
+      if (!uf) return null
+
+      let tableMappingId: string | null = null
+      for (const ds of data.datasets) {
+        for (const t of ds.tables) {
+          if (t.targetTableId === uf.table_id) {
+            tableMappingId = t.tableMappingId
+            break
+          }
+        }
+        if (tableMappingId) break
+      }
+      if (!tableMappingId) {
+        showToast('No table mapping found for this field.', 'error')
+        return null
+      }
+
+      // Flush any pending auto-save (shouldn't fire for null transformationId,
+      // but defensively clear the debounce timer so our captured snapshot
+      // doesn't race with a later keystroke).
+      if (autoSaveTimerRef.current) clearTimeout(autoSaveTimerRef.current)
+
+      // Capture the freshest user-entered values AT CALL TIME — not from a
+      // stale closure. Handles Race 3B (buffered keystrokes after trigger).
+      const lt = localTransformRef.current
+      const initialSql = lt?.sql ?? ''
+      const initialDescription = lt?.description ?? ''
+
+      const promise = ensureValueAssignment(
+        projectId,
+        tableMappingId,
+        targetFieldId,
+        initialSql,
+        initialDescription,
+      )
+      vaCommitInFlightRef.current.set(pendingSentinel, promise)
+
+      try {
+        const result = await promise
+        if (!result.success || !result.fieldMappingId || !result.transformationId) {
+          showToast(result.error ?? 'Could not create value assignment', 'error')
+          return null
+        }
+
+        const fmId = result.fieldMappingId
+        const transformationId = result.transformationId
+
+        // Promote the synthetic placeholder into a real mapped-field entry.
+        // Mirrors the server-side routing in getTransformData — first TM
+        // whose target_table matches — so the sidebar badge lands in the
+        // same slot a page reload would produce.
+        setData((prev) => {
+          let routed = false
+          const datasets = prev.datasets.map((ds) => ({
+            ...ds,
+            tables: ds.tables.map((tbl) => {
+              if (routed) return tbl
+              if (tbl.targetTableId !== uf.table_id) return tbl
+              routed = true
+              const without = tbl.fields.filter((f) => f.fieldMappingId !== fmId)
+              const newItem: FieldItem = {
+                fieldMappingId: fmId,
+                sourceFieldId: null,
+                sourceFieldName: null,
+                sourceFieldDataType: null,
+                sourceFieldInferredType: null,
+                sourceFieldIsNullable: true,
+                targetFieldId: uf.id,
+                targetFieldName: uf.name,
+                targetFieldDataType: uf.data_type,
+                targetFieldInferredType: null,
+                targetFieldIsNullable: uf.is_nullable,
+                targetFieldIsPrimaryKey: uf.is_primary_key,
+                sourceTableId: null,
+                isValueAssignment: true,
+                typeCompatibility: null,
+                confidence: null,
+                aiReasoning: null,
+                nullPercentage: 0,
+                formatIssuesCount: 0,
+                sampleValues: [],
+                cardinality: 0,
+                needsTransform: true,
+                transformation: {
+                  id: transformationId,
+                  target_field_mapping_id: fmId,
+                  description: initialDescription || null,
+                  generated_sql: initialSql,
+                  is_ai_generated: false,
+                  test_results: null,
+                  status: 'draft',
+                  created_at: new Date().toISOString(),
+                },
+                isContributing: false,
+                contributingSourceFields: [],
+                targetCheckConstraint: uf.check_constraint,
+              }
+              const merged = [...without, newItem]
+              merged.sort((a, b) => {
+                if (a.isValueAssignment && !b.isValueAssignment) return 1
+                if (!a.isValueAssignment && b.isValueAssignment) return -1
+                if (a.isValueAssignment && b.isValueAssignment) {
+                  return a.targetFieldName.localeCompare(b.targetFieldName)
+                }
+                return 0
+              })
+              return { ...tbl, fields: merged }
+            }),
+          }))
+          return {
+            ...prev,
+            datasets,
+            unmappedNotNullTargetFields: prev.unmappedNotNullTargetFields.filter((f) => f.id !== uf.id),
+            unmappedNullableTargetFields: prev.unmappedNullableTargetFields.filter((f) => f.id !== uf.id),
+          }
+        })
+
+        // Carry the user's in-progress text into the real localTransform.
+        // Functional setState so we don't stomp on a concurrent keystroke.
+        setLocalTransform((prev) => ({
+          transformationId,
+          description: prev?.description ?? initialDescription,
+          sql: prev?.sql ?? initialSql,
+          badge: prev?.badge ?? 'none',
+          status: 'draft',
+        }))
+        setSelectedMappingId(fmId)
+
+        return { fieldMappingId: fmId, transformationId }
+      } finally {
+        vaCommitInFlightRef.current.delete(pendingSentinel)
+      }
+    },
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [projectId, data.datasets, data.unmappedNotNullTargetFields, data.unmappedNullableTargetFields]
+  )
+
   // ── Clear ─────────────────────────────────────────────────────────────────
 
   function handleClear() {
@@ -735,11 +987,21 @@ export default function TransformContent({ projectId, projectName, initialData, 
   function handleSuggest() {
     if (!selectedMappingId) return
     const existing = localTransform?.description?.trim()
+    // Pending VA commit trigger: materialise the TFM first so Suggest has
+    // a real fmId to hang context off. After ensure, `selectedMappingId` has
+    // been swapped to the real id, so we use the return value directly.
+    const pendingSentinel = selectedMappingId.startsWith('pending:') ? selectedMappingId : null
     // If there's already content, confirm before replacing
     if (existing) {
       // We use startSuggesting to get the suggestion first, then show the dialog
       startSuggesting(async () => {
-        const result = await suggestTransformDescription(selectedMappingId)
+        let fmId: string = selectedMappingId
+        if (pendingSentinel) {
+          const ensured = await ensureValueAssignmentOnce(pendingSentinel)
+          if (!ensured) return
+          fmId = ensured.fieldMappingId
+        }
+        const result = await suggestTransformDescription(fmId)
         if (!result.success || !result.suggestion) {
           showToast(result.error ?? 'Could not generate suggestion. Please describe the transformation manually.', 'error')
           return
@@ -750,7 +1012,13 @@ export default function TransformContent({ projectId, projectName, initialData, 
     }
     // Textarea is empty — populate directly
     startSuggesting(async () => {
-      const result = await suggestTransformDescription(selectedMappingId)
+      let fmId: string = selectedMappingId
+      if (pendingSentinel) {
+        const ensured = await ensureValueAssignmentOnce(pendingSentinel)
+        if (!ensured) return
+        fmId = ensured.fieldMappingId
+      }
+      const result = await suggestTransformDescription(fmId)
       if (!result.success || !result.suggestion) {
         showToast(result.error ?? 'Could not generate suggestion. Please describe the transformation manually.', 'error')
         return
@@ -773,9 +1041,18 @@ export default function TransformContent({ projectId, projectName, initialData, 
     if (!desc) { showToast('Enter a description first', 'error'); return }
 
     const existingSQL = localTransform.sql?.trim() || null
+    const pendingSentinel = selectedMappingId.startsWith('pending:') ? selectedMappingId : null
 
     startGenerating(async () => {
-      const result = await generateTransform(selectedMappingId, desc, existingSQL)
+      // Pending VA commit trigger: materialise the TFM first so
+      // generateTransform has a real fmId to upsert against.
+      let fmId: string = selectedMappingId
+      if (pendingSentinel) {
+        const ensured = await ensureValueAssignmentOnce(pendingSentinel)
+        if (!ensured) return
+        fmId = ensured.fieldMappingId
+      }
+      const result = await generateTransform(fmId, desc, existingSQL)
       if (!result.success || !result.sql) {
         showToast(result.error ?? 'Generation failed', 'error')
         return
@@ -794,7 +1071,7 @@ export default function TransformContent({ projectId, projectName, initialData, 
       setPreviewError(null)
       setApplyResult(null)
       setTestResult(null)
-      refreshFieldTransformation(selectedMappingId, result.transformationId ?? null, result.sql!, 'ai', desc, 'draft')
+      refreshFieldTransformation(fmId, result.transformationId ?? null, result.sql!, 'ai', desc, 'draft')
     })
   }
 
@@ -824,7 +1101,14 @@ export default function TransformContent({ projectId, projectName, initialData, 
   // ── Test Transform (full run against all rows) ────────────────────────────
 
   function handleTest() {
-    if (!selectedMappingId || !localTransform?.transformationId) return
+    if (!selectedMappingId || !localTransform) return
+    // When the selection is a pending sentinel, Test Transform is the
+    // Variant C commit trigger for SQL mode: it ensures the VA TFM + its
+    // transformations row exist (seeded with the user-typed SQL), then
+    // proceeds. For already-materialised TFMs we keep the existing guard.
+    const pendingSentinel = selectedMappingId.startsWith('pending:') ? selectedMappingId : null
+    if (!pendingSentinel && !localTransform.transformationId) return
+    if (!localTransform.sql?.trim()) { showToast('Enter a SQL expression first', 'error'); return }
     setTestResult(null)
 
     // Flush any pending auto-save first so the RPC uses the latest SQL
@@ -832,7 +1116,13 @@ export default function TransformContent({ projectId, projectName, initialData, 
     flushAutoSave()
 
     startTesting(async () => {
-      const res = await runFullTransformTest(selectedMappingId)
+      let fmId: string = selectedMappingId
+      if (pendingSentinel) {
+        const ensured = await ensureValueAssignmentOnce(pendingSentinel)
+        if (!ensured) return
+        fmId = ensured.fieldMappingId
+      }
+      const res = await runFullTransformTest(fmId)
       if (!res.success || !res.result) {
         showToast(res.error ?? 'Test failed', 'error')
         return
@@ -841,7 +1131,7 @@ export default function TransformContent({ projectId, projectName, initialData, 
       if (res.result.failedRows === 0) {
         // All rows pass → update local status to tested
         setLocalTransform((prev) => prev ? { ...prev, status: 'tested' } : null)
-        refreshFieldStatus(selectedMappingId, 'tested')
+        refreshFieldStatus(fmId, 'tested')
       } else {
         // Failures → keep as draft
         setLocalTransform((prev) => prev ? { ...prev, status: 'draft' } : null)
@@ -1256,10 +1546,69 @@ export default function TransformContent({ projectId, projectName, initialData, 
 
   // ── UI helpers ────────────────────────────────────────────────────────────
 
-  const selectedContext = useMemo(
-    () => (selectedMappingId ? findField(data.datasets, selectedMappingId) : null),
-    [data.datasets, selectedMappingId]
-  )
+  // `pending:<targetFieldId>` sentinel — set by the sidebar click handler
+  // for unmapped target fields. Under Variant C (C2) this drives the
+  // mapped-field UI to render a placeholder state; the real TFM is created
+  // only when the user hits one of the three commit triggers.
+  const selectedUnmappedFieldId = selectedMappingId?.startsWith('pending:')
+    ? selectedMappingId.slice('pending:'.length)
+    : null
+
+  const selectedContext = useMemo<
+    { field: FieldItem; table: TableGroup; dataset: DatasetGroup } | null
+  >(() => {
+    if (!selectedMappingId) return null
+    const found = findField(data.datasets, selectedMappingId)
+    if (found) return found
+    // Synthesise a placeholder context for a pending unmapped field so the
+    // mapped-field UI can render a unified shell (Bug A fix). The synthetic
+    // FieldItem uses the pending sentinel as its id — callers that compare
+    // `selectedContext.field.fieldMappingId` get a stable key, and the
+    // commit triggers swap the whole field tree over to the real TFM id
+    // once `ensureValueAssignment` returns.
+    if (!selectedUnmappedFieldId) return null
+    const uf =
+      data.unmappedNotNullTargetFields.find((f) => f.id === selectedUnmappedFieldId) ??
+      data.unmappedNullableTargetFields.find((f) => f.id === selectedUnmappedFieldId)
+    if (!uf) return null
+    // Route to the first (dataset, table) pair whose targetTableId matches —
+    // mirrors getTransformData's `firstTmByTargetTable` semantics.
+    for (const ds of data.datasets) {
+      for (const tbl of ds.tables) {
+        if (tbl.targetTableId !== uf.table_id) continue
+        const syntheticField: FieldItem = {
+          fieldMappingId: selectedMappingId,
+          sourceFieldId: null,
+          sourceFieldName: null,
+          sourceFieldDataType: null,
+          sourceFieldInferredType: null,
+          sourceFieldIsNullable: true,
+          targetFieldId: uf.id,
+          targetFieldName: uf.name,
+          targetFieldDataType: uf.data_type,
+          targetFieldInferredType: null,
+          targetFieldIsNullable: uf.is_nullable,
+          targetFieldIsPrimaryKey: uf.is_primary_key,
+          sourceTableId: null,
+          isValueAssignment: true,
+          typeCompatibility: null,
+          confidence: null,
+          aiReasoning: null,
+          nullPercentage: 0,
+          formatIssuesCount: 0,
+          sampleValues: [],
+          cardinality: 0,
+          needsTransform: true,
+          transformation: null,
+          isContributing: false,
+          contributingSourceFields: [],
+          targetCheckConstraint: uf.check_constraint,
+        }
+        return { field: syntheticField, table: tbl, dataset: ds }
+      }
+    }
+    return null
+  }, [data.datasets, data.unmappedNotNullTargetFields, data.unmappedNullableTargetFields, selectedMappingId, selectedUnmappedFieldId])
 
   function statusBadge() {
     if (!localTransform) return null
@@ -1515,16 +1864,7 @@ export default function TransformContent({ projectId, projectName, initialData, 
                     const next = new Set(prev); next.has(id) ? next.delete(id) : next.add(id); return next
                   })}
                   onSelectField={handleSelectField}
-                  onSelectUnmappedField={(id) => {
-                    setSelectedUnmappedFieldId(id)
-                    setSelectedMappingId(null)
-                    setUnmappedDescription('')
-                    setUnmappedSql('')
-                    setUnmappedSqlSource(null)
-                    setUnmappedSqlExpanded(false)
-                    setUnmappedPreviewRows([])
-                    setUnmappedFieldMappingId(null)
-                  }}
+                  onSelectUnmappedField={handleSelectUnmapped}
                 />
               ))
             )}
@@ -1532,420 +1872,9 @@ export default function TransformContent({ projectId, projectName, initialData, 
           </div>
         </div>
 
-        {/* ── Right area: empty state OR unmapped info OR split panel ── */}
+        {/* ── Right area: empty state OR split panel ── */}
         <div className="flex-1 flex flex-col overflow-hidden">
-          {selectedUnmappedFieldId && !selectedContext ? (() => {
-            const field = data.unmappedNotNullTargetFields.find((f) => f.id === selectedUnmappedFieldId)
-              ?? data.unmappedNullableTargetFields.find((f) => f.id === selectedUnmappedFieldId)
-            if (!field) return null
-            const isRequired = !field.is_nullable
-            const checkConstraint = field.check_constraint as { type?: string; allowedValues?: string[]; pattern?: string } | null
-
-            // Lazily ensure a field_mapping exists; returns its ID
-            const ensureFieldMapping = async (): Promise<string | null> => {
-              if (unmappedFieldMappingId) return unmappedFieldMappingId
-              let tableMappingId: string | null = null
-              for (const ds of data.datasets) {
-                for (const t of ds.tables) {
-                  if (t.targetTableId === field.table_id) { tableMappingId = t.tableMappingId; break }
-                }
-                if (tableMappingId) break
-              }
-              if (!tableMappingId) return null
-              const result = await createValueAssignment(projectId, tableMappingId, field.id)
-              if (!result.success || !result.fieldMappingId) {
-                if (!result.success) {
-                  if (result.error?.includes('already has a field mapping')) {
-                    showToast('This target field already has a field mapping. Remove it first to add a value assignment.', 'error')
-                  } else {
-                    showToast(result.error ?? 'Could not create value assignment', 'error')
-                  }
-                }
-                return null
-              }
-              setUnmappedFieldMappingId(result.fieldMappingId)
-              return result.fieldMappingId
-            }
-
-            const handleUnmappedSuggest = async () => {
-              setUnmappedSuggesting(true)
-              try {
-                const fmId = await ensureFieldMapping()
-                if (!fmId) return
-                const result = await suggestTransformDescription(fmId)
-                if (!result.success || !result.suggestion) {
-                  showToast(result.error ?? 'Could not generate suggestion.', 'error')
-                  return
-                }
-                setUnmappedDescription(result.suggestion)
-              } finally {
-                setUnmappedSuggesting(false)
-              }
-            }
-
-            const handleUnmappedGenerate = async () => {
-              if (!unmappedDescription.trim()) return
-              setUnmappedGenerating(true)
-              try {
-                const fmId = await ensureFieldMapping()
-                if (!fmId) return
-                const existingUnmappedSQL = unmappedSql?.trim() || null
-                const genResult = await generateTransform(fmId, unmappedDescription, existingUnmappedSQL)
-                if (!genResult.success || !genResult.sql) {
-                  showToast(genResult.error ?? 'Generation failed', 'error')
-                  return
-                }
-                setUnmappedSql(genResult.sql)
-                setUnmappedSqlSource('ai')
-                setUnmappedSqlExpanded(true)
-                const prev = await previewTransformDistinct(fmId, genResult.sql)
-                if (!prev.success) {
-                  showToast(prev.error ?? 'Preview failed', 'error')
-                  return
-                }
-                if (prev.results) setUnmappedPreviewRows(prev.results.map((r) => ({ after: r.after })))
-              } finally {
-                setUnmappedGenerating(false)
-              }
-            }
-
-            const handleUnmappedSave = async () => {
-              if (!unmappedFieldMappingId || !unmappedSql.trim()) return
-              setUnmappedSaving(true)
-              try {
-                const { createClient } = await import('@/lib/supabase/client')
-                const sb = createClient()
-                const { data: tfData } = await sb.from('transformations').select('id').eq('target_field_mapping_id', unmappedFieldMappingId).maybeSingle()
-                const transformationId: string | null = tfData?.id ?? null
-                if (tfData?.id) {
-                  const saveRes = await autoSaveTransform(tfData.id, unmappedSql, unmappedDescription)
-                  if (!saveRes.success) {
-                    showToast(saveRes.error ?? 'Save failed', 'error')
-                    return
-                  }
-                }
-
-                // Splice the new VA TFM into the in-memory data tree so
-                // findField() can locate it for the right-pane editor.
-                // Mirrors getTransformData's server-side VA emission shape
-                // (transformations.ts :: getTransformData, FieldItem block
-                // ~line 690) and the inline TransformationRow synthesis in
-                // refreshFieldTransformation. Replaces router.refresh(),
-                // which wouldn't propagate into local `data` state because
-                // there is no initialData→data useEffect sync.
-                const fmId = unmappedFieldMappingId
-                const newItem: FieldItem = {
-                  fieldMappingId: fmId,
-                  sourceFieldId: null,
-                  sourceFieldName: null,
-                  sourceFieldDataType: null,
-                  sourceFieldInferredType: null,
-                  sourceFieldIsNullable: true,
-                  targetFieldId: field.id,
-                  targetFieldName: field.name,
-                  targetFieldDataType: field.data_type,
-                  targetFieldInferredType: null,
-                  targetFieldIsNullable: field.is_nullable,
-                  targetFieldIsPrimaryKey: field.is_primary_key,
-                  sourceTableId: null,
-                  isValueAssignment: true,
-                  typeCompatibility: null,
-                  confidence: null,
-                  aiReasoning: null,
-                  nullPercentage: 0,
-                  formatIssuesCount: 0,
-                  sampleValues: [],
-                  cardinality: 0,
-                  needsTransform: true,
-                  transformation: transformationId
-                    ? {
-                        id: transformationId,
-                        target_field_mapping_id: fmId,
-                        description: unmappedDescription,
-                        generated_sql: unmappedSql,
-                        is_ai_generated: unmappedSqlSource === 'ai',
-                        test_results: null,
-                        status: 'draft',
-                        created_at: new Date().toISOString(),
-                      }
-                    : null,
-                  isContributing: false,
-                  contributingSourceFields: [],
-                  targetCheckConstraint: field.check_constraint,
-                }
-
-                setData((prev) => ({
-                  ...prev,
-                  datasets: prev.datasets.map((ds) => ({
-                    ...ds,
-                    tables: ds.tables.map((tbl) => {
-                      if (tbl.targetTableId !== field.table_id) return tbl
-                      const without = tbl.fields.filter((f) => f.fieldMappingId !== fmId)
-                      const merged = [...without, newItem]
-                      // Stable sort matching getTransformData's comparator:
-                      // VAs after mapped fields, VAs alphabetised by target
-                      // name; mapped fields' relative order preserved
-                      // (ES2019 stable sort).
-                      merged.sort((a, b) => {
-                        if (a.isValueAssignment && !b.isValueAssignment) return 1
-                        if (!a.isValueAssignment && b.isValueAssignment) return -1
-                        if (a.isValueAssignment && b.isValueAssignment) {
-                          return a.targetFieldName.localeCompare(b.targetFieldName)
-                        }
-                        return 0
-                      })
-                      return { ...tbl, fields: merged }
-                    }),
-                  })),
-                  unmappedNotNullTargetFields: prev.unmappedNotNullTargetFields.filter((f) => f.id !== field.id),
-                  unmappedNullableTargetFields: prev.unmappedNullableTargetFields.filter((f) => f.id !== field.id),
-                }))
-
-                setSelectedMappingId(fmId)
-                setSelectedUnmappedFieldId(null)
-              } finally {
-                setUnmappedSaving(false)
-              }
-            }
-
-            const smartPlaceholder = checkConstraint?.type === 'in_list' && checkConstraint.allowedValues?.length
-              ? `e.g. "Always set to '${checkConstraint.allowedValues[0]}'" or "Use FIRM for law firms, CORP for corporations"`
-              : isRequired
-                ? `e.g. "Always set to 'DEFAULT'", "Use current timestamp", "Generate a UUID"`
-                : `e.g. "Leave as NULL", "Set to empty string", "Use current date"`
-
-            return (
-              <div className="flex-1 flex flex-col min-h-0">
-                {/* Header — same as regular transform editor header */}
-                <div className="bg-white border-b border-gray-100 px-6 py-3 flex items-center justify-between flex-shrink-0">
-                  <div className="flex items-center gap-3 min-w-0">
-                    <span className="text-sm font-semibold text-gray-900 flex-shrink-0">Define Value</span>
-                    <span className="text-xs font-medium px-2 py-0.5 rounded-full bg-purple-100 text-purple-700 flex-shrink-0">Value Assignment</span>
-                    <div className="flex items-center gap-1.5 text-sm text-gray-500 flex-wrap min-w-0">
-                      <span className="font-medium text-gray-700 truncate">{field.name}</span>
-                      <span className="text-gray-400 text-xs">{field.data_type}</span>
-                      {isRequired && <span className="text-amber-600 text-xs">NOT NULL</span>}
-                      {field.table_name && <span className="text-gray-400 text-xs">· {field.table_name}</span>}
-                    </div>
-                  </div>
-                </div>
-
-                {/* Scrollable editor body */}
-                <div className="flex-1 overflow-auto p-5 space-y-4">
-
-                  {/* Description card — identical structure to regular transform NL description card */}
-                  <div className="bg-white rounded-lg border border-gray-100 p-4">
-                    <label className="block text-sm font-medium text-gray-900 mb-2">
-                      Describe the value this field should receive
-                    </label>
-                    {/* Context hints — replaces multi-source hint */}
-                    <div className="mb-3 space-y-2">
-                      <div className="px-3 py-2 bg-purple-50 border border-purple-100 rounded-lg text-xs text-purple-700">
-                        <span className="font-medium">No source field mapped.</span>{' '}
-                        {isRequired
-                          ? 'This required field needs a value for every record. Describe a constant, expression, or rule.'
-                          : 'This optional field has no source mapping. Define a value or leave it to default to NULL.'}
-                      </div>
-                      {checkConstraint?.type === 'in_list' && checkConstraint.allowedValues && (
-                        <div className="px-3 py-2 bg-blue-50 border border-blue-100 rounded-lg text-xs text-blue-700">
-                          <span className="font-medium">Allowed values:</span>{' '}
-                          <span className="font-mono">{checkConstraint.allowedValues.join(', ')}</span>
-                        </div>
-                      )}
-                      {checkConstraint?.type === 'regex' && checkConstraint.pattern && (
-                        <div className="px-3 py-2 bg-blue-50 border border-blue-100 rounded-lg text-xs text-blue-700">
-                          <span className="font-medium">Pattern constraint:</span>{' '}
-                          <span className="font-mono">{checkConstraint.pattern}</span>
-                        </div>
-                      )}
-                    </div>
-                    <Textarea
-                      value={unmappedDescription}
-                      onChange={(e) => setUnmappedDescription(e.target.value)}
-                      placeholder={smartPlaceholder}
-                      readOnly={!canEdit}
-                      className={`min-h-20 resize-none text-sm ${!canEdit ? 'opacity-60 cursor-not-allowed' : ''}`}
-                      onKeyDown={(e) => { if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) handleUnmappedGenerate() }}
-                    />
-                    {/* Action row — same layout as regular editor */}
-                    <div className="mt-3 flex items-center gap-2 flex-wrap">
-                      <RoleTooltip allowed={canEdit} requiredRole="Editor">
-                        <Button
-                          variant="outline"
-                          className="gap-1.5 text-sm border-gray-300 text-gray-700 hover:text-blue-700 hover:border-blue-300 hover:bg-blue-50"
-                          onClick={handleUnmappedSuggest}
-                          disabled={unmappedSuggesting || unmappedGenerating || !canEdit}
-                        >
-                          {unmappedSuggesting
-                            ? <span className="w-3.5 h-3.5 border-2 border-gray-400 border-t-blue-500 rounded-full animate-spin" />
-                            : <Sparkles className="w-3.5 h-3.5" />}
-                          {unmappedSuggesting ? 'Suggesting...' : 'AI Suggest'}
-                        </Button>
-                      </RoleTooltip>
-                      <RoleTooltip allowed={canEdit} requiredRole="Editor">
-                        <Button
-                          className="bg-primary hover:bg-primary/90 text-white gap-2"
-                          onClick={handleUnmappedGenerate}
-                          disabled={unmappedGenerating || unmappedSuggesting || !unmappedDescription.trim() || !canEdit}
-                        >
-                        <RefreshCw className={`w-4 h-4 ${unmappedGenerating ? 'animate-spin' : ''}`} />
-                        {unmappedGenerating ? 'Generating...' : 'Generate SQL'}
-                        </Button>
-                      </RoleTooltip>
-                      {canEdit && (
-                        <button
-                          className="text-sm text-gray-500 hover:text-gray-700 underline-offset-2 hover:underline"
-                          onClick={() => { setUnmappedDescription(''); setUnmappedSql(''); setUnmappedSqlSource(null); setUnmappedPreviewRows([]) }}
-                        >
-                          Clear
-                        </button>
-                      )}
-                    </div>
-                  </div>
-
-                  {/* Generated SQL — collapsible, same as regular editor */}
-                  {unmappedSql && (
-                    <div className="bg-white rounded-lg border border-gray-100">
-                      <button
-                        type="button"
-                        onClick={() => setUnmappedSqlExpanded((v) => !v)}
-                        className="w-full px-4 py-2.5 flex items-center justify-between hover:bg-gray-50 transition-colors"
-                      >
-                        <div className="flex items-center gap-2">
-                          <span className="text-sm font-semibold text-gray-900">Generated SQL</span>
-                          {unmappedSqlSource === 'ai' && (
-                            <span className="text-[10px] font-medium px-1.5 py-0.5 rounded-full bg-blue-100 text-blue-700">AI-Generated</span>
-                          )}
-                        </div>
-                        <span className="text-xs text-gray-400">{unmappedSqlExpanded ? 'Hide ▴' : 'Show ▾'}</span>
-                      </button>
-                      {unmappedSqlExpanded && (
-                        <div className="p-4 border-t border-gray-100">
-                          <textarea
-                            value={unmappedSql}
-                            onChange={(e) => { setUnmappedSql(e.target.value); setUnmappedSqlSource('manual') }}
-                            readOnly={!canEdit}
-                            className={`w-full font-mono text-xs text-gray-800 bg-gray-50 rounded border border-gray-200 p-3 resize-none focus:outline-none focus:ring-2 focus:ring-blue-500/30 focus:border-blue-500 ${!canEdit ? 'opacity-60 cursor-not-allowed' : ''}`}
-                            rows={Math.max(2, unmappedSql.split('\n').length + 1)}
-                            spellCheck={false}
-                          />
-                        </div>
-                      )}
-                    </div>
-                  )}
-
-                  {/* Value Preview — simplified table, target column only (no source) */}
-                  {unmappedSql && (
-                    <div className="bg-white rounded-lg border border-gray-100 overflow-hidden">
-                      <div className="px-4 py-2.5 border-b border-gray-100 flex items-center justify-between">
-                        <span className="text-sm font-semibold text-gray-900">Value Preview</span>
-                        {unmappedPreviewRows.length > 0 && (
-                          <span className="text-xs text-green-600 flex items-center gap-1">
-                            <span className="w-1.5 h-1.5 rounded-full bg-green-500" />
-                            Live
-                          </span>
-                        )}
-                      </div>
-                      <table className="w-full text-sm">
-                        <thead>
-                          <tr className="bg-gray-50 border-b border-gray-100">
-                            <th className="text-left px-4 py-2 text-xs font-medium text-gray-500">
-                              Target ({field.name})
-                            </th>
-                          </tr>
-                        </thead>
-                        <tbody>
-                          {unmappedPreviewRows.length > 0 ? (
-                            unmappedPreviewRows.slice(0, 8).map((row, i) => (
-                              <tr key={i} className="border-b border-gray-50 last:border-0 hover:bg-gray-50/50">
-                                <td className="px-4 py-2 font-mono text-xs text-green-600">
-                                  {row.after != null ? String(row.after) : <span className="italic text-gray-400">null</span>}
-                                </td>
-                              </tr>
-                            ))
-                          ) : (
-                            <tr>
-                              <td className="px-4 py-6 text-center text-xs text-gray-400">
-                                Run <strong>Generate SQL</strong> to preview the output
-                              </td>
-                            </tr>
-                          )}
-                        </tbody>
-                      </table>
-                    </div>
-                  )}
-
-                </div>
-
-                {/* Pinned action bar — same structure as Test+Apply bar */}
-                {unmappedSql && (
-                  <div className="flex-shrink-0 z-10 border-t border-gray-100 bg-white px-4 py-3 flex items-center gap-3 shadow-[0_-2px_8px_rgba(0,0,0,0.06)]">
-                    <RoleTooltip allowed={canEdit} requiredRole="Editor">
-                      <Button
-                        className="bg-primary hover:bg-primary/90 text-white gap-2 flex-1"
-                        onClick={handleUnmappedSave}
-                        disabled={unmappedSaving || !canEdit}
-                      >
-                        {unmappedSaving ? (
-                          <span className="flex items-center gap-2">
-                            <span className="w-3.5 h-3.5 border-2 border-white/30 border-t-white rounded-full animate-spin" />
-                          Saving…
-                        </span>
-                      ) : (
-                        <>
-                          <Database className="w-3.5 h-3.5" />
-                          Save Value
-                        </>
-                      )}
-                      </Button>
-                    </RoleTooltip>
-                  </div>
-                )}
-
-                {/* Footer — same as regular editor footer */}
-                <div className="border-t border-gray-100 bg-white px-6 py-3 flex items-center justify-between flex-shrink-0">
-                  <span className="text-xs text-gray-400">
-                    Use <strong>Save Value</strong> to persist the expression, then <strong>Stage All Data</strong> to apply it.
-                  </span>
-                  <div className="flex flex-col items-end gap-1">
-                    {stagingError && <p className="text-xs text-red-600 max-w-xs text-right">{stagingError}</p>}
-                    <RoleTooltip allowed={canEdit} requiredRole="Editor">
-                      <Button
-                        className="bg-primary hover:bg-primary/90 text-white disabled:opacity-60"
-                        disabled={isStaging || !canEdit}
-                        onClick={() => {
-                          setStagingError(null)
-                          startStaging(async () => {
-                            try {
-                              const result = await stageAllData(projectId)
-                              if (!result.success) {
-                                const msg = result.error ?? 'Staging failed'
-                                setStagingError(msg)
-                                showToast(msg, 'error')
-                                return
-                              }
-                              router.push(`/app/projects/${projectId}/data-quality`)
-                            } catch (e) {
-                              const msg = e instanceof Error ? e.message : 'Staging failed'
-                              setStagingError(msg)
-                              showToast(msg, 'error')
-                            }
-                          })
-                        }}
-                      >
-                        {isStaging ? (
-                          <span className="flex items-center gap-2">
-                            <span className="w-3.5 h-3.5 border-2 border-white/30 border-t-white rounded-full animate-spin" />
-                            Staging…
-                          </span>
-                        ) : 'Continue to Validation'}
-                      </Button>
-                    </RoleTooltip>
-                  </div>
-                </div>
-              </div>
-            )
-          })() : !selectedContext ? (
+          {!selectedContext ? (
             <div className="flex-1 flex items-center justify-center p-8">
               <div className="text-center max-w-md">
                 <div className="w-16 h-16 bg-gray-100 rounded-full flex items-center justify-center mx-auto mb-4">
@@ -2690,13 +2619,20 @@ export default function TransformContent({ projectId, projectName, initialData, 
                 {/* Pinned action bar — flex-shrink-0 keeps it visible below the scroll area */}
                 {localTransform?.sql && !isArchived && (
                   <div className="flex-shrink-0 z-10 border-t border-gray-100 bg-white px-4 py-3 flex items-center gap-3 shadow-[0_-2px_8px_rgba(0,0,0,0.06)]">
-                    {/* Test Transform */}
+                    {/* Test Transform — also the Variant C SQL-mode commit
+                        trigger: when the selection is a `pending:` sentinel,
+                        handleTest routes through ensureValueAssignmentOnce
+                        to materialise the VA TFM with the user's SQL, then
+                        runs the full test. Disabled only while a test is
+                        in-flight; the outer {localTransform?.sql && … } guard
+                        on the action bar ensures SQL is present before the
+                        button renders. */}
                     <RoleTooltip allowed={canEdit} requiredRole="Editor">
                       <Button
                         variant="outline"
                         className="gap-2 border-gray-300 text-gray-700 hover:border-blue-400 hover:text-blue-700 hover:bg-blue-50"
                         onClick={handleTest}
-                        disabled={isTesting || !localTransform?.transformationId || !canEdit}
+                        disabled={isTesting || !canEdit}
                       >
                         {isTesting ? (
                           <span className="flex items-center gap-2">
@@ -2711,13 +2647,22 @@ export default function TransformContent({ projectId, projectName, initialData, 
                         )}
                       </Button>
                     </RoleTooltip>
-                    {/* Apply Transform — only enabled after successful test */}
+                    {/* Apply Transform — only enabled after successful test.
+                        For pending-sentinel selections, transformationId is
+                        null so the tooltip surfaces "Run Test Transform
+                        first" (which doubles as the commit trigger). */}
                     <RoleTooltip allowed={canEdit} requiredRole="Editor">
                       <Button
                         className="bg-primary hover:bg-primary/90 text-white gap-2 px-6 disabled:opacity-50 disabled:cursor-not-allowed"
                         onClick={handleApply}
                         disabled={isApplying || isCheckingIssues || !localTransform?.transformationId || localTransform.status !== 'tested' || !canEdit}
-                        title={localTransform.status !== 'tested' ? 'Run "Test Transform" first' : undefined}
+                        title={
+                          !localTransform?.transformationId
+                            ? 'Run "Test Transform" first to commit this value'
+                            : localTransform.status !== 'tested'
+                            ? 'Run "Test Transform" first'
+                            : undefined
+                        }
                     >
                       {isCheckingIssues ? (
                         <span className="flex items-center gap-2">
@@ -3136,45 +3081,19 @@ function FieldRow({ field, isSelected, onSelect, oneToManyCount = 1 }: {
 }) {
   const status = field.transformation?.status
   const isOneToMany = oneToManyCount > 1
+  const isVA = field.isValueAssignment
+  // The primary identifier shown in the top row. Mapped rows show the
+  // source field name (data flows source → target); VAs have no source,
+  // so they show the target field name instead. The bottom "→ No source
+  // mapped" subtitle is the only remaining VA differentiator in the
+  // sidebar — mirrors the TableNode unmapped-row pattern exactly so VAs
+  // and unmapped rows are visually homogeneous.
+  const primaryName = isVA ? field.targetFieldName : field.sourceFieldName
 
-  if (field.isValueAssignment) {
-    return (
-      <button
-        onClick={onSelect}
-        className={`w-full px-3 py-2.5 border-b border-gray-100 last:border-0 text-left transition-colors ${
-          isSelected
-            ? 'bg-purple-50 border-l-2 border-l-purple-400'
-            : 'border-l-2 border-l-transparent hover:bg-gray-50'
-        }`}
-      >
-        <div className="flex items-start justify-between gap-2 mb-0.5">
-          <div className="flex items-center gap-1.5 min-w-0 flex-1">
-            <span className="text-purple-500 text-xs font-mono flex-shrink-0">ƒ</span>
-            <span className="text-xs font-semibold text-purple-700 truncate">{field.targetFieldName}</span>
-          </div>
-          <div className="flex items-center gap-1 flex-shrink-0">
-            {status === 'applied' ? (
-              <Badge className="bg-green-100 text-green-700 hover:bg-green-100 border border-green-200 text-[10px] px-1.5 py-0">
-                Staged ✓
-              </Badge>
-            ) : field.transformation ? (
-              <Badge className="bg-purple-100 text-purple-700 hover:bg-purple-100 border border-purple-200 text-[10px] px-1.5 py-0">
-                Saved
-              </Badge>
-            ) : (
-              <Badge className="bg-purple-100 text-purple-700 hover:bg-purple-100 border border-purple-200 text-[10px] px-1.5 py-0">
-                Define
-              </Badge>
-            )}
-          </div>
-        </div>
-        <div className="flex items-center gap-1 pl-4">
-          <span className="text-[10px] text-purple-400">value assignment</span>
-        </div>
-      </button>
-    )
-  }
-
+  // NOTE: pre-existing 2px selection shift on selected-state toggle — no
+  // border-l-transparent on unselected rows to reserve the left accent
+  // slot. Flagged here for a future UI polish pass; not in scope for the
+  // sidebar unification.
   return (
     <button
       onClick={onSelect}
@@ -3184,7 +3103,7 @@ function FieldRow({ field, isSelected, onSelect, oneToManyCount = 1 }: {
           : 'hover:bg-settle-slate-50'
       }`}
     >
-      {/* Status dot */}
+      {/* Status dot — 5-state machine */}
       <span
         className={`w-1.5 h-1.5 rounded-full flex-shrink-0 mt-1.5 ${
           status === 'applied'
@@ -3203,8 +3122,8 @@ function FieldRow({ field, isSelected, onSelect, oneToManyCount = 1 }: {
       <div className="flex-1 min-w-0">
         <div className="flex items-center justify-between gap-1 mb-0.5">
           <div className="flex items-center gap-1.5 min-w-0">
-            <span className="text-[11px] font-medium text-settle-slate-900 font-mono truncate" title={field.sourceFieldName ?? undefined}>
-              {field.sourceFieldName}
+            <span className="text-[11px] font-medium text-settle-slate-900 font-mono truncate" title={primaryName ?? undefined}>
+              {primaryName}
             </span>
             {field.contributingSourceFields.length > 0 && (
               <span
@@ -3247,8 +3166,11 @@ function FieldRow({ field, isSelected, onSelect, oneToManyCount = 1 }: {
         </div>
         <div className="flex items-center gap-1">
           <ArrowRight className="w-2.5 h-2.5 text-settle-slate-300 flex-shrink-0" />
-          <span className="text-[10px] text-settle-slate-400 font-mono truncate" title={field.targetFieldName ?? undefined}>
-            {field.targetFieldName}
+          <span
+            className="text-[10px] text-settle-slate-400 font-mono truncate"
+            title={isVA ? undefined : field.targetFieldName ?? undefined}
+          >
+            {isVA ? 'No source mapped' : field.targetFieldName}
           </span>
         </div>
       </div>
