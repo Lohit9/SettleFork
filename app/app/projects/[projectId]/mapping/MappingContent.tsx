@@ -2348,7 +2348,7 @@ function MappingDetailsPanel({
                 )}
 
                 <button
-                  onClick={() => router.push(`/app/projects/${projectId}/transform?fieldMappingId=${fm.id}`)}
+                  onClick={() => router.push(`/app/projects/${projectId}/transform?targetFieldMappingId=${fm.id}`)}
                   className="text-xs font-medium text-settle-blue-500 hover:text-settle-blue-700 transition-colors"
                 >
                   View in Transform →
@@ -2358,7 +2358,7 @@ function MappingDetailsPanel({
               <div className="border border-gray-100 rounded-lg p-4">
                 <p className="text-xs text-settle-slate-400 mb-3">No transform defined</p>
                 <button
-                  onClick={() => router.push(`/app/projects/${projectId}/transform?fieldMappingId=${fm.id}`)}
+                  onClick={() => router.push(`/app/projects/${projectId}/transform?targetFieldMappingId=${fm.id}`)}
                   className="text-xs font-medium text-settle-blue-500 hover:text-settle-blue-700 transition-colors"
                 >
                   Define Transform →

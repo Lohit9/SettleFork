@@ -107,6 +107,7 @@ import {
 } from '@/components/ui/alert-dialog'
 import { useMappingRedesignEnabled } from '@/lib/hooks/useMappingRedesignEnabled'
 import TransformRedesignContent from './redesign/TransformContent'
+import { readTargetFieldMappingIdFromSearchParams } from '@/lib/url/transform-params'
 
 // ── Types ──────────────────────────────────────────────────────────────────────
 
@@ -467,9 +468,11 @@ export default function TransformContent({ projectId, projectName, initialData, 
   useEffect(() => { localTransformRef.current = localTransform }, [localTransform])
   useEffect(() => { selectedMappingIdRef.current = selectedMappingId }, [selectedMappingId])
 
-  // Auto-select field from URL query param (e.g. when navigating from mapping drawer)
+  // Auto-select field from URL query param (e.g. when navigating from mapping drawer).
+  // Accepts both `?targetFieldMappingId` (new, Phase 3+) and `?fieldMappingId`
+  // (legacy) — see lib/url/transform-params.ts for the back-compat contract.
   useEffect(() => {
-    const fmId = searchParams.get('fieldMappingId')
+    const fmId = readTargetFieldMappingIdFromSearchParams(searchParams)
     if (fmId && fmId !== selectedMappingId) {
       setSelectedMappingId(fmId)
     }
@@ -1937,7 +1940,7 @@ export default function TransformContent({ projectId, projectName, initialData, 
                     </>
                   )}
                   <button
-                    onClick={() => router.push(`/app/projects/${projectId}/mapping?fieldMappingId=${selectedMappingId}`)}
+                    onClick={() => router.push(`/app/projects/${projectId}/mapping?targetFieldMappingId=${selectedMappingId}`)}
                     className="text-[10px] text-settle-blue-500 hover:text-settle-blue-700 transition-colors"
                   >
                     · View Mapping →
