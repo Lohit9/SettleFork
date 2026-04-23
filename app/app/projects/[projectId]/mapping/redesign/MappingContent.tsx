@@ -27,22 +27,22 @@
 //   the default (unfiltered) view. This keeps the new state machine clean and
 //   avoids permanent coupling to the legacy filter vocabulary.
 //
-// CURRENT STATE (Gap 4b)
+// CURRENT STATE (Gap 4c)
 //
-//   Placeholder body still renders the "Phase 3 in progress" banner, and now
-//   ALSO renders a diagnostic panel that surfaces the key stats of the
-//   `MappingsForRedesignResult` payload fetched by `getMappingsForRedesign`.
-//   The diagnostic panel is a temporary smoke-test aid — Gap 4c replaces it
-//   with the real target-table-grouped UI. It MUST NOT leak into the final
-//   Gap 4c UI: when 4c lands, replace the <DiagnosticPanel /> call with the
-//   real target-table view.
+//   Diagnostic panel from Gap 4b is replaced with real target-table groups
+//   and minimal read-only field rows. No filters, no drawer, no chevron —
+//   Gaps 3, 5, 6, 7-10 layer those in. The amber WIP banner is retained at
+//   the top until the full redesign ships.
 
+import { useMemo } from 'react'
 import { PageHeader } from '@/components/app/PageHeader'
 import { type ProjectInfo } from '@/components/app/ProjectInfoPopover'
 import type {
-  MappingRowKind,
+  MappingRow,
   MappingsForRedesignResult,
+  TargetTableSummary,
 } from '@/lib/types/mappings-for-redesign'
+import { TargetTableGroup } from './components/TargetTableGroup'
 
 interface Props {
   projectId: string
@@ -51,9 +51,8 @@ interface Props {
   /**
    * Data feed for the redesigned Mapping page. Null only when
    * `page.tsx` was unable to fetch (unauth or project missing), in
-   * which case the UI renders the diagnostic banner with a "no data"
-   * indicator. Populated on all happy-path renders under the
-   * `use_mapping_redesign` flag.
+   * which case the UI renders an inline error state. Populated on
+   * all happy-path renders under the `use_mapping_redesign` flag.
    */
   initialRedesignData: MappingsForRedesignResult | null
 }
@@ -65,137 +64,181 @@ export default function MappingRedesignContent({
   initialRedesignData,
 }: Props) {
   return (
-    <div className="flex flex-col h-full">
+    <div className="flex h-full flex-col bg-gray-50">
       <PageHeader
         projectName={projectName}
         title="Mapping"
         projectInfo={projectInfo}
       />
-      <div className="flex-1 overflow-auto p-6">
-        <div
-          role="status"
-          aria-live="polite"
-          className="max-w-2xl mx-auto mt-8 rounded-lg border border-amber-300 bg-amber-50 px-6 py-5 text-amber-900"
-          data-testid="mapping-redesign-placeholder"
-        >
-          <div className="text-base font-semibold">
-            Mapping redesign — Phase 3 in progress
-          </div>
-          <p className="mt-2 text-sm text-amber-800">
-            You are viewing the experimental redesigned Mapping UI. The full
-            implementation is being landed incrementally under the
-            <code className="mx-1 rounded bg-amber-100 px-1 py-0.5 text-xs">
-              use_mapping_redesign
-            </code>
-            feature flag.
-          </p>
-          <dl className="mt-4 grid grid-cols-[auto_1fr] gap-x-4 gap-y-1 text-xs text-amber-900/80">
-            <dt className="font-medium">Project ID</dt>
-            <dd className="font-mono">{projectId}</dd>
-            <dt className="font-medium">Project name</dt>
-            <dd>{projectName}</dd>
-          </dl>
+      <div className="flex-1 overflow-auto">
+        <div className="mx-auto w-full max-w-5xl px-6 py-6">
+          <WipBanner projectId={projectId} />
+          {initialRedesignData === null ? (
+            <NoDataState />
+          ) : (
+            <MappingBody data={initialRedesignData} />
+          )}
         </div>
-
-        <DiagnosticPanel data={initialRedesignData} />
       </div>
     </div>
   )
 }
 
-// ─── Diagnostic panel (Gap 4b, temporary) ────────────────────────────────────
-// Surfaces the key fields of `MappingsForRedesignResult` so Gap 4b can be
-// smoke-tested end-to-end without the final UI. Gap 4c deletes this.
+// ─── WIP banner ──────────────────────────────────────────────────────────────
 
-function DiagnosticPanel({ data }: { data: MappingsForRedesignResult | null }) {
-  if (data === null) {
-    return (
-      <div
-        data-testid="mapping-redesign-diagnostic-empty"
-        className="max-w-2xl mx-auto mt-6 rounded-lg border border-slate-200 bg-slate-50 px-6 py-5 text-sm text-slate-600"
-      >
-        No mapping data fetched. The server action returned{' '}
-        <code className="rounded bg-slate-100 px-1 py-0.5">null</code> —
-        either the viewer is unauthenticated or the project was not
-        resolvable at render time.
-      </div>
-    )
+function WipBanner({ projectId }: { projectId: string }) {
+  return (
+    <div
+      role="status"
+      aria-live="polite"
+      data-testid="mapping-redesign-placeholder"
+      className="mb-6 rounded-lg border border-amber-300 bg-amber-50 px-4 py-3 text-xs text-amber-900"
+    >
+      <span className="font-semibold">Mapping redesign — Phase 3 in progress.</span>{' '}
+      You are viewing the experimental redesigned Mapping UI behind the{' '}
+      <code className="rounded bg-amber-100 px-1 py-0.5">use_mapping_redesign</code>{' '}
+      feature flag. Project <span className="font-mono">{projectId}</span>.
+    </div>
+  )
+}
+
+// ─── Body ────────────────────────────────────────────────────────────────────
+
+function MappingBody({ data }: { data: MappingsForRedesignResult }) {
+  /**
+   * Group rows by target-table id WHILE preserving server order. We
+   * rely on Map insertion order (the server emits rows sorted by
+   * targetTable.name ASC + ordinalPosition ASC), so the Map's native
+   * iteration yields groups in canonical order too. No client sort —
+   * that would violate the data-contract ordering guarantee.
+   */
+  const groupedRows = useMemo(() => groupRowsByTargetTable(data.rows), [data.rows])
+  const tablesById = useMemo(() => {
+    const m = new Map<string, TargetTableSummary>()
+    for (const t of data.targetTables) m.set(t.id, t)
+    return m
+  }, [data.targetTables])
+
+  return (
+    <>
+      <CountersRow counts={data.counts} tableCount={data.targetTables.length} />
+
+      {data.targetSchemaEmpty ? (
+        <EmptySchemaState />
+      ) : groupedRows.size === 0 ? (
+        <EmptyFieldsState />
+      ) : (
+        <div className="flex flex-col gap-4">
+          {Array.from(groupedRows.entries()).map(([targetTableId, rows]) => {
+            const summary = tablesById.get(targetTableId)
+            if (!summary) return null
+            return (
+              <TargetTableGroup
+                key={targetTableId}
+                targetTable={summary}
+                rows={rows}
+              />
+            )
+          })}
+        </div>
+      )}
+    </>
+  )
+}
+
+// ─── Counters row ────────────────────────────────────────────────────────────
+// Inline pipe-separated stats, matching the spec mockup (line 646) and the
+// existing pattern in components/app/ProjectsList.tsx.
+
+function CountersRow({
+  counts,
+  tableCount,
+}: {
+  counts: MappingsForRedesignResult['counts']
+  tableCount: number
+}) {
+  const chips: { label: string; value: number }[] = [
+    { label: 'Total', value: counts.total },
+    { label: 'Approved', value: counts.approved },
+    { label: 'Needs Review', value: counts.needsReview },
+  ]
+  // §9 Q6 (2026-04-22): show the Rejected chip only when the count is non-zero.
+  if (counts.rejected > 0) {
+    chips.push({ label: 'Rejected', value: counts.rejected })
   }
-
-  const rowCountByKind = countByKind(data.rows)
 
   return (
     <div
-      data-testid="mapping-redesign-diagnostic-panel"
-      className="max-w-2xl mx-auto mt-6 rounded-lg border border-slate-200 bg-white px-6 py-5 shadow-sm"
+      className="mb-4 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-gray-500"
+      data-testid="mapping-redesign-counters"
     >
-      <div className="text-sm font-semibold text-slate-800">
-        Redesign data payload (diagnostic)
-      </div>
-      <p className="mt-1 text-xs text-slate-500">
-        Temporary smoke-test view of <code>MappingsForRedesignResult</code>.
-        Replaced by the target-table-grouped UI in Gap 4c.
-      </p>
-
-      <dl className="mt-4 grid grid-cols-[10rem_1fr] gap-x-4 gap-y-1 text-xs">
-        <dt className="font-medium text-slate-600">rowCount</dt>
-        <dd className="font-mono text-slate-800">{data.rows.length}</dd>
-
-        <dt className="font-medium text-slate-600">rowCountByKind</dt>
-        <dd className="font-mono text-slate-800">
-          {formatKindCounts(rowCountByKind)}
-        </dd>
-
-        <dt className="font-medium text-slate-600">counts.total</dt>
-        <dd className="font-mono text-slate-800">{data.counts.total}</dd>
-
-        <dt className="font-medium text-slate-600">counts.approved</dt>
-        <dd className="font-mono text-slate-800">{data.counts.approved}</dd>
-
-        <dt className="font-medium text-slate-600">counts.needsReview</dt>
-        <dd className="font-mono text-slate-800">{data.counts.needsReview}</dd>
-
-        <dt className="font-medium text-slate-600">counts.rejected</dt>
-        <dd className="font-mono text-slate-800">{data.counts.rejected}</dd>
-
-        <dt className="font-medium text-slate-600">counts.unmapped</dt>
-        <dd className="font-mono text-slate-800">{data.counts.unmapped}</dd>
-
-        <dt className="font-medium text-slate-600">targetTableCount</dt>
-        <dd className="font-mono text-slate-800">{data.targetTables.length}</dd>
-
-        <dt className="font-medium text-slate-600">sourceTableCount</dt>
-        <dd className="font-mono text-slate-800">{data.sourceTables.length}</dd>
-
-        <dt className="font-medium text-slate-600">sourceFieldAcks</dt>
-        <dd className="font-mono text-slate-800">
-          {data.sourceFieldAcknowledgments.length}
-        </dd>
-
-        <dt className="font-medium text-slate-600">targetSchemaEmpty</dt>
-        <dd className="font-mono text-slate-800">
-          {String(data.targetSchemaEmpty)}
-        </dd>
-      </dl>
+      {chips.map((chip, i) => (
+        <span key={chip.label} className="flex items-center gap-3">
+          {i > 0 ? <span aria-hidden="true" className="text-gray-300">·</span> : null}
+          <span>
+            <span className="font-medium text-gray-700">{chip.label}</span>{' '}
+            <span className="tabular-nums">{chip.value}</span>
+          </span>
+        </span>
+      ))}
+      <span aria-hidden="true" className="text-gray-300">·</span>
+      <span className="tabular-nums" data-testid="mapping-redesign-table-count">
+        {tableCount} {tableCount === 1 ? 'table' : 'tables'}
+      </span>
     </div>
   )
 }
 
-function countByKind(
-  rows: MappingsForRedesignResult['rows'],
-): Record<MappingRowKind, number> {
-  const out: Record<MappingRowKind, number> = {
-    mapped: 0,
-    value_assignment: 0,
-    target_acknowledged: 0,
-    unmapped: 0,
-  }
-  for (const row of rows) {
-    out[row.kind]++
-  }
-  return out
+// ─── Empty / error states ────────────────────────────────────────────────────
+
+function NoDataState() {
+  return (
+    <div
+      data-testid="mapping-redesign-no-data"
+      className="rounded-lg border border-slate-200 bg-white px-6 py-12 text-center text-sm text-slate-600"
+    >
+      Unable to load mapping data. The project may be unavailable or you may
+      not have access — try refreshing or returning to the project list.
+    </div>
+  )
 }
 
-function formatKindCounts(counts: Record<MappingRowKind, number>): string {
-  return `mapped=${counts.mapped}  va=${counts.value_assignment}  ack=${counts.target_acknowledged}  unmapped=${counts.unmapped}`
+function EmptySchemaState() {
+  return (
+    <div
+      data-testid="mapping-redesign-empty-schema"
+      className="rounded-lg border border-slate-200 bg-white px-6 py-12 text-center text-sm text-slate-600"
+    >
+      No target schema has been defined yet for this project. Once target
+      tables are added, their fields will appear here for mapping.
+    </div>
+  )
+}
+
+function EmptyFieldsState() {
+  return (
+    <div
+      data-testid="mapping-redesign-empty-fields"
+      className="rounded-lg border border-slate-200 bg-white px-6 py-12 text-center text-sm text-slate-600"
+    >
+      No fields to display.
+    </div>
+  )
+}
+
+// ─── Pure helpers ────────────────────────────────────────────────────────────
+
+/**
+ * Group server-sorted rows by target-table id. Returns a Map so iteration
+ * order matches the rows' arrival order (canonical server order).
+ */
+function groupRowsByTargetTable(rows: MappingRow[]): Map<string, MappingRow[]> {
+  const out = new Map<string, MappingRow[]>()
+  for (const row of rows) {
+    const tableId = row.targetField.targetTable.id
+    const existing = out.get(tableId)
+    if (existing) existing.push(row)
+    else out.set(tableId, [row])
+  }
+  return out
 }
