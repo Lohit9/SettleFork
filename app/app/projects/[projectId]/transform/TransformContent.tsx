@@ -105,6 +105,8 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from '@/components/ui/alert-dialog'
+import { useMappingRedesignEnabled } from '@/lib/hooks/useMappingRedesignEnabled'
+import TransformRedesignContent from './redesign/TransformContent'
 
 // ── Types ──────────────────────────────────────────────────────────────────────
 
@@ -267,6 +269,21 @@ function TransformStatPills({
 // ── TransformContent ──────────────────────────────────────────────────────────
 
 export default function TransformContent({ projectId, projectName, initialData, isArchived = false, projectInfo }: Props) {
+  // ── Phase 3 redesign dispatch ─────────────────────────────────────────────
+  // When `projects.use_mapping_redesign` is true for this project, render the
+  // new UI from `./redesign/TransformContent`. Otherwise fall through to the
+  // legacy UI below untouched. See mapping/MappingContent.tsx for the full
+  // Rules-of-Hooks rationale for the early-return pattern.
+  if (useMappingRedesignEnabled(projectInfo)) {
+    return (
+      <TransformRedesignContent
+        projectId={projectId}
+        projectName={projectName}
+        projectInfo={projectInfo}
+      />
+    )
+  }
+
   const router = useRouter()
   const searchParams = useSearchParams()
   const { can } = useProjectRole(projectId)

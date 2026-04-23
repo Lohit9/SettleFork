@@ -43,6 +43,8 @@ import { useProjectRole } from '@/lib/hooks/useProjectRole'
 import { RoleTooltip } from '@/components/app/RoleTooltip'
 import { FieldPicker, type PickerField } from '@/components/app/FieldPicker'
 import { FixDrawer } from '@/components/ui/fix-drawer'
+import { useMappingRedesignEnabled } from '@/lib/hooks/useMappingRedesignEnabled'
+import MappingRedesignContent from './redesign/MappingContent'
 
 // ─── Props ────────────────────────────────────────────────────────────────────
 
@@ -2601,6 +2603,30 @@ function UnmappedView({
 type ToastState = { message: string; type: 'success' | 'error' }
 
 export default function MappingContent({ projectId, projectName, initialData, projectInfo }: Props) {
+  // ── Phase 3 redesign dispatch ─────────────────────────────────────────────
+  // When `projects.use_mapping_redesign` is true for this project, render the
+  // new UI from `./redesign/MappingContent`. Otherwise fall through to the
+  // legacy UI below untouched.
+  //
+  // `useMappingRedesignEnabled` is intentionally pure (no React hooks inside),
+  // so this early-return pattern does not violate the Rules of Hooks — the
+  // flag value is stable across renders of a given mount (it is server-rendered
+  // into `projectInfo`), so hook call order is consistent within each branch.
+  //
+  // Bundle note: the redesign module is imported statically because the
+  // placeholder has no runtime dependencies beyond `PageHeader`, which is
+  // already shared with the legacy UI. Revisit with `next/dynamic` once the
+  // redesign bundle grows large enough to justify splitting.
+  if (useMappingRedesignEnabled(projectInfo)) {
+    return (
+      <MappingRedesignContent
+        projectId={projectId}
+        projectName={projectName}
+        projectInfo={projectInfo}
+      />
+    )
+  }
+
   const router = useRouter()
   const { can: canRole } = useProjectRole(projectId)
   const canEdit = canRole('edit')
