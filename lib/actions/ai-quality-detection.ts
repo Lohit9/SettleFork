@@ -181,7 +181,19 @@ export async function runAIAugmentedChecks(
     .map((i) => `- [${i.severity}] ${i.title}: ${i.description}`)
     .join('\n') || '(none)'
 
-  // Get field mappings to this table's fields (target-aware context)
+  // Get field mappings to this table's fields (target-aware context).
+  //
+  // Gate 2 Q3 decision (Prompt 3d, Step 3D-8, 2026-04-22): preserve the
+  // legacy N-rows-per-multi-source-mapping shape in the <target_mappings>
+  // block by iterating `mapping_sources` directly (NOT per-TFM). Each MS
+  // row emits one "src → tgt (type_compat)" line — a multi-source TFM
+  // with one primary + two contributors therefore still emits three
+  // lines, matching the legacy field_mappings output exactly. Sort by
+  // ordinal ascending so primaries precede contributors within a TFM.
+  //
+  // `type_compatibility` lives on `mapping_sources` in the new model
+  // (one value per source contributor, not per target mapping), so this
+  // rewrite preserves per-source type_compat attribution too.
   const { data: fields } = await supabaseAdmin
     .from('fields')
     .select('id, name')
@@ -191,22 +203,53 @@ export async function runAIAugmentedChecks(
   let mappingsSummary = ''
   if (fieldIdList.length > 0) {
     const { data: mappings } = await supabaseAdmin
-      .from('field_mappings')
-      .select(`
-        source_field:fields!source_field_id(name, data_type),
-        target_field:fields!target_field_id(name, data_type, is_nullable),
-        type_compatibility
-      `)
+      .from('mapping_sources')
+      .select(
+        `
+        ordinal,
+        type_compatibility,
+        source_field:fields!source_field_id ( name, data_type ),
+        target_field_mapping:target_field_mappings!inner (
+          status,
+          target_field:fields!target_field_id ( name, data_type, is_nullable )
+        )
+      `
+      )
       .in('source_field_id', fieldIdList)
+      .neq('target_field_mapping.status', 'rejected')
+      .order('ordinal', { ascending: true })
+
+    type SrcField = { name: string; data_type: string }
+    type TgtField = { name: string; data_type: string; is_nullable: boolean }
+    type TfmEmbed = {
+      status: string
+      target_field: TgtField | TgtField[] | null
+    }
+    type MsRow = {
+      ordinal: number
+      type_compatibility: string | null
+      source_field: SrcField | SrcField[] | null
+      target_field_mapping: TfmEmbed | TfmEmbed[] | null
+    }
+    const pickOne = <T>(v: T | T[] | null | undefined): T | null =>
+      v == null ? null : Array.isArray(v) ? v[0] ?? null : v
 
     if (mappings && mappings.length > 0) {
-      mappingsSummary = (mappings as unknown as Array<{
-        source_field: { name: string; data_type: string } | null
-        target_field: { name: string; data_type: string; is_nullable: boolean } | null
-        type_compatibility: string | null
-      }>)
-        .filter((m) => m.source_field && m.target_field)
-        .map((m) => `  ${m.source_field!.name} (${m.source_field!.data_type}) → ${m.target_field!.name} (${m.target_field!.data_type}, ${m.target_field!.is_nullable ? 'nullable' : 'NOT NULL'})${m.type_compatibility ? ` — ${m.type_compatibility}` : ''}`)
+      mappingsSummary = (mappings as unknown as MsRow[])
+        .map((m) => {
+          const src = pickOne(m.source_field)
+          const tfm = pickOne(m.target_field_mapping)
+          const tgt = pickOne(tfm?.target_field ?? null)
+          return { src, tgt, tc: m.type_compatibility }
+        })
+        .filter(
+          (row): row is { src: SrcField; tgt: TgtField; tc: string | null } =>
+            !!row.src && !!row.tgt
+        )
+        .map(
+          ({ src, tgt, tc }) =>
+            `  ${src.name} (${src.data_type}) → ${tgt.name} (${tgt.data_type}, ${tgt.is_nullable ? 'nullable' : 'NOT NULL'})${tc ? ` — ${tc}` : ''}`
+        )
         .join('\n')
     }
   }
@@ -318,6 +361,12 @@ Identify additional data quality issues NOT already listed in existing_issues.`
     })
   }
 
+  // Guard-wiring decision (Prompt 3d, Step 3D-8): no
+  // `assertMappingWritesEnabled` guard here. runAIAugmentedChecks writes
+  // only to `quality_issues` — not to mapping-shape surfaces
+  // (`target_field_mappings` / `mapping_sources`). Maintenance mode
+  // guards mapping-shape mutations only; quality detection must continue
+  // to flow during maintenance so scans stay usable.
   if (issuesToInsert.length > 0) {
     const { error } = await supabaseAdmin.from('quality_issues').insert(issuesToInsert)
     if (error) {

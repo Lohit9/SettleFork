@@ -6,6 +6,7 @@ import { Project, Dataset, ProjectWithDatasets, ProjectWithStats } from '@/lib/t
 import { extractMigrationIntelligence } from '@/lib/actions/migration-intelligence'
 import { logActivity } from '@/lib/actions/activity-log'
 import { supabaseAdmin } from '@/lib/supabase/admin'
+import { getProjectsWithStatsInternal } from '@/lib/actions/_projects-core'
 
 export async function updateProjectLabels(
   projectId: string,
@@ -147,320 +148,39 @@ export async function deleteProject(projectId: string): Promise<{ success: boole
   return { success: true }
 }
 
+// Thin wrapper over `getProjectsWithStatsInternal` in
+// `_projects-core.ts`. The business logic moved in Prompt 3d Step 3D-14
+// (Path A refactor) so it can be called from Node-only integration
+// tests (`tests/integration/projects-heritage.test.ts`) that need to
+// bypass the cookies()/request-scope machinery of `'use server'`.
+//
+// The wrapper builds a cookies-bound Supabase client (RLS-active —
+// user sees only their own projects/orgs) and delegates. The
+// delegate takes the client as a parameter and does all the
+// aggregation work; see `_projects-core.ts` for the data-model
+// narrative, bare-ack handling, rejected-TM scope collapse, and
+// guard-wiring rationale.
+//
+// DO NOT inline the aggregation back here — the Path A split is a
+// correctness boundary: the Internal must not transitively import
+// next/headers, otherwise integration tests regress to the
+// `cookies() outside request scope` failure mode that prompted the
+// split. See Prompt 3d docs/prompt-3a-remaining-work.md for context.
 export async function getProjectsWithStats(orgId?: string): Promise<ProjectWithStats[]> {
   const supabase = await createClient()
-
-  let query = supabase
-    .from('projects')
-    .select('*, datasets(id, role, name)')
-    .order('created_at', { ascending: false })
-
-  if (orgId) {
-    query = query.eq('org_id', orgId)
-  }
-
-  const { data: projects, error } = await query
-
-  if (error || !projects || projects.length === 0) return []
-
-  const projectIds = projects.map((p) => p.id)
-  const allDatasets = projects.flatMap((p) => (p.datasets || []) as Dataset[])
-  const sourceDatasetIds = allDatasets.filter((d) => d.role === 'source').map((d) => d.id)
-  const targetDatasetIds = allDatasets.filter((d) => d.role === 'target').map((d) => d.id)
-
-  // Round 2: parallel fetch (tables for both source + target, table_mappings, quality_issues, outputs, acknowledgments)
-  const DUMMY_ID = '00000000-0000-0000-0000-000000000000'
-  const [
-    { data: sourceTables },
-    { data: targetTables },
-    { data: tableMappings },
-    { data: qualityIssues },
-    { data: outputs },
-    { data: fieldAcks },
-  ] = await Promise.all([
-    supabase
-      .from('tables')
-      .select('id, dataset_id, row_count')
-      .in('dataset_id', sourceDatasetIds.length > 0 ? sourceDatasetIds : [DUMMY_ID]),
-    supabase
-      .from('tables')
-      .select('id, dataset_id')
-      .in('dataset_id', targetDatasetIds.length > 0 ? targetDatasetIds : [DUMMY_ID]),
-    supabase
-      .from('table_mappings')
-      .select('id, project_id, target_table_id')
-      .in('project_id', projectIds)
-      .neq('status', 'rejected'),
-    supabase
-      .from('quality_issues')
-      .select('project_id, severity, status, field_id, stage, issue_kind, description')
-      .in('project_id', projectIds),
-    supabase.from('outputs').select('project_id').in('project_id', projectIds),
-    supabase.from('field_acknowledgments').select('project_id, field_id').in('project_id', projectIds),
-  ])
-
-  const sourceTableIds = (sourceTables || []).map((t) => t.id)
-  const tableMappingIds = (tableMappings || []).map((tm) => tm.id)
-  const allTargetTableIds = [...new Set((tableMappings || []).map((tm) => tm.target_table_id))]
-
-  // Round 3: source fields, field_mappings (with richer columns), ALL target fields (for counting)
-  const [{ data: fields }, { data: fieldMappings }, { data: allTargetFields }] = await Promise.all([
-    sourceTableIds.length > 0
-      ? supabase.from('fields').select('id, table_id').in('table_id', sourceTableIds)
-      : Promise.resolve({ data: [] as { id: string; table_id: string }[], error: null }),
-    tableMappingIds.length > 0
-      ? supabase
-          .from('field_mappings')
-          .select('id, table_mapping_id, status, is_contributing, source_field_id, target_field_id, needs_transformation')
-          .in('table_mapping_id', tableMappingIds)
-      : Promise.resolve({
-          data: [] as { id: string; table_mapping_id: string; status: string; is_contributing: boolean; source_field_id: string | null; target_field_id: string; needs_transformation: boolean | null }[],
-          error: null,
-        }),
-    allTargetTableIds.length > 0
-      ? supabase.from('fields').select('id, table_id').in('table_id', allTargetTableIds)
-      : Promise.resolve({ data: [] as { id: string; table_id: string }[], error: null }),
-  ])
-
-  const fieldMappingIds = (fieldMappings || []).map((fm) => fm.id)
-
-  // Round 4: transformations
-  const { data: transformations } =
-    fieldMappingIds.length > 0
-      ? await supabase
-          .from('transformations')
-          .select('field_mapping_id, status')
-          .in('field_mapping_id', fieldMappingIds)
-      : { data: [] as { field_mapping_id: string; status: string }[] }
-
-  // Build lookup maps
-  const datasetToProject = new Map<string, string>()
-  projects.forEach((p) => {
-    ;(p.datasets || []).forEach((d: Dataset) => datasetToProject.set(d.id, p.id))
-  })
-
-  const tableToProject = new Map<string, string>()
-  ;(sourceTables || []).forEach((t) => {
-    const pid = datasetToProject.get(t.dataset_id)
-    if (pid) tableToProject.set(t.id, pid)
-  })
-
-  const tmToProject = new Map<string, string>()
-  ;(tableMappings || []).forEach((tm) => tmToProject.set(tm.id, tm.project_id))
-
-  const fmToTM = new Map<string, string>()
-  ;(fieldMappings || []).forEach((fm) => fmToTM.set(fm.id, fm.table_mapping_id))
-
-  // Per-project aggregation buckets
-  type Bucket = {
-    totalSourceFields: number
-    totalRows: number
-    mappedFieldCount: number
-    blockingIssueCount: number
-    warningCount: number
-    totalTransforms: number
-    savedTransforms: number
-    totalQualityIssues: number
-    resolvedQualityIssues: number
-    outputCount: number
-    hasSourceTables: boolean
-    hasTargetTables: boolean
-    // Mapping phase: track primary mappings, approvals, and acknowledgments
-    primaryMappingCount: number
-    allPrimaryApproved: boolean
-    mappedTargetFieldIds: Set<string>
-    mappedSourceFieldIds: Set<string>
-    acknowledgedFieldIds: Set<string>
-    totalSourceFieldCount: number
-    totalTargetFieldCount: number
-    // Transform phase: track needs_transformation coverage
-    needsTransformIds: Set<string>
-    coveredTransformIds: Set<string>
-    // Dedup guard for target field counting
-    countedTargetFieldIds: Set<string>
-  }
-  const buckets = new Map<string, Bucket>()
-  projectIds.forEach((id) =>
-    buckets.set(id, {
-      totalSourceFields: 0,
-      totalRows: 0,
-      mappedFieldCount: 0,
-      blockingIssueCount: 0,
-      warningCount: 0,
-      totalTransforms: 0,
-      savedTransforms: 0,
-      totalQualityIssues: 0,
-      resolvedQualityIssues: 0,
-      outputCount: 0,
-      hasSourceTables: false,
-      hasTargetTables: false,
-      primaryMappingCount: 0,
-      allPrimaryApproved: true,
-      mappedTargetFieldIds: new Set(),
-      mappedSourceFieldIds: new Set(),
-      acknowledgedFieldIds: new Set(),
-      totalSourceFieldCount: 0,
-      totalTargetFieldCount: 0,
-      needsTransformIds: new Set(),
-      coveredTransformIds: new Set(),
-      countedTargetFieldIds: new Set(),
-    })
-  )
-
-  ;(fields || []).forEach((f) => {
-    const pid = tableToProject.get(f.table_id)
-    if (pid) {
-      buckets.get(pid)!.totalSourceFields++
-      buckets.get(pid)!.totalSourceFieldCount++
-    }
-  })
-  ;(sourceTables || []).forEach((t) => {
-    const pid = datasetToProject.get(t.dataset_id)
-    if (!pid) return
-    const b = buckets.get(pid)!
-    b.totalRows += t.row_count || 0
-    b.hasSourceTables = true
-  })
-  // Count target fields per project (via target tables → datasets → project)
-  const targetTableToProject = new Map<string, string>()
-  ;(targetTables || []).forEach((t) => {
-    const pid = datasetToProject.get(t.dataset_id)
-    if (pid) {
-      buckets.get(pid)!.hasTargetTables = true
-      targetTableToProject.set(t.id, pid)
-    }
-  })
-  // Count target fields per project (via table mapping target tables).
-  // Use countedTargetFieldIds to avoid double-counting when multiple source
-  // tables map to the same target table.
-  ;(allTargetFields || []).forEach((f) => {
-    const tms = (tableMappings || []).filter((tm) => tm.target_table_id === f.table_id)
-    for (const tm of tms) {
-      const b = buckets.get(tm.project_id)
-      if (b && !b.countedTargetFieldIds.has(f.id)) {
-        b.totalTargetFieldCount++
-        b.countedTargetFieldIds.add(f.id)
-      }
-    }
-  })
-  ;(fieldAcks || []).forEach((fa) => {
-    const b = buckets.get(fa.project_id)
-    if (b) b.acknowledgedFieldIds.add(fa.field_id)
-  })
-  ;(fieldMappings || []).forEach((fm) => {
-    const pid = tmToProject.get(fm.table_mapping_id)
-    if (!pid) return
-    const b = buckets.get(pid)!
-    if (fm.status !== 'rejected') {
-      b.mappedFieldCount++
-    }
-    if (fm.status !== 'rejected' && fm.source_field_id) b.mappedSourceFieldIds.add(fm.source_field_id)
-    if (!fm.is_contributing) {
-      b.primaryMappingCount++
-      if (fm.status !== 'approved') b.allPrimaryApproved = false
-      if (fm.status !== 'rejected') b.mappedTargetFieldIds.add(fm.target_field_id)
-      if (fm.status === 'approved' && fm.needs_transformation) {
-        b.needsTransformIds.add(fm.id)
-      }
-    }
-  })
-  ;(qualityIssues || []).forEach((qi) => {
-    const b = buckets.get(qi.project_id)
-    if (!b) return
-    b.totalQualityIssues++
-    if (qi.status === 'fixed' || qi.status === 'accepted_risk') b.resolvedQualityIssues++
-    if (qi.status === 'open' && qi.stage === 'in_flight') {
-      if (qi.severity === 'blocking') b.blockingIssueCount++
-      else if (qi.severity === 'warning') b.warningCount++
-    }
-  })
-  ;(transformations || []).forEach((t) => {
-    const tmId = fmToTM.get(t.field_mapping_id)
-    if (!tmId) return
-    const pid = tmToProject.get(tmId)
-    if (!pid) return
-    const b = buckets.get(pid)!
-    b.totalTransforms++
-    if (t.status === 'saved' || t.status === 'applied') b.savedTransforms++
-    if (b.needsTransformIds.has(t.field_mapping_id)) {
-      b.coveredTransformIds.add(t.field_mapping_id)
-    }
-  })
-  ;(outputs || []).forEach((o) => {
-    const b = buckets.get(o.project_id)
-    if (b) b.outputCount++
-  })
-
-  return projects.map((project) => {
-    const b = buckets.get(project.id)!
-    const datasets = (project.datasets || []) as Dataset[]
-    const src = datasets.find((d) => d.role === 'source')
-    const tgt = datasets.find((d) => d.role === 'target')
-
-    // NOTE: This is a "quality-resolution %" (fixed/accepted vs total issues),
-    // NOT the weighted 5-factor Migration Readiness score computed by
-    // `calculateReadinessScore` in lib/quality/readiness-formula.ts. It is
-    // kept here only because (a) the project list intentionally avoids the
-    // expensive per-project query fan-out that the real readiness score
-    // requires, and (b) nothing in the UI currently renders this field. If
-    // this ever becomes user-visible, rename it to `qualityResolutionPercent`
-    // or replace it with `computeReadinessScore(project.id)` behind a cache.
-    const readinessScore =
-      b.totalQualityIssues === 0
-        ? null
-        : Math.round((b.resolvedQualityIssues / b.totalQualityIssues) * 100)
-
-    // Phase 1 — Ingestion: both source and target tables exist
-    const ingestionDone = b.hasSourceTables && b.hasTargetTables
-
-    // Phase 2 — Mapping: all fields addressed (mapped or acknowledged)
-    const hasMappings = b.primaryMappingCount > 0
-    const totalFields = b.totalSourceFieldCount + b.totalTargetFieldCount
-    const allMappedOrAckedIds = new Set([...b.mappedSourceFieldIds, ...b.mappedTargetFieldIds, ...b.acknowledgedFieldIds])
-    const addressedCount = allMappedOrAckedIds.size
-    const mappingDone = hasMappings && b.allPrimaryApproved && totalFields > 0 && addressedCount >= totalFields
-
-    // Phase 3 — Transform: all approved needs_transformation mappings have a saved transform
-    const transformDone = b.needsTransformIds.size === 0
-      ? hasMappings
-      : b.coveredTransformIds.size >= b.needsTransformIds.size
-
-    // Phase 4 — Validate: at least one scan run AND zero open blocking issues
-    const validateDone = b.totalQualityIssues > 0 && b.blockingIssueCount === 0
-
-    let completed = 0
-    if (ingestionDone) completed = 1
-    if (completed >= 1 && mappingDone) completed = 2
-    if (completed >= 2 && transformDone) completed = 3
-    if (completed >= 3 && validateDone) completed = 4
-    if (completed >= 4 && b.outputCount > 0) completed = 5
-    const currentPhase = completed >= 5 ? 6 : completed + 1
-
-    return {
-      id: project.id,
-      name: project.name,
-      source_label: src?.name || 'Source',
-      target_label: tgt?.name || 'Target',
-      status: project.status as 'active' | 'completed' | 'archived',
-      created_at: project.created_at,
-      updated_at: project.updated_at,
-      completed_at: project.completed_at ?? null,
-      archived_at: project.archived_at ?? null,
-      totalSourceFields: b.totalSourceFields,
-      mappedFieldCount: b.mappedFieldCount,
-      totalRows: b.totalRows,
-      blockingIssueCount: b.blockingIssueCount,
-      warningCount: b.warningCount,
-      totalTransforms: b.totalTransforms,
-      savedTransforms: b.savedTransforms,
-      needsTransformCount: b.needsTransformIds.size,
-      coveredTransformCount: b.coveredTransformIds.size,
-      readinessScore,
-      currentPhase,
-      outputCount: b.outputCount,
-    }
-  })
+  return getProjectsWithStatsInternal(supabase, orgId)
 }
+
+// ───────────────────────────────────────────────────────────────────────────
+// The rest of the file is other server actions (createProject,
+// updateProject, deleteProject, updateProjectLabels,
+// markProjectComplete, reactivateProject, archiveProject, etc.).
+// These mutate projects/datasets/activity_log only — NOT mapping-
+// shape tables — so the Gate 2 guard-wiring policy does not require
+// `assertMappingWritesEnabled` here. The entire file is safe to run
+// while mapping writes are disabled (maintenance_mode=true).
+// ───────────────────────────────────────────────────────────────────────────
+
 
 /**
  * Marks a project as complete and triggers background migration intelligence

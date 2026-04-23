@@ -3,7 +3,7 @@ import { cookies } from 'next/headers'
 import { createClient } from '@/lib/supabase/server'
 import SidebarShell from '@/components/app/SidebarShell'
 import '../globals.css'
-import type { OrgRole } from '@/lib/types/organizations'
+import type { OrgRole, EnforcementMode } from '@/lib/types/organizations'
 
 export default async function AppLayout({
   children,
@@ -28,7 +28,7 @@ export default async function AppLayout({
   // Fetch orgs server-side — eliminates client round-trip on every page load
   const { data: memberships } = await supabase
     .from('org_memberships')
-    .select('role, organizations(id, name, slug, created_at, created_by)')
+    .select('role, organizations(id, name, slug, created_at, created_by, sso_enabled, enforcement_mode, sso_configured_at)')
     .eq('user_id', user.id)
     .order('joined_at', { ascending: true })
 
@@ -40,6 +40,9 @@ export default async function AppLayout({
       slug: m.organizations.slug as string,
       created_at: m.organizations.created_at as string,
       created_by: m.organizations.created_by as string,
+      sso_enabled: m.organizations.sso_enabled as boolean,
+      enforcement_mode: m.organizations.enforcement_mode as EnforcementMode,
+      sso_configured_at: (m.organizations.sso_configured_at ?? null) as string | null,
       role: m.role as OrgRole,
     }))
 

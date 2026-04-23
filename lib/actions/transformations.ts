@@ -1,5 +1,81 @@
 'use server'
 
+// ─────────────────────────────────────────────────────────────────────────────
+// Transformations server actions (mapping redesign — Phase 2, Prompt 3b).
+// ─────────────────────────────────────────────────────────────────────────────
+//
+// ID SEMANTICS — Option 2-narrow (Gate 2 decision)
+//
+//   The legacy UI still keys transform rows by `RichFieldMapping.id`, which
+//   the shim may emit in two shapes:
+//
+//     - <tfmId>                    → primary / value-assignment TFM row
+//     - <tfmId>::<mappingSourceId> → contributor row
+//
+//   Contributor rows do NOT own an independent transformation — a TFM carries
+//   at most one transformation (see invariant below), and that transformation
+//   describes the *target-field-level* SQL (primary + contributors combined).
+//
+//   `resolveTfmId(id)` is an internal helper that decodes either shape into a
+//   bare TFM id. It is intentionally NOT exported: Option 2-narrow keeps shim
+//   coupling contained to this module. `fk-cascade.ts` does not import the
+//   shim at all — its callers supply bare TFM ids directly.
+//
+//   The public surface of this module therefore accepts EITHER shape on the
+//   read/check paths (`checkFieldMappingHasTransform`, `getStagedPreviewForField`)
+//   — contributor ids short-circuit to a "no transform on this row" response
+//   — and requires bare TFM ids on write paths (`applyTransform`,
+//   `resetFieldTransform`, etc.), which is how every current caller constructs
+//   them.
+//
+// UNIQUE INVARIANT (not DB-enforced — see `lib/types/mapping-redesign.ts`)
+//
+//   COUNT(public.transformations) per `target_field_mapping_id` ≤ 1.
+//
+//   Every write path in this file relies on that invariant — we always query
+//   the existing transformation via `.eq('target_field_mapping_id', …)` +
+//   `.maybeSingle()`, then either UPDATE or INSERT. Migration 074 dropped
+//   `transformations.field_mapping_id` in favor of `target_field_mapping_id`;
+//   the constraint is soft (asserted via `tests/integration/transformations-
+//   unique-invariant.test.ts` against production data rather than via a DB
+//   UNIQUE index). A single DB-level duplicate would corrupt every per-field
+//   read in this module — see the invariant test's header for the escalation
+//   procedure if it ever fires.
+//
+// OUT-OF-SCOPE CALL SITES (historical — kept for change-history visibility)
+//
+//   - `flagStagedRowIssues` from `@/lib/actions/staged-row-flags` — was
+//     Prompt 3b out-of-scope. Rewritten in Prompt 3d (Step 3D-5) to the
+//     new TFM+mapping_sources model. The call site in `applyTransform`
+//     retains its try/catch as defense-in-depth against runtime failures
+//     (network / DB / RPC), not because the callee is known-broken.
+//
+// APPLY RPC WIRING (Gate 2 Q2 + Gate 2 G-a decisions)
+//
+//   - Mapped TFMs  → `dq_apply_field_transform_joined(tfmId, target_name, sql, NULL)`.
+//     Single-source branch is live; cross-table (`p_join_spec != NULL`) is
+//     stubbed in migration 074 until Phase 3.
+//   - Value-assignment TFMs → legacy `dq_apply_field_transform(tm_id, src_tbl,
+//     tgt_tbl, target_name, sql, has_staged)`. `dq_apply_field_transform_joined`
+//     rejects zero-source TFMs, so we fall back to the legacy RPC; VA apply
+//     iterates every TM whose `target_table_id` matches the VA's target field
+//     (VAs are global per target table in the new model). A dedicated
+//     `dq_apply_value_assignment` RPC is deferred to Prompt 3c.
+//
+// MAINTENANCE GUARD
+//
+//   Every write path threads its body through `guardWrites(projectId, …)`,
+//   which calls `assertMappingWritesEnabled` and converts the sentinel throw
+//   into a structured `{ success:false, errorCode:'MAINTENANCE_MODE' }`
+//   response (same pattern as `lib/actions/mappings.ts`). Two exceptions:
+//
+//     - `dismissTransformNeeded` / `reinstateTransformNeeded` preserve
+//       throw-on-error per Gate 2 Q4 (matches acknowledgeField precedent).
+//     - `resetFieldTransform`, `resetAllTransformsForTable` are helpers
+//       exclusively called from already-guarded write paths in
+//       `lib/actions/mappings.ts` (per Gate 2); they do not re-assert the
+//       guard. A comment at each function's header documents this.
+
 import { createClient } from '@/lib/supabase/server'
 import { supabaseAdmin } from '@/lib/supabase/admin'
 import { requireProjectPermission } from '@/lib/actions/role-resolution'
@@ -9,14 +85,23 @@ import { checkAIRateLimit } from '@/lib/ai/rate-limit'
 import { buildAIContext, formatFieldForPrompt, formatDocumentsForPrompt } from '@/lib/ai/context-builder'
 import { fieldNeedsTransform, wrapFieldRefsInJsonb } from '@/lib/utils/transform-helpers'
 import { logActivity } from '@/lib/actions/activity-log'
+import { assertMappingWritesEnabled } from '@/lib/auth/mapping-writes'
+import { SHIMMED_ID_SEPARATOR } from '@/lib/compat/mapping-shim'
 import { revalidatePath } from 'next/cache'
-import type { Transformation } from '@/lib/types/database'
+import type {
+  TargetFieldMappingRow,
+  TransformationRow,
+  TransformationStatus,
+} from '@/lib/types/mapping-redesign'
 
 export { fieldNeedsTransform, wrapFieldRefsInJsonb }
 
-// ── Shared types ──────────────────────────────────────────────────────────────
+// ─── Shared types ─────────────────────────────────────────────────────────────
 
 export interface FieldItem {
+  /** Target field mapping id. The legacy field name is preserved for
+   *  consumers (TransformContent.tsx) — the value is always a TFM UUID in
+   *  the new model. */
   fieldMappingId: string
   sourceFieldId: string | null
   sourceFieldName: string | null
@@ -33,7 +118,7 @@ export interface FieldItem {
   isValueAssignment: boolean
   typeCompatibility: string | null
   confidence: number | null
-  /** AI-generated reasoning from the field mapping (why this mapping was made) */
+  /** AI-generated reasoning from the TFM (why this mapping was made) */
   aiReasoning: string | null
   /** Null rate for the source field (from field_profiles) */
   nullPercentage: number
@@ -42,10 +127,22 @@ export interface FieldItem {
   sampleValues: unknown[]
   cardinality: number
   needsTransform: boolean
-  transformation: Transformation | null
-  /** True when this mapping is a contributing (secondary) source — hidden from the transform tree */
+  /**
+   * Raw new-model `TransformationRow` for the TFM — or `null` if no
+   * transformation has been generated yet. The legacy `Transformation`
+   * adapter (`toLegacyTransformation`) was removed in Prompt 3d Step
+   * 3D-12; consumers now read the new-model columns directly
+   * (`target_field_mapping_id`, `generated_sql`, `status`, etc.).
+   */
+  transformation: TransformationRow | null
+  /** Kept for API back-compatibility with TransformContent.tsx. Always
+   *  `false` in the new model — contributor rows are folded into the
+   *  primary FieldItem's `contributingSourceFields` and never emitted
+   *  as their own FieldItem. */
   isContributing: boolean
-  /** Additional source fields that contribute to the same target (for primary mappings only) */
+  /** Additional source fields that contribute to the same target (for
+   *  primary mappings only). Derived from `mapping_sources` rows with
+   *  `ordinal > 0`. */
   contributingSourceFields: { id: string; name: string; data_type: string }[]
   /** Target field check constraint (for value assignments — helps guide value selection) */
   targetCheckConstraint?: { type: string; allowedValues?: string[]; pattern?: string; raw?: string } | null
@@ -88,68 +185,343 @@ export interface TransformPageData {
   unmappedNullableTargetFields: UnmappedTargetField[]
 }
 
-// ── getTransformData ──────────────────────────────────────────────────────────
+// ─── Guard wiring helper ─────────────────────────────────────────────────────
+//
+// Mirrors the pattern in `lib/actions/mappings.ts`. Converts the maintenance-
+// mode sentinel throw from `assertMappingWritesEnabled` into a structured
+// `{ success:false, errorCode:'MAINTENANCE_MODE' }` response so the UI can
+// render a friendly message rather than a 500. Non-guard throws from `body`
+// propagate unchanged.
+
+const MAINTENANCE_GUARD_MESSAGE =
+  'Mapping writes are temporarily disabled for scheduled maintenance'
+
+export type TransformWriteErrorCode =
+  | 'MAINTENANCE_MODE'
+  | 'NOT_FOUND'
+  | 'PERMISSION_DENIED'
+  | 'VALIDATION'
+  | 'INTERNAL'
+
+async function guardWrites<T extends { success: boolean; error?: string; errorCode?: TransformWriteErrorCode }>(
+  projectId: string,
+  body: () => Promise<T>,
+): Promise<T> {
+  try {
+    await assertMappingWritesEnabled(projectId)
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err)
+    if (message === MAINTENANCE_GUARD_MESSAGE) {
+      return {
+        success: false,
+        error: MAINTENANCE_GUARD_MESSAGE,
+        errorCode: 'MAINTENANCE_MODE',
+      } as T
+    }
+    return {
+      success: false,
+      error: message,
+      errorCode: 'NOT_FOUND',
+    } as T
+  }
+  return body()
+}
+
+// ─── ID resolution (Option 2-narrow — internal only) ─────────────────────────
+
+type ResolvedTfmId =
+  | { kind: 'primary'; tfmId: string }
+  | { kind: 'contributor'; tfmId: string; mappingSourceId: string }
+  | { kind: 'unknown' }
+
+/**
+ * Decode a caller-supplied `fieldMappingId` into a bare TFM id.
+ *
+ * Accepts:
+ *   - bare UUID (`tfmId`) — a primary / VA TFM row
+ *   - composite `tfmId::mappingSourceId` — a contributor row emitted by
+ *     the shim. Contributors do not own an independent transformation, so
+ *     write-path callers of `resolveTfmId` should short-circuit when they
+ *     see `kind === 'contributor'`. Read-path callers may follow the
+ *     `tfmId` to the owning TFM (same transformation row).
+ *
+ * Other shapes (ack ids, empty strings, non-UUID plain strings) return
+ * `{ kind: 'unknown' }` and log a warning under the `[transformations]`
+ * namespace per P2.
+ */
+function resolveTfmId(id: string): ResolvedTfmId {
+  if (typeof id !== 'string' || id.length === 0) {
+    console.warn('[transformations] resolveTfmId: empty input')
+    return { kind: 'unknown' }
+  }
+
+  const parts = id.split(SHIMMED_ID_SEPARATOR)
+  const UUID_REGEX =
+    /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+
+  if (parts.length === 1) {
+    if (UUID_REGEX.test(parts[0])) {
+      return { kind: 'primary', tfmId: parts[0] }
+    }
+    console.warn('[transformations] resolveTfmId: unrecognized id format', { id })
+    return { kind: 'unknown' }
+  }
+
+  if (parts.length === 2 && UUID_REGEX.test(parts[0]) && UUID_REGEX.test(parts[1])) {
+    return { kind: 'contributor', tfmId: parts[0], mappingSourceId: parts[1] }
+  }
+
+  console.warn('[transformations] resolveTfmId: unrecognized id format', { id })
+  return { kind: 'unknown' }
+}
+
+// ─── TFM context resolver (shared across write paths) ────────────────────────
+//
+// Every write path needs the same basic context: the TFM row, its project,
+// its target field (+ table), and — for mapped TFMs — the primary source
+// field (+ table) plus the linking table_mapping. This helper does the query
+// once so individual write paths stay focused on their own logic.
+//
+// Returns `null` when the TFM does not exist (caller translates to NOT_FOUND).
+// Throws on structural invariant violations (e.g. mapped TFM with no
+// mapping_sources at all) — those indicate data corruption and should abort
+// the request rather than silently malfunctioning.
+
+interface ContextField {
+  id: string
+  name: string
+  table_id: string
+  data_type: string
+}
+
+interface TfmContext {
+  tfm: TargetFieldMappingRow
+  projectId: string
+  targetField: { id: string; name: string; table_id: string }
+  targetTable: { id: string; name: string }
+  /** Primary source (ordinal=0). NULL for VAs. */
+  primarySource: {
+    mappingSourceId: string
+    sourceFieldId: string
+    sourceField: ContextField | null
+    sourceTableId: string
+  } | null
+  /** Contributor sources (ordinal > 0), ordered by ordinal. */
+  contributors: Array<{
+    mappingSourceId: string
+    sourceFieldId: string
+    sourceField: ContextField | null
+    ordinal: number
+  }>
+  /** Resolved table_mapping linking primary source table → target table.
+   *  NULL for VAs. */
+  tableMapping: {
+    id: string
+    source_table_id: string
+    target_table_id: string
+  } | null
+}
+
+async function loadTfmContext(tfmId: string): Promise<TfmContext | null> {
+  const { data: tfm } = await supabaseAdmin
+    .from('target_field_mappings')
+    .select('*')
+    .eq('id', tfmId)
+    .maybeSingle<TargetFieldMappingRow>()
+
+  if (!tfm) return null
+
+  const { data: targetField } = await supabaseAdmin
+    .from('fields')
+    .select('id, name, table_id')
+    .eq('id', tfm.target_field_id)
+    .single<{ id: string; name: string; table_id: string }>()
+
+  if (!targetField) return null
+
+  const { data: targetTable } = await supabaseAdmin
+    .from('tables')
+    .select('id, name')
+    .eq('id', targetField.table_id)
+    .single<{ id: string; name: string }>()
+
+  if (!targetTable) return null
+
+  const { data: sources } = await supabaseAdmin
+    .from('mapping_sources')
+    .select('id, source_field_id, source_table_id, ordinal')
+    .eq('target_field_mapping_id', tfmId)
+    .order('ordinal', { ascending: true })
+
+  const sourceFieldIds = (sources ?? [])
+    .map((s) => s.source_field_id)
+    .filter((x): x is string => x != null)
+
+  const sourceFieldById = new Map<string, ContextField>()
+
+  if (sourceFieldIds.length > 0) {
+    const { data: srcFields } = await supabaseAdmin
+      .from('fields')
+      .select('id, name, table_id, data_type')
+      .in('id', sourceFieldIds)
+
+    for (const f of (srcFields ?? []) as ContextField[]) {
+      sourceFieldById.set(f.id, f)
+    }
+  }
+
+  const primaryRow = (sources ?? []).find((s) => s.ordinal === 0) ?? null
+  const contributorRows = (sources ?? []).filter((s) => s.ordinal > 0)
+
+  const primarySource = primaryRow
+    ? {
+        mappingSourceId: primaryRow.id as string,
+        sourceFieldId: (primaryRow.source_field_id ?? '') as string,
+        sourceField: primaryRow.source_field_id
+          ? sourceFieldById.get(primaryRow.source_field_id) ?? null
+          : null,
+        sourceTableId: (primaryRow.source_table_id ?? '') as string,
+      }
+    : null
+
+  const contributors = contributorRows.map((r) => ({
+    mappingSourceId: r.id as string,
+    sourceFieldId: (r.source_field_id ?? '') as string,
+    sourceField: r.source_field_id
+      ? sourceFieldById.get(r.source_field_id) ?? null
+      : null,
+    ordinal: r.ordinal as number,
+  }))
+
+  // Resolve table_mapping for mapped TFMs. Mapped = at least one source.
+  let tableMapping: TfmContext['tableMapping'] = null
+  if (primarySource && primarySource.sourceTableId) {
+    const { data: tm } = await supabaseAdmin
+      .from('table_mappings')
+      .select('id, source_table_id, target_table_id')
+      .eq('project_id', tfm.project_id)
+      .eq('source_table_id', primarySource.sourceTableId)
+      .eq('target_table_id', targetField.table_id)
+      .maybeSingle<{ id: string; source_table_id: string; target_table_id: string }>()
+    tableMapping = tm ?? null
+  }
+
+  return {
+    tfm,
+    projectId: tfm.project_id,
+    targetField,
+    targetTable,
+    primarySource,
+    contributors,
+    tableMapping,
+  }
+}
+
+// ─── getTransformData ─────────────────────────────────────────────────────────
+//
+// Read path — renders the Transform tab's dataset → table → field tree.
+//
+// Semantic parity with the legacy implementation:
+//   - Each TFM surfaces as ONE FieldItem under the TableGroup that hosts its
+//     primary source table (or — for value assignments — under the first TM
+//     whose target_table matches the VA's target_field.table_id; VAs are
+//     global per target table in the new model).
+//   - Contributor mapping_sources are folded into the primary FieldItem's
+//     `contributingSourceFields` list. The UI already hides contributors from
+//     the transform tree (legacy `isContributing=true` filter); we achieve the
+//     same effect by never emitting contributor rows at all.
+//   - `FieldItem.isContributing` stays `false` everywhere for API stability.
+//   - `needsTransform` is computed via `fieldNeedsTransform` — the heuristic
+//     is unchanged; its `needsTransformation` input now comes from the new
+//     `target_field_mappings.needs_transformation` column (migration 075).
 
 export async function getTransformData(
-  projectId: string
+  projectId: string,
 ): Promise<TransformPageData> {
   const supabase = await createClient()
   const {
     data: { user },
   } = await supabase.auth.getUser()
-  if (!user) return { datasets: [], schemaDocText: '', hasMappings: false, unmappedNotNullTargetFields: [], unmappedNullableTargetFields: [] }
+  const empty: TransformPageData = {
+    datasets: [],
+    schemaDocText: '',
+    hasMappings: false,
+    unmappedNotNullTargetFields: [],
+    unmappedNullableTargetFields: [],
+  }
+  if (!user) return empty
 
   const { data: project } = await supabase
     .from('projects')
     .select('id')
     .eq('id', projectId)
     .single()
-  if (!project) return { datasets: [], schemaDocText: '', hasMappings: false, unmappedNotNullTargetFields: [], unmappedNullableTargetFields: [] }
+  if (!project) return empty
 
-  // 1. Table mappings (non-rejected)
+  // ── 1. Table mappings (non-rejected) ───────────────────────────────────────
   const { data: tms } = await supabase
     .from('table_mappings')
     .select('id, source_table_id, target_table_id')
     .eq('project_id', projectId)
     .neq('status', 'rejected')
 
-  if (!tms || tms.length === 0) {
-    return { datasets: [], schemaDocText: '', hasMappings: false, unmappedNotNullTargetFields: [], unmappedNullableTargetFields: [] }
-  }
+  if (!tms || tms.length === 0) return empty
 
-  const tmIds = tms.map((tm) => tm.id)
-  const allTableIds = [
-    ...new Set([
+  const allTableIds = Array.from(
+    new Set([
       ...tms.map((tm) => tm.source_table_id),
       ...tms.map((tm) => tm.target_table_id),
     ]),
-  ]
+  )
 
-  // 2. Tables with dataset info, field_mappings, source/target fields, profiles, transformations
-  const [
-    { data: tables },
-    { data: fieldMappings },
-  ] = await Promise.all([
+  // ── 2. Tables + target_field_mappings + mapping_sources + transformations ─
+  const [tablesRes, tfmsRes, msRes] = await Promise.all([
     supabase
       .from('tables')
       .select('id, name, dataset_id, datasets(id, name, role)')
       .in('id', allTableIds),
     supabase
-      .from('field_mappings')
-      .select('id, table_mapping_id, source_field_id, target_field_id, type_compatibility, confidence, is_contributing, ai_reasoning, needs_transformation')
-      .in('table_mapping_id', tmIds)
-      .neq('status', 'rejected'),
+      .from('target_field_mappings')
+      .select('*')
+      .eq('project_id', projectId)
+      .neq('status', 'rejected')
+      .eq('is_acknowledged', false)
+      .returns<TargetFieldMappingRow[]>(),
+    // A deliberate two-step join: mapping_sources → TFMs → project. We pre-
+    // filtered TFMs by project/status above, so scoping MS by the resulting
+    // tfmIds below is cheaper and clearer than an inline join.
+    Promise.resolve(null),
   ])
 
-  if (!fieldMappings || fieldMappings.length === 0) {
-    return { datasets: [], schemaDocText: '', hasMappings: true, unmappedNotNullTargetFields: [], unmappedNullableTargetFields: [] }
+  const tables = tablesRes.data ?? []
+  const tfms = (tfmsRes.data ?? []) as TargetFieldMappingRow[]
+  void msRes
+
+  if (tfms.length === 0) {
+    // No TFMs means no mappings for this project. `hasMappings: true` stays
+    // because table_mappings exist — the UI distinguishes between
+    // "approve mappings first" and "no tables paired" states.
+    return { ...empty, hasMappings: true }
   }
 
-  const allSourceFieldIds = fieldMappings.map((fm) => fm.source_field_id).filter((id): id is string => id !== null)
-  const allTargetFieldIds = fieldMappings.map((fm) => fm.target_field_id)
-  const allFieldMappingIds = fieldMappings.map((fm) => fm.id)
+  const tfmIds = tfms.map((t) => t.id)
 
-  // 3. Fields, profiles, transformations
+  const { data: sources } = await supabase
+    .from('mapping_sources')
+    .select('id, target_field_mapping_id, source_field_id, source_table_id, ordinal, type_compatibility, confidence')
+    .in('target_field_mapping_id', tfmIds)
+    .order('ordinal', { ascending: true })
+
+  const allSourceFieldIds = Array.from(
+    new Set(
+      (sources ?? [])
+        .map((s) => s.source_field_id)
+        .filter((x): x is string => x != null),
+    ),
+  )
+  const allTargetFieldIds = Array.from(new Set(tfms.map((t) => t.target_field_id)))
+
+  // ── 3. Fields, profiles, transformations ───────────────────────────────────
   const [
     { data: sourceFields },
     { data: targetFields },
@@ -165,7 +537,7 @@ export async function getTransformData(
       : Promise.resolve({ data: [] as Array<{ id: string; name: string; data_type: string; inferred_type: string | null; is_nullable: boolean; table_id: string; ordinal_position: number }>, error: null }),
     supabase
       .from('fields')
-      .select('id, name, data_type, inferred_type, is_nullable, is_primary_key, check_constraint')
+      .select('id, name, data_type, inferred_type, is_nullable, is_primary_key, check_constraint, table_id')
       .in('id', allTargetFieldIds),
     allSourceFieldIds.length > 0
       ? supabase
@@ -176,13 +548,14 @@ export async function getTransformData(
     supabase
       .from('transformations')
       .select('*')
-      .in('field_mapping_id', allFieldMappingIds),
+      .in('target_field_mapping_id', tfmIds)
+      .returns<TransformationRow[]>(),
   ])
 
-  // 4. Schema documents for context
-  const allDatasetIds = [
-    ...new Set((tables ?? []).map((t) => t.dataset_id)),
-  ]
+  // ── 4. Schema documents for context ────────────────────────────────────────
+  const allDatasetIds = Array.from(
+    new Set(tables.map((t) => t.dataset_id)),
+  )
   const { data: schemaDocs } = await supabase
     .from('schema_documents')
     .select('extracted_text')
@@ -195,35 +568,174 @@ export async function getTransformData(
     .join('\n\n')
     .slice(0, 4000) ?? ''
 
-  // ── Index lookups ─────────────────────────────────────────────────────────
-  const tableById = new Map((tables ?? []).map((t) => [t.id, t]))
+  // ── Index lookups ──────────────────────────────────────────────────────────
+  const tableById = new Map(tables.map((t) => [t.id, t]))
   const srcFieldById = new Map((sourceFields ?? []).map((f) => [f.id, f]))
   const tgtFieldById = new Map((targetFields ?? []).map((f) => [f.id, f]))
   const profileByFieldId = new Map(
-    (fieldProfiles ?? []).map((p) => [p.field_id, p])
+    (fieldProfiles ?? []).map((p) => [p.field_id, p]),
   )
-  const transformByFMId = new Map(
-    (transformations ?? []).map((tr) => [tr.field_mapping_id, tr as Transformation])
-  )
-  const fmsByTmId = new Map<string, typeof fieldMappings>()
-  for (const fm of fieldMappings) {
-    const arr = fmsByTmId.get(fm.table_mapping_id) ?? []
-    arr.push(fm)
-    fmsByTmId.set(fm.table_mapping_id, arr)
+  const transformByTfmId = new Map<string, TransformationRow>()
+  for (const tr of (transformations ?? []) as TransformationRow[]) {
+    transformByTfmId.set(tr.target_field_mapping_id, tr)
   }
 
-  // ── Group: dataset → table → fields ───────────────────────────────────────
+  // ── Index sources per TFM ──────────────────────────────────────────────────
+  interface IndexedSource {
+    mappingSourceId: string
+    sourceFieldId: string | null
+    sourceTableId: string | null
+    ordinal: number
+    typeCompatibility: string | null
+    confidence: number | null
+  }
+  const sourcesByTfmId = new Map<string, IndexedSource[]>()
+  for (const s of sources ?? []) {
+    const list = sourcesByTfmId.get(s.target_field_mapping_id) ?? []
+    list.push({
+      mappingSourceId: s.id as string,
+      sourceFieldId: (s.source_field_id ?? null) as string | null,
+      sourceTableId: (s.source_table_id ?? null) as string | null,
+      ordinal: s.ordinal as number,
+      typeCompatibility: (s.type_compatibility ?? null) as string | null,
+      confidence: (s.confidence ?? null) as number | null,
+    })
+    sourcesByTfmId.set(s.target_field_mapping_id, list)
+  }
+
+  // ── TFM routing: which TableGroup does each TFM render under? ─────────────
+  //
+  // Mapped TFM: the TM whose (source_table_id, target_table_id) matches the
+  // TFM's primary source_table_id and the target field's table_id.
+  //
+  // VA TFM: the FIRST TM (in `tms` order) whose target_table_id matches the
+  // VA's target field's table_id. This mirrors legacy behaviour where a VA
+  // row surfaced under exactly one TableGroup (legacy `fm.table_mapping_id`).
+  // `applyTransform` / `revertTransform` loop every matching TM when the
+  // staged-data work happens — the routing here is purely for tree display.
+
+  const tmById = new Map(tms.map((tm) => [tm.id, tm]))
+  const firstTmByTargetTable = new Map<string, string>()
+  for (const tm of tms) {
+    if (!firstTmByTargetTable.has(tm.target_table_id)) {
+      firstTmByTargetTable.set(tm.target_table_id, tm.id)
+    }
+  }
+
+  function routeTfmToTm(
+    tfm: TargetFieldMappingRow,
+    tgtField: { table_id: string },
+    primary: IndexedSource | undefined,
+  ): string | null {
+    if (primary && primary.sourceTableId) {
+      for (const tm of tms ?? []) {
+        if (tm.source_table_id === primary.sourceTableId && tm.target_table_id === tgtField.table_id) {
+          return tm.id
+        }
+      }
+      return null
+    }
+    return firstTmByTargetTable.get(tgtField.table_id) ?? null
+  }
+
+  // ── Build per-TM field lists ──────────────────────────────────────────────
+  const fieldsByTmId = new Map<string, FieldItem[]>()
+
+  for (const tfm of tfms) {
+    const tgtField = tgtFieldById.get(tfm.target_field_id)
+    if (!tgtField) continue
+
+    const tfmSources = sourcesByTfmId.get(tfm.id) ?? []
+    const primary = tfmSources.find((s) => s.ordinal === 0)
+    const contributors = tfmSources.filter((s) => s.ordinal > 0)
+
+    const tmId = routeTfmToTm(tfm, tgtField, primary)
+    if (!tmId) continue
+
+    const isValueAssignment = primary == null
+    const srcField = primary?.sourceFieldId
+      ? srcFieldById.get(primary.sourceFieldId) ?? null
+      : null
+
+    // Skip mapped TFMs with a stray source_field_id that failed to hydrate —
+    // matches legacy "skip if source lookup failed" guard.
+    if (!isValueAssignment && !srcField) continue
+
+    const profile = primary?.sourceFieldId
+      ? profileByFieldId.get(primary.sourceFieldId)
+      : null
+    const transformation: TransformationRow | null = transformByTfmId.get(tfm.id) ?? null
+
+    const needsTransform = isValueAssignment
+      ? true
+      : fieldNeedsTransform({
+          typeCompatibility: primary?.typeCompatibility ?? null,
+          confidence: primary?.confidence ?? tfm.confidence,
+          sourceDataType: srcField!.data_type,
+          targetDataType: tgtField.data_type,
+          sourceFieldName: srcField!.name,
+          targetFieldName: tgtField.name,
+          hasTransformation: transformation !== null,
+          needsTransformation: tfm.needs_transformation,
+        })
+
+    const contributingSourceFields: { id: string; name: string; data_type: string }[] = []
+    for (const c of contributors) {
+      if (!c.sourceFieldId) continue
+      const cf = srcFieldById.get(c.sourceFieldId)
+      if (!cf) continue
+      contributingSourceFields.push({ id: cf.id, name: cf.name, data_type: cf.data_type })
+    }
+
+    const item: FieldItem = {
+      fieldMappingId: tfm.id,
+      sourceFieldId: srcField?.id ?? null,
+      sourceFieldName: srcField?.name ?? null,
+      sourceFieldDataType: srcField?.data_type ?? null,
+      sourceFieldInferredType: srcField?.inferred_type ?? null,
+      sourceFieldIsNullable: srcField?.is_nullable ?? true,
+      targetFieldId: tgtField.id,
+      targetFieldName: tgtField.name,
+      targetFieldDataType: tgtField.data_type,
+      targetFieldInferredType: tgtField.inferred_type,
+      targetFieldIsNullable: tgtField.is_nullable,
+      targetFieldIsPrimaryKey: !!(tgtField as typeof tgtField & { is_primary_key?: boolean }).is_primary_key,
+      sourceTableId: srcField?.table_id ?? null,
+      isValueAssignment,
+      typeCompatibility: primary?.typeCompatibility ?? null,
+      confidence: primary?.confidence ?? tfm.confidence,
+      aiReasoning: tfm.ai_reasoning,
+      nullPercentage: (profile as typeof profile & { null_percentage?: number } | undefined)?.null_percentage ?? 0,
+      formatIssuesCount: (profile as typeof profile & { format_issues_count?: number } | undefined)?.format_issues_count ?? 0,
+      sampleValues: (profile?.sample_values as unknown[]) ?? [],
+      cardinality: profile?.cardinality ?? 0,
+      needsTransform,
+      transformation,
+      isContributing: false,
+      contributingSourceFields,
+      targetCheckConstraint: isValueAssignment
+        ? ((tgtField as typeof tgtField & { check_constraint?: unknown }).check_constraint as FieldItem['targetCheckConstraint'] ?? null)
+        : null,
+    }
+
+    const list = fieldsByTmId.get(tmId) ?? []
+    list.push(item)
+    fieldsByTmId.set(tmId, list)
+  }
+
+  // ── Assemble DatasetGroup[] ───────────────────────────────────────────────
   const datasetGroupMap = new Map<string, DatasetGroup>()
 
   for (const tm of tms) {
+    const fields = fieldsByTmId.get(tm.id)
+    if (!fields || fields.length === 0) continue
+
     const srcTable = tableById.get(tm.source_table_id)
     const tgtTable = tableById.get(tm.target_table_id)
     if (!srcTable || !tgtTable) continue
 
-    const dataset = (srcTable.datasets as unknown as { id: string; name: string; role: string } | null)
+    const dataset = srcTable.datasets as unknown as { id: string; name: string; role: string } | null
     if (!dataset) continue
-
-    // Only process source dataset groups (we group by source)
     if (dataset.role !== 'source') continue
 
     let dsGroup = datasetGroupMap.get(dataset.id)
@@ -232,115 +744,43 @@ export async function getTransformData(
       datasetGroupMap.set(dataset.id, dsGroup)
     }
 
-    const fms = fmsByTmId.get(tm.id) ?? []
-    const fields: FieldItem[] = []
+    fields.sort((a, b) => {
+      if (a.isValueAssignment && !b.isValueAssignment) return 1
+      if (!a.isValueAssignment && b.isValueAssignment) return -1
+      if (a.isValueAssignment && b.isValueAssignment) {
+        return a.targetFieldName.localeCompare(b.targetFieldName)
+      }
+      const sfA = a.sourceFieldId ? (srcFieldById.get(a.sourceFieldId) as { ordinal_position?: number } | undefined) : undefined
+      const sfB = b.sourceFieldId ? (srcFieldById.get(b.sourceFieldId) as { ordinal_position?: number } | undefined) : undefined
+      return (sfA?.ordinal_position ?? 9999) - (sfB?.ordinal_position ?? 9999)
+    })
 
-    // Build a lookup: target_field_id → contributing source field names (for primary mappings)
-    const contributingByTarget = new Map<string, { id: string; name: string; data_type: string }[]>()
-    for (const fm of fms) {
-      if (!(fm as typeof fm & { is_contributing?: boolean }).is_contributing) continue
-      if (!fm.source_field_id) continue
-      const srcField = srcFieldById.get(fm.source_field_id)
-      if (!srcField) continue
-      const list = contributingByTarget.get(fm.target_field_id) ?? []
-      list.push({ id: srcField.id, name: srcField.name, data_type: srcField.data_type })
-      contributingByTarget.set(fm.target_field_id, list)
-    }
-
-    for (const fm of fms) {
-      const tgtField = tgtFieldById.get(fm.target_field_id)
-      if (!tgtField) continue
-
-      const isValueAssignment = fm.source_field_id === null
-      const srcField = fm.source_field_id ? srcFieldById.get(fm.source_field_id) : null
-      if (!isValueAssignment && !srcField) continue
-
-      const isContributing = !!(fm as typeof fm & { is_contributing?: boolean }).is_contributing
-
-      const profile = fm.source_field_id ? profileByFieldId.get(fm.source_field_id) : null
-      const transformation = transformByFMId.get(fm.id) ?? null
-
-      const fmWithFlags = fm as typeof fm & { ai_reasoning?: string | null; needs_transformation?: boolean | null }
-
-      const needsTransform = isValueAssignment ? true : fieldNeedsTransform({
-        typeCompatibility: fm.type_compatibility,
-        confidence: fm.confidence,
-        sourceDataType: srcField!.data_type,
-        targetDataType: tgtField.data_type,
-        sourceFieldName: srcField!.name,
-        targetFieldName: tgtField.name,
-        hasTransformation: transformation !== null,
-        needsTransformation: fmWithFlags.needs_transformation ?? null,
-      })
-
-      const fmTyped = fmWithFlags
-      fields.push({
-        fieldMappingId: fm.id,
-        sourceFieldId: srcField?.id ?? null,
-        sourceFieldName: srcField?.name ?? null,
-        sourceFieldDataType: srcField?.data_type ?? null,
-        sourceFieldInferredType: srcField?.inferred_type ?? null,
-        sourceFieldIsNullable: srcField?.is_nullable ?? true,
-        targetFieldId: tgtField.id,
-        targetFieldName: tgtField.name,
-        targetFieldDataType: tgtField.data_type,
-        targetFieldInferredType: tgtField.inferred_type,
-        targetFieldIsNullable: tgtField.is_nullable,
-        targetFieldIsPrimaryKey: !!(tgtField as typeof tgtField & { is_primary_key?: boolean }).is_primary_key,
-        sourceTableId: srcField?.table_id ?? null,
-        isValueAssignment,
-        typeCompatibility: fm.type_compatibility,
-        confidence: fm.confidence,
-        aiReasoning: fmTyped.ai_reasoning ?? null,
-        nullPercentage: (profile as typeof profile & { null_percentage?: number } | undefined)?.null_percentage ?? 0,
-        formatIssuesCount: (profile as typeof profile & { format_issues_count?: number } | undefined)?.format_issues_count ?? 0,
-        sampleValues: (profile?.sample_values as unknown[]) ?? [],
-        cardinality: profile?.cardinality ?? 0,
-        needsTransform,
-        transformation,
-        isContributing,
-        contributingSourceFields: isContributing ? [] : (contributingByTarget.get(fm.target_field_id) ?? []),
-        targetCheckConstraint: isValueAssignment ? ((tgtField as typeof tgtField & { check_constraint?: unknown }).check_constraint as FieldItem['targetCheckConstraint'] ?? null) : null,
-      })
-    }
-
-    if (fields.length > 0) {
-      // Sort: mapped fields by source ordinal_position, value assignments at end by target name
-      fields.sort((a, b) => {
-        if (a.isValueAssignment && !b.isValueAssignment) return 1
-        if (!a.isValueAssignment && b.isValueAssignment) return -1
-        if (a.isValueAssignment && b.isValueAssignment) {
-          return a.targetFieldName.localeCompare(b.targetFieldName)
-        }
-        const sfA = a.sourceFieldId ? srcFieldById.get(a.sourceFieldId) as { ordinal_position?: number } | undefined : undefined
-        const sfB = b.sourceFieldId ? srcFieldById.get(b.sourceFieldId) as { ordinal_position?: number } | undefined : undefined
-        return (sfA?.ordinal_position ?? 9999) - (sfB?.ordinal_position ?? 9999)
-      })
-      dsGroup.tables.push({
-        tableMappingId: tm.id,
-        sourceTableId: tm.source_table_id,
-        targetTableId: tm.target_table_id,
-        sourceTableName: srcTable.name,
-        targetTableName: tgtTable.name,
-        fields,
-      })
-    }
+    dsGroup.tables.push({
+      tableMappingId: tm.id,
+      sourceTableId: tm.source_table_id,
+      targetTableId: tm.target_table_id,
+      sourceTableName: srcTable.name,
+      targetTableName: tgtTable.name,
+      fields,
+    })
   }
 
-  // ── Compute unmapped NOT NULL target fields ─────────────────────────────────
-  const allTargetTableIds = [...new Set(tms.map((tm) => tm.target_table_id))]
+  void tmById // reserved for future per-TM lookups; keeps the map live.
+
+  // ── Compute unmapped target fields ────────────────────────────────────────
+  const allTargetTableIds = Array.from(new Set(tms.map((tm) => tm.target_table_id)))
   const { data: allTgtFieldRows } = await supabase
     .from('fields')
     .select('id, name, data_type, is_nullable, is_primary_key, table_id, check_constraint, default_value')
     .in('table_id', allTargetTableIds.length > 0 ? allTargetTableIds : ['__none__'])
     .order('ordinal_position', { ascending: true })
 
-  const mappedTargetFieldIds = new Set(
-    fieldMappings.filter((fm) => !fm.is_contributing).map((fm) => fm.target_field_id)
-  )
+  // "Mapped" = a non-rejected, non-acknowledged TFM exists for this target
+  // field. Already filtered in the tfms query above.
+  const mappedTargetFieldIds = new Set(tfms.map((t) => t.target_field_id))
 
   const tgtTableNameById = new Map(
-    (tables ?? []).filter((t) => allTargetTableIds.includes(t.id)).map((t) => [t.id, t.name])
+    tables.filter((t) => allTargetTableIds.includes(t.id)).map((t) => [t.id, t.name]),
   )
 
   const allUnmapped = (allTgtFieldRows ?? []).filter((f) => !mappedTargetFieldIds.has(f.id))
@@ -356,11 +796,9 @@ export async function getTransformData(
     default_value: (f as { default_value?: string | null }).default_value ?? null,
   })
 
-  // A column with a DEFAULT expression (migration 064) will auto-populate on
+  // A column with a DEFAULT expression (migration 064) auto-populates on
   // INSERT even when unmapped, so it does NOT belong in the "blocking"
-  // NOT-NULL bucket that the transform page uses to gate readiness. We
-  // still want to surface it in the UI — callers can render it in the
-  // nullable/soft bucket and tag it as "has default" off `default_value`.
+  // NOT-NULL bucket that the transform page uses to gate readiness.
   const hasDefault = (f: typeof allUnmapped[number]) => {
     const dv = (f as { default_value?: string | null }).default_value
     return dv != null && String(dv).length > 0
@@ -381,7 +819,7 @@ export async function getTransformData(
   }
 }
 
-// ── Claude system prompt ──────────────────────────────────────────────────────
+// ─── Claude system prompt ─────────────────────────────────────────────────────
 
 const TRANSFORM_SYSTEM_PROMPT = `You are a SQL transformation expert for enterprise data migrations.
 Given a source field, target field, their schemas, sample data, and a natural language description of the desired transformation, generate the SQL transformation expression.
@@ -480,153 +918,163 @@ Always preserve NULL and empty values unless the user explicitly instructs you t
   END
 This ensures that NULL source values do not accidentally map to a default/catch-all value. "All others" or "everything else" in the user's description means "all other NON-NULL, NON-EMPTY values" unless they explicitly say otherwise (e.g., "including nulls" or "map nulls to X"). Apply this NULL guard to ALL conditional expressions (CASE, COALESCE chains, IIF, etc.) unless the user's instruction explicitly handles nulls differently.`
 
-// ── wrapWithNullGuard ─────────────────────────────────────────────────────────
+// ─── wrapWithNullGuard ────────────────────────────────────────────────────────
+//
+// Deterministically ensures NULL/empty source values are preserved as NULL in
+// the generated SQL regardless of what Claude produced.
+//
+//   - If Claude already included a NULL guard for the source field → return as-is
+//   - If the SQL is a CASE expression → prepend a NULL WHEN as the first clause
+//   - Otherwise → wrap the whole expression in a NULL-safe CASE/ELSE
 
-/**
- * Deterministically ensures NULL/empty source values are preserved as NULL
- * in the generated SQL, regardless of what Claude produced.
- *
- * - If Claude already included a NULL guard for the source field → return as-is
- * - If the SQL is a CASE expression → prepend a NULL WHEN as the first clause
- * - Otherwise → wrap the whole expression in a NULL-safe CASE/ELSE
- */
 function wrapWithNullGuard(sql: string, sourceFieldName: string): string {
   const trimmed = sql.trim()
   const escapedName = sourceFieldName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
 
-  // Already has a null guard for this field — trust Claude
   const hasNullGuard = new RegExp(
     `WHEN\\s+["']?${escapedName}["']?\\s+IS\\s+NULL|WHEN\\s+TRIM\\s*\\(\\s*["']?${escapedName}["']?`,
-    'i'
+    'i',
   ).test(trimmed)
   if (hasNullGuard) return trimmed
 
   const nullWhen = `WHEN "${sourceFieldName}" IS NULL OR TRIM("${sourceFieldName}"::text) = '' THEN NULL`
 
-  // CASE expression → insert NULL guard as the first WHEN clause
   if (/^\s*CASE\b/i.test(trimmed)) {
     return trimmed.replace(/^(\s*CASE\b)/i, `$1\n  ${nullWhen}`)
   }
 
-  // Non-CASE expression (function call, arithmetic, etc.) → wrap entirely
   return `CASE\n  ${nullWhen}\n  ELSE ${trimmed}\nEND`
 }
 
-// ── generateTransform ─────────────────────────────────────────────────────────
+// ─── generateTransform ────────────────────────────────────────────────────────
 
 export async function generateTransform(
   fieldMappingId: string,
   description: string,
-  existingSQL?: string | null
-): Promise<{ success: boolean; sql?: string; transformationId?: string; error?: string }> {
+  existingSQL?: string | null,
+): Promise<{ success: boolean; sql?: string; transformationId?: string; error?: string; errorCode?: TransformWriteErrorCode }> {
   const supabase = await createClient()
   const {
     data: { user },
   } = await supabase.auth.getUser()
   if (!user) return { success: false, error: 'Not authenticated' }
 
-  // Rate limit
   const rateLimit = checkAIRateLimit(user.id)
   if (!rateLimit.allowed) return { success: false, error: rateLimit.error }
 
   if (!description.trim()) return { success: false, error: 'Description is required' }
 
-  // Fetch field mapping with context
-  const { data: fm } = await supabase
-    .from('field_mappings')
-    .select('id, source_field_id, target_field_id, type_compatibility, confidence, table_mapping_id')
-    .eq('id', fieldMappingId)
-    .single()
-  if (!fm) return { success: false, error: 'Field mapping not found' }
-
-  // Verify access through table_mapping → project
-  const { data: tm } = await supabase
-    .from('table_mappings')
-    .select('id, project_id, source_table_id, target_table_id')
-    .eq('id', fm.table_mapping_id)
-    .single()
-  if (!tm) return { success: false, error: 'Mapping not found' }
-
-  const { checkProjectPermission } = await import('@/lib/actions/role-resolution')
-  if (!(await checkProjectPermission(tm.project_id, 'editor'))) {
-    return { success: false, error: 'Insufficient permissions' }
+  const resolved = resolveTfmId(fieldMappingId)
+  if (resolved.kind !== 'primary') {
+    // Contributor rows don't own an independent transformation; unknown ids
+    // are a caller bug. Both surface as a friendly "not found" — matches
+    // legacy behavior when fm lookup failed.
+    return { success: false, error: 'Field mapping not found' }
   }
 
-  // Fetch fields — source may be null for value assignments
-  const isValueAssignment = fm.source_field_id === null
-  const [srcFieldResult, { data: tgtField }] = await Promise.all([
-    fm.source_field_id
-      ? supabase.from('fields').select('id, name, data_type, inferred_type, is_nullable, table_id').eq('id', fm.source_field_id).single()
-      : Promise.resolve({ data: null, error: null }),
-    supabase.from('fields').select('id, name, data_type, inferred_type, is_nullable, check_constraint').eq('id', fm.target_field_id).single(),
-  ])
-  const srcField = srcFieldResult.data
-  if (!isValueAssignment && !srcField) return { success: false, error: 'Source field not found' }
-  if (!tgtField) return { success: false, error: 'Target field not found' }
-  // Narrow the loosely-typed check_constraint JSONB into our canonical typed shape
-  // so the prompt builder below can key on cc.type safely.
-  const tgtCheckConstraint = (tgtField as typeof tgtField & { check_constraint?: unknown })
+  const ctx = await loadTfmContext(resolved.tfmId)
+  if (!ctx) return { success: false, error: 'Field mapping not found' }
+
+  const isValueAssignment = ctx.primarySource == null
+  if (!isValueAssignment && !ctx.primarySource?.sourceField) {
+    return { success: false, error: 'Source field not found' }
+  }
+
+  const perm = await requireProjectPermission(ctx.projectId, 'editor')
+  if (!perm.allowed) return { success: false, error: perm.error }
+
+  const tgtField = ctx.targetField
+  const { data: tgtFieldFull } = await supabase
+    .from('fields')
+    .select('id, name, data_type, inferred_type, is_nullable, check_constraint')
+    .eq('id', tgtField.id)
+    .single()
+  if (!tgtFieldFull) return { success: false, error: 'Target field not found' }
+
+  const tgtCheckConstraint = (tgtFieldFull as typeof tgtFieldFull & { check_constraint?: unknown })
     .check_constraint as
       | { type: string; allowedValues?: string[]; pattern?: string; min?: number; max?: number; raw?: string }
       | null
       | undefined
 
-  // Fetch tables
-  const [{ data: srcTable }, { data: tgtTable }] = await Promise.all([
-    supabase.from('tables').select('id, name, datasets(id, name)').eq('id', tm.source_table_id).single(),
-    supabase.from('tables').select('id, name').eq('id', tm.target_table_id).single(),
-  ])
+  const srcField = ctx.primarySource?.sourceField ?? null
+  const contributingSources = ctx.contributors
+    .map((c) => c.sourceField)
+    .filter((x): x is ContextField => x != null)
 
-  // Fetch any contributing field mappings for this target (for multi-source transforms)
-  const { data: contributingFMs } = await supabase
-    .from('field_mappings')
-    .select('source_field_id')
-    .eq('table_mapping_id', fm.table_mapping_id)
-    .eq('target_field_id', fm.target_field_id)
-    .eq('is_contributing', true)
-    .neq('status', 'rejected')
+  // Resolve tables for prompt rendering. For mapped TFMs we use the resolved
+  // table_mapping; for VAs we use the first TM whose target_table matches.
+  let srcTableName = ''
+  let srcTableId: string | null = null
+  let tgtTableId: string = tgtField.table_id
+  if (ctx.tableMapping) {
+    const { data: srcTable } = await supabase
+      .from('tables')
+      .select('id, name, datasets(id, name)')
+      .eq('id', ctx.tableMapping.source_table_id)
+      .single()
+    srcTableName = srcTable?.name ?? ''
+    srcTableId = ctx.tableMapping.source_table_id
+    tgtTableId = ctx.tableMapping.target_table_id
+  } else if (isValueAssignment) {
+    const { data: anyTm } = await supabase
+      .from('table_mappings')
+      .select('id, source_table_id, target_table_id, tables:tables!table_mappings_source_table_id_fkey(id, name)')
+      .eq('project_id', ctx.projectId)
+      .eq('target_table_id', tgtField.table_id)
+      .neq('status', 'rejected')
+      .limit(1)
+      .maybeSingle()
+    if (anyTm) {
+      srcTableId = anyTm.source_table_id as string
+      const srcTblObj = anyTm.tables as unknown as { id: string; name: string } | null
+      srcTableName = srcTblObj?.name ?? ''
+    }
+  }
 
-  const contributingFieldIds = (contributingFMs ?? []).map((c) => c.source_field_id).filter((id): id is string => id !== null)
+  // Build rich AI context. When the primary is a VA, we still pass the target
+  // field so the prompt can surface target constraints / distributions.
+  const allSourceFieldIds = srcField
+    ? [srcField.id, ...contributingSources.map((f) => f.id)]
+    : contributingSources.map((f) => f.id)
 
-  // Build rich AI context
-  const allSourceFieldIds = srcField ? [srcField.id, ...contributingFieldIds] : contributingFieldIds
-  const txCtx = await buildAIContext(tm.project_id, {
-    tableIds: [tm.source_table_id, tm.target_table_id],
-    fieldIds: [...allSourceFieldIds, tgtField.id],
-    includeProfilingStats: true,
-    includeValueDistributions: true,
-    includeSampleValues: true,
-    includeDocuments: true,
-    maxDistributionValues: 25,
-  }, user.id)
+  const contextTableIds = [srcTableId, tgtTableId].filter((x): x is string => x != null)
+  const txCtx = await buildAIContext(
+    ctx.projectId,
+    {
+      tableIds: contextTableIds,
+      fieldIds: [...allSourceFieldIds, tgtField.id],
+      includeProfilingStats: true,
+      includeValueDistributions: true,
+      includeSampleValues: true,
+      includeDocuments: true,
+      maxDistributionValues: 25,
+    },
+    user.id,
+  )
 
-  const tgtTableName = tgtTable?.name ?? ''
+  const tgtTableName = ctx.targetTable.name
   const transformDocBlock = formatDocumentsForPrompt(txCtx.documents)
 
-  // Find field contexts (source has distribution data; target is DDL-only so profile is empty)
   const allSrcCtxFields = txCtx.source_tables.flatMap((t) => t.fields)
   const srcFieldCtx = srcField ? allSrcCtxFields.find((f) => f.name === srcField.name) : null
   const tgtFieldCtx = txCtx.target_tables.flatMap((t) => t.fields).find((f) => f.name === tgtField.name)
 
-  // Fetch contributing field metadata for the prompt
+  // Contributing-source block (many-to-one mappings).
   let contributingSourcesBlock = ''
-  if (contributingFieldIds.length > 0) {
+  if (contributingSources.length > 0) {
     const { data: contribFields } = await supabase
       .from('fields')
       .select('id, name, data_type')
-      .in('id', contributingFieldIds)
+      .in('id', contributingSources.map((f) => f.id))
     if (contribFields && contribFields.length > 0) {
       const lines = contribFields.map((cf) => {
-        const ctx = allSrcCtxFields.find((f) => f.name === cf.name)
-        return ctx ? formatFieldForPrompt(ctx) : `${cf.name} (${cf.data_type})`
+        const cx = allSrcCtxFields.find((f) => f.name === cf.name)
+        return cx ? formatFieldForPrompt(cx) : `${cf.name} (${cf.data_type})`
       })
-      // Extract combination hint from the primary mapping's AI reasoning
-      const { data: primaryMapping } = await supabase
-        .from('field_mappings')
-        .select('ai_reasoning')
-        .eq('id', fieldMappingId)
-        .single()
-      const hintMatch = primaryMapping?.ai_reasoning?.match(/\[Combination:\s*(.*?)\]/)
+      // Combination hint lives on the TFM's ai_reasoning (migrated from the
+      // legacy primary FM's reasoning in 074).
+      const hintMatch = ctx.tfm.ai_reasoning?.match(/\[Combination:\s*(.*?)\]/)
       const combinationHint = hintMatch ? hintMatch[1] : ''
       contributingSourcesBlock = `\n<contributing_source_fields>
 This is a MANY-TO-ONE mapping. Multiple source fields must be combined into a single target field value.
@@ -642,7 +1090,6 @@ Handle nulls gracefully — if one source field is null, use the remaining field
     }
   }
 
-  // Build optional iteration block (only when refining an existing transform)
   let iterationBlock = ''
   if (existingSQL && existingSQL.trim().length > 0) {
     iterationBlock = `<existing_sql>
@@ -661,8 +1108,6 @@ The user has updated their description. Modify the existing SQL expression above
 `
   }
 
-  // Target CHECK constraint line — tells the AI the exact value domain so CASE/mapping
-  // SQL emits the right literals instead of guessing from source sample values.
   const checkConstraintLine = (() => {
     const cc = tgtCheckConstraint
     if (!cc) return ''
@@ -685,21 +1130,30 @@ The user has updated their description. Modify the existing SQL expression above
     return ''
   })()
 
-  // Build user message
   const sourceBlock = isValueAssignment
-    ? `<source_field>\nNo source field — this is a VALUE ASSIGNMENT.\nDefine a constant, expression, or function that produces the value for the target field.\nDo NOT reference row_data unless you know the source table columns.\nTable: ${srcTable?.name ?? ''}\n</source_field>`
-    : `<source_field>\n${srcFieldCtx ? formatFieldForPrompt(srcFieldCtx) : `${srcField!.name} (${srcField!.data_type})\n  Nullable: ${srcField!.is_nullable}`}\nTable: ${srcTable?.name ?? ''}\n</source_field>`
+    ? `<source_field>\nNo source field — this is a VALUE ASSIGNMENT.\nDefine a constant, expression, or function that produces the value for the target field.\nDo NOT reference row_data unless you know the source table columns.\nTable: ${srcTableName}\n</source_field>`
+    : `<source_field>\n${srcFieldCtx ? formatFieldForPrompt(srcFieldCtx) : `${srcField!.name} (${(srcField as typeof srcField & { data_type?: string }).data_type ?? ''})`}\nTable: ${srcTableName}\n</source_field>`
+
+  const typeCompat = ctx.primarySource?.mappingSourceId
+    ? (await supabase
+        .from('mapping_sources')
+        .select('type_compatibility')
+        .eq('id', ctx.primarySource.mappingSourceId)
+        .single()
+      ).data?.type_compatibility ?? null
+    : null
+
   const userMessage = `${sourceBlock}
 ${contributingSourcesBlock}
 <target_field>
 Field: ${tgtTableName}.${tgtField.name}
-Type: ${tgtField.data_type}${tgtField.inferred_type ? ` (${tgtField.inferred_type})` : ''}
-Nullable: ${tgtField.is_nullable}${checkConstraintLine}
+Type: ${(tgtFieldFull as { data_type: string }).data_type}${(tgtFieldFull as { inferred_type?: string | null }).inferred_type ? ` (${(tgtFieldFull as { inferred_type?: string | null }).inferred_type})` : ''}
+Nullable: ${(tgtFieldFull as { is_nullable: boolean }).is_nullable}${checkConstraintLine}
 ${tgtFieldCtx && tgtFieldCtx.cardinality > 0 ? `Distinct values: ${tgtFieldCtx.cardinality}` : ''}
 </target_field>
 
 <type_compatibility>
-${fm.type_compatibility ?? 'Not specified'}
+${typeCompat ?? 'Not specified'}
 </type_compatibility>
 ${transformDocBlock}
 ${txCtx.intelligence_context ? txCtx.intelligence_context + '\n\n' : ''}${iterationBlock}<description>
@@ -708,179 +1162,188 @@ ${description}
 
 Generate the SQL transformation expression.`
 
-  let rawSql: string
-  try {
-    rawSql = await callClaude(TRANSFORM_SYSTEM_PROMPT, userMessage, 2048)
-  } catch (err) {
-    return { success: false, error: 'AI generation failed. Please try again.' }
-  }
+  return guardWrites(ctx.projectId, async () => {
+    let rawSql: string
+    try {
+      rawSql = await callClaude(TRANSFORM_SYSTEM_PROMPT, userMessage, 2048)
+    } catch {
+      return { success: false, error: 'AI generation failed. Please try again.' }
+    }
 
-  // Clean the response: extract SQL, strip fences/preamble/trailing text, remove semicolons
-  let sql = extractTransformSQL(rawSql)
-  if (sql !== rawSql.trim()) {
-    console.log('[generateTransform] SQL extracted from mixed response, raw length:', rawSql.length, 'extracted length:', sql.length)
-  }
+    let sql = extractTransformSQL(rawSql)
+    if (sql !== rawSql.trim()) {
+      console.log('[transformations] generateTransform: SQL extracted from mixed response, raw length:', rawSql.length, 'extracted length:', sql.length)
+    }
 
-  if (!sql) return { success: false, error: 'AI returned empty SQL. Please try again.' }
+    if (!sql) return { success: false, error: 'AI returned empty SQL. Please try again.' }
 
-  // Deterministically wrap with NULL guard — skipped for value assignments (no source field)
-  if (srcField) {
-    sql = wrapWithNullGuard(sql, srcField.name)
-  }
+    if (srcField) {
+      sql = wrapWithNullGuard(sql, srcField.name)
+    }
 
-  // Store or update the transformation record
-  const { data: existing } = await supabase
-    .from('transformations')
-    .select('id')
-    .eq('field_mapping_id', fieldMappingId)
-    .single()
-
-  let transformationId: string
-
-  if (existing) {
-    const { error: updateErr } = await supabase
+    // Upsert transformation keyed on target_field_mapping_id.
+    const { data: existing } = await supabase
       .from('transformations')
-      .update({
-        description: description.trim(),
-        generated_sql: sql,
-        is_ai_generated: true,
-        status: 'draft',
-        test_results: null,
-      })
-      .eq('id', existing.id)
-    if (updateErr) return { success: false, error: 'Failed to save transformation' }
-    transformationId = existing.id
-  } else {
-    const { data: created, error: insertErr } = await supabase
-      .from('transformations')
-      .insert({
-        field_mapping_id: fieldMappingId,
-        description: description.trim(),
-        generated_sql: sql,
-        is_ai_generated: true,
-        status: 'draft',
-        test_results: null,
-      })
       .select('id')
-      .single()
-    if (insertErr || !created) return { success: false, error: 'Failed to save transformation' }
-    transformationId = created.id
-  }
+      .eq('target_field_mapping_id', ctx.tfm.id)
+      .maybeSingle()
 
-  // If this field is a PK, regenerating its transform may invalidate FK dependents.
-  // Stale (not delete) their transforms so users can see and address the inconsistency.
-  const { data: fmForPK } = await supabaseAdmin
-    .from('field_mappings')
-    .select('target_field_id, table_mappings!inner(project_id)')
-    .eq('id', fieldMappingId)
-    .single()
+    let transformationId: string
 
-  if (fmForPK) {
-    const { data: tgtField } = await supabaseAdmin
+    if (existing) {
+      const { error: updateErr } = await supabase
+        .from('transformations')
+        .update({
+          description: description.trim(),
+          generated_sql: sql,
+          is_ai_generated: true,
+          status: 'draft' as TransformationStatus,
+          test_results: null,
+        })
+        .eq('id', existing.id)
+      if (updateErr) return { success: false, error: 'Failed to save transformation' }
+      transformationId = existing.id as string
+    } else {
+      const { data: created, error: insertErr } = await supabase
+        .from('transformations')
+        .insert({
+          target_field_mapping_id: ctx.tfm.id,
+          description: description.trim(),
+          generated_sql: sql,
+          is_ai_generated: true,
+          status: 'draft' as TransformationStatus,
+          test_results: null,
+        })
+        .select('id')
+        .single()
+      if (insertErr || !created) return { success: false, error: 'Failed to save transformation' }
+      transformationId = created.id as string
+    }
+
+    // If this target field is a PK, regenerating its transform may invalidate
+    // FK dependents. Stale their transforms so users can address the drift.
+    const { data: tgtFieldPk } = await supabaseAdmin
       .from('fields')
       .select('is_primary_key')
-      .eq('id', fmForPK.target_field_id)
+      .eq('id', tgtField.id)
       .single()
 
-    if (tgtField?.is_primary_key) {
+    if (tgtFieldPk?.is_primary_key) {
       const { staleFKDependentTransforms } = await import('@/lib/actions/fk-cascade')
-      await staleFKDependentTransforms(
-        (fmForPK as unknown as { table_mappings: { project_id: string } }).table_mappings.project_id,
-        fmForPK.target_field_id
-      )
+      await staleFKDependentTransforms(ctx.projectId, tgtField.id)
     }
-  }
 
-  return { success: true, sql, transformationId }
+    return { success: true, sql, transformationId }
+  })
 }
 
-// ── updateTransformSQL ────────────────────────────────────────────────────────
+// ─── updateTransformSQL ───────────────────────────────────────────────────────
 
 export async function updateTransformSQL(
   transformationId: string,
-  sql: string
-): Promise<{ success: boolean; error?: string }> {
+  sql: string,
+): Promise<{ success: boolean; error?: string; errorCode?: TransformWriteErrorCode }> {
   const supabase = await createClient()
   const {
     data: { user },
   } = await supabase.auth.getUser()
   if (!user) return { success: false, error: 'Not authenticated' }
 
-  const { data: txLookup } = await supabaseAdmin.from('transformations').select('field_mapping_id, field_mappings!inner(table_mapping_id, table_mappings!inner(project_id))').eq('id', transformationId).single()
-  if (!txLookup) return { success: false, error: 'Transformation not found' }
-  const perm = await requireProjectPermission((txLookup as any).field_mappings.table_mappings.project_id, 'editor')
+  const { data: tx } = await supabaseAdmin
+    .from('transformations')
+    .select('id, status, target_field_mapping_id')
+    .eq('id', transformationId)
+    .maybeSingle<Pick<TransformationRow, 'id' | 'status' | 'target_field_mapping_id'>>()
+  if (!tx) return { success: false, error: 'Transformation not found' }
+
+  const { data: tfmRow } = await supabaseAdmin
+    .from('target_field_mappings')
+    .select('project_id')
+    .eq('id', tx.target_field_mapping_id)
+    .single<{ project_id: string }>()
+  if (!tfmRow) return { success: false, error: 'Transformation not found' }
+
+  const perm = await requireProjectPermission(tfmRow.project_id, 'editor')
   if (!perm.allowed) return { success: false, error: perm.error }
 
-  const cleanSql = sql.replace(/;+$/, '').trim()
-  if (!cleanSql) return { success: false, error: 'SQL cannot be empty' }
+  return guardWrites(tfmRow.project_id, async () => {
+    const cleanSql = sql.replace(/;+$/, '').trim()
+    if (!cleanSql) return { success: false, error: 'SQL cannot be empty' }
 
-  // Check current status — if applied, mark as stale instead of draft
-  const { data: current } = await supabase
-    .from('transformations')
-    .select('status')
-    .eq('id', transformationId)
-    .single()
+    // If the transform was previously applied, surface SQL edits as 'stale'
+    // so downstream readers know staged data no longer matches.
+    const newStatus: TransformationStatus = tx.status === 'applied' ? 'stale' : 'draft'
 
-  const newStatus = current?.status === 'applied' ? 'stale' : 'draft'
+    const { error } = await supabase
+      .from('transformations')
+      .update({
+        generated_sql: cleanSql,
+        is_ai_generated: false,
+        status: newStatus,
+        test_results: null,
+      })
+      .eq('id', transformationId)
 
-  const { error } = await supabase
-    .from('transformations')
-    .update({
-      generated_sql: cleanSql,
-      is_ai_generated: false,
-      status: newStatus,
-      test_results: null,
-    })
-    .eq('id', transformationId)
-
-  if (error) return { success: false, error: 'Failed to update SQL' }
-  return { success: true }
+    if (error) return { success: false, error: 'Failed to update SQL' }
+    return { success: true }
+  })
 }
 
-// ── autoSaveTransform ─────────────────────────────────────────────────────────
-// Persists sql, description, and optionally status.
-// Used by the client-side debounced auto-save.
+// ─── autoSaveTransform ────────────────────────────────────────────────────────
+// Persists sql, description, and optionally status. Used by the client-side
+// debounced auto-save while the user is editing in the Transform tab.
 
 export async function autoSaveTransform(
   transformationId: string,
   sql: string,
   description: string,
-  status?: string
-): Promise<{ success: boolean; error?: string }> {
+  status?: string,
+): Promise<{ success: boolean; error?: string; errorCode?: TransformWriteErrorCode }> {
   const supabase = await createClient()
   const {
     data: { user },
   } = await supabase.auth.getUser()
   if (!user) return { success: false, error: 'Not authenticated' }
 
-  const { data: txLookupAS } = await supabaseAdmin.from('transformations').select('field_mapping_id, field_mappings!inner(table_mapping_id, table_mappings!inner(project_id))').eq('id', transformationId).single()
-  if (!txLookupAS) return { success: false, error: 'Transformation not found' }
-  const perm = await requireProjectPermission((txLookupAS as any).field_mappings.table_mappings.project_id, 'editor')
+  const { data: tx } = await supabaseAdmin
+    .from('transformations')
+    .select('id, target_field_mapping_id')
+    .eq('id', transformationId)
+    .maybeSingle<Pick<TransformationRow, 'id' | 'target_field_mapping_id'>>()
+  if (!tx) return { success: false, error: 'Transformation not found' }
+
+  const { data: tfmRow } = await supabaseAdmin
+    .from('target_field_mappings')
+    .select('project_id')
+    .eq('id', tx.target_field_mapping_id)
+    .single<{ project_id: string }>()
+  if (!tfmRow) return { success: false, error: 'Transformation not found' }
+
+  const perm = await requireProjectPermission(tfmRow.project_id, 'editor')
   if (!perm.allowed) return { success: false, error: perm.error }
 
-  const cleanSql = sql.replace(/;+$/, '').trim()
+  return guardWrites(tfmRow.project_id, async () => {
+    const cleanSql = sql.replace(/;+$/, '').trim()
+    const updates: Record<string, unknown> = {
+      generated_sql: cleanSql || sql,
+      description: description.trim() || null,
+    }
+    if (status) updates.status = status
 
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const updates: Record<string, any> = {
-    generated_sql: cleanSql || sql,
-    description: description.trim() || null,
-  }
-  if (status) updates.status = status
+    const { error } = await supabase
+      .from('transformations')
+      .update(updates)
+      .eq('id', transformationId)
 
-  const { error } = await supabase
-    .from('transformations')
-    .update(updates)
-    .eq('id', transformationId)
-
-  if (error) return { success: false, error: 'Auto-save failed' }
-  return { success: true }
+    if (error) return { success: false, error: 'Auto-save failed' }
+    return { success: true }
+  })
 }
 
-// ── runFullTransformTest ──────────────────────────────────────────────────────
-// Runs the stored transform SQL against ALL rows in the source table.
-// Returns pass/fail counts and up to 20 failure details.
-// On success (0 failures) sets transformation status → 'tested'.
-// On failures keeps status as 'draft'.
+// ─── runFullTransformTest ─────────────────────────────────────────────────────
+// Runs the stored transform SQL against ALL rows in the source table. Returns
+// pass/fail counts and up to 20 failure details. On zero failures sets the
+// transformation status → 'tested'; on failures keeps 'draft'.
 
 export interface TransformTestFailure {
   rowNumber: number
@@ -896,44 +1359,51 @@ export interface FullTransformTestResult {
 }
 
 export async function runFullTransformTest(
-  fieldMappingId: string
-): Promise<{ success: boolean; result?: FullTransformTestResult; error?: string }> {
+  fieldMappingId: string,
+): Promise<{ success: boolean; result?: FullTransformTestResult; error?: string; errorCode?: TransformWriteErrorCode }> {
   const supabase = await createClient()
   const {
     data: { user },
   } = await supabase.auth.getUser()
   if (!user) return { success: false, error: 'Not authenticated' }
 
-  const { data: fm } = await supabase
-    .from('field_mappings')
-    .select('id, source_field_id, table_mapping_id')
-    .eq('id', fieldMappingId)
-    .single()
-  if (!fm) return { success: false, error: 'Field mapping not found' }
+  const resolved = resolveTfmId(fieldMappingId)
+  if (resolved.kind !== 'primary') {
+    return { success: false, error: 'Field mapping not found' }
+  }
 
-  const { data: tm } = await supabase
-    .from('table_mappings')
-    .select('id, project_id, source_table_id')
-    .eq('id', fm.table_mapping_id)
-    .single()
-  if (!tm) return { success: false, error: 'Table mapping not found' }
-  const perm = await requireProjectPermission(tm.project_id, 'editor')
+  const ctx = await loadTfmContext(resolved.tfmId)
+  if (!ctx) return { success: false, error: 'Field mapping not found' }
+
+  const perm = await requireProjectPermission(ctx.projectId, 'editor')
   if (!perm.allowed) return { success: false, error: perm.error }
 
-  // Load the current transformation record
   const { data: transformation } = await supabase
     .from('transformations')
     .select('id, generated_sql, status')
-    .eq('field_mapping_id', fieldMappingId)
-    .single()
-  if (!transformation?.generated_sql) return { success: false, error: 'No transform SQL found. Generate a transform first.' }
+    .eq('target_field_mapping_id', ctx.tfm.id)
+    .maybeSingle<Pick<TransformationRow, 'id' | 'generated_sql' | 'status'>>()
+  if (!transformation?.generated_sql) {
+    return { success: false, error: 'No transform SQL found. Generate a transform first.' }
+  }
 
-  const srcField = fm.source_field_id
-    ? (await supabase.from('fields').select('id, name, table_id').eq('id', fm.source_field_id).single()).data
-    : null
-  if (fm.source_field_id && !srcField) return { success: false, error: 'Source field not found' }
+  // Source table: primary's source field's table_id for mapped TFMs; first TM
+  // whose target_table matches for VAs (same pattern as generateTransform).
+  const srcField = ctx.primarySource?.sourceField ?? null
+  let sourceTableId: string | null = srcField?.table_id ?? null
+  if (!sourceTableId) {
+    const { data: anyTm } = await supabase
+      .from('table_mappings')
+      .select('source_table_id')
+      .eq('project_id', ctx.projectId)
+      .eq('target_table_id', ctx.targetField.table_id)
+      .neq('status', 'rejected')
+      .limit(1)
+      .maybeSingle()
+    sourceTableId = (anyTm?.source_table_id as string | undefined) ?? null
+  }
+  if (!sourceTableId) return { success: false, error: 'Source table not found' }
 
-  const sourceTableId = srcField?.table_id ?? tm.source_table_id
   const { data: allSourceFields } = await supabase
     .from('fields')
     .select('name')
@@ -942,57 +1412,59 @@ export async function runFullTransformTest(
 
   const wrappedSql = wrapFieldRefsInJsonb(transformation.generated_sql.replace(/;+$/, '').trim(), fieldNames)
 
-  const { data: rpcResult, error: rpcErr } = await supabaseAdmin.rpc(
-    'execute_transform_full_test',
-    {
-      p_expression: wrappedSql,
-      p_table_id: sourceTableId,
-      p_source_field: srcField?.name ?? '_none_',
+  return guardWrites(ctx.projectId, async () => {
+    const { data: rpcResult, error: rpcErr } = await supabaseAdmin.rpc(
+      'execute_transform_full_test',
+      {
+        p_expression: wrappedSql,
+        p_table_id: sourceTableId,
+        p_source_field: srcField?.name ?? '_none_',
+      },
+    )
+
+    if (rpcErr) return { success: false, error: rpcErr.message }
+
+    const raw = rpcResult as {
+      total_rows: number
+      passed_rows: number
+      failed_rows: number
+      failures: { row_number: number; source_value: string; error_message: string }[]
     }
-  )
 
-  if (rpcErr) return { success: false, error: rpcErr.message }
+    const result: FullTransformTestResult = {
+      totalRows: raw.total_rows ?? 0,
+      passedRows: raw.passed_rows ?? 0,
+      failedRows: raw.failed_rows ?? 0,
+      failures: (raw.failures ?? []).map((f) => ({
+        rowNumber: f.row_number,
+        sourceValue: f.source_value,
+        errorMessage: f.error_message,
+      })),
+    }
 
-  const raw = rpcResult as {
-    total_rows: number
-    passed_rows: number
-    failed_rows: number
-    failures: { row_number: number; source_value: string; error_message: string }[]
-  }
+    const newStatus: TransformationStatus = result.failedRows === 0 ? 'tested' : 'draft'
+    await supabase
+      .from('transformations')
+      .update({ status: newStatus })
+      .eq('id', transformation.id)
 
-  const result: FullTransformTestResult = {
-    totalRows: raw.total_rows ?? 0,
-    passedRows: raw.passed_rows ?? 0,
-    failedRows: raw.failed_rows ?? 0,
-    failures: (raw.failures ?? []).map((f) => ({
-      rowNumber: f.row_number,
-      sourceValue: f.source_value,
-      errorMessage: f.error_message,
-    })),
-  }
-
-  // Update transformation status based on test outcome
-  const newStatus = result.failedRows === 0 ? 'tested' : 'draft'
-  await supabase
-    .from('transformations')
-    .update({ status: newStatus })
-    .eq('id', transformation.id)
-
-  return { success: true, result }
+    return { success: true, result }
+  })
 }
 
-// ── testTransformation ────────────────────────────────────────────────────────
+// ─── testTransformation ───────────────────────────────────────────────────────
 
 export async function testTransformation(
   fieldMappingId: string,
   sql: string,
   contributingFieldNames?: string[],
-  options?: { silent?: boolean }
+  options?: { silent?: boolean },
 ): Promise<{
   success: boolean
   results?: { before: string | null; after: string | null; beforeValues?: Record<string, string | null> }[]
   transformationId?: string
   error?: string
+  errorCode?: TransformWriteErrorCode
 }> {
   const supabase = await createClient()
   const {
@@ -1002,158 +1474,164 @@ export async function testTransformation(
 
   if (!sql.trim()) return { success: false, error: 'No SQL to test' }
 
-  // Fetch field mapping with ownership chain
-  const { data: fm } = await supabase
-    .from('field_mappings')
-    .select('id, source_field_id, target_field_id, table_mapping_id')
-    .eq('id', fieldMappingId)
-    .single()
-  if (!fm) return { success: false, error: 'Field mapping not found' }
+  const resolved = resolveTfmId(fieldMappingId)
+  if (resolved.kind !== 'primary') {
+    return { success: false, error: 'Field mapping not found' }
+  }
 
-  const { data: tm } = await supabase
-    .from('table_mappings')
-    .select('id, project_id, source_table_id')
-    .eq('id', fm.table_mapping_id)
-    .single()
-  if (!tm) return { success: false, error: 'Table mapping not found' }
-  const perm = await requireProjectPermission(tm.project_id, 'editor')
+  const ctx = await loadTfmContext(resolved.tfmId)
+  if (!ctx) return { success: false, error: 'Field mapping not found' }
+
+  const perm = await requireProjectPermission(ctx.projectId, 'editor')
   if (!perm.allowed) return { success: false, error: perm.error }
 
-  // Value assignments have no source field — for constants/expressions we can evaluate directly
-  const isValueAssignment = fm.source_field_id === null
-
-  // Get source field info (if it exists)
-  const srcField = fm.source_field_id
-    ? (await supabase.from('fields').select('id, name, table_id').eq('id', fm.source_field_id).single()).data
-    : null
+  const isValueAssignment = ctx.primarySource == null
+  const srcField = ctx.primarySource?.sourceField ?? null
   if (!isValueAssignment && !srcField) return { success: false, error: 'Source field not found' }
 
-  // Get all field names in source table for JSONB wrapping
-  const sourceTableId = srcField?.table_id ?? tm.source_table_id
+  // Source table: same resolution as runFullTransformTest.
+  let sourceTableId: string | null = srcField?.table_id ?? null
+  if (!sourceTableId) {
+    const { data: anyTm } = await supabase
+      .from('table_mappings')
+      .select('source_table_id')
+      .eq('project_id', ctx.projectId)
+      .eq('target_table_id', ctx.targetField.table_id)
+      .neq('status', 'rejected')
+      .limit(1)
+      .maybeSingle()
+    sourceTableId = (anyTm?.source_table_id as string | undefined) ?? null
+  }
+  if (!sourceTableId) return { success: false, error: 'Source table not found' }
+
   const { data: allSourceFields } = await supabase
     .from('fields')
     .select('name')
     .eq('table_id', sourceTableId)
-
   const fieldNames = (allSourceFields ?? []).map((f) => f.name)
 
-  // Wrap bare field refs with JSONB access (no-op for pure constants)
   const wrappedSql = wrapFieldRefsInJsonb(sql.trim(), fieldNames)
 
-  // For value assignments, evaluate the expression against source table rows
   const sourceFieldNames = srcField ? [srcField.name, ...(contributingFieldNames ?? [])] : (contributingFieldNames ?? [])
   const useMultiField = sourceFieldNames.length > 1
 
-  // Execute via RPC
-  const { data: rpcResult, error: rpcErr } = useMultiField
-    ? await supabaseAdmin.rpc('execute_transform_test', {
-        p_expression: wrappedSql,
-        p_table_id: sourceTableId,
-        p_source_fields: sourceFieldNames,
-        p_limit: 20,
-      })
-    : sourceFieldNames.length === 1
-    ? await supabaseAdmin.rpc('execute_transform_test', {
-        p_expression: wrappedSql,
-        p_table_id: sourceTableId,
-        p_source_field: sourceFieldNames[0],
-        p_limit: 20,
-      })
-    // Value assignment with no source fields — evaluate expression against source table
-    : await supabaseAdmin.rpc('execute_transform_test', {
-        p_expression: wrappedSql,
-        p_table_id: sourceTableId,
-        p_source_field: '_none_',
-        p_limit: 10,
-      })
+  return guardWrites(ctx.projectId, async () => {
+    const { data: rpcResult, error: rpcErr } = useMultiField
+      ? await supabaseAdmin.rpc('execute_transform_test', {
+          p_expression: wrappedSql,
+          p_table_id: sourceTableId,
+          p_source_fields: sourceFieldNames,
+          p_limit: 20,
+        })
+      : sourceFieldNames.length === 1
+      ? await supabaseAdmin.rpc('execute_transform_test', {
+          p_expression: wrappedSql,
+          p_table_id: sourceTableId,
+          p_source_field: sourceFieldNames[0],
+          p_limit: 20,
+        })
+      : await supabaseAdmin.rpc('execute_transform_test', {
+          p_expression: wrappedSql,
+          p_table_id: sourceTableId,
+          p_source_field: '_none_',
+          p_limit: 10,
+        })
 
-  if (rpcErr) {
-    return { success: false, error: rpcErr.message }
-  }
+    if (rpcErr) return { success: false, error: rpcErr.message }
 
-  const rows = (rpcResult as { before_value: unknown; after_value: unknown; before_values?: Record<string, unknown> }[]) ?? []
-  const results = rows.map((r) => ({
-    before: r.before_value != null ? String(r.before_value) : null,
-    after: r.after_value != null ? String(r.after_value) : null,
-    ...(r.before_values ? {
-      beforeValues: Object.fromEntries(
-        Object.entries(r.before_values).map(([k, v]) => [k, v != null ? String(v) : null])
-      ),
-    } : {}),
-  }))
+    const rows = (rpcResult as { before_value: unknown; after_value: unknown; before_values?: Record<string, unknown> }[]) ?? []
+    const results = rows.map((r) => ({
+      before: r.before_value != null ? String(r.before_value) : null,
+      after: r.after_value != null ? String(r.after_value) : null,
+      ...(r.before_values ? {
+        beforeValues: Object.fromEntries(
+          Object.entries(r.before_values).map(([k, v]) => [k, v != null ? String(v) : null]),
+        ),
+      } : {}),
+    }))
 
-  // Update the transformation record with test results and status
-  const { data: existing } = await supabase
-    .from('transformations')
-    .select('id')
-    .eq('field_mapping_id', fieldMappingId)
-    .single()
-
-  let transformationId: string | undefined
-
-  if (existing) {
-    // Never downgrade an applied transform — the auto-preview calls this function
-    // on field selection, which would overwrite 'applied' → 'tested'.
-    await supabase
+    // Upsert-ish: if a transformation exists, attach the test results (but
+    // never downgrade an already-applied transform — the auto-preview calls
+    // this function on field selection).
+    const { data: existing } = await supabase
       .from('transformations')
-      .update({ status: 'tested', test_results: results })
-      .eq('id', existing.id)
-      .neq('status', 'applied')
-    transformationId = existing.id
-  }
+      .select('id')
+      .eq('target_field_mapping_id', ctx.tfm.id)
+      .maybeSingle()
 
-  // Only log explicit user-initiated tests — not the background auto-preview
-  if (!options?.silent) {
-    const srcFldLog = fm.source_field_id
-      ? (await supabase.from('fields').select('name').eq('id', fm.source_field_id).single()).data
-      : null
-    const { data: tgtFldLog } = await supabase.from('fields').select('name').eq('id', fm.target_field_id).single()
-    await logActivity(
-      tm.project_id,
-      'transform_tested',
-      `Transform tested: ${srcFldLog?.name ?? '[value]'} \u2192 ${tgtFldLog?.name ?? '?'}`,
-      'transform',
-      { transformation_id: transformationId, source_field: srcFldLog?.name ?? null, target_field: tgtFldLog?.name }
-    )
-  }
+    let transformationId: string | undefined
+    if (existing) {
+      await supabase
+        .from('transformations')
+        .update({ status: 'tested' as TransformationStatus, test_results: results })
+        .eq('id', existing.id)
+        .neq('status', 'applied')
+      transformationId = existing.id as string
+    }
 
-  return { success: true, results, transformationId }
+    if (!options?.silent) {
+      await logActivity(
+        ctx.projectId,
+        'transform_tested',
+        `Transform tested: ${srcField?.name ?? '[value]'} \u2192 ${ctx.targetField.name}`,
+        'transform',
+        { transformation_id: transformationId, source_field: srcField?.name ?? null, target_field: ctx.targetField.name },
+      )
+    }
+
+    return { success: true, results, transformationId }
+  })
 }
 
-// ── saveTransformation ────────────────────────────────────────────────────────
+// ─── saveTransformation ───────────────────────────────────────────────────────
 
 export async function saveTransformation(
-  transformationId: string
-): Promise<{ success: boolean; error?: string }> {
+  transformationId: string,
+): Promise<{ success: boolean; error?: string; errorCode?: TransformWriteErrorCode }> {
   const supabase = await createClient()
   const {
     data: { user },
   } = await supabase.auth.getUser()
   if (!user) return { success: false, error: 'Not authenticated' }
 
-  const { data: txLookupSave } = await supabaseAdmin.from('transformations').select('field_mapping_id, field_mappings!inner(table_mapping_id, table_mappings!inner(project_id))').eq('id', transformationId).single()
-  if (!txLookupSave) return { success: false, error: 'Transformation not found' }
-  const perm = await requireProjectPermission((txLookupSave as any).field_mappings.table_mappings.project_id, 'editor')
+  const { data: tx } = await supabaseAdmin
+    .from('transformations')
+    .select('id, target_field_mapping_id')
+    .eq('id', transformationId)
+    .maybeSingle<Pick<TransformationRow, 'id' | 'target_field_mapping_id'>>()
+  if (!tx) return { success: false, error: 'Transformation not found' }
+
+  const { data: tfmRow } = await supabaseAdmin
+    .from('target_field_mappings')
+    .select('project_id')
+    .eq('id', tx.target_field_mapping_id)
+    .single<{ project_id: string }>()
+  if (!tfmRow) return { success: false, error: 'Transformation not found' }
+
+  const perm = await requireProjectPermission(tfmRow.project_id, 'editor')
   if (!perm.allowed) return { success: false, error: perm.error }
 
-  const { error } = await supabase
-    .from('transformations')
-    .update({ status: 'saved' })
-    .eq('id', transformationId)
+  return guardWrites(tfmRow.project_id, async () => {
+    const { error } = await supabase
+      .from('transformations')
+      .update({ status: 'saved' as TransformationStatus })
+      .eq('id', transformationId)
 
-  if (error) return { success: false, error: 'Failed to save transformation' }
-  return { success: true }
+    if (error) return { success: false, error: 'Failed to save transformation' }
+    return { success: true }
+  })
 }
 
-// ── autoGenerateAllTransforms ─────────────────────────────────────────────────
+// ─── autoGenerateAllTransforms ────────────────────────────────────────────────
 
 export async function autoGenerateAllTransforms(
-  projectId: string
+  projectId: string,
 ): Promise<{
   success: boolean
   generated: number
   failed: number
   error?: string
+  errorCode?: TransformWriteErrorCode
 }> {
   const supabase = await createClient()
   const {
@@ -1173,57 +1651,53 @@ export async function autoGenerateAllTransforms(
     .single()
   if (!project) return { success: false, generated: 0, failed: 0, error: 'Project not found' }
 
-  // Get transform data to find flagged fields without transforms
-  const pageData = await getTransformData(projectId)
-  if (!pageData.hasMappings) {
-    return { success: true, generated: 0, failed: 0 }
-  }
+  return guardWrites(projectId, async () => {
+    const pageData = await getTransformData(projectId)
+    if (!pageData.hasMappings) return { success: true, generated: 0, failed: 0 }
 
-  // Collect all field items that need transformation but don't have one
-  const targets: FieldItem[] = []
-  for (const ds of pageData.datasets) {
-    for (const tbl of ds.tables) {
-      for (const field of tbl.fields) {
-        if (field.needsTransform && !field.transformation) {
-          targets.push(field)
+    const targets: FieldItem[] = []
+    for (const ds of pageData.datasets) {
+      for (const tbl of ds.tables) {
+        for (const field of tbl.fields) {
+          if (field.needsTransform && !field.transformation) {
+            targets.push(field)
+          }
         }
       }
     }
-  }
 
-  if (targets.length === 0) {
-    return { success: true, generated: 0, failed: 0 }
-  }
+    if (targets.length === 0) return { success: true, generated: 0, failed: 0 }
 
-  let generated = 0
-  let failed = 0
+    let generated = 0
+    let failed = 0
 
-  for (const field of targets) {
-    // Auto-generate a description based on available context
-    const autoDesc = field.typeCompatibility
-      ? `Transform ${field.sourceFieldName} to ${field.targetFieldName}: ${field.typeCompatibility}`
-      : `Map ${field.sourceFieldName} (${field.sourceFieldDataType}) to ${field.targetFieldName} (${field.targetFieldDataType})`
+    for (const field of targets) {
+      const autoDesc = field.typeCompatibility
+        ? `Transform ${field.sourceFieldName} to ${field.targetFieldName}: ${field.typeCompatibility}`
+        : `Map ${field.sourceFieldName} (${field.sourceFieldDataType}) to ${field.targetFieldName} (${field.targetFieldDataType})`
 
-    const result = await generateTransform(field.fieldMappingId, autoDesc)
-    if (result.success) {
-      generated++
-    } else {
-      failed++
+      const result = await generateTransform(field.fieldMappingId, autoDesc)
+      if (result.success) generated++
+      else failed++
     }
-  }
 
-  return { success: true, generated, failed }
+    return { success: true, generated, failed }
+  })
 }
 
-// ── applyTransform ────────────────────────────────────────────────────────────
-// Applies a single field's transform to staged_data_rows via the
-// dq_apply_field_transform RPC. Creates staged rows if none exist for the
-// table mapping yet (incremental staging).
+// ─── applyTransform ───────────────────────────────────────────────────────────
+//
+// Applies a single TFM's transform to staged_data_rows.
+//
+// Mapped TFMs        → `dq_apply_field_transform_joined(tfmId, tgt_name, sql, NULL)`.
+// Value-assignments  → `dq_apply_field_transform(tm_id, src_tbl, tgt_tbl, tgt_name, sql, has_staged)`
+//                      looped over every TM sharing the VA's target_table
+//                      (VAs are global per target table in the new model).
 
 export async function applyTransform(
   fieldMappingId: string,
-  sql: string
-): Promise<{ success: boolean; rowsAffected: number; error?: string }> {
+  sql: string,
+): Promise<{ success: boolean; rowsAffected: number; error?: string; errorCode?: TransformWriteErrorCode }> {
   const supabase = await createClient()
   const {
     data: { user },
@@ -1232,172 +1706,232 @@ export async function applyTransform(
 
   if (!sql.trim()) return { success: false, rowsAffected: 0, error: 'No SQL to apply' }
 
-  // Gate: require the transform to have been tested first
+  const resolved = resolveTfmId(fieldMappingId)
+  if (resolved.kind !== 'primary') {
+    return { success: false, rowsAffected: 0, error: 'Field mapping not found' }
+  }
+
+  // Gate: require the transform to have been tested first.
   const { data: trans } = await supabase
     .from('transformations')
     .select('status')
-    .eq('field_mapping_id', fieldMappingId)
-    .single()
+    .eq('target_field_mapping_id', resolved.tfmId)
+    .maybeSingle<{ status: TransformationStatus }>()
   if (trans && trans.status !== 'tested' && trans.status !== 'applied') {
     return { success: false, rowsAffected: 0, error: 'Run "Test Transform" before applying.' }
   }
 
-  // Resolve ownership chain
-  const { data: fm } = await supabase
-    .from('field_mappings')
-    .select('id, source_field_id, target_field_id, table_mapping_id')
-    .eq('id', fieldMappingId)
-    .single()
-  if (!fm) return { success: false, rowsAffected: 0, error: 'Field mapping not found' }
+  const ctx = await loadTfmContext(resolved.tfmId)
+  if (!ctx) return { success: false, rowsAffected: 0, error: 'Field mapping not found' }
 
-  const { data: tm } = await supabase
-    .from('table_mappings')
-    .select('id, project_id, source_table_id, target_table_id')
-    .eq('id', fm.table_mapping_id)
-    .single()
-  if (!tm) return { success: false, rowsAffected: 0, error: 'Table mapping not found' }
-  const perm = await requireProjectPermission(tm.project_id, 'editor')
+  const perm = await requireProjectPermission(ctx.projectId, 'editor')
   if (!perm.allowed) return { success: false, rowsAffected: 0, error: perm.error }
 
-  // Fetch source and target field names — source may be null for value assignments
-  const srcField = fm.source_field_id
-    ? (await supabase.from('fields').select('id, name, table_id').eq('id', fm.source_field_id).single()).data
-    : null
-  const { data: tgtField } = await supabase.from('fields').select('id, name').eq('id', fm.target_field_id).single()
-  if (!tgtField) return { success: false, rowsAffected: 0, error: 'Target field not found' }
-  if (!fm.source_field_id && !srcField) { /* value assignment — ok */ }
-  else if (!srcField) return { success: false, rowsAffected: 0, error: 'Source field not found' }
-
-  // All source field names for JSONB rewriting
-  const sourceTableId = srcField?.table_id ?? tm.source_table_id
-  const { data: allSourceFields } = await supabase
-    .from('fields')
-    .select('name')
-    .eq('table_id', sourceTableId)
-  const fieldNames = (allSourceFields ?? []).map((f) => f.name)
-
-  const wrappedSql = wrapFieldRefsInJsonb(sql.replace(/;+$/, '').trim(), fieldNames)
-
-  // Check if staged rows already exist for this table mapping
-  const { count: stagedCount } = await supabaseAdmin
-    .from('staged_data_rows')
-    .select('id', { count: 'exact', head: true })
-    .eq('table_mapping_id', tm.id)
-
-  const hasExistingStaged = (stagedCount ?? 0) > 0
-
-  // Execute via RPC
-  const { data: rowsAffected, error: rpcErr } = await supabaseAdmin.rpc(
-    'dq_apply_field_transform',
-    {
-      p_table_mapping_id: tm.id,
-      p_source_table_id: tm.source_table_id,
-      p_target_table_id: tm.target_table_id,
-      p_target_field_name: tgtField.name,
-      p_transform_sql: wrappedSql,
-      p_has_existing_staged: hasExistingStaged,
-    }
-  )
-
-  if (rpcErr) {
-    return { success: false, rowsAffected: 0, error: rpcErr.message }
+  const isValueAssignment = ctx.primarySource == null
+  if (!isValueAssignment && !ctx.primarySource?.sourceField) {
+    return { success: false, rowsAffected: 0, error: 'Source field not found' }
   }
 
-  // Mark this transformation as applied
-  await supabase
-    .from('transformations')
-    .update({ status: 'applied' })
-    .eq('field_mapping_id', fieldMappingId)
+  return guardWrites(ctx.projectId, async () => {
+    const tgtField = ctx.targetField
+    let totalRows = 0
 
-  // Re-flag row_issues now that transform values have changed
-  try {
-    const { flagStagedRowIssues } = await import('@/lib/actions/staged-row-flags')
-    await flagStagedRowIssues(tm.project_id, tm.id)
-  } catch {
-    // Non-critical — row_issues may be stale but staging data is intact
-  }
+    if (!isValueAssignment) {
+      // ── Mapped TFM — single call via the new joined RPC ─────────────────────
+      const srcField = ctx.primarySource!.sourceField!
+      const { data: allSourceFields } = await supabase
+        .from('fields')
+        .select('name')
+        .eq('table_id', srcField.table_id)
+      const fieldNames = (allSourceFields ?? []).map((f) => f.name)
+      const wrappedSql = wrapFieldRefsInJsonb(sql.replace(/;+$/, '').trim(), fieldNames)
 
-  const appliedRows = Number(rowsAffected ?? 0)
-  await logActivity(
-    tm.project_id,
-    'transform_applied',
-    `Transform applied: ${srcField?.name ?? '[value]'} \u2192 ${tgtField.name} — ${appliedRows} row${appliedRows !== 1 ? 's' : ''}`,
-    'transform',
-    {
-      field_mapping_id: fieldMappingId,
-      source_field: srcField?.name ?? null,
-      target_field: tgtField.name,
-      rows_affected: appliedRows,
+      const { data: rowsAffected, error: rpcErr } = await supabase.rpc(
+        'dq_apply_field_transform_joined',
+        {
+          p_target_field_mapping_id: ctx.tfm.id,
+          p_target_field_name: tgtField.name,
+          p_transform_sql: wrappedSql,
+          p_join_spec: null,
+        },
+      )
+
+      if (rpcErr) return { success: false, rowsAffected: 0, error: rpcErr.message }
+
+      totalRows = Number(rowsAffected ?? 0)
+    } else {
+      // ── Value-assignment TFM — loop every TM whose target_table matches ────
+      // Uses the legacy single-TM RPC per Gate 2 G-a decision. A dedicated
+      // `dq_apply_value_assignment` is deferred to Prompt 3c.
+      const { data: tms } = await supabaseAdmin
+        .from('table_mappings')
+        .select('id, source_table_id, target_table_id')
+        .eq('project_id', ctx.projectId)
+        .eq('target_table_id', tgtField.table_id)
+        .neq('status', 'rejected')
+
+      if (!tms || tms.length === 0) {
+        return { success: false, rowsAffected: 0, error: 'No table mapping pairs the target table' }
+      }
+
+      // For VA apply, SQL is constant across TMs. Wrap with empty fieldNames
+      // (VAs don't reference source columns); wrapping is still safe because
+      // `wrapFieldRefsInJsonb` is a no-op when the set is empty.
+      const wrappedSql = wrapFieldRefsInJsonb(sql.replace(/;+$/, '').trim(), [])
+
+      for (const tm of tms) {
+        const { count: stagedCount } = await supabaseAdmin
+          .from('staged_data_rows')
+          .select('id', { count: 'exact', head: true })
+          .eq('table_mapping_id', tm.id)
+
+        const hasExistingStaged = (stagedCount ?? 0) > 0
+
+        const { data: rowsAffected, error: rpcErr } = await supabase.rpc(
+          'dq_apply_field_transform',
+          {
+            p_table_mapping_id: tm.id,
+            p_source_table_id: tm.source_table_id,
+            p_target_table_id: tm.target_table_id,
+            p_target_field_name: tgtField.name,
+            p_transform_sql: wrappedSql,
+            p_has_existing_staged: hasExistingStaged,
+          },
+        )
+
+        if (rpcErr) {
+          console.error('[transformations] applyTransform: VA apply failed', {
+            tmId: tm.id,
+            tfmId: ctx.tfm.id,
+            error: rpcErr.message,
+          })
+          return { success: false, rowsAffected: 0, error: rpcErr.message }
+        }
+
+        totalRows += Number(rowsAffected ?? 0)
+      }
     }
-  )
 
-  revalidatePath(`/app/projects/${tm.project_id}`, 'layout')
-  return { success: true, rowsAffected: appliedRows }
+    // Mark the transformation as applied.
+    await supabase
+      .from('transformations')
+      .update({ status: 'applied' as TransformationStatus })
+      .eq('target_field_mapping_id', ctx.tfm.id)
+
+    // Call into staged-row-flags best-effort. Function is functional
+    // as of Prompt 3d commit; try/catch retained as defense against
+    // unexpected runtime errors (network, DB, RPC failures).
+    try {
+      const { flagStagedRowIssues } = await import('@/lib/actions/staged-row-flags')
+      const tmForFlag = ctx.tableMapping?.id
+        ?? (isValueAssignment
+          ? (await supabaseAdmin
+              .from('table_mappings')
+              .select('id')
+              .eq('project_id', ctx.projectId)
+              .eq('target_table_id', tgtField.table_id)
+              .neq('status', 'rejected')
+              .limit(1)
+              .maybeSingle()).data?.id as string | undefined
+          : undefined)
+      if (tmForFlag) {
+        await flagStagedRowIssues(ctx.projectId, tmForFlag)
+      }
+    } catch {
+      // Non-critical — row_issues may be stale but staging data is intact.
+    }
+
+    const srcField = ctx.primarySource?.sourceField ?? null
+    await logActivity(
+      ctx.projectId,
+      'transform_applied',
+      `Transform applied: ${srcField?.name ?? '[value]'} \u2192 ${tgtField.name} — ${totalRows} row${totalRows !== 1 ? 's' : ''}`,
+      'transform',
+      {
+        field_mapping_id: ctx.tfm.id,
+        source_field: srcField?.name ?? null,
+        target_field: tgtField.name,
+        rows_affected: totalRows,
+      },
+    )
+
+    revalidatePath(`/app/projects/${ctx.projectId}`, 'layout')
+    return { success: true, rowsAffected: totalRows }
+  })
 }
 
-// ── revertTransform ───────────────────────────────────────────────────────────
-// Removes a single target field's staged value from all staged_data_rows for
-// the table mapping, then resets the transformation status back to 'tested'.
-// Uses the revert_field_transform RPC which applies jsonb - text operator so
-// only rows that actually carry the key are touched.
+// ─── revertTransform ──────────────────────────────────────────────────────────
+// Removes a target field's staged value from all matching staged_data_rows and
+// resets the transformation status back to 'tested'. Mapped TFMs revert one
+// TM; VAs loop every TM sharing the target table (mirroring applyTransform).
 
 export async function revertTransform(
-  fieldMappingId: string
-): Promise<{ success: boolean; rowsAffected: number; error?: string }> {
+  fieldMappingId: string,
+): Promise<{ success: boolean; rowsAffected: number; error?: string; errorCode?: TransformWriteErrorCode }> {
   const supabase = await createClient()
   const {
     data: { user },
   } = await supabase.auth.getUser()
   if (!user) return { success: false, rowsAffected: 0, error: 'Not authenticated' }
 
-  // Resolve field mapping → table mapping → project (for permission check)
-  const { data: fm } = await supabaseAdmin
-    .from('field_mappings')
-    .select('id, target_field_id, table_mapping_id, table_mappings!inner(project_id)')
-    .eq('id', fieldMappingId)
-    .single()
+  const resolved = resolveTfmId(fieldMappingId)
+  if (resolved.kind !== 'primary') {
+    return { success: false, rowsAffected: 0, error: 'Field mapping not found' }
+  }
 
-  if (!fm) return { success: false, rowsAffected: 0, error: 'Field mapping not found' }
+  const ctx = await loadTfmContext(resolved.tfmId)
+  if (!ctx) return { success: false, rowsAffected: 0, error: 'Field mapping not found' }
 
-  const projectId = (fm as unknown as { table_mappings: { project_id: string } }).table_mappings.project_id
-  const perm = await requireProjectPermission(projectId, 'editor')
+  const perm = await requireProjectPermission(ctx.projectId, 'editor')
   if (!perm.allowed) return { success: false, rowsAffected: 0, error: perm.error }
 
-  // Look up the target field's name — staged_data_rows uses the field name as the JSONB key
-  const { data: tgtField } = await supabaseAdmin
-    .from('fields')
-    .select('name')
-    .eq('id', fm.target_field_id)
-    .single()
+  return guardWrites(ctx.projectId, async () => {
+    const tgtField = ctx.targetField
 
-  if (!tgtField) return { success: false, rowsAffected: 0, error: 'Target field not found' }
+    // Gather the TM set to revert.
+    let tmIds: string[] = []
+    if (ctx.tableMapping) {
+      tmIds = [ctx.tableMapping.id]
+    } else {
+      const { data: tms } = await supabaseAdmin
+        .from('table_mappings')
+        .select('id')
+        .eq('project_id', ctx.projectId)
+        .eq('target_table_id', tgtField.table_id)
+        .neq('status', 'rejected')
+      tmIds = (tms ?? []).map((t) => t.id as string)
+    }
 
-  const { data, error: rpcErr } = await supabaseAdmin.rpc('revert_field_transform', {
-    p_table_mapping_id: fm.table_mapping_id,
-    p_target_field_name: tgtField.name,
+    let totalReverted = 0
+    for (const tmId of tmIds) {
+      const { data: count, error: rpcErr } = await supabaseAdmin.rpc('revert_field_transform', {
+        p_table_mapping_id: tmId,
+        p_target_field_name: tgtField.name,
+      })
+      if (rpcErr) return { success: false, rowsAffected: 0, error: rpcErr.message }
+      totalReverted += (count as number) ?? 0
+    }
+
+    // Reset transform status from 'applied' back to 'tested'.
+    await supabaseAdmin
+      .from('transformations')
+      .update({ status: 'tested' as TransformationStatus })
+      .eq('target_field_mapping_id', ctx.tfm.id)
+      .eq('status', 'applied')
+
+    revalidatePath(`/app/projects/${ctx.projectId}`, 'layout')
+    return { success: true, rowsAffected: totalReverted }
   })
-
-  if (rpcErr) return { success: false, rowsAffected: 0, error: rpcErr.message }
-
-  // Reset transform status from 'applied' back to 'tested'
-  await supabaseAdmin
-    .from('transformations')
-    .update({ status: 'tested' })
-    .eq('field_mapping_id', fieldMappingId)
-    .eq('status', 'applied')
-
-  revalidatePath(`/app/projects/${projectId}`, 'layout')
-  return { success: true, rowsAffected: (data as number) ?? 0 }
 }
 
-// ── getStagedPreviewForField ──────────────────────────────────────────────────
+// ─── getStagedPreviewForField ─────────────────────────────────────────────────
 // Reads a sample of staged_data_rows and extracts the source → target pair for
-// a specific field mapping. Used by the Transform Data Preview after Apply so
-// the user sees real staged values rather than a re-executed live SQL preview.
+// a specific TFM. Used by the Transform Data Preview after Apply so the user
+// sees real staged values rather than a re-executed live SQL preview.
 
 export async function getStagedPreviewForField(
   fieldMappingId: string,
-  limit = 20
+  limit = 20,
 ): Promise<{
   success: boolean
   rows?: Array<{ sourceValue: string | null; targetValue: string | null }>
@@ -1410,38 +1944,44 @@ export async function getStagedPreviewForField(
   } = await supabase.auth.getUser()
   if (!user) return { success: false, error: 'Not authenticated' }
 
-  // Resolve source/target field IDs and table mapping
-  const { data: fm } = await supabase
-    .from('field_mappings')
-    .select('source_field_id, target_field_id, table_mapping_id')
-    .eq('id', fieldMappingId)
-    .single()
+  const resolved = resolveTfmId(fieldMappingId)
+  if (resolved.kind === 'unknown') {
+    return { success: false, error: 'Field mapping not found' }
+  }
 
-  if (!fm) return { success: false, error: 'Field mapping not found' }
+  const ctx = await loadTfmContext(resolved.tfmId)
+  if (!ctx) return { success: false, error: 'Field mapping not found' }
 
-  // Resolve both field names in parallel
-  const [srcResult, tgtResult] = await Promise.all([
-    fm.source_field_id
-      ? supabase.from('fields').select('name').eq('id', fm.source_field_id).single()
-      : Promise.resolve({ data: null }),
-    supabase.from('fields').select('name').eq('id', fm.target_field_id).single(),
-  ])
+  const srcFieldName = ctx.primarySource?.sourceField?.name ?? null
+  const tgtFieldName = ctx.targetField.name
 
-  if (!tgtResult.data) return { success: false, error: 'Target field not found' }
-  const srcFieldName = srcResult.data?.name ?? null
-  const tgtFieldName = tgtResult.data.name
+  // Pick the TM to read from. For mapped: the resolved linking TM. For VAs:
+  // the first TM sharing the target table. Matches the getTransformData
+  // routing so what the user sees under a TableGroup maps to THIS TM's
+  // staged rows.
+  let tmId: string | null = ctx.tableMapping?.id ?? null
+  if (!tmId) {
+    const { data: anyTm } = await supabase
+      .from('table_mappings')
+      .select('id')
+      .eq('project_id', ctx.projectId)
+      .eq('target_table_id', ctx.targetField.table_id)
+      .neq('status', 'rejected')
+      .limit(1)
+      .maybeSingle()
+    tmId = (anyTm?.id as string | undefined) ?? null
+  }
+  if (!tmId) return { success: true, rows: [], totalRows: 0 }
 
-  // Count total staged rows for this table mapping
   const { count } = await supabase
     .from('staged_data_rows')
     .select('id', { count: 'exact', head: true })
-    .eq('table_mapping_id', fm.table_mapping_id)
+    .eq('table_mapping_id', tmId)
 
-  // Fetch a page of staged rows
   const { data: rows, error } = await supabase
     .from('staged_data_rows')
     .select('source_row_data, transformed_row_data')
-    .eq('table_mapping_id', fm.table_mapping_id)
+    .eq('table_mapping_id', tmId)
     .order('row_number', { ascending: true })
     .limit(limit)
 
@@ -1459,16 +1999,15 @@ export async function getStagedPreviewForField(
   return { success: true, rows: mapped, totalRows: count ?? 0 }
 }
 
-// ── previewTransformDistinct ──────────────────────────────────────────────────
+// ─── previewTransformDistinct ─────────────────────────────────────────────────
 // Returns all distinct (before, after, count) triples for a SQL expression.
 // Used by the "All Distinct Values" toggle in the live preview panel.
-// For many-to-one mappings pass contributingFieldNames so the before-values
-// object includes all contributing source fields, not just the primary.
+// Read path — no maintenance guard (viewer permission suffices).
 
 export async function previewTransformDistinct(
   fieldMappingId: string,
   sql: string,
-  contributingFieldNames?: string[]
+  contributingFieldNames?: string[],
 ): Promise<{
   success: boolean
   results?: { before: string | null; beforeValues: Record<string, string | null>; after: string | null; count: number }[]
@@ -1482,28 +2021,33 @@ export async function previewTransformDistinct(
 
   if (!sql.trim()) return { success: false, error: 'No SQL to preview' }
 
-  const { data: fm } = await supabase
-    .from('field_mappings')
-    .select('id, source_field_id, table_mapping_id')
-    .eq('id', fieldMappingId)
-    .single()
-  if (!fm) return { success: false, error: 'Field mapping not found' }
+  const resolved = resolveTfmId(fieldMappingId)
+  if (resolved.kind === 'unknown') {
+    return { success: false, error: 'Field mapping not found' }
+  }
 
-  const { data: tm } = await supabase
-    .from('table_mappings')
-    .select('id, project_id, source_table_id')
-    .eq('id', fm.table_mapping_id)
-    .single()
-  if (!tm) return { success: false, error: 'Table mapping not found' }
-  const perm = await requireProjectPermission(tm.project_id, 'viewer')
+  const ctx = await loadTfmContext(resolved.tfmId)
+  if (!ctx) return { success: false, error: 'Field mapping not found' }
+
+  const perm = await requireProjectPermission(ctx.projectId, 'viewer')
   if (!perm.allowed) return { success: false, error: perm.error }
 
-  const srcField = fm.source_field_id
-    ? (await supabase.from('fields').select('id, name, table_id').eq('id', fm.source_field_id).single()).data
-    : null
-  if (fm.source_field_id && !srcField) return { success: false, error: 'Source field not found' }
+  const srcField = ctx.primarySource?.sourceField ?? null
 
-  const sourceTableId = srcField?.table_id ?? tm.source_table_id
+  let sourceTableId: string | null = srcField?.table_id ?? null
+  if (!sourceTableId) {
+    const { data: anyTm } = await supabase
+      .from('table_mappings')
+      .select('source_table_id')
+      .eq('project_id', ctx.projectId)
+      .eq('target_table_id', ctx.targetField.table_id)
+      .neq('status', 'rejected')
+      .limit(1)
+      .maybeSingle()
+    sourceTableId = (anyTm?.source_table_id as string | undefined) ?? null
+  }
+  if (!sourceTableId) return { success: false, error: 'Source table not found' }
+
   const { data: allSourceFields } = await supabase
     .from('fields')
     .select('name')
@@ -1522,19 +2066,21 @@ export async function previewTransformDistinct(
       p_source_fields: sourceFields,
       p_transform_sql: wrappedSql,
       p_limit: 200,
-    }
+    },
   )
 
-  if (rpcErr) {
-    return { success: false, error: rpcErr.message }
-  }
+  if (rpcErr) return { success: false, error: rpcErr.message }
 
   const rows = (rpcResult as { before_values: unknown; after_value: unknown; occurrence_count: number }[]) ?? []
   const results = rows.map((r) => {
     const bv = r.before_values as Record<string, string | null> | null
-    // If the DB returned an error sentinel, surface it
     if (bv && (bv as { _error?: boolean })._error) {
-      return { before: null, beforeValues: {} as Record<string, string | null>, after: r.after_value != null ? String(r.after_value) : null, count: 0 }
+      return {
+        before: null,
+        beforeValues: {} as Record<string, string | null>,
+        after: r.after_value != null ? String(r.after_value) : null,
+        count: 0,
+      }
     }
     const primaryVal = bv && srcField ? (bv[srcField.name] ?? null) : null
     return {
@@ -1548,7 +2094,7 @@ export async function previewTransformDistinct(
   return { success: true, results }
 }
 
-// ── suggestTransformDescription ───────────────────────────────────────────────
+// ─── suggestTransformDescription ──────────────────────────────────────────────
 
 const SUGGEST_SYSTEM_PROMPT = `You are a data migration expert. Given context about a source-to-target field mapping, generate a concise natural language description of how this field should be transformed.
 
@@ -1571,7 +2117,7 @@ Examples of good descriptions:
 Return ONLY the description text — no explanation, no preamble, no markdown.`
 
 export async function suggestTransformDescription(
-  fieldMappingId: string
+  fieldMappingId: string,
 ): Promise<{ success: boolean; suggestion?: string; error?: string }> {
   const supabase = await createClient()
   const {
@@ -1582,66 +2128,104 @@ export async function suggestTransformDescription(
   const rateLimit = checkAIRateLimit(user.id)
   if (!rateLimit.allowed) return { success: false, error: rateLimit.error }
 
-  // Fetch field mapping with context
-  const { data: fm } = await supabase
-    .from('field_mappings')
-    .select('id, source_field_id, target_field_id, type_compatibility, confidence, ai_reasoning, table_mapping_id')
-    .eq('id', fieldMappingId)
-    .single()
-  if (!fm) return { success: false, error: 'Field mapping not found' }
+  const resolved = resolveTfmId(fieldMappingId)
+  if (resolved.kind !== 'primary') {
+    return { success: false, error: 'Field mapping not found' }
+  }
 
-  const { data: tm } = await supabase
-    .from('table_mappings')
-    .select('id, project_id, source_table_id, target_table_id')
-    .eq('id', fm.table_mapping_id)
-    .single()
-  if (!tm) return { success: false, error: 'Mapping not found' }
-  const perm = await requireProjectPermission(tm.project_id, 'editor')
+  const ctx = await loadTfmContext(resolved.tfmId)
+  if (!ctx) return { success: false, error: 'Field mapping not found' }
+
+  const perm = await requireProjectPermission(ctx.projectId, 'editor')
   if (!perm.allowed) return { success: false, error: perm.error }
 
-  const srcField = fm.source_field_id
-    ? (await supabase.from('fields').select('id, name, data_type, inferred_type, is_nullable').eq('id', fm.source_field_id).single()).data
-    : null
-  const { data: tgtField } = await supabase.from('fields').select('id, name, data_type, inferred_type, is_nullable').eq('id', fm.target_field_id).single()
-  if (fm.source_field_id && !srcField) return { success: false, error: 'Source field not found' }
-  if (!tgtField) return { success: false, error: 'Target field not found' }
+  const srcField = ctx.primarySource?.sourceField ?? null
+  const tgtField = ctx.targetField
+
+  const { data: tgtFieldFull } = await supabase
+    .from('fields')
+    .select('id, name, data_type, inferred_type, is_nullable')
+    .eq('id', tgtField.id)
+    .single()
+  if (!tgtFieldFull) return { success: false, error: 'Target field not found' }
+
+  const { data: srcFieldFull } = srcField
+    ? await supabase
+        .from('fields')
+        .select('id, name, data_type, inferred_type, is_nullable')
+        .eq('id', srcField.id)
+        .single()
+    : { data: null }
+  if (srcField && !srcFieldFull) return { success: false, error: 'Source field not found' }
 
   const fieldIds = srcField ? [srcField.id, tgtField.id] : [tgtField.id]
-  const ctx = await buildAIContext(tm.project_id, {
-    tableIds: [tm.source_table_id, tm.target_table_id],
-    fieldIds,
-    includeProfilingStats: true,
-    includeValueDistributions: true,
-    includeSampleValues: true,
-    includeDocuments: true,
-    maxDistributionValues: 20,
-  }, user.id)
+  // Tables: if mapped, use the resolved TM's pair; else collect the VA's
+  // target table and any matching TM's source table.
+  let tableIds: string[]
+  if (ctx.tableMapping) {
+    tableIds = [ctx.tableMapping.source_table_id, ctx.tableMapping.target_table_id]
+  } else {
+    const { data: anyTm } = await supabase
+      .from('table_mappings')
+      .select('source_table_id, target_table_id')
+      .eq('project_id', ctx.projectId)
+      .eq('target_table_id', tgtField.table_id)
+      .neq('status', 'rejected')
+      .limit(1)
+      .maybeSingle()
+    tableIds = anyTm
+      ? [anyTm.source_table_id as string, anyTm.target_table_id as string]
+      : [tgtField.table_id]
+  }
 
-  const srcFieldCtx = srcField ? ctx.source_tables.flatMap((t) => t.fields).find((f) => f.name === srcField.name) : null
-  const tgtFieldCtx = ctx.target_tables.flatMap((t) => t.fields).find((f) => f.name === tgtField.name)
-  const docsBlock = formatDocumentsForPrompt(ctx.documents)
+  const aiCtx = await buildAIContext(
+    ctx.projectId,
+    {
+      tableIds,
+      fieldIds,
+      includeProfilingStats: true,
+      includeValueDistributions: true,
+      includeSampleValues: true,
+      includeDocuments: true,
+      maxDistributionValues: 20,
+    },
+    user.id,
+  )
 
-  const fmWithReasoning = fm as typeof fm & { ai_reasoning?: string | null }
+  const srcFieldCtx = srcField
+    ? aiCtx.source_tables.flatMap((t) => t.fields).find((f) => f.name === srcField.name)
+    : null
+  const tgtFieldCtx = aiCtx.target_tables.flatMap((t) => t.fields).find((f) => f.name === tgtField.name)
+  const docsBlock = formatDocumentsForPrompt(aiCtx.documents)
 
-  const sourceBlock = srcField
-    ? `<source_field>\n${srcFieldCtx ? formatFieldForPrompt(srcFieldCtx) : `${srcField.name} (${srcField.data_type})\n  Nullable: ${srcField.is_nullable}`}\n</source_field>`
+  const typeCompat = ctx.primarySource?.mappingSourceId
+    ? (await supabase
+        .from('mapping_sources')
+        .select('type_compatibility')
+        .eq('id', ctx.primarySource.mappingSourceId)
+        .single()
+      ).data?.type_compatibility ?? null
+    : null
+
+  const sourceBlock = srcFieldFull
+    ? `<source_field>\n${srcFieldCtx ? formatFieldForPrompt(srcFieldCtx) : `${(srcFieldFull as { name: string }).name} (${(srcFieldFull as { data_type: string }).data_type})\n  Nullable: ${(srcFieldFull as { is_nullable: boolean }).is_nullable}`}\n</source_field>`
     : `<source_field>\nNo source field — this is a value assignment. Define a constant or expression for the target field.\n</source_field>`
 
   const userMessage = `${sourceBlock}
 
 <target_field>
-${tgtField.name} (${tgtField.data_type}${tgtField.inferred_type ? `, ${tgtField.inferred_type}` : ''})
-Nullable: ${tgtField.is_nullable}
+${(tgtFieldFull as { name: string }).name} (${(tgtFieldFull as { data_type: string }).data_type}${(tgtFieldFull as { inferred_type?: string | null }).inferred_type ? `, ${(tgtFieldFull as { inferred_type?: string | null }).inferred_type}` : ''})
+Nullable: ${(tgtFieldFull as { is_nullable: boolean }).is_nullable}
 ${tgtFieldCtx && tgtFieldCtx.cardinality > 0 ? `Distinct values: ${tgtFieldCtx.cardinality}` : ''}
 </target_field>
 
 <mapping_context>
-Type compatibility: ${fm.type_compatibility ?? 'Not specified'}
-Confidence: ${fm.confidence ?? 'N/A'}%
-AI reasoning: ${fmWithReasoning.ai_reasoning ?? 'Not available'}
+Type compatibility: ${typeCompat ?? 'Not specified'}
+Confidence: ${ctx.primarySource?.mappingSourceId ? (ctx.tfm.confidence ?? 'N/A') : (ctx.tfm.confidence ?? 'N/A')}%
+AI reasoning: ${ctx.tfm.ai_reasoning ?? 'Not available'}
 </mapping_context>
 ${docsBlock}
-${ctx.intelligence_context ? ctx.intelligence_context + '\n\n' : ''}Suggest a transformation description for this field mapping.`
+${aiCtx.intelligence_context ? aiCtx.intelligence_context + '\n\n' : ''}Suggest a transformation description for this field mapping.`
 
   let suggestion: string
   try {
@@ -1653,10 +2237,13 @@ ${ctx.intelligence_context ? ctx.intelligence_context + '\n\n' : ''}Suggest a tr
   return { success: true, suggestion: suggestion.trim() }
 }
 
-// ── Dismiss / reinstate needs_transformation ──────────────────────────────────
+// ─── Dismiss / reinstate needs_transformation ────────────────────────────────
+// Writes to `target_field_mappings.needs_transformation` (migration 075). Per
+// Gate 2 Q4 these functions preserve throw-on-error: guard failures propagate
+// as native Error instances (matching `acknowledgeField` precedent).
 
 /**
- * Marks a field mapping as NOT needing transformation.
+ * Marks a TFM as NOT needing transformation.
  * Used when the AI incorrectly flagged a direct-passthrough field.
  * Does NOT delete any existing transformation record.
  */
@@ -1666,18 +2253,29 @@ export async function dismissTransformNeeded(
 ): Promise<{ success: boolean; error?: string }> {
   const perm = await requireProjectPermission(projectId, 'editor')
   if (!perm.allowed) return { success: false, error: perm.error }
+
+  await assertMappingWritesEnabled(projectId)
+
+  const resolved = resolveTfmId(fieldMappingId)
+  if (resolved.kind !== 'primary') {
+    throw new Error(`Failed to dismiss transform: invalid id ${fieldMappingId}`)
+  }
+
   const supabase = await createClient()
   const { error } = await supabase
-    .from('field_mappings')
+    .from('target_field_mappings')
     .update({ needs_transformation: false })
-    .eq('id', fieldMappingId)
+    .eq('id', resolved.tfmId)
+    .eq('project_id', projectId)
+
   if (error) throw new Error(`Failed to dismiss transform: ${error.message}`)
+
   revalidatePath(`/app/projects/${projectId}`, 'layout')
   return { success: true }
 }
 
 /**
- * Reinstates a field mapping as needing transformation.
+ * Reinstates a TFM as needing transformation.
  * Used to undo a previous dismissal.
  */
 export async function reinstateTransformNeeded(
@@ -1686,25 +2284,43 @@ export async function reinstateTransformNeeded(
 ): Promise<{ success: boolean; error?: string }> {
   const perm = await requireProjectPermission(projectId, 'editor')
   if (!perm.allowed) return { success: false, error: perm.error }
+
+  await assertMappingWritesEnabled(projectId)
+
+  const resolved = resolveTfmId(fieldMappingId)
+  if (resolved.kind !== 'primary') {
+    throw new Error(`Failed to reinstate transform: invalid id ${fieldMappingId}`)
+  }
+
   const supabase = await createClient()
   const { error } = await supabase
-    .from('field_mappings')
+    .from('target_field_mappings')
     .update({ needs_transformation: true })
-    .eq('id', fieldMappingId)
+    .eq('id', resolved.tfmId)
+    .eq('project_id', projectId)
+
   if (error) throw new Error(`Failed to reinstate transform: ${error.message}`)
+
   revalidatePath(`/app/projects/${projectId}`, 'layout')
   return { success: true }
 }
 
-// ── resetFieldTransform ───────────────────────────────────────────────────────
-// Removes the transform row for a field mapping and, if the transform was
-// already applied, reverts the staged JSONB key on all staged_data_rows for
-// the parent table mapping. Called before editing or deleting a field mapping
-// so that stale SQL and orphaned staged keys are never left behind.
+// ─── resetFieldTransform ──────────────────────────────────────────────────────
+//
+// Removes the transformation row for a TFM and, if the transform was applied,
+// reverts the staged JSONB key on every matching staged_data_rows row. Called
+// from `lib/actions/mappings.ts` before editing or deleting a mapping so stale
+// SQL and orphaned staged keys never linger.
+//
+// NOTE ON GUARDING: this function intentionally does NOT call
+// `assertMappingWritesEnabled`. It is invoked exclusively from already-guarded
+// write paths in `mappings.ts` (via `guardWrites`). Re-asserting would
+// double-call the guard (inefficient) and would complicate the throw-on-error
+// contract the caller relies on.
 
 export async function resetFieldTransform(
   fieldMappingId: string,
-  options?: { skipFKCascade?: boolean }
+  options?: { skipFKCascade?: boolean },
 ): Promise<{
   success: boolean
   hadTransform: boolean
@@ -1714,21 +2330,19 @@ export async function resetFieldTransform(
   fkRowsReverted?: number
   error?: string
 }> {
-  // 1. Look up field mapping to get target field name and table mapping id
-  const { data: fm } = await supabaseAdmin
-    .from('field_mappings')
-    .select('id, table_mapping_id, target_field_id, fields!field_mappings_target_field_id_fkey(name), table_mappings!inner(project_id)')
-    .eq('id', fieldMappingId)
-    .single()
+  const resolved = resolveTfmId(fieldMappingId)
+  if (resolved.kind !== 'primary') {
+    return { success: true, hadTransform: false, hadStagedData: false, rowsReverted: 0 }
+  }
 
-  if (!fm) return { success: true, hadTransform: false, hadStagedData: false, rowsReverted: 0 }
+  const ctx = await loadTfmContext(resolved.tfmId)
+  if (!ctx) return { success: true, hadTransform: false, hadStagedData: false, rowsReverted: 0 }
 
-  // 2. Check if a transform exists
   const { data: transform } = await supabaseAdmin
     .from('transformations')
     .select('id, status')
-    .eq('field_mapping_id', fieldMappingId)
-    .maybeSingle()
+    .eq('target_field_mapping_id', ctx.tfm.id)
+    .maybeSingle<{ id: string; status: TransformationStatus }>()
 
   if (!transform) {
     return { success: true, hadTransform: false, hadStagedData: false, rowsReverted: 0 }
@@ -1737,58 +2351,74 @@ export async function resetFieldTransform(
   let hadStagedData = false
   let rowsReverted = 0
 
-  // 3. If transform was applied, revert the staged JSONB key using the RPC
+  // Revert staged data via the existing RPC, scoped to the TM set this TFM
+  // renders against (mapped: 1 TM, VA: all matching TMs).
   if (transform.status === 'applied') {
-    const targetFieldName = (fm as unknown as { fields: { name: string } | null }).fields?.name
-    if (targetFieldName) {
+    const tgtFieldName = ctx.targetField.name
+    let tmIds: string[] = []
+    if (ctx.tableMapping) {
+      tmIds = [ctx.tableMapping.id]
+    } else {
+      const { data: tms } = await supabaseAdmin
+        .from('table_mappings')
+        .select('id')
+        .eq('project_id', ctx.projectId)
+        .eq('target_table_id', ctx.targetField.table_id)
+        .neq('status', 'rejected')
+      tmIds = (tms ?? []).map((t) => t.id as string)
+    }
+
+    for (const tmId of tmIds) {
       const { data: count } = await supabaseAdmin.rpc('revert_field_transform', {
-        p_table_mapping_id: fm.table_mapping_id,
-        p_target_field_name: targetFieldName,
+        p_table_mapping_id: tmId,
+        p_target_field_name: tgtFieldName,
       })
       hadStagedData = true
-      rowsReverted = (count as number) ?? 0
+      rowsReverted += (count as number) ?? 0
     }
   }
 
-  // 4. Delete the transform row — clean slate for the new mapping
+  // Delete the transformation row — clean slate for the new mapping.
   await supabaseAdmin
     .from('transformations')
     .delete()
-    .eq('field_mapping_id', fieldMappingId)
+    .eq('target_field_mapping_id', ctx.tfm.id)
 
-  // 5. If this is a PK field, mark FK dependent transforms as stale.
-  // Using stale (not delete) preserves the SQL for reference while signalling
-  // the user that the FK transform may no longer match the new PK format.
-  // Dynamic import avoids a circular dependency between transformations.ts and
-  // fk-cascade.ts. skipFKCascade prevents infinite recursion when called from
-  // within staleFKDependentTransforms itself.
+  // If this target field is a PK, stale all FK-dependent transforms.
+  // Dynamic import avoids a circular dependency with fk-cascade.ts.
+  // `skipFKCascade: true` prevents recursion when called from within
+  // `staleFKDependentTransforms` itself.
   let fkDependentsReset = 0
   let fkRowsReverted = 0
 
   if (!options?.skipFKCascade) {
-    const projectId = (fm as unknown as { table_mappings: { project_id: string } }).table_mappings?.project_id
-    if (projectId && fm.target_field_id) {
-      const { staleFKDependentTransforms } = await import('@/lib/actions/fk-cascade')
-      const fkResult = await staleFKDependentTransforms(projectId, fm.target_field_id)
-      fkDependentsReset = fkResult.dependentsStaled
-      fkRowsReverted = fkResult.stagedRowsReverted
-    }
+    const { staleFKDependentTransforms } = await import('@/lib/actions/fk-cascade')
+    const fkResult = await staleFKDependentTransforms(ctx.projectId, ctx.targetField.id)
+    fkDependentsReset = fkResult.dependentsStaled
+    fkRowsReverted = fkResult.stagedRowsReverted
   }
 
   return { success: true, hadTransform: true, hadStagedData, rowsReverted, fkDependentsReset, fkRowsReverted }
 }
 
-// ── checkFieldMappingHasTransform ─────────────────────────────────────────────
+// ─── checkFieldMappingHasTransform ────────────────────────────────────────────
 // Lightweight check used by the UI before showing a re-map confirmation dialog.
+// Accepts either a bare TFM id or a shimmed contributor id. Contributors don't
+// own a transformation; short-circuit to `hasTransform: false`.
 
 export async function checkFieldMappingHasTransform(
-  fieldMappingId: string
+  fieldMappingId: string,
 ): Promise<{ hasTransform: boolean; status?: string; hasStaged: boolean }> {
+  const resolved = resolveTfmId(fieldMappingId)
+  if (resolved.kind !== 'primary') {
+    return { hasTransform: false, hasStaged: false }
+  }
+
   const { data: transform } = await supabaseAdmin
     .from('transformations')
     .select('id, status')
-    .eq('field_mapping_id', fieldMappingId)
-    .maybeSingle()
+    .eq('target_field_mapping_id', resolved.tfmId)
+    .maybeSingle<{ id: string; status: TransformationStatus }>()
 
   return {
     hasTransform: !!transform,
@@ -1797,32 +2427,25 @@ export async function checkFieldMappingHasTransform(
   }
 }
 
-// ── resetAllTransformsForTable ────────────────────────────────────────────────
-// Clears all staged_data_rows for a table mapping before bulk-deleting its
-// field mappings. The transforms themselves are cascade-deleted by the caller
-// when field_mappings are deleted. This function handles the staged data gap
-// that cascade does not cover (staged_data_rows links to table_mappings, not
-// field_mappings, so no cascade fires from field_mapping deletion).
+// ─── resetAllTransformsForTable ───────────────────────────────────────────────
+//
+// Deletes all staged_data_rows for a table mapping before the caller tears
+// down its field mappings. Transformations themselves cascade via
+// `transformations.target_field_mapping_id` ON DELETE CASCADE when the owning
+// TFM is deleted — that is the responsibility of `mappings.ts`'s
+// `deleteTableMapping` (which computes orphaned TFMs explicitly).
+//
+// The `transformsReset` count is informational only; in the new model the
+// deletion of transformation rows is scoped by TFM orphan-ship rather than
+// TM-id, so we report 0 here and let the caller compute the actual transform
+// fallout from its own `computeOrphanedTfmsForTmDelete` pass.
+//
+// NOTE ON GUARDING: same pattern as `resetFieldTransform` — called exclusively
+// from guarded write paths in `mappings.ts`; no re-assertion.
 
 export async function resetAllTransformsForTable(
-  tableMappingId: string
+  tableMappingId: string,
 ): Promise<{ success: boolean; transformsReset: number; stagedRowsReverted: number; error?: string }> {
-  // 1. Count transforms about to be cascade-deleted (informational)
-  const { data: fieldMappings } = await supabaseAdmin
-    .from('field_mappings')
-    .select('id')
-    .eq('table_mapping_id', tableMappingId)
-
-  const fmIds = (fieldMappings ?? []).map((fm) => fm.id)
-
-  const { count: transformCount } = await supabaseAdmin
-    .from('transformations')
-    .select('id', { count: 'exact', head: true })
-    .in('field_mapping_id', fmIds.length > 0 ? fmIds : ['none'])
-
-  // 2. Delete all staged rows for this table mapping in one shot.
-  //    This is correct — we're wiping and regenerating all field mappings,
-  //    so all staged data is by definition stale regardless of per-field status.
   const { count: stagedCount } = await supabaseAdmin
     .from('staged_data_rows')
     .delete({ count: 'exact' })
@@ -1830,7 +2453,7 @@ export async function resetAllTransformsForTable(
 
   return {
     success: true,
-    transformsReset: transformCount ?? 0,
+    transformsReset: 0,
     stagedRowsReverted: stagedCount ?? 0,
   }
 }

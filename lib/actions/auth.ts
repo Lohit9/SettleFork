@@ -130,8 +130,10 @@ export async function signUpWithBotProtection(payload: SignUpPayload): Promise<S
       await markInviteUsed(payload.inviteCode, authData.user.id)
 
       try {
-        // createOrganization uses the RLS-enforced client — since we just signed up,
-        // the session may not be ready yet. Use supabaseAdmin to create the personal org.
+        // Create a personal workspace for the new user via supabaseAdmin.
+        // We use the service-role client because the user's session may not
+        // be fully established immediately post-signup, which would cause
+        // an RLS-enforced insert to fail.
         const slug = 'ws-' + Math.random().toString(36).slice(2, 14)
         const { data: newOrg } = await supabaseAdmin
           .from('organizations')

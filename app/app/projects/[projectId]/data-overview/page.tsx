@@ -38,6 +38,8 @@ export default async function DataOverviewPage({ params, searchParams }: Props) 
     sourceSystem: fullProject.datasets?.find((d) => d.role === 'source')?.name ?? null,
     targetSystem: fullProject.datasets?.find((d) => d.role === 'target')?.name ?? null,
     createdAt: fullProject.created_at,
+    useMappingRedesign: fullProject.use_mapping_redesign,
+    maintenanceMode: fullProject.maintenance_mode,
   } : undefined
 
   return (

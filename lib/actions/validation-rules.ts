@@ -474,55 +474,106 @@ export async function executeCustomRules(
 
   if (rules.length === 0) return { success: true, newIssues: 0, warnings: [] }
 
-  // Batch-fetch field_mappings + transformations for every rule that targets a
-  // field, so we can attribute root_cause_breakdown at insert time without a
-  // per-issue round-trip. Rules can be attached to either a source field
-  // (custom user rules) or a target field (DDL-seeded CHECK-constraint rules).
+  // ───────────────────────────────────────────────────────────────────────────
+  // Guard-wiring decision (Prompt 3d, Step 3D-7, 2026-04-22): no
+  // `assertMappingWritesEnabled` guard on the block below. The writes in
+  // executeCustomRules land on `quality_issues` and `validation_rules` —
+  // NOT on the mapping-shape surface (`target_field_mappings` /
+  // `mapping_sources`). Maintenance mode guards mapping-shape mutations
+  // only; quality-detection output must continue to flow during
+  // maintenance so scans stay usable.
+  // ───────────────────────────────────────────────────────────────────────────
+  //
+  // Batch-fetch TFM + MS + transformations for every rule that targets a
+  // field, so we can attribute root_cause_breakdown at insert time without
+  // a per-issue round-trip. Rules can be attached to either a source field
+  // (custom user rules, matched via mapping_sources.source_field_id) or a
+  // target field (DDL-seeded CHECK-constraint rules, matched via
+  // target_field_mappings.target_field_id). Both paths flatten into a
+  // single `fmByFieldId: field_id → { id: target_field_mapping_id }` map
+  // so downstream attribution logic stays identical to the legacy shape.
   const ruleFieldIds = rules
     .map((r) => r.field_id)
     .filter((id): id is string => Boolean(id))
 
-  type FmRow = {
-    id: string
-    source_field_id: string | null
-    target_field_id: string | null
-    needs_transformation: boolean | null
-  }
-  const fmByFieldId = new Map<string, FmRow>()
-  let fmIds: string[] = []
+  type TfmRef = { id: string }
+  const fmByFieldId = new Map<string, TfmRef>()
+  let tfmIds: string[] = []
 
   if (ruleFieldIds.length > 0) {
-    const { data: fmRowsSource } = await supabaseAdmin
-      .from('field_mappings')
-      .select('id, source_field_id, target_field_id, needs_transformation, status')
+    // (a) Source-side: a mapping_source whose source_field_id matches a rule
+    //     field, with the owning TFM joined for project scoping + status
+    //     filtering. A source field can back multiple TFMs (primary in one,
+    //     contributor in another); Map.set last-wins is preserved from the
+    //     legacy behaviour — same non-determinism, same downstream effect.
+    const { data: msSourceRows } = await supabaseAdmin
+      .from('mapping_sources')
+      .select(
+        `
+        source_field_id,
+        target_field_mapping:target_field_mappings!inner (
+          id, project_id, status
+        )
+      `
+      )
       .in('source_field_id', ruleFieldIds)
-      .neq('status', 'rejected')
-    const { data: fmRowsTarget } = await supabaseAdmin
-      .from('field_mappings')
-      .select('id, source_field_id, target_field_id, needs_transformation, status')
+      .eq('target_field_mapping.project_id', projectId)
+      .neq('target_field_mapping.status', 'rejected')
+
+    // (b) Target-side: a TFM whose target_field_id matches a rule field.
+    //     target_field_id is unique per TFM, so at most one TFM per rule
+    //     field — no ambiguity on this side.
+    const { data: tfmTargetRows } = await supabaseAdmin
+      .from('target_field_mappings')
+      .select('id, target_field_id')
       .in('target_field_id', ruleFieldIds)
+      .eq('project_id', projectId)
       .neq('status', 'rejected')
 
-    const fmRows = [...(fmRowsSource ?? []), ...(fmRowsTarget ?? [])] as FmRow[]
-    for (const fm of fmRows) {
-      if (fm.source_field_id && ruleFieldIds.includes(fm.source_field_id)) {
-        fmByFieldId.set(fm.source_field_id, fm)
-      }
-      if (fm.target_field_id && ruleFieldIds.includes(fm.target_field_id)) {
-        fmByFieldId.set(fm.target_field_id, fm)
-      }
+    type MsJoinRow = {
+      source_field_id: string | null
+      target_field_mapping:
+        | { id: string; project_id: string; status: string }
+        | { id: string; project_id: string; status: string }[]
+        | null
     }
-    fmIds = [...new Set(fmRows.map((fm) => fm.id))]
+    const pickTfm = (r: MsJoinRow) => {
+      const v = r.target_field_mapping
+      if (!v) return null
+      return Array.isArray(v) ? v[0] ?? null : v
+    }
+
+    for (const row of (msSourceRows ?? []) as MsJoinRow[]) {
+      const tfm = pickTfm(row)
+      if (!tfm || !row.source_field_id) continue
+      if (!ruleFieldIds.includes(row.source_field_id)) continue
+      fmByFieldId.set(row.source_field_id, { id: tfm.id })
+    }
+
+    for (const tfm of tfmTargetRows ?? []) {
+      if (!tfm.target_field_id) continue
+      if (!ruleFieldIds.includes(tfm.target_field_id)) continue
+      fmByFieldId.set(tfm.target_field_id as string, { id: tfm.id as string })
+    }
+
+    tfmIds = [
+      ...new Set([
+        ...((msSourceRows ?? []) as MsJoinRow[])
+          .map((r) => pickTfm(r)?.id)
+          .filter((id): id is string => Boolean(id)),
+        ...(tfmTargetRows ?? []).map((t) => t.id as string),
+      ]),
+    ]
   }
 
-  const txByFmId = new Map<string, { status: string }>()
-  if (fmIds.length > 0) {
+  const txByTfmId = new Map<string, { status: string }>()
+  if (tfmIds.length > 0) {
     const { data: txRows } = await supabaseAdmin
       .from('transformations')
-      .select('field_mapping_id, status')
-      .in('field_mapping_id', fmIds)
+      .select('target_field_mapping_id, status')
+      .in('target_field_mapping_id', tfmIds)
     for (const tx of txRows ?? []) {
-      txByFmId.set(tx.field_mapping_id as string, { status: tx.status as string })
+      txByTfmId.set(tx.target_field_mapping_id as string, { status: tx.status as string })
     }
   }
 
@@ -742,7 +793,7 @@ export async function executeCustomRules(
       ) {
         const fm = fmByFieldId.get(fieldId)
         if (fm) {
-          const hasApplied = txByFmId.get(fm.id)?.status === 'applied'
+          const hasApplied = txByTfmId.get(fm.id)?.status === 'applied'
           if (hasApplied) {
             rootCauseBreakdown = {
               source_data: 0,

@@ -1,0 +1,42 @@
+-- ============================================================
+-- 067: Tighten org_invites RLS by dropping the permissive
+--      anyone_can_read_invite_by_token SELECT policy.
+--
+-- Rationale: Migration 050 created
+--   CREATE POLICY "anyone_can_read_invite_by_token" ON public.org_invites
+--     FOR SELECT USING (true);
+-- with the intent of allowing public token-based invite lookup on the
+-- /invite/[token] landing page. In practice, every token-lookup code
+-- path (getInviteByToken, acceptInvite, the signup pre-fill, the admin
+-- platform UIs, and the approveAndGenerateInvite flow) goes through
+-- supabaseAdmin, which bypasses RLS entirely. The permissive policy
+-- therefore provides zero functional value while exposing every pending
+-- invite row — including invitee email addresses — to any authenticated
+-- user across every org on the platform.
+--
+-- What this migration does:
+--   - DROP POLICY "anyone_can_read_invite_by_token" ON public.org_invites
+--
+-- What this migration does NOT do:
+--   - It does not touch "admins_can_manage_invites" (FOR ALL, defined in
+--     050 and rewritten in 051). That policy continues to cover every
+--     legitimate authenticated read: org owners/admins listing pending
+--     invites for their own org via getPendingInvites(), as well as the
+--     .select().single() return from createOrgInvite()'s INSERT.
+--   - It does not add a user-scoped "read invites sent to my email"
+--     policy. No code path consumes such a policy today; adding one
+--     would be unnecessary surface area.
+--
+-- Data migration: none required.
+--
+-- Application code changes: none required. All callers already use
+-- either supabaseAdmin (RLS-bypassed) or an authenticated client whose
+-- reads are covered by admins_can_manage_invites.
+-- ============================================================
+
+DROP POLICY IF EXISTS "anyone_can_read_invite_by_token" ON public.org_invites;
+
+-- Verification (run in SQL editor post-deploy):
+-- SELECT policyname, cmd FROM pg_policies
+-- WHERE tablename = 'org_invites' ORDER BY policyname;
+-- Expected: one row — admins_can_manage_invites / ALL

@@ -5,13 +5,37 @@
  * All queries run via Supabase RPC helper functions defined in 006_data_quality.sql.
  * The admin client is used for aggregation queries; project ownership is verified
  * explicitly before any data access.
+ *
+ * Module architecture (Prompt 3d Path A refactor):
+ *
+ *   This file ('use server') exposes the three public entry points the UI
+ *   calls:
+ *     - runSourceDataChecks  (source-stage data quality detection)
+ *     - runInFlightChecks    (in-flight / post-transform detection)
+ *     - runStagedValidation  (composite re-run + custom rules)
+ *
+ *   The bodies of runSourceDataChecks and runStagedValidation remain here.
+ *   runInFlightChecks is a thin wrapper — its body lives in the non-server
+ *   module `lib/quality/_detection-engine-core.ts` as
+ *   `runInFlightChecksInternal`, which is directly testable against
+ *   Heritage Core without the `'use server'` + auth plumbing. See
+ *   `tests/integration/detection-engine-heritage.test.ts`.
+ *
+ *   Shared helpers (rpcCount / rpcSamples / makeIssue) also live in the
+ *   core module and are imported back here.
  */
 
 import { supabaseAdmin } from '@/lib/supabase/admin'
 import { createClient } from '@/lib/supabase/server'
 import type { QualityIssue, Field } from '@/lib/types/database'
+import {
+  rpcCount,
+  rpcSamples,
+  makeIssue,
+  runInFlightChecksInternal,
+} from '@/lib/quality/_detection-engine-core'
 
-// ── helpers ──────────────────────────────────────────────────────────────────
+// ── helpers (server-action-local) ─────────────────────────────────────────────
 
 async function verifyTableOwnership(
   tableId: string,
@@ -47,70 +71,6 @@ async function getTotalRowCount(tableId: string): Promise<number> {
     .eq('table_id', tableId)
 
   return count ?? 0
-}
-
-async function rpcCount(fn: string, params: Record<string, unknown>): Promise<number> {
-  const { data, error } = await supabaseAdmin.rpc(fn, params)
-  if (error) {
-    console.warn(`[detection] RPC ${fn} error:`, error.message)
-    return 0
-  }
-  return Number(data ?? 0)
-}
-
-async function rpcSamples(
-  fn: string,
-  params: Record<string, unknown>
-): Promise<Record<string, unknown>[]> {
-  const { data, error } = await supabaseAdmin.rpc(fn, params)
-  if (error) {
-    console.warn(`[detection] RPC ${fn} samples error:`, error.message)
-    return []
-  }
-  return Array.isArray(data) ? data : []
-}
-
-function makeIssue(
-  overrides: Partial<QualityIssue> & {
-    project_id: string
-    table_id: string
-    field_id: string | null
-    stage: QualityIssue['stage']
-    severity: QualityIssue['severity']
-    title: string
-    description: string
-    affected_records: number
-    issue_kind?: string | null
-    affected_rows_sample?: Record<string, unknown>[]
-    detection_source?: QualityIssue['detection_source']
-  }
-): Omit<QualityIssue, 'id' | 'created_at'> {
-  const base: Omit<QualityIssue, 'id' | 'created_at'> = {
-    ai_suggested_fix: null,
-    ai_fix_options: null,
-    downstream_impact: null,
-    generated_sql: null,
-    status: 'open',
-    detection_source: 'auto',
-    validation_rule_id: null,
-    affected_rows_sample: null,
-    issue_kind: null,
-    ...overrides,
-  }
-
-  // Source-stage issues are always source data by definition — raw CSV / DB
-  // data observed before any transform is applied. Auto-populate the breakdown
-  // when the caller didn't set one explicitly so the UI's Root Cause filter
-  // and chip render correctly.
-  if (base.stage === 'source' && !base.root_cause_breakdown) {
-    base.root_cause_breakdown = {
-      source_data: overrides.affected_records,
-      transform_error: 0,
-      missing_transform: 0,
-    }
-  }
-
-  return base
 }
 
 // ── SOURCE DATA CHECKS ────────────────────────────────────────────────────────
@@ -651,6 +611,11 @@ export async function runSourceDataChecks(
 
 // ── IN-FLIGHT CHECKS ──────────────────────────────────────────────────────────
 
+// Thin server-action wrapper. Auth check + project-existence guard, then
+// delegate to runInFlightChecksInternal. All business logic lives in
+// lib/quality/_detection-engine-core.ts so it is directly testable against
+// Heritage Core without the 'use server' + cookies/auth plumbing.
+
 export async function runInFlightChecks(projectId: string): Promise<void> {
   const supabase = await createClient()
   const {
@@ -665,462 +630,7 @@ export async function runInFlightChecks(projectId: string): Promise<void> {
     .single()
   if (!project) throw new Error('Project not found or access denied')
 
-  // Delete existing in-flight issues for this project (re-scan is idempotent)
-  await supabaseAdmin
-    .from('quality_issues')
-    .delete()
-    .eq('project_id', projectId)
-    .eq('stage', 'in_flight')
-    .in('detection_source', ['auto', 'manual_scan'])
-
-  // Fetch all approved/needs_review field mappings with full context
-  const { data: fieldMappings } = await supabaseAdmin
-    .from('field_mappings')
-    .select(
-      `
-      id,
-      source_field_id,
-      target_field_id,
-      table_mapping_id,
-      needs_transformation,
-      table_mappings!inner(
-        project_id,
-        source_table_id,
-        target_table_id
-      ),
-      source_field:fields!source_field_id(id, name, data_type, inferred_type, is_nullable, is_primary_key, table_id),
-      target_field:fields!target_field_id(id, name, data_type, is_nullable, is_foreign_key, fk_reference, table_id)
-    `
-    )
-    .eq('table_mappings.project_id', projectId)
-
-  if (!fieldMappings || fieldMappings.length === 0) return
-
-  // Pre-fetch transformations for all field_mappings so per-issue root-cause
-  // attribution is a map lookup rather than a per-issue query.
-  const fmIds = fieldMappings.map((fm) => fm.id)
-  const { data: transforms } = await supabaseAdmin
-    .from('transformations')
-    .select('field_mapping_id, status')
-    .in('field_mapping_id', fmIds)
-  const transformByFmId = new Map(
-    (transforms ?? []).map((t) => [t.field_mapping_id as string, t as { field_mapping_id: string; status: string }])
-  )
-
-  // Computes a clean root_cause_breakdown with exactly one non-zero bucket:
-  //   - Transform applied → split source vs transform error by comparing staged
-  //     to source violation counts (pre-existing logic).
-  //   - needs_transformation = true, no applied transform → missing_transform.
-  //   - Otherwise → source_data (no transform needed, or transform not applicable).
-  function computeRootCause(
-    fm: { id: string; needs_transformation?: boolean | null },
-    sourceCount: number,
-    stagedCount: number,
-    hasStaged: boolean
-  ): { source_data: number; transform_error: number; missing_transform: number } {
-    const transform = transformByFmId.get(fm.id)
-    const hasApplied = transform?.status === 'applied'
-    const needsTransform = fm.needs_transformation === true
-
-    if (hasStaged && hasApplied) {
-      const sourceOrigin = Math.min(sourceCount, stagedCount)
-      const transformOrigin = Math.max(0, stagedCount - sourceCount)
-      return { source_data: sourceOrigin, transform_error: transformOrigin, missing_transform: 0 }
-    }
-
-    if (needsTransform && !hasApplied) {
-      return { source_data: 0, transform_error: 0, missing_transform: stagedCount }
-    }
-
-    return { source_data: stagedCount, transform_error: 0, missing_transform: 0 }
-  }
-
-  type TMRow = { project_id: string; source_table_id: string; target_table_id: string }
-  type SFRow = { id: string; name: string; data_type: string; inferred_type: string | null; is_nullable: boolean; is_primary_key: boolean; table_id: string }
-  type TFRow = { id: string; name: string; data_type: string; is_nullable: boolean; is_foreign_key: boolean; fk_reference: string | null; table_id: string }
-
-  // Determine which table_mappings have staged data (transforms applied)
-  const uniqueMappingIds = [
-    ...new Set(fieldMappings.map((fm) => fm.table_mapping_id)),
-  ]
-  const stagedMappingIds = new Set<string>()
-  for (const mappingId of uniqueMappingIds) {
-    const { count } = await supabaseAdmin
-      .from('staged_data_rows')
-      .select('id', { count: 'exact', head: true })
-      .eq('table_mapping_id', mappingId)
-      .limit(1)
-    if ((count ?? 0) > 0) stagedMappingIds.add(mappingId)
-  }
-
-  // Fetch target table names for display
-  const targetTableIds = [
-    ...new Set(
-      fieldMappings.map((fm) => (fm.table_mappings as unknown as TMRow).target_table_id)
-    ),
-  ]
-  const { data: targetTables } = await supabaseAdmin
-    .from('tables')
-    .select('id, name')
-    .in('id', targetTableIds)
-  const targetTableMap = new Map((targetTables ?? []).map((t) => [t.id, t.name]))
-
-  // Build reverse map: target table name (uppercase) → table_mapping_id
-  // Used for FK parent lookup in Check 10.
-  const targetNameToMappingId = new Map<string, string>()
-  for (const fm of fieldMappings) {
-    const tm = fm.table_mappings as unknown as { project_id: string; source_table_id: string; target_table_id: string }
-    const tName = targetTableMap.get(tm.target_table_id)
-    if (tName && !targetNameToMappingId.has(tName.toUpperCase())) {
-      targetNameToMappingId.set(tName.toUpperCase(), fm.table_mapping_id)
-    }
-  }
-
-  // Fetch source table names
-  const sourceTableIds = [
-    ...new Set(
-      fieldMappings.map((fm) => (fm.table_mappings as unknown as TMRow).source_table_id)
-    ),
-  ]
-  const { data: sourceTables } = await supabaseAdmin
-    .from('tables')
-    .select('id, name')
-    .in('id', sourceTableIds)
-  const sourceTableMap = new Map((sourceTables ?? []).map((t) => [t.id, t.name]))
-
-  // Lookup: table_mapping_id → source_table_id (used for FK root cause computation)
-  const mappingIdToSourceTableId = new Map<string, string>()
-  for (const fm of fieldMappings) {
-    const tmData = fm.table_mappings as unknown as TMRow
-    mappingIdToSourceTableId.set(fm.table_mapping_id, tmData.source_table_id)
-  }
-
-  const issuesToInsert: Omit<QualityIssue, 'id' | 'created_at'>[] = []
-
-  for (const fm of fieldMappings) {
-    const tm = fm.table_mappings as unknown as TMRow
-    const sf = fm.source_field as unknown as SFRow | null
-    const tf = fm.target_field as unknown as TFRow | null
-
-    if (!sf || !tf) continue
-
-    const sourceTableName = sourceTableMap.get(tm.source_table_id) ?? 'source'
-    const targetTableName = targetTableMap.get(tm.target_table_id) ?? 'target'
-    const fieldTitle = `${sourceTableName}.${sf.name}`
-    const hasStaged = stagedMappingIds.has(fm.table_mapping_id)
-
-    // ── Check 8: String length truncation (BLOCKING)
-    // Checks TRANSFORMED value against target length limit when staged data exists;
-    // falls back to source data otherwise.
-    const targetType = tf.data_type?.toUpperCase() ?? ''
-    const lengthMatch = targetType.match(/(?:CHAR|VARCHAR)\((\d+)\)/)
-    if (lengthMatch) {
-      const maxLen = parseInt(lengthMatch[1], 10)
-
-      let exceededCount = 0
-      let samples: Record<string, unknown>[] = []
-
-      if (hasStaged) {
-        exceededCount = await rpcCount('dq_staged_length_exceeded', {
-          p_mapping_id: fm.table_mapping_id,
-          p_field: tf.name,
-          p_max: maxLen,
-        })
-        if (exceededCount > 0) {
-          samples = await rpcSamples('dq_staged_length_exceeded_samples', {
-            p_mapping_id: fm.table_mapping_id,
-            p_field: tf.name,
-            p_max: maxLen,
-            p_limit: 5,
-          })
-        }
-      } else {
-        exceededCount = await rpcCount('dq_length_exceeded_count', {
-          p_table_id: tm.source_table_id,
-          p_field: sf.name,
-          p_max: maxLen,
-        })
-        if (exceededCount > 0) {
-          samples = await rpcSamples('dq_length_exceeded_samples', {
-            p_table_id: tm.source_table_id,
-            p_field: sf.name,
-            p_max: maxLen,
-            p_limit: 5,
-          })
-        }
-      }
-
-      if (exceededCount > 0) {
-        const dataNote = hasStaged ? '' : ' (checked against source data — stage transforms for transformed validation)'
-
-        // Always compute a clean breakdown via the helper.
-        // When not staged, sourceCount == stagedCount == exceededCount, so the
-        // helper routes to missing_transform (if needs_transformation) or source_data.
-        let sourceExceededCount = exceededCount
-        if (hasStaged) {
-          sourceExceededCount = await rpcCount('dq_length_exceeded_count', {
-            p_table_id: tm.source_table_id,
-            p_field: sf.name,
-            p_max: maxLen,
-          })
-        }
-        const rcBreakdown = computeRootCause(fm, sourceExceededCount, exceededCount, hasStaged)
-
-        let rcRootCause: string | undefined
-        if (rcBreakdown.transform_error > 0) {
-          rcRootCause = `Transform error — transform output exceeds ${maxLen} chars`
-        } else if (rcBreakdown.missing_transform > 0) {
-          rcRootCause = `Missing transform — values exceed ${maxLen} chars and no transform is applied to shorten them`
-        } else {
-          rcRootCause = `Source data — values already exceed ${maxLen} chars at source`
-        }
-
-        issuesToInsert.push(
-          makeIssue({
-            project_id: projectId,
-            table_id: hasStaged ? tm.target_table_id : tm.source_table_id,
-            field_id: hasStaged ? tf.id : sf.id,
-            stage: 'in_flight',
-            severity: 'blocking',
-            title: hasStaged ? `${targetTableName}.${tf.name}` : fieldTitle,
-            description: `Transformed ${tf.name} values exceed target field limit (${maxLen} chars) — ${exceededCount} records affected${dataNote}`,
-            affected_records: Number(exceededCount),
-            affected_rows_sample: samples,
-            issue_kind: 'length_overflow',
-            detection_source: 'manual_scan',
-            root_cause: rcRootCause,
-            root_cause_breakdown: rcBreakdown,
-          })
-        )
-      }
-    }
-
-    // ── Check 9: Case inconsistency (WARNING)
-    // When staged data exists, check the TRANSFORMED values; target codes should
-    // already be uppercase, so this should be rare after a transform is applied.
-    const targetIsUpper =
-      targetTableName === targetTableName.toUpperCase() &&
-      tf.name === tf.name.toUpperCase() &&
-      tf.name.includes('_')
-    if (targetIsUpper) {
-      let mixedCount = 0
-      if (hasStaged) {
-        mixedCount = await rpcCount('dq_staged_mixed_case_count', {
-          p_mapping_id: fm.table_mapping_id,
-          p_field: tf.name,
-        })
-      } else {
-        mixedCount = await rpcCount('dq_mixed_case_count', {
-          p_table_id: tm.source_table_id,
-          p_field: sf.name,
-        })
-      }
-      if (mixedCount > 0) {
-        issuesToInsert.push(
-          makeIssue({
-            project_id: projectId,
-            table_id: hasStaged ? tm.target_table_id : tm.source_table_id,
-            field_id: hasStaged ? tf.id : sf.id,
-            stage: 'in_flight',
-            severity: 'warning',
-            title: `${targetTableName}.${tf.name}`,
-            description: `Case inconsistency: ${hasStaged ? 'transformed' : 'source'} values contain lowercase, target expects uppercase — ${mixedCount} records affected`,
-            affected_records: Number(mixedCount),
-            issue_kind: 'case_inconsistency',
-            detection_source: 'manual_scan',
-            root_cause_breakdown: { source_data: Number(mixedCount), transform_error: 0, missing_transform: 0 },
-          })
-        )
-      }
-    }
-
-    // ── Check 10: FK referential integrity against staged parent data (BLOCKING)
-    // Only runs when both the child and parent table mappings have been staged.
-    if (hasStaged && tf.is_foreign_key && tf.fk_reference) {
-      const [parentTableName, parentFieldName] = tf.fk_reference.split('.')
-      if (parentTableName && parentFieldName) {
-        const parentMappingId = targetNameToMappingId.get(parentTableName.toUpperCase())
-        if (parentMappingId && stagedMappingIds.has(parentMappingId)) {
-          const orphanCount = await rpcCount('dq_staged_orphaned_fk_count', {
-            p_child_mapping_id: fm.table_mapping_id,
-            p_child_field: tf.name,
-            p_parent_mapping_id: parentMappingId,
-            p_parent_field: parentFieldName,
-          })
-          if (orphanCount > 0) {
-            const samples = await rpcSamples('dq_staged_orphaned_fk_samples', {
-              p_child_mapping_id: fm.table_mapping_id,
-              p_child_field: tf.name,
-              p_parent_mapping_id: parentMappingId,
-              p_parent_field: parentFieldName,
-              p_limit: 5,
-            })
-
-            // Root cause: check if the same orphans existed in source data
-            let rcRootCause: string | undefined
-            let rcBreakdown: QualityIssue['root_cause_breakdown']
-            const parentSourceTableId = mappingIdToSourceTableId.get(parentMappingId)
-            if (parentSourceTableId) {
-              const sourceOrphanCount = await rpcCount('dq_orphaned_fk_count', {
-                p_source_table_id: tm.source_table_id,
-                p_source_field: sf.name,
-                p_target_table_id: parentSourceTableId,
-                p_target_field: parentFieldName,
-              })
-              const rcSourceOrigin = Math.min(sourceOrphanCount, orphanCount)
-              const rcTransformOrigin = Math.max(0, orphanCount - sourceOrphanCount)
-              rcRootCause = rcSourceOrigin > 0
-                ? `Source data — ${rcSourceOrigin} orphaned reference${rcSourceOrigin !== 1 ? 's' : ''} existed in source`
-                : 'Transform error — transform produced values not matching parent table'
-              rcBreakdown = { source_data: rcSourceOrigin, transform_error: rcTransformOrigin, missing_transform: 0 }
-            }
-
-            issuesToInsert.push(
-              makeIssue({
-                project_id: projectId,
-                table_id: tm.target_table_id,
-                field_id: tf.id,
-                stage: 'in_flight',
-                severity: 'blocking',
-                title: `${targetTableName}.${tf.name}`,
-                description: `Referential integrity violation: ${orphanCount} staged record${orphanCount !== 1 ? 's' : ''} in ${targetTableName}.${tf.name} reference values not found in staged ${parentTableName}.${parentFieldName} — these records will fail on load`,
-                affected_records: Number(orphanCount),
-                affected_rows_sample: samples,
-                issue_kind: 'orphaned_fk',
-                detection_source: 'manual_scan',
-                root_cause: rcRootCause,
-                root_cause_breakdown: rcBreakdown,
-              })
-            )
-          }
-        }
-      }
-    }
-
-    // ── Check 11: Non-nullable target with null/empty values (BLOCKING)
-    // When staged data exists, check the TRANSFORMED value for the TARGET field.
-    if (!tf.is_nullable && sf.is_nullable) {
-      let nullCount = 0
-      if (hasStaged) {
-        nullCount = await rpcCount('dq_staged_null_count', {
-          p_mapping_id: fm.table_mapping_id,
-          p_field: tf.name,
-        })
-      } else {
-        nullCount = await rpcCount('dq_null_count', {
-          p_table_id: tm.source_table_id,
-          p_field: sf.name,
-        })
-      }
-      if (nullCount > 0) {
-        const dataNote = hasStaged ? '' : ' (checked against source data — stage transforms for transformed validation)'
-
-        // Always compute a clean breakdown via the helper. Fetch the source
-        // null count for the split when staged; otherwise sourceCount == stagedCount.
-        let sourceNullCount = nullCount
-        if (hasStaged) {
-          sourceNullCount = await rpcCount('dq_null_count', {
-            p_table_id: tm.source_table_id,
-            p_field: sf.name,
-          })
-        }
-        const rcBreakdown = computeRootCause(fm, sourceNullCount, nullCount, hasStaged)
-
-        let rcRootCause: string | undefined
-        if (rcBreakdown.transform_error > 0 && rcBreakdown.source_data > 0) {
-          rcRootCause = `${rcBreakdown.source_data} from source data, ${rcBreakdown.transform_error} introduced by transform`
-        } else if (rcBreakdown.transform_error > 0) {
-          rcRootCause = 'Transform error — source values were valid but transform produced null'
-        } else if (rcBreakdown.missing_transform > 0) {
-          rcRootCause = 'Missing transform — source has null values and no transform is applied to handle them'
-        } else {
-          rcRootCause = 'Source data — values were null at source'
-        }
-
-        issuesToInsert.push(
-          makeIssue({
-            project_id: projectId,
-            table_id: hasStaged ? tm.target_table_id : tm.source_table_id,
-            field_id: hasStaged ? tf.id : sf.id,
-            stage: 'in_flight',
-            severity: 'blocking',
-            title: hasStaged ? `${targetTableName}.${tf.name}` : fieldTitle,
-            description: `Target field ${targetTableName}.${tf.name} is non-nullable but has ${nullCount} null/empty values after transformation — these records will fail on load${dataNote}`,
-            affected_records: Number(nullCount),
-            issue_kind: 'null_required',
-            detection_source: 'manual_scan',
-            root_cause: rcRootCause,
-            root_cause_breakdown: rcBreakdown,
-          })
-        )
-      }
-    }
-  }
-
-  // ── Check 12: Required target fields with no mapping (BLOCKING)
-  const { data: datasets } = await supabaseAdmin
-    .from('datasets')
-    .select('id')
-    .eq('project_id', projectId)
-    .eq('role', 'target')
-
-  if (datasets && datasets.length > 0) {
-    const targetDatasetIds = datasets.map((d) => d.id)
-    const { data: targetTablesData } = await supabaseAdmin
-      .from('tables')
-      .select('id, name, dataset_id')
-      .in('dataset_id', targetDatasetIds)
-
-    if (targetTablesData) {
-      for (const tbl of targetTablesData) {
-        const { data: requiredFields } = await supabaseAdmin
-          .from('fields')
-          .select('id, name')
-          .eq('table_id', tbl.id)
-          .eq('is_nullable', false)
-
-        if (!requiredFields) continue
-
-        for (const rf of requiredFields) {
-          // Check if any field_mapping points to this target field
-          const { count } = await supabaseAdmin
-            .from('field_mappings')
-            .select('*', { count: 'exact', head: true })
-            .eq('target_field_id', rf.id)
-
-          if ((count ?? 0) === 0) {
-            issuesToInsert.push(
-              makeIssue({
-                project_id: projectId,
-                table_id: tbl.id,
-                field_id: rf.id,
-                stage: 'in_flight',
-                severity: 'blocking',
-                title: `${tbl.name}.${rf.name}`,
-                description: `Required target field ${tbl.name}.${rf.name} has no source mapping — all records will fail on load unless a default value is provided`,
-                affected_records: 0,
-                issue_kind: 'unmapped_required',
-                detection_source: 'manual_scan',
-                // By definition: an unmapped required field is always a missing
-                // mapping/transform. affected_records is 0 (no data flows at all),
-                // so use 1 as a symbolic count to surface the "Missing transform"
-                // chip in the UI.
-                root_cause: 'Missing transform — required target field has no source mapping',
-                root_cause_breakdown: { source_data: 0, transform_error: 0, missing_transform: 1 },
-              })
-            )
-          }
-        }
-      }
-    }
-  }
-
-  if (issuesToInsert.length > 0) {
-    const { error } = await supabaseAdmin.from('quality_issues').insert(issuesToInsert)
-    if (error) {
-      console.error('[detection] Failed to insert in-flight issues:', error.message)
-    }
-  }
+  return runInFlightChecksInternal(projectId)
 }
 
 // ── STAGED VALIDATION ─────────────────────────────────────────────────────────

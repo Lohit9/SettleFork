@@ -11,6 +11,12 @@ export interface Project {
   updated_at: string
   completed_at: string | null
   archived_at: string | null
+  // Phase 3+ mapping redesign rollout gate. Per-project canary flag.
+  // Added in migration 073; dropped after full rollout per spec.
+  use_mapping_redesign: boolean
+  // Transient deployment-window flag that blocks mapping writes during the
+  // Phase 1+2 migration. Added in migration 073; dropped after migration complete.
+  maintenance_mode: boolean
 }
 
 export interface Dataset {
@@ -230,16 +236,11 @@ export interface ReadinessScore {
   }
 }
 
-export interface Transformation {
-  id: string
-  field_mapping_id: string
-  description: string | null
-  generated_sql: string
-  is_ai_generated: boolean
-  test_results: unknown | null
-  status: 'draft' | 'tested' | 'saved' | 'applied' | 'stale'
-  created_at: string
-}
+// Legacy `Transformation` interface (id, field_mapping_id, …) was
+// retired in Prompt 3d Step 3D-12 alongside the `toLegacyTransformation`
+// adapter. Consumers now read the new-model shape
+// `lib/types/mapping-redesign.ts :: TransformationRow` directly — its
+// FK column is `target_field_mapping_id`, matching the DB.
 
 export interface Output {
   id: string

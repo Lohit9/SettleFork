@@ -3,6 +3,8 @@
 import { revalidatePath } from 'next/cache'
 import { createClient } from '@/lib/supabase/server'
 import { supabaseAdmin } from '@/lib/supabase/admin'
+import { requirePlatformAdmin } from '@/lib/auth/platform-admin'
+import { getAuthEmailsByIds } from '@/lib/auth/users'
 import type { Organization, OrgMembership, OrgRole } from '@/lib/types/organizations'
 
 function slugify(name: string): string {
@@ -38,39 +40,6 @@ export async function adminCreateOrganization(
   return { org: org as Organization }
 }
 
-export async function createOrganization(
-  name: string
-): Promise<{ org: Organization | null; error?: string }> {
-  const supabase = await createClient()
-  const { data: { user } } = await supabase.auth.getUser()
-  if (!user) return { org: null, error: 'Not authenticated' }
-
-  const trimmed = name.trim()
-  if (!trimmed) return { org: null, error: 'Organization name is required' }
-
-  const slug = slugify(trimmed)
-
-  const { data: org, error: orgErr } = await supabase
-    .from('organizations')
-    .insert({ name: trimmed, slug, created_by: user.id })
-    .select()
-    .single()
-
-  if (orgErr || !org) return { org: null, error: orgErr?.message ?? 'Failed to create organization' }
-
-  const { error: memErr } = await supabase
-    .from('org_memberships')
-    .insert({ org_id: org.id, user_id: user.id, role: 'owner' })
-
-  if (memErr) {
-    await supabaseAdmin.from('organizations').delete().eq('id', org.id)
-    return { org: null, error: memErr.message }
-  }
-
-  revalidatePath('/app/projects')
-  return { org: org as Organization }
-}
-
 export async function getOrganizationsForUser(): Promise<{
   orgs: Array<Organization & { role: OrgRole }>
   error?: string
@@ -101,7 +70,7 @@ export async function getOrgMembers(
 
   const { data, error } = await supabase
     .from('org_memberships')
-    .select('id, org_id, user_id, role, joined_at')
+    .select('id, org_id, user_id, role, joined_at, provisioning_source')
     .eq('org_id', orgId)
     .order('joined_at', { ascending: true })
 
@@ -113,10 +82,9 @@ export async function getOrgMembers(
     .select('id, full_name')
     .in('id', userIds.length > 0 ? userIds : ['none'])
 
-  const { data: authUsers } = await supabaseAdmin.auth.admin.listUsers({ perPage: 1000 })
+  const emailMap = await getAuthEmailsByIds(userIds)
 
   const profileMap = new Map((profiles ?? []).map((p) => [p.id, p.full_name]))
-  const emailMap = new Map((authUsers?.users ?? []).map((u) => [u.id, u.email]))
 
   const members: OrgMembership[] = (data ?? []).map((m) => ({
     ...m,
@@ -248,13 +216,9 @@ export async function adminGetOrgMembers(orgId: string): Promise<{
   error?: string
   members: Array<{ id: string; user_id: string; role: OrgRole; joined_at: string; user_name: string; user_email: string }>
 }> {
-  const supabase = await createClient()
-  const { data: { user } } = await supabase.auth.getUser()
-  if (!user) return { success: false, error: 'Not authenticated', members: [] }
-
-  const ADMIN_EMAILS = ['kaandincer1@gmail.com']
-  if (!ADMIN_EMAILS.includes(user.email ?? '')) {
-    return { success: false, error: 'Not a platform admin', members: [] }
+  const admin = await requirePlatformAdmin()
+  if (!admin.ok) {
+    return { success: false, error: admin.error, members: [] }
   }
 
   // Step 1: Get memberships — no join (profiles has no direct FK from org_memberships)
@@ -276,9 +240,8 @@ export async function adminGetOrgMembers(orgId: string): Promise<{
 
   const nameMap = new Map((profiles ?? []).map((p) => [p.id, p.full_name]))
 
-  // Step 3: Fetch emails from auth.users
-  const { data: authUsers } = await supabaseAdmin.auth.admin.listUsers({ perPage: 1000 })
-  const emailMap = new Map((authUsers?.users ?? []).map((u) => [u.id, u.email]))
+  // Step 3: Fetch emails from auth.users via SECURITY DEFINER RPC
+  const emailMap = await getAuthEmailsByIds(userIds)
 
   // Step 4: Assemble
   const members = data.map((m) => ({

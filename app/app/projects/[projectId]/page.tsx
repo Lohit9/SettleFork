@@ -14,7 +14,7 @@ export default async function ControlPlanePage({
 
   const { data: project } = await supabase
     .from('projects')
-    .select('id, name, created_at, datasets(*)')
+    .select('id, name, created_at, use_mapping_redesign, maintenance_mode, datasets(*)')
     .eq('id', projectId)
     .single()
 
@@ -29,6 +29,8 @@ export default async function ControlPlanePage({
       (project.datasets as { role: string; name: string }[] ?? [])
         .find((d) => d.role === 'target')?.name ?? null,
     createdAt: project.created_at,
+    useMappingRedesign: project.use_mapping_redesign,
+    maintenanceMode: project.maintenance_mode,
   }
 
   const [sourceDatasets, targetDatasets] = await Promise.all([
