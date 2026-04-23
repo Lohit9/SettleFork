@@ -101,23 +101,42 @@ export async function resolveFixTarget(issue: ResolvableIssue): Promise<FixTarge
     return fallback('no table_mapping for target')
   }
 
-  // Resolve source field from field_mapping (by target_field_id)
+  // Resolve source field from the new-model TFM + primary MS lookup.
+  //
+  // Prompt 3d (2026-04-22): TFMs are unique per (project_id,
+  // target_field_id); the legacy (target_field_id, table_mapping_id)
+  // composite key is reconstructed by additionally requiring the primary
+  // MS (ordinal=0) to belong to the TM's source_table_id. Rejected and
+  // acknowledged TFMs are filtered out — the legacy query never routed
+  // fixes through them and we preserve that behaviour exactly.
   let sourceFieldId: string | null = null
   let sourceFieldName: string | null = null
   if (issue.field_id) {
-    const { data: fm } = await supabaseAdmin
-      .from('field_mappings')
-      .select('source_field_id')
+    const { data: tfm } = await supabaseAdmin
+      .from('target_field_mappings')
+      .select(
+        `
+        id,
+        mapping_sources ( source_field_id, source_table_id, ordinal )
+      `,
+      )
+      .eq('project_id', issue.project_id)
       .eq('target_field_id', issue.field_id)
-      .eq('table_mapping_id', tm.id)
+      .neq('status', 'rejected')
+      .eq('is_acknowledged', false)
       .maybeSingle()
 
-    if (!fm?.source_field_id) {
-      // No source field mapped (Check 12 territory) — cannot route
+    const primary =
+      (tfm?.mapping_sources ?? []).find((m) => m.ordinal === 0) ?? null
+
+    if (!primary?.source_field_id || primary.source_table_id !== tm.source_table_id) {
+      // No primary source mapped, or the primary source lives in a
+      // different source table than the TM we're routing through
+      // (Check 12 territory, or a VA where source is null) — cannot route.
       return fallback('no field_mapping for target field')
     }
 
-    sourceFieldId = fm.source_field_id
+    sourceFieldId = primary.source_field_id
     const { data: srcField } = await supabaseAdmin
       .from('fields')
       .select('name')

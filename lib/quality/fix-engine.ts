@@ -330,19 +330,31 @@ Target nullable: ${tf.is_nullable}
 Note: the fix must operate on the SOURCE table above (${tableName}) since target tables have no data.`
     }
   } else if (issue.field_id) {
-    const { data: fmData } = await supabaseAdmin
-      .from('field_mappings')
+    // Source-stage issue: find the TFM this source field feeds into so we
+    // can surface its target field in <target_context> for Claude.
+    //
+    // Prompt 3d (2026-04-22): the legacy field_mappings query used no
+    // status filter and .limit(1), taking whatever row Postgres surfaced
+    // first. Preserved byte-for-byte here — adding a status filter would
+    // change which mapping's target field Claude sees when a source
+    // participates in multiple TFMs.
+    const { data: msRow } = await supabaseAdmin
+      .from('mapping_sources')
       .select(`
-        target_field:fields!target_field_id(name, data_type, is_nullable)
+        target_field_mappings!inner (
+          target_field:fields!target_field_id(name, data_type, is_nullable)
+        )
       `)
       .eq('source_field_id', issue.field_id)
       .limit(1)
       .maybeSingle()
 
-    if (fmData?.target_field) {
-      const tf = fmData.target_field as unknown as { name: string; data_type: string; is_nullable: boolean }
-      targetContext = `Mapped to: ${tf.name} (${tf.data_type})
-Target nullable: ${tf.is_nullable}`
+    const targetField = (msRow as { target_field_mappings?: { target_field?: { name: string; data_type: string; is_nullable: boolean } | null } } | null)
+      ?.target_field_mappings?.target_field ?? null
+
+    if (targetField) {
+      targetContext = `Mapped to: ${targetField.name} (${targetField.data_type})
+Target nullable: ${targetField.is_nullable}`
     }
   }
 

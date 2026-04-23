@@ -236,16 +236,11 @@ export interface ReadinessScore {
   }
 }
 
-export interface Transformation {
-  id: string
-  field_mapping_id: string
-  description: string | null
-  generated_sql: string
-  is_ai_generated: boolean
-  test_results: unknown | null
-  status: 'draft' | 'tested' | 'saved' | 'applied' | 'stale'
-  created_at: string
-}
+// Legacy `Transformation` interface (id, field_mapping_id, …) was
+// retired in Prompt 3d Step 3D-12 alongside the `toLegacyTransformation`
+// adapter. Consumers now read the new-model shape
+// `lib/types/mapping-redesign.ts :: TransformationRow` directly — its
+// FK column is `target_field_mapping_id`, matching the DB.
 
 export interface Output {
   id: string

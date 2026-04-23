@@ -97,6 +97,14 @@ Keep the executive summary to 3-4 sentences. Keep the rollback procedure to 2-3 
 
 // ── generateMigrationRunbook ──────────────────────────────────────────────────
 
+// Guard-wiring decision (Prompt 3d, Step 3D-10, Gate 2 §1.9):
+// `generateMigrationRunbook` writes to `outputs` and to Supabase
+// storage only — NOT to any mapping-shape table (target_field_mappings /
+// mapping_sources / transformations / table_mappings). Per the Gate 2
+// guard-wiring policy, only functions that mutate mapping shape need
+// `assertMappingWritesEnabled` guards; this function is out of scope
+// for that guard and intentionally does not call it. It is safe to
+// run while mapping writes are disabled (maintenance_mode=true).
 export async function generateMigrationRunbook(
   projectId: string
 ): Promise<{ success: boolean; downloadUrl?: string; version?: string; error?: string }> {
@@ -161,31 +169,169 @@ export async function generateMigrationRunbook(
     ...approvedTMs.map((tm) => tm.target_table_id),
   ].filter(Boolean) as string[]
 
-  const tmIds = approvedTMs.map((tm) => tm.id)
-
-  const [{ data: allTables }, { data: fieldMappings }] = await Promise.all([
+  // ── Parallel data fetch (hop 2) ─────────────────────────────────────────────
+  //
+  // NEW-MODEL NOTE (Prompt 3d, Step 3D-10, Gate 2 §1.9): the legacy
+  // per-TM `.from('field_mappings')` query is replaced with a project-
+  // scoped `target_field_mappings` fetch that nests `mapping_sources`
+  // and `target_field`. Per Q3 decision, the TFM+MS graph is then
+  // FLATTENED into an array of FM-shaped rows — one row per primary
+  // MS, one row per contributor MS, one row per value assignment.
+  // This keeps byte-for-byte parity with legacy semantics:
+  //   (a) `fms.length` counts each contributor independently (matches
+  //       the legacy "${fms.length} field mappings" text in the user
+  //       prompt AND the `totalFieldMappings` field persisted to the
+  //       runbook docx).
+  //   (b) `mappingBlock` emits one line per primary + one line per
+  //       contributor — the "src (type) → tgt (type)" shape contributors
+  //       rendered on in legacy.
+  //
+  // Legacy did NOT filter FM.status (rejected FMs were included in
+  // counts and mapping blocks), so we DO NOT add a `.neq('status',
+  // 'rejected')` filter here — preservation trumps hygiene for the
+  // runbook content, which is a downstream artifact of the approved
+  // TM set.
+  //
+  // ── DESIGN PATTERN: CONTRIBUTOR SENTINEL IDS ────────────────────
+  // Mapped-case contributor flat-rows receive a SENTINEL id of the
+  // form `${tfm.id}:contrib:${ordinal}` (never a UUID, never a real
+  // TFM id). The downstream transformation lookup map is keyed by
+  // real TFM ids, so `transformByTfmId.get(flat.id)` naturally
+  // returns undefined for contributor flat-rows — the "Transform:"
+  // tag therefore renders exactly once per multi-source mapping
+  // (on the primary row), matching legacy where only the primary
+  // FM had a transformations row. Same pattern used in 3D-9
+  // (migration-intelligence.ts). Prefer this over a branching
+  // `is_primary` flag: downstream render/lookup code needs zero
+  // changes, and the sentinel is self-documenting.
+  // ─────────────────────────────────────────────────────────────────
+  const [{ data: allTables }, tfmResult] = await Promise.all([
     supabaseAdmin.from('tables').select('id, name, dataset_id, row_count').in('id', allTableIds),
     supabaseAdmin
-      .from('field_mappings')
+      .from('target_field_mappings')
       .select(
-        'id, table_mapping_id, status, needs_transformation, source_field_id, source_field:fields!field_mappings_source_field_id_fkey(id, name, data_type), target_field:fields!field_mappings_target_field_id_fkey(id, name, data_type, is_foreign_key, fk_reference)'
+        `
+        id,
+        needs_transformation,
+        combination_type,
+        target_field:fields!target_field_id (
+          id, name, data_type, is_foreign_key, fk_reference, table_id
+        ),
+        mapping_sources (
+          id, ordinal, source_field_id, source_table_id,
+          source_field:fields!source_field_id (
+            id, name, data_type
+          )
+        )
+        `
       )
-      .in('table_mapping_id', tmIds),
+      .eq('project_id', projectId),
   ])
 
   const tables = allTables ?? []
-  const fms = fieldMappings ?? []
-  const fmIds = fms.map((fm) => fm.id)
+
+  // ── Flatten TFM+MS into FM-shaped rows (Q3 preserves N-row output) ──────────
+  type SrcEmbed = { id: string; name: string; data_type: string }
+  type TgtEmbed = {
+    id: string
+    name: string
+    data_type: string
+    is_foreign_key: boolean
+    fk_reference: string | null
+    table_id: string
+  }
+  type MsEmbed = {
+    id: string
+    ordinal: number
+    source_field_id: string | null
+    source_table_id: string | null
+    source_field: SrcEmbed | SrcEmbed[] | null
+  }
+  type TfmRow = {
+    id: string
+    needs_transformation: boolean | null
+    combination_type: string | null
+    target_field: TgtEmbed | TgtEmbed[] | null
+    mapping_sources: MsEmbed[] | null
+  }
+  type FlatMappingRow = {
+    id: string
+    tfm_id: string
+    table_mapping_id: string
+    needs_transformation: boolean | null
+    source_field_id: string | null
+    source_field: SrcEmbed | null
+    target_field: TgtEmbed | null
+    is_contributor: boolean
+  }
+  const pickOne = <T>(v: T | T[] | null | undefined): T | null =>
+    v == null ? null : Array.isArray(v) ? v[0] ?? null : v
+
+  const tfms = (tfmResult.data ?? []) as unknown as TfmRow[]
+  const tfmIds = tfms.map((t) => t.id)
+
+  const fms: FlatMappingRow[] = []
+  for (const tfm of tfms) {
+    const tgt = pickOne(tfm.target_field)
+    if (!tgt) continue
+    const msAll = [...(tfm.mapping_sources ?? [])].sort((a, b) => a.ordinal - b.ordinal)
+    const primary = msAll[0] ?? null
+    const isVA = msAll.length === 0 && tfm.combination_type === 'custom_sql'
+    const isBareAck = msAll.length === 0 && !isVA
+    if (isBareAck) continue
+
+    // Owning-TM rule: target_field.table_id == tm.target_table_id AND
+    //   mapped case: primary MS source_table_id == tm.source_table_id
+    //   VA case:     any tm with matching target_table_id (first match)
+    const owningTm = approvedTMs.find((tm) => {
+      if (tm.target_table_id !== tgt.table_id) return false
+      if (isVA) return true
+      if (!primary) return false
+      return primary.source_table_id === tm.source_table_id
+    })
+    if (!owningTm) continue
+
+    if (isVA) {
+      fms.push({
+        id: tfm.id,
+        tfm_id: tfm.id,
+        table_mapping_id: owningTm.id,
+        needs_transformation: tfm.needs_transformation,
+        source_field_id: null,
+        source_field: null,
+        target_field: tgt,
+        is_contributor: false,
+      })
+      continue
+    }
+
+    for (const ms of msAll) {
+      const isPrimary = ms.ordinal === 0
+      fms.push({
+        // Sentinel id for contributors (see DESIGN PATTERN header above).
+        id: isPrimary ? tfm.id : `${tfm.id}:contrib:${ms.ordinal}`,
+        tfm_id: tfm.id,
+        table_mapping_id: owningTm.id,
+        // `needs_transformation` lives on TFM only (migration 075);
+        // surface the same TFM-level flag on every flat row.
+        needs_transformation: tfm.needs_transformation,
+        source_field_id: ms.source_field_id,
+        source_field: pickOne(ms.source_field),
+        target_field: tgt,
+        is_contributor: !isPrimary,
+      })
+    }
+  }
 
   // ── Parallel data fetch (hop 3) ─────────────────────────────────────────────
+  // Transformations scoped by target_field_mapping_id (column rename).
   const [{ data: transformations }, { data: targetFieldsFull }] = await Promise.all([
-    fmIds.length > 0
+    tfmIds.length > 0
       ? supabaseAdmin
           .from('transformations')
-          .select('field_mapping_id, description, generated_sql, status')
-          .in('field_mapping_id', fmIds)
+          .select('target_field_mapping_id, description, generated_sql, status')
+          .in('target_field_mapping_id', tfmIds)
       : Promise.resolve({ data: [] }),
-    // Fetch all target fields for FK-based load order
     tgtDs
       ? supabaseAdmin
           .from('fields')
@@ -198,7 +344,9 @@ export async function generateMigrationRunbook(
   ])
 
   const allTransforms = transformations ?? []
-  const transformByFMId = new Map(allTransforms.map((t) => [t.field_mapping_id, t]))
+  // Keyed by real TFM id. Contributor flat-rows carry sentinel ids and
+  // will therefore miss this map by design (see DESIGN PATTERN header).
+  const transformByTfmId = new Map(allTransforms.map((t) => [t.target_field_mapping_id, t]))
 
   // ── Compute stats ──────────────────────────────────────────────────────────
   const srcTables = tables.filter((t) => t.dataset_id === srcDs?.id)
@@ -250,7 +398,11 @@ export async function generateMigrationRunbook(
             ? `${srcF.name} (${srcF.data_type})`
             : null
       if (srcLabel === null) continue
-      const t = transformByFMId.get(fm.id)
+      // Contributor flat-rows carry sentinel ids (see DESIGN PATTERN
+      // header above); .get() therefore misses by design, rendering
+      // the Transform tag exactly once per multi-source mapping —
+      // legacy parity.
+      const t = transformByTfmId.get(fm.id)
       const xform = t ? ` | Transform: ${t.description ?? t.generated_sql?.slice(0, 60) ?? 'yes'}` : ''
       mappingBlock += `  ${srcLabel} → ${tgtF.name} (${tgtF.data_type})${xform}\n`
     }
@@ -261,7 +413,9 @@ export async function generateMigrationRunbook(
     .filter((t) => t.generated_sql)
     .slice(0, 30)
     .map((t) => {
-      const fm = fms.find((f) => f.id === t.field_mapping_id)
+      // Resolves to the primary (or VA) flat row — its id is the real
+      // TFM id; contributor sentinels never collide.
+      const fm = fms.find((f) => f.id === t.target_field_mapping_id)
       const src = !fm
         ? '?'
         : fm.source_field_id == null

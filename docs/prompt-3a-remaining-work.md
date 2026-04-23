@@ -3,6 +3,155 @@
 Generated as part of Gate-3 R6 (Option B: build-pass + grep sweep). This is
 the work inventory for Prompt 3b's investigation.
 
+## Phase 2 status — COMPLETE (Prompt 3d, 2026-04-22)
+
+Prompts 3a → 3d have collectively rewritten every mapping-model consumer
+against `target_field_mappings` + `mapping_sources` +
+`source_field_acknowledgments`. The legacy `field_mappings` and
+`field_acknowledgments` tables have zero non-comment references in `lib/`,
+`app/`, and `components/`, enforced at source level by three codebase-wide
+grep tests (3D-13).
+
+### Phase-2 scorecard (Prompt 3d scope)
+
+| File                                          | 3D step | Status      | Guard wiring |
+| --------------------------------------------- | ------- | ----------- | ------------ |
+| `lib/quality/detection-engine.ts` (+ `_detection-engine-core.ts`) | 3D-4    | ✅ Path A split + Option A rewrite | NONE (reads only; UI invokes scan) |
+| `lib/actions/staged-row-flags.ts`             | 3D-5    | ✅ Rewritten | NONE (read-only, cross-referenced after writer applied) |
+| `lib/actions/staging.ts`                      | 3D-6    | ✅ Rewritten (2 sites) | NONE (writes to `staged_data_rows`, not mapping-shape) |
+| `lib/actions/validation-rules.ts`             | 3D-7    | ✅ Rewritten | NONE (writes to `quality_issues`, not mapping-shape) |
+| `lib/actions/ai-quality-detection.ts`         | 3D-8    | ✅ Rewritten | NONE (writes to `quality_issues`, not mapping-shape) |
+| `lib/actions/migration-intelligence.ts`       | 3D-9    | ✅ Rewritten | NONE (writes to `migration_intelligence`, knowledge base) |
+| `lib/actions/migration-runbook.ts`            | 3D-10   | ✅ Rewritten | NONE (writes to `outputs` + Supabase storage) |
+| `lib/actions/projects.ts` (+ `_projects-core.ts`) | 3D-11 / 3D-14 | ✅ Path A split + rewrite | NONE (read-only aggregation) |
+| `lib/actions/transformations.ts` (adapter deletion) | 3D-12 | ✅ `toLegacyTransformation` + legacy `Transformation` interface deleted | — |
+| Codebase-wide grep tests                      | 3D-13   | ✅ 3 new tests added, 1 narrow test superseded + deleted | — |
+| Heritage integration tests (PostgREST semantics + projects-heritage PINNED) | 3D-14 | ✅ 3 opt-in gated tests landed | — |
+
+`maintenance_mode` remains `true` at the time this scorecard is being
+committed; the flip to `false` happens in the Gate 4 release step of
+Prompt 3d once the commit is assembled and reviewed.
+
+### Bugs fixed in Phase 2
+
+See the "Bugs fixed in Prompt 3c" section below for the three latent bugs
+repaired during Prompt 3c. Additionally, Prompt 3d Step 3D-12 exposed and
+fixed two more:
+
+1. **`app/app/projects/[projectId]/transform/TransformContent.tsx:1204` —
+   inline transformation literal constructed `{ field_mapping_id: fmId, … }`.**
+   The legacy column name was carried forward into an object literal that
+   was (incorrectly) typed as the legacy `Transformation` interface. When
+   Step 3D-12 retyped `FieldItem.transformation` from `Transformation | null`
+   to `TransformationRow | null`, `tsc --noEmit` flagged the literal
+   because `TransformationRow` has `target_field_mapping_id`, not
+   `field_mapping_id`. Fixed by renaming the key.
+
+2. **`app/app/projects/[projectId]/transform/TransformContent.tsx:1607` —
+   Supabase query filter `.eq('field_mapping_id', …)` against
+   `transformations`.** `field_mapping_id` was dropped from
+   `transformations` in migration 074 (2026-04-22 execution). The query
+   would have produced a PostgREST column-not-found error on any user
+   action hitting this code path. Caught by `tsc` only because the type
+   tightening in Step 3D-12 indirectly required the `.eq()` argument to
+   conform to `TransformationRow`'s column names. Fixed by renaming to
+   `target_field_mapping_id`.
+
+**Institutional note — adapter deletion as architectural pattern.**
+Both bugs had existed since migration 074 ran on 2026-04-22. Neither
+was caught by:
+
+- `tsc` against the pre-deletion codebase (the adapter's legacy type
+  hid the mismatch).
+- Unit tests (TransformContent is a large page component with no
+  refinement test).
+- Grep for `field_mapping_id` (the codebase legitimately uses the
+  string `field_mapping_id` in `activity_log` jsonb payloads — see
+  Phase 4 cleanup candidates below — so a blind grep would have had
+  too many hits to review).
+- Manual code review in Prompts 3b and 3c.
+
+The adapter (`toLegacyTransformation`) was a deliberate semantic lie:
+it populated a legacy `.field_mapping_id` field with the new TFM id so
+downstream code would keep type-checking. Deleting the adapter and
+tightening the downstream type forced `tsc` to validate every call
+site's literal shape and query-column name, which surfaced both bugs.
+
+Generalisation: **when migrating off a legacy type, deleting the
+adapter is not the last step but a diagnostic step**. The type-error
+storm that follows is the signal — each error is either (a) a
+legitimate call site needing rewriting or (b) a latent bug the
+adapter was hiding. Budget for fixes when scheduling adapter
+deletion; don't treat it as a pure cleanup.
+
+### Phase 4 cleanup candidates
+
+Items that are non-blocking today but would benefit from a dedicated
+cleanup pass after Phase 2 closes out.
+
+1. **`lib/actions/transformations.ts:1851` — `activity_log` jsonb payload
+   key `field_mapping_id`.** The `logActivity` call writes
+   `{ field_mapping_id: ctx.tfm.id }` into the `activity_log.details`
+   jsonb column. The key name is legacy-shaped but the value is
+   semantically a TFM id post-074. The key is allow-listed in
+   `tests/lib/no-legacy-adapter.test.ts` to avoid tripping the
+   codebase-wide grep, but the allowlist is a sharp corner: future
+   engineers reading analytics queries that filter
+   `details->>'field_mapping_id'` will infer the wrong identity
+   semantics and potentially join against the dropped
+   `field_mappings` table (which is always empty → silent zero
+   results).
+
+   Cleanup plan: inventory every analytics / reporting consumer that
+   reads this jsonb key (dashboards, warehouse ETLs, ad-hoc SQL
+   bookmarks). Once consumer set is enumerated, either (a) rename the
+   key to `target_field_mapping_id` with a single coordinated
+   migration across producer + consumers, or (b) document the key
+   name as a stable analytics ABI contract and move the allowlist
+   from the grep test into the production code as a
+   `// legacy-analytics-key:` comment. Either resolution is better
+   than the current in-test allowlist. Estimated effort: a half-day
+   of archaeology + a small PR.
+
+2. **PostgREST filter-semantics test coverage gaps (Step 3D-14).** The
+   consolidated integration test (`tests/integration/postgrest-filter-semantics.test.ts`)
+   exercises four nested-filter patterns against Heritage Core data.
+   Two filters are currently shape-verified but not behavior-verified
+   because Heritage's data shape renders them vacuous:
+
+   - **Rejection-filter vacuousness** — `validation-rules` and
+     `ai-quality-detection` both apply a `.status != 'rejected'`
+     filter on the embedded `target_field_mapping` inner-joined
+     relation. Heritage Core currently has zero TFMs with
+     `status='rejected'`, so the filter can never exclude anything
+     on this canary. Standard PostgREST grammar, low risk, but
+     behaviourally untested.
+
+   - **`target_field.table_id` embedded-filter vacuousness** — In
+     `staging.ts`'s per-TM TFM fetch, every TFM returned by Heritage's
+     data shape happens to target the same `table_id` that matches the
+     outer TM's `target_table_id`, so the embedded filter cannot
+     exclude anything. In-memory owning-TM rule (applied post-fetch) is
+     the primary correctness mechanism; the PostgREST filter is a
+     best-effort server-side narrowing.
+
+   Resolution options: (a) seed Heritage Core with a rejected TFM and
+   a cross-table TFM to make both filters non-vacuous; (b) build a
+   fixture-backed unit that hits a real PostgREST instance with a
+   controlled schema. Either is cheap; deferred because the unit-level
+   refinement tests already pin the query shape and the risk of a
+   silent PostgREST semantic change is judged low.
+
+3. **`maintenance_mode` ratchet policy.** Flipping
+   `maintenance_mode=false` at the end of Prompt 3d restores write
+   availability, but there is no automated check preventing a future
+   commit from flipping it back to `true` without simultaneously
+   landing a mapping-writes safety net. Recommend adding a
+   documented pre-commit check (or a codeowner-guarded
+   `docs/database-config.md` entry) that enforces: if you flip the
+   flag to `true`, you must also attach a one-paragraph release note
+   explaining why and when it flips back.
+
 ## Scope recap
 
 Prompt 3a rewrote:
@@ -219,25 +368,130 @@ Known coverage gaps (accepted, tracked here):
   debt" section). Shape/soundness + numeric plausibility is covered by
   the env-gated heritage test against live data.
 
-### Prompt 3d scope — `lib/quality/*` + quality-adjacent actions
+### Prompt 3d scope — `lib/quality/*` + quality-adjacent actions — ✅ COMPLETE
 
-| File                                  | Line  | Description                                                    |
-| ------------------------------------- | ----- | -------------------------------------------------------------- |
-| `lib/quality/fix-target.ts`           | 109   | FM → target field lookup for fix suggestion                    |
-| `lib/quality/fix-engine.ts`           | 334   | FM → staged row hydration for fix apply                        |
-| `lib/quality/detection-engine.ts`     | 678   | FM enumeration for "un-mapped target with non-null constraint" |
-| `lib/quality/detection-engine.ts`     | 1087  | FM probe for "not in allowed values" detection                 |
-| `lib/quality/resolved-by-transform.ts`| 32    | FM → transform status join for resolved-by-transform tally     |
-| `lib/actions/validation-rules.ts`     | 496   | FM id list for validation rule target selection                |
-| `lib/actions/validation-rules.ts`     | 501   | FM batch fetch for rule apply                                  |
-| `lib/actions/staging.ts`              | 250   | FM → target field for staged-row key allocation                |
-| `lib/actions/staging.ts`              | 637   | FM enumeration for stage-phase diff                            |
-| `lib/actions/staged-row-flags.ts`     | 114   | FM → target field lookup for flag write                        |
-| `lib/actions/migration-intelligence.ts` | 499 | FM sampling for intelligence context                           |
-| `lib/actions/migration-runbook.ts`    | 169   | FM count for runbook preamble                                  |
-| `lib/actions/ai-quality-detection.ts` | 194   | FM → field name lookup for AI prompt                           |
-| `lib/actions/projects.ts`             | 199   | `field_acknowledgments` rollup for project grid                |
-| `lib/actions/projects.ts`             | 213   | FM count for project grid                                      |
+Original scope (identified at Gate-3 R6):
+
+| File                                  | Line  | Description                                                    | Step    |
+| ------------------------------------- | ----- | -------------------------------------------------------------- | ------- |
+| `lib/quality/fix-target.ts`           | 109   | FM → target field lookup for fix suggestion                    | 3D-1/2/3 |
+| `lib/quality/fix-engine.ts`           | 334   | FM → staged row hydration for fix apply                        | 3D-1/2/3 |
+| `lib/quality/detection-engine.ts`     | 678   | FM enumeration for "un-mapped target with non-null constraint" | 3D-4    |
+| `lib/quality/detection-engine.ts`     | 1087  | FM probe for "not in allowed values" detection                 | 3D-4    |
+| `lib/quality/resolved-by-transform.ts`| 32    | FM → transform status join for resolved-by-transform tally     | 3D-1/2/3 |
+| `lib/actions/validation-rules.ts`     | 496   | FM id list for validation rule target selection                | 3D-7    |
+| `lib/actions/validation-rules.ts`     | 501   | FM batch fetch for rule apply                                  | 3D-7    |
+| `lib/actions/staging.ts`              | 250   | FM → target field for staged-row key allocation                | 3D-6    |
+| `lib/actions/staging.ts`              | 637   | FM enumeration for stage-phase diff                            | 3D-6    |
+| `lib/actions/staged-row-flags.ts`     | 114   | FM → target field lookup for flag write                        | 3D-5    |
+| `lib/actions/migration-intelligence.ts` | 499 | FM sampling for intelligence context                           | 3D-9    |
+| `lib/actions/migration-runbook.ts`    | 169   | FM count for runbook preamble                                  | 3D-10   |
+| `lib/actions/ai-quality-detection.ts` | 194   | FM → field name lookup for AI prompt                           | 3D-8    |
+| `lib/actions/projects.ts`             | 199   | `field_acknowledgments` rollup for project grid                | 3D-11   |
+| `lib/actions/projects.ts`             | 213   | FM count for project grid                                      | 3D-11   |
+
+### Path A split pattern (institutional note)
+
+Two files in Prompt 3d's scope were split into a thin `'use server'`
+wrapper + a sibling non-server core module, introduced here as a
+repeatable pattern:
+
+- `lib/quality/detection-engine.ts` (wrapper) ↔
+  `lib/quality/_detection-engine-core.ts` (core) — Step 3D-4.
+- `lib/actions/projects.ts` (wrapper) ↔
+  `lib/actions/_projects-core.ts` (core) — Step 3D-14.
+
+**Why.** A `'use server'` server action transitively pulls
+`next/headers :: cookies()` via `lib/supabase/server.ts :: createClient()`.
+`cookies()` throws when invoked outside a Next.js request scope, which
+makes server actions impossible to call directly from Vitest integration
+tests. The Path A pattern resolves this by moving the function's body
+into a non-`'use server'` module that takes the Supabase client as a
+parameter. The original server action becomes a one-liner that builds
+a cookies-bound client and delegates.
+
+**Client-scoping contract.** The core function MUST accept the client
+as a parameter rather than constructing its own. That is the crux of
+the pattern — it preserves RLS in production (wrapper passes the
+cookies-bound, user-scoped client) while allowing tests to pass a
+service-role admin client for read-only Heritage verification. If the
+core function hard-coded `supabaseAdmin`, every logged-in user would
+see every project across every organization. That is a production
+hazard the Path A refactor must never introduce.
+
+**Test-harness contract.** Heritage integration tests that call the
+core function with `supabaseAdmin` must be read-only AND narrow to a
+known canary record by id after the fetch. Admin-mode queries return
+rows across the entire database; filtering by canary id after the
+fetch keeps the test deterministic even when admin surfaces rows that
+RLS would have hidden.
+
+**When to apply.** Apply the Path A split when:
+
+1. A `'use server'` function needs direct testing against a live DB.
+2. The function is read-only (writers should be tested via the
+   wrapper + a test-harness request scope, not by bypassing auth).
+3. The function is a pure aggregation or computation — if it mutates
+   state, the `'use server'` boundary exists for a reason.
+
+**When NOT to apply.** Do NOT apply to:
+
+1. Functions that perform writes (the server-action boundary is where
+   auth + maintenance-mode guards sit).
+2. Functions that are genuinely request-scoped (e.g., read the
+   current user's session).
+
+Pattern is captured in the header docblocks of both `_detection-engine-core.ts`
+and `_projects-core.ts`; new applications should cross-reference those
+for a worked example.
+
+### Prompt 3d — Step 3D-14 Heritage integration snapshot
+
+Step 3D-14 activated three Heritage-touching integration tests, each
+gated behind an explicit opt-in environment flag so `.env.local`
+auto-loading alone cannot trigger them:
+
+| Test                                              | Opt-in flag                                    | Semantics                                                     |
+| ------------------------------------------------- | ---------------------------------------------- | ------------------------------------------------------------- |
+| `tests/integration/postgrest-filter-semantics.test.ts` | `RUN_POSTGREST_INTEGRATION=1`              | Read-only; exercises 4 nested-filter patterns from 3D-5/6/7/8 |
+| `tests/integration/detection-engine-heritage.test.ts`  | `RUN_DETECTION_HERITAGE_INTEGRATION=1`     | Mutates `quality_issues`; pins 29-issue post-rewrite baseline |
+| `tests/integration/projects-heritage.test.ts`          | `RUN_PROJECTS_HERITAGE_INTEGRATION=1`      | Read-only; pins `SNAPSHOT_2026_04_22` for project `6622ddf1`  |
+
+The opt-in gate pattern was instituted after an accidental integration
+run during 3D-14 implementation. Writers (detection-engine) especially
+need the gate because the delete-then-reinsert cycle rewrites canary
+`quality_issues` rows.
+
+Pinned `SNAPSHOT_2026_04_22` for `projects-heritage` (project
+`6622ddf1-47bd-4e48-ac2a-5b109a25bc13`, captured 2026-04-22):
+
+```
+totalSourceFields:     99
+mappedFieldCount:     100
+totalRows:            864
+blockingIssueCount:    10
+warningCount:           0
+totalTransforms:        0
+savedTransforms:        0
+needsTransformCount:   34
+coveredTransformCount:  0
+readinessScore:         4
+currentPhase:           3
+outputCount:           11
+status:            active
+```
+
+Cross-checks (confirmed by founder at Step 3D-14 approval): `mappedFieldCount=100`
+matches the 100 non-bare-ack TFMs in the DB; `totalRows=864` matches the
+known `staged_data_rows` count; `totalTransforms/savedTransforms/coveredTransformCount=0`
+matches Heritage's zero-transforms state; derived metrics are in
+reasonable ranges consistent with project state.
+
+Re-baseline required after any of: manual data ops on the Heritage
+project, schema changes affecting TFM/MS/transformations tables,
+`getProjectsWithStats` rollup logic changes, or detection-engine scans
+that mutate in-flight `quality_issues` (since the detection-engine
+heritage test runs in the same suite).
 
 ## Call-site preservation (from `lib/actions/mappings.ts`)
 
@@ -433,6 +687,120 @@ quality-adjacent actions listed above). The outputs read/write path,
 execution-package generation, readiness-score computation, transform
 apply/revert/reset/cascade, and mapping CRUD are all fully wired on the
 new data model.
+
+## Known test infrastructure issues
+
+Issues observed while running the suite that are **not blocking Prompt 3d**
+and are tracked here for separate follow-up.
+
+### `tests/integration/transforms-heritage.test.ts` — Anthropic SDK refuses jsdom
+
+**Symptom.** When the heritage test suite runs with `HERITAGE_*` env vars
+populated (which activates `transforms-heritage.test.ts`), the test fails
+at the import of `@/lib/actions/transformations` with:
+
+```
+Error: It looks like you're running in a browser-like environment.
+ ❯ new BaseAnthropic node_modules/@anthropic-ai/sdk/src/client.ts:381:12
+ ❯ new Anthropic        node_modules/@anthropic-ai/sdk/client.mjs:555:9
+ ❯ lib/ai/claude.ts:6:19
+ ❯ lib/actions/transformations.ts:81:1
+```
+
+**Root cause.** The Vitest config uses `environment: 'jsdom'` globally so
+React component tests have a DOM. `@anthropic-ai/sdk` refuses to
+instantiate when it detects a `window` global (the default safeguard
+against exposing API keys in the browser). Module-level Claude client
+construction in `lib/ai/claude.ts` runs on import → throws on any server
+action import chain that transitively pulls `transformations.ts`,
+including heritage integration tests running in Node.
+
+**Impact on 3d.** None. The failure is purely environmental. The
+detection-engine heritage test (`detection-engine-heritage.test.ts`) is
+annotated with `// @vitest-environment node`, which side-steps the issue
+for that file specifically. `transforms-heritage.test.ts` was written
+before that pattern was adopted.
+
+**Deferred fix options.**
+
+1. Add `// @vitest-environment node` to the top of
+   `transforms-heritage.test.ts` (one-line fix, smallest blast radius).
+2. Per-suite `pool: 'forks'` + `environmentMatchGlobs` so all
+   `tests/integration/**` default to Node.
+3. Lazy-init the Claude client inside `lib/ai/claude.ts` (no
+   module-level `new Anthropic(...)`), so the check only fires on actual
+   invocation. This is the most robust fix but touches production code.
+
+Fix separately, not in Prompt 3d. Ticket owner: next infra pass.
+
+### `tests/integration/detection-engine-heritage.test.ts` — empirical
+baseline gap
+
+**Symptom.** When the test harness invokes legacy `runInFlightChecks`
+(via `runInFlightChecksInternal` after the Path A split) against a
+Heritage project that holds pre-existing `manual_scan` rows from prior
+UI scans, the function's delete-then-reinsert cycle deletes the existing
+rows and inserts **zero** replacements. Observed on project
+`0ad1bef0-decf-4525-8b3c-4eada73255dc` (29 pre-existing manual_scan
+issues across 4 auto check kinds → post-call: 0 new rows in
+`quality_issues` created in the last 10 minutes).
+
+**Root cause.** Not investigated. The legacy code path was scheduled
+for replacement in the same prompt (3d Option A rewrite); debugging
+throwaway code was not worth the hours. Plausible causes: missing
+precondition in the test context (auth/session assumptions that only
+hold in the server-action wrapper, despite Internal extraction not
+referencing auth anywhere), RPC helpers returning 0 when invoked under
+the admin client for reasons unrelated to the Path A move, or simple
+test-harness env drift. None were confirmed.
+
+**Impact on 3d.** Means we could not establish a meaningful pre-rewrite
+snapshot for `detection-engine-heritage.test.ts`. The pre-rewrite
+baseline concept was dropped; the test was simplified to a single
+post-rewrite `SNAPSHOT_2026_04_22` constant.
+
+**Resolution in Prompt 3d.**
+
+1. Step 3D-4 Option A rewrite landed in `_detection-engine-core.ts`.
+2. Heritage test re-run post-rewrite against project `0ad1bef0`: produced
+   **29 in-flight issues** across 4 check kinds (`null_required`=11,
+   `unmapped_required`=12, `orphaned_fk`=3, `length_overflow`=3) — i.e.
+   Option A's rewrite succeeded from the harness where the legacy code
+   path failed silently. Whatever was suppressing the legacy
+   implementation in the Vitest environment no longer applies to the
+   new-model implementation. The 29-issue baseline is pinned as
+   `SNAPSHOT_2026_04_22` and asserted exactly by the test's PINNED
+   describe block.
+
+**Remaining coverage gap.** All 29 issues fall on the staged branch
+(the canary has staged rows on every TM). The snapshot does NOT
+exercise the Option A source-branch per-MS fanout — no pre-stage
+projects with multi-source TFMs are available in Heritage Core. The
+flattener's source-branch contributor iteration is guarded at unit
+level in `tests/quality/detection-engine-refinements.test.ts` but is
+not end-to-end verified. Tracked below.
+
+**Future work.** Create a purpose-built seed project with known-bad
+data — multi-source TFMs + field values that deterministically trigger
+each check kind on BOTH branches (pre-stage for source branch,
+post-stage for staged branch) — for full integration coverage of the
+detection engine. Tracked as future seed-data work.
+
+### `tests/integration/outputs-heritage.test.ts` — snapshot drift after
+`detection-engine-heritage` was added
+
+**Symptom.** `SNAPSHOT_2026_04_22` values for
+`metrics.readinessScore` (and adjacent readiness fields) pinned on
+2026-04-22 were captured against a stale `quality_issues` state that
+pre-dated the introduction of `detection-engine-heritage.test.ts`. Once
+the detection-engine heritage test runs in the same suite, it mutates
+`quality_issues` for the Heritage project (equivalent to clicking
+"Scan"), which shifts readiness and fails the pinned snapshot.
+
+**Resolution.** The snapshot is being re-pinned in Prompt 3d against the
+post-fresh-scan state, with a header comment noting that both heritage
+tests now assume fresh-scan state going forward. This is a one-time
+re-pin, not a recurring issue.
 
 ## Test coverage debt (accepted at Gate-3 Item 3)
 

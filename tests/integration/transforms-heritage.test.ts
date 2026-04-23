@@ -68,7 +68,7 @@ describeFn('[integration] getTransformData against Heritage Core', () => {
             // Transformations key on target_field_mapping_id — which is the
             // FieldItem.fieldMappingId when the item is a primary/VA.
             expect(f.transformation.id).toBeTypeOf('string')
-            expect(f.transformation.field_mapping_id).toBeTypeOf('string')
+            expect(f.transformation.target_field_mapping_id).toBeTypeOf('string')
           }
         }
       }

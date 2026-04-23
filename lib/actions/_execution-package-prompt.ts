@@ -20,9 +20,10 @@
  *
  * Data model note: this module's `buildMappingSections` consumes the new
  * model directly (target_field_mappings + mapping_sources, via the grouper
- * in `_outputs-helpers.ts`). It does NOT call the `toLegacyTransformation`
- * adapter. The orchestrator in execution-package.ts queries the new tables
- * and passes the rows through verbatim.
+ * in `_outputs-helpers.ts`). The orchestrator in execution-package.ts
+ * queries the new tables and passes the rows through verbatim. The former
+ * `toLegacyTransformation` adapter was deleted in Prompt 3d Step 3D-12;
+ * TransformationRow now flows end-to-end.
  */
 
 import type { SqlDialect, CheckConstraint } from '@/lib/types/database'

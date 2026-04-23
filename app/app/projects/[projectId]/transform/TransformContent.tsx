@@ -1201,7 +1201,7 @@ export default function TransformContent({ projectId, projectName, initialData, 
               transformation: f.transformation
                 ? { ...f.transformation, generated_sql: sql, is_ai_generated: badge === 'ai', description, status, test_results: null }
                 : transId
-                ? { id: transId, field_mapping_id: fmId, description, generated_sql: sql, is_ai_generated: badge === 'ai', test_results: null, status, created_at: new Date().toISOString() }
+                ? { id: transId, target_field_mapping_id: fmId, description, generated_sql: sql, is_ai_generated: badge === 'ai', test_results: null, status, created_at: new Date().toISOString() }
                 : null,
             }
           }),
@@ -1604,7 +1604,7 @@ export default function TransformContent({ projectId, projectName, initialData, 
               try {
                 const { createClient } = await import('@/lib/supabase/client')
                 const sb = createClient()
-                const { data: tfData } = await sb.from('transformations').select('id').eq('field_mapping_id', unmappedFieldMappingId).maybeSingle()
+                const { data: tfData } = await sb.from('transformations').select('id').eq('target_field_mapping_id', unmappedFieldMappingId).maybeSingle()
                 if (tfData?.id) {
                   const saveRes = await autoSaveTransform(tfData.id, unmappedSql, unmappedDescription)
                   if (!saveRes.success) {

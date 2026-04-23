@@ -109,18 +109,50 @@ export async function flagStagedRowIssues(
       (sourceFields ?? []).map((f) => [f.id, f])
     )
 
-    // ── Step 5: Load field mappings (source field id → target field name) ────
-    const { data: fieldMappings } = await supabaseAdmin
-      .from('field_mappings')
-      .select('source_field_id, target_field:fields!field_mappings_target_field_id_fkey(name)')
-      .eq('table_mapping_id', tableMappingId)
-      .neq('status', 'rejected')
-
+    // ── Step 5: Load TFM-based source→target name map ───────────────────────
+    //
+    // Prompt 3d (2026-04-22): replaces the legacy per-TM lookup that keyed
+    // on table_mapping_id. In the new model TFMs are project-scoped (no
+    // table_mapping_id column), so the TM is derived from the pair
+    // (mapping_sources source_table_id, target_field table_id) — both of
+    // which we have on `tm` above.
+    //
+    // Preserved-legacy semantics:
+    //   - No ordinal filter — primary AND contributor MS rows build the map,
+    //     matching legacy which included both primary and contributor FMs.
+    //   - .neq(status, rejected) preserved from the legacy query.
+    //   - No acknowledgment filter — legacy never joined the source-side
+    //     acks table here, so acknowledged TFMs whose MS rows match still
+    //     contribute to the display map.
+    //   - Last-wins on same source_field_id — matches the legacy Map.set
+    //     overwrite semantics if a source field maps to multiple targets.
     const targetNameBySrcId = new Map<string, string>()
-    for (const fm of fieldMappings ?? []) {
-      const tgt = fm.target_field as unknown as { name: string } | null
-      if (tgt?.name && fm.source_field_id != null) {
-        targetNameBySrcId.set(fm.source_field_id, tgt.name)
+
+    if (fieldIds.length > 0) {
+      const { data: tfmRows } = await supabaseAdmin
+        .from('target_field_mappings')
+        .select(
+          `
+          mapping_sources!inner ( source_field_id ),
+          target_field:fields!target_field_id ( name, table_id )
+        `
+        )
+        .eq('project_id', projectId)
+        .neq('status', 'rejected')
+        .eq('mapping_sources.source_table_id', tm.source_table_id)
+        .in('mapping_sources.source_field_id', fieldIds)
+
+      for (const tfm of tfmRows ?? []) {
+        const tgt = tfm.target_field as unknown as
+          | { name: string; table_id: string }
+          | null
+        // Scope to this TM: target_field must live under the TM's target table.
+        if (!tgt || tgt.table_id !== tm.target_table_id) continue
+        for (const ms of tfm.mapping_sources ?? []) {
+          if (ms.source_field_id != null) {
+            targetNameBySrcId.set(ms.source_field_id, tgt.name)
+          }
+        }
       }
     }
 

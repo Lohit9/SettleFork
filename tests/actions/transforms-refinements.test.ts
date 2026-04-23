@@ -63,7 +63,7 @@ describe('[transforms refinements] R1 — resolveTfmId (Option 2-narrow)', () =>
     const body = sliceBetween(
       TRANSFORMS_SRC,
       'function resolveTfmId(',
-      '// ─── toLegacyTransformation',
+      '// ─── TFM context resolver',
     )
     expect(body).toContain("kind: 'primary'")
     expect(body).toContain("kind: 'contributor'")
@@ -221,7 +221,7 @@ describe('[transforms refinements] R7 — resolveTfmId uses [transformations] ta
     const body = sliceBetween(
       TRANSFORMS_SRC,
       'function resolveTfmId(',
-      '// ─── toLegacyTransformation',
+      '// ─── TFM context resolver',
     )
     expect(body).toMatch(/console\.warn\(['"]?\[transformations\]/)
   })

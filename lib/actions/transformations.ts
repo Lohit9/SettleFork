@@ -42,12 +42,13 @@
 //   read in this module — see the invariant test's header for the escalation
 //   procedure if it ever fires.
 //
-// OUT-OF-SCOPE CALL SITES (expected to break at runtime until later prompts)
+// OUT-OF-SCOPE CALL SITES (historical — kept for change-history visibility)
 //
-//   - `flagStagedRowIssues` from `@/lib/actions/staged-row-flags` — Prompt 3d.
-//     Still queries legacy `field_mappings`. Call site preserved in
-//     `applyTransform` inside a try/catch so the apply itself succeeds even
-//     when the flagging pass fails.
+//   - `flagStagedRowIssues` from `@/lib/actions/staged-row-flags` — was
+//     Prompt 3b out-of-scope. Rewritten in Prompt 3d (Step 3D-5) to the
+//     new TFM+mapping_sources model. The call site in `applyTransform`
+//     retains its try/catch as defense-in-depth against runtime failures
+//     (network / DB / RPC), not because the callee is known-broken.
 //
 // APPLY RPC WIRING (Gate 2 Q2 + Gate 2 G-a decisions)
 //
@@ -87,7 +88,6 @@ import { logActivity } from '@/lib/actions/activity-log'
 import { assertMappingWritesEnabled } from '@/lib/auth/mapping-writes'
 import { SHIMMED_ID_SEPARATOR } from '@/lib/compat/mapping-shim'
 import { revalidatePath } from 'next/cache'
-import type { Transformation } from '@/lib/types/database'
 import type {
   TargetFieldMappingRow,
   TransformationRow,
@@ -127,7 +127,14 @@ export interface FieldItem {
   sampleValues: unknown[]
   cardinality: number
   needsTransform: boolean
-  transformation: Transformation | null
+  /**
+   * Raw new-model `TransformationRow` for the TFM — or `null` if no
+   * transformation has been generated yet. The legacy `Transformation`
+   * adapter (`toLegacyTransformation`) was removed in Prompt 3d Step
+   * 3D-12; consumers now read the new-model columns directly
+   * (`target_field_mapping_id`, `generated_sql`, `status`, etc.).
+   */
+  transformation: TransformationRow | null
   /** Kept for API back-compatibility with TransformContent.tsx. Always
    *  `false` in the new model — contributor rows are folded into the
    *  primary FieldItem's `contributingSourceFields` and never emitted
@@ -266,43 +273,6 @@ function resolveTfmId(id: string): ResolvedTfmId {
 
   console.warn('[transformations] resolveTfmId: unrecognized id format', { id })
   return { kind: 'unknown' }
-}
-
-// ─── toLegacyTransformation ──────────────────────────────────────────────────
-//
-// Adapter that converts a new-model `TransformationRow` into the legacy
-// `Transformation` shape still imported by out-of-scope consumers (outputs.ts,
-// execution-package.ts, migration-intelligence.ts, …). The `field_mapping_id`
-// field on `Transformation` is populated with the TFM id — consumers that
-// still read `.field_mapping_id` will see the TFM id, which is semantically
-// the correct replacement for the dropped legacy column.
-//
-// The legacy type (`@/lib/types/database`) is kept unchanged so the 10+
-// out-of-scope files that project through `.field_mapping_id` continue to
-// type-check. Prompt 3c/3d will rewrite those callers against
-// `target_field_mapping_id` directly and the legacy type will be retired
-// alongside the shim (spec §Cleanup items).
-//
-// TODO(prompt-3d): DELETE THIS ADAPTER and the legacy `Transformation`
-// interface in `lib/types/database.ts` in the same commit that closes
-// out Prompt 3d. Downstream consumers should read
-// `transformations.target_field_mapping_id` directly to match the actual
-// DB column name. Leaving the "field_mapping_id-but-actually-TFM-id"
-// semantic shim in place past Phase 2 is a maintenance liability —
-// future readers will write code that depends on the wrong identity
-// semantics. See `docs/prompt-3a-remaining-work.md` §Known caveats #3.
-
-function toLegacyTransformation(row: TransformationRow): Transformation {
-  return {
-    id: row.id,
-    field_mapping_id: row.target_field_mapping_id,
-    description: row.description,
-    generated_sql: row.generated_sql,
-    is_ai_generated: row.is_ai_generated,
-    test_results: row.test_results,
-    status: row.status,
-    created_at: row.created_at,
-  }
 }
 
 // ─── TFM context resolver (shared across write paths) ────────────────────────
@@ -694,10 +664,7 @@ export async function getTransformData(
     const profile = primary?.sourceFieldId
       ? profileByFieldId.get(primary.sourceFieldId)
       : null
-    const transformationRow = transformByTfmId.get(tfm.id) ?? null
-    const transformation = transformationRow
-      ? toLegacyTransformation(transformationRow)
-      : null
+    const transformation: TransformationRow | null = transformByTfmId.get(tfm.id) ?? null
 
     const needsTransform = isValueAssignment
       ? true
@@ -1851,8 +1818,9 @@ export async function applyTransform(
       .update({ status: 'applied' as TransformationStatus })
       .eq('target_field_mapping_id', ctx.tfm.id)
 
-    // Re-flag row_issues now that transform values have changed.
-    // `staged-row-flags` is Prompt-3d scope; catching keeps apply resilient.
+    // Call into staged-row-flags best-effort. Function is functional
+    // as of Prompt 3d commit; try/catch retained as defense against
+    // unexpected runtime errors (network, DB, RPC failures).
     try {
       const { flagStagedRowIssues } = await import('@/lib/actions/staged-row-flags')
       const tmForFlag = ctx.tableMapping?.id

@@ -7,6 +7,35 @@ import { flagStagedRowIssues } from '@/lib/actions/staged-row-flags'
 import { logActivity } from '@/lib/actions/activity-log'
 import { revalidatePath } from 'next/cache'
 
+// ── Internal helpers ──────────────────────────────────────────────────────────
+//
+// Supabase's generated types for many-to-one joins sometimes widen a single
+// embedded row to `T | T[]`. These two tiny helpers narrow the result of the
+// `target_field` / `source_field` nested selects to a single row without
+// relaxing strictness at each call site.
+
+function pickTargetField(
+  row: { target_field: unknown } | null | undefined
+):
+  | { id: string; name: string; table_id: string }
+  | null {
+  const v = row?.target_field
+  if (!v) return null
+  const maybeArr = v as unknown as
+    | { id: string; name: string; table_id: string }
+    | { id: string; name: string; table_id: string }[]
+  if (Array.isArray(maybeArr)) return maybeArr[0] ?? null
+  return maybeArr
+}
+
+function pickSourceField(
+  v: { id: string; name: string } | { id: string; name: string }[] | null | undefined
+): { id: string; name: string } | null {
+  if (!v) return null
+  if (Array.isArray(v)) return v[0] ?? null
+  return v
+}
+
 // ── Public types ──────────────────────────────────────────────────────────────
 
 export interface StagedTableResult {
@@ -183,12 +212,15 @@ export async function getSourceIssuesForField(
 // NOT NULL constraint.
 //
 // Steps per table_mapping:
-//   1. Get approved field_mappings
-//   2. Fetch source/target field names and saved/tested/applied transforms
-//   3. Build jsonb_build_object SELECT (per-field NULL guard + transform or direct access)
-//   4. Call generate_staged_data_for_mapping RPC (DELETE + INSERT in one round-trip)
-//   5. Populate row_issues via populate_row_issues_for_mapping RPC
-//   6. Mark transforms as 'applied'
+//   1. Get approved target_field_mappings (with mapping_sources + source_field
+//      and target_field joined) that are owned by THIS table_mapping per the
+//      "owning-TM rule" (see inline comment in stageAllData for full rule).
+//   2. Fetch all source-table field names (for transform wrapping) and all
+//      saved/tested/applied transforms scoped by target_field_mapping_id.
+//   3. Build jsonb_build_object SELECT (per-field NULL guard + transform or direct access).
+//   4. Call generate_staged_data_for_mapping RPC (DELETE + INSERT in one round-trip).
+//   5. Populate row_issues via populate_row_issues_for_mapping RPC.
+//   6. Mark transforms as 'applied' (data-lifecycle flip, NOT mapping-shape mutation).
 
 export async function stageAllData(projectId: string): Promise<{
   success: boolean
@@ -245,45 +277,86 @@ export async function stageAllData(projectId: string): Promise<{
     const targetTableName = tableNameById.get(tm.target_table_id) ?? 'unknown'
 
     try {
-      // Get non-rejected field mappings for this table mapping
-      const { data: fms } = await supabaseAdmin
-        .from('field_mappings')
-        .select('id, source_field_id, target_field_id, is_contributing')
-        .eq('table_mapping_id', tm.id)
+      // ─────────────────────────────────────────────────────────────────────
+      // Gate 2 Q4 decision (Prompt 3d, 2026-04-22): no `assertMappingWritesEnabled` guard here.
+      // The `saved|tested → applied` status flip at the end of this block
+      // (on `transformations`) is a data-lifecycle operation — it records
+      // that a transform HAS been run against staged data — not a mutation
+      // of the mapping shape (`target_field_mappings` / `mapping_sources`).
+      // The maintenance-mode guard protects mapping-shape writes; data-lifecycle
+      // writes must continue to flow during maintenance so existing mappings
+      // can still be staged against fresh source data.
+      // ─────────────────────────────────────────────────────────────────────
+
+      // Load all non-rejected TFMs owned by THIS table_mapping (tm). In the
+      // new model, TFMs are project-scoped — "owned by tm" means:
+      //
+      //   - Mapped TFM: the TFM's `target_field` lives in `tm.target_table_id`
+      //     AND its primary mapping_source (ordinal=0) has
+      //     `source_table_id == tm.source_table_id`.
+      //   - Value assignment: the TFM's `target_field` lives in
+      //     `tm.target_table_id`, `combination_type === 'custom_sql'`, and
+      //     the TFM has zero mapping_sources (per Gate 2 §1.6 reminder).
+      //
+      // We fetch all non-rejected TFMs for the project scoped by
+      // target_field.table_id server-side, then apply the owning-TM source
+      // rule in-memory. The source_field name is pulled from the nested
+      // `source_field` join so we avoid a separate fetch.
+      const { data: projectTfms } = await supabaseAdmin
+        .from('target_field_mappings')
+        .select(
+          `
+          id,
+          combination_type,
+          target_field_id,
+          mapping_sources (
+            id, source_field_id, source_table_id, ordinal,
+            source_field:fields!source_field_id ( id, name )
+          ),
+          target_field:fields!target_field_id ( id, name, table_id )
+        `
+        )
+        .eq('project_id', projectId)
         .neq('status', 'rejected')
+        .eq('target_field.table_id', tm.target_table_id)
 
-      if (!fms || fms.length === 0) continue
+      type TfmRow = (typeof projectTfms extends (infer U)[] | null ? U : never)
 
-      const srcFieldIds = fms.map((fm) => fm.source_field_id).filter((id): id is string => id !== null)
-      const tgtFieldIds = fms.map((fm) => fm.target_field_id)
-      const fmIds = fms.map((fm) => fm.id)
+      const tfms = (projectTfms ?? []).filter((row) => {
+        // `target_field.table_id` server-filter drops rows where the embedded
+        // target_field does not match; belt-and-braces re-check here.
+        const tgt = pickTargetField(row)
+        if (!tgt || tgt.table_id !== tm.target_table_id) return false
 
-      const [
-        { data: srcFields },
-        { data: tgtFields },
-        { data: allSrcFields },
-        { data: transforms },
-      ] = await Promise.all([
-        srcFieldIds.length > 0
-          ? supabaseAdmin.from('fields').select('id, name').in('id', srcFieldIds)
-          : Promise.resolve({ data: [], error: null }),
-        supabaseAdmin.from('fields').select('id, name').in('id', tgtFieldIds),
+        const ms = (row.mapping_sources ?? []) as Array<{ ordinal: number; source_table_id: string | null }>
+        if (ms.length === 0) {
+          // Value assignment: must be custom_sql. Bare-ack TFMs (no MS,
+          // combination_type != 'custom_sql') are excluded from staging.
+          return row.combination_type === 'custom_sql'
+        }
+        const primary = [...ms].sort((a, b) => a.ordinal - b.ordinal)[0]
+        return primary.ordinal === 0 && primary.source_table_id === tm.source_table_id
+      }) as TfmRow[]
+
+      if (tfms.length === 0) continue
+
+      const tfmIds = tfms.map((t) => t.id)
+
+      const [{ data: allSrcFields }, { data: transforms }] = await Promise.all([
         supabaseAdmin.from('fields').select('name').eq('table_id', tm.source_table_id),
         supabaseAdmin
           .from('transformations')
-          .select('id, field_mapping_id, generated_sql, status')
-          .in('field_mapping_id', fmIds)
+          .select('id, target_field_mapping_id, generated_sql, status')
+          .in('target_field_mapping_id', tfmIds)
           .in('status', ['saved', 'tested', 'applied']),
       ])
 
-      const srcById = new Map((srcFields ?? []).map((f) => [f.id, f]))
-      const tgtById = new Map((tgtFields ?? []).map((f) => [f.id, f]))
       const allSrcFieldNames = (allSrcFields ?? []).map((f) => f.name)
-      const transformByFMId = new Map(
-        (transforms ?? []).map((t) => [t.field_mapping_id, t.generated_sql as string])
+      const transformByTfmId = new Map(
+        (transforms ?? []).map((t) => [t.target_field_mapping_id, t.generated_sql as string])
       )
-      const transformIdByFMId = new Map(
-        (transforms ?? []).map((t) => [t.field_mapping_id, t.id as string])
+      const transformIdByTfmId = new Map(
+        (transforms ?? []).map((t) => [t.target_field_mapping_id, t.id as string])
       )
 
       // Build jsonb_build_object pairs with per-field NULL guard.
@@ -291,16 +364,24 @@ export async function stageAllData(projectId: string): Promise<{
       // of letting an erroring transform expression crash the entire row.
       const jsonbPairs: string[] = []
 
-      for (const fm of fms) {
-        if (fm.is_contributing) continue
-        const isValueAssignment = fm.source_field_id === null
-        const srcField = fm.source_field_id ? srcById.get(fm.source_field_id) : null
-        const tgtField = tgtById.get(fm.target_field_id)
+      for (const tfm of tfms) {
+        const ms = (tfm.mapping_sources ?? []) as Array<{
+          ordinal: number
+          source_field_id: string | null
+          source_table_id: string | null
+          source_field: { id: string; name: string } | { id: string; name: string }[] | null
+        }>
+        const isValueAssignment = ms.length === 0
+        const primary = isValueAssignment
+          ? null
+          : [...ms].sort((a, b) => a.ordinal - b.ordinal)[0]
+        const srcField = primary ? pickSourceField(primary.source_field) : null
+        const tgtField = pickTargetField(tfm)
         if (!isValueAssignment && !srcField) continue
         if (!tgtField) continue
 
         const keyLiteral = `'${tgtField.name.replace(/'/g, "''")}'`
-        const transformSql = transformByFMId.get(fm.id)
+        const transformSql = transformByTfmId.get(tfm.id)
         const escapedSrc = srcField ? srcField.name.replace(/'/g, "''") : ''
 
         let valueExpr: string
@@ -358,8 +439,10 @@ export async function stageAllData(projectId: string): Promise<{
       // Cross-reference staged rows against open quality issues and populate row_issues
       const { flaggedRows = 0 } = await flagStagedRowIssues(projectId, tm.id)
 
-      // Mark all saved/tested transforms for this table as 'applied'
-      const transformIdsToMark = [...transformIdByFMId.values()]
+      // Mark all saved/tested transforms for this table as 'applied'.
+      // This is a data-lifecycle flip — NOT guarded by assertMappingWritesEnabled.
+      // See the Gate 2 Q4 block at the top of this try{} for the full rationale.
+      const transformIdsToMark = [...transformIdByTfmId.values()]
       if (transformIdsToMark.length > 0) {
         await supabaseAdmin
           .from('transformations')
@@ -630,48 +713,82 @@ export async function getStagedDataPreview(
   const from = (page - 1) * pageSize
   const to = from + pageSize - 1
 
-  // ── 1. Load non-rejected, non-contributing field mappings ─────────────────
-  // Contributing mappings feed into a primary mapping's transform SQL —
-  // they don't produce their own separate target column in the preview.
-  const { data: fms } = await supabase
-    .from('field_mappings')
-    .select('id, source_field_id, target_field_id')
-    .eq('table_mapping_id', tableMappingId)
+  // ── 1. Load the owning table_mapping + its TFMs ───────────────────────────
+  // Preview is rendered through the lens of TFMs owned by THIS table_mapping.
+  // "Owned by tm" in the new model means:
+  //   - Mapped TFM:  target_field.table_id == tm.target_table_id AND
+  //                  primary mapping_source (ordinal=0) has
+  //                  source_table_id == tm.source_table_id.
+  //   - Value assignment: target_field.table_id == tm.target_table_id AND
+  //                  combination_type === 'custom_sql' AND no mapping_sources
+  //                  (per Gate 2 §1.6 reminder).
+  // Contributors (mapping_sources with ordinal >= 1) are excluded naturally
+  // because the preview iterates once per TFM and looks only at MS[ordinal=0].
+  const { data: tmRow } = await supabase
+    .from('table_mappings')
+    .select('id, project_id, source_table_id, target_table_id')
+    .eq('id', tableMappingId)
     .neq('status', 'rejected')
-    .or('is_contributing.is.null,is_contributing.eq.false')
+    .maybeSingle()
 
-  if (!fms || fms.length === 0) return { rows: [], totalRows: 0, stagedFields: [], rowIssues: [], flaggedFields: {}, totalFlaggedRows: 0 }
+  if (!tmRow) return { rows: [], totalRows: 0, stagedFields: [], rowIssues: [], flaggedFields: {}, totalFlaggedRows: 0 }
 
-  const srcIds = fms.map((fm) => fm.source_field_id).filter((id): id is string => id !== null)
-  const tgtIds = fms.map((fm) => fm.target_field_id)
-  const fmIds = fms.map((fm) => fm.id)
+  const { data: projectTfms } = await supabase
+    .from('target_field_mappings')
+    .select(
+      `
+      id,
+      combination_type,
+      target_field_id,
+      mapping_sources (
+        id, source_field_id, source_table_id, ordinal,
+        source_field:fields!source_field_id ( id, name )
+      ),
+      target_field:fields!target_field_id ( id, name, table_id )
+    `
+    )
+    .eq('project_id', tmRow.project_id)
+    .neq('status', 'rejected')
+    .eq('target_field.table_id', tmRow.target_table_id)
 
-  const [{ data: srcFields }, { data: tgtFields }] = await Promise.all([
-    srcIds.length > 0
-      ? supabase.from('fields').select('id, name').in('id', srcIds)
-      : Promise.resolve({ data: [] as { id: string; name: string }[], error: null }),
-    supabase.from('fields').select('id, name').in('id', tgtIds),
-  ])
+  const tfms = (projectTfms ?? []).filter((row) => {
+    const tgt = pickTargetField(row)
+    if (!tgt || tgt.table_id !== tmRow.target_table_id) return false
+    const ms = (row.mapping_sources ?? []) as Array<{ ordinal: number; source_table_id: string | null }>
+    if (ms.length === 0) {
+      return row.combination_type === 'custom_sql'
+    }
+    const primary = [...ms].sort((a, b) => a.ordinal - b.ordinal)[0]
+    return primary.ordinal === 0 && primary.source_table_id === tmRow.source_table_id
+  })
 
-  const srcNameById = new Map((srcFields ?? []).map((f) => [f.id, f.name]))
-  const tgtNameById = new Map((tgtFields ?? []).map((f) => [f.id, f.name]))
+  if (tfms.length === 0) return { rows: [], totalRows: 0, stagedFields: [], rowIssues: [], flaggedFields: {}, totalFlaggedRows: 0 }
+
+  const tfmIds = tfms.map((t) => t.id)
 
   // targetFieldName → sourceFieldName (for passthrough lookup)
   const fieldMap = new Map<string, string>()
-  // target field names for value assignments (source_field_id is null)
+  // target field names for value assignments (TFMs with zero mapping_sources)
   const valueAssignmentTargetNames = new Set<string>()
-  // fieldMappingId → targetFieldName (for stagedFields computation)
-  const tgtNameByFMId = new Map<string, string>()
-  for (const fm of fms) {
-    const tgt = tgtNameById.get(fm.target_field_id)
+  // target_field_mapping_id → targetFieldName (for stagedFields computation)
+  const tgtNameByTfmId = new Map<string, string>()
+  for (const tfm of tfms) {
+    const tgt = pickTargetField(tfm)
     if (!tgt) continue
-    if (fm.source_field_id) {
-      const src = srcNameById.get(fm.source_field_id)
-      if (src) fieldMap.set(tgt, src)
+    const ms = (tfm.mapping_sources ?? []) as Array<{
+      ordinal: number
+      source_field_id: string | null
+      source_field: { id: string; name: string } | { id: string; name: string }[] | null
+    }>
+    if (ms.length === 0) {
+      // Value assignment: no source column to read from.
+      valueAssignmentTargetNames.add(tgt.name)
     } else {
-      valueAssignmentTargetNames.add(tgt)
+      const primary = [...ms].sort((a, b) => a.ordinal - b.ordinal)[0]
+      const src = pickSourceField(primary?.source_field)
+      if (src) fieldMap.set(tgt.name, src.name)
     }
-    tgtNameByFMId.set(fm.id, tgt)
+    tgtNameByTfmId.set(tfm.id, tgt.name)
   }
 
   // ── 2. Check whether staging has been run ─────────────────────────────────
@@ -692,12 +809,12 @@ export async function getStagedDataPreview(
     // transformed by a SQL expression.
     const { data: appliedTransforms } = await supabaseAdmin
       .from('transformations')
-      .select('field_mapping_id')
-      .in('field_mapping_id', fmIds)
+      .select('target_field_mapping_id')
+      .in('target_field_mapping_id', tfmIds)
       .eq('status', 'applied')
 
     const stagedFields = (appliedTransforms ?? [])
-      .map((t) => tgtNameByFMId.get(t.field_mapping_id))
+      .map((t) => tgtNameByTfmId.get(t.target_field_mapping_id))
       .filter((name): name is string => !!name)
 
     // Aggregate flaggedFields and totalFlaggedRows from ALL rows (not just the
