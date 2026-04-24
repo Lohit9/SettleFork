@@ -172,6 +172,53 @@ describe('[redesign guard] no legacy shim or UI types in the redesign path', () 
       'MappingsForRedesignResult is not referenced anywhere under the redesign path — data contract is not wired in.',
     ).toBe(true)
   })
+
+  // ─── Gap 3 — no client-side .sort() on rows ────────────────────────────────
+  //
+  // Design §4 / §5 pin the contract: the SERVER guarantees row order
+  // `(targetTable.name ASC, targetField.ordinalPosition ASC, targetField.name
+  // ASC)` and consumers MUST NOT re-sort. Any `.sort(` call under the
+  // redesign path is a contract violation — either the client is second-
+  // guessing server order, or the filter pipeline grew a re-sort step that
+  // would silently desync from the server contract.
+  //
+  // False positives to watch for:
+  //   • `Array.prototype.toSorted` — allowed (non-mutating; still a re-sort
+  //     of a local snapshot). This guard catches both `.sort(` and
+  //     `.toSorted(` so we stay conservative. If a legitimate need emerges,
+  //     update the rationale here instead of silently silencing.
+  //   • String methods like `.sortBy` — out of scope; regex is word-anchored
+  //     on `.sort(` exactly.
+  it('contains no client-side .sort() or .toSorted() on rows', () => {
+    const violations: Array<{ file: string; snippet: string }> = []
+    for (const abs of files) {
+      const raw = readFileSync(abs, 'utf-8')
+      const code = stripComments(raw)
+      // Match `.sort(` or `.toSorted(` as a method call. We intentionally
+      // ignore prefix context (any variable name) — the redesign path is
+      // small enough that a bare client-side `.sort(` is always a
+      // contract concern worth flagging. If a utility helper ever legit-
+      // imately sorts a non-rows array under this path, relax the guard
+      // by scoping to variable names (rows, filteredRows, groupedRows)
+      // and document why.
+      const pattern = /\.(?:sort|toSorted)\s*\(/g
+      const matches = code.match(pattern) ?? []
+      for (const m of matches) {
+        violations.push({
+          file: abs.replace(REPO_ROOT + '/', ''),
+          snippet: m,
+        })
+      }
+    }
+    expect(
+      violations,
+      `Client-side .sort() or .toSorted() call found under the redesign path:\n` +
+        violations.map((v) => `  ${v.file}: ${v.snippet}`).join('\n') +
+        `\n\nThe server guarantees row ordering; consumers must preserve it verbatim.` +
+        `\nIf you have a legitimate non-rows sort, relax the guard in ` +
+        `tests/lib/no-shim-in-redesign-path.test.ts and document the rationale.`,
+    ).toEqual([])
+  })
 })
 
 function escapeRegex(s: string): string {

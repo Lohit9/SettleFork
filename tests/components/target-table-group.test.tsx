@@ -123,4 +123,63 @@ describe('TargetTableGroup', () => {
     )
     expect(screen.queryByText('Heritage Core')).toBeNull()
   })
+
+  // ─── Gap 3 — filteredCount prop ──────────────────────────────────────────
+
+  it('renders "X of Y fields" when filteredCount is provided and matching < total', () => {
+    const rows: MappingRow[] = [
+      mapped({ id: 'r1', targetField: targetField({ id: 'f1', name: 'field_one' }) }),
+    ]
+    render(
+      <TargetTableGroup
+        targetTable={summary}
+        rows={rows}
+        filteredCount={{ total: 19, matching: 3 }}
+      />,
+    )
+    expect(screen.getByTestId('target-table-field-count')).toHaveTextContent(
+      '3 of 19 fields',
+    )
+  })
+
+  it('falls back to "Y fields" when filteredCount.matching === filteredCount.total', () => {
+    const rows: MappingRow[] = [
+      mapped({ id: 'r1', targetField: targetField({ id: 'f1', name: 'field_one' }) }),
+    ]
+    render(
+      <TargetTableGroup
+        targetTable={summary}
+        rows={rows}
+        filteredCount={{ total: 19, matching: 19 }}
+      />,
+    )
+    expect(screen.getByTestId('target-table-field-count')).toHaveTextContent(
+      '19 fields',
+    )
+    expect(screen.getByTestId('target-table-field-count')).not.toHaveTextContent(
+      ' of ',
+    )
+  })
+
+  it('renders filtered-empty state when filteredCount.matching === 0', () => {
+    render(
+      <TargetTableGroup
+        targetTable={summary}
+        rows={[]}
+        filteredCount={{ total: 19, matching: 0 }}
+      />,
+    )
+    expect(screen.getByTestId('target-table-filtered-empty')).toBeInTheDocument()
+    expect(
+      screen.getByTestId('target-table-filtered-empty'),
+    ).toHaveTextContent(/no fields match/i)
+    expect(screen.queryByText(/no fields to display for this table/i)).toBeNull()
+  })
+
+  it('shows unfiltered "Y fields" when filteredCount is omitted (Gap 4c backward compat)', () => {
+    render(<TargetTableGroup targetTable={summary} rows={[]} />)
+    expect(screen.getByTestId('target-table-field-count')).toHaveTextContent(
+      '3 fields',
+    )
+  })
 })

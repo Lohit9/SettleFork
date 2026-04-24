@@ -17,7 +17,8 @@
 //
 //     ?target=<table-id>       — scope to a single target table
 //     ?source=<table-id>       — scope to a single source table
-//     ?status=<value>          — status filter (all | needs_review | approved | unmapped)
+//     ?status=<value>          — status filter (needs_review | approved | rejected;
+//                                "all" is the default and is OMITTED from the URL)
 //     ?q=<search>              — free-text field-name search
 //
 //   Back-compat note (founder decision, out-of-band, 2026-04-21): the legacy
@@ -27,14 +28,19 @@
 //   the default (unfiltered) view. This keeps the new state machine clean and
 //   avoids permanent coupling to the legacy filter vocabulary.
 //
-// CURRENT STATE (Gap 4c)
+// CURRENT STATE (Gap 3)
 //
-//   Diagnostic panel from Gap 4b is replaced with real target-table groups
-//   and minimal read-only field rows. No filters, no drawer, no chevron —
-//   Gaps 3, 5, 6, 7-10 layer those in. The amber WIP banner is retained at
-//   the top until the full redesign ships.
+//   Filter row (3 dropdowns + search), URL sync, filter pipeline over the
+//   canonical rows array, per-group "X of Y match" indicators. Filter
+//   application is instant; the URL write for the search param is debounced
+//   by 200ms to avoid navigation storms. Other filter changes (dropdowns,
+//   clear-all) write the URL immediately.
+//
+//   NOT YET SHIPPED: row content (Rules 1-6, Gap 5), row chevron/expansion
+//   (Gap 5+6), drawer (Gaps 7-10). Rows remain the Gap 4c minimal render.
 
-import { useMemo } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useRouter, useSearchParams } from 'next/navigation'
 import { PageHeader } from '@/components/app/PageHeader'
 import { type ProjectInfo } from '@/components/app/ProjectInfoPopover'
 import type {
@@ -42,7 +48,21 @@ import type {
   MappingsForRedesignResult,
   TargetTableSummary,
 } from '@/lib/types/mappings-for-redesign'
+import {
+  countFilteredPerTargetTable,
+  DEFAULT_FILTER_STATE,
+  filterRows,
+  isGroupHiddenByIdentityFilters,
+  isGroupHiddenBySearch,
+  type MappingFilterState,
+  parseFilterStateFromParams,
+  serializeFilterStateToQuery,
+  shouldHideEmptyGroups,
+} from '@/lib/utils/mapping-filters'
+import { FilterRow } from './components/FilterRow'
 import { TargetTableGroup } from './components/TargetTableGroup'
+
+const SEARCH_DEBOUNCE_MS = 200
 
 interface Props {
   projectId: string
@@ -76,7 +96,7 @@ export default function MappingRedesignContent({
           {initialRedesignData === null ? (
             <NoDataState />
           ) : (
-            <MappingBody data={initialRedesignData} />
+            <MappingBody projectId={projectId} data={initialRedesignData} />
           )}
         </div>
       </div>
@@ -104,39 +124,178 @@ function WipBanner({ projectId }: { projectId: string }) {
 
 // ─── Body ────────────────────────────────────────────────────────────────────
 
-function MappingBody({ data }: { data: MappingsForRedesignResult }) {
+function MappingBody({
+  projectId,
+  data,
+}: {
+  projectId: string
+  data: MappingsForRedesignResult
+}) {
+  const router = useRouter()
+  const searchParams = useSearchParams()
+
+  // Seed filter state ONCE from the URL. Subsequent URL changes come from
+  // user input via our own writers; we don't round-trip through router →
+  // searchParams → state (which would cause focus/selection loss inside
+  // the search input on every keystroke).
+  const [filters, setFilters] = useState<MappingFilterState>(() =>
+    parseFilterStateFromParams(
+      searchParams ?? new URLSearchParams(),
+    ),
+  )
+
+  // Debounce only the search-param URL write. Other filters write
+  // immediately because they cause a single state change per interaction.
+  const pendingSearchTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+
+  const writeUrl = useCallback(
+    (next: MappingFilterState) => {
+      const qs = serializeFilterStateToQuery(next)
+      router.replace(
+        `/app/projects/${projectId}/mapping${qs ? `?${qs}` : ''}`,
+        { scroll: false },
+      )
+    },
+    [router, projectId],
+  )
+
+  const handleFiltersChange = useCallback(
+    (next: MappingFilterState) => {
+      setFilters((prev) => {
+        if (pendingSearchTimer.current) {
+          clearTimeout(pendingSearchTimer.current)
+          pendingSearchTimer.current = null
+        }
+        // Only the search string uses debounced URL writes — typing
+        // causes many updates per second. Dropdown changes (and clear-
+        // all) should feel instant in the URL bar.
+        if (
+          next.target === prev.target &&
+          next.source === prev.source &&
+          next.status === prev.status &&
+          next.search !== prev.search
+        ) {
+          pendingSearchTimer.current = setTimeout(() => {
+            pendingSearchTimer.current = null
+            writeUrl(next)
+          }, SEARCH_DEBOUNCE_MS)
+        } else {
+          writeUrl(next)
+        }
+        return next
+      })
+    },
+    [writeUrl],
+  )
+
+  useEffect(() => {
+    return () => {
+      if (pendingSearchTimer.current) {
+        clearTimeout(pendingSearchTimer.current)
+        pendingSearchTimer.current = null
+      }
+    }
+  }, [])
+
+  // Filter pipeline is instantaneous — the server already loaded every
+  // row, so filtering is a pure in-memory pass. No debounce here even
+  // when the user is typing.
+  const filteredRows = useMemo(
+    () => filterRows(data.rows, filters),
+    [data.rows, filters],
+  )
+
   /**
-   * Group rows by target-table id WHILE preserving server order. We
-   * rely on Map insertion order (the server emits rows sorted by
+   * Group filtered rows by target-table id WHILE preserving server order.
+   * We rely on Map insertion order (the server emits rows sorted by
    * targetTable.name ASC + ordinalPosition ASC), so the Map's native
-   * iteration yields groups in canonical order too. No client sort —
-   * that would violate the data-contract ordering guarantee.
+   * iteration yields groups in canonical order too.
+   *
+   * CONTRACT: NO client-side sort anywhere in this module. The no-client-
+   * sort guard test (tests/lib/no-shim-in-redesign-path.test.ts) will
+   * fail if anyone adds `.sort(` to this path.
    */
-  const groupedRows = useMemo(() => groupRowsByTargetTable(data.rows), [data.rows])
+  const groupedRows = useMemo(
+    () => groupRowsByTargetTable(filteredRows),
+    [filteredRows],
+  )
+
   const tablesById = useMemo(() => {
     const m = new Map<string, TargetTableSummary>()
     for (const t of data.targetTables) m.set(t.id, t)
     return m
   }, [data.targetTables])
 
+  const perGroupCounts = useMemo(
+    () => countFilteredPerTargetTable(filteredRows, data.targetTables),
+    [filteredRows, data.targetTables],
+  )
+
+  const isDefaultState = isDefaultFilterState(filters)
+  /**
+   * Group-visibility decision (Gap 3 amendment + Amendment 3,
+   * 2026-04-21). Two hide vectors, combined with OR:
+   *
+   *   1. IDENTITY hide (`isGroupHiddenByIdentityFilters`) —
+   *      Target/Source filter is active and this group does not match
+   *      the selected table identity. Identity membership is computed
+   *      against the UNFILTERED rows array so a Target/Source-matching
+   *      group STAYS VISIBLE even when Status or Search subsequently
+   *      narrows its rows to zero (the group then renders its own
+   *      filtered-empty state inside the header). This preserves the
+   *      identity-confirmed context the user explicitly asked for.
+   *
+   *   2. SEARCH hide (`isGroupHiddenBySearch`) — Search is active AND
+   *      no row in this group matches the query. Applies ONLY when
+   *      neither Target nor Source identity is active (the predicate
+   *      itself enforces that precedence). Search is free-text /
+   *      infinite-cardinality; rendering N empty-state headers per
+   *      keystroke is noise on an interaction meant to feel fast.
+   *
+   * Status alone never hides groups — it's a 3-4-value axis where an
+   * empty group is informative ("this project has zero needs-review
+   * fields here") rather than noise.
+   */
+  const hideEmpty = shouldHideEmptyGroups(filters)
+
+  const visibleTargetTables = useMemo(() => {
+    if (!hideEmpty) return data.targetTables
+    return data.targetTables.filter(
+      (summary) =>
+        !isGroupHiddenByIdentityFilters(summary.id, filters, data.rows) &&
+        !isGroupHiddenBySearch(summary.id, filters, data.rows),
+    )
+  }, [hideEmpty, data.targetTables, data.rows, filters])
+
   return (
     <>
-      <CountersRow counts={data.counts} tableCount={data.targetTables.length} />
+      <CountersRow counts={data.counts} />
+
+      <FilterRow
+        filters={filters}
+        onFiltersChange={handleFiltersChange}
+        targetTables={data.targetTables}
+        sourceTables={data.sourceTables}
+        tableCount={data.targetTables.length}
+      />
 
       {data.targetSchemaEmpty ? (
         <EmptySchemaState />
-      ) : groupedRows.size === 0 ? (
+      ) : data.targetTables.length === 0 ? (
         <EmptyFieldsState />
+      ) : visibleTargetTables.length === 0 ? (
+        <NoGroupsMatchState />
       ) : (
         <div className="flex flex-col gap-4">
-          {Array.from(groupedRows.entries()).map(([targetTableId, rows]) => {
-            const summary = tablesById.get(targetTableId)
-            if (!summary) return null
+          {visibleTargetTables.map((summary) => {
+            const rowsInGroup = groupedRows.get(summary.id) ?? []
+            const perGroup = perGroupCounts.get(summary.id)
             return (
               <TargetTableGroup
-                key={targetTableId}
+                key={summary.id}
                 targetTable={summary}
-                rows={rows}
+                rows={rowsInGroup}
+                filteredCount={isDefaultState ? undefined : perGroup}
               />
             )
           })}
@@ -148,14 +307,14 @@ function MappingBody({ data }: { data: MappingsForRedesignResult }) {
 
 // ─── Counters row ────────────────────────────────────────────────────────────
 // Inline pipe-separated stats, matching the spec mockup (line 646) and the
-// existing pattern in components/app/ProjectsList.tsx.
+// existing pattern in components/app/ProjectsList.tsx. Values are always
+// unfiltered project totals (per design §5.3); filter-aware "X of Y" lives
+// at the per-group header via TargetTableGroup's `filteredCount` prop.
 
 function CountersRow({
   counts,
-  tableCount,
 }: {
   counts: MappingsForRedesignResult['counts']
-  tableCount: number
 }) {
   const chips: { label: string; value: number }[] = [
     { label: 'Total', value: counts.total },
@@ -169,7 +328,7 @@ function CountersRow({
 
   return (
     <div
-      className="mb-4 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-gray-500"
+      className="mb-3 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-gray-500"
       data-testid="mapping-redesign-counters"
     >
       {chips.map((chip, i) => (
@@ -181,10 +340,6 @@ function CountersRow({
           </span>
         </span>
       ))}
-      <span aria-hidden="true" className="text-gray-300">·</span>
-      <span className="tabular-nums" data-testid="mapping-redesign-table-count">
-        {tableCount} {tableCount === 1 ? 'table' : 'tables'}
-      </span>
     </div>
   )
 }
@@ -226,6 +381,25 @@ function EmptyFieldsState() {
   )
 }
 
+/**
+ * Shown when every group is emptied by the active filter — either no
+ * target table contains any row matching the selected Target/Source
+ * identity, or Search finds zero matches across every group (Amendment
+ * 3). Without this state, the user would see a blank canvas with no
+ * context.
+ */
+function NoGroupsMatchState() {
+  return (
+    <div
+      data-testid="mapping-redesign-no-groups-match"
+      className="rounded-lg border border-slate-200 bg-white px-6 py-12 text-center text-sm text-slate-600"
+    >
+      No tables match the current filters. Try broadening your search,
+      widening the Target or Source dropdown, or clearing the filters.
+    </div>
+  )
+}
+
 // ─── Pure helpers ────────────────────────────────────────────────────────────
 
 /**
@@ -241,4 +415,13 @@ function groupRowsByTargetTable(rows: MappingRow[]): Map<string, MappingRow[]> {
     else out.set(tableId, [row])
   }
   return out
+}
+
+function isDefaultFilterState(state: MappingFilterState): boolean {
+  return (
+    state.target === DEFAULT_FILTER_STATE.target &&
+    state.source === DEFAULT_FILTER_STATE.source &&
+    state.status === DEFAULT_FILTER_STATE.status &&
+    state.search === DEFAULT_FILTER_STATE.search
+  )
 }

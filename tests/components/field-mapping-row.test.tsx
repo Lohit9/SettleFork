@@ -163,11 +163,17 @@ describe('FieldMappingRow', () => {
     expect(queryByLabelText(/^transformation:/)).toBeNull()
   })
 
-  it('shows the "required" tag when isNullable=false', () => {
+  it('does NOT render a "required" badge even when isNullable=false (drawer concern; Gap 3 amendment, 2026-04-21)', () => {
+    // The NOT-NULL / required indicator was added in Gap 4c as a sidebar
+    // row badge, then removed during Gap 3 review — it communicated nothing
+    // per-row on Heritage (95% of fields are NOT NULL). The drawer header
+    // (Gaps 7-10) is the canonical home for required/nullable display.
+    // This test prevents silent regression: if a future change adds the
+    // badge back to the main row, this will fail.
     render(
       <FieldMappingRow row={mapped({ targetField: targetField({ isNullable: false }) })} />,
     )
-    expect(screen.getByText('required')).toBeInTheDocument()
+    expect(screen.queryByText(/^required$/)).toBeNull()
   })
 
   it('exposes row kind via data attribute for debugging and snapshots', () => {

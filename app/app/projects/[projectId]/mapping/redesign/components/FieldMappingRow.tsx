@@ -25,6 +25,15 @@ import type {
 //   • status chip (dot + label) matching legacy visual vocabulary for
 //     consistency during the Phase 3 → 5 transition
 //   • tiny transformation-state indicator dot when hasTransformation=true
+//
+// NOT rendered on the main page (moved to drawer — Gaps 7-10):
+//   • The "required" NOT-NULL badge. Added in Gap 4c, removed here per
+//     founder review (Gap 3 amendment, 2026-04-21): the badge fires on
+//     ~95% of Heritage rows and communicates nothing differentiating
+//     per-row. Required/nullable surfaces in the drawer header (§Drawer
+//     lines 864-890) where it's actionable, not as chrome on every row.
+//     `row.targetField.isNullable` is preserved on the data contract —
+//     the drawer consumes it.
 
 interface FieldMappingRowProps {
   row: MappingRow
@@ -46,14 +55,6 @@ export function FieldMappingRow({ row }: FieldMappingRowProps) {
         >
           {row.targetField.name}
         </span>
-        {row.targetField.isNullable === false ? (
-          <span
-            className="rounded bg-slate-100 px-1 py-0.5 text-[10px] font-medium text-slate-500 dark:bg-slate-800 dark:text-slate-400"
-            title="NOT NULL"
-          >
-            required
-          </span>
-        ) : null}
       </div>
 
       {/* Confidence — fixed right-aligned cell so eyes can scan vertically */}
