@@ -158,7 +158,9 @@ describe('assembleMappingsForRedesign — discriminator cases', () => {
     expect(row.kind).toBe('mapped')
     expect(row.combinationType).toBe('concat_space')
     expect(row.sources.map((s) => s.ordinal)).toEqual([0, 1])
-    expect(row.sources[0].sampleValues).toEqual(['Alice', 'Bob', 'Carol']) // sliced to 3
+    // Gap 6 (2026-04-24): wire cap raised from 3 → 10. Input of 4
+    // flows through unchanged since it's below the cap.
+    expect(row.sources[0].sampleValues).toEqual(['Alice', 'Bob', 'Carol', 'Dora'])
     expect(row.sources.every((s) => s.joinAnnotation === null)).toBe(true)
   })
 
@@ -354,5 +356,111 @@ describe('assembleMappingsForRedesign — discriminator cases', () => {
     expect(out.rows).toEqual([])
     expect(out.targetSchemaEmpty).toBe(true)
     expect(out.targetTables).toEqual([])
+  })
+
+  // ─── Gap 6 ────────────────────────────────────────────────────────────
+  //
+  // Sample-values wire cap. Locked at 10 per founder decision (2026-04-24);
+  // UI previews first 3 and exposes remainder via `+N more`. Source of truth
+  // is `MAX_SAMPLE_VALUES` in `_mappings-for-redesign-core.ts` — any change
+  // there must update both `MappingSourceRef.sampleValues` JSDoc and this
+  // test in lockstep.
+
+  it('case 12a: sampleValues capped at 10 when DB has more', () => {
+    const fifteen = Array.from({ length: 15 }, (_, i) => `v${i + 1}`)
+    const F_S_OVERFLOW = field({
+      id: 'f-s-overflow',
+      table_id: TBL_S_CUST.id,
+      name: 'OverflowField',
+      data_type: 'VARCHAR(50)',
+      ordinal_position: 99,
+      field_profiles: [{ field_id: 'f-s-overflow', sample_values: fifteen }],
+    })
+    const t = tfm({
+      id: 'tfm-overflow',
+      target_field_id: F_T_FULLNAME.id,
+      combination_type: 'single',
+    })
+    const m = ms({
+      id: 'ms-overflow',
+      target_field_mapping_id: 'tfm-overflow',
+      source_field_id: F_S_OVERFLOW.id,
+      source_table_id: F_S_OVERFLOW.table_id,
+      ordinal: 0,
+    })
+    const out = assembleMappingsForRedesign(
+      baseInput({
+        fields: [
+          F_S_CUSTID, F_S_FIRST, F_S_LAST, F_S_CONTACTFK, F_S_ORDID, F_S_ORDTOTAL, F_S_OVERFLOW,
+          F_T_CUSTID, F_T_FULLNAME, F_T_TENANT, F_T_NOTES, F_T_LEGACY, F_T_ORDCONTACT, F_T_ORDTOTAL,
+        ],
+        tfms: [t],
+        mappingSources: [m],
+      }),
+    )
+    const row = out.rows.find((r) => r.id === 'tfm-overflow') as MappedRow
+    expect(row.sources[0].sampleValues).toHaveLength(10)
+    expect(row.sources[0].sampleValues).toEqual([
+      'v1', 'v2', 'v3', 'v4', 'v5', 'v6', 'v7', 'v8', 'v9', 'v10',
+    ])
+  })
+
+  it('case 12b: sampleValues passes through when DB has exactly 10 (no truncation, no pad)', () => {
+    const ten = Array.from({ length: 10 }, (_, i) => `v${i + 1}`)
+    const F_S_TEN = field({
+      id: 'f-s-ten',
+      table_id: TBL_S_CUST.id,
+      name: 'TenField',
+      data_type: 'VARCHAR(50)',
+      ordinal_position: 98,
+      field_profiles: [{ field_id: 'f-s-ten', sample_values: ten }],
+    })
+    const t = tfm({
+      id: 'tfm-ten',
+      target_field_id: F_T_FULLNAME.id,
+      combination_type: 'single',
+    })
+    const m = ms({
+      id: 'ms-ten',
+      target_field_mapping_id: 'tfm-ten',
+      source_field_id: F_S_TEN.id,
+      source_table_id: F_S_TEN.table_id,
+      ordinal: 0,
+    })
+    const out = assembleMappingsForRedesign(
+      baseInput({
+        fields: [
+          F_S_CUSTID, F_S_FIRST, F_S_LAST, F_S_CONTACTFK, F_S_ORDID, F_S_ORDTOTAL, F_S_TEN,
+          F_T_CUSTID, F_T_FULLNAME, F_T_TENANT, F_T_NOTES, F_T_LEGACY, F_T_ORDCONTACT, F_T_ORDTOTAL,
+        ],
+        tfms: [t],
+        mappingSources: [m],
+      }),
+    )
+    const row = out.rows.find((r) => r.id === 'tfm-ten') as MappedRow
+    expect(row.sources[0].sampleValues).toEqual(ten)
+  })
+
+  it('case 12c: aiReasoning on mapping_sources flows through to MappingSourceRef', () => {
+    const t = tfm({
+      id: 'tfm-reasoning',
+      target_field_id: F_T_CUSTID.id,
+      combination_type: 'single',
+    })
+    const m = ms({
+      id: 'ms-reasoning',
+      target_field_mapping_id: 'tfm-reasoning',
+      source_field_id: F_S_CUSTID.id,
+      source_table_id: F_S_CUSTID.table_id,
+      ordinal: 0,
+      ai_reasoning: 'Direct 1:1 on the primary key; no transformation required.',
+    })
+    const out = assembleMappingsForRedesign(
+      baseInput({ tfms: [t], mappingSources: [m] }),
+    )
+    const row = out.rows.find((r) => r.id === 'tfm-reasoning') as MappedRow
+    expect(row.sources[0].aiReasoning).toBe(
+      'Direct 1:1 on the primary key; no transformation required.',
+    )
   })
 })
