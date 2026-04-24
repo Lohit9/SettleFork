@@ -1246,6 +1246,20 @@ Same as single-source, with additional validation:
 | 4b | Cross-table authoring in Source tab: cross-table field picker, join editor, live preview with joins | 1.5 days | Phase 4a | MEDIUM |
 | 5-Cleanup | Remove shim, delete `UnmappedView`, `UnmappedTargetIndicator`, legacy localStorage keys. Drop feature flag column once all projects migrated. | 0.5 days | Phase 4b stable | LOW |
 
+> **Gap 12 no-op (2026-04-24).** The Phase 3 roadmap originally scoped a
+> "Gap 12 — delete unused legacy stubs" cleanup between Gap 6 and Gap 13.
+> Investigation on 2026-04-24 found no standalone legacy components
+> eligible for deletion: `UnmappedView` and `UnmappedTargetIndicator`
+> are **inline functions inside `MappingContent.tsx`** (lines 2488 and
+> 2482), not standalone files. Because `MappingContent.tsx` is reserved
+> for Gap 13 (full shim deletion, folded into Phase 5-Cleanup above),
+> the inline stubs will be removed naturally when the legacy file is
+> retired. Gap 12 was therefore closed as a no-op — no code changed,
+> no tests changed. Rule 6 (unmapped row) rendering in the redesign is
+> covered by `tests/components/field-mapping-row.test.tsx`
+> (`describe('FieldMappingRow — Rule 6 (unmapped)')`, plus chevron-
+> absence and a11y assertions). See commit message for the full audit.
+
 **Total**: ~19 focused engineering days including cleanup and A11y baseline.
 
 ## Back-compatibility shim limitations
@@ -1303,9 +1317,9 @@ Items to remove during Phase 5-Cleanup:
 
 ### Code deletions
 
-- `UnmappedView` component (`app/app/projects/[projectId]/mapping/MappingContent.tsx:2479`) — unreferenced
-- `UnmappedTargetIndicator` component (same file, line 2473) — stub returning null
-- `InlineAddFieldRow` component (same file, line 523) — replaced by drawer Source tab
+- `UnmappedView` component (`app/app/projects/[projectId]/mapping/MappingContent.tsx:2488`) — unreferenced inline function; removed with `MappingContent.tsx` in Gap 13 (Phase 5-Cleanup). A 2026-04-24 investigation (Gap 12) confirmed it is **inline**, not a standalone file, so it cannot be deleted independently of the shim — Gap 12 closed as a no-op.
+- `UnmappedTargetIndicator` component (same file, line 2482) — stub returning null; same story as above (inline; removed with `MappingContent.tsx` in Gap 13).
+- `InlineAddFieldRow` component (same file, line 523) — replaced by drawer Source tab; also inline, removed with `MappingContent.tsx` in Gap 13.
 - `lib/compat/mapping-shim.ts` — no longer needed after Phase 3 UI reads new model directly
 - `SUPPRESS_MULTI_TARGET_KEY` and `SUPPRESS_MULTI_TARGET_KEY_LEGACY` localStorage keys (lines 518-519) — orphaned after `InlineAddFieldRow` retires
 
