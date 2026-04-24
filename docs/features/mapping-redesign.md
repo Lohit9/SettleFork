@@ -829,6 +829,12 @@ Each source field gets one line in the expanded view:
 
 Join annotation format: `(join: ForeignKeyName)` where `ForeignKeyName` is the FK field in the dominant source table that references the joined table. For multiple sources sharing the same join, the annotation appears on each.
 
+### Purpose — scanning, not deep review
+
+The expanded view is explicitly a **scanning** surface. It exists so the user can verify at a glance which source fields contribute to a multi-source row, their per-source confidence, and any cross-table joins — nothing more. Deep per-source review (sample values, AI reasoning text, per-source edit controls, approve/reject actions) is the drawer's job; see §Drawer design and Gaps 7-10 for that work.
+
+This division is deliberate. Inlining sample values and reasoning on the expanded view was tried on 2026-04-24 (Gap 6 attempt) and reverted after the founder smoke test: the added density overwhelmed the mapping page's scanning use case. Data-layer plumbing for those fields (`MappingSourceRef.sampleValues`, `MappingSourceRef.aiReasoning`) survived on the wire because the drawer will consume them; the frontend rendering was confined to the drawer as originally intended.
+
 ### Interaction
 
 - Clicking the chevron again collapses the row
@@ -850,12 +856,13 @@ Same structure as Rule 2/3 expansion. The collapsed summary line is replaced wit
 
 ### Expanded view does NOT include
 
-- Combination SQL
-- Example output
-- AI reasoning (beyond the per-field confidence)
-- Edit controls
+- **Sample values from the source field** — lives in the drawer Source tab card (Gaps 7-10). `MappingSourceRef.sampleValues` carries up to 10 values on the wire for drawer consumption; the expanded view never renders them.
+- **AI reasoning text** (both per-source and row-level) — lives in the drawer. `MappingSourceRef.aiReasoning` (per-source) and `MappedRow.aiReasoning` (row-level) both flow through to the drawer; the expanded view never renders them.
+- **Combination SQL** — lives in the drawer Source tab / Transform tab.
+- **Edit controls** (approve, reject, remove, per-source add/remove) — live in the drawer footer.
+- **Example output** — lives in the drawer Transform tab preview.
 
-All of those live in the drawer. The expanded view is a read-only inspection surface.
+Explicitly: if a future gap is tempted to add any of the above to the expanded view "just this once", stop and re-read this section. The scanning-vs-review split is the governing principle of the mapping page; violating it produced a measurable UX regression on 2026-04-24 and must not be re-litigated without a founder-approved re-scoping.
 
 ## Drawer design
 

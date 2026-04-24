@@ -717,6 +717,35 @@ function asNonEmptyString(v: unknown): string | null {
   return typeof v === 'string' && v.length > 0 ? v : null
 }
 
+/**
+ * Max sample values we ship on the wire per source field.
+ *
+ * CONSUMER — drawer Source tab card (Gaps 7-10).
+ * ────────────────────────────────────────────────────────────────────
+ * Raised from 3 → 10 on 2026-04-24 to support deep per-source review
+ * in the drawer. The main-page expanded view (chevron-toggled per-
+ * source list) does NOT render these values — that path is optimized
+ * for scanning, not for inspection. See
+ * `docs/features/mapping-redesign.md` §Expanded view for the scoping
+ * rationale and `MappingSourceRef.sampleValues` JSDoc for the
+ * authoritative shape contract.
+ *
+ * History: a Gap 6 attempt inlined a 3-sample preview + "+N more"
+ * affordance on the expanded-view bullet line. Smoke test revealed
+ * the density overwhelmed the scanning use case, so the frontend
+ * rendering was reverted. The 10-value wire cap survives because the
+ * drawer will consume this data.
+ *
+ * Trade-offs considered at 10:
+ *   • Heritage production data has ≥4 values on 85/99 source fields
+ *     (86%). Most have ~10. Raising beyond 10 would inflate payload
+ *     without a matching UX benefit at current drawer fidelity.
+ *   • 10 short string values per source × ~3 sources per row × ~100
+ *     rows = negligible wire cost (<50 KB at worst-case 100-char
+ *     values, typically <10 KB).
+ */
+const MAX_SAMPLE_VALUES = 10
+
 function extractSampleValues(
   profiles: RawFieldRow['field_profiles'],
 ): string[] {
@@ -725,7 +754,7 @@ function extractSampleValues(
   const raw = first?.sample_values
   if (!Array.isArray(raw)) return []
   return raw
-    .slice(0, 3)
+    .slice(0, MAX_SAMPLE_VALUES)
     .map((v) => (typeof v === 'string' ? v : String(v)))
 }
 

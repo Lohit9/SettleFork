@@ -442,8 +442,33 @@ export interface MappingSourceRef {
   joinSpec: JoinSpec | null
 
   /**
-   * Up to 3 sample values from field_profiles for the Source tab
-   * card's "Example:" line. Empty array when no profile or no samples.
+   * Sample values from `field_profiles.sample_values` for the source
+   * field.
+   *
+   * CONSUMER — drawer Source tab card only.
+   * ──────────────────────────────────────────────────────────────────
+   * The mapping row's expanded view (chevron-toggled per-source list)
+   * intentionally does NOT render sample values. The mapping page is
+   * a scan-and-approve surface; deep per-source review — samples,
+   * reasoning, edit controls — lives in the drawer opened by clicking
+   * a row. See `docs/features/mapping-redesign.md` §Expanded view for
+   * the scoping rationale.
+   *
+   * An earlier attempt (Gap 6, 2026-04-24) inlined a 3-sample preview
+   * plus a `+N more` affordance on the expanded-view bullet line.
+   * Smoke test revealed the density overwhelmed the scanning use
+   * case, so the rendering was reverted. The 10-value wire cap
+   * survived because the drawer will consume this data in Gaps 7-10.
+   *
+   * Shape contract (locked 2026-04-24):
+   *   • Up to 10 values from the DB (cap in `extractSampleValues`).
+   *   • Empty array when no profile exists, the profile has no
+   *     samples, or `sample_values` is not an array.
+   *   • Server order preserved — no client-side reshuffling.
+   *
+   * Raising the 10-cap is the single-line change to
+   * `MAX_SAMPLE_VALUES` in `_mappings-for-redesign-core.ts`; update
+   * this JSDoc in lockstep.
    */
   sampleValues: string[]
 }
