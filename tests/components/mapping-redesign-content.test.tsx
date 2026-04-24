@@ -487,3 +487,177 @@ describe('MappingRedesignContent — Clear filters', () => {
     )
   })
 })
+
+// ─── Phase 3 Gap 7 — drawer state + URL sync ────────────────────────────────
+//
+// Verifies the drawer ↔ URL ↔ filter integration:
+//   • `?drawer=<rowId>` on mount opens the drawer to that row.
+//   • Clicking a row body writes `?drawer=<rowId>` to the URL.
+//   • Clicking the drawer's X button strips `?drawer` from the URL.
+//   • A filter that hides the open drawer row auto-closes the drawer
+//     and cleans up the URL param.
+//   • A stale `?drawer=<id>` for a non-existent row silently closes
+//     on mount (prevents a sticky empty drawer when row IDs change
+//     server-side).
+//   • Drawer + filter params co-exist in a single writeUrl call.
+
+describe('MappingRedesignContent — Gap 7 drawer URL sync', () => {
+  it('opens the drawer on mount when ?drawer=<rowId> is in the URL', () => {
+    renderRedesign('drawer=r-accounts-1')
+    expect(screen.getByTestId('mapping-drawer')).toBeInTheDocument()
+    const title = screen.getByTestId('mapping-drawer-title')
+    expect(title.textContent).toBe('account_id')
+  })
+
+  it('does NOT render the drawer when ?drawer is absent from the URL', () => {
+    renderRedesign()
+    expect(screen.queryByTestId('mapping-drawer')).toBeNull()
+  })
+
+  it('clicking a row body writes ?drawer=<rowId> to the URL and opens the drawer', () => {
+    renderRedesign()
+    // The drawer is closed at this point so `account_id` appears once
+    // (in the row). Click that row body to open the drawer.
+    const accountIdRow = screen
+      .getByText('account_id')
+      .closest('[data-testid="field-mapping-row"]')!
+      .querySelector('[data-testid="field-mapping-row-body"]') as HTMLElement
+    fireEvent.click(accountIdRow)
+    expect(screen.getByTestId('mapping-drawer')).toBeInTheDocument()
+    expect(replaceMock).toHaveBeenCalledWith(
+      '/app/projects/p1/mapping?drawer=r-accounts-1',
+      { scroll: false },
+    )
+  })
+
+  it('clicking the X button removes ?drawer from the URL and closes the drawer', () => {
+    renderRedesign('drawer=r-accounts-1')
+    expect(screen.getByTestId('mapping-drawer')).toBeInTheDocument()
+    fireEvent.click(screen.getByTestId('mapping-drawer-close'))
+    expect(screen.queryByTestId('mapping-drawer')).toBeNull()
+    // URL should be stripped (bare mapping path).
+    expect(replaceMock).toHaveBeenCalledWith(
+      '/app/projects/p1/mapping',
+      { scroll: false },
+    )
+  })
+
+  it('Esc key closes the drawer and strips the URL param', () => {
+    renderRedesign('drawer=r-accounts-1')
+    expect(screen.getByTestId('mapping-drawer')).toBeInTheDocument()
+    fireEvent.keyDown(document, { key: 'Escape' })
+    expect(screen.queryByTestId('mapping-drawer')).toBeNull()
+    expect(replaceMock).toHaveBeenCalledWith(
+      '/app/projects/p1/mapping',
+      { scroll: false },
+    )
+  })
+
+  it('silently closes when ?drawer points at a non-existent row id (stale URL)', () => {
+    renderRedesign('drawer=row-that-does-not-exist')
+    // Drawer never renders.
+    expect(screen.queryByTestId('mapping-drawer')).toBeNull()
+    // URL is normalised to remove the stale param.
+    expect(replaceMock).toHaveBeenCalledWith(
+      '/app/projects/p1/mapping',
+      { scroll: false },
+    )
+  })
+
+  it('auto-closes when a filter hides the currently-open row', () => {
+    // Open row in accounts group, then narrow Target filter to customers
+    // (which has no row with id `r-accounts-1`).
+    renderRedesign(`drawer=r-accounts-1`)
+    expect(screen.getByTestId('mapping-drawer')).toBeInTheDocument()
+    // Apply a Target filter via the URL-mounted state — easiest path is
+    // to flip via the dropdown trigger, but we already have replaceMock
+    // wiring; click clear-all first to reset, then dispatch a Target
+    // change. Simpler: re-render with a filter that hides accounts.
+    // We can mutate currentSearch and re-render to simulate.
+
+    // Apply target=customers via the actual Target filter dropdown so
+    // the local handler runs. Clear assertions after mount.
+    replaceMock.mockClear()
+    fireEvent.click(screen.getByTestId('filter-target'))
+    // 'customers' appears in BOTH the dropdown options list AND in the
+    // group header. Target the dropdown option specifically by role.
+    fireEvent.click(screen.getByRole('option', { name: /customers/i }))
+    // Drawer should disappear; replaceMock should have been called with
+    // a URL that does NOT include drawer= and DOES include target=.
+    expect(screen.queryByTestId('mapping-drawer')).toBeNull()
+    const calls = replaceMock.mock.calls.map((c) => c[0] as string)
+    const finalUrl = calls[calls.length - 1] ?? ''
+    expect(finalUrl).toContain(`target=${customersTable.id}`)
+    expect(finalUrl).not.toContain('drawer=')
+  })
+
+  it('drawer state is independent of filter state — both can be active simultaneously', () => {
+    // Mount with a target filter active AND a drawer pointing at a row
+    // that survives the filter. Both the filter chrome AND the drawer
+    // should render.
+    renderRedesign(`target=${accountsTable.id}&drawer=r-accounts-1`)
+    expect(screen.getByTestId('mapping-drawer')).toBeInTheDocument()
+    // Only one group (accounts) renders; the drawer is anchored to a
+    // row inside it.
+    expect(screen.getAllByTestId('target-table-group')).toHaveLength(1)
+  })
+
+  it('writeUrl composes filters + drawerRowId together in one URL', () => {
+    // Mount with a filter, then click a row to open the drawer. The
+    // combined URL must carry BOTH params.
+    renderRedesign(`target=${accountsTable.id}`)
+    replaceMock.mockClear()
+    // Drawer is closed so 'account_id' appears once (the row). Click it.
+    const rowBody = screen
+      .getByText('account_id')
+      .closest('[data-testid="field-mapping-row"]')!
+      .querySelector('[data-testid="field-mapping-row-body"]') as HTMLElement
+    fireEvent.click(rowBody)
+    const lastUrl = replaceMock.mock.calls.at(-1)?.[0] as string
+    expect(lastUrl).toContain(`target=${accountsTable.id}`)
+    expect(lastUrl).toContain('drawer=r-accounts-1')
+  })
+
+  it('changing a filter while drawer is open preserves drawerRowId in the URL when the row survives', () => {
+    renderRedesign(`drawer=r-accounts-1`)
+    replaceMock.mockClear()
+    // Apply target=accounts (the row's own group) — row survives.
+    fireEvent.click(screen.getByTestId('filter-target'))
+    fireEvent.click(screen.getByRole('option', { name: /accounts/i }))
+    const lastUrl = replaceMock.mock.calls.at(-1)?.[0] as string
+    expect(lastUrl).toContain('drawer=r-accounts-1')
+    expect(lastUrl).toContain(`target=${accountsTable.id}`)
+    // And the drawer is still rendered.
+    expect(screen.getByTestId('mapping-drawer')).toBeInTheDocument()
+  })
+
+  it('row body in the rendered tree carries role="button" and tabIndex=0 when drawer is wired up', () => {
+    renderRedesign()
+    const bodies = screen.getAllByTestId('field-mapping-row-body')
+    expect(bodies.length).toBeGreaterThan(0)
+    for (const b of bodies) {
+      expect(b.getAttribute('role')).toBe('button')
+      expect(b.getAttribute('tabindex')).toBe('0')
+    }
+  })
+
+  it('opening the drawer adds bg-slate-50 to the active row body', () => {
+    renderRedesign('drawer=r-accounts-1')
+    // 'account_id' renders BOTH in the row AND inside the drawer header,
+    // so we cannot use getByText. Locate the active row by its parent
+    // FieldMappingRow data-testid + the unique row body within.
+    const activeRowContainer = document.querySelector(
+      '[data-testid="field-mapping-row"][data-row-kind="mapped"]',
+    )
+    const activeRow = activeRowContainer!.querySelector(
+      '[data-testid="field-mapping-row-body"]',
+    ) as HTMLElement
+    expect(activeRow.className).toContain('bg-slate-50')
+    // The 'balance' row is unique (drawer header doesn't show 'balance').
+    const otherRow = screen
+      .getByText('balance')
+      .closest('[data-testid="field-mapping-row"]')!
+      .querySelector('[data-testid="field-mapping-row-body"]') as HTMLElement
+    expect(otherRow.className).not.toContain('bg-slate-50')
+  })
+})

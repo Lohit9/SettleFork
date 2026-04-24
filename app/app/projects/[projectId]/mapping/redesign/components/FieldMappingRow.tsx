@@ -109,13 +109,49 @@ import { ExpandedSourceList } from './ExpandedSourceList'
 
 interface FieldMappingRowProps {
   row: MappingRow
+  /**
+   * Phase 3 Gap 7 — drawer-open trigger. When provided, the row body
+   * becomes a `role="button"` keyboard-and-mouse-clickable surface that
+   * invokes this callback with `row.id`. The chevron continues to
+   * `stopPropagation` so chevron clicks toggle the in-place expansion
+   * without bubbling here.
+   *
+   * Omitted in fixtures and storybook scenarios that render rows
+   * without a drawer host (e.g. legacy MappingContent never sets this).
+   */
+  onRowClick?: (rowId: string) => void
+  /**
+   * Phase 3 Gap 7 — drawer-open visual highlight. When `true`, the row
+   * body gets a subtle `bg-slate-50` tint to anchor the user's eye to
+   * the row whose drawer is open. Provided by the parent based on its
+   * own drawer state (`drawerRowId === row.id`).
+   */
+  isActive?: boolean
 }
 
-export function FieldMappingRow({ row }: FieldMappingRowProps) {
+export function FieldMappingRow({ row, onRowClick, isActive }: FieldMappingRowProps) {
   const expandedId = useId()
   const rule = resolveMappedRule(row)
   const canExpand = rule === 'rule_2' || rule === 'rule_3' || rule === 'rule_4'
   const [isExpanded, setIsExpanded] = useState(false)
+  const isClickable = onRowClick !== undefined
+
+  const handleActivate = isClickable
+    ? () => onRowClick!(row.id)
+    : undefined
+
+  const handleKeyDown = isClickable
+    ? (e: React.KeyboardEvent<HTMLDivElement>) => {
+        // Only swallow Enter / Space when the activation target is the row
+        // body itself — chevron / future drawer-internal buttons should
+        // continue to receive their own keyboard events.
+        if (e.target !== e.currentTarget) return
+        if (e.key === 'Enter' || e.key === ' ') {
+          e.preventDefault()
+          onRowClick!(row.id)
+        }
+      }
+    : undefined
 
   return (
     <div
@@ -123,14 +159,20 @@ export function FieldMappingRow({ row }: FieldMappingRowProps) {
       data-testid="field-mapping-row"
       data-row-kind={row.kind}
       data-row-rule={row.kind === 'mapped' ? rule : undefined}
-      aria-label={buildAriaLabel(row, rule, isExpanded)}
+      aria-label={buildAriaLabel(row, rule, isExpanded, isClickable)}
     >
       <div
         data-testid="field-mapping-row-body"
+        role={isClickable ? 'button' : undefined}
+        tabIndex={isClickable ? 0 : undefined}
+        onClick={handleActivate}
+        onKeyDown={handleKeyDown}
         className={cn(
           // Column template documented above; keep this literal in sync with
           // the ASCII figure in the file header.
           'grid grid-cols-[1fr_5rem_1fr_8rem_1.25rem_1rem] items-center gap-4 px-5 py-2.5',
+          isClickable && 'cursor-pointer focus:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-slate-300',
+          isActive && 'bg-slate-50',
         )}
       >
         <SourceCell row={row} rule={rule} />
@@ -648,6 +690,7 @@ function buildAriaLabel(
   row: MappingRow,
   rule: MappingRowRule,
   isExpanded: boolean,
+  isClickable: boolean,
 ): string {
   const targetQualified = `${row.targetField.targetTable.name}.${row.targetField.name}`
   const confPhrase =
@@ -656,6 +699,12 @@ function buildAriaLabel(
       : ''
   const statusPhrase = `, ${STATUS_CONFIG[row.status].label.toLowerCase()}`
 
+  // Gap 7: append a click-affordance hint so screen readers signal that
+  // the row is interactable beyond simple description. Suffix only applies
+  // when `onRowClick` was provided (legacy callers without a drawer host
+  // keep their pre-Gap-7 aria-labels verbatim).
+  const clickPhrase = isClickable ? ' — click to open details' : ''
+
   switch (row.kind) {
     case 'mapped': {
       if (rule === 'rule_1') {
@@ -663,22 +712,22 @@ function buildAriaLabel(
         const sourceQualified = dominant
           ? `${dominant.sourceTable.name}.${dominant.sourceField.name}`
           : 'unknown source'
-        return `${sourceQualified} mapped to ${targetQualified}${confPhrase}${statusPhrase}`
+        return `${sourceQualified} mapped to ${targetQualified}${confPhrase}${statusPhrase}${clickPhrase}`
       }
       // Rule 2/3/4: summary phrase + expansion state.
       const tableCount = new Set(row.sources.map((s) => s.sourceTable.id)).size
       const fieldCount = row.sources.length
       const countPhrase = `mapped from ${fieldCount} source ${fieldCount === 1 ? 'field' : 'fields'} across ${tableCount} ${tableCount === 1 ? 'table' : 'tables'}`
       const expandPhrase = `, currently ${isExpanded ? 'expanded' : 'collapsed'}`
-      return `${targetQualified} ${countPhrase}${confPhrase}${statusPhrase}${expandPhrase}`
+      return `${targetQualified} ${countPhrase}${confPhrase}${statusPhrase}${expandPhrase}${clickPhrase}`
     }
     case 'value_assignment':
-      return `${targetQualified} value assignment${confPhrase}${statusPhrase}`
+      return `${targetQualified} value assignment${confPhrase}${statusPhrase}${clickPhrase}`
     case 'target_acknowledged': {
-      return buildAckAriaLabel(row, targetQualified)
+      return buildAckAriaLabel(row, targetQualified) + clickPhrase
     }
     case 'unmapped':
-      return `${targetQualified} not yet mapped`
+      return `${targetQualified} not yet mapped${clickPhrase}`
   }
 }
 
