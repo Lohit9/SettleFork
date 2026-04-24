@@ -219,6 +219,55 @@ describe('[redesign guard] no legacy shim or UI types in the redesign path', () 
         `tests/lib/no-shim-in-redesign-path.test.ts and document the rationale.`,
     ).toEqual([])
   })
+
+  // ─── Gap 5a hotfix — no Tailwind dark-prefix modifiers ─────────────────────
+  //
+  // Tailwind's default `darkMode` is `'media'` (see `tailwind.config.ts` —
+  // no explicit key). Under `'media'`, every dark-prefix class fires
+  // automatically when the user's OS reports `prefers-color-scheme: dark`,
+  // without any `.dark` gate.
+  //
+  // The rest of the app does NOT support dark mode: legacy UI uses zero
+  // dark-prefix modifiers, and redesign surfaces hardcode light-mode
+  // backgrounds (`bg-white`, `bg-gray-50`) with no dark counterpart.
+  //
+  // Result of mixing: dark-prefix text classes (near-white) render over
+  // hardcoded `bg-white` rows — near-white-on-white ghosted text. Gap 4c
+  // introduced the regression; Gap 5a propagated it to more sites; the
+  // 2026-04-23 smoke test surfaced it. This invariant prevents a repeat.
+  //
+  // If/when the app adopts dark mode app-wide, revisit this guard together
+  // with every sibling light-only surface — not in isolation.
+  //
+  // Comments are stripped before the regex runs, so module-level
+  // explanations of this invariant (which naturally reference the
+  // forbidden token) do NOT trip the guard.
+  it('contains no Tailwind dark-prefix class modifiers', () => {
+    const violations: Array<{ file: string; snippet: string }> = []
+    for (const abs of files) {
+      const raw = readFileSync(abs, 'utf-8')
+      const code = stripComments(raw)
+      // Match the literal dark-prefix token with a word character after
+      // the colon — this catches dark:bg-*, dark:text-*, etc. but avoids
+      // incidental substrings like `dark:` inside a URL or at end-of-line.
+      const pattern = /\bdark:[a-z0-9_\-[\]/.]+/gi
+      const matches = code.match(pattern) ?? []
+      for (const m of matches) {
+        violations.push({
+          file: abs.replace(REPO_ROOT + '/', ''),
+          snippet: m,
+        })
+      }
+    }
+    expect(
+      violations,
+      `Tailwind dark-prefix modifier found under the redesign path:\n` +
+        violations.map((v) => `  ${v.file}: ${v.snippet}`).join('\n') +
+        `\n\nThe surrounding redesign UI hardcodes light backgrounds; ` +
+        `dark-prefix text classes produce ghosted text in OS dark mode.` +
+        `\nIf the app adopts dark mode app-wide, revisit this guard holistically.`,
+    ).toEqual([])
+  })
 })
 
 function escapeRegex(s: string): string {
