@@ -4,8 +4,12 @@ import { TargetTableGroup } from '@/app/app/projects/[projectId]/mapping/redesig
 import type {
   MappedRow,
   MappingRow,
+  MappingSourceRef,
+  TargetAcknowledgedRow,
   TargetFieldRef,
   TargetTableSummary,
+  UnmappedRow,
+  ValueAssignmentRow,
 } from '@/lib/types/mappings-for-redesign'
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -27,6 +31,27 @@ function targetField(overrides: Partial<TargetFieldRef> = {}): TargetFieldRef {
   }
 }
 
+function source(overrides: Partial<MappingSourceRef> = {}): MappingSourceRef {
+  return {
+    id: 'ms-1',
+    ordinal: 0,
+    confidence: 98,
+    aiReasoning: null,
+    typeCompatibility: null,
+    sourceField: {
+      id: 'sf-1',
+      name: 'ACCT_NO',
+      dataType: 'NUMBER',
+      isNullable: false,
+    },
+    sourceTable: { id: 'st-1', name: 'ACCT_MASTER' },
+    joinAnnotation: null,
+    joinSpec: null,
+    sampleValues: [],
+    ...overrides,
+  }
+}
+
 function mapped(overrides: Partial<MappedRow> = {}): MappedRow {
   return {
     kind: 'mapped',
@@ -36,10 +61,57 @@ function mapped(overrides: Partial<MappedRow> = {}): MappedRow {
     status: 'approved',
     hasTransformation: false,
     transformationStatus: null,
-    sources: [],
+    sources: [source()],
     combinationType: 'single',
     combinationSql: null,
     aiReasoning: null,
+    ...overrides,
+  }
+}
+
+function valueAssignment(
+  overrides: Partial<ValueAssignmentRow> = {},
+): ValueAssignmentRow {
+  return {
+    kind: 'value_assignment',
+    id: 'tfm-va-1',
+    targetField: targetField({ id: 'tf-va', name: 'created_at' }),
+    confidence: 95,
+    status: 'approved',
+    hasTransformation: false,
+    transformationStatus: null,
+    combinationType: 'custom_sql',
+    combinationSql: null,
+    aiReasoning: null,
+    ...overrides,
+  }
+}
+
+function targetAck(
+  overrides: Partial<TargetAcknowledgedRow> = {},
+): TargetAcknowledgedRow {
+  return {
+    kind: 'target_acknowledged',
+    id: 'tfm-ack-1',
+    targetField: targetField({ id: 'tf-ack', name: 'internal_flag' }),
+    confidence: null,
+    status: 'approved',
+    hasTransformation: false,
+    transformationStatus: null,
+    acknowledgmentReason: 'system default',
+    ...overrides,
+  }
+}
+
+function unmapped(overrides: Partial<UnmappedRow> = {}): UnmappedRow {
+  return {
+    kind: 'unmapped',
+    id: 'unmapped::tf-u',
+    targetField: targetField({ id: 'tf-u', name: 'missing_field' }),
+    confidence: null,
+    status: 'unmapped',
+    hasTransformation: false,
+    transformationStatus: null,
     ...overrides,
   }
 }
@@ -181,5 +253,54 @@ describe('TargetTableGroup', () => {
     expect(screen.getByTestId('target-table-field-count')).toHaveTextContent(
       '3 fields',
     )
+  })
+
+  // ─── Kind-mix integration (Gap 5a) ───────────────────────────────────────
+  // Ensures the group delegates every MappingRow kind to FieldMappingRow
+  // correctly. FieldMappingRow.test.tsx covers the per-kind rendering
+  // contract; this case is a shallow integration check that the group
+  // component doesn't filter or swallow any kind.
+
+  it('renders every row kind (mapped, VA, target_acknowledged, unmapped) in a mixed group', () => {
+    const rows: MappingRow[] = [
+      mapped({
+        id: 'r-m',
+        targetField: targetField({ id: 'f-m', name: 'account_id' }),
+      }),
+      valueAssignment({
+        id: 'r-va',
+        targetField: targetField({ id: 'f-va', name: 'created_at' }),
+      }),
+      targetAck({
+        id: 'r-ack',
+        targetField: targetField({ id: 'f-ack', name: 'internal_flag' }),
+      }),
+      unmapped({
+        id: 'r-u',
+        targetField: targetField({ id: 'f-u', name: 'missing_field' }),
+      }),
+    ]
+    render(
+      <TargetTableGroup
+        targetTable={{ ...summary, fieldCount: rows.length }}
+        rows={rows}
+      />,
+    )
+    const rowEls = screen.getAllByTestId('field-mapping-row')
+    expect(rowEls).toHaveLength(4)
+    // Each kind appears via its data-row-kind attribute — stable hook that
+    // also powers smoke tests and snapshots.
+    const kinds = rowEls.map((el) => el.getAttribute('data-row-kind'))
+    expect(kinds).toEqual([
+      'mapped',
+      'value_assignment',
+      'target_acknowledged',
+      'unmapped',
+    ])
+    // Target field name for every kind renders (spot-check).
+    expect(screen.getByText('account_id')).toBeInTheDocument()
+    expect(screen.getByText('created_at')).toBeInTheDocument()
+    expect(screen.getByText('internal_flag')).toBeInTheDocument()
+    expect(screen.getByText('missing_field')).toBeInTheDocument()
   })
 })

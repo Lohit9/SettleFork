@@ -62,4 +62,32 @@ describe('TableBadge', () => {
     const wrapper = container.firstElementChild
     expect(wrapper?.getAttribute('title')).toBe('orders')
   })
+
+  // ─── Gap 5a hotfix 2026-04-23 ─── no dark-prefix Tailwind modifiers ────────
+  //
+  // The surrounding redesign UI hardcodes a light background (bg-white on
+  // TargetTableGroup, bg-gray-50 on the page). Tailwind's `darkMode: 'media'`
+  // default would fire any dark-prefix text variant automatically in OS dark
+  // mode, producing near-white-on-white ghosted text (the 2026-04-23 bug).
+  //
+  // Companion invariant: tests/lib/no-shim-in-redesign-path.test.ts greps
+  // every redesign source file for the dark-prefix token at CI time. These
+  // className assertions are the component-level smoke-test safety net.
+  describe('light-mode-only invariant', () => {
+    it('name span uses light-mode text color and no dark-prefix', () => {
+      const { container } = render(<TableBadge tableName="accounts" />)
+      const wrapper = container.firstElementChild
+      expect(wrapper?.className).toContain('text-slate-700')
+      expect(wrapper?.className).not.toMatch(/\bdark:/)
+    })
+
+    it('dataset subtitle uses light-mode text color and no dark-prefix', () => {
+      const { container } = render(
+        <TableBadge tableName="accounts" datasetName="Heritage Core" />,
+      )
+      const subtitleSpan = container.querySelectorAll('span > span')[1]
+      expect(subtitleSpan?.className).toContain('text-slate-500')
+      expect(subtitleSpan?.className).not.toMatch(/\bdark:/)
+    })
+  })
 })

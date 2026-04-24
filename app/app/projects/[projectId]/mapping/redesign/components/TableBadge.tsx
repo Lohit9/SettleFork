@@ -16,10 +16,15 @@ import { cn } from '@/components/ui/utils'
 // design round.
 //
 // Visual:
-//   • monochrome pill (slate-100 / slate-800 dark)
+//   • monochrome pill (slate-100 background, slate-700 text)
 //   • truncating max-width so long table names do not break row layout
 //   • optional dataset subtitle renders as a secondary line ONLY when the
 //     caller has a dataset worth surfacing (filter dropdown, not the row)
+//
+// Light-mode-only (Gap 5a hotfix 2026-04-23): deliberately no dark-prefix
+// Tailwind modifiers. See `FieldMappingRow.tsx` file header for the full
+// rationale. The grep invariant at
+// `tests/lib/no-shim-in-redesign-path.test.ts` enforces this at CI time.
 
 interface TableBadgeProps {
   /** Table name to display. Required. */
@@ -39,7 +44,7 @@ export function TableBadge({ tableName, datasetName, className }: TableBadgeProp
   return (
     <span
       className={cn(
-        'inline-flex max-w-[14rem] flex-col items-start rounded-md bg-slate-100 px-1.5 py-0.5 align-middle text-[11px] font-medium text-slate-700 dark:bg-slate-800 dark:text-slate-200',
+        'inline-flex max-w-[14rem] flex-col items-start rounded-md bg-slate-100 px-1.5 py-0.5 align-middle text-[11px] font-medium text-slate-700',
         className,
       )}
       // Title attribute provides the non-truncated name on hover; the
@@ -48,7 +53,7 @@ export function TableBadge({ tableName, datasetName, className }: TableBadgeProp
     >
       <span className="block w-full truncate font-mono leading-tight">{tableName}</span>
       {datasetName ? (
-        <span className="block w-full truncate text-[10px] font-normal text-slate-500 dark:text-slate-400">
+        <span className="block w-full truncate text-[10px] font-normal text-slate-500">
           {datasetName}
         </span>
       ) : null}
