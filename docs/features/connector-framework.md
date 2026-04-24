@@ -56,7 +56,7 @@
 
 8. **API version** — Pin **`v63.0`** at launch. At implementation time: verify **v63** is still GA and **≥6 months** mature; if retired, bump to the **current stable** pin (e.g. v64) and update **`SALESFORCE_API_VERSION`** + this doc in the same PR. **Annual review every January.** Version is **connector-module-scoped:** `SALESFORCE_API_VERSION` constant in Salesforce connector config; all URL builders consume it. **Source-invariant test:** `tests/lib/salesforce-api-version-guard.test.ts` greps for `/services/data/v\d+\.\d+/` outside the allowed constant file and **fails** on drift. **`connections.config`** stores the API version per connection for audit and migration support.
 
-9. **Failure round-trip (Salesforce target push)** — **Visibility:** each rejected row → **`quality_issues`** with `stage = 'target'`; severity from Salesforce error category (**blocking** for validation/required-field; **warning** for softer issues such as duplicate-detection); structured description with SF code/message/field path; **PII stripped** from persisted text — reference **`staged_data_rows.id`** instead. **Retry safety:** extend **`staged_data_rows`** with `target_push_status` (`pending` / `in_flight` / `succeeded` / `failed`), `target_push_attempted_at`, `target_push_error_id` (FK → `quality_issues`), `target_external_id` (Salesforce Id after success). Re-push filters **`target_push_status IN ('pending', 'failed')`** — successes skipped. **Audit:** **`connector_job_steps`** — **event-sourced**, **append-only**: each step’s lifecycle is a **sequence of inserted events** (`started`, `completed`, `failed`, `retried`). **No `UPDATE`** on step events; current state = **latest event** per `(connector_job_id, step_index)`. **DB permissions:** application role **INSERT-only** on `connector_job_steps`; **no UPDATE/DELETE** for that role; a **more privileged role** used **only** by retention cleanup. Step events store **`request_summary`** / **`response_summary`** (not raw bodies): HTTP method, path, byte counts, status code, selected safe headers; Salesforce job IDs in **`metadata` jsonb**; errors as structured **`ErrorEnvelope`** after normalization. **Bulk correlation:** every Bulk CSV includes **`_settle_row_id`** = `staged_data_rows.id`; Salesforce echoes in success/failure result CSVs; framework correlates on that column; **hidden** from mapping UI. **Retention:** **2 years** `connector_job_steps` events; **7 years** `connector_jobs` summary; **`quality_issues`** indefinite. Cleanup via **scheduled Inngest**; per-org retention config is **v2**. **Edge cases:** partial batch failure is **normal** (job completes with non-empty `failedResults`); **job-level failure** → revert in-flight rows to **`pending`**; **network failure mid-poll** → Inngest step retries; **idempotency** via `target_push_status` on success path; **source data mutation after successful push** → row returns **`pending`** while **preserving** `target_external_id` until intentionally cleared.
+9. **Failure round-trip (Salesforce target push)** — **Visibility:** each rejected row → **`quality_issues`** with `stage = 'target'`; severity from Salesforce error category (**blocking** for validation/required-field; **warning** for softer issues such as duplicate-detection); structured description with SF code/message/field path; **PII stripped** from persisted text — reference **`staged_data_rows.id`** instead. **Retry safety:** extend **`staged_data_rows`** with `target_push_status` (`pending` / `in_flight` / `succeeded` / `failed`), `target_push_attempted_at`, `target_push_error_id` (FK → `quality_issues`), `target_external_id` (Salesforce Id after success). Re-push filters **`target_push_status IN ('pending', 'failed')`** — successes skipped. **Audit:** **`connector_job_steps`** — **event-sourced**, **append-only**: each step’s lifecycle is a **sequence of inserted events** (`started`, `completed`, `failed`, `retried`). **No `UPDATE`** on step events; current state = **latest event** per `(connector_job_id, step_index)`. **DB permissions:** application roles **`authenticated`** and **`service_role`** receive **`INSERT` and `SELECT`** on `connector_job_steps` only, with **`UPDATE` and `DELETE` explicitly revoked** (Section 10); dedicated **`connector_retention`** role used **only** by scheduled cleanup for **`DELETE`** past the retention window. Step events store **`request_summary`** / **`response_summary`** (not raw bodies): HTTP method, path, byte counts, status code, selected safe headers; Salesforce job IDs in **`metadata` jsonb**; errors as structured **`ErrorEnvelope`** after normalization. **Bulk correlation:** every Bulk CSV includes **`_settle_row_id`** = `staged_data_rows.id`; Salesforce echoes in success/failure result CSVs; framework correlates on that column; **hidden** from mapping UI. **Retention:** **2 years** `connector_job_steps` events; **7 years** `connector_jobs` summary; **`quality_issues`** indefinite. Cleanup via **scheduled Inngest**; per-org retention config is **v2**. **Edge cases:** partial batch failure is **normal** (job completes with non-empty `failedResults`); **job-level failure** → revert in-flight rows to **`pending`**; **network failure mid-poll** → Inngest step retries; **idempotency** via `target_push_status` on success path; **source data mutation after successful push** → row returns **`pending`** while **preserving** `target_external_id` until intentionally cleared.
 
 10. **External ID strategy** — **`INSERT`-then-upsert-by-Id**; **no** customer-side external-ID fields in v1. First push: **composite `create` / Bulk insert**; capture returned **Salesforce Ids** into `staged_data_rows.target_external_id`. Subsequent pushes: **upsert by Id** (universal). New rows repeat the pattern. Customer-defined external IDs → **v2 advanced option**. OAuth scopes remain **`api` + `refresh_token` + `offline_access`** only — **no** `modify_metadata` / `full`.
 
@@ -140,32 +140,34 @@
 ### 5.1 `Secret<T>` (Layer 1)
 
 ```typescript
-/** Opaque handle — plaintext never stored on the object’s enumerable fields. */
-export interface Secret<T> {
-  /** Grep-auditable — only call at HTTP/SDK boundaries inside a single Inngest step. */
-  unwrap(): T
-  toJSON(): '[REDACTED:secret]'
+const SECRET_VALUES = new WeakMap<Secret<unknown>, unknown>()
+
+export class Secret<T> {
+  private readonly __brand: 'Secret' = 'Secret'
+
+  constructor(value: T) {
+    SECRET_VALUES.set(this, value)
+  }
+
+  unwrap(): T {
+    const value = SECRET_VALUES.get(this)
+    if (value === undefined) {
+      throw new Error('Secret accessed after disposal or via cloned shell')
+    }
+    return value as T
+  }
+
+  toString(): string { return '[REDACTED]' }
+  toJSON(): string { return '[REDACTED]' }
+  [Symbol.for('nodejs.util.inspect.custom')](): string { return '[REDACTED]' }
 }
 
-/** Internal vault — not exported. structuredClone(secret) yields an object whose unwrap() misses the vault entry. */
-const vault = new WeakMap<object, unknown>()
-
 export function createSecret<T>(value: T): Secret<T> {
-  const token = Object.create(null) as Secret<T>
-  vault.set(token, value)
-  token.unwrap = () => {
-    const v = vault.get(token)
-    if (v === undefined) {
-      throw new Error('Secret unwrap failed: value missing (cloned or GC’d)')
-    }
-    return v as T
-  }
-  token.toJSON = () => '[REDACTED:secret]'
-  return token
+  return new Secret(value)
 }
 ```
 
-*Implementation note:* also define `toString`, `Symbol.toPrimitive`, and Node `util.inspect.custom` so **all** introspection paths redact; ensure `JSON.stringify` uses `toJSON`.
+**Clone resistance and typing:** `structuredClone` produces an empty `Secret` shell whose `unwrap()` throws because the clone has **no** entry in the `WeakMap`. The private `__brand` field prevents structural type confusion (`Secret<string>` is not assignable to `string`). Class-based wrapping gives correct TypeScript typing throughout the framework.
 
 ### 5.2 `oauth_flow_sessions` (row shape)
 
@@ -469,9 +471,19 @@ Medium scope: **`SqlArtifactAdapter`** delegating to existing generators until m
 - **Secret<T> + connectorLogger + normalizeErrorEnvelope + tests** — §2.11.
 - **No CHECK constraint** secret scanning; **nightly detection Inngest** on audit columns.
 - **`oauth_flow_sessions`:** short TTL, single-use, PKCE, IP limits.
-- **`connector_job_steps`:** append-only; **INSERT-only** app role; privileged role **only** for retention.
+- **`connector_job_steps`:** append-only enforcement via **database role split** (subsection below); privileged retention role **only** for scheduled cleanup.
 - **Audit events:** connection lifecycle, OAuth refresh, job start/complete/fail — `activity_log` or successor.
-- **SOC 2 narrative:** Inngest **Type II** + Settle controls on **redaction, RLS, and retention**.
+- **SOC 2 narrative:** Inngest **Type II** + Settle controls on **redaction, RLS, retention, and audit integrity**.
+
+### Database role split for append-only audit integrity
+
+- **Application roles (`authenticated`, `service_role`):** Migration grants **`INSERT`** and **`SELECT`** on **`connector_job_steps`** only. Migration explicitly **`REVOKE UPDATE, DELETE`** on **`connector_job_steps`** from **`authenticated`** and **`service_role`**. Application code **cannot** mutate or remove audit rows — Postgres **rejects** the operation.
+
+- **Dedicated `connector_retention` role:** Holds **`DELETE`** on **`connector_job_steps`** (and any companion append-only tables governed by the same retention policy). Used **exclusively** by the **scheduled cleanup Inngest function**, which runs predicates such as **`DELETE FROM connector_job_steps WHERE created_at < now() - interval '2 years'`** (exact window per §2.9). Credentials for this role use a **separate** connection string in a dedicated env var (e.g. **`CONNECTOR_RETENTION_DB_URL`** — exact name decided at implementation time), loaded **only** by the cleanup function module, **never** by general application code.
+
+- **Cleanup operations logging:** Actions performed under **`connector_retention`** (rows deleted, batch identifiers, timestamps) are recorded in a **separate** operations / security audit channel — **not** in **`connector_job_steps`** (which remains the connector job audit trail).
+
+- **SOC 2 mapping:** This pattern supports **TSC CC7.2** — *the entity restricts the ability of unauthorized personnel to alter system data* — by making tampering with append-only audit events a **privilege violation at the database layer**, not merely a convention in application code.
 
 ---
 
