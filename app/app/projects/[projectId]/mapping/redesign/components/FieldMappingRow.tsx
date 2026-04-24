@@ -1,4 +1,8 @@
+'use client'
+
+import { useId, useState } from 'react'
 import { cn } from '@/components/ui/utils'
+import { ChevronDown, ChevronRight } from '@/components/icons'
 import type {
   MappedRow,
   MappingRow,
@@ -7,10 +11,12 @@ import type {
   TargetAcknowledgedRow,
   ValueAssignmentRow,
 } from '@/lib/types/mappings-for-redesign'
+import { classifyMappedRow, type MappingRowRule } from '@/lib/utils/mapping-row-rules'
 import { TableBadge } from './TableBadge'
+import { ExpandedSourceList } from './ExpandedSourceList'
 
 // ─────────────────────────────────────────────────────────────────────────────
-// FieldMappingRow — Phase 3 Gap 5a (Rules 1, 5, 6 + VA).
+// FieldMappingRow — Phase 3 Gap 5a + 5b.
 // ─────────────────────────────────────────────────────────────────────────────
 //
 // Renders a single MappingRow per the canonical spec §Row design
@@ -19,24 +25,25 @@ import { TableBadge } from './TableBadge'
 // vertical scan across rows stays consistent regardless of mapping
 // complexity.
 //
-// COLUMN LAYOUT (CSS grid, fixed template):
+// COLUMN LAYOUT (CSS grid, fixed template — 6 columns, Gap 5b):
 //
-//   ┌──────────────────┬──────┬──────────────────┬────────┬─┐
-//   │ source           │ conf │ target           │ status │T│
-//   │ 1fr (flex)       │ 5rem │ 1fr (flex)       │ 8rem   │ │
-//   └──────────────────┴──────┴──────────────────┴────────┴─┘
+//   ┌──────────────────┬──────┬──────────────────┬────────┬─┬─┐
+//   │ source           │ conf │ target           │ status │T│C│
+//   │ 1fr (flex)       │ 5rem │ 1fr (flex)       │ 8rem   │ │ │
+//   └──────────────────┴──────┴──────────────────┴────────┴─┴─┘
+//                                                          ↑  ↑
+//                                       transformation dot ─┘  │
+//                                                chevron (Gap 5b)
 //
-// Grid is used (vs. flex) so every row column aligns vertically down a
-// target-table group — eyes can scan a column top-to-bottom without the
-// shimmer that flex widths cause when neighboring content differs.
+// Chevron column added in Gap 5b. Claimed by every row (empty span for
+// Rule 1 / 5 / 6 / VA) so column alignment stays consistent down a group.
 //
 // KIND DISPATCH (strict):
 //
-//   'mapped'             → Rule 1 if sources.length === 1 (Heritage: 99/100)
-//                        → Rule 1 FALLBACK when sources.length > 1 (Heritage:
-//                          1/100 — the full_name concat_space row). Gap 5b
-//                          adds Rule 2/3/4 + chevron. Intentionally ignores
-//                          the non-dominant sources for now.
+//   'mapped'             → Rule 1 / 2 / 3 / 4 determined by
+//                          `classifyMappedRow(sources)` (lib/utils/mapping-
+//                          row-rules.ts). Rule 2/3/4 expose a chevron and
+//                          an ExpandedSourceList below the collapsed row.
 //   'value_assignment'   → Rule 1 visual; source slot shows "No source mapped"
 //                          per founder Gap 4a §9 Q5 decision. VA SQL lives in
 //                          the drawer (Gaps 7-10), NOT on the row.
@@ -45,8 +52,16 @@ import { TableBadge } from './TableBadge'
 //   'unmapped'           → Rule 6. Em-dash source + confidence. Bare target
 //                          name, no subtitle.
 //
-// NOT rendered in Gap 5a (deferred):
-//   • Chevron + in-place expansion (Gap 5b for Rule 2/3/4; Gap 6 sourced list)
+// EXPANSION SEMANTICS (Gap 5b, spec §Expanded view):
+//   • Chevron toggles per-row local state (useState, NOT URL-synced).
+//   • Default collapsed.
+//   • Chevron click stops propagation so Gaps 7-10 can layer row-body →
+//     drawer-open click on top without conflict.
+//   • Expand uses a CSS grid-rows trick (0fr ↔ 1fr) for smooth 150ms
+//     animation without JS height measurement.
+//   • aria-expanded + aria-controls wired on the chevron button.
+//
+// NOT rendered in Gap 5b (deferred):
 //   • Row click → drawer open (Gaps 7-10)
 //   • Approve / reject / remove action buttons
 //   • Per-source join annotation on the collapsed row — spec §Row design
@@ -97,33 +112,71 @@ interface FieldMappingRowProps {
 }
 
 export function FieldMappingRow({ row }: FieldMappingRowProps) {
+  const expandedId = useId()
+  const rule = resolveMappedRule(row)
+  const canExpand = rule === 'rule_2' || rule === 'rule_3' || rule === 'rule_4'
+  const [isExpanded, setIsExpanded] = useState(false)
+
   return (
     <div
       role="listitem"
       data-testid="field-mapping-row"
       data-row-kind={row.kind}
-      aria-label={buildAriaLabel(row)}
-      className={cn(
-        // Column template documented above; keep this literal in sync with
-        // the ASCII figure in the file header.
-        'grid grid-cols-[1fr_5rem_1fr_8rem_1.25rem] items-center gap-4 px-5 py-2.5',
-      )}
+      data-row-rule={row.kind === 'mapped' ? rule : undefined}
+      aria-label={buildAriaLabel(row, rule, isExpanded)}
     >
-      <SourceCell row={row} />
-      <ConfidenceCell confidence={row.confidence} />
-      <TargetCell row={row} />
-      <StatusChip status={row.status} />
-      <TransformSlot row={row} />
+      <div
+        data-testid="field-mapping-row-body"
+        className={cn(
+          // Column template documented above; keep this literal in sync with
+          // the ASCII figure in the file header.
+          'grid grid-cols-[1fr_5rem_1fr_8rem_1.25rem_1rem] items-center gap-4 px-5 py-2.5',
+        )}
+      >
+        <SourceCell row={row} rule={rule} />
+        <ConfidenceCell confidence={row.confidence} />
+        <TargetCell row={row} />
+        <StatusChip status={row.status} />
+        <TransformSlot row={row} />
+        <ChevronSlot
+          canExpand={canExpand}
+          isExpanded={isExpanded}
+          onToggle={() => setIsExpanded((v) => !v)}
+          expandedId={expandedId}
+        />
+      </div>
+      {canExpand && row.kind === 'mapped' ? (
+        <ExpansionRegion isExpanded={isExpanded}>
+          <ExpandedSourceList
+            id={expandedId}
+            sources={row.sources}
+            // Type narrowing: canExpand excludes rule_1.
+            rule={rule as Exclude<MappingRowRule, 'rule_1'>}
+          />
+        </ExpansionRegion>
+      ) : null}
     </div>
   )
 }
 
-// ─── Source cell (Rules 1 / 5 / 6 + VA dispatch) ─────────────────────────────
+// ─── Rule resolution ─────────────────────────────────────────────────────────
 
-function SourceCell({ row }: { row: MappingRow }) {
+/**
+ * Rule classification is meaningful only for 'mapped' rows. Other kinds
+ * have a fixed layout; we still return 'rule_1' as a harmless sentinel so
+ * the caller can keep a single variable + switch.
+ */
+function resolveMappedRule(row: MappingRow): MappingRowRule {
+  if (row.kind !== 'mapped' || row.sources.length < 1) return 'rule_1'
+  return classifyMappedRow(row.sources)
+}
+
+// ─── Source cell (kind + rule dispatcher) ────────────────────────────────────
+
+function SourceCell({ row, rule }: { row: MappingRow; rule: MappingRowRule }) {
   switch (row.kind) {
     case 'mapped':
-      return <MappedSourceCell row={row} />
+      return <MappedSourceCell row={row} rule={rule} />
     case 'value_assignment':
       return <ValueAssignmentSourceCell row={row} />
     case 'target_acknowledged':
@@ -132,12 +185,7 @@ function SourceCell({ row }: { row: MappingRow }) {
   }
 }
 
-/**
- * Rule 1 source rendering. For Gap 5a, multi-source rows (mapped with
- * `sources.length > 1`) also land here and render only the dominant
- * source — Gap 5b layers Rule 2/3/4 on top.
- */
-function MappedSourceCell({ row }: { row: MappedRow }) {
+function MappedSourceCell({ row, rule }: { row: MappedRow; rule: MappingRowRule }) {
   if (row.sources.length === 0) {
     // Contract defense: a 'mapped' row without sources is a server-side
     // violation of the discriminated union (would be 'value_assignment'
@@ -146,20 +194,101 @@ function MappedSourceCell({ row }: { row: MappedRow }) {
     return <EmDashCell srLabel="no source mapped" />
   }
 
-  const dominant = pickDominantSource(row.sources)
-  // TODO(Gap 5b): replace single-source render with Rule 2/3/4 when
-  // row.sources.length > 1. The additional sources are present on the
-  // row but intentionally ignored by the Gap 5a visual — see the kind-
-  // dispatch block comment at the top of this file.
+  switch (rule) {
+    case 'rule_1':
+      return <Rule1SourceRender source={pickDominantSource(row.sources)} />
+    case 'rule_2':
+      return <Rule2SourceRender sources={row.sources} />
+    case 'rule_3':
+      return <Rule3SourceRender sources={row.sources} />
+    case 'rule_4':
+      return <Rule4SourceRender sources={row.sources} />
+  }
+}
 
+function Rule1SourceRender({ source }: { source: MappingSourceRef }) {
   return (
     <div className="flex min-w-0 items-center gap-2">
-      <TableBadge tableName={dominant.sourceTable.name} />
+      <TableBadge tableName={source.sourceTable.name} />
       <span
         className="truncate font-mono text-[13px] text-slate-700"
-        title={dominant.sourceField.name}
+        title={source.sourceField.name}
       >
-        {dominant.sourceField.name}
+        {source.sourceField.name}
+      </span>
+    </div>
+  )
+}
+
+/**
+ * Rule 2 — multi-source, same table: one badge + comma-separated field names.
+ * The classifier guarantees all sources share a `sourceTable.id` when this
+ * renderer fires; we still read from `sources[0].sourceTable.name` (cheaper
+ * than a Set lookup) — every element has the same value by definition.
+ */
+function Rule2SourceRender({ sources }: { sources: MappingSourceRef[] }) {
+  const fieldList = sources.map((s) => s.sourceField.name).join(', ')
+  return (
+    <div className="flex min-w-0 items-center gap-2">
+      <TableBadge tableName={sources[0]!.sourceTable.name} />
+      <span
+        className="truncate font-mono text-[13px] text-slate-700"
+        title={fieldList}
+      >
+        {fieldList}
+      </span>
+    </div>
+  )
+}
+
+/**
+ * Rule 3 — cross-table, two tables: `[Badge] fields, [Badge] fields` where
+ * the groups are derived by walking sources in ORDINAL ORDER and starting a
+ * new group whenever the adjacent source's `sourceTable.id` differs.
+ *
+ * Why ordinal-order grouping (vs. group-by-table-then-sort):
+ *   • Contract forbids consumer-side re-sorting of the sources array.
+ *   • The server's ordinal ordering is canonical — non-dominant sources get
+ *     higher ordinals regardless of table, so natural grouping usually
+ *     already produces `[A] fields, [B] fields`.
+ *   • On the rare interleaved case (A, B, A) the user sees exactly what
+ *     the server-side state describes — no hidden reshuffling.
+ */
+function Rule3SourceRender({ sources }: { sources: MappingSourceRef[] }) {
+  const groups = groupAdjacentSourcesByTable(sources)
+  return (
+    <div className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1">
+      {groups.map((g, i) => (
+        <div key={`${g.tableId}-${i}`} className="flex min-w-0 items-center gap-2">
+          <TableBadge tableName={g.tableName} />
+          <span
+            className="truncate font-mono text-[13px] text-slate-700"
+            title={g.fields.join(', ')}
+          >
+            {g.fields.join(', ')}
+          </span>
+        </div>
+      ))}
+    </div>
+  )
+}
+
+/**
+ * Rule 4 — summary line. No badges, no field names inline. The full roster
+ * lives in the ExpandedSourceList. Numbers use `tabular-nums` so the column
+ * stays steady across rows of similar shape.
+ */
+function Rule4SourceRender({ sources }: { sources: MappingSourceRef[] }) {
+  const tableCount = new Set(sources.map((s) => s.sourceTable.id)).size
+  const fieldCount = sources.length
+  const summary = `${fieldCount} ${fieldCount === 1 ? 'field' : 'fields'} across ${tableCount} ${tableCount === 1 ? 'table' : 'tables'}`
+  return (
+    <div className="flex min-w-0 items-center">
+      <span
+        className="truncate text-[13px] tabular-nums text-slate-500"
+        title={summary}
+      >
+        {summary}
       </span>
     </div>
   )
@@ -196,6 +325,36 @@ function pickDominantSource(sources: MappingSourceRef[]): MappingSourceRef {
     if (s.ordinal === 0) return s
   }
   return sources[0]!
+}
+
+/**
+ * Walk `sources` in order, opening a new group whenever the next source's
+ * `sourceTable.id` differs from the previous. Returns groups with the table
+ * name and the ordered field-name list per group.
+ *
+ * Contract-safe: no consumer-side sorting; the output faithfully mirrors the
+ * server's ordinal order.
+ */
+interface SourceGroup {
+  tableId: string
+  tableName: string
+  fields: string[]
+}
+function groupAdjacentSourcesByTable(sources: MappingSourceRef[]): SourceGroup[] {
+  const out: SourceGroup[] = []
+  for (const s of sources) {
+    const last = out[out.length - 1]
+    if (last && last.tableId === s.sourceTable.id) {
+      last.fields.push(s.sourceField.name)
+    } else {
+      out.push({
+        tableId: s.sourceTable.id,
+        tableName: s.sourceTable.name,
+        fields: [s.sourceField.name],
+      })
+    }
+  }
+  return out
 }
 
 // ─── Confidence cell ─────────────────────────────────────────────────────────
@@ -383,6 +542,90 @@ const TRANSFORM_INDICATOR_CONFIG: Record<
   saved: { className: 'bg-amber-400', label: 'saved' },
 }
 
+// ─── Chevron slot (Gap 5b) ───────────────────────────────────────────────────
+
+/**
+ * Column 6 — chevron button for Rule 2/3/4. Rule 1 / 5 / 6 / VA rows render
+ * an empty span so the grid column stays claimed and vertical alignment is
+ * preserved down a group.
+ *
+ * Click handler calls `stopPropagation` so Gaps 7-10 can layer a row-body
+ * click (→ drawer open) without the chevron interfering. `aria-expanded` +
+ * `aria-controls` wire the button to the ExpandedSourceList for screen
+ * readers.
+ */
+function ChevronSlot({
+  canExpand,
+  isExpanded,
+  onToggle,
+  expandedId,
+}: {
+  canExpand: boolean
+  isExpanded: boolean
+  onToggle: () => void
+  expandedId: string
+}) {
+  if (!canExpand) {
+    return <span aria-hidden="true" />
+  }
+  return (
+    <button
+      type="button"
+      onClick={(e) => {
+        e.stopPropagation()
+        onToggle()
+      }}
+      aria-expanded={isExpanded}
+      aria-controls={expandedId}
+      aria-label={isExpanded ? 'Hide source details' : 'Show source details'}
+      data-testid="field-mapping-row-chevron"
+      className={cn(
+        'inline-flex h-5 w-5 items-center justify-center rounded',
+        'text-slate-400 transition-colors hover:text-slate-700',
+        'focus:outline-none focus-visible:ring-2 focus-visible:ring-slate-300',
+      )}
+    >
+      {isExpanded ? (
+        <ChevronDown className="h-4 w-4" />
+      ) : (
+        <ChevronRight className="h-4 w-4" />
+      )}
+    </button>
+  )
+}
+
+// ─── Expansion region (animated) ─────────────────────────────────────────────
+
+/**
+ * Collapses content to 0 height when `isExpanded=false`, animates to full
+ * height otherwise. Uses the CSS grid-rows 0fr↔1fr trick so we never have
+ * to measure DOM heights in JS. 150ms matches the spec's "subtle" guidance.
+ *
+ * Always renders the child (not conditionally) so:
+ *   • `aria-controls` on the chevron always resolves to a real DOM node
+ *   • The expand animation has content to animate in on first click
+ *
+ * `aria-hidden` is flipped with the state so screen readers ignore the
+ * collapsed region.
+ */
+function ExpansionRegion({
+  isExpanded,
+  children,
+}: {
+  isExpanded: boolean
+  children: React.ReactNode
+}) {
+  return (
+    <div
+      aria-hidden={!isExpanded}
+      className="grid transition-[grid-template-rows] duration-150 ease-out"
+      style={{ gridTemplateRows: isExpanded ? '1fr' : '0fr' }}
+    >
+      <div className="overflow-hidden">{children}</div>
+    </div>
+  )
+}
+
 // ─── A11y helper ─────────────────────────────────────────────────────────────
 
 /**
@@ -395,8 +638,17 @@ const TRANSFORM_INDICATOR_CONFIG: Record<
  *   "accounts.created_at value assignment at 95% confidence, approved"
  *   "customers.internal_flag acknowledged as not migratable: system default"
  *   "accounts.new_field not yet mapped"
+ *
+ * Gap 5b addition: multi-source rows (Rule 2/3/4) gain a count phrase
+ * ("N source fields across M tables") + expansion state ("currently
+ * collapsed" / "currently expanded"). Rule 1 and non-mapped kinds are
+ * unchanged so existing expectations stay stable.
  */
-function buildAriaLabel(row: MappingRow): string {
+function buildAriaLabel(
+  row: MappingRow,
+  rule: MappingRowRule,
+  isExpanded: boolean,
+): string {
   const targetQualified = `${row.targetField.targetTable.name}.${row.targetField.name}`
   const confPhrase =
     row.confidence !== null
@@ -406,13 +658,19 @@ function buildAriaLabel(row: MappingRow): string {
 
   switch (row.kind) {
     case 'mapped': {
-      const dominant = pickDominantSource(row.sources)
-      const sourceQualified = dominant
-        ? `${dominant.sourceTable.name}.${dominant.sourceField.name}`
-        : 'unknown source'
-      const multi =
-        row.sources.length > 1 ? ` (+${row.sources.length - 1} more)` : ''
-      return `${sourceQualified}${multi} mapped to ${targetQualified}${confPhrase}${statusPhrase}`
+      if (rule === 'rule_1') {
+        const dominant = pickDominantSource(row.sources)
+        const sourceQualified = dominant
+          ? `${dominant.sourceTable.name}.${dominant.sourceField.name}`
+          : 'unknown source'
+        return `${sourceQualified} mapped to ${targetQualified}${confPhrase}${statusPhrase}`
+      }
+      // Rule 2/3/4: summary phrase + expansion state.
+      const tableCount = new Set(row.sources.map((s) => s.sourceTable.id)).size
+      const fieldCount = row.sources.length
+      const countPhrase = `mapped from ${fieldCount} source ${fieldCount === 1 ? 'field' : 'fields'} across ${tableCount} ${tableCount === 1 ? 'table' : 'tables'}`
+      const expandPhrase = `, currently ${isExpanded ? 'expanded' : 'collapsed'}`
+      return `${targetQualified} ${countPhrase}${confPhrase}${statusPhrase}${expandPhrase}`
     }
     case 'value_assignment':
       return `${targetQualified} value assignment${confPhrase}${statusPhrase}`
