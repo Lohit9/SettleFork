@@ -674,6 +674,100 @@ Kept OUT to preserve single-responsibility:
   locks "naive .map() in Phase 3"; revisit only if profiling shows
   a problem.
 
+### 3.4 Amendment 2026-04-25 — `sourceFields` (Phase 3 Gap 11b)
+
+The contract is extended with a new top-level field on
+`MappingsForRedesignResult`:
+
+```ts
+sourceFields: SourceFieldWithState[]
+```
+
+Drives the **source schema sidebar** shipped in Gap 11a (shell) +
+11b (content). The sidebar groups source fields by source table,
+shows a Mapped/Unmapped indicator per field, surfaces sample values
++ data type on hover, and supports click-to-highlight the main-view
+rows that consume a given field.
+
+**Founder-locked decisions (Gap 11b discussion, 2026-04-25)**
+
+1. **Single contract, not a separate query.** Extending
+   `MappingsForRedesignResult` instead of adding a lazy
+   `lib/actions/source-fields-for-sidebar.ts`:
+
+   - Cache coherence: a Reject (Gap 9) deletes a TFM AND flips a
+     source field's `mappingStatus`. With one contract, a single
+     `revalidatePath` reflows both surfaces. A separate query would
+     need its own invalidation lifecycle, doubling the surface area.
+   - Payload weight: Heritage's 99 source fields × ~5 sample values
+     each ≈ 8 KB on the wire. Negligible vs. the ~50-80 KB rows
+     payload. Pilot customers up to ~500 source fields stay well
+     within budget.
+   - Sidebar default-collapsed: yes, most page loads don't render
+     the data — but SSR delivery is essentially free (already in
+     the response stream). Lazy-loading would trade negligible
+     bytes for an extra server round-trip on first expand.
+
+2. **`mappingStatus` semantics.** `'mapped'` iff the source field
+   appears in `mapping_sources.source_field_id` for at least one
+   TFM with `status !== 'rejected'`. Rejected TFMs explicitly do
+   NOT claim their contributing sources as mapped. Post-Gap-9 new
+   rejects = deletes (TFM disappears entirely); the only case
+   where this matters in production is the legacy SimpleLegal
+   rejected row. Excluding rejected here is defense-in-depth
+   against that legacy row + any future write path that retains
+   rejected TFMs.
+
+3. **Two-state indicator only.** No amber/partial state for
+   "mapped to a needs_review TFM" — `needs_review` and `approved`
+   both surface as `'mapped'`. The sidebar is a coverage-scan
+   surface, not a status-review surface.
+
+4. **`isAcknowledged` plumbed through, not yet rendered.** The
+   flag is emitted on every `SourceFieldWithState` for forward
+   compatibility with Gap 11c (which will design the
+   acknowledged-source visual treatment). Gap 11b renders all
+   acknowledged source fields identically to other unmapped
+   fields under the Unmapped pill. This avoids a follow-up
+   contract change in Gap 11c.
+
+5. **No `contributingTfmIds` on the contract.** The click-to-
+   highlight interaction needs the set of TFM ids that consume a
+   given source field, but this is derived client-side via
+   `useMemo` over the already-loaded `rows` array. Keeping the
+   derivation client-side avoids a redundant server-computed map
+   that could drift from `rows[]`.
+
+6. **No filter-pill counts on the contract.** All / Mapped /
+   Unmapped pill counts are derived client-side via `useMemo`
+   over `sourceFields`. Three-line derivation, single source of
+   truth, no extra wire surface.
+
+**Ordering.** Server-emitted in canonical order:
+
+```
+ORDER BY
+  sourceTable.name         ASC,
+  sourceField.ordinalPosition ASC,
+  sourceField.name         ASC
+```
+
+Mirrors `rows[]` ordering. The redesign-path no-`.sort()` guard
+(`tests/lib/no-shim-in-redesign-path.test.ts`) prevents any
+client-side re-sort downstream.
+
+**Always present.** Projects with no source schema yet emit
+`sourceFields: []`; the sidebar surfaces a "no source schema
+ingested" empty state.
+
+The full TypeScript shape (including the `SourceFieldWithState`
+interface) lives in `lib/types/mappings-for-redesign.ts` — see the
+`AMENDMENTS` block at the top of that file and the inline JSDoc on
+`MappingsForRedesignResult.sourceFields` and
+`SourceFieldWithState`. The query strategy in §4.2 already fetches
+every `field` and `field_profile` for the project; Gap 11b reuses
+that data path verbatim — no new round-trips.
+
 ---
 
 ## 4. Query strategy

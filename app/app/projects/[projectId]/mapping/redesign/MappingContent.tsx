@@ -41,7 +41,6 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useRouter, useSearchParams } from 'next/navigation'
-import { cn } from '@/components/ui/utils'
 import { PageHeader } from '@/components/app/PageHeader'
 import { type ProjectInfo } from '@/components/app/ProjectInfoPopover'
 import type {
@@ -63,6 +62,8 @@ import {
 import { FilterRow } from './components/FilterRow'
 import { TargetTableGroup } from './components/TargetTableGroup'
 import { MappingDrawer } from './components/MappingDrawer'
+import { SourceSchemaSidebar } from './components/SourceSchemaSidebar'
+import { useSidebarState, type SidebarState } from './components/useSidebarState'
 
 const SEARCH_DEBOUNCE_MS = 200
 
@@ -85,12 +86,197 @@ export default function MappingRedesignContent({
   projectInfo,
   initialRedesignData,
 }: Props) {
-  // Phase 3 Gap 7 — derive drawer-open status from the URL so the layout
-  // wrapper can shift right-padding without lifting drawer state out of
-  // `MappingBody`. `useSearchParams` is reactive in the app router; the
-  // value re-flows here on every `router.replace` from the body.
+  // Derive drawer-open status from the URL. `useSearchParams` is
+  // reactive in the app router; the value re-flows here on every
+  // `router.replace` from the body. Used by the auto-collapse effect
+  // below (Gap 11a, founder decision 4 — at narrow viewport, sidebar
+  // auto-collapses when the drawer opens).
+  //
+  // Phase 3 Gap 11a (2026-04-25): the drawer is now ALWAYS-overlay; we
+  // no longer reflow the main content area when it opens. The
+  // `isDrawerOpen` flag survives because the sidebar's auto-collapse
+  // logic still depends on it.
   const searchParams = useSearchParams()
   const isDrawerOpen = !!(searchParams?.get('drawer') ?? '')
+
+  // Source schema sidebar — Gap 11a. Persistence (collapsed/expanded
+  // + filter selection) lives in `useSidebarState`; auto-collapse on
+  // narrow viewports is overlaid below as ephemeral, non-persisted
+  // state. Keep these two concerns separate so the persistence layer
+  // never sees the temporary override.
+  const {
+    state: persistedSidebarState,
+    filter: sidebarFilter,
+    setSidebarState,
+    setSidebarFilter,
+  } = useSidebarState()
+
+  // Track viewport width via matchMedia. Default to wide (true) before
+  // the post-mount effect runs so the first paint matches the SSR
+  // assumption (no layout flash). jsdom does not polyfill matchMedia;
+  // tests inject a stub via `window.matchMedia = vi.fn(...)`.
+  const [isWideViewport, setIsWideViewport] = useState(true)
+  useEffect(() => {
+    if (typeof window === 'undefined' || typeof window.matchMedia !== 'function') {
+      return
+    }
+    const mql = window.matchMedia('(min-width: 1025px)')
+    setIsWideViewport(mql.matches)
+    const onChange = (e: MediaQueryListEvent) => setIsWideViewport(e.matches)
+    if (typeof mql.addEventListener === 'function') {
+      mql.addEventListener('change', onChange)
+      return () => mql.removeEventListener('change', onChange)
+    }
+    // Legacy fallback (older Safari) — addListener/removeListener.
+    // Wrap to satisfy the older signature.
+    const legacyHandler = () => setIsWideViewport(mql.matches)
+    mql.addListener(legacyHandler)
+    return () => mql.removeListener(legacyHandler)
+  }, [])
+
+  // Ephemeral auto-collapse override. NOT persisted — only in memory
+  // for the session. We track it as a derived "the drawer is open at
+  // a narrow viewport, so override an expanded preference for now."
+  // Read the persisted state through a ref inside the trigger effect
+  // so we can fire the auto-collapse on (drawer-open, viewport-narrow)
+  // transitions only — without re-firing every time the user manually
+  // expands the sidebar during the same session.
+  const [autoCollapsed, setAutoCollapsed] = useState(false)
+  const persistedSidebarStateRef = useRef<SidebarState>(persistedSidebarState)
+  useEffect(() => {
+    persistedSidebarStateRef.current = persistedSidebarState
+  }, [persistedSidebarState])
+
+  // Trigger: drawer transitions to open OR viewport narrows. If the
+  // user's persisted preference is 'expanded' AND the viewport is
+  // narrow AND the drawer is open, auto-collapse the sidebar so the
+  // drawer can claim primary focus. Founder decision 4.
+  useEffect(() => {
+    if (
+      isDrawerOpen &&
+      !isWideViewport &&
+      persistedSidebarStateRef.current === 'expanded'
+    ) {
+      setAutoCollapsed(true)
+    }
+  }, [isDrawerOpen, isWideViewport])
+
+  // Restore: drawer closes → clear the override. The sidebar snaps
+  // back to the user's persisted state.
+  useEffect(() => {
+    if (!isDrawerOpen) setAutoCollapsed(false)
+  }, [isDrawerOpen])
+
+  // Restore: viewport widens above 1024px while drawer is still open
+  // → clear the override. Founder decision 4 — "when viewport widens
+  // back above 1024px with drawer open, sidebar respects persisted
+  // state."
+  useEffect(() => {
+    if (isWideViewport) setAutoCollapsed(false)
+  }, [isWideViewport])
+
+  // Effective state shown in the UI = persisted state unless the
+  // ephemeral override is active.
+  const effectiveSidebarState: SidebarState = autoCollapsed
+    ? 'collapsed'
+    : persistedSidebarState
+
+  // Wrap the persisted setter so a deliberate user click during an
+  // auto-collapsed period clears the override (their action wins,
+  // until the next narrow-viewport re-trigger).
+  const handleSidebarStateChange = useCallback(
+    (next: SidebarState) => {
+      setAutoCollapsed(false)
+      setSidebarState(next)
+    },
+    [setSidebarState],
+  )
+
+  // ── Phase 3 Gap 11b — sidebar click-to-highlight ──────────────────
+  //
+  // When the user clicks a source field row in the sidebar, every
+  // main-view row that consumes that source gets a visual highlight.
+  // Single-select: one source field at a time. Founder-locked
+  // decisions (Gap 11b discussion 4-6 + additional concern):
+  //   • State lives at the outer component because both the sidebar
+  //     (active-row indicator) and the main view (row highlight)
+  //     consume it.
+  //   • The sourceField → consuming-rowIds map is derived client-side
+  //     via `useMemo` over `data.rows` (decision 6) — no contract
+  //     surface for `contributingTfmIds`.
+  //   • A SIBLING click-outside listener (decision 4) clears the
+  //     highlight when the user clicks anywhere outside the sidebar
+  //     and outside a highlighted row. Separate from the drawer's
+  //     existing click-outside listener so each can be tested in
+  //     isolation.
+  //   • Esc key clears the highlight (matches the drawer's Esc
+  //     behavior — same key clears whichever ephemeral surface is
+  //     active).
+  //   • Drawer action complete (Approve/Reject) clears the highlight
+  //     to prevent stale rowId references after a Reject deletes a
+  //     TFM. Approve case is mild over-clearing; Reject case is
+  //     necessary. See `MappingBody.handleDrawerActionComplete`.
+  const [highlightedSourceFieldId, setHighlightedSourceFieldId] = useState<
+    string | null
+  >(null)
+
+  const sourceFieldToRowIds = useMemo(
+    () => buildSourceFieldToRowIds(initialRedesignData?.rows ?? []),
+    [initialRedesignData?.rows],
+  )
+
+  const highlightedRowIds: Set<string> | null = useMemo(() => {
+    if (highlightedSourceFieldId === null) return null
+    return sourceFieldToRowIds.get(highlightedSourceFieldId) ?? new Set()
+  }, [highlightedSourceFieldId, sourceFieldToRowIds])
+
+  const clearHighlight = useCallback(() => {
+    setHighlightedSourceFieldId(null)
+  }, [])
+
+  const handleSidebarFieldClick = useCallback(
+    (fieldId: string) => {
+      // Single-select toggle: clicking the active field clears it,
+      // clicking a different field replaces.
+      setHighlightedSourceFieldId((prev) => (prev === fieldId ? null : fieldId))
+    },
+    [],
+  )
+
+  // Sibling click-outside listener — clears the highlight when the
+  // user mousedowns anywhere outside the sidebar and outside a
+  // highlighted row. This is intentionally separate from the
+  // drawer's own click-outside-to-close listener inside
+  // `MappingDrawer`. Each listener has a single responsibility and a
+  // single test surface.
+  useEffect(() => {
+    if (highlightedSourceFieldId === null) return
+    const onMouseDown = (e: MouseEvent) => {
+      const target = e.target as Node | null
+      if (target === null || !(target instanceof Element)) {
+        clearHighlight()
+        return
+      }
+      const insideSidebar = target.closest(
+        '[data-testid="source-schema-sidebar"]',
+      )
+      if (insideSidebar) return
+      const insideHighlightedRow = target.closest(
+        '[data-highlighted-row="true"]',
+      )
+      if (insideHighlightedRow) return
+      clearHighlight()
+    }
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') clearHighlight()
+    }
+    document.addEventListener('mousedown', onMouseDown)
+    document.addEventListener('keydown', onKeyDown)
+    return () => {
+      document.removeEventListener('mousedown', onMouseDown)
+      document.removeEventListener('keydown', onKeyDown)
+    }
+  }, [highlightedSourceFieldId, clearHighlight])
 
   return (
     <div className="flex h-full flex-col bg-gray-50">
@@ -99,27 +285,69 @@ export default function MappingRedesignContent({
         title="Mapping"
         projectInfo={projectInfo}
       />
-      <div
-        className={cn(
-          'flex-1 overflow-auto transition-[padding] duration-150 ease-out motion-reduce:transition-none',
-          // Reserve drawer width on viewports wide enough that doing so
-          // does not collapse the content area to a too-narrow column.
-          // Below that threshold the drawer sits over content (still
-          // legible because the drawer is opaque white with shadow).
-          isDrawerOpen && 'xl:pr-[520px]',
-        )}
-      >
-        <div className="mx-auto w-full max-w-5xl px-6 py-6">
-          <WipBanner projectId={projectId} />
-          {initialRedesignData === null ? (
-            <NoDataState />
-          ) : (
-            <MappingBody projectId={projectId} data={initialRedesignData} />
-          )}
+      {/* Horizontal layout: source-schema sidebar (left) + main scroll
+          container (right). The drawer mounts inside `MappingBody` and
+          is `position: fixed` (anchored to the viewport, not its DOM
+          parent), so it overlays the right portion regardless of where
+          it lives in the tree. `min-h-0` is necessary — without it,
+          flex children stretch indefinitely instead of letting the
+          inner scroll container handle overflow. */}
+      <div className="flex min-h-0 flex-1 overflow-hidden">
+        <SourceSchemaSidebar
+          state={effectiveSidebarState}
+          filter={sidebarFilter}
+          onStateChange={handleSidebarStateChange}
+          onFilterChange={setSidebarFilter}
+          sourceFields={initialRedesignData?.sourceFields ?? []}
+          highlightedSourceFieldId={highlightedSourceFieldId}
+          onFieldClick={handleSidebarFieldClick}
+        />
+        <div className="flex-1 overflow-auto">
+          <div className="mx-auto w-full max-w-5xl px-6 py-6">
+            <WipBanner projectId={projectId} />
+            {initialRedesignData === null ? (
+              <NoDataState />
+            ) : (
+              <MappingBody
+                projectId={projectId}
+                data={initialRedesignData}
+                highlightedRowIds={highlightedRowIds}
+                onClearHighlight={clearHighlight}
+              />
+            )}
+          </div>
         </div>
       </div>
     </div>
   )
+}
+
+/**
+ * Build a `Map<sourceFieldId, Set<rowId>>` over the canonical rows
+ * array. Used by the sidebar click-to-highlight interaction (Gap 11b)
+ * to find every main-view row that consumes a given source field.
+ *
+ * Only `MappedRow` rows contribute (other row kinds have no sources).
+ * `value_assignment`, `target_acknowledged`, and `unmapped` rows are
+ * silently skipped.
+ *
+ * Empty input → empty map (not null) so callers can treat the lookup
+ * uniformly.
+ */
+function buildSourceFieldToRowIds(
+  rows: MappingRow[],
+): Map<string, Set<string>> {
+  const out = new Map<string, Set<string>>()
+  for (const row of rows) {
+    if (row.kind !== 'mapped') continue
+    for (const src of row.sources) {
+      const sfId = src.sourceField.id
+      const existing = out.get(sfId)
+      if (existing) existing.add(row.id)
+      else out.set(sfId, new Set([row.id]))
+    }
+  }
+  return out
 }
 
 // ─── WIP banner ──────────────────────────────────────────────────────────────
@@ -145,9 +373,25 @@ function WipBanner({ projectId }: { projectId: string }) {
 function MappingBody({
   projectId,
   data,
+  highlightedRowIds,
+  onClearHighlight,
 }: {
   projectId: string
   data: MappingsForRedesignResult
+  /**
+   * Phase 3 Gap 11b — set of row ids the sidebar's click-to-highlight
+   * interaction is currently illuminating. `null` means no highlight
+   * is active. The set itself is never written to; callers re-derive
+   * via `useMemo` whenever the source field selection changes.
+   */
+  highlightedRowIds: Set<string> | null
+  /**
+   * Clears the sidebar highlight. Invoked from
+   * `handleDrawerActionComplete` so that an Approve/Reject does not
+   * leave a stale rowId reference behind (Reject deletes the TFM
+   * entirely, so the highlighted row identity dissolves).
+   */
+  onClearHighlight: () => void
 }) {
   const router = useRouter()
   const searchParams = useSearchParams()
@@ -238,6 +482,42 @@ function MappingBody({
     setDrawerRowId(null)
     writeUrl(filters, null)
   }, [writeUrl, filters])
+
+  // Phase 3 Gap 9 — drawer action completion. Approve and Reject have
+  // different post-action UX:
+  //
+  //   Approve: drawer STAYS OPEN with the new status. We just refresh
+  //            server data so the parent re-renders with the canonical
+  //            row.status. The drawer's local optimistic overlay
+  //            self-clears once the fresh prop arrives.
+  //   Reject:  drawer CLOSES and the URL clears `?drawer=`. The TFM is
+  //            deleted on the server, so the row identity dissolves —
+  //            keeping the drawer open would leave the user staring at
+  //            stale data (or, worse, a Rule 6 unmapped pseudo-row
+  //            synthesized client-side, which would diverge from the
+  //            server's canonical assembly). Founder decisions 1 + 2
+  //            in the Gap 9 alignment.
+  //
+  // `router.refresh()` re-fetches the server component's data without
+  // navigating, so the page rerenders with fresh `MappingsForRedesignResult`.
+  const handleDrawerActionComplete = useCallback(
+    (action: 'approve' | 'reject', _rowId: string) => {
+      // Phase 3 Gap 11b — clear the sidebar highlight after any
+      // drawer action. Reject deletes the TFM (the highlighted row
+      // identity dissolves on the server), so a stale highlight
+      // would point at a row id that no longer exists. Approve
+      // preserves identity but also clears the highlight — mild
+      // over-clearing is acceptable per the founder's "additional
+      // concern" decision in the Gap 11b alignment.
+      onClearHighlight()
+      router.refresh()
+      if (action === 'reject') {
+        setDrawerRowId(null)
+        writeUrl(filters, null)
+      }
+    },
+    [router, filters, writeUrl, onClearHighlight],
+  )
 
   useEffect(() => {
     return () => {
@@ -352,6 +632,7 @@ function MappingBody({
         targetTables={data.targetTables}
         sourceTables={data.sourceTables}
         tableCount={data.targetTables.length}
+        rejectedCount={data.counts.rejected}
       />
 
       {data.targetSchemaEmpty ? (
@@ -373,6 +654,7 @@ function MappingBody({
                 filteredCount={isDefaultState ? undefined : perGroup}
                 onRowClick={handleRowClick}
                 openRowId={drawerRowId}
+                highlightedRowIds={highlightedRowIds}
               />
             )
           })}
@@ -389,6 +671,7 @@ function MappingBody({
         row={drawerRow}
         isOpen={drawerRow !== null}
         onClose={handleDrawerClose}
+        onActionComplete={handleDrawerActionComplete}
       />
     </>
   )

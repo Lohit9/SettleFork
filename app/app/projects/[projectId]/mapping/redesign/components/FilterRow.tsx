@@ -52,14 +52,30 @@ interface FilterRowProps {
    * on the right to match the spec mockup. Pass 0 to hide.
    */
   tableCount: number
+  /**
+   * Phase 3 Gap 9 — rejected TFM count, used to gate the "Rejected"
+   * status option in the dropdown. The option is hidden when the count
+   * is zero (mirroring the counter-pill pattern from Gap 4a §9 Q6),
+   * with one exception: if the user already has Rejected selected
+   * (e.g., via a legacy URL bookmark), keep the option visible so the
+   * Select stays in a valid state. They can clear it explicitly.
+   *
+   * Optional for back-compat with existing tests that don't pass it;
+   * default is 0 → option hidden, which matches "fresh project" UX.
+   */
+  rejectedCount?: number
 }
 
-const STATUS_OPTIONS: Array<{ value: MappingStatusFilter; label: string }> = [
+const BASE_STATUS_OPTIONS: Array<{ value: MappingStatusFilter; label: string }> = [
   { value: 'all', label: 'All status' },
   { value: 'needs_review', label: 'Needs Review' },
   { value: 'approved', label: 'Approved' },
-  { value: 'rejected', label: 'Rejected' },
 ]
+
+const REJECTED_STATUS_OPTION: { value: MappingStatusFilter; label: string } = {
+  value: 'rejected',
+  label: 'Rejected',
+}
 
 export function FilterRow({
   filters,
@@ -67,7 +83,16 @@ export function FilterRow({
   targetTables,
   sourceTables,
   tableCount,
+  rejectedCount = 0,
 }: FilterRowProps) {
+  // Gate the "Rejected" option on rejectedCount > 0, with a fallback to
+  // keep the option visible when the current filter value is already
+  // 'rejected' (legacy URL bookmark scenario). Without the fallback the
+  // Select would render an invalid value.
+  const statusOptions =
+    rejectedCount > 0 || filters.status === 'rejected'
+      ? [...BASE_STATUS_OPTIONS, REJECTED_STATUS_OPTION]
+      : BASE_STATUS_OPTIONS
   // Local mirror for the search input so typing stays instant even
   // when the parent debounces URL writes. We sync back FROM the parent
   // whenever `filters.search` changes externally (e.g., URL-driven
@@ -167,7 +192,7 @@ export function FilterRow({
           <SelectValue />
         </SelectTrigger>
         <SelectContent>
-          {STATUS_OPTIONS.map((opt) => (
+          {statusOptions.map((opt) => (
             <SelectItem key={opt.value} value={opt.value}>
               {opt.label}
             </SelectItem>

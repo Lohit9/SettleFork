@@ -54,6 +54,13 @@ interface TargetTableGroupProps {
    * drawer open.
    */
   openRowId?: string | null
+  /**
+   * Phase 3 Gap 11b — set of row ids highlighted by the source-schema
+   * sidebar's click-to-highlight interaction. Each `FieldMappingRow`
+   * tests its own `row.id` for membership. `null` means no sidebar
+   * highlight is active (treated as the empty set).
+   */
+  highlightedRowIds?: Set<string> | null
 }
 
 export function TargetTableGroup({
@@ -62,6 +69,7 @@ export function TargetTableGroup({
   filteredCount,
   onRowClick,
   openRowId,
+  highlightedRowIds,
 }: TargetTableGroupProps) {
   const label = resolveFieldCountLabel(targetTable, filteredCount)
   const isFilteredEmpty = filteredCount !== undefined && filteredCount.matching === 0
@@ -111,6 +119,7 @@ export function TargetTableGroup({
               row={row}
               onRowClick={onRowClick}
               isActive={openRowId === row.id}
+              isHighlighted={highlightedRowIds?.has(row.id) ?? false}
             />
           ))}
         </div>

@@ -441,6 +441,92 @@ describe('assembleMappingsForRedesign — discriminator cases', () => {
     expect(row.sources[0].sampleValues).toEqual(ten)
   })
 
+  // ─── Gap 11b — sourceFields contract extension ──────────────────────────
+  //
+  // Source schema sidebar (`MappingsForRedesignResult.sourceFields`) is a
+  // server-assembled view over every source field in the project, decorated
+  // with mapping state and sample values. Founder-locked semantics:
+  //   • mappingStatus='mapped' iff the field appears in mapping_sources for
+  //     a non-rejected TFM.
+  //   • Rejected TFMs do NOT claim contributing sources as mapped.
+  //   • isAcknowledged plumbs through `source_field_acknowledgments` rows
+  //     (no visual treatment in Gap 11b — Gap 11c will design it).
+  //   • Server emits canonical order: (sourceTable.name ASC,
+  //     ordinalPosition ASC, name ASC).
+  //   • Always present (possibly empty array) — never `null`.
+
+  it('case 13a: sourceFields contains every source field with status + samples', () => {
+    const out = assembleMappingsForRedesign(baseInput({ tfms: [] }))
+    expect(out.sourceFields).toHaveLength(6)
+    const byId = new Map(out.sourceFields.map((f) => [f.id, f]))
+    const first = byId.get(F_S_FIRST.id)!
+    expect(first.name).toBe('FirstName')
+    expect(first.dataType).toBe('VARCHAR(50)')
+    expect(first.sourceTable).toEqual({ id: TBL_S_CUST.id, name: 'customers' })
+    expect(first.sampleValues).toEqual(['Alice', 'Bob', 'Carol', 'Dora'])
+    expect(first.mappingStatus).toBe('unmapped')
+    expect(first.isAcknowledged).toBe(false)
+  })
+
+  it('case 13b: mappingStatus="mapped" for fields contributing to non-rejected TFMs', () => {
+    const t = tfm({ id: 'tfm-13b', target_field_id: F_T_CUSTID.id, status: 'approved' })
+    const m = ms({ id: 'ms-13b', target_field_mapping_id: 'tfm-13b', source_field_id: F_S_CUSTID.id, source_table_id: F_S_CUSTID.table_id, ordinal: 0 })
+    const out = assembleMappingsForRedesign(baseInput({ tfms: [t], mappingSources: [m] }))
+    const cust = out.sourceFields.find((f) => f.id === F_S_CUSTID.id)!
+    expect(cust.mappingStatus).toBe('mapped')
+    const others = out.sourceFields.filter((f) => f.id !== F_S_CUSTID.id)
+    others.forEach((f) => expect(f.mappingStatus).toBe('unmapped'))
+  })
+
+  it('case 13c: mappingStatus="mapped" includes needs_review TFMs', () => {
+    const t = tfm({ id: 'tfm-13c', target_field_id: F_T_CUSTID.id, status: 'needs_review' })
+    const m = ms({ id: 'ms-13c', target_field_mapping_id: 'tfm-13c', source_field_id: F_S_CUSTID.id, source_table_id: F_S_CUSTID.table_id, ordinal: 0 })
+    const out = assembleMappingsForRedesign(baseInput({ tfms: [t], mappingSources: [m] }))
+    const cust = out.sourceFields.find((f) => f.id === F_S_CUSTID.id)!
+    expect(cust.mappingStatus).toBe('mapped')
+  })
+
+  it('case 13d: rejected TFMs do NOT claim their sources as mapped', () => {
+    // Founder-locked decision 2 (Gap 11b): rejected TFMs are
+    // explicitly excluded from the mapped set. Defends against the
+    // legacy SimpleLegal rejected row + any future write path that
+    // retains rejected TFMs.
+    const t = tfm({ id: 'tfm-13d', target_field_id: F_T_CUSTID.id, status: 'rejected' })
+    const m = ms({ id: 'ms-13d', target_field_mapping_id: 'tfm-13d', source_field_id: F_S_CUSTID.id, source_table_id: F_S_CUSTID.table_id, ordinal: 0 })
+    const out = assembleMappingsForRedesign(baseInput({ tfms: [t], mappingSources: [m] }))
+    const cust = out.sourceFields.find((f) => f.id === F_S_CUSTID.id)!
+    expect(cust.mappingStatus).toBe('unmapped')
+  })
+
+  it('case 13e: isAcknowledged reflects source_field_acknowledgments rows', () => {
+    const ack: RawSourceAckRow = { id: 'ack-13e', source_field_id: F_S_ORDTOTAL.id, reason: 'deprecated' }
+    const out = assembleMappingsForRedesign(baseInput({ sourceAcks: [ack] }))
+    const ordTotal = out.sourceFields.find((f) => f.id === F_S_ORDTOTAL.id)!
+    expect(ordTotal.isAcknowledged).toBe(true)
+    const others = out.sourceFields.filter((f) => f.id !== F_S_ORDTOTAL.id)
+    others.forEach((f) => expect(f.isAcknowledged).toBe(false))
+  })
+
+  it('case 13f: server emits canonical order (sourceTable.name ASC, ordinal ASC, name ASC)', () => {
+    const out = assembleMappingsForRedesign(baseInput({ tfms: [] }))
+    expect(out.sourceFields.map((f) => `${f.sourceTable.name}.${f.name}`)).toEqual([
+      'customers.CustomerID',
+      'customers.FirstName',
+      'customers.LastName',
+      'customers.PrimaryContactID',
+      'orders.ContactID',
+      'orders.TotalCents',
+    ])
+  })
+
+  it('case 13g: sourceFields is always an array (empty when no source schema)', () => {
+    const out = assembleMappingsForRedesign(baseInput({
+      tables: [TBL_T_CUST, TBL_T_ORD],
+      fields: [F_T_CUSTID, F_T_FULLNAME, F_T_TENANT, F_T_NOTES, F_T_LEGACY, F_T_ORDCONTACT, F_T_ORDTOTAL],
+    }))
+    expect(out.sourceFields).toEqual([])
+  })
+
   it('case 12c: aiReasoning on mapping_sources flows through to MappingSourceRef', () => {
     const t = tfm({
       id: 'tfm-reasoning',

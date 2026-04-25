@@ -1,8 +1,27 @@
 'use client'
 
-import { useCallback, useEffect, useId, useRef } from 'react'
+import {
+  useCallback,
+  useEffect,
+  useId,
+  useMemo,
+  useRef,
+  useState,
+  useTransition,
+} from 'react'
+import { Loader2 } from 'lucide-react'
 import { cn } from '@/components/ui/utils'
-import { X } from '@/components/icons'
+import { AlertCircle, X } from '@/components/icons'
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from '@/components/ui/alert-dialog'
 import type {
   MappedRow,
   MappingRow,
@@ -12,12 +31,16 @@ import type {
   UnmappedRow,
   ValueAssignmentRow,
 } from '@/lib/types/mappings-for-redesign'
+import {
+  approveFieldMapping,
+  rejectFieldMapping,
+} from '@/lib/actions/mappings-for-redesign'
 import { classifyMappedRow, type MappingRowRule } from '@/lib/utils/mapping-row-rules'
 import { formatSampleValues } from '@/lib/utils/mapping-drawer-format'
 import { TableBadge } from './TableBadge'
 
 // ─────────────────────────────────────────────────────────────────────────────
-// MappingDrawer — Phase 3 Gaps 7 + 8a + 8b.
+// MappingDrawer — Phase 3 Gaps 7 + 8a + 8b + 9.
 // ─────────────────────────────────────────────────────────────────────────────
 //
 // Right-side drawer that opens when the user clicks a mapping row body.
@@ -28,9 +51,16 @@ import { TableBadge } from './TableBadge'
 //
 // Gap 8a (shipped f9d2896): body content for non-mapped row kinds.
 //
-// Gap 8b (this gap): body content for mapped rows (Rules 1-4) — per-source
+// Gap 8b (shipped): body content for mapped rows (Rules 1-4) — per-source
 // roster + combination strategy + row-level reasoning + row-level confidence.
-// Removes the Gap 8a "Mapped row drawer body — coming in Gap 8b" placeholder.
+//
+// Gap 9 (this gap): drawer footer — Approve / Reject action buttons, kind-
+// dispatched disabled-state matrix, AlertDialog confirmation for Reject,
+// inline error banner above the footer, and the optimistic-Approve /
+// request-response-Reject UX. Wires `approveFieldMapping` and
+// `rejectFieldMapping` from `lib/actions/mappings-for-redesign.ts`. Reject
+// closes the drawer + clears the URL (founder amendment: reject == delete →
+// row identity dissolves); Approve stays open with status badge re-rendered.
 //
 // Final body kind dispatch:
 //
@@ -43,9 +73,18 @@ import { TableBadge } from './TableBadge'
 //                                               [Combination] / AI reasoning /
 //                                               Confidence / Status)
 //
-// Footer remains the Gap 7 placeholder; action buttons are Gap 9. The drawer is
-// deliberately tab-LESS; the spec's Details/Source/Transform tabs were retired
-// at Gap 7 in favour of kind-dispatched single-page bodies. Founder Q3.
+// Footer dispatch (Gap 9):
+//
+//   mapped / value_assignment   → ApproveRejectFooter (both buttons, disabled
+//                                                      states per status)
+//   target_acknowledged         → AcknowledgedFooter  (both buttons disabled,
+//                                                      explanatory tooltips)
+//   unmapped                    → no footer (no actions yet — Gap 11+ may add
+//                                            "Suggest mapping" CTA)
+//
+// The drawer is deliberately tab-LESS; the spec's Details/Source/Transform
+// tabs were retired at Gap 7 in favour of kind-dispatched single-page bodies.
+// Founder Q3.
 //
 // LOCKED FOUNDER DECISIONS (do not re-litigate; see Gap 7 prompt):
 //
@@ -82,11 +121,21 @@ import { TableBadge } from './TableBadge'
 // ── Drawer width ───────────────────────────────────────────────────────────
 
 /**
- * Drawer width in pixels. Exported so `MappingContent.tsx` can pad the
- * mapping content area to match (avoids hidden behind-drawer rows). Single
- * source of truth — change here, change everywhere.
+ * Drawer width in pixels. Single source of truth for the inline width
+ * style applied to the drawer aside.
+ *
+ * Phase 3 Gap 11a (2026-04-25): drawer is now ALWAYS-overlay across all
+ * viewport widths (no more `xl:pr-[…]` reflow on the parent scroll
+ * container). Width reduced from 520 → 480 to coexist comfortably with
+ * the new left-side `SourceSchemaSidebar` at common viewport widths.
+ *
+ * Tailwind's JIT requires literal class names, so the parent's reflow
+ * class — when it existed — was a hardcoded `'xl:pr-[520px]'` literal
+ * rather than an interpolation of this constant. With the reflow gone,
+ * this constant is now consumed only by the inline `style` prop below,
+ * eliminating the historical drift risk.
  */
-export const MAPPING_DRAWER_WIDTH_PX = 520
+export const MAPPING_DRAWER_WIDTH_PX = 480
 
 // ── Public API ────────────────────────────────────────────────────────────
 
@@ -105,12 +154,30 @@ export interface MappingDrawerProps {
    * row highlight in response.
    */
   onClose: () => void
+  /**
+   * Gap 9 — called after a successful Approve or Reject so the parent
+   * can refetch server data (`router.refresh()`) and, for Reject, close
+   * the drawer + clear the URL (founder decision 2 in the Gap 9
+   * alignment). Receives the action verb and the row id so the parent
+   * does not have to track in-flight state itself.
+   *
+   * Optional: tests render the drawer in isolation without a parent
+   * refetcher; in that mode the drawer falls back to its own derived
+   * state (no harm done — the optimistic overlay self-corrects on the
+   * next prop change).
+   */
+  onActionComplete?: (action: 'approve' | 'reject', rowId: string) => void
 }
 
 /**
  * Right-side drawer shell. See file header for the full Gap 7 contract.
  */
-export function MappingDrawer({ row, isOpen, onClose }: MappingDrawerProps) {
+export function MappingDrawer({
+  row,
+  isOpen,
+  onClose,
+  onActionComplete,
+}: MappingDrawerProps) {
   const titleId = useId()
   const drawerRef = useRef<HTMLElement | null>(null)
   // Track the element that had focus before the drawer opened so we can
@@ -149,6 +216,17 @@ export function MappingDrawer({ row, isOpen, onClose }: MappingDrawerProps) {
       if (target instanceof Element) {
         const clickedRow = target.closest('[data-testid="field-mapping-row-body"]')
         if (clickedRow) return
+        // Phase 3 Gap 11a — the new left-side `SourceSchemaSidebar`
+        // coexists with the drawer at viewports above 1024px (founder
+        // decision 4). Without this guard, mousedown on the sidebar's
+        // collapsed rail or close chevron would close the drawer
+        // before the sidebar's own click handler ran. We scope the
+        // exception by data-testid so unrelated DOM never benefits
+        // from this exclusion.
+        const clickedSidebar = target.closest(
+          '[data-testid="source-schema-sidebar"]',
+        )
+        if (clickedSidebar) return
       }
       onCloseRef.current()
     }
@@ -170,7 +248,129 @@ export function MappingDrawer({ row, isOpen, onClose }: MappingDrawerProps) {
     drawerRef.current = node
   }, [])
 
-  if (!isOpen || !row) return null
+  // ── Gap 9 — action state ───────────────────────────────────────────────
+  //
+  // Optimistic overlay for Approve. Keyed by row id so the overlay does
+  // NOT bleed into a different row if the user clicks another mapping
+  // before the server replies. The effective status used by the body's
+  // `StatusSection` and the footer's button-disabled matrix is derived
+  // by overlaying this onto `row.status`.
+  //
+  // We deliberately store the overlay in a single state slot rather than
+  // a Map: only one Approve can be in flight at a time (Approve disables
+  // its own trigger, Reject is gated behind a confirmation dialog), so
+  // multiple concurrent overlays are not reachable.
+  const [optimisticApprove, setOptimisticApprove] = useState<{
+    rowId: string
+  } | null>(null)
+  const [errorMessage, setErrorMessage] = useState<string | null>(null)
+  const [isApprovePending, startApproveTransition] = useTransition()
+  const [isRejecting, setIsRejecting] = useState(false)
+  const [confirmRejectOpen, setConfirmRejectOpen] = useState(false)
+
+  // Reset transient action state whenever the row identity changes —
+  // including drawer close (`row` becomes null between renders) and
+  // user clicks on a different row body.
+  const rowId = row?.id ?? null
+  useEffect(() => {
+    setOptimisticApprove(null)
+    setErrorMessage(null)
+    setConfirmRejectOpen(false)
+    // Note: we deliberately do NOT clear `isRejecting` here — Reject
+    // closes the drawer (founder decision 2 in the Gap 9 alignment),
+    // which unmounts everything; if a new row mounts, the in-flight
+    // state was for a different row and would never resolve here.
+    setIsRejecting(false)
+  }, [rowId])
+
+  // Clear the optimistic overlay once the server confirms by handing
+  // back a row whose status already matches our optimistic intent.
+  // After `router.refresh()` the parent re-renders with fresh server
+  // data; this effect reconciles. Keeping the overlay until then would
+  // double-flash the Approved state when the server data arrives in
+  // the same tick.
+  useEffect(() => {
+    if (
+      optimisticApprove &&
+      row &&
+      row.id === optimisticApprove.rowId &&
+      row.status === 'approved'
+    ) {
+      setOptimisticApprove(null)
+    }
+  }, [row?.id, row?.status, optimisticApprove])
+
+  const effectiveRow = useMemo<MappingRow | null>(() => {
+    if (!row) return null
+    if (optimisticApprove && optimisticApprove.rowId === row.id) {
+      return applyOptimisticApprove(row)
+    }
+    return row
+  }, [row, optimisticApprove])
+
+  const handleApprove = useCallback(() => {
+    if (!row) return
+    const targetRowId = row.id
+    setErrorMessage(null)
+    setOptimisticApprove({ rowId: targetRowId })
+    startApproveTransition(async () => {
+      try {
+        const result = await approveFieldMapping(targetRowId)
+        if (!result.success) {
+          setOptimisticApprove((current) =>
+            current && current.rowId === targetRowId ? null : current,
+          )
+          setErrorMessage(GENERIC_APPROVE_ERROR)
+          if (typeof console !== 'undefined') {
+            console.error('[MappingDrawer] approveFieldMapping failed:', result)
+          }
+          return
+        }
+        onActionComplete?.('approve', targetRowId)
+      } catch (err) {
+        setOptimisticApprove((current) =>
+          current && current.rowId === targetRowId ? null : current,
+        )
+        setErrorMessage(GENERIC_APPROVE_ERROR)
+        if (typeof console !== 'undefined') {
+          console.error('[MappingDrawer] approveFieldMapping threw:', err)
+        }
+      }
+    })
+  }, [row, onActionComplete])
+
+  const handleRejectConfirm = useCallback(async () => {
+    if (!row) return
+    const targetRowId = row.id
+    setErrorMessage(null)
+    setIsRejecting(true)
+    try {
+      const result = await rejectFieldMapping(targetRowId)
+      if (!result.success) {
+        setIsRejecting(false)
+        setConfirmRejectOpen(false)
+        setErrorMessage(GENERIC_REJECT_ERROR)
+        if (typeof console !== 'undefined') {
+          console.error('[MappingDrawer] rejectFieldMapping failed:', result)
+        }
+        return
+      }
+      // Success path — parent will close the drawer + refresh data.
+      // We do NOT clear `isRejecting` here; the drawer is about to
+      // unmount.
+      setConfirmRejectOpen(false)
+      onActionComplete?.('reject', targetRowId)
+    } catch (err) {
+      setIsRejecting(false)
+      setConfirmRejectOpen(false)
+      setErrorMessage(GENERIC_REJECT_ERROR)
+      if (typeof console !== 'undefined') {
+        console.error('[MappingDrawer] rejectFieldMapping threw:', err)
+      }
+    }
+  }, [row, onActionComplete])
+
+  if (!isOpen || !row || !effectiveRow) return null
 
   return (
     <aside
@@ -187,13 +387,56 @@ export function MappingDrawer({ row, isOpen, onClose }: MappingDrawerProps) {
       )}
       style={{ width: `${MAPPING_DRAWER_WIDTH_PX}px` }}
     >
-      <DrawerHeader row={row} titleId={titleId} onClose={onClose} />
-      <DrawerSubheader row={row} />
-      <DrawerBody row={row} />
-      <DrawerFooter />
+      <DrawerHeader row={effectiveRow} titleId={titleId} onClose={onClose} />
+      <DrawerSubheader row={effectiveRow} />
+      <DrawerBody row={effectiveRow} />
+      <DrawerFooter
+        row={effectiveRow}
+        errorMessage={errorMessage}
+        isApprovePending={isApprovePending}
+        isRejecting={isRejecting}
+        optimisticallyApproved={optimisticApprove !== null}
+        onApprove={handleApprove}
+        onRejectClick={() => setConfirmRejectOpen(true)}
+      />
+      <RejectConfirmDialog
+        open={confirmRejectOpen}
+        onOpenChange={(next) => {
+          if (isRejecting) return
+          setConfirmRejectOpen(next)
+        }}
+        targetFieldName={effectiveRow.targetField.name}
+        isRejecting={isRejecting}
+        onConfirm={handleRejectConfirm}
+      />
     </aside>
   )
 }
+
+// ── Optimistic overlay helper ───────────────────────────────────────────────
+//
+// Apply the "Approve in flight" overlay to a row. Only mapped /
+// value_assignment rows are reachable here — Approve is disabled for
+// `target_acknowledged` and the button does not exist for `unmapped`.
+// Returning the row unchanged for those kinds is purely defensive.
+
+function applyOptimisticApprove(row: MappingRow): MappingRow {
+  if (row.kind === 'mapped') return { ...row, status: 'approved' }
+  if (row.kind === 'value_assignment') return { ...row, status: 'approved' }
+  return row
+}
+
+// ── Action error copy ───────────────────────────────────────────────────────
+//
+// Founder decision 4 (Gap 9 alignment) — uniform error copy regardless
+// of underlying errorCode (PERMISSION_DENIED vs MAINTENANCE_MODE vs
+// INTERNAL etc.). Technical details land in console only. The user
+// gets a clear, actionable retry prompt.
+
+const GENERIC_APPROVE_ERROR =
+  "Couldn't approve this mapping. Please try again."
+const GENERIC_REJECT_ERROR =
+  "Couldn't reject this mapping. Please try again."
 
 // ── Header ─────────────────────────────────────────────────────────────────
 
@@ -634,15 +877,19 @@ function AcknowledgedBody({ row }: { row: TargetAcknowledgedRow }) {
 // ── Rule 6 — Unmapped ──────────────────────────────────────────────────────
 
 const UNMAPPED_BODY_PROSE =
-  'This target field has no source mapping yet. Use AI Suggest from the Mapping page to generate a proposal, or acknowledge this field as intentionally unmapped.'
+  'Remapping unmapped fields is coming soon. For now, use the legacy Mapping view to create a new mapping.'
 
 /**
  * Unmapped-row drawer body. No status section — unmapped state is implicit
  * from the prose.
  *
- * TODO(Gap 9): replace the empty-state prose with an inline "Suggest mapping"
- * action button when the action footer lands. The current copy is the
- * read-only Gap 8a equivalent ("here's what to do, but no buttons yet").
+ * TODO(future remap gap, Phase 4 / TBD): replace this empty-state prose
+ * with an inline "Suggest mapping" or "Add mapping" action when the
+ * remap workflow lands in the redesign UI. Gap 9 shipped the
+ * Approve/Reject footer for already-mapped rows, but starting a NEW
+ * mapping from an unmapped target — the AI-suggest + drag-to-map
+ * flows from the legacy Mapping view — has not yet been ported. Until
+ * then the redesign drawer points the user to the legacy view.
  */
 function UnmappedBody({ row }: { row: UnmappedRow }) {
   return (
@@ -1003,17 +1250,285 @@ function formatSourceConfidence(confidence: number | null): string {
   return formatConfidence(confidence)
 }
 
-// ── Footer — still the Gap 7 placeholder (Gap 9 fills with action buttons) ─
+// ── Footer — Gap 9 ──────────────────────────────────────────────────────────
+//
+// Kind-dispatched action surface. Buttons are sticky-bottom so they
+// remain visible while the body scrolls. The error banner sits
+// immediately above the button row inside the same `<footer>` so
+// keyboard tab order moves: body → error (if any) → Approve → Reject.
+//
+// Disabled-state matrix (founder decision 7 + the existing status
+// taxonomy):
+//
+//   mapped/value_assignment + status='needs_review'
+//     Approve: enabled    Reject: enabled
+//   mapped/value_assignment + status='approved'
+//     Approve: DISABLED ("already approved")    Reject: enabled
+//   mapped/value_assignment + status='rejected'      ← legacy data
+//     Approve: enabled (un-reject)               Reject: enabled (delete)
+//   target_acknowledged
+//     Approve: DISABLED ("acknowledged" tooltip)
+//     Reject:  DISABLED ("acknowledged" tooltip)
+//   unmapped
+//     no footer — no actions are valid yet
+//
+// Optimistic-Approve overlay is applied at the row level before this
+// component sees it, so the button row only needs to read `row.status`.
 
-function DrawerFooter() {
+interface DrawerFooterProps {
+  row: MappingRow
+  errorMessage: string | null
+  isApprovePending: boolean
+  isRejecting: boolean
+  optimisticallyApproved: boolean
+  onApprove: () => void
+  onRejectClick: () => void
+}
+
+function DrawerFooter({
+  row,
+  errorMessage,
+  isApprovePending,
+  isRejecting,
+  optimisticallyApproved,
+  onApprove,
+  onRejectClick,
+}: DrawerFooterProps) {
+  if (row.kind === 'unmapped') {
+    return null
+  }
+
   return (
     <footer
       data-testid="mapping-drawer-footer"
       className="sticky bottom-0 z-10 border-t border-slate-200 bg-white px-5 py-3"
     >
-      <p className="text-center text-sm text-slate-400">
-        Actions coming in Gap 10
-      </p>
+      {errorMessage ? (
+        <div
+          role="alert"
+          data-testid="mapping-drawer-error"
+          className="mb-3 flex items-start gap-2 rounded-md border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-800"
+        >
+          <AlertCircle
+            aria-hidden="true"
+            className="mt-0.5 h-3.5 w-3.5 flex-shrink-0 text-red-500"
+          />
+          <span className="leading-snug">{errorMessage}</span>
+        </div>
+      ) : null}
+      {row.kind === 'target_acknowledged' ? (
+        <AcknowledgedFooterButtons />
+      ) : (
+        <ApproveRejectButtons
+          status={row.status}
+          isApprovePending={isApprovePending}
+          isRejecting={isRejecting}
+          optimisticallyApproved={optimisticallyApproved}
+          onApprove={onApprove}
+          onRejectClick={onRejectClick}
+        />
+      )}
     </footer>
+  )
+}
+
+interface ApproveRejectButtonsProps {
+  status: 'needs_review' | 'approved' | 'rejected' | 'unmapped'
+  isApprovePending: boolean
+  isRejecting: boolean
+  optimisticallyApproved: boolean
+  onApprove: () => void
+  onRejectClick: () => void
+}
+
+function ApproveRejectButtons({
+  status,
+  isApprovePending,
+  isRejecting,
+  optimisticallyApproved,
+  onApprove,
+  onRejectClick,
+}: ApproveRejectButtonsProps) {
+  // Effective approve-disabled: already approved (incl. optimistic),
+  // or another action is in flight.
+  const approveDisabled =
+    optimisticallyApproved ||
+    status === 'approved' ||
+    isApprovePending ||
+    isRejecting
+  const rejectDisabled = isApprovePending || isRejecting
+
+  const approveTitle =
+    status === 'approved' || optimisticallyApproved
+      ? 'This mapping is already approved'
+      : undefined
+
+  return (
+    <div className="flex items-center justify-end gap-2">
+      <button
+        type="button"
+        data-testid="mapping-drawer-reject-button"
+        aria-label="Reject mapping"
+        onClick={onRejectClick}
+        disabled={rejectDisabled}
+        className={cn(
+          'inline-flex h-9 items-center justify-center gap-1.5 rounded-md border px-3 text-sm font-medium transition-colors',
+          'border-red-200 bg-white text-red-700 hover:bg-red-50',
+          'focus:outline-none focus:ring-2 focus:ring-red-500/30',
+          'disabled:cursor-not-allowed disabled:border-slate-200 disabled:bg-slate-50 disabled:text-slate-400 disabled:hover:bg-slate-50',
+        )}
+      >
+        {isRejecting ? (
+          <>
+            <Loader2
+              aria-hidden="true"
+              className="h-3.5 w-3.5 animate-spin"
+              data-testid="mapping-drawer-reject-spinner"
+            />
+            <span>Rejecting…</span>
+          </>
+        ) : (
+          'Reject'
+        )}
+      </button>
+      <button
+        type="button"
+        data-testid="mapping-drawer-approve-button"
+        aria-label="Approve mapping"
+        onClick={onApprove}
+        disabled={approveDisabled}
+        title={approveTitle}
+        className={cn(
+          'inline-flex h-9 items-center justify-center rounded-md border px-3 text-sm font-medium transition-colors',
+          'border-blue-600 bg-blue-600 text-white hover:bg-blue-700',
+          'focus:outline-none focus:ring-2 focus:ring-blue-500/40',
+          'disabled:cursor-not-allowed disabled:border-slate-200 disabled:bg-slate-100 disabled:text-slate-400 disabled:hover:bg-slate-100',
+        )}
+      >
+        Approve
+      </button>
+    </div>
+  )
+}
+
+/**
+ * Footer button row for `target_acknowledged` rows. Both buttons are
+ * disabled with explanatory `title` tooltips so the user understands
+ * why — acknowledged rows are an intentional "no source mapping"
+ * declaration, not a candidate for approve/reject. To reverse, the user
+ * must un-acknowledge the field via the field-acknowledgment surface
+ * (out of scope for the redesign drawer in Phase 3).
+ */
+function AcknowledgedFooterButtons() {
+  return (
+    <div className="flex items-center justify-end gap-2">
+      <button
+        type="button"
+        data-testid="mapping-drawer-reject-button"
+        aria-label="Reject mapping"
+        disabled
+        title="Acknowledged rows can't be rejected; un-acknowledge first."
+        className={cn(
+          'inline-flex h-9 items-center justify-center rounded-md border px-3 text-sm font-medium',
+          'cursor-not-allowed border-slate-200 bg-slate-50 text-slate-400',
+        )}
+      >
+        Reject
+      </button>
+      <button
+        type="button"
+        data-testid="mapping-drawer-approve-button"
+        aria-label="Approve mapping"
+        disabled
+        title="Acknowledged rows can't be approved; un-acknowledge first."
+        className={cn(
+          'inline-flex h-9 items-center justify-center rounded-md border px-3 text-sm font-medium',
+          'cursor-not-allowed border-slate-200 bg-slate-100 text-slate-400',
+        )}
+      >
+        Approve
+      </button>
+    </div>
+  )
+}
+
+// ── Reject confirmation dialog ──────────────────────────────────────────────
+//
+// Locked copy (Gap 9 alignment):
+//
+//   Title:  "Reject this mapping?"
+//   Body:   "<field_name> will become unmapped. The mapping and any
+//            associated transformation will be deleted. This cannot be
+//            undone."
+//   Buttons: "Cancel" (default) + "Reject" (destructive)
+//
+// The dialog reuses `components/ui/alert-dialog.tsx` (the hand-rolled
+// shadcn AlertDialog used elsewhere in the app — Transform / FK
+// cascade prompts). We force `AlertDialogAction`'s default blue styling
+// to red to signal destructive intent.
+
+interface RejectConfirmDialogProps {
+  open: boolean
+  onOpenChange: (next: boolean) => void
+  targetFieldName: string
+  isRejecting: boolean
+  onConfirm: () => void
+}
+
+function RejectConfirmDialog({
+  open,
+  onOpenChange,
+  targetFieldName,
+  isRejecting,
+  onConfirm,
+}: RejectConfirmDialogProps) {
+  return (
+    <AlertDialog open={open} onOpenChange={onOpenChange}>
+      <AlertDialogContent data-testid="mapping-drawer-reject-confirm-dialog">
+        <AlertDialogHeader>
+          <AlertDialogTitle>Reject this mapping?</AlertDialogTitle>
+          <AlertDialogDescription>
+            <span className="font-mono text-slate-900">{targetFieldName}</span>{' '}
+            will become unmapped. The mapping and any associated transformation
+            will be deleted. This cannot be undone.
+          </AlertDialogDescription>
+        </AlertDialogHeader>
+        <AlertDialogFooter>
+          <AlertDialogCancel
+            disabled={isRejecting}
+            data-testid="mapping-drawer-reject-cancel"
+            onClick={() => {
+              if (!isRejecting) onOpenChange(false)
+            }}
+          >
+            Cancel
+          </AlertDialogCancel>
+          <AlertDialogAction
+            onClick={(e) => {
+              // Prevent the AlertDialog from auto-closing — we close
+              // explicitly on success / failure inside `onConfirm` so
+              // the loading-state spinner has time to render.
+              e.preventDefault()
+              onConfirm()
+            }}
+            disabled={isRejecting}
+            data-testid="mapping-drawer-reject-confirm"
+            className="bg-red-600 hover:bg-red-700 focus:ring-red-500/40"
+          >
+            {isRejecting ? (
+              <>
+                <Loader2
+                  aria-hidden="true"
+                  className="mr-1.5 h-3.5 w-3.5 animate-spin"
+                />
+                Rejecting…
+              </>
+            ) : (
+              'Reject'
+            )}
+          </AlertDialogAction>
+        </AlertDialogFooter>
+      </AlertDialogContent>
+    </AlertDialog>
   )
 }

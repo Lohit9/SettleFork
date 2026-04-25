@@ -692,6 +692,118 @@ Placeholder: `Search fields, tables, and mappings...`
 
 When filters or search are active, target table groups with zero matching rows are hidden from the view. Groups with matching rows remain visible with a subtle count indicator showing how many rows match (e.g., `accounts · 3 of 19 fields match`).
 
+## Source schema sidebar
+
+Persistent left-edge browser for the project's source schema. Shipped in two
+gaps: 11a (shell + drawer overlay refactor + persistence) and 11b (content +
+interactions). Lives in
+`app/app/projects/[projectId]/mapping/redesign/components/SourceSchemaSidebar.tsx`.
+
+### Layout & states
+
+- **Collapsed (28 px)** — vertical "Source fields" rail label + total count,
+  top-anchored. Click anywhere on the rail to expand. This is the default for
+  first-time users (founder decision, Gap 11a).
+- **Expanded (200 px)** — header with title + total count + close chevron,
+  search input, filter pills (`All` / `Mapped` / `Unmapped`), and a scrollable
+  fields list grouped by source table.
+
+The sidebar **always overlays alongside the main view**; it is not modal.
+Above 1024 px the sidebar coexists with the drawer. At/below 1024 px the
+sidebar auto-collapses while the drawer is open (ephemeral override —
+not persisted), then restores to the user's persisted state when the
+drawer closes or the viewport widens.
+
+### Persistence
+
+`localStorage` keys:
+
+- `mapping-sidebar-state` — `'collapsed' | 'expanded'`. Default `'collapsed'`.
+- `mapping-sidebar-filter` — `'all' | 'mapped' | 'unmapped'`. Default
+  `'unmapped'` (most actionable view when expanded). Persisted even while the
+  sidebar is collapsed.
+
+### Field rendering
+
+Server emits `MappingsForRedesignResult.sourceFields:
+SourceFieldWithState[]` in canonical order (`sourceTable.name ASC,
+ordinalPosition ASC, name ASC`). The sidebar groups by `sourceTable.id`
+preserving server order — Gap 11b renders groups always-expanded; collapsible
+groups are deferred to Gap 11c.
+
+Each field row shows:
+
+- **Status dot** — green for `mapped`, slate for `unmapped`. No third
+  amber/partial state (founder decision 1, Gap 11b).
+- **Field name** — truncated single line, mono.
+- **Hover/focus tooltip** — anchored to the row, reveals the field's
+  `dataType` and sample values (formatted via `formatSampleValues`,
+  the same helper the drawer uses).
+
+`isAcknowledged` is delivered on the contract (forward-compatible with Gap
+11c) but Gap 11b does NOT visually differentiate acknowledged fields — they
+render identically to other unmapped fields under the Unmapped pill. Gap 11c
+will design the dedicated treatment (strike-through vs muted opacity vs
+separate sub-section) — see the inline TODO in `SourceSchemaSidebar.tsx`.
+
+### Filter pills
+
+`All` / `Mapped` / `Unmapped` with inline counts derived client-side via
+`useMemo` over `sourceFields` (no extra contract surface). Active pill writes
+through to `localStorage` so the user's preference survives across sessions.
+
+`mappingStatus` semantics: `'mapped'` iff the source field appears in
+`mapping_sources` for at least one TFM with `status !== 'rejected'`. Founder-
+locked exclusion (Gap 11b decision 2) — rejected TFMs do not claim sources as
+mapped. Post-Gap-9 rejects = deletes, so this matters only for the legacy
+SimpleLegal rejected row in production; the exclusion is defensive against
+that legacy row plus any future write path that retains rejected TFMs.
+
+### Search
+
+Search input above the filter pills. Substring match (case-insensitive,
+trimmed) across `field.name` and `sourceTable.name`. Sample values are NOT
+searched — they're a hover-only affordance, not a primary identifier.
+
+Search input is debounced ~200 ms before filter application; the visible
+input value is immediate. Empty/whitespace-only input is the pass-through
+sentinel.
+
+Empty states:
+
+- No source schema ingested for the project at all → "No source schema
+  ingested for this project." (sidebar still mounts so users can see the
+  shell.)
+- Filter + search yield zero matches → "No source fields match the current
+  filter." inside the list area.
+
+### Click-to-highlight (founder decision 4, Gap 11)
+
+Clicking a field row highlights every main-view row that consumes that
+source field. Highlight visual: 2 px blue left border (matches the existing
+drawer-active `bg-slate-50` cue but distinguishable). Single-select — clicking
+another field replaces the highlight; clicking outside the sidebar, pressing
+Esc, or completing a drawer Approve/Reject all clear it.
+
+The highlight does NOT:
+
+- Open the drawer.
+- Narrow the main view's filters.
+- Auto-scroll the first match into view.
+
+The sibling click-outside listener for highlight clearing lives at the
+`MappingContent` level, separate from the drawer's existing click-outside
+listener (separation of concerns — each tested in isolation).
+
+`contributingTfmIds` is derived client-side via `useMemo` over `data.rows`
+into a `Map<sourceFieldId, Set<rowId>>` (founder decision 6, Gap 11b) — no
+new server-computed map.
+
+Stale-highlight guard: when a drawer Approve or Reject action completes
+(`handleDrawerActionComplete`), the highlight is cleared. Approve case is
+mild over-clearing; Reject case is necessary because the highlighted TFM is
+deleted on the server.
+
 ## Row design
 
 Each row represents one mapping — one target field and its configured source(s). The row's visual presentation adapts to mapping complexity.

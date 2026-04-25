@@ -64,6 +64,28 @@ interface HeritageMappingsRedesignSnapshot {
   sourceFieldAckCount: number
   targetSchemaEmpty: boolean
   /**
+   * Phase 3 Gap 11b — total source field count for the project.
+   * Drives the source-schema sidebar's count badge. Captured here so
+   * the integration snapshot covers contract drift in `sourceFields`
+   * shape / ordering as well as row state.
+   */
+  sourceFieldCount: number
+  /**
+   * Phase 3 Gap 11b — split of source fields by `mappingStatus`.
+   * `mapped + unmapped` always equals `sourceFieldCount`. The split
+   * locks in the founder-locked semantic that rejected TFMs do NOT
+   * claim their contributing sources as mapped.
+   */
+  sourceFieldsByStatus: { mapped: number; unmapped: number }
+  /**
+   * Phase 3 Gap 11b — count of source fields with `isAcknowledged=true`.
+   * Always equals `sourceFieldAckCount` for any project where every
+   * acknowledgment row points at a live source field; tracked
+   * separately so a divergence (acks pointing at deleted fields) is
+   * surfaced.
+   */
+  acknowledgedSourceFieldCount: number
+  /**
    * SHA-256 of a normalized row fingerprint: for each row we capture
    * `{id, kind, status, targetField.id, sourceIds, hasTransformation}`
    * in the contract-guaranteed server order. Any silent drift in
@@ -71,6 +93,15 @@ interface HeritageMappingsRedesignSnapshot {
    * here without having to pin the entire row array.
    */
   rowsFingerprint: string
+  /**
+   * SHA-256 of a normalized source-field fingerprint, in the
+   * contract-guaranteed server order. Captures
+   * `{id, sourceTable.id, mappingStatus, isAcknowledged,
+   * sampleValueCount}` per field. Like `rowsFingerprint`, this
+   * lets the snapshot detect ordering / shape / status drift
+   * without pinning the entire `sourceFields` array.
+   */
+  sourceFieldsFingerprint: string
 }
 
 // ─── Pinned snapshot (populate on first CAPTURE run) ────────────────
@@ -131,6 +162,28 @@ async function captureSnapshot(): Promise<HeritageMappingsRedesignSnapshot> {
     .update(fingerprintBody)
     .digest('hex')
 
+  const sourceFieldsByStatus = { mapped: 0, unmapped: 0 }
+  let acknowledgedSourceFieldCount = 0
+  for (const sf of result.sourceFields) {
+    sourceFieldsByStatus[sf.mappingStatus]++
+    if (sf.isAcknowledged) acknowledgedSourceFieldCount++
+  }
+
+  const sourceFieldsFingerprintBody = result.sourceFields
+    .map((sf) =>
+      [
+        sf.id,
+        sf.sourceTable.id,
+        sf.mappingStatus,
+        sf.isAcknowledged ? 'A' : '_',
+        String(sf.sampleValues.length),
+      ].join('|'),
+    )
+    .join('\n')
+  const sourceFieldsFingerprint = createHash('sha256')
+    .update(sourceFieldsFingerprintBody)
+    .digest('hex')
+
   return {
     projectId: result.projectId,
     rowCount: result.rows.length,
@@ -140,7 +193,11 @@ async function captureSnapshot(): Promise<HeritageMappingsRedesignSnapshot> {
     sourceTableCount: result.sourceTables.length,
     sourceFieldAckCount: result.sourceFieldAcknowledgments.length,
     targetSchemaEmpty: result.targetSchemaEmpty,
+    sourceFieldCount: result.sourceFields.length,
+    sourceFieldsByStatus,
+    acknowledgedSourceFieldCount,
     rowsFingerprint,
+    sourceFieldsFingerprint,
   }
 }
 

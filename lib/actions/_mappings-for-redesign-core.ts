@@ -32,6 +32,7 @@ import type {
   MappingTransformationStatus,
   MappingsForRedesignResult,
   SourceFieldAcknowledgmentSummary,
+  SourceFieldWithState,
   SourceTableSummary,
   TargetAcknowledgedRow,
   TargetFieldRef,
@@ -429,6 +430,15 @@ export function assembleMappingsForRedesign(
       reason: a.reason,
     }))
 
+  // ── Source schema sidebar (Phase 3 Gap 11b) ──────────────────────
+  const sourceFieldsWithState = buildSourceFieldsWithState(
+    sourceFields,
+    tablesById,
+    tfms,
+    mappingSources,
+    sourceAcks,
+  )
+
   // ── Project-level counters ────────────────────────────────────────
   const counts: MappingCounts = computeCounts(rows)
 
@@ -438,6 +448,7 @@ export function assembleMappingsForRedesign(
     targetTables: targetTableSummaries,
     sourceTables: sourceTableSummaries,
     sourceFieldAcknowledgments,
+    sourceFields: sourceFieldsWithState,
     counts,
     targetSchemaEmpty: targetTables.length === 0 || targetFields.length === 0,
   }
@@ -829,6 +840,87 @@ function compareRows(a: MappingRow, b: MappingRow): number {
   const byOrdinal = a.targetField.ordinalPosition - b.targetField.ordinalPosition
   if (byOrdinal !== 0) return byOrdinal
   return localeCompare(a.targetField.name, b.targetField.name)
+}
+
+// ─── Source schema sidebar — Phase 3 Gap 11b ─────────────────────────
+
+/**
+ * Build the `sourceFields: SourceFieldWithState[]` payload consumed
+ * by the source-schema sidebar.
+ *
+ * SEMANTICS — `mappingStatus`
+ * ───────────────────────────
+ * A source field is `'mapped'` iff its id appears in
+ * `mapping_sources.source_field_id` for any TFM in this project whose
+ * `status !== 'rejected'`. Otherwise `'unmapped'`.
+ *
+ * Excluding rejected TFMs is founder-locked (Gap 11b decision 2): a
+ * rejected TFM does not "claim" its contributing sources as mapped.
+ * Post-Gap-9, new rejects = deletes (the TFM disappears entirely);
+ * the legacy SimpleLegal rejected row is the only production case
+ * where `status='rejected'` rows still carry live `mapping_sources`.
+ * Excluding here is defensive against that legacy row + any future
+ * data that does not delete-on-reject.
+ *
+ * ORDERING
+ * ────────
+ * Server-emitted in canonical order:
+ *   (sourceTable.name ASC, ordinalPosition ASC, name ASC)
+ *
+ * Mirrors `rows[]` ordering. The redesign-path sort guard prevents
+ * any client-side re-sorting downstream.
+ */
+function buildSourceFieldsWithState(
+  sourceFields: RawFieldRow[],
+  tablesById: Map<string, RawTableRow>,
+  tfms: RawTfmRow[],
+  mappingSources: RawMappingSourceRow[],
+  sourceAcks: RawSourceAckRow[],
+): SourceFieldWithState[] {
+  const tfmStatusById = new Map<string, string>(
+    tfms.map((t) => [t.id, t.status]),
+  )
+
+  const mappedSourceFieldIds = new Set<string>()
+  for (const ms of mappingSources) {
+    if (ms.source_field_id === null) continue
+    if (tfmStatusById.get(ms.target_field_mapping_id) === 'rejected') continue
+    mappedSourceFieldIds.add(ms.source_field_id)
+  }
+
+  const acknowledgedSourceFieldIds = new Set<string>(
+    sourceAcks.map((a) => a.source_field_id),
+  )
+
+  const out: SourceFieldWithState[] = []
+  for (const field of sourceFields) {
+    const table = tablesById.get(field.table_id)
+    if (!table) continue
+    out.push({
+      id: field.id,
+      name: field.name,
+      dataType: field.data_type,
+      ordinalPosition: field.ordinal_position,
+      sourceTable: { id: table.id, name: table.name },
+      mappingStatus: mappedSourceFieldIds.has(field.id) ? 'mapped' : 'unmapped',
+      sampleValues: extractSampleValues(field.field_profiles),
+      isAcknowledged: acknowledgedSourceFieldIds.has(field.id),
+    })
+  }
+
+  out.sort(compareSourceFields)
+  return out
+}
+
+function compareSourceFields(
+  a: SourceFieldWithState,
+  b: SourceFieldWithState,
+): number {
+  const byTable = localeCompare(a.sourceTable.name, b.sourceTable.name)
+  if (byTable !== 0) return byTable
+  const byOrdinal = a.ordinalPosition - b.ordinalPosition
+  if (byOrdinal !== 0) return byOrdinal
+  return localeCompare(a.name, b.name)
 }
 
 function computeCounts(rows: MappingRow[]): MappingCounts {

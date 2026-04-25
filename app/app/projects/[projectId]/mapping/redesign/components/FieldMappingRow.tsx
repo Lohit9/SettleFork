@@ -127,9 +127,26 @@ interface FieldMappingRowProps {
    * own drawer state (`drawerRowId === row.id`).
    */
   isActive?: boolean
+  /**
+   * Phase 3 Gap 11b — source-schema sidebar highlight. When `true`,
+   * the row body gets a 2 px blue left border so the user can spot
+   * every main-view row that consumes the source field they clicked
+   * in the sidebar. Distinct from `isActive` (drawer-open) so the two
+   * states can coexist on the same row without visual conflict.
+   *
+   * Combined with `data-highlighted-row="true"` on the body element so
+   * the parent's click-outside listener can treat clicks ON the
+   * highlight as "stay highlighted" rather than "clear."
+   */
+  isHighlighted?: boolean
 }
 
-export function FieldMappingRow({ row, onRowClick, isActive }: FieldMappingRowProps) {
+export function FieldMappingRow({
+  row,
+  onRowClick,
+  isActive,
+  isHighlighted,
+}: FieldMappingRowProps) {
   const expandedId = useId()
   const rule = resolveMappedRule(row)
   const canExpand = rule === 'rule_2' || rule === 'rule_3' || rule === 'rule_4'
@@ -157,12 +174,14 @@ export function FieldMappingRow({ row, onRowClick, isActive }: FieldMappingRowPr
     <div
       role="listitem"
       data-testid="field-mapping-row"
+      data-row-id={row.id}
       data-row-kind={row.kind}
       data-row-rule={row.kind === 'mapped' ? rule : undefined}
       aria-label={buildAriaLabel(row, rule, isExpanded, isClickable)}
     >
       <div
         data-testid="field-mapping-row-body"
+        data-highlighted-row={isHighlighted ? 'true' : undefined}
         role={isClickable ? 'button' : undefined}
         tabIndex={isClickable ? 0 : undefined}
         onClick={handleActivate}
@@ -173,6 +192,7 @@ export function FieldMappingRow({ row, onRowClick, isActive }: FieldMappingRowPr
           'grid grid-cols-[1fr_5rem_1fr_8rem_1.25rem_1rem] items-center gap-4 px-5 py-2.5',
           isClickable && 'cursor-pointer focus:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-slate-300',
           isActive && 'bg-slate-50',
+          isHighlighted && 'border-l-2 border-blue-500',
         )}
       >
         <SourceCell row={row} rule={rule} />
