@@ -41,7 +41,6 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useRouter, useSearchParams } from 'next/navigation'
-import { cn } from '@/components/ui/utils'
 import { PageHeader } from '@/components/app/PageHeader'
 import { type ProjectInfo } from '@/components/app/ProjectInfoPopover'
 import type {
@@ -63,6 +62,8 @@ import {
 import { FilterRow } from './components/FilterRow'
 import { TargetTableGroup } from './components/TargetTableGroup'
 import { MappingDrawer } from './components/MappingDrawer'
+import { SourceSchemaSidebar } from './components/SourceSchemaSidebar'
+import { useSidebarState, type SidebarState } from './components/useSidebarState'
 
 const SEARCH_DEBOUNCE_MS = 200
 
@@ -85,12 +86,111 @@ export default function MappingRedesignContent({
   projectInfo,
   initialRedesignData,
 }: Props) {
-  // Phase 3 Gap 7 — derive drawer-open status from the URL so the layout
-  // wrapper can shift right-padding without lifting drawer state out of
-  // `MappingBody`. `useSearchParams` is reactive in the app router; the
-  // value re-flows here on every `router.replace` from the body.
+  // Derive drawer-open status from the URL. `useSearchParams` is
+  // reactive in the app router; the value re-flows here on every
+  // `router.replace` from the body. Used by the auto-collapse effect
+  // below (Gap 11a, founder decision 4 — at narrow viewport, sidebar
+  // auto-collapses when the drawer opens).
+  //
+  // Phase 3 Gap 11a (2026-04-25): the drawer is now ALWAYS-overlay; we
+  // no longer reflow the main content area when it opens. The
+  // `isDrawerOpen` flag survives because the sidebar's auto-collapse
+  // logic still depends on it.
   const searchParams = useSearchParams()
   const isDrawerOpen = !!(searchParams?.get('drawer') ?? '')
+
+  // Source schema sidebar — Gap 11a. Persistence (collapsed/expanded
+  // + filter selection) lives in `useSidebarState`; auto-collapse on
+  // narrow viewports is overlaid below as ephemeral, non-persisted
+  // state. Keep these two concerns separate so the persistence layer
+  // never sees the temporary override.
+  const {
+    state: persistedSidebarState,
+    filter: sidebarFilter,
+    setSidebarState,
+    setSidebarFilter,
+  } = useSidebarState()
+
+  // Track viewport width via matchMedia. Default to wide (true) before
+  // the post-mount effect runs so the first paint matches the SSR
+  // assumption (no layout flash). jsdom does not polyfill matchMedia;
+  // tests inject a stub via `window.matchMedia = vi.fn(...)`.
+  const [isWideViewport, setIsWideViewport] = useState(true)
+  useEffect(() => {
+    if (typeof window === 'undefined' || typeof window.matchMedia !== 'function') {
+      return
+    }
+    const mql = window.matchMedia('(min-width: 1025px)')
+    setIsWideViewport(mql.matches)
+    const onChange = (e: MediaQueryListEvent) => setIsWideViewport(e.matches)
+    if (typeof mql.addEventListener === 'function') {
+      mql.addEventListener('change', onChange)
+      return () => mql.removeEventListener('change', onChange)
+    }
+    // Legacy fallback (older Safari) — addListener/removeListener.
+    // Wrap to satisfy the older signature.
+    const legacyHandler = () => setIsWideViewport(mql.matches)
+    mql.addListener(legacyHandler)
+    return () => mql.removeListener(legacyHandler)
+  }, [])
+
+  // Ephemeral auto-collapse override. NOT persisted — only in memory
+  // for the session. We track it as a derived "the drawer is open at
+  // a narrow viewport, so override an expanded preference for now."
+  // Read the persisted state through a ref inside the trigger effect
+  // so we can fire the auto-collapse on (drawer-open, viewport-narrow)
+  // transitions only — without re-firing every time the user manually
+  // expands the sidebar during the same session.
+  const [autoCollapsed, setAutoCollapsed] = useState(false)
+  const persistedSidebarStateRef = useRef<SidebarState>(persistedSidebarState)
+  useEffect(() => {
+    persistedSidebarStateRef.current = persistedSidebarState
+  }, [persistedSidebarState])
+
+  // Trigger: drawer transitions to open OR viewport narrows. If the
+  // user's persisted preference is 'expanded' AND the viewport is
+  // narrow AND the drawer is open, auto-collapse the sidebar so the
+  // drawer can claim primary focus. Founder decision 4.
+  useEffect(() => {
+    if (
+      isDrawerOpen &&
+      !isWideViewport &&
+      persistedSidebarStateRef.current === 'expanded'
+    ) {
+      setAutoCollapsed(true)
+    }
+  }, [isDrawerOpen, isWideViewport])
+
+  // Restore: drawer closes → clear the override. The sidebar snaps
+  // back to the user's persisted state.
+  useEffect(() => {
+    if (!isDrawerOpen) setAutoCollapsed(false)
+  }, [isDrawerOpen])
+
+  // Restore: viewport widens above 1024px while drawer is still open
+  // → clear the override. Founder decision 4 — "when viewport widens
+  // back above 1024px with drawer open, sidebar respects persisted
+  // state."
+  useEffect(() => {
+    if (isWideViewport) setAutoCollapsed(false)
+  }, [isWideViewport])
+
+  // Effective state shown in the UI = persisted state unless the
+  // ephemeral override is active.
+  const effectiveSidebarState: SidebarState = autoCollapsed
+    ? 'collapsed'
+    : persistedSidebarState
+
+  // Wrap the persisted setter so a deliberate user click during an
+  // auto-collapsed period clears the override (their action wins,
+  // until the next narrow-viewport re-trigger).
+  const handleSidebarStateChange = useCallback(
+    (next: SidebarState) => {
+      setAutoCollapsed(false)
+      setSidebarState(next)
+    },
+    [setSidebarState],
+  )
 
   return (
     <div className="flex h-full flex-col bg-gray-50">
@@ -99,23 +199,29 @@ export default function MappingRedesignContent({
         title="Mapping"
         projectInfo={projectInfo}
       />
-      <div
-        className={cn(
-          'flex-1 overflow-auto transition-[padding] duration-150 ease-out motion-reduce:transition-none',
-          // Reserve drawer width on viewports wide enough that doing so
-          // does not collapse the content area to a too-narrow column.
-          // Below that threshold the drawer sits over content (still
-          // legible because the drawer is opaque white with shadow).
-          isDrawerOpen && 'xl:pr-[520px]',
-        )}
-      >
-        <div className="mx-auto w-full max-w-5xl px-6 py-6">
-          <WipBanner projectId={projectId} />
-          {initialRedesignData === null ? (
-            <NoDataState />
-          ) : (
-            <MappingBody projectId={projectId} data={initialRedesignData} />
-          )}
+      {/* Horizontal layout: source-schema sidebar (left) + main scroll
+          container (right). The drawer mounts inside `MappingBody` and
+          is `position: fixed` (anchored to the viewport, not its DOM
+          parent), so it overlays the right portion regardless of where
+          it lives in the tree. `min-h-0` is necessary — without it,
+          flex children stretch indefinitely instead of letting the
+          inner scroll container handle overflow. */}
+      <div className="flex min-h-0 flex-1 overflow-hidden">
+        <SourceSchemaSidebar
+          state={effectiveSidebarState}
+          filter={sidebarFilter}
+          onStateChange={handleSidebarStateChange}
+          onFilterChange={setSidebarFilter}
+        />
+        <div className="flex-1 overflow-auto">
+          <div className="mx-auto w-full max-w-5xl px-6 py-6">
+            <WipBanner projectId={projectId} />
+            {initialRedesignData === null ? (
+              <NoDataState />
+            ) : (
+              <MappingBody projectId={projectId} data={initialRedesignData} />
+            )}
+          </div>
         </div>
       </div>
     </div>

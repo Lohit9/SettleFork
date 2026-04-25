@@ -1,7 +1,10 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { fireEvent, render, screen, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
-import { MappingDrawer } from '@/app/app/projects/[projectId]/mapping/redesign/components/MappingDrawer'
+import {
+  MappingDrawer,
+  MAPPING_DRAWER_WIDTH_PX,
+} from '@/app/app/projects/[projectId]/mapping/redesign/components/MappingDrawer'
 import type {
   MappedRow,
   MappingSourceRef,
@@ -537,12 +540,59 @@ describe('MappingDrawer — click outside closes', () => {
 })
 
 // ─── Width invariant ───────────────────────────────────────────────────────
-
+//
+// Phase 3 Gap 11a (2026-04-25) — drawer width changed from 520 → 480 as
+// part of the always-overlay refactor. The exported constant and the
+// inline `style.width` must agree, and both must equal 480.
 describe('MappingDrawer — width', () => {
-  it('inline width matches the exported MAPPING_DRAWER_WIDTH_PX (520)', () => {
+  it('inline width matches the exported MAPPING_DRAWER_WIDTH_PX (480)', () => {
     render(<MappingDrawer row={mapped()} isOpen={true} onClose={() => {}} />)
     const drawer = screen.getByTestId('mapping-drawer')
-    expect(drawer.style.width).toBe('520px')
+    expect(drawer.style.width).toBe('480px')
+  })
+
+  it('exports MAPPING_DRAWER_WIDTH_PX === 480', () => {
+    expect(MAPPING_DRAWER_WIDTH_PX).toBe(480)
+  })
+})
+
+// ─── Click-outside guard: sidebar coexistence (Gap 11a) ────────────────────
+//
+// The drawer's document-level mousedown handler closes the drawer on
+// any click outside the drawer DOM. Two narrow exceptions exist:
+//   1. Clicks on a `[data-testid="field-mapping-row-body"]` (so
+//      clicking another row swaps the drawer's row).
+//   2. Clicks on a `[data-testid="source-schema-sidebar"]` (so the
+//      drawer + sidebar can coexist above 1024px without the sidebar
+//      dismissing the drawer when the user toggles it).
+//
+// This suite regression-guards exception 2.
+describe('MappingDrawer — click-outside guard for sidebar (Gap 11a)', () => {
+  it('does not close the drawer when mousedown lands inside source-schema-sidebar', () => {
+    const onClose = vi.fn()
+    render(
+      <div>
+        <div data-testid="source-schema-sidebar">
+          <button data-testid="sidebar-rail-button">rail</button>
+        </div>
+        <MappingDrawer row={mapped()} isOpen={true} onClose={onClose} />
+      </div>,
+    )
+    fireEvent.mouseDown(screen.getByTestId('sidebar-rail-button'))
+    expect(onClose).not.toHaveBeenCalled()
+  })
+
+  it('still closes on mousedown landing outside both drawer and sidebar', () => {
+    const onClose = vi.fn()
+    render(
+      <div>
+        <div data-testid="source-schema-sidebar">sidebar</div>
+        <div data-testid="random-content">unrelated</div>
+        <MappingDrawer row={mapped()} isOpen={true} onClose={onClose} />
+      </div>,
+    )
+    fireEvent.mouseDown(screen.getByTestId('random-content'))
+    expect(onClose).toHaveBeenCalledTimes(1)
   })
 })
 

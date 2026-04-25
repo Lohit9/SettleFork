@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { fireEvent, render, screen } from '@testing-library/react'
+import { act, fireEvent, render, screen } from '@testing-library/react'
 import MappingRedesignContent from '@/app/app/projects/[projectId]/mapping/redesign/MappingContent'
 import type {
   MappedRow,
@@ -675,3 +675,232 @@ describe('MappingRedesignContent — Gap 7 drawer URL sync', () => {
   })
 })
 
+// ─────────────────────────────────────────────────────────────────────────────
+// Phase 3 Gap 11a — Source schema sidebar integration.
+// ─────────────────────────────────────────────────────────────────────────────
+//
+// The sidebar is owned by `MappingRedesignContent`. Two integration
+// behaviors are exercised here:
+//   1. Coexistence with the drawer above 1024px viewport (no auto-collapse).
+//   2. Auto-collapse when the drawer opens at <= 1024px viewport.
+//   3. Restoration when the drawer closes (or when the viewport widens).
+//   4. Reflow regression: scroll container does NOT carry `xl:pr-[…]`.
+//   5. localStorage persistence honored across mounts.
+
+interface MockMediaQueryList extends MediaQueryList {
+  __setMatches: (m: boolean) => void
+}
+
+/**
+ * Install a controllable `window.matchMedia` mock. Returns a setter
+ * that flips the `matches` value AND fires the change listener so
+ * subscribed components react. The default state is wide (true)
+ * unless overridden via the second arg.
+ */
+function installMatchMediaMock(initialWide: boolean): MockMediaQueryList {
+  let matches = initialWide
+  const listeners = new Set<(e: MediaQueryListEvent) => void>()
+  const mql: MockMediaQueryList = {
+    media: '(min-width: 1025px)',
+    matches,
+    onchange: null,
+    addListener: (l: ((e: MediaQueryListEvent) => void) | null) => {
+      if (l) listeners.add(l)
+    },
+    removeListener: (l: ((e: MediaQueryListEvent) => void) | null) => {
+      if (l) listeners.delete(l)
+    },
+    addEventListener: (_t: string, l: EventListener | EventListenerObject | null) => {
+      if (typeof l === 'function') {
+        listeners.add(l as (e: MediaQueryListEvent) => void)
+      }
+    },
+    removeEventListener: (_t: string, l: EventListener | EventListenerObject | null) => {
+      if (typeof l === 'function') {
+        listeners.delete(l as (e: MediaQueryListEvent) => void)
+      }
+    },
+    dispatchEvent: () => true,
+    __setMatches: (m: boolean) => {
+      matches = m
+      const event = { matches: m, media: mql.media } as MediaQueryListEvent
+      for (const l of listeners) l(event)
+    },
+  } as MockMediaQueryList
+  // `matches` is declared readonly on the interface. Use a getter so
+  // reads always return the current closure value; tests mutate via
+  // `__setMatches`.
+  Object.defineProperty(mql, 'matches', {
+    get: () => matches,
+    configurable: true,
+  })
+  window.matchMedia = vi.fn().mockReturnValue(mql) as typeof window.matchMedia
+  return mql
+}
+
+describe('MappingRedesignContent — Gap 11a sidebar integration', () => {
+  beforeEach(() => {
+    window.localStorage.clear()
+  })
+
+  afterEach(() => {
+    window.localStorage.clear()
+    // matchMedia was overwritten per-test; reset to the previous value
+    // (jsdom default is `undefined`). The next test that needs it
+    // installs its own mock.
+    delete (window as unknown as { matchMedia?: unknown }).matchMedia
+  })
+
+  it('renders the source schema sidebar shell at the default collapsed state', () => {
+    installMatchMediaMock(true)
+    renderRedesign()
+    const sidebar = screen.getByTestId('source-schema-sidebar')
+    expect(sidebar).toBeInTheDocument()
+    expect(sidebar.getAttribute('data-state')).toBe('collapsed')
+    expect(sidebar.style.width).toBe('28px')
+  })
+
+  it('honors a persisted "expanded" state from localStorage on mount', () => {
+    window.localStorage.setItem('mapping-sidebar-state', 'expanded')
+    installMatchMediaMock(true)
+    renderRedesign()
+    const sidebar = screen.getByTestId('source-schema-sidebar')
+    expect(sidebar.getAttribute('data-state')).toBe('expanded')
+    expect(sidebar.style.width).toBe('200px')
+  })
+
+  it('writes "expanded" to localStorage when the user clicks the rail', () => {
+    installMatchMediaMock(true)
+    renderRedesign()
+    fireEvent.click(screen.getByTestId('source-schema-sidebar-rail'))
+    expect(window.localStorage.getItem('mapping-sidebar-state')).toBe(
+      'expanded',
+    )
+  })
+
+  it('coexists with the drawer above 1024px viewport (no auto-collapse)', () => {
+    window.localStorage.setItem('mapping-sidebar-state', 'expanded')
+    installMatchMediaMock(true) // wide
+    renderRedesign('drawer=r-accounts-1')
+    const sidebar = screen.getByTestId('source-schema-sidebar')
+    // Drawer is open AND viewport is wide → sidebar respects persisted
+    // 'expanded' state. No auto-collapse override.
+    expect(sidebar.getAttribute('data-state')).toBe('expanded')
+    expect(screen.getByTestId('mapping-drawer')).toBeInTheDocument()
+  })
+
+  it('auto-collapses the sidebar when the drawer opens at <= 1024px viewport', () => {
+    window.localStorage.setItem('mapping-sidebar-state', 'expanded')
+    installMatchMediaMock(false) // narrow
+    renderRedesign('drawer=r-accounts-1')
+    const sidebar = screen.getByTestId('source-schema-sidebar')
+    // Persisted state stays 'expanded', but the effective state is
+    // 'collapsed' for this drawer-open + narrow-viewport session.
+    expect(sidebar.getAttribute('data-state')).toBe('collapsed')
+    // Auto-collapse must NOT write to localStorage — it's ephemeral.
+    expect(window.localStorage.getItem('mapping-sidebar-state')).toBe(
+      'expanded',
+    )
+  })
+
+  it('restores the sidebar when the drawer closes at narrow viewport', () => {
+    window.localStorage.setItem('mapping-sidebar-state', 'expanded')
+    installMatchMediaMock(false)
+    const { rerender } = render(
+      <MappingRedesignContent
+        projectId="p1"
+        projectName="Heritage Core"
+        initialRedesignData={buildData()}
+      />,
+    )
+    currentSearch = 'drawer=r-accounts-1'
+    rerender(
+      <MappingRedesignContent
+        projectId="p1"
+        projectName="Heritage Core"
+        initialRedesignData={buildData()}
+      />,
+    )
+    expect(
+      screen.getByTestId('source-schema-sidebar').getAttribute('data-state'),
+    ).toBe('collapsed')
+    // Now drawer closes — sidebar should restore.
+    currentSearch = ''
+    rerender(
+      <MappingRedesignContent
+        projectId="p1"
+        projectName="Heritage Core"
+        initialRedesignData={buildData()}
+      />,
+    )
+    expect(
+      screen.getByTestId('source-schema-sidebar').getAttribute('data-state'),
+    ).toBe('expanded')
+  })
+
+  it('restores the sidebar when the viewport widens above 1024px while drawer is open', () => {
+    window.localStorage.setItem('mapping-sidebar-state', 'expanded')
+    const mql = installMatchMediaMock(false)
+    renderRedesign('drawer=r-accounts-1')
+    expect(
+      screen.getByTestId('source-schema-sidebar').getAttribute('data-state'),
+    ).toBe('collapsed')
+    // Widen the viewport — listener fires, auto-collapse clears.
+    act(() => {
+      mql.__setMatches(true)
+    })
+    expect(
+      screen.getByTestId('source-schema-sidebar').getAttribute('data-state'),
+    ).toBe('expanded')
+  })
+
+  it('re-collapses if the viewport narrows again with the drawer still open', () => {
+    window.localStorage.setItem('mapping-sidebar-state', 'expanded')
+    const mql = installMatchMediaMock(true)
+    renderRedesign('drawer=r-accounts-1')
+    expect(
+      screen.getByTestId('source-schema-sidebar').getAttribute('data-state'),
+    ).toBe('expanded')
+    // Narrow the viewport while drawer is open — auto-collapse fires.
+    act(() => {
+      mql.__setMatches(false)
+    })
+    expect(
+      screen.getByTestId('source-schema-sidebar').getAttribute('data-state'),
+    ).toBe('collapsed')
+  })
+
+  it('drawer overlay refactor: the scroll container does NOT carry xl:pr-[520px] or xl:pr-[480px]', () => {
+    installMatchMediaMock(true)
+    const { container } = render(
+      <MappingRedesignContent
+        projectId="p1"
+        projectName="Heritage Core"
+        initialRedesignData={buildData()}
+      />,
+    )
+    // The post-Gap-11a layout has NO reflow class anywhere on any
+    // scroll container — the drawer is now ALWAYS-overlay. Search the
+    // entire rendered tree to be defensive against refactors.
+    expect(container.innerHTML).not.toContain('xl:pr-[520px]')
+    expect(container.innerHTML).not.toContain('xl:pr-[480px]')
+  })
+
+  it('persists the sidebar filter selection across re-mounts via localStorage', () => {
+    installMatchMediaMock(true)
+    window.localStorage.setItem('mapping-sidebar-state', 'expanded')
+    const { unmount } = renderRedesign()
+    fireEvent.click(screen.getByTestId('source-schema-sidebar-filter-mapped'))
+    expect(window.localStorage.getItem('mapping-sidebar-filter')).toBe(
+      'mapped',
+    )
+    unmount()
+    // Re-mount — the persisted filter survives.
+    renderRedesign()
+    expect(
+      screen
+        .getByTestId('source-schema-sidebar-filter-mapped')
+        .getAttribute('aria-pressed'),
+    ).toBe('true')
+  })
+})

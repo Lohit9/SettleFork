@@ -121,11 +121,21 @@ import { TableBadge } from './TableBadge'
 // ── Drawer width ───────────────────────────────────────────────────────────
 
 /**
- * Drawer width in pixels. Exported so `MappingContent.tsx` can pad the
- * mapping content area to match (avoids hidden behind-drawer rows). Single
- * source of truth — change here, change everywhere.
+ * Drawer width in pixels. Single source of truth for the inline width
+ * style applied to the drawer aside.
+ *
+ * Phase 3 Gap 11a (2026-04-25): drawer is now ALWAYS-overlay across all
+ * viewport widths (no more `xl:pr-[…]` reflow on the parent scroll
+ * container). Width reduced from 520 → 480 to coexist comfortably with
+ * the new left-side `SourceSchemaSidebar` at common viewport widths.
+ *
+ * Tailwind's JIT requires literal class names, so the parent's reflow
+ * class — when it existed — was a hardcoded `'xl:pr-[520px]'` literal
+ * rather than an interpolation of this constant. With the reflow gone,
+ * this constant is now consumed only by the inline `style` prop below,
+ * eliminating the historical drift risk.
  */
-export const MAPPING_DRAWER_WIDTH_PX = 520
+export const MAPPING_DRAWER_WIDTH_PX = 480
 
 // ── Public API ────────────────────────────────────────────────────────────
 
@@ -206,6 +216,17 @@ export function MappingDrawer({
       if (target instanceof Element) {
         const clickedRow = target.closest('[data-testid="field-mapping-row-body"]')
         if (clickedRow) return
+        // Phase 3 Gap 11a — the new left-side `SourceSchemaSidebar`
+        // coexists with the drawer at viewports above 1024px (founder
+        // decision 4). Without this guard, mousedown on the sidebar's
+        // collapsed rail or close chevron would close the drawer
+        // before the sidebar's own click handler ran. We scope the
+        // exception by data-testid so unrelated DOM never benefits
+        // from this exclusion.
+        const clickedSidebar = target.closest(
+          '[data-testid="source-schema-sidebar"]',
+        )
+        if (clickedSidebar) return
       }
       onCloseRef.current()
     }
