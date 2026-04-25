@@ -1374,6 +1374,77 @@ Same as single-source, with additional validation:
 
 **Total**: ~19 focused engineering days including cleanup and A11y baseline.
 
+## Phase 3 closure — 2026-04-25
+
+Phase 3 (mapping page redesign UI) is implementation-complete. The redesign is feature-flag gated behind `projects.use_mapping_redesign`; only Heritage Core (project `6622ddf1-47bd-4e48-ac2a-5b109a25bc13`) currently runs on it. Production users on every other project see no change — the legacy `app/app/projects/[projectId]/mapping/MappingContent.tsx` continues to render via the back-compat shim until Phase 5-Cleanup retires it.
+
+### Shipped gaps
+
+| Gap | Scope | Status |
+|---|---|---|
+| 1 | Feature flag dispatch | ✅ shipped |
+| 3 | Filter row + counter pills (Total / Approved / Needs Review / [Rejected] / [Unmapped]) | ✅ shipped (Unmapped chip added in Gap 13 closeout) |
+| 4a | Read-path data contract design (`getMappingsForRedesign`, `MappingsForRedesignResult`) | ✅ shipped |
+| 4b | Read-path implementation | ✅ shipped |
+| 4c | Render target-table groups | ✅ shipped |
+| 5a | Row Rules 1, 5, 6 + dark-mode regression hotfix | ✅ shipped |
+| 5b | Row Rules 2, 3, 4 with chevron expansion | ✅ shipped |
+| 6 (partial) | Frontend rendering of expanded sample values + AI reasoning | ⚠️ **reverted on smoke test 2026-04-24**; data layer (`MappingSourceRef.sampleValues`, `MappingSourceRef.aiReasoning`) retained on the contract because the drawer consumes it (Gap 8b) |
+| 7 | Drawer shell with row-click trigger + URL `?drawer=` sync | ✅ shipped |
+| 8a | Drawer body for acknowledged, unmapped, value_assignment rows | ✅ shipped |
+| 8b | Drawer body for mapped rows with per-source roster | ✅ shipped |
+| 9 | Drawer footer Approve / Reject actions | ✅ shipped |
+| 10 (reduced) | Drawer focus restore polish (URL deep-link + post-Reject detached node) | ✅ shipped (closeout 2026-04-25) |
+| 11a | Source schema sidebar shell + drawer overlay refactor (drawer width 520→480, removed `xl:pr-[…]` reflow) | ✅ shipped |
+| 11b | Sidebar content + filter / search / click-to-highlight interactions | ✅ shipped |
+| 12 | Legacy stub deletion | ✅ closed as **no-op** (2026-04-24) — `UnmappedView` and `UnmappedTargetIndicator` are inline functions inside the legacy `MappingContent.tsx`, not standalone files; cannot be deleted independently of the parent file (which retires in Phase 5-Cleanup) |
+| 13 (reduced) | Project-level unmapped target visibility — Unmapped counter chip on `CountersRow` | ✅ shipped (closeout 2026-04-25) |
+| 15 | Transform URL param back-compat (`?fieldMappingId=` → `?targetFieldMappingId=`) | ✅ shipped |
+
+### Closed as no-op (no code, no spec text)
+
+- **Gap 14, 16, 17** — unscoped placeholder slots reserved during the Phase 3 prompt sequence to leave headroom for unknown work that never materialized. Zero spec text, zero code references, zero TODO claims. Closed without action; the slot numbers can be re-used by future polish work if convenient.
+
+### Future polish (post-Phase-3, pre-Phase-4)
+
+- **Gap 11c** — sidebar polish, deferred from Gap 11b at founder's call:
+  1. **Acknowledged source field visual treatment** — `SourceFieldWithState.isAcknowledged` is plumbed through the contract since Gap 11b, but acknowledged fields render identically to other unmapped fields under the Unmapped pill. A future visual treatment (strike-through, muted opacity, separate sub-section, etc.) is pending design discussion. TODO marker lives in `app/app/projects/[projectId]/mapping/redesign/components/SourceSchemaSidebar.tsx`.
+  2. **Collapsible source-table groups** — sidebar currently renders all source-table groups always-expanded. With Heritage's ~10 tables and 99 fields it's fine; pilot customers with 200-500 fields may benefit from per-group collapsibility (default-expanded, persisted in localStorage).
+  3. **Per-value tooltip truncation** — sidebar hover tooltips reuse `formatSampleValues` from the drawer with no per-value cap. If real customer data surfaces unwieldy long values, fix in the shared `formatSampleValues` helper (drawer benefits too).
+
+Gap 11c is not blocking; it's incremental polish that can ship as a single small gap when needed.
+
+### Reduced-scope deferrals (documented decisions, not gaps)
+
+The Phase 3 closeout investigation surfaced three smaller items that were deliberately *not* shipped:
+
+- **Per-target-table "M of N mapped" header annotation** (Gap 13 candidate) — adds visual clutter to a header already showing `X of Y fields` when filtered. Phase 4 candidate if user feedback requests it.
+- **Status filter dropdown "Unmapped" option** (Gap 13 candidate) — would conflate `MappingStatusFilter` (TFM status union) with `row.kind` (which is a separate axis). Belongs with the broader "remap unmapped fields" Phase 4 mutation work.
+- **Drawer animation refinement, post-Approve focus on disabled button** (Gap 10 candidates) — animation is working as designed with reduced-motion already wired; post-Approve focus on a disabled button is cosmetic-only and self-resolves on the next user interaction.
+- **Drawer mobile / <768px responsive** — explicit spec non-goal per "Platform scope" §line 1582 ("Mobile access is not a validated use case…").
+
+### Next workstream — Phase 4 (mutation completeness)
+
+The redesign UI today supports two mutations: drawer Approve and drawer Reject (Gap 9). Phase 4 fills in the rest of the write surface:
+
+- **Manual mapping creation** from Rule 6 unmapped rows — the inline-add-field affordance the legacy UI calls "Map to →"
+- **Edit existing mapping sources** — add, remove, or relocate `mapping_sources` on an existing TFM
+- **Edit combination strategy** — change `combination_type` / `combination_sql` on a mapped TFM
+- **Un-acknowledge** previously acknowledged target fields (today the redesign treats acknowledgment as terminal; Reject is disabled on acknowledged rows)
+- **Bulk operations** — approve all (high confidence threshold), reject all, generate AI suggestions for a TM
+- **AI Suggest per-row** in the redesign UI (currently only available via the legacy MappingContent's "Suggest mappings" affordance)
+
+Phase 4 is gated behind the same `use_mapping_redesign` flag and ships incrementally — each mutation as its own gap, behind the same feature flag, smoke-tested on Heritage Core before flipping.
+
+### Phase 5-Cleanup (deferred)
+
+After Phase 4 stabilizes and the canary expands beyond Heritage Core to additional pilot projects (~30 days of stable use), Phase 5-Cleanup retires the legacy code path:
+
+- Delete `app/app/projects/[projectId]/mapping/MappingContent.tsx` (which retires the inline `UnmappedView`, `UnmappedTargetIndicator`, `InlineAddFieldRow` placeholders by extension — see "Cleanup items" below)
+- Delete `lib/compat/mapping-shim.ts` (no longer needed once UI reads new model directly)
+- Drop `projects.use_mapping_redesign` column from the database
+- Drop `projects.maintenance_mode` column once migration window is confirmed complete
+
 ## Back-compatibility shim limitations
 
 During Phase 2a, a shim translates the new data model back into the old `RichFieldMapping` shape so the unchanged `MappingContent.tsx` and `TransformContent.tsx` continue to render. The shim is removed after Phase 3 ships.

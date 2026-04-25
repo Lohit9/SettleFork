@@ -539,6 +539,138 @@ describe('MappingDrawer — click outside closes', () => {
   })
 })
 
+// ─── Phase 3 Gap 10 — focus restore polish ──────────────────────────────────
+//
+// On drawer close, focus should restore to a sensible element so the user
+// can continue keyboard navigation. Two edge cases require a fallback:
+//
+//   1. URL deep-link open (`?drawer=<rowId>` on initial mount). At capture
+//      time `document.activeElement` is `<body>`. Without a fallback,
+//      focus restore would silently do nothing (focusing `<body>` is a
+//      no-op in jsdom and most browsers).
+//
+//   2. Post-Reject DOM rebuild. After a successful Reject the parent
+//      calls `router.refresh()`, which can replace the original row body
+//      element while the drawer is still mounted. By the time the cleanup
+//      runs the captured trigger is detached (`isConnected === false`).
+//      Focusing a detached element is a silent no-op.
+//
+// In both cases we fall back to the first `[data-testid="field-mapping-
+// row-body"]` still in the DOM (rows are role=button + tabIndex=0).
+//
+// Microtask gymnastics: focus restoration is queued via `queueMicrotask`
+// so React's commit phase tears down the drawer subtree first. Tests
+// `await Promise.resolve()` before asserting on `document.activeElement`.
+
+describe('MappingDrawer — Gap 10 focus restore polish', () => {
+  it('URL deep-link case: trigger is <body>, focus falls back to first row body', async () => {
+    // Render the drawer open with row bodies as siblings. Because nothing
+    // was focused at mount time (jsdom default is `<body>`), the open-
+    // effect captures `<body>` as the trigger — the URL deep-link scenario.
+    const { rerender } = render(
+      <div>
+        <div data-testid="field-mapping-row-body" tabIndex={0} id="row-a" />
+        <div data-testid="field-mapping-row-body" tabIndex={0} id="row-b" />
+        <MappingDrawer row={mapped()} isOpen={true} onClose={() => {}} />
+      </div>,
+    )
+    expect(document.activeElement).toBe(document.body)
+
+    rerender(
+      <div>
+        <div data-testid="field-mapping-row-body" tabIndex={0} id="row-a" />
+        <div data-testid="field-mapping-row-body" tabIndex={0} id="row-b" />
+        <MappingDrawer row={mapped()} isOpen={false} onClose={() => {}} />
+      </div>,
+    )
+    // Flush the queueMicrotask deferring focus restore.
+    await Promise.resolve()
+    expect(document.activeElement).not.toBe(document.body)
+    expect(document.activeElement?.id).toBe('row-a')
+  })
+
+  it('post-Reject detached-node case: trigger is removed from DOM, focus falls back to first row body', async () => {
+    // Step 1: render with drawer closed so the open-effect doesn't capture
+    // anything yet.
+    const { rerender, container } = render(
+      <div>
+        <div data-testid="field-mapping-row-body" tabIndex={0} id="trigger-row" />
+        <div data-testid="field-mapping-row-body" tabIndex={0} id="other-row" />
+        <MappingDrawer row={mapped()} isOpen={false} onClose={() => {}} />
+      </div>,
+    )
+    // Step 2: focus the trigger row (simulating the user clicking it).
+    container.querySelector<HTMLElement>('#trigger-row')!.focus()
+    expect(document.activeElement?.id).toBe('trigger-row')
+
+    // Step 3: open the drawer. The open-effect captures the focused
+    // trigger row as `triggerRef`.
+    rerender(
+      <div>
+        <div data-testid="field-mapping-row-body" tabIndex={0} id="trigger-row" />
+        <div data-testid="field-mapping-row-body" tabIndex={0} id="other-row" />
+        <MappingDrawer row={mapped()} isOpen={true} onClose={() => {}} />
+      </div>,
+    )
+
+    // Step 4: detach the trigger from the DOM (simulating the post-Reject
+    // `router.refresh()` rebuilding the row tree) AND close the drawer.
+    rerender(
+      <div>
+        <div data-testid="field-mapping-row-body" tabIndex={0} id="other-row" />
+        <MappingDrawer row={mapped()} isOpen={false} onClose={() => {}} />
+      </div>,
+    )
+    await Promise.resolve()
+
+    // Trigger is gone; fallback should land on the remaining row body.
+    expect(document.activeElement?.id).toBe('other-row')
+  })
+
+  it('happy path: connected non-body trigger receives focus on close', async () => {
+    const { rerender, container } = render(
+      <div>
+        <div data-testid="field-mapping-row-body" tabIndex={0} id="row-a" />
+        <MappingDrawer row={mapped()} isOpen={false} onClose={() => {}} />
+      </div>,
+    )
+    const rowA = container.querySelector<HTMLElement>('#row-a')!
+    rowA.focus()
+    expect(document.activeElement).toBe(rowA)
+
+    rerender(
+      <div>
+        <div data-testid="field-mapping-row-body" tabIndex={0} id="row-a" />
+        <MappingDrawer row={mapped()} isOpen={true} onClose={() => {}} />
+      </div>,
+    )
+    rerender(
+      <div>
+        <div data-testid="field-mapping-row-body" tabIndex={0} id="row-a" />
+        <MappingDrawer row={mapped()} isOpen={false} onClose={() => {}} />
+      </div>,
+    )
+    await Promise.resolve()
+    expect(document.activeElement?.id).toBe('row-a')
+  })
+
+  it('no fallback available (zero rows in DOM) leaves focus alone — does not throw', async () => {
+    const { rerender } = render(
+      <div>
+        <MappingDrawer row={mapped()} isOpen={true} onClose={() => {}} />
+      </div>,
+    )
+    rerender(
+      <div>
+        <MappingDrawer row={mapped()} isOpen={false} onClose={() => {}} />
+      </div>,
+    )
+    // Does not throw; focus stays on body (the jsdom default).
+    await Promise.resolve()
+    expect(document.activeElement).toBe(document.body)
+  })
+})
+
 // ─── Width invariant ───────────────────────────────────────────────────────
 //
 // Phase 3 Gap 11a (2026-04-25) — drawer width changed from 520 → 480 as
