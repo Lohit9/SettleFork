@@ -305,13 +305,22 @@ function buildData(): MappingsForRedesignResult {
 
 // ── Test setup ──────────────────────────────────────────────────────────────
 
-function renderRedesign(searchString = '') {
+function renderRedesign(
+  searchString = '',
+  dataOverrides?: Partial<MappingsForRedesignResult>,
+) {
   currentSearch = searchString
+  const baseData = buildData()
+  const data: MappingsForRedesignResult = {
+    ...baseData,
+    ...dataOverrides,
+    counts: { ...baseData.counts, ...(dataOverrides?.counts ?? {}) },
+  }
   return render(
     <MappingRedesignContent
       projectId="p1"
       projectName="Heritage Core"
-      initialRedesignData={buildData()}
+      initialRedesignData={data}
     />,
   )
 }
@@ -1159,5 +1168,46 @@ describe('MappingRedesignContent — Gap 11b sidebar click-to-highlight', () => 
     await waitFor(() => {
       expect(isRowHighlighted('r-accounts-1')).toBe(false)
     })
+  })
+})
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Phase 3 Gap 13 — Unmapped counter chip.
+// ─────────────────────────────────────────────────────────────────────────────
+//
+// The counter pills row (`mapping-redesign-counters`) renders a chip per
+// non-zero status counter, mirroring the existing Rejected gating pattern.
+// `Unmapped` is the project-level aggregate count of target fields with no
+// TFM at all — previously invisible despite being on the contract.
+
+describe('MappingRedesignContent — Gap 13 Unmapped counter chip', () => {
+  it('renders the Unmapped chip when counts.unmapped > 0', () => {
+    renderRedesign('', { counts: { total: 6, approved: 4, needsReview: 1, rejected: 0, unmapped: 3 } })
+    const counters = screen.getByTestId('mapping-redesign-counters')
+    expect(counters.textContent).toContain('Unmapped')
+    expect(counters.textContent).toContain('3')
+  })
+
+  it('hides the Unmapped chip when counts.unmapped === 0', () => {
+    renderRedesign('', { counts: { total: 6, approved: 5, needsReview: 1, rejected: 0, unmapped: 0 } })
+    const counters = screen.getByTestId('mapping-redesign-counters')
+    expect(counters.textContent).not.toContain('Unmapped')
+  })
+
+  it('renders Unmapped alongside Rejected when both are non-zero', () => {
+    renderRedesign('', { counts: { total: 8, approved: 4, needsReview: 1, rejected: 1, unmapped: 2 } })
+    const counters = screen.getByTestId('mapping-redesign-counters')
+    expect(counters.textContent).toContain('Rejected')
+    expect(counters.textContent).toContain('Unmapped')
+  })
+
+  it('Total/Approved/Needs Review chips always render regardless of Unmapped value', () => {
+    renderRedesign('', { counts: { total: 5, approved: 5, needsReview: 0, rejected: 0, unmapped: 0 } })
+    const counters = screen.getByTestId('mapping-redesign-counters')
+    expect(counters.textContent).toContain('Total')
+    expect(counters.textContent).toContain('Approved')
+    expect(counters.textContent).toContain('Needs Review')
+    expect(counters.textContent).not.toContain('Unmapped')
+    expect(counters.textContent).not.toContain('Rejected')
   })
 })

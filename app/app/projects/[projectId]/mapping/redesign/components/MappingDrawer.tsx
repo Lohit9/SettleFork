@@ -118,6 +118,50 @@ import { TableBadge } from './TableBadge'
 // invariant in `tests/lib/no-shim-in-redesign-path.test.ts` enforces it.
 // See `FieldMappingRow.tsx` file header for the full rationale.
 
+// ── Focus restore helper (Phase 3 Gap 10) ─────────────────────────────────
+//
+// Resolve the element to receive focus when the drawer closes. The drawer
+// captures `document.activeElement` synchronously on open as
+// `triggerRef.current`; on close we want to restore focus to that element.
+//
+// Two edge cases require a fallback:
+//
+//   1. URL deep-link open (`?drawer=<rowId>` on initial mount). At capture
+//      time the active element is `<body>`. Focusing `<body>` is a silent
+//      no-op that strands the user at the document root.
+//
+//   2. Post-Reject DOM rebuild. After a successful Reject the parent calls
+//      `router.refresh()`, which can replace the original row body element
+//      while the drawer is still mounted. By the time our cleanup runs the
+//      captured trigger may be detached from the DOM (its `isConnected`
+//      flag flips false). Focusing a detached element is a silent no-op.
+//
+// In both cases we fall back to the first mapping-row body still in the
+// DOM (rows are `role="button" tabIndex={0}` since Gap 7) so the user
+// keeps a visible focus affordance and can resume keyboard navigation.
+//
+// Returns `null` when no fallback can be found (e.g., a project with zero
+// rows). Callers should leave focus alone in that case rather than force
+// it somewhere arbitrary.
+function resolveFocusTarget(
+  triggerCandidate: HTMLElement | null,
+): HTMLElement | null {
+  if (typeof document === 'undefined') return null
+  if (
+    triggerCandidate &&
+    triggerCandidate.isConnected &&
+    triggerCandidate !== document.body &&
+    typeof triggerCandidate.focus === 'function'
+  ) {
+    return triggerCandidate
+  }
+  const firstRow = document.querySelector<HTMLElement>(
+    '[data-testid="field-mapping-row-body"]',
+  )
+  if (firstRow && firstRow.isConnected) return firstRow
+  return null
+}
+
 // ── Drawer width ───────────────────────────────────────────────────────────
 
 /**
@@ -237,10 +281,14 @@ export function MappingDrawer({
       document.removeEventListener('mousedown', onMouseDown)
       // Defer focus restoration to the next tick so React's commit phase
       // has finished tearing down the drawer subtree first.
+      // Phase 3 Gap 10 — `resolveFocusTarget` falls back to the first
+      // mapping row body when the trigger is `<body>` (URL deep-link) or
+      // detached (post-Reject DOM rebuild).
       const trigger = triggerRef.current
-      if (trigger && typeof trigger.focus === 'function') {
-        queueMicrotask(() => trigger.focus())
-      }
+      queueMicrotask(() => {
+        const target = resolveFocusTarget(trigger)
+        if (target) target.focus()
+      })
     }
   }, [isOpen])
 

@@ -697,6 +697,15 @@ function CountersRow({
   if (counts.rejected > 0) {
     chips.push({ label: 'Rejected', value: counts.rejected })
   }
+  // Phase 3 Gap 13 (2026-04-25): show the Unmapped chip only when the
+  // count is non-zero — same gating convention as Rejected. Surfaces the
+  // project-level aggregate count of target fields that have no TFM at
+  // all, which was previously invisible despite being on the contract
+  // (`counts.unmapped`). Per-row Rule 6 already shows each unmapped
+  // field inline; this chip is the project-level scanning surface.
+  if (counts.unmapped > 0) {
+    chips.push({ label: 'Unmapped', value: counts.unmapped })
+  }
 
   return (
     <div
