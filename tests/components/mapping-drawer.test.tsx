@@ -408,13 +408,24 @@ describe('MappingDrawer — subheader VA (value_assignment)', () => {
   })
 })
 
-// ─── Body + footer placeholders ────────────────────────────────────────────
+// ─── Mapped-row placeholder + footer placeholder ───────────────────────────
+//
+// Gap 8a updated the mapped-row placeholder copy to call out Gap 8b explicitly
+// (the per-source roster is Gap 8b's territory). The footer placeholder is
+// unchanged from Gap 7 — Gap 9 fills it with action buttons.
 
-describe('MappingDrawer — body + footer placeholders', () => {
-  it('renders the body placeholder text "Tab content coming in Gaps 8-10"', () => {
+describe('MappingDrawer — mapped-row placeholder + footer placeholder', () => {
+  it('mapped row body shows the Gap 8b placeholder copy', () => {
     render(<MappingDrawer row={mapped()} isOpen={true} onClose={() => {}} />)
     const body = screen.getByTestId('mapping-drawer-body')
-    expect(body.textContent).toContain('Tab content coming in Gaps 8-10')
+    expect(body.textContent).toContain(
+      'Mapped row drawer body — coming in Gap 8b',
+    )
+  })
+
+  it('mapped placeholder uses the dedicated test-id', () => {
+    render(<MappingDrawer row={mapped()} isOpen={true} onClose={() => {}} />)
+    expect(screen.getByTestId('drawer-mapped-placeholder')).toBeInTheDocument()
   })
 
   it('renders the footer placeholder text "Actions coming in Gap 10"', () => {
@@ -423,11 +434,10 @@ describe('MappingDrawer — body + footer placeholders', () => {
     expect(footer.textContent).toContain('Actions coming in Gap 10')
   })
 
-  it('body uses muted text color (slate-400)', () => {
+  it('mapped placeholder uses muted text color (slate-400)', () => {
     render(<MappingDrawer row={mapped()} isOpen={true} onClose={() => {}} />)
-    const body = screen.getByTestId('mapping-drawer-body')
-    const p = body.querySelector('p')
-    expect(p?.className).toContain('text-slate-400')
+    const placeholder = screen.getByTestId('drawer-mapped-placeholder')
+    expect(placeholder.className).toContain('text-slate-400')
   })
 })
 
@@ -531,5 +541,363 @@ describe('MappingDrawer — light-mode-only invariant', () => {
       <MappingDrawer row={mapped()} isOpen={true} onClose={() => {}} />,
     )
     expect(container.innerHTML).not.toMatch(/\bdark:[a-z]/i)
+  })
+})
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Phase 3 Gap 8a — body content for Rule 5 / Rule 6 / VA rows.
+// ─────────────────────────────────────────────────────────────────────────────
+//
+// Mapped rows (Rule 1-4) continue to render the placeholder — Gap 8b fills
+// that. The drawer body wrapper (`data-testid="mapping-drawer-body"`) is
+// preserved so the Gap 7 outside-click contract still holds.
+
+// ─── Body skeleton invariants ──────────────────────────────────────────────
+
+describe('MappingDrawer — body skeleton invariants (all kinds)', () => {
+  const cases: Array<{ name: string; row: () => Parameters<typeof MappingDrawer>[0]['row'] }> = [
+    { name: 'mapped', row: () => mapped() },
+    { name: 'value_assignment', row: () => valueAssignment() },
+    { name: 'target_acknowledged', row: () => targetAck() },
+    { name: 'unmapped', row: () => unmapped() },
+  ]
+
+  it.each(cases)('renders the body wrapper test-id for $name rows', ({ row }) => {
+    render(<MappingDrawer row={row()} isOpen={true} onClose={() => {}} />)
+    expect(screen.getByTestId('mapping-drawer-body')).toBeInTheDocument()
+  })
+
+  it('body wrapper is scrollable (flex-1 + overflow-auto)', () => {
+    render(<MappingDrawer row={targetAck()} isOpen={true} onClose={() => {}} />)
+    const body = screen.getByTestId('mapping-drawer-body')
+    expect(body.className).toContain('flex-1')
+    expect(body.className).toContain('overflow-auto')
+  })
+})
+
+// ─── Rule 5 — Target Acknowledged body ─────────────────────────────────────
+
+describe('MappingDrawer — Rule 5 (Target Acknowledged) body', () => {
+  it('renders the Target field section with name, table badge, type, and required indicator', () => {
+    render(
+      <MappingDrawer
+        row={targetAck({
+          targetField: targetField({
+            name: 'description',
+            dataType: 'VARCHAR(255)',
+            isNullable: false,
+            targetTable: { id: 'tt-9', name: 'account_status' },
+          }),
+        })}
+        isOpen={true}
+        onClose={() => {}}
+      />,
+    )
+    const section = screen.getByTestId('drawer-section-target-field')
+    expect(within(section).getByTestId('drawer-target-field-name').textContent).toBe(
+      'description',
+    )
+    expect(within(section).getByText('account_status')).toBeInTheDocument()
+    const meta = within(section).getByTestId('drawer-target-field-meta')
+    expect(meta.textContent).toContain('VARCHAR(255)')
+    expect(meta.textContent).toContain('required')
+  })
+
+  it('Target field meta shows "nullable" when isNullable=true', () => {
+    render(
+      <MappingDrawer
+        row={targetAck({
+          targetField: targetField({ isNullable: true }),
+        })}
+        isOpen={true}
+        onClose={() => {}}
+      />,
+    )
+    const meta = screen.getByTestId('drawer-target-field-meta')
+    expect(meta.textContent).toContain('nullable')
+    expect(meta.textContent).not.toContain('required')
+  })
+
+  it('renders Acknowledgment section with the reason text when present', () => {
+    render(
+      <MappingDrawer
+        row={targetAck({ acknowledgmentReason: 'system default' })}
+        isOpen={true}
+        onClose={() => {}}
+      />,
+    )
+    const reason = screen.getByTestId('drawer-acknowledgment-reason')
+    expect(reason.textContent).toBe('system default')
+  })
+
+  it('Acknowledgment section shows empty-state when acknowledgmentReason is null', () => {
+    render(
+      <MappingDrawer
+        row={targetAck({ acknowledgmentReason: null })}
+        isOpen={true}
+        onClose={() => {}}
+      />,
+    )
+    expect(screen.queryByTestId('drawer-acknowledgment-reason')).toBeNull()
+    expect(
+      screen.getByTestId('drawer-acknowledgment-reason-empty'),
+    ).toBeInTheDocument()
+  })
+
+  // Notes / acknowledged-by / acknowledged-at: NOT on the contract today.
+  // Deferred per Gap 8a contract-shape decision (see AcknowledgedBody JSDoc).
+  it('does NOT render any acknowledged-by, acknowledged-at, or notes sub-fields (deferred)', () => {
+    render(<MappingDrawer row={targetAck()} isOpen={true} onClose={() => {}} />)
+    expect(screen.queryByText(/acknowledged by/i)).toBeNull()
+    expect(screen.queryByText(/acknowledged at/i)).toBeNull()
+    expect(screen.queryByText(/^notes$/i)).toBeNull()
+  })
+
+  it('renders Status section with "Approved" + green dot', () => {
+    render(<MappingDrawer row={targetAck()} isOpen={true} onClose={() => {}} />)
+    const status = screen.getByTestId('drawer-section-status')
+    const indicator = within(status).getByTestId('drawer-status-indicator')
+    expect(indicator.textContent).toContain('Approved')
+    const dot = indicator.querySelector('span[aria-hidden="true"]')
+    expect(dot?.className).toContain('bg-green-500')
+  })
+
+  it('section ordering is Target field → Acknowledgment → Status', () => {
+    render(<MappingDrawer row={targetAck()} isOpen={true} onClose={() => {}} />)
+    const body = screen.getByTestId('mapping-drawer-body')
+    const sections = within(body).getAllByRole('heading', { level: 3 })
+    expect(sections.map((h) => h.textContent)).toEqual([
+      'Target field',
+      'Acknowledgment',
+      'Status',
+    ])
+  })
+
+  it('does NOT show Value expression, AI reasoning, or Mapping status sections', () => {
+    render(<MappingDrawer row={targetAck()} isOpen={true} onClose={() => {}} />)
+    expect(screen.queryByTestId('drawer-section-value-expression')).toBeNull()
+    expect(screen.queryByTestId('drawer-section-ai-reasoning')).toBeNull()
+    expect(screen.queryByTestId('drawer-section-mapping-status')).toBeNull()
+  })
+})
+
+// ─── Rule 6 — Unmapped body ────────────────────────────────────────────────
+
+describe('MappingDrawer — Rule 6 (Unmapped) body', () => {
+  it('renders the Target field section', () => {
+    render(<MappingDrawer row={unmapped()} isOpen={true} onClose={() => {}} />)
+    expect(
+      screen.getByTestId('drawer-section-target-field'),
+    ).toBeInTheDocument()
+  })
+
+  it('renders the Mapping status section with the empty-state prose', () => {
+    render(<MappingDrawer row={unmapped()} isOpen={true} onClose={() => {}} />)
+    const prose = screen.getByTestId('drawer-unmapped-prose')
+    expect(prose.textContent).toContain('no source mapping yet')
+    expect(prose.textContent).toContain('AI Suggest')
+    expect(prose.textContent).toContain('acknowledge')
+  })
+
+  it('does NOT render a Status section (unmapped state is implicit)', () => {
+    render(<MappingDrawer row={unmapped()} isOpen={true} onClose={() => {}} />)
+    expect(screen.queryByTestId('drawer-section-status')).toBeNull()
+  })
+
+  it('does NOT render any action buttons (Gap 9 territory)', () => {
+    render(<MappingDrawer row={unmapped()} isOpen={true} onClose={() => {}} />)
+    const body = screen.getByTestId('mapping-drawer-body')
+    expect(within(body).queryAllByRole('button')).toHaveLength(0)
+  })
+
+  it('section ordering is Target field → Mapping status', () => {
+    render(<MappingDrawer row={unmapped()} isOpen={true} onClose={() => {}} />)
+    const body = screen.getByTestId('mapping-drawer-body')
+    const sections = within(body).getAllByRole('heading', { level: 3 })
+    expect(sections.map((h) => h.textContent)).toEqual([
+      'Target field',
+      'Mapping status',
+    ])
+  })
+})
+
+// ─── VA — Value Assignment body ────────────────────────────────────────────
+
+describe('MappingDrawer — Value Assignment body', () => {
+  it('renders the Target field section', () => {
+    render(
+      <MappingDrawer row={valueAssignment()} isOpen={true} onClose={() => {}} />,
+    )
+    expect(
+      screen.getByTestId('drawer-section-target-field'),
+    ).toBeInTheDocument()
+  })
+
+  it('renders the Value expression section with combinationSql in a code block', () => {
+    render(
+      <MappingDrawer
+        row={valueAssignment({ combinationSql: 'NOW()' })}
+        isOpen={true}
+        onClose={() => {}}
+      />,
+    )
+    const expr = screen.getByTestId('drawer-value-expression')
+    expect(expr.textContent).toBe('NOW()')
+    expect(expr.tagName).toBe('PRE')
+    expect(expr.className).toContain('font-mono')
+    expect(expr.className).toContain('bg-slate-50')
+    expect(expr.className).toContain('text-xs')
+  })
+
+  it('Value expression code block preserves multiline whitespace', () => {
+    const sql = "CASE\n  WHEN status = 'A' THEN 'active'\n  ELSE 'inactive'\nEND"
+    render(
+      <MappingDrawer
+        row={valueAssignment({ combinationSql: sql })}
+        isOpen={true}
+        onClose={() => {}}
+      />,
+    )
+    const expr = screen.getByTestId('drawer-value-expression')
+    expect(expr.className).toContain('whitespace-pre-wrap')
+    expect(expr.textContent).toBe(sql)
+  })
+
+  it('Value expression shows empty-state when combinationSql is null', () => {
+    render(
+      <MappingDrawer
+        row={valueAssignment({ combinationSql: null })}
+        isOpen={true}
+        onClose={() => {}}
+      />,
+    )
+    expect(screen.queryByTestId('drawer-value-expression')).toBeNull()
+    expect(
+      screen.getByTestId('drawer-value-expression-empty'),
+    ).toBeInTheDocument()
+  })
+
+  it('renders the AI reasoning section with prose when aiReasoning is non-null', () => {
+    render(
+      <MappingDrawer
+        row={valueAssignment({ aiReasoning: 'Default created_at uses NOW()' })}
+        isOpen={true}
+        onClose={() => {}}
+      />,
+    )
+    const reasoning = screen.getByTestId('drawer-ai-reasoning')
+    expect(reasoning.textContent).toBe('Default created_at uses NOW()')
+    expect(reasoning.className).toContain('italic')
+  })
+
+  it('AI reasoning section shows empty-state when aiReasoning is null', () => {
+    render(
+      <MappingDrawer
+        row={valueAssignment({ aiReasoning: null })}
+        isOpen={true}
+        onClose={() => {}}
+      />,
+    )
+    expect(screen.queryByTestId('drawer-ai-reasoning')).toBeNull()
+    const empty = screen.getByTestId('drawer-ai-reasoning-empty')
+    expect(empty.textContent).toBe('No reasoning available')
+  })
+
+  it('renders Confidence section as 2-decimal percentage', () => {
+    render(
+      <MappingDrawer
+        row={valueAssignment({ confidence: 92 })}
+        isOpen={true}
+        onClose={() => {}}
+      />,
+    )
+    const conf = screen.getByTestId('drawer-confidence')
+    expect(conf.textContent).toBe('92.00%')
+  })
+
+  it('Confidence section shows em-dash when confidence is null', () => {
+    render(
+      <MappingDrawer
+        row={valueAssignment({ confidence: null })}
+        isOpen={true}
+        onClose={() => {}}
+      />,
+    )
+    expect(screen.queryByTestId('drawer-confidence')).toBeNull()
+    const empty = screen.getByTestId('drawer-confidence-empty')
+    expect(empty.textContent).toContain('—')
+    expect(empty.getAttribute('aria-label')).toBe('no confidence available')
+  })
+
+  it('Status section reflects actual row.status (not hardcoded "Approved")', () => {
+    render(
+      <MappingDrawer
+        row={valueAssignment({ status: 'needs_review' })}
+        isOpen={true}
+        onClose={() => {}}
+      />,
+    )
+    const indicator = screen.getByTestId('drawer-status-indicator')
+    expect(indicator.textContent).toContain('Needs Review')
+    const dot = indicator.querySelector('span[aria-hidden="true"]')
+    expect(dot?.className).toContain('bg-amber-400')
+  })
+
+  it('Status section shows Approved + green dot when status="approved"', () => {
+    render(
+      <MappingDrawer
+        row={valueAssignment({ status: 'approved' })}
+        isOpen={true}
+        onClose={() => {}}
+      />,
+    )
+    const indicator = screen.getByTestId('drawer-status-indicator')
+    expect(indicator.textContent).toContain('Approved')
+    const dot = indicator.querySelector('span[aria-hidden="true"]')
+    expect(dot?.className).toContain('bg-green-500')
+  })
+
+  it('section ordering is Target field → Value expression → AI reasoning → Confidence → Status', () => {
+    render(
+      <MappingDrawer row={valueAssignment()} isOpen={true} onClose={() => {}} />,
+    )
+    const body = screen.getByTestId('mapping-drawer-body')
+    const sections = within(body).getAllByRole('heading', { level: 3 })
+    expect(sections.map((h) => h.textContent)).toEqual([
+      'Target field',
+      'Value expression',
+      'AI reasoning',
+      'Confidence',
+      'Status',
+    ])
+  })
+})
+
+// ─── Mapped row regression ─────────────────────────────────────────────────
+
+describe('MappingDrawer — Mapped row body (regression guard for Gap 8b)', () => {
+  it('does NOT render Acknowledgment, Mapping status, Value expression sections', () => {
+    render(<MappingDrawer row={mapped()} isOpen={true} onClose={() => {}} />)
+    expect(screen.queryByTestId('drawer-section-acknowledgment')).toBeNull()
+    expect(screen.queryByTestId('drawer-section-mapping-status')).toBeNull()
+    expect(screen.queryByTestId('drawer-section-value-expression')).toBeNull()
+    expect(screen.queryByTestId('drawer-section-ai-reasoning')).toBeNull()
+    expect(screen.queryByTestId('drawer-section-confidence')).toBeNull()
+    expect(screen.queryByTestId('drawer-section-status')).toBeNull()
+    expect(screen.queryByTestId('drawer-section-target-field')).toBeNull()
+  })
+
+  it('placeholder explicitly mentions Gap 8b so the deferred state is unambiguous', () => {
+    render(<MappingDrawer row={mapped()} isOpen={true} onClose={() => {}} />)
+    const placeholder = screen.getByTestId('drawer-mapped-placeholder')
+    expect(placeholder.textContent).toContain('Gap 8b')
+  })
+
+  it('mapped placeholder does not pollute the Rule 5 / Rule 6 / VA test-ids', () => {
+    render(<MappingDrawer row={mapped()} isOpen={true} onClose={() => {}} />)
+    expect(screen.queryByTestId('drawer-target-field-name')).toBeNull()
+    expect(screen.queryByTestId('drawer-acknowledgment-reason')).toBeNull()
+    expect(screen.queryByTestId('drawer-unmapped-prose')).toBeNull()
+    expect(screen.queryByTestId('drawer-value-expression')).toBeNull()
   })
 })

@@ -8,24 +8,35 @@ import type {
   MappingRow,
   MappingSourceRef,
   TargetAcknowledgedRow,
+  TargetFieldRef,
+  UnmappedRow,
+  ValueAssignmentRow,
 } from '@/lib/types/mappings-for-redesign'
 import { classifyMappedRow, type MappingRowRule } from '@/lib/utils/mapping-row-rules'
 import { TableBadge } from './TableBadge'
 
 // ─────────────────────────────────────────────────────────────────────────────
-// MappingDrawer — Phase 3 Gap 7 shell.
+// MappingDrawer — Phase 3 Gaps 7 + 8a.
 // ─────────────────────────────────────────────────────────────────────────────
 //
 // Right-side drawer that opens when the user clicks a mapping row body.
-// Gap 7 ships the SHELL ONLY:
 //
-//   • Sticky header with target field name + target TableBadge + close X
-//   • Sticky subheader summarising sources/state per row kind
-//   • Body placeholder ("Tab content coming in Gaps 8-10")
-//   • Footer placeholder ("Actions coming in Gap 10")
+// Gap 7 (shipped d0f8c58): the shell — sticky header with target field name +
+// target TableBadge + close X, sticky rule-specific subheader, scrollable body,
+// sticky footer placeholder, Esc / outside-click close, focus restore.
 //
-// Tabs (Details / Source / Transform), action buttons, sample-value rendering,
-// AI-reasoning text, and SQL editing are all explicitly DEFERRED to Gaps 8-10.
+// Gap 8a (this gap): body content for non-mapped row kinds. Replaces the Gap 7
+// "Tab content coming in Gaps 8-10" placeholder with a kind dispatch:
+//
+//   target_acknowledged → AcknowledgedBody (Target field / Acknowledgment / Status)
+//   unmapped            → UnmappedBody     (Target field / Mapping status)
+//   value_assignment    → ValueAssignmentBody (Target field / Value expression /
+//                                              AI reasoning / Confidence / Status)
+//   mapped              → MappedBody  (still a placeholder — Gap 8b territory)
+//
+// Footer remains the Gap 7 placeholder; action buttons are Gap 9. The drawer is
+// deliberately tab-LESS; the spec's Details/Source/Transform tabs were retired
+// at Gap 7 in favour of kind-dispatched single-page bodies. Founder Q3.
 //
 // LOCKED FOUNDER DECISIONS (do not re-litigate; see Gap 7 prompt):
 //
@@ -169,7 +180,7 @@ export function MappingDrawer({ row, isOpen, onClose }: MappingDrawerProps) {
     >
       <DrawerHeader row={row} titleId={titleId} onClose={onClose} />
       <DrawerSubheader row={row} />
-      <DrawerBody />
+      <DrawerBody row={row} />
       <DrawerFooter />
     </aside>
   )
@@ -378,20 +389,376 @@ function AcknowledgedSubheader({ row }: { row: TargetAcknowledgedRow }) {
   )
 }
 
-// ── Body & footer placeholders ─────────────────────────────────────────────
+// ── Body — kind-dispatched (Gap 8a) ────────────────────────────────────────
+//
+// The wrapping `<div data-testid="mapping-drawer-body">` is preserved so:
+//   • The outside-click handler in `MappingDrawer` (line ~130) can still
+//     test `drawerRef.current.contains(target)` against any descendant.
+//   • Existing Gap 7 tests that use `mapping-drawer-body` to fire `mousedown`
+//     on a non-closing target keep passing.
+// Inside the wrapper, content is dispatched on `row.kind`:
+//   target_acknowledged → AcknowledgedBody
+//   unmapped            → UnmappedBody
+//   value_assignment    → ValueAssignmentBody
+//   mapped              → MappedBody (still a placeholder; Gap 8b)
 
-function DrawerBody() {
+function DrawerBody({ row }: { row: MappingRow }) {
   return (
     <div
       data-testid="mapping-drawer-body"
-      className="flex-1 overflow-auto px-5 py-8"
+      className="flex-1 overflow-auto px-6 py-5"
     >
-      <p className="text-center text-sm text-slate-400">
-        Tab content coming in Gaps 8-10
-      </p>
+      <BodyContent row={row} />
     </div>
   )
 }
+
+function BodyContent({ row }: { row: MappingRow }) {
+  switch (row.kind) {
+    case 'mapped':
+      return <MappedBody row={row} />
+    case 'value_assignment':
+      return <ValueAssignmentBody row={row} />
+    case 'target_acknowledged':
+      return <AcknowledgedBody row={row} />
+    case 'unmapped':
+      return <UnmappedBody row={row} />
+  }
+}
+
+// ── Body primitives — shared across kinds ──────────────────────────────────
+//
+// Three light primitives keep the kind bodies declarative and the visual
+// language (small-caps section title, generous spacing, no border separators)
+// in one place. They are intentionally thin wrappers — extracting them into
+// their own files is premature until Gap 8b confirms the conventions hold for
+// the more complex mapped-row roster.
+
+/**
+ * Stacked section with a small-caps title and arbitrary children. Spacing
+ * is `mb-6` between sections (clean Linear / Notion vibe — no border rules).
+ */
+function DrawerSection({
+  title,
+  testId,
+  children,
+}: {
+  title: string
+  testId: string
+  children: React.ReactNode
+}) {
+  return (
+    <section className="mb-6 last:mb-0" data-testid={testId}>
+      <h3 className="mb-2 text-xs font-medium uppercase tracking-wide text-slate-500">
+        {title}
+      </h3>
+      <div>{children}</div>
+    </section>
+  )
+}
+
+/**
+ * Stacked label/value pair. `mono` switches the value to `font-mono` (used
+ * for field names, data types, and other identifier-shaped values). Empty
+ * `value` is supported but callers should reach for `<DrawerEmptyState />`
+ * for readability when the field is intentionally absent.
+ */
+function DrawerField({
+  label,
+  value,
+  mono = false,
+  testId,
+}: {
+  label: string
+  value: string
+  mono?: boolean
+  testId?: string
+}) {
+  return (
+    <div className="mb-3 last:mb-0" data-testid={testId}>
+      <div className="text-xs text-slate-500">{label}</div>
+      <div
+        className={cn(
+          'text-sm text-slate-900',
+          mono && 'font-mono',
+        )}
+      >
+        {value}
+      </div>
+    </div>
+  )
+}
+
+/**
+ * Italic muted line for "field intentionally absent" states. Visually
+ * matches the row-level em-dash treatment from Gap 5a so the drawer reads
+ * consistently with the rows underneath it.
+ */
+function DrawerEmptyState({
+  text,
+  testId,
+}: {
+  text: string
+  testId?: string
+}) {
+  return (
+    <p
+      className="text-sm italic text-slate-400"
+      data-testid={testId}
+    >
+      {text}
+    </p>
+  )
+}
+
+// ── Shared "Target field" section (used by every kind body) ────────────────
+
+/**
+ * Reused by all four kinds. Shows target name + TableBadge on the first
+ * line, then `<dataType> · <required|nullable>` underneath. The target field
+ * identity is the one constant across every drawer body.
+ */
+function TargetFieldSection({ targetField }: { targetField: TargetFieldRef }) {
+  return (
+    <DrawerSection title="Target field" testId="drawer-section-target-field">
+      <div className="space-y-1.5">
+        <div className="flex flex-wrap items-center gap-2">
+          <span
+            className="font-mono text-sm text-slate-900"
+            data-testid="drawer-target-field-name"
+          >
+            {targetField.name}
+          </span>
+          <TableBadge tableName={targetField.targetTable.name} />
+        </div>
+        <div
+          className="text-xs text-slate-500"
+          data-testid="drawer-target-field-meta"
+        >
+          <span className="font-mono">{targetField.dataType}</span>
+          <span className="mx-1.5 text-slate-300" aria-hidden="true">·</span>
+          <span>{targetField.isNullable ? 'nullable' : 'required'}</span>
+        </div>
+      </div>
+    </DrawerSection>
+  )
+}
+
+// ── Shared "Status" section (Rule 5 + VA) ──────────────────────────────────
+//
+// Mirrors the row-level `STATUS_CONFIG` literal in `FieldMappingRow.tsx`. The
+// duplication is small (one config map) and deliberate: refactoring into a
+// shared module is premature until Gap 9's footer wires up the same vocabulary
+// for Approve / Reject buttons. At that point a single source of truth makes
+// sense — currently the change would be churn for two callers.
+
+type DrawerStatus = MappingRow['status']
+
+const DRAWER_STATUS_CONFIG: Record<
+  DrawerStatus,
+  { label: string; dotClassName: string }
+> = {
+  approved: { label: 'Approved', dotClassName: 'bg-green-500' },
+  needs_review: { label: 'Needs Review', dotClassName: 'bg-amber-400' },
+  rejected: { label: 'Rejected', dotClassName: 'bg-red-500' },
+  unmapped: { label: 'Unmapped', dotClassName: 'bg-slate-300' },
+}
+
+function StatusSection({ status }: { status: DrawerStatus }) {
+  const cfg = DRAWER_STATUS_CONFIG[status]
+  return (
+    <DrawerSection title="Status" testId="drawer-section-status">
+      <div
+        className="flex items-center gap-2"
+        data-testid="drawer-status-indicator"
+      >
+        <span
+          aria-hidden="true"
+          className={cn('h-2 w-2 flex-shrink-0 rounded-full', cfg.dotClassName)}
+        />
+        <span className="text-sm text-slate-900">{cfg.label}</span>
+      </div>
+    </DrawerSection>
+  )
+}
+
+// ── Rule 5 — Target Acknowledged ───────────────────────────────────────────
+
+/**
+ * Acknowledged-row drawer body.
+ *
+ * NOTE on omitted fields (Gap 8a contract-shape decision, 2026-04-24):
+ * The Gap 8a spec mentions optional `acknowledgmentNotes`, `acknowledgedBy`,
+ * and `acknowledgedAt` rows. The redesign data contract
+ * (`lib/types/mappings-for-redesign.ts` `TargetAcknowledgedRow`) currently
+ * exposes ONLY `acknowledgmentReason`. The other three fields are not on the
+ * wire and not surfaced in the underlying server action. They are deferred
+ * pending a contract change — adding them here would require expanding
+ * `TargetAcknowledgedRow`, the translator, and the read-path tests in
+ * lockstep. Out of scope for Gap 8a per the original prompt's constraint
+ * "do NOT touch lib/actions/mappings-for-redesign.ts or types".
+ */
+function AcknowledgedBody({ row }: { row: TargetAcknowledgedRow }) {
+  return (
+    <>
+      <TargetFieldSection targetField={row.targetField} />
+      <DrawerSection title="Acknowledgment" testId="drawer-section-acknowledgment">
+        {row.acknowledgmentReason ? (
+          <p
+            className="text-sm text-slate-900"
+            data-testid="drawer-acknowledgment-reason"
+          >
+            {row.acknowledgmentReason}
+          </p>
+        ) : (
+          <DrawerEmptyState
+            text="No reason recorded"
+            testId="drawer-acknowledgment-reason-empty"
+          />
+        )}
+      </DrawerSection>
+      <StatusSection status={row.status} />
+    </>
+  )
+}
+
+// ── Rule 6 — Unmapped ──────────────────────────────────────────────────────
+
+const UNMAPPED_BODY_PROSE =
+  'This target field has no source mapping yet. Use AI Suggest from the Mapping page to generate a proposal, or acknowledge this field as intentionally unmapped.'
+
+/**
+ * Unmapped-row drawer body. No status section — unmapped state is implicit
+ * from the prose.
+ *
+ * TODO(Gap 9): replace the empty-state prose with an inline "Suggest mapping"
+ * action button when the action footer lands. The current copy is the
+ * read-only Gap 8a equivalent ("here's what to do, but no buttons yet").
+ */
+function UnmappedBody({ row }: { row: UnmappedRow }) {
+  return (
+    <>
+      <TargetFieldSection targetField={row.targetField} />
+      <DrawerSection title="Mapping status" testId="drawer-section-mapping-status">
+        <p
+          className="text-sm text-slate-600"
+          data-testid="drawer-unmapped-prose"
+        >
+          {UNMAPPED_BODY_PROSE}
+        </p>
+      </DrawerSection>
+    </>
+  )
+}
+
+// ── VA — Value Assignment ──────────────────────────────────────────────────
+
+/**
+ * Value-assignment drawer body.
+ *
+ * `combinationSql` is the single field that distinguishes a VA from any other
+ * row in the drawer view. We render it in a code block (slate-50 bg, mono,
+ * `whitespace-pre-wrap` so multi-line SQL preserves formatting). Long lines
+ * are allowed to scroll horizontally to keep the multiline reading pose.
+ *
+ * The status section uses the actual `row.status` (not hardcoded "Approved").
+ * VAs are nominally created at `'approved'` but the contract permits all three
+ * states (`'needs_review' | 'approved' | 'rejected'`); rendering the actual
+ * value avoids lying to the user when they are mid-review.
+ */
+function ValueAssignmentBody({ row }: { row: ValueAssignmentRow }) {
+  return (
+    <>
+      <TargetFieldSection targetField={row.targetField} />
+
+      <DrawerSection title="Value expression" testId="drawer-section-value-expression">
+        {row.combinationSql ? (
+          <pre
+            className="overflow-x-auto whitespace-pre-wrap break-words rounded bg-slate-50 p-3 font-mono text-xs text-slate-900"
+            data-testid="drawer-value-expression"
+          >
+            {row.combinationSql}
+          </pre>
+        ) : (
+          <DrawerEmptyState
+            text="No expression authored yet"
+            testId="drawer-value-expression-empty"
+          />
+        )}
+      </DrawerSection>
+
+      <DrawerSection title="AI reasoning" testId="drawer-section-ai-reasoning">
+        {row.aiReasoning ? (
+          <p
+            className="text-sm italic text-slate-600"
+            data-testid="drawer-ai-reasoning"
+          >
+            {row.aiReasoning}
+          </p>
+        ) : (
+          <DrawerEmptyState
+            text="No reasoning available"
+            testId="drawer-ai-reasoning-empty"
+          />
+        )}
+      </DrawerSection>
+
+      <DrawerSection title="Confidence" testId="drawer-section-confidence">
+        {row.confidence !== null ? (
+          <span
+            className="text-sm tabular-nums text-slate-900"
+            data-testid="drawer-confidence"
+          >
+            {formatConfidence(row.confidence)}
+          </span>
+        ) : (
+          <span
+            aria-label="no confidence available"
+            className="inline-flex items-center text-sm text-slate-400"
+            data-testid="drawer-confidence-empty"
+          >
+            <span aria-hidden="true">—</span>
+          </span>
+        )}
+      </DrawerSection>
+
+      <StatusSection status={row.status} />
+    </>
+  )
+}
+
+/**
+ * Shared with `FieldMappingRow.tsx` semantically — accepts either the
+ * 0-100 integer storage convention or a 0-1 fraction defensively, renders
+ * 2-decimal percentage. Mirrors row-level Gap 5a vocabulary.
+ */
+function formatConfidence(confidence: number): string {
+  const normalized = confidence > 1 ? confidence : confidence * 100
+  return `${normalized.toFixed(2)}%`
+}
+
+// ── Mapped row body — Gap 8b territory ─────────────────────────────────────
+
+/**
+ * Mapped-row drawer body is the per-source roster (sample values, AI
+ * reasoning, type-compat phrase, edit affordances). That work is Gap 8b. For
+ * Gap 8a the placeholder is updated to call out the deferred state explicitly
+ * — readers of the Gap 7 placeholder (`Tab content coming in Gaps 8-10`)
+ * landing on the post-Gap-8a build should not be confused into thinking the
+ * non-mapped kinds are still placeholder.
+ */
+function MappedBody({ row: _row }: { row: MappedRow }) {
+  return (
+    <p
+      className="py-6 text-center text-sm italic text-slate-400"
+      data-testid="drawer-mapped-placeholder"
+    >
+      Mapped row drawer body — coming in Gap 8b
+    </p>
+  )
+}
+
+// ── Footer — still the Gap 7 placeholder (Gap 9 fills with action buttons) ─
 
 function DrawerFooter() {
   return (
