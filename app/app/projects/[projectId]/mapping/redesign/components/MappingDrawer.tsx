@@ -13,10 +13,11 @@ import type {
   ValueAssignmentRow,
 } from '@/lib/types/mappings-for-redesign'
 import { classifyMappedRow, type MappingRowRule } from '@/lib/utils/mapping-row-rules'
+import { formatSampleValues } from '@/lib/utils/mapping-drawer-format'
 import { TableBadge } from './TableBadge'
 
 // ─────────────────────────────────────────────────────────────────────────────
-// MappingDrawer — Phase 3 Gaps 7 + 8a.
+// MappingDrawer — Phase 3 Gaps 7 + 8a + 8b.
 // ─────────────────────────────────────────────────────────────────────────────
 //
 // Right-side drawer that opens when the user clicks a mapping row body.
@@ -25,14 +26,22 @@ import { TableBadge } from './TableBadge'
 // target TableBadge + close X, sticky rule-specific subheader, scrollable body,
 // sticky footer placeholder, Esc / outside-click close, focus restore.
 //
-// Gap 8a (this gap): body content for non-mapped row kinds. Replaces the Gap 7
-// "Tab content coming in Gaps 8-10" placeholder with a kind dispatch:
+// Gap 8a (shipped f9d2896): body content for non-mapped row kinds.
 //
-//   target_acknowledged → AcknowledgedBody (Target field / Acknowledgment / Status)
-//   unmapped            → UnmappedBody     (Target field / Mapping status)
-//   value_assignment    → ValueAssignmentBody (Target field / Value expression /
-//                                              AI reasoning / Confidence / Status)
-//   mapped              → MappedBody  (still a placeholder — Gap 8b territory)
+// Gap 8b (this gap): body content for mapped rows (Rules 1-4) — per-source
+// roster + combination strategy + row-level reasoning + row-level confidence.
+// Removes the Gap 8a "Mapped row drawer body — coming in Gap 8b" placeholder.
+//
+// Final body kind dispatch:
+//
+//   target_acknowledged → AcknowledgedBody     (Target field / Acknowledgment /
+//                                               Status)
+//   unmapped            → UnmappedBody         (Target field / Mapping status)
+//   value_assignment    → ValueAssignmentBody  (Target field / Value expression /
+//                                               AI reasoning / Confidence / Status)
+//   mapped              → MappedBody           (Target field / Sources /
+//                                               [Combination] / AI reasoning /
+//                                               Confidence / Status)
 //
 // Footer remains the Gap 7 placeholder; action buttons are Gap 9. The drawer is
 // deliberately tab-LESS; the spec's Details/Source/Transform tabs were retired
@@ -737,25 +746,261 @@ function formatConfidence(confidence: number): string {
   return `${normalized.toFixed(2)}%`
 }
 
-// ── Mapped row body — Gap 8b territory ─────────────────────────────────────
+// ── Mapped row body — Gap 8b ───────────────────────────────────────────────
+//
+// Per-source roster + combination strategy + row-level reasoning/confidence.
+// Sections:
+//
+//   1. Target field      (reused — TargetFieldSection)
+//   2. Sources           (per-source roster, 1+ SourceCards)
+//   3. Combination       (multi-source rows only — sources.length >= 2)
+//   4. AI reasoning      (row-level; empty-state when null since absence is
+//                         meaningful at the row level — contrast with
+//                         per-source reasoning, which silently omits)
+//   5. Confidence        (row-level)
+//   6. Status            (reused — StatusSection)
+//
+// Source ordering invariant: `sources[]` is server-emitted in ordinal-asc
+// order. The roster MUST iterate verbatim — no client-side sort. The
+// codebase grep invariant in `tests/lib/no-shim-in-redesign-path.test.ts`
+// guards this for the redesign path generally.
 
 /**
- * Mapped-row drawer body is the per-source roster (sample values, AI
- * reasoning, type-compat phrase, edit affordances). That work is Gap 8b. For
- * Gap 8a the placeholder is updated to call out the deferred state explicitly
- * — readers of the Gap 7 placeholder (`Tab content coming in Gaps 8-10`)
- * landing on the post-Gap-8a build should not be confused into thinking the
- * non-mapped kinds are still placeholder.
+ * Combination-type → human-readable phrase. Defensive over the full enum
+ * even though `'single'` is functionally unreachable in the rendered output
+ * (the Combination section is gated on `sources.length >= 2`, while
+ * `combinationType: 'single'` only ever appears with `sources.length === 1`
+ * per migration 074 STEP 5 and the contract JSDoc). Keeping all four
+ * entries:
+ *
+ *   • Exhaustive maps catch enum widening at compile time without ad-hoc
+ *     `default:` branches.
+ *   • If a future contract drift produces `'single'` on a multi-source
+ *     row, this renders a sensible label instead of throwing.
  */
-function MappedBody({ row: _row }: { row: MappedRow }) {
+const COMBINATION_TYPE_LABELS: Record<MappedRow['combinationType'], string> = {
+  single: 'Use single source',
+  concat_space: 'Concatenate with space',
+  concat_comma: 'Concatenate with comma',
+  custom_sql: 'Custom SQL expression',
+}
+
+/**
+ * Mapped-row drawer body. Reuses Gap 8a primitives wherever possible
+ * (`TargetFieldSection`, `StatusSection`, `DrawerSection`, `DrawerEmptyState`,
+ * `formatConfidence`).
+ */
+function MappedBody({ row }: { row: MappedRow }) {
+  const isMultiSource = row.sources.length >= 2
   return (
-    <p
-      className="py-6 text-center text-sm italic text-slate-400"
-      data-testid="drawer-mapped-placeholder"
-    >
-      Mapped row drawer body — coming in Gap 8b
-    </p>
+    <>
+      <TargetFieldSection targetField={row.targetField} />
+      <SourcesSection sources={row.sources} />
+      {isMultiSource ? (
+        <CombinationSection
+          combinationType={row.combinationType}
+          combinationSql={row.combinationSql}
+        />
+      ) : null}
+      <RowAiReasoningSection aiReasoning={row.aiReasoning} />
+      <RowConfidenceSection confidence={row.confidence} />
+      <StatusSection status={row.status} />
+    </>
   )
+}
+
+/**
+ * Per-source roster wrapper. Always renders the "Sources" section header
+ * for visual consistency with the rest of the drawer body — including for
+ * Rule 1 (single source). See Gap 8b investigation report Q1 for the
+ * consistency-over-density rationale.
+ *
+ * `sources[]` is iterated verbatim (no `.sort()` — server ordinal order is
+ * authoritative).
+ */
+function SourcesSection({ sources }: { sources: MappingSourceRef[] }) {
+  return (
+    <DrawerSection title="Sources" testId="drawer-section-sources">
+      <ul className="space-y-3" data-testid="drawer-sources-list">
+        {sources.map((source) => (
+          <SourceCard key={source.id} source={source} />
+        ))}
+      </ul>
+    </DrawerSection>
+  )
+}
+
+/**
+ * Per-source card. Layout (founder decision 1):
+ *
+ *   [TableBadge] field_name        confidence    (join: …)
+ *   Sample values
+ *   v1, v2, v3, v4 (... (+N more) when truncated)
+ *   <italic per-source reasoning>
+ *
+ * Sample-values block omits entirely when `sampleValues` is empty (silent).
+ * Per-source reasoning omits entirely when null (silent — sources without
+ * reasoning are common; an empty-state would clutter). Contrast with the
+ * row-level reasoning section, which DOES surface absence.
+ *
+ * No card border — vertical whitespace separates cards. Matches the
+ * Linear/Notion-style aesthetic established in Gap 8a.
+ */
+function SourceCard({ source }: { source: MappingSourceRef }) {
+  const samplesLine = formatSampleValues(source.sampleValues)
+  return (
+    <li className="space-y-1.5" data-testid="drawer-source-card">
+      <div className="flex min-w-0 flex-wrap items-center gap-2">
+        <TableBadge tableName={source.sourceTable.name} />
+        <span
+          className="truncate font-mono text-sm text-slate-900"
+          data-testid="drawer-source-field-name"
+          title={source.sourceField.name}
+        >
+          {source.sourceField.name}
+        </span>
+        <span
+          className="ml-auto flex-shrink-0 tabular-nums text-xs text-slate-500"
+          data-testid="drawer-source-confidence"
+        >
+          {formatSourceConfidence(source.confidence)}
+        </span>
+        {source.joinAnnotation ? (
+          <span
+            className="basis-full text-xs italic text-slate-500"
+            data-testid="drawer-source-join"
+          >
+            (join: {source.joinAnnotation})
+          </span>
+        ) : null}
+      </div>
+
+      {samplesLine !== '' ? (
+        <div data-testid="drawer-source-samples">
+          <div className="text-xs text-slate-500">Sample values</div>
+          <div className="break-words text-xs text-slate-600">
+            {samplesLine}
+          </div>
+        </div>
+      ) : null}
+
+      {source.aiReasoning ? (
+        <p
+          className="text-sm italic text-slate-600"
+          data-testid="drawer-source-reasoning"
+        >
+          {source.aiReasoning}
+        </p>
+      ) : null}
+    </li>
+  )
+}
+
+/**
+ * Combination strategy. Renders the human-readable label for the
+ * `combinationType`; when `combinationType === 'custom_sql'` AND
+ * `combinationSql` is non-null, also renders the SQL in a code block whose
+ * styling matches `ValueAssignmentBody`'s Value expression block exactly
+ * (consistency for the same visual primitive across body kinds).
+ *
+ * Caller-gated on `sources.length >= 2` — single-source rows never see
+ * this section.
+ */
+function CombinationSection({
+  combinationType,
+  combinationSql,
+}: {
+  combinationType: MappedRow['combinationType']
+  combinationSql: string | null
+}) {
+  const label = COMBINATION_TYPE_LABELS[combinationType]
+  const showSql = combinationType === 'custom_sql' && combinationSql !== null
+  return (
+    <DrawerSection title="Combination" testId="drawer-section-combination">
+      <div
+        className="text-sm text-slate-900"
+        data-testid="drawer-combination-label"
+      >
+        {label}
+      </div>
+      {showSql ? (
+        <pre
+          className="mt-2 overflow-x-auto whitespace-pre-wrap break-words rounded bg-slate-50 p-3 font-mono text-xs text-slate-900"
+          data-testid="drawer-combination-sql"
+        >
+          {combinationSql}
+        </pre>
+      ) : null}
+    </DrawerSection>
+  )
+}
+
+/**
+ * Row-level AI reasoning. Surfaces an empty-state when null — at the row
+ * level, "no reasoning" IS information (the AI couldn't justify the
+ * mapping, the user should know). Per-source reasoning by contrast is
+ * silently omitted when absent.
+ */
+function RowAiReasoningSection({ aiReasoning }: { aiReasoning: string | null }) {
+  return (
+    <DrawerSection title="AI reasoning" testId="drawer-section-ai-reasoning">
+      {aiReasoning ? (
+        <p
+          className="text-sm italic text-slate-600"
+          data-testid="drawer-ai-reasoning"
+        >
+          {aiReasoning}
+        </p>
+      ) : (
+        <DrawerEmptyState
+          text="No reasoning available"
+          testId="drawer-ai-reasoning-empty"
+        />
+      )}
+    </DrawerSection>
+  )
+}
+
+/**
+ * Row-level confidence. Mirrors the VA body's Confidence section exactly —
+ * percentage when non-null, em-dash with sr-only label when null. Always
+ * rendered (including for Rule 1 even though the value duplicates the
+ * single source's confidence) per Gap 8b investigation Q2 — consistency
+ * with the rest of the drawer body wins over the marginal density saving.
+ */
+function RowConfidenceSection({ confidence }: { confidence: number | null }) {
+  return (
+    <DrawerSection title="Confidence" testId="drawer-section-confidence">
+      {confidence !== null ? (
+        <span
+          className="text-sm tabular-nums text-slate-900"
+          data-testid="drawer-confidence"
+        >
+          {formatConfidence(confidence)}
+        </span>
+      ) : (
+        <span
+          aria-label="no confidence available"
+          className="inline-flex items-center text-sm text-slate-400"
+          data-testid="drawer-confidence-empty"
+        >
+          <span aria-hidden="true">—</span>
+        </span>
+      )}
+    </DrawerSection>
+  )
+}
+
+/**
+ * Per-source confidence formatter. Identical algorithm to `formatConfidence`
+ * (2-decimal percentage, accepts 0-1 fraction or 0-100 integer storage), but
+ * returns an em-dash for `null` — per-source rows can carry null confidence
+ * per the contract, and we want a quiet glyph rather than throwing or
+ * showing "0.00%".
+ */
+function formatSourceConfidence(confidence: number | null): string {
+  if (confidence === null) return '—'
+  return formatConfidence(confidence)
 }
 
 // ── Footer — still the Gap 7 placeholder (Gap 9 fills with action buttons) ─

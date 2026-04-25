@@ -408,36 +408,40 @@ describe('MappingDrawer — subheader VA (value_assignment)', () => {
   })
 })
 
-// ─── Mapped-row placeholder + footer placeholder ───────────────────────────
+// ─── Mapped-row body shape + footer placeholder ────────────────────────────
 //
-// Gap 8a updated the mapped-row placeholder copy to call out Gap 8b explicitly
-// (the per-source roster is Gap 8b's territory). The footer placeholder is
-// unchanged from Gap 7 — Gap 9 fills it with action buttons.
+// Gap 8b replaces the Gap 8a "Mapped row drawer body — coming in Gap 8b"
+// placeholder with the real per-source-roster body. These tests lock the
+// post-8b shape — the Gap 8a placeholder MUST NOT render any longer.
+//
+// The footer placeholder is unchanged from Gap 7 — Gap 9 fills it with
+// action buttons.
 
-describe('MappingDrawer — mapped-row placeholder + footer placeholder', () => {
-  it('mapped row body shows the Gap 8b placeholder copy', () => {
+describe('MappingDrawer — mapped-row body shape + footer placeholder', () => {
+  it('mapped row body renders the Target field section (Gap 8a placeholder removed)', () => {
+    render(<MappingDrawer row={mapped()} isOpen={true} onClose={() => {}} />)
+    expect(
+      screen.getByTestId('drawer-section-target-field'),
+    ).toBeInTheDocument()
+  })
+
+  it('the Gap 8a mapped placeholder test-id no longer appears in the DOM', () => {
+    render(<MappingDrawer row={mapped()} isOpen={true} onClose={() => {}} />)
+    expect(screen.queryByTestId('drawer-mapped-placeholder')).toBeNull()
+  })
+
+  it('the body no longer contains the Gap 8a placeholder copy', () => {
     render(<MappingDrawer row={mapped()} isOpen={true} onClose={() => {}} />)
     const body = screen.getByTestId('mapping-drawer-body')
-    expect(body.textContent).toContain(
+    expect(body.textContent).not.toContain(
       'Mapped row drawer body — coming in Gap 8b',
     )
   })
 
-  it('mapped placeholder uses the dedicated test-id', () => {
-    render(<MappingDrawer row={mapped()} isOpen={true} onClose={() => {}} />)
-    expect(screen.getByTestId('drawer-mapped-placeholder')).toBeInTheDocument()
-  })
-
-  it('renders the footer placeholder text "Actions coming in Gap 10"', () => {
+  it('renders the footer placeholder text "Actions coming in Gap 10" (unchanged)', () => {
     render(<MappingDrawer row={mapped()} isOpen={true} onClose={() => {}} />)
     const footer = screen.getByTestId('mapping-drawer-footer')
     expect(footer.textContent).toContain('Actions coming in Gap 10')
-  })
-
-  it('mapped placeholder uses muted text color (slate-400)', () => {
-    render(<MappingDrawer row={mapped()} isOpen={true} onClose={() => {}} />)
-    const placeholder = screen.getByTestId('drawer-mapped-placeholder')
-    expect(placeholder.className).toContain('text-slate-400')
   })
 })
 
@@ -873,31 +877,495 @@ describe('MappingDrawer — Value Assignment body', () => {
   })
 })
 
-// ─── Mapped row regression ─────────────────────────────────────────────────
+// ─────────────────────────────────────────────────────────────────────────────
+// Phase 3 Gap 8b — body content for mapped rows (Rules 1, 2, 3, 4).
+// ─────────────────────────────────────────────────────────────────────────────
+//
+// Per-source roster + combination strategy + row-level reasoning/confidence.
+// Replaces the Gap 8a "coming in Gap 8b" placeholder.
 
-describe('MappingDrawer — Mapped row body (regression guard for Gap 8b)', () => {
-  it('does NOT render Acknowledgment, Mapping status, Value expression sections', () => {
+// ── Multi-source / cross-table fixture builders ─────────────────────────────
+
+function rule2Mapped(
+  overrides: Partial<MappedRow> = {},
+  sourcesOverrides: Array<Partial<MappingSourceRef>> | null = null,
+): MappedRow {
+  // Same source table; 2+ sources → Rule 2.
+  const defaultSources: MappingSourceRef[] = [
+    source({
+      id: 'ms-r2-a',
+      ordinal: 0,
+      confidence: 95,
+      sourceField: { id: 'sf-r2-a', name: 'FNAME', dataType: 'VARCHAR(50)', isNullable: false },
+      sourceTable: { id: 'st-cif', name: 'CIF_MASTER' },
+    }),
+    source({
+      id: 'ms-r2-b',
+      ordinal: 1,
+      confidence: 90,
+      sourceField: { id: 'sf-r2-b', name: 'LNAME', dataType: 'VARCHAR(50)', isNullable: false },
+      sourceTable: { id: 'st-cif', name: 'CIF_MASTER' },
+    }),
+  ]
+  const sources = sourcesOverrides
+    ? sourcesOverrides.map((o, i) => ({ ...defaultSources[i % defaultSources.length]!, ...o }))
+    : defaultSources
+  return mapped({
+    id: 'tfm-r2',
+    targetField: targetField({ id: 'tf-r2', name: 'full_name' }),
+    sources,
+    combinationType: 'concat_space',
+    combinationSql: null,
+    confidence: 90,
+    ...overrides,
+  })
+}
+
+function rule3Mapped(
+  overrides: Partial<MappedRow> = {},
+): MappedRow {
+  // 2+ sources, exactly 2 source tables → Rule 3.
+  const sources: MappingSourceRef[] = [
+    source({
+      id: 'ms-r3-a',
+      ordinal: 0,
+      confidence: 88,
+      sourceField: { id: 'sf-r3-a', name: 'AccountName', dataType: 'VARCHAR(100)', isNullable: false },
+      sourceTable: { id: 'st-acc', name: 'AccountMaster' },
+      joinAnnotation: null,
+    }),
+    source({
+      id: 'ms-r3-b',
+      ordinal: 1,
+      confidence: 80,
+      sourceField: { id: 'sf-r3-b', name: 'Email', dataType: 'VARCHAR(200)', isNullable: true },
+      sourceTable: { id: 'st-con', name: 'ContactMaster' },
+      joinAnnotation: 'PrimaryContactID',
+    }),
+  ]
+  return mapped({
+    id: 'tfm-r3',
+    targetField: targetField({ id: 'tf-r3', name: 'display_name' }),
+    sources,
+    combinationType: 'concat_comma',
+    combinationSql: null,
+    confidence: 80,
+    ...overrides,
+  })
+}
+
+function rule4Mapped(
+  overrides: Partial<MappedRow> = {},
+): MappedRow {
+  // 5 sources across 2 tables → Rule 4 (field-count threshold).
+  const sources: MappingSourceRef[] = [
+    source({ id: 'ms-r4-1', ordinal: 0, confidence: 90, sourceField: { id: 'sf-r4-1', name: 'F1', dataType: 'VARCHAR(50)', isNullable: false }, sourceTable: { id: 'st-a', name: 'TableA' } }),
+    source({ id: 'ms-r4-2', ordinal: 1, confidence: 85, sourceField: { id: 'sf-r4-2', name: 'F2', dataType: 'VARCHAR(50)', isNullable: false }, sourceTable: { id: 'st-a', name: 'TableA' } }),
+    source({ id: 'ms-r4-3', ordinal: 2, confidence: 80, sourceField: { id: 'sf-r4-3', name: 'F3', dataType: 'VARCHAR(50)', isNullable: true }, sourceTable: { id: 'st-a', name: 'TableA' } }),
+    source({ id: 'ms-r4-4', ordinal: 3, confidence: 75, sourceField: { id: 'sf-r4-4', name: 'F4', dataType: 'VARCHAR(50)', isNullable: true }, sourceTable: { id: 'st-b', name: 'TableB' }, joinAnnotation: 'JoinKey' }),
+    source({ id: 'ms-r4-5', ordinal: 4, confidence: 70, sourceField: { id: 'sf-r4-5', name: 'F5', dataType: 'VARCHAR(50)', isNullable: true }, sourceTable: { id: 'st-b', name: 'TableB' }, joinAnnotation: 'JoinKey' }),
+  ]
+  return mapped({
+    id: 'tfm-r4',
+    targetField: targetField({ id: 'tf-r4', name: 'composite_field' }),
+    sources,
+    combinationType: 'custom_sql',
+    combinationSql: "F1 || ' ' || F2 || ' / ' || F3 || ' / ' || F4 || '-' || F5",
+    confidence: 70,
+    ...overrides,
+  })
+}
+
+// ── Rule 1 mapped body (single source) ─────────────────────────────────────
+
+describe('MappingDrawer — Rule 1 (single source) mapped body', () => {
+  it('renders the Target field section', () => {
+    render(<MappingDrawer row={mapped()} isOpen={true} onClose={() => {}} />)
+    expect(
+      screen.getByTestId('drawer-section-target-field'),
+    ).toBeInTheDocument()
+  })
+
+  it('renders the Sources section (header kept for Rule 1 — consistency)', () => {
+    render(<MappingDrawer row={mapped()} isOpen={true} onClose={() => {}} />)
+    const section = screen.getByTestId('drawer-section-sources')
+    expect(section).toBeInTheDocument()
+    expect(within(section).getByRole('heading', { level: 3 }).textContent).toBe(
+      'Sources',
+    )
+  })
+
+  it('renders exactly one source card for Rule 1', () => {
+    render(<MappingDrawer row={mapped()} isOpen={true} onClose={() => {}} />)
+    const cards = screen.getAllByTestId('drawer-source-card')
+    expect(cards).toHaveLength(1)
+  })
+
+  it('source card shows TableBadge + source field name + per-source confidence', () => {
+    render(
+      <MappingDrawer
+        row={mapped({
+          sources: [
+            source({
+              confidence: 98,
+              sourceField: { id: 'sf-1', name: 'CIF_NO', dataType: 'NUMBER', isNullable: false },
+              sourceTable: { id: 'st-1', name: 'CIF_MASTER' },
+            }),
+          ],
+        })}
+        isOpen={true}
+        onClose={() => {}}
+      />,
+    )
+    const card = screen.getByTestId('drawer-source-card')
+    expect(within(card).getByText('CIF_MASTER')).toBeInTheDocument()
+    expect(within(card).getByTestId('drawer-source-field-name').textContent).toBe(
+      'CIF_NO',
+    )
+    expect(within(card).getByTestId('drawer-source-confidence').textContent).toBe(
+      '98.00%',
+    )
+  })
+
+  it('source card does NOT render a join annotation for Rule 1 (always null)', () => {
+    render(<MappingDrawer row={mapped()} isOpen={true} onClose={() => {}} />)
+    expect(screen.queryByTestId('drawer-source-join')).toBeNull()
+  })
+
+  it('source card shows sample values when sampleValues is non-empty', () => {
+    render(
+      <MappingDrawer
+        row={mapped({
+          sources: [source({ sampleValues: ['12345', '67890', '24680'] })],
+        })}
+        isOpen={true}
+        onClose={() => {}}
+      />,
+    )
+    const samples = screen.getByTestId('drawer-source-samples')
+    expect(samples.textContent).toContain('Sample values')
+    expect(samples.textContent).toContain('12345, 67890, 24680')
+  })
+
+  it('source card omits sample values block when sampleValues is empty', () => {
+    render(<MappingDrawer row={mapped()} isOpen={true} onClose={() => {}} />)
+    expect(screen.queryByTestId('drawer-source-samples')).toBeNull()
+  })
+
+  it('source card truncates sample values to first 8 + "... (+N more)" when >8 values', () => {
+    const ten = Array.from({ length: 10 }, (_, i) => `v${i + 1}`)
+    render(
+      <MappingDrawer
+        row={mapped({ sources: [source({ sampleValues: ten })] })}
+        isOpen={true}
+        onClose={() => {}}
+      />,
+    )
+    const samples = screen.getByTestId('drawer-source-samples')
+    expect(samples.textContent).toContain(
+      'v1, v2, v3, v4, v5, v6, v7, v8, ... (+2 more)',
+    )
+  })
+
+  it('source card renders per-source AI reasoning when non-null (italic prose)', () => {
+    render(
+      <MappingDrawer
+        row={mapped({
+          sources: [source({ aiReasoning: 'Direct PK match in dominant table.' })],
+        })}
+        isOpen={true}
+        onClose={() => {}}
+      />,
+    )
+    const reasoning = screen.getByTestId('drawer-source-reasoning')
+    expect(reasoning.textContent).toBe('Direct PK match in dominant table.')
+    expect(reasoning.className).toContain('italic')
+  })
+
+  it('source card OMITS per-source AI reasoning when null (silent — no empty-state)', () => {
+    render(<MappingDrawer row={mapped()} isOpen={true} onClose={() => {}} />)
+    expect(screen.queryByTestId('drawer-source-reasoning')).toBeNull()
+  })
+
+  it('does NOT render the Combination section for Rule 1 (single source)', () => {
+    render(<MappingDrawer row={mapped()} isOpen={true} onClose={() => {}} />)
+    expect(screen.queryByTestId('drawer-section-combination')).toBeNull()
+  })
+
+  it('renders row-level AI reasoning when non-null', () => {
+    render(
+      <MappingDrawer
+        row={mapped({ aiReasoning: 'Single-source mapping; high confidence.' })}
+        isOpen={true}
+        onClose={() => {}}
+      />,
+    )
+    const reasoning = screen.getByTestId('drawer-ai-reasoning')
+    expect(reasoning.textContent).toBe(
+      'Single-source mapping; high confidence.',
+    )
+  })
+
+  it('renders row-level AI reasoning empty-state when null (absence is meaningful at row level)', () => {
+    render(<MappingDrawer row={mapped({ aiReasoning: null })} isOpen={true} onClose={() => {}} />)
+    expect(screen.queryByTestId('drawer-ai-reasoning')).toBeNull()
+    const empty = screen.getByTestId('drawer-ai-reasoning-empty')
+    expect(empty.textContent).toBe('No reasoning available')
+  })
+
+  it('renders row-level Confidence as 2-decimal percentage (always shown — Rule 1 included)', () => {
+    render(
+      <MappingDrawer
+        row={mapped({ confidence: 87 })}
+        isOpen={true}
+        onClose={() => {}}
+      />,
+    )
+    expect(screen.getByTestId('drawer-confidence').textContent).toBe('87.00%')
+  })
+
+  it('renders em-dash with sr-only label when row-level confidence is null', () => {
+    render(
+      <MappingDrawer
+        row={mapped({ confidence: null })}
+        isOpen={true}
+        onClose={() => {}}
+      />,
+    )
+    expect(screen.queryByTestId('drawer-confidence')).toBeNull()
+    const empty = screen.getByTestId('drawer-confidence-empty')
+    expect(empty.textContent).toContain('—')
+    expect(empty.getAttribute('aria-label')).toBe('no confidence available')
+  })
+
+  it('renders the Status section with the row.status', () => {
+    render(<MappingDrawer row={mapped({ status: 'needs_review' })} isOpen={true} onClose={() => {}} />)
+    const indicator = screen.getByTestId('drawer-status-indicator')
+    expect(indicator.textContent).toContain('Needs Review')
+  })
+
+  it('section ordering for Rule 1 is Target field → Sources → AI reasoning → Confidence → Status (no Combination)', () => {
+    render(<MappingDrawer row={mapped()} isOpen={true} onClose={() => {}} />)
+    const body = screen.getByTestId('mapping-drawer-body')
+    const headings = within(body).getAllByRole('heading', { level: 3 })
+    expect(headings.map((h) => h.textContent)).toEqual([
+      'Target field',
+      'Sources',
+      'AI reasoning',
+      'Confidence',
+      'Status',
+    ])
+  })
+})
+
+// ── Rule 2 mapped body (multi-source, same table) ──────────────────────────
+
+describe('MappingDrawer — Rule 2 (multi-source, same table) mapped body', () => {
+  it('renders multiple source cards (one per source)', () => {
+    render(<MappingDrawer row={rule2Mapped()} isOpen={true} onClose={() => {}} />)
+    expect(screen.getAllByTestId('drawer-source-card')).toHaveLength(2)
+  })
+
+  it('every source card shares the same source table (Rule 2 invariant)', () => {
+    render(<MappingDrawer row={rule2Mapped()} isOpen={true} onClose={() => {}} />)
+    const cards = screen.getAllByTestId('drawer-source-card')
+    cards.forEach((card) => {
+      expect(within(card).getByText('CIF_MASTER')).toBeInTheDocument()
+    })
+  })
+
+  it('does NOT render any join annotation (same-table sources)', () => {
+    render(<MappingDrawer row={rule2Mapped()} isOpen={true} onClose={() => {}} />)
+    expect(screen.queryByTestId('drawer-source-join')).toBeNull()
+  })
+
+  it('renders the Combination section with the human-readable label', () => {
+    render(<MappingDrawer row={rule2Mapped()} isOpen={true} onClose={() => {}} />)
+    const section = screen.getByTestId('drawer-section-combination')
+    expect(within(section).getByTestId('drawer-combination-label').textContent).toBe(
+      'Concatenate with space',
+    )
+  })
+
+  it('Combination section hides the SQL code block for non-custom_sql types', () => {
+    render(<MappingDrawer row={rule2Mapped()} isOpen={true} onClose={() => {}} />)
+    expect(screen.queryByTestId('drawer-combination-sql')).toBeNull()
+  })
+
+  it('Combination section renders the SQL code block when combinationType=custom_sql AND combinationSql is non-null', () => {
+    const sql = "FNAME || ' / ' || LNAME"
+    render(
+      <MappingDrawer
+        row={rule2Mapped({ combinationType: 'custom_sql', combinationSql: sql })}
+        isOpen={true}
+        onClose={() => {}}
+      />,
+    )
+    const block = screen.getByTestId('drawer-combination-sql')
+    expect(block.tagName).toBe('PRE')
+    expect(block.textContent).toBe(sql)
+    expect(block.className).toContain('font-mono')
+    expect(block.className).toContain('bg-slate-50')
+    expect(block.className).toContain('whitespace-pre-wrap')
+    expect(within(screen.getByTestId('drawer-section-combination')).getByTestId('drawer-combination-label').textContent).toBe(
+      'Custom SQL expression',
+    )
+  })
+
+  it('Combination section hides the SQL code block when combinationType=custom_sql but combinationSql is null', () => {
+    render(
+      <MappingDrawer
+        row={rule2Mapped({ combinationType: 'custom_sql', combinationSql: null })}
+        isOpen={true}
+        onClose={() => {}}
+      />,
+    )
+    expect(screen.queryByTestId('drawer-combination-sql')).toBeNull()
+  })
+
+  it('section ordering for Rule 2 is Target field → Sources → Combination → AI reasoning → Confidence → Status', () => {
+    render(<MappingDrawer row={rule2Mapped()} isOpen={true} onClose={() => {}} />)
+    const body = screen.getByTestId('mapping-drawer-body')
+    const headings = within(body).getAllByRole('heading', { level: 3 })
+    expect(headings.map((h) => h.textContent)).toEqual([
+      'Target field',
+      'Sources',
+      'Combination',
+      'AI reasoning',
+      'Confidence',
+      'Status',
+    ])
+  })
+})
+
+// ── Rule 3 mapped body (cross-table, two tables) ───────────────────────────
+
+describe('MappingDrawer — Rule 3 (cross-table, two tables) mapped body', () => {
+  it('renders cards from each of the two source tables (multiple TableBadges, one per card)', () => {
+    render(<MappingDrawer row={rule3Mapped()} isOpen={true} onClose={() => {}} />)
+    const cards = screen.getAllByTestId('drawer-source-card')
+    expect(cards).toHaveLength(2)
+    expect(within(cards[0]!).getByText('AccountMaster')).toBeInTheDocument()
+    expect(within(cards[1]!).getByText('ContactMaster')).toBeInTheDocument()
+  })
+
+  it('renders the join annotation inline as "(join: <annotation>)" when joinAnnotation is non-null', () => {
+    render(<MappingDrawer row={rule3Mapped()} isOpen={true} onClose={() => {}} />)
+    const join = screen.getByTestId('drawer-source-join')
+    expect(join.textContent).toBe('(join: PrimaryContactID)')
+    expect(join.className).toContain('italic')
+  })
+
+  it('does NOT render a join annotation for the dominant source (joinAnnotation === null)', () => {
+    render(<MappingDrawer row={rule3Mapped()} isOpen={true} onClose={() => {}} />)
+    const cards = screen.getAllByTestId('drawer-source-card')
+    expect(within(cards[0]!).queryByTestId('drawer-source-join')).toBeNull()
+    expect(within(cards[1]!).getByTestId('drawer-source-join')).toBeInTheDocument()
+  })
+
+  it('renders the Combination section with concat_comma label', () => {
+    render(<MappingDrawer row={rule3Mapped()} isOpen={true} onClose={() => {}} />)
+    expect(screen.getByTestId('drawer-combination-label').textContent).toBe(
+      'Concatenate with comma',
+    )
+  })
+
+  it('section ordering for Rule 3 includes Combination section', () => {
+    render(<MappingDrawer row={rule3Mapped()} isOpen={true} onClose={() => {}} />)
+    const body = screen.getByTestId('mapping-drawer-body')
+    const headings = within(body).getAllByRole('heading', { level: 3 })
+    expect(headings.map((h) => h.textContent)).toContain('Combination')
+  })
+})
+
+// ── Rule 4 mapped body (3+ tables OR 5+ sources) ───────────────────────────
+
+describe('MappingDrawer — Rule 4 (multi-table complex) mapped body', () => {
+  it('renders all 5 sources as individual cards (no truncation in drawer)', () => {
+    render(<MappingDrawer row={rule4Mapped()} isOpen={true} onClose={() => {}} />)
+    expect(screen.getAllByTestId('drawer-source-card')).toHaveLength(5)
+  })
+
+  it('renders join annotations on the cross-table sources (last 2)', () => {
+    render(<MappingDrawer row={rule4Mapped()} isOpen={true} onClose={() => {}} />)
+    const joins = screen.getAllByTestId('drawer-source-join')
+    expect(joins).toHaveLength(2)
+    joins.forEach((j) => {
+      expect(j.textContent).toBe('(join: JoinKey)')
+    })
+  })
+
+  it('renders the Combination section with custom_sql label + code block', () => {
+    render(<MappingDrawer row={rule4Mapped()} isOpen={true} onClose={() => {}} />)
+    expect(screen.getByTestId('drawer-combination-label').textContent).toBe(
+      'Custom SQL expression',
+    )
+    const block = screen.getByTestId('drawer-combination-sql')
+    expect(block.textContent).toContain("F1 || ' ' || F2")
+  })
+})
+
+// ── Mapped body regression guards ──────────────────────────────────────────
+
+describe('MappingDrawer — Mapped body regression guards', () => {
+  it('Gap 8a placeholder test-id is gone (drawer-mapped-placeholder must not render)', () => {
+    render(<MappingDrawer row={mapped()} isOpen={true} onClose={() => {}} />)
+    expect(screen.queryByTestId('drawer-mapped-placeholder')).toBeNull()
+  })
+
+  it('mapped body does NOT leak Acknowledgment / Mapping status / Value expression sections', () => {
     render(<MappingDrawer row={mapped()} isOpen={true} onClose={() => {}} />)
     expect(screen.queryByTestId('drawer-section-acknowledgment')).toBeNull()
     expect(screen.queryByTestId('drawer-section-mapping-status')).toBeNull()
     expect(screen.queryByTestId('drawer-section-value-expression')).toBeNull()
-    expect(screen.queryByTestId('drawer-section-ai-reasoning')).toBeNull()
-    expect(screen.queryByTestId('drawer-section-confidence')).toBeNull()
-    expect(screen.queryByTestId('drawer-section-status')).toBeNull()
-    expect(screen.queryByTestId('drawer-section-target-field')).toBeNull()
   })
 
-  it('placeholder explicitly mentions Gap 8b so the deferred state is unambiguous', () => {
+  it('body wrapper test-id is preserved (Gap 7 outside-click contract)', () => {
     render(<MappingDrawer row={mapped()} isOpen={true} onClose={() => {}} />)
-    const placeholder = screen.getByTestId('drawer-mapped-placeholder')
-    expect(placeholder.textContent).toContain('Gap 8b')
+    const body = screen.getByTestId('mapping-drawer-body')
+    expect(body).toBeInTheDocument()
+    expect(body.className).toContain('flex-1')
+    expect(body.className).toContain('overflow-auto')
   })
 
-  it('mapped placeholder does not pollute the Rule 5 / Rule 6 / VA test-ids', () => {
-    render(<MappingDrawer row={mapped()} isOpen={true} onClose={() => {}} />)
-    expect(screen.queryByTestId('drawer-target-field-name')).toBeNull()
-    expect(screen.queryByTestId('drawer-acknowledgment-reason')).toBeNull()
-    expect(screen.queryByTestId('drawer-unmapped-prose')).toBeNull()
-    expect(screen.queryByTestId('drawer-value-expression')).toBeNull()
+  it('source-card render order matches the input sources[] (server ordinal order preserved)', () => {
+    const cifA = source({
+      id: 'ms-ord-a',
+      ordinal: 0,
+      sourceField: { id: 'sf-ord-a', name: 'ALPHA', dataType: 'VARCHAR(10)', isNullable: false },
+      sourceTable: { id: 'st-x', name: 'TX' },
+    })
+    const cifB = source({
+      id: 'ms-ord-b',
+      ordinal: 1,
+      sourceField: { id: 'sf-ord-b', name: 'BETA', dataType: 'VARCHAR(10)', isNullable: false },
+      sourceTable: { id: 'st-x', name: 'TX' },
+    })
+    const cifC = source({
+      id: 'ms-ord-c',
+      ordinal: 2,
+      sourceField: { id: 'sf-ord-c', name: 'GAMMA', dataType: 'VARCHAR(10)', isNullable: false },
+      sourceTable: { id: 'st-x', name: 'TX' },
+    })
+    render(
+      <MappingDrawer
+        row={mapped({
+          sources: [cifA, cifB, cifC],
+          combinationType: 'concat_space',
+        })}
+        isOpen={true}
+        onClose={() => {}}
+      />,
+    )
+    const names = screen
+      .getAllByTestId('drawer-source-field-name')
+      .map((el) => el.textContent)
+    expect(names).toEqual(['ALPHA', 'BETA', 'GAMMA'])
+  })
+
+  it('reuses TargetFieldSection and StatusSection (no duplication of those test-ids)', () => {
+    render(<MappingDrawer row={rule2Mapped()} isOpen={true} onClose={() => {}} />)
+    expect(screen.getAllByTestId('drawer-section-target-field')).toHaveLength(1)
+    expect(screen.getAllByTestId('drawer-section-status')).toHaveLength(1)
   })
 })
