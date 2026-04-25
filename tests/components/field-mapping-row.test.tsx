@@ -845,3 +845,196 @@ describe('FieldMappingRow — positive control', () => {
     expect(screen.getByTestId('field-mapping-row')).toBeInTheDocument()
   })
 })
+
+// ─── Gap 7 — drawer-open row click behavior ─────────────────────────────────
+//
+// When `onRowClick` is provided, the row body becomes a clickable button-
+// roled surface that fires the callback with `row.id`. Critically:
+//   • Chevron clicks must NOT bubble (Gap 5b's stopPropagation contract).
+//   • ExpandedSourceList clicks must NOT trigger onRowClick (the list
+//     lives outside the body grid).
+//   • Keyboard activation (Enter / Space) must work for screen readers.
+//   • aria-label is appended with "click to open details" so AT users
+//     hear the affordance.
+
+describe('FieldMappingRow — Gap 7 row click', () => {
+  it('clicking the row body calls onRowClick with row.id', async () => {
+    const onRowClick = vi.fn()
+    const user = userEvent.setup()
+    render(<FieldMappingRow row={mapped()} onRowClick={onRowClick} />)
+    await user.click(screen.getByTestId('field-mapping-row-body'))
+    expect(onRowClick).toHaveBeenCalledTimes(1)
+    expect(onRowClick).toHaveBeenCalledWith('tfm-1')
+  })
+
+  it('clicking the chevron does NOT trigger onRowClick (stopPropagation contract)', async () => {
+    const onRowClick = vi.fn()
+    const user = userEvent.setup()
+    const row = mapped({
+      sources: [
+        cifMasterSource(0, 'FNAME'),
+        cifMasterSource(1, 'LNAME'),
+      ],
+    })
+    render(<FieldMappingRow row={row} onRowClick={onRowClick} />)
+    await user.click(screen.getByTestId('field-mapping-row-chevron'))
+    expect(onRowClick).not.toHaveBeenCalled()
+  })
+
+  it('clicking inside the ExpandedSourceList does NOT trigger onRowClick', async () => {
+    const onRowClick = vi.fn()
+    const user = userEvent.setup()
+    const row = mapped({
+      sources: [
+        cifMasterSource(0, 'FNAME'),
+        cifMasterSource(1, 'LNAME'),
+      ],
+    })
+    render(<FieldMappingRow row={row} onRowClick={onRowClick} />)
+    // Expand first.
+    await user.click(screen.getByTestId('field-mapping-row-chevron'))
+    onRowClick.mockClear()
+    // The expanded list is outside the row body grid; clicking it should
+    // not trigger row activation.
+    const list = screen.getByTestId('expanded-source-list')
+    await user.click(list)
+    expect(onRowClick).not.toHaveBeenCalled()
+  })
+
+  it('Enter key on focused row body triggers onRowClick', async () => {
+    const onRowClick = vi.fn()
+    const user = userEvent.setup()
+    render(<FieldMappingRow row={mapped()} onRowClick={onRowClick} />)
+    const body = screen.getByTestId('field-mapping-row-body')
+    body.focus()
+    await user.keyboard('{Enter}')
+    expect(onRowClick).toHaveBeenCalledWith('tfm-1')
+  })
+
+  it('Space key on focused row body triggers onRowClick', async () => {
+    const onRowClick = vi.fn()
+    const user = userEvent.setup()
+    render(<FieldMappingRow row={mapped()} onRowClick={onRowClick} />)
+    const body = screen.getByTestId('field-mapping-row-body')
+    body.focus()
+    await user.keyboard(' ')
+    expect(onRowClick).toHaveBeenCalledWith('tfm-1')
+  })
+
+  it('omits role/tabIndex/cursor-pointer when onRowClick is NOT provided', () => {
+    render(<FieldMappingRow row={mapped()} />)
+    const body = screen.getByTestId('field-mapping-row-body')
+    expect(body.getAttribute('role')).toBeNull()
+    expect(body.getAttribute('tabindex')).toBeNull()
+    expect(body.className).not.toContain('cursor-pointer')
+  })
+
+  it('sets role="button", tabIndex=0, and cursor-pointer when onRowClick IS provided', () => {
+    render(<FieldMappingRow row={mapped()} onRowClick={() => {}} />)
+    const body = screen.getByTestId('field-mapping-row-body')
+    expect(body.getAttribute('role')).toBe('button')
+    expect(body.getAttribute('tabindex')).toBe('0')
+    expect(body.className).toContain('cursor-pointer')
+  })
+
+  it('isActive=true adds bg-slate-50 to the row body', () => {
+    render(<FieldMappingRow row={mapped()} onRowClick={() => {}} isActive={true} />)
+    const body = screen.getByTestId('field-mapping-row-body')
+    expect(body.className).toContain('bg-slate-50')
+  })
+
+  it('isActive=false (or omitted) does NOT add bg-slate-50', () => {
+    render(<FieldMappingRow row={mapped()} onRowClick={() => {}} />)
+    const body = screen.getByTestId('field-mapping-row-body')
+    expect(body.className).not.toContain('bg-slate-50')
+  })
+
+  it('aria-label appends "click to open details" when onRowClick is provided', () => {
+    const { container } = render(
+      <FieldMappingRow row={mapped()} onRowClick={() => {}} />,
+    )
+    const el = container.querySelector('[data-testid="field-mapping-row"]')
+    expect(el?.getAttribute('aria-label')).toContain('— click to open details')
+  })
+
+  it('aria-label OMITS click affordance phrase when onRowClick is NOT provided', () => {
+    const { container } = render(<FieldMappingRow row={mapped()} />)
+    const el = container.querySelector('[data-testid="field-mapping-row"]')
+    expect(el?.getAttribute('aria-label')).not.toContain('click to open details')
+  })
+
+  it('fires for a Rule 2 mapped row (multi-source same table)', async () => {
+    const onRowClick = vi.fn()
+    const user = userEvent.setup()
+    const row = mapped({
+      id: 'r2',
+      sources: [cifMasterSource(0, 'FNAME'), cifMasterSource(1, 'LNAME')],
+    })
+    render(<FieldMappingRow row={row} onRowClick={onRowClick} />)
+    await user.click(screen.getByTestId('field-mapping-row-body'))
+    expect(onRowClick).toHaveBeenCalledWith('r2')
+  })
+
+  it('fires for a value_assignment row', async () => {
+    const onRowClick = vi.fn()
+    const user = userEvent.setup()
+    render(
+      <FieldMappingRow row={valueAssignment({ id: 'va-row' })} onRowClick={onRowClick} />,
+    )
+    await user.click(screen.getByTestId('field-mapping-row-body'))
+    expect(onRowClick).toHaveBeenCalledWith('va-row')
+  })
+
+  it('fires for a target_acknowledged row', async () => {
+    const onRowClick = vi.fn()
+    const user = userEvent.setup()
+    render(
+      <FieldMappingRow row={targetAck({ id: 'ack-row' })} onRowClick={onRowClick} />,
+    )
+    await user.click(screen.getByTestId('field-mapping-row-body'))
+    expect(onRowClick).toHaveBeenCalledWith('ack-row')
+  })
+
+  it('fires for an unmapped row (with the "unmapped::" sentinel id)', async () => {
+    const onRowClick = vi.fn()
+    const user = userEvent.setup()
+    render(
+      <FieldMappingRow
+        row={unmapped({ id: 'unmapped::tf-99' })}
+        onRowClick={onRowClick}
+      />,
+    )
+    await user.click(screen.getByTestId('field-mapping-row-body'))
+    expect(onRowClick).toHaveBeenCalledWith('unmapped::tf-99')
+  })
+
+  it('TargetTableGroup threads onRowClick + openRowId down to its rows', async () => {
+    const onRowClick = vi.fn()
+    const user = userEvent.setup()
+    const summary: TargetTableSummary = {
+      id: 'tt-1',
+      name: 'accounts',
+      datasetName: 'Heritage Core',
+      fieldCount: 2,
+    }
+    const rows: MappingRow[] = [
+      mapped({ id: 'a' }),
+      mapped({ id: 'b', targetField: targetField({ id: 'tf-2', name: 'other' }) }),
+    ]
+    render(
+      <TargetTableGroup
+        targetTable={summary}
+        rows={rows}
+        onRowClick={onRowClick}
+        openRowId="a"
+      />,
+    )
+    const bodies = screen.getAllByTestId('field-mapping-row-body')
+    expect(bodies).toHaveLength(2)
+    // First row is openRowId — should carry the active highlight.
+    expect(bodies[0]!.className).toContain('bg-slate-50')
+    expect(bodies[1]!.className).not.toContain('bg-slate-50')
+    await user.click(bodies[1]!)
+    expect(onRowClick).toHaveBeenCalledWith('b')
+  })
+})

@@ -41,6 +41,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useRouter, useSearchParams } from 'next/navigation'
+import { cn } from '@/components/ui/utils'
 import { PageHeader } from '@/components/app/PageHeader'
 import { type ProjectInfo } from '@/components/app/ProjectInfoPopover'
 import type {
@@ -61,6 +62,7 @@ import {
 } from '@/lib/utils/mapping-filters'
 import { FilterRow } from './components/FilterRow'
 import { TargetTableGroup } from './components/TargetTableGroup'
+import { MappingDrawer } from './components/MappingDrawer'
 
 const SEARCH_DEBOUNCE_MS = 200
 
@@ -83,6 +85,13 @@ export default function MappingRedesignContent({
   projectInfo,
   initialRedesignData,
 }: Props) {
+  // Phase 3 Gap 7 — derive drawer-open status from the URL so the layout
+  // wrapper can shift right-padding without lifting drawer state out of
+  // `MappingBody`. `useSearchParams` is reactive in the app router; the
+  // value re-flows here on every `router.replace` from the body.
+  const searchParams = useSearchParams()
+  const isDrawerOpen = !!(searchParams?.get('drawer') ?? '')
+
   return (
     <div className="flex h-full flex-col bg-gray-50">
       <PageHeader
@@ -90,7 +99,16 @@ export default function MappingRedesignContent({
         title="Mapping"
         projectInfo={projectInfo}
       />
-      <div className="flex-1 overflow-auto">
+      <div
+        className={cn(
+          'flex-1 overflow-auto transition-[padding] duration-150 ease-out motion-reduce:transition-none',
+          // Reserve drawer width on viewports wide enough that doing so
+          // does not collapse the content area to a too-narrow column.
+          // Below that threshold the drawer sits over content (still
+          // legible because the drawer is opaque white with shadow).
+          isDrawerOpen && 'xl:pr-[520px]',
+        )}
+      >
         <div className="mx-auto w-full max-w-5xl px-6 py-6">
           <WipBanner projectId={projectId} />
           {initialRedesignData === null ? (
@@ -144,13 +162,33 @@ function MappingBody({
     ),
   )
 
+  // Phase 3 Gap 7 — drawer state. Seeded from `?drawer=<rowId>` on
+  // mount; mutated by row clicks + close button + filter-out auto-close.
+  // The row id can be a bare TFM UUID OR the `unmapped::<uuid>` sentinel
+  // (founder Q4 — verbatim row.id in URL). The current row is looked up
+  // by linear scan; row counts are bounded (<300 in practice), so the
+  // ergonomic clarity of one source of truth (`drawerRowId`) outweighs a
+  // memoised id→row map.
+  const [drawerRowId, setDrawerRowId] = useState<string | null>(() => {
+    const initial = (searchParams ?? new URLSearchParams()).get('drawer')
+    return initial && initial.length > 0 ? initial : null
+  })
+
   // Debounce only the search-param URL write. Other filters write
   // immediately because they cause a single state change per interaction.
   const pendingSearchTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   const writeUrl = useCallback(
-    (next: MappingFilterState) => {
-      const qs = serializeFilterStateToQuery(next)
+    (next: MappingFilterState, nextDrawerRowId: string | null) => {
+      // Pattern U1 (single source of truth): one writer composes the
+      // filter query string and the drawer param together. This keeps
+      // filter writes from clobbering the drawer param and vice versa.
+      const filterQs = serializeFilterStateToQuery(next)
+      const params = new URLSearchParams(filterQs)
+      if (nextDrawerRowId !== null) {
+        params.set('drawer', nextDrawerRowId)
+      }
+      const qs = params.toString()
       router.replace(
         `/app/projects/${projectId}/mapping${qs ? `?${qs}` : ''}`,
         { scroll: false },
@@ -177,16 +215,29 @@ function MappingBody({
         ) {
           pendingSearchTimer.current = setTimeout(() => {
             pendingSearchTimer.current = null
-            writeUrl(next)
+            writeUrl(next, drawerRowId)
           }, SEARCH_DEBOUNCE_MS)
         } else {
-          writeUrl(next)
+          writeUrl(next, drawerRowId)
         }
         return next
       })
     },
-    [writeUrl],
+    [writeUrl, drawerRowId],
   )
+
+  const handleRowClick = useCallback(
+    (rowId: string) => {
+      setDrawerRowId(rowId)
+      writeUrl(filters, rowId)
+    },
+    [writeUrl, filters],
+  )
+
+  const handleDrawerClose = useCallback(() => {
+    setDrawerRowId(null)
+    writeUrl(filters, null)
+  }, [writeUrl, filters])
 
   useEffect(() => {
     return () => {
@@ -204,6 +255,30 @@ function MappingBody({
     () => filterRows(data.rows, filters),
     [data.rows, filters],
   )
+
+  // Phase 3 Gap 7 — derive the open drawer row from `drawerRowId`. We
+  // require the row to be present in `filteredRows` (not just `data.rows`)
+  // so the founder rule "filter that hides the open row closes the drawer"
+  // is enforced as a single derivation rather than a side-effecting
+  // `useEffect`. `useMemo` keeps the lookup cheap; an actual auto-close
+  // (URL clean-up + state reset) fires from a sibling `useEffect` below.
+  const drawerRow = useMemo<MappingRow | null>(() => {
+    if (drawerRowId === null) return null
+    return filteredRows.find((r) => r.id === drawerRowId) ?? null
+  }, [drawerRowId, filteredRows])
+
+  // Phase 3 Gap 7 — auto-close + URL clean-up when the open drawer row
+  // is no longer reachable. Two trigger paths:
+  //   1. Filter change hides the row (e.g. Search "xyz_never_matches")
+  //   2. Stale URL on mount (`?drawer=<id>` for an id absent from data)
+  // Both flow through this effect so the URL stays consistent with
+  // visible state at all times.
+  useEffect(() => {
+    if (drawerRowId !== null && drawerRow === null) {
+      setDrawerRowId(null)
+      writeUrl(filters, null)
+    }
+  }, [drawerRowId, drawerRow, filters, writeUrl])
 
   /**
    * Group filtered rows by target-table id WHILE preserving server order.
@@ -296,11 +371,25 @@ function MappingBody({
                 targetTable={summary}
                 rows={rowsInGroup}
                 filteredCount={isDefaultState ? undefined : perGroup}
+                onRowClick={handleRowClick}
+                openRowId={drawerRowId}
               />
             )
           })}
         </div>
       )}
+
+      {/*
+        Phase 3 Gap 7 — drawer host. Position-fixed; no backdrop. The
+        click-outside-closes contract is implemented in the parent
+        scroll-container wrapper (see `MappingRedesignContent`) so this
+        component does not have to know about its DOM neighbourhood.
+      */}
+      <MappingDrawer
+        row={drawerRow}
+        isOpen={drawerRow !== null}
+        onClose={handleDrawerClose}
+      />
     </>
   )
 }

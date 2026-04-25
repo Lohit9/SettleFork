@@ -41,12 +41,27 @@ interface TargetTableGroupProps {
    * the group renders its Gap 4c baseline.
    */
   filteredCount?: { total: number; matching: number }
+  /**
+   * Phase 3 Gap 7 — row-body click → drawer-open trigger. Threaded
+   * untouched into each `FieldMappingRow`. Omit when the parent has
+   * no drawer host (e.g. legacy fixtures, storybook).
+   */
+  onRowClick?: (rowId: string) => void
+  /**
+   * Phase 3 Gap 7 — id of the row whose drawer is currently open.
+   * Each `FieldMappingRow` compares its own `row.id` against this and
+   * applies the active-row highlight when they match. `null` means no
+   * drawer open.
+   */
+  openRowId?: string | null
 }
 
 export function TargetTableGroup({
   targetTable,
   rows,
   filteredCount,
+  onRowClick,
+  openRowId,
 }: TargetTableGroupProps) {
   const label = resolveFieldCountLabel(targetTable, filteredCount)
   const isFilteredEmpty = filteredCount !== undefined && filteredCount.matching === 0
@@ -91,7 +106,12 @@ export function TargetTableGroup({
       ) : (
         <div role="list" className="divide-y divide-gray-100">
           {rows.map((row) => (
-            <FieldMappingRow key={row.id} row={row} />
+            <FieldMappingRow
+              key={row.id}
+              row={row}
+              onRowClick={onRowClick}
+              isActive={openRowId === row.id}
+            />
           ))}
         </div>
       )}
