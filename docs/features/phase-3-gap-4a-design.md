@@ -768,6 +768,29 @@ interface) lives in `lib/types/mappings-for-redesign.ts` — see the
 every `field` and `field_profile` for the project; Gap 11b reuses
 that data path verbatim — no new round-trips.
 
+### 3.5 Phase 3 closure — 2026-04-25
+
+The read-path contract designed in this document shipped against
+the redesign UI across Gaps 4b, 4c, 5a/5b, 7-9, 11a/11b. The
+closeout pass on 2026-04-25 (Gaps 10 + 13 reduced scope) made one
+final consumer-side addition without touching the contract:
+
+- **`MappingCounts.unmapped`** was on the contract since §3.2 but
+  unused in the rendering layer until Gap 13 reduced scope. The
+  Gap 13 closeout adds an Unmapped chip to the project-level
+  `CountersRow`, gated on `counts.unmapped > 0` (mirroring the
+  Rejected chip pattern from §9 Q6). No contract change — just
+  consumer wiring.
+
+No other contract surface changed during closeout. `sourceFields`
+(§3.4) remains the last live amendment; the contract is otherwise
+stable as designed.
+
+For the full Phase 3 status (all gaps shipped, reserved-slot
+dispositions, Phase 4/5 forward-look) see the **"Phase 3 closure
+— 2026-04-25"** section in
+[`docs/features/mapping-redesign.md`](./mapping-redesign.md).
+
 ---
 
 ## 4. Query strategy
