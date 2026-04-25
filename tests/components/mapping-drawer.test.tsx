@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from 'vitest'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { fireEvent, render, screen, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { MappingDrawer } from '@/app/app/projects/[projectId]/mapping/redesign/components/MappingDrawer'
@@ -408,16 +408,15 @@ describe('MappingDrawer — subheader VA (value_assignment)', () => {
   })
 })
 
-// ─── Mapped-row body shape + footer placeholder ────────────────────────────
+// ─── Mapped-row body shape + footer (Gap 8b + Gap 9) ───────────────────────
 //
-// Gap 8b replaces the Gap 8a "Mapped row drawer body — coming in Gap 8b"
-// placeholder with the real per-source-roster body. These tests lock the
-// post-8b shape — the Gap 8a placeholder MUST NOT render any longer.
-//
-// The footer placeholder is unchanged from Gap 7 — Gap 9 fills it with
-// action buttons.
+// Gap 8b replaced the Gap 8a "Mapped row drawer body — coming in Gap 8b"
+// placeholder with the real per-source-roster body. Gap 9 replaced the
+// "Actions coming in Gap 10" footer placeholder with the real Approve /
+// Reject button row. These tests lock the post-9 shape — neither
+// placeholder may render any longer.
 
-describe('MappingDrawer — mapped-row body shape + footer placeholder', () => {
+describe('MappingDrawer — mapped-row body shape + footer', () => {
   it('mapped row body renders the Target field section (Gap 8a placeholder removed)', () => {
     render(<MappingDrawer row={mapped()} isOpen={true} onClose={() => {}} />)
     expect(
@@ -438,10 +437,20 @@ describe('MappingDrawer — mapped-row body shape + footer placeholder', () => {
     )
   })
 
-  it('renders the footer placeholder text "Actions coming in Gap 10" (unchanged)', () => {
+  it('the footer no longer renders the Gap 7/8 placeholder copy', () => {
     render(<MappingDrawer row={mapped()} isOpen={true} onClose={() => {}} />)
     const footer = screen.getByTestId('mapping-drawer-footer')
-    expect(footer.textContent).toContain('Actions coming in Gap 10')
+    expect(footer.textContent).not.toContain('Actions coming in Gap 10')
+  })
+
+  it('renders Approve and Reject buttons in the footer for a mapped row', () => {
+    render(<MappingDrawer row={mapped()} isOpen={true} onClose={() => {}} />)
+    expect(
+      screen.getByTestId('mapping-drawer-approve-button'),
+    ).toBeInTheDocument()
+    expect(
+      screen.getByTestId('mapping-drawer-reject-button'),
+    ).toBeInTheDocument()
   })
 })
 
@@ -696,11 +705,20 @@ describe('MappingDrawer — Rule 6 (Unmapped) body', () => {
   })
 
   it('renders the Mapping status section with the empty-state prose', () => {
+    // Post-Gap-9 amendment (2026-04-25): the prose was rewritten to
+    // stop referencing legacy-only affordances ("AI Suggest from the
+    // Mapping page" / "acknowledge … intentionally unmapped"). The
+    // redesign currently has no remap workflow, so the copy points
+    // users to the legacy view until a future remap gap (Phase 4 /
+    // TBD) ports those flows.
     render(<MappingDrawer row={unmapped()} isOpen={true} onClose={() => {}} />)
     const prose = screen.getByTestId('drawer-unmapped-prose')
-    expect(prose.textContent).toContain('no source mapping yet')
-    expect(prose.textContent).toContain('AI Suggest')
-    expect(prose.textContent).toContain('acknowledge')
+    expect(prose.textContent).toContain('Remapping unmapped fields is coming soon')
+    expect(prose.textContent).toContain('legacy Mapping view')
+    // Regression guard: the old copy mentioned "AI Suggest" and
+    // "acknowledge" — affordances absent from the redesign today.
+    expect(prose.textContent).not.toContain('AI Suggest')
+    expect(prose.textContent).not.toContain('acknowledge')
   })
 
   it('does NOT render a Status section (unmapped state is implicit)', () => {
@@ -1367,5 +1385,433 @@ describe('MappingDrawer — Mapped body regression guards', () => {
     render(<MappingDrawer row={rule2Mapped()} isOpen={true} onClose={() => {}} />)
     expect(screen.getAllByTestId('drawer-section-target-field')).toHaveLength(1)
     expect(screen.getAllByTestId('drawer-section-status')).toHaveLength(1)
+  })
+})
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Gap 9 — Footer action buttons (Approve / Reject + confirmation + UX state)
+// ═══════════════════════════════════════════════════════════════════════════
+//
+// The drawer's footer is now a stateful action surface. These tests cover:
+//
+//   • Disabled-state matrix per row.kind × row.status (the 5 pinned
+//     decisions act as regression guards):
+//       - mapped/VA + needs_review: both enabled
+//       - mapped/VA + approved:     Approve disabled, Reject enabled
+//       - mapped/VA + rejected:     both enabled (legacy un-reject path)
+//       - target_acknowledged:      both disabled with explanatory tooltips
+//       - unmapped:                 footer hidden entirely
+//
+//   • Approve UX:
+//       - Click → optimistic status update visible immediately
+//       - Server success → onActionComplete('approve', rowId) fired
+//       - Server failure → optimistic state reverted, error banner shown
+//
+//   • Reject UX:
+//       - Click → confirmation dialog opens with locked copy
+//       - Cancel → dialog closes, no action call
+//       - Confirm → spinner appears, action call fires, dialog stays open
+//                   until the call resolves
+//       - Server success → onActionComplete('reject', rowId) fired
+//       - Server failure → dialog closes, error banner shown
+//
+//   • Reject confirmation copy is the founder-locked exact text.
+//
+// We mock `@/lib/actions/mappings-for-redesign` so tests don't need a
+// Supabase harness. `vi.hoisted` is required because `vi.mock` factories
+// are hoisted to the top of the file by vitest's transformer; without
+// hoisting these closure variables would be uninitialized when the
+// factory runs.
+
+import { act } from 'react'
+
+const { approveFieldMappingMock, rejectFieldMappingMock } = vi.hoisted(() => ({
+  approveFieldMappingMock: vi.fn(),
+  rejectFieldMappingMock: vi.fn(),
+}))
+
+vi.mock('@/lib/actions/mappings-for-redesign', () => ({
+  approveFieldMapping: (...args: unknown[]) =>
+    approveFieldMappingMock(...args),
+  rejectFieldMapping: (...args: unknown[]) =>
+    rejectFieldMappingMock(...args),
+}))
+
+beforeEach(() => {
+  approveFieldMappingMock.mockReset()
+  rejectFieldMappingMock.mockReset()
+})
+
+describe('MappingDrawer Gap 9 — disabled-state matrix', () => {
+  it('mapped row + status=needs_review: both Approve and Reject are enabled', () => {
+    render(
+      <MappingDrawer
+        row={mapped({ status: 'needs_review' })}
+        isOpen={true}
+        onClose={() => {}}
+      />,
+    )
+    expect(
+      screen.getByTestId('mapping-drawer-approve-button'),
+    ).not.toBeDisabled()
+    expect(
+      screen.getByTestId('mapping-drawer-reject-button'),
+    ).not.toBeDisabled()
+  })
+
+  it('mapped row + status=approved: Approve is DISABLED, Reject is enabled', () => {
+    render(
+      <MappingDrawer
+        row={mapped({ status: 'approved' })}
+        isOpen={true}
+        onClose={() => {}}
+      />,
+    )
+    expect(screen.getByTestId('mapping-drawer-approve-button')).toBeDisabled()
+    expect(
+      screen.getByTestId('mapping-drawer-reject-button'),
+    ).not.toBeDisabled()
+  })
+
+  it('mapped row + status=rejected (legacy): BOTH buttons are enabled', () => {
+    render(
+      <MappingDrawer
+        row={mapped({ status: 'rejected' })}
+        isOpen={true}
+        onClose={() => {}}
+      />,
+    )
+    expect(
+      screen.getByTestId('mapping-drawer-approve-button'),
+    ).not.toBeDisabled()
+    expect(
+      screen.getByTestId('mapping-drawer-reject-button'),
+    ).not.toBeDisabled()
+  })
+
+  it('value_assignment row + status=needs_review: both buttons enabled', () => {
+    render(
+      <MappingDrawer
+        row={valueAssignment({ status: 'needs_review' })}
+        isOpen={true}
+        onClose={() => {}}
+      />,
+    )
+    expect(
+      screen.getByTestId('mapping-drawer-approve-button'),
+    ).not.toBeDisabled()
+    expect(
+      screen.getByTestId('mapping-drawer-reject-button'),
+    ).not.toBeDisabled()
+  })
+
+  it('target_acknowledged: BOTH buttons are disabled with explanatory tooltips', () => {
+    render(
+      <MappingDrawer row={targetAck()} isOpen={true} onClose={() => {}} />,
+    )
+    const approveBtn = screen.getByTestId('mapping-drawer-approve-button')
+    const rejectBtn = screen.getByTestId('mapping-drawer-reject-button')
+    expect(approveBtn).toBeDisabled()
+    expect(rejectBtn).toBeDisabled()
+    expect(rejectBtn.getAttribute('title')).toContain(
+      'Acknowledged rows',
+    )
+    expect(approveBtn.getAttribute('title')).toContain(
+      'Acknowledged rows',
+    )
+  })
+
+  it('unmapped row: the footer is NOT rendered (no actions available)', () => {
+    render(<MappingDrawer row={unmapped()} isOpen={true} onClose={() => {}} />)
+    expect(screen.queryByTestId('mapping-drawer-footer')).toBeNull()
+    expect(
+      screen.queryByTestId('mapping-drawer-approve-button'),
+    ).toBeNull()
+    expect(screen.queryByTestId('mapping-drawer-reject-button')).toBeNull()
+  })
+})
+
+describe('MappingDrawer Gap 9 — Approve action', () => {
+  it('clicking Approve calls approveFieldMapping with the row id', async () => {
+    approveFieldMappingMock.mockResolvedValue({ success: true })
+    const user = userEvent.setup()
+    render(
+      <MappingDrawer
+        row={mapped({ id: 'tfm-test', status: 'needs_review' })}
+        isOpen={true}
+        onClose={() => {}}
+      />,
+    )
+    await user.click(screen.getByTestId('mapping-drawer-approve-button'))
+    expect(approveFieldMappingMock).toHaveBeenCalledWith('tfm-test')
+  })
+
+  it('on success, fires onActionComplete("approve", rowId)', async () => {
+    approveFieldMappingMock.mockResolvedValue({ success: true })
+    const onActionComplete = vi.fn()
+    const user = userEvent.setup()
+    render(
+      <MappingDrawer
+        row={mapped({ id: 'tfm-success', status: 'needs_review' })}
+        isOpen={true}
+        onClose={() => {}}
+        onActionComplete={onActionComplete}
+      />,
+    )
+    await user.click(screen.getByTestId('mapping-drawer-approve-button'))
+    // Wait for the transition / async callback to settle.
+    await act(async () => {
+      await Promise.resolve()
+    })
+    expect(onActionComplete).toHaveBeenCalledWith('approve', 'tfm-success')
+  })
+
+  it('optimistically reflects approved status before the server resolves', async () => {
+    const deferred: { resolve?: (v: { success: boolean }) => void } = {}
+    approveFieldMappingMock.mockImplementation(
+      () =>
+        new Promise<{ success: boolean }>((resolve) => {
+          deferred.resolve = resolve
+        }),
+    )
+    const user = userEvent.setup()
+    render(
+      <MappingDrawer
+        row={mapped({ status: 'needs_review' })}
+        isOpen={true}
+        onClose={() => {}}
+      />,
+    )
+    // Pre-click sanity: status indicator says Needs Review.
+    expect(
+      screen.getByTestId('drawer-status-indicator').textContent,
+    ).toContain('Needs Review')
+    await user.click(screen.getByTestId('mapping-drawer-approve-button'))
+    // While the promise is pending the optimistic overlay is applied.
+    expect(
+      screen.getByTestId('drawer-status-indicator').textContent,
+    ).toContain('Approved')
+    expect(
+      screen.getByTestId('mapping-drawer-approve-button'),
+    ).toBeDisabled()
+    // Resolve the promise to clean up.
+    deferred.resolve?.({ success: true })
+    await act(async () => {
+      await Promise.resolve()
+    })
+  })
+
+  it('on server failure, reverts optimistic state and shows the error banner', async () => {
+    approveFieldMappingMock.mockResolvedValue({
+      success: false,
+      error: 'boom',
+      errorCode: 'INTERNAL',
+    })
+    const user = userEvent.setup()
+    render(
+      <MappingDrawer
+        row={mapped({ status: 'needs_review' })}
+        isOpen={true}
+        onClose={() => {}}
+      />,
+    )
+    await user.click(screen.getByTestId('mapping-drawer-approve-button'))
+    await act(async () => {
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+    // Status reverted to Needs Review.
+    expect(
+      screen.getByTestId('drawer-status-indicator').textContent,
+    ).toContain('Needs Review')
+    // Error banner shows the generic copy.
+    const banner = screen.getByTestId('mapping-drawer-error')
+    expect(banner.textContent).toContain("Couldn't approve this mapping")
+  })
+})
+
+describe('MappingDrawer Gap 9 — Reject action', () => {
+  it('clicking Reject opens the confirmation dialog (does NOT call rejectFieldMapping yet)', async () => {
+    const user = userEvent.setup()
+    render(
+      <MappingDrawer
+        row={mapped({ status: 'needs_review' })}
+        isOpen={true}
+        onClose={() => {}}
+      />,
+    )
+    await user.click(screen.getByTestId('mapping-drawer-reject-button'))
+    expect(
+      screen.getByTestId('mapping-drawer-reject-confirm-dialog'),
+    ).toBeInTheDocument()
+    expect(rejectFieldMappingMock).not.toHaveBeenCalled()
+  })
+
+  it('confirmation dialog uses the founder-locked title and body copy', async () => {
+    const user = userEvent.setup()
+    render(
+      <MappingDrawer
+        row={mapped({
+          targetField: targetField({ name: 'cool_field' }),
+          status: 'needs_review',
+        })}
+        isOpen={true}
+        onClose={() => {}}
+      />,
+    )
+    await user.click(screen.getByTestId('mapping-drawer-reject-button'))
+    const dialog = screen.getByTestId('mapping-drawer-reject-confirm-dialog')
+    expect(dialog.textContent).toContain('Reject this mapping?')
+    expect(dialog.textContent).toContain('cool_field')
+    expect(dialog.textContent).toContain('will become unmapped')
+    expect(dialog.textContent).toContain(
+      'The mapping and any associated transformation will be deleted',
+    )
+    expect(dialog.textContent).toContain('This cannot be undone')
+  })
+
+  it('Cancel button closes the dialog and does NOT call rejectFieldMapping', async () => {
+    const user = userEvent.setup()
+    render(
+      <MappingDrawer
+        row={mapped({ status: 'needs_review' })}
+        isOpen={true}
+        onClose={() => {}}
+      />,
+    )
+    await user.click(screen.getByTestId('mapping-drawer-reject-button'))
+    await user.click(screen.getByTestId('mapping-drawer-reject-cancel'))
+    expect(
+      screen.queryByTestId('mapping-drawer-reject-confirm-dialog'),
+    ).toBeNull()
+    expect(rejectFieldMappingMock).not.toHaveBeenCalled()
+  })
+
+  it('Confirm button calls rejectFieldMapping with the row id', async () => {
+    rejectFieldMappingMock.mockResolvedValue({ success: true })
+    const user = userEvent.setup()
+    render(
+      <MappingDrawer
+        row={mapped({ id: 'tfm-rej', status: 'needs_review' })}
+        isOpen={true}
+        onClose={() => {}}
+      />,
+    )
+    await user.click(screen.getByTestId('mapping-drawer-reject-button'))
+    await user.click(screen.getByTestId('mapping-drawer-reject-confirm'))
+    expect(rejectFieldMappingMock).toHaveBeenCalledWith('tfm-rej')
+  })
+
+  it('shows a loading spinner on the confirm button while the action is in flight', async () => {
+    const deferred: { resolve?: (v: { success: boolean }) => void } = {}
+    rejectFieldMappingMock.mockImplementation(
+      () =>
+        new Promise<{ success: boolean }>((resolve) => {
+          deferred.resolve = resolve
+        }),
+    )
+    const user = userEvent.setup()
+    render(
+      <MappingDrawer
+        row={mapped({ status: 'needs_review' })}
+        isOpen={true}
+        onClose={() => {}}
+      />,
+    )
+    await user.click(screen.getByTestId('mapping-drawer-reject-button'))
+    await user.click(screen.getByTestId('mapping-drawer-reject-confirm'))
+    // While pending, both Cancel and Confirm are disabled and the
+    // footer Reject button shows the spinner.
+    expect(
+      screen.getByTestId('mapping-drawer-reject-confirm'),
+    ).toBeDisabled()
+    expect(
+      screen.getByTestId('mapping-drawer-reject-cancel'),
+    ).toBeDisabled()
+    expect(
+      screen.getByTestId('mapping-drawer-reject-spinner'),
+    ).toBeInTheDocument()
+    deferred.resolve?.({ success: true })
+    await act(async () => {
+      await Promise.resolve()
+    })
+  })
+
+  it('on success, fires onActionComplete("reject", rowId)', async () => {
+    rejectFieldMappingMock.mockResolvedValue({ success: true })
+    const onActionComplete = vi.fn()
+    const user = userEvent.setup()
+    render(
+      <MappingDrawer
+        row={mapped({ id: 'tfm-rej-ok', status: 'needs_review' })}
+        isOpen={true}
+        onClose={() => {}}
+        onActionComplete={onActionComplete}
+      />,
+    )
+    await user.click(screen.getByTestId('mapping-drawer-reject-button'))
+    await user.click(screen.getByTestId('mapping-drawer-reject-confirm'))
+    await act(async () => {
+      await Promise.resolve()
+    })
+    expect(onActionComplete).toHaveBeenCalledWith('reject', 'tfm-rej-ok')
+  })
+
+  it('on server failure, closes the dialog and shows the error banner', async () => {
+    rejectFieldMappingMock.mockResolvedValue({
+      success: false,
+      error: 'boom',
+      errorCode: 'INTERNAL',
+    })
+    const user = userEvent.setup()
+    render(
+      <MappingDrawer
+        row={mapped({ status: 'needs_review' })}
+        isOpen={true}
+        onClose={() => {}}
+      />,
+    )
+    await user.click(screen.getByTestId('mapping-drawer-reject-button'))
+    await user.click(screen.getByTestId('mapping-drawer-reject-confirm'))
+    await act(async () => {
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+    expect(
+      screen.queryByTestId('mapping-drawer-reject-confirm-dialog'),
+    ).toBeNull()
+    const banner = screen.getByTestId('mapping-drawer-error')
+    expect(banner.textContent).toContain("Couldn't reject this mapping")
+  })
+})
+
+describe('MappingDrawer Gap 9 — error banner reset on row change', () => {
+  it('clears the error banner when the drawer switches to a different row', async () => {
+    approveFieldMappingMock.mockResolvedValue({
+      success: false,
+      error: 'boom',
+    })
+    const user = userEvent.setup()
+    const { rerender } = render(
+      <MappingDrawer
+        row={mapped({ id: 'tfm-a', status: 'needs_review' })}
+        isOpen={true}
+        onClose={() => {}}
+      />,
+    )
+    await user.click(screen.getByTestId('mapping-drawer-approve-button'))
+    await act(async () => {
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+    expect(screen.getByTestId('mapping-drawer-error')).toBeInTheDocument()
+    rerender(
+      <MappingDrawer
+        row={mapped({ id: 'tfm-b', status: 'needs_review' })}
+        isOpen={true}
+        onClose={() => {}}
+      />,
+    )
+    expect(screen.queryByTestId('mapping-drawer-error')).toBeNull()
   })
 })

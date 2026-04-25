@@ -36,7 +36,10 @@ const sourceTables: SourceTableSummary[] = [
   { id: 'st-y', name: 'CIF_MASTER', datasetName: 'legacy', fieldCount: 8 },
 ]
 
-function renderFilterRow(overrides: Partial<MappingFilterState> = {}) {
+function renderFilterRow(
+  overrides: Partial<MappingFilterState> = {},
+  options: { rejectedCount?: number } = {},
+) {
   const onFiltersChange = vi.fn()
   const filters: MappingFilterState = { ...DEFAULT_FILTER_STATE, ...overrides }
   const utils = render(
@@ -46,6 +49,7 @@ function renderFilterRow(overrides: Partial<MappingFilterState> = {}) {
       targetTables={targetTables}
       sourceTables={sourceTables}
       tableCount={targetTables.length}
+      rejectedCount={options.rejectedCount ?? 0}
     />,
   )
   return { ...utils, onFiltersChange }
@@ -212,5 +216,64 @@ describe('FilterRow — Radix Select integration', () => {
   it('does NOT apply the active class when the status is "all"', () => {
     renderFilterRow()
     expect(screen.getByTestId('filter-status').className).not.toMatch(/bg-blue-50/)
+  })
+})
+
+// ─── Gap 9 — "Rejected" option gating ───────────────────────────────────────
+//
+// Founder decision (Gap 9 alignment §4): the "Rejected" option in the
+// status dropdown is gated on `rejectedCount > 0`, mirroring the
+// counter-pill pattern from Gap 4a §9 Q6. Legacy-URL fallback: if the
+// current status filter is already 'rejected' the option must remain
+// visible so the Select stays in a valid state.
+//
+// Radix Select renders items in a portal that is mounted only when the
+// dropdown is open. We avoid the Radix open/close complexity by
+// asserting the trigger's rendered value text instead — the trigger
+// reflects the currently selected option's label via <SelectValue/>,
+// which itself sources from the items list. When the option is missing
+// from the items list (and not in the active filter), the dropdown
+// has 3 entries; otherwise it has 4.
+
+describe('FilterRow — Rejected option gating (Gap 9)', () => {
+  it('renders without crashing when rejectedCount is omitted (back-compat)', () => {
+    const onFiltersChange = vi.fn()
+    expect(() =>
+      render(
+        <FilterRow
+          filters={DEFAULT_FILTER_STATE}
+          onFiltersChange={onFiltersChange}
+          targetTables={targetTables}
+          sourceTables={sourceTables}
+          tableCount={targetTables.length}
+        />,
+      ),
+    ).not.toThrow()
+  })
+
+  it('keeps the trigger valid when status=rejected even though rejectedCount=0 (legacy URL fallback)', () => {
+    // The trigger renders the selected value's label. If the item
+    // were missing, Radix's <SelectValue/> would fall back to the
+    // placeholder, which our config does not define — so an empty
+    // trigger here would indicate the gating logic stripped the
+    // option even when it was needed.
+    renderFilterRow({ status: 'rejected' }, { rejectedCount: 0 })
+    const trigger = screen.getByTestId('filter-status')
+    expect(within(trigger).getByText(/rejected/i)).toBeInTheDocument()
+  })
+
+  it('keeps the trigger valid when status=rejected and rejectedCount > 0', () => {
+    renderFilterRow({ status: 'rejected' }, { rejectedCount: 3 })
+    const trigger = screen.getByTestId('filter-status')
+    expect(within(trigger).getByText(/rejected/i)).toBeInTheDocument()
+  })
+
+  it('renders cleanly with the default state when rejectedCount=0 (option hidden, no errors)', () => {
+    renderFilterRow({ status: 'all' }, { rejectedCount: 0 })
+    const trigger = screen.getByTestId('filter-status')
+    // Default selection label is "All status" — the trigger MUST
+    // display it. (If the gating logic had a bug that broke the
+    // Select, the trigger text would be empty.)
+    expect(within(trigger).getByText(/all status/i)).toBeInTheDocument()
   })
 })

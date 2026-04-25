@@ -51,6 +51,19 @@ vi.mock('@/components/app/PageHeader', () => ({
   ),
 }))
 
+// Phase 3 Gap 9 — `MappingDrawer` now imports `approveFieldMapping` /
+// `rejectFieldMapping` from `@/lib/actions/mappings-for-redesign`,
+// which transitively imports `lib/actions/mappings.ts` →
+// `lib/ai/claude.ts`. The latter constructs an Anthropic client at
+// module load time, which throws in jsdom under recent SDK versions.
+// We don't exercise the action surface here (this suite is about
+// filter/group rendering); stub them to no-ops to keep the import
+// chain cheap and side-effect-free.
+vi.mock('@/lib/actions/mappings-for-redesign', () => ({
+  approveFieldMapping: vi.fn().mockResolvedValue({ success: true }),
+  rejectFieldMapping: vi.fn().mockResolvedValue({ success: true }),
+}))
+
 // ── Fixtures ────────────────────────────────────────────────────────────────
 
 const accountsTable: TargetTableSummary = {
@@ -661,3 +674,4 @@ describe('MappingRedesignContent — Gap 7 drawer URL sync', () => {
     expect(otherRow.className).not.toContain('bg-slate-50')
   })
 })
+

@@ -239,6 +239,34 @@ function MappingBody({
     writeUrl(filters, null)
   }, [writeUrl, filters])
 
+  // Phase 3 Gap 9 — drawer action completion. Approve and Reject have
+  // different post-action UX:
+  //
+  //   Approve: drawer STAYS OPEN with the new status. We just refresh
+  //            server data so the parent re-renders with the canonical
+  //            row.status. The drawer's local optimistic overlay
+  //            self-clears once the fresh prop arrives.
+  //   Reject:  drawer CLOSES and the URL clears `?drawer=`. The TFM is
+  //            deleted on the server, so the row identity dissolves —
+  //            keeping the drawer open would leave the user staring at
+  //            stale data (or, worse, a Rule 6 unmapped pseudo-row
+  //            synthesized client-side, which would diverge from the
+  //            server's canonical assembly). Founder decisions 1 + 2
+  //            in the Gap 9 alignment.
+  //
+  // `router.refresh()` re-fetches the server component's data without
+  // navigating, so the page rerenders with fresh `MappingsForRedesignResult`.
+  const handleDrawerActionComplete = useCallback(
+    (action: 'approve' | 'reject', _rowId: string) => {
+      router.refresh()
+      if (action === 'reject') {
+        setDrawerRowId(null)
+        writeUrl(filters, null)
+      }
+    },
+    [router, filters, writeUrl],
+  )
+
   useEffect(() => {
     return () => {
       if (pendingSearchTimer.current) {
@@ -352,6 +380,7 @@ function MappingBody({
         targetTables={data.targetTables}
         sourceTables={data.sourceTables}
         tableCount={data.targetTables.length}
+        rejectedCount={data.counts.rejected}
       />
 
       {data.targetSchemaEmpty ? (
@@ -389,6 +418,7 @@ function MappingBody({
         row={drawerRow}
         isOpen={drawerRow !== null}
         onClose={handleDrawerClose}
+        onActionComplete={handleDrawerActionComplete}
       />
     </>
   )
