@@ -22,6 +22,14 @@
  * Stability: the contract is LOCKED as of design-doc commit 70e1ef5
  * (2026-04-22). Further changes require a founder-reviewed design
  * update — not an ad-hoc edit during implementation.
+ *
+ * AMENDMENTS
+ * ----------
+ *   2026-04-25 (Phase 3 Gap 11b): added `sourceFields:
+ *   SourceFieldWithState[]` for the source-schema sidebar shipped in
+ *   the same gap. The shape mirrors the founder-locked decisions in
+ *   `docs/features/phase-3-gap-4a-design.md` §3 (amendment block) and
+ *   `docs/features/mapping-redesign.md` §Source schema sidebar.
  */
 
 // ─── Top-level result ────────────────────────────────────────────────
@@ -101,6 +109,39 @@ export interface MappingsForRedesignResult {
    * not on target fields.
    */
   sourceFieldAcknowledgments: SourceFieldAcknowledgmentSummary[]
+
+  /**
+   * Every source field in the project's source-role datasets, one
+   * entry per field, decorated with mapping state for the source
+   * schema sidebar (Phase 3 Gap 11b).
+   *
+   * ORDERING — server-guaranteed (DO NOT re-sort on the client).
+   * ─────────────────────────────────────────────────────────────────
+   *   ORDER BY
+   *     sourceTable.name         ASC,  -- group scan order
+   *     sourceField.ordinalPosition ASC,
+   *     sourceField.name         ASC   -- tiebreak
+   *
+   * Symmetry with `rows`: server is the canonical source of order so
+   * the client can group by `sourceTable.id` and rely on Map insertion
+   * order for canonical rendering. The redesign-path `.sort()` guard
+   * (`tests/lib/no-shim-in-redesign-path.test.ts`) enforces the
+   * "no client-side sort" invariant.
+   *
+   * Always present (possibly empty array) — projects with no source
+   * schema yet emit `sourceFields: []` and the sidebar surfaces a
+   * "no source schema ingested" empty state.
+   *
+   * `mappingStatus` is computed by treating every TFM with
+   * `status='rejected'` as if its `mapping_sources` rows did not
+   * exist. Founder-locked semantic (Gap 11b decision 2): rejected
+   * TFMs do not "claim" their contributing sources as mapped. This
+   * matters only for the single legacy rejected row in production
+   * (Demo #2 SimpleLegal — pre-Gap-9 data); post-Gap-9 rejects =
+   * deletes so the case is moot for new writes. Excluding rejected
+   * here is defense-in-depth + a clean fix for the legacy row.
+   */
+  sourceFields: SourceFieldWithState[]
 
   /**
    * Pre-computed counter-pill values across all rows, server-side.
@@ -562,6 +603,76 @@ export interface SourceFieldAcknowledgmentSummary {
   id: string
   sourceFieldId: string
   reason: string
+}
+
+// ─── Source schema sidebar (Phase 3 Gap 11b) ─────────────────────────
+
+/**
+ * One source field, decorated with the state needed to render it in
+ * the source-schema sidebar (Phase 3 Gap 11b).
+ *
+ * The sidebar groups entries by `sourceTable.id` (preserving server
+ * order — see `MappingsForRedesignResult.sourceFields` JSDoc), shows
+ * a Mapped/Unmapped indicator, and surfaces sample values + dataType
+ * on hover. Click-to-highlight is a UI-only concern: the sidebar
+ * computes the set of contributing TFM ids client-side from the
+ * already-loaded `rows` (founder decision: `contributingTfmIds` is
+ * NOT on the contract — single source of truth wins over a redundant
+ * server-computed map that could drift).
+ *
+ * `isAcknowledged` is emitted but currently ignored by Gap 11b
+ * rendering. It's plumbed through for Gap 11c, which will decide the
+ * visual treatment for source-side acknowledgments (strike-through
+ * vs muted opacity vs a separate sub-section). Until then, all
+ * acknowledged fields render identically to other unmapped fields
+ * under the Unmapped filter. Including the flag now avoids a
+ * follow-up contract change.
+ */
+export interface SourceFieldWithState {
+  /** `fields.id` of the source field. */
+  id: string
+  /** Field name as defined in the source schema. */
+  name: string
+  /** Raw DDL data type, e.g. `"VARCHAR(50)"`. */
+  dataType: string
+  /**
+   * Column ordinal within the parent source table. Used for stable
+   * server-side ordering inside a source-table group.
+   */
+  ordinalPosition: number
+  /** Parent source table — drives the sidebar group header. */
+  sourceTable: { id: string; name: string }
+  /**
+   * Whether this source field appears in `mapping_sources` for any
+   * non-rejected TFM in this project.
+   *
+   *   'mapped'   — at least one non-rejected TFM consumes this field
+   *   'unmapped' — zero non-rejected TFM contributions
+   *
+   * "Mapped" includes `needs_review` and `approved`; founder-locked
+   * decision 1 of Gap 11b explicitly avoids a third "amber" state.
+   */
+  mappingStatus: 'mapped' | 'unmapped'
+  /**
+   * Sample values from `field_profiles.sample_values`, capped at 10
+   * to mirror `MappingSourceRef.sampleValues`. Same source of truth
+   * (`MAX_SAMPLE_VALUES` in `_mappings-for-redesign-core.ts`).
+   *
+   * Empty array when no profile exists, the profile has no samples,
+   * or `sample_values` is not an array.
+   */
+  sampleValues: string[]
+  /**
+   * `true` iff this source field has a row in
+   * `source_field_acknowledgments` for this project (the user has
+   * explicitly declared the field as not-to-be-migrated).
+   *
+   * Gap 11b consumes this as metadata only — no visual differentiation.
+   * Gap 11c will fold acknowledged fields into the Unmapped pill with
+   * a yet-to-be-designed visual treatment (see
+   * `SourceSchemaSidebar.tsx` TODO).
+   */
+  isAcknowledged: boolean
 }
 
 // ─── Project-level counters ──────────────────────────────────────────

@@ -1,11 +1,12 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { act, fireEvent, render, screen } from '@testing-library/react'
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import MappingRedesignContent from '@/app/app/projects/[projectId]/mapping/redesign/MappingContent'
 import type {
   MappedRow,
   MappingRow,
   MappingSourceRef,
   MappingsForRedesignResult,
+  SourceFieldWithState,
   SourceTableSummary,
   TargetFieldRef,
   TargetTableSummary,
@@ -155,7 +156,15 @@ function buildData(): MappingsForRedesignResult {
       }),
       status: 'approved',
       sources: [
-        source({ sourceTable: { id: sourceTableX.id, name: sourceTableX.name } }),
+        source({
+          sourceField: {
+            id: 'sf-acct-col',
+            name: 'COL',
+            dataType: 'VARCHAR',
+            isNullable: false,
+          },
+          sourceTable: { id: sourceTableX.id, name: sourceTableX.name },
+        }),
       ],
     }),
     mapped({
@@ -167,7 +176,15 @@ function buildData(): MappingsForRedesignResult {
       }),
       status: 'needs_review',
       sources: [
-        source({ sourceTable: { id: sourceTableX.id, name: sourceTableX.name } }),
+        source({
+          sourceField: {
+            id: 'sf-acct-col',
+            name: 'COL',
+            dataType: 'VARCHAR',
+            isNullable: false,
+          },
+          sourceTable: { id: sourceTableX.id, name: sourceTableX.name },
+        }),
       ],
     }),
     mapped({
@@ -179,7 +196,15 @@ function buildData(): MappingsForRedesignResult {
       }),
       status: 'approved',
       sources: [
-        source({ sourceTable: { id: sourceTableY.id, name: sourceTableY.name } }),
+        source({
+          sourceField: {
+            id: 'sf-cif-col',
+            name: 'COL',
+            dataType: 'VARCHAR',
+            isNullable: false,
+          },
+          sourceTable: { id: sourceTableY.id, name: sourceTableY.name },
+        }),
       ],
     }),
     mapped({
@@ -191,7 +216,15 @@ function buildData(): MappingsForRedesignResult {
       }),
       status: 'approved',
       sources: [
-        source({ sourceTable: { id: sourceTableY.id, name: sourceTableY.name } }),
+        source({
+          sourceField: {
+            id: 'sf-cif-col',
+            name: 'COL',
+            dataType: 'VARCHAR',
+            isNullable: false,
+          },
+          sourceTable: { id: sourceTableY.id, name: sourceTableY.name },
+        }),
       ],
     }),
     mapped({
@@ -203,9 +236,53 @@ function buildData(): MappingsForRedesignResult {
       }),
       status: 'approved',
       sources: [
-        source({ sourceTable: { id: sourceTableX.id, name: sourceTableX.name } }),
+        source({
+          sourceField: {
+            id: 'sf-acct-col',
+            name: 'COL',
+            dataType: 'VARCHAR',
+            isNullable: false,
+          },
+          sourceTable: { id: sourceTableX.id, name: sourceTableX.name },
+        }),
       ],
     }),
+  ]
+
+  // Phase 3 Gap 11b — three source fields, two of which are referenced
+  // by the rows above. The third (`UNUSED_COL` in ACCT_MASTER) lets us
+  // exercise Mapped vs Unmapped membership in the sidebar tests.
+  const sourceFields: SourceFieldWithState[] = [
+    {
+      id: 'sf-acct-col',
+      name: 'COL',
+      dataType: 'VARCHAR',
+      ordinalPosition: 0,
+      sourceTable: { id: sourceTableX.id, name: sourceTableX.name },
+      mappingStatus: 'mapped',
+      sampleValues: ['A', 'B'],
+      isAcknowledged: false,
+    },
+    {
+      id: 'sf-acct-unused',
+      name: 'UNUSED_COL',
+      dataType: 'VARCHAR',
+      ordinalPosition: 1,
+      sourceTable: { id: sourceTableX.id, name: sourceTableX.name },
+      mappingStatus: 'unmapped',
+      sampleValues: [],
+      isAcknowledged: false,
+    },
+    {
+      id: 'sf-cif-col',
+      name: 'COL',
+      dataType: 'VARCHAR',
+      ordinalPosition: 0,
+      sourceTable: { id: sourceTableY.id, name: sourceTableY.name },
+      mappingStatus: 'mapped',
+      sampleValues: ['Cust1', 'Cust2'],
+      isAcknowledged: false,
+    },
   ]
 
   return {
@@ -215,6 +292,7 @@ function buildData(): MappingsForRedesignResult {
     targetTables: [accountsTable, customersTable, loansTable],
     sourceTables: [sourceTableX, sourceTableY],
     sourceFieldAcknowledgments: [],
+    sourceFields,
     counts: {
       total: rows.length,
       approved: 4,
@@ -902,5 +980,184 @@ describe('MappingRedesignContent — Gap 11a sidebar integration', () => {
         .getByTestId('source-schema-sidebar-filter-mapped')
         .getAttribute('aria-pressed'),
     ).toBe('true')
+  })
+})
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Phase 3 Gap 11b — sidebar content + click-to-highlight integration.
+// ─────────────────────────────────────────────────────────────────────────────
+//
+// Exercises the parent-owned highlight state machine end-to-end:
+//   1. Sidebar field click highlights every consuming row.
+//   2. Re-clicking the same field clears the highlight (toggle).
+//   3. Clicking a different field replaces (single-select).
+//   4. Esc clears the highlight.
+//   5. Mousedown outside the sidebar AND outside a highlighted row clears.
+//   6. Mousedown inside a highlighted row preserves the highlight (so the
+//      drawer can open from there without losing context on its way in).
+//   7. Drawer Approve/Reject completion clears the highlight (founder-locked
+//      "additional concern" — protects against stale rowId references after
+//      a Reject deletes a TFM).
+
+describe('MappingRedesignContent — Gap 11b sidebar click-to-highlight', () => {
+  beforeEach(() => {
+    window.localStorage.setItem('mapping-sidebar-state', 'expanded')
+    // Default sidebar filter is 'unmapped'; flip to 'all' so both the
+    // mapped (sf-acct-col, sf-cif-col) and unmapped (sf-acct-unused)
+    // fixture fields render in the sidebar.
+    window.localStorage.setItem('mapping-sidebar-filter', 'all')
+    installMatchMediaMock(true)
+  })
+
+  afterEach(() => {
+    window.localStorage.clear()
+    delete (window as unknown as { matchMedia?: unknown }).matchMedia
+  })
+
+  function findFieldButton(sourceFieldId: string): HTMLElement {
+    const fields = screen.getAllByTestId('source-schema-sidebar-field')
+    const match = fields.find(
+      (f) => f.getAttribute('data-source-field-id') === sourceFieldId,
+    )
+    if (!match) {
+      throw new Error(
+        `No sidebar field button found for sourceFieldId=${sourceFieldId}`,
+      )
+    }
+    return match
+  }
+
+  function getRowBody(rowId: string): HTMLElement {
+    const row = document.querySelector(
+      `[data-testid="field-mapping-row"][data-row-id="${rowId}"]`,
+    )
+    if (!row) throw new Error(`Row not found: ${rowId}`)
+    const body = row.querySelector(
+      '[data-testid="field-mapping-row-body"]',
+    ) as HTMLElement | null
+    if (!body) throw new Error(`Row body not found: ${rowId}`)
+    return body
+  }
+
+  function isRowHighlighted(rowId: string): boolean {
+    return getRowBody(rowId).getAttribute('data-highlighted-row') === 'true'
+  }
+
+  it('clicking a sidebar field highlights every main-view row that consumes it', () => {
+    renderRedesign()
+    fireEvent.click(findFieldButton('sf-acct-col'))
+    // sf-acct-col is consumed by accounts-1, accounts-2, and loans-1.
+    expect(isRowHighlighted('r-accounts-1')).toBe(true)
+    expect(isRowHighlighted('r-accounts-2')).toBe(true)
+    expect(isRowHighlighted('r-loans-1')).toBe(true)
+    // customers rows source from sf-cif-col — should remain unhighlighted.
+    expect(isRowHighlighted('r-customers-1')).toBe(false)
+    expect(isRowHighlighted('r-customers-2')).toBe(false)
+  })
+
+  it('clicking the same field a second time clears the highlight (toggle)', () => {
+    renderRedesign()
+    const btn = findFieldButton('sf-acct-col')
+    fireEvent.click(btn)
+    expect(isRowHighlighted('r-accounts-1')).toBe(true)
+    fireEvent.click(btn)
+    expect(isRowHighlighted('r-accounts-1')).toBe(false)
+  })
+
+  it('clicking a different sidebar field replaces the highlight (single-select)', () => {
+    renderRedesign()
+    fireEvent.click(findFieldButton('sf-acct-col'))
+    expect(isRowHighlighted('r-accounts-1')).toBe(true)
+    fireEvent.click(findFieldButton('sf-cif-col'))
+    // accounts/loans rows clear, customers rows light up.
+    expect(isRowHighlighted('r-accounts-1')).toBe(false)
+    expect(isRowHighlighted('r-loans-1')).toBe(false)
+    expect(isRowHighlighted('r-customers-1')).toBe(true)
+    expect(isRowHighlighted('r-customers-2')).toBe(true)
+  })
+
+  it('Esc clears the highlight', () => {
+    renderRedesign()
+    fireEvent.click(findFieldButton('sf-acct-col'))
+    expect(isRowHighlighted('r-accounts-1')).toBe(true)
+    fireEvent.keyDown(document, { key: 'Escape' })
+    expect(isRowHighlighted('r-accounts-1')).toBe(false)
+  })
+
+  it('mousedown outside the sidebar AND outside a highlighted row clears the highlight', () => {
+    renderRedesign()
+    fireEvent.click(findFieldButton('sf-acct-col'))
+    expect(isRowHighlighted('r-accounts-1')).toBe(true)
+    // r-customers-1 is NOT highlighted by sf-acct-col, so mousedown there
+    // should fall through to the click-outside listener and clear.
+    fireEvent.mouseDown(getRowBody('r-customers-1'))
+    expect(isRowHighlighted('r-accounts-1')).toBe(false)
+  })
+
+  it('mousedown inside a highlighted row PRESERVES the highlight', () => {
+    // The user should be able to click a highlighted row to open its drawer
+    // without the act of clicking blowing away the highlight on its way in.
+    renderRedesign()
+    fireEvent.click(findFieldButton('sf-acct-col'))
+    expect(isRowHighlighted('r-accounts-1')).toBe(true)
+    fireEvent.mouseDown(getRowBody('r-accounts-1'))
+    expect(isRowHighlighted('r-accounts-1')).toBe(true)
+  })
+
+  it('mousedown inside the sidebar PRESERVES the highlight', () => {
+    renderRedesign()
+    fireEvent.click(findFieldButton('sf-acct-col'))
+    // Mousedown on the sidebar's filter row, list area, or header should
+    // not clear — the user might be aiming for another field row.
+    const sidebar = screen.getByTestId('source-schema-sidebar')
+    fireEvent.mouseDown(sidebar)
+    expect(isRowHighlighted('r-accounts-1')).toBe(true)
+  })
+
+  it('opening the drawer leaves the highlight intact (drawer + highlight coexist)', () => {
+    renderRedesign()
+    fireEvent.click(findFieldButton('sf-acct-col'))
+    fireEvent.click(getRowBody('r-accounts-1'))
+    expect(screen.getByTestId('mapping-drawer')).toBeInTheDocument()
+    expect(isRowHighlighted('r-accounts-1')).toBe(true)
+  })
+
+  it('drawer Approve completion clears the highlight (mild over-clear is intentional)', async () => {
+    // Founder-locked "additional concern" decision: the existing Gap 9
+    // post-action callback also clears the sidebar highlight so a stale
+    // rowId reference cannot survive a Reject. Approve clears too —
+    // mild over-clearing accepted in exchange for the simpler one-line
+    // fix in `handleDrawerActionComplete`.
+    //
+    // Use r-accounts-2 (status='needs_review') so the Approve button
+    // is enabled. r-accounts-1 is already 'approved' → button disabled.
+    renderRedesign('drawer=r-accounts-2')
+    fireEvent.click(findFieldButton('sf-acct-col'))
+    expect(isRowHighlighted('r-accounts-2')).toBe(true)
+    const approveBtn = screen.getByTestId('mapping-drawer-approve-button')
+    fireEvent.click(approveBtn)
+    // Approve runs inside a React transition; the post-action
+    // callback (which clears the highlight) fires after the mocked
+    // server resolves. Wait until the DOM reflects that.
+    await waitFor(() => {
+      expect(isRowHighlighted('r-accounts-2')).toBe(false)
+    })
+  })
+
+  it('drawer Reject completion clears the highlight (necessary — TFM is gone)', async () => {
+    renderRedesign('drawer=r-accounts-1')
+    fireEvent.click(findFieldButton('sf-acct-col'))
+    expect(isRowHighlighted('r-accounts-1')).toBe(true)
+    fireEvent.click(screen.getByTestId('mapping-drawer-reject-button'))
+    const confirmBtn = await screen.findByTestId('mapping-drawer-reject-confirm')
+    fireEvent.click(confirmBtn)
+    // Drawer closes on Reject and the parent's `handleDrawerActionComplete`
+    // clears the highlight in the same callback. The row stays in the
+    // DOM (only the TFM identity dissolves on the server; the in-memory
+    // fixture is unchanged), so we can assert the data attribute
+    // directly once the post-action callback has flushed.
+    await waitFor(() => {
+      expect(isRowHighlighted('r-accounts-1')).toBe(false)
+    })
   })
 })

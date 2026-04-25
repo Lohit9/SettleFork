@@ -192,6 +192,92 @@ export default function MappingRedesignContent({
     [setSidebarState],
   )
 
+  // ── Phase 3 Gap 11b — sidebar click-to-highlight ──────────────────
+  //
+  // When the user clicks a source field row in the sidebar, every
+  // main-view row that consumes that source gets a visual highlight.
+  // Single-select: one source field at a time. Founder-locked
+  // decisions (Gap 11b discussion 4-6 + additional concern):
+  //   • State lives at the outer component because both the sidebar
+  //     (active-row indicator) and the main view (row highlight)
+  //     consume it.
+  //   • The sourceField → consuming-rowIds map is derived client-side
+  //     via `useMemo` over `data.rows` (decision 6) — no contract
+  //     surface for `contributingTfmIds`.
+  //   • A SIBLING click-outside listener (decision 4) clears the
+  //     highlight when the user clicks anywhere outside the sidebar
+  //     and outside a highlighted row. Separate from the drawer's
+  //     existing click-outside listener so each can be tested in
+  //     isolation.
+  //   • Esc key clears the highlight (matches the drawer's Esc
+  //     behavior — same key clears whichever ephemeral surface is
+  //     active).
+  //   • Drawer action complete (Approve/Reject) clears the highlight
+  //     to prevent stale rowId references after a Reject deletes a
+  //     TFM. Approve case is mild over-clearing; Reject case is
+  //     necessary. See `MappingBody.handleDrawerActionComplete`.
+  const [highlightedSourceFieldId, setHighlightedSourceFieldId] = useState<
+    string | null
+  >(null)
+
+  const sourceFieldToRowIds = useMemo(
+    () => buildSourceFieldToRowIds(initialRedesignData?.rows ?? []),
+    [initialRedesignData?.rows],
+  )
+
+  const highlightedRowIds: Set<string> | null = useMemo(() => {
+    if (highlightedSourceFieldId === null) return null
+    return sourceFieldToRowIds.get(highlightedSourceFieldId) ?? new Set()
+  }, [highlightedSourceFieldId, sourceFieldToRowIds])
+
+  const clearHighlight = useCallback(() => {
+    setHighlightedSourceFieldId(null)
+  }, [])
+
+  const handleSidebarFieldClick = useCallback(
+    (fieldId: string) => {
+      // Single-select toggle: clicking the active field clears it,
+      // clicking a different field replaces.
+      setHighlightedSourceFieldId((prev) => (prev === fieldId ? null : fieldId))
+    },
+    [],
+  )
+
+  // Sibling click-outside listener — clears the highlight when the
+  // user mousedowns anywhere outside the sidebar and outside a
+  // highlighted row. This is intentionally separate from the
+  // drawer's own click-outside-to-close listener inside
+  // `MappingDrawer`. Each listener has a single responsibility and a
+  // single test surface.
+  useEffect(() => {
+    if (highlightedSourceFieldId === null) return
+    const onMouseDown = (e: MouseEvent) => {
+      const target = e.target as Node | null
+      if (target === null || !(target instanceof Element)) {
+        clearHighlight()
+        return
+      }
+      const insideSidebar = target.closest(
+        '[data-testid="source-schema-sidebar"]',
+      )
+      if (insideSidebar) return
+      const insideHighlightedRow = target.closest(
+        '[data-highlighted-row="true"]',
+      )
+      if (insideHighlightedRow) return
+      clearHighlight()
+    }
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') clearHighlight()
+    }
+    document.addEventListener('mousedown', onMouseDown)
+    document.addEventListener('keydown', onKeyDown)
+    return () => {
+      document.removeEventListener('mousedown', onMouseDown)
+      document.removeEventListener('keydown', onKeyDown)
+    }
+  }, [highlightedSourceFieldId, clearHighlight])
+
   return (
     <div className="flex h-full flex-col bg-gray-50">
       <PageHeader
@@ -212,6 +298,9 @@ export default function MappingRedesignContent({
           filter={sidebarFilter}
           onStateChange={handleSidebarStateChange}
           onFilterChange={setSidebarFilter}
+          sourceFields={initialRedesignData?.sourceFields ?? []}
+          highlightedSourceFieldId={highlightedSourceFieldId}
+          onFieldClick={handleSidebarFieldClick}
         />
         <div className="flex-1 overflow-auto">
           <div className="mx-auto w-full max-w-5xl px-6 py-6">
@@ -219,13 +308,46 @@ export default function MappingRedesignContent({
             {initialRedesignData === null ? (
               <NoDataState />
             ) : (
-              <MappingBody projectId={projectId} data={initialRedesignData} />
+              <MappingBody
+                projectId={projectId}
+                data={initialRedesignData}
+                highlightedRowIds={highlightedRowIds}
+                onClearHighlight={clearHighlight}
+              />
             )}
           </div>
         </div>
       </div>
     </div>
   )
+}
+
+/**
+ * Build a `Map<sourceFieldId, Set<rowId>>` over the canonical rows
+ * array. Used by the sidebar click-to-highlight interaction (Gap 11b)
+ * to find every main-view row that consumes a given source field.
+ *
+ * Only `MappedRow` rows contribute (other row kinds have no sources).
+ * `value_assignment`, `target_acknowledged`, and `unmapped` rows are
+ * silently skipped.
+ *
+ * Empty input → empty map (not null) so callers can treat the lookup
+ * uniformly.
+ */
+function buildSourceFieldToRowIds(
+  rows: MappingRow[],
+): Map<string, Set<string>> {
+  const out = new Map<string, Set<string>>()
+  for (const row of rows) {
+    if (row.kind !== 'mapped') continue
+    for (const src of row.sources) {
+      const sfId = src.sourceField.id
+      const existing = out.get(sfId)
+      if (existing) existing.add(row.id)
+      else out.set(sfId, new Set([row.id]))
+    }
+  }
+  return out
 }
 
 // ─── WIP banner ──────────────────────────────────────────────────────────────
@@ -251,9 +373,25 @@ function WipBanner({ projectId }: { projectId: string }) {
 function MappingBody({
   projectId,
   data,
+  highlightedRowIds,
+  onClearHighlight,
 }: {
   projectId: string
   data: MappingsForRedesignResult
+  /**
+   * Phase 3 Gap 11b — set of row ids the sidebar's click-to-highlight
+   * interaction is currently illuminating. `null` means no highlight
+   * is active. The set itself is never written to; callers re-derive
+   * via `useMemo` whenever the source field selection changes.
+   */
+  highlightedRowIds: Set<string> | null
+  /**
+   * Clears the sidebar highlight. Invoked from
+   * `handleDrawerActionComplete` so that an Approve/Reject does not
+   * leave a stale rowId reference behind (Reject deletes the TFM
+   * entirely, so the highlighted row identity dissolves).
+   */
+  onClearHighlight: () => void
 }) {
   const router = useRouter()
   const searchParams = useSearchParams()
@@ -364,13 +502,21 @@ function MappingBody({
   // navigating, so the page rerenders with fresh `MappingsForRedesignResult`.
   const handleDrawerActionComplete = useCallback(
     (action: 'approve' | 'reject', _rowId: string) => {
+      // Phase 3 Gap 11b — clear the sidebar highlight after any
+      // drawer action. Reject deletes the TFM (the highlighted row
+      // identity dissolves on the server), so a stale highlight
+      // would point at a row id that no longer exists. Approve
+      // preserves identity but also clears the highlight — mild
+      // over-clearing is acceptable per the founder's "additional
+      // concern" decision in the Gap 11b alignment.
+      onClearHighlight()
       router.refresh()
       if (action === 'reject') {
         setDrawerRowId(null)
         writeUrl(filters, null)
       }
     },
-    [router, filters, writeUrl],
+    [router, filters, writeUrl, onClearHighlight],
   )
 
   useEffect(() => {
@@ -508,6 +654,7 @@ function MappingBody({
                 filteredCount={isDefaultState ? undefined : perGroup}
                 onRowClick={handleRowClick}
                 openRowId={drawerRowId}
+                highlightedRowIds={highlightedRowIds}
               />
             )
           })}
