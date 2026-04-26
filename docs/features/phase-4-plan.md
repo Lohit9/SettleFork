@@ -1,6 +1,6 @@
 # Phase 4 plan — mutation completeness
 
-**Status:** implementation in progress (Phase 4a underway). Created 2026-04-25.
+**Status:** Phase 4a complete (2026-04-26). Phase 4b / 4c / 4-extras pending. Created 2026-04-25; last updated 2026-04-26.
 **Predecessor:** Phase 3 closed at `b900538` on `main`. The
 redesign UI is feature-flag gated (`projects.use_mapping_redesign`)
 and currently active only on Heritage Core in production.
@@ -15,9 +15,14 @@ and currently active only on Heritage Core in production.
 | 4a-3 | Cross-table picker + cross-table create flow (W1 cross-table) — includes Apply-RPC transparency stack (founder decision §10-OQ-1) | ✅ shipped 2026-04-25 |
 | 4a-4a | "Draft discarded" toast primitive + row-switch Undo affordance | ✅ shipped 2026-04-25 |
 | 4a-4b | AI Suggest UI integration (W6 in W1's form — `[Suggest with AI]` footer + in-form pill, ConfidencePill, Why? toggle, replace-warning, laundering-prevention save metadata) | ✅ shipped 2026-04-26 |
-| 4a-5 | W6 cross-table AI suggestions (deferred LLM prompt work — wrapper hard-strips cross-table tails today) | ⏳ pending |
+| 4a-5 | Closure docs + code cleanup pass (`Phase 4a complete` section in `mapping-redesign.md`, stale-comment removal in `MappingDrawer.tsx`, established-patterns reference for 4b/4c maintainers) | ✅ shipped 2026-04-26 |
+| 4a-6 | Cross-table Transform apply — extend `dq_apply_field_transform_joined` to branch on `p_join_spec != NULL`, remove `CROSS_TABLE_TRANSFORM_NOT_YET_SUPPORTED` short-circuit, drop transparency stack | ⏳ pending — RPC design |
+| 4-extras | Cross-table AI Suggest (LLM prompt redesign for joined sources), `AbortSignal` threading through `suggestMappingForTarget`, source-side acknowledgment toggle in sidebar | ⏳ pending — only if Heritage demands |
 | 4b | W2 + W3 + W4 (edit sources, combination, un-acknowledge) | ⏳ pending |
 | 4c | W5 (bulk operations) | ⏳ pending |
+| 5-Cleanup | Legacy `MappingContent.tsx` retirement, feature flag removal, shim deletion, stale prose copy revisit | ⏳ pending — 30-day canary gate |
+
+**Phase 4a closure summary:** Heritage Core has the full mapping authoring loop end-to-end in the redesign UI as of 2026-04-26: manual creation (same-table + cross-table), AI Suggest with confidence + rationale, audit-correct provenance via laundering prevention, toast-with-Undo for accidental discards, all four close paths handled coherently. See `docs/features/mapping-redesign.md` → "Phase 4a complete — Mapping authoring loop (2026-04-26)" for the full disposition including capabilities, known limitations, and the patterns-established reference for maintainers working on 4b / 4c / 5.
 
 This document is the design artefact we work through together
 before firing each Phase 4 implementation prompt. Decisions
