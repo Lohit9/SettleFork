@@ -31,6 +31,13 @@ import { supabaseAdmin } from '@/lib/supabase/admin'
 //   - `acknowledgment_removed`        — W4 un-acknowledge target field
 //   - `mapping_bulk_approved`         — W5 approveAll / approveHighConfidence
 //   - `mapping_bulk_rejected`         — W5 rejectAll
+//   - `transformation_reset`          — emitted by `editMappingSources`
+//                                       (4b-1) when a source change forces
+//                                       the field's transform to be deleted
+//                                       and its staged data reverted.
+//                                       Metadata: { reason: 'mapping_edited',
+//                                       target_field_mapping_id, target_field,
+//                                       rows_reverted }.
 export type ActionType =
   | 'fix_applied'
   | 'fix_reverted'
@@ -52,6 +59,7 @@ export type ActionType =
   | 'acknowledgment_removed'
   | 'mapping_bulk_approved'
   | 'mapping_bulk_rejected'
+  | 'transformation_reset'
   | 'rule_added'
   | 'rule_deleted'
   | 'scan_run'

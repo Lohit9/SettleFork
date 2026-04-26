@@ -413,8 +413,16 @@ describe('[mappings-for-redesign 4a] findOrCreateTableMapping helper', () => {
 // ─────────────────────────────────────────────────────────────────────
 
 describe('[mappings-for-redesign 4a] suggestMappingForTarget', () => {
-  // The function is the last in the file; slice to EOF marker.
-  const body = SRC.slice(SRC.indexOf('export async function suggestMappingForTarget('))
+  // Slice bounded to the function body. The file used to terminate at
+  // `suggestMappingForTarget`; Phase 4b-1 added `editMappingSources` /
+  // `updateMappingCombination` / `previewEditInvalidation` after it, so
+  // we now slice up to the JSDoc banner that opens `editMappingSources`.
+  const startIdx = SRC.indexOf('export async function suggestMappingForTarget(')
+  const endIdx = SRC.indexOf(
+    '// ─── Write path — Phase 4b-1',
+    startIdx,
+  )
+  const body = SRC.slice(startIdx, endIdx > 0 ? endIdx : undefined)
 
   it('checks auth + editor permission BEFORE the rate limiter (cheap-check ordering)', () => {
     const userIdx = body.indexOf('supabase.auth.getUser()')

@@ -2403,7 +2403,7 @@ describe('MappingDrawer Phase 4a-2 — Save flow', () => {
       await Promise.resolve()
       await Promise.resolve()
     })
-    expect(onSaveSuccess).toHaveBeenCalledWith('tfm-new-id')
+    expect(onSaveSuccess).toHaveBeenCalledWith('tfm-new-id', undefined)
     // Form deactivates so the body returns to the empty-state. (In
     // production, the parent page swaps the row to a mapped one in
     // parallel — this is not asserted here.)

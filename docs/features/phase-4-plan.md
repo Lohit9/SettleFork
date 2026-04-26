@@ -1,6 +1,6 @@
 # Phase 4 plan — mutation completeness
 
-**Status:** Phase 4a complete (2026-04-26, including 4a-6 cross-table apply). Phase 4b / 4c / 4-extras pending. Created 2026-04-25; last updated 2026-04-26.
+**Status:** Phase 4a complete (2026-04-26, including 4a-6 cross-table apply). Phase 4b-1 complete (2026-04-26 — W2 + W3 edit sources / combination). Phase 4b-2 / 4c / 4-extras pending. Created 2026-04-25; last updated 2026-04-26.
 **Predecessor:** Phase 3 closed at `b900538` on `main`. The
 redesign UI is feature-flag gated (`projects.use_mapping_redesign`)
 and currently active only on Heritage Core in production.
@@ -18,7 +18,8 @@ and currently active only on Heritage Core in production.
 | 4a-5 | Closure docs + code cleanup pass (`Phase 4a complete` section in `mapping-redesign.md`, stale-comment removal in `MappingDrawer.tsx`, established-patterns reference for 4b/4c maintainers) | ✅ shipped 2026-04-26 |
 | 4a-6 | Cross-table Transform apply — extend `dq_apply_field_transform_joined` to branch on `p_join_spec != NULL` (migration 076), `buildJoinSpec` derivation in action layer, retire `CROSS_TABLE_TRANSFORM_NOT_YET_SUPPORTED` short-circuit and the three-layer transparency stack | ✅ shipped 2026-04-26 |
 | 4-extras | Cross-table AI Suggest (LLM prompt redesign for joined sources), `AbortSignal` threading through `suggestMappingForTarget`, source-side acknowledgment toggle in sidebar | ⏳ pending — only if Heritage demands |
-| 4b | W2 + W3 + W4 (edit sources, combination, un-acknowledge) | ⏳ pending |
+| 4b-1 | W2 + W3 (edit sources via `editMappingSources`, edit combination via `updateMappingCombination`, drawer Edit affordance, EditInvalidationDialog warn flow, post-save Re-author deep-link) | ✅ shipped 2026-04-26 |
+| 4b-2 | W4 (un-acknowledge — fast-follow within same week per founder §9.1) | ⏳ pending |
 | 4c | W5 (bulk operations) | ⏳ pending |
 | 5-Cleanup | Legacy `MappingContent.tsx` retirement, feature flag removal, shim deletion, stale prose copy revisit | ⏳ pending — 30-day canary gate |
 
@@ -761,22 +762,59 @@ chain:
     smoke test
 
 **Phase 4b — edit existing mapping (W2 + W3 + W4)**
-- Wraps `editFieldMapping`, `deleteFieldMapping` (already wrapped),
-  `removeAcknowledgment`, new `updateMappingCombination`
-- Adds inline-edit affordances to MappedBody Sources +
-  Combination sections; adds Un-acknowledge footer button to
-  AcknowledgedBody
-- New ActionTypes: `mapping_sources_changed`,
-  `mapping_combination_changed`, `acknowledgment_removed`
-- **Founder value:** medium-high — closes the "I have to drop
-  back to legacy to fix a wrong mapping" gap
-- **Risk:** low-medium — heavy reuse of W1's Radix Select source
-  picker + Gap 9 confirmation-dialog pattern
-- **Estimate:** 2-3 sessions
-  - 1 session: wrappers + new `updateMappingCombination` action +
-    server tests
-  - 1-2 sessions: SourceCard ⋯ menu + inline-edit transitions +
-    confirmation dialog reuse + smoke test
+
+Split into two sub-phases per founder §9.1 (locked 2026-04-26):
+
+- **4b-1 — W2 + W3 (sources + combination)** ✅ shipped 2026-04-26
+  - Wraps `editMappingSources` (atomic DELETE+INSERT via the new
+    `dq_replace_mapping_sources` RPC + status revert + transform
+    reset on source change), `updateMappingCombination`
+    (combination-only edit, no transform reset per founder §1.3),
+    `previewEditInvalidation` (read-only pre-save query for the
+    EditInvalidationDialog).
+  - Drawer surface: Edit button rightmost in `ApproveRejectButtons`
+    footer (founder §3.3), hidden on rejected / target_acknowledged
+    / unmapped / custom_sql. Body switches to the parameterized
+    `CreateMappingForm` (mode='edit'); footer collapses to
+    `[Cancel] [Save changes]`.
+  - Form parameterization: `CreateMappingForm.mode='create'|'edit'`
+    + `editInitialState` prop. Hydrates picker + combination +
+    join annotations from existing TFM (founder §5.2 — pre-populated
+    annotations preserved across edits). Submit handler routes
+    create → `createFieldMapping`; edit → `editMappingSources`.
+    AI Suggest hidden in edit mode (deferred to 4-extras).
+    `DiscardChangesDialog` extracted to its own file for reuse.
+  - Apply-invalidation flow: `previewEditInvalidation` runs before
+    save; if a transform exists with staged rows, an
+    `EditInvalidationDialog` warns the user before proceeding.
+    Post-save toast surfaces a `[Re-author transform]` deep-link
+    to the Transform tab (founder §2.2 + §3.1).
+  - Activity-log additions: `transformation_reset` ActionType
+    emitted alongside `mapping_sources_changed` when a source
+    change forces a reset (metadata `{ reason: 'mapping_edited' }`,
+    founder §8.1).
+  - Test coverage: ~50 source-level invariants across actions +
+    components, plus 3 on-demand Heritage integration tests
+    (`tests/integration/edit-mapping-heritage.test.ts`).
+  - See `docs/features/mapping-redesign.md` →
+    "Phase 4b-1 — edit mapping sources / combination (2026-04-26)"
+    for the full disposition.
+
+- **4b-2 — W4 (un-acknowledge)** ⏳ pending
+  - Wraps `removeAcknowledgment`. Adds Un-acknowledge footer
+    button to `AcknowledgedBody`. New ActionType:
+    `acknowledgment_removed` (already in the enum from Pre-prep).
+  - Fast-follow within the same week (founder §9.1). Smaller
+    surface than 4b-1 — single wrapper, single footer button, no
+    form parameterization.
+  - **Estimate:** 1 session.
+
+- **Founder value:** medium-high — 4b-1 closes the "I have to drop
+  back to legacy to fix a wrong mapping" gap.
+- **Risk:** low-medium — heavy reuse of 4a's `CreateMappingForm`
+  + `DiscardChangesDialog` + drawer state machine.
+- **Estimate:** 4-5 sessions total (3-4 for 4b-1 + 1 for 4b-2,
+  founder §10.1).
 
 **Phase 4c — bulk operations (W5)**
 - Wraps `approveAllFieldMappings`, `rejectAllFieldMappings`,

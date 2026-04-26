@@ -1530,3 +1530,1116 @@ Respond with ONLY valid JSON in this exact shape:
     },
   }
 }
+
+// ─── Write path — Phase 4b-1 (edit existing mappings) ────────────────────────
+//
+// `editMappingSources`, `updateMappingCombination`, and `previewEditInvalidation`
+// form the W2 (sources) + W3 (combination) edit surfaces for an EXISTING TFM
+// reachable from the redesign drawer. New behavior contract (per founder
+// decisions §1-§10 in the Phase 4b investigation):
+//
+//   • Status revert  — any source/combination change flips the TFM back to
+//                      `needs_review` regardless of prior state. The user
+//                      must explicitly Approve again.
+//   • Provenance laundering — when a source change strips every original
+//                      AI-suggested source, the TFM-level `ai_reasoning`
+//                      and per-source AI markers are wiped to manual
+//                      provenance. Retaining ≥1 original AI source
+//                      preserves the AI markers on retained rows; new
+//                      rows always carry manual markers.
+//   • Transform reset — source edits call `resetFieldTransform`, which
+//                      deletes the transformations row AND reverts staged
+//                      data (strips the target field key). Combination-only
+//                      edits do NOT reset the transform (§1.3) — the
+//                      transform SQL is still valid, only the combination
+//                      semantics changed.
+//   • Dominant table swap blocked (§5) — changing the FIRST source's
+//                      table would require re-anchoring the table-mapping
+//                      and re-deriving every join_spec. Out of scope for
+//                      4b-1; surfaces as `DOMINANT_TABLE_CHANGED` so the
+//                      UI can prompt "remove the original primary source
+//                      first, then add the new dominant table". Founder
+//                      decision §5: ship later if real demand surfaces.
+//   • Bare-acknowledged TFMs (`is_acknowledged=true`, no sources) cannot
+//                      be edited via this path — the un-acknowledge flow
+//                      ships as W4 in 4b-2 (founder decision §3.4 +
+//                      §9.1). Returns `TFM_ACKNOWLEDGED`.
+//   • Defensive `TFM_REJECTED` — post Gap-9 reject == delete, so a
+//                      rejected TFM should be unreachable; if a legacy
+//                      rejected row survives, refuse to mutate it.
+//
+// `previewEditInvalidation` is a read-only pre-save query the drawer
+// invokes BEFORE calling `editMappingSources` so it can show the
+// EditInvalidationDialog warning when (a) a transform exists for this
+// field AND (b) staged_data_rows reference the target field key. The
+// drawer-side dialog routes through `editMappingSources` regardless on
+// confirm — the preview only drives copy.
+
+export type EditMappingErrorCode =
+  | 'PERMISSION_DENIED'
+  | 'NOT_FOUND'
+  | 'VALIDATION'
+  | 'MAINTENANCE_MODE'
+  | 'INTERNAL'
+  /** Cross-table FK precheck failed; same shape as create-time. */
+  | 'CROSS_TABLE_AMBIGUOUS'
+  /**
+   * The user picked a different dominant-table source. Re-anchoring the
+   * table-mapping (and re-deriving every join_spec) is out of scope for
+   * 4b-1; the UI prompts the user to remove the original primary first.
+   */
+  | 'DOMINANT_TABLE_CHANGED'
+  /**
+   * Defensive — post-Gap-9 a rejected TFM should be unreachable
+   * (reject == delete). If a legacy `status='rejected'` row survives,
+   * refuse to mutate it; the user must reject (delete) and re-create.
+   */
+  | 'TFM_REJECTED'
+  /**
+   * Bare-acknowledged TFM (`is_acknowledged=true`, no sources). Edit
+   * doesn't apply; the user must un-acknowledge first (W4 in 4b-2).
+   */
+  | 'TFM_ACKNOWLEDGED'
+
+export type EditMappingResult =
+  | {
+      success: true
+      tfmId: string
+      /**
+       * True when `resetFieldTransform` actually deleted a transform row.
+       * The drawer surfaces a "Re-author transform" deep-link in the
+       * post-save toast when this is true.
+       */
+      transformReset: boolean
+      /** Number of staged_data_rows whose target field key was reverted. */
+      stagedRowsReverted: number
+      /**
+       * True when the source set changed (set diff vs. existing). Combination-
+       * only or no-op edits report `false`. Drives whether the drawer's
+       * post-save toast mentions invalidation at all.
+       */
+      sourcesChanged: boolean
+    }
+  | {
+      success: false
+      error: string
+      errorCode: EditMappingErrorCode
+      candidateFkFields?: string[]
+      ambiguousJoinedTableId?: string
+      ambiguousJoinedTableName?: string
+      dominantTableName?: string
+    }
+
+export type UpdateCombinationErrorCode =
+  | 'PERMISSION_DENIED'
+  | 'NOT_FOUND'
+  | 'VALIDATION'
+  | 'MAINTENANCE_MODE'
+  | 'INTERNAL'
+  | 'TFM_REJECTED'
+  | 'TFM_ACKNOWLEDGED'
+
+export type UpdateCombinationResult =
+  | { success: true; tfmId: string }
+  | {
+      success: false
+      error: string
+      errorCode: UpdateCombinationErrorCode
+    }
+
+export type PreviewEditInvalidationResult =
+  | {
+      success: true
+      hasTransform: boolean
+      /**
+       * Count of staged_data_rows whose `transformed_row_data` JSONB
+       * carries the target field name as a key. Capped at
+       * PREVIEW_INVALIDATION_COUNT_CAP (101) so the dialog can render
+       * "100+ staged rows" without paging through millions of rows.
+       */
+      stagedRowCount: number
+      /** True when stagedRowCount hit the cap (i.e. real count is ≥ cap). */
+      capped: boolean
+    }
+  | {
+      success: false
+      error: string
+      errorCode: 'NOT_FOUND' | 'PERMISSION_DENIED' | 'INTERNAL'
+    }
+
+/**
+ * Founder decision §2.1 — show exact count when ≤100, qualitative copy
+ * ("100+ staged rows") otherwise. The preview query caps at
+ * `PREVIEW_INVALIDATION_COUNT_CAP` so a project with millions of staged
+ * rows doesn't punish the dialog with a full count.
+ */
+// Note: `'use server'` files can only export async functions, so this
+// is a module-internal const. The number is also documented in
+// `docs/features/mapping-redesign.md` and referenced by name in
+// `EditInvalidationDialog.tsx`'s JSDoc.
+const PREVIEW_INVALIDATION_COUNT_CAP = 101
+
+/**
+ * Edit the source set of an existing TFM. See file header for the full
+ * 4b-1 contract. This is the W2 server-side surface.
+ *
+ * SEQUENCE:
+ *   1.  Cheap input validation (1+ sources, no dups, custom_sql blocked,
+ *       single↔concat sanity).
+ *   2.  Auth (Supabase user).
+ *   3.  Identity reads: TFM (with project_id, target_field_id, status,
+ *       is_acknowledged, ai_reasoning, combination_type) + existing
+ *       mapping_sources (with source_field_id + ai_reasoning).
+ *   4.  Project permission gate (`requireProjectPermission(..., 'editor')`).
+ *   5.  Defensive state guards: TFM_REJECTED (post-Gap-9 unreachable),
+ *       TFM_ACKNOWLEDGED (bare-ack TFM has no sources to edit).
+ *   6.  Maintenance-mode guard.
+ *   7.  Source field identity reads (project ownership) + reorder to
+ *       input order (dominant = ordinal 0).
+ *   8.  Dominant-table swap detection. The first new source's table_id
+ *       MUST match the original dominant. Mismatch → DOMINANT_TABLE_CHANGED.
+ *   9.  Cross-table FK precheck (parallel to createFieldMapping).
+ *  10.  Provenance laundering: read existing AI-suggested source ids,
+ *       compute retained set, derive new TFM-level ai_reasoning and
+ *       per-source ai_reasoning markers.
+ *  11.  Compute set-diff to drive `sourcesChanged` flag (drives
+ *       transform reset + activity log + post-save toast).
+ *  12.  RPC `dq_replace_mapping_sources` — atomic DELETE+INSERT. Fires
+ *       only when something actually changed (no-op edits skip).
+ *  13.  UPDATE target_field_mappings SET status='needs_review',
+ *       combination_type=<new>, ai_reasoning=<new>, updated_at=now().
+ *  14.  If sourcesChanged: `resetFieldTransform` to clean up transform
+ *       row + revert staged data.
+ *  15.  Coverage recompute on the (existing) table_mappings row.
+ *  16.  revalidatePath /mapping AND /transform.
+ *  17.  Activity log: `mapping_sources_changed` always (even no-op so
+ *       the audit trail captures the user's explicit edit click).
+ *       Plus `transformation_reset` when applicable.
+ *  18.  Return result with transformReset + stagedRowsReverted +
+ *       sourcesChanged so the drawer can drive its post-save toast.
+ */
+export async function editMappingSources(input: {
+  tfmId: string
+  sourceFieldIds: string[]
+  combinationType: CreateFieldMappingCombinationType | 'custom_sql'
+  /** See `createFieldMapping`'s `joinAnnotations` doc — same shape. */
+  joinAnnotations?: Record<string, string>
+}): Promise<EditMappingResult> {
+  const {
+    tfmId,
+    sourceFieldIds,
+    combinationType,
+    joinAnnotations = {},
+  } = input
+
+  // ── Step 1: validation ───────────────────────────────────────────────────
+  if (!tfmId) {
+    return {
+      success: false,
+      error: 'tfmId is required',
+      errorCode: 'VALIDATION',
+    }
+  }
+  if (!Array.isArray(sourceFieldIds) || sourceFieldIds.length === 0) {
+    return {
+      success: false,
+      error: 'At least one source field is required',
+      errorCode: 'VALIDATION',
+    }
+  }
+  if (combinationType === 'custom_sql') {
+    return {
+      success: false,
+      error:
+        'Custom SQL combinations are authored on the Transform tab, not here',
+      errorCode: 'VALIDATION',
+    }
+  }
+  if (combinationType === 'single' && sourceFieldIds.length !== 1) {
+    return {
+      success: false,
+      error: "combination_type 'single' requires exactly one source field",
+      errorCode: 'VALIDATION',
+    }
+  }
+  if (combinationType !== 'single' && sourceFieldIds.length < 2) {
+    return {
+      success: false,
+      error: `combination_type '${combinationType}' requires at least two source fields`,
+      errorCode: 'VALIDATION',
+    }
+  }
+  if (new Set(sourceFieldIds).size !== sourceFieldIds.length) {
+    return {
+      success: false,
+      error: 'Duplicate source fields are not allowed',
+      errorCode: 'VALIDATION',
+    }
+  }
+
+  // ── Step 2: auth ─────────────────────────────────────────────────────────
+  const supabase = await createClient()
+  const {
+    data: { user },
+  } = await supabase.auth.getUser()
+  if (!user) {
+    return {
+      success: false,
+      error: 'Not authenticated',
+      errorCode: 'PERMISSION_DENIED',
+    }
+  }
+
+  // ── Step 3: identity read — TFM + existing sources ───────────────────────
+  const { data: tfm } = await supabaseAdmin
+    .from('target_field_mappings')
+    .select(
+      'id, project_id, target_field_id, status, is_acknowledged, ai_reasoning, combination_type',
+    )
+    .eq('id', tfmId)
+    .maybeSingle<{
+      id: string
+      project_id: string
+      target_field_id: string
+      status: 'needs_review' | 'approved' | 'rejected'
+      is_acknowledged: boolean
+      ai_reasoning: string | null
+      combination_type: string | null
+    }>()
+  if (!tfm) {
+    return {
+      success: false,
+      error: 'Mapping not found',
+      errorCode: 'NOT_FOUND',
+    }
+  }
+  const projectId = tfm.project_id
+
+  // ── Step 4: permission ───────────────────────────────────────────────────
+  const perm = await requireProjectPermission(projectId, 'editor')
+  if (!perm.allowed) {
+    return {
+      success: false,
+      error: perm.error ?? 'Insufficient permissions',
+      errorCode: 'PERMISSION_DENIED',
+    }
+  }
+
+  // ── Step 5: defensive state guards ──────────────────────────────────────
+  if (tfm.status === 'rejected') {
+    return {
+      success: false,
+      error:
+        "This mapping has been rejected. Reject and re-create instead of editing.",
+      errorCode: 'TFM_REJECTED',
+    }
+  }
+  if (tfm.is_acknowledged) {
+    return {
+      success: false,
+      error:
+        "This field is acknowledged. Un-acknowledge it first to map it.",
+      errorCode: 'TFM_ACKNOWLEDGED',
+    }
+  }
+
+  // ── Step 6: maintenance gate ─────────────────────────────────────────────
+  try {
+    await assertMappingWritesEnabled(projectId)
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err)
+    if (
+      message ===
+      'Mapping writes are temporarily disabled for scheduled maintenance'
+    ) {
+      return {
+        success: false,
+        error: message,
+        errorCode: 'MAINTENANCE_MODE',
+      }
+    }
+    return {
+      success: false,
+      error: message,
+      errorCode: 'NOT_FOUND',
+    }
+  }
+
+  // ── Step 7: identity reads — target field + source fields ───────────────
+  const { data: targetField, error: tfErr } = await supabaseAdmin
+    .from('fields')
+    .select('id, name, table_id, tables!inner(datasets!inner(project_id))')
+    .eq('id', tfm.target_field_id)
+    .single<{
+      id: string
+      name: string
+      table_id: string
+      tables:
+        | { datasets: { project_id: string } | { project_id: string }[] | null }
+        | {
+            datasets: { project_id: string } | { project_id: string }[] | null
+          }[]
+        | null
+    }>()
+  if (tfErr || !targetField) {
+    return {
+      success: false,
+      error: 'Target field not found',
+      errorCode: 'NOT_FOUND',
+    }
+  }
+
+  const { data: sourceFields, error: sfErr } = await supabaseAdmin
+    .from('fields')
+    .select('id, name, table_id, tables!inner(datasets!inner(project_id))')
+    .in('id', sourceFieldIds)
+    .returns<
+      Array<{
+        id: string
+        name: string
+        table_id: string
+        tables:
+          | {
+              datasets:
+                | { project_id: string }
+                | { project_id: string }[]
+                | null
+            }
+          | {
+              datasets:
+                | { project_id: string }
+                | { project_id: string }[]
+                | null
+            }[]
+          | null
+      }>
+    >()
+  if (sfErr || !sourceFields) {
+    return {
+      success: false,
+      error: 'Failed to read source fields',
+      errorCode: 'INTERNAL',
+    }
+  }
+  if (sourceFields.length !== sourceFieldIds.length) {
+    return {
+      success: false,
+      error: 'One or more source fields not found',
+      errorCode: 'NOT_FOUND',
+    }
+  }
+  for (const sf of sourceFields) {
+    const sfTables = Array.isArray(sf.tables) ? sf.tables[0] : sf.tables
+    const sfDatasets = Array.isArray(sfTables?.datasets)
+      ? sfTables?.datasets[0]
+      : sfTables?.datasets
+    const sfProject = sfDatasets?.project_id
+    if (sfProject !== projectId) {
+      return {
+        success: false,
+        error: 'One or more source fields do not belong to this project',
+        errorCode: 'VALIDATION',
+      }
+    }
+  }
+  const sourceFieldsById = new Map(sourceFields.map((f) => [f.id, f]))
+  const orderedSources = sourceFieldIds.map((id) => sourceFieldsById.get(id)!)
+
+  // ── Step 7b: identity read — existing mapping_sources ───────────────────
+  // Captures both the original dominant table (for swap detection) and
+  // the AI-suggested source ids (for provenance laundering).
+  const { data: existingSources, error: esErr } = await supabaseAdmin
+    .from('mapping_sources')
+    .select('source_field_id, source_table_id, ai_reasoning, ordinal')
+    .eq('target_field_mapping_id', tfm.id)
+    .order('ordinal', { ascending: true })
+    .returns<
+      Array<{
+        source_field_id: string | null
+        source_table_id: string | null
+        ai_reasoning: string | null
+        ordinal: number | null
+      }>
+    >()
+  if (esErr || !existingSources) {
+    return {
+      success: false,
+      error: 'Failed to read existing mapping sources',
+      errorCode: 'INTERNAL',
+    }
+  }
+  const originalDominantTableId =
+    existingSources.length > 0 ? existingSources[0].source_table_id : null
+  // AI-suggested rows are tagged with `ai_reasoning` starting with
+  // 'AI-suggested:' (per createFieldMapping's perSourceReasoning). Manual
+  // rows carry 'Manually selected by user'. Provenance is tracked at the
+  // source row level so a single TFM can mix retained-AI + new-manual
+  // rows after an edit.
+  const originalAiSuggestedSourceIds = new Set<string>(
+    existingSources
+      .filter(
+        (s) =>
+          s.source_field_id !== null &&
+          typeof s.ai_reasoning === 'string' &&
+          s.ai_reasoning.startsWith('AI-suggested:'),
+      )
+      .map((s) => s.source_field_id as string),
+  )
+  const existingSourceFieldIds = new Set<string>(
+    existingSources
+      .filter((s) => s.source_field_id !== null)
+      .map((s) => s.source_field_id as string),
+  )
+
+  // ── Step 8: dominant-table swap detection ───────────────────────────────
+  const newDominantTableId = orderedSources[0].table_id
+  if (
+    originalDominantTableId !== null &&
+    newDominantTableId !== originalDominantTableId
+  ) {
+    return {
+      success: false,
+      error:
+        "Changing the first source's table requires re-creating the mapping. Remove the original primary source, then add the new one.",
+      errorCode: 'DOMINANT_TABLE_CHANGED',
+    }
+  }
+
+  // ── Step 9: cross-table FK precheck ─────────────────────────────────────
+  // Logic mirrors `createFieldMapping` Step 5b. Duplicated inline (rather
+  // than extracted into a shared helper) so a regression in one path
+  // cannot silently affect the other; the duplication is local to this
+  // file and easy to reconcile when both paths converge in a later phase.
+  const sourceTableId = newDominantTableId
+  const uniqueSourceTableIds = new Set(orderedSources.map((s) => s.table_id))
+  const isCrossTable = uniqueSourceTableIds.size > 1
+
+  const joinSpecBySourceFieldId = new Map<
+    string,
+    { viaSourceTable: string; viaFkField: string; toFkField: string | null }
+  >()
+
+  if (isCrossTable) {
+    const joinedTableIds = [...uniqueSourceTableIds].filter(
+      (id) => id !== newDominantTableId,
+    )
+
+    const { data: tableRows, error: tablesErr } = await supabaseAdmin
+      .from('tables')
+      .select('id, name')
+      .in('id', [newDominantTableId, ...joinedTableIds])
+    if (tablesErr || !tableRows) {
+      return {
+        success: false,
+        error: 'Failed to read source tables for FK inference',
+        errorCode: 'INTERNAL',
+      }
+    }
+    const tablesById = new Map<string, FkInferenceTable>(
+      tableRows.map((t) => [t.id, { id: t.id, name: t.name }]),
+    )
+    const dominantTableName = tablesById.get(newDominantTableId)?.name ?? ''
+
+    const { data: domFieldsRaw, error: domErr } = await supabaseAdmin
+      .from('fields')
+      .select('name, is_foreign_key, fk_reference, ordinal_position')
+      .eq('table_id', newDominantTableId)
+      .eq('is_foreign_key', true)
+      .order('ordinal_position', { ascending: true })
+    if (domErr) {
+      return {
+        success: false,
+        error: 'Failed to read dominant table FK fields',
+        errorCode: 'INTERNAL',
+      }
+    }
+    const dominantFkFields: FkInferenceField[] = (domFieldsRaw ?? []).map(
+      (f) => ({
+        name: f.name as string,
+        is_foreign_key: f.is_foreign_key as boolean | null,
+        fk_reference: f.fk_reference as string | null,
+      }),
+    )
+
+    for (const joinedTableId of joinedTableIds) {
+      const joinedTableName = tablesById.get(joinedTableId)?.name ?? ''
+      if (!joinedTableName) {
+        return {
+          success: false,
+          error: 'Joined source table not found',
+          errorCode: 'NOT_FOUND',
+        }
+      }
+
+      const candidates = inferFkCandidates(
+        dominantFkFields,
+        joinedTableId,
+        joinedTableName,
+        tablesById,
+      )
+
+      let pickedFkName: string | null = null
+      let needsPersistedSpec = false
+
+      if (candidates.length === 0) {
+        return {
+          success: false,
+          error: `No foreign key in ${dominantTableName} references ${joinedTableName}. Add an FK in the source schema or use the legacy Mapping page for ad-hoc joins.`,
+          errorCode: 'CROSS_TABLE_AMBIGUOUS',
+          candidateFkFields: [],
+          ambiguousJoinedTableId: joinedTableId,
+          ambiguousJoinedTableName: joinedTableName,
+          dominantTableName,
+        }
+      } else if (candidates.length === 1) {
+        pickedFkName = candidates[0]
+        const override = joinAnnotations[joinedTableId]
+        if (override !== undefined && override !== pickedFkName) {
+          return {
+            success: false,
+            error: `Selected join field '${override}' is not a valid FK from ${dominantTableName} to ${joinedTableName}`,
+            errorCode: 'VALIDATION',
+          }
+        }
+        needsPersistedSpec = false
+      } else {
+        const override = joinAnnotations[joinedTableId]
+        if (override === undefined) {
+          return {
+            success: false,
+            error: `Multiple foreign keys in ${dominantTableName} reference ${joinedTableName}. Pick the join field.`,
+            errorCode: 'CROSS_TABLE_AMBIGUOUS',
+            candidateFkFields: candidates,
+            ambiguousJoinedTableId: joinedTableId,
+            ambiguousJoinedTableName: joinedTableName,
+            dominantTableName,
+          }
+        }
+        if (!candidates.includes(override)) {
+          return {
+            success: false,
+            error: `Selected join field '${override}' is not a valid FK from ${dominantTableName} to ${joinedTableName}`,
+            errorCode: 'VALIDATION',
+          }
+        }
+        pickedFkName = override
+        needsPersistedSpec = true
+      }
+
+      const matchedField = dominantFkFields.find(
+        (f) => f.name === pickedFkName,
+      )
+      const toFkField = matchedField?.fk_reference
+        ? parseToFkFieldFromReference(matchedField.fk_reference)
+        : null
+
+      if (needsPersistedSpec) {
+        for (const sf of orderedSources) {
+          if (sf.table_id === joinedTableId) {
+            joinSpecBySourceFieldId.set(sf.id, {
+              viaSourceTable: dominantTableName,
+              viaFkField: pickedFkName!,
+              toFkField,
+            })
+          }
+        }
+      }
+    }
+  }
+
+  // ── Step 10: provenance laundering (§1f, 4a-4b parity) ──────────────────
+  // RULE: any source row whose source_field_id is in
+  // `originalAiSuggestedSourceIds` AND survives the edit retains its
+  // 'AI-suggested:…' marker; everything else (new sources + originally-
+  // manual sources) gets the manual marker. The TFM-level `ai_reasoning`
+  // collapses to manual when ZERO original AI sources survive — even if
+  // the edit happened to keep some manual sources.
+  const newSourceIdsSet = new Set(sourceFieldIds)
+  const retainedAiSourceIds = new Set(
+    [...originalAiSuggestedSourceIds].filter((id) => newSourceIdsSet.has(id)),
+  )
+  const stillHasOriginalAi = retainedAiSourceIds.size > 0
+  const newTfmAiReasoning = stillHasOriginalAi
+    ? tfm.ai_reasoning ?? 'AI-suggested via per-row Suggest'
+    : 'Mapping edited via redesign UI'
+
+  // ── Step 11: source set-diff (drives transform reset + log copy) ─────────
+  let sourcesChanged = false
+  if (newSourceIdsSet.size !== existingSourceFieldIds.size) {
+    sourcesChanged = true
+  } else {
+    for (const id of newSourceIdsSet) {
+      if (!existingSourceFieldIds.has(id)) {
+        sourcesChanged = true
+        break
+      }
+    }
+  }
+  // Ordinal change (re-ordering sources without adding/removing) ALSO counts
+  // as a source change because the dominant source defines the join anchor.
+  if (!sourcesChanged && existingSources.length === sourceFieldIds.length) {
+    for (let i = 0; i < sourceFieldIds.length; i++) {
+      if (existingSources[i].source_field_id !== sourceFieldIds[i]) {
+        sourcesChanged = true
+        break
+      }
+    }
+  }
+
+  // ── Step 12: replace mapping sources via RPC ────────────────────────────
+  const rpcSources = orderedSources.map((sf, idx) => {
+    const spec = joinSpecBySourceFieldId.get(sf.id)
+    const join_spec = spec
+      ? {
+          via_source_table: spec.viaSourceTable,
+          via_fk_field: spec.viaFkField,
+          to_fk_field: spec.toFkField ?? '',
+        }
+      : null
+    const isRetainedAi = retainedAiSourceIds.has(sf.id)
+    return {
+      source_field_id: sf.id,
+      source_table_id: sf.table_id,
+      // Edit-time we don't have a fresh confidence signal — preserve the
+      // existing per-source confidence by reusing 100 for new manual rows
+      // and re-using the stored value when the source is retained. The
+      // RPC's INSERT writes whatever we send; we don't pass through prior
+      // per-source confidence today (would require a per-id lookup) — a
+      // future polish, low priority because confidence isn't gating any
+      // behavior.
+      confidence: 100,
+      ai_reasoning: isRetainedAi
+        ? existingSources.find((s) => s.source_field_id === sf.id)
+            ?.ai_reasoning ?? 'AI-suggested: (preserved across edit)'
+        : 'Manually selected by user',
+      type_compatibility: null as string | null,
+      similar_fields_considered: [] as string[],
+      join_spec: join_spec as unknown,
+      ordinal: idx,
+    }
+  })
+
+  const { error: rpcErr } = await supabase.rpc('dq_replace_mapping_sources', {
+    p_tfm_id: tfm.id,
+    p_sources: rpcSources,
+  })
+  if (rpcErr) {
+    return {
+      success: false,
+      error: rpcErr.message,
+      errorCode: 'INTERNAL',
+    }
+  }
+
+  // ── Step 13: TFM-level UPDATE (status revert + combination + AI) ────────
+  const { error: tfmUpdErr } = await supabaseAdmin
+    .from('target_field_mappings')
+    .update({
+      status: 'needs_review',
+      combination_type: combinationType,
+      ai_reasoning: newTfmAiReasoning,
+      updated_at: new Date().toISOString(),
+    })
+    .eq('id', tfm.id)
+  if (tfmUpdErr) {
+    return {
+      success: false,
+      error: tfmUpdErr.message,
+      errorCode: 'INTERNAL',
+    }
+  }
+
+  // ── Step 14: transform reset (only when sources changed) ─────────────────
+  let transformReset = false
+  let stagedRowsReverted = 0
+  if (sourcesChanged) {
+    const { resetFieldTransform } = await import('@/lib/actions/transformations')
+    const reset = await resetFieldTransform(tfm.id)
+    if (reset.success) {
+      transformReset = reset.hadTransform
+      stagedRowsReverted = reset.rowsReverted
+    } else {
+      // Soft-fail: surface as INTERNAL but the source replacement already
+      // committed; the user gets a "transform may be stale" follow-up. We
+      // do NOT roll back the source change because the transform reset is
+      // best-effort cleanup and a stale transform will just be `applied=false`
+      // until the user re-authors.
+      console.warn(
+        '[editMappingSources] resetFieldTransform failed:',
+        reset.error,
+      )
+    }
+  }
+
+  // ── Step 15: coverage recompute ──────────────────────────────────────────
+  // Look up the existing TM for the dominant source table → target table.
+  const { data: existingTm } = await supabaseAdmin
+    .from('table_mappings')
+    .select('id')
+    .eq('project_id', projectId)
+    .eq('source_table_id', sourceTableId)
+    .eq('target_table_id', targetField.table_id)
+    .maybeSingle()
+  if (existingTm?.id) {
+    await recomputeTableMappingStatus(supabase, existingTm.id as string)
+  }
+
+  // ── Step 16: revalidate ──────────────────────────────────────────────────
+  revalidatePath(`/app/projects/${projectId}/mapping`)
+  revalidatePath(`/app/projects/${projectId}/transform`)
+
+  // ── Step 17: activity logs ───────────────────────────────────────────────
+  const srcNames = orderedSources.map((s) => s.name)
+  const inlineSrcList =
+    srcNames.length <= 3
+      ? srcNames.join(', ')
+      : `${srcNames.slice(0, 2).join(', ')}, +${srcNames.length - 2} more`
+  const editDescription = `Mapping edited: ${inlineSrcList} \u2192 ${targetField.name}`
+
+  await logActivity(projectId, 'mapping_sources_changed', editDescription, 'mapping', {
+    target_field_mapping_id: tfm.id,
+    target_field: targetField.name,
+    target_field_id: tfm.target_field_id,
+    source_fields: srcNames,
+    source_field_ids: sourceFieldIds,
+    combination_type: combinationType,
+    sources_changed: sourcesChanged,
+    cross_table: isCrossTable,
+    transform_reset: transformReset,
+  })
+
+  if (transformReset) {
+    await logActivity(
+      projectId,
+      'transformation_reset',
+      `Transformation reset on edit: ${targetField.name}`,
+      'transform',
+      {
+        reason: 'mapping_edited',
+        target_field_mapping_id: tfm.id,
+        target_field: targetField.name,
+        rows_reverted: stagedRowsReverted,
+      },
+    )
+  }
+
+  return {
+    success: true,
+    tfmId: tfm.id,
+    transformReset,
+    stagedRowsReverted,
+    sourcesChanged,
+  }
+}
+
+/**
+ * Update only the combination_type on an existing TFM. Cheaper than
+ * `editMappingSources` because:
+ *   • Sources are unchanged → no `dq_replace_mapping_sources` call.
+ *   • Transform is NOT reset (per founder decision §1.3) — the SQL is
+ *     still valid, only the combination semantics changed.
+ *   • Provenance laundering does NOT apply (no source touched).
+ *
+ * Status reverts to `needs_review` so the user re-approves explicitly.
+ */
+export async function updateMappingCombination(
+  tfmId: string,
+  combinationType: CreateFieldMappingCombinationType | 'custom_sql',
+): Promise<UpdateCombinationResult> {
+  if (!tfmId) {
+    return {
+      success: false,
+      error: 'tfmId is required',
+      errorCode: 'VALIDATION',
+    }
+  }
+  if (combinationType === 'custom_sql') {
+    return {
+      success: false,
+      error:
+        'Custom SQL combinations are authored on the Transform tab, not here',
+      errorCode: 'VALIDATION',
+    }
+  }
+
+  const supabase = await createClient()
+  const {
+    data: { user },
+  } = await supabase.auth.getUser()
+  if (!user) {
+    return {
+      success: false,
+      error: 'Not authenticated',
+      errorCode: 'PERMISSION_DENIED',
+    }
+  }
+
+  const { data: tfm } = await supabaseAdmin
+    .from('target_field_mappings')
+    .select(
+      'id, project_id, target_field_id, status, is_acknowledged, combination_type',
+    )
+    .eq('id', tfmId)
+    .maybeSingle<{
+      id: string
+      project_id: string
+      target_field_id: string
+      status: 'needs_review' | 'approved' | 'rejected'
+      is_acknowledged: boolean
+      combination_type: string | null
+    }>()
+  if (!tfm) {
+    return {
+      success: false,
+      error: 'Mapping not found',
+      errorCode: 'NOT_FOUND',
+    }
+  }
+
+  const perm = await requireProjectPermission(tfm.project_id, 'editor')
+  if (!perm.allowed) {
+    return {
+      success: false,
+      error: perm.error ?? 'Insufficient permissions',
+      errorCode: 'PERMISSION_DENIED',
+    }
+  }
+
+  if (tfm.status === 'rejected') {
+    return {
+      success: false,
+      error:
+        "This mapping has been rejected. Reject and re-create instead of editing.",
+      errorCode: 'TFM_REJECTED',
+    }
+  }
+  if (tfm.is_acknowledged) {
+    return {
+      success: false,
+      error:
+        "This field is acknowledged. Un-acknowledge it first to map it.",
+      errorCode: 'TFM_ACKNOWLEDGED',
+    }
+  }
+
+  try {
+    await assertMappingWritesEnabled(tfm.project_id)
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err)
+    if (
+      message ===
+      'Mapping writes are temporarily disabled for scheduled maintenance'
+    ) {
+      return {
+        success: false,
+        error: message,
+        errorCode: 'MAINTENANCE_MODE',
+      }
+    }
+    return {
+      success: false,
+      error: message,
+      errorCode: 'NOT_FOUND',
+    }
+  }
+
+  // Single↔concat sanity vs. existing source count.
+  const { count: existingSourceCount } = await supabaseAdmin
+    .from('mapping_sources')
+    .select('id', { count: 'exact', head: true })
+    .eq('target_field_mapping_id', tfm.id)
+  const sourceCount = existingSourceCount ?? 0
+  if (combinationType === 'single' && sourceCount !== 1) {
+    return {
+      success: false,
+      error:
+        "combination_type 'single' requires exactly one source field on the mapping",
+      errorCode: 'VALIDATION',
+    }
+  }
+  if (combinationType !== 'single' && sourceCount < 2) {
+    return {
+      success: false,
+      error: `combination_type '${combinationType}' requires at least two source fields on the mapping`,
+      errorCode: 'VALIDATION',
+    }
+  }
+
+  // No-op short-circuit: if the new value matches the existing one, still
+  // bump status to needs_review (the user's intent was an edit) but skip
+  // the activity log and revalidate to avoid log spam.
+  if (tfm.combination_type === combinationType && tfm.status === 'needs_review') {
+    return { success: true, tfmId: tfm.id }
+  }
+
+  const { error: updErr } = await supabaseAdmin
+    .from('target_field_mappings')
+    .update({
+      status: 'needs_review',
+      combination_type: combinationType,
+      updated_at: new Date().toISOString(),
+    })
+    .eq('id', tfm.id)
+  if (updErr) {
+    return {
+      success: false,
+      error: updErr.message,
+      errorCode: 'INTERNAL',
+    }
+  }
+
+  // Read target field name for the activity-log payload.
+  const { data: targetField } = await supabaseAdmin
+    .from('fields')
+    .select('name')
+    .eq('id', tfm.target_field_id)
+    .single<{ name: string }>()
+
+  revalidatePath(`/app/projects/${tfm.project_id}/mapping`)
+  revalidatePath(`/app/projects/${tfm.project_id}/transform`)
+
+  await logActivity(
+    tfm.project_id,
+    'mapping_combination_changed',
+    `Combination changed: ${targetField?.name ?? '?'} \u2192 ${combinationType}`,
+    'mapping',
+    {
+      target_field_mapping_id: tfm.id,
+      target_field: targetField?.name ?? null,
+      target_field_id: tfm.target_field_id,
+      previous_combination_type: tfm.combination_type,
+      combination_type: combinationType,
+    },
+  )
+
+  return { success: true, tfmId: tfm.id }
+}
+
+/**
+ * Read-only pre-save query for the EditInvalidationDialog. Returns
+ * (a) whether a transform exists for this TFM, and (b) the count of
+ * staged_data_rows whose `transformed_row_data` JSONB carries the target
+ * field name as a key. Capped at PREVIEW_INVALIDATION_COUNT_CAP so a
+ * project with millions of staged rows doesn't punish the dialog with
+ * an unbounded count.
+ *
+ * The drawer uses this to decide whether to show the warn dialog
+ * BEFORE invoking `editMappingSources`. The dialog gates on
+ * `hasTransform === true && stagedRowCount > 0`. On confirm the drawer
+ * calls `editMappingSources` regardless — the preview only drives copy.
+ */
+export async function previewEditInvalidation(
+  tfmId: string,
+): Promise<PreviewEditInvalidationResult> {
+  if (!tfmId) {
+    return {
+      success: false,
+      error: 'tfmId is required',
+      errorCode: 'NOT_FOUND',
+    }
+  }
+
+  const supabase = await createClient()
+  const {
+    data: { user },
+  } = await supabase.auth.getUser()
+  if (!user) {
+    return {
+      success: false,
+      error: 'Not authenticated',
+      errorCode: 'PERMISSION_DENIED',
+    }
+  }
+
+  const { data: tfm } = await supabaseAdmin
+    .from('target_field_mappings')
+    .select('id, project_id, target_field_id')
+    .eq('id', tfmId)
+    .maybeSingle<{ id: string; project_id: string; target_field_id: string }>()
+  if (!tfm) {
+    return {
+      success: false,
+      error: 'Mapping not found',
+      errorCode: 'NOT_FOUND',
+    }
+  }
+
+  const perm = await requireProjectPermission(tfm.project_id, 'editor')
+  if (!perm.allowed) {
+    return {
+      success: false,
+      error: perm.error ?? 'Insufficient permissions',
+      errorCode: 'PERMISSION_DENIED',
+    }
+  }
+
+  // Transform existence check.
+  const { data: txn } = await supabaseAdmin
+    .from('transformations')
+    .select('id, status')
+    .eq('target_field_mapping_id', tfm.id)
+    .maybeSingle<{ id: string; status: string }>()
+  const hasTransform = txn !== null
+
+  // Read the target field name + table id for the staged-row scan.
+  const { data: targetField } = await supabaseAdmin
+    .from('fields')
+    .select('id, name, table_id')
+    .eq('id', tfm.target_field_id)
+    .single<{ id: string; name: string; table_id: string }>()
+  if (!targetField) {
+    return {
+      success: false,
+      error: 'Target field not found',
+      errorCode: 'NOT_FOUND',
+    }
+  }
+
+  // Find every TM for (project, target_table) so we can scope the count
+  // to staged rows that belong to this field. Multi-source-table projects
+  // can have several TMs whose target_table is this field's parent.
+  const { data: tms } = await supabaseAdmin
+    .from('table_mappings')
+    .select('id')
+    .eq('project_id', tfm.project_id)
+    .eq('target_table_id', targetField.table_id)
+    .neq('status', 'rejected')
+  const tmIds: string[] = (tms ?? []).map((t) => t.id as string)
+  if (tmIds.length === 0) {
+    return { success: true, hasTransform, stagedRowCount: 0, capped: false }
+  }
+
+  // Count staged_data_rows whose transformed_row_data JSONB contains the
+  // target field name as a key. PostgREST translates `?` (jsonb key
+  // existence) via the `cs` (contains) helper; we use raw filter syntax
+  // to express it.
+  // Cap at PREVIEW_INVALIDATION_COUNT_CAP so a project with millions of
+  // staged rows doesn't run a full count.
+  const { count, error: countErr } = await supabaseAdmin
+    .from('staged_data_rows')
+    .select('id', { count: 'exact', head: true })
+    .in('table_mapping_id', tmIds)
+    .filter('transformed_row_data', 'cs', JSON.stringify({ [targetField.name]: null }))
+    .limit(PREVIEW_INVALIDATION_COUNT_CAP)
+  if (countErr) {
+    // Soft-fail: count is best-effort signal for the dialog. If the
+    // jsonb-contains filter fails (some PostgREST versions are picky),
+    // surface qualitative copy via `capped: true` so the dialog still
+    // renders the "staged data will be invalidated" warning without a
+    // bogus number.
+    return {
+      success: true,
+      hasTransform,
+      stagedRowCount: 0,
+      capped: hasTransform,
+    }
+  }
+  const stagedRowCount = count ?? 0
+  const capped = stagedRowCount >= PREVIEW_INVALIDATION_COUNT_CAP
+  return {
+    success: true,
+    hasTransform,
+    stagedRowCount,
+    capped,
+  }
+}
