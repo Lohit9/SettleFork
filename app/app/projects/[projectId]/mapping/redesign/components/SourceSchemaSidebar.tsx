@@ -70,6 +70,7 @@ import { useEffect, useId, useMemo, useRef, useState } from 'react'
 import { ChevronLeft } from 'lucide-react'
 import { cn } from '@/components/ui/utils'
 import { formatSampleValues } from '@/lib/utils/mapping-drawer-format'
+import { SEARCH_DEBOUNCE_MS } from '@/lib/constants/redesign-ui'
 import type { SourceFieldWithState } from '@/lib/types/mappings-for-redesign'
 import type {
   SidebarFilter,
@@ -81,11 +82,15 @@ export const SIDEBAR_COLLAPSED_WIDTH_PX = 28
 /** Expanded sidebar width in pixels. Founder decision 3. */
 export const SIDEBAR_EXPANDED_WIDTH_PX = 200
 /**
- * Debounce window for the search input — 200 ms before the typed value
- * propagates into the filter pipeline. Matches the main-view search
- * debounce in `redesign/MappingContent.tsx` for consistent feel.
+ * Debounce window for the sidebar search input. Re-exported from
+ * `lib/constants/redesign-ui` (`SEARCH_DEBOUNCE_MS`) so the sidebar's
+ * historic public name (`SIDEBAR_SEARCH_DEBOUNCE_MS`) keeps its API
+ * shape — consumers who imported the old name from this module
+ * continue to work. New consumers (e.g. `SourceFieldPicker.tsx`)
+ * should import the canonical `SEARCH_DEBOUNCE_MS` directly from the
+ * shared constants module.
  */
-export const SIDEBAR_SEARCH_DEBOUNCE_MS = 200
+export const SIDEBAR_SEARCH_DEBOUNCE_MS = SEARCH_DEBOUNCE_MS
 
 const FILTER_OPTIONS: ReadonlyArray<{ value: SidebarFilter; label: string }> = [
   { value: 'all', label: 'All' },
@@ -215,7 +220,7 @@ export function SourceSchemaSidebar({
     searchTimerRef.current = setTimeout(() => {
       setSearchQuery(searchInput)
       searchTimerRef.current = null
-    }, SIDEBAR_SEARCH_DEBOUNCE_MS)
+    }, SEARCH_DEBOUNCE_MS)
     return () => {
       if (searchTimerRef.current) {
         clearTimeout(searchTimerRef.current)
