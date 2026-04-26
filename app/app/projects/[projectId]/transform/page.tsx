@@ -1,9 +1,6 @@
 import { notFound } from 'next/navigation'
 import { createClient } from '@/lib/supabase/server'
-import {
-  getTransformData,
-  projectHasCrossTableMappings,
-} from '@/lib/actions/transformations'
+import { getTransformData } from '@/lib/actions/transformations'
 import { getProject } from '@/lib/actions/projects'
 import TransformContent from './TransformContent'
 
@@ -27,13 +24,9 @@ export default async function TransformPage({ params }: PageProps) {
     .single()
   if (!project) notFound()
 
-  const [transformData, fullProject, hasCrossTableMappings] = await Promise.all([
+  const [transformData, fullProject] = await Promise.all([
     getTransformData(projectId),
     getProject(projectId).catch(() => null),
-    // Phase 4a-3: detect cross-table TFMs at the page boundary so the
-    // redesign Transform placeholder can surface the apply limitation.
-    // Falls back to `false` on any error — the note is informational only.
-    projectHasCrossTableMappings(projectId).catch(() => false),
   ])
   const isArchived = project.status === 'archived'
 
@@ -53,7 +46,6 @@ export default async function TransformPage({ params }: PageProps) {
       initialData={transformData}
       isArchived={isArchived}
       projectInfo={projectInfo}
-      hasCrossTableMappings={hasCrossTableMappings}
     />
   )
 }

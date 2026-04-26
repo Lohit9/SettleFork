@@ -1498,27 +1498,18 @@ describe('MappingDrawer — Rule 3 (cross-table, two tables) mapped body', () =>
     expect(headings.map((h) => h.textContent)).toContain('Combination')
   })
 
-  // ── Cross-table apply transparency badge (Phase 4a-3) ─────────────
+  // ── Cross-table apply transparency badge (Phase 4a-3 → retired in 4a-6) ──
+  //
+  // Phase 4a-6 wired the cross-table apply RPC branch (migration 076) and
+  // retired the transparency badge. Negative invariant kept here so a
+  // regression that re-introduces the testid surfaces immediately.
 
-  it('renders the cross-table-apply transparency badge in the Sources section header', () => {
+  it('does NOT render a cross-table-apply transparency badge for cross-table TFMs (retired in 4a-6)', () => {
     render(<MappingDrawer row={rule3Mapped()} isOpen={true} onClose={() => {}} />)
-    const badge = screen.getByTestId(
-      'drawer-section-sources-cross-table-badge',
-    )
-    expect(badge.textContent).toMatch(/cross-table/i)
-    expect(badge.getAttribute('title')).toMatch(
-      /Transform application for cross-table mappings/i,
-    )
-  })
-
-  it('badge lives inside the Sources section header (not the body / not other sections)', () => {
-    render(<MappingDrawer row={rule3Mapped()} isOpen={true} onClose={() => {}} />)
-    const sourcesSection = screen.getByTestId('drawer-section-sources')
     expect(
-      within(sourcesSection).getByTestId(
-        'drawer-section-sources-cross-table-badge',
-      ),
-    ).toBeInTheDocument()
+      screen.queryByTestId('drawer-section-sources-cross-table-badge'),
+    ).toBeNull()
+    expect(screen.queryByText(/cross-table not yet applicable/i)).toBeNull()
   })
 })
 

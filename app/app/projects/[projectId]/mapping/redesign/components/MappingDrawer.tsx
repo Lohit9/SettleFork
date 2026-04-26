@@ -1548,46 +1548,19 @@ function MappedBody({ row }: { row: MappedRow }) {
  * authoritative).
  */
 function SourcesSection({ sources }: { sources: MappingSourceRef[] }) {
-  // Phase 4a-3: detect cross-table mappings (2+ distinct source
-  // tables among ms.sourceTable.id) and surface a transparency badge
-  // explaining that Transform-tab apply doesn't yet handle this
-  // case. See `lib/actions/transformations.ts:applyTransform` for the
-  // structured server-side error path.
-  const uniqueTableIds = new Set(sources.map((s) => s.sourceTable.id))
-  const isCrossTable = uniqueTableIds.size > 1
+  // Phase 4a-6 retired the cross-table transparency badge — the
+  // `dq_apply_field_transform_joined` RPC now wires the cross-table
+  // branch via migration 076. Sources can span multiple source tables
+  // without limitation. See `docs/features/mapping-redesign.md`
+  // (Phase 4a-6 closure) for the historical narrative.
   return (
-    <DrawerSection
-      title="Sources"
-      testId="drawer-section-sources"
-      headerAside={isCrossTable ? <CrossTableApplyBadge /> : undefined}
-    >
+    <DrawerSection title="Sources" testId="drawer-section-sources">
       <ul className="space-y-3" data-testid="drawer-sources-list">
         {sources.map((source) => (
           <SourceCard key={source.id} source={source} />
         ))}
       </ul>
     </DrawerSection>
-  )
-}
-
-/**
- * Phase 4a-3 cross-table apply transparency badge. Surfaces in the
- * drawer's Sources section header for any TFM whose `mapping_sources`
- * span 2+ distinct source tables. Muted slate styling (this is a
- * known limitation, not an error condition — §10-OQ-1 styling note).
- */
-function CrossTableApplyBadge() {
-  return (
-    <span
-      data-testid="drawer-section-sources-cross-table-badge"
-      title="Transform application for cross-table mappings ships in a future release."
-      className={cn(
-        'inline-flex items-center rounded border border-slate-200 bg-slate-50',
-        'px-1.5 py-0.5 text-[10px] font-medium text-slate-500',
-      )}
-    >
-      Transform: cross-table not yet applicable
-    </span>
   )
 }
 
