@@ -50,11 +50,24 @@
 //     retains its try/catch as defense-in-depth against runtime failures
 //     (network / DB / RPC), not because the callee is known-broken.
 //
-// APPLY RPC WIRING (Gate 2 Q2 + Gate 2 G-a decisions)
+// APPLY RPC WIRING (Gate 2 Q2 + Gate 2 G-a + Phase 4a-6 decisions)
 //
-//   - Mapped TFMs  → `dq_apply_field_transform_joined(tfmId, target_name, sql, NULL)`.
-//     Single-source branch is live; cross-table (`p_join_spec != NULL`) is
-//     stubbed in migration 074 until Phase 3.
+//   - Mapped TFMs  → `dq_apply_field_transform_joined(tfmId, target_name, sql, p_join_spec)`.
+//     Migration 076 (Phase 4a-6) wired the cross-table branch:
+//       * Same-table TFM           → p_join_spec = NULL  (byte-for-byte
+//                                     migration 074 semantics preserved).
+//       * Cross-table TFM          → p_join_spec = { dominant_table_id,
+//                                     joins: [...] } JSONB. Action layer
+//                                     builds the spec via
+//                                     `buildJoinSpec(tfmId, supabase)` from
+//                                     `lib/utils/transform-cross-table.ts`,
+//                                     dedupes per-source rows to per-table
+//                                     entries, and re-derives FK relationships
+//                                     when stored `mapping_sources.join_spec`
+//                                     is null. Ambiguous re-derivation
+//                                     (0 or 2+ candidates at apply time)
+//                                     surfaces `CROSS_TABLE_FK_INFERENCE_FAILED`
+//                                     before the RPC is invoked.
 //   - Value-assignment TFMs → legacy `dq_apply_field_transform(tm_id, src_tbl,
 //     tgt_tbl, target_name, sql, has_staged)`. `dq_apply_field_transform_joined`
 //     rejects zero-source TFMs, so we fall back to the legacy RPC; VA apply
@@ -84,6 +97,7 @@ import { extractTransformSQL } from '@/lib/ai/sql-extractor'
 import { checkAIRateLimit } from '@/lib/ai/rate-limit'
 import { buildAIContext, formatFieldForPrompt, formatDocumentsForPrompt } from '@/lib/ai/context-builder'
 import { fieldNeedsTransform, wrapFieldRefsInJsonb } from '@/lib/utils/transform-helpers'
+import { buildJoinSpec } from '@/lib/utils/transform-cross-table'
 import { logActivity } from '@/lib/actions/activity-log'
 import { assertMappingWritesEnabled } from '@/lib/auth/mapping-writes'
 import { SHIMMED_ID_SEPARATOR } from '@/lib/compat/mapping-shim'
@@ -212,16 +226,18 @@ export type TransformWriteErrorCode =
   | 'VALIDATION'
   | 'INTERNAL'
   /**
-   * Phase 4a-3 — surfaced by `applyTransform` (and `testTransform` /
-   * `runFullTransformTest` future surfaces) when the targeted TFM
-   * spans 2+ source tables. The underlying RPC
-   * `dq_apply_field_transform_joined` does not yet handle the
-   * `p_join_spec != NULL` branch; cross-table apply is deferred to a
-   * follow-up phase. The Transform tab UI consumes this code to
-   * server-disable Apply/Test buttons + render a tooltip; the
-   * drawer Sources section also surfaces a transparency badge.
+   * Phase 4a-6 — surfaced by `applyTransform` (and `testTransformation`
+   * for parity) when a cross-table TFM was authored with an inferred FK
+   * (stored `mapping_sources.join_spec=null`) but `inferFkCandidates`
+   * now returns 0 or 2+ candidates. Indicates schema drift since the
+   * mapping was authored. User-facing copy:
+   *   "FK relationship changed since this mapping was authored.
+   *    Please re-author the mapping."
+   * Replaced the legacy `CROSS_TABLE_TRANSFORM_NOT_YET_SUPPORTED` code
+   * (Phase 4a-3 transparency stack — retired in 4a-6 once the RPC's
+   * cross-table branch shipped via migration 076).
    */
-  | 'CROSS_TABLE_TRANSFORM_NOT_YET_SUPPORTED'
+  | 'CROSS_TABLE_FK_INFERENCE_FAILED'
 
 async function guardWrites<T extends { success: boolean; error?: string; errorCode?: TransformWriteErrorCode }>(
   projectId: string,
@@ -1644,6 +1660,25 @@ export async function testTransformation(
   const srcField = ctx.primarySource?.sourceField ?? null
   if (!isValueAssignment && !srcField) return { success: false, error: 'Source field not found' }
 
+  // Phase 4a-6 — same routing logic as `applyTransform` so cross-table
+  // FK ambiguity is surfaced consistently. The underlying live-preview
+  // RPC (`execute_transform_test`) operates on a single `data_rows`
+  // partition and cannot LATERAL-join, so we still fetch the dominant
+  // table's fields below — joined-table refs in the user's SQL would
+  // resolve against dominant rows only. Cross-table preview parity
+  // with apply is tracked under Phase 4-extras.
+  let crossTableJoinSpec: Awaited<ReturnType<typeof buildJoinSpec>> | null = null
+  if (!isValueAssignment) {
+    crossTableJoinSpec = await buildJoinSpec(ctx.tfm.id, supabaseAdmin)
+    if (!crossTableJoinSpec.ok) {
+      return {
+        success: false,
+        error: crossTableJoinSpec.error,
+        errorCode: crossTableJoinSpec.errorCode,
+      }
+    }
+  }
+
   // Source table: same resolution as runFullTransformTest.
   let sourceTableId: string | null = srcField?.table_id ?? null
   if (!sourceTableId) {
@@ -1665,7 +1700,34 @@ export async function testTransformation(
     .eq('table_id', sourceTableId)
   const fieldNames = (allSourceFields ?? []).map((f) => f.name)
 
-  const wrappedSql = wrapFieldRefsInJsonb(sql.trim(), fieldNames)
+  // Cross-table: prefer the qualified-aware overload so the same
+  // `Table.Field` refs the apply path will accept also tokenize
+  // correctly here (the dominant-table portion will preview;
+  // joined-table refs resolve to NULL until cross-table preview
+  // parity ships).
+  let wrappedSql: string
+  if (
+    crossTableJoinSpec &&
+    crossTableJoinSpec.ok &&
+    crossTableJoinSpec.spec &&
+    crossTableJoinSpec.fieldMap
+  ) {
+    try {
+      wrappedSql = wrapFieldRefsInJsonb(sql.trim(), crossTableJoinSpec.fieldMap)
+      // The execute_transform_test RPC doesn't accept aliases — strip
+      // them down to bare row_data refs (the dominant table is the
+      // execution scope; joined refs collapse to NULL there).
+      wrappedSql = wrappedSql.replace(/\b[A-Za-z_][A-Za-z0-9_]*\.row_data->>'/g, "row_data->>'")
+    } catch (e) {
+      const msg =
+        e instanceof Error
+          ? e.message
+          : 'Cross-table transforms must use table-qualified field references.'
+      return { success: false, error: msg }
+    }
+  } else {
+    wrappedSql = wrapFieldRefsInJsonb(sql.trim(), fieldNames)
+  }
 
   const sourceFieldNames = srcField ? [srcField.name, ...(contributingFieldNames ?? [])] : (contributingFieldNames ?? [])
   const useMultiField = sourceFieldNames.length > 1
@@ -1840,89 +1902,45 @@ export async function autoGenerateAllTransforms(
   })
 }
 
-// ─── Cross-table TFM detection (Phase 4a-3) ──────────────────────────────────
+// ─── (retired in Phase 4a-6) Cross-table transparency helpers ────────────────
 //
-// `dq_apply_field_transform_joined` does NOT yet handle the
-// `p_join_spec != NULL` branch. Cross-table mappings persist
-// successfully (Phase 4a-3 wrapper writes per-source `join_spec`)
-// but Transform-tab apply / test surfaces would otherwise hit a
-// `RAISE EXCEPTION` from the RPC. We detect the cross-table case at
-// the action layer and return a structured
-// `CROSS_TABLE_TRANSFORM_NOT_YET_SUPPORTED` so callers can surface
-// the limitation cleanly.
-
-/**
- * Returns true when the TFM's mapping_sources span 2+ distinct
- * source tables. Pre-condition: `tfmId` references a real TFM. The
- * query is admin-bound (RLS narrowing on mapping_sources is OK in
- * RPC contexts but the action paths use a thin admin scan to avoid
- * a second auth hop).
- */
-async function isCrossTableTfm(tfmId: string): Promise<boolean> {
-  const { data, error } = await supabaseAdmin
-    .from('mapping_sources')
-    .select('source_table_id')
-    .eq('target_field_mapping_id', tfmId)
-  if (error || !data) return false
-  const distinct = new Set<string>()
-  for (const r of data) {
-    if (r.source_table_id !== null) distinct.add(r.source_table_id as string)
-  }
-  return distinct.size > 1
-}
-
-// ─── projectHasCrossTableMappings ─────────────────────────────────────────────
+// Phase 4a-3 introduced two helpers — `isCrossTableTfm` and
+// `projectHasCrossTableMappings` — to power a three-layer transparency
+// stack (action error code + Transform tab disabled buttons + drawer
+// Sources badge) preventing users from triggering the stubbed
+// cross-table branch of `dq_apply_field_transform_joined`. Phase 4a-6
+// wired that branch via migration 076 + `buildJoinSpec`
+// (`lib/utils/transform-cross-table.ts`) and retired the transparency
+// stack — both helpers are deleted; `applyTransform` /
+// `testTransformation` route through the joined RPC directly.
 //
-// True when *any* TFM in the project has `mapping_sources` spanning two or more
-// source tables. Powers the redesign Transform-page placeholder note: while
-// the redesign Transform UI is still a Phase-3 placeholder (no Apply/Test
-// buttons to disable), we surface the cross-table apply limitation in the
-// placeholder itself so users on flag-on projects with cross-table mappings
-// see the same transparency they get on the legacy UI (Block F Part B) and in
-// the drawer Sources badge (Block F Part C).
-//
-// Implementation note: we go through `target_field_mappings` so we can scope
-// to the project in a single round-trip. The shape returned by PostgREST is
-//
-//   [{ id, mapping_sources: [{ source_table_id }, …] }, …]
-//
-// We then count distinct `source_table_id` per TFM and short-circuit on the
-// first one that exceeds 1. Empty input ⇒ `false`.
-export async function projectHasCrossTableMappings(
-  projectId: string,
-): Promise<boolean> {
-  const { data, error } = await supabaseAdmin
-    .from('target_field_mappings')
-    .select('id, mapping_sources(source_table_id)')
-    .eq('project_id', projectId)
-  if (error || !data) return false
-  for (const tfm of data as Array<{
-    mapping_sources: Array<{ source_table_id: string | null }> | null
-  }>) {
-    const sources = tfm.mapping_sources ?? []
-    const distinct = new Set<string>()
-    for (const ms of sources) {
-      if (ms.source_table_id !== null) distinct.add(ms.source_table_id)
-    }
-    if (distinct.size > 1) return true
-  }
-  return false
-}
+// Historical narrative is preserved in
+// `docs/features/mapping-redesign.md` (Phase 4a-6 section). For the
+// retired implementation see this file at any commit between Phase
+// 4a-3 and 4a-6 (or the migration 074 docstring).
 
 // ─── applyTransform ───────────────────────────────────────────────────────────
 //
 // Applies a single TFM's transform to staged_data_rows.
 //
-// Mapped TFMs        → `dq_apply_field_transform_joined(tfmId, tgt_name, sql, NULL)`.
+// Mapped TFMs        → `dq_apply_field_transform_joined(tfmId, tgt_name, sql, p_join_spec)`.
+//                      Same-table TFMs pass `p_join_spec = NULL`.
+//                      Cross-table TFMs derive `p_join_spec` from
+//                      `buildJoinSpec(tfmId, supabase)` — the helper
+//                      dedupes per-source `mapping_sources` rows to
+//                      per-table joins and re-derives the FK
+//                      relationship when stored `join_spec` is null
+//                      (parity with the read path's annotation
+//                      derivation). Re-derivation that yields 0 or
+//                      2+ FK candidates returns
+//                      `CROSS_TABLE_FK_INFERENCE_FAILED` before the
+//                      RPC is invoked. The cross-table-aware overload
+//                      of `wrapFieldRefsInJsonb` rewrites
+//                      `Table.Field` references to `<alias>.row_data->>'Field'`
+//                      using aliases that match the join_spec.
 // Value-assignments  → `dq_apply_field_transform(tm_id, src_tbl, tgt_tbl, tgt_name, sql, has_staged)`
 //                      looped over every TM sharing the VA's target_table
 //                      (VAs are global per target table in the new model).
-//
-// Cross-table guard (Phase 4a-3): TFMs whose mapping_sources span
-// 2+ source tables short-circuit with
-// `CROSS_TABLE_TRANSFORM_NOT_YET_SUPPORTED` BEFORE the RPC is
-// invoked. The wrapper UI / Transform tab surface the limitation;
-// the RPC itself would raise a friendlier-but-still-failing error.
 
 export async function applyTransform(
   fieldMappingId: string,
@@ -1962,18 +1980,19 @@ export async function applyTransform(
     return { success: false, rowsAffected: 0, error: 'Source field not found' }
   }
 
-  // Phase 4a-3 cross-table apply guard. Mapped TFMs only — VA TFMs
-  // have a single source table by construction so the guard is a
-  // no-op for them, but we cheaply skip the query.
+  // Phase 4a-6 — derive p_join_spec for cross-table TFMs. Helper
+  // returns `spec=null` for same-table TFMs (RPC's same-table branch
+  // is preserved byte-for-byte from migration 074). FK ambiguity at
+  // apply time short-circuits with CROSS_TABLE_FK_INFERENCE_FAILED.
+  let joinSpec: Awaited<ReturnType<typeof buildJoinSpec>> | null = null
   if (!isValueAssignment) {
-    const crossTable = await isCrossTableTfm(ctx.tfm.id)
-    if (crossTable) {
+    joinSpec = await buildJoinSpec(ctx.tfm.id, supabaseAdmin)
+    if (!joinSpec.ok) {
       return {
         success: false,
         rowsAffected: 0,
-        error:
-          'Transform application for cross-table mappings ships in a future release.',
-        errorCode: 'CROSS_TABLE_TRANSFORM_NOT_YET_SUPPORTED',
+        error: joinSpec.error,
+        errorCode: joinSpec.errorCode,
       }
     }
   }
@@ -1983,14 +2002,35 @@ export async function applyTransform(
     let totalRows = 0
 
     if (!isValueAssignment) {
-      // ── Mapped TFM — single call via the new joined RPC ─────────────────────
+      // ── Mapped TFM — single call via the joined RPC ─────────────────────────
       const srcField = ctx.primarySource!.sourceField!
-      const { data: allSourceFields } = await supabase
-        .from('fields')
-        .select('name')
-        .eq('table_id', srcField.table_id)
-      const fieldNames = (allSourceFields ?? []).map((f) => f.name)
-      const wrappedSql = wrapFieldRefsInJsonb(sql.replace(/;+$/, '').trim(), fieldNames)
+      const cleaned = sql.replace(/;+$/, '').trim()
+      const okSpec = joinSpec as Extract<typeof joinSpec, { ok: true }>
+
+      let wrappedSql: string
+      let p_join_spec: unknown = null
+
+      if (okSpec.spec && okSpec.fieldMap) {
+        // Cross-table — qualify field refs against the per-table alias map.
+        try {
+          wrappedSql = wrapFieldRefsInJsonb(cleaned, okSpec.fieldMap)
+        } catch (e) {
+          const msg =
+            e instanceof Error
+              ? e.message
+              : 'Cross-table transforms must use table-qualified field references.'
+          return { success: false, rowsAffected: 0, error: msg }
+        }
+        p_join_spec = okSpec.spec
+      } else {
+        // Same-table — preserve the existing flat field-name list path.
+        const { data: allSourceFields } = await supabase
+          .from('fields')
+          .select('name')
+          .eq('table_id', srcField.table_id)
+        const fieldNames = (allSourceFields ?? []).map((f) => f.name)
+        wrappedSql = wrapFieldRefsInJsonb(cleaned, fieldNames)
+      }
 
       const { data: rowsAffected, error: rpcErr } = await supabase.rpc(
         'dq_apply_field_transform_joined',
@@ -1998,7 +2038,7 @@ export async function applyTransform(
           p_target_field_mapping_id: ctx.tfm.id,
           p_target_field_name: tgtField.name,
           p_transform_sql: wrappedSql,
-          p_join_spec: null,
+          p_join_spec,
         },
       )
 

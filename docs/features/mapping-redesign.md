@@ -1505,27 +1505,16 @@ Phase 4a-3 lifts the same-table guard introduced in 4a-2. Users can now select s
 
 Resolved disambiguation rows render as read-only with a `Change` link that re-opens the dropdown. Both shapes (resolved + active) coexist when there are several joined tables (founder decision §4-OQ-2). Removing a chip silently clears the matching `joinAnnotations` and `ambiguousCandidates` entries (founder decision §4-OQ-3); state never persists across form re-opens (founder decision §5-OQ-2).
 
-### Apply RPC limitation (transparency stack)
+### Apply RPC transparency stack — retired by Phase 4a-6 (2026-04-26)
 
-Cross-table mapping **creation** is fully supported in 4a-3. Cross-table transform **apply** is not — `dq_apply_field_transform_joined` does not yet branch on `p_join_spec != NULL`. The 4a-3 commit ships the full transparency stack so the user is never surprised downstream:
-
-- `applyTransform` (`lib/actions/transformations.ts`) detects cross-table TFMs (count(distinct `mapping_sources.source_table_id`) > 1) and short-circuits with `errorCode: 'CROSS_TABLE_TRANSFORM_NOT_YET_SUPPORTED'` BEFORE the RPC call.
-- The Transform tab disables both `Test Transform` and `Apply Transform` buttons when the selected row is cross-table (`selectedContext.field.isCrossTable`). Tooltip: "Transform application for cross-table mappings ships in a future release."
-- The drawer's `Sources` section renders a small muted `Transform: cross-table not yet applicable` badge in the section header for cross-table mappings.
-
-A future phase wires the cross-table branch in `dq_apply_field_transform_joined`; the structured error code is the explicit handoff between phases.
-
-#### Transform tab transparency partial gap
-
-The redesign Transform UI is a placeholder per the Phase 3 deferral (`app/app/projects/[projectId]/transform/redesign/TransformContent.tsx`). Block F Part B (the Apply/Test button-disabling layer) only fires on the *legacy* Transform UI; on flag-on projects (`projects.use_mapping_redesign = true`) it is dormant until the redesign Transform UI is built.
-
-Mitigations stacked on top of the dormant Block F Part B:
-
-- **Action-layer guard (Part A)** — `applyTransform` short-circuits any programmatic cross-table apply call regardless of UI path. This is the load-bearing layer.
-- **Conditional placeholder note** — when the project has any cross-table TFM (`projectHasCrossTableMappings(projectId)`), the redesign Transform placeholder renders an additional `transform-redesign-cross-table-note` informational line below the project ID/name block: "This project has cross-table mappings. Transform application for cross-table mappings ships in a future release."
-- **Drawer Sources badge (Part C)** — surfaces the limitation at mapping-creation time in the drawer, before the user ever navigates to the Transform tab.
-
-When the redesign Transform UI is built (Phase 4b/5), the Block F Part B button-disabling logic will activate without code changes because the `FieldItem.isCrossTable` derivation in `TransformContent` already includes the necessary data. At that point the placeholder note becomes unreachable and can be removed.
+> **Historical narrative.** 4a-3 (2026-04-25) shipped cross-table mapping **creation** with a three-layer transparency stack so users were never surprised when downstream apply was stubbed. 4a-6 (2026-04-26) wired the apply path end-to-end via migration 076 and retired the entire stack. The original disposition is preserved here for context; current behaviour is documented in **Phase 4a-6 — cross-table apply** below.
+>
+> Original three-layer stack (now removed):
+> - **Action-layer guard (Part A)** — `applyTransform` short-circuited cross-table TFMs with `errorCode: 'CROSS_TABLE_TRANSFORM_NOT_YET_SUPPORTED'`.
+> - **Transform-tab disabled buttons (Part B)** — `Test Transform` / `Apply Transform` disabled when `selectedContext.field.isCrossTable`, tooltip pointing to a "future release".
+> - **Drawer Sources badge (Part C)** — small muted "Transform: cross-table not yet applicable" badge on the drawer's `Sources` section header.
+>
+> Companion plumbing also retired in 4a-6: the `projectHasCrossTableMappings(projectId)` server helper, the `hasCrossTableMappings` prop threaded through `transform/page.tsx` → `TransformContent.tsx` → `transform/redesign/TransformContent.tsx`, the placeholder `transform-redesign-cross-table-note` line, and the `isCrossTableTfm` private helper in `lib/actions/transformations.ts`. Source-level invariants pinning the absence of this stack live in `tests/actions/transforms-cross-table-apply.test.ts` (X4 block) and `tests/components/transform-cross-table-enabled.test.ts`.
 
 ### Phase 5-Cleanup (deferred)
 
@@ -1712,7 +1701,7 @@ These are intentional Phase 4a deferrals, not bugs. Each is documented inline at
 
 1. **AI Suggest is same-table only.** The wrapper (`lib/actions/mappings-for-redesign.ts` lines 1473-1497) hard-strips cross-table tails to `AI_INVALID_RESPONSE`. The LLM prompt explicitly steers same-table suggestions; cross-table AI requires a substantively harder prompt design that proposes joined-source mappings reliably enough to be useful. Deferred to a future LLM-prompt phase. See "AI Suggest UI integration" §"Same-table-only limitation" above.
 2. **AbortController for Suggest is client-side only.** `suggestMappingForTarget` does not accept a `signal` parameter; canceling a pending suggestion discards the response client-side but the server-side LLM call completes. Tokens are sunk cost (founder decision §7-OQ-2). Adding signal threading is a non-breaking future change. See "AI Suggest UI integration" §"Server action AbortSignal not threaded" above.
-3. **Cross-table Transform apply is gated.** Phase 4a-3 ships cross-table mapping *creation* end-to-end, but `dq_apply_field_transform_joined` does not yet branch on `p_join_spec != NULL`. Cross-table TFMs surface `errorCode: 'CROSS_TABLE_TRANSFORM_NOT_YET_SUPPORTED'` from `applyTransform`; the Transform tab disables Apply / Test for these rows; the drawer surfaces a transparency badge. Wiring the RPC branch is queued for a future phase (TBD — likely 4a-6 or a Phase 5 RPC pass). See "Cross-table mapping creation (Phase 4a-3)" above for the full disposition.
+3. **Cross-table Transform apply** ✅ closed by Phase 4a-6 (2026-04-26). Migration 076 wired the cross-table branch of `dq_apply_field_transform_joined`; `applyTransform` derives `p_join_spec` per apply via `buildJoinSpec` and the three-layer transparency stack is retired. See "Phase 4a-6 — cross-table apply" below for the full disposition.
 4. **Edit-existing-mapping mutations not yet wired.** Phase 4b covers W2 (add/remove `mapping_sources` on a mapped TFM), W3 (combination_type change), and W4 (un-acknowledge). Until 4b ships, mapped-row drawer bodies remain read-only — the user must Reject + recreate to fix a mistaken mapping.
 5. **Bulk operations not yet wired.** Phase 4c covers W5 (Approve all / Reject all per TM, Approve high-confidence project-wide). Until 4c ships, every approval/rejection is a per-row drawer action.
 6. **Empty-state prose on Rule 6 unmapped rows is stale on Heritage.** `UNMAPPED_BODY_PROSE` ("Remapping unmapped fields is coming soon. For now, use the legacy Mapping view to create a new mapping.") was authored pre-Phase-4a as an empty-state placeholder. Heritage now has both `[Suggest with AI]` and `[Create mapping]` footer buttons on the same drawer, making the prose contradictory. The prose stays for non-flag projects (where the legacy view IS the answer) and a copy revisit is queued for Phase 5-Cleanup once the flag comes off and the legacy file retires. Code-comment annotated at `MappingDrawer.tsx` `UnmappedBody` JSDoc.
@@ -1749,14 +1738,146 @@ End-to-end Phase 4a flow on Heritage (Reject → Suggest with AI → Save / Crea
 
 | Sub-phase | Workstreams | Wrappers | Status |
 |---|---|---|---|
-| 4a-5 (this) | Closure docs + code cleanup | n/a | ✅ shipped 2026-04-26 |
-| 4a-6 (TBD) | Cross-table Transform apply RPC branch | extend `dq_apply_field_transform_joined` | ⏳ pending — gated on RPC design |
+| 4a-5 | Closure docs + code cleanup | n/a | ✅ shipped 2026-04-26 |
+| 4a-6 | Cross-table Transform apply — RPC branch + transparency stack retirement | migration 076 + `buildJoinSpec` in action layer | ✅ shipped 2026-04-26 |
 | 4b | W2 + W3 + W4 (edit sources, edit combination, un-acknowledge) | wraps `editFieldMapping`, `deleteFieldMapping`, `removeAcknowledgment` + new `updateMappingCombination` | ⏳ pending |
 | 4c | W5 (bulk approve / reject / approve-high-confidence) | wraps `approveAllFieldMappings`, `rejectAllFieldMappings`, `approveHighConfidenceMappings` | ⏳ pending |
 | 4-extras | Cross-table AI Suggest, AbortSignal threading on Suggest, source-side acknowledgment toggle | new LLM prompt design + wrapper signature widen | ⏳ pending — only if Heritage smoke-test demands |
 | 5-Cleanup | Legacy file retirement, feature-flag removal, shim deletion, stale prose copy revisit | n/a | ⏳ pending — gated on 30-day canary |
 
 See `docs/features/phase-4-plan.md` for the detailed Phase 4b/4c partition plan.
+
+## Phase 4a-6 — cross-table apply (2026-04-26)
+
+Phase 4a-6 closes the cross-table loop opened by 4a-3: cross-table TFMs that previously had to be authored, then short-circuited at apply time, now run through `dq_apply_field_transform_joined` end-to-end. The same RPC handles both branches; the action layer routes them by deriving `p_join_spec` per apply.
+
+This is a **single atomic commit** spanning a migration, a new utility module, an overload extension, action-layer routing, retirement of the three-layer transparency stack, and a documentation pass — paired with `tests/integration/transform-apply-cross-table-heritage.test.ts` for end-to-end verification on Heritage. Founder decisions §1-OQ-A through §10-OQ-B (locked 2026-04-26) plus the additional `CROSS_TABLE_FK_INFERENCE_FAILED` error code drove the scope.
+
+### Migration 076 — `dq_apply_field_transform_joined` cross-table branch
+
+`supabase/migrations/076_dq_apply_field_transform_joined_cross_table.sql` is a `CREATE OR REPLACE` (idempotent — re-running against an already-migrated DB is a no-op). The function gains a four-arg signature: `(p_target_field_mapping_id UUID, p_target_field_name TEXT, p_transform_sql TEXT, p_join_spec JSONB DEFAULT NULL)`.
+
+**Same-table branch (preserved byte-for-byte from migration 074):** when `p_join_spec IS NULL`, the function executes the existing single-`data_rows`-partition `UPDATE staged_data_rows ... FROM data_rows d` shape. No changes to row semantics, side effects, or error surface — the proven path is left untouched (§5-OQ-A: pure function update + grant + comment, no fixture gates).
+
+**Cross-table branch (new):** when `p_join_spec IS NOT NULL`, the function:
+
+1. Validates `p_join_spec` shape on entry. Required keys: `dominant_table_id` (UUID-text), `joins` (array). Each `joins[i]` element requires `joined_table_id`, `via_fk_field`, `to_fk_field`, `alias`. Missing or wrong-typed keys raise an `EXCEPTION` with a structured message — the caller (action layer) is responsible for sending well-formed JSONB; runtime raise is defense-in-depth.
+2. Builds dynamic SQL with one `LEFT JOIN LATERAL ( SELECT * FROM data_rows ... ORDER BY row_number LIMIT 1 ) <alias> ON TRUE` per joined-table entry (§3-OQ-A). The `LIMIT 1` + `ORDER BY row_number` tiebreak (§3-OQ-B) makes 1:N relationships deterministic — when multiple joined-side rows match a given dominant row, the lowest `row_number` wins. `LEFT JOIN` (not `INNER`) preserves dominant-row cardinality so an FK miss does not drop the row from the apply set.
+3. The `UPDATE staged_data_rows` body executes the user's `p_transform_sql` (already alias-qualified by the action layer's `wrapFieldRefsInJsonb` cross-table overload — see below) over the dominant projection plus the joined LATERAL aliases. FK-missed joined cells resolve to `NULL`; the SQL operator that consumes the NULL produces the same result as same-table apply on a NULL source field — typically a NULL output, which `staged_data_rows.transformed_row_data` then preserves the prior value for (§8a-OQ matches same-table behaviour).
+4. Emits `RAISE NOTICE clock_timestamp()` deltas at three checkpoints (entry, each LATERAL added, final UPDATE complete) — §9-OQ-B timing instrumentation. Real-data performance is observable from Supabase logs without functional indexes; index revisits are deferred until measured cost forces optimization (§9-OQ-A: no special ingestion-side index strategy planned).
+5. Re-grants `EXECUTE` (idempotent), updates `COMMENT ON FUNCTION` to reflect cross-table support.
+
+The legacy `dq_apply_field_transform` (single-TM, used by the value-assignment loop) is untouched and not deprecated — that's a Phase 5-Cleanup concern (§5-OQ-B).
+
+### `p_join_spec` JSONB contract
+
+The on-disk shape consumed by the RPC (snake_case, mirrors `migrations/076` parameter parsing):
+
+```json
+{
+  "dominant_table_id": "<uuid>",
+  "joins": [
+    {
+      "joined_table_id": "<uuid>",
+      "via_fk_field": "<dominant-side FK column name>",
+      "to_fk_field":  "<joined-side referenced column name>",
+      "alias":        "j0"
+    }
+  ]
+}
+```
+
+Distinct from the camelCase `JoinSpec` interface in `lib/types/mappings-for-redesign.ts`, which describes the per-row `mapping_sources.join_spec` storage shape. The action layer translates between the two; this is intentional separation between storage (per-source-row) and RPC contract (per-table).
+
+`alias` is purely positional: the dominant projection always uses `'d'`; joined contributors use `'j0'`, `'j1'`, etc., assigned in input order. The aliases match what the RPC's dynamic SQL expects in the LATERAL clauses, AND what the cross-table `wrapFieldRefsInJsonb` overload emits in the rewritten transform SQL.
+
+### `buildJoinSpec` — action-layer derivation
+
+`lib/utils/transform-cross-table.ts` exports two helpers, paired with unit tests in `tests/utils/transform-cross-table.test.ts`:
+
+- **`deriveJoinSpec(input)`** — pure function. Given pre-fetched dominant + per-table contributor metadata, produces `{ ok: true, spec, fieldMap }` or `{ ok: false, errorCode: 'CROSS_TABLE_FK_INFERENCE_FAILED', error }`. Same-table TFMs (zero contributors) return `{ ok: true, spec: null, fieldMap: null }` — the caller short-circuits to the same-table apply path.
+- **`buildJoinSpec(tfmId, supabase)`** — async wrapper. Pulls `mapping_sources`, the parent TFM's `project_id`, the project's `tables`, and the involved tables' `fields` in four queries, dedupes per-source rows to per-table joins, then delegates to `deriveJoinSpec`.
+
+**Per-source → per-table dedupe (§1-OQ-A).** `mapping_sources.join_spec` is recorded *per row* (one per contributing source field). The RPC consumes *per table* — one LATERAL clause per distinct joined source table, regardless of how many fields from that table contribute. A 4-field cross-table TFM with two fields from `LOAN_MASTER` (dominant) and two fields from `CIF_MASTER` (joined) collapses to exactly one LATERAL clause for `CIF_MASTER`. The first non-null `join_spec` observed per joined table wins; null rows fall through to FK re-derivation. Pinned in `tests/utils/transform-cross-table.test.ts` "per-row → per-table dedupe".
+
+**FK re-derivation when stored is null (§8f-OQ).** `createFieldMapping` writes `mapping_sources.join_spec=null` when a single FK candidate was found at write time (the read path re-derives the annotation via `inferFkCandidates`). At apply time we re-derive again — schema may have shifted since the mapping was authored. If `inferFkCandidates` now returns 0 or 2+ candidates, `buildJoinSpec` returns `{ ok: false, errorCode: 'CROSS_TABLE_FK_INFERENCE_FAILED', error: '<copy>' }` *before* invoking the RPC. The action layer surfaces both `error` and `errorCode` so the UI can render the user-facing copy ("FK relationship changed since this mapping was authored. Please re-author the mapping.") and downstream callers can branch on the structured code. Auto-persisting a re-derived spec is intentionally NOT done — parity with the read path, and it would mask schema drift.
+
+**No TFM-level join_spec column (§2-OQ-A).** The per-row `mapping_sources.join_spec` storage shape is unchanged. We did not add a denormalized TFM-level column; the per-apply derivation is cheap (four queries, all keyed on indexes), and a denormalized cache would have to be invalidated on every schema change.
+
+### `wrapFieldRefsInJsonb` cross-table overload
+
+`lib/utils/transform-helpers.ts` gains a second overload signature:
+
+```ts
+function wrapFieldRefsInJsonb(sql: string, fieldNames: string[]): string                                // same-table (preserved)
+function wrapFieldRefsInJsonb(sql: string, fieldsByTableName: Map<string, CrossTableFieldEntry>): string // cross-table (new)
+```
+
+Same-table call sites (single-source mapped TFMs and value assignments) are zero-change — the `string[]` signature preserves migration 074 semantics byte-for-byte (§4-OQ-B).
+
+**Field reference qualification (§4-OQ-A).** Cross-table transforms must use table-qualified field references (`Table.Field`). Bare or singly-quoted unqualified references in cross-table TFMs throw `Cross-table transforms must use table-qualified field references.` because two same-named columns in different tables would otherwise resolve to whichever happens to win.
+
+The cross-table overload accepts three input shapes for qualified references:
+- `"LOAN_MASTER.LOAN_TYPE"` — single quoted-identifier with the dot inside the quotes
+- `LOAN_MASTER.LOAN_TYPE` — two adjacent bare identifiers separated by a dot
+- `LOAN_MASTER . LOAN_TYPE` — same with whitespace around the dot (SQL convention)
+
+All three rewrite to `(<alias>.row_data->>'Field')` using the alias from the input map (`'d'` for dominant, `'j0'` / `'j1'` / … for joined contributors). Single-quoted SQL string literals are passed through untouched in both same-table and cross-table modes — value strings like `'Active'` or `'CIF_TYPE'` (as a literal) are never rewritten.
+
+The action layer's `applyTransform` and `testTransformation` invoke the cross-table overload only on the cross-table branch (when `buildJoinSpec` returns a populated `spec`); the same-table branch keeps the `string[]` signature. Pinned in `tests/actions/transforms-cross-table-apply.test.ts` X3 block.
+
+### `applyTransform` and `testTransformation` routing
+
+`lib/actions/transformations.ts:applyTransform` flow for mapped TFMs (Phase 4a-6 shape):
+
+1. `resolveTfmId` + `loadTfmContext` + `requireProjectPermission(..., 'editor')` — unchanged.
+2. **`buildJoinSpec(ctx.tfm.id, supabaseAdmin)`** — runs *before* the maintenance guard. Returns `{ ok: true, spec, fieldMap }` for both same-table (`spec=null`) and cross-table TFMs, or `{ ok: false, errorCode: 'CROSS_TABLE_FK_INFERENCE_FAILED' }`. Failure short-circuits with the structured envelope.
+3. Inside `guardWrites`: for the cross-table branch, wrap the user SQL with the cross-table overload (using `okSpec.fieldMap`) and pass `p_join_spec = okSpec.spec` to the RPC. For the same-table branch, the existing flat-field-name list path runs unchanged (`p_join_spec = null`). Wrap-time errors (bare-ref violations) are caught and converted to `{ success: false, error }` rather than propagating as exceptions.
+4. RPC call passes the four-arg payload `(p_target_field_mapping_id, p_target_field_name, p_transform_sql, p_join_spec)`. Pinned in `tests/actions/transforms-cross-table-apply.test.ts` X2 block.
+
+`testTransformation` mirrors the routing logic so FK ambiguity surfaces consistently across Apply and Test (X5 block). Cross-table SQL is qualified-aware-rewritten then alias-stripped (`<alias>.row_data->>'Field'` → `row_data->>'Field'`) before handoff to the single-partition `execute_transform_test` RPC, which doesn't accept aliases. The dominant-table portion previews; joined-table refs collapse to NULL until a join-aware test RPC ships in Phase 4-extras.
+
+The previous `CROSS_TABLE_TRANSFORM_NOT_YET_SUPPORTED` short-circuit is **removed** (§6-OQ-A). The `TransformWriteErrorCode` union member is also removed and replaced with `CROSS_TABLE_FK_INFERENCE_FAILED`. Source-level invariant pins this in `tests/actions/transforms-cross-table-apply.test.ts` X4 + X6 blocks.
+
+### Transparency stack retirement (§6-OQ-A + §6-OQ-B)
+
+The Phase 4a-3 three-layer transparency stack is fully retired. Surfaces touched (19 enumerated touch points, paraphrased here):
+
+**Action layer:**
+- `lib/actions/transformations.ts` — `isCrossTableTfm` private helper deleted; `projectHasCrossTableMappings` exported helper deleted; `CROSS_TABLE_TRANSFORM_NOT_YET_SUPPORTED` union member removed; header-comment narrative updated to reference 4a-6 wiring.
+- `lib/actions/mappings-for-redesign.ts` — JSDoc on `createFieldMapping` updated to point at the working apply path and document `CROSS_TABLE_FK_INFERENCE_FAILED`.
+
+**Legacy Transform UI:**
+- `app/app/projects/[projectId]/transform/page.tsx` — `projectHasCrossTableMappings` server-fetch removed; `hasCrossTableMappings` prop dropped from the `TransformContent` invocation.
+- `app/app/projects/[projectId]/transform/TransformContent.tsx` — `hasCrossTableMappings` prop deleted; `disabled` clauses on `Test Transform` and `Apply Transform` no longer reference `selectedContext?.field.isCrossTable`; the "future release" tooltip copy is removed.
+
+**Redesign Transform UI placeholder:**
+- `app/app/projects/[projectId]/transform/redesign/TransformContent.tsx` — `hasCrossTableMappings` prop deleted; the `transform-redesign-cross-table-note` informational line is removed.
+
+**Drawer Sources badge:**
+- `app/app/projects/[projectId]/mapping/redesign/components/MappingDrawer.tsx` — `CrossTableApplyBadge` component deleted; `headerAside` plumbing on `SourcesSection` no longer threads the badge.
+
+**Tests:**
+- `tests/components/transform-cross-table-disabled.test.ts` deleted; replaced by `tests/components/transform-cross-table-enabled.test.ts` (negative invariant — pins that no `disabled={...}` expression references `isCrossTable`, no "future release" copy remains, no `hasCrossTableMappings` prop remains).
+- `tests/actions/transforms-refinements.test.ts` — R2c block removed (it pinned the retired short-circuit + `isCrossTableTfm` helper). R2 updated to assert the new payload shape (`p_join_spec` derived via `buildJoinSpec`, defaults to null for same-table).
+- `tests/components/mapping-drawer.test.tsx` — assertion flipped to "badge no longer rendered".
+- `tests/components/transform-redesign-placeholder.test.tsx` — assertion flipped to "cross-table note no longer rendered".
+
+### Test coverage (§7-OQ-A + §8d-OQ)
+
+| Layer | File | What it pins |
+|---|---|---|
+| Pure derivation | `tests/utils/transform-cross-table.test.ts` | Same-table short-circuit, stored-spec honour, FK re-derivation (1/0/2+ candidates, unparseable `fk_reference`), 3-table aliasing (`d`/`j0`/`j1`), per-row → per-table dedupe via `buildJoinSpec` async stub, ambiguous-FK schema-drift case |
+| SQL rewriting | `tests/utils/transform-helpers.test.ts` | Same-table overload BCC (bare/quoted/`"Table.Field"` forms, literal preservation), cross-table overload (quoted + 2-token + whitespace-tolerant dot, bare-ref throw, literal preservation, unknown qualifier passthrough) |
+| Action routing | `tests/actions/transforms-cross-table-apply.test.ts` | `buildJoinSpec` gates the RPC call (X1), four-arg payload shape (X2), overload routing per branch (X3), transparency stack retirement (X4), `testTransformation` routing parity (X5), `TransformWriteErrorCode` union member (X6) |
+| Component | `tests/components/transform-cross-table-enabled.test.ts` | No `disabled={...}` references `isCrossTable`; no "future release" copy; no `hasCrossTableMappings` prop |
+| Integration (on-demand) | `tests/integration/transform-apply-cross-table-heritage.test.ts` | End-to-end seed → apply → assert composite shape on `staged_data_rows` → cleanup against Heritage; gated by `RUN_TRANSFORM_APPLY_CROSS_TABLE_HERITAGE_INTEGRATION=1`. Covers 2-table cases (§8d-OQ); 3-table SQL generation pinned via the unit + source-level layers above. |
+
+### Deferrals carried forward to Phase 4-extras
+
+- **`join_strict` semantics (§8b-OQ).** Today every join is `LEFT JOIN LATERAL` (preserve prior on FK miss). A future toggle to opt into `INNER JOIN` semantics (drop dominant rows on FK miss) is deferred — Heritage hasn't surfaced a need.
+- **Cross-table preview parity in `testTransformation`.** The single-partition `execute_transform_test` RPC doesn't accept aliases, so cross-table previews currently strip aliases and resolve joined refs to NULL. A join-aware test RPC is queued for Phase 4-extras; the alias-stripping comment in `lib/actions/transformations.ts` is the explicit handoff.
+- **JSONB functional indexes on `data_rows.row_data`.** Not needed at Heritage scale; revisit if real-data timing instrumentation surfaces measurable cost (§9-OQ-A + §9-OQ-B).
 
 ## Cleanup items
 

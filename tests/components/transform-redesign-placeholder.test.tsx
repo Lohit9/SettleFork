@@ -3,76 +3,38 @@ import { render, screen } from '@testing-library/react'
 import TransformRedesignContent from '@/app/app/projects/[projectId]/transform/redesign/TransformContent'
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Phase 4a-3 — Transform redesign placeholder cross-table note.
+// Phase 4a-6 — retired cross-table-apply transparency note.
 // ─────────────────────────────────────────────────────────────────────────────
 //
-// The redesign Transform UI is still a Phase-3 placeholder. Block F Part B
-// (Apply/Test button disabling) only fires on the legacy Transform UI, so
-// flag-on projects with cross-table mappings would otherwise see no UI-side
-// transparency that cross-table apply isn't yet supported. The placeholder
-// renders an additional informational note when `hasCrossTableMappings` is
-// true. These tests pin that contract.
+// Phase 4a-3 added a `hasCrossTableMappings` prop + a transparency note to the
+// redesign Transform placeholder while the cross-table apply RPC branch was
+// stubbed. Phase 4a-6 wired the branch (migration 076) and retired the
+// note (alongside the legacy Transform tab disabled-button stack and the
+// drawer Sources badge).
+//
+// These negative invariants pin that the prop and note are gone — a
+// regression that re-introduces them here surfaces immediately.
 
-describe('TransformRedesignContent — cross-table apply note', () => {
-  it('renders the cross-table-apply note when hasCrossTableMappings is true', () => {
-    render(
-      <TransformRedesignContent
-        projectId="p1"
-        projectName="Test Project"
-        hasCrossTableMappings={true}
-      />,
-    )
-    const note = screen.getByTestId('transform-redesign-cross-table-note')
-    expect(note).toBeInTheDocument()
-    expect(note.textContent).toMatch(/cross-table mappings/i)
-    expect(note.textContent).toMatch(
-      /Transform application for cross-table mappings ships in a future release/i,
-    )
-  })
-
-  it('does NOT render the note when hasCrossTableMappings is false', () => {
-    render(
-      <TransformRedesignContent
-        projectId="p1"
-        projectName="Test Project"
-        hasCrossTableMappings={false}
-      />,
-    )
-    expect(
-      screen.queryByTestId('transform-redesign-cross-table-note'),
-    ).toBeNull()
-  })
-
-  it('does NOT render the note when hasCrossTableMappings prop is omitted (default false)', () => {
+describe('TransformRedesignContent — cross-table apply note retired (Phase 4a-6)', () => {
+  it('does NOT render a cross-table-apply note in the placeholder', () => {
     render(
       <TransformRedesignContent projectId="p1" projectName="Test Project" />,
     )
     expect(
       screen.queryByTestId('transform-redesign-cross-table-note'),
     ).toBeNull()
+    expect(
+      screen.queryByText(/cross-table mappings ships in a future release/i),
+    ).toBeNull()
   })
 
-  it('renders the note BELOW the project ID/name dl block (visual ordering)', () => {
-    const { container } = render(
-      <TransformRedesignContent
-        projectId="p1"
-        projectName="Test Project"
-        hasCrossTableMappings={true}
-      />,
+  it('placeholder renders without any cross-table prop in the props contract', () => {
+    // Type-system invariant: the component no longer accepts
+    // `hasCrossTableMappings`. Authoring with the prop is a TS error;
+    // this runtime test pins the surface stays clean.
+    render(
+      <TransformRedesignContent projectId="p1" projectName="Test Project" />,
     )
-    const placeholder = screen.getByTestId('transform-redesign-placeholder')
-    const dl = placeholder.querySelector('dl')
-    const note = screen.getByTestId('transform-redesign-cross-table-note')
-    // dl precedes the note in document order
-    expect(dl).not.toBeNull()
-    const allChildren = Array.from(placeholder.children)
-    const dlIdx = allChildren.indexOf(dl as Element)
-    const noteIdx = allChildren.indexOf(note)
-    expect(dlIdx).toBeGreaterThanOrEqual(0)
-    expect(noteIdx).toBeGreaterThan(dlIdx)
-    // Smaller-text + slate-600 visual treatment
-    expect(note.className).toContain('text-xs')
-    expect(note.className).toContain('text-slate-600')
-    expect(container.innerHTML).not.toMatch(/\bdark:/)
+    expect(screen.getByTestId('transform-redesign-placeholder')).toBeInTheDocument()
   })
 })

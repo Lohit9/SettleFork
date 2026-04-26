@@ -417,14 +417,16 @@ export type CreateFieldMappingResult =
  *         candidate list (defense-in-depth) and persist a populated
  *         `join_spec` JSONB.
  *
- * Note (apply RPC limitation): the Transform-tab apply path
- * (`dq_apply_field_transform_joined`) does NOT yet support
- * cross-table joins. `lib/actions/transformations.ts:applyTransform`
- * detects cross-table TFMs and returns
- * `CROSS_TABLE_TRANSFORM_NOT_YET_SUPPORTED` so the user gets a clear
- * error rather than a silent failure. This wrapper writes the
- * cross-table mapping correctly; downstream apply lands in a future
- * phase that wires the RPC's join branch.
+ * Apply RPC: Phase 4a-6 wired the cross-table branch of
+ * `dq_apply_field_transform_joined` (migration 076).
+ * `lib/actions/transformations.ts:applyTransform` derives the
+ * `p_join_spec` JSONB at apply time via `buildJoinSpec` (per-source
+ * dedupe to per-table joins, FK re-derivation when stored
+ * `join_spec` is null). Cross-table mappings authored here apply
+ * end-to-end without further user action. Re-derivation that yields
+ * 0 or 2+ FK candidates surfaces `CROSS_TABLE_FK_INFERENCE_FAILED`
+ * — typically a sign the schema has shifted since the mapping was
+ * authored.
  *
  * SEQUENCE (per Phase 4a-3 investigation §2):
  *   1. Auth + permission (`requireProjectPermission(..., 'editor')`).

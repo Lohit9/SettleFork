@@ -88,9 +88,18 @@ describe('[transforms refinements] R2 — applyTransform RPC wiring (mapped vs V
       'export async function revertTransform(',
     )
     expect(body).toContain("'dq_apply_field_transform_joined'")
-    // The mapped branch passes the TFM id directly and leaves join_spec null.
+    // The mapped branch passes the TFM id directly and a derived
+    // `p_join_spec` JSONB (null for same-table, populated for
+    // cross-table — Phase 4a-6 / migration 076).
     expect(body).toMatch(/p_target_field_mapping_id:\s*ctx\.tfm\.id/)
-    expect(body).toMatch(/p_join_spec:\s*null/)
+    expect(body).toMatch(/p_join_spec\s*,/)
+    // The cross-table spec is built via buildJoinSpec — pinned here
+    // so a future refactor that inlines or renames the helper will
+    // surface as a test failure rather than a silent regression.
+    expect(body).toMatch(/buildJoinSpec\s*\(/)
+    // Same-table path defaults p_join_spec to null (preserving
+    // migration 074 byte-for-byte semantics on the same-table branch).
+    expect(body).toMatch(/let\s+p_join_spec[^=]*=\s*null/)
   })
 
   it('applyTransform falls back to dq_apply_field_transform for VAs', () => {
@@ -105,42 +114,15 @@ describe('[transforms refinements] R2 — applyTransform RPC wiring (mapped vs V
   })
 })
 
-// ─── R2c: Cross-table apply transparency (Phase 4a-3) ───────────────────────
-
-describe('[transforms refinements] R2c — applyTransform cross-table guard', () => {
-  it('TransformWriteErrorCode union includes CROSS_TABLE_TRANSFORM_NOT_YET_SUPPORTED', () => {
-    expect(TRANSFORMS_SRC).toMatch(/CROSS_TABLE_TRANSFORM_NOT_YET_SUPPORTED/)
-    // Must appear in the union, not just a stray string.
-    expect(TRANSFORMS_SRC).toMatch(/export\s+type\s+TransformWriteErrorCode[\s\S]*?CROSS_TABLE_TRANSFORM_NOT_YET_SUPPORTED/)
-  })
-
-  it('isCrossTableTfm helper is defined and queries mapping_sources by source_table_id', () => {
-    expect(TRANSFORMS_SRC).toMatch(/async\s+function\s+isCrossTableTfm\s*\(/)
-    const body = sliceBetween(
-      TRANSFORMS_SRC,
-      'async function isCrossTableTfm(',
-      '// ─── applyTransform',
-    )
-    expect(body).toMatch(/from\(['"]mapping_sources['"]\)/)
-    expect(body).toMatch(/select\(['"]source_table_id['"]\)/)
-    expect(body).toMatch(/eq\(['"]target_field_mapping_id['"]/)
-    // Distinct count > 1 logic.
-    expect(body).toMatch(/Set/)
-    expect(body).toMatch(/distinct\.size\s*>\s*1/)
-  })
-
-  it('applyTransform short-circuits with CROSS_TABLE_TRANSFORM_NOT_YET_SUPPORTED for cross-table TFMs', () => {
-    const body = sliceBetween(
-      TRANSFORMS_SRC,
-      'export async function applyTransform(',
-      'export async function revertTransform(',
-    )
-    expect(body).toMatch(/isCrossTableTfm\s*\(\s*ctx\.tfm\.id\s*\)/)
-    expect(body).toMatch(/errorCode:\s*['"]CROSS_TABLE_TRANSFORM_NOT_YET_SUPPORTED['"]/)
-    // Guard fires only for mapped TFMs (not VAs).
-    expect(body).toMatch(/!isValueAssignment[\s\S]{0,200}isCrossTableTfm/)
-  })
-})
+// ─── R2c retired (Phase 4a-6) ────────────────────────────────────────────────
+//
+// The R2c describe block originally pinned the Phase 4a-3 transparency
+// stack: `CROSS_TABLE_TRANSFORM_NOT_YET_SUPPORTED` error code,
+// `isCrossTableTfm` helper, and the short-circuit in `applyTransform`.
+// All three were retired in Phase 4a-6 once the cross-table apply RPC
+// branch shipped via migration 076. New invariants for the
+// cross-table apply path live in
+// `tests/actions/transforms-cross-table-apply.test.ts`.
 
 // ─── R3: Cascade RPC is joined-only ──────────────────────────────────────────
 

@@ -1,6 +1,6 @@
 # Phase 4 plan — mutation completeness
 
-**Status:** Phase 4a complete (2026-04-26). Phase 4b / 4c / 4-extras pending. Created 2026-04-25; last updated 2026-04-26.
+**Status:** Phase 4a complete (2026-04-26, including 4a-6 cross-table apply). Phase 4b / 4c / 4-extras pending. Created 2026-04-25; last updated 2026-04-26.
 **Predecessor:** Phase 3 closed at `b900538` on `main`. The
 redesign UI is feature-flag gated (`projects.use_mapping_redesign`)
 and currently active only on Heritage Core in production.
@@ -16,31 +16,38 @@ and currently active only on Heritage Core in production.
 | 4a-4a | "Draft discarded" toast primitive + row-switch Undo affordance | ✅ shipped 2026-04-25 |
 | 4a-4b | AI Suggest UI integration (W6 in W1's form — `[Suggest with AI]` footer + in-form pill, ConfidencePill, Why? toggle, replace-warning, laundering-prevention save metadata) | ✅ shipped 2026-04-26 |
 | 4a-5 | Closure docs + code cleanup pass (`Phase 4a complete` section in `mapping-redesign.md`, stale-comment removal in `MappingDrawer.tsx`, established-patterns reference for 4b/4c maintainers) | ✅ shipped 2026-04-26 |
-| 4a-6 | Cross-table Transform apply — extend `dq_apply_field_transform_joined` to branch on `p_join_spec != NULL`, remove `CROSS_TABLE_TRANSFORM_NOT_YET_SUPPORTED` short-circuit, drop transparency stack | ⏳ pending — RPC design |
+| 4a-6 | Cross-table Transform apply — extend `dq_apply_field_transform_joined` to branch on `p_join_spec != NULL` (migration 076), `buildJoinSpec` derivation in action layer, retire `CROSS_TABLE_TRANSFORM_NOT_YET_SUPPORTED` short-circuit and the three-layer transparency stack | ✅ shipped 2026-04-26 |
 | 4-extras | Cross-table AI Suggest (LLM prompt redesign for joined sources), `AbortSignal` threading through `suggestMappingForTarget`, source-side acknowledgment toggle in sidebar | ⏳ pending — only if Heritage demands |
 | 4b | W2 + W3 + W4 (edit sources, combination, un-acknowledge) | ⏳ pending |
 | 4c | W5 (bulk operations) | ⏳ pending |
 | 5-Cleanup | Legacy `MappingContent.tsx` retirement, feature flag removal, shim deletion, stale prose copy revisit | ⏳ pending — 30-day canary gate |
 
-**Phase 4a closure summary:** Heritage Core has the full mapping authoring loop end-to-end in the redesign UI as of 2026-04-26: manual creation (same-table + cross-table), AI Suggest with confidence + rationale, audit-correct provenance via laundering prevention, toast-with-Undo for accidental discards, all four close paths handled coherently. See `docs/features/mapping-redesign.md` → "Phase 4a complete — Mapping authoring loop (2026-04-26)" for the full disposition including capabilities, known limitations, and the patterns-established reference for maintainers working on 4b / 4c / 5.
+**Phase 4a closure summary:** Heritage Core has the full mapping authoring loop end-to-end in the redesign UI as of 2026-04-26: manual creation (same-table + cross-table), AI Suggest with confidence + rationale, audit-correct provenance via laundering prevention, toast-with-Undo for accidental discards, all four close paths handled coherently. **4a-6 (2026-04-26) extended this to the apply path**: cross-table TFMs now run through `dq_apply_field_transform_joined`'s LATERAL-join branch end-to-end, with the action layer deriving `p_join_spec` per apply (parity with the read-path FK re-derivation). The Phase 4a-3 transparency stack (action error code + Transform tab disabled buttons + drawer Sources badge) is retired. See `docs/features/mapping-redesign.md` → "Phase 4a complete — Mapping authoring loop (2026-04-26)" and "Phase 4a-6 — cross-table apply (2026-04-26)" for the full disposition including capabilities, known limitations, and the patterns-established reference for maintainers working on 4b / 4c / 5.
 
 This document is the design artefact we work through together
 before firing each Phase 4 implementation prompt. Decisions
 in §10 were locked at the start of 4a-1; nothing further locks
 without explicit founder approval.
 
-> **Phase 4a-3 deferred work — cross-table transform apply.**
-> 4a-3 ships cross-table mapping creation with the full transparency
-> stack (founder decision §10-OQ-1, 2026-04-25). The underlying
-> `dq_apply_field_transform_joined` RPC does not yet branch on
-> `p_join_spec != NULL`. Cross-table TFMs short-circuit with
-> `errorCode: 'CROSS_TABLE_TRANSFORM_NOT_YET_SUPPORTED'` from
-> `applyTransform`; the Transform tab disables Apply / Test for
-> these rows; the drawer surfaces a transparency badge. A follow-up
-> phase (TBD — likely 4a-6 or a Phase 5 RPC pass) wires the
-> cross-table branch in the RPC and removes the structured error
-> code. See `docs/features/mapping-redesign.md` →
-> "Cross-table mapping creation (Phase 4a-3)" for the full disposition.
+> **Phase 4a-3 deferred work — cross-table transform apply.** ✅ closed by 4a-6 (2026-04-26).
+> 4a-3 shipped cross-table mapping *creation* with a three-layer
+> transparency stack (action error code +
+> Transform-tab disabled buttons + drawer Sources badge) per founder
+> decision §10-OQ-1 (2026-04-25). 4a-6 wired the cross-table branch
+> of `dq_apply_field_transform_joined` (migration 076) and retired
+> the entire transparency stack: the
+> `CROSS_TABLE_TRANSFORM_NOT_YET_SUPPORTED` error code is gone, the
+> Transform-tab buttons no longer disable on cross-table TFMs, and
+> the drawer Sources badge is removed. The action layer now derives
+> `p_join_spec` at apply time via `buildJoinSpec`
+> (`lib/utils/transform-cross-table.ts`) — per-source-row dedupe to
+> per-table joins plus FK re-derivation when stored `join_spec` is
+> null (parity with the read path). FK ambiguity at apply time
+> surfaces the new `CROSS_TABLE_FK_INFERENCE_FAILED` error code
+> (user copy: "FK relationship changed since this mapping was
+> authored. Please re-author the mapping."). See
+> `docs/features/mapping-redesign.md` → "Phase 4a-6 — cross-table
+> apply" for the full disposition.
 
 > **Phase 4a-4b deferred work — AbortSignal threading + cross-table AI.**
 > 4a-4b ships AI Suggest UI integration with two intentional gaps that
