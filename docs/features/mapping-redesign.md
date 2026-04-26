@@ -1676,6 +1676,88 @@ The shim is pure translation; no business logic. Unit-tested as part of Phase 2 
 
 Phase 3c completion removes the shim. `MappingContent.tsx` and `TransformContent.tsx` read the new model directly. `lib/compat/mapping-shim.ts` is deleted.
 
+## Phase 4a complete — Mapping authoring loop (2026-04-26)
+
+Phase 4a is implementation-complete. The redesign UI now supports the full mapping authoring loop end-to-end on Heritage Core: a user can create, AI-suggest, edit, save, approve, reject, and recover from accidental discards entirely within the new drawer + form surface, without falling back to the legacy `MappingContent.tsx`. Non-flag projects continue to render the legacy UI unchanged until Phase 5-Cleanup retires it.
+
+### What shipped — sub-phase recap
+
+| Sub-phase | Date | Scope | Anchor section |
+|---|---|---|---|
+| Pre-prep | 2026-04-25 | `ActionType` enum widening for new mapping log codes | n/a |
+| 4a-1 | 2026-04-25 | `createFieldMapping` + `suggestMappingForTarget` server-action wrappers + tests | `phase-4-plan.md` §2 |
+| 4a-2 | 2026-04-25 | `CreateMappingForm` shell + drawer integration (W1, manual same-table creation) | "Manual mapping creation (Phase 4a-2)" above |
+| 4a-3 | 2026-04-25 | Cross-table picker + Apply-RPC three-layer transparency stack | "Cross-table mapping creation (Phase 4a-3)" above |
+| 4a-4a | 2026-04-25 | `ToastProvider` + switch-row-while-dirty Undo affordance | "AI Suggest UI integration" §4a-4a above |
+| 4a-4b | 2026-04-26 | AI Suggest UI integration (footer + in-form pill, ConfidencePill, replace-warning, laundering prevention, strict-mode-resistant consumption guard) | "AI Suggest UI integration" §4a-4b above |
+| 4a-5 | 2026-04-26 | Closure docs + code cleanup pass (this section) | this section |
+
+### Capabilities now available in the redesign UI
+
+For Heritage users (the only flag-on project today):
+
+- **Manual mapping creation, same-table** — pick one or more source fields from the same source table as the target's TM, optionally choose a combination strategy when 2+ sources are picked, save with audit-correct manual provenance.
+- **Manual mapping creation, cross-table** — pick a source field from a *different* source table whose schema participates in an FK chain reaching the target's TM. The form auto-infers the join path and surfaces the Apply-RPC three-layer transparency stack (founder decision §10-OQ-1 of 4a-3).
+- **AI Suggest** — invoke `suggestMappingForTarget` per row from two surfaces (Rule 6 footer auto-trigger or in-form pill), pre-fill the form with suggested sources + combination + confidence + rationale, review and optionally edit before save. ConfidencePill renders threshold-banded color coding (≥70 high, 40-69 possible, <40 uncertain), `Why?` toggle exposes rationale on demand.
+- **Audit-correct provenance** — `aiSuggested=true` only persists when at least one originally-suggested source survives in the final selection. Removing every AI source and picking unrelated ones flips the mapping to manual provenance. Prevents laundering manual mappings under AI authorship.
+- **Toast-with-Undo for accidental discards** — clicking another row while a `CreateMappingForm` is dirty silently discards the draft and surfaces a 5-second toast with `[Undo]`. Restoration replays the URL drawer change, auto-activates the form, and re-hydrates source selection in one render.
+- **All four close paths handled coherently** — Cancel button, Esc, click-outside, and the X button all route through `formRef.current.requestClose()`, which pops the discard dialog when dirty and short-circuits when clean. The fifth path (row-switch-while-dirty) gets the toast-with-Undo affordance instead of a dialog (founder decision §8-OQ-1 of 4a-2).
+- **Approve / Reject** — unchanged from Phase 3 Gap 9; continues to work on freshly-saved Phase 4a mappings without modification.
+
+For non-Heritage projects: zero user-facing change. The flag is off; the legacy `MappingContent.tsx` continues to render via the back-compat shim.
+
+### Known limitations carried forward
+
+These are intentional Phase 4a deferrals, not bugs. Each is documented inline at its source and surfaced here for forward-look visibility.
+
+1. **AI Suggest is same-table only.** The wrapper (`lib/actions/mappings-for-redesign.ts` lines 1473-1497) hard-strips cross-table tails to `AI_INVALID_RESPONSE`. The LLM prompt explicitly steers same-table suggestions; cross-table AI requires a substantively harder prompt design that proposes joined-source mappings reliably enough to be useful. Deferred to a future LLM-prompt phase. See "AI Suggest UI integration" §"Same-table-only limitation" above.
+2. **AbortController for Suggest is client-side only.** `suggestMappingForTarget` does not accept a `signal` parameter; canceling a pending suggestion discards the response client-side but the server-side LLM call completes. Tokens are sunk cost (founder decision §7-OQ-2). Adding signal threading is a non-breaking future change. See "AI Suggest UI integration" §"Server action AbortSignal not threaded" above.
+3. **Cross-table Transform apply is gated.** Phase 4a-3 ships cross-table mapping *creation* end-to-end, but `dq_apply_field_transform_joined` does not yet branch on `p_join_spec != NULL`. Cross-table TFMs surface `errorCode: 'CROSS_TABLE_TRANSFORM_NOT_YET_SUPPORTED'` from `applyTransform`; the Transform tab disables Apply / Test for these rows; the drawer surfaces a transparency badge. Wiring the RPC branch is queued for a future phase (TBD — likely 4a-6 or a Phase 5 RPC pass). See "Cross-table mapping creation (Phase 4a-3)" above for the full disposition.
+4. **Edit-existing-mapping mutations not yet wired.** Phase 4b covers W2 (add/remove `mapping_sources` on a mapped TFM), W3 (combination_type change), and W4 (un-acknowledge). Until 4b ships, mapped-row drawer bodies remain read-only — the user must Reject + recreate to fix a mistaken mapping.
+5. **Bulk operations not yet wired.** Phase 4c covers W5 (Approve all / Reject all per TM, Approve high-confidence project-wide). Until 4c ships, every approval/rejection is a per-row drawer action.
+6. **Empty-state prose on Rule 6 unmapped rows is stale on Heritage.** `UNMAPPED_BODY_PROSE` ("Remapping unmapped fields is coming soon. For now, use the legacy Mapping view to create a new mapping.") was authored pre-Phase-4a as an empty-state placeholder. Heritage now has both `[Suggest with AI]` and `[Create mapping]` footer buttons on the same drawer, making the prose contradictory. The prose stays for non-flag projects (where the legacy view IS the answer) and a copy revisit is queued for Phase 5-Cleanup once the flag comes off and the legacy file retires. Code-comment annotated at `MappingDrawer.tsx` `UnmappedBody` JSDoc.
+7. **Legacy `MappingContent.tsx` still in tree.** The 4,008-LOC legacy file plus the `lib/compat/mapping-shim.ts` translation layer continue to power non-flag projects. Removal is Phase 5-Cleanup, after the flag has been on globally for 30+ days canary.
+
+### Patterns established in Phase 4a (vs legacy)
+
+For future maintainers and agents working on Phase 4b / 4c / 5: these are the patterns Phase 4a established that should be followed by subsequent mutation gaps. Each replaces or extends a legacy pattern.
+
+| Concern | Phase 4a-established pattern | Legacy pattern (do not reuse) |
+|---|---|---|
+| Server-side write surface | Thin wrappers in `lib/actions/mappings-for-redesign.ts` that decode redesign `rowId` shim format → resolved TFM/source ids, defend pre-flight, identity-snapshot, delegate to legacy action, race-handle `alreadyDeleted`, emit activity log, return redesign-shaped result | Direct calls to `lib/actions/mappings.ts` (which owns auth/perm/guardWrites but does not log most mutations) |
+| Form state | Hand-rolled `useState` + `useTransition` + `forwardRef`/`useImperativeHandle` for parent-controlled close. Founder decision §7 — no react-hook-form, no Zod | Inline-add-field-row idiom (`MappingContent.tsx:523`) |
+| Source picker | `SourceFieldPicker` (Radix-free, server-order-preserved, multi-select with chips, same-table + cross-table modes, no client `.sort()`) | Legacy inline picker on the legacy mapping page |
+| Combination strategy | Inline radio group surfaced only when 2+ sources selected; example text dynamic from sample values; `concat_space` default; `custom_sql` disabled in 4a (transform-tab concern) | Legacy combination dropdown on the legacy mapping page |
+| Discard guard | `formRef.current.requestClose()` routed from all four close paths (Cancel/Esc/click-outside/X). Pops `DiscardChangesDialog` when dirty; short-circuits when clean. The fifth path (row-switch-while-dirty) gets toast-with-Undo, not the dialog | Legacy mapping page has no dirty guard |
+| Toast surface | Single `ToastProvider` at `MappingContent` root + `useToast` consumer hook. ARIA `role="status"`, 5-second auto-dismiss, single action slot. Used for "Draft discarded" + Undo today; reusable for any non-blocking mutation feedback in Phase 4b/4c | Legacy uses inline error banners and `confirm()` dialogs |
+| Confidence formatting | Single source of truth in `lib/utils/confidence-format.ts` (`formatConfidencePercent`, `classifyConfidence`, `formatConfidenceLabel`). ConfidencePill is the only consumer of color bands; pre-existing `ConfidenceCell` / `RowConfidenceSection` / `SourceBullet` cells stay muted slate | Three inline `formatConfidence` helpers, now consolidated |
+| AI Suggest invocation | `requestSuggest` race-resolution: abort prior + fire new (founder decision §1-OQ-1). `AbortController` is client-side discard only; server tokens are sunk cost. `originalSuggestedIds` tracks initial source set for laundering prevention at save time | Legacy `suggestRemainingMappings` is per-TM bulk only |
+| Strict-mode resistance | Parent-owned `useRef<Set<string>>` consumption guards in components that survive child remounts. The 4a-4b auto-suggest guard lives in `MappingDrawer` (does not remount) keyed by `targetField.id`, with `tryConsumeAutoSuggest` callback exposed to the form | n/a (legacy did not have strict-mode-sensitive effects) |
+| Error surface | Single generalized `ErrorBanner` (founder decision §7-OQ-1 of 4a-4b) parameterized via `actionLabel` + `onAction` props. `SUGGEST_ERROR_COPY` map drives affordance per error code. RATE_LIMITED is the only persistent affordance | Legacy uses ad-hoc inline error spans |
+| Discard dialog | Single `DiscardChangesDialog` parameterized via `variant: 'discard' \| 'replace-ai'` prop (founder decision §3-OQ-2 of 4a-4b) — no extraction, single component handles both cases | Legacy uses `confirm()` |
+| Audit log | Wrapper-side after successful delegate; one event per user action (`mapping_created`, `mapping_approved`, etc.). Phase 4a's wrappers carry the logging burden because the legacy actions do not (eight of eighteen are silent — see `phase-4-plan.md` §2.2) | Legacy emits `mapping_approved` and `mapping_rejected` from `updateFieldMappingStatus` only |
+| Provenance metadata | `aiSuggested` boolean on TFM rows persists only when the saved source set retains overlap with the most recent loaded suggestion's `sourceFieldIds`. `confidence` and `aiReasoning` ride along when `aiSuggested=true` and drop otherwise | Legacy persists AI metadata unconditionally on suggested mappings |
+| Cross-table apply transparency | Three-layer stack: (1) wrapper short-circuits with structured error code, (2) Transform tab disables Apply / Test, (3) drawer surfaces transparency badge. All three layers must move together when the RPC branch lands | Legacy never supported cross-table apply |
+
+### Smoke-test sign-off
+
+Heritage smoke test verified all 13 layers across 4a-4b's commit: Path B (footer) single-POST in dev (strict-mode fix confirmed live), auto-trigger from Rule 6 footer, in-form pill on empty manual form, cancel mid-pending (forwardRef path), replace warning when manually edited / suppressed when AI-pre-filled-and-untouched / fired when AI-pre-filled-then-edited, laundering prevention (both branches), race resolution (rapid Suggest+Cancel+Suggest), confidence pill colors at threshold boundaries, network error flow with Try again, refactor parity preserved on existing rows, dark/light mode parity preserved.
+
+End-to-end Phase 4a flow on Heritage (Reject → Suggest with AI → Save / Create cross-table → Save / row-switch Undo / Approve) is the recommended Phase 4b kickoff smoke check before any Phase 4b code lands.
+
+### Forward look — what remains in Phase 4
+
+| Sub-phase | Workstreams | Wrappers | Status |
+|---|---|---|---|
+| 4a-5 (this) | Closure docs + code cleanup | n/a | ✅ shipped 2026-04-26 |
+| 4a-6 (TBD) | Cross-table Transform apply RPC branch | extend `dq_apply_field_transform_joined` | ⏳ pending — gated on RPC design |
+| 4b | W2 + W3 + W4 (edit sources, edit combination, un-acknowledge) | wraps `editFieldMapping`, `deleteFieldMapping`, `removeAcknowledgment` + new `updateMappingCombination` | ⏳ pending |
+| 4c | W5 (bulk approve / reject / approve-high-confidence) | wraps `approveAllFieldMappings`, `rejectAllFieldMappings`, `approveHighConfidenceMappings` | ⏳ pending |
+| 4-extras | Cross-table AI Suggest, AbortSignal threading on Suggest, source-side acknowledgment toggle | new LLM prompt design + wrapper signature widen | ⏳ pending — only if Heritage smoke-test demands |
+| 5-Cleanup | Legacy file retirement, feature-flag removal, shim deletion, stale prose copy revisit | n/a | ⏳ pending — gated on 30-day canary |
+
+See `docs/features/phase-4-plan.md` for the detailed Phase 4b/4c partition plan.
+
 ## Cleanup items
 
 Items to remove during Phase 5-Cleanup:

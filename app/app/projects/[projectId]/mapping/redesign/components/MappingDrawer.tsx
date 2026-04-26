@@ -47,14 +47,15 @@ import {
 } from './CreateMappingForm'
 
 // ─────────────────────────────────────────────────────────────────────────────
-// MappingDrawer — Phase 3 Gaps 7 + 8a + 8b + 9.
+// MappingDrawer — Phase 3 Gaps 7 + 8a + 8b + 9, extended in Phase 4a-2 / 4a-3 /
+// 4a-4a / 4a-4b for the full mapping-authoring loop.
 // ─────────────────────────────────────────────────────────────────────────────
 //
 // Right-side drawer that opens when the user clicks a mapping row body.
 //
 // Gap 7 (shipped d0f8c58): the shell — sticky header with target field name +
 // target TableBadge + close X, sticky rule-specific subheader, scrollable body,
-// sticky footer placeholder, Esc / outside-click close, focus restore.
+// sticky footer (Esc / outside-click close, focus restore).
 //
 // Gap 8a (shipped f9d2896): body content for non-mapped row kinds.
 //
@@ -986,7 +987,7 @@ function AcknowledgedSubheader({ row }: { row: TargetAcknowledgedRow }) {
 //   target_acknowledged → AcknowledgedBody
 //   unmapped            → UnmappedBody
 //   value_assignment    → ValueAssignmentBody
-//   mapped              → MappedBody (still a placeholder; Gap 8b)
+//   mapped              → MappedBody (Gap 8b — per-source roster + combination)
 
 interface DrawerBodyProps {
   row: MappingRow
@@ -1298,13 +1299,22 @@ const UNMAPPED_BODY_PROSE =
  * Unmapped-row drawer body. No status section — unmapped state is implicit
  * from the prose.
  *
- * TODO(future remap gap, Phase 4 / TBD): replace this empty-state prose
- * with an inline "Suggest mapping" or "Add mapping" action when the
- * remap workflow lands in the redesign UI. Gap 9 shipped the
- * Approve/Reject footer for already-mapped rows, but starting a NEW
- * mapping from an unmapped target — the AI-suggest + drag-to-map
- * flows from the legacy Mapping view — has not yet been ported. Until
- * then the redesign drawer points the user to the legacy view.
+ * Phase 4a closure (2026-04-26): the TODO previously parked here for
+ * "future remap gap, Phase 4 / TBD" has shipped. Phase 4a-2 wired the
+ * inline `CreateMappingForm` (manual same-table creation), Phase 4a-3
+ * extended it to cross-table sources, and Phase 4a-4b added AI Suggest
+ * (footer button + in-form pill, ConfidencePill, replace-warning gate,
+ * laundering-prevention save metadata). The footer below now mirrors
+ * the form lifecycle — `[Suggest with AI]` `[Create mapping]` when
+ * inactive, `[Cancel suggestion]` while a suggestion is in flight,
+ * `[Cancel]` `[Save mapping]` once the form is active.
+ *
+ * `UNMAPPED_BODY_PROSE` remains as the empty-state copy shown before
+ * the user clicks either footer button. The "use the legacy Mapping
+ * view" steer is now stale on Heritage but kept for non-flag projects
+ * (where the legacy `MappingContent.tsx` still owns this surface);
+ * a copy revisit is queued as polish in Phase 5-Cleanup once the flag
+ * comes off and the legacy file retires.
  */
 interface UnmappedBodyProps {
   row: UnmappedRow
