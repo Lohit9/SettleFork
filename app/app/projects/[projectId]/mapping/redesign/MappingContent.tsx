@@ -64,6 +64,8 @@ import { TargetTableGroup } from './components/TargetTableGroup'
 import { MappingDrawer } from './components/MappingDrawer'
 import { SourceSchemaSidebar } from './components/SourceSchemaSidebar'
 import { useSidebarState, type SidebarState } from './components/useSidebarState'
+import type { CreateMappingFormSnapshot } from './components/CreateMappingForm'
+import { ToastProvider, useToast } from '@/lib/contexts/ToastContext'
 
 const SEARCH_DEBOUNCE_MS = 200
 
@@ -308,12 +310,18 @@ export default function MappingRedesignContent({
             {initialRedesignData === null ? (
               <NoDataState />
             ) : (
-              <MappingBody
-                projectId={projectId}
-                data={initialRedesignData}
-                highlightedRowIds={highlightedRowIds}
-                onClearHighlight={clearHighlight}
-              />
+              // Phase 4a-4a — toast provider scoped to the redesign
+              // page (founder decision §1-OQ-1). `MappingBody` reads
+              // `useToast` for the row-switch-while-dirty undo
+              // affordance.
+              <ToastProvider>
+                <MappingBody
+                  projectId={projectId}
+                  data={initialRedesignData}
+                  highlightedRowIds={highlightedRowIds}
+                  onClearHighlight={clearHighlight}
+                />
+              </ToastProvider>
             )}
           </div>
         </div>
@@ -395,6 +403,7 @@ function MappingBody({
 }) {
   const router = useRouter()
   const searchParams = useSearchParams()
+  const { pushToast } = useToast()
 
   // Seed filter state ONCE from the URL. Subsequent URL changes come from
   // user input via our own writers; we don't round-trip through router →
@@ -442,6 +451,38 @@ function MappingBody({
   const [pendingDrawerRowId, setPendingDrawerRowId] = useState<
     string | null
   >(null)
+
+  // ── Phase 4a-4a — row-switch-while-dirty toast wiring ─────────────
+  //
+  // `lastDirtyFormSnapshot` mirrors the unmapped-row form's dirty
+  // state. The drawer publishes via `onFormDirtyChange`; we cache the
+  // latest snapshot so a row-switch can offer Undo without forcing
+  // the form to remount around a deferred discard.
+  //
+  // `restoreRequest` is the one-shot payload threaded back into the
+  // drawer when the user clicks Undo. The drawer's
+  // `restoreFormState` prop reads from this state; the form's
+  // mount-time hydration effect calls `onRestoreConsumed` once it has
+  // applied the snapshot, at which point we clear the request.
+  //
+  // Founder decisions:
+  //   • §11-OQ-1 — snapshot scope = fields only (no errors/dialog
+  //     state). Defined in `CreateMappingForm` as
+  //     `CreateMappingFormSnapshot`.
+  //   • §11-OQ-2 — single rolling latest for rapid discards. The
+  //     toast's `id: 'row-switch-discard'` invokes the toast
+  //     primitive's replace-by-id semantics so the queue never
+  //     stacks more than one of these at once.
+  //   • §11-OQ-3 — toast does NOT fire on click-outside-drawer
+  //     (uses 4a-2's `DiscardChangesDialog`). Toast only fires on
+  //     row-switch. The dialog path lives inside `MappingDrawer`
+  //     and never reaches `handleRowClick`.
+  const [lastDirtyFormSnapshot, setLastDirtyFormSnapshot] =
+    useState<CreateMappingFormSnapshot | null>(null)
+  const [restoreRequest, setRestoreRequest] = useState<{
+    rowId: string
+    snapshot: CreateMappingFormSnapshot
+  } | null>(null)
 
   // Debounce only the search-param URL write. Other filters write
   // immediately because they cause a single state change per interaction.
@@ -497,16 +538,71 @@ function MappingBody({
 
   const handleRowClick = useCallback(
     (rowId: string) => {
+      // Phase 4a-4a — row-switch-while-dirty: capture the snapshot +
+      // original row id, push a toast with an Undo affordance, then
+      // proceed with the navigation. The form unmounts as the drawer
+      // re-keys to the new row; the snapshot is the only handle on
+      // the discarded draft.
+      //
+      // Ignore the no-op self-click (clicking the already-open row
+      // body should not fire a "draft discarded" toast — nothing was
+      // discarded).
+      const originalRowId = drawerRowId
+      const originalSnapshot = lastDirtyFormSnapshot
+      if (
+        originalSnapshot !== null &&
+        originalRowId !== null &&
+        originalRowId !== rowId
+      ) {
+        pushToast({
+          id: 'row-switch-discard',
+          variant: 'info',
+          message: 'Mapping draft discarded.',
+          actionLabel: 'Undo',
+          onAction: () => {
+            // Restore: navigate back to the original row, thread the
+            // snapshot down so the drawer can auto-activate the form
+            // and the form can re-hydrate its fields.
+            setRestoreRequest({
+              rowId: originalRowId,
+              snapshot: originalSnapshot,
+            })
+            setDrawerRowId(originalRowId)
+            writeUrl(filters, originalRowId)
+          },
+        })
+      }
+      // Clear the cached snapshot — the form is about to unmount and
+      // the discard has been recorded (either in a toast queue or
+      // silently if the row id is the same).
+      setLastDirtyFormSnapshot(null)
       setDrawerRowId(rowId)
       writeUrl(filters, rowId)
     },
-    [writeUrl, filters],
+    [writeUrl, filters, drawerRowId, lastDirtyFormSnapshot, pushToast],
   )
 
   const handleDrawerClose = useCallback(() => {
     setDrawerRowId(null)
     writeUrl(filters, null)
   }, [writeUrl, filters])
+
+  // Phase 4a-4a — drawer publishes its form's snapshot here whenever
+  // the dirty flag flips. Null = clean / form absent. We mirror it
+  // into `lastDirtyFormSnapshot` so `handleRowClick` has a single
+  // synchronous read for the toast trigger.
+  const handleFormDirtyChange = useCallback(
+    (snapshot: CreateMappingFormSnapshot | null) => {
+      setLastDirtyFormSnapshot(snapshot)
+    },
+    [],
+  )
+
+  // Phase 4a-4a — fired by the form once it has applied a restore
+  // snapshot. Clears the request so subsequent renders don't re-apply.
+  const handleRestoreConsumed = useCallback(() => {
+    setRestoreRequest(null)
+  }, [])
 
   // Phase 3 Gap 9 — drawer action completion. Approve and Reject have
   // different post-action UX:
@@ -788,6 +884,20 @@ function MappingBody({
         projectId={projectId}
         availableSourceFields={data.sourceFields}
         onSaveSuccess={handleDrawerSaveSuccess}
+        onFormDirtyChange={handleFormDirtyChange}
+        restoreFormState={
+          // Only thread the snapshot when it matches the currently
+          // open drawer row. Defense-in-depth — the drawer also
+          // checks `targetFieldId` before activating, but gating
+          // here keeps the drawer's prop surface stable across
+          // unrelated row navigations.
+          restoreRequest !== null &&
+          effectiveDrawerRow !== null &&
+          restoreRequest.rowId === effectiveDrawerRow.id
+            ? restoreRequest.snapshot
+            : null
+        }
+        onRestoreConsumed={handleRestoreConsumed}
       />
     </>
   )

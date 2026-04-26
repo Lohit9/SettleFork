@@ -119,6 +119,7 @@ describe('CreateMappingForm — initial render', () => {
       isDirty: false,
       canSave: false,
       isSavePending: false,
+      snapshot: null,
     })
   })
 })
@@ -147,6 +148,12 @@ describe('CreateMappingForm — selection + dirty/canSave publishing', () => {
       isDirty: true,
       canSave: true,
       isSavePending: false,
+      snapshot: {
+        targetFieldId: 'tf-1',
+        selectedIds: ['sf-cif-1'],
+        combinationType: 'concat_space',
+        joinAnnotations: {},
+      },
     })
   })
 
@@ -172,6 +179,7 @@ describe('CreateMappingForm — selection + dirty/canSave publishing', () => {
       isDirty: false,
       canSave: false,
       isSavePending: false,
+      snapshot: null,
     })
   })
 })

@@ -58,6 +58,7 @@ import {
   useEffect,
   useImperativeHandle,
   useMemo,
+  useRef,
   useState,
   useTransition,
 } from 'react'
@@ -87,6 +88,29 @@ import type { SourceFieldWithState } from '@/lib/types/mappings-for-redesign'
 import { SourceFieldPicker } from './SourceFieldPicker'
 
 // ── Public types ─────────────────────────────────────────────────────────────
+
+/**
+ * Phase 4a-4a — minimal serializable snapshot of the form's USER-INPUT
+ * fields. Used by:
+ *
+ *   • The drawer's `onFormDirtyChange` lift — published whenever the
+ *     form is dirty so `MappingContent` can offer Undo on row-switch.
+ *   • The drawer's `restoreFormState` re-hydrate path — the `Undo`
+ *     toast action passes a previously-captured snapshot back down so
+ *     the form re-mounts with the user's prior selections.
+ *
+ * Scope (founder decision §11-OQ-1): fields ONLY. Errors, dialog state,
+ * and ephemeral disambiguation cleanup are deliberately excluded — they
+ * are recovery surfaces, not draft content. `targetFieldId` is included
+ * so a stale snapshot for a different row can be detected and ignored
+ * cheaply.
+ */
+export interface CreateMappingFormSnapshot {
+  targetFieldId: string
+  selectedIds: string[]
+  combinationType: CreateFieldMappingCombinationType
+  joinAnnotations: Record<string, string>
+}
 
 /**
  * Imperative handle exposed by `CreateMappingForm` to its parent
@@ -138,8 +162,31 @@ export interface CreateMappingFormProps {
    * Notifies the parent (drawer) whenever the dirty flag flips so the
    * drawer's close-with-confirm intercept and the footer's Save-button
    * disabled state can read a single source of truth.
+   *
+   * Phase 4a-4a: also carries `snapshot` — the dirty-time snapshot of
+   * user-input fields, or `null` when the form is clean. The drawer
+   * lifts this further to `MappingContent` so a row-switch-while-dirty
+   * can offer an Undo affordance.
    */
-  onStateChange?: (state: { isDirty: boolean; canSave: boolean; isSavePending: boolean }) => void
+  onStateChange?: (state: {
+    isDirty: boolean
+    canSave: boolean
+    isSavePending: boolean
+    snapshot: CreateMappingFormSnapshot | null
+  }) => void
+  /**
+   * Phase 4a-4a — when a user undoes a row-switch-discard, the toast
+   * action passes a previously-captured snapshot back down here. The
+   * form applies the snapshot on mount, then immediately invokes
+   * `onRestoreConsumed` so the parent can clear the prop and avoid
+   * re-applying on subsequent renders. Stale snapshots whose
+   * `targetFieldId` doesn't match the current `targetField.id` are
+   * silently ignored (defense-in-depth — `MappingContent` already
+   * gates by row identity).
+   */
+  restoreFormState?: CreateMappingFormSnapshot | null
+  /** See `restoreFormState`. */
+  onRestoreConsumed?: () => void
 }
 
 // ── Internal types ───────────────────────────────────────────────────────────
@@ -199,6 +246,8 @@ export const CreateMappingForm = forwardRef<
     onSaveSuccess,
     onCancel,
     onStateChange,
+    restoreFormState,
+    onRestoreConsumed,
   },
   ref,
 ) {
@@ -301,6 +350,43 @@ export const CreateMappingForm = forwardRef<
     })
   }, [presentJoinedTableIds])
 
+  // ── Phase 4a-4a — restoreFormState mount-time hydration ─────────
+  //
+  // When a user undoes a row-switch-discard, `MappingContent` passes
+  // the previously-captured snapshot back down through the drawer.
+  // We apply it on mount (or on the first render where it becomes
+  // non-null), then call `onRestoreConsumed` so the parent clears the
+  // prop. The targetFieldId check is defense-in-depth — the drawer is
+  // keyed by row identity so a mismatched snapshot is unreachable in
+  // production paths, but defensive code beats a crash if a future
+  // bug threads the wrong shape through.
+  //
+  // We track "applied" via a ref instead of state so re-renders during
+  // the apply pass don't double-fire. The dependency on the snapshot
+  // identity covers the case where the user invokes Undo a second
+  // time within the same form mount (rare, but possible if they
+  // somehow row-switch + undo in rapid succession before unmount).
+  const restoreAppliedRef = useRef<CreateMappingFormSnapshot | null>(null)
+  useEffect(() => {
+    if (
+      restoreFormState !== null &&
+      restoreFormState !== undefined &&
+      restoreFormState !== restoreAppliedRef.current &&
+      restoreFormState.targetFieldId === targetField.id
+    ) {
+      restoreAppliedRef.current = restoreFormState
+      setSelectedIds(restoreFormState.selectedIds)
+      setCombinationType(restoreFormState.combinationType)
+      setJoinAnnotations({ ...restoreFormState.joinAnnotations })
+      // Resolved disambiguation entries from a previous attempt are
+      // intentionally NOT carried — `ambiguousCandidates` is server
+      // feedback that we'd need to re-derive on next save anyway.
+      setAmbiguousCandidates(new Map())
+      setEditingResolvedTableIds(new Set())
+      onRestoreConsumed?.()
+    }
+  }, [restoreFormState, targetField.id, onRestoreConsumed])
+
   // ── Derived flags ───────────────────────────────────────────────
   const isDirty = selectedIds.length > 0
 
@@ -318,9 +404,29 @@ export const CreateMappingForm = forwardRef<
   const canSave =
     selectedIds.length > 0 && !isSavePending && !hasUnresolvedAmbiguity
 
+  // Phase 4a-4a — publish a snapshot whenever the form is dirty so
+  // the drawer can lift it to `MappingContent` for row-switch undo.
+  // `null` when clean.
   useEffect(() => {
-    onStateChange?.({ isDirty, canSave, isSavePending })
-  }, [isDirty, canSave, isSavePending, onStateChange])
+    const snapshot: CreateMappingFormSnapshot | null = isDirty
+      ? {
+          targetFieldId: targetField.id,
+          selectedIds: [...selectedIds],
+          combinationType,
+          joinAnnotations: { ...joinAnnotations },
+        }
+      : null
+    onStateChange?.({ isDirty, canSave, isSavePending, snapshot })
+  }, [
+    isDirty,
+    canSave,
+    isSavePending,
+    selectedIds,
+    combinationType,
+    joinAnnotations,
+    targetField.id,
+    onStateChange,
+  ])
 
   // ── Effective combination — collapses to 'single' for 1 source ───
   // The wrapper expects `'single'` when there is exactly one source;
