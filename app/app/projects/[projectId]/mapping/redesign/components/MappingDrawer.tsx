@@ -42,6 +42,7 @@ import { TableBadge } from './TableBadge'
 import {
   CreateMappingForm,
   type CreateMappingFormHandle,
+  type CreateMappingFormSnapshot,
 } from './CreateMappingForm'
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -237,6 +238,23 @@ export interface MappingDrawerProps {
    * effect doesn't unmount the drawer mid-refresh.
    */
   onSaveSuccess?: (newTfmId: string) => void
+  /**
+   * Phase 4a-4a — fired whenever the unmapped-row form's dirty state
+   * flips. Carries the dirty snapshot when the form has selections,
+   * `null` when the form is clean (or absent). `MappingContent`
+   * stores the latest snapshot so a row-switch can offer Undo.
+   */
+  onFormDirtyChange?: (snapshot: CreateMappingFormSnapshot | null) => void
+  /**
+   * Phase 4a-4a — when present and the snapshot's `targetFieldId`
+   * matches the current row's target field, the drawer auto-activates
+   * the form and threads the snapshot down to `CreateMappingForm` for
+   * mount-time hydration. Cleared by the parent via
+   * `onRestoreConsumed` once the form has consumed it.
+   */
+  restoreFormState?: CreateMappingFormSnapshot | null
+  /** See `restoreFormState`. */
+  onRestoreConsumed?: () => void
 }
 
 /**
@@ -250,6 +268,9 @@ export function MappingDrawer({
   projectId,
   availableSourceFields,
   onSaveSuccess,
+  onFormDirtyChange,
+  restoreFormState,
+  onRestoreConsumed,
 }: MappingDrawerProps) {
   const titleId = useId()
   const drawerRef = useRef<HTMLElement | null>(null)
@@ -283,15 +304,70 @@ export function MappingDrawer({
   const formRef = useRef<CreateMappingFormHandle | null>(null)
 
   // Reset form state on every row identity change. Founder decision §8 —
-  // switch-row-while-dirty is a silent unmount in 4a-2 (toast follows
-  // in 4a-4). We do NOT route through the discard dialog here; the
-  // user explicitly chose to view a different row, and prompting on
-  // every row click would feel hostile.
+  // switch-row-while-dirty is a silent unmount (in 4a-4a the parent
+  // additionally fires a row-switch-discard toast with Undo). We do
+  // NOT route through the discard dialog here; the user explicitly
+  // chose to view a different row, and prompting on every row click
+  // would feel hostile.
   const rowIdForFormReset = row?.id ?? null
   useEffect(() => {
     setIsFormActive(false)
     setFormState({ isDirty: false, canSave: false, isSavePending: false })
   }, [rowIdForFormReset])
+
+  // Phase 4a-4a — restoreFormState auto-activate.
+  //
+  // When `MappingContent` passes a non-null snapshot whose
+  // `targetFieldId` matches the current Rule 6 row's target field, we
+  // flip `isFormActive` to true so the form mounts and consumes the
+  // snapshot via its own mount-time hydration effect. Runs AFTER the
+  // row-id reset effect (declaration order = run order in React) so
+  // any stale `false` from the reset is immediately corrected to
+  // `true` on the same render where the restore arrives.
+  const restoreTargetFieldId = restoreFormState?.targetFieldId
+  const currentTargetFieldId =
+    row?.kind === 'unmapped' ? row.targetField.id : null
+  useEffect(() => {
+    if (
+      restoreFormState &&
+      currentTargetFieldId !== null &&
+      restoreTargetFieldId === currentTargetFieldId
+    ) {
+      setIsFormActive(true)
+    }
+  }, [restoreFormState, restoreTargetFieldId, currentTargetFieldId])
+
+  // Phase 4a-4a — dirty-change lift.
+  //
+  // The form publishes its full state via `onStateChange`. We mirror
+  // it locally for footer display AND bubble the snapshot up so the
+  // parent can keep a "latest dirty snapshot" cache for row-switch
+  // undo. Snapshot is null when the form is clean OR absent.
+  const handleFormStateChange = useCallback(
+    (state: {
+      isDirty: boolean
+      canSave: boolean
+      isSavePending: boolean
+      snapshot: CreateMappingFormSnapshot | null
+    }) => {
+      setFormState({
+        isDirty: state.isDirty,
+        canSave: state.canSave,
+        isSavePending: state.isSavePending,
+      })
+      onFormDirtyChange?.(state.snapshot)
+    },
+    [onFormDirtyChange],
+  )
+
+  // When the form un-mounts (drawer closes / row swaps / form
+  // cancelled), publish a clean snapshot so the parent doesn't hold
+  // a stale "dirty for row X" reference indefinitely.
+  useEffect(() => {
+    if (!isFormActive) {
+      onFormDirtyChange?.(null)
+    }
+  }, [isFormActive, onFormDirtyChange])
 
   // Stable-onClose ref so the document-level handlers below don't have
   // to re-bind on every render of the parent.
@@ -553,12 +629,14 @@ export function MappingDrawer({
         formRef={formRef}
         projectId={projectId}
         availableSourceFields={availableSourceFields}
-        onFormStateChange={setFormState}
+        onFormStateChange={handleFormStateChange}
         onFormCancel={() => setIsFormActive(false)}
         onFormSaveSuccess={(tfmId) => {
           setIsFormActive(false)
           onSaveSuccess?.(tfmId)
         }}
+        restoreFormState={restoreFormState}
+        onRestoreConsumed={onRestoreConsumed}
       />
       <DrawerFooter
         row={effectiveRow}
@@ -844,36 +922,23 @@ interface DrawerBodyProps {
     isDirty: boolean
     canSave: boolean
     isSavePending: boolean
+    snapshot: CreateMappingFormSnapshot | null
   }) => void
   onFormCancel: () => void
   onFormSaveSuccess: (newTfmId: string) => void
+  /** Phase 4a-4a — restore-from-undo snapshot threaded to the form. */
+  restoreFormState?: CreateMappingFormSnapshot | null
+  /** Phase 4a-4a — invoked by the form once a restore has been applied. */
+  onRestoreConsumed?: () => void
 }
 
-function DrawerBody({
-  row,
-  isFormActive,
-  formRef,
-  projectId,
-  availableSourceFields,
-  onFormStateChange,
-  onFormCancel,
-  onFormSaveSuccess,
-}: DrawerBodyProps) {
+function DrawerBody(props: DrawerBodyProps) {
   return (
     <div
       data-testid="mapping-drawer-body"
       className="flex-1 overflow-auto px-6 py-5"
     >
-      <BodyContent
-        row={row}
-        isFormActive={isFormActive}
-        formRef={formRef}
-        projectId={projectId}
-        availableSourceFields={availableSourceFields}
-        onFormStateChange={onFormStateChange}
-        onFormCancel={onFormCancel}
-        onFormSaveSuccess={onFormSaveSuccess}
-      />
+      <BodyContent {...props} />
     </div>
   )
 }
@@ -887,6 +952,8 @@ function BodyContent({
   onFormStateChange,
   onFormCancel,
   onFormSaveSuccess,
+  restoreFormState,
+  onRestoreConsumed,
 }: DrawerBodyProps) {
   switch (row.kind) {
     case 'mapped':
@@ -906,6 +973,8 @@ function BodyContent({
           onFormStateChange={onFormStateChange}
           onFormCancel={onFormCancel}
           onFormSaveSuccess={onFormSaveSuccess}
+          restoreFormState={restoreFormState}
+          onRestoreConsumed={onRestoreConsumed}
         />
       )
   }
@@ -1144,9 +1213,12 @@ interface UnmappedBodyProps {
     isDirty: boolean
     canSave: boolean
     isSavePending: boolean
+    snapshot: CreateMappingFormSnapshot | null
   }) => void
   onFormCancel: () => void
   onFormSaveSuccess: (newTfmId: string) => void
+  restoreFormState?: CreateMappingFormSnapshot | null
+  onRestoreConsumed?: () => void
 }
 
 function UnmappedBody({
@@ -1158,6 +1230,8 @@ function UnmappedBody({
   onFormStateChange,
   onFormCancel,
   onFormSaveSuccess,
+  restoreFormState,
+  onRestoreConsumed,
 }: UnmappedBodyProps) {
   return (
     <>
@@ -1178,6 +1252,8 @@ function UnmappedBody({
             onSaveSuccess={onFormSaveSuccess}
             onCancel={onFormCancel}
             onStateChange={onFormStateChange}
+            restoreFormState={restoreFormState}
+            onRestoreConsumed={onRestoreConsumed}
           />
         </DrawerSection>
       ) : (

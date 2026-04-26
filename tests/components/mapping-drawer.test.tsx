@@ -2451,3 +2451,120 @@ describe('MappingDrawer Phase 4a-2 — row switch resets form state silently', (
     ).toBeInTheDocument()
   })
 })
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Phase 4a-4a — restoreFormState + onFormDirtyChange contract.
+// ─────────────────────────────────────────────────────────────────────────────
+//
+// The drawer relays its form's dirty-state snapshot up to the parent
+// (`MappingContent`) via `onFormDirtyChange`, and threads a
+// previously-captured snapshot back down via `restoreFormState`. The
+// parent uses these props to power the row-switch-while-dirty Undo
+// affordance. These tests pin the wiring contract:
+//
+//   • Threading a non-null `restoreFormState` whose `targetFieldId`
+//     matches the open Rule 6 row auto-activates the form and
+//     re-hydrates its source selection.
+//   • The form invokes `onRestoreConsumed` exactly once after applying
+//     the snapshot.
+//   • `onFormDirtyChange` fires with the snapshot when the form
+//     becomes dirty and with `null` when the form becomes clean (or
+//     the user cancels).
+
+describe('MappingDrawer Phase 4a-4a — restoreFormState + onFormDirtyChange', () => {
+  it('auto-activates the form and hydrates selections when restoreFormState is threaded in', () => {
+    const onRestoreConsumed = vi.fn()
+    render(
+      <MappingDrawer
+        row={unmapped({
+          id: 'unmapped::tf-A',
+          targetField: targetField({ id: 'tf-A' }),
+        })}
+        isOpen={true}
+        onClose={() => {}}
+        projectId="p-1"
+        availableSourceFields={SOURCE_FIELDS_FIXTURE}
+        restoreFormState={{
+          targetFieldId: 'tf-A',
+          selectedIds: ['sf-acc-1'],
+          combinationType: 'concat_space',
+          joinAnnotations: {},
+        }}
+        onRestoreConsumed={onRestoreConsumed}
+      />,
+    )
+    expect(screen.getByTestId('create-mapping-form')).toBeInTheDocument()
+    const chips = screen.getAllByTestId('source-field-picker-chip')
+    expect(chips).toHaveLength(1)
+    expect(chips[0].getAttribute('data-source-field-id')).toBe('sf-acc-1')
+    expect(onRestoreConsumed).toHaveBeenCalledTimes(1)
+  })
+
+  it('does NOT auto-activate when restoreFormState targetFieldId does not match the open row', () => {
+    const onRestoreConsumed = vi.fn()
+    render(
+      <MappingDrawer
+        row={unmapped({
+          id: 'unmapped::tf-A',
+          targetField: targetField({ id: 'tf-A' }),
+        })}
+        isOpen={true}
+        onClose={() => {}}
+        projectId="p-1"
+        availableSourceFields={SOURCE_FIELDS_FIXTURE}
+        restoreFormState={{
+          targetFieldId: 'tf-OTHER',
+          selectedIds: ['sf-acc-1'],
+          combinationType: 'concat_space',
+          joinAnnotations: {},
+        }}
+        onRestoreConsumed={onRestoreConsumed}
+      />,
+    )
+    expect(screen.queryByTestId('create-mapping-form')).toBeNull()
+    expect(
+      screen.getByTestId('mapping-drawer-create-mapping-button'),
+    ).toBeInTheDocument()
+    expect(onRestoreConsumed).not.toHaveBeenCalled()
+  })
+
+  it('fires onFormDirtyChange with a snapshot when the form becomes dirty and null when cleaned', async () => {
+    const user = userEvent.setup()
+    const onFormDirtyChange = vi.fn()
+    render(
+      <MappingDrawer
+        row={unmapped({
+          id: 'unmapped::tf-A',
+          targetField: targetField({ id: 'tf-A' }),
+        })}
+        isOpen={true}
+        onClose={() => {}}
+        projectId="p-1"
+        availableSourceFields={SOURCE_FIELDS_FIXTURE}
+        onFormDirtyChange={onFormDirtyChange}
+      />,
+    )
+    // Form not active yet — drawer should have published null.
+    expect(onFormDirtyChange).toHaveBeenCalledWith(null)
+    onFormDirtyChange.mockClear()
+
+    await user.click(screen.getByTestId('mapping-drawer-create-mapping-button'))
+    await user.click(screen.getAllByTestId('source-field-picker-field')[0])
+    // Latest call has a non-null snapshot for this targetFieldId.
+    const lastCall = onFormDirtyChange.mock.calls.at(-1)?.[0] as
+      | {
+          targetFieldId: string
+          selectedIds: string[]
+          combinationType: string
+        }
+      | null
+    expect(lastCall).not.toBeNull()
+    expect(lastCall?.targetFieldId).toBe('tf-A')
+    expect(lastCall?.selectedIds).toEqual(['sf-acc-1'])
+
+    onFormDirtyChange.mockClear()
+    // Unselect — form is clean again, snapshot should be null.
+    await user.click(screen.getAllByTestId('source-field-picker-field')[0])
+    expect(onFormDirtyChange).toHaveBeenLastCalledWith(null)
+  })
+})

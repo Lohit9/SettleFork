@@ -80,3 +80,32 @@
     transition-timing-function: cubic-bezier(0.4, 0, 0.2, 1);
   }
 }
+
+/**
+ * Toast slide-in animation (Phase 4a-4a — `lib/contexts/ToastContext.tsx`).
+ *
+ * Keyframe-based instead of `tailwindcss-animate` to avoid a new plugin
+ * dependency. Used by `.toast-enter` on freshly pushed toasts; runs once
+ * on mount and then settles. Falls back gracefully when
+ * `prefers-reduced-motion` is set (skips the slide, keeps the fade).
+ */
+@keyframes toast-slide-in-up {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.toast-enter {
+  animation: toast-slide-in-up 180ms cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .toast-enter {
+    animation: none;
+  }
+}

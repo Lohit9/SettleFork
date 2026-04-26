@@ -31,3 +31,33 @@
  * (single source of truth) and not at any individual call site.
  */
 export const SEARCH_DEBOUNCE_MS = 200
+
+/**
+ * Auto-dismiss timeout for toast notifications — applied between toast
+ * push and automatic removal from the queue. Manual dismissal (via the
+ * close button or a programmatic `dismissToast(id)` call) bypasses this.
+ *
+ * Used by:
+ *   • `lib/contexts/ToastContext.tsx` (Phase 4a-4a)
+ *   • `MappingContent.tsx` row-switch-while-dirty notification (Phase 4a-4a)
+ *
+ * 5 seconds is long enough to read a short notification ("Mapping draft
+ * discarded") and click an action affordance ("Undo"), and short enough
+ * to not block the user's next interaction. Matches the OS-level toast
+ * convention (macOS, iOS, Android notification timeouts cluster in the
+ * 4–6s range).
+ */
+export const TOAST_AUTO_DISMISS_MS = 5000
+
+/**
+ * Maximum number of simultaneously visible toasts. When the queue
+ * exceeds this count, the oldest toast is evicted (FIFO). Replace-by-id
+ * semantics (`pushToast({ id })` re-using an existing id) does NOT
+ * consume a slot — the previous toast with the same id is replaced
+ * in place.
+ *
+ * 3 keeps the bottom-right stack readable without crowding the drawer's
+ * sticky footer. Increase only if smoke-tester feedback shows users
+ * missing notifications during burst events.
+ */
+export const TOAST_MAX_VISIBLE = 3

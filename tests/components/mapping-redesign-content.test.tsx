@@ -1414,3 +1414,223 @@ describe('MappingRedesignContent Phase 4a-2 — save flow swaps URL + refreshes'
     ).toBeInTheDocument()
   })
 })
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Phase 4a-4a — row-switch-while-dirty toast wiring (Block B).
+// ─────────────────────────────────────────────────────────────────────────────
+//
+// Verifies the page-level glue:
+//   • Switching rows while the unmapped drawer's form is dirty fires
+//     an info toast with "Mapping draft discarded." + Undo affordance.
+//   • Clicking Undo within the toast lifetime navigates back to the
+//     original row, re-mounts the form, and re-hydrates the user's
+//     prior selections (selectedIds + combinationType).
+//   • Multiple rapid row-switches collapse to a single toast (rolling
+//     latest via replace-by-id 'row-switch-discard').
+//   • Clicking the same row a second time (no actual switch) does NOT
+//     fire a toast.
+//   • The toast auto-dismisses after `TOAST_AUTO_DISMISS_MS` (5000ms).
+//   • Click-outside-drawer with a dirty form does NOT fire a toast —
+//     that path is owned by `DiscardChangesDialog` (founder §11-OQ-3).
+
+function buildDataWithTwoUnmapped(): MappingsForRedesignResult {
+  const base = buildData()
+  const unmapped1: MappingRow = {
+    kind: 'unmapped',
+    id: 'unmapped::tf-u1',
+    targetField: targetField({
+      id: 'tf-u1',
+      name: 'phone_number',
+      targetTable: { id: accountsTable.id, name: accountsTable.name },
+      ordinalPosition: 98,
+    }),
+    confidence: null,
+    status: 'unmapped',
+    hasTransformation: false,
+    transformationStatus: null,
+  }
+  const unmapped2: MappingRow = {
+    kind: 'unmapped',
+    id: 'unmapped::tf-u2',
+    targetField: targetField({
+      id: 'tf-u2',
+      name: 'fax_number',
+      targetTable: { id: accountsTable.id, name: accountsTable.name },
+      ordinalPosition: 99,
+    }),
+    confidence: null,
+    status: 'unmapped',
+    hasTransformation: false,
+    transformationStatus: null,
+  }
+  return {
+    ...base,
+    rows: [...base.rows, unmapped1, unmapped2],
+    counts: { ...base.counts, unmapped: 2 },
+  }
+}
+
+describe('MappingRedesignContent Phase 4a-4a — row-switch-while-dirty toast', () => {
+  it('shows an info toast with Undo when switching rows while form is dirty', async () => {
+    currentSearch = 'drawer=unmapped::tf-u1'
+    render(
+      <MappingRedesignContent
+        projectId="p1"
+        projectName="Heritage Core"
+        initialRedesignData={buildDataWithTwoUnmapped()}
+      />,
+    )
+    fireEvent.click(
+      screen.getByTestId('mapping-drawer-create-mapping-button'),
+    )
+    fireEvent.click(screen.getAllByTestId('source-field-picker-field')[0])
+    // Click the second unmapped row to switch. Click handler lives on
+    // `field-mapping-row-body` (the inner clickable surface), not on
+    // the outer `field-mapping-row` container.
+    const findUnmappedRowBodyById = (id: string) => {
+      const row = screen
+        .getAllByTestId('field-mapping-row')
+        .find((el) => el.getAttribute('data-row-id') === id)!
+      return row.querySelector(
+        '[data-testid="field-mapping-row-body"]',
+      ) as HTMLElement
+    }
+    fireEvent.click(findUnmappedRowBodyById('unmapped::tf-u2'))
+    const toast = await screen.findByTestId('toast')
+    expect(toast).toBeInTheDocument()
+    expect(toast.getAttribute('data-toast-variant')).toBe('info')
+    expect(toast.textContent).toContain('Mapping draft discarded')
+    expect(screen.getByTestId('toast-action')).toHaveTextContent('Undo')
+  })
+
+  it('Undo restores the form on the original row with the prior selections', async () => {
+    currentSearch = 'drawer=unmapped::tf-u1'
+    render(
+      <MappingRedesignContent
+        projectId="p1"
+        projectName="Heritage Core"
+        initialRedesignData={buildDataWithTwoUnmapped()}
+      />,
+    )
+    fireEvent.click(
+      screen.getByTestId('mapping-drawer-create-mapping-button'),
+    )
+    const firstField = screen.getAllByTestId('source-field-picker-field')[0]
+    const firstFieldId = firstField.getAttribute('data-source-field-id')!
+    fireEvent.click(firstField)
+    const findUnmappedRowBodyById = (id: string) => {
+      const row = screen
+        .getAllByTestId('field-mapping-row')
+        .find((el) => el.getAttribute('data-row-id') === id)!
+      return row.querySelector(
+        '[data-testid="field-mapping-row-body"]',
+      ) as HTMLElement
+    }
+    fireEvent.click(findUnmappedRowBodyById('unmapped::tf-u2'))
+    const undoBtn = await screen.findByTestId('toast-action')
+    fireEvent.click(undoBtn)
+    // Form is mounted again on the original row with the prior chip
+    // selection retained.
+    await waitFor(() => {
+      expect(screen.getByTestId('create-mapping-form')).toBeInTheDocument()
+    })
+    const chips = screen.getAllByTestId('source-field-picker-chip')
+    expect(
+      chips.some(
+        (c) => c.getAttribute('data-source-field-id') === firstFieldId,
+      ),
+    ).toBe(true)
+  })
+
+  it('rapid successive row switches collapse to a single toast (rolling latest)', async () => {
+    currentSearch = 'drawer=unmapped::tf-u1'
+    render(
+      <MappingRedesignContent
+        projectId="p1"
+        projectName="Heritage Core"
+        initialRedesignData={buildDataWithTwoUnmapped()}
+      />,
+    )
+    fireEvent.click(
+      screen.getByTestId('mapping-drawer-create-mapping-button'),
+    )
+    fireEvent.click(screen.getAllByTestId('source-field-picker-field')[0])
+    const findUnmappedRowBodyById = (id: string) => {
+      const row = screen
+        .getAllByTestId('field-mapping-row')
+        .find((el) => el.getAttribute('data-row-id') === id)!
+      return row.querySelector(
+        '[data-testid="field-mapping-row-body"]',
+      ) as HTMLElement
+    }
+    fireEvent.click(findUnmappedRowBodyById('unmapped::tf-u2'))
+    // After the first switch, dirty the form again on tf-u2 then
+    // switch back. Each switch should replace the same toast id.
+    fireEvent.click(
+      screen.getByTestId('mapping-drawer-create-mapping-button'),
+    )
+    fireEvent.click(screen.getAllByTestId('source-field-picker-field')[0])
+    fireEvent.click(findUnmappedRowBodyById('unmapped::tf-u1'))
+    await waitFor(() => {
+      expect(screen.getAllByTestId('toast')).toHaveLength(1)
+    })
+  })
+
+  it('does not show the toast on no-op self-click of the open row', () => {
+    currentSearch = 'drawer=unmapped::tf-u1'
+    render(
+      <MappingRedesignContent
+        projectId="p1"
+        projectName="Heritage Core"
+        initialRedesignData={buildDataWithTwoUnmapped()}
+      />,
+    )
+    fireEvent.click(
+      screen.getByTestId('mapping-drawer-create-mapping-button'),
+    )
+    fireEvent.click(screen.getAllByTestId('source-field-picker-field')[0])
+    const sameRow = screen
+      .getAllByTestId('field-mapping-row')
+      .find((el) => el.getAttribute('data-row-id') === 'unmapped::tf-u1')!
+      .querySelector(
+        '[data-testid="field-mapping-row-body"]',
+      ) as HTMLElement
+    fireEvent.click(sameRow)
+    expect(screen.queryByTestId('toast')).toBeNull()
+  })
+
+  it('toast auto-dismisses after TOAST_AUTO_DISMISS_MS', async () => {
+    vi.useFakeTimers()
+    try {
+      currentSearch = 'drawer=unmapped::tf-u1'
+      render(
+        <MappingRedesignContent
+          projectId="p1"
+          projectName="Heritage Core"
+          initialRedesignData={buildDataWithTwoUnmapped()}
+        />,
+      )
+      fireEvent.click(
+        screen.getByTestId('mapping-drawer-create-mapping-button'),
+      )
+      fireEvent.click(screen.getAllByTestId('source-field-picker-field')[0])
+      fireEvent.click(
+        screen
+          .getAllByTestId('field-mapping-row')
+          .find(
+            (el) => el.getAttribute('data-row-id') === 'unmapped::tf-u2',
+          )!
+          .querySelector(
+            '[data-testid="field-mapping-row-body"]',
+          ) as HTMLElement,
+      )
+      expect(screen.getByTestId('toast')).toBeInTheDocument()
+      act(() => {
+        vi.advanceTimersByTime(5100)
+      })
+      expect(screen.queryByTestId('toast')).toBeNull()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+})
