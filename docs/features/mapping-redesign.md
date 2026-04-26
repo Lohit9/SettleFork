@@ -2033,6 +2033,84 @@ Same source-level invariant testing strategy as 4a-* / 4b-1 — fast, determinis
 1. **Source-side un-acknowledge.** The `removeAcknowledgment` helper handles both target-side (deletes the bare-ack TFM) and source-side (deletes the `source_field_acknowledgments` row). The drawer un-acknowledge surface is target-side ONLY — source-side acknowledgments are still managed via the legacy field-acknowledgment surface (the redesign drawer renders source rows differently). This is not a regression; source-side ack management was always out of scope for the drawer.
 2. **No re-acknowledge shortcut after un-acknowledge.** Once un-acknowledged, the field returns to Rule 6 unmapped; the user reaches the standard W1 form to re-ack. No "undo" button (mirrors reject's no-undo policy).
 
+## Phase 4c-1 — bulk approve (2026-04-26)
+
+Phase 4c-1 ships the first half of W5 (bulk operations). Reviewers facing N×M mapping projects (Mitratech-class: ~1000 TFMs across 30+ tables) get two new affordances on the redesign Mapping page:
+
+1. **Per-target-table approve.** A kebab menu (`⋯`) on each `TargetTableGroup` header surfaces "Approve all needs-review" — flips every needs-review TFM in that table to `approved` in one click.
+2. **Project-wide high-confidence approve.** A small text-button in the `FilterRow`'s right-aligned region: "Approve high-confidence (N)" — flips every needs-review TFM whose `confidence ≥ 85` to `approved`, project-wide.
+
+The reject side ships in 4c-2 as a fast-follow (founder §10.1 split: complexity asymmetry around `resetFieldTransform` per-row + staged-data revert pre-DELETE makes reject the larger lift).
+
+### Server-side wrapper surface
+
+Three new exports in `lib/actions/mappings-for-redesign.ts`:
+
+- `bulkApproveFieldMappingsForTargetTable(input: { projectId, targetTableId })` — write path. Returns `BulkApproveResult` discriminated union with `rowsAffected` + `tfmIds[]` on success, or `error` + `errorCode` on failure.
+- `approveHighConfidenceMappings(input: { projectId, threshold? })` — write path. Same result shape; threshold defaults to 85, validated to `[0, 100]`.
+- `previewBulkApprove(input: { projectId, targetTableId })` — read-only helper. Returns `{ count, preview[] }` capped at 5 preview rows. Used by `BulkConfirmDialog` to render the confirmation count + first-five-rows preview without a TOCTOU window between client-side derivation and server-side write.
+
+All three pass the standard gate stack (auth → `requireProjectPermission(projectId, 'editor')` → `assertMappingWritesEnabled`). Preview's permission gate is `viewer`-level.
+
+### Scope hard-coding
+
+The bulk wrappers DELIBERATELY do NOT consult the user's live filter state. Scope is hard-coded at the wrapper boundary:
+
+| Wrapper | Filter |
+|---|---|
+| `bulkApproveFieldMappingsForTargetTable` | `status='needs_review'` AND `is_acknowledged=false` AND `target_field` belongs to `targetTableId` |
+| `approveHighConfidenceMappings` | `status='needs_review'` AND `is_acknowledged=false` AND `confidence >= threshold` |
+
+Founder §6.3 — coupling bulk scope to the user's transient filter dropdown would mean two different users with the same project state could see different "Approve all" semantics depending on what they had typed into Search. The hard-coded scope reads identically from any UI surface.
+
+The `is_acknowledged=false` clause is critical: a bare-acknowledged TFM (the W1 product of "intentionally unmapped") is NOT a needs-review mapping, even though its `status` is sometimes `needs_review` in legacy data. Bulk approve never auto-acknowledges (founder §2.2) — that legacy behavior in `approveAllFieldMappings` is intentionally NOT inherited.
+
+### Idempotency
+
+The hard-coded `status='needs_review'` filter makes both wrappers idempotent under re-run: a re-fired click after partial failure simply skips the already-flipped rows. No transactional wrapping; no progress-bar UI.
+
+### Activity-log strategy
+
+Single bulk entry per click (founder §7.1 — N+1 per-row entries would create log spam at Mitratech scale). The pre-staged `mapping_bulk_approved` ActionType carries:
+
+```ts
+metadata: {
+  scope: 'target_table_needs_review' | 'project_high_confidence',
+  count: number,
+  tfm_ids: string[],
+  fields_affected: string[],         // human-readable target-field names
+  target_table_id?: string,          // per-table only
+  target_table_name?: string,        // per-table only
+  threshold?: number,                // high-confidence only
+}
+```
+
+The `tfm_ids` array preserves the granular audit trail without exploding the log row count.
+
+### Preview pattern
+
+`BulkConfirmDialog` opens before any write, populated by:
+
+- **Per-table path**: server-side `previewBulkApprove(projectId, targetTableId)` — authoritative count + first 5 preview rows (each = `{ tfmId, targetField, primarySource }`). Renders a "Loading preview…" indicator while the call is in flight.
+- **High-confidence path**: client-side derivation from already-loaded `data.rows` (every row carries `confidence` already; the preview is a pure pass over the existing collection — no new round-trip). Same `BulkPreviewRow` shape.
+
+When `count > preview.length`, the dialog renders an "and N more…" line. The 5-row cap mirrors founder §3.2.
+
+### UI surfaces
+
+- `BulkConfirmDialog.tsx` — new shared confirmation primitive. Parameterised for `mode: 'approve' | 'reject'` ahead of 4c-2 (only approve callers ship in 4c-1; reject styling is wired but unreached).
+- `TargetTableGroup.tsx` — adds a kebab menu to the header. Single item in 4c-1: "Approve all needs-review". Disabled with subtitle "No needs-review mappings" when count=0. Founder refinement (2026-04-26): we do NOT ship a disabled "Reject" placeholder — that lands alongside its wiring in 4c-2.
+- `FilterRow.tsx` — adds "Approve high-confidence (N)" text-button in the right-aligned region. Hidden when N=0.
+
+The redesign already lacks a `DropdownMenu` shadcn primitive (intentional — see `components/ui/`). The kebab uses a bespoke click-outside-closing menu inlined in `TargetTableGroup.tsx`. ~70 LOC; promotes to a shared primitive only if 4c-2 or beyond grows a third caller.
+
+### Known limitations carried forward (Phase 4c-1)
+
+1. **No bulk reject.** Ships in 4c-2 (founder §10.1 split). Per-table kebab has only Approve in 4c-1.
+2. **No multi-select / checkbox model.** Filter-scoped bulk only (founder §1.3). Adding row checkboxes is a separate W5b investigation if needed.
+3. **No undo for bulk approve.** Per-row Approve is reversible via the drawer; bulk approve has no atomic undo (the user can re-author each row individually). Founder §5.2 — "This cannot be undone" copy makes that explicit at confirm time.
+4. **High-confidence preview is client-derived.** The per-table path uses `previewBulkApprove`; the high-confidence path derives count + preview from already-loaded `data.rows`. Both are authoritative at dialog-open time; the wrapper's idempotent scope filter handles any divergence at write time.
+
 
 
 Items to remove during Phase 5-Cleanup:

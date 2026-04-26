@@ -2851,3 +2851,563 @@ export async function unacknowledgeField(input: {
 
   return { success: true, tfmId: tfm.id }
 }
+
+// ─── Write path — Phase 4c-1 (bulk approve + high-confidence) ───────────────
+//
+// Two bulk approve wrappers + one read-only preview helper. Locked decisions
+// (founder, 2026-04-26):
+//
+//   §1   IN-scope for 4c-1: per-target-table approve, project-wide
+//        approve-high-confidence. (Per-target-table reject ships in 4c-2.)
+//   §2.1 Do NOT reuse legacy `rejectAllFieldMappings` (status='rejected'
+//        contract clash with redesign's reject=DELETE). Approve side is
+//        also a fresh wrapper, NOT a per-row loop, NOT a wrap of legacy
+//        `approveAllFieldMappings` (which auto-acks unmapped fields).
+//   §2.2 Strict scope on approve — NO auto-acknowledge side-effect.
+//   §4.1 Approach C — TS orchestration + single bulk SQL UPDATE. No new
+//        RPC migration. Heritage scale: <500ms; Mitratech-class
+//        (~1000 TFMs): ~1-2s on a single .update().in() call.
+//   §4.2 Scope by target_table_id (not table_mapping_id like legacy).
+//        Redesign UI groups by target table; TM is the source×target
+//        pairing concept the redesign deliberately abstracts away.
+//   §4.3 Server-side preview helper (`previewBulkApprove`) — eliminates
+//        the TOCTOU class where the live UI filter state diverges from
+//        the canonical scope at write time.
+//   §6   Hard-coded scope: `status='needs_review' AND is_acknowledged=false`.
+//        Bulk wrappers IGNORE the user's live filter state.
+//   §7.1 Single bulk activity-log entry per click (NOT N per-row entries).
+//        Uses pre-staged `mapping_bulk_approved` ActionType.
+//   §7.2 Metadata includes the full `tfm_ids` array for granular audit
+//        without log spam.
+//   §9.1 Single bulk UPDATE. No background-task / progress-bar
+//        complication for v1.
+//
+// Activity log shape (from §7 + closure-doc §5.2):
+//   action_type: 'mapping_bulk_approved'
+//   description: 'Bulk approve: 7 mappings on customers'      (per-table)
+//                'Bulk approve: 27 high-confidence mappings (≥85%)'
+//                                                             (project-wide)
+//   metadata: {
+//     scope: 'target_table_needs_review' | 'project_high_confidence',
+//     count: number,
+//     tfm_ids: string[],
+//     fields_affected: string[],         (target-field names, for human read)
+//     target_table_id?: string,          (per-table only)
+//     target_table_name?: string,        (per-table only)
+//     threshold?: number,                (high-confidence only, default 85)
+//   }
+//
+// CONCURRENCY / IDEMPOTENCY (§2.3): the wrapper is idempotent under re-run.
+// The hard-coded scope filter is `status='needs_review'`, so a re-fired
+// click after a partial commit simply skips the already-approved rows. No
+// transaction wrapping for v1.
+//
+// TM RECOMPUTE (§4.1): one pass at the end of the bulk write per affected
+// target table. The legacy `approveHighConfidenceMappings` and
+// `approveAllFieldMappings` use the same shape — we mirror it here.
+
+export type BulkApproveErrorCode =
+  | 'PERMISSION_DENIED'
+  | 'NOT_FOUND'
+  | 'VALIDATION'
+  | 'MAINTENANCE_MODE'
+  | 'INTERNAL'
+
+export type BulkApproveResult =
+  | {
+      success: true
+      /** Number of TFMs flipped from `needs_review` → `approved`. */
+      rowsAffected: number
+      /** Bulk-approved TFM uuids (matches `tfm_ids` in the activity log). */
+      tfmIds: string[]
+    }
+  | {
+      success: false
+      error: string
+      errorCode: BulkApproveErrorCode
+    }
+
+/**
+ * Read-only preview of what `bulkApproveFieldMappingsForTargetTable` WOULD
+ * approve at this moment. Used by `BulkConfirmDialog` to populate the
+ * count + first-five-rows preview list. Callers should treat the result
+ * as authoritative at dialog-open time; any divergence between this
+ * snapshot and the eventual write is handled by the wrapper's idempotent
+ * scope filter (§2.3).
+ *
+ * Returns `null` count + empty preview when the user lacks read
+ * permission, so the dialog can render a graceful empty state.
+ *
+ * Scope (§6.1, §6.3 — hard-coded, NOT user-filter-state aware):
+ *   - status === 'needs_review'
+ *   - is_acknowledged === false
+ *   - target_field's table === input.targetTableId
+ *
+ * Preview list cap: 5 rows (§3.2). Full count is always returned exactly.
+ */
+export async function previewBulkApprove(input: {
+  projectId: string
+  targetTableId: string
+}): Promise<{
+  count: number
+  preview: Array<{
+    tfmId: string
+    targetField: string
+    primarySource: string | null
+  }>
+}> {
+  const { projectId, targetTableId } = input
+  if (!projectId || !targetTableId) {
+    return { count: 0, preview: [] }
+  }
+
+  const supabase = await createClient()
+  const {
+    data: { user },
+  } = await supabase.auth.getUser()
+  if (!user) {
+    return { count: 0, preview: [] }
+  }
+
+  // Read-only perm: viewer is sufficient for preview. The actual write
+  // wrapper enforces editor.
+  const perm = await requireProjectPermission(projectId, 'viewer')
+  if (!perm.allowed) {
+    return { count: 0, preview: [] }
+  }
+
+  // Resolve target field ids in this table once.
+  const { data: targetFieldsRows } = await supabaseAdmin
+    .from('fields')
+    .select('id, name')
+    .eq('table_id', targetTableId)
+  const targetFields = (targetFieldsRows ?? []) as Array<{
+    id: string
+    name: string
+  }>
+  if (targetFields.length === 0) {
+    return { count: 0, preview: [] }
+  }
+  const targetFieldIds = targetFields.map((f) => f.id)
+  const fieldNameById = new Map(targetFields.map((f) => [f.id, f.name] as const))
+
+  // In-scope TFMs (status='needs_review' AND is_acknowledged=false).
+  const { data: tfms } = await supabaseAdmin
+    .from('target_field_mappings')
+    .select('id, target_field_id')
+    .eq('project_id', projectId)
+    .eq('status', 'needs_review')
+    .eq('is_acknowledged', false)
+    .in('target_field_id', targetFieldIds)
+  const tfmRows = (tfms ?? []) as Array<{ id: string; target_field_id: string }>
+  const count = tfmRows.length
+  if (count === 0) {
+    return { count: 0, preview: [] }
+  }
+
+  // Preview the first 5 (server order: PostgREST default, stable enough
+  // for "and N more" UX). For each, look up the primary mapping_source
+  // (ordinal=0) so the dialog can render "last_name ← LAST_NAME". Single
+  // batched query keeps the N+1 lookup at one round-trip.
+  const previewTfmIds = tfmRows.slice(0, 5).map((t) => t.id)
+  const { data: primarySources } = await supabaseAdmin
+    .from('mapping_sources')
+    .select('target_field_mapping_id, ordinal, fields:source_field_id(name)')
+    .in('target_field_mapping_id', previewTfmIds)
+    .eq('ordinal', 0)
+  const primaryByTfmId = new Map<string, string>()
+  for (const ms of (primarySources ?? []) as unknown as Array<{
+    target_field_mapping_id: string
+    ordinal: number
+    fields: { name: string } | { name: string }[] | null
+  }>) {
+    // Supabase typegen surfaces the FK relation as either a single object
+    // or a one-element array depending on the join kind. Normalise here.
+    const f = Array.isArray(ms.fields) ? ms.fields[0] : ms.fields
+    if (f?.name) {
+      primaryByTfmId.set(ms.target_field_mapping_id, f.name)
+    }
+  }
+
+  const preview = previewTfmIds.map((tfmId) => {
+    const tfm = tfmRows.find((t) => t.id === tfmId)
+    return {
+      tfmId,
+      targetField: tfm ? (fieldNameById.get(tfm.target_field_id) ?? '?') : '?',
+      primarySource: primaryByTfmId.get(tfmId) ?? null,
+    }
+  })
+
+  return { count, preview }
+}
+
+/**
+ * Bulk-approve every needs-review TFM whose target field belongs to the
+ * given target table. See file header for the full 4c-1 contract.
+ *
+ * SEQUENCE:
+ *   1.  Cheap input validation (projectId + targetTableId required).
+ *   2.  Auth (Supabase user) → PERMISSION_DENIED.
+ *   3.  Project-permission gate (`requireProjectPermission(..., 'editor')`)
+ *       → PERMISSION_DENIED.
+ *   4.  Maintenance-mode gate → MAINTENANCE_MODE.
+ *   5.  Resolve target field universe (table → field ids).
+ *   6.  Identity read — find every in-scope TFM (needs_review +
+ *       not-acknowledged + target_field in this table). Empty set
+ *       returns success with `rowsAffected: 0` (NOT a VALIDATION error;
+ *       idempotent re-run path).
+ *   7.  Bulk SQL UPDATE — single `.update().in(tfmIds)` call, atomic
+ *       at the SQL statement level. Sets `status='approved'`.
+ *   8.  TM recompute pass — every TM whose target_table_id matches
+ *       this table gets a coverage refresh. Looped on the assumption
+ *       that one target table belongs to a small number of TMs (<5
+ *       on Heritage; <20 worst case at Mitratech scale).
+ *   9.  Activity log: single `mapping_bulk_approved` entry with full
+ *       metadata (scope='target_table_needs_review', count, tfm_ids,
+ *       fields_affected, target_table_id, target_table_name).
+ *   10. Revalidate /mapping path.
+ */
+export async function bulkApproveFieldMappingsForTargetTable(input: {
+  projectId: string
+  targetTableId: string
+}): Promise<BulkApproveResult> {
+  const { projectId, targetTableId } = input
+
+  // ── Step 1: validation ───────────────────────────────────────────────────
+  if (!projectId) {
+    return {
+      success: false,
+      error: 'projectId is required',
+      errorCode: 'VALIDATION',
+    }
+  }
+  if (!targetTableId) {
+    return {
+      success: false,
+      error: 'targetTableId is required',
+      errorCode: 'VALIDATION',
+    }
+  }
+
+  // ── Step 2: auth ─────────────────────────────────────────────────────────
+  const supabase = await createClient()
+  const {
+    data: { user },
+  } = await supabase.auth.getUser()
+  if (!user) {
+    return {
+      success: false,
+      error: 'Not authenticated',
+      errorCode: 'PERMISSION_DENIED',
+    }
+  }
+
+  // ── Step 3: permission ───────────────────────────────────────────────────
+  const perm = await requireProjectPermission(projectId, 'editor')
+  if (!perm.allowed) {
+    return {
+      success: false,
+      error: perm.error ?? 'Insufficient permissions',
+      errorCode: 'PERMISSION_DENIED',
+    }
+  }
+
+  // ── Step 4: maintenance gate ─────────────────────────────────────────────
+  try {
+    await assertMappingWritesEnabled(projectId)
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err)
+    if (
+      message ===
+      'Mapping writes are temporarily disabled for scheduled maintenance'
+    ) {
+      return {
+        success: false,
+        error: message,
+        errorCode: 'MAINTENANCE_MODE',
+      }
+    }
+    return {
+      success: false,
+      error: message,
+      errorCode: 'INTERNAL',
+    }
+  }
+
+  // ── Step 5: resolve target field universe ────────────────────────────────
+  // We also need to verify the table itself belongs to the project — a
+  // wrong projectId/targetTableId pairing should NOT silently approve
+  // rows from a different project.
+  const { data: targetTable } = await supabaseAdmin
+    .from('tables')
+    .select('id, name, dataset_id, datasets:dataset_id(project_id)')
+    .eq('id', targetTableId)
+    .maybeSingle<{
+      id: string
+      name: string
+      dataset_id: string
+      datasets: { project_id: string } | null
+    }>()
+  if (!targetTable || targetTable.datasets?.project_id !== projectId) {
+    return {
+      success: false,
+      error: 'Target table not found in this project',
+      errorCode: 'NOT_FOUND',
+    }
+  }
+
+  const { data: targetFieldsRows } = await supabaseAdmin
+    .from('fields')
+    .select('id, name')
+    .eq('table_id', targetTableId)
+  const targetFields = (targetFieldsRows ?? []) as Array<{
+    id: string
+    name: string
+  }>
+  if (targetFields.length === 0) {
+    // Empty target table — nothing to approve, but not an error per §2.3
+    // idempotent semantics. The UI should also disable the kebab item
+    // when count=0 (Block C), so this branch is mostly defense-in-depth.
+    return { success: true, rowsAffected: 0, tfmIds: [] }
+  }
+  const targetFieldIds = targetFields.map((f) => f.id)
+  const fieldNameById = new Map(targetFields.map((f) => [f.id, f.name] as const))
+
+  // ── Step 6: identity read — in-scope TFMs ────────────────────────────────
+  const { data: tfms } = await supabaseAdmin
+    .from('target_field_mappings')
+    .select('id, target_field_id')
+    .eq('project_id', projectId)
+    .eq('status', 'needs_review')
+    .eq('is_acknowledged', false)
+    .in('target_field_id', targetFieldIds)
+  const tfmRows = (tfms ?? []) as Array<{ id: string; target_field_id: string }>
+  if (tfmRows.length === 0) {
+    return { success: true, rowsAffected: 0, tfmIds: [] }
+  }
+  const tfmIds = tfmRows.map((t) => t.id)
+  const fieldsAffected = tfmRows.map(
+    (t) => fieldNameById.get(t.target_field_id) ?? '?',
+  )
+
+  // ── Step 7: bulk SQL UPDATE ──────────────────────────────────────────────
+  const { error: updateError } = await supabaseAdmin
+    .from('target_field_mappings')
+    .update({ status: 'approved' })
+    .in('id', tfmIds)
+  if (updateError) {
+    return {
+      success: false,
+      error: updateError.message,
+      errorCode: 'INTERNAL',
+    }
+  }
+
+  // ── Step 8: TM recompute pass ────────────────────────────────────────────
+  const { data: tms } = await supabaseAdmin
+    .from('table_mappings')
+    .select('id')
+    .eq('project_id', projectId)
+    .eq('target_table_id', targetTableId)
+  for (const tm of (tms ?? []) as Array<{ id: string }>) {
+    await recomputeTableMappingStatus(supabase, tm.id)
+  }
+
+  // ── Step 9: activity log ─────────────────────────────────────────────────
+  await logActivity(
+    projectId,
+    'mapping_bulk_approved',
+    `Bulk approve: ${tfmRows.length} mapping${
+      tfmRows.length === 1 ? '' : 's'
+    } on ${targetTable.name}`,
+    'mapping',
+    {
+      scope: 'target_table_needs_review',
+      count: tfmRows.length,
+      tfm_ids: tfmIds,
+      fields_affected: fieldsAffected,
+      target_table_id: targetTableId,
+      target_table_name: targetTable.name,
+    },
+  )
+
+  // ── Step 10: revalidate /mapping ─────────────────────────────────────────
+  revalidatePath(`/app/projects/${projectId}/mapping`)
+
+  return {
+    success: true,
+    rowsAffected: tfmRows.length,
+    tfmIds,
+  }
+}
+
+/**
+ * Project-wide approve for every needs-review TFM whose confidence
+ * meets the threshold. Redesign-shape wrapper around the same SQL
+ * idiom as legacy `approveHighConfidenceMappings`, but with:
+ *
+ *   - Discriminated-union result (BulkApproveResult, NOT
+ *     `{ success, count, error }` legacy shape).
+ *   - Single bulk activity-log entry tagged
+ *     `scope='project_high_confidence'`.
+ *   - Threshold default 85 (matches legacy default per §6).
+ *
+ * Scope (§6.1):
+ *   - status === 'needs_review'
+ *   - is_acknowledged === false
+ *   - confidence >= threshold
+ */
+export async function approveHighConfidenceMappings(input: {
+  projectId: string
+  threshold?: number
+}): Promise<BulkApproveResult> {
+  const { projectId } = input
+  const threshold = input.threshold ?? 85
+
+  // ── Step 1: validation ───────────────────────────────────────────────────
+  if (!projectId) {
+    return {
+      success: false,
+      error: 'projectId is required',
+      errorCode: 'VALIDATION',
+    }
+  }
+  if (!Number.isFinite(threshold) || threshold < 0 || threshold > 100) {
+    return {
+      success: false,
+      error: 'threshold must be a number in [0, 100]',
+      errorCode: 'VALIDATION',
+    }
+  }
+
+  // ── Step 2: auth ─────────────────────────────────────────────────────────
+  const supabase = await createClient()
+  const {
+    data: { user },
+  } = await supabase.auth.getUser()
+  if (!user) {
+    return {
+      success: false,
+      error: 'Not authenticated',
+      errorCode: 'PERMISSION_DENIED',
+    }
+  }
+
+  // ── Step 3: permission ───────────────────────────────────────────────────
+  const perm = await requireProjectPermission(projectId, 'editor')
+  if (!perm.allowed) {
+    return {
+      success: false,
+      error: perm.error ?? 'Insufficient permissions',
+      errorCode: 'PERMISSION_DENIED',
+    }
+  }
+
+  // ── Step 4: maintenance gate ─────────────────────────────────────────────
+  try {
+    await assertMappingWritesEnabled(projectId)
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err)
+    if (
+      message ===
+      'Mapping writes are temporarily disabled for scheduled maintenance'
+    ) {
+      return {
+        success: false,
+        error: message,
+        errorCode: 'MAINTENANCE_MODE',
+      }
+    }
+    return {
+      success: false,
+      error: message,
+      errorCode: 'INTERNAL',
+    }
+  }
+
+  // ── Step 5: bulk UPDATE with WHERE filters + RETURNING ───────────────────
+  // Returning the affected ids + target_field_ids in one shot so we can
+  // compute the activity-log payload and the TM recompute set without a
+  // second round-trip.
+  const { data: updated, error: updateError } = await supabaseAdmin
+    .from('target_field_mappings')
+    .update({ status: 'approved' })
+    .eq('project_id', projectId)
+    .eq('status', 'needs_review')
+    .eq('is_acknowledged', false)
+    .gte('confidence', threshold)
+    .select('id, target_field_id')
+  if (updateError) {
+    return {
+      success: false,
+      error: updateError.message,
+      errorCode: 'INTERNAL',
+    }
+  }
+  const updatedRows = (updated ?? []) as Array<{
+    id: string
+    target_field_id: string
+  }>
+  const tfmIds = updatedRows.map((r) => r.id)
+  if (tfmIds.length === 0) {
+    return { success: true, rowsAffected: 0, tfmIds: [] }
+  }
+
+  // ── Step 6: TM recompute pass ────────────────────────────────────────────
+  // Affected target tables = the parent tables of the target_field_ids.
+  // De-dupe via Set to bound TM lookups.
+  const targetFieldIds = [
+    ...new Set(updatedRows.map((r) => r.target_field_id)),
+  ]
+  const { data: tgtFields } = await supabaseAdmin
+    .from('fields')
+    .select('id, name, table_id')
+    .in('id', targetFieldIds)
+  const tgtFieldRows = (tgtFields ?? []) as Array<{
+    id: string
+    name: string
+    table_id: string
+  }>
+  const targetTableIds = [...new Set(tgtFieldRows.map((f) => f.table_id))]
+  const fieldNameById = new Map(tgtFieldRows.map((f) => [f.id, f.name] as const))
+  const fieldsAffected = updatedRows.map(
+    (r) => fieldNameById.get(r.target_field_id) ?? '?',
+  )
+
+  if (targetTableIds.length > 0) {
+    const { data: tms } = await supabaseAdmin
+      .from('table_mappings')
+      .select('id')
+      .eq('project_id', projectId)
+      .in('target_table_id', targetTableIds)
+    for (const tm of (tms ?? []) as Array<{ id: string }>) {
+      await recomputeTableMappingStatus(supabase, tm.id)
+    }
+  }
+
+  // ── Step 7: activity log ─────────────────────────────────────────────────
+  await logActivity(
+    projectId,
+    'mapping_bulk_approved',
+    `Bulk approve: ${updatedRows.length} high-confidence mapping${
+      updatedRows.length === 1 ? '' : 's'
+    } (\u2265${threshold}%)`,
+    'mapping',
+    {
+      scope: 'project_high_confidence',
+      count: updatedRows.length,
+      tfm_ids: tfmIds,
+      fields_affected: fieldsAffected,
+      threshold,
+    },
+  )
+
+  // ── Step 8: revalidate /mapping ──────────────────────────────────────────
+  revalidatePath(`/app/projects/${projectId}/mapping`)
+
+  return {
+    success: true,
+    rowsAffected: updatedRows.length,
+    tfmIds,
+  }
+}

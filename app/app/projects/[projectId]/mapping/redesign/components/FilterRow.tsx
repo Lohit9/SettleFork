@@ -64,6 +64,26 @@ interface FilterRowProps {
    * default is 0 → option hidden, which matches "fresh project" UX.
    */
   rejectedCount?: number
+  /**
+   * Phase 4c-1 — count of project-wide needs-review TFMs whose
+   * confidence ≥ HIGH_CONFIDENCE_THRESHOLD (default 85). Drives the
+   * "Approve high-confidence (N)" button visibility and copy. When
+   * `0`, the button is hidden entirely (no disabled state — at zero
+   * the affordance is noise; the dialog's own count would also be 0
+   * by the time the user reached it). When omitted, the button is
+   * also hidden — fixtures and storybook never wire it.
+   *
+   * Derivation lives in the parent (`MappingContent`), client-side
+   * over the already-loaded `data.rows` (no extra round-trip). Cap
+   * at 999+ for display purposes is unnecessary at expected scale.
+   */
+  highConfidenceCount?: number
+  /**
+   * Phase 4c-1 — fired when the user clicks "Approve high-confidence
+   * (N)". Parent owns the dialog state and is responsible for
+   * opening `BulkConfirmDialog` with `scope='high_confidence'`.
+   */
+  onApproveHighConfidenceClick?: () => void
 }
 
 const BASE_STATUS_OPTIONS: Array<{ value: MappingStatusFilter; label: string }> = [
@@ -84,6 +104,8 @@ export function FilterRow({
   sourceTables,
   tableCount,
   rejectedCount = 0,
+  highConfidenceCount,
+  onApproveHighConfidenceClick,
 }: FilterRowProps) {
   // Gate the "Rejected" option on rejectedCount > 0, with a fallback to
   // keep the option visible when the current filter value is already
@@ -242,9 +264,38 @@ export function FilterRow({
         </button>
       ) : null}
 
+      {/*
+        Phase 4c-1 — project-wide bulk approve for high-confidence
+        needs-review TFMs. Hidden when the count is zero (or the prop
+        is unset, e.g. fixtures). Sits in the right-aligned region
+        ahead of the table-count gutter via `ml-auto` on the first
+        right-aligned element. When BOTH this button and the table
+        count are visible, only the leftmost gets `ml-auto`.
+      */}
+      {highConfidenceCount !== undefined &&
+      highConfidenceCount > 0 &&
+      onApproveHighConfidenceClick !== undefined ? (
+        <button
+          type="button"
+          onClick={onApproveHighConfidenceClick}
+          data-testid="filter-row-approve-high-confidence"
+          className="ml-auto h-9 flex-shrink-0 rounded-lg border border-gray-200 bg-white px-3 text-xs font-medium text-gray-700 transition-colors hover:border-gray-300 hover:bg-gray-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500/30"
+        >
+          Approve high-confidence ({highConfidenceCount})
+        </button>
+      ) : null}
+
       {tableCount > 0 ? (
         <span
-          className="ml-auto flex-shrink-0 text-xs tabular-nums text-gray-500"
+          className={cn(
+            'flex-shrink-0 text-xs tabular-nums text-gray-500',
+            // Only claim ml-auto when the button above didn't take it.
+            !(
+              highConfidenceCount !== undefined &&
+              highConfidenceCount > 0 &&
+              onApproveHighConfidenceClick !== undefined
+            ) && 'ml-auto',
+          )}
           data-testid="filter-row-table-count"
         >
           {tableCount} {tableCount === 1 ? 'table' : 'tables'}
