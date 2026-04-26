@@ -146,6 +146,15 @@ export interface FieldItem {
   contributingSourceFields: { id: string; name: string; data_type: string }[]
   /** Target field check constraint (for value assignments — helps guide value selection) */
   targetCheckConstraint?: { type: string; allowedValues?: string[]; pattern?: string; raw?: string } | null
+  /**
+   * Phase 4a-3 — true when the underlying TFM's mapping_sources span
+   * 2+ distinct source tables. Cross-table apply is not yet
+   * supported by `dq_apply_field_transform_joined`; the Transform tab
+   * server-disables Apply / Test buttons for these rows. False for
+   * value assignments, single-source mapped TFMs, and same-table
+   * multi-source TFMs.
+   */
+  isCrossTable: boolean
 }
 
 export interface TableGroup {
@@ -202,6 +211,17 @@ export type TransformWriteErrorCode =
   | 'PERMISSION_DENIED'
   | 'VALIDATION'
   | 'INTERNAL'
+  /**
+   * Phase 4a-3 — surfaced by `applyTransform` (and `testTransform` /
+   * `runFullTransformTest` future surfaces) when the targeted TFM
+   * spans 2+ source tables. The underlying RPC
+   * `dq_apply_field_transform_joined` does not yet handle the
+   * `p_join_spec != NULL` branch; cross-table apply is deferred to a
+   * follow-up phase. The Transform tab UI consumes this code to
+   * server-disable Apply/Test buttons + render a tooltip; the
+   * drawer Sources section also surfaces a transparency badge.
+   */
+  | 'CROSS_TABLE_TRANSFORM_NOT_YET_SUPPORTED'
 
 async function guardWrites<T extends { success: boolean; error?: string; errorCode?: TransformWriteErrorCode }>(
   projectId: string,
@@ -680,12 +700,23 @@ export async function getTransformData(
         })
 
     const contributingSourceFields: { id: string; name: string; data_type: string }[] = []
+    let contributorSpansOtherTable = false
     for (const c of contributors) {
       if (!c.sourceFieldId) continue
       const cf = srcFieldById.get(c.sourceFieldId)
       if (!cf) continue
       contributingSourceFields.push({ id: cf.id, name: cf.name, data_type: cf.data_type })
+      if (
+        srcField &&
+        cf.table_id &&
+        srcField.table_id &&
+        cf.table_id !== srcField.table_id
+      ) {
+        contributorSpansOtherTable = true
+      }
     }
+    const isCrossTable =
+      !isValueAssignment && contributorSpansOtherTable
 
     const item: FieldItem = {
       fieldMappingId: tfm.id,
@@ -713,6 +744,7 @@ export async function getTransformData(
       transformation,
       isContributing: false,
       contributingSourceFields,
+      isCrossTable,
       targetCheckConstraint: isValueAssignment
         ? ((tgtField as typeof tgtField & { check_constraint?: unknown }).check_constraint as FieldItem['targetCheckConstraint'] ?? null)
         : null,
@@ -1808,6 +1840,75 @@ export async function autoGenerateAllTransforms(
   })
 }
 
+// ─── Cross-table TFM detection (Phase 4a-3) ──────────────────────────────────
+//
+// `dq_apply_field_transform_joined` does NOT yet handle the
+// `p_join_spec != NULL` branch. Cross-table mappings persist
+// successfully (Phase 4a-3 wrapper writes per-source `join_spec`)
+// but Transform-tab apply / test surfaces would otherwise hit a
+// `RAISE EXCEPTION` from the RPC. We detect the cross-table case at
+// the action layer and return a structured
+// `CROSS_TABLE_TRANSFORM_NOT_YET_SUPPORTED` so callers can surface
+// the limitation cleanly.
+
+/**
+ * Returns true when the TFM's mapping_sources span 2+ distinct
+ * source tables. Pre-condition: `tfmId` references a real TFM. The
+ * query is admin-bound (RLS narrowing on mapping_sources is OK in
+ * RPC contexts but the action paths use a thin admin scan to avoid
+ * a second auth hop).
+ */
+async function isCrossTableTfm(tfmId: string): Promise<boolean> {
+  const { data, error } = await supabaseAdmin
+    .from('mapping_sources')
+    .select('source_table_id')
+    .eq('target_field_mapping_id', tfmId)
+  if (error || !data) return false
+  const distinct = new Set<string>()
+  for (const r of data) {
+    if (r.source_table_id !== null) distinct.add(r.source_table_id as string)
+  }
+  return distinct.size > 1
+}
+
+// ─── projectHasCrossTableMappings ─────────────────────────────────────────────
+//
+// True when *any* TFM in the project has `mapping_sources` spanning two or more
+// source tables. Powers the redesign Transform-page placeholder note: while
+// the redesign Transform UI is still a Phase-3 placeholder (no Apply/Test
+// buttons to disable), we surface the cross-table apply limitation in the
+// placeholder itself so users on flag-on projects with cross-table mappings
+// see the same transparency they get on the legacy UI (Block F Part B) and in
+// the drawer Sources badge (Block F Part C).
+//
+// Implementation note: we go through `target_field_mappings` so we can scope
+// to the project in a single round-trip. The shape returned by PostgREST is
+//
+//   [{ id, mapping_sources: [{ source_table_id }, …] }, …]
+//
+// We then count distinct `source_table_id` per TFM and short-circuit on the
+// first one that exceeds 1. Empty input ⇒ `false`.
+export async function projectHasCrossTableMappings(
+  projectId: string,
+): Promise<boolean> {
+  const { data, error } = await supabaseAdmin
+    .from('target_field_mappings')
+    .select('id, mapping_sources(source_table_id)')
+    .eq('project_id', projectId)
+  if (error || !data) return false
+  for (const tfm of data as Array<{
+    mapping_sources: Array<{ source_table_id: string | null }> | null
+  }>) {
+    const sources = tfm.mapping_sources ?? []
+    const distinct = new Set<string>()
+    for (const ms of sources) {
+      if (ms.source_table_id !== null) distinct.add(ms.source_table_id)
+    }
+    if (distinct.size > 1) return true
+  }
+  return false
+}
+
 // ─── applyTransform ───────────────────────────────────────────────────────────
 //
 // Applies a single TFM's transform to staged_data_rows.
@@ -1816,6 +1917,12 @@ export async function autoGenerateAllTransforms(
 // Value-assignments  → `dq_apply_field_transform(tm_id, src_tbl, tgt_tbl, tgt_name, sql, has_staged)`
 //                      looped over every TM sharing the VA's target_table
 //                      (VAs are global per target table in the new model).
+//
+// Cross-table guard (Phase 4a-3): TFMs whose mapping_sources span
+// 2+ source tables short-circuit with
+// `CROSS_TABLE_TRANSFORM_NOT_YET_SUPPORTED` BEFORE the RPC is
+// invoked. The wrapper UI / Transform tab surface the limitation;
+// the RPC itself would raise a friendlier-but-still-failing error.
 
 export async function applyTransform(
   fieldMappingId: string,
@@ -1853,6 +1960,22 @@ export async function applyTransform(
   const isValueAssignment = ctx.primarySource == null
   if (!isValueAssignment && !ctx.primarySource?.sourceField) {
     return { success: false, rowsAffected: 0, error: 'Source field not found' }
+  }
+
+  // Phase 4a-3 cross-table apply guard. Mapped TFMs only — VA TFMs
+  // have a single source table by construction so the guard is a
+  // no-op for them, but we cheaply skip the query.
+  if (!isValueAssignment) {
+    const crossTable = await isCrossTableTfm(ctx.tfm.id)
+    if (crossTable) {
+      return {
+        success: false,
+        rowsAffected: 0,
+        error:
+          'Transform application for cross-table mappings ships in a future release.',
+        errorCode: 'CROSS_TABLE_TRANSFORM_NOT_YET_SUPPORTED',
+      }
+    }
   }
 
   return guardWrites(ctx.projectId, async () => {

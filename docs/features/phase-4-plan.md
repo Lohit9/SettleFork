@@ -12,7 +12,7 @@ and currently active only on Heritage Core in production.
 | Pre-prep | `ActionType` enum widening for new mapping log codes | ✅ shipped 2026-04-25 |
 | 4a-1 | `createFieldMapping` + `suggestMappingForTarget` server wrappers (same-table only) | ✅ shipped 2026-04-25 |
 | 4a-2 | `CreateMappingForm` + drawer integration (W1, manual mapping creation, same-table only) | ✅ shipped 2026-04-25 |
-| 4a-3 | Cross-table picker + cross-table create flow (W1 cross-table) | ⏳ pending |
+| 4a-3 | Cross-table picker + cross-table create flow (W1 cross-table) — includes Apply-RPC transparency stack (founder decision §10-OQ-1) | ✅ shipped 2026-04-25 |
 | 4a-4 | "Draft discarded" toast on row switch + UX polish | ⏳ pending |
 | 4a-5 | W6 — AI Suggest per-row in W1's form | ⏳ pending |
 | 4b | W2 + W3 + W4 (edit sources, combination, un-acknowledge) | ⏳ pending |
@@ -22,6 +22,19 @@ This document is the design artefact we work through together
 before firing each Phase 4 implementation prompt. Decisions
 in §10 were locked at the start of 4a-1; nothing further locks
 without explicit founder approval.
+
+> **Phase 4a-3 deferred work — cross-table transform apply.**
+> 4a-3 ships cross-table mapping creation with the full transparency
+> stack (founder decision §10-OQ-1, 2026-04-25). The underlying
+> `dq_apply_field_transform_joined` RPC does not yet branch on
+> `p_join_spec != NULL`. Cross-table TFMs short-circuit with
+> `errorCode: 'CROSS_TABLE_TRANSFORM_NOT_YET_SUPPORTED'` from
+> `applyTransform`; the Transform tab disables Apply / Test for
+> these rows; the drawer surfaces a transparency badge. A follow-up
+> phase (TBD — likely 4a-6 or a Phase 5 RPC pass) wires the
+> cross-table branch in the RPC and removes the structured error
+> code. See `docs/features/mapping-redesign.md` →
+> "Cross-table mapping creation (Phase 4a-3)" for the full disposition.
 
 > **Cross-references:**
 > - Design contract: `docs/features/phase-3-gap-4a-design.md`

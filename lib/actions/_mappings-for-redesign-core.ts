@@ -40,6 +40,7 @@ import type {
   UnmappedRow,
   ValueAssignmentRow,
 } from '@/lib/types/mappings-for-redesign'
+import { inferFkCandidates } from '@/lib/utils/fk-inference'
 
 // ─── Raw row shapes fetched from Supabase ────────────────────────────
 //
@@ -641,6 +642,9 @@ function buildMappingSourceRef(
  *
  * Returns null when no annotation can be derived (ambiguous FK graph
  * + missing join_spec). The UI hides the annotation in that case.
+ *
+ * Phase 4a-3: the FK inference primitive lives in
+ * `lib/utils/fk-inference.ts` so the write path can reuse it.
  */
 function deriveJoinAnnotation(
   ms: RawMappingSourceRow,
@@ -649,63 +653,23 @@ function deriveJoinAnnotation(
   tablesById: Map<string, RawTableRow>,
   fieldsByTableId: Map<string, RawFieldRow[]>,
 ): string | null {
-  // Step 1: FK inference over dominant-table fields.
   const dominantFields = fieldsByTableId.get(dominantTableId) ?? []
-  const fkCandidates = dominantFields.filter(
-    (f) =>
-      f.is_foreign_key === true &&
-      f.fk_reference !== null &&
-      fkReferenceTargetsTable(f.fk_reference, ms.source_table_id!, joinedTableName, tablesById),
+  const fkCandidates = inferFkCandidates(
+    dominantFields,
+    ms.source_table_id!,
+    joinedTableName,
+    tablesById,
   )
   if (fkCandidates.length === 1) {
-    return `(join: ${fkCandidates[0].name})`
+    return `(join: ${fkCandidates[0]})`
   }
 
-  // Step 2: fall back to the structured join_spec.
   const spec = coerceJoinSpec(ms.join_spec)
   if (spec?.viaFkField) {
     return `(join: ${spec.viaFkField})`
   }
 
   return null
-}
-
-/**
- * Check whether an `fk_reference` string points at the given table.
- *
- * `fk_reference` is a free-form text annotation produced by schema
- * ingestion. Known shapes from production data:
- *
- *   • `"CustomerMaster.ContactID"`  — "table.field"
- *   • `"CustomerMaster(ContactID)"` — "table(field)"
- *   • `"CustomerMaster"`            — bare table name
- *   • UUID string                   — direct table ID reference
- *
- * Match by exact UUID OR by substring-prefix on the joined table's
- * name. When the fk_reference is ambiguous or uses an unrecognized
- * shape, the caller falls through to the structured `join_spec` JSONB.
- */
-function fkReferenceTargetsTable(
-  fkReference: string,
-  joinedTableId: string,
-  joinedTableName: string,
-  tablesById: Map<string, RawTableRow>,
-): boolean {
-  // Direct ID match (rare but unambiguous).
-  if (fkReference === joinedTableId) return true
-
-  // Name-based matches: "Table.Col", "Table(Col)", or bare "Table".
-  const leadingTableName = fkReference.split(/[.(\s]/, 1)[0]
-  if (leadingTableName === joinedTableName) return true
-
-  // Defensive: the fk_reference may include a schema-qualified prefix
-  // (e.g. "public.CustomerMaster.ContactID"). Fall back to looking up
-  // every table, and match the first token that resolves to the same
-  // table id as the joined source.
-  const byName = [...tablesById.values()].find(
-    (t) => t.name === leadingTableName,
-  )
-  return byName !== undefined && byName.id === joinedTableId
 }
 
 /**

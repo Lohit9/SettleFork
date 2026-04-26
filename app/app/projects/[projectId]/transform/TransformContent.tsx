@@ -117,6 +117,9 @@ interface Props {
   initialData: TransformPageData
   isArchived?: boolean
   projectInfo?: ProjectInfo
+  // Phase 4a-3: passed through to the redesign placeholder so it can
+  // render the cross-table-apply transparency note. Legacy UI ignores it.
+  hasCrossTableMappings?: boolean
 }
 
 type LocalStatus = 'draft' | 'tested' | 'applied' | 'stale'
@@ -269,7 +272,7 @@ function TransformStatPills({
 
 // ── TransformContent ──────────────────────────────────────────────────────────
 
-export default function TransformContent({ projectId, projectName, initialData, isArchived = false, projectInfo }: Props) {
+export default function TransformContent({ projectId, projectName, initialData, isArchived = false, projectInfo, hasCrossTableMappings = false }: Props) {
   // ── Phase 3 redesign dispatch ─────────────────────────────────────────────
   // When `projects.use_mapping_redesign` is true for this project, render the
   // new UI from `./redesign/TransformContent`. Otherwise fall through to the
@@ -281,6 +284,7 @@ export default function TransformContent({ projectId, projectName, initialData, 
         projectId={projectId}
         projectName={projectName}
         projectInfo={projectInfo}
+        hasCrossTableMappings={hasCrossTableMappings}
       />
     )
   }
@@ -945,6 +949,7 @@ export default function TransformContent({ projectId, projectName, initialData, 
                 },
                 isContributing: false,
                 contributingSourceFields: [],
+                isCrossTable: false,
                 targetCheckConstraint: uf.check_constraint,
               }
               const merged = [...without, newItem]
@@ -1622,6 +1627,7 @@ export default function TransformContent({ projectId, projectName, initialData, 
           transformation: null,
           isContributing: false,
           contributingSourceFields: [],
+          isCrossTable: false,
           targetCheckConstraint: uf.check_constraint,
         }
         return { field: syntheticField, table: tbl, dataset: ds }
@@ -2652,7 +2658,12 @@ export default function TransformContent({ projectId, projectName, initialData, 
                         variant="outline"
                         className="gap-2 border-gray-300 text-gray-700 hover:border-blue-400 hover:text-blue-700 hover:bg-blue-50"
                         onClick={handleTest}
-                        disabled={isTesting || !canEdit}
+                        disabled={isTesting || !canEdit || !!selectedContext?.field.isCrossTable}
+                        title={
+                          selectedContext?.field.isCrossTable
+                            ? 'Transform application for cross-table mappings ships in a future release.'
+                            : undefined
+                        }
                       >
                         {isTesting ? (
                           <span className="flex items-center gap-2">
@@ -2675,9 +2686,11 @@ export default function TransformContent({ projectId, projectName, initialData, 
                       <Button
                         className="bg-primary hover:bg-primary/90 text-white gap-2 px-6 disabled:opacity-50 disabled:cursor-not-allowed"
                         onClick={handleApply}
-                        disabled={isApplying || isCheckingIssues || !localTransform?.transformationId || localTransform.status !== 'tested' || !canEdit}
+                        disabled={isApplying || isCheckingIssues || !localTransform?.transformationId || localTransform.status !== 'tested' || !canEdit || !!selectedContext?.field.isCrossTable}
                         title={
-                          !localTransform?.transformationId
+                          selectedContext?.field.isCrossTable
+                            ? 'Transform application for cross-table mappings ships in a future release.'
+                            : !localTransform?.transformationId
                             ? 'Run "Test Transform" first to commit this value'
                             : localTransform.status !== 'tested'
                             ? 'Run "Test Transform" first'

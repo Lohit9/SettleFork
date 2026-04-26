@@ -330,7 +330,7 @@ describe('FieldMappingRow — Rule 3 (cross-table, two tables)', () => {
           ordinal: 2,
           sourceField: { id: 'sf-2', name: 'EMAIL', dataType: 'VARCHAR', isNullable: false },
           sourceTable: { id: 'st-CONTACTS', name: 'CONTACTS' },
-          joinAnnotation: 'PrimaryContactID',
+          joinAnnotation: '(join: PrimaryContactID)',
         }),
       ],
       targetField: targetField({ name: 'customer_full_profile' }),
@@ -417,7 +417,7 @@ describe('FieldMappingRow — Rule 4 (multi-table complex)', () => {
           sourceField: { id: `sf-${i}`, name: `F${i}`, dataType: 'VARCHAR', isNullable: false },
           sourceTable: { id: `st-${i % 3}`, name: `TABLE_${i % 3}` },
           // i=0 → TABLE_0, i=1 → TABLE_1, i=2 → TABLE_2, i=3 → TABLE_0 (3 distinct tables)
-          joinAnnotation: i === 0 ? null : `JOIN_${i}`,
+          joinAnnotation: i === 0 ? null : `(join: JOIN_${i})`,
         }),
       ),
       targetField: targetField({ name: 'complex_field' }),

@@ -69,13 +69,33 @@ describe('ExpandedSourceList', () => {
       source({
         tableName: 'CIF_MASTER',
         fieldName: 'FNAME',
-        joinAnnotation: 'PrimaryContactID',
+        // Canonical contract: `joinAnnotation` arrives pre-wrapped from
+        // `deriveJoinAnnotation`. Renderers consume as-is.
+        joinAnnotation: '(join: PrimaryContactID)',
       }),
     ]
     render(<ExpandedSourceList sources={sources} rule="rule_3" />)
     const joinNode = screen.getByTestId('expanded-source-join')
     expect(joinNode.textContent).toBe('(join: PrimaryContactID)')
     expect(joinNode.className).toContain('italic')
+  })
+
+  // Regression test (Phase 4a-3 smoke): the canonical pre-wrapped
+  // `joinAnnotation` produced by `deriveJoinAnnotation` must NOT be
+  // wrapped again by the renderer. Earlier the expanded list emitted
+  // `(join: (join: FK))`. Guard against re-introduction.
+  it('does NOT double-wrap the canonical "(join: …)" annotation', () => {
+    const sources = [
+      source({
+        tableName: 'CONTACTS',
+        fieldName: 'EMAIL',
+        joinAnnotation: '(join: CIF_NO)',
+      }),
+    ]
+    render(<ExpandedSourceList sources={sources} rule="rule_3" />)
+    const joinNode = screen.getByTestId('expanded-source-join')
+    expect(joinNode.textContent).toBe('(join: CIF_NO)')
+    expect(joinNode.textContent).not.toMatch(/\(join:\s*\(join:/)
   })
 
   it('does NOT render a join annotation node when joinAnnotation is null (Rule 2 same-table case)', () => {
@@ -109,7 +129,7 @@ describe('ExpandedSourceList', () => {
   describe('light-mode-only invariant', () => {
     it('entire rendered tree contains no dark-prefix substring', () => {
       const sources = [
-        source({ tableName: 'A', fieldName: 'a1', joinAnnotation: 'FK' }),
+        source({ tableName: 'A', fieldName: 'a1', joinAnnotation: '(join: FK)' }),
         source({ tableName: 'B', fieldName: 'b1', joinAnnotation: null }),
       ]
       const { container } = render(<ExpandedSourceList sources={sources} rule="rule_3" />)

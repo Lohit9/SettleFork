@@ -922,21 +922,31 @@ function BodyContent({
 /**
  * Stacked section with a small-caps title and arbitrary children. Spacing
  * is `mb-6` between sections (clean Linear / Notion vibe — no border rules).
+ *
+ * `headerAside` (optional) renders a trailing slot in the header row,
+ * right-aligned. Used by `SourcesSection` to surface the Phase 4a-3
+ * cross-table apply badge without disrupting the rest of the drawer's
+ * uniform section header style.
  */
 function DrawerSection({
   title,
   testId,
   children,
+  headerAside,
 }: {
   title: string
   testId: string
   children: React.ReactNode
+  headerAside?: React.ReactNode
 }) {
   return (
     <section className="mb-6 last:mb-0" data-testid={testId}>
-      <h3 className="mb-2 text-xs font-medium uppercase tracking-wide text-slate-500">
-        {title}
-      </h3>
+      <div className="mb-2 flex items-center justify-between gap-2">
+        <h3 className="text-xs font-medium uppercase tracking-wide text-slate-500">
+          {title}
+        </h3>
+        {headerAside}
+      </div>
       <div>{children}</div>
     </section>
   )
@@ -1346,14 +1356,46 @@ function MappedBody({ row }: { row: MappedRow }) {
  * authoritative).
  */
 function SourcesSection({ sources }: { sources: MappingSourceRef[] }) {
+  // Phase 4a-3: detect cross-table mappings (2+ distinct source
+  // tables among ms.sourceTable.id) and surface a transparency badge
+  // explaining that Transform-tab apply doesn't yet handle this
+  // case. See `lib/actions/transformations.ts:applyTransform` for the
+  // structured server-side error path.
+  const uniqueTableIds = new Set(sources.map((s) => s.sourceTable.id))
+  const isCrossTable = uniqueTableIds.size > 1
   return (
-    <DrawerSection title="Sources" testId="drawer-section-sources">
+    <DrawerSection
+      title="Sources"
+      testId="drawer-section-sources"
+      headerAside={isCrossTable ? <CrossTableApplyBadge /> : undefined}
+    >
       <ul className="space-y-3" data-testid="drawer-sources-list">
         {sources.map((source) => (
           <SourceCard key={source.id} source={source} />
         ))}
       </ul>
     </DrawerSection>
+  )
+}
+
+/**
+ * Phase 4a-3 cross-table apply transparency badge. Surfaces in the
+ * drawer's Sources section header for any TFM whose `mapping_sources`
+ * span 2+ distinct source tables. Muted slate styling (this is a
+ * known limitation, not an error condition — §10-OQ-1 styling note).
+ */
+function CrossTableApplyBadge() {
+  return (
+    <span
+      data-testid="drawer-section-sources-cross-table-badge"
+      title="Transform application for cross-table mappings ships in a future release."
+      className={cn(
+        'inline-flex items-center rounded border border-slate-200 bg-slate-50',
+        'px-1.5 py-0.5 text-[10px] font-medium text-slate-500',
+      )}
+    >
+      Transform: cross-table not yet applicable
+    </span>
   )
 }
 
@@ -1397,7 +1439,12 @@ function SourceCard({ source }: { source: MappingSourceRef }) {
             className="basis-full text-xs italic text-slate-500"
             data-testid="drawer-source-join"
           >
-            (join: {source.joinAnnotation})
+            {/* `source.joinAnnotation` is pre-formatted by
+                `deriveJoinAnnotation` in
+                `lib/actions/_mappings-for-redesign-core.ts` and
+                already includes the `(join: …)` wrapper. Render
+                verbatim — wrapping again produces "(join: (join: X))". */}
+            {source.joinAnnotation}
           </span>
         ) : null}
       </div>

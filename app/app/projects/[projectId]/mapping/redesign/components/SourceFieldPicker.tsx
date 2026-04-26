@@ -1,7 +1,7 @@
 'use client'
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Phase 4a-2 — Source field picker for the W1 manual mapping creation form.
+// Phase 4a-2/4a-3 — Source field picker for the W1 manual mapping creation form.
 // ─────────────────────────────────────────────────────────────────────────────
 //
 // Custom inline multi-select picker (founder decision 3 — no Radix
@@ -10,20 +10,32 @@
 // view with:
 //
 //   • A search input at top (debounced — `SEARCH_DEBOUNCE_MS`)
-//   • A chip strip of currently selected fields (selection order
-//     preserved; first-picked = ordinal 0 / dominant)
-//   • Grouped list of source fields (same-table groups only — see below)
-//   • Status dot + name + hover tooltip per row
+//   • A chip strip of currently selected fields, grouped by source
+//     table with subtle "Dominant" / "Joined" small-caps headers
+//   • Grouped list of source fields (all tables visible)
 //   • ✓ marker + tinted background on selected rows
 //
-// SAME-TABLE CONSTRAINT (Phase 4a-2)
+// CROSS-TABLE SUPPORT (Phase 4a-3)
 //
-// The wrapper rejects cross-table input with `CROSS_TABLE_NOT_YET_SUPPORTED`;
-// the picker enforces the same invariant in the UI by hiding source
-// tables other than the one the user has already drawn from. Once the
-// last chip is removed the constraint releases instantly. A muted
-// footer note tells the user where the hidden groups went and points
-// at Phase 4a-3.
+// The same-table constraint introduced in 4a-2 has been lifted: the
+// picker no longer hides non-dominant source tables, and the muted
+// footer note pointing at 4a-3 has been removed. The wrapper now
+// performs an FK precheck and surfaces disambiguation through
+// `CreateMappingForm`'s inline dropdown when needed.
+//
+// First-picked stable for dominant: the ordering of `selectedIds` is
+// preserved verbatim — index 0 = ordinal 0 = dominant source. The
+// picker never re-anchors when the user adds joined chips (§3-OQ-1).
+//
+// CHIP GROUPING (Phase 4a-3 — §3-OQ-2 / §3-OQ-3)
+//
+//   • Same-table selection (all chips from one source table) →
+//     flat single-row chip strip, no headers.
+//   • Cross-table selection (2+ source tables among chips) → chips
+//     grouped under "DOMINANT" and "JOINED" small-caps text headers.
+//     Within each group the per-table sub-grouping carries a faint
+//     table name pill so the user can tell "joined chips from CIF"
+//     apart from "joined chips from BRANCH" at a glance.
 //
 // HOVER TOOLTIP
 //
@@ -101,18 +113,6 @@ export function SourceFieldPicker({
     }
   }, [searchInput])
 
-  // ── Same-table constraint ─────────────────────────────────────────
-  // The wrapper enforces same-table at write time. The picker enforces
-  // it at the UI layer by collapsing the visible groups to the chosen
-  // source table once the user has picked anything. The constraint
-  // releases instantly when the last chip is removed (founder decision
-  // §2-OQ-2).
-  const constraintTableId = useMemo<string | null>(() => {
-    if (selectedIds.length === 0) return null
-    const first = availableSourceFields.find((f) => f.id === selectedIds[0])
-    return first?.sourceTable.id ?? null
-  }, [selectedIds, availableSourceFields])
-
   // ── Derived selected-field objects (in selection order) ───────────
   // We resolve the chip list by walking `selectedIds` (preserves user
   // order) rather than `availableSourceFields` (would force server
@@ -133,23 +133,15 @@ export function SourceFieldPicker({
     return out
   }, [selectedIds, fieldsById])
 
-  // ── Visible fields: search + same-table filter ────────────────────
+  // ── Visible fields: search filter only (cross-table allowed) ──────
   const visibleFields = useMemo(() => {
     const trimmed = searchQuery.trim().toLowerCase()
+    if (trimmed.length === 0) return availableSourceFields
     return availableSourceFields.filter((field) => {
-      if (
-        constraintTableId !== null &&
-        field.sourceTable.id !== constraintTableId
-      ) {
-        return false
-      }
-      if (trimmed.length > 0) {
-        const haystack = `${field.name} ${field.sourceTable.name}`.toLowerCase()
-        if (!haystack.includes(trimmed)) return false
-      }
-      return true
+      const haystack = `${field.name} ${field.sourceTable.name}`.toLowerCase()
+      return haystack.includes(trimmed)
     })
-  }, [availableSourceFields, constraintTableId, searchQuery])
+  }, [availableSourceFields, searchQuery])
 
   // ── Group by source table (Map preserves server order) ───────────
   const grouped = useMemo(() => {
@@ -182,14 +174,6 @@ export function SourceFieldPicker({
 
   const selectedSet = useMemo(() => new Set(selectedIds), [selectedIds])
 
-  // Did the constraint hide any tables that would otherwise be visible?
-  // Used purely for the muted footer note copy.
-  const constraintHidesGroups =
-    constraintTableId !== null &&
-    availableSourceFields.some(
-      (f) => f.sourceTable.id !== constraintTableId,
-    )
-
   return (
     <div data-testid="source-field-picker" className="flex flex-col gap-2">
       <SelectedChipsRow
@@ -217,20 +201,20 @@ export function SourceFieldPicker({
           disabled={disabled}
         />
       </div>
-      {constraintHidesGroups ? (
-        <p
-          data-testid="source-field-picker-constraint-note"
-          className="text-[11px] italic text-slate-500"
-        >
-          Cross-table mappings ship in Phase 4a-3. Fields from other source
-          tables are hidden until you remove your selection.
-        </p>
-      ) : null}
     </div>
   )
 }
 
 // ── Selected chips ───────────────────────────────────────────────────────────
+//
+// Layout rules (Phase 4a-3):
+//
+//   • 0 chips                    → empty-state line.
+//   • 1+ chips, 1 source table   → flat single-row chip strip.
+//   • 1+ chips, 2+ source tables → grouped under DOMINANT / JOINED
+//     small-caps headers; within JOINED the chips remain in selection
+//     order. The dominant table is always the first selected chip's
+//     table (§3-OQ-1: stable, no re-anchor).
 
 function SelectedChipsRow({
   fields,
@@ -251,44 +235,148 @@ function SelectedChipsRow({
       </p>
     )
   }
+
+  // Determine cross-table state up-front. The dominant table id is
+  // the first chip's table (selection order is the source of truth).
+  const dominantTableId = fields[0].sourceTable.id
+  const uniqueTableIds = new Set(fields.map((f) => f.sourceTable.id))
+  const isCrossTable = uniqueTableIds.size > 1
+
+  if (!isCrossTable) {
+    // Single-table case: collapse to flat chip strip with no group
+    // headers. Visually identical to the 4a-2 shape.
+    return (
+      <ul
+        data-testid="source-field-picker-chips"
+        data-cross-table="false"
+        className="flex flex-wrap gap-1.5"
+      >
+        {fields.map((field) => (
+          <ChipListItem
+            key={field.id}
+            field={field}
+            onRemove={onRemove}
+            disabled={disabled}
+          />
+        ))}
+      </ul>
+    )
+  }
+
+  // Cross-table: split into dominant + joined buckets. Within
+  // `joinedFields` we preserve selection order, so a user picking
+  // CIF.A → BRANCH.B → CIF.C ends up with chips [CIF.A] under
+  // dominant and [BRANCH.B, CIF.C] under joined — order matches
+  // input ordinal.
+  const dominantFields = fields.filter(
+    (f) => f.sourceTable.id === dominantTableId,
+  )
+  const joinedFields = fields.filter(
+    (f) => f.sourceTable.id !== dominantTableId,
+  )
+
   return (
-    <ul
+    <div
       data-testid="source-field-picker-chips"
-      className="flex flex-wrap gap-1.5"
+      data-cross-table="true"
+      className="flex flex-col gap-1.5"
     >
-      {fields.map((field) => (
-        <li key={field.id}>
-          <span
-            data-testid="source-field-picker-chip"
-            data-source-field-id={field.id}
-            className={cn(
-              'inline-flex items-center gap-1.5 rounded-full',
-              'border border-blue-200 bg-blue-50 px-2 py-0.5',
-              'text-[11px] font-medium text-blue-900',
-            )}
-          >
-            <span className="font-mono">{field.name}</span>
-            <span className="text-blue-400">·</span>
-            <span className="text-blue-700">{field.sourceTable.name}</span>
-            <button
-              type="button"
-              onClick={() => onRemove(field.id)}
-              disabled={disabled}
-              data-testid="source-field-picker-chip-remove"
-              aria-label={`Remove ${field.name}`}
-              className={cn(
-                'inline-flex h-3.5 w-3.5 items-center justify-center rounded-full',
-                'text-blue-500 hover:bg-blue-100 hover:text-blue-800',
-                'focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-500',
-                'disabled:cursor-not-allowed disabled:opacity-50',
-              )}
-            >
-              <X className="h-2.5 w-2.5" />
-            </button>
-          </span>
-        </li>
-      ))}
-    </ul>
+      <ChipGroup
+        label="Dominant"
+        testId="source-field-picker-chips-dominant"
+        fields={dominantFields}
+        onRemove={onRemove}
+        disabled={disabled}
+      />
+      <ChipGroup
+        label="Joined"
+        testId="source-field-picker-chips-joined"
+        fields={joinedFields}
+        onRemove={onRemove}
+        disabled={disabled}
+      />
+    </div>
+  )
+}
+
+function ChipGroup({
+  label,
+  testId,
+  fields,
+  onRemove,
+  disabled,
+}: {
+  label: string
+  testId: string
+  fields: SourceFieldWithState[]
+  onRemove: (id: string) => void
+  disabled: boolean
+}) {
+  return (
+    <div className="flex flex-col gap-1" data-testid={testId}>
+      <span
+        className={cn(
+          'text-[9px] font-semibold uppercase tracking-[0.08em]',
+          'text-slate-400',
+        )}
+      >
+        {label}
+      </span>
+      <ul className="flex flex-wrap gap-1.5">
+        {fields.map((field) => (
+          <ChipListItem
+            key={field.id}
+            field={field}
+            onRemove={onRemove}
+            disabled={disabled}
+          />
+        ))}
+      </ul>
+    </div>
+  )
+}
+
+function ChipListItem({
+  field,
+  onRemove,
+  disabled,
+}: {
+  field: SourceFieldWithState
+  onRemove: (id: string) => void
+  disabled: boolean
+}) {
+  return (
+    <li>
+      <span
+        data-testid="source-field-picker-chip"
+        data-source-field-id={field.id}
+        data-source-table-id={field.sourceTable.id}
+        className={cn(
+          'inline-flex items-center gap-1.5 rounded-full',
+          'border border-blue-200 bg-blue-50 px-2 py-0.5',
+          'text-[11px] font-medium text-blue-900',
+        )}
+      >
+        <span className="font-mono">{field.name}</span>
+        <span className="text-blue-400">·</span>
+        <span className="text-blue-700">{field.sourceTable.name}</span>
+        <button
+          type="button"
+          onClick={() => onRemove(field.id)}
+          disabled={disabled}
+          data-testid="source-field-picker-chip-remove"
+          aria-label={`Remove ${field.name}`}
+          className={cn(
+            'inline-flex h-3.5 w-3.5 items-center justify-center rounded-full',
+            'text-blue-500 hover:bg-blue-100 hover:text-blue-800',
+            'focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-500',
+            'disabled:cursor-not-allowed disabled:opacity-50',
+          )}
+        >
+          <X className="h-2.5 w-2.5" />
+        </button>
+      </span>
+    </li>
   )
 }
 

@@ -1145,7 +1145,10 @@ function rule3Mapped(
       confidence: 80,
       sourceField: { id: 'sf-r3-b', name: 'Email', dataType: 'VARCHAR(200)', isNullable: true },
       sourceTable: { id: 'st-con', name: 'ContactMaster' },
-      joinAnnotation: 'PrimaryContactID',
+      // `joinAnnotation` per the canonical contract (see
+      // `lib/actions/_mappings-for-redesign-core.ts::deriveJoinAnnotation`)
+      // is already wrapped in `(join: …)`. Renderers must consume verbatim.
+      joinAnnotation: '(join: PrimaryContactID)',
     }),
   ]
   return mapped({
@@ -1167,8 +1170,8 @@ function rule4Mapped(
     source({ id: 'ms-r4-1', ordinal: 0, confidence: 90, sourceField: { id: 'sf-r4-1', name: 'F1', dataType: 'VARCHAR(50)', isNullable: false }, sourceTable: { id: 'st-a', name: 'TableA' } }),
     source({ id: 'ms-r4-2', ordinal: 1, confidence: 85, sourceField: { id: 'sf-r4-2', name: 'F2', dataType: 'VARCHAR(50)', isNullable: false }, sourceTable: { id: 'st-a', name: 'TableA' } }),
     source({ id: 'ms-r4-3', ordinal: 2, confidence: 80, sourceField: { id: 'sf-r4-3', name: 'F3', dataType: 'VARCHAR(50)', isNullable: true }, sourceTable: { id: 'st-a', name: 'TableA' } }),
-    source({ id: 'ms-r4-4', ordinal: 3, confidence: 75, sourceField: { id: 'sf-r4-4', name: 'F4', dataType: 'VARCHAR(50)', isNullable: true }, sourceTable: { id: 'st-b', name: 'TableB' }, joinAnnotation: 'JoinKey' }),
-    source({ id: 'ms-r4-5', ordinal: 4, confidence: 70, sourceField: { id: 'sf-r4-5', name: 'F5', dataType: 'VARCHAR(50)', isNullable: true }, sourceTable: { id: 'st-b', name: 'TableB' }, joinAnnotation: 'JoinKey' }),
+    source({ id: 'ms-r4-4', ordinal: 3, confidence: 75, sourceField: { id: 'sf-r4-4', name: 'F4', dataType: 'VARCHAR(50)', isNullable: true }, sourceTable: { id: 'st-b', name: 'TableB' }, joinAnnotation: '(join: JoinKey)' }),
+    source({ id: 'ms-r4-5', ordinal: 4, confidence: 70, sourceField: { id: 'sf-r4-5', name: 'F5', dataType: 'VARCHAR(50)', isNullable: true }, sourceTable: { id: 'st-b', name: 'TableB' }, joinAnnotation: '(join: JoinKey)' }),
   ]
   return mapped({
     id: 'tfm-r4',
@@ -1461,6 +1464,19 @@ describe('MappingDrawer — Rule 3 (cross-table, two tables) mapped body', () =>
     expect(join.className).toContain('italic')
   })
 
+  // Regression test (Phase 4a-3 smoke): the canonical
+  // `deriveJoinAnnotation` output (`'(join: …)'`) must NOT be wrapped a
+  // second time by the renderer. Earlier the drawer emitted
+  // `(join: (join: PrimaryContactID))`. Guard against re-introduction.
+  it('does NOT double-wrap the canonical "(join: …)" annotation produced by the server', () => {
+    render(<MappingDrawer row={rule3Mapped()} isOpen={true} onClose={() => {}} />)
+    const join = screen.getByTestId('drawer-source-join')
+    expect(join.textContent).not.toMatch(/\(join:\s*\(join:/)
+    // exactly one "(join:" substring
+    const occurrences = (join.textContent ?? '').match(/\(join:/g) ?? []
+    expect(occurrences).toHaveLength(1)
+  })
+
   it('does NOT render a join annotation for the dominant source (joinAnnotation === null)', () => {
     render(<MappingDrawer row={rule3Mapped()} isOpen={true} onClose={() => {}} />)
     const cards = screen.getAllByTestId('drawer-source-card')
@@ -1480,6 +1496,45 @@ describe('MappingDrawer — Rule 3 (cross-table, two tables) mapped body', () =>
     const body = screen.getByTestId('mapping-drawer-body')
     const headings = within(body).getAllByRole('heading', { level: 3 })
     expect(headings.map((h) => h.textContent)).toContain('Combination')
+  })
+
+  // ── Cross-table apply transparency badge (Phase 4a-3) ─────────────
+
+  it('renders the cross-table-apply transparency badge in the Sources section header', () => {
+    render(<MappingDrawer row={rule3Mapped()} isOpen={true} onClose={() => {}} />)
+    const badge = screen.getByTestId(
+      'drawer-section-sources-cross-table-badge',
+    )
+    expect(badge.textContent).toMatch(/cross-table/i)
+    expect(badge.getAttribute('title')).toMatch(
+      /Transform application for cross-table mappings/i,
+    )
+  })
+
+  it('badge lives inside the Sources section header (not the body / not other sections)', () => {
+    render(<MappingDrawer row={rule3Mapped()} isOpen={true} onClose={() => {}} />)
+    const sourcesSection = screen.getByTestId('drawer-section-sources')
+    expect(
+      within(sourcesSection).getByTestId(
+        'drawer-section-sources-cross-table-badge',
+      ),
+    ).toBeInTheDocument()
+  })
+})
+
+describe('MappingDrawer — same-table mappings DO NOT render cross-table badge', () => {
+  it('Rule 1 (single-source) does not render the badge', () => {
+    render(<MappingDrawer row={mapped()} isOpen={true} onClose={() => {}} />)
+    expect(
+      screen.queryByTestId('drawer-section-sources-cross-table-badge'),
+    ).toBeNull()
+  })
+
+  it('Rule 2 (multi-source same-table) does not render the badge', () => {
+    render(<MappingDrawer row={rule2Mapped()} isOpen={true} onClose={() => {}} />)
+    expect(
+      screen.queryByTestId('drawer-section-sources-cross-table-badge'),
+    ).toBeNull()
   })
 })
 

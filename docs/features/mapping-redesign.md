@@ -1486,6 +1486,47 @@ The fifth path — switching to a different row by clicking another field on the
 
 The disabled `custom_sql` radio is a deliberate signal that custom-SQL composition is supported by the data model but not the create flow. Editing an existing TFM's combination strategy `from custom_sql` back to a concat will be allowed in a later gap; transitioning `to custom_sql` is blocked from the redesign drawer for the foreseeable future (founder decision on the Phase 4 investigation, 2026-04-25).
 
+## Cross-table mapping creation (Phase 4a-3)
+
+Phase 4a-3 lifts the same-table guard introduced in 4a-2. Users can now select source fields from multiple source tables in the same form; the wrapper runs an FK precheck against the dominant table's foreign keys and either auto-infers the join or asks the user to pick the FK column when the choice is ambiguous (founder decisions on the 4a-3 investigation, 2026-04-25).
+
+### Picker behavior
+
+- The same-table constraint is gone. All source-table groups remain visible at all times; the muted "Cross-table mappings ship in Phase 4a-3" footer note has been removed.
+- Selected chips visually group by source table when 2+ tables are involved. The first-picked source table becomes the **dominant** group (no re-anchor on later picks — founder decision §3-OQ-1) and renders under a subtle small-caps `DOMINANT` header. Every other source table renders under a `JOINED` header in selection order. When all selected fields share one table, the layout collapses to the legacy flat chip strip.
+
+### FK inference contract
+
+`createFieldMapping` runs `inferFkCandidates` (extracted to `lib/utils/fk-inference.ts`) per joined table. Three branches:
+
+1. **Single candidate** — wrapper auto-infers the join. `mapping_sources.join_spec` is persisted as `null` for the joined source; the read path re-derives the annotation on demand from the dominant table's `fk_reference` metadata.
+2. **Zero candidates** — wrapper returns `errorCode: 'CROSS_TABLE_AMBIGUOUS'` with `candidateFkFields: []` and `ambiguousJoinedTableId` / `ambiguousJoinedTableName` / `dominantTableName` on the result. The form surfaces this as a zero-FK banner ("No FK from `<dominant>` to `<joined>` exists. Add one in the source schema first.") with no dropdown — no refresh affordance (founder decision §8-OQ-2).
+3. **Multiple candidates** — wrapper returns `CROSS_TABLE_AMBIGUOUS` with the FK candidate list. The form renders a native `<select>` (founder decision §4-OQ-1) under the picker. After the user picks, the form re-saves with `joinAnnotations[<joinedTableId>] = <fkColumn>`; the wrapper validates the override is in the candidate list (defense-in-depth — founder decision §2-OQ-4) and persists `join_spec.from_fk_field = <fkColumn>` on the joined source.
+
+Resolved disambiguation rows render as read-only with a `Change` link that re-opens the dropdown. Both shapes (resolved + active) coexist when there are several joined tables (founder decision §4-OQ-2). Removing a chip silently clears the matching `joinAnnotations` and `ambiguousCandidates` entries (founder decision §4-OQ-3); state never persists across form re-opens (founder decision §5-OQ-2).
+
+### Apply RPC limitation (transparency stack)
+
+Cross-table mapping **creation** is fully supported in 4a-3. Cross-table transform **apply** is not — `dq_apply_field_transform_joined` does not yet branch on `p_join_spec != NULL`. The 4a-3 commit ships the full transparency stack so the user is never surprised downstream:
+
+- `applyTransform` (`lib/actions/transformations.ts`) detects cross-table TFMs (count(distinct `mapping_sources.source_table_id`) > 1) and short-circuits with `errorCode: 'CROSS_TABLE_TRANSFORM_NOT_YET_SUPPORTED'` BEFORE the RPC call.
+- The Transform tab disables both `Test Transform` and `Apply Transform` buttons when the selected row is cross-table (`selectedContext.field.isCrossTable`). Tooltip: "Transform application for cross-table mappings ships in a future release."
+- The drawer's `Sources` section renders a small muted `Transform: cross-table not yet applicable` badge in the section header for cross-table mappings.
+
+A future phase wires the cross-table branch in `dq_apply_field_transform_joined`; the structured error code is the explicit handoff between phases.
+
+#### Transform tab transparency partial gap
+
+The redesign Transform UI is a placeholder per the Phase 3 deferral (`app/app/projects/[projectId]/transform/redesign/TransformContent.tsx`). Block F Part B (the Apply/Test button-disabling layer) only fires on the *legacy* Transform UI; on flag-on projects (`projects.use_mapping_redesign = true`) it is dormant until the redesign Transform UI is built.
+
+Mitigations stacked on top of the dormant Block F Part B:
+
+- **Action-layer guard (Part A)** — `applyTransform` short-circuits any programmatic cross-table apply call regardless of UI path. This is the load-bearing layer.
+- **Conditional placeholder note** — when the project has any cross-table TFM (`projectHasCrossTableMappings(projectId)`), the redesign Transform placeholder renders an additional `transform-redesign-cross-table-note` informational line below the project ID/name block: "This project has cross-table mappings. Transform application for cross-table mappings ships in a future release."
+- **Drawer Sources badge (Part C)** — surfaces the limitation at mapping-creation time in the drawer, before the user ever navigates to the Transform tab.
+
+When the redesign Transform UI is built (Phase 4b/5), the Block F Part B button-disabling logic will activate without code changes because the `FieldItem.isCrossTable` derivation in `TransformContent` already includes the necessary data. At that point the placeholder note becomes unreachable and can be removed.
+
 ### Phase 5-Cleanup (deferred)
 
 After Phase 4 stabilizes and the canary expands beyond Heritage Core to additional pilot projects (~30 days of stable use), Phase 5-Cleanup retires the legacy code path:

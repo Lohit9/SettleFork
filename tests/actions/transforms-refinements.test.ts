@@ -105,6 +105,43 @@ describe('[transforms refinements] R2 — applyTransform RPC wiring (mapped vs V
   })
 })
 
+// ─── R2c: Cross-table apply transparency (Phase 4a-3) ───────────────────────
+
+describe('[transforms refinements] R2c — applyTransform cross-table guard', () => {
+  it('TransformWriteErrorCode union includes CROSS_TABLE_TRANSFORM_NOT_YET_SUPPORTED', () => {
+    expect(TRANSFORMS_SRC).toMatch(/CROSS_TABLE_TRANSFORM_NOT_YET_SUPPORTED/)
+    // Must appear in the union, not just a stray string.
+    expect(TRANSFORMS_SRC).toMatch(/export\s+type\s+TransformWriteErrorCode[\s\S]*?CROSS_TABLE_TRANSFORM_NOT_YET_SUPPORTED/)
+  })
+
+  it('isCrossTableTfm helper is defined and queries mapping_sources by source_table_id', () => {
+    expect(TRANSFORMS_SRC).toMatch(/async\s+function\s+isCrossTableTfm\s*\(/)
+    const body = sliceBetween(
+      TRANSFORMS_SRC,
+      'async function isCrossTableTfm(',
+      '// ─── applyTransform',
+    )
+    expect(body).toMatch(/from\(['"]mapping_sources['"]\)/)
+    expect(body).toMatch(/select\(['"]source_table_id['"]\)/)
+    expect(body).toMatch(/eq\(['"]target_field_mapping_id['"]/)
+    // Distinct count > 1 logic.
+    expect(body).toMatch(/Set/)
+    expect(body).toMatch(/distinct\.size\s*>\s*1/)
+  })
+
+  it('applyTransform short-circuits with CROSS_TABLE_TRANSFORM_NOT_YET_SUPPORTED for cross-table TFMs', () => {
+    const body = sliceBetween(
+      TRANSFORMS_SRC,
+      'export async function applyTransform(',
+      'export async function revertTransform(',
+    )
+    expect(body).toMatch(/isCrossTableTfm\s*\(\s*ctx\.tfm\.id\s*\)/)
+    expect(body).toMatch(/errorCode:\s*['"]CROSS_TABLE_TRANSFORM_NOT_YET_SUPPORTED['"]/)
+    // Guard fires only for mapped TFMs (not VAs).
+    expect(body).toMatch(/!isValueAssignment[\s\S]{0,200}isCrossTableTfm/)
+  })
+})
+
 // ─── R3: Cascade RPC is joined-only ──────────────────────────────────────────
 
 describe('[transforms refinements] R3 — cascadeTransformToFKs is joined-only', () => {
