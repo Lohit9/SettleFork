@@ -21,9 +21,15 @@
 //   3. AI RATIONALE persists on TFM.ai_reasoning when the user accepts
 //      an AI suggestion (input.aiReasoning threads through to the RPC's
 //      p_combination.ai_reasoning).
-//   4. CROSS-TABLE INPUT in 4a-1 returns 'CROSS_TABLE_NOT_YET_SUPPORTED'
-//      with the deferral copy. 'CROSS_TABLE_AMBIGUOUS' is reserved on
-//      the union for 4a-3 but unused at any 4a-1 call site.
+//   4. CROSS-TABLE INPUT (Phase 4a-3): wrapper performs FK precheck.
+//      Zero candidates → CROSS_TABLE_AMBIGUOUS with empty
+//      candidateFkFields. 2+ candidates without joinAnnotations →
+//      CROSS_TABLE_AMBIGUOUS with the candidate list. Single
+//      candidate or matched override → success with per-source
+//      `join_spec` populated only for user-disambiguated joined
+//      sources. The legacy 4a-1 'CROSS_TABLE_NOT_YET_SUPPORTED' code
+//      remains on the union for client compatibility but is never
+//      emitted from a return statement post-4a-3.
 //   5. COVERAGE RECOMPUTE is explicit (closes the legacy
 //      addManualFieldMapping gap).
 //   6. ACTIVITY LOG emits 'mapping_created' AFTER the RPC succeeds with
@@ -66,11 +72,11 @@ describe('[mappings-for-redesign 4a] wrapper exports', () => {
     expect(SRC).toMatch(/export async function suggestMappingForTarget\(/)
   })
 
-  it('exports CreateFieldMappingErrorCode union (with the cross-table reservations)', () => {
+  it('exports CreateFieldMappingErrorCode union (with the cross-table codes)', () => {
     expect(SRC).toMatch(/export type CreateFieldMappingErrorCode/)
-    // 4a-1 emitter
+    // Retained on the union post-4a-3 for client compatibility.
     expect(SRC).toMatch(/['"]CROSS_TABLE_NOT_YET_SUPPORTED['"]/)
-    // 4a-3 placeholder, unused emitter today
+    // 4a-3 active emitter (zero / multi candidate FK).
     expect(SRC).toMatch(/['"]CROSS_TABLE_AMBIGUOUS['"]/)
   })
 
@@ -202,24 +208,68 @@ describe('[mappings-for-redesign 4a] createFieldMapping', () => {
     )
   })
 
-  // ── Cross-table guard (founder decision 1: 4a-1 same-table only) ──
+  // ── Cross-table FK precheck (Phase 4a-3) ──────────────────────────
 
-  it('returns CROSS_TABLE_NOT_YET_SUPPORTED when sources span multiple source tables', () => {
+  it('detects cross-table input via uniqueSourceTableIds and branches into the FK precheck', () => {
     expect(body).toMatch(/uniqueSourceTableIds\.size\s*>\s*1/)
-    // The literal contains BOTH the deferral copy and the errorCode
-    // (order in the object literal varies), so just assert co-presence
-    // within a small window of the size > 1 guard.
-    expect(body).toMatch(
-      /uniqueSourceTableIds\.size\s*>\s*1[\s\S]{0,500}CROSS_TABLE_NOT_YET_SUPPORTED/,
-    )
-    expect(body).toMatch(/Cross-table mappings coming in Phase 4a-3/)
+    expect(body).toMatch(/isCrossTable/)
   })
 
-  it('does NOT emit CROSS_TABLE_AMBIGUOUS in 4a-1 (reserved for 4a-3 FK precheck)', () => {
-    // The errorCode appears in the union (verified above) but is never
-    // returned from any return statement at this stage. Search for
-    // `errorCode: 'CROSS_TABLE_AMBIGUOUS'` specifically.
-    expect(body).not.toMatch(/errorCode:\s*['"]CROSS_TABLE_AMBIGUOUS['"]/)
+  it('imports the FK inference helpers from lib/utils/fk-inference', () => {
+    expect(SRC).toMatch(
+      /from\s+['"]@\/lib\/utils\/fk-inference['"]/,
+    )
+    expect(body).toMatch(/inferFkCandidates\(/)
+    expect(body).toMatch(/parseToFkFieldFromReference\(/)
+  })
+
+  it('emits CROSS_TABLE_AMBIGUOUS with empty candidates on the zero-FK branch', () => {
+    expect(body).toMatch(
+      /candidates\.length\s*===\s*0[\s\S]{0,800}CROSS_TABLE_AMBIGUOUS/,
+    )
+    expect(body).toMatch(/candidateFkFields:\s*\[\]/)
+  })
+
+  it('emits CROSS_TABLE_AMBIGUOUS with the candidate list when 2+ candidates exist and no override is supplied', () => {
+    expect(body).toMatch(
+      /override\s*===\s*undefined[\s\S]{0,800}CROSS_TABLE_AMBIGUOUS/,
+    )
+    expect(body).toMatch(/candidateFkFields:\s*candidates/)
+  })
+
+  it('validates joinAnnotations override against the live candidate list (defense-in-depth)', () => {
+    // §2-OQ-4: stale form whose picked FK no longer exists rejects
+    // with VALIDATION rather than corrupting `join_spec`.
+    expect(body).toMatch(
+      /!candidates\.includes\(override\)[\s\S]{0,400}VALIDATION/,
+    )
+  })
+
+  it('extends the result type with disambiguation context fields', () => {
+    expect(SRC).toMatch(/ambiguousJoinedTableId\?:\s*string/)
+    expect(SRC).toMatch(/ambiguousJoinedTableName\?:\s*string/)
+    expect(SRC).toMatch(/dominantTableName\?:\s*string/)
+  })
+
+  it('accepts joinAnnotations input and propagates it as a Record<string, string>', () => {
+    expect(SRC).toMatch(/joinAnnotations\?:\s*Record<string,\s*string>/)
+  })
+
+  it('emits per-source join_spec only for user-disambiguated joined sources', () => {
+    // Single-candidate inferences and dominant rows store null so the
+    // read path re-derives annotation each render.
+    expect(body).toMatch(/joinSpecBySourceFieldId/)
+    expect(body).toMatch(/via_source_table:/)
+    expect(body).toMatch(/via_fk_field:/)
+    expect(body).toMatch(/to_fk_field:/)
+  })
+
+  it('does NOT emit a CROSS_TABLE_NOT_YET_SUPPORTED return after 4a-3', () => {
+    // The code remains on the union for compatibility but no return
+    // statement re-emits it.
+    expect(body).not.toMatch(
+      /errorCode:\s*['"]CROSS_TABLE_NOT_YET_SUPPORTED['"]/,
+    )
   })
 
   // ── Existing-TFM collision (founder decision 3) ───────────────────

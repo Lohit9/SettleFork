@@ -403,6 +403,7 @@ describe('CreateMappingForm — save flow', () => {
       targetFieldId: 'tf-1',
       sourceFieldIds: ['sf-cif-1'],
       combinationType: 'single',
+      joinAnnotations: {},
     })
     expect(onSaveSuccess).toHaveBeenCalledWith('tfm-new')
   })
@@ -447,6 +448,7 @@ describe('CreateMappingForm — save flow', () => {
       targetFieldId: 'tf-1',
       sourceFieldIds: ['sf-cif-1', 'sf-cif-2'],
       combinationType: 'concat_comma',
+      joinAnnotations: {},
     })
   })
 
@@ -608,7 +610,7 @@ describe('CreateMappingForm — save errors', () => {
     expect(onCancel).toHaveBeenCalledTimes(1)
   })
 
-  it('CROSS_TABLE_NOT_YET_SUPPORTED renders the 4a-3 copy', async () => {
+  it('CROSS_TABLE_NOT_YET_SUPPORTED falls back to its generic copy when surfaced (legacy code, no longer emitted post-4a-3)', async () => {
     const ref = createRef<CreateMappingFormHandle>()
     const user = userEvent.setup()
     createFieldMappingMock.mockResolvedValue({
@@ -636,7 +638,7 @@ describe('CreateMappingForm — save errors', () => {
     })
     expect(
       screen.getByTestId('create-mapping-form-error').textContent,
-    ).toContain('Phase 4a-3')
+    ).toMatch(/Cross-table mappings are not available/i)
   })
 
   it('thrown error falls back to INTERNAL copy', async () => {
@@ -698,6 +700,303 @@ describe('CreateMappingForm — save errors', () => {
         .find((f) => f.getAttribute('data-source-field-id') === 'sf-cif-2')!,
     )
     expect(screen.queryByTestId('create-mapping-form-error')).toBeNull()
+  })
+})
+
+// ── Cross-table disambiguation (Phase 4a-3) ─────────────────────────────────
+
+describe('CreateMappingForm — cross-table disambiguation', () => {
+  async function pickField(user: ReturnType<typeof userEvent.setup>, id: string) {
+    const el = screen
+      .getAllByTestId('source-field-picker-field')
+      .find((f) => f.getAttribute('data-source-field-id') === id)!
+    await user.click(el)
+  }
+
+  it('passes joinAnnotations (defaulting to {}) on the wrapper call', async () => {
+    const ref = createRef<CreateMappingFormHandle>()
+    const user = userEvent.setup()
+    createFieldMappingMock.mockResolvedValue({
+      success: true,
+      tfmId: 'tfm-new',
+      tableMappingId: 'tm-new',
+    })
+    render(
+      <CreateMappingForm
+        ref={ref}
+        projectId="proj-1"
+        targetField={targetField}
+        availableSourceFields={allFields}
+        onSaveSuccess={() => {}}
+        onCancel={() => {}}
+      />,
+    )
+    await pickField(user, 'sf-cif-1')
+    await act(async () => {
+      ref.current!.triggerSave()
+    })
+    const arg = createFieldMappingMock.mock.calls[0][0]
+    expect(arg.joinAnnotations).toEqual({})
+  })
+
+  it('renders the multi-FK dropdown when wrapper returns CROSS_TABLE_AMBIGUOUS with candidates', async () => {
+    const ref = createRef<CreateMappingFormHandle>()
+    const user = userEvent.setup()
+    createFieldMappingMock.mockResolvedValue({
+      success: false,
+      errorCode: 'CROSS_TABLE_AMBIGUOUS',
+      error: 'pick FK',
+      candidateFkFields: ['PRIMARY_CIF', 'SECONDARY_CIF'],
+      ambiguousJoinedTableId: 'st-acct',
+      ambiguousJoinedTableName: 'ACCT_MASTER',
+      dominantTableName: 'CIF_MASTER',
+    })
+    render(
+      <CreateMappingForm
+        ref={ref}
+        projectId="proj-1"
+        targetField={targetField}
+        availableSourceFields={allFields}
+        onSaveSuccess={() => {}}
+        onCancel={() => {}}
+      />,
+    )
+    await pickField(user, 'sf-cif-1')
+    await pickField(user, 'sf-acct-1')
+    await act(async () => {
+      ref.current!.triggerSave()
+    })
+    const dropdown = screen.getByTestId(
+      'create-mapping-form-disambiguation-active',
+    )
+    expect(dropdown.getAttribute('data-joined-table-id')).toBe('st-acct')
+    const select = screen.getByTestId(
+      'create-mapping-form-disambiguation-select',
+    ) as HTMLSelectElement
+    const optionTexts = Array.from(select.options).map((o) => o.textContent)
+    expect(optionTexts).toContain('PRIMARY_CIF')
+    expect(optionTexts).toContain('SECONDARY_CIF')
+    // Generic error banner is suppressed in favor of the structured row.
+    expect(screen.queryByTestId('create-mapping-form-error')).toBeNull()
+  })
+
+  it('renders the zero-FK banner when candidates is empty', async () => {
+    const ref = createRef<CreateMappingFormHandle>()
+    const user = userEvent.setup()
+    createFieldMappingMock.mockResolvedValue({
+      success: false,
+      errorCode: 'CROSS_TABLE_AMBIGUOUS',
+      error: 'no FK',
+      candidateFkFields: [],
+      ambiguousJoinedTableId: 'st-acct',
+      ambiguousJoinedTableName: 'ACCT_MASTER',
+      dominantTableName: 'CIF_MASTER',
+    })
+    render(
+      <CreateMappingForm
+        ref={ref}
+        projectId="proj-1"
+        targetField={targetField}
+        availableSourceFields={allFields}
+        onSaveSuccess={() => {}}
+        onCancel={() => {}}
+      />,
+    )
+    await pickField(user, 'sf-cif-1')
+    await pickField(user, 'sf-acct-1')
+    await act(async () => {
+      ref.current!.triggerSave()
+    })
+    const banner = screen.getByTestId(
+      'create-mapping-form-disambiguation-zero-fk',
+    )
+    expect(banner.textContent).toMatch(/No foreign key/i)
+    expect(banner.textContent).toContain('CIF_MASTER')
+    expect(banner.textContent).toContain('ACCT_MASTER')
+    // No refresh affordance on zero-FK (founder §8-OQ-2).
+    expect(screen.queryByTestId('create-mapping-form-refresh')).toBeNull()
+  })
+
+  it('blocks save while a multi-FK entry has no annotation picked', async () => {
+    const ref = createRef<CreateMappingFormHandle>()
+    const onSaveSuccess = vi.fn()
+    const onStateChange = vi.fn()
+    const user = userEvent.setup()
+    createFieldMappingMock.mockResolvedValueOnce({
+      success: false,
+      errorCode: 'CROSS_TABLE_AMBIGUOUS',
+      error: 'pick FK',
+      candidateFkFields: ['PRIMARY_CIF', 'SECONDARY_CIF'],
+      ambiguousJoinedTableId: 'st-acct',
+      ambiguousJoinedTableName: 'ACCT_MASTER',
+      dominantTableName: 'CIF_MASTER',
+    })
+    render(
+      <CreateMappingForm
+        ref={ref}
+        projectId="proj-1"
+        targetField={targetField}
+        availableSourceFields={allFields}
+        onSaveSuccess={onSaveSuccess}
+        onCancel={() => {}}
+        onStateChange={onStateChange}
+      />,
+    )
+    await pickField(user, 'sf-cif-1')
+    await pickField(user, 'sf-acct-1')
+    await act(async () => {
+      ref.current!.triggerSave()
+    })
+    // After the ambiguous response, canSave must flip to false even
+    // though selectedIds.length > 0 and no save is pending.
+    const lastCanSave = onStateChange.mock.calls.at(-1)?.[0]?.canSave
+    expect(lastCanSave).toBe(false)
+
+    // Re-fire triggerSave should be a no-op (wrapper not called again).
+    await act(async () => {
+      ref.current!.triggerSave()
+    })
+    expect(createFieldMappingMock).toHaveBeenCalledTimes(1)
+  })
+
+  it('user pick → resave passes joinAnnotations to wrapper', async () => {
+    const ref = createRef<CreateMappingFormHandle>()
+    const user = userEvent.setup()
+    createFieldMappingMock
+      .mockResolvedValueOnce({
+        success: false,
+        errorCode: 'CROSS_TABLE_AMBIGUOUS',
+        error: 'pick FK',
+        candidateFkFields: ['PRIMARY_CIF', 'SECONDARY_CIF'],
+        ambiguousJoinedTableId: 'st-acct',
+        ambiguousJoinedTableName: 'ACCT_MASTER',
+        dominantTableName: 'CIF_MASTER',
+      })
+      .mockResolvedValueOnce({
+        success: true,
+        tfmId: 'tfm-new',
+        tableMappingId: 'tm-new',
+      })
+    render(
+      <CreateMappingForm
+        ref={ref}
+        projectId="proj-1"
+        targetField={targetField}
+        availableSourceFields={allFields}
+        onSaveSuccess={() => {}}
+        onCancel={() => {}}
+      />,
+    )
+    await pickField(user, 'sf-cif-1')
+    await pickField(user, 'sf-acct-1')
+    await act(async () => {
+      ref.current!.triggerSave()
+    })
+    const select = screen.getByTestId(
+      'create-mapping-form-disambiguation-select',
+    ) as HTMLSelectElement
+    fireEvent.change(select, { target: { value: 'PRIMARY_CIF' } })
+    await act(async () => {
+      ref.current!.triggerSave()
+    })
+    expect(createFieldMappingMock).toHaveBeenCalledTimes(2)
+    const secondArg = createFieldMappingMock.mock.calls[1][0]
+    expect(secondArg.joinAnnotations).toEqual({ 'st-acct': 'PRIMARY_CIF' })
+  })
+
+  it('after pick, dropdown collapses to a resolved row with a Change link', async () => {
+    const ref = createRef<CreateMappingFormHandle>()
+    const user = userEvent.setup()
+    createFieldMappingMock.mockResolvedValueOnce({
+      success: false,
+      errorCode: 'CROSS_TABLE_AMBIGUOUS',
+      error: 'pick FK',
+      candidateFkFields: ['PRIMARY_CIF', 'SECONDARY_CIF'],
+      ambiguousJoinedTableId: 'st-acct',
+      ambiguousJoinedTableName: 'ACCT_MASTER',
+      dominantTableName: 'CIF_MASTER',
+    })
+    render(
+      <CreateMappingForm
+        ref={ref}
+        projectId="proj-1"
+        targetField={targetField}
+        availableSourceFields={allFields}
+        onSaveSuccess={() => {}}
+        onCancel={() => {}}
+      />,
+    )
+    await pickField(user, 'sf-cif-1')
+    await pickField(user, 'sf-acct-1')
+    await act(async () => {
+      ref.current!.triggerSave()
+    })
+    const select = screen.getByTestId(
+      'create-mapping-form-disambiguation-select',
+    ) as HTMLSelectElement
+    fireEvent.change(select, { target: { value: 'PRIMARY_CIF' } })
+
+    expect(
+      screen.queryByTestId('create-mapping-form-disambiguation-active'),
+    ).toBeNull()
+    const resolved = screen.getByTestId(
+      'create-mapping-form-disambiguation-resolved',
+    )
+    expect(resolved.textContent).toContain('PRIMARY_CIF')
+
+    // Change link flips back to active dropdown.
+    await user.click(
+      screen.getByTestId('create-mapping-form-disambiguation-change'),
+    )
+    expect(
+      screen.getByTestId('create-mapping-form-disambiguation-active'),
+    ).toBeInTheDocument()
+  })
+
+  it('removing the joined-table chip silently clears its disambiguation state', async () => {
+    const ref = createRef<CreateMappingFormHandle>()
+    const user = userEvent.setup()
+    createFieldMappingMock.mockResolvedValueOnce({
+      success: false,
+      errorCode: 'CROSS_TABLE_AMBIGUOUS',
+      error: 'pick FK',
+      candidateFkFields: ['PRIMARY_CIF', 'SECONDARY_CIF'],
+      ambiguousJoinedTableId: 'st-acct',
+      ambiguousJoinedTableName: 'ACCT_MASTER',
+      dominantTableName: 'CIF_MASTER',
+    })
+    render(
+      <CreateMappingForm
+        ref={ref}
+        projectId="proj-1"
+        targetField={targetField}
+        availableSourceFields={allFields}
+        onSaveSuccess={() => {}}
+        onCancel={() => {}}
+      />,
+    )
+    await pickField(user, 'sf-cif-1')
+    await pickField(user, 'sf-acct-1')
+    await act(async () => {
+      ref.current!.triggerSave()
+    })
+    expect(
+      screen.getByTestId('create-mapping-form-disambiguation'),
+    ).toBeInTheDocument()
+
+    // Remove the joined-table chip via the chip's X button.
+    const chips = screen.getAllByTestId('source-field-picker-chip')
+    const acctChip = chips.find(
+      (c) => c.getAttribute('data-source-field-id') === 'sf-acct-1',
+    )!
+    await user.click(
+      acctChip.querySelector(
+        '[data-testid="source-field-picker-chip-remove"]',
+      ) as HTMLElement,
+    )
+    expect(
+      screen.queryByTestId('create-mapping-form-disambiguation'),
+    ).toBeNull()
   })
 })
 

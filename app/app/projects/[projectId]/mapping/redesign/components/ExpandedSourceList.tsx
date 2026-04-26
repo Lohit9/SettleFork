@@ -88,7 +88,9 @@ function SourceBullet({ source }: { source: MappingSourceRef }) {
           className="flex-shrink-0 text-xs italic text-slate-500"
           data-testid="expanded-source-join"
         >
-          (join: {source.joinAnnotation})
+          {/* Server-formatted by `deriveJoinAnnotation`; already
+              wrapped in `(join: …)`. Render as-is. */}
+          {source.joinAnnotation}
         </span>
       ) : null}
     </li>

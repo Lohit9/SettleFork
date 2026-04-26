@@ -79,6 +79,12 @@ import { callClaude } from '@/lib/ai/claude'
 import { checkAIRateLimit } from '@/lib/ai/rate-limit'
 import { buildAIContext, formatDocumentsForPrompt } from '@/lib/ai/context-builder'
 import { decodeShimmedRowId } from '@/lib/compat/mapping-shim'
+import {
+  inferFkCandidates,
+  parseToFkFieldFromReference,
+  type FkInferenceField,
+  type FkInferenceTable,
+} from '@/lib/utils/fk-inference'
 import type { MappingsForRedesignResult } from '@/lib/types/mappings-for-redesign'
 
 /**
@@ -339,13 +345,21 @@ export type CreateFieldMappingErrorCode =
   | 'VALIDATION'
   | 'MAINTENANCE_MODE'
   | 'INTERNAL'
-  /** Source fields span multiple source tables. Phase 4a-1 returns this. */
+  /**
+   * 4a-1 same-table-only emitter. Phase 4a-3 lifts the same-table guard
+   * and never emits this code; the union member is retained on the type
+   * so older clients that branch on it continue to compile.
+   */
   | 'CROSS_TABLE_NOT_YET_SUPPORTED'
   /**
-   * Phase 4a-3 will return this when FK inference between dominant and
-   * joined source tables produces zero or multiple candidates. Reserved
-   * on the union now so 4a-2 form code can branch on it without churning
-   * the type when 4a-3 lands. Unused emitter site in 4a-1.
+   * Phase 4a-3 — FK inference produced zero or multiple candidates for
+   * a non-dominant source table. The result includes `candidateFkFields`
+   * (`[]` for zero candidates, `[a, b, …]` for 2+) and table-name
+   * context so the form can render the right UI:
+   *   • zero candidates → error banner directing user to add an FK
+   *     in the schema or use the legacy Mapping page
+   *   • 2+ candidates → inline disambiguation dropdown; user picks
+   *     a candidate and resaves with `joinAnnotations` populated
    */
   | 'CROSS_TABLE_AMBIGUOUS'
 
@@ -360,45 +374,74 @@ export type CreateFieldMappingResult =
       error: string
       errorCode: CreateFieldMappingErrorCode
       /**
-       * Populated by 4a-3 when errorCode === 'CROSS_TABLE_AMBIGUOUS' to
-       * surface the candidate FK field names so the form can ask the
-       * user to disambiguate. Always undefined in 4a-1.
+       * Populated when errorCode === 'CROSS_TABLE_AMBIGUOUS'. `[]`
+       * indicates zero FK matches between dominant and joined source
+       * tables (zero-FK error path); a non-empty array surfaces the
+       * candidate FK field names so the form can ask the user to
+       * disambiguate. Undefined for all other error codes.
        */
       candidateFkFields?: string[]
+      /**
+       * The joined source table id whose FK inference came back
+       * ambiguous. Populated alongside `candidateFkFields` so the
+       * form can scope its disambiguation UI to the offending
+       * (dominant, joined) pair without diffing `selectedIds`.
+       */
+      ambiguousJoinedTableId?: string
+      /** Joined table's name for user-facing copy. */
+      ambiguousJoinedTableName?: string
+      /** Dominant source table's name for user-facing copy. */
+      dominantTableName?: string
     }
 
 /**
  * Create a target_field_mapping with one or more sources in a single
  * atomic RPC call.
  *
- * Same-table only for Phase 4a-1: every source field must live in the
- * same source table. Cross-table input returns
- * `CROSS_TABLE_NOT_YET_SUPPORTED` (Phase 4a-3 will lift this guard with
- * a paired FK-inference precheck).
+ * Same-table and cross-table sources both supported as of Phase 4a-3.
+ * For cross-table input the wrapper performs an FK precheck:
  *
- * SEQUENCE (per Phase 4a investigation §2):
+ *   • Dominant source table = first source's table (input order is
+ *     stable; UI never re-anchors).
+ *   • Per joined table, look up FK fields in the dominant table whose
+ *     `fk_reference` resolves to the joined table id.
+ *       - 0 candidates → return `CROSS_TABLE_AMBIGUOUS` with empty
+ *         `candidateFkFields` (form renders zero-FK error banner).
+ *       - 1 candidate  → store `join_spec=null` for that source; read
+ *         path re-derives annotation each render so column renames
+ *         flow through automatically.
+ *       - 2+ candidates → require `joinAnnotations[joinedTableId]`
+ *         in input. Without it, return `CROSS_TABLE_AMBIGUOUS` with
+ *         the candidate list so the form can render a disambiguation
+ *         dropdown. With it, validate that the picked name is in the
+ *         candidate list (defense-in-depth) and persist a populated
+ *         `join_spec` JSONB.
+ *
+ * Note (apply RPC limitation): the Transform-tab apply path
+ * (`dq_apply_field_transform_joined`) does NOT yet support
+ * cross-table joins. `lib/actions/transformations.ts:applyTransform`
+ * detects cross-table TFMs and returns
+ * `CROSS_TABLE_TRANSFORM_NOT_YET_SUPPORTED` so the user gets a clear
+ * error rather than a silent failure. This wrapper writes the
+ * cross-table mapping correctly; downstream apply lands in a future
+ * phase that wires the RPC's join branch.
+ *
+ * SEQUENCE (per Phase 4a-3 investigation §2):
  *   1. Auth + permission (`requireProjectPermission(..., 'editor')`).
  *   2. Validate inputs: 1+ sources, no duplicates, combinationType not
- *      'custom_sql', single↔concat sanity (single ⇒ exactly one source;
- *      concat_* ⇒ 2+ sources).
+ *      'custom_sql', single↔concat sanity.
  *   3. Identity reads: source fields with their table_id+name, target
- *      field with its table_id+name. Names hydrate the activity-log
- *      payload.
+ *      field with its table_id+name.
  *   4. Defensive guards: all field IDs belong to this project; no
- *      duplicate sourceFieldIds; cross-table → CROSS_TABLE_NOT_YET_
- *      SUPPORTED.
+ *      duplicate sourceFieldIds.
  *   5. Maintenance-mode guard (`assertMappingWritesEnabled`).
- *   6. Existing-TFM collision: if a non-rejected non-acknowledged TFM
- *      already exists for the target, return VALIDATION with the
- *      "refresh to see the current state" copy (decision 3). Bare-
- *      acknowledgment exception: silently delete pre-create (mirrors
- *      legacy `addManualFieldMapping:1714-1719` — implicit un-ack).
- *   7. Find-or-create table_mappings row for (sourceTable, targetTable).
- *   8. RPC call `dq_create_target_field_mapping` with multi-source
- *      payload. Status defaults to 'needs_review' (per founder decision
- *      2 — redesign Approve is the explicit acceptance gate).
- *   9. `recomputeTableMappingStatus` — closes the legacy gap where
- *      `addManualFieldMapping` never recomputed coverage post-write.
+ *   5b. Cross-table FK precheck (when sources span multiple tables).
+ *   6. Existing-TFM collision check.
+ *   7. Find-or-create table_mappings row for (dominantTable, targetTable).
+ *   8. RPC call `dq_create_target_field_mapping` — per-source
+ *      `join_spec` populated for disambiguated joined sources, null
+ *      for dominant + single-candidate joined sources.
+ *   9. `recomputeTableMappingStatus`.
  *  10. revalidatePath for /mapping AND /transform.
  *  11. Emit `mapping_created` activity log entry.
  */
@@ -413,6 +456,16 @@ export async function createFieldMapping(input: {
   confidence?: number
   /** Optional AI rationale to persist on TFM.ai_reasoning (decision 4). */
   aiReasoning?: string | null
+  /**
+   * Phase 4a-3 — cross-table disambiguation overrides. Keyed by joined
+   * source table id, value is the FK field name in the dominant table
+   * the user picked. Required only when the joined table has 2+ FK
+   * candidates; ignored otherwise. The wrapper validates each value
+   * against the live candidate list before persisting (defense-in-
+   * depth: a stale form submission picking a renamed FK fails fast
+   * with VALIDATION rather than corrupting `join_spec`).
+   */
+  joinAnnotations?: Record<string, string>
 }): Promise<CreateFieldMappingResult> {
   // ── Step 1: validation (cheap, before any I/O) ────────────────────────────
   const {
@@ -423,6 +476,7 @@ export async function createFieldMapping(input: {
     aiSuggested = false,
     confidence,
     aiReasoning = null,
+    joinAnnotations = {},
   } = input
 
   if (!projectId || !targetFieldId) {
@@ -644,16 +698,175 @@ export async function createFieldMapping(input: {
   const sourceFieldsById = new Map(sourceFields.map((f) => [f.id, f]))
   const orderedSources = sourceFieldIds.map((id) => sourceFieldsById.get(id)!)
 
-  // ── Step 5: cross-table guard (Phase 4a-1) ───────────────────────────────
+  // ── Step 5b: cross-table FK precheck (Phase 4a-3) ────────────────────────
+  // Dominant source table = first source's table_id. UI never re-anchors
+  // — picking order is stable across edits, and chip removal cleanup
+  // happens form-side before resave (§4-OQ-3).
+  const dominantTableId = orderedSources[0].table_id
+  const sourceTableId = dominantTableId
   const uniqueSourceTableIds = new Set(orderedSources.map((s) => s.table_id))
-  if (uniqueSourceTableIds.size > 1) {
-    return {
-      success: false,
-      error: 'Cross-table mappings coming in Phase 4a-3',
-      errorCode: 'CROSS_TABLE_NOT_YET_SUPPORTED',
+  const isCrossTable = uniqueSourceTableIds.size > 1
+
+  // Per-source join_spec storage. Populated only for non-dominant
+  // sources whose joined table has 2+ candidate FKs in the dominant
+  // table (user-disambiguated). Single-candidate joins remain null
+  // so the read path re-derives annotation each render.
+  const joinSpecBySourceFieldId = new Map<
+    string,
+    { viaSourceTable: string; viaFkField: string; toFkField: string | null }
+  >()
+
+  if (isCrossTable) {
+    const joinedTableIds = [...uniqueSourceTableIds].filter(
+      (id) => id !== dominantTableId,
+    )
+
+    const { data: tableRows, error: tablesErr } = await supabaseAdmin
+      .from('tables')
+      .select('id, name')
+      .in('id', [dominantTableId, ...joinedTableIds])
+    if (tablesErr || !tableRows) {
+      return {
+        success: false,
+        error: 'Failed to read source tables for FK inference',
+        errorCode: 'INTERNAL',
+      }
+    }
+    const tablesById = new Map<string, FkInferenceTable>(
+      tableRows.map((t) => [t.id, { id: t.id, name: t.name }]),
+    )
+    const dominantTableName = tablesById.get(dominantTableId)?.name ?? ''
+
+    // FK fields in dominant. Order by `ordinal_position` so the
+    // candidate list surfaces stably (matches read-path
+    // `deriveJoinAnnotation` which iterates fields in DB order).
+    const { data: domFieldsRaw, error: domErr } = await supabaseAdmin
+      .from('fields')
+      .select('name, is_foreign_key, fk_reference, ordinal_position')
+      .eq('table_id', dominantTableId)
+      .eq('is_foreign_key', true)
+      .order('ordinal_position', { ascending: true })
+    if (domErr) {
+      return {
+        success: false,
+        error: 'Failed to read dominant table FK fields',
+        errorCode: 'INTERNAL',
+      }
+    }
+    const dominantFkFields: FkInferenceField[] = (domFieldsRaw ?? []).map(
+      (f) => ({
+        name: f.name as string,
+        is_foreign_key: f.is_foreign_key as boolean | null,
+        fk_reference: f.fk_reference as string | null,
+      }),
+    )
+
+    // Resolve a viaFkField name for each joined table.
+    const resolvedFkByJoinedTable = new Map<
+      string,
+      { viaFkField: string; toFkField: string | null }
+    >()
+
+    for (const joinedTableId of joinedTableIds) {
+      const joinedTableName = tablesById.get(joinedTableId)?.name ?? ''
+      if (!joinedTableName) {
+        return {
+          success: false,
+          error: 'Joined source table not found',
+          errorCode: 'NOT_FOUND',
+        }
+      }
+
+      const candidates = inferFkCandidates(
+        dominantFkFields,
+        joinedTableId,
+        joinedTableName,
+        tablesById,
+      )
+
+      let pickedFkName: string | null = null
+      let needsPersistedSpec = false
+
+      if (candidates.length === 0) {
+        return {
+          success: false,
+          error: `No foreign key in ${dominantTableName} references ${joinedTableName}. Add an FK in the source schema or use the legacy Mapping page for ad-hoc joins.`,
+          errorCode: 'CROSS_TABLE_AMBIGUOUS',
+          candidateFkFields: [],
+          ambiguousJoinedTableId: joinedTableId,
+          ambiguousJoinedTableName: joinedTableName,
+          dominantTableName,
+        }
+      } else if (candidates.length === 1) {
+        // Single-candidate inference: trust it, store null spec.
+        pickedFkName = candidates[0]
+        // If the user pre-supplied an annotation that mismatches the
+        // sole candidate (rare, e.g. stale form against a renamed
+        // FK), reject with VALIDATION rather than silently overriding.
+        const override = joinAnnotations[joinedTableId]
+        if (override !== undefined && override !== pickedFkName) {
+          return {
+            success: false,
+            error: `Selected join field '${override}' is not a valid FK from ${dominantTableName} to ${joinedTableName}`,
+            errorCode: 'VALIDATION',
+          }
+        }
+        needsPersistedSpec = false
+      } else {
+        // 2+ candidates → require user disambiguation.
+        const override = joinAnnotations[joinedTableId]
+        if (override === undefined) {
+          return {
+            success: false,
+            error: `Multiple foreign keys in ${dominantTableName} reference ${joinedTableName}. Pick the join field.`,
+            errorCode: 'CROSS_TABLE_AMBIGUOUS',
+            candidateFkFields: candidates,
+            ambiguousJoinedTableId: joinedTableId,
+            ambiguousJoinedTableName: joinedTableName,
+            dominantTableName,
+          }
+        }
+        if (!candidates.includes(override)) {
+          // Defense-in-depth (§2-OQ-4): user-supplied override must
+          // be in the live candidate list. Stale forms whose picked
+          // FK was renamed/dropped fail VALIDATION, surfacing the
+          // schema drift to the user.
+          return {
+            success: false,
+            error: `Selected join field '${override}' is not a valid FK from ${dominantTableName} to ${joinedTableName}`,
+            errorCode: 'VALIDATION',
+          }
+        }
+        pickedFkName = override
+        needsPersistedSpec = true
+      }
+
+      const matchedField = dominantFkFields.find(
+        (f) => f.name === pickedFkName,
+      )
+      const toFkField = matchedField?.fk_reference
+        ? parseToFkFieldFromReference(matchedField.fk_reference)
+        : null
+
+      resolvedFkByJoinedTable.set(joinedTableId, {
+        viaFkField: pickedFkName!,
+        toFkField,
+      })
+
+      if (needsPersistedSpec) {
+        // Mark every source from this joined table for spec persistence.
+        for (const sf of orderedSources) {
+          if (sf.table_id === joinedTableId) {
+            joinSpecBySourceFieldId.set(sf.id, {
+              viaSourceTable: dominantTableName,
+              viaFkField: pickedFkName!,
+              toFkField,
+            })
+          }
+        }
+      }
     }
   }
-  const sourceTableId = orderedSources[0].table_id
 
   // ── Step 6: existing-TFM collision check ─────────────────────────────────
   const { data: existingTfm } = await supabaseAdmin
@@ -732,16 +945,31 @@ export async function createFieldMapping(input: {
     ? `AI-suggested: ${(aiReasoning ?? '').slice(0, 280)}`.trim()
     : 'Manually selected by user'
 
-  const rpcSources = orderedSources.map((sf, idx) => ({
-    source_field_id: sf.id,
-    source_table_id: sf.table_id,
-    confidence: perSourceConfidence,
-    ai_reasoning: perSourceReasoning,
-    type_compatibility: null as string | null,
-    similar_fields_considered: [] as string[],
-    join_spec: null as unknown,
-    ordinal: idx,
-  }))
+  const rpcSources = orderedSources.map((sf, idx) => {
+    // Per-source `join_spec`. Snake-case keys to match the stored
+    // JSONB shape — the read-path `coerceJoinSpec` parses
+    // `via_source_table`/`via_fk_field`/`to_fk_field` directly.
+    // Single-candidate inferences and the dominant source itself
+    // store null; the read path re-derives the annotation.
+    const spec = joinSpecBySourceFieldId.get(sf.id)
+    const join_spec = spec
+      ? {
+          via_source_table: spec.viaSourceTable,
+          via_fk_field: spec.viaFkField,
+          to_fk_field: spec.toFkField ?? '',
+        }
+      : null
+    return {
+      source_field_id: sf.id,
+      source_table_id: sf.table_id,
+      confidence: perSourceConfidence,
+      ai_reasoning: perSourceReasoning,
+      type_compatibility: null as string | null,
+      similar_fields_considered: [] as string[],
+      join_spec: join_spec as unknown,
+      ordinal: idx,
+    }
+  })
 
   const { data: rpcTfmId, error: rpcErr } = await supabase.rpc(
     'dq_create_target_field_mapping',

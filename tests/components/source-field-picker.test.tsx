@@ -234,8 +234,8 @@ describe('SourceFieldPicker — chips strip', () => {
   })
 })
 
-describe('SourceFieldPicker — same-table constraint', () => {
-  it('hides cross-table groups once a field is selected', () => {
+describe('SourceFieldPicker — cross-table support (Phase 4a-3)', () => {
+  it('keeps every source-table group visible after a field is selected (no hiding)', () => {
     render(
       <SourceFieldPicker
         availableSourceFields={allFields}
@@ -244,42 +244,15 @@ describe('SourceFieldPicker — same-table constraint', () => {
       />,
     )
     const groups = screen.getAllByTestId('source-field-picker-group')
-    expect(groups).toHaveLength(1)
+    expect(groups).toHaveLength(2)
     expect(groups[0].getAttribute('data-source-table-name')).toBe('CIF_MASTER')
+    expect(groups[1].getAttribute('data-source-table-name')).toBe('ACCT_MASTER')
   })
 
-  it('renders the muted footer note when constraint hides groups', () => {
+  it('does NOT render the same-table-constraint footer note (removed in 4a-3)', () => {
     render(
       <SourceFieldPicker
         availableSourceFields={allFields}
-        selectedIds={['sf-cif-1']}
-        onSelectedChange={() => {}}
-      />,
-    )
-    const note = screen.getByTestId('source-field-picker-constraint-note')
-    expect(note.textContent).toContain('Cross-table mappings ship in Phase 4a-3')
-    expect(note.textContent).toContain(
-      'Fields from other source tables are hidden',
-    )
-  })
-
-  it('does NOT render the constraint note when nothing selected', () => {
-    render(
-      <SourceFieldPicker
-        availableSourceFields={allFields}
-        selectedIds={[]}
-        onSelectedChange={() => {}}
-      />,
-    )
-    expect(
-      screen.queryByTestId('source-field-picker-constraint-note'),
-    ).toBeNull()
-  })
-
-  it('does NOT render constraint note when all fields share a single table', () => {
-    render(
-      <SourceFieldPicker
-        availableSourceFields={cifFields}
         selectedIds={['sf-cif-1']}
         onSelectedChange={() => {}}
       />,
@@ -289,26 +262,126 @@ describe('SourceFieldPicker — same-table constraint', () => {
     ).toBeNull()
   })
 
-  it('releases constraint instantly when last chip removed (controlled re-render)', () => {
-    const { rerender } = render(
+  it('selecting a field from a non-dominant table is allowed and produces a cross-table chip layout', () => {
+    const onSelectedChange = vi.fn()
+    render(
       <SourceFieldPicker
         availableSourceFields={allFields}
         selectedIds={['sf-cif-1']}
-        onSelectedChange={() => {}}
+        onSelectedChange={onSelectedChange}
       />,
     )
-    expect(screen.getAllByTestId('source-field-picker-group')).toHaveLength(1)
-    rerender(
+    // Pick a field from a different source table.
+    const acctField = screen
+      .getAllByTestId('source-field-picker-field')
+      .find((el) => el.getAttribute('data-source-field-id') === 'sf-acct-1')!
+    fireEvent.click(acctField)
+    expect(onSelectedChange).toHaveBeenCalledWith(['sf-cif-1', 'sf-acct-1'])
+  })
+})
+
+describe('SourceFieldPicker — selected chip grouping (Phase 4a-3)', () => {
+  it('flat single-row chip strip when all chips share one source table', () => {
+    render(
       <SourceFieldPicker
         availableSourceFields={allFields}
-        selectedIds={[]}
+        selectedIds={['sf-cif-1', 'sf-cif-2']}
         onSelectedChange={() => {}}
       />,
     )
-    expect(screen.getAllByTestId('source-field-picker-group')).toHaveLength(2)
+    const wrapper = screen.getByTestId('source-field-picker-chips')
+    expect(wrapper.getAttribute('data-cross-table')).toBe('false')
+    // No DOMINANT/JOINED group containers in the single-table case.
     expect(
-      screen.queryByTestId('source-field-picker-constraint-note'),
+      screen.queryByTestId('source-field-picker-chips-dominant'),
     ).toBeNull()
+    expect(
+      screen.queryByTestId('source-field-picker-chips-joined'),
+    ).toBeNull()
+  })
+
+  it('groups chips under DOMINANT and JOINED headers when 2+ source tables present', () => {
+    render(
+      <SourceFieldPicker
+        availableSourceFields={allFields}
+        selectedIds={['sf-cif-1', 'sf-acct-1']}
+        onSelectedChange={() => {}}
+      />,
+    )
+    const wrapper = screen.getByTestId('source-field-picker-chips')
+    expect(wrapper.getAttribute('data-cross-table')).toBe('true')
+
+    const dominant = screen.getByTestId('source-field-picker-chips-dominant')
+    expect(dominant.textContent).toMatch(/Dominant/i)
+    const dominantChips = within(dominant).getAllByTestId(
+      'source-field-picker-chip',
+    )
+    expect(dominantChips).toHaveLength(1)
+    expect(dominantChips[0].getAttribute('data-source-field-id')).toBe(
+      'sf-cif-1',
+    )
+
+    const joined = screen.getByTestId('source-field-picker-chips-joined')
+    expect(joined.textContent).toMatch(/Joined/i)
+    const joinedChips = within(joined).getAllByTestId(
+      'source-field-picker-chip',
+    )
+    expect(joinedChips).toHaveLength(1)
+    expect(joinedChips[0].getAttribute('data-source-field-id')).toBe(
+      'sf-acct-1',
+    )
+  })
+
+  it('first-picked stable for dominant: re-arranging selection order does not re-anchor', () => {
+    // Selection order: ACCT first, then CIF → ACCT should be dominant.
+    render(
+      <SourceFieldPicker
+        availableSourceFields={allFields}
+        selectedIds={['sf-acct-1', 'sf-cif-1', 'sf-cif-2']}
+        onSelectedChange={() => {}}
+      />,
+    )
+    const dominant = screen.getByTestId('source-field-picker-chips-dominant')
+    const dominantChips = within(dominant).getAllByTestId(
+      'source-field-picker-chip',
+    )
+    const ids = dominantChips.map((c) => c.getAttribute('data-source-field-id'))
+    expect(ids).toEqual(['sf-acct-1'])
+
+    const joined = screen.getByTestId('source-field-picker-chips-joined')
+    const joinedIds = within(joined)
+      .getAllByTestId('source-field-picker-chip')
+      .map((c) => c.getAttribute('data-source-field-id'))
+    expect(joinedIds).toEqual(['sf-cif-1', 'sf-cif-2'])
+  })
+
+  it('multiple chips from the same joined table appear in selection order under JOINED', () => {
+    render(
+      <SourceFieldPicker
+        availableSourceFields={allFields}
+        selectedIds={['sf-cif-1', 'sf-acct-2', 'sf-acct-1']}
+        onSelectedChange={() => {}}
+      />,
+    )
+    const joined = screen.getByTestId('source-field-picker-chips-joined')
+    const ids = within(joined)
+      .getAllByTestId('source-field-picker-chip')
+      .map((c) => c.getAttribute('data-source-field-id'))
+    // Selection order preserved: BALANCE before ACCT_NO.
+    expect(ids).toEqual(['sf-acct-2', 'sf-acct-1'])
+  })
+
+  it('chips expose data-source-table-id for downstream styling/testing', () => {
+    render(
+      <SourceFieldPicker
+        availableSourceFields={allFields}
+        selectedIds={['sf-cif-1', 'sf-acct-1']}
+        onSelectedChange={() => {}}
+      />,
+    )
+    const chips = screen.getAllByTestId('source-field-picker-chip')
+    const tableIds = chips.map((c) => c.getAttribute('data-source-table-id'))
+    expect(tableIds).toEqual(['st-cif', 'st-acct'])
   })
 })
 
