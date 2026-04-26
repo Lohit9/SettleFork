@@ -65,7 +65,22 @@ import { MappingDrawer } from './components/MappingDrawer'
 import { SourceSchemaSidebar } from './components/SourceSchemaSidebar'
 import { useSidebarState, type SidebarState } from './components/useSidebarState'
 import type { CreateMappingFormSnapshot } from './components/CreateMappingForm'
+import {
+  BulkConfirmDialog,
+  type BulkPreviewRow,
+} from './components/BulkConfirmDialog'
+import {
+  bulkApproveFieldMappingsForTargetTable,
+  approveHighConfidenceMappings,
+  previewBulkApprove,
+} from '@/lib/actions/mappings-for-redesign'
 import { ToastProvider, useToast } from '@/lib/contexts/ToastContext'
+
+// Phase 4c-1 — high-confidence threshold (mirrors legacy default).
+// Lives here so the FilterRow button copy and the wrapper's threshold
+// argument never drift (the wrapper accepts `threshold` and defaults
+// to 85; this constant is the canonical client-side reflection).
+const HIGH_CONFIDENCE_THRESHOLD = 85
 
 const SEARCH_DEBOUNCE_MS = 200
 
@@ -693,6 +708,152 @@ function MappingBody({
     [router, filters, writeUrl, pushToast, projectId],
   )
 
+  // ── Phase 4c-1 — bulk-action state machine ─────────────────────────
+  //
+  // One source-of-truth slot for the bulk dialog. `bulkAction` carries
+  // the active scope (`'approve_table' | 'approve_high_confidence'`)
+  // plus enough metadata to label the dialog. `null` keeps the dialog
+  // closed.
+  //
+  // Preview data (`bulkPreviewCount`, `bulkPreview`) is fetched
+  // server-side once the dialog opens, so the count + preview list
+  // reflect the canonical scope and dodge the TOCTOU class where a
+  // client-side derivation would be a snapshot of the user's stale
+  // filter state. `bulkPreviewCount === null` is the loading
+  // indicator; the dialog renders "Loading preview…" until it lands.
+  //
+  // `isBulkSubmitting` and `bulkErrorMessage` round out the dialog's
+  // local lifecycle. The wrapper's `tfmIds` array is not retained
+  // here — the toast announces the count and the activity log keeps
+  // the audit trail.
+  const [bulkAction, setBulkAction] = useState<
+    | { kind: 'approve_table'; targetTableId: string; targetTableName: string }
+    | { kind: 'approve_high_confidence' }
+    | null
+  >(null)
+  const [bulkPreviewCount, setBulkPreviewCount] = useState<number | null>(null)
+  const [bulkPreview, setBulkPreview] = useState<BulkPreviewRow[]>([])
+  const [isBulkSubmitting, setIsBulkSubmitting] = useState(false)
+  const [bulkErrorMessage, setBulkErrorMessage] = useState<string | null>(null)
+
+  // Open helpers — separated from the wrapper-call helper so the
+  // dialog can render a loading state for the preview before the
+  // server returns.
+  const handleApproveAllForTableClick = useCallback(
+    (targetTableId: string) => {
+      const tableName =
+        data.targetTables.find((t) => t.id === targetTableId)?.name ?? '?'
+      setBulkAction({
+        kind: 'approve_table',
+        targetTableId,
+        targetTableName: tableName,
+      })
+      setBulkPreviewCount(null)
+      setBulkPreview([])
+      setBulkErrorMessage(null)
+      // Fire the preview load in the background. The dialog renders
+      // "Loading preview…" until this resolves.
+      void (async () => {
+        const result = await previewBulkApprove({ projectId, targetTableId })
+        // Guard against stale resolves: only commit the preview when
+        // the dialog is still showing the same scope.
+        setBulkAction((current) => {
+          if (
+            current?.kind === 'approve_table' &&
+            current.targetTableId === targetTableId
+          ) {
+            setBulkPreviewCount(result.count)
+            setBulkPreview(result.preview)
+          }
+          return current
+        })
+      })()
+    },
+    [data.targetTables, projectId],
+  )
+
+  // Project-wide high-confidence preview: client-side derivation for
+  // the count is enough (we already have every row + its confidence
+  // in `data.rows`); we still want a preview LIST for the dialog,
+  // which the bulkApprove preview helper does NOT cover (it scopes
+  // by target_table_id). For 4c-1, derive both from `data.rows` —
+  // §4.3's server preview helper covers the per-table path; the
+  // high-confidence path uses what the client already has loaded.
+  // This preserves single-fetch performance and avoids a new
+  // server-side preview RPC for a contract that's identical in shape
+  // to the per-table case.
+  const handleApproveHighConfidenceClick = useCallback(() => {
+    setBulkAction({ kind: 'approve_high_confidence' })
+    setBulkErrorMessage(null)
+    const inScope = data.rows.filter(
+      (r) =>
+        (r.kind === 'mapped' || r.kind === 'value_assignment') &&
+        r.status === 'needs_review' &&
+        (r.confidence ?? 0) >= HIGH_CONFIDENCE_THRESHOLD,
+    )
+    setBulkPreviewCount(inScope.length)
+    const preview: BulkPreviewRow[] = inScope.slice(0, 5).map((r) => {
+      const primary =
+        r.kind === 'mapped' && r.sources.length > 0
+          ? (r.sources[0]?.sourceField.name ?? null)
+          : null
+      return {
+        tfmId: r.id,
+        targetField: r.targetField.name,
+        primarySource: primary,
+      }
+    })
+    setBulkPreview(preview)
+  }, [data.rows])
+
+  const handleBulkCancel = useCallback(() => {
+    if (isBulkSubmitting) return
+    setBulkAction(null)
+    setBulkPreview([])
+    setBulkPreviewCount(null)
+    setBulkErrorMessage(null)
+  }, [isBulkSubmitting])
+
+  const handleBulkConfirm = useCallback(async () => {
+    if (bulkAction === null) return
+    setIsBulkSubmitting(true)
+    setBulkErrorMessage(null)
+    try {
+      const result =
+        bulkAction.kind === 'approve_table'
+          ? await bulkApproveFieldMappingsForTargetTable({
+              projectId,
+              targetTableId: bulkAction.targetTableId,
+            })
+          : await approveHighConfidenceMappings({
+              projectId,
+              threshold: HIGH_CONFIDENCE_THRESHOLD,
+            })
+      if (!result.success) {
+        setBulkErrorMessage(result.error)
+        return
+      }
+      const n = result.rowsAffected
+      const message =
+        bulkAction.kind === 'approve_table'
+          ? `Approved ${n} mapping${n === 1 ? '' : 's'} on ${bulkAction.targetTableName}.`
+          : `Approved ${n} high-confidence mapping${n === 1 ? '' : 's'}.`
+      pushToast({
+        id: `bulk-approve-${bulkAction.kind}-${Date.now()}`,
+        variant: 'success',
+        message,
+      })
+      setBulkAction(null)
+      setBulkPreview([])
+      setBulkPreviewCount(null)
+      router.refresh()
+    } catch (err) {
+      setBulkErrorMessage(err instanceof Error ? err.message : String(err))
+    } finally {
+      setIsBulkSubmitting(false)
+    }
+  }, [bulkAction, projectId, pushToast, router])
+
   const handleDrawerActionComplete = useCallback(
     (action: 'approve' | 'reject' | 'unacknowledge', _rowId: string) => {
       // Phase 3 Gap 11b — clear the sidebar highlight after any
@@ -881,6 +1042,40 @@ function MappingBody({
     )
   }, [hideEmpty, data.targetTables, data.rows, filters])
 
+  // Phase 4c-1 — per-target-table needs-review counts. Drives the
+  // kebab item's enabled/disabled state and subtitle. Iterated once
+  // over `data.rows` rather than per-group inside the render loop
+  // (avoids O(n×m) work on every interaction). Bulk wrapper scope is
+  // hard-coded `status='needs_review' AND is_acknowledged=false`; the
+  // ack-only rows enter the kind discriminator as
+  // `target_acknowledged`, so filtering by `kind === 'mapped' ||
+  // 'value_assignment'` AND `status === 'needs_review'` matches the
+  // server's WHERE clause exactly.
+  const needsReviewCountByTable = useMemo(() => {
+    const m = new Map<string, number>()
+    for (const row of data.rows) {
+      if (row.kind !== 'mapped' && row.kind !== 'value_assignment') continue
+      if (row.status !== 'needs_review') continue
+      const tableId = row.targetField.targetTable.id
+      m.set(tableId, (m.get(tableId) ?? 0) + 1)
+    }
+    return m
+  }, [data.rows])
+
+  // Phase 4c-1 — project-wide high-confidence count. Same derivation
+  // contract as the server preview's WHERE clause but the client
+  // already has confidence on every row, so this is a single pass.
+  const highConfidenceCount = useMemo(() => {
+    let n = 0
+    for (const row of data.rows) {
+      if (row.kind !== 'mapped' && row.kind !== 'value_assignment') continue
+      if (row.status !== 'needs_review') continue
+      if ((row.confidence ?? 0) < HIGH_CONFIDENCE_THRESHOLD) continue
+      n++
+    }
+    return n
+  }, [data.rows])
+
   return (
     <>
       <CountersRow counts={data.counts} />
@@ -892,6 +1087,8 @@ function MappingBody({
         sourceTables={data.sourceTables}
         tableCount={data.targetTables.length}
         rejectedCount={data.counts.rejected}
+        highConfidenceCount={highConfidenceCount}
+        onApproveHighConfidenceClick={handleApproveHighConfidenceClick}
       />
 
       {data.targetSchemaEmpty ? (
@@ -914,6 +1111,8 @@ function MappingBody({
                 onRowClick={handleRowClick}
                 openRowId={drawerRowId}
                 highlightedRowIds={highlightedRowIds}
+                needsReviewCount={needsReviewCountByTable.get(summary.id) ?? 0}
+                onApproveAllClick={handleApproveAllForTableClick}
               />
             )
           })}
@@ -948,6 +1147,36 @@ function MappingBody({
             : null
         }
         onRestoreConsumed={handleRestoreConsumed}
+      />
+
+      {/*
+        Phase 4c-1 — bulk confirm dialog. Single global instance,
+        scoped by `bulkAction`. Closed when `bulkAction === null`.
+      */}
+      <BulkConfirmDialog
+        open={bulkAction !== null}
+        mode="approve"
+        scope={
+          bulkAction?.kind === 'approve_high_confidence'
+            ? 'high_confidence'
+            : 'table'
+        }
+        targetTableName={
+          bulkAction?.kind === 'approve_table'
+            ? bulkAction.targetTableName
+            : undefined
+        }
+        threshold={
+          bulkAction?.kind === 'approve_high_confidence'
+            ? HIGH_CONFIDENCE_THRESHOLD
+            : undefined
+        }
+        count={bulkPreviewCount}
+        preview={bulkPreview}
+        isSubmitting={isBulkSubmitting}
+        errorMessage={bulkErrorMessage}
+        onCancel={handleBulkCancel}
+        onConfirm={handleBulkConfirm}
       />
     </>
   )

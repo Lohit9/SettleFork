@@ -1,8 +1,12 @@
+'use client'
+
+import { useEffect, useRef, useState } from 'react'
 import type {
   MappingRow,
   TargetTableSummary,
 } from '@/lib/types/mappings-for-redesign'
 import { FieldMappingRow } from './FieldMappingRow'
+import { MoreHorizontal } from '@/components/icons'
 
 // ─────────────────────────────────────────────────────────────────────────────
 // TargetTableGroup — Phase 3 Gap 4c (extended in Gap 3 for filtered counts).
@@ -61,6 +65,26 @@ interface TargetTableGroupProps {
    * highlight is active (treated as the empty set).
    */
   highlightedRowIds?: Set<string> | null
+  /**
+   * Phase 4c-1 — count of needs-review TFMs in this table that the
+   * "Approve all needs-review" kebab item would act on. Derived
+   * client-side from already-loaded `data.rows` by the parent
+   * (cheap, no extra round-trip). When `0`, the kebab item renders
+   * disabled with a "No needs-review mappings" subtitle. When the
+   * caller does NOT provide this prop (e.g. legacy fixtures or
+   * storybook), the kebab menu is omitted entirely.
+   */
+  needsReviewCount?: number
+  /**
+   * Phase 4c-1 — fired when the user clicks "Approve all needs-review"
+   * in the kebab menu. Parent (`MappingContent`) owns the dialog state
+   * and is responsible for opening `BulkConfirmDialog` with the right
+   * scope. The kebab itself only emits the click event; it does NOT
+   * gate on `needsReviewCount` (the menu item is disabled at the
+   * primitive level, but parents that want to react to a disabled
+   * click will see no event by virtue of the underlying button).
+   */
+  onApproveAllClick?: (targetTableId: string) => void
 }
 
 export function TargetTableGroup({
@@ -70,9 +94,17 @@ export function TargetTableGroup({
   onRowClick,
   openRowId,
   highlightedRowIds,
+  needsReviewCount,
+  onApproveAllClick,
 }: TargetTableGroupProps) {
   const label = resolveFieldCountLabel(targetTable, filteredCount)
   const isFilteredEmpty = filteredCount !== undefined && filteredCount.matching === 0
+
+  // Phase 4c-1 — kebab menu. Only rendered when both the count prop
+  // and the click handler are wired (i.e. on the live redesign page;
+  // not from legacy fixtures or storybook).
+  const showKebab =
+    needsReviewCount !== undefined && onApproveAllClick !== undefined
 
   return (
     <section
@@ -98,6 +130,14 @@ export function TargetTableGroup({
         >
           {label}
         </span>
+        {showKebab ? (
+          <TargetTableKebabMenu
+            targetTableId={targetTable.id}
+            targetTableName={targetTable.name}
+            needsReviewCount={needsReviewCount ?? 0}
+            onApproveAllClick={onApproveAllClick!}
+          />
+        ) : null}
       </header>
 
       {isFilteredEmpty ? (
@@ -125,6 +165,111 @@ export function TargetTableGroup({
         </div>
       )}
     </section>
+  )
+}
+
+// ─── Kebab menu (Phase 4c-1) ──────────────────────────────────────────────────
+//
+// Lightweight inline popover. The codebase has no shadcn `DropdownMenu`
+// primitive (intentional — see `components/ui/`), so this is a bespoke
+// click-outside-closing menu. Footprint is small enough to keep
+// colocated rather than promoting to a shared primitive — until 4c-2
+// adds the second item, no other surface needs the same shape.
+//
+// Click semantics (founder refinement, 2026-04-26):
+//   - In 4c-1 the menu has only ONE item: "Approve all needs-review".
+//   - Disabled state with subtitle "No needs-review mappings" when
+//     `needsReviewCount === 0`.
+//   - The Reject item ships in 4c-2 — we deliberately do NOT render
+//     a disabled placeholder now, to avoid self-promising a feature
+//     that may shift in priority.
+
+function TargetTableKebabMenu({
+  targetTableId,
+  targetTableName,
+  needsReviewCount,
+  onApproveAllClick,
+}: {
+  targetTableId: string
+  targetTableName: string
+  needsReviewCount: number
+  onApproveAllClick: (targetTableId: string) => void
+}) {
+  const [open, setOpen] = useState(false)
+  const wrapperRef = useRef<HTMLDivElement | null>(null)
+
+  // Click-outside + Escape close. Only registered while open.
+  useEffect(() => {
+    if (!open) return
+    const onDocClick = (e: MouseEvent) => {
+      if (!wrapperRef.current) return
+      if (!wrapperRef.current.contains(e.target as Node)) {
+        setOpen(false)
+      }
+    }
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setOpen(false)
+    }
+    document.addEventListener('mousedown', onDocClick)
+    document.addEventListener('keydown', onKey)
+    return () => {
+      document.removeEventListener('mousedown', onDocClick)
+      document.removeEventListener('keydown', onKey)
+    }
+  }, [open])
+
+  const isDisabled = needsReviewCount === 0
+  return (
+    <div
+      ref={wrapperRef}
+      className="relative flex-shrink-0"
+      data-testid="target-table-kebab"
+      data-target-table-id={targetTableId}
+    >
+      <button
+        type="button"
+        aria-label={`Bulk actions for ${targetTableName}`}
+        aria-haspopup="menu"
+        aria-expanded={open}
+        onClick={() => setOpen((prev) => !prev)}
+        className="inline-flex h-7 w-7 items-center justify-center rounded-md text-gray-500 hover:bg-gray-100 hover:text-gray-700 focus:outline-none focus-visible:ring-2 focus-visible:ring-gray-400"
+        data-testid="target-table-kebab-trigger"
+      >
+        <MoreHorizontal className="h-4 w-4" />
+      </button>
+      {open ? (
+        <div
+          role="menu"
+          aria-label={`Bulk actions for ${targetTableName}`}
+          className="absolute right-0 top-full z-20 mt-1 w-60 overflow-hidden rounded-md border border-gray-200 bg-white shadow-lg"
+          data-testid="target-table-kebab-menu"
+        >
+          <button
+            type="button"
+            role="menuitem"
+            disabled={isDisabled}
+            onClick={() => {
+              if (isDisabled) return
+              setOpen(false)
+              onApproveAllClick(targetTableId)
+            }}
+            className={
+              isDisabled
+                ? 'flex w-full flex-col items-start gap-0.5 px-3 py-2 text-left text-sm text-gray-400 cursor-not-allowed'
+                : 'flex w-full flex-col items-start gap-0.5 px-3 py-2 text-left text-sm text-gray-700 hover:bg-gray-50 focus:bg-gray-50 focus:outline-none cursor-pointer'
+            }
+            data-testid="target-table-kebab-approve-all"
+          >
+            <span className="font-medium">Approve all needs-review</span>
+            <span className="text-xs text-gray-500">
+              {isDisabled
+                ? 'No needs-review mappings'
+                : `${needsReviewCount} mapping${needsReviewCount === 1 ? '' : 's'} pending`}
+            </span>
+          </button>
+        </div>
+      ) : null}
+    </div>
   )
 }
 

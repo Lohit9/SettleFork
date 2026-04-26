@@ -1,6 +1,6 @@
 # Phase 4 plan — mutation completeness
 
-**Status:** Phase 4a complete (2026-04-26, including 4a-6 cross-table apply). Phase 4b complete (2026-04-26 — 4b-1 W2 + W3 edit sources / combination shipped + 4b-2 W4 un-acknowledge shipped same day). Phase 4c / 4-extras pending. Created 2026-04-25; last updated 2026-04-26.
+**Status:** Phase 4a complete (2026-04-26, including 4a-6 cross-table apply). Phase 4b complete (2026-04-26 — 4b-1 W2 + W3 edit sources / combination shipped + 4b-2 W4 un-acknowledge shipped same day). Phase 4c-1 (W5 bulk approve + high-confidence) complete (2026-04-26); 4c-2 (W5 bulk reject) fast-follow pending. 4-extras pending. Created 2026-04-25; last updated 2026-04-26.
 **Predecessor:** Phase 3 closed at `b900538` on `main`. The
 redesign UI is feature-flag gated (`projects.use_mapping_redesign`)
 and currently active only on Heritage Core in production.
@@ -20,7 +20,8 @@ and currently active only on Heritage Core in production.
 | 4-extras | Cross-table AI Suggest (LLM prompt redesign for joined sources), `AbortSignal` threading through `suggestMappingForTarget`, source-side acknowledgment toggle in sidebar | ⏳ pending — only if Heritage demands |
 | 4b-1 | W2 + W3 (edit sources via `editMappingSources`, edit combination via `updateMappingCombination`, drawer Edit affordance, EditInvalidationDialog warn flow, post-save Re-author deep-link) | ✅ shipped 2026-04-26 |
 | 4b-2 | W4 (un-acknowledge — fast-follow within same week per founder §9.1) | ✅ shipped 2026-04-26 |
-| 4c | W5 (bulk operations) | ⏳ pending |
+| 4c-1 | W5 partial — per-table bulk approve (kebab on `TargetTableGroup`) + project-wide high-confidence approve (`FilterRow` text-button), `BulkConfirmDialog` primitive, three new wrappers in `mappings-for-redesign.ts`, single bulk activity log entry per click | ✅ shipped 2026-04-26 |
+| 4c-2 | W5 remainder — bulk reject (kebab "Reject all needs-review", reuses `BulkConfirmDialog` with `mode='reject'`, requires per-row `resetFieldTransform` + staged-data revert ahead of bulk DELETE) — fast-follow per founder §10.1 split decision | ⏳ pending |
 | 5-Cleanup | Legacy `MappingContent.tsx` retirement, feature flag removal, shim deletion, stale prose copy revisit | ⏳ pending — 30-day canary gate |
 
 **Phase 4a closure summary:** Heritage Core has the full mapping authoring loop end-to-end in the redesign UI as of 2026-04-26: manual creation (same-table + cross-table), AI Suggest with confidence + rationale, audit-correct provenance via laundering prevention, toast-with-Undo for accidental discards, all four close paths handled coherently. **4a-6 (2026-04-26) extended this to the apply path**: cross-table TFMs now run through `dq_apply_field_transform_joined`'s LATERAL-join branch end-to-end, with the action layer deriving `p_join_spec` per apply (parity with the read-path FK re-derivation). The Phase 4a-3 transparency stack (action error code + Transform tab disabled buttons + drawer Sources badge) is retired. See `docs/features/mapping-redesign.md` → "Phase 4a complete — Mapping authoring loop (2026-04-26)" and "Phase 4a-6 — cross-table apply (2026-04-26)" for the full disposition including capabilities, known limitations, and the patterns-established reference for maintainers working on 4b / 4c / 5.
