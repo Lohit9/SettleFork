@@ -2111,6 +2111,56 @@ The redesign already lacks a `DropdownMenu` shadcn primitive (intentional — se
 3. **No undo for bulk approve.** Per-row Approve is reversible via the drawer; bulk approve has no atomic undo (the user can re-author each row individually). Founder §5.2 — "This cannot be undone" copy makes that explicit at confirm time.
 4. **High-confidence preview is client-derived.** The per-table path uses `previewBulkApprove`; the high-confidence path derives count + preview from already-loaded `data.rows`. Both are authoritative at dialog-open time; the wrapper's idempotent scope filter handles any divergence at write time.
 
+## Phase 4c-2 — bulk reject (2026-04-26)
+
+Phase 4c-2 closes Phase 4c by shipping the second half of W5: per-target-table bulk reject. The kebab menu in `TargetTableGroup` now has two items — Approve all needs-review (4c-1) and Reject all needs-review (4c-2) — sharing the lifted-dialog state machine in `MappingContent` and the `BulkConfirmDialog` primitive.
+
+### Wrapper surface
+
+- `bulkRejectFieldMappingsForTargetTable({ projectId, targetTableId })` returns a `BulkRejectResult` discriminated union. Success variant carries `rowsAffected`, `transformsReset`, `stagedRowsReverted`, `tfmIds`, and an optional `failedTfmIds` (only present on partial-success). Failure variant uses the same five-code `BulkRejectErrorCode` union as the approve wrapper (`PERMISSION_DENIED | NOT_FOUND | VALIDATION | MAINTENANCE_MODE | INTERNAL`).
+- `previewBulkReject({ projectId, targetTableId })` is the read-only companion. Same shape as `previewBulkApprove` plus a per-row `hasTransform: boolean` flag that surfaces in the dialog as a transform-reset indicator.
+
+The wrapper does NOT reuse the legacy `rejectAllFieldMappings` (Phase 4c investigation §2.1) — the legacy path flips `status='rejected'` whereas the redesign UI deletes the row outright (founder amendment 2026-04-21; per-row reject already DELETEs). Reusing the legacy action would silently desync the audit trail and the visible state.
+
+### Scope (hard-coded, NOT user-filter-state aware)
+
+Same scope filter as bulk approve (§6.1, §6.3):
+
+- `status === 'needs_review'`
+- `is_acknowledged === false`
+- `target_field`'s table === input `targetTableId`
+
+Acknowledged TFMs are bare-acks ("intentionally unmapped") and surface "Un-acknowledge" instead (Phase 4b-2). Approved TFMs are out of scope; the user reaches them via per-row reject if they want to delete a previously-approved row.
+
+### Partial-success handling (forward-progress)
+
+Reject is destructive — failing the whole batch on a single transform-reset error is hostile UX when the user just wants those rows gone. The wrapper takes the forward-progress path (locked decision §5.3):
+
+1. Identity-read the in-scope TFM set.
+2. Per-TFM `resetFieldTransform(tfmId)` loop. The helper is no-op-safe for TFMs without a transformations row (returns `success: true, hadTransform: false`); failures populate `failedTfmIds` and exclude the TFM from the rejectable set.
+3. Single bulk `DELETE.in('id', rejectableIds)` on `target_field_mappings`. CASCADE removes `mapping_sources` and any residual `transformations` rows automatically.
+4. TM recompute pass for affected `table_mappings`.
+5. Single `mapping_bulk_rejected` activity-log entry. Metadata: `{ scope: 'target_table_needs_review', count, tfm_ids, failed_tfm_ids?, fields_affected, target_table_id, target_table_name, transforms_reset }`. The `failed_tfm_ids` key is only present on partial-success (object-spread pattern keeps the metadata blob clean on full success).
+6. `revalidatePath('/app/projects/[id]/mapping')`.
+
+When every TFM's transform reset fails (rejectable.length === 0 after the loop), the wrapper returns `INTERNAL` rather than `VALIDATION` — the empty-scope VALIDATION case is reserved for "nothing to reject in the first place" (caught before the loop).
+
+### UI surfaces
+
+- `BulkConfirmDialog.tsx` — reject mode wires the locked §5.2 copy: "Each rejected mapping is deleted permanently. The target fields will appear as unmapped (Rule 6). This cannot be undone." Action button uses red destructive styling (`bg-red-600 hover:bg-red-700`). Loading-state label is "Rejecting…". Preview rows render a small `transform` badge when `row.hasTransform` is true and the dialog is in reject mode.
+- `TargetTableGroup.tsx` — kebab menu grows a second item: "Reject all needs-review", with red text (`text-red-600 hover:bg-red-50`), separator above, same disabled contract as approve. Optional `onRejectAllClick` prop — legacy fixtures / storybook can opt out.
+- `MappingContent.tsx` — `bulkAction` discriminated union extends with `'reject_table'`. New `handleRejectAllForTableClick` mirrors the approve handler shape (open dialog → fire `previewBulkReject` in the background → guard against stale resolves). Submit dispatches on `bulkAction.kind`. Toast copy distinguishes full success from partial success:
+  - Full: `Rejected N mappings on <Table>.` (with `M transforms reset.` appended when `transformsReset > 0`)
+  - Partial: `Rejected N of M mappings on <Table>; K could not be rejected (transform reset failed)` (toast variant is `info`, not `error`, since real progress was made — the dialog's red banner path is reserved for outright failure)
+
+### `hasTransform` preview indicator
+
+`previewBulkReject` runs an extra batched query (`SELECT target_field_mapping_id FROM transformations WHERE target_field_mapping_id IN (...)`) against the first 5 preview TFMs and threads `hasTransform: boolean` onto each preview row. The dialog renders a subdued amber `transform` badge next to those rows so users see at a glance which mappings will trigger a transform-reset side effect before they confirm. The flag is only computed for the preview slice (cap-of-5) — the wrapper itself doesn't need a pre-pass since `resetFieldTransform` is no-op-safe for TFMs without a transformation row.
+
+### Phase 4c is now complete
+
+With 4c-2 shipped, both halves of W5 (bulk approve + bulk reject) are live on the redesigned Mapping page. The remaining Phase 4 work is the rolling Phase 5-Cleanup list (legacy code retirement, RLS hardening, docs consolidation).
+
 
 
 Items to remove during Phase 5-Cleanup:

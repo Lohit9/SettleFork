@@ -49,6 +49,16 @@ export interface BulkPreviewRow {
    * em-dash placeholder in the absence of a primary source.
    */
   primarySource: string | null
+  /**
+   * Phase 4c-2 — true when this TFM owns a `transformations` row that
+   * the bulk reject wrapper will reset before deletion. Surfaced as a
+   * small "transform" indicator in the preview list so users see which
+   * rows trigger transform-reset side effects. Only meaningful when
+   * `mode === 'reject'`; ignored on approve. Optional (undefined for
+   * preview rows that haven't been hydrated by the reject preview
+   * helper, e.g. high-confidence approve which derives client-side).
+   */
+  hasTransform?: boolean
 }
 
 export interface BulkConfirmDialogProps {
@@ -137,6 +147,18 @@ function buildLeadCopy(props: BulkConfirmDialogProps): string {
   return `You're about to ${verb} ${n} high-confidence ${noun}.`
 }
 
+// §5.2 — irreversibility / consequence copy. Approve gets the generic
+// "This cannot be undone" line; reject gets the explicit
+// "deleted permanently … will appear as unmapped (Rule 6)" copy from
+// the locked Phase 4c investigation §5.2 decision so users understand
+// the destructive contract before confirming.
+function buildConsequenceCopy(props: BulkConfirmDialogProps): string {
+  if (props.mode === 'reject') {
+    return 'Each rejected mapping is deleted permanently. The target fields will appear as unmapped (Rule 6). This cannot be undone.'
+  }
+  return 'This cannot be undone.'
+}
+
 function buildActionLabel(props: BulkConfirmDialogProps): string {
   const { mode, count, isSubmitting } = props
   const n = count ?? 0
@@ -165,10 +187,10 @@ export function BulkConfirmDialog(props: BulkConfirmDialogProps) {
   const title = buildTitle(props)
   const lead = buildLeadCopy(props)
   const actionLabel = buildActionLabel(props)
-  // §5.2 — destructive irreversibility line. Approve is destructive in
-  // the sense that the lifecycle moves forward; reject is destructive
-  // in the literal sense (DELETE). Same line covers both modes.
-  const undoLine = "This cannot be undone."
+  // §5.2 — consequence / irreversibility line. Approve gets the
+  // generic note; reject gets explicit "deleted permanently … Rule 6"
+  // copy from the locked Phase 4c investigation §5.2 decision.
+  const undoLine = buildConsequenceCopy(props)
 
   // The "and N more" clause renders only when count > preview.length.
   // Defensive: count can be null while the preview is loading.
@@ -229,6 +251,9 @@ export function BulkConfirmDialog(props: BulkConfirmDialogProps) {
                   key={row.tfmId}
                   className="flex items-center gap-2 text-gray-700"
                   data-testid="bulk-confirm-dialog-preview-row"
+                  data-has-transform={
+                    mode === 'reject' && row.hasTransform ? 'true' : undefined
+                  }
                 >
                   <span className="font-mono text-gray-900">
                     {row.targetField}
@@ -239,6 +264,19 @@ export function BulkConfirmDialog(props: BulkConfirmDialogProps) {
                   <span className="font-mono text-gray-500">
                     {row.primarySource ?? '\u2014'}
                   </span>
+                  {/* Phase 4c-2 — transform-reset indicator. Only
+                      surfaces in reject mode (approve doesn't reset
+                      transforms). The badge is intentionally subdued
+                      so it doesn't compete with the field names. */}
+                  {mode === 'reject' && row.hasTransform ? (
+                    <span
+                      className="rounded bg-amber-50 px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide text-amber-700"
+                      data-testid="bulk-confirm-dialog-preview-row-transform"
+                      title="Transformation will be reset"
+                    >
+                      transform
+                    </span>
+                  ) : null}
                 </li>
               ))}
               {remaining > 0 ? (
