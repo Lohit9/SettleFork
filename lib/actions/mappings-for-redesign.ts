@@ -531,15 +531,26 @@ export async function createFieldMapping(input: {
   // read so RLS narrowing on `fields` doesn't silently drop a source the
   // user lacks SELECT on — the wrapper's project-membership check above
   // is the authoritative gate.
+  // Project ownership chain: fields.table_id → tables.dataset_id →
+  // datasets.project_id. The `tables` table has NO `project_id` column
+  // of its own — joining `tables(project_id)` would return a PostgREST
+  // 42703 ("column tables_1.project_id does not exist"). Match the
+  // legacy pattern at `lib/actions/fields.ts:81` which walks both hops
+  // through `!inner` to keep the join restrictive.
   const { data: targetField, error: tfErr } = await supabaseAdmin
     .from('fields')
-    .select('id, name, table_id, tables(project_id)')
+    .select('id, name, table_id, tables!inner(datasets!inner(project_id))')
     .eq('id', targetFieldId)
     .single<{
       id: string
       name: string
       table_id: string
-      tables: { project_id: string } | { project_id: string }[] | null
+      tables:
+        | { datasets: { project_id: string } | { project_id: string }[] | null }
+        | {
+            datasets: { project_id: string } | { project_id: string }[] | null
+          }[]
+        | null
     }>()
   if (tfErr || !targetField) {
     return {
@@ -549,10 +560,16 @@ export async function createFieldMapping(input: {
     }
   }
 
-  // Defensive: target field belongs to this project.
-  const targetProjectId = Array.isArray(targetField.tables)
-    ? targetField.tables[0]?.project_id
-    : targetField.tables?.project_id
+  // Defensive: target field belongs to this project. PostgREST returns
+  // a one-to-one join either as a single object or a singleton array
+  // depending on relationship-cardinality inference; tolerate both.
+  const targetTables = Array.isArray(targetField.tables)
+    ? targetField.tables[0]
+    : targetField.tables
+  const targetDatasets = Array.isArray(targetTables?.datasets)
+    ? targetTables?.datasets[0]
+    : targetTables?.datasets
+  const targetProjectId = targetDatasets?.project_id
   if (targetProjectId !== projectId) {
     return {
       success: false,
@@ -561,16 +578,31 @@ export async function createFieldMapping(input: {
     }
   }
 
+  // Same join-chain caveat as the target-field read above: walk through
+  // datasets to reach project_id. `tables` has no project_id column.
   const { data: sourceFields, error: sfErr } = await supabaseAdmin
     .from('fields')
-    .select('id, name, table_id, tables(project_id)')
+    .select('id, name, table_id, tables!inner(datasets!inner(project_id))')
     .in('id', sourceFieldIds)
     .returns<
       Array<{
         id: string
         name: string
         table_id: string
-        tables: { project_id: string } | { project_id: string }[] | null
+        tables:
+          | {
+              datasets:
+                | { project_id: string }
+                | { project_id: string }[]
+                | null
+            }
+          | {
+              datasets:
+                | { project_id: string }
+                | { project_id: string }[]
+                | null
+            }[]
+          | null
       }>
     >()
   if (sfErr || !sourceFields) {
@@ -591,9 +623,11 @@ export async function createFieldMapping(input: {
 
   // Defensive: every source field belongs to this project.
   for (const sf of sourceFields) {
-    const sfProject = Array.isArray(sf.tables)
-      ? sf.tables[0]?.project_id
-      : sf.tables?.project_id
+    const sfTables = Array.isArray(sf.tables) ? sf.tables[0] : sf.tables
+    const sfDatasets = Array.isArray(sfTables?.datasets)
+      ? sfTables?.datasets[0]
+      : sfTables?.datasets
+    const sfProject = sfDatasets?.project_id
     if (sfProject !== projectId) {
       return {
         success: false,
@@ -932,8 +966,12 @@ export async function suggestMappingForTarget(input: {
   // ── Read target field identity ───────────────────────────────────────────
   const { data: targetField, error: tfErr } = await supabaseAdmin
     .from('fields')
+    // Same join-chain caveat as `createFieldMapping`: walk through
+    // datasets to reach project_id (`tables` has no project_id column).
+    // `tables.name` lives on `tables` itself so it stays at the first
+    // hop alongside the nested `datasets!inner(project_id)`.
     .select(
-      'id, name, data_type, is_primary_key, is_foreign_key, is_nullable, table_id, tables(project_id, name)',
+      'id, name, data_type, is_primary_key, is_foreign_key, is_nullable, table_id, tables!inner(name, datasets!inner(project_id))',
     )
     .eq('id', targetFieldId)
     .single<{
@@ -945,8 +983,20 @@ export async function suggestMappingForTarget(input: {
       is_nullable: boolean | null
       table_id: string
       tables:
-        | { project_id: string; name: string }
-        | { project_id: string; name: string }[]
+        | {
+            name: string
+            datasets:
+              | { project_id: string }
+              | { project_id: string }[]
+              | null
+          }
+        | {
+            name: string
+            datasets:
+              | { project_id: string }
+              | { project_id: string }[]
+              | null
+          }[]
         | null
     }>()
   if (tfErr || !targetField) {
@@ -957,9 +1007,13 @@ export async function suggestMappingForTarget(input: {
     }
   }
 
-  const targetProjectId = Array.isArray(targetField.tables)
-    ? targetField.tables[0]?.project_id
-    : targetField.tables?.project_id
+  const targetTablesNode = Array.isArray(targetField.tables)
+    ? targetField.tables[0]
+    : targetField.tables
+  const targetDatasetsNode = Array.isArray(targetTablesNode?.datasets)
+    ? targetTablesNode?.datasets[0]
+    : targetTablesNode?.datasets
+  const targetProjectId = targetDatasetsNode?.project_id
   if (targetProjectId !== projectId) {
     return {
       success: false,
@@ -967,9 +1021,7 @@ export async function suggestMappingForTarget(input: {
       errorCode: 'NOT_FOUND',
     }
   }
-  const targetTableName = Array.isArray(targetField.tables)
-    ? (targetField.tables[0]?.name ?? '?')
-    : (targetField.tables?.name ?? '?')
+  const targetTableName = targetTablesNode?.name ?? '?'
 
   // ── Build AI context (project-wide source schema) ────────────────────────
   // Reuse `buildAIContext` so we get sample values + value distributions +

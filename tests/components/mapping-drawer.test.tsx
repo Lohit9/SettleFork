@@ -8,6 +8,7 @@ import {
 import type {
   MappedRow,
   MappingSourceRef,
+  SourceFieldWithState,
   TargetAcknowledgedRow,
   TargetFieldRef,
   UnmappedRow,
@@ -908,7 +909,11 @@ describe('MappingDrawer — Rule 6 (Unmapped) body', () => {
     expect(screen.queryByTestId('drawer-section-status')).toBeNull()
   })
 
-  it('does NOT render any action buttons (Gap 9 territory)', () => {
+  it('does NOT render any action buttons in the body (Gap 9 territory)', () => {
+    // Phase 4a-2 amendment: the [Create mapping] button now lives in
+    // the footer when the form is inactive, NOT in the body. The body
+    // remains free of buttons until the form is activated (covered in
+    // the "Phase 4a-2 — unmapped footer" suite below).
     render(<MappingDrawer row={unmapped()} isOpen={true} onClose={() => {}} />)
     const body = screen.getByTestId('mapping-drawer-body')
     expect(within(body).queryAllByRole('button')).toHaveLength(0)
@@ -1607,9 +1612,14 @@ describe('MappingDrawer — Mapped body regression guards', () => {
 
 import { act } from 'react'
 
-const { approveFieldMappingMock, rejectFieldMappingMock } = vi.hoisted(() => ({
+const {
+  approveFieldMappingMock,
+  rejectFieldMappingMock,
+  createFieldMappingMock,
+} = vi.hoisted(() => ({
   approveFieldMappingMock: vi.fn(),
   rejectFieldMappingMock: vi.fn(),
+  createFieldMappingMock: vi.fn(),
 }))
 
 vi.mock('@/lib/actions/mappings-for-redesign', () => ({
@@ -1617,11 +1627,26 @@ vi.mock('@/lib/actions/mappings-for-redesign', () => ({
     approveFieldMappingMock(...args),
   rejectFieldMapping: (...args: unknown[]) =>
     rejectFieldMappingMock(...args),
+  createFieldMapping: (...args: unknown[]) =>
+    createFieldMappingMock(...args),
+}))
+
+// Phase 4a-2 — `CreateMappingForm` calls `useRouter().refresh()` on
+// successful save. The component-under-test renders the form when the
+// user clicks [Create mapping] on an unmapped row, so router-mocking
+// is now drawer-test-scoped (not just form-test-scoped).
+vi.mock('next/navigation', () => ({
+  useRouter: () => ({
+    refresh: vi.fn(),
+    replace: vi.fn(),
+    push: vi.fn(),
+  }),
 }))
 
 beforeEach(() => {
   approveFieldMappingMock.mockReset()
   rejectFieldMappingMock.mockReset()
+  createFieldMappingMock.mockReset()
 })
 
 describe('MappingDrawer Gap 9 — disabled-state matrix', () => {
@@ -1703,9 +1728,16 @@ describe('MappingDrawer Gap 9 — disabled-state matrix', () => {
     )
   })
 
-  it('unmapped row: the footer is NOT rendered (no actions available)', () => {
+  it('unmapped row: footer is rendered with [Create mapping] (Phase 4a-2); no Approve/Reject', () => {
+    // Phase 4a-2 amendment: the unmapped footer now hosts a primary
+    // [Create mapping] button (mode-switches to [Cancel] [Save] once
+    // the form is activated). Approve/Reject remain absent — they are
+    // only meaningful for already-mapped rows.
     render(<MappingDrawer row={unmapped()} isOpen={true} onClose={() => {}} />)
-    expect(screen.queryByTestId('mapping-drawer-footer')).toBeNull()
+    expect(screen.getByTestId('mapping-drawer-footer')).toBeInTheDocument()
+    expect(
+      screen.getByTestId('mapping-drawer-create-mapping-button'),
+    ).toBeInTheDocument()
     expect(
       screen.queryByTestId('mapping-drawer-approve-button'),
     ).toBeNull()
@@ -1995,5 +2027,372 @@ describe('MappingDrawer Gap 9 — error banner reset on row change', () => {
       />,
     )
     expect(screen.queryByTestId('mapping-drawer-error')).toBeNull()
+  })
+})
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Phase 4a-2 — manual mapping creation (W1) drawer integration.
+// ─────────────────────────────────────────────────────────────────────────────
+//
+// Covers the drawer-side contract introduced by Phase 4a-2:
+//   • Footer mode-switching (inactive → [Create mapping]; active →
+//     [Cancel] [Save mapping]).
+//   • Body morph (Mapping-status prose → CreateMappingForm).
+//   • Imperative form-handle wiring (Save click → triggerSave; Cancel
+//     click → requestClose).
+//   • Close-with-confirm intercepts on Esc / X / click-outside / Cancel
+//     when the form is dirty.
+//   • Discard-dialog Esc/click guards (the dialog-only Esc per
+//     founder decision §1-OQ-1, mousedown inside the dialog does NOT
+//     close the drawer beneath it).
+//   • Row-switch is silent — no discard prompt (founder decision
+//     §8-OQ-1).
+//   • onSaveSuccess is fired with the wrapper's new TFM id and the
+//     drawer body deactivates the form afterwards.
+
+function makeSourceField(
+  overrides: Partial<SourceFieldWithState> = {},
+): SourceFieldWithState {
+  return {
+    id: 'sf-acc',
+    name: 'ACCT_NO',
+    dataType: 'NUMBER',
+    ordinalPosition: 1,
+    sourceTable: { id: 'st-acc', name: 'ACCT_MASTER' },
+    mappingStatus: 'unmapped',
+    sampleValues: ['1001', '1002', '1003'],
+    isAcknowledged: false,
+    ...overrides,
+  }
+}
+
+const SOURCE_FIELDS_FIXTURE: SourceFieldWithState[] = [
+  makeSourceField({ id: 'sf-acc-1', name: 'ACCT_NO', ordinalPosition: 1 }),
+  makeSourceField({ id: 'sf-acc-2', name: 'ACCT_TYPE', ordinalPosition: 2 }),
+]
+
+describe('MappingDrawer Phase 4a-2 — unmapped footer mode-switch', () => {
+  it('renders [Create mapping] only when the form is inactive', () => {
+    render(
+      <MappingDrawer
+        row={unmapped()}
+        isOpen={true}
+        onClose={() => {}}
+        projectId="p-1"
+        availableSourceFields={SOURCE_FIELDS_FIXTURE}
+      />,
+    )
+    expect(
+      screen.getByTestId('mapping-drawer-create-mapping-button'),
+    ).toBeInTheDocument()
+    expect(
+      screen.queryByTestId('mapping-drawer-form-cancel-button'),
+    ).toBeNull()
+    expect(screen.queryByTestId('mapping-drawer-form-save-button')).toBeNull()
+  })
+
+  it('clicking [Create mapping] morphs body to form + footer to [Cancel] [Save]', async () => {
+    const user = userEvent.setup()
+    render(
+      <MappingDrawer
+        row={unmapped()}
+        isOpen={true}
+        onClose={() => {}}
+        projectId="p-1"
+        availableSourceFields={SOURCE_FIELDS_FIXTURE}
+      />,
+    )
+    await user.click(screen.getByTestId('mapping-drawer-create-mapping-button'))
+    expect(screen.getByTestId('create-mapping-form')).toBeInTheDocument()
+    expect(
+      screen.queryByTestId('drawer-unmapped-prose'),
+    ).toBeNull()
+    expect(
+      screen.getByTestId('mapping-drawer-form-cancel-button'),
+    ).toBeInTheDocument()
+    expect(
+      screen.getByTestId('mapping-drawer-form-save-button'),
+    ).toBeInTheDocument()
+    expect(
+      screen.queryByTestId('mapping-drawer-create-mapping-button'),
+    ).toBeNull()
+  })
+
+  it('Save button starts disabled (no source selected) and enables after a selection', async () => {
+    const user = userEvent.setup()
+    render(
+      <MappingDrawer
+        row={unmapped()}
+        isOpen={true}
+        onClose={() => {}}
+        projectId="p-1"
+        availableSourceFields={SOURCE_FIELDS_FIXTURE}
+      />,
+    )
+    await user.click(screen.getByTestId('mapping-drawer-create-mapping-button'))
+    const save = screen.getByTestId(
+      'mapping-drawer-form-save-button',
+    ) as HTMLButtonElement
+    expect(save.disabled).toBe(true)
+    const fieldButtons = screen.getAllByTestId('source-field-picker-field')
+    await user.click(fieldButtons[0])
+    expect(save.disabled).toBe(false)
+  })
+
+  it('clicking Cancel on a clean form deactivates the form silently', async () => {
+    const user = userEvent.setup()
+    render(
+      <MappingDrawer
+        row={unmapped()}
+        isOpen={true}
+        onClose={() => {}}
+        projectId="p-1"
+        availableSourceFields={SOURCE_FIELDS_FIXTURE}
+      />,
+    )
+    await user.click(screen.getByTestId('mapping-drawer-create-mapping-button'))
+    await user.click(screen.getByTestId('mapping-drawer-form-cancel-button'))
+    expect(screen.queryByTestId('create-mapping-form')).toBeNull()
+    expect(
+      screen.getByTestId('mapping-drawer-create-mapping-button'),
+    ).toBeInTheDocument()
+    // No discard dialog should have surfaced for a clean form.
+    expect(
+      screen.queryByTestId('create-mapping-form-discard-dialog'),
+    ).toBeNull()
+  })
+})
+
+describe('MappingDrawer Phase 4a-2 — close-with-confirm intercepts (dirty form)', () => {
+  it('Cancel button surfaces the discard dialog when dirty', async () => {
+    const user = userEvent.setup()
+    render(
+      <MappingDrawer
+        row={unmapped()}
+        isOpen={true}
+        onClose={() => {}}
+        projectId="p-1"
+        availableSourceFields={SOURCE_FIELDS_FIXTURE}
+      />,
+    )
+    await user.click(screen.getByTestId('mapping-drawer-create-mapping-button'))
+    await user.click(
+      screen.getAllByTestId('source-field-picker-field')[0],
+    )
+    await user.click(screen.getByTestId('mapping-drawer-form-cancel-button'))
+    expect(
+      screen.getByTestId('create-mapping-form-discard-dialog'),
+    ).toBeInTheDocument()
+    // Form remains mounted while the dialog is open.
+    expect(screen.getByTestId('create-mapping-form')).toBeInTheDocument()
+  })
+
+  it('X button surfaces the discard dialog when dirty (no onClose call)', async () => {
+    const onClose = vi.fn()
+    const user = userEvent.setup()
+    render(
+      <MappingDrawer
+        row={unmapped()}
+        isOpen={true}
+        onClose={onClose}
+        projectId="p-1"
+        availableSourceFields={SOURCE_FIELDS_FIXTURE}
+      />,
+    )
+    await user.click(screen.getByTestId('mapping-drawer-create-mapping-button'))
+    await user.click(
+      screen.getAllByTestId('source-field-picker-field')[0],
+    )
+    await user.click(screen.getByTestId('mapping-drawer-close'))
+    expect(
+      screen.getByTestId('create-mapping-form-discard-dialog'),
+    ).toBeInTheDocument()
+    expect(onClose).not.toHaveBeenCalled()
+  })
+
+  it('clicking Discard in the dialog deactivates the form (no onClose)', async () => {
+    const onClose = vi.fn()
+    const user = userEvent.setup()
+    render(
+      <MappingDrawer
+        row={unmapped()}
+        isOpen={true}
+        onClose={onClose}
+        projectId="p-1"
+        availableSourceFields={SOURCE_FIELDS_FIXTURE}
+      />,
+    )
+    await user.click(screen.getByTestId('mapping-drawer-create-mapping-button'))
+    await user.click(
+      screen.getAllByTestId('source-field-picker-field')[0],
+    )
+    await user.click(screen.getByTestId('mapping-drawer-form-cancel-button'))
+    await user.click(screen.getByTestId('create-mapping-form-discard-confirm'))
+    expect(screen.queryByTestId('create-mapping-form')).toBeNull()
+    expect(
+      screen.getByTestId('mapping-drawer-create-mapping-button'),
+    ).toBeInTheDocument()
+    // Founder decision §1-OQ-1: discard dialog dismisses dialog/form,
+    // it does NOT bubble up to drawer-close.
+    expect(onClose).not.toHaveBeenCalled()
+  })
+
+  it('Esc with the discard dialog open does NOT bubble to onClose', async () => {
+    const onClose = vi.fn()
+    const user = userEvent.setup()
+    render(
+      <MappingDrawer
+        row={unmapped()}
+        isOpen={true}
+        onClose={onClose}
+        projectId="p-1"
+        availableSourceFields={SOURCE_FIELDS_FIXTURE}
+      />,
+    )
+    await user.click(screen.getByTestId('mapping-drawer-create-mapping-button'))
+    await user.click(
+      screen.getAllByTestId('source-field-picker-field')[0],
+    )
+    await user.click(screen.getByTestId('mapping-drawer-form-cancel-button'))
+    expect(
+      screen.getByTestId('create-mapping-form-discard-dialog'),
+    ).toBeInTheDocument()
+    // Esc should dismiss the dialog only (Radix' AlertDialog wires its
+    // own listener); the drawer's listener must skip onClose because
+    // an [role=alertdialog] is mounted.
+    fireEvent.keyDown(document, { key: 'Escape' })
+    expect(onClose).not.toHaveBeenCalled()
+  })
+
+  it('mousedown inside an open discard dialog does NOT bubble to onClose', async () => {
+    const onClose = vi.fn()
+    const user = userEvent.setup()
+    render(
+      <MappingDrawer
+        row={unmapped()}
+        isOpen={true}
+        onClose={onClose}
+        projectId="p-1"
+        availableSourceFields={SOURCE_FIELDS_FIXTURE}
+      />,
+    )
+    await user.click(screen.getByTestId('mapping-drawer-create-mapping-button'))
+    await user.click(
+      screen.getAllByTestId('source-field-picker-field')[0],
+    )
+    await user.click(screen.getByTestId('mapping-drawer-form-cancel-button'))
+    const dialog = screen.getByTestId('create-mapping-form-discard-dialog')
+    fireEvent.mouseDown(dialog)
+    expect(onClose).not.toHaveBeenCalled()
+  })
+})
+
+describe('MappingDrawer Phase 4a-2 — Save flow', () => {
+  it('Save button calls createFieldMapping with the selected source + same-table combination', async () => {
+    createFieldMappingMock.mockResolvedValue({
+      success: true,
+      tfmId: 'tfm-new',
+    })
+    const user = userEvent.setup()
+    render(
+      <MappingDrawer
+        row={unmapped({
+          targetField: targetField({
+            id: 'tf-target',
+            name: 'account_number',
+          }),
+        })}
+        isOpen={true}
+        onClose={() => {}}
+        projectId="p-1"
+        availableSourceFields={SOURCE_FIELDS_FIXTURE}
+      />,
+    )
+    await user.click(screen.getByTestId('mapping-drawer-create-mapping-button'))
+    await user.click(
+      screen.getAllByTestId('source-field-picker-field')[0],
+    )
+    await user.click(screen.getByTestId('mapping-drawer-form-save-button'))
+    await act(async () => {
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+    expect(createFieldMappingMock).toHaveBeenCalledTimes(1)
+    expect(createFieldMappingMock.mock.calls[0]?.[0]).toMatchObject({
+      projectId: 'p-1',
+      targetFieldId: 'tf-target',
+      sourceFieldIds: ['sf-acc-1'],
+      combinationType: 'single',
+    })
+  })
+
+  it('successful save invokes onSaveSuccess(newTfmId) and deactivates the form', async () => {
+    createFieldMappingMock.mockResolvedValue({
+      success: true,
+      tfmId: 'tfm-new-id',
+    })
+    const onSaveSuccess = vi.fn()
+    const user = userEvent.setup()
+    render(
+      <MappingDrawer
+        row={unmapped()}
+        isOpen={true}
+        onClose={() => {}}
+        projectId="p-1"
+        availableSourceFields={SOURCE_FIELDS_FIXTURE}
+        onSaveSuccess={onSaveSuccess}
+      />,
+    )
+    await user.click(screen.getByTestId('mapping-drawer-create-mapping-button'))
+    await user.click(
+      screen.getAllByTestId('source-field-picker-field')[0],
+    )
+    await user.click(screen.getByTestId('mapping-drawer-form-save-button'))
+    await act(async () => {
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+    expect(onSaveSuccess).toHaveBeenCalledWith('tfm-new-id')
+    // Form deactivates so the body returns to the empty-state. (In
+    // production, the parent page swaps the row to a mapped one in
+    // parallel — this is not asserted here.)
+    expect(screen.queryByTestId('create-mapping-form')).toBeNull()
+  })
+})
+
+describe('MappingDrawer Phase 4a-2 — row switch resets form state silently', () => {
+  it('switching to a different row clears the active form (no discard dialog)', async () => {
+    const user = userEvent.setup()
+    const { rerender } = render(
+      <MappingDrawer
+        row={unmapped({ id: 'unmapped::tf-A', targetField: targetField({ id: 'tf-A' }) })}
+        isOpen={true}
+        onClose={() => {}}
+        projectId="p-1"
+        availableSourceFields={SOURCE_FIELDS_FIXTURE}
+      />,
+    )
+    await user.click(screen.getByTestId('mapping-drawer-create-mapping-button'))
+    await user.click(
+      screen.getAllByTestId('source-field-picker-field')[0],
+    )
+    expect(screen.getByTestId('create-mapping-form')).toBeInTheDocument()
+    // Founder decision §8-OQ-1: row-switch is the only silent path.
+    rerender(
+      <MappingDrawer
+        row={unmapped({ id: 'unmapped::tf-B', targetField: targetField({ id: 'tf-B' }) })}
+        isOpen={true}
+        onClose={() => {}}
+        projectId="p-1"
+        availableSourceFields={SOURCE_FIELDS_FIXTURE}
+      />,
+    )
+    expect(screen.queryByTestId('create-mapping-form')).toBeNull()
+    expect(
+      screen.queryByTestId('create-mapping-form-discard-dialog'),
+    ).toBeNull()
+    expect(
+      screen.getByTestId('mapping-drawer-create-mapping-button'),
+    ).toBeInTheDocument()
   })
 })

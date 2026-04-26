@@ -37,7 +37,12 @@ import {
 } from '@/lib/actions/mappings-for-redesign'
 import { classifyMappedRow, type MappingRowRule } from '@/lib/utils/mapping-row-rules'
 import { formatSampleValues } from '@/lib/utils/mapping-drawer-format'
+import type { SourceFieldWithState } from '@/lib/types/mappings-for-redesign'
 import { TableBadge } from './TableBadge'
+import {
+  CreateMappingForm,
+  type CreateMappingFormHandle,
+} from './CreateMappingForm'
 
 // ─────────────────────────────────────────────────────────────────────────────
 // MappingDrawer — Phase 3 Gaps 7 + 8a + 8b + 9.
@@ -211,6 +216,27 @@ export interface MappingDrawerProps {
    * next prop change).
    */
   onActionComplete?: (action: 'approve' | 'reject', rowId: string) => void
+  /**
+   * Phase 4a-2 — required by the manual mapping creation form (W1)
+   * when a Rule 6 unmapped drawer is open and the user clicks
+   * [Create mapping]. The form invokes `createFieldMapping` with this
+   * `projectId`. May be undefined for tests / non-unmapped rows.
+   */
+  projectId?: string
+  /**
+   * Phase 4a-2 — page-level source fields in canonical server order.
+   * Required when the form is reachable (Rule 6 unmapped rows).
+   * Optional otherwise.
+   */
+  availableSourceFields?: SourceFieldWithState[]
+  /**
+   * Phase 4a-2 — called with the new TFM id after `createFieldMapping`
+   * succeeds. Parent should swap the drawer URL param from
+   * `unmapped::<targetFieldId>` to the bare TFM uuid + arm the
+   * `pendingDrawerRowId` sentinel so the auto-close-on-stale-id
+   * effect doesn't unmount the drawer mid-refresh.
+   */
+  onSaveSuccess?: (newTfmId: string) => void
 }
 
 /**
@@ -221,6 +247,9 @@ export function MappingDrawer({
   isOpen,
   onClose,
   onActionComplete,
+  projectId,
+  availableSourceFields,
+  onSaveSuccess,
 }: MappingDrawerProps) {
   const titleId = useId()
   const drawerRef = useRef<HTMLElement | null>(null)
@@ -230,12 +259,68 @@ export function MappingDrawer({
   // the cleanup of the same effect.
   const triggerRef = useRef<HTMLElement | null>(null)
 
+  // ── Phase 4a-2 — manual mapping creation form state ───────────────
+  //
+  // `isFormActive` toggles the unmapped body between the empty-state
+  // prose and the `CreateMappingForm`. The footer mirrors this flag:
+  // `[Create mapping]` when inactive, `[Cancel]` `[Save mapping]`
+  // when active. `formState` is published from the form via its
+  // `onStateChange` prop and drives:
+  //   • The Save button's disabled flag (`!canSave`)
+  //   • The close-with-confirm intercept (the `requestClose` flow on
+  //     the form handle reads `isDirty` internally; this lifted copy
+  //     is for footer button display only).
+  //   • The maybeRequestClose helper (Esc / X / click-outside / Cancel
+  //     all route through `formRef.current.requestClose()` which
+  //     either pops the discard dialog when dirty or invokes
+  //     `onCancel` immediately when clean).
+  const [isFormActive, setIsFormActive] = useState(false)
+  const [formState, setFormState] = useState<{
+    isDirty: boolean
+    canSave: boolean
+    isSavePending: boolean
+  }>({ isDirty: false, canSave: false, isSavePending: false })
+  const formRef = useRef<CreateMappingFormHandle | null>(null)
+
+  // Reset form state on every row identity change. Founder decision §8 —
+  // switch-row-while-dirty is a silent unmount in 4a-2 (toast follows
+  // in 4a-4). We do NOT route through the discard dialog here; the
+  // user explicitly chose to view a different row, and prompting on
+  // every row click would feel hostile.
+  const rowIdForFormReset = row?.id ?? null
+  useEffect(() => {
+    setIsFormActive(false)
+    setFormState({ isDirty: false, canSave: false, isSavePending: false })
+  }, [rowIdForFormReset])
+
   // Stable-onClose ref so the document-level handlers below don't have
   // to re-bind on every render of the parent.
   const onCloseRef = useRef(onClose)
   useEffect(() => {
     onCloseRef.current = onClose
   }, [onClose])
+
+  // ── Close intercept — routes through the form when active ────────
+  //
+  // Esc / click-outside / X-button / Cancel-button all call
+  // `maybeRequestClose`. When the form is active we hand off to its
+  // imperative `requestClose` method, which decides between the
+  // discard dialog (dirty) and immediate cancel (clean). When the
+  // form is inactive we close the drawer normally.
+  //
+  // `maybeRequestCloseRef` keeps the document-level Esc / mousedown
+  // listeners stable across renders.
+  const maybeRequestClose = useCallback(() => {
+    if (isFormActive && formRef.current) {
+      formRef.current.requestClose()
+      return
+    }
+    onCloseRef.current()
+  }, [isFormActive])
+  const maybeRequestCloseRef = useRef(maybeRequestClose)
+  useEffect(() => {
+    maybeRequestCloseRef.current = maybeRequestClose
+  }, [maybeRequestClose])
 
   // Esc + outside-click + focus-restore — all gated behind `isOpen`.
   useEffect(() => {
@@ -245,7 +330,20 @@ export function MappingDrawer({
         ? (document.activeElement as HTMLElement | null)
         : null
     const onKeyDown = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') onCloseRef.current()
+      if (e.key === 'Escape') {
+        // Phase 4a-2 — when a modal-on-modal dialog (discard or
+        // reject) is open above the drawer, Esc must dismiss the
+        // dialog only. The `AlertDialog` primitive owns its own Esc
+        // listener; if we let the drawer's listener fire too the
+        // drawer would close right behind the dialog. The dialog
+        // root is rendered via a fixed-position overlay we can
+        // detect via `[role="alertdialog"]` in the DOM.
+        if (typeof document !== 'undefined') {
+          const dialogOpen = document.querySelector('[role="alertdialog"]')
+          if (dialogOpen) return
+        }
+        maybeRequestCloseRef.current()
+      }
     }
     const onMouseDown = (e: MouseEvent) => {
       const target = e.target as Node | null
@@ -253,11 +351,19 @@ export function MappingDrawer({
       // If the click landed inside the drawer itself, ignore — the
       // close button has its own React onClick wiring.
       if (drawerRef.current && drawerRef.current.contains(target)) return
-      // If the click landed on another clickable row body, let that
-      // row's own onClick switch the drawer to it (don't close-then-
-      // re-open in a single tick). We detect row bodies by their
-      // documented data-testid.
       if (target instanceof Element) {
+        // Phase 4a-2 — clicks inside an open AlertDialog (discard or
+        // reject) must not bubble up to "user clicked outside drawer".
+        // The dialog renders above the drawer in a higher-z-index
+        // overlay; without this guard mousedown on the dialog body
+        // would close the drawer beneath it.
+        const insideDialog = target.closest('[role="alertdialog"]')
+        if (insideDialog) return
+
+        // If the click landed on another clickable row body, let that
+        // row's own onClick switch the drawer to it (don't close-then-
+        // re-open in a single tick). We detect row bodies by their
+        // documented data-testid.
         const clickedRow = target.closest('[data-testid="field-mapping-row-body"]')
         if (clickedRow) return
         // Phase 3 Gap 11a — the new left-side `SourceSchemaSidebar`
@@ -272,7 +378,7 @@ export function MappingDrawer({
         )
         if (clickedSidebar) return
       }
-      onCloseRef.current()
+      maybeRequestCloseRef.current()
     }
     document.addEventListener('keydown', onKeyDown)
     document.addEventListener('mousedown', onMouseDown)
@@ -435,9 +541,25 @@ export function MappingDrawer({
       )}
       style={{ width: `${MAPPING_DRAWER_WIDTH_PX}px` }}
     >
-      <DrawerHeader row={effectiveRow} titleId={titleId} onClose={onClose} />
+      <DrawerHeader
+        row={effectiveRow}
+        titleId={titleId}
+        onClose={maybeRequestClose}
+      />
       <DrawerSubheader row={effectiveRow} />
-      <DrawerBody row={effectiveRow} />
+      <DrawerBody
+        row={effectiveRow}
+        isFormActive={isFormActive}
+        formRef={formRef}
+        projectId={projectId}
+        availableSourceFields={availableSourceFields}
+        onFormStateChange={setFormState}
+        onFormCancel={() => setIsFormActive(false)}
+        onFormSaveSuccess={(tfmId) => {
+          setIsFormActive(false)
+          onSaveSuccess?.(tfmId)
+        }}
+      />
       <DrawerFooter
         row={effectiveRow}
         errorMessage={errorMessage}
@@ -446,6 +568,12 @@ export function MappingDrawer({
         optimisticallyApproved={optimisticApprove !== null}
         onApprove={handleApprove}
         onRejectClick={() => setConfirmRejectOpen(true)}
+        isFormActive={isFormActive}
+        formCanSave={formState.canSave}
+        formIsSavePending={formState.isSavePending}
+        onCreateMappingClick={() => setIsFormActive(true)}
+        onFormCancelClick={() => maybeRequestClose()}
+        onFormSaveClick={() => formRef.current?.triggerSave()}
       />
       <RejectConfirmDialog
         open={confirmRejectOpen}
@@ -702,18 +830,64 @@ function AcknowledgedSubheader({ row }: { row: TargetAcknowledgedRow }) {
 //   value_assignment    → ValueAssignmentBody
 //   mapped              → MappedBody (still a placeholder; Gap 8b)
 
-function DrawerBody({ row }: { row: MappingRow }) {
+interface DrawerBodyProps {
+  row: MappingRow
+  /** Phase 4a-2 — whether the manual-create form is active for an unmapped row. */
+  isFormActive: boolean
+  /** Phase 4a-2 — imperative handle the parent uses to drive triggerSave / requestClose. */
+  formRef: React.MutableRefObject<CreateMappingFormHandle | null>
+  /** Phase 4a-2 — required when isFormActive becomes true on an unmapped row. */
+  projectId: string | undefined
+  /** Phase 4a-2 — page-level source fields for the form's picker. */
+  availableSourceFields: SourceFieldWithState[] | undefined
+  onFormStateChange: (state: {
+    isDirty: boolean
+    canSave: boolean
+    isSavePending: boolean
+  }) => void
+  onFormCancel: () => void
+  onFormSaveSuccess: (newTfmId: string) => void
+}
+
+function DrawerBody({
+  row,
+  isFormActive,
+  formRef,
+  projectId,
+  availableSourceFields,
+  onFormStateChange,
+  onFormCancel,
+  onFormSaveSuccess,
+}: DrawerBodyProps) {
   return (
     <div
       data-testid="mapping-drawer-body"
       className="flex-1 overflow-auto px-6 py-5"
     >
-      <BodyContent row={row} />
+      <BodyContent
+        row={row}
+        isFormActive={isFormActive}
+        formRef={formRef}
+        projectId={projectId}
+        availableSourceFields={availableSourceFields}
+        onFormStateChange={onFormStateChange}
+        onFormCancel={onFormCancel}
+        onFormSaveSuccess={onFormSaveSuccess}
+      />
     </div>
   )
 }
 
-function BodyContent({ row }: { row: MappingRow }) {
+function BodyContent({
+  row,
+  isFormActive,
+  formRef,
+  projectId,
+  availableSourceFields,
+  onFormStateChange,
+  onFormCancel,
+  onFormSaveSuccess,
+}: DrawerBodyProps) {
   switch (row.kind) {
     case 'mapped':
       return <MappedBody row={row} />
@@ -722,7 +896,18 @@ function BodyContent({ row }: { row: MappingRow }) {
     case 'target_acknowledged':
       return <AcknowledgedBody row={row} />
     case 'unmapped':
-      return <UnmappedBody row={row} />
+      return (
+        <UnmappedBody
+          row={row}
+          isFormActive={isFormActive}
+          formRef={formRef}
+          projectId={projectId}
+          availableSourceFields={availableSourceFields}
+          onFormStateChange={onFormStateChange}
+          onFormCancel={onFormCancel}
+          onFormSaveSuccess={onFormSaveSuccess}
+        />
+      )
   }
 }
 
@@ -939,18 +1124,65 @@ const UNMAPPED_BODY_PROSE =
  * flows from the legacy Mapping view — has not yet been ported. Until
  * then the redesign drawer points the user to the legacy view.
  */
-function UnmappedBody({ row }: { row: UnmappedRow }) {
+interface UnmappedBodyProps {
+  row: UnmappedRow
+  isFormActive: boolean
+  formRef: React.MutableRefObject<CreateMappingFormHandle | null>
+  projectId: string | undefined
+  availableSourceFields: SourceFieldWithState[] | undefined
+  onFormStateChange: (state: {
+    isDirty: boolean
+    canSave: boolean
+    isSavePending: boolean
+  }) => void
+  onFormCancel: () => void
+  onFormSaveSuccess: (newTfmId: string) => void
+}
+
+function UnmappedBody({
+  row,
+  isFormActive,
+  formRef,
+  projectId,
+  availableSourceFields,
+  onFormStateChange,
+  onFormCancel,
+  onFormSaveSuccess,
+}: UnmappedBodyProps) {
   return (
     <>
       <TargetFieldSection targetField={row.targetField} />
-      <DrawerSection title="Mapping status" testId="drawer-section-mapping-status">
-        <p
-          className="text-sm text-slate-600"
-          data-testid="drawer-unmapped-prose"
+      {isFormActive && projectId ? (
+        <DrawerSection
+          title="Create mapping"
+          testId="drawer-section-create-mapping"
         >
-          {UNMAPPED_BODY_PROSE}
-        </p>
-      </DrawerSection>
+          <CreateMappingForm
+            ref={formRef}
+            projectId={projectId}
+            targetField={{
+              id: row.targetField.id,
+              name: row.targetField.name,
+            }}
+            availableSourceFields={availableSourceFields ?? []}
+            onSaveSuccess={onFormSaveSuccess}
+            onCancel={onFormCancel}
+            onStateChange={onFormStateChange}
+          />
+        </DrawerSection>
+      ) : (
+        <DrawerSection
+          title="Mapping status"
+          testId="drawer-section-mapping-status"
+        >
+          <p
+            className="text-sm text-slate-600"
+            data-testid="drawer-unmapped-prose"
+          >
+            {UNMAPPED_BODY_PROSE}
+          </p>
+        </DrawerSection>
+      )}
     </>
   )
 }
@@ -1331,6 +1563,13 @@ interface DrawerFooterProps {
   optimisticallyApproved: boolean
   onApprove: () => void
   onRejectClick: () => void
+  /** Phase 4a-2 — manual mapping creation footer mode-switch flags. */
+  isFormActive: boolean
+  formCanSave: boolean
+  formIsSavePending: boolean
+  onCreateMappingClick: () => void
+  onFormCancelClick: () => void
+  onFormSaveClick: () => void
 }
 
 function DrawerFooter({
@@ -1341,11 +1580,13 @@ function DrawerFooter({
   optimisticallyApproved,
   onApprove,
   onRejectClick,
+  isFormActive,
+  formCanSave,
+  formIsSavePending,
+  onCreateMappingClick,
+  onFormCancelClick,
+  onFormSaveClick,
 }: DrawerFooterProps) {
-  if (row.kind === 'unmapped') {
-    return null
-  }
-
   return (
     <footer
       data-testid="mapping-drawer-footer"
@@ -1364,7 +1605,16 @@ function DrawerFooter({
           <span className="leading-snug">{errorMessage}</span>
         </div>
       ) : null}
-      {row.kind === 'target_acknowledged' ? (
+      {row.kind === 'unmapped' ? (
+        <UnmappedFooterButtons
+          isFormActive={isFormActive}
+          formCanSave={formCanSave}
+          formIsSavePending={formIsSavePending}
+          onCreateMappingClick={onCreateMappingClick}
+          onFormCancelClick={onFormCancelClick}
+          onFormSaveClick={onFormSaveClick}
+        />
+      ) : row.kind === 'target_acknowledged' ? (
         <AcknowledgedFooterButtons />
       ) : (
         <ApproveRejectButtons
@@ -1377,6 +1627,100 @@ function DrawerFooter({
         />
       )}
     </footer>
+  )
+}
+
+// ── Unmapped footer (Phase 4a-2) ────────────────────────────────────────────
+//
+// Mode-switches between two visual states:
+//   • Inactive — single [Create mapping] button on the right.
+//   • Active   — [Cancel] [Save mapping] pair on the right.
+//
+// The Save button is disabled until the form publishes `canSave=true`
+// (founder decision §4-OQ-1: dirty-check is redundant once selection
+// length is the gate). Both buttons are disabled while the save is
+// inflight to prevent duplicate submissions.
+
+interface UnmappedFooterButtonsProps {
+  isFormActive: boolean
+  formCanSave: boolean
+  formIsSavePending: boolean
+  onCreateMappingClick: () => void
+  onFormCancelClick: () => void
+  onFormSaveClick: () => void
+}
+
+function UnmappedFooterButtons({
+  isFormActive,
+  formCanSave,
+  formIsSavePending,
+  onCreateMappingClick,
+  onFormCancelClick,
+  onFormSaveClick,
+}: UnmappedFooterButtonsProps) {
+  if (!isFormActive) {
+    return (
+      <div className="flex items-center justify-end gap-2">
+        <button
+          type="button"
+          data-testid="mapping-drawer-create-mapping-button"
+          aria-label="Create mapping"
+          onClick={onCreateMappingClick}
+          className={cn(
+            'inline-flex h-9 items-center justify-center rounded-md border px-3 text-sm font-medium transition-colors',
+            'border-blue-600 bg-blue-600 text-white hover:bg-blue-700',
+            'focus:outline-none focus:ring-2 focus:ring-blue-500/40',
+          )}
+        >
+          Create mapping
+        </button>
+      </div>
+    )
+  }
+  return (
+    <div className="flex items-center justify-end gap-2">
+      <button
+        type="button"
+        data-testid="mapping-drawer-form-cancel-button"
+        aria-label="Cancel mapping creation"
+        onClick={onFormCancelClick}
+        disabled={formIsSavePending}
+        className={cn(
+          'inline-flex h-9 items-center justify-center rounded-md border px-3 text-sm font-medium transition-colors',
+          'border-slate-300 bg-white text-slate-700 hover:bg-slate-50',
+          'focus:outline-none focus:ring-2 focus:ring-slate-500/30',
+          'disabled:cursor-not-allowed disabled:border-slate-200 disabled:bg-slate-50 disabled:text-slate-400',
+        )}
+      >
+        Cancel
+      </button>
+      <button
+        type="button"
+        data-testid="mapping-drawer-form-save-button"
+        aria-label="Save mapping"
+        onClick={onFormSaveClick}
+        disabled={!formCanSave}
+        className={cn(
+          'inline-flex h-9 items-center justify-center gap-1.5 rounded-md border px-3 text-sm font-medium transition-colors',
+          'border-blue-600 bg-blue-600 text-white hover:bg-blue-700',
+          'focus:outline-none focus:ring-2 focus:ring-blue-500/40',
+          'disabled:cursor-not-allowed disabled:border-slate-200 disabled:bg-slate-100 disabled:text-slate-400 disabled:hover:bg-slate-100',
+        )}
+      >
+        {formIsSavePending ? (
+          <>
+            <Loader2
+              aria-hidden="true"
+              className="h-3.5 w-3.5 animate-spin"
+              data-testid="mapping-drawer-form-save-spinner"
+            />
+            <span>Saving…</span>
+          </>
+        ) : (
+          'Save mapping'
+        )}
+      </button>
+    </div>
   )
 }
 

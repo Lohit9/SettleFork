@@ -418,6 +418,31 @@ function MappingBody({
     return initial && initial.length > 0 ? initial : null
   })
 
+  // ── Phase 4a-2 — pendingDrawerRowId sentinel ──────────────────────
+  //
+  // After a successful `createFieldMapping`, we swap the drawer URL
+  // param from `unmapped::<targetFieldId>` to the bare new TFM uuid.
+  // The new id is NOT yet present in `data.rows` until
+  // `router.refresh()` rehydrates the server component below us.
+  // Without a sentinel, the stale-id auto-close effect (line 556-560
+  // pre-Phase-4a-2) would briefly fire `setDrawerRowId(null)` between
+  // the URL swap and the data refresh, causing the drawer to flicker
+  // closed/open on every save.
+  //
+  // `pendingDrawerRowId` is the new TFM id. Two effects co-operate:
+  //   1. Auto-close effect skips when `drawerRowId === pendingDrawerRowId`
+  //      (the sentinel signals "data not yet here, hold the drawer
+  //      open").
+  //   2. A clear effect releases the sentinel as soon as the new row
+  //      appears in `filteredRows` (the natural next render once
+  //      `router.refresh()` rehydrates the server component).
+  //
+  // Founder decision §9-OQ-1 — flicker on every save is unacceptable.
+  // The sentinel ships in 4a-2, not deferred to 4a-5 polish.
+  const [pendingDrawerRowId, setPendingDrawerRowId] = useState<
+    string | null
+  >(null)
+
   // Debounce only the search-param URL write. Other filters write
   // immediately because they cause a single state change per interaction.
   const pendingSearchTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
@@ -500,6 +525,32 @@ function MappingBody({
   //
   // `router.refresh()` re-fetches the server component's data without
   // navigating, so the page rerenders with fresh `MappingsForRedesignResult`.
+  // Phase 4a-2 — successful manual mapping creation.
+  //
+  // The drawer's `CreateMappingForm` invokes this with the new TFM
+  // uuid once `createFieldMapping` resolves. Three things happen in
+  // sequence:
+  //   1. Arm the `pendingDrawerRowId` sentinel so the auto-close
+  //      effect skips the cleanup pass during the URL→refresh window.
+  //   2. Swap `drawerRowId` (and the `?drawer=` URL param) from the
+  //      `unmapped::<targetFieldId>` sentinel to the bare new TFM
+  //      uuid. The drawer body re-mounts naturally on the row.kind
+  //      flip from 'unmapped' to 'mapped' — no explicit choreography
+  //      needed (founder decision §9-OQ-2).
+  //   3. `router.refresh()` rehydrates the server component so the
+  //      new row appears in `data.rows`. The clear-sentinel effect
+  //      then releases the sentinel and the steady-state contract
+  //      resumes.
+  const handleDrawerSaveSuccess = useCallback(
+    (newTfmId: string) => {
+      setPendingDrawerRowId(newTfmId)
+      setDrawerRowId(newTfmId)
+      writeUrl(filters, newTfmId)
+      router.refresh()
+    },
+    [router, filters, writeUrl],
+  )
+
   const handleDrawerActionComplete = useCallback(
     (action: 'approve' | 'reject', _rowId: string) => {
       // Phase 3 Gap 11b — clear the sidebar highlight after any
@@ -547,18 +598,80 @@ function MappingBody({
     return filteredRows.find((r) => r.id === drawerRowId) ?? null
   }, [drawerRowId, filteredRows])
 
+  // ── Phase 4a-2 — last-valid row retention during save→refresh ────
+  //
+  // After a successful manual mapping save we swap the URL from
+  // `?drawer=unmapped::tf-X` to `?drawer=<newTfmId>`. The new TFM is
+  // not yet in `data.rows` until `router.refresh()` rehydrates the
+  // server component (a separate React commit). Without retention,
+  // `drawerRow` becomes null in that intermediate window and
+  // `<MappingDrawer>` unmounts, causing a visible flicker.
+  //
+  // `lastValidDrawerRowRef` remembers the most recently rendered row
+  // identity so we can keep the drawer mounted with its content until
+  // the new mapped row materializes. The body re-mounts naturally on
+  // the row.kind 'unmapped' → 'mapped' flip (founder decision §9-OQ-2).
+  const lastValidDrawerRowRef = useRef<MappingRow | null>(null)
+  useEffect(() => {
+    if (drawerRow !== null) {
+      lastValidDrawerRowRef.current = drawerRow
+    }
+  }, [drawerRow])
+
+  // Effective row passed to `<MappingDrawer>`. Falls back to the last
+  // valid row only inside the pending sentinel window — never used as
+  // a generic fallback (which would mask filter-hide and stale-URL
+  // bugs).
+  const effectiveDrawerRow = useMemo<MappingRow | null>(() => {
+    if (drawerRow !== null) return drawerRow
+    if (
+      pendingDrawerRowId !== null &&
+      drawerRowId === pendingDrawerRowId &&
+      lastValidDrawerRowRef.current !== null
+    ) {
+      return lastValidDrawerRowRef.current
+    }
+    return null
+  }, [drawerRow, drawerRowId, pendingDrawerRowId])
+
   // Phase 3 Gap 7 — auto-close + URL clean-up when the open drawer row
   // is no longer reachable. Two trigger paths:
   //   1. Filter change hides the row (e.g. Search "xyz_never_matches")
   //   2. Stale URL on mount (`?drawer=<id>` for an id absent from data)
   // Both flow through this effect so the URL stays consistent with
   // visible state at all times.
+  //
+  // Phase 4a-2 amendment: skip auto-close while the
+  // `pendingDrawerRowId` sentinel matches the current `drawerRowId`.
+  // The sentinel signals "we just swapped the URL to a new TFM id;
+  // data refresh is in flight". Letting the auto-close fire here
+  // would close the drawer between URL swap and data rehydrate,
+  // producing a visible flicker on every save.
   useEffect(() => {
-    if (drawerRowId !== null && drawerRow === null) {
-      setDrawerRowId(null)
-      writeUrl(filters, null)
+    if (drawerRowId === null) return
+    if (drawerRow !== null) return
+    if (
+      pendingDrawerRowId !== null &&
+      drawerRowId === pendingDrawerRowId
+    ) {
+      return
     }
-  }, [drawerRowId, drawerRow, filters, writeUrl])
+    setDrawerRowId(null)
+    writeUrl(filters, null)
+  }, [drawerRowId, drawerRow, filters, writeUrl, pendingDrawerRowId])
+
+  // Phase 4a-2 — clear the sentinel as soon as the awaited row
+  // materializes in `filteredRows`. This is the natural completion
+  // signal: `router.refresh()` rehydrates the server component, the
+  // new TFM lands in `data.rows`, `drawerRow` becomes non-null, and
+  // we release the sentinel so subsequent navigation honors the
+  // standard auto-close contract again.
+  useEffect(() => {
+    if (pendingDrawerRowId === null) return
+    if (drawerRow !== null && drawerRow.id === pendingDrawerRowId) {
+      setPendingDrawerRowId(null)
+    }
+  }, [drawerRow, pendingDrawerRowId])
 
   /**
    * Group filtered rows by target-table id WHILE preserving server order.
@@ -668,10 +781,13 @@ function MappingBody({
         component does not have to know about its DOM neighbourhood.
       */}
       <MappingDrawer
-        row={drawerRow}
-        isOpen={drawerRow !== null}
+        row={effectiveDrawerRow}
+        isOpen={effectiveDrawerRow !== null}
         onClose={handleDrawerClose}
         onActionComplete={handleDrawerActionComplete}
+        projectId={projectId}
+        availableSourceFields={data.sourceFields}
+        onSaveSuccess={handleDrawerSaveSuccess}
       />
     </>
   )

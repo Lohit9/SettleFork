@@ -1,13 +1,27 @@
 # Phase 4 plan — mutation completeness
 
-**Status:** planning (no implementation). Created 2026-04-25.
+**Status:** implementation in progress (Phase 4a underway). Created 2026-04-25.
 **Predecessor:** Phase 3 closed at `b900538` on `main`. The
 redesign UI is feature-flag gated (`projects.use_mapping_redesign`)
 and currently active only on Heritage Core in production.
 
+### Implementation status
+
+| Sub-phase | Scope | Status |
+|---|---|---|
+| Pre-prep | `ActionType` enum widening for new mapping log codes | ✅ shipped 2026-04-25 |
+| 4a-1 | `createFieldMapping` + `suggestMappingForTarget` server wrappers (same-table only) | ✅ shipped 2026-04-25 |
+| 4a-2 | `CreateMappingForm` + drawer integration (W1, manual mapping creation, same-table only) | ✅ shipped 2026-04-25 |
+| 4a-3 | Cross-table picker + cross-table create flow (W1 cross-table) | ⏳ pending |
+| 4a-4 | "Draft discarded" toast on row switch + UX polish | ⏳ pending |
+| 4a-5 | W6 — AI Suggest per-row in W1's form | ⏳ pending |
+| 4b | W2 + W3 + W4 (edit sources, combination, un-acknowledge) | ⏳ pending |
+| 4c | W5 (bulk operations) | ⏳ pending |
+
 This document is the design artefact we work through together
-before firing the first Phase 4 implementation prompt. Decisions
-in §10 are open until founder lock; nothing here is committed.
+before firing each Phase 4 implementation prompt. Decisions
+in §10 were locked at the start of 4a-1; nothing further locks
+without explicit founder approval.
 
 > **Cross-references:**
 > - Design contract: `docs/features/phase-3-gap-4a-design.md`

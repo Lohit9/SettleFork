@@ -29,13 +29,14 @@ import type {
 // ── Mocks (hoisted) ──────────────────────────────────────────────────────────
 
 const replaceMock = vi.fn()
+const refreshMock = vi.fn()
 let currentSearch = ''
 
 vi.mock('next/navigation', () => ({
   useRouter: () => ({
     push: vi.fn(),
     replace: replaceMock,
-    refresh: vi.fn(),
+    refresh: refreshMock,
     back: vi.fn(),
     forward: vi.fn(),
     prefetch: vi.fn(),
@@ -60,9 +61,17 @@ vi.mock('@/components/app/PageHeader', () => ({
 // We don't exercise the action surface here (this suite is about
 // filter/group rendering); stub them to no-ops to keep the import
 // chain cheap and side-effect-free.
+// Phase 4a-2 amendment: `CreateMappingForm` (reachable via the
+// drawer's unmapped body) imports `createFieldMapping` from the
+// same module — extend the mock so the import chain stays
+// side-effect-free even when these tests render an unmapped row.
+const { createFieldMappingMock } = vi.hoisted(() => ({
+  createFieldMappingMock: vi.fn(),
+}))
 vi.mock('@/lib/actions/mappings-for-redesign', () => ({
   approveFieldMapping: vi.fn().mockResolvedValue({ success: true }),
   rejectFieldMapping: vi.fn().mockResolvedValue({ success: true }),
+  createFieldMapping: (...args: unknown[]) => createFieldMappingMock(...args),
 }))
 
 // ── Fixtures ────────────────────────────────────────────────────────────────
@@ -327,6 +336,12 @@ function renderRedesign(
 
 beforeEach(() => {
   replaceMock.mockClear()
+  refreshMock.mockClear()
+  createFieldMappingMock.mockReset()
+  createFieldMappingMock.mockResolvedValue({
+    success: true,
+    tfmId: 'tfm-new',
+  })
   currentSearch = ''
 })
 
@@ -1209,5 +1224,193 @@ describe('MappingRedesignContent — Gap 13 Unmapped counter chip', () => {
     expect(counters.textContent).toContain('Needs Review')
     expect(counters.textContent).not.toContain('Unmapped')
     expect(counters.textContent).not.toContain('Rejected')
+  })
+})
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Phase 4a-2 — manual mapping creation save flow + pendingDrawerRowId sentinel.
+// ─────────────────────────────────────────────────────────────────────────────
+//
+// Verifies the page-level wiring introduced in Block E:
+//   • `?drawer=unmapped::<targetFieldId>` opens an unmapped drawer
+//     and the new [Create mapping] footer button is visible.
+//   • Successful save fires `createFieldMapping`, swaps the URL from
+//     `?drawer=unmapped::tf-X` → `?drawer=tfm-new`, and calls
+//     `router.refresh()`. The drawer body remains mounted in the
+//     intermediate window.
+//   • The `pendingDrawerRowId` sentinel keeps the drawer mounted
+//     even when the new TFM uuid is not yet present in `data.rows`
+//     (the auto-close-on-stale-id effect must NOT fire).
+//   • Once the parent re-renders with new data containing the TFM,
+//     the sentinel releases and the drawer body now shows the
+//     Rule 1 mapped view.
+
+function buildDataWithUnmapped(): MappingsForRedesignResult {
+  const base = buildData()
+  const unmappedRow: MappingRow = {
+    kind: 'unmapped',
+    id: 'unmapped::tf-unmapped',
+    targetField: targetField({
+      id: 'tf-unmapped',
+      name: 'phone_number',
+      targetTable: { id: accountsTable.id, name: accountsTable.name },
+      ordinalPosition: 99,
+    }),
+    confidence: null,
+    status: 'unmapped',
+    hasTransformation: false,
+    transformationStatus: null,
+  }
+  return {
+    ...base,
+    rows: [...base.rows, unmappedRow],
+    counts: { ...base.counts, unmapped: 1 },
+  }
+}
+
+describe('MappingRedesignContent Phase 4a-2 — unmapped drawer surfaces [Create mapping]', () => {
+  it('renders the [Create mapping] button when an unmapped row is open via URL', () => {
+    currentSearch = 'drawer=unmapped::tf-unmapped'
+    render(
+      <MappingRedesignContent
+        projectId="p1"
+        projectName="Heritage Core"
+        initialRedesignData={buildDataWithUnmapped()}
+      />,
+    )
+    expect(screen.getByTestId('mapping-drawer')).toBeInTheDocument()
+    expect(
+      screen.getByTestId('mapping-drawer-create-mapping-button'),
+    ).toBeInTheDocument()
+  })
+})
+
+describe('MappingRedesignContent Phase 4a-2 — save flow swaps URL + refreshes', () => {
+  it('successful createFieldMapping replaces URL with the new TFM id and calls router.refresh', async () => {
+    createFieldMappingMock.mockResolvedValue({
+      success: true,
+      tfmId: 'tfm-brand-new',
+    })
+    currentSearch = 'drawer=unmapped::tf-unmapped'
+    render(
+      <MappingRedesignContent
+        projectId="p1"
+        projectName="Heritage Core"
+        initialRedesignData={buildDataWithUnmapped()}
+      />,
+    )
+    fireEvent.click(
+      screen.getByTestId('mapping-drawer-create-mapping-button'),
+    )
+    const fieldButtons = screen.getAllByTestId('source-field-picker-field')
+    fireEvent.click(fieldButtons[0])
+    fireEvent.click(screen.getByTestId('mapping-drawer-form-save-button'))
+    await act(async () => {
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+    expect(createFieldMappingMock).toHaveBeenCalledTimes(1)
+    // URL was updated with the new TFM uuid (the bare uuid, not the
+    // `unmapped::` sentinel).
+    const calls = replaceMock.mock.calls.map((c) => c[0] as string)
+    expect(calls.some((u) => u.includes('drawer=tfm-brand-new'))).toBe(true)
+    expect(refreshMock).toHaveBeenCalledTimes(1)
+  })
+
+  it('keeps the drawer mounted while the new TFM id is not yet in data.rows (sentinel guard)', async () => {
+    createFieldMappingMock.mockResolvedValue({
+      success: true,
+      tfmId: 'tfm-pending',
+    })
+    currentSearch = 'drawer=unmapped::tf-unmapped'
+    render(
+      <MappingRedesignContent
+        projectId="p1"
+        projectName="Heritage Core"
+        initialRedesignData={buildDataWithUnmapped()}
+      />,
+    )
+    fireEvent.click(
+      screen.getByTestId('mapping-drawer-create-mapping-button'),
+    )
+    fireEvent.click(screen.getAllByTestId('source-field-picker-field')[0])
+    fireEvent.click(screen.getByTestId('mapping-drawer-form-save-button'))
+    await act(async () => {
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+    // Founder decision §9-OQ-1: the drawer must NOT flicker closed in
+    // the URL→refresh window. The TFM uuid is now in the URL but the
+    // server data has not been re-fetched (refreshMock was a no-op),
+    // so `drawerRow` is null. Without the sentinel, the auto-close
+    // effect would unmount the drawer here. With the sentinel, the
+    // drawer stays open.
+    expect(screen.getByTestId('mapping-drawer')).toBeInTheDocument()
+  })
+
+  it('releases the sentinel and shows the new mapped row once data refresh lands', async () => {
+    createFieldMappingMock.mockResolvedValue({
+      success: true,
+      tfmId: 'tfm-after-refresh',
+    })
+    currentSearch = 'drawer=unmapped::tf-unmapped'
+    const initialData = buildDataWithUnmapped()
+    const { rerender } = render(
+      <MappingRedesignContent
+        projectId="p1"
+        projectName="Heritage Core"
+        initialRedesignData={initialData}
+      />,
+    )
+    fireEvent.click(
+      screen.getByTestId('mapping-drawer-create-mapping-button'),
+    )
+    fireEvent.click(screen.getAllByTestId('source-field-picker-field')[0])
+    fireEvent.click(screen.getByTestId('mapping-drawer-form-save-button'))
+    await act(async () => {
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+    // Simulate `router.refresh()` rehydration: the parent receives
+    // new data where the unmapped row has been replaced by a mapped
+    // row with the new TFM uuid.
+    const refreshedRows: MappingRow[] = initialData.rows
+      .filter((r) => r.id !== 'unmapped::tf-unmapped')
+      .concat([
+        mapped({
+          id: 'tfm-after-refresh',
+          targetField: targetField({
+            id: 'tf-unmapped',
+            name: 'phone_number',
+            targetTable: { id: accountsTable.id, name: accountsTable.name },
+            ordinalPosition: 99,
+          }),
+          status: 'needs_review',
+        }),
+      ])
+    rerender(
+      <MappingRedesignContent
+        projectId="p1"
+        projectName="Heritage Core"
+        initialRedesignData={{
+          ...initialData,
+          rows: refreshedRows,
+          counts: { ...initialData.counts, unmapped: 0, needsReview: initialData.counts.needsReview + 1 },
+        }}
+      />,
+    )
+    // Drawer is still open (didn't flicker shut), and now displays
+    // the mapped row's body — Rule 1 (single source) subheader.
+    expect(screen.getByTestId('mapping-drawer')).toBeInTheDocument()
+    expect(
+      screen.getByTestId('mapping-drawer-subheader-rule_1'),
+    ).toBeInTheDocument()
+    // Footer is back to Approve / Reject (no Create mapping).
+    expect(
+      screen.queryByTestId('mapping-drawer-create-mapping-button'),
+    ).toBeNull()
+    expect(
+      screen.getByTestId('mapping-drawer-approve-button'),
+    ).toBeInTheDocument()
   })
 })

@@ -1436,6 +1436,56 @@ The redesign UI today supports two mutations: drawer Approve and drawer Reject (
 
 Phase 4 is gated behind the same `use_mapping_redesign` flag and ships incrementally — each mutation as its own gap, behind the same feature flag, smoke-tested on Heritage Core before flipping.
 
+## Manual mapping creation (Phase 4a-2)
+
+The first mutation surface added under Phase 4. Same-table only — cross-table support arrives in Phase 4a-3 (founder decisions on the 4a investigation, 2026-04-25).
+
+### Affordance
+
+A primary `[Create mapping]` button appears in the drawer footer whenever the open row is `kind: 'unmapped'` (Rule 6). Click → the drawer body morphs from the empty-state prose into an inline `CreateMappingForm`; the footer mode-switches to `[Cancel]` `[Save mapping]`.
+
+### Form layout (top to bottom)
+
+1. **Source field picker** — searchable group→field list reusing the canonical server order. Shows the same field metadata as the sidebar (name, type, mapping status indicator, sample values via hover tooltip). Multi-select; selected fields render as removable chips above the picker. Same-table constraint is enforced live: once a source is picked, the other source-table groups are hidden and a muted footer note reads "Cross-table mappings ship in Phase 4a-3" (founder decision §2-OQ-1).
+2. **Combination strategy** — a radio group surfaces only when 2+ sources are selected. Three radios visible:
+   - `concat_space` (default) — values joined by a single space.
+   - `concat_dash` — values joined by `-`.
+   - `concat_pipe` — values joined by `|`.
+   - Plus a disabled `custom_sql` radio with a `title` attribute educating the user that custom SQL composition arrives later (founder decision §6-OQ-2).
+   The example text inside each radio is dynamic — derived from the actual sample values of the selected sources. Falls back to a canned `"Smith John"` example when samples are empty (founder decision §6-OQ-1).
+3. **Sample preview** — up to 3 sample rows showing what the combined value will look like across the selected sources. `computeSamplePreview` (in `lib/utils/mapping-preview.ts`) is the pure helper; it pads unequal sample arrays and degrades gracefully when every selected source has zero samples.
+
+### Save flow
+
+- `[Save mapping]` is disabled when no source is selected (founder decision §4-OQ-1).
+- Saving routes through the redesign-only wrapper `createFieldMapping` (`lib/actions/mappings-for-redesign.ts`), which delegates to the legacy core mutation but adds:
+  - Same-table guard (returns `VALIDATION` with `errorCode: 'CROSS_TABLE_NOT_YET_SUPPORTED'` for cross-table input)
+  - `findOrCreateTableMapping` so the form does not need to pass `tableMappingId` (founder decision §3-OQ-2)
+  - Permission + maintenance-mode gates inherited from the existing approve/reject wrappers
+- On success, the page-level handler swaps `?drawer=unmapped::<targetFieldId>` to `?drawer=<newTfmId>` and calls `router.refresh()`. The drawer body re-mounts from `UnmappedBody` to `MappedBody` naturally on the row.kind flip (founder decision §9-OQ-2).
+- A `pendingDrawerRowId` sentinel keeps the drawer rendered with the previous row content during the URL→refresh window so the user does not see a flicker (founder decision §9-OQ-1). Released as soon as the new TFM materializes in `data.rows`.
+
+### Error handling
+
+`CreateFieldMappingErrorCode` → user copy is mapped in `CreateMappingForm.tsx`. The `EXISTING_TFM` case (the target field was mapped while the user was editing) renders an inline `[Refresh]` affordance next to the error message; clicking it calls `router.refresh()` and dismisses the form (founder decision §3-OQ-1).
+
+### Close behavior
+
+Four close paths route through a `requestClose()` helper on the form's imperative handle (`useImperativeHandle`):
+
+- `[Cancel]` button
+- `✕` close button in the drawer header
+- Esc key (drawer-level listener)
+- Click outside the drawer
+
+When the form is dirty (any source selected), `requestClose()` opens an inline discard confirmation dialog. `[Discard]` deactivates the form; `[Keep editing]` returns to the form intact. Esc on the dialog dismisses the dialog only — it does not bubble to the drawer's own close path (founder decision §1-OQ-1, enforced by an `[role="alertdialog"]` guard in the drawer's keydown / mousedown listeners).
+
+The fifth path — switching to a different row by clicking another field on the page — is intentionally silent (founder decision §8-OQ-1). A toast informing the user "your draft was discarded" is deferred to Phase 4a-4.
+
+### Custom SQL transitions
+
+The disabled `custom_sql` radio is a deliberate signal that custom-SQL composition is supported by the data model but not the create flow. Editing an existing TFM's combination strategy `from custom_sql` back to a concat will be allowed in a later gap; transitioning `to custom_sql` is blocked from the redesign drawer for the foreseeable future (founder decision on the Phase 4 investigation, 2026-04-25).
+
 ### Phase 5-Cleanup (deferred)
 
 After Phase 4 stabilizes and the canary expands beyond Heritage Core to additional pilot projects (~30 days of stable use), Phase 5-Cleanup retires the legacy code path:
