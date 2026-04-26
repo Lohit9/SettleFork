@@ -3,6 +3,7 @@
 import { useId, useState } from 'react'
 import { cn } from '@/components/ui/utils'
 import { ChevronDown, ChevronRight } from '@/components/icons'
+import { formatConfidencePercent } from '@/lib/utils/confidence-format'
 import type {
   MappedRow,
   MappingRow,
@@ -433,20 +434,9 @@ function ConfidenceCell({ confidence }: { confidence: number | null }) {
   }
   return (
     <span className="text-right text-xs tabular-nums text-slate-500">
-      {formatConfidence(confidence)}
+      {formatConfidencePercent(confidence)}
     </span>
   )
-}
-
-/**
- * 2-decimal precision per Gap 4c spec. Accepts either a 0-100 integer
- * (legacy storage convention) or a 0-1 fraction (defensive — contract
- * documents the former but DB decimals can drift) and renders the 0-100
- * form with 2 decimals. Values >1 are assumed already 0-100.
- */
-function formatConfidence(confidence: number): string {
-  const normalized = confidence > 1 ? confidence : confidence * 100
-  return `${normalized.toFixed(2)}%`
 }
 
 // ─── Target cell (shared across all kinds, with Rule 5 subtitle) ─────────────
@@ -715,7 +705,7 @@ function buildAriaLabel(
   const targetQualified = `${row.targetField.targetTable.name}.${row.targetField.name}`
   const confPhrase =
     row.confidence !== null
-      ? ` at ${formatConfidence(row.confidence)} confidence`
+      ? ` at ${formatConfidencePercent(row.confidence)} confidence`
       : ''
   const statusPhrase = `, ${STATUS_CONFIG[row.status].label.toLowerCase()}`
 

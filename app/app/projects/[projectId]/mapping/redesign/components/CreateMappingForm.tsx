@@ -55,7 +55,9 @@
 
 import {
   forwardRef,
+  useCallback,
   useEffect,
+  useId,
   useImperativeHandle,
   useMemo,
   useRef,
@@ -63,7 +65,8 @@ import {
   useTransition,
 } from 'react'
 import { useRouter } from 'next/navigation'
-import { AlertCircle } from 'lucide-react'
+import { AlertCircle, Loader2 } from 'lucide-react'
+import { ChevronDown, ChevronRight, Sparkles } from '@/components/icons'
 import {
   AlertDialog,
   AlertDialogAction,
@@ -77,13 +80,19 @@ import {
 import { cn } from '@/components/ui/utils'
 import {
   createFieldMapping,
+  suggestMappingForTarget,
   type CreateFieldMappingErrorCode,
   type CreateFieldMappingCombinationType,
+  type SuggestMappingErrorCode,
 } from '@/lib/actions/mappings-for-redesign'
 import {
   computeSamplePreview,
   type SamplePreviewCombinationType,
 } from '@/lib/utils/mapping-preview'
+import {
+  classifyConfidence,
+  formatConfidenceLabel,
+} from '@/lib/utils/confidence-format'
 import type { SourceFieldWithState } from '@/lib/types/mappings-for-redesign'
 import { SourceFieldPicker } from './SourceFieldPicker'
 
@@ -113,6 +122,60 @@ export interface CreateMappingFormSnapshot {
 }
 
 /**
+ * Phase 4a-4b — AI Suggest result shape, mirrors the wrapper's
+ * `SuggestMappingForTargetResult.suggestion` payload. Values are
+ * post-resolution: `sourceFieldIds` are real DB UUIDs, `combinationType`
+ * is narrowed to the form's union (custom_sql is impossible at this
+ * level — wrapper never emits it; the form's `applyLoadedSuggestion`
+ * defends against future drift), `confidence` is integer 0-100, and
+ * `rationale` is ≤ 280 chars.
+ */
+export interface AISuggestion {
+  sourceFieldIds: string[]
+  combinationType: CreateFieldMappingCombinationType
+  confidence: number
+  rationale: string
+}
+
+/**
+ * Phase 4a-4b — error sentinel for client-side network/connectivity
+ * failures (server action throws before returning a `success: false`
+ * result). Distinct from `SuggestMappingErrorCode` which is the
+ * wrapper's structured error union. Both feed into `SUGGEST_ERROR_COPY`
+ * for ErrorBanner copy + affordance dispatch.
+ */
+export type SuggestErrorCode = SuggestMappingErrorCode | 'NETWORK'
+
+/**
+ * Phase 4a-4b — discriminated union for the AI Suggest lifecycle. The
+ * `pending` variant carries its own `AbortController` so the imperative
+ * cancel path (footer [Cancel suggestion] button) can read the live
+ * controller without an extra ref dereference. A second
+ * `prePendingSnapshotRef` outside this union captures restore state
+ * (Flow B per locked §7-OQ-1).
+ */
+export type SuggestState =
+  | { kind: 'idle' }
+  | { kind: 'pending'; abortController: AbortController }
+  | { kind: 'loaded'; suggestion: AISuggestion }
+  | { kind: 'error'; code: SuggestErrorCode; message: string }
+
+/**
+ * Phase 4a-4b — pre-pending field snapshot used by `cancelSuggest` to
+ * restore the form to its state before the user invoked Suggest. Held
+ * in a ref (not state) since it's read-once in the cancel path and
+ * doesn't need to drive any rendering. Captures `suggestState` too so
+ * cancelling a re-suggest restores to the prior 'loaded' or 'error'
+ * state, not just 'idle'.
+ */
+interface PreSuggestSnapshot {
+  selectedIds: string[]
+  combinationType: CreateFieldMappingCombinationType
+  joinAnnotations: Record<string, string>
+  suggestState: SuggestState
+}
+
+/**
  * Imperative handle exposed by `CreateMappingForm` to its parent
  * (`MappingDrawer`). The parent owns the visible footer buttons; the
  * handle lets it dispatch into the form without lifting the form's
@@ -131,6 +194,11 @@ export interface CreateMappingFormHandle {
    * the form invokes `onCancel()` immediately.
    */
   requestClose: () => void
+  /**
+   * Phase 4a-4b — abort the in-flight AI Suggest invocation and restore
+   * the form's pre-pending snapshot. No-op when not pending.
+   */
+  cancelSuggest: () => void
 }
 
 export interface CreateMappingFormProps {
@@ -187,6 +255,44 @@ export interface CreateMappingFormProps {
   restoreFormState?: CreateMappingFormSnapshot | null
   /** See `restoreFormState`. */
   onRestoreConsumed?: () => void
+  /**
+   * Phase 4a-4b — when true on mount the form auto-fires AI Suggest
+   * once. Used by Flow A (user clicks [Suggest with AI] from the
+   * Rule 6 footer): the drawer flips `isFormActive=true` AND sets this
+   * prop. The form consumes it in a one-shot mount-time effect and
+   * immediately invokes `onAutoSuggestConsumed` so the parent can clear
+   * the flag (matches the `restoreFormState` consume pattern).
+   */
+  autoSuggest?: boolean
+  /** See `autoSuggest`. */
+  onAutoSuggestConsumed?: () => void
+  /**
+   * Phase 4a-4b — strict-mode-resistant consumption guard owned by the
+   * parent (drawer). When the form's mount-time `autoSuggest` effect
+   * fires, it calls this with the current `targetField.id` and only
+   * proceeds if the return is `true`.
+   *
+   * Why parent-owned: in Next.js 14 dev (`reactStrictMode: true` by
+   * default for app router), every mount runs the effect twice (mount
+   * → cleanup → mount-again). A `useRef(false)` *inside* the form
+   * resets to `false` on the second mount, so the guard fails and
+   * `invokeSuggest` fires twice — issuing two server-side LLM calls
+   * per click. The drawer doesn't remount during the form's strict-
+   * mode cycle, so a `Set<string>` owned by the drawer survives the
+   * cycle and short-circuits the second mount.
+   *
+   * Optional for tests that exercise mount-time behavior without
+   * needing the cross-mount guarantee. Production path always passes
+   * a real implementation.
+   */
+  tryConsumeAutoSuggest?: (targetFieldId: string) => boolean
+  /**
+   * Phase 4a-4b — fired whenever the AI Suggest lifecycle phase changes.
+   * The drawer reads `isSuggestPending` to swap its footer to the
+   * single [Cancel suggestion] button. Other phases use the existing
+   * Cancel + Save pair.
+   */
+  onSuggestStateChange?: (state: { isSuggestPending: boolean }) => void
 }
 
 // ── Internal types ───────────────────────────────────────────────────────────
@@ -233,6 +339,62 @@ const ERROR_CODE_COPY: Record<CreateFieldMappingErrorCode, string> = {
 const EXISTING_TFM_COPY =
   'This target field was mapped while you were editing. Refresh to see the current state.'
 
+// ── AI Suggest error copy + affordance map (Phase 4a-4b) ─────────────────────
+//
+// Maps each `SuggestErrorCode` to its display copy and the affordance the
+// inline ErrorBanner should offer. Three affordance shapes:
+//
+//   • 'try-again' — re-invokes Suggest. Shown for retryable errors
+//     (AI_INVALID_RESPONSE, INTERNAL, NETWORK).
+//   • 'refresh'   — calls `router.refresh()` and dismisses the form.
+//     Mirrors the existing EXISTING_TFM affordance from 4a-2.
+//   • 'none'      — non-retryable. PERMISSION_DENIED is permission-
+//     scoped (no retry will help). RATE_LIMITED is timed-out (the
+//     pill becomes disabled with the wait-time tooltip per §7c — the
+//     banner is the persistent textual explanation; retry button
+//     would feel spammy).
+//
+// `RATE_LIMITED` displays the wrapper's verbatim error message (which
+// includes the wait time, e.g. "AI rate limit reached (100/hour). Try
+// again in 47 minutes.") rather than a hardcoded string — the wait
+// duration is dynamic.
+type SuggestErrorAffordance = 'try-again' | 'refresh' | 'none'
+
+interface SuggestErrorRender {
+  /** Copy to display, or 'verbatim' to use the wrapper's `result.error`. */
+  copy: string | 'verbatim'
+  affordance: SuggestErrorAffordance
+}
+
+const SUGGEST_ERROR_COPY: Record<SuggestErrorCode, SuggestErrorRender> = {
+  PERMISSION_DENIED: {
+    copy: "You don't have permission to use AI Suggest on this project.",
+    affordance: 'none',
+  },
+  NOT_FOUND: {
+    copy: "Couldn't find the target field. Please refresh and try again.",
+    affordance: 'refresh',
+  },
+  RATE_LIMITED: {
+    copy: 'verbatim',
+    affordance: 'none',
+  },
+  AI_INVALID_RESPONSE: {
+    copy:
+      "The AI suggestion didn't match the expected format. Try again or create the mapping manually.",
+    affordance: 'try-again',
+  },
+  INTERNAL: {
+    copy: "Couldn't get an AI suggestion. Try again.",
+    affordance: 'try-again',
+  },
+  NETWORK: {
+    copy:
+      "Couldn't reach the AI service. Check your connection and try again.",
+    affordance: 'try-again',
+  },
+}
+
 // ── Component ────────────────────────────────────────────────────────────────
 
 export const CreateMappingForm = forwardRef<
@@ -248,12 +410,17 @@ export const CreateMappingForm = forwardRef<
     onStateChange,
     restoreFormState,
     onRestoreConsumed,
+    autoSuggest = false,
+    onAutoSuggestConsumed,
+    tryConsumeAutoSuggest,
+    onSuggestStateChange,
   },
   ref,
 ) {
   const router = useRouter()
+  const whyPanelDomId = useId()
   const [selectedIds, setSelectedIds] = useState<string[]>([])
-  const [combinationType, setCombinationType] =
+  const [combinationType, setCombinationTypeRaw] =
     useState<CreateFieldMappingCombinationType>(DEFAULT_COMBINATION_TYPE)
   const [isSavePending, startSaveTransition] = useTransition()
   const [errorMessage, setErrorMessage] = useState<string | null>(null)
@@ -261,6 +428,75 @@ export const CreateMappingForm = forwardRef<
     null,
   )
   const [confirmDiscardOpen, setConfirmDiscardOpen] = useState(false)
+
+  // ── Phase 4a-4b — AI Suggest state ─────────────────────────────
+  //
+  // `suggestState`: discriminated union driving the AI Suggest UI
+  //   (idle pill → pending spinner → loaded pill+rationale → error
+  //   banner+pill).
+  // `suggestErrorCode`: typed error sentinel separate from the
+  //   message — used by the inline ErrorBanner to dispatch on
+  //   affordance (try-again vs refresh vs none).
+  // `userEditedAfterSuggest`: orthogonal flag (lives outside the
+  //   discriminated union). Flips true on any manual selection /
+  //   combination / annotation change while a suggestion is loaded.
+  //   Used by the replace-warning gate to differentiate "AI's own
+  //   output" from "user has invested manual effort on top of AI
+  //   output".
+  // `suggestRateLimited`: persists past `kind` transitions for the
+  //   form session. Disables the in-form pill with a tooltip.
+  //   Cleared only on form unmount.
+  // `originalSuggestedIds`: snapshot of the most recent suggestion's
+  //   `sourceFieldIds`. Used at save time for laundering prevention:
+  //   `aiSuggested=true` is preserved only when at least one
+  //   originally-suggested source survives in the final selection.
+  //   Set by `applyLoadedSuggestion`; survives manual edits.
+  // `whyExpanded`: controls the Why? collapsible. Default collapsed
+  //   per locked §5-OQ-1.
+  // `replaceWarningOpen`: controls the replace-AI-suggestion variant
+  //   of `DiscardChangesDialog`. Distinct from `confirmDiscardOpen`
+  //   which is the cancel-with-dirty-form path.
+  const [suggestState, setSuggestState] = useState<SuggestState>({
+    kind: 'idle',
+  })
+  const [userEditedAfterSuggest, setUserEditedAfterSuggest] = useState(false)
+  const [suggestRateLimited, setSuggestRateLimited] = useState(false)
+  const [originalSuggestedIds, setOriginalSuggestedIds] = useState<
+    string[] | null
+  >(null)
+  const [whyExpanded, setWhyExpanded] = useState(false)
+  const [replaceWarningOpen, setReplaceWarningOpen] = useState(false)
+
+  // Latest in-flight AbortController (per locked §7-OQ-2: abort prior +
+  // fire new). Distinct from the one inside `SuggestState.pending`
+  // because we need a stable reference outside the discriminated union
+  // for the unmount cleanup effect, and because race resolution must
+  // abort even when the prior state was already replaced (e.g. fast
+  // pending → loaded → pending sequence).
+  const suggestAbortRef = useRef<AbortController | null>(null)
+
+  // Pre-pending field snapshot for cancel restoration (Flow B per
+  // locked §7-OQ-1). Single-level snapshot (overwritten on every new
+  // invokeSuggest) per locked §3-OQ-1. Stored in a ref since it's
+  // read once in the cancel path and doesn't drive any rendering.
+  const prePendingSnapshotRef = useRef<PreSuggestSnapshot | null>(null)
+
+  // Phase 4a-4b — see `tryConsumeAutoSuggest` prop docs. The
+  // consumption guard lives in the parent so it survives the form's
+  // strict-mode unmount/remount cycle in dev. No form-local guard is
+  // needed (and would in fact be incorrect — a `useRef(false)` would
+  // reset on the strict-mode remount and admit a second invocation).
+
+  // Wraps the raw combinationType setter so user manual selection of a
+  // different combination flips `userEditedAfterSuggest` while a
+  // suggestion is loaded. Pass-through otherwise.
+  const setCombinationType = useCallback(
+    (next: CreateFieldMappingCombinationType) => {
+      setCombinationTypeRaw(next)
+      setUserEditedAfterSuggest(true)
+    },
+    [],
+  )
 
   // ── Cross-table disambiguation state (Phase 4a-3) ─────────────
   // `ambiguousCandidates`: server-supplied feedback keyed by joined
@@ -447,14 +683,23 @@ export const CreateMappingForm = forwardRef<
   // ── Selection / combination handlers ─────────────────────────────
   const handleSelectedChange = (next: string[]) => {
     setSelectedIds(next)
+    setUserEditedAfterSuggest(true)
     if (errorMessage !== null) {
       setErrorMessage(null)
       setErrorCode(null)
+    }
+    // Per locked §7-OQ-2 — selection change is the implicit "user is
+    // back in the saddle" signal that clears any AI Suggest error
+    // banner left over from a previous failed invocation. The pill's
+    // RATE_LIMITED disabled state is the persistent affordance.
+    if (suggestState.kind === 'error') {
+      setSuggestState({ kind: 'idle' })
     }
   }
 
   const handleAnnotationChange = (joinedTableId: string, fkName: string) => {
     setJoinAnnotations((prev) => ({ ...prev, [joinedTableId]: fkName }))
+    setUserEditedAfterSuggest(true)
     setEditingResolvedTableIds((prev) => {
       if (!prev.has(joinedTableId)) return prev
       const next = new Set(prev)
@@ -472,12 +717,342 @@ export const CreateMappingForm = forwardRef<
     })
   }
 
+  // ── Phase 4a-4b — AI Suggest invocation ─────────────────────────
+  //
+  // `invokeSuggest` is the single entry point for both Flow A (auto-
+  // trigger from Rule 6 footer) and Flow B (in-form pill click). It
+  // handles race resolution (abort prior + fire new per locked
+  // §7-OQ-2), captures the pre-pending snapshot for cancel restore,
+  // and dispatches the wrapper result into either `applyLoadedSuggestion`
+  // (success) or `setSuggestState({ kind: 'error', ... })` (failure).
+  //
+  // The wrapper does NOT accept an AbortSignal (server actions in
+  // Next 14 don't propagate signals — see investigation §8 / locked
+  // §7-OQ-2). The AbortController here is purely a CLIENT-SIDE
+  // discard mechanism: the LLM call completes server-side regardless;
+  // we ignore the late result via `signal.aborted` checks after the
+  // await.
+  const invokeSuggest = useCallback(async () => {
+    // Race resolution — drop any prior pending controller before
+    // arming a new one. Reads `current` + replaces in one step.
+    suggestAbortRef.current?.abort()
+    const controller = new AbortController()
+    suggestAbortRef.current = controller
+
+    // Capture pre-pending snapshot for cancel restoration. For Flow A
+    // (mounted form, no prior selection), this snapshot is empty/idle —
+    // restoring it on cancel yields a clean form ready for manual
+    // entry, which is the correct Flow A cancel UX. For Flow B (in-
+    // form pill click on top of a prior loaded/error/manual state),
+    // the snapshot captures whatever the user had so cancel feels
+    // like an undo.
+    prePendingSnapshotRef.current = {
+      selectedIds: [...selectedIds],
+      combinationType,
+      joinAnnotations: { ...joinAnnotations },
+      // Note: capture suggestState BEFORE we replace it below. This
+      // is read-only access — we're not mutating the union variant.
+      suggestState,
+    }
+
+    setSuggestState({ kind: 'pending', abortController: controller })
+    // Clear any prior ErrorBanner content so the pending state shows
+    // a clean "Suggesting..." surface. The createFieldMapping error
+    // banner shares the same surface — clear it too.
+    setErrorMessage(null)
+    setErrorCode(null)
+
+    try {
+      const result = await suggestMappingForTarget({
+        projectId,
+        targetFieldId: targetField.id,
+      })
+      // Race guard: if the user cancelled (or fired a new suggest)
+      // while we awaited, drop this result. The newer invocation
+      // owns the suggestState now.
+      if (controller.signal.aborted) return
+      if (!result.success) {
+        const render = SUGGEST_ERROR_COPY[result.errorCode]
+        const msg =
+          render.copy === 'verbatim' ? result.error : render.copy
+        setSuggestState({
+          kind: 'error',
+          code: result.errorCode,
+          message: msg,
+        })
+        if (result.errorCode === 'RATE_LIMITED') {
+          setSuggestRateLimited(true)
+        }
+        if (typeof console !== 'undefined') {
+          console.error(
+            '[CreateMappingForm] suggestMappingForTarget failed:',
+            result,
+          )
+        }
+        return
+      }
+      applyLoadedSuggestion(result.suggestion)
+    } catch (err) {
+      // The server action threw — typically network failure. Wrap as
+      // the NETWORK sentinel so the ErrorBanner gets the right copy +
+      // affordance.
+      if (controller.signal.aborted) return
+      const networkRender = SUGGEST_ERROR_COPY.NETWORK
+      setSuggestState({
+        kind: 'error',
+        code: 'NETWORK',
+        message:
+          networkRender.copy === 'verbatim'
+            ? 'Network error'
+            : networkRender.copy,
+      })
+      if (typeof console !== 'undefined') {
+        console.error('[CreateMappingForm] suggestMappingForTarget threw:', err)
+      }
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [
+    projectId,
+    targetField.id,
+    selectedIds,
+    combinationType,
+    joinAnnotations,
+    suggestState,
+  ])
+
+  // ── Apply a loaded suggestion to the form ──────────────────────
+  //
+  // Pre-fill `selectedIds` + `combinationType` from the wrapper's
+  // suggestion payload. Three defenses applied here:
+  //
+  //   1. Filter `sourceFieldIds` against `availableSourceFields`. If a
+  //      stale prop dropped some ids (rare — this prop comes from the
+  //      same DB read that fed the wrapper, but a sub-second
+  //      `router.refresh()` window could miss them), narrow silently.
+  //      If the filter empties the list, surface as
+  //      `AI_INVALID_RESPONSE` so the user retries (matches the
+  //      wrapper's own zero-resolution branch).
+  //
+  //   2. Defensive `custom_sql` narrowing. The wrapper guarantees one
+  //      of `'single' | 'concat_space' | 'concat_comma'`, but if a
+  //      future drift lifts the narrowing we want a clear error rather
+  //      than silently corrupting the form's combination state.
+  //
+  //   3. Combination narrowing on filter loss. If the filter dropped
+  //      sources to 1 (was multi), force `combinationType = 'single'`
+  //      so the form's invariant (combinationType === 'single' iff
+  //      selectedIds.length === 1) holds.
+  //
+  // On success: snapshot original suggested ids for laundering
+  // prevention at save time, reset `userEditedAfterSuggest` to false,
+  // and clear any error banner.
+  function applyLoadedSuggestion(s: AISuggestion) {
+    // Defense 2 — narrow against future custom_sql drift.
+    if ((s.combinationType as string) === 'custom_sql') {
+      setSuggestState({
+        kind: 'error',
+        code: 'AI_INVALID_RESPONSE',
+        message:
+          (SUGGEST_ERROR_COPY.AI_INVALID_RESPONSE.copy as string),
+      })
+      return
+    }
+
+    // Defense 1 — filter to ids actually present in availableSourceFields.
+    const presentIds = new Set(availableSourceFields.map((f) => f.id))
+    const validIds = s.sourceFieldIds.filter((id) => presentIds.has(id))
+    if (validIds.length === 0) {
+      setSuggestState({
+        kind: 'error',
+        code: 'AI_INVALID_RESPONSE',
+        message:
+          (SUGGEST_ERROR_COPY.AI_INVALID_RESPONSE.copy as string),
+      })
+      return
+    }
+
+    // Defense 3 — narrow combination on filter loss.
+    const narrowedCombination: CreateFieldMappingCombinationType =
+      validIds.length === 1 ? 'single' : s.combinationType
+
+    setSelectedIds(validIds)
+    setCombinationTypeRaw(narrowedCombination)
+    // Setting suggestState second so any consumer reading both fields
+    // in the same render observes consistent {selectedIds, suggestion}.
+    setSuggestState({
+      kind: 'loaded',
+      suggestion: { ...s, sourceFieldIds: validIds, combinationType: narrowedCombination },
+    })
+    setOriginalSuggestedIds(validIds)
+    setUserEditedAfterSuggest(false)
+    // Clear the form-level createFieldMapping error too — fresh
+    // suggestion supersedes any prior save attempt's complaint.
+    setErrorMessage(null)
+    setErrorCode(null)
+    // Reset the Why? expansion so each new suggestion starts collapsed
+    // (per §6 lean — each suggestion is a fresh thing the user should
+    // re-engage with consciously).
+    setWhyExpanded(false)
+  }
+
+  // ── Cancel suggest — Flow B snapshot restore ───────────────────
+  //
+  // Aborts the pending controller and restores the pre-pending field
+  // snapshot. For Flow A the snapshot is empty/idle — cancel yields a
+  // clean form. For Flow B the snapshot captures whatever the user
+  // had (manual selection, prior loaded suggestion, etc.) — cancel
+  // feels like an undo.
+  const cancelSuggest = useCallback(() => {
+    if (suggestState.kind !== 'pending') return
+    suggestState.abortController.abort()
+    suggestAbortRef.current = null
+    const snap = prePendingSnapshotRef.current
+    if (snap) {
+      setSelectedIds(snap.selectedIds)
+      setCombinationTypeRaw(snap.combinationType)
+      setJoinAnnotations(snap.joinAnnotations)
+      setSuggestState(snap.suggestState)
+    } else {
+      setSuggestState({ kind: 'idle' })
+    }
+  }, [suggestState])
+
+  // ── Replace-warning gate ───────────────────────────────────────
+  //
+  // Determines whether a new Suggest invocation should pop the
+  // replace-AI variant of DiscardChangesDialog before firing.
+  //
+  // Rule (per investigation §3):
+  //   • Empty form (no selection) → no warning, just invoke.
+  //   • Loaded suggestion + user has not edited → silent replace.
+  //   • Anything else with a selection → warn (user has invested
+  //     manual effort that the new suggestion would overwrite).
+  function shouldShowReplaceWarning(): boolean {
+    if (selectedIds.length === 0) return false
+    if (suggestState.kind === 'loaded' && !userEditedAfterSuggest) {
+      return false
+    }
+    return true
+  }
+
+  // Public-ish entry point used by the in-form pill click. The Rule 6
+  // footer's [Suggest with AI] click flips `autoSuggest=true` AND
+  // mounts an empty form, so it bypasses the gate (handled by the
+  // mount-time effect calling `invokeSuggest` directly).
+  const requestSuggest = useCallback(() => {
+    if (suggestRateLimited) return
+    if (suggestState.kind === 'pending') return
+    if (isSavePending) return
+    if (shouldShowReplaceWarning()) {
+      setReplaceWarningOpen(true)
+      return
+    }
+    void invokeSuggest()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [
+    suggestRateLimited,
+    suggestState,
+    isSavePending,
+    selectedIds,
+    userEditedAfterSuggest,
+    invokeSuggest,
+  ])
+
+  const handleConfirmReplace = () => {
+    setReplaceWarningOpen(false)
+    void invokeSuggest()
+  }
+
+  const handleKeepEditingReplace = () => {
+    setReplaceWarningOpen(false)
+  }
+
+  // ── Mount-time autoSuggest one-shot ─────────────────────────────
+  //
+  // Flow A — when the user clicks [Suggest with AI] from the Rule 6
+  // footer, the drawer flips both `isFormActive=true` and
+  // `autoSuggest=true`. The form mounts; this effect sees `autoSuggest`
+  // and fires `invokeSuggest` immediately, then calls
+  // `onAutoSuggestConsumed` so the parent clears the prop before any
+  // re-render that could re-fire.
+  //
+  // The consumption guard is parent-owned via `tryConsumeAutoSuggest`
+  // (see prop docs). A parent-owned guard survives the form's strict-
+  // mode unmount/remount cycle in Next.js dev (`reactStrictMode: true`
+  // by default for app router); a `useRef(false)` *inside* the form
+  // would reset on the second mount and admit a duplicate invocation,
+  // resulting in two server-side LLM calls per click.
+  //
+  // `tryConsumeAutoSuggest` is optional: when absent (some unit tests),
+  // the effect fires unconditionally. Production always passes it.
+  useEffect(() => {
+    if (!autoSuggest) return
+    if (tryConsumeAutoSuggest && !tryConsumeAutoSuggest(targetField.id)) {
+      return
+    }
+    void invokeSuggest()
+    onAutoSuggestConsumed?.()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [autoSuggest])
+
+  // ── Cleanup on unmount ─────────────────────────────────────────
+  //
+  // Abort any in-flight controller so the post-await `setSuggestState`
+  // calls don't fire setState-on-unmounted warnings. The signal.aborted
+  // checks already guard the state writes, but aborting here also
+  // releases any HTTP keep-alive on the underlying request (Next 14
+  // server actions are HTTP fetch underneath).
+  useEffect(() => {
+    return () => {
+      suggestAbortRef.current?.abort()
+    }
+  }, [])
+
+  // Publish suggest-pending state to the drawer for footer mode-switch.
+  useEffect(() => {
+    onSuggestStateChange?.({
+      isSuggestPending: suggestState.kind === 'pending',
+    })
+  }, [suggestState, onSuggestStateChange])
+
   // ── Save flow ───────────────────────────────────────────────────
   const handleSave = () => {
     if (selectedIds.length === 0 || isSavePending) return
     if (hasUnresolvedAmbiguity) return
+    if (suggestState.kind === 'pending') return
     setErrorMessage(null)
     setErrorCode(null)
+
+    // ── Phase 4a-4b — AI provenance with laundering correction ──
+    //
+    // `aiSuggested=true` only when:
+    //   (a) we have a snapshot of original suggested ids (form has
+    //       seen at least one successful suggest), AND
+    //   (b) at least one of those original ids is still in the
+    //       final selectedIds (user kept some AI signal).
+    //
+    // This prevents the "user removes all AI sources, picks unrelated
+    // ones, saves with ai_suggested=true" laundering risk identified
+    // in the structural-finding correction. Removing every AI source
+    // and replacing with manual picks → manual provenance.
+    //
+    // confidence + aiReasoning ride on the same gate — they describe
+    // the AI signal the user ultimately accepted. If they removed all
+    // of it, those values are lies and we drop them.
+    const stillHasOriginal =
+      originalSuggestedIds !== null &&
+      originalSuggestedIds.some((id) => selectedIds.includes(id))
+    const aiSuggested =
+      stillHasOriginal && suggestState.kind === 'loaded' ? true : undefined
+    const confidence =
+      stillHasOriginal && suggestState.kind === 'loaded'
+        ? suggestState.suggestion.confidence
+        : undefined
+    const aiReasoning =
+      stillHasOriginal && suggestState.kind === 'loaded'
+        ? suggestState.suggestion.rationale
+        : undefined
+
     startSaveTransition(async () => {
       try {
         const result = await createFieldMapping({
@@ -486,6 +1061,9 @@ export const CreateMappingForm = forwardRef<
           sourceFieldIds: selectedIds,
           combinationType: effectiveCombinationType,
           joinAnnotations,
+          aiSuggested,
+          confidence,
+          aiReasoning,
         })
         if (!result.success) {
           // CROSS_TABLE_AMBIGUOUS is the structured cross-table
@@ -585,24 +1163,91 @@ export const CreateMappingForm = forwardRef<
     () => ({
       triggerSave: handleSave,
       requestClose,
+      cancelSuggest,
     }),
     // intentionally re-create the handle on each render — closures
     // over `selectedIds`/`isSavePending`/`isDirty` need to be fresh.
   )
 
   // ── Derived UI flags ────────────────────────────────────────────
-  const fieldsDisabled = isSavePending || confirmDiscardOpen
+  const isSuggestPending = suggestState.kind === 'pending'
+  const fieldsDisabled =
+    isSavePending ||
+    confirmDiscardOpen ||
+    isSuggestPending ||
+    replaceWarningOpen
   const showCombinationRadios = selectedIds.length >= 2
   const isExistingTfmError =
     errorMessage === EXISTING_TFM_COPY && errorCode === 'VALIDATION'
+
+  // ── AI Suggest section render bits ─────────────────────────────
+  //
+  // Three render branches drive the AI Suggest top-row:
+  //   • idle   → [Suggest with AI] pill button (or rate-limited dim
+  //              variant if `suggestRateLimited`).
+  //   • pending → spinner + "Suggesting…" inline label.
+  //   • loaded → ConfidencePill + Why? toggle.
+  //   • error  → ErrorBanner only (the dim pill below stays usable per
+  //              try-again affordance, except for RATE_LIMITED).
+  //
+  // Per locked §6-OQ-2, the Why? toggle is hidden entirely when
+  // rationale is empty (rare — wrapper enforces ≤ 280 chars but does
+  // not enforce non-empty).
+  const showAISuggestRow =
+    suggestState.kind === 'idle' ||
+    suggestState.kind === 'pending' ||
+    suggestState.kind === 'loaded' ||
+    suggestState.kind === 'error'
+
+  // Suggest error banner content. Distinct from the form-save error
+  // banner (which renders separately at the top). The fallback
+  // affordance for AI errors is "Try again" → re-invokeSuggest.
+  let aiBanner: { message: string; affordance: SuggestErrorAffordance } | null = null
+  if (suggestState.kind === 'error') {
+    aiBanner = {
+      message: suggestState.message,
+      affordance: SUGGEST_ERROR_COPY[suggestState.code].affordance,
+    }
+  }
 
   return (
     <div data-testid="create-mapping-form" className="flex flex-col gap-3">
       {errorMessage ? (
         <ErrorBanner
           message={errorMessage}
-          showRefreshButton={isExistingTfmError}
-          onRefresh={handleRefreshOnExistingTfm}
+          actionLabel={isExistingTfmError ? 'Refresh' : null}
+          onAction={isExistingTfmError ? handleRefreshOnExistingTfm : null}
+          testId="create-mapping-form-error"
+          actionTestId="create-mapping-form-refresh"
+        />
+      ) : null}
+
+      {aiBanner ? (
+        <ErrorBanner
+          message={aiBanner.message}
+          actionLabel={aiBanner.affordance === 'try-again' ? 'Try again' : aiBanner.affordance === 'refresh' ? 'Refresh' : null}
+          onAction={
+            aiBanner.affordance === 'try-again'
+              ? () => void invokeSuggest()
+              : aiBanner.affordance === 'refresh'
+                ? handleRefreshOnExistingTfm
+                : null
+          }
+          testId="create-mapping-form-suggest-error"
+          actionTestId="create-mapping-form-suggest-error-action"
+        />
+      ) : null}
+
+      {showAISuggestRow ? (
+        <AISuggestSection
+          suggestState={suggestState}
+          rateLimited={suggestRateLimited}
+          isSavePending={isSavePending}
+          whyExpanded={whyExpanded}
+          onToggleWhy={() => setWhyExpanded((v) => !v)}
+          onRequestSuggest={requestSuggest}
+          onCancelSuggest={cancelSuggest}
+          whyPanelDomId={whyPanelDomId}
         />
       ) : null}
 
@@ -636,30 +1281,61 @@ export const CreateMappingForm = forwardRef<
       <SamplePreview preview={samplePreview} />
 
       <DiscardChangesDialog
+        variant="discard"
         targetFieldName={targetField.name}
         open={confirmDiscardOpen}
         onKeepEditing={handleDialogKeepEditing}
-        onDiscard={handleDialogDiscard}
+        onConfirm={handleDialogDiscard}
+      />
+
+      <DiscardChangesDialog
+        variant="replace-ai"
+        targetFieldName={targetField.name}
+        open={replaceWarningOpen}
+        onKeepEditing={handleKeepEditingReplace}
+        onConfirm={handleConfirmReplace}
       />
     </div>
   )
 })
 
 // ── Error banner ─────────────────────────────────────────────────────────────
+//
+// Phase 4a-4b: generalized from the 4a-2 fixed-affordance shape
+// (`showRefreshButton` boolean → static "Refresh" copy) to a parameterized
+// `actionLabel` + `onAction` pair. Two consumers:
+//
+//   • Form-save errors: actionLabel='Refresh' for EXISTING_TFM,
+//     actionLabel=null otherwise. Test ids unchanged
+//     (create-mapping-form-error, create-mapping-form-refresh).
+//
+//   • AI Suggest errors: actionLabel='Try again' for retryable codes
+//     (AI_INVALID_RESPONSE, INTERNAL, NETWORK), 'Refresh' for NOT_FOUND,
+//     null for non-retryable (PERMISSION_DENIED, RATE_LIMITED). Test
+//     ids: create-mapping-form-suggest-error,
+//     create-mapping-form-suggest-error-action.
+//
+// `testId` and `actionTestId` are required so each consumer's tests
+// stay non-overlapping (vs a single shared id that would let tests
+// accidentally bind to the wrong banner).
 
 function ErrorBanner({
   message,
-  showRefreshButton,
-  onRefresh,
+  actionLabel,
+  onAction,
+  testId,
+  actionTestId,
 }: {
   message: string
-  showRefreshButton: boolean
-  onRefresh: () => void
+  actionLabel: string | null
+  onAction: (() => void) | null
+  testId: string
+  actionTestId: string
 }) {
   return (
     <div
       role="alert"
-      data-testid="create-mapping-form-error"
+      data-testid={testId}
       className={cn(
         'flex items-start gap-2 rounded-md border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-800',
       )}
@@ -670,22 +1346,265 @@ function ErrorBanner({
       />
       <div className="flex flex-1 items-center justify-between gap-2">
         <span className="leading-snug">{message}</span>
-        {showRefreshButton ? (
+        {actionLabel && onAction ? (
           <button
             type="button"
-            onClick={onRefresh}
-            data-testid="create-mapping-form-refresh"
+            onClick={onAction}
+            data-testid={actionTestId}
             className={cn(
               'inline-flex h-6 items-center justify-center rounded border px-2 text-[11px] font-medium',
               'border-red-300 bg-white text-red-800 hover:bg-red-100',
               'focus:outline-none focus-visible:ring-2 focus-visible:ring-red-500/40',
             )}
           >
-            Refresh
+            {actionLabel}
           </button>
         ) : null}
       </div>
     </div>
+  )
+}
+
+// ── AI Suggest section (Phase 4a-4b) ────────────────────────────────────────
+//
+// Top-of-form row that surfaces the AI Suggest lifecycle. Visible whenever
+// the form is mounted (idle/pending/loaded/error) — never hidden, since the
+// pill is the discoverability surface for AI suggestions even before the
+// user invokes one. Three visual variants:
+//
+//   • idle  / error → [✨ Suggest with AI] action pill. Disabled with a
+//                     tooltip when `rateLimited` (locked §7c) or while a
+//                     save is pending (locked §10-OQ-1).
+//
+//   • pending       → Spinner + "Suggesting…" inline label. The cancel
+//                     affordance lives in the drawer footer
+//                     ([Cancel suggestion]) per locked §10-OQ-2 — this
+//                     row stays minimal to avoid two cancel buttons.
+//
+//   • loaded        → `ConfidencePill` (color-banded, label includes
+//                     percentage) + Why? toggle that expands the
+//                     `WhyPanel` with the rationale. Toggle hidden
+//                     when rationale empty (locked §6-OQ-2).
+
+function AISuggestSection({
+  suggestState,
+  rateLimited,
+  isSavePending,
+  whyExpanded,
+  onToggleWhy,
+  onRequestSuggest,
+  onCancelSuggest,
+  whyPanelDomId,
+}: {
+  suggestState: SuggestState
+  rateLimited: boolean
+  isSavePending: boolean
+  whyExpanded: boolean
+  onToggleWhy: () => void
+  onRequestSuggest: () => void
+  onCancelSuggest: () => void
+  whyPanelDomId: string
+}) {
+  void onCancelSuggest // imperative cancel lives in drawer footer; reserved.
+  if (suggestState.kind === 'pending') {
+    return (
+      <div
+        data-testid="create-mapping-form-suggest-pending"
+        className="flex items-center gap-2 rounded border border-blue-200 bg-blue-50/60 px-3 py-2 text-xs text-blue-900"
+      >
+        <Loader2
+          aria-hidden="true"
+          className="h-3.5 w-3.5 animate-spin"
+        />
+        <span>Suggesting…</span>
+      </div>
+    )
+  }
+  if (suggestState.kind === 'loaded') {
+    const { suggestion } = suggestState
+    const hasRationale = suggestion.rationale.trim().length > 0
+    return (
+      <div
+        data-testid="create-mapping-form-suggest-loaded"
+        className="flex flex-col gap-1.5 rounded border border-slate-200 bg-slate-50 px-3 py-2"
+      >
+        <div className="flex items-center gap-2">
+          <ConfidencePill confidence={suggestion.confidence} />
+          {hasRationale ? (
+            <WhyToggle
+              expanded={whyExpanded}
+              onToggle={onToggleWhy}
+              panelId={whyPanelDomId}
+            />
+          ) : null}
+          <button
+            type="button"
+            onClick={onRequestSuggest}
+            disabled={rateLimited || isSavePending}
+            data-testid="create-mapping-form-suggest-replace-button"
+            title={
+              rateLimited
+                ? 'AI Suggest is rate-limited; try again later.'
+                : isSavePending
+                  ? 'Save in progress.'
+                  : undefined
+            }
+            className={cn(
+              'ml-auto inline-flex h-6 items-center gap-1 rounded border px-1.5 text-[11px] font-medium',
+              'border-slate-300 bg-white text-slate-700 hover:bg-slate-100',
+              'focus:outline-none focus-visible:ring-2 focus-visible:ring-slate-500/30',
+              'disabled:cursor-not-allowed disabled:border-slate-200 disabled:bg-slate-50 disabled:text-slate-400',
+            )}
+          >
+            <Sparkles aria-hidden="true" className="h-3 w-3" />
+            <span>Re-suggest</span>
+          </button>
+        </div>
+        {hasRationale ? (
+          <WhyPanel
+            rationale={suggestion.rationale}
+            expanded={whyExpanded}
+            panelId={whyPanelDomId}
+          />
+        ) : null}
+      </div>
+    )
+  }
+  // idle or error — render the action pill. RATE_LIMITED disables the
+  // pill (locked §7c persistent affordance). Save-pending also disables
+  // (§10-OQ-1).
+  const disabled = rateLimited || isSavePending
+  return (
+    <div className="flex items-center">
+      <button
+        type="button"
+        onClick={onRequestSuggest}
+        disabled={disabled}
+        data-testid="create-mapping-form-suggest-button"
+        aria-label="Suggest with AI"
+        title={
+          rateLimited
+            ? 'AI Suggest is rate-limited; try again later.'
+            : isSavePending
+              ? 'Save in progress.'
+              : undefined
+        }
+        className={cn(
+          'inline-flex h-7 items-center gap-1.5 rounded-full border px-3 text-xs font-medium transition-colors',
+          'border-blue-200 bg-blue-50 text-blue-800 hover:bg-blue-100',
+          'focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-500/30',
+          'disabled:cursor-not-allowed disabled:border-slate-200 disabled:bg-slate-50 disabled:text-slate-400',
+        )}
+      >
+        <Sparkles aria-hidden="true" className="h-3.5 w-3.5" />
+        <span>Suggest with AI</span>
+      </button>
+    </div>
+  )
+}
+
+// ── ConfidencePill ──────────────────────────────────────────────────────────
+//
+// Color-banded confidence badge, only consumer of `classifyConfidence`
+// thresholds. Three bands (green ≥70 / amber 40-69 / red <40) per
+// locked §5/§6 visual contract.
+//
+// A11y: plain `<span>` per locked §5-OQ-1 (no role attribute — the
+// surrounding `Suggested:` context is a sibling, not container, and
+// adding a role would be ARIA noise). The `title` attribute carries
+// the same label text on hover for sighted users on small viewports.
+
+function ConfidencePill({ confidence }: { confidence: number }) {
+  const { label, threshold } = formatConfidenceLabel(confidence)
+  const palette =
+    threshold === 'high'
+      ? 'border-emerald-200 bg-emerald-50 text-emerald-800'
+      : threshold === 'possible'
+        ? 'border-amber-200 bg-amber-50 text-amber-800'
+        : 'border-red-200 bg-red-50 text-red-800'
+  const dotColor =
+    threshold === 'high'
+      ? 'bg-emerald-500'
+      : threshold === 'possible'
+        ? 'bg-amber-500'
+        : 'bg-red-500'
+  return (
+    <span
+      data-testid="create-mapping-form-confidence-pill"
+      data-threshold={threshold}
+      className={cn(
+        'inline-flex h-6 items-center gap-1.5 rounded-full border px-2 text-[11px] font-medium',
+        palette,
+      )}
+      title={label}
+    >
+      <span
+        aria-hidden="true"
+        className={cn('inline-block h-1.5 w-1.5 rounded-full', dotColor)}
+      />
+      <Sparkles aria-hidden="true" className="h-3 w-3" />
+      <span>{label}</span>
+    </span>
+  )
+}
+
+// ── Why? toggle + panel ─────────────────────────────────────────────────────
+//
+// Toggle is a chevron + "Why?" text. Panel is the rationale plain text
+// rendered below. Both colocated here to keep the AI Suggest visual
+// surface in one file. Per locked §6-OQ-1 the rationale is plain-text
+// rendered via `{rationale}` only — no markdown, no HTML.
+
+function WhyToggle({
+  expanded,
+  onToggle,
+  panelId,
+}: {
+  expanded: boolean
+  onToggle: () => void
+  panelId: string
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onToggle}
+      aria-expanded={expanded}
+      aria-controls={panelId}
+      data-testid="create-mapping-form-why-toggle"
+      className={cn(
+        'inline-flex h-6 items-center gap-0.5 rounded px-1.5 text-[11px] font-medium',
+        'text-slate-600 hover:bg-slate-100 hover:text-slate-900',
+        'focus:outline-none focus-visible:ring-2 focus-visible:ring-slate-500/30',
+      )}
+    >
+      {expanded ? (
+        <ChevronDown aria-hidden="true" className="h-3 w-3" />
+      ) : (
+        <ChevronRight aria-hidden="true" className="h-3 w-3" />
+      )}
+      <span>Why?</span>
+    </button>
+  )
+}
+
+function WhyPanel({
+  rationale,
+  expanded,
+  panelId,
+}: {
+  rationale: string
+  expanded: boolean
+  panelId: string
+}) {
+  if (!expanded) return null
+  return (
+    <p
+      id={panelId}
+      data-testid="create-mapping-form-why-panel"
+      className="text-[11px] leading-snug text-slate-700"
+    >
+      {rationale}
+    </p>
   )
 }
 
@@ -1084,17 +2003,57 @@ function SamplePreview({
 
 // ── Discard dialog ───────────────────────────────────────────────────────────
 
-function DiscardChangesDialog({
-  targetFieldName,
-  open,
-  onKeepEditing,
-  onDiscard,
-}: {
+// ── Discard / replace dialog (Phase 4a-4b parameterized) ────────────────────
+//
+// Two variants share this primitive:
+//
+//   • 'discard'    — shipped in 4a-2. Pops on Cancel / Esc / X / click-
+//                    outside when the form is dirty. Confirm action
+//                    button reads "Discard" with red-destructive styling.
+//
+//   • 'replace-ai' — Phase 4a-4b. Pops on `Re-suggest` / pill click when
+//                    the user has manual edits on top of an AI-loaded
+//                    suggestion. Confirm action button reads "Replace"
+//                    with the same red-destructive styling — replacing
+//                    a suggestion is also a "lose your work" path so
+//                    the visual weight matches.
+//
+// `data-testid="create-mapping-form-discard-dialog"` stays stable
+// across both variants (existing 4a-2 tests don't break) but a new
+// `data-variant` attribute carries the discriminant for new tests.
+
+interface DiscardChangesDialogProps {
+  variant: 'discard' | 'replace-ai'
   targetFieldName: string
   open: boolean
   onKeepEditing: () => void
-  onDiscard: () => void
-}) {
+  onConfirm: () => void
+}
+
+function DiscardChangesDialog({
+  variant,
+  targetFieldName,
+  open,
+  onKeepEditing,
+  onConfirm,
+}: DiscardChangesDialogProps) {
+  const title =
+    variant === 'discard' ? 'Discard changes?' : 'Replace with AI suggestion?'
+  const confirmLabel = variant === 'discard' ? 'Discard' : 'Replace'
+  const description =
+    variant === 'discard' ? (
+      <>
+        Your selected sources for{' '}
+        <span className="font-mono text-gray-700">{targetFieldName}</span> will
+        be lost. This cannot be undone.
+      </>
+    ) : (
+      <>
+        Your manual edits to{' '}
+        <span className="font-mono text-gray-700">{targetFieldName}</span> will
+        be replaced by the new AI suggestion. This cannot be undone.
+      </>
+    )
   return (
     <AlertDialog
       open={open}
@@ -1106,14 +2065,13 @@ function DiscardChangesDialog({
         if (!next) onKeepEditing()
       }}
     >
-      <AlertDialogContent data-testid="create-mapping-form-discard-dialog">
+      <AlertDialogContent
+        data-testid="create-mapping-form-discard-dialog"
+        data-variant={variant}
+      >
         <AlertDialogHeader>
-          <AlertDialogTitle>Discard changes?</AlertDialogTitle>
-          <AlertDialogDescription>
-            Your selected sources for{' '}
-            <span className="font-mono text-gray-700">{targetFieldName}</span>{' '}
-            will be lost. This cannot be undone.
-          </AlertDialogDescription>
+          <AlertDialogTitle>{title}</AlertDialogTitle>
+          <AlertDialogDescription>{description}</AlertDialogDescription>
         </AlertDialogHeader>
         <AlertDialogFooter>
           <AlertDialogCancel
@@ -1125,12 +2083,12 @@ function DiscardChangesDialog({
           <AlertDialogAction
             onClick={(e) => {
               e.preventDefault()
-              onDiscard()
+              onConfirm()
             }}
             data-testid="create-mapping-form-discard-confirm"
             className="bg-red-600 hover:bg-red-700 focus:ring-red-500/40"
           >
-            Discard
+            {confirmLabel}
           </AlertDialogAction>
         </AlertDialogFooter>
       </AlertDialogContent>

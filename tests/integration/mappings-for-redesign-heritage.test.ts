@@ -1058,5 +1058,68 @@ writeDescribeFn(
         expect(result).toHaveProperty('ambiguousJoinedTableId')
       }
     }, 30_000)
+
+    // ─── Phase 4a-4b — suggestMappingForTarget error paths ────────────
+    //
+    // The 4a-4b UI integration depends on a small-but-stable error-code
+    // contract for `suggestMappingForTarget`. The happy-path test above
+    // pins success; these tests pin two AI_INVALID_RESPONSE branches
+    // the wrapper will surface to the form's error banner. Locked
+    // §8-OQ-2: integration tests mock `callClaude` only — the rest of
+    // the wrapper (identity read, prompt assembly, name → id resolve,
+    // same-table guard) runs against Heritage.
+
+    it('suggestMappingForTarget AI_INVALID_RESPONSE — malformed JSON from LLM (4a-4b)', async () => {
+      const { suggestMappingForTarget } = await import(
+        '@/lib/actions/mappings-for-redesign'
+      )
+
+      // Simulate a model that returned non-JSON gibberish — the
+      // wrapper's JSON.parse fails and we surface
+      // AI_INVALID_RESPONSE. The form maps this to the "try again"
+      // affordance per locked §7-OQ-2.
+      callClaudeMock.mockResolvedValueOnce(
+        'I am not JSON, I am a prose response.',
+      )
+
+      const result = await suggestMappingForTarget({
+        projectId: HERITAGE_PROJECT_ID,
+        targetFieldId: fixtures.unmappedTargetField.id,
+      })
+
+      expect(result.success).toBe(false)
+      if (result.success) return
+      expect(result.errorCode).toBe('AI_INVALID_RESPONSE')
+      expect(callClaudeMock).toHaveBeenCalledTimes(1)
+    }, 60_000)
+
+    it('suggestMappingForTarget AI_INVALID_RESPONSE — LLM emits no resolvable field names (4a-4b)', async () => {
+      const { suggestMappingForTarget } = await import(
+        '@/lib/actions/mappings-for-redesign'
+      )
+
+      // Valid JSON shape, but every field name is a fabrication that
+      // doesn't exist anywhere in the Heritage source schema. The
+      // wrapper resolves names → ids, finds 0 hits, and surfaces
+      // AI_INVALID_RESPONSE. This is the failure mode the form's
+      // "AI did not return any usable source fields" banner targets.
+      callClaudeMock.mockResolvedValueOnce(
+        JSON.stringify({
+          source_field_names: ['__nope_nope_nope__', '__also_fake_field__'],
+          combination_type: 'single',
+          confidence: 30,
+          rationale: 'fabricated field names',
+        }),
+      )
+
+      const result = await suggestMappingForTarget({
+        projectId: HERITAGE_PROJECT_ID,
+        targetFieldId: fixtures.unmappedTargetField.id,
+      })
+
+      expect(result.success).toBe(false)
+      if (result.success) return
+      expect(result.errorCode).toBe('AI_INVALID_RESPONSE')
+    }, 60_000)
   },
 )

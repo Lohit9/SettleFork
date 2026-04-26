@@ -1671,10 +1671,12 @@ const {
   approveFieldMappingMock,
   rejectFieldMappingMock,
   createFieldMappingMock,
+  suggestMappingForTargetMock,
 } = vi.hoisted(() => ({
   approveFieldMappingMock: vi.fn(),
   rejectFieldMappingMock: vi.fn(),
   createFieldMappingMock: vi.fn(),
+  suggestMappingForTargetMock: vi.fn(),
 }))
 
 vi.mock('@/lib/actions/mappings-for-redesign', () => ({
@@ -1684,6 +1686,8 @@ vi.mock('@/lib/actions/mappings-for-redesign', () => ({
     rejectFieldMappingMock(...args),
   createFieldMapping: (...args: unknown[]) =>
     createFieldMappingMock(...args),
+  suggestMappingForTarget: (...args: unknown[]) =>
+    suggestMappingForTargetMock(...args),
 }))
 
 // Phase 4a-2 — `CreateMappingForm` calls `useRouter().refresh()` on
@@ -1702,6 +1706,7 @@ beforeEach(() => {
   approveFieldMappingMock.mockReset()
   rejectFieldMappingMock.mockReset()
   createFieldMappingMock.mockReset()
+  suggestMappingForTargetMock.mockReset()
 })
 
 describe('MappingDrawer Gap 9 — disabled-state matrix', () => {
@@ -2566,5 +2571,275 @@ describe('MappingDrawer Phase 4a-4a — restoreFormState + onFormDirtyChange', (
     // Unselect — form is clean again, snapshot should be null.
     await user.click(screen.getAllByTestId('source-field-picker-field')[0])
     expect(onFormDirtyChange).toHaveBeenLastCalledWith(null)
+  })
+})
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Phase 4a-4b — AI Suggest footer mode-switch + auto-trigger plumbing.
+// ─────────────────────────────────────────────────────────────────────────────
+//
+// Three-mode footer for unmapped rows (Block C of investigation §13):
+//
+//   • Inactive (no form active) — both [Suggest with AI] and [Create mapping]
+//   • Active + Suggest pending  — single [Cancel suggestion]
+//   • Active + not pending      — [Cancel] [Save mapping] (4a-2 shape)
+//
+// Plus the autoSuggest plumbing: clicking [Suggest with AI] from the
+// inactive footer must mount the form with `autoSuggest=true` so it
+// fires `invokeSuggest` on its first render. Cancel via the footer
+// must reach the form's imperative `cancelSuggest` handle.
+
+describe('MappingDrawer Phase 4a-4b — Suggest with AI footer auto-trigger', () => {
+  it('inactive footer renders BOTH [Suggest with AI] and [Create mapping] for an unmapped row', () => {
+    render(
+      <MappingDrawer
+        row={unmapped()}
+        isOpen={true}
+        onClose={() => {}}
+        projectId="p-1"
+        availableSourceFields={SOURCE_FIELDS_FIXTURE}
+      />,
+    )
+    expect(
+      screen.getByTestId('mapping-drawer-suggest-with-ai-button'),
+    ).toBeInTheDocument()
+    expect(
+      screen.getByTestId('mapping-drawer-create-mapping-button'),
+    ).toBeInTheDocument()
+    // The pending [Cancel suggestion] button is NOT visible while the
+    // drawer is in the inactive state.
+    expect(
+      screen.queryByTestId('mapping-drawer-cancel-suggest-button'),
+    ).toBeNull()
+  })
+
+  it('click [Suggest with AI] mounts form with autoSuggest and invokes the wrapper exactly once', async () => {
+    let resolveSuggest: ((value: unknown) => void) | undefined
+    suggestMappingForTargetMock.mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          resolveSuggest = resolve
+        }),
+    )
+    const user = userEvent.setup()
+    render(
+      <MappingDrawer
+        row={unmapped()}
+        isOpen={true}
+        onClose={() => {}}
+        projectId="p-1"
+        availableSourceFields={SOURCE_FIELDS_FIXTURE}
+      />,
+    )
+    await user.click(
+      screen.getByTestId('mapping-drawer-suggest-with-ai-button'),
+    )
+    // Form mounts and immediately fires the wrapper.
+    expect(screen.getByTestId('create-mapping-form')).toBeInTheDocument()
+    expect(suggestMappingForTargetMock).toHaveBeenCalledTimes(1)
+    // Footer flips to the pending mode — single [Cancel suggestion]
+    // button replaces the pair.
+    expect(
+      screen.getByTestId('mapping-drawer-cancel-suggest-button'),
+    ).toBeInTheDocument()
+    expect(
+      screen.queryByTestId('mapping-drawer-form-cancel-button'),
+    ).toBeNull()
+    expect(
+      screen.queryByTestId('mapping-drawer-form-save-button'),
+    ).toBeNull()
+    // Resolve the in-flight call so React doesn't warn about act().
+    await act(async () => {
+      resolveSuggest?.({
+        success: true,
+        suggestion: {
+          sourceFieldIds: ['sf-acc-1'],
+          combinationType: 'single',
+          confidence: 80,
+          rationale: 'High overlap',
+        },
+      })
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+  })
+
+  it('successful suggest restores active+not-pending footer ([Cancel] [Save mapping])', async () => {
+    suggestMappingForTargetMock.mockResolvedValue({
+      success: true,
+      suggestion: {
+        sourceFieldIds: ['sf-acc-1'],
+        combinationType: 'single',
+        confidence: 80,
+        rationale: 'Heritage rationale',
+      },
+    })
+    const user = userEvent.setup()
+    render(
+      <MappingDrawer
+        row={unmapped()}
+        isOpen={true}
+        onClose={() => {}}
+        projectId="p-1"
+        availableSourceFields={SOURCE_FIELDS_FIXTURE}
+      />,
+    )
+    await user.click(
+      screen.getByTestId('mapping-drawer-suggest-with-ai-button'),
+    )
+    await act(async () => {
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+    // Suggestion landed — pill is rendered and footer is back in
+    // the [Cancel] [Save] shape.
+    expect(
+      screen.getByTestId('create-mapping-form-suggest-loaded'),
+    ).toBeInTheDocument()
+    expect(
+      screen.getByTestId('mapping-drawer-form-cancel-button'),
+    ).toBeInTheDocument()
+    expect(
+      screen.getByTestId('mapping-drawer-form-save-button'),
+    ).toBeInTheDocument()
+    expect(
+      screen.queryByTestId('mapping-drawer-cancel-suggest-button'),
+    ).toBeNull()
+  })
+
+  it('[Cancel suggestion] aborts the pending call and returns to active+empty footer', async () => {
+    let resolveSuggest: ((value: unknown) => void) | undefined
+    suggestMappingForTargetMock.mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          resolveSuggest = resolve
+        }),
+    )
+    const user = userEvent.setup()
+    render(
+      <MappingDrawer
+        row={unmapped()}
+        isOpen={true}
+        onClose={() => {}}
+        projectId="p-1"
+        availableSourceFields={SOURCE_FIELDS_FIXTURE}
+      />,
+    )
+    await user.click(
+      screen.getByTestId('mapping-drawer-suggest-with-ai-button'),
+    )
+    expect(
+      screen.getByTestId('mapping-drawer-cancel-suggest-button'),
+    ).toBeInTheDocument()
+    await user.click(
+      screen.getByTestId('mapping-drawer-cancel-suggest-button'),
+    )
+    // After cancel: footer is back in the active+not-pending shape.
+    // The form is still mounted (cancel never tears it down — it just
+    // aborts the in-flight suggestion).
+    expect(screen.getByTestId('create-mapping-form')).toBeInTheDocument()
+    expect(
+      screen.getByTestId('mapping-drawer-form-cancel-button'),
+    ).toBeInTheDocument()
+    expect(
+      screen.getByTestId('mapping-drawer-form-save-button'),
+    ).toBeInTheDocument()
+    // Late-arriving server response does not surface a loaded
+    // suggestion (race resolution discarded it).
+    await act(async () => {
+      resolveSuggest?.({
+        success: true,
+        suggestion: {
+          sourceFieldIds: ['sf-acc-1'],
+          combinationType: 'single',
+          confidence: 80,
+          rationale: 'late',
+        },
+      })
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+    expect(
+      screen.queryByTestId('create-mapping-form-suggest-loaded'),
+    ).toBeNull()
+  })
+
+  it('row switch while a suggest is in flight resets autoSuggest + pending state on the next row', async () => {
+    let resolveSuggest: ((value: unknown) => void) | undefined
+    suggestMappingForTargetMock.mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          resolveSuggest = resolve
+        }),
+    )
+    const user = userEvent.setup()
+    const { rerender } = render(
+      <MappingDrawer
+        row={unmapped({
+          id: 'unmapped::tf-A',
+          targetField: targetField({ id: 'tf-A' }),
+        })}
+        isOpen={true}
+        onClose={() => {}}
+        projectId="p-1"
+        availableSourceFields={SOURCE_FIELDS_FIXTURE}
+      />,
+    )
+    await user.click(
+      screen.getByTestId('mapping-drawer-suggest-with-ai-button'),
+    )
+    expect(
+      screen.getByTestId('mapping-drawer-cancel-suggest-button'),
+    ).toBeInTheDocument()
+    // Switch rows mid-flight — drawer must reset to inactive footer
+    // for the new row, NOT carry the pending state across.
+    rerender(
+      <MappingDrawer
+        row={unmapped({
+          id: 'unmapped::tf-B',
+          targetField: targetField({ id: 'tf-B' }),
+        })}
+        isOpen={true}
+        onClose={() => {}}
+        projectId="p-1"
+        availableSourceFields={SOURCE_FIELDS_FIXTURE}
+      />,
+    )
+    expect(
+      screen.getByTestId('mapping-drawer-suggest-with-ai-button'),
+    ).toBeInTheDocument()
+    expect(
+      screen.getByTestId('mapping-drawer-create-mapping-button'),
+    ).toBeInTheDocument()
+    expect(
+      screen.queryByTestId('mapping-drawer-cancel-suggest-button'),
+    ).toBeNull()
+    // Drain the dangling promise from the unmounted form.
+    await act(async () => {
+      resolveSuggest?.({
+        success: true,
+        suggestion: {
+          sourceFieldIds: ['sf-acc-1'],
+          combinationType: 'single',
+          confidence: 80,
+          rationale: '',
+        },
+      })
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+  })
+
+  it('mapped/value_assignment/target_acknowledged rows do NOT render [Suggest with AI] (Rule 6 only)', () => {
+    const rows = [mapped(), valueAssignment(), targetAck()]
+    for (const row of rows) {
+      const { unmount } = render(
+        <MappingDrawer row={row} isOpen={true} onClose={() => {}} />,
+      )
+      expect(
+        screen.queryByTestId('mapping-drawer-suggest-with-ai-button'),
+      ).toBeNull()
+      unmount()
+    }
   })
 })

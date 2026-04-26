@@ -65,13 +65,18 @@ vi.mock('@/components/app/PageHeader', () => ({
 // drawer's unmapped body) imports `createFieldMapping` from the
 // same module — extend the mock so the import chain stays
 // side-effect-free even when these tests render an unmapped row.
-const { createFieldMappingMock } = vi.hoisted(() => ({
-  createFieldMappingMock: vi.fn(),
-}))
+const { createFieldMappingMock, suggestMappingForTargetMock } = vi.hoisted(
+  () => ({
+    createFieldMappingMock: vi.fn(),
+    suggestMappingForTargetMock: vi.fn(),
+  }),
+)
 vi.mock('@/lib/actions/mappings-for-redesign', () => ({
   approveFieldMapping: vi.fn().mockResolvedValue({ success: true }),
   rejectFieldMapping: vi.fn().mockResolvedValue({ success: true }),
   createFieldMapping: (...args: unknown[]) => createFieldMappingMock(...args),
+  suggestMappingForTarget: (...args: unknown[]) =>
+    suggestMappingForTargetMock(...args),
 }))
 
 // ── Fixtures ────────────────────────────────────────────────────────────────
@@ -342,6 +347,7 @@ beforeEach(() => {
     success: true,
     tfmId: 'tfm-new',
   })
+  suggestMappingForTargetMock.mockReset()
   currentSearch = ''
 })
 
@@ -1632,5 +1638,115 @@ describe('MappingRedesignContent Phase 4a-4a — row-switch-while-dirty toast', 
     } finally {
       vi.useRealTimers()
     }
+  })
+})
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Phase 4a-4b — AI Suggest end-to-end via the page surface.
+// ─────────────────────────────────────────────────────────────────────────────
+//
+// These tests pin the page-level wiring of the new [Suggest with AI]
+// footer button + auto-trigger plumbing through the drawer down to
+// the `CreateMappingForm`'s `invokeSuggest`. They do NOT re-pin the
+// per-component pill / Why? / replace-warning behavior — that lives
+// in `tests/components/create-mapping-form.test.tsx`. Scope here is
+// strictly the surface that integrates the three layers
+// (page → drawer → form).
+
+describe('MappingRedesignContent Phase 4a-4b — Suggest with AI surfaces from URL-opened unmapped drawer', () => {
+  it('renders [Suggest with AI] alongside [Create mapping] for an unmapped row', () => {
+    currentSearch = 'drawer=unmapped::tf-unmapped'
+    render(
+      <MappingRedesignContent
+        projectId="p1"
+        projectName="Heritage Core"
+        initialRedesignData={buildDataWithUnmapped()}
+      />,
+    )
+    expect(
+      screen.getByTestId('mapping-drawer-suggest-with-ai-button'),
+    ).toBeInTheDocument()
+    expect(
+      screen.getByTestId('mapping-drawer-create-mapping-button'),
+    ).toBeInTheDocument()
+  })
+
+  it('clicking [Suggest with AI] auto-triggers the wrapper exactly once and pre-fills on success', async () => {
+    suggestMappingForTargetMock.mockResolvedValue({
+      success: true,
+      suggestion: {
+        sourceFieldIds: ['sf-acct-col'],
+        combinationType: 'single',
+        confidence: 75,
+        rationale: 'page-surface rationale',
+      },
+    })
+    currentSearch = 'drawer=unmapped::tf-unmapped'
+    render(
+      <MappingRedesignContent
+        projectId="p1"
+        projectName="Heritage Core"
+        initialRedesignData={buildDataWithUnmapped()}
+      />,
+    )
+    fireEvent.click(
+      screen.getByTestId('mapping-drawer-suggest-with-ai-button'),
+    )
+    await act(async () => {
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+    expect(suggestMappingForTargetMock).toHaveBeenCalledTimes(1)
+    expect(
+      screen.getByTestId('create-mapping-form-suggest-loaded'),
+    ).toBeInTheDocument()
+    expect(
+      screen.getByTestId('create-mapping-form-confidence-pill'),
+    ).toBeInTheDocument()
+  })
+
+  it('saving an AI-suggested mapping passes ai_suggested=true through createFieldMapping', async () => {
+    suggestMappingForTargetMock.mockResolvedValue({
+      success: true,
+      suggestion: {
+        sourceFieldIds: ['sf-acct-col'],
+        combinationType: 'single',
+        confidence: 88,
+        rationale: 'persisted rationale',
+      },
+    })
+    createFieldMappingMock.mockResolvedValue({
+      success: true,
+      tfmId: 'tfm-ai-saved',
+    })
+    currentSearch = 'drawer=unmapped::tf-unmapped'
+    render(
+      <MappingRedesignContent
+        projectId="p1"
+        projectName="Heritage Core"
+        initialRedesignData={buildDataWithUnmapped()}
+      />,
+    )
+    fireEvent.click(
+      screen.getByTestId('mapping-drawer-suggest-with-ai-button'),
+    )
+    await act(async () => {
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+    fireEvent.click(screen.getByTestId('mapping-drawer-form-save-button'))
+    await act(async () => {
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+    expect(createFieldMappingMock).toHaveBeenCalledTimes(1)
+    const args = createFieldMappingMock.mock.calls[0][0] as {
+      aiSuggested?: boolean
+      confidence?: number
+      aiReasoning?: string
+    }
+    expect(args.aiSuggested).toBe(true)
+    expect(args.confidence).toBe(88)
+    expect(args.aiReasoning).toBe('persisted rationale')
   })
 })

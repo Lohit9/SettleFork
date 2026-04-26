@@ -1480,7 +1480,7 @@ Four close paths route through a `requestClose()` helper on the form's imperativ
 
 When the form is dirty (any source selected), `requestClose()` opens an inline discard confirmation dialog. `[Discard]` deactivates the form; `[Keep editing]` returns to the form intact. Esc on the dialog dismisses the dialog only — it does not bubble to the drawer's own close path (founder decision §1-OQ-1, enforced by an `[role="alertdialog"]` guard in the drawer's keydown / mousedown listeners).
 
-The fifth path — switching to a different row by clicking another field on the page — is intentionally silent (founder decision §8-OQ-1). A toast informing the user "your draft was discarded" is deferred to Phase 4a-4.
+The fifth path — switching to a different row by clicking another field on the page — is intentionally silent (founder decision §8-OQ-1). A toast informing the user "your draft was discarded" with `[Undo]` ships in Phase 4a-4 (see ["AI Suggest UI integration (Phase 4a-4)"](#ai-suggest-ui-integration-phase-4a-4)).
 
 ### Custom SQL transitions
 
@@ -1536,7 +1536,98 @@ After Phase 4 stabilizes and the canary expands beyond Heritage Core to addition
 - Drop `projects.use_mapping_redesign` column from the database
 - Drop `projects.maintenance_mode` column once migration window is confirmed complete
 
-## Back-compatibility shim limitations
+## AI Suggest UI integration (Phase 4a-4)
+
+Phase 4a-4 wires the existing `suggestMappingForTarget` server-action wrapper (Phase 4a-1) into the redesign drawer. It ships in two atomic commits — 4a-4a (toast primitive) and 4a-4b (AI Suggest UI integration).
+
+### 4a-4a — Row-switch toast primitive
+
+The toast primitive that surfaces "Draft discarded" with `[Undo]` when a user clicks another field row while a `CreateMappingForm` is dirty. The previously-silent fifth discard path (founder decision §8-OQ-1 of 4a-2) now has a non-blocking, undoable affordance.
+
+- `ToastProvider` + `useToast` (`components/ui/Toast.tsx`) — single-instance, ARIA `role="status"`, 5-second auto-dismiss, single-action button slot for `[Undo]`. No new dependencies; no `dark:` modifiers.
+- `MappingContent` snapshots the dirty form state (`CreateMappingFormSnapshot { targetFieldId, selectedIds, combinationType, joinAnnotations, ambiguousCandidates }`) the moment the row changes, fires the toast, and threads the snapshot back via the drawer's `restoreFormState` prop on Undo. Restoration replays the URL drawer change, auto-activates the form on mount, and re-hydrates source selection in one render.
+- The toast is the *only* surface that introduces non-blocking UX in the drawer. The four prior discard paths (Cancel, X, Esc, click-outside) keep their blocking discard dialog.
+
+### 4a-4b — AI Suggest UI integration
+
+The redesign drawer surfaces `suggestMappingForTarget` through two entry points on a Rule 6 unmapped row:
+
+1. **Footer auto-trigger** — `[Suggest with AI]` lives next to `[Create mapping]` on the inactive footer. Clicking it activates the form with `autoSuggest=true`, which fires `invokeSuggest` on first render. The footer collapses to a single `[Cancel suggestion]` button while the call is in flight.
+2. **In-form pill** — once the form is active (either via `[Create mapping]` or after a successful auto-trigger), an inline `Suggest with AI` pill at the top of the form re-invokes the wrapper. The pill becomes a `Re-suggest` chip alongside a `ConfidencePill` and `Why?` toggle once a suggestion has loaded.
+
+#### State machine
+
+```
+SuggestState =
+  | { kind: 'idle' }
+  | { kind: 'pending';  abortController: AbortController }
+  | { kind: 'loaded';   suggestion: AISuggestion }
+  | { kind: 'error';    code: SuggestErrorCode; message: string }
+```
+
+`SuggestErrorCode` is the union of `SuggestMappingErrorCode` (from the wrapper) plus a client-only `'NETWORK'` for thrown exceptions. Race resolution is "abort prior + fire new" (founder decision §1-OQ-1) — every `requestSuggest` call aborts any in-flight `AbortController` before transitioning to a fresh `pending`. The form's `cancelSuggest` imperative handle is what the drawer footer's `[Cancel suggestion]` button reaches.
+
+#### Same-table-only limitation
+
+The wrapper hard-strips cross-table tails to `AI_INVALID_RESPONSE` (`lib/actions/mappings-for-redesign.ts` lines 1473-1497). 4a-4b does not introduce cross-table AI: the LLM prompt explicitly steers same-table suggestions, and any cross-table tail surfaces as `AI_INVALID_RESPONSE` with the "Please pick sources manually" copy. Pre-fill therefore never threads `joinAnnotations` from the AI — that is the user's job in the cross-table flow (Phase 4a-3). Cross-table AI is a substantively harder LLM prompt problem and is deferred to a future phase.
+
+#### Server action AbortSignal not threaded
+
+`suggestMappingForTarget` does not accept a `signal` parameter, so `AbortController` is purely client-side discard. The server completes the LLM call regardless of whether the user clicked Cancel. This is intentional and aligned with founder decision §7-OQ-2 ("tokens are sunk cost") — adding signal threading is a non-breaking future change and tracked as deferred work in `docs/features/phase-4-plan.md`.
+
+#### Provenance laundering prevention
+
+`aiSuggested=true` is persisted only when at least one originally-suggested source survives in the final selected IDs:
+
+```ts
+const stillHasOriginal =
+  originalSuggestedIds !== null &&
+  originalSuggestedIds.some((id) => selectedIds.includes(id))
+
+aiSuggested = stillHasOriginal
+confidence  = stillHasOriginal ? suggestState.suggestion.confidence : undefined
+aiReasoning = stillHasOriginal ? suggestState.suggestion.rationale  : undefined
+```
+
+`originalSuggestedIds: string[] | null` is form state captured by `applyLoadedSuggestion` (after the present-id filter) and overwritten on every re-suggest. The user can edit the chip set freely after a suggestion lands; provenance flips automatically based on whether *any* AI-picked source remains. Net effect:
+
+- **User keeps any AI source** → `ai_suggested=true`, `confidence` and `ai_reasoning` persisted (the common case).
+- **User removes ALL AI sources, picks unrelated ones** → `ai_suggested=false`, `confidence` and `ai_reasoning` dropped (laundering prevented — the audit trail correctly reflects that the final mapping is manual).
+
+#### Replace-warning gate
+
+When the user has manually edited a loaded suggestion (chip change, combination-type change, or joinAnnotation change tracked via `userEditedAfterSuggest`), the `Re-suggest` pill opens a `DiscardChangesDialog` with `variant="replace-ai"` instead of firing immediately. The dialog reuses the existing component and is parameterized via the new `variant: 'discard' | 'replace-ai'` prop (founder decision §3-OQ-2 — no extraction). On confirm the form proceeds with the suggestion replace; on `[Keep editing]` the form is left intact.
+
+The replace-warning is suppressed when:
+- The form is empty (no chips, no annotations, default combination type).
+- The current loaded suggestion has not been edited since `applyLoadedSuggestion`.
+- The state is `idle` or `error` (nothing to lose).
+
+#### Confidence pill bands
+
+`ConfidencePill` is the only consumer of the new threshold logic in `lib/utils/confidence-format.ts`:
+
+- **High** (≥70) — green dot, `Confident (NN%)` label.
+- **Possible** (40-69) — amber dot, `Possible match (NN%)` label.
+- **Uncertain** (<40) — red dot, `Low confidence (NN%)` label.
+
+The pre-existing `ConfidenceCell` / `RowConfidenceSection` / `SourceBullet` cells stay muted slate (no color band). Founder decision: colored bands are gated behind AI provenance only.
+
+The lift to `lib/utils/confidence-format.ts` (`formatConfidencePercent`, `formatConfidenceLabel`, `classifyConfidence`) replaces three inline `formatConfidence` helpers in `FieldMappingRow.tsx`, `MappingDrawer.tsx`, and `ExpandedSourceList.tsx`. Output is byte-identical for all pre-existing call sites; `tests/utils/confidence-format.test.ts` pins parity. Output formatting in `lib/actions/_outputs-translators.ts` and `tests/outputs/confidence-formatting.test.ts` is intentionally not touched (export precision is a separate concern — founder decision §12-OQ-1).
+
+#### Error surface
+
+Errors share the existing `ErrorBanner` (founder decision §7-OQ-1, generalized to take `actionLabel` + `onAction` props). The `SUGGEST_ERROR_COPY` map drives the affordance per code:
+
+| Error code | Affordance | Persistence |
+|---|---|---|
+| `RATE_LIMITED` | `Refresh` (full reload) | Persists until next selection change; pill stays disabled |
+| `AI_INVALID_RESPONSE` | `Try again` (re-fires `invokeSuggest`) | Cleared on next selection change or save |
+| `NOT_FOUND` / `PERMISSION_DENIED` / `MAINTENANCE_MODE` / `INTERNAL` | `Try again` | Cleared on next selection change or save |
+| `NETWORK` (client-thrown) | `Try again` | Cleared on next selection change or save |
+| `VALIDATION` | (no action) | Cleared on next selection change or save |
+
+`RATE_LIMITED` is the only persistent affordance — `suggestRateLimited` state stays `true` until the user changes selection, at which point both the banner and the pill-disabled state release together.
 
 During Phase 2a, a shim translates the new data model back into the old `RichFieldMapping` shape so the unchanged `MappingContent.tsx` and `TransformContent.tsx` continue to render. The shim is removed after Phase 3 ships.
 

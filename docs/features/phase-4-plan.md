@@ -13,8 +13,9 @@ and currently active only on Heritage Core in production.
 | 4a-1 | `createFieldMapping` + `suggestMappingForTarget` server wrappers (same-table only) | ✅ shipped 2026-04-25 |
 | 4a-2 | `CreateMappingForm` + drawer integration (W1, manual mapping creation, same-table only) | ✅ shipped 2026-04-25 |
 | 4a-3 | Cross-table picker + cross-table create flow (W1 cross-table) — includes Apply-RPC transparency stack (founder decision §10-OQ-1) | ✅ shipped 2026-04-25 |
-| 4a-4 | "Draft discarded" toast on row switch + UX polish | ⏳ pending |
-| 4a-5 | W6 — AI Suggest per-row in W1's form | ⏳ pending |
+| 4a-4a | "Draft discarded" toast primitive + row-switch Undo affordance | ✅ shipped 2026-04-25 |
+| 4a-4b | AI Suggest UI integration (W6 in W1's form — `[Suggest with AI]` footer + in-form pill, ConfidencePill, Why? toggle, replace-warning, laundering-prevention save metadata) | ✅ shipped 2026-04-26 |
+| 4a-5 | W6 cross-table AI suggestions (deferred LLM prompt work — wrapper hard-strips cross-table tails today) | ⏳ pending |
 | 4b | W2 + W3 + W4 (edit sources, combination, un-acknowledge) | ⏳ pending |
 | 4c | W5 (bulk operations) | ⏳ pending |
 
@@ -35,6 +36,24 @@ without explicit founder approval.
 > cross-table branch in the RPC and removes the structured error
 > code. See `docs/features/mapping-redesign.md` →
 > "Cross-table mapping creation (Phase 4a-3)" for the full disposition.
+
+> **Phase 4a-4b deferred work — AbortSignal threading + cross-table AI.**
+> 4a-4b ships AI Suggest UI integration with two intentional gaps that
+> are non-breaking to lift later (founder decisions §7-OQ-2 and §1
+> structural finding, 2026-04-26):
+> 1. **AbortController is client-side only.** `suggestMappingForTarget`
+>    does not accept a `signal` parameter; canceling a pending
+>    suggestion discards the response client-side but the LLM call
+>    completes server-side. Tokens are sunk cost. A future phase can
+>    thread `signal` through the wrapper signature without breaking
+>    callers.
+> 2. **AI never produces cross-table sources.** The wrapper hard-strips
+>    cross-table tails to `AI_INVALID_RESPONSE`
+>    (`lib/actions/mappings-for-redesign.ts` lines 1473-1497). 4a-5
+>    will lift this once a substantively harder LLM prompt is designed
+>    that proposes joined-source mappings reliably enough to be useful.
+> See `docs/features/mapping-redesign.md` →
+> "AI Suggest UI integration (Phase 4a-4)" for the full disposition.
 
 > **Cross-references:**
 > - Design contract: `docs/features/phase-3-gap-4a-design.md`

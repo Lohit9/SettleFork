@@ -11,7 +11,7 @@ import {
 } from 'react'
 import { Loader2 } from 'lucide-react'
 import { cn } from '@/components/ui/utils'
-import { AlertCircle, X } from '@/components/icons'
+import { AlertCircle, Sparkles, X } from '@/components/icons'
 import {
   AlertDialog,
   AlertDialogAction,
@@ -37,6 +37,7 @@ import {
 } from '@/lib/actions/mappings-for-redesign'
 import { classifyMappedRow, type MappingRowRule } from '@/lib/utils/mapping-row-rules'
 import { formatSampleValues } from '@/lib/utils/mapping-drawer-format'
+import { formatConfidencePercent } from '@/lib/utils/confidence-format'
 import type { SourceFieldWithState } from '@/lib/types/mappings-for-redesign'
 import { TableBadge } from './TableBadge'
 import {
@@ -303,6 +304,51 @@ export function MappingDrawer({
   }>({ isDirty: false, canSave: false, isSavePending: false })
   const formRef = useRef<CreateMappingFormHandle | null>(null)
 
+  // ── Phase 4a-4b — AI Suggest mode plumbing ───────────────────────
+  //
+  // `autoSuggestRequested`: latched true when the user clicks the
+  // unmapped-row footer's [Suggest with AI] button. The drawer flips
+  // both this AND `isFormActive=true` so the form mounts and immediately
+  // sees `autoSuggest=true` on its first render. The form consumes it
+  // via its mount-time effect and calls `onAutoSuggestConsumed`, which
+  // flips this back to false. Reset on row.id change as defense-in-
+  // depth (the form unmounts on row change, so consumed state would be
+  // pre-cleared anyway, but this protects against future drift where
+  // the form might persist across rows).
+  //
+  // `isSuggestPending`: mirrored from the form's `onSuggestStateChange`
+  // callback. Drives the footer's mode-switch to a single
+  // [Cancel suggestion] button while the LLM call is in flight.
+  const [autoSuggestRequested, setAutoSuggestRequested] = useState(false)
+  const [isSuggestPending, setIsSuggestPending] = useState(false)
+
+  // ── Phase 4a-4b — strict-mode-resistant auto-suggest consumption ──
+  //
+  // The drawer owns the consumption guard so it survives the form's
+  // strict-mode unmount/remount cycle in dev (Next.js 14 has
+  // `reactStrictMode: true` by default for app router). A `useRef`
+  // *inside the form* would reset on remount and let the auto-suggest
+  // effect fire twice — issuing two server-side LLM calls per click
+  // even though only the second result lands in UI.
+  //
+  // The Set is keyed by target field id (rather than row.id) because
+  // unmapped row identity is `unmapped::${target_field_id}` — the
+  // target field id is the stable invariant across row reshuffles.
+  // Cleared on:
+  //   • row identity change (defense-in-depth, alongside the existing
+  //     reset effect)
+  //   • a fresh user click on [Suggest with AI] in the footer (so a
+  //     re-request after cancel fires correctly)
+  const autoSuggestConsumedRowsRef = useRef<Set<string>>(new Set())
+  const tryConsumeAutoSuggest = useCallback(
+    (targetFieldId: string): boolean => {
+      if (autoSuggestConsumedRowsRef.current.has(targetFieldId)) return false
+      autoSuggestConsumedRowsRef.current.add(targetFieldId)
+      return true
+    },
+    [],
+  )
+
   // Reset form state on every row identity change. Founder decision §8 —
   // switch-row-while-dirty is a silent unmount (in 4a-4a the parent
   // additionally fires a row-switch-discard toast with Undo). We do
@@ -313,6 +359,15 @@ export function MappingDrawer({
   useEffect(() => {
     setIsFormActive(false)
     setFormState({ isDirty: false, canSave: false, isSavePending: false })
+    // Phase 4a-4b — reset AI Suggest mode state on row swap. Defense-
+    // in-depth; the form unmounts on row change so its internal state
+    // is gone, but these drawer-level mirrors must clear too.
+    setAutoSuggestRequested(false)
+    setIsSuggestPending(false)
+    // Phase 4a-4b — clear the auto-suggest consumption Set on row swap
+    // so a new row's first auto-suggest can fire even if a prior row
+    // already populated the Set.
+    autoSuggestConsumedRowsRef.current.clear()
   }, [rowIdForFormReset])
 
   // Phase 4a-4a — restoreFormState auto-activate.
@@ -637,6 +692,10 @@ export function MappingDrawer({
         }}
         restoreFormState={restoreFormState}
         onRestoreConsumed={onRestoreConsumed}
+        autoSuggest={autoSuggestRequested}
+        onAutoSuggestConsumed={() => setAutoSuggestRequested(false)}
+        tryConsumeAutoSuggest={tryConsumeAutoSuggest}
+        onSuggestStateChange={(s) => setIsSuggestPending(s.isSuggestPending)}
       />
       <DrawerFooter
         row={effectiveRow}
@@ -649,7 +708,28 @@ export function MappingDrawer({
         isFormActive={isFormActive}
         formCanSave={formState.canSave}
         formIsSavePending={formState.isSavePending}
+        isSuggestPending={isSuggestPending}
         onCreateMappingClick={() => setIsFormActive(true)}
+        onSuggestWithAIClick={() => {
+          // Flow A — flip both flags in the same render so the form
+          // mounts with autoSuggest=true on its first render. The form
+          // fires invokeSuggest immediately and clears autoSuggest via
+          // onAutoSuggestConsumed.
+          //
+          // Phase 4a-4b strict-mode fix: clear any prior consumption
+          // entry for this row's target field so a re-request (e.g.
+          // user cancelled the auto-suggested form, then clicked
+          // [Suggest with AI] again on the same row) re-fires
+          // correctly.
+          if (effectiveRow.kind === 'unmapped') {
+            autoSuggestConsumedRowsRef.current.delete(
+              effectiveRow.targetField.id,
+            )
+          }
+          setAutoSuggestRequested(true)
+          setIsFormActive(true)
+        }}
+        onCancelSuggestClick={() => formRef.current?.cancelSuggest()}
         onFormCancelClick={() => maybeRequestClose()}
         onFormSaveClick={() => formRef.current?.triggerSave()}
       />
@@ -930,6 +1010,21 @@ interface DrawerBodyProps {
   restoreFormState?: CreateMappingFormSnapshot | null
   /** Phase 4a-4a — invoked by the form once a restore has been applied. */
   onRestoreConsumed?: () => void
+  /** Phase 4a-4b — when true, the form fires `invokeSuggest` once on mount. */
+  autoSuggest?: boolean
+  /** Phase 4a-4b — invoked by the form once autoSuggest has been consumed. */
+  onAutoSuggestConsumed?: () => void
+  /**
+   * Phase 4a-4b — strict-mode-resistant consumption guard owned by the
+   * drawer. The form calls this with its target field id; returns
+   * `true` if this is the first claim (form should fire invokeSuggest)
+   * or `false` if a prior mount already consumed for this row (form
+   * should short-circuit). See drawer-level comment on
+   * `autoSuggestConsumedRowsRef`.
+   */
+  tryConsumeAutoSuggest?: (targetFieldId: string) => boolean
+  /** Phase 4a-4b — fired whenever the form's AI Suggest pending state changes. */
+  onSuggestStateChange?: (state: { isSuggestPending: boolean }) => void
 }
 
 function DrawerBody(props: DrawerBodyProps) {
@@ -954,6 +1049,10 @@ function BodyContent({
   onFormSaveSuccess,
   restoreFormState,
   onRestoreConsumed,
+  autoSuggest,
+  onAutoSuggestConsumed,
+  tryConsumeAutoSuggest,
+  onSuggestStateChange,
 }: DrawerBodyProps) {
   switch (row.kind) {
     case 'mapped':
@@ -975,6 +1074,10 @@ function BodyContent({
           onFormSaveSuccess={onFormSaveSuccess}
           restoreFormState={restoreFormState}
           onRestoreConsumed={onRestoreConsumed}
+          autoSuggest={autoSuggest}
+          onAutoSuggestConsumed={onAutoSuggestConsumed}
+          tryConsumeAutoSuggest={tryConsumeAutoSuggest}
+          onSuggestStateChange={onSuggestStateChange}
         />
       )
   }
@@ -1219,6 +1322,10 @@ interface UnmappedBodyProps {
   onFormSaveSuccess: (newTfmId: string) => void
   restoreFormState?: CreateMappingFormSnapshot | null
   onRestoreConsumed?: () => void
+  autoSuggest?: boolean
+  onAutoSuggestConsumed?: () => void
+  tryConsumeAutoSuggest?: (targetFieldId: string) => boolean
+  onSuggestStateChange?: (state: { isSuggestPending: boolean }) => void
 }
 
 function UnmappedBody({
@@ -1232,6 +1339,10 @@ function UnmappedBody({
   onFormSaveSuccess,
   restoreFormState,
   onRestoreConsumed,
+  autoSuggest,
+  onAutoSuggestConsumed,
+  tryConsumeAutoSuggest,
+  onSuggestStateChange,
 }: UnmappedBodyProps) {
   return (
     <>
@@ -1254,6 +1365,10 @@ function UnmappedBody({
             onStateChange={onFormStateChange}
             restoreFormState={restoreFormState}
             onRestoreConsumed={onRestoreConsumed}
+            autoSuggest={autoSuggest}
+            onAutoSuggestConsumed={onAutoSuggestConsumed}
+            tryConsumeAutoSuggest={tryConsumeAutoSuggest}
+            onSuggestStateChange={onSuggestStateChange}
           />
         </DrawerSection>
       ) : (
@@ -1331,7 +1446,7 @@ function ValueAssignmentBody({ row }: { row: ValueAssignmentRow }) {
             className="text-sm tabular-nums text-slate-900"
             data-testid="drawer-confidence"
           >
-            {formatConfidence(row.confidence)}
+            {formatConfidencePercent(row.confidence)}
           </span>
         ) : (
           <span
@@ -1349,15 +1464,6 @@ function ValueAssignmentBody({ row }: { row: ValueAssignmentRow }) {
   )
 }
 
-/**
- * Shared with `FieldMappingRow.tsx` semantically — accepts either the
- * 0-100 integer storage convention or a 0-1 fraction defensively, renders
- * 2-decimal percentage. Mirrors row-level Gap 5a vocabulary.
- */
-function formatConfidence(confidence: number): string {
-  const normalized = confidence > 1 ? confidence : confidence * 100
-  return `${normalized.toFixed(2)}%`
-}
 
 // ── Mapped row body — Gap 8b ───────────────────────────────────────────────
 //
@@ -1508,7 +1614,7 @@ function SourceCard({ source }: { source: MappingSourceRef }) {
           className="ml-auto flex-shrink-0 tabular-nums text-xs text-slate-500"
           data-testid="drawer-source-confidence"
         >
-          {formatSourceConfidence(source.confidence)}
+          {formatConfidencePercent(source.confidence)}
         </span>
         {source.joinAnnotation ? (
           <span
@@ -1626,7 +1732,7 @@ function RowConfidenceSection({ confidence }: { confidence: number | null }) {
           className="text-sm tabular-nums text-slate-900"
           data-testid="drawer-confidence"
         >
-          {formatConfidence(confidence)}
+          {formatConfidencePercent(confidence)}
         </span>
       ) : (
         <span
@@ -1639,18 +1745,6 @@ function RowConfidenceSection({ confidence }: { confidence: number | null }) {
       )}
     </DrawerSection>
   )
-}
-
-/**
- * Per-source confidence formatter. Identical algorithm to `formatConfidence`
- * (2-decimal percentage, accepts 0-1 fraction or 0-100 integer storage), but
- * returns an em-dash for `null` — per-source rows can carry null confidence
- * per the contract, and we want a quiet glyph rather than throwing or
- * showing "0.00%".
- */
-function formatSourceConfidence(confidence: number | null): string {
-  if (confidence === null) return '—'
-  return formatConfidence(confidence)
 }
 
 // ── Footer — Gap 9 ──────────────────────────────────────────────────────────
@@ -1690,7 +1784,13 @@ interface DrawerFooterProps {
   isFormActive: boolean
   formCanSave: boolean
   formIsSavePending: boolean
+  /** Phase 4a-4b — true while the form's AI Suggest call is in flight. */
+  isSuggestPending: boolean
   onCreateMappingClick: () => void
+  /** Phase 4a-4b — Rule 6 footer's [Suggest with AI] click handler. */
+  onSuggestWithAIClick: () => void
+  /** Phase 4a-4b — single [Cancel suggestion] button click handler. */
+  onCancelSuggestClick: () => void
   onFormCancelClick: () => void
   onFormSaveClick: () => void
 }
@@ -1706,7 +1806,10 @@ function DrawerFooter({
   isFormActive,
   formCanSave,
   formIsSavePending,
+  isSuggestPending,
   onCreateMappingClick,
+  onSuggestWithAIClick,
+  onCancelSuggestClick,
   onFormCancelClick,
   onFormSaveClick,
 }: DrawerFooterProps) {
@@ -1733,7 +1836,10 @@ function DrawerFooter({
           isFormActive={isFormActive}
           formCanSave={formCanSave}
           formIsSavePending={formIsSavePending}
+          isSuggestPending={isSuggestPending}
           onCreateMappingClick={onCreateMappingClick}
+          onSuggestWithAIClick={onSuggestWithAIClick}
+          onCancelSuggestClick={onCancelSuggestClick}
           onFormCancelClick={onFormCancelClick}
           onFormSaveClick={onFormSaveClick}
         />
@@ -1753,22 +1859,33 @@ function DrawerFooter({
   )
 }
 
-// ── Unmapped footer (Phase 4a-2) ────────────────────────────────────────────
+// ── Unmapped footer (Phase 4a-2 + 4a-4b) ────────────────────────────────────
 //
-// Mode-switches between two visual states:
-//   • Inactive — single [Create mapping] button on the right.
-//   • Active   — [Cancel] [Save mapping] pair on the right.
+// Mode-switches between THREE visual states (4a-4b adds the third):
 //
-// The Save button is disabled until the form publishes `canSave=true`
-// (founder decision §4-OQ-1: dirty-check is redundant once selection
-// length is the gate). Both buttons are disabled while the save is
-// inflight to prevent duplicate submissions.
+//   • Inactive — Two-button row: [Suggest with AI] [Create mapping]. The
+//     Suggest variant flips both `isFormActive` AND `autoSuggestRequested`
+//     (drawer level) so the form mounts ready to fire its mount-time
+//     `invokeSuggest`. Both buttons are always enabled on initial render
+//     per locked §2-OQ-2 — rate-limit gating happens INSIDE the form's
+//     pill, not at the footer.
+//
+//   • Active + Suggest pending — Single [Cancel suggestion] button. Drives
+//     `formRef.current.cancelSuggest()` which aborts the in-flight
+//     controller and restores the form's pre-pending snapshot.
+//
+//   • Active + not pending — [Cancel] [Save mapping] pair (4a-2 shape).
+//     The Save button is disabled until the form publishes `canSave=true`.
+//     Both buttons are disabled while the save is inflight.
 
 interface UnmappedFooterButtonsProps {
   isFormActive: boolean
   formCanSave: boolean
   formIsSavePending: boolean
+  isSuggestPending: boolean
   onCreateMappingClick: () => void
+  onSuggestWithAIClick: () => void
+  onCancelSuggestClick: () => void
   onFormCancelClick: () => void
   onFormSaveClick: () => void
 }
@@ -1777,13 +1894,30 @@ function UnmappedFooterButtons({
   isFormActive,
   formCanSave,
   formIsSavePending,
+  isSuggestPending,
   onCreateMappingClick,
+  onSuggestWithAIClick,
+  onCancelSuggestClick,
   onFormCancelClick,
   onFormSaveClick,
 }: UnmappedFooterButtonsProps) {
   if (!isFormActive) {
     return (
       <div className="flex items-center justify-end gap-2">
+        <button
+          type="button"
+          data-testid="mapping-drawer-suggest-with-ai-button"
+          aria-label="Suggest mapping with AI"
+          onClick={onSuggestWithAIClick}
+          className={cn(
+            'inline-flex h-9 items-center justify-center gap-1.5 rounded-md border px-3 text-sm font-medium transition-colors',
+            'border-blue-200 bg-blue-50 text-blue-800 hover:bg-blue-100',
+            'focus:outline-none focus:ring-2 focus:ring-blue-500/30',
+          )}
+        >
+          <Sparkles aria-hidden="true" className="h-3.5 w-3.5" />
+          <span>Suggest with AI</span>
+        </button>
         <button
           type="button"
           data-testid="mapping-drawer-create-mapping-button"
@@ -1796,6 +1930,25 @@ function UnmappedFooterButtons({
           )}
         >
           Create mapping
+        </button>
+      </div>
+    )
+  }
+  if (isSuggestPending) {
+    return (
+      <div className="flex items-center justify-end gap-2">
+        <button
+          type="button"
+          data-testid="mapping-drawer-cancel-suggest-button"
+          aria-label="Cancel AI suggestion"
+          onClick={onCancelSuggestClick}
+          className={cn(
+            'inline-flex h-9 items-center justify-center rounded-md border px-3 text-sm font-medium transition-colors',
+            'border-slate-300 bg-white text-slate-700 hover:bg-slate-50',
+            'focus:outline-none focus:ring-2 focus:ring-slate-500/30',
+          )}
+        >
+          Cancel suggestion
         </button>
       </div>
     )
