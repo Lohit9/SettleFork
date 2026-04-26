@@ -1969,13 +1969,69 @@ Tests follow the source-level invariant pattern established in 4a-* (read action
 
 ### Known limitations carried forward
 
-These are intentional Phase 4b-1 deferrals, not bugs:
+These are intentional Phase 4b-1 deferrals, not bugs (4b-2 closed item 1 below; the rest carry forward):
 
-1. **Un-acknowledge (W4) not yet wired.** Source-side acknowledgment toggle ships as Phase 4b-2 fast-follow. The relevant footer affordance is queued in `phase-4-plan.md`.
+1. **Un-acknowledge (W4)** — ✓ shipped as Phase 4b-2 (2026-04-26). See "Phase 4b-2 — un-acknowledge field" below.
 2. **Quiet edit mode rejected.** No "Save without status revert" admin path — every edit reverts to `needs_review` (founder §4.1 + §4.2 — admin nextStatus override deferred).
 3. **No "don't show again" preference for the invalidation warn.** Every edit that would reset a transform pops the dialog; muting is queued for 4-extras (founder §6.1).
 4. **No `'stale' flag on transformations.** When sources change, the transform is deleted (`resetFieldTransform`), not flagged stale (founder §6.2 — preserves the 4a-6 transformation contract).
 5. **Cross-table edit requires `joinAnnotations` re-disambiguation only when ambiguity is fresh.** Unchanged joined tables retain pre-populated annotations across the edit (founder §5.2). Toggling cross/same-table on a source clears ambiguity for the affected joined table only.
+
+## Phase 4b-2 — un-acknowledge field (2026-04-26)
+
+Phase 4b-2 closes the W4 workstream from `phase-4-plan.md` and completes Phase 4b: a user with a target field that was acknowledged ("intentionally unmapped") can now reverse that decision in-place via the drawer footer, returning the field to Rule 6 (unmapped) so it becomes mappable again. Ships as a same-week fast-follow on top of 4b-1 (founder §9.1).
+
+### Server-side wrapper
+
+`unacknowledgeField(input: { projectId, targetFieldId })` lives in `lib/actions/mappings-for-redesign.ts` alongside the 4b-1 edit wrappers. Returns the `UnacknowledgeFieldResult` discriminated union with five error codes (`PERMISSION_DENIED`, `NOT_FOUND`, `VALIDATION`, `MAINTENANCE_MODE`, `INTERNAL`).
+
+Sequence (matches the wrapper's inline doc):
+
+1. Validation — empty `projectId` / `targetFieldId` → `VALIDATION`.
+2. Auth — `supabase.auth.getUser()`; missing user → `PERMISSION_DENIED`.
+3. Permission — `requireProjectPermission(projectId, 'editor')`; not editor → `PERMISSION_DENIED`.
+4. Maintenance gate — `assertMappingWritesEnabled(projectId)`; on flag-off → `MAINTENANCE_MODE`.
+5. Identity read — find the TFM via `(project_id, target_field_id)`. NOT filtered by `is_acknowledged` so we can distinguish two surfaces:
+   - No row → `NOT_FOUND` (stale drawer click after another user un-acknowledged).
+   - Row exists with `is_acknowledged=false` → `VALIDATION` with copy directing the user to Edit / Reject (the right surface for non-acknowledged TFMs).
+6. Delegate to `removeAcknowledgment(projectId, targetFieldId)` from `lib/actions/field-acknowledgments.ts` — already does the actual delete + table-mapping recompute. Wrapped in try/catch that translates unexpected throws to `INTERNAL`.
+7. Activity log — emits `acknowledgment_removed` with metadata `{ tfm_id, target_field_id, target_field, previous_acknowledgment_reason }`.
+8. Revalidate `/app/projects/<id>/mapping`.
+
+§3.k locked the status semantics: delete the TFM row, no new status enum value. The field re-renders as Rule 6 unmapped on the next read. No new RPC needed (founder §1: delegate to existing `removeAcknowledgment`).
+
+### UI surface
+
+Founder §3.j locked the affordance to the **drawer footer** (NOT inline). Matches the verb-action pattern of Approve / Reject / Edit. Specifically:
+
+- `target_acknowledged` rows show a three-button footer: `[Reject (disabled)] [Approve (disabled)] [Un-acknowledge]`.
+- Click → `UnacknowledgeConfirmDialog` (AlertDialog, neutral default styling — un-acknowledge is reversible by re-acknowledging, not destructive). Copy:
+  > Un-acknowledge this field?
+  > This will return `<field_name>` to unmapped (Rule 6) and clear the acknowledgment reason.
+  > [Cancel] [Un-acknowledge]
+- Confirm → `unacknowledgeField` server call → on success, drawer closes + URL clears + sidebar refreshes (mirrors reject's drawer-close path).
+- Failure surfaces uniform copy "Couldn't un-acknowledge this field. Please try again." with full errorCode in the console for ops triage.
+
+The disabled Approve/Reject tooltips ("un-acknowledge first") still apply — un-acknowledge is now the explicit way to follow that guidance.
+
+### Activity log
+
+Uses the existing `acknowledgment_removed` action type (added in the Phase 4 mutation-completeness widening, see `lib/actions/activity-log.ts:31`). No new action type needed.
+
+### Test coverage
+
+| Layer | File | Coverage |
+| ----- | ---- | -------- |
+| Action — server-level invariants | `tests/actions/unacknowledge-field.test.ts` | U1-U7 + sequencing: auth/permission/maintenance gates, NOT_FOUND vs VALIDATION distinction, removeAcknowledgment delegation, activity log + revalidate, ordered checks (validate-before-auth, auth-before-permission, permission-before-DB-read) |
+| Component — MappingDrawer un-ack state | `tests/components/mapping-drawer-unacknowledge.test.ts` | UN1-UN6: button presence + position (rightmost in `AcknowledgedFooterButtons`), visibility gate (only inside `target_acknowledged` branch), click-opens-dialog flow, dialog cancel does NOT call wrapper, confirm wires `unacknowledgeField({ projectId, targetFieldId })` and threads `onActionComplete?.('unacknowledge', ...)`, drawer-close + error-copy semantics |
+| Integration (on-demand) | `tests/integration/edit-mapping-heritage.test.ts` (extended) | I4: seed bare-acknowledged TFM via `supabaseAdmin`, invoke `unacknowledgeField`, verify TFM row is gone (field returns to Rule 6 unmapped). Gated by `RUN_EDIT_MAPPING_HERITAGE_INTEGRATION=1` |
+
+Same source-level invariant testing strategy as 4a-* / 4b-1 — fast, deterministic, no DB dependency for the unit layer; integration test self-seeds via direct admin insert (the `dq_acknowledge_target` RPC is also `auth.uid()`-gated and would require the same bypass pattern).
+
+### Known limitations carried forward (Phase 4b-2)
+
+1. **Source-side un-acknowledge.** The `removeAcknowledgment` helper handles both target-side (deletes the bare-ack TFM) and source-side (deletes the `source_field_acknowledgments` row). The drawer un-acknowledge surface is target-side ONLY — source-side acknowledgments are still managed via the legacy field-acknowledgment surface (the redesign drawer renders source rows differently). This is not a regression; source-side ack management was always out of scope for the drawer.
+2. **No re-acknowledge shortcut after un-acknowledge.** Once un-acknowledged, the field returns to Rule 6 unmapped; the user reaches the standard W1 form to re-ack. No "undo" button (mirrors reject's no-undo policy).
 
 
 

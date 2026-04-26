@@ -694,7 +694,7 @@ function MappingBody({
   )
 
   const handleDrawerActionComplete = useCallback(
-    (action: 'approve' | 'reject', _rowId: string) => {
+    (action: 'approve' | 'reject' | 'unacknowledge', _rowId: string) => {
       // Phase 3 Gap 11b — clear the sidebar highlight after any
       // drawer action. Reject deletes the TFM (the highlighted row
       // identity dissolves on the server), so a stale highlight
@@ -702,9 +702,13 @@ function MappingBody({
       // preserves identity but also clears the highlight — mild
       // over-clearing is acceptable per the founder's "additional
       // concern" decision in the Gap 11b alignment.
+      //
+      // Phase 4b-2 — un-acknowledge mirrors reject: the bare-ack
+      // TFM row is deleted, so the row id stops resolving. Close
+      // the drawer + clear the URL identically.
       onClearHighlight()
       router.refresh()
-      if (action === 'reject') {
+      if (action === 'reject' || action === 'unacknowledge') {
         setDrawerRowId(null)
         writeUrl(filters, null)
       }

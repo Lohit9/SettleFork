@@ -75,6 +75,7 @@ import {
 import { logActivity } from '@/lib/actions/activity-log'
 import { requireProjectPermission } from '@/lib/actions/role-resolution'
 import { assertMappingWritesEnabled } from '@/lib/auth/mapping-writes'
+import { removeAcknowledgment } from '@/lib/actions/field-acknowledgments'
 import { callClaude } from '@/lib/ai/claude'
 import { checkAIRateLimit } from '@/lib/ai/rate-limit'
 import { buildAIContext, formatDocumentsForPrompt } from '@/lib/ai/context-builder'
@@ -2642,4 +2643,211 @@ export async function previewEditInvalidation(
     stagedRowCount,
     capped,
   }
+}
+
+// ─── Write path — Phase 4b-2 (un-acknowledge field) ─────────────────────────
+//
+// `unacknowledgeField` is the W4 server-side surface — the mirror image of
+// `acknowledgeField`. It deletes the bare-acknowledged TFM row (no sources,
+// `is_acknowledged=true`) and lets the field return to Rule 6 (unmapped) so
+// the user can map it through the W1 form.
+//
+// Founder decisions §3.j + §3.k (Phase 4b investigation):
+//   • UI affordance: footer Un-acknowledge button on `target_acknowledged`
+//     rows (NOT inline — matches the verb-action affordance pattern of
+//     Approve / Reject / Edit).
+//   • Status semantics: delete the TFM row, no new status enum value. The
+//     field re-renders as Rule 6 unmapped on the next read. Activity log
+//     captures the un-ack via the existing `acknowledgment_removed` action
+//     type (no new action type needed; widened in 4a-* per
+//     `lib/actions/activity-log.ts:31`).
+//
+// The wrapper delegates the actual delete to
+// `removeAcknowledgment(projectId, fieldId)` from
+// `lib/actions/field-acknowledgments.ts` which already does the
+// editor-permission check, maintenance gate, and recompute of affected
+// table_mapping statuses. We layer wrapper-level guards on top so we can
+// distinguish PERMISSION_DENIED / MAINTENANCE_MODE / NOT_FOUND / VALIDATION
+// at the discriminated-union level without throw/catch in the drawer.
+//
+// IMPORTANT — `removeAcknowledgment` performs the same auth + maintenance
+// checks internally and throws on failure. We pre-validate so the typical
+// happy path returns a clean discriminated-union without exception flow,
+// AND so a NOT_FOUND case (stale drawer click after another user
+// un-acknowledged) surfaces deterministically. Any unexpected throw from
+// `removeAcknowledgment` is caught and translated to INTERNAL.
+
+export type UnacknowledgeFieldErrorCode =
+  | 'PERMISSION_DENIED'
+  | 'NOT_FOUND'
+  | 'VALIDATION'
+  | 'MAINTENANCE_MODE'
+  | 'INTERNAL'
+
+export type UnacknowledgeFieldResult =
+  | { success: true; tfmId: string }
+  | {
+      success: false
+      error: string
+      errorCode: UnacknowledgeFieldErrorCode
+    }
+
+/**
+ * Un-acknowledge a target field. Deletes the bare-ack TFM and returns the
+ * field to Rule 6 (unmapped). See file header for the full 4b-2 contract.
+ *
+ * SEQUENCE:
+ *   1.  Cheap input validation (projectId + targetFieldId required).
+ *   2.  Auth (Supabase user) → PERMISSION_DENIED.
+ *   3.  Project-permission gate (`requireProjectPermission(..., 'editor')`)
+ *       → PERMISSION_DENIED.
+ *   4.  Maintenance-mode gate → MAINTENANCE_MODE.
+ *   5.  Identity read — find the TFM via `(project_id, target_field_id)`
+ *       (uniqueness constraint guarantees ≤1 row). NOT_FOUND when absent.
+ *   6.  State guard — refuse to mutate a non-acknowledged TFM (the user
+ *       should reach `editMappingSources` for those). Returns VALIDATION
+ *       with copy directing the caller to the right surface.
+ *   7.  Delegate to `removeAcknowledgment(projectId, targetFieldId)` which
+ *       (a) deletes the row, (b) recomputes affected table_mappings.
+ *   8.  Activity log: `acknowledgment_removed` with metadata
+ *       { tfm_id, target_field_id, target_field, previous_acknowledgment_reason }.
+ *   9.  Revalidate /mapping path.
+ */
+export async function unacknowledgeField(input: {
+  projectId: string
+  targetFieldId: string
+}): Promise<UnacknowledgeFieldResult> {
+  const { projectId, targetFieldId } = input
+
+  // ── Step 1: validation ───────────────────────────────────────────────────
+  if (!projectId) {
+    return {
+      success: false,
+      error: 'projectId is required',
+      errorCode: 'VALIDATION',
+    }
+  }
+  if (!targetFieldId) {
+    return {
+      success: false,
+      error: 'targetFieldId is required',
+      errorCode: 'VALIDATION',
+    }
+  }
+
+  // ── Step 2: auth ─────────────────────────────────────────────────────────
+  const supabase = await createClient()
+  const {
+    data: { user },
+  } = await supabase.auth.getUser()
+  if (!user) {
+    return {
+      success: false,
+      error: 'Not authenticated',
+      errorCode: 'PERMISSION_DENIED',
+    }
+  }
+
+  // ── Step 3: permission ───────────────────────────────────────────────────
+  const perm = await requireProjectPermission(projectId, 'editor')
+  if (!perm.allowed) {
+    return {
+      success: false,
+      error: perm.error ?? 'Insufficient permissions',
+      errorCode: 'PERMISSION_DENIED',
+    }
+  }
+
+  // ── Step 4: maintenance gate ─────────────────────────────────────────────
+  try {
+    await assertMappingWritesEnabled(projectId)
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err)
+    if (
+      message ===
+      'Mapping writes are temporarily disabled for scheduled maintenance'
+    ) {
+      return {
+        success: false,
+        error: message,
+        errorCode: 'MAINTENANCE_MODE',
+      }
+    }
+    return {
+      success: false,
+      error: message,
+      errorCode: 'INTERNAL',
+    }
+  }
+
+  // ── Step 5: identity read — find TFM by (project_id, target_field_id) ───
+  // We do NOT filter by is_acknowledged here so we can distinguish
+  // NOT_FOUND (no TFM at all — likely a stale drawer click) from
+  // VALIDATION (TFM exists but is_acknowledged=false — wrong surface).
+  const { data: tfm } = await supabaseAdmin
+    .from('target_field_mappings')
+    .select('id, is_acknowledged, acknowledgment_reason')
+    .eq('project_id', projectId)
+    .eq('target_field_id', targetFieldId)
+    .maybeSingle<{
+      id: string
+      is_acknowledged: boolean
+      acknowledgment_reason: string | null
+    }>()
+  if (!tfm) {
+    return {
+      success: false,
+      error: 'Acknowledgment not found',
+      errorCode: 'NOT_FOUND',
+    }
+  }
+
+  // ── Step 6: state guard ──────────────────────────────────────────────────
+  if (!tfm.is_acknowledged) {
+    return {
+      success: false,
+      error:
+        "This field has a mapping, not an acknowledgment. Use Edit or Reject from the drawer to change it.",
+      errorCode: 'VALIDATION',
+    }
+  }
+
+  // ── Step 7: delegate to removeAcknowledgment ─────────────────────────────
+  try {
+    await removeAcknowledgment(projectId, targetFieldId)
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err)
+    return {
+      success: false,
+      error: message,
+      errorCode: 'INTERNAL',
+    }
+  }
+
+  // ── Step 8: activity log ─────────────────────────────────────────────────
+  // Best-effort target-field name lookup for the description; the row is
+  // already deleted but the field itself is still present.
+  const { data: targetField } = await supabaseAdmin
+    .from('fields')
+    .select('name')
+    .eq('id', targetFieldId)
+    .maybeSingle<{ name: string }>()
+
+  // ── Step 9: revalidate /mapping ──────────────────────────────────────────
+  revalidatePath(`/app/projects/${projectId}/mapping`)
+
+  await logActivity(
+    projectId,
+    'acknowledgment_removed',
+    `Acknowledgment removed: ${targetField?.name ?? '?'}`,
+    'mapping',
+    {
+      tfm_id: tfm.id,
+      target_field_id: targetFieldId,
+      target_field: targetField?.name ?? null,
+      previous_acknowledgment_reason: tfm.acknowledgment_reason,
+    },
+  )
+
+  return { success: true, tfmId: tfm.id }
 }

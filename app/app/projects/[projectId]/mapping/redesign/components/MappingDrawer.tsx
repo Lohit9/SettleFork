@@ -35,6 +35,7 @@ import {
   approveFieldMapping,
   previewEditInvalidation,
   rejectFieldMapping,
+  unacknowledgeField,
 } from '@/lib/actions/mappings-for-redesign'
 import { classifyMappedRow, type MappingRowRule } from '@/lib/utils/mapping-row-rules'
 import { formatSampleValues } from '@/lib/utils/mapping-drawer-format'
@@ -222,7 +223,10 @@ export interface MappingDrawerProps {
    * state (no harm done — the optimistic overlay self-corrects on the
    * next prop change).
    */
-  onActionComplete?: (action: 'approve' | 'reject', rowId: string) => void
+  onActionComplete?: (
+    action: 'approve' | 'reject' | 'unacknowledge',
+    rowId: string,
+  ) => void
   /**
    * Phase 4a-2 — required by the manual mapping creation form (W1)
    * when a Rule 6 unmapped drawer is open and the user clicks
@@ -613,6 +617,11 @@ export function MappingDrawer({
   const [isApprovePending, startApproveTransition] = useTransition()
   const [isRejecting, setIsRejecting] = useState(false)
   const [confirmRejectOpen, setConfirmRejectOpen] = useState(false)
+  // Phase 4b-2 — un-acknowledge in-flight + confirm dialog state. Mirrors
+  // the reject-confirmation shape (single-shot destructive action gated
+  // behind an AlertDialog, drawer closes on success).
+  const [isUnacknowledging, setIsUnacknowledging] = useState(false)
+  const [confirmUnacknowledgeOpen, setConfirmUnacknowledgeOpen] = useState(false)
 
   // Reset transient action state whenever the row identity changes —
   // including drawer close (`row` becomes null between renders) and
@@ -627,6 +636,8 @@ export function MappingDrawer({
     // which unmounts everything; if a new row mounts, the in-flight
     // state was for a different row and would never resolve here.
     setIsRejecting(false)
+    setConfirmUnacknowledgeOpen(false)
+    setIsUnacknowledging(false)
   }, [rowId])
 
   // Clear the optimistic overlay once the server confirms by handing
@@ -715,6 +726,51 @@ export function MappingDrawer({
       }
     }
   }, [row, onActionComplete])
+
+  // ── Phase 4b-2 — un-acknowledge handler ──────────────────────────
+  //
+  // Mirrors `handleRejectConfirm`'s shape: a destructive single-shot
+  // action gated behind an AlertDialog. On success the parent closes
+  // the drawer + clears the URL (the TFM row id dissolves; the field
+  // returns to Rule 6 unmapped). On failure we surface uniform copy
+  // and log the underlying errorCode for ops triage.
+  const handleUnacknowledgeConfirm = useCallback(async () => {
+    if (!row || row.kind !== 'target_acknowledged') return
+    // Defensive bail when the drawer was mounted without a projectId
+    // (the real flow always threads it from MappingContent — this is
+    // belt-and-suspenders for storybook / standalone test contexts).
+    if (!projectId) return
+    const targetRowId = row.id
+    const targetFieldId = row.targetField.id
+    setErrorMessage(null)
+    setIsUnacknowledging(true)
+    try {
+      const result = await unacknowledgeField({
+        projectId,
+        targetFieldId,
+      })
+      if (!result.success) {
+        setIsUnacknowledging(false)
+        setConfirmUnacknowledgeOpen(false)
+        setErrorMessage(GENERIC_UNACKNOWLEDGE_ERROR)
+        if (typeof console !== 'undefined') {
+          console.error('[MappingDrawer] unacknowledgeField failed:', result)
+        }
+        return
+      }
+      // Success — drawer about to unmount. Do NOT clear isUnacknowledging
+      // for the same reason as the reject path.
+      setConfirmUnacknowledgeOpen(false)
+      onActionComplete?.('unacknowledge', targetRowId)
+    } catch (err) {
+      setIsUnacknowledging(false)
+      setConfirmUnacknowledgeOpen(false)
+      setErrorMessage(GENERIC_UNACKNOWLEDGE_ERROR)
+      if (typeof console !== 'undefined') {
+        console.error('[MappingDrawer] unacknowledgeField threw:', err)
+      }
+    }
+  }, [row, projectId, onActionComplete])
 
   // ── Phase 4b-1 — edit-mode handlers ──────────────────────────────
   //
@@ -932,6 +988,8 @@ export function MappingDrawer({
         onEditClick={handleEditClick}
         onEditFormCancelClick={() => maybeRequestClose()}
         onEditFormSaveClick={() => void handleEditSavePrecheck()}
+        isUnacknowledging={isUnacknowledging}
+        onUnacknowledgeClick={() => setConfirmUnacknowledgeOpen(true)}
       />
       <EditInvalidationDialog
         preview={editInvalidationPreview}
@@ -949,6 +1007,16 @@ export function MappingDrawer({
         targetFieldName={effectiveRow.targetField.name}
         isRejecting={isRejecting}
         onConfirm={handleRejectConfirm}
+      />
+      <UnacknowledgeConfirmDialog
+        open={confirmUnacknowledgeOpen}
+        onOpenChange={(next) => {
+          if (isUnacknowledging) return
+          setConfirmUnacknowledgeOpen(next)
+        }}
+        targetFieldName={effectiveRow.targetField.name}
+        isUnacknowledging={isUnacknowledging}
+        onConfirm={handleUnacknowledgeConfirm}
       />
     </aside>
   )
@@ -978,6 +1046,8 @@ const GENERIC_APPROVE_ERROR =
   "Couldn't approve this mapping. Please try again."
 const GENERIC_REJECT_ERROR =
   "Couldn't reject this mapping. Please try again."
+const GENERIC_UNACKNOWLEDGE_ERROR =
+  "Couldn't un-acknowledge this field. Please try again."
 
 // ── Header ─────────────────────────────────────────────────────────────────
 
@@ -2050,6 +2120,18 @@ interface DrawerFooterProps {
   onEditFormCancelClick: () => void
   /** Phase 4b-1 — edit-mode [Save changes] click handler (runs preview-then-save). */
   onEditFormSaveClick: () => void
+  /**
+   * Phase 4b-2 — true while the un-acknowledge call is in flight.
+   * Drives the spinner on the Un-acknowledge button (and on the
+   * confirm dialog's destructive action).
+   */
+  isUnacknowledging: boolean
+  /**
+   * Phase 4b-2 — Un-acknowledge click handler. Opens the confirm
+   * dialog; the actual server call fires from the dialog's confirm
+   * action.
+   */
+  onUnacknowledgeClick: () => void
 }
 
 function DrawerFooter({
@@ -2074,6 +2156,8 @@ function DrawerFooter({
   onEditClick,
   onEditFormCancelClick,
   onEditFormSaveClick,
+  isUnacknowledging,
+  onUnacknowledgeClick,
 }: DrawerFooterProps) {
   // Phase 4b-1 — when the user is editing a mapped row, the footer
   // collapses to `[Cancel] [Save changes]` regardless of the row's
@@ -2140,7 +2224,10 @@ function DrawerFooter({
           onFormSaveClick={onFormSaveClick}
         />
       ) : row.kind === 'target_acknowledged' ? (
-        <AcknowledgedFooterButtons />
+        <AcknowledgedFooterButtons
+          isUnacknowledging={isUnacknowledging}
+          onUnacknowledgeClick={onUnacknowledgeClick}
+        />
       ) : (
         <ApproveRejectButtons
           status={row.status}
@@ -2492,14 +2579,25 @@ function EditFooterButtons({
 }
 
 /**
- * Footer button row for `target_acknowledged` rows. Both buttons are
- * disabled with explanatory `title` tooltips so the user understands
- * why — acknowledged rows are an intentional "no source mapping"
- * declaration, not a candidate for approve/reject. To reverse, the user
- * must un-acknowledge the field via the field-acknowledgment surface
- * (out of scope for the redesign drawer in Phase 3).
+ * Footer button row for `target_acknowledged` rows. Approve/Reject
+ * remain disabled with explanatory `title` tooltips — acknowledged
+ * rows are an intentional "no source mapping" declaration, not a
+ * candidate for approve/reject. Phase 4b-2 adds the rightmost
+ * [Un-acknowledge] button which is the canonical way to reverse the
+ * acknowledgment (deletes the bare-ack TFM and lets the field return
+ * to Rule 6 unmapped). Founder §3.j locked the affordance to the
+ * footer (matches Approve/Reject/Edit verb-action shape), and §3.k
+ * locked the semantic (delete the row, no new status enum value).
  */
-function AcknowledgedFooterButtons() {
+interface AcknowledgedFooterButtonsProps {
+  isUnacknowledging: boolean
+  onUnacknowledgeClick: () => void
+}
+
+function AcknowledgedFooterButtons({
+  isUnacknowledging,
+  onUnacknowledgeClick,
+}: AcknowledgedFooterButtonsProps) {
   return (
     <div className="flex items-center justify-end gap-2">
       <button
@@ -2527,6 +2625,32 @@ function AcknowledgedFooterButtons() {
         )}
       >
         Approve
+      </button>
+      <button
+        type="button"
+        data-testid="mapping-drawer-unacknowledge-button"
+        aria-label="Un-acknowledge field"
+        onClick={onUnacknowledgeClick}
+        disabled={isUnacknowledging}
+        className={cn(
+          'inline-flex h-9 items-center justify-center gap-1.5 rounded-md border px-3 text-sm font-medium transition-colors',
+          'border-slate-300 bg-white text-slate-700 hover:bg-slate-50',
+          'focus:outline-none focus:ring-2 focus:ring-slate-500/30',
+          'disabled:cursor-not-allowed disabled:border-slate-200 disabled:bg-slate-50 disabled:text-slate-400',
+        )}
+      >
+        {isUnacknowledging ? (
+          <>
+            <Loader2
+              aria-hidden="true"
+              className="h-3.5 w-3.5 animate-spin"
+              data-testid="mapping-drawer-unacknowledge-spinner"
+            />
+            <span>Un-acknowledging…</span>
+          </>
+        ) : (
+          'Un-acknowledge'
+        )}
       </button>
     </div>
   )
@@ -2605,6 +2729,87 @@ function RejectConfirmDialog({
               </>
             ) : (
               'Reject'
+            )}
+          </AlertDialogAction>
+        </AlertDialogFooter>
+      </AlertDialogContent>
+    </AlertDialog>
+  )
+}
+
+// ── Un-acknowledge confirmation dialog (Phase 4b-2) ─────────────────────────
+//
+// Locked copy (founder §3.j + investigation report):
+//
+//   Title:  "Un-acknowledge this field?"
+//   Body:   "This will return <field_name> to unmapped (Rule 6) and clear
+//            the acknowledgment reason."
+//   Buttons: "Cancel" (default) + "Un-acknowledge" (neutral, not destructive
+//            — the operation is reversible by re-acknowledging through the
+//            existing acknowledgment surface).
+//
+// Visually distinct from RejectConfirmDialog: button uses the default blue
+// styling rather than red because un-acknowledge is NOT a destructive
+// "delete and lose data" action — it just toggles the field back to
+// unmapped. The user can re-acknowledge or map it without re-authoring
+// content.
+
+interface UnacknowledgeConfirmDialogProps {
+  open: boolean
+  onOpenChange: (next: boolean) => void
+  targetFieldName: string
+  isUnacknowledging: boolean
+  onConfirm: () => void
+}
+
+function UnacknowledgeConfirmDialog({
+  open,
+  onOpenChange,
+  targetFieldName,
+  isUnacknowledging,
+  onConfirm,
+}: UnacknowledgeConfirmDialogProps) {
+  return (
+    <AlertDialog open={open} onOpenChange={onOpenChange}>
+      <AlertDialogContent data-testid="mapping-drawer-unacknowledge-confirm-dialog">
+        <AlertDialogHeader>
+          <AlertDialogTitle>Un-acknowledge this field?</AlertDialogTitle>
+          <AlertDialogDescription>
+            This will return{' '}
+            <span className="font-mono text-slate-900">{targetFieldName}</span>{' '}
+            to unmapped (Rule 6) and clear the acknowledgment reason.
+          </AlertDialogDescription>
+        </AlertDialogHeader>
+        <AlertDialogFooter>
+          <AlertDialogCancel
+            disabled={isUnacknowledging}
+            data-testid="mapping-drawer-unacknowledge-cancel"
+            onClick={() => {
+              if (!isUnacknowledging) onOpenChange(false)
+            }}
+          >
+            Cancel
+          </AlertDialogCancel>
+          <AlertDialogAction
+            onClick={(e) => {
+              // Same pattern as RejectConfirmDialog — close explicitly
+              // inside onConfirm so the spinner has time to render.
+              e.preventDefault()
+              onConfirm()
+            }}
+            disabled={isUnacknowledging}
+            data-testid="mapping-drawer-unacknowledge-confirm"
+          >
+            {isUnacknowledging ? (
+              <>
+                <Loader2
+                  aria-hidden="true"
+                  className="mr-1.5 h-3.5 w-3.5 animate-spin"
+                />
+                Un-acknowledging…
+              </>
+            ) : (
+              'Un-acknowledge'
             )}
           </AlertDialogAction>
         </AlertDialogFooter>

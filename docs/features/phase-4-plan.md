@@ -1,6 +1,6 @@
 # Phase 4 plan — mutation completeness
 
-**Status:** Phase 4a complete (2026-04-26, including 4a-6 cross-table apply). Phase 4b-1 complete (2026-04-26 — W2 + W3 edit sources / combination). Phase 4b-2 / 4c / 4-extras pending. Created 2026-04-25; last updated 2026-04-26.
+**Status:** Phase 4a complete (2026-04-26, including 4a-6 cross-table apply). Phase 4b complete (2026-04-26 — 4b-1 W2 + W3 edit sources / combination shipped + 4b-2 W4 un-acknowledge shipped same day). Phase 4c / 4-extras pending. Created 2026-04-25; last updated 2026-04-26.
 **Predecessor:** Phase 3 closed at `b900538` on `main`. The
 redesign UI is feature-flag gated (`projects.use_mapping_redesign`)
 and currently active only on Heritage Core in production.
@@ -19,7 +19,7 @@ and currently active only on Heritage Core in production.
 | 4a-6 | Cross-table Transform apply — extend `dq_apply_field_transform_joined` to branch on `p_join_spec != NULL` (migration 076), `buildJoinSpec` derivation in action layer, retire `CROSS_TABLE_TRANSFORM_NOT_YET_SUPPORTED` short-circuit and the three-layer transparency stack | ✅ shipped 2026-04-26 |
 | 4-extras | Cross-table AI Suggest (LLM prompt redesign for joined sources), `AbortSignal` threading through `suggestMappingForTarget`, source-side acknowledgment toggle in sidebar | ⏳ pending — only if Heritage demands |
 | 4b-1 | W2 + W3 (edit sources via `editMappingSources`, edit combination via `updateMappingCombination`, drawer Edit affordance, EditInvalidationDialog warn flow, post-save Re-author deep-link) | ✅ shipped 2026-04-26 |
-| 4b-2 | W4 (un-acknowledge — fast-follow within same week per founder §9.1) | ⏳ pending |
+| 4b-2 | W4 (un-acknowledge — fast-follow within same week per founder §9.1) | ✅ shipped 2026-04-26 |
 | 4c | W5 (bulk operations) | ⏳ pending |
 | 5-Cleanup | Legacy `MappingContent.tsx` retirement, feature flag removal, shim deletion, stale prose copy revisit | ⏳ pending — 30-day canary gate |
 
@@ -800,21 +800,44 @@ Split into two sub-phases per founder §9.1 (locked 2026-04-26):
     "Phase 4b-1 — edit mapping sources / combination (2026-04-26)"
     for the full disposition.
 
-- **4b-2 — W4 (un-acknowledge)** ⏳ pending
-  - Wraps `removeAcknowledgment`. Adds Un-acknowledge footer
-    button to `AcknowledgedBody`. New ActionType:
-    `acknowledgment_removed` (already in the enum from Pre-prep).
-  - Fast-follow within the same week (founder §9.1). Smaller
-    surface than 4b-1 — single wrapper, single footer button, no
-    form parameterization.
-  - **Estimate:** 1 session.
+- **4b-2 — W4 (un-acknowledge)** ✅ shipped 2026-04-26
+  - Wraps `removeAcknowledgment`. Adds rightmost Un-acknowledge
+    footer button to `AcknowledgedFooterButtons` (founder §3.j).
+    Reuses the existing `acknowledgment_removed` ActionType (no
+    new enum value — founder §3.k locked the semantic to "delete
+    the row").
+  - New `unacknowledgeField(input)` server action and
+    `UnacknowledgeConfirmDialog` component. State machine mirrors
+    reject's: drawer closes on success, URL clears, sidebar
+    refreshes.
+  - **Tests:** 23 component invariants
+    (`tests/components/mapping-drawer-unacknowledge.test.ts` UN1-UN6 +
+    sub-asserts), 20 action invariants
+    (`tests/actions/unacknowledge-field.test.ts` U0-U8), I4 added to
+    the on-demand integration suite. See
+    `docs/features/mapping-redesign.md` "Phase 4b-2 — un-acknowledge
+    field" for the full disposition.
 
-- **Founder value:** medium-high — 4b-1 closes the "I have to drop
-  back to legacy to fix a wrong mapping" gap.
+- **Phase 4b closure (2026-04-26):** Phase 4b shipped end-to-end
+  in a single week — 4b-1 (W2 + W3) and 4b-2 (W4) both landed on
+  2026-04-26, closing the "I have to drop back to legacy to fix a
+  wrong mapping" gap and giving the user a complete edit-acknowledgment
+  loop on every TFM kind. The `editMappingSources`,
+  `updateMappingCombination`, `previewEditInvalidation`, and
+  `unacknowledgeField` wrappers now form the full Phase 4b
+  server-side write surface. With 4a complete (cross-table apply)
+  and 4b complete (edit + un-ack), the redesign mapping page
+  reaches functional parity with the legacy MappingContent for
+  every individual-row mutation. Phase 4c (bulk W5) and 4d (TM
+  approve/reject) remain.
+
+- **Founder value:** high — 4b-1 closed the "I have to drop
+  back to legacy to fix a wrong mapping" gap; 4b-2 closed the
+  "I acknowledged this field by mistake — how do I undo?" gap.
 - **Risk:** low-medium — heavy reuse of 4a's `CreateMappingForm`
   + `DiscardChangesDialog` + drawer state machine.
-- **Estimate:** 4-5 sessions total (3-4 for 4b-1 + 1 for 4b-2,
-  founder §10.1).
+- **Actual effort:** ~2 sessions (4b-1 + 4b-2 same-day fast-follow
+  matched founder §10.1 estimate of 4-5 total).
 
 **Phase 4c — bulk operations (W5)**
 - Wraps `approveAllFieldMappings`, `rejectAllFieldMappings`,

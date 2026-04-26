@@ -1,7 +1,7 @@
 // @vitest-environment node
 //
-// Phase 4b-1 — Heritage-backed integration tests for `editMappingSources`
-// and `updateMappingCombination`.
+// Phase 4b-1 / 4b-2 — Heritage-backed integration tests for
+// `editMappingSources`, `updateMappingCombination`, and `unacknowledgeField`.
 //
 // Scope: end-to-end seed → edit → assert → cleanup against the
 // "Heritage Core" canary project. Mirrors the env-gating + mock shape
@@ -22,6 +22,9 @@
 //   I3. `updateMappingCombination` reverts status to `needs_review`
 //       WITHOUT calling `dq_replace_mapping_sources` and WITHOUT
 //       triggering a transform reset (founder §1.3).
+//   I4. `unacknowledgeField` deletes a bare-acknowledged TFM and
+//       returns the field to Rule 6 unmapped. Verifies post-call
+//       SELECT-by-id returns no row (4b-2).
 //
 // Run locally:
 //   RUN_EDIT_MAPPING_HERITAGE_INTEGRATION=1 \
@@ -509,5 +512,60 @@ describeFn('[integration] editMappingSources / updateMappingCombination against 
       .maybeSingle()
     expect(tr).not.toBeNull()
     expect(tr?.status).toBe('applied')
+  }, 60_000)
+
+  // Phase 4b-2 — un-acknowledge field
+  //
+  // Seeds a bare-acknowledged TFM (is_acknowledged=true, no sources)
+  // directly via supabaseAdmin (the dq_acknowledge_target RPC is
+  // SECURITY DEFINER and gates on auth.uid(); the same bypass pattern
+  // as fakeCreateTfm). Then invokes `unacknowledgeField` and asserts
+  // the row is deleted, returning the field to Rule 6 unmapped.
+  it('I4: unacknowledgeField deletes a bare-ack TFM and returns the field to Rule 6 unmapped', async () => {
+    if (!fx) return
+    const { unacknowledgeField } = await import(
+      '@/lib/actions/mappings-for-redesign'
+    )
+    const { supabaseAdmin } = await import('@/lib/supabase/admin')
+
+    // Seed a bare-acknowledged TFM directly.
+    const { data: ackTfm, error: ackErr } = await supabaseAdmin
+      .from('target_field_mappings')
+      .insert({
+        project_id: fx.projectId,
+        target_field_id: fx.targetFieldId,
+        confidence: null,
+        status: 'approved',
+        ai_reasoning: null,
+        is_acknowledged: true,
+        acknowledgment_reason: 'integration test seed — un-acknowledge',
+        combination_type: null,
+        combination_sql: null,
+      })
+      .select('id')
+      .single()
+    expect(ackErr, ackErr?.message).toBeNull()
+    if (!ackTfm) return
+    createdTfmIds.add(ackTfm.id)
+
+    // Invoke wrapper.
+    const result = await unacknowledgeField({
+      projectId: fx.projectId,
+      targetFieldId: fx.targetFieldId,
+    })
+    expect(result.success, JSON.stringify(result)).toBe(true)
+    if (!result.success) return
+    expect(result.tfmId).toBe(ackTfm.id)
+
+    // Verify the TFM is gone — field returns to Rule 6 unmapped.
+    const { data: post } = await supabaseAdmin
+      .from('target_field_mappings')
+      .select('id')
+      .eq('id', ackTfm.id)
+      .maybeSingle()
+    expect(post).toBeNull()
+
+    // Cleanup tracker can drop this id since the row no longer exists.
+    createdTfmIds.delete(ackTfm.id)
   }, 60_000)
 })
