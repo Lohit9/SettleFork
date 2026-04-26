@@ -85,6 +85,13 @@ interface TargetTableGroupProps {
    * click will see no event by virtue of the underlying button).
    */
   onApproveAllClick?: (targetTableId: string) => void
+  /**
+   * Phase 4c-2 — fired when the user clicks "Reject all needs-review"
+   * in the kebab menu. Same shape + disabled-state contract as
+   * `onApproveAllClick`. When omitted the reject menu item is
+   * skipped entirely (legacy fixtures / storybook can opt out).
+   */
+  onRejectAllClick?: (targetTableId: string) => void
 }
 
 export function TargetTableGroup({
@@ -96,13 +103,15 @@ export function TargetTableGroup({
   highlightedRowIds,
   needsReviewCount,
   onApproveAllClick,
+  onRejectAllClick,
 }: TargetTableGroupProps) {
   const label = resolveFieldCountLabel(targetTable, filteredCount)
   const isFilteredEmpty = filteredCount !== undefined && filteredCount.matching === 0
 
   // Phase 4c-1 — kebab menu. Only rendered when both the count prop
   // and the click handler are wired (i.e. on the live redesign page;
-  // not from legacy fixtures or storybook).
+  // not from legacy fixtures or storybook). Reject handler is
+  // optional — when wired it surfaces a second menu item (4c-2).
   const showKebab =
     needsReviewCount !== undefined && onApproveAllClick !== undefined
 
@@ -136,6 +145,7 @@ export function TargetTableGroup({
             targetTableName={targetTable.name}
             needsReviewCount={needsReviewCount ?? 0}
             onApproveAllClick={onApproveAllClick!}
+            onRejectAllClick={onRejectAllClick}
           />
         ) : null}
       </header>
@@ -168,32 +178,32 @@ export function TargetTableGroup({
   )
 }
 
-// ─── Kebab menu (Phase 4c-1) ──────────────────────────────────────────────────
+// ─── Kebab menu (Phase 4c-1, extended in 4c-2) ───────────────────────────────
 //
 // Lightweight inline popover. The codebase has no shadcn `DropdownMenu`
 // primitive (intentional — see `components/ui/`), so this is a bespoke
-// click-outside-closing menu. Footprint is small enough to keep
-// colocated rather than promoting to a shared primitive — until 4c-2
-// adds the second item, no other surface needs the same shape.
+// click-outside-closing menu. Two items in 4c-2:
 //
-// Click semantics (founder refinement, 2026-04-26):
-//   - In 4c-1 the menu has only ONE item: "Approve all needs-review".
-//   - Disabled state with subtitle "No needs-review mappings" when
-//     `needsReviewCount === 0`.
-//   - The Reject item ships in 4c-2 — we deliberately do NOT render
-//     a disabled placeholder now, to avoid self-promising a feature
-//     that may shift in priority.
+//   1. "Approve all needs-review" — primary, gray text.
+//   2. "Reject all needs-review"  — destructive, red text. Separator
+//      above. Optional via `onRejectAllClick` so legacy fixtures /
+//      storybook callers can opt out.
+//
+// Disabled-state subtitle ("No needs-review mappings") applies to BOTH
+// items uniformly when `needsReviewCount === 0`.
 
 function TargetTableKebabMenu({
   targetTableId,
   targetTableName,
   needsReviewCount,
   onApproveAllClick,
+  onRejectAllClick,
 }: {
   targetTableId: string
   targetTableName: string
   needsReviewCount: number
   onApproveAllClick: (targetTableId: string) => void
+  onRejectAllClick?: (targetTableId: string) => void
 }) {
   const [open, setOpen] = useState(false)
   const wrapperRef = useRef<HTMLDivElement | null>(null)
@@ -267,6 +277,44 @@ function TargetTableKebabMenu({
                 : `${needsReviewCount} mapping${needsReviewCount === 1 ? '' : 's'} pending`}
             </span>
           </button>
+          {/* Phase 4c-2 — Reject all needs-review. Visual treatment:
+              red text for the destructive verb, separator above,
+              same disabled contract as approve. */}
+          {onRejectAllClick !== undefined ? (
+            <>
+              <div
+                className="border-t border-gray-100"
+                data-testid="target-table-kebab-separator"
+              />
+              <button
+                type="button"
+                role="menuitem"
+                disabled={isDisabled}
+                onClick={() => {
+                  if (isDisabled) return
+                  setOpen(false)
+                  onRejectAllClick(targetTableId)
+                }}
+                className={
+                  isDisabled
+                    ? 'flex w-full flex-col items-start gap-0.5 px-3 py-2 text-left text-sm text-gray-400 cursor-not-allowed'
+                    : 'flex w-full flex-col items-start gap-0.5 px-3 py-2 text-left text-sm text-red-600 hover:bg-red-50 focus:bg-red-50 focus:outline-none cursor-pointer'
+                }
+                data-testid="target-table-kebab-reject-all"
+              >
+                <span className="font-medium">Reject all needs-review</span>
+                <span
+                  className={
+                    isDisabled ? 'text-xs text-gray-500' : 'text-xs text-red-500/80'
+                  }
+                >
+                  {isDisabled
+                    ? 'No needs-review mappings'
+                    : `${needsReviewCount} mapping${needsReviewCount === 1 ? '' : 's'} will be deleted`}
+                </span>
+              </button>
+            </>
+          ) : null}
         </div>
       ) : null}
     </div>

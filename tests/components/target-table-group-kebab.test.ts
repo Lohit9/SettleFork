@@ -65,19 +65,21 @@ describe('[target-table-kebab] TG1 conditional rendering', () => {
 // ─────────────────────────────────────────────────────────────────────
 
 describe('[target-table-kebab] TG2 menu items', () => {
-  it('TG2a: single menu item — "Approve all needs-review"', () => {
+  it('TG2a: "Approve all needs-review" item is present (single approve testid)', () => {
     expect(SRC).toMatch(/Approve all needs-review/)
-    // Only ONE menu-item testid in the file (no Reject placeholder).
+    // Approve testid is unique — there's only ONE approve menu item
+    // regardless of the 4c-2 reject extension.
     const matches = SRC.match(/data-testid="target-table-kebab-approve-all"/g) ?? []
     expect(matches.length).toBe(1)
   })
 
-  it('TG2b: NO disabled "Reject" placeholder shipped in 4c-1', () => {
-    // Founder refinement (2026-04-26): the Reject item is added in
-    // 4c-2 alongside its wiring; we deliberately do NOT ship a
-    // disabled placeholder here.
-    expect(SRC).not.toMatch(/Reject all needs-review/)
-    expect(SRC).not.toMatch(/data-testid="target-table-kebab-reject-all"/)
+  it('TG2b: 4c-2 ships the Reject item (see target-table-group-kebab-reject.test.ts)', () => {
+    // Phase 4c-2 (2026-04-26): the Reject item lands alongside its
+    // wiring. Detailed invariants (red styling, separator, click
+    // semantics) live in the dedicated reject test file. We pin the
+    // invariant here only to flag accidental removal.
+    expect(SRC).toMatch(/Reject all needs-review/)
+    expect(SRC).toMatch(/data-testid="target-table-kebab-reject-all"/)
   })
 
   it('TG2c: menu items use role="menuitem" and the container uses role="menu"', () => {

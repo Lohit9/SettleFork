@@ -73,6 +73,8 @@ import {
   bulkApproveFieldMappingsForTargetTable,
   approveHighConfidenceMappings,
   previewBulkApprove,
+  bulkRejectFieldMappingsForTargetTable,
+  previewBulkReject,
 } from '@/lib/actions/mappings-for-redesign'
 import { ToastProvider, useToast } from '@/lib/contexts/ToastContext'
 
@@ -729,6 +731,7 @@ function MappingBody({
   const [bulkAction, setBulkAction] = useState<
     | { kind: 'approve_table'; targetTableId: string; targetTableName: string }
     | { kind: 'approve_high_confidence' }
+    | { kind: 'reject_table'; targetTableId: string; targetTableName: string }
     | null
   >(null)
   const [bulkPreviewCount, setBulkPreviewCount] = useState<number | null>(null)
@@ -760,6 +763,40 @@ function MappingBody({
         setBulkAction((current) => {
           if (
             current?.kind === 'approve_table' &&
+            current.targetTableId === targetTableId
+          ) {
+            setBulkPreviewCount(result.count)
+            setBulkPreview(result.preview)
+          }
+          return current
+        })
+      })()
+    },
+    [data.targetTables, projectId],
+  )
+
+  // Phase 4c-2 — reject-all-for-table click. Same shape as the approve
+  // path: open the dialog in `reject_table` scope, fire the preview load
+  // in the background, and let the dialog render "Loading preview…"
+  // until it lands. The preview helper returns `hasTransform` per row;
+  // BulkConfirmDialog surfaces it as a transform-reset indicator.
+  const handleRejectAllForTableClick = useCallback(
+    (targetTableId: string) => {
+      const tableName =
+        data.targetTables.find((t) => t.id === targetTableId)?.name ?? '?'
+      setBulkAction({
+        kind: 'reject_table',
+        targetTableId,
+        targetTableName: tableName,
+      })
+      setBulkPreviewCount(null)
+      setBulkPreview([])
+      setBulkErrorMessage(null)
+      void (async () => {
+        const result = await previewBulkReject({ projectId, targetTableId })
+        setBulkAction((current) => {
+          if (
+            current?.kind === 'reject_table' &&
             current.targetTableId === targetTableId
           ) {
             setBulkPreviewCount(result.count)
@@ -819,6 +856,55 @@ function MappingBody({
     setIsBulkSubmitting(true)
     setBulkErrorMessage(null)
     try {
+      if (bulkAction.kind === 'reject_table') {
+        // Phase 4c-2 — bulk reject path. Toast copy distinguishes
+        // full success from partial success so users see when the
+        // wrapper had to skip TFMs whose transform reset failed.
+        // Originally-requested count is the dialog's preview count
+        // (stable across the lifecycle of a single click); the
+        // wrapper returns `rowsAffected` (rejectable, deleted) and
+        // optional `failedTfmIds` (the difference).
+        const requested = bulkPreviewCount ?? 0
+        const result = await bulkRejectFieldMappingsForTargetTable({
+          projectId,
+          targetTableId: bulkAction.targetTableId,
+        })
+        if (!result.success) {
+          setBulkErrorMessage(result.error)
+          return
+        }
+        const n = result.rowsAffected
+        const failedCount = result.failedTfmIds?.length ?? 0
+        const transformsReset = result.transformsReset
+        let message: string
+        if (failedCount > 0) {
+          // Partial-success copy (§3.4 surface).
+          message = `Rejected ${n} of ${requested || n + failedCount} mapping${
+            n + failedCount === 1 ? '' : 's'
+          } on ${bulkAction.targetTableName}; ${failedCount} could not be rejected (transform reset failed)`
+        } else {
+          message = `Rejected ${n} mapping${n === 1 ? '' : 's'} on ${bulkAction.targetTableName}.`
+          if (transformsReset > 0) {
+            message += ` ${transformsReset} transform${transformsReset === 1 ? '' : 's'} reset.`
+          }
+        }
+        pushToast({
+          id: `bulk-reject-${bulkAction.kind}-${Date.now()}`,
+          // Partial success → 'info' (neutral, factual). The toast
+          // codebase has no 'warning' variant; 'error' is reserved
+          // for outright failures (handled by `setBulkErrorMessage`
+          // above which keeps the dialog open with a red banner).
+          variant: failedCount > 0 ? 'info' : 'success',
+          message,
+        })
+        setBulkAction(null)
+        setBulkPreview([])
+        setBulkPreviewCount(null)
+        router.refresh()
+        return
+      }
+
+      // Approve paths — unchanged from 4c-1.
       const result =
         bulkAction.kind === 'approve_table'
           ? await bulkApproveFieldMappingsForTargetTable({
@@ -852,7 +938,7 @@ function MappingBody({
     } finally {
       setIsBulkSubmitting(false)
     }
-  }, [bulkAction, projectId, pushToast, router])
+  }, [bulkAction, bulkPreviewCount, projectId, pushToast, router])
 
   const handleDrawerActionComplete = useCallback(
     (action: 'approve' | 'reject' | 'unacknowledge', _rowId: string) => {
@@ -1113,6 +1199,7 @@ function MappingBody({
                 highlightedRowIds={highlightedRowIds}
                 needsReviewCount={needsReviewCountByTable.get(summary.id) ?? 0}
                 onApproveAllClick={handleApproveAllForTableClick}
+                onRejectAllClick={handleRejectAllForTableClick}
               />
             )
           })}
@@ -1155,14 +1242,15 @@ function MappingBody({
       */}
       <BulkConfirmDialog
         open={bulkAction !== null}
-        mode="approve"
+        mode={bulkAction?.kind === 'reject_table' ? 'reject' : 'approve'}
         scope={
           bulkAction?.kind === 'approve_high_confidence'
             ? 'high_confidence'
             : 'table'
         }
         targetTableName={
-          bulkAction?.kind === 'approve_table'
+          bulkAction?.kind === 'approve_table' ||
+          bulkAction?.kind === 'reject_table'
             ? bulkAction.targetTableName
             : undefined
         }

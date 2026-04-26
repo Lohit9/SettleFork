@@ -76,6 +76,7 @@ import { logActivity } from '@/lib/actions/activity-log'
 import { requireProjectPermission } from '@/lib/actions/role-resolution'
 import { assertMappingWritesEnabled } from '@/lib/auth/mapping-writes'
 import { removeAcknowledgment } from '@/lib/actions/field-acknowledgments'
+import { resetFieldTransform } from '@/lib/actions/transformations'
 import { callClaude } from '@/lib/ai/claude'
 import { checkAIRateLimit } from '@/lib/ai/rate-limit'
 import { buildAIContext, formatDocumentsForPrompt } from '@/lib/ai/context-builder'
@@ -3409,5 +3410,438 @@ export async function approveHighConfidenceMappings(input: {
     success: true,
     rowsAffected: updatedRows.length,
     tfmIds,
+  }
+}
+
+// ─── Phase 4c-2 — bulk reject (W5 reject) ────────────────────────────────────
+//
+// Reject contract in the redesign UI: per-row reject DELETEs the TFM (founder
+// amendment 2026-04-21; the legacy `status='rejected'` flag is NOT used by
+// the new model). Bulk reject mirrors that contract — DELETE every needs-
+// review TFM in the target table; the target field thereafter renders as
+// Rule 6 unmapped. This is why we do NOT reuse the legacy
+// `rejectAllFieldMappings` (Phase 4c investigation §2.1): the legacy action
+// flips `status` to a value that the redesign read path no longer
+// distinguishes from approved (`status` is informational; deletion is the
+// only state the UI surfaces).
+//
+// PARTIAL-SUCCESS MODEL (§5.3 forward-progress, §3.4 toast + log surface):
+//   The wrapper performs a per-TFM `resetFieldTransform` loop BEFORE the
+//   bulk DELETE so any staged data is reverted with the right TFM context
+//   in scope. Reset failures do NOT abort the wrapper — failed TFM ids are
+//   collected into `failedTfmIds` and excluded from the rejectable set. The
+//   bulk DELETE proceeds with the survivors, the activity log records both
+//   sets, and the UI surfaces the partial count in the success toast. This
+//   is a deliberate departure from the all-or-nothing approve path: reject
+//   is destructive, so forward progress on the rows that CAN be deleted is
+//   preferable to retrying the whole batch on the next click.
+//
+// SCOPE (§6.1, §6.3 — same hard-coded scope as approve):
+//   - status === 'needs_review'
+//   - is_acknowledged === false
+//   - target_field's table === input.targetTableId
+//
+//   Acknowledged TFMs are bare-acks ("intentionally unmapped") and have no
+//   reject semantics — the redesign exposes "Un-acknowledge" instead (Phase
+//   4b-2). Approved TFMs are out of scope per §1.1; the user reaches them
+//   via per-row reject if they want to delete a previously-approved row.
+//
+// ACTIVITY LOG (§7):
+//   Single `mapping_bulk_rejected` entry per click with full metadata
+//   (scope, count, tfm_ids, failed_tfm_ids?, fields_affected,
+//   target_table_id, target_table_name, transforms_reset). Same shape as
+//   `mapping_bulk_approved` plus the partial-success surface.
+
+export type BulkRejectErrorCode =
+  | 'PERMISSION_DENIED'
+  | 'NOT_FOUND'
+  | 'VALIDATION'
+  | 'MAINTENANCE_MODE'
+  | 'INTERNAL'
+
+export type BulkRejectResult =
+  | {
+      success: true
+      /** Number of TFMs DELETEd (rejectable set after transform-reset filter). */
+      rowsAffected: number
+      /** Count of TFMs whose transformation row was reset before deletion. */
+      transformsReset: number
+      /** Sum of staged_data_rows reverted across the per-TFM reset loop. */
+      stagedRowsReverted: number
+      /** Bulk-rejected TFM uuids (matches `tfm_ids` in the activity log). */
+      tfmIds: string[]
+      /**
+       * TFM uuids whose `resetFieldTransform` step failed; these were
+       * EXCLUDED from the bulk DELETE so they remain in `needs_review`
+       * for a follow-up retry. Undefined / omitted on full success;
+       * present and non-empty on partial success.
+       */
+      failedTfmIds?: string[]
+    }
+  | {
+      success: false
+      error: string
+      errorCode: BulkRejectErrorCode
+    }
+
+/**
+ * Read-only preview of what `bulkRejectFieldMappingsForTargetTable` WOULD
+ * delete at this moment. Mirrors `previewBulkApprove` plus a `hasTransform`
+ * flag per row so the dialog can render a transform-reset indicator.
+ *
+ * Permission gate: viewer-level (the actual write enforces editor).
+ *
+ * Scope is hard-coded — same as the write wrapper (§6.1, §6.3).
+ *
+ * Preview list cap: 5 rows (§3.2). Full count is always returned exactly.
+ */
+export async function previewBulkReject(input: {
+  projectId: string
+  targetTableId: string
+}): Promise<{
+  count: number
+  preview: Array<{
+    tfmId: string
+    targetField: string
+    primarySource: string | null
+    hasTransform: boolean
+  }>
+}> {
+  const { projectId, targetTableId } = input
+  if (!projectId || !targetTableId) {
+    return { count: 0, preview: [] }
+  }
+
+  const supabase = await createClient()
+  const {
+    data: { user },
+  } = await supabase.auth.getUser()
+  if (!user) {
+    return { count: 0, preview: [] }
+  }
+
+  const perm = await requireProjectPermission(projectId, 'viewer')
+  if (!perm.allowed) {
+    return { count: 0, preview: [] }
+  }
+
+  const { data: targetFieldsRows } = await supabaseAdmin
+    .from('fields')
+    .select('id, name')
+    .eq('table_id', targetTableId)
+  const targetFields = (targetFieldsRows ?? []) as Array<{
+    id: string
+    name: string
+  }>
+  if (targetFields.length === 0) {
+    return { count: 0, preview: [] }
+  }
+  const targetFieldIds = targetFields.map((f) => f.id)
+  const fieldNameById = new Map(targetFields.map((f) => [f.id, f.name] as const))
+
+  const { data: tfms } = await supabaseAdmin
+    .from('target_field_mappings')
+    .select('id, target_field_id')
+    .eq('project_id', projectId)
+    .eq('status', 'needs_review')
+    .eq('is_acknowledged', false)
+    .in('target_field_id', targetFieldIds)
+  const tfmRows = (tfms ?? []) as Array<{ id: string; target_field_id: string }>
+  const count = tfmRows.length
+  if (count === 0) {
+    return { count: 0, preview: [] }
+  }
+
+  const previewTfmIds = tfmRows.slice(0, 5).map((t) => t.id)
+
+  // Primary source lookup — single batched query (same shape as
+  // previewBulkApprove).
+  const { data: primarySources } = await supabaseAdmin
+    .from('mapping_sources')
+    .select('target_field_mapping_id, ordinal, fields:source_field_id(name)')
+    .in('target_field_mapping_id', previewTfmIds)
+    .eq('ordinal', 0)
+  const primaryByTfmId = new Map<string, string>()
+  for (const ms of (primarySources ?? []) as unknown as Array<{
+    target_field_mapping_id: string
+    ordinal: number
+    fields: { name: string } | { name: string }[] | null
+  }>) {
+    const f = Array.isArray(ms.fields) ? ms.fields[0] : ms.fields
+    if (f?.name) {
+      primaryByTfmId.set(ms.target_field_mapping_id, f.name)
+    }
+  }
+
+  // hasTransform indicator: which preview TFMs own a transformations row?
+  // Single batched query (one round-trip for all 5). Caller renders a
+  // small badge so users understand transform-reset will run for those
+  // rows. We do NOT inspect transformation status (applied vs. draft)
+  // here — that's a Transform-tab concern; the bulk wrapper resets either
+  // way per `resetFieldTransform`'s contract.
+  const { data: transforms } = await supabaseAdmin
+    .from('transformations')
+    .select('target_field_mapping_id')
+    .in('target_field_mapping_id', previewTfmIds)
+  const hasTransformByTfmId = new Set<string>()
+  for (const t of (transforms ?? []) as Array<{
+    target_field_mapping_id: string
+  }>) {
+    hasTransformByTfmId.add(t.target_field_mapping_id)
+  }
+
+  const preview = previewTfmIds.map((tfmId) => {
+    const tfm = tfmRows.find((t) => t.id === tfmId)
+    return {
+      tfmId,
+      targetField: tfm ? (fieldNameById.get(tfm.target_field_id) ?? '?') : '?',
+      primarySource: primaryByTfmId.get(tfmId) ?? null,
+      hasTransform: hasTransformByTfmId.has(tfmId),
+    }
+  })
+
+  return { count, preview }
+}
+
+/**
+ * Bulk-reject every needs-review TFM whose target field belongs to the
+ * given target table. See file header for the full 4c-2 contract.
+ *
+ * SEQUENCE:
+ *   1.  Cheap input validation (projectId + targetTableId required).
+ *   2.  Auth (Supabase user) → PERMISSION_DENIED.
+ *   3.  Project-permission gate (`requireProjectPermission(..., 'editor')`)
+ *       → PERMISSION_DENIED.
+ *   4.  Maintenance-mode gate → MAINTENANCE_MODE.
+ *   5.  Resolve target field universe + ownership check (target table
+ *       belongs to project) → NOT_FOUND on mismatch.
+ *   6.  Identity read — find every in-scope TFM (needs_review + not-
+ *       acknowledged + target_field in this table). Empty set returns
+ *       VALIDATION ("nothing to reject"); the kebab item should be
+ *       disabled in this case (defense-in-depth).
+ *   7.  Per-TFM transform reset loop. Failures populate `failedTfmIds`
+ *       and the failing TFM is EXCLUDED from the rejectable set —
+ *       forward-progress (§5.3).
+ *   8.  Single bulk DELETE on the rejectable set. CASCADE removes
+ *       `mapping_sources` and `transformations` rows automatically
+ *       (FK ON DELETE CASCADE). Empty rejectable set returns VALIDATION
+ *       to surface the failure clearly to the UI.
+ *   9.  TM recompute pass — same shape as approve.
+ *   10. Activity log: single `mapping_bulk_rejected` entry with
+ *       metadata { scope, count, tfm_ids, failed_tfm_ids?,
+ *       fields_affected, target_table_id, target_table_name,
+ *       transforms_reset }.
+ *   11. Revalidate /mapping path.
+ */
+export async function bulkRejectFieldMappingsForTargetTable(input: {
+  projectId: string
+  targetTableId: string
+}): Promise<BulkRejectResult> {
+  const { projectId, targetTableId } = input
+
+  // ── Step 1: validation ───────────────────────────────────────────────────
+  if (!projectId) {
+    return {
+      success: false,
+      error: 'projectId is required',
+      errorCode: 'VALIDATION',
+    }
+  }
+  if (!targetTableId) {
+    return {
+      success: false,
+      error: 'targetTableId is required',
+      errorCode: 'VALIDATION',
+    }
+  }
+
+  // ── Step 2: auth ─────────────────────────────────────────────────────────
+  const supabase = await createClient()
+  const {
+    data: { user },
+  } = await supabase.auth.getUser()
+  if (!user) {
+    return {
+      success: false,
+      error: 'Not authenticated',
+      errorCode: 'PERMISSION_DENIED',
+    }
+  }
+
+  // ── Step 3: permission ───────────────────────────────────────────────────
+  const perm = await requireProjectPermission(projectId, 'editor')
+  if (!perm.allowed) {
+    return {
+      success: false,
+      error: perm.error ?? 'Insufficient permissions',
+      errorCode: 'PERMISSION_DENIED',
+    }
+  }
+
+  // ── Step 4: maintenance gate ─────────────────────────────────────────────
+  try {
+    await assertMappingWritesEnabled(projectId)
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err)
+    if (
+      message ===
+      'Mapping writes are temporarily disabled for scheduled maintenance'
+    ) {
+      return {
+        success: false,
+        error: message,
+        errorCode: 'MAINTENANCE_MODE',
+      }
+    }
+    return {
+      success: false,
+      error: message,
+      errorCode: 'INTERNAL',
+    }
+  }
+
+  // ── Step 5: resolve target field universe + ownership check ──────────────
+  const { data: targetTable } = await supabaseAdmin
+    .from('tables')
+    .select('id, name, dataset_id, datasets:dataset_id(project_id)')
+    .eq('id', targetTableId)
+    .maybeSingle<{
+      id: string
+      name: string
+      dataset_id: string
+      datasets: { project_id: string } | null
+    }>()
+  if (!targetTable || targetTable.datasets?.project_id !== projectId) {
+    return {
+      success: false,
+      error: 'Target table not found in this project',
+      errorCode: 'NOT_FOUND',
+    }
+  }
+
+  const { data: targetFieldsRows } = await supabaseAdmin
+    .from('fields')
+    .select('id, name')
+    .eq('table_id', targetTableId)
+  const targetFields = (targetFieldsRows ?? []) as Array<{
+    id: string
+    name: string
+  }>
+  if (targetFields.length === 0) {
+    return {
+      success: false,
+      error: 'No needs-review mappings to reject on this table',
+      errorCode: 'VALIDATION',
+    }
+  }
+  const targetFieldIds = targetFields.map((f) => f.id)
+  const fieldNameById = new Map(targetFields.map((f) => [f.id, f.name] as const))
+
+  // ── Step 6: identity read — in-scope TFMs ────────────────────────────────
+  const { data: tfms } = await supabaseAdmin
+    .from('target_field_mappings')
+    .select('id, target_field_id')
+    .eq('project_id', projectId)
+    .eq('status', 'needs_review')
+    .eq('is_acknowledged', false)
+    .in('target_field_id', targetFieldIds)
+  const tfmRows = (tfms ?? []) as Array<{ id: string; target_field_id: string }>
+  if (tfmRows.length === 0) {
+    return {
+      success: false,
+      error: 'No needs-review mappings to reject on this table',
+      errorCode: 'VALIDATION',
+    }
+  }
+
+  // ── Step 7: per-TFM transform reset loop ─────────────────────────────────
+  // resetFieldTransform is no-op-safe when the TFM has no transformation
+  // row (returns success with hadTransform=false). We still want to count
+  // hadTransform / rowsReverted for the activity log + toast. Failures
+  // are forward-progress: collect into failedTfmIds and exclude from
+  // the rejectable set.
+  const failedTfmIds: string[] = []
+  const rejectable: Array<{ id: string; target_field_id: string }> = []
+  let transformsReset = 0
+  let stagedRowsReverted = 0
+  for (const tfm of tfmRows) {
+    const r = await resetFieldTransform(tfm.id)
+    if (!r.success) {
+      failedTfmIds.push(tfm.id)
+      continue
+    }
+    if (r.hadTransform) transformsReset += 1
+    stagedRowsReverted += r.rowsReverted
+    rejectable.push(tfm)
+  }
+  if (rejectable.length === 0) {
+    return {
+      success: false,
+      error: 'Transform reset failed for every in-scope mapping',
+      errorCode: 'INTERNAL',
+    }
+  }
+  const rejectableIds = rejectable.map((t) => t.id)
+  const fieldsAffected = rejectable.map(
+    (t) => fieldNameById.get(t.target_field_id) ?? '?',
+  )
+
+  // ── Step 8: bulk SQL DELETE ──────────────────────────────────────────────
+  // CASCADE removes mapping_sources (FK ON DELETE CASCADE on
+  // mapping_sources.target_field_mapping_id). Transformations are also
+  // removed by the per-TFM reset loop above; any residual rows would
+  // also CASCADE here.
+  const { error: deleteError } = await supabaseAdmin
+    .from('target_field_mappings')
+    .delete()
+    .in('id', rejectableIds)
+  if (deleteError) {
+    return {
+      success: false,
+      error: deleteError.message,
+      errorCode: 'INTERNAL',
+    }
+  }
+
+  // ── Step 9: TM recompute pass ────────────────────────────────────────────
+  const { data: tms } = await supabaseAdmin
+    .from('table_mappings')
+    .select('id')
+    .eq('project_id', projectId)
+    .eq('target_table_id', targetTableId)
+  for (const tm of (tms ?? []) as Array<{ id: string }>) {
+    await recomputeTableMappingStatus(supabase, tm.id)
+  }
+
+  // ── Step 10: activity log ────────────────────────────────────────────────
+  await logActivity(
+    projectId,
+    'mapping_bulk_rejected',
+    `Bulk reject: ${rejectable.length} mapping${
+      rejectable.length === 1 ? '' : 's'
+    } on ${targetTable.name}`,
+    'mapping',
+    {
+      scope: 'target_table_needs_review',
+      count: rejectable.length,
+      tfm_ids: rejectableIds,
+      ...(failedTfmIds.length > 0 ? { failed_tfm_ids: failedTfmIds } : {}),
+      fields_affected: fieldsAffected,
+      target_table_id: targetTableId,
+      target_table_name: targetTable.name,
+      transforms_reset: transformsReset,
+    },
+  )
+
+  // ── Step 11: revalidate /mapping ─────────────────────────────────────────
+  revalidatePath(`/app/projects/${projectId}/mapping`)
+
+  return {
+    success: true,
+    rowsAffected: rejectable.length,
+    transformsReset,
+    stagedRowsReverted,
+    tfmIds: rejectableIds,
+    ...(failedTfmIds.length > 0 ? { failedTfmIds } : {}),
   }
 }
