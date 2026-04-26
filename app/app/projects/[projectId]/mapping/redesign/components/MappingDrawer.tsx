@@ -33,6 +33,7 @@ import type {
 } from '@/lib/types/mappings-for-redesign'
 import {
   approveFieldMapping,
+  previewEditInvalidation,
   rejectFieldMapping,
 } from '@/lib/actions/mappings-for-redesign'
 import { classifyMappedRow, type MappingRowRule } from '@/lib/utils/mapping-row-rules'
@@ -44,7 +45,10 @@ import {
   CreateMappingForm,
   type CreateMappingFormHandle,
   type CreateMappingFormSnapshot,
+  type EditMappingInitialState,
+  type EditSaveMeta,
 } from './CreateMappingForm'
+import { EditInvalidationDialog } from './EditInvalidationDialog'
 
 // ─────────────────────────────────────────────────────────────────────────────
 // MappingDrawer — Phase 3 Gaps 7 + 8a + 8b + 9, extended in Phase 4a-2 / 4a-3 /
@@ -238,8 +242,15 @@ export interface MappingDrawerProps {
    * `unmapped::<targetFieldId>` to the bare TFM uuid + arm the
    * `pendingDrawerRowId` sentinel so the auto-close-on-stale-id
    * effect doesn't unmount the drawer mid-refresh.
+   *
+   * Phase 4b-1 — `meta` is set when the save was an EDIT (W2/W3) of an
+   * existing TFM. The parent uses it to drive the post-save toast:
+   * "Mapping updated. <N> staged rows invalidated. [Re-author transform]"
+   * with a deep-link to the Transform tab when `transformReset === true`.
+   * For create-mode saves `meta` is omitted (callers should still
+   * call `router.refresh()` to surface the new row).
    */
-  onSaveSuccess?: (newTfmId: string) => void
+  onSaveSuccess?: (tfmId: string, meta?: EditSaveMeta) => void
   /**
    * Phase 4a-4a — fired whenever the unmapped-row form's dirty state
    * flips. Carries the dirty snapshot when the form has selections,
@@ -305,6 +316,42 @@ export function MappingDrawer({
   }>({ isDirty: false, canSave: false, isSavePending: false })
   const formRef = useRef<CreateMappingFormHandle | null>(null)
 
+  // ── Phase 4b-1 — edit-mode form state ─────────────────────────────
+  //
+  // `editFormActive`: when true on a mapped row (status approved or
+  // needs_review per §3.2), the body switches from `MappedBody` to
+  // a `CreateMappingForm` in `mode='edit'` and the footer transitions
+  // to `[Cancel] [Save changes]`.
+  //
+  // `editInitialState`: hydration payload built from the current
+  // mapped row's sources + combination type when the user clicks
+  // [Edit]. Held at the drawer level (not the form) so the drawer
+  // can read it for `previewEditInvalidation` lookups before save.
+  //
+  // `editInvalidationPreview`: result of the in-flight or last-
+  // resolved `previewEditInvalidation` call. When non-null AND
+  // `hasTransform === true`, the drawer pops the EditInvalidationDialog
+  // before forwarding `triggerSave` to the form. Cleared on dialog
+  // confirm or cancel.
+  //
+  // `isEditPreviewPending`: shown as a save-button spinner while the
+  // preview is in flight. Disables the Save button to prevent double-
+  // submission.
+  //
+  // `editPreviewError`: surfaced as the footer error banner if the
+  // preview RPC fails. The user can retry via the same Save button.
+  // Edit-only — does not interact with the create-mode error surface.
+  const [editFormActive, setEditFormActive] = useState(false)
+  const [editInitialState, setEditInitialState] =
+    useState<EditMappingInitialState | null>(null)
+  const [editInvalidationPreview, setEditInvalidationPreview] = useState<{
+    hasTransform: boolean
+    stagedRowCount: number
+    capped: boolean
+  } | null>(null)
+  const [isEditPreviewPending, setIsEditPreviewPending] = useState(false)
+  const [editPreviewError, setEditPreviewError] = useState<string | null>(null)
+
   // ── Phase 4a-4b — AI Suggest mode plumbing ───────────────────────
   //
   // `autoSuggestRequested`: latched true when the user clicks the
@@ -369,6 +416,15 @@ export function MappingDrawer({
     // so a new row's first auto-suggest can fire even if a prior row
     // already populated the Set.
     autoSuggestConsumedRowsRef.current.clear()
+    // Phase 4b-1 — clear edit-mode state on row swap. Same rationale
+    // as the create-mode reset above: the row identity is the form's
+    // mount key, so anything not re-derived from the new row's
+    // contract would be stale.
+    setEditFormActive(false)
+    setEditInitialState(null)
+    setEditInvalidationPreview(null)
+    setIsEditPreviewPending(false)
+    setEditPreviewError(null)
   }, [rowIdForFormReset])
 
   // Phase 4a-4a — restoreFormState auto-activate.
@@ -443,12 +499,16 @@ export function MappingDrawer({
   // `maybeRequestCloseRef` keeps the document-level Esc / mousedown
   // listeners stable across renders.
   const maybeRequestClose = useCallback(() => {
-    if (isFormActive && formRef.current) {
+    // Phase 4b-1 — when the edit form is active, route close intents
+    // (Esc / X / click-outside / Cancel) through the form's
+    // `requestClose` so a dirty edit pops the discard dialog before
+    // tearing down the drawer. Same pattern as create-mode.
+    if ((isFormActive || editFormActive) && formRef.current) {
       formRef.current.requestClose()
       return
     }
     onCloseRef.current()
-  }, [isFormActive])
+  }, [isFormActive, editFormActive])
   const maybeRequestCloseRef = useRef(maybeRequestClose)
   useEffect(() => {
     maybeRequestCloseRef.current = maybeRequestClose
@@ -656,6 +716,146 @@ export function MappingDrawer({
     }
   }, [row, onActionComplete])
 
+  // ── Phase 4b-1 — edit-mode handlers ──────────────────────────────
+  //
+  // `handleEditClick`: invoked by the Edit button on mapped rows.
+  //   1. Build `editInitialState` from the current row's sources +
+  //      combinationType. Source field ids are extracted in ordinal
+  //      order (no client sort — server emits ordinal-asc).
+  //   2. Recover any `joinAnnotations` from the current row's
+  //      `joinSpec.byJoinedTableId` map (Phase 4a-3 contract).
+  //      Pre-population matches founder decision §5.2.
+  //   3. Flip `editFormActive=true`. The body re-mounts to the form,
+  //      the footer transitions to [Cancel] [Save changes].
+  //
+  // `handleEditFormCancel`: invoked when the form's discard dialog
+  //   resolves (clean → immediate; dirty → after confirm). Clears
+  //   edit state and returns the drawer body to MappedBody.
+  //
+  // `handleEditSavePrecheck`: invoked by the Save button. Runs
+  //   `previewEditInvalidation`. If the result indicates a transform
+  //   exists with staged rows, populates `editInvalidationPreview`
+  //   so the EditInvalidationDialog renders. Otherwise calls
+  //   `formRef.current.triggerSave()` directly.
+  //
+  // `handleEditInvalidationConfirm`: dialog [Save and reset transform]
+  //   handler. Clears the preview and forwards to the form.
+  //
+  // `handleEditInvalidationCancel`: dialog [Cancel] handler. Clears
+  //   the preview; the user remains in edit mode.
+  //
+  // `handleEditFormSaveSuccess`: invoked by the form once
+  //   `editMappingSources` resolves. Clears all edit state, fires
+  //   `onSaveSuccess` to the parent with the EditSaveMeta payload
+  //   (parent runs router.refresh + post-save toast), and lets the
+  //   drawer settle on the freshly-rendered MappedBody.
+  const handleEditClick = useCallback(() => {
+    if (!row || row.kind !== 'mapped') return
+    // Status guard mirrors §3.2 — Edit is hidden on rejected /
+    // target_acknowledged / unmapped, but defensively bail here too.
+    if (row.status !== 'approved' && row.status !== 'needs_review') return
+
+    const sourceFieldIds = row.sources.map((s) => s.sourceField.id)
+    // Pre-populate joinAnnotations from each cross-table source's
+    // `joinSpec.viaFkField` (the FK field NAME in the dominant table
+    // pointing at this joined table). Per founder decision §5.2,
+    // unchanged joined tables retain their annotations across edits;
+    // the form's `cleanup` effect drops entries whose chip the user
+    // removes. Same-table sources have `joinSpec === null` and are
+    // skipped — they don't contribute to disambiguation.
+    const joinAnnotations: Record<string, string> = {}
+    for (const src of row.sources) {
+      if (src.joinSpec) {
+        joinAnnotations[src.sourceTable.id] = src.joinSpec.viaFkField
+      }
+    }
+
+    // Phase 4b-1 — `combinationType: 'custom_sql'` is a Transform-tab
+    // concern; the inline form does not author SQL. Defensively
+    // refuse to enter edit mode for custom_sql TFMs (the Edit button
+    // should be hidden for these by the footer dispatch, but defense
+    // in depth — a future regression would otherwise fall through to
+    // a form that can't represent the row's combination).
+    if (row.combinationType === 'custom_sql') return
+
+    setEditInitialState({
+      tfmId: row.id,
+      selectedIds: sourceFieldIds,
+      combinationType: row.combinationType,
+      joinAnnotations,
+    })
+    setEditInvalidationPreview(null)
+    setEditPreviewError(null)
+    setEditFormActive(true)
+  }, [row])
+
+  const handleEditFormCancel = useCallback(() => {
+    setEditFormActive(false)
+    setEditInitialState(null)
+    setEditInvalidationPreview(null)
+    setEditPreviewError(null)
+  }, [])
+
+  const handleEditSavePrecheck = useCallback(async () => {
+    if (!editInitialState) return
+    if (formState.isSavePending || isEditPreviewPending) return
+    setEditPreviewError(null)
+    setIsEditPreviewPending(true)
+    try {
+      const result = await previewEditInvalidation(editInitialState.tfmId)
+      if (!result.success) {
+        // Errors here are non-blocking — the user can still save (the
+        // wrapper will re-validate server-side). Surface the error in
+        // the footer banner so they can retry, but don't strand them.
+        setEditPreviewError(
+          "Couldn't check whether your edit will reset a transform. " +
+            'You can still save; we will re-check server-side.',
+        )
+        return
+      }
+      const shouldWarn = result.hasTransform && result.stagedRowCount > 0
+      if (shouldWarn) {
+        setEditInvalidationPreview({
+          hasTransform: result.hasTransform,
+          stagedRowCount: result.stagedRowCount,
+          capped: result.capped,
+        })
+        return
+      }
+      formRef.current?.triggerSave()
+    } catch (err) {
+      setEditPreviewError(
+        "Couldn't check whether your edit will reset a transform. " +
+          'You can still save; we will re-check server-side.',
+      )
+      if (typeof console !== 'undefined') {
+        console.error('[MappingDrawer] previewEditInvalidation threw:', err)
+      }
+    } finally {
+      setIsEditPreviewPending(false)
+    }
+  }, [editInitialState, formState.isSavePending, isEditPreviewPending])
+
+  const handleEditInvalidationConfirm = useCallback(() => {
+    setEditInvalidationPreview(null)
+    formRef.current?.triggerSave()
+  }, [])
+
+  const handleEditInvalidationCancel = useCallback(() => {
+    setEditInvalidationPreview(null)
+  }, [])
+
+  const handleEditFormSaveSuccess = useCallback(
+    (tfmId: string, meta?: EditSaveMeta) => {
+      setEditFormActive(false)
+      setEditInitialState(null)
+      setEditInvalidationPreview(null)
+      setEditPreviewError(null)
+      onSaveSuccess?.(tfmId, meta)
+    },
+    [onSaveSuccess],
+  )
+
   if (!isOpen || !row || !effectiveRow) return null
 
   return (
@@ -687,9 +887,9 @@ export function MappingDrawer({
         availableSourceFields={availableSourceFields}
         onFormStateChange={handleFormStateChange}
         onFormCancel={() => setIsFormActive(false)}
-        onFormSaveSuccess={(tfmId) => {
+        onFormSaveSuccess={(tfmId, meta) => {
           setIsFormActive(false)
-          onSaveSuccess?.(tfmId)
+          onSaveSuccess?.(tfmId, meta)
         }}
         restoreFormState={restoreFormState}
         onRestoreConsumed={onRestoreConsumed}
@@ -697,10 +897,14 @@ export function MappingDrawer({
         onAutoSuggestConsumed={() => setAutoSuggestRequested(false)}
         tryConsumeAutoSuggest={tryConsumeAutoSuggest}
         onSuggestStateChange={(s) => setIsSuggestPending(s.isSuggestPending)}
+        editFormActive={editFormActive}
+        editInitialState={editInitialState}
+        onEditFormCancel={handleEditFormCancel}
+        onEditFormSaveSuccess={handleEditFormSaveSuccess}
       />
       <DrawerFooter
         row={effectiveRow}
-        errorMessage={errorMessage}
+        errorMessage={errorMessage ?? editPreviewError}
         isApprovePending={isApprovePending}
         isRejecting={isRejecting}
         optimisticallyApproved={optimisticApprove !== null}
@@ -712,16 +916,6 @@ export function MappingDrawer({
         isSuggestPending={isSuggestPending}
         onCreateMappingClick={() => setIsFormActive(true)}
         onSuggestWithAIClick={() => {
-          // Flow A — flip both flags in the same render so the form
-          // mounts with autoSuggest=true on its first render. The form
-          // fires invokeSuggest immediately and clears autoSuggest via
-          // onAutoSuggestConsumed.
-          //
-          // Phase 4a-4b strict-mode fix: clear any prior consumption
-          // entry for this row's target field so a re-request (e.g.
-          // user cancelled the auto-suggested form, then clicked
-          // [Suggest with AI] again on the same row) re-fires
-          // correctly.
           if (effectiveRow.kind === 'unmapped') {
             autoSuggestConsumedRowsRef.current.delete(
               effectiveRow.targetField.id,
@@ -733,6 +927,18 @@ export function MappingDrawer({
         onCancelSuggestClick={() => formRef.current?.cancelSuggest()}
         onFormCancelClick={() => maybeRequestClose()}
         onFormSaveClick={() => formRef.current?.triggerSave()}
+        editFormActive={editFormActive}
+        isEditPreviewPending={isEditPreviewPending}
+        onEditClick={handleEditClick}
+        onEditFormCancelClick={() => maybeRequestClose()}
+        onEditFormSaveClick={() => void handleEditSavePrecheck()}
+      />
+      <EditInvalidationDialog
+        preview={editInvalidationPreview}
+        targetFieldName={effectiveRow.targetField.name}
+        isSaving={formState.isSavePending}
+        onConfirm={handleEditInvalidationConfirm}
+        onCancel={handleEditInvalidationCancel}
       />
       <RejectConfirmDialog
         open={confirmRejectOpen}
@@ -1006,7 +1212,7 @@ interface DrawerBodyProps {
     snapshot: CreateMappingFormSnapshot | null
   }) => void
   onFormCancel: () => void
-  onFormSaveSuccess: (newTfmId: string) => void
+  onFormSaveSuccess: (tfmId: string, meta?: EditSaveMeta) => void
   /** Phase 4a-4a — restore-from-undo snapshot threaded to the form. */
   restoreFormState?: CreateMappingFormSnapshot | null
   /** Phase 4a-4a — invoked by the form once a restore has been applied. */
@@ -1015,17 +1221,24 @@ interface DrawerBodyProps {
   autoSuggest?: boolean
   /** Phase 4a-4b — invoked by the form once autoSuggest has been consumed. */
   onAutoSuggestConsumed?: () => void
-  /**
-   * Phase 4a-4b — strict-mode-resistant consumption guard owned by the
-   * drawer. The form calls this with its target field id; returns
-   * `true` if this is the first claim (form should fire invokeSuggest)
-   * or `false` if a prior mount already consumed for this row (form
-   * should short-circuit). See drawer-level comment on
-   * `autoSuggestConsumedRowsRef`.
-   */
+  /** Phase 4a-4b — strict-mode-resistant consumption guard owned by the drawer. */
   tryConsumeAutoSuggest?: (targetFieldId: string) => boolean
   /** Phase 4a-4b — fired whenever the form's AI Suggest pending state changes. */
   onSuggestStateChange?: (state: { isSuggestPending: boolean }) => void
+  /**
+   * Phase 4b-1 — true while the user is editing an existing TFM's
+   * sources / combination. Exclusive with `isFormActive` (the create
+   * form is for unmapped rows; the edit form is for mapped rows).
+   * When true on a mapped row, the body renders `CreateMappingForm`
+   * in `mode='edit'` instead of `MappedBody`.
+   */
+  editFormActive: boolean
+  /** Phase 4b-1 — hydration payload for the edit form. Required when `editFormActive`. */
+  editInitialState: EditMappingInitialState | null
+  /** Phase 4b-1 — invoked by the form on Cancel / Discard from edit mode. */
+  onEditFormCancel: () => void
+  /** Phase 4b-1 — invoked by the form on a successful editMappingSources save. */
+  onEditFormSaveSuccess: (tfmId: string, meta?: EditSaveMeta) => void
 }
 
 function DrawerBody(props: DrawerBodyProps) {
@@ -1054,9 +1267,50 @@ function BodyContent({
   onAutoSuggestConsumed,
   tryConsumeAutoSuggest,
   onSuggestStateChange,
+  editFormActive,
+  editInitialState,
+  onEditFormCancel,
+  onEditFormSaveSuccess,
 }: DrawerBodyProps) {
   switch (row.kind) {
     case 'mapped':
+      // Phase 4b-1 — when the user clicks Edit on a mapped row, the
+      // body switches from the read-only roster to the same
+      // `CreateMappingForm` used for creation, parameterized in
+      // `mode='edit'`. The form needs `projectId` + the page-level
+      // source fields list (for the picker) — both are threaded down
+      // from the drawer's existing props.
+      if (
+        editFormActive &&
+        editInitialState !== null &&
+        projectId !== undefined &&
+        availableSourceFields !== undefined
+      ) {
+        return (
+          <>
+            <TargetFieldSection targetField={row.targetField} />
+            <DrawerSection
+              title="Edit mapping"
+              testId="drawer-section-edit-mapping"
+            >
+              <CreateMappingForm
+                ref={formRef}
+                mode="edit"
+                editInitialState={editInitialState}
+                projectId={projectId}
+                targetField={{
+                  id: row.targetField.id,
+                  name: row.targetField.name,
+                }}
+                availableSourceFields={availableSourceFields}
+                onSaveSuccess={onEditFormSaveSuccess}
+                onCancel={onEditFormCancel}
+                onStateChange={onFormStateChange}
+              />
+            </DrawerSection>
+          </>
+        )
+      }
       return <MappedBody row={row} />
     case 'value_assignment':
       return <ValueAssignmentBody row={row} />
@@ -1329,7 +1583,7 @@ interface UnmappedBodyProps {
     snapshot: CreateMappingFormSnapshot | null
   }) => void
   onFormCancel: () => void
-  onFormSaveSuccess: (newTfmId: string) => void
+  onFormSaveSuccess: (tfmId: string, meta?: EditSaveMeta) => void
   restoreFormState?: CreateMappingFormSnapshot | null
   onRestoreConsumed?: () => void
   autoSuggest?: boolean
@@ -1776,6 +2030,26 @@ interface DrawerFooterProps {
   onCancelSuggestClick: () => void
   onFormCancelClick: () => void
   onFormSaveClick: () => void
+  /**
+   * Phase 4b-1 — true while the user is editing an existing mapped
+   * row's sources / combination. When true, the footer shows
+   * `[Cancel] [Save changes]` instead of `[Reject] [Approve] [Edit]`.
+   */
+  editFormActive: boolean
+  /**
+   * Phase 4b-1 — true while the drawer is running
+   * `previewEditInvalidation` between the user's Save click and the
+   * actual `editMappingSources` call. The Save button shows a spinner
+   * during this window so the user gets feedback for the (usually
+   * sub-100ms) preview round-trip.
+   */
+  isEditPreviewPending: boolean
+  /** Phase 4b-1 — [Edit] click handler on mapped rows. */
+  onEditClick: () => void
+  /** Phase 4b-1 — edit-mode [Cancel] click handler. */
+  onEditFormCancelClick: () => void
+  /** Phase 4b-1 — edit-mode [Save changes] click handler (runs preview-then-save). */
+  onEditFormSaveClick: () => void
 }
 
 function DrawerFooter({
@@ -1795,7 +2069,46 @@ function DrawerFooter({
   onCancelSuggestClick,
   onFormCancelClick,
   onFormSaveClick,
+  editFormActive,
+  isEditPreviewPending,
+  onEditClick,
+  onEditFormCancelClick,
+  onEditFormSaveClick,
 }: DrawerFooterProps) {
+  // Phase 4b-1 — when the user is editing a mapped row, the footer
+  // collapses to `[Cancel] [Save changes]` regardless of the row's
+  // status. Mirrors the unmapped-form footer; `formIsSavePending`
+  // also drives this Save button's spinner because both flows go
+  // through the same imperative `formRef.current.triggerSave()`.
+  if (editFormActive && row.kind === 'mapped') {
+    return (
+      <footer
+        data-testid="mapping-drawer-footer"
+        className="sticky bottom-0 z-10 border-t border-slate-200 bg-white px-5 py-3"
+      >
+        {errorMessage ? (
+          <div
+            role="alert"
+            data-testid="mapping-drawer-error"
+            className="mb-3 flex items-start gap-2 rounded-md border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-800"
+          >
+            <AlertCircle
+              aria-hidden="true"
+              className="mt-0.5 h-3.5 w-3.5 flex-shrink-0 text-red-500"
+            />
+            <span className="leading-snug">{errorMessage}</span>
+          </div>
+        ) : null}
+        <EditFooterButtons
+          formCanSave={formCanSave}
+          formIsSavePending={formIsSavePending}
+          isEditPreviewPending={isEditPreviewPending}
+          onEditFormCancelClick={onEditFormCancelClick}
+          onEditFormSaveClick={onEditFormSaveClick}
+        />
+      </footer>
+    )
+  }
   return (
     <footer
       data-testid="mapping-drawer-footer"
@@ -1836,6 +2149,19 @@ function DrawerFooter({
           optimisticallyApproved={optimisticallyApproved}
           onApprove={onApprove}
           onRejectClick={onRejectClick}
+          // Phase 4b-1 — Edit affordance. Visible only on `mapped`
+          // rows in `needs_review` / `approved` (founder §3.2 hides
+          // it on `rejected`; VAs and acknowledged rows are entirely
+          // separate footer dispatches above). `custom_sql` mapped
+          // rows are also excluded — those are Transform-tab edits,
+          // not source-list edits.
+          showEditButton={
+            row.kind === 'mapped' &&
+            (row.status === 'needs_review' || row.status === 'approved') &&
+            row.combinationType !== 'custom_sql'
+          }
+          isEditDisabled={isApprovePending || isRejecting}
+          onEditClick={onEditClick}
         />
       )}
     </footer>
@@ -1990,6 +2316,17 @@ interface ApproveRejectButtonsProps {
   optimisticallyApproved: boolean
   onApprove: () => void
   onRejectClick: () => void
+  /**
+   * Phase 4b-1 — when true, render the Edit button to the RIGHT of
+   * Approve (founder §3.3 — rightmost in footer). The drawer decides
+   * visibility based on row kind, status, and `combinationType`; this
+   * component only handles rendering.
+   */
+  showEditButton?: boolean
+  /** Phase 4b-1 — disable Edit while approve/reject is in flight. */
+  isEditDisabled?: boolean
+  /** Phase 4b-1 — Edit click handler (no-op when `showEditButton` is false). */
+  onEditClick?: () => void
 }
 
 function ApproveRejectButtons({
@@ -1999,6 +2336,9 @@ function ApproveRejectButtons({
   optimisticallyApproved,
   onApprove,
   onRejectClick,
+  showEditButton = false,
+  isEditDisabled = false,
+  onEditClick,
 }: ApproveRejectButtonsProps) {
   // Effective approve-disabled: already approved (incl. optimistic),
   // or another action is in flight.
@@ -2057,6 +2397,95 @@ function ApproveRejectButtons({
         )}
       >
         Approve
+      </button>
+      {showEditButton ? (
+        <button
+          type="button"
+          data-testid="mapping-drawer-edit-button"
+          aria-label="Edit mapping"
+          onClick={onEditClick}
+          disabled={isEditDisabled}
+          className={cn(
+            'inline-flex h-9 items-center justify-center rounded-md border px-3 text-sm font-medium transition-colors',
+            'border-slate-300 bg-white text-slate-700 hover:bg-slate-50',
+            'focus:outline-none focus:ring-2 focus:ring-slate-500/30',
+            'disabled:cursor-not-allowed disabled:border-slate-200 disabled:bg-slate-50 disabled:text-slate-400 disabled:hover:bg-slate-50',
+          )}
+        >
+          Edit
+        </button>
+      ) : null}
+    </div>
+  )
+}
+
+// ── Edit-mode footer (Phase 4b-1) ──────────────────────────────────────────
+//
+// Mirrors `UnmappedFooterButtons`'s active-and-not-pending shape: a
+// `[Cancel] [Save changes]` pair. The Save button shows a spinner during
+// EITHER the preview-invalidation round-trip (`isEditPreviewPending`) OR
+// the actual `editMappingSources` save (`formIsSavePending`) — both are
+// part of the user-perceivable save path. Cancel is disabled while either
+// is in flight to prevent double-fire / partial-state bugs.
+
+interface EditFooterButtonsProps {
+  formCanSave: boolean
+  formIsSavePending: boolean
+  isEditPreviewPending: boolean
+  onEditFormCancelClick: () => void
+  onEditFormSaveClick: () => void
+}
+
+function EditFooterButtons({
+  formCanSave,
+  formIsSavePending,
+  isEditPreviewPending,
+  onEditFormCancelClick,
+  onEditFormSaveClick,
+}: EditFooterButtonsProps) {
+  const inflight = formIsSavePending || isEditPreviewPending
+  return (
+    <div className="flex items-center justify-end gap-2">
+      <button
+        type="button"
+        data-testid="mapping-drawer-edit-cancel-button"
+        aria-label="Cancel editing mapping"
+        onClick={onEditFormCancelClick}
+        disabled={inflight}
+        className={cn(
+          'inline-flex h-9 items-center justify-center rounded-md border px-3 text-sm font-medium transition-colors',
+          'border-slate-300 bg-white text-slate-700 hover:bg-slate-50',
+          'focus:outline-none focus:ring-2 focus:ring-slate-500/30',
+          'disabled:cursor-not-allowed disabled:border-slate-200 disabled:bg-slate-50 disabled:text-slate-400',
+        )}
+      >
+        Cancel
+      </button>
+      <button
+        type="button"
+        data-testid="mapping-drawer-edit-save-button"
+        aria-label="Save mapping changes"
+        onClick={onEditFormSaveClick}
+        disabled={!formCanSave || inflight}
+        className={cn(
+          'inline-flex h-9 items-center justify-center gap-1.5 rounded-md border px-3 text-sm font-medium transition-colors',
+          'border-blue-600 bg-blue-600 text-white hover:bg-blue-700',
+          'focus:outline-none focus:ring-2 focus:ring-blue-500/40',
+          'disabled:cursor-not-allowed disabled:border-slate-200 disabled:bg-slate-100 disabled:text-slate-400 disabled:hover:bg-slate-100',
+        )}
+      >
+        {inflight ? (
+          <>
+            <Loader2
+              aria-hidden="true"
+              className="h-3.5 w-3.5 animate-spin"
+              data-testid="mapping-drawer-edit-save-spinner"
+            />
+            <span>Saving…</span>
+          </>
+        ) : (
+          'Save changes'
+        )}
       </button>
     </div>
   )

@@ -637,14 +637,60 @@ function MappingBody({
   //      new row appears in `data.rows`. The clear-sentinel effect
   //      then releases the sentinel and the steady-state contract
   //      resumes.
+  // Phase 4b-1 — extended to handle the edit-mode meta payload. When
+  // `meta.mode === 'edit'` we DO NOT change `drawerRowId` (the TFM uuid
+  // is unchanged on edit). We DO refresh the server component so the
+  // mapped-row body re-renders with the new sources / combination, and
+  // we surface a post-save toast. When the wrapper reset a transform
+  // (`meta.transformReset === true`), the toast carries a
+  // [Re-author transform] action that deep-links to the Transform tab
+  // with `?targetFieldMappingId=<tfmId>` so the user lands on the
+  // freshly-blank transform editor for this exact field.
   const handleDrawerSaveSuccess = useCallback(
-    (newTfmId: string) => {
-      setPendingDrawerRowId(newTfmId)
-      setDrawerRowId(newTfmId)
-      writeUrl(filters, newTfmId)
+    (tfmId: string, meta?: { mode: 'edit'; transformReset: boolean; stagedRowsReverted: number; nextStatus: 'needs_review' }) => {
+      if (meta?.mode === 'edit') {
+        router.refresh()
+        if (meta.transformReset) {
+          const reauthorHref = `/app/projects/${projectId}/transform?targetFieldMappingId=${tfmId}`
+          // Founder §2.1 — exact row count when ≤100, qualitative
+          // otherwise. We don't know `capped` here (the wrapper returns
+          // an exact count, not the preview cap), so the threshold is
+          // applied client-side as a parallel rule. The
+          // PREVIEW_INVALIDATION_COUNT_CAP (101) is the source of
+          // truth for the dialog; here we mirror the same threshold
+          // so the dialog and toast read consistently.
+          const reverted = meta.stagedRowsReverted
+          const countPhrase =
+            reverted > 100
+              ? 'Staged data invalidated.'
+              : reverted === 1
+                ? '1 staged row invalidated.'
+                : `${reverted} staged rows invalidated.`
+          pushToast({
+            id: `mapping-edit-${tfmId}`,
+            variant: 'success',
+            message: `Mapping updated. ${countPhrase}`,
+            actionLabel: 'Re-author transform',
+            onAction: () => {
+              router.push(reauthorHref)
+            },
+          })
+        } else {
+          pushToast({
+            id: `mapping-edit-${tfmId}`,
+            variant: 'success',
+            message: 'Mapping updated.',
+          })
+        }
+        return
+      }
+      // Create-mode path (legacy 4a-2 contract).
+      setPendingDrawerRowId(tfmId)
+      setDrawerRowId(tfmId)
+      writeUrl(filters, tfmId)
       router.refresh()
     },
-    [router, filters, writeUrl],
+    [router, filters, writeUrl, pushToast, projectId],
   )
 
   const handleDrawerActionComplete = useCallback(

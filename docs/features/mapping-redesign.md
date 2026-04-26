@@ -1879,7 +1879,105 @@ The Phase 4a-3 three-layer transparency stack is fully retired. Surfaces touched
 - **Cross-table preview parity in `testTransformation`.** The single-partition `execute_transform_test` RPC doesn't accept aliases, so cross-table previews currently strip aliases and resolve joined refs to NULL. A join-aware test RPC is queued for Phase 4-extras; the alias-stripping comment in `lib/actions/transformations.ts` is the explicit handoff.
 - **JSONB functional indexes on `data_rows.row_data`.** Not needed at Heritage scale; revisit if real-data timing instrumentation surfaces measurable cost (§9-OQ-A + §9-OQ-B).
 
-## Cleanup items
+## Phase 4b-1 — edit mapping sources / combination (2026-04-26)
+
+Phase 4b-1 closes the W2 + W3 workstreams from `phase-4-plan.md`: a user with an existing mapped TFM can now edit its source set and/or combination type without rejecting and recreating. W4 (un-acknowledge) ships as 4b-2 fast-follow within the same week (founder §9.1).
+
+This is a **single atomic commit** spanning three new server actions, a parameterized form component, an updated drawer state machine, a new invalidation-warn dialog, ~75 source-level invariant tests, three on-demand Heritage integration tests, and this documentation pass. Founder decisions §1 through §22 (locked 2026-04-26 — see commit history) drove the scope.
+
+### Server-side wrappers
+
+`lib/actions/mappings-for-redesign.ts` gains three new exports:
+
+- **`editMappingSources(input)`** — atomic source-set replacement. Routes through the new `dq_replace_mapping_sources` RPC (idempotent DELETE + INSERT in one transaction) plus a `target_field_mappings` UPDATE for combination + status. Reverts status to `needs_review` on any source/combination change (§3.2). When sources change, also calls `resetFieldTransform` to delete the `transformations` row and revert staged data — combination-only edits do NOT reset the transform (§1.3). Cross-table FK precheck mirrors `createFieldMapping` (§5.1 — ambiguity is cleared on the cross/same toggle so users can correct it inline). Dominant-table swaps surface as a `DOMINANT_TABLE_CHANGED` validation error (§4 — no auto-rewrite of transform SQL on cross-table demotion). The full error code union is the 9-member `EditMappingErrorCode` (`VALIDATION`, `NOT_FOUND`, `PERMISSION_DENIED`, `MAINTENANCE_MODE`, `TFM_REJECTED`, `TFM_ACKNOWLEDGED`, `DOMINANT_TABLE_CHANGED`, `CROSS_TABLE_AMBIGUOUS`, `INTERNAL`) — §22.
+- **`updateMappingCombination(tfmId, combinationType)`** — combination-only edit. Cheaper than `editMappingSources` because no RPC call is needed (sources unchanged). Status reverts to `needs_review`; transform is NOT reset (§1.3). Provenance laundering does not apply (§1f — no source touched). No-op short-circuit when the combination is unchanged AND status is already `needs_review` (avoids activity-log spam).
+- **`previewEditInvalidation(tfmId)`** — read-only pre-save query for the dialog. Returns `{ hasTransform, stagedRowCount, capped }` where `stagedRowCount` is capped at 101 (`PREVIEW_INVALIDATION_COUNT_CAP`) — anything ≥ 100 renders qualitative copy ("Staged data will be invalidated") rather than a misleading exact number (§2.1). The drawer uses this to decide whether to pop the EditInvalidationDialog before invoking `editMappingSources`.
+
+#### Provenance laundering rule (4a–4b parity)
+
+`editMappingSources` reads the current `mapping_sources` rows' `ai_reasoning` flags before deletion. If at least one **surviving** source row carried non-null AI provenance, the resulting TFM keeps `ai_suggested=true` and the existing `ai_reasoning` text. Otherwise both flags drop. The rule mirrors create-mode laundering established in 4a-4b — manual edits that strip every AI-contributing source flip the TFM to manual provenance, preventing audit-trail drift. The form does NOT thread provenance flags over the wire (§7.1 — laundering is server-side only).
+
+#### Activity logging
+
+Two activity-log entries fire per edit:
+
+- `mapping_sources_changed` — always emitted on any edit (even no-op edits log so the audit trail captures explicit user intent). Metadata carries `target_field`, `source_fields`, `combination_type`, `sources_changed`, `cross_table`, `transform_reset`.
+- `transformation_reset` — emitted when `sourcesChanged === true` AND a transform existed. Metadata: `{ reason: 'mapping_edited', target_field_mapping_id, target_field, rows_reverted }` (§8.1).
+
+`mapping_combination_changed` is emitted by `updateMappingCombination` for combination-only edits (carries `previous_combination_type` + `combination_type`).
+
+### Form parameterization — `CreateMappingForm` (mode='create' | 'edit')
+
+`CreateMappingForm.tsx` is reused for both create and edit flows. The component gains two new props:
+
+- **`mode?: 'create' | 'edit'`** — defaults to `'create'`, so all 4a-* call sites continue to work without changes.
+- **`editInitialState?: EditMappingInitialState`** — `{ tfmId, selectedIds, combinationType, joinAnnotations }`. Required when `mode === 'edit'`. Provenance flags (`aiSuggested`, `originalSuggestedIds`) are intentionally absent — laundering is server-side (founder §1.f).
+
+Edit-mode behaviors:
+
+- **State hydration** — `selectedIds`, `combinationType`, and `joinAnnotations` initialize from `editInitialState` when in edit mode (§5.2 — pre-populate `joinAnnotations` from existing unchanged joined tables so the user only re-disambiguates if they actually changed a cross-table source).
+- **`isDirty` semantics** — in edit mode, the form compares the live picker state against `editInitialState`, not against an empty selection. A no-op edit reports `isDirty=false` and the Save button is disabled (§7 — `canSave` requires `isDirty` in edit mode).
+- **Submit handler routing** — `handleSave` dispatches to `handleEditSave` when `isEditMode`, calling `editMappingSources` instead of `createFieldMapping`. Server-side error codes are mapped via `EDIT_ERROR_CODE_COPY` with refresh affordances on TFM_NOT_FOUND/REJECTED/ACKNOWLEDGED (the page state is stale).
+- **AI Suggest hidden** — the Suggest pill and footer auto-trigger are gated behind `!isEditMode`; AI Suggest in edit mode is queued for 4-extras (founder §3 — same call as 4a's manual-only Suggest scope).
+- **Discard guard** — `DiscardChangesDialog` is now extracted to `app/app/projects/[projectId]/mapping/redesign/components/DiscardChangesDialog.tsx` (separate concern, reused across create + edit flows). The 'discard' variant is reused for both modes; 'replace-ai' remains create-mode-only.
+
+The post-Phase-4b-1 form weighs in at ~2,340 LOC — under the 2,400-LOC emergency stop threshold (founder Refinement 2). Further growth in 4b-2 / 4-extras may force the `useMappingFormState` hook extraction queued in `phase-4-plan.md`.
+
+### Drawer state machine — `MappingDrawer` edit mode
+
+`MappingDrawer.tsx` adds a new edit mode keyed off `editFormActive: boolean`:
+
+1. **Edit affordance.** The `ApproveRejectButtons` footer renders an `[Edit]` button rightmost when `row.kind === 'mapped' && (row.status === 'needs_review' || row.status === 'approved') && row.combinationType !== 'custom_sql'` (founder §3.2 — hidden on rejected, target_acknowledged, unmapped, custom_sql; §3.3 — rightmost). Click invokes `handleEditClick`, which builds `editInitialState` from `row.sources` (selectedIds in ordinal order, `joinAnnotations` recovered from each cross-table source's `joinSpec.viaFkField`) and flips `editFormActive=true`.
+2. **Body switch.** When `editFormActive`, `MappedBody` renders `<CreateMappingForm mode='edit' editInitialState={editInitialState} />` instead of the read-only mapping detail view.
+3. **Footer switch.** The footer collapses to `[Cancel] [Save changes]` (`EditFooterButtons` component). Both buttons are disabled while either the preview round-trip OR the actual save is in flight, so a user cannot double-fire.
+4. **Cancel flow.** Routes through `formRef.current.requestClose()` — the form's existing dirty guard pops `DiscardChangesDialog` (variant `'discard'`) when dirty, short-circuits when clean. Confirmed discard calls back to `handleEditFormCancel` which clears all edit state.
+5. **Save flow.** `handleEditSavePrecheck` calls `previewEditInvalidation(editInitialState.tfmId)` first. If the preview reports `hasTransform === true && stagedRowCount > 0`, populates `editInvalidationPreview` so the EditInvalidationDialog renders — the user must explicitly confirm. Otherwise calls `formRef.current.triggerSave()` directly. On confirm, the dialog clears the preview and forwards to `triggerSave()` which routes through the form's `handleEditSave` and the `editMappingSources` server action.
+
+### EditInvalidationDialog — apply-invalidation warn flow
+
+`app/app/projects/[projectId]/mapping/redesign/components/EditInvalidationDialog.tsx` is the new dialog component. Copy:
+
+> **Reset transform for this field?**
+>
+> Editing sources will reset the transform for `<targetFieldName>`. You'll need to re-author the transform SQL after saving (the current SQL references fields you may have removed).
+>
+> `<N> staged rows will be invalidated.` *(or "Staged data will be invalidated." when capped)*
+>
+> [Cancel] [Save and reset transform]
+
+The confirm action is styled red-destructive to match the irreversibility (the current transform SQL will be deleted). The `<N>` interpolation respects the 101-row cap from `previewEditInvalidation` — exact count when ≤ 100, qualitative when larger (founder §2.1).
+
+### Post-save toast with re-author deep-link
+
+`MappingContent.tsx`'s `handleDrawerSaveSuccess` callback now branches on the `EditSaveMeta` payload:
+
+- **`mode === 'edit'` AND `transformReset === true`** — pushes a toast with copy `"Mapping updated. <N> staged rows invalidated."` (or `"Staged data invalidated."` when ≥ 100) plus `[Re-author transform]` action. Click navigates to `/app/projects/[projectId]/transform?targetFieldMappingId=<tfmId>` (the existing Transform tab supports the URL param) — the user can immediately re-author the SQL against the new source set (founder §3.1 + §2.2).
+- **`mode === 'edit'` AND `transformReset === false`** — minimal "Mapping updated." toast, no action.
+- **`mode === undefined`** — create-mode path, unchanged from 4a-2.
+
+### Test coverage
+
+| Layer | File | Tests |
+|---|---|---|
+| Action — editMappingSources | `tests/actions/edit-mapping-sources.test.ts` | E1-E25: validation, auth, permission, defensive guards, dominant-table-swap, cross-table FK precheck, provenance laundering, source set-diff, RPC invocation, status update, `resetFieldTransform` call, activity logging, revalidation |
+| Action — updateMappingCombination | `tests/actions/update-mapping-combination.test.ts` | C1-C5: wrapper exports, validation, auth/permission/state guards, status revert without transform reset, activity logging + revalidation |
+| Component — CreateMappingForm edit mode | `tests/components/edit-mapping-form.test.ts` | F1-F12: type-level prop shape, hydration, dirty/save semantics, save-handler routing, error code mapping, AI-suggest hiding, `onSaveSuccess` threading |
+| Component — MappingDrawer edit state | `tests/components/mapping-drawer-edit.test.ts` | D1-D6: Edit-button presence + visibility gate, `handleEditClick` payload, body+footer mode switch, `EditFooterButtons` rendering, preview-then-save flow + dialog wiring |
+| Integration (on-demand) | `tests/integration/edit-mapping-heritage.test.ts` | I1-I3: edit-with-no-transform, edit-with-applied-transform (transform reset + staged data revert), combination-only edit (no transform reset). Gated by `RUN_EDIT_MAPPING_HERITAGE_INTEGRATION=1` |
+
+Tests follow the source-level invariant pattern established in 4a-* (read action source as a string, assert regex patterns for key invariants) — fast, deterministic, no DB dependency. Integration tests self-seed and self-clean (the action-layer mocks bypass the two `auth.uid()`-gated SECURITY DEFINER RPCs `dq_create_target_field_mapping` and `dq_replace_mapping_sources`, mirroring the 4a-6 fixture shape).
+
+### Known limitations carried forward
+
+These are intentional Phase 4b-1 deferrals, not bugs:
+
+1. **Un-acknowledge (W4) not yet wired.** Source-side acknowledgment toggle ships as Phase 4b-2 fast-follow. The relevant footer affordance is queued in `phase-4-plan.md`.
+2. **Quiet edit mode rejected.** No "Save without status revert" admin path — every edit reverts to `needs_review` (founder §4.1 + §4.2 — admin nextStatus override deferred).
+3. **No "don't show again" preference for the invalidation warn.** Every edit that would reset a transform pops the dialog; muting is queued for 4-extras (founder §6.1).
+4. **No `'stale' flag on transformations.** When sources change, the transform is deleted (`resetFieldTransform`), not flagged stale (founder §6.2 — preserves the 4a-6 transformation contract).
+5. **Cross-table edit requires `joinAnnotations` re-disambiguation only when ambiguity is fresh.** Unchanged joined tables retain pre-populated annotations across the edit (founder §5.2). Toggling cross/same-table on a source clears ambiguity for the affected joined table only.
+
+
 
 Items to remove during Phase 5-Cleanup:
 

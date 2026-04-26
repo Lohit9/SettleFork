@@ -2,11 +2,14 @@
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Phase 4a-2/4a-3 — W1 manual mapping creation form.
+// Phase 4b-1     — parameterized for edit mode (W2 edit sources / W3
+//                  edit combination type).
 // ─────────────────────────────────────────────────────────────────────────────
 //
 // In-drawer inline form that lets a user create a `target_field_mapping`
 // for a Rule 6 unmapped target field (founder decision 1: in-drawer
-// inline, no modal). Composed of:
+// inline, no modal) — and as of 4b-1, edit an existing TFM's source list
+// and combination type. Composed of:
 //
 //   1. SourceFieldPicker         — chip strip + search + grouped list
 //   2. JoinDisambiguation        — cross-table FK picker (4a-3)
@@ -67,24 +70,17 @@ import {
 import { useRouter } from 'next/navigation'
 import { AlertCircle, Loader2 } from 'lucide-react'
 import { ChevronDown, ChevronRight, Sparkles } from '@/components/icons'
-import {
-  AlertDialog,
-  AlertDialogAction,
-  AlertDialogCancel,
-  AlertDialogContent,
-  AlertDialogDescription,
-  AlertDialogFooter,
-  AlertDialogHeader,
-  AlertDialogTitle,
-} from '@/components/ui/alert-dialog'
 import { cn } from '@/components/ui/utils'
 import {
   createFieldMapping,
-  suggestMappingForTarget,
+  editMappingSources,
   type CreateFieldMappingErrorCode,
   type CreateFieldMappingCombinationType,
+  type EditMappingErrorCode,
   type SuggestMappingErrorCode,
+  suggestMappingForTarget,
 } from '@/lib/actions/mappings-for-redesign'
+import { DiscardChangesDialog } from './DiscardChangesDialog'
 import {
   computeSamplePreview,
   type SamplePreviewCombinationType,
@@ -201,12 +197,80 @@ export interface CreateMappingFormHandle {
   cancelSuggest: () => void
 }
 
+/**
+ * Phase 4b-1 — edit-mode hydration payload. The drawer constructs this
+ * from the row's existing `target_field_mapping` + `mapping_sources` rows
+ * before mounting the form in `mode='edit'`. Fields:
+ *
+ *   • `tfmId` — the row id; passed verbatim into `editMappingSources`.
+ *   • `selectedIds` — current source field ids in canonical order
+ *     (dominant-table sources first, then joined). The form renders
+ *     this as the initial picker selection.
+ *   • `combinationType` — current `combination_type`. Form's combination
+ *     radios pre-select this. When `selectedIds.length <= 1` the form
+ *     collapses to `'single'` regardless (matches create-mode behavior).
+ *   • `joinAnnotations` — current join_spec entries, one per joined
+ *     source table. Pre-populated so the user sees which FK each cross-
+ *     table join is using and can change it without re-deriving.
+ *
+ * Provenance is NOT carried here. The wrapper reads
+ * `mapping_sources.ai_reasoning` server-side and applies the laundering
+ * rule (founder §1.f) without form-side input — a manual TFM stays
+ * manual, an AI TFM stays AI iff at least one originally-AI source
+ * survives.
+ */
+export interface EditMappingInitialState {
+  tfmId: string
+  selectedIds: string[]
+  combinationType: CreateFieldMappingCombinationType
+  joinAnnotations: Record<string, string>
+}
+
+/**
+ * Phase 4b-1 — meta payload returned to the parent on a successful
+ * edit save. The drawer uses `transformReset` + `stagedRowsReverted`
+ * to drive the post-save success toast (with `[Re-author transform]`
+ * deep-link affordance when a transform was reset).
+ */
+export interface EditSaveMeta {
+  mode: 'edit'
+  tfmId: string
+  transformReset: boolean
+  stagedRowsReverted: number
+  nextStatus: 'needs_review'
+}
+
 export interface CreateMappingFormProps {
   projectId: string
   /**
-   * The Rule 6 unmapped target field this form will create a TFM for.
-   * Only `id` is required for the wrapper call; `name` is rendered in
-   * the discard-dialog body for context.
+   * Phase 4b-1 — discriminator between the two top-level shapes the
+   * form supports. Defaults to `'create'` for backward compatibility
+   * with all existing 4a-* call sites.
+   *
+   *   • `'create'` (default) — Rule 6 form. AI Suggest visible. Submit
+   *     handler routes to `createFieldMapping`. Discard dialog title
+   *     reads "Discard changes?".
+   *   • `'edit'`             — edit form. AI Suggest hidden (deferred
+   *     to Phase 4-extras). Submit routes to `editMappingSources`.
+   *     Hydrates from `editInitialState` on mount. Discard dialog
+   *     copy unchanged (founder §3 — "selected sources for X will be
+   *     lost" reads correctly for both new and edited selection).
+   */
+  mode?: 'create' | 'edit'
+  /**
+   * Phase 4b-1 — when `mode='edit'`, the snapshot of the existing TFM
+   * to hydrate from. REQUIRED when `mode='edit'`; ignored otherwise.
+   * Hydration runs once on mount (or when the snapshot identity
+   * changes), matching the `restoreFormState` pattern.
+   */
+  editInitialState?: EditMappingInitialState
+  /**
+   * The target field this form is mapping. For `mode='create'` this
+   * is the Rule 6 unmapped target field. For `mode='edit'` this is
+   * the same field whose existing TFM is being edited. Only `id` is
+   * required for create-mode wrapper calls; `name` is rendered in
+   * the discard-dialog body for context. (For edit-mode the TFM id
+   * comes from `editInitialState.tfmId`.)
    */
   targetField: { id: string; name: string }
   /**
@@ -215,11 +279,18 @@ export interface CreateMappingFormProps {
    */
   availableSourceFields: SourceFieldWithState[]
   /**
-   * Called with the new TFM id once `createFieldMapping` succeeds.
-   * Parent is expected to update the drawer URL param and call
-   * `router.refresh()` so the row morphs from Rule 6 to Rule 1/2.
+   * Called once a save succeeds.
+   *
+   *   • `mode='create'` — `tfmId` is the newly-created row's id; `meta`
+   *     is omitted. Parent updates the drawer URL param and calls
+   *     `router.refresh()` so the row morphs from Rule 6 to Rule 1/2.
+   *   • `mode='edit'`   — `tfmId` is the same row id (unchanged);
+   *     `meta` carries `transformReset` + `stagedRowsReverted` +
+   *     `nextStatus` so the drawer can show the post-save toast
+   *     (with the `[Re-author transform]` deep-link when a transform
+   *     was reset).
    */
-  onSaveSuccess: (newTfmId: string) => void
+  onSaveSuccess: (tfmId: string, meta?: EditSaveMeta) => void
   /**
    * Called when the user cancels (clean form OR after confirming
    * discard). Parent typically clears `isFormActive` so the drawer
@@ -339,6 +410,58 @@ const ERROR_CODE_COPY: Record<CreateFieldMappingErrorCode, string> = {
 const EXISTING_TFM_COPY =
   'This target field was mapped while you were editing. Refresh to see the current state.'
 
+// ── Phase 4b-1 edit-mode copy ────────────────────────────────────────────────
+//
+// `EditMappingErrorCode` shares the create-form codes (PERMISSION_DENIED,
+// NOT_FOUND, VALIDATION, MAINTENANCE_MODE, INTERNAL, CROSS_TABLE_AMBIGUOUS)
+// and adds three edit-only codes:
+//
+//   • TFM_REJECTED       — TFM was rejected by another user / tab between
+//                          drawer open and save. Edit is not allowed in
+//                          this state per §3.2; refresh to recover.
+//   • TFM_ACKNOWLEDGED   — TFM target field was acknowledged-as-empty;
+//                          edit is not allowed (must un-acknowledge first
+//                          via 4b-2). Refresh to recover.
+//   • DOMINANT_TABLE_CHANGED — user removed the dominant-table source.
+//                          Surfaced as a VALIDATION-style banner. The
+//                          dominant table is implicit in source ordering
+//                          and we don't allow swap-by-edit (founder
+//                          decision §1.2 / §10).
+//
+// NOTE: a "TFM was deleted while editing" race surfaces as `NOT_FOUND`
+// (the wrapper folds DB-row-missing into NOT_FOUND because the user-
+// visible recovery is identical: refresh).
+const EDIT_ERROR_CODE_COPY: Record<EditMappingErrorCode, string> = {
+  PERMISSION_DENIED:
+    "You don't have permission to edit mappings on this project.",
+  NOT_FOUND:
+    'This mapping was removed while you were editing. Refresh to see the current state.',
+  VALIDATION:
+    "Couldn't update the mapping. Please check your selections and try again.",
+  MAINTENANCE_MODE:
+    'Mapping changes are temporarily disabled. Please try again in a moment.',
+  INTERNAL: "Couldn't update the mapping. Please try again.",
+  TFM_REJECTED:
+    'This mapping was rejected while you were editing. Refresh to see the current state.',
+  TFM_ACKNOWLEDGED:
+    'This target field was acknowledged-as-empty while you were editing. Refresh to see the current state.',
+  DOMINANT_TABLE_CHANGED:
+    'Editing cannot change the primary source table. Keep at least one source from the original table, or reject this mapping and create a new one.',
+  CROSS_TABLE_AMBIGUOUS:
+    "We couldn't determine the join between the selected source tables. Pick the join field below.",
+}
+
+// Edit-mode codes that should surface the [Refresh] affordance — same
+// pattern as the create-mode EXISTING_TFM banner. NOT_FOUND is included
+// here because the wrapper uses it as the "TFM was concurrently deleted"
+// signal (vs. a non-existent input id, which is caught by VALIDATION).
+const EDIT_REFRESH_AFFORDANCE_CODES: ReadonlySet<EditMappingErrorCode> =
+  new Set<EditMappingErrorCode>([
+    'NOT_FOUND',
+    'TFM_REJECTED',
+    'TFM_ACKNOWLEDGED',
+  ])
+
 // ── AI Suggest error copy + affordance map (Phase 4a-4b) ─────────────────────
 //
 // Maps each `SuggestErrorCode` to its display copy and the affordance the
@@ -403,6 +526,8 @@ export const CreateMappingForm = forwardRef<
 >(function CreateMappingForm(
   {
     projectId,
+    mode = 'create',
+    editInitialState,
     targetField,
     availableSourceFields,
     onSaveSuccess,
@@ -419,14 +544,38 @@ export const CreateMappingForm = forwardRef<
 ) {
   const router = useRouter()
   const whyPanelDomId = useId()
-  const [selectedIds, setSelectedIds] = useState<string[]>([])
+  const isEditMode = mode === 'edit'
+
+  // ── Phase 4b-1 — edit-mode initial state hydration ────────────────
+  //
+  // When `mode='edit'`, seed `selectedIds` / `combinationType` /
+  // `joinAnnotations` from the snapshot on first mount. `useState`'s
+  // lazy initializer pattern is the right shape here because:
+  //   • It runs once per mount — exactly what we want for edit.
+  //   • It reads the snapshot synchronously, so the first render
+  //     paints with the user's existing selection (no flicker /
+  //     empty-then-fill).
+  //   • It keeps the same `useState` declaration shape across modes
+  //     so the rest of the form's state machine doesn't branch.
+  //
+  // `editInitialState` is required by contract when `mode='edit'`;
+  // we defensively coerce missing values to empty so a misconfigured
+  // call site doesn't crash (the form renders empty and the dirty
+  // flag stays false until the user makes a selection).
+  const [selectedIds, setSelectedIds] = useState<string[]>(() =>
+    isEditMode && editInitialState ? [...editInitialState.selectedIds] : [],
+  )
   const [combinationType, setCombinationTypeRaw] =
-    useState<CreateFieldMappingCombinationType>(DEFAULT_COMBINATION_TYPE)
+    useState<CreateFieldMappingCombinationType>(() =>
+      isEditMode && editInitialState
+        ? editInitialState.combinationType
+        : DEFAULT_COMBINATION_TYPE,
+    )
   const [isSavePending, startSaveTransition] = useTransition()
   const [errorMessage, setErrorMessage] = useState<string | null>(null)
-  const [errorCode, setErrorCode] = useState<CreateFieldMappingErrorCode | null>(
-    null,
-  )
+  const [errorCode, setErrorCode] = useState<
+    CreateFieldMappingErrorCode | EditMappingErrorCode | null
+  >(null)
   const [confirmDiscardOpen, setConfirmDiscardOpen] = useState(false)
 
   // ── Phase 4a-4b — AI Suggest state ─────────────────────────────
@@ -509,9 +658,20 @@ export const CreateMappingForm = forwardRef<
   const [ambiguousCandidates, setAmbiguousCandidates] = useState<
     Map<string, AmbiguousEntry>
   >(() => new Map())
+  // Phase 4b-1 — pre-populate joinAnnotations from the existing TFM so
+  // the user sees which FK each cross-table join is currently using.
+  // Per founder decision §5.2, unchanged joined tables retain their
+  // annotations across edits; only changed/added joined tables clear
+  // and re-derive on save (the wrapper's cross-table FK precheck
+  // re-runs the inference and re-emits CROSS_TABLE_AMBIGUOUS for the
+  // changed entries).
   const [joinAnnotations, setJoinAnnotations] = useState<
     Record<string, string>
-  >({})
+  >(() =>
+    isEditMode && editInitialState
+      ? { ...editInitialState.joinAnnotations }
+      : {},
+  )
   // Some joined tables may be in `ambiguousCandidates` AND have a
   // resolved `joinAnnotations` entry — by default we render those as
   // read-only summary rows. The user can flip an individual entry
@@ -624,7 +784,48 @@ export const CreateMappingForm = forwardRef<
   }, [restoreFormState, targetField.id, onRestoreConsumed])
 
   // ── Derived flags ───────────────────────────────────────────────
-  const isDirty = selectedIds.length > 0
+  //
+  // Phase 4b-1 — `isDirty` becomes mode-aware:
+  //
+  //   • create — dirty as soon as the user picks a single source.
+  //     Matches the original 4a-2 semantics (an empty form is clean,
+  //     a populated form is dirty).
+  //   • edit   — dirty only when the current selection / combination /
+  //     join annotations differ from `editInitialState`. The user
+  //     opening the drawer in edit mode and clicking Cancel without
+  //     touching anything is NOT dirty (no confirm dialog).
+  //
+  // Same flag drives the discard-confirm intercept and the Save-
+  // button disabled state — saving a no-op edit is not allowed.
+  const isDirty = useMemo(() => {
+    if (!isEditMode) return selectedIds.length > 0
+    if (!editInitialState) return selectedIds.length > 0
+    if (selectedIds.length !== editInitialState.selectedIds.length) return true
+    for (let i = 0; i < selectedIds.length; i++) {
+      if (selectedIds[i] !== editInitialState.selectedIds[i]) return true
+    }
+    if (combinationType !== editInitialState.combinationType) return true
+    // Order-independent record comparison without `.sort()` — the
+    // redesign path bans client-side sorting (server guarantees row
+    // ordering). For two records to be equal, every key in either
+    // direction must exist in the other AND map to the same value.
+    const initEntries = Object.entries(editInitialState.joinAnnotations)
+    const curEntries = Object.entries(joinAnnotations)
+    if (initEntries.length !== curEntries.length) return true
+    for (const [k, v] of initEntries) {
+      if (joinAnnotations[k] !== v) return true
+    }
+    for (const [k, v] of curEntries) {
+      if (editInitialState.joinAnnotations[k] !== v) return true
+    }
+    return false
+  }, [
+    isEditMode,
+    editInitialState,
+    selectedIds,
+    combinationType,
+    joinAnnotations,
+  ])
 
   // Unresolved ambiguity blocks save: any zero-FK entry, or any
   // multi-FK entry without a matching annotation.
@@ -637,8 +838,14 @@ export const CreateMappingForm = forwardRef<
     return false
   }, [ambiguousCandidates, joinAnnotations])
 
+  // Phase 4b-1 — edit mode requires `isDirty` (no-op saves blocked at
+  // UI level even though the wrapper short-circuits silently). Create
+  // mode preserves the 4a-2 behavior (any selection is saveable).
   const canSave =
-    selectedIds.length > 0 && !isSavePending && !hasUnresolvedAmbiguity
+    selectedIds.length > 0 &&
+    !isSavePending &&
+    !hasUnresolvedAmbiguity &&
+    (!isEditMode || isDirty)
 
   // Phase 4a-4a — publish a snapshot whenever the form is dirty so
   // the drawer can lift it to `MappingContent` for row-switch undo.
@@ -987,6 +1194,11 @@ export const CreateMappingForm = forwardRef<
   // the effect fires unconditionally. Production always passes it.
   useEffect(() => {
     if (!autoSuggest) return
+    // Phase 4b-1 — defense in depth. Edit mode hides the [Suggest with
+    // AI] surface so the parent should never set `autoSuggest=true`,
+    // but a future regression that does should be a no-op rather than
+    // a stray LLM call against a TFM the user is already editing.
+    if (isEditMode) return
     if (tryConsumeAutoSuggest && !tryConsumeAutoSuggest(targetField.id)) {
       return
     }
@@ -1020,8 +1232,14 @@ export const CreateMappingForm = forwardRef<
     if (selectedIds.length === 0 || isSavePending) return
     if (hasUnresolvedAmbiguity) return
     if (suggestState.kind === 'pending') return
+    if (isEditMode && !isDirty) return
     setErrorMessage(null)
     setErrorCode(null)
+
+    if (isEditMode) {
+      handleEditSave()
+      return
+    }
 
     // ── Phase 4a-4b — AI provenance with laundering correction ──
     //
@@ -1135,6 +1353,108 @@ export const CreateMappingForm = forwardRef<
     })
   }
 
+  // ── Phase 4b-1 — edit-mode save flow ─────────────────────────────
+  //
+  // Routes `selectedIds` / `combinationType` / `joinAnnotations` into
+  // `editMappingSources`. Mirrors `handleSave`'s try/catch and error-
+  // dispatch shape, but with the edit-specific error code map and
+  // result fields (`tfmId` is unchanged, `transformReset` /
+  // `stagedRowsReverted` / `nextStatus` carry post-save UX signal).
+  //
+  // CROSS_TABLE_AMBIGUOUS surfaces the same JoinDisambiguation flow
+  // as create-mode (the wrapper emits identical fields). The user
+  // resolves the join, the form re-saves, and the wrapper proceeds.
+  //
+  // DOMINANT_TABLE_CHANGED is the edit-only case. We surface a
+  // VALIDATION-style banner pointing the user at the picker — the
+  // safe recovery is "add the dominant-table source back, or reject
+  // this mapping and create fresh from the rejected slot". No inline
+  // affordance is offered because the banner copy explains the path.
+  //
+  // TFM_NOT_FOUND / TFM_REJECTED / TFM_ACKNOWLEDGED all surface the
+  // [Refresh] affordance — the page state is stale and re-deriving
+  // server-side is the only correct recovery.
+  const handleEditSave = () => {
+    if (!editInitialState) return
+
+    // Phase 4b-1 — provenance laundering happens entirely server-side
+    // inside `editMappingSources`. The wrapper reads the existing
+    // `mapping_sources.ai_reasoning` rows and decides whether to
+    // preserve `ai_suggested` / `ai_reasoning` based on whether ANY
+    // surviving row carries non-null AI provenance (founder §1.f).
+    // The form sends only the source set + combination + join
+    // annotations; no provenance flags ride the wire.
+
+    startSaveTransition(async () => {
+      try {
+        const result = await editMappingSources({
+          tfmId: editInitialState.tfmId,
+          sourceFieldIds: selectedIds,
+          combinationType: effectiveCombinationType,
+          joinAnnotations,
+        })
+        if (!result.success) {
+          if (
+            result.errorCode === 'CROSS_TABLE_AMBIGUOUS' &&
+            result.ambiguousJoinedTableId &&
+            result.ambiguousJoinedTableName &&
+            result.dominantTableName !== undefined
+          ) {
+            const tableId = result.ambiguousJoinedTableId
+            const candidates = result.candidateFkFields ?? []
+            setAmbiguousCandidates((prev) => {
+              const next = new Map(prev)
+              next.set(tableId, {
+                candidates,
+                joinedTableName: result.ambiguousJoinedTableName!,
+                dominantTableName: result.dominantTableName!,
+              })
+              return next
+            })
+            setErrorCode(result.errorCode)
+            setErrorMessage(null)
+            if (typeof console !== 'undefined') {
+              console.error(
+                '[CreateMappingForm] editMappingSources cross-table ambiguity:',
+                result,
+              )
+            }
+            return
+          }
+          setErrorCode(result.errorCode)
+          setErrorMessage(
+            EDIT_ERROR_CODE_COPY[result.errorCode] ??
+              EDIT_ERROR_CODE_COPY.INTERNAL,
+          )
+          if (typeof console !== 'undefined') {
+            console.error(
+              '[CreateMappingForm] editMappingSources failed:',
+              result,
+            )
+          }
+          return
+        }
+        // The wrapper always sets `status='needs_review'` on a
+        // sources/combination change (founder §3.2). Bake that as a
+        // literal here — the wrapper's success result doesn't carry
+        // status because there is no other branch.
+        onSaveSuccess(result.tfmId, {
+          mode: 'edit',
+          tfmId: result.tfmId,
+          transformReset: result.transformReset,
+          stagedRowsReverted: result.stagedRowsReverted,
+          nextStatus: 'needs_review',
+        })
+      } catch (err) {
+        setErrorCode('INTERNAL')
+        setErrorMessage(EDIT_ERROR_CODE_COPY.INTERNAL)
+        if (typeof console !== 'undefined') {
+          console.error('[CreateMappingForm] editMappingSources threw:', err)
+        }
+      }
+    })
+  }
+
   const handleRefreshOnExistingTfm = () => {
     router.refresh()
     onCancel()
@@ -1177,8 +1497,17 @@ export const CreateMappingForm = forwardRef<
     isSuggestPending ||
     replaceWarningOpen
   const showCombinationRadios = selectedIds.length >= 2
+  // Phase 4b-1 — the [Refresh] affordance fires on:
+  //   • create mode existing-tfm collision (errorCode VALIDATION +
+  //     EXISTING_TFM_COPY message), AND
+  //   • edit mode TFM_NOT_FOUND / TFM_REJECTED / TFM_ACKNOWLEDGED
+  //     (server-side state was concurrently mutated; refresh is the
+  //     only recovery).
   const isExistingTfmError =
-    errorMessage === EXISTING_TFM_COPY && errorCode === 'VALIDATION'
+    (errorMessage === EXISTING_TFM_COPY && errorCode === 'VALIDATION') ||
+    (isEditMode &&
+      errorCode !== null &&
+      EDIT_REFRESH_AFFORDANCE_CODES.has(errorCode as EditMappingErrorCode))
 
   // ── AI Suggest section render bits ─────────────────────────────
   //
@@ -1193,11 +1522,17 @@ export const CreateMappingForm = forwardRef<
   // Per locked §6-OQ-2, the Why? toggle is hidden entirely when
   // rationale is empty (rare — wrapper enforces ≤ 280 chars but does
   // not enforce non-empty).
+  // Phase 4b-1 — AI Suggest is hidden in edit mode (founder decision
+  // §1 — defer to 4-extras). The form's other affordances (picker,
+  // disambiguation, combination radios, sample preview) all work
+  // identically across both modes; AI Suggest is the one surface that
+  // doesn't have a defined edit-mode UX yet.
   const showAISuggestRow =
-    suggestState.kind === 'idle' ||
-    suggestState.kind === 'pending' ||
-    suggestState.kind === 'loaded' ||
-    suggestState.kind === 'error'
+    !isEditMode &&
+    (suggestState.kind === 'idle' ||
+      suggestState.kind === 'pending' ||
+      suggestState.kind === 'loaded' ||
+      suggestState.kind === 'error')
 
   // Suggest error banner content. Distinct from the form-save error
   // banner (which renders separately at the top). The fallback
@@ -2001,97 +2336,5 @@ function SamplePreview({
   )
 }
 
-// ── Discard dialog ───────────────────────────────────────────────────────────
-
-// ── Discard / replace dialog (Phase 4a-4b parameterized) ────────────────────
-//
-// Two variants share this primitive:
-//
-//   • 'discard'    — shipped in 4a-2. Pops on Cancel / Esc / X / click-
-//                    outside when the form is dirty. Confirm action
-//                    button reads "Discard" with red-destructive styling.
-//
-//   • 'replace-ai' — Phase 4a-4b. Pops on `Re-suggest` / pill click when
-//                    the user has manual edits on top of an AI-loaded
-//                    suggestion. Confirm action button reads "Replace"
-//                    with the same red-destructive styling — replacing
-//                    a suggestion is also a "lose your work" path so
-//                    the visual weight matches.
-//
-// `data-testid="create-mapping-form-discard-dialog"` stays stable
-// across both variants (existing 4a-2 tests don't break) but a new
-// `data-variant` attribute carries the discriminant for new tests.
-
-interface DiscardChangesDialogProps {
-  variant: 'discard' | 'replace-ai'
-  targetFieldName: string
-  open: boolean
-  onKeepEditing: () => void
-  onConfirm: () => void
-}
-
-function DiscardChangesDialog({
-  variant,
-  targetFieldName,
-  open,
-  onKeepEditing,
-  onConfirm,
-}: DiscardChangesDialogProps) {
-  const title =
-    variant === 'discard' ? 'Discard changes?' : 'Replace with AI suggestion?'
-  const confirmLabel = variant === 'discard' ? 'Discard' : 'Replace'
-  const description =
-    variant === 'discard' ? (
-      <>
-        Your selected sources for{' '}
-        <span className="font-mono text-gray-700">{targetFieldName}</span> will
-        be lost. This cannot be undone.
-      </>
-    ) : (
-      <>
-        Your manual edits to{' '}
-        <span className="font-mono text-gray-700">{targetFieldName}</span> will
-        be replaced by the new AI suggestion. This cannot be undone.
-      </>
-    )
-  return (
-    <AlertDialog
-      open={open}
-      onOpenChange={(next) => {
-        // Esc / overlay-click both surface as "user wants to bail" —
-        // collapse to the same path as the explicit Keep editing.
-        // Per founder decision §1-OQ-1 this dismisses the dialog
-        // ONLY (the parent does not bubble it to drawer-close).
-        if (!next) onKeepEditing()
-      }}
-    >
-      <AlertDialogContent
-        data-testid="create-mapping-form-discard-dialog"
-        data-variant={variant}
-      >
-        <AlertDialogHeader>
-          <AlertDialogTitle>{title}</AlertDialogTitle>
-          <AlertDialogDescription>{description}</AlertDialogDescription>
-        </AlertDialogHeader>
-        <AlertDialogFooter>
-          <AlertDialogCancel
-            data-testid="create-mapping-form-discard-cancel"
-            onClick={onKeepEditing}
-          >
-            Keep editing
-          </AlertDialogCancel>
-          <AlertDialogAction
-            onClick={(e) => {
-              e.preventDefault()
-              onConfirm()
-            }}
-            data-testid="create-mapping-form-discard-confirm"
-            className="bg-red-600 hover:bg-red-700 focus:ring-red-500/40"
-          >
-            {confirmLabel}
-          </AlertDialogAction>
-        </AlertDialogFooter>
-      </AlertDialogContent>
-    </AlertDialog>
-  )
-}
+// DiscardChangesDialog extracted to ./DiscardChangesDialog.tsx in Phase 4b-1
+// (shared with the edit-mapping flow on the drawer footer Cancel path).
