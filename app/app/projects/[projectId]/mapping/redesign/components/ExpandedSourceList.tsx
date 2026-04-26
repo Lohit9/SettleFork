@@ -1,4 +1,5 @@
 import { TableBadge } from './TableBadge'
+import { formatConfidencePercent } from '@/lib/utils/confidence-format'
 import type { MappingSourceRef } from '@/lib/types/mappings-for-redesign'
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -81,7 +82,7 @@ function SourceBullet({ source }: { source: MappingSourceRef }) {
         className="ml-auto flex-shrink-0 tabular-nums text-xs text-slate-500"
         data-testid="expanded-source-confidence"
       >
-        {formatConfidence(source.confidence)}
+        {formatConfidencePercent(source.confidence)}
       </span>
       {source.joinAnnotation ? (
         <span
@@ -97,16 +98,3 @@ function SourceBullet({ source }: { source: MappingSourceRef }) {
   )
 }
 
-/**
- * 2-decimal confidence formatting mirroring FieldMappingRow's rule so the
- * collapsed and expanded views never disagree on a fraction. Accepts either
- * 0-100 integers (legacy storage) or 0-1 fractions (defensive drift guard).
- *
- * Null handled by rendering an em-dash — a mapped source with null confidence
- * is unusual but allowed by the contract.
- */
-function formatConfidence(confidence: number | null): string {
-  if (confidence === null) return '—'
-  const normalized = confidence > 1 ? confidence : confidence * 100
-  return `${normalized.toFixed(2)}%`
-}

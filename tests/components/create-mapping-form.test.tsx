@@ -12,13 +12,16 @@ import type { SourceFieldWithState } from '@/lib/types/mappings-for-redesign'
 // Phase 4a-2 — `CreateMappingForm` + DiscardChangesDialog tests.
 // ─────────────────────────────────────────────────────────────────────────────
 
-const { createFieldMappingMock, routerRefreshMock } = vi.hoisted(() => ({
-  createFieldMappingMock: vi.fn(),
-  routerRefreshMock: vi.fn(),
-}))
+const { createFieldMappingMock, suggestMappingMock, routerRefreshMock } =
+  vi.hoisted(() => ({
+    createFieldMappingMock: vi.fn(),
+    suggestMappingMock: vi.fn(),
+    routerRefreshMock: vi.fn(),
+  }))
 
 vi.mock('@/lib/actions/mappings-for-redesign', () => ({
   createFieldMapping: (...args: unknown[]) => createFieldMappingMock(...args),
+  suggestMappingForTarget: (...args: unknown[]) => suggestMappingMock(...args),
 }))
 
 vi.mock('next/navigation', () => ({
@@ -31,6 +34,7 @@ vi.mock('next/navigation', () => ({
 
 beforeEach(() => {
   createFieldMappingMock.mockReset()
+  suggestMappingMock.mockReset()
   routerRefreshMock.mockReset()
 })
 
@@ -1156,3 +1160,947 @@ describe('CreateMappingForm — light-mode invariant', () => {
     expect(container.innerHTML).not.toMatch(/\bdark:/)
   })
 })
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Phase 4a-4b — AI Suggest UI tests.
+// ─────────────────────────────────────────────────────────────────────────────
+
+const SUGGESTION_FIXTURE = {
+  sourceFieldIds: ['sf-cif-1', 'sf-cif-2'],
+  combinationType: 'concat_space' as const,
+  confidence: 85,
+  rationale: 'FIRST_NAME and LAST_NAME together best match customer_name.',
+}
+
+describe('CreateMappingForm — AI Suggest pill (idle state)', () => {
+  it('renders the [Suggest with AI] pill on initial mount', () => {
+    render(
+      <CreateMappingForm
+        projectId="p1"
+        targetField={targetField}
+        availableSourceFields={cifFields}
+        onSaveSuccess={() => {}}
+        onCancel={() => {}}
+      />,
+    )
+    expect(
+      screen.getByTestId('create-mapping-form-suggest-button'),
+    ).toBeInTheDocument()
+    expect(
+      screen.queryByTestId('create-mapping-form-suggest-pending'),
+    ).toBeNull()
+    expect(
+      screen.queryByTestId('create-mapping-form-suggest-loaded'),
+    ).toBeNull()
+  })
+
+  it('clicking the pill invokes suggestMappingForTarget with the target field id', async () => {
+    suggestMappingMock.mockResolvedValueOnce({
+      success: true,
+      suggestion: SUGGESTION_FIXTURE,
+    })
+    const user = userEvent.setup()
+    render(
+      <CreateMappingForm
+        projectId="p1"
+        targetField={targetField}
+        availableSourceFields={cifFields}
+        onSaveSuccess={() => {}}
+        onCancel={() => {}}
+      />,
+    )
+    await user.click(screen.getByTestId('create-mapping-form-suggest-button'))
+    expect(suggestMappingMock).toHaveBeenCalledWith({
+      projectId: 'p1',
+      targetFieldId: 'tf-1',
+    })
+  })
+})
+
+describe('CreateMappingForm — AI Suggest pending state', () => {
+  it('renders "Suggesting…" while the wrapper is in flight', async () => {
+    let resolve!: (v: unknown) => void
+    suggestMappingMock.mockImplementationOnce(
+      () => new Promise((r) => (resolve = r)),
+    )
+    const user = userEvent.setup()
+    render(
+      <CreateMappingForm
+        projectId="p1"
+        targetField={targetField}
+        availableSourceFields={cifFields}
+        onSaveSuccess={() => {}}
+        onCancel={() => {}}
+      />,
+    )
+    await user.click(screen.getByTestId('create-mapping-form-suggest-button'))
+    expect(
+      screen.getByTestId('create-mapping-form-suggest-pending'),
+    ).toBeInTheDocument()
+    // Resolve to release the promise so the test cleanup is clean.
+    await act(async () => {
+      resolve({ success: true, suggestion: SUGGESTION_FIXTURE })
+    })
+  })
+
+  it('publishes isSuggestPending=true while pending and false after resolve', async () => {
+    suggestMappingMock.mockResolvedValueOnce({
+      success: true,
+      suggestion: SUGGESTION_FIXTURE,
+    })
+    const onSuggestStateChange = vi.fn()
+    const user = userEvent.setup()
+    render(
+      <CreateMappingForm
+        projectId="p1"
+        targetField={targetField}
+        availableSourceFields={cifFields}
+        onSaveSuccess={() => {}}
+        onCancel={() => {}}
+        onSuggestStateChange={onSuggestStateChange}
+      />,
+    )
+    await user.click(screen.getByTestId('create-mapping-form-suggest-button'))
+    // After resolution we should see at least one false call AFTER a true.
+    const truthyCalls = onSuggestStateChange.mock.calls.filter(
+      (c) => c[0].isSuggestPending === true,
+    )
+    expect(truthyCalls.length).toBeGreaterThanOrEqual(1)
+    expect(onSuggestStateChange).toHaveBeenLastCalledWith({
+      isSuggestPending: false,
+    })
+  })
+})
+
+describe('CreateMappingForm — AI Suggest loaded state (pre-fill)', () => {
+  it('pre-fills selectedIds and combinationType from the suggestion', async () => {
+    suggestMappingMock.mockResolvedValueOnce({
+      success: true,
+      suggestion: SUGGESTION_FIXTURE,
+    })
+    const onStateChange = vi.fn()
+    const user = userEvent.setup()
+    render(
+      <CreateMappingForm
+        projectId="p1"
+        targetField={targetField}
+        availableSourceFields={cifFields}
+        onSaveSuccess={() => {}}
+        onCancel={() => {}}
+        onStateChange={onStateChange}
+      />,
+    )
+    await user.click(screen.getByTestId('create-mapping-form-suggest-button'))
+    await screen.findByTestId('create-mapping-form-suggest-loaded')
+    expect(onStateChange).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        isDirty: true,
+        canSave: true,
+        snapshot: expect.objectContaining({
+          selectedIds: ['sf-cif-1', 'sf-cif-2'],
+          combinationType: 'concat_space',
+        }),
+      }),
+    )
+  })
+
+  it('renders the ConfidencePill and Why? toggle', async () => {
+    suggestMappingMock.mockResolvedValueOnce({
+      success: true,
+      suggestion: SUGGESTION_FIXTURE,
+    })
+    const user = userEvent.setup()
+    render(
+      <CreateMappingForm
+        projectId="p1"
+        targetField={targetField}
+        availableSourceFields={cifFields}
+        onSaveSuccess={() => {}}
+        onCancel={() => {}}
+      />,
+    )
+    await user.click(screen.getByTestId('create-mapping-form-suggest-button'))
+    await screen.findByTestId('create-mapping-form-confidence-pill')
+    expect(screen.getByTestId('create-mapping-form-why-toggle')).toBeInTheDocument()
+  })
+
+  it('Why? toggle expands the rationale panel', async () => {
+    suggestMappingMock.mockResolvedValueOnce({
+      success: true,
+      suggestion: SUGGESTION_FIXTURE,
+    })
+    const user = userEvent.setup()
+    render(
+      <CreateMappingForm
+        projectId="p1"
+        targetField={targetField}
+        availableSourceFields={cifFields}
+        onSaveSuccess={() => {}}
+        onCancel={() => {}}
+      />,
+    )
+    await user.click(screen.getByTestId('create-mapping-form-suggest-button'))
+    await screen.findByTestId('create-mapping-form-why-toggle')
+    // Initially collapsed.
+    expect(screen.queryByTestId('create-mapping-form-why-panel')).toBeNull()
+    await user.click(screen.getByTestId('create-mapping-form-why-toggle'))
+    expect(
+      screen.getByTestId('create-mapping-form-why-panel').textContent,
+    ).toContain('FIRST_NAME and LAST_NAME')
+  })
+
+  it('hides Why? toggle when rationale is empty', async () => {
+    suggestMappingMock.mockResolvedValueOnce({
+      success: true,
+      suggestion: { ...SUGGESTION_FIXTURE, rationale: '' },
+    })
+    const user = userEvent.setup()
+    render(
+      <CreateMappingForm
+        projectId="p1"
+        targetField={targetField}
+        availableSourceFields={cifFields}
+        onSaveSuccess={() => {}}
+        onCancel={() => {}}
+      />,
+    )
+    await user.click(screen.getByTestId('create-mapping-form-suggest-button'))
+    await screen.findByTestId('create-mapping-form-suggest-loaded')
+    expect(screen.queryByTestId('create-mapping-form-why-toggle')).toBeNull()
+  })
+
+  it('filters source ids that are not in availableSourceFields', async () => {
+    suggestMappingMock.mockResolvedValueOnce({
+      success: true,
+      suggestion: {
+        ...SUGGESTION_FIXTURE,
+        sourceFieldIds: ['sf-cif-1', 'sf-not-present'],
+      },
+    })
+    const onStateChange = vi.fn()
+    const user = userEvent.setup()
+    render(
+      <CreateMappingForm
+        projectId="p1"
+        targetField={targetField}
+        availableSourceFields={cifFields}
+        onSaveSuccess={() => {}}
+        onCancel={() => {}}
+        onStateChange={onStateChange}
+      />,
+    )
+    await user.click(screen.getByTestId('create-mapping-form-suggest-button'))
+    await screen.findByTestId('create-mapping-form-suggest-loaded')
+    expect(onStateChange).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        snapshot: expect.objectContaining({ selectedIds: ['sf-cif-1'] }),
+      }),
+    )
+  })
+
+  it('surfaces AI_INVALID_RESPONSE if the filter empties the source list', async () => {
+    suggestMappingMock.mockResolvedValueOnce({
+      success: true,
+      suggestion: {
+        ...SUGGESTION_FIXTURE,
+        sourceFieldIds: ['sf-not-present-1', 'sf-not-present-2'],
+      },
+    })
+    const user = userEvent.setup()
+    render(
+      <CreateMappingForm
+        projectId="p1"
+        targetField={targetField}
+        availableSourceFields={cifFields}
+        onSaveSuccess={() => {}}
+        onCancel={() => {}}
+      />,
+    )
+    await user.click(screen.getByTestId('create-mapping-form-suggest-button'))
+    await screen.findByTestId('create-mapping-form-suggest-error')
+    expect(
+      screen.getByTestId('create-mapping-form-suggest-error').textContent,
+    ).toMatch(/AI suggestion didn't match/i)
+  })
+
+  it('narrows combinationType to "single" when filter reduces to 1 source', async () => {
+    suggestMappingMock.mockResolvedValueOnce({
+      success: true,
+      suggestion: {
+        ...SUGGESTION_FIXTURE,
+        sourceFieldIds: ['sf-cif-1', 'sf-not-present'],
+        combinationType: 'concat_space' as const,
+      },
+    })
+    const onStateChange = vi.fn()
+    const user = userEvent.setup()
+    render(
+      <CreateMappingForm
+        projectId="p1"
+        targetField={targetField}
+        availableSourceFields={cifFields}
+        onSaveSuccess={() => {}}
+        onCancel={() => {}}
+        onStateChange={onStateChange}
+      />,
+    )
+    await user.click(screen.getByTestId('create-mapping-form-suggest-button'))
+    await screen.findByTestId('create-mapping-form-suggest-loaded')
+    expect(onStateChange).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        snapshot: expect.objectContaining({
+          selectedIds: ['sf-cif-1'],
+          combinationType: 'single',
+        }),
+      }),
+    )
+  })
+
+  it('defensively rejects custom_sql combinationType from the wrapper', async () => {
+    // Wrapper narrows custom_sql server-side, but defense-in-depth on
+    // the form per locked §4-OQ-1.
+    suggestMappingMock.mockResolvedValueOnce({
+      success: true,
+      suggestion: {
+        ...SUGGESTION_FIXTURE,
+        // Cast around the type guard to simulate a future drift.
+        combinationType: 'custom_sql',
+      },
+    })
+    const user = userEvent.setup()
+    render(
+      <CreateMappingForm
+        projectId="p1"
+        targetField={targetField}
+        availableSourceFields={cifFields}
+        onSaveSuccess={() => {}}
+        onCancel={() => {}}
+      />,
+    )
+    await user.click(screen.getByTestId('create-mapping-form-suggest-button'))
+    await screen.findByTestId('create-mapping-form-suggest-error')
+  })
+})
+
+describe('CreateMappingForm — AI Suggest error states', () => {
+  it('RATE_LIMITED renders the wrapper verbatim message and disables the pill', async () => {
+    suggestMappingMock.mockResolvedValueOnce({
+      success: false,
+      errorCode: 'RATE_LIMITED',
+      error:
+        'AI rate limit reached (100/hour). Try again in 47 minutes.',
+    })
+    const user = userEvent.setup()
+    render(
+      <CreateMappingForm
+        projectId="p1"
+        targetField={targetField}
+        availableSourceFields={cifFields}
+        onSaveSuccess={() => {}}
+        onCancel={() => {}}
+      />,
+    )
+    await user.click(screen.getByTestId('create-mapping-form-suggest-button'))
+    const banner = await screen.findByTestId(
+      'create-mapping-form-suggest-error',
+    )
+    expect(banner.textContent).toContain('AI rate limit reached')
+    // No Try-again button on RATE_LIMITED.
+    expect(
+      screen.queryByTestId('create-mapping-form-suggest-error-action'),
+    ).toBeNull()
+    // Pill becomes disabled with the rate-limit tooltip.
+    const pill = screen.getByTestId('create-mapping-form-suggest-button')
+    expect(pill).toBeDisabled()
+    expect(pill.getAttribute('title')).toMatch(/rate-limited/i)
+  })
+
+  it('AI_INVALID_RESPONSE renders Try again affordance', async () => {
+    suggestMappingMock.mockResolvedValueOnce({
+      success: false,
+      errorCode: 'AI_INVALID_RESPONSE',
+      error: 'parse error',
+    })
+    const user = userEvent.setup()
+    render(
+      <CreateMappingForm
+        projectId="p1"
+        targetField={targetField}
+        availableSourceFields={cifFields}
+        onSaveSuccess={() => {}}
+        onCancel={() => {}}
+      />,
+    )
+    await user.click(screen.getByTestId('create-mapping-form-suggest-button'))
+    await screen.findByTestId('create-mapping-form-suggest-error')
+    const action = screen.getByTestId(
+      'create-mapping-form-suggest-error-action',
+    )
+    expect(action.textContent).toBe('Try again')
+
+    // Clicking Try again re-invokes the wrapper.
+    suggestMappingMock.mockResolvedValueOnce({
+      success: true,
+      suggestion: SUGGESTION_FIXTURE,
+    })
+    await user.click(action)
+    expect(suggestMappingMock).toHaveBeenCalledTimes(2)
+  })
+
+  it('NETWORK error (wrapper throws) renders Try again', async () => {
+    suggestMappingMock.mockRejectedValueOnce(new Error('fetch failed'))
+    const user = userEvent.setup()
+    render(
+      <CreateMappingForm
+        projectId="p1"
+        targetField={targetField}
+        availableSourceFields={cifFields}
+        onSaveSuccess={() => {}}
+        onCancel={() => {}}
+      />,
+    )
+    await user.click(screen.getByTestId('create-mapping-form-suggest-button'))
+    const banner = await screen.findByTestId(
+      'create-mapping-form-suggest-error',
+    )
+    expect(banner.textContent).toMatch(/connection/i)
+    expect(
+      screen.getByTestId('create-mapping-form-suggest-error-action').textContent,
+    ).toBe('Try again')
+  })
+
+  it('selection change clears a non-rate-limit error banner', async () => {
+    suggestMappingMock.mockResolvedValueOnce({
+      success: false,
+      errorCode: 'AI_INVALID_RESPONSE',
+      error: 'parse error',
+    })
+    const user = userEvent.setup()
+    render(
+      <CreateMappingForm
+        projectId="p1"
+        targetField={targetField}
+        availableSourceFields={cifFields}
+        onSaveSuccess={() => {}}
+        onCancel={() => {}}
+      />,
+    )
+    await user.click(screen.getByTestId('create-mapping-form-suggest-button'))
+    await screen.findByTestId('create-mapping-form-suggest-error')
+    // Now flip the picker — error banner should clear (per locked §7-OQ-2).
+    const fields = screen.getAllByTestId('source-field-picker-field')
+    await user.click(
+      fields.find((f) => f.getAttribute('data-source-field-id') === 'sf-cif-1')!,
+    )
+    expect(
+      screen.queryByTestId('create-mapping-form-suggest-error'),
+    ).toBeNull()
+  })
+})
+
+describe('CreateMappingForm — AI Suggest cancel + race resolution', () => {
+  it('cancelSuggest aborts the in-flight request and restores pre-pending state', async () => {
+    let resolveFirst!: (v: unknown) => void
+    suggestMappingMock.mockImplementationOnce(
+      () => new Promise((r) => (resolveFirst = r)),
+    )
+    const ref = createRef<CreateMappingFormHandle>()
+    const user = userEvent.setup()
+    render(
+      <CreateMappingForm
+        ref={ref}
+        projectId="p1"
+        targetField={targetField}
+        availableSourceFields={cifFields}
+        onSaveSuccess={() => {}}
+        onCancel={() => {}}
+      />,
+    )
+    await user.click(screen.getByTestId('create-mapping-form-suggest-button'))
+    expect(
+      screen.getByTestId('create-mapping-form-suggest-pending'),
+    ).toBeInTheDocument()
+    await act(async () => {
+      ref.current!.cancelSuggest()
+    })
+    expect(
+      screen.queryByTestId('create-mapping-form-suggest-pending'),
+    ).toBeNull()
+    // Resolve the dropped promise; the form should ignore it.
+    await act(async () => {
+      resolveFirst({ success: true, suggestion: SUGGESTION_FIXTURE })
+    })
+    expect(
+      screen.queryByTestId('create-mapping-form-suggest-loaded'),
+    ).toBeNull()
+  })
+
+  it('rapid Suggest+Cancel+Suggest yields exactly one loaded state', async () => {
+    let resolveFirst!: (v: unknown) => void
+    suggestMappingMock.mockImplementationOnce(
+      () => new Promise((r) => (resolveFirst = r)),
+    )
+    suggestMappingMock.mockResolvedValueOnce({
+      success: true,
+      suggestion: SUGGESTION_FIXTURE,
+    })
+    const ref = createRef<CreateMappingFormHandle>()
+    const user = userEvent.setup()
+    render(
+      <CreateMappingForm
+        ref={ref}
+        projectId="p1"
+        targetField={targetField}
+        availableSourceFields={cifFields}
+        onSaveSuccess={() => {}}
+        onCancel={() => {}}
+      />,
+    )
+    await user.click(screen.getByTestId('create-mapping-form-suggest-button'))
+    await act(async () => {
+      ref.current!.cancelSuggest()
+    })
+    await user.click(screen.getByTestId('create-mapping-form-suggest-button'))
+    await screen.findByTestId('create-mapping-form-suggest-loaded')
+    // Resolve the first dropped promise — should NOT replace the loaded state.
+    await act(async () => {
+      resolveFirst({
+        success: true,
+        suggestion: { ...SUGGESTION_FIXTURE, confidence: 30 },
+      })
+    })
+    const pill = screen.getByTestId('create-mapping-form-confidence-pill')
+    // The current loaded state should still be the SECOND invocation (85),
+    // not the dropped first one (30).
+    expect(pill.dataset.threshold).toBe('high')
+  })
+})
+
+describe('CreateMappingForm — AI Suggest replace-warning gate', () => {
+  it('does NOT pop replace-warning on empty form', async () => {
+    suggestMappingMock.mockResolvedValueOnce({
+      success: true,
+      suggestion: SUGGESTION_FIXTURE,
+    })
+    const user = userEvent.setup()
+    render(
+      <CreateMappingForm
+        projectId="p1"
+        targetField={targetField}
+        availableSourceFields={cifFields}
+        onSaveSuccess={() => {}}
+        onCancel={() => {}}
+      />,
+    )
+    await user.click(screen.getByTestId('create-mapping-form-suggest-button'))
+    expect(
+      screen
+        .queryByTestId('create-mapping-form-discard-dialog')
+        ?.getAttribute('data-variant'),
+    ).not.toBe('replace-ai')
+  })
+
+  it('does NOT pop replace-warning on second click when user has not edited the suggestion', async () => {
+    suggestMappingMock.mockResolvedValue({
+      success: true,
+      suggestion: SUGGESTION_FIXTURE,
+    })
+    const user = userEvent.setup()
+    render(
+      <CreateMappingForm
+        projectId="p1"
+        targetField={targetField}
+        availableSourceFields={cifFields}
+        onSaveSuccess={() => {}}
+        onCancel={() => {}}
+      />,
+    )
+    await user.click(screen.getByTestId('create-mapping-form-suggest-button'))
+    await screen.findByTestId('create-mapping-form-suggest-loaded')
+    // Second click on the in-form re-suggest button — silent replace.
+    await user.click(
+      screen.getByTestId('create-mapping-form-suggest-replace-button'),
+    )
+    expect(
+      screen
+        .queryByTestId('create-mapping-form-discard-dialog')
+        ?.getAttribute('data-variant'),
+    ).not.toBe('replace-ai')
+  })
+
+  it('pops replace-warning when user edited the loaded suggestion', async () => {
+    suggestMappingMock.mockResolvedValue({
+      success: true,
+      suggestion: SUGGESTION_FIXTURE,
+    })
+    const user = userEvent.setup()
+    render(
+      <CreateMappingForm
+        projectId="p1"
+        targetField={targetField}
+        availableSourceFields={cifFields}
+        onSaveSuccess={() => {}}
+        onCancel={() => {}}
+      />,
+    )
+    await user.click(screen.getByTestId('create-mapping-form-suggest-button'))
+    await screen.findByTestId('create-mapping-form-suggest-loaded')
+    // Edit the suggestion: deselect one of the suggested fields.
+    const fields = screen.getAllByTestId('source-field-picker-field')
+    await user.click(
+      fields.find((f) => f.getAttribute('data-source-field-id') === 'sf-cif-1')!,
+    )
+    // Now click re-suggest — should pop the replace-warning variant.
+    await user.click(
+      screen.getByTestId('create-mapping-form-suggest-replace-button'),
+    )
+    const dlg = screen.getByTestId('create-mapping-form-discard-dialog')
+    expect(dlg.getAttribute('data-variant')).toBe('replace-ai')
+    // Confirming Replace fires a new suggest.
+    await user.click(
+      screen.getByTestId('create-mapping-form-discard-confirm'),
+    )
+    expect(suggestMappingMock).toHaveBeenCalledTimes(2)
+  })
+
+  it('Keep editing dismisses replace-warning without invoking', async () => {
+    suggestMappingMock.mockResolvedValue({
+      success: true,
+      suggestion: SUGGESTION_FIXTURE,
+    })
+    const user = userEvent.setup()
+    render(
+      <CreateMappingForm
+        projectId="p1"
+        targetField={targetField}
+        availableSourceFields={cifFields}
+        onSaveSuccess={() => {}}
+        onCancel={() => {}}
+      />,
+    )
+    await user.click(screen.getByTestId('create-mapping-form-suggest-button'))
+    await screen.findByTestId('create-mapping-form-suggest-loaded')
+    const fields = screen.getAllByTestId('source-field-picker-field')
+    await user.click(
+      fields.find((f) => f.getAttribute('data-source-field-id') === 'sf-cif-1')!,
+    )
+    await user.click(
+      screen.getByTestId('create-mapping-form-suggest-replace-button'),
+    )
+    expect(
+      screen.getByTestId('create-mapping-form-discard-dialog').getAttribute(
+        'data-variant',
+      ),
+    ).toBe('replace-ai')
+    await user.click(screen.getByTestId('create-mapping-form-discard-cancel'))
+    expect(suggestMappingMock).toHaveBeenCalledTimes(1)
+  })
+})
+
+describe('CreateMappingForm — autoSuggest one-shot mount-time fire', () => {
+  it('autoSuggest=true fires invokeSuggest exactly once on mount', async () => {
+    suggestMappingMock.mockResolvedValueOnce({
+      success: true,
+      suggestion: SUGGESTION_FIXTURE,
+    })
+    const onAutoSuggestConsumed = vi.fn()
+    render(
+      <CreateMappingForm
+        projectId="p1"
+        targetField={targetField}
+        availableSourceFields={cifFields}
+        onSaveSuccess={() => {}}
+        onCancel={() => {}}
+        autoSuggest
+        onAutoSuggestConsumed={onAutoSuggestConsumed}
+      />,
+    )
+    await screen.findByTestId('create-mapping-form-suggest-loaded')
+    expect(suggestMappingMock).toHaveBeenCalledTimes(1)
+    expect(onAutoSuggestConsumed).toHaveBeenCalledTimes(1)
+  })
+
+  it('autoSuggest=false (default) does NOT auto-fire', () => {
+    render(
+      <CreateMappingForm
+        projectId="p1"
+        targetField={targetField}
+        availableSourceFields={cifFields}
+        onSaveSuccess={() => {}}
+        onCancel={() => {}}
+      />,
+    )
+    expect(suggestMappingMock).not.toHaveBeenCalled()
+  })
+
+  // Phase 4a-4b — strict-mode-resistant consumption guard regression.
+  //
+  // In Next.js 14 dev (`reactStrictMode: true` by default for app
+  // router) every component mount runs effects twice (mount → cleanup
+  // → mount-again). A `useRef(false)` *inside* the form would reset on
+  // the second mount and admit a duplicate `invokeSuggest` invocation,
+  // issuing two server-side LLM calls per click.
+  //
+  // The fix lifts the consumption guard to the parent (drawer): a
+  // `Set<string>` keyed by target field id, owned by the drawer's
+  // `useRef`, threaded down via `tryConsumeAutoSuggest`. The drawer
+  // does not remount during the form's strict-mode cycle, so the Set
+  // survives and the second mount short-circuits.
+  //
+  // These tests assert the parent-owned guard contract directly,
+  // without depending on `<React.StrictMode>` (which Vitest does not
+  // enable by default).
+  it('parent-owned guard: same target field id remount does NOT re-fire invokeSuggest', async () => {
+    suggestMappingMock.mockResolvedValueOnce({
+      success: true,
+      suggestion: SUGGESTION_FIXTURE,
+    })
+    const consumed = new Set<string>()
+    const tryConsume = (id: string) => {
+      if (consumed.has(id)) return false
+      consumed.add(id)
+      return true
+    }
+    const props = {
+      projectId: 'p1',
+      targetField,
+      availableSourceFields: cifFields,
+      onSaveSuccess: () => {},
+      onCancel: () => {},
+      autoSuggest: true,
+      tryConsumeAutoSuggest: tryConsume,
+    }
+    const { unmount } = render(<CreateMappingForm {...props} />)
+    await screen.findByTestId('create-mapping-form-suggest-loaded')
+    expect(suggestMappingMock).toHaveBeenCalledTimes(1)
+
+    // Simulate strict-mode unmount → remount on the same row. The
+    // parent's Set persists across the form's lifecycle.
+    unmount()
+    render(<CreateMappingForm {...props} />)
+
+    // Give any queued effect a tick to run (and demonstrate it does
+    // NOT fire invokeSuggest a second time).
+    await act(() => Promise.resolve())
+    expect(suggestMappingMock).toHaveBeenCalledTimes(1)
+  })
+
+  it('parent-owned guard: different target field id DOES fire invokeSuggest on second mount', async () => {
+    suggestMappingMock.mockResolvedValue({
+      success: true,
+      suggestion: SUGGESTION_FIXTURE,
+    })
+    const consumed = new Set<string>()
+    const tryConsume = (id: string) => {
+      if (consumed.has(id)) return false
+      consumed.add(id)
+      return true
+    }
+    const otherTarget = { id: 'tf-2', name: 'customer_email' }
+    const baseProps = {
+      projectId: 'p1',
+      availableSourceFields: cifFields,
+      onSaveSuccess: () => {},
+      onCancel: () => {},
+      autoSuggest: true,
+      tryConsumeAutoSuggest: tryConsume,
+    }
+    const { unmount } = render(
+      <CreateMappingForm {...baseProps} targetField={targetField} />,
+    )
+    await screen.findByTestId('create-mapping-form-suggest-loaded')
+    expect(suggestMappingMock).toHaveBeenCalledTimes(1)
+
+    unmount()
+    render(<CreateMappingForm {...baseProps} targetField={otherTarget} />)
+
+    // New target field id was not in the Set — should fire a second
+    // invocation.
+    await act(() => Promise.resolve())
+    expect(suggestMappingMock).toHaveBeenCalledTimes(2)
+  })
+
+  it('parent-owned guard: re-request on same row after Set entry is cleared DOES fire again', async () => {
+    suggestMappingMock.mockResolvedValue({
+      success: true,
+      suggestion: SUGGESTION_FIXTURE,
+    })
+    const consumed = new Set<string>()
+    const tryConsume = (id: string) => {
+      if (consumed.has(id)) return false
+      consumed.add(id)
+      return true
+    }
+    const props = {
+      projectId: 'p1',
+      targetField,
+      availableSourceFields: cifFields,
+      onSaveSuccess: () => {},
+      onCancel: () => {},
+      autoSuggest: true,
+      tryConsumeAutoSuggest: tryConsume,
+    }
+    const { unmount } = render(<CreateMappingForm {...props} />)
+    await screen.findByTestId('create-mapping-form-suggest-loaded')
+    expect(suggestMappingMock).toHaveBeenCalledTimes(1)
+
+    // Simulate the drawer's `onSuggestWithAIClick` clearing the entry
+    // (re-request on the same row after a cancel).
+    unmount()
+    consumed.delete(targetField.id)
+    render(<CreateMappingForm {...props} />)
+
+    await screen.findByTestId('create-mapping-form-suggest-loaded')
+    expect(suggestMappingMock).toHaveBeenCalledTimes(2)
+  })
+})
+
+describe('CreateMappingForm — save flow with AI metadata + laundering correction', () => {
+  it('saves with aiSuggested+confidence+aiReasoning when AI sources are kept', async () => {
+    suggestMappingMock.mockResolvedValueOnce({
+      success: true,
+      suggestion: SUGGESTION_FIXTURE,
+    })
+    createFieldMappingMock.mockResolvedValueOnce({
+      success: true,
+      tfmId: 'tfm-1',
+    })
+    const ref = createRef<CreateMappingFormHandle>()
+    const user = userEvent.setup()
+    render(
+      <CreateMappingForm
+        ref={ref}
+        projectId="p1"
+        targetField={targetField}
+        availableSourceFields={cifFields}
+        onSaveSuccess={() => {}}
+        onCancel={() => {}}
+      />,
+    )
+    await user.click(screen.getByTestId('create-mapping-form-suggest-button'))
+    await screen.findByTestId('create-mapping-form-suggest-loaded')
+    await act(async () => {
+      ref.current!.triggerSave()
+    })
+    expect(createFieldMappingMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        aiSuggested: true,
+        confidence: 85,
+        aiReasoning: SUGGESTION_FIXTURE.rationale,
+      }),
+    )
+  })
+
+  it('saves WITHOUT AI metadata when ALL original sources are removed (laundering prevention)', async () => {
+    suggestMappingMock.mockResolvedValueOnce({
+      success: true,
+      suggestion: SUGGESTION_FIXTURE,
+    })
+    createFieldMappingMock.mockResolvedValueOnce({
+      success: true,
+      tfmId: 'tfm-1',
+    })
+    const ref = createRef<CreateMappingFormHandle>()
+    const user = userEvent.setup()
+    render(
+      <CreateMappingForm
+        ref={ref}
+        projectId="p1"
+        targetField={targetField}
+        availableSourceFields={cifFields}
+        onSaveSuccess={() => {}}
+        onCancel={() => {}}
+      />,
+    )
+    await user.click(screen.getByTestId('create-mapping-form-suggest-button'))
+    await screen.findByTestId('create-mapping-form-suggest-loaded')
+    // Remove BOTH original suggested ids and add a different one.
+    const fields = screen.getAllByTestId('source-field-picker-field')
+    await user.click(
+      fields.find((f) => f.getAttribute('data-source-field-id') === 'sf-cif-1')!,
+    )
+    await user.click(
+      fields.find((f) => f.getAttribute('data-source-field-id') === 'sf-cif-2')!,
+    )
+    await user.click(
+      fields.find((f) => f.getAttribute('data-source-field-id') === 'sf-cif-3')!,
+    )
+    await act(async () => {
+      ref.current!.triggerSave()
+    })
+    const call = createFieldMappingMock.mock.calls[0][0]
+    expect(call.aiSuggested).toBeUndefined()
+    expect(call.confidence).toBeUndefined()
+    expect(call.aiReasoning).toBeUndefined()
+  })
+
+  it('preserves AI metadata when at least one original source is kept', async () => {
+    suggestMappingMock.mockResolvedValueOnce({
+      success: true,
+      suggestion: SUGGESTION_FIXTURE,
+    })
+    createFieldMappingMock.mockResolvedValueOnce({
+      success: true,
+      tfmId: 'tfm-1',
+    })
+    const ref = createRef<CreateMappingFormHandle>()
+    const user = userEvent.setup()
+    render(
+      <CreateMappingForm
+        ref={ref}
+        projectId="p1"
+        targetField={targetField}
+        availableSourceFields={cifFields}
+        onSaveSuccess={() => {}}
+        onCancel={() => {}}
+      />,
+    )
+    await user.click(screen.getByTestId('create-mapping-form-suggest-button'))
+    await screen.findByTestId('create-mapping-form-suggest-loaded')
+    // Drop ONE of two AI sources, keep the other.
+    const fields = screen.getAllByTestId('source-field-picker-field')
+    await user.click(
+      fields.find((f) => f.getAttribute('data-source-field-id') === 'sf-cif-2')!,
+    )
+    await act(async () => {
+      ref.current!.triggerSave()
+    })
+    expect(createFieldMappingMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        aiSuggested: true,
+        confidence: 85,
+      }),
+    )
+  })
+
+  it('saves WITHOUT AI metadata on a never-AI-suggested manual flow (control)', async () => {
+    createFieldMappingMock.mockResolvedValueOnce({
+      success: true,
+      tfmId: 'tfm-1',
+    })
+    const ref = createRef<CreateMappingFormHandle>()
+    const user = userEvent.setup()
+    render(
+      <CreateMappingForm
+        ref={ref}
+        projectId="p1"
+        targetField={targetField}
+        availableSourceFields={cifFields}
+        onSaveSuccess={() => {}}
+        onCancel={() => {}}
+      />,
+    )
+    const fields = screen.getAllByTestId('source-field-picker-field')
+    await user.click(
+      fields.find((f) => f.getAttribute('data-source-field-id') === 'sf-cif-1')!,
+    )
+    await act(async () => {
+      ref.current!.triggerSave()
+    })
+    const call = createFieldMappingMock.mock.calls[0][0]
+    expect(call.aiSuggested).toBeUndefined()
+    expect(call.confidence).toBeUndefined()
+    expect(call.aiReasoning).toBeUndefined()
+  })
+})
+
