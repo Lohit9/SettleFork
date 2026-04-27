@@ -150,18 +150,6 @@ interface PreviewRow {
 
 // ── Helpers ────────────────────────────────────────────────────────────────────
 
-function countNeedsTransform(datasets: DatasetGroup[]): number {
-  let n = 0
-  for (const ds of datasets) {
-    for (const tbl of ds.tables) {
-      for (const f of tbl.fields) {
-        if (f.needsTransform) n++
-      }
-    }
-  }
-  return n
-}
-
 function findField(
   datasets: DatasetGroup[],
   fieldMappingId: string
@@ -490,7 +478,11 @@ export default function TransformContent({ projectId, projectName, initialData, 
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [searchParams])
 
-  const needsTransformCount = useMemo(() => countNeedsTransform(data.datasets), [data.datasets])
+  // Page-header subtitle reads the same canonical scalar that powers the
+  // pills (`computeProjectStats.transformScope`) — see the loader in
+  // `lib/actions/transformations.ts:getTransformData` for the source of
+  // truth.
+  const needsTransformCount = data.transformScope
 
   // Phase 3 — Tables filter is target-table-led to mirror the sidebar's
   // new grouping. The dropdown lists each target table once, with the
@@ -1876,11 +1868,19 @@ export default function TransformContent({ projectId, projectName, initialData, 
         </div>
       </PageHeader>
 
+      {/*
+        Pill counts come straight from the server-computed canonical scalars
+        (`computeProjectStats` in lib/quality/stat-formulas.ts). The Projects
+        List card and Migration Center read the same helper, so all three
+        surfaces report identical numbers for a given project state. The
+        client-side `filterCounts` / `inProgressCount` memos remain in scope
+        below — they power the filter dropdown chips, NOT the pill display.
+      */}
       <TransformStatPills
-        totalCount={filterCounts.needs_transform}
-        appliedCount={filterCounts.applied}
-        inProgressCount={inProgressCount}
-        toDefineCount={filterCounts.needs_transform - filterCounts.has_transform}
+        totalCount={data.transformScope}
+        appliedCount={data.transformApplied}
+        inProgressCount={data.transformInProgress}
+        toDefineCount={data.transformNeedsWork}
       />
 
       {/* ── Filter bar — flush border-b strip ── */}
