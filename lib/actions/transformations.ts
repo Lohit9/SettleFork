@@ -84,6 +84,8 @@
 //
 //     - `dismissTransformNeeded` / `reinstateTransformNeeded` preserve
 //       throw-on-error per Gate 2 Q4 (matches acknowledgeField precedent).
+//       `dismissValueAssignment` / `reinstateValueAssignment` (migration 077)
+//       follow the same throw-on-error pattern for the symmetric VA-side flag.
 //     - `resetFieldTransform`, `resetAllTransformsForTable` are helpers
 //       exclusively called from already-guarded write paths in
 //       `lib/actions/mappings.ts` (per Gate 2); they do not re-assert the
@@ -169,6 +171,16 @@ export interface FieldItem {
    * multi-source TFMs.
    */
   isCrossTable: boolean
+  /**
+   * Migration 077 — true when the user has dismissed the
+   * value-assignment requirement for this TFM (e.g. the field has a
+   * DB default or is intentionally left null). Only meaningful when
+   * `isValueAssignment === true`. Mirrors the mapped-side
+   * `needs_transformation = false` dismissal but with distinct semantics
+   * for load SQL and readiness scoring (dismissed VAs are skipped from
+   * SELECT lists; transform-dismissed mapped fields are not).
+   */
+  vaDismissed: boolean
 }
 
 export interface TableGroup {
@@ -200,8 +212,36 @@ export interface UnmappedTargetField {
   default_value: string | null
 }
 
+/**
+ * One row inside a `TargetTableGroup`. Either a mapping (TFM, mapped or VA)
+ * or a target field with no TFM yet (truly unmapped). Rows are interleaved
+ * in DDL order by the server so the sidebar can render them inline without
+ * a client-side sort.
+ */
+export type TargetTableRow =
+  | { kind: 'mapping'; field: FieldItem }
+  | { kind: 'unmapped'; field: UnmappedTargetField }
+
+/**
+ * Phase 3 redesign — target-led sidebar grouping. Each target table is a
+ * top-level group; fields inside the group are TFMs (mapped + VA, including
+ * dismissed VAs) plus any target fields with no TFM yet, all in DDL order.
+ *
+ * Coexists with `datasets` (source-led grouping). The target-led shape is
+ * what the redesigned sidebar consumes; the source-led shape is preserved
+ * so the existing selection-lookup helpers (`findField`, etc.) continue to
+ * work without rewriting every call site.
+ */
+export interface TargetTableGroup {
+  targetTableId: string
+  targetTableName: string
+  rows: TargetTableRow[]
+}
+
 export interface TransformPageData {
   datasets: DatasetGroup[]
+  /** Phase 3 redesign — target-led grouping, DDL-ordered, alphabetical by table name. */
+  targetTableGroups: TargetTableGroup[]
   schemaDocText: string
   hasMappings: boolean
   unmappedNotNullTargetFields: UnmappedTargetField[]
@@ -480,6 +520,7 @@ export async function getTransformData(
   } = await supabase.auth.getUser()
   const empty: TransformPageData = {
     datasets: [],
+    targetTableGroups: [],
     schemaDocText: '',
     hasMappings: false,
     unmappedNotNullTargetFields: [],
@@ -702,8 +743,13 @@ export async function getTransformData(
       : null
     const transformation: TransformationRow | null = transformByTfmId.get(tfm.id) ?? null
 
+    const vaDismissed = !!tfm.va_dismissed
+    // Migration 077 — dismissed VAs surface as "Dismissed" in the sidebar
+    // and editor (not "Define"); they no longer claim attention. The
+    // mapped-side `fieldNeedsTransform` heuristic does not apply: the user
+    // has explicitly opted this field out of value generation.
     const needsTransform = isValueAssignment
-      ? true
+      ? !vaDismissed
       : fieldNeedsTransform({
           typeCompatibility: primary?.typeCompatibility ?? null,
           confidence: primary?.confidence ?? tfm.confidence,
@@ -761,6 +807,7 @@ export async function getTransformData(
       isContributing: false,
       contributingSourceFields,
       isCrossTable,
+      vaDismissed,
       targetCheckConstraint: isValueAssignment
         ? ((tgtField as typeof tgtField & { check_constraint?: unknown }).check_constraint as FieldItem['targetCheckConstraint'] ?? null)
         : null,
@@ -858,8 +905,70 @@ export async function getTransformData(
     .filter((f) => f.is_nullable || hasDefault(f))
     .map(toUnmapped)
 
+  // ── Phase 3 redesign — target-led grouping ───────────────────────────────
+  //
+  // Builds a `TargetTableGroup` per target table that participates in any
+  // table_mapping, mixing TFMs (mapped + VA) and truly-unmapped target
+  // fields in DDL order. The sidebar consumes this shape directly; the
+  // existing `datasets` source-led shape is retained above for back-compat
+  // with selection-lookup helpers (`findField`, etc.).
+  //
+  // Sort order:
+  //   - Groups: alphabetical by `targetTableName` (locale-aware).
+  //   - Rows within a group: target-field DDL order via `allTgtFieldRows`
+  //     ordering (already `.order('ordinal_position', ascending)` above).
+  //
+  // No client-side `.sort()` is required — the consumer iterates the
+  // pre-sorted arrays as-is.
+  const fieldItemsByTargetFieldId = new Map<string, FieldItem>()
+  for (const dsGroup of datasetGroupMap.values()) {
+    for (const tbl of dsGroup.tables) {
+      for (const f of tbl.fields) {
+        fieldItemsByTargetFieldId.set(f.targetFieldId, f)
+      }
+    }
+  }
+
+  const unmappedFieldByTargetFieldId = new Map<string, UnmappedTargetField>()
+  for (const u of [...unmappedNotNullTargetFields, ...unmappedNullableTargetFields]) {
+    unmappedFieldByTargetFieldId.set(u.id, u)
+  }
+
+  const targetTableGroups: TargetTableGroup[] = []
+  for (const tableId of allTargetTableIds) {
+    const tableName = tgtTableNameById.get(tableId)
+    if (!tableName) continue
+
+    const rows: TargetTableRow[] = []
+    for (const f of allTgtFieldRows ?? []) {
+      if (f.table_id !== tableId) continue
+      const tfmField = fieldItemsByTargetFieldId.get(f.id)
+      if (tfmField) {
+        rows.push({ kind: 'mapping', field: tfmField })
+        continue
+      }
+      const unmapped = unmappedFieldByTargetFieldId.get(f.id)
+      if (unmapped) {
+        rows.push({ kind: 'unmapped', field: unmapped })
+      }
+    }
+
+    if (rows.length === 0) continue
+    targetTableGroups.push({
+      targetTableId: tableId,
+      targetTableName: tableName,
+      rows,
+    })
+  }
+
+  // Alphabetical group order. Done server-side; consumer never re-sorts.
+  targetTableGroups.sort((a, b) =>
+    a.targetTableName.localeCompare(b.targetTableName, undefined, { sensitivity: 'base' }),
+  )
+
   return {
     datasets: [...datasetGroupMap.values()],
+    targetTableGroups,
     schemaDocText,
     hasMappings: true,
     unmappedNotNullTargetFields,
@@ -2586,6 +2695,127 @@ export async function reinstateTransformNeeded(
     .eq('project_id', projectId)
 
   if (error) throw new Error(`Failed to reinstate transform: ${error.message}`)
+
+  revalidatePath(`/app/projects/${projectId}`, 'layout')
+  return { success: true }
+}
+
+// ─── Dismiss / reinstate value-assignment requirement (migration 077) ────────
+//
+// Mirrors the `dismissTransformNeeded` / `reinstateTransformNeeded` pair above
+// but operates on the symmetric VA-side flag `target_field_mappings.va_dismissed`.
+//
+// Asymmetry rationale (investigation finding 7)
+//   `dismissTransformNeeded(projectId, fieldMappingId)` — mapped TFM always
+//   exists by the time the user can click Dismiss (the mapping itself created
+//   the TFM at approve-time).
+//
+//   `dismissValueAssignment(projectId, targetFieldId, tableMappingId)` — the
+//   underlying TFM may NOT exist yet. The redesigned Transform path uses the
+//   "Deferred Creation Pattern" (Variant C) for unmapped target fields: the
+//   sidebar synthesises a placeholder FieldItem and a real TFM is created
+//   only at one of the explicit commit triggers (AI Suggest / Generate SQL /
+//   Test Transform). Dismissal becomes a fourth commit trigger. Threading the
+//   create + flip into a single server action keeps the user intent atomic.
+//
+//   The shared TFM-creation primitive is `createValueAssignment` in
+//   `lib/actions/mappings.ts` — already used by `ensureValueAssignment`
+//   (which adds a draft `transformations` insert on top). Dismissal does
+//   NOT insert a transformation row: the whole point of dismissal is "no
+//   value will be generated for this field."
+//
+//   `reinstateValueAssignment(projectId, fieldMappingId)` — TFM always
+//   exists by definition (you can only reinstate a previously-dismissed
+//   field, which means a TFM already exists). Symmetric to
+//   `reinstateTransformNeeded`.
+//
+// Existing transformation rows
+//   Following the precedent from `dismissTransformNeeded`, neither action
+//   touches the `transformations` table. The Transform editor gates the
+//   "Dismiss" link on "VA without saved value" so the conflict case ("apply
+//   then dismiss") is not reachable through the supported UX. If callers
+//   ever construct it programmatically, the dismissal flag and the applied
+//   transform row coexist; downstream readers (`_outputs-helpers`,
+//   `migration-intelligence`, `migration-runbook`, `stat-formulas`) treat
+//   `va_dismissed = true` as the authoritative signal and skip such TFMs
+//   from load SQL / scope counts entirely.
+
+/**
+ * Marks a value-assignment field as NOT needing a value during migration.
+ * Used for fields with database defaults, auto-generated values, or fields
+ * intentionally left null. Atomically creates the underlying VA TFM via
+ * `createValueAssignment` if one does not already exist, then sets
+ * `va_dismissed = true`. Does NOT insert or modify any transformations row.
+ *
+ * Throw-on-error semantics match `dismissTransformNeeded`.
+ */
+export async function dismissValueAssignment(
+  projectId: string,
+  targetFieldId: string,
+  tableMappingId: string,
+  reason?: string,
+): Promise<{ success: boolean; fieldMappingId?: string; error?: string }> {
+  const perm = await requireProjectPermission(projectId, 'editor')
+  if (!perm.allowed) return { success: false, error: perm.error }
+
+  await assertMappingWritesEnabled(projectId)
+
+  // Dynamic import: `mappings.ts` imports symbols from this file at the
+  // module top, so a top-level import of `createValueAssignment` would
+  // form an import cycle (same pattern as `ensureValueAssignment`).
+  const { createValueAssignment } = await import('@/lib/actions/mappings')
+
+  const vaResult = await createValueAssignment(projectId, tableMappingId, targetFieldId)
+  if (!vaResult.success || !vaResult.fieldMappingId) {
+    return {
+      success: false,
+      error: vaResult.error ?? 'Could not prepare value assignment for dismissal',
+    }
+  }
+
+  const fieldMappingId = vaResult.fieldMappingId
+
+  const { error } = await supabaseAdmin
+    .from('target_field_mappings')
+    .update({
+      va_dismissed: true,
+      dismissal_reason: reason?.trim() ? reason.trim() : null,
+    })
+    .eq('id', fieldMappingId)
+    .eq('project_id', projectId)
+
+  if (error) throw new Error(`Failed to dismiss value assignment: ${error.message}`)
+
+  revalidatePath(`/app/projects/${projectId}`, 'layout')
+  return { success: true, fieldMappingId }
+}
+
+/**
+ * Reinstates a previously-dismissed value-assignment requirement.
+ * The TFM is left in place; only `va_dismissed` is flipped back to `false`.
+ * Symmetric to `reinstateTransformNeeded`.
+ */
+export async function reinstateValueAssignment(
+  projectId: string,
+  fieldMappingId: string,
+): Promise<{ success: boolean; error?: string }> {
+  const perm = await requireProjectPermission(projectId, 'editor')
+  if (!perm.allowed) return { success: false, error: perm.error }
+
+  await assertMappingWritesEnabled(projectId)
+
+  const resolved = resolveTfmId(fieldMappingId)
+  if (resolved.kind !== 'primary') {
+    throw new Error(`Failed to reinstate value assignment: invalid id ${fieldMappingId}`)
+  }
+
+  const { error } = await supabaseAdmin
+    .from('target_field_mappings')
+    .update({ va_dismissed: false, dismissal_reason: null })
+    .eq('id', resolved.tfmId)
+    .eq('project_id', projectId)
+
+  if (error) throw new Error(`Failed to reinstate value assignment: ${error.message}`)
 
   revalidatePath(`/app/projects/${projectId}`, 'layout')
   return { success: true }

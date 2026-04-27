@@ -125,6 +125,7 @@ export type TfmRollupRow = {
   is_acknowledged: boolean
   combination_type: string | null
   needs_transformation: boolean | null
+  va_dismissed: boolean | null
   mapping_sources: Array<{
     source_field_id: string | null
     ordinal: number
@@ -219,7 +220,7 @@ export async function getProjectsWithStatsInternal(
       ? supabase
           .from('target_field_mappings')
           .select(
-            'id, project_id, target_field_id, confidence, status, is_acknowledged, combination_type, needs_transformation, mapping_sources(source_field_id, ordinal, type_compatibility)'
+            'id, project_id, target_field_id, confidence, status, is_acknowledged, combination_type, needs_transformation, va_dismissed, mapping_sources(source_field_id, ordinal, type_compatibility)'
           )
           .in('project_id', projectIds)
       : Promise.resolve({

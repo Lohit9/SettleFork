@@ -51,6 +51,24 @@ export interface TargetFieldMappingRow {
    * backfill — see migration 075's header for the rationale.
    */
   needs_transformation: boolean | null
+  /**
+   * Migration 077 — TRUE when the user has dismissed the value-assignment
+   * requirement for this target field (e.g. DB default, auto-generated,
+   * intentional NULL). Only meaningful for VA TFMs (`combination_type =
+   * 'custom_sql'` AND zero mapping_sources). Mapped TFMs use
+   * `needs_transformation = false` to dismiss transform requirements; the
+   * two flags are intentionally distinct because load-SQL emission and
+   * readiness scoring behave differently in each case (dismissed VAs are
+   * skipped from SELECT lists; transform-dismissed mapped fields are
+   * still emitted as direct passthroughs).
+   */
+  va_dismissed: boolean
+  /**
+   * Migration 077 — free-text rationale captured at dismissal time,
+   * parallel to `acknowledgment_reason`. Reserved for future Phase 4
+   * acknowledgment-consolidation work.
+   */
+  dismissal_reason: string | null
   created_at: string
   updated_at: string
 }

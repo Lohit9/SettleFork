@@ -356,7 +356,7 @@ export async function hydrateProjectData(
     supabaseAdmin
       .from('target_field_mappings')
       .select(
-        'id, project_id, target_field_id, confidence, status, ai_reasoning, is_acknowledged, acknowledgment_reason, combination_type, combination_sql, needs_transformation, created_at, updated_at',
+        'id, project_id, target_field_id, confidence, status, ai_reasoning, is_acknowledged, acknowledgment_reason, combination_type, combination_sql, needs_transformation, va_dismissed, dismissal_reason, created_at, updated_at',
       )
       .eq('project_id', projectId),
     supabaseAdmin
@@ -991,7 +991,7 @@ export async function getOutputsPageDataCore(projectId: string): Promise<Outputs
     supabaseAdmin
       .from('target_field_mappings')
       .select(
-        'id, target_field_id, confidence, status, ai_reasoning, is_acknowledged, combination_type, needs_transformation, created_at',
+        'id, target_field_id, confidence, status, ai_reasoning, is_acknowledged, combination_type, needs_transformation, va_dismissed, created_at',
       )
       .eq('project_id', projectId),
     supabaseAdmin
@@ -1039,6 +1039,7 @@ export async function getOutputsPageDataCore(projectId: string): Promise<Outputs
     is_acknowledged: boolean
     combination_type: string | null
     needs_transformation: boolean | null
+    va_dismissed: boolean | null
     created_at: string
   }>
   const tfmIdSet = new Set(tfms.map((t) => t.id))

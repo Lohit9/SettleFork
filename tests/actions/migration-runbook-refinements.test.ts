@@ -172,6 +172,18 @@ describe('[migration-runbook refinements] TFM→FM flattening (Q3)', () => {
     expect(code).toMatch(/if\s*\(\s*isBareAck\s*\)\s*continue/)
   })
 
+  // Migration 077: dismissed VAs ("no value needed") must drop out of the
+  // generated runbook so the document accurately reports the rows it will
+  // load. The SELECT list must include `va_dismissed` and the flattening
+  // loop must skip TFMs where `isVA && va_dismissed === true`.
+  it('SELECT includes va_dismissed (migration 077)', () => {
+    expect(code).toMatch(/\bva_dismissed\b/)
+  })
+
+  it('skips dismissed VAs during flattening (migration 077)', () => {
+    expect(code).toMatch(/isVA\s*&&\s*tfm\.va_dismissed\s*===\s*true/)
+  })
+
   it('derives owning table_mapping via target_field.table_id + primary.source_table_id match', () => {
     expect(code).toMatch(/owningTm/)
     expect(code).toMatch(/tm\.target_table_id\s*!==\s*tgt\.table_id/)

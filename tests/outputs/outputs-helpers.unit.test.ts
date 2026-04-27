@@ -217,6 +217,8 @@ describe('Test 1 — groupTfmsByTableMapping: fixture coverage cases', () => {
       combination_type: 'single',
       combination_sql: null,
       needs_transformation: null,
+      va_dismissed: false,
+      dismissal_reason: null,
       created_at: '2026-04-22T00:00:00Z',
       updated_at: '2026-04-22T00:00:00Z',
     }

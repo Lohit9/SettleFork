@@ -214,6 +214,7 @@ export async function generateMigrationRunbook(
         id,
         needs_transformation,
         combination_type,
+        va_dismissed,
         target_field:fields!target_field_id (
           id, name, data_type, is_foreign_key, fk_reference, table_id
         ),
@@ -251,6 +252,7 @@ export async function generateMigrationRunbook(
     id: string
     needs_transformation: boolean | null
     combination_type: string | null
+    va_dismissed: boolean | null
     target_field: TgtEmbed | TgtEmbed[] | null
     mapping_sources: MsEmbed[] | null
   }
@@ -279,6 +281,10 @@ export async function generateMigrationRunbook(
     const isVA = msAll.length === 0 && tfm.combination_type === 'custom_sql'
     const isBareAck = msAll.length === 0 && !isVA
     if (isBareAck) continue
+    // Migration 077: dismissed VAs ("no value needed") are skipped so the
+    // generated runbook accurately reports the rows it will load, matching
+    // execution-package and outputs-helpers semantics exactly.
+    if (isVA && tfm.va_dismissed === true) continue
 
     // Owning-TM rule: target_field.table_id == tm.target_table_id AND
     //   mapped case: primary MS source_table_id == tm.source_table_id

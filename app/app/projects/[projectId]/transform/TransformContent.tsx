@@ -54,6 +54,7 @@ import {
   ChevronDown,
   ChevronRight,
   ArrowRight,
+  CornerLeftUp,
   AlertCircle,
   AlertTriangle,
   CheckCircle2,
@@ -76,9 +77,20 @@ import {
   suggestTransformDescription,
   dismissTransformNeeded,
   reinstateTransformNeeded,
+  dismissValueAssignment,
+  reinstateValueAssignment,
   ensureValueAssignment,
 } from '@/lib/actions/transformations'
-import type { TransformPageData, DatasetGroup, TableGroup, FieldItem, FullTransformTestResult, UnmappedTargetField } from '@/lib/actions/transformations'
+import type {
+  TransformPageData,
+  DatasetGroup,
+  TableGroup,
+  FieldItem,
+  FullTransformTestResult,
+  UnmappedTargetField,
+  TargetTableGroup,
+  TargetTableRow,
+} from '@/lib/actions/transformations'
 import { stageAllData, getBlockingSourceIssues, getSourceIssuesForField, checkProjectStaleness } from '@/lib/actions/staging'
 import { triggerStagedValidation } from '@/lib/actions/quality-fixes'
 import type { BlockingIssue, FieldSourceIssue } from '@/lib/actions/staging'
@@ -105,8 +117,6 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from '@/components/ui/alert-dialog'
-import { useMappingRedesignEnabled } from '@/lib/hooks/useMappingRedesignEnabled'
-import TransformRedesignContent from './redesign/TransformContent'
 import { readTargetFieldMappingIdFromSearchParams } from '@/lib/url/transform-params'
 
 // ── Types ──────────────────────────────────────────────────────────────────────
@@ -270,36 +280,24 @@ function TransformStatPills({
 // ── TransformContent ──────────────────────────────────────────────────────────
 
 export default function TransformContent({ projectId, projectName, initialData, isArchived = false, projectInfo }: Props) {
-  // ── Phase 3 redesign dispatch ─────────────────────────────────────────────
-  // When `projects.use_mapping_redesign` is true for this project, render the
-  // new UI from `./redesign/TransformContent`. Otherwise fall through to the
-  // legacy UI below untouched. See mapping/MappingContent.tsx for the full
-  // Rules-of-Hooks rationale for the early-return pattern.
-  if (useMappingRedesignEnabled(projectInfo)) {
-    return (
-      <TransformRedesignContent
-        projectId={projectId}
-        projectName={projectName}
-        projectInfo={projectInfo}
-      />
-    )
-  }
-
+  // Phase 3 — `use_mapping_redesign` no longer dispatches to a separate
+  // placeholder component. Both flag states render this UI; the
+  // target-led sidebar + VA dismissal symmetry land in a single surface.
+  // The `projectInfo` prop is preserved for future consumers and to keep
+  // the page-level data fetcher's contract stable.
+  void projectInfo
   const router = useRouter()
   const searchParams = useSearchParams()
   const { can } = useProjectRole(projectId)
   const canEdit = can('edit')
   const [data, setData] = useState<TransformPageData>(initialData)
   const [selectedMappingId, setSelectedMappingId] = useState<string | null>(null)
-  const [expandedDatasets, setExpandedDatasets] = useState<Set<string>>(
-    new Set(initialData.datasets.map((d) => d.datasetId))
-  )
-  const [expandedTables, setExpandedTables] = useState<Set<string>>(
-    new Set(
-      initialData.datasets.flatMap((d) =>
-        d.tables.length > 0 ? [d.tables[0].tableMappingId] : []
-      )
-    )
+  // Phase 3 — sidebar regrouped from source-led (dataset → table_mapping)
+  // to target-led (target_table). One Set is enough: every group is a
+  // target table, identified by `targetTableId`. All groups start expanded
+  // so the user sees the full landscape on first paint; toggle collapses.
+  const [expandedTargetTables, setExpandedTargetTables] = useState<Set<string>>(
+    new Set(initialData.targetTableGroups.map((g) => g.targetTableId))
   )
   const [localTransform, setLocalTransform] = useState<LocalTransform | null>(null)
   // Whether the Generated SQL panel is expanded; auto-collapses on new AI generation
@@ -338,6 +336,13 @@ export default function TransformContent({ projectId, projectName, initialData, 
   const [isStaging, startStaging] = useTransition()
   const [isSuggesting, startSuggesting] = useTransition()
   const [isDismissing, setIsDismissing] = useState(false)
+  // VA dismissal (migration 077) — `isVADismissing` covers the entire
+  // round-trip (button disable + spinner). `showVADismissConfirm` opens
+  // the confirmation AlertDialog. The two flags coexist: dialog open →
+  // user clicks Dismiss → dialog closes → request fires → dialog stays
+  // closed and the action bar shows a spinner via `isVADismissing`.
+  const [isVADismissing, setIsVADismissing] = useState(false)
+  const [showVADismissConfirm, setShowVADismissConfirm] = useState(false)
 
   // Staging warning popup — shown when blocking source issues exist before staging
   const [showStagingWarning, setShowStagingWarning] = useState(false)
@@ -406,18 +411,24 @@ export default function TransformContent({ projectId, projectName, initialData, 
     [searchParams, router, projectId]
   )
 
-  // Read initial selection from URL on mount
+  // Read initial selection from URL on mount.
+  //
+  // Phase 3 — `selectedTableIds` keys on `targetTableId` to mirror the
+  // sidebar's target-led grouping. The on-disk URL (`?fields=`) is
+  // unchanged: it stores TFM ids, which are stable across the regrouping.
+  // Only the in-memory derived "which tables are selected" set switched
+  // its key. The derivation walks `data.targetTableGroups` (not the
+  // legacy `data.datasets` source-led shape).
   useEffect(() => {
     const fields = searchParams.get('fields')
     if (!fields) return
     const ids = new Set(fields.split(',').filter(Boolean))
     const tableIds = new Set<string>()
-    for (const ds of data.datasets) {
-      for (const t of ds.tables) {
-        if (t.fields.some((f) => ids.has(f.fieldMappingId))) {
-          tableIds.add(t.tableMappingId)
-        }
-      }
+    for (const g of data.targetTableGroups) {
+      const hasSelected = g.rows.some(
+        (r) => r.kind === 'mapping' && ids.has(r.field.fieldMappingId),
+      )
+      if (hasSelected) tableIds.add(g.targetTableId)
     }
     setTableFieldSelection({
       selectedFieldIds: ids,
@@ -481,49 +492,51 @@ export default function TransformContent({ projectId, projectName, initialData, 
 
   const needsTransformCount = useMemo(() => countNeedsTransform(data.datasets), [data.datasets])
 
-  // Per-table unmapped field lookups (keyed by target table id)
-  const unmappedByTargetTable = useMemo(() => {
-    const map: Record<string, { notNull: UnmappedTargetField[]; nullable: UnmappedTargetField[] }> = {}
-    for (const f of data.unmappedNotNullTargetFields) {
-      if (!map[f.table_id]) map[f.table_id] = { notNull: [], nullable: [] }
-      map[f.table_id].notNull.push(f)
-    }
-    for (const f of data.unmappedNullableTargetFields) {
-      if (!map[f.table_id]) map[f.table_id] = { notNull: [], nullable: [] }
-      map[f.table_id].nullable.push(f)
-    }
-    return map
-  }, [data.unmappedNotNullTargetFields, data.unmappedNullableTargetFields])
-
-  // Shape datasets into FilterTable[] for TableFieldFilter
+  // Phase 3 — Tables filter is target-table-led to mirror the sidebar's
+  // new grouping. The dropdown lists each target table once, with the
+  // contained fields (TFMs) as the leaves. Multi-source TFMs surface
+  // their primary source name in the leaf label; truly-unmapped target
+  // fields don't currently participate in this filter (parity with
+  // pre-Phase-3 behaviour where unmapped rows lived under their target
+  // table_mapping group).
   const filterTables = useMemo(
     (): FilterTable[] =>
-      data.datasets.flatMap((ds) =>
-        ds.tables.map((t) => ({
-          id: t.tableMappingId,
-          label: `${t.sourceTableName} → ${t.targetTableName}`,
-          fields: t.fields
-            .filter((f) => !f.isContributing)
-            .map((f) => ({
-              id: f.fieldMappingId,
-              label: `${f.sourceFieldName ?? 'unmapped'} → ${f.targetFieldName}`,
-            })),
-        }))
-      ),
-    [data.datasets]
+      data.targetTableGroups.map((g) => ({
+        id: g.targetTableId,
+        label: g.targetTableName,
+        fields: g.rows
+          .filter((r): r is { kind: 'mapping'; field: FieldItem } => r.kind === 'mapping')
+          .map((r) => ({
+            id: r.field.fieldMappingId,
+            label: r.field.isValueAssignment
+              ? `${r.field.targetFieldName} (value assignment)`
+              : `${r.field.targetFieldName} ← ${r.field.sourceFieldName ?? 'unmapped'}`,
+          })),
+      })),
+    [data.targetTableGroups]
   )
 
   // Filter counts
   const allFieldsFlat = useMemo(() => data.datasets.flatMap((ds) => ds.tables.flatMap((t) => t.fields)), [data.datasets])
   const filterCounts = useMemo(() => {
-    const mapped = allFieldsFlat.filter((f) => !f.isContributing)
+    // Phase 3 — `f.isContributing` is always `false` in the new model
+    // (see `FieldItem.isContributing` doc comment). The legacy filter is
+    // dropped per Finding 8; `mapped` is now `allFieldsFlat` directly.
+    const mapped = allFieldsFlat
     const totalUnmapped = data.unmappedNotNullTargetFields.length + data.unmappedNullableTargetFields.length
+    // Migration 077 — dismissed VAs are addressed; they don't claim
+    // attention from the `needs_transform` bucket. They DO still count
+    // toward `all` (so the full TFM total isn't silently shrunk) but
+    // are filtered out everywhere a "needs work" semantic applies.
+    const needsTransform = mapped.filter((f) => f.needsTransform).length
+    const dismissed = mapped.filter((f) => f.vaDismissed).length
     return {
       all: mapped.length + totalUnmapped,
-      needs_transform: mapped.filter((f) => f.needsTransform).length,
+      needs_transform: needsTransform,
       has_transform: mapped.filter((f) => f.transformation !== null).length,
       unmapped: totalUnmapped,
       applied: mapped.filter((f) => f.transformation?.status === 'applied').length,
+      dismissed,
     }
   }, [allFieldsFlat, data.unmappedNotNullTargetFields.length, data.unmappedNullableTargetFields.length])
 
@@ -946,6 +959,7 @@ export default function TransformContent({ projectId, projectName, initialData, 
                 isContributing: false,
                 contributingSourceFields: [],
                 isCrossTable: false,
+                vaDismissed: false,
                 targetCheckConstraint: uf.check_constraint,
               }
               const merged = [...without, newItem]
@@ -1001,6 +1015,66 @@ export default function TransformContent({ projectId, projectName, initialData, 
     setShowStagedPreview(false)
     setStagedPreview(null)
     isDirtyRef.current = false
+  }
+
+  // ── VA Dismiss / Reinstate (migration 077) ───────────────────────────────
+  //
+  // Atomic create-or-find + flip. `dismissValueAssignment` accepts
+  // `targetFieldId + tableMappingId` because the underlying TFM may not
+  // exist yet for unmapped target fields (Variant C deferred-creation
+  // pattern); the server action handles that internally via
+  // `createValueAssignment`. `reinstateValueAssignment` only ever runs
+  // against an existing TFM, so it takes a `fieldMappingId`.
+  //
+  // Optimistic UX: `refreshFieldVADismissed` patches the in-memory tree
+  // before the server returns so the sidebar badge flips instantly. On
+  // failure we revert via the same helper.
+  async function handleVADismiss() {
+    if (!selectedContext) return
+    const { field, table } = selectedContext
+    setShowVADismissConfirm(false)
+    setIsVADismissing(true)
+    try {
+      const result = await dismissValueAssignment(
+        projectId,
+        field.targetFieldId,
+        table.tableMappingId,
+      )
+      if (!result.success || !result.fieldMappingId) {
+        showToast(result.error || 'Could not dismiss this field. Try again.', 'error')
+        return
+      }
+      // The server may have just created the TFM (Variant C path) — swap
+      // the pending sentinel for the real id so the editor stays glued.
+      if (selectedMappingId?.startsWith('pending:')) {
+        setSelectedMappingId(result.fieldMappingId)
+      }
+      refreshFieldVADismissed(result.fieldMappingId, true)
+      showToast('Field marked as not needing a value', 'success')
+    } catch {
+      showToast('Could not dismiss this field. Try again.', 'error')
+    } finally {
+      setIsVADismissing(false)
+    }
+  }
+
+  async function handleVAReinstate() {
+    if (!selectedContext) return
+    const fmId = selectedContext.field.fieldMappingId
+    setIsVADismissing(true)
+    try {
+      const result = await reinstateValueAssignment(projectId, fmId)
+      if (!result.success) {
+        showToast(result.error || 'Could not reinstate this field. Try again.', 'error')
+        return
+      }
+      refreshFieldVADismissed(fmId, false)
+      showToast('Field reinstated — value generation required', 'success')
+    } catch {
+      showToast('Could not reinstate this field. Try again.', 'error')
+    } finally {
+      setIsVADismissing(false)
+    }
   }
 
   // ── AI Suggest ────────────────────────────────────────────────────────────
@@ -1501,6 +1575,42 @@ export default function TransformContent({ projectId, projectName, initialData, 
 
   // ── Refresh field state helpers ───────────────────────────────────────────
 
+  // Phase 3 — `data.datasets` (source-led) and `data.targetTableGroups`
+  // (target-led) are independent server-built shapes that share the same
+  // FieldItem semantics. Optimistic refreshes must patch BOTH so the
+  // sidebar (which reads `targetTableGroups`) and the editor / lookup
+  // helpers (which read `datasets`) stay in sync.
+  //
+  // `applyToFieldItem` walks every FieldItem under both shapes and
+  // returns a new immutable tree with `mutate(f)` applied where
+  // `match(f)` is true. Centralising the dual-walk avoids the previous
+  // pattern of three near-identical setData updaters drifting from each
+  // other.
+  function applyToFieldItem(
+    prev: TransformPageData,
+    match: (f: FieldItem) => boolean,
+    mutate: (f: FieldItem) => FieldItem,
+  ): TransformPageData {
+    return {
+      ...prev,
+      datasets: prev.datasets.map((ds) => ({
+        ...ds,
+        tables: ds.tables.map((tbl) => ({
+          ...tbl,
+          fields: tbl.fields.map((f) => (match(f) ? mutate(f) : f)),
+        })),
+      })),
+      targetTableGroups: prev.targetTableGroups.map((g) => ({
+        ...g,
+        rows: g.rows.map((r) =>
+          r.kind === 'mapping' && match(r.field)
+            ? { kind: 'mapping' as const, field: mutate(r.field) }
+            : r,
+        ),
+      })),
+    }
+  }
+
   function refreshFieldTransformation(
     fmId: string,
     transId: string | null,
@@ -1509,60 +1619,57 @@ export default function TransformContent({ projectId, projectName, initialData, 
     description: string,
     status: LocalStatus
   ) {
-    setData((prev) => ({
-      ...prev,
-      datasets: prev.datasets.map((ds) => ({
-        ...ds,
-        tables: ds.tables.map((tbl) => ({
-          ...tbl,
-          fields: tbl.fields.map((f) => {
-            if (f.fieldMappingId !== fmId) return f
-            return {
-              ...f,
-              needsTransform: true,
-              transformation: f.transformation
-                ? { ...f.transformation, generated_sql: sql, is_ai_generated: badge === 'ai', description, status, test_results: null }
-                : transId
-                ? { id: transId, target_field_mapping_id: fmId, description, generated_sql: sql, is_ai_generated: badge === 'ai', test_results: null, status, created_at: new Date().toISOString() }
-                : null,
-            }
-          }),
-        })),
-      })),
-    }))
+    setData((prev) =>
+      applyToFieldItem(
+        prev,
+        (f) => f.fieldMappingId === fmId,
+        (f) => ({
+          ...f,
+          needsTransform: true,
+          transformation: f.transformation
+            ? { ...f.transformation, generated_sql: sql, is_ai_generated: badge === 'ai', description, status, test_results: null }
+            : transId
+            ? { id: transId, target_field_mapping_id: fmId, description, generated_sql: sql, is_ai_generated: badge === 'ai', test_results: null, status, created_at: new Date().toISOString() }
+            : null,
+        }),
+      ),
+    )
   }
 
   function refreshFieldStatus(fmId: string, status: LocalStatus) {
-    setData((prev) => ({
-      ...prev,
-      datasets: prev.datasets.map((ds) => ({
-        ...ds,
-        tables: ds.tables.map((tbl) => ({
-          ...tbl,
-          fields: tbl.fields.map((f) => {
-            if (f.fieldMappingId !== fmId || !f.transformation) return f
-            return { ...f, transformation: { ...f.transformation, status } }
-          }),
-        })),
-      })),
-    }))
+    setData((prev) =>
+      applyToFieldItem(
+        prev,
+        (f) => f.fieldMappingId === fmId && !!f.transformation,
+        (f) => ({ ...f, transformation: f.transformation ? { ...f.transformation, status } : f.transformation }),
+      ),
+    )
   }
 
   /** Patches the in-memory data tree after dismiss/reinstate so sidebar badge + counts update instantly. */
   function refreshFieldNeedsTransform(fmId: string, needsTransform: boolean) {
-    setData((prev) => ({
-      ...prev,
-      datasets: prev.datasets.map((ds) => ({
-        ...ds,
-        tables: ds.tables.map((tbl) => ({
-          ...tbl,
-          fields: tbl.fields.map((f) => {
-            if (f.fieldMappingId !== fmId) return f
-            return { ...f, needsTransform }
-          }),
-        })),
-      })),
-    }))
+    setData((prev) =>
+      applyToFieldItem(
+        prev,
+        (f) => f.fieldMappingId === fmId,
+        (f) => ({ ...f, needsTransform }),
+      ),
+    )
+  }
+
+  /**
+   * Migration 077 — patches the in-memory tree after VA dismiss /
+   * reinstate so the sidebar badge ("Dismissed") and `needsTransform`
+   * gate update instantly without a server round-trip.
+   */
+  function refreshFieldVADismissed(fmId: string, vaDismissed: boolean) {
+    setData((prev) =>
+      applyToFieldItem(
+        prev,
+        (f) => f.fieldMappingId === fmId,
+        (f) => ({ ...f, vaDismissed, needsTransform: !vaDismissed }),
+      ),
+    )
   }
 
   // ── UI helpers ────────────────────────────────────────────────────────────
@@ -1624,6 +1731,7 @@ export default function TransformContent({ projectId, projectName, initialData, 
           isContributing: false,
           contributingSourceFields: [],
           isCrossTable: false,
+          vaDismissed: false,
           targetCheckConstraint: uf.check_constraint,
         }
         return { field: syntheticField, table: tbl, dataset: ds }
@@ -1861,28 +1969,22 @@ export default function TransformContent({ projectId, projectName, initialData, 
         {/* ── Left Sidebar ── */}
         <div className="w-72 bg-white border-r border-gray-100 flex flex-col flex-shrink-0">
           <div className="flex-1 overflow-auto p-3 space-y-2">
-            {data.datasets.length === 0 && filterCounts.unmapped === 0 ? (
+            {data.targetTableGroups.length === 0 && filterCounts.unmapped === 0 ? (
               <p className="text-xs text-gray-500 text-center py-8">
                 All fields are compatible — no transformations required.
               </p>
             ) : (
-              data.datasets.map((ds) => (
-                <DatasetNode
-                  key={ds.datasetId}
-                  dataset={ds}
-                  expanded={expandedDatasets.has(ds.datasetId)}
-                  expandedTables={expandedTables}
+              data.targetTableGroups.map((g) => (
+                <TargetTableNode
+                  key={g.targetTableId}
+                  group={g}
+                  expanded={expandedTargetTables.has(g.targetTableId)}
                   selectedMappingId={selectedMappingId}
                   selectedUnmappedFieldId={selectedUnmappedFieldId}
-                  staleTableMappingIds={staleTableMappingIds}
-                  unmappedByTargetTable={unmappedByTargetTable}
                   filter={sidebarFilter}
                   searchQuery={sidebarSearchQuery}
                   selectedFieldIds={tableFieldSelection.selectedFieldIds}
-                  onToggleDataset={(id) => setExpandedDatasets((prev) => {
-                    const next = new Set(prev); next.has(id) ? next.delete(id) : next.add(id); return next
-                  })}
-                  onToggleTable={(id) => setExpandedTables((prev) => {
+                  onToggle={(id) => setExpandedTargetTables((prev) => {
                     const next = new Set(prev); next.has(id) ? next.delete(id) : next.add(id); return next
                   })}
                   onSelectField={handleSelectField}
@@ -1919,27 +2021,39 @@ export default function TransformContent({ projectId, projectName, initialData, 
                   <span className="text-[10px] text-settle-slate-300">·</span>
                   {selectedContext.field.isValueAssignment ? (
                     <>
+                      {/* VA breadcrumb is unchanged — there is no source to
+                          invert. Format: target_field TYPE [NOT NULL] · table */}
                       <span className="text-xs font-medium text-settle-slate-900 font-mono">{selectedContext.field.targetFieldName}</span>
                       <span className="text-[10px] text-settle-slate-400">{selectedContext.field.targetFieldDataType}</span>
                       {!selectedContext.field.targetFieldIsNullable && (
                         <span className="text-[10px] text-amber-600">NOT NULL</span>
                       )}
                     </>
-                  ) : selectedContext.field.contributingSourceFields.length > 0 ? (
-                    <>
-                      <span className="text-xs font-medium text-settle-slate-900 font-mono">{selectedContext.field.sourceFieldName}</span>
-                      {selectedContext.field.contributingSourceFields.map((cf, idx) => (
-                        <span key={idx} className="text-xs font-medium text-settle-slate-900 font-mono">, {cf.name}</span>
-                      ))}
-                      <ArrowRight className="w-3 h-3 text-settle-slate-300" />
-                      <span className="text-xs font-medium text-settle-slate-900 font-mono">{selectedContext.field.targetFieldName}</span>
-                    </>
                   ) : (
-                    <>
-                      <span className="text-xs font-medium text-settle-slate-900 font-mono">{selectedContext.field.sourceFieldName}</span>
-                      <ArrowRight className="w-3 h-3 text-settle-slate-300" />
-                      <span className="text-xs font-medium text-settle-slate-900 font-mono">{selectedContext.field.targetFieldName}</span>
-                    </>
+                    /* Phase 3 redesign — breadcrumb leads with target, then
+                        ← source(s). Multi-source truncates at 3+ sources;
+                        the title attribute carries the full list for hover.
+                        Unicode `←` (U+2190) keeps the breadcrumb visually
+                        consistent with the trailing `→` glyph in
+                        `· View Mapping →` below. The sidebar uses a Lucide
+                        CornerLeftUp icon at smaller sizes (see FieldRow). */
+                    (() => {
+                      const sourceList = formatSourceList(selectedContext.field)
+                      return (
+                        <>
+                          <span className="text-xs font-medium text-settle-slate-900 font-mono">
+                            {selectedContext.field.targetFieldName}
+                          </span>
+                          <span className="text-settle-slate-400 text-xs leading-none" aria-hidden="true">←</span>
+                          <span
+                            className="text-xs font-medium text-settle-slate-900 font-mono"
+                            title={sourceList.truncated ? `Sources: ${sourceList.full}` : undefined}
+                          >
+                            {sourceList.display}
+                          </span>
+                        </>
+                      )
+                    })()
                   )}
                   <button
                     onClick={() => router.push(`/app/projects/${projectId}/mapping?targetFieldMappingId=${selectedMappingId}`)}
@@ -2124,6 +2238,33 @@ export default function TransformContent({ projectId, projectName, initialData, 
                               Clear
                             </button>
                           )}
+                          {/*
+                           * Migration 077 — VA dismissal affordance. Visible
+                           * only for value-assignment fields that have not
+                           * yet been dismissed AND have no transformation row
+                           * (no saved value). Clicking opens the AlertDialog
+                           * confirm; the actual server call fires from
+                           * `handleVADismiss`. Symmetric to
+                           * `dismissTransformNeeded` for mapped fields, but
+                           * uses a confirm dialog rather than the inline
+                           * toggle to make the consequence ("field will not
+                           * receive a value during migration") deliberate.
+                           */}
+                          {canEdit
+                            && selectedContext.field.isValueAssignment
+                            && !selectedContext.field.vaDismissed
+                            && selectedContext.field.transformation === null && (
+                            <button
+                              type="button"
+                              data-testid="va-dismiss-link"
+                              className="text-sm text-settle-slate-500 hover:text-settle-slate-700 underline-offset-2 hover:underline disabled:opacity-50"
+                              onClick={() => setShowVADismissConfirm(true)}
+                              disabled={isVADismissing}
+                              title="Mark this field as not needing a value (e.g., DB default, auto-generated, intentional NULL)"
+                            >
+                              {isVADismissing ? 'Dismissing…' : 'Dismiss'}
+                            </button>
+                          )}
                         </div>
                       </>
                     ) : (
@@ -2195,6 +2336,38 @@ export default function TransformContent({ projectId, projectName, initialData, 
                     </div>
                   )}
                     </>
+                  ) : selectedContext.field.isValueAssignment && selectedContext.field.vaDismissed ? (
+                    /*
+                     * Migration 077 — dismissed VA placeholder. Replaces the
+                     * generic "Mapped directly…" copy because dismissed VAs
+                     * have a specific opt-in semantic that the user should
+                     * be able to reverse. The Reinstate button mirrors the
+                     * action affordance of the active VA `Dismiss` link.
+                     */
+                    <div
+                      data-testid="va-dismissed-banner"
+                      className="rounded-lg border border-settle-slate-200 bg-settle-slate-50 px-4 py-3 flex items-start gap-3"
+                    >
+                      <div className="flex-1 min-w-0">
+                        <p className="text-sm font-medium text-settle-slate-900">
+                          This field has been marked as not needing a value
+                        </p>
+                        <p className="text-xs text-settle-slate-500 mt-1">
+                          It will be omitted from the migration load SQL. Reinstate to require a value.
+                        </p>
+                      </div>
+                      {canEdit && (
+                        <button
+                          type="button"
+                          data-testid="va-reinstate-button"
+                          className="text-sm font-medium text-settle-blue-500 hover:text-settle-blue-700 underline-offset-2 hover:underline disabled:opacity-50 flex-shrink-0"
+                          onClick={handleVAReinstate}
+                          disabled={isVADismissing}
+                        >
+                          {isVADismissing ? 'Reinstating…' : 'Reinstate'}
+                        </button>
+                      )}
+                    </div>
                   ) : (
                     <p className="text-sm text-gray-400 py-3">
                       Mapped directly without transformation.
@@ -2779,6 +2952,41 @@ export default function TransformContent({ projectId, projectName, initialData, 
         />
       )}
 
+      {/*
+        Migration 077 — VA dismissal confirmation. Mirrors the Revert
+        dialog pattern below; AlertDialog (rather than the polish-3
+        bespoke popover) is the right primitive here because the trigger
+        sits in the editor's full-width action bar, not inside a tight
+        inline row, so a centered modal is clearer than an anchored
+        popover. Locked copy:
+          Title:  "Mark this field as not needing a value?"
+          Body:   explains the load-SQL consequence
+          Buttons: Cancel + Dismiss
+        The Dismiss button is destructive-styled (slate, not red) — the
+        action is reversible via Reinstate, so red would over-signal
+        permanence.
+      */}
+      <AlertDialog open={showVADismissConfirm} onOpenChange={setShowVADismissConfirm}>
+        <AlertDialogContent data-testid="va-dismiss-confirm-dialog">
+          <AlertDialogHeader>
+            <AlertDialogTitle>Mark this field as not needing a value?</AlertDialogTitle>
+            <AlertDialogDescription>
+              This field will not receive a value during migration. Use this for fields with database defaults, auto-generated values, or fields intentionally left null. You can reinstate it later if needed.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              data-testid="va-dismiss-confirm-button"
+              onClick={handleVADismiss}
+              className="bg-settle-slate-700 hover:bg-settle-slate-800 text-white focus-visible:ring-settle-slate-700"
+            >
+              Dismiss
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
       {/* Revert confirmation dialog */}
       <AlertDialog open={showRevertDialog} onOpenChange={setShowRevertDialog}>
         <AlertDialogContent>
@@ -2837,254 +3045,194 @@ export default function TransformContent({ projectId, projectName, initialData, 
   )
 }
 
-// ── DatasetNode ───────────────────────────────────────────────────────────────
+// ─────────────────────────────────────────────────────────────────────────────
+// Phase 3 redesign — target-led sidebar (replaces DatasetNode + TableNode).
+// ─────────────────────────────────────────────────────────────────────────────
 
-function DatasetNode({
-  dataset, expanded, expandedTables, selectedMappingId, selectedUnmappedFieldId,
-  staleTableMappingIds, unmappedByTargetTable, filter, searchQuery, selectedFieldIds,
-  onToggleDataset, onToggleTable, onSelectField, onSelectUnmappedField,
-}: {
-  dataset: DatasetGroup
-  expanded: boolean
-  expandedTables: Set<string>
-  selectedMappingId: string | null
-  selectedUnmappedFieldId: string | null
-  staleTableMappingIds: Set<string>
-  unmappedByTargetTable: Record<string, { notNull: UnmappedTargetField[]; nullable: UnmappedTargetField[] }>
-  filter: TransformFilter
-  searchQuery: string
-  selectedFieldIds: Set<string> | null
-  onToggleDataset: (id: string) => void
-  onToggleTable: (id: string) => void
-  onSelectField: (id: string) => void
-  onSelectUnmappedField: (id: string) => void
-}) {
-  return (
-    <div className="border border-gray-100 rounded-lg overflow-hidden">
-      <button
-        onClick={() => onToggleDataset(dataset.datasetId)}
-        className="w-full flex items-center gap-2 px-3 py-2.5 bg-white hover:bg-gray-50 transition-colors"
-      >
-        {expanded ? <ChevronDown className="w-4 h-4 text-gray-500 flex-shrink-0" /> : <ChevronRight className="w-4 h-4 text-gray-500 flex-shrink-0" />}
-        <span className="text-xs font-bold text-blue-600 truncate" title={dataset.datasetName}>
-          {dataset.datasetName}
-        </span>
-      </button>
-      {expanded && (
-        <div className="border-t border-gray-100 divide-y divide-gray-100">
-          {dataset.tables.map((tbl) => (
-            <TableNode
-              key={tbl.tableMappingId}
-              table={tbl}
-              expanded={expandedTables.has(tbl.tableMappingId)}
-              selectedMappingId={selectedMappingId}
-              selectedUnmappedFieldId={selectedUnmappedFieldId}
-              isTableStale={staleTableMappingIds.has(tbl.tableMappingId)}
-              unmappedFields={unmappedByTargetTable[tbl.targetTableId]}
-              filter={filter}
-              searchQuery={searchQuery}
-              selectedFieldIds={selectedFieldIds}
-              onToggle={() => onToggleTable(tbl.tableMappingId)}
-              onSelectField={onSelectField}
-              onSelectUnmappedField={onSelectUnmappedField}
-            />
-          ))}
-        </div>
-      )}
-    </div>
-  )
+/**
+ * Comma-separated source list for a multi-source mapping. Truncates to
+ * `{primary}, {first contributor}, +N` when there are 3 or more sources;
+ * the caller can use `full` for a `title` tooltip showing the un-truncated
+ * list. Single-source returns the source name verbatim with no truncation.
+ */
+function formatSourceList(field: FieldItem): {
+  display: string
+  full: string
+  truncated: boolean
+} {
+  if (field.isValueAssignment) {
+    return { display: '', full: '', truncated: false }
+  }
+  const all = [
+    field.sourceFieldName ?? '',
+    ...field.contributingSourceFields.map((f) => f.name),
+  ].filter(Boolean)
+  const full = all.join(', ')
+  if (all.length <= 2) {
+    return { display: full, full, truncated: false }
+  }
+  // 3+ — show first two, then `+N` for the rest.
+  const visible = all.slice(0, 2).join(', ')
+  const overflow = all.length - 2
+  return { display: `${visible}, +${overflow}`, full, truncated: true }
 }
 
-// ── TableNode ─────────────────────────────────────────────────────────────────
+/**
+ * Sidebar status descriptor for a TFM. Five states (mapped) plus a sixth
+ * for dismissed VAs (migration 077). The status dot and text badge derive
+ * from the same `kind`; the editor uses the `label` directly and the dot
+ * uses the `dotClass`.
+ *
+ *   applied        — transformation.status === 'applied'
+ *   stale          — transformation.status === 'stale'
+ *   saved          — transformation row exists, status not above
+ *   needs_transform — needsTransform === true (no transformation yet)
+ *   dismissed      — vaDismissed === true (VA only, migration 077)
+ *   none           — default / passthrough
+ */
+type RowStatus =
+  | { kind: 'applied'; label: 'Applied'; dotClass: string; textClass: string }
+  | { kind: 'stale'; label: 'Stale ⚠'; dotClass: string; textClass: string }
+  | { kind: 'saved'; label: 'Saved'; dotClass: string; textClass: string }
+  | { kind: 'needs_transform'; label: 'Define'; dotClass: string; textClass: string }
+  | { kind: 'dismissed'; label: 'Dismissed'; dotClass: string; textClass: string }
+  | { kind: 'none'; label: ''; dotClass: string; textClass: string }
 
-function TableNode({
-  table, expanded, selectedMappingId, selectedUnmappedFieldId, isTableStale,
-  unmappedFields, filter, searchQuery, selectedFieldIds, onToggle, onSelectField, onSelectUnmappedField,
+function deriveRowStatus(field: FieldItem): RowStatus {
+  const status = field.transformation?.status
+  if (status === 'applied') {
+    return { kind: 'applied', label: 'Applied', dotClass: 'bg-green-500', textClass: 'text-green-600' }
+  }
+  if (status === 'stale') {
+    return { kind: 'stale', label: 'Stale ⚠', dotClass: 'bg-amber-400', textClass: 'text-amber-600' }
+  }
+  if (field.transformation !== null) {
+    return { kind: 'saved', label: 'Saved', dotClass: 'bg-amber-400', textClass: 'text-settle-slate-500' }
+  }
+  if (field.isValueAssignment && field.vaDismissed) {
+    return { kind: 'dismissed', label: 'Dismissed', dotClass: 'bg-settle-slate-300', textClass: 'text-settle-slate-500' }
+  }
+  if (field.needsTransform) {
+    return { kind: 'needs_transform', label: 'Define', dotClass: 'bg-amber-400', textClass: 'text-amber-600' }
+  }
+  return { kind: 'none', label: '', dotClass: 'bg-settle-slate-300', textClass: 'text-settle-slate-400' }
+}
+
+// ── TargetTableNode ──────────────────────────────────────────────────────────
+
+function TargetTableNode({
+  group, expanded, selectedMappingId, selectedUnmappedFieldId,
+  filter, searchQuery, selectedFieldIds,
+  onToggle, onSelectField, onSelectUnmappedField,
 }: {
-  table: TableGroup
+  group: TargetTableGroup
   expanded: boolean
   selectedMappingId: string | null
   selectedUnmappedFieldId: string | null
-  isTableStale: boolean
-  unmappedFields?: { notNull: UnmappedTargetField[]; nullable: UnmappedTargetField[] }
   filter: TransformFilter
   searchQuery: string
   selectedFieldIds: Set<string> | null
-  onToggle: () => void
+  onToggle: (targetTableId: string) => void
   onSelectField: (id: string) => void
   onSelectUnmappedField: (id: string) => void
 }) {
-  const primaryFields = table.fields.filter((f) => !f.isContributing)
+  // Apply filter + search to the pre-sorted (DDL-ordered, server-side) row
+  // list. Filtering keeps the array order; we never re-sort on the client.
+  const visibleRows: TargetTableRow[] = []
+  for (const row of group.rows) {
+    if (row.kind === 'mapping') {
+      const f = row.field
 
-  // Apply filter to mapped fields
-  const filteredFields = primaryFields.filter((f) => {
-    // Table / field multi-select filter
-    if (
-      selectedFieldIds !== null &&
-      selectedFieldIds.size > 0 &&
-      !selectedFieldIds.has(f.fieldMappingId)
-    ) {
-      return false
-    }
-    switch (filter) {
-      case 'needs_transform': return f.needsTransform
-      case 'has_transform': return f.transformation !== null
-      case 'applied': return f.transformation?.status === 'applied'
-      case 'unmapped': return false
-      default: return true
-    }
-  }).filter((field) => {
-    if (!searchQuery.trim()) return true
-    const q = searchQuery.toLowerCase()
-    return (
-      (field.sourceFieldName ?? '').toLowerCase().includes(q) ||
-      field.targetFieldName.toLowerCase().includes(q)
-    )
-  })
+      if (
+        selectedFieldIds !== null &&
+        selectedFieldIds.size > 0 &&
+        !selectedFieldIds.has(f.fieldMappingId)
+      ) {
+        continue
+      }
 
-  const showUnmapped =
-    filter === 'all' ||
-    filter === 'unmapped' ||
-    filter === 'needs_transform'
-  const searchFilter = (f: UnmappedTargetField) => {
-    if (!searchQuery.trim()) return true
-    const q = searchQuery.toLowerCase()
-    return f.name.toLowerCase().includes(q) || f.table_name.toLowerCase().includes(q)
+      // Status filter — `unmapped` excludes mapped rows entirely.
+      let passesStatus: boolean
+      switch (filter) {
+        case 'needs_transform': passesStatus = f.needsTransform; break
+        case 'has_transform': passesStatus = f.transformation !== null; break
+        case 'applied': passesStatus = f.transformation?.status === 'applied'; break
+        case 'unmapped': passesStatus = false; break
+        default: passesStatus = true
+      }
+      if (!passesStatus) continue
+
+      // Search — target field name OR any source field name (multi-source aware).
+      if (searchQuery.trim()) {
+        const q = searchQuery.toLowerCase()
+        const matchesTarget = f.targetFieldName.toLowerCase().includes(q)
+        const matchesPrimarySource = (f.sourceFieldName ?? '').toLowerCase().includes(q)
+        const matchesContributor = f.contributingSourceFields.some((c) =>
+          c.name.toLowerCase().includes(q),
+        )
+        if (!matchesTarget && !matchesPrimarySource && !matchesContributor) continue
+      }
+      visibleRows.push(row)
+    } else {
+      // Truly-unmapped target field (no TFM yet). Surfaced under the same
+      // filter rules the legacy sidebar used: visible in `all`, `unmapped`,
+      // and `needs_transform`.
+      const showUnmapped =
+        filter === 'all' || filter === 'unmapped' || filter === 'needs_transform'
+      if (!showUnmapped) continue
+
+      const f = row.field
+      if (searchQuery.trim()) {
+        const q = searchQuery.toLowerCase()
+        if (!f.name.toLowerCase().includes(q) && !f.table_name.toLowerCase().includes(q)) {
+          continue
+        }
+      }
+      visibleRows.push(row)
+    }
   }
-  const unmappedNotNull = showUnmapped ? (unmappedFields?.notNull ?? []).filter(searchFilter) : []
-  const unmappedNullable = showUnmapped ? (unmappedFields?.nullable ?? []).filter(searchFilter) : []
-  const totalVisible = filteredFields.length + unmappedNotNull.length + unmappedNullable.length
 
-  if (totalVisible === 0) return null
+  if (visibleRows.length === 0) return null
 
   return (
-    <div>
+    <div className="border border-settle-slate-100 rounded-lg overflow-hidden">
       <button
-        onClick={onToggle}
-        className="w-full flex items-center justify-between px-3 py-2 bg-white hover:bg-settle-slate-50 transition-colors border-b border-settle-slate-100"
+        onClick={() => onToggle(group.targetTableId)}
+        className="w-full flex items-center justify-between gap-2 px-3 py-2 bg-white hover:bg-settle-slate-50 transition-colors"
       >
         <div className="flex items-center gap-2 min-w-0">
           {expanded
             ? <ChevronDown className="w-3 h-3 text-settle-slate-400 flex-shrink-0" />
             : <ChevronRight className="w-3 h-3 text-settle-slate-400 flex-shrink-0" />
           }
-          <div className="flex items-center gap-1.5 min-w-0">
-            <span className="text-[11px] font-medium text-settle-slate-900 truncate">{table.sourceTableName}</span>
-            <ArrowRight className="w-3 h-3 text-settle-slate-300 flex-shrink-0" />
-            <span className="text-[11px] text-settle-slate-500 truncate">{table.targetTableName}</span>
-          </div>
+          <span className="text-[11px] font-mono font-medium text-settle-slate-900 truncate" title={group.targetTableName}>
+            {group.targetTableName}
+          </span>
         </div>
+        <span className="text-[10px] text-settle-slate-400 flex-shrink-0">
+          [{visibleRows.length}]
+        </span>
       </button>
       {expanded && (
-        <div className="bg-gray-50 border-t border-gray-100">
-          {(() => {
-            // Detect one-to-many groups within the filtered list
-            const srcCounts = new Map<string, number>()
-            for (const f of filteredFields) {
-              if (!f.sourceFieldId) continue
-              srcCounts.set(f.sourceFieldId, (srcCounts.get(f.sourceFieldId) ?? 0) + 1)
-            }
-            const oneToManySrcIds = new Set(
-              [...srcCounts.entries()].filter(([, c]) => c > 1).map(([id]) => id)
-            )
-
-            if (oneToManySrcIds.size === 0) {
-              // No one-to-many groups — render flat list
-              return filteredFields.map((field) => {
-                const oneToManyCount = field.sourceFieldId
-                  ? primaryFields.filter((f) => f.sourceFieldId === field.sourceFieldId).length
-                  : 0
-                return (
-                  <FieldRow
-                    key={field.fieldMappingId}
-                    field={field}
-                    isSelected={selectedMappingId === field.fieldMappingId}
-                    onSelect={() => onSelectField(field.fieldMappingId)}
-                    oneToManyCount={oneToManyCount}
-                  />
-                )
-              })
-            }
-
-            // Render with one-to-many groups wrapped in purple containers
-            const rendered = new Set<string>()
-            return filteredFields.map((field) => {
-              if (rendered.has(field.fieldMappingId)) return null
-              rendered.add(field.fieldMappingId)
-
-              if (field.sourceFieldId && oneToManySrcIds.has(field.sourceFieldId)) {
-                const groupFields = filteredFields.filter(
-                  (f) => f.sourceFieldId === field.sourceFieldId
-                )
-                groupFields.forEach((f) => rendered.add(f.fieldMappingId))
-
-                // Use full primaryFields count for the badge (unaffected by active filter)
-                const groupCount = primaryFields.filter(
-                  (f) => f.sourceFieldId === field.sourceFieldId
-                ).length
-
-                return (
-                  <div key={`otm-${field.sourceFieldId}`} className="border-l-2 border-purple-200 my-0.5">
-                    <div className="text-[11px] text-purple-600 font-medium px-3 py-1 bg-purple-50/50">
-                      Split: {field.sourceFieldName} → {groupCount} target fields
-                    </div>
-                    {groupFields.map((gf) => (
-                      <FieldRow
-                        key={gf.fieldMappingId}
-                        field={gf}
-                        isSelected={selectedMappingId === gf.fieldMappingId}
-                        onSelect={() => onSelectField(gf.fieldMappingId)}
-                        oneToManyCount={groupCount}
-                      />
-                    ))}
-                  </div>
-                )
-              }
-
+        <div className="bg-gray-50 border-t border-settle-slate-100">
+          {visibleRows.map((row) => {
+            if (row.kind === 'mapping') {
               return (
                 <FieldRow
-                  key={field.fieldMappingId}
-                  field={field}
-                  isSelected={selectedMappingId === field.fieldMappingId}
-                  onSelect={() => onSelectField(field.fieldMappingId)}
-                  oneToManyCount={0}
+                  key={row.field.fieldMappingId}
+                  field={row.field}
+                  isSelected={selectedMappingId === row.field.fieldMappingId}
+                  onSelect={() => onSelectField(row.field.fieldMappingId)}
                 />
               )
-            }).filter(Boolean)
-          })()}
-
-          {/* Unmapped target fields — same layout as FieldRow */}
-          {[...unmappedNotNull, ...unmappedNullable].map((field) => {
-            const isRequired = !field.is_nullable
-            const isSelected = selectedUnmappedFieldId === field.id
+            }
             return (
-              <button
-                key={field.id}
-                onClick={() => onSelectUnmappedField(field.id)}
-                className={`w-full px-3 py-2 text-left transition-colors border-b border-settle-slate-50 flex items-start gap-2 ${
-                  isSelected
-                    ? 'bg-blue-50 border-l-2 border-l-settle-blue-500'
-                    : 'hover:bg-settle-slate-50'
-                }`}
-              >
-                <span className={`w-1.5 h-1.5 rounded-full flex-shrink-0 mt-1.5 ${
-                  isRequired ? 'bg-amber-400' : 'bg-settle-slate-300'
-                }`} />
-                <div className="flex-1 min-w-0">
-                  <div className="flex items-center justify-between gap-1 mb-0.5">
-                    <span className="text-[11px] font-medium text-settle-slate-900 font-mono truncate">{field.name}</span>
-                    <span className={`text-[10px] flex-shrink-0 ${
-                      isRequired ? 'text-amber-600' : 'text-settle-slate-400'
-                    }`}>
-                      {isRequired ? 'Define' : ''}
-                    </span>
-                  </div>
-                  <div className="flex items-center gap-1">
-                    <ArrowRight className="w-2.5 h-2.5 text-settle-slate-300 flex-shrink-0" />
-                    <span className="text-[10px] text-settle-slate-400 font-mono truncate">No source mapped</span>
-                  </div>
-                </div>
-              </button>
+              <UnmappedFieldRow
+                key={row.field.id}
+                field={row.field}
+                isSelected={selectedUnmappedFieldId === row.field.id}
+                onSelect={() => onSelectUnmappedField(row.field.id)}
+              />
             )
           })}
         </div>
@@ -3093,29 +3241,17 @@ function TableNode({
   )
 }
 
-// ── FieldRow ──────────────────────────────────────────────────────────────────
+// ── FieldRow (target-primary, two-line) ──────────────────────────────────────
 
-function FieldRow({ field, isSelected, onSelect, oneToManyCount = 1 }: {
+function FieldRow({ field, isSelected, onSelect }: {
   field: FieldItem
   isSelected: boolean
   onSelect: () => void
-  oneToManyCount?: number
 }) {
-  const status = field.transformation?.status
-  const isOneToMany = oneToManyCount > 1
   const isVA = field.isValueAssignment
-  // The primary identifier shown in the top row. Mapped rows show the
-  // source field name (data flows source → target); VAs have no source,
-  // so they show the target field name instead. The bottom "→ No source
-  // mapped" subtitle is the only remaining VA differentiator in the
-  // sidebar — mirrors the TableNode unmapped-row pattern exactly so VAs
-  // and unmapped rows are visually homogeneous.
-  const primaryName = isVA ? field.targetFieldName : field.sourceFieldName
+  const status = deriveRowStatus(field)
+  const sourceList = formatSourceList(field)
 
-  // NOTE: pre-existing 2px selection shift on selected-state toggle — no
-  // border-l-transparent on unselected rows to reserve the left accent
-  // slot. Flagged here for a future UI polish pass; not in scope for the
-  // sidebar unification.
   return (
     <button
       onClick={onSelect}
@@ -3125,74 +3261,83 @@ function FieldRow({ field, isSelected, onSelect, oneToManyCount = 1 }: {
           : 'hover:bg-settle-slate-50'
       }`}
     >
-      {/* Status dot — 5-state machine */}
-      <span
-        className={`w-1.5 h-1.5 rounded-full flex-shrink-0 mt-1.5 ${
-          status === 'applied'
-            ? 'bg-green-500'
-            : status === 'stale'
-            ? 'bg-amber-400'
-            : field.transformation !== null
-            ? 'bg-amber-400'
-            : field.needsTransform === true
-            ? 'bg-amber-400'
-            : 'bg-settle-slate-300'
-        }`}
-      />
+      <span className={`w-1.5 h-1.5 rounded-full flex-shrink-0 mt-1.5 ${status.dotClass}`} />
 
-      {/* Field info */}
       <div className="flex-1 min-w-0">
         <div className="flex items-center justify-between gap-1 mb-0.5">
-          <div className="flex items-center gap-1.5 min-w-0">
-            <span className="text-[11px] font-medium text-settle-slate-900 font-mono truncate" title={primaryName ?? undefined}>
-              {primaryName}
+          <span
+            className="text-[11px] font-medium text-settle-slate-900 font-mono truncate"
+            title={field.targetFieldName}
+          >
+            {field.targetFieldName}
+          </span>
+          <span className={`text-[10px] flex-shrink-0 ${status.textClass}`}>
+            {status.label}
+          </span>
+        </div>
+        <div className="flex items-center gap-1 min-w-0">
+          {isVA ? (
+            <span className="text-[10px] text-settle-slate-400 font-mono truncate">
+              No source mapped
             </span>
-            {field.contributingSourceFields.length > 0 && (
+          ) : (
+            <>
+              <CornerLeftUp
+                data-testid="sidebar-source-arrow"
+                className="w-2.5 h-2.5 text-settle-slate-400 flex-shrink-0"
+                aria-hidden="true"
+              />
               <span
-                title={`Many-to-one: also uses ${field.contributingSourceFields.map(f => f.name).join(', ')}`}
-                className="flex-shrink-0 text-[10px] font-medium text-blue-600 bg-blue-50 px-1 rounded"
+                className="text-[10px] text-settle-slate-400 font-mono truncate"
+                title={sourceList.truncated ? `Sources: ${sourceList.full}` : sourceList.full}
               >
-                +{field.contributingSourceFields.length}
+                {sourceList.display}
               </span>
-            )}
-            {isOneToMany && (
-              <span
-                title={`One-to-many: ${field.sourceFieldName} maps to ${oneToManyCount} target fields`}
-                className="flex-shrink-0 text-[10px] font-medium text-purple-600 bg-purple-50 px-1 rounded"
-              >
-                1→{oneToManyCount}
-              </span>
-            )}
-          </div>
+            </>
+          )}
+        </div>
+      </div>
+    </button>
+  )
+}
+
+// ── UnmappedFieldRow (target field with no TFM yet) ──────────────────────────
+
+function UnmappedFieldRow({ field, isSelected, onSelect }: {
+  field: UnmappedTargetField
+  isSelected: boolean
+  onSelect: () => void
+}) {
+  const isRequired = !field.is_nullable
+  return (
+    <button
+      onClick={onSelect}
+      className={`w-full px-3 py-2 text-left transition-colors border-b border-settle-slate-50 flex items-start gap-2 ${
+        isSelected
+          ? 'bg-blue-50 border-l-2 border-l-settle-blue-500'
+          : 'hover:bg-settle-slate-50'
+      }`}
+    >
+      <span className={`w-1.5 h-1.5 rounded-full flex-shrink-0 mt-1.5 ${
+        isRequired ? 'bg-amber-400' : 'bg-settle-slate-300'
+      }`} />
+      <div className="flex-1 min-w-0">
+        <div className="flex items-center justify-between gap-1 mb-0.5">
+          <span
+            className="text-[11px] font-medium text-settle-slate-900 font-mono truncate"
+            title={field.name}
+          >
+            {field.name}
+          </span>
           <span className={`text-[10px] flex-shrink-0 ${
-            status === 'applied'
-              ? 'text-green-600'
-              : status === 'stale'
-              ? 'text-amber-600'
-              : field.transformation !== null
-              ? 'text-settle-slate-500'
-              : field.needsTransform === true
-              ? 'text-amber-600'
-              : 'text-settle-slate-400'
+            isRequired ? 'text-amber-600' : 'text-settle-slate-400'
           }`}>
-            {status === 'applied'
-              ? 'Applied'
-              : status === 'stale'
-              ? 'Stale ⚠'
-              : field.transformation !== null
-              ? 'Saved'
-              : field.needsTransform === true
-              ? 'Define'
-              : ''}
+            {isRequired ? 'Define' : ''}
           </span>
         </div>
         <div className="flex items-center gap-1">
-          <ArrowRight className="w-2.5 h-2.5 text-settle-slate-300 flex-shrink-0" />
-          <span
-            className="text-[10px] text-settle-slate-400 font-mono truncate"
-            title={isVA ? undefined : field.targetFieldName ?? undefined}
-          >
-            {isVA ? 'No source mapped' : field.targetFieldName}
+          <span className="text-[10px] text-settle-slate-400 font-mono truncate">
+            No source mapped
           </span>
         </div>
       </div>

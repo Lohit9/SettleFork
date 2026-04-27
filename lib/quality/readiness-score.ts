@@ -75,7 +75,7 @@ export async function computeReadinessScore(projectId: string): Promise<Readines
     supabaseAdmin
       .from('target_field_mappings')
       .select(
-        'id, project_id, target_field_id, confidence, status, ai_reasoning, is_acknowledged, acknowledgment_reason, combination_type, combination_sql, needs_transformation, created_at, updated_at',
+        'id, project_id, target_field_id, confidence, status, ai_reasoning, is_acknowledged, acknowledgment_reason, combination_type, combination_sql, needs_transformation, va_dismissed, dismissal_reason, created_at, updated_at',
       )
       .eq('project_id', projectId),
   ])
@@ -209,8 +209,19 @@ export async function computeReadinessScore(projectId: string): Promise<Readines
   // target_field_id (bare acks excluded by `primaryTfms`; we include all
   // approved TFMs here to match the legacy predicate "any approved row
   // pointing at this target counts as mapped").
+  //
+  // Dismissed value assignments (migration 077) are also "addressed" — the
+  // user explicitly marked the target field as not needing a value. They
+  // should NOT inflate `unmapped_required_count` even if their TFM hasn't
+  // been transitioned to `status='approved'` yet, so we union them in
+  // alongside the approved-TFM set.
   const mappedTargetFieldIdSet = new Set(
-    tfms.filter((t) => t.status === 'approved' && !!t.target_field_id).map((t) => t.target_field_id),
+    tfms
+      .filter(
+        (t) =>
+          (t.status === 'approved' || t.va_dismissed === true) && !!t.target_field_id,
+      )
+      .map((t) => t.target_field_id),
   )
   const unmappedRequiredCount = (requiredTargetFields ?? []).filter(
     (f) => !mappedTargetFieldIdSet.has(f.id),

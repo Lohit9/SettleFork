@@ -195,7 +195,7 @@ async function fetchExecutionPackageContext(
     supabaseAdmin
       .from('target_field_mappings')
       .select(
-        'id, project_id, target_field_id, confidence, status, ai_reasoning, is_acknowledged, acknowledgment_reason, combination_type, combination_sql, needs_transformation, created_at, updated_at',
+        'id, project_id, target_field_id, confidence, status, ai_reasoning, is_acknowledged, acknowledgment_reason, combination_type, combination_sql, needs_transformation, va_dismissed, dismissal_reason, created_at, updated_at',
       )
       .eq('project_id', projectId)
       .eq('status', 'approved'),
@@ -277,9 +277,25 @@ async function fetchExecutionPackageContext(
       source_table_id: tm.source_table_id,
       target_table_id: tm.target_table_id,
     })),
-    targetFieldMappings: (tfmRows ?? []) as TargetFieldMappingRow[],
+    // Migration 077: dismissed value assignments are excluded from
+    // execution package generation. The user explicitly marked them as
+    // "no value needed" via the Transform tab — they should not appear
+    // in the load SQL, the prompt context, or the per-table scripts.
+    // Mapping sources are unaffected (a dismissed VA has no MS rows by
+    // construction); transformations are similarly skipped because a
+    // VA TFM that's dismissed should not have a saved transformation
+    // attached, but we belt-and-brace by also dropping any rows that
+    // somehow reference a dismissed TFM.
+    targetFieldMappings: ((tfmRows ?? []) as TargetFieldMappingRow[]).filter(
+      (t) => t.va_dismissed !== true,
+    ),
     mappingSources: (mappingSourceRows ?? []) as MappingSourceRow[],
-    transformations: (transformationRows ?? []) as TransformationRow[],
+    transformations: ((transformationRows ?? []) as TransformationRow[]).filter(
+      (t) => {
+        const owner = (tfmRows ?? []).find((r) => r.id === t.target_field_mapping_id)
+        return !owner || owner.va_dismissed !== true
+      },
+    ),
     qualityIssues: (qualityIssueRows ?? []) as QualityIssueRow[],
     validationRules: (validationRuleRows ?? []) as ValidationRuleRow[],
     schemaDocs: (schemaDocRows ?? []) as SchemaDocRow[],

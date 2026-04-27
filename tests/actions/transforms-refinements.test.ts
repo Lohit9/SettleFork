@@ -246,6 +246,99 @@ describe('[transforms refinements] R7 — resolveTfmId uses [transformations] ta
   })
 })
 
+// ─── R8: dismissValueAssignment / reinstateValueAssignment (migration 077) ──
+
+describe('[transforms refinements] R8 — dismissValueAssignment + reinstateValueAssignment', () => {
+  const DISMISS_BODY = sliceBetween(
+    TRANSFORMS_SRC,
+    'export async function dismissValueAssignment(',
+    'export async function reinstateValueAssignment(',
+  )
+  const REINSTATE_BODY = sliceBetween(
+    TRANSFORMS_SRC,
+    'export async function reinstateValueAssignment(',
+    'export async function resetFieldTransform(',
+  )
+
+  it('dismissValueAssignment signature matches Option A (projectId, targetFieldId, tableMappingId)', () => {
+    expect(TRANSFORMS_SRC).toMatch(
+      /export\s+async\s+function\s+dismissValueAssignment\s*\(\s*\n?\s*projectId:\s*string,\s*\n?\s*targetFieldId:\s*string,\s*\n?\s*tableMappingId:\s*string/,
+    )
+  })
+
+  it('dismissValueAssignment delegates TFM creation to the shared `createValueAssignment` primitive', () => {
+    // Investigation finding 4: a single primitive owns the create-or-find
+    // semantic so VA TFM creation never drifts between Mapping and Transform
+    // surfaces. Pin the dynamic-import + symbol so a future refactor that
+    // inlines the create logic surfaces here.
+    expect(DISMISS_BODY).toMatch(/import\(['"]@\/lib\/actions\/mappings['"]\)/)
+    expect(DISMISS_BODY).toMatch(/createValueAssignment\s*\(\s*projectId,\s*tableMappingId,\s*targetFieldId\s*\)/)
+  })
+
+  it('dismissValueAssignment writes va_dismissed=true (NOT needs_transformation)', () => {
+    // Asymmetry pin: the VA-side flag is `va_dismissed`, NOT
+    // `needs_transformation`. Conflating them risks readiness-score and
+    // load-SQL bugs documented in migration 077's header.
+    expect(DISMISS_BODY).toContain("from('target_field_mappings')")
+    expect(DISMISS_BODY).toMatch(/va_dismissed:\s*true/)
+    expect(DISMISS_BODY).not.toMatch(/needs_transformation:\s*false/)
+  })
+
+  it('dismissValueAssignment captures an optional `reason` into dismissal_reason', () => {
+    // Forward-compat pin (migration 077 §Forward-compatibility): the
+    // dismissal_reason column exists so future Phase 4 acknowledgment
+    // consolidation can fold the reason without a schema change. The action
+    // must accept and persist the reason.
+    expect(TRANSFORMS_SRC).toMatch(/dismissValueAssignment[\s\S]{0,400}reason\?:\s*string/)
+    expect(DISMISS_BODY).toMatch(/dismissal_reason:/)
+  })
+
+  it('dismissValueAssignment guards via requireProjectPermission and assertMappingWritesEnabled', () => {
+    expect(DISMISS_BODY).toMatch(/requireProjectPermission\(projectId,\s*['"]editor['"]\)/)
+    expect(DISMISS_BODY).toMatch(/assertMappingWritesEnabled\(projectId\)/)
+  })
+
+  it('reinstateValueAssignment signature mirrors reinstateTransformNeeded (projectId, fieldMappingId)', () => {
+    expect(TRANSFORMS_SRC).toMatch(
+      /export\s+async\s+function\s+reinstateValueAssignment\s*\(\s*\n?\s*projectId:\s*string,\s*\n?\s*fieldMappingId:\s*string/,
+    )
+  })
+
+  it('reinstateValueAssignment writes va_dismissed=false and clears dismissal_reason', () => {
+    expect(REINSTATE_BODY).toContain("from('target_field_mappings')")
+    expect(REINSTATE_BODY).toMatch(/va_dismissed:\s*false/)
+    expect(REINSTATE_BODY).toMatch(/dismissal_reason:\s*null/)
+  })
+
+  it('reinstateValueAssignment guards via requireProjectPermission and assertMappingWritesEnabled', () => {
+    expect(REINSTATE_BODY).toMatch(/requireProjectPermission\(projectId,\s*['"]editor['"]\)/)
+    expect(REINSTATE_BODY).toMatch(/assertMappingWritesEnabled\(projectId\)/)
+  })
+
+  it('reinstateValueAssignment uses resolveTfmId to tolerate composite ids', () => {
+    // The `?fields=` URL-param scheme keys on TFM ids, but legacy
+    // composite ids (`tfm::ms`) may still be surfaced by tests or
+    // older serialised state. Pin that the action accepts both.
+    expect(REINSTATE_BODY).toMatch(/resolveTfmId\(fieldMappingId\)/)
+    expect(REINSTATE_BODY).toMatch(/kind\s*!==\s*['"]primary['"]/)
+  })
+})
+
+// ─── R9: getTransformData surfaces va_dismissed (migration 077) ──────────────
+
+describe('[transforms refinements] R9 — getTransformData reads va_dismissed', () => {
+  it('FieldItem interface declares vaDismissed: boolean', () => {
+    expect(TRANSFORMS_SRC).toMatch(/vaDismissed:\s*boolean/)
+  })
+
+  it('needsTransform gates VA-only TFMs on !vaDismissed', () => {
+    // The whole point of the dismissal: a dismissed VA stops appearing
+    // as `Define` in the sidebar / header. Pin the gate so a regression
+    // can't silently re-enable the old "VA always needs transform" path.
+    expect(TRANSFORMS_SRC).toMatch(/isValueAssignment[\s\S]{0,200}!vaDismissed/)
+  })
+})
+
 // ─── Re-export sanity ────────────────────────────────────────────────────────
 
 describe('[transforms refinements] public API sanity', () => {
