@@ -112,7 +112,26 @@ interface RawTransformationRow {
   id: string
   target_field_mapping_id: string
   status: string | null
+  // Q11.E lock (drawer redesign, 2026-04-26): added to power the
+  // drawer-redesign Transformation section. `description` is the
+  // human-authored intent line; `generated_sql` is the full SQL,
+  // truncated server-side (`MAX_TRANSFORMATION_SQL_PREVIEW_LENGTH`)
+  // before being placed on `MappingRowBase.transformationSqlPreview`.
+  description: string | null
+  generated_sql: string | null
 }
+
+/**
+ * Server-side cap for `MappingRowBase.transformationSqlPreview`.
+ * Mirrors the legacy mapping page preview length (see
+ * `app/app/projects/[projectId]/mapping/MappingContent.tsx` Transform
+ * tab preview block). Values longer than the cap are truncated and a
+ * single `…` appended so the wire payload stays bounded.
+ *
+ * The standalone Transform page is the canonical surface for the full
+ * SQL — the drawer is a glance-only consumer.
+ */
+const MAX_TRANSFORMATION_SQL_PREVIEW_LENGTH = 300
 
 /**
  * The raw inputs to `assembleMappingsForRedesign`. Exported so unit
@@ -234,7 +253,7 @@ export async function getMappingsForRedesignCore(
     tfmIds.length > 0
       ? supabase
           .from('transformations')
-          .select('id, target_field_mapping_id, status')
+          .select('id, target_field_mapping_id, status, description, generated_sql')
           .in('target_field_mapping_id', tfmIds)
       : Promise.resolve({ data: [] as RawTransformationRow[] }),
   ])
@@ -486,6 +505,8 @@ function buildUnmappedRow(targetField: TargetFieldRef): UnmappedRow {
     status: 'unmapped',
     hasTransformation: false,
     transformationStatus: null,
+    transformationDescription: null,
+    transformationSqlPreview: null,
   }
 }
 
@@ -504,6 +525,8 @@ function buildTargetAcknowledgedRow(
     status: 'approved',
     hasTransformation: false,
     transformationStatus: null,
+    transformationDescription: null,
+    transformationSqlPreview: null,
     acknowledgmentReason: tfm.acknowledgment_reason,
   }
 }
@@ -523,6 +546,10 @@ function buildValueAssignmentRow(
     transformationStatus: coerceTransformationStatus(
       transformation?.status ?? null,
       transformation !== null,
+    ),
+    transformationDescription: transformation?.description ?? null,
+    transformationSqlPreview: buildTransformationSqlPreview(
+      transformation?.generated_sql ?? null,
     ),
     combinationType: 'custom_sql',
     combinationSql: tfm.combination_sql,
@@ -571,6 +598,10 @@ function buildMappedRow(
     transformationStatus: coerceTransformationStatus(
       transformation?.status ?? null,
       transformation !== null,
+    ),
+    transformationDescription: transformation?.description ?? null,
+    transformationSqlPreview: buildTransformationSqlPreview(
+      transformation?.generated_sql ?? null,
     ),
     sources,
     combinationType: coerceCombinationType(tfm.combination_type),
@@ -771,6 +802,30 @@ function coerceTransformationStatus(
   // when a transformation row exists but carries a null/unknown status,
   // emit 'draft' (the initial lifecycle state).
   return 'draft'
+}
+
+/**
+ * Server-truncate `transformations.generated_sql` to the wire cap so
+ * the drawer-redesign Transformation section can render a glance-only
+ * preview without paying the cost of the full SQL.
+ *
+ *   • null transformation row → null (no section rendered)
+ *   • null/empty SQL          → null (translator emits null when there
+ *                                     is nothing to preview, even if
+ *                                     a transformation row exists in
+ *                                     a degenerate state)
+ *   • SQL ≤ cap               → verbatim SQL
+ *   • SQL > cap               → first cap chars + `…`
+ *
+ * Q11.E lock (drawer redesign, 2026-04-26).
+ */
+function buildTransformationSqlPreview(
+  sql: string | null | undefined,
+): string | null {
+  if (sql === null || sql === undefined) return null
+  if (sql.length === 0) return null
+  if (sql.length <= MAX_TRANSFORMATION_SQL_PREVIEW_LENGTH) return sql
+  return `${sql.slice(0, MAX_TRANSFORMATION_SQL_PREVIEW_LENGTH)}…`
 }
 
 function countByKey<T>(items: T[], keyFn: (t: T) => string): Map<string, number> {

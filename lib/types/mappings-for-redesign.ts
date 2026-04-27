@@ -242,6 +242,45 @@ interface MappingRowBase {
    * "no transformation row exists".
    */
   transformationStatus: MappingTransformationStatus | null
+
+  /**
+   * Human-authored description for the transformation, mirrored from
+   * `transformations.description`. Drives the drawer-redesign
+   * Transformation section's first line. Always null when
+   * `hasTransformation=false`. May be null when `hasTransformation=true`
+   * if the AI/user never authored a description (the column is nullable).
+   *
+   * Q11.E lock (drawer redesign, 2026-04-26): added so the drawer can
+   * surface description + truncated SQL without an extra round-trip.
+   *
+   * Purely additive read-path field — the property is OPTIONAL on the
+   * type so that existing fixture builders, factories, and serialized
+   * snapshots from the pre-Q11.E era continue to compile and parse
+   * without a forced migration. The translator
+   * (`_mappings-for-redesign-core.ts`) always emits an explicit value
+   * (string or null) on real wire payloads; the optionality only
+   * relaxes the constraint for synthetic fixtures and partial-update
+   * code paths that legitimately don't carry the field.
+   */
+  transformationDescription?: string | null
+
+  /**
+   * Server-truncated SQL preview for the transformation, mirrored from
+   * `transformations.generated_sql`. Capped at 300 chars to match the
+   * legacy mapping page's preview block; values longer than the cap
+   * are truncated with a trailing `…` so the wire payload stays bounded.
+   *
+   * Always null when `hasTransformation=false`. Drives the drawer-
+   * redesign Transformation section's monospace preview block.
+   *
+   * Q11.E lock (drawer redesign, 2026-04-26): co-introduced with
+   * `transformationDescription`. The full SQL still lives on the
+   * standalone Transform page; this preview is glance-only.
+   *
+   * Optional for the same reason as `transformationDescription` — keeps
+   * the type extension purely additive on the read path.
+   */
+  transformationSqlPreview?: string | null
 }
 
 /** Mapped row — 1+ mapping_sources, not acknowledged. Rules 1-4. */

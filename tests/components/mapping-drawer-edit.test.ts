@@ -48,50 +48,72 @@ function sliceBetween(src: string, startMarker: string, endMarker: string): stri
 }
 
 // ─────────────────────────────────────────────────────────────────────
-// D1 — Edit button presence
+// D1 — Edit pencil presence (drawer-redesign Q11.A lock)
 // ─────────────────────────────────────────────────────────────────────
+//
+// The drawer redesign relocated the legacy footer "Edit" button to an
+// inline pencil affordance in the Sources section header (Q11.A lock).
+// The pencil reads as a section-scoped action ("edit these sources"),
+// which scopes the verb correctly and frees footer real estate at
+// 480px drawer width. The legacy `mapping-drawer-edit-button` test-id
+// is regression-guarded as gone.
 
-describe('[mapping-drawer-edit] D1 — Edit button presence', () => {
-  it('D1a: renders Edit button with `mapping-drawer-edit-button` test-id (rightmost in ApproveRejectButtons)', () => {
-    expect(SRC).toMatch(/data-testid="mapping-drawer-edit-button"/)
-    expect(SRC).toMatch(/aria-label="Edit mapping"/)
+describe('[mapping-drawer-edit] D1 — Edit pencil presence', () => {
+  it('D1a: renders the Edit pencil with `mapping-drawer-edit-pencil` test-id', () => {
+    expect(SRC).toMatch(/data-testid="mapping-drawer-edit-pencil"/)
+    expect(SRC).toMatch(/aria-label="Edit mapping sources"/)
   })
 
-  it('D1b: ApproveRejectButtons renders Edit AFTER Approve (rightmost-in-footer per founder §3.3)', () => {
-    // Body of ApproveRejectButtons returns a flex container; verify
-    // the Edit button block appears textually after the Approve
-    // button block.
-    const approveIdx = SRC.indexOf('data-testid="mapping-drawer-approve-button"')
-    const editIdx = SRC.indexOf('data-testid="mapping-drawer-edit-button"')
-    expect(approveIdx).toBeGreaterThan(0)
-    expect(editIdx).toBeGreaterThan(0)
-    expect(editIdx).toBeGreaterThan(approveIdx)
+  it('D1b: legacy footer Edit button (`mapping-drawer-edit-button`) is REMOVED', () => {
+    expect(SRC).not.toMatch(/data-testid="mapping-drawer-edit-button"/)
+    // Legacy aria-label is gone too (the new pencil uses a different
+    // label so the surface reads as "edit these sources" rather than
+    // a generic row-level verb).
+    expect(SRC).not.toMatch(/aria-label="Edit mapping"\s/)
+  })
+
+  it('D1c: pencil mounts inside MappedBody as Sources section headerAside (Q11.A — section-scoped affordance)', () => {
+    // The pencil is rendered as `headerAside` of the Sources DrawerSection
+    // by MappedBody; ApproveRejectButtons no longer carries any
+    // Edit-button slot.
+    const fnMatch = SRC.match(
+      /function ApproveRejectButtons[\s\S]+?\n\}\n/,
+    )
+    expect(fnMatch).not.toBeNull()
+    expect(fnMatch![0]).not.toMatch(/showEditButton/)
+    expect(fnMatch![0]).not.toMatch(/mapping-drawer-edit-button/)
   })
 })
 
 // ─────────────────────────────────────────────────────────────────────
-// D2 — Edit visibility gate
+// D2 — Edit visibility gate (drawer-redesign Q11.A lock)
 // ─────────────────────────────────────────────────────────────────────
 
 describe('[mapping-drawer-edit] D2 — Edit visibility gate', () => {
-  it('D2a: Edit only renders on `kind === "mapped"` (unmapped + acknowledged use other footer dispatches)', () => {
-    // The DrawerFooter dispatches: unmapped → UnmappedFooterButtons,
-    // target_acknowledged → AcknowledgedFooterButtons, else (mapped)
-    // → ApproveRejectButtons. Edit button only lives in the third.
-    expect(SRC).toMatch(/row\.kind\s*===\s*['"]unmapped['"]\s*\?\s*[\s\S]{0,400}UnmappedFooterButtons/)
-    expect(SRC).toMatch(/row\.kind\s*===\s*['"]target_acknowledged['"]\s*\?\s*[\s\S]{0,200}AcknowledgedFooterButtons/)
-    expect(SRC).toMatch(/showEditButton=\{[\s\S]{0,300}row\.kind\s*===\s*['"]mapped['"]/)
+  it('D2a: pencil only renders inside MappedBody (unmapped + acknowledged + VA bodies do not mount the pencil)', () => {
+    // Other body components (UnmappedBody, AcknowledgedBody,
+    // ValueAssignmentBody) do not invoke <EditPencilButton ... />.
+    const mappedBody = sliceBetween(SRC, 'function MappedBody', '\n}\n')
+    expect(mappedBody).toMatch(/<EditPencilButton/)
+    const unmappedBody = sliceBetween(SRC, 'function UnmappedBody', '\n}\n')
+    expect(unmappedBody).not.toMatch(/<EditPencilButton/)
+    const ackBody = sliceBetween(SRC, 'function AcknowledgedBody', '\n}\n')
+    expect(ackBody).not.toMatch(/<EditPencilButton/)
+    const vaBody = sliceBetween(SRC, 'function ValueAssignmentBody', '\n}\n')
+    expect(vaBody).not.toMatch(/<EditPencilButton/)
   })
 
-  it('D2b: Edit hidden on rejected status (founder §3.2 — only needs_review / approved show it)', () => {
-    expect(SRC).toMatch(
-      /showEditButton=\{[\s\S]{0,300}row\.status\s*===\s*['"]needs_review['"]\s*\|\|\s*row\.status\s*===\s*['"]approved['"]/,
+  it('D2b: pencil hidden on rejected status (Q11.A — only needs_review / approved show it)', () => {
+    const mappedBody = sliceBetween(SRC, 'function MappedBody', '\n}\n')
+    expect(mappedBody).toMatch(
+      /showEditPencil\s*=\s*[\s\S]{0,300}row\.status\s*===\s*['"]needs_review['"]\s*\|\|\s*row\.status\s*===\s*['"]approved['"]/,
     )
   })
 
-  it('D2c: Edit hidden on custom_sql combinations (Transform-tab concern, not source-list)', () => {
-    expect(SRC).toMatch(
-      /showEditButton=\{[\s\S]{0,400}row\.combinationType\s*!==\s*['"]custom_sql['"]/,
+  it('D2c: pencil hidden on custom_sql combinations (Transform-tab concern, not source-list)', () => {
+    const mappedBody = sliceBetween(SRC, 'function MappedBody', '\n}\n')
+    expect(mappedBody).toMatch(
+      /showEditPencil\s*=\s*[\s\S]{0,400}row\.combinationType\s*!==\s*['"]custom_sql['"]/,
     )
   })
 

@@ -275,7 +275,13 @@ describe('assembleMappingsForRedesign — discriminator cases', () => {
   it('case 8: transformation presence and status flow through to hasTransformation/transformationStatus', () => {
     const t8 = tfm({ id: 'tfm-8', target_field_id: F_T_CUSTID.id })
     const m8 = ms({ id: 'ms-8', target_field_mapping_id: 'tfm-8', source_field_id: F_S_CUSTID.id, source_table_id: F_S_CUSTID.table_id, ordinal: 0 })
-    const tr8: RawTransformationRow = { id: 'tr-8', target_field_mapping_id: 'tfm-8', status: 'applied' }
+    const tr8: RawTransformationRow = {
+      id: 'tr-8',
+      target_field_mapping_id: 'tfm-8',
+      status: 'applied',
+      description: 'Trim whitespace from id',
+      generated_sql: 'TRIM(src.CustomerID)',
+    }
     const out = assembleMappingsForRedesign(baseInput({ tfms: [t8], mappingSources: [m8], transformations: [tr8] }))
     const row = out.rows.find((r) => r.id === 'tfm-8') as MappedRow
     expect(row.hasTransformation).toBe(true)
@@ -285,11 +291,84 @@ describe('assembleMappingsForRedesign — discriminator cases', () => {
   it('case 8b: null DB transformation status coerces to draft when a row exists', () => {
     const t = tfm({ id: 'tfm-8b', target_field_id: F_T_CUSTID.id })
     const m = ms({ id: 'ms-8b', target_field_mapping_id: 'tfm-8b', source_field_id: F_S_CUSTID.id, source_table_id: F_S_CUSTID.table_id, ordinal: 0 })
-    const tr: RawTransformationRow = { id: 'tr-8b', target_field_mapping_id: 'tfm-8b', status: null }
+    const tr: RawTransformationRow = {
+      id: 'tr-8b',
+      target_field_mapping_id: 'tfm-8b',
+      status: null,
+      description: null,
+      generated_sql: null,
+    }
     const out = assembleMappingsForRedesign(baseInput({ tfms: [t], mappingSources: [m], transformations: [tr] }))
     const row = out.rows.find((r) => r.id === 'tfm-8b') as MappedRow
     expect(row.hasTransformation).toBe(true)
     expect(row.transformationStatus).toBe('draft')
+  })
+
+  // Case 8c — drawer redesign Q11.E lock (2026-04-26): description +
+  // SQL preview flow through to MappingRowBase.
+  it('case 8c: transformation description and SQL preview flow through to MappingRowBase (mapped row)', () => {
+    const t = tfm({ id: 'tfm-8c', target_field_id: F_T_CUSTID.id })
+    const m = ms({ id: 'ms-8c', target_field_mapping_id: 'tfm-8c', source_field_id: F_S_CUSTID.id, source_table_id: F_S_CUSTID.table_id, ordinal: 0 })
+    const tr: RawTransformationRow = {
+      id: 'tr-8c',
+      target_field_mapping_id: 'tfm-8c',
+      status: 'applied',
+      description: 'Cast to VARCHAR and uppercase',
+      generated_sql: 'UPPER(CAST(src.CustomerID AS VARCHAR))',
+    }
+    const out = assembleMappingsForRedesign(baseInput({ tfms: [t], mappingSources: [m], transformations: [tr] }))
+    const row = out.rows.find((r) => r.id === 'tfm-8c') as MappedRow
+    expect(row.transformationDescription).toBe('Cast to VARCHAR and uppercase')
+    expect(row.transformationSqlPreview).toBe('UPPER(CAST(src.CustomerID AS VARCHAR))')
+  })
+
+  it('case 8d: transformationSqlPreview is server-truncated to 300 chars with trailing ellipsis', () => {
+    const t = tfm({ id: 'tfm-8d', target_field_id: F_T_CUSTID.id })
+    const m = ms({ id: 'ms-8d', target_field_mapping_id: 'tfm-8d', source_field_id: F_S_CUSTID.id, source_table_id: F_S_CUSTID.table_id, ordinal: 0 })
+    const longSql = 'A'.repeat(500)
+    const tr: RawTransformationRow = {
+      id: 'tr-8d',
+      target_field_mapping_id: 'tfm-8d',
+      status: 'draft',
+      description: null,
+      generated_sql: longSql,
+    }
+    const out = assembleMappingsForRedesign(baseInput({ tfms: [t], mappingSources: [m], transformations: [tr] }))
+    const row = out.rows.find((r) => r.id === 'tfm-8d') as MappedRow
+    // 300 chars of payload + the trailing ellipsis character.
+    expect(row.transformationSqlPreview).toHaveLength(301)
+    expect(row.transformationSqlPreview?.endsWith('…')).toBe(true)
+    expect(row.transformationSqlPreview?.startsWith('AAAA')).toBe(true)
+  })
+
+  it('case 8e: empty / null SQL on the transformation row yields a null preview', () => {
+    const t = tfm({ id: 'tfm-8e', target_field_id: F_T_CUSTID.id })
+    const m = ms({ id: 'ms-8e', target_field_mapping_id: 'tfm-8e', source_field_id: F_S_CUSTID.id, source_table_id: F_S_CUSTID.table_id, ordinal: 0 })
+    const tr: RawTransformationRow = {
+      id: 'tr-8e',
+      target_field_mapping_id: 'tfm-8e',
+      status: 'draft',
+      description: null,
+      generated_sql: '',
+    }
+    const out = assembleMappingsForRedesign(baseInput({ tfms: [t], mappingSources: [m], transformations: [tr] }))
+    const row = out.rows.find((r) => r.id === 'tfm-8e') as MappedRow
+    expect(row.transformationSqlPreview).toBeNull()
+    expect(row.transformationDescription).toBeNull()
+  })
+
+  it('case 8f: rows with no transformation row carry null description and null SQL preview across all kinds', () => {
+    const t = tfm({ id: 'tfm-8f', target_field_id: F_T_CUSTID.id })
+    const m = ms({ id: 'ms-8f', target_field_mapping_id: 'tfm-8f', source_field_id: F_S_CUSTID.id, source_table_id: F_S_CUSTID.table_id, ordinal: 0 })
+    const out = assembleMappingsForRedesign(baseInput({ tfms: [t], mappingSources: [m], transformations: [] }))
+    const mapped = out.rows.find((r) => r.id === 'tfm-8f') as MappedRow
+    expect(mapped.transformationDescription).toBeNull()
+    expect(mapped.transformationSqlPreview).toBeNull()
+
+    // Every unmapped row in the same payload has the same nulls.
+    const someUnmapped = out.rows.find((r) => r.kind === 'unmapped')
+    expect(someUnmapped?.transformationDescription).toBeNull()
+    expect(someUnmapped?.transformationSqlPreview).toBeNull()
   })
 
   // Case 9 ------------------------------------------------------------
