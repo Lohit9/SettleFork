@@ -559,3 +559,90 @@ describe('SourceFieldPicker — light-mode invariant', () => {
     expect(container.innerHTML).not.toMatch(/\bdark:/)
   })
 })
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Phase A (post-Phase-3) — picker rows render an inline `[TABLE_NAME]` badge
+// before the field name, mirroring the redesigned mapping page's row chrome.
+// Section headers stay (Option α): the badge plus the header gives a per-row
+// disambiguator that makes the picker readable even when the user has
+// scrolled past the section boundary.
+// ─────────────────────────────────────────────────────────────────────────────
+describe('SourceFieldPicker — inline table badge on every row (Phase A)', () => {
+  function getRow(id: string): HTMLButtonElement {
+    const el = document.querySelector(
+      `[data-testid="source-field-picker-field"][data-source-field-id="${id}"]`,
+    )
+    if (!(el instanceof HTMLButtonElement)) {
+      throw new Error(`Row not found for id=${id}`)
+    }
+    return el
+  }
+
+  it('renders the source-table name as a TableBadge inside every field row', () => {
+    render(
+      <SourceFieldPicker
+        availableSourceFields={allFields}
+        selectedIds={[]}
+        onSelectedChange={() => {}}
+      />,
+    )
+    // CIF_MASTER fields: badge text matches sourceTable.name.
+    const cifRow = getRow('sf-cif-1')
+    expect(cifRow.textContent).toContain('CIF_MASTER')
+    expect(cifRow.textContent).toContain('FIRST_NAME')
+    // ACCT_MASTER fields: badge text matches sourceTable.name.
+    const acctRow = getRow('sf-acct-1')
+    expect(acctRow.textContent).toContain('ACCT_MASTER')
+    expect(acctRow.textContent).toContain('ACCT_NO')
+  })
+
+  it('field-name span title exposes "<table> · <field>" for hover overflow disambiguation', () => {
+    render(
+      <SourceFieldPicker
+        availableSourceFields={allFields}
+        selectedIds={[]}
+        onSelectedChange={() => {}}
+      />,
+    )
+    // Two elements inside a row carry a `title`: the TableBadge
+    // (table name only) and the truncated field-name span (table ·
+    // field). Use `within().getByTitle` to assert the latter exists
+    // without depending on which appears first in the DOM.
+    const cifRow = getRow('sf-cif-1')
+    expect(
+      within(cifRow).getByTitle('CIF_MASTER · FIRST_NAME'),
+    ).toBeInTheDocument()
+  })
+
+  it('badge appears even when the row is selected (badge is identity, not state)', () => {
+    render(
+      <SourceFieldPicker
+        availableSourceFields={allFields}
+        selectedIds={['sf-cif-1']}
+        onSelectedChange={() => {}}
+      />,
+    )
+    const row = getRow('sf-cif-1')
+    expect(row.getAttribute('aria-pressed')).toBe('true')
+    // The selected row still surfaces the table name in its body.
+    expect(row.textContent).toContain('CIF_MASTER')
+  })
+
+  it('badge appears for EVERY row across all groups (no row left behind)', () => {
+    render(
+      <SourceFieldPicker
+        availableSourceFields={allFields}
+        selectedIds={[]}
+        onSelectedChange={() => {}}
+      />,
+    )
+    const rows = screen.getAllByTestId('source-field-picker-field')
+    expect(rows.length).toBeGreaterThan(0)
+    for (const row of rows) {
+      const id = row.getAttribute('data-source-field-id')
+      const expected = allFields.find((f) => f.id === id)?.sourceTable.name
+      expect(expected).toBeDefined()
+      expect(row.textContent).toContain(expected as string)
+    }
+  })
+})

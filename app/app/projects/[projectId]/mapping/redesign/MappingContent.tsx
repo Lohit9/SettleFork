@@ -1221,10 +1221,15 @@ function MappingContentLoaded({
   }, [router, projectId, filters, drawerRowId])
 
   const handleInlineSourceCommit = useCallback(
-    async (rowId: string, finalIds: string[]) => {
+    async (
+      rowId: string,
+      finalIds: string[],
+    ): Promise<{ success: boolean }> => {
       const row = data.rows.find((r) => r.id === rowId)
-      if (row === undefined) return
-      if (finalIds.length === 0) return // Picker's empty-error guard handles UX.
+      if (row === undefined) return { success: false }
+      // Picker's Save-disabled-when-empty guard normally prevents this,
+      // but defense-in-depth: an empty selection cannot be persisted.
+      if (finalIds.length === 0) return { success: false }
 
       setOptimistic(rowId, 'mapping')
 
@@ -1267,7 +1272,7 @@ function MappingContentLoaded({
               message: result.error ?? 'Could not create mapping.',
             })
             clearOptimistic(rowId)
-            return
+            return { success: false }
           }
           pushToast({
             id: `inline-map-${rowId}-${Date.now()}`,
@@ -1289,7 +1294,7 @@ function MappingContentLoaded({
               message: result.error ?? 'Could not update mapping sources.',
             })
             clearOptimistic(rowId)
-            return
+            return { success: false }
           }
           const message =
             !wasMulti && isMulti
@@ -1304,7 +1309,7 @@ function MappingContentLoaded({
           // Other row.kind values are filtered out by FieldMappingRow's
           // `isInlineSourceEditable` guard before reaching this handler.
           clearOptimistic(rowId)
-          return
+          return { success: false }
         }
         router.refresh()
       } catch (err) {
@@ -1314,9 +1319,10 @@ function MappingContentLoaded({
           message: err instanceof Error ? err.message : 'Could not save mapping.',
         })
         clearOptimistic(rowId)
-        return
+        return { success: false }
       }
       setTimeout(() => clearOptimistic(rowId), 200)
+      return { success: true }
     },
     [data.rows, projectId, setOptimistic, clearOptimistic, pushToast, router],
   )

@@ -53,6 +53,7 @@ import { cn } from '@/components/ui/utils'
 import { SEARCH_DEBOUNCE_MS } from '@/lib/constants/redesign-ui'
 import { formatSampleValues } from '@/lib/utils/mapping-drawer-format'
 import type { SourceFieldWithState } from '@/lib/types/mappings-for-redesign'
+import { TableBadge } from './TableBadge'
 
 export interface SourceFieldPickerProps {
   /**
@@ -558,9 +559,14 @@ function PickerFieldRow({
         )}
       >
         <SelectionIndicator isSelected={isSelected} />
+        <TableBadge
+          tableName={field.sourceTable.name}
+          size="sm"
+          className="shrink-0"
+        />
         <span
           className="flex-1 truncate font-mono text-[11px]"
-          title={field.name}
+          title={`${field.sourceTable.name} · ${field.name}`}
         >
           {field.name}
         </span>
