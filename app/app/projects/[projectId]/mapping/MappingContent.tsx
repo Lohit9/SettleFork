@@ -257,7 +257,7 @@ function GenerateMappingsPanel({
           <div className="text-center px-4">
             <div className="w-10 h-10 border-4 border-blue-600 border-t-transparent rounded-full animate-spin mx-auto mb-3" />
             <p className="font-semibold text-gray-900 text-sm">Generating AI-powered mappings…</p>
-            <p className="text-xs text-gray-500 mt-1">Analyzing schemas and sample data. This may take 15–30 seconds.</p>
+            <p className="text-xs text-gray-500 mt-1">Analyzing schemas and sample data. This typically takes 1-3 minutes.</p>
           </div>
         </div>
       )}
