@@ -65,6 +65,10 @@ import { MappingDrawer } from './components/MappingDrawer'
 import { MappingSummaryStrip } from './components/MappingSummaryStrip'
 import { SourceSchemaSidebar } from './components/SourceSchemaSidebar'
 import { RejectConfirmPopover } from './components/RejectConfirmPopover'
+import {
+  EmptyMappingState,
+  selectEmptyMappingCase,
+} from './components/EmptyMappingState'
 import type { FieldMappingRowOptimisticState } from './components/FieldMappingRow'
 import {
   useSidebarState,
@@ -1549,6 +1553,21 @@ function MappingContentLoaded({
     return m
   }, [data.rows])
 
+  // Phase 4 empty-state — discriminate the four cases that warrant
+  // an empty-state CTA in the body and the Strip+FilterRow hide-out
+  // in the toolbar. `selectEmptyMappingCase` returns 1-4 for the
+  // empty cases (see `EmptyMappingState.tsx` for the matrix) or
+  // `null` when the project has at least one populated TFM and the
+  // existing TargetTableGroup list should render. The toolbar
+  // (Strip + FilterRow) is informationally useless in any of the
+  // empty cases — there's nothing to filter — so we hide it whenever
+  // we're rendering an empty-state card.
+  const emptyMappingCase = useMemo(
+    () => selectEmptyMappingCase(data),
+    [data],
+  )
+  const isEmptyMappingState = emptyMappingCase !== null
+
   // Phase 4c-1 — project-wide high-confidence count. Same derivation
   // contract as the server preview's WHERE clause but the client
   // already has confidence on every row, so this is a single pass.
@@ -1582,16 +1601,29 @@ function MappingContentLoaded({
   // viewport's full width regardless of sidebar state.
   return (
     <>
-      <MappingSummaryStrip counts={data.counts} />
-      <FilterRow
-        filters={filters}
-        onFiltersChange={handleFiltersChange}
-        targetTables={data.targetTables}
-        sourceTables={data.sourceTables}
-        rejectedCount={data.counts.rejected}
-        highConfidenceCount={highConfidenceCount}
-        onApproveHighConfidenceClick={handleApproveHighConfidenceClick}
-      />
+      {/* Phase 4 empty-state — Strip + FilterRow surface only when the
+          project has at least one populated TFM. In any of the four
+          empty cases (no source/target schema, both schemas with zero
+          TFMs) the toolbar is hidden because there is nothing to
+          filter. The structural-invariant test in
+          `tests/components/mapping-redesign-content.test.tsx`
+          continues to pass for populated fixtures because Strip and
+          FilterRow render in their original sibling positions when
+          present. */}
+      {!isEmptyMappingState && (
+        <>
+          <MappingSummaryStrip counts={data.counts} />
+          <FilterRow
+            filters={filters}
+            onFiltersChange={handleFiltersChange}
+            targetTables={data.targetTables}
+            sourceTables={data.sourceTables}
+            rejectedCount={data.counts.rejected}
+            highConfidenceCount={highConfidenceCount}
+            onApproveHighConfidenceClick={handleApproveHighConfidenceClick}
+          />
+        </>
+      )}
 
       {/* Sidebar + body scroll container. The sidebar persists across
           loaded/empty data states (its own state lives in
@@ -1614,14 +1646,13 @@ function MappingContentLoaded({
           {/*
             Body reading column. `py-6` provides 24px top + 24px bottom
             breathing room around the group cards. The toolbar above
-            (Strip + FilterRow) is full-width and outside this column;
-            the column only governs the body content's reading width.
+            (Strip + FilterRow), when shown, is full-width and outside
+            this column; the column only governs the body content's
+            reading width.
           */}
           <div className="mx-auto w-full max-w-5xl px-6 py-6">
-            {data.targetSchemaEmpty ? (
-              <EmptySchemaState />
-            ) : data.targetTables.length === 0 ? (
-              <EmptyFieldsState />
+            {isEmptyMappingState ? (
+              <EmptyMappingState projectId={projectId} data={data} />
             ) : visibleTargetTables.length === 0 ? (
               <NoGroupsMatchState />
             ) : (
@@ -1763,28 +1794,22 @@ function NoDataState() {
   )
 }
 
-function EmptySchemaState() {
-  return (
-    <div
-      data-testid="mapping-redesign-empty-schema"
-      className="rounded-lg border border-slate-200 bg-white px-6 py-12 text-center text-sm text-slate-600"
-    >
-      No target schema has been defined yet for this project. Once target
-      tables are added, their fields will appear here for mapping.
-    </div>
-  )
-}
-
-function EmptyFieldsState() {
-  return (
-    <div
-      data-testid="mapping-redesign-empty-fields"
-      className="rounded-lg border border-slate-200 bg-white px-6 py-12 text-center text-sm text-slate-600"
-    >
-      No fields to display.
-    </div>
-  )
-}
+/**
+ * Phase 4 — `EmptySchemaState` and `EmptyFieldsState` (former inline
+ * components rendered for the `targetSchemaEmpty` and
+ * `targetTables.length === 0` cases) have been subsumed by
+ * `<EmptyMappingState>` in `./components/EmptyMappingState.tsx`,
+ * which discriminates four empty cases (no schemas, target-only,
+ * source-only, both-but-zero-TFMs) and surfaces the
+ * `[Go to Data Overview]` CTA for the first three plus the
+ * `<GenerateMappingsPanel>` for the fourth. The two `data-testid`
+ * tokens previously emitted here (`mapping-redesign-empty-schema`,
+ * `mapping-redesign-empty-fields`) are no longer in the DOM; the new
+ * variants emit `mapping-redesign-empty-no-schemas`,
+ * `mapping-redesign-empty-no-target`,
+ * `mapping-redesign-empty-no-source`, and
+ * `mapping-redesign-empty-generate` respectively.
+ */
 
 /**
  * Shown when every group is emptied by the active filter — either no

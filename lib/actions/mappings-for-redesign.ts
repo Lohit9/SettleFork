@@ -68,6 +68,7 @@ import {
 } from '@/lib/actions/_mappings-for-redesign-core'
 import {
   deleteFieldMapping,
+  generateMappings as legacyGenerateMappings,
   recomputeTableMappingStatus,
   updateFieldMappingStatus,
   type MappingWriteErrorCode,
@@ -160,6 +161,38 @@ export interface RejectMappingResult extends MappingActionResult {
  * UPDATE, table-mapping coverage recompute, and `mapping_approved`
  * activity logging.
  */
+/**
+ * Phase 4 empty-state — thin pass-through wrapper around the legacy
+ * `generateMappings` action so the redesigned `GenerateMappingsPanel`
+ * (a client component under `mapping/redesign/components/`) can call
+ * AI-driven initial mapping generation without breaking the redesign
+ * UI's grep invariant.
+ *
+ * Why a wrapper instead of a re-export? Next.js's SWC compiler rejects
+ * `export … from '…'` re-exports in `'use server'` files — only direct
+ * async function exports are allowed. The wrapper satisfies the
+ * compiler while still routing through the legacy implementation,
+ * which already handles auth, `requireProjectPermission('editor')`,
+ * `guardWrites`, Claude orchestration, and persisting `table_mappings`
+ * + `target_field_mappings` via `dq_create_target_field_mapping`.
+ *
+ * The redesign UI imports this symbol from
+ * `@/lib/actions/mappings-for-redesign`. The grep invariant
+ * (`tests/lib/no-shim-in-redesign-path.test.ts`) is satisfied because
+ * the redesign tree never references `@/lib/actions/mappings` —
+ * imports terminate at this file.
+ *
+ * When Phase 5 retires the legacy `MappingContent.tsx`, fold the
+ * underlying implementation in here and drop the wrapper.
+ */
+export async function generateMappings(
+  projectId: string,
+  sourceTableIds: string[],
+  targetTableIds: string[],
+) {
+  return legacyGenerateMappings(projectId, sourceTableIds, targetTableIds)
+}
+
 export async function approveFieldMapping(
   rowId: string,
 ): Promise<MappingActionResult> {

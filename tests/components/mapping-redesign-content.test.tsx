@@ -106,6 +106,15 @@ vi.mock('@/lib/actions/mappings-for-redesign', () => ({
   previewBulkReject: vi
     .fn()
     .mockResolvedValue({ success: true, rows: [], totalCount: 0 }),
+  // Phase 4 empty-state — `GenerateMappingsPanel` (mounted only when
+  // the project is in the case-4 empty state) imports `generateMappings`
+  // from this same surface via the re-export added to the action layer.
+  // Stub to a no-op success; the empty-state suite below exercises
+  // the routing/panel render only — submit-flow assertions live in
+  // `tests/components/generate-mappings-panel.test.tsx`.
+  generateMappings: vi
+    .fn()
+    .mockResolvedValue({ success: true, generated: 0, skipped: 0 }),
 }))
 
 // Phase 4-polish-3 — `MappingContent` calls `acknowledgeField`
@@ -2196,5 +2205,200 @@ describe('MappingRedesignContent — group collapsibility (Phase 4-polish-2)', (
       .map((c) => c[0] as string)
       .filter((u) => u.includes('collapsed='))
     expect(collapseUrls).toHaveLength(0)
+  })
+})
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Phase 4 empty-state — four-case discriminator + toolbar visibility.
+// ─────────────────────────────────────────────────────────────────────────────
+//
+// The redesigned page now mounts `<EmptyMappingState>` in place of the
+// TargetTableGroup list whenever the project is in one of four empty
+// shapes (no schemas, target-only, source-only, both-but-zero-TFMs).
+// The summary strip + filter row are hidden in those cases because
+// there is nothing to filter. The populated case (`counts.total >
+// counts.unmapped`) is unchanged — toolbar and group list both render.
+//
+// These tests pin the routing + toolbar visibility through the page-
+// level component so the integration contract is guarded end-to-end.
+// The discriminator math itself is unit-tested in
+// `tests/components/empty-mapping-state.test.tsx`; the
+// `<GenerateMappingsPanel>` submit flow is unit-tested in
+// `tests/components/generate-mappings-panel.test.tsx`.
+
+describe('MappingRedesignContent — Phase 4 empty-state cases', () => {
+  function buildEmptyData(
+    overrides: Partial<MappingsForRedesignResult>,
+  ): MappingsForRedesignResult {
+    return {
+      projectId: 'p1',
+      rows: [],
+      targetTables: [],
+      sourceTables: [],
+      sourceFieldAcknowledgments: [],
+      sourceFields: [],
+      counts: {
+        total: 0,
+        approved: 0,
+        needsReview: 0,
+        rejected: 0,
+        unmapped: 0,
+      },
+      targetSchemaEmpty: true,
+      ...overrides,
+    }
+  }
+
+  function renderEmpty(data: MappingsForRedesignResult) {
+    currentSearch = ''
+    return render(
+      <MappingRedesignContent
+        projectId="p1"
+        projectName="Heritage Core"
+        initialRedesignData={data}
+      />,
+    )
+  }
+
+  it('case 1 (no schemas): renders the no-schemas card and hides the toolbar', () => {
+    renderEmpty(
+      buildEmptyData({
+        targetSchemaEmpty: true,
+        sourceTables: [],
+        sourceFields: [],
+      }),
+    )
+    expect(
+      screen.getByTestId('mapping-redesign-empty-no-schemas'),
+    ).toBeInTheDocument()
+    expect(screen.queryByTestId('mapping-summary-strip')).toBeNull()
+    expect(screen.queryByTestId('mapping-redesign-filter-row')).toBeNull()
+    expect(
+      screen.getByTestId('mapping-redesign-empty-cta').getAttribute('href'),
+    ).toBe('/app/projects/p1/data-overview?tab=schema-overview')
+  })
+
+  it('case 2 (target schema missing): renders the no-target card and hides the toolbar', () => {
+    renderEmpty(
+      buildEmptyData({
+        targetSchemaEmpty: true,
+        sourceTables: [sourceTableX],
+        sourceFields: [
+          {
+            id: 'sf-1',
+            name: 'COL_A',
+            dataType: 'VARCHAR(50)',
+            ordinalPosition: 1,
+            sourceTable: { id: sourceTableX.id, name: sourceTableX.name },
+            mappingStatus: 'unmapped',
+            sampleValues: [],
+            isAcknowledged: false,
+          } satisfies SourceFieldWithState,
+        ],
+      }),
+    )
+    expect(
+      screen.getByTestId('mapping-redesign-empty-no-target'),
+    ).toBeInTheDocument()
+    expect(screen.queryByTestId('mapping-summary-strip')).toBeNull()
+    expect(screen.queryByTestId('mapping-redesign-filter-row')).toBeNull()
+  })
+
+  it('case 3 (source schema missing): renders the no-source card and hides the toolbar', () => {
+    renderEmpty(
+      buildEmptyData({
+        targetSchemaEmpty: false,
+        sourceTables: [],
+        sourceFields: [],
+        targetTables: [accountsTable],
+        counts: {
+          total: 5,
+          approved: 0,
+          needsReview: 0,
+          rejected: 0,
+          unmapped: 5,
+        },
+      }),
+    )
+    expect(
+      screen.getByTestId('mapping-redesign-empty-no-source'),
+    ).toBeInTheDocument()
+    expect(screen.queryByTestId('mapping-summary-strip')).toBeNull()
+    expect(screen.queryByTestId('mapping-redesign-filter-row')).toBeNull()
+    // The all-Unmapped row list must NOT render in case 3 — the user
+    // has no path forward without source schemas.
+    expect(screen.queryAllByTestId('target-table-group')).toHaveLength(0)
+  })
+
+  it('case 4 (both schemas, all unmapped): renders the GenerateMappingsPanel and hides the toolbar', () => {
+    renderEmpty(
+      buildEmptyData({
+        targetSchemaEmpty: false,
+        sourceTables: [sourceTableX, sourceTableY],
+        sourceFields: [
+          {
+            id: 'sf-1',
+            name: 'COL_A',
+            dataType: 'VARCHAR(50)',
+            ordinalPosition: 1,
+            sourceTable: { id: sourceTableX.id, name: sourceTableX.name },
+            mappingStatus: 'unmapped',
+            sampleValues: [],
+            isAcknowledged: false,
+          } satisfies SourceFieldWithState,
+        ],
+        targetTables: [accountsTable, customersTable],
+        counts: {
+          total: 4,
+          approved: 0,
+          needsReview: 0,
+          rejected: 0,
+          unmapped: 4,
+        },
+      }),
+    )
+    expect(
+      screen.getByTestId('mapping-redesign-empty-generate'),
+    ).toBeInTheDocument()
+    expect(screen.getByTestId('generate-mappings-panel')).toBeInTheDocument()
+    expect(
+      screen.getByTestId('generate-mappings-source-panel'),
+    ).toBeInTheDocument()
+    expect(
+      screen.getByTestId('generate-mappings-target-panel'),
+    ).toBeInTheDocument()
+    expect(screen.queryByTestId('mapping-summary-strip')).toBeNull()
+    expect(screen.queryByTestId('mapping-redesign-filter-row')).toBeNull()
+    // The all-Unmapped row list must NOT render in case 4 either —
+    // the panel takes over.
+    expect(screen.queryAllByTestId('target-table-group')).toHaveLength(0)
+  })
+
+  it('populated case: toolbar (Strip + FilterRow) renders and the empty card is absent', () => {
+    // Use the existing populated fixture path so we re-exercise the
+    // structural-invariant guarantee: when there is at least one
+    // non-unmapped row, both Strip and FilterRow render in their
+    // canonical positions and the EmptyMappingState card stays out.
+    renderRedesign()
+    expect(screen.getByTestId('mapping-summary-strip')).toBeInTheDocument()
+    expect(screen.getByTestId('mapping-redesign-filter-row')).toBeInTheDocument()
+    expect(screen.queryByTestId('mapping-redesign-empty-no-schemas')).toBeNull()
+    expect(screen.queryByTestId('mapping-redesign-empty-no-target')).toBeNull()
+    expect(screen.queryByTestId('mapping-redesign-empty-no-source')).toBeNull()
+    expect(screen.queryByTestId('mapping-redesign-empty-generate')).toBeNull()
+  })
+
+  it('source schema sidebar persists across the empty-state render', () => {
+    // The sidebar is part of the empty-state shell (Phase 4 prompt
+    // §"Wire-up in redesign MappingContent"): the sidebar+body flex
+    // row keeps mounting in every empty case. This pins it.
+    renderEmpty(
+      buildEmptyData({
+        targetSchemaEmpty: true,
+        sourceTables: [],
+        sourceFields: [],
+      }),
+    )
+    expect(screen.getByTestId('source-schema-sidebar')).toBeInTheDocument()
   })
 })
