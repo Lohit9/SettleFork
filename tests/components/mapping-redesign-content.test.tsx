@@ -1581,16 +1581,17 @@ describe('MappingRedesignContent Phase 4a-2 — save flow swaps URL + refreshes'
       />,
     )
     // Drawer is still open (didn't flicker shut), and now displays
-    // the mapped row's body. Drawer-redesign — the legacy
-    // `mapping-drawer-subheader-rule_1` testid was removed; verify
-    // the new stacked-header source identity is rendered for the
-    // freshly-mapped row instead.
+    // the mapped row's body. Drawer redesign — TARGET-led identity:
+    // the header is target-only (no SOURCE row). Verify the freshly-
+    // mapped row's body now contains the SOURCE section with a
+    // populated source card (the unmapped empty-state body is gone).
     expect(screen.getByTestId('mapping-drawer')).toBeInTheDocument()
     expect(
-      screen.getByTestId('mapping-drawer-header-source'),
+      screen.getByTestId('drawer-section-source'),
     ).toBeInTheDocument()
+    expect(screen.getByTestId('drawer-source-card')).toBeInTheDocument()
     expect(
-      screen.queryByTestId('mapping-drawer-header-source-empty'),
+      screen.queryByTestId('drawer-unmapped-empty-state'),
     ).toBeNull()
     // Footer is back to Approve / Reject (no Create mapping).
     expect(

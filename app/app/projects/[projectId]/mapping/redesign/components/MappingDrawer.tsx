@@ -47,10 +47,10 @@ import {
   rejectFieldMapping,
   unacknowledgeField,
 } from '@/lib/actions/mappings-for-redesign'
-import { classifyMappedRow } from '@/lib/utils/mapping-row-rules'
 import {
   classifyRowConfidence,
   formatConfidencePercent,
+  type RowConfidenceBand,
 } from '@/lib/utils/confidence-format'
 import type { SourceFieldWithState } from '@/lib/types/mappings-for-redesign'
 import { TableBadge } from './TableBadge'
@@ -1080,55 +1080,52 @@ const GENERIC_UNACKNOWLEDGE_ERROR =
 // combined. Scroll real estate goes to the body sections (Sources / AI
 // Reasoning / Transformation).
 
-const SOURCES_SECTION_TESTID = 'drawer-section-sources'
+// Drawer redesign — TARGET-led identity (this iteration): the body's
+// first section is renamed `SOURCE` (singular). The testid follows
+// suit: `drawer-section-source`. The section name is singular
+// regardless of source count — Rule 1 has one source, Rule 2/3/4
+// list multiple sources under a single SOURCE section heading; the
+// list itself carries the plurality cue.
+const SOURCE_SECTION_TESTID = 'drawer-section-source'
 
 /**
- * Scroll the body to the Sources section. Used by the multi-source
- * `+N sources` chip on line 1 (Q11.H lock). Falls through silently when
- * the section is absent (defensive — the chip should only render when a
- * Sources section exists, but tests / future kinds can drop it).
- */
-function scrollToSourcesSection() {
-  if (typeof document === 'undefined') return
-  const target = document.querySelector<HTMLElement>(
-    `[data-testid="${SOURCES_SECTION_TESTID}"]`,
-  )
-  if (target) {
-    target.scrollIntoView({ block: 'start', behavior: 'smooth' })
-  }
-}
-
-/**
- * Drawer header — drawer-redesign refinement (canary feedback).
+ * Drawer header — drawer-redesign refinement (TARGET-led identity).
  *
- * Founder canary review (drawer redesign refinements §Header restructure)
- * promotes status + confidence from the OVERVIEW body section to the
- * SOURCE row's top-right corner, alongside the close button. The
- * status word ("Approved", "Needs Review", …) is dropped from
- * user-visible text — the dot color carries the status signal and a
- * `title=` attribute exposes the word for hover/screen-reader access.
+ * Founder canary review converged on a TARGET-led mental model: the
+ * list view is target-table-grouped and the user clicks a row anchored
+ * on the target field name. The drawer leads with the target field as
+ * the subject ("you are building this target field"); source details
+ * render as the first body section describing how the target gets
+ * filled.
  *
- *   SOURCE                                          ●  92%   ✕
- *   [srcTable] srcField                  (+N sources chip if Rule 3/4)
- *   TARGET
- *   [tgtTable] tgtField
+ *   [tgtTable] tgtField                ●  Approved   ✕
  *
- * The body's leading OVERVIEW section is removed entirely (its
- * remaining payload — type compatibility + AI reasoning — moves to a
- * new ANALYSIS section in the body). Status + confidence land in the
- * header so the at-a-glance answer (status, confidence) sits with
- * identity at the top of the drawer.
+ * Single-row identity. No SOURCE row in the header — sources move to
+ * the body's first section (renamed `SOURCE`, singular). No "TARGET"
+ * label — the row itself is the target identity, no labelling
+ * required at this level.
  *
- * All identity fields render at `text-base font-mono font-normal`
- * (weight dropped from `font-semibold` per the prior pass — drawer
- * source/target now match the list-view source/target weight, and the
- * SOURCE / TARGET small-caps labels carry section emphasis on their
- * own).
+ * Status badge composition:
+ *   • mapped / VA: dot + sentence-case status word ("Approved",
+ *     "Needs review", "Rejected"), color-matched.
+ *   • Rule 5 (target_acknowledged): dot + "Acknowledged" word
+ *     (slate hue, separate from the migration-074 storage status).
+ *   • Rule 6 (unmapped): badge entirely suppressed — only the close
+ *     button renders.
  *
- * Sticky vs. scroll-with-body: the header is intentionally NOT sticky —
- * canary screenshots confirmed the drawer body has ample empty space
- * below the Transformation section on most rows, so pinning the header
- * costs more than it saves.
+ * Confidence: NOT in the header. The per-source SOURCE section
+ * carries it (color-banded, restored on Rule 1 too — the drawer
+ * needs a confidence number somewhere, and per-source adjacency to
+ * the source identity reads cleaner than a header-level number that
+ * would have to compete with the status word for vertical real
+ * estate).
+ *
+ * Sticky vs. scroll-with-body: the header is intentionally NOT
+ * sticky — the body has ample empty space on most rows, and pinning
+ * a 50-60px header costs more than it saves.
+ *
+ * Identity field renders at `font-mono text-base font-normal text-
+ * slate-900`, matching the list-view source/target weight.
  */
 function DrawerHeader({
   row,
@@ -1144,173 +1141,29 @@ function DrawerHeader({
       data-testid="mapping-drawer-header"
       className="border-b border-slate-200 bg-white px-5 py-4"
     >
-      <HeaderIdentitySection
-        kind="source"
-        label="SOURCE"
-        labelTestId="mapping-drawer-header-source-label"
-        onClose={onClose}
-        // Drawer redesign refinements §1: status + confidence move
-        // from the OVERVIEW body section to the SOURCE row's
-        // top-right corner. Suppressed entirely for Rule 6 unmapped
-        // rows (no status to surface, no confidence available).
-        rightSlot={
-          row.kind !== 'unmapped' ? <HeaderStatusBadge row={row} /> : null
-        }
-      >
-        <HeaderSourceIdentity row={row} />
-      </HeaderIdentitySection>
-
-      <HeaderIdentitySection
-        kind="target"
-        label="TARGET"
-        labelTestId="mapping-drawer-header-target-label"
+      <div
+        data-testid="mapping-drawer-header-row"
+        className="flex items-center justify-between gap-3"
       >
         <HeaderTargetIdentity row={row} titleId={titleId} />
-      </HeaderIdentitySection>
+        <div className="flex flex-shrink-0 items-center gap-3">
+          {row.kind !== 'unmapped' ? <HeaderStatusBadge row={row} /> : null}
+          <button
+            type="button"
+            onClick={onClose}
+            aria-label="Close drawer"
+            data-testid="mapping-drawer-close"
+            className={cn(
+              'inline-flex h-6 w-6 flex-shrink-0 items-center justify-center rounded-md',
+              'text-slate-400 transition-colors hover:bg-slate-100 hover:text-slate-700',
+              'focus:outline-none focus-visible:ring-2 focus-visible:ring-slate-300',
+            )}
+          >
+            <X className="h-3.5 w-3.5" />
+          </button>
+        </div>
+      </div>
     </header>
-  )
-}
-
-/**
- * Wraps a header identity row (SOURCE or TARGET): small-caps label on
- * top, identity content beneath. The SOURCE variant carries the close
- * button (right-aligned on the same row as the label) and an optional
- * `rightSlot` (drawer redesign §Header restructure — used for the
- * `HeaderStatusBadge`) so the status + confidence + close-X cluster
- * sits together in the canonical top-right corner.
- */
-function HeaderIdentitySection({
-  kind,
-  label,
-  labelTestId,
-  onClose,
-  rightSlot,
-  children,
-}: {
-  kind: 'source' | 'target'
-  label: string
-  labelTestId: string
-  onClose?: () => void
-  rightSlot?: React.ReactNode
-  children: React.ReactNode
-}) {
-  return (
-    <div className={kind === 'target' ? 'mt-4' : undefined}>
-      <div
-        className="mb-1 flex items-center justify-between gap-2"
-        data-testid={
-          kind === 'source' ? 'mapping-drawer-header-source-row' : undefined
-        }
-      >
-        <span
-          className="text-xs font-medium uppercase tracking-wide text-slate-500"
-          data-testid={labelTestId}
-        >
-          {label}
-        </span>
-        {rightSlot || onClose ? (
-          <div className="flex items-center gap-2">
-            {rightSlot}
-            {onClose ? (
-              <button
-                type="button"
-                onClick={onClose}
-                aria-label="Close drawer"
-                data-testid="mapping-drawer-close"
-                className={cn(
-                  'inline-flex h-6 w-6 flex-shrink-0 items-center justify-center rounded-md',
-                  'text-slate-400 transition-colors hover:bg-slate-100 hover:text-slate-700',
-                  'focus:outline-none focus-visible:ring-2 focus-visible:ring-slate-300',
-                )}
-              >
-                <X className="h-3.5 w-3.5" />
-              </button>
-            ) : null}
-          </div>
-        ) : null}
-      </div>
-      {children}
-    </div>
-  )
-}
-
-/**
- * Source-side identity. Renders an em-dash placeholder for VA / Rule 5 /
- * Rule 6 (no source); for mapped rows dispatches on the classifier rule
- * (Q11.H — dominant only on Rule 3/4 with `+N sources` chip; Rule 2
- * collapses fields with comma-truncation; Rule 1 single source field +
- * badge).
- *
- * Identity sizing settled at `text-base font-normal` per Refinement 4 —
- * the bump to `text-base` (from `text-sm` in the compressed header) gives
- * the field its visual weight; the SOURCE / TARGET small-caps labels
- * provide section emphasis. Source and target render identically, matching
- * the parallel font-alignment lock in the 4-polish-1 list view.
- */
-function HeaderSourceIdentity({ row }: { row: MappingRow }) {
-  if (row.kind !== 'mapped' || row.sources.length === 0) {
-    return (
-      <span
-        className="font-mono text-base text-slate-400"
-        data-testid="mapping-drawer-header-source-empty"
-        aria-label="no source"
-      >
-        —
-      </span>
-    )
-  }
-  const rule = classifyMappedRow(row.sources)
-  if (rule === 'rule_2') {
-    // Multi-source same-table: comma-join field names with truncation,
-    // single badge.
-    const fieldList = row.sources.map((s) => s.sourceField.name).join(', ')
-    return (
-      <div
-        className="flex min-w-0 items-center gap-2"
-        data-testid="mapping-drawer-header-source"
-      >
-        <TableBadge tableName={row.sources[0]!.sourceTable.name} size="sm" />
-        <span
-          className="min-w-0 truncate font-mono text-base font-normal text-slate-900"
-          title={fieldList}
-        >
-          {fieldList}
-        </span>
-      </div>
-    )
-  }
-  // Rule 1, 3, 4 — show dominant source only. Rule 3 / 4 add a `+N sources`
-  // chip linking to the body Sources section (Q11.H lock).
-  const dominant = row.sources[0]!
-  const overflow = row.sources.length - 1
-  return (
-    <div
-      className="flex min-w-0 items-center gap-2"
-      data-testid="mapping-drawer-header-source"
-    >
-      <TableBadge tableName={dominant.sourceTable.name} size="sm" />
-      <span
-        className="min-w-0 flex-1 truncate font-mono text-base font-normal text-slate-900"
-        title={dominant.sourceField.name}
-      >
-        {dominant.sourceField.name}
-      </span>
-      {overflow > 0 ? (
-        <button
-          type="button"
-          onClick={scrollToSourcesSection}
-          data-testid="mapping-drawer-header-sources-chip"
-          aria-label={`Show ${overflow} additional source${overflow === 1 ? '' : 's'} in body`}
-          className={cn(
-            'inline-flex flex-shrink-0 items-center rounded bg-slate-100 px-1.5 py-0.5',
-            'text-[10px] font-medium text-slate-600 transition-colors hover:bg-slate-200',
-            'focus:outline-none focus-visible:ring-2 focus-visible:ring-slate-300',
-          )}
-        >
-          +{overflow} sources
-        </button>
-      ) : null}
-    </div>
   )
 }
 
@@ -1346,53 +1199,65 @@ function HeaderTargetIdentity({
 }
 
 /**
- * Status dot used by `HeaderStatusBadge` (drawer redesign §1).
+ * Status dot used by `HeaderStatusBadge` (drawer redesign — TARGET-led
+ * identity).
  *
- * Renders a 8×8 colored disc carrying the per-status palette from
- * `DRAWER_STATUS_CONFIG`. The dot color is the only visual signal of
- * status — the user-visible status word ("Approved", "Needs Review",
- * "Rejected", "Acknowledged") was dropped from the header per founder
- * canary lock. The status word is still exposed via the `title=`
- * attribute and `aria-label` for hover tooltip + screen reader access.
+ * Renders a small colored disc carrying a hue that visually pairs
+ * with the adjacent status word. The dot is decorative — the visible
+ * word carries the semantic signal — but the dot's color is still
+ * load-bearing for at-a-glance scanning.
+ *
+ * The testid disambiguator (`mapping-drawer-header-status-${variant}`)
+ * is the surface tests use to assert which palette the badge picked.
+ * For mapped/VA rows, `variant` is the row.status enum; for Rule 5
+ * acknowledged it's the literal `'acknowledged'` string (which is NOT
+ * a status enum value but a UI presentation token).
  */
-function HeaderStatusDot({ status }: { status: MappingRow['status'] }) {
-  const cfg = DRAWER_STATUS_CONFIG[status]
+function HeaderStatusDot({
+  variant,
+  label,
+  dotClassName,
+}: {
+  variant: string
+  label: string
+  dotClassName: string
+}) {
   return (
     <span
-      data-testid={`mapping-drawer-header-status-${status}`}
-      aria-label={cfg.label}
-      title={cfg.label}
+      data-testid={`mapping-drawer-header-status-${variant}`}
+      aria-label={label}
+      title={label}
       className="inline-flex flex-shrink-0 items-center"
     >
       <span
         aria-hidden="true"
-        className={cn('h-2 w-2 flex-shrink-0 rounded-full', cfg.dotClassName)}
+        className={cn('h-2 w-2 flex-shrink-0 rounded-full', dotClassName)}
       />
     </span>
   )
 }
 
 /**
- * Status + confidence badge in the header's SOURCE row top-right
- * (drawer redesign refinements §1).
+ * Status badge in the header's SOURCE row top-right (drawer redesign
+ * — TARGET-led identity).
  *
- * Layout: `● 92%` — a colored status dot followed by the
- * integer-rounded confidence percent. The status word is intentionally
- * suppressed from user-visible text; it is exposed via the dot's
- * `title=` attribute (hover tooltip) and `aria-label` (screen readers).
+ * Layout: `● Approved` — a colored status dot followed by the
+ * sentence-case status word. The badge is the drawer's only status
+ * surface (the prior pass put the confidence percent here; this
+ * iteration drops it — the per-source SOURCE section now carries
+ * confidence). Word + dot share a hue so the badge reads as a single
+ * colored token.
  *
  * Status mapping by row.kind:
- *   • `mapped` / `value_assignment`: row.status drives the dot color.
- *   • `target_acknowledged` (Rule 5): forced to `'approved'` so the
- *     dot reads as a filled green dot, matching 4-polish-1's lock that
- *     acknowledged rows surface as "all clear / no action needed".
- *   • `unmapped` (Rule 6): handled by the caller — the entire badge is
- *     suppressed and only the close button renders. There is no
- *     status to surface and no confidence to display.
- *
- * Confidence is rendered only when `row.confidence` is non-null.
- * Acknowledged rows have `confidence === null` so the badge degrades to
- * dot-only for that row kind.
+ *   • `mapped` / `value_assignment`: row.status drives variant +
+ *     palette via `DRAWER_STATUS_CONFIG`. Sentence-case labels:
+ *     "Approved", "Needs review", "Rejected".
+ *   • `target_acknowledged` (Rule 5): rendered as the dedicated
+ *     "Acknowledged" presentation token (slate hue throughout) —
+ *     not the row's `status: 'approved'` payload, which is a
+ *     migration-074 storage detail, not a UI signal.
+ *   • `unmapped` (Rule 6): handled by the caller — the entire badge
+ *     is suppressed and only the close button renders.
  */
 function HeaderStatusBadge({
   row,
@@ -1400,24 +1265,26 @@ function HeaderStatusBadge({
   row: MappedRow | ValueAssignmentRow | TargetAcknowledgedRow
 }) {
   const isAcknowledged = row.kind === 'target_acknowledged'
-  const dotStatus: MappingRow['status'] = isAcknowledged
-    ? 'approved'
-    : row.status
-  const confidence = isAcknowledged ? null : row.confidence
+  const variant = isAcknowledged ? 'acknowledged' : row.status
+  const cfg = isAcknowledged
+    ? ACKNOWLEDGED_BADGE_CONFIG
+    : DRAWER_STATUS_CONFIG[row.status]
   return (
     <span
       data-testid="mapping-drawer-header-status-badge"
       className="inline-flex items-center gap-1.5 text-sm font-medium"
     >
-      <HeaderStatusDot status={dotStatus} />
-      {confidence !== null ? (
-        <span
-          className="tabular-nums text-slate-700"
-          data-testid="mapping-drawer-header-status-percent"
-        >
-          {formatConfidencePercent(confidence)}
-        </span>
-      ) : null}
+      <HeaderStatusDot
+        variant={variant}
+        label={cfg.label}
+        dotClassName={cfg.dotClassName}
+      />
+      <span
+        className={cfg.wordClassName}
+        data-testid="mapping-drawer-header-status-word"
+      >
+        {cfg.label}
+      </span>
     </span>
   )
 }
@@ -1669,6 +1536,12 @@ function DrawerEmptyState({
 
 type DrawerStatus = MappingRow['status']
 
+// Drawer redesign — TARGET-led identity (this iteration): the status
+// badge in the header now renders `[dot] [word]` (no confidence
+// percent). Labels are sentence-case to match founder spec
+// ("Needs review" not "Needs Review"). `wordClassName` carries the
+// hue that matches the dot — the badge reads as a single colored
+// token rather than a dot disconnected from a slate word.
 const DRAWER_STATUS_CONFIG: Record<
   DrawerStatus,
   { label: string; dotClassName: string; wordClassName: string }
@@ -1679,7 +1552,7 @@ const DRAWER_STATUS_CONFIG: Record<
     wordClassName: 'text-green-700',
   },
   needs_review: {
-    label: 'Needs Review',
+    label: 'Needs review',
     dotClassName: 'bg-amber-400',
     wordClassName: 'text-amber-700',
   },
@@ -1694,6 +1567,19 @@ const DRAWER_STATUS_CONFIG: Record<
     wordClassName: 'text-slate-500',
   },
 }
+
+// Drawer redesign — TARGET-led identity (this iteration): Rule 5
+// (target_acknowledged) is not a `MappingRow['status']` value — its
+// `row.status === 'approved'` per the type definition (migration 074
+// step 3c) — so the header badge surfaces it as a separate
+// "Acknowledged" presentation token. Slate hue throughout (dot +
+// word) reads as "intentional non-mapping / signed off" rather than
+// the green "approved mapping" affirmation.
+const ACKNOWLEDGED_BADGE_CONFIG = {
+  label: 'Acknowledged',
+  dotClassName: 'bg-slate-400',
+  wordClassName: 'text-slate-700',
+} as const
 
 // ── Rule 5 — Target Acknowledged ───────────────────────────────────────────
 //
@@ -1787,7 +1673,7 @@ function UnmappedBody({
 }: UnmappedBodyProps) {
   return (
     <>
-      <DrawerSection title="Sources" testId={SOURCES_SECTION_TESTID}>
+      <DrawerSection title="Source" testId={SOURCE_SECTION_TESTID}>
         {isFormActive && projectId ? (
           <CreateMappingForm
             ref={formRef}
@@ -1834,7 +1720,7 @@ function UnmappedBody({
 function ValueAssignmentBody({ row }: { row: ValueAssignmentRow }) {
   return (
     <>
-      <DrawerSection title="Sources" testId={SOURCES_SECTION_TESTID}>
+      <DrawerSection title="Source" testId={SOURCE_SECTION_TESTID}>
         <DrawerEmptyState
           text="Value assignment — no sources"
           testId="drawer-va-no-sources"
@@ -2011,8 +1897,8 @@ function MappedBody({
   return (
     <>
       <DrawerSection
-        title="Sources"
-        testId={SOURCES_SECTION_TESTID}
+        title="Source"
+        testId={SOURCE_SECTION_TESTID}
         headerAside={
           showEditPencil && !editFormActive ? (
             <EditPencilButton onClick={onEditClick} />
@@ -2124,23 +2010,19 @@ function EditPencilButton({ onClick }: { onClick: () => void }) {
  */
 function SourcesRoster({ row }: { row: MappedRow }) {
   const isMultiSource = row.sources.length >= 2
-  // Refinement 5 (canary feedback): the per-source confidence percent
-  // duplicates the row-level aggregate that now sits in Overview. For
-  // Rule 1 single-source rows the two values are identical by
-  // construction (one source = one confidence = the row), so the
-  // drawer reads the same number twice. Multi-source rows keep the
-  // per-source confidence — each source carries its own confidence
-  // distinct from the row aggregate, so the value is informative.
-  const showPerSourceConfidence = isMultiSource
+  // Drawer redesign — TARGET-led identity (this iteration): per-source
+  // confidence is restored on ALL rows, including Rule 1 single-source.
+  // The header now leads with the target field and carries no
+  // confidence number; the per-source percent here is the only
+  // confidence display in the drawer, so it must show on Rule 1 too.
+  // The minor redundancy with the list view's right-edge confidence
+  // column on Rule 1 is acceptable — adjacency to the source identity
+  // makes the number meaningful in context.
   return (
     <>
       <ul className="space-y-3" data-testid="drawer-sources-list">
         {row.sources.map((source) => (
-          <SourceCard
-            key={source.id}
-            source={source}
-            showConfidence={showPerSourceConfidence}
-          />
+          <SourceCard key={source.id} source={source} />
         ))}
       </ul>
       {isMultiSource ? (
@@ -2167,33 +2049,38 @@ function SourcesRoster({ row }: { row: MappedRow }) {
 }
 
 /**
- * Per-source card — drawer-redesign refinement (canary feedback).
+ * Per-source card — drawer-redesign refinement (TARGET-led identity).
  *
- *   [srcTable] field_name                              confidence?
+ *   [srcTable] field_name                              confidence%
  *   (join: fk_field)                                   (when present)
  *
- * Refinement 5 (per-source confidence): `showConfidence` is gated by
- * the parent. Rule 1 (single source) hides the per-source percent —
- * the header status badge already exposes the row-level confidence,
- * which equals the single source's value by construction. Rule 2/3/4
- * (multi-source) keeps the per-source percent because each source
- * carries its own distinct confidence distinct from the row aggregate.
+ * Drawer redesign — TARGET-led identity (this iteration): per-source
+ * confidence is restored on ALL rows, including Rule 1 single-source.
+ * The header now leads with the target field and carries no
+ * confidence number, so the per-source percent here is the drawer's
+ * only confidence surface. Color-banded via `classifyRowConfidence`
+ * (≥85 high/green-medium, 40-84 amber, <40 low/red) — the same
+ * thresholds the list view's `ConfidenceCell` uses, which keeps the
+ * two surfaces semantically aligned.
  *
- * Drawer redesign refinements §2/§3: SOURCES is now identity-only.
- * Type compatibility moves to ANALYSIS (Refinement 4); per-source
- * sample values move to the standalone SAMPLE VALUES section
- * (Refinement 3, with collapsible per-source field blocks). Per-source
- * AI reasoning is aggregated and rendered in ANALYSIS — `<SourceCard>`
+ * Drawer redesign refinements §2/§3: SOURCE is identity-only.
+ * Type compatibility lives in ANALYSIS; per-source sample values
+ * move to the standalone SAMPLE VALUES section. Per-source AI
+ * reasoning is aggregated and rendered in ANALYSIS — `<SourceCard>`
  * does not render `source.aiReasoning` or `source.sampleValues`
  * directly.
  */
-function SourceCard({
-  source,
-  showConfidence,
-}: {
-  source: MappingSourceRef
-  showConfidence: boolean
-}) {
+const SOURCE_CONFIDENCE_BAND_CLASSNAME: Record<RowConfidenceBand, string> = {
+  high: 'text-green-600 font-medium',
+  amber: 'text-amber-600',
+  low: 'text-red-600',
+}
+
+function SourceCard({ source }: { source: MappingSourceRef }) {
+  const confidenceBand: RowConfidenceBand | null =
+    source.confidence === null
+      ? null
+      : classifyRowConfidence(source.confidence)
   return (
     <li className="space-y-2" data-testid="drawer-source-card">
       <div className="flex min-w-0 items-center gap-2">
@@ -2205,14 +2092,18 @@ function SourceCard({
         >
           {source.sourceField.name}
         </span>
-        {showConfidence ? (
-          <span
-            className="flex-shrink-0 tabular-nums text-xs text-slate-500"
-            data-testid="drawer-source-confidence"
-          >
-            {formatConfidencePercent(source.confidence)}
-          </span>
-        ) : null}
+        <span
+          className={cn(
+            'flex-shrink-0 text-sm font-medium tabular-nums',
+            confidenceBand !== null
+              ? SOURCE_CONFIDENCE_BAND_CLASSNAME[confidenceBand]
+              : 'text-slate-500',
+          )}
+          data-testid="drawer-source-confidence"
+          data-confidence-band={confidenceBand ?? 'none'}
+        >
+          {formatConfidencePercent(source.confidence)}
+        </span>
       </div>
 
       {source.joinAnnotation ? (
@@ -2367,8 +2258,8 @@ function SampleValuesFieldBlock({
             <div
               key={`${idx}-${value}`}
               className={cn(
-                'border-b border-slate-100 py-2 last:border-b-0',
-                'break-words font-mono text-sm text-slate-700',
+                'border-b border-slate-100 py-1 last:border-b-0',
+                'break-words font-mono text-xs text-slate-700',
               )}
               data-testid="drawer-sample-values-row"
             >
