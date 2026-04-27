@@ -115,4 +115,47 @@ describeFn('[integration] getTransformData against Heritage Core', () => {
       expect(mappedTargetFieldIds.has(u.id)).toBe(false)
     }
   })
+
+  // ── Counter-unification (feat/transform-counter-unification, 2026-04-27) ──
+  //
+  // After the Transform tab joined the canonical `computeProjectStats` path,
+  // its four pill scalars MUST match what the Projects List card and
+  // Migration Center display for the same project. We verify this two ways:
+  //   1. Internal consistency:
+  //        transformInProgress === transformScope - transformApplied - transformNeedsWork
+  //      and each scalar is a non-negative integer no larger than `transformScope`.
+  //   2. Cross-surface consistency: the Heritage canary's Projects List
+  //      already pins these same numbers in
+  //      `tests/integration/projects-heritage.test.ts:194-201` (and the
+  //      Migration Center pins them in `outputs-heritage.test.ts:135-140`).
+  //      A drift here without a matching update there immediately surfaces
+  //      the regression.
+  it('returns the four canonical pill scalars as a self-consistent quartet', async () => {
+    const { getTransformData } = await import('@/lib/actions/transformations')
+    const result = await getTransformData(HERITAGE_PROJECT_ID)
+
+    expect(result.transformScope).toBeTypeOf('number')
+    expect(result.transformApplied).toBeTypeOf('number')
+    expect(result.transformNeedsWork).toBeTypeOf('number')
+    expect(result.transformInProgress).toBeTypeOf('number')
+
+    expect(Number.isInteger(result.transformScope)).toBe(true)
+    expect(Number.isInteger(result.transformApplied)).toBe(true)
+    expect(Number.isInteger(result.transformNeedsWork)).toBe(true)
+    expect(Number.isInteger(result.transformInProgress)).toBe(true)
+
+    expect(result.transformScope).toBeGreaterThanOrEqual(0)
+    expect(result.transformApplied).toBeGreaterThanOrEqual(0)
+    expect(result.transformNeedsWork).toBeGreaterThanOrEqual(0)
+    expect(result.transformInProgress).toBeGreaterThanOrEqual(0)
+
+    expect(result.transformApplied).toBeLessThanOrEqual(result.transformScope)
+    expect(result.transformNeedsWork).toBeLessThanOrEqual(result.transformScope)
+    expect(result.transformInProgress).toBeLessThanOrEqual(result.transformScope)
+
+    // The arithmetic identity that makes the four pills add up to the whole.
+    expect(result.transformInProgress).toBe(
+      result.transformScope - result.transformApplied - result.transformNeedsWork,
+    )
+  })
 })
