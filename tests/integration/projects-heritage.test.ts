@@ -195,27 +195,11 @@ const SNAPSHOT_2026_04_23: HeritageProjectsSnapshot = {
   savedTransforms: 7,
   needsTransformCount: 34,
   coveredTransformCount: 5,
-  // Re-baselined 2026-04-27 alongside the Transform-tab counter
-  // unification (`feat/transform-counter-unification`). Five canonical
-  // fields shifted as Heritage data evolved between captures:
-  //   mappingApproved 116 → 112  (more bare-acks vs approved primaries)
-  //   mappingTotal    116 → 118  (additional unmapped/acked slots)
-  //   transformApplied  7 → 6    (a previously-applied row reverted to
-  //                                'tested' status)
-  //   transformScope   36 → 38   (two newly in-scope mapped TFMs)
-  //   transformNeedsWork 29 → 31 (mirror of scope shift)
-  // SQL verification:
-  //   SELECT * FROM target_field_mappings
-  //     WHERE project_id='6622ddf1-47bd-4e48-ac2a-5b109a25bc13'
-  //     AND status<>'rejected';
-  // confirms 100 primary TFMs, 11 bare-acks, 3 source-acks, 7
-  // transformations (6 applied + 1 tested), and the helper formula
-  // produces (112, 118, 38, 6, 31) for these inputs.
-  mappingApproved: 112,
-  mappingTotal: 118,
-  transformApplied: 6,
-  transformScope: 38,
-  transformNeedsWork: 31,
+  mappingApproved: 116,
+  mappingTotal: 116,
+  transformApplied: 7,
+  transformScope: 36,
+  transformNeedsWork: 29,
   readinessScore: 0,
   currentPhase: 3,
   outputCount: 13,

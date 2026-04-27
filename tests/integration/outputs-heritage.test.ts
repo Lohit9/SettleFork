@@ -132,43 +132,19 @@ const SNAPSHOT_2026_04_22 = {
       warnings: 5,
       staging: 10,
     },
-    // Re-baselined 2026-04-27 alongside the Transform-tab counter
-    // unification (`feat/transform-counter-unification`). The four
-    // canonical-stats fields below + `fieldsNeedingTransformWork`
-    // (`stats.transformNeedsWork`) are the same ones the Transform tab
-    // and Projects List now read from `computeProjectStats`. Heritage
-    // data has evolved since the 2026-04-22 capture:
-    //   approvedFieldMappings  116 → 112  (more bare-acks vs approved)
-    //   totalFieldMappings     116 → 118  (additional unmapped/acked slots)
-    //   completedTransforms      3 →   6  (more rows reached 'applied')
-    //   totalTransforms         58 →  38  (transformations dismissed via
-    //                                      needs_transformation=false fall
-    //                                      out of scope)
-    //   fieldsNeedingTransformWork 55 → 31 (mirror of scope shift)
-    // SQL verification:
-    //   SELECT * FROM target_field_mappings
-    //     WHERE project_id='6622ddf1-47bd-4e48-ac2a-5b109a25bc13'
-    //     AND status<>'rejected';
-    // confirms 100 primary TFMs, 11 bare-acks, 3 source-acks, 7
-    // transformations (6 applied + 1 tested); the canonical helper
-    // produces (112, 118, 38, 6, 31). Other fields in this snapshot
-    // (openBlocking, blockingIssues, readinessScore, etc.) are NOT
-    // derived from the unification path and are intentionally left at
-    // their 2026-04-22 values; if the integration suite is rerun and
-    // those fail, refresh them in a separate baseline commit.
-    approvedFieldMappings: 112,
-    totalFieldMappings: 118,
+    approvedFieldMappings: 116,
+    totalFieldMappings: 116,
     openBlocking: 39,
     openWarnings: 0,
-    completedTransforms: 6,
-    totalTransforms: 38,
+    completedTransforms: 3,
+    totalTransforms: 58,
     stagedTables: 8,
     totalTargetTables: 8,
   },
   outstanding: {
     unmappedSourceFields: 0,
     blockingIssues: 39,
-    fieldsNeedingTransformWork: 31,
+    fieldsNeedingTransformWork: 55,
     untestedTransforms: 0,
     testedTransforms: 0,
   },

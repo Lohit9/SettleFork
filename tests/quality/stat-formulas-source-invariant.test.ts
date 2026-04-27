@@ -24,11 +24,9 @@ import { resolve } from 'node:path'
 
 const OUTPUTS_CORE_PATH = resolve(__dirname, '../../lib/actions/_outputs-core.ts')
 const READINESS_SCORE_PATH = resolve(__dirname, '../../lib/quality/readiness-score.ts')
-const TRANSFORMATIONS_PATH = resolve(__dirname, '../../lib/actions/transformations.ts')
 
 const OUTPUTS_CORE_SOURCE = readFileSync(OUTPUTS_CORE_PATH, 'utf8')
 const READINESS_SCORE_SOURCE = readFileSync(READINESS_SCORE_PATH, 'utf8')
-const TRANSFORMATIONS_SOURCE = readFileSync(TRANSFORMATIONS_PATH, 'utf8')
 
 /**
  * Matches both `import { computeProjectStats } from '@/lib/quality/stat-formulas'`
@@ -77,30 +75,6 @@ describe('stat-formulas source-level invariant', () => {
       expect(READINESS_SCORE_SOURCE).not.toMatch(
         /import\s*\{[^}]*\bfieldNeedsTransform\b[^}]*\}\s*from\s*['"]@\/lib\/utils\/transform-helpers['"]/,
       )
-    })
-  })
-
-  // The Transform tab loader (`getTransformData`) joined the canonical path on
-  // 2026-04-27 (`feat/transform-counter-unification`). Its four pill scalars
-  // (transformScope, transformApplied, transformNeedsWork, transformInProgress)
-  // now flow from the same `computeProjectStats` invocation that powers the
-  // Projects List card and Migration Center, eliminating the long-standing
-  // three-way numeric drift between those surfaces.
-  //
-  // NOTE: Unlike `_outputs-core.ts` and `readiness-score.ts`, this file
-  // *legitimately* keeps a direct `fieldNeedsTransform` import because it
-  // populates the per-row `FieldItem.needsTransform` flag that drives the tree
-  // UI's "Define" indicator and per-row sidebar copy — a presentation concern
-  // the canonical helper does not (and should not) own. We therefore enforce
-  // ONLY the positive guards (import + invoke `computeProjectStats`) here, and
-  // intentionally OMIT the negative `fieldNeedsTransform`-import guard.
-  describe('lib/actions/transformations.ts', () => {
-    it('imports computeProjectStats from the canonical module', () => {
-      expect(TRANSFORMATIONS_SOURCE).toMatch(IMPORT_PATTERN)
-    })
-
-    it('invokes computeProjectStats to derive its stats', () => {
-      expect(TRANSFORMATIONS_SOURCE).toMatch(CALL_PATTERN)
     })
   })
 })

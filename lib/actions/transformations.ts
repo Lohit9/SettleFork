@@ -99,7 +99,6 @@ import { extractTransformSQL } from '@/lib/ai/sql-extractor'
 import { checkAIRateLimit } from '@/lib/ai/rate-limit'
 import { buildAIContext, formatFieldForPrompt, formatDocumentsForPrompt } from '@/lib/ai/context-builder'
 import { fieldNeedsTransform, wrapFieldRefsInJsonb } from '@/lib/utils/transform-helpers'
-import { computeProjectStats } from '@/lib/quality/stat-formulas'
 import { buildJoinSpec } from '@/lib/utils/transform-cross-table'
 import { logActivity } from '@/lib/actions/activity-log'
 import { assertMappingWritesEnabled } from '@/lib/auth/mapping-writes'
@@ -247,21 +246,6 @@ export interface TransformPageData {
   hasMappings: boolean
   unmappedNotNullTargetFields: UnmappedTargetField[]
   unmappedNullableTargetFields: UnmappedTargetField[]
-  /**
-   * Canonical transform-progress scalars (server-computed via
-   * `computeProjectStats` from `lib/quality/stat-formulas.ts`). Feed these
-   * directly to `<TransformStatPills>`; the same helper backs the Projects
-   * Dashboard card and Migration Center, so all three surfaces report the
-   * same numbers for the same project state.
-   *
-   * `transformInProgress = transformScope - transformApplied - transformNeedsWork`
-   * is the count of in-scope TFMs whose transformation row exists with a
-   * non-applied status (draft/tested).
-   */
-  transformScope: number
-  transformApplied: number
-  transformNeedsWork: number
-  transformInProgress: number
 }
 
 // ─── Guard wiring helper ─────────────────────────────────────────────────────
@@ -541,10 +525,6 @@ export async function getTransformData(
     hasMappings: false,
     unmappedNotNullTargetFields: [],
     unmappedNullableTargetFields: [],
-    transformScope: 0,
-    transformApplied: 0,
-    transformNeedsWork: 0,
-    transformInProgress: 0,
   }
   if (!user) return empty
 
@@ -571,48 +551,28 @@ export async function getTransformData(
     ]),
   )
 
-  // ── 2. Tables + target_field_mappings + canonical-stats inputs ───────────
-  //
-  // The first two queries feed the FieldItem tree (Transform tab UI). The
-  // last three (`datasets`, `sourceAcks`, `qualityIssues`) feed the
-  // canonical `computeProjectStats` helper so the four pill scalars
-  // (`transformScope` / `transformApplied` / `transformNeedsWork` /
-  // `transformInProgress`) match the Migration Center and Projects List
-  // surfaces exactly. Same parallel batch — no extra round-trip.
-  const [tablesRes, tfmsRes, datasetsRes, sourceAcksRes, qualityIssuesRes] =
-    await Promise.all([
-      supabase
-        .from('tables')
-        .select('id, name, dataset_id, datasets(id, name, role)')
-        .in('id', allTableIds),
-      // Match canonical helper scope: include bare-ack TFMs in the result
-      // so `computeProjectStats` sees them, then filter them out of the
-      // FieldItem-construction loop below (bare-acks have no MS row and
-      // would otherwise misclassify as VAs and surface in the tree).
-      supabase
-        .from('target_field_mappings')
-        .select('*')
-        .eq('project_id', projectId)
-        .neq('status', 'rejected')
-        .returns<TargetFieldMappingRow[]>(),
-      supabase.from('datasets').select('id, role').eq('project_id', projectId),
-      supabase
-        .from('source_field_acknowledgments')
-        .select('source_field_id')
-        .eq('project_id', projectId),
-      supabase
-        .from('quality_issues')
-        .select(
-          'status, stage, severity, field_id, issue_kind, description, title',
-        )
-        .eq('project_id', projectId),
-    ])
+  // ── 2. Tables + target_field_mappings + mapping_sources + transformations ─
+  const [tablesRes, tfmsRes, msRes] = await Promise.all([
+    supabase
+      .from('tables')
+      .select('id, name, dataset_id, datasets(id, name, role)')
+      .in('id', allTableIds),
+    supabase
+      .from('target_field_mappings')
+      .select('*')
+      .eq('project_id', projectId)
+      .neq('status', 'rejected')
+      .eq('is_acknowledged', false)
+      .returns<TargetFieldMappingRow[]>(),
+    // A deliberate two-step join: mapping_sources → TFMs → project. We pre-
+    // filtered TFMs by project/status above, so scoping MS by the resulting
+    // tfmIds below is cheaper and clearer than an inline join.
+    Promise.resolve(null),
+  ])
 
   const tables = tablesRes.data ?? []
   const tfms = (tfmsRes.data ?? []) as TargetFieldMappingRow[]
-  const allProjectDatasets = datasetsRes.data ?? []
-  const sourceAckRows = sourceAcksRes.data ?? []
-  const qualityIssueRows = qualityIssuesRes.data ?? []
+  void msRes
 
   if (tfms.length === 0) {
     // No TFMs means no mappings for this project. `hasMappings: true` stays
@@ -622,38 +582,12 @@ export async function getTransformData(
   }
 
   const tfmIds = tfms.map((t) => t.id)
-  const allDatasetIds = allProjectDatasets.map((d) => d.id)
-  const sourceDatasetIdSet = new Set(
-    allProjectDatasets.filter((d) => d.role === 'source').map((d) => d.id),
-  )
-  const targetDatasetIdSet = new Set(
-    allProjectDatasets.filter((d) => d.role === 'target').map((d) => d.id),
-  )
 
-  // Pull mapping_sources alongside the project's full table inventory.
-  // The latter widens the per-TFM source/target-fields fetches below to
-  // every field in every source/target dataset table — the canonical
-  // helper needs both universes (it computes `unmappedSource` /
-  // `unmappedTarget` against them). Same parallel batch as before — the
-  // table-inventory query just rides along.
-  const [{ data: sources }, { data: allDatasetTables }] = await Promise.all([
-    supabase
-      .from('mapping_sources')
-      .select('id, target_field_mapping_id, source_field_id, source_table_id, ordinal, type_compatibility, confidence')
-      .in('target_field_mapping_id', tfmIds)
-      .order('ordinal', { ascending: true }),
-    supabase
-      .from('tables')
-      .select('id, dataset_id')
-      .in('dataset_id', allDatasetIds.length > 0 ? allDatasetIds : ['__none__']),
-  ])
-
-  const allSourceTableIds = (allDatasetTables ?? [])
-    .filter((t) => sourceDatasetIdSet.has(t.dataset_id))
-    .map((t) => t.id)
-  const allProjectTargetTableIds = (allDatasetTables ?? [])
-    .filter((t) => targetDatasetIdSet.has(t.dataset_id))
-    .map((t) => t.id)
+  const { data: sources } = await supabase
+    .from('mapping_sources')
+    .select('id, target_field_mapping_id, source_field_id, source_table_id, ordinal, type_compatibility, confidence')
+    .in('target_field_mapping_id', tfmIds)
+    .order('ordinal', { ascending: true })
 
   const allSourceFieldIds = Array.from(
     new Set(
@@ -662,38 +596,26 @@ export async function getTransformData(
         .filter((x): x is string => x != null),
     ),
   )
+  const allTargetFieldIds = Array.from(new Set(tfms.map((t) => t.target_field_id)))
 
   // ── 3. Fields, profiles, transformations ───────────────────────────────────
-  //
-  // Source / target field queries are widened to ALL fields in the project's
-  // source/target dataset tables (not just the per-TFM subset) so the same
-  // result feeds the canonical `computeProjectStats` helper below — it
-  // computes `unmappedSource` / `unmappedTarget` against the full universe.
-  // The FieldItem-construction loop continues to look up by id via
-  // `srcFieldById` / `tgtFieldById`, which works on the (now-superset) map.
-  // The widened `targetFields` also replaces the previous late-stage
-  // `allTgtFieldRows` query — the column list and ordering merge both
-  // historical SELECTs into one fetch.
   const [
     { data: sourceFields },
     { data: targetFields },
     { data: fieldProfiles },
     { data: transformations },
   ] = await Promise.all([
-    allSourceTableIds.length > 0
+    allSourceFieldIds.length > 0
       ? supabase
           .from('fields')
           .select('id, name, data_type, inferred_type, is_nullable, table_id, ordinal_position')
-          .in('table_id', allSourceTableIds)
+          .in('id', allSourceFieldIds)
           .order('ordinal_position', { ascending: true })
       : Promise.resolve({ data: [] as Array<{ id: string; name: string; data_type: string; inferred_type: string | null; is_nullable: boolean; table_id: string; ordinal_position: number }>, error: null }),
-    allProjectTargetTableIds.length > 0
-      ? supabase
-          .from('fields')
-          .select('id, name, data_type, inferred_type, is_nullable, is_primary_key, check_constraint, table_id, default_value')
-          .in('table_id', allProjectTargetTableIds)
-          .order('ordinal_position', { ascending: true })
-      : Promise.resolve({ data: [] as Array<{ id: string; name: string; data_type: string; inferred_type: string | null; is_nullable: boolean; is_primary_key: boolean; check_constraint: unknown; table_id: string; default_value: string | null }>, error: null }),
+    supabase
+      .from('fields')
+      .select('id, name, data_type, inferred_type, is_nullable, is_primary_key, check_constraint, table_id')
+      .in('id', allTargetFieldIds),
     allSourceFieldIds.length > 0
       ? supabase
           .from('field_profiles')
@@ -707,19 +629,14 @@ export async function getTransformData(
       .returns<TransformationRow[]>(),
   ])
 
-
   // ── 4. Schema documents for context ────────────────────────────────────────
-  // Scoped to datasets that participate in a non-rejected table_mapping
-  // (matches prior behavior — `tables` was already filtered to
-  // `allTableIds`). Distinct from `allDatasetIds` (every project dataset),
-  // which the canonical helper consumes above.
-  const schemaDocDatasetIds = Array.from(
+  const allDatasetIds = Array.from(
     new Set(tables.map((t) => t.dataset_id)),
   )
   const { data: schemaDocs } = await supabase
     .from('schema_documents')
     .select('extracted_text')
-    .in('dataset_id', schemaDocDatasetIds)
+    .in('dataset_id', allDatasetIds)
     .not('extracted_text', 'is', null)
 
   const schemaDocText = schemaDocs
@@ -802,14 +719,6 @@ export async function getTransformData(
   const fieldsByTmId = new Map<string, FieldItem[]>()
 
   for (const tfm of tfms) {
-    // Bare-ack TFMs (is_acknowledged=true AND combination_type IS NULL) are
-    // included in the SQL fetch so the canonical stats helper can count them
-    // toward `mappingApproved`/`acknowledgedCount`, but they have no
-    // mapping_sources row and would otherwise be misclassified as value
-    // assignments. They never surfaced as FieldItems before the SQL filter
-    // was loosened; preserve that behavior explicitly.
-    if (tfm.is_acknowledged && tfm.combination_type === null) continue
-
     const tgtField = tgtFieldById.get(tfm.target_field_id)
     if (!tgtField) continue
 
@@ -954,29 +863,22 @@ export async function getTransformData(
   void tmById // reserved for future per-TM lookups; keeps the map live.
 
   // ── Compute unmapped target fields ────────────────────────────────────────
-  // Scope: target fields in TM-referenced target tables only (preserves
-  // the previous late-stage `allTgtFieldRows` behavior). The full
-  // canonical-helper field universe lives in `targetFields` (loaded
-  // wider above); we just filter it down to the TM-referenced subset
-  // here to avoid re-querying Postgres.
   const allTargetTableIds = Array.from(new Set(tms.map((tm) => tm.target_table_id)))
-  const allTargetTableIdsSet = new Set(allTargetTableIds)
-  const allTgtFieldRows = (targetFields ?? []).filter((f) =>
-    allTargetTableIdsSet.has(f.table_id),
-  )
+  const { data: allTgtFieldRows } = await supabase
+    .from('fields')
+    .select('id, name, data_type, is_nullable, is_primary_key, table_id, check_constraint, default_value')
+    .in('table_id', allTargetTableIds.length > 0 ? allTargetTableIds : ['__none__'])
+    .order('ordinal_position', { ascending: true })
 
-  // "Mapped" = a non-rejected TFM exists for this target field. Bare-acks
-  // are non-rejected and DO claim a target_field_id, so they correctly
-  // exclude their target field from the "unmapped" buckets here — same
-  // semantics as the prior `is_acknowledged=false` SQL filter, just shifted
-  // to the post-load scope.
+  // "Mapped" = a non-rejected, non-acknowledged TFM exists for this target
+  // field. Already filtered in the tfms query above.
   const mappedTargetFieldIds = new Set(tfms.map((t) => t.target_field_id))
 
   const tgtTableNameById = new Map(
-    tables.filter((t) => allTargetTableIdsSet.has(t.id)).map((t) => [t.id, t.name]),
+    tables.filter((t) => allTargetTableIds.includes(t.id)).map((t) => [t.id, t.name]),
   )
 
-  const allUnmapped = allTgtFieldRows.filter((f) => !mappedTargetFieldIds.has(f.id))
+  const allUnmapped = (allTgtFieldRows ?? []).filter((f) => !mappedTargetFieldIds.has(f.id))
   const toUnmapped = (f: typeof allUnmapped[number]): UnmappedTargetField => ({
     id: f.id,
     name: f.name,
@@ -1038,7 +940,7 @@ export async function getTransformData(
     if (!tableName) continue
 
     const rows: TargetTableRow[] = []
-    for (const f of allTgtFieldRows) {
+    for (const f of allTgtFieldRows ?? []) {
       if (f.table_id !== tableId) continue
       const tfmField = fieldItemsByTargetFieldId.get(f.id)
       if (tfmField) {
@@ -1064,54 +966,6 @@ export async function getTransformData(
     a.targetTableName.localeCompare(b.targetTableName, undefined, { sensitivity: 'base' }),
   )
 
-  // ── Canonical pill counts ────────────────────────────────────────────────
-  //
-  // `<TransformStatPills>` reads these scalars directly. The Projects List
-  // and Migration Center call the SAME `computeProjectStats` helper with
-  // the SAME project-scoped rows, so all three surfaces report identical
-  // numbers for any given project state. See
-  // `lib/quality/stat-formulas.ts` for the canonical formula and
-  // `tests/quality/stat-formulas-source-invariant.test.ts` for the
-  // architectural guard that prevents this code path from re-forking the
-  // logic in the future.
-  const stats = computeProjectStats({
-    tfms: tfms.map((t) => ({
-      id: t.id,
-      target_field_id: t.target_field_id,
-      confidence: t.confidence,
-      status: t.status,
-      is_acknowledged: t.is_acknowledged,
-      combination_type: t.combination_type,
-      needs_transformation: t.needs_transformation,
-      va_dismissed: t.va_dismissed,
-    })),
-    mappingSources: (sources ?? []).map((m) => ({
-      target_field_mapping_id: m.target_field_mapping_id,
-      source_field_id: m.source_field_id,
-      ordinal: m.ordinal,
-      type_compatibility: m.type_compatibility,
-    })),
-    sourceFields: (sourceFields ?? []).map((f) => ({
-      id: f.id,
-      name: f.name,
-      data_type: f.data_type,
-    })),
-    targetFields: (targetFields ?? []).map((f) => ({
-      id: f.id,
-      name: f.name,
-      data_type: f.data_type,
-    })),
-    sourceAckFieldIds: sourceAckRows.map((a) => a.source_field_id),
-    transforms: (transformations ?? []).map((t) => ({
-      target_field_mapping_id: t.target_field_mapping_id,
-      status: t.status,
-    })),
-    qualityIssues: qualityIssueRows,
-  })
-
-  const transformInProgress =
-    stats.transformScope - stats.transformApplied - stats.transformNeedsWork
-
   return {
     datasets: [...datasetGroupMap.values()],
     targetTableGroups,
@@ -1119,10 +973,6 @@ export async function getTransformData(
     hasMappings: true,
     unmappedNotNullTargetFields,
     unmappedNullableTargetFields,
-    transformScope: stats.transformScope,
-    transformApplied: stats.transformApplied,
-    transformNeedsWork: stats.transformNeedsWork,
-    transformInProgress,
   }
 }
 
