@@ -266,15 +266,21 @@ interface FieldMappingRowProps {
    */
   onInlineUnacknowledge?: (rowId: string) => void
   /**
-   * Phase 4-polish-3 — fired when the user commits a source-set change
-   * via the inline picker (close with non-empty pending set differing
-   * from the initial set). The parent dispatches
-   * `createFieldMapping` (for unmapped rows) or `editMappingSources`
-   * (for mapped rows) and surfaces the appropriate post-save toast.
-   * Receives the row id and the final selected source-field id list
-   * in user-pick order.
+   * Phase 4-polish-3 — fired when the user clicks Save in the inline
+   * picker with a non-empty pending set differing from the initial
+   * set. The parent dispatches `createFieldMapping` (for unmapped
+   * rows) or `editMappingSources` (for mapped rows) and surfaces the
+   * appropriate post-save toast. Returns a result so the picker can
+   * close on success or stay open on error. Receives the row id and
+   * the final selected source-field id list in user-pick order.
+   *
+   * Phase A refit (post-Phase-3): explicit Save button replaces the
+   * earlier commit-on-close model; `onSourceCommit` is now async.
    */
-  onSourceCommit?: (rowId: string, finalSourceFieldIds: string[]) => void
+  onSourceCommit?: (
+    rowId: string,
+    finalSourceFieldIds: string[],
+  ) => Promise<{ success: boolean }>
 }
 
 export function FieldMappingRow({
@@ -333,8 +339,11 @@ export function FieldMappingRow({
     setIsPickerOpen(true)
   }
 
-  const handlePickerCommit = (finalIds: string[]) => {
-    onSourceCommit?.(row.id, finalIds)
+  const handlePickerCommit = async (
+    finalIds: string[],
+  ): Promise<{ success: boolean }> => {
+    if (!onSourceCommit) return { success: false }
+    return onSourceCommit(row.id, finalIds)
   }
 
   const handlePickerClose = () => {

@@ -1,20 +1,26 @@
 import { describe, it, expect, vi } from 'vitest'
 import { useRef } from 'react'
-import { act, fireEvent, render, screen } from '@testing-library/react'
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { InlineSourcePicker } from '@/app/app/projects/[projectId]/mapping/redesign/components/InlineSourcePicker'
 import type { SourceFieldWithState } from '@/lib/types/mappings-for-redesign'
 
 // ─────────────────────────────────────────────────────────────────────────────
-// InlineSourcePicker — Phase 4-polish-3 Block A unit tests.
+// InlineSourcePicker — Phase 4-polish-3 Block A + Phase A refit unit tests.
 // ─────────────────────────────────────────────────────────────────────────────
 //
 // Pins the founder-locked behavior:
 //   • Wraps `SourceFieldPicker` in a portal anchored to a row cell.
-//   • Commit-on-close: fires `onCommit` ONLY when selection changes
-//     vs the initial set; always fires `onClose`.
-//   • Empty-selection guard: blocks close + surfaces inline error.
-//   • Esc + click-outside both attempt close (subject to guard).
+//   • Explicit Save / Cancel footer (replaces the original commit-on-
+//     close model). Save fires `onCommit` and closes the picker on
+//     success; on failure the picker stays open so the user can retry.
+//   • Esc, click-outside, and Cancel all close the picker WITHOUT
+//     committing.
+//   • Empty selection disables Save (with a tooltip hint) but never
+//     blocks Cancel — the dedicated reject (✗) row button handles
+//     "remove this mapping".
+//   • In-flight save shows a spinner; Cancel is disabled and Esc /
+//     click-outside are ignored to prevent racing the wrapper.
 //
 // The picker body itself (`SourceFieldPicker`) has its own dedicated
 // test file; here we exercise the inline wrapper's specific contract.
@@ -45,7 +51,7 @@ const FIELDS: SourceFieldWithState[] = [
 
 interface HarnessProps {
   initialIds: string[]
-  onCommit: (ids: string[]) => void
+  onCommit: (ids: string[]) => Promise<{ success: boolean }>
   onClose: () => void
   fields?: SourceFieldWithState[]
 }
@@ -83,6 +89,19 @@ function getFieldRow(id: string): HTMLButtonElement {
   return el
 }
 
+function getSaveButton(): HTMLButtonElement {
+  return screen.getByTestId('inline-source-picker-save') as HTMLButtonElement
+}
+
+function getCancelButton(): HTMLButtonElement {
+  return screen.getByTestId('inline-source-picker-cancel') as HTMLButtonElement
+}
+
+// Default success commit — the wrapper's happy path.
+function commitSuccess(): Promise<{ success: boolean }> {
+  return Promise.resolve({ success: true })
+}
+
 // ── Tests ───────────────────────────────────────────────────────────────────
 
 describe('InlineSourcePicker — render + portal hosting', () => {
@@ -90,7 +109,7 @@ describe('InlineSourcePicker — render + portal hosting', () => {
     const { container } = render(
       <Harness
         initialIds={['sf-1']}
-        onCommit={vi.fn()}
+        onCommit={commitSuccess}
         onClose={vi.fn()}
       />,
     )
@@ -106,7 +125,7 @@ describe('InlineSourcePicker — render + portal hosting', () => {
     render(
       <Harness
         initialIds={['sf-1']}
-        onCommit={vi.fn()}
+        onCommit={commitSuccess}
         onClose={vi.fn()}
       />,
     )
@@ -114,134 +133,382 @@ describe('InlineSourcePicker — render + portal hosting', () => {
     expect(picker.getAttribute('role')).toBe('dialog')
     expect(picker.getAttribute('aria-label')).toBe('Edit source fields')
   })
-})
 
-describe('InlineSourcePicker — commit-on-close contract', () => {
-  it('Esc with NO changes fires onClose only — onCommit is NOT called', async () => {
-    const onCommit = vi.fn()
-    const onClose = vi.fn()
-    const user = userEvent.setup()
+  it('renders the Save / Cancel footer at the bottom of the popover', async () => {
     render(
       <Harness
         initialIds={['sf-1']}
-        onCommit={onCommit}
-        onClose={onClose}
+        onCommit={commitSuccess}
+        onClose={vi.fn()}
       />,
     )
     await screen.findByTestId('inline-source-picker')
-    await user.keyboard('{Escape}')
-    expect(onClose).toHaveBeenCalledTimes(1)
-    expect(onCommit).not.toHaveBeenCalled()
+    expect(screen.getByTestId('inline-source-picker-footer')).toBeInTheDocument()
+    expect(screen.getByTestId('inline-source-picker-save')).toBeInTheDocument()
+    expect(screen.getByTestId('inline-source-picker-cancel')).toBeInTheDocument()
   })
 
-  it('Esc AFTER toggling a row fires onCommit with the new selection THEN onClose', async () => {
-    const onCommit = vi.fn()
-    const onClose = vi.fn()
-    const user = userEvent.setup()
+  it('footer is anchored OUTSIDE the scrollable list wrapper so it stays put on scroll', async () => {
+    // Sticky-footer contract: the list (and its parent scroll
+    // wrapper) is a SIBLING of the footer, not an ancestor. If a
+    // refactor accidentally nests the footer inside the scroll
+    // container, scrolling the list would carry the footer along
+    // with it and the user would lose access to Save/Cancel — the
+    // exact bug Phase A's first canary surfaced. Use a many-field
+    // fixture so even if the list extends past its `max-h-72`
+    // internal scroll the assertion still pins structural
+    // separation (not just initial visibility).
+    const manyFields: SourceFieldWithState[] = Array.from(
+      { length: 60 },
+      (_, i) =>
+        field({
+          id: `sf-many-${i}`,
+          name: `COL_${i}`,
+          ordinalPosition: i,
+        }),
+    )
     render(
       <Harness
-        initialIds={['sf-1']}
-        onCommit={onCommit}
-        onClose={onClose}
+        initialIds={['sf-many-0']}
+        onCommit={commitSuccess}
+        onClose={vi.fn()}
+        fields={manyFields}
       />,
     )
     await screen.findByTestId('inline-source-picker')
-    // Add sf-2 by clicking its row (each row is a toggle button with
-    // `aria-pressed`; we use the data-source-field-id selector so the
-    // test does not depend on accessible-name resolution).
-    await user.click(getFieldRow('sf-2'))
-    await user.keyboard('{Escape}')
-    expect(onCommit).toHaveBeenCalledTimes(1)
-    expect(onCommit).toHaveBeenCalledWith(['sf-1', 'sf-2'])
-    expect(onClose).toHaveBeenCalledTimes(1)
-  })
-
-  it('click-outside fires the same commit-on-close path as Esc', async () => {
-    const onCommit = vi.fn()
-    const onClose = vi.fn()
-    const user = userEvent.setup()
-    render(
-      <Harness
-        initialIds={['sf-1']}
-        onCommit={onCommit}
-        onClose={onClose}
-      />,
-    )
-    await screen.findByTestId('inline-source-picker')
-    await user.click(getFieldRow('sf-2'))
-    // Dispatch mousedown on document.body to simulate click-outside
-    // (the picker listens via `document.addEventListener('mousedown', ...)`).
-    act(() => {
-      fireEvent.mouseDown(document.body)
-    })
-    expect(onCommit).toHaveBeenCalledWith(['sf-1', 'sf-2'])
-    expect(onClose).toHaveBeenCalledTimes(1)
-  })
-
-  it('toggling a source ON and back OFF fires onClose only — selection matches initial', async () => {
-    const onCommit = vi.fn()
-    const onClose = vi.fn()
-    const user = userEvent.setup()
-    render(
-      <Harness
-        initialIds={['sf-1']}
-        onCommit={onCommit}
-        onClose={onClose}
-      />,
-    )
-    await screen.findByTestId('inline-source-picker')
-    await user.click(getFieldRow('sf-2')) // adds sf-2
-    await user.click(getFieldRow('sf-2')) // removes sf-2 — back to ['sf-1']
-    await user.keyboard('{Escape}')
-    expect(onCommit).not.toHaveBeenCalled()
-    expect(onClose).toHaveBeenCalledTimes(1)
+    const footer = screen.getByTestId('inline-source-picker-footer')
+    const list = screen.getByTestId('source-field-picker-list')
+    expect(footer).toBeInTheDocument()
+    expect(list.contains(footer)).toBe(false)
+    // Defense-in-depth: also assert the footer is NOT inside the
+    // SourceFieldPicker root. The SourceFieldPicker subtree IS the
+    // scrolling sibling — the footer must live one level above it.
+    const pickerBody = screen.getByTestId('source-field-picker')
+    expect(pickerBody.contains(footer)).toBe(false)
   })
 })
 
-describe('InlineSourcePicker — empty-selection guard', () => {
-  it('Esc with empty selection blocks close AND surfaces the inline error', async () => {
-    const onCommit = vi.fn()
-    const onClose = vi.fn()
+describe('InlineSourcePicker — Save button states', () => {
+  it('Save is disabled at mount when no changes are pending', async () => {
+    render(
+      <Harness
+        initialIds={['sf-1']}
+        onCommit={commitSuccess}
+        onClose={vi.fn()}
+      />,
+    )
+    await screen.findByTestId('inline-source-picker')
+    const save = getSaveButton()
+    expect(save).toBeDisabled()
+    // Tooltip hint surfaces via the title attribute.
+    expect(save.getAttribute('title')).toBe('No changes to save')
+    expect(save.textContent).toBe('Save')
+  })
+
+  it('Save is enabled with a count after the user toggles a row', async () => {
     const user = userEvent.setup()
     render(
       <Harness
         initialIds={['sf-1']}
-        onCommit={onCommit}
-        onClose={onClose}
+        onCommit={commitSuccess}
+        onClose={vi.fn()}
       />,
     )
     await screen.findByTestId('inline-source-picker')
-    await user.click(getFieldRow('sf-1')) // remove the only source
-    await user.keyboard('{Escape}')
-    // Picker stays open; neither callback fires.
-    expect(onClose).not.toHaveBeenCalled()
-    expect(onCommit).not.toHaveBeenCalled()
-    // Inline error surfaces with locked copy.
-    const error = await screen.findByTestId(
-      'inline-source-picker-empty-error',
-    )
-    expect(error.textContent).toBe('Select at least one source field')
-    expect(error.getAttribute('role')).toBe('alert')
+    await user.click(getFieldRow('sf-2'))
+    const save = getSaveButton()
+    expect(save).toBeEnabled()
+    expect(save.textContent).toBe('Save (1 change)')
+    expect(save.getAttribute('title')).toBeNull()
   })
 
-  it('clearing the error: re-selecting a source dismisses the error message', async () => {
+  it('Save copy pluralises correctly: "Save (2 changes)"', async () => {
     const user = userEvent.setup()
     render(
-      <Harness initialIds={['sf-1']} onCommit={vi.fn()} onClose={vi.fn()} />,
+      <Harness
+        initialIds={['sf-1']}
+        onCommit={commitSuccess}
+        onClose={vi.fn()}
+      />,
+    )
+    await screen.findByTestId('inline-source-picker')
+    await user.click(getFieldRow('sf-2'))
+    await user.click(getFieldRow('sf-3'))
+    expect(getSaveButton().textContent).toBe('Save (2 changes)')
+  })
+
+  it('Save count includes both ADDITIONS and REMOVALS (symmetric difference)', async () => {
+    // Initial: [sf-1, sf-2]; after toggles: [sf-2, sf-3]
+    //   removed sf-1 (1) + added sf-3 (1) = 2 changes
+    const user = userEvent.setup()
+    render(
+      <Harness
+        initialIds={['sf-1', 'sf-2']}
+        onCommit={commitSuccess}
+        onClose={vi.fn()}
+      />,
+    )
+    await screen.findByTestId('inline-source-picker')
+    await user.click(getFieldRow('sf-1')) // -1
+    await user.click(getFieldRow('sf-3')) // +1
+    expect(getSaveButton().textContent).toBe('Save (2 changes)')
+  })
+
+  it('Save is disabled when the user reverts to the initial set', async () => {
+    const user = userEvent.setup()
+    render(
+      <Harness
+        initialIds={['sf-1']}
+        onCommit={commitSuccess}
+        onClose={vi.fn()}
+      />,
+    )
+    await screen.findByTestId('inline-source-picker')
+    await user.click(getFieldRow('sf-2')) // adds
+    expect(getSaveButton()).toBeEnabled()
+    await user.click(getFieldRow('sf-2')) // removes — back to initial
+    const save = getSaveButton()
+    expect(save).toBeDisabled()
+    expect(save.getAttribute('title')).toBe('No changes to save')
+  })
+
+  it('Save is disabled when the pending selection is empty (even though changes exist)', async () => {
+    const user = userEvent.setup()
+    render(
+      <Harness
+        initialIds={['sf-1']}
+        onCommit={commitSuccess}
+        onClose={vi.fn()}
+      />,
     )
     await screen.findByTestId('inline-source-picker')
     await user.click(getFieldRow('sf-1')) // empties selection
-    await user.keyboard('{Escape}') // surfaces error
-    await screen.findByTestId('inline-source-picker-empty-error')
-    // Selecting a source clears the error.
+    const save = getSaveButton()
+    expect(save).toBeDisabled()
+    // The empty-selection hint takes precedence over the
+    // no-changes-to-save hint.
+    expect(save.getAttribute('title')).toBe('Select at least one source field')
+  })
+
+  it('Save is disabled at mount when the row starts unmapped (initial empty)', async () => {
+    render(
+      <Harness initialIds={[]} onCommit={commitSuccess} onClose={vi.fn()} />,
+    )
+    await screen.findByTestId('inline-source-picker')
+    const save = getSaveButton()
+    expect(save).toBeDisabled()
+    // Empty-selection hint takes precedence over the no-changes hint
+    // — "select something" is the actionable next step regardless of
+    // whether the user just opened the picker or just cleared it.
+    expect(save.getAttribute('title')).toBe('Select at least one source field')
+  })
+})
+
+describe('InlineSourcePicker — Save click commit flow', () => {
+  it('Save click fires onCommit with the pending ids in pick order', async () => {
+    const onCommit = vi.fn().mockResolvedValue({ success: true })
+    const onClose = vi.fn()
+    const user = userEvent.setup()
+    render(
+      <Harness
+        initialIds={['sf-1']}
+        onCommit={onCommit}
+        onClose={onClose}
+      />,
+    )
+    await screen.findByTestId('inline-source-picker')
     await user.click(getFieldRow('sf-2'))
+    await user.click(getSaveButton())
+    await waitFor(() => expect(onCommit).toHaveBeenCalledTimes(1))
+    expect(onCommit).toHaveBeenCalledWith(['sf-1', 'sf-2'])
+  })
+
+  it('Save click that succeeds closes the picker via onClose', async () => {
+    const onCommit = vi.fn().mockResolvedValue({ success: true })
+    const onClose = vi.fn()
+    const user = userEvent.setup()
+    render(
+      <Harness
+        initialIds={['sf-1']}
+        onCommit={onCommit}
+        onClose={onClose}
+      />,
+    )
+    await screen.findByTestId('inline-source-picker')
+    await user.click(getFieldRow('sf-2'))
+    await user.click(getSaveButton())
+    await waitFor(() => expect(onClose).toHaveBeenCalledTimes(1))
+  })
+
+  it('Save click that fails leaves the picker open and does NOT call onClose', async () => {
+    const onCommit = vi.fn().mockResolvedValue({ success: false })
+    const onClose = vi.fn()
+    const user = userEvent.setup()
+    render(
+      <Harness
+        initialIds={['sf-1']}
+        onCommit={onCommit}
+        onClose={onClose}
+      />,
+    )
+    await screen.findByTestId('inline-source-picker')
+    await user.click(getFieldRow('sf-2'))
+    await user.click(getSaveButton())
+    await waitFor(() => expect(onCommit).toHaveBeenCalledTimes(1))
+    // Picker still mounted; onClose never fired.
+    expect(onClose).not.toHaveBeenCalled()
+    expect(screen.queryByTestId('inline-source-picker')).toBeInTheDocument()
+  })
+
+  it('Save click while the wrapper is in flight shows the spinner and disables Cancel', async () => {
+    let resolveCommit: ((r: { success: boolean }) => void) | null = null
+    const onCommit = vi.fn().mockImplementation(
+      () =>
+        new Promise<{ success: boolean }>((resolve) => {
+          resolveCommit = resolve
+        }),
+    )
+    const user = userEvent.setup()
+    render(
+      <Harness
+        initialIds={['sf-1']}
+        onCommit={onCommit}
+        onClose={vi.fn()}
+      />,
+    )
+    await screen.findByTestId('inline-source-picker')
+    await user.click(getFieldRow('sf-2'))
+    await user.click(getSaveButton())
+    // Spinner is rendered; both buttons are disabled.
+    await screen.findByTestId('inline-source-picker-save-spinner')
+    expect(getSaveButton()).toBeDisabled()
+    expect(getCancelButton()).toBeDisabled()
+    // Resolve the wrapper to clean up the in-flight promise so the
+    // test does not leak a pending microtask.
+    act(() => {
+      resolveCommit?.({ success: true })
+    })
+    await waitFor(() => {
+      expect(
+        screen.queryByTestId('inline-source-picker-save-spinner'),
+      ).toBeNull()
+    })
+  })
+})
+
+describe('InlineSourcePicker — Cancel button', () => {
+  it('Cancel click closes the picker without firing onCommit', async () => {
+    const onCommit = vi.fn().mockResolvedValue({ success: true })
+    const onClose = vi.fn()
+    const user = userEvent.setup()
+    render(
+      <Harness
+        initialIds={['sf-1']}
+        onCommit={onCommit}
+        onClose={onClose}
+      />,
+    )
+    await screen.findByTestId('inline-source-picker')
+    // Pending changes do NOT trigger commit-on-cancel.
+    await user.click(getFieldRow('sf-2'))
+    await user.click(getCancelButton())
+    expect(onClose).toHaveBeenCalledTimes(1)
+    expect(onCommit).not.toHaveBeenCalled()
+  })
+
+  it('Cancel is enabled even when the pending selection is empty', async () => {
+    const onClose = vi.fn()
+    const user = userEvent.setup()
+    render(
+      <Harness
+        initialIds={['sf-1']}
+        onCommit={commitSuccess}
+        onClose={onClose}
+      />,
+    )
+    await screen.findByTestId('inline-source-picker')
+    await user.click(getFieldRow('sf-1')) // empties selection
+    expect(getCancelButton()).toBeEnabled()
+    await user.click(getCancelButton())
+    expect(onClose).toHaveBeenCalledTimes(1)
+  })
+
+  it('Cancel is enabled at mount with no pending changes', async () => {
+    render(
+      <Harness
+        initialIds={['sf-1']}
+        onCommit={commitSuccess}
+        onClose={vi.fn()}
+      />,
+    )
+    await screen.findByTestId('inline-source-picker')
+    expect(getCancelButton()).toBeEnabled()
+  })
+})
+
+describe('InlineSourcePicker — Esc + click-outside fire Cancel semantics', () => {
+  it('Esc closes the picker WITHOUT committing pending changes', async () => {
+    const onCommit = vi.fn().mockResolvedValue({ success: true })
+    const onClose = vi.fn()
+    const user = userEvent.setup()
+    render(
+      <Harness
+        initialIds={['sf-1']}
+        onCommit={onCommit}
+        onClose={onClose}
+      />,
+    )
+    await screen.findByTestId('inline-source-picker')
+    await user.click(getFieldRow('sf-2')) // dirty
+    await user.keyboard('{Escape}')
+    expect(onClose).toHaveBeenCalledTimes(1)
+    expect(onCommit).not.toHaveBeenCalled()
+  })
+
+  it('click-outside closes the picker WITHOUT committing pending changes', async () => {
+    const onCommit = vi.fn().mockResolvedValue({ success: true })
+    const onClose = vi.fn()
+    const user = userEvent.setup()
+    render(
+      <Harness
+        initialIds={['sf-1']}
+        onCommit={onCommit}
+        onClose={onClose}
+      />,
+    )
+    await screen.findByTestId('inline-source-picker')
+    await user.click(getFieldRow('sf-2')) // dirty
+    act(() => {
+      fireEvent.mouseDown(document.body)
+    })
+    expect(onClose).toHaveBeenCalledTimes(1)
+    expect(onCommit).not.toHaveBeenCalled()
+  })
+
+  it('Esc with empty selection ALSO cancels (no empty-error block)', async () => {
+    const onCommit = vi.fn().mockResolvedValue({ success: true })
+    const onClose = vi.fn()
+    const user = userEvent.setup()
+    render(
+      <Harness
+        initialIds={['sf-1']}
+        onCommit={onCommit}
+        onClose={onClose}
+      />,
+    )
+    await screen.findByTestId('inline-source-picker')
+    await user.click(getFieldRow('sf-1')) // empties selection
+    await user.keyboard('{Escape}')
+    expect(onClose).toHaveBeenCalledTimes(1)
+    expect(onCommit).not.toHaveBeenCalled()
+    // Vestigial empty-error must NOT render anywhere.
     expect(
       screen.queryByTestId('inline-source-picker-empty-error'),
     ).toBeNull()
   })
 
-  it('click-outside with empty selection ALSO blocks close', async () => {
-    const onCommit = vi.fn()
+  it('click-outside with empty selection ALSO cancels (no empty-error block)', async () => {
+    const onCommit = vi.fn().mockResolvedValue({ success: true })
     const onClose = vi.fn()
     const user = userEvent.setup()
     render(
@@ -256,11 +523,42 @@ describe('InlineSourcePicker — empty-selection guard', () => {
     act(() => {
       fireEvent.mouseDown(document.body)
     })
-    expect(onClose).not.toHaveBeenCalled()
+    expect(onClose).toHaveBeenCalledTimes(1)
     expect(onCommit).not.toHaveBeenCalled()
     expect(
-      screen.getByTestId('inline-source-picker-empty-error'),
-    ).toBeInTheDocument()
+      screen.queryByTestId('inline-source-picker-empty-error'),
+    ).toBeNull()
+  })
+
+  it('Esc during an in-flight save is IGNORED (cannot race the wrapper)', async () => {
+    let resolveCommit: ((r: { success: boolean }) => void) | null = null
+    const onCommit = vi.fn().mockImplementation(
+      () =>
+        new Promise<{ success: boolean }>((resolve) => {
+          resolveCommit = resolve
+        }),
+    )
+    const onClose = vi.fn()
+    const user = userEvent.setup()
+    render(
+      <Harness
+        initialIds={['sf-1']}
+        onCommit={onCommit}
+        onClose={onClose}
+      />,
+    )
+    await screen.findByTestId('inline-source-picker')
+    await user.click(getFieldRow('sf-2'))
+    await user.click(getSaveButton())
+    await screen.findByTestId('inline-source-picker-save-spinner')
+    // Esc fires during in-flight save — should NOT close.
+    await user.keyboard('{Escape}')
+    expect(onClose).not.toHaveBeenCalled()
+    // Resolve to clean up.
+    act(() => {
+      resolveCommit?.({ success: true })
+    })
+    await waitFor(() => expect(onClose).toHaveBeenCalledTimes(1))
   })
 })
 
@@ -269,7 +567,7 @@ describe('InlineSourcePicker — initial selection lifecycle', () => {
     render(
       <Harness
         initialIds={['sf-1', 'sf-3']}
-        onCommit={vi.fn()}
+        onCommit={commitSuccess}
         onClose={vi.fn()}
       />,
     )
@@ -285,27 +583,25 @@ describe('InlineSourcePicker — initial selection lifecycle', () => {
     expect(getFieldRow('sf-3').getAttribute('data-is-selected')).toBe('true')
   })
 
-  it('mounts with EMPTY initial ids (unmapped → mapped flow); the empty-error is NOT shown until close attempted', async () => {
-    // The error is purely a "you tried to close empty" signal — it
-    // should not pre-fire just because the initial state is empty.
+  it('mounts with EMPTY initial ids (unmapped → mapped flow)', async () => {
     render(
-      <Harness initialIds={[]} onCommit={vi.fn()} onClose={vi.fn()} />,
+      <Harness initialIds={[]} onCommit={commitSuccess} onClose={vi.fn()} />,
     )
     await screen.findByTestId('inline-source-picker')
-    expect(
-      screen.queryByTestId('inline-source-picker-empty-error'),
-    ).toBeNull()
+    // Save disabled (no changes); Cancel enabled.
+    expect(getSaveButton()).toBeDisabled()
+    expect(getCancelButton()).toBeEnabled()
   })
 })
 
 describe('InlineSourcePicker — clicking the anchor', () => {
-  it('clicking the anchor does NOT fire onCancel — parent owns re-open semantics', async () => {
+  it('clicking the anchor does NOT fire onClose — parent owns re-open semantics', async () => {
     // Mirrors the RejectConfirmPopover anchor-contains contract: the
     // picker's click-outside handler explicitly excludes the anchor
     // so a click on the trigger doesn't immediately re-fire close
     // and stack with a parent re-open. Pin so a refactor that drops
     // the anchor-contains check shows up in CI.
-    const onCommit = vi.fn()
+    const onCommit = vi.fn().mockResolvedValue({ success: true })
     const onClose = vi.fn()
     render(
       <Harness

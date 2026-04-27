@@ -154,7 +154,10 @@ interface TargetTableGroupProps {
   onInlineReject?: (rowId: string, anchorEl: HTMLElement) => void
   onInlineAcknowledge?: (rowId: string) => void
   onInlineUnacknowledge?: (rowId: string) => void
-  onInlineSourceCommit?: (rowId: string, finalSourceFieldIds: string[]) => void
+  onInlineSourceCommit?: (
+    rowId: string,
+    finalSourceFieldIds: string[],
+  ) => Promise<{ success: boolean }>
 }
 
 export function TargetTableGroup({
