@@ -159,8 +159,26 @@ describe('[staging refinements] stageAllData new-model TFM fetch', () => {
   })
 
   it('detects value assignments via combination_type === custom_sql AND ms.length === 0', () => {
-    // VA filter branch in the in-memory filter: ms.length === 0 → check combination_type
-    expect(code).toMatch(/combination_type\s*===\s*['"]custom_sql['"]/)
+    // VA filter branch in the in-memory filter. Migration 077 reshaped
+    // the conditional from
+    //   return row.combination_type === 'custom_sql'
+    // to a two-step
+    //   if (row.combination_type !== 'custom_sql') return false
+    //   return va_dismissed !== true
+    // Either form encodes the same VA detection. Pin both to remain
+    // resilient to future refactors that re-flip the conditional.
+    expect(code).toMatch(/combination_type\s*(?:===|!==)\s*['"]custom_sql['"]/)
+  })
+
+  // Migration 077: dismissed VAs ("no value needed") must not appear in the
+  // staged write path. The SELECT must include the column and the in-memory
+  // filter must reject `va_dismissed === true` on VA-only rows.
+  it('SELECT includes va_dismissed (migration 077)', () => {
+    expect(code).toMatch(/\bva_dismissed\b/)
+  })
+
+  it('filters out VA TFMs where va_dismissed === true', () => {
+    expect(code).toMatch(/va_dismissed\s*\?:\s*boolean\s*\|\s*null|va_dismissed\s*!==\s*true/)
   })
 
   it('scopes transformations by target_field_mapping_id (column rename)', () => {
@@ -264,7 +282,21 @@ describe('[staging refinements] getStagedDataPreview new-model TFM fetch', () =>
   })
 
   it('detects VAs via combination_type === custom_sql AND ms.length === 0', () => {
-    expect(code).toMatch(/combination_type\s*===\s*['"]custom_sql['"]/)
+    // See sister test in stageAllData section — migration 077 flipped
+    // this filter to an early-return form (`!==` then `va_dismissed`
+    // check). Either spelling is acceptable.
+    expect(code).toMatch(/combination_type\s*(?:===|!==)\s*['"]custom_sql['"]/)
+  })
+
+  // Migration 077: dismissed VAs are filtered out of the preview as well so
+  // the staged-rows table never shows a column the user has already opted
+  // out of. Symmetric to the stageAllData filter pinned above.
+  it('SELECT includes va_dismissed (migration 077)', () => {
+    expect(code).toMatch(/\bva_dismissed\b/)
+  })
+
+  it('filters out VA TFMs where va_dismissed === true', () => {
+    expect(code).toMatch(/va_dismissed\s*\?:\s*boolean\s*\|\s*null|va_dismissed\s*!==\s*true/)
   })
 
   it('builds tgtNameByTfmId (renamed from tgtNameByFMId) keyed by TFM id', () => {

@@ -117,7 +117,15 @@ export interface StatsQualityIssueRow {
  *  caller feed its own locally-typed row without re-casting.
  *
  *  The formula only compares `combination_type` to `null` and `'custom_sql'`;
- *  both branches are safe for any string. */
+ *  both branches are safe for any string.
+ *
+ *  `va_dismissed` (migration 077) marks a value-assignment TFM the user
+ *  flagged as "no value needed" in the Transform tab. The formula treats a
+ *  dismissed VA as out-of-scope for transform progress (it still counts as
+ *  a primary TFM for mapping ratios because the row exists; it just stops
+ *  inflating `transformScope`). Callers may omit the field for legacy
+ *  fixtures — undefined is treated as `false`, preserving pre-077 behavior
+ *  exactly. */
 export interface StatsTfmRow {
   id: string
   target_field_id: string
@@ -126,6 +134,7 @@ export interface StatsTfmRow {
   is_acknowledged: boolean
   combination_type: string | null
   needs_transformation: boolean | null
+  va_dismissed?: boolean | null
 }
 
 export interface ComputeProjectStatsInputs {
@@ -264,13 +273,18 @@ function isNeverResolvable(q: {
  *
  *   **Transform scope**
  *     transformScope    = count of primaryTfms where
- *                           isValueAssignment=true
+ *                           (isValueAssignment AND NOT va_dismissed)
  *                           OR fieldNeedsTransform(...) returns true
  *     transformApplied  = in-scope TFMs with transformation.status='applied'
  *     transformNeedsWork= in-scope TFMs with NO transformation row
  *
  *     value assignments (combination_type='custom_sql' AND no primary MS)
- *     are ALWAYS in scope — parity with legacy `!fm.source_field_id ? true`.
+ *     are in scope EXCEPT when the user has dismissed them via the
+ *     Transform tab's "no value needed" affordance (`va_dismissed=true`,
+ *     migration 077). Dismissed VAs still count as primary TFMs for the
+ *     mapping ratio (the row exists), they just exit the transform
+ *     denominator — same effect as `needs_transformation=false` for a
+ *     mapped TFM.
  *
  *   **Quality issues**
  *     openBlocking / openWarnings      = naive count of open+in_flight
@@ -385,7 +399,7 @@ export function computeProjectStats(inputs: ComputeProjectStatsInputs): ProjectS
     const hasTransformation = tfmIdsWithTransforms.has(tfm.id)
 
     const needsTransform = isValueAssignment
-      ? true
+      ? !(tfm.va_dismissed === true)
       : fieldNeedsTransform({
           typeCompatibility: primary?.type_compatibility ?? '',
           confidence: tfm.confidence ?? 0,

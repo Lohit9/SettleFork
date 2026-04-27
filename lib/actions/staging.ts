@@ -308,6 +308,7 @@ export async function stageAllData(projectId: string): Promise<{
           `
           id,
           combination_type,
+          va_dismissed,
           target_field_id,
           mapping_sources (
             id, source_field_id, source_table_id, ordinal,
@@ -332,7 +333,11 @@ export async function stageAllData(projectId: string): Promise<{
         if (ms.length === 0) {
           // Value assignment: must be custom_sql. Bare-ack TFMs (no MS,
           // combination_type != 'custom_sql') are excluded from staging.
-          return row.combination_type === 'custom_sql'
+          // Migration 077: dismissed VAs are also excluded — the user
+          // marked them as "no value needed" so they should not produce
+          // a column in the staged jsonb_build_object payload.
+          if (row.combination_type !== 'custom_sql') return false
+          return (row as { va_dismissed?: boolean | null }).va_dismissed !== true
         }
         const primary = [...ms].sort((a, b) => a.ordinal - b.ordinal)[0]
         return primary.ordinal === 0 && primary.source_table_id === tm.source_table_id
@@ -739,6 +744,7 @@ export async function getStagedDataPreview(
       `
       id,
       combination_type,
+      va_dismissed,
       target_field_id,
       mapping_sources (
         id, source_field_id, source_table_id, ordinal,
@@ -756,7 +762,10 @@ export async function getStagedDataPreview(
     if (!tgt || tgt.table_id !== tmRow.target_table_id) return false
     const ms = (row.mapping_sources ?? []) as Array<{ ordinal: number; source_table_id: string | null }>
     if (ms.length === 0) {
-      return row.combination_type === 'custom_sql'
+      if (row.combination_type !== 'custom_sql') return false
+      // Migration 077: dismissed VAs ("no value needed") are excluded from
+      // the preview — same semantics as the apply path above.
+      return (row as { va_dismissed?: boolean | null }).va_dismissed !== true
     }
     const primary = [...ms].sort((a, b) => a.ordinal - b.ordinal)[0]
     return primary.ordinal === 0 && primary.source_table_id === tmRow.source_table_id

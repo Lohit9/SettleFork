@@ -156,6 +156,12 @@ export function groupTfmsByTableMapping(input: GroupTfmsInput): Map<string, TfmF
     const isVA = tfm.combination_type === 'custom_sql' && msList.length === 0
 
     if (isVA) {
+      // Rule (migration 077): VAs the user dismissed in the Transform tab
+      // (`va_dismissed=true`) are excluded from grouping. They produce no
+      // output rows in the execution package, the migration runbook, or
+      // the per-table scripts — semantically equivalent to a target field
+      // the user "knows is intentionally null/default".
+      if (tfm.va_dismissed === true) continue
       // VA fan-out: every TM targeting this target-table owns a copy of the VA.
       const matchingTms = tmsByTargetTable.get(tgtField.table_id) ?? []
       for (const tm of matchingTms) {

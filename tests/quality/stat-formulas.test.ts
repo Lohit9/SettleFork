@@ -282,6 +282,51 @@ describe('computeProjectStats — transform scope', () => {
     expect(stats.transformTested).toBe(1)
     expect(stats.transformApplied).toBe(0) // tfm3 dismissed
   })
+
+  // ── Migration 077 — dismissed VAs exit transform scope ──────────────────
+  //
+  // The Transform redesign adds a "no value needed" affordance for VA TFMs:
+  // user-dismissed VAs flip `va_dismissed=true` and stop counting toward
+  // transform progress. The mapping ratios are unchanged (the TFM row still
+  // exists), only the transform denominator shrinks. This is the symmetric
+  // counterpart to mapped fields' `needs_transformation=false` short-circuit
+  // exercised by the "stale transformation row" test above.
+  it('a dismissed VA TFM exits transformScope (migration 077)', () => {
+    const base = buildInputs()
+    const dismissedTfms: StatsTfmRow[] = base.tfms.map((t) =>
+      t.id === 'tfm6' ? { ...t, va_dismissed: true } : t,
+    )
+    const stats = computeProjectStats({ ...base, tfms: dismissedTfms })
+
+    // Before dismissal: scope = 2 (tfm2 + tfm6). After: scope = 1 (tfm2).
+    expect(stats.transformScope).toBe(1)
+    expect(stats.transformApplied).toBe(0)
+    expect(stats.transformNeedsWork).toBe(1)
+  })
+
+  it('a dismissed VA TFM keeps mapping counts unchanged', () => {
+    // The TFM row still exists, so the mapping denominator must not move.
+    // Only the transform denominator shrinks. This is the contract that
+    // distinguishes va_dismissed (Transform-side concern) from an outright
+    // delete (Mapping-side concern).
+    const base = buildInputs()
+    const dismissedTfms: StatsTfmRow[] = base.tfms.map((t) =>
+      t.id === 'tfm6' ? { ...t, va_dismissed: true } : t,
+    )
+    const stats = computeProjectStats({ ...base, tfms: dismissedTfms })
+
+    expect(stats.mappingTotal).toBe(7)
+    expect(stats.mappingApproved).toBe(6)
+    expect(stats.mappingUnmapped).toBe(1)
+  })
+
+  it('omitting va_dismissed (legacy fixtures) preserves pre-077 behavior', () => {
+    // Fixtures that pre-date migration 077 do not set the field at all.
+    // The formula must read `undefined` as `false` so existing test suites
+    // and bulk-loaded production rows continue to compute identical scopes.
+    const stats = computeProjectStats(buildInputs())
+    expect(stats.transformScope).toBe(2) // tfm2 + tfm6 (VA still in scope)
+  })
 })
 
 describe('computeProjectStats — quality issues', () => {

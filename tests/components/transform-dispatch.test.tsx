@@ -4,33 +4,20 @@ import type { ProjectInfo } from '@/components/app/ProjectInfoPopover'
 import type { TransformPageData } from '@/lib/actions/transformations'
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Phase 3 Gap 1 — transform dispatch test harness.
+// Phase 3 — TransformContent renders identically across `useMappingRedesign`.
 // ─────────────────────────────────────────────────────────────────────────────
 //
-// Verifies that the feature-flag dispatch at the top of the legacy
-// `TransformContent` default export correctly routes to either the Phase 3
-// redesign module or the legacy UI based on `projectInfo.useMappingRedesign`.
-// Mirrors `mapping-dispatch.test.tsx` — same strategy, different module.
-
-// ── Mocks (hoisted) ───────────────────────────────────────────────────────────
-
-vi.mock(
-  '@/app/app/projects/[projectId]/transform/redesign/TransformContent',
-  () => ({
-    default: ({
-      projectId,
-      projectName,
-    }: {
-      projectId: string
-      projectName: string
-    }) => (
-      <div data-testid="transform-redesign-marker">
-        <span data-testid="redesign-project-id">{projectId}</span>
-        <span data-testid="redesign-project-name">{projectName}</span>
-      </div>
-    ),
-  })
-)
+// In Phase 3 Gap 1 the Transform page dispatched on `use_mapping_redesign`,
+// routing flag-on projects to a placeholder component while the redesigned
+// UI was incrementally landed. Phase 3 (this commit) lands the unified
+// target-led sidebar + VA dismissal symmetry into `TransformContent` and
+// removes the placeholder + dispatch gate entirely.
+//
+// These invariants pin that:
+//   1. Both flag states render the same UI (the empty-state copy from
+//      `TransformContent`'s "no mappings" branch).
+//   2. The placeholder testid `transform-redesign-marker` is gone — a
+//      regression that re-introduces the dispatch surfaces immediately.
 
 vi.mock('next/navigation', () => ({
   useRouter: () => ({
@@ -59,7 +46,6 @@ vi.mock('@/lib/hooks/useProjectRole', () => ({
   }),
 }))
 
-// Server-action modules imported by the legacy Transform UI.
 vi.mock('@/lib/actions/transformations', () => ({
   generateTransform: vi.fn(),
   autoSaveTransform: vi.fn(),
@@ -73,6 +59,8 @@ vi.mock('@/lib/actions/transformations', () => ({
   suggestTransformDescription: vi.fn(),
   dismissTransformNeeded: vi.fn(),
   reinstateTransformNeeded: vi.fn(),
+  dismissValueAssignment: vi.fn(),
+  reinstateValueAssignment: vi.fn(),
   ensureValueAssignment: vi.fn(),
 }))
 
@@ -92,8 +80,6 @@ vi.mock('@/lib/actions/fk-cascade', () => ({
   cascadeTransformToFKs: vi.fn(),
 }))
 
-// ── Test setup ────────────────────────────────────────────────────────────────
-
 const baseProjectInfo: ProjectInfo = {
   projectName: 'Test Project',
   sourceSystem: 'src',
@@ -103,6 +89,7 @@ const baseProjectInfo: ProjectInfo = {
 
 const emptyTransformData: TransformPageData = {
   datasets: [],
+  targetTableGroups: [],
   schemaDocText: '',
   hasMappings: false,
   unmappedNotNullTargetFields: [],
@@ -116,12 +103,12 @@ async function importTransformContent() {
   return mod.default
 }
 
-describe('TransformContent dispatch (Phase 3 flag gate)', () => {
+describe('TransformContent — flag-agnostic render (Phase 3 dispatch removed)', () => {
   beforeEach(() => {
     vi.clearAllMocks()
   })
 
-  it('dispatches to the redesign component when useMappingRedesign is true', async () => {
+  it('does NOT route to a separate placeholder when useMappingRedesign is true', async () => {
     const TransformContent = await importTransformContent()
 
     render(
@@ -133,16 +120,11 @@ describe('TransformContent dispatch (Phase 3 flag gate)', () => {
       />
     )
 
-    expect(screen.getByTestId('transform-redesign-marker')).toBeInTheDocument()
-    expect(screen.getByTestId('redesign-project-id')).toHaveTextContent(
-      'proj-123'
-    )
-    expect(screen.getByTestId('redesign-project-name')).toHaveTextContent(
-      'Heritage Core'
-    )
+    expect(screen.queryByTestId('transform-redesign-marker')).toBeNull()
+    expect(screen.queryByTestId('transform-redesign-placeholder')).toBeNull()
   })
 
-  it('falls through to the legacy UI when useMappingRedesign is false', async () => {
+  it('renders the unified UI when useMappingRedesign is false', async () => {
     const TransformContent = await importTransformContent()
 
     render(
@@ -154,41 +136,36 @@ describe('TransformContent dispatch (Phase 3 flag gate)', () => {
       />
     )
 
-    expect(
-      screen.queryByTestId('transform-redesign-marker')
-    ).not.toBeInTheDocument()
+    expect(screen.queryByTestId('transform-redesign-marker')).toBeNull()
+    expect(screen.queryByTestId('transform-redesign-placeholder')).toBeNull()
   })
 
-  it('falls through to the legacy UI when useMappingRedesign is undefined (default)', async () => {
+  it('renders identically across flag states (snapshot-style invariant)', async () => {
     const TransformContent = await importTransformContent()
 
-    render(
+    const { container: flagOff } = render(
       <TransformContent
         projectId="proj-123"
         projectName="Heritage Core"
         initialData={emptyTransformData}
-        projectInfo={baseProjectInfo}
-      />
+        projectInfo={{ ...baseProjectInfo, useMappingRedesign: false }}
+      />,
     )
+    const flagOffTopLevel = flagOff.querySelectorAll('[data-testid]').length
 
-    expect(
-      screen.queryByTestId('transform-redesign-marker')
-    ).not.toBeInTheDocument()
-  })
-
-  it('falls through to the legacy UI when projectInfo is undefined', async () => {
-    const TransformContent = await importTransformContent()
-
-    render(
+    const { container: flagOn } = render(
       <TransformContent
         projectId="proj-123"
         projectName="Heritage Core"
         initialData={emptyTransformData}
-      />
+        projectInfo={{ ...baseProjectInfo, useMappingRedesign: true }}
+      />,
     )
+    const flagOnTopLevel = flagOn.querySelectorAll('[data-testid]').length
 
-    expect(
-      screen.queryByTestId('transform-redesign-marker')
-    ).not.toBeInTheDocument()
+    // The two trees should have the same structural footprint — the
+    // dispatch gate is gone, so flag-on no longer mounts a placeholder
+    // tree with its own testids. Equality is the invariant.
+    expect(flagOnTopLevel).toBe(flagOffTopLevel)
   })
 })
