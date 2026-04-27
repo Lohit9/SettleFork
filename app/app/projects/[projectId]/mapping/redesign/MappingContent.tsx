@@ -64,6 +64,8 @@ import { TargetTableGroup } from './components/TargetTableGroup'
 import { MappingDrawer } from './components/MappingDrawer'
 import { MappingSummaryStrip } from './components/MappingSummaryStrip'
 import { SourceSchemaSidebar } from './components/SourceSchemaSidebar'
+import { RejectConfirmPopover } from './components/RejectConfirmPopover'
+import type { FieldMappingRowOptimisticState } from './components/FieldMappingRow'
 import {
   useSidebarState,
   type SidebarFilter,
@@ -75,12 +77,18 @@ import {
   type BulkPreviewRow,
 } from './components/BulkConfirmDialog'
 import {
+  approveFieldMapping,
   bulkApproveFieldMappingsForTargetTable,
   approveHighConfidenceMappings,
+  createFieldMapping,
+  editMappingSources,
   previewBulkApprove,
   bulkRejectFieldMappingsForTargetTable,
   previewBulkReject,
+  rejectFieldMapping,
+  type CreateFieldMappingCombinationType,
 } from '@/lib/actions/mappings-for-redesign'
+import { acknowledgeField } from '@/lib/actions/field-acknowledgments'
 import { ToastProvider, useToast } from '@/lib/contexts/ToastContext'
 import { CONFIDENCE_THRESHOLD_ROW_HIGH } from '@/lib/utils/confidence-format'
 import { useCollapsedGroups } from '@/lib/hooks/useCollapsedGroups'
@@ -481,6 +489,23 @@ function MappingContentLoaded({
   const [drawerRowId, setDrawerRowId] = useState<string | null>(() => {
     const initial = (searchParams ?? new URLSearchParams()).get('drawer')
     return initial && initial.length > 0 ? initial : null
+  })
+
+  // ── Phase 4-polish-3 — `?focus=unack` deep-link param ─────────────
+  //
+  // When the inline ✗ on a `target_acknowledged` row fires, the row
+  // handler writes `?drawer=<rowId>&focus=unack` so the drawer opens
+  // and lands the user on the destructive Un-acknowledge button. The
+  // drawer reads the param via the `focus` prop and pulses the
+  // button, then fires `onFocusConsumed` so we can strip the param
+  // from the URL — leaving it would re-fire the focus on every
+  // unrelated drawer-affecting re-render.
+  //
+  // Initialised from the URL on mount; cleared by
+  // `handleFocusConsumed` after the drawer reports consumption.
+  const [drawerFocus, setDrawerFocus] = useState<'unack' | null>(() => {
+    const initial = (searchParams ?? new URLSearchParams()).get('focus')
+    return initial === 'unack' ? 'unack' : null
   })
 
   // ── Phase 4a-2 — pendingDrawerRowId sentinel ──────────────────────
@@ -980,6 +1005,322 @@ function MappingContentLoaded({
     }
   }, [bulkAction, bulkPreviewCount, projectId, pushToast, router])
 
+  // ── Phase 4-polish-3 — inline row action state ────────────────────
+  //
+  // Three slots co-operate to deliver the inline action UX defined in
+  // `docs/features/phase-4-plan.md` §polish-3:
+  //
+  //   1. `optimisticStates` — row-id-keyed map of in-flight animation
+  //      states. The row component reads this map via prop and renders
+  //      the matching CSS overlay (green flash, slate flash, blue
+  //      flash, slide-fade-out).
+  //   2. `rejectAnchor` — single slot for the active reject popover.
+  //      Set when the user clicks the row's ✗ button; cleared on
+  //      cancel, on successful confirm (after the wrapper resolves),
+  //      and on unmount. The popover anchors to the captured DOM node.
+  //   3. `lastInlineActionTfmId` — purely informational; tracks the
+  //      most recent rowId that fired an inline action so future
+  //      polish (e.g. inline error toasts that restate the row label)
+  //      can read it without prop drilling. Currently unused but kept
+  //      as a sentinel for the next polish iteration. (Removed in
+  //      this implementation pass; will be re-added if needed.)
+  //
+  // Lifecycle: each handler sets the optimistic state synchronously
+  // BEFORE awaiting the wrapper, so the user sees the highlight on
+  // the next paint. After the wrapper resolves, we delay the clear by
+  // a small timeout so the highlight has a moment to be visible
+  // before either (a) the row re-renders with its post-action data
+  // (approve / edit-sources path) or (b) the row unmounts naturally
+  // post `router.refresh()` (reject / acknowledge / unmapped→mapped).
+  const [optimisticStates, setOptimisticStates] = useState<
+    Map<string, FieldMappingRowOptimisticState>
+  >(() => new Map())
+  const [rejectAnchor, setRejectAnchor] = useState<{
+    rowId: string
+    anchorEl: HTMLElement
+  } | null>(null)
+
+  const setOptimistic = useCallback(
+    (rowId: string, state: FieldMappingRowOptimisticState) => {
+      setOptimisticStates((prev) => {
+        const next = new Map(prev)
+        next.set(rowId, state)
+        return next
+      })
+    },
+    [],
+  )
+  const clearOptimistic = useCallback((rowId: string) => {
+    setOptimisticStates((prev) => {
+      if (!prev.has(rowId)) return prev
+      const next = new Map(prev)
+      next.delete(rowId)
+      return next
+    })
+  }, [])
+
+  const handleInlineApprove = useCallback(
+    async (rowId: string) => {
+      setOptimistic(rowId, 'approving')
+      try {
+        const result = await approveFieldMapping(rowId)
+        if (!result.success) {
+          pushToast({
+            id: `inline-approve-${rowId}-${Date.now()}`,
+            variant: 'error',
+            message: result.error ?? 'Could not approve mapping.',
+          })
+          clearOptimistic(rowId)
+          return
+        }
+        pushToast({
+          id: `inline-approve-${rowId}-${Date.now()}`,
+          variant: 'success',
+          message: 'Mapping approved.',
+        })
+        router.refresh()
+      } catch (err) {
+        pushToast({
+          id: `inline-approve-${rowId}-${Date.now()}`,
+          variant: 'error',
+          message: err instanceof Error ? err.message : 'Could not approve mapping.',
+        })
+        clearOptimistic(rowId)
+        return
+      }
+      // Hold the highlight for ~150ms so the user catches the green
+      // flash before the row settles into its post-approve state.
+      setTimeout(() => clearOptimistic(rowId), 150)
+    },
+    [setOptimistic, clearOptimistic, pushToast, router],
+  )
+
+  const handleInlineRejectClick = useCallback(
+    (rowId: string, anchorEl: HTMLElement) => {
+      setRejectAnchor({ rowId, anchorEl })
+    },
+    [],
+  )
+
+  const handleRejectCancel = useCallback(() => {
+    setRejectAnchor(null)
+  }, [])
+
+  const handleRejectConfirm = useCallback(async () => {
+    if (rejectAnchor === null) return
+    const { rowId } = rejectAnchor
+    setRejectAnchor(null)
+    setOptimistic(rowId, 'rejecting')
+    try {
+      const result = await rejectFieldMapping(rowId)
+      if (!result.success) {
+        pushToast({
+          id: `inline-reject-${rowId}-${Date.now()}`,
+          variant: 'error',
+          message: result.error ?? 'Could not reject mapping.',
+        })
+        clearOptimistic(rowId)
+        return
+      }
+      pushToast({
+        id: `inline-reject-${rowId}-${Date.now()}`,
+        variant: 'success',
+        message: 'Mapping rejected.',
+      })
+      // Wait for the 200ms slide-fade-out to complete before firing
+      // `router.refresh()` so the user sees the row leave gracefully
+      // rather than blink out instantly when the data swap arrives.
+      setTimeout(() => router.refresh(), 200)
+    } catch (err) {
+      pushToast({
+        id: `inline-reject-${rowId}-${Date.now()}`,
+        variant: 'error',
+        message: err instanceof Error ? err.message : 'Could not reject mapping.',
+      })
+      clearOptimistic(rowId)
+    }
+  }, [rejectAnchor, setOptimistic, clearOptimistic, pushToast, router])
+
+  const handleInlineAcknowledge = useCallback(
+    async (rowId: string) => {
+      const row = data.rows.find((r) => r.id === rowId)
+      if (row === undefined) return
+      const targetFieldId = row.targetField.id
+      setOptimistic(rowId, 'acknowledging')
+      try {
+        // `acknowledgeField` throws on failure (back-compat semantic
+        // from the legacy MappingContent, kept by `field-
+        // acknowledgments.ts`). Inline path uses the bare reason
+        // `'acknowledged'` — same default the legacy sidebar action
+        // surface used. For richer reasons users still go through
+        // the drawer's W1 form.
+        await acknowledgeField(projectId, targetFieldId, 'target', 'acknowledged')
+        pushToast({
+          id: `inline-acknowledge-${rowId}-${Date.now()}`,
+          variant: 'success',
+          message: 'Field acknowledged.',
+        })
+        setTimeout(() => router.refresh(), 150)
+      } catch (err) {
+        pushToast({
+          id: `inline-acknowledge-${rowId}-${Date.now()}`,
+          variant: 'error',
+          message:
+            err instanceof Error ? err.message : 'Could not acknowledge field.',
+        })
+        clearOptimistic(rowId)
+        return
+      }
+      setTimeout(() => clearOptimistic(rowId), 250)
+    },
+    [data.rows, projectId, setOptimistic, clearOptimistic, pushToast, router],
+  )
+
+  // The inline ✗ on `target_acknowledged` rows opens the drawer with
+  // the `?focus=unack` deep-link rather than firing the un-acknowledge
+  // wrapper directly. Founder lock — un-acknowledge is a destructive
+  // identity-dissolving action and deserves a confirmation surface;
+  // the drawer's existing UnacknowledgeConfirmDialog is that surface.
+  // Block F (this same phase) wires the focus param into a scroll +
+  // brief-highlight pulse on the drawer's existing un-ack button.
+  const handleInlineUnacknowledge = useCallback(
+    (rowId: string) => {
+      setDrawerRowId(rowId)
+      setDrawerFocus('unack')
+      const filterQs = serializeFilterStateToQuery(filters)
+      const params = new URLSearchParams(filterQs)
+      params.set('drawer', rowId)
+      params.set('focus', 'unack')
+      const qs = params.toString()
+      router.replace(
+        `/app/projects/${projectId}/mapping${qs ? `?${qs}` : ''}`,
+        { scroll: false },
+      )
+    },
+    [router, projectId, filters],
+  )
+
+  // ── Phase 4-polish-3 — focus consumption + URL strip ──────────────
+  //
+  // Fired by the drawer once it has scrolled the un-acknowledge
+  // button into view and started its highlight pulse. We clear the
+  // local `drawerFocus` state and rewrite the URL without the
+  // `?focus=unack` param so the focus does not re-trigger on
+  // unrelated re-renders (e.g., subsequent filter changes that
+  // re-emit `writeUrl`).
+  const handleFocusConsumed = useCallback(() => {
+    setDrawerFocus(null)
+    const filterQs = serializeFilterStateToQuery(filters)
+    const params = new URLSearchParams(filterQs)
+    if (drawerRowId !== null) params.set('drawer', drawerRowId)
+    const qs = params.toString()
+    router.replace(
+      `/app/projects/${projectId}/mapping${qs ? `?${qs}` : ''}`,
+      { scroll: false },
+    )
+  }, [router, projectId, filters, drawerRowId])
+
+  const handleInlineSourceCommit = useCallback(
+    async (rowId: string, finalIds: string[]) => {
+      const row = data.rows.find((r) => r.id === rowId)
+      if (row === undefined) return
+      if (finalIds.length === 0) return // Picker's empty-error guard handles UX.
+
+      setOptimistic(rowId, 'mapping')
+
+      const isMulti = finalIds.length > 1
+      const wasMulti = row.kind === 'mapped' && row.sources.length > 1
+
+      // Combination-type resolution per polish-3 spec:
+      //   • finalIds.length === 1 → 'single'
+      //   • multi & was multi (mapped) → preserve existing unless
+      //     'custom_sql' (which is filtered out of inline-edit
+      //     eligibility upstream).
+      //   • multi & was single | unmapped → default 'concat_space'
+      //     to match `CreateMappingForm`'s pre-selection.
+      let combinationType: CreateFieldMappingCombinationType
+      if (!isMulti) {
+        combinationType = 'single'
+      } else if (
+        row.kind === 'mapped' &&
+        wasMulti &&
+        (row.combinationType === 'concat_space' ||
+          row.combinationType === 'concat_comma')
+      ) {
+        combinationType = row.combinationType
+      } else {
+        combinationType = 'concat_space'
+      }
+
+      try {
+        if (row.kind === 'unmapped') {
+          const result = await createFieldMapping({
+            projectId,
+            targetFieldId: row.targetField.id,
+            sourceFieldIds: finalIds,
+            combinationType,
+          })
+          if (!result.success) {
+            pushToast({
+              id: `inline-map-${rowId}-${Date.now()}`,
+              variant: 'error',
+              message: result.error ?? 'Could not create mapping.',
+            })
+            clearOptimistic(rowId)
+            return
+          }
+          pushToast({
+            id: `inline-map-${rowId}-${Date.now()}`,
+            variant: 'success',
+            message: isMulti
+              ? 'Mapping created. Now multi-source — define combination logic in the Transform tab.'
+              : 'Mapping created.',
+          })
+        } else if (row.kind === 'mapped') {
+          const result = await editMappingSources({
+            tfmId: rowId,
+            sourceFieldIds: finalIds,
+            combinationType,
+          })
+          if (!result.success) {
+            pushToast({
+              id: `inline-map-${rowId}-${Date.now()}`,
+              variant: 'error',
+              message: result.error ?? 'Could not update mapping sources.',
+            })
+            clearOptimistic(rowId)
+            return
+          }
+          const message =
+            !wasMulti && isMulti
+              ? 'Now multi-source. Define combination logic in the Transform tab.'
+              : 'Source updated.'
+          pushToast({
+            id: `inline-map-${rowId}-${Date.now()}`,
+            variant: 'success',
+            message,
+          })
+        } else {
+          // Other row.kind values are filtered out by FieldMappingRow's
+          // `isInlineSourceEditable` guard before reaching this handler.
+          clearOptimistic(rowId)
+          return
+        }
+        router.refresh()
+      } catch (err) {
+        pushToast({
+          id: `inline-map-${rowId}-${Date.now()}`,
+          variant: 'error',
+          message: err instanceof Error ? err.message : 'Could not save mapping.',
+        })
+        clearOptimistic(rowId)
+        return
+      }
+      setTimeout(() => clearOptimistic(rowId), 200)
+    },
+    [data.rows, projectId, setOptimistic, clearOptimistic, pushToast, router],
+  )
+
   const handleDrawerActionComplete = useCallback(
     (action: 'approve' | 'reject' | 'unacknowledge', _rowId: string) => {
       // Phase 3 Gap 11b — clear the sidebar highlight after any
@@ -1297,6 +1638,13 @@ function MappingContentLoaded({
                       isCollapsed={isCollapsed(summary.name)}
                       isAutoExpanded={isAutoExpanded}
                       onToggleCollapse={toggleCollapsed}
+                      availableSourceFields={data.sourceFields}
+                      optimisticStates={optimisticStates}
+                      onInlineApprove={handleInlineApprove}
+                      onInlineReject={handleInlineRejectClick}
+                      onInlineAcknowledge={handleInlineAcknowledge}
+                      onInlineUnacknowledge={handleInlineUnacknowledge}
+                      onInlineSourceCommit={handleInlineSourceCommit}
                     />
                   )
                 })}
@@ -1334,7 +1682,27 @@ function MappingContentLoaded({
             : null
         }
         onRestoreConsumed={handleRestoreConsumed}
+        focus={drawerFocus}
+        onFocusConsumed={handleFocusConsumed}
       />
+
+      {/*
+        Phase 4-polish-3 — reject confirmation popover. Anchored to
+        the row's ✗ button. Single global instance keyed by
+        `rejectAnchor` so concurrent reject popovers can't stack;
+        opening a second one auto-closes the first via the
+        `setRejectAnchor` setter.
+      */}
+      {rejectAnchor !== null ? (
+        <RejectConfirmPopover
+          // The popover expects a `RefObject` shape — wrap the
+          // captured DOM node in a frozen ref-shaped object so the
+          // popover's positioning effect can read `.current`.
+          anchorRef={{ current: rejectAnchor.anchorEl }}
+          onConfirm={handleRejectConfirm}
+          onCancel={handleRejectCancel}
+        />
+      ) : null}
 
       {/*
         Phase 4c-1 — bulk confirm dialog. Single global instance,

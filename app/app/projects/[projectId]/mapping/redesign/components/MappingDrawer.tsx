@@ -284,6 +284,25 @@ export interface MappingDrawerProps {
   restoreFormState?: CreateMappingFormSnapshot | null
   /** See `restoreFormState`. */
   onRestoreConsumed?: () => void
+  /**
+   * Phase 4-polish-3 — drawer deep-link focus instruction. Set by the
+   * parent when the URL carries `?focus=unack`; the drawer scrolls
+   * the un-acknowledge button into view and pulses a brief highlight
+   * so users coming from the inline ✗ on a `target_acknowledged` row
+   * land directly on the destructive action without hunting for it.
+   *
+   * Only meaningful when `row?.kind === 'target_acknowledged'`. For
+   * other row kinds the drawer ignores the prop (the un-ack button
+   * doesn't render).
+   *
+   * Once consumed (focused + highlighted), the drawer fires
+   * `onFocusConsumed?.()` so the parent can strip the param from the
+   * URL — leaving it in the URL would re-fire the focus on every
+   * re-render.
+   */
+  focus?: 'unack' | null
+  /** See `focus`. */
+  onFocusConsumed?: () => void
 }
 
 /**
@@ -300,6 +319,8 @@ export function MappingDrawer({
   onFormDirtyChange,
   restoreFormState,
   onRestoreConsumed,
+  focus,
+  onFocusConsumed,
 }: MappingDrawerProps) {
   const titleId = useId()
   const drawerRef = useRef<HTMLElement | null>(null)
@@ -308,6 +329,53 @@ export function MappingDrawer({
   // when `isOpen` flips from false → true; restoring on close happens in
   // the cleanup of the same effect.
   const triggerRef = useRef<HTMLElement | null>(null)
+
+  // ── Phase 4-polish-3 — `?focus=unack` deep-link state ─────────────
+  //
+  // When the drawer opens with `focus === 'unack'` (set by the parent
+  // off the URL param), we scroll the un-acknowledge button into view
+  // and pulse a 1.5s highlight so the user lands directly on the
+  // destructive action they came for from the inline ✗ on the row.
+  // The highlight is a slate ring rendered via a `data-focus-pulse`
+  // attribute the button reads off (CSS in `AcknowledgedFooterButtons`
+  // ramps a ring on / off based on the attribute).
+  //
+  // After the scroll + highlight fire, we call `onFocusConsumed?.()`
+  // so the parent can strip the param from the URL — leaving it
+  // would re-fire the focus on every drawer-affecting re-render.
+  const [focusPulseActive, setFocusPulseActive] = useState(false)
+  useEffect(() => {
+    if (focus !== 'unack') return
+    if (row?.kind !== 'target_acknowledged') {
+      // Not applicable on this row kind; consume the param so the
+      // URL doesn't keep the stale instruction around.
+      onFocusConsumed?.()
+      return
+    }
+    let pulseTimer: ReturnType<typeof setTimeout> | null = null
+    // Wait one paint so the drawer's body has mounted before we
+    // measure the un-ack button.
+    const rafId = requestAnimationFrame(() => {
+      const btn = drawerRef.current?.querySelector(
+        '[data-testid="mapping-drawer-unacknowledge-button"]',
+      )
+      if (btn instanceof HTMLElement) {
+        btn.scrollIntoView({ behavior: 'smooth', block: 'nearest' })
+        setFocusPulseActive(true)
+        pulseTimer = setTimeout(() => {
+          setFocusPulseActive(false)
+        }, 1500)
+      }
+      // Consume immediately (whether the button was found or not) so
+      // the parent can strip the URL param. The local pulse, if any,
+      // continues independently.
+      onFocusConsumed?.()
+    })
+    return () => {
+      cancelAnimationFrame(rafId)
+      if (pulseTimer !== null) clearTimeout(pulseTimer)
+    }
+  }, [focus, row?.kind, onFocusConsumed])
 
   // ── Phase 4a-2 — manual mapping creation form state ───────────────
   //
@@ -1001,6 +1069,7 @@ export function MappingDrawer({
         onEditFormSaveClick={() => void handleEditSavePrecheck()}
         isUnacknowledging={isUnacknowledging}
         onUnacknowledgeClick={() => setConfirmUnacknowledgeOpen(true)}
+        unacknowledgePulseActive={focusPulseActive}
       />
       <EditInvalidationDialog
         preview={editInvalidationPreview}
@@ -2844,6 +2913,12 @@ interface DrawerFooterProps {
    * action.
    */
   onUnacknowledgeClick: () => void
+  /**
+   * Phase 4-polish-3 — true for ~1.5s after a `?focus=unack` deep-link
+   * lands. The Un-acknowledge button renders a slate ring while this
+   * is true so the user lands on the destructive action they came for.
+   */
+  unacknowledgePulseActive: boolean
 }
 
 function DrawerFooter({
@@ -2869,6 +2944,7 @@ function DrawerFooter({
   onEditFormSaveClick,
   isUnacknowledging,
   onUnacknowledgeClick,
+  unacknowledgePulseActive,
 }: DrawerFooterProps) {
   // Phase 4b-1 — when the user is editing a mapped row, the footer
   // collapses to `[Cancel] [Save changes]` regardless of the row's
@@ -2938,6 +3014,7 @@ function DrawerFooter({
         <AcknowledgedFooterButtons
           isUnacknowledging={isUnacknowledging}
           onUnacknowledgeClick={onUnacknowledgeClick}
+          pulseActive={unacknowledgePulseActive}
         />
       ) : (
         // Drawer redesign — Q11.A lock: Edit moved out of the footer
@@ -3263,25 +3340,37 @@ function EditFooterButtons({
 interface AcknowledgedFooterButtonsProps {
   isUnacknowledging: boolean
   onUnacknowledgeClick: () => void
+  /**
+   * Phase 4-polish-3 — true while the `?focus=unack` deep-link pulse
+   * is active (~1.5s). Renders a slate ring around the button so the
+   * user who came from the inline ✗ on a `target_acknowledged` row
+   * lands directly on the destructive action.
+   */
+  pulseActive: boolean
 }
 
 function AcknowledgedFooterButtons({
   isUnacknowledging,
   onUnacknowledgeClick,
+  pulseActive,
 }: AcknowledgedFooterButtonsProps) {
   return (
     <div className="flex items-center justify-end gap-2">
       <button
         type="button"
         data-testid="mapping-drawer-unacknowledge-button"
+        data-focus-pulse={pulseActive ? 'true' : undefined}
         aria-label="Un-acknowledge field"
         onClick={onUnacknowledgeClick}
         disabled={isUnacknowledging}
         className={cn(
-          'inline-flex h-9 items-center justify-center gap-1.5 rounded-md border px-3 text-sm font-medium transition-colors',
+          'inline-flex h-9 items-center justify-center gap-1.5 rounded-md border px-3 text-sm font-medium transition-shadow',
           'border-slate-300 bg-white text-slate-700 hover:bg-slate-50',
           'focus:outline-none focus:ring-2 focus:ring-slate-500/30',
           'disabled:cursor-not-allowed disabled:border-slate-200 disabled:bg-slate-50 disabled:text-slate-400',
+          pulseActive
+            ? 'ring-2 ring-slate-400 ring-offset-2 motion-reduce:transition-none'
+            : '',
         )}
       >
         {isUnacknowledging ? (

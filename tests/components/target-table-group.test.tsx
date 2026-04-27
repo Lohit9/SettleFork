@@ -432,14 +432,18 @@ describe('TargetTableGroup — column header strip', () => {
     render(<TargetTableGroup targetTable={summary} rows={rows} />)
     const header = screen.getByTestId('target-table-column-headers')
     // Refinement G (Phase 4-polish-1 final, 2026-04-26): col 6 (chevron)
-    // dropped. Template went from 6 cols → 5 cols. The header strip
-    // mirrors the row template byte-for-byte.
+    // dropped. Template went from 6 cols → 5 cols.
+    //
+    // Phase 4-polish-3 (2026-04-27): a new 5rem actions column was
+    // re-added at the row end (col 6) to host the inline ✓/✗/+/⊘
+    // buttons. The header strip mirrors the row template byte-for-
+    // byte and now ships a sixth (empty) header cell.
     expect(header.className).toContain(
-      'grid-cols-[0.75rem_minmax(6rem,8rem)_minmax(8rem,14rem)_1fr_5rem]',
+      'grid-cols-[0.75rem_minmax(6rem,8rem)_minmax(8rem,14rem)_1fr_5rem_5rem]',
     )
   })
 
-  it('TargetTableGroup.tsx contains the locked 5-column header grid template literal', () => {
+  it('TargetTableGroup.tsx contains the locked 6-column header grid template literal', () => {
     // Source-level invariant: pin the literal in the source file so a
     // refactor that changes only the rendered className (e.g. via a
     // dynamic helper) still trips a guard. Mirrors the
@@ -454,14 +458,19 @@ describe('TargetTableGroup — column header strip', () => {
       'utf-8',
     )
     const expected =
-      'grid-cols-[0.75rem_minmax(6rem,8rem)_minmax(8rem,14rem)_1fr_5rem]'
+      'grid-cols-[0.75rem_minmax(6rem,8rem)_minmax(8rem,14rem)_1fr_5rem_5rem]'
     expect(file).toContain(expected)
     // Belt and suspenders: the prior 6-col template (with trailing
     // `_1rem` chevron column) must NOT appear in the source file —
-    // a partial-revert leaving the header at 6 cols would pass the
-    // `toContain` check above.
+    // a partial-revert that swaps in a chevron col would otherwise
+    // hide behind the broader `toContain` check above.
     expect(file).not.toContain(
       'grid-cols-[0.75rem_minmax(6rem,8rem)_minmax(8rem,14rem)_1fr_5rem_1rem]',
+    )
+    // Belt and suspenders #2: the polish-1 5-col template (no
+    // trailing actions column) must NOT appear either.
+    expect(file).not.toMatch(
+      /grid-cols-\[0\.75rem_minmax\(6rem,8rem\)_minmax\(8rem,14rem\)_1fr_5rem\](?!_)/,
     )
   })
 })

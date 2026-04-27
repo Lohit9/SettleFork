@@ -553,22 +553,26 @@ describe('FieldMappingRow — chevron position (Refinement G)', () => {
   it('chevron sits inline alongside the source-field render (col 3 area), not at row end', () => {
     // Walk the row body's direct children. Pre-Refinement G the
     // chevron was its own grid cell at index 5 (last). Post-
-    // Refinement G the row body has 5 grid cells; the chevron lives
-    // INSIDE col 3 (a flex wrapper around `SourceFieldCell` +
-    // `InlineExpandChevron`). Pin: the chevron is NOT a direct child
-    // of the row body.
+    // Refinement G the chevron lives INSIDE col 3 (a flex wrapper
+    // around `SourceFieldCell` + `InlineExpandChevron`).
+    //
+    // Phase 4-polish-3 (2026-04-27): the row body grew BACK to 6
+    // grid cells with the addition of the inline-actions column at
+    // the row end. The chevron still lives inline at col 3 — the
+    // new col 6 hosts the per-row ✓/✗/+/⊘ buttons, not the chevron.
     render(<FieldMappingRow row={rule2Row()} />)
     const body = screen.getByTestId('field-mapping-row-body')
     const chevron = screen.getByTestId('field-mapping-row-chevron')
-    expect(body.children).toHaveLength(5)
+    expect(body.children).toHaveLength(6)
     // Chevron's parent is the col-3 flex wrapper; that wrapper IS one
-    // of the row body's 5 children (specifically the 3rd, 0-indexed:
-    // col 1 status, col 2 src tbl, col 3 src field+chevron, col 4
-    // target, col 5 confidence).
+    // of the row body's 6 children. Pin: the chevron is NOT a direct
+    // child of the row body (col 6 actions cell at the row end).
     expect(chevron.parentElement).not.toBe(body)
     expect(chevron.parentElement?.parentElement).toBe(body)
     // Index of the chevron's parent within the row body's children
-    // is 2 (the third grid cell — col 3 source field).
+    // is 2 (the third grid cell — col 3 source field). Order:
+    // col 1 status, col 2 src tbl, col 3 src field+chevron,
+    // col 4 target, col 5 confidence, col 6 actions.
     const wrapperIndex = Array.from(body.children).indexOf(
       chevron.parentElement as Element,
     )
@@ -590,9 +594,13 @@ describe('FieldMappingRow — chevron position (Refinement G)', () => {
     // Single-source rows have no chevron at all (canExpand=false). The
     // col-3 wrapper still exists structurally (so the grid layout
     // stays consistent) but contains only the field render.
+    //
+    // Phase 4-polish-3 (2026-04-27): the row body grew BACK to 6
+    // grid cells with the addition of the inline-actions column at
+    // the row end (col 6 hosts ✓/✗/+/⊘ buttons).
     render(<FieldMappingRow row={mapped()} />)
     const body = screen.getByTestId('field-mapping-row-body')
-    expect(body.children).toHaveLength(5)
+    expect(body.children).toHaveLength(6)
     expect(screen.queryByTestId('field-mapping-row-chevron')).toBeNull()
   })
 })
@@ -1190,7 +1198,7 @@ describe('FieldMappingRow — Phase 4-polish-1 confidence color-grading', () => 
 // without showing up as a CI failure.
 
 describe('FieldMappingRow — column template invariant', () => {
-  it('FieldMappingRow.tsx contains the locked 5-column grid template literal', () => {
+  it('FieldMappingRow.tsx contains the locked 6-column grid template literal', () => {
     const fs = require('node:fs') as typeof import('node:fs')
     const path = require('node:path') as typeof import('node:path')
     const file = fs.readFileSync(
@@ -1211,20 +1219,32 @@ describe('FieldMappingRow — column template invariant', () => {
     // rows only. Template went from 6 cols → 5 cols. Single-source
     // rows have no chevron at all.
     //
+    // Phase 4-polish-3 (2026-04-27): a new 5rem actions column was
+    // RE-ADDED at the row end (col 6) to host the inline ✓/✗/+/⊘
+    // action buttons. Template went 5 cols → 6 cols. The chevron
+    // remains inline in col 3 (NOT a dedicated col 6 chevron slot).
+    //
     // If a future refactor legitimately needs a new template, update
     // both this literal AND the ASCII figure in `FieldMappingRow.tsx`
     // file header AND the paired invariant in
     // `target-table-group.test.tsx` at the same time — the column
     // header in `TargetTableGroup.tsx` mirrors this template literal.
     const expected =
-      'grid-cols-[0.75rem_minmax(6rem,8rem)_minmax(8rem,14rem)_1fr_5rem]'
+      'grid-cols-[0.75rem_minmax(6rem,8rem)_minmax(8rem,14rem)_1fr_5rem_5rem]'
     expect(file).toContain(expected)
     // Belt and suspenders: the prior 6-col template (with trailing
     // `_1rem` chevron column) must NOT appear anywhere in the file —
-    // a partial-revert that re-introduces col 6 in just the row body
-    // would otherwise pass the `toContain` check above.
+    // a partial-revert that re-introduces a chevron col would
+    // otherwise hide behind the broader `toContain` check.
     expect(file).not.toContain(
       'grid-cols-[0.75rem_minmax(6rem,8rem)_minmax(8rem,14rem)_1fr_5rem_1rem]',
+    )
+    // Belt and suspenders #2: the polish-1 5-col template (no
+    // trailing actions column) must NOT appear either — guards
+    // against an accidental partial revert that drops the actions
+    // column without restoring the chevron col.
+    expect(file).not.toMatch(
+      /grid-cols-\[0\.75rem_minmax\(6rem,8rem\)_minmax\(8rem,14rem\)_1fr_5rem\](?!_)/,
     )
   })
 
@@ -1293,34 +1313,43 @@ describe('FieldMappingRow — confidence cell renders percent only (Refinement F
   })
 })
 
-// ─── Regression guard: the dropped 5rem actions cell is GONE ────────────────
+// ─── Inline actions cell — re-added in Phase 4-polish-3 ─────────────────────
 //
-// Phase 4-polish-1 comprehensive pass dropped the dedicated actions cell.
-// If a future change reintroduces a 5rem column reservation in the row's
-// grid template (e.g., to host Phase 4-polish-3 inline approve/reject
-// buttons), the column-template invariant test will catch it. This guard
-// adds a second-channel assertion: the row body should NOT have a child
-// flex+justify-end div separate from the ConfidenceCell.
+// Phase 4-polish-1 dropped the dedicated actions cell. Phase 4-polish-3
+// (2026-04-27) re-added it as the rightmost grid column (col 6, 5rem)
+// to host the inline ✓ / ✗ / + / ⊘ action buttons. Pin the structural
+// presence: the row body should expose a `field-mapping-row-actions`
+// child that lives at the row-end (col 6 position).
+//
+// The cell's content opacity is gated on `group-hover` /
+// `focus-within`; tests targeting visibility live below in the
+// inline-row-actions describe block.
 
-describe('FieldMappingRow — dropped actions cell regression guard', () => {
-  it('row body has no standalone flex+justify-end actions container outside the confidence cell', () => {
+describe('FieldMappingRow — inline actions cell structural presence', () => {
+  it('renders an end-aligned `field-mapping-row-actions` child as the last grid cell', () => {
+    render(<FieldMappingRow row={mapped({ hasTransformation: false })} />)
+    const body = screen.getByTestId('field-mapping-row-body')
+    const actions = screen.getByTestId('field-mapping-row-actions')
+    // The actions cell IS a direct child of the row body (col 6).
+    expect(actions.parentElement).toBe(body)
+    // It is the LAST child of the row body — col 6 of the 6-col grid.
+    expect(body.lastElementChild).toBe(actions)
+    // It carries the flex+justify-end layout so buttons stack at the
+    // row's right edge.
+    expect(actions.className).toContain('justify-end')
+    expect(actions.className).toContain('flex')
+  })
+
+  it('the confidence cell is NOT the last grid cell (the actions cell sits to its right)', () => {
     const { container } = render(
       <FieldMappingRow row={mapped({ hasTransformation: false })} />,
     )
-    // Direct children of the row body. After the comprehensive pass the
-    // body grid contains: StatusDot, SourceTable, SourceField, Target,
-    // ConfidenceCell, Chevron. None of those should be a flex+justify-
-    // end container that's distinct from the confidence cell.
     const body = screen.getByTestId('field-mapping-row-body')
-    const directChildren = Array.from(body.children)
-    const orphanActions = directChildren.find((el) => {
-      if (!(el instanceof HTMLElement)) return false
-      // The confidence cell IS flex+justify-end when it carries content,
-      // but it carries `data-confidence-band` — exclude it.
-      if (el.hasAttribute('data-confidence-band')) return false
-      return el.className.includes('justify-end') && el.className.includes('flex')
-    })
-    expect(orphanActions).toBeUndefined()
+    const confidenceCell = container.querySelector('[data-confidence-band]')
+    expect(confidenceCell).toBeTruthy()
+    // The confidence cell is col 5; the actions cell at col 6 sits to
+    // its right. So the confidence cell is NOT the last child of body.
+    expect(body.lastElementChild).not.toBe(confidenceCell)
   })
 })
 
