@@ -75,20 +75,22 @@ describe('[mapping-drawer-unacknowledge] UN1 — button presence', () => {
     expect(SRC).toMatch(/data-testid="mapping-drawer-unacknowledge-spinner"/)
   })
 
-  it('UN1d: button is rightmost in AcknowledgedFooterButtons (after disabled Approve)', () => {
+  it('UN1d: button is the SOLE control in AcknowledgedFooterButtons (Q11.A — disabled Approve/Reject removed)', () => {
+    // Drawer redesign Q11.A: AcknowledgedFooterButtons no longer
+    // renders the disabled [Reject] / [Approve] siblings (they were
+    // visual noise — un-acknowledging is the only meaningful action
+    // for an ack row). Verify Approve and Reject are absent and the
+    // un-acknowledge button is the lone footer control.
     const ackFooter = sliceBetween(
       SRC,
       'function AcknowledgedFooterButtons',
       '\nfunction ',
     )
-    const approveIdx = ackFooter.indexOf(
-      'data-testid="mapping-drawer-approve-button"',
+    expect(ackFooter).not.toMatch(/data-testid="mapping-drawer-approve-button"/)
+    expect(ackFooter).not.toMatch(/data-testid="mapping-drawer-reject-button"/)
+    expect(ackFooter).toMatch(
+      /data-testid="mapping-drawer-unacknowledge-button"/,
     )
-    const unackIdx = ackFooter.indexOf(
-      'data-testid="mapping-drawer-unacknowledge-button"',
-    )
-    expect(approveIdx).toBeGreaterThan(0)
-    expect(unackIdx).toBeGreaterThan(approveIdx)
   })
 })
 

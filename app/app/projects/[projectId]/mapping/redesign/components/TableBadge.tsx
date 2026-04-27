@@ -26,6 +26,13 @@ import { cn } from '@/components/ui/utils'
 // rationale. The grep invariant at
 // `tests/lib/no-shim-in-redesign-path.test.ts` enforces this at CI time.
 
+// Q11.G lock (drawer redesign): support a compact `'sm'` variant for the
+// drawer header line 1, while keeping `'md'` (the existing visual) as the
+// default for every existing call site. Adding `size?: 'sm' | 'md'` is a
+// purely additive prop — no current caller passes `size`, so all rows,
+// filters, and previews keep their current chrome unchanged.
+type TableBadgeSize = 'sm' | 'md'
+
 interface TableBadgeProps {
   /** Table name to display. Required. */
   tableName: string
@@ -36,24 +43,47 @@ interface TableBadgeProps {
    * Omitted inside row chrome.
    */
   datasetName?: string
+  /**
+   * Visual size variant.
+   *   • `'md'` (default): the established 11px row/filter chrome.
+   *   • `'sm'`: a tighter 10px chrome used by the redesign drawer header
+   *     line 1 where two badges + two field names + a close button must
+   *     coexist on a single 480px row.
+   */
+  size?: TableBadgeSize
   /** Optional Tailwind class overrides (e.g. sizing inside a tight cell). */
   className?: string
 }
 
-export function TableBadge({ tableName, datasetName, className }: TableBadgeProps) {
+const SIZE_CLASSES: Record<TableBadgeSize, { container: string; primary: string; secondary: string }> = {
+  md: {
+    container: 'max-w-[14rem] px-1.5 py-0.5 text-[11px]',
+    primary: 'leading-tight',
+    secondary: 'text-[10px]',
+  },
+  sm: {
+    container: 'max-w-[10rem] px-1 py-0 text-[10px]',
+    primary: 'leading-none',
+    secondary: 'text-[9px]',
+  },
+}
+
+export function TableBadge({ tableName, datasetName, size = 'md', className }: TableBadgeProps) {
+  const sizeClasses = SIZE_CLASSES[size]
   return (
     <span
       className={cn(
-        'inline-flex max-w-[14rem] flex-col items-start rounded-md bg-slate-100 px-1.5 py-0.5 align-middle text-[11px] font-medium text-slate-700',
+        'inline-flex flex-col items-start rounded-md bg-slate-100 align-middle font-medium text-slate-700',
+        sizeClasses.container,
         className,
       )}
       // Title attribute provides the non-truncated name on hover; the
       // visible text node always truncates to keep rows single-line.
       title={datasetName ? `${tableName} · ${datasetName}` : tableName}
     >
-      <span className="block w-full truncate font-mono leading-tight">{tableName}</span>
+      <span className={cn('block w-full truncate font-mono', sizeClasses.primary)}>{tableName}</span>
       {datasetName ? (
-        <span className="block w-full truncate text-[10px] font-normal text-slate-500">
+        <span className={cn('block w-full truncate font-normal text-slate-500', sizeClasses.secondary)}>
           {datasetName}
         </span>
       ) : null}

@@ -11,7 +11,17 @@ import {
 } from 'react'
 import { Loader2 } from 'lucide-react'
 import { cn } from '@/components/ui/utils'
-import { AlertCircle, Sparkles, X } from '@/components/icons'
+import {
+  AlertCircle,
+  AlertTriangle,
+  ArrowRight,
+  Check,
+  ChevronDown,
+  ChevronRight,
+  Pencil,
+  Sparkles,
+  X,
+} from '@/components/icons'
 import {
   AlertDialog,
   AlertDialogAction,
@@ -26,8 +36,8 @@ import type {
   MappedRow,
   MappingRow,
   MappingSourceRef,
+  MappingTransformationStatus,
   TargetAcknowledgedRow,
-  TargetFieldRef,
   UnmappedRow,
   ValueAssignmentRow,
 } from '@/lib/types/mappings-for-redesign'
@@ -37,9 +47,11 @@ import {
   rejectFieldMapping,
   unacknowledgeField,
 } from '@/lib/actions/mappings-for-redesign'
-import { classifyMappedRow, type MappingRowRule } from '@/lib/utils/mapping-row-rules'
-import { formatSampleValues } from '@/lib/utils/mapping-drawer-format'
-import { formatConfidencePercent } from '@/lib/utils/confidence-format'
+import { classifyMappedRow } from '@/lib/utils/mapping-row-rules'
+import {
+  classifyRowConfidence,
+  formatConfidencePercent,
+} from '@/lib/utils/confidence-format'
 import type { SourceFieldWithState } from '@/lib/types/mappings-for-redesign'
 import { TableBadge } from './TableBadge'
 import {
@@ -934,7 +946,6 @@ export function MappingDrawer({
         titleId={titleId}
         onClose={maybeRequestClose}
       />
-      <DrawerSubheader row={effectiveRow} />
       <DrawerBody
         row={effectiveRow}
         isFormActive={isFormActive}
@@ -957,6 +968,7 @@ export function MappingDrawer({
         editInitialState={editInitialState}
         onEditFormCancel={handleEditFormCancel}
         onEditFormSaveSuccess={handleEditFormSaveSuccess}
+        onEditClick={handleEditClick}
       />
       <DrawerFooter
         row={effectiveRow}
@@ -985,7 +997,6 @@ export function MappingDrawer({
         onFormSaveClick={() => formRef.current?.triggerSave()}
         editFormActive={editFormActive}
         isEditPreviewPending={isEditPreviewPending}
-        onEditClick={handleEditClick}
         onEditFormCancelClick={() => maybeRequestClose()}
         onEditFormSaveClick={() => void handleEditSavePrecheck()}
         isUnacknowledging={isUnacknowledging}
@@ -1049,8 +1060,76 @@ const GENERIC_REJECT_ERROR =
 const GENERIC_UNACKNOWLEDGE_ERROR =
   "Couldn't un-acknowledge this field. Please try again."
 
-// ── Header ─────────────────────────────────────────────────────────────────
+// ── Header (drawer redesign — compressed 2-line) ───────────────────────────
+//
+// Shape (founder lock):
+//
+//   Line 1: [srcTable] sourceField  →  [tgtTable] targetField    [✕]
+//   Line 2: ●  87.50%  ·  VARCHAR(50) → VARCHAR(200)
+//
+// Line 1 collapses the legacy header (target field only) and DrawerSubheader
+// (per-rule "from" prose) into a single source→target identity row. Per
+// Q11.H lock, multi-source rows show only the dominant source on line 1
+// with a `+N sources` chip that scrolls the body to the Sources section.
+//
+// Line 2 collapses the legacy `Status`, `Confidence`, and per-source type-
+// compat sections into a single tabular meta strip. Suppressed entirely
+// for Rule 6 unmapped per founder lock — line 2 just doesn't render.
+//
+// Total height ~52-56px, down from the legacy header+subheader at ~101px
+// combined. Scroll real estate goes to the body sections (Sources / AI
+// Reasoning / Transformation).
 
+const SOURCES_SECTION_TESTID = 'drawer-section-sources'
+
+/**
+ * Scroll the body to the Sources section. Used by the multi-source
+ * `+N sources` chip on line 1 (Q11.H lock). Falls through silently when
+ * the section is absent (defensive — the chip should only render when a
+ * Sources section exists, but tests / future kinds can drop it).
+ */
+function scrollToSourcesSection() {
+  if (typeof document === 'undefined') return
+  const target = document.querySelector<HTMLElement>(
+    `[data-testid="${SOURCES_SECTION_TESTID}"]`,
+  )
+  if (target) {
+    target.scrollIntoView({ block: 'start', behavior: 'smooth' })
+  }
+}
+
+/**
+ * Drawer header — drawer-redesign refinement (canary feedback).
+ *
+ * Founder canary review (drawer redesign refinements §Header restructure)
+ * promotes status + confidence from the OVERVIEW body section to the
+ * SOURCE row's top-right corner, alongside the close button. The
+ * status word ("Approved", "Needs Review", …) is dropped from
+ * user-visible text — the dot color carries the status signal and a
+ * `title=` attribute exposes the word for hover/screen-reader access.
+ *
+ *   SOURCE                                          ●  92%   ✕
+ *   [srcTable] srcField                  (+N sources chip if Rule 3/4)
+ *   TARGET
+ *   [tgtTable] tgtField
+ *
+ * The body's leading OVERVIEW section is removed entirely (its
+ * remaining payload — type compatibility + AI reasoning — moves to a
+ * new ANALYSIS section in the body). Status + confidence land in the
+ * header so the at-a-glance answer (status, confidence) sits with
+ * identity at the top of the drawer.
+ *
+ * All identity fields render at `text-base font-mono font-normal`
+ * (weight dropped from `font-semibold` per the prior pass — drawer
+ * source/target now match the list-view source/target weight, and the
+ * SOURCE / TARGET small-caps labels carry section emphasis on their
+ * own).
+ *
+ * Sticky vs. scroll-with-body: the header is intentionally NOT sticky —
+ * canary screenshots confirmed the drawer body has ample empty space
+ * below the Transformation section on most rows, so pinning the header
+ * costs more than it saves.
+ */
 function DrawerHeader({
   row,
   titleId,
@@ -1063,191 +1142,282 @@ function DrawerHeader({
   return (
     <header
       data-testid="mapping-drawer-header"
-      className="sticky top-0 z-10 flex items-center justify-between gap-3 border-b border-slate-200 bg-white px-5 py-4"
+      className="border-b border-slate-200 bg-white px-5 py-4"
     >
-      <div className="flex min-w-0 items-center gap-2">
-        <h2
-          id={titleId}
-          data-testid="mapping-drawer-title"
-          className="truncate font-mono text-base font-semibold text-slate-900"
-          title={row.targetField.name}
-        >
-          {row.targetField.name}
-        </h2>
-        <TableBadge tableName={row.targetField.targetTable.name} />
-      </div>
-      <button
-        type="button"
-        onClick={onClose}
-        aria-label="Close drawer"
-        data-testid="mapping-drawer-close"
-        className={cn(
-          'inline-flex h-7 w-7 flex-shrink-0 items-center justify-center rounded-md',
-          'text-slate-400 transition-colors hover:bg-slate-100 hover:text-slate-700',
-          'focus:outline-none focus-visible:ring-2 focus-visible:ring-slate-300',
-        )}
+      <HeaderIdentitySection
+        kind="source"
+        label="SOURCE"
+        labelTestId="mapping-drawer-header-source-label"
+        onClose={onClose}
+        // Drawer redesign refinements §1: status + confidence move
+        // from the OVERVIEW body section to the SOURCE row's
+        // top-right corner. Suppressed entirely for Rule 6 unmapped
+        // rows (no status to surface, no confidence available).
+        rightSlot={
+          row.kind !== 'unmapped' ? <HeaderStatusBadge row={row} /> : null
+        }
       >
-        <X className="h-4 w-4" />
-      </button>
+        <HeaderSourceIdentity row={row} />
+      </HeaderIdentitySection>
+
+      <HeaderIdentitySection
+        kind="target"
+        label="TARGET"
+        labelTestId="mapping-drawer-header-target-label"
+      >
+        <HeaderTargetIdentity row={row} titleId={titleId} />
+      </HeaderIdentitySection>
     </header>
   )
 }
 
-// ── Subheader (per-row-kind summary) ───────────────────────────────────────
+/**
+ * Wraps a header identity row (SOURCE or TARGET): small-caps label on
+ * top, identity content beneath. The SOURCE variant carries the close
+ * button (right-aligned on the same row as the label) and an optional
+ * `rightSlot` (drawer redesign §Header restructure — used for the
+ * `HeaderStatusBadge`) so the status + confidence + close-X cluster
+ * sits together in the canonical top-right corner.
+ */
+function HeaderIdentitySection({
+  kind,
+  label,
+  labelTestId,
+  onClose,
+  rightSlot,
+  children,
+}: {
+  kind: 'source' | 'target'
+  label: string
+  labelTestId: string
+  onClose?: () => void
+  rightSlot?: React.ReactNode
+  children: React.ReactNode
+}) {
+  return (
+    <div className={kind === 'target' ? 'mt-4' : undefined}>
+      <div
+        className="mb-1 flex items-center justify-between gap-2"
+        data-testid={
+          kind === 'source' ? 'mapping-drawer-header-source-row' : undefined
+        }
+      >
+        <span
+          className="text-xs font-medium uppercase tracking-wide text-slate-500"
+          data-testid={labelTestId}
+        >
+          {label}
+        </span>
+        {rightSlot || onClose ? (
+          <div className="flex items-center gap-2">
+            {rightSlot}
+            {onClose ? (
+              <button
+                type="button"
+                onClick={onClose}
+                aria-label="Close drawer"
+                data-testid="mapping-drawer-close"
+                className={cn(
+                  'inline-flex h-6 w-6 flex-shrink-0 items-center justify-center rounded-md',
+                  'text-slate-400 transition-colors hover:bg-slate-100 hover:text-slate-700',
+                  'focus:outline-none focus-visible:ring-2 focus-visible:ring-slate-300',
+                )}
+              >
+                <X className="h-3.5 w-3.5" />
+              </button>
+            ) : null}
+          </div>
+        ) : null}
+      </div>
+      {children}
+    </div>
+  )
+}
 
 /**
- * Sticky summary line directly under the header. The content varies by
- * row kind / rule per the Gap 7 founder spec:
+ * Source-side identity. Renders an em-dash placeholder for VA / Rule 5 /
+ * Rule 6 (no source); for mapped rows dispatches on the classifier rule
+ * (Q11.H — dominant only on Rule 3/4 with `+N sources` chip; Rule 2
+ * collapses fields with comma-truncation; Rule 1 single source field +
+ * badge).
  *
- *   Rule 1 (mapped, 1 source)        "from" + field [Badge]
- *   Rule 2 (same-table multi-source) "from" + comma-fields [Badge]
- *   Rule 3 (cross-table, 2 tables)   "from" + field [Badge], field [Badge]
- *   Rule 4 (3+ tables OR 5+ fields)  "from" + first 3 (field [Badge]) + "+ N more"
- *   Rule 5 (target_acknowledged)     "acknowledged — <reason>" (italic)
- *                                    or "acknowledged" alone if no reason
- *   Rule 6 (unmapped)                "no source mapped yet" (italic)
- *   VA                               "value assignment" (italic)
- *
- * Pure presentational. The classification call delegates to
- * `classifyMappedRow` so Rule semantics stay in one place.
+ * Identity sizing settled at `text-base font-normal` per Refinement 4 —
+ * the bump to `text-base` (from `text-sm` in the compressed header) gives
+ * the field its visual weight; the SOURCE / TARGET small-caps labels
+ * provide section emphasis. Source and target render identically, matching
+ * the parallel font-alignment lock in the 4-polish-1 list view.
  */
-function DrawerSubheader({ row }: { row: MappingRow }) {
-  return (
-    <div
-      data-testid="mapping-drawer-subheader"
-      className="sticky z-[9] border-b border-slate-100 bg-white px-5 py-2.5 text-sm text-slate-500"
-      style={{ top: 'var(--drawer-header-offset, 65px)' }}
-    >
-      <SubheaderContent row={row} />
-    </div>
-  )
-}
-
-function SubheaderContent({ row }: { row: MappingRow }) {
-  switch (row.kind) {
-    case 'mapped':
-      return <MappedSubheader row={row} />
-    case 'value_assignment':
-      return (
-        <span className="italic" data-testid="mapping-drawer-subheader-va">
-          value assignment
-        </span>
-      )
-    case 'target_acknowledged':
-      return <AcknowledgedSubheader row={row} />
-    case 'unmapped':
-      return (
-        <span className="italic" data-testid="mapping-drawer-subheader-unmapped">
-          no source mapped yet
-        </span>
-      )
-  }
-}
-
-function MappedSubheader({ row }: { row: MappedRow }) {
-  if (row.sources.length === 0) {
-    // Defensive: a 'mapped' row with zero sources is a contract violation
-    // upstream (would be 'value_assignment' / 'target_acknowledged'). Fall
-    // back to the unmapped phrasing rather than crashing.
-    return <span className="italic">no source mapped yet</span>
-  }
-  const rule = classifyMappedRow(row.sources)
-  return (
-    <div
-      className="flex flex-wrap items-center gap-x-2 gap-y-1"
-      data-testid={`mapping-drawer-subheader-${rule}`}
-    >
-      <span>from</span>
-      <SubheaderRuleBody rule={rule} sources={row.sources} />
-    </div>
-  )
-}
-
-const RULE_4_PREVIEW_LIMIT = 3
-
-function SubheaderRuleBody({
-  rule,
-  sources,
-}: {
-  rule: MappingRowRule
-  sources: MappingSourceRef[]
-}) {
-  switch (rule) {
-    case 'rule_1': {
-      const s = sources[0]!
-      return (
-        <span className="inline-flex items-center gap-2">
-          <span className="font-mono text-slate-700">{s.sourceField.name}</span>
-          <TableBadge tableName={s.sourceTable.name} />
-        </span>
-      )
-    }
-    case 'rule_2': {
-      // All sources share a table by classifier guarantee; render one badge.
-      const fieldList = sources.map((s) => s.sourceField.name).join(', ')
-      return (
-        <span className="inline-flex min-w-0 items-center gap-2">
-          <span className="truncate font-mono text-slate-700" title={fieldList}>
-            {fieldList}
-          </span>
-          <TableBadge tableName={sources[0]!.sourceTable.name} />
-        </span>
-      )
-    }
-    case 'rule_3': {
-      // Cross-table, 2 tables. Render each source as `field [Badge]`,
-      // comma-separated. We walk the sources in ordinal order — no client
-      // sort — so per-source visual order matches the row.
-      return (
-        <>
-          {sources.map((s, i) => (
-            <span key={s.id} className="inline-flex items-center gap-2">
-              <span className="font-mono text-slate-700">{s.sourceField.name}</span>
-              <TableBadge tableName={s.sourceTable.name} />
-              {i < sources.length - 1 ? <span aria-hidden="true">,</span> : null}
-            </span>
-          ))}
-        </>
-      )
-    }
-    case 'rule_4': {
-      const preview = sources.slice(0, RULE_4_PREVIEW_LIMIT)
-      const overflow = sources.length - preview.length
-      return (
-        <>
-          {preview.map((s, i) => (
-            <span key={s.id} className="inline-flex items-center gap-2">
-              <span className="font-mono text-slate-700">{s.sourceField.name}</span>
-              <TableBadge tableName={s.sourceTable.name} />
-              {i < preview.length - 1 ? <span aria-hidden="true">,</span> : null}
-            </span>
-          ))}
-          {overflow > 0 ? (
-            <span
-              className="text-slate-500"
-              data-testid="mapping-drawer-subheader-more"
-            >
-              + {overflow} more
-            </span>
-          ) : null}
-        </>
-      )
-    }
-  }
-}
-
-function AcknowledgedSubheader({ row }: { row: TargetAcknowledgedRow }) {
-  if (row.acknowledgmentReason) {
+function HeaderSourceIdentity({ row }: { row: MappingRow }) {
+  if (row.kind !== 'mapped' || row.sources.length === 0) {
     return (
-      <span data-testid="mapping-drawer-subheader-ack">
-        <span>acknowledged — </span>
-        <span className="italic">{row.acknowledgmentReason}</span>
+      <span
+        className="font-mono text-base text-slate-400"
+        data-testid="mapping-drawer-header-source-empty"
+        aria-label="no source"
+      >
+        —
       </span>
     )
   }
+  const rule = classifyMappedRow(row.sources)
+  if (rule === 'rule_2') {
+    // Multi-source same-table: comma-join field names with truncation,
+    // single badge.
+    const fieldList = row.sources.map((s) => s.sourceField.name).join(', ')
+    return (
+      <div
+        className="flex min-w-0 items-center gap-2"
+        data-testid="mapping-drawer-header-source"
+      >
+        <TableBadge tableName={row.sources[0]!.sourceTable.name} size="sm" />
+        <span
+          className="min-w-0 truncate font-mono text-base font-normal text-slate-900"
+          title={fieldList}
+        >
+          {fieldList}
+        </span>
+      </div>
+    )
+  }
+  // Rule 1, 3, 4 — show dominant source only. Rule 3 / 4 add a `+N sources`
+  // chip linking to the body Sources section (Q11.H lock).
+  const dominant = row.sources[0]!
+  const overflow = row.sources.length - 1
   return (
-    <span className="italic" data-testid="mapping-drawer-subheader-ack">
-      acknowledged
+    <div
+      className="flex min-w-0 items-center gap-2"
+      data-testid="mapping-drawer-header-source"
+    >
+      <TableBadge tableName={dominant.sourceTable.name} size="sm" />
+      <span
+        className="min-w-0 flex-1 truncate font-mono text-base font-normal text-slate-900"
+        title={dominant.sourceField.name}
+      >
+        {dominant.sourceField.name}
+      </span>
+      {overflow > 0 ? (
+        <button
+          type="button"
+          onClick={scrollToSourcesSection}
+          data-testid="mapping-drawer-header-sources-chip"
+          aria-label={`Show ${overflow} additional source${overflow === 1 ? '' : 's'} in body`}
+          className={cn(
+            'inline-flex flex-shrink-0 items-center rounded bg-slate-100 px-1.5 py-0.5',
+            'text-[10px] font-medium text-slate-600 transition-colors hover:bg-slate-200',
+            'focus:outline-none focus-visible:ring-2 focus-visible:ring-slate-300',
+          )}
+        >
+          +{overflow} sources
+        </button>
+      ) : null}
+    </div>
+  )
+}
+
+/**
+ * Target-side identity. Single fixed shape: `[tgtTable] targetField`.
+ * The field name owns the `id={titleId}` so `aria-labelledby` on the
+ * drawer aside still references the canonical title (the target field
+ * is the row identity per founder Q3 from the Gap 7 spec).
+ */
+function HeaderTargetIdentity({
+  row,
+  titleId,
+}: {
+  row: MappingRow
+  titleId: string
+}) {
+  return (
+    <div
+      className="flex min-w-0 items-center gap-2"
+      data-testid="mapping-drawer-header-target"
+    >
+      <TableBadge tableName={row.targetField.targetTable.name} size="sm" />
+      <span
+        id={titleId}
+        data-testid="mapping-drawer-title"
+        className="min-w-0 truncate font-mono text-base font-normal text-slate-900"
+        title={row.targetField.name}
+      >
+        {row.targetField.name}
+      </span>
+    </div>
+  )
+}
+
+/**
+ * Status dot used by `HeaderStatusBadge` (drawer redesign §1).
+ *
+ * Renders a 8×8 colored disc carrying the per-status palette from
+ * `DRAWER_STATUS_CONFIG`. The dot color is the only visual signal of
+ * status — the user-visible status word ("Approved", "Needs Review",
+ * "Rejected", "Acknowledged") was dropped from the header per founder
+ * canary lock. The status word is still exposed via the `title=`
+ * attribute and `aria-label` for hover tooltip + screen reader access.
+ */
+function HeaderStatusDot({ status }: { status: MappingRow['status'] }) {
+  const cfg = DRAWER_STATUS_CONFIG[status]
+  return (
+    <span
+      data-testid={`mapping-drawer-header-status-${status}`}
+      aria-label={cfg.label}
+      title={cfg.label}
+      className="inline-flex flex-shrink-0 items-center"
+    >
+      <span
+        aria-hidden="true"
+        className={cn('h-2 w-2 flex-shrink-0 rounded-full', cfg.dotClassName)}
+      />
+    </span>
+  )
+}
+
+/**
+ * Status + confidence badge in the header's SOURCE row top-right
+ * (drawer redesign refinements §1).
+ *
+ * Layout: `● 92%` — a colored status dot followed by the
+ * integer-rounded confidence percent. The status word is intentionally
+ * suppressed from user-visible text; it is exposed via the dot's
+ * `title=` attribute (hover tooltip) and `aria-label` (screen readers).
+ *
+ * Status mapping by row.kind:
+ *   • `mapped` / `value_assignment`: row.status drives the dot color.
+ *   • `target_acknowledged` (Rule 5): forced to `'approved'` so the
+ *     dot reads as a filled green dot, matching 4-polish-1's lock that
+ *     acknowledged rows surface as "all clear / no action needed".
+ *   • `unmapped` (Rule 6): handled by the caller — the entire badge is
+ *     suppressed and only the close button renders. There is no
+ *     status to surface and no confidence to display.
+ *
+ * Confidence is rendered only when `row.confidence` is non-null.
+ * Acknowledged rows have `confidence === null` so the badge degrades to
+ * dot-only for that row kind.
+ */
+function HeaderStatusBadge({
+  row,
+}: {
+  row: MappedRow | ValueAssignmentRow | TargetAcknowledgedRow
+}) {
+  const isAcknowledged = row.kind === 'target_acknowledged'
+  const dotStatus: MappingRow['status'] = isAcknowledged
+    ? 'approved'
+    : row.status
+  const confidence = isAcknowledged ? null : row.confidence
+  return (
+    <span
+      data-testid="mapping-drawer-header-status-badge"
+      className="inline-flex items-center gap-1.5 text-sm font-medium"
+    >
+      <HeaderStatusDot status={dotStatus} />
+      {confidence !== null ? (
+        <span
+          className="tabular-nums text-slate-700"
+          data-testid="mapping-drawer-header-status-percent"
+        >
+          {formatConfidencePercent(confidence)}
+        </span>
+      ) : null}
     </span>
   )
 }
@@ -1309,6 +1479,14 @@ interface DrawerBodyProps {
   onEditFormCancel: () => void
   /** Phase 4b-1 — invoked by the form on a successful editMappingSources save. */
   onEditFormSaveSuccess: (tfmId: string, meta?: EditSaveMeta) => void
+  /**
+   * Drawer redesign (Q11.A lock) — invoked by the inline pencil in the
+   * Sources section header on mapped rows. Replaces the legacy footer
+   * Edit button. Only mapped/`needs_review`+`approved` rows where
+   * `combinationType !== 'custom_sql'` show the affordance; the body
+   * defends in depth by gating render on the same conditions.
+   */
+  onEditClick: () => void
 }
 
 function DrawerBody(props: DrawerBodyProps) {
@@ -1341,47 +1519,24 @@ function BodyContent({
   editInitialState,
   onEditFormCancel,
   onEditFormSaveSuccess,
+  onEditClick,
 }: DrawerBodyProps) {
   switch (row.kind) {
     case 'mapped':
-      // Phase 4b-1 — when the user clicks Edit on a mapped row, the
-      // body switches from the read-only roster to the same
-      // `CreateMappingForm` used for creation, parameterized in
-      // `mode='edit'`. The form needs `projectId` + the page-level
-      // source fields list (for the picker) — both are threaded down
-      // from the drawer's existing props.
-      if (
-        editFormActive &&
-        editInitialState !== null &&
-        projectId !== undefined &&
-        availableSourceFields !== undefined
-      ) {
-        return (
-          <>
-            <TargetFieldSection targetField={row.targetField} />
-            <DrawerSection
-              title="Edit mapping"
-              testId="drawer-section-edit-mapping"
-            >
-              <CreateMappingForm
-                ref={formRef}
-                mode="edit"
-                editInitialState={editInitialState}
-                projectId={projectId}
-                targetField={{
-                  id: row.targetField.id,
-                  name: row.targetField.name,
-                }}
-                availableSourceFields={availableSourceFields}
-                onSaveSuccess={onEditFormSaveSuccess}
-                onCancel={onEditFormCancel}
-                onStateChange={onFormStateChange}
-              />
-            </DrawerSection>
-          </>
-        )
-      }
-      return <MappedBody row={row} />
+      return (
+        <MappedBody
+          row={row}
+          editFormActive={editFormActive}
+          editInitialState={editInitialState}
+          formRef={formRef}
+          projectId={projectId}
+          availableSourceFields={availableSourceFields}
+          onFormStateChange={onFormStateChange}
+          onEditFormCancel={onEditFormCancel}
+          onEditFormSaveSuccess={onEditFormSaveSuccess}
+          onEditClick={onEditClick}
+        />
+      )
     case 'value_assignment':
       return <ValueAssignmentBody row={row} />
     case 'target_acknowledged':
@@ -1437,7 +1592,7 @@ function DrawerSection({
   headerAside?: React.ReactNode
 }) {
   return (
-    <section className="mb-6 last:mb-0" data-testid={testId}>
+    <section className="mb-4 last:mb-0" data-testid={testId}>
       <div className="mb-2 flex items-center justify-between gap-2">
         <h3 className="text-xs font-medium uppercase tracking-wide text-slate-500">
           {title}
@@ -1503,98 +1658,66 @@ function DrawerEmptyState({
   )
 }
 
-// ── Shared "Target field" section (used by every kind body) ────────────────
-
-/**
- * Reused by all four kinds. Shows target name + TableBadge on the first
- * line, then `<dataType> · <required|nullable>` underneath. The target field
- * identity is the one constant across every drawer body.
- */
-function TargetFieldSection({ targetField }: { targetField: TargetFieldRef }) {
-  return (
-    <DrawerSection title="Target field" testId="drawer-section-target-field">
-      <div className="space-y-1.5">
-        <div className="flex flex-wrap items-center gap-2">
-          <span
-            className="font-mono text-sm text-slate-900"
-            data-testid="drawer-target-field-name"
-          >
-            {targetField.name}
-          </span>
-          <TableBadge tableName={targetField.targetTable.name} />
-        </div>
-        <div
-          className="text-xs text-slate-500"
-          data-testid="drawer-target-field-meta"
-        >
-          <span className="font-mono">{targetField.dataType}</span>
-          <span className="mx-1.5 text-slate-300" aria-hidden="true">·</span>
-          <span>{targetField.isNullable ? 'nullable' : 'required'}</span>
-        </div>
-      </div>
-    </DrawerSection>
-  )
-}
-
-// ── Shared "Status" section (Rule 5 + VA) ──────────────────────────────────
+// ── Status palette (drawer redesign — header + sections share) ─────────────
 //
-// Mirrors the row-level `STATUS_CONFIG` literal in `FieldMappingRow.tsx`. The
-// duplication is small (one config map) and deliberate: refactoring into a
-// shared module is premature until Gap 9's footer wires up the same vocabulary
-// for Approve / Reject buttons. At that point a single source of truth makes
-// sense — currently the change would be churn for two callers.
+// Four-entry palette, color + label per status. The drawer redesign moves
+// the status presence to the header line 2 dot (no label, color only) but
+// the palette stays here as the single source of truth — the AI Reasoning
+// section's header pill (when added) and the Transformation section's
+// `applied/tested/draft/stale` pill both consume from cousin palettes
+// defined alongside.
 
 type DrawerStatus = MappingRow['status']
 
 const DRAWER_STATUS_CONFIG: Record<
   DrawerStatus,
-  { label: string; dotClassName: string }
+  { label: string; dotClassName: string; wordClassName: string }
 > = {
-  approved: { label: 'Approved', dotClassName: 'bg-green-500' },
-  needs_review: { label: 'Needs Review', dotClassName: 'bg-amber-400' },
-  rejected: { label: 'Rejected', dotClassName: 'bg-red-500' },
-  unmapped: { label: 'Unmapped', dotClassName: 'bg-slate-300' },
-}
-
-function StatusSection({ status }: { status: DrawerStatus }) {
-  const cfg = DRAWER_STATUS_CONFIG[status]
-  return (
-    <DrawerSection title="Status" testId="drawer-section-status">
-      <div
-        className="flex items-center gap-2"
-        data-testid="drawer-status-indicator"
-      >
-        <span
-          aria-hidden="true"
-          className={cn('h-2 w-2 flex-shrink-0 rounded-full', cfg.dotClassName)}
-        />
-        <span className="text-sm text-slate-900">{cfg.label}</span>
-      </div>
-    </DrawerSection>
-  )
+  approved: {
+    label: 'Approved',
+    dotClassName: 'bg-green-500',
+    wordClassName: 'text-green-700',
+  },
+  needs_review: {
+    label: 'Needs Review',
+    dotClassName: 'bg-amber-400',
+    wordClassName: 'text-amber-700',
+  },
+  rejected: {
+    label: 'Rejected',
+    dotClassName: 'bg-red-500',
+    wordClassName: 'text-red-700',
+  },
+  unmapped: {
+    label: 'Unmapped',
+    dotClassName: 'bg-slate-300',
+    wordClassName: 'text-slate-500',
+  },
 }
 
 // ── Rule 5 — Target Acknowledged ───────────────────────────────────────────
-
-/**
- * Acknowledged-row drawer body.
- *
- * NOTE on omitted fields (Gap 8a contract-shape decision, 2026-04-24):
- * The Gap 8a spec mentions optional `acknowledgmentNotes`, `acknowledgedBy`,
- * and `acknowledgedAt` rows. The redesign data contract
- * (`lib/types/mappings-for-redesign.ts` `TargetAcknowledgedRow`) currently
- * exposes ONLY `acknowledgmentReason`. The other three fields are not on the
- * wire and not surfaced in the underlying server action. They are deferred
- * pending a contract change — adding them here would require expanding
- * `TargetAcknowledgedRow`, the translator, and the read-path tests in
- * lockstep. Out of scope for Gap 8a per the original prompt's constraint
- * "do NOT touch lib/actions/mappings-for-redesign.ts or types".
- */
+//
+// Drawer redesign: target field identity moves to the header; status
+// + confidence land in the header SOURCE row top-right (drawer
+// redesign refinements §1) — for acknowledged rows the badge surfaces
+// as a filled green dot (no confidence percent because Rule 5 has
+// `confidence === null`). The body is now a single `Acknowledgment`
+// section; the prior pass's leading OVERVIEW section is removed
+// entirely, and ANALYSIS is omitted for Rule 5 (no source = no type
+// compat, no AI reasoning to surface). The edit pencil is hidden —
+// acknowledged rows have no sources to edit.
+//
+// NOTE on omitted fields: `acknowledgmentNotes`, `acknowledgedBy`,
+// `acknowledgedAt` are NOT on the redesign data contract
+// (`TargetAcknowledgedRow` exposes only `acknowledgmentReason`). Adding
+// them would require a contract change and is out of scope.
 function AcknowledgedBody({ row }: { row: TargetAcknowledgedRow }) {
   return (
     <>
-      <TargetFieldSection targetField={row.targetField} />
-      <DrawerSection title="Acknowledgment" testId="drawer-section-acknowledgment">
+      <DrawerSection
+        title="Acknowledgment"
+        testId="drawer-section-acknowledgment"
+      >
         {row.acknowledgmentReason ? (
           <p
             className="text-sm text-slate-900"
@@ -1609,37 +1732,21 @@ function AcknowledgedBody({ row }: { row: TargetAcknowledgedRow }) {
           />
         )}
       </DrawerSection>
-      <StatusSection status={row.status} />
     </>
   )
 }
 
 // ── Rule 6 — Unmapped ──────────────────────────────────────────────────────
+//
+// Drawer redesign: Rule 6 reuses the `Sources` section title with an
+// empty-state body ("No source mapped yet"), so the chrome matches Rules
+// 1-4 even when there's no roster to show. The form mounts in place of
+// the empty-state when `isFormActive` flips (the footer's [Create mapping]
+// or [Suggest with AI] button). Edit pencil is hidden — there's no mapping
+// to edit until a source is chosen.
 
-const UNMAPPED_BODY_PROSE =
-  'Remapping unmapped fields is coming soon. For now, use the legacy Mapping view to create a new mapping.'
+const UNMAPPED_EMPTY_STATE_COPY = 'No source mapped yet'
 
-/**
- * Unmapped-row drawer body. No status section — unmapped state is implicit
- * from the prose.
- *
- * Phase 4a closure (2026-04-26): the TODO previously parked here for
- * "future remap gap, Phase 4 / TBD" has shipped. Phase 4a-2 wired the
- * inline `CreateMappingForm` (manual same-table creation), Phase 4a-3
- * extended it to cross-table sources, and Phase 4a-4b added AI Suggest
- * (footer button + in-form pill, ConfidencePill, replace-warning gate,
- * laundering-prevention save metadata). The footer below now mirrors
- * the form lifecycle — `[Suggest with AI]` `[Create mapping]` when
- * inactive, `[Cancel suggestion]` while a suggestion is in flight,
- * `[Cancel]` `[Save mapping]` once the form is active.
- *
- * `UNMAPPED_BODY_PROSE` remains as the empty-state copy shown before
- * the user clicks either footer button. The "use the legacy Mapping
- * view" steer is now stale on Heritage but kept for non-flag projects
- * (where the legacy `MappingContent.tsx` still owns this surface);
- * a copy revisit is queued as polish in Phase 5-Cleanup once the flag
- * comes off and the legacy file retires.
- */
 interface UnmappedBodyProps {
   row: UnmappedRow
   isFormActive: boolean
@@ -1680,12 +1787,8 @@ function UnmappedBody({
 }: UnmappedBodyProps) {
   return (
     <>
-      <TargetFieldSection targetField={row.targetField} />
-      {isFormActive && projectId ? (
-        <DrawerSection
-          title="Create mapping"
-          testId="drawer-section-create-mapping"
-        >
+      <DrawerSection title="Sources" testId={SOURCES_SECTION_TESTID}>
+        {isFormActive && projectId ? (
           <CreateMappingForm
             ref={formRef}
             projectId={projectId}
@@ -1704,45 +1807,46 @@ function UnmappedBody({
             tryConsumeAutoSuggest={tryConsumeAutoSuggest}
             onSuggestStateChange={onSuggestStateChange}
           />
-        </DrawerSection>
-      ) : (
-        <DrawerSection
-          title="Mapping status"
-          testId="drawer-section-mapping-status"
-        >
-          <p
-            className="text-sm text-slate-600"
-            data-testid="drawer-unmapped-prose"
-          >
-            {UNMAPPED_BODY_PROSE}
-          </p>
-        </DrawerSection>
-      )}
+        ) : (
+          <DrawerEmptyState
+            text={UNMAPPED_EMPTY_STATE_COPY}
+            testId="drawer-unmapped-empty-state"
+          />
+        )}
+      </DrawerSection>
     </>
   )
 }
 
 // ── VA — Value Assignment ──────────────────────────────────────────────────
-
-/**
- * Value-assignment drawer body.
- *
- * `combinationSql` is the single field that distinguishes a VA from any other
- * row in the drawer view. We render it in a code block (slate-50 bg, mono,
- * `whitespace-pre-wrap` so multi-line SQL preserves formatting). Long lines
- * are allowed to scroll horizontally to keep the multiline reading pose.
- *
- * The status section uses the actual `row.status` (not hardcoded "Approved").
- * VAs are nominally created at `'approved'` but the contract permits all three
- * states (`'needs_review' | 'approved' | 'rejected'`); rendering the actual
- * value avoids lying to the user when they are mid-review.
- */
+//
+// Drawer redesign refinements §3 (canary feedback): VA body order is
+// now SOURCES → ANALYSIS → Value expression (drawer's structural lock —
+// `Sources → Sample Values → Analysis → Transformation` collapses to
+// three sections for VA because there are no sources to surface
+// sample values for, and the Transformation slot is filled by the
+// VA-specific `Value expression` section). The prior pass's leading
+// OVERVIEW section is removed entirely; status + confidence move to
+// the header SOURCE row top-right (Refinement 1) and AI reasoning
+// moves into the new ANALYSIS section. Type compatibility is
+// intentionally skipped for VAs — they have no source dataType to
+// compare against.
 function ValueAssignmentBody({ row }: { row: ValueAssignmentRow }) {
   return (
     <>
-      <TargetFieldSection targetField={row.targetField} />
+      <DrawerSection title="Sources" testId={SOURCES_SECTION_TESTID}>
+        <DrawerEmptyState
+          text="Value assignment — no sources"
+          testId="drawer-va-no-sources"
+        />
+      </DrawerSection>
 
-      <DrawerSection title="Value expression" testId="drawer-section-value-expression">
+      <AnalysisSection row={row} />
+
+      <DrawerSection
+        title="Value expression"
+        testId="drawer-section-value-expression"
+      >
         {row.combinationSql ? (
           <pre
             className="overflow-x-auto whitespace-pre-wrap break-words rounded bg-slate-50 p-3 font-mono text-xs text-slate-900"
@@ -1757,79 +1861,55 @@ function ValueAssignmentBody({ row }: { row: ValueAssignmentRow }) {
           />
         )}
       </DrawerSection>
-
-      <DrawerSection title="AI reasoning" testId="drawer-section-ai-reasoning">
-        {row.aiReasoning ? (
-          <p
-            className="text-sm italic text-slate-600"
-            data-testid="drawer-ai-reasoning"
-          >
-            {row.aiReasoning}
-          </p>
-        ) : (
-          <DrawerEmptyState
-            text="No reasoning available"
-            testId="drawer-ai-reasoning-empty"
-          />
-        )}
-      </DrawerSection>
-
-      <DrawerSection title="Confidence" testId="drawer-section-confidence">
-        {row.confidence !== null ? (
-          <span
-            className="text-sm tabular-nums text-slate-900"
-            data-testid="drawer-confidence"
-          >
-            {formatConfidencePercent(row.confidence)}
-          </span>
-        ) : (
-          <span
-            aria-label="no confidence available"
-            className="inline-flex items-center text-sm text-slate-400"
-            data-testid="drawer-confidence-empty"
-          >
-            <span aria-hidden="true">—</span>
-          </span>
-        )}
-      </DrawerSection>
-
-      <StatusSection status={row.status} />
     </>
   )
 }
 
 
-// ── Mapped row body — Gap 8b ───────────────────────────────────────────────
+// ── Mapped row body — drawer redesign ──────────────────────────────────────
 //
-// Per-source roster + combination strategy + row-level reasoning/confidence.
-// Sections:
+// Drawer redesign refinements §3 (founder canary review): body
+// section order is now
 //
-//   1. Target field      (reused — TargetFieldSection)
-//   2. Sources           (per-source roster, 1+ SourceCards)
-//   3. Combination       (multi-source rows only — sources.length >= 2)
-//   4. AI reasoning      (row-level; empty-state when null since absence is
-//                         meaningful at the row level — contrast with
-//                         per-source reasoning, which silently omits)
-//   5. Confidence        (row-level)
-//   6. Status            (reused — StatusSection)
+//   1. SOURCES         (always rendered; inline edit affordance in
+//                       `headerAside` for needs_review + approved on
+//                       non-custom_sql rows; per-source line shape is
+//                       identity-only — type compatibility moved to
+//                       ANALYSIS, sample values moved to SAMPLE
+//                       VALUES. Combination label below the roster
+//                       for multi-source rows.)
+//   2. SAMPLE VALUES   (collapsible per-source field blocks; section
+//                       omitted when no source has sample data.
+//                       Single-source rows default the lone block to
+//                       expanded; multi-source rows default all
+//                       blocks collapsed. Section also hidden in
+//                       edit-mode — sample values describe the
+//                       existing row, not the in-flight form.)
+//   3. ANALYSIS        (type compatibility line + AI reasoning
+//                       disclosure. Type compat for the dominant
+//                       source, always visible. AI reasoning
+//                       collapsible — default-expanded for
+//                       needs_review, default-collapsed for approved.
+//                       Section also hidden in edit-mode for the same
+//                       reason as SAMPLE VALUES.)
+//   4. TRANSFORMATION  (per Q11.E lock — full read with description +
+//                       SQL preview when hasTransformation; nav-only
+//                       when absent on non-custom_sql mapped rows)
+//
+// Confidence + Status live in the header SOURCE row top-right
+// (drawer redesign refinements §1 — `HeaderStatusBadge`). The
+// standalone OVERVIEW section that shipped in the prior pass is
+// removed entirely (drawer redesign refinements §2).
 //
 // Source ordering invariant: `sources[]` is server-emitted in ordinal-asc
-// order. The roster MUST iterate verbatim — no client-side sort. The
-// codebase grep invariant in `tests/lib/no-shim-in-redesign-path.test.ts`
-// guards this for the redesign path generally.
+// order. The roster MUST iterate verbatim — no client-side sort.
 
 /**
  * Combination-type → human-readable phrase. Defensive over the full enum
  * even though `'single'` is functionally unreachable in the rendered output
- * (the Combination section is gated on `sources.length >= 2`, while
- * `combinationType: 'single'` only ever appears with `sources.length === 1`
- * per migration 074 STEP 5 and the contract JSDoc). Keeping all four
- * entries:
- *
- *   • Exhaustive maps catch enum widening at compile time without ad-hoc
- *     `default:` branches.
- *   • If a future contract drift produces `'single'` on a multi-source
- *     row, this renders a sensible label instead of throwing.
+ * (multi-source phrases are caller-gated). Keeping all four entries:
+ *   • Exhaustive maps catch enum widening at compile time.
+ *   • Future contract drift renders a sensible label instead of throwing.
  */
 const COMBINATION_TYPE_LABELS: Record<MappedRow['combinationType'], string> = {
   single: 'Use single source',
@@ -1838,219 +1918,962 @@ const COMBINATION_TYPE_LABELS: Record<MappedRow['combinationType'], string> = {
   custom_sql: 'Custom SQL expression',
 }
 
-/**
- * Mapped-row drawer body. Reuses Gap 8a primitives wherever possible
- * (`TargetFieldSection`, `StatusSection`, `DrawerSection`, `DrawerEmptyState`,
- * `formatConfidence`).
- */
-function MappedBody({ row }: { row: MappedRow }) {
-  const isMultiSource = row.sources.length >= 2
+interface MappedBodyProps {
+  row: MappedRow
+  /** Drawer redesign — true while the inline pencil edit form is mounted. */
+  editFormActive: boolean
+  editInitialState: EditMappingInitialState | null
+  formRef: React.MutableRefObject<CreateMappingFormHandle | null>
+  projectId: string | undefined
+  availableSourceFields: SourceFieldWithState[] | undefined
+  onFormStateChange: (state: {
+    isDirty: boolean
+    canSave: boolean
+    isSavePending: boolean
+    snapshot: CreateMappingFormSnapshot | null
+  }) => void
+  onEditFormCancel: () => void
+  onEditFormSaveSuccess: (tfmId: string, meta?: EditSaveMeta) => void
+  /** Pencil click handler — mounts the edit form in the Sources section. */
+  onEditClick: () => void
+}
+
+function MappedBody({
+  row,
+  editFormActive,
+  editInitialState,
+  formRef,
+  projectId,
+  availableSourceFields,
+  onFormStateChange,
+  onEditFormCancel,
+  onEditFormSaveSuccess,
+  onEditClick,
+}: MappedBodyProps) {
+  // Q11.A lock — pencil affordance is visible for needs_review + approved
+  // mapped rows, except `custom_sql` (which is a Transform-page concern,
+  // not a sources/combination edit). For other states (rejected) the
+  // founder removed the affordance from the source-edit flow.
+  const showEditPencil =
+    (row.status === 'needs_review' || row.status === 'approved') &&
+    row.combinationType !== 'custom_sql'
+
+  // Edit-mode mounts the form INSIDE the Sources section (replacing the
+  // source-card list), which keeps the visual context — "you are editing
+  // these sources" — instead of stranding the form in a sibling section.
+  const canMountEditForm =
+    editFormActive &&
+    editInitialState !== null &&
+    projectId !== undefined &&
+    availableSourceFields !== undefined
+
+  // Drawer redesign refinements §3 (founder canary review): the body
+  // section order is now
+  //
+  //   SOURCES   →   SAMPLE VALUES   →   ANALYSIS   →   TRANSFORMATION
+  //
+  // The leading OVERVIEW section that shipped in the prior pass is
+  // removed entirely (Refinement 2):
+  //
+  //   • Status + confidence move to the header SOURCE row top-right
+  //     (Refinement 1 — `HeaderStatusBadge`).
+  //   • Type compatibility + AI reasoning move into the new ANALYSIS
+  //     section (Refinement 4 — `AnalysisSection`).
+  //
+  // Section ordering rationale (drawer redesign refinements §3):
+  //
+  //   1. SOURCES      — the mapping definition. Edit affordance lives
+  //                     here (the inline edit button still mounts in
+  //                     the section header's `headerAside` slot).
+  //   2. SAMPLE VALUES — the data evidence. For verify-task users this
+  //                     is the primary content they want to scan after
+  //                     seeing identity. Single-source rows default
+  //                     the lone field block to expanded; multi-source
+  //                     rows default all blocks collapsed (Refinement 5).
+  //   3. ANALYSIS     — the deep-dive. Type compatibility (compact
+  //                     form, always visible) + AI reasoning
+  //                     (collapsible, default-expanded for
+  //                     needs_review). Most users skip past it;
+  //                     understand-task users find it where they
+  //                     expect drill-in content.
+  //   4. TRANSFORMATION — the action affordance for editing transforms.
+  //                     Stays at the bottom.
+  //
+  // Edit-mode mount behavior unchanged: the `+N sources` chip in the
+  // header still scrolls to SOURCES via `scrollToSourcesSection`
+  // (queries by testid, not document position, so the reorder doesn't
+  // affect scroll wiring). When the edit form mounts in place of the
+  // source roster, SAMPLE VALUES is intentionally hidden — sample
+  // values describe the existing data, not the in-flight authoring
+  // state. ANALYSIS is also hidden during edit mode for the same
+  // reason: type compat + AI reasoning are post-hoc evidence about
+  // the row's current shape, not the form's draft state.
   return (
     <>
-      <TargetFieldSection targetField={row.targetField} />
-      <SourcesSection sources={row.sources} />
-      {isMultiSource ? (
-        <CombinationSection
-          combinationType={row.combinationType}
-          combinationSql={row.combinationSql}
-        />
+      <DrawerSection
+        title="Sources"
+        testId={SOURCES_SECTION_TESTID}
+        headerAside={
+          showEditPencil && !editFormActive ? (
+            <EditPencilButton onClick={onEditClick} />
+          ) : null
+        }
+      >
+        {canMountEditForm ? (
+          <CreateMappingForm
+            ref={formRef}
+            mode="edit"
+            editInitialState={editInitialState!}
+            projectId={projectId!}
+            targetField={{
+              id: row.targetField.id,
+              name: row.targetField.name,
+            }}
+            availableSourceFields={availableSourceFields!}
+            onSaveSuccess={onEditFormSaveSuccess}
+            onCancel={onEditFormCancel}
+            onStateChange={onFormStateChange}
+          />
+        ) : (
+          <SourcesRoster row={row} />
+        )}
+      </DrawerSection>
+
+      {!canMountEditForm ? (
+        <>
+          <SampleValuesSection sources={row.sources} />
+          <AnalysisSection row={row} />
+        </>
       ) : null}
-      <RowAiReasoningSection aiReasoning={row.aiReasoning} />
-      <RowConfidenceSection confidence={row.confidence} />
-      <StatusSection status={row.status} />
+
+      <TransformationSection row={row} projectId={projectId} />
     </>
   )
 }
 
 /**
- * Per-source roster wrapper. Always renders the "Sources" section header
- * for visual consistency with the rest of the drawer body — including for
- * Rule 1 (single source). See Gap 8b investigation report Q1 for the
- * consistency-over-density rationale.
- *
- * `sources[]` is iterated verbatim (no `.sort()` — server ordinal order is
- * authoritative).
+ * Build the per-source reasoning aggregate for `AiReasoningDisclosure`.
+ * Filters out sources whose `aiReasoning` is null or whitespace-only so
+ * the section doesn't render orphan empty paragraphs. Order preserved
+ * from the input (server ordinal, dominant first) so the drawer
+ * narrative matches the Sources section line order.
  */
-function SourcesSection({ sources }: { sources: MappingSourceRef[] }) {
-  // Phase 4a-6 retired the cross-table transparency badge — the
-  // `dq_apply_field_transform_joined` RPC now wires the cross-table
-  // branch via migration 076. Sources can span multiple source tables
-  // without limitation. See `docs/features/mapping-redesign.md`
-  // (Phase 4a-6 closure) for the historical narrative.
+function collectPerSourceReasonings(
+  sources: readonly MappingSourceRef[],
+): Array<{
+  sourceId: string
+  sourceTable: string
+  sourceField: string
+  reasoning: string
+}> {
+  return sources.flatMap((s) => {
+    const trimmed = s.aiReasoning?.trim()
+    if (!trimmed) return []
+    return [
+      {
+        sourceId: s.id,
+        sourceTable: s.sourceTable.name,
+        sourceField: s.sourceField.name,
+        reasoning: trimmed,
+      },
+    ]
+  })
+}
+
+/**
+ * Edit button rendered inside the Sources section header's `headerAside`
+ * slot. Replaces the legacy footer Edit button per Q11.A lock — section-
+ * scoped affordance reads cleaner than a row-level verb in the footer.
+ *
+ * Refinement 1 (canary feedback): the pencil-icon-only affordance was
+ * too subtle. The button now renders as a small text link with a
+ * leading pencil glyph, matching the "Define Transform ›" link
+ * pattern in the Transformation section. The text "Edit" is the
+ * primary affordance; the icon is decorative and reinforces the verb.
+ *
+ * The testid `mapping-drawer-edit-pencil` is preserved verbatim so
+ * existing tests and edit-pencil dependents (D1/D2 tests, the inline
+ * edit-form mount logic) continue to resolve the affordance without
+ * a rename pass. The semantic shift (icon-only → text+icon) doesn't
+ * change the testid contract.
+ */
+function EditPencilButton({ onClick }: { onClick: () => void }) {
   return (
-    <DrawerSection title="Sources" testId="drawer-section-sources">
+    <button
+      type="button"
+      onClick={onClick}
+      aria-label="Edit mapping sources"
+      data-testid="mapping-drawer-edit-pencil"
+      className={cn(
+        'inline-flex items-center gap-1 rounded px-1 py-0.5',
+        'text-xs font-medium text-blue-700 transition-colors',
+        'hover:bg-blue-50 hover:text-blue-800 hover:underline',
+        'focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-500/30',
+      )}
+    >
+      <Pencil aria-hidden="true" className="h-3 w-3" />
+      <span>Edit</span>
+    </button>
+  )
+}
+
+/**
+ * Per-source roster body for the Sources section. Renders one `SourceCard`
+ * per source in ordinal order, plus an optional "Combine with: <strategy>"
+ * label below the roster for multi-source rows.
+ */
+function SourcesRoster({ row }: { row: MappedRow }) {
+  const isMultiSource = row.sources.length >= 2
+  // Refinement 5 (canary feedback): the per-source confidence percent
+  // duplicates the row-level aggregate that now sits in Overview. For
+  // Rule 1 single-source rows the two values are identical by
+  // construction (one source = one confidence = the row), so the
+  // drawer reads the same number twice. Multi-source rows keep the
+  // per-source confidence — each source carries its own confidence
+  // distinct from the row aggregate, so the value is informative.
+  const showPerSourceConfidence = isMultiSource
+  return (
+    <>
       <ul className="space-y-3" data-testid="drawer-sources-list">
-        {sources.map((source) => (
-          <SourceCard key={source.id} source={source} />
+        {row.sources.map((source) => (
+          <SourceCard
+            key={source.id}
+            source={source}
+            showConfidence={showPerSourceConfidence}
+          />
+        ))}
+      </ul>
+      {isMultiSource ? (
+        <div
+          className="mt-3 text-xs text-slate-500"
+          data-testid="drawer-combination-label"
+        >
+          Combine with:{' '}
+          <span className="text-slate-700">
+            {COMBINATION_TYPE_LABELS[row.combinationType]}
+          </span>
+        </div>
+      ) : null}
+      {row.combinationType === 'custom_sql' && row.combinationSql ? (
+        <pre
+          className="mt-2 overflow-x-auto whitespace-pre-wrap break-words rounded bg-slate-50 p-3 font-mono text-xs text-slate-900"
+          data-testid="drawer-combination-sql"
+        >
+          {row.combinationSql}
+        </pre>
+      ) : null}
+    </>
+  )
+}
+
+/**
+ * Per-source card — drawer-redesign refinement (canary feedback).
+ *
+ *   [srcTable] field_name                              confidence?
+ *   (join: fk_field)                                   (when present)
+ *
+ * Refinement 5 (per-source confidence): `showConfidence` is gated by
+ * the parent. Rule 1 (single source) hides the per-source percent —
+ * the header status badge already exposes the row-level confidence,
+ * which equals the single source's value by construction. Rule 2/3/4
+ * (multi-source) keeps the per-source percent because each source
+ * carries its own distinct confidence distinct from the row aggregate.
+ *
+ * Drawer redesign refinements §2/§3: SOURCES is now identity-only.
+ * Type compatibility moves to ANALYSIS (Refinement 4); per-source
+ * sample values move to the standalone SAMPLE VALUES section
+ * (Refinement 3, with collapsible per-source field blocks). Per-source
+ * AI reasoning is aggregated and rendered in ANALYSIS — `<SourceCard>`
+ * does not render `source.aiReasoning` or `source.sampleValues`
+ * directly.
+ */
+function SourceCard({
+  source,
+  showConfidence,
+}: {
+  source: MappingSourceRef
+  showConfidence: boolean
+}) {
+  return (
+    <li className="space-y-2" data-testid="drawer-source-card">
+      <div className="flex min-w-0 items-center gap-2">
+        <TableBadge tableName={source.sourceTable.name} />
+        <span
+          className="min-w-0 flex-1 truncate font-mono text-sm text-slate-900"
+          data-testid="drawer-source-field-name"
+          title={source.sourceField.name}
+        >
+          {source.sourceField.name}
+        </span>
+        {showConfidence ? (
+          <span
+            className="flex-shrink-0 tabular-nums text-xs text-slate-500"
+            data-testid="drawer-source-confidence"
+          >
+            {formatConfidencePercent(source.confidence)}
+          </span>
+        ) : null}
+      </div>
+
+      {source.joinAnnotation ? (
+        <div
+          className="text-[11px] italic text-slate-500"
+          data-testid="drawer-source-join"
+        >
+          {/* `source.joinAnnotation` is pre-formatted by `deriveJoinAnnotation`
+              and already includes the `(join: …)` wrapper. Render verbatim. */}
+          {source.joinAnnotation}
+        </div>
+      ) : null}
+    </li>
+  )
+}
+
+// ── Sample values section (drawer redesign refinements §3 + §5) ────────────
+//
+// SAMPLE VALUES is the second body section (the "data evidence" tier
+// — drawer redesign refinements §3 ordering: SOURCES → SAMPLE VALUES →
+// ANALYSIS → TRANSFORMATION). It promotes the prior pass's per-source
+// nested block (`SampleValuesBlock`, always-visible bordered strip
+// rendered inside `<SourceCard>`) to a top-level section with one
+// collapsible field block per source.
+//
+// Default-open behavior — drawer redesign refinements §5 (founder
+// canary review):
+//
+//   • Single-source rows (Rule 1): the lone field block defaults to
+//     expanded. There is one source and no choice to make; showing
+//     values immediately serves the verify-task case (user lands on
+//     drawer, sees evidence without a click).
+//   • Multi-source rows (Rule 2/3/4): all field blocks default to
+//     collapsed. The user typically inspects one source at a time;
+//     default-collapsed keeps the section compact while preserving
+//     independent per-block toggle state.
+//
+// `totalSourceCount` is the number of *sources with non-empty
+// sampleValues* (the same set that's actually rendered as field
+// blocks). Sources with empty sample arrays are filtered out before
+// the count is computed, so a Rule 2 row where only one of two
+// sources has sample data still gets the "single-source expanded"
+// default — there's only one block actually rendered.
+//
+// The section omits itself entirely when no source has sample data
+// (consistent with the prior `SampleValuesBlock`'s silent-omission
+// behavior — the section header isn't worth rendering an empty body
+// just to label "no samples available").
+function SampleValuesSection({
+  sources,
+}: {
+  sources: readonly MappingSourceRef[]
+}) {
+  const sourcesWithSamples = sources.filter((s) => s.sampleValues.length > 0)
+  if (sourcesWithSamples.length === 0) return null
+  const totalSourceCount = sourcesWithSamples.length
+  return (
+    <DrawerSection
+      title="Sample values"
+      testId="drawer-section-sample-values"
+    >
+      <ul
+        className="space-y-2"
+        data-testid="drawer-sample-values-list"
+      >
+        {sourcesWithSamples.map((source) => (
+          <SampleValuesFieldBlock
+            key={source.id}
+            source={source}
+            totalSourceCount={totalSourceCount}
+          />
         ))}
       </ul>
     </DrawerSection>
   )
 }
 
+interface SampleValuesFieldBlockProps {
+  source: MappingSourceRef
+  /**
+   * Number of sources with non-empty sample data in the parent
+   * section. Drives the initial `useState` value: `=== 1` opens by
+   * default; `> 1` starts collapsed.
+   */
+  totalSourceCount: number
+}
+
 /**
- * Per-source card. Layout (founder decision 1):
+ * Collapsible per-source field block inside SAMPLE VALUES.
  *
- *   [TableBadge] field_name        confidence    (join: …)
- *   Sample values
- *   v1, v2, v3, v4 (... (+N more) when truncated)
- *   <italic per-source reasoning>
+ *   ▸ [SRC_TABLE] src_field            (collapsed)
+ *   ▾ [SRC_TABLE] src_field            (expanded)
+ *     DDA
+ *     NOW
+ *     SAV
  *
- * Sample-values block omits entirely when `sampleValues` is empty (silent).
- * Per-source reasoning omits entirely when null (silent — sources without
- * reasoning are common; an empty-state would clutter). Contrast with the
- * row-level reasoning section, which DOES surface absence.
- *
- * No card border — vertical whitespace separates cards. Matches the
- * Linear/Notion-style aesthetic established in Gap 8a.
+ * Each block manages its own open/closed state — toggling one block
+ * does not affect any other block in the section. The chevron
+ * (right when collapsed, down when expanded) and the
+ * `aria-expanded` / `aria-controls` wiring mirror the disclosure
+ * pattern used elsewhere in the drawer (`NestedAiReasoningDisclosure`).
  */
-function SourceCard({ source }: { source: MappingSourceRef }) {
-  const samplesLine = formatSampleValues(source.sampleValues)
+function SampleValuesFieldBlock({
+  source,
+  totalSourceCount,
+}: SampleValuesFieldBlockProps) {
+  const isSingleSource = totalSourceCount === 1
+  const [isOpen, setIsOpen] = useState(isSingleSource)
+  const panelId = useId()
   return (
-    <li className="space-y-1.5" data-testid="drawer-source-card">
-      <div className="flex min-w-0 flex-wrap items-center gap-2">
-        <TableBadge tableName={source.sourceTable.name} />
+    <li data-testid="drawer-sample-values-field-block">
+      <button
+        type="button"
+        onClick={() => setIsOpen((prev) => !prev)}
+        aria-expanded={isOpen}
+        aria-controls={panelId}
+        data-testid="drawer-sample-values-toggle"
+        data-source-id={source.id}
+        className={cn(
+          'inline-flex w-full items-center gap-2 rounded px-1 py-1',
+          'text-left transition-colors hover:bg-slate-50',
+          'focus:outline-none focus-visible:ring-2 focus-visible:ring-slate-300',
+        )}
+      >
+        {isOpen ? (
+          <ChevronDown
+            aria-hidden="true"
+            className="h-4 w-4 flex-shrink-0 text-slate-500"
+          />
+        ) : (
+          <ChevronRight
+            aria-hidden="true"
+            className="h-4 w-4 flex-shrink-0 text-slate-500"
+          />
+        )}
+        <TableBadge tableName={source.sourceTable.name} size="sm" />
         <span
-          className="truncate font-mono text-sm text-slate-900"
-          data-testid="drawer-source-field-name"
+          className="min-w-0 flex-1 truncate font-mono text-sm text-slate-900"
           title={source.sourceField.name}
         >
           {source.sourceField.name}
         </span>
-        <span
-          className="ml-auto flex-shrink-0 tabular-nums text-xs text-slate-500"
-          data-testid="drawer-source-confidence"
+      </button>
+      {isOpen ? (
+        <div
+          id={panelId}
+          className="ml-6 mt-1 flex flex-col"
+          data-testid="drawer-sample-values-panel"
+          data-source-id={source.id}
         >
-          {formatConfidencePercent(source.confidence)}
-        </span>
-        {source.joinAnnotation ? (
-          <span
-            className="basis-full text-xs italic text-slate-500"
-            data-testid="drawer-source-join"
-          >
-            {/* `source.joinAnnotation` is pre-formatted by
-                `deriveJoinAnnotation` in
-                `lib/actions/_mappings-for-redesign-core.ts` and
-                already includes the `(join: …)` wrapper. Render
-                verbatim — wrapping again produces "(join: (join: X))". */}
-            {source.joinAnnotation}
-          </span>
-        ) : null}
-      </div>
-
-      {samplesLine !== '' ? (
-        <div data-testid="drawer-source-samples">
-          <div className="text-xs text-slate-500">Sample values</div>
-          <div className="break-words text-xs text-slate-600">
-            {samplesLine}
-          </div>
+          {source.sampleValues.map((value, idx) => (
+            <div
+              key={`${idx}-${value}`}
+              className={cn(
+                'border-b border-slate-100 py-2 last:border-b-0',
+                'break-words font-mono text-sm text-slate-700',
+              )}
+              data-testid="drawer-sample-values-row"
+            >
+              {value}
+            </div>
+          ))}
         </div>
-      ) : null}
-
-      {source.aiReasoning ? (
-        <p
-          className="text-sm italic text-slate-600"
-          data-testid="drawer-source-reasoning"
-        >
-          {source.aiReasoning}
-        </p>
       ) : null}
     </li>
   )
 }
 
-/**
- * Combination strategy. Renders the human-readable label for the
- * `combinationType`; when `combinationType === 'custom_sql'` AND
- * `combinationSql` is non-null, also renders the SQL in a code block whose
- * styling matches `ValueAssignmentBody`'s Value expression block exactly
- * (consistency for the same visual primitive across body kinds).
- *
- * Caller-gated on `sources.length >= 2` — single-source rows never see
- * this section.
- */
-function CombinationSection({
-  combinationType,
-  combinationSql,
+// ── Analysis section (drawer redesign refinements §4) ──────────────────────
+//
+// Drawer redesign refinements §4 (founder canary review): ANALYSIS is
+// the third body section (drawer redesign refinements §3 ordering:
+// SOURCES → SAMPLE VALUES → ANALYSIS → TRANSFORMATION). It's the
+// "deep-dive" tier consolidating two pieces of information that the
+// prior pass had bundled into the now-removed OVERVIEW section:
+//
+//   ┌─────────────────────────────────────────────┐
+//   │ ANALYSIS                                    │
+//   │ VARCHAR(4) → VARCHAR(10)  ✓ compatible      │   ← line 1: type compat (always visible)
+//   │ ▸ AI reasoning  (collapsible)               │   ← line 2: AI reasoning disclosure
+//   └─────────────────────────────────────────────┘
+//
+// Visibility matrix (drawer redesign refinements §4):
+//
+//   row.kind === 'mapped'        → ANALYSIS renders. Type compat
+//                                  shows for the dominant source. AI
+//                                  reasoning disclosure renders when
+//                                  any row-level or per-source
+//                                  reasoning is non-empty.
+//   row.kind === 'value_assignment'
+//                                → ANALYSIS renders only when AI
+//                                  reasoning is non-empty. Type
+//                                  compat is intentionally skipped
+//                                  (VAs have no source dataType to
+//                                  compare against).
+//   row.kind === 'target_acknowledged'
+//                                → ANALYSIS not rendered (no source =
+//                                  no type compat, no AI reasoning to
+//                                  surface). `AcknowledgedBody`
+//                                  doesn't mount this component.
+//   row.kind === 'unmapped'      → ANALYSIS not rendered. `UnmappedBody`
+//                                  doesn't mount this component.
+//
+// AI reasoning disclosure (`NestedAiReasoningDisclosure`) keeps its
+// Q11.B/Q11.C lock verbatim:
+//   • Default-expanded for `needs_review` (review moment — user is
+//     actively evaluating the AI's rationale).
+//   • Default-collapsed for `approved` / other (already signed off).
+//   • Disclosure mechanic, per-source aggregation, and reset-on-
+//     status-change all carry over from the prior pass.
+
+function AnalysisSection({
+  row,
 }: {
-  combinationType: MappedRow['combinationType']
-  combinationSql: string | null
+  row: MappedRow | ValueAssignmentRow
 }) {
-  const label = COMBINATION_TYPE_LABELS[combinationType]
-  const showSql = combinationType === 'custom_sql' && combinationSql !== null
+  const isMapped = row.kind === 'mapped'
+  const dominantSource =
+    isMapped && row.sources.length > 0 ? row.sources[0]! : null
+
+  const perSourceReasonings = isMapped
+    ? collectPerSourceReasonings(row.sources)
+    : []
+  const rowAiReasoning = row.aiReasoning
+  const hasAnyReasoning =
+    rowAiReasoning !== null || perSourceReasonings.length > 0
+
+  // VA: nothing to show without AI reasoning (no type compat for VAs).
+  // Mapped: defensively skip when there's neither a dominant source
+  // nor any reasoning — the section would render an empty shell.
+  if (!isMapped && !hasAnyReasoning) return null
+  if (isMapped && dominantSource === null && !hasAnyReasoning) return null
+
   return (
-    <DrawerSection title="Combination" testId="drawer-section-combination">
-      <div
-        className="text-sm text-slate-900"
-        data-testid="drawer-combination-label"
-      >
-        {label}
-      </div>
-      {showSql ? (
-        <pre
-          className="mt-2 overflow-x-auto whitespace-pre-wrap break-words rounded bg-slate-50 p-3 font-mono text-xs text-slate-900"
-          data-testid="drawer-combination-sql"
-        >
-          {combinationSql}
-        </pre>
+    <DrawerSection title="Analysis" testId="drawer-section-analysis">
+      {dominantSource ? (
+        <TypeCompatibility
+          sourceType={dominantSource.sourceField.dataType}
+          targetType={row.targetField.dataType}
+          rawText={dominantSource.typeCompatibility}
+        />
+      ) : null}
+
+      {hasAnyReasoning ? (
+        <NestedAiReasoningDisclosure
+          rowAiReasoning={rowAiReasoning}
+          perSourceReasonings={perSourceReasonings}
+          rowStatus={row.status}
+        />
       ) : null}
     </DrawerSection>
   )
 }
 
-/**
- * Row-level AI reasoning. Surfaces an empty-state when null — at the row
- * level, "no reasoning" IS information (the AI couldn't justify the
- * mapping, the user should know). Per-source reasoning by contrast is
- * silently omitted when absent.
- */
-function RowAiReasoningSection({ aiReasoning }: { aiReasoning: string | null }) {
+// ── Type compatibility (compact verdict line) ──────────────────────────────
+//
+// Compact glance line consumed by `AnalysisSection` (drawer redesign
+// refinements §4 — type compatibility lives in ANALYSIS, not OVERVIEW):
+//
+//   VARCHAR(4) → VARCHAR(10)  ✓ compatible
+//   VARCHAR(50) → VARCHAR(20) ⚠ conversion needed
+//
+// Verdict heuristic. The wire contract carries `typeCompatibility` as
+// a free-form `string | null` (legacy storage of Claude's prose). We
+// classify by keyword scan into one of three buckets:
+//
+//   compatible (✓ green)  — text matches the same "direct compatible"
+//                           keywords used elsewhere in the codebase
+//                           (`fieldNeedsTransform` in
+//                           `lib/utils/transform-helpers.ts` Step 4
+//                           uses /direct compatible|no conversion
+//                           needed|compatible.?no/). Re-using that
+//                           regex keeps the verdict logic consistent
+//                           with the existing transform-scope
+//                           classifier.
+//
+//   warning (⚠ amber)     — default for any non-null
+//                           `typeCompatibility` that isn't an explicit
+//                           "direct compatible". Covers truncation
+//                           risk, lossy conversion, format conversion,
+//                           etc. The amber color is deliberately
+//                           cautious — most real-world non-direct
+//                           cases need user attention, and a single
+//                           amber bucket is easier to scan than three
+//                           color levels.
+//
+//   unknown (slate)       — `typeCompatibility === null`. Renders the
+//                           type pair without a verdict glyph; the
+//                           caller (`AnalysisSection`) only mounts
+//                           this component when there's a dominant
+//                           source, so null here is genuinely
+//                           "AI never assessed" rather than "no
+//                           source".
+//
+// Three-state rather than the prompt's optional fourth ✗ "incompatible"
+// state: the dataset has no examples of an `incompatible` verdict
+// surfaced through `typeCompatibility` (the legacy classifier only
+// emitted compatible/needs-conversion). Adding ✗ as a fourth bucket
+// would require a contract change. If a future canary surfaces a real
+// incompatible case, the bucket map below extends with one entry.
+
+type TypeCompatVerdict = 'compatible' | 'warning' | 'unknown'
+
+function classifyTypeCompatibility(
+  rawText: string | null,
+): TypeCompatVerdict {
+  if (rawText === null) return 'unknown'
+  const compat = rawText.toLowerCase()
+  // Mirror the regex used in `fieldNeedsTransform` Step 4 so the
+  // drawer's verdict and the readiness-score classifier stay in
+  // lockstep. If the keyword catalogue evolves, both surfaces
+  // update together.
+  if (/direct compatible|no conversion needed|compatible.?no/.test(compat)) {
+    return 'compatible'
+  }
+  return 'warning'
+}
+
+function TypeCompatibility({
+  sourceType,
+  targetType,
+  rawText,
+}: {
+  sourceType: string
+  targetType: string
+  rawText: string | null
+}) {
+  const verdict = classifyTypeCompatibility(rawText)
   return (
-    <DrawerSection title="AI reasoning" testId="drawer-section-ai-reasoning">
-      {aiReasoning ? (
-        <p
-          className="text-sm italic text-slate-600"
+    <div
+      className="flex items-center gap-2 text-sm text-slate-600"
+      data-testid="drawer-analysis-type-compat"
+      data-verdict={verdict}
+    >
+      <span className="font-mono text-xs text-slate-500">
+        <span data-testid="drawer-analysis-type-compat-source">
+          {sourceType}
+        </span>{' '}
+        <span aria-hidden="true" className="text-slate-400">
+          →
+        </span>{' '}
+        <span data-testid="drawer-analysis-type-compat-target">
+          {targetType}
+        </span>
+      </span>
+      <TypeCompatibilityVerdict verdict={verdict} />
+    </div>
+  )
+}
+
+function TypeCompatibilityVerdict({
+  verdict,
+}: {
+  verdict: TypeCompatVerdict
+}) {
+  if (verdict === 'compatible') {
+    return (
+      <span
+        className="inline-flex items-center gap-1 text-xs font-medium text-green-700"
+        data-testid="drawer-analysis-type-compat-verdict-compatible"
+      >
+        <Check aria-hidden="true" className="h-4 w-4" />
+        compatible
+      </span>
+    )
+  }
+  if (verdict === 'warning') {
+    return (
+      <span
+        className="inline-flex items-center gap-1 text-xs font-medium text-amber-700"
+        data-testid="drawer-analysis-type-compat-verdict-warning"
+      >
+        <AlertTriangle aria-hidden="true" className="h-4 w-4" />
+        conversion needed
+      </span>
+    )
+  }
+  // verdict === 'unknown' — render nothing visible; the type pair
+  // itself is sufficient. Returning null keeps the layout flush
+  // when the AI hasn't assessed compatibility.
+  return null
+}
+
+// ── AI Reasoning disclosure (nested inside Analysis) ───────────────────────
+//
+// Q11.B/Q11.C lock (carried over from prior passes):
+//   • Hidden entirely when neither row-level nor per-source reasoning
+//     is present.
+//   • Open by default for `needs_review` (review moment — user is
+//     actively evaluating the AI's rationale).
+//   • Closed by default for `approved` / other (already signed off).
+//   • Disclosure mechanic mirrors the prior `AiReasoningDisclosure`
+//     verbatim (chevron + `aria-expanded` + plain-text panel).
+//
+// Drawer redesign refinements §4: this disclosure renders INSIDE the
+// new ANALYSIS section (the prior pass had it nested under OVERVIEW;
+// OVERVIEW is removed entirely). The component drops the section
+// wrapper but otherwise keeps the same shape — chevron + label at
+// smaller text size to fit ANALYSIS's tighter context. The testid
+// contract reuses `drawer-ai-reasoning-toggle` / `drawer-ai-reasoning`
+// so existing tests resolving the affordance continue to pass.
+
+function NestedAiReasoningDisclosure({
+  rowAiReasoning,
+  perSourceReasonings,
+  rowStatus,
+}: {
+  rowAiReasoning: string | null
+  perSourceReasonings: Array<{
+    sourceId: string
+    sourceTable: string
+    sourceField: string
+    reasoning: string
+  }>
+  rowStatus: MappingRow['status']
+}) {
+  const panelId = useId()
+  const initialExpanded = rowStatus === 'needs_review'
+  const [expanded, setExpanded] = useState(initialExpanded)
+
+  // Reset open/closed default when the row's status flips between
+  // approved ↔ needs_review (e.g. user approves from inside the drawer).
+  const [lastStatus, setLastStatus] = useState(rowStatus)
+  if (lastStatus !== rowStatus) {
+    setLastStatus(rowStatus)
+    setExpanded(rowStatus === 'needs_review')
+  }
+
+  return (
+    <div className="mt-3" data-testid="drawer-analysis-ai-reasoning">
+      <button
+        type="button"
+        onClick={() => setExpanded((prev) => !prev)}
+        aria-expanded={expanded}
+        aria-controls={panelId}
+        data-testid="drawer-ai-reasoning-toggle"
+        className={cn(
+          'inline-flex h-6 items-center gap-0.5 rounded px-1.5 text-[11px] font-medium',
+          'text-slate-600 transition-colors hover:bg-slate-100 hover:text-slate-900',
+          'focus:outline-none focus-visible:ring-2 focus-visible:ring-slate-300',
+        )}
+      >
+        {expanded ? (
+          <ChevronDown aria-hidden="true" className="h-3 w-3" />
+        ) : (
+          <ChevronRight aria-hidden="true" className="h-3 w-3" />
+        )}
+        <span>{expanded ? 'Hide AI reasoning' : 'AI reasoning'}</span>
+      </button>
+      {expanded ? (
+        <div
+          id={panelId}
+          className="mt-2 space-y-2"
           data-testid="drawer-ai-reasoning"
         >
-          {aiReasoning}
-        </p>
-      ) : (
-        <DrawerEmptyState
-          text="No reasoning available"
-          testId="drawer-ai-reasoning-empty"
+          {rowAiReasoning !== null ? (
+            <p
+              className="text-sm italic text-slate-600"
+              data-testid="drawer-ai-reasoning-row"
+            >
+              {rowAiReasoning}
+            </p>
+          ) : null}
+          {perSourceReasonings.map((entry) => (
+            <p
+              key={entry.sourceId}
+              className="text-sm italic text-slate-600"
+              data-testid="drawer-ai-reasoning-source"
+              data-source-id={entry.sourceId}
+            >
+              <span className="not-italic font-mono text-xs font-medium text-slate-700">
+                {entry.sourceTable}.{entry.sourceField}:
+              </span>{' '}
+              {entry.reasoning}
+            </p>
+          ))}
+        </div>
+      ) : null}
+    </div>
+  )
+}
+
+
+// ── Transformation section (Q11.E lock) ────────────────────────────────────
+//
+// Conditional render matrix (locked):
+//
+//   hasTransformation === true
+//     → Full section: status pill + description + truncated SQL preview
+//       block + "View in Transform →" link
+//   !hasTransformation && row.kind === 'mapped' && combinationType !== 'custom_sql'
+//     → Section header + "Define Transform →" inline link only
+//   row.kind === 'value_assignment'
+//     → Handled inline by ValueAssignmentBody as a "Value expression"
+//       section (the VA's combinationSql is the value, not a transform).
+//   row.kind === 'target_acknowledged' || row.kind === 'unmapped'
+//     → Section hidden (no TFM, no transform).
+//
+// Status pill values from `transformationStatus`:
+//   applied → green   tested/saved → blue   draft → slate   stale → amber
+//
+// "View / Define Transform →" routes to
+// `/app/projects/<projectId>/transform?targetFieldMappingId=<row.id>`
+// (the canonical Phase 3+ URL contract; the Transform page reads either
+// `targetFieldMappingId` or the legacy `fieldMappingId` per
+// `lib/url/transform-params.ts`).
+
+const TRANSFORMATION_STATUS_PILL: Record<
+  MappingTransformationStatus,
+  { label: string; className: string }
+> = {
+  applied: {
+    label: 'Applied',
+    className: 'bg-green-100 text-green-800',
+  },
+  tested: {
+    label: 'Tested',
+    className: 'bg-blue-100 text-blue-800',
+  },
+  saved: {
+    label: 'Saved',
+    className: 'bg-blue-100 text-blue-800',
+  },
+  draft: {
+    label: 'Draft',
+    className: 'bg-slate-100 text-slate-700',
+  },
+  stale: {
+    label: 'Stale',
+    className: 'bg-amber-100 text-amber-800',
+  },
+}
+
+function TransformationSection({
+  row,
+  projectId,
+}: {
+  row: MappedRow
+  projectId: string | undefined
+}) {
+  // Resolve the Transform-page route once per render. The route shape
+  // matches the existing Transform page's URL contract (deeplink reads
+  // `targetFieldMappingId` per `lib/url/transform-params.ts`). When
+  // `projectId` is unavailable (test contexts that mount the drawer
+  // standalone without a parent), the link points at a same-page
+  // anchor instead of throwing — defensive only; production always
+  // has projectId.
+  const transformHref = projectId
+    ? `/app/projects/${projectId}/transform?targetFieldMappingId=${row.id}`
+    : '#'
+
+  if (row.hasTransformation) {
+    return (
+      <DrawerSection
+        title="Transformation"
+        testId="drawer-section-transformation"
+      >
+        <div className="space-y-2">
+          {row.transformationStatus ? (
+            <TransformationStatusPill status={row.transformationStatus} />
+          ) : null}
+          {row.transformationDescription ? (
+            <p
+              className="text-sm text-slate-700"
+              data-testid="drawer-transformation-description"
+            >
+              {row.transformationDescription}
+            </p>
+          ) : null}
+          {row.transformationSqlPreview ? (
+            <pre
+              className={cn(
+                'overflow-y-auto rounded bg-slate-50 px-3 py-2',
+                'font-mono text-[11px] text-slate-900',
+                'whitespace-pre-wrap break-words',
+                'max-h-32',
+              )}
+              data-testid="drawer-transformation-sql-preview"
+            >
+              {row.transformationSqlPreview}
+            </pre>
+          ) : null}
+          <TransformLink
+            href={transformHref}
+            label="View in Transform"
+            testId="drawer-transformation-view-link"
+          />
+        </div>
+      </DrawerSection>
+    )
+  }
+
+  // No transformation. Show the "Define Transform →" affordance only for
+  // non-custom_sql mapped rows — `custom_sql` flows author SQL through a
+  // different surface entirely (the Transform page's custom-SQL editor),
+  // and there's no inline transform-author flow to link to.
+  if (row.combinationType === 'custom_sql') return null
+
+  return (
+    <DrawerSection
+      title="Transformation"
+      testId="drawer-section-transformation"
+    >
+      <div data-testid="drawer-transformation-empty">
+        <TransformLink
+          href={transformHref}
+          label="Define Transform"
+          testId="drawer-transformation-define-link"
         />
-      )}
+      </div>
     </DrawerSection>
   )
 }
 
-/**
- * Row-level confidence. Mirrors the VA body's Confidence section exactly —
- * percentage when non-null, em-dash with sr-only label when null. Always
- * rendered (including for Rule 1 even though the value duplicates the
- * single source's confidence) per Gap 8b investigation Q2 — consistency
- * with the rest of the drawer body wins over the marginal density saving.
- */
-function RowConfidenceSection({ confidence }: { confidence: number | null }) {
+function TransformationStatusPill({
+  status,
+}: {
+  status: MappingTransformationStatus
+}) {
+  const cfg = TRANSFORMATION_STATUS_PILL[status]
   return (
-    <DrawerSection title="Confidence" testId="drawer-section-confidence">
-      {confidence !== null ? (
-        <span
-          className="text-sm tabular-nums text-slate-900"
-          data-testid="drawer-confidence"
-        >
-          {formatConfidencePercent(confidence)}
-        </span>
-      ) : (
-        <span
-          aria-label="no confidence available"
-          className="inline-flex items-center text-sm text-slate-400"
-          data-testid="drawer-confidence-empty"
-        >
-          <span aria-hidden="true">—</span>
-        </span>
+    <span
+      className={cn(
+        'inline-flex items-center rounded px-1.5 py-0.5 text-[11px] font-medium',
+        cfg.className,
       )}
-    </DrawerSection>
+      data-testid={`drawer-transformation-status-${status}`}
+    >
+      {cfg.label}
+    </span>
+  )
+}
+
+function TransformLink({
+  href,
+  label,
+  testId,
+}: {
+  href: string
+  label: string
+  testId: string
+}) {
+  // Refinement 2 (canary feedback): trailing icon switches from
+  // `ExternalLink` (↗) to `ChevronRight` (›). The Transform page is
+  // an in-app surface, not an external destination — the external
+  // arrow signaled "leaves the app", which was misleading. The
+  // chevron reads as "drill into" / "go to", consistent with native
+  // app navigation patterns.
+  return (
+    <a
+      href={href}
+      data-testid={testId}
+      className={cn(
+        'inline-flex items-center gap-1 text-sm font-medium text-blue-700',
+        'hover:text-blue-800 hover:underline',
+        'focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-500/30',
+      )}
+    >
+      <span>{label}</span>
+      <ChevronRight aria-hidden="true" className="h-4 w-4" />
+    </a>
   )
 }
 
@@ -2114,8 +2937,6 @@ interface DrawerFooterProps {
    * sub-100ms) preview round-trip.
    */
   isEditPreviewPending: boolean
-  /** Phase 4b-1 — [Edit] click handler on mapped rows. */
-  onEditClick: () => void
   /** Phase 4b-1 — edit-mode [Cancel] click handler. */
   onEditFormCancelClick: () => void
   /** Phase 4b-1 — edit-mode [Save changes] click handler (runs preview-then-save). */
@@ -2153,7 +2974,6 @@ function DrawerFooter({
   onFormSaveClick,
   editFormActive,
   isEditPreviewPending,
-  onEditClick,
   onEditFormCancelClick,
   onEditFormSaveClick,
   isUnacknowledging,
@@ -2229,6 +3049,9 @@ function DrawerFooter({
           onUnacknowledgeClick={onUnacknowledgeClick}
         />
       ) : (
+        // Drawer redesign — Q11.A lock: Edit moved out of the footer
+        // entirely. The inline Sources-section pencil (rendered by the
+        // body) is now the only edit affordance.
         <ApproveRejectButtons
           status={row.status}
           isApprovePending={isApprovePending}
@@ -2236,19 +3059,6 @@ function DrawerFooter({
           optimisticallyApproved={optimisticallyApproved}
           onApprove={onApprove}
           onRejectClick={onRejectClick}
-          // Phase 4b-1 — Edit affordance. Visible only on `mapped`
-          // rows in `needs_review` / `approved` (founder §3.2 hides
-          // it on `rejected`; VAs and acknowledged rows are entirely
-          // separate footer dispatches above). `custom_sql` mapped
-          // rows are also excluded — those are Transform-tab edits,
-          // not source-list edits.
-          showEditButton={
-            row.kind === 'mapped' &&
-            (row.status === 'needs_review' || row.status === 'approved') &&
-            row.combinationType !== 'custom_sql'
-          }
-          isEditDisabled={isApprovePending || isRejecting}
-          onEditClick={onEditClick}
         />
       )}
     </footer>
@@ -2403,19 +3213,17 @@ interface ApproveRejectButtonsProps {
   optimisticallyApproved: boolean
   onApprove: () => void
   onRejectClick: () => void
-  /**
-   * Phase 4b-1 — when true, render the Edit button to the RIGHT of
-   * Approve (founder §3.3 — rightmost in footer). The drawer decides
-   * visibility based on row kind, status, and `combinationType`; this
-   * component only handles rendering.
-   */
-  showEditButton?: boolean
-  /** Phase 4b-1 — disable Edit while approve/reject is in flight. */
-  isEditDisabled?: boolean
-  /** Phase 4b-1 — Edit click handler (no-op when `showEditButton` is false). */
-  onEditClick?: () => void
 }
 
+// Drawer redesign — Q11.A lock:
+//   needs_review            → [Reject] [Approve]
+//   approved                → [Reject]                  (Approve hidden — already approved)
+//   rejected (legacy data)  → [Reject] [Approve]        (Approve = un-reject path)
+//   The Edit button is gone from the footer entirely; the inline
+//   Sources-section pencil is now the only edit affordance. Approve
+//   was previously rendered-but-disabled on `approved`; collapsing it
+//   to a single Reject button gives a meaningfully cleaner footer in
+//   the 480px drawer.
 function ApproveRejectButtons({
   status,
   isApprovePending,
@@ -2423,23 +3231,12 @@ function ApproveRejectButtons({
   optimisticallyApproved,
   onApprove,
   onRejectClick,
-  showEditButton = false,
-  isEditDisabled = false,
-  onEditClick,
 }: ApproveRejectButtonsProps) {
-  // Effective approve-disabled: already approved (incl. optimistic),
-  // or another action is in flight.
-  const approveDisabled =
-    optimisticallyApproved ||
-    status === 'approved' ||
-    isApprovePending ||
-    isRejecting
+  const showApprove =
+    !optimisticallyApproved &&
+    (status === 'needs_review' || status === 'rejected')
+  const approveDisabled = isApprovePending || isRejecting
   const rejectDisabled = isApprovePending || isRejecting
-
-  const approveTitle =
-    status === 'approved' || optimisticallyApproved
-      ? 'This mapping is already approved'
-      : undefined
 
   return (
     <div className="flex items-center justify-end gap-2">
@@ -2469,37 +3266,21 @@ function ApproveRejectButtons({
           'Reject'
         )}
       </button>
-      <button
-        type="button"
-        data-testid="mapping-drawer-approve-button"
-        aria-label="Approve mapping"
-        onClick={onApprove}
-        disabled={approveDisabled}
-        title={approveTitle}
-        className={cn(
-          'inline-flex h-9 items-center justify-center rounded-md border px-3 text-sm font-medium transition-colors',
-          'border-blue-600 bg-blue-600 text-white hover:bg-blue-700',
-          'focus:outline-none focus:ring-2 focus:ring-blue-500/40',
-          'disabled:cursor-not-allowed disabled:border-slate-200 disabled:bg-slate-100 disabled:text-slate-400 disabled:hover:bg-slate-100',
-        )}
-      >
-        Approve
-      </button>
-      {showEditButton ? (
+      {showApprove ? (
         <button
           type="button"
-          data-testid="mapping-drawer-edit-button"
-          aria-label="Edit mapping"
-          onClick={onEditClick}
-          disabled={isEditDisabled}
+          data-testid="mapping-drawer-approve-button"
+          aria-label="Approve mapping"
+          onClick={onApprove}
+          disabled={approveDisabled}
           className={cn(
             'inline-flex h-9 items-center justify-center rounded-md border px-3 text-sm font-medium transition-colors',
-            'border-slate-300 bg-white text-slate-700 hover:bg-slate-50',
-            'focus:outline-none focus:ring-2 focus:ring-slate-500/30',
-            'disabled:cursor-not-allowed disabled:border-slate-200 disabled:bg-slate-50 disabled:text-slate-400 disabled:hover:bg-slate-50',
+            'border-blue-600 bg-blue-600 text-white hover:bg-blue-700',
+            'focus:outline-none focus:ring-2 focus:ring-blue-500/40',
+            'disabled:cursor-not-allowed disabled:border-slate-200 disabled:bg-slate-100 disabled:text-slate-400 disabled:hover:bg-slate-100',
           )}
         >
-          Edit
+          Approve
         </button>
       ) : null}
     </div>
@@ -2579,15 +3360,14 @@ function EditFooterButtons({
 }
 
 /**
- * Footer button row for `target_acknowledged` rows. Approve/Reject
- * remain disabled with explanatory `title` tooltips — acknowledged
- * rows are an intentional "no source mapping" declaration, not a
- * candidate for approve/reject. Phase 4b-2 adds the rightmost
- * [Un-acknowledge] button which is the canonical way to reverse the
- * acknowledgment (deletes the bare-ack TFM and lets the field return
- * to Rule 6 unmapped). Founder §3.j locked the affordance to the
- * footer (matches Approve/Reject/Edit verb-action shape), and §3.k
- * locked the semantic (delete the row, no new status enum value).
+ * Footer button row for `target_acknowledged` rows. Drawer redesign:
+ * the disabled Approve/Reject pair is removed entirely — acknowledged
+ * rows live on a different verb axis (the only meaningful action is
+ * "un-acknowledge to return to Rule 6"). Phase 4b-2 introduced
+ * [Un-acknowledge] which is now the *only* footer button for these
+ * rows. Founder §3.j locked the affordance to the footer (matches
+ * Approve/Reject/Edit verb-action shape), and §3.k locked the
+ * semantic (delete the row, no new status enum value).
  */
 interface AcknowledgedFooterButtonsProps {
   isUnacknowledging: boolean
@@ -2600,32 +3380,6 @@ function AcknowledgedFooterButtons({
 }: AcknowledgedFooterButtonsProps) {
   return (
     <div className="flex items-center justify-end gap-2">
-      <button
-        type="button"
-        data-testid="mapping-drawer-reject-button"
-        aria-label="Reject mapping"
-        disabled
-        title="Acknowledged rows can't be rejected; un-acknowledge first."
-        className={cn(
-          'inline-flex h-9 items-center justify-center rounded-md border px-3 text-sm font-medium',
-          'cursor-not-allowed border-slate-200 bg-slate-50 text-slate-400',
-        )}
-      >
-        Reject
-      </button>
-      <button
-        type="button"
-        data-testid="mapping-drawer-approve-button"
-        aria-label="Approve mapping"
-        disabled
-        title="Acknowledged rows can't be approved; un-acknowledge first."
-        className={cn(
-          'inline-flex h-9 items-center justify-center rounded-md border px-3 text-sm font-medium',
-          'cursor-not-allowed border-slate-200 bg-slate-100 text-slate-400',
-        )}
-      >
-        Approve
-      </button>
       <button
         type="button"
         data-testid="mapping-drawer-unacknowledge-button"
