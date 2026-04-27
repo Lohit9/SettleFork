@@ -71,6 +71,7 @@ export async function createProject(
       user_id: user.id,
       org_id: resolvedOrgId,
       created_by: user.id,
+      use_mapping_redesign: true,
     })
     .select()
     .single()
