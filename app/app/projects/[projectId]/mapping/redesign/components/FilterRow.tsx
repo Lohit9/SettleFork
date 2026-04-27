@@ -15,19 +15,52 @@ import type {
   TargetTableSummary,
 } from '@/lib/types/mappings-for-redesign'
 import {
+  CONFIDENCE_THRESHOLD_ROW_AMBER,
+  CONFIDENCE_THRESHOLD_ROW_HIGH,
+} from '@/lib/utils/confidence-format'
+import {
   hasActiveFilters,
+  type MappingConfidenceFilter,
   type MappingFilterState,
   type MappingStatusFilter,
 } from '@/lib/utils/mapping-filters'
 
 // ─────────────────────────────────────────────────────────────────────────────
-// FilterRow — Phase 3 Gap 3.
+// FilterRow — Phase 4-polish-1 final refinements.
 // ─────────────────────────────────────────────────────────────────────────────
 //
-// Three Selects + one search input, arranged left-to-right, with an
-// optional "N tables" gutter on the right (per spec mockup at
-// docs/features/mapping-redesign.md §Information architecture line 648).
-// A "Clear filters" affordance appears whenever any filter is non-default.
+// Four Selects + one search input + a right-edge `N tables` (or
+// contextual approve link) gutter, arranged left-to-right as a
+// SINGLE-LINE legacy-aesthetic toolbar.
+//
+//   [All target tables ▾]  [All source tables ▾]  [All status ▾]  [All confidence ▾]   [🔍 search…]   N tables / Approve N high-confidence
+//
+// Aesthetic timeline:
+//   • Phase 3 / Gap 3 baseline: tinted `bg-gray-50` toolbar with
+//     short noun-less Status/Confidence "all" labels and a permanent
+//     "Approve high-confidence (N)" button at the right edge.
+//   • Comprehensive pass (2026-04-26): switched to `bg-white` +
+//     `border-b border-gray-100` (Refinement B), `h-8 text-xs`
+//     compact triggers, prefix labels per axis, vertical hairline
+//     dividers, the new Confidence filter, search-to-right-edge,
+//     contextual bulk-approve link replacing the permanent button.
+//   • Final refinements (Refinement 3, 2026-04-26): prefix labels
+//     and hairline dividers DROPPED. Each dropdown's default value
+//     is now noun-carrying and self-documents the filter axis
+//     ("All target tables", "All source tables", "All status",
+//     "All confidence"). Cleaner read, fewer DOM nodes, no axis
+//     duplication between prefix and value.
+//
+// Standing locks:
+//   • Q2 / mutex right-edge: the contextual "Approve N high-confidence"
+//     link REPLACES the table-count gutter when active — they never
+//     co-render. Whichever element claims the slot uses `ml-auto` to
+//     sit flush against the toolbar's right edge.
+//   • Q8 / threshold-derived labels: Confidence band labels derive
+//     from `CONFIDENCE_THRESHOLD_ROW_HIGH` (85) and
+//     `CONFIDENCE_THRESHOLD_ROW_AMBER` (40) imported from
+//     `confidence-format.ts`. No literal threshold numbers in this
+//     file — the dropdown self-updates if a future PR shifts a band.
 //
 // This component is controlled: it renders the provided `filters` state
 // and emits updates through `onFiltersChange`. Debouncing the
@@ -48,11 +81,6 @@ interface FilterRowProps {
   /** Universe of source tables for the Source dropdown. */
   sourceTables: readonly SourceTableSummary[]
   /**
-   * Table count gutter label. Typically targetTables.length — rendered
-   * on the right to match the spec mockup. Pass 0 to hide.
-   */
-  tableCount: number
-  /**
    * Phase 3 Gap 9 — rejected TFM count, used to gate the "Rejected"
    * status option in the dropdown. The option is hidden when the count
    * is zero (mirroring the counter-pill pattern from Gap 4a §9 Q6),
@@ -65,13 +93,15 @@ interface FilterRowProps {
    */
   rejectedCount?: number
   /**
-   * Phase 4c-1 — count of project-wide needs-review TFMs whose
-   * confidence ≥ HIGH_CONFIDENCE_THRESHOLD (default 85). Drives the
-   * "Approve high-confidence (N)" button visibility and copy. When
-   * `0`, the button is hidden entirely (no disabled state — at zero
-   * the affordance is noise; the dialog's own count would also be 0
-   * by the time the user reached it). When omitted, the button is
-   * also hidden — fixtures and storybook never wire it.
+   * Phase 4c-1 (4-polish-1 redesign) — count of project-wide
+   * needs-review TFMs whose confidence ≥ HIGH_CONFIDENCE_THRESHOLD
+   * (default 85). Drives the contextual "Approve N high-confidence"
+   * link visibility + copy. The link surfaces ONLY when the
+   * Confidence filter is set to 'high' AND the count is positive —
+   * the user has explicitly narrowed to high-confidence rows, so the
+   * bulk-approve affordance becomes contextually useful instead of a
+   * permanent right-edge button. When the prop is unset (fixtures /
+   * storybook), the link is hidden unconditionally.
    *
    * Derivation lives in the parent (`MappingContent`), client-side
    * over the already-loaded `data.rows` (no extra round-trip). Cap
@@ -79,13 +109,27 @@ interface FilterRowProps {
    */
   highConfidenceCount?: number
   /**
-   * Phase 4c-1 — fired when the user clicks "Approve high-confidence
-   * (N)". Parent owns the dialog state and is responsible for
-   * opening `BulkConfirmDialog` with `scope='high_confidence'`.
+   * Fired when the user clicks the contextual "Approve N
+   * high-confidence" link. Parent owns the dialog state and is
+   * responsible for opening `BulkConfirmDialog` with
+   * `scope='high_confidence'`.
    */
   onApproveHighConfidenceClick?: () => void
 }
 
+// Refinement 3 (2026-04-26): prefix labels DROPPED from the toolbar.
+// Each dropdown's default value now self-documents the filter axis,
+// so Status and Confidence return to noun-carrying "all" labels
+// (parity with Source / Target which already carry their nouns):
+//
+//   • 'All status'      — was 'All' under the prefix-label aesthetic
+//   • 'All source tables'
+//   • 'All target tables'
+//   • 'All confidence'  — was 'All' under the prefix-label aesthetic
+//
+// The hairline dividers between groups are also gone — without prefix
+// labels there's nothing to separate, just dropdowns sitting in `gap-3`
+// flow.
 const BASE_STATUS_OPTIONS: Array<{ value: MappingStatusFilter; label: string }> = [
   { value: 'all', label: 'All status' },
   { value: 'needs_review', label: 'Needs Review' },
@@ -97,12 +141,27 @@ const REJECTED_STATUS_OPTION: { value: MappingStatusFilter; label: string } = {
   label: 'Rejected',
 }
 
+// Q8 lock — band labels derive from the canonical thresholds in
+// `confidence-format.ts` so the dropdown copy and the row-level color
+// band can never drift. If a future PR shifts a threshold, the
+// dropdown self-updates with no edits here.
+const CONFIDENCE_OPTIONS: Array<{ value: MappingConfidenceFilter; label: string }> = [
+  { value: 'all', label: 'All confidence' },
+  { value: 'high', label: `High (≥${CONFIDENCE_THRESHOLD_ROW_HIGH})` },
+  {
+    value: 'medium',
+    label: `Medium (${CONFIDENCE_THRESHOLD_ROW_AMBER}–${
+      CONFIDENCE_THRESHOLD_ROW_HIGH - 1
+    })`,
+  },
+  { value: 'low', label: `Low (<${CONFIDENCE_THRESHOLD_ROW_AMBER})` },
+]
+
 export function FilterRow({
   filters,
   onFiltersChange,
   targetTables,
   sourceTables,
-  tableCount,
   rejectedCount = 0,
   highConfidenceCount,
   onApproveHighConfidenceClick,
@@ -147,6 +206,16 @@ export function FilterRow({
       onFiltersChange({ ...filters, status: value })
     }
   }
+  const handleConfidenceChange = (value: string) => {
+    if (
+      value === 'all' ||
+      value === 'high' ||
+      value === 'medium' ||
+      value === 'low'
+    ) {
+      onFiltersChange({ ...filters, confidence: value })
+    }
+  }
   const handleSearchInput = (value: string) => {
     setSearchInput(value)
     onFiltersChange({ ...filters, search: value })
@@ -162,6 +231,7 @@ export function FilterRow({
       target: 'all',
       source: 'all',
       status: 'all',
+      confidence: 'all',
       search: '',
     })
   }
@@ -176,11 +246,65 @@ export function FilterRow({
 
   const filtersActive = hasActiveFilters(filters)
 
+  // Contextual bulk-approve link visibility (Task 5c). Three conditions
+  // compose with AND: the parent supplies a non-zero count AND the
+  // Confidence filter has narrowed to 'high' AND the click handler is
+  // wired. Outside this context the affordance is hidden.
+  const showContextualBulkApprove =
+    filters.confidence === 'high' &&
+    highConfidenceCount !== undefined &&
+    highConfidenceCount > 0 &&
+    onApproveHighConfidenceClick !== undefined
+
   return (
     <div
       data-testid="mapping-redesign-filter-row"
-      className="mb-4 flex flex-wrap items-center gap-2"
+      // Phase 4-polish-1 sidebar architecture refactor (2026-04-26):
+      // FilterRow now lives at PAGE LEVEL — a direct child of the
+      // outer `flex h-full flex-col bg-gray-50` column rendered by
+      // `MappingRedesignContent`, sibling to `<PageHeader>` and
+      // `<MappingSummaryStrip>`. Previously it lived inside the body's
+      // `flex-1 overflow-auto` scroll container with `sticky top-0
+      // z-10 -mx-6 mb-4` to compensate for that placement; now that
+      // it's outside any scroll container, those classes are gone:
+      //
+      //   • `sticky top-0` removed — DOM order alone keeps the row
+      //     visible at the top of the page (it never scrolls because
+      //     it's not inside a scroll container).
+      //   • `z-10` removed — there are no sticky siblings to layer
+      //     against; popovers (kebab z-20, FieldPicker portal
+      //     z-9999) still render above the toolbar by their own
+      //     z-index.
+      //   • `-mx-6` removed — the centered `max-w-5xl px-6` column no
+      //     longer wraps this row, so no compensating negative
+      //     margin is needed; the row spans the full viewport width.
+      //   • `mb-4` removed — the body content's own `py-6` (on the
+      //     reading column inside the body scroller) provides
+      //     breathing room above the first group card.
+      //
+      // Retained from the prior comprehensive pass:
+      //   • `bg-white` + `border-b border-gray-100` — legacy toolbar
+      //     aesthetic; reads as a true toolbar against the gray-50
+      //     page background.
+      //   • `px-5 py-2.5` — toolbar's own internal padding.
+      //   • `flex items-center gap-3` — single-row layout of the
+      //     filter dropdowns + search; `gap-3` between adjacent
+      //     controls. No `flex-wrap` — the toolbar is a single line
+      //     at supported viewports (≥768px).
+      //
+      // `flex-shrink-0` is new and load-bearing here: without it, the
+      // toolbar can be vertically compressed by the flex column when
+      // the body's `flex-1` claims more space than the viewport can
+      // afford. The strip carries the same flag for the same reason.
+      className="flex flex-shrink-0 items-center gap-3 border-b border-gray-100 bg-white px-5 py-2.5"
     >
+      {/*
+        Refinement 3 (2026-04-26): prefix labels and hairline dividers
+        were removed. Each dropdown's default value is now noun-carrying
+        and self-documents the filter axis ("All target tables", "All
+        source tables", "All status", "All confidence"). The dropdowns
+        sit in the toolbar's `gap-3` flow with no extra structure.
+      */}
       <FilterSelect
         ariaLabel="Filter by target table"
         testId="filter-target"
@@ -206,7 +330,7 @@ export function FilterRow({
           aria-label="Filter by status"
           data-testid="filter-status"
           className={cn(
-            'h-9 w-auto min-w-[9rem] text-sm',
+            'h-8 w-auto min-w-[7rem] text-xs',
             filters.status !== 'all' &&
               'border-blue-200 bg-blue-50/60 text-blue-900',
           )}
@@ -222,7 +346,41 @@ export function FilterRow({
         </SelectContent>
       </Select>
 
-      <div className="relative flex-1 min-w-[14rem] max-w-md">
+      <Select value={filters.confidence} onValueChange={handleConfidenceChange}>
+        <SelectTrigger
+          aria-label="Filter by confidence"
+          data-testid="filter-confidence"
+          className={cn(
+            'h-8 w-auto min-w-[8rem] text-xs',
+            filters.confidence !== 'all' &&
+              'border-blue-200 bg-blue-50/60 text-blue-900',
+          )}
+        >
+          <SelectValue />
+        </SelectTrigger>
+        <SelectContent>
+          {CONFIDENCE_OPTIONS.map((opt) => (
+            <SelectItem key={opt.value} value={opt.value}>
+              {opt.label}
+            </SelectItem>
+          ))}
+        </SelectContent>
+      </Select>
+
+      {/*
+        Refinement C (Phase 4-polish-1 final, 2026-04-26): the search
+        wrapper is now a fixed `w-72` (288px) compact box pushed to
+        the right edge via `ml-auto`. The prior `flex-1 min-w-[14rem]
+        max-w-md` pattern absorbed all available horizontal space up
+        to 28rem, which read as visually unbalanced at wide viewports
+        (search dominated the toolbar). Compact + right-aligned
+        creates a clean dropdowns-left / search-right rhythm with
+        large whitespace between, matching the legacy mapping page.
+      */}
+      <div
+        className="relative w-72 flex-shrink-0 ml-auto"
+        data-testid="filter-row-search-wrapper"
+      >
         <Search className="pointer-events-none absolute left-3 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-gray-400" />
         <input
           ref={searchInputRef}
@@ -234,7 +392,7 @@ export function FilterRow({
           aria-label="Search mappings"
           data-testid="filter-search-input"
           className={cn(
-            'h-9 w-full rounded-lg border bg-white pl-9 pr-9 text-sm text-gray-900 placeholder:text-gray-400 transition-colors focus:outline-none focus:ring-2 focus:ring-blue-500/30',
+            'h-8 w-full rounded-md border bg-white pl-9 pr-9 text-xs text-gray-900 placeholder:text-gray-400 transition-colors focus:outline-none focus:ring-2 focus:ring-blue-500/30',
             searchInput === ''
               ? 'border-gray-200 focus:border-blue-500'
               : 'border-blue-200 bg-blue-50/60 focus:border-blue-500',
@@ -258,48 +416,35 @@ export function FilterRow({
           type="button"
           onClick={handleClearAll}
           data-testid="filter-clear-all"
-          className="h-9 rounded-lg px-3 text-xs font-medium text-gray-500 transition-colors hover:bg-gray-100 hover:text-gray-800"
+          className="h-8 flex-shrink-0 rounded-md px-2.5 text-xs font-medium text-gray-500 transition-colors hover:bg-gray-100 hover:text-gray-800"
         >
           Clear filters
         </button>
       ) : null}
 
       {/*
-        Phase 4c-1 — project-wide bulk approve for high-confidence
-        needs-review TFMs. Hidden when the count is zero (or the prop
-        is unset, e.g. fixtures). Sits in the right-aligned region
-        ahead of the table-count gutter via `ml-auto` on the first
-        right-aligned element. When BOTH this button and the table
-        count are visible, only the leftmost gets `ml-auto`.
+        Right-edge slot. Refinement 5 (Phase 4-polish-1 final-final,
+        2026-04-26): the passive table-count gutter ("8 tables") was
+        DROPPED. It was passive informational, not actionable, and
+        sat orphaned in tiny text adding visual chrome without
+        function. The contextual bulk-approve link still surfaces
+        in the same right-edge slot when filter=high AND count>0 —
+        that affordance IS actionable and earns its place.
+
+        Search wrapper (Refinement C) still owns `ml-auto`; the
+        approve button sits naturally to its right via the toolbar's
+        `gap-3` when present. When the approve button is absent,
+        nothing else competes for the right edge.
       */}
-      {highConfidenceCount !== undefined &&
-      highConfidenceCount > 0 &&
-      onApproveHighConfidenceClick !== undefined ? (
+      {showContextualBulkApprove ? (
         <button
           type="button"
           onClick={onApproveHighConfidenceClick}
           data-testid="filter-row-approve-high-confidence"
-          className="ml-auto h-9 flex-shrink-0 rounded-lg border border-gray-200 bg-white px-3 text-xs font-medium text-gray-700 transition-colors hover:border-gray-300 hover:bg-gray-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500/30"
+          className="h-8 flex-shrink-0 rounded-md px-2 text-xs font-medium text-blue-600 underline-offset-2 transition-colors hover:bg-blue-50 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500/30"
         >
-          Approve high-confidence ({highConfidenceCount})
+          Approve {highConfidenceCount} high-confidence
         </button>
-      ) : null}
-
-      {tableCount > 0 ? (
-        <span
-          className={cn(
-            'flex-shrink-0 text-xs tabular-nums text-gray-500',
-            // Only claim ml-auto when the button above didn't take it.
-            !(
-              highConfidenceCount !== undefined &&
-              highConfidenceCount > 0 &&
-              onApproveHighConfidenceClick !== undefined
-            ) && 'ml-auto',
-          )}
-          data-testid="filter-row-table-count"
-        >
-          {tableCount} {tableCount === 1 ? 'table' : 'tables'}
-        </span>
       ) : null}
     </div>
   )
@@ -332,7 +477,7 @@ function FilterSelect({
         aria-label={ariaLabel}
         data-testid={testId}
         className={cn(
-          'h-9 w-auto min-w-[10rem] max-w-[16rem] text-sm',
+          'h-8 w-auto min-w-[8rem] max-w-[14rem] text-xs',
           isActive && 'border-blue-200 bg-blue-50/60 text-blue-900',
         )}
       >

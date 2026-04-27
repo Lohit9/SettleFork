@@ -122,16 +122,24 @@ export function TargetTableGroup({
       data-target-table-id={targetTable.id}
       className="overflow-hidden rounded-lg border border-gray-200 bg-white"
     >
-      <header className="flex items-baseline justify-between gap-3 border-b border-gray-100 bg-gray-50/50 px-5 py-3">
+      {/*
+        Refinement A (Phase 4-polish-1 final, 2026-04-26): the dataset
+        name subtitle ("Nymbus Core" etc.) was dropped. Every group is
+        in the same target dataset, and the page header already
+        identifies it ("Mapping | <project> Migration"). The subtitle
+        was redundant and read as visual noise stacked under the
+        target table name. The header is now single-line.
+
+        Note: `targetTable.datasetName` is still part of the
+        `TargetTableSummary` type — it remains accessible in props
+        and can surface elsewhere (e.g. multi-dataset projects in
+        the future) without being read here.
+      */}
+      <header className="flex items-center justify-between gap-3 border-b border-gray-100 bg-gray-50/50 px-5 py-3">
         <div className="min-w-0 flex-1">
           <h2 className="truncate text-sm font-semibold text-gray-900">
             {targetTable.name}
           </h2>
-          {targetTable.datasetName ? (
-            <p className="truncate text-xs text-gray-400">
-              {targetTable.datasetName}
-            </p>
-          ) : null}
         </div>
         <span
           className="flex-shrink-0 text-xs text-gray-500"
@@ -162,19 +170,112 @@ export function TargetTableGroup({
           No fields to display for this table.
         </div>
       ) : (
-        <div role="list" className="divide-y divide-gray-100">
-          {rows.map((row) => (
-            <FieldMappingRow
-              key={row.id}
-              row={row}
-              onRowClick={onRowClick}
-              isActive={openRowId === row.id}
-              isHighlighted={highlightedRowIds?.has(row.id) ?? false}
-            />
-          ))}
-        </div>
+        <>
+          <ColumnHeaderRow />
+          <div role="list" className="divide-y divide-gray-100">
+            {rows.map((row) => (
+              <FieldMappingRow
+                key={row.id}
+                row={row}
+                onRowClick={onRowClick}
+                isActive={openRowId === row.id}
+                isHighlighted={highlightedRowIds?.has(row.id) ?? false}
+              />
+            ))}
+          </div>
+        </>
       )}
     </section>
+  )
+}
+
+// ─── Column header row (Phase 4-polish-1 comprehensive pass) ────────────────
+//
+// Legacy parity strip: the previous mapping page rendered three column
+// labels ("Source Field", "Conf.", "Target Field") inside each table
+// group's expanded body, between the group header and the first row
+// (legacy `MappingContent.tsx` lines 1587-1593). The redesign dropped
+// these in Gap 4c; this pass restores them.
+//
+// Architecture: the header reuses the EXACT grid template literal from
+// `FieldMappingRow.tsx` so columns align byte-for-byte. The
+// column-header invariant test in `tests/components/target-table-
+// group.test.tsx` mirrors the row's column-template invariant — if a
+// future refactor changes the row template, the header must update too
+// or CI fails.
+//
+// Refinement E (Phase 4-polish-1 final, 2026-04-26): the prior unified
+// "Source Field" header that spanned cols 2-3 (`col-start-2 col-end-4`)
+// SPLIT into two single-cell headers — "Source Table" (col 2) and
+// "Source Field" (col 3). Canary review found the unified header read
+// as describing only col 3 (the field name); col 2 (the table badges)
+// felt header-less. The visual separation between the two columns is
+// real even after Refinement 4's tightening, and the split header
+// matches that reality.
+//
+// Refinement G (Phase 4-polish-1 final, 2026-04-26): the row template
+// dropped its trailing `1rem` chevron column when the row-end chevron
+// was relocated inline next to source field names (multi-source rows
+// only). The header strip mirrors that 5-column template byte-for-
+// byte; the prior `<span aria-hidden />` for col 6 is gone.
+//
+// Label placement (vs. the 5-col grid):
+//   • col 1 (status dot)   — empty (`<span aria-hidden />`)
+//   • col 2 (source table) — "Source Table" (left-aligned)
+//   • col 3 (source field) — "Source Field" (left-aligned)
+//   • col 4 (target field) — "Target Field" (left-aligned)
+//   • col 5 (confidence)   — "Conf." (right-aligned to match
+//     ConfidenceCell content alignment)
+//
+// A11y: `aria-hidden="true"` on the container — each FieldMappingRow
+// already carries a self-contained `aria-label` covering target /
+// source / status / confidence; the visual header is purely a sighted-
+// user navigation aid. Full ARIA grid semantics (role="grid",
+// role="columnheader") would require restructuring `role="list"` →
+// `role="grid"` everywhere, which is a separate A11y polish.
+//
+// Visibility: only rendered in the populated branch (rows.length > 0,
+// not filtered-empty). When the group has no rendered rows, the
+// header would be a confusing label without content.
+//
+// Classes mirror the legacy strip lines 1588-1591 verbatim:
+//   text-xs font-medium text-gray-500
+//   bg-settle-slate-50 border-b border-settle-slate-100 px-5 py-2
+
+function ColumnHeaderRow() {
+  return (
+    <div
+      role="row"
+      aria-hidden="true"
+      data-testid="target-table-column-headers"
+      className="grid grid-cols-[0.75rem_minmax(6rem,8rem)_minmax(8rem,14rem)_1fr_5rem] items-center gap-3 border-b border-settle-slate-100 bg-settle-slate-50 px-5 py-2"
+    >
+      <span aria-hidden="true" />
+      <div
+        className="text-xs font-medium text-gray-500"
+        data-testid="target-table-column-header-source-table"
+      >
+        Source Table
+      </div>
+      <div
+        className="text-xs font-medium text-gray-500"
+        data-testid="target-table-column-header-source-field"
+      >
+        Source Field
+      </div>
+      <div
+        className="text-xs font-medium text-gray-500"
+        data-testid="target-table-column-header-target-field"
+      >
+        Target Field
+      </div>
+      <div
+        className="text-right text-xs font-medium text-gray-500"
+        data-testid="target-table-column-header-confidence"
+      >
+        Conf.
+      </div>
+    </div>
   )
 }
 

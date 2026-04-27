@@ -61,6 +61,8 @@ function mapped(overrides: Partial<MappedRow> = {}): MappedRow {
     status: 'approved',
     hasTransformation: false,
     transformationStatus: null,
+    transformationDescription: null,
+    transformationSqlPreview: null,
     sources: [source()],
     combinationType: 'single',
     combinationSql: null,
@@ -80,6 +82,8 @@ function valueAssignment(
     status: 'approved',
     hasTransformation: false,
     transformationStatus: null,
+    transformationDescription: null,
+    transformationSqlPreview: null,
     combinationType: 'custom_sql',
     combinationSql: null,
     aiReasoning: null,
@@ -98,6 +102,8 @@ function targetAck(
     status: 'approved',
     hasTransformation: false,
     transformationStatus: null,
+    transformationDescription: null,
+    transformationSqlPreview: null,
     acknowledgmentReason: 'system default',
     ...overrides,
   }
@@ -112,6 +118,8 @@ function unmapped(overrides: Partial<UnmappedRow> = {}): UnmappedRow {
     status: 'unmapped',
     hasTransformation: false,
     transformationStatus: null,
+    transformationDescription: null,
+    transformationSqlPreview: null,
     ...overrides,
   }
 }
@@ -137,9 +145,15 @@ describe('TargetTableGroup', () => {
     expect(screen.getByTestId('target-table-field-count')).toHaveTextContent('1 field')
   })
 
-  it('renders the dataset subtitle under the table name', () => {
+  it('does NOT render the dataset name as a subtitle (Refinement A)', () => {
+    // Phase 4-polish-1 final refinements (Refinement A, 2026-04-26):
+    // the dataset-name subtitle ("Nymbus Core" / "Heritage Core" /
+    // etc.) was dropped from the group header. Every group is in
+    // the same target dataset and the page header already
+    // identifies it; the subtitle was redundant noise. Pin its
+    // absence so a future refactor cannot silently re-add it.
     render(<TargetTableGroup targetTable={summary} rows={[]} />)
-    expect(screen.getByText('Heritage Core')).toBeInTheDocument()
+    expect(screen.queryByText('Heritage Core')).toBeNull()
   })
 
   it('renders one FieldMappingRow per input row', () => {
@@ -186,7 +200,11 @@ describe('TargetTableGroup', () => {
     expect(group.getAttribute('data-target-table-id')).toBe('tt-1')
   })
 
-  it('omits the dataset subtitle when datasetName is empty', () => {
+  it('does not render the dataset name even when datasetName is non-empty (Refinement A)', () => {
+    // Refinement A: the subtitle is unconditionally absent. This test
+    // duplicates the "does NOT render the dataset name as a subtitle"
+    // assertion above with a different prop shape (empty string vs.
+    // populated) — both must hold.
     render(
       <TargetTableGroup
         targetTable={{ ...summary, datasetName: '' }}
@@ -302,5 +320,148 @@ describe('TargetTableGroup', () => {
     expect(screen.getByText('created_at')).toBeInTheDocument()
     expect(screen.getByText('internal_flag')).toBeInTheDocument()
     expect(screen.getByText('missing_field')).toBeInTheDocument()
+  })
+})
+
+// ─── Phase 4-polish-1 comprehensive pass — column header strip ──────────────
+//
+// The legacy mapping page rendered three column labels ("Source Field",
+// "Conf.", "Target Field") inside each table group's expanded body,
+// between the group header and the first row. The redesign dropped them
+// in Gap 4c; this comprehensive pass restored them. These tests pin the
+// new behavior as a regression surface.
+
+describe('TargetTableGroup — column header strip', () => {
+  it('renders the column header strip when there are rows', () => {
+    const rows: MappingRow[] = [
+      mapped({ id: 'r1', targetField: targetField({ id: 'f1', name: 'field_one' }) }),
+    ]
+    render(<TargetTableGroup targetTable={summary} rows={rows} />)
+    expect(screen.getByTestId('target-table-column-headers')).toBeInTheDocument()
+  })
+
+  it('renders four split-cell labels (Source Table / Source Field / Target Field / Conf.)', () => {
+    // Refinement E (Phase 4-polish-1 final, 2026-04-26): the prior
+    // unified "Source Field" header (cols 2-3 spanning) was split
+    // into two single-cell headers — "Source Table" (col 2) and
+    // "Source Field" (col 3). Canary review found the unified label
+    // read as describing only col 3; col 2 felt header-less.
+    const rows: MappingRow[] = [
+      mapped({ id: 'r1', targetField: targetField({ id: 'f1', name: 'field_one' }) }),
+    ]
+    render(<TargetTableGroup targetTable={summary} rows={rows} />)
+    const header = screen.getByTestId('target-table-column-headers')
+    expect(within(header).getByText('Source Table')).toBeInTheDocument()
+    expect(within(header).getByText('Source Field')).toBeInTheDocument()
+    expect(within(header).getByText('Target Field')).toBeInTheDocument()
+    expect(within(header).getByText('Conf.')).toBeInTheDocument()
+  })
+
+  it('places each header in its own grid cell (no column-spanning) — Refinement E', () => {
+    // Pin the absence of `col-start-2 col-end-4` (the prior unified-
+    // label pattern) and confirm the four split cells each surface
+    // their own data-testid hook.
+    const rows: MappingRow[] = [
+      mapped({ id: 'r1', targetField: targetField({ id: 'f1', name: 'field_one' }) }),
+    ]
+    render(<TargetTableGroup targetTable={summary} rows={rows} />)
+    const header = screen.getByTestId('target-table-column-headers')
+    expect(within(header).getByTestId('target-table-column-header-source-table'))
+      .toBeInTheDocument()
+    expect(within(header).getByTestId('target-table-column-header-source-field'))
+      .toBeInTheDocument()
+    expect(within(header).getByTestId('target-table-column-header-target-field'))
+      .toBeInTheDocument()
+    expect(within(header).getByTestId('target-table-column-header-confidence'))
+      .toBeInTheDocument()
+    // Belt and suspenders: no element inside the header carries the
+    // legacy spanning class.
+    expect(header.innerHTML).not.toContain('col-start-2')
+    expect(header.innerHTML).not.toContain('col-end-4')
+  })
+
+  it('hides the column header strip when the group has no rows (Gap 4c empty branch)', () => {
+    // Without rows the header would label content that does not exist —
+    // a confusing surface. The empty/placeholder branch suppresses the
+    // header per the Phase 4-polish-1 comprehensive pass contract.
+    render(<TargetTableGroup targetTable={summary} rows={[]} />)
+    expect(
+      screen.queryByTestId('target-table-column-headers'),
+    ).not.toBeInTheDocument()
+  })
+
+  it('hides the column header strip in the filtered-empty branch (matching === 0)', () => {
+    render(
+      <TargetTableGroup
+        targetTable={summary}
+        rows={[]}
+        filteredCount={{ total: 19, matching: 0 }}
+      />,
+    )
+    expect(
+      screen.queryByTestId('target-table-column-headers'),
+    ).not.toBeInTheDocument()
+    // Sanity: the filtered-empty body renders instead.
+    expect(screen.getByTestId('target-table-filtered-empty')).toBeInTheDocument()
+  })
+
+  it('marks the column header strip as aria-hidden (visual aid only)', () => {
+    // The FieldMappingRow already carries a self-contained `aria-label`
+    // covering target / source / status / confidence; the visual header
+    // is purely a sighted-user navigation aid. Full ARIA grid semantics
+    // would require restructuring `role="list"` everywhere, which is a
+    // separate accessibility polish.
+    const rows: MappingRow[] = [
+      mapped({ id: 'r1', targetField: targetField({ id: 'f1', name: 'field_one' }) }),
+    ]
+    render(<TargetTableGroup targetTable={summary} rows={rows} />)
+    const header = screen.getByTestId('target-table-column-headers')
+    expect(header.getAttribute('aria-hidden')).toBe('true')
+  })
+
+  it('uses the same 6-column grid template as FieldMappingRow (column-template invariant)', () => {
+    // The header column widths MUST mirror the row's grid template
+    // byte-for-byte — otherwise headers and row content drift apart on
+    // the column grid. If a future refactor changes the row template
+    // (in `FieldMappingRow.tsx`), this test fails alongside the row's
+    // own column-template invariant test, forcing both to update in
+    // lock-step.
+    const rows: MappingRow[] = [
+      mapped({ id: 'r1', targetField: targetField({ id: 'f1', name: 'field_one' }) }),
+    ]
+    render(<TargetTableGroup targetTable={summary} rows={rows} />)
+    const header = screen.getByTestId('target-table-column-headers')
+    // Refinement G (Phase 4-polish-1 final, 2026-04-26): col 6 (chevron)
+    // dropped. Template went from 6 cols → 5 cols. The header strip
+    // mirrors the row template byte-for-byte.
+    expect(header.className).toContain(
+      'grid-cols-[0.75rem_minmax(6rem,8rem)_minmax(8rem,14rem)_1fr_5rem]',
+    )
+  })
+
+  it('TargetTableGroup.tsx contains the locked 5-column header grid template literal', () => {
+    // Source-level invariant: pin the literal in the source file so a
+    // refactor that changes only the rendered className (e.g. via a
+    // dynamic helper) still trips a guard. Mirrors the
+    // `FieldMappingRow.tsx` column-template invariant test.
+    const fs = require('node:fs') as typeof import('node:fs')
+    const path = require('node:path') as typeof import('node:path')
+    const file = fs.readFileSync(
+      path.resolve(
+        __dirname,
+        '../../app/app/projects/[projectId]/mapping/redesign/components/TargetTableGroup.tsx',
+      ),
+      'utf-8',
+    )
+    const expected =
+      'grid-cols-[0.75rem_minmax(6rem,8rem)_minmax(8rem,14rem)_1fr_5rem]'
+    expect(file).toContain(expected)
+    // Belt and suspenders: the prior 6-col template (with trailing
+    // `_1rem` chevron column) must NOT appear in the source file —
+    // a partial-revert leaving the header at 6 cols would pass the
+    // `toContain` check above.
+    expect(file).not.toContain(
+      'grid-cols-[0.75rem_minmax(6rem,8rem)_minmax(8rem,14rem)_1fr_5rem_1rem]',
+    )
   })
 })

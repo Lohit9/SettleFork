@@ -16,35 +16,50 @@ import {
 // the new threshold classifier + label helper consumed exclusively by
 // `ConfidencePill`.
 
-describe('formatConfidencePercent — parity with pre-lift inline copies', () => {
-  // These five inputs are the locked refactor parity set per §11-OQ-1.
-  // They span: integer 0-100 (the canonical storage convention),
-  // sub-integer 0-100, the 0-1 fraction defensive branch, the null
-  // branch, and a boundary value (100 → "100.00%").
+describe('formatConfidencePercent — Refinement H integer rounding', () => {
+  // Phase 4-polish-1 Refinement H (2026-04-26): dropped 2-decimal
+  // precision in favor of integer rounding. The fractional part read
+  // as numeric noise without analytical value. Pin the new format
+  // verbatim across the canonical input set: null branch, integer
+  // 0-100, decimal 0-100 (rounding behavior), 0-1 fraction defensive
+  // branch, boundary at the >1 gate.
   it('null returns em-dash', () => {
     expect(formatConfidencePercent(null)).toBe('—')
   })
 
-  it('integer 0-100 renders 2-decimal percent', () => {
-    expect(formatConfidencePercent(85)).toBe('85.00%')
+  it('integer 0-100 renders integer percent', () => {
+    expect(formatConfidencePercent(85)).toBe('85%')
   })
 
-  it('decimal 0-100 preserves precision', () => {
-    expect(formatConfidencePercent(85.42)).toBe('85.42%')
+  it('decimal 0-100 rounds to nearest integer', () => {
+    expect(formatConfidencePercent(85.42)).toBe('85%')
+    expect(formatConfidencePercent(85.6)).toBe('86%')
+    expect(formatConfidencePercent(99.4)).toBe('99%')
+    expect(formatConfidencePercent(99.5)).toBe('100%')
   })
 
-  it('0-1 fraction multiplies ×100 (defensive drift guard)', () => {
-    expect(formatConfidencePercent(0.85)).toBe('85.00%')
+  it('0-1 fraction multiplies ×100 then rounds (defensive drift guard)', () => {
+    expect(formatConfidencePercent(0.85)).toBe('85%')
+    expect(formatConfidencePercent(0.925)).toBe('93%')
   })
 
-  it('value of exactly 1 stays as 1.00% (boundary at the >1 gate)', () => {
-    // The inline copies all use `confidence > 1` so 1 is treated as
+  it('value of exactly 1 renders as 100% (boundary at the >1 gate)', () => {
+    // The implementation uses `confidence > 1` so 1 is treated as
     // a 0-1 fraction and multiplied. 1 * 100 = 100. Pin the parity.
-    expect(formatConfidencePercent(1)).toBe('100.00%')
+    expect(formatConfidencePercent(1)).toBe('100%')
   })
 
-  it('value 100 stays as 100.00%', () => {
-    expect(formatConfidencePercent(100)).toBe('100.00%')
+  it('value 100 renders as 100%', () => {
+    expect(formatConfidencePercent(100)).toBe('100%')
+  })
+
+  it('two-decimal precision is gone (Refinement H regression guard)', () => {
+    // Pin the absence of `.NN%` suffixes — a future revert that re-
+    // introduces `.toFixed(2)` would silently fail this. Test every
+    // call site's typical input:
+    expect(formatConfidencePercent(92.5)).not.toContain('.')
+    expect(formatConfidencePercent(85)).not.toContain('.')
+    expect(formatConfidencePercent(0.92)).not.toContain('.')
   })
 })
 
