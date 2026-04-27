@@ -84,6 +84,37 @@ vi.mock('@/lib/actions/mappings-for-redesign', () => ({
   createFieldMapping: (...args: unknown[]) => createFieldMappingMock(...args),
   suggestMappingForTarget: (...args: unknown[]) =>
     suggestMappingForTargetMock(...args),
+  // Phase 4-polish-3 — `MappingContent` imports a wider surface of
+  // server actions to back the inline action handlers (✓ approve,
+  // ✗ reject, + map, ⊘ acknowledge) and the multi-select source
+  // picker commit. Stub them all to no-ops so the import chain stays
+  // side-effect-free; the integration tests in this suite don't
+  // exercise the wrapper round-trip.
+  editMappingSources: vi.fn().mockResolvedValue({ success: true }),
+  bulkApproveFieldMappingsForTargetTable: vi
+    .fn()
+    .mockResolvedValue({ success: true, approvedCount: 0 }),
+  approveHighConfidenceMappings: vi
+    .fn()
+    .mockResolvedValue({ success: true, approvedCount: 0 }),
+  previewBulkApprove: vi
+    .fn()
+    .mockResolvedValue({ success: true, rows: [], totalCount: 0 }),
+  bulkRejectFieldMappingsForTargetTable: vi
+    .fn()
+    .mockResolvedValue({ success: true, rejectedCount: 0 }),
+  previewBulkReject: vi
+    .fn()
+    .mockResolvedValue({ success: true, rows: [], totalCount: 0 }),
+}))
+
+// Phase 4-polish-3 — `MappingContent` calls `acknowledgeField`
+// directly from `@/lib/actions/field-acknowledgments` for the inline
+// ⊘ button on unmapped rows. That module imports `server-only` (and
+// the supabase admin client) at module load, both of which throw in
+// jsdom. Stub the surface to a no-op success.
+vi.mock('@/lib/actions/field-acknowledgments', () => ({
+  acknowledgeField: vi.fn().mockResolvedValue({ success: true }),
 }))
 
 // ── Fixtures ────────────────────────────────────────────────────────────────

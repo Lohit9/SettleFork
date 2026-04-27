@@ -1,6 +1,7 @@
 'use client'
 
-import { useId, useState } from 'react'
+import { useId, useRef, useState } from 'react'
+import { Ban, Check, Pencil, Plus, X } from 'lucide-react'
 import { cn } from '@/components/ui/utils'
 import { ChevronDown, ChevronRight } from '@/components/icons'
 import {
@@ -12,12 +13,14 @@ import type {
   MappedRow,
   MappingRow,
   MappingSourceRef,
+  SourceFieldWithState,
   TargetAcknowledgedRow,
   ValueAssignmentRow,
 } from '@/lib/types/mappings-for-redesign'
 import { classifyMappedRow, type MappingRowRule } from '@/lib/utils/mapping-row-rules'
 import { TableBadge } from './TableBadge'
 import { ExpandedSourceList } from './ExpandedSourceList'
+import { InlineSourcePicker } from './InlineSourcePicker'
 
 // ─────────────────────────────────────────────────────────────────────────────
 // FieldMappingRow — Phase 3 Gap 5a + 5b.
@@ -171,6 +174,23 @@ import { ExpandedSourceList } from './ExpandedSourceList'
 // The grep invariant enforces "no dark-prefix Tailwind class anywhere
 // under `app/app/projects/[projectId]/mapping/redesign/`" at CI time.
 
+/**
+ * Phase 4-polish-3 — optimistic per-row UI state. The parent owns this
+ * map keyed by row id; rows render the appropriate animation while the
+ * wrapper call is in flight. States:
+ *   • 'approving'     — brief green highlight while approveFieldMapping runs
+ *   • 'rejecting'     — slide-fade-out while rejectFieldMapping runs
+ *   • 'acknowledging' — brief slate highlight while acknowledgeField runs
+ *   • 'mapping'       — brief blue highlight while createFieldMapping /
+ *                        editMappingSources runs
+ * All transitions honor `motion-reduce:transition-none`.
+ */
+export type FieldMappingRowOptimisticState =
+  | 'approving'
+  | 'rejecting'
+  | 'acknowledging'
+  | 'mapping'
+
 interface FieldMappingRowProps {
   row: MappingRow
   /**
@@ -203,6 +223,58 @@ interface FieldMappingRowProps {
    * highlight as "stay highlighted" rather than "clear."
    */
   isHighlighted?: boolean
+  /**
+   * Phase 4-polish-3 — page-level source fields universe (one entry per
+   * source field across all source tables). Required for the inline
+   * source picker. When omitted, the source cell falls back to the
+   * pre-polish-3 contract (clicking a source-eligible row opens the
+   * drawer rather than the inline picker).
+   */
+  availableSourceFields?: SourceFieldWithState[]
+  /**
+   * Phase 4-polish-3 — optimistic UI hint for the row. When set, the
+   * row renders the corresponding animation overlay while the parent's
+   * wrapper call is in flight. See `FieldMappingRowOptimisticState`.
+   */
+  optimisticState?: FieldMappingRowOptimisticState
+  /**
+   * Phase 4-polish-3 — inline approve handler. Wired only for mapped
+   * rows with status='needs_review'. Parent dispatches
+   * `approveFieldMapping` and surfaces the post-approve highlight via
+   * `optimisticState`.
+   */
+  onInlineApprove?: (rowId: string) => void
+  /**
+   * Phase 4-polish-3 — inline reject handler. Wired for mapped rows
+   * with status ∈ {needs_review, approved}. The handler receives the
+   * ✗ button as the popover anchor; the parent renders
+   * `RejectConfirmPopover` and dispatches `rejectFieldMapping` only on
+   * confirm.
+   */
+  onInlineReject?: (rowId: string, anchorEl: HTMLElement) => void
+  /**
+   * Phase 4-polish-3 — inline acknowledge handler. Wired for unmapped
+   * rows. Parent dispatches `acknowledgeField` with the dedicated
+   * "no-source-required" reason and surfaces a brief highlight.
+   */
+  onInlineAcknowledge?: (rowId: string) => void
+  /**
+   * Phase 4-polish-3 — inline un-acknowledge handler. Wired for
+   * `target_acknowledged` rows. Opens the drawer with
+   * `?focus=unack` (NOT inline). Parent owns the URL navigation; this
+   * row component just announces the click.
+   */
+  onInlineUnacknowledge?: (rowId: string) => void
+  /**
+   * Phase 4-polish-3 — fired when the user commits a source-set change
+   * via the inline picker (close with non-empty pending set differing
+   * from the initial set). The parent dispatches
+   * `createFieldMapping` (for unmapped rows) or `editMappingSources`
+   * (for mapped rows) and surfaces the appropriate post-save toast.
+   * Receives the row id and the final selected source-field id list
+   * in user-pick order.
+   */
+  onSourceCommit?: (rowId: string, finalSourceFieldIds: string[]) => void
 }
 
 export function FieldMappingRow({
@@ -210,12 +282,64 @@ export function FieldMappingRow({
   onRowClick,
   isActive,
   isHighlighted,
+  availableSourceFields,
+  optimisticState,
+  onInlineApprove,
+  onInlineReject,
+  onInlineAcknowledge,
+  onInlineUnacknowledge,
+  onSourceCommit,
 }: FieldMappingRowProps) {
   const expandedId = useId()
   const rule = resolveMappedRule(row)
   const canExpand = rule === 'rule_2' || rule === 'rule_3' || rule === 'rule_4'
   const [isExpanded, setIsExpanded] = useState(false)
   const isClickable = onRowClick !== undefined
+
+  // ── Phase 4-polish-3 — inline source-picker state ───────────────────
+  //
+  // Eligibility: the inline picker hosts source-set edits for rows where
+  // multi-select picking is meaningful AND the wrapper contract supports
+  // it. Rows that need the drawer (custom_sql combination, Rule 4
+  // 3+-tables-or-many-fields, value assignments, acknowledged rows)
+  // continue to open the drawer on row-body click. Eligibility ALSO
+  // requires the parent to have wired the `onSourceCommit` /
+  // `availableSourceFields` props — legacy fixtures and storybook
+  // callers that omit them fall through to the drawer path.
+  const isInlineSourceEditable =
+    availableSourceFields !== undefined &&
+    onSourceCommit !== undefined &&
+    ((row.kind === 'mapped' &&
+      row.combinationType !== 'custom_sql' &&
+      rule !== 'rule_4') ||
+      row.kind === 'unmapped')
+
+  const [isPickerOpen, setIsPickerOpen] = useState(false)
+  const sourceTriggerRef = useRef<HTMLButtonElement | null>(null)
+  const rowBodyRef = useRef<HTMLDivElement | null>(null)
+
+  // The picker anchors to the row body (full row width) so it has space
+  // for the chip strip + search + grouped list. Falling back to the
+  // source-cell trigger on narrow viewports is a future polish.
+  const pickerAnchorRef = rowBodyRef
+
+  const initialSourceFieldIds =
+    row.kind === 'mapped'
+      ? row.sources.map((s) => s.sourceField.id)
+      : []
+
+  const handleOpenPicker = () => {
+    if (!isInlineSourceEditable) return
+    setIsPickerOpen(true)
+  }
+
+  const handlePickerCommit = (finalIds: string[]) => {
+    onSourceCommit?.(row.id, finalIds)
+  }
+
+  const handlePickerClose = () => {
+    setIsPickerOpen(false)
+  }
 
   const handleActivate = isClickable
     ? () => onRowClick!(row.id)
@@ -252,6 +376,20 @@ export function FieldMappingRow({
   // signal warrants.
   const isEmptyRow = row.kind === 'target_acknowledged' || row.kind === 'unmapped'
 
+  // Phase 4-polish-3 — optimistic-state visual overlays. Approve / map
+  // flash a brief tint (150ms / 200ms), reject animates a slide-fade-
+  // out, acknowledge tints slate. All honor `motion-reduce:transition-
+  // none`. Implemented via additive Tailwind classes on the row body.
+  const optimisticBgClass =
+    optimisticState === 'approving'
+      ? 'bg-green-50'
+      : optimisticState === 'acknowledging'
+        ? 'bg-slate-100'
+        : optimisticState === 'mapping'
+          ? 'bg-blue-50'
+          : ''
+  const isRejecting = optimisticState === 'rejecting'
+
   return (
     <div
       role="listitem"
@@ -259,10 +397,19 @@ export function FieldMappingRow({
       data-row-id={row.id}
       data-row-kind={row.kind}
       data-row-rule={row.kind === 'mapped' ? rule : undefined}
+      data-optimistic-state={optimisticState ?? undefined}
       aria-label={buildAriaLabel(row, rule, isExpanded, isClickable)}
-      className={cn(isEmptyRow && 'opacity-70')}
+      className={cn(
+        isEmptyRow && 'opacity-70',
+        // Reject slide-fade-out: the row is visually retracted while the
+        // wrapper call is in flight. The parent unmounts the row once
+        // `router.refresh()` returns the canonical absence of the TFM.
+        'transition-[opacity,transform] duration-200 ease-out motion-reduce:transition-none',
+        isRejecting && 'pointer-events-none -translate-x-1 opacity-0',
+      )}
     >
       <div
+        ref={rowBodyRef}
         data-testid="field-mapping-row-body"
         data-highlighted-row={isHighlighted ? 'true' : undefined}
         role={isClickable ? 'button' : undefined}
@@ -272,35 +419,88 @@ export function FieldMappingRow({
         className={cn(
           // Column template documented above; keep this literal in sync
           // with the ASCII figure in the file header. The column-template
-          // invariant test in `tests/components/field-mapping-row-column-
-          // template.test.ts` regex-asserts this exact literal — update
-          // both together if the layout shifts again.
+          // invariant test in `tests/components/field-mapping-row.test.tsx`
+          // regex-asserts this exact literal — update both together if
+          // the layout shifts again.
           //
-          // Refinement G (Phase 4-polish-1 final, 2026-04-26): the
-          // dedicated col 6 (chevron column) was DROPPED. The expand
-          // chevron now renders inline in col 3 (source field) for
-          // multi-source rows only. Single-source rows have no chevron.
-          // Template went from 6 cols → 5 cols.
-          'grid grid-cols-[0.75rem_minmax(6rem,8rem)_minmax(8rem,14rem)_1fr_5rem] items-center gap-3 px-5 py-1.5',
+          // Phase 4-polish-3 (2026-04-27): the trailing 5rem actions
+          // column was ADDED back to host inline approve / reject /
+          // map / acknowledge buttons. The column was dropped during
+          // the polish-1 comprehensive pass on the rationale that
+          // hover-only buttons did not deserve a structural column;
+          // polish-3's row-state-aware button set (e.g. ✓ + ✗ on
+          // needs_review, ✗ alone on approved, + + ⊘ on unmapped)
+          // makes the column predictable per row state and the 5rem
+          // resting whitespace re-earns its place. Template went
+          // from 5 cols → 6 cols.
+          'group grid grid-cols-[0.75rem_minmax(6rem,8rem)_minmax(8rem,14rem)_1fr_5rem_5rem] items-center gap-3 px-5 py-1.5',
+          // Color overlays for optimistic UI — added on top of the
+          // base layout so animations layer cleanly with the existing
+          // `isActive` (drawer-open) and `isHighlighted` (sidebar)
+          // states.
+          'transition-colors duration-150 ease-out motion-reduce:transition-none',
+          optimisticBgClass,
           isClickable && 'cursor-pointer focus:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-slate-300',
-          isActive && 'bg-slate-50',
+          isActive && !optimisticBgClass && 'bg-slate-50',
           isHighlighted && 'border-l-2 border-blue-500',
         )}
       >
         <StatusDot status={row.status} kind={row.kind} />
-        <SourceTableCell row={row} rule={rule} />
-        <div className="flex min-w-0 items-center gap-1.5">
-          <SourceFieldCell row={row} rule={rule} />
-          {canExpand ? (
-            <InlineExpandChevron
-              isExpanded={isExpanded}
-              onToggle={() => setIsExpanded((v) => !v)}
-              expandedId={expandedId}
-            />
-          ) : null}
-        </div>
+        {isInlineSourceEditable ? (
+          <>
+            <SourceTableTriggerButton
+              buttonRef={sourceTriggerRef}
+              onClick={handleOpenPicker}
+              ariaLabel={buildSourceTriggerAriaLabel(row)}
+            >
+              <SourceTableCell row={row} rule={rule} />
+            </SourceTableTriggerButton>
+            <SourceFieldTriggerSurface
+              onClick={handleOpenPicker}
+              ariaLabel={buildSourceTriggerAriaLabel(row)}
+            >
+              <SourceFieldCell row={row} rule={rule} />
+              {canExpand ? (
+                <InlineExpandChevron
+                  isExpanded={isExpanded}
+                  onToggle={() => setIsExpanded((v) => !v)}
+                  expandedId={expandedId}
+                />
+              ) : null}
+              <Pencil
+                aria-hidden="true"
+                data-testid="field-mapping-row-source-edit-hint"
+                className="ml-auto h-3 w-3 flex-shrink-0 text-slate-300 opacity-0 transition-opacity duration-150 ease-out group-hover:opacity-100 motion-reduce:transition-none"
+              />
+            </SourceFieldTriggerSurface>
+          </>
+        ) : (
+          <>
+            <SourceTableCell row={row} rule={rule} />
+            <div className="flex min-w-0 items-center gap-1.5">
+              <SourceFieldCell row={row} rule={rule} />
+              {canExpand ? (
+                <InlineExpandChevron
+                  isExpanded={isExpanded}
+                  onToggle={() => setIsExpanded((v) => !v)}
+                  expandedId={expandedId}
+                />
+              ) : null}
+            </div>
+          </>
+        )}
         <TargetCell row={row} />
         <ConfidenceCell row={row} />
+        <InlineActionsCell
+          row={row}
+          rule={rule}
+          optimisticState={optimisticState}
+          onInlineApprove={onInlineApprove}
+          onInlineReject={onInlineReject}
+          onInlineAcknowledge={onInlineAcknowledge}
+          onInlineUnacknowledge={onInlineUnacknowledge}
+          onInlineMap={isInlineSourceEditable ? handleOpenPicker : undefined}
+        />
       </div>
       {canExpand && row.kind === 'mapped' ? (
         <ExpansionRegion isExpanded={isExpanded}>
@@ -312,8 +512,326 @@ export function FieldMappingRow({
           />
         </ExpansionRegion>
       ) : null}
+      {isPickerOpen && availableSourceFields ? (
+        <InlineSourcePicker
+          anchorRef={pickerAnchorRef}
+          initialSourceFieldIds={initialSourceFieldIds}
+          availableSourceFields={availableSourceFields}
+          onCommit={handlePickerCommit}
+          onClose={handlePickerClose}
+        />
+      ) : null}
     </div>
   )
+}
+
+// ─── Source-cell triggers (Phase 4-polish-3) ─────────────────────────────────
+//
+// Row-state-aware affordance for the source-side cells (cols 2 + 3). When
+// the row is inline-editable, both cells render as activate-able surfaces
+// that open the inline source picker; when not, they fall back to the
+// pre-polish-3 spans + the row body's drawer-open handler.
+//
+// Why two different element types?
+//   • Col 2 (source table) renders the `<TableBadge>` with no further
+//     interactive descendants, so a real `<button>` is fine.
+//   • Col 3 (source field) hosts the existing `InlineExpandChevron` button
+//     for multi-source rows — wrapping that in a `<button>` would nest
+//     interactive elements (HTML invariant). We use a `role="button"` div
+//     for col 3 so the chevron can keep its native `<button>` element
+//     without violating the no-nested-button rule.
+//
+// Both surfaces `stopPropagation` on click + on Enter/Space keydown so
+// activation does NOT also bubble to the row body's drawer-open handler.
+
+function SourceTableTriggerButton({
+  buttonRef,
+  onClick,
+  ariaLabel,
+  children,
+}: {
+  buttonRef: React.Ref<HTMLButtonElement>
+  onClick: () => void
+  ariaLabel: string
+  children: React.ReactNode
+}) {
+  return (
+    <button
+      ref={buttonRef}
+      type="button"
+      data-testid="field-mapping-row-source-table-trigger"
+      aria-label={ariaLabel}
+      onClick={(e) => {
+        e.stopPropagation()
+        onClick()
+      }}
+      onKeyDown={(e) => {
+        if (e.key === 'Enter' || e.key === ' ') e.stopPropagation()
+      }}
+      className={cn(
+        'flex min-w-0 items-center text-left',
+        'cursor-pointer rounded',
+        'focus:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-slate-300',
+      )}
+    >
+      {children}
+    </button>
+  )
+}
+
+function SourceFieldTriggerSurface({
+  onClick,
+  ariaLabel,
+  children,
+}: {
+  onClick: () => void
+  ariaLabel: string
+  children: React.ReactNode
+}) {
+  return (
+    <div
+      role="button"
+      tabIndex={0}
+      data-testid="field-mapping-row-source-field-trigger"
+      aria-label={ariaLabel}
+      onClick={(e) => {
+        // The chevron button (when rendered) already calls
+        // `stopPropagation` on its own click handler, so clicks that
+        // originated on the chevron never reach this onClick — which
+        // is exactly what we want. Clicks on the field-name text /
+        // pencil icon / surrounding whitespace fall through to here
+        // and open the picker.
+        e.stopPropagation()
+        onClick()
+      }}
+      onKeyDown={(e) => {
+        if (e.target !== e.currentTarget) return
+        if (e.key === 'Enter' || e.key === ' ') {
+          e.preventDefault()
+          e.stopPropagation()
+          onClick()
+        }
+      }}
+      className={cn(
+        'flex min-w-0 items-center gap-1.5',
+        'cursor-pointer rounded',
+        'focus:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-slate-300',
+      )}
+    >
+      {children}
+    </div>
+  )
+}
+
+function buildSourceTriggerAriaLabel(row: MappingRow): string {
+  if (row.kind === 'unmapped') return 'Pick source fields for this target'
+  return 'Edit source fields for this mapping'
+}
+
+// ─── Inline actions cell (Phase 4-polish-3, col 6) ───────────────────────────
+//
+// Rightmost grid cell hosting row-state-aware action buttons:
+//
+//   • Mapped + needs_review        → ✓ approve  + ✗ reject
+//   • Mapped + approved            →             ✗ reject
+//   • Mapped + rejected            → (none — soft-deleted, awaiting refresh)
+//   • Target acknowledged          → ✗ un-acknowledge (opens drawer)
+//   • Unmapped                     → + map      + ⊘ acknowledge
+//   • Value assignment             → (none — drawer-only)
+//
+// Buttons are `opacity-0` at rest and reveal on `group-hover` /
+// `focus-within` so the column reads as quiet whitespace until the user
+// signals intent. Each button `stopPropagation` so a click on a button
+// does not also trigger the row-body's drawer-open. The cell itself is
+// not focusable; tab-order flows through the buttons individually.
+
+interface InlineActionsCellProps {
+  row: MappingRow
+  rule: MappingRowRule
+  optimisticState?: FieldMappingRowOptimisticState
+  onInlineApprove?: (rowId: string) => void
+  onInlineReject?: (rowId: string, anchorEl: HTMLElement) => void
+  onInlineAcknowledge?: (rowId: string) => void
+  onInlineUnacknowledge?: (rowId: string) => void
+  onInlineMap?: () => void
+}
+
+function InlineActionsCell({
+  row,
+  rule: _rule,
+  optimisticState,
+  onInlineApprove,
+  onInlineReject,
+  onInlineAcknowledge,
+  onInlineUnacknowledge,
+  onInlineMap,
+}: InlineActionsCellProps) {
+  // Disable all buttons while an optimistic action is in flight so the
+  // user cannot double-fire (e.g. spam Approve, then Reject before the
+  // first round-trip resolves).
+  const isBusy = optimisticState !== undefined
+
+  const buttons: React.ReactNode[] = []
+
+  if (row.kind === 'mapped') {
+    if (row.status === 'needs_review' && onInlineApprove !== undefined) {
+      buttons.push(
+        <ActionIconButton
+          key="approve"
+          testId="field-mapping-row-approve-button"
+          ariaLabel="Approve mapping"
+          tooltip="Approve mapping"
+          onClick={() => onInlineApprove(row.id)}
+          disabled={isBusy}
+          variant="approve"
+        >
+          <Check aria-hidden="true" className="h-3.5 w-3.5" />
+        </ActionIconButton>,
+      )
+    }
+    if (
+      (row.status === 'needs_review' || row.status === 'approved') &&
+      onInlineReject !== undefined
+    ) {
+      buttons.push(
+        <ActionIconButton
+          key="reject"
+          testId="field-mapping-row-reject-button"
+          ariaLabel="Reject mapping"
+          tooltip="Reject mapping"
+          onClick={(e) => onInlineReject(row.id, e.currentTarget)}
+          disabled={isBusy}
+          variant="reject"
+        >
+          <X aria-hidden="true" className="h-3.5 w-3.5" />
+        </ActionIconButton>,
+      )
+    }
+  } else if (row.kind === 'unmapped') {
+    if (onInlineMap !== undefined) {
+      buttons.push(
+        <ActionIconButton
+          key="map"
+          testId="field-mapping-row-map-button"
+          ariaLabel="Map this field"
+          tooltip="Map this field"
+          onClick={() => onInlineMap()}
+          disabled={isBusy}
+          variant="map"
+        >
+          <Plus aria-hidden="true" className="h-3.5 w-3.5" />
+        </ActionIconButton>,
+      )
+    }
+    if (onInlineAcknowledge !== undefined) {
+      buttons.push(
+        <ActionIconButton
+          key="acknowledge"
+          testId="field-mapping-row-acknowledge-button"
+          ariaLabel="Acknowledge as not migratable"
+          tooltip="Acknowledge as not migratable"
+          onClick={() => onInlineAcknowledge(row.id)}
+          disabled={isBusy}
+          variant="acknowledge"
+        >
+          <Ban aria-hidden="true" className="h-3.5 w-3.5" />
+        </ActionIconButton>,
+      )
+    }
+  } else if (row.kind === 'target_acknowledged') {
+    if (onInlineUnacknowledge !== undefined) {
+      buttons.push(
+        <ActionIconButton
+          key="unacknowledge"
+          testId="field-mapping-row-unacknowledge-button"
+          ariaLabel="Un-acknowledge field"
+          tooltip="Un-acknowledge (opens details)"
+          onClick={() => onInlineUnacknowledge(row.id)}
+          disabled={isBusy}
+          variant="reject"
+        >
+          <X aria-hidden="true" className="h-3.5 w-3.5" />
+        </ActionIconButton>,
+      )
+    }
+  }
+  // value_assignment + mapped+rejected fall through with no buttons.
+
+  return (
+    <div
+      data-testid="field-mapping-row-actions"
+      className={cn(
+        'flex items-center justify-end gap-1',
+        // Resting state hides the buttons so the column reads as
+        // negative space; hover or keyboard focus within the row
+        // reveals them. focus-within covers the case of a keyboard
+        // user tabbing into a button.
+        'opacity-0 transition-opacity duration-150 ease-out motion-reduce:transition-none',
+        'group-hover:opacity-100 group-focus-within:opacity-100 focus-within:opacity-100',
+      )}
+    >
+      {buttons}
+    </div>
+  )
+}
+
+interface ActionIconButtonProps {
+  testId: string
+  ariaLabel: string
+  tooltip: string
+  onClick: (e: React.MouseEvent<HTMLButtonElement>) => void
+  disabled?: boolean
+  variant: 'approve' | 'reject' | 'map' | 'acknowledge'
+  children: React.ReactNode
+}
+
+function ActionIconButton({
+  testId,
+  ariaLabel,
+  tooltip,
+  onClick,
+  disabled,
+  variant,
+  children,
+}: ActionIconButtonProps) {
+  return (
+    <button
+      type="button"
+      data-testid={testId}
+      data-action-variant={variant}
+      aria-label={ariaLabel}
+      title={tooltip}
+      disabled={disabled}
+      onClick={(e) => {
+        e.stopPropagation()
+        onClick(e)
+      }}
+      onKeyDown={(e) => {
+        if (e.key === 'Enter' || e.key === ' ') {
+          e.stopPropagation()
+        }
+      }}
+      className={cn(
+        'inline-flex h-6 w-6 flex-shrink-0 items-center justify-center rounded',
+        'transition-colors duration-150 ease-out motion-reduce:transition-none',
+        'focus:outline-none focus-visible:ring-2 focus-visible:ring-slate-300',
+        'disabled:cursor-not-allowed disabled:opacity-50',
+        ACTION_VARIANT_CLASSNAME[variant],
+      )}
+    >
+      {children}
+    </button>
+  )
+}
+
+const ACTION_VARIANT_CLASSNAME: Record<
+  ActionIconButtonProps['variant'],
+  string
+> = {
+  approve: 'text-slate-500 hover:bg-green-100 hover:text-green-700',
+  reject: 'text-slate-500 hover:bg-red-100 hover:text-red-700',
+  map: 'text-slate-500 hover:bg-blue-100 hover:text-blue-700',
+  acknowledge: 'text-slate-500 hover:bg-slate-200 hover:text-slate-700',
 }
 
 // ─── Rule resolution ─────────────────────────────────────────────────────────

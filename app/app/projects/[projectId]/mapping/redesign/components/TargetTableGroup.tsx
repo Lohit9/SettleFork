@@ -3,9 +3,13 @@
 import { useEffect, useRef, useState } from 'react'
 import type {
   MappingRow,
+  SourceFieldWithState,
   TargetTableSummary,
 } from '@/lib/types/mappings-for-redesign'
-import { FieldMappingRow } from './FieldMappingRow'
+import {
+  FieldMappingRow,
+  type FieldMappingRowOptimisticState,
+} from './FieldMappingRow'
 import { ChevronRight, MoreHorizontal } from '@/components/icons'
 import { cn } from '@/components/ui/utils'
 
@@ -127,6 +131,30 @@ interface TargetTableGroupProps {
    * (the group renders as a static disclosure-less header).
    */
   onToggleCollapse?: (tableName: string) => void
+  /**
+   * Phase 4-polish-3 — page-level source fields universe used by each
+   * row's inline source picker. Forwarded untouched. Omit when no
+   * inline editing surface is wired (legacy fixtures / storybook).
+   */
+  availableSourceFields?: SourceFieldWithState[]
+  /**
+   * Phase 4-polish-3 — row-id-keyed map of in-flight optimistic states
+   * (approve / reject / acknowledge / map). The group looks up its own
+   * rows in this map and forwards the state to each `FieldMappingRow`
+   * via `optimisticState`.
+   */
+  optimisticStates?: Map<string, FieldMappingRowOptimisticState>
+  /**
+   * Phase 4-polish-3 — inline action handlers. Forwarded untouched
+   * to each row. Each is independently optional so individual call
+   * sites can opt out of specific affordances (e.g. read-only
+   * fixtures wire neither approve nor reject).
+   */
+  onInlineApprove?: (rowId: string) => void
+  onInlineReject?: (rowId: string, anchorEl: HTMLElement) => void
+  onInlineAcknowledge?: (rowId: string) => void
+  onInlineUnacknowledge?: (rowId: string) => void
+  onInlineSourceCommit?: (rowId: string, finalSourceFieldIds: string[]) => void
 }
 
 export function TargetTableGroup({
@@ -142,6 +170,13 @@ export function TargetTableGroup({
   isCollapsed = false,
   isAutoExpanded = false,
   onToggleCollapse,
+  availableSourceFields,
+  optimisticStates,
+  onInlineApprove,
+  onInlineReject,
+  onInlineAcknowledge,
+  onInlineUnacknowledge,
+  onInlineSourceCommit,
 }: TargetTableGroupProps) {
   const label = resolveFieldCountLabel(targetTable, filteredCount)
   const isFilteredEmpty = filteredCount !== undefined && filteredCount.matching === 0
@@ -327,6 +362,13 @@ export function TargetTableGroup({
                 onRowClick={onRowClick}
                 isActive={openRowId === row.id}
                 isHighlighted={highlightedRowIds?.has(row.id) ?? false}
+                availableSourceFields={availableSourceFields}
+                optimisticState={optimisticStates?.get(row.id)}
+                onInlineApprove={onInlineApprove}
+                onInlineReject={onInlineReject}
+                onInlineAcknowledge={onInlineAcknowledge}
+                onInlineUnacknowledge={onInlineUnacknowledge}
+                onSourceCommit={onInlineSourceCommit}
               />
             ))}
           </div>
@@ -395,7 +437,7 @@ function ColumnHeaderRow() {
       role="row"
       aria-hidden="true"
       data-testid="target-table-column-headers"
-      className="grid grid-cols-[0.75rem_minmax(6rem,8rem)_minmax(8rem,14rem)_1fr_5rem] items-center gap-3 border-b border-settle-slate-100 bg-settle-slate-50 px-5 py-2"
+      className="grid grid-cols-[0.75rem_minmax(6rem,8rem)_minmax(8rem,14rem)_1fr_5rem_5rem] items-center gap-3 border-b border-settle-slate-100 bg-settle-slate-50 px-5 py-2"
     >
       <span aria-hidden="true" />
       <div
@@ -422,6 +464,14 @@ function ColumnHeaderRow() {
       >
         Conf.
       </div>
+      {/*
+        Phase 4-polish-3 — col 6 hosts the inline action buttons in
+        the row template. The header strip leaves it as quiet
+        whitespace (no label) so the column reads as a hover-revealed
+        gutter rather than a labelled column. Buttons themselves
+        carry tooltips + aria-labels per row.
+      */}
+      <span aria-hidden="true" />
     </div>
   )
 }
