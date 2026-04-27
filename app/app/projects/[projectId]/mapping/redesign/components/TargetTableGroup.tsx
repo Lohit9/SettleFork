@@ -6,7 +6,8 @@ import type {
   TargetTableSummary,
 } from '@/lib/types/mappings-for-redesign'
 import { FieldMappingRow } from './FieldMappingRow'
-import { MoreHorizontal } from '@/components/icons'
+import { ChevronRight, MoreHorizontal } from '@/components/icons'
+import { cn } from '@/components/ui/utils'
 
 // ─────────────────────────────────────────────────────────────────────────────
 // TargetTableGroup — Phase 3 Gap 4c (extended in Gap 3 for filtered counts).
@@ -92,6 +93,40 @@ interface TargetTableGroupProps {
    * skipped entirely (legacy fixtures / storybook can opt out).
    */
   onRejectAllClick?: (targetTableId: string) => void
+  /**
+   * Phase 4-polish-2 — group collapsibility (URL-driven).
+   *
+   * `isCollapsed` reflects the persisted user choice (read from
+   * `?collapsed=` via `useCollapsedGroups` in the parent). It does NOT
+   * directly control whether rows render — see `isAutoExpanded` below.
+   *
+   * Default behavior when the prop is omitted (legacy fixtures /
+   * storybook): the group renders fully expanded with NO chevron
+   * affordance. The toggle UI only surfaces when `onToggleCollapse`
+   * is also wired, keeping the kebab-only legacy contract intact.
+   */
+  isCollapsed?: boolean
+  /**
+   * Phase 4-polish-2 — set to `true` by `MappingContent` when ANY
+   * filter (search, status, confidence, target, source) is non-default.
+   * Forces the group expanded regardless of `isCollapsed` so the user
+   * never sees zero results for an active filter just because the
+   * matching rows live inside a collapsed group. The persisted
+   * `?collapsed=` state is preserved (not modified by auto-expand);
+   * clearing the filter restores the user's chosen disclosure state.
+   */
+  isAutoExpanded?: boolean
+  /**
+   * Phase 4-polish-2 — fired when the user clicks the group header
+   * or presses Enter/Space on it. Receives the target-table NAME (not
+   * id) because `?collapsed=` persists names for human-readable URLs
+   * and stable cross-deploy state (ids may regenerate on schema
+   * regeneration; names tend to be stable migration identities).
+   *
+   * When omitted, the chevron + click affordance are NOT rendered
+   * (the group renders as a static disclosure-less header).
+   */
+  onToggleCollapse?: (tableName: string) => void
 }
 
 export function TargetTableGroup({
@@ -104,6 +139,9 @@ export function TargetTableGroup({
   needsReviewCount,
   onApproveAllClick,
   onRejectAllClick,
+  isCollapsed = false,
+  isAutoExpanded = false,
+  onToggleCollapse,
 }: TargetTableGroupProps) {
   const label = resolveFieldCountLabel(targetTable, filteredCount)
   const isFilteredEmpty = filteredCount !== undefined && filteredCount.matching === 0
@@ -115,11 +153,42 @@ export function TargetTableGroup({
   const showKebab =
     needsReviewCount !== undefined && onApproveAllClick !== undefined
 
+  // Phase 4-polish-2 — collapsibility. The chevron + click affordance
+  // is gated on `onToggleCollapse` being wired (so legacy fixtures /
+  // storybook callers that omit it get the prior static-header
+  // behaviour). The `isExpanded` boolean is the OR of the user's
+  // persisted choice and any auto-expand pressure from active filters.
+  const isCollapsible = onToggleCollapse !== undefined
+  const isExpanded = !isCollapsed || isAutoExpanded
+  const rowsContainerId = `target-table-rows-${targetTable.id}`
+
+  // The toggle handler is only attached when collapsibility is wired.
+  // Defining it inline keeps the dependency array trivial; the
+  // closure cost is negligible compared to the render-time work
+  // per row.
+  const handleHeaderClick = () => {
+    if (!isCollapsible) return
+    onToggleCollapse!(targetTable.name)
+  }
+
+  // Keyboard activation — Enter and Space on the header button. Native
+  // `<button>` already handles this, but explicit handlers let us
+  // surface the same behaviour in tests without relying on the
+  // browser's default keyboard-to-click translation.
+  const handleHeaderKeyDown = (e: React.KeyboardEvent<HTMLButtonElement>) => {
+    if (!isCollapsible) return
+    if (e.key === 'Enter' || e.key === ' ') {
+      e.preventDefault()
+      onToggleCollapse!(targetTable.name)
+    }
+  }
+
   return (
     <section
       aria-label={`Target table ${targetTable.name}`}
       data-testid="target-table-group"
       data-target-table-id={targetTable.id}
+      data-collapsed={isCollapsible ? String(!isExpanded) : undefined}
       className="overflow-hidden rounded-lg border border-gray-200 bg-white"
     >
       {/*
@@ -134,30 +203,94 @@ export function TargetTableGroup({
         `TargetTableSummary` type — it remains accessible in props
         and can surface elsewhere (e.g. multi-dataset projects in
         the future) without being read here.
+
+        Phase 4-polish-2 (2026-04-27): the header became a clickable
+        toggle for group collapsibility. The toggle area (chevron +
+        name + count) is a single `<button>`; the kebab menu lives
+        as a sibling element outside the button so we don't nest
+        interactives (HTML invariant). When `onToggleCollapse` is
+        omitted (legacy fixtures), we fall back to a non-button
+        layout that preserves the prior behaviour.
       */}
-      <header className="flex items-center justify-between gap-3 border-b border-gray-100 bg-gray-50/50 px-5 py-3">
-        <div className="min-w-0 flex-1">
-          <h2 className="truncate text-sm font-semibold text-gray-900">
-            {targetTable.name}
-          </h2>
-        </div>
-        <span
-          className="flex-shrink-0 text-xs text-gray-500"
-          data-testid="target-table-field-count"
-        >
-          {label}
-        </span>
+      <header className="flex items-stretch border-b border-gray-100 bg-gray-50/50">
+        {isCollapsible ? (
+          <button
+            type="button"
+            onClick={handleHeaderClick}
+            onKeyDown={handleHeaderKeyDown}
+            aria-expanded={isExpanded}
+            aria-controls={rowsContainerId}
+            aria-label={`Toggle ${targetTable.name} group`}
+            data-testid="target-table-group-toggle"
+            className={cn(
+              'flex flex-1 items-center gap-2 px-5 py-3 text-left',
+              'transition-colors hover:bg-gray-100/50',
+              'focus:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-blue-500/40',
+            )}
+          >
+            <ChevronRight
+              aria-hidden="true"
+              data-testid="target-table-group-chevron"
+              data-expanded={String(isExpanded)}
+              className={cn(
+                'h-4 w-4 flex-shrink-0 text-gray-400 transition-transform duration-150 ease-out motion-reduce:transition-none',
+                isExpanded && 'rotate-90',
+              )}
+            />
+            <h2 className="min-w-0 flex-1 truncate text-sm font-semibold text-gray-900">
+              {targetTable.name}
+            </h2>
+            <span
+              className="flex-shrink-0 text-xs text-gray-500"
+              data-testid="target-table-field-count"
+            >
+              {label}
+            </span>
+          </button>
+        ) : (
+          <div className="flex flex-1 items-center gap-3 px-5 py-3">
+            <h2 className="min-w-0 flex-1 truncate text-sm font-semibold text-gray-900">
+              {targetTable.name}
+            </h2>
+            <span
+              className="flex-shrink-0 text-xs text-gray-500"
+              data-testid="target-table-field-count"
+            >
+              {label}
+            </span>
+          </div>
+        )}
         {showKebab ? (
-          <TargetTableKebabMenu
-            targetTableId={targetTable.id}
-            targetTableName={targetTable.name}
-            needsReviewCount={needsReviewCount ?? 0}
-            onApproveAllClick={onApproveAllClick!}
-            onRejectAllClick={onRejectAllClick}
-          />
+          <div className="flex items-center pr-5">
+            <TargetTableKebabMenu
+              targetTableId={targetTable.id}
+              targetTableName={targetTable.name}
+              needsReviewCount={needsReviewCount ?? 0}
+              onApproveAllClick={onApproveAllClick!}
+              onRejectAllClick={onRejectAllClick}
+            />
+          </div>
         ) : null}
       </header>
 
+      {/*
+        Phase 4-polish-2 — height-transition wrapper for the rows
+        container. The `max-h-[10000px]` upper bound is generous enough
+        for any realistic group (Mitratech-class enterprise migrations
+        cap at hundreds of fields per table; a max-height of 10kpx
+        unblocks 200+ rows even at the widest row heights). The
+        transition is GPU-friendly and respects prefers-reduced-motion.
+
+        We always render the rows DOM (just clipped when collapsed)
+        so the height transition has content to animate to/from.
+        Future optimisation: only mount when expanded for very large
+        groups — deferred until a profiler call surfaces it.
+
+        When the group is fully un-mounted from disclosure (e.g. the
+        legacy non-collapsible variant, or filtered-empty / row-empty
+        branches) we skip the wrapper entirely so the static CSS does
+        not introduce any visual change for non-collapsible callers.
+      */}
       {isFilteredEmpty ? (
         <div
           className="px-5 py-6 text-center text-xs text-gray-400"
@@ -170,7 +303,21 @@ export function TargetTableGroup({
           No fields to display for this table.
         </div>
       ) : (
-        <>
+        <div
+          id={rowsContainerId}
+          data-testid="target-table-rows-container"
+          aria-hidden={isCollapsible ? !isExpanded : undefined}
+          className={cn(
+            'overflow-hidden',
+            isCollapsible &&
+              'transition-[max-height] duration-200 ease-out motion-reduce:transition-none',
+            isCollapsible
+              ? isExpanded
+                ? 'max-h-[10000px]'
+                : 'max-h-0'
+              : '',
+          )}
+        >
           <ColumnHeaderRow />
           <div role="list" className="divide-y divide-gray-100">
             {rows.map((row) => (
@@ -183,7 +330,7 @@ export function TargetTableGroup({
               />
             ))}
           </div>
-        </>
+        </div>
       )}
     </section>
   )

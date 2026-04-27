@@ -83,6 +83,7 @@ import {
 } from '@/lib/actions/mappings-for-redesign'
 import { ToastProvider, useToast } from '@/lib/contexts/ToastContext'
 import { CONFIDENCE_THRESHOLD_ROW_HIGH } from '@/lib/utils/confidence-format'
+import { useCollapsedGroups } from '@/lib/hooks/useCollapsedGroups'
 
 // Phase 4c-1 — high-confidence threshold (mirrors legacy default).
 // Lives here so the FilterRow contextual link copy, the new Confidence
@@ -1132,6 +1133,20 @@ function MappingContentLoaded({
   )
 
   const isDefaultState = isDefaultFilterState(filters)
+
+  // Phase 4-polish-2 — group collapsibility (URL-driven). The hook
+  // owns parsing/serialising the `?collapsed=` URL param and exposing
+  // O(1) membership / toggle / expand-all helpers. We thread its
+  // outputs into each TargetTableGroup below.
+  //
+  // `isAutoExpanded` is computed once per render from `isDefaultState`
+  // (already memoised above): when ANY filter is non-default, the
+  // user's persisted collapsed state is overridden so they can never
+  // see "0 results" because the matching rows live inside a
+  // collapsed group. Clearing the filter restores the user's
+  // disclosure state from the unchanged `?collapsed=` URL param.
+  const { isCollapsed, toggleCollapsed } = useCollapsedGroups()
+  const isAutoExpanded = !isDefaultState
   /**
    * Group-visibility decision (Gap 3 amendment + Amendment 3,
    * 2026-04-21). Two hide vectors, combined with OR:
@@ -1279,6 +1294,9 @@ function MappingContentLoaded({
                       needsReviewCount={needsReviewCountByTable.get(summary.id) ?? 0}
                       onApproveAllClick={handleApproveAllForTableClick}
                       onRejectAllClick={handleRejectAllForTableClick}
+                      isCollapsed={isCollapsed(summary.name)}
+                      isAutoExpanded={isAutoExpanded}
+                      onToggleCollapse={toggleCollapsed}
                     />
                   )
                 })}

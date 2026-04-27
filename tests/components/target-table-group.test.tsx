@@ -1,5 +1,5 @@
-import { describe, it, expect } from 'vitest'
-import { render, screen, within } from '@testing-library/react'
+import { describe, it, expect, vi } from 'vitest'
+import { fireEvent, render, screen, within } from '@testing-library/react'
 import { TargetTableGroup } from '@/app/app/projects/[projectId]/mapping/redesign/components/TargetTableGroup'
 import type {
   MappedRow,
@@ -463,5 +463,323 @@ describe('TargetTableGroup — column header strip', () => {
     expect(file).not.toContain(
       'grid-cols-[0.75rem_minmax(6rem,8rem)_minmax(8rem,14rem)_1fr_5rem_1rem]',
     )
+  })
+})
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Phase 4-polish-2 — group collapsibility (URL-driven).
+// ─────────────────────────────────────────────────────────────────────────────
+//
+// The header gains a chevron + click affordance that toggles whether the
+// group's rows are visible. The state is OWNED by the parent
+// (`MappingContent` via `useCollapsedGroups`); this component only
+// surfaces the interaction. Tests here pin the JSX-level contract:
+// chevron rotation, click → onToggle wiring, accessibility attrs,
+// keyboard activation, and the legacy non-collapsible fallback.
+
+describe('TargetTableGroup — collapsibility (Phase 4-polish-2)', () => {
+  const rows: MappingRow[] = [
+    mapped({ id: 'r1', targetField: targetField({ id: 'f1', name: 'field_one' }) }),
+    mapped({ id: 'r2', targetField: targetField({ id: 'f2', name: 'field_two' }) }),
+  ]
+
+  it('does NOT render the chevron toggle when onToggleCollapse is omitted (legacy fallback)', () => {
+    // Storybook / fixture callers that don't wire the hook keep the
+    // prior static-header behaviour. Pin this so a future refactor
+    // can't make the chevron unconditionally appear.
+    render(<TargetTableGroup targetTable={summary} rows={rows} />)
+    expect(screen.queryByTestId('target-table-group-toggle')).toBeNull()
+    expect(screen.queryByTestId('target-table-group-chevron')).toBeNull()
+  })
+
+  it('renders the chevron toggle button when onToggleCollapse is wired', () => {
+    render(
+      <TargetTableGroup
+        targetTable={summary}
+        rows={rows}
+        onToggleCollapse={vi.fn()}
+      />,
+    )
+    expect(screen.getByTestId('target-table-group-toggle')).toBeInTheDocument()
+    expect(screen.getByTestId('target-table-group-chevron')).toBeInTheDocument()
+  })
+
+  it('chevron is rotated (data-expanded="true") when expanded', () => {
+    render(
+      <TargetTableGroup
+        targetTable={summary}
+        rows={rows}
+        onToggleCollapse={vi.fn()}
+        isCollapsed={false}
+      />,
+    )
+    const chevron = screen.getByTestId('target-table-group-chevron')
+    expect(chevron.getAttribute('data-expanded')).toBe('true')
+    // SVG elements expose `className` as an `SVGAnimatedString`, so we
+    // read the raw `class` attribute string instead of `.className`.
+    expect(chevron.getAttribute('class')).toContain('rotate-90')
+  })
+
+  it('chevron is NOT rotated (data-expanded="false") when collapsed', () => {
+    render(
+      <TargetTableGroup
+        targetTable={summary}
+        rows={rows}
+        onToggleCollapse={vi.fn()}
+        isCollapsed={true}
+      />,
+    )
+    const chevron = screen.getByTestId('target-table-group-chevron')
+    expect(chevron.getAttribute('data-expanded')).toBe('false')
+    expect(chevron.getAttribute('class') ?? '').not.toContain('rotate-90')
+  })
+
+  it('aria-expanded matches the boolean expanded state when expanded', () => {
+    render(
+      <TargetTableGroup
+        targetTable={summary}
+        rows={rows}
+        onToggleCollapse={vi.fn()}
+        isCollapsed={false}
+      />,
+    )
+    const toggle = screen.getByTestId('target-table-group-toggle')
+    expect(toggle.getAttribute('aria-expanded')).toBe('true')
+  })
+
+  it('aria-expanded matches the boolean expanded state when collapsed', () => {
+    render(
+      <TargetTableGroup
+        targetTable={summary}
+        rows={rows}
+        onToggleCollapse={vi.fn()}
+        isCollapsed={true}
+      />,
+    )
+    const toggle = screen.getByTestId('target-table-group-toggle')
+    expect(toggle.getAttribute('aria-expanded')).toBe('false')
+  })
+
+  it('aria-controls references the rows container id', () => {
+    render(
+      <TargetTableGroup
+        targetTable={summary}
+        rows={rows}
+        onToggleCollapse={vi.fn()}
+      />,
+    )
+    const toggle = screen.getByTestId('target-table-group-toggle')
+    const container = screen.getByTestId('target-table-rows-container')
+    const controls = toggle.getAttribute('aria-controls')
+    expect(controls).toBeTruthy()
+    expect(container.getAttribute('id')).toBe(controls)
+  })
+
+  it('aria-label includes the table name (screen-reader announcement)', () => {
+    render(
+      <TargetTableGroup
+        targetTable={summary}
+        rows={rows}
+        onToggleCollapse={vi.fn()}
+      />,
+    )
+    const toggle = screen.getByTestId('target-table-group-toggle')
+    expect(toggle.getAttribute('aria-label')).toBe('Toggle accounts group')
+  })
+
+  it('clicking the header fires onToggleCollapse with the table NAME', () => {
+    const onToggle = vi.fn()
+    render(
+      <TargetTableGroup
+        targetTable={summary}
+        rows={rows}
+        onToggleCollapse={onToggle}
+      />,
+    )
+    fireEvent.click(screen.getByTestId('target-table-group-toggle'))
+    expect(onToggle).toHaveBeenCalledTimes(1)
+    expect(onToggle).toHaveBeenCalledWith('accounts')
+  })
+
+  it('Enter key on the toggle fires onToggleCollapse', () => {
+    const onToggle = vi.fn()
+    render(
+      <TargetTableGroup
+        targetTable={summary}
+        rows={rows}
+        onToggleCollapse={onToggle}
+      />,
+    )
+    const toggle = screen.getByTestId('target-table-group-toggle')
+    fireEvent.keyDown(toggle, { key: 'Enter' })
+    expect(onToggle).toHaveBeenCalledWith('accounts')
+  })
+
+  it('Space key on the toggle fires onToggleCollapse', () => {
+    const onToggle = vi.fn()
+    render(
+      <TargetTableGroup
+        targetTable={summary}
+        rows={rows}
+        onToggleCollapse={onToggle}
+      />,
+    )
+    const toggle = screen.getByTestId('target-table-group-toggle')
+    fireEvent.keyDown(toggle, { key: ' ' })
+    expect(onToggle).toHaveBeenCalledWith('accounts')
+  })
+
+  it('clicking the kebab menu does NOT fire onToggleCollapse', () => {
+    // The kebab is rendered as a sibling button outside the toggle
+    // button, so its click never bubbles to the toggle. This is the
+    // structural guarantee — no `stopPropagation` needed.
+    const onToggle = vi.fn()
+    render(
+      <TargetTableGroup
+        targetTable={summary}
+        rows={rows}
+        onToggleCollapse={onToggle}
+        needsReviewCount={2}
+        onApproveAllClick={vi.fn()}
+      />,
+    )
+    fireEvent.click(screen.getByTestId('target-table-kebab-trigger'))
+    expect(onToggle).not.toHaveBeenCalled()
+  })
+
+  it('renders rows inside a wrapped container when expanded', () => {
+    render(
+      <TargetTableGroup
+        targetTable={summary}
+        rows={rows}
+        onToggleCollapse={vi.fn()}
+        isCollapsed={false}
+      />,
+    )
+    const container = screen.getByTestId('target-table-rows-container')
+    expect(within(container).getAllByTestId('field-mapping-row')).toHaveLength(2)
+    // Always-mounted rows: even when collapsed the DOM remains, just
+    // clipped via max-height. Pin that the rows are NOT removed when
+    // collapsed in the assertion below.
+    expect(container.className).toContain('max-h-[10000px]')
+  })
+
+  it('keeps rows mounted but clipped (max-h-0) when collapsed', () => {
+    render(
+      <TargetTableGroup
+        targetTable={summary}
+        rows={rows}
+        onToggleCollapse={vi.fn()}
+        isCollapsed={true}
+      />,
+    )
+    const container = screen.getByTestId('target-table-rows-container')
+    expect(within(container).getAllByTestId('field-mapping-row')).toHaveLength(2)
+    expect(container.className).toContain('max-h-0')
+    expect(container.className).not.toContain('max-h-[10000px]')
+    // aria-hidden flips so screen readers skip the clipped rows.
+    expect(container.getAttribute('aria-hidden')).toBe('true')
+  })
+
+  it('isAutoExpanded forces expansion regardless of isCollapsed', () => {
+    // Filter-driven auto-expand: even when the user has collapsed
+    // this group via `?collapsed=`, an active filter (search /
+    // status / etc.) overrides and shows the rows. The persisted
+    // collapsed state is unchanged — see MappingContent integration
+    // tests for the URL preservation contract.
+    render(
+      <TargetTableGroup
+        targetTable={summary}
+        rows={rows}
+        onToggleCollapse={vi.fn()}
+        isCollapsed={true}
+        isAutoExpanded={true}
+      />,
+    )
+    const container = screen.getByTestId('target-table-rows-container')
+    expect(container.className).toContain('max-h-[10000px]')
+    const toggle = screen.getByTestId('target-table-group-toggle')
+    expect(toggle.getAttribute('aria-expanded')).toBe('true')
+    const chevron = screen.getByTestId('target-table-group-chevron')
+    expect(chevron.getAttribute('data-expanded')).toBe('true')
+  })
+
+  it('section data-collapsed attribute reflects state (selector hook)', () => {
+    const { rerender } = render(
+      <TargetTableGroup
+        targetTable={summary}
+        rows={rows}
+        onToggleCollapse={vi.fn()}
+        isCollapsed={false}
+      />,
+    )
+    expect(
+      screen.getByTestId('target-table-group').getAttribute('data-collapsed'),
+    ).toBe('false')
+    rerender(
+      <TargetTableGroup
+        targetTable={summary}
+        rows={rows}
+        onToggleCollapse={vi.fn()}
+        isCollapsed={true}
+      />,
+    )
+    expect(
+      screen.getByTestId('target-table-group').getAttribute('data-collapsed'),
+    ).toBe('true')
+  })
+
+  it('honors prefers-reduced-motion via motion-reduce: classes', () => {
+    // Pin the motion-reduce token on the height transition so a future
+    // refactor cannot drop it. We can't easily simulate the OS-level
+    // setting here, but the className presence is a stable
+    // testable proxy.
+    render(
+      <TargetTableGroup
+        targetTable={summary}
+        rows={rows}
+        onToggleCollapse={vi.fn()}
+      />,
+    )
+    const container = screen.getByTestId('target-table-rows-container')
+    expect(container.className).toContain('motion-reduce:transition-none')
+  })
+
+  it('does NOT wrap the rows container with the transition when onToggleCollapse is omitted', () => {
+    // Legacy callers (storybook / fixtures) get the prior static
+    // layout — no max-h class, no transition class. The rows-
+    // container testid is still surfaced for selectors but its
+    // class is bare.
+    render(<TargetTableGroup targetTable={summary} rows={rows} />)
+    const container = screen.getByTestId('target-table-rows-container')
+    expect(container.className).not.toContain('max-h-')
+    expect(container.className).not.toContain('transition-[max-height]')
+  })
+
+  it('does not render the rows container in the row-empty branch', () => {
+    // Empty-rows path renders the polite placeholder, which is OUTSIDE
+    // the transition wrapper — pin that the wrapper testid doesn't
+    // appear so empty groups don't carry a 0-height clipped container.
+    render(
+      <TargetTableGroup
+        targetTable={summary}
+        rows={[]}
+        onToggleCollapse={vi.fn()}
+      />,
+    )
+    expect(screen.queryByTestId('target-table-rows-container')).toBeNull()
+  })
+
+  it('does not render the rows container in the filtered-empty branch', () => {
+    render(
+      <TargetTableGroup
+        targetTable={summary}
+        rows={[]}
+        filteredCount={{ total: 19, matching: 0 }}
+        onToggleCollapse={vi.fn()}
+      />,
+    )
+    expect(screen.queryByTestId('target-table-rows-container')).toBeNull()
+    expect(screen.getByTestId('target-table-filtered-empty')).toBeInTheDocument()
   })
 })
