@@ -7,6 +7,7 @@ import {
 } from '@/app/app/projects/[projectId]/mapping/redesign/components/MappingDrawer'
 import type {
   MappedRow,
+  MappingRow,
   MappingSourceRef,
   SourceFieldWithState,
   TargetAcknowledgedRow,
@@ -76,6 +77,8 @@ function mapped(overrides: Partial<MappedRow> = {}): MappedRow {
     status: 'approved',
     hasTransformation: false,
     transformationStatus: null,
+    transformationDescription: null,
+    transformationSqlPreview: null,
     sources: [source()],
     combinationType: 'single',
     combinationSql: null,
@@ -95,6 +98,8 @@ function valueAssignment(
     status: 'approved',
     hasTransformation: true,
     transformationStatus: 'applied',
+    transformationDescription: null,
+    transformationSqlPreview: null,
     combinationType: 'custom_sql',
     combinationSql: 'NOW()',
     aiReasoning: null,
@@ -113,6 +118,8 @@ function targetAck(
     status: 'approved',
     hasTransformation: false,
     transformationStatus: null,
+    transformationDescription: null,
+    transformationSqlPreview: null,
     acknowledgmentReason: 'system default',
     ...overrides,
   }
@@ -127,6 +134,8 @@ function unmapped(overrides: Partial<UnmappedRow> = {}): UnmappedRow {
     status: 'unmapped',
     hasTransformation: false,
     transformationStatus: null,
+    transformationDescription: null,
+    transformationSqlPreview: null,
     ...overrides,
   }
 }
@@ -167,18 +176,31 @@ describe('MappingDrawer — closed state', () => {
 // ─── Header ─────────────────────────────────────────────────────────────────
 
 describe('MappingDrawer — header', () => {
-  it('renders the target field name as the labelled heading', () => {
+  it('renders the target field name as the dialog-labelled title node', () => {
     render(<MappingDrawer row={mapped()} isOpen={true} onClose={() => {}} />)
     const title = screen.getByTestId('mapping-drawer-title')
     expect(title.textContent).toBe('customer_id')
-    expect(title.tagName).toBe('H2')
+    // Drawer redesign — title is an inline span inside the compressed
+    // 2-line header (Q11.J lock); accessible labelling is preserved
+    // via the dialog's `aria-labelledby` attribute pointing at this
+    // element's id.
+    expect(title.tagName).toBe('SPAN')
+    const dialog = screen.getByTestId('mapping-drawer')
+    expect(dialog.getAttribute('aria-labelledby')).toBe(title.id)
   })
 
-  it('field name uses font-mono and font-semibold', () => {
+  it('target field name uses font-mono and font-normal (Refinement 4 — alignment with list view + source side)', () => {
+    // Refinement 4 lock: drawer header source and target field rows
+    // render identically — same font, same weight, same color. The
+    // SOURCE / TARGET small-caps labels carry section emphasis on
+    // their own; bolded field names duplicated that signal and broke
+    // visual parity with the list view (where 4-polish-1 dropped
+    // `font-semibold` from the target cell in the same pass).
     render(<MappingDrawer row={mapped()} isOpen={true} onClose={() => {}} />)
     const title = screen.getByTestId('mapping-drawer-title')
     expect(title.className).toContain('font-mono')
-    expect(title.className).toContain('font-semibold')
+    expect(title.className).toContain('font-normal')
+    expect(title.className).not.toContain('font-semibold')
   })
 
   it('renders a TableBadge for the target table in the header', () => {
@@ -202,26 +224,54 @@ describe('MappingDrawer — header', () => {
   })
 })
 
-// ─── Subheader (per row kind / rule) ────────────────────────────────────────
+// ─── Stacked header (drawer-redesign refinement §1) ───────────────────────
+//
+// Header is a 3-section vertical stack:
+//   SOURCE                                               [✕]
+//   [srcTable] srcField                  (+N sources chip if Rule 3/4)
+//   TARGET
+//   [tgtTable] tgtField
+//   ●  87.50%  Approved  ·  VARCHAR(50) → VARCHAR(200)
+//
+// These suites lock the stacked shape: SOURCE/TARGET small-caps labels,
+// per-rule source identity, the multi-source `+N sources` chip for
+// cross-table rows (Rule 3/4), the em-dash placeholder for
+// VA/Rule 5/Rule 6, and the meta line (status dot + status word +
+// confidence + types) on the third row. The legacy compressed-header
+// shape (line 1 with arrow grid + line 2 dot-only meta) is regression-
+// guarded as absent.
 
-describe('MappingDrawer — subheader Rule 1 (single source)', () => {
-  it('renders "from <field> [Badge]" for a single-source mapped row', () => {
+describe('MappingDrawer — stacked header source row (Rule 1 single source)', () => {
+  it('renders dominant source identity (table badge + field name)', () => {
     render(<MappingDrawer row={mapped()} isOpen={true} onClose={() => {}} />)
-    const sub = screen.getByTestId('mapping-drawer-subheader-rule_1')
-    expect(sub.textContent).toContain('from')
-    expect(within(sub).getByText('ACCT_NO')).toBeInTheDocument()
-    expect(within(sub).getByText('ACCT_MASTER')).toBeInTheDocument()
+    const src = screen.getByTestId('mapping-drawer-header-source')
+    expect(within(src).getByText('ACCT_MASTER')).toBeInTheDocument()
+    expect(within(src).getByText('ACCT_NO')).toBeInTheDocument()
   })
 
-  it('source field name uses font-mono', () => {
+  it('renders target identity (table badge + field name)', () => {
     render(<MappingDrawer row={mapped()} isOpen={true} onClose={() => {}} />)
-    const sub = screen.getByTestId('mapping-drawer-subheader-rule_1')
-    const fieldSpan = within(sub).getByText('ACCT_NO')
-    expect(fieldSpan.className).toContain('font-mono')
+    const tgt = screen.getByTestId('mapping-drawer-header-target')
+    expect(within(tgt).getByText('accounts')).toBeInTheDocument()
+    expect(within(tgt).getByTestId('mapping-drawer-title').textContent).toBe(
+      'customer_id',
+    )
+  })
+
+  it('does NOT render the legacy subheader testid', () => {
+    render(<MappingDrawer row={mapped()} isOpen={true} onClose={() => {}} />)
+    expect(screen.queryByTestId('mapping-drawer-subheader-rule_1')).toBeNull()
+  })
+
+  it('Rule 1 source has NO `+N sources` chip', () => {
+    render(<MappingDrawer row={mapped()} isOpen={true} onClose={() => {}} />)
+    expect(
+      screen.queryByTestId('mapping-drawer-header-sources-chip'),
+    ).toBeNull()
   })
 })
 
-describe('MappingDrawer — subheader Rule 2 (multi-source same table)', () => {
+describe('MappingDrawer — stacked header source row (Rule 2 multi-source same table)', () => {
   const row = () =>
     mapped({
       sources: [
@@ -232,25 +282,30 @@ describe('MappingDrawer — subheader Rule 2 (multi-source same table)', () => {
       targetField: targetField({ name: 'full_name' }),
     })
 
-  it('renders comma-separated fields and ONE TableBadge', () => {
+  it('comma-joins the field list and renders ONE source TableBadge', () => {
     render(<MappingDrawer row={row()} isOpen={true} onClose={() => {}} />)
-    const sub = screen.getByTestId('mapping-drawer-subheader-rule_2')
-    expect(within(sub).getByText('FNAME, LNAME, MI')).toBeInTheDocument()
-    // Only one CIF_MASTER badge inside the subheader (the header has its
-    // own target-table badge for "accounts" — unrelated).
-    expect(within(sub).getAllByText('CIF_MASTER')).toHaveLength(1)
+    const src = screen.getByTestId('mapping-drawer-header-source')
+    expect(within(src).getByText('FNAME, LNAME, MI')).toBeInTheDocument()
+    expect(within(src).getAllByText('CIF_MASTER')).toHaveLength(1)
   })
 
   it('field list uses font-mono', () => {
     render(<MappingDrawer row={row()} isOpen={true} onClose={() => {}} />)
-    const sub = screen.getByTestId('mapping-drawer-subheader-rule_2')
-    const list = within(sub).getByText('FNAME, LNAME, MI')
+    const src = screen.getByTestId('mapping-drawer-header-source')
+    const list = within(src).getByText('FNAME, LNAME, MI')
     expect(list.className).toContain('font-mono')
+  })
+
+  it('Rule 2 has NO `+N sources` chip (single table)', () => {
+    render(<MappingDrawer row={row()} isOpen={true} onClose={() => {}} />)
+    expect(
+      screen.queryByTestId('mapping-drawer-header-sources-chip'),
+    ).toBeNull()
   })
 })
 
-describe('MappingDrawer — subheader Rule 3 (cross-table, 2 tables)', () => {
-  const row = () =>
+describe('MappingDrawer — stacked header source row (Rule 3/4 cross-table)', () => {
+  const row3 = () =>
     mapped({
       sources: [
         source({
@@ -268,137 +323,50 @@ describe('MappingDrawer — subheader Rule 3 (cross-table, 2 tables)', () => {
       ],
     })
 
-  it('renders each source with its own TableBadge', () => {
-    render(<MappingDrawer row={row()} isOpen={true} onClose={() => {}} />)
-    const sub = screen.getByTestId('mapping-drawer-subheader-rule_3')
-    expect(within(sub).getByText('A_COL')).toBeInTheDocument()
-    expect(within(sub).getByText('B_COL')).toBeInTheDocument()
-    expect(within(sub).getByText('TBL_A')).toBeInTheDocument()
-    expect(within(sub).getByText('TBL_B')).toBeInTheDocument()
+  it('shows ONLY the dominant source on line 1 (overflow chip carries the rest)', () => {
+    render(<MappingDrawer row={row3()} isOpen={true} onClose={() => {}} />)
+    const src = screen.getByTestId('mapping-drawer-header-source')
+    expect(within(src).getByText('TBL_A')).toBeInTheDocument()
+    expect(within(src).getByText('A_COL')).toBeInTheDocument()
+    // The non-dominant source is NOT inlined.
+    expect(within(src).queryByText('TBL_B')).toBeNull()
+    expect(within(src).queryByText('B_COL')).toBeNull()
   })
-})
 
-describe('MappingDrawer — subheader Rule 4 (3+ tables or 5+ sources)', () => {
-  const row = () =>
-    mapped({
+  it('renders the `+N sources` chip with the overflow count (singular)', () => {
+    render(<MappingDrawer row={row3()} isOpen={true} onClose={() => {}} />)
+    const chip = screen.getByTestId('mapping-drawer-header-sources-chip')
+    expect(chip.textContent).toBe('+1 sources')
+    // The chip is a button (clickable scrolls to body Sources section).
+    expect(chip.tagName).toBe('BUTTON')
+  })
+
+  it('chip aria-label describes the overflow scroll target', () => {
+    render(<MappingDrawer row={row3()} isOpen={true} onClose={() => {}} />)
+    const chip = screen.getByTestId('mapping-drawer-header-sources-chip')
+    expect(chip.getAttribute('aria-label')).toBe(
+      'Show 1 additional source in body',
+    )
+  })
+
+  it('Rule 4 (5 sources / 2 tables) chip count is `+4 sources`', () => {
+    const fiveAcrossTwo = mapped({
       sources: [
-        source({
-          id: 'ms-1',
-          ordinal: 0,
-          sourceField: { id: 'sf-1', name: 'F1', dataType: 'VARCHAR', isNullable: false },
-          sourceTable: { id: 'st-1', name: 'T1' },
-        }),
-        source({
-          id: 'ms-2',
-          ordinal: 1,
-          sourceField: { id: 'sf-2', name: 'F2', dataType: 'VARCHAR', isNullable: false },
-          sourceTable: { id: 'st-2', name: 'T2' },
-        }),
-        source({
-          id: 'ms-3',
-          ordinal: 2,
-          sourceField: { id: 'sf-3', name: 'F3', dataType: 'VARCHAR', isNullable: false },
-          sourceTable: { id: 'st-3', name: 'T3' },
-        }),
-        source({
-          id: 'ms-4',
-          ordinal: 3,
-          sourceField: { id: 'sf-4', name: 'F4', dataType: 'VARCHAR', isNullable: false },
-          sourceTable: { id: 'st-4', name: 'T4' },
-        }),
-        source({
-          id: 'ms-5',
-          ordinal: 4,
-          sourceField: { id: 'sf-5', name: 'F5', dataType: 'VARCHAR', isNullable: false },
-          sourceTable: { id: 'st-5', name: 'T5' },
-        }),
+        source({ id: 'ms-1', ordinal: 0, sourceField: { id: 'sf-1', name: 'F1', dataType: 'VARCHAR', isNullable: false }, sourceTable: { id: 'st-a', name: 'T_A' } }),
+        source({ id: 'ms-2', ordinal: 1, sourceField: { id: 'sf-2', name: 'F2', dataType: 'VARCHAR', isNullable: false }, sourceTable: { id: 'st-a', name: 'T_A' } }),
+        source({ id: 'ms-3', ordinal: 2, sourceField: { id: 'sf-3', name: 'F3', dataType: 'VARCHAR', isNullable: false }, sourceTable: { id: 'st-b', name: 'T_B' } }),
+        source({ id: 'ms-4', ordinal: 3, sourceField: { id: 'sf-4', name: 'F4', dataType: 'VARCHAR', isNullable: false }, sourceTable: { id: 'st-b', name: 'T_B' } }),
+        source({ id: 'ms-5', ordinal: 4, sourceField: { id: 'sf-5', name: 'F5', dataType: 'VARCHAR', isNullable: false }, sourceTable: { id: 'st-b', name: 'T_B' } }),
       ],
     })
-
-  it('renders the first 3 sources + "+ N more" pill (N=2)', () => {
-    render(<MappingDrawer row={row()} isOpen={true} onClose={() => {}} />)
-    const sub = screen.getByTestId('mapping-drawer-subheader-rule_4')
-    expect(within(sub).getByText('F1')).toBeInTheDocument()
-    expect(within(sub).getByText('F2')).toBeInTheDocument()
-    expect(within(sub).getByText('F3')).toBeInTheDocument()
-    expect(within(sub).queryByText('F4')).toBeNull()
-    expect(within(sub).queryByText('F5')).toBeNull()
-    const more = within(sub).getByTestId('mapping-drawer-subheader-more')
-    expect(more.textContent).toContain('+ 2 more')
-  })
-
-  it('does NOT render "+ N more" when sources count exactly equals the preview limit (defensive)', () => {
-    // 3 sources / 3 tables → Rule 4 (table-count threshold), but no overflow.
-    const r = mapped({
-      sources: [
-        source({
-          id: 'ms-1',
-          ordinal: 0,
-          sourceField: { id: 'sf-1', name: 'F1', dataType: 'VARCHAR', isNullable: false },
-          sourceTable: { id: 'st-1', name: 'T1' },
-        }),
-        source({
-          id: 'ms-2',
-          ordinal: 1,
-          sourceField: { id: 'sf-2', name: 'F2', dataType: 'VARCHAR', isNullable: false },
-          sourceTable: { id: 'st-2', name: 'T2' },
-        }),
-        source({
-          id: 'ms-3',
-          ordinal: 2,
-          sourceField: { id: 'sf-3', name: 'F3', dataType: 'VARCHAR', isNullable: false },
-          sourceTable: { id: 'st-3', name: 'T3' },
-        }),
-      ],
-    })
-    render(<MappingDrawer row={r} isOpen={true} onClose={() => {}} />)
-    const sub = screen.getByTestId('mapping-drawer-subheader-rule_4')
-    expect(within(sub).queryByTestId('mapping-drawer-subheader-more')).toBeNull()
+    render(<MappingDrawer row={fiveAcrossTwo} isOpen={true} onClose={() => {}} />)
+    const chip = screen.getByTestId('mapping-drawer-header-sources-chip')
+    expect(chip.textContent).toBe('+4 sources')
   })
 })
 
-describe('MappingDrawer — subheader Rule 5 (target_acknowledged)', () => {
-  it('renders "acknowledged — <reason>" with reason in italic', () => {
-    render(
-      <MappingDrawer
-        row={targetAck({ acknowledgmentReason: 'system default' })}
-        isOpen={true}
-        onClose={() => {}}
-      />,
-    )
-    const sub = screen.getByTestId('mapping-drawer-subheader-ack')
-    expect(sub.textContent).toContain('acknowledged')
-    expect(sub.textContent).toContain('system default')
-    // Reason rendered inside an italic span.
-    const reason = within(sub).getByText('system default')
-    expect(reason.className).toContain('italic')
-  })
-
-  it('renders "acknowledged" alone (italic) when reason is null', () => {
-    render(
-      <MappingDrawer
-        row={targetAck({ acknowledgmentReason: null })}
-        isOpen={true}
-        onClose={() => {}}
-      />,
-    )
-    const sub = screen.getByTestId('mapping-drawer-subheader-ack')
-    expect(sub.textContent).toBe('acknowledged')
-    expect(sub.className).toContain('italic')
-  })
-})
-
-describe('MappingDrawer — subheader Rule 6 (unmapped)', () => {
-  it('renders italic "no source mapped yet"', () => {
-    render(<MappingDrawer row={unmapped()} isOpen={true} onClose={() => {}} />)
-    const sub = screen.getByTestId('mapping-drawer-subheader-unmapped')
-    expect(sub.textContent).toBe('no source mapped yet')
-    expect(sub.className).toContain('italic')
-  })
-})
-
-describe('MappingDrawer — subheader VA (value_assignment)', () => {
-  it('renders italic "value assignment"', () => {
+describe('MappingDrawer — stacked header source row (no source rows)', () => {
+  it('VA renders an em-dash placeholder for the source half', () => {
     render(
       <MappingDrawer
         row={valueAssignment()}
@@ -406,9 +374,268 @@ describe('MappingDrawer — subheader VA (value_assignment)', () => {
         onClose={() => {}}
       />,
     )
-    const sub = screen.getByTestId('mapping-drawer-subheader-va')
-    expect(sub.textContent).toBe('value assignment')
-    expect(sub.className).toContain('italic')
+    const empty = screen.getByTestId('mapping-drawer-header-source-empty')
+    expect(empty.textContent).toBe('—')
+    expect(empty.getAttribute('aria-label')).toBe('no source')
+  })
+
+  it('Rule 5 (target_acknowledged) renders an em-dash placeholder for the source half', () => {
+    render(<MappingDrawer row={targetAck()} isOpen={true} onClose={() => {}} />)
+    expect(
+      screen.getByTestId('mapping-drawer-header-source-empty'),
+    ).toBeInTheDocument()
+  })
+
+  it('Rule 6 (unmapped) renders an em-dash placeholder for the source half', () => {
+    render(<MappingDrawer row={unmapped()} isOpen={true} onClose={() => {}} />)
+    expect(
+      screen.getByTestId('mapping-drawer-header-source-empty'),
+    ).toBeInTheDocument()
+  })
+
+  it('legacy subheader-ack / subheader-va / subheader-unmapped testids are gone', () => {
+    render(<MappingDrawer row={targetAck()} isOpen={true} onClose={() => {}} />)
+    expect(screen.queryByTestId('mapping-drawer-subheader-ack')).toBeNull()
+    expect(screen.queryByTestId('mapping-drawer-subheader-va')).toBeNull()
+    expect(screen.queryByTestId('mapping-drawer-subheader-unmapped')).toBeNull()
+  })
+})
+
+// ─── Stacked header meta line (status dot + status word + confidence + types) ─
+
+// Refinement 3 (canary feedback): the header's third "meta line" (status
+// dot + word + confidence + source/target type pair) was deleted. Its
+// content moved into the new Overview body section (Refinement 4). The
+// status dot + word + confidence helpers below still exist as named
+// components — they're now consumed by Overview — but they no longer
+// render inside the header.
+
+describe('MappingDrawer — header meta line removal (Refinement 3)', () => {
+  it('header does NOT render a meta line for any row kind', () => {
+    for (const row of [
+      mapped({ status: 'needs_review' }),
+      mapped({ status: 'approved' }),
+      mapped({ status: 'rejected' }),
+      valueAssignment(),
+      targetAck(),
+      unmapped(),
+    ]) {
+      const { unmount } = render(
+        <MappingDrawer row={row} isOpen={true} onClose={() => {}} />,
+      )
+      expect(screen.queryByTestId('mapping-drawer-header-meta')).toBeNull()
+      unmount()
+    }
+  })
+
+  it('header SOURCE row contains status dot + confidence percent (drawer redesign §1)', () => {
+    // Drawer redesign refinements §1 (founder canary review):
+    // status + confidence move from the now-removed OVERVIEW body
+    // section to the header's SOURCE row top-right. The dot color
+    // carries status; the percent is integer-rounded.
+    render(
+      <MappingDrawer
+        row={mapped({ status: 'needs_review', confidence: 88 })}
+        isOpen={true}
+        onClose={() => {}}
+      />,
+    )
+    const header = screen.getByTestId('mapping-drawer-header')
+    const badge = within(header).getByTestId(
+      'mapping-drawer-header-status-badge',
+    )
+    expect(
+      within(badge).getByTestId('mapping-drawer-header-status-needs_review'),
+    ).toBeInTheDocument()
+    expect(
+      within(badge).getByTestId('mapping-drawer-header-status-percent')
+        .textContent,
+    ).toBe('88%')
+  })
+
+  it('header status badge does NOT render the status word as visible text (drawer redesign §1)', () => {
+    // The status word ("Approved", "Needs Review", "Rejected",
+    // "Acknowledged") is dropped from user-visible text — only the
+    // dot's color carries the status signal. The word stays
+    // accessible via the dot's `title=` attribute.
+    render(
+      <MappingDrawer
+        row={mapped({ status: 'needs_review', confidence: 88 })}
+        isOpen={true}
+        onClose={() => {}}
+      />,
+    )
+    const badge = screen.getByTestId('mapping-drawer-header-status-badge')
+    expect(badge.textContent).toBe('88%')
+    expect(badge.textContent).not.toContain('Needs Review')
+  })
+
+  it('header status badge dot has title attribute matching the status word for accessibility', () => {
+    // Drawer redesign refinements §1: the dropped status word is
+    // re-exposed via the dot's `title=` attribute (hover tooltip)
+    // and `aria-label` (screen readers). All four status values
+    // surface their canonical label.
+    for (const [row, label] of [
+      [mapped({ status: 'needs_review' }), 'Needs Review'] as const,
+      [mapped({ status: 'approved' }), 'Approved'] as const,
+      [mapped({ status: 'rejected' }), 'Rejected'] as const,
+      [targetAck(), 'Approved'] as const,
+    ]) {
+      const { unmount } = render(
+        <MappingDrawer row={row} isOpen={true} onClose={() => {}} />,
+      )
+      const status: MappingRow['status'] =
+        row.kind === 'target_acknowledged' ? 'approved' : row.status
+      const dot = screen.getByTestId(
+        `mapping-drawer-header-status-${status}`,
+      )
+      expect(dot.getAttribute('title')).toBe(label)
+      expect(dot.getAttribute('aria-label')).toBe(label)
+      unmount()
+    }
+  })
+
+  it('header status badge is suppressed entirely for Rule 6 unmapped rows', () => {
+    // Drawer redesign refinements §1: Rule 6 has no status to
+    // surface and `confidence === null`, so the entire badge is
+    // omitted. Only the close button renders in the SOURCE row's
+    // right-hand cluster.
+    render(<MappingDrawer row={unmapped()} isOpen={true} onClose={() => {}} />)
+    const header = screen.getByTestId('mapping-drawer-header')
+    expect(
+      within(header).queryByTestId('mapping-drawer-header-status-badge'),
+    ).toBeNull()
+    // Close button still renders.
+    expect(within(header).getByTestId('mapping-drawer-close')).toBeInTheDocument()
+  })
+
+  it('Rule 5 acknowledged renders a filled green dot but no confidence percent (drawer redesign §1)', () => {
+    // Rule 5 (acknowledged) has `confidence === null`, so the badge
+    // degrades to dot-only. The dot is forced to the `approved`
+    // (filled green) palette to read as "all clear / no action
+    // needed", matching 4-polish-1's lock.
+    render(<MappingDrawer row={targetAck()} isOpen={true} onClose={() => {}} />)
+    const badge = screen.getByTestId('mapping-drawer-header-status-badge')
+    expect(
+      within(badge).getByTestId('mapping-drawer-header-status-approved'),
+    ).toBeInTheDocument()
+    expect(
+      within(badge).queryByTestId('mapping-drawer-header-status-percent'),
+    ).toBeNull()
+    // The visible text is empty (dot only).
+    expect(badge.textContent).toBe('')
+  })
+})
+
+// ─── Stacked header — SOURCE/TARGET label structure (drawer-redesign §1) ──
+//
+// The header gains two small-caps labels above each identity row:
+// SOURCE on top of the source identity, TARGET on top of the target
+// identity. This locks the stacked-vs-compressed distinction so a
+// future refactor can't quietly drop them. Styling token mirrors the
+// body section labels (`<DrawerSection title="...">`) so the rhythm
+// across header + body reads as one visual primitive.
+
+describe('MappingDrawer — stacked header SOURCE/TARGET labels', () => {
+  it('renders a SOURCE small-caps label above the source identity row', () => {
+    render(<MappingDrawer row={mapped()} isOpen={true} onClose={() => {}} />)
+    const label = screen.getByTestId('mapping-drawer-header-source-label')
+    expect(label.textContent).toBe('SOURCE')
+    expect(label.className).toContain('uppercase')
+    expect(label.className).toContain('tracking-wide')
+    expect(label.className).toContain('text-xs')
+  })
+
+  it('renders a TARGET small-caps label above the target identity row', () => {
+    render(<MappingDrawer row={mapped()} isOpen={true} onClose={() => {}} />)
+    const label = screen.getByTestId('mapping-drawer-header-target-label')
+    expect(label.textContent).toBe('TARGET')
+    expect(label.className).toContain('uppercase')
+    expect(label.className).toContain('tracking-wide')
+  })
+
+  it('SOURCE label and TARGET label use IDENTICAL token styling (visual rhythm with body labels)', () => {
+    render(<MappingDrawer row={mapped()} isOpen={true} onClose={() => {}} />)
+    const src = screen.getByTestId('mapping-drawer-header-source-label')
+    const tgt = screen.getByTestId('mapping-drawer-header-target-label')
+    expect(src.className).toBe(tgt.className)
+  })
+
+  it('source field row and target field row render at identical font weight (Refinement 4)', () => {
+    // Refinement 4 lock: source and target should render identically —
+    // same font, same weight, same color — so the SOURCE / TARGET
+    // small-caps labels are the only emphasis. We assert weight via
+    // class string presence rather than full equality because the
+    // wrapping containers carry layout classes (`flex-1`, etc.) that
+    // legitimately differ between source/target sides.
+    render(<MappingDrawer row={mapped()} isOpen={true} onClose={() => {}} />)
+    const src = screen.getByTestId('mapping-drawer-header-source')
+    const tgt = screen.getByTestId('mapping-drawer-header-target')
+    const srcField = within(src).getByText('ACCT_NO')
+    const tgtField = within(tgt).getByTestId('mapping-drawer-title')
+    for (const node of [srcField, tgtField]) {
+      expect(node.className).toContain('font-mono')
+      expect(node.className).toContain('text-base')
+      expect(node.className).toContain('font-normal')
+      expect(node.className).toContain('text-slate-900')
+      expect(node.className).not.toContain('font-semibold')
+    }
+  })
+
+  it('close button sits in the same SOURCE-row flex cluster as the status badge (top-right corner)', () => {
+    // Drawer redesign refinements §1: the SOURCE row's right-hand
+    // cluster carries `<HeaderStatusBadge> <CloseButton>` together.
+    // The cluster is wrapped in a flex container that sits inside
+    // the same flex row as the SOURCE label.
+    render(<MappingDrawer row={mapped()} isOpen={true} onClose={() => {}} />)
+    const close = screen.getByTestId('mapping-drawer-close')
+    const badge = screen.getByTestId('mapping-drawer-header-status-badge')
+    const sourceRow = screen.getByTestId('mapping-drawer-header-source-row')
+    // Both close button and status badge live inside the SOURCE row.
+    expect(sourceRow.contains(close)).toBe(true)
+    expect(sourceRow.contains(badge)).toBe(true)
+    // Close button and badge share their immediate parent (the
+    // right-hand cluster wrapping both).
+    expect(close.parentElement).toBe(badge.parentElement)
+  })
+
+  it('header is NOT sticky (drawer-redesign §1 lock — scrolls with body content)', () => {
+    render(<MappingDrawer row={mapped()} isOpen={true} onClose={() => {}} />)
+    const header = screen.getByTestId('mapping-drawer-header')
+    expect(header.className).not.toContain('sticky')
+    expect(header.className).not.toContain('top-0')
+  })
+
+  it('header structural ordering: SOURCE → TARGET (in DOM order; meta line deleted in Refinement 3)', () => {
+    render(<MappingDrawer row={mapped()} isOpen={true} onClose={() => {}} />)
+    const header = screen.getByTestId('mapping-drawer-header')
+    const srcLabel = within(header).getByTestId(
+      'mapping-drawer-header-source-label',
+    )
+    const tgtLabel = within(header).getByTestId(
+      'mapping-drawer-header-target-label',
+    )
+    // compareDocumentPosition returns DOCUMENT_POSITION_FOLLOWING (4)
+    // when `other` follows `node`.
+    expect(srcLabel.compareDocumentPosition(tgtLabel) & 4).toBe(4)
+    // No meta line — header is identity-only (Refinement 3).
+    expect(within(header).queryByTestId('mapping-drawer-header-meta')).toBeNull()
+  })
+
+  it('legacy compressed-header arrow grid is gone (no lone ArrowRight between source and target)', () => {
+    render(<MappingDrawer row={mapped()} isOpen={true} onClose={() => {}} />)
+    const header = screen.getByTestId('mapping-drawer-header')
+    // The arrow lived as a direct child of the line-1 grid in the
+    // compressed shape. The stacked shape has source identity and
+    // target identity in separate vertical sections — no inline arrow.
+    // The TYPES substring on the meta line still uses an arrow, but
+    // that's inside `mapping-drawer-header-meta`, not at header root.
+    const directChildren = Array.from(header.children)
+    const hasLooseArrow = directChildren.some(
+      (child) =>
+        child.tagName === 'svg' || child.querySelector?.('svg.lucide-arrow-right'),
+    )
+    expect(hasLooseArrow).toBe(false)
   })
 })
 
@@ -421,11 +648,14 @@ describe('MappingDrawer — subheader VA (value_assignment)', () => {
 // placeholder may render any longer.
 
 describe('MappingDrawer — mapped-row body shape + footer', () => {
-  it('mapped row body renders the Target field section (Gap 8a placeholder removed)', () => {
+  it('mapped row body renders the Sources section (drawer redesign — Target field section removed)', () => {
     render(<MappingDrawer row={mapped()} isOpen={true} onClose={() => {}} />)
-    expect(
-      screen.getByTestId('drawer-section-target-field'),
-    ).toBeInTheDocument()
+    expect(screen.getByTestId('drawer-section-sources')).toBeInTheDocument()
+    // Drawer redesign: Target field, Status, Confidence sections all
+    // moved into the compressed header. Their testids must not render.
+    expect(screen.queryByTestId('drawer-section-target-field')).toBeNull()
+    expect(screen.queryByTestId('drawer-section-status')).toBeNull()
+    expect(screen.queryByTestId('drawer-section-confidence')).toBeNull()
   })
 
   it('the Gap 8a mapped placeholder test-id no longer appears in the DOM', () => {
@@ -447,8 +677,14 @@ describe('MappingDrawer — mapped-row body shape + footer', () => {
     expect(footer.textContent).not.toContain('Actions coming in Gap 10')
   })
 
-  it('renders Approve and Reject buttons in the footer for a mapped row', () => {
-    render(<MappingDrawer row={mapped()} isOpen={true} onClose={() => {}} />)
+  it('renders Reject button + (for needs_review) Approve button in the footer', () => {
+    render(
+      <MappingDrawer
+        row={mapped({ status: 'needs_review' })}
+        isOpen={true}
+        onClose={() => {}}
+      />,
+    )
     expect(
       screen.getByTestId('mapping-drawer-approve-button'),
     ).toBeInTheDocument()
@@ -771,47 +1007,23 @@ describe('MappingDrawer — body skeleton invariants (all kinds)', () => {
   })
 })
 
-// ─── Rule 5 — Target Acknowledged body ─────────────────────────────────────
+// ─── Rule 5 — Target Acknowledged body (drawer redesign) ───────────────────
+//
+// Drawer redesign refinements §1/§2: target field identity sits in the
+// header; status surfaces as a filled green dot in the header SOURCE
+// row top-right (no confidence percent — Rule 5 has `confidence ===
+// null`). The body collapses to a single `Acknowledgment` section
+// (Q11.M lock keeps the existing label) — the prior pass's leading
+// OVERVIEW section is removed entirely, and the new ANALYSIS section
+// is omitted for Rule 5 because there's no source = no type compat,
+// no AI reasoning to surface.
 
 describe('MappingDrawer — Rule 5 (Target Acknowledged) body', () => {
-  it('renders the Target field section with name, table badge, type, and required indicator', () => {
-    render(
-      <MappingDrawer
-        row={targetAck({
-          targetField: targetField({
-            name: 'description',
-            dataType: 'VARCHAR(255)',
-            isNullable: false,
-            targetTable: { id: 'tt-9', name: 'account_status' },
-          }),
-        })}
-        isOpen={true}
-        onClose={() => {}}
-      />,
-    )
-    const section = screen.getByTestId('drawer-section-target-field')
-    expect(within(section).getByTestId('drawer-target-field-name').textContent).toBe(
-      'description',
-    )
-    expect(within(section).getByText('account_status')).toBeInTheDocument()
-    const meta = within(section).getByTestId('drawer-target-field-meta')
-    expect(meta.textContent).toContain('VARCHAR(255)')
-    expect(meta.textContent).toContain('required')
-  })
-
-  it('Target field meta shows "nullable" when isNullable=true', () => {
-    render(
-      <MappingDrawer
-        row={targetAck({
-          targetField: targetField({ isNullable: true }),
-        })}
-        isOpen={true}
-        onClose={() => {}}
-      />,
-    )
-    const meta = screen.getByTestId('drawer-target-field-meta')
-    expect(meta.textContent).toContain('nullable')
-    expect(meta.textContent).not.toContain('required')
+  it('does NOT render the legacy Target field / Status / Confidence sections (moved to header)', () => {
+    render(<MappingDrawer row={targetAck()} isOpen={true} onClose={() => {}} />)
+    expect(screen.queryByTestId('drawer-section-target-field')).toBeNull()
+    expect(screen.queryByTestId('drawer-section-status')).toBeNull()
+    expect(screen.queryByTestId('drawer-section-confidence')).toBeNull()
   })
 
   it('renders Acknowledgment section with the reason text when present', () => {
@@ -840,106 +1052,123 @@ describe('MappingDrawer — Rule 5 (Target Acknowledged) body', () => {
     ).toBeInTheDocument()
   })
 
-  // Notes / acknowledged-by / acknowledged-at: NOT on the contract today.
-  // Deferred per Gap 8a contract-shape decision (see AcknowledgedBody JSDoc).
-  it('does NOT render any acknowledged-by, acknowledged-at, or notes sub-fields (deferred)', () => {
+  it('does NOT render acknowledged-by, acknowledged-at, or notes sub-fields (deferred)', () => {
     render(<MappingDrawer row={targetAck()} isOpen={true} onClose={() => {}} />)
     expect(screen.queryByText(/acknowledged by/i)).toBeNull()
     expect(screen.queryByText(/acknowledged at/i)).toBeNull()
     expect(screen.queryByText(/^notes$/i)).toBeNull()
   })
 
-  it('renders Status section with "Approved" + green dot', () => {
-    render(<MappingDrawer row={targetAck()} isOpen={true} onClose={() => {}} />)
-    const status = screen.getByTestId('drawer-section-status')
-    const indicator = within(status).getByTestId('drawer-status-indicator')
-    expect(indicator.textContent).toContain('Approved')
-    const dot = indicator.querySelector('span[aria-hidden="true"]')
-    expect(dot?.className).toContain('bg-green-500')
-  })
-
-  it('section ordering is Target field → Acknowledgment → Status', () => {
+  it('Rule 5 body renders ONLY the Acknowledgment section (drawer redesign §2/§4)', () => {
+    // Drawer redesign refinements §2: OVERVIEW is removed entirely.
+    // Drawer redesign refinements §4: ANALYSIS is omitted for Rule 5
+    // (no source = no type compat, no AI reasoning to surface).
+    // The body collapses to the lone Acknowledgment section.
     render(<MappingDrawer row={targetAck()} isOpen={true} onClose={() => {}} />)
     const body = screen.getByTestId('mapping-drawer-body')
     const sections = within(body).getAllByRole('heading', { level: 3 })
-    expect(sections.map((h) => h.textContent)).toEqual([
-      'Target field',
-      'Acknowledgment',
-      'Status',
-    ])
+    expect(sections.map((h) => h.textContent)).toEqual(['Acknowledgment'])
   })
 
-  it('does NOT show Value expression, AI reasoning, or Mapping status sections', () => {
+  it('Rule 5 body does NOT render Overview or Analysis sections (drawer redesign §2/§4)', () => {
+    // Negative invariant: the prior pass's OVERVIEW section is gone
+    // for every row kind, and ANALYSIS is omitted for Rule 5.
     render(<MappingDrawer row={targetAck()} isOpen={true} onClose={() => {}} />)
-    expect(screen.queryByTestId('drawer-section-value-expression')).toBeNull()
+    expect(screen.queryByTestId('drawer-section-overview')).toBeNull()
+    expect(screen.queryByTestId('drawer-section-analysis')).toBeNull()
+  })
+
+  it('does NOT render Sources / AI Reasoning / Transformation / Sample Values sections', () => {
+    render(<MappingDrawer row={targetAck()} isOpen={true} onClose={() => {}} />)
+    expect(screen.queryByTestId('drawer-section-sources')).toBeNull()
     expect(screen.queryByTestId('drawer-section-ai-reasoning')).toBeNull()
-    expect(screen.queryByTestId('drawer-section-mapping-status')).toBeNull()
+    expect(screen.queryByTestId('drawer-section-transformation')).toBeNull()
+    expect(screen.queryByTestId('drawer-section-sample-values')).toBeNull()
+  })
+
+  it('does NOT render the Sources-section edit pencil', () => {
+    render(<MappingDrawer row={targetAck()} isOpen={true} onClose={() => {}} />)
+    expect(screen.queryByTestId('mapping-drawer-edit-pencil')).toBeNull()
   })
 })
 
-// ─── Rule 6 — Unmapped body ────────────────────────────────────────────────
+// ─── Rule 6 — Unmapped body (drawer redesign) ──────────────────────────────
+//
+// Drawer redesign: Rule 6 reuses the `Sources` section title with an
+// empty-state body ("No source mapped yet"). Footer carries the dual
+// `[Suggest with AI] [Create mapping]` pair (Q11.F lock).
 
 describe('MappingDrawer — Rule 6 (Unmapped) body', () => {
-  it('renders the Target field section', () => {
+  it('renders ONE Sources section with empty-state copy', () => {
     render(<MappingDrawer row={unmapped()} isOpen={true} onClose={() => {}} />)
-    expect(
-      screen.getByTestId('drawer-section-target-field'),
-    ).toBeInTheDocument()
+    const section = screen.getByTestId('drawer-section-sources')
+    expect(within(section).getByRole('heading', { level: 3 }).textContent).toBe(
+      'Sources',
+    )
+    const empty = screen.getByTestId('drawer-unmapped-empty-state')
+    expect(empty.textContent).toBe('No source mapped yet')
+    expect(empty.className).toContain('italic')
   })
 
-  it('renders the Mapping status section with the empty-state prose', () => {
-    // Post-Gap-9 amendment (2026-04-25): the prose was rewritten to
-    // stop referencing legacy-only affordances ("AI Suggest from the
-    // Mapping page" / "acknowledge … intentionally unmapped"). The
-    // redesign currently has no remap workflow, so the copy points
-    // users to the legacy view until a future remap gap (Phase 4 /
-    // TBD) ports those flows.
+  it('does NOT render the legacy Target field / Mapping status sections (moved to header)', () => {
     render(<MappingDrawer row={unmapped()} isOpen={true} onClose={() => {}} />)
-    const prose = screen.getByTestId('drawer-unmapped-prose')
-    expect(prose.textContent).toContain('Remapping unmapped fields is coming soon')
-    expect(prose.textContent).toContain('legacy Mapping view')
-    // Regression guard: the old copy mentioned "AI Suggest" and
-    // "acknowledge" — affordances absent from the redesign today.
-    expect(prose.textContent).not.toContain('AI Suggest')
-    expect(prose.textContent).not.toContain('acknowledge')
+    expect(screen.queryByTestId('drawer-section-target-field')).toBeNull()
+    expect(screen.queryByTestId('drawer-section-mapping-status')).toBeNull()
   })
 
-  it('does NOT render a Status section (unmapped state is implicit)', () => {
+  it('does NOT render a Status section (unmapped state is implicit + dot is hidden)', () => {
     render(<MappingDrawer row={unmapped()} isOpen={true} onClose={() => {}} />)
     expect(screen.queryByTestId('drawer-section-status')).toBeNull()
   })
 
   it('does NOT render any action buttons in the body (Gap 9 territory)', () => {
-    // Phase 4a-2 amendment: the [Create mapping] button now lives in
-    // the footer when the form is inactive, NOT in the body. The body
-    // remains free of buttons until the form is activated (covered in
-    // the "Phase 4a-2 — unmapped footer" suite below).
     render(<MappingDrawer row={unmapped()} isOpen={true} onClose={() => {}} />)
     const body = screen.getByTestId('mapping-drawer-body')
     expect(within(body).queryAllByRole('button')).toHaveLength(0)
   })
 
-  it('section ordering is Target field → Mapping status', () => {
+  it('does NOT render the Sources-section edit pencil for unmapped rows', () => {
     render(<MappingDrawer row={unmapped()} isOpen={true} onClose={() => {}} />)
-    const body = screen.getByTestId('mapping-drawer-body')
-    const sections = within(body).getAllByRole('heading', { level: 3 })
-    expect(sections.map((h) => h.textContent)).toEqual([
-      'Target field',
-      'Mapping status',
-    ])
+    expect(screen.queryByTestId('mapping-drawer-edit-pencil')).toBeNull()
+  })
+
+  it('does NOT render an AI Reasoning or Transformation section', () => {
+    render(<MappingDrawer row={unmapped()} isOpen={true} onClose={() => {}} />)
+    expect(screen.queryByTestId('drawer-section-ai-reasoning')).toBeNull()
+    expect(screen.queryByTestId('drawer-section-transformation')).toBeNull()
   })
 })
 
-// ─── VA — Value Assignment body ────────────────────────────────────────────
+// ─── VA — Value Assignment body (drawer redesign) ──────────────────────────
+//
+// Drawer redesign:
+//   • Sources section renders an explanatory empty-state (VAs intentionally
+//     have no sources).
+//   • AI Reasoning is the standard collapsible disclosure (Q11.B/Q11.C).
+//   • The legacy "Transformation" section is renamed `Value expression` and
+//     shows the `combinationSql` block verbatim.
+//   • Confidence + Status moved to the header line 2 dot/percent.
 
 describe('MappingDrawer — Value Assignment body', () => {
-  it('renders the Target field section', () => {
+  it('renders Sources section with VA-specific empty-state', () => {
     render(
       <MappingDrawer row={valueAssignment()} isOpen={true} onClose={() => {}} />,
     )
-    expect(
-      screen.getByTestId('drawer-section-target-field'),
-    ).toBeInTheDocument()
+    const section = screen.getByTestId('drawer-section-sources')
+    expect(within(section).getByRole('heading', { level: 3 }).textContent).toBe(
+      'Sources',
+    )
+    const empty = screen.getByTestId('drawer-va-no-sources')
+    expect(empty.textContent).toBe('Value assignment — no sources')
+  })
+
+  it('does NOT render the legacy Target field / Status / Confidence sections', () => {
+    render(
+      <MappingDrawer row={valueAssignment()} isOpen={true} onClose={() => {}} />,
+    )
+    expect(screen.queryByTestId('drawer-section-target-field')).toBeNull()
+    expect(screen.queryByTestId('drawer-section-status')).toBeNull()
+    expect(screen.queryByTestId('drawer-section-confidence')).toBeNull()
   })
 
   it('renders the Value expression section with combinationSql in a code block', () => {
@@ -986,20 +1215,11 @@ describe('MappingDrawer — Value Assignment body', () => {
     ).toBeInTheDocument()
   })
 
-  it('renders the AI reasoning section with prose when aiReasoning is non-null', () => {
-    render(
-      <MappingDrawer
-        row={valueAssignment({ aiReasoning: 'Default created_at uses NOW()' })}
-        isOpen={true}
-        onClose={() => {}}
-      />,
-    )
-    const reasoning = screen.getByTestId('drawer-ai-reasoning')
-    expect(reasoning.textContent).toBe('Default created_at uses NOW()')
-    expect(reasoning.className).toContain('italic')
-  })
-
-  it('AI reasoning section shows empty-state when aiReasoning is null', () => {
+  it('Analysis section is omitted entirely when aiReasoning is null (drawer redesign §4)', () => {
+    // Drawer redesign refinements §4: VAs have no source dataType to
+    // compare, so type compat is not part of ANALYSIS for VAs. When
+    // aiReasoning is also null, ANALYSIS has no content to render
+    // and is omitted entirely.
     render(
       <MappingDrawer
         row={valueAssignment({ aiReasoning: null })}
@@ -1007,77 +1227,68 @@ describe('MappingDrawer — Value Assignment body', () => {
         onClose={() => {}}
       />,
     )
-    expect(screen.queryByTestId('drawer-ai-reasoning')).toBeNull()
-    const empty = screen.getByTestId('drawer-ai-reasoning-empty')
-    expect(empty.textContent).toBe('No reasoning available')
+    expect(screen.queryByTestId('drawer-section-analysis')).toBeNull()
+    expect(screen.queryByTestId('drawer-ai-reasoning-toggle')).toBeNull()
+    // Legacy section name from the prior pass is gone.
+    expect(screen.queryByTestId('drawer-section-ai-reasoning')).toBeNull()
   })
 
-  it('renders Confidence section as 2-decimal percentage', () => {
+  it('AI reasoning toggle renders inside Analysis when aiReasoning is non-null + status=approved (collapsed by default)', () => {
+    // Drawer redesign refinements §4: AI reasoning lives inside the
+    // ANALYSIS section. Q11.B lock carries over — collapsed by
+    // default for `approved`, expanded by default for `needs_review`.
     render(
       <MappingDrawer
-        row={valueAssignment({ confidence: 92 })}
+        row={valueAssignment({
+          aiReasoning: 'Default created_at uses NOW()',
+          status: 'approved',
+        })}
         isOpen={true}
         onClose={() => {}}
       />,
     )
-    const conf = screen.getByTestId('drawer-confidence')
-    expect(conf.textContent).toBe('92.00%')
+    const analysis = screen.getByTestId('drawer-section-analysis')
+    const toggle = within(analysis).getByTestId('drawer-ai-reasoning-toggle')
+    expect(toggle.getAttribute('aria-expanded')).toBe('false')
+    expect(within(analysis).queryByTestId('drawer-ai-reasoning')).toBeNull()
   })
 
-  it('Confidence section shows em-dash when confidence is null', () => {
+  it('Analysis section for VA does NOT render type compatibility (no source dataType)', () => {
+    // Drawer redesign refinements §4: VAs have no source dataType to
+    // compare against, so type compat is intentionally skipped. When
+    // ANALYSIS renders for a VA, it contains AI reasoning only.
     render(
       <MappingDrawer
-        row={valueAssignment({ confidence: null })}
+        row={valueAssignment({ aiReasoning: 'reason' })}
         isOpen={true}
         onClose={() => {}}
       />,
     )
-    expect(screen.queryByTestId('drawer-confidence')).toBeNull()
-    const empty = screen.getByTestId('drawer-confidence-empty')
-    expect(empty.textContent).toContain('—')
-    expect(empty.getAttribute('aria-label')).toBe('no confidence available')
+    const analysis = screen.getByTestId('drawer-section-analysis')
+    expect(
+      within(analysis).queryByTestId('drawer-analysis-type-compat'),
+    ).toBeNull()
   })
 
-  it('Status section reflects actual row.status (not hardcoded "Approved")', () => {
+  it('section ordering for VA is Sources → Analysis → Value expression (drawer redesign §3)', () => {
+    // Drawer redesign refinements §3: body order is SOURCES →
+    // SAMPLE VALUES → ANALYSIS → TRANSFORMATION. For VAs, SAMPLE
+    // VALUES is omitted (no sources = no samples) and TRANSFORMATION
+    // is replaced by VA-specific `Value expression`. The leading
+    // OVERVIEW section from the prior pass is removed entirely.
     render(
       <MappingDrawer
-        row={valueAssignment({ status: 'needs_review' })}
+        row={valueAssignment({ aiReasoning: 'reason text' })}
         isOpen={true}
         onClose={() => {}}
       />,
-    )
-    const indicator = screen.getByTestId('drawer-status-indicator')
-    expect(indicator.textContent).toContain('Needs Review')
-    const dot = indicator.querySelector('span[aria-hidden="true"]')
-    expect(dot?.className).toContain('bg-amber-400')
-  })
-
-  it('Status section shows Approved + green dot when status="approved"', () => {
-    render(
-      <MappingDrawer
-        row={valueAssignment({ status: 'approved' })}
-        isOpen={true}
-        onClose={() => {}}
-      />,
-    )
-    const indicator = screen.getByTestId('drawer-status-indicator')
-    expect(indicator.textContent).toContain('Approved')
-    const dot = indicator.querySelector('span[aria-hidden="true"]')
-    expect(dot?.className).toContain('bg-green-500')
-  })
-
-  it('section ordering is Target field → Value expression → AI reasoning → Confidence → Status', () => {
-    render(
-      <MappingDrawer row={valueAssignment()} isOpen={true} onClose={() => {}} />,
     )
     const body = screen.getByTestId('mapping-drawer-body')
     const sections = within(body).getAllByRole('heading', { level: 3 })
     expect(sections.map((h) => h.textContent)).toEqual([
-      'Target field',
+      'Sources',
+      'Analysis',
       'Value expression',
-      'AI reasoning',
-      'Confidence',
-      'Status',
     ])
   })
 })
@@ -1187,20 +1398,18 @@ function rule4Mapped(
 // ── Rule 1 mapped body (single source) ─────────────────────────────────────
 
 describe('MappingDrawer — Rule 1 (single source) mapped body', () => {
-  it('renders the Target field section', () => {
-    render(<MappingDrawer row={mapped()} isOpen={true} onClose={() => {}} />)
-    expect(
-      screen.getByTestId('drawer-section-target-field'),
-    ).toBeInTheDocument()
-  })
-
-  it('renders the Sources section (header kept for Rule 1 — consistency)', () => {
+  it('renders the Sources section as the FIRST body section (drawer redesign §3)', () => {
+    // Drawer redesign refinements §3: SOURCES is now the first body
+    // section. The prior pass's leading OVERVIEW section is removed
+    // entirely (drawer redesign refinements §2).
     render(<MappingDrawer row={mapped()} isOpen={true} onClose={() => {}} />)
     const section = screen.getByTestId('drawer-section-sources')
     expect(section).toBeInTheDocument()
     expect(within(section).getByRole('heading', { level: 3 }).textContent).toBe(
       'Sources',
     )
+    // OVERVIEW is gone.
+    expect(screen.queryByTestId('drawer-section-overview')).toBeNull()
   })
 
   it('renders exactly one source card for Rule 1', () => {
@@ -1209,7 +1418,14 @@ describe('MappingDrawer — Rule 1 (single source) mapped body', () => {
     expect(cards).toHaveLength(1)
   })
 
-  it('source card shows TableBadge + source field name + per-source confidence', () => {
+  it('Rule 1 source card shows TableBadge + field name and HIDES the per-source confidence (Refinement 5)', () => {
+    // Refinement 5 (canary feedback): for Rule 1 single-source rows,
+    // the per-source confidence percent duplicates the row-level
+    // aggregate that now lives in Overview. The two values are
+    // identical by construction (one source = one confidence = the
+    // row), so we hide the per-source span. Multi-source rows keep
+    // it (each source has its own distinct confidence — see Rule 2/3
+    // tests further down).
     render(
       <MappingDrawer
         row={mapped({
@@ -1230,9 +1446,8 @@ describe('MappingDrawer — Rule 1 (single source) mapped body', () => {
     expect(within(card).getByTestId('drawer-source-field-name').textContent).toBe(
       'CIF_NO',
     )
-    expect(within(card).getByTestId('drawer-source-confidence').textContent).toBe(
-      '98.00%',
-    )
+    // Per-source confidence is HIDDEN for Rule 1.
+    expect(within(card).queryByTestId('drawer-source-confidence')).toBeNull()
   })
 
   it('source card does NOT render a join annotation for Rule 1 (always null)', () => {
@@ -1240,7 +1455,11 @@ describe('MappingDrawer — Rule 1 (single source) mapped body', () => {
     expect(screen.queryByTestId('drawer-source-join')).toBeNull()
   })
 
-  it('source card shows sample values when sampleValues is non-empty', () => {
+  it('Sample Values is a top-level body section between Sources and Analysis (drawer redesign §3)', () => {
+    // Drawer redesign refinements §3: SAMPLE VALUES is the second
+    // body section, sitting between SOURCES and ANALYSIS. The
+    // section is rendered only when at least one source has
+    // non-empty sample data.
     render(
       <MappingDrawer
         row={mapped({
@@ -1250,17 +1469,49 @@ describe('MappingDrawer — Rule 1 (single source) mapped body', () => {
         onClose={() => {}}
       />,
     )
-    const samples = screen.getByTestId('drawer-source-samples')
-    expect(samples.textContent).toContain('Sample values')
-    expect(samples.textContent).toContain('12345, 67890, 24680')
-  })
-
-  it('source card omits sample values block when sampleValues is empty', () => {
-    render(<MappingDrawer row={mapped()} isOpen={true} onClose={() => {}} />)
+    const section = screen.getByTestId('drawer-section-sample-values')
+    expect(within(section).getByRole('heading', { level: 3 }).textContent).toBe(
+      'Sample values',
+    )
+    // Sources legacy nested block is gone.
     expect(screen.queryByTestId('drawer-source-samples')).toBeNull()
   })
 
-  it('source card truncates sample values to first 8 + "... (+N more)" when >8 values', () => {
+  it('Sample Values single-source field block is EXPANDED by default (drawer redesign §5)', () => {
+    // Drawer redesign refinements §5 (founder canary review):
+    // single-source rows default the lone field block to expanded.
+    // There's one source and no choice to make; showing values
+    // immediately serves the verify-task case.
+    render(
+      <MappingDrawer
+        row={mapped({
+          sources: [source({ sampleValues: ['12345', '67890', '24680'] })],
+        })}
+        isOpen={true}
+        onClose={() => {}}
+      />,
+    )
+    const section = screen.getByTestId('drawer-section-sample-values')
+    const toggle = within(section).getByTestId('drawer-sample-values-toggle')
+    expect(toggle.getAttribute('aria-expanded')).toBe('true')
+    const rows = within(section).getAllByTestId('drawer-sample-values-row')
+    expect(rows.map((n) => n.textContent)).toEqual([
+      '12345',
+      '67890',
+      '24680',
+    ])
+  })
+
+  it('Sample Values section is omitted when no source has sample data', () => {
+    render(<MappingDrawer row={mapped()} isOpen={true} onClose={() => {}} />)
+    expect(screen.queryByTestId('drawer-section-sample-values')).toBeNull()
+    expect(screen.queryByTestId('drawer-sample-values-toggle')).toBeNull()
+  })
+
+  it('Sample Values renders one row per value with no client-side truncation', () => {
+    // The wire payload caps sample values at 10. The drawer surfaces
+    // every value verbatim — no "+N more", no truncation, no
+    // grid-mode collapse.
     const ten = Array.from({ length: 10 }, (_, i) => `v${i + 1}`)
     render(
       <MappingDrawer
@@ -1269,100 +1520,411 @@ describe('MappingDrawer — Rule 1 (single source) mapped body', () => {
         onClose={() => {}}
       />,
     )
-    const samples = screen.getByTestId('drawer-source-samples')
-    expect(samples.textContent).toContain(
-      'v1, v2, v3, v4, v5, v6, v7, v8, ... (+2 more)',
-    )
+    const rows = screen.getAllByTestId('drawer-sample-values-row')
+    expect(rows.map((n) => n.textContent)).toEqual(ten)
   })
 
-  it('source card renders per-source AI reasoning when non-null (italic prose)', () => {
+  it('Sample Values long values wrap with break-words rather than truncate', () => {
     render(
       <MappingDrawer
         row={mapped({
-          sources: [source({ aiReasoning: 'Direct PK match in dominant table.' })],
+          sources: [
+            source({
+              sampleValues: [
+                'one very long descriptive value that overflows a narrow drawer',
+              ],
+            }),
+          ],
         })}
         isOpen={true}
         onClose={() => {}}
       />,
     )
-    const reasoning = screen.getByTestId('drawer-source-reasoning')
-    expect(reasoning.textContent).toBe('Direct PK match in dominant table.')
-    expect(reasoning.className).toContain('italic')
+    const row = screen.getByTestId('drawer-sample-values-row')
+    expect(row.className).toContain('break-words')
+    expect(row.className).not.toContain('truncate')
+    expect(row.getAttribute('title')).toBeNull()
   })
 
-  it('source card OMITS per-source AI reasoning when null (silent — no empty-state)', () => {
-    render(<MappingDrawer row={mapped()} isOpen={true} onClose={() => {}} />)
+  it('per-source AI reasoning is NO LONGER rendered inline on the source card', () => {
+    // Drawer redesign §2 lock — per-source aiReasoning folds into the
+    // AI Reasoning section (one labelled paragraph per source) so the
+    // Sources section line stays scannable.
+    render(
+      <MappingDrawer
+        row={mapped({
+          sources: [
+            source({ aiReasoning: 'Direct PK match in dominant table.' }),
+          ],
+        })}
+        isOpen={true}
+        onClose={() => {}}
+      />,
+    )
     expect(screen.queryByTestId('drawer-source-reasoning')).toBeNull()
   })
 
-  it('does NOT render the Combination section for Rule 1 (single source)', () => {
+  it('type compatibility renders ONLY in Analysis, not per-source (drawer redesign §4)', () => {
+    // Drawer redesign refinements §4: type compatibility moves from
+    // the now-removed OVERVIEW section into the new ANALYSIS section
+    // as a compact verdict line (`VARCHAR(4) → VARCHAR(10) ✓
+    // compatible`). The per-source `<SourceCard>` does not render
+    // type-compat at all — SOURCES is identity-only.
+    render(
+      <MappingDrawer
+        row={mapped({
+          sources: [
+            source({
+              typeCompatibility: 'NUMBER → VARCHAR(200) needs CAST',
+              sourceField: {
+                id: 'sf-1',
+                name: 'F',
+                dataType: 'NUMBER',
+                isNullable: false,
+              },
+            }),
+          ],
+          targetField: targetField({ dataType: 'VARCHAR(200)' }),
+        })}
+        isOpen={true}
+        onClose={() => {}}
+      />,
+    )
+    // Per-source type-compat span is gone.
+    expect(screen.queryByTestId('drawer-source-type-compat')).toBeNull()
+    // Negative invariant — no standalone Type Compatibility section.
+    expect(screen.queryByTestId('drawer-section-type-compat')).toBeNull()
+    // The prior pass's Overview-scoped testid is gone.
+    expect(screen.queryByTestId('drawer-overview-type-compat')).toBeNull()
+    // Type compat appears in Analysis as a compact verdict line.
+    const compat = screen.getByTestId('drawer-analysis-type-compat')
+    expect(compat.getAttribute('data-verdict')).toBe('warning')
+    expect(compat.textContent).toContain('NUMBER')
+    expect(compat.textContent).toContain('VARCHAR(200)')
+    expect(
+      within(compat).getByTestId(
+        'drawer-analysis-type-compat-verdict-warning',
+      ),
+    ).toBeInTheDocument()
+  })
+
+  it('does NOT render the legacy Target field / Confidence / Status sections', () => {
     render(<MappingDrawer row={mapped()} isOpen={true} onClose={() => {}} />)
+    expect(screen.queryByTestId('drawer-section-target-field')).toBeNull()
+    expect(screen.queryByTestId('drawer-section-confidence')).toBeNull()
+    expect(screen.queryByTestId('drawer-section-status')).toBeNull()
+  })
+
+  it('does NOT render the Combination "Combine with" label for Rule 1 (single source)', () => {
+    render(<MappingDrawer row={mapped()} isOpen={true} onClose={() => {}} />)
+    expect(screen.queryByTestId('drawer-combination-label')).toBeNull()
+    // Legacy Combination SECTION testid is also absent.
     expect(screen.queryByTestId('drawer-section-combination')).toBeNull()
   })
 
-  it('renders row-level AI reasoning when non-null', () => {
+  it('Analysis section omits AI reasoning when neither row-level nor per-source is present (Q11.C lock)', () => {
+    // Drawer redesign refinements §4: AI reasoning lives inside the
+    // ANALYSIS section. The visibility gate (hide when no reasoning
+    // of any kind) carries over verbatim. Type compatibility still
+    // renders for the dominant source.
     render(
       <MappingDrawer
-        row={mapped({ aiReasoning: 'Single-source mapping; high confidence.' })}
+        row={mapped({ aiReasoning: null })}
         isOpen={true}
         onClose={() => {}}
       />,
     )
-    const reasoning = screen.getByTestId('drawer-ai-reasoning')
-    expect(reasoning.textContent).toBe(
-      'Single-source mapping; high confidence.',
-    )
+    expect(screen.queryByTestId('drawer-section-ai-reasoning')).toBeNull()
+    expect(screen.queryByTestId('drawer-ai-reasoning-toggle')).toBeNull()
+    // ANALYSIS still renders because type compat is always shown for
+    // mapped rows (mapped rows have a dominant source).
+    expect(screen.getByTestId('drawer-section-analysis')).toBeInTheDocument()
   })
 
-  it('renders row-level AI reasoning empty-state when null (absence is meaningful at row level)', () => {
-    render(<MappingDrawer row={mapped({ aiReasoning: null })} isOpen={true} onClose={() => {}} />)
+  it('AI Reasoning toggle inside Analysis is OPEN by default for needs_review (Q11.B lock)', () => {
+    render(
+      <MappingDrawer
+        row={mapped({
+          aiReasoning: 'Single-source mapping; high confidence.',
+          status: 'needs_review',
+        })}
+        isOpen={true}
+        onClose={() => {}}
+      />,
+    )
+    const analysis = screen.getByTestId('drawer-section-analysis')
+    const toggle = within(analysis).getByTestId('drawer-ai-reasoning-toggle')
+    expect(toggle.getAttribute('aria-expanded')).toBe('true')
+    const reasoning = within(analysis).getByTestId('drawer-ai-reasoning')
+    expect(reasoning.textContent).toBe('Single-source mapping; high confidence.')
+  })
+
+  it('AI Reasoning toggle inside Analysis is CLOSED by default for approved (Q11.B lock)', () => {
+    render(
+      <MappingDrawer
+        row={mapped({
+          aiReasoning: 'Single-source mapping; high confidence.',
+          status: 'approved',
+        })}
+        isOpen={true}
+        onClose={() => {}}
+      />,
+    )
+    const analysis = screen.getByTestId('drawer-section-analysis')
+    const toggle = within(analysis).getByTestId('drawer-ai-reasoning-toggle')
+    expect(toggle.getAttribute('aria-expanded')).toBe('false')
+    expect(within(analysis).queryByTestId('drawer-ai-reasoning')).toBeNull()
+  })
+
+  it('clicking the AI Reasoning toggle inside Analysis expands and collapses the panel', async () => {
+    const user = userEvent.setup()
+    render(
+      <MappingDrawer
+        row={mapped({
+          aiReasoning: 'Single-source mapping; high confidence.',
+          status: 'approved',
+        })}
+        isOpen={true}
+        onClose={() => {}}
+      />,
+    )
+    const toggle = screen.getByTestId('drawer-ai-reasoning-toggle')
+    expect(toggle.getAttribute('aria-expanded')).toBe('false')
+    await user.click(toggle)
+    expect(toggle.getAttribute('aria-expanded')).toBe('true')
+    expect(screen.getByTestId('drawer-ai-reasoning')).toBeInTheDocument()
+    await user.click(toggle)
+    expect(toggle.getAttribute('aria-expanded')).toBe('false')
     expect(screen.queryByTestId('drawer-ai-reasoning')).toBeNull()
-    const empty = screen.getByTestId('drawer-ai-reasoning-empty')
-    expect(empty.textContent).toBe('No reasoning available')
   })
 
-  it('renders row-level Confidence as 2-decimal percentage (always shown — Rule 1 included)', () => {
+  it('section ordering for Rule 1 is Sources → Analysis → Transformation when no sample data (drawer redesign §3)', () => {
+    // Drawer redesign refinements §3: body order is SOURCES →
+    // SAMPLE VALUES → ANALYSIS → TRANSFORMATION. SAMPLE VALUES is
+    // omitted when no source has sample data, leaving three
+    // sections. The leading OVERVIEW from the prior pass is gone.
     render(
       <MappingDrawer
-        row={mapped({ confidence: 87 })}
+        row={mapped({
+          aiReasoning: 'reason text',
+          // Force the Transformation section to render via the Define link.
+          combinationType: 'single',
+          hasTransformation: false,
+        })}
         isOpen={true}
         onClose={() => {}}
       />,
     )
-    expect(screen.getByTestId('drawer-confidence').textContent).toBe('87.00%')
-  })
-
-  it('renders em-dash with sr-only label when row-level confidence is null', () => {
-    render(
-      <MappingDrawer
-        row={mapped({ confidence: null })}
-        isOpen={true}
-        onClose={() => {}}
-      />,
-    )
-    expect(screen.queryByTestId('drawer-confidence')).toBeNull()
-    const empty = screen.getByTestId('drawer-confidence-empty')
-    expect(empty.textContent).toContain('—')
-    expect(empty.getAttribute('aria-label')).toBe('no confidence available')
-  })
-
-  it('renders the Status section with the row.status', () => {
-    render(<MappingDrawer row={mapped({ status: 'needs_review' })} isOpen={true} onClose={() => {}} />)
-    const indicator = screen.getByTestId('drawer-status-indicator')
-    expect(indicator.textContent).toContain('Needs Review')
-  })
-
-  it('section ordering for Rule 1 is Target field → Sources → AI reasoning → Confidence → Status (no Combination)', () => {
-    render(<MappingDrawer row={mapped()} isOpen={true} onClose={() => {}} />)
     const body = screen.getByTestId('mapping-drawer-body')
     const headings = within(body).getAllByRole('heading', { level: 3 })
     expect(headings.map((h) => h.textContent)).toEqual([
-      'Target field',
       'Sources',
-      'AI reasoning',
-      'Confidence',
-      'Status',
+      'Analysis',
+      'Transformation',
     ])
+  })
+
+  it('section ordering for Rule 1 is Sources → Sample Values → Analysis → Transformation when sample data is present (drawer redesign §3)', () => {
+    // Drawer redesign refinements §3: full four-section body when
+    // every section has content. SAMPLE VALUES sits between SOURCES
+    // and ANALYSIS.
+    render(
+      <MappingDrawer
+        row={mapped({
+          aiReasoning: 'reason text',
+          combinationType: 'single',
+          hasTransformation: false,
+          sources: [source({ sampleValues: ['A', 'B'] })],
+        })}
+        isOpen={true}
+        onClose={() => {}}
+      />,
+    )
+    const body = screen.getByTestId('mapping-drawer-body')
+    const headings = within(body).getAllByRole('heading', { level: 3 })
+    expect(headings.map((h) => h.textContent)).toEqual([
+      'Sources',
+      'Sample values',
+      'Analysis',
+      'Transformation',
+    ])
+  })
+})
+
+// ── AI Reasoning aggregation, nested inside Analysis (drawer redesign §4) ──
+//
+// Drawer redesign refinements §4 (founder canary review): the AI
+// reasoning disclosure lives inside the new ANALYSIS section (the
+// prior pass had it nested under OVERVIEW, which is removed entirely).
+// The aggregation rules are unchanged:
+//
+//   • Disclosure visible if EITHER row-level OR any per-source
+//     reasoning is non-null. (Identical Q11.C lock — no reasoning of
+//     any kind ⇒ no toggle.)
+//   • Default-open for `needs_review`, default-closed for everything
+//     else (Q11.B lock).
+//   • When the panel renders: row-level paragraph first (when
+//     present), then one labelled paragraph per source
+//     ("[srcTable].field_name: ...") in server ordinal order.
+//   • Per-source paragraphs carry `data-testid="drawer-ai-reasoning-source"`
+//     plus `data-source-id` to enable per-source assertions.
+//
+// Testid contract: the toggle/panel keep their prior IDs
+// (`drawer-ai-reasoning-toggle`, `drawer-ai-reasoning`,
+// `drawer-ai-reasoning-row`, `drawer-ai-reasoning-source`) so legacy
+// tests resolving the affordances continue to pass. The disclosure
+// wrapper now exposes `drawer-analysis-ai-reasoning` (the prior pass's
+// `drawer-overview-ai-reasoning` is gone alongside OVERVIEW).
+
+describe('MappingDrawer — AI Reasoning aggregation (nested inside Analysis)', () => {
+  it('disclosure is HIDDEN when both row-level AND every per-source reasoning is null', () => {
+    render(
+      <MappingDrawer
+        row={mapped({
+          aiReasoning: null,
+          sources: [source({ aiReasoning: null })],
+        })}
+        isOpen={true}
+        onClose={() => {}}
+      />,
+    )
+    expect(screen.queryByTestId('drawer-analysis-ai-reasoning')).toBeNull()
+    expect(screen.queryByTestId('drawer-ai-reasoning-toggle')).toBeNull()
+    // Legacy testids from prior passes are gone.
+    expect(screen.queryByTestId('drawer-section-ai-reasoning')).toBeNull()
+    expect(screen.queryByTestId('drawer-overview-ai-reasoning')).toBeNull()
+  })
+
+  it('disclosure is VISIBLE when only row-level reasoning is present (single paragraph)', () => {
+    render(
+      <MappingDrawer
+        row={mapped({
+          aiReasoning: 'TFM-level reasoning.',
+          status: 'needs_review',
+          sources: [source({ aiReasoning: null })],
+        })}
+        isOpen={true}
+        onClose={() => {}}
+      />,
+    )
+    expect(
+      screen.getByTestId('drawer-analysis-ai-reasoning'),
+    ).toBeInTheDocument()
+    // needs_review opens the disclosure by default.
+    const row = screen.getByTestId('drawer-ai-reasoning-row')
+    expect(row.textContent).toBe('TFM-level reasoning.')
+    expect(screen.queryByTestId('drawer-ai-reasoning-source')).toBeNull()
+  })
+
+  it('disclosure is VISIBLE when only per-source reasoning is present (no row-level paragraph rendered)', () => {
+    render(
+      <MappingDrawer
+        row={mapped({
+          aiReasoning: null,
+          status: 'needs_review',
+          sources: [
+            source({
+              id: 'ms-only',
+              aiReasoning: 'Per-source-only reasoning.',
+            }),
+          ],
+        })}
+        isOpen={true}
+        onClose={() => {}}
+      />,
+    )
+    expect(
+      screen.getByTestId('drawer-analysis-ai-reasoning'),
+    ).toBeInTheDocument()
+    expect(screen.queryByTestId('drawer-ai-reasoning-row')).toBeNull()
+    const perSource = screen.getByTestId('drawer-ai-reasoning-source')
+    expect(perSource.textContent).toContain('Per-source-only reasoning.')
+    expect(perSource.getAttribute('data-source-id')).toBe('ms-only')
+  })
+
+  it('multi-source row renders row-level paragraph + one labelled paragraph per source (in ordinal order)', () => {
+    render(
+      <MappingDrawer
+        row={mapped({
+          aiReasoning: 'Combined name from FNAME + LNAME.',
+          status: 'needs_review',
+          sources: [
+            source({
+              id: 'ms-fname',
+              ordinal: 0,
+              aiReasoning: 'First name from CIF master.',
+              sourceField: {
+                id: 'sf-fname',
+                name: 'FNAME',
+                dataType: 'VARCHAR',
+                isNullable: false,
+              },
+              sourceTable: { id: 'st-cif', name: 'CIF_MASTER' },
+            }),
+            source({
+              id: 'ms-lname',
+              ordinal: 1,
+              aiReasoning: 'Last name from CIF master.',
+              sourceField: {
+                id: 'sf-lname',
+                name: 'LNAME',
+                dataType: 'VARCHAR',
+                isNullable: false,
+              },
+              sourceTable: { id: 'st-cif', name: 'CIF_MASTER' },
+            }),
+          ],
+        })}
+        isOpen={true}
+        onClose={() => {}}
+      />,
+    )
+    expect(
+      screen.getByTestId('drawer-ai-reasoning-row').textContent,
+    ).toBe('Combined name from FNAME + LNAME.')
+    const perSource = screen.getAllByTestId('drawer-ai-reasoning-source')
+    expect(perSource).toHaveLength(2)
+    expect(perSource[0]!.getAttribute('data-source-id')).toBe('ms-fname')
+    expect(perSource[0]!.textContent).toContain('CIF_MASTER.FNAME:')
+    expect(perSource[0]!.textContent).toContain('First name from CIF master.')
+    expect(perSource[1]!.getAttribute('data-source-id')).toBe('ms-lname')
+    expect(perSource[1]!.textContent).toContain('CIF_MASTER.LNAME:')
+    expect(perSource[1]!.textContent).toContain('Last name from CIF master.')
+  })
+
+  it('whitespace-only per-source reasoning is treated as empty (no paragraph rendered)', () => {
+    render(
+      <MappingDrawer
+        row={mapped({
+          aiReasoning: 'Row-level only.',
+          status: 'needs_review',
+          sources: [source({ id: 'ms-blank', aiReasoning: '   \n  ' })],
+        })}
+        isOpen={true}
+        onClose={() => {}}
+      />,
+    )
+    expect(screen.queryByTestId('drawer-ai-reasoning-source')).toBeNull()
+    expect(
+      screen.getByTestId('drawer-ai-reasoning-row').textContent,
+    ).toBe('Row-level only.')
+  })
+
+  it('VA rows do NOT aggregate per-source reasoning (VAs have no sources)', () => {
+    render(
+      <MappingDrawer
+        row={valueAssignment({
+          aiReasoning: 'NOW() default for created_at.',
+          status: 'needs_review',
+        })}
+        isOpen={true}
+        onClose={() => {}}
+      />,
+    )
+    expect(screen.queryByTestId('drawer-ai-reasoning-source')).toBeNull()
+    expect(
+      screen.getByTestId('drawer-ai-reasoning-row').textContent,
+    ).toBe('NOW() default for created_at.')
   })
 })
 
@@ -1387,20 +1949,21 @@ describe('MappingDrawer — Rule 2 (multi-source, same table) mapped body', () =
     expect(screen.queryByTestId('drawer-source-join')).toBeNull()
   })
 
-  it('renders the Combination section with the human-readable label', () => {
+  it('renders the inline `Combine with: …` label below the source roster', () => {
     render(<MappingDrawer row={rule2Mapped()} isOpen={true} onClose={() => {}} />)
-    const section = screen.getByTestId('drawer-section-combination')
-    expect(within(section).getByTestId('drawer-combination-label').textContent).toBe(
-      'Concatenate with space',
-    )
+    const label = screen.getByTestId('drawer-combination-label')
+    expect(label.textContent).toContain('Combine with:')
+    expect(label.textContent).toContain('Concatenate with space')
+    // Drawer redesign — no standalone Combination section.
+    expect(screen.queryByTestId('drawer-section-combination')).toBeNull()
   })
 
-  it('Combination section hides the SQL code block for non-custom_sql types', () => {
+  it('hides the inline custom-SQL block for non-custom_sql types', () => {
     render(<MappingDrawer row={rule2Mapped()} isOpen={true} onClose={() => {}} />)
     expect(screen.queryByTestId('drawer-combination-sql')).toBeNull()
   })
 
-  it('Combination section renders the SQL code block when combinationType=custom_sql AND combinationSql is non-null', () => {
+  it('renders the inline custom-SQL block when combinationType=custom_sql AND combinationSql is non-null', () => {
     const sql = "FNAME || ' / ' || LNAME"
     render(
       <MappingDrawer
@@ -1415,12 +1978,11 @@ describe('MappingDrawer — Rule 2 (multi-source, same table) mapped body', () =
     expect(block.className).toContain('font-mono')
     expect(block.className).toContain('bg-slate-50')
     expect(block.className).toContain('whitespace-pre-wrap')
-    expect(within(screen.getByTestId('drawer-section-combination')).getByTestId('drawer-combination-label').textContent).toBe(
-      'Custom SQL expression',
-    )
+    const label = screen.getByTestId('drawer-combination-label')
+    expect(label.textContent).toContain('Custom SQL expression')
   })
 
-  it('Combination section hides the SQL code block when combinationType=custom_sql but combinationSql is null', () => {
+  it('hides the inline custom-SQL block when combinationType=custom_sql but combinationSql is null', () => {
     render(
       <MappingDrawer
         row={rule2Mapped({ combinationType: 'custom_sql', combinationSql: null })}
@@ -1431,18 +1993,84 @@ describe('MappingDrawer — Rule 2 (multi-source, same table) mapped body', () =
     expect(screen.queryByTestId('drawer-combination-sql')).toBeNull()
   })
 
-  it('section ordering for Rule 2 is Target field → Sources → Combination → AI reasoning → Confidence → Status', () => {
-    render(<MappingDrawer row={rule2Mapped()} isOpen={true} onClose={() => {}} />)
+  it('section ordering for Rule 2 is Sources → Analysis → Transformation when no sample data (drawer redesign §3)', () => {
+    // Drawer redesign refinements §3: body order is SOURCES →
+    // SAMPLE VALUES → ANALYSIS → TRANSFORMATION. SAMPLE VALUES is
+    // omitted when no source has sample data. The leading OVERVIEW
+    // from the prior pass is removed entirely.
+    render(
+      <MappingDrawer
+        row={rule2Mapped({ aiReasoning: 'reason' })}
+        isOpen={true}
+        onClose={() => {}}
+      />,
+    )
     const body = screen.getByTestId('mapping-drawer-body')
     const headings = within(body).getAllByRole('heading', { level: 3 })
     expect(headings.map((h) => h.textContent)).toEqual([
-      'Target field',
       'Sources',
-      'Combination',
-      'AI reasoning',
-      'Confidence',
-      'Status',
+      'Analysis',
+      'Transformation',
     ])
+  })
+
+  it('multi-source SAMPLE VALUES field blocks all default to COLLAPSED (drawer redesign §5)', () => {
+    // Drawer redesign refinements §5 (founder canary review):
+    // multi-source rows default all field blocks to collapsed. The
+    // user typically inspects one source at a time; default-
+    // collapsed keeps the section compact while preserving
+    // independent per-block toggle state.
+    render(
+      <MappingDrawer
+        row={rule2Mapped(
+          {},
+          [
+            { sampleValues: ['DDA', 'NOW'] },
+            { sampleValues: ['ABC', 'DEF'] },
+          ],
+        )}
+        isOpen={true}
+        onClose={() => {}}
+      />,
+    )
+    const toggles = screen.getAllByTestId('drawer-sample-values-toggle')
+    expect(toggles).toHaveLength(2)
+    for (const toggle of toggles) {
+      expect(toggle.getAttribute('aria-expanded')).toBe('false')
+    }
+    // No values rendered yet — every block is collapsed.
+    expect(screen.queryByTestId('drawer-sample-values-row')).toBeNull()
+  })
+
+  it('multi-source SAMPLE VALUES blocks toggle independently (drawer redesign §5)', async () => {
+    // Drawer redesign refinements §5: each field block manages its
+    // own open/closed state. Clicking one block does not affect any
+    // other block in the section.
+    const user = userEvent.setup()
+    render(
+      <MappingDrawer
+        row={rule2Mapped(
+          {},
+          [
+            { sampleValues: ['DDA', 'NOW'] },
+            { sampleValues: ['ABC', 'DEF'] },
+          ],
+        )}
+        isOpen={true}
+        onClose={() => {}}
+      />,
+    )
+    const toggles = screen.getAllByTestId('drawer-sample-values-toggle')
+    // Open the first block; the second remains collapsed.
+    await user.click(toggles[0]!)
+    expect(toggles[0]!.getAttribute('aria-expanded')).toBe('true')
+    expect(toggles[1]!.getAttribute('aria-expanded')).toBe('false')
+    // The first block's values render; the second's do not.
+    const firstPanel = screen.getByTestId('drawer-sample-values-panel')
+    expect(
+      within(firstPanel).getAllByTestId('drawer-sample-values-row')
+        .map((n) => n.textContent),
+    ).toEqual(['DDA', 'NOW'])
   })
 })
 
@@ -1484,18 +2112,20 @@ describe('MappingDrawer — Rule 3 (cross-table, two tables) mapped body', () =>
     expect(within(cards[1]!).getByTestId('drawer-source-join')).toBeInTheDocument()
   })
 
-  it('renders the Combination section with concat_comma label', () => {
+  it('renders the inline `Combine with: …` label with concat_comma copy', () => {
     render(<MappingDrawer row={rule3Mapped()} isOpen={true} onClose={() => {}} />)
-    expect(screen.getByTestId('drawer-combination-label').textContent).toBe(
-      'Concatenate with comma',
-    )
+    const label = screen.getByTestId('drawer-combination-label')
+    expect(label.textContent).toContain('Combine with:')
+    expect(label.textContent).toContain('Concatenate with comma')
   })
 
-  it('section ordering for Rule 3 includes Combination section', () => {
+  it('drawer redesign drops the standalone Combination section heading', () => {
     render(<MappingDrawer row={rule3Mapped()} isOpen={true} onClose={() => {}} />)
     const body = screen.getByTestId('mapping-drawer-body')
-    const headings = within(body).getAllByRole('heading', { level: 3 })
-    expect(headings.map((h) => h.textContent)).toContain('Combination')
+    const headings = within(body)
+      .getAllByRole('heading', { level: 3 })
+      .map((h) => h.textContent)
+    expect(headings).not.toContain('Combination')
   })
 
   // ── Cross-table apply transparency badge (Phase 4a-3 → retired in 4a-6) ──
@@ -1546,11 +2176,10 @@ describe('MappingDrawer — Rule 4 (multi-table complex) mapped body', () => {
     })
   })
 
-  it('renders the Combination section with custom_sql label + code block', () => {
+  it('renders the inline `Combine with: Custom SQL expression` label + custom_sql block', () => {
     render(<MappingDrawer row={rule4Mapped()} isOpen={true} onClose={() => {}} />)
-    expect(screen.getByTestId('drawer-combination-label').textContent).toBe(
-      'Custom SQL expression',
-    )
+    const label = screen.getByTestId('drawer-combination-label')
+    expect(label.textContent).toContain('Custom SQL expression')
     const block = screen.getByTestId('drawer-combination-sql')
     expect(block.textContent).toContain("F1 || ' ' || F2")
   })
@@ -1614,10 +2243,45 @@ describe('MappingDrawer — Mapped body regression guards', () => {
     expect(names).toEqual(['ALPHA', 'BETA', 'GAMMA'])
   })
 
-  it('reuses TargetFieldSection and StatusSection (no duplication of those test-ids)', () => {
+  it('drawer redesign — Target field / Status / Confidence sections are NOT in the body (moved to header)', () => {
     render(<MappingDrawer row={rule2Mapped()} isOpen={true} onClose={() => {}} />)
-    expect(screen.getAllByTestId('drawer-section-target-field')).toHaveLength(1)
-    expect(screen.getAllByTestId('drawer-section-status')).toHaveLength(1)
+    expect(screen.queryByTestId('drawer-section-target-field')).toBeNull()
+    expect(screen.queryByTestId('drawer-section-status')).toBeNull()
+    expect(screen.queryByTestId('drawer-section-confidence')).toBeNull()
+    // Sources section is the unique entry-point for source identity
+    // inside the body — exactly one render.
+    expect(screen.getAllByTestId('drawer-section-sources')).toHaveLength(1)
+  })
+
+  it('body sections use tightened mb-4 spacing (drawer redesign §3 — Sources / Analysis / Transformation)', () => {
+    // Drawer redesign refinements §3: body sections are SOURCES,
+    // SAMPLE VALUES (when present), ANALYSIS, TRANSFORMATION. The
+    // tightened mb-4 spacing applies to every rendered section.
+    // The fixture below has no sample data so SAMPLE VALUES is
+    // omitted; the remaining three sections all carry mb-4.
+    render(
+      <MappingDrawer
+        row={mapped({
+          aiReasoning: 'reason',
+          combinationType: 'single',
+          hasTransformation: false,
+        })}
+        isOpen={true}
+        onClose={() => {}}
+      />,
+    )
+    for (const id of [
+      'drawer-section-sources',
+      'drawer-section-analysis',
+      'drawer-section-transformation',
+    ]) {
+      const section = screen.getByTestId(id)
+      expect(section.className).toContain('mb-4')
+      expect(section.className).not.toContain('mb-6')
+    }
+    // OVERVIEW and standalone AI Reasoning are gone.
+    expect(screen.queryByTestId('drawer-section-overview')).toBeNull()
+    expect(screen.queryByTestId('drawer-section-ai-reasoning')).toBeNull()
   })
 })
 
@@ -1700,7 +2364,7 @@ beforeEach(() => {
   suggestMappingForTargetMock.mockReset()
 })
 
-describe('MappingDrawer Gap 9 — disabled-state matrix', () => {
+describe('MappingDrawer Gap 9 — disabled-state matrix (drawer redesign)', () => {
   it('mapped row + status=needs_review: both Approve and Reject are enabled', () => {
     render(
       <MappingDrawer
@@ -1717,7 +2381,7 @@ describe('MappingDrawer Gap 9 — disabled-state matrix', () => {
     ).not.toBeDisabled()
   })
 
-  it('mapped row + status=approved: Approve is DISABLED, Reject is enabled', () => {
+  it('mapped row + status=approved: Approve is HIDDEN, Reject is enabled (Q11.A lock)', () => {
     render(
       <MappingDrawer
         row={mapped({ status: 'approved' })}
@@ -1725,13 +2389,15 @@ describe('MappingDrawer Gap 9 — disabled-state matrix', () => {
         onClose={() => {}}
       />,
     )
-    expect(screen.getByTestId('mapping-drawer-approve-button')).toBeDisabled()
+    // Approve is no longer rendered-but-disabled; the redesign collapses
+    // the approved-row footer to just `[Reject]`.
+    expect(screen.queryByTestId('mapping-drawer-approve-button')).toBeNull()
     expect(
       screen.getByTestId('mapping-drawer-reject-button'),
     ).not.toBeDisabled()
   })
 
-  it('mapped row + status=rejected (legacy): BOTH buttons are enabled', () => {
+  it('mapped row + status=rejected (legacy): BOTH buttons are enabled (un-reject path)', () => {
     render(
       <MappingDrawer
         row={mapped({ status: 'rejected' })}
@@ -1763,31 +2429,29 @@ describe('MappingDrawer Gap 9 — disabled-state matrix', () => {
     ).not.toBeDisabled()
   })
 
-  it('target_acknowledged: BOTH buttons are disabled with explanatory tooltips', () => {
+  it('target_acknowledged: footer is just [Un-acknowledge] (no Approve/Reject)', () => {
     render(
       <MappingDrawer row={targetAck()} isOpen={true} onClose={() => {}} />,
     )
-    const approveBtn = screen.getByTestId('mapping-drawer-approve-button')
-    const rejectBtn = screen.getByTestId('mapping-drawer-reject-button')
-    expect(approveBtn).toBeDisabled()
-    expect(rejectBtn).toBeDisabled()
-    expect(rejectBtn.getAttribute('title')).toContain(
-      'Acknowledged rows',
-    )
-    expect(approveBtn.getAttribute('title')).toContain(
-      'Acknowledged rows',
-    )
+    expect(
+      screen.queryByTestId('mapping-drawer-approve-button'),
+    ).toBeNull()
+    expect(
+      screen.queryByTestId('mapping-drawer-reject-button'),
+    ).toBeNull()
+    expect(
+      screen.getByTestId('mapping-drawer-unacknowledge-button'),
+    ).toBeInTheDocument()
   })
 
-  it('unmapped row: footer is rendered with [Create mapping] (Phase 4a-2); no Approve/Reject', () => {
-    // Phase 4a-2 amendment: the unmapped footer now hosts a primary
-    // [Create mapping] button (mode-switches to [Cancel] [Save] once
-    // the form is activated). Approve/Reject remain absent — they are
-    // only meaningful for already-mapped rows.
+  it('unmapped row: footer is rendered with [Create mapping] + [Suggest with AI]; no Approve/Reject', () => {
     render(<MappingDrawer row={unmapped()} isOpen={true} onClose={() => {}} />)
     expect(screen.getByTestId('mapping-drawer-footer')).toBeInTheDocument()
     expect(
       screen.getByTestId('mapping-drawer-create-mapping-button'),
+    ).toBeInTheDocument()
+    expect(
+      screen.getByTestId('mapping-drawer-suggest-with-ai-button'),
     ).toBeInTheDocument()
     expect(
       screen.queryByTestId('mapping-drawer-approve-button'),
@@ -1847,18 +2511,23 @@ describe('MappingDrawer Gap 9 — Approve action', () => {
         onClose={() => {}}
       />,
     )
-    // Pre-click sanity: status indicator says Needs Review.
+    // Pre-click sanity: header status dot reflects Needs Review.
     expect(
-      screen.getByTestId('drawer-status-indicator').textContent,
-    ).toContain('Needs Review')
+      screen.getByTestId('mapping-drawer-header-status-needs_review'),
+    ).toBeInTheDocument()
     await user.click(screen.getByTestId('mapping-drawer-approve-button'))
-    // While the promise is pending the optimistic overlay is applied.
+    // While the promise is pending the optimistic overlay flips the
+    // header dot to Approved (drawer redesign — status moved to
+    // header line 2 dot).
     expect(
-      screen.getByTestId('drawer-status-indicator').textContent,
-    ).toContain('Approved')
+      screen.getByTestId('mapping-drawer-header-status-approved'),
+    ).toBeInTheDocument()
+    // The post-optimistic state is `mapped/approved` → footer collapses
+    // to `[Reject]` only (Q11.A lock), so the Approve button is no
+    // longer rendered.
     expect(
-      screen.getByTestId('mapping-drawer-approve-button'),
-    ).toBeDisabled()
+      screen.queryByTestId('mapping-drawer-approve-button'),
+    ).toBeNull()
     // Resolve the promise to clean up.
     deferred.resolve?.({ success: true })
     await act(async () => {
@@ -1885,10 +2554,10 @@ describe('MappingDrawer Gap 9 — Approve action', () => {
       await Promise.resolve()
       await Promise.resolve()
     })
-    // Status reverted to Needs Review.
+    // Header status dot reverted to Needs Review.
     expect(
-      screen.getByTestId('drawer-status-indicator').textContent,
-    ).toContain('Needs Review')
+      screen.getByTestId('mapping-drawer-header-status-needs_review'),
+    ).toBeInTheDocument()
     // Error banner shows the generic copy.
     const banner = screen.getByTestId('mapping-drawer-error')
     expect(banner.textContent).toContain("Couldn't approve this mapping")

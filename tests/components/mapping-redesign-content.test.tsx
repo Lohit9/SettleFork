@@ -151,6 +151,8 @@ function mapped(overrides: Partial<MappedRow> = {}): MappedRow {
     status: 'approved',
     hasTransformation: false,
     transformationStatus: null,
+    transformationDescription: null,
+    transformationSqlPreview: null,
     sources: [source()],
     combinationType: 'single',
     combinationSql: null,
@@ -1430,6 +1432,8 @@ function buildDataWithUnmapped(): MappingsForRedesignResult {
     status: 'unmapped',
     hasTransformation: false,
     transformationStatus: null,
+    transformationDescription: null,
+    transformationSqlPreview: null,
   }
   return {
     ...base,
@@ -1570,11 +1574,17 @@ describe('MappingRedesignContent Phase 4a-2 — save flow swaps URL + refreshes'
       />,
     )
     // Drawer is still open (didn't flicker shut), and now displays
-    // the mapped row's body — Rule 1 (single source) subheader.
+    // the mapped row's body. Drawer-redesign — the legacy
+    // `mapping-drawer-subheader-rule_1` testid was removed; verify
+    // the new stacked-header source identity is rendered for the
+    // freshly-mapped row instead.
     expect(screen.getByTestId('mapping-drawer')).toBeInTheDocument()
     expect(
-      screen.getByTestId('mapping-drawer-subheader-rule_1'),
+      screen.getByTestId('mapping-drawer-header-source'),
     ).toBeInTheDocument()
+    expect(
+      screen.queryByTestId('mapping-drawer-header-source-empty'),
+    ).toBeNull()
     // Footer is back to Approve / Reject (no Create mapping).
     expect(
       screen.queryByTestId('mapping-drawer-create-mapping-button'),
@@ -1618,6 +1628,8 @@ function buildDataWithTwoUnmapped(): MappingsForRedesignResult {
     status: 'unmapped',
     hasTransformation: false,
     transformationStatus: null,
+    transformationDescription: null,
+    transformationSqlPreview: null,
   }
   const unmapped2: MappingRow = {
     kind: 'unmapped',
@@ -1632,6 +1644,8 @@ function buildDataWithTwoUnmapped(): MappingsForRedesignResult {
     status: 'unmapped',
     hasTransformation: false,
     transformationStatus: null,
+    transformationDescription: null,
+    transformationSqlPreview: null,
   }
   return {
     ...base,
