@@ -46,8 +46,13 @@ describe('[target-table-kebab] TG1 conditional rendering', () => {
   })
 
   it('TG1c: kebab trigger uses MoreHorizontal icon and exposes data-testid', () => {
+    // Phase 4-polish-2 (2026-04-27): the icon import line gained
+    // `ChevronRight` alongside `MoreHorizontal` for the group-toggle
+    // chevron. The invariant we still want to pin is that
+    // `MoreHorizontal` is imported FROM `@/components/icons`; the
+    // surrounding sibling imports are free to grow.
     expect(SRC).toMatch(
-      /import\s*\{\s*MoreHorizontal\s*\}\s*from\s*['"]@\/components\/icons['"]/,
+      /import\s*\{[^}]*\bMoreHorizontal\b[^}]*\}\s*from\s*['"]@\/components\/icons['"]/,
     )
     expect(SRC).toMatch(/data-testid="target-table-kebab-trigger"/)
     expect(SRC).toMatch(/data-testid="target-table-kebab"/)

@@ -1,5 +1,12 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import {
+  act,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+  within,
+} from '@testing-library/react'
 import MappingRedesignContent from '@/app/app/projects/[projectId]/mapping/redesign/MappingContent'
 import type {
   MappedRow,
@@ -1926,5 +1933,236 @@ describe('MappingRedesignContent Phase 4a-4b — Suggest with AI surfaces from U
     expect(args.aiSuggested).toBe(true)
     expect(args.confidence).toBe(88)
     expect(args.aiReasoning).toBe('persisted rationale')
+  })
+})
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Phase 4-polish-2 — group collapsibility integration.
+// ─────────────────────────────────────────────────────────────────────────────
+//
+// Pins the URL ↔ render contract for `?collapsed=`:
+//   • default state: every group is expanded
+//   • `?collapsed=foo,bar` collapses only foo + bar; others stay expanded
+//   • clicking a group header writes the table NAME into `?collapsed=`
+//   • any active filter forces auto-expand on every visible group
+//     (the persisted `?collapsed=` is preserved, not modified)
+//   • clearing filters restores the user's collapsed state from URL
+//
+// The hook unit tests cover the parser/serializer details; this suite
+// covers the JSX integration via the live MappingRedesignContent body.
+
+describe('MappingRedesignContent — group collapsibility (Phase 4-polish-2)', () => {
+  it('renders all groups expanded by default with no ?collapsed= in URL', () => {
+    renderRedesign()
+    const sections = screen.getAllByTestId('target-table-group')
+    expect(sections).toHaveLength(3)
+    // data-collapsed reflects the disclosure state — false on every
+    // group when `?collapsed=` is absent.
+    for (const s of sections) {
+      expect(s.getAttribute('data-collapsed')).toBe('false')
+    }
+    // Every group's chevron toggle button shows aria-expanded=true.
+    const toggles = screen.getAllByTestId('target-table-group-toggle')
+    expect(toggles).toHaveLength(3)
+    for (const t of toggles) {
+      expect(t.getAttribute('aria-expanded')).toBe('true')
+    }
+  })
+
+  it('renders collapsed groups when ?collapsed= names them', () => {
+    renderRedesign('collapsed=accounts,loans')
+    const sections = screen.getAllByTestId('target-table-group')
+    const byId = new Map(
+      sections.map((s) => [s.getAttribute('data-target-table-id'), s]),
+    )
+    expect(byId.get(accountsTable.id)?.getAttribute('data-collapsed')).toBe('true')
+    expect(byId.get(loansTable.id)?.getAttribute('data-collapsed')).toBe('true')
+    // customers stays expanded because it's not in the collapsed list.
+    expect(byId.get(customersTable.id)?.getAttribute('data-collapsed')).toBe(
+      'false',
+    )
+  })
+
+  it('clicking a group header writes the table NAME into ?collapsed=', () => {
+    renderRedesign()
+    replaceMock.mockClear()
+    // Pick the customers group header. Each toggle has the table name
+    // baked into its aria-label, so we can identify it precisely.
+    const customersToggle = screen.getByLabelText('Toggle customers group')
+    fireEvent.click(customersToggle)
+    expect(replaceMock).toHaveBeenCalled()
+    const lastUrl = replaceMock.mock.calls.at(-1)?.[0] as string
+    expect(lastUrl).toContain('collapsed=customers')
+  })
+
+  it('toggling an already-collapsed group removes it from ?collapsed=', () => {
+    renderRedesign('collapsed=accounts,customers')
+    replaceMock.mockClear()
+    const accountsToggle = screen.getByLabelText('Toggle accounts group')
+    fireEvent.click(accountsToggle)
+    const lastUrl = replaceMock.mock.calls.at(-1)?.[0] as string
+    // Only `customers` should remain in `?collapsed=`.
+    expect(lastUrl).toContain('collapsed=customers')
+    expect(lastUrl).not.toContain('accounts')
+  })
+
+  it('toggling the only collapsed group drops the ?collapsed= param entirely', () => {
+    renderRedesign('collapsed=accounts')
+    replaceMock.mockClear()
+    fireEvent.click(screen.getByLabelText('Toggle accounts group'))
+    const lastUrl = replaceMock.mock.calls.at(-1)?.[0] as string
+    expect(lastUrl).not.toContain('collapsed=')
+  })
+
+  it('toggling preserves co-existing filter URL params', () => {
+    // Use a search term that matches a row so the accounts group
+    // remains in the DOM (`q=test` hides all groups via the Search
+    // identity rule, leaving no toggle button to click).
+    renderRedesign('q=account')
+    replaceMock.mockClear()
+    fireEvent.click(screen.getByLabelText('Toggle accounts group'))
+    const lastUrl = replaceMock.mock.calls.at(-1)?.[0] as string
+    expect(lastUrl).toContain('q=account')
+    expect(lastUrl).toContain('collapsed=accounts')
+  })
+
+  it('auto-expand: ?q=test forces every group expanded regardless of ?collapsed=', () => {
+    // 'balance' matches a row in accounts. Both `accounts` and
+    // `customers` are in `?collapsed=` but the active search forces
+    // them open so the matching results aren't hidden.
+    renderRedesign('q=balance&collapsed=accounts,customers')
+    const toggles = screen.getAllByTestId('target-table-group-toggle')
+    for (const t of toggles) {
+      expect(t.getAttribute('aria-expanded')).toBe('true')
+    }
+  })
+
+  it('auto-expand: ?status=needs_review forces every visible group expanded', () => {
+    renderRedesign('status=needs_review&collapsed=accounts,customers,loans')
+    // Status filter keeps all groups visible (Amendment 1 / Gap 3
+    // status-keeps-empty contract). Auto-expand forces every one of
+    // them open.
+    const toggles = screen.getAllByTestId('target-table-group-toggle')
+    expect(toggles.length).toBeGreaterThan(0)
+    for (const t of toggles) {
+      expect(t.getAttribute('aria-expanded')).toBe('true')
+    }
+  })
+
+  it('auto-expand: ?confidence=high forces every visible group expanded', () => {
+    renderRedesign('confidence=high&collapsed=accounts,customers,loans')
+    const toggles = screen.getAllByTestId('target-table-group-toggle')
+    expect(toggles.length).toBeGreaterThan(0)
+    for (const t of toggles) {
+      expect(t.getAttribute('aria-expanded')).toBe('true')
+    }
+  })
+
+  it('auto-expand: ?target=<id> narrows visibility AND forces survivor expanded', () => {
+    renderRedesign(`target=${accountsTable.id}&collapsed=accounts`)
+    // Only the accounts group should be visible (others hidden by the
+    // target filter), AND it should be expanded despite the persisted
+    // `?collapsed=accounts` — the filter pressure overrides.
+    const sections = screen.getAllByTestId('target-table-group')
+    expect(sections).toHaveLength(1)
+    expect(sections[0]?.getAttribute('data-target-table-id')).toBe(
+      accountsTable.id,
+    )
+    const toggle = screen.getByTestId('target-table-group-toggle')
+    expect(toggle.getAttribute('aria-expanded')).toBe('true')
+  })
+
+  it('auto-expand: ?source=<id> narrows visibility AND forces survivor expanded', () => {
+    renderRedesign(`source=${sourceTableY.id}&collapsed=customers`)
+    // sourceTableY is referenced only by the customers table.
+    const sections = screen.getAllByTestId('target-table-group')
+    expect(sections).toHaveLength(1)
+    expect(sections[0]?.getAttribute('data-target-table-id')).toBe(
+      customersTable.id,
+    )
+    const toggle = screen.getByTestId('target-table-group-toggle')
+    expect(toggle.getAttribute('aria-expanded')).toBe('true')
+  })
+
+  it('?collapsed= is preserved while filters are active (auto-expand does NOT clear it)', () => {
+    // The user collapsed accounts + customers, then ran a search. The
+    // groups auto-expand visually, but the URL keeps `?collapsed=` so
+    // clearing the filter restores the prior collapsed state. We
+    // verify the URL was NOT mutated by the act of mounting with
+    // both params present.
+    renderRedesign('q=test&collapsed=accounts,customers')
+    expect(replaceMock).not.toHaveBeenCalled()
+  })
+
+  it('clearing filters restores the user collapsed state from ?collapsed=', () => {
+    // Simulate the post-clear state by mounting with `?collapsed=` only —
+    // i.e. what the URL looks like after the user clears their filter.
+    // Auto-expand should NO LONGER apply, so the named groups render
+    // collapsed again.
+    renderRedesign('collapsed=accounts')
+    const sections = screen.getAllByTestId('target-table-group')
+    const byId = new Map(
+      sections.map((s) => [s.getAttribute('data-target-table-id'), s]),
+    )
+    expect(byId.get(accountsTable.id)?.getAttribute('data-collapsed')).toBe('true')
+    expect(byId.get(customersTable.id)?.getAttribute('data-collapsed')).toBe(
+      'false',
+    )
+    expect(byId.get(loansTable.id)?.getAttribute('data-collapsed')).toBe('false')
+  })
+
+  it('rows stay mounted when collapsed (clipped only) so screen-reader graph stays stable', () => {
+    renderRedesign('collapsed=accounts')
+    const accountsSection = screen
+      .getAllByTestId('target-table-group')
+      .find((s) => s.getAttribute('data-target-table-id') === accountsTable.id)!
+    // The rows-container DOM is rendered with max-h-0 — pin that the
+    // FieldMappingRow children are still in the tree (just clipped).
+    const container = within(accountsSection).getByTestId(
+      'target-table-rows-container',
+    )
+    expect(within(container).getAllByTestId('field-mapping-row').length).toBeGreaterThan(
+      0,
+    )
+    expect(container.className).toContain('max-h-0')
+  })
+
+  it('toggling a group does NOT mutate filter params in the URL', () => {
+    renderRedesign(`target=${accountsTable.id}&q=balance`)
+    replaceMock.mockClear()
+    // Note: with `?target=` set, only one group renders (accounts).
+    // Toggling does not strip the filter — the URL afterwards must
+    // preserve both params verbatim.
+    const accountsToggle = screen.getByLabelText('Toggle accounts group')
+    fireEvent.click(accountsToggle)
+    const lastUrl = replaceMock.mock.calls.at(-1)?.[0] as string
+    expect(lastUrl).toContain(`target=${accountsTable.id}`)
+    expect(lastUrl).toContain('q=balance')
+    expect(lastUrl).toContain('collapsed=accounts')
+  })
+
+  it('clicking the kebab menu does NOT toggle the group (sibling buttons)', () => {
+    renderRedesign()
+    replaceMock.mockClear()
+    // The kebab is wired with needsReviewCount > 0 because the fixture
+    // includes a needs_review row in the accounts table. Find that
+    // group's kebab.
+    const accountsSection = screen
+      .getAllByTestId('target-table-group')
+      .find((s) => s.getAttribute('data-target-table-id') === accountsTable.id)!
+    const kebabTrigger = within(accountsSection).getByTestId(
+      'target-table-kebab-trigger',
+    )
+    fireEvent.click(kebabTrigger)
+    // No URL write should have occurred — only the kebab menu should
+    // have opened (its own state). Assert that the menu opened AND the
+    // collapsed state was not touched.
+    expect(
+      within(accountsSection).getByTestId('target-table-kebab-menu'),
+    ).toBeInTheDocument()
+    const collapseUrls = replaceMock.mock.calls
+      .map((c) => c[0] as string)
+      .filter((u) => u.includes('collapsed='))
+    expect(collapseUrls).toHaveLength(0)
   })
 })
