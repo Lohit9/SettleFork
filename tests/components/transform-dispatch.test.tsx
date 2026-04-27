@@ -94,10 +94,6 @@ const emptyTransformData: TransformPageData = {
   hasMappings: false,
   unmappedNotNullTargetFields: [],
   unmappedNullableTargetFields: [],
-  transformScope: 0,
-  transformApplied: 0,
-  transformNeedsWork: 0,
-  transformInProgress: 0,
 }
 
 async function importTransformContent() {
