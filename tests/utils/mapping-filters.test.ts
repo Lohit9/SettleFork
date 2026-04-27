@@ -93,6 +93,8 @@ function mapped(overrides: Partial<MappedRow> = {}): MappedRow {
     status: 'approved',
     hasTransformation: false,
     transformationStatus: null,
+    transformationDescription: null,
+    transformationSqlPreview: null,
     sources: [source()],
     combinationType: 'single',
     combinationSql: null,
@@ -112,6 +114,8 @@ function valueAssignment(
     status: 'approved',
     hasTransformation: true,
     transformationStatus: 'applied',
+    transformationDescription: null,
+    transformationSqlPreview: null,
     combinationType: 'custom_sql',
     combinationSql: 'NOW()',
     aiReasoning: null,
@@ -128,6 +132,8 @@ function ack(overrides: Partial<TargetAcknowledgedRow> = {}): TargetAcknowledged
     status: 'approved',
     hasTransformation: false,
     transformationStatus: null,
+    transformationDescription: null,
+    transformationSqlPreview: null,
     acknowledgmentReason: null,
     ...overrides,
   }
@@ -142,6 +148,8 @@ function unmapped(overrides: Partial<UnmappedRow> = {}): UnmappedRow {
     status: 'unmapped',
     hasTransformation: false,
     transformationStatus: null,
+    transformationDescription: null,
+    transformationSqlPreview: null,
     ...overrides,
   }
 }
@@ -383,6 +391,7 @@ describe('filterRows — combined filters (AND semantics)', () => {
       target: tableA.id,
       source: 'all',
       status: 'approved',
+      confidence: 'all',
       search: '',
     })
     expect(
@@ -392,15 +401,131 @@ describe('filterRows — combined filters (AND semantics)', () => {
     ).toBe(true)
   })
 
-  it('all four filters apply simultaneously', () => {
+  it('all five filters apply simultaneously', () => {
     const out = filterRows(buildRows(), {
       target: tableA.id,
       source: sourceTableX.id,
       status: 'approved',
+      confidence: 'high',
       search: 'customer',
     })
     expect(out).toHaveLength(1)
     expect(out[0]?.targetField.name).toBe('customer_id')
+  })
+})
+
+// ─── Confidence band filter (Phase 4-polish-1 comprehensive pass) ───────────
+//
+// New filter axis: classifies rows by `classifyRowConfidence` thresholds
+// (≥85 = high, 40-84 = amber/medium, <40 = low). The user-facing
+// "Medium" label maps to the internal "amber" band. Null-confidence
+// rows are EXCLUDED whenever a non-'all' band is active.
+
+describe('filterRows — confidence filter', () => {
+  const high = mapped({
+    id: 'conf-high',
+    confidence: 92,
+    targetField: targetField({ id: 'tf-high', name: 'conf_high_field' }),
+  })
+  const medium = mapped({
+    id: 'conf-medium',
+    confidence: 70,
+    targetField: targetField({ id: 'tf-medium', name: 'conf_medium_field' }),
+  })
+  const low = mapped({
+    id: 'conf-low',
+    confidence: 25,
+    targetField: targetField({ id: 'tf-low', name: 'conf_low_field' }),
+  })
+  const nullConf: TargetAcknowledgedRow = {
+    kind: 'target_acknowledged',
+    id: 'conf-ack',
+    targetField: targetField({ id: 'tf-null', name: 'conf_null_field' }),
+    confidence: null,
+    status: 'approved',
+    hasTransformation: false,
+    transformationStatus: null,
+    transformationDescription: null,
+    transformationSqlPreview: null,
+    acknowledgmentReason: null,
+  }
+  const rows: MappingRow[] = [high, medium, low, nullConf]
+
+  it('"all" passes every row through (including null confidence)', () => {
+    const out = filterRows(rows, DEFAULT_FILTER_STATE)
+    expect(out).toHaveLength(4)
+  })
+
+  it('"high" keeps only rows with confidence ≥ 85', () => {
+    const out = filterRows(rows, { ...DEFAULT_FILTER_STATE, confidence: 'high' })
+    expect(out.map((r) => r.id)).toEqual(['conf-high'])
+  })
+
+  it('"medium" keeps only rows with confidence in [40, 85) — internal "amber" band', () => {
+    const out = filterRows(rows, {
+      ...DEFAULT_FILTER_STATE,
+      confidence: 'medium',
+    })
+    expect(out.map((r) => r.id)).toEqual(['conf-medium'])
+  })
+
+  it('"low" keeps only rows with confidence < 40', () => {
+    const out = filterRows(rows, { ...DEFAULT_FILTER_STATE, confidence: 'low' })
+    expect(out.map((r) => r.id)).toEqual(['conf-low'])
+  })
+
+  it('EXCLUDES null-confidence rows whenever a non-"all" band is active', () => {
+    for (const band of ['high', 'medium', 'low'] as const) {
+      const out = filterRows(rows, { ...DEFAULT_FILTER_STATE, confidence: band })
+      expect(out.some((r) => r.id === 'conf-ack')).toBe(false)
+    }
+  })
+
+  it('boundary value 85 classifies as "high" (inclusive lower bound)', () => {
+    const boundary = mapped({
+      id: 'conf-85',
+      confidence: 85,
+      targetField: targetField({ id: 'tf-85', name: 'eighty_five' }),
+    })
+    const out = filterRows([boundary], {
+      ...DEFAULT_FILTER_STATE,
+      confidence: 'high',
+    })
+    expect(out).toHaveLength(1)
+  })
+
+  it('boundary value 40 classifies as "medium" (amber inclusive lower bound)', () => {
+    const boundary = mapped({
+      id: 'conf-40',
+      confidence: 40,
+      targetField: targetField({ id: 'tf-40', name: 'forty' }),
+    })
+    const out = filterRows([boundary], {
+      ...DEFAULT_FILTER_STATE,
+      confidence: 'medium',
+    })
+    expect(out).toHaveLength(1)
+  })
+
+  it('combines AND-wise with status (high + needs_review)', () => {
+    const highNeedsReview = mapped({
+      id: 'h-nr',
+      confidence: 92,
+      status: 'needs_review',
+      targetField: targetField({ id: 'tf-h-nr', name: 'h_nr' }),
+    })
+    const highApproved = mapped({
+      id: 'h-ap',
+      confidence: 92,
+      status: 'approved',
+      targetField: targetField({ id: 'tf-h-ap', name: 'h_ap' }),
+    })
+    const out = filterRows([highNeedsReview, highApproved], {
+      ...DEFAULT_FILTER_STATE,
+      confidence: 'high',
+      status: 'needs_review',
+    })
+    expect(out.map((r) => r.id)).toEqual(['h-nr'])
   })
 })
 
@@ -438,13 +563,16 @@ describe('countFilteredPerTargetTable', () => {
 })
 
 describe('parseFilterStateFromParams', () => {
-  it('parses all four params', () => {
-    const params = new URLSearchParams('target=t1&source=s1&status=approved&q=hello')
+  it('parses all five params (target / source / status / confidence / q)', () => {
+    const params = new URLSearchParams(
+      'target=t1&source=s1&status=approved&confidence=high&q=hello',
+    )
     const state = parseFilterStateFromParams(params)
     expect(state).toEqual({
       target: 't1',
       source: 's1',
       status: 'approved',
+      confidence: 'high',
       search: 'hello',
     })
   })
@@ -461,6 +589,22 @@ describe('parseFilterStateFromParams', () => {
     expect(state.status).toBe('all')
   })
 
+  it('invalid confidence falls back to "all" (Phase 4-polish-1 comprehensive pass)', () => {
+    const state = parseFilterStateFromParams(
+      new URLSearchParams('confidence=bogus_band'),
+    )
+    expect(state.confidence).toBe('all')
+  })
+
+  it('parses confidence=medium / low / high verbatim', () => {
+    for (const value of ['high', 'medium', 'low'] as const) {
+      const state = parseFilterStateFromParams(
+        new URLSearchParams(`confidence=${value}`),
+      )
+      expect(state.confidence).toBe(value)
+    }
+  })
+
   it('IGNORES legacy params (fields, type) — hard reset per founder decision', () => {
     const state = parseFilterStateFromParams(
       new URLSearchParams('fields=tfm1,tfm2&type=one_to_one'),
@@ -474,18 +618,39 @@ describe('serializeFilterStateToQuery', () => {
     expect(serializeFilterStateToQuery(DEFAULT_FILTER_STATE)).toBe('')
   })
 
-  it('emits all four params when all are non-default', () => {
+  it('emits all five params when all are non-default', () => {
     const qs = serializeFilterStateToQuery({
       target: 't1',
       source: 's1',
       status: 'approved',
+      confidence: 'high',
       search: 'hello',
     })
     const params = new URLSearchParams(qs)
     expect(params.get('target')).toBe('t1')
     expect(params.get('source')).toBe('s1')
     expect(params.get('status')).toBe('approved')
+    expect(params.get('confidence')).toBe('high')
     expect(params.get('q')).toBe('hello')
+  })
+
+  it('omits confidence when set to default "all"', () => {
+    const qs = serializeFilterStateToQuery({
+      ...DEFAULT_FILTER_STATE,
+      target: 't1',
+    })
+    const params = new URLSearchParams(qs)
+    expect(params.has('confidence')).toBe(false)
+  })
+
+  it('emits confidence=medium / low when non-default', () => {
+    for (const value of ['medium', 'low'] as const) {
+      const qs = serializeFilterStateToQuery({
+        ...DEFAULT_FILTER_STATE,
+        confidence: value,
+      })
+      expect(new URLSearchParams(qs).get('confidence')).toBe(value)
+    }
   })
 
   it('trims whitespace-only search to empty', () => {
@@ -507,6 +672,7 @@ describe('hasActiveFilters', () => {
       { ...DEFAULT_FILTER_STATE, target: 't1' },
       { ...DEFAULT_FILTER_STATE, source: 's1' },
       { ...DEFAULT_FILTER_STATE, status: 'approved' },
+      { ...DEFAULT_FILTER_STATE, confidence: 'high' },
       { ...DEFAULT_FILTER_STATE, search: 'x' },
     ]
     for (const c of cases) expect(hasActiveFilters(c)).toBe(true)

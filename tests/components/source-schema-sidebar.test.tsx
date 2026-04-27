@@ -802,3 +802,78 @@ describe('SourceSchemaSidebar — no-shim invariant (Gap 11b)', () => {
     expect(sortSpy).not.toHaveBeenCalled()
   })
 })
+
+// ─── Refinement 1 — sidebar mounts in-flow below the page header ────────────
+//
+// Refinement 1 (Phase 4-polish-1 final-final, 2026-04-26): the user
+// observed that "the source fields sidebar covers the page header
+// when expanded." Investigation confirmed the SourceSchemaSidebar
+// is NOT in fact a viewport-fixed overlay — it mounts as a regular
+// flex child inside `MappingContent`'s horizontal flex row, which
+// itself sits BELOW the `<PageHeader>` in the parent flex column.
+// Width changes (28px ↔ 200px) only resize the column within the
+// row beneath the header; the sidebar can't physically extend up
+// past the row's top edge.
+//
+// Concretely the layout is:
+//
+//   <MappingContent>            flex h-full flex-col       (column)
+//     <PageHeader />            shrink-0, min-h-[60px]
+//     <div ...>                 flex flex-1 (row, fills below header)
+//       <SourceSchemaSidebar /> width 28 ↔ 200 (in-flow flex child)
+//       <div>{body}</div>
+//     </div>
+//   </MappingContent>
+//
+// The aside carries `position: relative` (NOT fixed/absolute), so
+// it's bound by its parent flex row. No portal. No `top: 0`. No
+// `inset-y-0`. The sidebar's stretch is `self-stretch` against the
+// row's height — it does NOT stretch beyond the row.
+//
+// These regression guards pin that contract so a future refactor
+// to `position: fixed` (which would re-introduce the very bug the
+// user was reporting against an imagined fixed-positioned sidebar)
+// fails this test rather than silently shipping a header-covering
+// overlay. If a future iteration intentionally adopts a fixed-
+// positioned sidebar, update the contract here AND the
+// `MappingContent` layout in tandem.
+
+describe('SourceSchemaSidebar — Refinement 1 (in-flow positioning)', () => {
+  it('aside element is positioned `relative` (in flow), NOT fixed or absolute', () => {
+    renderSidebar({ state: 'expanded', filter: 'all', sourceFields: [] })
+    const sidebar = screen.getByTestId('source-schema-sidebar')
+    expect(sidebar.tagName).toBe('ASIDE')
+    const cls = sidebar.className
+    expect(cls).toContain('relative')
+    // Forbid any positioning utility that would take it out of flow
+    // and let it overlay the PageHeader above.
+    expect(cls).not.toMatch(/\bfixed\b/)
+    expect(cls).not.toMatch(/\babsolute\b/)
+    expect(cls).not.toMatch(/\binset-y-0\b/)
+    expect(cls).not.toMatch(/\binset-0\b/)
+    expect(cls).not.toMatch(/\btop-0\b/)
+  })
+
+  it('aside stretches to its parent flex row only (self-stretch, not h-screen)', () => {
+    renderSidebar({ state: 'expanded', filter: 'all', sourceFields: [] })
+    const sidebar = screen.getByTestId('source-schema-sidebar')
+    const cls = sidebar.className
+    // self-stretch is the cross-axis stretch within the parent flex
+    // row — it bounds the sidebar's height to the row, NOT the
+    // viewport. h-screen would let it extend above PageHeader.
+    expect(cls).toContain('self-stretch')
+    expect(cls).not.toMatch(/\bh-screen\b/)
+    expect(cls).not.toMatch(/\bh-\[100vh\]/)
+  })
+
+  it('aside does NOT carry an inline style top/bottom that would anchor it to the viewport', () => {
+    renderSidebar({ state: 'expanded', filter: 'all', sourceFields: [] })
+    const sidebar = screen.getByTestId('source-schema-sidebar')
+    const style = sidebar.getAttribute('style') ?? ''
+    // The sidebar's only inline style is `width: <px>` (toggling
+    // between collapsed and expanded). Anything else is suspect.
+    expect(style).not.toMatch(/top:/)
+    expect(style).not.toMatch(/bottom:/)
+    expect(style).not.toMatch(/position:/)
+  })
+})

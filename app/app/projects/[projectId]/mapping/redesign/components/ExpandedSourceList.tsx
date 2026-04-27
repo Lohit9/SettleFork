@@ -1,5 +1,10 @@
 import { TableBadge } from './TableBadge'
-import { formatConfidencePercent } from '@/lib/utils/confidence-format'
+import {
+  classifyRowConfidence,
+  formatConfidencePercent,
+  type RowConfidenceBand,
+} from '@/lib/utils/confidence-format'
+import { cn } from '@/components/ui/utils'
 import type { MappingSourceRef } from '@/lib/types/mappings-for-redesign'
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -28,6 +33,12 @@ import type { MappingSourceRef } from '@/lib/types/mappings-for-redesign'
 // enforces the invariant at CI time.
 
 import type { MappingRowRule } from '@/lib/utils/mapping-row-rules'
+
+const EXPANDED_BAND_CLASSNAME: Record<RowConfidenceBand, string> = {
+  high: 'text-green-600 font-semibold',
+  amber: 'text-amber-600',
+  low: 'text-red-600',
+}
 
 interface ExpandedSourceListProps {
   sources: MappingSourceRef[]
@@ -63,6 +74,12 @@ export function ExpandedSourceList({ sources, rule, id }: ExpandedSourceListProp
 }
 
 function SourceBullet({ source }: { source: MappingSourceRef }) {
+  // Phase 4-polish-1 founder Q9.2: no color when no number. We classify
+  // and color-grade only when a confidence value is present; null /
+  // missing values render as the em-dash from `formatConfidencePercent`
+  // in a neutral slate hue (the row-band classes never apply).
+  const band: RowConfidenceBand | null =
+    source.confidence === null ? null : classifyRowConfidence(source.confidence)
   return (
     <li
       data-testid="expanded-source-bullet"
@@ -73,13 +90,20 @@ function SourceBullet({ source }: { source: MappingSourceRef }) {
       </span>
       <TableBadge tableName={source.sourceTable.name} />
       <span
-        className="truncate font-mono text-[13px] text-slate-700"
+        className="truncate font-mono text-[13px] font-normal text-slate-900"
         title={source.sourceField.name}
       >
         {source.sourceField.name}
       </span>
       <span
-        className="ml-auto flex-shrink-0 tabular-nums text-xs text-slate-500"
+        className={cn(
+          'ml-auto flex-shrink-0 tabular-nums text-xs',
+          // Phase 4-polish-1 founder Q9.3: same row-band classifier as the
+          // collapsed-row ConfidenceCell so the per-source confidence in
+          // the expanded view reads consistently with the parent row.
+          band !== null ? EXPANDED_BAND_CLASSNAME[band] : 'text-slate-500',
+        )}
+        data-confidence-band={band ?? 'none'}
         data-testid="expanded-source-confidence"
       >
         {formatConfidencePercent(source.confidence)}

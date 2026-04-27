@@ -80,22 +80,77 @@ export function classifyConfidence(confidence: number): ConfidenceThreshold {
 }
 
 /**
- * 2-decimal percent string, suitable for muted-slate confidence cells
- * that show the raw numeric value. Mirrors the pre-lift inline behavior:
+ * Integer percent string, suitable for muted-slate confidence cells
+ * that show the raw numeric value:
  *
  *   • null              → '—'              (em-dash; rendered when a
  *                                            mapped source has no
  *                                            confidence on record)
- *   • 0-1 fraction       → multiply ×100, fixed(2) + '%'
- *   • 0-100 integer/float → fixed(2) + '%'
+ *   • 0-1 fraction       → multiply ×100, Math.round + '%'
+ *   • 0-100 integer/float → Math.round + '%'
  *
  * Used by FieldMappingRow's `ConfidenceCell`, MappingDrawer's
  * `RowConfidenceSection`, and `ExpandedSourceList`'s `SourceBullet`.
+ *
+ * Phase 4-polish-1 final refinements (Refinement H, 2026-04-26):
+ * dropped the 2-decimal precision and switched to integer rounding.
+ * The fractional part was reading as numeric noise without analytical
+ * value (no consumer compares 92.50% vs 92.49%); a single integer
+ * percent reads cleaner across the row table, the drawer header
+ * meta line, and the AI Suggest pill. `Math.round` rounds half-away-
+ * from-zero so 99.5% renders as 100%, matching user expectation.
  */
 export function formatConfidencePercent(confidence: number | null): string {
   if (confidence === null) return '—'
   const normalized = confidence > 1 ? confidence : confidence * 100
-  return `${normalized.toFixed(2)}%`
+  return `${Math.round(normalized)}%`
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Row-display thresholds — Phase 4-polish-1.
+// ─────────────────────────────────────────────────────────────────────────────
+//
+// Distinct from the `ConfidencePill` thresholds above (70/40), these gate the
+// inline confidence cell in `FieldMappingRow` and the per-source confidence
+// in `ExpandedSourceList`. The founder-locked cutoffs are stricter (≥85
+// reads as green) — they reflect "rows the user can defer to without manual
+// review", a higher bar than the AI Suggest pill's "I am confident enough to
+// pre-fill the form".
+//
+// Two consumers, two semantics. Do NOT collapse into a single classifier;
+// the AI Suggest pill stays at 70/40 by founder decision (4a-4b lift,
+// "colored bands gated behind AI provenance only").
+
+/**
+ * Lower bound (inclusive) for the "high" row band — green text + bold weight.
+ * The bold pairing satisfies the accessibility note in §12 of the polish-1
+ * locked decisions: color alone is insufficient signal for users with
+ * deuteranopia/protanopia. Green band is the only one that pairs with a
+ * font-weight cue today; amber and red carry their own hue contrast and
+ * font-weight stays normal.
+ */
+export const CONFIDENCE_THRESHOLD_ROW_HIGH = 85
+
+/**
+ * Lower bound (inclusive) for the "amber" row band. Below this cutoff the
+ * row reads as "low" (red). Same 0-1 vs 0-100 tolerance contract as the
+ * other classifiers in this file.
+ */
+export const CONFIDENCE_THRESHOLD_ROW_AMBER = 40
+
+/**
+ * Three-way classification for the inline row cell + ExpandedSourceList
+ * per-source confidence. Out-of-range / non-finite values collapse to
+ * `'low'` as a safe default — the only consumer is presentation.
+ */
+export type RowConfidenceBand = 'high' | 'amber' | 'low'
+
+export function classifyRowConfidence(confidence: number): RowConfidenceBand {
+  if (!Number.isFinite(confidence)) return 'low'
+  const normalized = confidence > 1 ? confidence : confidence * 100
+  if (normalized >= CONFIDENCE_THRESHOLD_ROW_HIGH) return 'high'
+  if (normalized >= CONFIDENCE_THRESHOLD_ROW_AMBER) return 'amber'
+  return 'low'
 }
 
 /**

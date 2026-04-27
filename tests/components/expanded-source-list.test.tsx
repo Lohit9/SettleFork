@@ -58,10 +58,13 @@ describe('ExpandedSourceList', () => {
     expect(screen.getByText('TABLE_B')).toBeInTheDocument()
   })
 
-  it('renders per-source confidence with 2 decimals', () => {
+  it('renders per-source confidence as integer percent (Refinement H)', () => {
+    // Phase 4-polish-1 Refinement H (2026-04-26): confidence renders
+    // as integer percent (no decimals) across all consumers of
+    // `formatConfidencePercent`. 87.5 rounds to 88.
     const sources = [source({ confidence: 87.5 })]
     render(<ExpandedSourceList sources={sources} rule="rule_2" />)
-    expect(screen.getByTestId('expanded-source-confidence').textContent).toBe('87.50%')
+    expect(screen.getByTestId('expanded-source-confidence').textContent).toBe('88%')
   })
 
   it('renders joinAnnotation as italic text when present', () => {
@@ -136,10 +139,17 @@ describe('ExpandedSourceList', () => {
       expect(container.innerHTML).not.toMatch(/\bdark:/)
     })
 
-    it('bullet row uses light-mode slate-700 for field name and no dark-prefix', () => {
+    it('bullet row uses light-mode slate-900 + font-normal for field name (Refinement 6)', () => {
+      // Refinement 6 (Phase 4-polish-1 final-final, 2026-04-26): the
+      // expanded-source bullet's field-name span tracks the row-level
+      // source-field cells — same `font-mono font-normal text-slate-
+      // 900`. Hierarchy is column position + header strip, not
+      // typography weight/color.
       render(<ExpandedSourceList sources={[source({ fieldName: 'FNAME' })]} rule="rule_2" />)
       const fieldNode = screen.getByText('FNAME')
-      expect(fieldNode.className).toContain('text-slate-700')
+      expect(fieldNode.className).toContain('text-slate-900')
+      expect(fieldNode.className).toContain('font-normal')
+      expect(fieldNode.className).not.toContain('text-slate-700')
       expect(fieldNode.className).not.toMatch(/\bdark:/)
     })
   })

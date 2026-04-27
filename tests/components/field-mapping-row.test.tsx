@@ -78,6 +78,8 @@ function mapped(overrides: Partial<MappedRow> = {}): MappedRow {
     status: 'approved',
     hasTransformation: false,
     transformationStatus: null,
+    transformationDescription: null,
+    transformationSqlPreview: null,
     sources: [source()],
     combinationType: 'single',
     combinationSql: null,
@@ -97,6 +99,8 @@ function valueAssignment(
     status: 'approved',
     hasTransformation: true,
     transformationStatus: 'applied',
+    transformationDescription: null,
+    transformationSqlPreview: null,
     combinationType: 'custom_sql',
     combinationSql: 'NOW()',
     aiReasoning: null,
@@ -115,6 +119,8 @@ function targetAck(
     status: 'approved',
     hasTransformation: false,
     transformationStatus: null,
+    transformationDescription: null,
+    transformationSqlPreview: null,
     acknowledgmentReason: 'system default',
     ...overrides,
   }
@@ -129,6 +135,8 @@ function unmapped(overrides: Partial<UnmappedRow> = {}): UnmappedRow {
     status: 'unmapped',
     hasTransformation: false,
     transformationStatus: null,
+    transformationDescription: null,
+    transformationSqlPreview: null,
     ...overrides,
   }
 }
@@ -143,11 +151,13 @@ describe('FieldMappingRow — Rule 1 (single-source mapped)', () => {
     // Source field name.
     expect(screen.getByText('ACCT_NO')).toBeInTheDocument()
     // Confidence.
-    expect(screen.getByText('98.00%')).toBeInTheDocument()
+    expect(screen.getByText('98%')).toBeInTheDocument()
     // Target field name.
     expect(screen.getByText('customer_id')).toBeInTheDocument()
-    // Status.
-    expect(screen.getByText('Approved')).toBeInTheDocument()
+    // Phase 4-polish-1: status chip collapsed to dot-only (founder Q1).
+    // The visible label is gone; the aria-label is the canonical
+    // screen-reader surface ("status: Approved").
+    expect(screen.getByLabelText('status: Approved')).toBeInTheDocument()
   })
 
   it('does NOT render an em-dash in the source column (the source exists)', () => {
@@ -509,6 +519,84 @@ describe('FieldMappingRow — Rule 1 has no chevron (regression guard)', () => {
   })
 })
 
+// ─── Refinement G — chevron repositioned inline next to source field ────────
+//
+// Phase 4-polish-1 final refinements (Refinement G, 2026-04-26): the
+// expand chevron moved from a dedicated col 6 (row-end) to inline at
+// the right edge of col 3 (source field area). The dedicated chevron
+// column was DROPPED; the row grid template went from 6 cols → 5
+// cols. Pin the new placement structurally so a future refactor
+// cannot re-introduce the row-end chevron without tripping CI.
+
+describe('FieldMappingRow — chevron position (Refinement G)', () => {
+  // Helper to build a Rule 2 (multi-source same table) row.
+  function rule2Row() {
+    return mapped({
+      id: 'r2',
+      sources: [
+        source({
+          id: 'ms-0',
+          ordinal: 0,
+          sourceField: { id: 'sf-0', name: 'F0', dataType: 'VARCHAR', isNullable: false },
+          sourceTable: { id: 'st-1', name: 'TBL' },
+        }),
+        source({
+          id: 'ms-1',
+          ordinal: 1,
+          sourceField: { id: 'sf-1', name: 'F1', dataType: 'VARCHAR', isNullable: false },
+          sourceTable: { id: 'st-1', name: 'TBL' },
+        }),
+      ],
+    })
+  }
+
+  it('chevron sits inline alongside the source-field render (col 3 area), not at row end', () => {
+    // Walk the row body's direct children. Pre-Refinement G the
+    // chevron was its own grid cell at index 5 (last). Post-
+    // Refinement G the row body has 5 grid cells; the chevron lives
+    // INSIDE col 3 (a flex wrapper around `SourceFieldCell` +
+    // `InlineExpandChevron`). Pin: the chevron is NOT a direct child
+    // of the row body.
+    render(<FieldMappingRow row={rule2Row()} />)
+    const body = screen.getByTestId('field-mapping-row-body')
+    const chevron = screen.getByTestId('field-mapping-row-chevron')
+    expect(body.children).toHaveLength(5)
+    // Chevron's parent is the col-3 flex wrapper; that wrapper IS one
+    // of the row body's 5 children (specifically the 3rd, 0-indexed:
+    // col 1 status, col 2 src tbl, col 3 src field+chevron, col 4
+    // target, col 5 confidence).
+    expect(chevron.parentElement).not.toBe(body)
+    expect(chevron.parentElement?.parentElement).toBe(body)
+    // Index of the chevron's parent within the row body's children
+    // is 2 (the third grid cell — col 3 source field).
+    const wrapperIndex = Array.from(body.children).indexOf(
+      chevron.parentElement as Element,
+    )
+    expect(wrapperIndex).toBe(2)
+  })
+
+  it('the source-field wrapper renders the field name BEFORE the chevron (DOM order = visual order)', () => {
+    render(<FieldMappingRow row={rule2Row()} />)
+    const chevron = screen.getByTestId('field-mapping-row-chevron')
+    const wrapper = chevron.parentElement!
+    // Last child is the chevron; the field-render precedes it under
+    // flex with default `flex-direction: row` left-to-right.
+    expect(wrapper.lastElementChild).toBe(chevron)
+    // The wrapper has at least 2 children (field render + chevron).
+    expect(wrapper.children.length).toBeGreaterThanOrEqual(2)
+  })
+
+  it('Rule 1 source-field cell does NOT wrap with an inline chevron', () => {
+    // Single-source rows have no chevron at all (canExpand=false). The
+    // col-3 wrapper still exists structurally (so the grid layout
+    // stays consistent) but contains only the field render.
+    render(<FieldMappingRow row={mapped()} />)
+    const body = screen.getByTestId('field-mapping-row-body')
+    expect(body.children).toHaveLength(5)
+    expect(screen.queryByTestId('field-mapping-row-chevron')).toBeNull()
+  })
+})
+
 // ─── Value assignment (founder Gap 4a §9 Q5) ────────────────────────────────
 
 describe('FieldMappingRow — Value assignment', () => {
@@ -522,7 +610,7 @@ describe('FieldMappingRow — Value assignment', () => {
 
   it('renders confidence normally (not em-dashed) — VAs carry confidence', () => {
     render(<FieldMappingRow row={valueAssignment({ confidence: 92 })} />)
-    expect(screen.getByText('92.00%')).toBeInTheDocument()
+    expect(screen.getByText('92%')).toBeInTheDocument()
   })
 
   it('renders the target field name in mono', () => {
@@ -543,17 +631,57 @@ describe('FieldMappingRow — Rule 5 (target-acknowledged)', () => {
     expect(screen.getByLabelText('no confidence available')).toBeInTheDocument()
   })
 
-  it('renders the target field name with an "acknowledged: <reason>" subtitle', () => {
+  it('renders the target field name without an "(acknowledged)" suffix (Refinement B)', () => {
+    // Phase 4-polish-1 final refinements (Refinement B, 2026-04-26):
+    // the inline "(acknowledged)" suffix was DROPPED. The visual
+    // signals (slate-300 status dot disambiguated via hover tooltip,
+    // em-dashes in source + confidence columns) carry the
+    // distinction without the parenthetical. Pin the absence so a
+    // future refactor cannot silently re-add the suffix.
     render(<FieldMappingRow row={targetAck({ acknowledgmentReason: 'system default' })} />)
     expect(screen.getByText('internal_id')).toBeInTheDocument()
-    expect(screen.getByText('acknowledged: system default')).toBeInTheDocument()
+    expect(screen.queryByTestId('target-acknowledged-suffix')).toBeNull()
+    // Belt and suspenders: the literal "(acknowledged)" text must
+    // not appear anywhere in the row's rendered content.
+    const row = screen.getByTestId('field-mapping-row')
+    expect(row.textContent).not.toContain('(acknowledged)')
   })
 
-  it('renders the "acknowledged" subtitle without a reason when acknowledgmentReason is null', () => {
+  it('renders no suffix even when acknowledgmentReason is null (Refinement B)', () => {
     render(<FieldMappingRow row={targetAck({ acknowledgmentReason: null })} />)
     expect(screen.getByText('internal_id')).toBeInTheDocument()
-    // Exact-match so "acknowledged: ..." variants don't accidentally pass.
-    expect(screen.getByText(/^acknowledged$/)).toBeInTheDocument()
+    expect(screen.queryByTestId('target-acknowledged-suffix')).toBeNull()
+    const row = screen.getByTestId('field-mapping-row')
+    expect(row.textContent).not.toContain('(acknowledged)')
+  })
+
+  it('status dot carries a hover tooltip that says "Acknowledged" (Refinement B)', () => {
+    // Refinement B: the StatusDot's `title=` attribute is the
+    // sighted-user disambiguation path between acknowledged
+    // (kind=target_acknowledged) and other states. The tooltip
+    // branches on `kind` rather than `status` — the targetAck
+    // factory uses status='approved' but the dot still reads as
+    // "Acknowledged" via the kind branch. This is what lets a
+    // hovering user tell apart acknowledged from a regular approved
+    // mapping without AT.
+    render(<FieldMappingRow row={targetAck()} />)
+    // The aria-label still surfaces the underlying status (factory
+    // uses 'approved'); the title is the kind-aware override.
+    const dot = screen.getByLabelText('status: Approved')
+    expect(dot.getAttribute('title')).toBe('Acknowledged')
+  })
+
+  it('aria-label still carries the acknowledged-as-not-migratable phrase (AT path preserved)', () => {
+    // The row-level aria-label is the screen-reader surface and
+    // remains intact post-Refinement B. Only the visual suffix is
+    // gone; AT users still hear the full description.
+    const { container } = render(
+      <FieldMappingRow row={targetAck({ acknowledgmentReason: 'system default' })} />,
+    )
+    const el = container.querySelector('[data-testid="field-mapping-row"]')
+    expect(el?.getAttribute('aria-label')).toContain(
+      'acknowledged as not migratable: system default',
+    )
   })
 
   it('does NOT render a transformation indicator (ack rows never carry one)', () => {
@@ -574,48 +702,111 @@ describe('FieldMappingRow — Rule 6 (unmapped)', () => {
     expect(screen.queryByText(/^acknowledged/)).toBeNull()
   })
 
-  it('renders the "Unmapped" status chip', () => {
+  it('renders the "Unmapped" status dot via aria-label only (label dropped in Phase 4-polish-1)', () => {
     render(<FieldMappingRow row={unmapped()} />)
-    expect(screen.getByText('Unmapped')).toBeInTheDocument()
+    expect(screen.getByLabelText('status: Unmapped')).toBeInTheDocument()
+  })
+
+  it('status dot carries a hover tooltip that says "Unmapped" (Refinement B)', () => {
+    // Refinement B: the unmapped row's tooltip mirrors the status
+    // label (the kind branch in StatusDot only fires for
+    // target_acknowledged); pin the non-acknowledged path as the
+    // foil to the acknowledged-tooltip test above.
+    render(<FieldMappingRow row={unmapped()} />)
+    const dot = screen.getByLabelText('status: Unmapped')
+    expect(dot.getAttribute('title')).toBe('Unmapped')
   })
 })
 
 // ─── Status chip (shared across all kinds) ──────────────────────────────────
 
-describe('FieldMappingRow — status chip', () => {
-  it('renders "Needs Review" for status=needs_review', () => {
-    render(<FieldMappingRow row={mapped({ status: 'needs_review' })} />)
-    expect(screen.getByText('Needs Review')).toBeInTheDocument()
-  })
-
-  it('renders "Rejected" for status=rejected', () => {
-    render(<FieldMappingRow row={mapped({ status: 'rejected' })} />)
-    expect(screen.getByText('Rejected')).toBeInTheDocument()
-  })
-
-  it('renders "Approved" for status=approved', () => {
+describe('FieldMappingRow — status dot', () => {
+  // Phase 4-polish-1 (founder Q1.3): the legacy "dot + label" status chip
+  // collapsed to dot-only. Visible labels are gone; the aria-label still
+  // carries the human-readable status so screen-reader users hear it
+  // verbatim. These four tests assert the dot-only contract by querying
+  // by aria-label and inspecting the dot's color class.
+  it('renders the "Approved" dot via aria-label only', () => {
     render(<FieldMappingRow row={mapped({ status: 'approved' })} />)
-    expect(screen.getByText('Approved')).toBeInTheDocument()
+    expect(screen.queryByText('Approved')).toBeNull()
+    const dot = screen.getByLabelText('status: Approved')
+    expect(dot.className).toContain('bg-green-500')
+  })
+
+  it('renders the "Needs Review" dot via aria-label only', () => {
+    render(<FieldMappingRow row={mapped({ status: 'needs_review' })} />)
+    expect(screen.queryByText('Needs Review')).toBeNull()
+    const dot = screen.getByLabelText('status: Needs Review')
+    expect(dot.className).toContain('bg-amber-400')
+  })
+
+  it('renders the "Rejected" dot via aria-label only', () => {
+    render(<FieldMappingRow row={mapped({ status: 'rejected' })} />)
+    expect(screen.queryByText('Rejected')).toBeNull()
+    const dot = screen.getByLabelText('status: Rejected')
+    expect(dot.className).toContain('bg-red-500')
+  })
+
+  it('renders the "Unmapped" dot as a HOLLOW circle (Refinement 3 — form vs fill)', () => {
+    // Refinement 3 (Phase 4-polish-1 final-final, 2026-04-26): the
+    // unmapped dot SHIFTED from filled-slate-300 to a hollow ring
+    // (`border border-slate-400 bg-transparent`). The form-vs-fill
+    // distinction holds under colorblindness or low-contrast
+    // monitors where slate-300 vs green/amber could collapse.
+    // Pin the new contract verbatim and the absence of the prior
+    // filled style.
+    render(<FieldMappingRow row={unmapped()} />)
+    const dot = screen.getByLabelText('status: Unmapped')
+    expect(dot.className).toContain('border')
+    expect(dot.className).toContain('border-slate-400')
+    expect(dot.className).toContain('bg-transparent')
+    expect(dot.className).not.toContain('bg-slate-300')
+    expect(dot.getAttribute('data-status-dot-style')).toBe('hollow')
+  })
+
+  it('acknowledged rows render a FILLED dot (only kind=unmapped is hollow)', () => {
+    // Refinement 3: the hollow style fires SOLELY on
+    // kind === 'unmapped'. Acknowledged rows reuse their underlying
+    // status color (e.g. bg-green-500 when status='approved') and
+    // remain filled. Pin the boundary so a future regex-based
+    // refactor doesn't accidentally hollow out acknowledged dots.
+    render(<FieldMappingRow row={targetAck()} />)
+    // targetAck factory uses status='approved' → filled green.
+    const dot = screen.getByLabelText('status: Approved')
+    expect(dot.className).toContain('bg-green-500')
+    expect(dot.className).not.toContain('bg-transparent')
+    expect(dot.className).not.toContain('border-slate-400')
+    expect(dot.getAttribute('data-status-dot-style')).toBe('filled')
+  })
+
+  it('mapped rows render a FILLED dot regardless of status', () => {
+    render(<FieldMappingRow row={mapped({ status: 'approved' })} />)
+    const dot = screen.getByLabelText('status: Approved')
+    expect(dot.getAttribute('data-status-dot-style')).toBe('filled')
+    expect(dot.className).not.toContain('bg-transparent')
   })
 })
 
 // ─── Confidence formatting ──────────────────────────────────────────────────
 
 describe('FieldMappingRow — confidence formatting', () => {
-  it('formats fractional confidence to 2 decimals', () => {
+  // Phase 4-polish-1 Refinement H (2026-04-26): formatConfidencePercent
+  // dropped 2-decimal precision in favor of integer rounding. Pin the
+  // new format here. Math.round is half-away-from-zero, so 87.5 → 88.
+  it('formats fractional confidence to nearest integer', () => {
     render(<FieldMappingRow row={mapped({ confidence: 87.5 })} />)
-    expect(screen.getByText('87.50%')).toBeInTheDocument()
+    expect(screen.getByText('88%')).toBeInTheDocument()
   })
 
-  it('formats integer confidence to 2 decimals', () => {
+  it('formats integer confidence as a bare integer percent', () => {
     render(<FieldMappingRow row={mapped({ confidence: 92 })} />)
-    expect(screen.getByText('92.00%')).toBeInTheDocument()
+    expect(screen.getByText('92%')).toBeInTheDocument()
   })
 
   it('interprets 0-1 fractional input as a 0-100 percentage', () => {
     // Defensive formatting: DB stores 0-100 today but drift can't corrupt UI.
     render(<FieldMappingRow row={mapped({ confidence: 0.85 })} />)
-    expect(screen.getByText('85.00%')).toBeInTheDocument()
+    expect(screen.getByText('85%')).toBeInTheDocument()
   })
 
   it('renders an em-dash when confidence is null', () => {
@@ -624,29 +815,46 @@ describe('FieldMappingRow — confidence formatting', () => {
   })
 })
 
-// ─── Transformation indicator ───────────────────────────────────────────────
+// ─── Transformation indicator — REMOVED (Refinement F regression guard) ─────
 
-describe('FieldMappingRow — transformation indicator', () => {
-  it('renders an "applied" indicator when hasTransformation=true, status=applied', () => {
-    render(
+describe('FieldMappingRow — transformation indicator removed (Refinement F)', () => {
+  // Phase 4-polish-1 final refinements (Refinement F, 2026-04-26):
+  // the row-level transformation indicator was removed entirely.
+  // Earlier passes rendered an inline slate-400 dot inside
+  // `ConfidenceCell`; canary review found the muted treatment too
+  // subtle to convey meaning and a saturated hue would have stolen
+  // disproportionate attention. The drawer's Transformation section
+  // remains the source of truth for transform status.
+  //
+  // Pin the absence across every row state so a future refactor
+  // cannot silently re-add the dot.
+  it('does NOT render a transformation indicator on a mapped row with applied status', () => {
+    const { queryByLabelText } = render(
       <FieldMappingRow
         row={mapped({ hasTransformation: true, transformationStatus: 'applied' })}
       />,
     )
-    expect(screen.getByLabelText('transformation: applied')).toBeInTheDocument()
+    expect(queryByLabelText(/^transformation:/)).toBeNull()
   })
 
-  it('renders a "draft" indicator when hasTransformation=true and status is null', () => {
-    render(
+  it('does NOT render a transformation indicator on a mapped row with draft status', () => {
+    const { queryByLabelText } = render(
       <FieldMappingRow
         row={mapped({ hasTransformation: true, transformationStatus: null })}
       />,
     )
-    expect(screen.getByLabelText('transformation: draft')).toBeInTheDocument()
+    expect(queryByLabelText(/^transformation:/)).toBeNull()
   })
 
-  it('renders nothing visible in the transform slot when hasTransformation=false', () => {
+  it('does NOT render a transformation indicator on a mapped row with hasTransformation=false', () => {
     const { queryByLabelText } = render(<FieldMappingRow row={mapped()} />)
+    expect(queryByLabelText(/^transformation:/)).toBeNull()
+  })
+
+  it('does NOT render a transformation indicator on a value-assignment row', () => {
+    const { queryByLabelText } = render(
+      <FieldMappingRow row={valueAssignment({ hasTransformation: true, transformationStatus: 'applied' })} />,
+    )
     expect(queryByLabelText(/^transformation:/)).toBeNull()
   })
 })
@@ -674,7 +882,7 @@ describe('FieldMappingRow — aria-labels', () => {
     const { container } = render(<FieldMappingRow row={mapped()} />)
     const row = container.querySelector('[data-testid="field-mapping-row"]')
     expect(row?.getAttribute('aria-label')).toBe(
-      'ACCT_MASTER.ACCT_NO mapped to accounts.customer_id at 98.00% confidence, approved',
+      'ACCT_MASTER.ACCT_NO mapped to accounts.customer_id at 98% confidence, approved',
     )
   })
 
@@ -737,7 +945,7 @@ describe('FieldMappingRow — aria-labels', () => {
     const { container } = render(<FieldMappingRow row={valueAssignment()} />)
     const el = container.querySelector('[data-testid="field-mapping-row"]')
     expect(el?.getAttribute('aria-label')).toBe(
-      'accounts.created_at value assignment at 92.00% confidence, approved',
+      'accounts.created_at value assignment at 92% confidence, approved',
     )
   })
 
@@ -770,6 +978,43 @@ describe('FieldMappingRow — data attributes', () => {
   })
 })
 
+// ─── Refinement 4 — opacity fade on empty rows ──────────────────────────────
+//
+// Refinement 4 (Phase 4-polish-1 final-final, 2026-04-26): empty rows
+// (unmapped + target_acknowledged) carry `opacity-70` on the outer
+// listitem container so the eye skips past them when scanning for
+// actionable mappings. Mapped rows + value-assignment rows stay at
+// full opacity. Pin the contract here.
+
+describe('FieldMappingRow — Refinement 4 (opacity fade on empty rows)', () => {
+  it('unmapped rows render with opacity-70 on the listitem container', () => {
+    render(<FieldMappingRow row={unmapped()} />)
+    const row = screen.getByTestId('field-mapping-row')
+    expect(row.className).toContain('opacity-70')
+  })
+
+  it('target_acknowledged rows render with opacity-70 on the listitem container', () => {
+    render(<FieldMappingRow row={targetAck()} />)
+    const row = screen.getByTestId('field-mapping-row')
+    expect(row.className).toContain('opacity-70')
+  })
+
+  it('mapped rows render at full opacity (no opacity-N class on the listitem)', () => {
+    render(<FieldMappingRow row={mapped()} />)
+    const row = screen.getByTestId('field-mapping-row')
+    expect(row.className).not.toContain('opacity-70')
+    // Defensive: no other opacity utility either.
+    expect(row.className).not.toMatch(/\bopacity-\d/)
+  })
+
+  it('value-assignment rows render at full opacity (actionable, not faded)', () => {
+    render(<FieldMappingRow row={valueAssignment()} />)
+    const row = screen.getByTestId('field-mapping-row')
+    expect(row.className).not.toContain('opacity-70')
+    expect(row.className).not.toMatch(/\bopacity-\d/)
+  })
+})
+
 // ─── Gap 5a hotfix 2026-04-23 ─── light-mode-only invariant ────────────────
 //
 // The surrounding redesign UI hardcodes a light background (bg-white on
@@ -782,40 +1027,72 @@ describe('FieldMappingRow — data attributes', () => {
 // className assertions are the component-level smoke-test safety net.
 
 describe('FieldMappingRow — light-mode-only invariant', () => {
-  it('target name span uses full-contrast light-mode color and font-medium', () => {
+  it('target name span uses full-contrast light-mode color and font-normal (Refinement 6)', () => {
+    // Refinement 6 (Phase 4-polish-1 final-final, 2026-04-26): the
+    // target field name dropped its prior `font-medium` weight to
+    // render at `font-normal`, matching the source-side cells. Pin
+    // the new contract verbatim — both color and weight.
     const { container } = render(<FieldMappingRow row={mapped()} />)
     const targetSpan = container.querySelector('.font-mono.text-sm')
     expect(targetSpan).toBeTruthy()
     const cls = targetSpan?.className ?? ''
     expect(cls).toContain('text-slate-900')
-    expect(cls).toContain('font-medium')
+    expect(cls).toContain('font-normal')
+    // Belt and suspenders: the prior weights must NOT appear on the
+    // target span.
+    expect(cls).not.toContain('font-medium')
+    expect(cls).not.toContain('font-semibold')
     expect(cls).not.toMatch(/\bdark:/)
   })
 
-  it('source field name span uses light-mode slate-700 and no dark-prefix', () => {
+  it('source field name span matches target weight + color (Refinement 6)', () => {
+    // Refinement 6: source and target field cells now render at
+    // identical font weight (`font-normal`) and color (`text-slate-
+    // 900`). Hierarchy comes from column position + the column-header
+    // strip, not from typography weight or color contrast.
     render(<FieldMappingRow row={mapped()} />)
     const sourceSpan = screen.getByText('ACCT_NO')
     const cls = sourceSpan.className
-    expect(cls).toContain('text-slate-700')
+    expect(cls).toContain('text-slate-900')
+    expect(cls).toContain('font-normal')
+    // The prior slate-700 (lighter) is gone.
+    expect(cls).not.toContain('text-slate-700')
     expect(cls).not.toMatch(/\bdark:/)
   })
 
-  it('confidence span uses light-mode slate-500 and no dark-prefix', () => {
-    const { container } = render(<FieldMappingRow row={mapped()} />)
-    const confidence = container.querySelector('.tabular-nums')
+  it('color-graded confidence span uses light-mode hues (green/amber/red) and no dark-prefix', () => {
+    // Phase 4-polish-1 (founder Q9): the confidence cell is now band-
+    // classified — high → green-600 + medium-weight, amber → amber-600,
+    // low → red-600. The legacy slate-500 baseline is gone; this test
+    // asserts the new light-mode color set and reaffirms the no-dark-
+    // prefix invariant so the row stays readable in OS dark mode.
+    //
+    // Refinement 3 (2026-04-26): high-band weight dropped from
+    // font-semibold → font-medium so the number sits in the row's
+    // secondary visual layer. The color band still carries the primary
+    // signal; the lighter weight de-emphasizes the digits themselves.
+    const { container } = render(<FieldMappingRow row={mapped({ confidence: 98 })} />)
+    const confidence = container.querySelector('[data-confidence-band="high"]')
     expect(confidence).toBeTruthy()
     const cls = confidence?.className ?? ''
-    expect(cls).toContain('text-slate-500')
+    expect(cls).toContain('text-green-600')
+    expect(cls).toContain('font-medium')
+    expect(cls).not.toContain('font-semibold')
     expect(cls).not.toMatch(/\bdark:/)
   })
 
-  it('"No source mapped" VA slot uses light-mode slate-500 and no dark-prefix', () => {
+  it('"No source mapped" VA slot uses light-mode slate-500 italic and no dark-prefix', () => {
+    // Phase 4-polish-1 (Block A): VA's "No source mapped" inline phrase
+    // moved from the combined source cell to the new source-FIELD column
+    // (column 3). The italic + slate-500 styling is preserved so VAs read
+    // identically across the redesign rollout. Container-wide no-dark-
+    // prefix invariant remains.
     const { container } = render(<FieldMappingRow row={valueAssignment()} />)
     const vaText = screen.getByText('No source mapped')
     const cls = vaText.className
     expect(cls).toContain('text-slate-500')
+    expect(cls).toContain('italic')
     expect(cls).not.toMatch(/\bdark:/)
-    // Sanity: the container must not carry any dark-prefix substring either.
     expect(container.innerHTML).not.toMatch(/\bdark:/)
   })
 
@@ -824,6 +1101,286 @@ describe('FieldMappingRow — light-mode-only invariant', () => {
       <FieldMappingRow row={targetAck({ acknowledgmentReason: 'system default' })} />,
     )
     expect(container.innerHTML).not.toMatch(/\bdark:/)
+  })
+})
+
+// ─── Phase 4-polish-1 — confidence color-grading ────────────────────────────
+//
+// `classifyRowConfidence` (Block B) gates three bands: ≥85 high, 40-84
+// amber, <40 low. The collapsed-row ConfidenceCell renders each with a
+// light-mode hue + the `data-confidence-band` attribute hook so the
+// invariant tests below have a stable selector regardless of class
+// reshuffling. Block A pairs the high band with a slightly heavier weight
+// for the deuteranopia/protanopia accessibility note (founder Q9.1).
+//
+// Refinement 3 (2026-04-26): high-band weight is now `font-medium` (was
+// `font-semibold` at the Phase 4-polish-1 baseline). The differentiation
+// channel is preserved (medium vs. amber/low's font-normal) but at a
+// calmer overall density — the color band remains the primary signal,
+// the weight cue is the second channel for color-blind users.
+
+describe('FieldMappingRow — Phase 4-polish-1 confidence color-grading', () => {
+  it('renders the high band (≥85) in green-600 with font-medium', () => {
+    const { container } = render(<FieldMappingRow row={mapped({ confidence: 92 })} />)
+    const cell = container.querySelector('[data-confidence-band="high"]')
+    expect(cell).toBeTruthy()
+    const cls = cell?.className ?? ''
+    expect(cls).toContain('text-green-600')
+    expect(cls).toContain('font-medium')
+    // Refinement 3 lock-in: font-semibold was the Phase 4-polish-1
+    // baseline before the founder's "de-emphasize the number" refinement;
+    // pin its absence so a future style refactor cannot silently re-bold
+    // the high-band number.
+    expect(cls).not.toContain('font-semibold')
+  })
+
+  it('renders the boundary value 85 as high (inclusive lower bound)', () => {
+    const { container } = render(<FieldMappingRow row={mapped({ confidence: 85 })} />)
+    expect(container.querySelector('[data-confidence-band="high"]')).toBeTruthy()
+  })
+
+  it('renders the amber band (40-84) in amber-600 without font-medium or font-semibold', () => {
+    // Amber and low rely on hue alone (font-normal default). The high
+    // band is the only band carrying a weight cue, per founder Q9.1.
+    const { container } = render(<FieldMappingRow row={mapped({ confidence: 70 })} />)
+    const cell = container.querySelector('[data-confidence-band="amber"]')
+    expect(cell).toBeTruthy()
+    const cls = cell?.className ?? ''
+    expect(cls).toContain('text-amber-600')
+    expect(cls).not.toContain('font-medium')
+    expect(cls).not.toContain('font-semibold')
+  })
+
+  it('renders the boundary value 40 as amber (inclusive lower bound for amber)', () => {
+    const { container } = render(<FieldMappingRow row={mapped({ confidence: 40 })} />)
+    expect(container.querySelector('[data-confidence-band="amber"]')).toBeTruthy()
+  })
+
+  it('renders the low band (<40) in red-600', () => {
+    const { container } = render(<FieldMappingRow row={mapped({ confidence: 30 })} />)
+    const cell = container.querySelector('[data-confidence-band="low"]')
+    expect(cell).toBeTruthy()
+    expect(cell?.className).toContain('text-red-600')
+  })
+
+  it('still renders an em-dash (no band) when confidence is null', () => {
+    // Founder Q9.2 (no color when no number): null confidence keeps the
+    // em-dash placeholder and does NOT carry a `data-confidence-band`
+    // attribute — there's no value to grade.
+    const { container } = render(<FieldMappingRow row={targetAck({ confidence: null })} />)
+    expect(container.querySelector('[data-confidence-band]')).toBeNull()
+    expect(screen.getByLabelText('no confidence available')).toBeInTheDocument()
+  })
+
+  it('treats 0-1 fractional input via the same band classifier (defensive)', () => {
+    // Same defensive 0-1 vs 0-100 tolerance as
+    // `formatConfidencePercent`. A drifted DB that emits 0.92 still
+    // grades as high, so the row reads consistently with the formatted
+    // percent ("92%" post-Refinement H integer rounding).
+    const { container } = render(<FieldMappingRow row={mapped({ confidence: 0.92 })} />)
+    expect(container.querySelector('[data-confidence-band="high"]')).toBeTruthy()
+  })
+})
+
+// ─── Phase 4-polish-1 — column template invariant ───────────────────────────
+//
+// Mirrors the 4c-2 `.delete()` count guard pattern: a regex assertion
+// over the literal grid-template string in `FieldMappingRow.tsx` so a
+// future style refactor cannot silently shift the column structure
+// without showing up as a CI failure.
+
+describe('FieldMappingRow — column template invariant', () => {
+  it('FieldMappingRow.tsx contains the locked 5-column grid template literal', () => {
+    const fs = require('node:fs') as typeof import('node:fs')
+    const path = require('node:path') as typeof import('node:path')
+    const file = fs.readFileSync(
+      path.resolve(
+        __dirname,
+        '../../app/app/projects/[projectId]/mapping/redesign/components/FieldMappingRow.tsx',
+      ),
+      'utf-8',
+    )
+    // Phase 4-polish-1 comprehensive pass (2026-04-26): col 2 tightened
+    // from `minmax(7rem, 12rem)` to `minmax(6rem, 8rem)` (Heritage's
+    // longest source-table badge is 12 chars ≈ 5.7rem, fits in 6rem
+    // with breathing room). Former 5rem actions cell DROPPED.
+    //
+    // Refinement G (Phase 4-polish-1 final, 2026-04-26): the dedicated
+    // chevron column (col 6, 1rem) was DROPPED. The expand chevron now
+    // renders inline in col 3 (source field area) for multi-source
+    // rows only. Template went from 6 cols → 5 cols. Single-source
+    // rows have no chevron at all.
+    //
+    // If a future refactor legitimately needs a new template, update
+    // both this literal AND the ASCII figure in `FieldMappingRow.tsx`
+    // file header AND the paired invariant in
+    // `target-table-group.test.tsx` at the same time — the column
+    // header in `TargetTableGroup.tsx` mirrors this template literal.
+    const expected =
+      'grid-cols-[0.75rem_minmax(6rem,8rem)_minmax(8rem,14rem)_1fr_5rem]'
+    expect(file).toContain(expected)
+    // Belt and suspenders: the prior 6-col template (with trailing
+    // `_1rem` chevron column) must NOT appear anywhere in the file —
+    // a partial-revert that re-introduces col 6 in just the row body
+    // would otherwise pass the `toContain` check above.
+    expect(file).not.toContain(
+      'grid-cols-[0.75rem_minmax(6rem,8rem)_minmax(8rem,14rem)_1fr_5rem_1rem]',
+    )
+  })
+
+  it('FieldMappingRow.tsx body row has py-1.5 vertical density (Phase 4-polish-1 Q1.3)', () => {
+    const fs = require('node:fs') as typeof import('node:fs')
+    const path = require('node:path') as typeof import('node:path')
+    const file = fs.readFileSync(
+      path.resolve(
+        __dirname,
+        '../../app/app/projects/[projectId]/mapping/redesign/components/FieldMappingRow.tsx',
+      ),
+      'utf-8',
+    )
+    // Asserts the locked py-1.5 density. The grid-template line carries
+    // px-5 + py-1.5 together; we anchor on the combined token so this
+    // doesn't false-positive on an unrelated `py-1.5` elsewhere in the
+    // file (e.g. a subtitle).
+    expect(file).toMatch(/grid-cols-\[[^\]]+\][^'"]*px-5 py-1\.5/)
+  })
+})
+
+// ─── Phase 4-polish-1 final refinements (Refinement F) ──────────────────────
+//
+// The row-level transformation indicator was REMOVED entirely. Earlier
+// passes rendered an inline slate-400 dot inside `ConfidenceCell` to
+// signal "this row has a transform"; canary review found it too subtle
+// to convey meaning. The drawer's Transformation section is now the
+// single source of truth for transform status.
+//
+// These regression guards pin the absence and assert that
+// `ConfidenceCell` renders only the percent text (or em-dash) — no
+// trailing element of any kind.
+
+describe('FieldMappingRow — confidence cell renders percent only (Refinement F)', () => {
+  it('does NOT render any transformation indicator alongside the percent', () => {
+    const { container } = render(
+      <FieldMappingRow
+        row={mapped({
+          confidence: 92,
+          hasTransformation: true,
+          transformationStatus: 'applied',
+        })}
+      />,
+    )
+    expect(
+      container.querySelector('[aria-label^="transformation:"]'),
+    ).toBeNull()
+    // The confidence cell renders just the percent (post Refinement H,
+    // integer-rounded — no decimals). `data-confidence-band` is still
+    // present so downstream tests / styling can target the band.
+    const cell = container.querySelector('[data-confidence-band="high"]')
+    expect(cell).toBeTruthy()
+    expect(cell?.textContent).toBe('92%')
+  })
+
+  it('renders only the percent text when hasTransformation=false (no dot, no extras)', () => {
+    const { container } = render(
+      <FieldMappingRow row={mapped({ confidence: 92, hasTransformation: false })} />,
+    )
+    expect(
+      container.querySelector('[aria-label^="transformation:"]'),
+    ).toBeNull()
+    const cell = container.querySelector('[data-confidence-band="high"]')
+    expect(cell).toBeTruthy()
+    expect(cell?.textContent).toBe('92%')
+  })
+})
+
+// ─── Regression guard: the dropped 5rem actions cell is GONE ────────────────
+//
+// Phase 4-polish-1 comprehensive pass dropped the dedicated actions cell.
+// If a future change reintroduces a 5rem column reservation in the row's
+// grid template (e.g., to host Phase 4-polish-3 inline approve/reject
+// buttons), the column-template invariant test will catch it. This guard
+// adds a second-channel assertion: the row body should NOT have a child
+// flex+justify-end div separate from the ConfidenceCell.
+
+describe('FieldMappingRow — dropped actions cell regression guard', () => {
+  it('row body has no standalone flex+justify-end actions container outside the confidence cell', () => {
+    const { container } = render(
+      <FieldMappingRow row={mapped({ hasTransformation: false })} />,
+    )
+    // Direct children of the row body. After the comprehensive pass the
+    // body grid contains: StatusDot, SourceTable, SourceField, Target,
+    // ConfidenceCell, Chevron. None of those should be a flex+justify-
+    // end container that's distinct from the confidence cell.
+    const body = screen.getByTestId('field-mapping-row-body')
+    const directChildren = Array.from(body.children)
+    const orphanActions = directChildren.find((el) => {
+      if (!(el instanceof HTMLElement)) return false
+      // The confidence cell IS flex+justify-end when it carries content,
+      // but it carries `data-confidence-band` — exclude it.
+      if (el.hasAttribute('data-confidence-band')) return false
+      return el.className.includes('justify-end') && el.className.includes('flex')
+    })
+    expect(orphanActions).toBeUndefined()
+  })
+})
+
+// ─── Phase 4-polish-1 — split source columns (table | field) ─────────────────
+//
+// Block A split the legacy combined source cell into two grid columns:
+// the table badge owns column 2 (7-12rem) and the field name(s) own
+// column 3 (1fr). Tests below exercise the rule-dispatch matrix at the
+// column boundary so a future refactor cannot accidentally collapse
+// either column back into a single cell.
+
+describe('FieldMappingRow — split source columns', () => {
+  it('Rule 1 places the badge in column 2 and the field name in column 3 (separate parent elements)', () => {
+    render(<FieldMappingRow row={mapped()} />)
+    const badge = screen.getByText('ACCT_MASTER')
+    const fieldName = screen.getByText('ACCT_NO')
+    // Different DOM ancestors — the badge no longer wraps the field name
+    // (legacy combined-cell layout). The closest ancestor that satisfies
+    // the grid-row body is the same; the immediate parents differ.
+    expect(badge.closest('span[title="ACCT_MASTER"]')).not.toBe(
+      fieldName.closest('span[title="ACCT_NO"]'),
+    )
+  })
+
+  it('value_assignment renders an em-dash in the table column AND "No source mapped" in the field column', () => {
+    // Pairs the legacy "No source mapped" inline phrase (founder Gap 4a
+    // §9 Q5, preserved verbatim) with the new em-dash table-column slot
+    // so the table column reads consistently across kinds.
+    render(<FieldMappingRow row={valueAssignment()} />)
+    expect(screen.getByLabelText('no source table')).toBeInTheDocument()
+    expect(screen.getByText('No source mapped')).toBeInTheDocument()
+  })
+
+  it('Rule 5/6 render an em-dash in BOTH the table column AND the field column with distinct aria-labels', () => {
+    // Distinct aria-labels ("no source mapped" vs "no source field")
+    // prevent screen readers from hearing the same phrase twice while
+    // still communicating the absence of each piece of data.
+    render(<FieldMappingRow row={unmapped()} />)
+    expect(screen.getByLabelText('no source mapped')).toBeInTheDocument()
+    expect(screen.getByLabelText('no source field')).toBeInTheDocument()
+  })
+
+  it('Rule 4 renders an empty (aria-hidden) badge cell + summary phrase in the field column (Q1)', () => {
+    const row = mapped({
+      sources: Array.from({ length: 4 }, (_, i) =>
+        source({
+          id: `ms-${i}`,
+          ordinal: i,
+          sourceField: { id: `sf-${i}`, name: `F${i}`, dataType: 'VARCHAR', isNullable: false },
+          sourceTable: { id: `st-${i % 3}`, name: `TABLE_${i % 3}` },
+        }),
+      ),
+    })
+    const { container } = render(<FieldMappingRow row={row} />)
+    // No table badges in the body for Rule 4 — the column is intentionally
+    // empty so the field column's summary phrase ("4 fields across 3
+    // tables") owns the visual real estate.
+    const body = screen.getByTestId('field-mapping-row-body')
+    expect(within(body).queryByText('TABLE_0')).toBeNull()
+    void container
   })
 })
 

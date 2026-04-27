@@ -2,6 +2,7 @@ import type {
   MappingRow,
   TargetTableSummary,
 } from '@/lib/types/mappings-for-redesign'
+import { classifyRowConfidence } from '@/lib/utils/confidence-format'
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Phase 3 Gap 3 — pure filter pipeline for the redesigned Mapping page.
@@ -33,6 +34,27 @@ export type MappingStatusFilter =
   | 'approved'
   | 'rejected'
 
+/**
+ * Confidence filter bands. The 'medium' band maps to the internal
+ * `'amber'` band returned by `classifyRowConfidence` — see
+ * `rowMatchesConfidenceBand` for the bridge. The user-facing
+ * label and URL param both use 'medium'.
+ *
+ * Threshold reference (sourced from `confidence-format.ts`, single
+ * source of truth — the dropdown labels in `FilterRow.tsx` derive
+ * from those constants too, never literals):
+ *
+ *   • 'high'   ↔ classifyRowConfidence === 'high'   (≥CONFIDENCE_THRESHOLD_ROW_HIGH)
+ *   • 'medium' ↔ classifyRowConfidence === 'amber'  (≥CONFIDENCE_THRESHOLD_ROW_AMBER, <CONFIDENCE_THRESHOLD_ROW_HIGH)
+ *   • 'low'    ↔ classifyRowConfidence === 'low'    (<CONFIDENCE_THRESHOLD_ROW_AMBER)
+ *
+ * Null-confidence rows (Rule 5/6, most VAs) are EXCLUDED whenever a
+ * non-'all' band is selected — they have no number to bucket. Status
+ * and search filters compose orthogonally per the AND-semantics
+ * contract above.
+ */
+export type MappingConfidenceFilter = 'all' | 'high' | 'medium' | 'low'
+
 /** Shape of the active filter state, mirrored to/from URL params. */
 export interface MappingFilterState {
   /** Target table id or 'all'. */
@@ -41,6 +63,11 @@ export interface MappingFilterState {
   source: string
   /** Status filter value; 'all' includes rejected (§9 Q6 resolution). */
   status: MappingStatusFilter
+  /**
+   * Confidence-band filter (Phase 4-polish-1 comprehensive pass).
+   * Applies to TFM-level confidence via `classifyRowConfidence`.
+   */
+  confidence: MappingConfidenceFilter
   /** Free-text search. Case-insensitive substring match. */
   search: string
 }
@@ -50,6 +77,7 @@ export const DEFAULT_FILTER_STATE: MappingFilterState = {
   target: 'all',
   source: 'all',
   status: 'all',
+  confidence: 'all',
   search: '',
 }
 
@@ -69,8 +97,15 @@ export function filterRows(
   const hasTargetFilter = filters.target !== 'all'
   const hasSourceFilter = filters.source !== 'all'
   const hasStatusFilter = filters.status !== 'all'
+  const hasConfidenceFilter = filters.confidence !== 'all'
 
-  if (!hasTargetFilter && !hasSourceFilter && !hasStatusFilter && !hasSearch) {
+  if (
+    !hasTargetFilter &&
+    !hasSourceFilter &&
+    !hasStatusFilter &&
+    !hasConfidenceFilter &&
+    !hasSearch
+  ) {
     // Fast path: no filters active. Return a defensive copy so callers
     // never get a readonly alias they can accidentally mutate.
     return rows.slice()
@@ -87,12 +122,42 @@ export function filterRows(
     if (hasStatusFilter && row.status !== filters.status) {
       continue
     }
+    if (
+      hasConfidenceFilter &&
+      !rowMatchesConfidenceBand(row, filters.confidence)
+    ) {
+      continue
+    }
     if (hasSearch && !rowMatchesSearch(row, search)) {
       continue
     }
     out.push(row)
   }
   return out
+}
+
+/**
+ * Row-level predicate for the Confidence filter (Phase 4-polish-1
+ * comprehensive pass). Maps the user-facing band ('high'/'medium'/'low')
+ * onto `classifyRowConfidence`'s internal classification ('high'/
+ * 'amber'/'low'). 'medium' is the user-facing softening of the internal
+ * 'amber' label.
+ *
+ * Null-confidence rows (Rule 5/6, most VAs) are EXCLUDED whenever a
+ * non-'all' band is selected — they have no number to bucket, and
+ * "show me low-confidence rows" should not surprise the user with rows
+ * that have no confidence at all.
+ */
+function rowMatchesConfidenceBand(
+  row: MappingRow,
+  band: MappingConfidenceFilter,
+): boolean {
+  if (band === 'all') return true
+  if (row.confidence === null) return false
+  const classified = classifyRowConfidence(row.confidence)
+  if (band === 'high') return classified === 'high'
+  if (band === 'medium') return classified === 'amber'
+  return classified === 'low'
 }
 
 /**
@@ -190,6 +255,7 @@ export function parseFilterStateFromParams(params: {
     target: params.get('target') ?? 'all',
     source: params.get('source') ?? 'all',
     status: normalizeStatus(params.get('status')),
+    confidence: normalizeConfidence(params.get('confidence')),
     search: params.get('q') ?? '',
   }
 }
@@ -207,6 +273,7 @@ export function serializeFilterStateToQuery(state: MappingFilterState): string {
   if (state.target !== 'all') params.set('target', state.target)
   if (state.source !== 'all') params.set('source', state.source)
   if (state.status !== 'all') params.set('status', state.status)
+  if (state.confidence !== 'all') params.set('confidence', state.confidence)
   if (state.search.trim() !== '') params.set('q', state.search)
   return params.toString()
 }
@@ -218,12 +285,20 @@ function normalizeStatus(raw: string | null): MappingStatusFilter {
   return 'all'
 }
 
+function normalizeConfidence(raw: string | null): MappingConfidenceFilter {
+  if (raw === 'high' || raw === 'medium' || raw === 'low') {
+    return raw
+  }
+  return 'all'
+}
+
 /** Convenience: is any filter non-default? */
 export function hasActiveFilters(state: MappingFilterState): boolean {
   return (
     state.target !== 'all' ||
     state.source !== 'all' ||
     state.status !== 'all' ||
+    state.confidence !== 'all' ||
     state.search.trim() !== ''
   )
 }
