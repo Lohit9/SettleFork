@@ -62,8 +62,13 @@ import {
 import { FilterRow } from './components/FilterRow'
 import { TargetTableGroup } from './components/TargetTableGroup'
 import { MappingDrawer } from './components/MappingDrawer'
+import { MappingSummaryStrip } from './components/MappingSummaryStrip'
 import { SourceSchemaSidebar } from './components/SourceSchemaSidebar'
-import { useSidebarState, type SidebarState } from './components/useSidebarState'
+import {
+  useSidebarState,
+  type SidebarFilter,
+  type SidebarState,
+} from './components/useSidebarState'
 import type { CreateMappingFormSnapshot } from './components/CreateMappingForm'
 import {
   BulkConfirmDialog,
@@ -77,12 +82,19 @@ import {
   previewBulkReject,
 } from '@/lib/actions/mappings-for-redesign'
 import { ToastProvider, useToast } from '@/lib/contexts/ToastContext'
+import { CONFIDENCE_THRESHOLD_ROW_HIGH } from '@/lib/utils/confidence-format'
 
 // Phase 4c-1 — high-confidence threshold (mirrors legacy default).
-// Lives here so the FilterRow button copy and the wrapper's threshold
+// Lives here so the FilterRow contextual link copy, the new Confidence
+// filter dropdown's "High (≥85)" label, and the wrapper's threshold
 // argument never drift (the wrapper accepts `threshold` and defaults
 // to 85; this constant is the canonical client-side reflection).
-const HIGH_CONFIDENCE_THRESHOLD = 85
+//
+// Phase 4-polish-1 comprehensive pass: this re-exports
+// `CONFIDENCE_THRESHOLD_ROW_HIGH` from `confidence-format.ts` so the
+// row-display band classifier and the bulk-approve gate use the same
+// numeric value. Previously a private 85 lived here in parallel.
+const HIGH_CONFIDENCE_THRESHOLD = CONFIDENCE_THRESHOLD_ROW_HIGH
 
 const SEARCH_DEBOUNCE_MS = 200
 
@@ -234,7 +246,7 @@ export default function MappingRedesignContent({
   //   • Drawer action complete (Approve/Reject) clears the highlight
   //     to prevent stale rowId references after a Reject deletes a
   //     TFM. Approve case is mild over-clearing; Reject case is
-  //     necessary. See `MappingBody.handleDrawerActionComplete`.
+  //     necessary. See `MappingContentLoaded.handleDrawerActionComplete`.
   const [highlightedSourceFieldId, setHighlightedSourceFieldId] = useState<
     string | null
   >(null)
@@ -297,53 +309,72 @@ export default function MappingRedesignContent({
     }
   }, [highlightedSourceFieldId, clearHighlight])
 
+  // Phase 4-polish-1 sidebar architecture refactor (2026-04-26):
+  // `<MappingSummaryStrip>` and `<FilterRow>` are now PAGE-LEVEL
+  // siblings of `<PageHeader>`, sitting ABOVE the sidebar+body flex
+  // row. Previously they lived inside the body's scroll container,
+  // which caused horizontal squish whenever the sidebar expanded
+  // from 28px to 200px (the toolbar shared the same horizontal
+  // space as the group cards). The structural fix elevates them
+  // to the page-level toolbar so they read as semantically
+  // equivalent to the page header — full-width, never covered by
+  // the sidebar, never scrolled.
+  //
+  // `<ToastProvider>` wraps the entire flex column so any descendant
+  // (including the page-level FilterRow's bulk-approve handler) can
+  // call `useToast`. `<ToastContainer>` (a sibling of the flex
+  // column inside the provider) is `position: fixed` and does not
+  // affect flex layout.
   return (
-    <div className="flex h-full flex-col bg-gray-50">
-      <PageHeader
-        projectName={projectName}
-        title="Mapping"
-        projectInfo={projectInfo}
-      />
-      {/* Horizontal layout: source-schema sidebar (left) + main scroll
-          container (right). The drawer mounts inside `MappingBody` and
-          is `position: fixed` (anchored to the viewport, not its DOM
-          parent), so it overlays the right portion regardless of where
-          it lives in the tree. `min-h-0` is necessary — without it,
-          flex children stretch indefinitely instead of letting the
-          inner scroll container handle overflow. */}
-      <div className="flex min-h-0 flex-1 overflow-hidden">
-        <SourceSchemaSidebar
-          state={effectiveSidebarState}
-          filter={sidebarFilter}
-          onStateChange={handleSidebarStateChange}
-          onFilterChange={setSidebarFilter}
-          sourceFields={initialRedesignData?.sourceFields ?? []}
-          highlightedSourceFieldId={highlightedSourceFieldId}
-          onFieldClick={handleSidebarFieldClick}
+    <ToastProvider>
+      <div className="flex h-full flex-col bg-gray-50">
+        <PageHeader
+          projectName={projectName}
+          title="Mapping"
+          projectInfo={projectInfo}
         />
-        <div className="flex-1 overflow-auto">
-          <div className="mx-auto w-full max-w-5xl px-6 py-6">
-            <WipBanner projectId={projectId} />
-            {initialRedesignData === null ? (
-              <NoDataState />
-            ) : (
-              // Phase 4a-4a — toast provider scoped to the redesign
-              // page (founder decision §1-OQ-1). `MappingBody` reads
-              // `useToast` for the row-switch-while-dirty undo
-              // affordance.
-              <ToastProvider>
-                <MappingBody
-                  projectId={projectId}
-                  data={initialRedesignData}
-                  highlightedRowIds={highlightedRowIds}
-                  onClearHighlight={clearHighlight}
-                />
-              </ToastProvider>
-            )}
+        {initialRedesignData === null ? (
+          // Empty / error path — sidebar is rendered but inert; the
+          // body shows a single inline error card.
+          <div className="flex min-h-0 flex-1 overflow-hidden">
+            <SourceSchemaSidebar
+              state={effectiveSidebarState}
+              filter={sidebarFilter}
+              onStateChange={handleSidebarStateChange}
+              onFilterChange={setSidebarFilter}
+              sourceFields={[]}
+              highlightedSourceFieldId={highlightedSourceFieldId}
+              onFieldClick={handleSidebarFieldClick}
+            />
+            <div className="flex-1 overflow-auto">
+              <div className="mx-auto w-full max-w-5xl px-6 py-6">
+                <NoDataState />
+              </div>
+            </div>
           </div>
-        </div>
+        ) : (
+          // Loaded path — `MappingContentLoaded` returns a Fragment
+          // whose children flow as direct siblings of `<PageHeader>`
+          // under the outer flex column. The first three Fragment
+          // children are the page-level toolbar (Strip + FilterRow)
+          // followed by the sidebar+body flex row; trailing
+          // children are the position-fixed drawer + bulk dialog
+          // (no flex impact).
+          <MappingContentLoaded
+            projectId={projectId}
+            data={initialRedesignData}
+            sidebarState={effectiveSidebarState}
+            sidebarFilter={sidebarFilter}
+            onSidebarStateChange={handleSidebarStateChange}
+            onSidebarFilterChange={setSidebarFilter}
+            highlightedSourceFieldId={highlightedSourceFieldId}
+            onSidebarFieldClick={handleSidebarFieldClick}
+            highlightedRowIds={highlightedRowIds}
+            onClearHighlight={clearHighlight}
+          />
+        )}
       </div>
-    </div>
+    </ToastProvider>
   )
 }
 
@@ -375,34 +406,41 @@ function buildSourceFieldToRowIds(
   return out
 }
 
-// ─── WIP banner ──────────────────────────────────────────────────────────────
-
-function WipBanner({ projectId }: { projectId: string }) {
-  return (
-    <div
-      role="status"
-      aria-live="polite"
-      data-testid="mapping-redesign-placeholder"
-      className="mb-6 rounded-lg border border-amber-300 bg-amber-50 px-4 py-3 text-xs text-amber-900"
-    >
-      <span className="font-semibold">Mapping redesign — Phase 3 in progress.</span>{' '}
-      You are viewing the experimental redesigned Mapping UI behind the{' '}
-      <code className="rounded bg-amber-100 px-1 py-0.5">use_mapping_redesign</code>{' '}
-      feature flag. Project <span className="font-mono">{projectId}</span>.
-    </div>
-  )
-}
-
 // ─── Body ────────────────────────────────────────────────────────────────────
+// (Phase 4-polish-1 founder Q2.1: WipBanner dropped entirely. The
+// experimental "Mapping redesign — Phase 3 in progress" amber banner
+// lived here from Phase 3 forward; with Phase 4c shipped on Heritage the
+// banner has nothing useful to communicate. Removed without replacement.)
+//
 
-function MappingBody({
+function MappingContentLoaded({
   projectId,
   data,
+  sidebarState,
+  sidebarFilter,
+  onSidebarStateChange,
+  onSidebarFilterChange,
+  highlightedSourceFieldId,
+  onSidebarFieldClick,
   highlightedRowIds,
   onClearHighlight,
 }: {
   projectId: string
   data: MappingsForRedesignResult
+  /**
+   * Sidebar shell props — owned by `MappingRedesignContent` (the
+   * outer entry component) so the sidebar persists its state across
+   * loaded/empty data transitions. We accept them as a flat prop
+   * surface here rather than a nested object so React's static
+   * memoisation reads them as stable references when the parent
+   * memoises individually.
+   */
+  sidebarState: SidebarState
+  sidebarFilter: SidebarFilter
+  onSidebarStateChange: (next: SidebarState) => void
+  onSidebarFilterChange: (next: SidebarFilter) => void
+  highlightedSourceFieldId: string | null
+  onSidebarFieldClick: (fieldId: string) => void
   /**
    * Phase 3 Gap 11b — set of row ids the sidebar's click-to-highlight
    * interaction is currently illuminating. `null` means no highlight
@@ -538,6 +576,7 @@ function MappingBody({
           next.target === prev.target &&
           next.source === prev.source &&
           next.status === prev.status &&
+          next.confidence === prev.confidence &&
           next.search !== prev.search
         ) {
           pendingSearchTimer.current = setTimeout(() => {
@@ -1162,49 +1201,92 @@ function MappingBody({
     return n
   }, [data.rows])
 
+  // Phase 4-polish-1 sidebar architecture refactor (2026-04-26): the
+  // returned Fragment expands as direct children of the outer flex
+  // column rendered by `MappingRedesignContent`. The sibling order
+  // is intentional and pinned by a structural invariant test in
+  // `tests/components/mapping-redesign-content.test.tsx`:
+  //
+  //   1. <MappingSummaryStrip>  — page-level toolbar row 1 (chips)
+  //   2. <FilterRow>            — page-level toolbar row 2
+  //   3. <div ...flex row>      — sidebar + body scroll container
+  //   4. <MappingDrawer>        — position-fixed; no flex impact
+  //   5. <BulkConfirmDialog>    — position-fixed; no flex impact
+  //
+  // Strip and FilterRow used to live INSIDE the body's
+  // `flex-1 overflow-auto` scroll container, which caused horizontal
+  // squish whenever the sidebar expanded. Lifting them out makes
+  // them semantically equivalent to the page header — they span the
+  // viewport's full width regardless of sidebar state.
   return (
     <>
-      <CountersRow counts={data.counts} />
-
+      <MappingSummaryStrip counts={data.counts} />
       <FilterRow
         filters={filters}
         onFiltersChange={handleFiltersChange}
         targetTables={data.targetTables}
         sourceTables={data.sourceTables}
-        tableCount={data.targetTables.length}
         rejectedCount={data.counts.rejected}
         highConfidenceCount={highConfidenceCount}
         onApproveHighConfidenceClick={handleApproveHighConfidenceClick}
       />
 
-      {data.targetSchemaEmpty ? (
-        <EmptySchemaState />
-      ) : data.targetTables.length === 0 ? (
-        <EmptyFieldsState />
-      ) : visibleTargetTables.length === 0 ? (
-        <NoGroupsMatchState />
-      ) : (
-        <div className="flex flex-col gap-4">
-          {visibleTargetTables.map((summary) => {
-            const rowsInGroup = groupedRows.get(summary.id) ?? []
-            const perGroup = perGroupCounts.get(summary.id)
-            return (
-              <TargetTableGroup
-                key={summary.id}
-                targetTable={summary}
-                rows={rowsInGroup}
-                filteredCount={isDefaultState ? undefined : perGroup}
-                onRowClick={handleRowClick}
-                openRowId={drawerRowId}
-                highlightedRowIds={highlightedRowIds}
-                needsReviewCount={needsReviewCountByTable.get(summary.id) ?? 0}
-                onApproveAllClick={handleApproveAllForTableClick}
-                onRejectAllClick={handleRejectAllForTableClick}
-              />
-            )
-          })}
+      {/* Sidebar + body scroll container. The sidebar persists across
+          loaded/empty data states (its own state lives in
+          `MappingRedesignContent`); the body renders the group-card
+          list, per-group empty states, or filter-empty states inside
+          a centered max-w-5xl reading column. `min-h-0` is necessary —
+          without it, flex children stretch indefinitely instead of
+          letting the scroll container handle overflow. */}
+      <div className="flex min-h-0 flex-1 overflow-hidden">
+        <SourceSchemaSidebar
+          state={sidebarState}
+          filter={sidebarFilter}
+          onStateChange={onSidebarStateChange}
+          onFilterChange={onSidebarFilterChange}
+          sourceFields={data.sourceFields}
+          highlightedSourceFieldId={highlightedSourceFieldId}
+          onFieldClick={onSidebarFieldClick}
+        />
+        <div className="flex-1 overflow-auto">
+          {/*
+            Body reading column. `py-6` provides 24px top + 24px bottom
+            breathing room around the group cards. The toolbar above
+            (Strip + FilterRow) is full-width and outside this column;
+            the column only governs the body content's reading width.
+          */}
+          <div className="mx-auto w-full max-w-5xl px-6 py-6">
+            {data.targetSchemaEmpty ? (
+              <EmptySchemaState />
+            ) : data.targetTables.length === 0 ? (
+              <EmptyFieldsState />
+            ) : visibleTargetTables.length === 0 ? (
+              <NoGroupsMatchState />
+            ) : (
+              <div className="flex flex-col gap-4">
+                {visibleTargetTables.map((summary) => {
+                  const rowsInGroup = groupedRows.get(summary.id) ?? []
+                  const perGroup = perGroupCounts.get(summary.id)
+                  return (
+                    <TargetTableGroup
+                      key={summary.id}
+                      targetTable={summary}
+                      rows={rowsInGroup}
+                      filteredCount={isDefaultState ? undefined : perGroup}
+                      onRowClick={handleRowClick}
+                      openRowId={drawerRowId}
+                      highlightedRowIds={highlightedRowIds}
+                      needsReviewCount={needsReviewCountByTable.get(summary.id) ?? 0}
+                      onApproveAllClick={handleApproveAllForTableClick}
+                      onRejectAllClick={handleRejectAllForTableClick}
+                    />
+                  )
+                })}
+              </div>
+            )}
+          </div>
         </div>
-      )}
+      </div>
 
       {/*
         Phase 3 Gap 7 — drawer host. Position-fixed; no backdrop. The
@@ -1270,55 +1352,12 @@ function MappingBody({
   )
 }
 
-// ─── Counters row ────────────────────────────────────────────────────────────
-// Inline pipe-separated stats, matching the spec mockup (line 646) and the
-// existing pattern in components/app/ProjectsList.tsx. Values are always
-// unfiltered project totals (per design §5.3); filter-aware "X of Y" lives
-// at the per-group header via TargetTableGroup's `filteredCount` prop.
-
-function CountersRow({
-  counts,
-}: {
-  counts: MappingsForRedesignResult['counts']
-}) {
-  const chips: { label: string; value: number }[] = [
-    { label: 'Total', value: counts.total },
-    { label: 'Approved', value: counts.approved },
-    { label: 'Needs Review', value: counts.needsReview },
-  ]
-  // §9 Q6 (2026-04-22): show the Rejected chip only when the count is non-zero.
-  if (counts.rejected > 0) {
-    chips.push({ label: 'Rejected', value: counts.rejected })
-  }
-  // Phase 3 Gap 13 (2026-04-25): show the Unmapped chip only when the
-  // count is non-zero — same gating convention as Rejected. Surfaces the
-  // project-level aggregate count of target fields that have no TFM at
-  // all, which was previously invisible despite being on the contract
-  // (`counts.unmapped`). Per-row Rule 6 already shows each unmapped
-  // field inline; this chip is the project-level scanning surface.
-  if (counts.unmapped > 0) {
-    chips.push({ label: 'Unmapped', value: counts.unmapped })
-  }
-
-  return (
-    <div
-      className="mb-3 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-gray-500"
-      data-testid="mapping-redesign-counters"
-    >
-      {chips.map((chip, i) => (
-        <span key={chip.label} className="flex items-center gap-3">
-          {i > 0 ? <span aria-hidden="true" className="text-gray-300">·</span> : null}
-          <span>
-            <span className="font-medium text-gray-700">{chip.label}</span>{' '}
-            <span className="tabular-nums">{chip.value}</span>
-          </span>
-        </span>
-      ))}
-    </div>
-  )
-}
-
 // ─── Empty / error states ────────────────────────────────────────────────────
+// (Phase 4-polish-1 founder Q2: CountersRow retired. Project-level chip
+// rendering moved to `MappingSummaryStrip` at the page-header layer with
+// restored legacy density. The §9 Q6 Rejected gating and the Phase 3
+// Gap 13 Unmapped gating are preserved verbatim there.)
+//
 
 function NoDataState() {
   return (
@@ -1396,6 +1435,7 @@ function isDefaultFilterState(state: MappingFilterState): boolean {
     state.target === DEFAULT_FILTER_STATE.target &&
     state.source === DEFAULT_FILTER_STATE.source &&
     state.status === DEFAULT_FILTER_STATE.status &&
+    state.confidence === DEFAULT_FILTER_STATE.confidence &&
     state.search === DEFAULT_FILTER_STATE.search
   )
 }

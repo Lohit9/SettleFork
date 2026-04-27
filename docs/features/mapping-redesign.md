@@ -2161,6 +2161,110 @@ When every TFM's transform reset fails (rejectable.length === 0 after the loop),
 
 With 4c-2 shipped, both halves of W5 (bulk approve + bulk reject) are live on the redesigned Mapping page. The remaining Phase 4 work is the rolling Phase 5-Cleanup list (legacy code retirement, RLS hardening, docs consolidation).
 
+## Phase 4-polish-1 — visual restoration (2026-04-26)
+
+Phase 4-polish-1 is the first of three polish sub-phases that restore the legacy Mapping page's tighter, more scannable aesthetic on top of the redesign's structural foundation. This sub-phase is **visual-only** — no backend changes, no new wrappers, no migrations, no behavior changes to mutation paths. The redesign's data model, server actions, and feature-flag gating are all untouched.
+
+The other two polish sub-phases ship separately:
+
+- **4-polish-2** — group collapse/expand state with per-project `localStorage` keying, auto-expand-on-filter-match (founder Q3.x).
+- **4-polish-3** — inline approve/reject affordances in the row's actions cell with full Heritage MCP smoke verification (founder Q10.1, Q12.2).
+
+### Block A — row layout refactor (`FieldMappingRow.tsx`)
+
+The row's CSS Grid template moves from a 6-column `[20px_2fr_2fr_5rem_4rem_1rem]` shape to a 7-column `[0.75rem_minmax(7rem,12rem)_minmax(8rem,14rem)_1fr_5rem_5rem_1rem]` shape, isolating the source table badge into its own column so it never pushes the field name and capping the source-field column so source table + source field sit together as a visual unit. Column ownership:
+
+1. **Status dot** (0.75rem) — `StatusDot`, dot only, no text label. ARIA label preserved (`aria-label="status: <Status>"`).
+2. **Source table badge** (`minmax(7rem, 12rem)`) — `SourceTableCell`. Single `TableBadge` for Rule 1, two `TableBadge`s side-by-side for Rule 3 (multi-table), an `EmDashCell` for VA / Rule 5 / Rule 6, an empty span for Rule 4 (3+ tables — the summary phrase lives in column 3 and the badge column is intentionally blank).
+3. **Source field name(s)** (`minmax(8rem, 14rem)`) — `SourceFieldCell`. Rule 1: single name. Rule 2 (multi-source same table): comma-list. Rule 3 (multi-source cross-table): inline middle-dot list. Rule 4 (3+ tables): summary phrase. VA: "No source mapped". Rule 5 / Rule 6: `EmDashCell`. The cap (Refinement 4 / 2026-04-26) keeps the source-table badge and source-field name visually adjacent at wide viewports — without it, the spread between cols 2 and 3 broke the source-side / target-side mental grouping.
+4. **Target field name** (`1fr`) — `TargetCell`. The legacy `AcknowledgedSubtitle` is dropped; acknowledged TFMs render an inline `(acknowledged)` suffix after the target name with the reason in a `title=` tooltip (founder Q6.1). Absorbs the bulk of the remaining horizontal space; whitespace between the source group (cols 2-3) and the target column conveys source→target flow without per-row arrows.
+5. **Confidence** (5rem, right-aligned) — `ConfidenceCell` with the Block B color-grading (see below). Em-dash for null and acknowledged (founder Q6.2 — no number, no color).
+6. **Actions cell** (5rem, right-aligned) — `ActionsCell`. Carries the existing transform indicator dot (relocated from its previous spot), positioned `justify-end`. The 4-polish-3 inline approve/reject buttons land here.
+7. **Chevron** (1rem) — `ChevronSlot`, unchanged from Phase 3.
+
+Vertical density compresses from `py-2.5` to `py-1.5` (founder Q1.3) — the legacy 32-row-per-screen feel returns without sacrificing tap target affordance because the chevron and (in 4-polish-3) inline action buttons live in their own end-aligned columns rather than competing with row chrome.
+
+Cross-table truncation: `TableBadge` accepts an optional `maxWidth` prop that the `SourceTableCell` Rule 3 path threads through, applying `max-width: 6rem; text-overflow: ellipsis` plus a `title=` tooltip with the full table name. Single-badge rows (Rule 1) leave the prop unset and render at natural width — only the multi-badge cross-table case truncates.
+
+### Block B — confidence color-grading (`lib/utils/confidence-format.ts`)
+
+Two new threshold constants and a 3-band classifier ship without modifying the existing `CONFIDENCE_THRESHOLD_HIGH` (70) used by `ConfidencePill`:
+
+- `CONFIDENCE_THRESHOLD_ROW_HIGH = 85`
+- `CONFIDENCE_THRESHOLD_ROW_AMBER = 40`
+- `classifyRowConfidence(c: number): 'high' | 'amber' | 'low'`
+
+The classifier accepts confidence in either fraction (`0.92`) or percent (`92`) form; values >1 are treated as percent, otherwise scaled by 100. The two consumers — `ConfidenceCell` in the collapsed row and `ExpandedSourceList`'s per-source line — apply the same map:
+
+- `'high'` → `text-green-600 font-medium` (size `text-[11px]`)
+- `'amber'` → `text-amber-600` (size `text-[11px]`)
+- `'low'` → `text-red-600` (size `text-[11px]`)
+
+`ConfidencePill` (used by the Drawer header and the AI Suggest in-form pill) keeps its existing 70/50 thresholds — those are summary indicators in larger UI surfaces with a different visual budget. The row-level thresholds run hotter (85 / 40) because the row body is dense and the user is scanning hundreds of values; a tighter band makes the green rows pop and the red rows demand attention without needing per-row hover affordance.
+
+A slightly heavier weight on the green band (`font-medium` vs. amber/low's `font-normal`, founder Q9.1) is the only typographic differentiation v1 ships — additional pairings (e.g. amber italic, low underline) are deferred until polish-3 lands and we can see how the inline action buttons interact with the row's visual rhythm.
+
+**Refinement 3 (2026-04-26).** The number itself is de-emphasized in favor of the color-band signal: text size dropped from `text-xs` to `text-[11px]` (one custom step below the default Tailwind ladder) and high-band weight from `font-semibold` to `font-medium`. The row reads calmer and the digits sit in the secondary visual layer — color-band still carries the actionable signal, the number remains reference precision.
+
+### Block C — header restoration (`MappingSummaryStrip.tsx`, `MappingContent.tsx`)
+
+A new `MappingSummaryStrip.tsx` replaces both the experimental `WipBanner` (dropped per Q2.1) and the structural `CountersRow`. It renders a single horizontal strip directly below the page header with:
+
+- **Breadcrumb** (left, behind a vertical divider): `<sourceSystem> → <targetSystem>`. Hidden entirely when EITHER side is null (founder Q2.2 — a one-sided breadcrumb is more confusing than no breadcrumb).
+- **Always-visible chips** (right of breadcrumb): Total, Approved (green dot), Needs Review (amber dot), separated by middle-dot dividers.
+- **Conditional chips**: Rejected (red dot, count > 0), Unmapped (slate-300 dot, count > 0). The slate-300 hue is shared with the unmapped + acknowledged status dots in the row body (founder Q7.2 unification).
+
+Styling: white background, `border-b border-gray-100`, no shadow (founder Q2.3 — reads as a structural divider, not a floating bar). The strip is **non-sticky** (founder Q8.1) and scrolls away naturally when the user dives into the row body, leaving the (now sticky) `FilterRow` as the persistent toolbar.
+
+`MappingContent.tsx` drops both the `<WipBanner />` import + render and the `<CountersRow />` import + render, mounting `<MappingSummaryStrip />` in their place and threading `projectInfo.sourceSystem` and `projectInfo.targetSystem` through (already on props — only the call site changes). The Phase 3 Gap 13 unmapped counter chip behavior is preserved by the strip's conditional Unmapped chip path; the `mapping-redesign-counters` test ID is retired and a regression guard test now asserts its absence.
+
+### Block D — sticky filter row (`FilterRow.tsx`)
+
+`FilterRow` becomes sticky at the top of the scroll container with `sticky top-0 z-10`. The negative horizontal margin (`-mx-6`) plus matching padding (`px-6`) extends the slate-50 background full-width inside its column container so the sticky bar reads as a unified toolbar rather than a floating pill. `border-b border-gray-100` matches the summary strip's bottom border for visual continuity once the strip scrolls past.
+
+Group headers are intentionally NOT sticky in 4-polish-1 (founder Q8.2 — defer). The current 1-target-table-per-screen reading pattern doesn't demand them, and adding a second sticky layer would require careful z-index choreography that's better paired with the 4-polish-2 group collapse work.
+
+### Block E — tests
+
+Updated:
+
+- `tests/components/field-mapping-row.test.tsx` — ~30 cases updated for the new column template, `StatusDot` (label-text → ARIA-label assertion), `target-acknowledged-suffix` `data-testid` (replacing `target-subtitle`), color-graded confidence assertions. New suites cover (a) the 3-band confidence classifier with boundary values, (b) a regex-based column-template invariant test that reads `FieldMappingRow.tsx` from disk and asserts the exact 7-column grid string + `py-1.5` density (mirroring the 4c-2 `.delete()` count guard pattern, founder Q10.2), (c) the `ActionsCell` shape and right-alignment, and (d) the split source columns (table badge in column 2, field name(s) in column 3) for VA / Rule 5/6 / Rule 4.
+- `tests/components/mapping-redesign-content.test.tsx` — ~10 cases updated to query `mapping-summary-strip` instead of `mapping-redesign-counters`. Two new regression guard tests assert that `mapping-redesign-counters` and `mapping-redesign-placeholder` (the retired `WipBanner`) are NOT in the rendered DOM.
+
+New:
+
+- `tests/components/mapping-summary-strip.test.tsx` (~13 cases) — breadcrumb conditional render (both / null source / null target / both null), chip rendering and ordering, conditional Rejected/Unmapped chips, dot color assertions, Q2.3 styling invariants (white bg + slate-100 border + no shadow), and the per-component dark-prefix invariant.
+
+The column-template invariant test is the structural equivalent of the 4c-2 `.delete()` count guard: a compile-time invariant that the source file has exactly the expected shape, raising before any visual review can catch it. Without it, an editor who reflows the grid string into a multi-line `cn()` call would silently break the layout.
+
+### Block F — docs
+
+This document gains the Phase 4-polish-1 section. `docs/features/phase-4-plan.md` gains a sub-phase row in the implementation status table and a header status update.
+
+### What's deliberately NOT in 4-polish-1
+
+- **Inline approve / reject buttons in the actions cell.** The actions cell ships in 4-polish-1 as a structural slot (currently holding only the transform dot) so 4-polish-3 can drop the buttons in without touching the grid template. The buttons ship behind the full Heritage MCP smoke gate (founder Q10.1, Q12.2).
+- **Group collapse/expand state.** The current per-target-table groups remain always-expanded. 4-polish-2 ships per-project `localStorage` keying with auto-expand on filter match (founder Q3.x).
+- **Reject popover, deep-link to drawer for un-acknowledge, source swap toast.** All three are 4-polish-3 (founder Q5.1, Q5.2, Q4.1) — they require either backend behavior the polish-1 quality gate forbids or UI surfaces (popover machinery) that pair more naturally with the inline-action work.
+- **Sticky group headers.** Deferred (Q8.2) — see Block D.
+
+### Quality gates exercised
+
+- `tsc --noEmit` clean (no new types fight existing ones; the `RowConfidenceBand` union ships pure-additively).
+- `vitest run --exclude='tests/integration/**'` green at the polish-1 commit.
+- `npm run build` green.
+- All grep invariants pass: no `dark:` modifiers under the redesign path, no client-side `.sort()` in redesign components, no legacy mappings imports under the redesign UI.
+- No backend changes — no migrations, no new wrappers, no RPC changes. The wrapper count and the migration count both stay flat from 4c-2 to 4-polish-1.
+
+### Refinements (2026-04-26 — bundled into the same commit)
+
+After the initial Phase 4-polish-1 visual review, four refinements landed on top of the same uncommitted changeset before commit. All four are visual-only; no test count regression, no new wrappers, no new dependencies.
+
+1. **Smaller status dots.** `StatusDot` shrunk from `h-2 w-2` (8px) to `h-1.5 w-1.5` (6px). The 0.75rem (12px) grid column is unchanged so the dot still centers cleanly. The label was already gone in the Phase 4-polish-1 baseline; the larger dot read as visual noise without it. ARIA label preserved verbatim.
+2. **Transform indicator polish.** The col-6 `TransformationIndicator` unifies all status colors to `bg-slate-400` (was `bg-green-500` for applied, `bg-red-500` for stale, `bg-amber-400` for draft / tested / saved). Size pinned at `h-1.5 w-1.5` to match the new status-dot rhythm. The `title=` tooltip stays dynamic ("Transformation applied" / "Transformation stale" / etc.) so power users keep the per-status detail one hover away; the dot itself drops the saturated semantic color to read as "subtle marker, not feature highlight". `TRANSFORM_INDICATOR_CONFIG` retains the `className` field for future use by other surfaces (e.g., the drawer header) — the row indicator deliberately ignores it.
+3. **Smaller, lighter confidence text.** `ConfidenceCell` text dropped from `text-xs` (12px) to `text-[11px]` (one custom step below the default Tailwind ladder) and high-band weight from `font-semibold` to `font-medium`. The high band's color-plus-weight Q9.1 second channel for color-blind users is preserved (medium > amber/low's normal); the row reads calmer overall. Em-dash for null / acknowledged stays neutral via `EmDashCell`.
+4. **Tighter source group via constrained col 3.** Grid template col 3 changed from `1fr` to `minmax(8rem, 14rem)` — the source-table badge (col 2, 7-12rem) and source-field name (col 3, now 8-14rem) sit together as one visual unit; the target column (col 4) absorbs the freed flex. The visual result reads `[dot] [SRC_TABLE src_field]   →   [target]   [conf]   [actions]` — whitespace between the source group and the target conveys flow without per-row arrows. The column-template invariant test was re-anchored on the new template literal at the same time (founder Q10.2 — the regex guard pattern is unchanged in shape, only the expected literal moved).
+
 
 
 Items to remove during Phase 5-Cleanup:

@@ -1193,43 +1193,207 @@ describe('MappingRedesignContent — Gap 11b sidebar click-to-highlight', () => 
 })
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Phase 3 Gap 13 — Unmapped counter chip.
+// Phase 3 Gap 13 — Unmapped counter chip (Phase 4-polish-1: lifted into
+// `MappingSummaryStrip` at the page-header layer).
 // ─────────────────────────────────────────────────────────────────────────────
 //
-// The counter pills row (`mapping-redesign-counters`) renders a chip per
-// non-zero status counter, mirroring the existing Rejected gating pattern.
-// `Unmapped` is the project-level aggregate count of target fields with no
-// TFM at all — previously invisible despite being on the contract.
+// The legacy `mapping-redesign-counters` test surface was retired with
+// the `CountersRow` component in Phase 4-polish-1. Conditional rendering
+// for the Unmapped + Rejected chips now lives on the `MappingSummaryStrip`
+// component (founder Q2 lock — restore legacy density at the page-header
+// layer). The §9 Q6 Rejected gating and the original Gap 13 Unmapped
+// gating are preserved verbatim there; these tests now query the strip's
+// new testid.
 
-describe('MappingRedesignContent — Gap 13 Unmapped counter chip', () => {
+describe('MappingRedesignContent — Gap 13 Unmapped counter chip (now on MappingSummaryStrip)', () => {
   it('renders the Unmapped chip when counts.unmapped > 0', () => {
     renderRedesign('', { counts: { total: 6, approved: 4, needsReview: 1, rejected: 0, unmapped: 3 } })
-    const counters = screen.getByTestId('mapping-redesign-counters')
-    expect(counters.textContent).toContain('Unmapped')
-    expect(counters.textContent).toContain('3')
+    const strip = screen.getByTestId('mapping-summary-strip')
+    expect(strip.textContent).toContain('Unmapped')
+    expect(strip.textContent).toContain('3')
   })
 
   it('hides the Unmapped chip when counts.unmapped === 0', () => {
     renderRedesign('', { counts: { total: 6, approved: 5, needsReview: 1, rejected: 0, unmapped: 0 } })
-    const counters = screen.getByTestId('mapping-redesign-counters')
-    expect(counters.textContent).not.toContain('Unmapped')
+    const strip = screen.getByTestId('mapping-summary-strip')
+    expect(strip.textContent).not.toContain('Unmapped')
   })
 
   it('renders Unmapped alongside Rejected when both are non-zero', () => {
     renderRedesign('', { counts: { total: 8, approved: 4, needsReview: 1, rejected: 1, unmapped: 2 } })
-    const counters = screen.getByTestId('mapping-redesign-counters')
-    expect(counters.textContent).toContain('Rejected')
-    expect(counters.textContent).toContain('Unmapped')
+    const strip = screen.getByTestId('mapping-summary-strip')
+    expect(strip.textContent).toContain('Rejected')
+    expect(strip.textContent).toContain('Unmapped')
   })
 
   it('Total/Approved/Needs Review chips always render regardless of Unmapped value', () => {
     renderRedesign('', { counts: { total: 5, approved: 5, needsReview: 0, rejected: 0, unmapped: 0 } })
-    const counters = screen.getByTestId('mapping-redesign-counters')
-    expect(counters.textContent).toContain('Total')
-    expect(counters.textContent).toContain('Approved')
-    expect(counters.textContent).toContain('Needs Review')
-    expect(counters.textContent).not.toContain('Unmapped')
-    expect(counters.textContent).not.toContain('Rejected')
+    const strip = screen.getByTestId('mapping-summary-strip')
+    expect(strip.textContent).toContain('Total')
+    expect(strip.textContent).toContain('Approved')
+    expect(strip.textContent).toContain('Needs Review')
+    expect(strip.textContent).not.toContain('Unmapped')
+    expect(strip.textContent).not.toContain('Rejected')
+  })
+
+  it('legacy `mapping-redesign-counters` testid is removed (regression guard)', () => {
+    // Pin the retirement: the old testid must NOT appear anywhere in the
+    // rendered tree. If a future refactor accidentally re-introduces a
+    // CountersRow alongside the strip, this assertion catches the
+    // duplication.
+    renderRedesign('', { counts: { total: 5, approved: 5, needsReview: 0, rejected: 0, unmapped: 0 } })
+    expect(screen.queryByTestId('mapping-redesign-counters')).toBeNull()
+  })
+
+  it('experimental WipBanner placeholder is removed (founder Q2.1 lock)', () => {
+    // Phase 4-polish-1 (Q2.1) drops the experimental amber banner
+    // entirely. Same regression-guard pattern as the counters testid
+    // above — pin the retirement so it cannot silently come back.
+    renderRedesign('', { counts: { total: 5, approved: 5, needsReview: 0, rejected: 0, unmapped: 0 } })
+    expect(screen.queryByTestId('mapping-redesign-placeholder')).toBeNull()
+  })
+})
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Phase 4-polish-1 sidebar architecture refactor — zero-gap regression guard.
+// ─────────────────────────────────────────────────────────────────────────────
+//
+// Original Refinement 2 (Phase 4-polish-1) closed a 24px gap between
+// the bottom of `MappingSummaryStrip` and the top of `FilterRow`.
+// Root cause at the time was the centered `max-w-5xl py-6` column
+// that wrapped `FilterRow` (the strip mounted outside it). The fix
+// was `py-6` → `pb-6` on that column.
+//
+// Phase 4-polish-1 sidebar architecture refactor (2026-04-26)
+// promoted both the strip and `FilterRow` to PAGE LEVEL — they are
+// now direct siblings of `<PageHeader>` under the outer flex column,
+// sitting ABOVE the sidebar+body flex row. The centered `max-w-5xl`
+// column no longer wraps either of them; it now only wraps the body
+// content (group cards / empty states).
+//
+// With the structural lift, the zero-gap contract becomes a direct
+// sibling assertion: `MappingSummaryStrip.nextElementSibling` is the
+// `FilterRow`. No DOM walk is needed; if a future refactor inserts
+// any element between them, this guard fires.
+
+describe('MappingRedesignContent — zero-gap between strip and FilterRow (post sidebar architecture refactor)', () => {
+  it('strip and FilterRow are direct siblings under the page-level flex column', () => {
+    renderRedesign()
+    const strip = screen.getByTestId('mapping-summary-strip')
+    const filterRow = screen.getByTestId('mapping-redesign-filter-row')
+    expect(strip).toBeInTheDocument()
+    expect(filterRow).toBeInTheDocument()
+
+    // The structural invariant: FilterRow is the strip's immediate
+    // next element sibling. No wrapper, no margin-introducing div,
+    // nothing between them. If anything reappears here, this guard
+    // fires before the visual gap is shipped.
+    expect(strip.nextElementSibling).toBe(filterRow)
+
+    // Both elements share the same parent (the outer flex column
+    // rendered by `MappingRedesignContent`). Pin the relationship
+    // explicitly so a future refactor that nests one of them inside
+    // a new wrapper surfaces here.
+    expect(strip.parentElement).toBe(filterRow.parentElement)
+  })
+
+  it('strip carries no bottom margin and FilterRow carries no top margin/padding', () => {
+    renderRedesign()
+    const strip = screen.getByTestId('mapping-summary-strip')
+    const filterRow = screen.getByTestId('mapping-redesign-filter-row')
+
+    // Strip's bottom edge: no `mb-N`. We allow `py-N` (which expands
+    // to `pt-N pb-N`) because that's the strip's own intrinsic
+    // breathing room, not external spacing.
+    expect(strip.className).not.toMatch(/\bmb-\d/)
+
+    // FilterRow's top edge: no `mt-N`. The post-refactor className
+    // also drops `pt-N` from the original `py-2.5` is fine — we
+    // explicitly allow `py-N` for the toolbar's own padding.
+    expect(filterRow.className).not.toMatch(/\bmt-\d/)
+  })
+
+  it('FilterRow is no longer sticky (lift-out removes sticky positioning)', () => {
+    renderRedesign()
+    const filterRow = screen.getByTestId('mapping-redesign-filter-row')
+
+    // Pre-refactor the FilterRow carried `sticky top-0 z-10 -mx-6
+    // mb-4` to behave correctly inside the body's scroll container.
+    // After the lift-out, all four are gone: structural DOM order
+    // alone keeps the toolbar visible at the top of the page (it is
+    // not inside any scroll container), and there is no centered
+    // column to compensate for.
+    expect(filterRow.className).not.toMatch(/\bsticky\b/)
+    expect(filterRow.className).not.toMatch(/\btop-0\b/)
+    expect(filterRow.className).not.toMatch(/\bz-10\b/)
+    expect(filterRow.className).not.toMatch(/-mx-\d/)
+    expect(filterRow.className).not.toMatch(/\bmb-\d/)
+  })
+})
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Phase 4-polish-1 sidebar architecture refactor — structural invariant guard.
+// ─────────────────────────────────────────────────────────────────────────────
+//
+// Pins the post-refactor DOM tree shape: `<PageHeader>`, the summary
+// strip, the FilterRow, and the sidebar+body flex row are all DIRECT
+// CHILDREN of the same `<div className="flex h-full flex-col bg-gray-50">`
+// page-level flex column. If a future refactor reintroduces a wrapper
+// around any of these (e.g. nesting strip+filter back inside the body
+// scroller, or wrapping them in a new "toolbar" div), this guard
+// fires.
+//
+// The position-fixed `<MappingDrawer>` and `<BulkConfirmDialog>`
+// trailing children are intentionally not asserted — they render
+// `null` when closed and don't influence layout when open. The guard
+// asserts only the toolbar+body siblings.
+
+describe('MappingRedesignContent — structural invariant (post sidebar architecture refactor)', () => {
+  it('PageHeader, Strip, FilterRow, and sidebar+body row are direct children of the page flex column', () => {
+    renderRedesign()
+    const pageHeader = screen.getByTestId('page-header')
+    const strip = screen.getByTestId('mapping-summary-strip')
+    const filterRow = screen.getByTestId('mapping-redesign-filter-row')
+    const sidebar = screen.getByTestId('source-schema-sidebar')
+
+    // Walk up from PageHeader to find the outer flex column. The
+    // testid mock for PageHeader returns `<div data-testid="page-header">`
+    // so its parentElement IS the page flex column.
+    const pageColumn = pageHeader.parentElement
+    expect(pageColumn).not.toBeNull()
+    if (!pageColumn) return
+
+    // Pin the page column's class shape (the outer wrapper rendered
+    // by MappingRedesignContent).
+    expect(pageColumn.className).toMatch(/\bflex\b/)
+    expect(pageColumn.className).toMatch(/\bflex-col\b/)
+    expect(pageColumn.className).toMatch(/\bh-full\b/)
+    expect(pageColumn.className).toMatch(/\bbg-gray-50\b/)
+
+    // Each of the four elements must have `pageColumn` as its
+    // immediate parent.
+    expect(strip.parentElement).toBe(pageColumn)
+    expect(filterRow.parentElement).toBe(pageColumn)
+    // The sidebar lives inside the sidebar+body flex row; that ROW
+    // is the direct child of pageColumn. Walk one step up from the
+    // sidebar to find the row, then assert.
+    const sidebarBodyRow = sidebar.parentElement
+    expect(sidebarBodyRow).not.toBeNull()
+    if (!sidebarBodyRow) return
+    expect(sidebarBodyRow.parentElement).toBe(pageColumn)
+
+    // Pin the sibling order: PageHeader → Strip → FilterRow →
+    // sidebar+body row. Children after that (drawer, dialog) are
+    // position-fixed and not asserted by this invariant.
+    const children = Array.from(pageColumn.children) as HTMLElement[]
+    const pageHeaderIdx = children.indexOf(pageHeader)
+    const stripIdx = children.indexOf(strip)
+    const filterRowIdx = children.indexOf(filterRow)
+    const rowIdx = children.indexOf(sidebarBodyRow)
+    expect(pageHeaderIdx).toBeGreaterThanOrEqual(0)
+    expect(stripIdx).toBe(pageHeaderIdx + 1)
+    expect(filterRowIdx).toBe(stripIdx + 1)
+    expect(rowIdx).toBe(filterRowIdx + 1)
   })
 })
 
