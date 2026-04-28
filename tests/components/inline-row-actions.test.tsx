@@ -485,9 +485,16 @@ describe('Inline source-edit hint', () => {
     // The pencil renders as an SVG (lucide-react), so its `className`
     // is an SVGAnimatedString. Read the raw attribute instead.
     const pencilClass = pencil.getAttribute('class') ?? ''
-    // The pencil hides at rest (opacity-0) and reveals on group-hover.
+    // The pencil hides at rest (opacity-0) and reveals on hover of the
+    // unified source-trigger wrapper (cols 2-3). Source-cell unification
+    // (2026-04-28) narrowed the hover scope from the row body to the
+    // wrapper via Tailwind's named-group syntax: the wrapper carries
+    // `group/source`, the pencil reveals on `group-hover/source:`. Pre-
+    // unification this asserted the unscoped `group-hover:opacity-100`
+    // (the row body owned the `group` class), which fired on hover
+    // ANYWHERE in the row including Target / Confidence / Actions cells.
     expect(pencilClass).toContain('opacity-0')
-    expect(pencilClass).toContain('group-hover:opacity-100')
+    expect(pencilClass).toContain('group-hover/source:opacity-100')
   })
 
   it('does NOT render the Pencil hint on ineligible rows (custom_sql)', () => {
