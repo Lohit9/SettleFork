@@ -277,3 +277,138 @@ describeFn('SSO admin actions — cross-org isolation (read actions)', () => {
     }
   })
 })
+
+// ─── Cross-org isolation suite — write actions (B-2-c-ii commit 2) ───
+//
+// These tests prove that `requireOrgAdmin` rejects cross-tenant write
+// attempts. The negative paths NEVER touch the DB (the gate rejects
+// before any insert/update/delete + before any audit emit), so no
+// cleanup is needed for them.
+//
+// The combined positive control DOES write to the real DB — it adds
+// a synthetic domain to User 2's iso org, then removes it, then
+// touches the enforcement-mode setter. Each step cleans up after
+// itself; if a step throws midway, the next test run's cleanup
+// fixture (`npm run sso:test:cleanup:isolation`) tears the iso org
+// down entirely.
+
+describeFn('SSO admin actions — cross-org isolation (write actions)', () => {
+  let primaryOrgId: string
+  let isolationOrgId: string
+
+  beforeAll(async () => {
+    const { supabaseAdmin } = await import('@/lib/supabase/admin')
+    const { resolveIsolationFixtureIds } = await import(
+      './sso-admin-isolation-helpers'
+    )
+    const ids = await resolveIsolationFixtureIds(supabaseAdmin)
+    primaryOrgId = ids.primaryOrgId
+    isolationOrgId = ids.isolationOrgId
+  })
+
+  it('addOrgSsoDomain rejects cross-org write (User 2 → primary org)', async () => {
+    const { addOrgSsoDomain } = await import('@/lib/actions/sso-admin-mutations')
+    const result = await addOrgSsoDomain(primaryOrgId, 'iso-attempt.example')
+    expect(result.ok).toBe(false)
+    if (!result.ok) {
+      expect(result.errorCode).toBe('NOT_AUTHORIZED')
+      // Never the validation-failure or DB-error path — those would
+      // mean the action made it past the gate.
+      expect(result.errorCode).not.toBe('VALIDATION')
+      expect(result.errorCode).not.toBe('DB_ERROR')
+      expect(result.errorCode).not.toBe('DOMAIN_ALREADY_MAPPED')
+    }
+    // CRITICAL: the action must NOT have emitted an audit event for
+    // this rejection (auditing is post-success only). We can't
+    // observe sso_audit_events here without an extra query, but the
+    // source-level test
+    // `tests/actions/sso-admin-mutations-source.test.ts` pins
+    // emit-after-write ordering — combined with this rejection, the
+    // emit could only fire on a write that never happened.
+  })
+
+  it('removeOrgSsoDomain rejects cross-org write (User 2 → primary org)', async () => {
+    const { removeOrgSsoDomain } = await import('@/lib/actions/sso-admin-mutations')
+    // The primary org has `gmail.com` attached. If the gate failed,
+    // this delete would silently succeed and break the primary
+    // fixture. Belt-and-suspenders: the runtime rejection gate plus
+    // the source-level ordering invariant make this unreachable.
+    const result = await removeOrgSsoDomain(primaryOrgId, 'gmail.com')
+    expect(result.ok).toBe(false)
+    if (!result.ok) {
+      expect(result.errorCode).toBe('NOT_AUTHORIZED')
+    }
+  })
+
+  it('setOrgEnforcementMode rejects cross-org write (User 2 → primary org)', async () => {
+    const { setOrgEnforcementMode } = await import(
+      '@/lib/actions/sso-admin-mutations'
+    )
+    const result = await setOrgEnforcementMode(primaryOrgId, 'strict')
+    expect(result.ok).toBe(false)
+    if (!result.ok) {
+      expect(result.errorCode).toBe('NOT_AUTHORIZED')
+    }
+  })
+
+  // Positive control — full round-trip on User 2's OWN org. Verifies
+  // the gate's positive branch + the audit emits actually fire when
+  // the caller is authorized. Each step cleans up after itself.
+  it('User 2 can perform write round-trip on User 2 own org (positive control)', async () => {
+    const {
+      addOrgSsoDomain,
+      removeOrgSsoDomain,
+      setOrgEnforcementMode,
+    } = await import('@/lib/actions/sso-admin-mutations')
+
+    const SYNTHETIC_DOMAIN = 'sso-iso-rt.example.invalid'
+
+    // ADD
+    const addResult = await addOrgSsoDomain(isolationOrgId, SYNTHETIC_DOMAIN)
+    expect(addResult.ok).toBe(true)
+    try {
+      if (addResult.ok) {
+        expect(addResult.domain.domain).toBe(SYNTHETIC_DOMAIN)
+      }
+
+      // REMOVE — also serves as cleanup for the ADD above.
+      const remResult = await removeOrgSsoDomain(isolationOrgId, SYNTHETIC_DOMAIN)
+      expect(remResult.ok).toBe(true)
+      if (remResult.ok) {
+        // The iso org had ONE domain (the one we just added), so
+        // was_last_domain must be true.
+        expect(remResult.was_last_domain).toBe(true)
+      }
+
+      // SET MODE — read the iso org's current mode first, then call
+      // the setter with that same value to force a no-op. We avoid
+      // hard-coding the default ('optional' today, but migration
+      // history could change it) by querying first. The action must
+      // report ok:true with was_no_op:true, proving the gate passes
+      // AND the no-op path returns success.
+      const { supabaseAdmin } = await import('@/lib/supabase/admin')
+      const { data: orgRow } = await supabaseAdmin
+        .from('organizations')
+        .select('enforcement_mode')
+        .eq('id', isolationOrgId)
+        .single()
+      const currentMode = orgRow?.enforcement_mode as
+        | 'strict'
+        | 'hybrid'
+        | 'optional'
+        | undefined
+      expect(currentMode).toBeDefined()
+      const setResult = await setOrgEnforcementMode(isolationOrgId, currentMode!)
+      expect(setResult.ok).toBe(true)
+      if (setResult.ok) {
+        expect(setResult.was_no_op).toBe(true)
+        expect(setResult.new_mode).toBe(currentMode)
+      }
+    } finally {
+      // Defensive cleanup: if any earlier step threw, ensure the
+      // synthetic domain is gone before the next test run. The
+      // remove action is idempotent so a no-op delete is fine.
+      await removeOrgSsoDomain(isolationOrgId, SYNTHETIC_DOMAIN)
+    }
+  })
+})

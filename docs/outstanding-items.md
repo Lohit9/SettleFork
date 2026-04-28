@@ -10,7 +10,7 @@ Items graduate off this list when:
 - Moved to a formal ticket (link from here to there)
 - Explicitly decided to not do (move to "Rejected" section with reason)
 
-Last updated: 2026-04-28 (B-2-c-i)
+Last updated: 2026-04-28 (B-2-c-ii)
 
 ---
 
@@ -161,13 +161,49 @@ Last updated: 2026-04-28 (B-2-c-i)
           of `metadata`. Hashes display as truncated 8-char 
           prefix + `(hashed)` label. `null actor_user_id` 
           renders as "Unauthenticated attempt".
-- [ ] SSO epic — B-2-c-ii (domain editor on top of B-2-c-i). 
-      Adds add/remove domain controls to the SSO admin page; 
-      reuses `requireOrgAdmin` and the cross-org isolation 
-      test pattern. First commit should also flip the 
-      `it.skip` markers in `tests/integration/sso-admin-isolation.test.ts` 
-      to `it(...)` once the second-user fixture is wired into 
-      `scripts/sso-test-setup.ts`.
+    - **✓ COMPLETE — B-2-c-ii (domain editor + enforcement controls + 
+      cross-tenant fixture).** Branch: `feat/sso-admin-writes`. Two 
+      commits:
+        - **Commit 1 (`471d4b8`):** wired the cross-tenant isolation 
+          test fixture (second `auth.users` row + isolation org + 
+          membership; `vi.mock`-driven User-2 impersonation). Flipped 
+          5 `.skip` markers to executing tests; runtime cross-org 
+          rejection now proven end-to-end against a real second 
+          tenant.
+        - **Commit 2 (this commit):** new write surface on top of 
+          B-2-c-i's read page —
+          - `lib/actions/sso-admin-mutations.ts`: 4 actions 
+            (`addOrgSsoDomain`, `removeOrgSsoDomain`, 
+            `setOrgEnforcementMode`, `previewEnforcementChange`). 
+            Each starts with `requireOrgAdmin(orgId)`; audit emits 
+            after DB writes succeed. Source-level invariant tests 
+            (39) pin the gate-before-DB / audit-after-DB / 
+            no-spoofable-id-params shapes. Runtime isolation tests 
+            (3 negative + 1 positive round-trip) prove cross-tenant 
+            rejection on writes.
+          - `lib/sso/domain-validation.ts`: extracted 
+            `DOMAIN_REGEX` + `VALID_ENFORCEMENT_MODES` + 
+            `validateDomain` for shared use; 
+            `lib/actions/sso.ts` (platform-admin) now imports the 
+            same constants — single source of truth.
+          - `EnforcementChangeDialog` + `RemoveLastDomainDialog`: 
+            built on the shared `AlertDialog` primitive 
+            (`components/ui/alert-dialog.tsx`). 6-transition risk 
+            classifier drives modal mount: low (optional ↔ hybrid) 
+            dispatches immediately; medium (strict → *) opens 
+            amber-tone "weakening enforcement" modal; high 
+            (* → strict) opens red modal with preflight count of 
+            members without SSO identities.
+          - `DomainsList` + `SsoOverviewCard` made interactive 
+            with `canEdit` prop; `router.refresh()` on success 
+            so the new audit-event row appears in "Recent activity" 
+            without a full reload.
+          - Security tightening over the platform-admin path: 
+            `addOrgSsoDomain`'s cross-org "domain hijack" error 
+            does NOT include the conflicting `org_id` (the 
+            platform-admin path at `lib/actions/sso.ts:909-924` 
+            does). Conflicting `org_id` is logged server-side 
+            via `console.warn` for ops triage.
 - [ ] SSO epic — B-2-c-iii (IdP metadata upload). 
 - [ ] SSO epic — B-2-c-iv (test-connection flow). 
 - [ ] SSO epic — B-2-c-v (cert rotation).

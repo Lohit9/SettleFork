@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import { render, screen } from '@testing-library/react'
 import { SsoSettingsContent } from '@/app/app/settings/sso/SsoSettingsContent'
 import type {
@@ -7,6 +7,31 @@ import type {
   ListOrgSsoLinkedUsersResult,
   ListOrgSsoAuditEventsResult,
 } from '@/lib/actions/sso-admin'
+
+// B-2-c-ii: DomainsList + SsoOverviewCard now call useRouter().
+// We don't test routing behavior here — siblings handle that — so a
+// no-op stub is sufficient.
+vi.mock('next/navigation', () => ({
+  useRouter: () => ({
+    push: vi.fn(),
+    replace: vi.fn(),
+    refresh: vi.fn(),
+    back: vi.fn(),
+    forward: vi.fn(),
+    prefetch: vi.fn(),
+  }),
+}))
+
+// The action modules are server-only (`'use server'`). The component
+// tests don't actually invoke them — they just import the type
+// signatures. Stub the implementations to no-op so importing the
+// component doesn't pull a server-action runtime into jsdom.
+vi.mock('@/lib/actions/sso-admin-mutations', () => ({
+  addOrgSsoDomain: vi.fn(),
+  removeOrgSsoDomain: vi.fn(),
+  setOrgEnforcementMode: vi.fn(),
+  previewEnforcementChange: vi.fn(),
+}))
 
 // ─────────────────────────────────────────────────────────────────────
 // SsoSettingsContent — page orchestrator under various data states.
@@ -274,5 +299,72 @@ describe('SsoSettingsContent — inline empty states', () => {
       />,
     )
     expect(screen.getByText('No recent SSO activity.')).toBeTruthy()
+  })
+})
+
+// ─── 5. canEdit prop wiring (B-2-c-ii) ─────────────────────────────────
+
+describe('SsoSettingsContent — canEdit prop wiring', () => {
+  it('defaults canEdit to false when prop omitted (read-only by default)', () => {
+    render(
+      <SsoSettingsContent
+        orgId={ORG_ID}
+        overview={okOverview()}
+        domains={okDomains()}
+        linkedUsers={okUsers()}
+        auditEvents={okEvents()}
+      />,
+    )
+    // No add-domain form → canEdit propagated as false.
+    expect(screen.queryByTestId('add-domain-form')).toBeNull()
+    // No editable enforcement select → ditto.
+    expect(screen.queryByTestId('enforcement-mode-select')).toBeNull()
+  })
+
+  it('canEdit=true mounts the add-domain form on the domains card', () => {
+    render(
+      <SsoSettingsContent
+        orgId={ORG_ID}
+        overview={okOverview()}
+        domains={okDomains()}
+        linkedUsers={okUsers()}
+        auditEvents={okEvents()}
+        canEdit={true}
+      />,
+    )
+    expect(screen.getByTestId('add-domain-form')).toBeTruthy()
+  })
+
+  it('canEdit=true mounts the editable enforcement select on the overview card', () => {
+    render(
+      <SsoSettingsContent
+        orgId={ORG_ID}
+        overview={okOverview()}
+        domains={okDomains()}
+        linkedUsers={okUsers()}
+        auditEvents={okEvents()}
+        canEdit={true}
+      />,
+    )
+    expect(screen.getByTestId('enforcement-mode-select')).toBeTruthy()
+  })
+
+  it('canEdit=false explicitly hides write controls even when overview succeeded', () => {
+    render(
+      <SsoSettingsContent
+        orgId={ORG_ID}
+        overview={okOverview()}
+        domains={okDomains()}
+        linkedUsers={okUsers()}
+        auditEvents={okEvents()}
+        canEdit={false}
+      />,
+    )
+    expect(screen.queryByTestId('add-domain-form')).toBeNull()
+    expect(screen.queryByTestId('enforcement-mode-select')).toBeNull()
+    // The display elements must still mount — read-only is not the
+    // empty state.
+    expect(screen.getByText('Domains')).toBeTruthy()
+    expect(screen.getByText(/Hybrid/)).toBeTruthy()
   })
 })
