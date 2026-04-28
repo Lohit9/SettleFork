@@ -10,7 +10,7 @@ Items graduate off this list when:
 - Moved to a formal ticket (link from here to there)
 - Explicitly decided to not do (move to "Rejected" section with reason)
 
-Last updated: 2026-04-28
+Last updated: 2026-04-28 (B-2-c-i)
 
 ---
 
@@ -111,6 +111,66 @@ Last updated: 2026-04-28
       (Scheduled: 2026-04-22)
 - [ ] SSO epic — Prompt D (admin UI, customer-facing + platform-admin). 
       (Scheduled: 2026-04-23)
+    - **✓ COMPLETE — B-2-b (login page redesign + reason banners).** 
+      Branch `feat/sso-login-redesign`. Email-first two-stage flow 
+      with SSO discovery; renders all 14 `sso_*` and `auth_*` reason 
+      codes that were previously silently dropped on `/login`. Three 
+      pre-existing bugs fixed (`?returnTo=` ignored, `//evil.com` 
+      open-redirect, `loading=true` stuck state). Feature flag 
+      `NEXT_PUBLIC_LOGIN_EMAIL_FIRST` falls back to 
+      `LegacyLoginForm` for instant rollback.
+    - **✓ COMPLETE — B-2-c-i (read-only admin SSO settings + 
+      foundation infra).** Branch `feat/sso-admin-ui`. Lands 
+      `/app/settings/sso` plus three pieces of foundation that the 
+      remaining sub-prompts (-ii through -v) reuse:
+        - **`lib/auth/require-org-role.ts`**: first shared 
+          `requireOrgAdmin(orgId)` gate; discriminated union return 
+          (`unauthenticated` / `not_member` / `insufficient_role`). 
+          15 unit tests pin behavior including the trap-role 
+          (editor/viewer rejection) cases.
+        - **`tests/integration/sso-admin-isolation.test.ts`**: 
+          establishes the cross-org isolation test pattern. 
+          Env-gated under `SETTLE_SSO_ADMIN_ISOLATION_TEST=1`; 
+          assertions ship with `it.skip` until a second-user 
+          fixture is provisioned (see "Testing tasks → SSO" below). 
+          Two always-runs source-shape sanity checks pin that every 
+          action imports and calls `requireOrgAdmin(orgId)`.
+        - **`app/app/settings/layout.tsx`**: extracts the duplicated 
+          settings header/tab-nav from the General + Organization 
+          pages. Adds "SSO" as the third top-level tab. 
+          `SettingsTabs.tsx` is the small Client Component that 
+          owns active-state styling via `usePathname()`; the layout 
+          itself stays a Server Component.
+        - **Cross-tenant strategy**: `lib/actions/sso-admin.ts` 
+          uses `supabaseAdmin` for `sso_identity_links` and 
+          `sso_audit_events` reads (RLS denies org admins on 
+          those tables — see migration 070:585-601). Each of the 
+          four actions calls `requireOrgAdmin(orgId)` BEFORE any 
+          DB access. RLS widening on the two tables deferred to 
+          Item 1.B (audit_log epic) per Decision MN-D5. 
+          `tests/actions/sso-admin-source.test.ts` (26 tests) 
+          pins the gate-before-DB invariant via source-level 
+          regex.
+        - **Audit event renderer 
+          (`AuditEventRow.tsx`)**: hybrid switch over the 11 
+          `SSOAuditEventType` values per Mini-D6. Hand-crafted 
+          summaries for `sso.login.success`, `sso.login.failure` 
+          (with reason translation table), `sso.provider.configured`, 
+          `sso.enforcement.changed`, `sso.domain.added/removed`. 
+          Six other types fall back to a flat key/value rendering 
+          of `metadata`. Hashes display as truncated 8-char 
+          prefix + `(hashed)` label. `null actor_user_id` 
+          renders as "Unauthenticated attempt".
+- [ ] SSO epic — B-2-c-ii (domain editor on top of B-2-c-i). 
+      Adds add/remove domain controls to the SSO admin page; 
+      reuses `requireOrgAdmin` and the cross-org isolation 
+      test pattern. First commit should also flip the 
+      `it.skip` markers in `tests/integration/sso-admin-isolation.test.ts` 
+      to `it(...)` once the second-user fixture is wired into 
+      `scripts/sso-test-setup.ts`.
+- [ ] SSO epic — B-2-c-iii (IdP metadata upload). 
+- [ ] SSO epic — B-2-c-iv (test-connection flow). 
+- [ ] SSO epic — B-2-c-v (cert rotation).
 
 ### Planned near-term (Tier 1)
 - [ ] Audit log expansion (auth events, invites, exports, admin actions, 
@@ -270,6 +330,18 @@ to exercise it. Items here are not bugs — they are known-unknowns
 that need empirical confirmation.
 
 ### SSO (Prompt D or post-Prompt D)
+- [ ] **Second-user fixture for cross-org isolation tests 
+      (B-2-c-i follow-up).** `tests/integration/sso-admin-isolation.test.ts` 
+      ships the test pattern with `it.skip` markers because 
+      `scripts/sso-test-setup.ts` provisions only ONE test user 
+      (Alice in `SSO Test`). Extend the setup script to provision 
+      a second user/org pair (`outsider@example.test` in a fresh 
+      `Outsider Test` org with a non-overlapping domain), seed minimal 
+      SSO state in Org B (one provider, one domain, one identity link, 
+      one audit event), and add a session-mint helper. Then flip 
+      every `it.skip` to `it` in the isolation test file. Done in 
+      B-2-c-ii (where the same fixture is also needed for testing 
+      domain-mutation cross-org paths) or as a standalone commit.
 - [ ] Validate GoTrue error response shapes against real API responses. 
       A2's defensive error parser handles unknown shapes by extracting 
       any available message fields, but the exact shape of each 
