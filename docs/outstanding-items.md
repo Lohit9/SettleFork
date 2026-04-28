@@ -19,28 +19,53 @@ Last updated: 2026-04-28
 ### Security
 - [ ] SSO epic — Prompt B (middleware + login + callback with 
       dedupe-on-login). (Scheduled: 2026-04-21)
-    - **✓ COMPLETE — B-2-a-ii (callback half of B-2-a).** 
-      Commit `e9c217d` (branch `feat/sso-okta-setup`, local-only — 
-      not yet pushed). Adds the `?type=sso` branch to 
-      `/api/auth/callback` with six ordered security checks before 
-      provisioning: (1) HMAC-signed `attempted_org_id` cookie 
-      verified (signed at `/sso/start` with 
-      `SSO_ATTEMPT_COOKIE_SECRET`); (2) session has an `sso:<uuid>` 
-      identity; (3) cross-tenant — provider's `org_id` matches the 
-      attempted org; (4) domain-provider sanity — email domain → 
-      org matches provider → org; (5) duplicate-account — no 
-      other identity providers on the same user (same-user check 
-      via `get_auth_identity_providers`); (6) JIT via 
-      `provision_user_via_jit`. Identity linking via 
-      `mark_identity_sso_linked` is non-blocking (failures 
-      audited but login proceeds — middleware-side repair for 
-      unlinked SSO sessions deferred as future work). Cross-user 
-      duplicate detection RPC deferred per Decision D7 (same-user 
-      check is sufficient for current Supabase 1:1 email 
-      invariant). Failure paths emit `sso.login.failure` with 
-      bounded metadata (`email_hash`, never raw email). New 
-      module: `lib/sso/attempt-cookie.ts`. End-to-end verified 
-      against Okta dev tenant on prod Supabase.
+    - **✓ COMPLETE — B-2-a (rate limiting + callback hardening).** 
+      Both halves shipped on branch `feat/sso-okta-setup`.
+        - **B-2-a-i (rate limiter): commit `3dacb92`.**
+          - Upstash Redis sliding-window limiter at 
+            `lib/rate-limit/upstash.ts` (10/min, prevents 
+            59s/61s burst-bypass that fixed-window allows).
+          - Wired into `/sso/start` (per-IP+org_slug) and 
+            `checkSSOEnabledForEmail` (per-IP+email_domain_hash), 
+            10/min each. Composite keys prevent per-IP-only 
+            exhaustion (shared NAT) and per-target-only 
+            exhaustion (single attacker draining one org).
+          - Canonical IP extractor at `lib/auth/get-client-ip.ts` 
+            (null-on-miss, fail-closed — does NOT replicate 
+            `lib/actions/auth.ts`'s `'127.0.0.1'` fallback that 
+            collides anonymous traffic into one bucket).
+          - Defense-in-depth: narrowed 
+            `checkSSOEnabledForEmail` return shape from 
+            `{ required, orgId?, orgSlug?, providerId?, 
+            enforcementMode? }` to `{ required, orgSlug? }`. 
+            Removes unauthenticated leak of internal `org_id`, 
+            `sso_providers.id`, and `enforcement_mode`.
+          - Audit folded into existing `sso.login.failure` 
+            event_type with `metadata.reason='rate_limited'` (no 
+            migration needed — symmetric with B-2-a-ii's 7 new 
+            reason values).
+        - **B-2-a-ii (callback hardening): commit `e9c217d`.**
+          - Six ordered security checks before authenticating: 
+            HMAC attempt-cookie verify, provider resolution from 
+            session, cross-tenant, domain-provider sanity, 
+            duplicate account (same-user via 
+            `get_auth_identity_providers`), JIT via 
+            `provision_user_via_jit`.
+          - Identity linking via `mark_identity_sso_linked` is 
+            non-blocking (failures audited but login proceeds — 
+            middleware-side repair for unlinked SSO sessions 
+            deferred as future work).
+          - HMAC-signed attempt cookie via 
+            `SSO_ATTEMPT_COOKIE_SECRET` env var (new module 
+            `lib/sso/attempt-cookie.ts`).
+          - Cross-user duplicate detection RPC deferred per 
+            Decision D7 (same-user check sufficient for current 
+            Supabase 1:1 email invariant).
+        - **Out of scope (tracked separately):** existing 
+          in-memory rate limiters at 
+          `lib/auth/signup-rate-limit.ts` and 
+          `lib/ai/rate-limit.ts` deliberately left unmigrated; 
+          tracked as 8-week-plan Item 4.2.
 - [ ] SSO epic — Prompt C (invite flow + identity linking). 
       (Scheduled: 2026-04-22)
 - [ ] SSO epic — Prompt D (admin UI, customer-facing + platform-admin). 
@@ -504,6 +529,45 @@ Required env vars in `.env.local`:
 - `SSO_ATTEMPT_COOKIE_SECRET` (generate with 
   `openssl rand -hex 32`)
 
+### Rate limiter sanity check (new in B-2-a-i)
+
+After Phase 7 happy-path login succeeds, verify rate limiting:
+
+1. From the same incognito window or a curl loop, hit 
+   `/sso/start?org=sso-test` 12+ times in <60s:
+
+   ```bash
+   for i in {1..12}; do
+     curl -sI -w "%{http_code} %{redirect_url}\n" -o /dev/null \
+       "http://localhost:3001/sso/start?org=sso-test"
+   done
+   ```
+
+2. The 11th+ requests should redirect to 
+   `/login?reason=sso_rate_limited`.
+
+3. Verify in Supabase:
+
+   ```sql
+   SELECT event_type, metadata->>'reason', metadata->>'key_kind', created_at
+   FROM sso_audit_events
+   WHERE metadata->>'reason' = 'rate_limited'
+   ORDER BY created_at DESC LIMIT 5;
+   ```
+
+   Should show recent rows with `key_kind='sso-start'`.
+
+4. To reset between tests: rate limit window is 60 seconds, so 
+   wait 60s. Or namespace via a different `org_slug` to use a 
+   different bucket key.
+
+Required env vars in `.env.local` for the rate limiter:
+
+- `UPSTASH_REDIS_REST_URL` (from Upstash dashboard, dev 
+  database)
+- `UPSTASH_REDIS_REST_TOKEN` (from Upstash dashboard, dev 
+  database)
+
 ---
 
 ## Completed
@@ -622,3 +686,33 @@ Required env vars in `.env.local`:
       curl `PUT`. Permanent fix shipped: `gotruePut` helper added 
       and called after the provider POST (idempotent — Supabase's 
       Admin API overwrites the domains array on each PUT).
+- [x] 2026-04-28 — B-2-a-i shipped. Upstash Redis-backed 
+      sliding-window rate limiter wired into the two 
+      unauthenticated SSO surfaces (`/sso/start` and 
+      `checkSSOEnabledForEmail`). New abstraction at 
+      `lib/rate-limit/upstash.ts` (10/min sliding, prevents 
+      59s/61s burst-bypass). New canonical IP extractor at 
+      `lib/auth/get-client-ip.ts` (null-on-miss for fail-closed 
+      policy). Smoke-tested with 12-request curl loop: 11th 
+      request correctly redirected to 
+      `/login?reason=sso_rate_limited` and emitted 
+      `sso.login.failure` with `metadata.reason='rate_limited'`. 
+      See commit `3dacb92`.
+- [x] 2026-04-28 — Defense-in-depth: narrowed 
+      `checkSSOEnabledForEmail`'s return shape from 
+      `{ required, orgId?, orgSlug?, providerId?, 
+      enforcementMode? }` to `{ required, orgSlug? }`. Removes 
+      unauthenticated leak of internal `org_id`, `providerId`, 
+      and `enforcement_mode`. Verified zero callers of the old 
+      shape exist in the codebase before narrowing. Internal 
+      callback at `app/api/auth/callback/route.ts:283` calls the 
+      underlying RPC directly, not the public action, so 
+      unaffected.
+- [x] 2026-04-28 — Pre-push checklist completed: 
+      `SSO_ATTEMPT_COOKIE_SECRET`, `UPSTASH_REDIS_REST_URL`, 
+      `UPSTASH_REDIS_REST_TOKEN` provisioned in Vercel for 
+      Production and Preview scopes. Separate values from local 
+      development (different secret bytes; separate Upstash 
+      database `settle-rate-limit-prod` vs 
+      `settle-rate-limit-dev`). Branch `feat/sso-okta-setup` 
+      ready to push to origin.
