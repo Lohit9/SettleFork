@@ -10,7 +10,7 @@ Items graduate off this list when:
 - Moved to a formal ticket (link from here to there)
 - Explicitly decided to not do (move to "Rejected" section with reason)
 
-Last updated: 2026-04-20
+Last updated: 2026-04-28
 
 ---
 
@@ -19,6 +19,22 @@ Last updated: 2026-04-20
 ### Security
 - [ ] SSO epic — Prompt B (middleware + login + callback with 
       dedupe-on-login). (Scheduled: 2026-04-21)
+    - **B-2-a — JIT provisioning gap in callback (verified 
+      2026-04-28 via Phase 7 of Okta runbook).** End-to-end SAML 
+      round-trip confirmed: the callback at 
+      `/api/auth/callback?type=sso` exchanges the code and sets a 
+      Supabase session, but does NOT call `provision_user_via_jit`. 
+      The JIT'd auth user lands on `/app/projects` with zero 
+      `org_memberships` rows and is shown the empty-state 
+      onboarding modal instead of the SSO org's projects. B-2-a 
+      must wire `provision_user_via_jit(p_user_id, p_org_id, 
+      p_email)` into the callback immediately after 
+      `exchangeCodeForSession`, resolving `p_org_id` from the 
+      provider's domain mapping (or from `sso_providers.org_id` via 
+      the GoTrue provider id on the session). After provisioning, 
+      also call `mark_identity_sso_linked` to populate 
+      `sso_identity_links` (the `is_sso_user` middleware hot path 
+      reads this).
 - [ ] SSO epic — Prompt C (invite flow + identity linking). 
       (Scheduled: 2026-04-22)
 - [ ] SSO epic — Prompt D (admin UI, customer-facing + platform-admin). 
@@ -481,3 +497,33 @@ next worked on; seed content from Cursor/Claude analysis done
       `email_hash` per call for observability. RPC grants 
       `service_role`-only except `is_sso_user` (`authenticated`). 
       Commits: 4d909ab (A1), b4bf5cf (A2).
+- [x] 2026-04-27 — Reusable SSO test harness: `scripts/
+      sso-test-setup.ts` (Phase 6 — provisions "SSO Test" org with 
+      slug `sso-test`, kaan@usesettle.ai as owner, `sso_domains` 
+      row mapping `gmail.com`, GoTrue SAML provider via Admin API, 
+      `sso_providers` row, flips `sso_enabled`) and `scripts/
+      sso-test-cleanup.ts` (Phase 10 — reverses these; default 
+      mode preserves the org/memberships/JIT'd test user, `--full` 
+      removes everything). Wired into `package.json` as 
+      `npm run sso:test:setup` / `npm run sso:test:cleanup`. 
+      Will be reused for B-2-a, B-2-b, B-2-c validation. 
+      Commit: b843625.
+- [x] 2026-04-28 — Decision 29 (SAML cross-tenant check) 
+      unblocked via empirical format verification. Phase 9 of the 
+      Okta runbook (real SAML round-trip with the test harness 
+      above) confirmed: `auth.identities.provider` for a 
+      SAML-authenticated user equals the literal string 
+      `"sso:" + <supabase_provider_id>` (e.g., 
+      `"sso:217246fc-d5a1-4709-b234-c983206dfc65"`). Direct 
+      string equality is sufficient for the cross-tenant check 
+      in B-2-a; no regex/parse is needed. Settles the assumption 
+      flagged when migration 070's `get_auth_identity_providers` 
+      RPC was scoped.
+- [x] 2026-04-28 — End-to-end SAML round-trip executed against 
+      Okta (Phase 7 of runbook) on the prod Supabase project. 
+      Confirms PKCE cookie persistence across `/sso/start` → 
+      Okta → `/api/auth/callback?type=sso` (previously a 
+      known-unknown — see Testing tasks → SSO). 
+      `exchangeCodeForSession` succeeds and a Supabase session 
+      cookie is set. JIT provisioning gap discovered in the same 
+      session and tracked under SSO Prompt B above (B-2-a).
