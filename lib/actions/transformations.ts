@@ -354,7 +354,7 @@ function resolveTfmId(id: string): ResolvedTfmId {
 // ─── TFM context resolver (shared across write paths) ────────────────────────
 //
 // Every write path needs the same basic context: the TFM row, its project,
-// its target field (+ table), and — for mapped TFMs — the primary source
+// its target field (+ table), and — for mapped TFMs — the anchor source
 // field (+ table) plus the linking table_mapping. This helper does the query
 // once so individual write paths stay focused on their own logic.
 //
@@ -389,8 +389,9 @@ interface TfmContext {
     sourceField: ContextField | null
     ordinal: number
   }>
-  /** Resolved table_mapping linking primary source table → target table.
-   *  NULL for VAs. */
+  /** Resolved table_mapping linking anchor source table → target table.
+   *  Cycle 1 — for cross-table TFMs the anchor is the first source's
+   *  table (first-source-wins). NULL for VAs. */
   tableMapping: {
     id: string
     source_table_id: string
@@ -499,9 +500,10 @@ async function loadTfmContext(tfmId: string): Promise<TfmContext | null> {
 //
 // Semantic parity with the legacy implementation:
 //   - Each TFM surfaces as ONE FieldItem under the TableGroup that hosts its
-//     primary source table (or — for value assignments — under the first TM
-//     whose target_table matches the VA's target_field.table_id; VAs are
-//     global per target table in the new model).
+//     anchor source table (Cycle 1 — first-source-wins; or — for value
+//     assignments — under the first TM whose target_table matches the VA's
+//     target_field.table_id; VAs are global per target table in the new
+//     model).
 //   - Contributor mapping_sources are folded into the primary FieldItem's
 //     `contributingSourceFields` list. The UI already hides contributors from
 //     the transform tree (legacy `isContributing=true` filter); we achieve the
@@ -683,7 +685,8 @@ export async function getTransformData(
   // ── TFM routing: which TableGroup does each TFM render under? ─────────────
   //
   // Mapped TFM: the TM whose (source_table_id, target_table_id) matches the
-  // TFM's primary source_table_id and the target field's table_id.
+  // TFM's anchor source_table_id (Cycle 1 — first-source-wins) and the
+  // target field's table_id.
   //
   // VA TFM: the FIRST TM (in `tms` order) whose target_table_id matches the
   // VA's target field's table_id. This mirrors legacy behaviour where a VA
@@ -1160,7 +1163,8 @@ export async function generateTransform(
     .filter((x): x is ContextField => x != null)
 
   // Resolve tables for prompt rendering. For mapped TFMs we use the resolved
-  // table_mapping; for VAs we use the first TM whose target_table matches.
+  // table_mapping (the anchor source table → target table — Cycle 1 first-
+  // source-wins); for VAs we use the first TM whose target_table matches.
   let srcTableName = ''
   let srcTableId: string | null = null
   let tgtTableId: string = tgtField.table_id

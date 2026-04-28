@@ -812,14 +812,15 @@ writeDescribeFn(
       ])
     }, 30_000)
 
-    // Phase 4a-3: cross-table is now SUPPORTED. The legacy
-    // CROSS_TABLE_NOT_YET_SUPPORTED error code is retired (kept on
-    // the union for client back-compat only). Generic fixture pairs
-    // resolve to ONE of: success (single FK candidate inferred) or
-    // CROSS_TABLE_AMBIGUOUS (zero or multiple candidates). Both
-    // branches are valid Heritage outcomes — pinning one would be
-    // schema-fragile.
-    it('createFieldMapping generic cross-table input resolves to success or CROSS_TABLE_AMBIGUOUS (4a-3)', async () => {
+    // Cycle 1 — Phase 4a-3's cross-table FK precheck was removed
+    // (locked decisions §1, §2). Cross-table inputs now ALWAYS succeed
+    // at create time regardless of FK candidate count. Persisted
+    // `mapping_sources.join_spec` is always null on the write path;
+    // the read path re-derives the FK annotation each render via
+    // `inferFkCandidates`. Multi-candidate ambiguity surfaces only at
+    // Transform-tab apply time as `CROSS_TABLE_FK_INFERENCE_FAILED`
+    // (covered by `transform-apply-cross-table-heritage.test.ts`).
+    it('createFieldMapping generic cross-table input always succeeds (Cycle 1 — FK precheck removed)', async () => {
       const { createFieldMapping } = await import(
         '@/lib/actions/mappings-for-redesign'
       )
@@ -831,46 +832,37 @@ writeDescribeFn(
         combinationType: 'concat_space',
       })
 
-      if (result.success) {
-        // Single-FK inference path — TFM persisted with per-source
-        // join_spec for the joined source(s).
-        createdTfmIds.add(result.tfmId)
-        const { supabaseAdmin } = await import('@/lib/supabase/admin')
-        const { data: ms } = await supabaseAdmin
-          .from('mapping_sources')
-          .select('source_table_id, ordinal')
-          .eq('target_field_mapping_id', result.tfmId)
-        const distinctTables = new Set(
-          (ms ?? []).map((r) => r.source_table_id),
-        )
-        expect(distinctTables.size).toBeGreaterThan(1)
-      } else {
-        // Zero or multi candidate path — wrapper surfaces structured
-        // disambiguation context.
-        expect(result.errorCode).toBe('CROSS_TABLE_AMBIGUOUS')
-        expect(result.error).toBeTruthy()
-        // ambiguousJoinedTableId / dominantTableName fields come
-        // along on the structured result; presence asserted, not
-        // values (Heritage schema details are out of scope for the
-        // generic fixture).
-        expect(result).toHaveProperty('ambiguousJoinedTableId')
-        expect(result).toHaveProperty('dominantTableName')
+      expect(result.success).toBe(true)
+      if (!result.success) return
+      createdTfmIds.add(result.tfmId)
+
+      const { supabaseAdmin } = await import('@/lib/supabase/admin')
+      const { data: ms } = await supabaseAdmin
+        .from('mapping_sources')
+        .select('source_table_id, ordinal, join_spec')
+        .eq('target_field_mapping_id', result.tfmId)
+      const distinctTables = new Set(
+        (ms ?? []).map((r) => r.source_table_id),
+      )
+      expect(distinctTables.size).toBeGreaterThan(1)
+      // Cycle 1 contract — every persisted source row carries a null
+      // `join_spec`; the read path re-derives via inferFkCandidates.
+      for (const row of ms ?? []) {
+        expect(row.join_spec).toBeNull()
       }
     }, 30_000)
 
-    it('createFieldMapping rejects unknown joinAnnotations entry → CROSS_TABLE_AMBIGUOUS or VALIDATION', async () => {
+    it('createFieldMapping ignores joinAnnotations on the write path (Cycle 1 — accepted for back-compat, never persisted)', async () => {
       const { createFieldMapping } = await import(
         '@/lib/actions/mappings-for-redesign'
       )
 
-      // joinAnnotations with a bogus FK column for the joined table.
-      // Wrapper either:
-      //  - finds candidates and rejects the bogus override → CROSS_TABLE_AMBIGUOUS
-      //  - finds zero candidates → CROSS_TABLE_AMBIGUOUS (empty list)
-      //  - VALIDATION if some other invariant trips first
-      // All three are acceptable — the assertion pins the
-      // defense-in-depth contract that bogus annotations never reach
-      // the RPC.
+      // Cycle 1 — the wrapper still accepts `joinAnnotations` on the
+      // input shape for client back-compat (the form payload still
+      // threads `joinAnnotations: {}`), but the value is no longer
+      // validated against live FK candidates and never lands on
+      // `mapping_sources.join_spec`. A bogus FK column should
+      // therefore have no effect on the create outcome.
       const joinedTableId = fixtures.crossTableSources[1].tableId
       const result = await createFieldMapping({
         projectId: HERITAGE_PROJECT_ID,
@@ -880,11 +872,9 @@ writeDescribeFn(
         joinAnnotations: { [joinedTableId]: '__bogus_field_does_not_exist__' },
       })
 
-      expect(result.success).toBe(false)
-      if (result.success) return
-      expect(['CROSS_TABLE_AMBIGUOUS', 'VALIDATION']).toContain(
-        result.errorCode,
-      )
+      expect(result.success).toBe(true)
+      if (!result.success) return
+      createdTfmIds.add(result.tfmId)
     }, 30_000)
 
     it('createFieldMapping custom_sql → VALIDATION', async () => {
@@ -973,10 +963,10 @@ writeDescribeFn(
     // stability over breadth — it pins the cross-table happy path
     // against a fixed Heritage subset.
 
-    it('canonical loans.status cross-table happy path — single FK inferred (4a-3)', async () => {
+    it('canonical loans.status cross-table happy path — Cycle 1 always succeeds, join_spec null on every row', async () => {
       if (!fixtures.canonicalCrossTable) {
         console.warn(
-          '[4a-3 canonical] loans.status / LOAN_STATUS_CD / CUSTOMER_NAME ' +
+          '[Cycle 1 canonical] loans.status / LOAN_STATUS_CD / CUSTOMER_NAME ' +
             'not found in Heritage; test self-skips. Re-baseline ' +
             'fixtures or refresh Heritage to re-enable.',
         )
@@ -995,37 +985,36 @@ writeDescribeFn(
         combinationType: 'concat_space',
       })
 
-      // Either single FK is auto-inferred (success) OR Heritage
-      // schema currently has zero/multi candidates (CROSS_TABLE_AMBIGUOUS).
-      // Both outcomes are valid pinpoints on the cross-table contract.
-      if (result.success) {
-        createdTfmIds.add(result.tfmId)
-        const { data: ms } = await supabaseAdmin
-          .from('mapping_sources')
-          .select('source_table_id, source_field_id, ordinal, join_spec')
-          .eq('target_field_mapping_id', result.tfmId)
-          .order('ordinal', { ascending: true })
-        expect((ms ?? []).length).toBe(2)
-        // Dominant source: ordinal 0, join_spec null.
-        expect(ms![0].ordinal).toBe(0)
-        expect(ms![0].source_field_id).toBe(fx.dominantSource.id)
-        expect(ms![0].join_spec).toBeNull()
-        // Joined source: ordinal 1, source_table_id differs from dominant.
-        expect(ms![1].ordinal).toBe(1)
-        expect(ms![1].source_field_id).toBe(fx.joinedSource.id)
-        expect(ms![1].source_table_id).not.toBe(ms![0].source_table_id)
-        // join_spec: null when single-FK inferred (read path
-        // re-derives), populated when user-disambiguated. Both
-        // shapes are acceptable here.
-      } else {
-        expect(result.errorCode).toBe('CROSS_TABLE_AMBIGUOUS')
-      }
+      // Cycle 1 — cross-table create always succeeds (FK precheck
+      // removed). Persisted join_spec is always null; read path
+      // re-derives the FK annotation each render via
+      // `inferFkCandidates`.
+      expect(result.success).toBe(true)
+      if (!result.success) return
+      createdTfmIds.add(result.tfmId)
+
+      const { data: ms } = await supabaseAdmin
+        .from('mapping_sources')
+        .select('source_table_id, source_field_id, ordinal, join_spec')
+        .eq('target_field_mapping_id', result.tfmId)
+        .order('ordinal', { ascending: true })
+      expect((ms ?? []).length).toBe(2)
+      // Anchor source: ordinal 0, join_spec null.
+      expect(ms![0].ordinal).toBe(0)
+      expect(ms![0].source_field_id).toBe(fx.dominantSource.id)
+      expect(ms![0].join_spec).toBeNull()
+      // Joined source: ordinal 1, source_table_id differs from anchor,
+      // join_spec also null (Cycle 1 contract).
+      expect(ms![1].ordinal).toBe(1)
+      expect(ms![1].source_field_id).toBe(fx.joinedSource.id)
+      expect(ms![1].source_table_id).not.toBe(ms![0].source_table_id)
+      expect(ms![1].join_spec).toBeNull()
     }, 30_000)
 
-    it('canonical zero-FK case — CIF_MASTER + ACCT_MASTER, dominant=CIF (4a-3)', async () => {
+    it('canonical zero-FK case — Cycle 1 cross-table create succeeds even when no FK exists (Transform-tab apply will surface CROSS_TABLE_FK_INFERENCE_FAILED later)', async () => {
       if (!fixtures.canonicalZeroFk) {
         console.warn(
-          '[4a-3 canonical] CIF_MASTER / ACCT_MASTER not found in ' +
+          '[Cycle 1 canonical] CIF_MASTER / ACCT_MASTER not found in ' +
             'Heritage; zero-FK test self-skips.',
         )
         return
@@ -1042,21 +1031,16 @@ writeDescribeFn(
         combinationType: 'concat_space',
       })
 
-      // Zero-FK from CIF (dominant) to ACCT (joined) → wrapper
-      // returns CROSS_TABLE_AMBIGUOUS with empty candidate list. The
-      // form surfaces this as a zero-FK banner with no dropdown.
-      // Multi-FK is also an acceptable outcome if the schema
-      // surprises us — both branches mean the wrapper correctly
-      // refused to silently invent a join.
-      if (result.success) {
-        // Single-FK inferred (Heritage may have evolved). Track for
-        // cleanup and pass.
-        createdTfmIds.add(result.tfmId)
-      } else {
-        expect(result.errorCode).toBe('CROSS_TABLE_AMBIGUOUS')
-        expect(result).toHaveProperty('candidateFkFields')
-        expect(result).toHaveProperty('ambiguousJoinedTableId')
-      }
+      // Cycle 1 — zero-FK no longer blocks create. The TFM is
+      // persisted with `join_spec: null` on every source. The
+      // CROSS_TABLE_FK_INFERENCE_FAILED error is surfaced only when
+      // the user later runs the Transform tab apply, since the
+      // read-path inference is what actually requires an FK to walk
+      // the join. (See `transform-apply-cross-table-heritage.test.ts`
+      // for the apply-time contract.)
+      expect(result.success).toBe(true)
+      if (!result.success) return
+      createdTfmIds.add(result.tfmId)
     }, 30_000)
 
     // ─── Phase 4a-4b — suggestMappingForTarget error paths ────────────

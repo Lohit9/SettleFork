@@ -280,7 +280,7 @@ describe('SourceFieldPicker — cross-table support (Phase 4a-3)', () => {
   })
 })
 
-describe('SourceFieldPicker — selected chip grouping (Phase 4a-3)', () => {
+describe('SourceFieldPicker — selected chip grouping (Cycle 1)', () => {
   it('flat single-row chip strip when all chips share one source table', () => {
     render(
       <SourceFieldPicker
@@ -291,7 +291,12 @@ describe('SourceFieldPicker — selected chip grouping (Phase 4a-3)', () => {
     )
     const wrapper = screen.getByTestId('source-field-picker-chips')
     expect(wrapper.getAttribute('data-cross-table')).toBe('false')
-    // No DOMINANT/JOINED group containers in the single-table case.
+    // No per-table group containers in the single-table case.
+    expect(
+      screen.queryByTestId('source-field-picker-chips-group'),
+    ).toBeNull()
+    // No legacy DOMINANT/JOINED testids — Cycle 1 removed the primacy
+    // distinction.
     expect(
       screen.queryByTestId('source-field-picker-chips-dominant'),
     ).toBeNull()
@@ -300,7 +305,7 @@ describe('SourceFieldPicker — selected chip grouping (Phase 4a-3)', () => {
     ).toBeNull()
   })
 
-  it('groups chips under DOMINANT and JOINED headers when 2+ source tables present', () => {
+  it('groups chips under per-source-table headers when 2+ source tables present', () => {
     render(
       <SourceFieldPicker
         availableSourceFields={allFields}
@@ -311,51 +316,63 @@ describe('SourceFieldPicker — selected chip grouping (Phase 4a-3)', () => {
     const wrapper = screen.getByTestId('source-field-picker-chips')
     expect(wrapper.getAttribute('data-cross-table')).toBe('true')
 
-    const dominant = screen.getByTestId('source-field-picker-chips-dominant')
-    expect(dominant.textContent).toMatch(/Dominant/i)
-    const dominantChips = within(dominant).getAllByTestId(
+    // Cycle 1 — no DOMINANT / JOINED testids; replaced by a single
+    // per-table group testid keyed on `data-source-table-id`.
+    expect(
+      screen.queryByTestId('source-field-picker-chips-dominant'),
+    ).toBeNull()
+    expect(
+      screen.queryByTestId('source-field-picker-chips-joined'),
+    ).toBeNull()
+
+    const groups = screen.getAllByTestId('source-field-picker-chips-group')
+    expect(groups).toHaveLength(2)
+
+    const acctGroup = groups.find(
+      (g) => g.getAttribute('data-source-table-id') === 'st-acct',
+    )!
+    expect(acctGroup.textContent).toMatch(/ACCT_MASTER/)
+    const acctChips = within(acctGroup).getAllByTestId(
       'source-field-picker-chip',
     )
-    expect(dominantChips).toHaveLength(1)
-    expect(dominantChips[0].getAttribute('data-source-field-id')).toBe(
-      'sf-cif-1',
+    expect(acctChips.map((c) => c.getAttribute('data-source-field-id'))).toEqual(
+      ['sf-acct-1'],
     )
 
-    const joined = screen.getByTestId('source-field-picker-chips-joined')
-    expect(joined.textContent).toMatch(/Joined/i)
-    const joinedChips = within(joined).getAllByTestId(
+    const cifGroup = groups.find(
+      (g) => g.getAttribute('data-source-table-id') === 'st-cif',
+    )!
+    expect(cifGroup.textContent).toMatch(/CIF_MASTER/)
+    const cifChips = within(cifGroup).getAllByTestId(
       'source-field-picker-chip',
     )
-    expect(joinedChips).toHaveLength(1)
-    expect(joinedChips[0].getAttribute('data-source-field-id')).toBe(
-      'sf-acct-1',
+    expect(cifChips.map((c) => c.getAttribute('data-source-field-id'))).toEqual(
+      ['sf-cif-1'],
     )
   })
 
-  it('first-picked stable for dominant: re-arranging selection order does not re-anchor', () => {
-    // Selection order: ACCT first, then CIF → ACCT should be dominant.
+  it('group order is alphabetical by source-table name regardless of selection order', () => {
+    // Selection order: CIF first, then ACCT — ACCT should still
+    // appear first because alphabetical order comes from
+    // availableSourceFields (server canonical order).
     render(
       <SourceFieldPicker
         availableSourceFields={allFields}
-        selectedIds={['sf-acct-1', 'sf-cif-1', 'sf-cif-2']}
+        selectedIds={['sf-cif-1', 'sf-acct-1', 'sf-cif-2']}
         onSelectedChange={() => {}}
       />,
     )
-    const dominant = screen.getByTestId('source-field-picker-chips-dominant')
-    const dominantChips = within(dominant).getAllByTestId(
-      'source-field-picker-chip',
+    const groups = screen.getAllByTestId('source-field-picker-chips-group')
+    const orderedTableIds = groups.map((g) =>
+      g.getAttribute('data-source-table-id'),
     )
-    const ids = dominantChips.map((c) => c.getAttribute('data-source-field-id'))
-    expect(ids).toEqual(['sf-acct-1'])
-
-    const joined = screen.getByTestId('source-field-picker-chips-joined')
-    const joinedIds = within(joined)
-      .getAllByTestId('source-field-picker-chip')
-      .map((c) => c.getAttribute('data-source-field-id'))
-    expect(joinedIds).toEqual(['sf-cif-1', 'sf-cif-2'])
+    // availableSourceFields lists CIF fields first (cifFields ordered
+    // before acctFields). Server canonical order — verify that's what
+    // drives header ordering, NOT the selection order.
+    expect(orderedTableIds).toEqual(['st-cif', 'st-acct'])
   })
 
-  it('multiple chips from the same joined table appear in selection order under JOINED', () => {
+  it('within each table group, chips preserve selection order', () => {
     render(
       <SourceFieldPicker
         availableSourceFields={allFields}
@@ -363,11 +380,13 @@ describe('SourceFieldPicker — selected chip grouping (Phase 4a-3)', () => {
         onSelectedChange={() => {}}
       />,
     )
-    const joined = screen.getByTestId('source-field-picker-chips-joined')
-    const ids = within(joined)
+    const acctGroup = screen
+      .getAllByTestId('source-field-picker-chips-group')
+      .find((g) => g.getAttribute('data-source-table-id') === 'st-acct')!
+    const ids = within(acctGroup)
       .getAllByTestId('source-field-picker-chip')
       .map((c) => c.getAttribute('data-source-field-id'))
-    // Selection order preserved: BALANCE before ACCT_NO.
+    // Selection order preserved within the group: BALANCE before ACCT_NO.
     expect(ids).toEqual(['sf-acct-2', 'sf-acct-1'])
   })
 
@@ -381,7 +400,11 @@ describe('SourceFieldPicker — selected chip grouping (Phase 4a-3)', () => {
     )
     const chips = screen.getAllByTestId('source-field-picker-chip')
     const tableIds = chips.map((c) => c.getAttribute('data-source-table-id'))
-    expect(tableIds).toEqual(['st-cif', 'st-acct'])
+    // Group order is alphabetical by table name — CIF before ACCT
+    // would naturally surface as ['st-cif', 'st-acct'] when the
+    // server canonical order has CIF fields first; sort to make the
+    // assertion order-independent for this surface check.
+    expect(tableIds.sort()).toEqual(['st-acct', 'st-cif'])
   })
 })
 

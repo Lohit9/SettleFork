@@ -1868,21 +1868,15 @@ describe('MappingDrawer — Rule 2 (multi-source, same table) mapped body', () =
     expect(screen.queryByTestId('drawer-source-join')).toBeNull()
   })
 
-  it('renders the inline `Combine with: …` label below the source roster', () => {
+  it('does NOT render any inline `Combine with: …` label or custom-SQL block (Cycle 1 — combination labels removed)', () => {
     render(<MappingDrawer row={rule2Mapped()} isOpen={true} onClose={() => {}} />)
-    const label = screen.getByTestId('drawer-combination-label')
-    expect(label.textContent).toContain('Combine with:')
-    expect(label.textContent).toContain('Concatenate with space')
-    // Drawer redesign — no standalone Combination section.
+    expect(screen.queryByTestId('drawer-combination-label')).toBeNull()
+    expect(screen.queryByTestId('drawer-combination-sql')).toBeNull()
+    // Legacy Combination SECTION testid stays absent.
     expect(screen.queryByTestId('drawer-section-combination')).toBeNull()
   })
 
-  it('hides the inline custom-SQL block for non-custom_sql types', () => {
-    render(<MappingDrawer row={rule2Mapped()} isOpen={true} onClose={() => {}} />)
-    expect(screen.queryByTestId('drawer-combination-sql')).toBeNull()
-  })
-
-  it('renders the inline custom-SQL block when combinationType=custom_sql AND combinationSql is non-null', () => {
+  it('does NOT surface combination metadata even when combinationType=custom_sql AND combinationSql is non-null (Cycle 1)', () => {
     const sql = "FNAME || ' / ' || LNAME"
     render(
       <MappingDrawer
@@ -1891,24 +1885,11 @@ describe('MappingDrawer — Rule 2 (multi-source, same table) mapped body', () =
         onClose={() => {}}
       />,
     )
-    const block = screen.getByTestId('drawer-combination-sql')
-    expect(block.tagName).toBe('PRE')
-    expect(block.textContent).toBe(sql)
-    expect(block.className).toContain('font-mono')
-    expect(block.className).toContain('bg-slate-50')
-    expect(block.className).toContain('whitespace-pre-wrap')
-    const label = screen.getByTestId('drawer-combination-label')
-    expect(label.textContent).toContain('Custom SQL expression')
-  })
-
-  it('hides the inline custom-SQL block when combinationType=custom_sql but combinationSql is null', () => {
-    render(
-      <MappingDrawer
-        row={rule2Mapped({ combinationType: 'custom_sql', combinationSql: null })}
-        isOpen={true}
-        onClose={() => {}}
-      />,
-    )
+    // The SourcesRoster-internal combine/SQL preview is removed in
+    // Cycle 1. The VA-path "Value expression" DrawerSection (separate
+    // surface, gated on `kind === 'value_assignment'`) is unaffected
+    // and stays alive elsewhere.
+    expect(screen.queryByTestId('drawer-combination-label')).toBeNull()
     expect(screen.queryByTestId('drawer-combination-sql')).toBeNull()
   })
 
@@ -2031,11 +2012,9 @@ describe('MappingDrawer — Rule 3 (cross-table, two tables) mapped body', () =>
     expect(within(cards[1]!).getByTestId('drawer-source-join')).toBeInTheDocument()
   })
 
-  it('renders the inline `Combine with: …` label with concat_comma copy', () => {
+  it('does NOT render the inline `Combine with: …` label even for cross-table multi-source rows (Cycle 1)', () => {
     render(<MappingDrawer row={rule3Mapped()} isOpen={true} onClose={() => {}} />)
-    const label = screen.getByTestId('drawer-combination-label')
-    expect(label.textContent).toContain('Combine with:')
-    expect(label.textContent).toContain('Concatenate with comma')
+    expect(screen.queryByTestId('drawer-combination-label')).toBeNull()
   })
 
   it('drawer redesign drops the standalone Combination section heading', () => {
@@ -2095,12 +2074,10 @@ describe('MappingDrawer — Rule 4 (multi-table complex) mapped body', () => {
     })
   })
 
-  it('renders the inline `Combine with: Custom SQL expression` label + custom_sql block', () => {
+  it('does NOT render the inline `Combine with: …` label or custom_sql block (Cycle 1)', () => {
     render(<MappingDrawer row={rule4Mapped()} isOpen={true} onClose={() => {}} />)
-    const label = screen.getByTestId('drawer-combination-label')
-    expect(label.textContent).toContain('Custom SQL expression')
-    const block = screen.getByTestId('drawer-combination-sql')
-    expect(block.textContent).toContain("F1 || ' ' || F2")
+    expect(screen.queryByTestId('drawer-combination-label')).toBeNull()
+    expect(screen.queryByTestId('drawer-combination-sql')).toBeNull()
   })
 })
 

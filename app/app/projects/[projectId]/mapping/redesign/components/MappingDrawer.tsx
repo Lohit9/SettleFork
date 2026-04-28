@@ -1859,20 +1859,6 @@ function ValueAssignmentBody({ row }: { row: ValueAssignmentRow }) {
 // Source ordering invariant: `sources[]` is server-emitted in ordinal-asc
 // order. The roster MUST iterate verbatim — no client-side sort.
 
-/**
- * Combination-type → human-readable phrase. Defensive over the full enum
- * even though `'single'` is functionally unreachable in the rendered output
- * (multi-source phrases are caller-gated). Keeping all four entries:
- *   • Exhaustive maps catch enum widening at compile time.
- *   • Future contract drift renders a sensible label instead of throwing.
- */
-const COMBINATION_TYPE_LABELS: Record<MappedRow['combinationType'], string> = {
-  single: 'Use single source',
-  concat_space: 'Concatenate with space',
-  concat_comma: 'Concatenate with comma',
-  custom_sql: 'Custom SQL expression',
-}
-
 interface MappedBodyProps {
   row: MappedRow
   /** Drawer redesign — true while the inline pencil edit form is mounted. */
@@ -2074,11 +2060,9 @@ function EditPencilButton({ onClick }: { onClick: () => void }) {
 
 /**
  * Per-source roster body for the Sources section. Renders one `SourceCard`
- * per source in ordinal order, plus an optional "Combine with: <strategy>"
- * label below the roster for multi-source rows.
+ * per source in ordinal order.
  */
 function SourcesRoster({ row }: { row: MappedRow }) {
-  const isMultiSource = row.sources.length >= 2
   // Drawer redesign — TARGET-led identity (this iteration): per-source
   // confidence is restored on ALL rows, including Rule 1 single-source.
   // The header now leads with the target field and carries no
@@ -2088,32 +2072,11 @@ function SourcesRoster({ row }: { row: MappedRow }) {
   // column on Rule 1 is acceptable — adjacency to the source identity
   // makes the number meaningful in context.
   return (
-    <>
-      <ul className="space-y-3" data-testid="drawer-sources-list">
-        {row.sources.map((source) => (
-          <SourceCard key={source.id} source={source} />
-        ))}
-      </ul>
-      {isMultiSource ? (
-        <div
-          className="mt-3 text-xs text-slate-500"
-          data-testid="drawer-combination-label"
-        >
-          Combine with:{' '}
-          <span className="text-slate-700">
-            {COMBINATION_TYPE_LABELS[row.combinationType]}
-          </span>
-        </div>
-      ) : null}
-      {row.combinationType === 'custom_sql' && row.combinationSql ? (
-        <pre
-          className="mt-2 overflow-x-auto whitespace-pre-wrap break-words rounded bg-slate-50 p-3 font-mono text-xs text-slate-900"
-          data-testid="drawer-combination-sql"
-        >
-          {row.combinationSql}
-        </pre>
-      ) : null}
-    </>
+    <ul className="space-y-3" data-testid="drawer-sources-list">
+      {row.sources.map((source) => (
+        <SourceCard key={source.id} source={source} />
+      ))}
+    </ul>
   )
 }
 

@@ -155,7 +155,10 @@ describe('CreateMappingForm — selection + dirty/canSave publishing', () => {
       snapshot: {
         targetFieldId: 'tf-1',
         selectedIds: ['sf-cif-1'],
-        combinationType: 'concat_space',
+        // Cycle 1 — `combinationType` is derived from selection length:
+        // 1 source → 'single' (informational; persistence still routes
+        // through `effectiveCombinationType` on the wrapper call).
+        combinationType: 'single',
         joinAnnotations: {},
       },
     })
@@ -188,10 +191,10 @@ describe('CreateMappingForm — selection + dirty/canSave publishing', () => {
   })
 })
 
-// ── Combination radios visibility ───────────────────────────────────────────
+// ── Combination radios removed (Cycle 1) ────────────────────────────────────
 
-describe('CreateMappingForm — combination radios', () => {
-  it('combination radios appear once 2+ sources are selected', async () => {
+describe('CreateMappingForm — combination radios removed (Cycle 1)', () => {
+  it('NEVER renders the combination radios container, regardless of source count', async () => {
     const user = userEvent.setup()
     render(
       <CreateMappingForm
@@ -203,6 +206,7 @@ describe('CreateMappingForm — combination radios', () => {
       />,
     )
     const fields = screen.getAllByTestId('source-field-picker-field')
+    expect(screen.queryByTestId('create-mapping-form-combination')).toBeNull()
     await user.click(
       fields.find((f) => f.getAttribute('data-source-field-id') === 'sf-cif-1')!,
     )
@@ -210,109 +214,16 @@ describe('CreateMappingForm — combination radios', () => {
     await user.click(
       fields.find((f) => f.getAttribute('data-source-field-id') === 'sf-cif-2')!,
     )
-    expect(screen.getByTestId('create-mapping-form-combination')).toBeInTheDocument()
-  })
-
-  it('concat_space is pre-selected when 2 sources selected', async () => {
-    const user = userEvent.setup()
-    render(
-      <CreateMappingForm
-        projectId="p1"
-        targetField={targetField}
-        availableSourceFields={cifFields}
-        onSaveSuccess={() => {}}
-        onCancel={() => {}}
-      />,
-    )
-    const fields = screen.getAllByTestId('source-field-picker-field')
-    await user.click(
-      fields.find((f) => f.getAttribute('data-source-field-id') === 'sf-cif-1')!,
-    )
-    await user.click(
-      fields.find((f) => f.getAttribute('data-source-field-id') === 'sf-cif-2')!,
-    )
-    const concatSpaceLabel = screen.getByTestId(
-      'create-mapping-form-combination-concat_space',
-    )
-    const radio = concatSpaceLabel.querySelector('input[type="radio"]')!
-    expect(radio).toHaveProperty('checked', true)
-  })
-
-  it('custom_sql radio is rendered as disabled with a tooltip', async () => {
-    const user = userEvent.setup()
-    render(
-      <CreateMappingForm
-        projectId="p1"
-        targetField={targetField}
-        availableSourceFields={cifFields}
-        onSaveSuccess={() => {}}
-        onCancel={() => {}}
-      />,
-    )
-    const fields = screen.getAllByTestId('source-field-picker-field')
-    await user.click(
-      fields.find((f) => f.getAttribute('data-source-field-id') === 'sf-cif-1')!,
-    )
-    await user.click(
-      fields.find((f) => f.getAttribute('data-source-field-id') === 'sf-cif-2')!,
-    )
-    const customLabel = screen.getByTestId(
-      'create-mapping-form-combination-custom_sql',
-    )
-    expect(customLabel.getAttribute('data-disabled')).toBe('true')
-    expect(customLabel.getAttribute('title')).toContain(
-      'Custom SQL combinations are managed in the Transform tab',
-    )
-    const radio = customLabel.querySelector('input[type="radio"]')!
-    expect(radio).toHaveProperty('disabled', true)
-  })
-
-  it('renders a dynamic example text from selected sources samples', async () => {
-    const user = userEvent.setup()
-    render(
-      <CreateMappingForm
-        projectId="p1"
-        targetField={targetField}
-        availableSourceFields={cifFields}
-        onSaveSuccess={() => {}}
-        onCancel={() => {}}
-      />,
-    )
-    const fields = screen.getAllByTestId('source-field-picker-field')
-    await user.click(
-      fields.find((f) => f.getAttribute('data-source-field-id') === 'sf-cif-2')!, // LAST_NAME → 'Smith'
-    )
-    await user.click(
-      fields.find((f) => f.getAttribute('data-source-field-id') === 'sf-cif-1')!, // FIRST_NAME → 'Alpha'
-    )
-    // selection order: LAST_NAME then FIRST_NAME → 'Smith Alpha'
-    const space = screen.getByTestId('create-mapping-form-combination-concat_space')
-    expect(space.textContent).toContain('"Smith Alpha"')
-    const comma = screen.getByTestId('create-mapping-form-combination-concat_comma')
-    expect(comma.textContent).toContain('"Smith, Alpha"')
-  })
-
-  it('falls back to canned example when any source has no samples', async () => {
-    const user = userEvent.setup()
-    render(
-      <CreateMappingForm
-        projectId="p1"
-        targetField={targetField}
-        availableSourceFields={cifFields}
-        onSaveSuccess={() => {}}
-        onCancel={() => {}}
-      />,
-    )
-    const fields = screen.getAllByTestId('source-field-picker-field')
-    // EMAIL has no samples — pair with FIRST_NAME
-    await user.click(
-      fields.find((f) => f.getAttribute('data-source-field-id') === 'sf-cif-1')!,
-    )
-    await user.click(
-      fields.find((f) => f.getAttribute('data-source-field-id') === 'sf-cif-3')!, // EMAIL no samples
-    )
-    const space = screen.getByTestId('create-mapping-form-combination-concat_space')
-    expect(space.textContent).toContain('"Smith John"')
+    expect(screen.queryByTestId('create-mapping-form-combination')).toBeNull()
+    expect(
+      screen.queryByTestId('create-mapping-form-combination-concat_space'),
+    ).toBeNull()
+    expect(
+      screen.queryByTestId('create-mapping-form-combination-concat_comma'),
+    ).toBeNull()
+    expect(
+      screen.queryByTestId('create-mapping-form-combination-custom_sql'),
+    ).toBeNull()
   })
 })
 
@@ -344,7 +255,7 @@ describe('CreateMappingForm — sample preview', () => {
     ).toContain('+ 2 more')
   })
 
-  it('updates preview when combination changes from concat_space to concat_comma', async () => {
+  it('preview renders concat_space-style joined samples for 2+ source selections (Cycle 1 — combination radios removed)', async () => {
     const user = userEvent.setup()
     render(
       <CreateMappingForm
@@ -362,19 +273,13 @@ describe('CreateMappingForm — sample preview', () => {
     await user.click(
       fields.find((f) => f.getAttribute('data-source-field-id') === 'sf-cif-1')!, // FIRST_NAME (Alpha,Bravo,Charlie)
     )
-    const initialRows = screen
+    const rows = screen
       .getAllByTestId('create-mapping-form-preview-row')
       .map((r) => r.textContent)
-    expect(initialRows[0]).toBe('Smith Alpha')
-
-    const commaRadio = screen
-      .getByTestId('create-mapping-form-combination-concat_comma')
-      .querySelector('input[type="radio"]')! as HTMLElement
-    await user.click(commaRadio)
-    const updatedRows = screen
-      .getAllByTestId('create-mapping-form-preview-row')
-      .map((r) => r.textContent)
-    expect(updatedRows[0]).toBe('Smith, Alpha')
+    // Cycle 1 — `effectiveCombinationType` for 2+ sources in create
+    // mode is the hard-coded default `'concat_space'`. The user no
+    // longer has a UI to flip combination types.
+    expect(rows[0]).toBe('Smith Alpha')
   })
 })
 
@@ -420,7 +325,7 @@ describe('CreateMappingForm — save flow', () => {
     expect(onSaveSuccess).toHaveBeenCalledWith('tfm-new')
   })
 
-  it('triggerSave with 2 sources passes user-selected combination_type', async () => {
+  it('triggerSave with 2+ sources passes the derived `concat_space` combination_type (Cycle 1 — no user-facing radios)', async () => {
     const ref = createRef<CreateMappingFormHandle>()
     const user = userEvent.setup()
     createFieldMappingMock.mockResolvedValue({
@@ -446,10 +351,6 @@ describe('CreateMappingForm — save flow', () => {
     await user.click(
       fields.find((f) => f.getAttribute('data-source-field-id') === 'sf-cif-2')!,
     )
-    const commaRadio = screen
-      .getByTestId('create-mapping-form-combination-concat_comma')
-      .querySelector('input[type="radio"]')! as HTMLElement
-    await user.click(commaRadio)
 
     await act(async () => {
       ref.current!.triggerSave()
@@ -459,7 +360,7 @@ describe('CreateMappingForm — save flow', () => {
       projectId: 'proj-1',
       targetFieldId: 'tf-1',
       sourceFieldIds: ['sf-cif-1', 'sf-cif-2'],
-      combinationType: 'concat_comma',
+      combinationType: 'concat_space',
       joinAnnotations: {},
     })
   })
@@ -715,9 +616,17 @@ describe('CreateMappingForm — save errors', () => {
   })
 })
 
-// ── Cross-table disambiguation (Phase 4a-3) ─────────────────────────────────
+// ── Cross-table disambiguation surface removed (Cycle 1) ────────────────────
+//
+// Cycle 1 deleted the form-side FK disambiguation prompt entirely
+// (locked decision §6 — the wrapper's CROSS_TABLE_AMBIGUOUS error
+// path was wholesale-deleted; multi-candidate ambiguity now surfaces
+// at Transform-tab apply time as `CROSS_TABLE_FK_INFERENCE_FAILED`).
+// The test surface that asserted the dropdown / zero-FK banner /
+// resolved-row affordances was deleted alongside it. The regression
+// guard below confirms none of those testids re-emerge.
 
-describe('CreateMappingForm — cross-table disambiguation', () => {
+describe('CreateMappingForm — cross-table disambiguation surface removed (Cycle 1)', () => {
   async function pickField(user: ReturnType<typeof userEvent.setup>, id: string) {
     const el = screen
       .getAllByTestId('source-field-picker-field')
@@ -748,20 +657,20 @@ describe('CreateMappingForm — cross-table disambiguation', () => {
       ref.current!.triggerSave()
     })
     const arg = createFieldMappingMock.mock.calls[0][0]
+    // Wrapper still accepts `joinAnnotations` for backward-compat;
+    // the value is `{}` since the form no longer surfaces the picker
+    // that populated it. Cycle 1 ignores `joinAnnotations` on the
+    // server side as well.
     expect(arg.joinAnnotations).toEqual({})
   })
 
-  it('renders the multi-FK dropdown when wrapper returns CROSS_TABLE_AMBIGUOUS with candidates', async () => {
+  it('does NOT render the disambiguation dropdown / zero-FK banner / resolved row even when 2+ source tables are selected (Cycle 1)', async () => {
     const ref = createRef<CreateMappingFormHandle>()
     const user = userEvent.setup()
     createFieldMappingMock.mockResolvedValue({
-      success: false,
-      errorCode: 'CROSS_TABLE_AMBIGUOUS',
-      error: 'pick FK',
-      candidateFkFields: ['PRIMARY_CIF', 'SECONDARY_CIF'],
-      ambiguousJoinedTableId: 'st-acct',
-      ambiguousJoinedTableName: 'ACCT_MASTER',
-      dominantTableName: 'CIF_MASTER',
+      success: true,
+      tfmId: 'tfm-new',
+      tableMappingId: 'tm-new',
     })
     render(
       <CreateMappingForm
@@ -778,236 +687,21 @@ describe('CreateMappingForm — cross-table disambiguation', () => {
     await act(async () => {
       ref.current!.triggerSave()
     })
-    const dropdown = screen.getByTestId(
-      'create-mapping-form-disambiguation-active',
-    )
-    expect(dropdown.getAttribute('data-joined-table-id')).toBe('st-acct')
-    const select = screen.getByTestId(
-      'create-mapping-form-disambiguation-select',
-    ) as HTMLSelectElement
-    const optionTexts = Array.from(select.options).map((o) => o.textContent)
-    expect(optionTexts).toContain('PRIMARY_CIF')
-    expect(optionTexts).toContain('SECONDARY_CIF')
-    // Generic error banner is suppressed in favor of the structured row.
-    expect(screen.queryByTestId('create-mapping-form-error')).toBeNull()
-  })
-
-  it('renders the zero-FK banner when candidates is empty', async () => {
-    const ref = createRef<CreateMappingFormHandle>()
-    const user = userEvent.setup()
-    createFieldMappingMock.mockResolvedValue({
-      success: false,
-      errorCode: 'CROSS_TABLE_AMBIGUOUS',
-      error: 'no FK',
-      candidateFkFields: [],
-      ambiguousJoinedTableId: 'st-acct',
-      ambiguousJoinedTableName: 'ACCT_MASTER',
-      dominantTableName: 'CIF_MASTER',
-    })
-    render(
-      <CreateMappingForm
-        ref={ref}
-        projectId="proj-1"
-        targetField={targetField}
-        availableSourceFields={allFields}
-        onSaveSuccess={() => {}}
-        onCancel={() => {}}
-      />,
-    )
-    await pickField(user, 'sf-cif-1')
-    await pickField(user, 'sf-acct-1')
-    await act(async () => {
-      ref.current!.triggerSave()
-    })
-    const banner = screen.getByTestId(
-      'create-mapping-form-disambiguation-zero-fk',
-    )
-    expect(banner.textContent).toMatch(/No foreign key/i)
-    expect(banner.textContent).toContain('CIF_MASTER')
-    expect(banner.textContent).toContain('ACCT_MASTER')
-    // No refresh affordance on zero-FK (founder §8-OQ-2).
-    expect(screen.queryByTestId('create-mapping-form-refresh')).toBeNull()
-  })
-
-  it('blocks save while a multi-FK entry has no annotation picked', async () => {
-    const ref = createRef<CreateMappingFormHandle>()
-    const onSaveSuccess = vi.fn()
-    const onStateChange = vi.fn()
-    const user = userEvent.setup()
-    createFieldMappingMock.mockResolvedValueOnce({
-      success: false,
-      errorCode: 'CROSS_TABLE_AMBIGUOUS',
-      error: 'pick FK',
-      candidateFkFields: ['PRIMARY_CIF', 'SECONDARY_CIF'],
-      ambiguousJoinedTableId: 'st-acct',
-      ambiguousJoinedTableName: 'ACCT_MASTER',
-      dominantTableName: 'CIF_MASTER',
-    })
-    render(
-      <CreateMappingForm
-        ref={ref}
-        projectId="proj-1"
-        targetField={targetField}
-        availableSourceFields={allFields}
-        onSaveSuccess={onSaveSuccess}
-        onCancel={() => {}}
-        onStateChange={onStateChange}
-      />,
-    )
-    await pickField(user, 'sf-cif-1')
-    await pickField(user, 'sf-acct-1')
-    await act(async () => {
-      ref.current!.triggerSave()
-    })
-    // After the ambiguous response, canSave must flip to false even
-    // though selectedIds.length > 0 and no save is pending.
-    const lastCanSave = onStateChange.mock.calls.at(-1)?.[0]?.canSave
-    expect(lastCanSave).toBe(false)
-
-    // Re-fire triggerSave should be a no-op (wrapper not called again).
-    await act(async () => {
-      ref.current!.triggerSave()
-    })
-    expect(createFieldMappingMock).toHaveBeenCalledTimes(1)
-  })
-
-  it('user pick → resave passes joinAnnotations to wrapper', async () => {
-    const ref = createRef<CreateMappingFormHandle>()
-    const user = userEvent.setup()
-    createFieldMappingMock
-      .mockResolvedValueOnce({
-        success: false,
-        errorCode: 'CROSS_TABLE_AMBIGUOUS',
-        error: 'pick FK',
-        candidateFkFields: ['PRIMARY_CIF', 'SECONDARY_CIF'],
-        ambiguousJoinedTableId: 'st-acct',
-        ambiguousJoinedTableName: 'ACCT_MASTER',
-        dominantTableName: 'CIF_MASTER',
-      })
-      .mockResolvedValueOnce({
-        success: true,
-        tfmId: 'tfm-new',
-        tableMappingId: 'tm-new',
-      })
-    render(
-      <CreateMappingForm
-        ref={ref}
-        projectId="proj-1"
-        targetField={targetField}
-        availableSourceFields={allFields}
-        onSaveSuccess={() => {}}
-        onCancel={() => {}}
-      />,
-    )
-    await pickField(user, 'sf-cif-1')
-    await pickField(user, 'sf-acct-1')
-    await act(async () => {
-      ref.current!.triggerSave()
-    })
-    const select = screen.getByTestId(
-      'create-mapping-form-disambiguation-select',
-    ) as HTMLSelectElement
-    fireEvent.change(select, { target: { value: 'PRIMARY_CIF' } })
-    await act(async () => {
-      ref.current!.triggerSave()
-    })
-    expect(createFieldMappingMock).toHaveBeenCalledTimes(2)
-    const secondArg = createFieldMappingMock.mock.calls[1][0]
-    expect(secondArg.joinAnnotations).toEqual({ 'st-acct': 'PRIMARY_CIF' })
-  })
-
-  it('after pick, dropdown collapses to a resolved row with a Change link', async () => {
-    const ref = createRef<CreateMappingFormHandle>()
-    const user = userEvent.setup()
-    createFieldMappingMock.mockResolvedValueOnce({
-      success: false,
-      errorCode: 'CROSS_TABLE_AMBIGUOUS',
-      error: 'pick FK',
-      candidateFkFields: ['PRIMARY_CIF', 'SECONDARY_CIF'],
-      ambiguousJoinedTableId: 'st-acct',
-      ambiguousJoinedTableName: 'ACCT_MASTER',
-      dominantTableName: 'CIF_MASTER',
-    })
-    render(
-      <CreateMappingForm
-        ref={ref}
-        projectId="proj-1"
-        targetField={targetField}
-        availableSourceFields={allFields}
-        onSaveSuccess={() => {}}
-        onCancel={() => {}}
-      />,
-    )
-    await pickField(user, 'sf-cif-1')
-    await pickField(user, 'sf-acct-1')
-    await act(async () => {
-      ref.current!.triggerSave()
-    })
-    const select = screen.getByTestId(
-      'create-mapping-form-disambiguation-select',
-    ) as HTMLSelectElement
-    fireEvent.change(select, { target: { value: 'PRIMARY_CIF' } })
-
+    expect(screen.queryByTestId('create-mapping-form-disambiguation')).toBeNull()
     expect(
       screen.queryByTestId('create-mapping-form-disambiguation-active'),
     ).toBeNull()
-    const resolved = screen.getByTestId(
-      'create-mapping-form-disambiguation-resolved',
-    )
-    expect(resolved.textContent).toContain('PRIMARY_CIF')
-
-    // Change link flips back to active dropdown.
-    await user.click(
-      screen.getByTestId('create-mapping-form-disambiguation-change'),
-    )
     expect(
-      screen.getByTestId('create-mapping-form-disambiguation-active'),
-    ).toBeInTheDocument()
-  })
-
-  it('removing the joined-table chip silently clears its disambiguation state', async () => {
-    const ref = createRef<CreateMappingFormHandle>()
-    const user = userEvent.setup()
-    createFieldMappingMock.mockResolvedValueOnce({
-      success: false,
-      errorCode: 'CROSS_TABLE_AMBIGUOUS',
-      error: 'pick FK',
-      candidateFkFields: ['PRIMARY_CIF', 'SECONDARY_CIF'],
-      ambiguousJoinedTableId: 'st-acct',
-      ambiguousJoinedTableName: 'ACCT_MASTER',
-      dominantTableName: 'CIF_MASTER',
-    })
-    render(
-      <CreateMappingForm
-        ref={ref}
-        projectId="proj-1"
-        targetField={targetField}
-        availableSourceFields={allFields}
-        onSaveSuccess={() => {}}
-        onCancel={() => {}}
-      />,
-    )
-    await pickField(user, 'sf-cif-1')
-    await pickField(user, 'sf-acct-1')
-    await act(async () => {
-      ref.current!.triggerSave()
-    })
+      screen.queryByTestId('create-mapping-form-disambiguation-zero-fk'),
+    ).toBeNull()
     expect(
-      screen.getByTestId('create-mapping-form-disambiguation'),
-    ).toBeInTheDocument()
-
-    // Remove the joined-table chip via the chip's X button.
-    const chips = screen.getAllByTestId('source-field-picker-chip')
-    const acctChip = chips.find(
-      (c) => c.getAttribute('data-source-field-id') === 'sf-acct-1',
-    )!
-    await user.click(
-      acctChip.querySelector(
-        '[data-testid="source-field-picker-chip-remove"]',
-      ) as HTMLElement,
-    )
+      screen.queryByTestId('create-mapping-form-disambiguation-resolved'),
+    ).toBeNull()
     expect(
-      screen.queryByTestId('create-mapping-form-disambiguation'),
+      screen.queryByTestId('create-mapping-form-disambiguation-select'),
+    ).toBeNull()
+    expect(
+      screen.queryByTestId('create-mapping-form-disambiguation-change'),
     ).toBeNull()
   })
 })
