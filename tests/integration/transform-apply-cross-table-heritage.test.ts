@@ -295,12 +295,14 @@ describeFn(
       const { applyTransform } = await import('@/lib/actions/transformations')
       const { supabaseAdmin } = await import('@/lib/supabase/admin')
 
-      // 1. Create cross-table TFM via the wrapper. Heritage has a
-      //    single LOAN_MASTER → CIF_MASTER FK (LOAN_MASTER.CIF_NO →
-      //    CIF_MASTER.CIF_NO) so FK inference resolves to one
-      //    candidate and the wrapper succeeds without
-      //    joinAnnotations. If that's not true (schema drift), the
-      //    create returns CROSS_TABLE_AMBIGUOUS and we self-skip.
+      // 1. Create cross-table TFM via the wrapper. Cycle 1 — the
+      //    create-time FK precheck has been removed, so cross-table
+      //    inputs always succeed regardless of FK candidate count.
+      //    Read-path FK inference (and any apply-time
+      //    `CROSS_TABLE_FK_INFERENCE_FAILED` surfacing) lives
+      //    downstream in `applyTransform`. Heritage has a single
+      //    LOAN_MASTER → CIF_MASTER FK that the read-path
+      //    `inferFkCandidates` should still resolve cleanly.
       const created = await createFieldMapping({
         projectId: HERITAGE_PROJECT_ID,
         targetFieldId: fx.loansStatusFieldId,

@@ -119,7 +119,7 @@ describe('[edit-mapping-sources] wrapper shape', () => {
     expect(resultUnion).toMatch(/errorCode:\s*EditMappingErrorCode/)
   })
 
-  it('E2: EditMappingErrorCode exposes all 9 documented error paths', () => {
+  it('E2 (Cycle 1): EditMappingErrorCode exposes the 7 retained error paths; CROSS_TABLE_AMBIGUOUS + DOMINANT_TABLE_CHANGED were removed', () => {
     const union = sliceBetween(
       SRC,
       'export type EditMappingErrorCode',
@@ -130,10 +130,15 @@ describe('[edit-mapping-sources] wrapper shape', () => {
     expect(union).toContain("'VALIDATION'")
     expect(union).toContain("'MAINTENANCE_MODE'")
     expect(union).toContain("'INTERNAL'")
-    expect(union).toContain("'CROSS_TABLE_AMBIGUOUS'")
-    expect(union).toContain("'DOMINANT_TABLE_CHANGED'")
     expect(union).toContain("'TFM_REJECTED'")
     expect(union).toContain("'TFM_ACKNOWLEDGED'")
+    // Cycle 1 — locked decision §2 hygiene cleanup. The cross-table FK
+    // precheck and dominant-swap guard were wholesale-deleted from the
+    // server, and the corresponding error codes were removed from the
+    // union. Multi-candidate ambiguity now surfaces at Transform-tab
+    // apply time as `CROSS_TABLE_FK_INFERENCE_FAILED`.
+    expect(union).not.toContain("'CROSS_TABLE_AMBIGUOUS'")
+    expect(union).not.toContain("'DOMINANT_TABLE_CHANGED'")
   })
 })
 
@@ -290,62 +295,48 @@ describe('[edit-mapping-sources] existing-sources read', () => {
 })
 
 // ─────────────────────────────────────────────────────────────────────
-// E12 — Dominant-table swap detection
+// E12 — Dominant-table swap detection (REMOVED in Cycle 1)
+// E13-E17 — Cross-table FK precheck (REMOVED in Cycle 1)
+//
+// Cycle 1 wholesale-deleted both server-side surfaces (locked
+// decisions §1, §2). Inline cross-table source edits — including
+// dominant-table swaps and 0/multi-FK-candidate situations — are
+// now permitted. The persisted `mapping_sources.join_spec` is
+// always-null on the write path; the read path re-derives the FK
+// annotation each render via `inferFkCandidates`. Multi-candidate
+// ambiguity surfaces only at Transform-tab apply time as
+// `CROSS_TABLE_FK_INFERENCE_FAILED` (existing code path).
+//
+// The regression guards below lock the deletion in place by
+// confirming none of the deleted constructs reappear in
+// `editMappingSources`.
 // ─────────────────────────────────────────────────────────────────────
 
-describe('[edit-mapping-sources] dominant-table swap', () => {
-  it('E12: returns DOMINANT_TABLE_CHANGED when newDominantTableId !== originalDominantTableId', () => {
-    expect(BODY).toMatch(/newDominantTableId\s*!==\s*originalDominantTableId/)
-    expect(BODY).toMatch(
-      /Changing the first source's table[\s\S]{0,400}errorCode:\s*['"]DOMINANT_TABLE_CHANGED['"]/,
-    )
-  })
-
-  it('E12b: skips swap detection when the existing TFM had no sources (defensive — should not happen for non-acknowledged TFMs)', () => {
-    expect(BODY).toMatch(/originalDominantTableId\s*!==\s*null/)
+describe('[edit-mapping-sources] dominant-table swap removed (Cycle 1)', () => {
+  it('E12 (Cycle 1): editMappingSources no longer emits DOMINANT_TABLE_CHANGED nor compares newDominantTableId !== originalDominantTableId', () => {
+    expect(BODY).not.toMatch(/newDominantTableId/)
+    expect(BODY).not.toMatch(/originalDominantTableId/)
+    expect(BODY).not.toMatch(/DOMINANT_TABLE_CHANGED/)
+    expect(BODY).not.toMatch(/Changing the first source's table/)
   })
 })
 
-// ─────────────────────────────────────────────────────────────────────
-// E13-E17 — Cross-table FK precheck
-// ─────────────────────────────────────────────────────────────────────
-
-describe('[edit-mapping-sources] cross-table FK precheck', () => {
-  it('E13: precheck only runs when the source set spans more than one table', () => {
-    expect(BODY).toMatch(/uniqueSourceTableIds\.size\s*>\s*1/)
-    expect(BODY).toMatch(/if\s*\(isCrossTable\)/)
+describe('[edit-mapping-sources] cross-table FK precheck removed (Cycle 1)', () => {
+  it('E13-E17 (Cycle 1): editMappingSources no longer runs the cross-table FK precheck (no CROSS_TABLE_AMBIGUOUS, no needsPersistedSpec, no isCrossTable branch, no candidates inspection)', () => {
+    expect(BODY).not.toMatch(/CROSS_TABLE_AMBIGUOUS/)
+    expect(BODY).not.toMatch(/needsPersistedSpec/)
+    expect(BODY).not.toMatch(/if\s*\(isCrossTable\)/)
+    expect(BODY).not.toMatch(/joinSpecBySourceFieldId\.set/)
+    expect(BODY).not.toMatch(/candidateFkFields:/)
+    expect(BODY).not.toMatch(/ambiguousJoinedTableId:/)
+    expect(BODY).not.toMatch(/ambiguousJoinedTableName:/)
   })
 
-  it('E14: zero FK candidates → CROSS_TABLE_AMBIGUOUS with empty candidateFkFields + ambiguousJoinedTableId/Name + dominantTableName', () => {
-    expect(BODY).toMatch(/candidates\.length\s*===\s*0/)
-    expect(BODY).toMatch(
-      /candidates\.length\s*===\s*0[\s\S]{0,800}errorCode:\s*['"]CROSS_TABLE_AMBIGUOUS['"][\s\S]{0,400}candidateFkFields:\s*\[\]/,
-    )
-    expect(BODY).toMatch(/ambiguousJoinedTableId:\s*joinedTableId/)
-    expect(BODY).toMatch(/ambiguousJoinedTableName:\s*joinedTableName/)
-    expect(BODY).toMatch(/dominantTableName/)
-  })
-
-  it('E15: multiple candidates without override → CROSS_TABLE_AMBIGUOUS with candidates list', () => {
-    expect(BODY).toMatch(
-      /override\s*===\s*undefined[\s\S]{0,400}errorCode:\s*['"]CROSS_TABLE_AMBIGUOUS['"][\s\S]{0,300}candidateFkFields:\s*candidates/,
-    )
-  })
-
-  it('E16: invalid override (single-candidate mismatch OR multi-candidate not in list) → VALIDATION', () => {
-    expect(BODY).toMatch(
-      /override\s*!==\s*undefined\s*&&\s*override\s*!==\s*pickedFkName[\s\S]{0,500}errorCode:\s*['"]VALIDATION['"]/,
-    )
-    expect(BODY).toMatch(
-      /!candidates\.includes\(override\)[\s\S]{0,400}errorCode:\s*['"]VALIDATION['"]/,
-    )
-  })
-
-  it('E17: persisted join_spec written ONLY when needsPersistedSpec === true (multi-candidate disambiguation)', () => {
-    expect(BODY).toMatch(/needsPersistedSpec\s*=\s*false/)
-    expect(BODY).toMatch(/needsPersistedSpec\s*=\s*true/)
-    expect(BODY).toMatch(/if\s*\(needsPersistedSpec\)/)
-    expect(BODY).toMatch(/joinSpecBySourceFieldId\.set/)
+  it('E13-E17 (Cycle 1): inferFkCandidates and joinSpecBySourceFieldId STAY at module/file scope (read-path re-derivation is unaffected; consumed by _mappings-for-redesign-core.ts and transform-cross-table.ts)', () => {
+    // `inferFkCandidates` is still imported (consumed by the read
+    // path / transform-cross-table.ts). The wrapper body simply
+    // doesn't call it for the precheck anymore.
+    expect(SRC).toMatch(/inferFkCandidates/)
   })
 })
 
@@ -382,12 +373,17 @@ describe('[edit-mapping-sources] dq_replace_mapping_sources RPC', () => {
     expect(BODY).toMatch(/p_sources:\s*rpcSources/)
   })
 
-  it('E19b: rpcSources entries carry source_field_id, source_table_id, ordinal, ai_reasoning, join_spec', () => {
+  it('E19b (Cycle 1): rpcSources entries carry source_field_id, source_table_id, ordinal, ai_reasoning, and an always-null join_spec on the write path', () => {
     expect(BODY).toMatch(/source_field_id:\s*sf\.id/)
     expect(BODY).toMatch(/source_table_id:\s*sf\.table_id/)
     expect(BODY).toMatch(/ordinal:\s*idx/)
     expect(BODY).toMatch(/ai_reasoning:\s*isRetainedAi/)
-    expect(BODY).toMatch(/join_spec:\s*join_spec/)
+    // Cycle 1 — `join_spec` is always written as `null`. The read
+    // path re-derives the FK annotation each render via
+    // `inferFkCandidates`. The previous `joinSpecBySourceFieldId`
+    // map plumbing has been removed entirely.
+    expect(BODY).toMatch(/join_spec:\s*null/)
+    expect(BODY).not.toMatch(/joinSpecBySourceFieldId/)
   })
 
   it('E19c: maps INTERNAL on RPC error', () => {

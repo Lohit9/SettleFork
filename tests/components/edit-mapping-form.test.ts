@@ -117,7 +117,7 @@ describe('[edit-mapping-form] hydration + dirty/save semantics', () => {
     )
   })
 
-  it('F6: isDirty in edit mode compares against editInitialState (set + ordering + combination + joinAnnotations)', () => {
+  it('F6: isDirty in edit mode compares against editInitialState (set + ordering + joinAnnotations) — Cycle 1 dropped the standalone combinationType comparison', () => {
     // Set difference: length OR per-index id mismatch.
     expect(SRC).toMatch(
       /selectedIds\.length\s*!==\s*editInitialState\.selectedIds\.length/,
@@ -125,12 +125,16 @@ describe('[edit-mapping-form] hydration + dirty/save semantics', () => {
     expect(SRC).toMatch(
       /selectedIds\[i\]\s*!==\s*editInitialState\.selectedIds\[i\]/,
     )
-    // Combination type change is dirty.
-    expect(SRC).toMatch(
-      /combinationType\s*!==\s*editInitialState\.combinationType/,
-    )
     // joinAnnotations comparison.
     expect(SRC).toMatch(/editInitialState\.joinAnnotations/)
+    // Cycle 1 — combinationType is now derived from selectedIds (with
+    // edit-mode preservation for ≥2 sources). Since the user has no UI
+    // to change it independently, the dirty memo no longer compares it
+    // as a free axis; selection-set changes already cover the 1↔2+
+    // transition that flips the derived value.
+    expect(SRC).not.toMatch(
+      /combinationType\s*!==\s*editInitialState\.combinationType/,
+    )
   })
 
   it('F7: canSave in edit mode requires isDirty (no-op edits cannot save)', () => {
@@ -159,12 +163,16 @@ describe('[edit-mapping-form] save handler routing', () => {
     expect(handlerBody).not.toMatch(/originalSuggestedIds:/)
   })
 
-  it('F9c: handleEditSave handles CROSS_TABLE_AMBIGUOUS by populating ambiguousCandidates (parallel to create-mode)', () => {
+  it('F9c (Cycle 1 — CROSS_TABLE_AMBIGUOUS handling removed): handleEditSave no longer references CROSS_TABLE_AMBIGUOUS or setAmbiguousCandidates', () => {
+    // Cycle 1 wholesale-deleted the FK precheck on the server and the
+    // disambiguation prompt on the client (locked decisions §1, §2,
+    // §6). The error code no longer exists on `EditMappingErrorCode`,
+    // and the form-side state plumbing went with it. This regression
+    // guard locks the surface deletion in place.
     const handlerBody = sliceBetween(SRC, 'const handleEditSave', 'const handleRefreshOnExistingTfm')
-    expect(handlerBody).toMatch(
-      /errorCode\s*===\s*['"]CROSS_TABLE_AMBIGUOUS['"]/,
-    )
-    expect(handlerBody).toMatch(/setAmbiguousCandidates/)
+    expect(handlerBody).not.toMatch(/CROSS_TABLE_AMBIGUOUS/)
+    expect(handlerBody).not.toMatch(/setAmbiguousCandidates/)
+    expect(SRC).not.toMatch(/setAmbiguousCandidates/)
   })
 })
 
@@ -177,11 +185,15 @@ describe('[edit-mapping-form] error code mapping', () => {
     expect(SRC).toMatch(/EDIT_ERROR_CODE_COPY:\s*Record<EditMappingErrorCode,\s*string>/)
   })
 
-  it('F10b: EDIT_ERROR_CODE_COPY surfaces TFM_REJECTED + TFM_ACKNOWLEDGED + DOMINANT_TABLE_CHANGED with intent-revealing copy', () => {
+  it('F10b (Cycle 1): EDIT_ERROR_CODE_COPY surfaces TFM_REJECTED + TFM_ACKNOWLEDGED with intent-revealing copy; DOMINANT_TABLE_CHANGED entry was removed', () => {
     const copyMap = sliceBetween(SRC, 'EDIT_ERROR_CODE_COPY', '\n}\n\n')
     expect(copyMap).toMatch(/TFM_REJECTED:/)
     expect(copyMap).toMatch(/TFM_ACKNOWLEDGED:/)
-    expect(copyMap).toMatch(/DOMINANT_TABLE_CHANGED:/)
+    // Cycle 1 — DOMINANT_TABLE_CHANGED was removed from
+    // EditMappingErrorCode along with the dominant-swap guard
+    // (locked decision §2, server hygiene cleanup).
+    expect(copyMap).not.toMatch(/DOMINANT_TABLE_CHANGED:/)
+    expect(copyMap).not.toMatch(/CROSS_TABLE_AMBIGUOUS:/)
   })
 
   it('F10c: catches editMappingSources throws and falls back to INTERNAL copy', () => {

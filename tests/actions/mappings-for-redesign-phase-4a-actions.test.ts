@@ -72,12 +72,20 @@ describe('[mappings-for-redesign 4a] wrapper exports', () => {
     expect(SRC).toMatch(/export async function suggestMappingForTarget\(/)
   })
 
-  it('exports CreateFieldMappingErrorCode union (with the cross-table codes)', () => {
+  it('exports CreateFieldMappingErrorCode union (Cycle 1: CROSS_TABLE_AMBIGUOUS removed; CROSS_TABLE_NOT_YET_SUPPORTED retained for client compatibility)', () => {
     expect(SRC).toMatch(/export type CreateFieldMappingErrorCode/)
     // Retained on the union post-4a-3 for client compatibility.
     expect(SRC).toMatch(/['"]CROSS_TABLE_NOT_YET_SUPPORTED['"]/)
-    // 4a-3 active emitter (zero / multi candidate FK).
-    expect(SRC).toMatch(/['"]CROSS_TABLE_AMBIGUOUS['"]/)
+    // Cycle 1 — locked decision §2 hygiene cleanup. The cross-table FK
+    // precheck was wholesale-deleted, and the CROSS_TABLE_AMBIGUOUS
+    // emitter went with it. Multi-candidate ambiguity now surfaces at
+    // Transform-tab apply time as `CROSS_TABLE_FK_INFERENCE_FAILED`.
+    const errorUnion = sliceBetween(
+      SRC,
+      'export type CreateFieldMappingErrorCode',
+      '\n\n',
+    )
+    expect(errorUnion).not.toContain("'CROSS_TABLE_AMBIGUOUS'")
   })
 
   it('exports SuggestMappingErrorCode union (with rate limit + invalid-response codes)', () => {
@@ -208,60 +216,51 @@ describe('[mappings-for-redesign 4a] createFieldMapping', () => {
     )
   })
 
-  // ── Cross-table FK precheck (Phase 4a-3) ──────────────────────────
+  // ── Cross-table FK precheck (REMOVED in Cycle 1) ──────────────────
+  //
+  // Cycle 1 wholesale-deleted the FK precheck branch in
+  // `createFieldMapping` (locked decisions §1, §2). Inline cross-table
+  // mapping creation is now permitted regardless of FK ambiguity.
+  // Persisted `mapping_sources.join_spec` is always-null on the write
+  // path; the read path re-derives the annotation each render via
+  // `inferFkCandidates`. Multi-candidate ambiguity surfaces only at
+  // Transform-tab apply time as `CROSS_TABLE_FK_INFERENCE_FAILED`.
+  //
+  // The regression guards below lock the deletion in place by
+  // confirming none of the deleted constructs reappear in
+  // `createFieldMapping`.
 
-  it('detects cross-table input via uniqueSourceTableIds and branches into the FK precheck', () => {
-    expect(body).toMatch(/uniqueSourceTableIds\.size\s*>\s*1/)
-    expect(body).toMatch(/isCrossTable/)
+  it('Cycle 1: createFieldMapping no longer runs the cross-table FK precheck (no isCrossTable branch, no CROSS_TABLE_AMBIGUOUS, no candidate inspection, no joinSpecBySourceFieldId map)', () => {
+    expect(body).not.toMatch(/CROSS_TABLE_AMBIGUOUS/)
+    expect(body).not.toMatch(/if\s*\(isCrossTable\)/)
+    expect(body).not.toMatch(/inferFkCandidates\(/)
+    expect(body).not.toMatch(/parseToFkFieldFromReference\(/)
+    expect(body).not.toMatch(/joinSpecBySourceFieldId/)
+    expect(body).not.toMatch(/needsPersistedSpec/)
+    expect(body).not.toMatch(/candidateFkFields:/)
+    expect(body).not.toMatch(/ambiguousJoinedTableId:/)
+    expect(body).not.toMatch(/ambiguousJoinedTableName:/)
+    expect(body).not.toMatch(/dominantTableName:/)
   })
 
-  it('imports the FK inference helpers from lib/utils/fk-inference', () => {
-    expect(SRC).toMatch(
-      /from\s+['"]@\/lib\/utils\/fk-inference['"]/,
+  it('Cycle 1: CreateFieldMappingResult no longer extends with disambiguation context fields', () => {
+    const resultType = sliceBetween(
+      SRC,
+      'export type CreateFieldMappingResult',
+      '\n\nexport',
     )
-    expect(body).toMatch(/inferFkCandidates\(/)
-    expect(body).toMatch(/parseToFkFieldFromReference\(/)
+    expect(resultType).not.toMatch(/candidateFkFields\?:/)
+    expect(resultType).not.toMatch(/ambiguousJoinedTableId\?:/)
+    expect(resultType).not.toMatch(/ambiguousJoinedTableName\?:/)
+    expect(resultType).not.toMatch(/dominantTableName\?:/)
   })
 
-  it('emits CROSS_TABLE_AMBIGUOUS with empty candidates on the zero-FK branch', () => {
-    expect(body).toMatch(
-      /candidates\.length\s*===\s*0[\s\S]{0,800}CROSS_TABLE_AMBIGUOUS/,
-    )
-    expect(body).toMatch(/candidateFkFields:\s*\[\]/)
-  })
-
-  it('emits CROSS_TABLE_AMBIGUOUS with the candidate list when 2+ candidates exist and no override is supplied', () => {
-    expect(body).toMatch(
-      /override\s*===\s*undefined[\s\S]{0,800}CROSS_TABLE_AMBIGUOUS/,
-    )
-    expect(body).toMatch(/candidateFkFields:\s*candidates/)
-  })
-
-  it('validates joinAnnotations override against the live candidate list (defense-in-depth)', () => {
-    // §2-OQ-4: stale form whose picked FK no longer exists rejects
-    // with VALIDATION rather than corrupting `join_spec`.
-    expect(body).toMatch(
-      /!candidates\.includes\(override\)[\s\S]{0,400}VALIDATION/,
-    )
-  })
-
-  it('extends the result type with disambiguation context fields', () => {
-    expect(SRC).toMatch(/ambiguousJoinedTableId\?:\s*string/)
-    expect(SRC).toMatch(/ambiguousJoinedTableName\?:\s*string/)
-    expect(SRC).toMatch(/dominantTableName\?:\s*string/)
-  })
-
-  it('accepts joinAnnotations input and propagates it as a Record<string, string>', () => {
+  it('Cycle 1: createFieldMapping still accepts joinAnnotations on the input shape (ignored on the write path; preserved for client back-compat)', () => {
     expect(SRC).toMatch(/joinAnnotations\?:\s*Record<string,\s*string>/)
   })
 
-  it('emits per-source join_spec only for user-disambiguated joined sources', () => {
-    // Single-candidate inferences and dominant rows store null so the
-    // read path re-derives annotation each render.
-    expect(body).toMatch(/joinSpecBySourceFieldId/)
-    expect(body).toMatch(/via_source_table:/)
-    expect(body).toMatch(/via_fk_field:/)
-    expect(body).toMatch(/to_fk_field:/)
+  it('Cycle 1: rpcSources entries persist join_spec=null on every write (read path re-derives via inferFkCandidates)', () => {
+    expect(body).toMatch(/join_spec:\s*null/)
   })
 
   it('does NOT emit a CROSS_TABLE_NOT_YET_SUPPORTED return after 4a-3', () => {

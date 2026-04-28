@@ -10,32 +10,33 @@
 // view with:
 //
 //   • A search input at top (debounced — `SEARCH_DEBOUNCE_MS`)
-//   • A chip strip of currently selected fields, grouped by source
-//     table with subtle "Dominant" / "Joined" small-caps headers
+//   • A chip strip of currently selected fields, grouped per source
+//     table (Cycle 1 — no DOMINANT/JOINED primacy distinction)
 //   • Grouped list of source fields (all tables visible)
 //   • ✓ marker + tinted background on selected rows
 //
-// CROSS-TABLE SUPPORT (Phase 4a-3)
+// CROSS-TABLE SUPPORT
 //
-// The same-table constraint introduced in 4a-2 has been lifted: the
-// picker no longer hides non-dominant source tables, and the muted
-// footer note pointing at 4a-3 has been removed. The wrapper now
-// performs an FK precheck and surfaces disambiguation through
-// `CreateMappingForm`'s inline dropdown when needed.
+// All source tables are visible regardless of which table the user
+// selected first. The wrapper allows authoring cross-table TFMs
+// without an FK precheck; multi-candidate ambiguity surfaces at
+// Transform-tab apply time as `CROSS_TABLE_FK_INFERENCE_FAILED`.
 //
-// First-picked stable for dominant: the ordering of `selectedIds` is
-// preserved verbatim — index 0 = ordinal 0 = dominant source. The
-// picker never re-anchors when the user adds joined chips (§3-OQ-1).
+// Selection ordering: `selectedIds` is preserved verbatim — index 0 =
+// ordinal 0. The first-listed source's table is the apply anchor
+// under the hood (Cycle 1: first-source-wins for table_mapping
+// ownership), but the picker UI does NOT advertise this.
 //
-// CHIP GROUPING (Phase 4a-3 — §3-OQ-2 / §3-OQ-3)
+// CHIP GROUPING (Cycle 1 — per-source-table grouping)
 //
 //   • Same-table selection (all chips from one source table) →
 //     flat single-row chip strip, no headers.
 //   • Cross-table selection (2+ source tables among chips) → chips
-//     grouped under "DOMINANT" and "JOINED" small-caps text headers.
-//     Within each group the per-table sub-grouping carries a faint
-//     table name pill so the user can tell "joined chips from CIF"
-//     apart from "joined chips from BRANCH" at a glance.
+//     grouped under per-table small-caps headers. All groups render
+//     identically (no primacy distinction). Header order is
+//     alphabetical (inherited from `availableSourceFields`'s server
+//     canonical order — `sourceTable.name ASC`); within each group
+//     chips preserve selection order.
 //
 // HOVER TOOLTIP
 //
@@ -65,7 +66,10 @@ export interface SourceFieldPickerProps {
   availableSourceFields: SourceFieldWithState[]
   /**
    * Currently selected source field ids. Order is the user's selection
-   * order: index 0 = dominant source (ordinal 0 in the new mapping).
+   * order: index 0 = ordinal 0 in the new mapping. Cycle 1 — the first
+   * entry's source table acts as the apply anchor under the hood
+   * (table_mapping ownership), but the picker UI does NOT advertise
+   * this.
    */
   selectedIds: string[]
   /**
@@ -179,6 +183,7 @@ export function SourceFieldPicker({
     <div data-testid="source-field-picker" className="flex flex-col gap-2">
       <SelectedChipsRow
         fields={selectedFields}
+        availableSourceFields={availableSourceFields}
         onRemove={handleToggle}
         disabled={disabled}
       />
@@ -208,21 +213,25 @@ export function SourceFieldPicker({
 
 // ── Selected chips ───────────────────────────────────────────────────────────
 //
-// Layout rules (Phase 4a-3):
+// Layout rules (Cycle 1 — no DOMINANT/JOINED primacy distinction):
 //
 //   • 0 chips                    → empty-state line.
 //   • 1+ chips, 1 source table   → flat single-row chip strip.
-//   • 1+ chips, 2+ source tables → grouped under DOMINANT / JOINED
-//     small-caps headers; within JOINED the chips remain in selection
-//     order. The dominant table is always the first selected chip's
-//     table (§3-OQ-1: stable, no re-anchor).
+//   • 1+ chips, 2+ source tables → grouped per source table. All
+//     groups render identically (no primacy label). Group order
+//     follows `availableSourceFields`'s server canonical order
+//     (`sourceTable.name ASC`) so headers appear alphabetically
+//     without a client-side `.sort()`. Within each group chips
+//     preserve selection order.
 
 function SelectedChipsRow({
   fields,
+  availableSourceFields,
   onRemove,
   disabled,
 }: {
   fields: SourceFieldWithState[]
+  availableSourceFields: SourceFieldWithState[]
   onRemove: (id: string) => void
   disabled: boolean
 }) {
@@ -237,9 +246,6 @@ function SelectedChipsRow({
     )
   }
 
-  // Determine cross-table state up-front. The dominant table id is
-  // the first chip's table (selection order is the source of truth).
-  const dominantTableId = fields[0].sourceTable.id
   const uniqueTableIds = new Set(fields.map((f) => f.sourceTable.id))
   const isCrossTable = uniqueTableIds.size > 1
 
@@ -264,17 +270,45 @@ function SelectedChipsRow({
     )
   }
 
-  // Cross-table: split into dominant + joined buckets. Within
-  // `joinedFields` we preserve selection order, so a user picking
-  // CIF.A → BRANCH.B → CIF.C ends up with chips [CIF.A] under
-  // dominant and [BRANCH.B, CIF.C] under joined — order matches
-  // input ordinal.
-  const dominantFields = fields.filter(
-    (f) => f.sourceTable.id === dominantTableId,
-  )
-  const joinedFields = fields.filter(
-    (f) => f.sourceTable.id !== dominantTableId,
-  )
+  // Cross-table: bucket chips per source table. Walk the selected
+  // `fields` so each bucket preserves selection order. Determine
+  // bucket display order by walking `availableSourceFields` (server
+  // canonical order = `sourceTable.name ASC`) and emitting any
+  // bucket whose tableId is present — alphabetical without a
+  // client-side `.sort()`.
+  const fieldsByTableId = new Map<
+    string,
+    { tableName: string; fields: SourceFieldWithState[] }
+  >()
+  for (const field of fields) {
+    const existing = fieldsByTableId.get(field.sourceTable.id)
+    if (existing) {
+      existing.fields.push(field)
+    } else {
+      fieldsByTableId.set(field.sourceTable.id, {
+        tableName: field.sourceTable.name,
+        fields: [field],
+      })
+    }
+  }
+  const orderedBuckets: Array<{
+    tableId: string
+    tableName: string
+    fields: SourceFieldWithState[]
+  }> = []
+  const emittedTableIds = new Set<string>()
+  for (const field of availableSourceFields) {
+    const tableId = field.sourceTable.id
+    if (emittedTableIds.has(tableId)) continue
+    const bucket = fieldsByTableId.get(tableId)
+    if (!bucket) continue
+    emittedTableIds.add(tableId)
+    orderedBuckets.push({
+      tableId,
+      tableName: bucket.tableName,
+      fields: bucket.fields,
+    })
+  }
 
   return (
     <div
@@ -282,39 +316,40 @@ function SelectedChipsRow({
       data-cross-table="true"
       className="flex flex-col gap-1.5"
     >
-      <ChipGroup
-        label="Dominant"
-        testId="source-field-picker-chips-dominant"
-        fields={dominantFields}
-        onRemove={onRemove}
-        disabled={disabled}
-      />
-      <ChipGroup
-        label="Joined"
-        testId="source-field-picker-chips-joined"
-        fields={joinedFields}
-        onRemove={onRemove}
-        disabled={disabled}
-      />
+      {orderedBuckets.map((bucket) => (
+        <ChipGroup
+          key={bucket.tableId}
+          label={bucket.tableName}
+          tableId={bucket.tableId}
+          fields={bucket.fields}
+          onRemove={onRemove}
+          disabled={disabled}
+        />
+      ))}
     </div>
   )
 }
 
 function ChipGroup({
   label,
-  testId,
+  tableId,
   fields,
   onRemove,
   disabled,
 }: {
   label: string
-  testId: string
+  tableId: string
   fields: SourceFieldWithState[]
   onRemove: (id: string) => void
   disabled: boolean
 }) {
   return (
-    <div className="flex flex-col gap-1" data-testid={testId}>
+    <div
+      className="flex flex-col gap-1"
+      data-testid="source-field-picker-chips-group"
+      data-source-table-id={tableId}
+      data-source-table-name={label}
+    >
       <span
         className={cn(
           'text-[9px] font-semibold uppercase tracking-[0.08em]',

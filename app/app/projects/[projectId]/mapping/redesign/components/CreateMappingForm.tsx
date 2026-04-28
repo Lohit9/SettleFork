@@ -8,13 +8,11 @@
 //
 // In-drawer inline form that lets a user create a `target_field_mapping`
 // for a Rule 6 unmapped target field (founder decision 1: in-drawer
-// inline, no modal) — and as of 4b-1, edit an existing TFM's source list
-// and combination type. Composed of:
+// inline, no modal) — and as of 4b-1, edit an existing TFM's source list.
+// Composed of:
 //
-//   1. SourceFieldPicker         — chip strip + search + grouped list
-//   2. JoinDisambiguation        — cross-table FK picker (4a-3)
-//   3. CombinationStrategyRadios — visible only when 2+ sources picked
-//   4. SamplePreview             — real-time client-side preview
+//   1. SourceFieldPicker — chip strip + search + grouped list
+//   2. SamplePreview     — real-time client-side preview
 //
 // The drawer parent renders the visible [Cancel] [Save] buttons in the
 // drawer footer; the form exposes its imperative save trigger via a
@@ -36,25 +34,22 @@
 //   `router.refresh()` and dismisses the form via `onCancel` so the
 //   user lands on the freshly-rendered server state.
 //
-// CROSS-TABLE DISAMBIGUATION (Phase 4a-3)
+// COMBINATION TYPE (Cycle 1 architectural rebuild)
 //
-//   When the user picks sources from 2+ source tables, the wrapper
-//   performs an FK precheck. Three branches:
-//     • zero FK candidates → CROSS_TABLE_AMBIGUOUS with empty
-//       `candidateFkFields`. The form renders a banner row pointing at
-//       schema admin / legacy mapping page. No re-save until the
-//       offending chip is removed.
-//     • single FK candidate → wrapper succeeds silently, form moves on.
-//     • 2+ FK candidates → CROSS_TABLE_AMBIGUOUS with the candidate
-//       list. The form renders a native <select> dropdown asking the
-//       user to disambiguate. After a pick the user can resave.
+//   The combination_type radio UI was removed in Cycle 1. The form now
+//   derives `combinationType` for the wrapper payload:
+//     • create mode — 0 sources → 'custom_sql' (VA path, unreachable
+//       from this form), 1 source → 'single', 2+ sources →
+//       'concat_space' (default).
+//     • edit mode — snap to 'single' for 1 source; preserve
+//       `editInitialState.combinationType` otherwise (legacy
+//       'concat_comma' TFMs retain their authored combination on edit).
 //
-//   Resolved picks render as read-only summary rows with a [Change]
-//   link that flips them back to active dropdowns (§4-OQ-2).
-//
-//   `ambiguousCandidates` accumulates server feedback across resaves;
-//   `joinAnnotations` is the user's per-joined-table pick. Both clean
-//   up silently when the corresponding chip is removed (§4-OQ-3).
+//   `joinAnnotations` is still passed to the wrapper as an opaque
+//   pass-through (driven by `editInitialState.joinAnnotations` in edit
+//   mode, empty in create mode). The form-side disambiguation prompt
+//   is gone in Cycle 1; the wrapper ignores `joinAnnotations` after the
+//   FK precheck deletion in Block 2.
 
 import {
   forwardRef,
@@ -113,7 +108,13 @@ import { SourceFieldPicker } from './SourceFieldPicker'
 export interface CreateMappingFormSnapshot {
   targetFieldId: string
   selectedIds: string[]
-  combinationType: CreateFieldMappingCombinationType
+  /**
+   * Cycle 1 — informational only. Re-derived from selection on restore
+   * (`'single'` for 1 source, `editInitialState.combinationType` in edit
+   * mode, `'concat_space'` default in create mode, `'custom_sql'` for
+   * the 0-source defensive case which never persists through this form).
+   */
+  combinationType: CreateFieldMappingCombinationType | 'custom_sql'
   joinAnnotations: Record<string, string>
 }
 
@@ -166,7 +167,6 @@ export type SuggestState =
  */
 interface PreSuggestSnapshot {
   selectedIds: string[]
-  combinationType: CreateFieldMappingCombinationType
   joinAnnotations: Record<string, string>
   suggestState: SuggestState
 }
@@ -366,23 +366,6 @@ export interface CreateMappingFormProps {
   onSuggestStateChange?: (state: { isSuggestPending: boolean }) => void
 }
 
-// ── Internal types ───────────────────────────────────────────────────────────
-
-/**
- * A joined-table entry in the form's `ambiguousCandidates` map. Mirrors
- * the wrapper's CROSS_TABLE_AMBIGUOUS result shape, scoped to a single
- * joined table.
- *
- *   • `candidates` empty   → zero-FK case: render banner row, block save.
- *   • `candidates` non-empty → multi-FK case: render dropdown until the
- *     user picks a value present in `candidates`.
- */
-interface AmbiguousEntry {
-  candidates: string[]
-  joinedTableName: string
-  dominantTableName: string
-}
-
 // ── Defaults / mappings ──────────────────────────────────────────────────────
 
 const DEFAULT_COMBINATION_TYPE: CreateFieldMappingCombinationType = 'concat_space'
@@ -400,11 +383,6 @@ const ERROR_CODE_COPY: Record<CreateFieldMappingErrorCode, string> = {
   // emitted post-4a-3 (cross-table input is fully supported).
   CROSS_TABLE_NOT_YET_SUPPORTED:
     'Cross-table mappings are not available in this build. Please pick sources from a single source table.',
-  // Surfaced as fallback when CROSS_TABLE_AMBIGUOUS arrives without
-  // a populated `ambiguousJoinedTableName`. The form's primary
-  // surfaces (zero-FK banner, dropdown) cover the structured case.
-  CROSS_TABLE_AMBIGUOUS:
-    "We couldn't determine the join between the selected source tables. Pick the join field below.",
 }
 
 const EXISTING_TFM_COPY =
@@ -413,8 +391,8 @@ const EXISTING_TFM_COPY =
 // ── Phase 4b-1 edit-mode copy ────────────────────────────────────────────────
 //
 // `EditMappingErrorCode` shares the create-form codes (PERMISSION_DENIED,
-// NOT_FOUND, VALIDATION, MAINTENANCE_MODE, INTERNAL, CROSS_TABLE_AMBIGUOUS)
-// and adds three edit-only codes:
+// NOT_FOUND, VALIDATION, MAINTENANCE_MODE, INTERNAL) and adds two
+// edit-only codes:
 //
 //   • TFM_REJECTED       — TFM was rejected by another user / tab between
 //                          drawer open and save. Edit is not allowed in
@@ -422,11 +400,6 @@ const EXISTING_TFM_COPY =
 //   • TFM_ACKNOWLEDGED   — TFM target field was acknowledged-as-empty;
 //                          edit is not allowed (must un-acknowledge first
 //                          via 4b-2). Refresh to recover.
-//   • DOMINANT_TABLE_CHANGED — user removed the dominant-table source.
-//                          Surfaced as a VALIDATION-style banner. The
-//                          dominant table is implicit in source ordering
-//                          and we don't allow swap-by-edit (founder
-//                          decision §1.2 / §10).
 //
 // NOTE: a "TFM was deleted while editing" race surfaces as `NOT_FOUND`
 // (the wrapper folds DB-row-missing into NOT_FOUND because the user-
@@ -445,10 +418,6 @@ const EDIT_ERROR_CODE_COPY: Record<EditMappingErrorCode, string> = {
     'This mapping was rejected while you were editing. Refresh to see the current state.',
   TFM_ACKNOWLEDGED:
     'This target field was acknowledged-as-empty while you were editing. Refresh to see the current state.',
-  DOMINANT_TABLE_CHANGED:
-    'Editing cannot change the primary source table. Keep at least one source from the original table, or reject this mapping and create a new one.',
-  CROSS_TABLE_AMBIGUOUS:
-    "We couldn't determine the join between the selected source tables. Pick the join field below.",
 }
 
 // Edit-mode codes that should surface the [Refresh] affordance — same
@@ -548,15 +517,18 @@ export const CreateMappingForm = forwardRef<
 
   // ── Phase 4b-1 — edit-mode initial state hydration ────────────────
   //
-  // When `mode='edit'`, seed `selectedIds` / `combinationType` /
-  // `joinAnnotations` from the snapshot on first mount. `useState`'s
-  // lazy initializer pattern is the right shape here because:
-  //   • It runs once per mount — exactly what we want for edit.
-  //   • It reads the snapshot synchronously, so the first render
-  //     paints with the user's existing selection (no flicker /
-  //     empty-then-fill).
-  //   • It keeps the same `useState` declaration shape across modes
-  //     so the rest of the form's state machine doesn't branch.
+  // When `mode='edit'`, seed `selectedIds` / `joinAnnotations` from the
+  // snapshot on first mount. `useState`'s lazy initializer pattern
+  // runs once per mount and paints synchronously, so the first render
+  // shows the user's existing selection (no flicker / empty-then-fill).
+  //
+  // `combinationType` is no longer a useState — Cycle 1 removed the
+  // combination radios. The effective value is derived just-in-time:
+  //   • create mode: 0 → 'custom_sql' (VA path), 1 → 'single',
+  //     2+ → DEFAULT_COMBINATION_TYPE (concat_space).
+  //   • edit mode: 1 → 'single'; 0 or ≥2 → preserve
+  //     `editInitialState.combinationType` (so legacy 'concat_comma'
+  //     TFMs survive an edit unchanged).
   //
   // `editInitialState` is required by contract when `mode='edit'`;
   // we defensively coerce missing values to empty so a misconfigured
@@ -565,12 +537,6 @@ export const CreateMappingForm = forwardRef<
   const [selectedIds, setSelectedIds] = useState<string[]>(() =>
     isEditMode && editInitialState ? [...editInitialState.selectedIds] : [],
   )
-  const [combinationType, setCombinationTypeRaw] =
-    useState<CreateFieldMappingCombinationType>(() =>
-      isEditMode && editInitialState
-        ? editInitialState.combinationType
-        : DEFAULT_COMBINATION_TYPE,
-    )
   const [isSavePending, startSaveTransition] = useTransition()
   const [errorMessage, setErrorMessage] = useState<string | null>(null)
   const [errorCode, setErrorCode] = useState<
@@ -636,35 +602,15 @@ export const CreateMappingForm = forwardRef<
   // needed (and would in fact be incorrect — a `useRef(false)` would
   // reset on the strict-mode remount and admit a second invocation).
 
-  // Wraps the raw combinationType setter so user manual selection of a
-  // different combination flips `userEditedAfterSuggest` while a
-  // suggestion is loaded. Pass-through otherwise.
-  const setCombinationType = useCallback(
-    (next: CreateFieldMappingCombinationType) => {
-      setCombinationTypeRaw(next)
-      setUserEditedAfterSuggest(true)
-    },
-    [],
-  )
-
-  // ── Cross-table disambiguation state (Phase 4a-3) ─────────────
-  // `ambiguousCandidates`: server-supplied feedback keyed by joined
-  // source table id. Empty array = zero-FK case (unresolvable in
-  // form — render a banner and block save until chip removed).
-  // Non-empty array = multi-FK case — render a <select> dropdown.
-  // `joinAnnotations`: user's pick per joined table id; values are
-  // FK field names in the dominant table. Sent to the wrapper on
-  // resave; persisted in the JOIN_SPEC JSONB (multi-candidate only).
-  const [ambiguousCandidates, setAmbiguousCandidates] = useState<
-    Map<string, AmbiguousEntry>
-  >(() => new Map())
-  // Phase 4b-1 — pre-populate joinAnnotations from the existing TFM so
-  // the user sees which FK each cross-table join is currently using.
-  // Per founder decision §5.2, unchanged joined tables retain their
-  // annotations across edits; only changed/added joined tables clear
-  // and re-derive on save (the wrapper's cross-table FK precheck
-  // re-runs the inference and re-emits CROSS_TABLE_AMBIGUOUS for the
-  // changed entries).
+  // `joinAnnotations` is preserved as state for two reasons:
+  //   • Edit-mode hydration retains the existing TFM's join_spec
+  //     entries so they survive a save round-trip without re-derivation.
+  //   • The cancel-suggest path snapshots and restores it.
+  // Cycle 1 removed the user-facing JoinDisambiguation surface; this
+  // map is now an opaque pass-through into the wrapper. Block 2 of
+  // Cycle 1 deleted the wrapper's FK precheck / join_spec persistence,
+  // so the value is effectively a no-op server-side until Cycle 2
+  // garbage-collects the parameter from the wrapper signature.
   const [joinAnnotations, setJoinAnnotations] = useState<
     Record<string, string>
   >(() =>
@@ -672,13 +618,6 @@ export const CreateMappingForm = forwardRef<
       ? { ...editInitialState.joinAnnotations }
       : {},
   )
-  // Some joined tables may be in `ambiguousCandidates` AND have a
-  // resolved `joinAnnotations` entry — by default we render those as
-  // read-only summary rows. The user can flip an individual entry
-  // back to "edit" mode via the Change link; this state tracks that.
-  const [editingResolvedTableIds, setEditingResolvedTableIds] = useState<
-    Set<string>
-  >(() => new Set())
 
   // ── Derived: selected fields, dominant table, joined-table set ──
   const selectedFields = useMemo<SourceFieldWithState[]>(() => {
@@ -704,40 +643,19 @@ export const CreateMappingForm = forwardRef<
   }, [selectedFields, dominantTableId])
 
   // ── Cleanup effect (§4-OQ-3) ─────────────────────────────────
-  // When chips for a joined table are all removed, silently drop
-  // that table's entries from `ambiguousCandidates`, `joinAnnotations`,
-  // and `editingResolvedTableIds`. The user never sees a stale
-  // dropdown for a chip they removed.
+  // When chips for a joined table are all removed, silently drop that
+  // table's entries from `joinAnnotations`. The map is now an opaque
+  // wrapper-payload pass-through (Cycle 1 removed the user-facing
+  // disambiguation surface), but stale entries pointing at removed
+  // tables are still hygienically purged so the saved payload matches
+  // the visible source set.
   useEffect(() => {
-    setAmbiguousCandidates((prev) => {
-      let changed = false
-      const next = new Map(prev)
-      for (const k of [...next.keys()]) {
-        if (!presentJoinedTableIds.has(k)) {
-          next.delete(k)
-          changed = true
-        }
-      }
-      return changed ? next : prev
-    })
     setJoinAnnotations((prev) => {
       let changed = false
       const next: Record<string, string> = {}
       for (const k of Object.keys(prev)) {
         if (presentJoinedTableIds.has(k)) {
           next[k] = prev[k]
-        } else {
-          changed = true
-        }
-      }
-      return changed ? next : prev
-    })
-    setEditingResolvedTableIds((prev) => {
-      let changed = false
-      const next = new Set<string>()
-      for (const k of prev) {
-        if (presentJoinedTableIds.has(k)) {
-          next.add(k)
         } else {
           changed = true
         }
@@ -772,16 +690,37 @@ export const CreateMappingForm = forwardRef<
     ) {
       restoreAppliedRef.current = restoreFormState
       setSelectedIds(restoreFormState.selectedIds)
-      setCombinationType(restoreFormState.combinationType)
       setJoinAnnotations({ ...restoreFormState.joinAnnotations })
-      // Resolved disambiguation entries from a previous attempt are
-      // intentionally NOT carried — `ambiguousCandidates` is server
-      // feedback that we'd need to re-derive on next save anyway.
-      setAmbiguousCandidates(new Map())
-      setEditingResolvedTableIds(new Set())
+      // Snapshot's `combinationType` field is informational only after
+      // Cycle 1 — the form derives the effective combination from the
+      // restored selection length, so there is no setter to call.
       onRestoreConsumed?.()
     }
   }, [restoreFormState, targetField.id, onRestoreConsumed])
+
+  // ── Effective combination ───────────────────────────────────────
+  //
+  // Cycle 1 removed the combination radios. The effective value is
+  // derived from `selectedIds.length` and (in edit mode) the original
+  // TFM's `editInitialState.combinationType`:
+  //
+  //   • 1 source         → 'single' (single-source TFMs always store
+  //                         'single' regardless of mode).
+  //   • create + 0       → 'custom_sql' (VA path; this form is not
+  //                         the surface that authors VA TFMs, but the
+  //                         derivation defends against an empty save).
+  //   • create + 2+      → DEFAULT_COMBINATION_TYPE ('concat_space').
+  //   • edit + 0 or 2+   → preserve `editInitialState.combinationType`
+  //                         so legacy 'concat_comma' TFMs survive an
+  //                         edit unchanged.
+  const effectiveCombinationType: CreateFieldMappingCombinationType | 'custom_sql' = (() => {
+    if (selectedIds.length === 1) return 'single' as const
+    if (isEditMode && editInitialState) {
+      return editInitialState.combinationType
+    }
+    if (selectedIds.length === 0) return 'custom_sql' as const
+    return DEFAULT_COMBINATION_TYPE
+  })()
 
   // ── Derived flags ───────────────────────────────────────────────
   //
@@ -790,10 +729,12 @@ export const CreateMappingForm = forwardRef<
   //   • create — dirty as soon as the user picks a single source.
   //     Matches the original 4a-2 semantics (an empty form is clean,
   //     a populated form is dirty).
-  //   • edit   — dirty only when the current selection / combination /
-  //     join annotations differ from `editInitialState`. The user
-  //     opening the drawer in edit mode and clicking Cancel without
-  //     touching anything is NOT dirty (no confirm dialog).
+  //   • edit   — dirty only when the current selection / join
+  //     annotations differ from `editInitialState`. The user opening
+  //     the drawer in edit mode and clicking Cancel without touching
+  //     anything is NOT dirty (no confirm dialog). `combinationType`
+  //     is derived from selection length, so a count-driven flip
+  //     surfaces through the selection diff.
   //
   // Same flag drives the discard-confirm intercept and the Save-
   // button disabled state — saving a no-op edit is not allowed.
@@ -804,7 +745,6 @@ export const CreateMappingForm = forwardRef<
     for (let i = 0; i < selectedIds.length; i++) {
       if (selectedIds[i] !== editInitialState.selectedIds[i]) return true
     }
-    if (combinationType !== editInitialState.combinationType) return true
     // Order-independent record comparison without `.sort()` — the
     // redesign path bans client-side sorting (server guarantees row
     // ordering). For two records to be equal, every key in either
@@ -823,20 +763,8 @@ export const CreateMappingForm = forwardRef<
     isEditMode,
     editInitialState,
     selectedIds,
-    combinationType,
     joinAnnotations,
   ])
-
-  // Unresolved ambiguity blocks save: any zero-FK entry, or any
-  // multi-FK entry without a matching annotation.
-  const hasUnresolvedAmbiguity = useMemo(() => {
-    for (const [tableId, info] of ambiguousCandidates) {
-      if (info.candidates.length === 0) return true
-      const picked = joinAnnotations[tableId]
-      if (!picked || !info.candidates.includes(picked)) return true
-    }
-    return false
-  }, [ambiguousCandidates, joinAnnotations])
 
   // Phase 4b-1 — edit mode requires `isDirty` (no-op saves blocked at
   // UI level even though the wrapper short-circuits silently). Create
@@ -844,18 +772,18 @@ export const CreateMappingForm = forwardRef<
   const canSave =
     selectedIds.length > 0 &&
     !isSavePending &&
-    !hasUnresolvedAmbiguity &&
     (!isEditMode || isDirty)
 
   // Phase 4a-4a — publish a snapshot whenever the form is dirty so
   // the drawer can lift it to `MappingContent` for row-switch undo.
-  // `null` when clean.
+  // `null` when clean. `combinationType` carried for parent compat;
+  // it is informational only and re-derived from selection on restore.
   useEffect(() => {
     const snapshot: CreateMappingFormSnapshot | null = isDirty
       ? {
           targetFieldId: targetField.id,
           selectedIds: [...selectedIds],
-          combinationType,
+          combinationType: effectiveCombinationType,
           joinAnnotations: { ...joinAnnotations },
         }
       : null
@@ -865,23 +793,15 @@ export const CreateMappingForm = forwardRef<
     canSave,
     isSavePending,
     selectedIds,
-    combinationType,
+    effectiveCombinationType,
     joinAnnotations,
     targetField.id,
     onStateChange,
   ])
 
-  // ── Effective combination — collapses to 'single' for 1 source ───
-  // The wrapper expects `'single'` when there is exactly one source;
-  // the user's stored concat selection only matters once a second
-  // source is added. The radio group is hidden for <2 sources, so the
-  // user never observes this flip directly.
-  const effectiveCombinationType: CreateFieldMappingCombinationType =
-    selectedIds.length <= 1 ? 'single' : combinationType
-
   // ── Sample preview ──────────────────────────────────────────────
   const previewCombination: SamplePreviewCombinationType =
-    effectiveCombinationType
+    effectiveCombinationType === 'custom_sql' ? 'single' : effectiveCombinationType
   const samplePreview = useMemo(
     () => computeSamplePreview(selectedFields, previewCombination),
     [selectedFields, previewCombination],
@@ -902,26 +822,6 @@ export const CreateMappingForm = forwardRef<
     if (suggestState.kind === 'error') {
       setSuggestState({ kind: 'idle' })
     }
-  }
-
-  const handleAnnotationChange = (joinedTableId: string, fkName: string) => {
-    setJoinAnnotations((prev) => ({ ...prev, [joinedTableId]: fkName }))
-    setUserEditedAfterSuggest(true)
-    setEditingResolvedTableIds((prev) => {
-      if (!prev.has(joinedTableId)) return prev
-      const next = new Set(prev)
-      next.delete(joinedTableId)
-      return next
-    })
-  }
-
-  const handleAnnotationChangeRequest = (joinedTableId: string) => {
-    setEditingResolvedTableIds((prev) => {
-      if (prev.has(joinedTableId)) return prev
-      const next = new Set(prev)
-      next.add(joinedTableId)
-      return next
-    })
   }
 
   // ── Phase 4a-4b — AI Suggest invocation ─────────────────────────
@@ -955,7 +855,6 @@ export const CreateMappingForm = forwardRef<
     // like an undo.
     prePendingSnapshotRef.current = {
       selectedIds: [...selectedIds],
-      combinationType,
       joinAnnotations: { ...joinAnnotations },
       // Note: capture suggestState BEFORE we replace it below. This
       // is read-only access — we're not mutating the union variant.
@@ -1022,15 +921,14 @@ export const CreateMappingForm = forwardRef<
     projectId,
     targetField.id,
     selectedIds,
-    combinationType,
     joinAnnotations,
     suggestState,
   ])
 
   // ── Apply a loaded suggestion to the form ──────────────────────
   //
-  // Pre-fill `selectedIds` + `combinationType` from the wrapper's
-  // suggestion payload. Three defenses applied here:
+  // Pre-fill `selectedIds` from the wrapper's suggestion payload.
+  // Two defenses applied here:
   //
   //   1. Filter `sourceFieldIds` against `availableSourceFields`. If a
   //      stale prop dropped some ids (rare — this prop comes from the
@@ -1043,12 +941,10 @@ export const CreateMappingForm = forwardRef<
   //   2. Defensive `custom_sql` narrowing. The wrapper guarantees one
   //      of `'single' | 'concat_space' | 'concat_comma'`, but if a
   //      future drift lifts the narrowing we want a clear error rather
-  //      than silently corrupting the form's combination state.
-  //
-  //   3. Combination narrowing on filter loss. If the filter dropped
-  //      sources to 1 (was multi), force `combinationType = 'single'`
-  //      so the form's invariant (combinationType === 'single' iff
-  //      selectedIds.length === 1) holds.
+  //      than silently corrupting the form's persisted combination
+  //      (the wrapper still receives `effectiveCombinationType`, which
+  //      is derived from selection length, but a custom_sql suggestion
+  //      indicates a behavior we do not yet author from this surface).
   //
   // On success: snapshot original suggested ids for laundering
   // prevention at save time, reset `userEditedAfterSuggest` to false,
@@ -1078,17 +974,12 @@ export const CreateMappingForm = forwardRef<
       return
     }
 
-    // Defense 3 — narrow combination on filter loss.
-    const narrowedCombination: CreateFieldMappingCombinationType =
-      validIds.length === 1 ? 'single' : s.combinationType
-
     setSelectedIds(validIds)
-    setCombinationTypeRaw(narrowedCombination)
     // Setting suggestState second so any consumer reading both fields
     // in the same render observes consistent {selectedIds, suggestion}.
     setSuggestState({
       kind: 'loaded',
-      suggestion: { ...s, sourceFieldIds: validIds, combinationType: narrowedCombination },
+      suggestion: { ...s, sourceFieldIds: validIds },
     })
     setOriginalSuggestedIds(validIds)
     setUserEditedAfterSuggest(false)
@@ -1116,7 +1007,6 @@ export const CreateMappingForm = forwardRef<
     const snap = prePendingSnapshotRef.current
     if (snap) {
       setSelectedIds(snap.selectedIds)
-      setCombinationTypeRaw(snap.combinationType)
       setJoinAnnotations(snap.joinAnnotations)
       setSuggestState(snap.suggestState)
     } else {
@@ -1230,7 +1120,6 @@ export const CreateMappingForm = forwardRef<
   // ── Save flow ───────────────────────────────────────────────────
   const handleSave = () => {
     if (selectedIds.length === 0 || isSavePending) return
-    if (hasUnresolvedAmbiguity) return
     if (suggestState.kind === 'pending') return
     if (isEditMode && !isDirty) return
     setErrorMessage(null)
@@ -1284,42 +1173,6 @@ export const CreateMappingForm = forwardRef<
           aiReasoning,
         })
         if (!result.success) {
-          // CROSS_TABLE_AMBIGUOUS is the structured cross-table
-          // disambiguation channel. The wrapper returns the joined
-          // table id + name + candidate list — surface them as a
-          // dedicated UI section below the picker rather than as a
-          // generic error banner.
-          if (
-            result.errorCode === 'CROSS_TABLE_AMBIGUOUS' &&
-            result.ambiguousJoinedTableId &&
-            result.ambiguousJoinedTableName &&
-            result.dominantTableName !== undefined
-          ) {
-            const tableId = result.ambiguousJoinedTableId
-            const candidates = result.candidateFkFields ?? []
-            setAmbiguousCandidates((prev) => {
-              const next = new Map(prev)
-              next.set(tableId, {
-                candidates,
-                joinedTableName: result.ambiguousJoinedTableName!,
-                dominantTableName: result.dominantTableName!,
-              })
-              return next
-            })
-            // Reflect the ambiguity into errorCode for tests/banner
-            // gating but skip the generic error banner — the inline
-            // section conveys the resolution path.
-            setErrorCode(result.errorCode)
-            setErrorMessage(null)
-            if (typeof console !== 'undefined') {
-              console.error(
-                '[CreateMappingForm] cross-table ambiguity:',
-                result,
-              )
-            }
-            return
-          }
-
           // EXISTING_TFM is a special VALIDATION case — the wrapper
           // returns errorCode='VALIDATION' with a stable phrase baked
           // into `error`. Sniff for the canonical phrase to surface
@@ -1355,21 +1208,11 @@ export const CreateMappingForm = forwardRef<
 
   // ── Phase 4b-1 — edit-mode save flow ─────────────────────────────
   //
-  // Routes `selectedIds` / `combinationType` / `joinAnnotations` into
-  // `editMappingSources`. Mirrors `handleSave`'s try/catch and error-
-  // dispatch shape, but with the edit-specific error code map and
-  // result fields (`tfmId` is unchanged, `transformReset` /
+  // Routes `selectedIds` / `effectiveCombinationType` / `joinAnnotations`
+  // into `editMappingSources`. Mirrors `handleSave`'s try/catch and
+  // error-dispatch shape, but with the edit-specific error code map
+  // and result fields (`tfmId` is unchanged, `transformReset` /
   // `stagedRowsReverted` / `nextStatus` carry post-save UX signal).
-  //
-  // CROSS_TABLE_AMBIGUOUS surfaces the same JoinDisambiguation flow
-  // as create-mode (the wrapper emits identical fields). The user
-  // resolves the join, the form re-saves, and the wrapper proceeds.
-  //
-  // DOMINANT_TABLE_CHANGED is the edit-only case. We surface a
-  // VALIDATION-style banner pointing the user at the picker — the
-  // safe recovery is "add the dominant-table source back, or reject
-  // this mapping and create fresh from the rejected slot". No inline
-  // affordance is offered because the banner copy explains the path.
   //
   // TFM_NOT_FOUND / TFM_REJECTED / TFM_ACKNOWLEDGED all surface the
   // [Refresh] affordance — the page state is stale and re-deriving
@@ -1394,33 +1237,6 @@ export const CreateMappingForm = forwardRef<
           joinAnnotations,
         })
         if (!result.success) {
-          if (
-            result.errorCode === 'CROSS_TABLE_AMBIGUOUS' &&
-            result.ambiguousJoinedTableId &&
-            result.ambiguousJoinedTableName &&
-            result.dominantTableName !== undefined
-          ) {
-            const tableId = result.ambiguousJoinedTableId
-            const candidates = result.candidateFkFields ?? []
-            setAmbiguousCandidates((prev) => {
-              const next = new Map(prev)
-              next.set(tableId, {
-                candidates,
-                joinedTableName: result.ambiguousJoinedTableName!,
-                dominantTableName: result.dominantTableName!,
-              })
-              return next
-            })
-            setErrorCode(result.errorCode)
-            setErrorMessage(null)
-            if (typeof console !== 'undefined') {
-              console.error(
-                '[CreateMappingForm] editMappingSources cross-table ambiguity:',
-                result,
-              )
-            }
-            return
-          }
           setErrorCode(result.errorCode)
           setErrorMessage(
             EDIT_ERROR_CODE_COPY[result.errorCode] ??
@@ -1496,7 +1312,6 @@ export const CreateMappingForm = forwardRef<
     confirmDiscardOpen ||
     isSuggestPending ||
     replaceWarningOpen
-  const showCombinationRadios = selectedIds.length >= 2
   // Phase 4b-1 — the [Refresh] affordance fires on:
   //   • create mode existing-tfm collision (errorCode VALIDATION +
   //     EXISTING_TFM_COPY message), AND
@@ -1524,9 +1339,8 @@ export const CreateMappingForm = forwardRef<
   // not enforce non-empty).
   // Phase 4b-1 — AI Suggest is hidden in edit mode (founder decision
   // §1 — defer to 4-extras). The form's other affordances (picker,
-  // disambiguation, combination radios, sample preview) all work
-  // identically across both modes; AI Suggest is the one surface that
-  // doesn't have a defined edit-mode UX yet.
+  // sample preview) work identically across both modes; AI Suggest is
+  // the one surface that doesn't have a defined edit-mode UX yet.
   const showAISuggestRow =
     !isEditMode &&
     (suggestState.kind === 'idle' ||
@@ -1592,26 +1406,6 @@ export const CreateMappingForm = forwardRef<
         onSelectedChange={handleSelectedChange}
         disabled={fieldsDisabled}
       />
-
-      {ambiguousCandidates.size > 0 ? (
-        <JoinDisambiguation
-          entries={ambiguousCandidates}
-          joinAnnotations={joinAnnotations}
-          editingTableIds={editingResolvedTableIds}
-          onChangeAnnotation={handleAnnotationChange}
-          onChangeRequest={handleAnnotationChangeRequest}
-          disabled={fieldsDisabled}
-        />
-      ) : null}
-
-      {showCombinationRadios ? (
-        <CombinationRadios
-          value={combinationType}
-          onChange={setCombinationType}
-          disabled={fieldsDisabled}
-          selectedFields={selectedFields}
-        />
-      ) : null}
 
       <SamplePreview preview={samplePreview} />
 
@@ -1940,348 +1734,6 @@ function WhyPanel({
     >
       {rationale}
     </p>
-  )
-}
-
-// ── Join disambiguation (Phase 4a-3) ────────────────────────────────────────
-//
-// Renders one row per joined table that came back as
-// CROSS_TABLE_AMBIGUOUS from the wrapper. Three row variants:
-//
-//   1. Zero-FK error  — `candidates` empty. Shows a static red-bordered
-//      banner with copy directing the user to the schema or legacy
-//      mapping page. No way to resolve in form; user must remove the
-//      offending chip. No refresh affordance per §8-OQ-2.
-//
-//   2. Multi-FK active dropdown — user has not yet picked a candidate
-//      OR they've explicitly clicked Change. Native <select> with the
-//      candidate list (§4-OQ-1).
-//
-//   3. Multi-FK resolved — the user has picked a candidate AND has
-//      not opted into Change mode. Read-only summary line with a
-//      muted [Change] link (§4-OQ-2).
-
-function JoinDisambiguation({
-  entries,
-  joinAnnotations,
-  editingTableIds,
-  onChangeAnnotation,
-  onChangeRequest,
-  disabled,
-}: {
-  entries: Map<string, AmbiguousEntry>
-  joinAnnotations: Record<string, string>
-  editingTableIds: Set<string>
-  onChangeAnnotation: (joinedTableId: string, fkName: string) => void
-  onChangeRequest: (joinedTableId: string) => void
-  disabled: boolean
-}) {
-  // Map iteration preserves insertion order (= save attempt order)
-  // so users see the table they most recently picked first.
-  const list = Array.from(entries.entries())
-  return (
-    <section
-      data-testid="create-mapping-form-disambiguation"
-      className="flex flex-col gap-1.5 rounded border border-amber-200 bg-amber-50 px-3 py-2"
-    >
-      <header className="text-[11px] font-semibold uppercase tracking-wide text-amber-800">
-        Join field
-      </header>
-      {list.map(([joinedTableId, info]) => {
-        const picked = joinAnnotations[joinedTableId]
-        const isResolved =
-          picked !== undefined &&
-          info.candidates.includes(picked) &&
-          !editingTableIds.has(joinedTableId)
-        if (info.candidates.length === 0) {
-          return (
-            <ZeroFkBanner
-              key={joinedTableId}
-              joinedTableName={info.joinedTableName}
-              dominantTableName={info.dominantTableName}
-            />
-          )
-        }
-        if (isResolved) {
-          return (
-            <ResolvedRow
-              key={joinedTableId}
-              joinedTableId={joinedTableId}
-              joinedTableName={info.joinedTableName}
-              dominantTableName={info.dominantTableName}
-              picked={picked}
-              onChangeRequest={onChangeRequest}
-              disabled={disabled}
-            />
-          )
-        }
-        return (
-          <ActiveDropdown
-            key={joinedTableId}
-            joinedTableId={joinedTableId}
-            entry={info}
-            picked={picked}
-            onChangeAnnotation={onChangeAnnotation}
-            disabled={disabled}
-          />
-        )
-      })}
-    </section>
-  )
-}
-
-function ZeroFkBanner({
-  joinedTableName,
-  dominantTableName,
-}: {
-  joinedTableName: string
-  dominantTableName: string
-}) {
-  return (
-    <div
-      role="alert"
-      data-testid="create-mapping-form-disambiguation-zero-fk"
-      data-joined-table-name={joinedTableName}
-      className={cn(
-        'flex items-start gap-2 rounded border border-red-200 bg-red-50 px-2 py-1.5 text-[11px] text-red-800',
-      )}
-    >
-      <AlertCircle
-        aria-hidden="true"
-        className="mt-0.5 h-3.5 w-3.5 flex-shrink-0 text-red-500"
-      />
-      <span className="leading-snug">
-        No foreign key in{' '}
-        <span className="font-mono font-semibold">{dominantTableName}</span>{' '}
-        references{' '}
-        <span className="font-mono font-semibold">{joinedTableName}</span>. Add
-        an FK in the source schema or use the legacy Mapping page for ad-hoc
-        joins.
-      </span>
-    </div>
-  )
-}
-
-function ActiveDropdown({
-  joinedTableId,
-  entry,
-  picked,
-  onChangeAnnotation,
-  disabled,
-}: {
-  joinedTableId: string
-  entry: AmbiguousEntry
-  picked: string | undefined
-  onChangeAnnotation: (joinedTableId: string, fkName: string) => void
-  disabled: boolean
-}) {
-  return (
-    <div
-      data-testid="create-mapping-form-disambiguation-active"
-      data-joined-table-id={joinedTableId}
-      data-joined-table-name={entry.joinedTableName}
-      className="flex flex-wrap items-center gap-1.5 text-[11px] text-amber-900"
-    >
-      <span>
-        Join{' '}
-        <span className="font-mono font-semibold">{entry.dominantTableName}</span>{' '}
-        to{' '}
-        <span className="font-mono font-semibold">{entry.joinedTableName}</span>{' '}
-        via
-      </span>
-      <select
-        data-testid="create-mapping-form-disambiguation-select"
-        value={picked ?? ''}
-        onChange={(e) => onChangeAnnotation(joinedTableId, e.target.value)}
-        disabled={disabled}
-        aria-label={`Choose join field for ${entry.joinedTableName}`}
-        className={cn(
-          'rounded border border-amber-300 bg-white px-2 py-0.5 font-mono text-[11px]',
-          'focus:outline-none focus:ring-1 focus:ring-amber-500',
-          'disabled:cursor-not-allowed disabled:bg-slate-50 disabled:text-slate-400',
-        )}
-      >
-        <option value="" disabled>
-          Pick FK…
-        </option>
-        {entry.candidates.map((c) => (
-          <option key={c} value={c}>
-            {c}
-          </option>
-        ))}
-      </select>
-    </div>
-  )
-}
-
-function ResolvedRow({
-  joinedTableId,
-  joinedTableName,
-  dominantTableName,
-  picked,
-  onChangeRequest,
-  disabled,
-}: {
-  joinedTableId: string
-  joinedTableName: string
-  dominantTableName: string
-  picked: string
-  onChangeRequest: (joinedTableId: string) => void
-  disabled: boolean
-}) {
-  return (
-    <div
-      data-testid="create-mapping-form-disambiguation-resolved"
-      data-joined-table-id={joinedTableId}
-      data-joined-table-name={joinedTableName}
-      className="flex flex-wrap items-center gap-1.5 text-[11px] text-amber-900"
-    >
-      <span>
-        Joining{' '}
-        <span className="font-mono font-semibold">{dominantTableName}</span> to{' '}
-        <span className="font-mono font-semibold">{joinedTableName}</span> via{' '}
-        <span className="font-mono font-semibold">{picked}</span>
-      </span>
-      <button
-        type="button"
-        onClick={() => onChangeRequest(joinedTableId)}
-        disabled={disabled}
-        data-testid="create-mapping-form-disambiguation-change"
-        className={cn(
-          'inline-flex h-5 items-center rounded px-1.5 text-[10px] font-medium uppercase tracking-wide',
-          'text-amber-700 hover:bg-amber-100 hover:text-amber-900',
-          'focus:outline-none focus-visible:ring-1 focus-visible:ring-amber-500',
-          'disabled:cursor-not-allowed disabled:opacity-60',
-        )}
-      >
-        Change
-      </button>
-    </div>
-  )
-}
-
-// ── Combination radios ───────────────────────────────────────────────────────
-
-const COMBINATION_LABELS: Record<
-  CreateFieldMappingCombinationType,
-  string
-> = {
-  single: 'Use single source',
-  concat_space: 'Concatenate with space',
-  concat_comma: 'Concatenate with comma',
-}
-
-const CUSTOM_SQL_TOOLTIP =
-  'Custom SQL combinations are managed in the Transform tab.'
-
-function CombinationRadios({
-  value,
-  onChange,
-  disabled,
-  selectedFields,
-}: {
-  value: CreateFieldMappingCombinationType
-  onChange: (next: CreateFieldMappingCombinationType) => void
-  disabled: boolean
-  selectedFields: SourceFieldWithState[]
-}) {
-  // Compute one-row example per combination from the actual selected
-  // sources' first sample values. Falls back to canned literals when
-  // any source has no samples.
-  const example = (combination: 'concat_space' | 'concat_comma'): string => {
-    const allHaveSamples = selectedFields.every((f) => f.sampleValues.length > 0)
-    if (!allHaveSamples) {
-      return combination === 'concat_space' ? 'Smith John' : 'Smith, John'
-    }
-    const firsts = selectedFields.map((f) => f.sampleValues[0]!)
-    return firsts.join(combination === 'concat_space' ? ' ' : ', ')
-  }
-
-  return (
-    <fieldset
-      data-testid="create-mapping-form-combination"
-      className="flex flex-col gap-1.5 rounded border border-slate-200 px-3 py-2"
-      disabled={disabled}
-    >
-      <legend className="px-1 text-[11px] font-semibold uppercase tracking-wide text-slate-600">
-        Combination
-      </legend>
-      <RadioRow
-        name="combination"
-        value="concat_space"
-        checked={value === 'concat_space'}
-        onChange={() => onChange('concat_space')}
-        label={COMBINATION_LABELS.concat_space}
-        example={`"${example('concat_space')}"`}
-        disabled={disabled}
-      />
-      <RadioRow
-        name="combination"
-        value="concat_comma"
-        checked={value === 'concat_comma'}
-        onChange={() => onChange('concat_comma')}
-        label={COMBINATION_LABELS.concat_comma}
-        example={`"${example('concat_comma')}"`}
-        disabled={disabled}
-      />
-      <RadioRow
-        name="combination"
-        value="custom_sql"
-        checked={false}
-        onChange={() => {}}
-        label="Custom SQL"
-        example="Managed in the Transform tab"
-        disabled
-        explicitlyBlocked
-      />
-    </fieldset>
-  )
-}
-
-function RadioRow({
-  name,
-  value,
-  checked,
-  onChange,
-  label,
-  example,
-  disabled,
-  explicitlyBlocked = false,
-}: {
-  name: string
-  value: string
-  checked: boolean
-  onChange: () => void
-  label: string
-  example: string
-  disabled: boolean
-  explicitlyBlocked?: boolean
-}) {
-  return (
-    <label
-      data-testid={`create-mapping-form-combination-${value}`}
-      data-disabled={explicitlyBlocked ? 'true' : undefined}
-      title={explicitlyBlocked ? CUSTOM_SQL_TOOLTIP : undefined}
-      className={cn(
-        'flex items-center gap-2 text-xs',
-        explicitlyBlocked
-          ? 'cursor-not-allowed text-slate-400'
-          : 'cursor-pointer text-slate-700',
-      )}
-    >
-      <input
-        type="radio"
-        name={name}
-        value={value}
-        checked={checked}
-        onChange={onChange}
-        disabled={disabled || explicitlyBlocked}
-        className="h-3.5 w-3.5 accent-blue-600"
-      />
-      <span className="font-medium">{label}</span>
-      <span className="text-slate-400">—</span>
-      <span className="font-mono">{example}</span>
-    </label>
   )
 }
 
