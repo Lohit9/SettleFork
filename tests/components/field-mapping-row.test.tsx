@@ -7,6 +7,7 @@ import type {
   MappedRow,
   MappingRow,
   MappingSourceRef,
+  SourceFieldWithState,
   TargetAcknowledgedRow,
   TargetFieldRef,
   TargetTableSummary,
@@ -1622,5 +1623,272 @@ describe('FieldMappingRow — Gap 7 row click', () => {
     expect(bodies[1]!.className).not.toContain('bg-slate-50')
     await user.click(bodies[1]!)
     expect(onRowClick).toHaveBeenCalledWith('b')
+  })
+})
+
+// ─── Source-cell unification (2026-04-28) ───────────────────────────────────
+//
+// Pins the unified source-trigger contract: cols 2 + 3 (Source Table +
+// Source Field) merge into a single click target / focus stop / hover
+// region when the row is inline-source-editable. Replaces the prior
+// pair of separate triggers (`SourceTableTriggerButton` +
+// `SourceFieldTriggerSurface`) which each owned their own focus ring
+// and tab stop.
+//
+// Contract:
+//   • One outer wrapper carrying data-testid="field-mapping-row-source-trigger"
+//     wraps both inner cells.
+//   • Clicking ANYWHERE inside the wrapper (over either inner cell OR
+//     the inter-track gap) opens the InlineSourcePicker.
+//   • The wrapper is the sole tab stop for the source area — the inner
+//     cells drop their own tabIndex.
+//   • The wrapper carries Tailwind's `group/source` named group so the
+//     Pencil hover-hint reveals on hover anywhere in the wrapper (not
+//     just on the Source Field cell).
+//   • The inner trigger testids (field-mapping-row-source-table-trigger,
+//     field-mapping-row-source-field-trigger) are preserved for
+//     test back-compat — clicks on them still activate the picker via
+//     the outer wrapper's onClick.
+//
+// Eligibility is unchanged: the wrapper renders ONLY when
+// `isInlineSourceEditable` is true (mapped non-Rule-4 non-custom-sql, or
+// unmapped). All other row kinds fall through to the legacy two-cell
+// drawer-open path.
+
+describe('FieldMappingRow — source-cell unification (2026-04-28)', () => {
+  function makeAvailableSourceFields(): SourceFieldWithState[] {
+    return [
+      {
+        id: 'sf-1',
+        name: 'ACCT_NO',
+        dataType: 'NUMBER',
+        ordinalPosition: 1,
+        sourceTable: { id: 'st-1', name: 'ACCT_MASTER' },
+        mappingStatus: 'mapped',
+        sampleValues: [],
+        isAcknowledged: false,
+      },
+      {
+        id: 'sf-2',
+        name: 'CUSTOMER_REF',
+        dataType: 'VARCHAR(50)',
+        ordinalPosition: 2,
+        sourceTable: { id: 'st-1', name: 'ACCT_MASTER' },
+        mappingStatus: 'unmapped',
+        sampleValues: [],
+        isAcknowledged: false,
+      },
+    ]
+  }
+
+  it('renders a unified outer wrapper with data-testid="field-mapping-row-source-trigger" on inline-eligible rows', () => {
+    render(
+      <FieldMappingRow
+        row={mapped()}
+        availableSourceFields={makeAvailableSourceFields()}
+        onSourceCommit={vi.fn()}
+      />,
+    )
+    const wrapper = screen.getByTestId('field-mapping-row-source-trigger')
+    expect(wrapper).toBeInTheDocument()
+    // Both inner trigger testids must remain (preserved for test
+    // back-compat + as DOM hooks for the click-bubbling contract).
+    expect(
+      screen.getByTestId('field-mapping-row-source-table-trigger'),
+    ).toBeInTheDocument()
+    expect(
+      screen.getByTestId('field-mapping-row-source-field-trigger'),
+    ).toBeInTheDocument()
+  })
+
+  it('does NOT render the unified wrapper on ineligible rows (custom_sql falls through to legacy two-cell layout)', () => {
+    render(
+      <FieldMappingRow
+        row={mapped({ combinationType: 'custom_sql', combinationSql: 'NOW()' })}
+        availableSourceFields={makeAvailableSourceFields()}
+        onSourceCommit={vi.fn()}
+      />,
+    )
+    expect(
+      screen.queryByTestId('field-mapping-row-source-trigger'),
+    ).toBeNull()
+  })
+
+  it('does NOT render the unified wrapper on target_acknowledged rows', () => {
+    render(
+      <FieldMappingRow
+        row={targetAck()}
+        availableSourceFields={makeAvailableSourceFields()}
+        onSourceCommit={vi.fn()}
+      />,
+    )
+    expect(
+      screen.queryByTestId('field-mapping-row-source-trigger'),
+    ).toBeNull()
+  })
+
+  it('clicking the outer wrapper opens the InlineSourcePicker', async () => {
+    const user = userEvent.setup()
+    render(
+      <FieldMappingRow
+        row={mapped()}
+        availableSourceFields={makeAvailableSourceFields()}
+        onSourceCommit={vi.fn()}
+      />,
+    )
+    const wrapper = screen.getByTestId('field-mapping-row-source-trigger')
+    await user.click(wrapper)
+    expect(
+      await screen.findByTestId('inline-source-picker'),
+    ).toBeInTheDocument()
+  })
+
+  it('clicking the SOURCE TABLE inner cell ALSO opens the picker (click bubbles up to the wrapper)', async () => {
+    // Pre-unification this required the source-table inner button's own
+    // onClick to fire openPicker. Post-unification only the wrapper has
+    // an onClick — clicks on the inner cell bubble up to it. This test
+    // pins that bubbling contract: clicking the source-table cell
+    // continues to open the picker via the wrapper's onClick.
+    const user = userEvent.setup()
+    render(
+      <FieldMappingRow
+        row={mapped()}
+        availableSourceFields={makeAvailableSourceFields()}
+        onSourceCommit={vi.fn()}
+      />,
+    )
+    const tableCell = screen.getByTestId(
+      'field-mapping-row-source-table-trigger',
+    )
+    await user.click(tableCell)
+    expect(
+      await screen.findByTestId('inline-source-picker'),
+    ).toBeInTheDocument()
+  })
+
+  it('clicking the unified wrapper does NOT bubble to the row-body drawer-open handler', async () => {
+    // The wrapper `stopPropagation`s on click — clicking it must NOT
+    // also fire the row-body's onRowClick (which would open the
+    // drawer, defeating the inline-edit affordance).
+    const onRowClick = vi.fn()
+    const user = userEvent.setup()
+    render(
+      <FieldMappingRow
+        row={mapped()}
+        onRowClick={onRowClick}
+        availableSourceFields={makeAvailableSourceFields()}
+        onSourceCommit={vi.fn()}
+      />,
+    )
+    const wrapper = screen.getByTestId('field-mapping-row-source-trigger')
+    await user.click(wrapper)
+    expect(onRowClick).not.toHaveBeenCalled()
+  })
+
+  it('the unified wrapper is the SOLE tab stop for the source area (one focus stop, not two)', () => {
+    render(
+      <FieldMappingRow
+        row={mapped()}
+        availableSourceFields={makeAvailableSourceFields()}
+        onSourceCommit={vi.fn()}
+      />,
+    )
+    const wrapper = screen.getByTestId('field-mapping-row-source-trigger')
+    const tableCell = screen.getByTestId(
+      'field-mapping-row-source-table-trigger',
+    )
+    const fieldCell = screen.getByTestId(
+      'field-mapping-row-source-field-trigger',
+    )
+    // Wrapper IS focusable.
+    expect(wrapper.getAttribute('tabindex')).toBe('0')
+    expect(wrapper.getAttribute('role')).toBe('button')
+    // Inner cells are NOT focusable — no tabIndex attribute, no
+    // button role.
+    expect(tableCell.getAttribute('tabindex')).toBeNull()
+    expect(tableCell.getAttribute('role')).toBeNull()
+    expect(fieldCell.getAttribute('tabindex')).toBeNull()
+    expect(fieldCell.getAttribute('role')).toBeNull()
+    // The wrapper is also NOT a native <button> (it is a <div>) — pinned
+    // because the chevron inside col 3 is a real <button> and nesting
+    // <button> inside <button> would violate the HTML invariant.
+    expect(wrapper.tagName.toLowerCase()).toBe('div')
+  })
+
+  it('the unified wrapper carries the `group/source` named group so the Pencil hover-hint reveals on hover anywhere in cols 2-3', () => {
+    render(
+      <FieldMappingRow
+        row={mapped()}
+        availableSourceFields={makeAvailableSourceFields()}
+        onSourceCommit={vi.fn()}
+      />,
+    )
+    const wrapper = screen.getByTestId('field-mapping-row-source-trigger')
+    const wrapperClass = wrapper.className
+    // The named group scopes the hover trigger to the wrapper. Pre-
+    // unification the row-body owned an unnamed `group` and the
+    // Pencil's `group-hover:opacity-100` keyed off it — meaning hover
+    // ANYWHERE in the row (Target / Confidence / Actions cells too)
+    // revealed the Pencil. Post-unification the Pencil scopes to
+    // `group-hover/source:opacity-100`, scoped to this wrapper.
+    expect(wrapperClass).toContain('group/source')
+    // The Pencil's class is asserted in
+    // tests/components/inline-row-actions.test.tsx — the matching
+    // half of this contract.
+  })
+
+  it('the unified wrapper spans cols 2-3 via col-span-2 + grid-cols-subgrid (preserves parent column widths)', () => {
+    render(
+      <FieldMappingRow
+        row={mapped()}
+        availableSourceFields={makeAvailableSourceFields()}
+        onSourceCommit={vi.fn()}
+      />,
+    )
+    const wrapper = screen.getByTestId('field-mapping-row-source-trigger')
+    const wrapperClass = wrapper.className
+    // col-span-2 places the wrapper in tracks 2 + 3 of the row's 6-col
+    // grid (StatusDot in col 1, Target in col 4, Confidence in col 5,
+    // Actions in col 6). grid-cols-subgrid re-exposes the parent
+    // tracks to the wrapper's two children so the Source Table /
+    // Source Field cells land at their pre-unification x-coordinates
+    // — the column-template invariant test at L1200 stays untouched.
+    expect(wrapperClass).toContain('col-span-2')
+    expect(wrapperClass).toContain('grid-cols-subgrid')
+  })
+
+  it('keyboard activation (Enter / Space) on the unified wrapper opens the picker', async () => {
+    const user = userEvent.setup()
+    render(
+      <FieldMappingRow
+        row={mapped()}
+        availableSourceFields={makeAvailableSourceFields()}
+        onSourceCommit={vi.fn()}
+      />,
+    )
+    const wrapper = screen.getByTestId('field-mapping-row-source-trigger')
+    wrapper.focus()
+    await user.keyboard('{Enter}')
+    expect(
+      await screen.findByTestId('inline-source-picker'),
+    ).toBeInTheDocument()
+  })
+
+  it('the Pencil hover-hint is rendered inside the unified wrapper (so wrapper hover reveals it)', () => {
+    // Sanity check: the Pencil lives inside the wrapper's DOM subtree,
+    // which is what makes `group-hover/source:opacity-100` (named
+    // group on the wrapper) actually reveal it. If a future refactor
+    // moved the Pencil outside the wrapper, the hover-hint contract
+    // would silently break.
+    render(
+      <FieldMappingRow
+        row={mapped()}
+        availableSourceFields={makeAvailableSourceFields()}
+        onSourceCommit={vi.fn()}
+      />,
+    )
+    const wrapper = screen.getByTestId('field-mapping-row-source-trigger')
+    const pencil = screen.getByTestId('field-mapping-row-source-edit-hint')
+    expect(wrapper.contains(pencil)).toBe(true)
   })
 })

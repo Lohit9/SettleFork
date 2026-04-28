@@ -321,13 +321,20 @@ export function FieldMappingRow({
       row.kind === 'unmapped')
 
   const [isPickerOpen, setIsPickerOpen] = useState(false)
-  const sourceTriggerRef = useRef<HTMLButtonElement | null>(null)
   const rowBodyRef = useRef<HTMLDivElement | null>(null)
+  const sourceWrapperRef = useRef<HTMLDivElement | null>(null)
 
-  // The picker anchors to the row body (full row width) so it has space
-  // for the chip strip + search + grouped list. Falling back to the
-  // source-cell trigger on narrow viewports is a future polish.
-  const pickerAnchorRef = rowBodyRef
+  // Source-cell unification (2026-04-28): the picker anchors to the
+  // unified source-trigger wrapper that spans cols 2-3 (Source Table +
+  // Source Field) — NOT the full row body. This keeps the picker
+  // visually paired with the cells it edits and leaves the Target Field
+  // + Confidence cells visible while the picker is open, so the user
+  // can see what they are mapping TO while choosing the source. The
+  // existing PICKER_MIN_WIDTH_PX (352px) floor in InlineSourcePicker
+  // still applies for narrow viewports where the cols-2-3 wrapper is
+  // narrower than 352px; in that case the portal positioning logic
+  // already flips to the left edge to keep the picker on-screen.
+  const pickerAnchorRef = sourceWrapperRef
 
   const initialSourceFieldIds =
     row.kind === 'mapped'
@@ -456,17 +463,20 @@ export function FieldMappingRow({
       >
         <StatusDot status={row.status} kind={row.kind} />
         {isInlineSourceEditable ? (
-          <>
-            <SourceTableTriggerButton
-              buttonRef={sourceTriggerRef}
-              onClick={handleOpenPicker}
-              ariaLabel={buildSourceTriggerAriaLabel(row)}
+          <UnifiedSourceTrigger
+            wrapperRef={sourceWrapperRef}
+            onActivate={handleOpenPicker}
+            ariaLabel={buildSourceTriggerAriaLabel(row)}
+          >
+            <div
+              data-testid="field-mapping-row-source-table-trigger"
+              className="flex min-w-0 items-center text-left"
             >
               <SourceTableCell row={row} rule={rule} />
-            </SourceTableTriggerButton>
-            <SourceFieldTriggerSurface
-              onClick={handleOpenPicker}
-              ariaLabel={buildSourceTriggerAriaLabel(row)}
+            </div>
+            <div
+              data-testid="field-mapping-row-source-field-trigger"
+              className="flex min-w-0 items-center gap-1.5"
             >
               <SourceFieldCell row={row} rule={rule} />
               {canExpand ? (
@@ -479,10 +489,10 @@ export function FieldMappingRow({
               <Pencil
                 aria-hidden="true"
                 data-testid="field-mapping-row-source-edit-hint"
-                className="ml-auto h-3 w-3 flex-shrink-0 text-slate-300 opacity-0 transition-opacity duration-150 ease-out group-hover:opacity-100 motion-reduce:transition-none"
+                className="ml-auto h-3 w-3 flex-shrink-0 text-slate-300 opacity-0 transition-opacity duration-150 ease-out group-hover/source:opacity-100 motion-reduce:transition-none"
               />
-            </SourceFieldTriggerSurface>
-          </>
+            </div>
+          </UnifiedSourceTrigger>
         ) : (
           <>
             <SourceTableCell row={row} rule={rule} />
@@ -534,96 +544,91 @@ export function FieldMappingRow({
   )
 }
 
-// ─── Source-cell triggers (Phase 4-polish-3) ─────────────────────────────────
+// ─── Unified source-cell trigger (Source-cell unification, 2026-04-28) ──────
 //
-// Row-state-aware affordance for the source-side cells (cols 2 + 3). When
-// the row is inline-editable, both cells render as activate-able surfaces
-// that open the inline source picker; when not, they fall back to the
-// pre-polish-3 spans + the row body's drawer-open handler.
+// Single click+focus surface that spans grid cols 2-3 (Source Table +
+// Source Field). Replaces the prior pair of separate triggers
+// (`SourceTableTriggerButton` + `SourceFieldTriggerSurface`) which each
+// owned their own focus ring and were perceived as two adjacent click
+// targets across the gap-3 (12px) seam between cols.
 //
-// Why two different element types?
-//   • Col 2 (source table) renders the `<TableBadge>` with no further
-//     interactive descendants, so a real `<button>` is fine.
-//   • Col 3 (source field) hosts the existing `InlineExpandChevron` button
-//     for multi-source rows — wrapping that in a `<button>` would nest
-//     interactive elements (HTML invariant). We use a `role="button"` div
-//     for col 3 so the chevron can keep its native `<button>` element
-//     without violating the no-nested-button rule.
+// Layout: the wrapper is a single grid item placed in col 2 with
+// `col-span-2`, so it occupies tracks 2 + 3 (and the inter-track gap)
+// as a single visual block. Internally it uses `grid-cols-subgrid` to
+// re-expose cols 2-3 to its two children, preserving the parent's
+// column widths exactly — the inner Source Table / Source Field cells
+// land at the same x-coordinates they did pre-unification.
 //
-// Both surfaces `stopPropagation` on click + on Enter/Space keydown so
-// activation does NOT also bubble to the row body's drawer-open handler.
+// Tab order: ONE focus stop. The wrapper owns `tabIndex={0}` +
+// `role="button"` + the focus ring. Inner children are passive divs
+// (no tabIndex, no role) so keyboard tab does not stop on them.
+//
+// Hover scope: the wrapper carries Tailwind's named group `group/source`
+// which the Pencil icon's `group-hover/source:opacity-100` class keys
+// off. Hovering anywhere in cols 2-3 (over either inner child OR the
+// inter-track gap) reveals the Pencil — communicates "click anywhere
+// in this region to edit the source."
+//
+// Click handling: a single onClick on the wrapper handles activation
+// for clicks anywhere inside the wrapper's bounding box. The wrapper
+// `stopPropagation`s so the click does not bubble to the row body's
+// drawer-open handler. The InlineExpandChevron continues to
+// `stopPropagation` on its own click so chevron expand-toggle stays
+// independent of picker open; chevron clicks therefore never trigger
+// the wrapper's onClick.
+//
+// Eligibility: this wrapper is rendered ONLY when `isInlineSourceEditable`
+// is true (mapped non-custom-sql non-rule-4, or unmapped). All other
+// row kinds (Rule 4, value_assignment, custom_sql, target_acknowledged)
+// render the legacy pre-unification fallback (separate SourceTableCell +
+// SourceFieldCell with no triggers, falling through to the row-body
+// drawer-open handler). Eligibility logic is unchanged from the prior
+// two-trigger implementation.
 
-function SourceTableTriggerButton({
-  buttonRef,
-  onClick,
+function UnifiedSourceTrigger({
+  wrapperRef,
+  onActivate,
   ariaLabel,
   children,
 }: {
-  buttonRef: React.Ref<HTMLButtonElement>
-  onClick: () => void
-  ariaLabel: string
-  children: React.ReactNode
-}) {
-  return (
-    <button
-      ref={buttonRef}
-      type="button"
-      data-testid="field-mapping-row-source-table-trigger"
-      aria-label={ariaLabel}
-      onClick={(e) => {
-        e.stopPropagation()
-        onClick()
-      }}
-      onKeyDown={(e) => {
-        if (e.key === 'Enter' || e.key === ' ') e.stopPropagation()
-      }}
-      className={cn(
-        'flex min-w-0 items-center text-left',
-        'cursor-pointer rounded',
-        'focus:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-slate-300',
-      )}
-    >
-      {children}
-    </button>
-  )
-}
-
-function SourceFieldTriggerSurface({
-  onClick,
-  ariaLabel,
-  children,
-}: {
-  onClick: () => void
+  wrapperRef: React.Ref<HTMLDivElement>
+  onActivate: () => void
   ariaLabel: string
   children: React.ReactNode
 }) {
   return (
     <div
+      ref={wrapperRef}
       role="button"
       tabIndex={0}
-      data-testid="field-mapping-row-source-field-trigger"
+      data-testid="field-mapping-row-source-trigger"
       aria-label={ariaLabel}
       onClick={(e) => {
-        // The chevron button (when rendered) already calls
-        // `stopPropagation` on its own click handler, so clicks that
-        // originated on the chevron never reach this onClick — which
-        // is exactly what we want. Clicks on the field-name text /
-        // pencil icon / surrounding whitespace fall through to here
-        // and open the picker.
+        // The chevron button (when rendered inside col 3) already
+        // calls `stopPropagation` on its own click, so chevron clicks
+        // never reach here. Clicks on the table badge / field-name
+        // text / pencil icon / inter-cell gap all fall through to
+        // this handler and open the picker. We `stopPropagation` so
+        // the click does not bubble to the row body's drawer-open
+        // handler (the row body sits one level up in the DOM).
         e.stopPropagation()
-        onClick()
+        onActivate()
       }}
       onKeyDown={(e) => {
+        // Only swallow Enter/Space when the activation target is the
+        // wrapper itself — the chevron button's own native keyboard
+        // handling stays intact.
         if (e.target !== e.currentTarget) return
         if (e.key === 'Enter' || e.key === ' ') {
           e.preventDefault()
           e.stopPropagation()
-          onClick()
+          onActivate()
         }
       }}
       className={cn(
-        'flex min-w-0 items-center gap-1.5',
-        'cursor-pointer rounded',
+        'group/source col-span-2 grid grid-cols-subgrid items-center gap-3',
+        'cursor-pointer rounded transition-colors duration-150 ease-out motion-reduce:transition-none',
+        'hover:bg-slate-50',
         'focus:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-slate-300',
       )}
     >
