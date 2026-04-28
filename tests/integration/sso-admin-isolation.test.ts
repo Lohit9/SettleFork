@@ -1,7 +1,8 @@
 // @vitest-environment node
 //
 // Cross-org isolation tests for `lib/actions/sso-admin.ts` (B-2-c-i,
-// Mini-D8).
+// Mini-D8) — wired up against a real second-tenant fixture in
+// B-2-c-ii (commit 1).
 //
 // Why this file exists
 // --------------------
@@ -13,59 +14,58 @@
 // behavior in isolation; the source-level tests
 // (`tests/actions/sso-admin-source.test.ts`) verify the gate runs
 // before any DB access. THIS file is the integration backstop that
-// proves end-to-end: with two real users in two real orgs, User A's
-// session cannot pull Org B's payloads.
+// proves end-to-end: with two real users in two real orgs, User 2's
+// session cannot pull Org 1's payloads.
 //
 // ─────────────────────────────────────────────────────────────────────
-// Status (B-2-c-i first commit): SCAFFOLD
+// Status (B-2-c-ii commit 1): EXECUTING (was SCAFFOLD)
 // ─────────────────────────────────────────────────────────────────────
-// The `it.skip` markers below ship the test pattern but do not run
-// the assertions. They document EXACTLY what subsequent commits will
-// flip to `it(...)` once the second-user fixture is in place.
+// The 5 cross-org tests below now execute end-to-end when
+// `SETTLE_SSO_ADMIN_ISOLATION_TEST=1` is set AND the fixture has been
+// provisioned via `npm run sso:test:setup:isolation`.
 //
-// What's missing for a runnable suite
-// -----------------------------------
-// `scripts/sso-test-setup.ts` provisions ONE test user
-// (`alice-sso-test@example.com`) in ONE org (`SSO Test`). The
-// isolation tests need a SECOND user in a SECOND org. The right
-// follow-up is to extend that script with a second `(user, org)`
-// pair — call it `OUTSIDER` — and add a teardown helper that removes
-// both. A separate commit (likely under B-2-c-ii's domain editor
-// work, where the same fixture is useful) will:
+// How "act as User 2" works without a real cookie session
+// -------------------------------------------------------
+// Server actions read `cookies()` via `lib/supabase/server.ts`'s
+// `createClient()`. Reproducing a real cookie session in a Node-only
+// test environment is awkward (no Next.js request scope, no PKCE
+// round-trip). Instead, this file uses the same `vi.mock` pattern
+// that the Heritage integration suite already established at
+// `tests/integration/bulk-approve-heritage.test.ts:64-82`:
+//   - `vi.mock('@/lib/supabase/server', ...)` replaces `createClient`
+//     with a service-role-backed shim whose `auth.getUser()` returns
+//     User 2's UUID.
+//   - Membership lookups in `requireOrgAdmin` fall through to
+//     `supabaseAdmin.from('org_memberships')` which queries the real
+//     DB. So the gate's behavior is *identical* to a real session —
+//     we've just replaced "where does the auth.uid come from?" with
+//     "the test fixture's User 2 UUID."
 //
-//   1. Add `OUTSIDER_EMAIL`, `OUTSIDER_ORG_NAME`, etc. constants to
-//      `scripts/sso-test-setup.ts` mirroring the existing constants.
-//   2. Provision a second user/org pair with a non-overlapping
-//      domain (e.g. `outsider.example`) and minimal SSO state so
-//      `listOrgSsoLinkedUsers` and `listOrgSsoAuditEvents` return
-//      non-empty data when queried by the outsider's own admin —
-//      i.e. there IS data in Org B, and Alice (Org A admin) must
-//      not see it.
-//   3. Add a sign-in helper that mints a session cookie for the
-//      desired user (the existing setup script signs Alice in via
-//      `supabase.auth.signInWithPassword`; we replicate for the
-//      outsider).
-//   4. Flip every `it.skip` below to `it`.
-//   5. Document in `docs/outstanding-items.md` that B-2-c-ii (or
-//      whichever sub-prompt runs the flip) re-enables this suite.
+// What we did NOT do, and why (Mini-D session 2026-04-28, hybrid path)
+// --------------------------------------------------------------------
+// We did not provision a second Okta SAML app, a second Okta user, or
+// the password sign-in flow originally imagined in the B-2-c-i
+// scaffold. None of that machinery is needed to test the
+// authorization gate — only `auth.users` row existence and
+// `org_memberships` row absence/presence are load-bearing for
+// `requireOrgAdmin`. The end-to-end SAML round-trip path for a second
+// tenant is recorded as a follow-up item in
+// `docs/outstanding-items.md` — appropriate when we need to test the
+// IdP boundary itself, not before.
 //
-// Why we ship the scaffold now
-// ----------------------------
-// The cross-org isolation pattern is itself a deliverable of
-// B-2-c-i. Future sub-prompts (`-ii` adds domain mutations, `-iii`
-// uploads IdP metadata, `-iv` runs test-connection, `-v` rotates
-// certs) all add server actions that read or mutate org-scoped data.
-// Each must add a corresponding skipped test here at landing time so
-// the gate is visible in the diff. By the time the second-user
-// fixture lands, this file should already document every action's
-// expected isolation behavior, not just B-2-c-i's four.
+// Forward-compatibility for B-2-c-ii commit 2
+// -------------------------------------------
+// Commit 2 of B-2-c-ii adds three executing tests for the new write
+// actions (`addOrgSsoDomain`, `removeOrgSsoDomain`,
+// `setOrgEnforcementMode`) plus a positive-control write. Those
+// tests reuse this file's `vi.mock` and fixture-resolution helpers
+// without modification.
 
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, vi, beforeAll } from 'vitest'
 
 // ─── Env gate ────────────────────────────────────────────────────────
 
-const RUN_ISOLATION =
-  process.env.SETTLE_SSO_ADMIN_ISOLATION_TEST === '1'
+const RUN_ISOLATION = process.env.SETTLE_SSO_ADMIN_ISOLATION_TEST === '1'
 
 const HAS_BASE_ENV =
   Boolean(process.env.NEXT_PUBLIC_SUPABASE_URL) &&
@@ -75,27 +75,89 @@ const HAS_ENV = RUN_ISOLATION && HAS_BASE_ENV
 
 const describeFn = HAS_ENV ? describe : describe.skip
 
-// ─── Sanity invariants that run in any environment ───────────────────
+// ─── Mock the SSR client to impersonate User 2 ───────────────────────
+//
+// vi.mock is hoisted to the top of the file and runs once at module
+// load. The factory closure caches User 2's UUID after the first
+// `auth.getUser()` invocation so the membership lookups inside
+// `requireOrgAdmin` see a consistent identity throughout the test
+// run.
+//
+// The mock is installed unconditionally, but it has zero effect on
+// the always-runs sanity invariants below: those tests only call
+// `readFileSync` and never invoke any server action. The
+// User-2-resolution DB call inside `auth.getUser()` only fires when
+// a server action is actually invoked — i.e. inside the env-gated
+// describe block.
+
+vi.mock('@/lib/supabase/server', async () => {
+  const adminMod =
+    await vi.importActual<typeof import('@/lib/supabase/admin')>(
+      '@/lib/supabase/admin',
+    )
+  const { supabaseAdmin } = adminMod
+
+  // Inline copy of `ISO_USER_EMAIL` from
+  // `tests/integration/sso-admin-isolation-helpers.ts`. We can't
+  // import the helper file inside this hoisted factory because the
+  // import would race with vi.mock's own evaluation order; literal
+  // duplication here is the safer pattern. If the email changes,
+  // update both places (the helper file's docstring flags this).
+  const ISO_USER_EMAIL = 'kaandincer1+ssoisolation@gmail.com'
+
+  let cachedUser2Id: string | null = null
+
+  async function resolveUser2Id(): Promise<string> {
+    if (cachedUser2Id) return cachedUser2Id
+    const { data, error } = await supabaseAdmin.rpc(
+      'find_auth_user_by_email',
+      { p_email: ISO_USER_EMAIL },
+    )
+    if (error) {
+      throw new Error(
+        `[isolation-mock] resolve User 2 failed: ${error.message}. ` +
+          `Run: npm run sso:test:setup:isolation`,
+      )
+    }
+    if (!data || data.length === 0) {
+      throw new Error(
+        `[isolation-mock] User ${ISO_USER_EMAIL} not found. Run: ` +
+          `npm run sso:test:setup:isolation`,
+      )
+    }
+    cachedUser2Id = data[0].id as string
+    return cachedUser2Id
+  }
+
+  return {
+    createClient: async () => ({
+      auth: {
+        getUser: async () => {
+          const id = await resolveUser2Id()
+          return { data: { user: { id } }, error: null }
+        },
+      },
+      from: supabaseAdmin.from.bind(supabaseAdmin),
+      rpc: supabaseAdmin.rpc.bind(supabaseAdmin),
+    }),
+  }
+})
+
+// ─── Always-runs sanity invariants ───────────────────────────────────
 //
 // The unit tests at `tests/lib/auth/require-org-role.test.ts` already
 // cover the unauthenticated/not_member/insufficient_role branches of
-// `requireOrgAdmin` against a fully mocked SSR client. We can't
-// faithfully repeat that here without mocking — the helper uses
-// `next/headers#cookies()`, which throws outside a request scope,
-// so a "real" call from a Node-only test environment can't reach
-// the auth-rejection branch.
+// `requireOrgAdmin` against a fully mocked SSR client. THIS suite's
+// always-runs block does two source-shape checks that catch
+// gate-removal regressions even when the env-gated suite is skipped:
+// they read the action file as text and assert that every action
+// imports and (textually) uses `requireOrgAdmin`.
 //
-// Instead, this suite does two source-shape checks that ARE safe
-// in any environment: they read the action file as text and assert
-// that every action imports and (textually) uses `requireOrgAdmin`.
 // Source-shape duplication of the auth-gate placement check in
 // `tests/actions/sso-admin-source.test.ts` is intentional — when
-// this file lights up under env gating, the same invariant must
-// still hold even though the runtime test is the load-bearing one.
-//
-// If a future commit removes the import or stops calling the gate,
-// these always-runs tests fail at every CI run — well before the
-// env-gated suite even loads.
+// the runtime suite below lights up under env gating, the same
+// invariant must still hold even though the runtime test is the
+// load-bearing one.
 
 import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
@@ -139,75 +201,79 @@ describe('SSO admin actions — sanity invariants (always runs)', () => {
   })
 })
 
-// ─── Cross-org isolation suite (env-gated, currently skipped) ────────
+// ─── Cross-org isolation suite (env-gated, EXECUTING) ────────────────
 
-describeFn('SSO admin actions — cross-org isolation', () => {
-  // FIXTURE PRECONDITIONS (when un-skipped):
-  //
-  //   - Alice is signed in (session cookie present) and is an admin
-  //     of `aliceOrg`.
-  //   - `outsiderOrg` exists with at least one row in each of
-  //     `sso_providers`, `sso_domains`, `sso_identity_links`,
-  //     `sso_audit_events`. Alice MUST NOT be a member of
-  //     `outsiderOrg`.
-  //   - `aliceOrg.id !== outsiderOrg.id`.
-  //
-  // These IDs are placeholders — populated from env vars by the
-  // follow-up commit that wires the fixture.
-  const aliceOrgId =
-    process.env.SSO_ISOLATION_ALICE_ORG_ID ??
-    '00000000-0000-0000-0000-000000000001'
-  const outsiderOrgId =
-    process.env.SSO_ISOLATION_OUTSIDER_ORG_ID ??
-    '00000000-0000-0000-0000-000000000002'
+describeFn('SSO admin actions — cross-org isolation (read actions)', () => {
+  // Resolved at suite startup from the fixture provisioned by
+  // `npm run sso:test:setup:isolation`. If the fixture is missing,
+  // beforeAll throws a self-diagnosing error.
+  let primaryOrgId: string
+  let isolationOrgId: string
 
-  it.skip('getOrgSsoOverview rejects cross-org access (Alice → outsiderOrg)', async () => {
+  beforeAll(async () => {
+    const { supabaseAdmin } = await import('@/lib/supabase/admin')
+    const { resolveIsolationFixtureIds } = await import(
+      './sso-admin-isolation-helpers'
+    )
+    const ids = await resolveIsolationFixtureIds(supabaseAdmin)
+    primaryOrgId = ids.primaryOrgId
+    isolationOrgId = ids.isolationOrgId
+  })
+
+  it('getOrgSsoOverview rejects cross-org access (User 2 → primary org)', async () => {
     const { getOrgSsoOverview } = await import('@/lib/actions/sso-admin')
-    const result = await getOrgSsoOverview(outsiderOrgId)
+    const result = await getOrgSsoOverview(primaryOrgId)
     expect(result.ok).toBe(false)
-    // Either `not_member` (Alice has no membership in outsiderOrg)
-    // or `insufficient_role` (a future change might give
-    // cross-org viewer roles). Both must reject; ok=true is
-    // catastrophic.
     if (!result.ok) {
-      expect(result.error).not.toMatch(/Failed/) // rejection from
-      // the auth gate, not a downstream DB error
+      // The rejection must come from the auth gate
+      // (`requireOrgAdmin` returning `not_member`), not a downstream
+      // DB error. The gate's user-facing error string starts with
+      // "Not a member" / "Role" — a "Failed" prefix would mean we
+      // reached a service-role read past the gate, which is the
+      // exact regression this test is here to catch.
+      expect(result.error).not.toMatch(/^Failed/)
     }
   })
 
-  it.skip('listOrgSsoDomains rejects cross-org access (Alice → outsiderOrg)', async () => {
+  it('listOrgSsoDomains rejects cross-org access (User 2 → primary org)', async () => {
     const { listOrgSsoDomains } = await import('@/lib/actions/sso-admin')
-    const result = await listOrgSsoDomains(outsiderOrgId)
+    const result = await listOrgSsoDomains(primaryOrgId)
     expect(result.ok).toBe(false)
   })
 
-  it.skip('listOrgSsoLinkedUsers rejects cross-org access (Alice → outsiderOrg)', async () => {
+  it('listOrgSsoLinkedUsers rejects cross-org access (User 2 → primary org)', async () => {
     const { listOrgSsoLinkedUsers } = await import('@/lib/actions/sso-admin')
-    const result = await listOrgSsoLinkedUsers(outsiderOrgId)
+    const result = await listOrgSsoLinkedUsers(primaryOrgId)
     expect(result.ok).toBe(false)
     // CRITICAL: this action uses `supabaseAdmin` (RLS bypass) for
     // the actual data read. The gate is the only thing standing
-    // between Alice and outsider's user list. If this assertion
-    // ever fails, every linked-user list in the system is exposed
-    // cross-tenant.
+    // between User 2 and the primary org's user list. If this
+    // assertion ever fails, every linked-user list in the system
+    // is exposed cross-tenant.
   })
 
-  it.skip('listOrgSsoAuditEvents rejects cross-org access (Alice → outsiderOrg)', async () => {
+  it('listOrgSsoAuditEvents rejects cross-org access (User 2 → primary org)', async () => {
     const { listOrgSsoAuditEvents } = await import('@/lib/actions/sso-admin')
-    const result = await listOrgSsoAuditEvents(outsiderOrgId)
+    const result = await listOrgSsoAuditEvents(primaryOrgId)
     expect(result.ok).toBe(false)
     // Same critical posture as linked-users — bypass via service
     // role makes the gate load-bearing.
   })
 
-  // Positive control: Alice IS an admin of `aliceOrg`, so calling
-  // her own org should succeed. Without this, a regression where
-  // `requireOrgAdmin` rejected EVERY call would still pass the
-  // four rejection tests above. Pinning the positive path keeps
-  // the suite honest.
-  it.skip('Alice can read her own org (positive control)', async () => {
+  // Positive control: User 2 IS an admin of the isolation org, so
+  // calling getOrgSsoOverview against User 2's own org should
+  // succeed. Without this, a regression where `requireOrgAdmin`
+  // rejected EVERY call would still pass the four rejection tests
+  // above. Pinning the positive path keeps the suite honest.
+  it('User 2 can read User 2 own org (positive control)', async () => {
     const { getOrgSsoOverview } = await import('@/lib/actions/sso-admin')
-    const result = await getOrgSsoOverview(aliceOrgId)
+    const result = await getOrgSsoOverview(isolationOrgId)
     expect(result.ok).toBe(true)
+    if (result.ok) {
+      // The iso org has sso_enabled=false (no provider/domain
+      // attached) — confirm the action returns the expected
+      // disabled-but-readable shape.
+      expect(result.sso_enabled).toBe(false)
+    }
   })
 })

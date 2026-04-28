@@ -330,18 +330,30 @@ to exercise it. Items here are not bugs — they are known-unknowns
 that need empirical confirmation.
 
 ### SSO (Prompt D or post-Prompt D)
-- [ ] **Second-user fixture for cross-org isolation tests 
-      (B-2-c-i follow-up).** `tests/integration/sso-admin-isolation.test.ts` 
-      ships the test pattern with `it.skip` markers because 
-      `scripts/sso-test-setup.ts` provisions only ONE test user 
-      (Alice in `SSO Test`). Extend the setup script to provision 
-      a second user/org pair (`outsider@example.test` in a fresh 
-      `Outsider Test` org with a non-overlapping domain), seed minimal 
-      SSO state in Org B (one provider, one domain, one identity link, 
-      one audit event), and add a session-mint helper. Then flip 
-      every `it.skip` to `it` in the isolation test file. Done in 
-      B-2-c-ii (where the same fixture is also needed for testing 
-      domain-mutation cross-org paths) or as a standalone commit.
+- [x] **Second-user fixture for cross-org isolation tests 
+      (B-2-c-i follow-up).** Shipped in B-2-c-ii commit 1 
+      (`feat/sso-admin-writes`). New scripts 
+      `scripts/sso-test-setup-isolation.ts` + `cleanup-isolation.ts` 
+      provision a real second `auth.users` row + isolation org 
+      (`sso-isolation-test` slug) + owner membership; the 5 existing 
+      `it.skip` markers in `tests/integration/sso-admin-isolation.test.ts` 
+      flipped to executing `it()` gated by 
+      `SETTLE_SSO_ADMIN_ISOLATION_TEST=1`. Tests stand in as User 2 via 
+      `vi.mock('@/lib/supabase/server', ...)` — the same pattern the 
+      Heritage integration suite already uses. No real cookie/session 
+      replay needed for authorization-gate tests.
+- [ ] **End-to-end SAML round-trip for a second tenant 
+      (B-2-c-ii deferred).** The B-2-c-ii commit-1 fixture intentionally 
+      stops at "auth.users + org + membership" because the cross-tenant 
+      authorization gate is the only test surface that needed it. A 
+      future commit can extend the fixture with a second Okta SAML app 
+      (manual one-time admin work in the Okta dev tenant) + a 
+      password-flow sign-in helper, enabling real-cookie isolation 
+      tests AND a second-tenant SAML round-trip smoke test. Required 
+      env vars when the time comes: `SSO_TEST_USER_2_PASSWORD`, 
+      `SSO_TEST_OKTA_APP_2_ID`, `SSO_TEST_OKTA_APP_2_METADATA_URL`. 
+      Not pilot-blocking; not security-blocking (the gate is already 
+      runtime-tested via the simpler vi.mock fixture).
 - [ ] Validate GoTrue error response shapes against real API responses. 
       A2's defensive error parser handles unknown shapes by extracting 
       any available message fields, but the exact shape of each 
