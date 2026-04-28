@@ -66,6 +66,47 @@ Last updated: 2026-04-28
           `lib/auth/signup-rate-limit.ts` and 
           `lib/ai/rate-limit.ts` deliberately left unmigrated; 
           tracked as 8-week-plan Item 4.2.
+    - **✓ COMPLETE — B-2-b (login page redesign with email-first 
+      SSO discovery).** Two-stage form replaces the legacy 
+      single-stage email+password layout. Stage 1 collects email 
+      and probes `checkSSOEnabledForEmail`; Stage 2 renders 
+      password (always) and a "Continue with single sign-on" 
+      button (hybrid orgs). Strict-SSO orgs are redirected to 
+      `/sso/start` directly from Stage 1.
+        - New canonical helpers: `lib/auth/safe-next.ts` 
+          (consolidates open-redirect / CRLF rules used by both 
+          login and `/sso/start`) and 
+          `lib/auth/login-reason-codes.ts` (single source of 
+          truth for the 14 `?reason=…` / `?error=…` codes 
+          previously dropped silently on `/login`).
+        - Source-level test 
+          `tests/lib/auth/login-reason-codes-source.test.ts` 
+          enforces bidirectional invariant: every emitted code 
+          maps to copy, every code in the map is emitted. 
+          Prevents future silent-drop regressions.
+        - Re-broadened `checkSSOEnabledForEmail` to return 
+          `orgSlug` for hybrid orgs in addition to strict (was 
+          over-narrowed in B-2-a-i). `org_id`, 
+          `sso_providers.id`, and `enforcement_mode` remain 
+          hidden. Fail-closed paths still return 
+          `{ required: false }` with no slug — rate-limit hit 
+          remains indistinguishable from "no SSO".
+        - Pre-existing bugs fixed in `EmailFirstLoginForm`: 
+          `?returnTo=` now read alongside `?redirect=`; 
+          `//evil.com` open-redirect blocked; catch-block now 
+          resets `loading` state.
+        - Browser-autofill compat via hidden 
+          `<input type=password>` on Stage 1 (sr-only + 
+          tabIndex=-1 + aria-hidden).
+        - Feature flag `NEXT_PUBLIC_LOGIN_EMAIL_FIRST` (defaults 
+          to enabled). Setting to `'false'` selects the legacy 
+          single-stage form preserved at 
+          `components/auth/LegacyLoginForm.tsx` for instant 
+          rollback. **Removal plan:** delete legacy component + 
+          flag after 14 days of prod stability.
+        - Test coverage: 49 component tests covering both stages, 
+          all 14 reason-code banners, redirect/returnTo 
+          preservation, probe fail-soft, double-submit guards.
 - [ ] SSO epic — Prompt C (invite flow + identity linking). 
       (Scheduled: 2026-04-22)
 - [ ] SSO epic — Prompt D (admin UI, customer-facing + platform-admin). 

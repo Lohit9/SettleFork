@@ -1,7 +1,9 @@
 // @vitest-environment node
 //
-// Source-level invariant tests for the rate-limit + return-shape
-// changes to `lib/actions/sso.ts:checkSSOEnabledForEmail` (B-2-a-i).
+// Source-level invariant tests for `lib/actions/sso.ts:checkSSOEnabledForEmail`.
+//
+// Coverage spans BOTH B-2-a-i (rate-limit + return-shape narrowing)
+// and B-2-b (broadening orgSlug for hybrid/optional orgs).
 //
 // What this file pins:
 //   - getClientIp/hashIp/checkRateLimit + createHash imports present
@@ -11,10 +13,14 @@
 //   - Domain hash is 16-char SHA-256 hex (matches hashEmail / hashIp)
 //   - Rate-limit check happens BEFORE the lookup_sso_provider_for_domain
 //     RPC call (shields the DB from enumeration)
-//   - Return shape is narrowed: rate-limit hit returns { required: false }
+//   - Return shape: rate-limit hit returns { required: false }
 //     (indistinguishable from "no SSO" — does not signal limit state)
 //   - Function signature returns `{ required: boolean; orgSlug?: string }`
 //     — orgId, providerId, enforcementMode are NOT returned
+//   - Success path computes `required` from `enforcement_mode === 'strict'`
+//     ONLY — hybrid + optional return required=false (B-2-b)
+//   - Success path returns `orgSlug` whenever a provider row matches,
+//     regardless of mode (hybrid/optional get the slug too — B-2-b)
 //   - Audit on rate-limit hit emits sso.login.failure with reason='rate_limited'
 //   - Raw IP is never echoed into audit metadata
 
@@ -173,11 +179,49 @@ describe('[checkSSOEnabledForEmail / return shape] narrowed (Mini-D3)', () => {
     expect(sig).not.toMatch(/enforcementMode\?:/)
   })
 
-  it('on the success path returns { required: true, orgSlug }', () => {
-    // The terminal return at the bottom of the function — should
-    // only carry required + orgSlug.
+  it('on the success path returns { required, orgSlug } where orgSlug = row.org_slug', () => {
+    // Broadened in B-2-b: `required` is now derived from
+    // `enforcement_mode === 'strict'` (not hardcoded `true`).
+    // orgSlug is returned for ANY mode that surfaced a row from the
+    // RPC — strict, hybrid, AND optional all carry the slug.
+    //
+    // We assert the shape — `required` must be a computed boolean
+    // bound to the enforcement_mode comparison — and that orgSlug
+    // pulls from the same `row.org_slug` field.
     expect(CHECK_FN_CODE).toMatch(
-      /return\s*\{\s*required:\s*true\s*,\s*orgSlug:\s*row\.org_slug\s*,?\s*\}/
+      /return\s*\{\s*required\s*,?\s*orgSlug:\s*row\.org_slug\s*,?\s*\}/
+    )
+  })
+
+  it('success path computes required from enforcement_mode === \'strict\' (NOT a hardcoded true)', () => {
+    // Critical: hybrid and optional MUST NOT yield required=true. The
+    // login page redirects to /sso/start ONLY for required=true; if
+    // hybrid orgs were marked required they would lose the password
+    // option entirely.
+    expect(CHECK_FN_CODE).toMatch(
+      /required\s*=\s*row\.enforcement_mode\s*===\s*['"]strict['"]/
+    )
+    // And the function must NOT emit a literal `required: true` in
+    // the success-path return — that would short-circuit the
+    // enforcement_mode check.
+    const returnIdx = CHECK_FN_CODE.lastIndexOf('return {')
+    expect(returnIdx).toBeGreaterThan(-1)
+    const tailReturn = CHECK_FN_CODE.slice(returnIdx)
+    expect(tailReturn).not.toMatch(/required:\s*true/)
+  })
+
+  it('success path surfaces orgSlug for ALL non-empty rows (broadened in B-2-b)', () => {
+    // The defensive null-guard before the broadened return must NOT
+    // re-narrow to strict-only. Slice from the rows.length check to
+    // the closing brace and assert no enforcement_mode === 'strict'
+    // gate gets in the way of returning orgSlug.
+    const rowsCheckIdx = CHECK_FN_CODE.indexOf('if (rows.length === 0)')
+    expect(rowsCheckIdx).toBeGreaterThan(-1)
+    const tail = CHECK_FN_CODE.slice(rowsCheckIdx)
+    // Must contain a single `return { required, orgSlug: row.org_slug }`
+    // — proving orgSlug is included regardless of `required`'s value.
+    expect(tail).toMatch(
+      /return\s*\{\s*required\s*,?\s*orgSlug:\s*row\.org_slug\s*,?\s*\}/
     )
   })
 
