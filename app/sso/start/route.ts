@@ -3,6 +3,7 @@ import { createClient } from '@/lib/supabase/server'
 import { supabaseAdmin } from '@/lib/supabase/admin'
 import { emitSsoAuditEvent } from '@/lib/actions/sso-audit'
 import { hashEmail } from '@/lib/sso/email-hash'
+import { setAttemptOrgCookie } from '@/lib/sso/attempt-cookie'
 
 export const dynamic = 'force-dynamic'
 export const runtime = 'nodejs'
@@ -138,8 +139,14 @@ export async function GET(request: Request) {
       )
     }
 
-    // Redirect to GoTrue (which then 302s to the IdP)
-    return NextResponse.redirect(data.url, 302)
+    // Redirect to GoTrue (which then 302s to the IdP). Sign the
+    // attempted org_id into a short-lived HttpOnly cookie so the
+    // callback can verify cross-tenant invariants after the SAML
+    // round-trip. Cookie is consumed (deleted) by the callback on
+    // every exit path.
+    const redirectResponse = NextResponse.redirect(data.url, 302)
+    setAttemptOrgCookie(redirectResponse, org.id)
+    return redirectResponse
   } catch (err) {
     console.error('[sso/start] unexpected error:', { err: String(err) })
     const requestUrl = new URL(request.url)
