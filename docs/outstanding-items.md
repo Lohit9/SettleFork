@@ -19,22 +19,28 @@ Last updated: 2026-04-28
 ### Security
 - [ ] SSO epic — Prompt B (middleware + login + callback with 
       dedupe-on-login). (Scheduled: 2026-04-21)
-    - **B-2-a — JIT provisioning gap in callback (verified 
-      2026-04-28 via Phase 7 of Okta runbook).** End-to-end SAML 
-      round-trip confirmed: the callback at 
-      `/api/auth/callback?type=sso` exchanges the code and sets a 
-      Supabase session, but does NOT call `provision_user_via_jit`. 
-      The JIT'd auth user lands on `/app/projects` with zero 
-      `org_memberships` rows and is shown the empty-state 
-      onboarding modal instead of the SSO org's projects. B-2-a 
-      must wire `provision_user_via_jit(p_user_id, p_org_id, 
-      p_email)` into the callback immediately after 
-      `exchangeCodeForSession`, resolving `p_org_id` from the 
-      provider's domain mapping (or from `sso_providers.org_id` via 
-      the GoTrue provider id on the session). After provisioning, 
-      also call `mark_identity_sso_linked` to populate 
-      `sso_identity_links` (the `is_sso_user` middleware hot path 
-      reads this).
+    - **✓ COMPLETE — B-2-a-ii (callback half of B-2-a).** 
+      Commit `e9c217d` (branch `feat/sso-okta-setup`, local-only — 
+      not yet pushed). Adds the `?type=sso` branch to 
+      `/api/auth/callback` with six ordered security checks before 
+      provisioning: (1) HMAC-signed `attempted_org_id` cookie 
+      verified (signed at `/sso/start` with 
+      `SSO_ATTEMPT_COOKIE_SECRET`); (2) session has an `sso:<uuid>` 
+      identity; (3) cross-tenant — provider's `org_id` matches the 
+      attempted org; (4) domain-provider sanity — email domain → 
+      org matches provider → org; (5) duplicate-account — no 
+      other identity providers on the same user (same-user check 
+      via `get_auth_identity_providers`); (6) JIT via 
+      `provision_user_via_jit`. Identity linking via 
+      `mark_identity_sso_linked` is non-blocking (failures 
+      audited but login proceeds — middleware-side repair for 
+      unlinked SSO sessions deferred as future work). Cross-user 
+      duplicate detection RPC deferred per Decision D7 (same-user 
+      check is sufficient for current Supabase 1:1 email 
+      invariant). Failure paths emit `sso.login.failure` with 
+      bounded metadata (`email_hash`, never raw email). New 
+      module: `lib/sso/attempt-cookie.ts`. End-to-end verified 
+      against Okta dev tenant on prod Supabase.
 - [ ] SSO epic — Prompt C (invite flow + identity linking). 
       (Scheduled: 2026-04-22)
 - [ ] SSO epic — Prompt D (admin UI, customer-facing + platform-admin). 
@@ -441,6 +447,65 @@ next worked on; seed content from Cursor/Claude analysis done
 
 ---
 
+## SSO Test Runbook
+
+To re-test SSO end-to-end against the SSO Test org + Okta dev 
+tenant:
+
+1. Aggressive cleanup (deletes JIT'd test user + org for clean 
+   state):
+
+   `npm run sso:test:cleanup -- --full`
+
+2. Re-create test infrastructure:
+
+   `npm run sso:test:setup`
+
+   - Creates SSO Test org (slug `sso-test`)
+   - kaan@usesettle.ai owner membership
+   - GoTrue SAML provider for Okta dev tenant
+   - `sso_providers` row + `sso_domains`: `gmail.com` mapping
+   - PUTs `domains: ['gmail.com']` to GoTrue provider
+   - Flips `organizations.sso_enabled = true`
+
+3. Clear webpack cache (REQUIRED if dev server has been running 
+   across setup/cleanup cycles):
+
+   - In dev server terminal: Ctrl+C
+   - `rm -rf .next`
+   - `npm run dev -- -p 3001`
+   - Wait for "Ready" before retesting
+
+4. Test from fresh incognito window:
+
+   - http://localhost:3001/sso/start?org=sso-test
+   - Login as `kaandincer1+ssotest@gmail.com` / 
+     `Settle-SSO-Test-2026!`
+   - Should land on `/app/projects` authenticated with `viewer` 
+     role in SSO Test org
+
+5. Verify state via SQL:
+
+   - `org_memberships` row exists with 
+     `provisioning_source='jit'`
+   - `sso_identity_links` row exists
+   - `sso_audit_events` shows `sso.login.success` with 
+     `is_new_membership=true`
+   - `auth.identities` has exactly 1 `sso:*` row for the test 
+     user
+
+Required env vars in `.env.local`:
+
+- `NEXT_PUBLIC_SUPABASE_URL`
+- `NEXT_PUBLIC_SUPABASE_ANON_KEY`
+- `SUPABASE_SERVICE_ROLE_KEY`
+- `NEXT_PUBLIC_APP_URL=http://localhost:3001` (security worktree 
+  only)
+- `SSO_ATTEMPT_COOKIE_SECRET` (generate with 
+  `openssl rand -hex 32`)
+
+---
+
 ## Completed
 
 - [x] 2026-04-20 — Removed dead code: `createOrganization` 
@@ -527,3 +592,33 @@ next worked on; seed content from Cursor/Claude analysis done
       `exchangeCodeForSession` succeeds and a Supabase session 
       cookie is set. JIT provisioning gap discovered in the same 
       session and tracked under SSO Prompt B above (B-2-a).
+- [x] 2026-04-28 — End-to-end SAML round-trip executed with full 
+      B-2-a-ii security pipeline. All six checks ran clean: 
+      attempt cookie verified (HMAC-SHA256), provider resolved 
+      from session, cross-tenant matched, domain-provider matched, 
+      no duplicate accounts, JIT provisioning succeeded with 
+      `was_new=true`, identity link succeeded. 
+      `sso.login.success` audit emitted with bounded metadata 
+      (`email_hash`, no PII). Verification queries against prod 
+      Supabase confirmed 1 `org_memberships` row, 1 
+      `sso_identity_links` row, 0 failure events. See commit 
+      `e9c217d`.
+- [x] 2026-04-28 — Debugging note: during repeated setup/cleanup 
+      test cycles, observed Next.js dev server serving stale 
+      compiled routes that referenced previous-generation UUIDs 
+      even after Settle DB and GoTrue both updated to new values. 
+      Root cause: webpack disk cache in `.next/`. Manifestation: 
+      "No such SSO provider" errors with valid provider IDs. 
+      Fix: `rm -rf .next` before retesting after a 
+      `cleanup --full`. Codified in the new SSO Test Runbook 
+      below.
+- [x] 2026-04-28 — Setup script bug discovered: 
+      `scripts/sso-test-setup.ts` creates the GoTrue SAML provider 
+      via `POST /auth/v1/admin/sso/providers` but did not 
+      subsequently attach domain claims via `PUT` to 
+      `/auth/v1/admin/sso/providers/<id>`. Result: GoTrue's 
+      `domains: []` for the provider, while Settle's `sso_domains` 
+      table had the row. Worked around manually mid-debugging via 
+      curl `PUT`. Permanent fix shipped: `gotruePut` helper added 
+      and called after the provider POST (idempotent — Supabase's 
+      Admin API overwrites the domains array on each PUT).

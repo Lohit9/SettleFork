@@ -11,6 +11,10 @@
  *   4. Probe sso_domains for 'gmail.com' — bail if owned by a different org
  *   5. Probe sso_providers for the SSO Test org — if exists, DELETE GoTrue + DB rows first
  *   6. POST to GoTrue Admin SSO API to register Okta provider
+ *   6b. PUT to GoTrue Admin SSO API to attach the test domain to that
+ *       provider (Supabase's signInWithSSO uses domain-based lookup
+ *       via this attribute; without it GoTrue returns "No such SSO
+ *       provider" even though Settle's sso_domains row exists.)
  *   7. INSERT sso_providers row (capturing GoTrue's id as supabase_provider_id)
  *   8. INSERT sso_domains row mapping gmail.com -> SSO Test org
  *   9. UPDATE organizations: sso_enabled=true, sso_configured_at=now()
@@ -129,6 +133,33 @@ async function gotrueDelete(providerId: string): Promise<void> {
     const text = await res.text()
     throw new Error(`GoTrue DELETE failed (${res.status}): ${text}`)
   }
+}
+
+async function gotruePut(
+  providerId: string,
+  body: Record<string, unknown>
+): Promise<GoTrueProvider> {
+  // PUT is the only verb GoTrue's Admin SSO API exposes for editing
+  // an existing provider. Idempotent by Supabase's API design — the
+  // body fields fully overwrite their counterparts on the server, so
+  // re-running setup with the same domains list is a no-op on the
+  // server's end-state (only the updated_at timestamp moves).
+  const url = `${SUPABASE_URL_STR}/auth/v1/admin/sso/providers/${providerId}`
+  const res = await fetch(url, {
+    method: 'PUT',
+    headers: {
+      Authorization: `Bearer ${SERVICE_KEY_STR}`,
+      apikey: SERVICE_KEY_STR,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify(body),
+  })
+
+  const text = await res.text()
+  if (!res.ok) {
+    throw new Error(`GoTrue PUT failed (${res.status}): ${text}`)
+  }
+  return JSON.parse(text) as GoTrueProvider
 }
 
 // ============================================================================
@@ -340,6 +371,27 @@ async function main() {
       console.warn(`  ⚠ Parsed entity_id does not match expected ${OKTA_ENTITY_ID}`)
       console.warn(`     Continuing anyway — this is informational.`)
     }
+  }
+  console.log('')
+
+  // -------------------------------------------------------------------------
+  // Step 6b: Attach the test domain to the GoTrue provider
+  // -------------------------------------------------------------------------
+  // Without this PUT, GoTrue's domains array is [] for the provider
+  // and Supabase's signInWithSSO returns "No such SSO provider" for
+  // domain-keyed lookups even though Settle's sso_domains row exists.
+  // The Settle code path uses provider-id-keyed signInWithSSO so it
+  // works without this — but attaching the domain server-side keeps
+  // the two stores consistent and unblocks domain-keyed lookup paths.
+  // Non-fatal: if the PUT fails we warn and continue. The provider
+  // remains usable from Settle (sso_domains is the authoritative
+  // source for our application code).
+  console.log(`Step 6b: PUTing domain "${TEST_DOMAIN}" onto GoTrue provider...`)
+  try {
+    await gotruePut(gotrueProvider.id, { domains: [TEST_DOMAIN] })
+    console.log(`  ✓ Domain '${TEST_DOMAIN}' attached to GoTrue provider`)
+  } catch (err) {
+    console.warn(`  ⚠ GoTrue domain attach failed (continuing — Settle's sso_domains row is authoritative):`, err)
   }
   console.log('')
 
