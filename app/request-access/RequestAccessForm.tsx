@@ -1,8 +1,9 @@
 'use client'
 
-import { useState, useTransition } from 'react'
+import { useRef, useState, useTransition } from 'react'
 import Link from 'next/link'
 import { submitAccessRequest } from '@/lib/actions/invites'
+import { Turnstile, type TurnstileHandle } from '@/components/ui/Turnstile'
 
 const CALENDLY = process.env.NEXT_PUBLIC_CALENDLY_SCOPING_URL || 'https://calendly.com/settle-ai/migration-scoping-call'
 
@@ -13,6 +14,8 @@ export default function RequestAccessForm() {
   const [submittedEmail, setSubmittedEmail] = useState('')
   const [error, setError] = useState<string | null>(null)
   const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({})
+  const [turnstileToken, setTurnstileToken] = useState<string | null>(null)
+  const turnstileRef = useRef<TurnstileHandle>(null)
 
   const [form, setForm] = useState({
     name: '',
@@ -39,6 +42,11 @@ export default function RequestAccessForm() {
     return errs
   }
 
+  const resetTurnstile = () => {
+    turnstileRef.current?.reset()
+    setTurnstileToken(null)
+  }
+
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault()
     setError(null)
@@ -49,6 +57,11 @@ export default function RequestAccessForm() {
       return
     }
 
+    if (!turnstileToken) {
+      setError('Please complete the verification challenge.')
+      return
+    }
+
     startTransition(async () => {
       const result = await submitAccessRequest({
         name: form.name.trim(),
@@ -56,7 +69,12 @@ export default function RequestAccessForm() {
         company: form.company.trim(),
         role_type: 'Platform access request',
         additional_notes: form.notes || undefined,
+        turnstileToken,
       })
+
+      // Tokens are single-use. Reset the widget on every completion so the
+      // user can resubmit after a server-side rejection without remounting.
+      resetTurnstile()
 
       if (!result.success) {
         setError(result.error ?? 'Something went wrong. Please try again or email us at kaan@usesettle.ai')
@@ -179,9 +197,16 @@ export default function RequestAccessForm() {
               />
             </Field>
 
+            <Turnstile
+              ref={turnstileRef}
+              onVerify={setTurnstileToken}
+              onExpire={() => setTurnstileToken(null)}
+              onError={() => setTurnstileToken(null)}
+            />
+
             <button
               type="submit"
-              disabled={isPending}
+              disabled={isPending || !turnstileToken}
               className="w-full bg-[#2358D4] hover:bg-[#1D4ED8] disabled:opacity-60 text-white font-semibold py-3.5 rounded-xl transition-all text-sm mt-2"
             >
               {isPending ? 'Submitting…' : 'Request Access'}

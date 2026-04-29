@@ -3,6 +3,8 @@
 import { revalidatePath } from 'next/cache'
 import { supabaseAdmin } from '@/lib/supabase/admin'
 import { requirePlatformAdmin } from '@/lib/auth/platform-admin'
+import { verifyTurnstileToken } from '@/lib/auth/turnstile'
+import { getRequestIp } from '@/lib/utils/request-ip'
 
 // ── constants ─────────────────────────────────────────────────────────────
 
@@ -92,7 +94,23 @@ export async function submitAccessRequest(data: {
   systems_involved?: string
   additional_notes?: string
   ref?: string
+  turnstileToken: string
 }): Promise<{ success: boolean; error?: string }> {
+  // Cloudflare Turnstile gate — blocks anonymous bots before we touch the
+  // DB. Dev/local with TURNSTILE_SECRET_KEY unset is bypassed inside the
+  // verifier. Existing client-side validation in RequestAccessForm.tsx is
+  // unchanged; this server action keeps its prior shape (no extra manual
+  // validation introduced) so the only behavioral delta is the gate.
+  const ip = await getRequestIp()
+  const verify = await verifyTurnstileToken(data.turnstileToken, ip)
+  if (!verify.ok) {
+    console.warn('[turnstile] access-request rejected', {
+      reason: verify.reason,
+      errorCodes: verify.errorCodes,
+    })
+    return { success: false, error: 'Verification failed. Please try again.' }
+  }
+
   const { error } = await supabaseAdmin.from('access_requests').insert({
     name: data.name.trim(),
     email: data.email.trim().toLowerCase(),
@@ -106,12 +124,15 @@ export async function submitAccessRequest(data: {
     return { success: false, error: 'Something went wrong. Please try again or email us at kaan@usesettle.ai' }
   }
 
-  // Fire notification (non-blocking)
+  // Fire notification (non-blocking). Strip the Turnstile token before
+  // forwarding — the notify route doesn't need it and it would just bloat
+  // logs.
+  const { turnstileToken: _turnstileToken, ...notifyPayload } = data
   try {
     await fetch(`${APP_URL}/api/notify-access-request`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(data),
+      body: JSON.stringify(notifyPayload),
     })
   } catch {
     // Non-blocking: DB insert is the source of truth
