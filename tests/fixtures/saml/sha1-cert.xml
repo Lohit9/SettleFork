@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<md:EntityDescriptor xmlns:md="urn:oasis:names:tc:SAML:2.0:metadata" entityID="https://example.com/idp/sha1">
+  <md:IDPSSODescriptor protocolSupportEnumeration="urn:oasis:names:tc:SAML:2.0:protocol">
+    <md:KeyDescriptor use="signing">
+      <ds:KeyInfo xmlns:ds="http://www.w3.org/2000/09/xmldsig#">
+        <ds:X509Data><ds:X509Certificate>MIIDhTCCAm2gAwIBAgIUMGuv8wgb32XbR4zI0hzD65DvySQwDQYJKoZIhvcNAQEFBQAwUjEtMCsGA1UEAwwkU2V0dGxlIFNBTUwgVGVzdCBXZWFrIFNIQS0xIFJTQS0yMDQ4MRQwEgYDVQQKDAtTZXR0bGUgVGVzdDELMAkGA1UEBhMCVVMwHhcNMjYwNDI5MTIzOTU2WhcNMzYwNDI2MTIzOTU2WjBSMS0wKwYDVQQDDCRTZXR0bGUgU0FNTCBUZXN0IFdlYWsgU0hBLTEgUlNBLTIwNDgxFDASBgNVBAoMC1NldHRsZSBUZXN0MQswCQYDVQQGEwJVUzCCASIwDQYJKoZIhvcNAQEBBQADggEPADCCAQoCggEBAK35qOrqZHzFi9QDPeq5yrK7infno7DvaPmEN4F/rGrdlFrJDWlnFp2gKaKzhYOmkzC8naqAjKgNJmK7kW2+tmoKeca4mx9urwEpv2+63Ss6AYdNVSfRvNpwV1l2DR/2LCN/c9dfgn0mDjR/LwhMDgfO5XvjT8kD758v9pGLXOg/7hjlI7hPssHEfv95qd/R9eDAbmkJi+gASnCJU9QZcrdbn43U6U1NI8HUf3eAbZd1zxz+W9fR5OBWllvgHXA6HzmaaDu7gsT0U+vcLbtYELe93PaQZKe4fJKJOpSljb8vjBUUw+jpMZBtAJWasiN3NYO4rlTIZZSfiZoZX8kGLMkCAwEAAaNTMFEwHQYDVR0OBBYEFC6co4/kUml0JtbJa/Hj6WvjHA0HMB8GA1UdIwQYMBaAFC6co4/kUml0JtbJa/Hj6WvjHA0HMA8GA1UdEwEB/wQFMAMBAf8wDQYJKoZIhvcNAQEFBQADggEBADD+WFO2bzhS9FhkVvH9TEQmjDvEAkCTY/lxjasnUEQlD4PvAMZZ6FHniCd7gTyRqPcobMnp46r4XLWNY0/ljAdei+RPGdIoz2f+OgMCLpXs1VWFW/mzWhln4FNRldsHwBPfoJDJ4TwBVrj/iS4Ng0Pkp91bfMKeoICTw8qNUnRQtqUabTdSiCxSTQ8Iq9N3DvtIhEXVLD0T1zL9dYi/18zKJkuLjSEuuPYCALJp4wtafdpuI09dilt4RJM96NNNP+qzHZdWGyKBkVJBBNLIWNLku/1mU6C6Qkm1+C9RFIjJ12fRcSujtcLA7C90kzXXPrL0qJR1vOUXV5JlLCI5heo=</ds:X509Certificate></ds:X509Data>
+      </ds:KeyInfo>
+    </md:KeyDescriptor>
+    <md:SingleSignOnService Binding="urn:oasis:names:tc:SAML:2.0:bindings:HTTP-Redirect" Location="https://example.com/sso"/>
+  </md:IDPSSODescriptor>
+</md:EntityDescriptor>

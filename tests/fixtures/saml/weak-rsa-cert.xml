@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<md:EntityDescriptor xmlns:md="urn:oasis:names:tc:SAML:2.0:metadata" entityID="https://example.com/idp/weak-rsa">
+  <md:IDPSSODescriptor protocolSupportEnumeration="urn:oasis:names:tc:SAML:2.0:protocol">
+    <md:KeyDescriptor use="signing">
+      <ds:KeyInfo xmlns:ds="http://www.w3.org/2000/09/xmldsig#">
+        <ds:X509Data><ds:X509Certificate>MIICdDCCAd2gAwIBAgIUZdsdMxrPaFdPdj4w2GcVra67fzowDQYJKoZIhvcNAQELBQAwTDEnMCUGA1UEAwweU2V0dGxlIFNBTUwgVGVzdCBXZWFrIFJTQS0xMDI0MRQwEgYDVQQKDAtTZXR0bGUgVGVzdDELMAkGA1UEBhMCVVMwHhcNMjYwNDI5MTIzOTU2WhcNMzYwNDI2MTIzOTU2WjBMMScwJQYDVQQDDB5TZXR0bGUgU0FNTCBUZXN0IFdlYWsgUlNBLTEwMjQxFDASBgNVBAoMC1NldHRsZSBUZXN0MQswCQYDVQQGEwJVUzCBnzANBgkqhkiG9w0BAQEFAAOBjQAwgYkCgYEA5KHd2pjHFGYmC5Sglo85+6EJB/tNuqLnaNQ3EblvQJNH6T8OS+c0rA6Q3yWcOJT62/UdWPq08LFRxWHQYcZ4DZp3pSpJ6Vk+AbXIDavKwvDIONtOMEiNY0DMTLihOSIU0PdxJ3LQYSmsHAWcBCihf6V0t1x1qBfdWb/gTnL7nBECAwEAAaNTMFEwHQYDVR0OBBYEFPPQ5ul4EDMop9gJKYxr7TtpgyEtMB8GA1UdIwQYMBaAFPPQ5ul4EDMop9gJKYxr7TtpgyEtMA8GA1UdEwEB/wQFMAMBAf8wDQYJKoZIhvcNAQELBQADgYEAF2pAL/qMiILuwG87DNg10AnH1D9I9PEMEFQC71Cjo5gXPgq58mJbLGDNQUZCsY2Xt7VN0KgB3tw78aoLfTa5EyDkF9IRkU7Y3KdNWuTbgZ8kYG4Abt9TaniypNxUWnmNTI/Ui5qXGHBlIEfOfsivBtp8TUe3E36dYyDFDTh//kM=</ds:X509Certificate></ds:X509Data>
+      </ds:KeyInfo>
+    </md:KeyDescriptor>
+    <md:SingleSignOnService Binding="urn:oasis:names:tc:SAML:2.0:bindings:HTTP-Redirect" Location="https://example.com/sso"/>
+  </md:IDPSSODescriptor>
+</md:EntityDescriptor>

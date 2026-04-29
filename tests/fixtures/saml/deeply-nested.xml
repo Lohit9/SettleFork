@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<wrap><wrap><wrap><wrap><wrap><wrap><wrap><wrap><wrap><wrap><wrap><wrap><wrap><wrap><wrap><wrap><wrap><wrap><wrap><wrap><wrap><wrap><wrap><wrap><wrap>
+<md:EntityDescriptor xmlns:md="urn:oasis:names:tc:SAML:2.0:metadata" entityID="https://example.com/idp/deep">
+  <md:IDPSSODescriptor protocolSupportEnumeration="urn:oasis:names:tc:SAML:2.0:protocol"/>
+</md:EntityDescriptor>
+</wrap></wrap></wrap></wrap></wrap></wrap></wrap></wrap></wrap></wrap></wrap></wrap></wrap></wrap></wrap></wrap></wrap></wrap></wrap></wrap></wrap></wrap></wrap></wrap></wrap>
