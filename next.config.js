@@ -10,11 +10,12 @@ const securityHeaders = [
     key: 'Content-Security-Policy',
     value: [
       "default-src 'self'",
-      "script-src 'self' 'unsafe-eval' 'unsafe-inline'",
+      "script-src 'self' 'unsafe-eval' 'unsafe-inline' https://challenges.cloudflare.com https://vercel.live",
       "style-src 'self' 'unsafe-inline'",
       "img-src 'self' data: blob: https://*.supabase.co",
       "connect-src 'self' https://*.supabase.co https://api.anthropic.com",
       "font-src 'self'",
+      "frame-src 'self' https://challenges.cloudflare.com",
       "frame-ancestors 'none'",
     ].join('; '),
   },
