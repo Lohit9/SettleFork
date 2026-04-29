@@ -1,9 +1,10 @@
 'use client'
 
-import { useState } from 'react'
+import { useRef, useState, useTransition } from 'react'
 import Link from 'next/link'
 import { motion, AnimatePresence } from 'framer-motion'
-import { createClient } from '@/lib/supabase/client'
+import { submitPricingEstimate } from '@/lib/actions/pricing-estimate'
+import { Turnstile, type TurnstileHandle } from '@/components/ui/Turnstile'
 
 type EstimatorStep = 'q1' | 'q2' | 'q3' | 'q4' | 'result' | 'form' | 'confirmation'
 
@@ -145,9 +146,16 @@ export default function PricingEstimator() {
   const [email, setEmail] = useState('')
   const [company, setCompany] = useState('')
   const [role, setRole] = useState('')
-  const [isSubmitting, setIsSubmitting] = useState(false)
+  const [isPending, startTransition] = useTransition()
   const [error, setError] = useState('')
   const [showForm, setShowForm] = useState(false)
+  const [turnstileToken, setTurnstileToken] = useState<string | null>(null)
+  const turnstileRef = useRef<TurnstileHandle>(null)
+
+  const resetTurnstile = () => {
+    turnstileRef.current?.reset()
+    setTurnstileToken(null)
+  }
 
   function resetAll() {
     setStep('q1')
@@ -159,9 +167,9 @@ export default function PricingEstimator() {
     setEmail('')
     setCompany('')
     setRole('')
-    setIsSubmitting(false)
     setError('')
     setShowForm(false)
+    resetTurnstile()
   }
 
   function goBack() {
@@ -178,7 +186,9 @@ export default function PricingEstimator() {
     setTimeout(() => setStep(next), 300)
   }
 
-  async function handleSubmit() {
+  function handleSubmit(e: React.FormEvent) {
+    e.preventDefault()
+
     if (!name.trim() || !email.trim() || !company.trim()) {
       setError('Please fill in all required fields.')
       return
@@ -187,56 +197,41 @@ export default function PricingEstimator() {
       setError('Please enter a valid work email.')
       return
     }
+    if (!turnstileToken) {
+      setError('Please complete the verification challenge.')
+      return
+    }
 
-    setIsSubmitting(true)
     setError('')
 
     const pricing = calculatePricing(tableCount, sourceCount)
 
-    try {
-      const supabase = createClient()
-      const { error: dbError } = await supabase.from('pricing_leads').insert({
+    startTransition(async () => {
+      const result = await submitPricingEstimate({
         name: name.trim(),
         email: email.trim().toLowerCase(),
         company: company.trim(),
-        role: role.trim() || null,
-        system_type: systemType,
-        source_system_count: sourceCount,
-        table_count_range: tableCount,
+        role: role.trim() || undefined,
+        systemType,
+        sourceSystemCount: sourceCount,
+        tableCountRange: tableCount,
         timeline,
-        computed_tier: pricing.tier,
-        price_range_shown: pricing.priceRange,
+        computedTier: pricing.tier,
+        priceRangeShown: pricing.priceRange,
+        turnstileToken,
       })
-      if (dbError) throw dbError
 
-      try {
-        await fetch('/api/notify-pricing-estimate', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            name: name.trim(),
-            email: email.trim().toLowerCase(),
-            company: company.trim(),
-            role: role.trim(),
-            system_type: systemType,
-            source_system_count: sourceCount,
-            table_count_range: tableCount,
-            timeline,
-            computed_tier: pricing.tier,
-            price_range_shown: pricing.priceRange,
-          }),
-        })
-      } catch (emailError) {
-        console.error('Email notification failed:', emailError)
+      // Tokens are single-use. Reset on every completion so the user
+      // can retry after a server-side rejection without remounting.
+      resetTurnstile()
+
+      if (!result.success) {
+        setError(result.error)
+        return
       }
 
       setStep('confirmation')
-    } catch (err) {
-      console.error('Submission error:', err)
-      setError('Something went wrong. Please try again or book a call directly.')
-    } finally {
-      setIsSubmitting(false)
-    }
+    })
   }
 
   const pricing = calculatePricing(tableCount, sourceCount)
@@ -426,13 +421,18 @@ export default function PricingEstimator() {
                   transition={{ duration: 0.35 }}
                   className="overflow-hidden"
                 >
-                  <div className="max-w-md mx-auto mt-8 space-y-4">
+                  <form
+                    onSubmit={handleSubmit}
+                    noValidate
+                    className="max-w-md mx-auto mt-8 space-y-4"
+                  >
                     <input
                       type="text"
                       required
                       placeholder="Full name"
                       value={name}
                       onChange={(e) => setName(e.target.value)}
+                      autoComplete="name"
                       className="w-full px-4 py-3 border border-[#E2E8F0] rounded-lg text-sm text-[#0F172A] placeholder:text-[#94A3B8] focus:outline-none focus:ring-2 focus:ring-[#2358D4] focus:border-transparent bg-white"
                     />
                     <input
@@ -441,6 +441,7 @@ export default function PricingEstimator() {
                       placeholder="Work email"
                       value={email}
                       onChange={(e) => setEmail(e.target.value)}
+                      autoComplete="email"
                       className="w-full px-4 py-3 border border-[#E2E8F0] rounded-lg text-sm text-[#0F172A] placeholder:text-[#94A3B8] focus:outline-none focus:ring-2 focus:ring-[#2358D4] focus:border-transparent bg-white"
                     />
                     <input
@@ -449,6 +450,7 @@ export default function PricingEstimator() {
                       placeholder="Company name"
                       value={company}
                       onChange={(e) => setCompany(e.target.value)}
+                      autoComplete="organization"
                       className="w-full px-4 py-3 border border-[#E2E8F0] rounded-lg text-sm text-[#0F172A] placeholder:text-[#94A3B8] focus:outline-none focus:ring-2 focus:ring-[#2358D4] focus:border-transparent bg-white"
                     />
                     <input
@@ -456,17 +458,31 @@ export default function PricingEstimator() {
                       placeholder="Role or title (optional)"
                       value={role}
                       onChange={(e) => setRole(e.target.value)}
+                      autoComplete="organization-title"
                       className="w-full px-4 py-3 border border-[#E2E8F0] rounded-lg text-sm text-[#0F172A] placeholder:text-[#94A3B8] focus:outline-none focus:ring-2 focus:ring-[#2358D4] focus:border-transparent bg-white"
                     />
 
                     {error && <p className="text-sm text-red-600 mt-2">{error}</p>}
 
+                    {/* Turnstile mounts only while the lead-capture step is
+                        visible (showForm + AnimatePresence). When the user
+                        navigates back to a question step or hits "Start over"
+                        the parent unmounts this whole subtree, so there's no
+                        duplicate-render path. */}
+                    <Turnstile
+                      ref={turnstileRef}
+                      onVerify={setTurnstileToken}
+                      onExpire={() => setTurnstileToken(null)}
+                      onError={() => setTurnstileToken(null)}
+                      size="flexible"
+                    />
+
                     <button
-                      onClick={handleSubmit}
-                      disabled={isSubmitting}
+                      type="submit"
+                      disabled={isPending || !turnstileToken}
                       className="w-full py-3.5 bg-[#2358D4] hover:bg-[#1D4ED8] text-white font-semibold rounded-xl text-sm transition-all mt-2 disabled:opacity-60 disabled:cursor-not-allowed"
                     >
-                      {isSubmitting ? 'Submitting…' : 'Get Estimate'}
+                      {isPending ? 'Submitting…' : 'Get Estimate'}
                     </button>
 
                     <p className="text-sm text-[#64748B] hover:text-[#2358D4] text-center mt-3 transition-colors">
@@ -479,7 +495,7 @@ export default function PricingEstimator() {
                         Or book a scoping call →
                       </Link>
                     </p>
-                  </div>
+                  </form>
                 </motion.div>
               )}
             </AnimatePresence>
