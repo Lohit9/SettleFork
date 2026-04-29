@@ -1,12 +1,8 @@
 'use client'
 
-import { useState } from 'react'
-import { createClient } from '@supabase/supabase-js'
-
-const supabase = createClient(
-  process.env.NEXT_PUBLIC_SUPABASE_URL!,
-  process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
-)
+import { useRef, useState, useTransition } from 'react'
+import { submitMigrationLead } from '@/lib/actions/migration-leads'
+import { Turnstile, type TurnstileHandle } from '@/components/ui/Turnstile'
 
 const TIMELINE_OPTIONS = [
   'This quarter',
@@ -37,11 +33,19 @@ export default function LeadCaptureForm({ sourceSystem, targetSystem, slug }: Le
   const [timeline, setTimeline] = useState('')
   const [volume, setVolume] = useState('')
   const [notes, setNotes] = useState('')
-  const [isSubmitting, setIsSubmitting] = useState(false)
+  const [isPending, startTransition] = useTransition()
   const [isSubmitted, setIsSubmitted] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [turnstileToken, setTurnstileToken] = useState<string | null>(null)
+  const turnstileRef = useRef<TurnstileHandle>(null)
 
-  async function handleSubmit() {
+  const resetTurnstile = () => {
+    turnstileRef.current?.reset()
+    setTurnstileToken(null)
+  }
+
+  const handleSubmit = (e: React.FormEvent) => {
+    e.preventDefault()
     setError(null)
 
     if (!companyName.trim() || !email.trim()) {
@@ -52,51 +56,35 @@ export default function LeadCaptureForm({ sourceSystem, targetSystem, slug }: Le
       setError('Please enter a valid work email address.')
       return
     }
+    if (!turnstileToken) {
+      setError('Please complete the verification challenge.')
+      return
+    }
 
-    setIsSubmitting(true)
-    try {
-      const { error: dbError } = await supabase.from('migration_leads').insert({
-        company_name: companyName.trim() || null,
+    startTransition(async () => {
+      const result = await submitMigrationLead({
         email: email.trim(),
-        source_system: sourceSystem,
-        target_system: targetSystem,
-        timeline: timeline || null,
-        volume: volume || null,
-        notes: notes.trim() || null,
-        page_slug: slug,
+        company: companyName.trim(),
+        slug,
+        sourceSystem,
+        targetSystem,
+        timeline: timeline || undefined,
+        volume: volume || undefined,
+        notes: notes.trim() || undefined,
+        turnstileToken,
       })
 
-      if (dbError) throw dbError
+      // Tokens are single-use. Reset on every completion so the user
+      // can retry after a server-side rejection without remounting.
+      resetTurnstile()
 
-      // Send confirmation + admin notification emails.
-      // Runs after a successful DB insert; failure here must not block the success state.
-      try {
-        await fetch('/api/notify-access-request', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            name: '',
-            email: email.trim(),
-            company: companyName.trim(),
-            role_type: '',
-            systems_involved: `${sourceSystem} → ${targetSystem}`,
-            additional_notes: [
-              timeline ? `Timeline: ${timeline}` : '',
-              volume ? `Data volume: ${volume}` : '',
-              notes.trim() || '',
-            ].filter(Boolean).join(' | '),
-            ref: 'assessment',
-          }),
-        })
-      } catch (emailError) {
-        console.error('Email notification failed:', emailError)
+      if (!result.success) {
+        setError(result.error)
+        return
       }
 
       setIsSubmitted(true)
-    } catch (e) {
-      setError(e instanceof Error ? e.message : 'Something went wrong. Please try again.')
-      setIsSubmitting(false)
-    }
+    })
   }
 
   if (isSubmitted) {
@@ -124,10 +112,17 @@ export default function LeadCaptureForm({ sourceSystem, targetSystem, slug }: Le
   }
 
   return (
-    <div>
+    <form onSubmit={handleSubmit} noValidate>
       <p className="text-xs text-settle-slate-400 text-center mb-4 max-w-lg mx-auto italic">
         We'll review your migration scope and follow up within 48 hours to discuss next steps.
       </p>
+
+      {error && (
+        <div className="mb-4 rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
+          {error}
+        </div>
+      )}
+
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
         <input
           type="text"
@@ -135,6 +130,8 @@ export default function LeadCaptureForm({ sourceSystem, targetSystem, slug }: Le
           value={companyName}
           onChange={(e) => setCompanyName(e.target.value)}
           className={INPUT_CLASS}
+          autoComplete="organization"
+          required
         />
         <input
           type="email"
@@ -142,6 +139,8 @@ export default function LeadCaptureForm({ sourceSystem, targetSystem, slug }: Le
           value={email}
           onChange={(e) => setEmail(e.target.value)}
           className={INPUT_CLASS}
+          autoComplete="email"
+          required
         />
         <select
           value={timeline}
@@ -173,17 +172,23 @@ export default function LeadCaptureForm({ sourceSystem, targetSystem, slug }: Le
         className={`${INPUT_CLASS} mt-4 resize-none`}
       />
 
-      {error && (
-        <p className="mt-3 text-sm text-red-500">{error}</p>
-      )}
+      <div className="mt-4">
+        <Turnstile
+          ref={turnstileRef}
+          onVerify={setTurnstileToken}
+          onExpire={() => setTurnstileToken(null)}
+          onError={() => setTurnstileToken(null)}
+          theme="light"
+        />
+      </div>
 
       <button
-        onClick={handleSubmit}
-        disabled={isSubmitting}
-        className="w-full bg-settle-blue-600 hover:bg-settle-blue-700 disabled:opacity-60 disabled:cursor-not-allowed text-white font-semibold py-3.5 rounded-xl transition-all hover:-translate-y-0.5 hover:shadow-lg hover:shadow-blue-600/25 mt-2"
+        type="submit"
+        disabled={isPending || !turnstileToken}
+        className="w-full bg-settle-blue-600 hover:bg-settle-blue-700 disabled:opacity-60 disabled:cursor-not-allowed text-white font-semibold py-3.5 rounded-xl transition-all hover:-translate-y-0.5 hover:shadow-lg hover:shadow-blue-600/25 mt-4"
       >
-        {isSubmitting ? 'Submitting…' : 'Start Your Migration'}
+        {isPending ? 'Submitting…' : 'Start Your Migration'}
       </button>
-    </div>
+    </form>
   )
 }

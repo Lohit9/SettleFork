@@ -15,6 +15,7 @@
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.78.0",
+    "@marsidev/react-turnstile": "^1.5.1",
     "@radix-ui/react-select": "^2.2.6",
     "@supabase/ssr": "^0.5.2",
     "@supabase/supabase-js": "^2.86.2",
