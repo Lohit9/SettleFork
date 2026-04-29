@@ -22,20 +22,16 @@ import {
 import { createOrgInvite, getPendingInvites, revokeInvite } from '@/lib/actions/org-invites'
 import type { OrgMembership, OrgInvite, OrgRole } from '@/lib/types/organizations'
 
-const ROLE_OPTIONS: OrgRole[] = ['owner', 'admin', 'editor', 'viewer']
+const ROLE_OPTIONS: OrgRole[] = ['owner', 'member']
 
 const ROLE_BADGE: Record<OrgRole, string> = {
   owner: 'bg-purple-100 text-purple-700',
-  admin: 'bg-blue-100 text-blue-700',
-  editor: 'bg-green-100 text-green-700',
-  viewer: 'bg-gray-100 text-gray-600',
+  member: 'bg-blue-100 text-blue-700',
 }
 
 const ROLE_LABEL: Record<OrgRole, string> = {
   owner: 'Owner',
-  admin: 'Admin',
-  editor: 'Editor',
-  viewer: 'Viewer',
+  member: 'Member',
 }
 
 interface Props {
@@ -76,7 +72,9 @@ export default function OrganizationSettingsContent({
   multiOrg,
 }: Props) {
   const router = useRouter()
-  const isAdmin = orgRole === 'owner' || orgRole === 'admin'
+  // Post-079: only owners have admin-level org powers (invite/manage/rename).
+  // The variable is still named `isAdmin` for UI semantics.
+  const isAdmin = orgRole === 'owner'
 
   const [members, setMembers] = useState<OrgMembership[]>([])
   const [invites, setInvites] = useState<OrgInvite[]>([])
@@ -90,7 +88,7 @@ export default function OrganizationSettingsContent({
 
   // Invite form
   const [inviteEmail, setInviteEmail] = useState('')
-  const [inviteRole, setInviteRole] = useState<OrgRole>('editor')
+  const [inviteRole, setInviteRole] = useState<OrgRole>('member')
   const [inviteSuccess, setInviteSuccess] = useState<string | null>(null)
   const [inviteError, setInviteError] = useState<string | null>(null)
 
@@ -148,7 +146,7 @@ export default function OrganizationSettingsContent({
       }
       setInviteSuccess(`Invite sent to ${inviteEmail.trim()}`)
       setInviteEmail('')
-      setInviteRole('editor')
+      setInviteRole('member')
       loadData()
       setTimeout(() => setInviteSuccess(null), 5000)
     })

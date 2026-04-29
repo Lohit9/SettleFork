@@ -187,7 +187,10 @@ export function orgInviteEmail(params: {
 
   const greeting = params.recipientName ? `Hi ${params.recipientName},` : 'Hi,'
 
-  const roleWithArticle = ['admin', 'editor', 'owner'].includes(params.role.toLowerCase())
+  // Phonetic article: 'an' before vowel-sound role names, 'a' otherwise.
+  // Post-079 the org role set is { owner, member } — keeping the rule
+  // generic so adding a new role doesn't require touching this template.
+  const roleWithArticle = /^[aeio]/i.test(params.role)
     ? `an ${params.role}`
     : `a ${params.role}`
 

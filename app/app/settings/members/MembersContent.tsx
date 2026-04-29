@@ -15,13 +15,14 @@ import { getOrgMembers, updateMemberRole, removeMember } from '@/lib/actions/org
 import { createOrgInvite, getPendingInvites, revokeInvite } from '@/lib/actions/org-invites'
 import type { OrgMembership, OrgInvite, OrgRole } from '@/lib/types/organizations'
 
-const ROLE_OPTIONS: OrgRole[] = ['owner', 'admin', 'editor', 'viewer']
+// NOTE: This file is orphaned (no route renders it post-079). Kept compiling
+// for the rename only — slated for deletion in PR 2 alongside the project-
+// member management UI work.
+const ROLE_OPTIONS: OrgRole[] = ['owner', 'member']
 
 const ROLE_BADGE: Record<OrgRole, string> = {
   owner: 'bg-purple-100 text-purple-700',
-  admin: 'bg-blue-100 text-blue-700',
-  editor: 'bg-green-100 text-green-700',
-  viewer: 'bg-gray-100 text-gray-600',
+  member: 'bg-blue-100 text-blue-700',
 }
 
 interface Props {
@@ -49,7 +50,7 @@ export default function MembersContent({ orgId, currentUserId, currentUserRole }
 
   // Invite form
   const [inviteEmail, setInviteEmail] = useState('')
-  const [inviteRole, setInviteRole] = useState<OrgRole>('viewer')
+  const [inviteRole, setInviteRole] = useState<OrgRole>('member')
   const [inviteSuccess, setInviteSuccess] = useState<string | null>(null)
   const [inviteError, setInviteError] = useState<string | null>(null)
 
@@ -57,7 +58,7 @@ export default function MembersContent({ orgId, currentUserId, currentUserRole }
   const [confirmRemove, setConfirmRemove] = useState<string | null>(null)
   const [actionError, setActionError] = useState<string | null>(null)
 
-  const isAdmin = currentUserRole === 'owner' || currentUserRole === 'admin'
+  const isAdmin = currentUserRole === 'owner'
   const ownerCount = members.filter((m) => m.role === 'owner').length
 
   useEffect(() => {
@@ -84,7 +85,7 @@ export default function MembersContent({ orgId, currentUserId, currentUserRole }
       }
       setInviteSuccess(`Invite sent to ${inviteEmail.trim()}`)
       setInviteEmail('')
-      setInviteRole('viewer')
+      setInviteRole('member')
       loadData()
       setTimeout(() => setInviteSuccess(null), 5000)
     })

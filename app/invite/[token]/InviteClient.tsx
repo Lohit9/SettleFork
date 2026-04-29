@@ -11,16 +11,12 @@ import type { OrgRole } from '@/lib/types/organizations'
 
 const ROLE_LABELS: Record<OrgRole, string> = {
   owner: 'Owner',
-  admin: 'Admin',
-  editor: 'Editor',
-  viewer: 'Viewer',
+  member: 'Member',
 }
 
 const ROLE_COLORS: Record<OrgRole, string> = {
   owner: 'bg-purple-100 text-purple-700',
-  admin: 'bg-blue-100 text-blue-700',
-  editor: 'bg-green-100 text-green-700',
-  viewer: 'bg-gray-100 text-gray-600',
+  member: 'bg-blue-100 text-blue-700',
 }
 
 interface InviteClientProps {

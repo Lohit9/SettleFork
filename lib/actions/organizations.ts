@@ -105,6 +105,11 @@ export async function updateMemberRole(
   const { data: { user } } = await supabase.auth.getUser()
   if (!user) return { success: false, error: 'Not authenticated' }
 
+  // Tightened in migration 079: only org owners can change roles. Pre-079
+  // this accepted owners + admins, but the 'admin' org-role no longer exists
+  // (admin → owner in the rename). The org RLS update policy on
+  // org_memberships also enforces this, but we check here so the error
+  // message is friendly and we avoid a wasted SELECT before the gated UPDATE.
   const { data: callerMem } = await supabase
     .from('org_memberships')
     .select('role')
@@ -112,25 +117,31 @@ export async function updateMemberRole(
     .eq('user_id', user.id)
     .single()
 
-  if (!callerMem || !['owner', 'admin'].includes(callerMem.role)) {
-    return { success: false, error: 'Only owners and admins can change roles' }
+  if (!callerMem || callerMem.role !== 'owner') {
+    return { success: false, error: 'Only owners can change roles' }
   }
 
-  if (newRole !== 'owner') {
+  const { data: targetMem } = await supabase
+    .from('org_memberships')
+    .select('role')
+    .eq('org_id', orgId)
+    .eq('user_id', userId)
+    .single()
+
+  const prevRole = (targetMem?.role ?? null) as OrgRole | null
+  if (prevRole === null) return { success: false, error: 'Member not found' }
+
+  if (prevRole === newRole) return { success: true }
+
+  // Last-owner safeguard. Only relevant when demoting away from 'owner'.
+  if (prevRole === 'owner' && newRole !== 'owner') {
     const { count } = await supabase
       .from('org_memberships')
       .select('id', { count: 'exact', head: true })
       .eq('org_id', orgId)
       .eq('role', 'owner')
 
-    const { data: targetMem } = await supabase
-      .from('org_memberships')
-      .select('role')
-      .eq('org_id', orgId)
-      .eq('user_id', userId)
-      .single()
-
-    if (targetMem?.role === 'owner' && (count ?? 0) <= 1) {
+    if ((count ?? 0) <= 1) {
       return { success: false, error: 'Cannot demote the last owner' }
     }
   }
@@ -142,6 +153,27 @@ export async function updateMemberRole(
     .eq('user_id', userId)
 
   if (error) return { success: false, error: error.message }
+
+  // Migration 079: when promoting member → owner, fan out project-admin
+  // rows for every project in the org (ON CONFLICT DO NOTHING). Demotion
+  // owner → member intentionally does NOT remove project_members rows —
+  // stickiness rule keeps the user's existing access until an explicit
+  // removal runs. See migration 079 §J.2.
+  if (newRole === 'owner' && prevRole !== 'owner') {
+    const { error: fanoutErr } = await supabase.rpc(
+      'grant_new_org_member_project_access',
+      { p_user_id: userId, p_org_id: orgId, p_role: 'owner' }
+    )
+    if (fanoutErr) {
+      // Role update already committed. Surface the error for ops
+      // triage but don't roll back the role change — re-running the
+      // action is idempotent.
+      console.error(
+        '[updateMemberRole] owner-promotion fanout failed (role updated, project access incomplete):',
+        fanoutErr
+      )
+    }
+  }
 
   revalidatePath('/app/settings')
   return { success: true }
@@ -155,6 +187,7 @@ export async function removeMember(
   const { data: { user } } = await supabase.auth.getUser()
   if (!user) return { success: false, error: 'Not authenticated' }
 
+  // Tightened in migration 079: only org owners can remove members.
   const { data: callerMem } = await supabase
     .from('org_memberships')
     .select('role')
@@ -162,8 +195,8 @@ export async function removeMember(
     .eq('user_id', user.id)
     .single()
 
-  if (!callerMem || !['owner', 'admin'].includes(callerMem.role)) {
-    return { success: false, error: 'Only owners and admins can remove members' }
+  if (!callerMem || callerMem.role !== 'owner') {
+    return { success: false, error: 'Only owners can remove members' }
   }
 
   const { data: targetMem } = await supabase
@@ -271,6 +304,90 @@ export async function updateOrganization(
     .eq('id', orgId)
 
   if (error) return { success: false, error: error.message }
+
+  revalidatePath('/app/settings')
+  revalidatePath('/app/settings/organization')
+  return { success: true }
+}
+
+/**
+ * Toggle the per-org `member_auto_grant_enabled` flag (migration 079).
+ *
+ * Auto-grant rules controlled by this toggle:
+ *   - Owners are auto-granted project-admin on every project regardless
+ *     of this flag — owners always have full access.
+ *   - Members are auto-granted project-editor on every project IFF this
+ *     flag is TRUE at the time the auto-grant fires (project creation,
+ *     invite acceptance, JIT provisioning).
+ *
+ * Transition semantics:
+ *   - OFF→ON: backfill project-editor rows for every (member × project)
+ *     pair in the org, ON CONFLICT (project_id, user_id) DO NOTHING.
+ *     Previously-removed rows stay removed (stickiness rule).
+ *   - ON→OFF: do NOT remove existing project_members rows. The toggle
+ *     only controls future auto-grants; revoking existing access
+ *     requires an explicit `removeMember` (org-level) or per-project
+ *     removal (PR 2 surface).
+ *
+ * Authorization: org owner only. Caller-side check here is duplicated
+ * by the organizations UPDATE RLS policy (which uses
+ * get_user_admin_org_ids → role='owner' post-079).
+ */
+export async function setOrgMemberAutoGrant(
+  orgId: string,
+  enabled: boolean
+): Promise<{ success: boolean; error?: string }> {
+  const supabase = await createClient()
+  const { data: { user } } = await supabase.auth.getUser()
+  if (!user) return { success: false, error: 'Not authenticated' }
+
+  const { data: callerMem } = await supabase
+    .from('org_memberships')
+    .select('role')
+    .eq('org_id', orgId)
+    .eq('user_id', user.id)
+    .single()
+
+  if (!callerMem || callerMem.role !== 'owner') {
+    return { success: false, error: 'Only owners can change this setting' }
+  }
+
+  const { data: orgRow } = await supabase
+    .from('organizations')
+    .select('member_auto_grant_enabled')
+    .eq('id', orgId)
+    .single()
+
+  if (!orgRow) return { success: false, error: 'Organization not found' }
+  const prev = orgRow.member_auto_grant_enabled as boolean
+  if (prev === enabled) return { success: true }
+
+  const { error } = await supabase
+    .from('organizations')
+    .update({ member_auto_grant_enabled: enabled })
+    .eq('id', orgId)
+
+  if (error) return { success: false, error: error.message }
+
+  // OFF→ON transition triggers backfill. ON→OFF is a no-op on existing rows.
+  if (enabled && prev === false) {
+    const { error: backfillErr } = await supabase.rpc(
+      'backfill_org_member_project_access',
+      { p_org_id: orgId }
+    )
+    if (backfillErr) {
+      // Toggle already committed. Surface the error so the caller can
+      // retry — the RPC is idempotent.
+      console.error(
+        '[setOrgMemberAutoGrant] OFF→ON backfill failed (toggle updated):',
+        backfillErr
+      )
+      return {
+        success: false,
+        error: `Setting saved, but member backfill failed: ${backfillErr.message}. Retry to complete.`,
+      }
+    }
+  }
 
   revalidatePath('/app/settings')
   revalidatePath('/app/settings/organization')
