@@ -83,7 +83,7 @@ function ApprovePopover({
   onClose: () => void
 }) {
   const [orgName, setOrgName] = useState(req.company?.trim() || '')
-  const [role, setRole] = useState<'owner' | 'admin' | 'editor' | 'viewer'>('owner')
+  const [role, setRole] = useState<OrgRole>('owner')
   const [isPending, startTransition] = useTransition()
   const ref = useRef<HTMLDivElement>(null)
 
@@ -126,7 +126,7 @@ function ApprovePopover({
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
-              {(['owner', 'admin', 'editor', 'viewer'] as const).map((r) => (
+              {(['owner', 'member'] as const).map((r) => (
                 <SelectItem key={r} value={r}><span className="capitalize">{r}</span></SelectItem>
               ))}
             </SelectContent>
@@ -327,7 +327,7 @@ function RequestsSection({
 // ── Organizations section ─────────────────────────────────────────────────────
 
 type AdminMember = { id: string; user_id: string; role: OrgRole; joined_at: string; user_name: string; user_email: string }
-const ROLE_OPTIONS: OrgRole[] = ['owner', 'admin', 'editor', 'viewer']
+const ROLE_OPTIONS: OrgRole[] = ['owner', 'member']
 
 function OrgDetail({ org }: { org: OrgRow }) {
   const [members, setMembers] = useState<AdminMember[]>([])
@@ -340,7 +340,7 @@ function OrgDetail({ org }: { org: OrgRow }) {
   useEffect(() => {
     adminGetOrgMembers(org.id).then(({ members: m }) => {
       setMembers(m)
-      if (m.length > 0) setInviteRole('editor')
+      if (m.length > 0) setInviteRole('member')
     })
     adminGetPendingInvites(org.id).then(({ invites: inv }) => setInvites(inv))
   }, [org.id])
@@ -355,7 +355,7 @@ function OrgDetail({ org }: { org: OrgRow }) {
       if (result.error) { showToast(`Error: ${result.error}`); return }
       showToast(`Invite sent to ${inviteEmail.trim()}`)
       setInviteEmail('')
-      setInviteRole('editor')
+      setInviteRole('member')
       adminGetPendingInvites(org.id).then(({ invites: inv }) => setInvites(inv))
     })
   }

@@ -3,9 +3,9 @@
 import { revalidatePath } from 'next/cache'
 import { supabaseAdmin } from '@/lib/supabase/admin'
 import { requirePlatformAdmin } from '@/lib/auth/platform-admin'
+import type { OrgRole } from '@/lib/types/organizations'
 import { verifyTurnstileToken } from '@/lib/auth/turnstile'
 import { getRequestIp } from '@/lib/utils/request-ip'
-
 // ── constants ─────────────────────────────────────────────────────────────
 
 // Safe chars: exclude 0/O, 1/I/L to avoid confusion
@@ -191,7 +191,10 @@ export async function updateAccessRequestStatus(
 export async function approveAndGenerateInvite(
   requestId: string,
   orgNameOverride?: string,
-  roleOverride: 'owner' | 'admin' | 'editor' | 'viewer' = 'owner'
+  // OrgRole post-079 = 'owner' | 'member'. Default to 'owner' since this
+  // platform-admin path creates a brand-new org for the approved requester
+  // — they need to be the org owner to invite their team.
+  roleOverride: OrgRole = 'owner'
 ): Promise<{ code: string; signupUrl: string; error?: string }> {
   const user = await assertAdmin()
   if (!user) return { code: '', signupUrl: '', error: 'Not authorized' }

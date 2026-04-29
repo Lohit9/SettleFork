@@ -346,7 +346,10 @@ interface ProjectsListProps {
 }
 
 export function ProjectsList({ initialProjects, activeOrgRole }: ProjectsListProps) {
-  const canCreateProject = activeOrgRole !== 'viewer'
+  // Post-079: any org membership ('owner' or 'member') can create projects.
+  // The pre-079 'viewer' org-role no longer exists. Treat absent membership
+  // (undefined activeOrgRole) as the only no-create case.
+  const canCreateProject = activeOrgRole === 'owner' || activeOrgRole === 'member'
   const router = useRouter()
   const [projects, setProjects] = useState<ProjectWithStats[]>(initialProjects)
   const [showWelcome, setShowWelcome] = useState(false)

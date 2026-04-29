@@ -24,7 +24,7 @@ interface OrgRow {
   project_count: number
 }
 
-const ROLE_OPTIONS: OrgRole[] = ['owner', 'admin', 'editor', 'viewer']
+const ROLE_OPTIONS: OrgRole[] = ['owner', 'member']
 
 function fmt(dateStr: string) {
   return new Date(dateStr).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })
@@ -52,8 +52,8 @@ function OrgDetail({ org }: { org: OrgRow }) {
   useEffect(() => {
     adminGetOrgMembers(org.id).then(({ members: m }) => {
       setMembers(m)
-      // Once members load: if org already has members, default role to editor instead of owner
-      if (m.length > 0) setInviteRole('editor')
+      // Once members load: if org already has members, default role to member instead of owner
+      if (m.length > 0) setInviteRole('member')
     })
     adminGetPendingInvites(org.id).then(({ invites: inv }) => setInvites(inv))
   }, [org.id])
@@ -74,8 +74,8 @@ function OrgDetail({ org }: { org: OrgRow }) {
       }
       showToast(`Invite sent to ${inviteEmail.trim()}`)
       setInviteEmail('')
-      // After first invite sent, subsequent invites default to editor
-      setInviteRole('editor')
+      // After first invite sent, subsequent invites default to member
+      setInviteRole('member')
       adminGetPendingInvites(org.id).then(({ invites: inv }) => setInvites(inv))
     })
   }

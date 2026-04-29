@@ -1,12 +1,21 @@
 'use server'
 
 import { createClient } from '@/lib/supabase/server'
-import type { OrgRole } from '@/lib/types/organizations'
-import { ROLE_HIERARCHY } from '@/lib/types/organizations'
+import type { ProjectRole } from '@/lib/types/organizations'
+import { PROJECT_ROLE_HIERARCHY } from '@/lib/types/organizations'
+
+// Project access is determined ONLY by `project_members` membership after
+// migration 079. Org membership is no longer a fallback. This file mirrors
+// the server-side SQL helpers (`get_user_project_role` / `user_has_project_role`)
+// for use in Server Actions where calling an RPC adds latency for no benefit.
+//
+// Auto-grant rules (writes to project_members) live in lib/actions/projects.ts,
+// lib/actions/org-invites.ts, lib/actions/organizations.ts, and the SQL
+// helpers in migration 079 §J. This file is read-only.
 
 export async function getUserProjectRole(
   projectId: string
-): Promise<OrgRole | null> {
+): Promise<ProjectRole | null> {
   const supabase = await createClient()
   const { data: { user } } = await supabase.auth.getUser()
   if (!user) return null
@@ -18,38 +27,22 @@ export async function getUserProjectRole(
     .eq('user_id', user.id)
     .maybeSingle()
 
-  if (pmRow?.role) return pmRow.role as OrgRole
-
-  const { data: orgRole } = await supabase
-    .from('projects')
-    .select('org_id')
-    .eq('id', projectId)
-    .single()
-
-  if (!orgRole?.org_id) return null
-
-  const { data: omRow } = await supabase
-    .from('org_memberships')
-    .select('role')
-    .eq('org_id', orgRole.org_id)
-    .eq('user_id', user.id)
-    .maybeSingle()
-
-  return (omRow?.role as OrgRole) ?? null
+  // No org-role fallback — strict project_members membership only.
+  return (pmRow?.role as ProjectRole | null) ?? null
 }
 
 export async function checkProjectPermission(
   projectId: string,
-  minRole: OrgRole
+  minRole: ProjectRole
 ): Promise<boolean> {
   const role = await getUserProjectRole(projectId)
   if (!role) return false
-  return ROLE_HIERARCHY[role] >= ROLE_HIERARCHY[minRole]
+  return PROJECT_ROLE_HIERARCHY[role] >= PROJECT_ROLE_HIERARCHY[minRole]
 }
 
 export async function requireProjectPermission(
   projectId: string,
-  minRole: OrgRole
+  minRole: ProjectRole
 ): Promise<{ allowed: boolean; error?: string }> {
   const allowed = await checkProjectPermission(projectId, minRole)
   if (!allowed) {

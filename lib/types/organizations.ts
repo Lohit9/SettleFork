@@ -1,7 +1,28 @@
-export type OrgRole = 'owner' | 'admin' | 'editor' | 'viewer'
+// ── Role taxonomies (migration 079: project-level RBAC strict membership) ──
+//
+// Org and project roles are independent vocabularies after 079:
+//   - OrgRole controls org administration (rename/invite/role-change/toggle).
+//     Values: 'owner' (full control) | 'member' (regular org user).
+//   - ProjectRole controls project access. Values: 'admin' | 'editor' | 'viewer'.
+//     A user has access to a project iff a project_members row exists for them.
+//     There is no implicit access from org membership.
+//
+// Auto-grant rules (event-driven, idempotent — see migration 079 §J):
+//   - Org owners are auto-granted project-admin on every project in the org.
+//   - Org members are auto-granted project-editor on every project in the org
+//     IFF organizations.member_auto_grant_enabled = TRUE.
+//   - Project creators are auto-granted project-admin on the project they create.
+//   - Removal of a project_members row sticks (every fanout uses
+//     ON CONFLICT DO NOTHING).
+export type OrgRole = 'owner' | 'member'
 
-export const ROLE_HIERARCHY: Record<OrgRole, number> = {
-  owner: 4,
+export type ProjectRole = 'admin' | 'editor' | 'viewer'
+
+// Numeric hierarchy for role-comparison checks (e.g. requireProjectPermission).
+// Higher number = more privileges. The actual checks live in
+// lib/actions/role-resolution.ts and lib/hooks/useProjectRole.ts; this map is
+// the single source of truth they share.
+export const PROJECT_ROLE_HIERARCHY: Record<ProjectRole, number> = {
   admin: 3,
   editor: 2,
   viewer: 1,
@@ -16,6 +37,10 @@ export interface Organization {
   sso_enabled: boolean
   enforcement_mode: EnforcementMode
   sso_configured_at: string | null
+  // Migration 079: per-org toggle for member project_members auto-grant.
+  // Defaults TRUE for backward compatibility. Owners are auto-granted
+  // regardless of this flag; only the member-fanout consults it.
+  member_auto_grant_enabled: boolean
 }
 
 export interface OrgMembership {
@@ -48,7 +73,11 @@ export interface ProjectMember {
   id: string
   project_id: string
   user_id: string
-  role: OrgRole | null
+  // Nullable in the DB schema (legacy from migration 050). Migration 079
+  // tightens the CHECK constraint to ('admin','editor','viewer') but does
+  // not add NOT NULL — pre-existing NULL rows are still possible. Treat
+  // null as "no role" (no access). NOT NULL is deferred to PR 2 cleanup.
+  role: ProjectRole | null
   assigned_at: string
   user_name?: string
   user_email?: string

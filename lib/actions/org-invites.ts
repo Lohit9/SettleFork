@@ -22,6 +22,8 @@ export async function createOrgInvite(
   const { data: { user } } = await supabase.auth.getUser()
   if (!user) return { invite: null, error: 'Not authenticated' }
 
+  // Tightened in migration 079: only org owners can invite members
+  // (the legacy 'admin' org-role no longer exists post-rename).
   const { data: callerMem } = await supabase
     .from('org_memberships')
     .select('role')
@@ -29,8 +31,8 @@ export async function createOrgInvite(
     .eq('user_id', user.id)
     .single()
 
-  if (!callerMem || !['owner', 'admin'].includes(callerMem.role)) {
-    return { invite: null, error: 'Only owners and admins can invite members' }
+  if (!callerMem || callerMem.role !== 'owner') {
+    return { invite: null, error: 'Only owners can invite members' }
   }
 
   const existingAuthUser = await findAuthUserByEmail(email)
@@ -289,6 +291,29 @@ export async function acceptInvite(
       })
 
     if (memErr) return { orgId: '', orgName: '', error: memErr.message }
+
+    // Migration 079: auto-grant project_members rows for the new
+    // org membership. 'owner' → project-admin everywhere; 'member' →
+    // project-editor everywhere if member_auto_grant_enabled. ON
+    // CONFLICT DO NOTHING preserves stickiness if a row was previously
+    // removed. See migration 079 §J.2.
+    const { error: fanoutErr } = await supabaseAdmin.rpc(
+      'grant_new_org_member_project_access',
+      { p_user_id: userId, p_org_id: invite.org_id, p_role: invite.role }
+    )
+    if (fanoutErr) {
+      // Org membership already committed. Surface the error so the
+      // caller (acceptInvite UI) can retry — the RPC is idempotent.
+      console.error(
+        '[acceptInvite] auto-grant fanout failed (org_memberships row created):',
+        fanoutErr
+      )
+      return {
+        orgId: invite.org_id,
+        orgName: (invite as any).organizations?.name ?? '',
+        error: `Joined org, but project access setup failed: ${fanoutErr.message}. Please contact your org owner.`,
+      }
+    }
   }
 
   await supabaseAdmin

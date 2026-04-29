@@ -14,7 +14,10 @@ export default async function ProjectsPage() {
 
   // Resolve org role — don't depend solely on the cookie.
   // New users have no cookie yet; fall back to owner org then first org.
-  let activeOrgRole: OrgRole = 'viewer'
+  // 'member' is the safe default post-079: any user with no resolved
+  // membership renders as a non-owner (no admin affordances). Project
+  // visibility itself is gated by project_members RLS, not this prop.
+  let activeOrgRole: OrgRole = 'member'
   let resolvedOrgId = activeOrgId
 
   if (user) {

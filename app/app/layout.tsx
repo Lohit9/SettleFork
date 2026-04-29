@@ -28,7 +28,7 @@ export default async function AppLayout({
   // Fetch orgs server-side — eliminates client round-trip on every page load
   const { data: memberships } = await supabase
     .from('org_memberships')
-    .select('role, organizations(id, name, slug, created_at, created_by, sso_enabled, enforcement_mode, sso_configured_at)')
+    .select('role, organizations(id, name, slug, created_at, created_by, sso_enabled, enforcement_mode, sso_configured_at, member_auto_grant_enabled)')
     .eq('user_id', user.id)
     .order('joined_at', { ascending: true })
 
@@ -43,6 +43,7 @@ export default async function AppLayout({
       sso_enabled: m.organizations.sso_enabled as boolean,
       enforcement_mode: m.organizations.enforcement_mode as EnforcementMode,
       sso_configured_at: (m.organizations.sso_configured_at ?? null) as string | null,
+      member_auto_grant_enabled: m.organizations.member_auto_grant_enabled as boolean,
       role: m.role as OrgRole,
     }))
 
