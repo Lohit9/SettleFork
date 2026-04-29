@@ -475,6 +475,7 @@ export default function PricingEstimator() {
                       onExpire={() => setTurnstileToken(null)}
                       onError={() => setTurnstileToken(null)}
                       size="flexible"
+                      theme="light"
                     />
 
                     <button

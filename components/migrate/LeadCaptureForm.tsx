@@ -178,6 +178,7 @@ export default function LeadCaptureForm({ sourceSystem, targetSystem, slug }: Le
           onVerify={setTurnstileToken}
           onExpire={() => setTurnstileToken(null)}
           onError={() => setTurnstileToken(null)}
+          theme="light"
         />
       </div>
 

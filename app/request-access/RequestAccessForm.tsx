@@ -202,6 +202,7 @@ export default function RequestAccessForm() {
               onVerify={setTurnstileToken}
               onExpire={() => setTurnstileToken(null)}
               onError={() => setTurnstileToken(null)}
+              theme="light"
             />
 
             <button
