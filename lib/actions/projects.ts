@@ -35,6 +35,14 @@ export async function createProject(
   const supabase = await createClient()
   const { data: { user } } = await supabase.auth.getUser()
 
+  console.log('[createProject:DEBUG entry]', {
+    user_authenticated: !!user,
+    user_id: user?.id,
+    user_email: user?.email,
+    has_orgId_param: !!orgId,
+    orgId_param: orgId,
+  })
+
   if (!user) return { success: false, error: 'Not authenticated' }
 
   // Resolve org_id: use provided orgId, or fall back to user's first org
@@ -67,6 +75,13 @@ export async function createProject(
     return { success: false, error: 'You are not a member of this organization' }
   }
 
+  console.log('[createProject:DEBUG]', {
+    user_id: user.id,
+    resolved_org_id: resolvedOrgId,
+    membership_check_passed: !!membership,
+    membership_role: membership?.role,
+  })
+
   const { data: project, error } = await supabase
     .from('projects')
     .insert({
@@ -79,6 +94,15 @@ export async function createProject(
     })
     .select()
     .single()
+
+  if (error) {
+    console.error('[createProject:DEBUG] INSERT failed', {
+      error_message: error.message,
+      error_code: error.code,
+      error_details: error.details,
+      error_hint: error.hint,
+    })
+  }
 
   if (error || !project) return { success: false, error: error?.message || 'Failed to create project' }
 
