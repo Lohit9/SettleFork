@@ -34,6 +34,12 @@ export default defineConfig({
       '.next/**',
       'figma/**',
       'supabase/**',
+      // Live-data / Heritage integration tests are env-gated (see each
+      // file for its `RUN_*_INTEGRATION` opt-in flag). Excluded from the
+      // default `npm test` run so CI doesn't try to load them; run them
+      // explicitly via `npm run test:integration` with the per-file
+      // RUN_*_INTEGRATION flag and Supabase env vars set locally.
+      'tests/integration/**',
     ],
   },
 })
