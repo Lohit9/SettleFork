@@ -60,6 +60,7 @@ export function PageHeader({ projectName, title, projectId, children }: PageHead
             <Link
               href={`/app/projects/${projectId}/settings`}
               aria-label="Project settings"
+              title="Project settings"
               data-testid="page-header-settings"
               className="w-7 h-7 rounded-md text-settle-slate-400 hover:text-settle-slate-600 hover:bg-settle-slate-50 flex items-center justify-center transition-colors"
             >
