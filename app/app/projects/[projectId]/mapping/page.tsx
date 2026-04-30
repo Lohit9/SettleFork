@@ -2,15 +2,20 @@ import { notFound } from 'next/navigation'
 import { createClient } from '@/lib/supabase/server'
 import { getMappings } from '@/lib/actions/mappings'
 import { getMappingsForRedesign } from '@/lib/actions/mappings-for-redesign'
-import { getProject } from '@/lib/actions/projects'
 import MappingContent from './MappingContent'
-import type { MappingsResult } from '@/lib/actions/mappings'
-import type { MappingsForRedesignResult } from '@/lib/types/mappings-for-redesign'
+import MappingRedesignContent from './redesign/MappingContent'
 
 interface Props {
   params: Promise<{ projectId: string }>
 }
 
+// Phase 3 Gap 1 / PR 2a: the `use_mapping_redesign` dispatch lives here
+// at the server boundary. We pick exactly one Content component to render
+// based on `projects.use_mapping_redesign`, and only fetch the data feed
+// the chosen component needs. Pre-PR 2a this branch lived inside the
+// legacy `MappingContent` default export and consumed `projectInfo`; the
+// dispatch was lifted to the server so `projectInfo` could be retired
+// alongside the (i)→gear ripple in the next commit.
 export default async function MappingPage({ params }: Props) {
   const { projectId } = await params
 
@@ -18,47 +23,33 @@ export default async function MappingPage({ params }: Props) {
   const { data: { user } } = await supabase.auth.getUser()
   if (!user) notFound()
 
-  const projectResult = await supabase
+  const { data: project } = await supabase
     .from('projects')
     .select('id, name, use_mapping_redesign')
     .eq('id', projectId)
     .single()
 
-  const project = projectResult.data
   if (!project) notFound()
 
-  // Phase 3 dispatch: branch at the server-component level so we fetch
-  // exactly one read path per render. Per design §8.2 the legacy
-  // `getMappings` and the new `getMappingsForRedesign` are both
-  // callable in parallel during Phase 3+4, but a given render picks one.
   const useRedesign = project.use_mapping_redesign === true
 
-  const [legacyResult, redesignResult, fullProject] = await Promise.all([
-    useRedesign
-      ? Promise.resolve<MappingsResult | null>(null)
-      : getMappings(projectId),
-    useRedesign
-      ? getMappingsForRedesign(projectId)
-      : Promise.resolve<MappingsForRedesignResult | null>(null),
-    getProject(projectId).catch(() => null),
-  ])
+  if (useRedesign) {
+    const initialRedesignData = await getMappingsForRedesign(projectId)
+    return (
+      <MappingRedesignContent
+        projectId={projectId}
+        projectName={project.name}
+        initialRedesignData={initialRedesignData}
+      />
+    )
+  }
 
-  const projectInfo = fullProject ? {
-    projectName: fullProject.name,
-    sourceSystem: fullProject.datasets?.find((d) => d.role === 'source')?.name ?? null,
-    targetSystem: fullProject.datasets?.find((d) => d.role === 'target')?.name ?? null,
-    createdAt: fullProject.created_at,
-    useMappingRedesign: fullProject.use_mapping_redesign,
-    maintenanceMode: fullProject.maintenance_mode,
-  } : undefined
-
+  const initialData = await getMappings(projectId)
   return (
     <MappingContent
       projectId={projectId}
       projectName={project.name}
-      initialData={legacyResult}
-      initialRedesignData={redesignResult}
-      projectInfo={projectInfo}
+      initialData={initialData}
     />
   )
 }

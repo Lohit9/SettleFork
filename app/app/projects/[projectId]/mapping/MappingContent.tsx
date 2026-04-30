@@ -10,7 +10,6 @@ import {
 import { Check, CheckCircle, Pencil, X, ChevronDown, ChevronRight, ArrowRight, Plus } from '@/components/icons'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { PageHeader } from '@/components/app/PageHeader'
-import { type ProjectInfo } from '@/components/app/ProjectInfoPopover'
 import {
   updateFieldMappingStatus,
   editFieldMapping,
@@ -43,23 +42,19 @@ import { useProjectRole } from '@/lib/hooks/useProjectRole'
 import { RoleTooltip } from '@/components/app/RoleTooltip'
 import { FieldPicker, type PickerField } from '@/components/app/FieldPicker'
 import { FixDrawer } from '@/components/ui/fix-drawer'
-import { useMappingRedesignEnabled } from '@/lib/hooks/useMappingRedesignEnabled'
-import MappingRedesignContent from './redesign/MappingContent'
-import type { MappingsForRedesignResult } from '@/lib/types/mappings-for-redesign'
 
 // ─── Props ────────────────────────────────────────────────────────────────────
+//
+// PR 2a (Apr 2026): the `use_mapping_redesign` dispatch moved from this
+// component's default export to the server page (mapping/page.tsx). When
+// the flag is true, `page.tsx` renders `<MappingRedesignContent>` directly
+// and never instantiates this legacy component — so `initialRedesignData`
+// and the dispatch gate are gone from this file.
 
 interface Props {
   projectId: string
   projectName: string
   initialData: MappingsResult | null
-  // Phase 3 Gap 4b: the redesigned read-path payload. Populated by
-  // `page.tsx` only when `projects.use_mapping_redesign === true`;
-  // null on the legacy branch. The legacy UI below does not consume
-  // this prop — it is threaded directly into the redesign component
-  // inside the dispatch gate.
-  initialRedesignData: MappingsForRedesignResult | null
-  projectInfo?: ProjectInfo
 }
 
 type StatusFilter = 'all' | 'needs_review' | 'approved' | 'unmapped'
@@ -2613,34 +2608,7 @@ export default function MappingContent({
   projectId,
   projectName,
   initialData,
-  initialRedesignData,
-  projectInfo,
 }: Props) {
-  // ── Phase 3 redesign dispatch ─────────────────────────────────────────────
-  // When `projects.use_mapping_redesign` is true for this project, render the
-  // new UI from `./redesign/MappingContent`. Otherwise fall through to the
-  // legacy UI below untouched.
-  //
-  // `useMappingRedesignEnabled` is intentionally pure (no React hooks inside),
-  // so this early-return pattern does not violate the Rules of Hooks — the
-  // flag value is stable across renders of a given mount (it is server-rendered
-  // into `projectInfo`), so hook call order is consistent within each branch.
-  //
-  // Bundle note: the redesign module is imported statically because the
-  // placeholder has no runtime dependencies beyond `PageHeader`, which is
-  // already shared with the legacy UI. Revisit with `next/dynamic` once the
-  // redesign bundle grows large enough to justify splitting.
-  if (useMappingRedesignEnabled(projectInfo)) {
-    return (
-      <MappingRedesignContent
-        projectId={projectId}
-        projectName={projectName}
-        projectInfo={projectInfo}
-        initialRedesignData={initialRedesignData}
-      />
-    )
-  }
-
   const router = useRouter()
   const { can: canRole } = useProjectRole(projectId)
   const canEdit = canRole('edit')
@@ -3656,7 +3624,7 @@ export default function MappingContent({
             {toast.message}
           </div>
         )}
-        <PageHeader projectName={projectName} title="Mapping" subtitle="Review and approve field mappings" projectInfo={projectInfo} />
+        <PageHeader projectName={projectName} title="Mapping" subtitle="Review and approve field mappings" />
         <div className="flex-1 overflow-auto">
         <div className="px-6 py-5 max-w-3xl mx-auto">
         <p className="text-sm text-gray-500 mb-5">
@@ -3686,7 +3654,7 @@ export default function MappingContent({
           {toast.message}
         </div>
       )}
-      <PageHeader projectName={projectName} title="Mapping" subtitle="Review and approve field mappings" projectInfo={projectInfo} />
+      <PageHeader projectName={projectName} title="Mapping" subtitle="Review and approve field mappings" />
 
       {/* Stat pills — flush toolbar */}
       <MappingStatPills

@@ -42,7 +42,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useRouter, useSearchParams } from 'next/navigation'
 import { PageHeader } from '@/components/app/PageHeader'
-import { type ProjectInfo } from '@/components/app/ProjectInfoPopover'
 import type {
   MappingRow,
   MappingsForRedesignResult,
@@ -114,7 +113,6 @@ const SEARCH_DEBOUNCE_MS = 200
 interface Props {
   projectId: string
   projectName: string
-  projectInfo?: ProjectInfo
   /**
    * Data feed for the redesigned Mapping page. Null only when
    * `page.tsx` was unable to fetch (unauth or project missing), in
@@ -127,7 +125,6 @@ interface Props {
 export default function MappingRedesignContent({
   projectId,
   projectName,
-  projectInfo,
   initialRedesignData,
 }: Props) {
   // Derive drawer-open status from the URL. `useSearchParams` is
@@ -344,7 +341,6 @@ export default function MappingRedesignContent({
         <PageHeader
           projectName={projectName}
           title="Mapping"
-          projectInfo={projectInfo}
         />
         {initialRedesignData === null ? (
           // Empty / error path — sidebar is rendered but inert; the
