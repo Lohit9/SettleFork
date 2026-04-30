@@ -151,5 +151,5 @@ export async function requireOrgRole(
 export async function requireOrgAdmin(
   orgId: string,
 ): Promise<RequireOrgRoleResult> {
-  return requireOrgRole(orgId, ['owner', 'admin'])
+  return requireOrgRole(orgId, ['owner'])
 }
