@@ -18,9 +18,13 @@ import {
   removeMember,
   updateOrganization,
   leaveOrganization,
+  setOrgMemberAutoGrant,
+  backfillOrgMemberProjectAccess,
 } from '@/lib/actions/organizations'
 import { createOrgInvite, getPendingInvites, revokeInvite } from '@/lib/actions/org-invites'
 import type { OrgMembership, OrgInvite, OrgRole } from '@/lib/types/organizations'
+import { Switch } from '@/components/ui/switch'
+import { Modal } from '@/components/ui/modal'
 
 const ROLE_OPTIONS: OrgRole[] = ['owner', 'member']
 
@@ -106,6 +110,14 @@ export default function OrganizationSettingsContent({
   const [showLeaveConfirm, setShowLeaveConfirm] = useState(false)
   const [leaveError, setLeaveError] = useState<string | null>(null)
   const [isLeaving, setIsLeaving] = useState(false)
+
+  // Auto-grant toggle (PR 2b)
+  const [autoGrantEnabled, setAutoGrantEnabled] = useState(org.member_auto_grant_enabled)
+  const [showEnableModal, setShowEnableModal] = useState(false)
+  const [autoGrantBusy, setAutoGrantBusy] = useState<
+    'idle' | 'enable-only' | 'enable-backfill' | 'disable'
+  >('idle')
+  const [autoGrantError, setAutoGrantError] = useState<string | null>(null)
 
   const ownerCount = members.filter((m) => m.role === 'owner').length
   const isLastOwner =
@@ -206,6 +218,69 @@ export default function OrganizationSettingsContent({
     document.cookie = 'mine-active-org=; path=/; max-age=0'
     router.push('/app/projects')
     router.refresh()
+  }
+
+  // ── Auto-grant toggle handlers (PR 2b) ────────────────────────────────────
+  // OFF→ON: open the 3-option modal so the owner can choose whether to
+  // backfill existing members. ON→OFF: silent direct execution — turning
+  // off has no destructive side effect (stickiness rule), so a confirm
+  // would just add friction.
+  const handleAutoGrantSwitchChange = (next: boolean) => {
+    setAutoGrantError(null)
+    if (next && !autoGrantEnabled) {
+      setShowEnableModal(true)
+    } else if (!next && autoGrantEnabled) {
+      handleDisableAutoGrant()
+    }
+  }
+
+  const handleDisableAutoGrant = async () => {
+    setAutoGrantBusy('disable')
+    setAutoGrantError(null)
+    const result = await setOrgMemberAutoGrant(org.id, false)
+    if (result.success) {
+      setAutoGrantEnabled(false)
+    } else {
+      setAutoGrantError(result.error ?? 'Failed to update setting')
+    }
+    setAutoGrantBusy('idle')
+  }
+
+  const handleEnableOnly = async () => {
+    setAutoGrantBusy('enable-only')
+    setAutoGrantError(null)
+    const result = await setOrgMemberAutoGrant(org.id, true)
+    if (result.success) {
+      setAutoGrantEnabled(true)
+      setShowEnableModal(false)
+    } else {
+      setAutoGrantError(result.error ?? 'Failed to update setting')
+    }
+    setAutoGrantBusy('idle')
+  }
+
+  const handleEnableAndBackfill = async () => {
+    setAutoGrantBusy('enable-backfill')
+    setAutoGrantError(null)
+    const toggleResult = await setOrgMemberAutoGrant(org.id, true)
+    if (!toggleResult.success) {
+      setAutoGrantError(toggleResult.error ?? 'Failed to update setting')
+      setAutoGrantBusy('idle')
+      return
+    }
+    // Toggle landed; mirror it locally so the Switch reflects ON even if
+    // the backfill fails downstream.
+    setAutoGrantEnabled(true)
+    const backfillResult = await backfillOrgMemberProjectAccess(org.id)
+    if (!backfillResult.success) {
+      setAutoGrantError(
+        `Setting saved, but backfill failed: ${backfillResult.error ?? 'unknown error'}. Retry to complete.`,
+      )
+      setAutoGrantBusy('idle')
+      return
+    }
+    setShowEnableModal(false)
+    setAutoGrantBusy('idle')
   }
 
   return (
@@ -535,6 +610,45 @@ export default function OrganizationSettingsContent({
         </div>
       )}
 
+      {/* Permissions — owners only (PR 2b) */}
+      {isAdmin && (
+        <div className="bg-white border border-gray-200 rounded-xl p-5">
+          <h3 className="text-sm font-semibold text-gray-900 mb-4">Permissions</h3>
+          <div className="flex items-start justify-between gap-4">
+            <div className="flex-1 min-w-0">
+              <label
+                htmlFor="auto-grant-toggle"
+                className="text-sm font-medium text-gray-900 cursor-pointer"
+              >
+                Auto-grant new members project access
+              </label>
+              <p
+                id="auto-grant-toggle-description"
+                className="text-xs text-gray-500 mt-1"
+              >
+                When on, new org members are automatically given editor access
+                on every project. Existing access is sticky — turning this off
+                won&apos;t remove anyone&apos;s current access.
+              </p>
+              {autoGrantBusy === 'disable' && (
+                <p className="text-xs text-gray-500 mt-1">Saving…</p>
+              )}
+              {autoGrantError && autoGrantBusy === 'idle' && !showEnableModal && (
+                <p className="text-xs text-red-600 mt-1">{autoGrantError}</p>
+              )}
+            </div>
+            <Switch
+              id="auto-grant-toggle"
+              checked={autoGrantEnabled}
+              onCheckedChange={handleAutoGrantSwitchChange}
+              disabled={autoGrantBusy !== 'idle'}
+              aria-label="Auto-grant new members project access"
+              aria-describedby="auto-grant-toggle-description"
+            />
+          </div>
+        </div>
+      )}
+
       {/* Danger Zone */}
       <div className="bg-white border border-red-200 rounded-xl p-5">
         <p className="text-base font-medium text-red-600 mb-3">Danger zone</p>
@@ -606,6 +720,73 @@ export default function OrganizationSettingsContent({
             </div>
           </div>
         </div>
+      )}
+
+      {/* Auto-grant enable modal — 3-option flow on OFF→ON (PR 2b) */}
+      {showEnableModal && (
+        <Modal
+          title="Enable auto-grant for new members?"
+          onClose={() => {
+            if (autoGrantBusy === 'idle') {
+              setShowEnableModal(false)
+              setAutoGrantError(null)
+            }
+          }}
+        >
+          <div className="space-y-3 text-sm text-gray-700">
+            <p>
+              When auto-grant is on, new members joining this organization
+              automatically get editor access on every project. You can also
+              backfill existing members now so they get editor access on
+              every project they don&apos;t already have.
+            </p>
+            <p>
+              <span className="font-semibold">Backfill is sticky:</span>{' '}
+              previously-removed members stay removed. Anyone you&apos;ve
+              explicitly removed from a project will not regain access through
+              backfill.
+            </p>
+            <p>
+              Turning auto-grant off later won&apos;t revoke any existing
+              access — only future fanouts pause.
+            </p>
+          </div>
+          {autoGrantError && (
+            <p className="text-xs text-red-600 mt-3">{autoGrantError}</p>
+          )}
+          <div className="flex flex-col gap-2 mt-6">
+            <Button
+              onClick={handleEnableAndBackfill}
+              disabled={autoGrantBusy !== 'idle'}
+              className="bg-primary hover:bg-primary/90 text-white disabled:opacity-50"
+            >
+              {autoGrantBusy === 'enable-backfill'
+                ? 'Enabling…'
+                : 'Enable and backfill existing members'}
+            </Button>
+            <Button
+              variant="outline"
+              onClick={handleEnableOnly}
+              disabled={autoGrantBusy !== 'idle'}
+              className="disabled:opacity-50"
+            >
+              {autoGrantBusy === 'enable-only'
+                ? 'Enabling…'
+                : "Just enable, don't backfill"}
+            </Button>
+            <Button
+              variant="ghost"
+              onClick={() => {
+                setShowEnableModal(false)
+                setAutoGrantError(null)
+              }}
+              disabled={autoGrantBusy !== 'idle'}
+              className="text-gray-600 disabled:opacity-50"
+            >
+              Cancel
+            </Button>
+          </div>
+        </Modal>
       )}
     </div>
   )
