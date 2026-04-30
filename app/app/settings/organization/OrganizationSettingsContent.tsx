@@ -35,7 +35,13 @@ const ROLE_LABEL: Record<OrgRole, string> = {
 }
 
 interface Props {
-  org: { id: string; name: string; slug: string; created_at: string }
+  org: {
+    id: string
+    name: string
+    slug: string
+    created_at: string
+    member_auto_grant_enabled: boolean
+  }
   orgRole: OrgRole
   currentUserId: string
   multiOrg: boolean

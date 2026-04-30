@@ -33,7 +33,7 @@ export default async function OrganizationSettingsPage() {
 
   const { data: org } = await supabase
     .from('organizations')
-    .select('id, name, slug, created_at')
+    .select('id, name, slug, created_at, member_auto_grant_enabled')
     .eq('id', activeMembership.org_id)
     .single()
 
