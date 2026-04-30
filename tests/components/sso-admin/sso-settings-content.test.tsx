@@ -33,6 +33,11 @@ vi.mock('@/lib/actions/sso-admin-mutations', () => ({
   previewEnforcementChange: vi.fn(),
 }))
 
+vi.mock('@/lib/actions/sso-admin-provider-config', () => ({
+  configureOrgSsoProviderFromXml: vi.fn(),
+  configureOrgSsoProviderFromUrl: vi.fn(),
+}))
+
 // ─────────────────────────────────────────────────────────────────────
 // SsoSettingsContent — page orchestrator under various data states.
 //
@@ -57,6 +62,7 @@ vi.mock('@/lib/actions/sso-admin-mutations', () => ({
 // ─────────────────────────────────────────────────────────────────────
 
 const ORG_ID = '00000000-0000-0000-0000-000000000001'
+const ORG_SLUG = 'acme-org'
 
 function okOverview(
   overrides: Partial<Extract<GetOrgSsoOverviewResult, { ok: true }>> = {},
@@ -67,8 +73,21 @@ function okOverview(
     enforcement_mode: 'hybrid',
     sso_configured_at: new Date('2026-04-01T00:00:00Z').toISOString(),
     idp_type: 'okta',
+    entity_id: 'https://example.okta.com/metadata',
+    cert_fingerprint_sha256: 'aaaaaaaa11111111aaaaaaaa11111111aaaaaaaa11111111aaaaaaaa11111111',
+    cert_subject: null,
+    cert_not_before: null,
+    cert_not_after: null,
+    cert_signature_algorithm: 'sha256',
     ...overrides,
   }
+}
+
+function defaultsForRender() {
+  return {
+    orgSlug: ORG_SLUG,
+    metadataUploadEnabled: false,
+  } as const
 }
 
 function okDomains(
@@ -125,6 +144,7 @@ describe('SsoSettingsContent — SSO enabled + all data ok', () => {
     render(
       <SsoSettingsContent
         orgId={ORG_ID}
+        {...defaultsForRender()}
         overview={okOverview()}
         domains={okDomains()}
         linkedUsers={okUsers()}
@@ -141,6 +161,7 @@ describe('SsoSettingsContent — SSO enabled + all data ok', () => {
     render(
       <SsoSettingsContent
         orgId={ORG_ID}
+        {...defaultsForRender()}
         overview={okOverview()}
         domains={okDomains()}
         linkedUsers={okUsers()}
@@ -154,6 +175,7 @@ describe('SsoSettingsContent — SSO enabled + all data ok', () => {
     render(
       <SsoSettingsContent
         orgId={ORG_ID}
+        {...defaultsForRender()}
         overview={okOverview({ enforcement_mode: 'strict' })}
         domains={okDomains()}
         linkedUsers={okUsers()}
@@ -171,6 +193,7 @@ describe('SsoSettingsContent — SSO disabled', () => {
     render(
       <SsoSettingsContent
         orgId={ORG_ID}
+        {...defaultsForRender()}
         overview={okOverview({ sso_enabled: false })}
         domains={okDomains()}
         linkedUsers={okUsers()}
@@ -184,6 +207,7 @@ describe('SsoSettingsContent — SSO disabled', () => {
     render(
       <SsoSettingsContent
         orgId={ORG_ID}
+        {...defaultsForRender()}
         overview={okOverview({ sso_enabled: false })}
         domains={okDomains()}
         linkedUsers={okUsers()}
@@ -198,6 +222,7 @@ describe('SsoSettingsContent — SSO disabled', () => {
     render(
       <SsoSettingsContent
         orgId={ORG_ID}
+        {...defaultsForRender()}
         overview={okOverview({ sso_enabled: false })}
         domains={okDomains()}
         linkedUsers={okUsers()}
@@ -216,6 +241,7 @@ describe('SsoSettingsContent — fail-soft when actions return ok:false', () => 
     render(
       <SsoSettingsContent
         orgId={ORG_ID}
+        {...defaultsForRender()}
         overview={{ ok: false, error: 'Failed to load organization' }}
         domains={okDomains()}
         linkedUsers={okUsers()}
@@ -233,6 +259,7 @@ describe('SsoSettingsContent — fail-soft when actions return ok:false', () => 
     render(
       <SsoSettingsContent
         orgId={ORG_ID}
+        {...defaultsForRender()}
         overview={okOverview()}
         domains={{ ok: false, error: 'Failed to load domains' }}
         linkedUsers={okUsers()}
@@ -248,6 +275,7 @@ describe('SsoSettingsContent — fail-soft when actions return ok:false', () => 
     render(
       <SsoSettingsContent
         orgId={ORG_ID}
+        {...defaultsForRender()}
         overview={okOverview()}
         domains={okDomains()}
         linkedUsers={okUsers()}
@@ -266,6 +294,7 @@ describe('SsoSettingsContent — inline empty states', () => {
     render(
       <SsoSettingsContent
         orgId={ORG_ID}
+        {...defaultsForRender()}
         overview={okOverview()}
         domains={okDomains([])}
         linkedUsers={okUsers()}
@@ -279,6 +308,7 @@ describe('SsoSettingsContent — inline empty states', () => {
     render(
       <SsoSettingsContent
         orgId={ORG_ID}
+        {...defaultsForRender()}
         overview={okOverview()}
         domains={okDomains()}
         linkedUsers={okUsers([])}
@@ -292,6 +322,7 @@ describe('SsoSettingsContent — inline empty states', () => {
     render(
       <SsoSettingsContent
         orgId={ORG_ID}
+        {...defaultsForRender()}
         overview={okOverview()}
         domains={okDomains()}
         linkedUsers={okUsers()}
@@ -309,6 +340,7 @@ describe('SsoSettingsContent — canEdit prop wiring', () => {
     render(
       <SsoSettingsContent
         orgId={ORG_ID}
+        {...defaultsForRender()}
         overview={okOverview()}
         domains={okDomains()}
         linkedUsers={okUsers()}
@@ -325,6 +357,7 @@ describe('SsoSettingsContent — canEdit prop wiring', () => {
     render(
       <SsoSettingsContent
         orgId={ORG_ID}
+        {...defaultsForRender()}
         overview={okOverview()}
         domains={okDomains()}
         linkedUsers={okUsers()}
@@ -339,6 +372,7 @@ describe('SsoSettingsContent — canEdit prop wiring', () => {
     render(
       <SsoSettingsContent
         orgId={ORG_ID}
+        {...defaultsForRender()}
         overview={okOverview()}
         domains={okDomains()}
         linkedUsers={okUsers()}
@@ -353,6 +387,7 @@ describe('SsoSettingsContent — canEdit prop wiring', () => {
     render(
       <SsoSettingsContent
         orgId={ORG_ID}
+        {...defaultsForRender()}
         overview={okOverview()}
         domains={okDomains()}
         linkedUsers={okUsers()}
@@ -366,5 +401,140 @@ describe('SsoSettingsContent — canEdit prop wiring', () => {
     // empty state.
     expect(screen.getByText('Domains')).toBeTruthy()
     expect(screen.getByText(/Hybrid/)).toBeTruthy()
+  })
+})
+
+// ─── 6. Metadata upload + preview (B-2-c-iii) ─────────────────────────
+
+describe('SsoSettingsContent — metadata upload & empty-state (B-2-c-iii)', () => {
+  it('renders MetadataUploadCard when metadataUploadEnabled and canEdit', () => {
+    render(
+      <SsoSettingsContent
+        orgId={ORG_ID}
+        orgSlug={ORG_SLUG}
+        metadataUploadEnabled
+        overview={okOverview()}
+        domains={okDomains()}
+        linkedUsers={okUsers()}
+        auditEvents={okEvents()}
+        canEdit
+      />,
+    )
+    expect(screen.getByTestId('metadata-upload-card')).toBeTruthy()
+  })
+
+  it('hides MetadataUploadCard when metadataUploadEnabled is false', () => {
+    render(
+      <SsoSettingsContent
+        orgId={ORG_ID}
+        orgSlug={ORG_SLUG}
+        metadataUploadEnabled={false}
+        overview={okOverview()}
+        domains={okDomains()}
+        linkedUsers={okUsers()}
+        auditEvents={okEvents()}
+        canEdit
+      />,
+    )
+    expect(screen.queryByTestId('metadata-upload-card')).toBeNull()
+  })
+
+  it('hides MetadataUploadCard when canEdit is false', () => {
+    render(
+      <SsoSettingsContent
+        orgId={ORG_ID}
+        orgSlug={ORG_SLUG}
+        metadataUploadEnabled
+        overview={okOverview()}
+        domains={okDomains()}
+        linkedUsers={okUsers()}
+        auditEvents={okEvents()}
+        canEdit={false}
+      />,
+    )
+    expect(screen.queryByTestId('metadata-upload-card')).toBeNull()
+  })
+
+  it('skips empty state when metadataUploadEnabled and SSO not yet enabled', () => {
+    render(
+      <SsoSettingsContent
+        orgId={ORG_ID}
+        orgSlug={ORG_SLUG}
+        metadataUploadEnabled
+        overview={okOverview({ sso_enabled: false })}
+        domains={okDomains()}
+        linkedUsers={okUsers()}
+        auditEvents={okEvents()}
+        canEdit
+      />,
+    )
+    expect(screen.queryByTestId('sso-empty-state')).toBeNull()
+    expect(screen.getByTestId('metadata-upload-card')).toBeTruthy()
+    expect(screen.getByText('Configuration')).toBeTruthy()
+  })
+
+  it('shows empty state when metadata off and SSO disabled', () => {
+    render(
+      <SsoSettingsContent
+        orgId={ORG_ID}
+        orgSlug={ORG_SLUG}
+        metadataUploadEnabled={false}
+        overview={okOverview({ sso_enabled: false })}
+        domains={okDomains()}
+        linkedUsers={okUsers()}
+        auditEvents={okEvents()}
+        canEdit
+      />,
+    )
+    expect(screen.getByTestId('sso-empty-state')).toBeTruthy()
+  })
+
+  it('threads orgSlug to MetadataUploadCard', () => {
+    const slug = 'my-threaded-slug'
+    render(
+      <SsoSettingsContent
+        orgId={ORG_ID}
+        orgSlug={slug}
+        metadataUploadEnabled
+        overview={okOverview({ sso_enabled: false })}
+        domains={okDomains()}
+        linkedUsers={okUsers()}
+        auditEvents={okEvents()}
+        canEdit
+      />,
+    )
+    expect(
+      screen.getByTestId('metadata-upload-card').getAttribute('data-org-slug'),
+    ).toBe(slug)
+  })
+
+  it('renders MetadataPreviewCard when SSO enabled', () => {
+    render(
+      <SsoSettingsContent
+        orgId={ORG_ID}
+        {...defaultsForRender()}
+        overview={okOverview()}
+        domains={okDomains()}
+        linkedUsers={okUsers()}
+        auditEvents={okEvents()}
+        canEdit
+      />,
+    )
+    expect(screen.getByTestId('metadata-preview-card')).toBeTruthy()
+  })
+
+  it('omits MetadataPreviewCard when SSO disabled', () => {
+    render(
+      <SsoSettingsContent
+        orgId={ORG_ID}
+        {...defaultsForRender()}
+        overview={okOverview({ sso_enabled: false })}
+        domains={okDomains()}
+        linkedUsers={okUsers()}
+        auditEvents={okEvents()}
+        canEdit
+      />,
+    )
+    expect(screen.queryByTestId('metadata-preview-card')).toBeNull()
   })
 })

@@ -42,6 +42,12 @@ function okOverview(
     enforcement_mode: 'hybrid',
     sso_configured_at: new Date('2026-04-01T00:00:00Z').toISOString(),
     idp_type: 'okta',
+    entity_id: null,
+    cert_fingerprint_sha256: null,
+    cert_subject: null,
+    cert_not_before: null,
+    cert_not_after: null,
+    cert_signature_algorithm: null,
     ...overrides,
   }
 }

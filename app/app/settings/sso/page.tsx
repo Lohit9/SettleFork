@@ -7,6 +7,7 @@ import {
   listOrgSsoLinkedUsers,
   listOrgSsoAuditEvents,
 } from '@/lib/actions/sso-admin'
+import { isMetadataUploadEnabledForOrg } from '@/lib/sso/admin-metadata-upload-allowlist'
 import { SsoSettingsContent } from './SsoSettingsContent'
 
 // Org-admin SSO settings page (B-2-c-i).
@@ -109,6 +110,25 @@ export default async function SsoSettingsPage() {
   // Parallel fetch — all four reads independent. Keeps the slowest
   // call (typically the audit-events query, since it pulls the most
   // rows) on the critical path rather than serializing.
+  const { data: orgRow, error: orgErr } = await supabase
+    .from('organizations')
+    .select('slug')
+    .eq('id', orgId)
+    .single()
+
+  if (orgErr || !orgRow?.slug) {
+    return (
+      <div className="px-8 py-6">
+        <div className="rounded-md border border-gray-200 bg-white px-4 py-3 text-sm text-gray-600">
+          We could not load organization details. Try again or switch
+          organizations from the sidebar.
+        </div>
+      </div>
+    )
+  }
+
+  const metadataUploadEnabled = isMetadataUploadEnabledForOrg(orgId)
+
   const [overview, domains, linkedUsers, auditEvents] = await Promise.all([
     getOrgSsoOverview(orgId),
     listOrgSsoDomains(orgId),
@@ -119,6 +139,7 @@ export default async function SsoSettingsPage() {
   return (
     <SsoSettingsContent
       orgId={orgId}
+      orgSlug={orgRow.slug}
       overview={overview}
       domains={domains}
       linkedUsers={linkedUsers}
@@ -128,6 +149,7 @@ export default async function SsoSettingsPage() {
       // page rendered (i.e. isAdmin was true), the user can edit.
       // Viewers/editors never reach this branch.
       canEdit={isAdmin}
+      metadataUploadEnabled={metadataUploadEnabled}
     />
   )
 }

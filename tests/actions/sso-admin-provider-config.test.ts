@@ -563,6 +563,13 @@ describe('configureOrgSsoProviderFromXml — entity_id mismatch without confirm'
     expect(result.errorCode).toBe('ENTITY_ID_CHANGED')
     expect(result.details?.expected_entity_id).toBe('http://prev/entity')
     expect(result.details?.conflicting_entity_id).toBe(OKTA_ENTITY_ID)
+    expect(result.details?.proposed_idp_type).toBe(parsedOkta.idp_type)
+    expect(result.details?.proposed_cert_fingerprint_sha256).toBe(
+      OKTA_FINGERPRINT,
+    )
+    expect(result.details?.proposed_cert_not_after).toBe(
+      parsedOkta.cert.not_after,
+    )
     expect(gotrueAdminRequestMock).not.toHaveBeenCalled()
   })
 })

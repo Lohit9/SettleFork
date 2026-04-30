@@ -155,6 +155,10 @@ export type ConfigureOrgSsoProviderResult =
         conflicting_entity_id?: string
         expected_entity_id?: string
         rate_limit_reset_at?: number
+        /** Populated only for ENTITY_ID_CHANGED — echoes parsed metadata for the replace modal */
+        proposed_idp_type?: IdPType
+        proposed_cert_fingerprint_sha256?: string
+        proposed_cert_not_after?: string
       }
     }
 
@@ -449,6 +453,9 @@ async function configureProviderInternal(
       details: {
         conflicting_entity_id: parsed.entity_id,
         expected_entity_id: existingProvider.entity_id,
+        proposed_idp_type: parsed.idp_type,
+        proposed_cert_fingerprint_sha256: parsed.cert.fingerprint_sha256,
+        proposed_cert_not_after: parsed.cert.not_after,
       },
     }
   }
@@ -741,6 +748,13 @@ async function updateProviderInPlace(
         error:
           'Identity provider entity ID conflict. Use the replacement flow to proceed.',
         errorCode: 'ENTITY_ID_CHANGED',
+        details: {
+          conflicting_entity_id: parsed.entity_id,
+          expected_entity_id: existing.entity_id,
+          proposed_idp_type: parsed.idp_type,
+          proposed_cert_fingerprint_sha256: parsed.cert.fingerprint_sha256,
+          proposed_cert_not_after: parsed.cert.not_after,
+        },
       }
     }
     console.error('[sso-admin-provider-config] GoTrue PUT failed', {

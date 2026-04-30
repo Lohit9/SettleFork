@@ -154,6 +154,86 @@ describe('AuditEventRow — sso.enforcement.changed', () => {
   })
 })
 
+describe('AuditEventRow — sso.provider.updated (B-2-c-iii)', () => {
+  it('renders rotated certificate copy for updated_in_place', () => {
+    render(
+      <AuditEventRow
+        event={makeEvent({
+          event_type: 'sso.provider.updated',
+          metadata: { action: 'updated_in_place' },
+        })}
+      />,
+    )
+    expect(screen.getByTestId('audit-row-summary').textContent).toBe(
+      'alice@acme.test rotated the IdP signing certificate',
+    )
+  })
+
+  it('renders replaced with different idp_type', () => {
+    render(
+      <AuditEventRow
+        event={makeEvent({
+          event_type: 'sso.provider.updated',
+          metadata: {
+            action: 'replaced',
+            previous_idp_type: 'okta',
+            idp_type: 'entra',
+          },
+        })}
+      />,
+    )
+    expect(screen.getByTestId('audit-row-summary').textContent).toBe(
+      'alice@acme.test replaced okta provider with entra',
+    )
+  })
+
+  it('renders entity-ID-changed variant when same idp_type', () => {
+    render(
+      <AuditEventRow
+        event={makeEvent({
+          event_type: 'sso.provider.updated',
+          metadata: {
+            action: 'replaced',
+            previous_idp_type: 'okta',
+            idp_type: 'okta',
+          },
+        })}
+      />,
+    )
+    expect(screen.getByTestId('audit-row-summary').textContent).toBe(
+      'alice@acme.test replaced SSO provider (entity ID changed)',
+    )
+  })
+
+  it('renders partial failure summary', () => {
+    render(
+      <AuditEventRow
+        event={makeEvent({
+          event_type: 'sso.provider.updated',
+          metadata: { partial_failure: true, action: 'replaced' },
+        })}
+      />,
+    )
+    expect(screen.getByTestId('audit-row-summary').textContent).toBe(
+      'alice@acme.test — replaced failed (partial; ops review needed)',
+    )
+  })
+
+  it('falls back when action is unknown', () => {
+    render(
+      <AuditEventRow
+        event={makeEvent({
+          event_type: 'sso.provider.updated',
+          metadata: { action: 'mystery' },
+        })}
+      />,
+    )
+    expect(screen.getByTestId('audit-row-summary').textContent).toBe(
+      'alice@acme.test updated SSO provider',
+    )
+  })
+})
+
 describe('AuditEventRow — sso.domain.added / removed', () => {
   it('renders "<actor> added domain <domain>"', () => {
     const event = makeEvent({
@@ -243,7 +323,6 @@ describe('AuditEventRow — hash truncation', () => {
 
 describe('AuditEventRow — fallback rendering for non-handcrafted types', () => {
   it.each([
-    'sso.provider.updated',
     'sso.provider.removed',
     'sso.jit.provisioned',
     'sso.identity.linked',
