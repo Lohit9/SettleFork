@@ -29,7 +29,13 @@ const SUPABASE_URL = process.env.NEXT_PUBLIC_SUPABASE_URL!
  * Service Provider, not an org-specific IdP. Stored on each
  * sso_providers row for admin-UI display convenience.
  */
-function getSPUrls() {
+// Made async to satisfy the Next.js 'use server' constraint that every
+// export must be an async function. The body is still synchronous; the
+// Promise wrap is purely a formality so the function can be exported
+// from this server-actions file. Used by the org-admin provider-config
+// action in `lib/actions/sso-admin-provider-config.ts` to construct the
+// same `acs_url` and `sp_entity_id` values from a single source of truth.
+export async function getSPUrls(): Promise<{ acsUrl: string; spEntityId: string }> {
   return {
     acsUrl: `${SUPABASE_URL}/auth/v1/sso/saml/acs`,
     spEntityId: `${SUPABASE_URL}/auth/v1/sso/saml/metadata`,
@@ -249,7 +255,7 @@ export async function configureSSOProvider(
   }
 
   // Step 6: Insert sso_providers row (with rollback on failure)
-  const { acsUrl, spEntityId } = getSPUrls()
+  const { acsUrl, spEntityId } = await getSPUrls()
   try {
     const { data: provider, error: insErr } = await supabaseAdmin
       .from('sso_providers')

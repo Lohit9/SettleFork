@@ -60,8 +60,24 @@
 // `setOrgEnforcementMode`) plus a positive-control write. Those
 // tests reuse this file's `vi.mock` and fixture-resolution helpers
 // without modification.
+//
+// B-2-c-iii commit 2 extension
+// -----------------------------
+// Adds 4 more tests for the new provider-config server actions
+// (`configureOrgSsoProviderFromXml`, `configureOrgSsoProviderFromUrl`).
+// These tests:
+//   - Mock `gotrueAdminRequest` and `safeFetchMetadata` so we don't
+//     actually contact GoTrue or the public internet during CI.
+//   - Stub the feature-flag env vars so `isMetadataUploadEnabledForOrg`
+//     returns true for the isolation org (otherwise the public actions
+//     short-circuit with NOT_AVAILABLE before the auth gate fires —
+//     which is correct production behavior but defeats the test goal
+//     of exercising the gate).
+//   - Run a precondition check that migration 080 (cert metadata
+//     columns) has been applied to the local Supabase, throwing a
+//     self-diagnosing error if the columns are missing.
 
-import { describe, it, expect, vi, beforeAll } from 'vitest'
+import { describe, it, expect, vi, beforeAll, afterAll } from 'vitest'
 
 // ─── Env gate ────────────────────────────────────────────────────────
 
@@ -140,6 +156,41 @@ vi.mock('@/lib/supabase/server', async () => {
       from: supabaseAdmin.from.bind(supabaseAdmin),
       rpc: supabaseAdmin.rpc.bind(supabaseAdmin),
     }),
+  }
+})
+
+// ─── Mock gotrueAdminRequest + safeFetchMetadata (B-2-c-iii commit 2) ─
+//
+// The new provider-config actions hit GoTrue and (on the URL path) the
+// public internet. Mocking both at module load means:
+//   - Cross-tenant rejection tests (auth gate fires before either is
+//     called) cleanly assert "mock not invoked" as a positive proof
+//     that the gate ran first.
+//   - The positive-control test can stage a successful GoTrue POST
+//     without touching the real GoTrue admin API.
+//
+// The mocks are installed unconditionally to keep load order
+// deterministic; the existing read/write isolation tests don't import
+// either symbol, so there's no behavior change for those suites.
+vi.mock('@/lib/sso/gotrue-admin', async () => {
+  const actual =
+    await vi.importActual<typeof import('@/lib/sso/gotrue-admin')>(
+      '@/lib/sso/gotrue-admin',
+    )
+  return {
+    ...actual,
+    gotrueAdminRequest: vi.fn(),
+  }
+})
+
+vi.mock('@/lib/security/safe-fetch', async () => {
+  const actual =
+    await vi.importActual<typeof import('@/lib/security/safe-fetch')>(
+      '@/lib/security/safe-fetch',
+    )
+  return {
+    ...actual,
+    safeFetchMetadata: vi.fn(),
   }
 })
 
@@ -409,6 +460,276 @@ describeFn('SSO admin actions — cross-org isolation (write actions)', () => {
       // synthetic domain is gone before the next test run. The
       // remove action is idempotent so a no-op delete is fine.
       await removeOrgSsoDomain(isolationOrgId, SYNTHETIC_DOMAIN)
+    }
+  })
+})
+
+// ─── Cross-org isolation suite — provider config (B-2-c-iii commit 2) ─
+//
+// Four tests cover the org-admin self-serve provider configuration
+// surface from `lib/actions/sso-admin-provider-config.ts`:
+//
+//   1. User 2 cannot configure the primary org via XML
+//   2. User 2 cannot configure the primary org via URL
+//   3. User 2 cannot UPDATE an existing primary-org provider via XML
+//   4. User 2 CAN configure their own iso org (positive control)
+//
+// Tests 1-3 prove the auth gate rejects BEFORE any GoTrue call,
+// `safeFetchMetadata` invocation, or DB write to `sso_providers`.
+// Test 4 exercises the full happy path on User 2's own org with
+// mocked GoTrue, asserting success + cleaning up after itself.
+//
+// Migration 080 precondition
+// --------------------------
+// The provider-config actions read/write the cert metadata columns
+// added by `supabase/migrations/080_sso_provider_cert_columns.sql`.
+// We probe for one of those columns at suite start so a missing
+// migration produces a self-diagnosing error rather than an
+// inscrutable "column does not exist" PostgREST error mid-test.
+//
+// Feature flag
+// ------------
+// We stub `NEXT_PUBLIC_SSO_ADMIN_METADATA_UPLOAD_ENABLED=true` for
+// the suite. Without this, the public actions short-circuit with
+// `NOT_AVAILABLE` BEFORE the auth gate fires — which is correct
+// production behavior but defeats the purpose of the cross-tenant
+// authorization test. Mini-D14 says empty allowlist + flag-on
+// permits all orgs, which is exactly what we want for the test.
+
+describeFn('SSO admin actions — provider-config cross-org isolation', () => {
+  let primaryOrgId: string
+  let isolationOrgId: string
+  let gotrueAdminRequestMock: ReturnType<typeof vi.fn>
+  let safeFetchMetadataMock: ReturnType<typeof vi.fn>
+
+  beforeAll(async () => {
+    // Resolve the mocked exports we installed at module load. We
+    // look them up dynamically rather than via static `import { ... }
+    // from '@/lib/sso/gotrue-admin'` so the file-level vi.mock has a
+    // chance to run first.
+    const gotrueAdmin = await import('@/lib/sso/gotrue-admin')
+    const safeFetch = await import('@/lib/security/safe-fetch')
+    gotrueAdminRequestMock = gotrueAdmin.gotrueAdminRequest as ReturnType<
+      typeof vi.fn
+    >
+    safeFetchMetadataMock = safeFetch.safeFetchMetadata as ReturnType<
+      typeof vi.fn
+    >
+
+    const { supabaseAdmin } = await import('@/lib/supabase/admin')
+    const { resolveIsolationFixtureIds } = await import(
+      './sso-admin-isolation-helpers'
+    )
+    const ids = await resolveIsolationFixtureIds(supabaseAdmin)
+    primaryOrgId = ids.primaryOrgId
+    isolationOrgId = ids.isolationOrgId
+
+    // Migration 080 precondition: probe for one of the new cert
+    // columns. PostgREST returns `42703` (column does not exist) if
+    // the migration hasn't been applied. We surface a self-diagnosing
+    // error rather than letting downstream tests fail with cryptic
+    // PostgREST errors.
+    const probe = await supabaseAdmin
+      .from('sso_providers')
+      .select('cert_fingerprint_sha256')
+      .limit(0)
+    if (probe.error) {
+      throw new Error(
+        '[provider-config-isolation] Migration 080 not applied. ' +
+          'The cert metadata columns are missing on `public.sso_providers`. ' +
+          'Apply via Supabase dashboard or `supabase db push`, then re-run.\n' +
+          `Underlying error: ${probe.error.message}`,
+      )
+    }
+
+    // Feature flag: enable for the suite. Mini-D14 — empty allowlist
+    // means "all orgs enabled", which is exactly what we want.
+    vi.stubEnv('NEXT_PUBLIC_SSO_ADMIN_METADATA_UPLOAD_ENABLED', 'true')
+    delete process.env.SSO_ADMIN_METADATA_UPLOAD_ORGS
+  })
+
+  afterAll(() => {
+    vi.unstubAllEnvs()
+  })
+
+  // Reset the mocks between tests so call-count assertions are
+  // independent.
+  function resetMocks() {
+    gotrueAdminRequestMock.mockReset()
+    safeFetchMetadataMock.mockReset()
+  }
+
+  it('configureOrgSsoProviderFromXml rejects cross-org write (User 2 → primary org)', async () => {
+    resetMocks()
+    const { configureOrgSsoProviderFromXml } = await import(
+      '@/lib/actions/sso-admin-provider-config'
+    )
+    const xml = readFileSync(
+      resolve(__dirname, '../fixtures/saml/okta-valid.xml'),
+      'utf8',
+    )
+    const result = await configureOrgSsoProviderFromXml(primaryOrgId, xml)
+
+    expect(result.ok).toBe(false)
+    if (!result.ok) {
+      expect(result.errorCode).toBe('NOT_AUTHORIZED')
+      // Belt-and-suspenders: never any of the post-gate codes.
+      expect(result.errorCode).not.toBe('NOT_AVAILABLE')
+      expect(result.errorCode).not.toBe('GOTRUE_ERROR')
+      expect(result.errorCode).not.toBe('DB_ERROR')
+    }
+    // Critical: the gate must reject BEFORE any GoTrue call. If the
+    // gate ever moved past the parse-and-write block, this assertion
+    // fails — the rejection would still happen but only after an
+    // unauthorized GoTrue write attempt.
+    expect(gotrueAdminRequestMock).not.toHaveBeenCalled()
+  })
+
+  it('configureOrgSsoProviderFromUrl rejects cross-org write (User 2 → primary org)', async () => {
+    resetMocks()
+    const { configureOrgSsoProviderFromUrl } = await import(
+      '@/lib/actions/sso-admin-provider-config'
+    )
+    const result = await configureOrgSsoProviderFromUrl(
+      primaryOrgId,
+      'https://idp.example.com/metadata',
+    )
+
+    expect(result.ok).toBe(false)
+    if (!result.ok) {
+      expect(result.errorCode).toBe('NOT_AUTHORIZED')
+    }
+    // Critical: the gate must reject BEFORE the rate-limit increment
+    // AND before the safeFetch call. If the gate moved past either,
+    // a hostile actor could exhaust the limiter for legitimate users
+    // OR weaponize the egress fetcher against internal targets.
+    expect(safeFetchMetadataMock).not.toHaveBeenCalled()
+    expect(gotrueAdminRequestMock).not.toHaveBeenCalled()
+  })
+
+  it('configureOrgSsoProviderFromXml rejects UPDATE attempt against primary-org provider', async () => {
+    resetMocks()
+    // Provision a synthetic sso_providers row on the primary org so
+    // the orchestrator's "existing provider?" branch is hit. The gate
+    // rejects BEFORE that branch executes (the gate runs first, then
+    // delegates to configureProviderInternal which queries
+    // sso_providers), so this row is never touched — but its
+    // existence pins the threat model: even with a real provider
+    // already registered for the primary org, User 2's update attempt
+    // must reject.
+    const { supabaseAdmin } = await import('@/lib/supabase/admin')
+    const SYNTHETIC_PROVIDER_GOTRUE_ID = '99999999-aaaa-bbbb-cccc-999999999999'
+
+    // Read the SP URLs we need for the synthetic row's NOT NULL
+    // columns.
+    const { getSPUrls } = await import('@/lib/actions/sso')
+    const { acsUrl, spEntityId } = await getSPUrls()
+
+    const { data: existingRow } = await supabaseAdmin
+      .from('sso_providers')
+      .select('id')
+      .eq('org_id', primaryOrgId)
+      .maybeSingle()
+
+    let createdSyntheticRow = false
+    if (!existingRow) {
+      const { error: insErr } = await supabaseAdmin.from('sso_providers').insert({
+        org_id: primaryOrgId,
+        supabase_provider_id: SYNTHETIC_PROVIDER_GOTRUE_ID,
+        idp_type: 'okta',
+        entity_id: 'http://test-isolation/entity',
+        metadata_url: null,
+        metadata_xml: '<synthetic/>',
+        acs_url: acsUrl,
+        sp_entity_id: spEntityId,
+        attribute_mapping: { keys: {} },
+      })
+      if (insErr) {
+        throw new Error(
+          `[provider-config-isolation] failed to provision synthetic primary-org provider: ${insErr.message}`,
+        )
+      }
+      createdSyntheticRow = true
+    }
+
+    try {
+      const { configureOrgSsoProviderFromXml } = await import(
+        '@/lib/actions/sso-admin-provider-config'
+      )
+      const xml = readFileSync(
+        resolve(__dirname, '../fixtures/saml/okta-valid.xml'),
+        'utf8',
+      )
+      const result = await configureOrgSsoProviderFromXml(primaryOrgId, xml)
+
+      expect(result.ok).toBe(false)
+      if (!result.ok) {
+        expect(result.errorCode).toBe('NOT_AUTHORIZED')
+      }
+      expect(gotrueAdminRequestMock).not.toHaveBeenCalled()
+    } finally {
+      if (createdSyntheticRow) {
+        await supabaseAdmin
+          .from('sso_providers')
+          .delete()
+          .eq('org_id', primaryOrgId)
+          .eq('supabase_provider_id', SYNTHETIC_PROVIDER_GOTRUE_ID)
+      }
+    }
+  })
+
+  // Positive control: User 2 IS an admin of the iso org, so configuring
+  // a provider for their OWN org must succeed. Without this, a
+  // regression where requireOrgAdmin rejects EVERY call would still
+  // pass the three rejection tests above. We mock GoTrue to avoid
+  // contacting the real backend, then clean up the inserted row +
+  // the org-flag flip after the test.
+  it('configureOrgSsoProviderFromXml succeeds on iso org (positive control)', async () => {
+    resetMocks()
+    const SYNTHETIC_GOTRUE_ID = 'aaaaaaaa-1111-2222-3333-aaaaaaaaaaaa'
+    gotrueAdminRequestMock.mockResolvedValueOnce({ id: SYNTHETIC_GOTRUE_ID })
+
+    const xml = readFileSync(
+      resolve(__dirname, '../fixtures/saml/okta-valid.xml'),
+      'utf8',
+    )
+    const { configureOrgSsoProviderFromXml } = await import(
+      '@/lib/actions/sso-admin-provider-config'
+    )
+    const { supabaseAdmin } = await import('@/lib/supabase/admin')
+
+    try {
+      // forceOverride: true skips the password-only-users RPC, which
+      // returns a non-zero count for the iso org since User 2 is the
+      // sole owner with no SSO identity link. Bypassing the guardrail
+      // is fine for this test — it's exercising the gate + write +
+      // audit path, not the guardrail itself.
+      const result = await configureOrgSsoProviderFromXml(
+        isolationOrgId,
+        xml,
+        { forceOverride: true },
+      )
+      expect(result.ok).toBe(true)
+      if (result.ok) {
+        expect(result.action).toBe('created')
+        expect(gotrueAdminRequestMock).toHaveBeenCalledWith(
+          'POST',
+          '/admin/sso/providers',
+          expect.objectContaining({ type: 'saml' }),
+        )
+      }
+    } finally {
+      // Cleanup: remove the inserted sso_providers row + reset the
+      // org's sso_enabled flag. Idempotent — safe if the action
+      // failed midway and never inserted.
+      await supabaseAdmin
+        .from('sso_providers')
+        .delete()
+        .eq('org_id', isolationOrgId)
+      await supabaseAdmin
+        .from('organizations')
+        .update({ sso_enabled: false, sso_configured_at: null })
+        .eq('id', isolationOrgId)
     }
   })
 })
