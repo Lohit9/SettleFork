@@ -32,112 +32,33 @@ export async function createProject(
   description?: string,
   orgId?: string
 ): Promise<{ success: boolean; data?: Project; error?: string }> {
+  // The entire creation flow (project insert + project_members fanout +
+  // datasets insert) runs inside a single SECURITY DEFINER RPC defined
+  // in migration 080. This sidesteps a @supabase/ssr write-path bug
+  // where the cookie-based SSR client loses JWT context on writes
+  // (auth.uid() returns NULL during RLS evaluation even when reads in
+  // the same request succeed). Inside the RPC, auth.uid() is captured
+  // once at entry and the rest runs with definer privileges atomically.
   const supabase = await createClient()
   const { data: { user } } = await supabase.auth.getUser()
 
-  console.log('[createProject:DEBUG entry]', {
-    user_authenticated: !!user,
-    user_id: user?.id,
-    user_email: user?.email,
-    has_orgId_param: !!orgId,
-    orgId_param: orgId,
-  })
-
   if (!user) return { success: false, error: 'Not authenticated' }
 
-  // Resolve org_id: use provided orgId, or fall back to user's first org
-  let resolvedOrgId = orgId
-  if (!resolvedOrgId) {
-    const { data: membership } = await supabase
-      .from('org_memberships')
-      .select('org_id')
-      .eq('user_id', user.id)
-      .limit(1)
-      .single()
-    resolvedOrgId = membership?.org_id
-  }
-
-  if (!resolvedOrgId) return { success: false, error: 'No organization found. Please contact support.' }
-
-  // Org membership is required (otherwise the user has no relationship to the
-  // target org). Migration 079 removed the legacy 'viewer' org-role, so any
-  // org_memberships row is sufficient — owners and members can both create
-  // projects. (If we ever want to gate creation to owners, that would be a
-  // future per-org toggle, not a hard rule.)
-  const { data: membership } = await supabase
-    .from('org_memberships')
-    .select('role')
-    .eq('org_id', resolvedOrgId)
-    .eq('user_id', user.id)
+  const { data, error } = await supabase
+    .rpc('create_project_with_access', {
+      p_name: name,
+      p_description: description ?? null,
+      p_source_system_name: sourceSystemName,
+      p_target_system_name: targetSystemName,
+      p_org_id: orgId ?? null,
+    })
     .single()
 
-  if (!membership) {
-    return { success: false, error: 'You are not a member of this organization' }
+  if (error || !data) {
+    return { success: false, error: error?.message || 'Failed to create project' }
   }
 
-  console.log('[createProject:DEBUG]', {
-    user_id: user.id,
-    resolved_org_id: resolvedOrgId,
-    membership_check_passed: !!membership,
-    membership_role: membership?.role,
-  })
-
-  const { data: project, error } = await supabase
-    .from('projects')
-    .insert({
-      name,
-      description: description || null,
-      user_id: user.id,
-      org_id: resolvedOrgId,
-      created_by: user.id,
-      use_mapping_redesign: true,
-    })
-    .select()
-    .single()
-
-  if (error) {
-    console.error('[createProject:DEBUG] INSERT failed', {
-      error_message: error.message,
-      error_code: error.code,
-      error_details: error.details,
-      error_hint: error.hint,
-    })
-  }
-
-  if (error || !project) return { success: false, error: error?.message || 'Failed to create project' }
-
-  // Auto-grant project_members rows: creator (admin), all org owners (admin),
-  // all org members (editor) when member_auto_grant_enabled. The SECURITY
-  // DEFINER RPC bypasses the project_members RLS policy, which requires
-  // user_has_project_role(...,'admin') — for a fresh project no such row
-  // exists yet, so a direct INSERT via the SSR client would fail post-079.
-  // See supabase/migrations/079_project_rbac_strict_membership.sql §J.1.
-  const { error: fanoutError } = await supabase.rpc('grant_new_project_access', {
-    p_project_id: project.id,
-    p_org_id: resolvedOrgId,
-    p_creator_id: user.id,
-  })
-
-  if (fanoutError) {
-    // Fanout failed — the project row exists but no access rows do. Roll back
-    // the project to keep the system in a consistent state. We use the user's
-    // SSR client; with the new RLS policy the user can no longer see the
-    // project (no project_members row), but DELETE on projects is gated by
-    // user_has_project_role(..., 'admin') — also fails. Use supabaseAdmin to
-    // guarantee cleanup. Log loudly for ops triage.
-    console.error('[createProject] grant_new_project_access failed; rolling back project:', fanoutError)
-    await supabaseAdmin.from('projects').delete().eq('id', project.id)
-    return { success: false, error: `Failed to assign project access: ${fanoutError.message}` }
-  }
-
-  const { error: datasetError } = await supabase.from('datasets').insert([
-    { project_id: project.id, role: 'source', name: sourceSystemName },
-    { project_id: project.id, role: 'target', name: targetSystemName },
-  ])
-
-  if (datasetError) return { success: false, error: datasetError.message }
-
-  return { success: true, data: project as Project }
+  return { success: true, data: data as Project }
 }
 
 export async function getProjects(): Promise<Project[]> {
