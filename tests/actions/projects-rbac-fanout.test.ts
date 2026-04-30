@@ -1,27 +1,33 @@
 // @vitest-environment node
 //
-// Source-level invariant tests for the createProject auto-grant
-// fanout introduced by migration 079 (project-level RBAC PR 1).
+// Source-level invariant tests for the createProject Server Action.
 //
-// Behavior changes vs pre-079 createProject:
-//   - The pre-079 inline "viewer cannot create projects" gate is removed.
-//     Post-079 the org_memberships role taxonomy is { owner, member }; both
-//     can create projects.
-//   - The creator's project_members row used to be inserted directly
-//     with role='owner'. The 'owner' value is no longer in the
-//     project_members.role CHECK; the creator now becomes 'admin'.
-//   - The direct insert is replaced by the SECURITY DEFINER RPC
-//     `grant_new_project_access(p_project_id, p_org_id, p_creator_id)`,
-//     which inserts the creator + all org owners + all org members
-//     (when toggle on) in one transactional shot. Direct inserts via the
-//     SSR client would fail RLS post-079 because the creator does not
-//     yet have an admin row to satisfy `user_has_project_role(...,'admin')`.
+// Architecture (post-079 + post-080):
+//   createProject is a thin caller of the SECURITY DEFINER RPC
+//   `create_project_with_access` (migration 080). The RPC validates
+//   auth.uid() once at entry, inserts the project row, fans out
+//   project_members rows via grant_new_project_access (migration
+//   079 §J.1), and inserts source + target datasets — all inside
+//   one transaction.
+//
+// Pre-079 patterns guarded against:
+//   - The inline "viewers cannot create projects" gate (org-role
+//     'viewer' no longer exists post-079; both 'owner' and 'member'
+//     can create projects).
+//   - Direct insert into project_members with role='owner' (the
+//     project_members.role CHECK no longer accepts 'owner'; creators
+//     are 'admin').
+//
+// Pre-080 patterns guarded against:
+//   - Direct call to grant_new_project_access from the Server Action
+//     (now an internal step inside create_project_with_access).
 //
 // Invariants pinned:
 //   P1.  Old viewer-block string is gone.
 //   P2.  Old direct project_members insert with role:'owner' is gone.
-//   P3.  An RPC call to `grant_new_project_access` is present, with the
-//        new project id + org id + creator id.
+//   P3.  An RPC call to `create_project_with_access` is present with
+//        the migration-080 parameter shape, and the pre-080
+//        grant_new_project_access pattern is gone.
 
 import { describe, it, expect } from 'vitest'
 import { readFileSync } from 'node:fs'
@@ -54,12 +60,27 @@ describe('createProject — post-079 fanout invariants', () => {
     expect(BODY).not.toMatch(directInsert)
   })
 
-  it('P3 — calls supabase.rpc(\'grant_new_project_access\', {...}) with project / org / creator ids', () => {
-    expect(BODY).toMatch(/\.rpc\(\s*['"]grant_new_project_access['"]/)
-    // Argument shape is the contract with migration 079 §J.1. The test
-    // fails if any of the three is renamed.
-    expect(BODY).toMatch(/p_project_id\s*:\s*project\.id/)
-    expect(BODY).toMatch(/p_org_id\s*:\s*resolvedOrgId/)
-    expect(BODY).toMatch(/p_creator_id\s*:\s*user\.id/)
+  it('P3 — calls supabase.rpc(\'create_project_with_access\', {...}) with the 080 RPC parameter shape', () => {
+    // Migration 080 replaced the in-action multi-step flow with a single
+    // SECURITY DEFINER RPC that wraps the project insert, the
+    // grant_new_project_access fanout, and the source/target dataset
+    // inserts. createProject is now a thin caller of that RPC.
+    expect(BODY).toMatch(/\.rpc\(\s*['"]create_project_with_access['"]/)
+
+    // Parameter names are the contract with migration 080. The test
+    // fails if any is renamed.
+    expect(BODY).toMatch(/p_name\s*:\s*name/)
+    expect(BODY).toMatch(/p_description\s*:\s*description/)
+    expect(BODY).toMatch(/p_source_system_name\s*:\s*sourceSystemName/)
+    expect(BODY).toMatch(/p_target_system_name\s*:\s*targetSystemName/)
+    expect(BODY).toMatch(/p_org_id\s*:\s*orgId/)
+
+    // Negative guard: the Server Action no longer calls
+    // grant_new_project_access directly — that's now an internal call
+    // site within the 080 RPC, covered by tests/migrations/
+    // 079-project-rbac-strict-membership.test.ts §J.1 and the integration
+    // test. Pinning this negative guards against a regression to the
+    // pre-080 shape.
+    expect(BODY).not.toMatch(/\.rpc\(\s*['"]grant_new_project_access['"]/)
   })
 })

@@ -169,7 +169,8 @@ describeFn('project-rbac strict membership (079) — RLS + role resolution', () 
     STATE.projectAOwnedByAdmin = projectA1!.id
 
     // Manually grant access via the SECURITY DEFINER RPC (mirrors the
-    // production createProject path). Toggle is OFF, so memberA is NOT
+    // inner fanout step of the production createProject →
+    // create_project_with_access path). Toggle is OFF, so memberA is NOT
     // auto-granted; only ownerA + ownerA-as-creator gets a row.
     await supabaseAdmin.rpc('grant_new_project_access', {
       p_project_id: STATE.projectAOwnedByAdmin,
