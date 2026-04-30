@@ -1,16 +1,20 @@
 // @vitest-environment node
 //
 // Source-level invariant tests for the org-level RBAC actions affected
-// by migration 079 (project-level RBAC PR 1).
+// by migration 079 (project-level RBAC PR 1) and PR 2b (auto-grant
+// toggle split).
 //
-// Three Server Actions are pinned:
+// Four Server Actions are pinned:
 //   - updateMemberRole: caller gate tightened to owner-only; promotion
 //     to 'owner' triggers grant_new_org_member_project_access fanout
 //     (admin rows for every project in org). Demotion does NOT remove
 //     existing project_members rows (stickiness).
 //   - removeMember: caller gate tightened to owner-only.
-//   - setOrgMemberAutoGrant (new in 079): owner-only; OFF→ON triggers
-//     backfill_org_member_project_access; ON→OFF does not remove rows.
+//   - setOrgMemberAutoGrant (079, refactored in PR 2b): owner-only;
+//     pure column toggle, NO RPC calls, NO project_members deletes.
+//     Backfill side effect was extracted into the new action below.
+//   - backfillOrgMemberProjectAccess (PR 2b): owner-only; calls the
+//     `backfill_org_member_project_access` RPC; sticky (no deletes).
 
 import { describe, it, expect } from 'vitest'
 import { readFileSync } from 'node:fs'
@@ -32,6 +36,7 @@ function functionBody(start: string, fallbackEnd: string = '\n}\n\n'): string {
 const UPDATE_MEMBER_ROLE = functionBody('export async function updateMemberRole(')
 const REMOVE_MEMBER = functionBody('export async function removeMember(')
 const SET_TOGGLE = functionBody('export async function setOrgMemberAutoGrant(')
+const BACKFILL = functionBody('export async function backfillOrgMemberProjectAccess(')
 
 describe('updateMemberRole — post-079', () => {
   it('caller gate is owner-only (no \'admin\' org-role anymore)', () => {
@@ -80,7 +85,7 @@ describe('removeMember — post-079', () => {
   })
 })
 
-describe('setOrgMemberAutoGrant (new in 079)', () => {
+describe('setOrgMemberAutoGrant — PR 2b (pure column toggle)', () => {
   it('exists with the expected (orgId, enabled) signature', () => {
     expect(SET_TOGGLE).toMatch(
       /export async function setOrgMemberAutoGrant\(\s*orgId:\s*string,\s*enabled:\s*boolean\s*\)/
@@ -97,21 +102,49 @@ describe('setOrgMemberAutoGrant (new in 079)', () => {
     )
   })
 
-  it('OFF→ON triggers backfill_org_member_project_access RPC', () => {
-    // The backfill is gated on (enabled && prev === false) — pin both
-    // the gate and the RPC name.
-    expect(SET_TOGGLE).toMatch(/enabled\s*&&\s*prev\s*===\s*false/)
-    expect(SET_TOGGLE).toMatch(
-      /\.rpc\(\s*[\s\n]*['"]backfill_org_member_project_access['"]/
+  it('does NOT call any RPC (backfill is now a separate explicit action)', () => {
+    // PR 2b refactor: the OFF→ON auto-backfill side effect was extracted
+    // into `backfillOrgMemberProjectAccess`. This function must remain
+    // a pure column toggle.
+    expect(SET_TOGGLE).not.toMatch(/\.rpc\(/)
+  })
+
+  it('does NOT remove project_members rows (stickiness)', () => {
+    expect(SET_TOGGLE).not.toMatch(
+      /\.from\(\s*['"]project_members['"]\s*\)[\s\S]*?\.delete\(/
+    )
+  })
+})
+
+describe('backfillOrgMemberProjectAccess — new in PR 2b', () => {
+  it('exists with the expected (orgId) signature', () => {
+    expect(BACKFILL).toMatch(
+      /export async function backfillOrgMemberProjectAccess\(\s*orgId:\s*string\s*\)/
     )
   })
 
-  it('ON→OFF does NOT remove project_members rows (stickiness)', () => {
-    // No project_members deletion in the ON→OFF path. Negative match
-    // against the entire function body is sufficient: the only
-    // post-toggle code path is the OFF→ON backfill.
-    expect(SET_TOGGLE).not.toMatch(
+  it('caller gate is owner-only', () => {
+    expect(BACKFILL).toMatch(/callerMem\.role\s*!==\s*['"]owner['"]/)
+  })
+
+  it("calls .rpc('backfill_org_member_project_access', { p_org_id: orgId })", () => {
+    expect(BACKFILL).toMatch(
+      /\.rpc\(\s*[\s\n]*['"]backfill_org_member_project_access['"]/
+    )
+    expect(BACKFILL).toMatch(/p_org_id\s*:\s*orgId/)
+  })
+
+  it('does NOT remove project_members rows (stickiness invariant)', () => {
+    expect(BACKFILL).not.toMatch(
       /\.from\(\s*['"]project_members['"]\s*\)[\s\S]*?\.delete\(/
+    )
+  })
+
+  it('returns the RPC error message verbatim on failure', () => {
+    // Pin the shape `{ success: false, error: rpcError.message }` so the
+    // caller can surface it directly without re-wrapping.
+    expect(BACKFILL).toMatch(
+      /return\s*\{\s*success:\s*false,\s*error:\s*rpcError\.message\s*\}/
     )
   })
 })

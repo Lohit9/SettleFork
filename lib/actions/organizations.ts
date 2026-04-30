@@ -313,21 +313,23 @@ export async function updateOrganization(
 /**
  * Toggle the per-org `member_auto_grant_enabled` flag (migration 079).
  *
- * Auto-grant rules controlled by this toggle:
+ * Pure column toggle: this action does NOT backfill, fan out, or remove
+ * any project_members rows. It only updates `organizations.member_
+ * auto_grant_enabled`. Backfilling existing members onto existing
+ * projects is a separate, explicit step — see
+ * `backfillOrgMemberProjectAccess`. The split (PR 2b) lets the UI ask
+ * the owner whether to backfill on OFF→ON instead of doing it
+ * automatically.
+ *
+ * Effect of the flag (consumed by 079 §J fanout RPCs):
  *   - Owners are auto-granted project-admin on every project regardless
- *     of this flag — owners always have full access.
+ *     of this flag.
  *   - Members are auto-granted project-editor on every project IFF this
  *     flag is TRUE at the time the auto-grant fires (project creation,
  *     invite acceptance, JIT provisioning).
  *
- * Transition semantics:
- *   - OFF→ON: backfill project-editor rows for every (member × project)
- *     pair in the org, ON CONFLICT (project_id, user_id) DO NOTHING.
- *     Previously-removed rows stay removed (stickiness rule).
- *   - ON→OFF: do NOT remove existing project_members rows. The toggle
- *     only controls future auto-grants; revoking existing access
- *     requires an explicit `removeMember` (org-level) or per-project
- *     removal (PR 2 surface).
+ * Stickiness: turning the flag OFF does NOT remove any existing
+ * project_members rows. The flag only gates future auto-grants.
  *
  * Authorization: org owner only. Caller-side check here is duplicated
  * by the organizations UPDATE RLS policy (which uses
@@ -369,25 +371,57 @@ export async function setOrgMemberAutoGrant(
 
   if (error) return { success: false, error: error.message }
 
-  // OFF→ON transition triggers backfill. ON→OFF is a no-op on existing rows.
-  if (enabled && prev === false) {
-    const { error: backfillErr } = await supabase.rpc(
-      'backfill_org_member_project_access',
-      { p_org_id: orgId }
-    )
-    if (backfillErr) {
-      // Toggle already committed. Surface the error so the caller can
-      // retry — the RPC is idempotent.
-      console.error(
-        '[setOrgMemberAutoGrant] OFF→ON backfill failed (toggle updated):',
-        backfillErr
-      )
-      return {
-        success: false,
-        error: `Setting saved, but member backfill failed: ${backfillErr.message}. Retry to complete.`,
-      }
-    }
+  revalidatePath('/app/settings')
+  revalidatePath('/app/settings/organization')
+  return { success: true }
+}
+
+/**
+ * Backfill project-editor rows for every (member × project) pair in
+ * the org. Idempotent and sticky: every insert uses ON CONFLICT
+ * (project_id, user_id) DO NOTHING, so previously-removed members stay
+ * removed.
+ *
+ * Calls migration 079 §J.3's `backfill_org_member_project_access` RPC,
+ * which inserts editor rows only for `om.role = 'member'`. Owners are
+ * out of scope here because they are auto-fanned-out as project-admin
+ * via `grant_new_org_member_project_access('owner')` at promotion time.
+ *
+ * The RPC does NOT consult `organizations.member_auto_grant_enabled` —
+ * the caller decides. PR 2b's UI offers this as the "Enable and
+ * backfill" option in the OFF→ON modal, after `setOrgMemberAutoGrant`
+ * has already flipped the column.
+ *
+ * Authorization: org owner only.
+ *
+ * Note: org-scoped activity_log audit deferred — `activity_log` is
+ * currently project-scoped (NOT NULL `project_id`). Adding org-scoped
+ * audit requires a schema change tracked in a separate PR.
+ */
+export async function backfillOrgMemberProjectAccess(
+  orgId: string
+): Promise<{ success: boolean; error?: string }> {
+  const supabase = await createClient()
+  const { data: { user } } = await supabase.auth.getUser()
+  if (!user) return { success: false, error: 'Not authenticated' }
+
+  const { data: callerMem } = await supabase
+    .from('org_memberships')
+    .select('role')
+    .eq('org_id', orgId)
+    .eq('user_id', user.id)
+    .single()
+
+  if (!callerMem || callerMem.role !== 'owner') {
+    return { success: false, error: 'Only owners can backfill project access' }
   }
+
+  const { error: rpcError } = await supabase.rpc(
+    'backfill_org_member_project_access',
+    { p_org_id: orgId }
+  )
+
+  if (rpcError) return { success: false, error: rpcError.message }
 
   revalidatePath('/app/settings')
   revalidatePath('/app/settings/organization')
