@@ -5,7 +5,6 @@ import { getValidationRules } from '@/lib/actions/validation-rules'
 import { computeReadinessScore } from '@/lib/quality/readiness-score'
 import { getResolvedSourceFieldIds } from '@/lib/quality/resolved-by-transform'
 import { supabaseAdmin } from '@/lib/supabase/admin'
-import { getProject } from '@/lib/actions/projects'
 import DataQualityContent from './DataQualityContent'
 
 interface PageProps {
@@ -30,7 +29,7 @@ export default async function DataQualityPage({ params, searchParams }: PageProp
   if (!user) notFound()
 
   // Parallel data fetch — fix history fetched once here to avoid N+1 per IssueCard
-  const [{ issues, hasMappings, stagedTargetTableIds }, validationRules, readiness, tablesData, initialFixHistory, resolvedSourceFieldIds, projectResult, project] = await Promise.all([
+  const [{ issues, hasMappings, stagedTargetTableIds }, validationRules, readiness, tablesData, initialFixHistory, resolvedSourceFieldIds, projectResult] = await Promise.all([
     getQualityIssues(projectId),
     getValidationRules(projectId),
     computeReadinessScore(projectId),
@@ -43,7 +42,6 @@ export default async function DataQualityPage({ params, searchParams }: PageProp
     // Source field IDs whose issues are resolved by an approved transform
     getResolvedSourceFieldIds(projectId).catch(() => [] as string[]),
     supabase.from('projects').select('name, status').eq('id', projectId).single(),
-    getProject(projectId).catch(() => null),
   ])
 
   const allDatasets = (tablesData.data ?? []) as Array<{
@@ -58,15 +56,6 @@ export default async function DataQualityPage({ params, searchParams }: PageProp
   }>
 
   const isArchived = projectResult.data?.status === 'archived'
-
-  const projectInfo = project ? {
-    projectName: project.name,
-    sourceSystem: project.datasets?.find((d) => d.role === 'source')?.name ?? null,
-    targetSystem: project.datasets?.find((d) => d.role === 'target')?.name ?? null,
-    createdAt: project.created_at,
-    useMappingRedesign: project.use_mapping_redesign,
-    maintenanceMode: project.maintenance_mode,
-  } : undefined
 
   return (
     <DataQualityContent
@@ -86,7 +75,6 @@ export default async function DataQualityPage({ params, searchParams }: PageProp
       initialFilterStatus={sp.status}
       initialFilterStage={sp.stage}
       isArchived={isArchived}
-      projectInfo={projectInfo}
     />
   )
 }

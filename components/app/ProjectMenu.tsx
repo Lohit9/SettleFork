@@ -6,6 +6,7 @@ import { useRouter } from 'next/navigation'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Button } from '@/components/ui/button'
+import { Modal } from '@/components/ui/modal'
 import { updateProject, updateProjectLabels, deleteProject, markProjectComplete, reactivateProject, archiveProject } from '@/lib/actions/projects'
 import { getExecutionPackageUrl } from '@/lib/actions/execution-package'
 import { useProjectRole } from '@/lib/hooks/useProjectRole'
@@ -24,36 +25,6 @@ export interface ProjectMenuProject {
 interface ProjectMenuProps {
   project: ProjectMenuProject
   onUpdate?: () => void
-}
-
-// ── shared modal shell ─────────────────────────────────────────────────────
-
-function Modal({
-  title,
-  onClose,
-  children,
-}: {
-  title: string
-  onClose?: () => void
-  children: React.ReactNode
-}) {
-  useEffect(() => {
-    function onKey(e: KeyboardEvent) { if (e.key === 'Escape') onClose?.() }
-    document.addEventListener('keydown', onKey)
-    return () => document.removeEventListener('keydown', onKey)
-  }, [onClose])
-
-  return (
-    <div
-      className="fixed inset-0 bg-black/40 flex items-center justify-center z-[300] p-4"
-      onMouseDown={(e) => { if (e.target === e.currentTarget) onClose?.() }}
-    >
-      <div className="bg-white border border-gray-200 rounded-xl shadow-xl w-full max-w-md p-6">
-        <h2 className="text-base font-semibold text-gray-900 mb-4">{title}</h2>
-        {children}
-      </div>
-    </div>
-  )
 }
 
 // ── three-dot icon ─────────────────────────────────────────────────────────

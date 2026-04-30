@@ -14,24 +14,11 @@ export default async function ControlPlanePage({
 
   const { data: project } = await supabase
     .from('projects')
-    .select('id, name, created_at, use_mapping_redesign, maintenance_mode, datasets(*)')
+    .select('id, name')
     .eq('id', projectId)
     .single()
 
   if (!project) notFound()
-
-  const projectInfo = {
-    projectName: project.name,
-    sourceSystem:
-      (project.datasets as { role: string; name: string }[] ?? [])
-        .find((d) => d.role === 'source')?.name ?? null,
-    targetSystem:
-      (project.datasets as { role: string; name: string }[] ?? [])
-        .find((d) => d.role === 'target')?.name ?? null,
-    createdAt: project.created_at,
-    useMappingRedesign: project.use_mapping_redesign,
-    maintenanceMode: project.maintenance_mode,
-  }
 
   const [sourceDatasets, targetDatasets] = await Promise.all([
     getDatasetsWithTables(projectId, 'source'),
@@ -58,7 +45,6 @@ export default async function ControlPlanePage({
       initialContextDocs={contextDocs}
       primarySourceDatasetId={primarySourceDatasetId}
       primaryTargetDatasetId={primaryTargetDatasetId}
-      projectInfo={projectInfo}
     />
   )
 }

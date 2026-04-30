@@ -68,6 +68,13 @@ export type ActionType =
   | 'target_uploaded'
   | 'doc_uploaded'
   | 'project_archived'
+  // PR 2a — project-level RBAC member management. Emitted from the
+  // server actions in `lib/actions/project-members.ts`. Categorized
+  // under `'system'` (administrative actions; no separate dot-color
+  // ships in PR 2a — UI grouping is a follow-up).
+  | 'project_member_added'
+  | 'project_member_removed'
+  | 'project_member_role_changed'
 
 export type ActionCategory = 'fix' | 'mapping' | 'transform' | 'validation' | 'data' | 'system'
 

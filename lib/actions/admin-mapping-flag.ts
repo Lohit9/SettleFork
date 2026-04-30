@@ -47,9 +47,9 @@ export async function setProjectMappingRedesign(
     return { success: false, allowed: true, error: error.message }
   }
 
-  // Redesign toggle affects the mapping page shell + any surface that reads
-  // projectInfo. Revalidate the project's routes so the new flag value is
-  // picked up on next navigation.
+  // Redesign toggle is read by the mapping page's server-side dispatch
+  // (mapping/page.tsx). Revalidate the project's layout so the new flag
+  // value is picked up on next navigation.
   revalidatePath(`/app/projects/${projectId}`, 'layout')
 
   return { success: true, allowed: true }

@@ -1,21 +1,20 @@
 'use client'
 
-import type { ProjectInfo } from '@/components/app/ProjectInfoPopover'
-
 /**
- * Client-side feature gate for the Phase 3+ mapping redesign UI.
+ * Strict boolean check for the Phase 3+ mapping redesign feature flag.
  *
- * Consumes the flag from `ProjectInfo` (server-rendered into the page) rather
- * than fetching — the value is baked into the initial HTML payload, so the
- * hook is pure/synchronous and has no loading state.
+ * Server pages (mapping/page.tsx) own the dispatch — they read
+ * `projects.use_mapping_redesign` and render `<MappingRedesignContent>`
+ * vs the legacy `<MappingContent>` accordingly. This hook remains
+ * exported for any future client-side consumer that needs the same
+ * strict-check semantics: only literal `true` enables; falsy / null /
+ * non-boolean values disable. The strict equality check guards against
+ * silent data-shape drift (e.g. a stringly-typed `"1"` from Supabase).
  *
- * Back-compat: `useMappingRedesign` is optional on `ProjectInfo` for call sites
- * that haven't been updated yet. Returns `false` (old UI) in that case.
- *
- * See docs/features/mapping-redesign.md §"Feature flag infrastructure".
+ * Pure, synchronous, no React state.
  */
 export function useMappingRedesignEnabled(
-  projectInfo: ProjectInfo | undefined | null
+  flag: boolean | undefined | null
 ): boolean {
-  return projectInfo?.useMappingRedesign === true
+  return flag === true
 }

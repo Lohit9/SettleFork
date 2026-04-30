@@ -1,14 +1,27 @@
-import { ProjectInfoPopover, type ProjectInfo } from '@/components/app/ProjectInfoPopover'
+import Link from 'next/link'
+import { Settings } from '@/components/icons'
 
 interface PageHeaderProps {
   projectName: string
   title: string
   subtitle?: string
-  projectInfo?: ProjectInfo
+  /**
+   * When set, renders a settings gear (right side of the header) linking
+   * to `/app/projects/<projectId>/settings`. PR 2a replaced the (i) info
+   * popover with this gear so the project-settings flow (Members + Info
+   * tabs) gets a stable entry point. Non-project consumers omit this prop;
+   * the gear simply doesn't render.
+   */
+  projectId?: string
   children?: React.ReactNode
 }
 
-export function PageHeader({ projectName, title, subtitle, projectInfo, children }: PageHeaderProps) {
+// Note on `subtitle`: declared in the prop interface for clarity at
+// call-sites and to keep the public API stable, but the design intentionally
+// surfaces only `projectName` in the chrome (per the Phase 4-polish-1
+// hierarchy refinement). The prop is destructured but not rendered; this
+// matches the pre-PR 2a behavior byte-for-byte.
+export function PageHeader({ projectName, title, projectId, children }: PageHeaderProps) {
   // Refinement 2 (Phase 4-polish-1 final-final, 2026-04-26): the page
   // header's title-vs-subtitle hierarchy was sharpened. The title
   // ("Mapping" / "Schemas" / etc.) bumps to `font-bold` so it reads
@@ -40,11 +53,19 @@ export function PageHeader({ projectName, title, subtitle, projectInfo, children
           </>
         )}
       </div>
-      {(children || projectInfo) && (
+      {(children || projectId) && (
         <div className="flex items-center gap-2 flex-shrink-0">
           {children}
-          {projectInfo && (
-            <ProjectInfoPopover info={projectInfo} />
+          {projectId && (
+            <Link
+              href={`/app/projects/${projectId}/settings`}
+              aria-label="Project settings"
+              title="Project settings"
+              data-testid="page-header-settings"
+              className="w-7 h-7 rounded-md text-settle-slate-400 hover:text-settle-slate-600 hover:bg-settle-slate-50 flex items-center justify-center transition-colors"
+            >
+              <Settings width={15} height={15} />
+            </Link>
           )}
         </div>
       )}
