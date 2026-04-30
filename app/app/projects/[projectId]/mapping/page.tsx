@@ -9,13 +9,9 @@ interface Props {
   params: Promise<{ projectId: string }>
 }
 
-// Phase 3 Gap 1 / PR 2a: the `use_mapping_redesign` dispatch lives here
-// at the server boundary. We pick exactly one Content component to render
-// based on `projects.use_mapping_redesign`, and only fetch the data feed
-// the chosen component needs. Pre-PR 2a this branch lived inside the
-// legacy `MappingContent` default export and consumed `projectInfo`; the
-// dispatch was lifted to the server so `projectInfo` could be retired
-// alongside the (i)→gear ripple in the next commit.
+// Server-side dispatch on `projects.use_mapping_redesign`: picks exactly
+// one Content component to render and fetches only the data feed that
+// component needs.
 export default async function MappingPage({ params }: Props) {
   const { projectId } = await params
 

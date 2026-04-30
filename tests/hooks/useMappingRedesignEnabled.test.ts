@@ -4,10 +4,8 @@ import { useMappingRedesignEnabled } from '@/lib/hooks/useMappingRedesignEnabled
 // The hook is pure — we can call it directly without renderHook.
 // That's intentional: no useState/useEffect, nothing to reconcile.
 //
-// PR 2a (Apr 2026): the hook's input shrunk from `ProjectInfo | undefined
-// | null` to `boolean | undefined | null`. The strict-`=== true` semantics
-// are unchanged; the dispatch itself moved from this hook (called inside
-// the legacy MappingContent) to the server page (mapping/page.tsx).
+// Contract: input is `boolean | undefined | null`; returns true only on
+// strict `=== true` (no truthy coercion).
 
 describe('useMappingRedesignEnabled', () => {
   it('returns false when flag is undefined (back-compat default)', () => {
