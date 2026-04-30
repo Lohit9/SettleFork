@@ -7,7 +7,6 @@ import { FileText, Upload, CheckCircle2, X, AlertCircle, ChevronRight } from '@/
 import { FileSpreadsheet } from 'lucide-react'
 import { IngestionCard } from './IngestionCard'
 import { PageHeader } from '@/components/app/PageHeader'
-import { type ProjectInfo } from '@/components/app/ProjectInfoPopover'
 import { useProjectRole } from '@/lib/hooks/useProjectRole'
 import { RoleTooltip } from '@/components/app/RoleTooltip'
 import {
@@ -37,7 +36,6 @@ interface ControlPlaneContentProps {
   primaryTargetDatasetId: string | null
   initialConnections?: Record<string, DBConnectionInfo>
   isArchived?: boolean
-  projectInfo?: ProjectInfo
 }
 
 function humanFileSize(bytes: number | null): string {
@@ -375,7 +373,6 @@ export function ControlPlaneContent({
   primaryTargetDatasetId,
   initialConnections = {},
   isArchived = false,
-  projectInfo,
 }: ControlPlaneContentProps) {
   const { can } = useProjectRole(projectId)
   const canEdit = can('edit')
@@ -434,7 +431,7 @@ export function ControlPlaneContent({
         projectName={projectName}
         title="Project Setup"
         subtitle="Configure source and target system connections"
-        projectInfo={projectInfo}
+        projectId={projectId}
       />
       <div className="flex-1 overflow-auto">
       <div className="px-5 py-4 space-y-3">

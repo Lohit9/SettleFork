@@ -341,6 +341,7 @@ export default function MappingRedesignContent({
         <PageHeader
           projectName={projectName}
           title="Mapping"
+          projectId={projectId}
         />
         {initialRedesignData === null ? (
           // Empty / error path — sidebar is rendered but inert; the

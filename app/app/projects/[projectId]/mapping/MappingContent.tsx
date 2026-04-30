@@ -3624,7 +3624,7 @@ export default function MappingContent({
             {toast.message}
           </div>
         )}
-        <PageHeader projectName={projectName} title="Mapping" subtitle="Review and approve field mappings" />
+        <PageHeader projectName={projectName} title="Mapping" subtitle="Review and approve field mappings" projectId={projectId} />
         <div className="flex-1 overflow-auto">
         <div className="px-6 py-5 max-w-3xl mx-auto">
         <p className="text-sm text-gray-500 mb-5">
@@ -3654,7 +3654,7 @@ export default function MappingContent({
           {toast.message}
         </div>
       )}
-      <PageHeader projectName={projectName} title="Mapping" subtitle="Review and approve field mappings" />
+      <PageHeader projectName={projectName} title="Mapping" subtitle="Review and approve field mappings" projectId={projectId} />
 
       {/* Stat pills — flush toolbar */}
       <MappingStatPills

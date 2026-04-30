@@ -25,7 +25,6 @@ import {
 import { Link2, Code, ShieldCheck, Database, Settings, Copy, Check, Package, PackageOpen, Eye, EyeOff, ClipboardCheck, BarChart2, GitMerge, Code2, Clock, BookOpen, FileText as FileTextLucide, Info, AlertTriangle } from 'lucide-react'
 import { Checkbox } from '@/components/ui/checkbox'
 import { PageHeader } from '@/components/app/PageHeader'
-import { type ProjectInfo } from '@/components/app/ProjectInfoPopover'
 import {
   generateGoldStandardCSVs,
   generateSQLLoadScripts,
@@ -58,7 +57,6 @@ interface Props {
   initialData: OutputsPageData
   isArchived?: boolean
   targetDbType?: SqlDialect
-  projectInfo?: ProjectInfo
 }
 
 interface DeliverableState {
@@ -248,7 +246,7 @@ function timeAgo(iso: string) {
 
 // RoleTooltip is imported from @/components/app/RoleTooltip
 
-export default function OutputsContent({ projectId, projectName, initialData, isArchived = false, targetDbType = 'postgresql', projectInfo }: Props) {
+export default function OutputsContent({ projectId, projectName, initialData, isArchived = false, targetDbType = 'postgresql' }: Props) {
   const { can: canRole } = useProjectRole(projectId)
   const canEdit = canRole('edit')
   const [data] = useState<OutputsPageData>(initialData)
@@ -913,7 +911,7 @@ export default function OutputsContent({ projectId, projectName, initialData, is
         </div>
       )}
 
-      <PageHeader projectName={projectName} title="Migration Center" subtitle="Your migration deliverables and project status" projectInfo={projectInfo} />
+      <PageHeader projectName={projectName} title="Migration Center" subtitle="Your migration deliverables and project status" projectId={projectId} />
 
       <div className="flex-1 overflow-auto">
       <div className="max-w-5xl mx-auto p-6 pb-16 space-y-6">

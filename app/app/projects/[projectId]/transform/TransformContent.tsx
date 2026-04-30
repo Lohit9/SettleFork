@@ -47,7 +47,6 @@ import {
   SelectValue,
 } from '@/components/ui/select'
 import { PageHeader } from '@/components/app/PageHeader'
-import { type ProjectInfo } from '@/components/app/ProjectInfoPopover'
 import { Textarea } from '@/components/ui/textarea'
 import {
   RefreshCw,
@@ -126,7 +125,6 @@ interface Props {
   projectName: string
   initialData: TransformPageData
   isArchived?: boolean
-  projectInfo?: ProjectInfo
 }
 
 type LocalStatus = 'draft' | 'tested' | 'applied' | 'stale'
@@ -279,13 +277,10 @@ function TransformStatPills({
 
 // ── TransformContent ──────────────────────────────────────────────────────────
 
-export default function TransformContent({ projectId, projectName, initialData, isArchived = false, projectInfo }: Props) {
+export default function TransformContent({ projectId, projectName, initialData, isArchived = false }: Props) {
   // Phase 3 — `use_mapping_redesign` no longer dispatches to a separate
   // placeholder component. Both flag states render this UI; the
   // target-led sidebar + VA dismissal symmetry land in a single surface.
-  // The `projectInfo` prop is preserved for future consumers and to keep
-  // the page-level data fetcher's contract stable.
-  void projectInfo
   const router = useRouter()
   const searchParams = useSearchParams()
   const { can } = useProjectRole(projectId)
@@ -1792,7 +1787,7 @@ export default function TransformContent({ projectId, projectName, initialData, 
   if (!data.hasMappings) {
     return (
       <div className="h-full bg-gray-50 flex flex-col overflow-hidden relative">
-        <PageHeader projectName={projectName} title="Transform" subtitle="Define transformation logic for mapped fields" projectInfo={projectInfo} />
+        <PageHeader projectName={projectName} title="Transform" subtitle="Define transformation logic for mapped fields" projectId={projectId} />
         <div className="flex-1 flex items-center justify-center p-8">
           <div className="text-center max-w-md">
             <div className="w-16 h-16 bg-gray-100 rounded-full flex items-center justify-center mx-auto mb-4">
@@ -1834,7 +1829,7 @@ export default function TransformContent({ projectId, projectName, initialData, 
         projectName={projectName}
         title="Transform"
         subtitle={`${needsTransformCount} field${needsTransformCount !== 1 ? 's' : ''} require transformation`}
-        projectInfo={projectInfo}
+        projectId={projectId}
       >
         <div className="flex items-center gap-3 flex-shrink-0">
           {stagingError && (
