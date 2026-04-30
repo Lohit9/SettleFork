@@ -67,7 +67,7 @@
 // see.
 
 import { describe, it, expect, beforeAll, afterAll } from 'vitest'
-import { createClient } from '@supabase/supabase-js'
+import { createClient, type SupabaseClient } from '@supabase/supabase-js'
 
 const RUN = process.env.RUN_PROJECT_RBAC_INTEGRATION === '1'
 const URL = process.env.NEXT_PUBLIC_SUPABASE_URL
@@ -95,7 +95,13 @@ interface TestState {
 const STATE = {} as TestState
 
 describeFn('project-rbac strict membership (079) — RLS + role resolution', () => {
-  const supabaseAdmin = createClient(URL!, SERVICE_KEY!)
+  // Declared but not constructed — `createClient(URL!, SERVICE_KEY!)`
+  // throws "supabaseUrl is required" when URL is undefined, and Vitest
+  // executes describe callback bodies during test collection even for
+  // `describe.skip` (it has to walk the tree to enumerate test names).
+  // Constructing inside beforeAll defers the call until the suite is
+  // actually scheduled to run, so describe.skip prevents it entirely.
+  let supabaseAdmin!: SupabaseClient
 
   const stamp = Date.now().toString(36)
   STATE.password = `Test_${stamp}_PRBAC!`
@@ -105,6 +111,8 @@ describeFn('project-rbac strict membership (079) — RLS + role resolution', () 
 
   // ─── Setup ────────────────────────────────────────────────────────
   beforeAll(async () => {
+    supabaseAdmin = createClient(URL!, SERVICE_KEY!)
+
     // Two orgs: Org A is the cross-org isolation subject; Org B is the
     // negative-control container that proves the user can't see Org A
     // projects from Org B-side view either.
