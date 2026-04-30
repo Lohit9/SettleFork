@@ -1,5 +1,5 @@
 -- ============================================================
--- 080: SSO provider cert metadata columns
+-- 081: SSO provider cert metadata columns
 --
 -- Add cert metadata columns to public.sso_providers for the org-admin-
 -- driven SAML provider configuration flow (B-2-c-iii). Columns are
@@ -19,7 +19,7 @@
 -- Numbering note: the original B-2-c-iii investigation expected this
 -- to be migration 071, but 071_sso_enforcement.sql, 072..078 were
 -- merged in the meantime. Initially renumbered to 079, then bumped
--- again to 080 because feat/project-rbac claimed 079 first
+-- again to 080 because feat/project-rbac claimed 079 first, then to 081 because feat/project-rbac shipped 080_create_project_with_access_rpc.sql to main first
 -- (079_project_rbac_strict_membership.sql in the settle-platform
 -- worktree, committed before this branch). No semantic change.
 --

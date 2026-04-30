@@ -73,7 +73,7 @@
 //     short-circuit with NOT_AVAILABLE before the auth gate fires —
 //     which is correct production behavior but defeats the test goal
 //     of exercising the gate).
-//   - Run a precondition check that migration 080 (cert metadata
+//   - Run a precondition check that migration 081 (cert metadata
 //     columns) has been applied to the local Supabase, throwing a
 //     self-diagnosing error if the columns are missing.
 
@@ -479,10 +479,10 @@ describeFn('SSO admin actions — cross-org isolation (write actions)', () => {
 // Test 4 exercises the full happy path on User 2's own org with
 // mocked GoTrue, asserting success + cleaning up after itself.
 //
-// Migration 080 precondition
+// Migration 081 precondition
 // --------------------------
 // The provider-config actions read/write the cert metadata columns
-// added by `supabase/migrations/080_sso_provider_cert_columns.sql`.
+// added by `supabase/migrations/081_sso_provider_cert_columns.sql`.
 // We probe for one of those columns at suite start so a missing
 // migration produces a self-diagnosing error rather than an
 // inscrutable "column does not exist" PostgREST error mid-test.
@@ -524,7 +524,7 @@ describeFn('SSO admin actions — provider-config cross-org isolation', () => {
     primaryOrgId = ids.primaryOrgId
     isolationOrgId = ids.isolationOrgId
 
-    // Migration 080 precondition: probe for one of the new cert
+    // Migration 081 precondition: probe for one of the new cert
     // columns. PostgREST returns `42703` (column does not exist) if
     // the migration hasn't been applied. We surface a self-diagnosing
     // error rather than letting downstream tests fail with cryptic
@@ -535,7 +535,7 @@ describeFn('SSO admin actions — provider-config cross-org isolation', () => {
       .limit(0)
     if (probe.error) {
       throw new Error(
-        '[provider-config-isolation] Migration 080 not applied. ' +
+        '[provider-config-isolation] Migration 081 not applied. ' +
           'The cert metadata columns are missing on `public.sso_providers`. ' +
           'Apply via Supabase dashboard or `supabase db push`, then re-run.\n' +
           `Underlying error: ${probe.error.message}`,

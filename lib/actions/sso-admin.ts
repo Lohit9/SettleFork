@@ -128,7 +128,7 @@ export async function getOrgSsoOverview(
     })
   }
 
-  /** Cast: generated DB types may lag migration 080. */
+  /** Cast: generated DB types may lag migration 081. */
   const prow =
     providerRes.error
       ? null
