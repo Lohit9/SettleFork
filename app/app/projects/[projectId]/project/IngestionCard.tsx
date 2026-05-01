@@ -823,10 +823,11 @@ export function IngestionCard({ type, title, projectId, initialDatasets, initial
                       <button
                         key={db.id}
                         onClick={() => handleDbTypeSelect(db.id)}
-                        className={`flex flex-col items-center justify-center gap-1.5 px-4 py-3 rounded-lg border-2 text-sm font-medium transition-colors cursor-pointer flex-1 ${
+                        disabled={!canEdit}
+                        className={`flex flex-col items-center justify-center gap-1.5 px-4 py-3 rounded-lg border-2 text-sm font-medium transition-colors flex-1 disabled:opacity-50 disabled:cursor-not-allowed ${
                           dbType === db.id
                             ? 'border-blue-600 bg-blue-50 text-blue-700'
-                            : 'border-gray-200 bg-white text-gray-600 hover:border-gray-300 hover:bg-gray-50'
+                            : 'border-gray-200 bg-white text-gray-600 hover:border-gray-300 hover:bg-gray-50 cursor-pointer'
                         }`}
                       >
                         <Database className={`w-4 h-4 ${dbType === db.id ? 'text-blue-600' : 'text-gray-400'}`} />
@@ -846,7 +847,7 @@ export function IngestionCard({ type, title, projectId, initialDatasets, initial
                         placeholder="db.example.com"
                         value={dbHost}
                         onChange={(e) => setDbHost(e.target.value)}
-                        disabled={connectionStatus === 'testing' || importing}
+                        disabled={connectionStatus === 'testing' || importing || !canEdit}
                       />
                     </div>
                     <div className="space-y-1">
@@ -855,7 +856,7 @@ export function IngestionCard({ type, title, projectId, initialDatasets, initial
                         type="number"
                         value={dbPort}
                         onChange={(e) => setDbPort(Number(e.target.value))}
-                        disabled={connectionStatus === 'testing' || importing}
+                        disabled={connectionStatus === 'testing' || importing || !canEdit}
                       />
                     </div>
                   </div>
@@ -867,7 +868,7 @@ export function IngestionCard({ type, title, projectId, initialDatasets, initial
                       placeholder="my_database"
                       value={dbName}
                       onChange={(e) => setDbName(e.target.value)}
-                      disabled={connectionStatus === 'testing' || importing}
+                      disabled={connectionStatus === 'testing' || importing || !canEdit}
                     />
                   </div>
 
@@ -879,7 +880,7 @@ export function IngestionCard({ type, title, projectId, initialDatasets, initial
                         placeholder="readonly_user"
                         value={dbUser}
                         onChange={(e) => setDbUser(e.target.value)}
-                        disabled={connectionStatus === 'testing' || importing}
+                        disabled={connectionStatus === 'testing' || importing || !canEdit}
                       />
                     </div>
                     <div className="space-y-1">
@@ -889,7 +890,7 @@ export function IngestionCard({ type, title, projectId, initialDatasets, initial
                         placeholder="••••••••"
                         value={dbPassword}
                         onChange={(e) => setDbPassword(e.target.value)}
-                        disabled={connectionStatus === 'testing' || importing}
+                        disabled={connectionStatus === 'testing' || importing || !canEdit}
                       />
                     </div>
                   </div>
@@ -904,7 +905,7 @@ export function IngestionCard({ type, title, projectId, initialDatasets, initial
                             type="checkbox"
                             checked={dbEncrypt}
                             onChange={(e) => setDbEncrypt(e.target.checked)}
-                            disabled={connectionStatus === 'testing' || importing}
+                            disabled={connectionStatus === 'testing' || importing || !canEdit}
                             className="w-4 h-4 rounded border-gray-300 text-blue-600 focus:ring-blue-500"
                           />
                           <span className="text-sm text-gray-700">Encrypt connection</span>
@@ -915,7 +916,7 @@ export function IngestionCard({ type, title, projectId, initialDatasets, initial
                             type="checkbox"
                             checked={dbTrustCert}
                             onChange={(e) => setDbTrustCert(e.target.checked)}
-                            disabled={connectionStatus === 'testing' || importing || !dbEncrypt}
+                            disabled={connectionStatus === 'testing' || importing || !dbEncrypt || !canEdit}
                             className="w-4 h-4 rounded border-gray-300 text-blue-600 focus:ring-blue-500"
                           />
                           <span className="text-sm text-gray-700">Trust server certificate</span>
@@ -929,7 +930,7 @@ export function IngestionCard({ type, title, projectId, initialDatasets, initial
                       <Select
                         value={dbSslMode}
                         onValueChange={setDbSslMode}
-                        disabled={connectionStatus === 'testing' || importing}
+                        disabled={connectionStatus === 'testing' || importing || !canEdit}
                       >
                         <SelectTrigger className="h-9 text-sm w-full">
                           <SelectValue />
@@ -946,21 +947,23 @@ export function IngestionCard({ type, title, projectId, initialDatasets, initial
 
                   {/* Test Connection button */}
                   <div className="flex items-center gap-3">
-                    <Button
-                      size="sm"
-                      variant="outline"
-                      onClick={handleTestConnection}
-                      disabled={!dbHost || !dbName || !dbUser || !dbPassword || connectionStatus === 'testing' || importing}
-                    >
-                      {connectionStatus === 'testing' ? (
-                        <span className="flex items-center gap-1.5">
-                          <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                          Testing…
-                        </span>
-                      ) : (
-                        'Test Connection'
-                      )}
-                    </Button>
+                    <RoleTooltip allowed={canEdit} requiredRole="Editor">
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        onClick={handleTestConnection}
+                        disabled={!dbHost || !dbName || !dbUser || !dbPassword || connectionStatus === 'testing' || importing || !canEdit}
+                      >
+                        {connectionStatus === 'testing' ? (
+                          <span className="flex items-center gap-1.5">
+                            <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                            Testing…
+                          </span>
+                        ) : (
+                          'Test Connection'
+                        )}
+                      </Button>
+                    </RoleTooltip>
                     {connectionStatus === 'success' && (
                       <span className="flex items-center gap-1.5 text-sm text-green-700 font-medium">
                         <CheckCircle2 className="w-4 h-4" />
@@ -1307,18 +1310,20 @@ export function IngestionCard({ type, title, projectId, initialDatasets, initial
                           </div>
                         )}
                         <div className="flex items-center gap-3">
-                          <Button
-                            size="sm"
-                            onClick={handleAddMoreImport}
-                            disabled={addMoreSelected.length === 0 || addMoreLoading}
-                            className="bg-primary hover:bg-primary/90 text-white disabled:opacity-50"
-                          >
-                            {addMoreLoading ? (
-                              <span className="flex items-center gap-1.5"><Loader2 className="w-3.5 h-3.5 animate-spin" />Importing…</span>
-                            ) : (
-                              `Import Selected (${addMoreSelected.length})`
-                            )}
-                          </Button>
+                          <RoleTooltip allowed={canEdit} requiredRole="Editor">
+                            <Button
+                              size="sm"
+                              onClick={handleAddMoreImport}
+                              disabled={addMoreSelected.length === 0 || addMoreLoading || !canEdit}
+                              className="bg-primary hover:bg-primary/90 text-white disabled:opacity-50"
+                            >
+                              {addMoreLoading ? (
+                                <span className="flex items-center gap-1.5"><Loader2 className="w-3.5 h-3.5 animate-spin" />Importing…</span>
+                              ) : (
+                                `Import Selected (${addMoreSelected.length})`
+                              )}
+                            </Button>
+                          </RoleTooltip>
                           <Button size="sm" variant="outline" onClick={() => setConnectionView('connected')}>
                             Cancel
                           </Button>
