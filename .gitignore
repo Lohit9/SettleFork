@@ -18,6 +18,10 @@
 # misc
 .DS_Store
 *.pem
+# Exception: SAML cert test fixtures are pre-generated, deterministic,
+# and committed (regenerate with scripts/generate-saml-test-certs.sh).
+# See tests/lib/sso/cert-validation.test.ts for the design rationale.
+!tests/fixtures/saml/certs/*.pem
 
 # debug
 npm-debug.log*
