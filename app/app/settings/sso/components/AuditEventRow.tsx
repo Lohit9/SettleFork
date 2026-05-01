@@ -122,10 +122,28 @@ function renderSummary(event: AuditEvent): string {
       const domain = asStr(m.domain) ?? '(unknown)'
       return `${actor} ${verb} domain ${domain}`
     }
+    case 'sso.provider.updated': {
+      if (m.partial_failure === true) {
+        const action = asStr(m.action)
+        return `${actor} — ${action ?? 'unknown'} failed (partial; ops review needed)`
+      }
+      const action = asStr(m.action)
+      if (action === 'replaced') {
+        const prevIdp = asStr(m.previous_idp_type) ?? 'previous'
+        const newIdp = asStr(m.idp_type) ?? 'new'
+        if (prevIdp !== newIdp) {
+          return `${actor} replaced ${prevIdp} provider with ${newIdp}`
+        }
+        return `${actor} replaced SSO provider (entity ID changed)`
+      }
+      if (action === 'updated_in_place') {
+        return `${actor} rotated the IdP signing certificate`
+      }
+      return `${actor} updated SSO provider`
+    }
     default:
       // Generic fallback for the remaining types
-      // (sso.provider.updated, sso.provider.removed,
-      // sso.jit.provisioned, sso.identity.linked,
+      // (sso.provider.removed, sso.jit.provisioned, sso.identity.linked,
       // sso.identity.unlinked, plus any future additions).
       return `${actor} — ${event.event_type}`
   }

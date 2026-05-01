@@ -41,6 +41,7 @@ import { createClient } from '@/lib/supabase/server'
 import { supabaseAdmin } from '@/lib/supabase/admin'
 import { requireOrgAdmin } from '@/lib/auth/require-org-role'
 import { getAuthEmailsByIds } from '@/lib/auth/users'
+import type { IdPType } from '@/lib/types/organizations'
 import type { SSOAuditEventType } from './sso-audit'
 
 // ─────────────────────────────────────────────────────────────────────
@@ -55,6 +56,12 @@ export type GetOrgSsoOverviewResult =
       enforcement_mode: 'strict' | 'hybrid' | 'optional'
       sso_configured_at: string | null
       idp_type: 'okta' | 'entra' | 'google' | 'generic' | null
+      entity_id: string | null
+      cert_fingerprint_sha256: string | null
+      cert_subject: string | null
+      cert_not_before: string | null
+      cert_not_after: string | null
+      cert_signature_algorithm: string | null
     }
 
 /**
@@ -66,6 +73,8 @@ export type GetOrgSsoOverviewResult =
  *   - `enforcement_mode`    — strict | hybrid | optional
  *   - `sso_configured_at`   — when SSO was first configured
  *   - `idp_type`            — provider type, or null when no provider row
+ *   - `entity_id` + five cert_* fields — SAML metadata surfaced for
+ *     the admin preview card (Mini-D16); NULL when no row or legacy row
  *
  * The provider row (`sso_providers`) may not exist even when
  * `sso_enabled = false` — we always return both shapes uniformly.
@@ -89,7 +98,17 @@ export async function getOrgSsoOverview(
       .single(),
     supabase
       .from('sso_providers')
-      .select('idp_type')
+      .select(
+        [
+          'idp_type',
+          'entity_id',
+          'cert_fingerprint_sha256',
+          'cert_subject',
+          'cert_not_before',
+          'cert_not_after',
+          'cert_signature_algorithm',
+        ].join(', '),
+      )
       .eq('org_id', orgId)
       .maybeSingle(),
   ])
@@ -102,12 +121,50 @@ export async function getOrgSsoOverview(
     return { ok: false, error: 'Failed to load organization' }
   }
 
+  if (providerRes.error) {
+    console.error('[sso-admin] getOrgSsoOverview sso_providers fetch failed', {
+      orgId,
+      error: providerRes.error.message,
+    })
+  }
+
+  /** Cast: generated DB types may lag migration 081. */
+  const prow =
+    providerRes.error
+      ? null
+      : (providerRes.data as null | {
+          idp_type: string | null
+          entity_id: string | null
+          cert_fingerprint_sha256: string | null
+          cert_subject: string | null
+          cert_not_before: string | null
+          cert_not_after: string | null
+          cert_signature_algorithm: string | null
+        })
+
+  const idpType: IdPType | null =
+    prow &&
+    (prow.idp_type === 'okta' ||
+      prow.idp_type === 'entra' ||
+      prow.idp_type === 'google' ||
+      prow.idp_type === 'generic')
+      ? prow.idp_type
+      : null
+
   return {
     ok: true,
     sso_enabled: orgRes.data.sso_enabled,
     enforcement_mode: orgRes.data.enforcement_mode,
     sso_configured_at: orgRes.data.sso_configured_at,
-    idp_type: providerRes.data?.idp_type ?? null,
+    idp_type: idpType,
+    entity_id: prow?.entity_id ?? null,
+    cert_fingerprint_sha256:
+      prow?.cert_fingerprint_sha256 ?? null,
+    cert_subject: prow?.cert_subject ?? null,
+    cert_not_before: prow?.cert_not_before ?? null,
+    cert_not_after: prow?.cert_not_after ?? null,
+    cert_signature_algorithm:
+      prow?.cert_signature_algorithm ?? null,
   }
 }
 

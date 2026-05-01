@@ -127,6 +127,14 @@ export interface SSOProvider {
   acs_url: string
   sp_entity_id: string
   attribute_mapping: SAMLAttributeMapping
+  // Cert metadata columns added by migration 081. Populated by the
+  // org-admin metadata upload flow (B-2-c-iii). NULL for providers
+  // configured via the platform-admin path before B-2-c-iii landed.
+  cert_fingerprint_sha256: string | null
+  cert_subject: string | null
+  cert_not_before: string | null
+  cert_not_after: string | null
+  cert_signature_algorithm: string | null
   created_at: string
   created_by: string | null
   updated_at: string

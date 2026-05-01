@@ -36,3 +36,6 @@ yarn-error.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+# Editor/sed backups of env files
+.env*.bak
+.env*.swp
