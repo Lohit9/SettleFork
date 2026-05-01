@@ -3,10 +3,11 @@
 /**
  * Server actions for the org-admin SSO settings page (B-2-c-i).
  *
- * Audience: organization owners and admins reading their OWN org's
- * SSO configuration. NOT to be confused with `lib/actions/sso.ts`,
- * whose mutations are gated to PLATFORM admins (Settle staff) and
- * exposes a different return shape.
+ * Audience: organization owners reading their OWN org's SSO
+ * configuration (the legacy `'admin'` org-role was unified into
+ * `'owner'` in migration 079 §B). NOT to be confused with
+ * `lib/actions/sso.ts`, whose mutations are gated to PLATFORM admins
+ * (Settle staff) and exposes a different return shape.
  *
  * Each of the four exported actions begins with `requireOrgAdmin(orgId)`
  * BEFORE any database access. This is the single security boundary

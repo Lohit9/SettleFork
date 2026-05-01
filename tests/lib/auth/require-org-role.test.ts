@@ -8,18 +8,29 @@
 //
 //   - Every code path returns a discriminated `{ ok }` value.
 //   - The `code` discriminator is correct for each failure mode.
-//   - The role allow-list is honored exactly (no off-by-one on the
-//     hierarchy: `editor` is NOT admin even though it sits above
-//     `viewer`).
+//   - The role allow-list is honored exactly. Allow-list semantics
+//     (vs. hierarchical comparison) are deliberately preserved so
+//     that adding new OrgRole variants in the future requires
+//     explicit caller opt-in, not implicit inheritance.
 //   - DB errors fail closed (returned as `not_member`, not surfaced).
 //   - The convenience `requireOrgAdmin` calls through with the
-//     correct allow-list (`['owner', 'admin']`).
+//     correct allow-list (`['owner']` post-migration 079).
+//
+// Post-079 OrgRole model (see `lib/types/organizations.ts:17` and
+// `supabase/migrations/079_project_rbac_strict_membership.sql §B`):
+// `OrgRole = 'owner' | 'member'`. The legacy `'admin'`/`'editor'`/
+// `'viewer'` org-role values were unified into `'owner'`/`'member'`
+// at the data layer; the database CHECK constraint now structurally
+// rejects the old values, so tests that mock them would simulate
+// states that cannot occur at runtime.
 //
 // The Supabase SSR client is mocked at the module level so we can
 // drive `auth.getUser()` and the `org_memberships` lookup
 // deterministically without touching a real DB.
 
 import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { readFileSync } from 'node:fs'
+import { resolve } from 'node:path'
 
 // ─────────────────────────────────────────────────────────────────────
 // vi.hoisted mocks
@@ -83,7 +94,7 @@ describe('requireOrgRole — authentication', () => {
   it('returns code=unauthenticated when no session user', async () => {
     setSessionUser(null)
     const { requireOrgRole } = await importHelpers()
-    const result = await requireOrgRole('org-1', ['owner', 'admin'])
+    const result = await requireOrgRole('org-1', ['owner'])
     expect(result).toEqual({
       ok: false,
       error: 'Not authenticated',
@@ -94,7 +105,7 @@ describe('requireOrgRole — authentication', () => {
   it('does NOT query org_memberships when the session is missing', async () => {
     setSessionUser(null)
     const { requireOrgRole } = await importHelpers()
-    await requireOrgRole('org-1', ['owner', 'admin'])
+    await requireOrgRole('org-1', ['owner'])
     // The membership lookup must be short-circuited; otherwise an
     // unauthenticated path could leak info via timing or RLS error
     // messages.
@@ -111,7 +122,7 @@ describe('requireOrgRole — membership', () => {
     setSessionUser('user-1')
     setMembershipRow(null)
     const { requireOrgRole } = await importHelpers()
-    const result = await requireOrgRole('org-1', ['owner', 'admin'])
+    const result = await requireOrgRole('org-1', ['owner'])
     expect(result).toEqual({
       ok: false,
       error: 'Not a member of this organization',
@@ -127,7 +138,7 @@ describe('requireOrgRole — membership', () => {
     setSessionUser('user-1')
     setMembershipRow(null, { message: 'connection reset' })
     const { requireOrgRole } = await importHelpers()
-    const result = await requireOrgRole('org-1', ['owner', 'admin'])
+    const result = await requireOrgRole('org-1', ['owner'])
 
     expect(result).toEqual({
       ok: false,
@@ -149,54 +160,27 @@ describe('requireOrgRole — membership', () => {
 // ─────────────────────────────────────────────────────────────────────
 
 describe('requireOrgRole — role allow-list', () => {
-  it('returns code=insufficient_role for a viewer when admin/owner required', async () => {
+  it('returns code=insufficient_role for a member when owner required', async () => {
     setSessionUser('user-1')
-    setMembershipRow('viewer')
+    setMembershipRow('member')
     const { requireOrgRole } = await importHelpers()
-    const result = await requireOrgRole('org-1', ['owner', 'admin'])
+    const result = await requireOrgRole('org-1', ['owner'])
     expect(result.ok).toBe(false)
     if (!result.ok) {
       expect(result.code).toBe('insufficient_role')
       // The message includes the actual role and the requirement —
       // useful for ops triage but never echoes attacker-controlled
       // input.
-      expect(result.error).toContain("'viewer'")
-      expect(result.error).toMatch(/owner.*admin/)
+      expect(result.error).toContain("'member'")
+      expect(result.error).toMatch(/owner/)
     }
-  })
-
-  it("returns code=insufficient_role for editor (the trap role above 'viewer' but below 'admin')", async () => {
-    // Defense-in-depth: the role hierarchy at
-    // `lib/types/organizations.ts:3-8` numbers editor=2, admin=3.
-    // A buggy implementation that compared `role >= 'admin'` could
-    // accidentally pass editors. Allow-list semantics catch this.
-    setSessionUser('user-1')
-    setMembershipRow('editor')
-    const { requireOrgRole } = await importHelpers()
-    const result = await requireOrgRole('org-1', ['owner', 'admin'])
-    expect(result.ok).toBe(false)
-    if (!result.ok) {
-      expect(result.code).toBe('insufficient_role')
-    }
-  })
-
-  it('returns ok=true for an admin', async () => {
-    setSessionUser('user-1')
-    setMembershipRow('admin')
-    const { requireOrgRole } = await importHelpers()
-    const result = await requireOrgRole('org-1', ['owner', 'admin'])
-    expect(result).toEqual({
-      ok: true,
-      userId: 'user-1',
-      role: 'admin',
-    })
   })
 
   it('returns ok=true for an owner', async () => {
     setSessionUser('user-1')
     setMembershipRow('owner')
     const { requireOrgRole } = await importHelpers()
-    const result = await requireOrgRole('org-1', ['owner', 'admin'])
+    const result = await requireOrgRole('org-1', ['owner'])
     expect(result).toEqual({
       ok: true,
       userId: 'user-1',
@@ -204,15 +188,22 @@ describe('requireOrgRole — role allow-list', () => {
     })
   })
 
-  it('honors a narrower allow-list (owner-only)', async () => {
+  it('honors a broader allow-list (owner-or-member)', async () => {
+    // Documents the escape hatch: callers that legitimately need
+    // both roles to pass can opt in explicitly without a new helper.
+    // No production caller does this today (every gate is owner-only
+    // post-079), but the surface is intentionally available for
+    // future "any-member" reads (e.g. a future read-only SSO config
+    // view for non-owners).
     setSessionUser('user-1')
-    setMembershipRow('admin')
+    setMembershipRow('member')
     const { requireOrgRole } = await importHelpers()
-    const result = await requireOrgRole('org-1', ['owner'])
-    // admin is in the owner-or-admin allow-list elsewhere, but for
-    // owner-only it must be rejected.
-    expect(result.ok).toBe(false)
-    if (!result.ok) expect(result.code).toBe('insufficient_role')
+    const result = await requireOrgRole('org-1', ['owner', 'member'])
+    expect(result).toEqual({
+      ok: true,
+      userId: 'user-1',
+      role: 'member',
+    })
   })
 })
 
@@ -229,28 +220,13 @@ describe('requireOrgAdmin — convenience wrapper', () => {
     expect(result).toEqual({ ok: true, userId: 'user-1', role: 'owner' })
   })
 
-  it('passes for admin', async () => {
+  it('rejects member (the JIT-provisioned default per migration 079 §B)', async () => {
+    // Critical: JIT-provisioned users land with role='member' (the
+    // default after migration 079 §B set `org_memberships.role
+    // DEFAULT 'member'`). This test pins that they cannot access
+    // any org-admin-gated action.
     setSessionUser('user-1')
-    setMembershipRow('admin')
-    const { requireOrgAdmin } = await importHelpers()
-    const result = await requireOrgAdmin('org-1')
-    expect(result).toEqual({ ok: true, userId: 'user-1', role: 'admin' })
-  })
-
-  it('rejects editor', async () => {
-    setSessionUser('user-1')
-    setMembershipRow('editor')
-    const { requireOrgAdmin } = await importHelpers()
-    const result = await requireOrgAdmin('org-1')
-    expect(result.ok).toBe(false)
-    if (!result.ok) expect(result.code).toBe('insufficient_role')
-  })
-
-  it('rejects viewer (the JIT-provisioned default — see migration 070:409-413)', async () => {
-    // Critical: JIT-provisioned users from B-2-a-ii get role='viewer'.
-    // This test pins that they cannot access B-2-c-i admin reads.
-    setSessionUser('user-1')
-    setMembershipRow('viewer')
+    setMembershipRow('member')
     const { requireOrgAdmin } = await importHelpers()
     const result = await requireOrgAdmin('org-1')
     expect(result.ok).toBe(false)
@@ -272,5 +248,30 @@ describe('requireOrgAdmin — convenience wrapper', () => {
     const result = await requireOrgAdmin('org-1')
     expect(result.ok).toBe(false)
     if (!result.ok) expect(result.code).toBe('not_member')
+  })
+})
+
+// ─────────────────────────────────────────────────────────────────────
+// Post-079 contract pinning (source-level)
+// ─────────────────────────────────────────────────────────────────────
+//
+// Mirrors the source-level pin pattern established by
+// `tests/actions/organizations-rbac.test.ts` and
+// `tests/actions/org-invites-fanout.test.ts` (added by the
+// project-rbac PR). A regression that re-introduces the legacy
+// `['owner', 'admin']` allow-list — e.g. a well-meaning revert
+// during a future refactor — fails CI before any runtime behavior
+// is exercised.
+
+describe('post-079 contract pinning (source-level)', () => {
+  it("requireOrgAdmin's allow-list is owner-only (no legacy 'admin' org-role)", () => {
+    const src = readFileSync(
+      resolve(__dirname, '../../../lib/auth/require-org-role.ts'),
+      'utf8',
+    )
+    expect(src).not.toMatch(
+      /requireOrgRole\(\s*orgId\s*,\s*\['owner'\s*,\s*'admin'\]/,
+    )
+    expect(src).toMatch(/requireOrgRole\(\s*orgId\s*,\s*\['owner'\]\s*\)/)
   })
 })

@@ -71,9 +71,10 @@ export type RequireOrgRoleResult =
  *
  * @param orgId   The org being accessed. Must be the org the caller
  *                is about to read/write.
- * @param allowed Allowed roles. Use `['owner', 'admin']` for admin
- *                actions; use the convenience wrapper `requireOrgAdmin`
- *                for that common case.
+ * @param allowed Allowed roles. Use `['owner']` for owner-only actions
+ *                (the common case — prefer the convenience wrapper
+ *                `requireOrgAdmin`), or `['owner', 'member']` when
+ *                broader access is intended.
  */
 export async function requireOrgRole(
   orgId: string,
@@ -141,10 +142,12 @@ export async function requireOrgRole(
 }
 
 /**
- * Convenience wrapper: `requireOrgRole(orgId, ['owner', 'admin'])`.
+ * Convenience wrapper: `requireOrgRole(orgId, ['owner'])`.
  *
  * Use for any org-admin-only operation. The role allow-list mirrors
- * `get_user_admin_org_ids()` from migration 051 — keeping the
+ * `get_user_admin_org_ids()` from migration 051 (rewritten in
+ * migration 079 §D to filter on `role = 'owner'` after the legacy
+ * `'admin'` org-role was unified into `'owner'`) — keeping the
  * application gate and the database policy synchronized at a single
  * symbolic layer.
  */

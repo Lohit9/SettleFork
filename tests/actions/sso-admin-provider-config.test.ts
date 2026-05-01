@@ -291,7 +291,7 @@ beforeEach(() => {
   requireOrgAdminMock.mockResolvedValue({
     ok: true,
     userId: USER_ID,
-    role: 'admin',
+    role: 'owner',
   })
   checkRateLimitMock.mockResolvedValue({
     allowed: true,
