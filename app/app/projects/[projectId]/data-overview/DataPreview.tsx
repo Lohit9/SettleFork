@@ -8,6 +8,8 @@ import type { TableOption, TargetFieldConstraint } from '@/lib/actions/data-over
 import type { StagedMappingOption } from '@/lib/actions/staging'
 import { AlertTriangle } from '@/components/icons'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
+import { useProjectRole } from '@/lib/hooks/useProjectRole'
+import { RoleTooltip } from '@/components/app/RoleTooltip'
 
 interface DataPreviewProps {
   projectId: string
@@ -21,6 +23,8 @@ const PAGE_SIZE = 10
 
 export default function DataPreview({ projectId, tables, isArchived = false, archivedAt, initialSelectedTableId }: DataPreviewProps) {
   const router = useRouter()
+  const { can } = useProjectRole(projectId)
+  const canEdit = can('edit')
 
   // ── View mode ──────────────────────────────────────────────────────────────
   const [viewMode, setViewMode] = useState<'source' | 'transformed'>('source')
@@ -406,18 +410,20 @@ export default function DataPreview({ projectId, tables, isArchived = false, arc
                       ).
                     </p>
                   </div>
-                  <button
-                    onClick={handleRegenerateStagedData}
-                    disabled={isRegenerating}
-                    className="flex-shrink-0 px-3 py-1.5 text-xs font-medium bg-amber-600 hover:bg-amber-700 text-white rounded-lg disabled:opacity-50 flex items-center gap-1.5"
-                  >
-                    {isRegenerating ? (
-                      <>
-                        <span className="w-3 h-3 border-2 border-white/30 border-t-white rounded-full animate-spin" />
-                        Staging…
-                      </>
-                    ) : 'Regenerate Staged Data'}
-                  </button>
+                  <RoleTooltip allowed={canEdit} requiredRole="Editor">
+                    <button
+                      onClick={handleRegenerateStagedData}
+                      disabled={isRegenerating || !canEdit}
+                      className="flex-shrink-0 px-3 py-1.5 text-xs font-medium bg-amber-600 hover:bg-amber-700 text-white rounded-lg disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-1.5"
+                    >
+                      {isRegenerating ? (
+                        <>
+                          <span className="w-3 h-3 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+                          Staging…
+                        </>
+                      ) : 'Regenerate Staged Data'}
+                    </button>
+                  </RoleTooltip>
                 </div>
               )}
 
