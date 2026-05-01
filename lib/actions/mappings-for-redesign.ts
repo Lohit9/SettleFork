@@ -65,7 +65,7 @@ import { createClient } from '@/lib/supabase/server'
 import { supabaseAdmin } from '@/lib/supabase/admin'
 import {
   getMappingsForRedesignCore,
-} from '@/lib/actions/_mappings-for-redesign-core'
+} from '@/lib/ai/mapping-engine'
 import {
   deleteFieldMapping,
   generateMappings as legacyGenerateMappings,

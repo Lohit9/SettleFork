@@ -6,7 +6,16 @@
  * Server actions in lib/actions/mappings.ts and lib/actions/mappings-for-redesign.ts
  * call into this module. UI code MUST NOT import this file directly —
  * see tests/lib/no-engine-in-redesign-ui.test.ts for the enforcement.
+ *
+ * File convention: pure things first, side-effecting things last.
+ *   1. Types
+ *   2. Pure helpers (un-exported)
+ *   3. Pure exported entry points (`assembleMappingsForRedesign`, …)
+ *   4. DB-touching orchestrators (`getMappingsForRedesignCore`, future
+ *      `runMappingGeneration`, `runMappingSuggestion`, …)
  */
+
+import type { SupabaseClient } from '@supabase/supabase-js'
 
 import type {
   JoinSpec,
@@ -143,207 +152,6 @@ export type {
   RawMappingSourceRow,
   RawSourceAckRow,
   RawTransformationRow,
-}
-
-// ─── Pure assembly ───────────────────────────────────────────────────
-
-/**
- * Pure, testable assembly step — no DB, no side effects. Consumes the
- * raw row arrays from Round 2-4 and emits the public contract.
- *
- * All design-contract invariants live here:
- *   • row kind discrimination (mapped / VA / acknowledged / unmapped)
- *   • canonical row ordering (see §9 Q7 resolution)
- *   • server-side `MappingCounts` rollup
- *   • join-annotation derivation (FK inference + JSONB fallback)
- *   • defensive coercion of nullable DB columns
- *
- * Do not add new invariants here without updating the design doc §3/§5
- * — this function IS the contract implementation.
- */
-export function assembleMappingsForRedesign(
-  input: AssembleInput,
-): MappingsForRedesignResult {
-  const {
-    projectId,
-    datasets,
-    tables,
-    fields,
-    tfms,
-    mappingSources,
-    sourceAcks,
-    transformations,
-  } = input
-
-  // ── Build dataset / table / field indexes ──────────────────────────
-  const datasetsById = new Map(datasets.map((d) => [d.id, d]))
-  const tablesById = new Map(tables.map((t) => [t.id, t]))
-  const fieldsById = new Map(fields.map((f) => [f.id, f]))
-
-  const sourceDatasetIds = new Set(
-    datasets.filter((d) => d.role === 'source').map((d) => d.id),
-  )
-  const targetDatasetIds = new Set(
-    datasets.filter((d) => d.role === 'target').map((d) => d.id),
-  )
-
-  const sourceTables = tables.filter((t) => sourceDatasetIds.has(t.dataset_id))
-  const targetTables = tables.filter((t) => targetDatasetIds.has(t.dataset_id))
-
-  const sourceTableIds = new Set(sourceTables.map((t) => t.id))
-  const targetTableIds = new Set(targetTables.map((t) => t.id))
-
-  const sourceFields = fields.filter((f) => sourceTableIds.has(f.table_id))
-  const targetFields = fields.filter((f) => targetTableIds.has(f.table_id))
-
-  // Field-count indexes for TableSummary rollups.
-  const sourceFieldCountByTable = countByKey(sourceFields, (f) => f.table_id)
-  const targetFieldCountByTable = countByKey(targetFields, (f) => f.table_id)
-
-  // Fields grouped by table — needed for FK-inference during joinAnnotation.
-  const fieldsByTableId = new Map<string, RawFieldRow[]>()
-  for (const f of fields) {
-    const arr = fieldsByTableId.get(f.table_id) ?? []
-    arr.push(f)
-    fieldsByTableId.set(f.table_id, arr)
-  }
-
-  // ── Build mapping_sources and transformations by TFM ──────────────
-  const mappingSourcesByTfm = new Map<string, RawMappingSourceRow[]>()
-  for (const ms of mappingSources) {
-    const arr = mappingSourcesByTfm.get(ms.target_field_mapping_id) ?? []
-    arr.push(ms)
-    mappingSourcesByTfm.set(ms.target_field_mapping_id, arr)
-  }
-  for (const [k, arr] of mappingSourcesByTfm) {
-    arr.sort((a, b) => a.ordinal - b.ordinal)
-    mappingSourcesByTfm.set(k, arr)
-  }
-
-  const transformationByTfm = new Map<string, RawTransformationRow>()
-  for (const tr of transformations) {
-    // Invariant: COUNT(transformations) per tfm ≤ 1 (see lib/types/mapping-redesign.ts).
-    // If the DB contains a duplicate, the second entry wins here — consistent
-    // with the legacy getMappings behaviour (upsert semantics).
-    transformationByTfm.set(tr.target_field_mapping_id, tr)
-  }
-
-  // ── Build TFMs by target_field_id for row assembly ────────────────
-  const tfmByTargetFieldId = new Map<string, RawTfmRow>()
-  for (const t of tfms) {
-    tfmByTargetFieldId.set(t.target_field_id, t)
-  }
-
-  // ── Assemble rows ─────────────────────────────────────────────────
-  const rows: MappingRow[] = []
-
-  for (const targetField of targetFields) {
-    const targetFieldRef = buildTargetFieldRef(targetField, tablesById)
-    if (!targetFieldRef) continue // Parent target table missing (shouldn't happen under normal ingestion).
-
-    const tfm = tfmByTargetFieldId.get(targetField.id)
-    if (!tfm) {
-      rows.push(buildUnmappedRow(targetFieldRef))
-      continue
-    }
-
-    const tfmSources = mappingSourcesByTfm.get(tfm.id) ?? []
-    const transformation = transformationByTfm.get(tfm.id) ?? null
-
-    // Discriminator logic per design §3.1 Call A:
-    //   is_acknowledged === true              → 'target_acknowledged'
-    //   combination_type === 'custom_sql' with zero sources → 'value_assignment'
-    //   otherwise (has ≥ 1 source)            → 'mapped'
-    if (tfm.is_acknowledged) {
-      rows.push(buildTargetAcknowledgedRow(tfm, targetFieldRef))
-      continue
-    }
-
-    if (tfm.combination_type === 'custom_sql' && tfmSources.length === 0) {
-      rows.push(buildValueAssignmentRow(tfm, targetFieldRef, transformation))
-      continue
-    }
-
-    // Mapped row. Require at least one source — a TFM with
-    // combination_type != 'custom_sql' and zero sources is
-    // semantically invalid; surface it as unmapped to avoid emitting
-    // a MappedRow with an empty `sources` array that would violate
-    // the Rules 1-4 selector.
-    if (tfmSources.length === 0) {
-      rows.push(buildUnmappedRow(targetFieldRef))
-      continue
-    }
-
-    rows.push(
-      buildMappedRow(
-        tfm,
-        targetFieldRef,
-        tfmSources,
-        transformation,
-        tablesById,
-        fieldsById,
-        fieldsByTableId,
-      ),
-    )
-  }
-
-  // ── Canonical ordering (§9 Q7) ────────────────────────────────────
-  rows.sort(compareRows)
-
-  // ── Filter universes ──────────────────────────────────────────────
-  const targetTableSummaries: TargetTableSummary[] = targetTables
-    .map((t) => {
-      const dataset = datasetsById.get(t.dataset_id)
-      return {
-        id: t.id,
-        name: t.name,
-        datasetName: dataset?.name ?? '',
-        fieldCount: targetFieldCountByTable.get(t.id) ?? 0,
-      }
-    })
-    .sort((a, b) => localeCompare(a.name, b.name))
-
-  const sourceTableSummaries: SourceTableSummary[] = sourceTables
-    .map((t) => {
-      const dataset = datasetsById.get(t.dataset_id)
-      return {
-        id: t.id,
-        name: t.name,
-        datasetName: dataset?.name ?? '',
-        fieldCount: sourceFieldCountByTable.get(t.id) ?? 0,
-      }
-    })
-    .sort((a, b) => localeCompare(a.name, b.name))
-
-  const sourceFieldAcknowledgments: SourceFieldAcknowledgmentSummary[] =
-    sourceAcks.map((a) => ({
-      id: a.id,
-      sourceFieldId: a.source_field_id,
-      reason: a.reason,
-    }))
-
-  // ── Source schema sidebar (Phase 3 Gap 11b) ──────────────────────
-  const sourceFieldsWithState = buildSourceFieldsWithState(
-    sourceFields,
-    tablesById,
-    tfms,
-    mappingSources,
-    sourceAcks,
-  )
-
-  // ── Project-level counters ────────────────────────────────────────
-  const counts: MappingCounts = computeCounts(rows)
-
-  return {
-    projectId,
-    rows,
-    targetTables: targetTableSummaries,
-    sourceTables: sourceTableSummaries,
-    sourceFieldAcknowledgments,
-    sourceFields: sourceFieldsWithState,
-    counts,
-    targetSchemaEmpty: targetTables.length === 0 || targetFields.length === 0,
-  }
 }
 
 // ─── Row builders ────────────────────────────────────────────────────
@@ -838,4 +646,318 @@ function computeCounts(rows: MappingRow[]): MappingCounts {
     }
   }
   return { total, approved, needsReview, rejected, unmapped }
+}
+
+// ─── Pure assembly ───────────────────────────────────────────────────
+
+/**
+ * Pure, testable assembly step — no DB, no side effects. Consumes the
+ * raw row arrays from Round 2-4 and emits the public contract.
+ *
+ * All design-contract invariants live here:
+ *   • row kind discrimination (mapped / VA / acknowledged / unmapped)
+ *   • canonical row ordering (see §9 Q7 resolution)
+ *   • server-side `MappingCounts` rollup
+ *   • join-annotation derivation (FK inference + JSONB fallback)
+ *   • defensive coercion of nullable DB columns
+ *
+ * Do not add new invariants here without updating the design doc §3/§5
+ * — this function IS the contract implementation.
+ */
+export function assembleMappingsForRedesign(
+  input: AssembleInput,
+): MappingsForRedesignResult {
+  const {
+    projectId,
+    datasets,
+    tables,
+    fields,
+    tfms,
+    mappingSources,
+    sourceAcks,
+    transformations,
+  } = input
+
+  // ── Build dataset / table / field indexes ──────────────────────────
+  const datasetsById = new Map(datasets.map((d) => [d.id, d]))
+  const tablesById = new Map(tables.map((t) => [t.id, t]))
+  const fieldsById = new Map(fields.map((f) => [f.id, f]))
+
+  const sourceDatasetIds = new Set(
+    datasets.filter((d) => d.role === 'source').map((d) => d.id),
+  )
+  const targetDatasetIds = new Set(
+    datasets.filter((d) => d.role === 'target').map((d) => d.id),
+  )
+
+  const sourceTables = tables.filter((t) => sourceDatasetIds.has(t.dataset_id))
+  const targetTables = tables.filter((t) => targetDatasetIds.has(t.dataset_id))
+
+  const sourceTableIds = new Set(sourceTables.map((t) => t.id))
+  const targetTableIds = new Set(targetTables.map((t) => t.id))
+
+  const sourceFields = fields.filter((f) => sourceTableIds.has(f.table_id))
+  const targetFields = fields.filter((f) => targetTableIds.has(f.table_id))
+
+  // Field-count indexes for TableSummary rollups.
+  const sourceFieldCountByTable = countByKey(sourceFields, (f) => f.table_id)
+  const targetFieldCountByTable = countByKey(targetFields, (f) => f.table_id)
+
+  // Fields grouped by table — needed for FK-inference during joinAnnotation.
+  const fieldsByTableId = new Map<string, RawFieldRow[]>()
+  for (const f of fields) {
+    const arr = fieldsByTableId.get(f.table_id) ?? []
+    arr.push(f)
+    fieldsByTableId.set(f.table_id, arr)
+  }
+
+  // ── Build mapping_sources and transformations by TFM ──────────────
+  const mappingSourcesByTfm = new Map<string, RawMappingSourceRow[]>()
+  for (const ms of mappingSources) {
+    const arr = mappingSourcesByTfm.get(ms.target_field_mapping_id) ?? []
+    arr.push(ms)
+    mappingSourcesByTfm.set(ms.target_field_mapping_id, arr)
+  }
+  for (const [k, arr] of mappingSourcesByTfm) {
+    arr.sort((a, b) => a.ordinal - b.ordinal)
+    mappingSourcesByTfm.set(k, arr)
+  }
+
+  const transformationByTfm = new Map<string, RawTransformationRow>()
+  for (const tr of transformations) {
+    // Invariant: COUNT(transformations) per tfm ≤ 1 (see lib/types/mapping-redesign.ts).
+    // If the DB contains a duplicate, the second entry wins here — consistent
+    // with the legacy getMappings behaviour (upsert semantics).
+    transformationByTfm.set(tr.target_field_mapping_id, tr)
+  }
+
+  // ── Build TFMs by target_field_id for row assembly ────────────────
+  const tfmByTargetFieldId = new Map<string, RawTfmRow>()
+  for (const t of tfms) {
+    tfmByTargetFieldId.set(t.target_field_id, t)
+  }
+
+  // ── Assemble rows ─────────────────────────────────────────────────
+  const rows: MappingRow[] = []
+
+  for (const targetField of targetFields) {
+    const targetFieldRef = buildTargetFieldRef(targetField, tablesById)
+    if (!targetFieldRef) continue // Parent target table missing (shouldn't happen under normal ingestion).
+
+    const tfm = tfmByTargetFieldId.get(targetField.id)
+    if (!tfm) {
+      rows.push(buildUnmappedRow(targetFieldRef))
+      continue
+    }
+
+    const tfmSources = mappingSourcesByTfm.get(tfm.id) ?? []
+    const transformation = transformationByTfm.get(tfm.id) ?? null
+
+    // Discriminator logic per design §3.1 Call A:
+    //   is_acknowledged === true              → 'target_acknowledged'
+    //   combination_type === 'custom_sql' with zero sources → 'value_assignment'
+    //   otherwise (has ≥ 1 source)            → 'mapped'
+    if (tfm.is_acknowledged) {
+      rows.push(buildTargetAcknowledgedRow(tfm, targetFieldRef))
+      continue
+    }
+
+    if (tfm.combination_type === 'custom_sql' && tfmSources.length === 0) {
+      rows.push(buildValueAssignmentRow(tfm, targetFieldRef, transformation))
+      continue
+    }
+
+    // Mapped row. Require at least one source — a TFM with
+    // combination_type != 'custom_sql' and zero sources is
+    // semantically invalid; surface it as unmapped to avoid emitting
+    // a MappedRow with an empty `sources` array that would violate
+    // the Rules 1-4 selector.
+    if (tfmSources.length === 0) {
+      rows.push(buildUnmappedRow(targetFieldRef))
+      continue
+    }
+
+    rows.push(
+      buildMappedRow(
+        tfm,
+        targetFieldRef,
+        tfmSources,
+        transformation,
+        tablesById,
+        fieldsById,
+        fieldsByTableId,
+      ),
+    )
+  }
+
+  // ── Canonical ordering (§9 Q7) ────────────────────────────────────
+  rows.sort(compareRows)
+
+  // ── Filter universes ──────────────────────────────────────────────
+  const targetTableSummaries: TargetTableSummary[] = targetTables
+    .map((t) => {
+      const dataset = datasetsById.get(t.dataset_id)
+      return {
+        id: t.id,
+        name: t.name,
+        datasetName: dataset?.name ?? '',
+        fieldCount: targetFieldCountByTable.get(t.id) ?? 0,
+      }
+    })
+    .sort((a, b) => localeCompare(a.name, b.name))
+
+  const sourceTableSummaries: SourceTableSummary[] = sourceTables
+    .map((t) => {
+      const dataset = datasetsById.get(t.dataset_id)
+      return {
+        id: t.id,
+        name: t.name,
+        datasetName: dataset?.name ?? '',
+        fieldCount: sourceFieldCountByTable.get(t.id) ?? 0,
+      }
+    })
+    .sort((a, b) => localeCompare(a.name, b.name))
+
+  const sourceFieldAcknowledgments: SourceFieldAcknowledgmentSummary[] =
+    sourceAcks.map((a) => ({
+      id: a.id,
+      sourceFieldId: a.source_field_id,
+      reason: a.reason,
+    }))
+
+  // ── Source schema sidebar (Phase 3 Gap 11b) ──────────────────────
+  const sourceFieldsWithState = buildSourceFieldsWithState(
+    sourceFields,
+    tablesById,
+    tfms,
+    mappingSources,
+    sourceAcks,
+  )
+
+  // ── Project-level counters ────────────────────────────────────────
+  const counts: MappingCounts = computeCounts(rows)
+
+  return {
+    projectId,
+    rows,
+    targetTables: targetTableSummaries,
+    sourceTables: sourceTableSummaries,
+    sourceFieldAcknowledgments,
+    sourceFields: sourceFieldsWithState,
+    counts,
+    targetSchemaEmpty: targetTables.length === 0 || targetFields.length === 0,
+  }
+}
+
+// ─── Full 4-round fetch + assembly ───────────────────────────────────
+
+/**
+ * Full Mapping-page read path for the Phase 3 redesign UI.
+ *
+ * Returns `null` on any failure to access the project (unauthenticated
+ * via RLS, project missing, or project ID malformed) — callers fall
+ * back to `notFound()`. All other errors propagate as thrown exceptions
+ * the wrapping server action surfaces to the user.
+ *
+ * Uses the supplied Supabase client — typically a user-scoped
+ * `createClient()` from `lib/supabase/server.ts` so RLS gates the read.
+ * The integration test can pass `supabaseAdmin` to bypass RLS (it
+ * filters by `projectId` explicitly, so the bypass is scope-safe).
+ */
+export async function getMappingsForRedesignCore(
+  supabase: SupabaseClient,
+  projectId: string,
+): Promise<MappingsForRedesignResult | null> {
+  // ── Round 1 — access gate ─────────────────────────────────────────
+  const { data: projectRow } = await supabase
+    .from('projects')
+    .select('id')
+    .eq('id', projectId)
+    .maybeSingle()
+  if (!projectRow) return null
+
+  // ── Round 2 — project-scoped parallel fetch ───────────────────────
+  const [
+    { data: datasetsRaw },
+    { data: tfmsRaw },
+    { data: sourceAcksRaw },
+  ] = await Promise.all([
+    supabase
+      .from('datasets')
+      .select('id, role, name')
+      .eq('project_id', projectId),
+    supabase
+      .from('target_field_mappings')
+      .select('id, target_field_id, confidence, status, ai_reasoning, is_acknowledged, acknowledgment_reason, combination_type, combination_sql')
+      .eq('project_id', projectId),
+    supabase
+      .from('source_field_acknowledgments')
+      .select('id, source_field_id, reason')
+      .eq('project_id', projectId),
+  ])
+
+  const datasets = (datasetsRaw ?? []) as RawDatasetRow[]
+  const tfms = (tfmsRaw ?? []) as RawTfmRow[]
+  const sourceAcks = (sourceAcksRaw ?? []) as RawSourceAckRow[]
+
+  const datasetIds = datasets.map((d) => d.id)
+  const tfmIds = tfms.map((t) => t.id)
+
+  // ── Round 3 — dependent IN-list fetch (tables + mapping_sources) ──
+  const [
+    { data: tablesRaw },
+    { data: mappingSourcesRaw },
+  ] = await Promise.all([
+    datasetIds.length > 0
+      ? supabase
+          .from('tables')
+          .select('id, dataset_id, name')
+          .in('dataset_id', datasetIds)
+      : Promise.resolve({ data: [] as RawTableRow[] }),
+    tfmIds.length > 0
+      ? supabase
+          .from('mapping_sources')
+          .select('id, target_field_mapping_id, source_field_id, source_table_id, confidence, ai_reasoning, type_compatibility, join_spec, ordinal')
+          .in('target_field_mapping_id', tfmIds)
+          .order('ordinal', { ascending: true })
+      : Promise.resolve({ data: [] as RawMappingSourceRow[] }),
+  ])
+
+  const tables = (tablesRaw ?? []) as RawTableRow[]
+  const mappingSources = (mappingSourcesRaw ?? []) as RawMappingSourceRow[]
+
+  const tableIds = tables.map((t) => t.id)
+
+  // ── Round 4 — fields + transformations ───────────────────────────
+  const [
+    { data: fieldsRaw },
+    { data: transformationsRaw },
+  ] = await Promise.all([
+    tableIds.length > 0
+      ? supabase
+          .from('fields')
+          .select('id, table_id, name, data_type, is_nullable, is_primary_key, is_foreign_key, fk_reference, default_value, ordinal_position, field_profiles(field_id, sample_values)')
+          .in('table_id', tableIds)
+      : Promise.resolve({ data: [] as RawFieldRow[] }),
+    tfmIds.length > 0
+      ? supabase
+          .from('transformations')
+          .select('id, target_field_mapping_id, status, description, generated_sql')
+          .in('target_field_mapping_id', tfmIds)
+      : Promise.resolve({ data: [] as RawTransformationRow[] }),
+  ])
+
+  const fields = (fieldsRaw ?? []) as RawFieldRow[]
+  const transformations = (transformationsRaw ?? []) as RawTransformationRow[]
+
+  return assembleMappingsForRedesign({
+    projectId,
+    datasets,
+    tables,
+    fields,
+    tfms,
+    mappingSources,
+    sourceAcks,
+    transformations,
+  })
 }
