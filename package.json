@@ -11,6 +11,8 @@
     "seed:migrations": "npx tsx scripts/seed-migration-pages.ts",
     "sso:test:setup": "npx tsx scripts/sso-test-setup.ts",
     "sso:test:cleanup": "npx tsx scripts/sso-test-cleanup.ts",
+    "sso:test:setup:isolation": "npx tsx scripts/sso-test-setup-isolation.ts",
+    "sso:test:cleanup:isolation": "npx tsx scripts/sso-test-cleanup-isolation.ts",
     "test": "vitest run",
     "test:watch": "vitest",
     "test:ui": "vitest --ui",

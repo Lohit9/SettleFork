@@ -9,6 +9,10 @@ import { emitSsoAuditEvent } from '@/lib/actions/sso-audit'
 import { hashEmail } from '@/lib/sso/email-hash'
 import { getClientIp, hashIp } from '@/lib/auth/get-client-ip'
 import { checkRateLimit } from '@/lib/rate-limit/upstash'
+import {
+  DOMAIN_REGEX,
+  VALID_ENFORCEMENT_MODES,
+} from '@/lib/sso/domain-validation'
 import type {
   SSOProvider,
   SSODomain,
@@ -56,14 +60,11 @@ const VALID_IDP_TYPES: readonly IdPType[] = [
   'generic',
 ] as const
 
-const VALID_ENFORCEMENT_MODES: readonly EnforcementMode[] = [
-  'strict',
-  'hybrid',
-  'optional',
-] as const
-
-const DOMAIN_REGEX =
-  /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)+$/
+// `DOMAIN_REGEX` and `VALID_ENFORCEMENT_MODES` were inlined here in
+// B-2-c-i. Extracted in B-2-c-ii to `@/lib/sso/domain-validation` so
+// the org-admin mutations in `lib/actions/sso-admin-mutations.ts`
+// share one source of truth — drift between platform-admin and
+// org-admin validation was the highest-risk regression vector.
 
 const EMAIL_REGEX = /^[^@\s]+@[^@\s]+\.[^@\s]+$/
 

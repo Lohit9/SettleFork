@@ -37,24 +37,46 @@ interface Props {
   domains: ListOrgSsoDomainsResult
   linkedUsers: ListOrgSsoLinkedUsersResult
   auditEvents: ListOrgSsoAuditEventsResult
+  /**
+   * True when the calling user is an org owner or admin and may
+   * mutate SSO state. False (default) renders the page in
+   * read-only mode — no add-domain form, no remove buttons, no
+   * editable enforcement dropdown. Defaults to false so the page
+   * is read-only-by-default if a parent ever forgets to wire the
+   * prop (defense in depth — the actions also enforce this gate
+   * server-side).
+   */
+  canEdit?: boolean
 }
 
 export function SsoSettingsContent({
-  orgId: _orgId,
+  orgId,
   overview,
   domains,
   linkedUsers,
   auditEvents,
+  canEdit = false,
 }: Props) {
   // Empty-state branch — only when we definitively know SSO is OFF.
   if (overview.ok && !overview.sso_enabled) {
     return <SsoEmptyState />
   }
 
+  // Pluck the current enforcement mode (when overview succeeded) so
+  // children that need it for confirmation copy don't have to
+  // reach into the discriminated union themselves.
+  const enforcementMode =
+    overview.ok ? overview.enforcement_mode : undefined
+
   return (
     <div className="px-8 py-6 max-w-3xl space-y-4">
-      <SsoOverviewCard overview={overview} />
-      <DomainsList domains={domains} />
+      <SsoOverviewCard overview={overview} canEdit={canEdit} orgId={orgId} />
+      <DomainsList
+        domains={domains}
+        canEdit={canEdit}
+        orgId={orgId}
+        enforcementMode={enforcementMode}
+      />
       <LinkedUsersList users={linkedUsers} />
       <AuditEventsList events={auditEvents} />
     </div>

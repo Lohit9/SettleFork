@@ -123,6 +123,11 @@ export default async function SsoSettingsPage() {
       domains={domains}
       linkedUsers={linkedUsers}
       auditEvents={auditEvents}
+      // `canEdit` reuses the same isAdmin computation that drove
+      // the role-gate above (line 94). One source of truth: if the
+      // page rendered (i.e. isAdmin was true), the user can edit.
+      // Viewers/editors never reach this branch.
+      canEdit={isAdmin}
     />
   )
 }
