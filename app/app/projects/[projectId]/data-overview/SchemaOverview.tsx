@@ -5,6 +5,7 @@ import { ChevronRight, Check, Pencil, Search } from '@/components/icons'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { updateField } from '@/lib/actions/fields'
 import { useProjectRole } from '@/lib/hooks/useProjectRole'
+import { RoleTooltip } from '@/components/app/RoleTooltip'
 import { enrichSchemaFromDocs } from '@/lib/actions/schema-enrichment'
 import type { DatasetSchemaData, TableData, FieldData, CheckConstraint } from '@/lib/actions/data-overview'
 
@@ -35,6 +36,7 @@ const COMMON_TYPES = [
 function FieldEditModal({
   field,
   fkOptions,
+  canEdit = true,
   onClose,
   onSave,
 }: {
@@ -42,6 +44,13 @@ function FieldEditModal({
   /** PK options for the dropdown, in canonical "TABLE.FIELD" form.
    *  Scoped to the editing field's own dataset, with its own table excluded. */
   fkOptions: string[]
+  /**
+   * Defense-in-depth gate. The pencil icon that opens the modal is already
+   * hidden for non-editors at the panel level, so this prop is normally
+   * never `false` in practice. Wrapping the Save button still hardens the
+   * modal against stale role state during a long-lived session.
+   */
+  canEdit?: boolean
   onClose: () => void
   onSave: (updated: FieldData) => void
 }) {
@@ -236,13 +245,15 @@ function FieldEditModal({
           >
             Cancel
           </button>
-          <button
-            onClick={handleSave}
-            disabled={saving || !name.trim()}
-            className="px-4 py-2 text-sm text-white bg-primary rounded-lg hover:bg-primary/90 disabled:opacity-50"
-          >
-            {saving ? 'Saving…' : 'Save'}
-          </button>
+          <RoleTooltip allowed={canEdit} requiredRole="Editor">
+            <button
+              onClick={handleSave}
+              disabled={saving || !name.trim() || !canEdit}
+              className="px-4 py-2 text-sm text-white bg-primary rounded-lg hover:bg-primary/90 disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+              {saving ? 'Saving…' : 'Save'}
+            </button>
+          </RoleTooltip>
         </div>
       </div>
     </div>
@@ -625,6 +636,7 @@ function SchemaPanel({
         <FieldEditModal
           field={editingField}
           fkOptions={buildFkOptions(editingField)}
+          canEdit={canEdit}
           onClose={() => setEditingField(null)}
           onSave={(updated) => {
             handleFieldSaved(updated)
