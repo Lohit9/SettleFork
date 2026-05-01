@@ -1,122 +1,39 @@
 'use client'
 
-import { Suspense, useState } from 'react'
+import { Suspense } from 'react'
+import EmailFirstLoginForm from '@/components/auth/EmailFirstLoginForm'
+import LegacyLoginForm from '@/components/auth/LegacyLoginForm'
+import AuthCard from '@/components/auth/AuthCard'
 
 export const dynamic = 'force-dynamic'
-import { useRouter, useSearchParams } from 'next/navigation'
-import Link from 'next/link'
-import { createClient } from '@/lib/supabase/client'
-import AuthCard from '@/components/auth/AuthCard'
-import FormField from '@/components/auth/FormField'
-import { Button } from '@/components/ui/button'
-import { Alert } from '@/components/ui/alert'
+
+// ─────────────────────────────────────────────────────────────────────
+// Feature flag — Mini-D3
+// ─────────────────────────────────────────────────────────────────────
+//
+// `NEXT_PUBLIC_LOGIN_EMAIL_FIRST` is read at module load (i.e. build
+// time for the static portion of this client bundle). Setting it to
+// the literal string `'false'` selects the LegacyLoginForm; any other
+// value (including unset) selects the new EmailFirstLoginForm.
+//
+// This is intentionally a deploy-time switch, NOT a runtime toggle.
+// Rollback procedure if EmailFirst breaks production:
+//   1. Set NEXT_PUBLIC_LOGIN_EMAIL_FIRST=false in Vercel (Production
+//      and Preview scopes).
+//   2. Redeploy (or trigger a rebuild). The legacy form starts
+//      rendering immediately.
+//
+// To turn the new flow back on: unset the var (or set to 'true') and
+// redeploy.
+//
+// Removal plan: after 14 days of EmailFirst stability, delete the
+// flag, the legacy import, and `components/auth/LegacyLoginForm.tsx`.
+// Tracked in docs/outstanding-items.md.
+const isEmailFirstEnabled =
+  process.env.NEXT_PUBLIC_LOGIN_EMAIL_FIRST !== 'false'
 
 function LoginContent() {
-  const router = useRouter()
-  const searchParams = useSearchParams()
-  const reason = searchParams.get('reason')
-  const [email, setEmail] = useState('')
-  const [password, setPassword] = useState('')
-  const [loading, setLoading] = useState(false)
-  const [error, setError] = useState<string | null>(null)
-
-  const handleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault()
-    setError(null)
-    setLoading(true)
-
-    try {
-      const supabase = createClient()
-      const { error: signInError } = await supabase.auth.signInWithPassword({
-        email,
-        password,
-      })
-
-      if (signInError) {
-        // Security: Don't reveal if email exists
-        if (signInError.message.includes('Invalid login credentials')) {
-          setError('Invalid email or password. Please try again.')
-        } else if (signInError.message.includes('Email not confirmed')) {
-          setError('Please verify your email address before signing in. Check your inbox for the verification link.')
-        } else {
-          setError('An error occurred. Please try again.')
-        }
-        setLoading(false)
-        return
-      }
-
-      // Redirect to the original destination or /app/projects.
-      // Validate starts with / to prevent open-redirect attacks.
-      const rawRedirect = searchParams.get('redirect')
-      const safeRedirect = rawRedirect?.startsWith('/') ? rawRedirect : '/app/projects'
-      router.push(safeRedirect)
-      router.refresh()
-    } catch (err) {
-      setError('An unexpected error occurred. Please try again.')
-      setLoading(false)
-    }
-  }
-
-  return (
-    <AuthCard
-      title="Sign in to Settle"
-      subtitle="Access your data migration projects"
-      footer={{
-        text: "Don't have an account?",
-        linkText: 'Request access',
-        linkHref: '/request-access',
-      }}
-    >
-      <form onSubmit={handleSubmit} className="space-y-4">
-        {reason === 'timeout' && (
-          <div className="mb-4 rounded-md bg-amber-50 border border-amber-200 px-4 py-3 text-sm text-amber-700">
-            Your session has expired due to inactivity. Please sign in again.
-          </div>
-        )}
-        {error && (
-          <Alert variant="destructive" onClose={() => setError(null)}>
-            {error}
-          </Alert>
-        )}
-
-        <FormField
-          label="Work email"
-          name="email"
-          type="email"
-          placeholder="you@company.com"
-          value={email}
-          onChange={(e) => setEmail(e.target.value)}
-          required
-          autoComplete="email"
-        />
-
-        <div className="space-y-2">
-          <FormField
-            label="Password"
-            name="password"
-            type="password"
-            placeholder="Enter your password"
-            value={password}
-            onChange={(e) => setPassword(e.target.value)}
-            required
-            autoComplete="current-password"
-          />
-          <div className="flex justify-end">
-            <Link
-              href="/forgot-password"
-              className="text-sm text-blue-600 hover:text-blue-700"
-            >
-              Forgot password?
-            </Link>
-          </div>
-        </div>
-
-        <Button type="submit" variant="default" size="lg" className="w-full" disabled={loading}>
-          {loading ? 'Signing in...' : 'Sign in'}
-        </Button>
-      </form>
-    </AuthCard>
-  )
+  return isEmailFirstEnabled ? <EmailFirstLoginForm /> : <LegacyLoginForm />
 }
 
 export default function LoginPage() {

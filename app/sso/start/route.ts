@@ -6,6 +6,7 @@ import { hashEmail } from '@/lib/sso/email-hash'
 import { setAttemptOrgCookie } from '@/lib/sso/attempt-cookie'
 import { getClientIp, hashIp } from '@/lib/auth/get-client-ip'
 import { checkRateLimit } from '@/lib/rate-limit/upstash'
+import { getSafeNext } from '@/lib/auth/safe-next'
 
 export const dynamic = 'force-dynamic'
 export const runtime = 'nodejs'
@@ -35,8 +36,6 @@ export async function GET(request: Request) {
     const orgSlug = requestUrl.searchParams.get('org')?.trim() ?? ''
     const email =
       requestUrl.searchParams.get('email')?.trim().toLowerCase() ?? ''
-    const nextParam =
-      requestUrl.searchParams.get('next') ?? '/app/projects'
 
     // Validate org slug: 1-67 chars, lowercase alphanumeric + hyphens
     // (matches slug format produced by organizations.ts slugify)
@@ -47,13 +46,10 @@ export async function GET(request: Request) {
       )
     }
 
-    // Validate next (open-redirect + CRLF guards)
-    const safeNext =
-      nextParam.startsWith('/') &&
-      !nextParam.startsWith('//') &&
-      !/[\r\n]/.test(nextParam)
-        ? nextParam
-        : '/app/projects'
+    // Validate ?next= via the canonical helper (open-redirect + CRLF
+    // guards). Single source of truth shared with the login page —
+    // any rule change applies to both call sites at once.
+    const safeNext = getSafeNext(requestUrl.searchParams, { keys: ['next'] })
 
     // Rate limit: per-IP per-org-slug, 10/min, sliding window.
     // Prevents enumeration of org slugs and unauthenticated audit-row

@@ -1034,8 +1034,34 @@ export async function removeDomainAllowlist(
  * The narrow return shape ({ required, orgSlug? } only) is a
  * defense-in-depth measure: the legacy shape leaked org_id, the
  * internal sso_providers.id, and enforcement_mode to unauthenticated
- * callers. The login UI only needs the slug for the /sso/start?org=
- * redirect.
+ * callers.
+ *
+ * Return-shape semantics (broadened in B-2-b for hybrid-mode UX):
+ *
+ *   { required: true,  orgSlug: '<slug>' }  — strict org. UI must
+ *                                             redirect to /sso/start.
+ *   { required: false, orgSlug: '<slug>' }  — hybrid OR optional org
+ *                                             (SSO available, password
+ *                                             also allowed). UI shows
+ *                                             both sign-in options.
+ *   { required: false }                     — no SSO mapping for the
+ *                                             email's domain, OR any
+ *                                             fail-closed branch
+ *                                             (rate-limit hit, RPC
+ *                                             error, missing IP, …).
+ *                                             UI shows password only.
+ *
+ * Why the slug is OK to leak whenever a provider exists: it is already
+ * public — it appears in the bookmarkable /sso/start?org=<slug> URL
+ * that customers share with their employees. The narrowing in B-2-a-i
+ * was about NOT leaking org_id, sso_providers.id, and enforcement_mode
+ * (all internal); the slug was over-narrowed and is restored here for
+ * the hybrid-mode "Continue with SSO" affordance.
+ *
+ * Fail-closed paths intentionally return { required: false } with NO
+ * orgSlug so a rate-limit hit (or any other failure) is
+ * indistinguishable from "no SSO for this domain" — preserves the
+ * anti-enumeration property from B-2-a-i.
  *
  * Every call (allowed or denied) is logged with email_hash for
  * observability — never the raw email.
@@ -1124,12 +1150,29 @@ export async function checkSSOEnabledForEmail(email: string): Promise<{
   }
 
   const row = rows[0]
-  // Narrowed return shape (B-2-a-i, Mini-D3): only orgSlug leaks to
-  // unauthenticated callers, and only when SSO is actually required.
-  // org_id, sso_provider_id, and enforcement_mode are NOT returned —
-  // they were unnecessary for the login UI and constituted leakage.
+  // Defensive: the RPC's TABLE return type guarantees these columns
+  // are non-null when a row matches (see migration 072), but a
+  // missing-or-empty value here is treated as "no SSO" rather than
+  // crashing the login page. orgSlug in particular MUST be a string
+  // for the /sso/start redirect to be valid.
+  if (!row.org_slug || !row.enforcement_mode) {
+    return { required: false }
+  }
+
+  // Broadened return shape (B-2-b, Mini-D1):
+  //   - `required` is TRUE only for strict orgs (the login page must
+  //     redirect immediately; password is not allowed).
+  //   - `orgSlug` is returned whenever a provider exists for the
+  //     email's domain (strict / hybrid / optional). Hybrid + optional
+  //     orgs surface a "Continue with SSO" button alongside the
+  //     password form.
+  //
+  // org_id, sso_provider_id, and enforcement_mode are STILL NOT
+  // returned — they are internal config and remain hidden from
+  // unauthenticated callers per B-2-a-i's narrowing rationale.
+  const required = row.enforcement_mode === 'strict'
   return {
-    required: true,
+    required,
     orgSlug: row.org_slug,
   }
 }
