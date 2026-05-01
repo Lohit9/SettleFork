@@ -22,7 +22,7 @@ import {
   type RawTableRow,
   type RawTfmRow,
   type RawTransformationRow,
-} from '@/lib/actions/_mappings-for-redesign-core'
+} from '@/lib/ai/mapping-engine'
 import type {
   MappedRow,
   TargetAcknowledgedRow,
