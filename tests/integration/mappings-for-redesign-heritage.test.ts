@@ -128,7 +128,7 @@ const SNAPSHOT_2026_04_23: HeritageMappingsRedesignSnapshot | null = null
 
 async function captureSnapshot(): Promise<HeritageMappingsRedesignSnapshot> {
   const { getMappingsForRedesignCore } = await import(
-    '@/lib/actions/_mappings-for-redesign-core'
+    '@/lib/ai/mapping-engine'
   )
   const { supabaseAdmin } = await import('@/lib/supabase/admin')
 
