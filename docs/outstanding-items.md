@@ -10,7 +10,7 @@ Items graduate off this list when:
 - Moved to a formal ticket (link from here to there)
 - Explicitly decided to not do (move to "Rejected" section with reason)
 
-Last updated: 2026-04-20
+Last updated: 2026-04-28
 
 ---
 
@@ -19,6 +19,53 @@ Last updated: 2026-04-20
 ### Security
 - [ ] SSO epic — Prompt B (middleware + login + callback with 
       dedupe-on-login). (Scheduled: 2026-04-21)
+    - **✓ COMPLETE — B-2-a (rate limiting + callback hardening).** 
+      Both halves shipped on branch `feat/sso-okta-setup`.
+        - **B-2-a-i (rate limiter): commit `3dacb92`.**
+          - Upstash Redis sliding-window limiter at 
+            `lib/rate-limit/upstash.ts` (10/min, prevents 
+            59s/61s burst-bypass that fixed-window allows).
+          - Wired into `/sso/start` (per-IP+org_slug) and 
+            `checkSSOEnabledForEmail` (per-IP+email_domain_hash), 
+            10/min each. Composite keys prevent per-IP-only 
+            exhaustion (shared NAT) and per-target-only 
+            exhaustion (single attacker draining one org).
+          - Canonical IP extractor at `lib/auth/get-client-ip.ts` 
+            (null-on-miss, fail-closed — does NOT replicate 
+            `lib/actions/auth.ts`'s `'127.0.0.1'` fallback that 
+            collides anonymous traffic into one bucket).
+          - Defense-in-depth: narrowed 
+            `checkSSOEnabledForEmail` return shape from 
+            `{ required, orgId?, orgSlug?, providerId?, 
+            enforcementMode? }` to `{ required, orgSlug? }`. 
+            Removes unauthenticated leak of internal `org_id`, 
+            `sso_providers.id`, and `enforcement_mode`.
+          - Audit folded into existing `sso.login.failure` 
+            event_type with `metadata.reason='rate_limited'` (no 
+            migration needed — symmetric with B-2-a-ii's 7 new 
+            reason values).
+        - **B-2-a-ii (callback hardening): commit `e9c217d`.**
+          - Six ordered security checks before authenticating: 
+            HMAC attempt-cookie verify, provider resolution from 
+            session, cross-tenant, domain-provider sanity, 
+            duplicate account (same-user via 
+            `get_auth_identity_providers`), JIT via 
+            `provision_user_via_jit`.
+          - Identity linking via `mark_identity_sso_linked` is 
+            non-blocking (failures audited but login proceeds — 
+            middleware-side repair for unlinked SSO sessions 
+            deferred as future work).
+          - HMAC-signed attempt cookie via 
+            `SSO_ATTEMPT_COOKIE_SECRET` env var (new module 
+            `lib/sso/attempt-cookie.ts`).
+          - Cross-user duplicate detection RPC deferred per 
+            Decision D7 (same-user check sufficient for current 
+            Supabase 1:1 email invariant).
+        - **Out of scope (tracked separately):** existing 
+          in-memory rate limiters at 
+          `lib/auth/signup-rate-limit.ts` and 
+          `lib/ai/rate-limit.ts` deliberately left unmigrated; 
+          tracked as 8-week-plan Item 4.2.
 - [ ] SSO epic — Prompt C (invite flow + identity linking). 
       (Scheduled: 2026-04-22)
 - [ ] SSO epic — Prompt D (admin UI, customer-facing + platform-admin). 
@@ -425,6 +472,104 @@ next worked on; seed content from Cursor/Claude analysis done
 
 ---
 
+## SSO Test Runbook
+
+To re-test SSO end-to-end against the SSO Test org + Okta dev 
+tenant:
+
+1. Aggressive cleanup (deletes JIT'd test user + org for clean 
+   state):
+
+   `npm run sso:test:cleanup -- --full`
+
+2. Re-create test infrastructure:
+
+   `npm run sso:test:setup`
+
+   - Creates SSO Test org (slug `sso-test`)
+   - kaan@usesettle.ai owner membership
+   - GoTrue SAML provider for Okta dev tenant
+   - `sso_providers` row + `sso_domains`: `gmail.com` mapping
+   - PUTs `domains: ['gmail.com']` to GoTrue provider
+   - Flips `organizations.sso_enabled = true`
+
+3. Clear webpack cache (REQUIRED if dev server has been running 
+   across setup/cleanup cycles):
+
+   - In dev server terminal: Ctrl+C
+   - `rm -rf .next`
+   - `npm run dev -- -p 3001`
+   - Wait for "Ready" before retesting
+
+4. Test from fresh incognito window:
+
+   - http://localhost:3001/sso/start?org=sso-test
+   - Login as `kaandincer1+ssotest@gmail.com` / 
+     `Settle-SSO-Test-2026!`
+   - Should land on `/app/projects` authenticated with `viewer` 
+     role in SSO Test org
+
+5. Verify state via SQL:
+
+   - `org_memberships` row exists with 
+     `provisioning_source='jit'`
+   - `sso_identity_links` row exists
+   - `sso_audit_events` shows `sso.login.success` with 
+     `is_new_membership=true`
+   - `auth.identities` has exactly 1 `sso:*` row for the test 
+     user
+
+Required env vars in `.env.local`:
+
+- `NEXT_PUBLIC_SUPABASE_URL`
+- `NEXT_PUBLIC_SUPABASE_ANON_KEY`
+- `SUPABASE_SERVICE_ROLE_KEY`
+- `NEXT_PUBLIC_APP_URL=http://localhost:3001` (security worktree 
+  only)
+- `SSO_ATTEMPT_COOKIE_SECRET` (generate with 
+  `openssl rand -hex 32`)
+
+### Rate limiter sanity check (new in B-2-a-i)
+
+After Phase 7 happy-path login succeeds, verify rate limiting:
+
+1. From the same incognito window or a curl loop, hit 
+   `/sso/start?org=sso-test` 12+ times in <60s:
+
+   ```bash
+   for i in {1..12}; do
+     curl -sI -w "%{http_code} %{redirect_url}\n" -o /dev/null \
+       "http://localhost:3001/sso/start?org=sso-test"
+   done
+   ```
+
+2. The 11th+ requests should redirect to 
+   `/login?reason=sso_rate_limited`.
+
+3. Verify in Supabase:
+
+   ```sql
+   SELECT event_type, metadata->>'reason', metadata->>'key_kind', created_at
+   FROM sso_audit_events
+   WHERE metadata->>'reason' = 'rate_limited'
+   ORDER BY created_at DESC LIMIT 5;
+   ```
+
+   Should show recent rows with `key_kind='sso-start'`.
+
+4. To reset between tests: rate limit window is 60 seconds, so 
+   wait 60s. Or namespace via a different `org_slug` to use a 
+   different bucket key.
+
+Required env vars in `.env.local` for the rate limiter:
+
+- `UPSTASH_REDIS_REST_URL` (from Upstash dashboard, dev 
+  database)
+- `UPSTASH_REDIS_REST_TOKEN` (from Upstash dashboard, dev 
+  database)
+
+---
+
 ## Completed
 
 - [x] 2026-04-20 — Removed dead code: `createOrganization` 
@@ -481,3 +626,93 @@ next worked on; seed content from Cursor/Claude analysis done
       `email_hash` per call for observability. RPC grants 
       `service_role`-only except `is_sso_user` (`authenticated`). 
       Commits: 4d909ab (A1), b4bf5cf (A2).
+- [x] 2026-04-27 — Reusable SSO test harness: `scripts/
+      sso-test-setup.ts` (Phase 6 — provisions "SSO Test" org with 
+      slug `sso-test`, kaan@usesettle.ai as owner, `sso_domains` 
+      row mapping `gmail.com`, GoTrue SAML provider via Admin API, 
+      `sso_providers` row, flips `sso_enabled`) and `scripts/
+      sso-test-cleanup.ts` (Phase 10 — reverses these; default 
+      mode preserves the org/memberships/JIT'd test user, `--full` 
+      removes everything). Wired into `package.json` as 
+      `npm run sso:test:setup` / `npm run sso:test:cleanup`. 
+      Will be reused for B-2-a, B-2-b, B-2-c validation. 
+      Commit: b843625.
+- [x] 2026-04-28 — Decision 29 (SAML cross-tenant check) 
+      unblocked via empirical format verification. Phase 9 of the 
+      Okta runbook (real SAML round-trip with the test harness 
+      above) confirmed: `auth.identities.provider` for a 
+      SAML-authenticated user equals the literal string 
+      `"sso:" + <supabase_provider_id>` (e.g., 
+      `"sso:217246fc-d5a1-4709-b234-c983206dfc65"`). Direct 
+      string equality is sufficient for the cross-tenant check 
+      in B-2-a; no regex/parse is needed. Settles the assumption 
+      flagged when migration 070's `get_auth_identity_providers` 
+      RPC was scoped.
+- [x] 2026-04-28 — End-to-end SAML round-trip executed against 
+      Okta (Phase 7 of runbook) on the prod Supabase project. 
+      Confirms PKCE cookie persistence across `/sso/start` → 
+      Okta → `/api/auth/callback?type=sso` (previously a 
+      known-unknown — see Testing tasks → SSO). 
+      `exchangeCodeForSession` succeeds and a Supabase session 
+      cookie is set. JIT provisioning gap discovered in the same 
+      session and tracked under SSO Prompt B above (B-2-a).
+- [x] 2026-04-28 — End-to-end SAML round-trip executed with full 
+      B-2-a-ii security pipeline. All six checks ran clean: 
+      attempt cookie verified (HMAC-SHA256), provider resolved 
+      from session, cross-tenant matched, domain-provider matched, 
+      no duplicate accounts, JIT provisioning succeeded with 
+      `was_new=true`, identity link succeeded. 
+      `sso.login.success` audit emitted with bounded metadata 
+      (`email_hash`, no PII). Verification queries against prod 
+      Supabase confirmed 1 `org_memberships` row, 1 
+      `sso_identity_links` row, 0 failure events. See commit 
+      `e9c217d`.
+- [x] 2026-04-28 — Debugging note: during repeated setup/cleanup 
+      test cycles, observed Next.js dev server serving stale 
+      compiled routes that referenced previous-generation UUIDs 
+      even after Settle DB and GoTrue both updated to new values. 
+      Root cause: webpack disk cache in `.next/`. Manifestation: 
+      "No such SSO provider" errors with valid provider IDs. 
+      Fix: `rm -rf .next` before retesting after a 
+      `cleanup --full`. Codified in the new SSO Test Runbook 
+      below.
+- [x] 2026-04-28 — Setup script bug discovered: 
+      `scripts/sso-test-setup.ts` creates the GoTrue SAML provider 
+      via `POST /auth/v1/admin/sso/providers` but did not 
+      subsequently attach domain claims via `PUT` to 
+      `/auth/v1/admin/sso/providers/<id>`. Result: GoTrue's 
+      `domains: []` for the provider, while Settle's `sso_domains` 
+      table had the row. Worked around manually mid-debugging via 
+      curl `PUT`. Permanent fix shipped: `gotruePut` helper added 
+      and called after the provider POST (idempotent — Supabase's 
+      Admin API overwrites the domains array on each PUT).
+- [x] 2026-04-28 — B-2-a-i shipped. Upstash Redis-backed 
+      sliding-window rate limiter wired into the two 
+      unauthenticated SSO surfaces (`/sso/start` and 
+      `checkSSOEnabledForEmail`). New abstraction at 
+      `lib/rate-limit/upstash.ts` (10/min sliding, prevents 
+      59s/61s burst-bypass). New canonical IP extractor at 
+      `lib/auth/get-client-ip.ts` (null-on-miss for fail-closed 
+      policy). Smoke-tested with 12-request curl loop: 11th 
+      request correctly redirected to 
+      `/login?reason=sso_rate_limited` and emitted 
+      `sso.login.failure` with `metadata.reason='rate_limited'`. 
+      See commit `3dacb92`.
+- [x] 2026-04-28 — Defense-in-depth: narrowed 
+      `checkSSOEnabledForEmail`'s return shape from 
+      `{ required, orgId?, orgSlug?, providerId?, 
+      enforcementMode? }` to `{ required, orgSlug? }`. Removes 
+      unauthenticated leak of internal `org_id`, `providerId`, 
+      and `enforcement_mode`. Verified zero callers of the old 
+      shape exist in the codebase before narrowing. Internal 
+      callback at `app/api/auth/callback/route.ts:283` calls the 
+      underlying RPC directly, not the public action, so 
+      unaffected.
+- [x] 2026-04-28 — Pre-push checklist completed: 
+      `SSO_ATTEMPT_COOKIE_SECRET`, `UPSTASH_REDIS_REST_URL`, 
+      `UPSTASH_REDIS_REST_TOKEN` provisioned in Vercel for 
+      Production and Preview scopes. Separate values from local 
+      development (different secret bytes; separate Upstash 
+      database `settle-rate-limit-prod` vs 
+      `settle-rate-limit-dev`). Branch `feat/sso-okta-setup` 
+      ready to push to origin.

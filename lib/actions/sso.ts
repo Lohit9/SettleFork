@@ -1,11 +1,14 @@
 'use server'
 
+import { createHash } from 'crypto'
 import { revalidatePath } from 'next/cache'
 import { supabaseAdmin } from '@/lib/supabase/admin'
 import { requirePlatformAdmin } from '@/lib/auth/platform-admin'
 import { gotrueAdminRequest, type GoTrueError } from '@/lib/sso/gotrue-admin'
 import { emitSsoAuditEvent } from '@/lib/actions/sso-audit'
 import { hashEmail } from '@/lib/sso/email-hash'
+import { getClientIp, hashIp } from '@/lib/auth/get-client-ip'
+import { checkRateLimit } from '@/lib/rate-limit/upstash'
 import type {
   SSOProvider,
   SSODomain,
@@ -1015,29 +1018,84 @@ export async function removeDomainAllowlist(
  * enumeration). This server action is the only surface that
  * reaches it.
  *
- * Fail-closed: any error returns { required: false }.
- * Middleware is the real enforcement point; this is a UX hint.
+ * Rate limited (B-2-a-i): per-IP per-email-domain, 10/min sliding
+ * window via Upstash. Composite key prevents a single IP from
+ * enumerating all customer domains; per-domain (not per-email)
+ * because all emails in a domain map to the same answer, so an
+ * attacker probing kaan@example.com and bob@example.com gets
+ * counted once.
  *
- * Every call is logged with email_hash for observability. Rate
- * limiting to be added in item 1.E (Upstash Redis).
+ * Fail-closed semantics, in three layers:
+ *   1. No client IP → return { required: false } (no audit emit).
+ *   2. Rate limit hit → emit sso.login.failure with reason='rate_limited',
+ *      return { required: false } (indistinguishable from "no SSO").
+ *   3. Any RPC error → return { required: false }.
  *
- * providerId returned here is our internal PK (sso_providers.id),
- * not Supabase's supabase_provider_id. /sso/start re-resolves to
- * the supabase_provider_id it needs for signInWithSSO.
+ * The narrow return shape ({ required, orgSlug? } only) is a
+ * defense-in-depth measure: the legacy shape leaked org_id, the
+ * internal sso_providers.id, and enforcement_mode to unauthenticated
+ * callers. The login UI only needs the slug for the /sso/start?org=
+ * redirect.
+ *
+ * Every call (allowed or denied) is logged with email_hash for
+ * observability — never the raw email.
  */
 export async function checkSSOEnabledForEmail(email: string): Promise<{
   required: boolean
-  orgId?: string
   orgSlug?: string
-  providerId?: string
-  enforcementMode?: EnforcementMode
 }> {
   const emailHash = hashEmail(email ?? '')
   console.info('[sso] checkSSOEnabledForEmail invoked', {
     email_hash: emailHash,
   })
 
+  // Layer 1: client IP required for the rate-limit bucket. No IP
+  // means we cannot attribute the request, and a hardcoded fallback
+  // would collide all anonymous traffic into one bucket — defeating
+  // the limiter. Fail-closed: deny silently.
+  const ip = await getClientIp()
+  if (!ip) {
+    console.warn('[sso] checkSSOEnabledForEmail: no client IP, rejecting')
+    return { required: false }
+  }
+
   if (!email || !EMAIL_REGEX.test(email)) {
+    return { required: false }
+  }
+
+  const domain = email.split('@')[1]?.toLowerCase()
+  if (!domain) {
+    return { required: false }
+  }
+  const domainHash = createHash('sha256')
+    .update(domain)
+    .digest('hex')
+    .slice(0, 16)
+
+  const rlResult = await checkRateLimit(`${ip}:${domainHash}`, {
+    kind: 'sso-check',
+    limit: 10,
+    window: '60 s',
+  })
+
+  if (!rlResult.allowed) {
+    await emitSsoAuditEvent('sso.login.failure', {
+      actorUserId: null,
+      orgId: null,
+      metadata: {
+        reason: 'rate_limited',
+        key_kind: 'sso-check',
+        ip_hash: hashIp(ip),
+        target_hash: domainHash,
+        email_hash: emailHash,
+        limit: rlResult.limit,
+        window_seconds: 60,
+        reset_at: rlResult.resetAt,
+      },
+    })
+    // Indistinguishable from "no SSO required for this email". Do NOT
+    // signal rate-limit state to the caller — the distinction itself
+    // is what an attacker uses to confirm a domain is real.
     return { required: false }
   }
 
@@ -1066,12 +1124,13 @@ export async function checkSSOEnabledForEmail(email: string): Promise<{
   }
 
   const row = rows[0]
+  // Narrowed return shape (B-2-a-i, Mini-D3): only orgSlug leaks to
+  // unauthenticated callers, and only when SSO is actually required.
+  // org_id, sso_provider_id, and enforcement_mode are NOT returned —
+  // they were unnecessary for the login UI and constituted leakage.
   return {
     required: true,
-    orgId: row.org_id,
     orgSlug: row.org_slug,
-    providerId: row.sso_provider_id,
-    enforcementMode: row.enforcement_mode as EnforcementMode,
   }
 }
 

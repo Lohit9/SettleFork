@@ -3,6 +3,9 @@ import { createClient } from '@/lib/supabase/server'
 import { supabaseAdmin } from '@/lib/supabase/admin'
 import { emitSsoAuditEvent } from '@/lib/actions/sso-audit'
 import { hashEmail } from '@/lib/sso/email-hash'
+import { setAttemptOrgCookie } from '@/lib/sso/attempt-cookie'
+import { getClientIp, hashIp } from '@/lib/auth/get-client-ip'
+import { checkRateLimit } from '@/lib/rate-limit/upstash'
 
 export const dynamic = 'force-dynamic'
 export const runtime = 'nodejs'
@@ -51,6 +54,56 @@ export async function GET(request: Request) {
       !/[\r\n]/.test(nextParam)
         ? nextParam
         : '/app/projects'
+
+    // Rate limit: per-IP per-org-slug, 10/min, sliding window.
+    // Prevents enumeration of org slugs and unauthenticated audit-row
+    // writes (sso_audit_events on the unknown_org branch below).
+    // Composite key (ip, orgSlug): a single IP can probe many orgs but
+    // not infinitely; one attacker behind shared NAT cannot exhaust the
+    // limit for legitimate users targeting different orgs.
+    //
+    // Placed AFTER slug regex validation (so we don't waste Redis ops on
+    // already-rejected input) and BEFORE the org DB lookup (so the
+    // limiter shields the DB and the audit-write path).
+    const ip = await getClientIp()
+    if (!ip) {
+      // Fail-closed: cannot identify the client, refuse the request.
+      // No audit emit — we don't know which org was attempted (we have
+      // the slug but no IP attribution, and emitting an unattributed
+      // audit row reintroduces the very abuse we are blocking).
+      console.warn('[sso/start] no client IP available, rejecting')
+      return NextResponse.redirect(
+        new URL('/login?reason=sso_rate_limited', requestUrl.origin),
+        302
+      )
+    }
+
+    const rlResult = await checkRateLimit(`${ip}:${orgSlug}`, {
+      kind: 'sso-start',
+      limit: 10,
+      window: '60 s',
+    })
+
+    if (!rlResult.allowed) {
+      await emitSsoAuditEvent('sso.login.failure', {
+        actorUserId: null,
+        orgId: null,
+        metadata: {
+          reason: 'rate_limited',
+          key_kind: 'sso-start',
+          ip_hash: hashIp(ip),
+          target_hash: orgSlug,
+          limit: rlResult.limit,
+          window_seconds: 60,
+          reset_at: rlResult.resetAt,
+          ...(email ? { email_hash: hashEmail(email) } : {}),
+        },
+      })
+      return NextResponse.redirect(
+        new URL('/login?reason=sso_rate_limited', requestUrl.origin),
+        302
+      )
+    }
 
     // Look up org
     const { data: org, error: orgErr } = await supabaseAdmin
@@ -138,8 +191,14 @@ export async function GET(request: Request) {
       )
     }
 
-    // Redirect to GoTrue (which then 302s to the IdP)
-    return NextResponse.redirect(data.url, 302)
+    // Redirect to GoTrue (which then 302s to the IdP). Sign the
+    // attempted org_id into a short-lived HttpOnly cookie so the
+    // callback can verify cross-tenant invariants after the SAML
+    // round-trip. Cookie is consumed (deleted) by the callback on
+    // every exit path.
+    const redirectResponse = NextResponse.redirect(data.url, 302)
+    setAttemptOrgCookie(redirectResponse, org.id)
+    return redirectResponse
   } catch (err) {
     console.error('[sso/start] unexpected error:', { err: String(err) })
     const requestUrl = new URL(request.url)
