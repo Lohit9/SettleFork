@@ -1339,6 +1339,10 @@ Generate the SQL transformation expression.`
         abuseUserId: user.id,
         metadata: { tfm_id: ctx.tfm.id, target_field_id: tgtField.id },
       })
+      // PR 12: SQL/text callsite — migrated in sub-commit 12.2.
+      if (result.kind !== 'text') {
+        throw new Error('transform_generate: unexpected toolUse response')
+      }
       rawSql = result.text
       llmCallId = result.callId
     } catch {
@@ -2788,6 +2792,10 @@ ${aiCtx.intelligence_context ? aiCtx.intelligence_context + '\n\n' : ''}Suggest 
       abuseUserId: user.id,
       metadata: { tfm_id: ctx.tfm.id },
     })
+    // PR 12: prose callsite — migrated in sub-commit 12.2.
+    if (result.kind !== 'text') {
+      throw new Error('transform_describe: unexpected toolUse response')
+    }
     suggestion = result.text
     llmCallId = result.callId
   } catch {

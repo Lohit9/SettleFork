@@ -19,6 +19,10 @@ import type { SupabaseClient } from '@supabase/supabase-js'
 
 import { callLLM } from '@/lib/ai/llm-client'
 import {
+  EMIT_TABLE_MAPPINGS_TOOL,
+  EMIT_MAPPING_SUGGESTION_TOOL,
+} from '@/lib/ai/tool-schemas'
+import {
   buildAIContext,
   formatDocumentsForPrompt,
   formatSchemaForPrompt,
@@ -1486,10 +1490,14 @@ ${otherSourcesList}
         otherSourcesBlock,
       })
 
-      let batchRaw: string
-      let primaryCallId: string
+      // PR 12 H1: when AI_PHASE_2_ENABLED=1 the engine forces a tool
+      // call (`emit_table_mappings`); otherwise the legacy text path
+      // runs unchanged. Heritage byte-identical fingerprints depend
+      // on the legacy path being preserved.
+      const phase2Enabled = process.env.AI_PHASE_2_ENABLED === '1'
+      let primaryResult: Awaited<ReturnType<typeof callLLM>>
       try {
-        const primaryResult = await callLLM({
+        primaryResult = await callLLM({
           feature: 'mapping_generate',
           systemPrompt: MAPPING_GENERATION_SYSTEM_PROMPT,
           userMessage: batchUserMessage,
@@ -1504,34 +1512,52 @@ ${otherSourcesList}
             batch_index: i,
             batch_total: sourceTablesForBatching.length,
           },
+          ...(phase2Enabled && { tool: EMIT_TABLE_MAPPINGS_TOOL }),
         })
-        batchRaw = primaryResult.text
-        primaryCallId = primaryResult.callId
       } catch (err) {
         console.error(`[Mapping] Claude call failed for source table ${sourceCtx.table_name}:`, err)
         continue
       }
 
-      try {
-        const batchParsed = parseClaudeJSON(batchRaw)
-        allTableMappings.push(...(batchParsed.table_mappings ?? []))
-      } catch {
+      if (primaryResult.kind === 'toolUse') {
+        // PR 12 flag-ON: tool input is already schema-validated by
+        // Anthropic; parse failures are structurally impossible here,
+        // so the legacy `mapping_generate_repair` retry below is
+        // unreachable on this branch.
+        const input = primaryResult.toolUse.input as { table_mappings?: ClaudeTableMapping[] }
+        allTableMappings.push(...(input.table_mappings ?? []))
+      } else {
+        // PR 12 flag-OFF: legacy JSON.parse + repair-retry path.
+        // Preserved verbatim to keep heritage fingerprints byte-identical.
+        const batchRaw = primaryResult.text
+        const primaryCallId = primaryResult.callId
         try {
-          const retryResult = await callLLM({
-            feature: 'mapping_generate_repair',
-            systemPrompt: 'You are a JSON repair tool. Return ONLY valid JSON, nothing else.',
-            userMessage: `The previous response was malformed JSON. Fix it and return ONLY the corrected JSON:\n\n${batchRaw}`,
-            maxTokens: PER_BATCH_MAX_TOKENS,
-            projectId,
-            userId,
-            promptVersion: 'mapping-repair-v1',
-            parentCallId: primaryCallId,
-            abuseUserId: userId,
-          })
-          const retryParsed = parseClaudeJSON(retryResult.text)
-          allTableMappings.push(...(retryParsed.table_mappings ?? []))
-        } catch (retryErr) {
-          console.error(`[Mapping] Failed to parse mappings for source table ${sourceCtx.table_name} after retry:`, retryErr)
+          const batchParsed = parseClaudeJSON(batchRaw)
+          allTableMappings.push(...(batchParsed.table_mappings ?? []))
+        } catch {
+          try {
+            const retryResult = await callLLM({
+              feature: 'mapping_generate_repair',
+              systemPrompt: 'You are a JSON repair tool. Return ONLY valid JSON, nothing else.',
+              userMessage: `The previous response was malformed JSON. Fix it and return ONLY the corrected JSON:\n\n${batchRaw}`,
+              maxTokens: PER_BATCH_MAX_TOKENS,
+              projectId,
+              userId,
+              promptVersion: 'mapping-repair-v1',
+              parentCallId: primaryCallId,
+              abuseUserId: userId,
+            })
+            // The retry runs on the legacy text path (no tool passed)
+            // so the result is always { kind: 'text', text }; the
+            // discriminator narrowing is required for tsc.
+            if (retryResult.kind !== 'text') {
+              throw new Error('Unexpected toolUse on mapping_generate_repair retry')
+            }
+            const retryParsed = parseClaudeJSON(retryResult.text)
+            allTableMappings.push(...(retryParsed.table_mappings ?? []))
+          } catch (retryErr) {
+            console.error(`[Mapping] Failed to parse mappings for source table ${sourceCtx.table_name} after retry:`, retryErr)
+          }
         }
       }
     }
@@ -1930,9 +1956,11 @@ Respond with ONLY valid JSON in this exact shape:
 {"source_field_names": ["FieldA"], "combination_type": "single", "confidence": 85, "rationale": "Brief reason"}`
 
   // ── Call LLM ─────────────────────────────────────────────────────────────
-  let raw: string
+  // PR 12 H1: tool use under flag ON; legacy text+JSON.parse under flag OFF.
+  const phase2Enabled = process.env.AI_PHASE_2_ENABLED === '1'
+  let result: Awaited<ReturnType<typeof callLLM>>
   try {
-    const result = await callLLM({
+    result = await callLLM({
       feature: 'mapping_suggest',
       systemPrompt: MAPPING_SUGGESTION_SYSTEM_PROMPT,
       userMessage: userMsg,
@@ -1942,8 +1970,8 @@ Respond with ONLY valid JSON in this exact shape:
       promptVersion: 'suggest-v1',
       abuseUserId: userId,
       metadata: { target_field_id: targetFieldId },
+      ...(phase2Enabled && { tool: EMIT_MAPPING_SUGGESTION_TOOL }),
     })
-    raw = result.text
   } catch (err) {
     return {
       success: false,
@@ -1953,28 +1981,29 @@ Respond with ONLY valid JSON in this exact shape:
   }
 
   // ── Parse + validate response ────────────────────────────────────────────
-  // NOTE: the engine has a `parseClaudeJSON` helper (PR 4) but it's
-  // hardcoded to expect `{ table_mappings: [...] }` shape. The
-  // suggestion path expects `{ source_field_names, combination_type,
-  // confidence, rationale }` instead, so we keep an inline parser
-  // here. The fence-stripping is identical to the helper's; a future
-  // refactor could extract a shape-agnostic `stripJsonFences(raw)`
-  // primitive that both call sites share.
+  // The legacy text path uses an inline parser because parseClaudeJSON
+  // is shape-locked to `{ table_mappings }`. The tool-use path bypasses
+  // both parsers entirely.
   let parsed: ClaudeSuggestionResponse
-  try {
-    let cleaned = raw.trim()
-    if (cleaned.startsWith('```')) {
-      cleaned = cleaned
-        .replace(/^```(?:json)?\n?/, '')
-        .replace(/\n?```$/, '')
-        .trim()
-    }
-    parsed = JSON.parse(cleaned) as ClaudeSuggestionResponse
-  } catch {
-    return {
-      success: false,
-      error: 'AI returned invalid JSON. Please try again.',
-      errorCode: 'AI_INVALID_RESPONSE',
+  if (result.kind === 'toolUse') {
+    parsed = result.toolUse.input as ClaudeSuggestionResponse
+  } else {
+    const raw = result.text
+    try {
+      let cleaned = raw.trim()
+      if (cleaned.startsWith('```')) {
+        cleaned = cleaned
+          .replace(/^```(?:json)?\n?/, '')
+          .replace(/\n?```$/, '')
+          .trim()
+      }
+      parsed = JSON.parse(cleaned) as ClaudeSuggestionResponse
+    } catch {
+      return {
+        success: false,
+        error: 'AI returned invalid JSON. Please try again.',
+        errorCode: 'AI_INVALID_RESPONSE',
+      }
     }
   }
 

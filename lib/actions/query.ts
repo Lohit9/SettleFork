@@ -3,6 +3,7 @@
 import { createClient } from '@/lib/supabase/server'
 import { supabaseAdmin } from '@/lib/supabase/admin'
 import { callLLM } from '@/lib/ai/llm-client'
+import { EMIT_QUERY_SUGGESTIONS_TOOL } from '@/lib/ai/tool-schemas'
 import { extractSelectSQL } from '@/lib/ai/sql-extractor'
 import { checkAIRateLimit } from '@/lib/ai/rate-limit'
 import { buildAIContext, formatDocumentsForPrompt } from '@/lib/ai/context-builder'
@@ -217,6 +218,10 @@ Generate a SELECT query answering the question above. Before casting or filterin
       promptVersion: 'nl-to-sql-v1',
       abuseUserId: user.id,
     })
+    // PR 12: SQL/text callsite — migrated in sub-commit 12.2.
+    if (result.kind !== 'text') {
+      throw new Error('nl_to_sql: unexpected toolUse response')
+    }
     const rawResponse = result.text
     primaryCallId = result.callId
     generatedSQL = extractSelectSQL(rawResponse)
@@ -284,6 +289,14 @@ Return ONLY the corrected raw SQL query — no explanation, no markdown, no back
           parentCallId: primaryCallId,
           abuseUserId: user.id,
         })
+        // PR 12: SQL/text callsite — migrated in sub-commit 12.2.
+        // Per investigation §4c, this retry is DB-failure-driven (not
+        // parse-failure-driven), so it survives tool-use migration as
+        // a kept retry (not removed dead code). Sub-commit 12.2 will
+        // pass `tool: EMIT_SQL_QUERY_TOOL`.
+        if (retryResult.kind !== 'text') {
+          throw new Error('nl_to_sql_retry: unexpected toolUse response')
+        }
         const rawRetry = retryResult.text
         retriedSQL = extractSelectSQL(rawRetry)
         if (retriedSQL !== rawRetry.trim()) {
@@ -477,6 +490,10 @@ Requirements:
 - Keep each query under 80 characters
 - Return ONLY a JSON array of 4 strings, no explanation, no markdown`
 
+  // PR 12 H1: tool use under flag ON; legacy text+JSON.parse under flag OFF.
+  // Tool input wraps the suggestions array under `suggestions` because
+  // Anthropic input_schema.type must be 'object'.
+  const phase2Enabled = process.env.AI_PHASE_2_ENABLED === '1'
   try {
     const result = await callLLM({
       feature: 'nl_suggest_queries',
@@ -487,11 +504,19 @@ Requirements:
       userId: user.id,
       promptVersion: 'nl-suggest-queries-v1',
       abuseUserId: user.id,
+      ...(phase2Enabled && { tool: EMIT_QUERY_SUGGESTIONS_TOOL }),
     })
-    const raw = result.text
-    const cleaned = raw.replace(/```json\s*/gi, '').replace(/```/g, '').trim()
-    const parsed = JSON.parse(cleaned)
-    if (Array.isArray(parsed) && parsed.length >= 1) return parsed.slice(0, 4)
+    if (result.kind === 'toolUse') {
+      const input = result.toolUse.input as { suggestions?: unknown }
+      if (Array.isArray(input.suggestions) && input.suggestions.length >= 1) {
+        return (input.suggestions as string[]).slice(0, 4)
+      }
+    } else {
+      const raw = result.text
+      const cleaned = raw.replace(/```json\s*/gi, '').replace(/```/g, '').trim()
+      const parsed = JSON.parse(cleaned)
+      if (Array.isArray(parsed) && parsed.length >= 1) return parsed.slice(0, 4)
+    }
   } catch {
     // fall through to fallback
   }

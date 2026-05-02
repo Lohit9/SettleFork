@@ -12,6 +12,7 @@
 import { supabaseAdmin } from '@/lib/supabase/admin'
 import { createClient } from '@/lib/supabase/server'
 import { callLLM } from '@/lib/ai/llm-client'
+import { EMIT_FIX_OPTIONS_TOOL } from '@/lib/ai/tool-schemas'
 import { checkAIRateLimit } from '@/lib/ai/rate-limit'
 import { buildAIContext, formatFieldForPrompt, formatDocumentsForPrompt } from '@/lib/ai/context-builder'
 import { resolveFixTarget } from '@/lib/quality/fix-target'
@@ -414,6 +415,8 @@ ${otherIssues}
 
 Provide 2-3 fix options for this issue. Use table_id = '${effectiveTableId}' in all SQL WHERE clauses.`
 
+  // PR 12 H1: tool use under flag ON; legacy text+JSON.parse under flag OFF.
+  const phase2Enabled = process.env.AI_PHASE_2_ENABLED === '1'
   let parsed: ClaudeFixResponse
   let llmCallId: string | null = null
   try {
@@ -428,16 +431,21 @@ Provide 2-3 fix options for this issue. Use table_id = '${effectiveTableId}' in 
       promptVersion: 'quality-fix-options-v1',
       abuseUserId: user.id,
       metadata: { issue_id: issueId, effective_table_id: effectiveTableId },
+      ...(phase2Enabled && { tool: EMIT_FIX_OPTIONS_TOOL }),
     })
     llmCallId = result.callId
 
-    // Strip markdown fences if present
-    const cleaned = result.text
-      .replace(/^```(?:json)?\s*/i, '')
-      .replace(/\s*```\s*$/, '')
-      .trim()
+    if (result.kind === 'toolUse') {
+      parsed = result.toolUse.input as unknown as ClaudeFixResponse
+    } else {
+      // Strip markdown fences if present
+      const cleaned = result.text
+        .replace(/^```(?:json)?\s*/i, '')
+        .replace(/\s*```\s*$/, '')
+        .trim()
 
-    parsed = JSON.parse(cleaned)
+      parsed = JSON.parse(cleaned)
+    }
   } catch (err) {
     console.error('[fix-engine] Failed to parse Claude response:', err)
     return { success: false, error: 'AI returned an unexpected response. Please try again.' }

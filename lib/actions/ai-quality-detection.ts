@@ -3,6 +3,7 @@
 import { supabaseAdmin } from '@/lib/supabase/admin'
 import { createClient } from '@/lib/supabase/server'
 import { callLLM } from '@/lib/ai/llm-client'
+import { EMIT_QUALITY_ISSUES_TOOL } from '@/lib/ai/tool-schemas'
 import { checkAIRateLimit } from '@/lib/ai/rate-limit'
 import {
   buildAIContext,
@@ -280,10 +281,12 @@ Table ID for your verification_sql queries: ${tableId}
 Identify additional data quality issues NOT already listed in existing_issues.`
 
   // Call Claude
-  let rawResponse: string
+  // PR 12 H1: tool use under flag ON; legacy text+JSON.parse under flag OFF.
+  const phase2Enabled = process.env.AI_PHASE_2_ENABLED === '1'
+  let result: Awaited<ReturnType<typeof callLLM>>
   let llmCallId: string | null = null
   try {
-    const result = await callLLM({
+    result = await callLLM({
       feature: 'quality_detection_ai',
       systemPrompt: AI_DETECTION_SYSTEM_PROMPT,
       userMessage,
@@ -293,8 +296,8 @@ Identify additional data quality issues NOT already listed in existing_issues.`
       promptVersion: 'quality-detection-ai-v1',
       abuseUserId: user.id,
       metadata: { table_id: tableId },
+      ...(phase2Enabled && { tool: EMIT_QUALITY_ISSUES_TOOL }),
     })
-    rawResponse = result.text
     llmCallId = result.callId
   } catch (err) {
     console.warn('[ai-detection] Claude call failed:', err)
@@ -303,13 +306,18 @@ Identify additional data quality issues NOT already listed in existing_issues.`
 
   // Parse response
   let parsed: ClaudeQualityResponse
-  try {
-    const jsonMatch = rawResponse.match(/\{[\s\S]*\}/)
-    if (!jsonMatch) throw new Error('No JSON found in response')
-    parsed = JSON.parse(jsonMatch[0]) as ClaudeQualityResponse
-  } catch {
-    console.warn('[ai-detection] Failed to parse Claude response')
-    return { issuesFound: 0, error: 'Failed to parse AI response' }
+  if (result.kind === 'toolUse') {
+    parsed = result.toolUse.input as unknown as ClaudeQualityResponse
+  } else {
+    const rawResponse = result.text
+    try {
+      const jsonMatch = rawResponse.match(/\{[\s\S]*\}/)
+      if (!jsonMatch) throw new Error('No JSON found in response')
+      parsed = JSON.parse(jsonMatch[0]) as ClaudeQualityResponse
+    } catch {
+      console.warn('[ai-detection] Failed to parse Claude response')
+      return { issuesFound: 0, error: 'Failed to parse AI response' }
+    }
   }
 
   const proposals = parsed.proposed_issues ?? []

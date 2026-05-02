@@ -3,6 +3,7 @@
 import { createClient } from '@/lib/supabase/server'
 import { supabaseAdmin } from '@/lib/supabase/admin'
 import { callLLM } from '@/lib/ai/llm-client'
+import { EMIT_MIGRATION_RUNBOOK_TOOL } from '@/lib/ai/tool-schemas'
 import { checkAIRateLimit } from '@/lib/ai/rate-limit'
 import { buildMigrationRunbook } from '@/lib/reports/migration-runbook-docx'
 import type { RunbookData } from '@/lib/reports/migration-runbook-docx'
@@ -536,9 +537,11 @@ ${businessRules || '(no documentation uploaded)'}
 ${loadOrderText || '(no target tables)'}`
 
   // ── Claude call ────────────────────────────────────────────────────────────
-  let rawResponse: string
+  // PR 12 H1: tool use under flag ON; legacy text+JSON.parse under flag OFF.
+  const phase2Enabled = process.env.AI_PHASE_2_ENABLED === '1'
+  let result: Awaited<ReturnType<typeof callLLM>>
   try {
-    const result = await callLLM({
+    result = await callLLM({
       feature: 'outputs_migration_runbook',
       systemPrompt: RUNBOOK_SYSTEM_PROMPT,
       userMessage,
@@ -547,14 +550,14 @@ ${loadOrderText || '(no target tables)'}`
       userId: user.id,
       promptVersion: 'migration-runbook-v1',
       abuseUserId: user.id,
+      ...(phase2Enabled && { tool: EMIT_MIGRATION_RUNBOOK_TOOL }),
     })
-    rawResponse = result.text
   } catch {
     return { success: false, error: 'AI content generation failed. Please try again.' }
   }
 
   // ── Parse Claude JSON response ─────────────────────────────────────────────
-  let claudeContent: Omit<
+  type ClaudeRunbookContent = Omit<
     RunbookData,
     | 'projectName'
     | 'sourceSystemName'
@@ -569,15 +572,21 @@ ${loadOrderText || '(no target tables)'}`
     | 'loadOrder'
   >
 
-  try {
-    const cleaned = rawResponse
-      .replace(/^```(?:json)?\s*/i, '')
-      .replace(/\s*```\s*$/, '')
-      .trim()
-    claudeContent = JSON.parse(cleaned)
-  } catch (parseErr) {
-    console.error('[migration-runbook] JSON parse failed:', parseErr, '\nRaw:', rawResponse.slice(0, 500))
-    return { success: false, error: 'AI returned invalid JSON. Please try again.' }
+  let claudeContent: ClaudeRunbookContent
+  if (result.kind === 'toolUse') {
+    claudeContent = result.toolUse.input as ClaudeRunbookContent
+  } else {
+    const rawResponse = result.text
+    try {
+      const cleaned = rawResponse
+        .replace(/^```(?:json)?\s*/i, '')
+        .replace(/\s*```\s*$/, '')
+        .trim()
+      claudeContent = JSON.parse(cleaned)
+    } catch (parseErr) {
+      console.error('[migration-runbook] JSON parse failed:', parseErr, '\nRaw:', rawResponse.slice(0, 500))
+      return { success: false, error: 'AI returned invalid JSON. Please try again.' }
+    }
   }
 
   // ── Assemble full RunbookData ──────────────────────────────────────────────

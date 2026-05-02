@@ -101,6 +101,10 @@ describeFn('[integration] callLLM logs a row in llm_calls', () => {
       metadata: { test: 'llm_calls_logging_sanity_check' },
     })
 
+    // PR 12: this test calls callLLM without a `tool`, so the result
+    // is always { kind: 'text' }; assert + narrow before reading .text.
+    expect(result.kind).toBe('text')
+    if (result.kind !== 'text') return
     // Wrapper return shape — basic sanity
     expect(result.text).toBeTruthy()
     expect(result.callId).toMatch(
@@ -192,6 +196,9 @@ describeFn('[integration] callLLM logs a row in llm_calls', () => {
       abuseUserId: USER_ID,
       metadata: { test: 'parent_chain_primary' },
     })
+    // PR 12: no tool passed → always kind='text'.
+    expect(primary.kind).toBe('text')
+    if (primary.kind !== 'text') return
     expect(primary.text).toBeTruthy()
 
     // Child call — synthesizes a "repair" retry by passing parentCallId
@@ -209,6 +216,9 @@ describeFn('[integration] callLLM logs a row in llm_calls', () => {
       abuseUserId: USER_ID,
       metadata: { test: 'parent_chain_child' },
     })
+    // PR 12: no tool passed → always kind='text'.
+    expect(child.kind).toBe('text')
+    if (child.kind !== 'text') return
     expect(child.text).toBeTruthy()
 
     const childRow = (await waitForLogRow(child.callId)) as

@@ -20,6 +20,7 @@ import Anthropic, {
   AuthenticationError,
   RateLimitError,
 } from '@anthropic-ai/sdk'
+import type { Tool, ToolUseBlock } from '@anthropic-ai/sdk/resources/messages'
 import { randomUUID, createHash } from 'node:crypto'
 import { supabaseAdmin } from '@/lib/supabase/admin'
 import { computeCostUsd } from '@/lib/ai/pricing'
@@ -91,10 +92,28 @@ export interface CallLLMOptions {
   abuseUserId?: string
   /** Arbitrary structured context. Stored as `llm_calls.metadata` JSONB. */
   metadata?: Record<string, unknown>
+  /**
+   * PR 12: optional tool definition. When provided, the request includes
+   * this as the only available tool and `tool_choice` forces the model
+   * to call it. The response shape becomes
+   * `{ kind: 'toolUse', toolUse: { name, input } }` — the `input` has
+   * already been schema-validated by Anthropic's API, so callers do not
+   * need to JSON-parse or fence-strip prose output.
+   *
+   * When omitted, the request is text-only (legacy behavior). The
+   * response shape is `{ kind: 'text', text }`.
+   *
+   * Settle's convention: every PR 12 callsite passes EXACTLY ONE tool.
+   * Multi-tool flows are reserved for Phase 3+ agentic features.
+   *
+   * The single-tool + forced-`tool_choice` posture is also why callers
+   * never need to inspect the returned `toolUse.name` — it can only be
+   * the tool we passed in.
+   */
+  tool?: Tool
 }
 
-export interface CallLLMResult {
-  text: string
+interface CallLLMResultCommon {
   /** PK of the inserted llm_calls row — caller stores for `parentCallId` chaining. */
   callId: string
   inputTokens: number
@@ -104,6 +123,32 @@ export interface CallLLMResult {
   costUsd: number | null
   anthropicRequestId: string | null
 }
+
+/**
+ * Discriminated-union return type. The `kind` discriminator is the
+ * forcing function for the PR 12 migration: callers that want the raw
+ * text must explicitly check `result.kind === 'text'`; callers that
+ * want the schema-validated tool input must check
+ * `result.kind === 'toolUse'`. The compiler walks every callsite the
+ * first time the union is introduced; that is intentional.
+ *
+ * Flag-conditional callsites (PR 12 H1 design) use the form:
+ *
+ *   const tool = phase2Enabled ? EMIT_X_TOOL : undefined
+ *   const result = await callLLM({ ..., tool })
+ *   if (result.kind === 'toolUse') {
+ *     parsed = result.toolUse.input as Shape
+ *   } else {
+ *     // legacy JSON.parse path preserved for flag-OFF
+ *     parsed = JSON.parse(result.text)
+ *   }
+ */
+export type CallLLMResult =
+  | (CallLLMResultCommon & { kind: 'text'; text: string })
+  | (CallLLMResultCommon & {
+      kind: 'toolUse'
+      toolUse: { name: string; input: Record<string, unknown> }
+    })
 
 // ─── Module-private constants + singletons ────────────────────────────────────
 
@@ -322,17 +367,26 @@ export async function callLLM(opts: CallLLMOptions): Promise<CallLLMResult> {
       // When the flag is OFF or the feature is in LOW_EFFORT_FEATURES,
       // no output_config is sent at all (preserves current behavior).
       ...(effort && { output_config: { effort } }),
+      // PR 12: include `tools` + `tool_choice` only when the caller
+      // passed `opts.tool`. `tool_choice` is a top-level request field
+      // (NOT nested inside output_config like `effort`); see
+      // SDK messages.d.ts:1081-1129 (ToolChoice union).
+      // disable_parallel_tool_use=true matches Settle's "exactly one
+      // tool per call" convention.
+      ...(opts.tool && {
+        tools: [opts.tool],
+        tool_choice: {
+          type: 'tool' as const,
+          name: opts.tool.name,
+          disable_parallel_tool_use: true,
+        },
+      }),
     }
     if (opts.abuseUserId) {
       request.metadata = { user_id: opts.abuseUserId }
     }
 
     const response = await anthropic.messages.create(request)
-
-    const textBlock = response.content.find((b) => b.type === 'text')
-    if (!textBlock || textBlock.type !== 'text') {
-      throw new Error('No text response from Claude')
-    }
 
     const usage = {
       input_tokens: response.usage.input_tokens ?? 0,
@@ -342,6 +396,67 @@ export async function callLLM(opts: CallLLMOptions): Promise<CallLLMResult> {
     }
     const costUsd = computeCostUsd(model, usage)
     const latencyMs = Date.now() - startedAt
+
+    // PR 12: branch on whether a tool was forced. When `opts.tool` is
+    // set, the response MUST contain a tool_use block matching the
+    // forced tool name; otherwise it MUST contain a text block. The
+    // §9.1 probe confirmed forced-tool responses do not carry a
+    // text block alongside the tool_use; the §9.1 probe also showed
+    // that thinking blocks may or may not appear depending on the
+    // model's budget decision, so we never assume one is present.
+    if (opts.tool) {
+      const toolUseBlock = response.content.find(
+        (b): b is ToolUseBlock => b.type === 'tool_use',
+      )
+      if (!toolUseBlock || toolUseBlock.name !== opts.tool.name) {
+        throw new Error(
+          `Expected tool_use response for ${opts.tool.name}; ` +
+            `got blocks: ${response.content.map((b) => b.type).join(', ')}`,
+        )
+      }
+
+      // Persist a JSON-serialized form of the tool input as
+      // `response_text` so the existing `llm_calls.response_text`
+      // surface stays consistent across text- and tool-use calls.
+      // Eval/audit consumers continue to read response_text uniformly.
+      const responseText = JSON.stringify(toolUseBlock.input)
+
+      void writeLogAsync({
+        ...baseRow,
+        response_text: responseText,
+        anthropic_request_id: response.id ?? null,
+        stop_reason: response.stop_reason ?? null,
+        input_tokens: usage.input_tokens,
+        output_tokens: usage.output_tokens,
+        cache_read_tokens: usage.cache_read_tokens,
+        cache_creation_tokens: usage.cache_creation_tokens,
+        latency_ms: latencyMs,
+        cost_usd: costUsd,
+        succeeded: true,
+        error_type: null,
+        error_message: null,
+      })
+
+      return {
+        kind: 'toolUse',
+        toolUse: {
+          name: toolUseBlock.name,
+          input: toolUseBlock.input as Record<string, unknown>,
+        },
+        callId,
+        inputTokens: usage.input_tokens,
+        outputTokens: usage.output_tokens,
+        cacheReadTokens: usage.cache_read_tokens,
+        cacheCreationTokens: usage.cache_creation_tokens,
+        costUsd,
+        anthropicRequestId: response.id ?? null,
+      }
+    }
+
+    const textBlock = response.content.find((b) => b.type === 'text')
+    if (!textBlock || textBlock.type !== 'text') {
+      throw new Error('No text response from Claude')
+    }
 
     void writeLogAsync({
       ...baseRow,
@@ -360,6 +475,7 @@ export async function callLLM(opts: CallLLMOptions): Promise<CallLLMResult> {
     })
 
     return {
+      kind: 'text',
       text: textBlock.text,
       callId,
       inputTokens: usage.input_tokens,
@@ -416,8 +532,28 @@ export async function callLLMStreaming(
       system: opts.systemPrompt,
       messages: [{ role: 'user', content: opts.userMessage }],
       stream: true,
-      // PR 11: include effort only when defined; same gating as callLLM.
-      ...(effort && { effort }),
+      // PR 12 follow-up to PR 11: nest `effort` under `output_config`,
+      // mirroring callLLM's correct placement at the non-streaming
+      // wrapper. PR 11 fixed this in callLLM but missed the streaming
+      // path; the §9.1 probe confirmed `output_config: { effort }` is
+      // also the correct shape for streaming requests. Without this
+      // fix, any streaming callsite (currently only
+      // `outputs_execution_package_compartmentalized`) would 400 with
+      // "Extra inputs are not permitted" the moment
+      // AI_PHASE_2_ENABLED=1 puts that feature on effort='high'.
+      ...(effort && { output_config: { effort } }),
+      // PR 12: same tool plumbing as callLLM. Streaming + tool_use is
+      // supported on SDK 0.78.0; `stream.finalMessage()` returns a
+      // fully-assembled message whose `content` array contains the
+      // tool_use block. The §9.1 probe verified this end-to-end.
+      ...(opts.tool && {
+        tools: [opts.tool],
+        tool_choice: {
+          type: 'tool' as const,
+          name: opts.tool.name,
+          disable_parallel_tool_use: true,
+        },
+      }),
     }
     if (opts.abuseUserId) {
       request.metadata = { user_id: opts.abuseUserId }
@@ -425,11 +561,6 @@ export async function callLLMStreaming(
 
     const stream = await anthropic.messages.stream(request)
     const message = await stream.finalMessage()
-
-    const textBlock = message.content.find((b) => b.type === 'text')
-    if (!textBlock || textBlock.type !== 'text') {
-      throw new Error('No text response from Claude')
-    }
 
     const usage = {
       input_tokens: message.usage.input_tokens ?? 0,
@@ -439,6 +570,56 @@ export async function callLLMStreaming(
     }
     const costUsd = computeCostUsd(model, usage)
     const latencyMs = Date.now() - startedAt
+
+    if (opts.tool) {
+      const toolUseBlock = message.content.find(
+        (b): b is ToolUseBlock => b.type === 'tool_use',
+      )
+      if (!toolUseBlock || toolUseBlock.name !== opts.tool.name) {
+        throw new Error(
+          `Expected tool_use response for ${opts.tool.name}; ` +
+            `got blocks: ${message.content.map((b) => b.type).join(', ')}`,
+        )
+      }
+
+      const responseText = JSON.stringify(toolUseBlock.input)
+
+      void writeLogAsync({
+        ...baseRow,
+        response_text: responseText,
+        anthropic_request_id: message.id ?? null,
+        stop_reason: message.stop_reason ?? null,
+        input_tokens: usage.input_tokens,
+        output_tokens: usage.output_tokens,
+        cache_read_tokens: usage.cache_read_tokens,
+        cache_creation_tokens: usage.cache_creation_tokens,
+        latency_ms: latencyMs,
+        cost_usd: costUsd,
+        succeeded: true,
+        error_type: null,
+        error_message: null,
+      })
+
+      return {
+        kind: 'toolUse',
+        toolUse: {
+          name: toolUseBlock.name,
+          input: toolUseBlock.input as Record<string, unknown>,
+        },
+        callId,
+        inputTokens: usage.input_tokens,
+        outputTokens: usage.output_tokens,
+        cacheReadTokens: usage.cache_read_tokens,
+        cacheCreationTokens: usage.cache_creation_tokens,
+        costUsd,
+        anthropicRequestId: message.id ?? null,
+      }
+    }
+
+    const textBlock = message.content.find((b) => b.type === 'text')
+    if (!textBlock || textBlock.type !== 'text') {
+      throw new Error('No text response from Claude')
+    }
 
     void writeLogAsync({
       ...baseRow,
@@ -457,6 +638,7 @@ export async function callLLMStreaming(
     })
 
     return {
+      kind: 'text',
       text: textBlock.text,
       callId,
       inputTokens: usage.input_tokens,
