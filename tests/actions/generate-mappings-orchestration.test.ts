@@ -254,27 +254,41 @@ describe('[generateMappings] B1 — PER_BATCH_MAX_TOKENS = 16000', () => {
     expect(RUN_GEN_BODY).toMatch(/const\s+PER_BATCH_MAX_TOKENS\s*=\s*16000\b/)
   })
 
-  it('passes PER_BATCH_MAX_TOKENS as the third argument to callClaude on the primary call', () => {
-    // The first callClaude inside the engine orchestrator is the
-    // per-batch primary invocation. Pinning the argument structure
-    // here means a refactor that drops the budget (or hardcodes a
-    // different number) breaks CI.
+  it('passes PER_BATCH_MAX_TOKENS via the callLLM options object on the primary call', () => {
+    // Post-PR-6: the primary AI call goes through `callLLM(opts)` from
+    // `lib/ai/llm-client.ts`, not `callClaude(...)` directly.
+    // Argument shape is now an options object — pin the four key
+    // fields on the primary call so a refactor that drops any of them
+    // breaks CI.
     expect(RUN_GEN_BODY).toMatch(
-      /callClaude\(MAPPING_GENERATION_SYSTEM_PROMPT,\s*batchUserMessage,\s*PER_BATCH_MAX_TOKENS\)/,
+      /callLLM\(\{[\s\S]{0,800}feature:\s*['"]mapping_generate['"]/,
+    )
+    expect(RUN_GEN_BODY).toMatch(
+      /callLLM\(\{[\s\S]{0,800}systemPrompt:\s*MAPPING_GENERATION_SYSTEM_PROMPT/,
+    )
+    expect(RUN_GEN_BODY).toMatch(
+      /callLLM\(\{[\s\S]{0,800}userMessage:\s*batchUserMessage/,
+    )
+    expect(RUN_GEN_BODY).toMatch(
+      /callLLM\(\{[\s\S]{0,800}maxTokens:\s*PER_BATCH_MAX_TOKENS/,
     )
   })
 })
 
 describe('[generateMappings] B2 — JSON-repair retry uses the same 16000-token budget', () => {
-  it('passes PER_BATCH_MAX_TOKENS to the retry callClaude (not a different literal)', () => {
+  it('passes PER_BATCH_MAX_TOKENS to the retry callLLM (not a different literal)', () => {
     // The retry block should reference the same constant, not a
     // different magic number. This pins the "same budget on retry"
     // contract — Claude needs the full budget to actually correct a
     // malformed response.
+    //
+    // Post-PR-6 end-marker: the retry block ends in
+    // `parseClaudeJSON(retryResult.text)` (was `parseClaudeJSON(retryRaw)`
+    // pre-PR-6 when the call returned a raw string).
     const retrySlice = sliceBetween(
       RUN_GEN_BODY,
       'JSON repair tool',
-      'parseClaudeJSON(retryRaw)',
+      'parseClaudeJSON(retryResult.text)',
     )
     expect(retrySlice).toContain('PER_BATCH_MAX_TOKENS')
     // Defensive: there should be no inline `1024` / `4096` / `2048`
@@ -303,14 +317,20 @@ describe('[generateMappings] C1 — one Claude call per source table, not per pa
     )
   })
 
-  it('does not call callClaude inside a target-table loop (no per-pair Claude call)', () => {
-    // Pin: there is no `for (const tgt of targetTables) { … callClaude … }`
+  it('does not call callLLM inside a target-table loop (no per-pair Claude call)', () => {
+    // Pin: there is no `for (const tgt of targetTables) { … callLLM … }`
     // pattern inside the engine orchestrator. The only Claude calls
     // are in the single per-source-table loop and its retry.
-    const claudeCallCount = (RUN_GEN_BODY.match(/callClaude\(/g) ?? []).length
-    // Two callClaude sites in runMappingGeneration: primary + JSON-repair
-    // retry. A per-pair refactor would push this to a much higher number.
-    expect(claudeCallCount).toBe(2)
+    //
+    // Post-PR-6: the wrapper is `callLLM` from `lib/ai/llm-client.ts`
+    // (was `callClaude` from `lib/ai/claude.ts` pre-PR-6). Defensive
+    // counts: zero `callClaude(` (proves PR 6's migration is complete
+    // for runMappingGeneration) AND exactly two `callLLM(` (primary +
+    // repair).
+    const callClaudeCount = (RUN_GEN_BODY.match(/callClaude\(/g) ?? []).length
+    expect(callClaudeCount).toBe(0)
+    const callLLMCount = (RUN_GEN_BODY.match(/callLLM\(/g) ?? []).length
+    expect(callLLMCount).toBe(2)
   })
 })
 
@@ -402,7 +422,10 @@ describe('[generateMappings] D2 — first-call failure → JSON-repair retry', (
   })
 
   it('parses the retry response with the same parseClaudeJSON helper', () => {
-    expect(RUN_GEN_BODY).toContain('const retryParsed = parseClaudeJSON(retryRaw)')
+    // Post-PR-6: callLLM returns a result object with `.text`, so the
+    // parsed retry input is now `retryResult.text` (was `retryRaw`
+    // pre-PR-6 when callClaude returned a raw string).
+    expect(RUN_GEN_BODY).toContain('parseClaudeJSON(retryResult.text)')
   })
 })
 

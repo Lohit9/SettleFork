@@ -185,19 +185,25 @@ describe('[mappings-for-redesign 4a] wrapper exports', () => {
   })
 
   it('imports the AI plumbing for suggestMappingForTarget', () => {
-    // Post-PR-5 split:
+    // Post-PR-5 + PR-6 split:
     //   • Wrapper imports `checkAIRateLimit` (still wrapper-side) and
-    //     `runMappingSuggestion` (the new delegation target).
-    //   • Engine imports `callClaude` and `buildAIContext` (the
-    //     actual AI plumbing — moved with the orchestration body).
+    //     `runMappingSuggestion` (the delegation target).
+    //   • Engine imports `callLLM` from `@/lib/ai/llm-client`
+    //     (was `callClaude` from `@/lib/ai/claude` pre-PR-6 — PR 6
+    //     migrated mapping-engine callsites to the unified wrapper)
+    //     plus `buildAIContext` (unchanged).
     expect(SRC).toContain("from '@/lib/ai/rate-limit'")
     expect(SRC).toMatch(/checkAIRateLimit/)
     expect(SRC).toContain("from '@/lib/ai/mapping-engine'")
     expect(SRC).toMatch(/runMappingSuggestion/)
-    expect(ENGINE_SRC).toContain("from '@/lib/ai/claude'")
+    expect(ENGINE_SRC).toContain("from '@/lib/ai/llm-client'")
     expect(ENGINE_SRC).toContain("from '@/lib/ai/context-builder'")
-    expect(ENGINE_SRC).toMatch(/callClaude/)
+    expect(ENGINE_SRC).toMatch(/callLLM/)
     expect(ENGINE_SRC).toMatch(/buildAIContext/)
+    // Defensive: PR 6 should have removed the direct callClaude import
+    // from the engine. PR 7 will remove the lib/ai/claude.ts module
+    // entirely once the remaining 20 callsites migrate.
+    expect(ENGINE_SRC).not.toContain("from '@/lib/ai/claude'")
   })
 })
 
@@ -548,9 +554,19 @@ describe('[mappings-for-redesign 4a] suggestMappingForTarget', () => {
     )
   })
 
-  it('calls callClaude with the prompt and a max_tokens budget', () => {
-    expect(engineBody).toMatch(/callClaude\(/)
-    expect(engineBody).toMatch(/1024/)
+  it('calls callLLM with the prompt and a max_tokens budget', () => {
+    // Post-PR-6: the engine uses `callLLM` from `lib/ai/llm-client.ts`
+    // (was `callClaude` from `lib/ai/claude.ts` pre-PR-6).
+    // Argument shape moved from positional to options object — pin
+    // both `feature: 'mapping_suggest'` and `maxTokens: 1024` on the
+    // same callLLM block.
+    expect(engineBody).toMatch(/callLLM\(/)
+    expect(engineBody).toMatch(
+      /callLLM\(\{[\s\S]{0,400}feature:\s*['"]mapping_suggest['"]/,
+    )
+    expect(engineBody).toMatch(
+      /callLLM\(\{[\s\S]{0,400}maxTokens:\s*1024/,
+    )
   })
 
   it('parses the LLM response with code-fence stripping (matches legacy parseClaudeJSON pattern)', () => {
