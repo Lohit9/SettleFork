@@ -117,12 +117,13 @@ const GENERATE_BODY = sliceBetween(
 // Body of `runMappingGeneration`, the orchestrator. Pins the bulk of
 // the AI work: batch loop, Claude calls, JSON parse + retry,
 // per-source-table iteration, persistence flow, error returns.
-// Slices to end-of-file because `runMappingGeneration` is currently
-// the last function in the engine. Future engine additions (e.g.
-// `runMappingSuggestion`) will require a tighter end marker.
-const RUN_GEN_BODY = sliceFrom(
+// Bounded at the suggestion-path section header that PR 5 added —
+// without that bound, C1.3's `callClaude(` count would also pick up
+// `runMappingSuggestion`'s Claude call.
+const RUN_GEN_BODY = sliceBetween(
   ENGINE_SRC,
   'export async function runMappingGeneration(',
+  '// ─── Mapping suggestion: prompts + types',
 )
 
 // Body of the system-prompt constant declaration. Bounded by the next

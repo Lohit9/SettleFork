@@ -1611,3 +1611,428 @@ ${otherSourcesList}
     return { success: false, error: err instanceof Error ? err.message : 'Generation failed', errorCode: 'INTERNAL' }
   }
 }
+
+// ─── Mapping suggestion: prompts + types ─────────────────────────────
+
+/**
+ * System prompt for the per-target Suggest Claude call. Distinct
+ * from `MAPPING_GENERATION_SYSTEM_PROMPT` BY DESIGN — see the
+ * investigation report §4.2 for the rationale (different scope:
+ * per-target with caller-narrowed schema vs. per-source-table batch
+ * with full-context decision-making). Do NOT unify the two prompts.
+ *
+ * Locked content — see `tests/integration/mappings-for-redesign-heritage.test.ts`
+ * `suggestMappingForTarget happy path` for end-to-end coverage.
+ */
+export const MAPPING_SUGGESTION_SYSTEM_PROMPT =
+  'You are a data migration expert. Return ONLY valid JSON.'
+
+/**
+ * Max characters for the LLM-emitted rationale string. Trimmed at
+ * the boundary so wire payloads stay bounded and the form pre-fill
+ * stays compact. Also referenced verbatim in the user message
+ * (`rationale is a brief explanation, ≤ N characters`) so the LLM
+ * sees the cap.
+ */
+export const RATIONALE_MAX_CHARS = 280
+
+interface ClaudeSuggestionResponse {
+  source_field_names?: unknown
+  combination_type?: unknown
+  confidence?: unknown
+  rationale?: unknown
+}
+
+// ─── Mapping suggestion: orchestrator ─────────────────────────────────
+
+/**
+ * Per-target Suggest orchestrator. Reads the target field, builds a
+ * project-wide AI context, calls Claude with a per-target prompt,
+ * parses + validates the response, translates LLM-emitted source
+ * field names into UUIDs (with same-table guard), and returns an
+ * ephemeral suggestion for the form to pre-fill.
+ *
+ * NO DB writes. NO audit log. Confirmation flows through
+ * `createFieldMapping` with `aiSuggested: true`.
+ *
+ * Returns:
+ *   • `{ success: true, suggestion: { sourceFieldIds, combinationType,
+ *     confidence, rationale } }` on a parsable, usable LLM response
+ *   • `{ success: false, errorCode: 'NOT_FOUND' }` for missing target
+ *     field, cross-project target, no source tables, or no source
+ *     fields
+ *   • `{ success: false, errorCode: 'AI_INVALID_RESPONSE' }` for
+ *     LLM parse / shape / cross-table failures
+ *   • `{ success: false, errorCode: 'INTERNAL' }` for context-build
+ *     failures, Claude call failures, source-field read failures
+ *
+ * Does NOT produce 'PERMISSION_DENIED' / 'RATE_LIMITED' — those are
+ * wrapper concerns.
+ *
+ * The wrapper at `lib/actions/mappings-for-redesign.ts:suggestMappingForTarget`
+ * passes `supabaseAdmin` as the `supabase` parameter (legacy bypassed
+ * RLS for the reads after explicit `requireProjectPermission`). The
+ * engine doesn't care which client it gets; it uses what's given.
+ */
+export async function runMappingSuggestion(
+  supabase: SupabaseClient,
+  userId: string,
+  projectId: string,
+  targetFieldId: string,
+): Promise<
+  | {
+      success: true
+      suggestion: {
+        sourceFieldIds: string[]
+        combinationType: 'single' | 'concat_space' | 'concat_comma'
+        confidence: number
+        rationale: string
+      }
+    }
+  | {
+      success: false
+      error: string
+      errorCode: 'NOT_FOUND' | 'AI_INVALID_RESPONSE' | 'INTERNAL'
+    }
+> {
+  // ── Read target field identity ───────────────────────────────────────────
+  const { data: targetField, error: tfErr } = await supabase
+    .from('fields')
+    // Same join-chain caveat as `createFieldMapping`: walk through
+    // datasets to reach project_id (`tables` has no project_id column).
+    // `tables.name` lives on `tables` itself so it stays at the first
+    // hop alongside the nested `datasets!inner(project_id)`.
+    .select(
+      'id, name, data_type, is_primary_key, is_foreign_key, is_nullable, table_id, tables!inner(name, datasets!inner(project_id))',
+    )
+    .eq('id', targetFieldId)
+    .single<{
+      id: string
+      name: string
+      data_type: string
+      is_primary_key: boolean | null
+      is_foreign_key: boolean | null
+      is_nullable: boolean | null
+      table_id: string
+      tables:
+        | {
+            name: string
+            datasets:
+              | { project_id: string }
+              | { project_id: string }[]
+              | null
+          }
+        | {
+            name: string
+            datasets:
+              | { project_id: string }
+              | { project_id: string }[]
+              | null
+          }[]
+        | null
+    }>()
+  if (tfErr || !targetField) {
+    return {
+      success: false,
+      error: 'Target field not found',
+      errorCode: 'NOT_FOUND',
+    }
+  }
+
+  const targetTablesNode = Array.isArray(targetField.tables)
+    ? targetField.tables[0]
+    : targetField.tables
+  const targetDatasetsNode = Array.isArray(targetTablesNode?.datasets)
+    ? targetTablesNode?.datasets[0]
+    : targetTablesNode?.datasets
+  const targetProjectId = targetDatasetsNode?.project_id
+  if (targetProjectId !== projectId) {
+    return {
+      success: false,
+      error: 'Target field does not belong to this project',
+      errorCode: 'NOT_FOUND',
+    }
+  }
+  const targetTableName = targetTablesNode?.name ?? '?'
+
+  // ── Build AI context (project-wide source schema) ────────────────────────
+  // Reuse `buildAIContext` so we get sample values + value distributions +
+  // documents in the same shape that `suggestRemainingMappings` does.
+  // Project-wide scope — the prompt's "same-table only" constraint is
+  // expressed in instruction text, not by filtering the context.
+  let context: Awaited<ReturnType<typeof buildAIContext>>
+  try {
+    context = await buildAIContext(
+      projectId,
+      {
+        includeValueDistributions: true,
+        includeSampleValues: true,
+        includeDocuments: true,
+        maxDistributionValues: 10,
+        maxSampleValues: 5,
+      },
+      userId,
+    )
+  } catch (err) {
+    return {
+      success: false,
+      error:
+        err instanceof Error ? err.message : 'Failed to build AI context',
+      errorCode: 'INTERNAL',
+    }
+  }
+
+  // Resolve a name→id map for source fields so we can translate the LLM's
+  // bare-name output back to UUIDs. `buildAIContext`'s FieldContext does
+  // NOT expose field UUIDs (intentional: it's a prompt-shape contract,
+  // not a DB-shape contract), so we run a small companion query that
+  // fetches just (id, name, table_id) for every source-side field.
+  const sourceTableIds = context.source_tables.map((t) => t.table_id)
+  if (sourceTableIds.length === 0) {
+    return {
+      success: false,
+      error: 'No source tables available to map against',
+      errorCode: 'NOT_FOUND',
+    }
+  }
+
+  const { data: sourceFieldRows, error: sfQErr } = await supabase
+    .from('fields')
+    .select('id, name, table_id')
+    .in('table_id', sourceTableIds)
+    .returns<Array<{ id: string; name: string; table_id: string }>>()
+  if (sfQErr || !sourceFieldRows) {
+    return {
+      success: false,
+      error: sfQErr?.message ?? 'Failed to read source fields',
+      errorCode: 'INTERNAL',
+    }
+  }
+
+  const sourceFieldsByLowerName = new Map<
+    string,
+    { id: string; tableId: string }
+  >()
+  for (const row of sourceFieldRows) {
+    // Last-write-wins for duplicate field names across source tables.
+    // Acceptable for 4a-1 (same-table only) — the prompt instructs the
+    // LLM to use a single source table, so collisions only matter if
+    // the LLM ignores the instruction. 4a-3 will switch to fully-
+    // qualified `Table.Field` lookups for cross-table.
+    sourceFieldsByLowerName.set(row.name.toLowerCase(), {
+      id: row.id,
+      tableId: row.table_id,
+    })
+  }
+
+  if (sourceFieldsByLowerName.size === 0) {
+    return {
+      success: false,
+      error: 'No source fields available to map against',
+      errorCode: 'NOT_FOUND',
+    }
+  }
+
+  // ── Build the prompt ─────────────────────────────────────────────────────
+  const targetTags: string[] = []
+  if (targetField.is_primary_key) targetTags.push('PK')
+  if (targetField.is_foreign_key) targetTags.push('FK')
+  if (targetField.is_nullable) targetTags.push('nullable')
+  const targetTagStr = targetTags.length ? ` [${targetTags.join(', ')}]` : ''
+
+  // Pull the target field's own profile (samples + distribution) from
+  // the context's `target_tables` if present. `FieldContext` exposes
+  // `name` and `data_type` but not `id`, so match by table_id + name.
+  let targetProfileBlock = ''
+  for (const tbl of context.target_tables) {
+    if (tbl.table_id !== targetField.table_id) continue
+    const f = tbl.fields.find((x) => x.name === targetField.name)
+    if (!f) continue
+    const samples = f.sample_values?.slice(0, 5) ?? []
+    const dist = f.value_distribution?.slice(0, 10) ?? []
+    if (samples.length > 0) {
+      targetProfileBlock += `\n  Samples: ${samples.map((v) => `"${v}"`).join(', ')}`
+    }
+    if (dist.length > 0) {
+      targetProfileBlock += `\n  Values: ${dist
+        .map((v) => `"${v.value}"(${v.count})`)
+        .join(', ')}`
+    }
+    break
+  }
+
+  const sourceTablesBlock = context.source_tables
+    .map((tbl) => {
+      const lines = tbl.fields
+        .map((f) => {
+          const tags: string[] = []
+          if (f.is_primary_key) tags.push('PK')
+          if (f.is_foreign_key) tags.push('FK')
+          if (f.is_nullable) tags.push('nullable')
+          const tagStr = tags.length ? ` [${tags.join(', ')}]` : ''
+          let line = `  - ${f.name} (${f.data_type})${tagStr}`
+          if (f.value_distribution?.length) {
+            const top = f.value_distribution.slice(0, 5)
+            line += `\n      Values: ${top.map((v) => `"${v.value}"(${v.count})`).join(', ')}`
+          } else if (f.sample_values?.length) {
+            line += `\n      Samples: ${f.sample_values.slice(0, 3).map((v) => `"${v}"`).join(', ')}`
+          }
+          return line
+        })
+        .join('\n')
+      return `<source_table name="${tbl.table_name}">\n${lines}\n</source_table>`
+    })
+    .join('\n\n')
+
+  const docBlock = formatDocumentsForPrompt(context.documents)
+
+  const userMsg = `Target field: ${targetTableName}.${targetField.name} (${targetField.data_type})${targetTagStr}${targetProfileBlock}
+
+Suggest ONE mapping for this target field. Pick 1 or more source fields, all from the SAME source table. Cross-table sources are NOT allowed in this version.
+
+Available source fields (grouped by source table):
+
+${sourceTablesBlock}
+${docBlock}
+${context.intelligence_context ? context.intelligence_context + '\n\n' : ''}IMPORTANT:
+- Use bare field names (not table.field).
+- All source_field_names MUST come from the SAME source table.
+- combination_type must be one of: "single", "concat_space", "concat_comma".
+  Use "single" iff exactly one source. Use "concat_space" or "concat_comma" for 2+ sources.
+- confidence is 0-100 indicating how confident you are in the proposed mapping.
+- rationale is a brief explanation, ≤ ${RATIONALE_MAX_CHARS} characters.
+
+Respond with ONLY valid JSON in this exact shape:
+{"source_field_names": ["FieldA"], "combination_type": "single", "confidence": 85, "rationale": "Brief reason"}`
+
+  // ── Call LLM ─────────────────────────────────────────────────────────────
+  let raw: string
+  try {
+    raw = await callClaude(MAPPING_SUGGESTION_SYSTEM_PROMPT, userMsg, 1024)
+  } catch (err) {
+    return {
+      success: false,
+      error: err instanceof Error ? err.message : 'AI call failed',
+      errorCode: 'INTERNAL',
+    }
+  }
+
+  // ── Parse + validate response ────────────────────────────────────────────
+  // NOTE: the engine has a `parseClaudeJSON` helper (PR 4) but it's
+  // hardcoded to expect `{ table_mappings: [...] }` shape. The
+  // suggestion path expects `{ source_field_names, combination_type,
+  // confidence, rationale }` instead, so we keep an inline parser
+  // here. The fence-stripping is identical to the helper's; a future
+  // refactor could extract a shape-agnostic `stripJsonFences(raw)`
+  // primitive that both call sites share.
+  let parsed: ClaudeSuggestionResponse
+  try {
+    let cleaned = raw.trim()
+    if (cleaned.startsWith('```')) {
+      cleaned = cleaned
+        .replace(/^```(?:json)?\n?/, '')
+        .replace(/\n?```$/, '')
+        .trim()
+    }
+    parsed = JSON.parse(cleaned) as ClaudeSuggestionResponse
+  } catch {
+    return {
+      success: false,
+      error: 'AI returned invalid JSON. Please try again.',
+      errorCode: 'AI_INVALID_RESPONSE',
+    }
+  }
+
+  if (!Array.isArray(parsed.source_field_names)) {
+    return {
+      success: false,
+      error: 'AI response missing source_field_names array',
+      errorCode: 'AI_INVALID_RESPONSE',
+    }
+  }
+
+  // Translate names → ids; strip unknowns; preserve LLM-emitted order.
+  const resolvedIds: string[] = []
+  const resolvedTableIds = new Set<string>()
+  for (const rawName of parsed.source_field_names) {
+    if (typeof rawName !== 'string') continue
+    const bare = rawName.split('.').pop()!.toLowerCase().trim()
+    const hit = sourceFieldsByLowerName.get(bare)
+    if (!hit) continue
+    if (resolvedIds.includes(hit.id)) continue // dedupe
+    resolvedIds.push(hit.id)
+    resolvedTableIds.add(hit.tableId)
+  }
+
+  if (resolvedIds.length === 0) {
+    // Either LLM emitted nothing usable or all names stripped out.
+    return {
+      success: false,
+      error:
+        'AI did not return any usable source fields. Please pick sources manually.',
+      errorCode: 'AI_INVALID_RESPONSE',
+    }
+  }
+
+  // Same-table guard on the LLM output. If the LLM ignored the instruction
+  // and emitted cross-table sources, drop the cross-table tail and keep
+  // the dominant-table prefix. If no same-table subset survives, surface
+  // AI_INVALID_RESPONSE so the user retries.
+  if (resolvedTableIds.size > 1) {
+    const dominantTableId = sourceFieldsByLowerName.get(
+      String(parsed.source_field_names[0])
+        .split('.')
+        .pop()!
+        .toLowerCase()
+        .trim(),
+    )?.tableId
+    const sameTable = resolvedIds.filter((id) => {
+      for (const v of sourceFieldsByLowerName.values()) {
+        if (v.id === id) return v.tableId === dominantTableId
+      }
+      return false
+    })
+    if (sameTable.length === 0) {
+      return {
+        success: false,
+        error:
+          'AI suggested cross-table sources, which are not yet supported. Please pick sources manually.',
+        errorCode: 'AI_INVALID_RESPONSE',
+      }
+    }
+    resolvedIds.length = 0
+    resolvedIds.push(...sameTable)
+  }
+
+  // Combination type narrowing.
+  const rawCombo = String(parsed.combination_type ?? '').toLowerCase()
+  let combinationType: 'single' | 'concat_space' | 'concat_comma'
+  if (resolvedIds.length === 1) {
+    combinationType = 'single'
+  } else if (rawCombo === 'concat_comma') {
+    combinationType = 'concat_comma'
+  } else {
+    // Default for 2+ sources matches the form's pre-selection (decision 7).
+    combinationType = 'concat_space'
+  }
+
+  const confidenceNum = Number(parsed.confidence)
+  const confidence =
+    Number.isFinite(confidenceNum) && confidenceNum >= 0 && confidenceNum <= 100
+      ? Math.round(confidenceNum)
+      : 50
+
+  const rationaleRaw =
+    typeof parsed.rationale === 'string' ? parsed.rationale : ''
+  const rationale = rationaleRaw.slice(0, RATIONALE_MAX_CHARS)
+
+  return {
+    success: true,
+    suggestion: {
+      sourceFieldIds: resolvedIds,
+      combinationType,
+      confidence,
+      rationale,
+    },
+  }
+}

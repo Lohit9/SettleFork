@@ -3,13 +3,52 @@
 // Phase 4a-1 — source-level invariant tests for the redesign-side
 // `createFieldMapping` and `suggestMappingForTarget` wrappers.
 //
-// Same rationale as `mappings-for-redesign-actions.test.ts` (Gap 9):
-// the wrappers touch Supabase auth, permission checks, the maintenance
+// `createFieldMapping` (44 tests) is fully wrapper-resident — those
+// pins read `lib/actions/mappings-for-redesign.ts`.
+//
+// `suggestMappingForTarget` was extracted in PR 5: the wrapper became
+// a 24-line thin delegation (auth + rate-limit + delegate), and the
+// AI orchestration moved to `runMappingSuggestion` in
+// `lib/ai/mapping-engine.ts`. Suggest pins now split:
+//   • Auth ordering, rate-limit-before-delegate, no-DB-write,
+//     no-activity-log → wrapper (`mappings-for-redesign.ts`)
+//   • AI plumbing imports, buildAIContext usage, callClaude call,
+//     JSON parse, name→id resolution, same-table guard, confidence
+//     clamp, rationale truncation, AI_INVALID_RESPONSE branches,
+//     combinationType narrowing → engine (`mapping-engine.ts`)
+//
+// ─────────────────────────────────────────────────────────────────────
+// APPROACH — source-text invariants, not behavioral mocks.
+// ─────────────────────────────────────────────────────────────────────
+//
+// Same rationale as `mappings-for-redesign-actions.test.ts` (Gap 9)
+// and the sibling `generate-mappings-orchestration.test.ts`: the
+// wrappers touch Supabase auth, permission checks, the maintenance
 // guard, the `dq_create_target_field_mapping` RPC, the Anthropic
-// client, and the activity log. Spinning up a full mocking harness for
-// every codepath is expensive; instead we read the source file and
-// assert the call-site shape locks the founder-locked decisions in
-// place.
+// client, and the activity log. Spinning up a full mocking harness
+// for every codepath is expensive; instead we read the source files
+// and assert the call-site shape locks the founder-locked decisions
+// in place. A future refactor that silently drops a refinement
+// cannot land without breaking CI.
+//
+// ─────────────────────────────────────────────────────────────────────
+// BRITTLENESS WARNING — both SUT files are format-frozen.
+// ─────────────────────────────────────────────────────────────────────
+//
+// Pins in this file slice both `lib/actions/mappings-for-redesign.ts`
+// AND `lib/ai/mapping-engine.ts`. Cosmetic reformatting of either
+// file (Prettier reflow, indentation width change, trailing-comma
+// policy shift) can break indentation- or section-header-anchored
+// markers. Treat both files as format-frozen until the next refactor
+// retires these pins.
+//
+// Engine slicers (`SUGGEST_ENGINE_BODY` below) are bounded by the
+// section-header comments PR 5 introduced
+// (`// ─── Mapping suggestion: prompts + types ───` and the
+// orchestrator section header). Adding new engine orchestrators after
+// `runMappingSuggestion` requires updating that bound — the same
+// section-marker dependency that PR 4 introduced for `RUN_GEN_BODY`
+// in `generate-mappings-orchestration.test.ts`.
 //
 // Founder-locked decisions captured here as regression guards:
 //   1. AUTO-APPROVE = NO. New TFMs created via the wrapper rely on the
@@ -39,7 +78,7 @@
 //   8. SUGGEST does NOT emit an activity_log entry.
 //   9. SUGGEST's AI_INVALID_RESPONSE codepath returns when the LLM
 //      output is unparseable OR resolves zero usable source fields.
-//  10. SUGGEST runs `checkAIRateLimit` BEFORE the LLM call.
+//  10. SUGGEST runs `checkAIRateLimit` BEFORE delegating to the engine.
 
 import { describe, it, expect } from 'vitest'
 import { readFileSync } from 'node:fs'
@@ -51,6 +90,9 @@ const ACTIONS_PATH = resolve(
 )
 const SRC = readFileSync(ACTIONS_PATH, 'utf8')
 
+const ENGINE_PATH = resolve(__dirname, '../../lib/ai/mapping-engine.ts')
+const ENGINE_SRC = readFileSync(ENGINE_PATH, 'utf8')
+
 function sliceBetween(src: string, startMarker: string, endMarker: string): string {
   const a = src.indexOf(startMarker)
   if (a < 0) throw new Error(`marker not found: ${startMarker}`)
@@ -58,6 +100,20 @@ function sliceBetween(src: string, startMarker: string, endMarker: string): stri
   if (b < 0) throw new Error(`end marker not found after ${startMarker}: ${endMarker}`)
   return src.slice(a, b)
 }
+
+// Body of `runMappingSuggestion` in the engine. Bounded at end-of-file
+// because suggestion is currently the last orchestrator — when a
+// future PR adds another orchestrator after it (e.g.,
+// `runMappingValidation`), this slicer needs a tighter end marker.
+function sliceFrom(src: string, startMarker: string): string {
+  const a = src.indexOf(startMarker)
+  if (a < 0) throw new Error(`marker not found: ${startMarker}`)
+  return src.slice(a)
+}
+const SUGGEST_ENGINE_BODY = sliceFrom(
+  ENGINE_SRC,
+  'export async function runMappingSuggestion(',
+)
 
 // ─────────────────────────────────────────────────────────────────────
 // 1. Wrapper exports + module-level shape
@@ -129,12 +185,19 @@ describe('[mappings-for-redesign 4a] wrapper exports', () => {
   })
 
   it('imports the AI plumbing for suggestMappingForTarget', () => {
-    expect(SRC).toContain("from '@/lib/ai/claude'")
+    // Post-PR-5 split:
+    //   • Wrapper imports `checkAIRateLimit` (still wrapper-side) and
+    //     `runMappingSuggestion` (the new delegation target).
+    //   • Engine imports `callClaude` and `buildAIContext` (the
+    //     actual AI plumbing — moved with the orchestration body).
     expect(SRC).toContain("from '@/lib/ai/rate-limit'")
-    expect(SRC).toContain("from '@/lib/ai/context-builder'")
-    expect(SRC).toMatch(/callClaude/)
     expect(SRC).toMatch(/checkAIRateLimit/)
-    expect(SRC).toMatch(/buildAIContext/)
+    expect(SRC).toContain("from '@/lib/ai/mapping-engine'")
+    expect(SRC).toMatch(/runMappingSuggestion/)
+    expect(ENGINE_SRC).toContain("from '@/lib/ai/claude'")
+    expect(ENGINE_SRC).toContain("from '@/lib/ai/context-builder'")
+    expect(ENGINE_SRC).toMatch(/callClaude/)
+    expect(ENGINE_SRC).toMatch(/buildAIContext/)
   })
 })
 
@@ -412,130 +475,157 @@ describe('[mappings-for-redesign 4a] findOrCreateTableMapping helper', () => {
 // ─────────────────────────────────────────────────────────────────────
 
 describe('[mappings-for-redesign 4a] suggestMappingForTarget', () => {
-  // Slice bounded to the function body. The file used to terminate at
-  // `suggestMappingForTarget`; Phase 4b-1 added `editMappingSources` /
-  // `updateMappingCombination` / `previewEditInvalidation` after it, so
-  // we now slice up to the JSDoc banner that opens `editMappingSources`.
-  const startIdx = SRC.indexOf('export async function suggestMappingForTarget(')
-  const endIdx = SRC.indexOf(
+  // Wrapper body slice — the thin delegation. Bounded by the next
+  // export. Post-PR-5 the body is ~24 lines: input validation, auth,
+  // rate-limit, then `runMappingSuggestion(supabaseAdmin, …)`.
+  const wrapperStartIdx = SRC.indexOf('export async function suggestMappingForTarget(')
+  const wrapperEndIdx = SRC.indexOf(
     '// ─── Write path — Phase 4b-1',
-    startIdx,
+    wrapperStartIdx,
   )
-  const body = SRC.slice(startIdx, endIdx > 0 ? endIdx : undefined)
+  const wrapperBody = SRC.slice(
+    wrapperStartIdx,
+    wrapperEndIdx > 0 ? wrapperEndIdx : undefined,
+  )
+
+  // Engine body slice (PR 5 destination). All AI orchestration
+  // patterns moved here: target-field read, buildAIContext, source-
+  // field companion query, prompt assembly, callClaude, JSON parse,
+  // name→id resolution, same-table guard, confidence clamp,
+  // rationale truncation, combinationType narrowing.
+  const engineBody = SUGGEST_ENGINE_BODY
 
   it('checks auth + editor permission BEFORE the rate limiter (cheap-check ordering)', () => {
-    const userIdx = body.indexOf('supabase.auth.getUser()')
-    const permIdx = body.indexOf('requireProjectPermission(')
-    const rlIdx = body.indexOf('checkAIRateLimit(')
+    // Wrapper-only concern — all three calls live in the thin
+    // delegation post-PR-5.
+    const userIdx = wrapperBody.indexOf('supabase.auth.getUser()')
+    const permIdx = wrapperBody.indexOf('requireProjectPermission(')
+    const rlIdx = wrapperBody.indexOf('checkAIRateLimit(')
     expect(userIdx).toBeGreaterThan(0)
     expect(permIdx).toBeGreaterThan(userIdx)
     expect(rlIdx).toBeGreaterThan(permIdx)
   })
 
-  it('runs checkAIRateLimit BEFORE the LLM call (avoid wasted tokens)', () => {
-    const rlIdx = body.indexOf('checkAIRateLimit(')
-    const llmIdx = body.indexOf('callClaude(')
+  it('runs checkAIRateLimit BEFORE delegating to the engine (avoid wasted tokens)', () => {
+    // Post-PR-5: the wrapper has no `callClaude(` — that's in the
+    // engine. The "expensive work guard" semantic is preserved by
+    // checking rate-limit-before-runMappingSuggestion ordering.
+    const rlIdx = wrapperBody.indexOf('checkAIRateLimit(')
+    const delegateIdx = wrapperBody.indexOf('runMappingSuggestion(')
     expect(rlIdx).toBeGreaterThan(0)
-    expect(llmIdx).toBeGreaterThan(rlIdx)
-    expect(body).toMatch(
+    expect(delegateIdx).toBeGreaterThan(rlIdx)
+    expect(wrapperBody).toMatch(
       /!rateLimit\.allowed[\s\S]{0,300}errorCode:\s*['"]RATE_LIMITED['"]/,
     )
   })
 
   it('builds AI context via buildAIContext with the project-scoped scope', () => {
-    expect(body).toMatch(/buildAIContext\(/)
+    // Engine concern post-PR-5.
+    expect(engineBody).toMatch(/buildAIContext\(/)
     // We use distributions + samples + documents.
-    expect(body).toMatch(/includeValueDistributions/)
-    expect(body).toMatch(/includeSampleValues/)
-    expect(body).toMatch(/includeDocuments/)
+    expect(engineBody).toMatch(/includeValueDistributions/)
+    expect(engineBody).toMatch(/includeSampleValues/)
+    expect(engineBody).toMatch(/includeDocuments/)
   })
 
-  it('passes user.id to buildAIContext so migration intelligence is hydrated', () => {
-    // The buildAIContext call is multi-line with a scope object literal;
-    // assert co-presence of `projectId` and `user.id` arguments within
-    // a generous window after the call site.
-    expect(body).toMatch(
-      /buildAIContext\([\s\S]{0,800}user\.id[\s\S]{0,100}\)/,
+  it('passes userId to buildAIContext so migration intelligence is hydrated', () => {
+    // Post-PR-5: engine signature takes `userId: string` as a
+    // parameter and forwards it to buildAIContext. The buildAIContext
+    // call is multi-line with a scope object literal; assert
+    // co-presence of `projectId` and `userId` arguments within a
+    // generous window after the call site.
+    expect(engineBody).toMatch(
+      /buildAIContext\([\s\S]{0,800}userId[\s\S]{0,100}\)/,
     )
   })
 
   it('runs a companion (id, name, table_id) query against fields (FieldContext lacks id)', () => {
     // FieldContext from lib/ai/context-builder.ts intentionally hides
-    // UUIDs — name→id translation needs its own query.
-    expect(body).toMatch(/from\(['"]fields['"]\)[\s\S]{0,300}id, name, table_id/)
+    // UUIDs — name→id translation needs its own query. Engine concern
+    // post-PR-5.
+    expect(engineBody).toMatch(
+      /from\(['"]fields['"]\)[\s\S]{0,300}id, name, table_id/,
+    )
   })
 
   it('calls callClaude with the prompt and a max_tokens budget', () => {
-    expect(body).toMatch(/callClaude\(/)
-    expect(body).toMatch(/1024/)
+    expect(engineBody).toMatch(/callClaude\(/)
+    expect(engineBody).toMatch(/1024/)
   })
 
   it('parses the LLM response with code-fence stripping (matches legacy parseClaudeJSON pattern)', () => {
-    expect(body).toMatch(/```/)
-    expect(body).toMatch(/JSON\.parse\(/)
+    expect(engineBody).toMatch(/```/)
+    expect(engineBody).toMatch(/JSON\.parse\(/)
   })
 
   it('returns AI_INVALID_RESPONSE when JSON.parse throws', () => {
-    expect(body).toMatch(
+    expect(engineBody).toMatch(
       /JSON\.parse[\s\S]{0,200}AI_INVALID_RESPONSE/,
     )
   })
 
   it('returns AI_INVALID_RESPONSE when source_field_names is not an array', () => {
-    expect(body).toMatch(
+    expect(engineBody).toMatch(
       /Array\.isArray\(parsed\.source_field_names\)[\s\S]{0,300}AI_INVALID_RESPONSE/,
     )
   })
 
   it('returns AI_INVALID_RESPONSE when zero usable source fields resolve', () => {
-    expect(body).toMatch(
+    expect(engineBody).toMatch(
       /resolvedIds\.length\s*===\s*0[\s\S]{0,400}AI_INVALID_RESPONSE/,
     )
   })
 
   it('strips invalid suggested IDs without aborting (lenient resolver)', () => {
     // Loop: for each rawName, look up; skip if missing.
-    expect(body).toMatch(/sourceFieldsByLowerName\.get\(/)
+    expect(engineBody).toMatch(/sourceFieldsByLowerName\.get\(/)
     // Skip + dedupe pattern.
-    expect(body).toMatch(/continue/)
+    expect(engineBody).toMatch(/continue/)
   })
 
   it('enforces same-table on the LLM output (prompt instructs same-table; double-check on parse)', () => {
-    expect(body).toMatch(/resolvedTableIds\.size\s*>\s*1/)
+    expect(engineBody).toMatch(/resolvedTableIds\.size\s*>\s*1/)
   })
 
-  it('emits NO activity_log entry on invocation (suggestions are ephemeral)', () => {
-    // logActivity calls in the wrapper exist for createFieldMapping
-    // and rejectFieldMapping, but the suggest body must not contain
-    // one — the assertion is local to the suggest function body.
-    expect(body).not.toMatch(/logActivity\(/)
+  it('emits NO activity_log entry (suggestions are ephemeral)', () => {
+    // logActivity calls exist elsewhere in the wrapper for
+    // createFieldMapping and rejectFieldMapping, but neither the
+    // suggest wrapper body NOR the engine's runMappingSuggestion
+    // body should contain one — the assertion is local to both.
+    expect(wrapperBody).not.toMatch(/logActivity\(/)
+    expect(engineBody).not.toMatch(/logActivity\(/)
   })
 
   it('uses Math.round / Number.isFinite to clamp confidence into [0, 100]', () => {
-    expect(body).toMatch(/Number\.isFinite/)
-    expect(body).toMatch(/Math\.round/)
+    expect(engineBody).toMatch(/Number\.isFinite/)
+    expect(engineBody).toMatch(/Math\.round/)
   })
 
   it('truncates the rationale to RATIONALE_MAX_CHARS', () => {
-    expect(body).toMatch(/RATIONALE_MAX_CHARS/)
-    expect(body).toMatch(/rationaleRaw\.slice\(/)
+    expect(engineBody).toMatch(/RATIONALE_MAX_CHARS/)
+    expect(engineBody).toMatch(/rationaleRaw\.slice\(/)
   })
 
   it("defaults combinationType to 'concat_space' when 2+ sources resolve and the LLM emits a non-comma value (decision 7)", () => {
-    expect(body).toMatch(/['"]concat_space['"]/)
-    expect(body).toMatch(/['"]concat_comma['"]/)
+    expect(engineBody).toMatch(/['"]concat_space['"]/)
+    expect(engineBody).toMatch(/['"]concat_comma['"]/)
     // Single-source override: 1 resolved id → 'single'.
-    expect(body).toMatch(
+    expect(engineBody).toMatch(
       /resolvedIds\.length\s*===\s*1[\s\S]{0,200}['"]single['"]/,
     )
   })
 
   it('does NOT issue any DB write (suggestion is read-only / ephemeral)', () => {
-    // No INSERT / UPDATE / DELETE / RPC call on the create-side path.
-    expect(body).not.toMatch(/\.insert\(/)
-    expect(body).not.toMatch(/\.update\(/)
-    expect(body).not.toMatch(/\.delete\(/)
-    expect(body).not.toMatch(
+    // No INSERT / UPDATE / DELETE / RPC call on the suggestion path.
+    // Wrapper has no DB writes (just delegates); engine reads target
+    // field + source fields but does not write.
+    expect(wrapperBody).not.toMatch(/\.insert\(/)
+    expect(wrapperBody).not.toMatch(/\.update\(/)
+    expect(wrapperBody).not.toMatch(/\.delete\(/)
+    expect(engineBody).not.toMatch(/\.insert\(/)
+    expect(engineBody).not.toMatch(/\.update\(/)
+    expect(engineBody).not.toMatch(/\.delete\(/)
+    expect(engineBody).not.toMatch(
       /supabase\.rpc\(\s*['"]dq_create_target_field_mapping['"]/,
     )
   })
