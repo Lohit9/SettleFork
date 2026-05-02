@@ -12,17 +12,23 @@ export async function updateProjectLabels(
   projectId: string,
   sourceLabel: string,
   targetLabel: string
-): Promise<void> {
-  const supabase = await createClient()
-  const { data: { user } } = await supabase.auth.getUser()
-  if (!user) throw new Error('Not authenticated')
+): Promise<{ success: boolean; error?: string }> {
+  const { checkProjectPermission } = await import('@/lib/actions/role-resolution')
+  if (!(await checkProjectPermission(projectId, 'editor'))) {
+    return { success: false, error: 'Insufficient permissions. Required role: editor' }
+  }
 
-  await Promise.all([
+  const supabase = await createClient()
+  const [srcResult, tgtResult] = await Promise.all([
     supabase.from('datasets').update({ name: sourceLabel }).eq('project_id', projectId).eq('role', 'source'),
     supabase.from('datasets').update({ name: targetLabel }).eq('project_id', projectId).eq('role', 'target'),
   ])
 
+  if (srcResult.error) return { success: false, error: srcResult.error.message }
+  if (tgtResult.error) return { success: false, error: tgtResult.error.message }
+
   revalidatePath('/app/projects')
+  return { success: true }
 }
 
 export async function createProject(
