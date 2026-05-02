@@ -1,74 +1,91 @@
 // @vitest-environment node
 //
-// PR 3 — regression pins for legacy `generateMappings` orchestration.
+// Regression pins for the `generateMappings` orchestration, post-PR-4
+// extraction. PR 4 split the function: `generateMappings` in
+// `lib/actions/mappings.ts` is now the thin wrapper (auth, rate-limit,
+// validation, `existingPairSet` construction, delegate); the bulk of
+// the AI work — batch loop, Claude calls, parse+retry, persistence,
+// collision-collapse — lives in `runMappingGeneration` and
+// `persistClaudeFieldMappingsForTM` in `lib/ai/mapping-engine.ts`.
+// This file pins both halves.
 //
-// These tests run BEFORE PR 4 extracts the orchestration logic from
-// `lib/actions/mappings.ts` to `lib/ai/mapping-engine.ts`. They are the
-// byte-equivalence safety net for the extraction: any refactor that
-// silently drops a pinned behavior breaks CI.
-//
-// Tested behaviors (groups A–G mirror the PR 3 spec):
+// Tested behaviors (groups A–G; group letters preserved across the
+// PR 3 → PR 4 evolution):
 //   A. MAPPING_GENERATION_SYSTEM_PROMPT content (verbatim section pins)
+//      → engine
 //   B. PER_BATCH_MAX_TOKENS = 16000, used in both the main call and
-//      the JSON-repair retry
+//      the JSON-repair retry → engine
 //   C. Batch loop iterates per-source-table and emits an
-//      `<other_source_tables>` block in the user message
+//      `<other_source_tables>` block in the user message → engine
 //   D. JSON parse → on failure, retry with the JSON-repair system
 //      prompt, same token budget; on retry failure, skip this batch
-//      and continue
-//   E. Many-to-one collision collapse in `persistClaudeFieldMappingsForTM`:
-//      same target across two field_mappings → single TFM, contributor
-//      appended, combinationType forced to 'concat_space'
+//      and continue → engine
+//   E. Many-to-one collision collapse in
+//      `persistClaudeFieldMappingsForTM`: same target across two
+//      field_mappings → single TFM, contributor appended,
+//      combinationType forced to 'concat_space' → engine
 //   F. Persistence shape: `dq_create_target_field_mapping` RPC called
 //      with p_project_id, p_target_field_id, p_sources (ordinals
-//      primary=0, contributor=1+), p_combination.type
-//   G. Error paths: zero-stored fallthrough, rate-limit returns
-//      'VALIDATION', individual Claude throw is non-fatal (continue)
+//      primary=0, contributor=1+), p_combination.type → engine
+//   G. Error paths: zero-stored fallthrough → engine; rate-limit
+//      returns 'VALIDATION' → wrapper; individual Claude throw is
+//      non-fatal (continue) → engine; auth ordering → wrapper;
+//      existing-pair skip path → mixed (set built in wrapper, applied
+//      in engine).
 //
 // ─────────────────────────────────────────────────────────────────────
 // APPROACH — source-text invariants, not behavioral mocks.
 // ─────────────────────────────────────────────────────────────────────
 //
 // Every existing test for legacy/redesign mapping actions in this repo
-// uses the source-text-invariant pattern: read `lib/actions/mappings.ts`
-// (or its sibling) as text and assert specific call-site shapes are
-// present. The convention is documented at
-// `tests/actions/mappings-for-redesign-actions.test.ts:8-18` with the
-// rationale "Spinning up a full mocking harness for every codepath is
-// expensive; instead we read the source file and assert the call-site
-// shape locks the founder-locked decisions in place. A future refactor
-// that silently drops a refinement cannot land without breaking CI."
-// Sibling examples: `mappings-refinements.test.ts`, `mappings-guard-
-// sweep.test.ts`, `mappings-for-redesign-phase-4a-actions.test.ts`.
+// uses the source-text-invariant pattern: read the SUT file as text
+// and assert specific call-site shapes are present. The convention is
+// documented at `tests/actions/mappings-for-redesign-actions.test.ts:8-18`
+// with the rationale "Spinning up a full mocking harness for every
+// codepath is expensive; instead we read the source file and assert
+// the call-site shape locks the founder-locked decisions in place. A
+// future refactor that silently drops a refinement cannot land
+// without breaking CI." Sibling examples:
+// `mappings-refinements.test.ts`, `mappings-guard-sweep.test.ts`,
+// `mappings-for-redesign-phase-4a-actions.test.ts`.
 //
 // This file follows that convention. No production code is loaded; no
-// mocks are set up. Each test reads `lib/actions/mappings.ts` and
-// asserts substrings or regex patterns are present in named slices of
-// the file. A refactor that drops any pinned behavior (a section
-// header, a constant value, a structural pattern, an error code, an
-// ordering invariant) breaks one or more tests here.
+// mocks are set up. Each test reads either `lib/actions/mappings.ts`
+// (wrapper concerns) or `lib/ai/mapping-engine.ts` (orchestration
+// concerns) and asserts substrings or regex patterns are present in
+// named slices of those files. A refactor that drops any pinned
+// behavior (a section header, a constant value, a structural pattern,
+// an error code, an ordering invariant) breaks one or more tests here.
 //
 // ─────────────────────────────────────────────────────────────────────
-// BRITTLENESS WARNING — do not reformat the SUT between PR 3 and PR 4.
+// BRITTLENESS WARNING — do not reformat the SUT files between PR 4 and
+// the next refactor.
 // ─────────────────────────────────────────────────────────────────────
 //
-// Some assertions in this file slice the source by indentation- and
-// brace-aware end-markers (e.g. D3's `'}\n        }\n      }'`, F4's
-// `^\s{6}p_` line-prefix scan, G2's catch-block boundary). These hold
-// against logic-preserving edits but break under cosmetic reformatting
+// PR 4 split the orchestration: `generateMappings` in
+// `lib/actions/mappings.ts` is now a thin wrapper (auth + rate-limit +
+// validation + `existingPairSet` construction + delegate). The bulk
+// of the AI work moved to `runMappingGeneration` in
+// `lib/ai/mapping-engine.ts`. This file pins both halves.
+//
+// Some assertions slice the source by indentation- and brace-aware
+// end-markers (e.g. D3's `'}\n      }\n    }'`, F4's `^\s{6}p_`
+// line-prefix scan, G2's catch-block boundary). These hold against
+// logic-preserving edits but break under cosmetic reformatting
 // (Prettier reflow, indentation width change, trailing-comma policy
-// shift). Between this PR's merge and PR 4's merge, treat
-// `lib/actions/mappings.ts` as format-frozen: only logic edits, no
-// reformatting passes. Once PR 4 lands and the orchestration moves to
-// `lib/ai/mapping-engine.ts`, this file's pins go with it (or get
-// retired if PR 4's behavioral evals supersede them).
+// shift). Between this PR's merge and the next refactor, treat BOTH
+// `lib/actions/mappings.ts` and `lib/ai/mapping-engine.ts` as
+// format-frozen: only logic edits, no reformatting passes.
 
 import { describe, it, expect } from 'vitest'
 import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 
-const MAPPINGS_PATH = resolve(__dirname, '../../lib/actions/mappings.ts')
-const SRC = readFileSync(MAPPINGS_PATH, 'utf8')
+const LEGACY_PATH = resolve(__dirname, '../../lib/actions/mappings.ts')
+const LEGACY_SRC = readFileSync(LEGACY_PATH, 'utf8')
+
+const ENGINE_PATH = resolve(__dirname, '../../lib/ai/mapping-engine.ts')
+const ENGINE_SRC = readFileSync(ENGINE_PATH, 'utf8')
 
 function sliceBetween(src: string, startMarker: string, endMarker: string): string {
   const a = src.indexOf(startMarker)
@@ -78,42 +95,65 @@ function sliceBetween(src: string, startMarker: string, endMarker: string): stri
   return src.slice(a, b)
 }
 
-// Body of the `generateMappings` exported function (top-level orchestrator).
-// Bounded by the next exported async function (`getMappings`).
+function sliceFrom(src: string, startMarker: string): string {
+  const a = src.indexOf(startMarker)
+  if (a < 0) throw new Error(`marker not found: ${startMarker}`)
+  return src.slice(a)
+}
+
+// ─── WRAPPER slice (legacy file) ──────────────────────────────────────
+//
+// Body of the thin `generateMappings` wrapper. Pins wrapper-only
+// concerns: auth, rate-limit, validation, `existingPairSet`
+// construction, delegation to `runMappingGeneration`.
 const GENERATE_BODY = sliceBetween(
-  SRC,
+  LEGACY_SRC,
   'export async function generateMappings(',
   'export async function getMappings(',
 )
 
-// Body of the system-prompt constant declaration through to the next
-// helper (`buildMappingUserMessage`).
-const SYSTEM_PROMPT_BLOCK = sliceBetween(
-  SRC,
-  'const MAPPING_GENERATION_SYSTEM_PROMPT',
-  'function buildMappingUserMessage(',
+// ─── ENGINE slices (mapping-engine.ts) ────────────────────────────────
+//
+// Body of `runMappingGeneration`, the orchestrator. Pins the bulk of
+// the AI work: batch loop, Claude calls, JSON parse + retry,
+// per-source-table iteration, persistence flow, error returns.
+// Slices to end-of-file because `runMappingGeneration` is currently
+// the last function in the engine. Future engine additions (e.g.
+// `runMappingSuggestion`) will require a tighter end marker.
+const RUN_GEN_BODY = sliceFrom(
+  ENGINE_SRC,
+  'export async function runMappingGeneration(',
 )
 
-// Body of the `buildMappingUserMessage` helper.
+// Body of the system-prompt constant declaration. Bounded by the next
+// section header in the engine (the read-path's row-builder section).
+const SYSTEM_PROMPT_BLOCK = sliceBetween(
+  ENGINE_SRC,
+  'export const MAPPING_GENERATION_SYSTEM_PROMPT',
+  '// ─── Row builders',
+)
+
+// Body of the `buildMappingUserMessage` helper. Bounded by the
+// pure-assembly section.
 const USER_MESSAGE_BUILDER = sliceBetween(
-  SRC,
-  'function buildMappingUserMessage(',
-  '// ─── persistClaudeFieldMappingsForTM',
+  ENGINE_SRC,
+  'export function buildMappingUserMessage(',
+  '// ─── Pure assembly',
 )
 
 // Body of `persistClaudeFieldMappingsForTM`. The collision-collapse
-// algorithm lives here. Bounded by the next helper.
+// algorithm lives here. Bounded by the orchestrator section header.
 const PERSIST_BODY = sliceBetween(
-  SRC,
-  'async function persistClaudeFieldMappingsForTM(',
-  'async function runMappingGenerationForPair(',
+  ENGINE_SRC,
+  'export async function persistClaudeFieldMappingsForTM(',
+  '// ─── Mapping generation: orchestrator',
 )
 
-// Body of `parseClaudeJSON`, the helper that powers the retry path.
+// Body of `parseClaudeJSON`. Bounded by the next exported helper.
 const PARSE_JSON_BODY = sliceBetween(
-  SRC,
-  'function parseClaudeJSON(',
-  'function bareTableName(',
+  ENGINE_SRC,
+  'export function parseClaudeJSON(',
+  'export function buildMappingUserMessage(',
 )
 
 // ─────────────────────────────────────────────────────────────────────
@@ -209,16 +249,16 @@ describe('[generateMappings] A5 — system prompt: closing JSON-only instruction
 // ─────────────────────────────────────────────────────────────────────
 
 describe('[generateMappings] B1 — PER_BATCH_MAX_TOKENS = 16000', () => {
-  it('declares PER_BATCH_MAX_TOKENS = 16000 inside generateMappings', () => {
-    expect(GENERATE_BODY).toMatch(/const\s+PER_BATCH_MAX_TOKENS\s*=\s*16000\b/)
+  it('declares PER_BATCH_MAX_TOKENS = 16000 inside runMappingGeneration (engine)', () => {
+    expect(RUN_GEN_BODY).toMatch(/const\s+PER_BATCH_MAX_TOKENS\s*=\s*16000\b/)
   })
 
   it('passes PER_BATCH_MAX_TOKENS as the third argument to callClaude on the primary call', () => {
-    // The first callClaude inside generateMappings is the per-batch
-    // primary invocation. Pinning the argument structure here means a
-    // refactor that drops the budget (or hardcodes a different number)
-    // breaks CI.
-    expect(GENERATE_BODY).toMatch(
+    // The first callClaude inside the engine orchestrator is the
+    // per-batch primary invocation. Pinning the argument structure
+    // here means a refactor that drops the budget (or hardcodes a
+    // different number) breaks CI.
+    expect(RUN_GEN_BODY).toMatch(
       /callClaude\(MAPPING_GENERATION_SYSTEM_PROMPT,\s*batchUserMessage,\s*PER_BATCH_MAX_TOKENS\)/,
     )
   })
@@ -231,7 +271,7 @@ describe('[generateMappings] B2 — JSON-repair retry uses the same 16000-token 
     // contract — Claude needs the full budget to actually correct a
     // malformed response.
     const retrySlice = sliceBetween(
-      GENERATE_BODY,
+      RUN_GEN_BODY,
       'JSON repair tool',
       'parseClaudeJSON(retryRaw)',
     )
@@ -251,24 +291,24 @@ describe('[generateMappings] C1 — one Claude call per source table, not per pa
   it('iterates the source-tables array, not a Cartesian product of source × target', () => {
     // The loop key: `for (let i = 0; i < sourceTablesForBatching.length; i++)`.
     // Crucially, there is no nested `for ... of targetTables` inside it.
-    expect(GENERATE_BODY).toMatch(
+    expect(RUN_GEN_BODY).toMatch(
       /for\s*\(\s*let\s+i\s*=\s*0\s*;\s*i\s*<\s*sourceTablesForBatching\.length\s*;\s*i\+\+\s*\)/,
     )
   })
 
   it('declares sourceTablesForBatching = aiCtx.source_tables (single source iteration boundary)', () => {
-    expect(GENERATE_BODY).toMatch(
+    expect(RUN_GEN_BODY).toMatch(
       /const\s+sourceTablesForBatching\s*=\s*aiCtx\.source_tables/,
     )
   })
 
   it('does not call callClaude inside a target-table loop (no per-pair Claude call)', () => {
     // Pin: there is no `for (const tgt of targetTables) { … callClaude … }`
-    // pattern inside generateMappings. The only Claude calls are in the
-    // single per-source-table loop and its retry.
-    const claudeCallCount = (GENERATE_BODY.match(/callClaude\(/g) ?? []).length
-    // Two callClaude sites in generateMappings: primary + JSON-repair retry.
-    // A per-pair refactor would push this to a much higher number.
+    // pattern inside the engine orchestrator. The only Claude calls
+    // are in the single per-source-table loop and its retry.
+    const claudeCallCount = (RUN_GEN_BODY.match(/callClaude\(/g) ?? []).length
+    // Two callClaude sites in runMappingGeneration: primary + JSON-repair
+    // retry. A per-pair refactor would push this to a much higher number.
     expect(claudeCallCount).toBe(2)
   })
 })
@@ -278,9 +318,9 @@ describe('[generateMappings] C2 — per-batch user message includes source/targe
     // The per-batch message construction passes a single source table
     // section, the full target schema, and an `<other_source_tables>`
     // block enumerating the OTHER source tables in this generation.
-    expect(GENERATE_BODY).toContain('buildMappingUserMessage({')
+    expect(RUN_GEN_BODY).toContain('buildMappingUserMessage({')
     const callSlice = sliceBetween(
-      GENERATE_BODY,
+      RUN_GEN_BODY,
       'const batchUserMessage = buildMappingUserMessage({',
       '})',
     )
@@ -291,14 +331,14 @@ describe('[generateMappings] C2 — per-batch user message includes source/targe
   })
 
   it('builds the otherSourcesBlock as an XML-style <other_source_tables> wrapper', () => {
-    expect(GENERATE_BODY).toContain('<other_source_tables>')
-    expect(GENERATE_BODY).toContain('</other_source_tables>')
+    expect(RUN_GEN_BODY).toContain('<other_source_tables>')
+    expect(RUN_GEN_BODY).toContain('</other_source_tables>')
   })
 
   it('otherSourcesBlock excludes the current source table from the listing', () => {
     // The filter that keeps the current table out of "other sources".
     // Pin: `.filter((st) => st.id !== currentSourceRow?.id)`.
-    expect(GENERATE_BODY).toMatch(
+    expect(RUN_GEN_BODY).toMatch(
       /\.filter\(\s*\(st\)\s*=>\s*st\.id\s*!==\s*currentSourceRow\?\.id\s*\)/,
     )
   })
@@ -333,11 +373,11 @@ describe('[generateMappings] D1 — first-call success path', () => {
   it('parses the response with parseClaudeJSON before any retry consideration', () => {
     // The primary parse happens in the inner try; only on its catch
     // do we enter the retry block. Pinning the inner-try pattern here.
-    expect(GENERATE_BODY).toContain('const batchParsed = parseClaudeJSON(batchRaw)')
+    expect(RUN_GEN_BODY).toContain('const batchParsed = parseClaudeJSON(batchRaw)')
   })
 
   it('appends the parsed table_mappings array to the cross-batch accumulator', () => {
-    expect(GENERATE_BODY).toMatch(
+    expect(RUN_GEN_BODY).toMatch(
       /allTableMappings\.push\(\.\.\.\(batchParsed\.table_mappings\s*\?\?\s*\[\]\)\)/,
     )
   })
@@ -349,19 +389,19 @@ describe('[generateMappings] D2 — first-call failure → JSON-repair retry', (
     // act as a "JSON repair tool" rather than the full mapping
     // expert. This is critical: the retry context is much smaller
     // because the input is just the malformed JSON.
-    expect(GENERATE_BODY).toContain(
+    expect(RUN_GEN_BODY).toContain(
       "'You are a JSON repair tool. Return ONLY valid JSON, nothing else.'",
     )
   })
 
   it('forwards the malformed batchRaw into the retry user message', () => {
-    expect(GENERATE_BODY).toContain('The previous response was malformed JSON. Fix it and return ONLY the corrected JSON:')
+    expect(RUN_GEN_BODY).toContain('The previous response was malformed JSON. Fix it and return ONLY the corrected JSON:')
     // The malformed string is interpolated into the user message.
-    expect(GENERATE_BODY).toMatch(/Fix it and return ONLY the corrected JSON:[\s\S]{0,80}\$\{batchRaw\}/)
+    expect(RUN_GEN_BODY).toMatch(/Fix it and return ONLY the corrected JSON:[\s\S]{0,80}\$\{batchRaw\}/)
   })
 
   it('parses the retry response with the same parseClaudeJSON helper', () => {
-    expect(GENERATE_BODY).toContain('const retryParsed = parseClaudeJSON(retryRaw)')
+    expect(RUN_GEN_BODY).toContain('const retryParsed = parseClaudeJSON(retryRaw)')
   })
 })
 
@@ -371,10 +411,17 @@ describe('[generateMappings] D3 — both calls fail → continue to next source 
     // iteration. There is NO `return { success: false ... }` inside
     // the catch — that would abort the entire generation on a single
     // batch failure, which is not the legacy behavior.
+    //
+    // Indentation note: post-PR-4 the orchestrator is at top level
+    // in the engine (no `guardWrites` wrapping), so the retry catch
+    // block's closing braces are 2 spaces shallower than they were
+    // in the legacy. End marker pinned at: `}` (close inner catch
+    // at 8-space indent) + newline + 6-space `}` (close outer catch)
+    // + newline + 4-space `}` (close for-loop).
     const retryFailureSlice = sliceBetween(
-      GENERATE_BODY,
+      RUN_GEN_BODY,
       'Failed to parse mappings for source table',
-      '}\n        }\n      }',
+      '}\n      }\n    }',
     )
     expect(retryFailureSlice).not.toContain('return {')
   })
@@ -598,14 +645,18 @@ describe('[generateMappings] F4 — TFM-level confidence rollup is left to the D
 
 describe('[generateMappings] F5 — table_mappings.insert precedes the per-target RPC fan-out', () => {
   it('table_mappings INSERT happens BEFORE persistClaudeFieldMappingsForTM is called', () => {
-    const insertIdx = GENERATE_BODY.indexOf("from('table_mappings')\n          .insert({")
-    const persistIdx = GENERATE_BODY.indexOf('persistClaudeFieldMappingsForTM({')
+    // Indentation note: post-PR-4 the INSERT lives in
+    // runMappingGeneration in the engine. The orchestrator is at top
+    // level so the INSERT is at indent 8 (inside the for-of loop at 6),
+    // not the 10-space indent it had in the legacy `guardWrites` body.
+    const insertIdx = RUN_GEN_BODY.indexOf("from('table_mappings')\n        .insert({")
+    const persistIdx = RUN_GEN_BODY.indexOf('persistClaudeFieldMappingsForTM({')
     expect(insertIdx).toBeGreaterThan(0)
     expect(persistIdx).toBeGreaterThan(insertIdx)
   })
 
   it('table_mappings.status is set to "needs_review" on insert (not auto-approved)', () => {
-    expect(GENERATE_BODY).toContain("status: 'needs_review',")
+    expect(RUN_GEN_BODY).toContain("status: 'needs_review',")
   })
 })
 
@@ -619,13 +670,13 @@ describe('[generateMappings] G1 — zero-stored fallthrough → INTERNAL error w
     // when Claude returns mappings whose table names do not match the
     // schema. Pinning verbatim catches accidental reword that would
     // make the message vague.
-    expect(GENERATE_BODY).toContain(
+    expect(RUN_GEN_BODY).toContain(
       'mapping suggestion(s) but none matched your table names',
     )
     // Pin the surrounding error-shape: `errorCode: 'INTERNAL'` is
     // present in the same return statement.
     const errorSlice = sliceBetween(
-      GENERATE_BODY,
+      RUN_GEN_BODY,
       'mapping suggestion(s) but none matched',
       '}',
     )
@@ -639,10 +690,15 @@ describe('[generateMappings] G2 — individual Claude throw is non-fatal (per-ba
     // the entire generation. A refactor that changes `continue` to
     // `return` would surprise users who selected multiple source
     // tables.
+    //
+    // Indentation note: post-PR-4 the orchestrator is at top level
+    // in the engine. The catch block's closing brace and the next
+    // `try {` are at 6-space indent (one level shallower than the
+    // legacy 8-space indent under `guardWrites`).
     const claudeCatchSlice = sliceBetween(
-      GENERATE_BODY,
+      RUN_GEN_BODY,
       'Claude call failed for source table',
-      '}\n\n        try {',
+      '}\n\n      try {',
     )
     expect(claudeCatchSlice).toContain('continue')
     expect(claudeCatchSlice).not.toContain('return {')
@@ -677,17 +733,21 @@ describe('[generateMappings] G4 — empty source/target arrays → VALIDATION', 
   })
 })
 
-describe('[generateMappings] G5 — auth + permission gates fire before any Claude call', () => {
-  it('getUser → requireProjectPermission → guardWrites all precede the batch loop', () => {
+describe('[generateMappings] G5 — auth + permission gates fire before any AI work', () => {
+  it('getUser → requireProjectPermission → guardWrites all precede runMappingGeneration', () => {
+    // Post-PR-4: the wrapper has no `callClaude` directly; it
+    // delegates to `runMappingGeneration` which does the AI work.
+    // The "any expensive work" semantic is preserved: auth gates
+    // must run before delegation.
     const getUserIdx = GENERATE_BODY.indexOf('supabase.auth.getUser')
     const permIdx = GENERATE_BODY.indexOf("requireProjectPermission(projectId, 'editor')")
     const guardIdx = GENERATE_BODY.indexOf('guardWrites(projectId,')
-    const claudeIdx = GENERATE_BODY.indexOf('callClaude(')
+    const delegateIdx = GENERATE_BODY.indexOf('runMappingGeneration(')
 
     expect(getUserIdx).toBeGreaterThan(0)
     expect(permIdx).toBeGreaterThan(getUserIdx)
     expect(guardIdx).toBeGreaterThan(permIdx)
-    expect(claudeIdx).toBeGreaterThan(guardIdx)
+    expect(delegateIdx).toBeGreaterThan(guardIdx)
   })
 })
 
@@ -715,9 +775,11 @@ describe('[generateMappings] G6 — existing-pair skip path: success, not error'
     // has a TM, increment skippedCount and continue to the next
     // suggestion — do NOT insert a duplicate TM, do NOT call
     // persistClaudeFieldMappingsForTM, do NOT short-circuit the loop.
-    expect(GENERATE_BODY).toMatch(/const\s+pairKey\s*=\s*`\$\{srcTable\.id\}::\$\{tgtTable\.id\}`/)
+    // Post-PR-4: the loop lives in the engine; the wrapper builds
+    // and passes `existingPairSet` in.
+    expect(RUN_GEN_BODY).toMatch(/const\s+pairKey\s*=\s*`\$\{srcTable\.id\}::\$\{tgtTable\.id\}`/)
     const skipSlice = sliceBetween(
-      GENERATE_BODY,
+      RUN_GEN_BODY,
       'if (existingPairSet.has(pairKey)) {',
       '}',
     )
@@ -730,14 +792,18 @@ describe('[generateMappings] G6 — existing-pair skip path: success, not error'
 
   it('zero stored + nonzero skipped → success: true with generated: 0 and skipped: M', () => {
     // The success-with-skips branch lives inside the
-    // `if (storedCount === 0)` block, gated on `skippedCount > 0`.
-    // Pin the verbatim return shape — this is the contract the UI
-    // relies on to render the "all pairs already mapped" message
-    // instead of an error toast.
+    // `if (storedCount === 0)` block in the engine, gated on
+    // `skippedCount > 0`. Pin the verbatim return shape — this is
+    // the contract the UI relies on to render the "all pairs already
+    // mapped" message instead of an error toast.
+    //
+    // Indentation note: post-PR-4 the orchestrator is at top level,
+    // so the next-block start marker `return { success: false,`
+    // sits at 6-space indent (was 10 in legacy `guardWrites`).
     const allSkippedSlice = sliceBetween(
-      GENERATE_BODY,
+      RUN_GEN_BODY,
       'if (storedCount === 0) {',
-      "return {\n          success: false,",
+      "return {\n        success: false,",
     )
     expect(allSkippedSlice).toContain('if (skippedCount > 0) {')
     expect(allSkippedSlice).toContain('success: true,')
@@ -757,10 +823,10 @@ describe('[generateMappings] G6 — existing-pair skip path: success, not error'
     // would silently regress the UI taxonomy. Pin via lexical order:
     // the `success: true` branch's text appears before the
     // `success: false ... errorCode: 'INTERNAL'` branch.
-    const successTrueIdx = GENERATE_BODY.indexOf(
+    const successTrueIdx = RUN_GEN_BODY.indexOf(
       "message: 'All selected table pairs already have mappings.",
     )
-    const internalErrorIdx = GENERATE_BODY.indexOf('but none matched your table names')
+    const internalErrorIdx = RUN_GEN_BODY.indexOf('but none matched your table names')
     expect(successTrueIdx).toBeGreaterThan(0)
     expect(internalErrorIdx).toBeGreaterThan(successTrueIdx)
   })
@@ -771,8 +837,8 @@ describe('[generateMappings] G6 — existing-pair skip path: success, not error'
     // actually inserted. Pin both counter keys and the conditional
     // message clause that surfaces "Skipped N pair(s) that already
     // have mappings" only when skippedCount > 0.
-    expect(GENERATE_BODY).toMatch(/return\s*\{\s*success:\s*true,\s*generated:\s*storedCount,\s*skipped:\s*skippedCount,/)
-    expect(GENERATE_BODY).toContain('Skipped ')
-    expect(GENERATE_BODY).toContain(' that already have mappings.')
+    expect(RUN_GEN_BODY).toMatch(/return\s*\{\s*success:\s*true,\s*generated:\s*storedCount,\s*skipped:\s*skippedCount,/)
+    expect(RUN_GEN_BODY).toContain('Skipped ')
+    expect(RUN_GEN_BODY).toContain(' that already have mappings.')
   })
 })
