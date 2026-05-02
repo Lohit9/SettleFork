@@ -101,10 +101,18 @@ const DEFAULT_SCOPE: Required<ContextScope> = {
 
 // ── Main context builder ──────────────────────────────────────────────────────
 
+/**
+ * `supabaseClient` (Phase 1 PR 10.4): optional dependency-injection
+ * point so the eval runner can pass `supabaseAdmin` and bypass the
+ * cookies-based auth path (which throws outside a Next.js request
+ * scope). Production callers omit it and the function continues to
+ * use `createClient()` as before. Heritage fingerprints unchanged.
+ */
 export async function buildAIContext(
   projectId: string,
   scope: ContextScope = {},
-  userId?: string
+  userId?: string,
+  supabaseClient?: Awaited<ReturnType<typeof createClient>>,
 ): Promise<ProjectAIContext> {
   const opts: Required<ContextScope> = {
     ...DEFAULT_SCOPE,
@@ -113,7 +121,7 @@ export async function buildAIContext(
     fieldIds: scope.fieldIds ?? DEFAULT_SCOPE.fieldIds,
   }
 
-  const supabase = await createClient()
+  const supabase = supabaseClient ?? (await createClient())
 
   // 1. Verify project access (RLS enforces ownership)
   const { data: project } = await supabase

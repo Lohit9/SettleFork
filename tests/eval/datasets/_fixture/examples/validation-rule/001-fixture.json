@@ -1,0 +1,18 @@
+{
+  "id": "_fixture/validation-rule/001-fixture",
+  "task": "validation-rule",
+  "input": {
+    "field_id": "fixture-field-uuid",
+    "natural_language_rule": "name must not be empty"
+  },
+  "gold": {
+    "rule_type": "not_null",
+    "rule_config": {},
+    "field_id": "fixture-field-uuid",
+    "severity": "error"
+  },
+  "metadata": {
+    "author": "claude",
+    "difficulty": "easy"
+  }
+}

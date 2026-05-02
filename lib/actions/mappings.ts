@@ -4,7 +4,7 @@ import { revalidatePath } from 'next/cache'
 import { createClient } from '@/lib/supabase/server'
 import { supabaseAdmin } from '@/lib/supabase/admin'
 import { requireProjectPermission } from '@/lib/actions/role-resolution'
-import { callLLM } from '@/lib/ai/llm-client'
+import { callLLM, type LLMFeature } from '@/lib/ai/llm-client'
 import { checkAIRateLimit } from '@/lib/ai/rate-limit'
 import { buildAIContext, formatSchemaForPrompt, formatDocumentsForPrompt } from '@/lib/ai/context-builder'
 import { logActivity } from '@/lib/actions/activity-log'
@@ -117,16 +117,31 @@ async function guardWrites<T extends { success: boolean; error?: string; errorCo
 }
 
 // ─── runMappingGenerationForPair (regenerate single TM) ───────────────────────
+//
+// Exported (Phase 1 PR 10.4) so the eval harness in lib/eval/runner.ts can
+// invoke the exact same code path production uses. Production callers
+// should NOT import this directly — they call the public
+// `regenerateFieldMappings` / `generateMappings` server actions which
+// wrap this with permission checks, status updates, and activity logs.
+//
+// `featureOverride` (Phase 1 PR 10.4): when provided, replaces the
+// default `mapping_generate_legacy_pair` feature value passed to
+// callLLM (and the matching `_repair` value on the JSON-repair retry).
+// Used by the eval runner to write llm_calls rows tagged
+// `eval_mapping` so they're filtered out of the production cost
+// report. Production callers omit this and continue to log under the
+// canonical feature taxonomy.
 
-async function runMappingGenerationForPair(args: {
+export async function runMappingGenerationForPair(args: {
   supabase: Awaited<ReturnType<typeof createClient>>
   userId: string
   projectId: string
   tableMappingId: string
   sourceTableId: string
   targetTableId: string
+  featureOverride?: LLMFeature
 }): Promise<{ inserted: number; error?: string }> {
-  const { supabase, userId, projectId, tableMappingId, sourceTableId, targetTableId } = args
+  const { supabase, userId, projectId, tableMappingId, sourceTableId, targetTableId, featureOverride } = args
 
   try {
     const [{ data: sourceTables, error: stErr }, { data: targetTables, error: ttErr }] = await Promise.all([
@@ -166,6 +181,12 @@ async function runMappingGenerationForPair(args: {
         maxSampleValues: 5,
       },
       userId,
+      // Phase 1 PR 10.4: thread the caller's supabase client through so
+      // the eval CLI can drive this path without a Next.js request
+      // scope. Production callers receive `await createClient()` (the
+      // RLS-aware client) via `regenerateFieldMappings`; this keeps
+      // that semantic.
+      supabase,
     )
 
     const sourceCtx = aiCtx.source_tables[0]
@@ -189,7 +210,11 @@ async function runMappingGenerationForPair(args: {
     let primaryCallId: string
     try {
       const primaryResult = await callLLM({
-        feature: 'mapping_generate_legacy_pair',
+        // featureOverride lets the eval runner tag this call as
+        // `eval_mapping` so it's excluded from the production cost
+        // report. Production callers omit it and the canonical feature
+        // taxonomy is preserved.
+        feature: featureOverride ?? 'mapping_generate_legacy_pair',
         systemPrompt: MAPPING_GENERATION_SYSTEM_PROMPT,
         userMessage,
         maxTokens: PER_BATCH_MAX_TOKENS,
@@ -216,7 +241,12 @@ async function runMappingGenerationForPair(args: {
     } catch {
       try {
         const retryResult = await callLLM({
-          feature: 'mapping_generate_legacy_pair_repair',
+          // Per the PR 10.4 decision: when the override is set, the
+          // JSON-repair retry rolls up under the SAME eval feature
+          // (eval_mapping) — eval treats primary+repair as one logical
+          // call. Production callers continue to log under the
+          // canonical _repair feature taxonomy.
+          feature: featureOverride ?? 'mapping_generate_legacy_pair_repair',
           systemPrompt: 'You are a JSON repair tool. Return ONLY valid JSON, nothing else.',
           userMessage: `The previous response was malformed JSON. Fix it and return ONLY the corrected JSON:\n\n${raw}`,
           maxTokens: PER_BATCH_MAX_TOKENS,

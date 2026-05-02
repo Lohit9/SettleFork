@@ -1,0 +1,24 @@
+{
+  "source": {
+    "tables": [
+      {
+        "name": "fixture_source_table",
+        "fields": [
+          { "name": "id", "data_type": "uuid", "is_nullable": false, "is_primary_key": true },
+          { "name": "name", "data_type": "text", "is_nullable": false }
+        ]
+      }
+    ]
+  },
+  "target": {
+    "tables": [
+      {
+        "name": "fixture_target_table",
+        "fields": [
+          { "name": "id", "data_type": "uuid", "is_nullable": false, "is_primary_key": true },
+          { "name": "label", "data_type": "text", "is_nullable": true }
+        ]
+      }
+    ]
+  }
+}
