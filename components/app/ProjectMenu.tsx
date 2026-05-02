@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useRef, useEffect, useTransition } from 'react'
+import { useState, useRef, useEffect, useCallback, useTransition } from 'react'
 import { createPortal } from 'react-dom'
 import { useRouter } from 'next/navigation'
 import { Input } from '@/components/ui/input'
@@ -10,6 +10,15 @@ import { Modal } from '@/components/ui/modal'
 import { updateProject, updateProjectLabels, deleteProject, markProjectComplete, reactivateProject, archiveProject } from '@/lib/actions/projects'
 import { getExecutionPackageUrl } from '@/lib/actions/execution-package'
 import { useProjectRole } from '@/lib/hooks/useProjectRole'
+
+// Dropdown panel sizing — the panel uses `style={{ width: MENU_WIDTH_PX }}`
+// (not a Tailwind width class) so this constant is the single source of truth.
+// MENU_MAX_HEIGHT_PX is a safe upper bound for the worst-case item count
+// (3 edit items + divider + 2 manage items) plus container padding.
+const MENU_WIDTH_PX = 208
+const MENU_MAX_HEIGHT_PX = 240
+const VIEWPORT_MARGIN_PX = 8
+const TRIGGER_GAP_PX = 4
 
 // ── types ──────────────────────────────────────────────────────────────────
 
@@ -75,7 +84,7 @@ export function ProjectMenu({ project, onUpdate }: ProjectMenuProps) {
   const canEdit = canRole('edit')
   const canManage = canRole('manage')
   const [isOpen, setIsOpen] = useState(false)
-  const [dropCoords, setDropCoords] = useState({ top: 0, left: 0 })
+  const [dropCoords, setDropCoords] = useState<{ top: number; left: number } | null>(null)
   const [modal, setModal] = useState<'rename' | 'labels' | 'delete' | 'archive' | null>(null)
 
   // rename state
@@ -120,12 +129,50 @@ export function ProjectMenu({ project, onUpdate }: ProjectMenuProps) {
     return () => document.removeEventListener('keydown', handler)
   }, [isOpen])
 
+  // Right-align the panel to the trigger and clamp to the viewport. Opens
+  // below if room, else flips above, else clamps to the top margin. Returns
+  // null if the trigger is unmounted (caller should noop).
+  const computePosition = useCallback((): { top: number; left: number } | null => {
+    if (!triggerRef.current) return null
+    const rect = triggerRef.current.getBoundingClientRect()
+    const idealLeft = rect.right - MENU_WIDTH_PX
+    const left = Math.max(
+      VIEWPORT_MARGIN_PX,
+      Math.min(idealLeft, window.innerWidth - MENU_WIDTH_PX - VIEWPORT_MARGIN_PX),
+    )
+    const fitsBelow = rect.bottom + TRIGGER_GAP_PX + MENU_MAX_HEIGHT_PX <= window.innerHeight
+    const fitsAbove = rect.top - TRIGGER_GAP_PX - MENU_MAX_HEIGHT_PX >= VIEWPORT_MARGIN_PX
+    const top = fitsBelow
+      ? rect.bottom + TRIGGER_GAP_PX
+      : fitsAbove
+        ? rect.top - TRIGGER_GAP_PX - MENU_MAX_HEIGHT_PX
+        : VIEWPORT_MARGIN_PX
+    return { top, left }
+  }, [])
+
+  // Recompute on resize + capture-phase scroll while open. Capture phase is
+  // required to catch scroll on ancestor containers (e.g. SidebarShell's
+  // overflow-auto wrapper) — without it the menu floats detached when the
+  // projects list scrolls.
+  useEffect(() => {
+    if (!isOpen) return
+    const handler = () => {
+      const next = computePosition()
+      if (next) setDropCoords(next)
+    }
+    window.addEventListener('resize', handler)
+    window.addEventListener('scroll', handler, true)
+    return () => {
+      window.removeEventListener('resize', handler)
+      window.removeEventListener('scroll', handler, true)
+    }
+  }, [isOpen, computePosition])
+
   const openDropdown = (e: React.MouseEvent) => {
     e.preventDefault()
     e.stopPropagation()
-    if (!isOpen && triggerRef.current) {
-      const rect = triggerRef.current.getBoundingClientRect()
-      setDropCoords({ top: rect.bottom + 4, left: rect.left })
+    if (!isOpen) {
+      setDropCoords(computePosition())
     }
     setIsOpen(o => !o)
   }
@@ -225,11 +272,11 @@ export function ProjectMenu({ project, onUpdate }: ProjectMenuProps) {
       </button>
 
       {/* Dropdown portal */}
-      {isOpen && typeof document !== 'undefined' && createPortal(
+      {isOpen && dropCoords && typeof document !== 'undefined' && createPortal(
         <div
           ref={dropRef}
-          className="fixed w-52 bg-white border border-gray-200 rounded-xl shadow-lg z-[200] py-1.5"
-          style={{ top: dropCoords.top, left: dropCoords.left }}
+          className="fixed bg-white border border-gray-200 rounded-xl shadow-lg z-[200] py-1.5"
+          style={{ width: MENU_WIDTH_PX, top: dropCoords.top, left: dropCoords.left }}
         >
           {!isArchived && (
             <>
