@@ -44,6 +44,7 @@ import {
   type GoldMapping,
 } from '@/lib/eval/scorers/mapping'
 import { runMappingGenerationForPair } from '@/lib/actions/mappings'
+import { resolveDefaultModel } from '@/lib/ai/llm-client'
 import { signSyntheticJwt } from '@/lib/eval/synthetic-jwt'
 import type {
   EvalExample,
@@ -88,7 +89,16 @@ export interface RunOutput extends EvalRunOutput {
 
 const EVAL_USER_ID = process.env.EVAL_USER_ID ?? 'd5f9972e-03d3-4b7d-b0a4-a205aef0bedf'
 const DEFAULT_MAX_COST_USD = 20
-const DEFAULT_MODEL = 'claude-sonnet-4-20250514'
+
+// Phase 2 PR 11: replaced the local `DEFAULT_MODEL` constant with a
+// per-call lookup against `resolveDefaultModel()`. The runner used to
+// hardcode 'claude-sonnet-4-20250514' as the metadata label, which
+// would have misreported the model in eval-output JSON regardless of
+// what the underlying API call actually used. Calling
+// resolveDefaultModel() at the moment the runner builds RunOutput
+// captures the true model the call will use (Sonnet 4.6 with flag
+// OFF; Opus 4.7 with flag ON). Each of the three call sites below
+// reflects the runner's "one model per run" architecture.
 
 /**
  * Build a Supabase client whose Authorization header carries a JWT
@@ -144,7 +154,7 @@ export async function runEval(opts: RunOptions = {}): Promise<RunOutput> {
       runId,
       branch,
       commitSha,
-      model: DEFAULT_MODEL,
+      model: resolveDefaultModel(),
       smoke: opts.smoke ?? false,
       task: taskFilter,
       datasets,
@@ -165,7 +175,7 @@ export async function runEval(opts: RunOptions = {}): Promise<RunOutput> {
       runId,
       branch,
       commitSha,
-      model: DEFAULT_MODEL,
+      model: resolveDefaultModel(),
       smoke: opts.smoke ?? false,
       task: taskFilter,
       datasets,
@@ -266,7 +276,7 @@ export async function runEval(opts: RunOptions = {}): Promise<RunOutput> {
     runId,
     branch,
     commitSha,
-    model: DEFAULT_MODEL,
+    model: resolveDefaultModel(),
     smoke: opts.smoke ?? false,
     task: taskFilter,
     datasets,
