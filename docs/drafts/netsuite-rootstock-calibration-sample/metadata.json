@@ -1,0 +1,7 @@
+{
+  "name": "netsuite-rootstock",
+  "version": "0.1.0-calibration",
+  "description": "5-example calibration sample (PR 10.5a). PR 10.5a calibrates the 'obvious vs judgment-call' boundary between Claude's gold-label authoring and Kaan's domain expertise. PR 10.5b expands to the full 60 mapping + 5 validation examples once the calibration boundary is locked.",
+  "author": "claude",
+  "updatedAt": "2026-05-02"
+}

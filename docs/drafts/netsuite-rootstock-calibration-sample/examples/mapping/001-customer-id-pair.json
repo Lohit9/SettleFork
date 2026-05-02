@@ -1,0 +1,30 @@
+{
+  "id": "netsuite-rootstock/mapping/001-customer-id-pair",
+  "task": "mapping",
+  "input": {
+    "source_table": "Customer",
+    "target_table": "Customer__c"
+  },
+  "gold": {
+    "mappings": [
+      {
+        "source_field": "entityid",
+        "target_field": "External_ID__c",
+        "combination_type": "single",
+        "_doc_justification": "NetSuite Customer.entityid is the user-visible unique customer code (e.g. 'CUST-12345'); SuiteScript Records Browser explicitly documents it as the external/business identifier (vs the system-internal `id` field). Rootstock Customer__c.External_ID__c is the canonical target for cross-system reconciliation: every NetSuite-to-Rootstock migration playbook publicly visible in vendor blog posts and Rootstock implementation guides uses this pair as the 1:1 anchor.",
+        "_doc_citations": [
+          "NetSuite SuiteScript Records Browser — Customer.entityid",
+          "Rootstock Object Reference — Customer__c.External_ID__c (per Kaan's calibration: confirm exact field name vs Account_Number__c / Customer_Number__c alternates)"
+        ]
+      }
+    ],
+    "notes": "Difficulty: easy. Both fields are documented as the canonical external-id field in their respective systems. The only judgment call is whether Rootstock uses External_ID__c (most cited) vs Account_Number__c (also cited) vs Customer_Number__c — schema notes flag this for Kaan's confirmation. If the canonical Rootstock field is one of the alternates, the gold target field shifts but the mapping pattern (1:1 single combination) does not."
+  },
+  "metadata": {
+    "author": "claude",
+    "difficulty": "easy",
+    "uncertainty_flags": [
+      "Rootstock target field name: External_ID__c is the most widely cited but not 100% verified against current Object Reference. Alternates: Account_Number__c, Customer_Number__c."
+    ]
+  }
+}

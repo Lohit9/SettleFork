@@ -1,0 +1,31 @@
+{
+  "id": "netsuite-rootstock/mapping/004-salesorder-amount",
+  "task": "mapping",
+  "input": {
+    "source_table": "SalesOrder",
+    "target_table": "Sales_Order__c"
+  },
+  "gold": {
+    "mappings": [
+      {
+        "source_field": "total",
+        "target_field": "Total_Amount__c",
+        "combination_type": "single",
+        "_doc_justification": "NetSuite Transaction.total is the all-inclusive order total in the transaction's currency: it includes line subtotals, tax, shipping, and discounts (this is documented in the SuiteScript Records Browser entry for Transaction.total and matches NetSuite's accounting convention that 'total' = the amount the customer is charged). Rootstock Sales_Order__c typically exposes Total_Amount__c (or Amount__c on some packages) as the field a sales operations team would use as 'the order's total amount'. Both fields are tax-and-discount-inclusive, so the mapping is a clean 1:1 with no transform required beyond a precision check.\n\nPrecision concern: NetSuite total is typically NUMERIC(precision varies by account) but commonly stored as the local-currency amount with 2-4 decimal places. Salesforce/Rootstock convention is NUMBER(18, 2) for Currency-typed fields. If a NetSuite account uses 4-decimal precision (common in JPY-inclusive multicurrency setups), the migration loses the trailing 2 digits — a transform-layer rounding decision. The mapping itself is still 1:1.",
+        "_doc_citations": [
+          "NetSuite SuiteScript Records Browser — Transaction.total (Type: Currency)",
+          "Rootstock Object Reference — Sales_Order__c.Total_Amount__c (per Kaan's calibration: confirm exact field name vs Amount__c / Order_Total__c alternates)"
+        ]
+      }
+    ],
+    "notes": "Difficulty: medium. The mapping pattern is trivially 1:1 but the example tests two real-world concerns:\n\n  1. Field-name disambiguation: Total_Amount__c vs Amount__c vs Order_Total__c — Rootstock packages have varied here over time.\n  2. Precision: tax-and-discount-inclusive total + currency-precision rounding is a transform-layer issue but the mapping decision (which target field) needs to be right first.\n\nIf an AI proposes Amount__c instead of Total_Amount__c, that's the kind of judgment-call drift the calibration sample is designed to surface."
+  },
+  "metadata": {
+    "author": "claude",
+    "difficulty": "medium",
+    "uncertainty_flags": [
+      "Target field name disambiguation: Total_Amount__c vs Amount__c vs Order_Total__c — Kaan to confirm canonical Rootstock practice.",
+      "Precision-loss handling on multi-decimal-currency accounts is a transform-layer concern, not a field-pair concern. Calibration question: should this example also propose a transform (e.g., 'ROUND total TO 2 DECIMAL PLACES') or strictly the field pair?"
+    ]
+  }
+}

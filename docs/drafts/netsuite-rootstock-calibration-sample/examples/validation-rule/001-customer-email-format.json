@@ -1,0 +1,36 @@
+{
+  "id": "netsuite-rootstock/validation-rule/001-customer-email-format",
+  "task": "validation-rule",
+  "input": {
+    "field_context": {
+      "field_name": "Email__c",
+      "field_type": "text",
+      "table_name": "Customer__c"
+    },
+    "nl_prompt": "Email addresses must be in valid format like name@domain.com"
+  },
+  "gold": {
+    "rule_type": "regex",
+    "rule_config": {
+      "pattern": "^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}$",
+      "case_sensitive": false
+    },
+    "field_id": "Customer__c.Email__c",
+    "severity": "warning",
+    "_doc_justification": "Email validation in a NetSuite-to-Rootstock migration should typically be a soft check (severity='warning') because legacy customer records often carry non-standard emails (sales-rep notes pasted into the email field, comma-separated email lists, malformed exports from older CRMs). Setting severity='blocking' would halt the migration on every malformed email and force per-record manual fix-up before any data lands in Rootstock — operationally untenable for migrations with >5000 customer records.\n\nThe regex is the simplified RFC 5322 form (no comment / quoted-pair / IP-literal support; covers ~99.9% of real-world emails). Case-insensitive because email addresses are case-insensitive in the local-part per RFC 5321 §2.4 (modulo edge cases that don't matter for migration validation).\n\nrule_type='regex' is the canonical mapping for 'must match email format' NL prompts in Settle's existing rule taxonomy (per validation_rules.rule_type CHECK constraint at supabase/migrations/006_data_quality.sql line 14).",
+    "_doc_citations": [
+      "supabase/migrations/006_data_quality.sql — validation_rules.rule_type CHECK constraint (rule_type IN ('not_null', 'unique', 'min_value', ..., 'regex', ...))",
+      "RFC 5322 — Internet Message Format, simplified email production for validation",
+      "RFC 5321 §2.4 — Internet Mail Service: case-insensitive local-part"
+    ]
+  },
+  "metadata": {
+    "author": "claude",
+    "difficulty": "medium",
+    "uncertainty_flags": [
+      "Severity choice: 'warning' (gold) vs 'blocking' is a project-policy decision, not a technical one. Picked 'warning' because that's the operational default for legacy-data migrations; some SOC 2-aligned project policies would mandate 'blocking'. Kaan to confirm Settle's default policy.",
+      "Regex strictness: simplified RFC 5322 (gold) vs strict RFC 5322 (rare; covers more edge cases at the cost of complexity) vs 'contains @ and a dot' (loose). Picked simplified as the best practical fit for migration validation; flag if Kaan prefers a different baseline.",
+      "field_id encoding: spec proposed an opaque UUID in the example; for the calibration sample this gold uses 'Customer__c.Email__c' (table.field) as a stable cross-environment identifier. The runner translates to the synthetic UUID at eval time."
+    ]
+  }
+}

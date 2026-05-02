@@ -1,0 +1,31 @@
+{
+  "id": "netsuite-rootstock/mapping/002-customer-name-pair",
+  "task": "mapping",
+  "input": {
+    "source_table": "Customer",
+    "target_table": "Customer__c"
+  },
+  "gold": {
+    "mappings": [
+      {
+        "source_field": "companyname",
+        "target_field": "Name",
+        "combination_type": "single",
+        "_doc_justification": "NetSuite Customer.companyname is the entity's display name for non-individual customers (SuiteScript Records Browser). Rootstock Customer__c is built on the Salesforce platform; every Salesforce custom object exposes a standard `Name` field that serves as the display label in the SF UI. For a NetSuite-to-Rootstock migration, mapping companyname → Name preserves the human-readable identity of the customer record. The 1:1 mapping is canonical because both systems treat this as 'the name shown in the UI for this customer'.",
+        "_doc_citations": [
+          "NetSuite SuiteScript Records Browser — Customer.companyname",
+          "Salesforce Object Reference — standard Name field on custom objects",
+          "Rootstock Object Reference — Customer__c entry"
+        ]
+      }
+    ],
+    "notes": "Difficulty: easy. Two well-documented fields with semantically symmetric purposes. Note: NetSuite customers can be either entities (companyname populated) or individuals (firstname + lastname populated; companyname null). For individual customers, the Name mapping needs a different rule — but that's a different example for PR 10.5b. The calibration sample here covers the entity case only."
+  },
+  "metadata": {
+    "author": "claude",
+    "difficulty": "easy",
+    "uncertainty_flags": [
+      "Individual-customer case (firstname + lastname → Name) is out of scope for this single example; PR 10.5b should add a separate example for that path."
+    ]
+  }
+}
