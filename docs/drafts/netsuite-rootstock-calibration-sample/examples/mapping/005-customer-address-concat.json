@@ -1,0 +1,33 @@
+{
+  "id": "netsuite-rootstock/mapping/005-customer-address-concat",
+  "task": "mapping",
+  "input": {
+    "source_table": "Customer",
+    "target_table": "Customer__c"
+  },
+  "gold": {
+    "mappings": [
+      {
+        "source_field": "billaddr1",
+        "target_field": "Billing_Address__c",
+        "combination_type": "concat_comma",
+        "contributing_source_fields": ["billcity", "billstate", "billzip"],
+        "_doc_justification": "NetSuite stores billing addresses as a structured sublist (addressbookList → addressbook → addressLine1, city, state, zip, country). For the calibration sample we flatten the four most common parts (line 1, city, state, zip) into the source schema as separate fields. The migration target — Rootstock Customer__c.Billing_Address__c — is a single TextArea-style field per Rootstock Object Reference for the calibration sample. The four source fields concatenate with comma-space separators per US-postal convention:\n\n  '123 Main St, San Francisco, CA, 94102'\n\nThe AI's job: recognize this as a many-to-one mapping (concat_*), pick all four contributing source fields, and produce a sensible separator. The 'right' answer at the field-pair level is a single (billaddr1 → Billing_Address__c) entry with combination_type='concat_comma' and the other three named as contributors.",
+        "_doc_citations": [
+          "NetSuite SuiteScript Records Browser — Customer addressbookList sublist (addressLine1, city, state, zip)",
+          "Rootstock Object Reference — Customer__c.Billing_Address__c (per Kaan's calibration — see notes for alternative interpretations)"
+        ]
+      }
+    ],
+    "notes": "Difficulty: HARD. Three orthogonal judgment calls compound here:\n\n  1. Many-to-one collapse vs structured target: Rootstock might NOT use a single Billing_Address__c TextArea. If Rootstock customer addresses live on a related Account record using Salesforce's compound BillingAddress (BillingStreet/BillingCity/BillingState/BillingPostalCode), the gold answer flips to a one-to-one-per-component mapping (4 separate (source → target) tuples), NOT a concat. This is the most likely place for the AI to be 'right' but Claude to be 'wrong' relative to actual Rootstock convention.\n\n  2. Separator format: comma-space ('123 Main, City, ST, 90000') vs newline ('123 Main\\nCity, ST 90000') vs no-separator. The Postal Service convention is two-line; the SF in-app display convention varies by org. Picked comma-space for the gold; flag for Kaan.\n\n  3. country handling: omitted from the source schema for the calibration sample (most US-only migrations don't use it); a real customer dataset has billcountry too.\n\nCALIBRATION VALUE: this example is the litmus test for whether Claude's 'obvious vs judgment-call' boundary aligns with Kaan's. If Kaan says 'no, Rootstock customer addresses always go to the related Account.BillingAddress compound field — this gold mapping is wrong', that's the most informative single calibration signal in the whole sample."
+  },
+  "metadata": {
+    "author": "claude",
+    "difficulty": "hard",
+    "uncertainty_flags": [
+      "Target shape: single Billing_Address__c TextArea (gold) vs structured BillingStreet/City/State/PostalCode on a related Account (alternative). Without verified Rootstock Object Reference access, picked the simpler many-to-one for calibration; Kaan to override if the structured target is the actual convention.",
+      "Separator format: comma-space (gold) vs newline vs other. Project-policy decision; flag.",
+      "billcountry omitted from the source schema for this example. PR 10.5b should add it for international-customer test cases."
+    ]
+  }
+}

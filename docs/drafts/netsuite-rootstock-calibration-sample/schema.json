@@ -1,0 +1,199 @@
+{
+  "_doc_notes": [
+    "PARTIAL schema covering only the tables and fields the 5 calibration",
+    "examples touch. PR 10.5b expands as more examples land.",
+    "",
+    "Source: NetSuite SuiteScript public docs (Records Browser).",
+    "  - Customer record: https://system.netsuite.com/help/helpcenter/en_US/srbrowser/Browser2024_2/odata/customer.html",
+    "  - SalesOrder record: https://system.netsuite.com/help/helpcenter/en_US/srbrowser/Browser2024_2/odata/salesorder.html",
+    "  Note: the SuiteScript Records Browser is hosted at system.netsuite.com",
+    "  and requires a NetSuite account login for the latest version. Kaan",
+    "  to confirm exact URLs against the most recent release notes; the",
+    "  field NAMES below match SuiteScript convention (lowercase, no",
+    "  separator) which has been stable across releases.",
+    "",
+    "Target: Rootstock Object Reference. Rootstock is built on the",
+    "Salesforce platform; objects use the __c suffix for custom",
+    "objects and fields per Salesforce convention.",
+    "  - Customer__c: Rootstock Object Reference, Customer__c entry.",
+    "    Public marketing site: https://www.rootstock.com",
+    "    Object reference is typically behind the customer center login;",
+    "    Kaan to confirm exact field names from the Rootstock Object",
+    "    Reference his account has access to.",
+    "  - Sales_Order__c: same caveat applies."
+  ],
+  "source": {
+    "tables": [
+      {
+        "name": "Customer",
+        "fields": [
+          {
+            "name": "entityid",
+            "data_type": "text",
+            "is_nullable": false,
+            "is_primary_key": true,
+            "description": "Unique customer identifier. Often the customer code (e.g. 'CUST-12345'). NetSuite-internal canonical id is `id` (system-generated); `entityid` is the user-visible external code that customers and integrations key on. Source: SuiteScript Records Browser, Customer.entityid."
+          },
+          {
+            "name": "companyname",
+            "data_type": "text",
+            "is_nullable": true,
+            "description": "Company name. Required for non-individual customers. Source: SuiteScript Records Browser, Customer.companyname."
+          },
+          {
+            "name": "email",
+            "data_type": "text",
+            "is_nullable": true,
+            "description": "Primary email address for the customer entity. Source: SuiteScript Records Browser, Customer.email."
+          },
+          {
+            "name": "currency",
+            "data_type": "text",
+            "is_nullable": true,
+            "is_foreign_key": true,
+            "description": "Reference to NetSuite Currency record. Stored as the currency record's internal id; the human-readable code (USD, EUR) is on the joined Currency record. Source: SuiteScript Records Browser, Customer.currency (List/Record - Currency)."
+          },
+          {
+            "name": "billaddr1",
+            "data_type": "text",
+            "is_nullable": true,
+            "description": "Billing address line 1. Part of the address sublist; flattened here for the calibration sample. Source: SuiteScript Records Browser, Customer addressbookList.addressbook.addressLine1."
+          },
+          {
+            "name": "billcity",
+            "data_type": "text",
+            "is_nullable": true,
+            "description": "Billing address city. Source: SuiteScript Records Browser, Customer addressbookList.addressbook.city."
+          },
+          {
+            "name": "billstate",
+            "data_type": "text",
+            "is_nullable": true,
+            "description": "Billing address state/province (2-character code in US). Source: SuiteScript Records Browser, Customer addressbookList.addressbook.state."
+          },
+          {
+            "name": "billzip",
+            "data_type": "text",
+            "is_nullable": true,
+            "description": "Billing address postal code. Source: SuiteScript Records Browser, Customer addressbookList.addressbook.zip."
+          }
+        ]
+      },
+      {
+        "name": "SalesOrder",
+        "fields": [
+          {
+            "name": "tranid",
+            "data_type": "text",
+            "is_nullable": false,
+            "is_primary_key": true,
+            "description": "Sales order transaction id (e.g. 'SO-00012345'). The user-visible order number. Source: SuiteScript Records Browser, Transaction.tranid."
+          },
+          {
+            "name": "entity",
+            "data_type": "text",
+            "is_nullable": false,
+            "is_foreign_key": true,
+            "description": "Customer the order belongs to. Stored as the Customer record's internal id. Source: SuiteScript Records Browser, SalesOrder.entity (List/Record - Customer)."
+          },
+          {
+            "name": "trandate",
+            "data_type": "date",
+            "is_nullable": false,
+            "description": "Order transaction date. Source: SuiteScript Records Browser, Transaction.trandate."
+          },
+          {
+            "name": "total",
+            "data_type": "numeric",
+            "is_nullable": true,
+            "description": "Order total in the transaction's currency. Includes tax, shipping, and discounts. Source: SuiteScript Records Browser, Transaction.total."
+          },
+          {
+            "name": "currency",
+            "data_type": "text",
+            "is_nullable": false,
+            "is_foreign_key": true,
+            "description": "Reference to Currency record for this transaction. Source: SuiteScript Records Browser, Transaction.currency."
+          }
+        ]
+      }
+    ]
+  },
+  "target": {
+    "tables": [
+      {
+        "name": "Customer__c",
+        "fields": [
+          {
+            "name": "External_ID__c",
+            "data_type": "text",
+            "is_nullable": false,
+            "is_primary_key": true,
+            "description": "External system identifier for cross-system reconciliation. The canonical migration target for source-system unique customer codes. Source: Rootstock Object Reference, Customer__c.External_ID__c. NOTE FROM CLAUDE: Kaan to confirm the exact field name; some Rootstock packages also expose `Account_Number__c` and `Customer_Number__c` as candidates; External_ID__c is the most widely cited."
+          },
+          {
+            "name": "Name",
+            "data_type": "text",
+            "is_nullable": false,
+            "description": "Standard Salesforce Name field on Customer__c. For a custom object, this is auto-generated unless overridden. Used as the customer's display name in Rootstock. Source: Salesforce Object Reference standard fields + Rootstock Customer__c entry."
+          },
+          {
+            "name": "Email__c",
+            "data_type": "text",
+            "is_nullable": true,
+            "description": "Primary contact email. Source: Rootstock Object Reference, Customer__c.Email__c. NOTE FROM CLAUDE: Kaan to confirm — Rootstock may use a Contact-related lookup pattern instead of a direct field; if so, the gold mapping target would shift to a related Contact record."
+          },
+          {
+            "name": "Currency_Code__c",
+            "data_type": "text",
+            "is_nullable": false,
+            "description": "ISO 4217 currency code (e.g. 'USD'). Rootstock objects under Salesforce multicurrency typically use the standard CurrencyIsoCode field, but Rootstock packages also frequently expose a Currency_Code__c custom field that mirrors the ISO code. Source: Rootstock Object Reference. NOTE FROM CLAUDE: this is one of the higher-uncertainty mappings — Kaan to confirm whether Rootstock uses CurrencyIsoCode (standard SF) or Currency_Code__c (custom)."
+          },
+          {
+            "name": "Billing_Address__c",
+            "data_type": "text",
+            "is_nullable": true,
+            "description": "Single-field rolled-up billing address (long text). Used when Rootstock prefers a flat single-line/multi-line address rather than the structured billing_street/city/state/postal_code fields. Source: Rootstock Object Reference, Customer__c. NOTE FROM CLAUDE: Rootstock may instead use Salesforce's compound BillingAddress field (BillingStreet, BillingCity, etc.) on a related Account record. If so, the address example becomes a one-to-many mapping into structured fields rather than a many-to-one concat."
+          }
+        ]
+      },
+      {
+        "name": "Sales_Order__c",
+        "fields": [
+          {
+            "name": "External_ID__c",
+            "data_type": "text",
+            "is_nullable": false,
+            "is_primary_key": true,
+            "description": "External system identifier for the order. Source: Rootstock Object Reference, Sales_Order__c.External_ID__c."
+          },
+          {
+            "name": "Customer__c",
+            "data_type": "uuid",
+            "is_nullable": false,
+            "is_foreign_key": true,
+            "description": "Lookup to Customer__c. Salesforce master-detail or lookup field. Source: Rootstock Object Reference, Sales_Order__c.Customer__c."
+          },
+          {
+            "name": "Order_Date__c",
+            "data_type": "date",
+            "is_nullable": false,
+            "description": "Date the order was placed. Source: Rootstock Object Reference, Sales_Order__c.Order_Date__c."
+          },
+          {
+            "name": "Total_Amount__c",
+            "data_type": "numeric",
+            "is_nullable": true,
+            "description": "Order total in the transaction's currency. NUMERIC(18,2) per Salesforce currency convention. Source: Rootstock Object Reference, Sales_Order__c.Total_Amount__c."
+          },
+          {
+            "name": "Currency_Code__c",
+            "data_type": "text",
+            "is_nullable": false,
+            "description": "Same caveat as Customer__c.Currency_Code__c — CurrencyIsoCode (standard SF) vs Currency_Code__c (custom) is a Rootstock-package detail that Kaan should confirm."
+          }
+        ]
+      }
+    ]
+  }
+}

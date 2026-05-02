@@ -1,0 +1,33 @@
+{
+  "id": "netsuite-rootstock/mapping/003-customer-currency",
+  "task": "mapping",
+  "input": {
+    "source_table": "Customer",
+    "target_table": "Customer__c"
+  },
+  "gold": {
+    "mappings": [
+      {
+        "source_field": "currency",
+        "target_field": "Currency_Code__c",
+        "combination_type": "single",
+        "_doc_justification": "NetSuite Customer.currency stores a reference to a Currency record (the internal id of the joined currency, not the ISO code itself). The migration target on Rootstock is the ISO 4217 currency code (e.g. 'USD', 'EUR') — Salesforce multicurrency convention. Two valid Rootstock targets:\n\n  (a) Standard Salesforce CurrencyIsoCode (the SF multicurrency platform field, present on every multicurrency-enabled object)\n  (b) Custom Currency_Code__c (a Rootstock-package custom field that mirrors the ISO code)\n\nFor this calibration the gold target is Currency_Code__c (the Rootstock-custom field) since Rootstock implementation guides historically reference it by name. The TRANSFORMATION is non-trivial: NetSuite's currency field stores a record ID; the migration must JOIN to the Currency record to extract the ISO code. This is captured by combination_type='single' with the understanding that the transform layer handles the lookup; the field-pair is still 1:1.",
+        "_doc_citations": [
+          "NetSuite SuiteScript Records Browser — Customer.currency (Type: List/Record - Currency)",
+          "NetSuite SuiteScript Records Browser — Currency record (the joined record holding the ISO code)",
+          "Salesforce Object Reference — CurrencyIsoCode standard field (alternative target)",
+          "Rootstock Object Reference — Customer__c.Currency_Code__c (per Kaan's calibration: confirm whether this is the custom field or whether Rootstock uses CurrencyIsoCode directly)"
+        ]
+      }
+    ],
+    "notes": "Difficulty: medium. The complexity isn't the field-pair (still 1:1) but the JOIN required to extract the ISO code from NetSuite's currency-record reference. An AI that proposes this mapping correctly should have access to the Currency record's ISO code field via context-builder's schema introspection. The combination_type stays 'single' because at the field-pair level it's a 1:1 mapping; the transform layer (PR 10.5b can add a separate transform example) handles the JOIN.\n\nThe judgment-call axis: target field name. CurrencyIsoCode (standard SF) vs Currency_Code__c (Rootstock custom). The schema flags this for Kaan's review."
+  },
+  "metadata": {
+    "author": "claude",
+    "difficulty": "medium",
+    "uncertainty_flags": [
+      "Target field: CurrencyIsoCode (standard SF) vs Currency_Code__c (Rootstock custom). Picked the latter for the calibration; Kaan to confirm canonical Rootstock practice.",
+      "The transform layer's responsibility: the field-pair mapping is 1:1 but the actual data extraction requires a JOIN to the Currency record. Calibration question: should the mapping example include the join_spec at the field-pair level, or is that a separate concern entirely owned by the transform-generation step?"
+    ]
+  }
+}
