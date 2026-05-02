@@ -27,7 +27,9 @@ export interface ModelPricing {
 }
 
 export const PRICING: Record<string, ModelPricing> = {
-  // Currently in use everywhere (lib/ai/claude.ts:16, :40)
+  // Deprecated as of 2025-Q4; retires 2026-06-15. Kept here so historical
+  // llm_calls rows pre-PR-11 still resolve a price. New calls use
+  // 'claude-sonnet-4-6' (current Sonnet) or 'claude-opus-4-7' (Phase 2).
   'claude-sonnet-4-20250514': {
     input: 3.0,
     output: 15.0,
@@ -36,7 +38,20 @@ export const PRICING: Record<string, ModelPricing> = {
     batchInput: 1.5,
   },
 
-  // Reserved for Phase 2 model upgrade
+  // Current Sonnet — replaces the deprecated 'claude-sonnet-4-20250514'
+  // as the default when AI_PHASE_2_ENABLED is OFF (PR 11). Identical
+  // pricing to Sonnet 4. Off the deprecation track.
+  'claude-sonnet-4-6': {
+    input: 3.0,
+    output: 15.0,
+    cacheRead: 0.3,
+    cacheCreation: 3.75,
+    batchInput: 1.5,
+  },
+
+  // Phase 2 model upgrade (PR 11) — used when AI_PHASE_2_ENABLED=1.
+  // Higher quality, higher cost (1.67x base; up to 2.25x effective due
+  // to Opus 4.7's new tokenizer producing more tokens per input).
   'claude-opus-4-7': {
     input: 5.0,
     output: 25.0,

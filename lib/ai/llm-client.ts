@@ -72,7 +72,14 @@ export interface CallLLMOptions {
   userMessage: string
   projectId: string
   userId: string
-  /** Defaults to `claude-sonnet-4-20250514` (matches `lib/ai/claude.ts`). */
+  /**
+   * Defaults to `claude-sonnet-4-6` (or `claude-opus-4-7` when
+   * `AI_PHASE_2_ENABLED=1`). Override per-call to use a different
+   * model for cost-sensitive features.
+   *
+   * The reference to `lib/ai/claude.ts` from a prior version of this
+   * comment is stale; that file was deleted in PR 7.
+   */
   model?: string
   /** Defaults to 4096 (single-shot) or 32000 (streaming). */
   maxTokens?: number
@@ -100,10 +107,66 @@ export interface CallLLMResult {
 
 // ─── Module-private constants + singletons ────────────────────────────────────
 
-const DEFAULT_MODEL = 'claude-sonnet-4-20250514'
 const DEFAULT_MAX_TOKENS = 4096
 const DEFAULT_STREAMING_MAX_TOKENS = 32000
 const ERROR_MESSAGE_MAX_CHARS = 1000
+
+// ─── Phase 2 model + effort resolution (PR 11) ────────────────────────────────
+
+/**
+ * Resolves the default model to use for a callLLM/callLLMStreaming call,
+ * honoring the AI_PHASE_2_ENABLED feature flag.
+ *
+ *   AI_PHASE_2_ENABLED=1 → 'claude-opus-4-7'  (Phase 2 quality upgrade)
+ *   else                 → 'claude-sonnet-4-6' (current Sonnet, off the
+ *                          'claude-sonnet-4-20250514' deprecation track
+ *                          that retires 2026-06-15)
+ *
+ * Read per-request, not at module load, so the flag can be flipped
+ * without redeploying.
+ *
+ * Per-call overrides via opts.model take precedence over this default.
+ */
+export function resolveDefaultModel(): string {
+  const phase2Enabled = process.env.AI_PHASE_2_ENABLED === '1'
+  return phase2Enabled ? 'claude-opus-4-7' : 'claude-sonnet-4-6'
+}
+
+/**
+ * Features that opt OUT of effort='high' when AI_PHASE_2_ENABLED=1.
+ *
+ * Default behavior under Phase 2 is effort='high' for all reasoning +
+ * synthesis tasks. The exception list captures features that produce
+ * purely documentary output where extended thinking adds latency
+ * without quality gain.
+ *
+ * Adding a new LLMFeature: assume it should NOT be on this list (i.e.,
+ * it gets effort='high' by default). Only add a feature here if its
+ * output is genuinely documentary, not synthesis or reasoning.
+ */
+const LOW_EFFORT_FEATURES: ReadonlySet<LLMFeature> = new Set<LLMFeature>([
+  'transform_describe', // narrates an existing transform; no synthesis
+  'nl_suggest_queries', // generates starter query suggestions
+])
+
+/**
+ * Resolves the `effort` parameter to send on the Anthropic API call,
+ * honoring AI_PHASE_2_ENABLED + the LOW_EFFORT_FEATURES exception list.
+ *
+ * Returns:
+ *   'high'    when flag is ON and the feature is NOT in the low-effort list
+ *   undefined when flag is OFF (preserves Sonnet 4.6 default behavior)
+ *   undefined when the feature IS in the low-effort list (uses Anthropic's
+ *             default effort for that model)
+ *
+ * Read per-request to support flag flipping without redeploy.
+ */
+export function resolveEffort(feature: LLMFeature): 'high' | undefined {
+  const phase2Enabled = process.env.AI_PHASE_2_ENABLED === '1'
+  if (!phase2Enabled) return undefined
+  if (LOW_EFFORT_FEATURES.has(feature)) return undefined
+  return 'high'
+}
 
 // CRITICAL: This file is server-side only. Never import in client components.
 // `lib/ai/claude.ts` instantiates Anthropic too — both will share env-var
@@ -240,7 +303,8 @@ function buildBaseRow(
 
 export async function callLLM(opts: CallLLMOptions): Promise<CallLLMResult> {
   const callId = randomUUID()
-  const model = opts.model ?? DEFAULT_MODEL
+  const model = opts.model ?? resolveDefaultModel()
+  const effort = resolveEffort(opts.feature)
   const maxTokens = opts.maxTokens ?? DEFAULT_MAX_TOKENS
   const startedAt = Date.now()
   const baseRow = buildBaseRow(callId, opts, model, maxTokens, false)
@@ -251,6 +315,13 @@ export async function callLLM(opts: CallLLMOptions): Promise<CallLLMResult> {
       max_tokens: maxTokens,
       system: opts.systemPrompt,
       messages: [{ role: 'user', content: opts.userMessage }],
+      // PR 11: include `output_config.effort` only when defined.
+      // The Anthropic SDK nests `effort` inside `OutputConfig`
+      // (messages.d.ts:704-712); a bare top-level `effort` field is
+      // rejected by the API as "Extra inputs are not permitted".
+      // When the flag is OFF or the feature is in LOW_EFFORT_FEATURES,
+      // no output_config is sent at all (preserves current behavior).
+      ...(effort && { output_config: { effort } }),
     }
     if (opts.abuseUserId) {
       request.metadata = { user_id: opts.abuseUserId }
@@ -332,7 +403,8 @@ export async function callLLMStreaming(
   opts: CallLLMOptions,
 ): Promise<CallLLMResult> {
   const callId = randomUUID()
-  const model = opts.model ?? DEFAULT_MODEL
+  const model = opts.model ?? resolveDefaultModel()
+  const effort = resolveEffort(opts.feature)
   const maxTokens = opts.maxTokens ?? DEFAULT_STREAMING_MAX_TOKENS
   const startedAt = Date.now()
   const baseRow = buildBaseRow(callId, opts, model, maxTokens, true)
@@ -344,6 +416,8 @@ export async function callLLMStreaming(
       system: opts.systemPrompt,
       messages: [{ role: 'user', content: opts.userMessage }],
       stream: true,
+      // PR 11: include effort only when defined; same gating as callLLM.
+      ...(effort && { effort }),
     }
     if (opts.abuseUserId) {
       request.metadata = { user_id: opts.abuseUserId }

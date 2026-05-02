@@ -136,7 +136,17 @@ describeFn('[integration] callLLM logs a row in llm_calls', () => {
     // Outcome + identity fields
     expect(row.succeeded).toBe(true)
     expect(row.feature).toBe('mapping_suggest')
-    expect(row.model).toBe('claude-sonnet-4-20250514')
+    // Phase 2 PR 11: default model now resolves dynamically via
+    // `resolveDefaultModel()` — `claude-sonnet-4-6` when
+    // AI_PHASE_2_ENABLED is unset (default), `claude-opus-4-7` when
+    // the flag is on. Assert against whichever default applies for
+    // the current env so this integration test stays robust across
+    // both states.
+    const expectedModel =
+      process.env.AI_PHASE_2_ENABLED === '1'
+        ? 'claude-opus-4-7'
+        : 'claude-sonnet-4-6'
+    expect(row.model).toBe(expectedModel)
     expect(row.is_streaming).toBe(false)
     expect(row.parent_call_id).toBeNull() // primary call, no parent
 
