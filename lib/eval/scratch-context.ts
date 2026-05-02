@@ -95,7 +95,39 @@ export async function createSyntheticProject(
     )
   }
 
-  return data.id as string
+  const projectId = data.id as string
+
+  // Phase 1 PR 10.4: project_members membership grant.
+  //
+  // Production projects are created via the `create_project_with_access`
+  // RPC (migration 080) which fans out grants to project_members so the
+  // creator + org admins/members can act on the project. The eval runner
+  // bypasses that RPC by INSERTing directly into `projects` (because
+  // create_project_with_access is itself behind cookies-based auth that
+  // tsx can't satisfy). That leaves the synthetic project without any
+  // project_members rows, which causes downstream RPCs like
+  // `dq_create_target_field_mapping` to fail with
+  // "permission denied for project ...".
+  //
+  // Insert the membership row directly. role='admin' so the synthetic
+  // user satisfies every project_role check on the path
+  // (admin > editor > viewer; see migration 079).
+  const { error: memberErr } = await supabaseAdmin.from('project_members').insert({
+    project_id: projectId,
+    user_id: input.userId,
+    role: 'admin',
+  })
+  if (memberErr) {
+    // Best-effort cascade cleanup so we don't leave an orphan project
+    // when the membership insert fails — the project is unusable
+    // without it.
+    await supabaseAdmin.from('projects').delete().eq('id', projectId)
+    throw new Error(
+      `[eval/scratch-context] Failed to insert project_members row for synthetic project "${input.name}": ${memberErr.message}`,
+    )
+  }
+
+  return projectId
 }
 
 /**
