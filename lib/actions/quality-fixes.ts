@@ -10,6 +10,7 @@ import { mapIssueKindToCondition } from '@/lib/quality/diagnostic-queries'
 import { resolveFixTarget } from '@/lib/quality/fix-target'
 import { executeCustomRules } from '@/lib/actions/validation-rules'
 import { logActivity } from '@/lib/actions/activity-log'
+import { logAIEdit } from '@/lib/actions/ai-edit-history'
 import type { QualityIssue, FixHistory } from '@/lib/types/database'
 
 // ── helpers ───────────────────────────────────────────────────────────────────
@@ -253,6 +254,24 @@ export async function applyFix(
 
   await supabase.from('quality_issues').update({ status: 'fixed' }).eq('id', issueId)
 
+  // Provenance: user accepted an AI-suggested fix. status flip
+  // 'open' (or 'accepted_risk') → 'fixed'. Anchored on the issue.
+  void logAIEdit({
+    projectId: issue.project_id,
+    actorId: user.id,
+    entityType: 'quality_issue',
+    entityId: issueId,
+    fieldPath: 'status',
+    oldValue: issue.status ?? 'open',
+    newValue: 'fixed',
+    editKind: 'human_accepted',
+    metadata: {
+      fix_option_index: fixOptionIndex,
+      fix_history_id: fixHistoryId,
+      affected_rows: rowsAffected,
+    },
+  })
+
   // Mark the source table as modified so staleness checks detect stale staged data
   await supabaseAdmin
     .from('tables')
@@ -335,6 +354,21 @@ export async function acceptRisk(
     'validation',
     { quality_issue_id: issueId }
   )
+
+  // Provenance: accepting risk is a human_accepted event on the
+  // quality_issue's status — the user is committing to "no fix needed"
+  // for this AI-flagged issue.
+  void logAIEdit({
+    projectId: issue.project_id,
+    actorId: user.id,
+    entityType: 'quality_issue',
+    entityId: issueId,
+    fieldPath: 'status',
+    oldValue: issue.status ?? 'open',
+    newValue: 'accepted_risk',
+    editKind: 'human_accepted',
+    metadata: { reason: reason ?? null },
+  })
 
   return { success: true }
 }
@@ -459,6 +493,20 @@ export async function revertFix(
       .from('quality_issues')
       .update({ status: 'open' })
       .eq('id', histRecord.quality_issue_id)
+
+    // Provenance: revert flips the issue back to 'open'. human_rejected
+    // is the right edit_kind — the user is rolling back a previous accept.
+    void logAIEdit({
+      projectId: histRecord.project_id,
+      actorId: user.id,
+      entityType: 'quality_issue',
+      entityId: histRecord.quality_issue_id,
+      fieldPath: 'status',
+      oldValue: 'fixed',
+      newValue: 'open',
+      editKind: 'human_rejected',
+      metadata: { fix_history_id: fixHistoryId, rows_reverted: rowsAffected },
+    })
   }
 
   try {

@@ -10,6 +10,7 @@ import {
   formatDocumentsForPrompt,
 } from '@/lib/ai/context-builder'
 import type { QualityIssue } from '@/lib/types/database'
+import { logAIEdit } from '@/lib/actions/ai-edit-history'
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -280,6 +281,7 @@ Identify additional data quality issues NOT already listed in existing_issues.`
 
   // Call Claude
   let rawResponse: string
+  let llmCallId: string | null = null
   try {
     const result = await callLLM({
       feature: 'quality_detection_ai',
@@ -293,6 +295,7 @@ Identify additional data quality issues NOT already listed in existing_issues.`
       metadata: { table_id: tableId },
     })
     rawResponse = result.text
+    llmCallId = result.callId
   } catch (err) {
     console.warn('[ai-detection] Claude call failed:', err)
     return { issuesFound: 0, error: 'AI call failed' }
@@ -375,10 +378,33 @@ Identify additional data quality issues NOT already listed in existing_issues.`
   // guards mapping-shape mutations only; quality detection must continue
   // to flow during maintenance so scans stay usable.
   if (issuesToInsert.length > 0) {
-    const { error } = await supabaseAdmin.from('quality_issues').insert(issuesToInsert)
+    // .select() returns the inserted rows so we can emit per-row provenance.
+    const { data: insertedIssues, error } = await supabaseAdmin
+      .from('quality_issues')
+      .insert(issuesToInsert)
+      .select('id, table_id, field_id, title')
     if (error) {
       console.error('[ai-detection] Failed to insert AI issues:', error.message)
       return { issuesFound: 0, error: error.message }
+    }
+
+    // Provenance: each inserted issue is an ai_proposed event. Anchored on
+    // the issue itself; new_value carries the diagnostic shape so the eval
+    // harness can reason about what the AI flagged.
+    for (const inserted of insertedIssues ?? []) {
+      const row = inserted as { id: string; table_id: string; field_id: string | null; title: string }
+      void logAIEdit({
+        projectId,
+        actorId: user.id,
+        entityType: 'quality_issue',
+        entityId: row.id,
+        fieldPath: 'detection',
+        oldValue: null,
+        newValue: { title: row.title, table_id: row.table_id, field_id: row.field_id },
+        editKind: 'ai_proposed',
+        llmCallId,
+        metadata: { detection_type: 'ai_augmented' },
+      })
     }
   }
 

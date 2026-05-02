@@ -15,6 +15,7 @@ import { callLLM } from '@/lib/ai/llm-client'
 import { checkAIRateLimit } from '@/lib/ai/rate-limit'
 import { buildAIContext, formatFieldForPrompt, formatDocumentsForPrompt } from '@/lib/ai/context-builder'
 import { resolveFixTarget } from '@/lib/quality/fix-target'
+import { logAIEdit } from '@/lib/actions/ai-edit-history'
 import type { FixOption } from '@/lib/types/database'
 
 const SYSTEM_PROMPT = `You are a senior enterprise data migration consultant. A data quality issue has been detected in a migration project. Your job is to:
@@ -414,6 +415,7 @@ ${otherIssues}
 Provide 2-3 fix options for this issue. Use table_id = '${effectiveTableId}' in all SQL WHERE clauses.`
 
   let parsed: ClaudeFixResponse
+  let llmCallId: string | null = null
   try {
     const issueProjectId = (issue as unknown as { project_id: string }).project_id
     const result = await callLLM({
@@ -427,6 +429,7 @@ Provide 2-3 fix options for this issue. Use table_id = '${effectiveTableId}' in 
       abuseUserId: user.id,
       metadata: { issue_id: issueId, effective_table_id: effectiveTableId },
     })
+    llmCallId = result.callId
 
     // Strip markdown fences if present
     const cleaned = result.text
@@ -444,6 +447,9 @@ Provide 2-3 fix options for this issue. Use table_id = '${effectiveTableId}' in 
     return { success: false, error: 'AI did not return valid fix options. Please try again.' }
   }
 
+  // Capture pre-write ai_fix_options so the diff is recoverable.
+  const previousFixOptions = (issue as unknown as { ai_fix_options: unknown }).ai_fix_options ?? null
+
   // Update the quality issue record
   const firstOption = parsed.fix_options[0]
   const { error: updateError } = await supabaseAdmin
@@ -453,6 +459,12 @@ Provide 2-3 fix options for this issue. Use table_id = '${effectiveTableId}' in 
       downstream_impact: parsed.downstream_impact ?? null,
       ai_suggested_fix: firstOption?.description ?? null,
       generated_sql: firstOption?.sql ?? null,
+      // Freeze the AI's first proposal. Only set on the first AI write
+      // to this issue — leave NULL afterwards so subsequent regenerations
+      // never overwrite the original.
+      ...(previousFixOptions == null
+        ? { original_ai_fix_options: parsed.fix_options }
+        : {}),
     })
     .eq('id', issueId)
 
@@ -460,6 +472,21 @@ Provide 2-3 fix options for this issue. Use table_id = '${effectiveTableId}' in 
     console.error('[fix-engine] Failed to store fix options:', updateError.message)
     return { success: false, error: 'Failed to save fix suggestions. Please try again.' }
   }
+
+  // Provenance: AI wrote ai_fix_options. ai_replaced when overwriting an
+  // existing AI proposal (regen); ai_proposed for the first AI write.
+  void logAIEdit({
+    projectId: (issue as unknown as { project_id: string }).project_id,
+    actorId: user.id,
+    entityType: 'quality_issue',
+    entityId: issueId,
+    fieldPath: 'ai_fix_options',
+    oldValue: previousFixOptions,
+    newValue: parsed.fix_options,
+    editKind: previousFixOptions == null ? 'ai_proposed' : 'ai_replaced',
+    llmCallId,
+    metadata: { effective_table_id: effectiveTableId },
+  })
 
   return { success: true }
 }
