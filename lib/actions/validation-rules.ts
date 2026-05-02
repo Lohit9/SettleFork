@@ -6,6 +6,7 @@ import { callLLM } from '@/lib/ai/llm-client'
 import { checkAIRateLimit } from '@/lib/ai/rate-limit'
 import { validateFixSQL } from '@/lib/quality/fix-sql-validator'
 import { logActivity } from '@/lib/actions/activity-log'
+import { logAIEdit } from '@/lib/actions/ai-edit-history'
 import type { ValidationRule, QualityIssue } from '@/lib/types/database'
 
 // ── helpers ───────────────────────────────────────────────────────────────────
@@ -216,15 +217,36 @@ export async function addValidationRule(
 
   if (error) return { success: false, error: error.message }
 
+  const insertedRule = data as ValidationRule
   await logActivity(
     projectId,
     'rule_added',
     `Validation rule added: ${rule.name}`,
     'validation',
-    { validation_rule_id: (data as ValidationRule).id, rule_type: rule.rule_type }
+    { validation_rule_id: insertedRule.id, rule_type: rule.rule_type }
   )
 
-  return { success: true, rule: data as ValidationRule }
+  // Provenance: user-authored rule (no prior AI proposal). Path A — emits
+  // alongside the existing logActivity call so the Activity tab and the
+  // structured-diff history stay in sync.
+  void logAIEdit({
+    projectId,
+    actorId: user.id,
+    entityType: 'validation_rule',
+    entityId: insertedRule.id,
+    fieldPath: 'rule_config',
+    oldValue: null,
+    newValue: {
+      name: rule.name,
+      rule_type: rule.rule_type,
+      rule_config: rule.rule_config,
+      severity: rule.severity,
+    },
+    editKind: 'human_authored',
+    metadata: { table_id: resolvedTableId, field_id: fieldId },
+  })
+
+  return { success: true, rule: insertedRule }
 }
 
 // ── add a rule from natural language ─────────────────────────────────────────
@@ -313,6 +335,7 @@ User's rule: "${naturalLanguageRule}"`
     rule_config: Record<string, unknown>
     severity: 'blocking' | 'warning'
   }
+  let llmCallId: string | null = null
 
   try {
     const result = await callLLM({
@@ -326,6 +349,7 @@ User's rule: "${naturalLanguageRule}"`
       abuseUserId: user.id,
       metadata: { field_id: fieldId, table_id: tableId },
     })
+    llmCallId = result.callId
     const cleaned = result.text
       .replace(/^```(?:json)?\s*/i, '')
       .replace(/\s*```\s*$/, '')
@@ -377,6 +401,31 @@ User's rule: "${naturalLanguageRule}"`
     'validation',
     { validation_rule_id: savedRule.id, rule_type: savedRule.rule_type, ai_generated: true }
   )
+
+  // Provenance: AI-proposed rule. llmCallId chains back to the callLLM
+  // result so eval-export and confidence-calibration paths can join
+  // ai_edit_history → llm_calls.
+  void logAIEdit({
+    projectId,
+    actorId: user.id,
+    entityType: 'validation_rule',
+    entityId: savedRule.id,
+    fieldPath: 'rule_config',
+    oldValue: null,
+    newValue: {
+      name: parsed.name,
+      rule_type: parsed.rule_type,
+      rule_config: parsed.rule_config,
+      severity: severityOverride ?? parsed.severity ?? 'warning',
+    },
+    editKind: 'ai_proposed',
+    llmCallId,
+    metadata: {
+      table_id: tableId,
+      field_id: fieldId,
+      ai_original_prompt: naturalLanguageRule,
+    },
+  })
 
   return { success: true, rule: savedRule }
 }
@@ -903,6 +952,20 @@ export async function deleteValidationRule(
     'validation',
     { validation_rule_id: ruleId, rule_type: rule.rule_type }
   )
+
+  // Provenance: deletion is a human_rejected event whether the rule was
+  // AI-proposed or user-authored. Old value snapshot captures the
+  // pre-delete shape so the calibration path can correlate.
+  void logAIEdit({
+    projectId: rule.project_id,
+    actorId: user.id,
+    entityType: 'validation_rule',
+    entityId: ruleId,
+    fieldPath: 'rule_config',
+    oldValue: { name: rule.name, rule_type: rule.rule_type },
+    newValue: null,
+    editKind: 'human_rejected',
+  })
 
   return { success: true }
 }
