@@ -4,7 +4,6 @@ import { revalidatePath } from 'next/cache'
 import { createClient } from '@/lib/supabase/server'
 import { supabaseAdmin } from '@/lib/supabase/admin'
 import { requireProjectPermission } from '@/lib/actions/role-resolution'
-import { callClaude } from '@/lib/ai/claude'
 import { callLLM } from '@/lib/ai/llm-client'
 import { checkAIRateLimit } from '@/lib/ai/rate-limit'
 import { buildAIContext, formatSchemaForPrompt, formatDocumentsForPrompt } from '@/lib/ai/context-builder'
@@ -2339,8 +2338,18 @@ ${remCtx.intelligence_context ? remCtx.intelligence_context + '\n\n' : ''}CRITIC
 
     let parsed: { field_mappings: ClaudeFieldMapping[] }
     try {
-      const raw = await callClaude('You are a data migration expert. Return ONLY valid JSON.', userMsg, 4096)
-      let cleaned = raw.trim()
+      const result = await callLLM({
+        feature: 'mapping_suggest_legacy_bulk',
+        systemPrompt: 'You are a data migration expert. Return ONLY valid JSON.',
+        userMessage: userMsg,
+        maxTokens: 4096,
+        projectId: tm.project_id,
+        userId: user.id,
+        promptVersion: 'mapping-suggest-legacy-bulk-v1',
+        abuseUserId: user.id,
+        metadata: { table_mapping_id: tableMappingId },
+      })
+      let cleaned = result.text.trim()
       if (cleaned.startsWith('```')) {
         cleaned = cleaned.replace(/^```(?:json)?\n?/, '').replace(/\n?```$/, '').trim()
       }

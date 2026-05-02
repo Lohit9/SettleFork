@@ -2,7 +2,7 @@
 
 import { createClient } from '@/lib/supabase/server'
 import { supabaseAdmin } from '@/lib/supabase/admin'
-import { callClaude } from '@/lib/ai/claude'
+import { callLLM } from '@/lib/ai/llm-client'
 import { checkAIRateLimit } from '@/lib/ai/rate-limit'
 import { canOverride } from '@/lib/utils/schema-priority'
 
@@ -213,7 +213,20 @@ export async function enrichSchemaFromDocs(
     // ── Step 5: Call Claude ───────────────────────────────────────────────────
     const userMessage = `<inferred_schema>\n${inferredSchemaText}\n</inferred_schema>\n\n<schema_documentation>\n${docsText}\n</schema_documentation>\n\nCompare the inferred schema against the documentation and return corrections for the "${table.name}" table only.`
 
-    const raw = await callClaude(ENRICHMENT_SYSTEM_PROMPT, userMessage, 2048)
+    // `projectId` already resolved at the top of the function (line 149)
+    // for downstream conflict-routing — reuse it here for the log row.
+    const result = await callLLM({
+      feature: 'schema_enrichment',
+      systemPrompt: ENRICHMENT_SYSTEM_PROMPT,
+      userMessage,
+      maxTokens: 2048,
+      projectId,
+      userId: user.id,
+      promptVersion: 'schema-enrichment-v1',
+      abuseUserId: user.id,
+      metadata: { dataset_id: datasetId, table_id: tableId, table_name: table.name },
+    })
+    const raw = result.text
 
     // ── Step 6: Parse response ────────────────────────────────────────────────
     let parsed: ClaudeSchemaResponse

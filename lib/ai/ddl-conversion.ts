@@ -11,7 +11,7 @@
  * Server-only. Never import from client components (ANTHROPIC_API_KEY).
  */
 
-import { callClaude } from '@/lib/ai/claude'
+import { callLLM } from '@/lib/ai/llm-client'
 import { parseDDL } from '@/lib/parsers/ddl-parser'
 
 // Lower bound below which the document is almost certainly not a schema
@@ -50,7 +50,11 @@ Output ONLY the DDL statements. No explanations, no markdown, no code fences. Ju
  * parser verification. Never throws — callers should treat `null` as
  * "deterministic merge isn't possible, let AI enrichment handle it".
  */
-export async function convertDocToDDL(documentText: string): Promise<string | null> {
+export async function convertDocToDDL(
+  projectId: string,
+  userId: string,
+  documentText: string,
+): Promise<string | null> {
   if (!documentText || documentText.trim().length < MIN_INPUT_CHARS) {
     return null
   }
@@ -59,7 +63,17 @@ export async function convertDocToDDL(documentText: string): Promise<string | nu
 
   let raw: string
   try {
-    raw = await callClaude(DDL_CONVERT_SYSTEM, truncated, 4096)
+    const result = await callLLM({
+      feature: 'ddl_conversion',
+      systemPrompt: DDL_CONVERT_SYSTEM,
+      userMessage: truncated,
+      maxTokens: 4096,
+      projectId,
+      userId,
+      promptVersion: 'ddl-conversion-v1',
+      abuseUserId: userId,
+    })
+    raw = result.text
   } catch (err) {
     console.error('[DDL Convert] Claude call failed:', err)
     return null

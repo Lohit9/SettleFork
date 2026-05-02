@@ -5,7 +5,7 @@ import { createClient } from '@/lib/supabase/server'
 import { requireProjectPermission } from '@/lib/actions/role-resolution'
 import { validateFixSQL } from '@/lib/quality/fix-sql-validator'
 import { countFormatIssues, computeValueDistribution, computeMinMax } from '@/lib/utils/profiling'
-import { callClaude } from '@/lib/ai/claude'
+import { callLLM } from '@/lib/ai/llm-client'
 import { checkAIRateLimit } from '@/lib/ai/rate-limit'
 import { logActivity } from '@/lib/actions/activity-log'
 
@@ -202,8 +202,18 @@ Fix description: "${description}"`
 
   let generatedSql = ''
   try {
-    const raw = await callClaude(systemPrompt, userMessage, 1024)
-    generatedSql = raw
+    const result = await callLLM({
+      feature: 'manual_fix',
+      systemPrompt,
+      userMessage,
+      maxTokens: 1024,
+      projectId,
+      userId: user.id,
+      promptVersion: 'manual-fix-v1',
+      abuseUserId: user.id,
+      metadata: { table_id: tableId, field_id: fieldId ?? null },
+    })
+    generatedSql = result.text
       .replace(/^```(?:sql)?\s*/i, '')
       .replace(/\s*```\s*$/, '')
       .trim()

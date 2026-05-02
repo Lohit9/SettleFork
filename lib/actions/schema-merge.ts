@@ -50,7 +50,7 @@ import {
 } from '@/lib/utils/schema-priority'
 import { inferBasicType } from '@/lib/utils/infer-basic-type'
 import { normalizeName } from '@/lib/utils/name-normalize'
-import { callClaude } from '@/lib/ai/claude'
+import { callLLM } from '@/lib/ai/llm-client'
 
 export interface MergeConstraintsResult {
   fieldsUpdated: number
@@ -114,6 +114,7 @@ interface MatchedPair {
 export async function mergeConstraintsFromDDL(
   datasetId: string,
   projectId: string,
+  userId: string,
   ddlText: string,
   datasetRole: 'source' | 'target',
   schemaSourceOverride: SchemaSource = 'ddl_parsed'
@@ -194,7 +195,7 @@ export async function mergeConstraintsFromDDL(
   // equality misses all such pairs. The layered matcher progressively relaxes
   // its heuristic and falls back to a single Claude call when the
   // deterministic layers can't resolve a name. See `matchDdlTablesToExisting`.
-  const matches = await matchDdlTablesToExisting(parsed, existingTables)
+  const matches = await matchDdlTablesToExisting(projectId, userId, parsed, existingTables)
 
   // ── Step 4: per matched pair, merge fields ───────────────────────────────
   for (const { parsedTable, existingTable } of matches) {
@@ -577,6 +578,8 @@ const LAYER2_MIN_MATCHED_FIELDS = 3
  * in the returned array and are logged once each.
  */
 async function matchDdlTablesToExisting(
+  projectId: string,
+  userId: string,
   parsed: ParsedTable[],
   existing: ExistingTable[]
 ): Promise<MatchedPair[]> {
@@ -680,6 +683,8 @@ async function matchDdlTablesToExisting(
   if (stillUnmatchedDdl.length > 0 && stillUnmatchedExisting.length > 0) {
     try {
       const aiMatches = await layer3AIMatch(
+        projectId,
+        userId,
         stillUnmatchedDdl,
         stillUnmatchedExisting
       )
@@ -736,6 +741,8 @@ async function matchDdlTablesToExisting(
  * produced; the caller validates them.
  */
 async function layer3AIMatch(
+  projectId: string,
+  userId: string,
   unmatchedDdl: ParsedTable[],
   unmatchedExisting: ExistingTable[]
 ): Promise<Array<{ ddlName: string; existingId: string }>> {
@@ -772,7 +779,17 @@ ${ddlLines}
 ${existingLines}
 </unmatched_existing_tables>`
 
-  const raw = await callClaude(systemPrompt, userMessage, 1024)
+  const result = await callLLM({
+    feature: 'schema_merge_ai_match',
+    systemPrompt,
+    userMessage,
+    maxTokens: 1024,
+    projectId,
+    userId,
+    promptVersion: 'schema-merge-ai-match-v1',
+    abuseUserId: userId,
+  })
+  const raw = result.text
 
   // Strip any stray code fences Claude sometimes adds despite the instructions.
   const cleaned = raw

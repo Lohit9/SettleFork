@@ -40,7 +40,7 @@
 
 import { createClient } from '@/lib/supabase/server'
 import { supabaseAdmin } from '@/lib/supabase/admin'
-import { callClaude, callClaudeStreaming } from '@/lib/ai/claude'
+import { callLLM, callLLMStreaming } from '@/lib/ai/llm-client'
 import { checkAIRateLimit } from '@/lib/ai/rate-limit'
 import JSZip from 'jszip'
 import type { SqlDialect, ExecutionPackageFormat } from '@/lib/types/database'
@@ -342,7 +342,18 @@ async function generateExecutionPackageInternal(
 
     let rawSql: string
     try {
-      rawSql = await callClaude(bundle.systemPrompt, bundle.userMessage, bundle.maxTokens)
+      const result = await callLLM({
+        feature: 'outputs_execution_package_monolithic',
+        systemPrompt: bundle.systemPrompt,
+        userMessage: bundle.userMessage,
+        maxTokens: bundle.maxTokens,
+        projectId,
+        userId,
+        promptVersion: 'execution-package-monolithic-v1',
+        abuseUserId: userId,
+        metadata: { dialect },
+      })
+      rawSql = result.text
     } catch (err) {
       console.error('[generateExecutionPackage] Claude call failed:', err)
       return { success: false, error: 'Failed to generate execution package. Please try again.' }
@@ -443,9 +454,22 @@ async function generateCompartmentalizedPackageInternal(
     const bundle = assembleCompartmentalizedPrompt(ctx, dialect)
 
     let rawResponse: string
+    let primaryCallId: string
     console.log('[COMPARTMENTALIZED] CRITICAL reminder dialect:', dialect)
     try {
-      rawResponse = await callClaudeStreaming(bundle.systemPrompt, bundle.userMessage, bundle.maxTokens)
+      const result = await callLLMStreaming({
+        feature: 'outputs_execution_package_compartmentalized',
+        systemPrompt: bundle.systemPrompt,
+        userMessage: bundle.userMessage,
+        maxTokens: bundle.maxTokens,
+        projectId,
+        userId,
+        promptVersion: 'execution-package-compartmentalized-v1',
+        abuseUserId: userId,
+        metadata: { dialect },
+      })
+      rawResponse = result.text
+      primaryCallId = result.callId
     } catch (err) {
       console.error('[generateCompartmentalizedPackage] Claude call failed:', err)
       return { success: false, error: 'Failed to generate compartmentalized package. Please try again.' }
@@ -588,7 +612,19 @@ async function generateCompartmentalizedPackageInternal(
 
       let monoSql = ''
       try {
-        monoSql = await callClaude(bundle.fallbackSystemPrompt, bundle.fallbackUserMessage, bundle.fallbackMaxTokens)
+        const fallbackResult = await callLLM({
+          feature: 'outputs_execution_package_fallback',
+          systemPrompt: bundle.fallbackSystemPrompt,
+          userMessage: bundle.fallbackUserMessage,
+          maxTokens: bundle.fallbackMaxTokens,
+          projectId,
+          userId,
+          promptVersion: 'execution-package-fallback-v1',
+          parentCallId: primaryCallId,
+          abuseUserId: userId,
+          metadata: { dialect, dialect_validation_failed_count: failedCount },
+        })
+        monoSql = fallbackResult.text
         console.log('[generateCompartmentalizedPackage] Monolithic fallback SQL length:', monoSql.length)
       } catch (fallbackErr) {
         console.error('[generateCompartmentalizedPackage] Monolithic fallback call failed:', fallbackErr)

@@ -101,6 +101,7 @@ export async function uploadSchemaDocument(formData: FormData): Promise<UploadSc
           const mergeResult = await mergeConstraintsFromDDL(
             datasetId,
             projectId,
+            user.id,
             extractedText,
             dataset.role,
             'ddl_parsed'
@@ -133,7 +134,7 @@ export async function uploadSchemaDocument(formData: FormData): Promise<UploadSc
       // existing AI enrichment path below — the upload itself never fails.
       try {
         const { convertDocToDDL } = await import('@/lib/ai/ddl-conversion')
-        const convertedDDL = await convertDocToDDL(extractedText)
+        const convertedDDL = await convertDocToDDL(projectId, user.id, extractedText)
 
         if (convertedDDL) {
           const { data: dataset, error: datasetErr } = await supabaseAdmin
@@ -152,6 +153,7 @@ export async function uploadSchemaDocument(formData: FormData): Promise<UploadSc
             const mergeResult = await mergeConstraintsFromDDL(
               datasetId,
               projectId,
+              user.id,
               convertedDDL,
               dataset.role,
               'doc_enriched'

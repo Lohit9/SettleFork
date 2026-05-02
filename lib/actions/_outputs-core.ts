@@ -17,7 +17,7 @@
  */
 
 import { supabaseAdmin } from '@/lib/supabase/admin'
-import { callClaude } from '@/lib/ai/claude'
+import { callLLM } from '@/lib/ai/llm-client'
 import { buildAIContext, formatDocumentsForPrompt } from '@/lib/ai/context-builder'
 import { buildReadinessDocx } from '@/lib/reports/readiness-report-docx'
 import { computeReadinessScore } from '@/lib/quality/readiness-score'
@@ -759,7 +759,17 @@ export async function generateReadinessReportInternal(
 
   let reportText: string
   try {
-    reportText = await callClaude(bundle.systemPrompt, bundle.userMessage, bundle.maxTokens)
+    const result = await callLLM({
+      feature: 'outputs_readiness_report',
+      systemPrompt: bundle.systemPrompt,
+      userMessage: bundle.userMessage,
+      maxTokens: bundle.maxTokens,
+      projectId,
+      userId,
+      promptVersion: 'readiness-report-v1',
+      abuseUserId: userId,
+    })
+    reportText = result.text
   } catch {
     return { success: false, error: 'AI report generation failed. Please try again.' }
   }

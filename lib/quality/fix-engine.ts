@@ -11,7 +11,7 @@
 
 import { supabaseAdmin } from '@/lib/supabase/admin'
 import { createClient } from '@/lib/supabase/server'
-import { callClaude } from '@/lib/ai/claude'
+import { callLLM } from '@/lib/ai/llm-client'
 import { checkAIRateLimit } from '@/lib/ai/rate-limit'
 import { buildAIContext, formatFieldForPrompt, formatDocumentsForPrompt } from '@/lib/ai/context-builder'
 import { resolveFixTarget } from '@/lib/quality/fix-target'
@@ -415,10 +415,21 @@ Provide 2-3 fix options for this issue. Use table_id = '${effectiveTableId}' in 
 
   let parsed: ClaudeFixResponse
   try {
-    const raw = await callClaude(SYSTEM_PROMPT, userMessage, 4096)
+    const issueProjectId = (issue as unknown as { project_id: string }).project_id
+    const result = await callLLM({
+      feature: 'quality_fix_options',
+      systemPrompt: SYSTEM_PROMPT,
+      userMessage,
+      maxTokens: 4096,
+      projectId: issueProjectId,
+      userId: user.id,
+      promptVersion: 'quality-fix-options-v1',
+      abuseUserId: user.id,
+      metadata: { issue_id: issueId, effective_table_id: effectiveTableId },
+    })
 
     // Strip markdown fences if present
-    const cleaned = raw
+    const cleaned = result.text
       .replace(/^```(?:json)?\s*/i, '')
       .replace(/\s*```\s*$/, '')
       .trim()
