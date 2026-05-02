@@ -252,10 +252,15 @@ pinnedDescribeFn(
 // the tests need to be readable about who they're impersonating.
 const HERITAGE_OWNER_USER_ID = 'd5f9972e-03d3-4b7d-b0a4-a205aef0bedf'
 
-// Hoisted mock for callClaude so individual tests can customize the
+// Hoisted mock for the LLM call so individual tests can customize the
 // LLM response per case. `vi.hoisted` runs before the `vi.mock` factory
 // below, sidestepping the usual hoisting headache.
-const { callClaudeMock } = vi.hoisted(() => ({ callClaudeMock: vi.fn() }))
+//
+// Post-PR-7: `lib/ai/claude.ts` is deleted. The mock factory wraps a
+// vi.fn that returns RAW TEXT (matching the tests' `.mockResolvedValueOnce(JSON.stringify(...))`
+// pattern from before PR 6) so existing tests don't have to change to
+// the `CallLLMResult` object shape.
+const { callLLMMock } = vi.hoisted(() => ({ callLLMMock: vi.fn() }))
 
 // Mocks below only matter when the wrapper is imported (i.e. inside
 // the write-path describe block when HAS_ENV is true). For unit-test
@@ -359,24 +364,19 @@ vi.mock('next/cache', () => ({
   revalidatePath: () => {},
 }))
 
-vi.mock('@/lib/ai/claude', () => ({
-  callClaude: callClaudeMock,
-}))
-
-// Post-PR-6: the engine's `runMappingSuggestion` (and `runMappingGeneration`,
-// once heritage write-path coverage extends to it) call `callLLM` from
-// `@/lib/ai/llm-client`, not `callClaude` directly. Delegate to the
-// existing `callClaudeMock` so per-test `mockResolvedValueOnce(...)` and
-// `expect(callClaudeMock).toHaveBeenCalledTimes(...)` assertions keep
-// working unchanged. The wrapped result mirrors `CallLLMResult` with stub
-// values for the bookkeeping fields the integration tests don't inspect.
+// Mock the unified LLM wrapper. The engine paths (mapping_generate,
+// mapping_suggest, etc.) all call `callLLM` from `@/lib/ai/llm-client`.
+// We mock both single-shot and streaming. `callLLMMock` is the
+// underlying vi.fn that tests configure with `.mockResolvedValueOnce(...)`
+// — it returns a raw string, the wrapper stubs the rest of the
+// `CallLLMResult` shape. Tests don't inspect the bookkeeping fields.
 vi.mock('@/lib/ai/llm-client', () => ({
   callLLM: async (opts: {
     systemPrompt: string
     userMessage: string
     maxTokens?: number
   }) => {
-    const text = (await callClaudeMock(
+    const text = (await callLLMMock(
       opts.systemPrompt,
       opts.userMessage,
       opts.maxTokens,
@@ -397,7 +397,7 @@ vi.mock('@/lib/ai/llm-client', () => ({
     userMessage: string
     maxTokens?: number
   }) => {
-    const text = (await callClaudeMock(
+    const text = (await callLLMMock(
       opts.systemPrompt,
       opts.userMessage,
       opts.maxTokens,
@@ -765,7 +765,7 @@ writeDescribeFn(
 
     afterEach(async () => {
       await cleanupCreatedTfms()
-      callClaudeMock.mockReset()
+      callLLMMock.mockReset()
     })
 
     it('createFieldMapping happy path — single source, same-table', async () => {
@@ -976,7 +976,7 @@ writeDescribeFn(
       // wrapper resolves bare names → ids via a project-wide lookup, so
       // any field from `sameTableSources` is guaranteed to round-trip.
       const fieldName = fixtures.primarySource.name
-      callClaudeMock.mockResolvedValueOnce(
+      callLLMMock.mockResolvedValueOnce(
         JSON.stringify({
           source_field_names: [fieldName],
           combination_type: 'single',
@@ -1001,8 +1001,8 @@ writeDescribeFn(
       // Verify prompt assembly: the LLM was called once and the user
       // message references the target field name (proves identity read
       // succeeded — the regression we just fixed).
-      expect(callClaudeMock).toHaveBeenCalledTimes(1)
-      const userMsg = callClaudeMock.mock.calls[0][1] as string
+      expect(callLLMMock).toHaveBeenCalledTimes(1)
+      const userMsg = callLLMMock.mock.calls[0][1] as string
       expect(userMsg).toContain(fixtures.unmappedTargetField.name)
     }, 60_000)
 
@@ -1114,7 +1114,7 @@ writeDescribeFn(
       // wrapper's JSON.parse fails and we surface
       // AI_INVALID_RESPONSE. The form maps this to the "try again"
       // affordance per locked §7-OQ-2.
-      callClaudeMock.mockResolvedValueOnce(
+      callLLMMock.mockResolvedValueOnce(
         'I am not JSON, I am a prose response.',
       )
 
@@ -1126,7 +1126,7 @@ writeDescribeFn(
       expect(result.success).toBe(false)
       if (result.success) return
       expect(result.errorCode).toBe('AI_INVALID_RESPONSE')
-      expect(callClaudeMock).toHaveBeenCalledTimes(1)
+      expect(callLLMMock).toHaveBeenCalledTimes(1)
     }, 60_000)
 
     it('suggestMappingForTarget AI_INVALID_RESPONSE — LLM emits no resolvable field names (4a-4b)', async () => {
@@ -1139,7 +1139,7 @@ writeDescribeFn(
       // wrapper resolves names → ids, finds 0 hits, and surfaces
       // AI_INVALID_RESPONSE. This is the failure mode the form's
       // "AI did not return any usable source fields" banner targets.
-      callClaudeMock.mockResolvedValueOnce(
+      callLLMMock.mockResolvedValueOnce(
         JSON.stringify({
           source_field_names: ['__nope_nope_nope__', '__also_fake_field__'],
           combination_type: 'single',

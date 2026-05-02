@@ -94,7 +94,7 @@
 import { createClient } from '@/lib/supabase/server'
 import { supabaseAdmin } from '@/lib/supabase/admin'
 import { requireProjectPermission } from '@/lib/actions/role-resolution'
-import { callClaude } from '@/lib/ai/claude'
+import { callLLM } from '@/lib/ai/llm-client'
 import { extractTransformSQL } from '@/lib/ai/sql-extractor'
 import { checkAIRateLimit } from '@/lib/ai/rate-limit'
 import { buildAIContext, formatFieldForPrompt, formatDocumentsForPrompt } from '@/lib/ai/context-builder'
@@ -1326,7 +1326,18 @@ Generate the SQL transformation expression.`
   return guardWrites(ctx.projectId, async () => {
     let rawSql: string
     try {
-      rawSql = await callClaude(TRANSFORM_SYSTEM_PROMPT, userMessage, 2048)
+      const result = await callLLM({
+        feature: 'transform_generate',
+        systemPrompt: TRANSFORM_SYSTEM_PROMPT,
+        userMessage,
+        maxTokens: 2048,
+        projectId: ctx.projectId,
+        userId: user.id,
+        promptVersion: 'transform-generate-v1',
+        abuseUserId: user.id,
+        metadata: { tfm_id: ctx.tfm.id, target_field_id: tgtField.id },
+      })
+      rawSql = result.text
     } catch {
       return { success: false, error: 'AI generation failed. Please try again.' }
     }
@@ -2628,7 +2639,18 @@ ${aiCtx.intelligence_context ? aiCtx.intelligence_context + '\n\n' : ''}Suggest 
 
   let suggestion: string
   try {
-    suggestion = await callClaude(SUGGEST_SYSTEM_PROMPT, userMessage, 256)
+    const result = await callLLM({
+      feature: 'transform_describe',
+      systemPrompt: SUGGEST_SYSTEM_PROMPT,
+      userMessage,
+      maxTokens: 256,
+      projectId: ctx.projectId,
+      userId: user.id,
+      promptVersion: 'transform-describe-v1',
+      abuseUserId: user.id,
+      metadata: { tfm_id: ctx.tfm.id },
+    })
+    suggestion = result.text
   } catch {
     return { success: false, error: 'AI suggestion failed. Please describe the transformation manually.' }
   }

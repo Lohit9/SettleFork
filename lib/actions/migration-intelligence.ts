@@ -2,7 +2,7 @@
 
 import { createClient } from '@/lib/supabase/server'
 import { supabaseAdmin } from '@/lib/supabase/admin'
-import { callClaude } from '@/lib/ai/claude'
+import { callLLM } from '@/lib/ai/llm-client'
 import type { MigrationIntelligence } from '@/lib/types/database'
 
 // ── Types ─────────────────────────────────────────────────────────────────────
@@ -852,7 +852,17 @@ ${docText || '(no documentation uploaded)'}
     // ── Claude call ───────────────────────────────────────────────────────────
     let rawResponse: string
     try {
-      rawResponse = await callClaude(EXTRACTION_SYSTEM_PROMPT, userMessage, 4096)
+      const result = await callLLM({
+        feature: 'migration_intelligence',
+        systemPrompt: EXTRACTION_SYSTEM_PROMPT,
+        userMessage,
+        maxTokens: 4096,
+        projectId,
+        userId: user.id,
+        promptVersion: 'migration-intelligence-v1',
+        abuseUserId: user.id,
+      })
+      rawResponse = result.text
     } catch (claudeErr) {
       console.error('Migration intelligence: Claude call failed:', claudeErr)
       return { success: false, error: 'AI extraction failed' }

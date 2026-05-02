@@ -82,7 +82,7 @@ export async function parseDDLFile(
     }
 
     try {
-      tables = await parseDDLWithAI(ddlContent)
+      tables = await parseDDLWithAI(projectId, user.id, ddlContent)
       usedAI = true
     } catch {
       return {

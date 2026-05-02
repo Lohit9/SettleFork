@@ -6,7 +6,7 @@
  * SQL Server bracket notation, etc.).
  */
 
-import { callClaude } from '@/lib/ai/claude'
+import { callLLM } from '@/lib/ai/llm-client'
 
 // ── Public types ──────────────────────────────────────────────────────────────
 
@@ -383,8 +383,22 @@ For CHECK constraints, populate checkConstraint with one of these shapes:
 - Other:    { "type": "custom", "raw": "original constraint text" }
 If no CHECK constraint exists for the field, set checkConstraint to null.`
 
-export async function parseDDLWithAI(sql: string): Promise<ParsedTable[]> {
-  const raw = await callClaude(DDL_PARSE_SYSTEM, sql.slice(0, 12000), 4096)
+export async function parseDDLWithAI(
+  projectId: string,
+  userId: string,
+  sql: string,
+): Promise<ParsedTable[]> {
+  const result = await callLLM({
+    feature: 'ddl_parsing',
+    systemPrompt: DDL_PARSE_SYSTEM,
+    userMessage: sql.slice(0, 12000),
+    maxTokens: 4096,
+    projectId,
+    userId,
+    promptVersion: 'ddl-parsing-v1',
+    abuseUserId: userId,
+  })
+  const raw = result.text
 
   // Strip markdown fences if present
   const cleaned = raw

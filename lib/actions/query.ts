@@ -2,7 +2,7 @@
 
 import { createClient } from '@/lib/supabase/server'
 import { supabaseAdmin } from '@/lib/supabase/admin'
-import { callClaude } from '@/lib/ai/claude'
+import { callLLM } from '@/lib/ai/llm-client'
 import { extractSelectSQL } from '@/lib/ai/sql-extractor'
 import { checkAIRateLimit } from '@/lib/ai/rate-limit'
 import { buildAIContext, formatDocumentsForPrompt } from '@/lib/ai/context-builder'
@@ -206,8 +206,19 @@ Generate a SELECT query answering the question above. Before casting or filterin
   }
 
   let generatedSQL: string
+  let primaryCallId: string
   try {
-    const rawResponse = await callClaude(systemPrompt, userMessage)
+    const result = await callLLM({
+      feature: 'nl_to_sql',
+      systemPrompt,
+      userMessage,
+      projectId,
+      userId: user.id,
+      promptVersion: 'nl-to-sql-v1',
+      abuseUserId: user.id,
+    })
+    const rawResponse = result.text
+    primaryCallId = result.callId
     generatedSQL = extractSelectSQL(rawResponse)
     if (generatedSQL !== rawResponse.trim()) {
       console.log('[executeNLQuery] SQL extracted from mixed response, raw length:', rawResponse.length, 'extracted length:', generatedSQL.length)
@@ -263,7 +274,17 @@ Return ONLY the corrected raw SQL query — no explanation, no markdown, no back
 
       let retriedSQL: string
       try {
-        const rawRetry = await callClaude(systemPrompt, retryUserMessage)
+        const retryResult = await callLLM({
+          feature: 'nl_to_sql_retry',
+          systemPrompt,
+          userMessage: retryUserMessage,
+          projectId,
+          userId: user.id,
+          promptVersion: 'nl-to-sql-retry-v1',
+          parentCallId: primaryCallId,
+          abuseUserId: user.id,
+        })
+        const rawRetry = retryResult.text
         retriedSQL = extractSelectSQL(rawRetry)
         if (retriedSQL !== rawRetry.trim()) {
           console.log('[executeNLQuery] SQL extracted from mixed retry response, raw length:', rawRetry.length, 'extracted length:', retriedSQL.length)
@@ -457,11 +478,17 @@ Requirements:
 - Return ONLY a JSON array of 4 strings, no explanation, no markdown`
 
   try {
-    const raw = await callClaude(
+    const result = await callLLM({
+      feature: 'nl_suggest_queries',
       systemPrompt,
-      `Schema:\n${schemaSummary}\n\nGenerate 4 suggested queries.`,
-      256
-    )
+      userMessage: `Schema:\n${schemaSummary}\n\nGenerate 4 suggested queries.`,
+      maxTokens: 256,
+      projectId,
+      userId: user.id,
+      promptVersion: 'nl-suggest-queries-v1',
+      abuseUserId: user.id,
+    })
+    const raw = result.text
     const cleaned = raw.replace(/```json\s*/gi, '').replace(/```/g, '').trim()
     const parsed = JSON.parse(cleaned)
     if (Array.isArray(parsed) && parsed.length >= 1) return parsed.slice(0, 4)

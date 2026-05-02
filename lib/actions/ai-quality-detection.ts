@@ -2,7 +2,7 @@
 
 import { supabaseAdmin } from '@/lib/supabase/admin'
 import { createClient } from '@/lib/supabase/server'
-import { callClaude } from '@/lib/ai/claude'
+import { callLLM } from '@/lib/ai/llm-client'
 import { checkAIRateLimit } from '@/lib/ai/rate-limit'
 import {
   buildAIContext,
@@ -281,11 +281,18 @@ Identify additional data quality issues NOT already listed in existing_issues.`
   // Call Claude
   let rawResponse: string
   try {
-    rawResponse = await callClaude(
-      AI_DETECTION_SYSTEM_PROMPT,
+    const result = await callLLM({
+      feature: 'quality_detection_ai',
+      systemPrompt: AI_DETECTION_SYSTEM_PROMPT,
       userMessage,
-      2048
-    )
+      maxTokens: 2048,
+      projectId,
+      userId: user.id,
+      promptVersion: 'quality-detection-ai-v1',
+      abuseUserId: user.id,
+      metadata: { table_id: tableId },
+    })
+    rawResponse = result.text
   } catch (err) {
     console.warn('[ai-detection] Claude call failed:', err)
     return { issuesFound: 0, error: 'AI call failed' }

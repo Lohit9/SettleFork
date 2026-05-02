@@ -2,7 +2,7 @@
 
 import { createClient } from '@/lib/supabase/server'
 import { supabaseAdmin } from '@/lib/supabase/admin'
-import { callClaude } from '@/lib/ai/claude'
+import { callLLM } from '@/lib/ai/llm-client'
 import { checkAIRateLimit } from '@/lib/ai/rate-limit'
 import { buildMigrationRunbook } from '@/lib/reports/migration-runbook-docx'
 import type { RunbookData } from '@/lib/reports/migration-runbook-docx'
@@ -538,7 +538,17 @@ ${loadOrderText || '(no target tables)'}`
   // ── Claude call ────────────────────────────────────────────────────────────
   let rawResponse: string
   try {
-    rawResponse = await callClaude(RUNBOOK_SYSTEM_PROMPT, userMessage, 8000)
+    const result = await callLLM({
+      feature: 'outputs_migration_runbook',
+      systemPrompt: RUNBOOK_SYSTEM_PROMPT,
+      userMessage,
+      maxTokens: 8000,
+      projectId,
+      userId: user.id,
+      promptVersion: 'migration-runbook-v1',
+      abuseUserId: user.id,
+    })
+    rawResponse = result.text
   } catch {
     return { success: false, error: 'AI content generation failed. Please try again.' }
   }

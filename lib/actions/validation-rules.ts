@@ -2,7 +2,7 @@
 
 import { supabaseAdmin } from '@/lib/supabase/admin'
 import { createClient } from '@/lib/supabase/server'
-import { callClaude } from '@/lib/ai/claude'
+import { callLLM } from '@/lib/ai/llm-client'
 import { checkAIRateLimit } from '@/lib/ai/rate-limit'
 import { validateFixSQL } from '@/lib/quality/fix-sql-validator'
 import { logActivity } from '@/lib/actions/activity-log'
@@ -315,8 +315,18 @@ User's rule: "${naturalLanguageRule}"`
   }
 
   try {
-    const raw = await callClaude(systemPrompt, userMessage, 512)
-    const cleaned = raw
+    const result = await callLLM({
+      feature: 'validation_rule_from_nl',
+      systemPrompt,
+      userMessage,
+      maxTokens: 512,
+      projectId,
+      userId: user.id,
+      promptVersion: 'validation-rule-from-nl-v1',
+      abuseUserId: user.id,
+      metadata: { field_id: fieldId, table_id: tableId },
+    })
+    const cleaned = result.text
       .replace(/^```(?:json)?\s*/i, '')
       .replace(/\s*```\s*$/, '')
       .trim()
