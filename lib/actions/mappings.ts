@@ -5,6 +5,7 @@ import { createClient } from '@/lib/supabase/server'
 import { supabaseAdmin } from '@/lib/supabase/admin'
 import { requireProjectPermission } from '@/lib/actions/role-resolution'
 import { callClaude } from '@/lib/ai/claude'
+import { callLLM } from '@/lib/ai/llm-client'
 import { checkAIRateLimit } from '@/lib/ai/rate-limit'
 import { buildAIContext, formatSchemaForPrompt, formatDocumentsForPrompt } from '@/lib/ai/context-builder'
 import { logActivity } from '@/lib/actions/activity-log'
@@ -185,8 +186,25 @@ async function runMappingGenerationForPair(args: {
     const PER_BATCH_MAX_TOKENS = 16000
 
     let raw: string
+    let primaryCallId: string
     try {
-      raw = await callClaude(MAPPING_GENERATION_SYSTEM_PROMPT, userMessage, PER_BATCH_MAX_TOKENS)
+      const primaryResult = await callLLM({
+        feature: 'mapping_generate_legacy_pair',
+        systemPrompt: MAPPING_GENERATION_SYSTEM_PROMPT,
+        userMessage,
+        maxTokens: PER_BATCH_MAX_TOKENS,
+        projectId,
+        userId,
+        promptVersion: 'mapping-v1',
+        abuseUserId: userId,
+        metadata: {
+          source_table_id: sourceTableId,
+          target_table_id: targetTableId,
+          table_mapping_id: tableMappingId,
+        },
+      })
+      raw = primaryResult.text
+      primaryCallId = primaryResult.callId
     } catch (err) {
       console.error(`[Mapping] Claude call failed for pair ${sourceTables[0].name} → ${targetTables[0].name}:`, err)
       return { inserted: 0, error: err instanceof Error ? err.message : 'Claude call failed' }
@@ -197,12 +215,18 @@ async function runMappingGenerationForPair(args: {
       parsedResponse = parseClaudeJSON(raw)
     } catch {
       try {
-        const retryRaw = await callClaude(
-          'You are a JSON repair tool. Return ONLY valid JSON, nothing else.',
-          `The previous response was malformed JSON. Fix it and return ONLY the corrected JSON:\n\n${raw}`,
-          PER_BATCH_MAX_TOKENS,
-        )
-        parsedResponse = parseClaudeJSON(retryRaw)
+        const retryResult = await callLLM({
+          feature: 'mapping_generate_legacy_pair_repair',
+          systemPrompt: 'You are a JSON repair tool. Return ONLY valid JSON, nothing else.',
+          userMessage: `The previous response was malformed JSON. Fix it and return ONLY the corrected JSON:\n\n${raw}`,
+          maxTokens: PER_BATCH_MAX_TOKENS,
+          projectId,
+          userId,
+          promptVersion: 'mapping-repair-v1',
+          parentCallId: primaryCallId,
+          abuseUserId: userId,
+        })
+        parsedResponse = parseClaudeJSON(retryResult.text)
       } catch (retryErr) {
         console.error(`[Mapping] Failed to parse response for pair after retry:`, retryErr)
         return { inserted: 0, error: 'AI returned invalid response. Please try again.' }

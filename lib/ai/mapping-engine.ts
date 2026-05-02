@@ -17,7 +17,7 @@
 
 import type { SupabaseClient } from '@supabase/supabase-js'
 
-import { callClaude } from '@/lib/ai/claude'
+import { callLLM } from '@/lib/ai/llm-client'
 import {
   buildAIContext,
   formatDocumentsForPrompt,
@@ -1487,8 +1487,26 @@ ${otherSourcesList}
       })
 
       let batchRaw: string
+      let primaryCallId: string
       try {
-        batchRaw = await callClaude(MAPPING_GENERATION_SYSTEM_PROMPT, batchUserMessage, PER_BATCH_MAX_TOKENS)
+        const primaryResult = await callLLM({
+          feature: 'mapping_generate',
+          systemPrompt: MAPPING_GENERATION_SYSTEM_PROMPT,
+          userMessage: batchUserMessage,
+          maxTokens: PER_BATCH_MAX_TOKENS,
+          projectId,
+          userId,
+          promptVersion: 'mapping-v1',
+          abuseUserId: userId,
+          metadata: {
+            source_table_id: currentSourceRow?.id ?? null,
+            source_table_name: sourceCtx.table_name,
+            batch_index: i,
+            batch_total: sourceTablesForBatching.length,
+          },
+        })
+        batchRaw = primaryResult.text
+        primaryCallId = primaryResult.callId
       } catch (err) {
         console.error(`[Mapping] Claude call failed for source table ${sourceCtx.table_name}:`, err)
         continue
@@ -1499,12 +1517,18 @@ ${otherSourcesList}
         allTableMappings.push(...(batchParsed.table_mappings ?? []))
       } catch {
         try {
-          const retryRaw = await callClaude(
-            'You are a JSON repair tool. Return ONLY valid JSON, nothing else.',
-            `The previous response was malformed JSON. Fix it and return ONLY the corrected JSON:\n\n${batchRaw}`,
-            PER_BATCH_MAX_TOKENS,
-          )
-          const retryParsed = parseClaudeJSON(retryRaw)
+          const retryResult = await callLLM({
+            feature: 'mapping_generate_repair',
+            systemPrompt: 'You are a JSON repair tool. Return ONLY valid JSON, nothing else.',
+            userMessage: `The previous response was malformed JSON. Fix it and return ONLY the corrected JSON:\n\n${batchRaw}`,
+            maxTokens: PER_BATCH_MAX_TOKENS,
+            projectId,
+            userId,
+            promptVersion: 'mapping-repair-v1',
+            parentCallId: primaryCallId,
+            abuseUserId: userId,
+          })
+          const retryParsed = parseClaudeJSON(retryResult.text)
           allTableMappings.push(...(retryParsed.table_mappings ?? []))
         } catch (retryErr) {
           console.error(`[Mapping] Failed to parse mappings for source table ${sourceCtx.table_name} after retry:`, retryErr)
@@ -1908,7 +1932,18 @@ Respond with ONLY valid JSON in this exact shape:
   // ── Call LLM ─────────────────────────────────────────────────────────────
   let raw: string
   try {
-    raw = await callClaude(MAPPING_SUGGESTION_SYSTEM_PROMPT, userMsg, 1024)
+    const result = await callLLM({
+      feature: 'mapping_suggest',
+      systemPrompt: MAPPING_SUGGESTION_SYSTEM_PROMPT,
+      userMessage: userMsg,
+      maxTokens: 1024,
+      projectId,
+      userId,
+      promptVersion: 'suggest-v1',
+      abuseUserId: userId,
+      metadata: { target_field_id: targetFieldId },
+    })
+    raw = result.text
   } catch (err) {
     return {
       success: false,

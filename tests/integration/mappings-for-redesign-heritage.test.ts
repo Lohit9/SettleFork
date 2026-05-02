@@ -363,6 +363,58 @@ vi.mock('@/lib/ai/claude', () => ({
   callClaude: callClaudeMock,
 }))
 
+// Post-PR-6: the engine's `runMappingSuggestion` (and `runMappingGeneration`,
+// once heritage write-path coverage extends to it) call `callLLM` from
+// `@/lib/ai/llm-client`, not `callClaude` directly. Delegate to the
+// existing `callClaudeMock` so per-test `mockResolvedValueOnce(...)` and
+// `expect(callClaudeMock).toHaveBeenCalledTimes(...)` assertions keep
+// working unchanged. The wrapped result mirrors `CallLLMResult` with stub
+// values for the bookkeeping fields the integration tests don't inspect.
+vi.mock('@/lib/ai/llm-client', () => ({
+  callLLM: async (opts: {
+    systemPrompt: string
+    userMessage: string
+    maxTokens?: number
+  }) => {
+    const text = (await callClaudeMock(
+      opts.systemPrompt,
+      opts.userMessage,
+      opts.maxTokens,
+    )) as string
+    return {
+      text,
+      callId: '00000000-0000-0000-0000-000000000000',
+      inputTokens: 0,
+      outputTokens: 0,
+      cacheReadTokens: 0,
+      cacheCreationTokens: 0,
+      costUsd: null,
+      anthropicRequestId: null,
+    }
+  },
+  callLLMStreaming: async (opts: {
+    systemPrompt: string
+    userMessage: string
+    maxTokens?: number
+  }) => {
+    const text = (await callClaudeMock(
+      opts.systemPrompt,
+      opts.userMessage,
+      opts.maxTokens,
+    )) as string
+    return {
+      text,
+      callId: '00000000-0000-0000-0000-000000000000',
+      inputTokens: 0,
+      outputTokens: 0,
+      cacheReadTokens: 0,
+      cacheCreationTokens: 0,
+      costUsd: null,
+      anthropicRequestId: null,
+    }
+  },
+}))
+
 vi.mock('@/lib/ai/rate-limit', () => ({
   checkAIRateLimit: () => ({ allowed: true }),
 }))
