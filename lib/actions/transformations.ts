@@ -101,6 +101,7 @@ import { buildAIContext, formatFieldForPrompt, formatDocumentsForPrompt } from '
 import { fieldNeedsTransform, wrapFieldRefsInJsonb } from '@/lib/utils/transform-helpers'
 import { buildJoinSpec } from '@/lib/utils/transform-cross-table'
 import { logActivity } from '@/lib/actions/activity-log'
+import { logAIEdit } from '@/lib/actions/ai-edit-history'
 import { assertMappingWritesEnabled } from '@/lib/auth/mapping-writes'
 import { SHIMMED_ID_SEPARATOR } from '@/lib/compat/mapping-shim'
 import { revalidatePath } from 'next/cache'
@@ -1325,6 +1326,7 @@ Generate the SQL transformation expression.`
 
   return guardWrites(ctx.projectId, async () => {
     let rawSql: string
+    let llmCallId: string | null = null
     try {
       const result = await callLLM({
         feature: 'transform_generate',
@@ -1338,6 +1340,7 @@ Generate the SQL transformation expression.`
         metadata: { tfm_id: ctx.tfm.id, target_field_id: tgtField.id },
       })
       rawSql = result.text
+      llmCallId = result.callId
     } catch {
       return { success: false, error: 'AI generation failed. Please try again.' }
     }
@@ -1354,11 +1357,16 @@ Generate the SQL transformation expression.`
     }
 
     // Upsert transformation keyed on target_field_mapping_id.
+    // Pull generated_sql for previousSql capture (provenance diff).
     const { data: existing } = await supabase
       .from('transformations')
-      .select('id')
+      .select('id, generated_sql')
       .eq('target_field_mapping_id', ctx.tfm.id)
       .maybeSingle()
+
+    const previousSql: string | null = existing
+      ? ((existing as { generated_sql: string | null }).generated_sql ?? null)
+      : null
 
     let transformationId: string
 
@@ -1383,6 +1391,9 @@ Generate the SQL transformation expression.`
           description: description.trim(),
           generated_sql: sql,
           is_ai_generated: true,
+          // Freeze the AI's first proposal. Set on INSERT only; never
+          // overwritten on subsequent regenerations.
+          original_ai_generated_sql: sql,
           status: 'draft' as TransformationStatus,
           test_results: null,
         })
@@ -1405,6 +1416,22 @@ Generate the SQL transformation expression.`
       await staleFKDependentTransforms(ctx.projectId, tgtField.id)
     }
 
+    // Provenance: structured diff for ai_edit_history. ai_replaced when
+    // overwriting an existing AI value (regen); ai_proposed for the
+    // first AI write. llmCallId chains back to the callLLM result.
+    void logAIEdit({
+      projectId: ctx.projectId,
+      actorId: user.id,
+      entityType: 'transformation',
+      entityId: transformationId,
+      fieldPath: 'generated_sql',
+      oldValue: previousSql,
+      newValue: sql,
+      editKind: previousSql ? 'ai_replaced' : 'ai_proposed',
+      llmCallId,
+      metadata: { tfm_id: ctx.tfm.id, target_field_id: tgtField.id },
+    })
+
     return { success: true, sql, transformationId }
   })
 }
@@ -1423,9 +1450,14 @@ export async function updateTransformSQL(
 
   const { data: tx } = await supabaseAdmin
     .from('transformations')
-    .select('id, status, target_field_mapping_id')
+    .select('id, status, target_field_mapping_id, generated_sql, is_ai_generated')
     .eq('id', transformationId)
-    .maybeSingle<Pick<TransformationRow, 'id' | 'status' | 'target_field_mapping_id'>>()
+    .maybeSingle<
+      Pick<
+        TransformationRow,
+        'id' | 'status' | 'target_field_mapping_id' | 'generated_sql' | 'is_ai_generated'
+      >
+    >()
   if (!tx) return { success: false, error: 'Transformation not found' }
 
   const { data: tfmRow } = await supabaseAdmin
@@ -1446,6 +1478,9 @@ export async function updateTransformSQL(
     // so downstream readers know staged data no longer matches.
     const newStatus: TransformationStatus = tx.status === 'applied' ? 'stale' : 'draft'
 
+    const previousSql = tx.generated_sql ?? null
+    const wasAiGenerated = tx.is_ai_generated === true
+
     const { error } = await supabase
       .from('transformations')
       .update({
@@ -1457,6 +1492,22 @@ export async function updateTransformSQL(
       .eq('id', transformationId)
 
     if (error) return { success: false, error: 'Failed to update SQL' }
+
+    // Provenance: user is hand-editing SQL. human_modified when overwriting
+    // an AI value (the calibration-loop signal); human_authored when
+    // overwriting a previously hand-authored value or a blank.
+    void logAIEdit({
+      projectId: tfmRow.project_id,
+      actorId: user.id,
+      entityType: 'transformation',
+      entityId: transformationId,
+      fieldPath: 'generated_sql',
+      oldValue: previousSql,
+      newValue: cleanSql,
+      editKind: wasAiGenerated ? 'human_modified' : 'human_authored',
+      metadata: { previous_status: tx.status, next_status: newStatus },
+    })
+
     return { success: true }
   })
 }
@@ -1602,9 +1653,14 @@ export async function autoSaveTransform(
 
   const { data: tx } = await supabaseAdmin
     .from('transformations')
-    .select('id, target_field_mapping_id')
+    .select('id, target_field_mapping_id, generated_sql, is_ai_generated')
     .eq('id', transformationId)
-    .maybeSingle<Pick<TransformationRow, 'id' | 'target_field_mapping_id'>>()
+    .maybeSingle<
+      Pick<
+        TransformationRow,
+        'id' | 'target_field_mapping_id' | 'generated_sql' | 'is_ai_generated'
+      >
+    >()
   if (!tx) return { success: false, error: 'Transformation not found' }
 
   const { data: tfmRow } = await supabaseAdmin
@@ -1619,11 +1675,15 @@ export async function autoSaveTransform(
 
   return guardWrites(tfmRow.project_id, async () => {
     const cleanSql = sql.replace(/;+$/, '').trim()
+    const newSql = cleanSql || sql
     const updates: Record<string, unknown> = {
-      generated_sql: cleanSql || sql,
+      generated_sql: newSql,
       description: description.trim() || null,
     }
     if (status) updates.status = status
+
+    const previousSql = tx.generated_sql ?? null
+    const wasAiGenerated = tx.is_ai_generated === true
 
     const { error } = await supabase
       .from('transformations')
@@ -1631,6 +1691,23 @@ export async function autoSaveTransform(
       .eq('id', transformationId)
 
     if (error) return { success: false, error: 'Auto-save failed' }
+
+    // Only emit when the SQL actually changed; description-only saves
+    // do not produce an ai_edit_history entry.
+    if (newSql !== previousSql) {
+      void logAIEdit({
+        projectId: tfmRow.project_id,
+        actorId: user.id,
+        entityType: 'transformation',
+        entityId: transformationId,
+        fieldPath: 'generated_sql',
+        oldValue: previousSql,
+        newValue: newSql,
+        editKind: wasAiGenerated ? 'human_modified' : 'human_authored',
+        metadata: { source: 'auto_save' },
+      })
+    }
+
     return { success: true }
   })
 }
@@ -1937,9 +2014,11 @@ export async function saveTransformation(
 
   const { data: tx } = await supabaseAdmin
     .from('transformations')
-    .select('id, target_field_mapping_id')
+    .select('id, target_field_mapping_id, status')
     .eq('id', transformationId)
-    .maybeSingle<Pick<TransformationRow, 'id' | 'target_field_mapping_id'>>()
+    .maybeSingle<
+      Pick<TransformationRow, 'id' | 'target_field_mapping_id' | 'status'>
+    >()
   if (!tx) return { success: false, error: 'Transformation not found' }
 
   const { data: tfmRow } = await supabaseAdmin
@@ -1953,12 +2032,29 @@ export async function saveTransformation(
   if (!perm.allowed) return { success: false, error: perm.error }
 
   return guardWrites(tfmRow.project_id, async () => {
+    const previousStatus = tx.status
     const { error } = await supabase
       .from('transformations')
       .update({ status: 'saved' as TransformationStatus })
       .eq('id', transformationId)
 
     if (error) return { success: false, error: 'Failed to save transformation' }
+
+    // Provenance: status-only flip. The function name is "save" but the
+    // mutation is a status acceptance, not an SQL edit (SQL edits flow
+    // through updateTransformSQL/autoSaveTransform). human_accepted is
+    // the right edit_kind — the user is committing the existing value.
+    void logAIEdit({
+      projectId: tfmRow.project_id,
+      actorId: user.id,
+      entityType: 'transformation',
+      entityId: transformationId,
+      fieldPath: 'status',
+      oldValue: previousStatus,
+      newValue: 'saved',
+      editKind: 'human_accepted',
+    })
+
     return { success: true }
   })
 }
@@ -2086,9 +2182,9 @@ export async function applyTransform(
   // Gate: require the transform to have been tested first.
   const { data: trans } = await supabase
     .from('transformations')
-    .select('status')
+    .select('id, status')
     .eq('target_field_mapping_id', resolved.tfmId)
-    .maybeSingle<{ status: TransformationStatus }>()
+    .maybeSingle<{ id: string; status: TransformationStatus }>()
   if (trans && trans.status !== 'tested' && trans.status !== 'applied') {
     return { success: false, rowsAffected: 0, error: 'Run "Test Transform" before applying.' }
   }
@@ -2265,6 +2361,23 @@ export async function applyTransform(
       },
     )
 
+    // Provenance: status flip 'tested'/'applied' → 'applied'. Only emit
+    // when we actually have a transformation row (idempotent re-applies
+    // and missing-row no-ops both arrive here).
+    if (trans) {
+      void logAIEdit({
+        projectId: ctx.projectId,
+        actorId: user.id,
+        entityType: 'transformation',
+        entityId: trans.id,
+        fieldPath: 'status',
+        oldValue: trans.status,
+        newValue: 'applied',
+        editKind: 'human_accepted',
+        metadata: { rows_affected: totalRows },
+      })
+    }
+
     revalidatePath(`/app/projects/${ctx.projectId}`, 'layout')
     return { success: true, rowsAffected: totalRows }
   })
@@ -2323,11 +2436,35 @@ export async function revertTransform(
     }
 
     // Reset transform status from 'applied' back to 'tested'.
+    // Capture the row first so we can emit a structured-diff provenance
+    // event with the pre-revert id.
+    const { data: txBefore } = await supabaseAdmin
+      .from('transformations')
+      .select('id, status')
+      .eq('target_field_mapping_id', ctx.tfm.id)
+      .maybeSingle<{ id: string; status: TransformationStatus }>()
+
     await supabaseAdmin
       .from('transformations')
       .update({ status: 'tested' as TransformationStatus })
       .eq('target_field_mapping_id', ctx.tfm.id)
       .eq('status', 'applied')
+
+    // Provenance: revert is a human_rejected event on the previous
+    // 'applied' state. Only emit when we found an applied row to revert.
+    if (txBefore && txBefore.status === 'applied') {
+      void logAIEdit({
+        projectId: ctx.projectId,
+        actorId: user.id,
+        entityType: 'transformation',
+        entityId: txBefore.id,
+        fieldPath: 'status',
+        oldValue: 'applied',
+        newValue: 'tested',
+        editKind: 'human_rejected',
+        metadata: { rows_reverted: totalReverted },
+      })
+    }
 
     revalidatePath(`/app/projects/${ctx.projectId}`, 'layout')
     return { success: true, rowsAffected: totalReverted }
@@ -2638,6 +2775,7 @@ ${docsBlock}
 ${aiCtx.intelligence_context ? aiCtx.intelligence_context + '\n\n' : ''}Suggest a transformation description for this field mapping.`
 
   let suggestion: string
+  let llmCallId: string | null = null
   try {
     const result = await callLLM({
       feature: 'transform_describe',
@@ -2651,11 +2789,32 @@ ${aiCtx.intelligence_context ? aiCtx.intelligence_context + '\n\n' : ''}Suggest 
       metadata: { tfm_id: ctx.tfm.id },
     })
     suggestion = result.text
+    llmCallId = result.callId
   } catch {
     return { success: false, error: 'AI suggestion failed. Please describe the transformation manually.' }
   }
 
-  return { success: true, suggestion: suggestion.trim() }
+  const trimmed = suggestion.trim()
+
+  // Provenance: the suggestion does not mutate any DB row, but we record it
+  // anchored on the parent TFM so the eval harness can later answer "did
+  // the user accept the AI's suggested description in their generateTransform
+  // call?" The fieldPath is virtual (not a transformations column) — the
+  // generateTransform emit owns the actual generated_sql provenance.
+  void logAIEdit({
+    projectId: ctx.projectId,
+    actorId: user.id,
+    entityType: 'target_field_mapping',
+    entityId: ctx.tfm.id,
+    fieldPath: 'ai_suggested_description',
+    oldValue: null,
+    newValue: trimmed,
+    editKind: 'ai_proposed',
+    llmCallId,
+    metadata: { tfm_id: ctx.tfm.id },
+  })
+
+  return { success: true, suggestion: trimmed }
 }
 
 // ─── Dismiss / reinstate needs_transformation ────────────────────────────────
@@ -2683,6 +2842,9 @@ export async function dismissTransformNeeded(
   }
 
   const supabase = await createClient()
+  const {
+    data: { user },
+  } = await supabase.auth.getUser()
   const { error } = await supabase
     .from('target_field_mappings')
     .update({ needs_transformation: false })
@@ -2690,6 +2852,21 @@ export async function dismissTransformNeeded(
     .eq('project_id', projectId)
 
   if (error) throw new Error(`Failed to dismiss transform: ${error.message}`)
+
+  // Provenance: user is dismissing the AI's "needs transformation" flag
+  // for this TFM — a human_rejected event on that signal.
+  if (user) {
+    void logAIEdit({
+      projectId,
+      actorId: user.id,
+      entityType: 'target_field_mapping',
+      entityId: resolved.tfmId,
+      fieldPath: 'needs_transformation',
+      oldValue: true,
+      newValue: false,
+      editKind: 'human_rejected',
+    })
+  }
 
   revalidatePath(`/app/projects/${projectId}`, 'layout')
   return { success: true }
@@ -2714,6 +2891,9 @@ export async function reinstateTransformNeeded(
   }
 
   const supabase = await createClient()
+  const {
+    data: { user },
+  } = await supabase.auth.getUser()
   const { error } = await supabase
     .from('target_field_mappings')
     .update({ needs_transformation: true })
@@ -2721,6 +2901,21 @@ export async function reinstateTransformNeeded(
     .eq('project_id', projectId)
 
   if (error) throw new Error(`Failed to reinstate transform: ${error.message}`)
+
+  // Provenance: user is reverting a previous dismissal of the
+  // "needs transformation" flag — human_modified on that signal.
+  if (user) {
+    void logAIEdit({
+      projectId,
+      actorId: user.id,
+      entityType: 'target_field_mapping',
+      entityId: resolved.tfmId,
+      fieldPath: 'needs_transformation',
+      oldValue: false,
+      newValue: true,
+      editKind: 'human_modified',
+    })
+  }
 
   revalidatePath(`/app/projects/${projectId}`, 'layout')
   return { success: true }
@@ -2925,6 +3120,35 @@ export async function resetFieldTransform(
     .from('transformations')
     .delete()
     .eq('target_field_mapping_id', ctx.tfm.id)
+
+  // Provenance: deletion is a human_rejected event on the transformation.
+  // Best-effort auth.getUser() — this helper is called from already-guarded
+  // write paths in mappings.ts, so the request always has a user; failure
+  // to resolve simply skips the emit (fire-and-forget contract).
+  try {
+    const supabaseRls = await createClient()
+    const {
+      data: { user: actor },
+    } = await supabaseRls.auth.getUser()
+    if (actor) {
+      void logAIEdit({
+        projectId: ctx.projectId,
+        actorId: actor.id,
+        entityType: 'transformation',
+        entityId: transform.id,
+        fieldPath: 'status',
+        oldValue: transform.status,
+        newValue: null,
+        editKind: 'human_rejected',
+        metadata: {
+          reason: 'mapping_edited',
+          rows_reverted: rowsReverted,
+        },
+      })
+    }
+  } catch {
+    // Non-critical — never fail the parent flow because of provenance logging.
+  }
 
   // If this target field is a PK, stale all FK-dependent transforms.
   // Dynamic import avoids a circular dependency with fk-cascade.ts.
