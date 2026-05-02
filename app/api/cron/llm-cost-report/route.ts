@@ -121,7 +121,14 @@ export async function GET(request: Request) {
     return Response.json({ error: rowsErr.message }, { status: 500 })
   }
 
-  const safeRows = rows ?? []
+  // Phase 1 PR 10.1: exclude eval_* features from the production cost
+  // summary so the daily email reflects real customer traffic only.
+  // Eval spend is tracked separately via the eval CLI's per-run output.
+  // Filtering in JS rather than via PostgREST `not.like` to avoid
+  // escape-character subtleties; volume is trivially small.
+  const safeRows = (rows ?? []).filter(
+    (r) => !((r.feature as string) ?? '').startsWith('eval_'),
+  )
 
   // Aggregations
   const byFeature = new Map<string, FeatureRow>()

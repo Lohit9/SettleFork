@@ -54,6 +54,15 @@ export type LLMFeature =
   | 'ddl_parsing'
   | 'ddl_conversion'
   | 'quality_fix_options'
+  // Phase 1 — eval harness (PR 10+).
+  // Production AI entry points may receive a feature override at the
+  // edge so that calls originating from the eval runner write to
+  // llm_calls with an eval_* feature, keeping production cost reports
+  // clean. PR 10.1 adds the enum values; PR 10.4 wires the override.
+  | 'eval_mapping'
+  | 'eval_validation_rule'
+  | 'eval_transform' // reserved — wired in PR 11
+  | 'eval_nl_to_sql' // reserved — wired in PR 11
 
 // ─── Public option + result shapes ────────────────────────────────────────────
 

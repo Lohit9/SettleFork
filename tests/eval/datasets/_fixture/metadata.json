@@ -1,0 +1,7 @@
+{
+  "name": "_fixture",
+  "description": "Loader unit-test fixture. Not a real dataset; do NOT score against this.",
+  "version": "1",
+  "author": "claude (PR 10.1)",
+  "updatedAt": "2026-05-02"
+}

@@ -1,0 +1,18 @@
+{
+  "id": "_fixture/mapping/001-fixture",
+  "task": "mapping",
+  "input": {
+    "source_table": "fixture_source_table",
+    "target_table": "fixture_target_table"
+  },
+  "gold": {
+    "mappings": [
+      { "source_field": "id", "target_field": "id", "combination_type": "single" },
+      { "source_field": "name", "target_field": "label", "combination_type": "single" }
+    ]
+  },
+  "metadata": {
+    "author": "claude",
+    "difficulty": "easy"
+  }
+}
