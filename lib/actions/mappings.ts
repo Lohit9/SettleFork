@@ -8,6 +8,7 @@ import { callLLM } from '@/lib/ai/llm-client'
 import { checkAIRateLimit } from '@/lib/ai/rate-limit'
 import { buildAIContext, formatSchemaForPrompt, formatDocumentsForPrompt } from '@/lib/ai/context-builder'
 import { logActivity } from '@/lib/actions/activity-log'
+import { logAIEdit } from '@/lib/actions/ai-edit-history'
 import { assertMappingWritesEnabled } from '@/lib/auth/mapping-writes'
 import { computeOrphanedTfmsForTmDelete } from '@/lib/mappings/tm-ownership'
 import {
@@ -238,6 +239,11 @@ async function runMappingGenerationForPair(args: {
     const tgtTableKey = targetTables[0].name.toLowerCase()
 
     let totalInserted = 0
+    // Capture the time before persistence starts so the post-call SELECT
+    // for provenance only picks up TFMs THIS call created. Concurrent
+    // generations on the same TM are gated by guardWrites at the caller,
+    // so the time-window approach is safe in practice.
+    const persistStartIso = new Date().toISOString()
     for (const tm of parsedResponse.table_mappings ?? []) {
       if (!tm.source_table || !tm.target_table) continue
       if (bareTableName(tm.source_table) !== srcTableKey || bareTableName(tm.target_table) !== tgtTableKey) {
@@ -254,6 +260,55 @@ async function runMappingGenerationForPair(args: {
         sourceTableId,
       })
       totalInserted += inserted
+    }
+
+    // Provenance: the persistence path runs through dq_create_target_field_mapping
+    // (RPC) — not a direct .from('target_field_mappings').insert(...) — so the
+    // audit invariant test does not require this site to call logAIEdit.
+    // We emit anyway, anchored on the just-created TFMs found via a
+    // post-persist SELECT scoped to (project_id, table_mapping_id, time
+    // window). Engine-level callId chaining is a deliberate follow-up.
+    if (totalInserted > 0) {
+      const { data: createdTfms } = await supabaseAdmin
+        .from('target_field_mappings')
+        .select('id, target_field_id, confidence, ai_reasoning')
+        .eq('project_id', projectId)
+        .gte('created_at', persistStartIso)
+      const createdMappingSources = await supabaseAdmin
+        .from('mapping_sources')
+        .select('target_field_mapping_id')
+        .eq('source_table_id', sourceTableId)
+        .gte('created_at', persistStartIso)
+      const tfmIdsWithSources = new Set(
+        (createdMappingSources.data ?? []).map(
+          (r) => (r as { target_field_mapping_id: string }).target_field_mapping_id,
+        ),
+      )
+      for (const tfm of createdTfms ?? []) {
+        // Only emit for TFMs that have a source linking back to this TM's
+        // source_table — filters out unrelated concurrent inserts.
+        if (!tfmIdsWithSources.has(tfm.id)) continue
+        void logAIEdit({
+          projectId,
+          actorId: userId,
+          entityType: 'target_field_mapping',
+          entityId: tfm.id,
+          fieldPath: 'confidence',
+          oldValue: null,
+          newValue: {
+            confidence: tfm.confidence,
+            ai_reasoning: tfm.ai_reasoning,
+            target_field_id: tfm.target_field_id,
+          },
+          editKind: 'ai_proposed',
+          llmCallId: primaryCallId,
+          metadata: {
+            source_table_id: sourceTableId,
+            target_table_id: targetTableId,
+            table_mapping_id: tableMappingId,
+          },
+        })
+      }
     }
 
     return { inserted: totalInserted }
@@ -782,20 +837,64 @@ export async function updateFieldMappingStatus(
 
   return guardWrites(tfmLookup.project_id, async () => {
     if (decoded.kind === 'tfm-primary') {
+      const previousStatus = tfmLookup.status
       const { error } = await supabaseAdmin
         .from('target_field_mappings')
         .update({ status })
         .eq('id', decoded.tfmId)
       if (error) return { success: false, error: error.message, errorCode: 'INTERNAL' }
+
+      // Provenance: status flip on the TFM. Each new status maps to a
+      // distinct edit_kind so the calibration loop can distinguish
+      // approve / reject / send-back-to-review.
+      const editKind =
+        status === 'approved'
+          ? 'human_accepted'
+          : status === 'rejected'
+            ? 'human_rejected'
+            : 'human_modified'
+      void logAIEdit({
+        projectId: tfmLookup.project_id,
+        actorId: user.id,
+        entityType: 'target_field_mapping',
+        entityId: decoded.tfmId,
+        fieldPath: 'status',
+        oldValue: previousStatus,
+        newValue: status,
+        editKind,
+      })
     } else {
       // tfm-contributor: reject = delete the contributor row; approve = no-op.
       if (status === 'rejected') {
+        // Capture the contributor row so the diff carries the rejected
+        // source-field id rather than just "deleted."
+        const { data: contribBefore } = await supabaseAdmin
+          .from('mapping_sources')
+          .select('id, source_field_id, confidence, ai_reasoning, ordinal')
+          .eq('id', decoded.mappingSourceId)
+          .eq('target_field_mapping_id', decoded.tfmId)
+          .maybeSingle()
+
         const { error } = await supabaseAdmin
           .from('mapping_sources')
           .delete()
           .eq('id', decoded.mappingSourceId)
           .eq('target_field_mapping_id', decoded.tfmId)
         if (error) return { success: false, error: error.message, errorCode: 'INTERNAL' }
+
+        if (contribBefore) {
+          void logAIEdit({
+            projectId: tfmLookup.project_id,
+            actorId: user.id,
+            entityType: 'mapping_source',
+            entityId: decoded.mappingSourceId,
+            fieldPath: 'source_field_id',
+            oldValue: contribBefore,
+            newValue: null,
+            editKind: 'human_rejected',
+            metadata: { parent_tfm_id: decoded.tfmId },
+          })
+        }
       }
     }
 
@@ -2337,6 +2436,7 @@ ${remCtx.intelligence_context ? remCtx.intelligence_context + '\n\n' : ''}CRITIC
 {"field_mappings":[{"source_field":"name","target_field":"name","confidence":75,"reasoning":"reason","similar_fields_considered":[],"type_compatibility":"TYPE\u2192TYPE"}]}`
 
     let parsed: { field_mappings: ClaudeFieldMapping[] }
+    let suggestCallId: string | null = null
     try {
       const result = await callLLM({
         feature: 'mapping_suggest_legacy_bulk',
@@ -2349,6 +2449,7 @@ ${remCtx.intelligence_context ? remCtx.intelligence_context + '\n\n' : ''}CRITIC
         abuseUserId: user.id,
         metadata: { table_mapping_id: tableMappingId },
       })
+      suggestCallId = result.callId
       let cleaned = result.text.trim()
       if (cleaned.startsWith('```')) {
         cleaned = cleaned.replace(/^```(?:json)?\n?/, '').replace(/\n?```$/, '').trim()
@@ -2397,6 +2498,7 @@ ${remCtx.intelligence_context ? remCtx.intelligence_context + '\n\n' : ''}CRITIC
       return true
     })
 
+    const persistStartIso = new Date().toISOString()
     const persistRes = await persistClaudeFieldMappingsForTM({
       supabase,
       projectId: tm.project_id,
@@ -2406,6 +2508,52 @@ ${remCtx.intelligence_context ? remCtx.intelligence_context + '\n\n' : ''}CRITIC
       fieldMappings: safeMappings,
       sourceTableId: tm.source_table_id,
     })
+
+    // Provenance: same post-call SELECT pattern as runMappingGenerationForPair.
+    // The persist call routes through the dq_create_target_field_mapping RPC,
+    // so direct .from('target_field_mappings').insert is not visible to the
+    // audit invariant test — we emit anyway for eval-harness traceability.
+    if (persistRes.inserted > 0) {
+      const { data: createdTfms } = await supabaseAdmin
+        .from('target_field_mappings')
+        .select('id, target_field_id, confidence, ai_reasoning')
+        .eq('project_id', tm.project_id)
+        .gte('created_at', persistStartIso)
+      const { data: createdMs } = await supabaseAdmin
+        .from('mapping_sources')
+        .select('target_field_mapping_id')
+        .eq('source_table_id', tm.source_table_id)
+        .gte('created_at', persistStartIso)
+      const tfmIdsWithSources = new Set(
+        (createdMs ?? []).map(
+          (r) => (r as { target_field_mapping_id: string }).target_field_mapping_id,
+        ),
+      )
+      for (const tfm of createdTfms ?? []) {
+        if (!tfmIdsWithSources.has(tfm.id)) continue
+        void logAIEdit({
+          projectId: tm.project_id,
+          actorId: user.id,
+          entityType: 'target_field_mapping',
+          entityId: tfm.id,
+          fieldPath: 'confidence',
+          oldValue: null,
+          newValue: {
+            confidence: tfm.confidence,
+            ai_reasoning: tfm.ai_reasoning,
+            target_field_id: tfm.target_field_id,
+          },
+          editKind: 'ai_proposed',
+          llmCallId: suggestCallId,
+          metadata: {
+            source_table_id: tm.source_table_id,
+            target_table_id: tm.target_table_id,
+            table_mapping_id: tableMappingId,
+            origin: 'suggest_remaining',
+          },
+        })
+      }
+    }
 
     return { success: true, newMappingsCount: persistRes.inserted }
   })
