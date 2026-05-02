@@ -210,8 +210,10 @@ export function ProjectMenu({ project, onUpdate }: ProjectMenuProps) {
 
   const handleLabels = () => {
     if (!srcLabel.trim() || !tgtLabel.trim()) return
+    setActionError(null)
     startTransition(async () => {
-      await updateProjectLabels(project.id, srcLabel.trim(), tgtLabel.trim())
+      const result = await updateProjectLabels(project.id, srcLabel.trim(), tgtLabel.trim())
+      if (!result.success) { setActionError(result.error ?? 'Failed to update labels.'); return }
       closeModal()
       refresh()
     })
