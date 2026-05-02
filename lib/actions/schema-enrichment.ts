@@ -3,6 +3,7 @@
 import { createClient } from '@/lib/supabase/server'
 import { supabaseAdmin } from '@/lib/supabase/admin'
 import { callLLM } from '@/lib/ai/llm-client'
+import { EMIT_SCHEMA_CORRECTIONS_TOOL } from '@/lib/ai/tool-schemas'
 import { checkAIRateLimit } from '@/lib/ai/rate-limit'
 import { canOverride } from '@/lib/utils/schema-priority'
 
@@ -213,6 +214,8 @@ export async function enrichSchemaFromDocs(
     // ── Step 5: Call Claude ───────────────────────────────────────────────────
     const userMessage = `<inferred_schema>\n${inferredSchemaText}\n</inferred_schema>\n\n<schema_documentation>\n${docsText}\n</schema_documentation>\n\nCompare the inferred schema against the documentation and return corrections for the "${table.name}" table only.`
 
+    // PR 12 H1: tool use under flag ON; legacy text+JSON.parse under flag OFF.
+    const phase2Enabled = process.env.AI_PHASE_2_ENABLED === '1'
     // `projectId` already resolved at the top of the function (line 149)
     // for downstream conflict-routing — reuse it here for the log row.
     const result = await callLLM({
@@ -225,18 +228,23 @@ export async function enrichSchemaFromDocs(
       promptVersion: 'schema-enrichment-v1',
       abuseUserId: user.id,
       metadata: { dataset_id: datasetId, table_id: tableId, table_name: table.name },
+      ...(phase2Enabled && { tool: EMIT_SCHEMA_CORRECTIONS_TOOL }),
     })
-    const raw = result.text
 
     // ── Step 6: Parse response ────────────────────────────────────────────────
     let parsed: ClaudeSchemaResponse
-    try {
-      // Strip markdown fences if present
-      const cleaned = raw.replace(/^```(?:json)?\s*/i, '').replace(/\s*```\s*$/, '').trim()
-      parsed = JSON.parse(cleaned)
-    } catch {
-      console.error('[enrichSchemaFromDocs] Failed to parse Claude response:', raw)
-      return { success: false, corrections: [], correctedFields: 0, error: 'Failed to parse AI response' }
+    if (result.kind === 'toolUse') {
+      parsed = result.toolUse.input as unknown as ClaudeSchemaResponse
+    } else {
+      const raw = result.text
+      try {
+        // Strip markdown fences if present
+        const cleaned = raw.replace(/^```(?:json)?\s*/i, '').replace(/\s*```\s*$/, '').trim()
+        parsed = JSON.parse(cleaned)
+      } catch {
+        console.error('[enrichSchemaFromDocs] Failed to parse Claude response:', raw)
+        return { success: false, corrections: [], correctedFields: 0, error: 'Failed to parse AI response' }
+      }
     }
 
     if (!Array.isArray(parsed.corrections)) {

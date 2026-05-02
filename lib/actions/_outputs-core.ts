@@ -769,6 +769,14 @@ export async function generateReadinessReportInternal(
       promptVersion: 'readiness-report-v1',
       abuseUserId: userId,
     })
+    // PR 12: this SQL/text callsite is migrated to tool use in
+    // sub-commit 12.2; for now the call passes no `tool`, so the
+    // result is always { kind: 'text' }. The narrowing check below
+    // satisfies the discriminated-union compiler without changing
+    // runtime behavior.
+    if (result.kind !== 'text') {
+      throw new Error('outputs_readiness_report: unexpected toolUse response')
+    }
     reportText = result.text
   } catch {
     return { success: false, error: 'AI report generation failed. Please try again.' }

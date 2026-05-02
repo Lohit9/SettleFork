@@ -213,6 +213,10 @@ Fix description: "${description}"`
       abuseUserId: user.id,
       metadata: { table_id: tableId, field_id: fieldId ?? null },
     })
+    // PR 12: SQL/text callsite — migrated in sub-commit 12.2.
+    if (result.kind !== 'text') {
+      throw new Error('manual_fix: unexpected toolUse response')
+    }
     generatedSql = result.text
       .replace(/^```(?:sql)?\s*/i, '')
       .replace(/\s*```\s*$/, '')

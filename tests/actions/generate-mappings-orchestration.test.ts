@@ -717,12 +717,16 @@ describe('[generateMappings] G2 — individual Claude throw is non-fatal (per-ba
     //
     // Indentation note: post-PR-4 the orchestrator is at top level
     // in the engine. The catch block's closing brace and the next
-    // `try {` are at 6-space indent (one level shallower than the
+    // statement are at 6-space indent (one level shallower than the
     // legacy 8-space indent under `guardWrites`).
+    //
+    // PR 12 update: the catch block is now followed by the
+    // `if (primaryResult.kind === 'toolUse')` discriminator branch
+    // (rather than another `try {`); the marker tracks that.
     const claudeCatchSlice = sliceBetween(
       RUN_GEN_BODY,
       'Claude call failed for source table',
-      '}\n\n      try {',
+      "}\n\n      if (primaryResult.kind === 'toolUse')",
     )
     expect(claudeCatchSlice).toContain('continue')
     expect(claudeCatchSlice).not.toContain('return {')

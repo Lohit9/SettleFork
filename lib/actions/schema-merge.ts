@@ -51,6 +51,7 @@ import {
 import { inferBasicType } from '@/lib/utils/infer-basic-type'
 import { normalizeName } from '@/lib/utils/name-normalize'
 import { callLLM } from '@/lib/ai/llm-client'
+import { EMIT_TABLE_MATCHES_TOOL } from '@/lib/ai/tool-schemas'
 
 export interface MergeConstraintsResult {
   fieldsUpdated: number
@@ -779,6 +780,8 @@ ${ddlLines}
 ${existingLines}
 </unmatched_existing_tables>`
 
+  // PR 12 H1: tool use under flag ON; legacy text+JSON.parse under flag OFF.
+  const phase2Enabled = process.env.AI_PHASE_2_ENABLED === '1'
   const result = await callLLM({
     feature: 'schema_merge_ai_match',
     systemPrompt,
@@ -788,27 +791,33 @@ ${existingLines}
     userId,
     promptVersion: 'schema-merge-ai-match-v1',
     abuseUserId: userId,
+    ...(phase2Enabled && { tool: EMIT_TABLE_MATCHES_TOOL }),
   })
-  const raw = result.text
 
-  // Strip any stray code fences Claude sometimes adds despite the instructions.
-  const cleaned = raw
-    .replace(/^```(?:json)?\s*/i, '')
-    .replace(/\s*```\s*$/i, '')
-    .trim()
+  let maybeMatches: unknown
+  if (result.kind === 'toolUse') {
+    maybeMatches = (result.toolUse.input as { matches?: unknown }).matches
+  } else {
+    const raw = result.text
+    // Strip any stray code fences Claude sometimes adds despite the instructions.
+    const cleaned = raw
+      .replace(/^```(?:json)?\s*/i, '')
+      .replace(/\s*```\s*$/i, '')
+      .trim()
 
-  let parsed: unknown
-  try {
-    parsed = JSON.parse(cleaned)
-  } catch {
-    console.warn('[DDL Merge] Layer 3: Claude returned non-JSON; skipping')
-    return []
+    let parsed: unknown
+    try {
+      parsed = JSON.parse(cleaned)
+    } catch {
+      console.warn('[DDL Merge] Layer 3: Claude returned non-JSON; skipping')
+      return []
+    }
+
+    maybeMatches =
+      parsed && typeof parsed === 'object' && 'matches' in parsed
+        ? (parsed as { matches?: unknown }).matches
+        : null
   }
-
-  const maybeMatches =
-    parsed && typeof parsed === 'object' && 'matches' in parsed
-      ? (parsed as { matches?: unknown }).matches
-      : null
   if (!Array.isArray(maybeMatches)) return []
 
   const ddlNameSet = new Set(unmatchedDdl.map((d) => d.name))

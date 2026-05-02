@@ -3,6 +3,7 @@
 import { createClient } from '@/lib/supabase/server'
 import { supabaseAdmin } from '@/lib/supabase/admin'
 import { callLLM } from '@/lib/ai/llm-client'
+import { EMIT_EXTRACTED_PATTERNS_TOOL } from '@/lib/ai/tool-schemas'
 import type { MigrationIntelligence } from '@/lib/types/database'
 
 // ── Types ─────────────────────────────────────────────────────────────────────
@@ -850,9 +851,13 @@ ${docText || '(no documentation uploaded)'}
 </documentation>`
 
     // ── Claude call ───────────────────────────────────────────────────────────
-    let rawResponse: string
+    // PR 12 H1: tool use under flag ON; legacy text+JSON.parse under flag OFF.
+    // Tool input wraps the patterns array under a `patterns` property
+    // because Anthropic input_schema.type must be 'object'.
+    const phase2Enabled = process.env.AI_PHASE_2_ENABLED === '1'
+    let result: Awaited<ReturnType<typeof callLLM>>
     try {
-      const result = await callLLM({
+      result = await callLLM({
         feature: 'migration_intelligence',
         systemPrompt: EXTRACTION_SYSTEM_PROMPT,
         userMessage,
@@ -861,8 +866,8 @@ ${docText || '(no documentation uploaded)'}
         userId: user.id,
         promptVersion: 'migration-intelligence-v1',
         abuseUserId: user.id,
+        ...(phase2Enabled && { tool: EMIT_EXTRACTED_PATTERNS_TOOL }),
       })
-      rawResponse = result.text
     } catch (claudeErr) {
       console.error('Migration intelligence: Claude call failed:', claudeErr)
       return { success: false, error: 'AI extraction failed' }
@@ -870,20 +875,29 @@ ${docText || '(no documentation uploaded)'}
 
     // ── Parse Claude response ─────────────────────────────────────────────────
     let extractedPatterns: ExtractedPattern[]
-    try {
-      // Strip any accidental markdown fences Claude may include
-      const cleaned = rawResponse
-        .replace(/^```(?:json)?\s*/i, '')
-        .replace(/\s*```\s*$/, '')
-        .trim()
-      extractedPatterns = JSON.parse(cleaned)
-
+    if (result.kind === 'toolUse') {
+      const input = result.toolUse.input as { patterns?: ExtractedPattern[] }
+      extractedPatterns = input.patterns ?? []
       if (!Array.isArray(extractedPatterns)) {
-        throw new Error('Response is not a JSON array')
+        return { success: false, error: 'Failed to parse AI response as JSON' }
       }
-    } catch (parseErr) {
-      console.error('Migration intelligence: JSON parse failed. Raw response:', rawResponse, parseErr)
-      return { success: false, error: 'Failed to parse AI response as JSON' }
+    } else {
+      const rawResponse = result.text
+      try {
+        // Strip any accidental markdown fences Claude may include
+        const cleaned = rawResponse
+          .replace(/^```(?:json)?\s*/i, '')
+          .replace(/\s*```\s*$/, '')
+          .trim()
+        extractedPatterns = JSON.parse(cleaned)
+
+        if (!Array.isArray(extractedPatterns)) {
+          throw new Error('Response is not a JSON array')
+        }
+      } catch (parseErr) {
+        console.error('Migration intelligence: JSON parse failed. Raw response:', rawResponse, parseErr)
+        return { success: false, error: 'Failed to parse AI response as JSON' }
+      }
     }
 
     // ── Deduplicate and upsert ────────────────────────────────────────────────

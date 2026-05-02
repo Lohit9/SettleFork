@@ -7,6 +7,7 @@
  */
 
 import { callLLM } from '@/lib/ai/llm-client'
+import { EMIT_PARSED_DDL_TOOL } from '@/lib/ai/tool-schemas'
 
 // ── Public types ──────────────────────────────────────────────────────────────
 
@@ -388,6 +389,8 @@ export async function parseDDLWithAI(
   userId: string,
   sql: string,
 ): Promise<ParsedTable[]> {
+  // PR 12 H1: tool use under flag ON; legacy text+JSON.parse under flag OFF.
+  const phase2Enabled = process.env.AI_PHASE_2_ENABLED === '1'
   const result = await callLLM({
     feature: 'ddl_parsing',
     systemPrompt: DDL_PARSE_SYSTEM,
@@ -397,16 +400,21 @@ export async function parseDDLWithAI(
     userId,
     promptVersion: 'ddl-parsing-v1',
     abuseUserId: userId,
+    ...(phase2Enabled && { tool: EMIT_PARSED_DDL_TOOL }),
   })
-  const raw = result.text
 
-  // Strip markdown fences if present
-  const cleaned = raw
-    .replace(/^```(?:json)?\s*/i, '')
-    .replace(/\s*```\s*$/, '')
-    .trim()
+  let parsed: { tables: ParsedTable[] }
+  if (result.kind === 'toolUse') {
+    parsed = result.toolUse.input as { tables: ParsedTable[] }
+  } else {
+    // Strip markdown fences if present
+    const cleaned = result.text
+      .replace(/^```(?:json)?\s*/i, '')
+      .replace(/\s*```\s*$/, '')
+      .trim()
 
-  const parsed = JSON.parse(cleaned) as { tables: ParsedTable[] }
+    parsed = JSON.parse(cleaned) as { tables: ParsedTable[] }
+  }
 
   if (!Array.isArray(parsed?.tables)) return []
 

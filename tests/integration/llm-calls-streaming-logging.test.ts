@@ -79,6 +79,9 @@ describeFn('[integration] callLLMStreaming logs a row in llm_calls', () => {
       metadata: { test: 'llm_calls_streaming_logging_sanity_check' },
     })
 
+    // PR 12: no tool passed → always kind='text'.
+    expect(result.kind).toBe('text')
+    if (result.kind !== 'text') return
     expect(result.text).toBeTruthy()
     expect(result.callId).toMatch(
       /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/,

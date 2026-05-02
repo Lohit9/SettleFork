@@ -3,6 +3,7 @@
 import { supabaseAdmin } from '@/lib/supabase/admin'
 import { createClient } from '@/lib/supabase/server'
 import { callLLM } from '@/lib/ai/llm-client'
+import { EMIT_VALIDATION_RULE_TOOL } from '@/lib/ai/tool-schemas'
 import { checkAIRateLimit } from '@/lib/ai/rate-limit'
 import { validateFixSQL } from '@/lib/quality/fix-sql-validator'
 import { logActivity } from '@/lib/actions/activity-log'
@@ -328,6 +329,8 @@ rule_config formats by type:
 Sample values: ${JSON.stringify(sampleValues)}
 User's rule: "${naturalLanguageRule}"`
 
+  // PR 12 H1: tool use under flag ON; legacy text+JSON.parse under flag OFF.
+  const phase2Enabled = process.env.AI_PHASE_2_ENABLED === '1'
   let parsed: {
     name: string
     description: string
@@ -348,13 +351,18 @@ User's rule: "${naturalLanguageRule}"`
       promptVersion: 'validation-rule-from-nl-v1',
       abuseUserId: user.id,
       metadata: { field_id: fieldId, table_id: tableId },
+      ...(phase2Enabled && { tool: EMIT_VALIDATION_RULE_TOOL }),
     })
     llmCallId = result.callId
-    const cleaned = result.text
-      .replace(/^```(?:json)?\s*/i, '')
-      .replace(/\s*```\s*$/, '')
-      .trim()
-    parsed = JSON.parse(cleaned)
+    if (result.kind === 'toolUse') {
+      parsed = result.toolUse.input as typeof parsed
+    } else {
+      const cleaned = result.text
+        .replace(/^```(?:json)?\s*/i, '')
+        .replace(/\s*```\s*$/, '')
+        .trim()
+      parsed = JSON.parse(cleaned)
+    }
   } catch {
     return { success: false, error: 'AI returned an unexpected response. Please try again.' }
   }

@@ -5,6 +5,10 @@ import { createClient } from '@/lib/supabase/server'
 import { supabaseAdmin } from '@/lib/supabase/admin'
 import { requireProjectPermission } from '@/lib/actions/role-resolution'
 import { callLLM, type LLMFeature } from '@/lib/ai/llm-client'
+import {
+  EMIT_TABLE_MAPPINGS_TOOL,
+  EMIT_FIELD_MAPPINGS_TOOL,
+} from '@/lib/ai/tool-schemas'
 import { checkAIRateLimit } from '@/lib/ai/rate-limit'
 import { buildAIContext, formatSchemaForPrompt, formatDocumentsForPrompt } from '@/lib/ai/context-builder'
 import { logActivity } from '@/lib/actions/activity-log'
@@ -206,10 +210,13 @@ export async function runMappingGenerationForPair(args: {
 
     const PER_BATCH_MAX_TOKENS = 16000
 
-    let raw: string
-    let primaryCallId: string
+    // PR 12 H1: tool use under flag ON; legacy text + parseClaudeJSON +
+    // repair-retry under flag OFF. The legacy branch is preserved
+    // verbatim so heritage byte-identical fingerprints hold.
+    const phase2Enabled = process.env.AI_PHASE_2_ENABLED === '1'
+    let primaryResult: Awaited<ReturnType<typeof callLLM>>
     try {
-      const primaryResult = await callLLM({
+      primaryResult = await callLLM({
         // featureOverride lets the eval runner tag this call as
         // `eval_mapping` so it's excluded from the production cost
         // report. Production callers omit it and the canonical feature
@@ -227,39 +234,58 @@ export async function runMappingGenerationForPair(args: {
           target_table_id: targetTableId,
           table_mapping_id: tableMappingId,
         },
+        ...(phase2Enabled && { tool: EMIT_TABLE_MAPPINGS_TOOL }),
       })
-      raw = primaryResult.text
-      primaryCallId = primaryResult.callId
     } catch (err) {
       console.error(`[Mapping] Claude call failed for pair ${sourceTables[0].name} → ${targetTables[0].name}:`, err)
       return { inserted: 0, error: err instanceof Error ? err.message : 'Claude call failed' }
     }
 
+    // primaryCallId is used downstream by logAIEdit for provenance
+    // chaining — keep it at function scope so the post-persist provenance
+    // emit (around line 356) can reference it under both branches.
+    const primaryCallId = primaryResult.callId
+
     let parsedResponse: ClaudeResponse
-    try {
-      parsedResponse = parseClaudeJSON(raw)
-    } catch {
+    if (primaryResult.kind === 'toolUse') {
+      // PR 12 flag-ON: schema-validated tool input; the
+      // `mapping_generate_legacy_pair_repair` retry below is dead on
+      // this branch (no parse failure mode to recover from).
+      parsedResponse = primaryResult.toolUse.input as unknown as ClaudeResponse
+    } else {
+      // PR 12 flag-OFF: legacy parseClaudeJSON + repair-retry.
+      const raw = primaryResult.text
       try {
-        const retryResult = await callLLM({
-          // Per the PR 10.4 decision: when the override is set, the
-          // JSON-repair retry rolls up under the SAME eval feature
-          // (eval_mapping) — eval treats primary+repair as one logical
-          // call. Production callers continue to log under the
-          // canonical _repair feature taxonomy.
-          feature: featureOverride ?? 'mapping_generate_legacy_pair_repair',
-          systemPrompt: 'You are a JSON repair tool. Return ONLY valid JSON, nothing else.',
-          userMessage: `The previous response was malformed JSON. Fix it and return ONLY the corrected JSON:\n\n${raw}`,
-          maxTokens: PER_BATCH_MAX_TOKENS,
-          projectId,
-          userId,
-          promptVersion: 'mapping-repair-v1',
-          parentCallId: primaryCallId,
-          abuseUserId: userId,
-        })
-        parsedResponse = parseClaudeJSON(retryResult.text)
-      } catch (retryErr) {
-        console.error(`[Mapping] Failed to parse response for pair after retry:`, retryErr)
-        return { inserted: 0, error: 'AI returned invalid response. Please try again.' }
+        parsedResponse = parseClaudeJSON(raw)
+      } catch {
+        try {
+          const retryResult = await callLLM({
+            // Per the PR 10.4 decision: when the override is set, the
+            // JSON-repair retry rolls up under the SAME eval feature
+            // (eval_mapping) — eval treats primary+repair as one logical
+            // call. Production callers continue to log under the
+            // canonical _repair feature taxonomy.
+            feature: featureOverride ?? 'mapping_generate_legacy_pair_repair',
+            systemPrompt: 'You are a JSON repair tool. Return ONLY valid JSON, nothing else.',
+            userMessage: `The previous response was malformed JSON. Fix it and return ONLY the corrected JSON:\n\n${raw}`,
+            maxTokens: PER_BATCH_MAX_TOKENS,
+            projectId,
+            userId,
+            promptVersion: 'mapping-repair-v1',
+            parentCallId: primaryCallId,
+            abuseUserId: userId,
+          })
+          // The retry runs on the legacy text path (no tool passed)
+          // so the result is always { kind: 'text', text }; the
+          // discriminator narrowing is required for tsc.
+          if (retryResult.kind !== 'text') {
+            throw new Error('Unexpected toolUse on mapping_generate_legacy_pair_repair retry')
+          }
+          parsedResponse = parseClaudeJSON(retryResult.text)
+        } catch (retryErr) {
+          console.error(`[Mapping] Failed to parse response for pair after retry:`, retryErr)
+          return { inserted: 0, error: 'AI returned invalid response. Please try again.' }
+        }
       }
     }
 
@@ -2465,6 +2491,8 @@ ${remDocBlock}
 ${remCtx.intelligence_context ? remCtx.intelligence_context + '\n\n' : ''}CRITICAL: Use ONLY the bare field name (not table.field). Respond with ONLY valid JSON:
 {"field_mappings":[{"source_field":"name","target_field":"name","confidence":75,"reasoning":"reason","similar_fields_considered":[],"type_compatibility":"TYPE\u2192TYPE"}]}`
 
+    // PR 12 H1: tool use under flag ON; legacy text+JSON.parse under flag OFF.
+    const phase2EnabledBulk = process.env.AI_PHASE_2_ENABLED === '1'
     let parsed: { field_mappings: ClaudeFieldMapping[] }
     let suggestCallId: string | null = null
     try {
@@ -2478,14 +2506,20 @@ ${remCtx.intelligence_context ? remCtx.intelligence_context + '\n\n' : ''}CRITIC
         promptVersion: 'mapping-suggest-legacy-bulk-v1',
         abuseUserId: user.id,
         metadata: { table_mapping_id: tableMappingId },
+        ...(phase2EnabledBulk && { tool: EMIT_FIELD_MAPPINGS_TOOL }),
       })
       suggestCallId = result.callId
-      let cleaned = result.text.trim()
-      if (cleaned.startsWith('```')) {
-        cleaned = cleaned.replace(/^```(?:json)?\n?/, '').replace(/\n?```$/, '').trim()
+      if (result.kind === 'toolUse') {
+        parsed = result.toolUse.input as { field_mappings: ClaudeFieldMapping[] }
+        if (!Array.isArray(parsed.field_mappings)) throw new Error('bad structure')
+      } else {
+        let cleaned = result.text.trim()
+        if (cleaned.startsWith('```')) {
+          cleaned = cleaned.replace(/^```(?:json)?\n?/, '').replace(/\n?```$/, '').trim()
+        }
+        parsed = JSON.parse(cleaned)
+        if (!Array.isArray(parsed.field_mappings)) throw new Error('bad structure')
       }
-      parsed = JSON.parse(cleaned)
-      if (!Array.isArray(parsed.field_mappings)) throw new Error('bad structure')
     } catch {
       return {
         success: false,

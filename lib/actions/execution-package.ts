@@ -353,6 +353,10 @@ async function generateExecutionPackageInternal(
         abuseUserId: userId,
         metadata: { dialect },
       })
+      // PR 12: SQL/text callsite — migrated in sub-commit 12.2.
+      if (result.kind !== 'text') {
+        throw new Error('outputs_execution_package_monolithic: unexpected toolUse response')
+      }
       rawSql = result.text
     } catch (err) {
       console.error('[generateExecutionPackage] Claude call failed:', err)
@@ -468,6 +472,10 @@ async function generateCompartmentalizedPackageInternal(
         abuseUserId: userId,
         metadata: { dialect },
       })
+      // PR 12: streaming callsite — migrated to tool use in sub-commit 12.3.
+      if (result.kind !== 'text') {
+        throw new Error('outputs_execution_package_compartmentalized: unexpected toolUse response')
+      }
       rawResponse = result.text
       primaryCallId = result.callId
     } catch (err) {
@@ -624,6 +632,10 @@ async function generateCompartmentalizedPackageInternal(
           abuseUserId: userId,
           metadata: { dialect, dialect_validation_failed_count: failedCount },
         })
+        // PR 12: SQL/text callsite — migrated in sub-commit 12.2.
+        if (fallbackResult.kind !== 'text') {
+          throw new Error('outputs_execution_package_fallback: unexpected toolUse response')
+        }
         monoSql = fallbackResult.text
         console.log('[generateCompartmentalizedPackage] Monolithic fallback SQL length:', monoSql.length)
       } catch (fallbackErr) {
