@@ -1895,24 +1895,6 @@ function FixHistoryPanel({
                       : 'border-settle-slate-200 bg-white'
                   }`}
                 >
-                  {/* Identity row — who applied this fix (live-joined at read time; deleted users → 'Unknown user' / '—') */}
-                  <div className="flex items-center gap-3">
-                    <div className="w-8 h-8 rounded-full bg-primary flex items-center justify-center flex-shrink-0">
-                      <span className="text-xs font-semibold text-white">
-                        {(entry.user_name || entry.user_email || '??')
-                          .slice(0, 2)
-                          .toUpperCase()}
-                      </span>
-                    </div>
-                    <div className="flex-1 min-w-0">
-                      <p className="text-sm font-medium text-gray-900 truncate">
-                        {entry.user_name || 'Unknown user'}
-                      </p>
-                      <p className="text-xs text-gray-500 truncate">
-                        {entry.user_email || '—'}
-                      </p>
-                    </div>
-                  </div>
                   {/* Title row: table.field + row count pill + Reverted badge */}
                   <div className="flex items-start justify-between gap-2">
                     <div className="min-w-0 flex-1">
@@ -1970,6 +1952,7 @@ function FixHistoryPanel({
                       hour: '2-digit',
                       minute: '2-digit',
                     })}
+                    {' · '}{entry.user_name ?? 'Unknown user'}
                     {isManual && (
                       <span className="ml-1.5 text-settle-slate-300">· manual</span>
                     )}
