@@ -66,6 +66,7 @@ export default async function ProjectSettingsPage({ params, searchParams }: Prop
         sourceSystem,
         targetSystem,
         createdAt: project.created_at,
+        isArchived: project.status === 'archived',
       }}
       initialMembers={members}
       initialAvailableOrgMembers={available.members}
