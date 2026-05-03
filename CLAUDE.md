@@ -368,7 +368,7 @@ No `console.log` in committed code. Use the logger.
 ### 9.7 Accessibility
 
 - Keyboard navigable.
-- ARIA roles where shadcn/ui doesn't provide them.
+- ARIA roles, keyboard navigation, and focus management come for free from the Radix-backed primitives in `components/ui/*` (Select via [`select.tsx`](components/ui/select.tsx), DropdownMenu via [`dropdown-menu.tsx`](components/ui/dropdown-menu.tsx)). When adding a new menu / popover / dialog primitive, prefer wrapping a Radix primitive in `components/ui/` rather than re-implementing focus traps and key handling. Hand-add ARIA only where no Radix wrapper exists yet.
 - Color contrast WCAG AA. Brand teal `#1D9E75` on white passes; verify combinations before shipping.
 
 ---
