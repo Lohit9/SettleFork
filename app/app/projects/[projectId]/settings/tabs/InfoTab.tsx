@@ -126,6 +126,7 @@ export default function InfoTab({ info }: { info: ProjectSettingsInfo }) {
               value={name}
               onChange={(e) => setName(e.target.value)}
               autoFocus
+              maxLength={120}
               className="max-w-md"
             />
           </div>
@@ -136,6 +137,7 @@ export default function InfoTab({ info }: { info: ProjectSettingsInfo }) {
             <Input
               value={sourceLabel}
               onChange={(e) => setSourceLabel(e.target.value)}
+              maxLength={80}
               className="max-w-md"
             />
           </div>
@@ -146,6 +148,7 @@ export default function InfoTab({ info }: { info: ProjectSettingsInfo }) {
             <Input
               value={targetLabel}
               onChange={(e) => setTargetLabel(e.target.value)}
+              maxLength={80}
               className="max-w-md"
             />
           </div>
