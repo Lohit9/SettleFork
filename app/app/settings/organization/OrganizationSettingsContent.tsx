@@ -25,6 +25,7 @@ import { createOrgInvite, getPendingInvites, revokeInvite } from '@/lib/actions/
 import type { OrgMembership, OrgInvite, OrgRole } from '@/lib/types/organizations'
 import { Switch } from '@/components/ui/switch'
 import { Modal } from '@/components/ui/modal'
+import { useEditableField } from '@/lib/hooks/useEditableField'
 
 const ROLE_OPTIONS: OrgRole[] = ['owner', 'member']
 
@@ -90,11 +91,20 @@ export default function OrganizationSettingsContent({
   const [invites, setInvites] = useState<OrgInvite[]>([])
   const [isPending, startTransition] = useTransition()
 
-  // Org name editing
-  const [orgName, setOrgName] = useState(org.name)
-  const [orgNameSaving, setOrgNameSaving] = useState(false)
-  const [orgNameError, setOrgNameError] = useState<string | null>(null)
-  const [orgNameSuccess, setOrgNameSuccess] = useState(false)
+  // Org name editing — useEditableField in always-on mode (PR F).
+  // The input is always visible for admins; Save auto-disables when no
+  // changes. Success message auto-dismisses after 3s (hook default).
+  const orgNameField = useEditableField({
+    initialValue: org.name,
+    onSave: async (draft) => {
+      const result = await updateOrganization(org.id, draft)
+      return result.success
+        ? { success: true }
+        : { success: false, error: result.error ?? 'Failed to save' }
+    },
+    alwaysEditing: true,
+    successMessage: 'Name updated successfully',
+  })
 
   // Invite form
   const [inviteEmail, setInviteEmail] = useState('')
@@ -132,23 +142,6 @@ export default function OrganizationSettingsContent({
     if (isAdmin) {
       getPendingInvites(org.id).then(({ invites: inv }) => setInvites(inv))
     }
-  }
-
-  const handleSaveOrgName = () => {
-    if (!orgName.trim() || orgName.trim() === org.name) return
-    setOrgNameError(null)
-    setOrgNameSuccess(false)
-    setOrgNameSaving(true)
-    startTransition(async () => {
-      const result = await updateOrganization(org.id, orgName.trim())
-      setOrgNameSaving(false)
-      if (!result.success) {
-        setOrgNameError(result.error ?? 'Failed to save')
-      } else {
-        setOrgNameSuccess(true)
-        setTimeout(() => setOrgNameSuccess(false), 3000)
-      }
-    })
   }
 
   const handleInvite = (e: React.FormEvent) => {
@@ -307,38 +300,29 @@ export default function OrganizationSettingsContent({
             {isAdmin ? (
               <div className="flex gap-2">
                 <Input
-                  value={orgName}
-                  onChange={(e) => {
-                    setOrgName(e.target.value)
-                    setOrgNameSuccess(false)
-                    setOrgNameError(null)
-                  }}
-                  onKeyDown={(e) => e.key === 'Enter' && handleSaveOrgName()}
+                  value={orgNameField.draft}
+                  onChange={(e) => orgNameField.setDraft(e.target.value)}
+                  onKeyDown={orgNameField.handleKeyDown}
                   className="max-w-xs"
                   placeholder="Organization name"
                 />
                 <Button
                   size="sm"
-                  onClick={handleSaveOrgName}
-                  disabled={
-                    isPending ||
-                    orgNameSaving ||
-                    !orgName.trim() ||
-                    orgName.trim() === org.name
-                  }
+                  onClick={orgNameField.save}
+                  disabled={!orgNameField.canSave}
                   className="bg-primary hover:bg-primary/90 text-white"
                 >
-                  {orgNameSaving ? 'Saving…' : 'Save'}
+                  {orgNameField.isSaving ? 'Saving…' : 'Save'}
                 </Button>
               </div>
             ) : (
               <p className="text-sm text-gray-900">{org.name}</p>
             )}
-            {orgNameError && (
-              <p className="text-xs text-red-600 mt-1">{orgNameError}</p>
+            {orgNameField.error && (
+              <p className="text-xs text-red-600 mt-1">{orgNameField.error}</p>
             )}
-            {orgNameSuccess && (
-              <p className="text-xs text-green-600 mt-1">Name updated successfully</p>
+            {orgNameField.successMessage && (
+              <p className="text-xs text-green-600 mt-1">{orgNameField.successMessage}</p>
             )}
           </div>
 
