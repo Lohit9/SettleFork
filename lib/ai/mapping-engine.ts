@@ -1729,6 +1729,12 @@ export async function runMappingSuggestion(
   userId: string,
   projectId: string,
   targetFieldId: string,
+  // Path 2 PR 1: optional eval-runner feature override. When present,
+  // routes the LLM call to the eval_* feature taxonomy so production
+  // cost reports stay clean. Production callsites omit this parameter
+  // and behavior is unchanged. Mirrors the runMappingGenerationForPair
+  // pattern (lib/actions/mappings.ts:121).
+  featureOverride?: import('@/lib/ai/llm-client').LLMFeature,
 ): Promise<
   | {
       success: true
@@ -1822,6 +1828,12 @@ export async function runMappingSuggestion(
         maxSampleValues: 5,
       },
       userId,
+      // Path 2 PR 1: pass the caller-supplied supabase client through
+      // to buildAIContext. The default fallback (createClient()) uses
+      // Next.js cookies which throw outside a request scope (CLI/eval
+      // context). Production callsites already pass a request-scoped
+      // client through `supabase`, so this is a no-op for them.
+      supabase,
     )
   } catch (err) {
     return {
@@ -1961,7 +1973,7 @@ Respond with ONLY valid JSON in this exact shape:
   let result: Awaited<ReturnType<typeof callLLM>>
   try {
     result = await callLLM({
-      feature: 'mapping_suggest',
+      feature: featureOverride ?? 'mapping_suggest',
       systemPrompt: MAPPING_SUGGESTION_SYSTEM_PROMPT,
       userMessage: userMsg,
       maxTokens: 1024,

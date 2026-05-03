@@ -43,7 +43,19 @@ import {
   type ProposedMapping,
   type GoldMapping,
 } from '@/lib/eval/scorers/mapping'
+import {
+  scoreValidationRuleStructural,
+  type ProposedValidationRule,
+  type GoldValidationRule,
+} from '@/lib/eval/scorers/validation-rule'
+import {
+  scoreMappingSuggestion,
+  type ProposedMappingSuggestion,
+  type GoldMappingSuggestion,
+} from '@/lib/eval/scorers/mapping-suggestion'
 import { runMappingGenerationForPair } from '@/lib/actions/mappings'
+import { addValidationRuleFromNL } from '@/lib/actions/validation-rules'
+import { runMappingSuggestion } from '@/lib/ai/mapping-engine'
 import { resolveDefaultModel } from '@/lib/ai/llm-client'
 import { signSyntheticJwt } from '@/lib/eval/synthetic-jwt'
 import type {
@@ -57,11 +69,12 @@ import type {
 
 export interface RunOptions {
   /**
-   * 'mapping' (default for PR 10.4), 'validation-rule' (skipped with
-   * warning until PR 11), or 'all' (currently equivalent to mapping
-   * because that is the only end-to-end-wired task).
+   * Task filter. Path 2 PR 1 wires 'validation-rule' and
+   * 'mapping-suggestion' alongside the original 'mapping'. 'all' runs
+   * every wired task. The remaining EvalTask values ('transform',
+   * 'nl-to-sql') are reserved enum values not yet wired.
    */
-  task?: 'mapping' | 'validation-rule' | 'all'
+  task?: 'mapping' | 'validation-rule' | 'mapping-suggestion' | 'all'
   /** Specific dataset directory under tests/eval/datasets/. */
   dataset?: string
   /**
@@ -207,16 +220,16 @@ export async function runEval(opts: RunOptions = {}): Promise<RunOutput> {
         datasets.push(dm)
       }
 
-      // Validation-rule wiring is deferred to PR 11. Skip with a
-      // warning so smoke runs over the _fixture dataset don't fail.
-      if (item.example.task === 'validation-rule') {
-        console.warn(
-          `[eval/runner] Skipping validation-rule example "${item.example.id}" — end-to-end wiring deferred to PR 11.`,
-        )
-        continue
-      }
-
-      if (item.example.task !== 'mapping') {
+      // Path 2 PR 1: dispatch on task. The reserved EvalTask values
+      // 'transform' and 'nl-to-sql' aren't wired here yet — they're
+      // skipped with a warning. The 3 wired tasks (mapping,
+      // validation-rule, mapping-suggestion) all use the same
+      // per-example bookkeeping pattern.
+      if (
+        item.example.task !== 'mapping' &&
+        item.example.task !== 'validation-rule' &&
+        item.example.task !== 'mapping-suggestion'
+      ) {
         console.warn(
           `[eval/runner] Skipping example "${item.example.id}" — task "${item.example.task}" not yet wired.`,
         )
@@ -224,20 +237,40 @@ export async function runEval(opts: RunOptions = {}): Promise<RunOutput> {
       }
 
       const exStart = Date.now()
-      const exResult = await runOneMappingExample({
-        datasetName: item.datasetName,
-        schema: item.schema,
-        example: item.example,
-        orgId,
-      })
+      let exResult: { score: number; costUsd: number; errored: boolean; errorMessage?: string }
+      let scorerName: string
+      if (item.example.task === 'mapping') {
+        exResult = await runOneMappingExample({
+          datasetName: item.datasetName,
+          schema: item.schema,
+          example: item.example,
+          orgId,
+        })
+        scorerName = 'scoreMappingFieldPair'
+      } else if (item.example.task === 'validation-rule') {
+        exResult = await runOneValidationRuleExample({
+          datasetName: item.datasetName,
+          schema: item.schema,
+          example: item.example,
+          orgId,
+        })
+        scorerName = 'scoreValidationRuleStructural'
+      } else {
+        // 'mapping-suggestion'
+        exResult = await runOneMappingSuggestionExample({
+          datasetName: item.datasetName,
+          schema: item.schema,
+          example: item.example,
+          orgId,
+        })
+        scorerName = 'scoreMappingSuggestion'
+      }
 
       dm.examples++
       dm.costUsd += exResult.costUsd
       dm.durationMs += Date.now() - exStart
       dm.cachedCount += 0 // PR 10.4 has no cache
 
-      // Aggregate the field-pair F1 scorer.
-      const scorerName = 'scoreMappingFieldPair'
       const summary = dm.scorers[scorerName] ?? {
         mean: 0,
         count: 0,
@@ -247,6 +280,9 @@ export async function runEval(opts: RunOptions = {}): Promise<RunOutput> {
       }
       if (exResult.errored) {
         summary.errorCount++
+        console.error(
+          `[eval/runner] Example "${item.example.id}" errored: ${exResult.errorMessage ?? '(no message)'}`,
+        )
       } else {
         const prev = summary.mean * summary.count
         summary.count++
@@ -329,13 +365,18 @@ function resolveWork(opts: RunOptions): Array<{
   for (const datasetName of datasetNames) {
     const ds = loadDataset(datasetName)
 
-    // Tasks to include.
+    // Tasks to include. Path 2 PR 1: wired tasks are 'mapping',
+    // 'validation-rule', 'mapping-suggestion'. Other EvalTask values
+    // ('transform', 'nl-to-sql') are reserved enum values; their
+    // examples are filtered out by the runner's per-task dispatch.
     const tasks: Array<keyof typeof ds.examples> =
       opts.task === 'mapping'
         ? ['mapping']
         : opts.task === 'validation-rule'
           ? ['validation-rule']
-          : ['mapping', 'validation-rule']
+          : opts.task === 'mapping-suggestion'
+            ? ['mapping-suggestion']
+            : ['mapping', 'validation-rule', 'mapping-suggestion']
 
     for (const task of tasks) {
       const examples = ds.examples[task]
@@ -418,6 +459,295 @@ async function runOneMappingExample(args: {
     const proposed = await readProposedMappings({ projectId, ctx })
     const gold = translateGoldMappings({ example: args.example, ctx })
     const scored = scoreMappingFieldPair(proposed, gold)
+
+    return { score: scored.score, costUsd, errored: false }
+  } catch (err) {
+    return {
+      score: 0,
+      costUsd: 0,
+      errored: true,
+      errorMessage: err instanceof Error ? err.message : String(err),
+    }
+  } finally {
+    if (projectId) {
+      try {
+        await teardownSyntheticProject(projectId)
+      } catch (cleanupErr) {
+        console.error(
+          `[eval/runner] Teardown of synthetic project ${projectId} failed:`,
+          cleanupErr,
+        )
+      }
+    }
+  }
+}
+
+/**
+ * Run one validation-rule example end-to-end.
+ *
+ * Path 2 PR 1: dispatches to `addValidationRuleFromNL` with an
+ * evalContext object that injects the user-authed Supabase client +
+ * EVAL_USER_ID + featureOverride='eval_validation_rule'. The function
+ * INSERTS into `validation_rules` keyed on the synthetic project, and
+ * the project teardown cascades the row away.
+ *
+ * Field selection: the fixture's `input.field_name` + `input.field_side`
+ * names a field on either the source or target table; we look up the
+ * synthetic UUID via the BuiltMappingContext maps and pass it as
+ * `fieldId`. The scorer compares the proposal's field_id against the
+ * SAME UUID at score time (so the gold's effective field_id is
+ * "the field we asked the AI to write a rule for").
+ */
+async function runOneValidationRuleExample(args: {
+  datasetName: string
+  schema: ReturnType<typeof loadDataset>['schema']
+  example: EvalExample
+  orgId: string
+}): Promise<{ score: number; costUsd: number; errored: boolean; errorMessage?: string }> {
+  const projectName = `${EVAL_PROJECT_PREFIX}${randomUUID()}`
+  let projectId: string | null = null
+
+  try {
+    projectId = await createSyntheticProject({
+      name: projectName,
+      userId: EVAL_USER_ID,
+      orgId: args.orgId,
+    })
+
+    const input = args.example.input as {
+      source_table: string
+      target_table: string
+      field_name: string
+      field_side: 'source' | 'target'
+      natural_language_rule: string
+    }
+    if (
+      !input.source_table ||
+      !input.target_table ||
+      !input.field_name ||
+      !input.field_side ||
+      !input.natural_language_rule
+    ) {
+      return {
+        score: 0,
+        costUsd: 0,
+        errored: true,
+        errorMessage:
+          'validation-rule example.input missing required keys (source_table, target_table, field_name, field_side, natural_language_rule)',
+      }
+    }
+
+    const ctx = await buildSyntheticMappingContext({
+      projectId,
+      schema: args.schema,
+      sourceTableName: input.source_table,
+      targetTableName: input.target_table,
+    })
+
+    const fieldsByName =
+      input.field_side === 'source' ? ctx.sourceFieldsByName : ctx.targetFieldsByName
+    const fieldId = fieldsByName.get(input.field_name)
+    if (!fieldId) {
+      return {
+        score: 0,
+        costUsd: 0,
+        errored: true,
+        errorMessage: `validation-rule example references unknown ${input.field_side} field "${input.field_name}"`,
+      }
+    }
+
+    const callsBefore = Date.now()
+
+    const supabaseUserAuth = buildUserAuthedClient()
+    const aiResult = await addValidationRuleFromNL(
+      projectId,
+      fieldId,
+      input.natural_language_rule,
+      undefined,
+      {
+        supabase: supabaseUserAuth,
+        userId: EVAL_USER_ID,
+        featureOverride: 'eval_validation_rule',
+      },
+    )
+
+    const costUsd = await sumLlmCallsCost({
+      projectId,
+      sinceMs: callsBefore - 5_000,
+    })
+
+    if (!aiResult.success || !aiResult.rule) {
+      return {
+        score: 0,
+        costUsd,
+        errored: true,
+        errorMessage: aiResult.error ?? 'addValidationRuleFromNL returned no rule',
+      }
+    }
+
+    // Translate the proposal into the scorer's input shape. The
+    // production row carries the columns the scorer needs verbatim.
+    const proposed: ProposedValidationRule = {
+      rule_type: aiResult.rule.rule_type as string,
+      rule_config: aiResult.rule.rule_config as Record<string, unknown>,
+      field_id: aiResult.rule.field_id as string,
+      severity: aiResult.rule.severity as 'blocking' | 'warning',
+      name: aiResult.rule.name as string,
+    }
+
+    // Build the gold for scoring. The fixture's gold carries
+    // rule_type + rule_config + severity + (optional) name; the
+    // scorer needs field_id too — we resolve it to the synthetic UUID
+    // we just passed to the AI, so a successful call gives a
+    // fieldMatch=true axis.
+    const goldRaw = args.example.gold as Record<string, unknown>
+    const gold: GoldValidationRule = {
+      rule_type: String(goldRaw.rule_type ?? ''),
+      rule_config: (goldRaw.rule_config as Record<string, unknown>) ?? {},
+      field_id: fieldId,
+      severity: (goldRaw.severity as 'blocking' | 'warning') ?? 'warning',
+      name: typeof goldRaw.name === 'string' ? goldRaw.name : undefined,
+    }
+    const scored = scoreValidationRuleStructural(proposed, gold)
+
+    return { score: scored.score, costUsd, errored: false }
+  } catch (err) {
+    return {
+      score: 0,
+      costUsd: 0,
+      errored: true,
+      errorMessage: err instanceof Error ? err.message : String(err),
+    }
+  } finally {
+    if (projectId) {
+      try {
+        await teardownSyntheticProject(projectId)
+      } catch (cleanupErr) {
+        console.error(
+          `[eval/runner] Teardown of synthetic project ${projectId} failed:`,
+          cleanupErr,
+        )
+      }
+    }
+  }
+}
+
+/**
+ * Run one mapping-suggestion example end-to-end.
+ *
+ * Path 2 PR 1: dispatches to `runMappingSuggestion` with the user-authed
+ * Supabase client + featureOverride='eval_mapping_suggestion'. The
+ * function does NOT write to the DB — it returns the suggestion
+ * in-memory — so cleanup is just the project teardown.
+ *
+ * Target-field selection: the fixture's `input.target_field_name`
+ * names a target field; we look up the synthetic UUID from
+ * `BuiltMappingContext.targetFieldsByName`.
+ */
+async function runOneMappingSuggestionExample(args: {
+  datasetName: string
+  schema: ReturnType<typeof loadDataset>['schema']
+  example: EvalExample
+  orgId: string
+}): Promise<{ score: number; costUsd: number; errored: boolean; errorMessage?: string }> {
+  const projectName = `${EVAL_PROJECT_PREFIX}${randomUUID()}`
+  let projectId: string | null = null
+
+  try {
+    projectId = await createSyntheticProject({
+      name: projectName,
+      userId: EVAL_USER_ID,
+      orgId: args.orgId,
+    })
+
+    const input = args.example.input as {
+      source_table: string
+      target_table: string
+      target_field_name: string
+    }
+    if (!input.source_table || !input.target_table || !input.target_field_name) {
+      return {
+        score: 0,
+        costUsd: 0,
+        errored: true,
+        errorMessage:
+          'mapping-suggestion example.input missing required keys (source_table, target_table, target_field_name)',
+      }
+    }
+
+    const ctx = await buildSyntheticMappingContext({
+      projectId,
+      schema: args.schema,
+      sourceTableName: input.source_table,
+      targetTableName: input.target_table,
+    })
+
+    const targetFieldId = ctx.targetFieldsByName.get(input.target_field_name)
+    if (!targetFieldId) {
+      return {
+        score: 0,
+        costUsd: 0,
+        errored: true,
+        errorMessage: `mapping-suggestion example references unknown target field "${input.target_field_name}"`,
+      }
+    }
+
+    const callsBefore = Date.now()
+
+    const supabaseUserAuth = buildUserAuthedClient()
+    const aiResult = await runMappingSuggestion(
+      supabaseUserAuth as unknown as Parameters<typeof runMappingSuggestion>[0],
+      EVAL_USER_ID,
+      projectId,
+      targetFieldId,
+      'eval_mapping_suggestion',
+    )
+
+    const costUsd = await sumLlmCallsCost({
+      projectId,
+      sinceMs: callsBefore - 5_000,
+    })
+
+    if (!aiResult.success) {
+      return {
+        score: 0,
+        costUsd,
+        errored: true,
+        errorMessage: aiResult.error,
+      }
+    }
+
+    // The AI returns source_field IDS; translate to NAMES so the
+    // scorer compares like-for-like with hand-authored gold names.
+    const sourceIdToName = new Map<string, string>()
+    for (const [name, id] of ctx.sourceFieldsByName) sourceIdToName.set(id, name)
+
+    const proposedNames: string[] = []
+    for (const id of aiResult.suggestion.sourceFieldIds) {
+      const n = sourceIdToName.get(id)
+      if (n) proposedNames.push(n)
+    }
+
+    const proposed: ProposedMappingSuggestion = {
+      source_field_names: proposedNames,
+      combination_type: aiResult.suggestion.combinationType,
+      confidence: aiResult.suggestion.confidence,
+      rationale: aiResult.suggestion.rationale,
+    }
+
+    const goldRaw = args.example.gold as Record<string, unknown>
+    const gold: GoldMappingSuggestion = {
+      expected_source_field_names: Array.isArray(goldRaw.expected_source_field_names)
+        ? (goldRaw.expected_source_field_names as string[])
+        : [],
+      acceptable_alternatives: Array.isArray(goldRaw.acceptable_alternatives)
+        ? (goldRaw.acceptable_alternatives as string[][])
+        : undefined,
+      expected_combination_type:
+        (goldRaw.expected_combination_type as GoldMappingSuggestion['expected_combination_type']) ??
+        'single',
+    }
+    const scored = scoreMappingSuggestion(proposed, gold)
 
     return { score: scored.score, costUsd, errored: false }
   } catch (err) {
