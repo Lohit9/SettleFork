@@ -29,14 +29,32 @@
  * missing required fields, extra fields, and type drift before any
  * downstream consumer sees the response.
  *
- *   additionalProperties: false  — used everywhere a closed shape is
- *     known (the vast majority of nested objects).
- *   additionalProperties: true   — used on two free-form objects whose
- *     shape genuinely depends on a sibling enum:
- *       rule_config in emit_validation_rule (per rule_type)
- *       pattern_config in emit_extracted_patterns (per category)
- *     Without this, strict mode would force an empty object and break
- *     the per-type contract.
+ *   additionalProperties: false — used UNIFORMLY across every nested
+ *     object schema in this file. Path 2 PR 1 surfaced that Anthropic
+ *     strict mode rejects the open-shape variant of additionalProperties
+ *     (HTTP 400 on Opus 4.7 with strict tools — Anthropic\'s error
+ *     message instructs setting additionalProperties to false). PR 12.1.5
+ *     didn't surface this because its flag-ON smoke only exercised
+ *     EMIT_TABLE_MAPPINGS_TOOL; Path 2 PR 1 was the first flag-ON
+ *     exercise of EMIT_VALIDATION_RULE_TOOL.
+ *
+ *     Three previously free-form objects whose shape varies by sibling
+ *     discriminator (`rule_config` per `rule_type`; `pattern_config`
+ *     per `category`; `checkConstraint` per `type`) are now expressed
+ *     as enumerated-optional-keys objects: the schema lists every
+ *     possible key across all discriminator values with
+ *     additionalProperties: false; the system prompt + container
+ *     description + per-key descriptions are authoritative for which
+ *     subset to populate per discriminator. Loses some schema-level
+ *     discriminator specificity (the schema cannot reject "wrong key
+ *     for this discriminator"); the downstream validator
+ *     (validateRuleConfig in lib/actions/validation-rules.ts) catches
+ *     that at insert time for rule_config.
+ *
+ *     Future probe: does Anthropic strict mode accept JSON Schema
+ *     if/then/else? If yes, a follow-up PR can re-tighten rule_config
+ *     and pattern_config and checkConstraint to express
+ *     per-discriminator constraints properly. Probe cost ~$0.001.
  */
 
 import type { Tool } from '@anthropic-ai/sdk/resources/messages'
@@ -266,10 +284,12 @@ export const EMIT_MAPPING_SUGGESTION_TOOL: Tool = {
  * The shape mirrors the inline parser's `parsed` type exactly; the
  * downstream `validateRuleConfig` does the per-rule_type config check.
  *
- * `rule_config` is intentionally free-form (additionalProperties: true)
- * because its shape varies by rule_type — see the per-type templates
- * in the rule_config description. The downstream `validateRuleConfig`
- * enforces the per-type contract after the call.
+ * `rule_config` is an enumerated-optional-keys object (Path 2 PR 1).
+ * The schema lists every possible key across all 12 rule_types with
+ * additionalProperties: false; the rule_type discriminator + the
+ * container description tell the model which subset to populate.
+ * The downstream `validateRuleConfig` enforces the per-type contract
+ * at insert time and rejects mismatches.
  *
  * The rule_type enum carries 12 values, including `custom_sql` (added
  * in PR 12.1.5 B-3) which resolves the prior divergence with
@@ -316,9 +336,57 @@ export const EMIT_VALIDATION_RULE_TOOL: Tool = {
       },
       rule_config: {
         type: 'object',
-        additionalProperties: true,
+        additionalProperties: false,
         description:
           'Per-type configuration object. The keys depend on rule_type:\n• not_null/unique → {} (empty)\n• min_value → { min: number }\n• max_value → { max: number }\n• min_length/max_length → { min_length / max_length: integer }\n• regex → { pattern: non-empty string, valid JS RegExp }\n• allowed_values → { values: non-empty string[] }\n• range → { min: number, max: number, min ≤ max }\n• date_after/date_before → { date: ISO date string parseable by Date.parse }\n• custom_sql → { sql: non-empty SELECT-only string, must include WHERE table_id filter }\nThe downstream validateRuleConfig will reject mismatches at insert time.',
+        properties: {
+          min: {
+            type: 'number',
+            description:
+              'Numeric lower bound. Used by min_value (sole key) and range (paired with max).',
+          },
+          max: {
+            type: 'number',
+            description:
+              'Numeric upper bound. Used by max_value (sole key) and range (paired with min, must satisfy min ≤ max).',
+          },
+          min_length: {
+            type: 'number',
+            description:
+              'Integer lower bound on string length. Used by min_length rule_type only.',
+          },
+          max_length: {
+            type: 'number',
+            description:
+              'Integer upper bound on string length. Used by max_length rule_type only.',
+          },
+          pattern: {
+            type: 'string',
+            description:
+              'Non-empty JS-compatible regular expression source string. Used by regex rule_type only.',
+          },
+          description: {
+            type: 'string',
+            description:
+              'Optional human-readable description of what the regex matches (e.g., "Two letters followed by 4 digits"). Used by regex rule_type only.',
+          },
+          values: {
+            type: 'array',
+            items: { type: 'string' },
+            description:
+              'Non-empty array of allowed string values. Used by allowed_values rule_type only.',
+          },
+          date: {
+            type: 'string',
+            description:
+              'ISO date string (e.g., "2020-01-01") parseable by Date.parse. Used by date_after and date_before rule_types only.',
+          },
+          sql: {
+            type: 'string',
+            description:
+              'Non-empty SELECT-only SQL string that must include a WHERE table_id filter. Used by custom_sql rule_type only.',
+          },
+        },
       },
       severity: {
         type: 'string',
@@ -409,9 +477,43 @@ export const EMIT_PARSED_DDL_TOOL: Tool = {
                   },
                   checkConstraint: {
                     type: ['object', 'null'],
-                    additionalProperties: true,
+                    additionalProperties: false,
                     description:
                       'CHECK constraint as a flat object selected by the `type` discriminator, OR null when the field has no CHECK constraint. Anthropic strict mode does not support JSON Schema oneOf (verified via probe), so the variant shape is encoded in this description rather than in the schema:\n• type=\'in_list\' → populate `allowedValues: string[]`; omit pattern/min/max\n• type=\'regex\' → populate `pattern: string`; omit allowedValues/min/max\n• type=\'range\' → populate `min` and/or `max` as numbers; omit allowedValues/pattern\n• type=\'custom\' → only set `type` and `raw`; omit the other shape-specific keys\nAlways populate `raw` with the original CHECK clause text (the validator on the consumer side preserves it for audit). Set the entire checkConstraint to null when no CHECK constraint exists on this field.',
+                    properties: {
+                      type: {
+                        type: 'string',
+                        enum: ['in_list', 'regex', 'range', 'custom'],
+                        description:
+                          'Discriminator selecting the constraint variant. Determines which sibling keys to populate.',
+                      },
+                      allowedValues: {
+                        type: 'array',
+                        items: { type: 'string' },
+                        description:
+                          'Allowed string values. Used by type=\'in_list\' only.',
+                      },
+                      pattern: {
+                        type: 'string',
+                        description:
+                          'Regular-expression source string. Used by type=\'regex\' only.',
+                      },
+                      min: {
+                        type: 'number',
+                        description:
+                          'Numeric lower bound (inclusive). Used by type=\'range\' only; pair with max when both bounds apply.',
+                      },
+                      max: {
+                        type: 'number',
+                        description:
+                          'Numeric upper bound (inclusive). Used by type=\'range\' only; pair with min when both bounds apply.',
+                      },
+                      raw: {
+                        type: 'string',
+                        description:
+                          'Verbatim CHECK clause text from the DDL (e.g., "status IN (\'A\',\'B\')"). Always populated; preserved for audit.',
+                      },
+                    },
                   },
                 },
                 required: [
@@ -595,9 +697,10 @@ export const EMIT_TABLE_MATCHES_TOOL: Tool = {
  * array is wrapped under `patterns` here. The callsite reads
  * `result.toolUse.input.patterns` and treats it as the array.
  *
- * `pattern_config` is free-form (additionalProperties: true) because
- * its shape varies by category (transformation_recipe vs
- * data_quality_pattern vs domain_knowledge vs source_system_hint).
+ * `pattern_config` is an enumerated-optional-keys object (Path 2 PR 1).
+ * The schema lists every possible key across all 4 categories with
+ * additionalProperties: false; the parent `category` enum + the
+ * container description tell the model which subset to populate.
  *
  * The pattern_config description embeds the canonical pattern_type
  * vocabulary from `lib/ai/canonical-patterns.ts` — edits to that file
@@ -641,10 +744,89 @@ export const EMIT_EXTRACTED_PATTERNS_TOOL: Tool = {
             },
             pattern_config: {
               type: 'object',
-              additionalProperties: true,
+              additionalProperties: false,
               description:
                 'Structured metadata. Shape varies by category:\n• transformation_recipe → { pattern_type, source_indicators[], target_indicators[], approach, edge_cases[] }\n• data_quality_pattern → { pattern_type, detection_method, typical_rate_percent, common_causes[] }\n• domain_knowledge → { domain, entity_patterns[], load_order_hint }\n• source_system_hint → { system_type, common_characteristics[], typical_issues[] }\n\nThe pattern_type field (or domain/system_type for the latter two) is the retrieval key. PREFER canonical values from the list below when your pattern fits one of them; coin new values only for genuinely novel patterns that don\'t fit any canonical bucket.\n\nCanonical pattern_type values (Settle\'s v1 vocabulary):\n' +
                 CANONICAL_PATTERN_BULLETS,
+              properties: {
+                pattern_type: {
+                  type: 'string',
+                  description:
+                    'Snake-case canonical phrase keying retrieval. Used by transformation_recipe and data_quality_pattern. PREFER values from the canonical vocabulary listed in the parent description; coin new values only for genuinely novel patterns.',
+                },
+                source_indicators: {
+                  type: 'array',
+                  items: { type: 'string' },
+                  description:
+                    'Signals that identify when this pattern applies on the source side (e.g., "VARCHAR field with $ or comma characters"). Used by transformation_recipe.',
+                },
+                target_indicators: {
+                  type: 'array',
+                  items: { type: 'string' },
+                  description:
+                    'Signals that identify the target shape that triggers this pattern (e.g., "DECIMAL or NUMERIC type"). Used by transformation_recipe.',
+                },
+                approach: {
+                  type: 'string',
+                  description:
+                    'High-level transformation approach in one phrase (e.g., "REGEXP_REPLACE to strip formatting, then cast"). Used by transformation_recipe.',
+                },
+                edge_cases: {
+                  type: 'array',
+                  items: { type: 'string' },
+                  description:
+                    'Edge cases the pattern must handle (e.g., "parentheses for negatives", "empty string vs NULL"). Used by transformation_recipe.',
+                },
+                detection_method: {
+                  type: 'string',
+                  description:
+                    'How the data-quality issue is detected (e.g., "LEFT JOIN parent WHERE parent.pk IS NULL"). Used by data_quality_pattern.',
+                },
+                typical_rate_percent: {
+                  type: 'string',
+                  description:
+                    'Typical affected-row rate as a percentage range or single value (e.g., "2-5", "<1"). Used by data_quality_pattern.',
+                },
+                common_causes: {
+                  type: 'array',
+                  items: { type: 'string' },
+                  description:
+                    'Upstream causes of the quality issue (e.g., "parent deletions without cascade"). Used by data_quality_pattern.',
+                },
+                domain: {
+                  type: 'string',
+                  description:
+                    'Snake-case domain identifier keying retrieval (e.g., "legal_elm"). Used by domain_knowledge.',
+                },
+                entity_patterns: {
+                  type: 'array',
+                  items: { type: 'string' },
+                  description:
+                    'Entity-relationship observations specific to the domain (e.g., "matters as core entity"). Used by domain_knowledge.',
+                },
+                load_order_hint: {
+                  type: 'string',
+                  description:
+                    'Hint about target load order constraints (e.g., "independent entities first"). Used by domain_knowledge.',
+                },
+                system_type: {
+                  type: 'string',
+                  description:
+                    'Snake-case source-system classification (e.g., "legacy_crm"). Used by source_system_hint.',
+                },
+                common_characteristics: {
+                  type: 'array',
+                  items: { type: 'string' },
+                  description:
+                    'Systematic characteristics of the source platform (e.g., "VARCHAR for most fields"). Used by source_system_hint.',
+                },
+                typical_issues: {
+                  type: 'array',
+                  items: { type: 'string' },
+                  description:
+                    'Recurring data quality issues to expect from this source system (e.g., "orphaned FKs from historical deletions"). Used by source_system_hint.',
+                },
+              },
             },
             tags: {
               type: 'array',

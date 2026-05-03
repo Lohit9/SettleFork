@@ -62,6 +62,7 @@ export type LLMFeature =
   // clean. PR 10.1 adds the enum values; PR 10.4 wires the override.
   | 'eval_mapping'
   | 'eval_validation_rule'
+  | 'eval_mapping_suggestion' // wired in Path 2 PR 1
   | 'eval_transform' // reserved — wired in PR 11
   | 'eval_nl_to_sql' // reserved — wired in PR 11
 

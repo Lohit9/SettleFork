@@ -50,8 +50,15 @@ function parseArgs(argv: string[]): ParsedArgs {
   let i = 0
   if (argv[i] && !argv[i]!.startsWith('--')) {
     const t = argv[i]!
-    if (t !== 'mapping' && t !== 'validation-rule' && t !== 'all') {
-      throw new Error(`Unknown task "${t}". Use 'mapping', 'validation-rule', or 'all'.`)
+    if (
+      t !== 'mapping' &&
+      t !== 'validation-rule' &&
+      t !== 'mapping-suggestion' &&
+      t !== 'all'
+    ) {
+      throw new Error(
+        `Unknown task "${t}". Use 'mapping', 'validation-rule', 'mapping-suggestion', or 'all'.`,
+      )
     }
     options.task = t
     i++

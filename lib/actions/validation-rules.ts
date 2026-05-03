@@ -1,8 +1,9 @@
 'use server'
 
+import type { SupabaseClient } from '@supabase/supabase-js'
 import { supabaseAdmin } from '@/lib/supabase/admin'
 import { createClient } from '@/lib/supabase/server'
-import { callLLM } from '@/lib/ai/llm-client'
+import { callLLM, type LLMFeature } from '@/lib/ai/llm-client'
 import { EMIT_VALIDATION_RULE_TOOL } from '@/lib/ai/tool-schemas'
 import { checkAIRateLimit } from '@/lib/ai/rate-limit'
 import { validateFixSQL } from '@/lib/quality/fix-sql-validator'
@@ -256,18 +257,35 @@ export async function addValidationRuleFromNL(
   projectId: string,
   fieldId: string,
   naturalLanguageRule: string,
-  severityOverride?: 'blocking' | 'warning'
+  severityOverride?: 'blocking' | 'warning',
+  // Path 2 PR 1: optional eval-runner injection. When present, bypasses
+  // the Next.js auth context (the eval runner has no request scope) and
+  // routes the LLM call to the eval_* feature taxonomy so production
+  // cost reports stay clean. Production callsites omit this parameter
+  // and behavior is unchanged. Mirrors the runMappingGenerationForPair
+  // pattern (lib/actions/mappings.ts:121).
+  evalContext?: {
+    supabase: SupabaseClient
+    userId: string
+    featureOverride: LLMFeature
+  },
 ): Promise<{ success: boolean; rule?: ValidationRule; error?: string }> {
   // Fix 5: fieldId is required for NL rules
   if (!fieldId) {
     return { success: false, error: 'Must select a field for the validation rule' }
   }
 
-  const supabase = await createClient()
-  const {
-    data: { user },
-  } = await supabase.auth.getUser()
-  if (!user) return { success: false, error: 'Not authenticated' }
+  let supabase: SupabaseClient
+  let user: { id: string }
+  if (evalContext) {
+    supabase = evalContext.supabase
+    user = { id: evalContext.userId }
+  } else {
+    supabase = await createClient()
+    const { data: { user: authUser } } = await supabase.auth.getUser()
+    if (!authUser) return { success: false, error: 'Not authenticated' }
+    user = authUser
+  }
 
   if (!checkAIRateLimit(user.id)) {
     return {
@@ -342,7 +360,7 @@ User's rule: "${naturalLanguageRule}"`
 
   try {
     const result = await callLLM({
-      feature: 'validation_rule_from_nl',
+      feature: evalContext?.featureOverride ?? 'validation_rule_from_nl',
       systemPrompt,
       userMessage,
       maxTokens: 512,

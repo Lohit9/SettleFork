@@ -1,0 +1,18 @@
+{
+  "id": "_fixture/mapping-suggestion/001-fixture",
+  "task": "mapping-suggestion",
+  "input": {
+    "source_table": "fixture_source_table",
+    "target_table": "fixture_target_table",
+    "target_field_name": "label"
+  },
+  "gold": {
+    "expected_source_field_names": ["name"],
+    "expected_combination_type": "single"
+  },
+  "metadata": {
+    "author": "claude",
+    "difficulty": "easy",
+    "notes": "Smoke fixture: target field 'label' (text) should map to source field 'name' (text) — both are the only non-PK text field on each side. Acceptable_alternatives intentionally omitted; this fixture has one obvious right answer."
+  }
+}

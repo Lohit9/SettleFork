@@ -41,11 +41,6 @@ interface JsonSchemaNode {
   anyOf?: JsonSchemaNode[]
 }
 
-/**
- * Walks every property in a JSON Schema node, invoking visit(path, prop)
- * for each leaf-level property and each composite property's container.
- * Path is built from the property names traversed.
- */
 function walkProperties(
   node: JsonSchemaNode,
   visit: (path: string, prop: JsonSchemaNode) => void,
@@ -101,13 +96,6 @@ describe('tool-schemas — structural invariants', () => {
   })
 
   it('every tool sets strict=true (Anthropic API-boundary deterministic validation)', () => {
-    // Strict mode is Settle's API-boundary deterministic-validation
-    // layer per the product principle "AI proposes → Deterministic
-    // validates → Human approves". It catches missing required fields,
-    // extra fields, and type drift before any downstream consumer
-    // sees the response. Strict mode requires `additionalProperties`
-    // on every nested object — the per-schema additions are documented
-    // in lib/ai/tool-schemas.ts.
     for (const tool of allTools) {
       expect(
         tool.strict,
@@ -183,10 +171,6 @@ describe('tool-schemas — description quality (PR 12.1.5 B-1)', () => {
     const failures: string[] = []
     for (const tool of allTools) {
       walkProperties(tool.input_schema as JsonSchemaNode, (path, prop) => {
-        // Skip pure container nodes (e.g., a `properties` object that's
-        // really a string lookup of named child schemas) — only report
-        // on nodes whose siblings include type/items/properties (i.e.,
-        // actual schema nodes the model reads).
         const isSchemaNode =
           'type' in prop ||
           'items' in prop ||
@@ -214,20 +198,16 @@ describe('tool-schemas — description quality (PR 12.1.5 B-1)', () => {
     expect(patternConfigDesc).toBeDefined()
     if (!patternConfigDesc) return
 
-    // Spot-check one canonical pattern_type from each of the 4 categories
-    expect(patternConfigDesc).toContain('currency_cleanup') // transformation_recipe
-    expect(patternConfigDesc).toContain('null_violation') // data_quality_pattern
-    expect(patternConfigDesc).toContain('entity_relationship_model') // domain_knowledge
-    expect(patternConfigDesc).toContain('legacy_format_quirk') // source_system_hint
+    expect(patternConfigDesc).toContain('currency_cleanup')
+    expect(patternConfigDesc).toContain('null_violation')
+    expect(patternConfigDesc).toContain('entity_relationship_model')
+    expect(patternConfigDesc).toContain('legacy_format_quirk')
   })
 
   it('the canonical-patterns module exports the expected category counts', () => {
-    // 12 transformation_recipe + 8 data_quality + 4 domain_knowledge + 4 source_system_hint = 28
     expect(Object.keys(ALL_CANONICAL_PATTERNS).length).toBe(28)
   })
 })
-
-// ─── PR 12.1.5 B-1: severity rubric anchored in 5 blocking conditions ────────
 
 describe('tool-schemas — severity rubric (PR 12.1.5 B-1)', () => {
   it('EMIT_VALIDATION_RULE_TOOL.severity description enumerates the 5 blocking conditions', () => {
@@ -244,10 +224,7 @@ describe('tool-schemas — severity rubric (PR 12.1.5 B-1)', () => {
 
   it('EMIT_QUALITY_ISSUES_TOOL.severity description enumerates the same 5 blocking conditions', () => {
     const severityDesc = (
-      (schemas.EMIT_QUALITY_ISSUES_TOOL.input_schema.properties as Record<
-        string,
-        JsonSchemaNode
-      >).proposed_issues.items?.properties?.severity
+      (schemas.EMIT_QUALITY_ISSUES_TOOL.input_schema.properties as Record<string, JsonSchemaNode>).proposed_issues.items?.properties?.severity
     )?.description
     expect(severityDesc).toBeDefined()
     if (!severityDesc) return
@@ -262,23 +239,17 @@ describe('tool-schemas — severity rubric (PR 12.1.5 B-1)', () => {
 describe('tool-schemas — risk-level rubric (PR 12.1.5 B-1)', () => {
   it('EMIT_FIX_OPTIONS_TOOL.risk_level description encodes the 3 tiers + CTE caveat', () => {
     const riskLevelDesc = (
-      (schemas.EMIT_FIX_OPTIONS_TOOL.input_schema.properties as Record<
-        string,
-        JsonSchemaNode
-      >).fix_options.items?.properties?.risk_level
+      (schemas.EMIT_FIX_OPTIONS_TOOL.input_schema.properties as Record<string, JsonSchemaNode>).fix_options.items?.properties?.risk_level
     )?.description
     expect(riskLevelDesc).toBeDefined()
     if (!riskLevelDesc) return
     expect(riskLevelDesc).toContain('"low"')
     expect(riskLevelDesc).toContain('"medium"')
     expect(riskLevelDesc).toContain('"high"')
-    // CTE caveat — the load-bearing risk-level decision
     expect(riskLevelDesc).toContain('CTE')
     expect(riskLevelDesc).toContain('non-revertable')
   })
 })
-
-// ─── PR 12.1.5 B-3: custom_sql in rule_type enum ─────────────────────────────
 
 describe('tool-schemas — custom_sql resolution (PR 12.1.5 B-3)', () => {
   it('EMIT_VALIDATION_RULE_TOOL.rule_type enum includes custom_sql', () => {
@@ -295,7 +266,6 @@ describe('tool-schemas — custom_sql resolution (PR 12.1.5 B-3)', () => {
       .properties as Record<string, JsonSchemaNode>).rule_type?.description
     expect(desc).toBeDefined()
     if (!desc) return
-    // The selection-criteria text — biases the AI toward structured types
     expect(desc).toContain('custom_sql')
     expect(desc).toContain('only when')
     expect(desc).toMatch(/maintainability|bypass/i)
@@ -312,22 +282,16 @@ describe('tool-schemas — custom_sql resolution (PR 12.1.5 B-3)', () => {
   })
 })
 
-// ─── PR 12.1.5 B-2: enum tightenings + checkConstraint flat-object ───────────
-
 describe('tool-schemas — B-2 enum tightenings + checkConstraint (PR 12.1.5 B-2)', () => {
   it('EMIT_SCHEMA_CORRECTIONS_TOOL.inferred_type is enum with 14 semantic types', () => {
     const inferredTypeNode = (
-      (schemas.EMIT_SCHEMA_CORRECTIONS_TOOL.input_schema.properties as Record<
-        string,
-        JsonSchemaNode
-      >).corrections.items?.properties?.corrections?.properties?.inferred_type
+      (schemas.EMIT_SCHEMA_CORRECTIONS_TOOL.input_schema.properties as Record<string, JsonSchemaNode>).corrections.items?.properties?.corrections?.properties?.inferred_type
     )
     expect(inferredTypeNode).toBeDefined()
     if (!inferredTypeNode) return
     const enumValues = inferredTypeNode.enum as string[] | undefined
     expect(enumValues).toBeDefined()
     expect(enumValues?.length).toBe(14)
-    // Spot-check a few canonical semantic types
     expect(enumValues).toContain('email')
     expect(enumValues).toContain('zip_code')
     expect(enumValues).toContain('id')
@@ -335,15 +299,10 @@ describe('tool-schemas — B-2 enum tightenings + checkConstraint (PR 12.1.5 B-2
 
   it('EMIT_PARSED_DDL_TOOL.checkConstraint description encodes the 4 variants (oneOf fallback)', () => {
     const checkConstraintNode = (
-      (schemas.EMIT_PARSED_DDL_TOOL.input_schema.properties as Record<
-        string,
-        JsonSchemaNode
-      >).tables.items?.properties?.fields?.items?.properties?.checkConstraint
+      (schemas.EMIT_PARSED_DDL_TOOL.input_schema.properties as Record<string, JsonSchemaNode>).tables.items?.properties?.fields?.items?.properties?.checkConstraint
     )
     expect(checkConstraintNode).toBeDefined()
     if (!checkConstraintNode) return
-    // Anthropic strict mode rejected oneOf (verified via probe);
-    // variant guidance lives in the description instead.
     const desc = checkConstraintNode.description
     expect(desc).toBeDefined()
     if (!desc) return
@@ -351,5 +310,78 @@ describe('tool-schemas — B-2 enum tightenings + checkConstraint (PR 12.1.5 B-2
     expect(desc).toContain("'regex'")
     expect(desc).toContain("'range'")
     expect(desc).toContain("'custom'")
+  })
+})
+
+// ─── Path 2 PR 1: additionalProperties: false uniformity ─────────────────────
+
+describe('tool-schemas — additionalProperties uniformity (Path 2 PR 1)', () => {
+  it('every nested object schema declares additionalProperties: false', () => {
+    const failures: string[] = []
+    for (const tool of allTools) {
+      walkProperties(
+        tool.input_schema as JsonSchemaNode,
+        (path, prop) => {
+          const isObjectNode =
+            prop.type === 'object' ||
+            (Array.isArray(prop.type) && prop.type.includes('object'))
+          if (!isObjectNode) return
+          if (prop.additionalProperties !== false) {
+            failures.push(
+              `${tool.name}: nested object at "${path}" must declare additionalProperties: false (got ${JSON.stringify(prop.additionalProperties)})`,
+            )
+          }
+        },
+      )
+    }
+    expect(failures, failures.join('\n')).toEqual([])
+  })
+
+  it('rule_config + pattern_config accept partial population (required is empty)', () => {
+    const ruleConfig = (
+      schemas.EMIT_VALIDATION_RULE_TOOL.input_schema.properties as Record<string, JsonSchemaNode>
+    ).rule_config
+    expect(ruleConfig.required ?? []).toEqual([])
+
+    const patternConfig = (
+      (schemas.EMIT_EXTRACTED_PATTERNS_TOOL.input_schema.properties as Record<string, JsonSchemaNode>).patterns.items?.properties?.pattern_config
+    )
+    expect(patternConfig).toBeDefined()
+    if (!patternConfig) return
+    expect(patternConfig.required ?? []).toEqual([])
+  })
+
+  it('rule_config enumerates all 9 possible keys across 12 rule_types', () => {
+    const properties = (
+      (schemas.EMIT_VALIDATION_RULE_TOOL.input_schema.properties as Record<string, JsonSchemaNode>).rule_config.properties as Record<string, JsonSchemaNode>
+    )
+    const expectedKeys = [
+      'min',
+      'max',
+      'min_length',
+      'max_length',
+      'pattern',
+      'description',
+      'values',
+      'date',
+      'sql',
+    ]
+    for (const k of expectedKeys) {
+      expect(properties).toHaveProperty(k)
+    }
+  })
+
+  it('pattern_config enumerates the union of 4 per-category templates', () => {
+    const properties = (
+      (schemas.EMIT_EXTRACTED_PATTERNS_TOOL.input_schema.properties as Record<string, JsonSchemaNode>).patterns.items?.properties?.pattern_config?.properties as
+        | Record<string, JsonSchemaNode>
+        | undefined
+    )
+    expect(properties).toBeDefined()
+    if (!properties) return
+    expect(properties).toHaveProperty('pattern_type')
+    expect(properties).toHaveProperty('approach')
+    expect(properties).toHaveProperty('domain')
+    expect(properties).toHaveProperty('system_type')
   })
 })

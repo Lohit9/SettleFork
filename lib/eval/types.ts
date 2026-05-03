@@ -16,7 +16,12 @@
  * investigation §1. PR 10 ships scorers for `mapping` and
  * `validation-rule` only; the other two are reserved for PR 11.
  */
-export type EvalTask = 'mapping' | 'transform' | 'nl-to-sql' | 'validation-rule'
+export type EvalTask =
+  | 'mapping'
+  | 'transform'
+  | 'nl-to-sql'
+  | 'validation-rule'
+  | 'mapping-suggestion'
 
 /** Datasets are referenced by directory name under `tests/eval/datasets/`. */
 export type DatasetName = string

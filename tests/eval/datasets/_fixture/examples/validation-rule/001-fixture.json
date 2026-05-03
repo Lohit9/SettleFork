@@ -1,18 +1,23 @@
 {
   "id": "_fixture/validation-rule/001-fixture",
   "task": "validation-rule",
+  "_note": "severity: 'blocking' reflects PR 12.1.5's 5-blocking-conditions rubric. NOT NULL constraints on required fields default to blocking per EMIT_VALIDATION_RULE_TOOL.severity description. If the rubric weakens in the future, update this gold value and document the change in the next eval-related PR.",
   "input": {
-    "field_id": "fixture-field-uuid",
+    "source_table": "fixture_source_table",
+    "target_table": "fixture_target_table",
+    "field_name": "name",
+    "field_side": "source",
     "natural_language_rule": "name must not be empty"
   },
   "gold": {
     "rule_type": "not_null",
     "rule_config": {},
-    "field_id": "fixture-field-uuid",
-    "severity": "error"
+    "severity": "blocking",
+    "name": "Name not empty"
   },
   "metadata": {
     "author": "claude",
-    "difficulty": "easy"
+    "difficulty": "easy",
+    "notes": "Smoke fixture: NL request 'name must not be empty' should map cleanly to a not_null rule on the source's `name` field. severity: 'blocking' aligns with the 5-blocking-conditions rubric (NOT NULL violations on required fields → blocking)."
   }
 }

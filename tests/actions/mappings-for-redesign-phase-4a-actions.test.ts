@@ -540,8 +540,12 @@ describe('[mappings-for-redesign 4a] suggestMappingForTarget', () => {
     // call is multi-line with a scope object literal; assert
     // co-presence of `projectId` and `userId` arguments within a
     // generous window after the call site.
+    //
+    // Path 2 PR 1: the call grew a 4th argument (supabase) plus a
+    // multi-line explanatory comment between `userId,` and the closing
+    // paren, so the after-userId window is widened from 100 to 800.
     expect(engineBody).toMatch(
-      /buildAIContext\([\s\S]{0,800}userId[\s\S]{0,100}\)/,
+      /buildAIContext\([\s\S]{0,800}userId[\s\S]{0,800}\)/,
     )
   })
 
@@ -560,9 +564,16 @@ describe('[mappings-for-redesign 4a] suggestMappingForTarget', () => {
     // Argument shape moved from positional to options object — pin
     // both `feature: 'mapping_suggest'` and `maxTokens: 1024` on the
     // same callLLM block.
+    //
+    // Path 2 PR 1: the engine threads an optional `featureOverride`
+    // parameter for the eval runner; the literal feature form changed
+    // from `feature: 'mapping_suggest'` to
+    // `feature: featureOverride ?? 'mapping_suggest'`. The regex
+    // tolerates the override expression between `feature:` and the
+    // canonical string literal so production behavior is still pinned.
     expect(engineBody).toMatch(/callLLM\(/)
     expect(engineBody).toMatch(
-      /callLLM\(\{[\s\S]{0,400}feature:\s*['"]mapping_suggest['"]/,
+      /callLLM\(\{[\s\S]{0,400}feature:[\s\S]{0,40}['"]mapping_suggest['"]/,
     )
     expect(engineBody).toMatch(
       /callLLM\(\{[\s\S]{0,400}maxTokens:\s*1024/,
