@@ -309,7 +309,7 @@ function UnifiedFixModal({
     setGeneratingFix(true)
     setError(null)
     try {
-      await generateFixSuggestions(issue.id)
+      await generateFixSuggestions({ issueId: issue.id })
       const { issues: refreshed } = await getQualityIssues(issue.project_id)
       const updated = refreshed.find((i) => i.id === issue.id)
       if (updated) {
@@ -1051,7 +1051,7 @@ function IssueCard({
   async function handleGenerateFix() {
     setError(null)
     startGenerating(async () => {
-      const res = await generateFixSuggestions(issue.id)
+      const res = await generateFixSuggestions({ issueId: issue.id })
       if (!res.success) {
         setError(res.error ?? 'Failed to generate fix suggestions')
       } else {

@@ -264,7 +264,7 @@ export async function markProjectComplete(projectId: string): Promise<{ success:
 
   // Fire intelligence extraction in the background — non-blocking and failure-safe
   try {
-    extractMigrationIntelligence(projectId).catch((err) => {
+    extractMigrationIntelligence({ projectId }).catch((err) => {
       console.error('Migration intelligence extraction failed (non-critical):', err)
     })
   } catch (err) {

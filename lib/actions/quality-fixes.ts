@@ -656,7 +656,7 @@ export async function runFullScan(
     }
     try {
       const { runAIAugmentedChecks } = await import('@/lib/actions/ai-quality-detection')
-      const aiResult = await runAIAugmentedChecks(projectId, tid)
+      const aiResult = await runAIAugmentedChecks({ projectId, tableId: tid })
       if (aiResult.error) {
         console.error(`[quality-fixes] AI augmented checks error for table ${tid}:`, aiResult.error)
       } else if (aiResult.skipped) {

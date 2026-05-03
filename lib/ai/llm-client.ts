@@ -63,6 +63,9 @@ export type LLMFeature =
   | 'eval_mapping'
   | 'eval_validation_rule'
   | 'eval_mapping_suggestion' // wired in Path 2 PR 1
+  | 'eval_quality_issues' // reserved — wired in Path 2 PR 2 B-2
+  | 'eval_extracted_patterns' // reserved — wired in Path 2 PR 2 B-2
+  | 'eval_fix_options' // reserved — wired in Path 2 PR 2 B-2
   | 'eval_transform' // reserved — wired in PR 11
   | 'eval_nl_to_sql' // reserved — wired in PR 11
 

@@ -22,6 +22,9 @@ export type EvalTask =
   | 'nl-to-sql'
   | 'validation-rule'
   | 'mapping-suggestion'
+  | 'quality-issues'
+  | 'extracted-patterns'
+  | 'fix-options'
 
 /** Datasets are referenced by directory name under `tests/eval/datasets/`. */
 export type DatasetName = string

@@ -54,10 +54,13 @@ function parseArgs(argv: string[]): ParsedArgs {
       t !== 'mapping' &&
       t !== 'validation-rule' &&
       t !== 'mapping-suggestion' &&
+      t !== 'quality-issues' &&
+      t !== 'extracted-patterns' &&
+      t !== 'fix-options' &&
       t !== 'all'
     ) {
       throw new Error(
-        `Unknown task "${t}". Use 'mapping', 'validation-rule', 'mapping-suggestion', or 'all'.`,
+        `Unknown task "${t}". Use 'mapping', 'validation-rule', 'mapping-suggestion', 'quality-issues', 'extracted-patterns', 'fix-options', or 'all'.`,
       )
     }
     options.task = t

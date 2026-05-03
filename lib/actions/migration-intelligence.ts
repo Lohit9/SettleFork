@@ -1,19 +1,63 @@
 'use server'
 
+import type { SupabaseClient } from '@supabase/supabase-js'
 import { createClient } from '@/lib/supabase/server'
 import { supabaseAdmin } from '@/lib/supabase/admin'
-import { callLLM } from '@/lib/ai/llm-client'
+import { callLLM, type LLMFeature } from '@/lib/ai/llm-client'
 import { EMIT_EXTRACTED_PATTERNS_TOOL } from '@/lib/ai/tool-schemas'
 import type { MigrationIntelligence } from '@/lib/types/database'
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
-interface ExtractedPattern {
+export interface ExtractedPattern {
   category: MigrationIntelligence['category']
   title: string
   pattern_description: string
   pattern_config: Record<string, unknown>
   tags: string[]
+}
+
+// ── Path 2 PR 2 B-1: object-style params + evalContext ───────────────────────
+
+export interface ExtractMigrationIntelligenceParams {
+  projectId: string
+  /**
+   * Path 2 PR 2 B-1: optional eval-runner injection.
+   *
+   * `migration_intelligence` is user-scoped (no project_id FK), so
+   * project teardown does NOT cascade-delete its rows. Without
+   * `skipPersist`, eval runs would leak rows tagged with EVAL_USER_ID
+   * forever (locked decision C2).
+   *
+   * When set, the function:
+   *   1. Bypasses Next.js auth (createClient + auth.getUser); uses
+   *      injected supabase + userId
+   *   2. Routes the LLM call to evalContext.featureOverride
+   *   3. Skips the per-pattern UPSERT loop into migration_intelligence
+   *      and returns the raw `extractedPatterns` array via `rawPatterns`
+   *
+   * Production callsites omit this and behavior is unchanged.
+   */
+  evalContext?: {
+    supabase: SupabaseClient
+    userId: string
+    featureOverride: LLMFeature
+    skipPersist: true
+  }
+}
+
+export interface ExtractMigrationIntelligenceResult {
+  success: boolean
+  patternsExtracted?: number
+  patternsNew?: number
+  patternsUpdated?: number
+  /**
+   * Populated only when `evalContext.skipPersist` was set. Carries the
+   * AI's raw extracted patterns array (unfiltered by dedup/UPSERT) for
+   * the eval scorer.
+   */
+  rawPatterns?: ExtractedPattern[]
+  error?: string
 }
 
 interface AppliedTransform {
@@ -418,23 +462,28 @@ async function updatePatternConfidence(
 // not call it. The feedback-loop `UPDATE`s and the dedupe `INSERT/UPDATE`s
 // all target `migration_intelligence` rows only, and are safe to run
 // while mapping writes are disabled (maintenance_mode=true).
-export async function extractMigrationIntelligence(projectId: string): Promise<{
-  success: boolean
-  patternsExtracted?: number
-  patternsNew?: number
-  patternsUpdated?: number
-  error?: string
-}> {
+export async function extractMigrationIntelligence(
+  params: ExtractMigrationIntelligenceParams,
+): Promise<ExtractMigrationIntelligenceResult> {
+  const { projectId, evalContext } = params
   try {
     // ── Auth ──────────────────────────────────────────────────────────────────
-    const supabase = await createClient()
-    const {
-      data: { user },
-      error: authError,
-    } = await supabase.auth.getUser()
+    let supabase: SupabaseClient
+    let user: { id: string }
+    if (evalContext) {
+      supabase = evalContext.supabase
+      user = { id: evalContext.userId }
+    } else {
+      supabase = await createClient()
+      const {
+        data: { user: authUser },
+        error: authError,
+      } = await supabase.auth.getUser()
 
-    if (authError || !user) {
-      return { success: false, error: 'Not authenticated' }
+      if (authError || !authUser) {
+        return { success: false, error: 'Not authenticated' }
+      }
+      user = authUser
     }
 
     const { data: project, error: projectError } = await supabaseAdmin
@@ -858,7 +907,7 @@ ${docText || '(no documentation uploaded)'}
     let result: Awaited<ReturnType<typeof callLLM>>
     try {
       result = await callLLM({
-        feature: 'migration_intelligence',
+        feature: evalContext?.featureOverride ?? 'migration_intelligence',
         systemPrompt: EXTRACTION_SYSTEM_PROMPT,
         userMessage,
         maxTokens: 4096,
@@ -897,6 +946,19 @@ ${docText || '(no documentation uploaded)'}
       } catch (parseErr) {
         console.error('Migration intelligence: JSON parse failed. Raw response:', rawResponse, parseErr)
         return { success: false, error: 'Failed to parse AI response as JSON' }
+      }
+    }
+
+    // Path 2 PR 2 B-1: eval C2 — bypass the per-pattern UPSERT into
+    // migration_intelligence. The table is user-scoped (no project_id
+    // FK), so project teardown does NOT cascade-delete its rows.
+    // skipPersist returns the raw extractedPatterns so the eval scorer
+    // measures AI output without leaking persistent rows.
+    if (evalContext?.skipPersist) {
+      return {
+        success: true,
+        patternsExtracted: extractedPatterns.length,
+        rawPatterns: extractedPatterns,
       }
     }
 
