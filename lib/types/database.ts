@@ -206,6 +206,10 @@ export interface FixHistory {
   reverted_at: string | null
   /** Joined from quality_issues via quality_issue_id (null if issue was deleted) */
   quality_issues?: { title: string } | null
+  /** Enriched at read time from profiles.full_name (live-join via applied_by FK) */
+  user_name?: string
+  /** Enriched at read time from auth.users.email via SECURITY DEFINER RPC */
+  user_email?: string | null
 }
 
 export interface FixSnapshot {
