@@ -4,6 +4,7 @@ import { useState, useRef } from 'react'
 import { Loader2 } from 'lucide-react'
 import { Upload } from '@/components/icons'
 import { updateProfileName, uploadAvatar } from '@/lib/actions/profile'
+import { useEditableField } from '@/lib/hooks/useEditableField'
 
 function getInitials(name: string | null, email: string): string {
   if (name) {
@@ -38,30 +39,27 @@ export function ProfileCard({
   const [displayName, setDisplayName] = useState(initialName ?? '')
   const [avatarUrl, setAvatarUrl] = useState<string | null>(initialAvatarUrl)
 
-  const [isEditingName, setIsEditingName] = useState(false)
-  const [editName, setEditName] = useState(displayName)
-  const [savingName, setSavingName] = useState(false)
-  const [nameError, setNameError] = useState<string | null>(null)
-
   const [uploadingAvatar, setUploadingAvatar] = useState(false)
   const avatarInputRef = useRef<HTMLInputElement>(null)
 
-  async function handleSaveName() {
-    const trimmed = editName.trim()
-    if (!trimmed || trimmed === displayName) return
-
-    setSavingName(true)
-    setNameError(null)
-    try {
-      const result = await updateProfileName(trimmed)
-      setDisplayName(result.name)
-      setIsEditingName(false)
-    } catch (err) {
-      setNameError(err instanceof Error ? err.message : 'Failed to save')
-    } finally {
-      setSavingName(false)
-    }
-  }
+  // Display-name edit machinery: state lifted into useEditableField (PR F).
+  // The hook expects `{success, error}` results; updateProfileName throws on
+  // error and resolves with `{name}` on success — wrap inline to fit.
+  const nameField = useEditableField({
+    initialValue: displayName,
+    onSave: async (draft) => {
+      try {
+        const result = await updateProfileName(draft)
+        setDisplayName(result.name)
+        return { success: true }
+      } catch (err) {
+        return {
+          success: false,
+          error: err instanceof Error ? err.message : 'Failed to save',
+        }
+      }
+    },
+  })
 
   async function handleAvatarUpload(e: React.ChangeEvent<HTMLInputElement>) {
     const file = e.target.files?.[0]
@@ -120,36 +118,25 @@ export function ProfileCard({
 
         {/* Name + Email */}
         <div className="flex-1 min-w-0">
-          {isEditingName ? (
+          {nameField.isEditing ? (
             <div className="flex items-center gap-2">
               <input
                 type="text"
-                value={editName}
-                onChange={(e) => setEditName(e.target.value)}
+                value={nameField.draft}
+                onChange={(e) => nameField.setDraft(e.target.value)}
                 className="h-8 px-3 text-sm border border-settle-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-primary/20 focus:border-primary"
                 autoFocus
-                onKeyDown={(e) => {
-                  if (e.key === 'Enter') handleSaveName()
-                  if (e.key === 'Escape') {
-                    setIsEditingName(false)
-                    setEditName(displayName)
-                    setNameError(null)
-                  }
-                }}
+                onKeyDown={nameField.handleKeyDown}
               />
               <button
-                onClick={handleSaveName}
-                disabled={savingName || editName.trim() === '' || editName.trim() === displayName}
+                onClick={nameField.save}
+                disabled={!nameField.canSave}
                 className="h-8 px-3 text-xs font-medium bg-primary text-white rounded-lg hover:bg-primary/90 transition-colors disabled:opacity-50"
               >
-                {savingName ? 'Saving...' : 'Save'}
+                {nameField.isSaving ? 'Saving...' : 'Save'}
               </button>
               <button
-                onClick={() => {
-                  setIsEditingName(false)
-                  setEditName(displayName)
-                  setNameError(null)
-                }}
+                onClick={nameField.cancel}
                 className="h-8 px-3 text-xs font-medium text-settle-slate-600 border border-settle-slate-200 rounded-lg hover:bg-settle-slate-50 transition-colors"
               >
                 Cancel
@@ -161,18 +148,15 @@ export function ProfileCard({
                 {displayName || email}
               </p>
               <button
-                onClick={() => {
-                  setEditName(displayName)
-                  setIsEditingName(true)
-                }}
+                onClick={nameField.startEdit}
                 className="text-xs text-settle-slate-500 hover:text-settle-slate-700 border border-settle-slate-200 rounded-lg px-2.5 py-1 transition-colors flex-shrink-0"
               >
                 Edit
               </button>
             </div>
           )}
-          {nameError && (
-            <p className="text-xs text-red-600 mt-1">{nameError}</p>
+          {nameField.error && (
+            <p className="text-xs text-red-600 mt-1">{nameField.error}</p>
           )}
           <p className="text-sm text-gray-500 truncate mt-0.5">{email}</p>
         </div>

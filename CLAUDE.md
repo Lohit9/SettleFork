@@ -370,6 +370,7 @@ No `console.log` in committed code. Use the logger.
 - Keyboard navigable.
 - ARIA roles, keyboard navigation, and focus management come for free from the Radix-backed primitives in `components/ui/*` (Select via [`select.tsx`](components/ui/select.tsx), DropdownMenu via [`dropdown-menu.tsx`](components/ui/dropdown-menu.tsx)). When adding a new menu / popover / dialog primitive, prefer wrapping a Radix primitive in `components/ui/` rather than re-implementing focus traps and key handling. Hand-add ARIA only where no Radix wrapper exists yet.
 - Color contrast WCAG AA. Brand teal `#1D9E75` on white passes; verify combinations before shipping.
+- **Single-field settings forms** use [`useEditableField`](lib/hooks/useEditableField.ts) — the canonical state-machine hook for the lightweight no-toast / no-Zod-on-client / no-react-hook-form pattern. Two UX modes: Edit-toggle (default) and `alwaysEditing: true`. Adopted by ProfileCard and OrganizationSettings. NOT for multi-field forms with sequential save (e.g. InfoTab) — extend with a `useEditableFieldGroup` hook when a 4th multi-field caller appears.
 
 ---
 
