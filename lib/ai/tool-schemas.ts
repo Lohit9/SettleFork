@@ -405,8 +405,10 @@ export const EMIT_PARSED_DDL_TOOL: Tool = {
                       'String representation of the column\'s DEFAULT clause value (e.g., "0", "CURRENT_TIMESTAMP", "\'pending\'"). Null when no DEFAULT is declared.',
                   },
                   checkConstraint: {
+                    type: ['object', 'null'],
+                    additionalProperties: true,
                     description:
-                      'One of four discriminated shapes selected by the `type` field:\n• type=\'in_list\' → populate `allowedValues: string[]`; leave pattern/min/max as null\n• type=\'regex\' → populate `pattern: string`; leave allowedValues/min/max as null\n• type=\'range\' → populate `min` and/or `max`; leave allowedValues/pattern as null\n• type=\'custom\' → only `raw: string`; leave the others as null\nAlways populate `raw` with the original CHECK clause text. Set checkConstraint to null when no CHECK constraint exists on this field. (B-2 may tighten this to a oneOf discriminated union pending strict-mode probe.)',
+                      'CHECK constraint as a flat object selected by the `type` discriminator, OR null when the field has no CHECK constraint. Anthropic strict mode does not support JSON Schema oneOf (verified via probe), so the variant shape is encoded in this description rather than in the schema:\n• type=\'in_list\' → populate `allowedValues: string[]`; omit pattern/min/max\n• type=\'regex\' → populate `pattern: string`; omit allowedValues/min/max\n• type=\'range\' → populate `min` and/or `max` as numbers; omit allowedValues/pattern\n• type=\'custom\' → only set `type` and `raw`; omit the other shape-specific keys\nAlways populate `raw` with the original CHECK clause text (the validator on the consumer side preserves it for audit). Set the entire checkConstraint to null when no CHECK constraint exists on this field.',
                   },
                 },
                 required: [
@@ -487,8 +489,24 @@ export const EMIT_SCHEMA_CORRECTIONS_TOOL: Tool = {
                 },
                 inferred_type: {
                   type: 'string',
+                  enum: [
+                    'email',
+                    'phone',
+                    'date',
+                    'datetime',
+                    'currency',
+                    'boolean',
+                    'percentage',
+                    'url',
+                    'address',
+                    'zip_code',
+                    'country',
+                    'state',
+                    'name',
+                    'id',
+                  ],
                   description:
-                    'Semantic type when the documentation describes the field\'s purpose. Valid values: email, phone, date, datetime, currency, boolean, percentage, url, address, zip_code, country, state, name, id. (B-2 will tighten this to a string enum.)',
+                    'Semantic type, set when the documentation describes the field\'s purpose. Picks one of the 14 canonical semantic types Settle\'s downstream consumers recognize. Omit when the documentation does not describe a semantic intent (the inference\'s structural type stays).',
                 },
                 data_type: {
                   type: 'string',
