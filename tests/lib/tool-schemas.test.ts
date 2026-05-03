@@ -277,3 +277,79 @@ describe('tool-schemas — risk-level rubric (PR 12.1.5 B-1)', () => {
     expect(riskLevelDesc).toContain('non-revertable')
   })
 })
+
+// ─── PR 12.1.5 B-3: custom_sql in rule_type enum ─────────────────────────────
+
+describe('tool-schemas — custom_sql resolution (PR 12.1.5 B-3)', () => {
+  it('EMIT_VALIDATION_RULE_TOOL.rule_type enum includes custom_sql', () => {
+    const ruleTypeNode = (schemas.EMIT_VALIDATION_RULE_TOOL.input_schema
+      .properties as Record<string, JsonSchemaNode>).rule_type
+    const ruleTypeEnum = ruleTypeNode.enum as string[] | undefined
+    expect(ruleTypeEnum).toBeDefined()
+    expect(ruleTypeEnum).toContain('custom_sql')
+    expect(ruleTypeEnum?.length).toBe(12)
+  })
+
+  it('EMIT_VALIDATION_RULE_TOOL.rule_type description guides custom_sql selection', () => {
+    const desc = (schemas.EMIT_VALIDATION_RULE_TOOL.input_schema
+      .properties as Record<string, JsonSchemaNode>).rule_type?.description
+    expect(desc).toBeDefined()
+    if (!desc) return
+    // The selection-criteria text — biases the AI toward structured types
+    expect(desc).toContain('custom_sql')
+    expect(desc).toContain('only when')
+    expect(desc).toMatch(/maintainability|bypass/i)
+  })
+
+  it('EMIT_VALIDATION_RULE_TOOL.rule_config description documents custom_sql template', () => {
+    const desc = (schemas.EMIT_VALIDATION_RULE_TOOL.input_schema
+      .properties as Record<string, JsonSchemaNode>).rule_config?.description
+    expect(desc).toBeDefined()
+    if (!desc) return
+    expect(desc).toContain('custom_sql')
+    expect(desc).toContain('SELECT-only')
+    expect(desc).toContain('table_id')
+  })
+})
+
+// ─── PR 12.1.5 B-2: enum tightenings + checkConstraint flat-object ───────────
+
+describe('tool-schemas — B-2 enum tightenings + checkConstraint (PR 12.1.5 B-2)', () => {
+  it('EMIT_SCHEMA_CORRECTIONS_TOOL.inferred_type is enum with 14 semantic types', () => {
+    const inferredTypeNode = (
+      (schemas.EMIT_SCHEMA_CORRECTIONS_TOOL.input_schema.properties as Record<
+        string,
+        JsonSchemaNode
+      >).corrections.items?.properties?.corrections?.properties?.inferred_type
+    )
+    expect(inferredTypeNode).toBeDefined()
+    if (!inferredTypeNode) return
+    const enumValues = inferredTypeNode.enum as string[] | undefined
+    expect(enumValues).toBeDefined()
+    expect(enumValues?.length).toBe(14)
+    // Spot-check a few canonical semantic types
+    expect(enumValues).toContain('email')
+    expect(enumValues).toContain('zip_code')
+    expect(enumValues).toContain('id')
+  })
+
+  it('EMIT_PARSED_DDL_TOOL.checkConstraint description encodes the 4 variants (oneOf fallback)', () => {
+    const checkConstraintNode = (
+      (schemas.EMIT_PARSED_DDL_TOOL.input_schema.properties as Record<
+        string,
+        JsonSchemaNode
+      >).tables.items?.properties?.fields?.items?.properties?.checkConstraint
+    )
+    expect(checkConstraintNode).toBeDefined()
+    if (!checkConstraintNode) return
+    // Anthropic strict mode rejected oneOf (verified via probe);
+    // variant guidance lives in the description instead.
+    const desc = checkConstraintNode.description
+    expect(desc).toBeDefined()
+    if (!desc) return
+    expect(desc).toContain("'in_list'")
+    expect(desc).toContain("'regex'")
+    expect(desc).toContain("'range'")
+    expect(desc).toContain("'custom'")
+  })
+})

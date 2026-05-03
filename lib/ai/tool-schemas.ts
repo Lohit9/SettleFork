@@ -268,11 +268,13 @@ export const EMIT_MAPPING_SUGGESTION_TOOL: Tool = {
  *
  * `rule_config` is intentionally free-form (additionalProperties: true)
  * because its shape varies by rule_type — see the per-type templates
- * in the system prompt. The downstream `validateRuleConfig` enforces
- * the per-type contract after the call.
+ * in the rule_config description. The downstream `validateRuleConfig`
+ * enforces the per-type contract after the call.
  *
- * NOTE: PR 12.1.5 B-3 will add `custom_sql` to the rule_type enum
- * (12 values total). For now (B-1) the enum stays at 11 values.
+ * The rule_type enum carries 12 values, including `custom_sql` (added
+ * in PR 12.1.5 B-3) which resolves the prior divergence with
+ * `validateRuleConfig` at lib/actions/validation-rules.ts:119 — the
+ * validator accepts custom_sql; the schema now matches.
  */
 export const EMIT_VALIDATION_RULE_TOOL: Tool = {
   name: 'emit_validation_rule',
@@ -307,15 +309,16 @@ export const EMIT_VALIDATION_RULE_TOOL: Tool = {
           'range',
           'date_after',
           'date_before',
+          'custom_sql',
         ],
         description:
-          'Canonical rule type. The rule_config shape MUST match the per-type template in the rule_config description. Use the most-specific type that captures the user intent — prefer "range" over separate min_value+max_value, prefer "allowed_values" over "regex" when the value set is small and known, prefer "date_after"/"date_before" over regex for date thresholds.',
+          'Canonical rule type. The rule_config shape MUST match the per-type template in the rule_config description. Use the most-specific type that captures the user intent — prefer "range" over separate min_value+max_value, prefer "allowed_values" over "regex" when the value set is small and known, prefer "date_after"/"date_before" over regex for date thresholds.\n\nUse `custom_sql` only when the validation logic genuinely cannot be expressed by any other rule type. Examples: cross-field referential checks, complex business rules involving multiple fields with non-trivial logic, or temporal patterns that require window functions. Do NOT use `custom_sql` as a default — prefer structured rule types when they fit. The user pays a maintainability cost for `custom_sql` rules because they bypass Settle\'s structured validation infrastructure.',
       },
       rule_config: {
         type: 'object',
         additionalProperties: true,
         description:
-          'Per-type configuration object. The keys depend on rule_type:\n• not_null/unique → {} (empty)\n• min_value → { min: number }\n• max_value → { max: number }\n• min_length/max_length → { min_length / max_length: integer }\n• regex → { pattern: non-empty string, valid JS RegExp }\n• allowed_values → { values: non-empty string[] }\n• range → { min: number, max: number, min ≤ max }\n• date_after/date_before → { date: ISO date string parseable by Date.parse }\nThe downstream validateRuleConfig will reject mismatches at insert time.',
+          'Per-type configuration object. The keys depend on rule_type:\n• not_null/unique → {} (empty)\n• min_value → { min: number }\n• max_value → { max: number }\n• min_length/max_length → { min_length / max_length: integer }\n• regex → { pattern: non-empty string, valid JS RegExp }\n• allowed_values → { values: non-empty string[] }\n• range → { min: number, max: number, min ≤ max }\n• date_after/date_before → { date: ISO date string parseable by Date.parse }\n• custom_sql → { sql: non-empty SELECT-only string, must include WHERE table_id filter }\nThe downstream validateRuleConfig will reject mismatches at insert time.',
       },
       severity: {
         type: 'string',
