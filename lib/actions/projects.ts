@@ -1,12 +1,53 @@
 'use server'
 
 import { revalidatePath } from 'next/cache'
+import { z } from 'zod'
 import { createClient } from '@/lib/supabase/server'
 import { Project, Dataset, ProjectWithDatasets, ProjectWithStats } from '@/lib/types/database'
 import { extractMigrationIntelligence } from '@/lib/actions/migration-intelligence'
 import { logActivity } from '@/lib/actions/activity-log'
 import { supabaseAdmin } from '@/lib/supabase/admin'
 import { getProjectsWithStatsInternal } from '@/lib/actions/_projects-core'
+import {
+  PROJECT_NAME_MAX_LENGTH,
+  DATASET_LABEL_MAX_LENGTH,
+} from './projects.constants'
+
+// ── Input validation framework ─────────────────────────────────────────────
+//
+// Zod is the codebase's input-validation framework (CLAUDE.md §9.3).
+// `lib/actions/projects.ts` is the canonical adopter; future server actions
+// that need input validation should mirror this pattern: module-level
+// constants (in a sibling non-'use server' file — Next.js only permits
+// async function exports from server-action files), module-level z.object
+// schemas, .safeParse inside the action body returning the first issue via
+// the standard { success: false, error } shape.
+
+const updateProjectInputSchema = z.object({
+  name: z
+    .string()
+    .trim()
+    .min(1, 'Project name cannot be empty')
+    .max(PROJECT_NAME_MAX_LENGTH, `Project name must be ${PROJECT_NAME_MAX_LENGTH} characters or less`)
+    .optional(),
+  description: z.string().optional(),
+  status: z.string().optional(),
+  completed_at: z.string().nullable().optional(),
+  archived_at: z.string().nullable().optional(),
+})
+
+const updateProjectLabelsInputSchema = z.object({
+  sourceLabel: z
+    .string()
+    .trim()
+    .min(1, 'Source label cannot be empty')
+    .max(DATASET_LABEL_MAX_LENGTH, `Source label must be ${DATASET_LABEL_MAX_LENGTH} characters or less`),
+  targetLabel: z
+    .string()
+    .trim()
+    .min(1, 'Target label cannot be empty')
+    .max(DATASET_LABEL_MAX_LENGTH, `Target label must be ${DATASET_LABEL_MAX_LENGTH} characters or less`),
+})
 
 export async function updateProjectLabels(
   projectId: string,
@@ -18,10 +59,26 @@ export async function updateProjectLabels(
     return { success: false, error: 'Insufficient permissions. Required role: editor' }
   }
 
+  const parsed = updateProjectLabelsInputSchema.safeParse({ sourceLabel, targetLabel })
+  if (!parsed.success) {
+    return { success: false, error: parsed.error.issues[0]?.message ?? 'Invalid input' }
+  }
+
   const supabase = await createClient()
+
+  // Archive guard: no system-level callers exist for label updates; the guard fires unconditionally.
+  const { data: current } = await supabase
+    .from('projects')
+    .select('status')
+    .eq('id', projectId)
+    .single()
+  if (current?.status === 'archived') {
+    return { success: false, error: 'Cannot modify archived project' }
+  }
+
   const [srcResult, tgtResult] = await Promise.all([
-    supabase.from('datasets').update({ name: sourceLabel }).eq('project_id', projectId).eq('role', 'source'),
-    supabase.from('datasets').update({ name: targetLabel }).eq('project_id', projectId).eq('role', 'target'),
+    supabase.from('datasets').update({ name: parsed.data.sourceLabel }).eq('project_id', projectId).eq('role', 'source'),
+    supabase.from('datasets').update({ name: parsed.data.targetLabel }).eq('project_id', projectId).eq('role', 'target'),
   ])
 
   if (srcResult.error) return { success: false, error: srcResult.error.message }
@@ -99,10 +156,33 @@ export async function updateProject(
     return { success: false, error: 'Insufficient permissions. Required role: editor' }
   }
 
+  const parsed = updateProjectInputSchema.safeParse(updates)
+  if (!parsed.success) {
+    return { success: false, error: parsed.error.issues[0]?.message ?? 'Invalid input' }
+  }
+
   const supabase = await createClient()
+
+  // Archive guard: skip when the call IS the archival or a system status
+  // transition (status set, archived_at set). User-initiated content edits
+  // (name/description) hit the guard. markProjectComplete has its own
+  // explicit guard upstream because the delegation here would skip this one.
+  const isSystemTransition =
+    parsed.data.status !== undefined || parsed.data.archived_at !== undefined
+  if (!isSystemTransition) {
+    const { data: current } = await supabase
+      .from('projects')
+      .select('status')
+      .eq('id', projectId)
+      .single()
+    if (current?.status === 'archived') {
+      return { success: false, error: 'Cannot modify archived project' }
+    }
+  }
+
   const { data, error } = await supabase
     .from('projects')
-    .update(updates)
+    .update(parsed.data)
     .eq('id', projectId)
     .select()
     .single()
@@ -163,6 +243,22 @@ export async function getProjectsWithStats(orgId?: string): Promise<ProjectWithS
  * completion response and failures are logged but not surfaced to the user.
  */
 export async function markProjectComplete(projectId: string): Promise<{ success: boolean; data?: Project; error?: string }> {
+  // Explicit archive guard: updateProject's guard skips when status is set
+  // (system transitions like this one), so we need the gate here for the
+  // archived → completed semantic block.
+  const supabase = await createClient()
+  const { data: project, error: fetchError } = await supabase
+    .from('projects')
+    .select('status')
+    .eq('id', projectId)
+    .single()
+  if (fetchError || !project) {
+    return { success: false, error: 'Project not found' }
+  }
+  if (project.status === 'archived') {
+    return { success: false, error: 'Cannot mark archived project complete' }
+  }
+
   const result = await updateProject(projectId, { status: 'completed', completed_at: new Date().toISOString() })
   if (!result.success) return result
 

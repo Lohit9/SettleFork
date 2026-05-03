@@ -326,8 +326,10 @@ For RBAC behavioral verification and other risky changes, prefer a **temporary s
 
 ### 9.3 Validation
 
-- Every external input (HTTP body, query param, file upload, AI response) parsed through Zod.
+- **Zod is the codebase's input-validation framework**, pinned to `^3` in `package.json` (Zod 4.x has breaking chaining-API differences; migration to 4.x will be a deliberate single-PR upgrade once enough call sites exist to benchmark the differences).
+- Every external input (HTTP body, query param, file upload, AI response, server-action input) parsed through Zod.
 - Reject early. Do not coerce silently.
+- **Canonical adopter:** [`lib/actions/projects.ts`](lib/actions/projects.ts) — module-level constants for tunable bounds, module-level `z.object` schemas, `.safeParse` inside the action body returning the first issue via the standard `{ success: false, error }` shape. Future server actions that need validation should follow this pattern. Migration of existing actions is incremental, not bundled.
 
 ### 9.4 Tests
 
