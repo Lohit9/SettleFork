@@ -1,8 +1,14 @@
 'use client'
 
-import { useState, useEffect, useRef } from 'react'
-import { createPortal } from 'react-dom'
+import { useState, useEffect } from 'react'
 import Link from 'next/link'
+import {
+  Popover,
+  PopoverClose,
+  PopoverContent,
+  PopoverPortal,
+  PopoverTrigger,
+} from '@/components/ui/popover'
 import { usePathname, useRouter } from 'next/navigation'
 import {
   FileText, Database, GitBranch, Code, CheckCircle,
@@ -85,13 +91,8 @@ export function Navigation({
   const router = useRouter()
 
   const [isHovered, setIsHovered] = useState(false)
-  const [isPopoverOpen, setIsPopoverOpen] = useState(false)
-  const [popoverCoords, setPopoverCoords] = useState({ bottom: 0, left: 0 })
   const [userName, setUserName] = useState<string | null>(null)
   const [userEmail, setUserEmail] = useState<string | null>(null)
-
-  const avatarRef = useRef<HTMLButtonElement>(null)
-  const popoverRef = useRef<HTMLDivElement>(null)
 
   // Fetch user data from browser client
   useEffect(() => {
@@ -104,40 +105,9 @@ export function Navigation({
     })
   }, [])
 
-  // Close popover on outside click (exclude avatar button)
-  useEffect(() => {
-    if (!isPopoverOpen) return
-    function handler(e: MouseEvent) {
-      const t = e.target as Node
-      if (
-        popoverRef.current && !popoverRef.current.contains(t) &&
-        avatarRef.current && !avatarRef.current.contains(t)
-      ) setIsPopoverOpen(false)
-    }
-    document.addEventListener('mousedown', handler)
-    return () => document.removeEventListener('mousedown', handler)
-  }, [isPopoverOpen])
-
-  // Close popover on Escape
-  useEffect(() => {
-    if (!isPopoverOpen) return
-    function handler(e: KeyboardEvent) { if (e.key === 'Escape') setIsPopoverOpen(false) }
-    document.addEventListener('keydown', handler)
-    return () => document.removeEventListener('keydown', handler)
-  }, [isPopoverOpen])
-
   const handleSignOut = async () => {
-    setIsPopoverOpen(false)
     await signOut()
     router.push('/login')
-  }
-
-  const openPopover = () => {
-    if (!isPopoverOpen && avatarRef.current) {
-      const rect = avatarRef.current.getBoundingClientRect()
-      setPopoverCoords({ bottom: window.innerHeight - rect.top + 8, left: rect.left })
-    }
-    setIsPopoverOpen(o => !o)
   }
 
   const expanded = isHovered
@@ -156,7 +126,7 @@ export function Navigation({
         ${expanded ? 'w-[220px] shadow-md shadow-gray-900/5' : 'w-[60px] shadow-none'}
       `}
       onMouseEnter={() => setIsHovered(true)}
-      onMouseLeave={() => { if (!isPopoverOpen) setIsHovered(false) }}
+      onMouseLeave={() => setIsHovered(false)}
     >
       {/* Logo */}
       <div className="flex-shrink-0 h-14 border-b border-gray-100 flex items-center px-3">
@@ -307,82 +277,81 @@ export function Navigation({
       {/* Divider */}
       <div className="mx-3 my-1.5 border-t border-gray-100 flex-shrink-0" />
 
-      {/* Avatar */}
+      {/* Avatar with Radix Popover (PR E.1) */}
       <div className={`flex-shrink-0 pb-4 ${expanded ? 'px-2' : 'flex justify-center'}`}>
-        {expanded ? (
-          <button
-            ref={avatarRef}
-            onClick={openPopover}
-            className="flex items-center gap-2.5 w-full px-2 py-1.5 rounded-lg hover:bg-gray-100 transition-colors cursor-pointer"
-          >
-            {initialAvatarUrl ? (
-              <img
-                src={initialAvatarUrl}
-                alt={displayName}
-                className="w-8 h-8 rounded-full object-cover flex-shrink-0"
-              />
-            ) : (
-              <div className="w-8 h-8 rounded-full bg-primary flex items-center justify-center flex-shrink-0">
-                <span className="text-xs font-semibold text-white">{userInitials}</span>
-              </div>
-            )}
-            <span className="text-sm text-gray-700 truncate max-w-[120px]">{displayName}</span>
-          </button>
-        ) : (
-          <Tip label={displayName}>
-            <button
-              ref={avatarRef}
-              onClick={openPopover}
-              className="w-10 h-10 flex items-center justify-center hover:bg-gray-100 rounded-lg transition-colors cursor-pointer"
+        <Popover>
+          {expanded ? (
+            <PopoverTrigger asChild>
+              <button className="flex items-center gap-2.5 w-full px-2 py-1.5 rounded-lg hover:bg-gray-100 transition-colors cursor-pointer">
+                {initialAvatarUrl ? (
+                  <img
+                    src={initialAvatarUrl}
+                    alt={displayName}
+                    className="w-8 h-8 rounded-full object-cover flex-shrink-0"
+                  />
+                ) : (
+                  <div className="w-8 h-8 rounded-full bg-primary flex items-center justify-center flex-shrink-0">
+                    <span className="text-xs font-semibold text-white">{userInitials}</span>
+                  </div>
+                )}
+                <span className="text-sm text-gray-700 truncate max-w-[120px]">{displayName}</span>
+              </button>
+            </PopoverTrigger>
+          ) : (
+            <Tip label={displayName}>
+              <PopoverTrigger asChild>
+                <button className="w-10 h-10 flex items-center justify-center hover:bg-gray-100 rounded-lg transition-colors cursor-pointer">
+                  {initialAvatarUrl ? (
+                    <img
+                      src={initialAvatarUrl}
+                      alt={displayName}
+                      className="w-8 h-8 rounded-full object-cover"
+                    />
+                  ) : (
+                    <div className="w-8 h-8 rounded-full bg-primary flex items-center justify-center">
+                      <span className="text-xs font-semibold text-white">{userInitials}</span>
+                    </div>
+                  )}
+                </button>
+              </PopoverTrigger>
+            </Tip>
+          )}
+          <PopoverPortal>
+            <PopoverContent
+              side="top"
+              align="start"
+              sideOffset={8}
+              className="w-[220px] p-3"
             >
-              {initialAvatarUrl ? (
-                <img
-                  src={initialAvatarUrl}
-                  alt={displayName}
-                  className="w-8 h-8 rounded-full object-cover"
-                />
-              ) : (
-                <div className="w-8 h-8 rounded-full bg-primary flex items-center justify-center">
-                  <span className="text-xs font-semibold text-white">{userInitials}</span>
-                </div>
-              )}
-            </button>
-          </Tip>
-        )}
+              <div className="px-1 pb-2">
+                <div className="text-sm font-medium text-gray-900 truncate">{displayName}</div>
+                {userEmail && <div className="text-xs text-gray-500 truncate mt-0.5">{userEmail}</div>}
+              </div>
+              <div className="border-t border-gray-200 my-2" />
+              <PopoverClose asChild>
+                <Link
+                  href="/app/settings"
+                  className="flex items-center gap-2 px-2 py-1.5 rounded-md text-sm text-gray-700 hover:bg-gray-100 transition-colors"
+                >
+                  <Settings className="w-4 h-4 text-gray-500 flex-shrink-0" />
+                  Settings
+                </Link>
+              </PopoverClose>
+              <PopoverClose asChild>
+                <button
+                  onClick={handleSignOut}
+                  className="w-full flex items-center gap-2 px-2 py-1.5 rounded-md text-sm text-red-600 hover:bg-red-50 transition-colors mt-0.5"
+                >
+                  <svg className="w-4 h-4 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1" />
+                  </svg>
+                  Sign out
+                </button>
+              </PopoverClose>
+            </PopoverContent>
+          </PopoverPortal>
+        </Popover>
       </div>
-
-      {/* Avatar popover via portal — escapes overflow:hidden */}
-      {isPopoverOpen && typeof document !== 'undefined' && createPortal(
-        <div
-          ref={popoverRef}
-          className="fixed w-[220px] bg-white border border-gray-200 rounded-xl shadow-lg z-[200] p-3"
-          style={{ bottom: popoverCoords.bottom, left: popoverCoords.left }}
-        >
-          <div className="px-1 pb-2">
-            <div className="text-sm font-medium text-gray-900 truncate">{displayName}</div>
-            {userEmail && <div className="text-xs text-gray-500 truncate mt-0.5">{userEmail}</div>}
-          </div>
-          <div className="border-t border-gray-200 my-2" />
-          <Link
-            href="/app/settings"
-            onClick={() => setIsPopoverOpen(false)}
-            className="flex items-center gap-2 px-2 py-1.5 rounded-md text-sm text-gray-700 hover:bg-gray-100 transition-colors"
-          >
-            <Settings className="w-4 h-4 text-gray-500 flex-shrink-0" />
-            Settings
-          </Link>
-          <button
-            onClick={handleSignOut}
-            className="w-full flex items-center gap-2 px-2 py-1.5 rounded-md text-sm text-red-600 hover:bg-red-50 transition-colors mt-0.5"
-          >
-            <svg className="w-4 h-4 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-              <path strokeLinecap="round" strokeLinejoin="round" d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1" />
-            </svg>
-            Sign out
-          </button>
-        </div>,
-        document.body
-      )}
     </aside>
   )
 }
