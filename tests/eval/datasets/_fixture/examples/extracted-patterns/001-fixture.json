@@ -1,0 +1,23 @@
+{
+  "id": "_fixture/extracted-patterns/001-fixture",
+  "task": "extracted-patterns",
+  "input": {
+    "source_table": "fixture_source_table",
+    "target_table": "fixture_target_table",
+    "seed_issue": {
+      "field_name": "name",
+      "severity": "warning",
+      "title": "fixture_source_table.name",
+      "description": "Null name on 5% of rows — should be reviewed before migration"
+    }
+  },
+  "gold": {
+    "min_pattern_count": 1,
+    "expected_categories": ["data_quality_pattern"]
+  },
+  "metadata": {
+    "author": "claude",
+    "difficulty": "easy",
+    "notes": "Smoke fixture: synthetic context carries an approved table_mapping + 1 seed quality_issue + field profiles. The AI must extract at least 1 pattern; we expect at least one data_quality_pattern (the canonical pattern_type vocabulary in lib/ai/canonical-patterns.ts has a `null_violation` slot the AI is steered toward by the tool description). min_pattern_count is conservative (1) because synthetic context is sparse; real projects produce 8-15 patterns per the system prompt."
+  }
+}
