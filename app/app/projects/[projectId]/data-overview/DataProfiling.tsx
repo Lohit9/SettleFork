@@ -1,11 +1,12 @@
 'use client'
 
-import { useState, useEffect, useRef } from 'react'
+import { useState, useEffect } from 'react'
 import { useRouter } from 'next/navigation'
 import { getFieldProfiles, getFieldQualityIssues } from '@/lib/actions/data-overview'
 import type { TableOption, ProfilingData } from '@/lib/actions/data-overview'
 import { Select, SelectContent, SelectGroup, SelectItem, SelectLabel, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { X, AlertTriangle } from '@/components/icons'
+import { Popover, PopoverContent, PopoverPortal, PopoverTrigger, PopoverClose } from '@/components/ui/popover'
 
 interface DataProfilingProps {
   projectId: string
@@ -98,9 +99,6 @@ export default function DataProfiling({
   const [openQualityPopover, setOpenQualityPopover] = useState<string | null>(null)
   const [popoverIssues, setPopoverIssues] = useState<FieldIssue[]>([])
   const [loadingIssues, setLoadingIssues] = useState(false)
-  const [popoverPosition, setPopoverPosition] = useState<'below' | 'above'>('below')
-  const popoverRef = useRef<HTMLDivElement>(null)
-  const triggerRefs = useRef<Record<string, HTMLButtonElement | null>>({})
 
   useEffect(() => {
     if (!selectedTableId) return
@@ -116,30 +114,6 @@ export default function DataProfiling({
       .then(({ issues }) => setPopoverIssues(issues))
       .finally(() => setLoadingIssues(false))
   }, [openQualityPopover, projectId])
-
-  // Flip popover above trigger when there isn't enough space below
-  useEffect(() => {
-    if (openQualityPopover && triggerRefs.current[openQualityPopover]) {
-      const trigger = triggerRefs.current[openQualityPopover]
-      if (trigger) {
-        const rect = trigger.getBoundingClientRect()
-        const spaceBelow = window.innerHeight - rect.bottom
-        setPopoverPosition(spaceBelow < 300 ? 'above' : 'below')
-      }
-    }
-  }, [openQualityPopover])
-
-  // Close popover on outside click
-  useEffect(() => {
-    if (!openQualityPopover) return
-    function handleClick(e: MouseEvent) {
-      if (popoverRef.current && !popoverRef.current.contains(e.target as Node)) {
-        setOpenQualityPopover(null)
-      }
-    }
-    document.addEventListener('mousedown', handleClick)
-    return () => document.removeEventListener('mousedown', handleClick)
-  }, [openQualityPopover])
 
   async function fetchProfile(tableId: string) {
     setLoading(true)
@@ -340,38 +314,38 @@ export default function DataProfiling({
                           {displayCount === 0 ? (
                             <span className="text-sm text-settle-slate-300">—</span>
                           ) : (
-                            <button
-                              ref={(el) => { triggerRefs.current[f.id] = el }}
-                              onClick={() =>
-                                setOpenQualityPopover(
-                                  openQualityPopover === f.id ? null : f.id
-                                )
-                              }
-                              className={`text-sm cursor-pointer ${
-                                isBlockingTone
-                                  ? 'text-red-600 hover:text-red-800'
-                                  : 'text-amber-600 hover:text-amber-800'
-                              }`}
+                            <Popover
+                              open={openQualityPopover === f.id}
+                              onOpenChange={(o) => setOpenQualityPopover(o ? f.id : null)}
                             >
-                              {displayCount} {displayCount === 1 ? 'issue' : 'issues'}
-                            </button>
-                          )}
+                              <PopoverTrigger asChild>
+                                <button
+                                  className={`text-sm cursor-pointer ${
+                                    isBlockingTone
+                                      ? 'text-red-600 hover:text-red-800'
+                                      : 'text-amber-600 hover:text-amber-800'
+                                  }`}
+                                >
+                                  {displayCount} {displayCount === 1 ? 'issue' : 'issues'}
+                                </button>
+                              </PopoverTrigger>
 
-                          {/* Quality issues popover */}
-                          {openQualityPopover === f.id && (() => {
-                            // Show the upload-time fallback (format + schema-aware) when
-                            // no quality_issues rows have been materialised for this field.
-                            const showFallback =
-                              !loadingIssues &&
-                              popoverIssues.length === 0 &&
-                              hasFallbackContent
-                            return (
-                            <div
-                              ref={popoverRef}
-                              className={`absolute right-0 z-50 w-80 bg-white rounded-lg shadow-lg border border-slate-200 ${
-                                popoverPosition === 'above' ? 'bottom-full mb-2' : 'top-full mt-2'
-                              }`}
-                            >
+                              {/* Quality issues popover */}
+                              <PopoverPortal>
+                                <PopoverContent
+                                  align="end"
+                                  sideOffset={8}
+                                  className="w-80 p-0 rounded-lg border-slate-200 overflow-visible"
+                                >
+                                  {(() => {
+                                    // Show the upload-time fallback (format + schema-aware) when
+                                    // no quality_issues rows have been materialised for this field.
+                                    const showFallback =
+                                      !loadingIssues &&
+                                      popoverIssues.length === 0 &&
+                                      hasFallbackContent
+                                    return (
+                            <>
                               <div className="flex items-center justify-between px-4 pt-4 pb-3">
                                 <h4 className="text-sm font-semibold text-gray-900">
                                   {f.name}
@@ -379,12 +353,13 @@ export default function DataProfiling({
                                     — {displayCount} issue{displayCount !== 1 ? 's' : ''}
                                   </span>
                                 </h4>
-                                <button
-                                  onClick={() => setOpenQualityPopover(null)}
-                                  className="text-slate-400 hover:text-slate-600 shrink-0"
-                                >
-                                  <X className="h-4 w-4" />
-                                </button>
+                                <PopoverClose asChild>
+                                  <button
+                                    className="text-slate-400 hover:text-slate-600 shrink-0"
+                                  >
+                                    <X className="h-4 w-4" />
+                                  </button>
+                                </PopoverClose>
                               </div>
 
                               <div className="px-4 pb-3 max-h-72 overflow-y-auto">
@@ -479,9 +454,13 @@ export default function DataProfiling({
                                   View in Data Preview →
                                 </button>
                               </div>
-                            </div>
-                            )
-                          })()}
+                            </>
+                                    )
+                                  })()}
+                                </PopoverContent>
+                              </PopoverPortal>
+                            </Popover>
+                          )}
                         </div>
                       </td>
                     </tr>
