@@ -1,0 +1,24 @@
+{
+  "id": "_fixture/fix-options/001-fixture",
+  "task": "fix-options",
+  "input": {
+    "source_table": "fixture_source_table",
+    "target_table": "fixture_target_table",
+    "seed_issue": {
+      "field_name": "name",
+      "severity": "warning",
+      "title": "fixture_source_table.name",
+      "description": "Null name on 5% of rows"
+    }
+  },
+  "gold": {
+    "min_option_count": 2,
+    "max_option_count": 3,
+    "requires_low_risk_option": true
+  },
+  "metadata": {
+    "author": "claude",
+    "difficulty": "easy",
+    "notes": "Smoke fixture: synthetic context seeds a quality_issues row on the `name` field via builder.seedQualityIssue. The runner passes the resulting qualityIssueId into generateFixSuggestions. Gold is structural: 2-3 options, ≥1 low-risk, all SQL must pass validateFixSQL against the synthetic source table id. No specific SQL strings ground-truthed."
+  }
+}

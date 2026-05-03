@@ -53,9 +53,24 @@ import {
   type ProposedMappingSuggestion,
   type GoldMappingSuggestion,
 } from '@/lib/eval/scorers/mapping-suggestion'
+import {
+  scoreQualityIssueDetection,
+  type GoldQualityIssues,
+} from '@/lib/eval/scorers/quality-issues'
+import {
+  scoreExtractedPatterns,
+  type GoldExtractedPatterns,
+} from '@/lib/eval/scorers/extracted-patterns'
+import {
+  scoreFixOptions,
+  type GoldFixOptions,
+} from '@/lib/eval/scorers/fix-options'
 import { runMappingGenerationForPair } from '@/lib/actions/mappings'
 import { addValidationRuleFromNL } from '@/lib/actions/validation-rules'
 import { runMappingSuggestion } from '@/lib/ai/mapping-engine'
+import { runAIAugmentedChecks } from '@/lib/actions/ai-quality-detection'
+import { extractMigrationIntelligence } from '@/lib/actions/migration-intelligence'
+import { generateFixSuggestions } from '@/lib/quality/fix-engine'
 import { resolveDefaultModel } from '@/lib/ai/llm-client'
 import { signSyntheticJwt } from '@/lib/eval/synthetic-jwt'
 import type {
@@ -227,15 +242,19 @@ export async function runEval(opts: RunOptions = {}): Promise<RunOutput> {
         datasets.push(dm)
       }
 
-      // Path 2 PR 1: dispatch on task. The reserved EvalTask values
+      // Path 2 PR 2 B-2: dispatch on task. The reserved EvalTask values
       // 'transform' and 'nl-to-sql' aren't wired here yet — they're
-      // skipped with a warning. The 3 wired tasks (mapping,
-      // validation-rule, mapping-suggestion) all use the same
-      // per-example bookkeeping pattern.
+      // skipped with a warning. The 6 wired tasks (mapping,
+      // validation-rule, mapping-suggestion, quality-issues,
+      // extracted-patterns, fix-options) all use the same per-example
+      // bookkeeping pattern.
       if (
         item.example.task !== 'mapping' &&
         item.example.task !== 'validation-rule' &&
-        item.example.task !== 'mapping-suggestion'
+        item.example.task !== 'mapping-suggestion' &&
+        item.example.task !== 'quality-issues' &&
+        item.example.task !== 'extracted-patterns' &&
+        item.example.task !== 'fix-options'
       ) {
         console.warn(
           `[eval/runner] Skipping example "${item.example.id}" — task "${item.example.task}" not yet wired.`,
@@ -262,8 +281,7 @@ export async function runEval(opts: RunOptions = {}): Promise<RunOutput> {
           orgId,
         })
         scorerName = 'scoreValidationRuleStructural'
-      } else {
-        // 'mapping-suggestion'
+      } else if (item.example.task === 'mapping-suggestion') {
         exResult = await runOneMappingSuggestionExample({
           datasetName: item.datasetName,
           schema: item.schema,
@@ -271,6 +289,31 @@ export async function runEval(opts: RunOptions = {}): Promise<RunOutput> {
           orgId,
         })
         scorerName = 'scoreMappingSuggestion'
+      } else if (item.example.task === 'quality-issues') {
+        exResult = await runOneQualityIssuesExample({
+          datasetName: item.datasetName,
+          schema: item.schema,
+          example: item.example,
+          orgId,
+        })
+        scorerName = 'scoreQualityIssueDetection'
+      } else if (item.example.task === 'extracted-patterns') {
+        exResult = await runOneExtractedPatternsExample({
+          datasetName: item.datasetName,
+          schema: item.schema,
+          example: item.example,
+          orgId,
+        })
+        scorerName = 'scoreExtractedPatterns'
+      } else {
+        // 'fix-options'
+        exResult = await runOneFixOptionsExample({
+          datasetName: item.datasetName,
+          schema: item.schema,
+          example: item.example,
+          orgId,
+        })
+        scorerName = 'scoreFixOptions'
       }
 
       dm.examples++
@@ -354,6 +397,10 @@ function resolveWork(opts: RunOptions): Array<{
       ...ds.examples.transform,
       ...ds.examples['nl-to-sql'],
       ...ds.examples['validation-rule'],
+      ...ds.examples['mapping-suggestion'],
+      ...ds.examples['quality-issues'],
+      ...ds.examples['extracted-patterns'],
+      ...ds.examples['fix-options'],
     ]
     const ex = allExamples.find((e) => e.id === opts.example)
     if (!ex) {
@@ -372,8 +419,9 @@ function resolveWork(opts: RunOptions): Array<{
   for (const datasetName of datasetNames) {
     const ds = loadDataset(datasetName)
 
-    // Tasks to include. Path 2 PR 1: wired tasks are 'mapping',
-    // 'validation-rule', 'mapping-suggestion'. Other EvalTask values
+    // Tasks to include. Path 2 PR 2 B-2: wired tasks are 'mapping',
+    // 'validation-rule', 'mapping-suggestion', 'quality-issues',
+    // 'extracted-patterns', 'fix-options'. Other EvalTask values
     // ('transform', 'nl-to-sql') are reserved enum values; their
     // examples are filtered out by the runner's per-task dispatch.
     const tasks: Array<keyof typeof ds.examples> =
@@ -383,7 +431,20 @@ function resolveWork(opts: RunOptions): Array<{
           ? ['validation-rule']
           : opts.task === 'mapping-suggestion'
             ? ['mapping-suggestion']
-            : ['mapping', 'validation-rule', 'mapping-suggestion']
+            : opts.task === 'quality-issues'
+              ? ['quality-issues']
+              : opts.task === 'extracted-patterns'
+                ? ['extracted-patterns']
+                : opts.task === 'fix-options'
+                  ? ['fix-options']
+                  : [
+                      'mapping',
+                      'validation-rule',
+                      'mapping-suggestion',
+                      'quality-issues',
+                      'extracted-patterns',
+                      'fix-options',
+                    ]
 
     for (const task of tasks) {
       const examples = ds.examples[task]
@@ -755,6 +816,342 @@ async function runOneMappingSuggestionExample(args: {
         'single',
     }
     const scored = scoreMappingSuggestion(proposed, gold)
+
+    return { score: scored.score, costUsd, errored: false }
+  } catch (err) {
+    return {
+      score: 0,
+      costUsd: 0,
+      errored: true,
+      errorMessage: err instanceof Error ? err.message : String(err),
+    }
+  } finally {
+    if (projectId) {
+      try {
+        await teardownSyntheticProject(projectId)
+      } catch (cleanupErr) {
+        console.error(
+          `[eval/runner] Teardown of synthetic project ${projectId} failed:`,
+          cleanupErr,
+        )
+      }
+    }
+  }
+}
+
+/**
+ * Run one quality-issues example end-to-end.
+ *
+ * Path 2 PR 2 B-2: dispatches to `runAIAugmentedChecks` with an
+ * evalContext using Posture A — `skipVerificationAndPersist: true`
+ * so we score the raw AI proposals BEFORE the verification SQL loop
+ * filters them by data survival. The synthetic source table is built
+ * with `withFieldProfiles: true` so the AI sees realistic stats.
+ */
+async function runOneQualityIssuesExample(args: {
+  datasetName: string
+  schema: ReturnType<typeof loadDataset>['schema']
+  example: EvalExample
+  orgId: string
+}): Promise<{ score: number; costUsd: number; errored: boolean; errorMessage?: string }> {
+  const projectName = `${EVAL_PROJECT_PREFIX}${randomUUID()}`
+  let projectId: string | null = null
+
+  try {
+    projectId = await createSyntheticProject({
+      name: projectName,
+      userId: EVAL_USER_ID,
+      orgId: args.orgId,
+    })
+
+    const input = args.example.input as { source_table: string; target_table: string }
+    if (!input.source_table || !input.target_table) {
+      return {
+        score: 0,
+        costUsd: 0,
+        errored: true,
+        errorMessage:
+          'quality-issues example.input missing required keys (source_table, target_table)',
+      }
+    }
+
+    const ctx = await buildSyntheticMappingContext({
+      projectId,
+      schema: args.schema,
+      sourceTableName: input.source_table,
+      targetTableName: input.target_table,
+      withFieldProfiles: true,
+    })
+
+    const callsBefore = Date.now()
+
+    const supabaseUserAuth = buildUserAuthedClient()
+    const aiResult = await runAIAugmentedChecks({
+      projectId,
+      tableId: ctx.sourceTableId,
+      evalContext: {
+        supabase: supabaseUserAuth,
+        userId: EVAL_USER_ID,
+        featureOverride: 'eval_quality_issues',
+        skipVerificationAndPersist: true,
+      },
+    })
+
+    const costUsd = await sumLlmCallsCost({
+      projectId,
+      sinceMs: callsBefore - 5_000,
+    })
+
+    if (aiResult.error) {
+      return { score: 0, costUsd, errored: true, errorMessage: aiResult.error }
+    }
+
+    const proposed = aiResult.rawProposals ?? []
+    const gold = args.example.gold as unknown as GoldQualityIssues
+    const scored = scoreQualityIssueDetection(proposed, gold, ctx.sourceTableId)
+
+    return { score: scored.score, costUsd, errored: false }
+  } catch (err) {
+    return {
+      score: 0,
+      costUsd: 0,
+      errored: true,
+      errorMessage: err instanceof Error ? err.message : String(err),
+    }
+  } finally {
+    if (projectId) {
+      try {
+        await teardownSyntheticProject(projectId)
+      } catch (cleanupErr) {
+        console.error(
+          `[eval/runner] Teardown of synthetic project ${projectId} failed:`,
+          cleanupErr,
+        )
+      }
+    }
+  }
+}
+
+/**
+ * Run one extracted-patterns example end-to-end.
+ *
+ * Path 2 PR 2 B-2: dispatches to `extractMigrationIntelligence` with
+ * `skipPersist: true` (locked C2 decision). migration_intelligence is
+ * user-scoped (no project_id FK), so project teardown does NOT
+ * cascade-delete its rows — skipPersist is load-bearing, not just an
+ * optimization. The synthetic context is built with
+ * `withFieldProfiles: true` AND a `seedQualityIssue` so the AI has
+ * an approved table_mapping + 1 quality_issues row + field profiles
+ * to reason from.
+ */
+async function runOneExtractedPatternsExample(args: {
+  datasetName: string
+  schema: ReturnType<typeof loadDataset>['schema']
+  example: EvalExample
+  orgId: string
+}): Promise<{ score: number; costUsd: number; errored: boolean; errorMessage?: string }> {
+  const projectName = `${EVAL_PROJECT_PREFIX}${randomUUID()}`
+  let projectId: string | null = null
+
+  try {
+    projectId = await createSyntheticProject({
+      name: projectName,
+      userId: EVAL_USER_ID,
+      orgId: args.orgId,
+    })
+
+    const input = args.example.input as {
+      source_table: string
+      target_table: string
+      seed_issue?: {
+        field_name: string
+        severity: 'blocking' | 'warning'
+        title: string
+        description: string
+      }
+    }
+    if (!input.source_table || !input.target_table) {
+      return {
+        score: 0,
+        costUsd: 0,
+        errored: true,
+        errorMessage:
+          'extracted-patterns example.input missing required keys (source_table, target_table)',
+      }
+    }
+
+    await buildSyntheticMappingContext({
+      projectId,
+      schema: args.schema,
+      sourceTableName: input.source_table,
+      targetTableName: input.target_table,
+      withFieldProfiles: true,
+      ...(input.seed_issue
+        ? {
+            seedQualityIssue: {
+              fieldName: input.seed_issue.field_name,
+              severity: input.seed_issue.severity,
+              title: input.seed_issue.title,
+              description: input.seed_issue.description,
+            },
+          }
+        : {}),
+    })
+
+    const callsBefore = Date.now()
+
+    const supabaseUserAuth = buildUserAuthedClient()
+    const aiResult = await extractMigrationIntelligence({
+      projectId,
+      evalContext: {
+        supabase: supabaseUserAuth,
+        userId: EVAL_USER_ID,
+        featureOverride: 'eval_extracted_patterns',
+        skipPersist: true,
+      },
+    })
+
+    const costUsd = await sumLlmCallsCost({
+      projectId,
+      sinceMs: callsBefore - 5_000,
+    })
+
+    if (!aiResult.success) {
+      return {
+        score: 0,
+        costUsd,
+        errored: true,
+        errorMessage: aiResult.error ?? 'extractMigrationIntelligence returned !success',
+      }
+    }
+
+    const proposed = aiResult.rawPatterns ?? []
+    const gold = args.example.gold as unknown as GoldExtractedPatterns
+    const scored = scoreExtractedPatterns(proposed, gold)
+
+    return { score: scored.score, costUsd, errored: false }
+  } catch (err) {
+    return {
+      score: 0,
+      costUsd: 0,
+      errored: true,
+      errorMessage: err instanceof Error ? err.message : String(err),
+    }
+  } finally {
+    if (projectId) {
+      try {
+        await teardownSyntheticProject(projectId)
+      } catch (cleanupErr) {
+        console.error(
+          `[eval/runner] Teardown of synthetic project ${projectId} failed:`,
+          cleanupErr,
+        )
+      }
+    }
+  }
+}
+
+/**
+ * Run one fix-options example end-to-end.
+ *
+ * Path 2 PR 2 B-2: dispatches to `generateFixSuggestions` with
+ * `skipPersist: true` so the scorer measures raw AI output and the
+ * `quality_issues.ai_fix_options` UPDATE is skipped. The synthetic
+ * context seeds a quality_issues row via `builder.seedQualityIssue`;
+ * the runner passes the resulting `qualityIssueId` to the entry
+ * function. Field profiles are required here because
+ * generateFixSuggestions calls `buildAIContext` with
+ * `includeProfilingStats + includeValueDistributions`.
+ */
+async function runOneFixOptionsExample(args: {
+  datasetName: string
+  schema: ReturnType<typeof loadDataset>['schema']
+  example: EvalExample
+  orgId: string
+}): Promise<{ score: number; costUsd: number; errored: boolean; errorMessage?: string }> {
+  const projectName = `${EVAL_PROJECT_PREFIX}${randomUUID()}`
+  let projectId: string | null = null
+
+  try {
+    projectId = await createSyntheticProject({
+      name: projectName,
+      userId: EVAL_USER_ID,
+      orgId: args.orgId,
+    })
+
+    const input = args.example.input as {
+      source_table: string
+      target_table: string
+      seed_issue: {
+        field_name: string
+        severity: 'blocking' | 'warning'
+        title: string
+        description: string
+      }
+    }
+    if (!input.source_table || !input.target_table || !input.seed_issue) {
+      return {
+        score: 0,
+        costUsd: 0,
+        errored: true,
+        errorMessage:
+          'fix-options example.input missing required keys (source_table, target_table, seed_issue)',
+      }
+    }
+
+    const ctx = await buildSyntheticMappingContext({
+      projectId,
+      schema: args.schema,
+      sourceTableName: input.source_table,
+      targetTableName: input.target_table,
+      withFieldProfiles: true,
+      seedQualityIssue: {
+        fieldName: input.seed_issue.field_name,
+        severity: input.seed_issue.severity,
+        title: input.seed_issue.title,
+        description: input.seed_issue.description,
+      },
+    })
+
+    if (!ctx.qualityIssueId) {
+      return {
+        score: 0,
+        costUsd: 0,
+        errored: true,
+        errorMessage: 'synthetic-context did not return qualityIssueId despite seedQualityIssue',
+      }
+    }
+
+    const callsBefore = Date.now()
+
+    const supabaseUserAuth = buildUserAuthedClient()
+    const aiResult = await generateFixSuggestions({
+      issueId: ctx.qualityIssueId,
+      evalContext: {
+        supabase: supabaseUserAuth,
+        userId: EVAL_USER_ID,
+        featureOverride: 'eval_fix_options',
+        skipPersist: true,
+      },
+    })
+
+    const costUsd = await sumLlmCallsCost({
+      projectId,
+      sinceMs: callsBefore - 5_000,
+    })
+
+    if (!aiResult.success) {
+      return {
+        score: 0,
+        costUsd,
+        errored: true,
+        errorMessage: aiResult.error ?? 'generateFixSuggestions returned !success',
+      }
+    }
+
+    const proposed = aiResult.rawFixOptions ?? []
+    const gold = args.example.gold as unknown as GoldFixOptions
+    const scored = scoreFixOptions(proposed, gold, ctx.sourceTableId)
 
     return { score: scored.score, costUsd, errored: false }
   } catch (err) {

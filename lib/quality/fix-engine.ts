@@ -298,15 +298,24 @@ export async function generateFixSuggestions(
 
   if (issue.project_id) {
     try {
-      const fixCtx = await buildAIContext(issue.project_id as string, {
-        tableIds: effectiveTableId ? [effectiveTableId] : [],
-        fieldIds: effectiveFieldId ? [effectiveFieldId] : [],
-        includeProfilingStats: true,
-        includeValueDistributions: true,
-        includeSampleValues: true,
-        includeDocuments: true,
-        maxDistributionValues: 15,
-      })
+      // Path 2 PR 2 B-2: pass the caller-supplied supabase client through
+      // when running under evalContext (CLI runs outside a request scope,
+      // so the default createClient() cookies path throws). Production
+      // callers omit evalContext and the 4th arg stays undefined.
+      const fixCtx = await buildAIContext(
+        issue.project_id as string,
+        {
+          tableIds: effectiveTableId ? [effectiveTableId] : [],
+          fieldIds: effectiveFieldId ? [effectiveFieldId] : [],
+          includeProfilingStats: true,
+          includeValueDistributions: true,
+          includeSampleValues: true,
+          includeDocuments: true,
+          maxDistributionValues: 15,
+        },
+        undefined,
+        evalContext ? supabase : undefined,
+      )
 
       // Find the affected field context (search source + target tables)
       const allFieldCtxs = [...fixCtx.source_tables, ...fixCtx.target_tables].flatMap((t) => t.fields)

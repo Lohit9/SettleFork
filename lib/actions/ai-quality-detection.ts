@@ -203,18 +203,28 @@ export async function runAIAugmentedChecks(
   const tableName = tableData.name
 
   // Build AI context scoped to this single table
+  // Path 2 PR 2 B-2: pass the caller-supplied supabase client through to
+  // buildAIContext when running under evalContext. The default fallback
+  // (createClient()) uses Next.js cookies which throw outside a request
+  // scope (CLI/eval). Production callers omit `evalContext` and the
+  // `supabase` argument is undefined, preserving the original behavior.
   let aiContext
   try {
-    aiContext = await buildAIContext(projectId, {
-      tableIds: [tableId],
-      includeProfilingStats: true,
-      includeValueDistributions: true,
-      includeSampleValues: true,
-      includeDocuments: true,
-      maxDocChars: 12000,
-      maxDistributionValues: 25,
-      maxSampleValues: 10,
-    }, user.id)
+    aiContext = await buildAIContext(
+      projectId,
+      {
+        tableIds: [tableId],
+        includeProfilingStats: true,
+        includeValueDistributions: true,
+        includeSampleValues: true,
+        includeDocuments: true,
+        maxDocChars: 12000,
+        maxDistributionValues: 25,
+        maxSampleValues: 10,
+      },
+      user.id,
+      evalContext ? supabase : undefined,
+    )
   } catch (err) {
     console.warn('[ai-detection] buildAIContext failed:', err)
     return { issuesFound: 0, error: 'Failed to build AI context' }

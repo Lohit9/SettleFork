@@ -1,0 +1,23 @@
+{
+  "id": "_fixture/quality-issues/001-fixture",
+  "task": "quality-issues",
+  "input": {
+    "source_table": "fixture_source_table",
+    "target_table": "fixture_target_table"
+  },
+  "gold": {
+    "expected_issues": [
+      {
+        "field_name": "name",
+        "expected_severity": "warning",
+        "description_keywords": ["null"]
+      }
+    ],
+    "acceptable_extra_issues": 5
+  },
+  "metadata": {
+    "author": "claude",
+    "difficulty": "easy",
+    "notes": "Smoke fixture: synthetic-context-builder.fieldProfileRow stamps `name` with null_count=5/total_rows=100 (5% nulls) on a NOT NULL column. AI is expected to surface a null-pattern issue on `name` with verification_sql against data_rows. Severity is 'warning' rather than 'blocking' per the locked 5-blocking-conditions rubric (PR 12.1.5): a 5% null rate on a NOT NULL field is review-worthy, not load-blocking, since the magnitude is below typical blocking thresholds."
+  }
+}
