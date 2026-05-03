@@ -1,8 +1,9 @@
 'use server'
 
+import type { SupabaseClient } from '@supabase/supabase-js'
 import { supabaseAdmin } from '@/lib/supabase/admin'
 import { createClient } from '@/lib/supabase/server'
-import { callLLM } from '@/lib/ai/llm-client'
+import { callLLM, type LLMFeature } from '@/lib/ai/llm-client'
 import { EMIT_QUALITY_ISSUES_TOOL } from '@/lib/ai/tool-schemas'
 import { checkAIRateLimit } from '@/lib/ai/rate-limit'
 import {
@@ -15,7 +16,7 @@ import { logAIEdit } from '@/lib/actions/ai-edit-history'
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
-interface ProposedIssue {
+export interface ProposedIssue {
   field_name: string
   cross_field?: string
   description: string
@@ -27,6 +28,46 @@ interface ProposedIssue {
 
 interface ClaudeQualityResponse {
   proposed_issues: ProposedIssue[]
+}
+
+// ── Path 2 PR 2 B-1: object-style params + evalContext ───────────────────────
+
+export interface RunAIAugmentedChecksParams {
+  projectId: string
+  tableId: string
+  /**
+   * Path 2 PR 2 B-1: optional eval-runner injection. When present, the
+   * function:
+   *   1. Bypasses the Next.js auth context (createClient + auth.getUser)
+   *      and uses the injected supabase + userId
+   *   2. Routes the LLM call to evalContext.featureOverride
+   *   3. Skips verification SQL execution AND the quality_issues INSERT
+   *      entirely — returns the raw `proposed_issues` array via
+   *      `rawProposals` so the eval scorer measures the AI's output as
+   *      it was emitted (not the subset that survived against synthetic
+   *      data). Same Posture A as PR 1's mapping-suggestion: score the
+   *      AI, not the downstream filter.
+   *
+   * Production callsites omit this and behavior is unchanged.
+   */
+  evalContext?: {
+    supabase: SupabaseClient
+    userId: string
+    featureOverride: LLMFeature
+    skipVerificationAndPersist: true
+  }
+}
+
+export interface RunAIAugmentedChecksResult {
+  issuesFound: number
+  skipped?: boolean
+  error?: string
+  /**
+   * Populated only when `evalContext.skipVerificationAndPersist` was set.
+   * Carries the AI's raw `proposed_issues` array (unfiltered by
+   * verification SQL execution) for the eval scorer.
+   */
+  rawProposals?: ProposedIssue[]
 }
 
 // ── Safety validator for AI-generated SQL ─────────────────────────────────────
@@ -126,14 +167,21 @@ If you find no additional issues beyond what the automated rules already detecte
 // ── Main export ───────────────────────────────────────────────────────────────
 
 export async function runAIAugmentedChecks(
-  projectId: string,
-  tableId: string
-): Promise<{ issuesFound: number; skipped?: boolean; error?: string }> {
-  const supabase = await createClient()
-  const {
-    data: { user },
-  } = await supabase.auth.getUser()
-  if (!user) return { issuesFound: 0, error: 'Not authenticated' }
+  params: RunAIAugmentedChecksParams,
+): Promise<RunAIAugmentedChecksResult> {
+  const { projectId, tableId, evalContext } = params
+
+  let supabase: SupabaseClient
+  let user: { id: string }
+  if (evalContext) {
+    supabase = evalContext.supabase
+    user = { id: evalContext.userId }
+  } else {
+    supabase = await createClient()
+    const { data: { user: authUser } } = await supabase.auth.getUser()
+    if (!authUser) return { issuesFound: 0, error: 'Not authenticated' }
+    user = authUser
+  }
 
   // Rate limit check — AI augmented checks count against per-user limit
   const rateCheck = checkAIRateLimit(user.id)
@@ -287,7 +335,7 @@ Identify additional data quality issues NOT already listed in existing_issues.`
   let llmCallId: string | null = null
   try {
     result = await callLLM({
-      feature: 'quality_detection_ai',
+      feature: evalContext?.featureOverride ?? 'quality_detection_ai',
       systemPrompt: AI_DETECTION_SYSTEM_PROMPT,
       userMessage,
       maxTokens: 2048,
@@ -321,6 +369,16 @@ Identify additional data quality issues NOT already listed in existing_issues.`
   }
 
   const proposals = parsed.proposed_issues ?? []
+
+  // Path 2 PR 2 B-1: eval Posture A — bypass verification SQL execution
+  // AND the quality_issues INSERT entirely. Return raw proposals as
+  // emitted by the AI so the eval scorer measures AI output, not
+  // synthetic-data-survival. Production (no evalContext) continues with
+  // the existing verification + insert pipeline below.
+  if (evalContext?.skipVerificationAndPersist) {
+    return { issuesFound: 0, rawProposals: proposals }
+  }
+
   if (proposals.length === 0) return { issuesFound: 0 }
 
   // Build a field name → field id lookup

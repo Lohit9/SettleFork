@@ -30,6 +30,9 @@ const TASKS: readonly EvalTask[] = [
   'nl-to-sql',
   'validation-rule',
   'mapping-suggestion',
+  'quality-issues',
+  'extracted-patterns',
+  'fix-options',
 ] as const
 
 /** Map from EvalTask → on-disk subdirectory name. They happen to match. */
@@ -178,6 +181,9 @@ export function loadDataset(datasetName: string): LoadedDataset {
     'nl-to-sql': [],
     'validation-rule': [],
     'mapping-suggestion': [],
+    'quality-issues': [],
+    'extracted-patterns': [],
+    'fix-options': [],
   }
   const examplesRoot = join(dir, 'examples')
 

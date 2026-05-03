@@ -9,15 +9,50 @@
  * triggered per-issue by user request, never bulk.
  */
 
+import type { SupabaseClient } from '@supabase/supabase-js'
 import { supabaseAdmin } from '@/lib/supabase/admin'
 import { createClient } from '@/lib/supabase/server'
-import { callLLM } from '@/lib/ai/llm-client'
+import { callLLM, type LLMFeature } from '@/lib/ai/llm-client'
 import { EMIT_FIX_OPTIONS_TOOL } from '@/lib/ai/tool-schemas'
 import { checkAIRateLimit } from '@/lib/ai/rate-limit'
 import { buildAIContext, formatFieldForPrompt, formatDocumentsForPrompt } from '@/lib/ai/context-builder'
 import { resolveFixTarget } from '@/lib/quality/fix-target'
 import { logAIEdit } from '@/lib/actions/ai-edit-history'
 import type { FixOption } from '@/lib/types/database'
+
+// ── Path 2 PR 2 B-1: object-style params + evalContext ───────────────────────
+
+export interface GenerateFixSuggestionsParams {
+  issueId: string
+  /**
+   * Path 2 PR 2 B-1: optional eval-runner injection. When set, the
+   * function:
+   *   1. Bypasses the Next.js auth context (createClient + auth.getUser)
+   *      and uses the injected supabase + userId
+   *   2. Routes the LLM call to evalContext.featureOverride
+   *   3. Skips the `quality_issues.ai_fix_options` UPDATE and returns
+   *      the raw `parsed.fix_options` array via `rawFixOptions`
+   *
+   * Production callsites omit this and behavior is unchanged.
+   */
+  evalContext?: {
+    supabase: SupabaseClient
+    userId: string
+    featureOverride: LLMFeature
+    skipPersist: true
+  }
+}
+
+export interface GenerateFixSuggestionsResult {
+  success: boolean
+  /**
+   * Populated only when `evalContext.skipPersist` was set. Carries the
+   * AI's raw fix-options array (unfiltered by the persist UPDATE) for
+   * the eval scorer.
+   */
+  rawFixOptions?: FixOption[]
+  error?: string
+}
 
 const SYSTEM_PROMPT = `You are a senior enterprise data migration consultant. A data quality issue has been detected in a migration project. Your job is to:
 1. Explain the root cause clearly
@@ -192,13 +227,21 @@ interface ClaudeFixResponse {
 }
 
 export async function generateFixSuggestions(
-  issueId: string
-): Promise<{ success: boolean; error?: string }> {
-  const supabase = await createClient()
-  const {
-    data: { user },
-  } = await supabase.auth.getUser()
-  if (!user) return { success: false, error: 'Not authenticated' }
+  params: GenerateFixSuggestionsParams,
+): Promise<GenerateFixSuggestionsResult> {
+  const { issueId, evalContext } = params
+
+  let supabase: SupabaseClient
+  let user: { id: string }
+  if (evalContext) {
+    supabase = evalContext.supabase
+    user = { id: evalContext.userId }
+  } else {
+    supabase = await createClient()
+    const { data: { user: authUser } } = await supabase.auth.getUser()
+    if (!authUser) return { success: false, error: 'Not authenticated' }
+    user = authUser
+  }
 
   // Rate limit
   const rateLimitOk = checkAIRateLimit(user.id)
@@ -422,7 +465,7 @@ Provide 2-3 fix options for this issue. Use table_id = '${effectiveTableId}' in 
   try {
     const issueProjectId = (issue as unknown as { project_id: string }).project_id
     const result = await callLLM({
-      feature: 'quality_fix_options',
+      feature: evalContext?.featureOverride ?? 'quality_fix_options',
       systemPrompt: SYSTEM_PROMPT,
       userMessage,
       maxTokens: 4096,
@@ -453,6 +496,14 @@ Provide 2-3 fix options for this issue. Use table_id = '${effectiveTableId}' in 
 
   if (!parsed.fix_options || !Array.isArray(parsed.fix_options)) {
     return { success: false, error: 'AI did not return valid fix options. Please try again.' }
+  }
+
+  // Path 2 PR 2 B-1: eval skipPersist — bypass the quality_issues UPDATE
+  // and return the raw fix_options array so the eval scorer measures
+  // AI output as emitted. Production (no evalContext) continues with
+  // the existing persistence pipeline below.
+  if (evalContext?.skipPersist) {
+    return { success: true, rawFixOptions: parsed.fix_options }
   }
 
   // Capture pre-write ai_fix_options so the diff is recoverable.

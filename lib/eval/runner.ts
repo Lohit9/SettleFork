@@ -74,7 +74,14 @@ export interface RunOptions {
    * every wired task. The remaining EvalTask values ('transform',
    * 'nl-to-sql') are reserved enum values not yet wired.
    */
-  task?: 'mapping' | 'validation-rule' | 'mapping-suggestion' | 'all'
+  task?:
+    | 'mapping'
+    | 'validation-rule'
+    | 'mapping-suggestion'
+    | 'quality-issues'
+    | 'extracted-patterns'
+    | 'fix-options'
+    | 'all'
   /** Specific dataset directory under tests/eval/datasets/. */
   dataset?: string
   /**

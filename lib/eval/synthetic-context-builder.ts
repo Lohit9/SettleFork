@@ -37,6 +37,28 @@ export interface BuildMappingContextInput {
   sourceTableName: string
   /** Must match a `name` in `schema.target.tables`. */
   targetTableName: string
+  /**
+   * Path 2 PR 2 B-1: when true, insert a `field_profiles` row per
+   * source field with hand-crafted realistic stats. The Hard-tier
+   * eval features (quality_issues, extracted_patterns, fix_options)
+   * all depend on field profiles for the AI to surface meaningful
+   * signal — without profiles, the AI sees "perfect data" and emits
+   * nothing. Per-field stat values are documented inline below.
+   */
+  withFieldProfiles?: boolean
+  /**
+   * Path 2 PR 2 B-1: when set, insert one `quality_issues` row tagged
+   * to a named source field. The fix_options eval requires a
+   * pre-existing issueId as input; this seeds it. The inserted row's
+   * id is returned via `BuiltMappingContext.qualityIssueId`.
+   */
+  seedQualityIssue?: {
+    /** Must match a name in `schema.source.tables[*].fields`. */
+    fieldName: string
+    severity: 'blocking' | 'warning'
+    title: string
+    description: string
+  }
 }
 
 export interface BuiltMappingContext {
@@ -49,6 +71,8 @@ export interface BuiltMappingContext {
   /** name → field id, for translating gold field labels to scorer ids. */
   sourceFieldsByName: Map<string, string>
   targetFieldsByName: Map<string, string>
+  /** Populated only when `seedQualityIssue` was set on the input. */
+  qualityIssueId?: string
 }
 
 /**
@@ -196,6 +220,58 @@ export async function buildSyntheticMappingContext(
     )
   }
 
+  // Path 2 PR 2 B-1: optional `field_profiles` rows for source fields.
+  // Hand-crafted stats designed to surface AI behavior in the Hard-tier
+  // smoke fixtures: every field has SOME imperfection (non-zero null_count
+  // OR cardinality < total_rows) so the quality_issues / extracted_patterns
+  // / fix_options scorers see meaningful AI output.
+  if (input.withFieldProfiles) {
+    const profileRows = (srcFields as Array<{ id: string; name: string }>).map(
+      (f) => fieldProfileRow(f.id, f.name),
+    )
+    const { error: fpErr } = await supabaseAdmin.from('field_profiles').insert(profileRows)
+    if (fpErr) {
+      throw new Error(
+        `[eval/synthetic-context] insert field_profiles failed: ${fpErr.message}`,
+      )
+    }
+  }
+
+  // Path 2 PR 2 B-1: optional seed `quality_issues` row. The fix_options
+  // eval requires a pre-existing issueId as input — this seeds it from
+  // the fixture's `seed_issue` block.
+  let qualityIssueId: string | undefined
+  if (input.seedQualityIssue) {
+    const seed = input.seedQualityIssue
+    const fieldId = sourceFieldsByName.get(seed.fieldName)
+    if (!fieldId) {
+      throw new Error(
+        `[eval/synthetic-context] seedQualityIssue references unknown source field "${seed.fieldName}"`,
+      )
+    }
+    const { data: qiRow, error: qiErr } = await supabaseAdmin
+      .from('quality_issues')
+      .insert({
+        project_id: input.projectId,
+        table_id: srcTbl.id,
+        field_id: fieldId,
+        stage: 'source',
+        severity: seed.severity,
+        title: seed.title,
+        description: seed.description,
+        affected_records: 0,
+        status: 'open',
+      })
+      .select('id')
+      .single()
+    if (qiErr || !qiRow) {
+      throw new Error(
+        `[eval/synthetic-context] insert seed quality_issues failed: ${qiErr?.message ?? 'no row'}`,
+      )
+    }
+    qualityIssueId = qiRow.id as string
+  }
+
   return {
     projectId: input.projectId,
     sourceDatasetId: sourceDs.id as string,
@@ -205,6 +281,7 @@ export async function buildSyntheticMappingContext(
     tableMappingId: tm.id as string,
     sourceFieldsByName,
     targetFieldsByName,
+    ...(qualityIssueId !== undefined ? { qualityIssueId } : {}),
   }
 }
 
@@ -221,5 +298,75 @@ function fieldRow(
     is_primary_key: spec.is_primary_key ?? false,
     is_foreign_key: spec.is_foreign_key ?? false,
     ordinal_position: ordinalPosition,
+  }
+}
+
+/**
+ * Hand-crafted `field_profiles` row stats per locked decision B1.
+ *
+ * Per-field strategy: name-based dispatch picks values that
+ * (a) match what the synthetic schema is documenting (e.g., a `name`
+ * field gets human-name samples; an `id` field gets high-cardinality
+ * uuid-shaped samples), and
+ * (b) introduce realistic imperfections (non-zero null_count OR
+ * cardinality < total_rows) so the AI surfaces meaningful issues
+ * rather than seeing "perfect data".
+ *
+ * Field profiles cascade-clean automatically: field_profiles → fields
+ * → tables → datasets → projects (all FK ON DELETE CASCADE).
+ */
+function fieldProfileRow(fieldId: string, fieldName: string): Record<string, unknown> {
+  // Default profile (any field name not specifically handled): some
+  // null_count, moderate cardinality, mixed sample values.
+  let totalRows = 100
+  let nullCount = 5
+  let nullPercentage = 5.0
+  let cardinality = 87
+  let uniquePercentage = 87.0
+  let sampleValues: string[] = ['value1', 'value2', 'value3', 'value4', 'value5']
+  let minValue: string | null = 'value1'
+  let maxValue: string | null = 'value5'
+
+  const lower = fieldName.toLowerCase()
+  if (lower === 'name' || lower.endsWith('_name')) {
+    // Human-name field: 5% null, high cardinality, plausible name samples.
+    sampleValues = ['Alice', 'Bob', 'Carol', 'David', 'Eve']
+    minValue = 'Alice'
+    maxValue = 'Zoe'
+  } else if (lower === 'id' || lower.endsWith('_id')) {
+    // ID field: typically NOT NULL + high uniqueness, no nulls.
+    nullCount = 0
+    nullPercentage = 0.0
+    cardinality = 100
+    uniquePercentage = 100.0
+    sampleValues = [
+      'a1b2c3d4-0001',
+      'a1b2c3d4-0002',
+      'a1b2c3d4-0003',
+      'a1b2c3d4-0004',
+      'a1b2c3d4-0005',
+    ]
+    minValue = 'a1b2c3d4-0001'
+    maxValue = 'z9y8x7w6-9999'
+  } else if (lower === 'label' || lower === 'description' || lower === 'title') {
+    // Text label field: moderate nulls, lower cardinality.
+    nullCount = 12
+    nullPercentage = 12.0
+    cardinality = 60
+    uniquePercentage = 60.0
+    sampleValues = ['Active', 'Inactive', 'Pending', 'Closed', 'Open']
+  }
+
+  return {
+    field_id: fieldId,
+    total_rows: totalRows,
+    null_count: nullCount,
+    null_percentage: nullPercentage,
+    cardinality,
+    unique_percentage: uniquePercentage,
+    format_issues_count: 0,
+    min_value: minValue,
+    max_value: maxValue,
+    sample_values: sampleValues,
   }
 }
