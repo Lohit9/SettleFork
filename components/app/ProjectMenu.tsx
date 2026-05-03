@@ -3,11 +3,10 @@
 import { useState, useRef, useEffect, useCallback, useTransition } from 'react'
 import { createPortal } from 'react-dom'
 import { useRouter } from 'next/navigation'
-import { Input } from '@/components/ui/input'
-import { Label } from '@/components/ui/label'
 import { Button } from '@/components/ui/button'
 import { Modal } from '@/components/ui/modal'
-import { updateProject, updateProjectLabels, deleteProject, markProjectComplete, reactivateProject, archiveProject } from '@/lib/actions/projects'
+import { Settings } from '@/components/icons'
+import { deleteProject, markProjectComplete, reactivateProject, archiveProject } from '@/lib/actions/projects'
 import { getExecutionPackageUrl } from '@/lib/actions/execution-package'
 import { useProjectRole } from '@/lib/hooks/useProjectRole'
 
@@ -85,13 +84,7 @@ export function ProjectMenu({ project, onUpdate }: ProjectMenuProps) {
   const canManage = canRole('manage')
   const [isOpen, setIsOpen] = useState(false)
   const [dropCoords, setDropCoords] = useState<{ top: number; left: number } | null>(null)
-  const [modal, setModal] = useState<'rename' | 'labels' | 'delete' | 'archive' | null>(null)
-
-  // rename state
-  const [newName, setNewName] = useState(project.name)
-  // labels state
-  const [srcLabel, setSrcLabel] = useState(project.source_label)
-  const [tgtLabel, setTgtLabel] = useState(project.target_label)
+  const [modal, setModal] = useState<'delete' | 'archive' | null>(null)
 
   const [archiveLoading, setArchiveLoading] = useState(false)
   const [archiveError, setArchiveError] = useState<string | null>(null)
@@ -177,11 +170,9 @@ export function ProjectMenu({ project, onUpdate }: ProjectMenuProps) {
     setIsOpen(o => !o)
   }
 
-  const openModal = (m: 'rename' | 'labels' | 'delete' | 'archive') => {
+  const openModal = (m: 'delete' | 'archive') => {
     setIsOpen(false)
     setActionError(null)
-    if (m === 'rename') setNewName(project.name)
-    if (m === 'labels') { setSrcLabel(project.source_label); setTgtLabel(project.target_label) }
     if (m === 'archive') {
       setArchiveError(null)
       setOutputUrl(undefined)
@@ -196,28 +187,6 @@ export function ProjectMenu({ project, onUpdate }: ProjectMenuProps) {
   const closeModal = () => setModal(null)
 
   // ── actions ──
-
-  const handleRename = () => {
-    if (!newName.trim()) return
-    setActionError(null)
-    startTransition(async () => {
-      const result = await updateProject(project.id, { name: newName.trim() })
-      if (!result.success) { setActionError(result.error ?? 'Failed to rename project'); return }
-      closeModal()
-      refresh()
-    })
-  }
-
-  const handleLabels = () => {
-    if (!srcLabel.trim() || !tgtLabel.trim()) return
-    setActionError(null)
-    startTransition(async () => {
-      const result = await updateProjectLabels(project.id, srcLabel.trim(), tgtLabel.trim())
-      if (!result.success) { setActionError(result.error ?? 'Failed to update labels.'); return }
-      closeModal()
-      refresh()
-    })
-  }
 
   const handleToggleStatus = () => {
     setIsOpen(false)
@@ -280,30 +249,28 @@ export function ProjectMenu({ project, onUpdate }: ProjectMenuProps) {
           className="fixed bg-white border border-gray-200 rounded-xl shadow-lg z-[200] py-1.5"
           style={{ width: MENU_WIDTH_PX, top: dropCoords.top, left: dropCoords.left }}
         >
+          {canEdit && (
+            <MenuItem
+              icon={<Settings className="w-4 h-4" />}
+              label="Project settings"
+              onClick={() => {
+                setIsOpen(false)
+                router.push(`/app/projects/${project.id}/settings?tab=info`)
+              }}
+            />
+          )}
           {!isArchived && (
             <>
               {canEdit && (
-                <>
-                  <MenuItem
-                    icon={<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5"><path d="M11.5 2.5l2 2-8 8H3.5v-2l8-8z"/></svg>}
-                    label="Rename"
-                    onClick={() => openModal('rename')}
-                  />
-                  <MenuItem
-                    icon={<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5"><rect x="2" y="5" width="12" height="9" rx="1"/><path d="M5 5V4a3 3 0 016 0v1"/></svg>}
-                    label="Edit labels"
-                    onClick={() => openModal('labels')}
-                  />
-                  <MenuItem
-                    icon={
-                      isCompleted
-                        ? <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5"><path d="M2 8a6 6 0 0110.5-4M14 8a6 6 0 01-10.5 4"/><path d="M12 4l2 2-2 2M4 12l-2-2 2-2"/></svg>
-                        : <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5"><circle cx="8" cy="8" r="6"/><path d="M5 8l2 2 4-4"/></svg>
-                    }
-                    label={isCompleted ? 'Reactivate' : 'Mark as completed'}
-                    onClick={handleToggleStatus}
-                  />
-                </>
+                <MenuItem
+                  icon={
+                    isCompleted
+                      ? <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5"><path d="M2 8a6 6 0 0110.5-4M14 8a6 6 0 01-10.5 4"/><path d="M12 4l2 2-2 2M4 12l-2-2 2-2"/></svg>
+                      : <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5"><circle cx="8" cy="8" r="6"/><path d="M5 8l2 2 4-4"/></svg>
+                  }
+                  label={isCompleted ? 'Reactivate' : 'Mark as completed'}
+                  onClick={handleToggleStatus}
+                />
               )}
               {canManage && (
                 <MenuItem
@@ -325,70 +292,6 @@ export function ProjectMenu({ project, onUpdate }: ProjectMenuProps) {
           )}
         </div>,
         document.body
-      )}
-
-      {/* Rename modal */}
-      {modal === 'rename' && (
-        <Modal title="Rename project" onClose={closeModal}>
-          {actionError && (
-            <div className="mb-3 rounded-md bg-red-50 border border-red-200 px-3 py-2 text-sm text-red-700">{actionError}</div>
-          )}
-          <div className="mb-4">
-            <Label className="text-sm text-gray-700 mb-1.5 block">Project name</Label>
-            <Input
-              autoFocus
-              value={newName}
-              onChange={(e) => setNewName(e.target.value)}
-              onKeyDown={(e) => { if (e.key === 'Enter') handleRename() }}
-              className="w-full"
-            />
-          </div>
-          <div className="flex justify-end gap-2">
-            <Button variant="ghost" onClick={closeModal} className="text-gray-600">Cancel</Button>
-            <Button
-              onClick={handleRename}
-              disabled={!newName.trim() || isPending}
-              className="bg-[#4F46E5] hover:bg-[#4338CA] text-white disabled:opacity-50"
-            >
-              {isPending ? 'Saving…' : 'Save'}
-            </Button>
-          </div>
-        </Modal>
-      )}
-
-      {/* Edit labels modal */}
-      {modal === 'labels' && (
-        <Modal title="Edit project labels" onClose={closeModal}>
-          <div className="space-y-3 mb-4">
-            <div>
-              <Label className="text-sm text-gray-700 mb-1.5 block">Source system</Label>
-              <Input
-                autoFocus
-                value={srcLabel}
-                onChange={(e) => setSrcLabel(e.target.value)}
-                className="w-full"
-              />
-            </div>
-            <div>
-              <Label className="text-sm text-gray-700 mb-1.5 block">Target system</Label>
-              <Input
-                value={tgtLabel}
-                onChange={(e) => setTgtLabel(e.target.value)}
-                className="w-full"
-              />
-            </div>
-          </div>
-          <div className="flex justify-end gap-2">
-            <Button variant="ghost" onClick={closeModal} className="text-gray-600">Cancel</Button>
-            <Button
-              onClick={handleLabels}
-              disabled={!srcLabel.trim() || !tgtLabel.trim() || isPending}
-              className="bg-[#4F46E5] hover:bg-[#4338CA] text-white disabled:opacity-50"
-            >
-              {isPending ? 'Saving…' : 'Save'}
-            </Button>
-          </div>
-        </Modal>
       )}
 
       {/* Delete confirmation modal */}

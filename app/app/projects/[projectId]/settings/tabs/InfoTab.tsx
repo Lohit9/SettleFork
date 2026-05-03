@@ -106,7 +106,7 @@ export default function InfoTab({ info }: { info: ProjectSettingsInfo }) {
     <div className="bg-white border border-gray-200 rounded-xl overflow-hidden">
       <div className="px-5 py-4 border-b border-gray-100 flex items-center justify-between">
         <h3 className="text-sm font-semibold text-gray-900">Project info</h3>
-        {!isEditing && canEdit && (
+        {!isEditing && canEdit && !info.isArchived && (
           <button
             onClick={enterEditMode}
             className="text-xs text-settle-slate-500 hover:text-settle-slate-700 border border-settle-slate-200 rounded-lg px-2.5 py-1 transition-colors"

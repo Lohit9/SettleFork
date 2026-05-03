@@ -13,6 +13,7 @@ export interface ProjectSettingsInfo {
   sourceSystem: string | null
   targetSystem: string | null
   createdAt: string
+  isArchived: boolean
 }
 
 interface Props {
