@@ -41,6 +41,7 @@
 import { createClient } from '@/lib/supabase/server'
 import { supabaseAdmin } from '@/lib/supabase/admin'
 import { callLLM, callLLMStreaming } from '@/lib/ai/llm-client'
+import { EMIT_COMPARTMENTALIZED_PACKAGE_TOOL } from '@/lib/ai/tool-schemas'
 import { checkAIRateLimit } from '@/lib/ai/rate-limit'
 import JSZip from 'jszip'
 import type { SqlDialect, ExecutionPackageFormat } from '@/lib/types/database'
@@ -455,8 +456,25 @@ async function generateCompartmentalizedPackageInternal(
     const { ctx, userId } = fetched
     const bundle = assembleCompartmentalizedPrompt(ctx, dialect)
 
-    let rawResponse: string
+    interface ClaudeFileEntry {
+      filename: string
+      type: string
+      content: string
+      table_name?: string
+      load_order?: number
+      dependencies?: string[]
+    }
+
+    // PR 12.3: tool-use under flag ON; legacy text + JSON-recovery scaffolding
+    // under flag OFF. The 30-line recovery scaffolding below (fence-strip,
+    // preamble-strip, truncation-recovery, sanitizeClaudeJson, JSON.parse)
+    // becomes dead code under flag-ON because tool-use guarantees a parsed
+    // files array via Anthropic's strict-mode boundary. Flag-OFF retains
+    // the scaffolding byte-identically per heritage.
+    const phase2Enabled = process.env.AI_PHASE_2_ENABLED === '1'
+    let rawResponse = ''
     let primaryCallId: string
+    let toolUseFiles: ClaudeFileEntry[] | null = null
     console.log('[COMPARTMENTALIZED] CRITICAL reminder dialect:', dialect)
     try {
       const result = await callLLMStreaming({
@@ -469,72 +487,76 @@ async function generateCompartmentalizedPackageInternal(
         promptVersion: 'execution-package-compartmentalized-v1',
         abuseUserId: userId,
         metadata: { dialect },
+        ...(phase2Enabled && { tool: EMIT_COMPARTMENTALIZED_PACKAGE_TOOL }),
       })
-      // PR 12: streaming callsite — migrated to tool use in sub-commit 12.3.
-      if (result.kind !== 'text') {
-        throw new Error('outputs_execution_package_compartmentalized: unexpected toolUse response')
-      }
-      rawResponse = result.text
       primaryCallId = result.callId
+      if (result.kind === 'toolUse') {
+        const input = result.toolUse.input as { files?: unknown }
+        if (!Array.isArray(input.files)) {
+          throw new Error('outputs_execution_package_compartmentalized: tool input missing files array')
+        }
+        toolUseFiles = input.files as ClaudeFileEntry[]
+      } else {
+        rawResponse = result.text
+      }
     } catch (err) {
       console.error('[generateCompartmentalizedPackage] Claude call failed:', err)
       return { success: false, error: 'Failed to generate compartmentalized package. Please try again.' }
     }
 
-    console.log('[generateCompartmentalizedPackage] Raw response length:', rawResponse.length)
-
-    interface ClaudeFileEntry {
-      filename: string
-      type: string
-      content: string
-      table_name?: string
-      load_order?: number
-      dependencies?: string[]
-    }
-
     let claudeFiles: ClaudeFileEntry[]
-    try {
-      let cleaned = rawResponse.trim()
+    if (toolUseFiles !== null) {
+      // Flag-ON tool-use path: skip the JSON-recovery scaffolding entirely.
+      // Anthropic's strict-mode boundary already validated the files array
+      // shape against EMIT_COMPARTMENTALIZED_PACKAGE_TOOL.
+      claudeFiles = toolUseFiles
+      console.log('[generateCompartmentalizedPackage] Tool-use mode: parsed', claudeFiles.length, 'files')
+    } else {
+      // Flag-OFF legacy text path: byte-identical to PR #23 baseline.
+      console.log('[generateCompartmentalizedPackage] Raw response length:', rawResponse.length)
+      try {
+        let cleaned = rawResponse.trim()
 
-      cleaned = cleaned.replace(/^```(?:json)?\s*\n?/i, '')
-      cleaned = cleaned.replace(/\n?```\s*$/i, '')
-      cleaned = cleaned.trim()
+        cleaned = cleaned.replace(/^```(?:json)?\s*\n?/i, '')
+        cleaned = cleaned.replace(/\n?```\s*$/i, '')
+        cleaned = cleaned.trim()
 
-      const braceIdx = cleaned.indexOf('{')
-      if (braceIdx > 0) {
-        console.log('[generateCompartmentalizedPackage] Stripping preamble, starts at index', braceIdx)
-        cleaned = cleaned.slice(braceIdx)
-      }
-
-      if (!cleaned.trimEnd().endsWith('}')) {
-        console.warn('[generateCompartmentalizedPackage] Response may be truncated — attempting recovery')
-        const lastClose = cleaned.lastIndexOf('}')
-        if (lastClose !== -1) {
-          cleaned = cleaned.slice(0, lastClose + 1)
-          const openBrackets = (cleaned.match(/\[/g) ?? []).length - (cleaned.match(/\]/g) ?? []).length
-          const openBraces = (cleaned.match(/\{/g) ?? []).length - (cleaned.match(/\}/g) ?? []).length
-          for (let i = 0; i < openBrackets; i++) cleaned += ']'
-          for (let i = 0; i < openBraces; i++) cleaned += '}'
-          console.log(
-            '[generateCompartmentalizedPackage] Recovery attempt — added',
-            openBrackets,
-            'brackets,',
-            openBraces,
-            'braces',
-          )
+        const braceIdx = cleaned.indexOf('{')
+        if (braceIdx > 0) {
+          console.log('[generateCompartmentalizedPackage] Stripping preamble, starts at index', braceIdx)
+          cleaned = cleaned.slice(braceIdx)
         }
-      }
 
-      const sanitized = sanitizeClaudeJson(cleaned)
-      const parsed = JSON.parse(sanitized) as { files: ClaudeFileEntry[] }
-      if (!Array.isArray(parsed.files)) throw new Error('Missing files array')
-      claudeFiles = parsed.files
-      console.log('[generateCompartmentalizedPackage] Parsed', claudeFiles.length, 'files successfully')
-    } catch (parseErr) {
-      console.error('[generateCompartmentalizedPackage] JSON parse failed:', parseErr)
-      return {
-        success: false,
-        error: 'Failed to parse structured output from AI. Try generating again, or use the single-file format.',
+        if (!cleaned.trimEnd().endsWith('}')) {
+          console.warn('[generateCompartmentalizedPackage] Response may be truncated — attempting recovery')
+          const lastClose = cleaned.lastIndexOf('}')
+          if (lastClose !== -1) {
+            cleaned = cleaned.slice(0, lastClose + 1)
+            const openBrackets = (cleaned.match(/\[/g) ?? []).length - (cleaned.match(/\]/g) ?? []).length
+            const openBraces = (cleaned.match(/\{/g) ?? []).length - (cleaned.match(/\}/g) ?? []).length
+            for (let i = 0; i < openBrackets; i++) cleaned += ']'
+            for (let i = 0; i < openBraces; i++) cleaned += '}'
+            console.log(
+              '[generateCompartmentalizedPackage] Recovery attempt — added',
+              openBrackets,
+              'brackets,',
+              openBraces,
+              'braces',
+            )
+          }
+        }
+
+        const sanitized = sanitizeClaudeJson(cleaned)
+        const parsed = JSON.parse(sanitized) as { files: ClaudeFileEntry[] }
+        if (!Array.isArray(parsed.files)) throw new Error('Missing files array')
+        claudeFiles = parsed.files
+        console.log('[generateCompartmentalizedPackage] Parsed', claudeFiles.length, 'files successfully')
+      } catch (parseErr) {
+        console.error('[generateCompartmentalizedPackage] JSON parse failed:', parseErr)
+        return {
+          success: false,
+          error: 'Failed to parse structured output from AI. Try generating again, or use the single-file format.',
+        }
       }
     }
 
