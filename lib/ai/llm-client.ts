@@ -20,7 +20,13 @@ import Anthropic, {
   AuthenticationError,
   RateLimitError,
 } from '@anthropic-ai/sdk'
-import type { TextBlockParam, Tool, ToolUseBlock } from '@anthropic-ai/sdk/resources/messages'
+import type {
+  OutputConfig,
+  TextBlockParam,
+  ThinkingConfigParam,
+  Tool,
+  ToolUseBlock,
+} from '@anthropic-ai/sdk/resources/messages'
 import { randomUUID, createHash } from 'node:crypto'
 import { supabaseAdmin } from '@/lib/supabase/admin'
 import { computeCostUsd } from '@/lib/ai/pricing'
@@ -154,6 +160,20 @@ export interface CallLLMOptions {
    * `applyToolCache`.
    */
   tools?: Tool[]
+  /**
+   * PR 3.4a — pass-through for Anthropic's `thinking` request field.
+   * SDK union: `{ type: 'adaptive' }` | `{ type: 'disabled' }` |
+   * `{ type: 'enabled', budget_tokens: number }` (≥1024). When
+   * undefined (today's universal state), no `thinking` field is sent
+   * and the request body is byte-identical to pre-3.4a.
+   */
+  thinking?: ThinkingConfigParam
+  /**
+   * PR 3.4a — override for `output_config`. Caller-supplied value wins;
+   * otherwise the wrapper falls back to legacy AI_PHASE_2_ENABLED-driven
+   * `{ effort }` via `resolveOutputConfig`. Undefined → no field sent.
+   */
+  output_config?: OutputConfig
 }
 
 interface CallLLMResultCommon {
@@ -432,6 +452,25 @@ export function applyToolCache(
   return { ...tool, cache_control: { type: 'ephemeral' } }
 }
 
+// ─── output_config resolution (PR 3.4a) ──────────────────────────────────────
+
+/**
+ * Resolve `output_config`: caller override wins; otherwise fall back
+ * to the legacy AI_PHASE_2_ENABLED-driven `{ effort }` shape via
+ * `resolveEffort`; otherwise undefined (no field sent).
+ *
+ * Branch (2) is byte-identical to pre-3.4a's inline `effort &&
+ * { output_config: { effort } }` construction. Pure; exported for tests.
+ */
+export function resolveOutputConfig(
+  opts: Pick<CallLLMOptions, 'output_config' | 'feature'>,
+): OutputConfig | undefined {
+  if (opts.output_config !== undefined) return opts.output_config
+  const effort = resolveEffort(opts.feature)
+  if (effort) return { effort }
+  return undefined
+}
+
 // ─── Multi-tool resolution helpers (PR 3.2) ──────────────────────────────────
 
 /**
@@ -502,7 +541,7 @@ export function resolveToolChoice(
 export async function callLLM(opts: CallLLMOptions): Promise<CallLLMResult> {
   const callId = randomUUID()
   const model = opts.model ?? resolveDefaultModel()
-  const effort = resolveEffort(opts.feature)
+  const outputConfig = resolveOutputConfig(opts)
   const maxTokens = opts.maxTokens ?? DEFAULT_MAX_TOKENS
   const startedAt = Date.now()
   const baseRow = buildBaseRow(callId, opts, model, maxTokens, false)
@@ -516,13 +555,12 @@ export async function callLLM(opts: CallLLMOptions): Promise<CallLLMResult> {
       // or a TextBlockParam[] carrying cache_control when set.
       system: buildSystemParam(opts.systemPrompt, opts.cacheControl),
       messages: [{ role: 'user', content: opts.userMessage }],
-      // PR 11: include `output_config.effort` only when defined.
-      // The Anthropic SDK nests `effort` inside `OutputConfig`
-      // (messages.d.ts:704-712); a bare top-level `effort` field is
-      // rejected by the API as "Extra inputs are not permitted".
-      // When the flag is OFF or the feature is in LOW_EFFORT_FEATURES,
-      // no output_config is sent at all (preserves current behavior).
-      ...(effort && { output_config: { effort } }),
+      // PR 11 / PR 3.4a: `output_config` resolved via the helper above
+      // (caller override → legacy effort fallback → undefined). Without
+      // this nesting `effort` 400s with "Extra inputs are not permitted".
+      ...(outputConfig && { output_config: outputConfig }),
+      // PR 3.4a: pass-through for `thinking` (adapter / enabled / disabled).
+      ...(opts.thinking && { thinking: opts.thinking }),
       // PR 12: include `tools` + `tool_choice` only when a tool surface
       // is registered. `tool_choice` is a top-level request field
       // (NOT nested inside output_config like `effort`); see
@@ -711,7 +749,7 @@ export async function callLLMStreaming(
 ): Promise<CallLLMResult> {
   const callId = randomUUID()
   const model = opts.model ?? resolveDefaultModel()
-  const effort = resolveEffort(opts.feature)
+  const outputConfig = resolveOutputConfig(opts)
   const maxTokens = opts.maxTokens ?? DEFAULT_STREAMING_MAX_TOKENS
   const startedAt = Date.now()
   const baseRow = buildBaseRow(callId, opts, model, maxTokens, true)
@@ -726,16 +764,12 @@ export async function callLLMStreaming(
       system: buildSystemParam(opts.systemPrompt, opts.cacheControl),
       messages: [{ role: 'user', content: opts.userMessage }],
       stream: true,
-      // PR 12 follow-up to PR 11: nest `effort` under `output_config`,
-      // mirroring callLLM's correct placement at the non-streaming
-      // wrapper. PR 11 fixed this in callLLM but missed the streaming
-      // path; the §9.1 probe confirmed `output_config: { effort }` is
-      // also the correct shape for streaming requests. Without this
-      // fix, any streaming callsite (currently only
-      // `outputs_execution_package_compartmentalized`) would 400 with
-      // "Extra inputs are not permitted" the moment
-      // AI_PHASE_2_ENABLED=1 puts that feature on effort='high'.
-      ...(effort && { output_config: { effort } }),
+      // PR 12 follow-up / PR 3.4a: same `resolveOutputConfig` helper +
+      // `thinking` pass-through as the non-streaming wrapper. No
+      // streaming callsite uses agent-loop today, but uniform plumbing
+      // avoids divergence between the two wrappers.
+      ...(outputConfig && { output_config: outputConfig }),
+      ...(opts.thinking && { thinking: opts.thinking }),
       // PR 12: same tool plumbing as callLLM. Streaming + tool_use is
       // supported on SDK 0.78.0; `stream.finalMessage()` returns a
       // fully-assembled message whose `content` array contains the

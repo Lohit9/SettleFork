@@ -23,6 +23,10 @@ export interface FieldContext {
   // Provenance label. Not emitted in the prompt today, but carried on the
   // context so future heuristics (confidence weighting, skip rules) can use it.
   schema_source: FieldSchemaSource
+  // PR 3.4a — column default expression + free-text description. Both
+  // surface in target-side schema rendering only; null when absent.
+  default_value: string | null
+  description: string | null
   // Profiling stats (computed across ALL rows during upload):
   null_percentage: number
   cardinality: number
@@ -83,8 +87,12 @@ export interface ContextScope {
   fieldIds?: string[]
   /** Max values in value_distribution per field */
   maxDistributionValues?: number
-  /** Max sample values per field */
+  /** Max sample values per field (legacy, symmetric). */
   maxSampleValues?: number
+  /** PR 3.4a — per-role override; falls back to `maxSampleValues` when unset. */
+  maxSourceSampleValues?: number
+  /** PR 3.4a — per-role override; falls back to `maxSampleValues` when unset. */
+  maxTargetSampleValues?: number
 }
 
 const DEFAULT_SCOPE: Required<ContextScope> = {
@@ -97,6 +105,10 @@ const DEFAULT_SCOPE: Required<ContextScope> = {
   fieldIds: [],
   maxDistributionValues: 25,
   maxSampleValues: 10,
+  // PR 3.4a — `-1` sentinel = "unset"; build path falls back to
+  // `maxSampleValues` so legacy callers stay byte-identical.
+  maxSourceSampleValues: -1,
+  maxTargetSampleValues: -1,
 }
 
 // ── Main context builder ──────────────────────────────────────────────────────
@@ -156,7 +168,9 @@ export async function buildAIContext(
   // 4. Get fields (optionally filtered to specific IDs)
   const fieldBaseQuery = supabase
     .from('fields')
-    .select('id, table_id, name, data_type, inferred_type, is_nullable, is_primary_key, is_foreign_key, fk_reference, check_constraint, schema_source, ordinal_position')
+    // PR 3.4a — `default_value` and `description` added (target-side
+    // rendering only; source rendering byte-unchanged).
+    .select('id, table_id, name, data_type, inferred_type, is_nullable, is_primary_key, is_foreign_key, fk_reference, check_constraint, schema_source, default_value, description, ordinal_position')
     .in('table_id', tableIds.length ? tableIds : ['__none__'])
     .order('ordinal_position', { ascending: true })
 
@@ -240,6 +254,12 @@ export async function buildAIContext(
     }
   }
 
+  // PR 3.4a — per-role sample cap; `-1` sentinel = unset → symmetric fallback.
+  const effectiveSourceSampleCap =
+    opts.maxSourceSampleValues >= 0 ? opts.maxSourceSampleValues : opts.maxSampleValues
+  const effectiveTargetSampleCap =
+    opts.maxTargetSampleValues >= 0 ? opts.maxTargetSampleValues : opts.maxSampleValues
+
   // 7. Assemble table contexts
   function buildTableContexts(
     datasetId: string | undefined,
@@ -247,6 +267,8 @@ export async function buildAIContext(
     role: 'source' | 'target'
   ): TableContext[] {
     if (!datasetId) return []
+
+    const sampleCap = role === 'source' ? effectiveSourceSampleCap : effectiveTargetSampleCap
 
     return (tables ?? [])
       .filter((t) => t.dataset_id === datasetId)
@@ -262,6 +284,8 @@ export async function buildAIContext(
               fk_reference?: string | null
               check_constraint?: CheckConstraint | null
               schema_source?: FieldSchemaSource | string | null
+              default_value?: string | null
+              description?: string | null
             }
 
             const ctx: FieldContext = {
@@ -274,6 +298,8 @@ export async function buildAIContext(
               fk_reference: rawField.fk_reference ?? null,
               check_constraint: (rawField.check_constraint as CheckConstraint | null) ?? null,
               schema_source: (rawField.schema_source as FieldSchemaSource) ?? 'inferred',
+              default_value: rawField.default_value ?? null,
+              description: rawField.description ?? null,
               null_percentage: (profile?.null_percentage as number) ?? 0,
               cardinality: (profile?.cardinality as number) ?? 0,
               unique_percentage: (profile?.unique_percentage as number) ?? 0,
@@ -283,7 +309,7 @@ export async function buildAIContext(
               value_distribution: rawDist.slice(0, opts.maxDistributionValues),
               sample_values: rawSamples
                 .filter(Boolean)
-                .slice(0, opts.maxSampleValues)
+                .slice(0, sampleCap)
                 .map((v) => String(v)),
             }
             return ctx
@@ -485,11 +511,14 @@ function formatCheckConstraintFlag(cc: CheckConstraint | null | undefined): stri
 
 /**
  * Format schema context for a Claude prompt.
- * Shows field metadata, profiling stats, and value distributions.
  * The `label` is used in the XML wrapper tags (e.g., "source" → <source_schema>).
+ * PR 3.4a — when `label === 'target'`, also emits `Default:` and
+ * `Description:` lines. Source rendering byte-unchanged.
  */
 export function formatSchemaForPrompt(tables: TableContext[], label: string): string {
   if (tables.length === 0) return ''
+
+  const isTarget = label === 'target'
 
   let output = `<${label}_schema>\n`
   output += `Current ${label} schema — source of truth for data types, constraints, nullability, and relationships.\n`
@@ -512,6 +541,15 @@ export function formatSchemaForPrompt(tables: TableContext[], label: string): st
       const flags = flagList.join(', ')
 
       output += `  - ${field.name} (${field.data_type}) [${flags}]\n`
+
+      // PR 3.4a — target-only enrichment (source byte-unchanged).
+      if (isTarget) {
+        if (field.default_value) output += `    Default: ${field.default_value}\n`
+        if (field.description) {
+          const compact = field.description.replace(/\s+/g, ' ').trim()
+          if (compact.length > 0) output += `    Description: ${compact}\n`
+        }
+      }
 
       // Profiling stats
       if (field.null_percentage > 0 || field.format_issues_count > 0 || field.cardinality > 0) {
