@@ -1,0 +1,4 @@
+strictDepBuilds: false
+allowBuilds:
+  canvas: false
+  esbuild: false

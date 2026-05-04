@@ -27,6 +27,7 @@
     "@radix-ui/react-select": "^2.2.6",
     "@supabase/ssr": "^0.5.2",
     "@supabase/supabase-js": "^2.86.2",
+    "@tanstack/react-virtual": "^3.13.24",
     "@types/papaparse": "^5.5.2",
     "@types/pg": "^8.20.0",
     "@upstash/ratelimit": "^2.0.8",

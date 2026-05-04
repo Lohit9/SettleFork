@@ -1,6 +1,7 @@
 'use client'
 
 import { useEffect, useRef, useState } from 'react'
+import { useWindowVirtualizer } from '@tanstack/react-virtual'
 import type {
   MappingRow,
   SourceFieldWithState,
@@ -12,6 +13,15 @@ import {
 } from './FieldMappingRow'
 import { ChevronRight, MoreHorizontal } from '@/components/icons'
 import { cn } from '@/components/ui/utils'
+
+// Threshold below which we skip virtualization. The virtualizer adds
+// per-row overhead (measureElement + ResizeObserver) that's pure cost
+// for small groups; the existing rows.map render path is faster for
+// short lists. 50 was picked because the default Mitratech-tier
+// project has ~20-40 fields per target table, so most groups stay on
+// the non-virtualized path. Larger PE-backed M&A projects with 200+
+// field tables hit the virtualized path automatically.
+const VIRTUALIZATION_THRESHOLD = 50
 
 // ─────────────────────────────────────────────────────────────────────────────
 // TargetTableGroup — Phase 3 Gap 4c (extended in Gap 3 for filtered counts).
@@ -153,6 +163,35 @@ interface TargetTableGroupProps {
    */
   optimisticData?: Map<string, MappingRow>
   /**
+   * Lifted per-row chevron-expansion state. When provided, the row
+   * reads its expanded flag from this map (keyed by rowId) instead
+   * of a local useState — necessary so the state survives the row's
+   * unmount/remount cycle when virtualization scrolls it out of and
+   * back into view. Optional for backward compat: legacy fixtures
+   * and standalone tests that omit this fall back to per-row local
+   * state. Owner: MappingContent.
+   */
+  expandedRowIds?: Map<string, boolean>
+  /**
+   * Companion setter for `expandedRowIds`. Fired with `(rowId, next)`
+   * when the row's chevron is clicked. Required if expandedRowIds is
+   * provided; ignored otherwise.
+   */
+  onExpandedChange?: (rowId: string, next: boolean) => void
+  /**
+   * Lifted "which row's inline source picker is open" — at most one
+   * row at a time. When provided AND `pickerOpenRowId === row.id`,
+   * the row renders its picker open. Required to survive virtualizer
+   * unmount/remount and to support the cleanup-on-row-dissolve
+   * behavior owned by MappingContent.
+   */
+  pickerOpenRowId?: string | null
+  /**
+   * Companion setter for `pickerOpenRowId`. Fired with `rowId` to
+   * open, `null` to close.
+   */
+  onPickerOpenChange?: (rowId: string | null) => void
+  /**
    * Phase 4-polish-3 — inline action handlers. Forwarded untouched
    * to each row. Each is independently optional so individual call
    * sites can opt out of specific affordances (e.g. read-only
@@ -184,6 +223,10 @@ export function TargetTableGroup({
   availableSourceFields,
   optimisticStates,
   optimisticData,
+  expandedRowIds,
+  onExpandedChange,
+  pickerOpenRowId,
+  onPickerOpenChange,
   onInlineApprove,
   onInlineReject,
   onInlineAcknowledge,
@@ -366,28 +409,213 @@ export function TargetTableGroup({
           )}
         >
           <ColumnHeaderRow />
-          <div role="list" className="divide-y divide-gray-100">
-            {rows.map((row) => (
-              <FieldMappingRow
-                key={row.id}
-                row={row}
-                onRowClick={onRowClick}
-                isActive={openRowId === row.id}
-                isHighlighted={highlightedRowIds?.has(row.id) ?? false}
-                availableSourceFields={availableSourceFields}
-                optimisticState={optimisticStates?.get(row.id)}
-                optimisticData={optimisticData}
-                onInlineApprove={onInlineApprove}
-                onInlineReject={onInlineReject}
-                onInlineAcknowledge={onInlineAcknowledge}
-                onInlineUnacknowledge={onInlineUnacknowledge}
-                onSourceCommit={onInlineSourceCommit}
-              />
-            ))}
-          </div>
+          {rows.length < VIRTUALIZATION_THRESHOLD ? (
+            <div role="list" className="divide-y divide-gray-100">
+              {rows.map((row) => (
+                <FieldMappingRow
+                  key={row.id}
+                  row={row}
+                  onRowClick={onRowClick}
+                  isActive={openRowId === row.id}
+                  isHighlighted={highlightedRowIds?.has(row.id) ?? false}
+                  availableSourceFields={availableSourceFields}
+                  optimisticState={optimisticStates?.get(row.id)}
+                  optimisticData={optimisticData}
+                  isExpanded={
+                    expandedRowIds !== undefined
+                      ? expandedRowIds.get(row.id) ?? false
+                      : undefined
+                  }
+                  onExpandedChange={
+                    onExpandedChange !== undefined
+                      ? (next) => onExpandedChange(row.id, next)
+                      : undefined
+                  }
+                  isPickerOpen={
+                    pickerOpenRowId !== undefined
+                      ? pickerOpenRowId === row.id
+                      : undefined
+                  }
+                  onPickerOpenChange={
+                    onPickerOpenChange !== undefined
+                      ? (next) =>
+                          onPickerOpenChange(next ? row.id : null)
+                      : undefined
+                  }
+                  onInlineApprove={onInlineApprove}
+                  onInlineReject={onInlineReject}
+                  onInlineAcknowledge={onInlineAcknowledge}
+                  onInlineUnacknowledge={onInlineUnacknowledge}
+                  onSourceCommit={onInlineSourceCommit}
+                />
+              ))}
+            </div>
+          ) : (
+            <VirtualizedRowList
+              rows={rows}
+              onRowClick={onRowClick}
+              openRowId={openRowId}
+              highlightedRowIds={highlightedRowIds}
+              availableSourceFields={availableSourceFields}
+              optimisticStates={optimisticStates}
+              optimisticData={optimisticData}
+              expandedRowIds={expandedRowIds}
+              onExpandedChange={onExpandedChange}
+              pickerOpenRowId={pickerOpenRowId}
+              onPickerOpenChange={onPickerOpenChange}
+              onInlineApprove={onInlineApprove}
+              onInlineReject={onInlineReject}
+              onInlineAcknowledge={onInlineAcknowledge}
+              onInlineUnacknowledge={onInlineUnacknowledge}
+              onInlineSourceCommit={onInlineSourceCommit}
+            />
+          )}
         </div>
       )}
     </section>
+  )
+}
+
+// ─── Virtualized row list (large-group renderer) ───────────────────────────
+//
+// Activated when the group has VIRTUALIZATION_THRESHOLD or more rows.
+// Uses @tanstack/react-virtual's `useWindowVirtualizer` because the
+// page already has a single window-level scroll container — per-group
+// internal scrollbars would be a UX regression. The virtualizer
+// measures each row via `measureElement` once it attaches its
+// forwardRef'd outer div, so chevron-expansion height changes are
+// observed automatically (no manual size table).
+//
+// Each visible row renders inside an absolute-positioned wrapper at
+// `translateY(virtualItem.start - virtualizer.options.scrollMargin)`.
+// Anchoring the row container with a ref + scrollMargin lets the
+// virtualizer compute the correct vertical offset of its row list
+// relative to the page scroll position.
+//
+// Backwards-compat note: legacy callers that DON'T pass expandedRowIds
+// / pickerOpenRowId fall back to per-row local state inside
+// FieldMappingRow. With virtualization those local states would be
+// lost on row remount; in practice the live MappingContent always
+// passes the lifted state, so this is only a concern for storybook /
+// test fixtures that opt into virtualization without lifting.
+
+interface VirtualizedRowListProps {
+  rows: MappingRow[]
+  onRowClick: TargetTableGroupProps['onRowClick']
+  openRowId: TargetTableGroupProps['openRowId']
+  highlightedRowIds: TargetTableGroupProps['highlightedRowIds']
+  availableSourceFields: TargetTableGroupProps['availableSourceFields']
+  optimisticStates: TargetTableGroupProps['optimisticStates']
+  optimisticData: TargetTableGroupProps['optimisticData']
+  expandedRowIds: TargetTableGroupProps['expandedRowIds']
+  onExpandedChange: TargetTableGroupProps['onExpandedChange']
+  pickerOpenRowId: TargetTableGroupProps['pickerOpenRowId']
+  onPickerOpenChange: TargetTableGroupProps['onPickerOpenChange']
+  onInlineApprove: TargetTableGroupProps['onInlineApprove']
+  onInlineReject: TargetTableGroupProps['onInlineReject']
+  onInlineAcknowledge: TargetTableGroupProps['onInlineAcknowledge']
+  onInlineUnacknowledge: TargetTableGroupProps['onInlineUnacknowledge']
+  onInlineSourceCommit: TargetTableGroupProps['onInlineSourceCommit']
+}
+
+function VirtualizedRowList({
+  rows,
+  onRowClick,
+  openRowId,
+  highlightedRowIds,
+  availableSourceFields,
+  optimisticStates,
+  optimisticData,
+  expandedRowIds,
+  onExpandedChange,
+  pickerOpenRowId,
+  onPickerOpenChange,
+  onInlineApprove,
+  onInlineReject,
+  onInlineAcknowledge,
+  onInlineUnacknowledge,
+  onInlineSourceCommit,
+}: VirtualizedRowListProps) {
+  const parentRef = useRef<HTMLDivElement | null>(null)
+
+  const virtualizer = useWindowVirtualizer({
+    count: rows.length,
+    estimateSize: () => 40,
+    overscan: 8,
+    scrollMargin: parentRef.current?.offsetTop ?? 0,
+  })
+
+  const virtualItems = virtualizer.getVirtualItems()
+
+  return (
+    <div
+      ref={parentRef}
+      role="list"
+      data-testid="target-table-virtualized-rows"
+      style={{
+        position: 'relative',
+        height: virtualizer.getTotalSize(),
+        width: '100%',
+      }}
+    >
+      {virtualItems.map((virtualItem) => {
+        const row = rows[virtualItem.index]
+        if (!row) return null
+        return (
+          <div
+            key={row.id}
+            data-virtual-index={virtualItem.index}
+            ref={virtualizer.measureElement}
+            style={{
+              position: 'absolute',
+              top: 0,
+              left: 0,
+              width: '100%',
+              transform: `translateY(${
+                virtualItem.start - virtualizer.options.scrollMargin
+              }px)`,
+            }}
+          >
+            <FieldMappingRow
+              row={row}
+              dataIndex={virtualItem.index}
+              onRowClick={onRowClick}
+              isActive={openRowId === row.id}
+              isHighlighted={highlightedRowIds?.has(row.id) ?? false}
+              availableSourceFields={availableSourceFields}
+              optimisticState={optimisticStates?.get(row.id)}
+              optimisticData={optimisticData}
+              isExpanded={
+                expandedRowIds !== undefined
+                  ? expandedRowIds.get(row.id) ?? false
+                  : undefined
+              }
+              onExpandedChange={
+                onExpandedChange !== undefined
+                  ? (next) => onExpandedChange(row.id, next)
+                  : undefined
+              }
+              isPickerOpen={
+                pickerOpenRowId !== undefined
+                  ? pickerOpenRowId === row.id
+                  : undefined
+              }
+              onPickerOpenChange={
+                onPickerOpenChange !== undefined
+                  ? (next) =>
+                      onPickerOpenChange(next ? row.id : null)
+                  : undefined
+              }
+              onInlineApprove={onInlineApprove}
+              onInlineReject={onInlineReject}
+              onInlineAcknowledge={onInlineAcknowledge}
+              onInlineUnacknowledge={onInlineUnacknowledge}
+              onSourceCommit={onInlineSourceCommit}
+            />
+          </div>
+        )
+      })}
+    </div>
   )
 }
 
