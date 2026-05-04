@@ -155,6 +155,16 @@ All Anthropic API calls go through a single typed wrapper. The wrapper:
 
 If an AI feature wants to call a tool that mutates customer data, route the proposed action through the validation + approval flow described in §1. No exceptions.
 
+#### 4.5.1 AI feature flags
+
+Two env vars gate the AI evolution path. Both default to `'0'` (OFF) and must remain default-off in production until explicit opt-in:
+
+- **`AI_PHASE_2_ENABLED`** (PR 11+): switches default model from `claude-sonnet-4-6` to `claude-opus-4-7` and opts callsites with `cacheControl: true` into Anthropic prompt caching (PR 13.1 cohort: `mapping_generate`, `quality_detection_ai`, `transform_generate`, `validation_rule_from_nl`, `ddl_parsing`, `quality_fix_options`).
+
+- **`AI_PHASE_3_ENABLED`** (PR 3.2+): opts adopting callsites into the agent-loop primitive at [`lib/ai/agent-loop.ts`](lib/ai/agent-loop.ts). When `'1'`, callsites that have been migrated route through `runAgentLoop` (multi-tool dispatch with data-scanning RPCs); when `'0'` (default), they continue using the single-shot `callLLM` path. Per-callsite opt-in — adoption is gated additionally at each adopting site (mirrors the `AI_PHASE_2_ENABLED` pattern). PR 3.2 ships infrastructure only; PR 3.4 makes `mapping_generate` the first adopter. Heritage flag-OFF byte-identical preserved as long as the flag stays unset.
+
+Both flags use exact string match (`process.env.X === '1'`); any other value (`'true'`, `'0'`, `''`, undefined) reads as OFF.
+
 ### 4.6 Database connectors (in design)
 
 PostgreSQL first. Constraints:
