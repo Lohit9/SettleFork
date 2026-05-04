@@ -79,10 +79,20 @@ export interface RunAgentLoopOptions {
   maxCostUsd?: number
   /** Hard cap on wall-clock ms across all iterations. Default 120_000 (2 min; well under cache TTL). */
   maxWallClockMs?: number
-  /** Per-call options forwarded to `callLLM` (model, maxTokens, etc.). */
+  /**
+   * Per-call options forwarded to `callLLM` (model, maxTokens, etc.).
+   * PR 3.4a widening: `thinking` + `output_config` for agent adopters.
+   */
   llmOptions?: Pick<
     CallLLMOptions,
-    'model' | 'maxTokens' | 'promptVersion' | 'abuseUserId' | 'cacheControl' | 'metadata'
+    | 'model'
+    | 'maxTokens'
+    | 'promptVersion'
+    | 'abuseUserId'
+    | 'cacheControl'
+    | 'metadata'
+    | 'thinking'
+    | 'output_config'
   >
   /**
    * LOCK #4: opt-in dry-run mode for unit tests. When set, the loop
