@@ -19,6 +19,7 @@
 import { describe, it, expect } from 'vitest'
 
 import { callLLMStreaming } from '@/lib/ai/llm-client'
+import { EMIT_QUERY_SUGGESTIONS_TOOL } from '@/lib/ai/tool-schemas'
 import { supabaseAdmin } from '@/lib/supabase/admin'
 
 const RUN = process.env.RUN_LLM_CALLS_INTEGRATION === '1'
@@ -116,6 +117,74 @@ describeFn('[integration] callLLMStreaming logs a row in llm_calls', () => {
 
     console.log(
       `[llm-calls-streaming-logging] success: callId=${result.callId} ` +
+        `tokens=${result.inputTokens}+${result.outputTokens} ` +
+        `cost=$${result.costUsd?.toFixed(6)}`,
+    )
+  }, 30_000)
+})
+
+// PR 12.3: tool-mode streaming smoke. callLLMStreaming has accepted a `tool`
+// parameter since PR 12.1, but no committed integration test exercised the
+// streaming + tool-use path end-to-end (only PR 12.1's §9.1 probe). This
+// test closes that gap. Uses EMIT_QUERY_SUGGESTIONS_TOOL — the smallest
+// tool schema in the catalog — to keep the smoke fast and cheap.
+describeFn('[integration] callLLMStreaming with tool parameter (PR 12.3)', () => {
+  it('returns kind=toolUse with parsed input + writes is_streaming=true row', async () => {
+    const SYSTEM_PROMPT =
+      'You generate example natural language queries for a data exploration tool. Use the emit_query_suggestions tool to return your output.'
+    const USER_MESSAGE =
+      'Schema:\n- users(id, name, email)\n\nGenerate 4 suggested queries.'
+
+    const result = await callLLMStreaming({
+      feature: 'outputs_execution_package_compartmentalized',
+      systemPrompt: SYSTEM_PROMPT,
+      userMessage: USER_MESSAGE,
+      maxTokens: 400,
+      projectId: PROJECT_ID,
+      userId: USER_ID,
+      promptVersion: 'llm-calls-streaming-tool-integration-v1',
+      abuseUserId: USER_ID,
+      metadata: { test: 'llm_calls_streaming_tool_use_smoke' },
+      tool: EMIT_QUERY_SUGGESTIONS_TOOL,
+    })
+
+    expect(result.kind).toBe('toolUse')
+    if (result.kind !== 'toolUse') return
+    expect(result.toolUse.name).toBe('emit_query_suggestions')
+
+    const input = result.toolUse.input as { suggestions?: unknown }
+    expect(Array.isArray(input.suggestions)).toBe(true)
+    expect((input.suggestions as unknown[]).length).toBeGreaterThanOrEqual(1)
+
+    expect(result.callId).toMatch(
+      /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/,
+    )
+    expect(result.inputTokens).toBeGreaterThan(0)
+    expect(result.outputTokens).toBeGreaterThan(0)
+    expect(result.costUsd).not.toBeNull()
+    expect(result.costUsd!).toBeGreaterThan(0)
+
+    const row = (await waitForLogRow(result.callId)) as
+      | (Record<string, unknown> & {
+          is_streaming: boolean
+          succeeded: boolean
+          feature: string
+          response_text: string | null
+        })
+      | null
+
+    expect(row).toBeTruthy()
+    if (!row) return
+
+    expect(row.is_streaming).toBe(true)
+    expect(row.succeeded).toBe(true)
+    // response_text persists the JSON-serialized tool input under tool-use
+    // (per llm-client.ts:589-594) so audit consumers see uniform shape.
+    expect(row.response_text).toBeTruthy()
+    expect(JSON.parse(row.response_text!)).toHaveProperty('suggestions')
+
+    console.log(
+      `[llm-calls-streaming-tool] success: callId=${result.callId} ` +
         `tokens=${result.inputTokens}+${result.outputTokens} ` +
         `cost=$${result.costUsd?.toFixed(6)}`,
     )
