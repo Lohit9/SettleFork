@@ -238,6 +238,17 @@ interface FieldMappingRowProps {
    */
   optimisticState?: FieldMappingRowOptimisticState
   /**
+   * Optimistic-data override map. When present and contains an entry
+   * for `row.id`, the entry's `MappingRow` shape is rendered in place
+   * of the prop-supplied `row`. Used by reject paths (inline + bulk +
+   * drawer) to pre-apply the post-reject unmapped shape so the row
+   * settles to its new identity BEFORE `router.refresh()` swaps the
+   * React key (`tfm-<id>` → `unmapped::<targetFieldId>`). Mask the
+   * unmount/remount blip that otherwise produces a 200-500ms blank
+   * flash on the inline path.
+   */
+  optimisticData?: Map<string, MappingRow>
+  /**
    * Phase 4-polish-3 — inline approve handler. Wired only for mapped
    * rows with status='needs_review'. Parent dispatches
    * `approveFieldMapping` and surfaces the post-approve highlight via
@@ -284,18 +295,27 @@ interface FieldMappingRowProps {
 }
 
 export function FieldMappingRow({
-  row,
+  row: providedRow,
   onRowClick,
   isActive,
   isHighlighted,
   availableSourceFields,
   optimisticState,
+  optimisticData,
   onInlineApprove,
   onInlineReject,
   onInlineAcknowledge,
   onInlineUnacknowledge,
   onSourceCommit,
 }: FieldMappingRowProps) {
+  // Resolve to the optimistic-data override if one exists for this
+  // row's id. The override carries the post-reject unmapped shape
+  // (kind: 'unmapped', no sources, no confidence) so every render
+  // branch downstream — `resolveMappedRule`, `buildAriaLabel`, the
+  // status-dot color, the source / target / confidence cells — all
+  // pattern-match on the override's `kind === 'unmapped'` and produce
+  // the post-reject look without waiting for the server round-trip.
+  const row = optimisticData?.get(providedRow.id) ?? providedRow
   const expandedId = useId()
   const rule = resolveMappedRule(row)
   const canExpand = rule === 'rule_2' || rule === 'rule_3' || rule === 'rule_4'
