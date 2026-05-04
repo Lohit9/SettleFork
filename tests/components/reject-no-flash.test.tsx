@@ -37,6 +37,14 @@
 //   RF9.  Negative invariant — `handleRejectConfirm` still has
 //         `setTimeout(() => router.refresh(), 200)` (the fade-out
 //         duration is unchanged; only the data-shape override is new).
+//   RF10. Negative invariant — the `isRejecting` className branch in
+//         FieldMappingRow.tsx must NOT include `opacity-0`. This is
+//         the test that would have caught the PR #58 failure mode:
+//         opacity-0 made the optimisticData override invisible during
+//         the rejection round-trip, reproducing the original blank
+//         flash. Dropping opacity-0 (hotfix on PR #58) lets the
+//         override actually render. Preserved: pointer-events-none +
+//         -translate-x-1 (subtle slide cue + double-click guard).
 
 import { describe, it, expect } from "vitest";
 import { readFileSync } from "node:fs";
@@ -168,5 +176,25 @@ describe("[Mapping reject-flash fix] optimistic-data override — invariants", (
     expect(HANDLE_REJECT_CONFIRM).toMatch(
       /setTimeout\(\(\)\s*=>\s*router\.refresh\(\)\s*,\s*200\s*\)/,
     );
+  });
+
+  it("RF10 — isRejecting className branch does NOT include opacity-0 (override must be visible)", () => {
+    // The class branch keyed on `isRejecting` must not apply opacity-0
+    // (or any opacity zeroing) — that hid the optimisticData override
+    // throughout the rejection round-trip in PR #58. We allow
+    // pointer-events-none + -translate-x-1 (slide cue + double-click
+    // guard) but not anything that drives the row's opacity to 0.
+    //
+    // Strategy: locate the `isRejecting && '...'` className segment
+    // and assert it does not contain the substring `opacity-0`. The
+    // segment is a single string literal so a substring check is
+    // sufficient and resists arbitrary class reordering.
+    const m = FIELD_MAPPING_ROW.match(/isRejecting\s*&&\s*'([^']*)'/);
+    expect(m, "isRejecting className branch not found").not.toBeNull();
+    const classNames = m![1];
+    expect(
+      classNames,
+      "isRejecting className branch contains opacity-0; got: '" + classNames + "'",
+    ).not.toContain("opacity-0");
   });
 });
