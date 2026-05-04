@@ -95,6 +95,7 @@ import { createClient } from '@/lib/supabase/server'
 import { supabaseAdmin } from '@/lib/supabase/admin'
 import { requireProjectPermission } from '@/lib/actions/role-resolution'
 import { callLLM } from '@/lib/ai/llm-client'
+import { EMIT_TRANSFORM_SQL_TOOL } from '@/lib/ai/tool-schemas'
 import { extractTransformSQL } from '@/lib/ai/sql-extractor'
 import { checkAIRateLimit } from '@/lib/ai/rate-limit'
 import { buildAIContext, formatFieldForPrompt, formatDocumentsForPrompt } from '@/lib/ai/context-builder'
@@ -1325,6 +1326,8 @@ ${description}
 Generate the SQL transformation expression.`
 
   return guardWrites(ctx.projectId, async () => {
+    // PR 12.2 B-1: tool use under flag ON; legacy text+extractTransformSQL under flag OFF.
+    const phase2Enabled = process.env.AI_PHASE_2_ENABLED === '1'
     let rawSql: string
     let llmCallId: string | null = null
     try {
@@ -1338,13 +1341,18 @@ Generate the SQL transformation expression.`
         promptVersion: 'transform-generate-v1',
         abuseUserId: user.id,
         metadata: { tfm_id: ctx.tfm.id, target_field_id: tgtField.id },
+        ...(phase2Enabled && { tool: EMIT_TRANSFORM_SQL_TOOL }),
       })
-      // PR 12: SQL/text callsite — migrated in sub-commit 12.2.
-      if (result.kind !== 'text') {
-        throw new Error('transform_generate: unexpected toolUse response')
-      }
-      rawSql = result.text
       llmCallId = result.callId
+      if (result.kind === 'toolUse') {
+        const input = result.toolUse.input as { sql?: unknown }
+        if (typeof input.sql !== 'string') {
+          throw new Error('transform_generate: tool input missing sql string')
+        }
+        rawSql = input.sql
+      } else {
+        rawSql = result.text
+      }
     } catch {
       return { success: false, error: 'AI generation failed. Please try again.' }
     }

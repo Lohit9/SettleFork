@@ -6,6 +6,7 @@ import { requireProjectPermission } from '@/lib/actions/role-resolution'
 import { validateFixSQL } from '@/lib/quality/fix-sql-validator'
 import { countFormatIssues, computeValueDistribution, computeMinMax } from '@/lib/utils/profiling'
 import { callLLM } from '@/lib/ai/llm-client'
+import { EMIT_FIX_SQL_TOOL } from '@/lib/ai/tool-schemas'
 import { checkAIRateLimit } from '@/lib/ai/rate-limit'
 import { logActivity } from '@/lib/actions/activity-log'
 
@@ -200,6 +201,8 @@ ${fieldList}${focusedFieldContext}${fieldProfileContext}${issueBlock}
 
 Fix description: "${description}"`
 
+  // PR 12.2 B-1: tool use under flag ON; legacy text+fence-strip under flag OFF.
+  const phase2Enabled = process.env.AI_PHASE_2_ENABLED === '1'
   let generatedSql = ''
   try {
     const result = await callLLM({
@@ -212,15 +215,23 @@ Fix description: "${description}"`
       promptVersion: 'manual-fix-v1',
       abuseUserId: user.id,
       metadata: { table_id: tableId, field_id: fieldId ?? null },
+      ...(phase2Enabled && { tool: EMIT_FIX_SQL_TOOL }),
     })
-    // PR 12: SQL/text callsite — migrated in sub-commit 12.2.
-    if (result.kind !== 'text') {
-      throw new Error('manual_fix: unexpected toolUse response')
+    if (result.kind === 'toolUse') {
+      const input = result.toolUse.input as { sql?: unknown }
+      if (typeof input.sql !== 'string') {
+        throw new Error('manual_fix: tool input missing sql string')
+      }
+      // Tool-use guarantees no markdown fences; strip+trim is a no-op
+      // here, but applied uniformly so downstream sees identical-shape
+      // input across flag-ON and -OFF.
+      generatedSql = input.sql.trim()
+    } else {
+      generatedSql = result.text
+        .replace(/^```(?:sql)?\s*/i, '')
+        .replace(/\s*```\s*$/, '')
+        .trim()
     }
-    generatedSql = result.text
-      .replace(/^```(?:sql)?\s*/i, '')
-      .replace(/\s*```\s*$/, '')
-      .trim()
   } catch (err) {
     console.error('[manual-fix] Claude error:', err)
     return {

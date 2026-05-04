@@ -1380,3 +1380,192 @@ export const EMIT_QUERY_SUGGESTIONS_TOOL: Tool = {
     required: ['suggestions'],
   },
 }
+
+// ─── SQL/text cluster (PR 12.2 sub-sub-commit B-1) ────────────────────────────
+
+/**
+ * Used by: `nl_to_sql` (lib/actions/query.ts:212) and the parse/run-failure
+ * retry path `nl_to_sql_retry` (lib/actions/query.ts:282). Both callsites
+ * pass the same tool — the retry differs by user message + parentCallId, not
+ * by output schema.
+ *
+ * Replaces the legacy text+`extractSelectSQL` regex pipeline with a
+ * schema-validated string. The fence-stripping post-processor in
+ * `lib/ai/sql-extractor.ts` stays in place for the flag-OFF path; under
+ * flag-ON it is bypassed because tool-use guarantees a clean string.
+ *
+ * The tool emits a single SELECT statement, never DML. A persistent system-
+ * prompt rule already enforces SELECT-only; the schema mirrors that as a
+ * description-level constraint (Anthropic strict mode does not support
+ * pattern/format constraints on string types — see
+ * docs/anthropic-strict-mode-constraints.md §4-5).
+ */
+export const EMIT_SQL_QUERY_TOOL: Tool = {
+  name: 'emit_sql_query',
+  description:
+    "Emit ONE PostgreSQL SELECT statement answering the natural-language question in the prompt. The query runs against the schema described in the prompt's `<schema>` block — every referenced table and column MUST appear in that schema; do not invent identifiers.\n\nREQUIRED:\n• A single statement starting with SELECT (no semicolon-separated multi-statements)\n• Every column reference is qualified with its table name when more than one table is in scope\n• Casing matches the schema exactly — Postgres is case-sensitive when identifiers are double-quoted\n• Defensive numeric/date casting when the schema describes the field as VARCHAR but the question implies numeric/date semantics: NULLIF(TRIM(field), '') before ::numeric or ::date; strip currency symbols ($, ,) before numeric cast; regex-guard with ~ '^-?[0-9]+(\\.[0-9]+)?$' before any ::numeric cast\n• When the question references a likely-corrupt field (the schema's profile lists format_issues_count > 0), prefer DISTINCT or LENGTH(field) over a numeric/date comparison — surface the data quality issue rather than crash the query\n\nFORBIDDEN:\n• DDL keywords: DROP, ALTER, CREATE, TRUNCATE, GRANT, REVOKE\n• DML keywords: INSERT, UPDATE, DELETE, MERGE\n• References to system schemas: pg_catalog, information_schema, auth.*, storage.*\n• Multiple statements (one SELECT per call)\n\nThe `query` property carries the executable SQL. The `explanation` property is a 1-2 sentence reviewer-facing description of what the query does and what data it returns — useful when the user later reviews the query history.",
+  strict: true,
+  input_schema: {
+    type: 'object',
+    additionalProperties: false,
+    properties: {
+      query: {
+        type: 'string',
+        description:
+          'The complete SELECT statement. No leading/trailing whitespace, no markdown fences, no comments. A single statement (one terminating semicolon optional). Must satisfy the REQUIRED/FORBIDDEN rules in the tool description.',
+      },
+      explanation: {
+        type: 'string',
+        description:
+          'A 1-2 sentence reviewer-facing description of what the query does and what shape the result takes (e.g., "Returns the count of customers per state, ordered descending by count"). Plain English; no SQL syntax in the explanation.',
+      },
+      assumptions: {
+        type: 'array',
+        items: {
+          type: 'string',
+          description:
+            'One assumption made when constructing the query (e.g., "Treated NULL annual_revenue as 0 in the SUM aggregate", "Filtered to status IN (\'active\', \'pending\') based on the question\'s intent"). Phrase as the action the query takes, not as a question.',
+        },
+        description:
+          'Optional list of assumptions the query encodes when the question was ambiguous. Empty or omitted when the question was unambiguous and the schema fully constrained the answer.',
+      },
+    },
+    required: ['query', 'explanation'],
+  },
+}
+
+/**
+ * Used by: `transform_generate` (lib/actions/transformations.ts:1331). Emits
+ * a SQL transformation expression that maps a source field's value to its
+ * target field. The expression is later wrapped by `wrapWithNullGuard` and
+ * stored in the `transformations` table; downstream the expression composes
+ * into a project-wide INSERT-from-SELECT bundle.
+ *
+ * Critical distinction from EMIT_SQL_QUERY_TOOL: this is an EXPRESSION (no
+ * SELECT keyword), not a statement. Examples: `REGEXP_REPLACE(row_data->>'amount', '[$,]', '', 'g')::numeric`,
+ * `CASE row_data->>'status' WHEN 'Won' THEN 'Closed Won' ELSE row_data->>'status' END`.
+ *
+ * The downstream `extractTransformSQL` post-processor stays in place for the
+ * flag-OFF path; under flag-ON the input.sql is consumed directly and the
+ * `wrapWithNullGuard` wrapper applies as before.
+ */
+export const EMIT_TRANSFORM_SQL_TOOL: Tool = {
+  name: 'emit_transform_sql',
+  description:
+    "Emit ONE PostgreSQL expression that transforms a source field's value into the target field's representation. This is an EXPRESSION (no SELECT keyword, no FROM clause) — it will be wrapped into a project-wide INSERT...SELECT statement by the downstream pipeline.\n\nThe expression operates on JSONB-extracted values: source fields are accessed via `row_data->>'FieldName'` (text extraction). The target type drives the output: when the target is numeric, end with `::numeric` (or the specific numeric subtype); when boolean, end with `::boolean` or a CASE expression; when text, plain string-typed expression.\n\nREQUIRED:\n• A single SQL expression with no leading/trailing keywords (no SELECT, no FROM, no WHERE)\n• All source field accesses use `row_data->>'<bare field name>'` — never qualified table.field\n• Numeric casts are regex-guarded when the source field's profile shows format issues: `WHEN row_data->>'X' ~ '^-?[0-9]+(\\.[0-9]+)?$' THEN (row_data->>'X')::numeric ELSE NULL END`\n• Date parsing handles mixed formats via CASE+regex when the source profile shows format_issues_count > 0\n• String truncation for VARCHAR(N) targets is explicit: `LEFT(row_data->>'X', N)` when the source max_length exceeds N\n• Boolean normalization expands the canonical Y/N/yes/no/1/0/true/false set: CASE-WHEN with case-insensitive matching\n\nFORBIDDEN:\n• DDL/DML keywords (this is an expression context — SELECT/INSERT/UPDATE/DELETE/CREATE/ALTER/DROP all rejected at the wrapper)\n• References to tables other than the implicit source row context\n• Window functions (ROW_NUMBER, RANK, etc.) — the wrapping INSERT...SELECT does not allow window functions in this position; use a deterministic CASE/CAST instead\n• Cross-row references — each transformation operates on a single row's data\n\nThe `sql` property carries the expression. The `description` property is a one-line plain-English summary of what the transformation does, used in audit logs. The `source_columns` array names every source field referenced in the expression. The `target_column` is the bare target field name being populated. The `joins` property is reserved for future cross-table flows; today it is omitted.",
+  strict: true,
+  input_schema: {
+    type: 'object',
+    additionalProperties: false,
+    properties: {
+      sql: {
+        type: 'string',
+        description:
+          'The complete transformation expression — a single PostgreSQL expression with no SELECT/FROM/WHERE keywords, no leading/trailing whitespace, no markdown fences, no comments. Operates on `row_data->>\'<field>\'` JSONB extracts. Casts to the target type when the source type differs. Must satisfy the REQUIRED/FORBIDDEN rules in the tool description.',
+      },
+      description: {
+        type: 'string',
+        description:
+          'One-line plain-English summary (≤ 120 chars) of the transformation logic. Phrase as the action it performs ("Strip currency formatting and cast to NUMERIC", "Normalize Y/N values to canonical TRUE/FALSE booleans"). Used by audit logs and future explanation surfaces.',
+      },
+      source_columns: {
+        type: 'array',
+        items: {
+          type: 'string',
+          description:
+            'One bare source field name (no table prefix, no row_data->> wrapping). Each name must appear in the source schema described in the prompt.',
+        },
+        description:
+          'Array of every source field name referenced in the `sql` expression. Used to validate the expression against the schema and to populate the mapping_sources rows. Order matches the order each field is referenced in the SQL expression.',
+      },
+      target_column: {
+        type: 'string',
+        description:
+          'The bare target field name being populated by this transformation. Must match the target field named in the prompt; the wrapper rejects mismatches.',
+      },
+      joins: {
+        type: 'array',
+        items: {
+          type: 'object',
+          additionalProperties: false,
+          properties: {
+            from: {
+              type: 'string',
+              description:
+                'The source-side table name driving the join (e.g., the source field\'s home table when the expression needs a sibling table for context).',
+            },
+            to: {
+              type: 'string',
+              description:
+                'The target-side table name (or another source table) the join points to. Must appear in the schema.',
+            },
+            on: {
+              type: 'string',
+              description:
+                'The join predicate as a SQL fragment (e.g., "src.customer_id = ref.id"). Anchored on bare table names; the wrapper handles row_data extraction.',
+            },
+          },
+          required: ['from', 'to', 'on'],
+        },
+        description:
+          'Optional cross-table joins required by this transformation. Today the production pipeline does not exercise joins for transformation expressions; this property is reserved for future cross-table flows and may be omitted (empty array or absent) for all current callsites.',
+      },
+    },
+    required: ['sql', 'description', 'source_columns', 'target_column'],
+  },
+}
+
+/**
+ * Used by: `manual_fix` (lib/actions/manual-fix.ts:205). Emits an
+ * UPDATE/DELETE statement that mutates `data_rows` JSONB to repair the
+ * data-quality issue described in the user's free-form prompt.
+ *
+ * Distinct from EMIT_FIX_OPTIONS_TOOL (PR 12.1) which emits 2-3 fix
+ * proposals at varying risk levels. EMIT_FIX_SQL_TOOL emits ONE fix that
+ * the user has already described in plain English — the AI translates
+ * description → SQL, not problem → options.
+ *
+ * The downstream `validateFixSQL` (lib/quality/fix-sql-validator.ts) safety
+ * check stays in place — tool-use guarantees a parseable string, not a
+ * safe one. The 5-condition risk_level rubric mirrors EMIT_FIX_OPTIONS_TOOL
+ * for consistency.
+ */
+export const EMIT_FIX_SQL_TOOL: Tool = {
+  name: 'emit_fix_sql',
+  description:
+    "Emit ONE PostgreSQL UPDATE or DELETE statement implementing the fix the user described in plain English. The statement runs against `data_rows` JSONB and operates on the single table named in the prompt.\n\nREQUIRED:\n• A single statement starting with UPDATE or DELETE (no SELECT, no multi-statement bundles)\n• `WHERE table_id = '<the exact uuid from the prompt>'` anchor on every statement — the wrapper validator rejects fixes that drop this filter\n• Use `row_data->>'FieldName'` for JSONB extraction; use `jsonb_set(row_data, '{FieldName}', ...)` for in-place value updates; use `row_data || '{...}'::jsonb` to add a missing field; use `DELETE FROM data_rows WHERE ...` to drop rows\n• Regex-guard any numeric cast: `WHERE ... AND row_data->>'X' ~ '^-?[0-9]+(\\.[0-9]+)?$'` before applying ::numeric in either WHERE or SET\n• Date format fixes use the CASE+regex pattern with NULL-safe outer CASE so unparseable values keep their original row_data (never wrap a parse expression in to_jsonb directly)\n• Window functions only inside CTEs (WITH ... UPDATE ...). Bare OVER() in UPDATE SET is rejected by Postgres\n\nFORBIDDEN:\n• DDL keywords: DROP, ALTER, CREATE, TRUNCATE, GRANT, REVOKE\n• References to tables other than `data_rows`\n• System schemas: pg_catalog, information_schema, auth.*, storage.*\n• LIMIT, FETCH FIRST, FETCH NEXT, OFFSET on the outer statement (the validator rejects these — fixes apply to all matching rows or to none; LIMIT inside a subquery is fine)\n• Multiple statements (single statement, optional trailing semicolon)\n• SQL comments (-- or /*...*/) — potential injection vectors\n\nRisk-level taxonomy: \"low\" = reversible non-destructive marker addition (e.g., flagging records via a new _review key in row_data). Originals fully preserved; revert restores exact pre-fix state.\n\n\"medium\" = reversible in-place value update preserving row identity (e.g., default-value fills, format normalization, value translation, currency cleanup). Settle's fix_snapshots table preserves the original row_data; revert restores values bit-for-bit. PREFER this tier when both medium and high formulations achieve the same logical result.\n\n\"high\" = row deletion (DELETE) OR CTE/window-function patterns. DELETE is reversible via re-INSERT but row IDs change; CTE patterns can land non-revertable if the user opts out of snapshotting. AVOID CTE patterns when a flat UPDATE achieves the same logical result.",
+  strict: true,
+  input_schema: {
+    type: 'object',
+    additionalProperties: false,
+    properties: {
+      sql: {
+        type: 'string',
+        description:
+          'The complete UPDATE or DELETE statement — a single statement with no leading/trailing whitespace, no markdown fences, no SQL comments. MUST include `WHERE table_id = \'<the table_id from the prompt>\'` as a safety anchor. MUST satisfy the REQUIRED/FORBIDDEN rules in the tool description; the downstream validateFixSQL validator rejects mismatches.',
+      },
+      description: {
+        type: 'string',
+        description:
+          'One-line plain-English summary (≤ 200 chars) of what the fix does, written for a non-SQL reviewer. Phrase as the action the fix takes ("Replaces null `name` values with the literal string \"Anonymous\"", "Deletes rows where `email` does not match the RFC 5322 simplified pattern"). Used in audit logs and the fix-history UI.',
+      },
+      risk_level: {
+        type: 'string',
+        enum: ['low', 'medium', 'high'],
+        description:
+          '"low" = reversible non-destructive marker addition (e.g., flagging records via a new _review field). Originals fully preserved; revert restores exact pre-fix state.\n\n"medium" = reversible in-place value update preserving row identity (e.g., default-value fills, format normalization, value translation, casing standardization, currency cleanup). Settle\'s fix_snapshots table preserves the original row_data; revert restores values bit-for-bit. PREFER this tier when both medium and high formulations achieve the same result.\n\n"high" = row deletion (DELETE) OR CTE/multi-table-pattern updates. DELETE is reversible via re-INSERT but row IDs change. CTE patterns (including any fix using window functions, which require CTEs) can land in a non-revertable state if the user opts to skip snapshotting. AVOID CTE patterns when a flat UPDATE expression achieves the same logical result.',
+      },
+      downstream_impact: {
+        type: 'string',
+        description:
+          'What BREAKS or improves in the migration if this fix is applied. Be specific about target tables and approximate record counts (e.g., "After this fix, Account inserts succeed for the 47 previously-NULL annual_revenue rows; values are filled with 0 and routed to a target review queue").',
+      },
+      tradeoff: {
+        type: 'string',
+        description:
+          '1-2 sentence statement of what the fix gains AND loses (e.g., "Gains: zero data loss, all rows preserved. Loses: introduces $0 placeholder values that may need a second pass during business review"). Surface the cost of the fix so the user can compare against alternatives.',
+      },
+    },
+    required: ['sql', 'description', 'risk_level', 'downstream_impact', 'tradeoff'],
+  },
+}

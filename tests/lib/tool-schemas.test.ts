@@ -73,8 +73,8 @@ function walkProperties(
 // ─── Existing invariants from PR 12 sub-commit 12.1 ──────────────────────────
 
 describe('tool-schemas — structural invariants', () => {
-  it('exports the expected count of tools (PR 12 §6: 13 distinct schemas)', () => {
-    expect(allTools.length).toBe(13)
+  it('exports the expected count of tools (PR 12.1: 13 + PR 12.2 B-1: 3 new SQL emitters = 16)', () => {
+    expect(allTools.length).toBe(16)
   })
 
   it('every tool has a snake_case name (lowercase letters + underscores)', () => {
@@ -383,5 +383,117 @@ describe('tool-schemas — additionalProperties uniformity (Path 2 PR 1)', () =>
     expect(properties).toHaveProperty('approach')
     expect(properties).toHaveProperty('domain')
     expect(properties).toHaveProperty('system_type')
+  })
+})
+
+// ─── PR 12.2 B-1: SQL emitter cluster (3 new tools) ──────────────────────────
+
+describe('tool-schemas — EMIT_SQL_QUERY_TOOL (PR 12.2 B-1)', () => {
+  it('exports with the expected name + strict mode', () => {
+    expect(schemas.EMIT_SQL_QUERY_TOOL.name).toBe('emit_sql_query')
+    expect(schemas.EMIT_SQL_QUERY_TOOL.strict).toBe(true)
+  })
+
+  it('requires query + explanation; assumptions optional', () => {
+    const required = schemas.EMIT_SQL_QUERY_TOOL.input_schema.required as string[]
+    expect(required).toEqual(['query', 'explanation'])
+    const properties = schemas.EMIT_SQL_QUERY_TOOL.input_schema.properties as Record<
+      string,
+      JsonSchemaNode
+    >
+    expect(properties).toHaveProperty('assumptions')
+    expect(required).not.toContain('assumptions')
+  })
+
+  it('description encodes SELECT-only + DDL/DML forbidden', () => {
+    const desc = schemas.EMIT_SQL_QUERY_TOOL.description ?? ''
+    expect(desc).toContain('SELECT')
+    expect(desc).toContain('DROP')
+    expect(desc).toContain('INSERT')
+    expect(desc).toContain('UPDATE')
+    expect(desc).toContain('DELETE')
+    expect(desc).toMatch(/system schemas|pg_catalog/)
+  })
+
+  it('top-level + nested objects declare additionalProperties: false', () => {
+    expect(schemas.EMIT_SQL_QUERY_TOOL.input_schema.additionalProperties).toBe(false)
+  })
+})
+
+describe('tool-schemas — EMIT_TRANSFORM_SQL_TOOL (PR 12.2 B-1)', () => {
+  it('exports with the expected name + strict mode', () => {
+    expect(schemas.EMIT_TRANSFORM_SQL_TOOL.name).toBe('emit_transform_sql')
+    expect(schemas.EMIT_TRANSFORM_SQL_TOOL.strict).toBe(true)
+  })
+
+  it('requires sql + description + source_columns + target_column; joins optional', () => {
+    const required = schemas.EMIT_TRANSFORM_SQL_TOOL.input_schema.required as string[]
+    expect(required).toEqual(['sql', 'description', 'source_columns', 'target_column'])
+    expect(required).not.toContain('joins')
+  })
+
+  it('description encodes EXPRESSION (not statement) semantics', () => {
+    const desc = schemas.EMIT_TRANSFORM_SQL_TOOL.description ?? ''
+    expect(desc).toContain('EXPRESSION')
+    expect(desc).toContain('row_data')
+    expect(desc).toMatch(/jsonb|JSONB/i)
+    expect(desc).toContain('regex')
+  })
+
+  it('joins.items is an object with from/to/on, all required', () => {
+    const properties = schemas.EMIT_TRANSFORM_SQL_TOOL.input_schema.properties as Record<
+      string,
+      JsonSchemaNode
+    >
+    const joinsItems = properties.joins?.items
+    expect(joinsItems).toBeDefined()
+    if (!joinsItems) return
+    expect(joinsItems.type).toBe('object')
+    expect(joinsItems.additionalProperties).toBe(false)
+    expect(joinsItems.required).toEqual(['from', 'to', 'on'])
+  })
+})
+
+describe('tool-schemas — EMIT_FIX_SQL_TOOL (PR 12.2 B-1)', () => {
+  it('exports with the expected name + strict mode', () => {
+    expect(schemas.EMIT_FIX_SQL_TOOL.name).toBe('emit_fix_sql')
+    expect(schemas.EMIT_FIX_SQL_TOOL.strict).toBe(true)
+  })
+
+  it('requires sql + description + risk_level + downstream_impact + tradeoff', () => {
+    const required = schemas.EMIT_FIX_SQL_TOOL.input_schema.required as string[]
+    expect(required).toEqual(['sql', 'description', 'risk_level', 'downstream_impact', 'tradeoff'])
+  })
+
+  it('risk_level is a 3-value enum (low/medium/high)', () => {
+    const properties = schemas.EMIT_FIX_SQL_TOOL.input_schema.properties as Record<
+      string,
+      JsonSchemaNode
+    >
+    const riskLevel = properties.risk_level
+    expect(riskLevel.type).toBe('string')
+    expect(riskLevel.enum).toEqual(['low', 'medium', 'high'])
+  })
+
+  it('description encodes UPDATE/DELETE only + WHERE table_id anchor', () => {
+    const desc = schemas.EMIT_FIX_SQL_TOOL.description ?? ''
+    expect(desc).toContain('UPDATE')
+    expect(desc).toContain('DELETE')
+    expect(desc).toMatch(/table_id\s*=/)
+    expect(desc).toContain('LIMIT')
+    expect(desc).toContain('FORBIDDEN')
+  })
+
+  it('risk_level description encodes the 3 tiers + CTE caveat (mirrors EMIT_FIX_OPTIONS_TOOL rubric)', () => {
+    const properties = schemas.EMIT_FIX_SQL_TOOL.input_schema.properties as Record<
+      string,
+      JsonSchemaNode
+    >
+    const riskDesc = properties.risk_level?.description ?? ''
+    expect(riskDesc).toContain('"low"')
+    expect(riskDesc).toContain('"medium"')
+    expect(riskDesc).toContain('"high"')
+    expect(riskDesc).toContain('CTE')
+    expect(riskDesc).toContain('non-revertable')
   })
 })
