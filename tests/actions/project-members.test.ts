@@ -11,6 +11,13 @@
 // against a database. End-to-end coverage lives at the manual smoke
 // level in PR 2a; future PRs can layer in DB integration tests against
 // the local supabase test harness if regressions warrant.
+//
+// Item 2.2 update: the enrichment-shape pins shifted from the inline
+// 3-step pattern (supabaseAdmin profiles SELECT + getAuthEmailsByIds)
+// to the canonical `enrichWithUserIdentity` helper invocation
+// (lib/auth/users.ts). Behavior is unchanged; the helper wraps the
+// same RPC + profiles SELECT internally. Pin shifted to lock the
+// new architectural choice.
 
 import { describe, it, expect } from 'vitest'
 import { readFileSync } from 'node:fs'
@@ -70,8 +77,10 @@ describe('project-members.ts — module-level invariants', () => {
     expect(SRC).toMatch(/logActivity/)
   })
 
-  it('imports getAuthEmailsByIds for the email enrichment step', () => {
-    expect(SRC).toMatch(/getAuthEmailsByIds/)
+  it('imports enrichWithUserIdentity for the canonical user-identity enrichment helper', () => {
+    expect(SRC).toMatch(
+      /import\s+\{[^}]*\benrichWithUserIdentity\b[^}]*\}\s+from\s+['"]@\/lib\/auth\/users['"]/
+    )
   })
 })
 
@@ -96,11 +105,10 @@ describe('getProjectMembers — list with name/email enrichment', () => {
     )
   })
 
-  it('enriches via supabaseAdmin profiles SELECT + getAuthEmailsByIds', () => {
+  it("enriches via enrichWithUserIdentity helper keyed on 'user_id'", () => {
     expect(GET_PROJECT_MEMBERS).toMatch(
-      /supabaseAdmin[\s\S]*?\.from\(\s*['"]profiles['"]\s*\)[\s\S]*?\.select\(\s*['"]id, full_name['"]\s*\)/
+      /enrichWithUserIdentity\([\s\S]*?,\s*['"]user_id['"]/
     )
-    expect(GET_PROJECT_MEMBERS).toMatch(/getAuthEmailsByIds\(/)
   })
 })
 
@@ -268,10 +276,9 @@ describe('getOrgMembersAvailableForProject — picker pool', () => {
     )
   })
 
-  it('enriches via supabaseAdmin profiles SELECT + getAuthEmailsByIds', () => {
+  it("enriches via enrichWithUserIdentity helper keyed on 'user_id'", () => {
     expect(GET_AVAILABLE_ORG_MEMBERS).toMatch(
-      /supabaseAdmin[\s\S]*?\.from\(\s*['"]profiles['"]\s*\)[\s\S]*?\.select\(\s*['"]id, full_name['"]\s*\)/
+      /enrichWithUserIdentity\([\s\S]*?,\s*['"]user_id['"]/
     )
-    expect(GET_AVAILABLE_ORG_MEMBERS).toMatch(/getAuthEmailsByIds\(/)
   })
 })

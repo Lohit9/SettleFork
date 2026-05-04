@@ -4,7 +4,7 @@ import { revalidatePath } from 'next/cache'
 import { createClient } from '@/lib/supabase/server'
 import { supabaseAdmin } from '@/lib/supabase/admin'
 import { requirePlatformAdmin } from '@/lib/auth/platform-admin'
-import { getAuthEmailsByIds } from '@/lib/auth/users'
+import { enrichWithUserIdentity } from '@/lib/auth/users'
 import type { Organization, OrgMembership, OrgRole } from '@/lib/types/organizations'
 
 function slugify(name: string): string {
@@ -76,22 +76,15 @@ export async function getOrgMembers(
 
   if (error) return { members: [], error: error.message }
 
-  const userIds = (data ?? []).map((m) => m.user_id)
-  const { data: profiles } = await supabaseAdmin
-    .from('profiles')
-    .select('id, full_name')
-    .in('id', userIds.length > 0 ? userIds : ['none'])
-
-  const emailMap = await getAuthEmailsByIds(userIds)
-
-  const profileMap = new Map((profiles ?? []).map((p) => [p.id, p.full_name]))
-
-  const members: OrgMembership[] = (data ?? []).map((m) => ({
+  const baseRows = (data ?? []).map((m) => ({
     ...m,
     role: m.role as OrgRole,
-    user_name: profileMap.get(m.user_id) ?? undefined,
-    user_email: emailMap.get(m.user_id) ?? undefined,
   }))
+
+  const members = (await enrichWithUserIdentity(
+    baseRows,
+    'user_id',
+  )) as OrgMembership[]
 
   return { members }
 }
@@ -254,7 +247,7 @@ export async function adminGetOrgMembers(orgId: string): Promise<{
     return { success: false, error: admin.error, members: [] }
   }
 
-  // Step 1: Get memberships — no join (profiles has no direct FK from org_memberships)
+  // Read membership rows directly (RLS-bypassed; admin path).
   const { data, error } = await supabaseAdmin
     .from('org_memberships')
     .select('id, role, joined_at, user_id')
@@ -264,27 +257,26 @@ export async function adminGetOrgMembers(orgId: string): Promise<{
   if (error) return { success: false, error: error.message, members: [] }
   if (!data || data.length === 0) return { success: true, members: [] }
 
-  // Step 2: Fetch profile names via direct PK lookup
-  const userIds = data.map((m) => m.user_id)
-  const { data: profiles } = await supabaseAdmin
-    .from('profiles')
-    .select('id, full_name')
-    .in('id', userIds)
-
-  const nameMap = new Map((profiles ?? []).map((p) => [p.id, p.full_name]))
-
-  // Step 3: Fetch emails from auth.users via SECURITY DEFINER RPC
-  const emailMap = await getAuthEmailsByIds(userIds)
-
-  // Step 4: Assemble
-  const members = data.map((m) => ({
+  // Live-join name + email. `missingFallback: 'Unknown'` preserves
+  // the admin-UI literal-string contract — return type pins
+  // user_name / user_email as `string`, not `string | null`.
+  const baseRows = data.map((m) => ({
     id: m.id,
     user_id: m.user_id,
     role: m.role as OrgRole,
     joined_at: m.joined_at,
-    user_name: nameMap.get(m.user_id) ?? 'Unknown',
-    user_email: emailMap.get(m.user_id) ?? 'Unknown',
   }))
+
+  const members = (await enrichWithUserIdentity(baseRows, 'user_id', {
+    missingFallback: 'Unknown',
+  })) as Array<{
+    id: string
+    user_id: string
+    role: OrgRole
+    joined_at: string
+    user_name: string
+    user_email: string
+  }>
 
   return { success: true, members }
 }

@@ -1107,7 +1107,7 @@ export default function OutputsContent({ projectId, projectName, initialData, is
                         <p className="text-xs text-gray-700">{entry.label}</p>
                       </div>
                       <span className="text-[10px] text-gray-400 flex-shrink-0 whitespace-nowrap">
-                        {fmtDateTime(entry.timestamp)}
+                        {fmtDateTime(entry.timestamp)} · {entry.user_name ?? 'Unknown user'}
                       </span>
                     </div>
                   ))}

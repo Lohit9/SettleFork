@@ -77,6 +77,11 @@ export interface DecisionEntry {
   type: DecisionType
   label: string
   timestamp: string
+  user_id: string | null
+  // Populated by enrichWithUserIdentity() in the outputs.ts wrapper —
+  // absent in the core data path. Render layer reads these.
+  user_name?: string | null
+  user_email?: string | null
   metadata?: Record<string, unknown>
 }
 
@@ -994,7 +999,7 @@ export async function getOutputsPageDataCore(projectId: string): Promise<Outputs
       .order('generated_at', { ascending: false }),
     supabaseAdmin
       .from('activity_log')
-      .select('id, action_type, description, category, metadata, created_at')
+      .select('id, action_type, description, category, metadata, created_at, user_id')
       .eq('project_id', projectId)
       .order('created_at', { ascending: false })
       .limit(200),
@@ -1174,6 +1179,7 @@ export async function getOutputsPageDataCore(projectId: string): Promise<Outputs
     type: entry.category as DecisionType,
     label: entry.description,
     timestamp: entry.created_at,
+    user_id: entry.user_id ?? null,
     metadata: entry.metadata as Record<string, unknown>,
   }))
 

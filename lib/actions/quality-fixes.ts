@@ -11,7 +11,7 @@ import { resolveFixTarget } from '@/lib/quality/fix-target'
 import { executeCustomRules } from '@/lib/actions/validation-rules'
 import { logActivity } from '@/lib/actions/activity-log'
 import { logAIEdit } from '@/lib/actions/ai-edit-history'
-import { getAuthEmailsByIds } from '@/lib/auth/users'
+import { enrichWithUserIdentity } from '@/lib/auth/users'
 import type { QualityIssue, FixHistory } from '@/lib/types/database'
 
 // ── helpers ───────────────────────────────────────────────────────────────────
@@ -556,30 +556,11 @@ export async function getFixHistory(
 
   const rows = (data as FixHistory[]) ?? []
 
-  // 3-step user-identity enrichment — mirrors getProjectMembers
-  // (lib/actions/project-members.ts:59-97) and getOrgMembers
-  // (lib/actions/organizations.ts:66-97). Live-join at read time so name
-  // updates reflect immediately; do not denormalize. Deleted users surface
-  // as undefined here; the UI falls back to 'Unknown user' / '—'.
-  const userIds = Array.from(
-    new Set(rows.map((r) => r.applied_by).filter(Boolean)),
-  )
-
-  const { data: profiles } = await supabaseAdmin
-    .from('profiles')
-    .select('id, full_name')
-    .in('id', userIds.length > 0 ? userIds : ['none'])
-
-  const emailMap = await getAuthEmailsByIds(userIds)
-  const profileMap = new Map(
-    (profiles ?? []).map((p) => [p.id, p.full_name]),
-  )
-
-  return rows.map((r) => ({
-    ...r,
-    user_name: profileMap.get(r.applied_by) ?? undefined,
-    user_email: emailMap.get(r.applied_by) ?? undefined,
-  }))
+  // Live-join actor identity into each fix_history row. Helper handles
+  // the empty-rows early-return and replaces the prior 3-step pattern
+  // (mirrors getProjectMembers + getOrgMembers). Live-join at read time
+  // so name updates reflect immediately; do not denormalize.
+  return enrichWithUserIdentity(rows, 'applied_by') as Promise<FixHistory[]>
 }
 
 // ── run full scan ─────────────────────────────────────────────────────────────

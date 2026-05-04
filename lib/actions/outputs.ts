@@ -38,6 +38,7 @@
 
 import { createClient } from '@/lib/supabase/server'
 import { supabaseAdmin } from '@/lib/supabase/admin'
+import { enrichWithUserIdentity } from '@/lib/auth/users'
 import { checkAIRateLimit } from '@/lib/ai/rate-limit'
 import {
   buildCSV,
@@ -90,7 +91,16 @@ export async function getOutputsPageData(projectId: string): Promise<OutputsPage
     return emptyOutputsPageData(projectId)
   }
 
-  return getOutputsPageDataCore(projectId)
+  const data = await getOutputsPageDataCore(projectId)
+
+  // Live-join actor identity into the decisions log so the UI can
+  // render "timestamp · name" without denormalising user_name into
+  // activity_log. Helper handles the empty-array case internally.
+  if (data.decisions.length > 0) {
+    data.decisions = await enrichWithUserIdentity(data.decisions, 'user_id')
+  }
+
+  return data
 }
 
 // ── generateGoldStandardCSVs ──────────────────────────────────────────────────
