@@ -412,18 +412,16 @@ export function FieldMappingRow({
   // signal warrants.
   const isEmptyRow = row.kind === 'target_acknowledged' || row.kind === 'unmapped'
 
-  // Phase 4-polish-3 — optimistic-state visual overlays. Approve / map
-  // flash a brief tint (150ms / 200ms), reject animates a slide-fade-
-  // out, acknowledge tints slate. All honor `motion-reduce:transition-
-  // none`. Implemented via additive Tailwind classes on the row body.
-  const optimisticBgClass =
-    optimisticState === 'approving'
-      ? 'bg-green-50'
-      : optimisticState === 'acknowledging'
-        ? 'bg-slate-100'
-        : optimisticState === 'mapping'
-          ? 'bg-blue-50'
-          : ''
+  // Phase 4-polish-3 follow-up (2026-05-04) — row-level optimistic
+  // background tints (bg-green-50 / bg-slate-100 / bg-blue-50) were
+  // replaced with a Linear-style button-level pulse animation
+  // (`.animate-button-pulse` keyframe in globals.css). The pulse is
+  // applied to the action button corresponding to the in-flight
+  // optimistic state inside `InlineActionsCell` below. Status-dot
+  // transition (amber → green on approve etc.) remains the canonical
+  // success confirmation; it triggers when `router.refresh()` rehydrates
+  // the row's status field. Reject keeps its slide cue (PR #60) — not
+  // pulsed.
   const isRejecting = optimisticState === 'rejecting'
 
   return (
@@ -479,9 +477,8 @@ export function FieldMappingRow({
           // `isActive` (drawer-open) and `isHighlighted` (sidebar)
           // states.
           'transition-colors duration-150 ease-out motion-reduce:transition-none',
-          optimisticBgClass,
           isClickable && 'cursor-pointer focus:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-slate-300',
-          isActive && !optimisticBgClass && 'bg-slate-50',
+          isActive && 'bg-slate-50',
           isHighlighted && 'border-l-2 border-blue-500',
         )}
       >
@@ -709,6 +706,15 @@ function InlineActionsCell({
   // first round-trip resolves).
   const isBusy = optimisticState !== undefined
 
+  // Map optimistic state → which button should pulse. Reject is
+  // intentionally absent — it uses the slide cue (PR #60), not the
+  // pulse. target_acknowledged's unacknowledge button (variant='reject')
+  // is also intentionally absent: there's no 'unacknowledging'
+  // optimistic state in the inline path.
+  const pulseApprove = optimisticState === 'approving'
+  const pulseAcknowledge = optimisticState === 'acknowledging'
+  const pulseMap = optimisticState === 'mapping'
+
   const buttons: React.ReactNode[] = []
 
   if (row.kind === 'mapped') {
@@ -722,6 +728,7 @@ function InlineActionsCell({
           onClick={() => onInlineApprove(row.id)}
           disabled={isBusy}
           variant="approve"
+          pulse={pulseApprove}
         >
           <Check aria-hidden="true" className="h-3.5 w-3.5" />
         </ActionIconButton>,
@@ -756,6 +763,7 @@ function InlineActionsCell({
           onClick={() => onInlineMap()}
           disabled={isBusy}
           variant="map"
+          pulse={pulseMap}
         >
           <Plus aria-hidden="true" className="h-3.5 w-3.5" />
         </ActionIconButton>,
@@ -771,6 +779,7 @@ function InlineActionsCell({
           onClick={() => onInlineAcknowledge(row.id)}
           disabled={isBusy}
           variant="acknowledge"
+          pulse={pulseAcknowledge}
         >
           <Ban aria-hidden="true" className="h-3.5 w-3.5" />
         </ActionIconButton>,
@@ -820,6 +829,15 @@ interface ActionIconButtonProps {
   onClick: (e: React.MouseEvent<HTMLButtonElement>) => void
   disabled?: boolean
   variant: 'approve' | 'reject' | 'map' | 'acknowledge'
+  /**
+   * When true, applies the `.animate-button-pulse` keyframe (defined
+   * in globals.css) so the button does a Linear-style soft scale +
+   * green ring fade-out for ~280ms. Set by the parent based on which
+   * optimistic state is in flight (approving / acknowledging /
+   * mapping). Honors `prefers-reduced-motion: reduce` via the keyframe's
+   * own media-query gate. Reject's slide cue is unrelated (PR #60).
+   */
+  pulse?: boolean
   children: React.ReactNode
 }
 
@@ -830,6 +848,7 @@ function ActionIconButton({
   onClick,
   disabled,
   variant,
+  pulse,
   children,
 }: ActionIconButtonProps) {
   return (
@@ -837,6 +856,7 @@ function ActionIconButton({
       type="button"
       data-testid={testId}
       data-action-variant={variant}
+      data-pulsing={pulse ? 'true' : undefined}
       aria-label={ariaLabel}
       title={tooltip}
       disabled={disabled}
@@ -855,6 +875,7 @@ function ActionIconButton({
         'focus:outline-none focus-visible:ring-2 focus-visible:ring-slate-300',
         'disabled:cursor-not-allowed disabled:opacity-50',
         ACTION_VARIANT_CLASSNAME[variant],
+        pulse && 'animate-button-pulse',
       )}
     >
       {children}
