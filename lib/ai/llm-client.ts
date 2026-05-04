@@ -135,6 +135,25 @@ export interface CallLLMOptions {
    * spike that recovers as cache rewarms.
    */
   cacheControl?: boolean
+  /**
+   * PR 3.2: optional multi-tool registration for agent-loop callsites.
+   * When provided (non-empty array), the request includes ALL listed
+   * tools and `tool_choice: { type: 'auto' }` — the model picks which
+   * tool to invoke per iteration, OR emits a text response.
+   *
+   * Mutually exclusive with `tool` (singular). The wrapper throws if
+   * both are set — a single call cannot mix forced-by-name and auto
+   * choice.
+   *
+   * Single-tool callsites (PR 12.x cohort) continue to use the
+   * existing `tool?: Tool` field with forced-by-name `tool_choice` —
+   * byte-identical to today.
+   *
+   * Cache control: when `cacheControl: true`, every tool in the array
+   * gets `cache_control: { type: 'ephemeral' }` applied via
+   * `applyToolCache`.
+   */
+  tools?: Tool[]
 }
 
 interface CallLLMResultCommon {
@@ -413,6 +432,71 @@ export function applyToolCache(
   return { ...tool, cache_control: { type: 'ephemeral' } }
 }
 
+// ─── Multi-tool resolution helpers (PR 3.2) ──────────────────────────────────
+
+/**
+ * Resolve the `tools` array to send to Anthropic, applying optional
+ * cache_control to each entry. Throws on mutual exclusivity violation.
+ *
+ *   neither tool nor tools set → returns undefined (no tools block sent)
+ *   tool set (single-tool legacy) → returns [applyToolCache(tool, ...)]
+ *   tools set (multi-tool, PR 3.2 agent-loop) → returns tools.map(applyToolCache)
+ *   BOTH set → throws (a single call cannot mix forced + auto tool_choice)
+ *
+ * Pure function — no I/O. Exported for unit testing.
+ */
+export function resolveToolsParam(
+  tool: Tool | undefined,
+  tools: Tool[] | undefined,
+  cacheControl: boolean | undefined,
+): Tool[] | undefined {
+  if (tool && tools && tools.length > 0) {
+    throw new Error(
+      'callLLM: opts.tool and opts.tools are mutually exclusive — a single call cannot mix forced-by-name and auto tool_choice',
+    )
+  }
+  if (tool) return [applyToolCache(tool, cacheControl)]
+  if (tools && tools.length > 0) return tools.map((t) => applyToolCache(t, cacheControl))
+  return undefined
+}
+
+/**
+ * Resolve the `tool_choice` field for an Anthropic request based on
+ * which tool surface (single vs multi) is in use.
+ *
+ *   neither tool nor tools set → returns undefined (no tool_choice sent)
+ *   tool set (single, legacy)  → forced-by-name (byte-identical to today)
+ *   tools set (multi, PR 3.2)  → { type: 'auto' } per LOCK #2
+ *
+ * `disable_parallel_tool_use: true` is set in BOTH single and multi
+ * cases — Settle's convention is one tool per call. The agent-loop
+ * primitive iterates serially; multi-tool here just means the MODEL
+ * chooses which one to invoke per iteration, not that multiple tools
+ * are dispatched in parallel.
+ *
+ * Pure function — no I/O. Exported for unit testing.
+ */
+export function resolveToolChoice(
+  tool: Tool | undefined,
+  tools: Tool[] | undefined,
+):
+  | { type: 'tool'; name: string; disable_parallel_tool_use: true }
+  | { type: 'auto'; disable_parallel_tool_use: true }
+  | undefined {
+  if (tool && tools && tools.length > 0) {
+    throw new Error(
+      'callLLM: opts.tool and opts.tools are mutually exclusive',
+    )
+  }
+  if (tool) {
+    return { type: 'tool', name: tool.name, disable_parallel_tool_use: true }
+  }
+  if (tools && tools.length > 0) {
+    return { type: 'auto', disable_parallel_tool_use: true }
+  }
+  return undefined
+}
+
 // ─── Single-shot wrapper ──────────────────────────────────────────────────────
 
 export async function callLLM(opts: CallLLMOptions): Promise<CallLLMResult> {
@@ -439,22 +523,24 @@ export async function callLLM(opts: CallLLMOptions): Promise<CallLLMResult> {
       // When the flag is OFF or the feature is in LOW_EFFORT_FEATURES,
       // no output_config is sent at all (preserves current behavior).
       ...(effort && { output_config: { effort } }),
-      // PR 12: include `tools` + `tool_choice` only when the caller
-      // passed `opts.tool`. `tool_choice` is a top-level request field
+      // PR 12: include `tools` + `tool_choice` only when a tool surface
+      // is registered. `tool_choice` is a top-level request field
       // (NOT nested inside output_config like `effort`); see
       // SDK messages.d.ts:1081-1129 (ToolChoice union).
       // disable_parallel_tool_use=true matches Settle's "exactly one
       // tool per call" convention.
       // PR 13.1: applyToolCache attaches cache_control when
       // opts.cacheControl is set; otherwise the tool is unchanged.
-      ...(opts.tool && {
-        tools: [applyToolCache(opts.tool, opts.cacheControl)],
-        tool_choice: {
-          type: 'tool' as const,
-          name: opts.tool.name,
-          disable_parallel_tool_use: true,
-        },
-      }),
+      // PR 3.2: opts.tools (multi-tool) yields tool_choice 'auto';
+      // opts.tool (single-tool legacy) yields forced-by-name. Mutually
+      // exclusive — resolveToolsParam throws if both set.
+      ...((() => {
+        const resolvedTools = resolveToolsParam(opts.tool, opts.tools, opts.cacheControl)
+        const resolvedChoice = resolveToolChoice(opts.tool, opts.tools)
+        return resolvedTools && resolvedChoice
+          ? { tools: resolvedTools, tool_choice: resolvedChoice }
+          : {}
+      })()),
     }
     if (opts.abuseUserId) {
       request.metadata = { user_id: opts.abuseUserId }
@@ -478,53 +564,84 @@ export async function callLLM(opts: CallLLMOptions): Promise<CallLLMResult> {
     // text block alongside the tool_use; the §9.1 probe also showed
     // that thinking blocks may or may not appear depending on the
     // model's budget decision, so we never assume one is present.
-    if (opts.tool) {
+    // PR 3.2: when `opts.tools` (multi) is set, the response MAY
+    // contain a tool_use of any registered tool OR a text block (the
+    // model decides per `tool_choice: 'auto'`). The wrapper validates
+    // tool_use names against the registered set and falls through to
+    // the text path when no tool_use is emitted.
+    const isSingleTool = !!opts.tool
+    const isMultiTool = !!(opts.tools && opts.tools.length > 0)
+    if (isSingleTool || isMultiTool) {
       const toolUseBlock = response.content.find(
         (b): b is ToolUseBlock => b.type === 'tool_use',
       )
-      if (!toolUseBlock || toolUseBlock.name !== opts.tool.name) {
+      if (toolUseBlock) {
+        if (isSingleTool && toolUseBlock.name !== opts.tool!.name) {
+          throw new Error(
+            `Expected tool_use response for ${opts.tool!.name}; ` +
+              `got blocks: ${response.content.map((b) => b.type).join(', ')}`,
+          )
+        }
+        if (isMultiTool) {
+          const allowedNames = new Set(opts.tools!.map((t) => t.name))
+          if (!allowedNames.has(toolUseBlock.name)) {
+            throw new Error(
+              `Unexpected tool_use name "${toolUseBlock.name}"; expected one of: ${[...allowedNames].join(', ')}`,
+            )
+          }
+        }
+
+        // Persist a JSON-serialized form of the tool input as
+        // `response_text` so the existing `llm_calls.response_text`
+        // surface stays consistent across text- and tool-use calls.
+        // Eval/audit consumers continue to read response_text uniformly.
+        const responseText = JSON.stringify(toolUseBlock.input)
+
+        void writeLogAsync({
+          ...baseRow,
+          response_text: responseText,
+          anthropic_request_id: response.id ?? null,
+          stop_reason: response.stop_reason ?? null,
+          input_tokens: usage.input_tokens,
+          output_tokens: usage.output_tokens,
+          cache_read_tokens: usage.cache_read_tokens,
+          cache_creation_tokens: usage.cache_creation_tokens,
+          latency_ms: latencyMs,
+          cost_usd: costUsd,
+          succeeded: true,
+          error_type: null,
+          error_message: null,
+        })
+
+        return {
+          kind: 'toolUse',
+          toolUse: {
+            name: toolUseBlock.name,
+            input: toolUseBlock.input as Record<string, unknown>,
+          },
+          callId,
+          inputTokens: usage.input_tokens,
+          outputTokens: usage.output_tokens,
+          cacheReadTokens: usage.cache_read_tokens,
+          cacheCreationTokens: usage.cache_creation_tokens,
+          costUsd,
+          anthropicRequestId: response.id ?? null,
+        }
+      }
+      // No tool_use block:
+      if (isSingleTool) {
+        // Single-tool with forced choice MUST emit a tool_use; missing
+        // one is a contract violation (byte-identical error to pre-3.2).
         throw new Error(
-          `Expected tool_use response for ${opts.tool.name}; ` +
+          `Expected tool_use response for ${opts.tool!.name}; ` +
             `got blocks: ${response.content.map((b) => b.type).join(', ')}`,
         )
       }
-
-      // Persist a JSON-serialized form of the tool input as
-      // `response_text` so the existing `llm_calls.response_text`
-      // surface stays consistent across text- and tool-use calls.
-      // Eval/audit consumers continue to read response_text uniformly.
-      const responseText = JSON.stringify(toolUseBlock.input)
-
-      void writeLogAsync({
-        ...baseRow,
-        response_text: responseText,
-        anthropic_request_id: response.id ?? null,
-        stop_reason: response.stop_reason ?? null,
-        input_tokens: usage.input_tokens,
-        output_tokens: usage.output_tokens,
-        cache_read_tokens: usage.cache_read_tokens,
-        cache_creation_tokens: usage.cache_creation_tokens,
-        latency_ms: latencyMs,
-        cost_usd: costUsd,
-        succeeded: true,
-        error_type: null,
-        error_message: null,
-      })
-
-      return {
-        kind: 'toolUse',
-        toolUse: {
-          name: toolUseBlock.name,
-          input: toolUseBlock.input as Record<string, unknown>,
-        },
-        callId,
-        inputTokens: usage.input_tokens,
-        outputTokens: usage.output_tokens,
-        cacheReadTokens: usage.cache_read_tokens,
-        cacheCreationTokens: usage.cache_creation_tokens,
-        costUsd,
-        anthropicRequestId: response.id ?? null,
-      }
+      // Multi-tool with auto choice: model chose to emit text — fall
+      // through to the text path below. Agent-loop callsites treat
+      // text responses as "no tool picked this iteration" (schema_error
+      // termination per design §A2); other multi-tool callers can
+      // handle them however they like.
     }
 
     const textBlock = response.content.find((b) => b.type === 'text')
@@ -625,14 +742,15 @@ export async function callLLMStreaming(
       // tool_use block. The §9.1 probe verified this end-to-end.
       // PR 13.1: applyToolCache attaches cache_control when
       // opts.cacheControl is set; otherwise the tool is unchanged.
-      ...(opts.tool && {
-        tools: [applyToolCache(opts.tool, opts.cacheControl)],
-        tool_choice: {
-          type: 'tool' as const,
-          name: opts.tool.name,
-          disable_parallel_tool_use: true,
-        },
-      }),
+      // PR 3.2: opts.tools (multi-tool) yields tool_choice 'auto'; see
+      // resolveToolsParam / resolveToolChoice helpers above.
+      ...((() => {
+        const resolvedTools = resolveToolsParam(opts.tool, opts.tools, opts.cacheControl)
+        const resolvedChoice = resolveToolChoice(opts.tool, opts.tools)
+        return resolvedTools && resolvedChoice
+          ? { tools: resolvedTools, tool_choice: resolvedChoice }
+          : {}
+      })()),
     }
     if (opts.abuseUserId) {
       request.metadata = { user_id: opts.abuseUserId }
@@ -650,49 +768,72 @@ export async function callLLMStreaming(
     const costUsd = computeCostUsd(model, usage)
     const latencyMs = Date.now() - startedAt
 
-    if (opts.tool) {
+    // PR 3.2: same single-vs-multi-tool branching as callLLM. See the
+    // comment block above the analogous branch in the non-streaming
+    // wrapper for full design notes.
+    const isSingleToolStream = !!opts.tool
+    const isMultiToolStream = !!(opts.tools && opts.tools.length > 0)
+    if (isSingleToolStream || isMultiToolStream) {
       const toolUseBlock = message.content.find(
         (b): b is ToolUseBlock => b.type === 'tool_use',
       )
-      if (!toolUseBlock || toolUseBlock.name !== opts.tool.name) {
+      if (toolUseBlock) {
+        if (isSingleToolStream && toolUseBlock.name !== opts.tool!.name) {
+          throw new Error(
+            `Expected tool_use response for ${opts.tool!.name}; ` +
+              `got blocks: ${message.content.map((b) => b.type).join(', ')}`,
+          )
+        }
+        if (isMultiToolStream) {
+          const allowedNames = new Set(opts.tools!.map((t) => t.name))
+          if (!allowedNames.has(toolUseBlock.name)) {
+            throw new Error(
+              `Unexpected tool_use name "${toolUseBlock.name}"; expected one of: ${[...allowedNames].join(', ')}`,
+            )
+          }
+        }
+
+        const responseText = JSON.stringify(toolUseBlock.input)
+
+        void writeLogAsync({
+          ...baseRow,
+          response_text: responseText,
+          anthropic_request_id: message.id ?? null,
+          stop_reason: message.stop_reason ?? null,
+          input_tokens: usage.input_tokens,
+          output_tokens: usage.output_tokens,
+          cache_read_tokens: usage.cache_read_tokens,
+          cache_creation_tokens: usage.cache_creation_tokens,
+          latency_ms: latencyMs,
+          cost_usd: costUsd,
+          succeeded: true,
+          error_type: null,
+          error_message: null,
+        })
+
+        return {
+          kind: 'toolUse',
+          toolUse: {
+            name: toolUseBlock.name,
+            input: toolUseBlock.input as Record<string, unknown>,
+          },
+          callId,
+          inputTokens: usage.input_tokens,
+          outputTokens: usage.output_tokens,
+          cacheReadTokens: usage.cache_read_tokens,
+          cacheCreationTokens: usage.cache_creation_tokens,
+          costUsd,
+          anthropicRequestId: message.id ?? null,
+        }
+      }
+      // No tool_use block:
+      if (isSingleToolStream) {
         throw new Error(
-          `Expected tool_use response for ${opts.tool.name}; ` +
+          `Expected tool_use response for ${opts.tool!.name}; ` +
             `got blocks: ${message.content.map((b) => b.type).join(', ')}`,
         )
       }
-
-      const responseText = JSON.stringify(toolUseBlock.input)
-
-      void writeLogAsync({
-        ...baseRow,
-        response_text: responseText,
-        anthropic_request_id: message.id ?? null,
-        stop_reason: message.stop_reason ?? null,
-        input_tokens: usage.input_tokens,
-        output_tokens: usage.output_tokens,
-        cache_read_tokens: usage.cache_read_tokens,
-        cache_creation_tokens: usage.cache_creation_tokens,
-        latency_ms: latencyMs,
-        cost_usd: costUsd,
-        succeeded: true,
-        error_type: null,
-        error_message: null,
-      })
-
-      return {
-        kind: 'toolUse',
-        toolUse: {
-          name: toolUseBlock.name,
-          input: toolUseBlock.input as Record<string, unknown>,
-        },
-        callId,
-        inputTokens: usage.input_tokens,
-        outputTokens: usage.output_tokens,
-        cacheReadTokens: usage.cache_read_tokens,
-        cacheCreationTokens: usage.cache_creation_tokens,
-        costUsd,
-        anthropicRequestId: message.id ?? null,
-      }
+      // Multi-tool with auto choice: fall through to text path.
     }
 
     const textBlock = message.content.find((b) => b.type === 'text')
