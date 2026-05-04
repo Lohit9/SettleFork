@@ -145,6 +145,14 @@ interface TargetTableGroupProps {
    */
   optimisticStates?: Map<string, FieldMappingRowOptimisticState>
   /**
+   * Optimistic-data overrides for the row data shape. Used during
+   * reject paths (inline + bulk + drawer) to pre-apply the unmapped
+   * shape BEFORE router.refresh() lands, masking the unmount/remount
+   * blip when React swaps `tfm-<id>` → `unmapped::<targetFieldId>`.
+   * Forwarded untouched to each FieldMappingRow.
+   */
+  optimisticData?: Map<string, MappingRow>
+  /**
    * Phase 4-polish-3 — inline action handlers. Forwarded untouched
    * to each row. Each is independently optional so individual call
    * sites can opt out of specific affordances (e.g. read-only
@@ -175,6 +183,7 @@ export function TargetTableGroup({
   onToggleCollapse,
   availableSourceFields,
   optimisticStates,
+  optimisticData,
   onInlineApprove,
   onInlineReject,
   onInlineAcknowledge,
@@ -367,6 +376,7 @@ export function TargetTableGroup({
                 isHighlighted={highlightedRowIds?.has(row.id) ?? false}
                 availableSourceFields={availableSourceFields}
                 optimisticState={optimisticStates?.get(row.id)}
+                optimisticData={optimisticData}
                 onInlineApprove={onInlineApprove}
                 onInlineReject={onInlineReject}
                 onInlineAcknowledge={onInlineAcknowledge}

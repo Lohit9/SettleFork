@@ -917,6 +917,88 @@ function MappingContentLoaded({
     setBulkErrorMessage(null)
   }, [isBulkSubmitting])
 
+  // Optimistic-data overrides for the row data shape. Used by the three
+  // reject paths (inline + bulk + drawer) to pre-apply the unmapped
+  // shape BEFORE `router.refresh()` lands. Without this override, the
+  // row continues to render its OLD mapped data during the fade-out
+  // animation, then React unmount/remounts when the post-refresh data
+  // swaps the React key from `tfm-<id>` to `unmapped::<targetFieldId>`
+  // — producing a 200-500ms blank flash on the inline path and a
+  // sub-perceptual blip on bulk + drawer. Pre-applying the unmapped
+  // shape masks the unmount/remount because the override row already
+  // looks like the post-reject row. The cleanup useEffect below drops
+  // overrides whose rowId is no longer in `data.rows` (post-refresh
+  // settle).
+  const [optimisticData, setOptimisticData] = useState<
+    Map<string, MappingRow>
+  >(() => new Map())
+
+  const writeOptimisticData = useCallback(
+    (rowId: string, override: MappingRow) => {
+      setOptimisticData((prev) => {
+        const next = new Map(prev)
+        next.set(rowId, override)
+        return next
+      })
+    },
+    [],
+  )
+
+  const clearOptimisticData = useCallback((rowId: string) => {
+    setOptimisticData((prev) => {
+      if (!prev.has(rowId)) return prev
+      const next = new Map(prev)
+      next.delete(rowId)
+      return next
+    })
+  }, [])
+
+  // Build the post-reject UnmappedRow shape from the current row's
+  // mapped/value-assignment identity. Returns null for row kinds that
+  // are not rejectable (target_acknowledged, unmapped) — call sites
+  // are upstream-gated so this should never fire in practice; defensive
+  // null on the off-chance.
+  const buildUnmappedOverride = useCallback(
+    (rowId: string): MappingRow | null => {
+      const row = data.rows.find((r) => r.id === rowId)
+      if (!row) return null
+      if (row.kind !== 'mapped' && row.kind !== 'value_assignment') {
+        return null
+      }
+      return {
+        id: row.id,
+        targetField: row.targetField,
+        kind: 'unmapped',
+        status: 'unmapped',
+        confidence: null,
+        hasTransformation: false,
+        transformationStatus: null,
+      }
+    },
+    [data.rows],
+  )
+
+  // Cleanup safety net — drop overrides whose rowId is no longer
+  // present in data.rows (post-refresh: TFM successfully rejected, key
+  // dissolved). Concurrent-reject race: an override for a row whose
+  // server action hasn't completed by the next refresh remains in the
+  // map (rowId still present in data.rows); cleared on its own refresh.
+  useEffect(() => {
+    setOptimisticData((prev) => {
+      if (prev.size === 0) return prev
+      const next = new Map(prev)
+      let changed = false
+      for (const rowId of Array.from(next.keys())) {
+        const row = data.rows.find((r) => r.id === rowId)
+        if (!row) {
+          next.delete(rowId)
+          changed = true
+        }
+      }
+      return changed ? next : prev
+    })
+  }, [data.rows])
+
   const handleBulkConfirm = useCallback(async () => {
     if (bulkAction === null) return
     setIsBulkSubmitting(true)
@@ -931,6 +1013,28 @@ function MappingContentLoaded({
         // wrapper returns `rowsAffected` (rejectable, deleted) and
         // optional `failedTfmIds` (the difference).
         const requested = bulkPreviewCount ?? 0
+        // Pre-apply unmapped overrides for every row about to be
+        // rejected. Eliminates the brief unmount/remount blip when
+        // router.refresh() lands and React swaps the keys from
+        // `tfm-<id>` to `unmapped::<targetFieldId>` on each row.
+        // Partial-failure rows (server keeps them mapped) clear via
+        // the data.rows cleanup useEffect once the refresh lands —
+        // the override is `unmapped` but the row's settled state is
+        // back to `mapped` (rowId still present, kind unchanged); the
+        // cleanup keeps the override there briefly until the next
+        // user action triggers another data.rows update. Mild stale
+        // override on the rare partial-failure row is acceptable; the
+        // banner copy already tells the user which rows failed.
+        const targetTableId = bulkAction.targetTableId
+        for (const r of data.rows) {
+          if (
+            (r.kind === 'mapped' || r.kind === 'value_assignment') &&
+            r.targetField.targetTable.id === targetTableId
+          ) {
+            const ovr = buildUnmappedOverride(r.id)
+            if (ovr) writeOptimisticData(r.id, ovr)
+          }
+        }
         const result = await bulkRejectFieldMappingsForTargetTable({
           projectId,
           targetTableId: bulkAction.targetTableId,
@@ -1004,7 +1108,7 @@ function MappingContentLoaded({
     } finally {
       setIsBulkSubmitting(false)
     }
-  }, [bulkAction, bulkPreviewCount, projectId, pushToast, router])
+  }, [bulkAction, bulkPreviewCount, projectId, pushToast, router, data.rows, buildUnmappedOverride, writeOptimisticData])
 
   // ── Phase 4-polish-3 — inline row action state ────────────────────
   //
@@ -1111,6 +1215,12 @@ function MappingContentLoaded({
     if (rejectAnchor === null) return
     const { rowId } = rejectAnchor
     setRejectAnchor(null)
+    // Pre-apply the unmapped shape so the row visually settles to its
+    // post-reject identity BEFORE the fade-out + key-swap. Eliminates
+    // the 200-500ms blank flash users saw between the fade-out and the
+    // post-refresh unmapped render.
+    const override = buildUnmappedOverride(rowId)
+    if (override) writeOptimisticData(rowId, override)
     setOptimistic(rowId, 'rejecting')
     try {
       const result = await rejectFieldMapping(rowId)
@@ -1121,6 +1231,7 @@ function MappingContentLoaded({
           message: result.error ?? 'Could not reject mapping.',
         })
         clearOptimistic(rowId)
+        clearOptimisticData(rowId)
         return
       }
       pushToast({
@@ -1131,6 +1242,8 @@ function MappingContentLoaded({
       // Wait for the 200ms slide-fade-out to complete before firing
       // `router.refresh()` so the user sees the row leave gracefully
       // rather than blink out instantly when the data swap arrives.
+      // The cleanup useEffect drops the override once data.rows no
+      // longer contains the rowId (post-refresh settle).
       setTimeout(() => router.refresh(), 200)
     } catch (err) {
       pushToast({
@@ -1139,8 +1252,18 @@ function MappingContentLoaded({
         message: err instanceof Error ? err.message : 'Could not reject mapping.',
       })
       clearOptimistic(rowId)
+      clearOptimisticData(rowId)
     }
-  }, [rejectAnchor, setOptimistic, clearOptimistic, pushToast, router])
+  }, [
+    rejectAnchor,
+    setOptimistic,
+    clearOptimistic,
+    pushToast,
+    router,
+    buildUnmappedOverride,
+    writeOptimisticData,
+    clearOptimisticData,
+  ])
 
   const handleInlineAcknowledge = useCallback(
     async (rowId: string) => {
@@ -1329,7 +1452,7 @@ function MappingContentLoaded({
   )
 
   const handleDrawerActionComplete = useCallback(
-    (action: 'approve' | 'reject' | 'unacknowledge', _rowId: string) => {
+    (action: 'approve' | 'reject' | 'unacknowledge', rowId: string) => {
       // Phase 3 Gap 11b — clear the sidebar highlight after any
       // drawer action. Reject deletes the TFM (the highlighted row
       // identity dissolves on the server), so a stale highlight
@@ -1342,13 +1465,30 @@ function MappingContentLoaded({
       // TFM row is deleted, so the row id stops resolving. Close
       // the drawer + clear the URL identically.
       onClearHighlight()
+      // Drawer-reject path equivalent of the inline override — pre-
+      // apply the unmapped shape on the underlying row so it doesn't
+      // blip during the unmount/remount when router.refresh() lands.
+      // Unacknowledge intentionally not covered (separate destructive
+      // action; if user reports flashing, follow-up issue applies the
+      // same pattern using the override map already wired here).
+      if (action === 'reject') {
+        const override = buildUnmappedOverride(rowId)
+        if (override) writeOptimisticData(rowId, override)
+      }
       router.refresh()
       if (action === 'reject' || action === 'unacknowledge') {
         setDrawerRowId(null)
         writeUrl(filters, null)
       }
     },
-    [router, filters, writeUrl, onClearHighlight],
+    [
+      router,
+      filters,
+      writeUrl,
+      onClearHighlight,
+      buildUnmappedOverride,
+      writeOptimisticData,
+    ],
   )
 
   useEffect(() => {
@@ -1674,6 +1814,7 @@ function MappingContentLoaded({
                       onToggleCollapse={toggleCollapsed}
                       availableSourceFields={data.sourceFields}
                       optimisticStates={optimisticStates}
+                      optimisticData={optimisticData}
                       onInlineApprove={handleInlineApprove}
                       onInlineReject={handleInlineRejectClick}
                       onInlineAcknowledge={handleInlineAcknowledge}
