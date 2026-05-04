@@ -119,3 +119,95 @@ export async function getAuthEmailsByIds(
   }
   return result
 }
+
+/**
+ * Options for enrichWithUserIdentity. All fields are optional.
+ *
+ *   nameField, emailField — column names to write the resolved
+ *     name + email into. Default 'user_name' and 'user_email' —
+ *     matches the convention used by getProjectMembers,
+ *     getOrgMembers, getFixHistory, and the new getOutputsPageData
+ *     decisions enrichment.
+ *
+ *   missingFallback — value to write into the name and email
+ *     fields when the user id is absent or not found in
+ *     auth.users / profiles. Default `null`. adminGetOrgMembers
+ *     passes `'Unknown'` to preserve its admin-UI literal-string
+ *     contract (its return type pins user_name / user_email as
+ *     `string`, not `string | null`).
+ */
+export interface EnrichOptions {
+  nameField?: string
+  emailField?: string
+  missingFallback?: string
+}
+
+/**
+ * Enrich a list of rows with the corresponding auth user's display
+ * name and email. Consolidates the 3-step pattern previously
+ * inlined in 5 places (getProjectMembers,
+ * getOrgMembersAvailableForProject, getOrgMembers,
+ * adminGetOrgMembers, getFixHistory) plus the new
+ * getOutputsPageData decisions enrichment.
+ *
+ * Steps:
+ *   1. Extract unique, non-falsy user ids from rows[].userIdField.
+ *   2. EARLY RETURN if no ids present — write the missingFallback
+ *      (default `null`) into every row's name + email. No Supabase
+ *      call. Replaces the `['none']` placeholder anti-pattern
+ *      previously used in getFixHistory (tracked under issue #46).
+ *   3. SELECT id, full_name from profiles via supabaseAdmin (RLS-
+ *      bypassed; profiles has no FK from the calling tables).
+ *   4. Resolve emails via getAuthEmailsByIds (SECURITY DEFINER RPC
+ *      under service_role).
+ *   5. Stitch via Map<userId, value>; rows with ids absent from
+ *      either map fall back to missingFallback.
+ *
+ * Live-join at read time so name updates reflect immediately;
+ * never denormalize.
+ */
+export async function enrichWithUserIdentity<
+  T extends Record<string, any>,
+>(
+  rows: T[],
+  userIdField: string,
+  options?: EnrichOptions,
+): Promise<T[]> {
+  const nameField = options?.nameField ?? 'user_name'
+  const emailField = options?.emailField ?? 'user_email'
+  const fallback: string | null = options?.missingFallback ?? null
+
+  const userIds = Array.from(
+    new Set(rows.map((r) => r[userIdField]).filter(Boolean)),
+  ) as string[]
+
+  if (userIds.length === 0) {
+    return rows.map((r) => ({
+      ...r,
+      [nameField]: fallback,
+      [emailField]: fallback,
+    }))
+  }
+
+  const { data: profiles } = await supabaseAdmin
+    .from('profiles')
+    .select('id, full_name')
+    .in('id', userIds)
+
+  const emailMap = await getAuthEmailsByIds(userIds)
+  const profileMap = new Map(
+    (profiles ?? []).map((p) => [p.id, p.full_name]),
+  )
+
+  return rows.map((r) => {
+    const id = r[userIdField] as string | null | undefined
+    if (!id) {
+      return { ...r, [nameField]: fallback, [emailField]: fallback }
+    }
+    return {
+      ...r,
+      [nameField]: profileMap.get(id) ?? fallback,
+      [emailField]: emailMap.get(id) ?? fallback,
+    }
+  })
+}

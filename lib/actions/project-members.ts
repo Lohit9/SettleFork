@@ -2,9 +2,8 @@
 
 import { revalidatePath } from 'next/cache'
 import { createClient } from '@/lib/supabase/server'
-import { supabaseAdmin } from '@/lib/supabase/admin'
 import { requireProjectPermission } from '@/lib/actions/role-resolution'
-import { getAuthEmailsByIds } from '@/lib/auth/users'
+import { enrichWithUserIdentity } from '@/lib/auth/users'
 import { logActivity } from '@/lib/actions/activity-log'
 import type {
   ProjectMember,
@@ -46,11 +45,8 @@ import type {
  *
  * Implementation mirrors `getOrgMembers` in `organizations.ts`:
  *   1. SSR client SELECT from `project_members` (RLS-active).
- *   2. supabaseAdmin SELECT from `profiles` for `full_name` (RLS-bypassed
- *      because profiles has no FK from project_members).
- *   3. `getAuthEmailsByIds` for emails (SECURITY DEFINER RPC under
- *      service_role).
- *   4. Stitch via Map<userId, value>.
+ *   2. `enrichWithUserIdentity` (lib/auth/users.ts) joins
+ *      profiles.full_name + auth.users.email into the rows.
  *
  * Filters out rows with `role IS NULL` per the design note in
  * `lib/types/organizations.ts:80`. The DB allows NULL roles for legacy
@@ -74,24 +70,18 @@ export async function getProjectMembers(
 
   if (error) return { members: [], error: error.message }
 
-  const userIds = (data ?? []).map((m) => m.user_id)
-  const { data: profiles } = await supabaseAdmin
-    .from('profiles')
-    .select('id, full_name')
-    .in('id', userIds.length > 0 ? userIds : ['none'])
-
-  const emailMap = await getAuthEmailsByIds(userIds)
-  const profileMap = new Map((profiles ?? []).map((p) => [p.id, p.full_name]))
-
-  const members: ProjectMember[] = (data ?? []).map((m) => ({
+  const baseRows = (data ?? []).map((m) => ({
     id: m.id,
     project_id: m.project_id,
     user_id: m.user_id,
     role: m.role as ProjectRole,
     assigned_at: m.assigned_at,
-    user_name: profileMap.get(m.user_id) ?? undefined,
-    user_email: emailMap.get(m.user_id) ?? undefined,
   }))
+
+  const members = (await enrichWithUserIdentity(
+    baseRows,
+    'user_id',
+  )) as ProjectMember[]
 
   return { members }
 }
@@ -407,25 +397,19 @@ export async function getOrgMembersAvailableForProject(
   const { data, error } = await query
   if (error) return { members: [], error: error.message }
 
-  const userIds = (data ?? []).map((m) => m.user_id)
-  const { data: profiles } = await supabaseAdmin
-    .from('profiles')
-    .select('id, full_name')
-    .in('id', userIds.length > 0 ? userIds : ['none'])
-
-  const emailMap = await getAuthEmailsByIds(userIds)
-  const profileMap = new Map((profiles ?? []).map((p) => [p.id, p.full_name]))
-
-  const members: OrgMembership[] = (data ?? []).map((m) => ({
+  const baseRows = (data ?? []).map((m) => ({
     id: m.id,
     org_id: m.org_id,
     user_id: m.user_id,
     role: m.role as OrgRole,
     joined_at: m.joined_at,
     provisioning_source: m.provisioning_source,
-    user_name: profileMap.get(m.user_id) ?? undefined,
-    user_email: emailMap.get(m.user_id) ?? undefined,
   }))
+
+  const members = (await enrichWithUserIdentity(
+    baseRows,
+    'user_id',
+  )) as OrgMembership[]
 
   return { members }
 }
