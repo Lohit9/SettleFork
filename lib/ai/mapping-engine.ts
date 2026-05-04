@@ -213,6 +213,9 @@ export interface ClaudeResponse {
  * `tests/actions/generate-mappings-orchestration.test.ts` Group A for
  * the verbatim section pins.
  */
+// PR 13.1: Cached via Anthropic prompt caching (cacheControl: true).
+// Editing this string invalidates the prompt cache; expect a 1-day cost
+// spike after deploys that touch this prompt while the cache rewarms.
 export const MAPPING_GENERATION_SYSTEM_PROMPT = `You are an enterprise data migration expert specializing in source-to-target schema mapping. Given source and target database schemas with sample data and optional documentation context, generate comprehensive mapping suggestions.
 
 For each mapping, provide:
@@ -1513,6 +1516,12 @@ ${otherSourcesList}
             batch_total: sourceTablesForBatching.length,
           },
           ...(phase2Enabled && { tool: EMIT_TABLE_MAPPINGS_TOOL }),
+          // PR 13.1: prompt caching for the engine's primary mapping
+          // call. Per-table batching produces high invocation locality
+          // within Anthropic's 5-min ephemeral TTL — break-even at ≥2
+          // tables per project. System prompt + tool definition are
+          // both static across invocations.
+          cacheControl: true,
         })
       } catch (err) {
         console.error(`[Mapping] Claude call failed for source table ${sourceCtx.table_name}:`, err)

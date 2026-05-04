@@ -354,6 +354,9 @@ export function parseDDL(sql: string): ParsedTable[] {
 
 // ── AI-assisted fallback ──────────────────────────────────────────────────────
 
+// PR 13.1: Cached via Anthropic prompt caching (cacheControl: true).
+// Editing this string invalidates the prompt cache; expect a 1-day cost
+// spike after deploys that touch this prompt while the cache rewarms.
 const DDL_PARSE_SYSTEM = `You are a SQL DDL parser. Given a DDL script, extract all CREATE TABLE definitions and return the structure as JSON.
 Respond with ONLY valid JSON, no markdown, no explanation:
 {
@@ -401,6 +404,10 @@ export async function parseDDLWithAI(
     promptVersion: 'ddl-parsing-v1',
     abuseUserId: userId,
     ...(phase2Enabled && { tool: EMIT_PARSED_DDL_TOOL }),
+    // PR 13.1: prompt caching for DDL parsing. Onboarding bursts process
+    // multiple DDL docs in sequence; tool definition (~3.5K tk) is the
+    // bulk of cacheable surface. System prompt + tool both static.
+    cacheControl: true,
   })
 
   let parsed: { tables: ParsedTable[] }

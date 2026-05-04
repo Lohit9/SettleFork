@@ -983,6 +983,9 @@ export async function getTransformData(
 
 // ─── Claude system prompt ─────────────────────────────────────────────────────
 
+// PR 13.1: Cached via Anthropic prompt caching (cacheControl: true).
+// Editing this string invalidates the prompt cache; expect a 1-day cost
+// spike after deploys that touch this prompt while the cache rewarms.
 const TRANSFORM_SYSTEM_PROMPT = `You are a SQL transformation expert for enterprise data migrations.
 Given a source field, target field, their schemas, sample data, and a natural language description of the desired transformation, generate the SQL transformation expression.
 
@@ -1342,6 +1345,11 @@ Generate the SQL transformation expression.`
         abuseUserId: user.id,
         metadata: { tfm_id: ctx.tfm.id, target_field_id: tgtField.id },
         ...(phase2Enabled && { tool: EMIT_TRANSFORM_SQL_TOOL }),
+        // PR 13.1: prompt caching. TRANSFORM_SYSTEM_PROMPT is the largest
+        // system prompt in the codebase (~5K tk of SQL pattern guidance);
+        // per-field batching during transform-tab work delivers high
+        // invocation locality. Highest single-call savings of the cohort.
+        cacheControl: true,
       })
       llmCallId = result.callId
       if (result.kind === 'toolUse') {
