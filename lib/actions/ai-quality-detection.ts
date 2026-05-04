@@ -105,6 +105,9 @@ function extractCount(result: unknown): number {
 
 // ── System prompt ─────────────────────────────────────────────────────────────
 
+// PR 13.1: Cached via Anthropic prompt caching (cacheControl: true).
+// Editing this string invalidates the prompt cache; expect a 1-day cost
+// spike after deploys that touch this prompt while the cache rewarms.
 const AI_DETECTION_SYSTEM_PROMPT = `You are a data quality analyst for enterprise data migrations. You are given:
 1. Field profiles from a source data table (types, null rates, value distributions, format issues)
 2. Schema documentation describing the intended schema structure and known issues
@@ -355,6 +358,10 @@ Identify additional data quality issues NOT already listed in existing_issues.`
       abuseUserId: user.id,
       metadata: { table_id: tableId },
       ...(phase2Enabled && { tool: EMIT_QUALITY_ISSUES_TOOL }),
+      // PR 13.1: prompt caching. AI_DETECTION_SYSTEM_PROMPT enumerates
+      // cross-field/value-domain/format check rules (~2K tk); per-table
+      // scan locality is high during onboarding (5-15 tables in burst).
+      cacheControl: true,
     })
     llmCallId = result.callId
   } catch (err) {

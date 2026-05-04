@@ -54,6 +54,9 @@ export interface GenerateFixSuggestionsResult {
   error?: string
 }
 
+// PR 13.1: Cached via Anthropic prompt caching (cacheControl: true).
+// Editing this string invalidates the prompt cache; expect a 1-day cost
+// spike after deploys that touch this prompt while the cache rewarms.
 const SYSTEM_PROMPT = `You are a senior enterprise data migration consultant. A data quality issue has been detected in a migration project. Your job is to:
 1. Explain the root cause clearly
 2. Assess downstream impact — what breaks if this isn't fixed
@@ -484,6 +487,11 @@ Provide 2-3 fix options for this issue. Use table_id = '${effectiveTableId}' in 
       abuseUserId: user.id,
       metadata: { issue_id: issueId, effective_table_id: effectiveTableId },
       ...(phase2Enabled && { tool: EMIT_FIX_OPTIONS_TOOL }),
+      // PR 13.1: prompt caching. SYSTEM_PROMPT carries the SQL safety
+      // rules + 5-condition risk rubric (~4K tk); EMIT_FIX_OPTIONS_TOOL
+      // is similarly large. Per-issue invocation locality is medium
+      // (multiple issues in one quality-review session).
+      cacheControl: true,
     })
     llmCallId = result.callId
 

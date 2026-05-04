@@ -20,7 +20,7 @@ import Anthropic, {
   AuthenticationError,
   RateLimitError,
 } from '@anthropic-ai/sdk'
-import type { Tool, ToolUseBlock } from '@anthropic-ai/sdk/resources/messages'
+import type { TextBlockParam, Tool, ToolUseBlock } from '@anthropic-ai/sdk/resources/messages'
 import { randomUUID, createHash } from 'node:crypto'
 import { supabaseAdmin } from '@/lib/supabase/admin'
 import { computeCostUsd } from '@/lib/ai/pricing'
@@ -115,6 +115,26 @@ export interface CallLLMOptions {
    * the tool we passed in.
    */
   tool?: Tool
+  /**
+   * PR 13.1: opt into Anthropic prompt caching. When true, sets
+   * `cache_control: { type: 'ephemeral' }` on the system prompt
+   * (transformed into content-block array form) and on the tool
+   * definition (when present). Cache reads/writes are recorded
+   * automatically via the existing `cache_read_tokens` /
+   * `cache_creation_tokens` columns in `llm_calls`.
+   *
+   * Defaults to false. Enable per-callsite based on the cache-fit
+   * audit (docs/investigations/pr13-prompt-caching.md §3). Anthropic's
+   * 5-minute ephemeral TTL means caching only pays off for features
+   * with invocation locality within that window — break-even is at a
+   * 25% read-to-write hit rate (cache writes cost 1.25× input;
+   * reads cost 0.10×).
+   *
+   * Editing the system prompt or tool schema for a cached feature
+   * forces a cache rewrite on the next deploy — expect a 1-day cost
+   * spike that recovers as cache rewarms.
+   */
+  cacheControl?: boolean
 }
 
 interface CallLLMResultCommon {
@@ -348,6 +368,51 @@ function buildBaseRow(
   }
 }
 
+// ─── Prompt-caching helpers (PR 13.1) ─────────────────────────────────────────
+
+/**
+ * Build the `system` parameter for an Anthropic request.
+ *
+ *   cacheControl=false (default) → returns the prompt as a plain string,
+ *     byte-identical to the pre-PR-13.1 wrapper output.
+ *   cacheControl=true            → returns a single TextBlockParam content
+ *     block carrying `cache_control: { type: 'ephemeral' }`. Anthropic
+ *     caches the prefix up to (and including) this block.
+ *
+ * Pure function — no I/O, no env reads. Exported for unit testing.
+ */
+export function buildSystemParam(
+  systemPrompt: string,
+  cacheControl: boolean | undefined,
+): string | TextBlockParam[] {
+  if (!cacheControl) return systemPrompt
+  return [
+    {
+      type: 'text',
+      text: systemPrompt,
+      cache_control: { type: 'ephemeral' },
+    },
+  ]
+}
+
+/**
+ * Apply prompt-caching to a Tool definition.
+ *
+ *   cacheControl=false (default) → returns the tool object unchanged.
+ *   cacheControl=true            → returns a shallow copy with
+ *     `cache_control: { type: 'ephemeral' }` attached. Anthropic caches
+ *     the tool definition (description + input_schema).
+ *
+ * Pure function — no I/O. Exported for unit testing.
+ */
+export function applyToolCache(
+  tool: Tool,
+  cacheControl: boolean | undefined,
+): Tool {
+  if (!cacheControl) return tool
+  return { ...tool, cache_control: { type: 'ephemeral' } }
+}
+
 // ─── Single-shot wrapper ──────────────────────────────────────────────────────
 
 export async function callLLM(opts: CallLLMOptions): Promise<CallLLMResult> {
@@ -362,7 +427,10 @@ export async function callLLM(opts: CallLLMOptions): Promise<CallLLMResult> {
     const request: Anthropic.MessageCreateParamsNonStreaming = {
       model,
       max_tokens: maxTokens,
-      system: opts.systemPrompt,
+      // PR 13.1: buildSystemParam returns plain string when
+      // cacheControl is unset (byte-identical to pre-13.1 behavior),
+      // or a TextBlockParam[] carrying cache_control when set.
+      system: buildSystemParam(opts.systemPrompt, opts.cacheControl),
       messages: [{ role: 'user', content: opts.userMessage }],
       // PR 11: include `output_config.effort` only when defined.
       // The Anthropic SDK nests `effort` inside `OutputConfig`
@@ -377,8 +445,10 @@ export async function callLLM(opts: CallLLMOptions): Promise<CallLLMResult> {
       // SDK messages.d.ts:1081-1129 (ToolChoice union).
       // disable_parallel_tool_use=true matches Settle's "exactly one
       // tool per call" convention.
+      // PR 13.1: applyToolCache attaches cache_control when
+      // opts.cacheControl is set; otherwise the tool is unchanged.
       ...(opts.tool && {
-        tools: [opts.tool],
+        tools: [applyToolCache(opts.tool, opts.cacheControl)],
         tool_choice: {
           type: 'tool' as const,
           name: opts.tool.name,
@@ -533,7 +603,10 @@ export async function callLLMStreaming(
     const request: Anthropic.MessageCreateParamsStreaming = {
       model,
       max_tokens: maxTokens,
-      system: opts.systemPrompt,
+      // PR 13.1: same buildSystemParam helper as callLLM. Streaming +
+      // prompt caching is supported identically — cache_control is a
+      // request-side marker and unaffected by streaming mode.
+      system: buildSystemParam(opts.systemPrompt, opts.cacheControl),
       messages: [{ role: 'user', content: opts.userMessage }],
       stream: true,
       // PR 12 follow-up to PR 11: nest `effort` under `output_config`,
@@ -550,8 +623,10 @@ export async function callLLMStreaming(
       // supported on SDK 0.78.0; `stream.finalMessage()` returns a
       // fully-assembled message whose `content` array contains the
       // tool_use block. The §9.1 probe verified this end-to-end.
+      // PR 13.1: applyToolCache attaches cache_control when
+      // opts.cacheControl is set; otherwise the tool is unchanged.
       ...(opts.tool && {
-        tools: [opts.tool],
+        tools: [applyToolCache(opts.tool, opts.cacheControl)],
         tool_choice: {
           type: 'tool' as const,
           name: opts.tool.name,

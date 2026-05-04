@@ -367,6 +367,12 @@ User's rule: "${naturalLanguageRule}"`
       projectId,
       userId: user.id,
       promptVersion: 'validation-rule-from-nl-v1',
+      // PR 13.1: prompt caching. systemPrompt is content-static across
+      // invocations (declared as a function-local const but identical
+      // every call — Anthropic's cache key is content-hash-based, not
+      // declaration-location-based). EMIT_VALIDATION_RULE_TOOL adds
+      // ~2.5K tk of cacheable tool definition.
+      cacheControl: true,
       abuseUserId: user.id,
       metadata: { field_id: fieldId, table_id: tableId },
       ...(phase2Enabled && { tool: EMIT_VALIDATION_RULE_TOOL }),
