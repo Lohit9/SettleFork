@@ -353,11 +353,9 @@ async function generateExecutionPackageInternal(
         abuseUserId: userId,
         metadata: { dialect },
       })
-      // PR 12: SQL/text callsite — migrated in sub-commit 12.2.
-      if (result.kind !== 'text') {
-        throw new Error('outputs_execution_package_monolithic: unexpected toolUse response')
-      }
-      rawSql = result.text
+      // PR 12.2 B-2: stay-text callsite (monolithic SQL bundle — splitMonolithicSQL
+      // consumes a single string, per Phase A §2.6). No `tool` is passed.
+      rawSql = result.kind === 'text' ? result.text : ''
     } catch (err) {
       console.error('[generateExecutionPackage] Claude call failed:', err)
       return { success: false, error: 'Failed to generate execution package. Please try again.' }
@@ -632,11 +630,9 @@ async function generateCompartmentalizedPackageInternal(
           abuseUserId: userId,
           metadata: { dialect, dialect_validation_failed_count: failedCount },
         })
-        // PR 12: SQL/text callsite — migrated in sub-commit 12.2.
-        if (fallbackResult.kind !== 'text') {
-          throw new Error('outputs_execution_package_fallback: unexpected toolUse response')
-        }
-        monoSql = fallbackResult.text
+        // PR 12.2 B-2: stay-text fallback (mirrors monolithic — same prompt
+        // bundle, same SQL-bundle output, per Phase A §2.7). No `tool`.
+        monoSql = fallbackResult.kind === 'text' ? fallbackResult.text : ''
         console.log('[generateCompartmentalizedPackage] Monolithic fallback SQL length:', monoSql.length)
       } catch (fallbackErr) {
         console.error('[generateCompartmentalizedPackage] Monolithic fallback call failed:', fallbackErr)
