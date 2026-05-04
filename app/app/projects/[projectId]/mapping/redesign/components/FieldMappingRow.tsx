@@ -437,11 +437,15 @@ export function FieldMappingRow({
       aria-label={buildAriaLabel(row, rule, isExpanded, isClickable)}
       className={cn(
         isEmptyRow && 'opacity-70',
-        // Reject slide-fade-out: the row is visually retracted while the
-        // wrapper call is in flight. The parent unmounts the row once
-        // `router.refresh()` returns the canonical absence of the TFM.
+        // Reject slide cue: the row slides 1px left + becomes
+        // pointer-inert during the rejection round-trip. PR #58's
+        // optimisticData override (in MappingContent) takes care of
+        // the visual content swap from mapped → unmapped shape; this
+        // class only adds the subtle motion cue. `opacity-0` was
+        // here in PR #58 but hid the override entirely — dropped in
+        // the hotfix.
         'transition-[opacity,transform] duration-200 ease-out motion-reduce:transition-none',
-        isRejecting && 'pointer-events-none -translate-x-1 opacity-0',
+        isRejecting && 'pointer-events-none -translate-x-1',
       )}
     >
       <div
