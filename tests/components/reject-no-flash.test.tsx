@@ -45,6 +45,11 @@
 //         flash. Dropping opacity-0 (hotfix on PR #58) lets the
 //         override actually render. Preserved: pointer-events-none +
 //         -translate-x-1 (subtle slide cue + double-click guard).
+//   RF11. Cleanup useEffect drops overrides where the row exists but
+//         its `kind` disagrees with the override's `unmapped` claim.
+//         Locks the Fix 2 hardening from the bulk-scope hotfix:
+//         partial-bulk-failure rows + scope-mismatch rows must
+//         self-heal on the next data.rows update.
 
 import { describe, it, expect } from "vitest";
 import { readFileSync } from "node:fs";
@@ -117,16 +122,31 @@ describe("[Mapping reject-flash fix] optimistic-data override — invariants", (
     expect(writeIdx).toBeLessThan(setOptIdx);
   });
 
-  it("RF4 — handleBulkConfirm reject branch writes overrides BEFORE bulkRejectFieldMappingsForTargetTable", () => {
-    // The bulk branch must iterate data.rows + call writeOptimisticData,
-    // and that block must appear before the await of the wrapper.
-    const writeIdx = HANDLE_BULK_CONFIRM.indexOf("writeOptimisticData(");
+  it("RF4 — handleBulkConfirm reject branch writes overrides BEFORE bulkRejectFieldMappingsForTargetTable AND scopes to status === 'needs_review'", () => {
+    // The bulk branch must iterate data.rows + call writeOptimisticData
+    // before the await of the wrapper, AND its filter must include
+    // `r.status === 'needs_review'` so the client-side override scope
+    // matches the server's bulkRejectFieldMappingsForTargetTable filter
+    // exactly. PR #61's bug was a wider client scope (no status filter)
+    // that caused approved mappings to render as unmapped even though
+    // the server didn't reject them.
+    // Use `(` suffix on writeOptimisticData and \`({\` suffix on the
+    // wrapper to anchor against actual call sites — comment-text
+    // occurrences inside the bulk loop's prose (which mentions both
+    // names) would otherwise return earlier indices.
+    const writeIdx = HANDLE_BULK_CONFIRM.indexOf("writeOptimisticData(r");
     const wrapperIdx = HANDLE_BULK_CONFIRM.indexOf(
-      "bulkRejectFieldMappingsForTargetTable",
+      "bulkRejectFieldMappingsForTargetTable({",
     );
     expect(writeIdx).toBeGreaterThan(-1);
     expect(wrapperIdx).toBeGreaterThan(-1);
     expect(writeIdx).toBeLessThan(wrapperIdx);
+    // Status filter must appear in the bulk loop's row filter. Match
+    // a relaxed pattern: `status` and `'needs_review'` adjacent within
+    // a small window to allow whitespace/quoting variations.
+    expect(HANDLE_BULK_CONFIRM).toMatch(
+      /r\.status\s*===\s*['"]needs_review['"]/,
+    );
   });
 
   it("RF5 — handleDrawerActionComplete writes override on action === 'reject' BEFORE router.refresh()", () => {
@@ -141,12 +161,14 @@ describe("[Mapping reject-flash fix] optimistic-data override — invariants", (
     );
   });
 
-  it("RF6 — cleanup useEffect on data.rows drops overrides whose rowId is no longer present", () => {
+  it("RF6 — cleanup useEffect on data.rows reconciles overrides against settled server data", () => {
     // The cleanup useEffect: setOptimisticData((prev) => {...}) inside a
-    // useEffect with [data.rows] deps. Pin both the existence of the
-    // useEffect with that dep + the .delete(rowId) call gated by !row.
+    // useEffect with [data.rows] deps. Pin existence + the
+    // next.delete(rowId) reconciliation call. The specific predicate
+    // (\`!row\` alone, vs the post-hotfix \`!row || row.kind !== 'unmapped'\`
+    // disjunction) is locked separately by RF11.
     expect(MAPPING_CONTENT).toMatch(
-      /useEffect\(\(\)\s*=>\s*\{[\s\S]*?setOptimisticData[\s\S]*?if\s*\(\s*!row\s*\)\s*\{[\s\S]*?next\.delete\(rowId\)[\s\S]*?\},\s*\[data\.rows\]\s*\)/,
+      /useEffect\(\(\)\s*=>\s*\{[\s\S]*?setOptimisticData[\s\S]*?next\.delete\(rowId\)[\s\S]*?\},\s*\[data\.rows\]\s*\)/,
     );
   });
 
@@ -196,5 +218,31 @@ describe("[Mapping reject-flash fix] optimistic-data override — invariants", (
       classNames,
       "isRejecting className branch contains opacity-0; got: '" + classNames + "'",
     ).not.toContain("opacity-0");
+  });
+
+  it("RF11 — cleanup useEffect drops overrides where row exists but kind !== 'unmapped' (Fix 2 self-heal)", () => {
+    // The data.rows-keyed cleanup useEffect must drop overrides under
+    // TWO conditions, not just absence:
+    //   (a) `!row` — rowId no longer in data.rows (post-reject success)
+    //   (b) `row.kind !== 'unmapped'` — rowId present but server didn't
+    //       follow through (partial bulk failure, scope mismatch). The
+    //       override claims unmapped; server says otherwise; defer to
+    //       server.
+    // Without (b), stale overrides linger until the next user action.
+    // The bulk-scope hotfix (PR #61) added (b) as defense-in-depth so
+    // future scope mismatches self-heal.
+    //
+    // Scope the regex to MappingContent.tsx since this is a single
+    // useEffect with a known shape.
+    const MAPPING_CONTENT = readFileSync(
+      resolve(ROOT, "app/app/projects/[projectId]/mapping/redesign/MappingContent.tsx"),
+      "utf8",
+    );
+    // Match the cleanup useEffect block: must contain both
+    // `if (!row || row.kind !== 'unmapped')` (or equivalent disjunction)
+    // AND `[data.rows]` deps.
+    expect(MAPPING_CONTENT).toMatch(
+      /useEffect\(\(\)\s*=>\s*\{[\s\S]*?setOptimisticData[\s\S]*?if\s*\(\s*!row\s*\|\|\s*row\.kind\s*!==\s*['"]unmapped['"]\s*\)[\s\S]*?next\.delete\(rowId\)[\s\S]*?\},\s*\[data\.rows\]\s*\)/,
+    );
   });
 });

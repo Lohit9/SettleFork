@@ -978,11 +978,20 @@ function MappingContentLoaded({
     [data.rows],
   )
 
-  // Cleanup safety net — drop overrides whose rowId is no longer
-  // present in data.rows (post-refresh: TFM successfully rejected, key
-  // dissolved). Concurrent-reject race: an override for a row whose
-  // server action hasn't completed by the next refresh remains in the
-  // map (rowId still present in data.rows); cleared on its own refresh.
+  // Cleanup safety net — drop overrides under two conditions:
+  //   (a) the rowId is no longer present in data.rows (post-refresh:
+  //       TFM successfully rejected, key dissolved into
+  //       `unmapped::<targetFieldId>`), OR
+  //   (b) the rowId is present but its kind disagrees with the
+  //       override's `unmapped` claim (server didn't reject the row —
+  //       partial-bulk-failure, scope mismatch, or any future code
+  //       path that wrote an override the server didn't follow
+  //       through on). Defer to server data in this case.
+  // Concurrent-reject race: an override for a row whose server action
+  // hasn't completed by the next refresh stays in the map only if the
+  // intervening refresh's data still shows the row at its original
+  // kind — at which point (b) clears it. The next user-action refresh
+  // re-applies if needed.
   useEffect(() => {
     setOptimisticData((prev) => {
       if (prev.size === 0) return prev
@@ -990,7 +999,7 @@ function MappingContentLoaded({
       let changed = false
       for (const rowId of Array.from(next.keys())) {
         const row = data.rows.find((r) => r.id === rowId)
-        if (!row) {
+        if (!row || row.kind !== 'unmapped') {
           next.delete(rowId)
           changed = true
         }
@@ -1017,18 +1026,33 @@ function MappingContentLoaded({
         // rejected. Eliminates the brief unmount/remount blip when
         // router.refresh() lands and React swaps the keys from
         // `tfm-<id>` to `unmapped::<targetFieldId>` on each row.
-        // Partial-failure rows (server keeps them mapped) clear via
-        // the data.rows cleanup useEffect once the refresh lands —
-        // the override is `unmapped` but the row's settled state is
-        // back to `mapped` (rowId still present, kind unchanged); the
-        // cleanup keeps the override there briefly until the next
-        // user action triggers another data.rows update. Mild stale
-        // override on the rare partial-failure row is acceptable; the
-        // banner copy already tells the user which rows failed.
+        //
+        // Scope MUST mirror the server's
+        // `bulkRejectFieldMappingsForTargetTable` filter exactly:
+        // status='needs_review', is_acknowledged=false, on the
+        // target table. Wider client scope (e.g. omitting the
+        // status filter) writes overrides on rows the server does
+        // NOT reject — approved mappings would visually "go
+        // unmapped" without the server actually deleting the TFM,
+        // and the override would stick until a subsequent user
+        // action triggered another data.rows update. The cleanup
+        // useEffect's kind-mismatch branch (Fix 2) does drop these
+        // stale overrides on the next refresh, but the correct
+        // primary defense is to never write them in the first
+        // place.
+        //
+        // Partial-failure rows (per-TFM transform reset failed —
+        // server kept them mapped) are handled by the cleanup
+        // useEffect on the post-refresh data.rows: the override
+        // claims unmapped but the row's settled kind is still
+        // 'mapped', so cleanup drops the override. Fix 2 makes
+        // this self-healing without requiring a subsequent user
+        // action.
         const targetTableId = bulkAction.targetTableId
         for (const r of data.rows) {
           if (
             (r.kind === 'mapped' || r.kind === 'value_assignment') &&
+            r.status === 'needs_review' &&
             r.targetField.targetTable.id === targetTableId
           ) {
             const ovr = buildUnmappedOverride(r.id)
