@@ -73,8 +73,8 @@ function walkProperties(
 // ─── Existing invariants from PR 12 sub-commit 12.1 ──────────────────────────
 
 describe('tool-schemas — structural invariants', () => {
-  it('exports the expected count of tools (PR 12.1: 13 + PR 12.2 B-1: 3 new SQL emitters = 16)', () => {
-    expect(allTools.length).toBe(16)
+  it('exports the expected count of tools (PR 12.1: 13 + PR 12.2 B-1: 3 SQL emitters + PR 3.3: 3 data-scanning tools = 19)', () => {
+    expect(allTools.length).toBe(19)
   })
 
   it('every tool has a snake_case name (lowercase letters + underscores)', () => {
@@ -495,5 +495,65 @@ describe('tool-schemas — EMIT_FIX_SQL_TOOL (PR 12.2 B-1)', () => {
     expect(riskDesc).toContain('"high"')
     expect(riskDesc).toContain('CTE')
     expect(riskDesc).toContain('non-revertable')
+  })
+})
+
+// ─── PR 3.3: data-scanning tool cluster (3 new schemas) ──────────────────────
+
+describe('tool-schemas — PR 3.3 data-scanning tool cluster', () => {
+  const dataScanningTools = [
+    'query_field_data',
+    'count_distinct_patterns',
+    'cross_field_correlation',
+  ]
+
+  // (a) Tool count assertion is at the top of the file (16 → 19); this
+  // describe block focuses on the new cluster's per-tool shape.
+
+  it('(b) all 3 data-scanning tools satisfy strict-mode constraints across the catalog', () => {
+    // Single sweep: additionalProperties: false, strict: true, no oneOf,
+    // no minimum/maximum, no minItems/maxItems on any of the 3 schemas.
+    for (const name of dataScanningTools) {
+      const tool = allTools.find((t) => t.name === name)
+      expect(tool, `tool ${name} not found`).toBeDefined()
+      if (!tool) continue
+      expect(tool.strict, `${name}: strict must be true`).toBe(true)
+      expect(tool.input_schema.type).toBe('object')
+      expect(
+        (tool.input_schema as { additionalProperties?: unknown }).additionalProperties,
+        `${name}: input_schema.additionalProperties must be false`,
+      ).toBe(false)
+      const json = JSON.stringify(tool.input_schema)
+      expect(json, `${name}: must not contain oneOf`).not.toMatch(/"oneOf"/)
+      expect(json, `${name}: must not contain minimum`).not.toMatch(/"minimum"/)
+      expect(json, `${name}: must not contain maximum`).not.toMatch(/"maximum"/)
+      expect(json, `${name}: must not contain minItems`).not.toMatch(/"minItems"/)
+      expect(json, `${name}: must not contain maxItems`).not.toMatch(/"maxItems"/)
+    }
+  })
+
+  it('(c) required-fields shape per tool: B1=[table_id,field_name], B2=[table_id,field_name], B3=[table_id,field_a_name,field_b_name]', () => {
+    expect(schemas.QUERY_FIELD_DATA_TOOL.input_schema.required).toEqual([
+      'table_id',
+      'field_name',
+    ])
+    expect(schemas.COUNT_DISTINCT_PATTERNS_TOOL.input_schema.required).toEqual([
+      'table_id',
+      'field_name',
+    ])
+    expect(schemas.CROSS_FIELD_CORRELATION_TOOL.input_schema.required).toEqual([
+      'table_id',
+      'field_a_name',
+      'field_b_name',
+    ])
+  })
+
+  it('(d) canonical happy-path: each tool exports the 3 distinct names + 3 are in allTools', () => {
+    const allNames = new Set(allTools.map((t) => t.name))
+    for (const name of dataScanningTools) {
+      expect(allNames.has(name), `${name} not in allTools`).toBe(true)
+    }
+    // Distinct names — no duplicates from accidental copy-paste
+    expect(new Set(dataScanningTools).size).toBe(3)
   })
 })
