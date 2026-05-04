@@ -1569,3 +1569,120 @@ export const EMIT_FIX_SQL_TOOL: Tool = {
     required: ['sql', 'description', 'risk_level', 'downstream_impact', 'tradeoff'],
   },
 }
+
+// ─── Phase 3 data-scanning tools (PR 3.3) ─────────────────────────────────────
+//
+// Three tools the agent loop registers alongside an "answer" tool to let
+// the model probe project data before emitting a final decision. Each
+// schema is paired with an RPC in migration 085 and a handler factory in
+// `lib/ai/agent-tools.ts`. Spec: docs/investigations/pr-phase3.1-agent-design.md §B.
+//
+// Strict-mode posture (per docs/anthropic-strict-mode-constraints.md):
+//   * additionalProperties: false on input_schema (no nested objects in
+//     these schemas, but the top level is uniform)
+//   * No oneOf, no min/max on numbers, no minItems/maxItems on arrays
+//     (none of these schemas declare arrays in input)
+//   * strict: true on each Tool
+
+/**
+ * Used by: `agent_query_field_data` RPC (migration 085 §B1). Sample N
+ * row values for one field, optionally filtered by a strict-allowlist
+ * single-condition where_filter.
+ */
+export const QUERY_FIELD_DATA_TOOL: Tool = {
+  name: 'query_field_data',
+  description:
+    "Sample value(s) for a single field on the source table. Returns up to 50 row values; useful when the system prompt shows aggregate stats but the model needs to inspect individual values to decide on a rule, transformation, or quality check. The `where_filter` is optional; when supplied, it must be a single SQL fragment matching ONE column condition (e.g., \"row_data->>'status' IS NULL\"). Multiple conditions, joins, subqueries, and any DDL/DML are rejected.",
+  strict: true,
+  input_schema: {
+    type: 'object',
+    additionalProperties: false,
+    properties: {
+      table_id: {
+        type: 'string',
+        description:
+          'UUID of the source table to sample from. Must match a table present in the system-prompt schema block.',
+      },
+      field_name: {
+        type: 'string',
+        description:
+          'Bare field name (no JSONB operators). The RPC extracts via row_data->>field_name internally.',
+      },
+      where_filter: {
+        type: 'string',
+        description:
+          "Optional single-condition SQL fragment (e.g., \"row_data->>'status' IS NULL\"). Omit or pass empty string for unconditional sample. Keywords blocked: SELECT, INSERT, UPDATE, DELETE, DROP, ALTER, CREATE, TRUNCATE, GRANT, REVOKE, BEGIN, COMMIT, JOIN, UNION, --, /*. Single condition only — multiple conditions joined by AND/OR are rejected.",
+      },
+      limit: {
+        type: 'number',
+        description:
+          'Number of sample values to return. Server enforces ceiling of 50; values above 50 are clamped. Recommend 10-20 for general inspection, 5 for quick checks.',
+      },
+    },
+    required: ['table_id', 'field_name'],
+  },
+}
+
+/**
+ * Used by: `agent_count_distinct_patterns` RPC (migration 085 §B2).
+ * Returns most-frequent distinct values + frequencies for one field.
+ */
+export const COUNT_DISTINCT_PATTERNS_TOOL: Tool = {
+  name: 'count_distinct_patterns',
+  description:
+    "For one field on the source table, return the most-frequent distinct values with row counts. Useful when deciding between an enum-style rule (small distinct set) and a regex/freeform rule (large distinct set). Returns up to 30 distinct values ordered by frequency desc; if the field has more than 30 distinct values, the response includes a `truncated: true` flag.",
+  strict: true,
+  input_schema: {
+    type: 'object',
+    additionalProperties: false,
+    properties: {
+      table_id: {
+        type: 'string',
+        description:
+          'UUID of the source table. Must match a table present in the system-prompt schema block.',
+      },
+      field_name: {
+        type: 'string',
+        description: 'Bare field name (no JSONB operators).',
+      },
+      limit: {
+        type: 'number',
+        description:
+          'Number of distinct values to return. Server clamps to 30. Recommend 10-15 for enum candidates.',
+      },
+    },
+    required: ['table_id', 'field_name'],
+  },
+}
+
+/**
+ * Used by: `agent_cross_field_correlation` RPC (migration 085 §B3).
+ * Joint frequency stats for two fields on the same table + per-A
+ * conditional null rates of B.
+ */
+export const CROSS_FIELD_CORRELATION_TOOL: Tool = {
+  name: 'cross_field_correlation',
+  description:
+    "For a SINGLE table, return joint-frequency stats for two fields A and B: how often does each (A_value, B_value) pair appear, and what's the conditional null rate of B given each value of A. Use this when deciding cross-field rules (e.g., \"when status='Closed Won', amount must not be NULL\"). Returns up to 25 (A, B) pairs ordered by joint frequency desc, plus conditional null rates for the top 10 A values.",
+  strict: true,
+  input_schema: {
+    type: 'object',
+    additionalProperties: false,
+    properties: {
+      table_id: {
+        type: 'string',
+        description:
+          'UUID of the source table; both fields must reside on this table.',
+      },
+      field_a_name: {
+        type: 'string',
+        description: 'Bare name of the first field (the conditioning field).',
+      },
+      field_b_name: {
+        type: 'string',
+        description: 'Bare name of the second field (the conditioned field).',
+      },
+    },
+    required: ['table_id', 'field_a_name', 'field_b_name'],
+  },
+}
