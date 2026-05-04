@@ -1,6 +1,6 @@
 'use client'
 
-import { useId, useRef, useState } from 'react'
+import { forwardRef, useId, useRef, useState } from 'react'
 import { Ban, Check, Pencil, Plus, X } from 'lucide-react'
 import { cn } from '@/components/ui/utils'
 import { ChevronDown, ChevronRight } from '@/components/icons'
@@ -292,22 +292,52 @@ interface FieldMappingRowProps {
     rowId: string,
     finalSourceFieldIds: string[],
   ) => Promise<{ success: boolean }>
+  /**
+   * Lifted chevron-expansion state. When provided, the row uses this
+   * value for `isExpanded` and calls `onExpandedChange(next)` on
+   * chevron toggle. When omitted, the row uses local useState (legacy
+   * behavior; survives only as long as the row is mounted, which is
+   * fine for non-virtualized callers).
+   */
+  isExpanded?: boolean
+  onExpandedChange?: (next: boolean) => void
+  /**
+   * Lifted inline-source-picker open state. Same pattern as
+   * isExpanded — when provided, parent owns the state.
+   */
+  isPickerOpen?: boolean
+  onPickerOpenChange?: (next: boolean) => void
+  /**
+   * Virtualizer index used for keying / debugging when the row is
+   * rendered inside a virtualized list. Surfaced as `data-index` on
+   * the outer div for measureElement keying. Optional — non-
+   * virtualized callers omit it.
+   */
+  dataIndex?: number
 }
 
-export function FieldMappingRow({
-  row: providedRow,
-  onRowClick,
-  isActive,
-  isHighlighted,
-  availableSourceFields,
-  optimisticState,
-  optimisticData,
-  onInlineApprove,
-  onInlineReject,
-  onInlineAcknowledge,
-  onInlineUnacknowledge,
-  onSourceCommit,
-}: FieldMappingRowProps) {
+export const FieldMappingRow = forwardRef<HTMLDivElement, FieldMappingRowProps>(function FieldMappingRow(
+  {
+    row: providedRow,
+    onRowClick,
+    isActive,
+    isHighlighted,
+    availableSourceFields,
+    optimisticState,
+    optimisticData,
+    onInlineApprove,
+    onInlineReject,
+    onInlineAcknowledge,
+    onInlineUnacknowledge,
+    onSourceCommit,
+    isExpanded: controlledExpanded,
+    onExpandedChange,
+    isPickerOpen: controlledPickerOpen,
+    onPickerOpenChange,
+    dataIndex,
+  },
+  ref,
+) {
   // Resolve to the optimistic-data override if one exists for this
   // row's id. The override carries the post-reject unmapped shape
   // (kind: 'unmapped', no sources, no confidence) so every render
@@ -319,7 +349,20 @@ export function FieldMappingRow({
   const expandedId = useId()
   const rule = resolveMappedRule(row)
   const canExpand = rule === 'rule_2' || rule === 'rule_3' || rule === 'rule_4'
-  const [isExpanded, setIsExpanded] = useState(false)
+  // Chevron-expansion state: lifted when the parent passes
+  // controlledExpanded + onExpandedChange (virtualized callers do this
+  // so the state survives row unmount/remount during scroll). Falls
+  // back to local useState for legacy / fixture callers.
+  const [localExpanded, setLocalExpanded] = useState(false)
+  const isExpanded =
+    controlledExpanded !== undefined ? controlledExpanded : localExpanded
+  const setIsExpanded = (next: boolean) => {
+    if (onExpandedChange !== undefined) {
+      onExpandedChange(next)
+    } else {
+      setLocalExpanded(next)
+    }
+  }
   const isClickable = onRowClick !== undefined
 
   // ── Phase 4-polish-3 — inline source-picker state ───────────────────
@@ -340,7 +383,16 @@ export function FieldMappingRow({
       rule !== 'rule_4') ||
       row.kind === 'unmapped')
 
-  const [isPickerOpen, setIsPickerOpen] = useState(false)
+  const [localPickerOpen, setLocalPickerOpen] = useState(false)
+  const isPickerOpen =
+    controlledPickerOpen !== undefined ? controlledPickerOpen : localPickerOpen
+  const setIsPickerOpen = (next: boolean) => {
+    if (onPickerOpenChange !== undefined) {
+      onPickerOpenChange(next)
+    } else {
+      setLocalPickerOpen(next)
+    }
+  }
   const rowBodyRef = useRef<HTMLDivElement | null>(null)
   const sourceWrapperRef = useRef<HTMLDivElement | null>(null)
 
@@ -426,8 +478,10 @@ export function FieldMappingRow({
 
   return (
     <div
+      ref={ref}
       role="listitem"
       data-testid="field-mapping-row"
+      data-index={dataIndex}
       data-row-id={row.id}
       data-row-kind={row.kind}
       data-row-rule={row.kind === 'mapped' ? rule : undefined}
@@ -503,7 +557,7 @@ export function FieldMappingRow({
               {canExpand ? (
                 <InlineExpandChevron
                   isExpanded={isExpanded}
-                  onToggle={() => setIsExpanded((v) => !v)}
+                  onToggle={() => setIsExpanded(!isExpanded)}
                   expandedId={expandedId}
                 />
               ) : null}
@@ -522,7 +576,7 @@ export function FieldMappingRow({
               {canExpand ? (
                 <InlineExpandChevron
                   isExpanded={isExpanded}
-                  onToggle={() => setIsExpanded((v) => !v)}
+                  onToggle={() => setIsExpanded(!isExpanded)}
                   expandedId={expandedId}
                 />
               ) : null}
@@ -563,7 +617,7 @@ export function FieldMappingRow({
       ) : null}
     </div>
   )
-}
+})
 
 // ─── Unified source-cell trigger (Source-cell unification, 2026-04-28) ──────
 //

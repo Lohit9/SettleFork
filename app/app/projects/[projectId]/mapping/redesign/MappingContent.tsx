@@ -1169,6 +1169,80 @@ function MappingContentLoaded({
     anchorEl: HTMLElement
   } | null>(null)
 
+  // Lifted per-row UI state. Necessary because the mapping row list
+  // is virtualized for large groups (TargetTableGroup wraps the row
+  // list with @tanstack/react-virtual when row count >= threshold);
+  // local useState inside FieldMappingRow would be lost when the row
+  // unmounts during scroll. Lifting here mirrors the same Map<rowId,
+  // value> pattern as `optimisticData` above.
+  //
+  //   * expandedRowIds: per-row chevron-expansion (multiple rows may
+  //     be expanded at once).
+  //   * pickerOpenRowId: at most one inline source picker open at a
+  //     time, so a single rowId is sufficient.
+  //
+  // Both are reconciled against `data.rows` via the cleanup useEffects
+  // below so stale entries don't accumulate after a router.refresh.
+  const [expandedRowIds, setExpandedRowIds] = useState<
+    Map<string, boolean>
+  >(() => new Map())
+  const [pickerOpenRowId, setPickerOpenRowId] = useState<string | null>(
+    null,
+  )
+
+  const handleExpandedChange = useCallback(
+    (rowId: string, next: boolean) => {
+      setExpandedRowIds((prev) => {
+        const m = new Map(prev)
+        if (next) m.set(rowId, true)
+        else m.delete(rowId)
+        return m
+      })
+    },
+    [],
+  )
+
+  // Cleanup: drop expandedRowIds entries whose rowId is no longer in
+  // data.rows (post-refresh: the row was rejected, dissolved into an
+  // unmapped::<targetFieldId> sentinel that has a different id; the
+  // old expansion flag would otherwise leak forever).
+  useEffect(() => {
+    setExpandedRowIds((prev) => {
+      if (prev.size === 0) return prev
+      const next = new Map(prev)
+      let changed = false
+      for (const rowId of Array.from(next.keys())) {
+        if (!data.rows.find((r) => r.id === rowId)) {
+          next.delete(rowId)
+          changed = true
+        }
+      }
+      return changed ? next : prev
+    })
+  }, [data.rows])
+
+  // Cleanup: close the inline source picker when its anchor row
+  // dissolves from data.rows (Issue 2 fix for InlineSourcePicker —
+  // its anchorRef points into row DOM that disappears on refresh).
+  useEffect(() => {
+    if (pickerOpenRowId === null) return
+    if (!data.rows.find((r) => r.id === pickerOpenRowId)) {
+      setPickerOpenRowId(null)
+    }
+  }, [data.rows, pickerOpenRowId])
+
+  // Cleanup: close the reject confirmation popover when its anchor row
+  // dissolves from data.rows (Issue 2 fix for RejectConfirmPopover —
+  // same anchor-detachment concern as InlineSourcePicker, both
+  // resolved with symmetric coverage so neither path lingers with a
+  // stale DOM ref).
+  useEffect(() => {
+    if (rejectAnchor === null) return
+    if (!data.rows.find((r) => r.id === rejectAnchor.rowId)) {
+      setRejectAnchor(null)
+    }
+  }, [data.rows, rejectAnchor])
+
   const setOptimistic = useCallback(
     (rowId: string, state: FieldMappingRowOptimisticState) => {
       setOptimisticStates((prev) => {
@@ -1839,6 +1913,10 @@ function MappingContentLoaded({
                       availableSourceFields={data.sourceFields}
                       optimisticStates={optimisticStates}
                       optimisticData={optimisticData}
+                      expandedRowIds={expandedRowIds}
+                      onExpandedChange={handleExpandedChange}
+                      pickerOpenRowId={pickerOpenRowId}
+                      onPickerOpenChange={setPickerOpenRowId}
                       onInlineApprove={handleInlineApprove}
                       onInlineReject={handleInlineRejectClick}
                       onInlineAcknowledge={handleInlineAcknowledge}
