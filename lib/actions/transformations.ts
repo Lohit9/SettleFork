@@ -2800,11 +2800,9 @@ ${aiCtx.intelligence_context ? aiCtx.intelligence_context + '\n\n' : ''}Suggest 
       abuseUserId: user.id,
       metadata: { tfm_id: ctx.tfm.id },
     })
-    // PR 12: prose callsite — migrated in sub-commit 12.2.
-    if (result.kind !== 'text') {
-      throw new Error('transform_describe: unexpected toolUse response')
-    }
-    suggestion = result.text
+    // PR 12.2 B-2: stay-text callsite (1-2 sentence prose — tool-use here
+    // is overkill, per Phase A §2.5). No `tool` is passed.
+    suggestion = result.kind === 'text' ? result.text : ''
     llmCallId = result.callId
   } catch {
     return { success: false, error: 'AI suggestion failed. Please describe the transformation manually.' }

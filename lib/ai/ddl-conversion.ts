@@ -73,11 +73,9 @@ export async function convertDocToDDL(
       promptVersion: 'ddl-conversion-v1',
       abuseUserId: userId,
     })
-    // PR 12: SQL/DDL text callsite — migrated in sub-commit 12.2.
-    if (result.kind !== 'text') {
-      throw new Error('ddl_conversion: unexpected toolUse response')
-    }
-    raw = result.text
+    // PR 12.2 B-2: stay-text callsite (DDL text — downstream parseDDL is
+    // the structural validator, per Phase A §2.9). No `tool` is passed.
+    raw = result.kind === 'text' ? result.text : ''
   } catch (err) {
     console.error('[DDL Convert] Claude call failed:', err)
     return null
