@@ -3,7 +3,7 @@
 import { createClient } from '@/lib/supabase/server'
 import { supabaseAdmin } from '@/lib/supabase/admin'
 import { callLLM } from '@/lib/ai/llm-client'
-import { EMIT_QUERY_SUGGESTIONS_TOOL } from '@/lib/ai/tool-schemas'
+import { EMIT_QUERY_SUGGESTIONS_TOOL, EMIT_SQL_QUERY_TOOL } from '@/lib/ai/tool-schemas'
 import { extractSelectSQL } from '@/lib/ai/sql-extractor'
 import { checkAIRateLimit } from '@/lib/ai/rate-limit'
 import { buildAIContext, formatDocumentsForPrompt } from '@/lib/ai/context-builder'
@@ -206,6 +206,8 @@ Generate a SELECT query answering the question above. Before casting or filterin
       .trim()
   }
 
+  // PR 12.2 B-1: tool use under flag ON; legacy text+extractSelectSQL under flag OFF.
+  const phase2Enabled = process.env.AI_PHASE_2_ENABLED === '1'
   let generatedSQL: string
   let primaryCallId: string
   try {
@@ -217,16 +219,24 @@ Generate a SELECT query answering the question above. Before casting or filterin
       userId: user.id,
       promptVersion: 'nl-to-sql-v1',
       abuseUserId: user.id,
+      ...(phase2Enabled && { tool: EMIT_SQL_QUERY_TOOL }),
     })
-    // PR 12: SQL/text callsite — migrated in sub-commit 12.2.
-    if (result.kind !== 'text') {
-      throw new Error('nl_to_sql: unexpected toolUse response')
-    }
-    const rawResponse = result.text
     primaryCallId = result.callId
-    generatedSQL = extractSelectSQL(rawResponse)
-    if (generatedSQL !== rawResponse.trim()) {
-      console.log('[executeNLQuery] SQL extracted from mixed response, raw length:', rawResponse.length, 'extracted length:', generatedSQL.length)
+    if (result.kind === 'toolUse') {
+      const input = result.toolUse.input as { query?: unknown }
+      if (typeof input.query !== 'string') {
+        throw new Error('nl_to_sql: tool input missing query string')
+      }
+      // Tool-use guarantees a clean string — extractSelectSQL is a no-op
+      // here, but we keep it as a defensive trim so the downstream
+      // executeQuery sees identical-shape input across flag-ON and -OFF.
+      generatedSQL = extractSelectSQL(input.query)
+    } else {
+      const rawResponse = result.text
+      generatedSQL = extractSelectSQL(rawResponse)
+      if (generatedSQL !== rawResponse.trim()) {
+        console.log('[executeNLQuery] SQL extracted from mixed response, raw length:', rawResponse.length, 'extracted length:', generatedSQL.length)
+      }
     }
   } catch {
     return { ...empty, error: 'AI service unavailable. Please try again.' }
@@ -279,6 +289,10 @@ Return ONLY the corrected raw SQL query — no explanation, no markdown, no back
 
       let retriedSQL: string
       try {
+        // PR 12.2 B-1: same tool as the primary; the retry is DB-failure-
+        // driven (not parse-failure-driven) per Phase A §2.2, so the
+        // retry shape survives migration. tool-use applies under flag ON;
+        // text-mode under flag OFF.
         const retryResult = await callLLM({
           feature: 'nl_to_sql_retry',
           systemPrompt,
@@ -288,19 +302,20 @@ Return ONLY the corrected raw SQL query — no explanation, no markdown, no back
           promptVersion: 'nl-to-sql-retry-v1',
           parentCallId: primaryCallId,
           abuseUserId: user.id,
+          ...(phase2Enabled && { tool: EMIT_SQL_QUERY_TOOL }),
         })
-        // PR 12: SQL/text callsite — migrated in sub-commit 12.2.
-        // Per investigation §4c, this retry is DB-failure-driven (not
-        // parse-failure-driven), so it survives tool-use migration as
-        // a kept retry (not removed dead code). Sub-commit 12.2 will
-        // pass `tool: EMIT_SQL_QUERY_TOOL`.
-        if (retryResult.kind !== 'text') {
-          throw new Error('nl_to_sql_retry: unexpected toolUse response')
-        }
-        const rawRetry = retryResult.text
-        retriedSQL = extractSelectSQL(rawRetry)
-        if (retriedSQL !== rawRetry.trim()) {
-          console.log('[executeNLQuery] SQL extracted from mixed retry response, raw length:', rawRetry.length, 'extracted length:', retriedSQL.length)
+        if (retryResult.kind === 'toolUse') {
+          const input = retryResult.toolUse.input as { query?: unknown }
+          if (typeof input.query !== 'string') {
+            throw new Error('nl_to_sql_retry: tool input missing query string')
+          }
+          retriedSQL = extractSelectSQL(input.query)
+        } else {
+          const rawRetry = retryResult.text
+          retriedSQL = extractSelectSQL(rawRetry)
+          if (retriedSQL !== rawRetry.trim()) {
+            console.log('[executeNLQuery] SQL extracted from mixed retry response, raw length:', rawRetry.length, 'extracted length:', retriedSQL.length)
+          }
         }
       } catch {
         // Claude unavailable for retry — fall through to return original error
