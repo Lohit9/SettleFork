@@ -147,6 +147,11 @@ export async function runMultiAgentMappingPipeline(
   const callIds: string[] = []
   let totalIterations = 0
 
+  // PR 3.4cd commit 3: capture pipeline-start ISO so the post-aggregation
+  // telemetry helper (`applyVoteOutcomeMetadata`) can scope its
+  // SELECT-poll-then-UPDATE to llm_calls rows from THIS pair only.
+  const pipelineStartedAtIso = new Date().toISOString()
+
   // ─── T0: Generator (3 votes parallel) ────────────────────────────────────
   const generatorVotes: GeneratorAgentResult[] = await Promise.all(
     Array.from({ length: VOTE_COUNT }, (_, i) =>
@@ -185,11 +190,25 @@ export async function runMultiAgentMappingPipeline(
     }
   }
 
-  // SHELL aggregator: commit 3 replaces with proper voting.
-  // First-vote-wins fallback so the shell is testable end-to-end.
-  const aggregatedCandidates: AggregatedCandidates = aggregateCandidatesShell(
+  // PR 3.4cd commit 3: proper joint-key vote aggregation with
+  // unanimous/majority/controversial classification and confidence
+  // calibration (95/67/50). See `aggregateCandidates` below.
+  const aggregatedCandidates: AggregatedCandidates = aggregateCandidates(
     okGeneratorVotes.map((v) => v.candidates),
   )
+
+  // Best-effort post-aggregation telemetry: attach `vote_outcome` to
+  // each Generator llm_calls row. Only meaningful when at least one of
+  // {unanimous, majority, controversial} is non-empty; for a stage with
+  // mixed outcomes we tag with the dominant one.
+  void applyVoteOutcomeMetadata({
+    supabase,
+    projectId,
+    voteRole: 'generator',
+    voteOutcome: pickDominantOutcome(aggregatedCandidates.summary),
+    sinceIso: pipelineStartedAtIso,
+    expectedCount: okGeneratorVotes.length,
+  })
 
   // Cost cap check — abort early if Generator alone blew the budget.
   if (totalCostUsd > PER_PAIR_MAX_COST_USD) {
@@ -316,10 +335,19 @@ export async function runMultiAgentMappingPipeline(
     CriticAgentResult & { kind: 'ok' }
   >
 
-  // SHELL aggregator: commit 3 replaces.
-  const aggregatedCritiques: AggregatedCritiques = aggregateCritiquesShell(
+  // PR 3.4cd commit 3: proper Jaccard-similarity critique aggregation.
+  const aggregatedCritiques: AggregatedCritiques = aggregateCritiques(
     okCriticVotes.map((v) => v.critiques),
   )
+
+  void applyVoteOutcomeMetadata({
+    supabase,
+    projectId,
+    voteRole: 'critic',
+    voteOutcome: pickDominantOutcome(aggregatedCritiques.summary),
+    sinceIso: pipelineStartedAtIso,
+    expectedCount: okCriticVotes.length,
+  })
 
   if (totalCostUsd > PER_PAIR_MAX_COST_USD) {
     return {
@@ -653,51 +681,372 @@ async function runCriticAgent(args: CriticAgentArgs): Promise<CriticAgentResult>
   }
 }
 
-// ─── SHELL aggregators (commit 3 replaces with proper voting) ───────────────
+// ─── Vote aggregators (PR 3.4cd commit 3) ───────────────────────────────────
+
+/** Confidence persistence values per Phase A §C4. */
+export const CONFIDENCE_UNANIMOUS = 95
+export const CONFIDENCE_MAJORITY = 67
+export const CONFIDENCE_CONTROVERSIAL = 50
 
 /**
- * SHELL aggregator — first-vote-wins. Commit 3 replaces this with
- * proper joint-key (source_field, target_field, tag) agreement logic +
- * controversial-bucket detection + confidence calibration (95/67/50).
+ * Aggregate Generator votes per Phase A §C2.
  *
- * For commit 2's purpose (orchestrator scaffolding + heritage gate
- * verification), this stub lets the shell run end-to-end. The summary
- * counts are also stubbed — commit 3 fills them in correctly.
+ * Joint key: `(source_field || target_field || tag)`. A candidate with
+ * the same joint key across N votes counts as N-way agreement.
+ * Different tags on the same `(source_field, target_field)` count as
+ * disagreement (the tag IS the resolution-routing decision).
+ *
+ * Output classification (3 votes assumed):
+ *   - 3/3 → unanimous (confidence 95). Agent's pre-vote `confidence`
+ *     overwritten with the locked unanimous value; the candidate from
+ *     vote 1 is the canonical instance (deterministic for downstream
+ *     ordering).
+ *   - 2/3 → majority (confidence 67). The minority's tag is captured
+ *     in `minority_tag` if it exists for the same field-pair (i.e., a
+ *     vote produced the same source/target pair but a different tag).
+ *   - 1/1/1 → controversial (confidence 50). All three voters disagreed
+ *     on the joint key. Returned as `Array<CandidateMapping[]>` —
+ *     each inner array is the set of distinct interpretations from
+ *     the three voters for one ambiguous (source_field, target_field).
+ *     Routed to Critic via the `unmappedTargetFields` mechanism (see
+ *     `runMultiAgentMappingPipeline`) and surfaced low-confidence to
+ *     the existing mapping UI review flow.
+ *
+ * Pure function. Exported for unit testing.
  */
-function aggregateCandidatesShell(
+export function aggregateCandidates(
   votes: CandidateMapping[][],
 ): AggregatedCandidates {
-  const firstVote = votes[0] ?? []
+  const totalVotes = votes.length
+
+  // Build joint-key index: jointKey → Map<voteIndex, CandidateMapping>.
+  // A vote contributing the same joint key to multiple candidates
+  // (shouldn't happen, but defensive) keeps only the first occurrence.
+  const byJointKey = new Map<string, Map<number, CandidateMapping>>()
+  for (let voteIdx = 0; voteIdx < votes.length; voteIdx++) {
+    const seenInThisVote = new Set<string>()
+    for (const candidate of votes[voteIdx] ?? []) {
+      const key = candidateJointKey(candidate)
+      if (seenInThisVote.has(key)) continue
+      seenInThisVote.add(key)
+      let voteMap = byJointKey.get(key)
+      if (!voteMap) {
+        voteMap = new Map()
+        byJointKey.set(key, voteMap)
+      }
+      voteMap.set(voteIdx, candidate)
+    }
+  }
+
+  // Also build a (source_field, target_field) → array-of-(voteIdx,
+  // candidate) index so we can detect "same field-pair, different
+  // tag" — that's a controversial set, not three independent
+  // candidates. Used to compute minority_tag on majority outcomes
+  // and to bucket 1/1/1 disagreement.
+  const byFieldPair = new Map<string, Array<{ voteIdx: number; candidate: CandidateMapping }>>()
+  for (let voteIdx = 0; voteIdx < votes.length; voteIdx++) {
+    const seenInThisVote = new Set<string>()
+    for (const candidate of votes[voteIdx] ?? []) {
+      const fieldPairKey = `${candidate.source_field}||${candidate.target_field}`
+      if (seenInThisVote.has(fieldPairKey)) continue
+      seenInThisVote.add(fieldPairKey)
+      const arr = byFieldPair.get(fieldPairKey) ?? []
+      arr.push({ voteIdx, candidate })
+      byFieldPair.set(fieldPairKey, arr)
+    }
+  }
+
+  // Track which field pairs have been claimed by unanimous/majority
+  // so we don't double-bucket them as controversial.
+  const claimedFieldPairs = new Set<string>()
+
+  const unanimous: CandidateMapping[] = []
+  const majority: AggregatedCandidates['majority'] = []
+
+  for (const [jointKey, voteMap] of byJointKey) {
+    const agreementCount = voteMap.size
+    if (agreementCount < 2) continue // controversial; handled below
+
+    // First vote's instance is canonical (deterministic ordering).
+    const sortedVoteIdxs = [...voteMap.keys()].sort((a, b) => a - b)
+    const canonical = voteMap.get(sortedVoteIdxs[0]!)!
+
+    if (agreementCount === totalVotes) {
+      unanimous.push({ ...canonical, confidence: CONFIDENCE_UNANIMOUS })
+      claimedFieldPairs.add(`${canonical.source_field}||${canonical.target_field}`)
+    } else {
+      // 2/3 majority. Find the minority's tag for the same field pair
+      // (if any vote produced the same source/target with a different tag).
+      const fieldPairKey = `${canonical.source_field}||${canonical.target_field}`
+      const peers = byFieldPair.get(fieldPairKey) ?? []
+      const minorityTags = new Set<CandidateMapping['tag']>()
+      for (const p of peers) {
+        if (p.candidate.tag !== canonical.tag) minorityTags.add(p.candidate.tag)
+      }
+      const minorityTag = minorityTags.size > 0 ? [...minorityTags][0]! : undefined
+      majority.push({
+        ...canonical,
+        confidence: CONFIDENCE_MAJORITY,
+        ...(minorityTag !== undefined ? { minority_tag: minorityTag } : {}),
+      })
+      claimedFieldPairs.add(fieldPairKey)
+    }
+  }
+
+  // Controversial: field pairs with 1/1/1 distinct interpretations
+  // (≥ 2 distinct joint keys for the same field pair, none agreed-on).
+  // Each entry is the array of distinct CandidateMappings for that field
+  // pair — the orchestrator surfaces them low-confidence to the UI.
+  const controversial: AggregatedCandidates['controversial'] = []
+  for (const [fieldPairKey, peers] of byFieldPair) {
+    if (claimedFieldPairs.has(fieldPairKey)) continue
+    // Distinct joint keys count
+    const jointKeys = new Set(peers.map((p) => candidateJointKey(p.candidate)))
+    if (jointKeys.size < 2) continue // shouldn't happen if not in byJointKey 2+, but defensive
+    controversial.push(
+      peers.map((p) => ({ ...p.candidate, confidence: CONFIDENCE_CONTROVERSIAL })),
+    )
+  }
+
   const summary: MultiAgentVoteSummary = {
-    unanimous: firstVote.length,
-    majority: 0,
-    controversial: 0,
+    unanimous: unanimous.length,
+    majority: majority.length,
+    controversial: controversial.length,
   }
-  return {
-    unanimous: firstVote,
-    majority: [],
-    controversial: [],
-    summary,
-  }
+  return { unanimous, majority, controversial, summary }
+}
+
+function candidateJointKey(c: CandidateMapping): string {
+  return `${c.source_field}||${c.target_field}||${c.tag}`
 }
 
 /**
- * SHELL aggregator — first-vote-wins. Commit 3 replaces with proper
- * Jaccard-similarity matching on critique descriptions + confidence
- * calibration (high/medium/low buckets).
+ * Aggregate Critic votes per Phase A §C3.
+ *
+ * Two-stage matching:
+ *   1. Coarse key: `(category, affected_mapping_index || affected_target_field)`.
+ *      Two critiques in different votes that share this key are
+ *      candidates for "same critique".
+ *   2. Fine match: Jaccard similarity on description tokens ≥ 0.5.
+ *      If two critiques share the coarse key AND have similar
+ *      descriptions, they count as the same critique.
+ *
+ * Output:
+ *   - 3/3 + 2/3 agreement → high_confidence (refinement MUST address)
+ *   - 1/1/1 disagreement → low_confidence (refinement may; surface in
+ *     final mapping rationale)
+ *
+ * Pure function. Exported for unit testing.
  */
-function aggregateCritiquesShell(votes: Critique[][]): AggregatedCritiques {
-  const firstVote = votes[0] ?? []
-  const summary: MultiAgentVoteSummary = {
-    unanimous: firstVote.length,
-    majority: 0,
-    controversial: 0,
+export function aggregateCritiques(votes: Critique[][]): AggregatedCritiques {
+  // Within a single vote, dedupe critiques on the coarse key (a vote
+  // shouldn't produce two critiques for the same (category, affected)
+  // — but if it does, the first wins).
+  const dedupedVotes: Critique[][] = votes.map((vote) => {
+    const seen = new Set<string>()
+    const out: Critique[] = []
+    for (const c of vote ?? []) {
+      const key = critiqueCoarseKey(c)
+      if (seen.has(key)) continue
+      seen.add(key)
+      out.push(c)
+    }
+    return out
+  })
+
+  // Build groups: each group is a set of critiques (one per vote at most)
+  // that share the coarse key + Jaccard ≥ 0.5 on description.
+  // Greedy grouping: walk vote 1, find matches in vote 2 + vote 3.
+  const groups: Critique[][] = []
+  const usedPerVote: Set<number>[] = dedupedVotes.map(() => new Set())
+
+  for (let i = 0; i < dedupedVotes.length; i++) {
+    for (let j = 0; j < dedupedVotes[i]!.length; j++) {
+      if (usedPerVote[i]!.has(j)) continue
+      const seed = dedupedVotes[i]![j]!
+      const group: Critique[] = [seed]
+      usedPerVote[i]!.add(j)
+
+      for (let other = i + 1; other < dedupedVotes.length; other++) {
+        for (let k = 0; k < dedupedVotes[other]!.length; k++) {
+          if (usedPerVote[other]!.has(k)) continue
+          const candidate = dedupedVotes[other]![k]!
+          if (
+            critiqueCoarseKey(candidate) === critiqueCoarseKey(seed) &&
+            jaccardSimilarity(seed.description, candidate.description) >= 0.5
+          ) {
+            group.push(candidate)
+            usedPerVote[other]!.add(k)
+            break // one match per vote
+          }
+        }
+      }
+      groups.push(group)
+    }
   }
-  return {
-    high_confidence: firstVote,
-    medium_confidence: [],
-    low_confidence: [],
-    summary,
+
+  const high_confidence: Critique[] = []   // 3/3 agreement
+  const medium_confidence: Critique[] = [] // 2/3 agreement
+  const low_confidence: Critique[][] = []  // 1/1/1 disagreement (singleton group)
+  for (const group of groups) {
+    if (group.length === votes.length) {
+      // 3/3 — refinement MUST address. Keep first vote's instance as canonical.
+      high_confidence.push(group[0]!)
+    } else if (group.length >= 2) {
+      // 2/3 — refinement SHOULD address.
+      medium_confidence.push(group[0]!)
+    } else {
+      // 1/1/1 (singleton): isolated critique. Surfaces low-confidence
+      // with the full critique payload in case the rationale matters.
+      low_confidence.push(group)
+    }
+  }
+
+  const summary: MultiAgentVoteSummary = {
+    unanimous: high_confidence.length,
+    majority: medium_confidence.length,
+    controversial: low_confidence.length,
+  }
+  return { high_confidence, medium_confidence, low_confidence, summary }
+}
+
+/**
+ * Pick the dominant vote outcome from a summary for `vote_outcome`
+ * telemetry tagging. Used to label all 3 llm_calls rows in a voted
+ * stage with a single tag. Tie-breaking: unanimous > majority >
+ * controversial (most-confident wins on ties).
+ */
+function pickDominantOutcome(
+  summary: MultiAgentVoteSummary,
+): 'unanimous' | 'majority' | 'controversial' {
+  const counts = [
+    { name: 'unanimous' as const, count: summary.unanimous },
+    { name: 'majority' as const, count: summary.majority },
+    { name: 'controversial' as const, count: summary.controversial },
+  ]
+  // Sort by count desc; on tie, prefer the higher-confidence outcome
+  // (unanimous beats majority beats controversial, which is the
+  // declaration order above — stable sort preserves it on ties).
+  counts.sort((a, b) => b.count - a.count)
+  return counts[0]!.name
+}
+
+function critiqueCoarseKey(c: Critique): string {
+  // Prefer affected_mapping_index when present; otherwise affected_target_field.
+  // Both populated → use index (more specific). Neither populated → fall back
+  // to category + first-32-chars-of-description (shouldn't happen given the
+  // tool schema's required fields but defensive).
+  if (c.affected_mapping_index !== undefined) return `${c.category}||idx:${c.affected_mapping_index}`
+  if (c.affected_target_field !== undefined) return `${c.category}||tgt:${c.affected_target_field}`
+  return `${c.category}||desc:${c.description.slice(0, 32)}`
+}
+
+/**
+ * Token-set Jaccard similarity. Lowercased, split on whitespace +
+ * non-word chars, stop-words ignored. Used to detect "same critique
+ * with slightly different wording" across the 3 critic votes.
+ *
+ * Pure function. Exported for unit testing.
+ */
+export function jaccardSimilarity(a: string, b: string): number {
+  const tokenize = (s: string): Set<string> => {
+    const stopWords = new Set(['the', 'a', 'an', 'is', 'are', 'and', 'or', 'of', 'to', 'in', 'on', 'for', 'this', 'that', 'will'])
+    const tokens = s
+      .toLowerCase()
+      .split(/[\s\W_]+/g)
+      .filter((t) => t.length >= 2 && !stopWords.has(t))
+    return new Set(tokens)
+  }
+  const A = tokenize(a)
+  const B = tokenize(b)
+  if (A.size === 0 && B.size === 0) return 1
+  if (A.size === 0 || B.size === 0) return 0
+  let intersect = 0
+  for (const t of A) if (B.has(t)) intersect++
+  const union = A.size + B.size - intersect
+  return intersect / union
+}
+
+// ─── Telemetry — SELECT-poll-then-UPDATE on llm_calls.metadata ──────────────
+
+/**
+ * Apply post-aggregation `vote_outcome` to the per-vote `llm_calls`
+ * rows for one voted-agent stage (Generator or Critic).
+ *
+ * Implementation notes:
+ *   - Polls SELECT id with backoff [100ms, 200ms, 500ms, 1s, 2s] until
+ *     `expectedCount` rows materialize OR the 5s budget is exhausted.
+ *     Necessary because callLLM's `writeLogAsync` is fire-and-forget;
+ *     the row may not be committed by the time aggregation finishes
+ *     on a fast pair.
+ *   - Filters by `metadata->>'vote_role'` AND `metadata->>'vote_index'`
+ *     IN ('1','2','3') AND `created_at >= sinceIso` to avoid touching
+ *     unrelated rows.
+ *   - UPDATEs metadata with `jsonb_set(metadata, '{vote_outcome}', ...)`.
+ *   - Best-effort: a failed UPDATE logs and continues; vote_outcome
+ *     is a downstream-analytics field, not load-bearing for the pipeline.
+ *
+ * Per Phase A §C5 + OQ9. Exported for unit testing.
+ */
+export async function applyVoteOutcomeMetadata(args: {
+  supabase: SupabaseClient
+  projectId: string
+  voteRole: 'generator' | 'critic'
+  voteOutcome: 'unanimous' | 'majority' | 'controversial'
+  sinceIso: string
+  expectedCount?: number
+}): Promise<void> {
+  const expectedCount = args.expectedCount ?? VOTE_COUNT
+  const backoffMs = [100, 200, 500, 1000, 2000] // sums to 3.8s; abort budget 5s
+  let foundIds: string[] = []
+  for (const ms of backoffMs) {
+    const { data } = await args.supabase
+      .from('llm_calls')
+      .select('id')
+      .eq('project_id', args.projectId)
+      .gte('created_at', args.sinceIso)
+      .filter('metadata->>vote_role', 'eq', args.voteRole)
+      .filter('metadata->>vote_index', 'in', '("1","2","3")')
+      .order('created_at', { ascending: false })
+      .limit(expectedCount)
+    foundIds = ((data as Array<{ id: string }> | null) ?? []).map((r) => r.id)
+    if (foundIds.length >= expectedCount) break
+    await new Promise((resolve) => setTimeout(resolve, ms))
+  }
+
+  if (foundIds.length === 0) {
+    console.warn(
+      `[multi-agent] vote_outcome telemetry: 0 ${args.voteRole} llm_calls rows materialized after 3.8s — skipping UPDATE.`,
+    )
+    return
+  }
+  if (foundIds.length < expectedCount) {
+    console.warn(
+      `[multi-agent] vote_outcome telemetry: only ${foundIds.length}/${expectedCount} ${args.voteRole} rows materialized; updating partial.`,
+    )
+  }
+
+  // Use the supabase client's RPC-free approach: read-modify-write via
+  // an UPDATE on each row's metadata. PostgREST doesn't expose
+  // jsonb_set directly, so we fetch metadata then write back the full
+  // object. Three rows per voted stage — small payload.
+  for (const id of foundIds) {
+    const { data } = await args.supabase
+      .from('llm_calls')
+      .select('metadata')
+      .eq('id', id)
+      .maybeSingle()
+    const metadata =
+      ((data as { metadata?: Record<string, unknown> } | null)?.metadata ?? {}) as Record<string, unknown>
+    const { error } = await args.supabase
+      .from('llm_calls')
+      .update({ metadata: { ...metadata, vote_outcome: args.voteOutcome } })
+      .eq('id', id)
+    if (error) {
+      console.warn(
+        `[multi-agent] vote_outcome UPDATE failed for ${id}: ${error.message}`,
+      )
+    }
   }
 }
 
