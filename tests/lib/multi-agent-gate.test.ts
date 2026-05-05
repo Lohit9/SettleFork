@@ -118,7 +118,11 @@ describe('multi-agent orchestrator — pipeline structure', () => {
   })
 
   it('T3 refinement uses MAPPING_GENERATION_AGENT_SYSTEM_PROMPT + EMIT_TABLE_MAPPINGS_TOOL (PR 3.4a frozen surface)', () => {
-    expect(ORCHESTRATOR_SRC).toMatch(/systemPrompt:\s*MAPPING_GENERATION_AGENT_SYSTEM_PROMPT/)
+    // PR-A wrapped this with withProvenanceGuidance(...) so the prompt
+    // picks up the 4-tier priority block at flag-ON. Allow either form.
+    expect(ORCHESTRATOR_SRC).toMatch(
+      /systemPrompt:\s*(?:withProvenanceGuidance\()?MAPPING_GENERATION_AGENT_SYSTEM_PROMPT/,
+    )
     expect(ORCHESTRATOR_SRC).toMatch(/promptVersion:\s*'mapping-v3-refinement'/)
   })
 

@@ -95,6 +95,7 @@ import { createClient } from '@/lib/supabase/server'
 import { supabaseAdmin } from '@/lib/supabase/admin'
 import { requireProjectPermission } from '@/lib/actions/role-resolution'
 import { callLLM } from '@/lib/ai/llm-client'
+import { withProvenanceGuidance } from '@/lib/ai/agent-provenance-guidance'
 import { EMIT_TRANSFORM_SQL_TOOL } from '@/lib/ai/tool-schemas'
 import { extractTransformSQL } from '@/lib/ai/sql-extractor'
 import { checkAIRateLimit } from '@/lib/ai/rate-limit'
@@ -1336,7 +1337,7 @@ Generate the SQL transformation expression.`
     try {
       const result = await callLLM({
         feature: 'transform_generate',
-        systemPrompt: TRANSFORM_SYSTEM_PROMPT,
+        systemPrompt: withProvenanceGuidance(TRANSFORM_SYSTEM_PROMPT),
         userMessage,
         maxTokens: 2048,
         projectId: ctx.projectId,
@@ -2799,7 +2800,7 @@ ${aiCtx.intelligence_context ? aiCtx.intelligence_context + '\n\n' : ''}Suggest 
   try {
     const result = await callLLM({
       feature: 'transform_describe',
-      systemPrompt: SUGGEST_SYSTEM_PROMPT,
+      systemPrompt: withProvenanceGuidance(SUGGEST_SYSTEM_PROMPT),
       userMessage,
       maxTokens: 256,
       projectId: ctx.projectId,

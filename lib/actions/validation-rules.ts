@@ -10,6 +10,7 @@ import { checkAIRateLimit } from '@/lib/ai/rate-limit'
 // addValidationRuleFromNL so a user-uploaded schema doc / business
 // context doc can inform the LLM's interpretation of an NL rule.
 import { buildAIContext, formatDocumentsForPrompt } from '@/lib/ai/context-builder'
+import { withProvenanceGuidance } from '@/lib/ai/agent-provenance-guidance'
 import { validateFixSQL } from '@/lib/quality/fix-sql-validator'
 import { logActivity } from '@/lib/actions/activity-log'
 import { logAIEdit } from '@/lib/actions/ai-edit-history'
@@ -396,7 +397,7 @@ ${docBlock}User's rule: "${naturalLanguageRule}"`
   try {
     const result = await callLLM({
       feature: evalContext?.featureOverride ?? 'validation_rule_from_nl',
-      systemPrompt,
+      systemPrompt: withProvenanceGuidance(systemPrompt),
       userMessage,
       maxTokens: 512,
       projectId,

@@ -48,6 +48,7 @@ import {
   buildAgentUserMessage,
   synthesizeToolUseResult,
 } from '@/lib/ai/mapping-engine'
+import { withProvenanceGuidance } from '@/lib/ai/agent-provenance-guidance'
 
 // ─── Public types ────────────────────────────────────────────────────────────
 
@@ -131,7 +132,7 @@ export async function runSingleAgentMappingLoop(
   try {
     agentResult = await runAgentLoop({
       feature,
-      systemPrompt: MAPPING_GENERATION_AGENT_SYSTEM_PROMPT,
+      systemPrompt: withProvenanceGuidance(MAPPING_GENERATION_AGENT_SYSTEM_PROMPT),
       userMessage: agentBatchUserMessage,
       tools: [
         { tool: QUERY_FIELD_DATA_TOOL, handler: makeQueryFieldDataHandler({ supabase, projectId, userId }) },
@@ -167,7 +168,7 @@ export async function runSingleAgentMappingLoop(
     try {
       const fallback = await callLLM({
         feature,
-        systemPrompt: MAPPING_GENERATION_SYSTEM_PROMPT,
+        systemPrompt: withProvenanceGuidance(MAPPING_GENERATION_SYSTEM_PROMPT),
         userMessage: baseUserMessage,
         maxTokens,
         projectId,

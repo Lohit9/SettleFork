@@ -68,7 +68,11 @@ describe('mappings — runMappingGenerationForPair agent gate (source pins)', ()
     expect(HELPER_SRC).toMatch(/\btool:\s*EMIT_TABLE_MAPPINGS_TOOL\b/)
     expect(HELPER_SRC).toMatch(/agent_fallback:\s*true/)
     expect(HELPER_SRC).toMatch(/agentResult\.reason\s*===\s*'schema_error'/)
-    expect(HELPER_SRC).toMatch(/systemPrompt:\s*MAPPING_GENERATION_AGENT_SYSTEM_PROMPT/)
+    // PR-A wrapped this with withProvenanceGuidance(...) so the prompt
+    // picks up the 4-tier priority block at flag-ON. Allow either form.
+    expect(HELPER_SRC).toMatch(
+      /systemPrompt:\s*(?:withProvenanceGuidance\()?MAPPING_GENERATION_AGENT_SYSTEM_PROMPT/,
+    )
   })
 
   it('legacy else branch preserves featureOverride routing + phase2Enabled tool spread (heritage)', () => {

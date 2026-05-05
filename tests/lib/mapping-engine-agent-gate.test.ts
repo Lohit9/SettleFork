@@ -152,7 +152,11 @@ describe('mapping-engine — runMappingGeneration agent gate (source pins)', () 
     expect(HELPER_SRC).toMatch(/thinking:\s*\{\s*type:\s*'adaptive'\s*\}/)
     expect(HELPER_SRC).toMatch(/output_config:\s*\{\s*effort:\s*'max'\s*\}/)
     expect(HELPER_SRC).toMatch(/agent_loop:\s*true/)
-    expect(HELPER_SRC).toMatch(/systemPrompt:\s*MAPPING_GENERATION_AGENT_SYSTEM_PROMPT/)
+    // PR-A wrapped this with withProvenanceGuidance(...) so the prompt
+    // picks up the 4-tier priority block at flag-ON. Allow either form.
+    expect(HELPER_SRC).toMatch(
+      /systemPrompt:\s*(?:withProvenanceGuidance\()?MAPPING_GENERATION_AGENT_SYSTEM_PROMPT/,
+    )
   })
 
   it('extracted helper preserves schema_error → single-shot fallback with EMIT_TABLE_MAPPINGS_TOOL forced + other-abort routing', () => {

@@ -263,8 +263,12 @@ describe('[generateMappings] B1 — PER_BATCH_MAX_TOKENS = 16000', () => {
     expect(RUN_GEN_BODY).toMatch(
       /callLLM\(\{[\s\S]{0,800}feature:\s*['"]mapping_generate['"]/,
     )
+    // PR-A wrapped the bare constant in `withProvenanceGuidance(...)`
+    // so the prompt picks up the 4-tier priority block at flag-ON.
+    // Allow either form so this pin is forward-compatible if PR-A is
+    // ever rolled back.
     expect(RUN_GEN_BODY).toMatch(
-      /callLLM\(\{[\s\S]{0,800}systemPrompt:\s*MAPPING_GENERATION_SYSTEM_PROMPT/,
+      /callLLM\(\{[\s\S]{0,800}systemPrompt:\s*(?:withProvenanceGuidance\()?MAPPING_GENERATION_SYSTEM_PROMPT/,
     )
     expect(RUN_GEN_BODY).toMatch(
       /callLLM\(\{[\s\S]{0,800}userMessage:\s*batchUserMessage/,

@@ -18,6 +18,7 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 
 import { callLLM, type CallLLMResult } from '@/lib/ai/llm-client'
+import { withProvenanceGuidance } from '@/lib/ai/agent-provenance-guidance'
 import { type AgentLoopResult } from '@/lib/ai/agent-loop'
 import {
   EMIT_TABLE_MAPPINGS_TOOL,
@@ -1689,7 +1690,7 @@ ${otherSourcesList}
         try {
           primaryResult = await callLLM({
             feature: 'mapping_generate',
-            systemPrompt: MAPPING_GENERATION_SYSTEM_PROMPT,
+            systemPrompt: withProvenanceGuidance(MAPPING_GENERATION_SYSTEM_PROMPT),
             userMessage: batchUserMessage,
             maxTokens: PER_BATCH_MAX_TOKENS,
             projectId,
@@ -2171,7 +2172,7 @@ Respond with ONLY valid JSON in this exact shape:
   try {
     result = await callLLM({
       feature: featureOverride ?? 'mapping_suggest',
-      systemPrompt: MAPPING_SUGGESTION_SYSTEM_PROMPT,
+      systemPrompt: withProvenanceGuidance(MAPPING_SUGGESTION_SYSTEM_PROMPT),
       userMessage: userMsg,
       maxTokens: 1024,
       projectId,

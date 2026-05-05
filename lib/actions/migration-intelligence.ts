@@ -4,6 +4,7 @@ import type { SupabaseClient } from '@supabase/supabase-js'
 import { createClient } from '@/lib/supabase/server'
 import { supabaseAdmin } from '@/lib/supabase/admin'
 import { callLLM, type LLMFeature } from '@/lib/ai/llm-client'
+import { withProvenanceGuidance } from '@/lib/ai/agent-provenance-guidance'
 import { EMIT_EXTRACTED_PATTERNS_TOOL } from '@/lib/ai/tool-schemas'
 import type { MigrationIntelligence } from '@/lib/types/database'
 
@@ -908,7 +909,7 @@ ${docText || '(no documentation uploaded)'}
     try {
       result = await callLLM({
         feature: evalContext?.featureOverride ?? 'migration_intelligence',
-        systemPrompt: EXTRACTION_SYSTEM_PROMPT,
+        systemPrompt: withProvenanceGuidance(EXTRACTION_SYSTEM_PROMPT),
         userMessage,
         maxTokens: 4096,
         projectId,
