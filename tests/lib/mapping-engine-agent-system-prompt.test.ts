@@ -23,12 +23,22 @@ describe('mapping-engine — agent-mode system prompt', () => {
   })
 
   it('AGENT_TOOL_GUIDANCE covers all 3 data tools + hard limits + what-not-to-do', () => {
-    expect(ENGINE_SRC).toMatch(/AGENT_TOOL_GUIDANCE\s*=/)
-    expect(ENGINE_SRC).toContain('query_field_data')
-    expect(ENGINE_SRC).toContain('count_distinct_patterns')
-    expect(ENGINE_SRC).toContain('cross_field_correlation')
-    expect(ENGINE_SRC).toMatch(/HARD LIMITS/)
-    expect(ENGINE_SRC).toMatch(/WHAT NOT TO DO/)
+    // PR 3.4cd commit 4: AGENT_TOOL_GUIDANCE moved to a dependency-free
+    // module (agent-tool-guidance.ts) to break the circular-import cycle
+    // between mapping-engine.ts and multi-agent-prompts.ts. mapping-engine.ts
+    // re-exports it for import-path stability.
+    const GUIDANCE_SRC = readFileSync(
+      resolve(__dirname, '../../lib/ai/agent-tool-guidance.ts'),
+      'utf8',
+    )
+    expect(GUIDANCE_SRC).toMatch(/export const AGENT_TOOL_GUIDANCE\s*=/)
+    expect(GUIDANCE_SRC).toContain('query_field_data')
+    expect(GUIDANCE_SRC).toContain('count_distinct_patterns')
+    expect(GUIDANCE_SRC).toContain('cross_field_correlation')
+    expect(GUIDANCE_SRC).toMatch(/HARD LIMITS/)
+    expect(GUIDANCE_SRC).toMatch(/WHAT NOT TO DO/)
+    // mapping-engine still re-exports for backward-compat import paths.
+    expect(ENGINE_SRC).toMatch(/export\s*\{\s*AGENT_TOOL_GUIDANCE\s*\}/)
   })
 
   it('original prompt heritage anchors remain present (byte-stability spot-check)', () => {

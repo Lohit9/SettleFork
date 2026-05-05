@@ -1,0 +1,21 @@
+{
+  "id": "_fixture/mapping/003-cross-table-fk",
+  "task": "mapping",
+  "input": {
+    "source_table": "fixture_source_table",
+    "target_table": "fixture_target_table"
+  },
+  "gold": {
+    "mappings": [
+      { "source_field": "id", "target_field": "id", "combination_type": "single" },
+      { "source_field": "name", "target_field": "label", "combination_type": "single" }
+    ]
+  },
+  "metadata": {
+    "author": "hand-authored (PR 3.4cd commit 4)",
+    "difficulty": "medium",
+    "notes": "PR 3.4cd Cross-Table specialist exercise. The constrained _fixture schema (single source/target table, id+name → id+label) does NOT support genuine cross-table FK testing — the schema would need additional source tables. Within this constraint, the fixture uses business_context to describe a hypothetical cross-table scenario and asserts the Critic surfaces a missed_mapping critique IF the agent fails to identify the cross-table relationship the business_context describes. Phase 3.8 cohort eval will replace this with a richer multi-table-source fixture. Score interpretation: 1.0 if Critic surfaces missed_mapping (correctly identifying the cross-table opportunity).",
+    "business_context": "The source 'name' field on fixture_source_table actually stores the REGION NAME of the customer's primary region (denormalized from a related region table that was joined-and-flattened during the legacy export). The target 'label' field on fixture_target_table is the canonical region display name for the target system. The mapping name → label is correct as a one-to-one denormalized mapping; the original cross-table structure (customer → region.name) is preserved in this flattened form. Treat this as a legitimate one_to_one mapping, NOT a cross_table tag.",
+    "expected_critique_category": "missed_mapping"
+  }
+}

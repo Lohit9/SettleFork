@@ -17,7 +17,11 @@
  * the eval-driven refinement happens in the next session.
  */
 
-import { AGENT_TOOL_GUIDANCE } from '@/lib/ai/mapping-engine'
+// PR 3.4cd commit 4: import from the dependency-free module to avoid
+// a runtime circular-import cycle (multi-agent-orchestrator imports from
+// here, mapping-engine imports from multi-agent-orchestrator, and this
+// file used to import from mapping-engine — TDZ at module load).
+import { AGENT_TOOL_GUIDANCE } from '@/lib/ai/agent-tool-guidance'
 
 // ─── Agent 1 — CANDIDATE GENERATOR (voted ×3) ───────────────────────────────
 

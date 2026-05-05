@@ -485,9 +485,21 @@ async function runGeneratorAgent(args: GeneratorAgentArgs): Promise<GeneratorAge
         promptVersion: 'mapping-v3-generator',
         ...(args.cacheControl ? { cacheControl: true } : {}),
         abuseUserId: args.userId,
-        thinking: { type: 'adaptive' },
+        // PR 3.4cd commit 4 — DIVERGENCE from Phase A LOCK #3 (TWO API constraints).
+        // 1) Opus 4.7 DEPRECATES `temperature` entirely (400 "temperature is
+        //    deprecated for this model"). Voting variance via temperature
+        //    is impossible on this model.
+        // 2) The same model rejects `temperature != 1` when thinking is
+        //    'adaptive' or 'enabled'. Voted agents disable thinking as a
+        //    no-op marker; the variance issue remains because temperature
+        //    is also dropped per (1).
+        // CONSEQUENCE: voting on Opus 4.7 produces near-unanimous outcomes
+        // (no variance source). Phase 3.8 cohort eval will surface this and
+        // drive a follow-up — either model swap voted agents to Sonnet 4.6
+        // (which accepts temperature) or use top_p once Anthropic exposes
+        // it on Opus. Architectural shape preserved; variance disabled.
+        thinking: { type: 'disabled' },
         output_config: { effort: 'max' },
-        temperature: VOTE_TEMPERATURE,
         metadata: { ...args.baseMetadata, agent_loop: true },
       },
     })
@@ -659,7 +671,11 @@ async function runCriticAgent(args: CriticAgentArgs): Promise<CriticAgentResult>
         promptVersion: 'mapping-v3-critic',
         ...(args.cacheControl ? { cacheControl: true } : {}),
         abuseUserId: args.userId,
-        thinking: { type: 'adaptive' },
+        // PR 3.4cd commit 4: same Opus-4.7-API-constraint DIVERGENCE as
+        // runGeneratorAgent — temperature is deprecated for this model;
+        // voted agents lose variance until follow-up resolves it (model
+        // swap to Sonnet 4.6 or Anthropic-side fix).
+        thinking: { type: 'disabled' },
         output_config: { effort: 'max' },
         temperature: VOTE_TEMPERATURE,
         metadata: { ...args.baseMetadata, agent_loop: true },

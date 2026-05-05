@@ -1,0 +1,20 @@
+{
+  "id": "_fixture/mapping/006-critic-catches-aggressive-mistake",
+  "task": "mapping",
+  "input": {
+    "source_table": "fixture_source_table",
+    "target_table": "fixture_target_table"
+  },
+  "gold": {
+    "mappings": [
+      { "source_field": "id", "target_field": "id", "combination_type": "single" }
+    ]
+  },
+  "metadata": {
+    "author": "hand-authored (PR 3.4cd commit 4)",
+    "difficulty": "medium",
+    "notes": "PR 3.4cd Critic exercise per Phase A §G2.006. The Critic must surface an `aggressive_mistake` critique when the Generator proposes a mapping that violates target constraints described in business_context. The constrained _fixture schema doesn't support actual CHECK constraint metadata at the field level, so the constraint is communicated via business_context — this tests whether agents correctly internalize business_context constraints. Score interpretation (scoreCriticOutput): 1.0 if any critique surfaces with category='aggressive_mistake'; 0.0 otherwise.",
+    "business_context": "CRITICAL CONSTRAINT — TARGET FIELD VALIDATION RULES: The target 'label' field on fixture_target_table has a hard CHECK constraint in the destination database that REQUIRES values to be one of exactly: 'ALPHA' or 'BETA'. NO other values are accepted; inserts violating this constraint will FAIL at the database layer and abort the migration. The source 'name' field on fixture_source_table contains free-text strings ('John Smith', 'Acme Corp', 'Project Phoenix', etc.) that DO NOT match the allowed picklist. Mapping name → label without a comprehensive value-translation rule will produce CHECK constraint violations on every record. This is an aggressive mistake the Critic must flag — name → label is only valid IF accompanied by a value-translation transformation that maps source values to {'ALPHA', 'BETA'} (which is impossible without additional business rules not provided in this context).",
+    "expected_critique_category": "aggressive_mistake"
+  }
+}

@@ -114,6 +114,26 @@ export interface ExampleMetadata {
    * opt-in; backward-compatible (existing fixtures omit the field).
    */
   business_context?: string
+  /**
+   * PR 3.4cd — voting validation. Set on fixtures (e.g.,
+   * `mapping/005-controversial.json`) where the expected outcome is
+   * a specific vote-aggregation classification (Phase A §G3). The
+   * eval runner routes these examples through `scoreMultiAgentVote`
+   * (1.0 exact / 0.5 partial-shape / 0.0 mismatch).
+   */
+  expected_vote?: 'unanimous' | 'majority' | 'controversial'
+  /**
+   * PR 3.4cd — critic validation. Set on fixtures (e.g.,
+   * `mapping/006-critic-catches-aggressive-mistake.json`) where the
+   * expected outcome is the Critic surfacing a critique of a specific
+   * category. The eval runner routes these through `scoreCriticOutput`
+   * (1.0 if any critique matches, 0.0 otherwise).
+   */
+  expected_critique_category?:
+    | 'contradiction'
+    | 'missed_mapping'
+    | 'conservative_mistake'
+    | 'aggressive_mistake'
 }
 
 /** Loader return shape — bundles schema + examples + metadata. */

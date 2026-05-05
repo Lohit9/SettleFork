@@ -1,4 +1,9 @@
 {
+  "env": {
+    "AI_PHASE_2_ENABLED": "1",
+    "AI_PHASE_3_ENABLED": "1",
+    "AI_PHASE_3_MULTI_AGENT_ENABLED": "1"
+  },
   "crons": [
     {
       "path": "/api/cron/auto-archive",

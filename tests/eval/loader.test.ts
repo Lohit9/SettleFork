@@ -20,7 +20,8 @@ describe('loader — happy path', () => {
   it('groups examples by task', () => {
     const ds = loadDataset('_fixture')
     // Post-PR-3.4b: mapping has 2 examples (001-fixture + 002-with-business-context).
-    expect(ds.examples.mapping).toHaveLength(2)
+    // PR 3.4cd commit 4: 4 new multi-agent fixtures (003-006). Total mapping fixtures = 6.
+    expect(ds.examples.mapping).toHaveLength(6)
     expect(ds.examples['validation-rule']).toHaveLength(1)
     expect(ds.examples.transform).toHaveLength(0)
     expect(ds.examples['nl-to-sql']).toHaveLength(0)
