@@ -42,7 +42,7 @@ export default function GettingStartedPage() {
         <BulletList items={[
           'Settle auto-detects column names, data types, primary keys, and foreign key relationships',
           'You\'ll see a confirmation with row count and field count after each upload',
-          'Max file size: 10MB per CSV, up to 100,000 rows per table',
+          'Max file size: 250MB per CSV, up to 1,000,000 rows per table',
         ]} />
         <Tip>
           Upload schema documentation too (PDFs, DDL files, ERD diagrams) in the Schema

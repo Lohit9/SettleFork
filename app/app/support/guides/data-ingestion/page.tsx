@@ -9,8 +9,8 @@ export default function DataIngestionGuide() {
       <Section title="CSV upload">
         <Paragraph>
           Upload one CSV file per table. Settle automatically infers the schema — column names,
-          data types, nullability, and primary keys. Files must be under 10MB with a maximum
-          of 100,000 rows.
+          data types, nullability, and primary keys. Files must be under 250MB with a maximum
+          of 1,000,000 rows.
         </Paragraph>
         <Paragraph>
           After uploading, you can re-upload a CSV to replace the data for any table. Settle
@@ -25,7 +25,7 @@ export default function DataIngestionGuide() {
           extract table and field definitions.
         </Paragraph>
         <Paragraph>
-          Accepted file types: .sql, .ddl, .txt (max 2MB).
+          Accepted file types: .sql, .ddl, .txt (max 20MB).
         </Paragraph>
       </Section>
 
