@@ -9,8 +9,10 @@ import { Upload, CheckCircle2, AlertCircle, RefreshCw } from '@/components/icons
 import { Database, Loader2, AlertTriangle, XCircle } from 'lucide-react'
 import { testConnection, listRemoteTables, listMssqlSchemas, listTablesForConnection, getConnectionForDataset, disconnectDatabase, resyncTables } from '@/lib/actions/db-connector'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
-import { getCsvUploadSlot, processUploadedCsv } from '@/lib/actions/csv'
+import { getCsvUploadSlot } from '@/lib/actions/csv'
+import { queueIngestionJob, getIngestionJobStatus } from '@/lib/actions/ingestion-jobs'
 import { uploadToSignedUrl } from '@/lib/utils/upload-helpers'
+import Papa from 'papaparse'
 import { createDataset, getTablesForDataset } from '@/lib/actions/datasets'
 import { parseDDLFile, confirmDDLSchema } from '@/lib/actions/ddl-upload'
 import type { ParsedTable } from '@/lib/parsers/ddl-parser'
@@ -27,6 +29,7 @@ interface UploadState {
     | 'idle'
     | 'requesting-slot'
     | 'uploading'
+    | 'queued'
     | 'processing'
     | 'success'
     | 'error'
@@ -35,6 +38,13 @@ interface UploadState {
   uploadedBytes?: number
   // total file size in bytes (only meaningful in 'uploading' phase)
   totalBytes?: number
+  // background-job id once queueIngestionJob succeeds; drives polling
+  jobId?: string
+  // worker-reported progress 0..1 (only meaningful in 'processing' phase)
+  workerProgress?: number
+  // worker-reported counts during processing
+  completedRows?: number
+  totalRows?: number
   rowCount?: number
   fieldCount?: number
   error?: string
@@ -585,9 +595,8 @@ export function IngestionCard({ type, title, projectId, initialDatasets, initial
     async (file: File) => {
       if (!selectedDatasetId || !selectedTableName) return
 
-      // Phase 1 — request signed upload slot. Tiny round-trip (kilobytes
-      // in, kilobytes out) so it doesn't hit Vercel's 1 MB serverActions
-      // body limit even for very large files.
+      // Phase 1 — request signed upload slot. Tiny round-trip; bypasses
+      // Vercel's 1 MB serverActions body limit.
       setUploadState({ status: 'requesting-slot', filename: file.name })
       const slot = await getCsvUploadSlot({
         projectId,
@@ -605,8 +614,8 @@ export function IngestionCard({ type, title, projectId, initialDatasets, initial
         return
       }
 
-      // Phase 2 — direct PUT to Supabase Storage with XHR progress.
-      // Bypasses Vercel function bodies entirely.
+      // Phase 2 — direct PUT to Supabase Storage. Any size; XHR progress
+      // events drive the upload progress bar.
       setUploadState({
         status: 'uploading',
         filename: file.name,
@@ -633,48 +642,172 @@ export function IngestionCard({ type, title, projectId, initialDatasets, initial
         return
       }
 
-      // Phase 3 — kick off server-side processing. Another tiny round
-      // trip; the function reads the file from Storage and runs the
-      // existing pipeline (parse + schema infer + data_rows insert +
-      // field_profiles compute, all synchronous before this returns).
-      setUploadState({ status: 'processing', filename: file.name })
-      const result = await processUploadedCsv({
+      // Phase 3 — client-side row count for cap validation + queue payload.
+      // We Papa.parse the file in the browser to learn totalRows. This
+      // is fast (in-memory; same parse the worker will do server-side
+      // shortly) and avoids the worker hitting the row cap mid-pipeline
+      // (where it's wasted work). The cap check inside queueIngestionJob
+      // is the authoritative one, but checking client-side gives a
+      // clean error before queueing.
+      let totalRows = 0
+      try {
+        const text = await file.text()
+        const parsed = Papa.parse<Record<string, string>>(text, {
+          header: true,
+          skipEmptyLines: true,
+          dynamicTyping: false,
+        })
+        totalRows = parsed.data.length
+        if (totalRows === 0) {
+          setUploadState({
+            status: 'error',
+            filename: file.name,
+            error: 'CSV has no data rows',
+          })
+          return
+        }
+      } catch (err) {
+        setUploadState({
+          status: 'error',
+          filename: file.name,
+          error: err instanceof Error ? err.message : 'Failed to parse CSV',
+        })
+        return
+      }
+
+      // Phase 4 — queue background ingestion job. Returns immediately
+      // with jobId; worker picks up within ~60s via cron.
+      const queueResult = await queueIngestionJob({
         projectId,
         datasetId: selectedDatasetId,
         role: type,
         tableName: selectedTableName,
         storagePath: slot.storagePath,
+        totalRows,
       })
-
-      if (result.success && result.tableId) {
-        try {
-          const freshTables = await getTablesForDataset(selectedDatasetId)
-          setDatasets((prev) =>
-            prev.map((d) => (d.id === selectedDatasetId ? { ...d, tables: freshTables } : d))
-          )
-          const uploadedTable = freshTables.find((t) => t.name === selectedTableName)
-          if (uploadedTable) setSelectedTableId(uploadedTable.id)
-        } catch {
-          // non-fatal
-        }
-
-        setUploadState({
-          status: 'success',
-          filename: file.name,
-          rowCount: result.rowCount,
-          fieldCount: result.fieldCount,
-        })
-        router.refresh()
-      } else {
+      if (!queueResult.success) {
         setUploadState({
           status: 'error',
           filename: file.name,
-          error: result.error ?? 'Processing failed',
+          error: queueResult.error ?? 'Failed to queue ingestion job',
         })
+        return
       }
+
+      // Phase 5 — queued state. The polling useEffect (below) takes
+      // over from here, transitioning through processing → success.
+      setUploadState({
+        status: 'queued',
+        filename: file.name,
+        jobId: queueResult.jobId,
+        totalRows,
+      })
     },
-    [projectId, type, selectedDatasetId, selectedTableName, router]
+    [projectId, type, selectedDatasetId, selectedTableName],
   )
+
+  // ── Polling: drive the queued → processing → success/error transition
+  // by reading the job's status from getIngestionJobStatus every 2s.
+  // The worker (app/api/cron/process-ingestion-job) updates the
+  // ingestion_jobs row's status + progress + completed_rows after each
+  // 1K-row chunk. The cleanup function clears the interval on unmount
+  // OR when status reaches a terminal state ('success' | 'error').
+  useEffect(() => {
+    if (
+      uploadState.status !== 'queued' &&
+      uploadState.status !== 'processing'
+    ) {
+      return
+    }
+    const jobId = uploadState.jobId
+    if (!jobId) return
+
+    let cancelled = false
+    const intervalId = setInterval(async () => {
+      if (cancelled) return
+      const result = await getIngestionJobStatus(jobId)
+      if (cancelled) return
+      if (!result.success) {
+        // Job not found (RLS rejected, or never existed). Treat as
+        // error — user can retry. Note: not-found can also mean the
+        // job was deleted by an external process, but we don't
+        // currently support that path.
+        setUploadState({
+          status: 'error',
+          filename: uploadState.filename,
+          error: result.error ?? 'Failed to fetch job status',
+        })
+        return
+      }
+      const job = result.job
+      if (job.status === 'completed') {
+        // Refresh dataset tables so the new table appears in the
+        // selector. Same pattern as the legacy success path.
+        if (selectedDatasetId) {
+          try {
+            const freshTables = await getTablesForDataset(selectedDatasetId)
+            if (cancelled) return
+            setDatasets((prev) =>
+              prev.map((d) =>
+                d.id === selectedDatasetId ? { ...d, tables: freshTables } : d,
+              ),
+            )
+            const uploadedTable = freshTables.find((t) => t.name === selectedTableName)
+            if (uploadedTable) setSelectedTableId(uploadedTable.id)
+          } catch {
+            // non-fatal — refresh below will pick up the new table
+          }
+        }
+        setUploadState({
+          status: 'success',
+          filename: uploadState.filename,
+          rowCount: job.total_rows ?? undefined,
+          // fieldCount is computed by the worker but not surfaced via
+          // job snapshot today. The dataset-tables refresh above
+          // populates the selector with the correct field count from
+          // the freshly inserted fields rows; the success card just
+          // shows row count.
+        })
+        router.refresh()
+        return
+      }
+      if (job.status === 'failed') {
+        setUploadState({
+          status: 'error',
+          filename: uploadState.filename,
+          error: job.error ?? 'Background processing failed',
+        })
+        return
+      }
+      // 'pending' or 'processing'. Update progress if processing;
+      // stay in 'queued' if pending (worker hasn't picked up yet).
+      if (job.status === 'processing') {
+        setUploadState((prev) =>
+          prev.status === 'queued' || prev.status === 'processing'
+            ? {
+                ...prev,
+                status: 'processing',
+                workerProgress: job.progress,
+                completedRows: job.completed_rows,
+                totalRows: job.total_rows ?? prev.totalRows,
+              }
+            : prev,
+        )
+      }
+    }, 2000)
+
+    return () => {
+      cancelled = true
+      clearInterval(intervalId)
+    }
+  }, [
+    uploadState.status,
+    uploadState.jobId,
+    uploadState.filename,
+    selectedDatasetId,
+    selectedTableName,
+    router,
+  ])
 
   const handleFileSelected = (file: File) => {
     if (tableHasData) {
@@ -1599,15 +1732,43 @@ export function IngestionCard({ type, title, projectId, initialDatasets, initial
                       </div>
                     )}
 
-                    {uploadState.status === 'processing' && (
+                    {uploadState.status === 'queued' && (
                       <div className="flex flex-col items-center justify-center h-full py-8">
+                        <div className="flex items-center gap-2.5">
+                          <div className="w-4 h-4 border-2 border-primary/30 border-t-primary rounded-full animate-spin flex-shrink-0" />
+                          <span className="text-sm text-gray-700">Queued for processing... starting within 60s</span>
+                        </div>
+                        <p className="text-xs text-gray-400 mt-1.5 ml-[26px]">
+                          Background worker picks up jobs once a minute
+                        </p>
+                      </div>
+                    )}
+
+                    {uploadState.status === 'processing' && (
+                      <div className="flex flex-col items-center justify-center h-full py-8 w-full">
                         <div className="flex items-center gap-2.5">
                           <div className="w-4 h-4 border-2 border-primary/30 border-t-primary rounded-full animate-spin flex-shrink-0" />
                           <span className="text-sm text-gray-700">Processing {uploadState.filename}...</span>
                         </div>
-                        <p className="text-xs text-gray-400 mt-1.5 ml-[26px]">
-                          Inferring schema and running checks · this may take a moment
-                        </p>
+                        {(() => {
+                          const completed = uploadState.completedRows ?? 0
+                          const total = uploadState.totalRows ?? 0
+                          const pct = total > 0 ? Math.min(100, Math.round((completed / total) * 100)) : 0
+                          return (
+                            <div className="ml-[26px] mt-1.5 w-full max-w-xs">
+                              <div className="h-1.5 w-full bg-gray-200 rounded-full overflow-hidden">
+                                <div
+                                  className="h-full bg-primary transition-[width] duration-300 ease-out"
+                                  style={{ width: `${pct}%` }}
+                                  data-testid="csv-processing-progress-bar"
+                                />
+                              </div>
+                              <p className="text-xs text-gray-400 mt-1">
+                                {completed.toLocaleString()} / {total.toLocaleString()} rows ({pct}%)
+                              </p>
+                            </div>
+                          )
+                        })()}
                       </div>
                     )}
 
