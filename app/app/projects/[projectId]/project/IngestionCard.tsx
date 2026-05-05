@@ -1102,10 +1102,10 @@ export function IngestionCard({ type, title, projectId, initialDatasets, initial
                             />
                             <span className="flex-1 text-sm font-mono text-gray-800">{table.name}</span>
                             <span className="text-xs text-gray-400 tabular-nums">~{table.estimatedRows.toLocaleString()} rows</span>
-                            {table.estimatedRows > 100_000 && (
+                            {table.estimatedRows > 1_000_000 && (
                               <span className="flex items-center gap-0.5 text-xs text-amber-600">
                                 <AlertTriangle className="w-3 h-3" />
-                                capped at 100K
+                                capped at 1M
                               </span>
                             )}
                           </label>
@@ -1661,7 +1661,7 @@ export function IngestionCard({ type, title, projectId, initialDatasets, initial
                               : 'Drop CSV here or click to select'}
                           </p>
                           <p className="text-[10px] text-settle-slate-400 mt-1">
-                            One CSV per table · Max 10MB · Up to 100,000 rows
+                            One CSV per table · Max 250MB · Up to 1,000,000 rows
                           </p>
                         </div>
                         <RoleTooltip allowed={canEdit} requiredRole="Editor">

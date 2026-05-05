@@ -5,8 +5,8 @@ export interface CSVValidationResult {
 }
 
 export function validateCSVUpload(file: File): CSVValidationResult {
-  if (file.size > 10 * 1024 * 1024) {
-    return { valid: false, reason: 'File exceeds 10MB limit' }
+  if (file.size > 250 * 1024 * 1024) {
+    return { valid: false, reason: 'File exceeds 250MB limit' }
   }
 
   const allowedTypes = ['text/csv', 'application/vnd.ms-excel', 'text/plain', 'application/csv']
