@@ -6,6 +6,10 @@ import { createClient } from '@/lib/supabase/server'
 import { callLLM, type LLMFeature } from '@/lib/ai/llm-client'
 import { EMIT_VALIDATION_RULE_TOOL } from '@/lib/ai/tool-schemas'
 import { checkAIRateLimit } from '@/lib/ai/rate-limit'
+// PR-B (INV-1 follow-up): documentation context is wired into
+// addValidationRuleFromNL so a user-uploaded schema doc / business
+// context doc can inform the LLM's interpretation of an NL rule.
+import { buildAIContext, formatDocumentsForPrompt } from '@/lib/ai/context-builder'
 import { validateFixSQL } from '@/lib/quality/fix-sql-validator'
 import { logActivity } from '@/lib/actions/activity-log'
 import { logAIEdit } from '@/lib/actions/ai-edit-history'
@@ -320,7 +324,38 @@ export async function addValidationRuleFromNL(
   const profile = (field.field_profiles as { sample_values?: unknown[] }[])?.[0]
   const sampleValues = profile?.sample_values?.slice(0, 10) ?? []
 
+  // PR-B (INV-1 follow-up): pull documentation context (schema docs +
+  // business-context docs) so an NL rule like "this field must be valid"
+  // can be interpreted against the customer's uploaded reference material.
+  // Field profiles + samples are NOT requested here — we already have the
+  // relevant ones from the direct `field.field_profiles` join above. We
+  // also scope to the field's own table so the doc-character budget isn't
+  // diluted across the whole project. Defensive try/catch: a context-build
+  // failure must NOT block rule creation — falling back to the empty
+  // docBlock preserves the pre-PR-B narrow-context behaviour.
+  let docBlock = ''
+  try {
+    const aiContext = await buildAIContext(
+      projectId,
+      {
+        tableIds: [tableId],
+        includeProfilingStats: false,
+        includeValueDistributions: false,
+        includeSampleValues: false,
+        includeDocuments: true,
+      },
+      user.id,
+      evalContext ? supabase : undefined,
+    )
+    docBlock = formatDocumentsForPrompt(aiContext.documents)
+  } catch (err) {
+    console.warn('[addValidationRuleFromNL] buildAIContext failed (docs unavailable):', err)
+  }
+
   const systemPrompt = `You are a data validation expert. Given a field's metadata and a natural language description of a validation rule, generate a structured validation rule.
+
+If documentation is provided (schema documentation or business-context documents), use it to interpret the user's NL rule — for example, valid value lists, expected formats, or business definitions of "valid". The user's NL rule is the primary specification; the documentation is reference context. Documentation should NOT override the user's explicit instruction; if they conflict, follow the user.
+
 Respond with ONLY valid JSON (no markdown, no code fences):
 {
   "name": "Short rule name",
@@ -345,7 +380,7 @@ rule_config formats by type:
 
   const userMessage = `Field: ${tableName}.${field.name} (${field.data_type}, inferred: ${field.inferred_type ?? 'text'})
 Sample values: ${JSON.stringify(sampleValues)}
-User's rule: "${naturalLanguageRule}"`
+${docBlock}User's rule: "${naturalLanguageRule}"`
 
   // PR 12 H1: tool use under flag ON; legacy text+JSON.parse under flag OFF.
   const phase2Enabled = process.env.AI_PHASE_2_ENABLED === '1'

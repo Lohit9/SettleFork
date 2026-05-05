@@ -176,3 +176,102 @@ describe('[validation-rules refinements] guard-wiring decision', () => {
     expect(body).toMatch(/Prompt 3d,?\s*Step 3D-7/)
   })
 })
+
+// ── PR-B: documentation context wired into addValidationRuleFromNL ───────────
+//
+// INV-1 surfaced that addValidationRuleFromNL had the narrowest context of any
+// AI agent in the codebase (field name + 10 samples + user's NL string). PR-B
+// wires buildAIContext + formatDocumentsForPrompt so a user-uploaded schema or
+// business-context doc can inform the LLM's interpretation of the NL rule.
+//
+// These pins are source-text-based to match the rest of the file. They lock:
+//   1. The new imports.
+//   2. The function uses buildAIContext scoped to the field's table only.
+//   3. The function calls formatDocumentsForPrompt on the resulting docs.
+//   4. The user-message template interpolates the docBlock between
+//      "Sample values:" and "User's rule:".
+//   5. The system prompt mentions documentation context.
+//   6. A try/catch guards the buildAIContext call so a context-build failure
+//      does NOT block rule creation (degrades to the pre-PR-B narrow context).
+
+function addValidationRuleFromNLBody(): string {
+  const start = SRC.indexOf('export async function addValidationRuleFromNL')
+  if (start < 0) throw new Error('addValidationRuleFromNL start not found')
+  // Body ends at the next top-level export (deleteValidationRule lives later
+  // in the file; the action immediately preceding it is what we want).
+  const end = SRC.indexOf('export async function ', start + 'export async function '.length)
+  if (end < 0) throw new Error('addValidationRuleFromNL end not found')
+  return SRC.slice(start, end)
+}
+
+describe('[validation-rules PR-B] documentation context wiring', () => {
+  const body = addValidationRuleFromNLBody()
+  const code = stripComments(body)
+
+  it('imports buildAIContext and formatDocumentsForPrompt from context-builder', () => {
+    const stripped = stripComments(SRC)
+    expect(stripped).toMatch(
+      /import\s*\{[^}]*\bbuildAIContext\b[^}]*\bformatDocumentsForPrompt\b[^}]*\}\s*from\s*['"]@\/lib\/ai\/context-builder['"]/,
+    )
+  })
+
+  it('calls buildAIContext scoped to the field\'s table (tableIds: [tableId])', () => {
+    expect(code).toMatch(/buildAIContext\(/)
+    expect(code).toMatch(/tableIds:\s*\[\s*tableId\s*\]/)
+  })
+
+  it('skips profiling / distributions / samples in buildAIContext (already on field row)', () => {
+    expect(code).toMatch(/includeProfilingStats:\s*false/)
+    expect(code).toMatch(/includeValueDistributions:\s*false/)
+    expect(code).toMatch(/includeSampleValues:\s*false/)
+  })
+
+  it('requests documentation in buildAIContext', () => {
+    expect(code).toMatch(/includeDocuments:\s*true/)
+  })
+
+  it('passes evalContext supabase client through to buildAIContext (eval-runner compatibility)', () => {
+    // Mirrors the ai-quality-detection.ts pattern.
+    expect(code).toMatch(/evalContext\s*\?\s*supabase\s*:\s*undefined/)
+  })
+
+  it('formats documents via formatDocumentsForPrompt(aiContext.documents)', () => {
+    expect(code).toMatch(/formatDocumentsForPrompt\(\s*aiContext\.documents\s*\)/)
+  })
+
+  it('user message interpolates docBlock between "Sample values:" and "User\'s rule:"', () => {
+    // Single regex spanning the three template segments — matches the
+    // exact ordering the prompt depends on.
+    expect(code).toMatch(
+      /Sample values:[\s\S]{0,200}\$\{docBlock\}User's rule:/,
+    )
+  })
+
+  it('docBlock degrades to empty string when buildAIContext throws (try/catch guard)', () => {
+    // Guard-pattern check: the `let docBlock = ''` initialiser must precede
+    // the buildAIContext call so a failure leaves the empty default.
+    expect(code).toMatch(/let docBlock = ''[\s\S]{0,200}try\s*\{[\s\S]{0,400}buildAIContext\(/)
+    expect(code).toMatch(/catch\s*\([^)]*\)\s*\{[\s\S]{0,200}console\.warn/)
+  })
+
+  it('system prompt mentions documentation context', () => {
+    expect(code).toMatch(/systemPrompt = `[\s\S]{0,2000}documentation/i)
+  })
+
+  it('system prompt declares user NL rule as primary specification', () => {
+    expect(code).toMatch(/user's NL rule is the primary specification/i)
+  })
+
+  it('no-docs path preserves pre-PR-B byte format (empty docBlock yields the legacy 3-line user message)', () => {
+    // The template literal has no extra whitespace around ${docBlock}, so
+    // when docBlock is '' the resulting userMessage is exactly:
+    //   Field: ...
+    //   Sample values: ...
+    //   User's rule: "..."
+    // — byte-identical to the pre-PR-B prompt. This pin guards against an
+    // accidental \n being introduced around the interpolation.
+    expect(code).toMatch(
+      /Sample values: \$\{JSON\.stringify\(sampleValues\)\}\n\$\{docBlock\}User's rule:/,
+    )
+  })
+})
