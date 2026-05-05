@@ -1686,3 +1686,299 @@ export const CROSS_FIELD_CORRELATION_TOOL: Tool = {
     required: ['table_id', 'field_a_name', 'field_b_name'],
   },
 }
+
+// ─── PR 3.4cd — Multi-agent answer tools ─────────────────────────────────────
+//
+// Four NEW answer tools, one per agent in the multi-agent mapping pipeline.
+// The 3 data-scanning tools above (QUERY_FIELD_DATA_TOOL,
+// COUNT_DISTINCT_PATTERNS_TOOL, CROSS_FIELD_CORRELATION_TOOL) are reused
+// across every agent. The existing EMIT_TABLE_MAPPINGS_TOOL (above) is
+// reused for the Generator's REFINEMENT call (after Critic) which produces
+// the final shape consumed by the unchanged persistence path.
+//
+// Strict-mode posture: same as the rest of this file. additionalProperties
+// false uniformly. No oneOf, no min/max on numbers, no minItems/maxItems.
+// Schemas kept compact to stay clear of PR 12.2 B-2's strict-mode 503 risk.
+
+/**
+ * Used by Agent 1 (Generator). Per (source_table, target_table) pair, emits
+ * candidate mappings each tagged with cardinality / cross-table classification.
+ * Specialists (Cross-Table, Cardinality) downstream resolve the uncertain and
+ * cross_table tags; Critic later reviews the merged confirmed set.
+ */
+export const EMIT_MAPPING_CANDIDATES_TOOL: Tool = {
+  name: 'emit_mapping_candidates',
+  description:
+    "Emit candidate source-to-target field mappings for the current pair. Each candidate carries a `tag` indicating its cardinality / cross-table status (one_to_one, many_to_one, one_to_many, cross_table, uncertain). Specialists downstream resolve uncertain and cross_table candidates; the critic later reviews the merged set. EMIT LIBERALLY at this stage — refusing to emit when unsure is the wrong default. Use the uncertain tag whenever cardinality or field semantics are ambiguous, and let specialists confirm or reclassify.\n\nRules: bare table and field names (no schema prefixes). For many_to_one, set tag='many_to_one' and populate contributing_source_fields with the OTHER fields besides source_field. For one_to_many, emit SEPARATE entries per target field, all sharing the same source_field. For cross_table, populate cross_table_source with the source_table + source_field that the target field actually comes from (FK denormalization); the dominant pair-level source is still recorded in source_field.",
+  strict: true,
+  input_schema: {
+    type: 'object',
+    additionalProperties: false,
+    properties: {
+      candidates: {
+        type: 'array',
+        description:
+          'Array of candidate mappings. Empty array is valid when no source field on this pair is a confident match for any target field.',
+        items: {
+          type: 'object',
+          additionalProperties: false,
+          properties: {
+            source_field: {
+              type: 'string',
+              description:
+                'Bare source field name (the primary contributor for many_to_one; the SAME field repeated across separate entries for one_to_many).',
+            },
+            target_field: {
+              type: 'string',
+              description:
+                'Bare target field name. Must match a field on the target_table named in the parent pair.',
+            },
+            tag: {
+              type: 'string',
+              enum: ['one_to_one', 'many_to_one', 'one_to_many', 'cross_table', 'uncertain'],
+              description:
+                'Cardinality / cross-table classification. one_to_one: simple direct mapping, types compatible. many_to_one: multiple source fields combine into one target. one_to_many: one source splits into multiple targets. cross_table: target field comes from a JOIN on a different source table (FK denormalization). uncertain: cardinality unclear or semantics ambiguous — specialists will resolve.',
+            },
+            confidence: {
+              type: 'number',
+              description:
+                'Integer 0-100 confidence the candidate is correct. This is the agent\'s pre-vote estimate; the orchestrator may overwrite based on inter-vote agreement.',
+            },
+            reasoning: {
+              type: 'string',
+              description:
+                '1-2 sentence reviewer-facing justification citing the specific signals used (name similarity, type compatibility, sample-value alignment, documentation reference).',
+            },
+            contributing_source_fields: {
+              type: 'array',
+              items: { type: 'string' },
+              description:
+                'Required when tag === "many_to_one". Array of ADDITIONAL source field names beyond source_field. Do NOT repeat the primary source_field. Omit for other tags.',
+            },
+            cross_table_source: {
+              type: 'object',
+              additionalProperties: false,
+              properties: {
+                source_table: {
+                  type: 'string',
+                  description: 'Bare source table name where the candidate field actually resides (the JOIN target).',
+                },
+                source_field: {
+                  type: 'string',
+                  description: 'Bare field name on the cross-table source.',
+                },
+              },
+              required: ['source_table', 'source_field'],
+              description:
+                'Required when tag === "cross_table". Names the source_table + source_field that the target field actually comes from via FK join. Omit for other tags.',
+            },
+            type_compatibility: {
+              type: 'string',
+              description:
+                'Describe the conversion or validation required: e.g., "VARCHAR → DECIMAL — strip $ and commas". When no conversion is needed: "direct compatible — no conversion needed".',
+            },
+            needs_transformation: {
+              type: 'boolean',
+              description:
+                'TRUE if any data transformation is required to fit target constraints (type conversion, value translation, format standardization, casing change, truncation, field combination/splitting, FK reformat). FALSE for naming-convention-only differences when values pass through unchanged.',
+            },
+          },
+          required: ['source_field', 'target_field', 'tag', 'confidence', 'reasoning', 'type_compatibility', 'needs_transformation'],
+        },
+      },
+    },
+    required: ['candidates'],
+  },
+}
+
+/**
+ * Used by Agent 2 (Cross-Table specialist). Resolves Generator candidates
+ * tagged cross_table or uncertain whose unresolved question is "which table
+ * does this field belong to / what's the FK path".
+ */
+export const EMIT_CROSS_TABLE_RESOLUTIONS_TOOL: Tool = {
+  name: 'emit_cross_table_resolutions',
+  description:
+    'Emit cross-table resolution decisions for the candidates the Generator passed to you. Each resolution either confirms the cross-table mapping (with the FK join_spec populated) or rejects it with reasoning. The candidate_index field references the position of each candidate in the input list — preserve the correspondence so the orchestrator can match resolutions back to candidates.\n\nReject when: no FK path exists between the dominant source table and the candidate cross_table_source; the proposed source table does not have the candidate field; OR the join cardinality would produce row-multiplication (e.g., joining on a non-unique column). Confirm only when there is a clear single-row or many-to-one FK path.',
+  strict: true,
+  input_schema: {
+    type: 'object',
+    additionalProperties: false,
+    properties: {
+      resolutions: {
+        type: 'array',
+        description:
+          'One entry per candidate the Generator passed in. The orchestrator merges these back into the confirmed mapping set; rejected candidates are dropped.',
+        items: {
+          type: 'object',
+          additionalProperties: false,
+          properties: {
+            candidate_index: {
+              type: 'number',
+              description:
+                'Zero-based index of the candidate in the input list passed to this agent. Required for correlation back to the Generator output.',
+            },
+            decision: {
+              type: 'string',
+              enum: ['confirm', 'reject'],
+              description:
+                'confirm: the cross-table mapping is valid; populate join_spec. reject: the cross-table mapping should be dropped from the confirmed set.',
+            },
+            reasoning: {
+              type: 'string',
+              description:
+                '1-2 sentence justification citing the specific FK relationship (or its absence). Reference fk_reference fields and join cardinality explicitly.',
+            },
+            join_spec: {
+              type: 'object',
+              additionalProperties: false,
+              properties: {
+                via_fk_field: {
+                  type: 'string',
+                  description:
+                    'Name of the FK field on the dominant source table that establishes the join (e.g., "region_id" when joining customer.region_id → region.id).',
+                },
+                join_path: {
+                  type: 'string',
+                  description:
+                    'Human-readable JOIN path (e.g., "customer.region_id → region.id, region.name → CUSTOMER_REGION_NAME"). Use → between hops.',
+                },
+              },
+              required: ['via_fk_field', 'join_path'],
+              description: 'Required when decision === "confirm". Omit when reject.',
+            },
+          },
+          required: ['candidate_index', 'decision', 'reasoning'],
+        },
+      },
+    },
+    required: ['resolutions'],
+  },
+}
+
+/**
+ * Used by Agent 3 (Cardinality specialist). Resolves Generator candidates
+ * tagged many_to_one, one_to_many, or uncertain (for cardinality reasons).
+ * Heavy use of cross_field_correlation to verify joint frequencies.
+ */
+export const EMIT_CARDINALITY_RESOLUTIONS_TOOL: Tool = {
+  name: 'emit_cardinality_resolutions',
+  description:
+    'Emit cardinality classification decisions for the candidates the Generator passed to you. Each resolution restates the candidate index, names the FINAL cardinality (one_to_one, many_to_one, one_to_many — never uncertain at this stage), and supplies the supporting transformation pattern.\n\nValidation rules: many_to_one is correct only when the contributing fields are JOINTLY POPULATED (high conditional non-null rate via cross_field_correlation). When contributors are mutually exclusive (one is null when the other is set), reclassify as one_to_one + acknowledge the unmapped sibling. one_to_many is correct only when source values show split-pattern structure (separator-delimited, fixed-width, etc.); use count_distinct_patterns or query_field_data to verify.',
+  strict: true,
+  input_schema: {
+    type: 'object',
+    additionalProperties: false,
+    properties: {
+      resolutions: {
+        type: 'array',
+        description:
+          'One entry per candidate the Generator passed in. The orchestrator uses these to overwrite the cardinality tag on the matching candidates.',
+        items: {
+          type: 'object',
+          additionalProperties: false,
+          properties: {
+            candidate_index: {
+              type: 'number',
+              description:
+                'Zero-based index of the candidate in the input list passed to this agent.',
+            },
+            final_cardinality: {
+              type: 'string',
+              enum: ['one_to_one', 'many_to_one', 'one_to_many'],
+              description:
+                'The classification this specialist confirms. Never "uncertain" — pick a definitive answer or reclassify as one_to_one if data does not support the proposed cardinality.',
+            },
+            contributing_fields: {
+              type: 'array',
+              items: { type: 'string' },
+              description:
+                'Required when final_cardinality === "many_to_one". The other source field names besides the primary source_field.',
+            },
+            split_hint: {
+              type: 'string',
+              description:
+                'Required when final_cardinality === "one_to_many". Brief description of the split rule (e.g., "Extract first name (substring before first space)").',
+            },
+            transformation_pattern: {
+              type: 'string',
+              description:
+                'High-level transformation pattern (e.g., "concat_space", "split_on_comma", "boolean_normalize_yn", "currency_strip"). Used by downstream transform-generation as a hint.',
+            },
+            reasoning: {
+              type: 'string',
+              description:
+                '1-2 sentence justification citing the data signals (joint-frequency stats, distinct-value patterns, conditional null rates).',
+            },
+          },
+          required: ['candidate_index', 'final_cardinality', 'transformation_pattern', 'reasoning'],
+        },
+      },
+    },
+    required: ['resolutions'],
+  },
+}
+
+/**
+ * Used by Agent 4 (Critic). Reviews the full confirmed mapping set + business
+ * context + unmapped target field list. Surfaces contradictions, missed
+ * mappings, conservative-mistakes, aggressive-mistakes for the Generator's
+ * refinement call to address.
+ */
+export const EMIT_CRITIQUE_TOOL: Tool = {
+  name: 'emit_critique',
+  description:
+    'Emit a critique of the confirmed mapping set. Be specific. "This mapping looks wrong" is useless; "Mapping X→Y will produce CHECK constraint violations because source has values [a, b] not in target\'s allowed [c, d, e]" is actionable. Use the data-scanning tools to verify hypotheses before flagging — false-positive critiques degrade the refinement quality.\n\nFour critique categories: contradiction (two mappings violate each other, e.g., same target claimed by two unconsolidated sources); missed_mapping (a target field with no proposed source where one clearly exists, especially common for nullable target fields the AI conservatively declined); conservative_mistake (a candidate rejected on weak signals when the data actually supports it — verify with query_field_data or count_distinct_patterns); aggressive_mistake (a mapping where source values do not fit target constraints — CHECK violations, NOT NULL on a frequently-null source, picklist mismatches).\n\nWhen a critique references a specific mapping in the confirmed set, populate affected_mapping_index. When it references an unmapped target field, populate affected_target_field. Severity high means the refinement step MUST address it; medium SHOULD; low MAY.',
+  strict: true,
+  input_schema: {
+    type: 'object',
+    additionalProperties: false,
+    properties: {
+      critiques: {
+        type: 'array',
+        description:
+          'Array of critiques. Empty array is valid when no issues found — emit no critiques rather than fabricating concerns.',
+        items: {
+          type: 'object',
+          additionalProperties: false,
+          properties: {
+            category: {
+              type: 'string',
+              enum: ['contradiction', 'missed_mapping', 'conservative_mistake', 'aggressive_mistake'],
+              description:
+                'Critique type. contradiction: two existing mappings violate each other. missed_mapping: target field with no source proposed where one exists. conservative_mistake: rejected candidate that data actually supports. aggressive_mistake: mapping that violates target constraints.',
+            },
+            affected_mapping_index: {
+              type: 'number',
+              description:
+                'Zero-based index of the affected mapping in the input confirmed-mappings list. Populate for contradiction and aggressive_mistake. Omit for missed_mapping (use affected_target_field instead).',
+            },
+            affected_target_field: {
+              type: 'string',
+              description:
+                'Bare name of the target field the critique is about. Populate for missed_mapping and conservative_mistake. Omit for contradiction (use affected_mapping_index).',
+            },
+            description: {
+              type: 'string',
+              description:
+                '1-3 sentence description of the issue. Cite specific data signals (sample values, cardinality, format issues, business_context). Avoid generic phrasing.',
+            },
+            suggested_fix: {
+              type: 'string',
+              description:
+                'Concrete instruction for the refinement step (e.g., "Consolidate as many_to_one with first_name + last_name", "Drop this mapping; use status_code instead", "Add mapping address.zip → CUSTOMER_ZIPCODE").',
+            },
+            severity: {
+              type: 'string',
+              enum: ['low', 'medium', 'high'],
+              description:
+                'high: refinement MUST address. medium: SHOULD address. low: MAY address. Aggressive mistakes are usually high; missed nullable fields are often low.',
+            },
+          },
+          required: ['category', 'description', 'suggested_fix', 'severity'],
+        },
+      },
+    },
+    required: ['critiques'],
+  },
+}

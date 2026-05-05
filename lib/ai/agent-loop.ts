@@ -82,6 +82,7 @@ export interface RunAgentLoopOptions {
   /**
    * Per-call options forwarded to `callLLM` (model, maxTokens, etc.).
    * PR 3.4a widening: `thinking` + `output_config` for agent adopters.
+   * PR 3.4cd widening: `temperature` for self-consistency voting.
    */
   llmOptions?: Pick<
     CallLLMOptions,
@@ -93,6 +94,7 @@ export interface RunAgentLoopOptions {
     | 'metadata'
     | 'thinking'
     | 'output_config'
+    | 'temperature'
   >
   /**
    * LOCK #4: opt-in dry-run mode for unit tests. When set, the loop

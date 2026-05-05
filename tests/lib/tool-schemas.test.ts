@@ -73,8 +73,8 @@ function walkProperties(
 // ─── Existing invariants from PR 12 sub-commit 12.1 ──────────────────────────
 
 describe('tool-schemas — structural invariants', () => {
-  it('exports the expected count of tools (PR 12.1: 13 + PR 12.2 B-1: 3 SQL emitters + PR 3.3: 3 data-scanning tools = 19)', () => {
-    expect(allTools.length).toBe(19)
+  it('exports the expected count of tools (PR 12.1: 13 + PR 12.2 B-1: 3 SQL emitters + PR 3.3: 3 data-scanning tools + PR 3.4cd: 4 multi-agent answer tools = 23)', () => {
+    expect(allTools.length).toBe(23)
   })
 
   it('every tool has a snake_case name (lowercase letters + underscores)', () => {
