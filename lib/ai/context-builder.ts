@@ -578,6 +578,73 @@ export function formatSchemaForPrompt(tables: TableContext[], label: string): st
 }
 
 /**
+ * PR 3.4b — Schema-level overview block for agent-mode mapping prompts.
+ * Pure, deterministic on identical input. Counts + naming-convention
+ * hints + FK density + document-presence flags. Heritage-friendly:
+ * legacy callsites do not invoke this; only the agent path does.
+ */
+export function formatSchemaOverviewBlock(aiCtx: ProjectAIContext): string {
+  const sourceTableCount = aiCtx.source_tables.length
+  const targetTableCount = aiCtx.target_tables.length
+  const sourceFieldCount = aiCtx.source_tables.reduce((n, t) => n + t.fields.length, 0)
+  const targetFieldCount = aiCtx.target_tables.reduce((n, t) => n + t.fields.length, 0)
+  const sourceRowCount = aiCtx.source_tables.reduce((n, t) => n + (t.row_count ?? 0), 0)
+
+  const sourceConv = detectNamingConvention(aiCtx.source_tables)
+  const targetConv = detectNamingConvention(aiCtx.target_tables)
+  const sourceFkDensity = computeFkDensity(aiCtx.source_tables)
+  const targetFkDensity = computeFkDensity(aiCtx.target_tables)
+
+  const docs = aiCtx.documents
+  const schemaDocCount = docs.source_documents.length + docs.target_documents.length
+  const businessDocCount = docs.business_context_documents.length
+  const intelligencePresent = aiCtx.intelligence_context.trim().length > 0
+
+  const lines: string[] = []
+  lines.push('<schema_overview>')
+  lines.push(`Source: ${sourceTableCount} table(s), ${sourceFieldCount} field(s) across ${sourceRowCount} profiled row(s); naming: ${sourceConv}; FK density: ${sourceFkDensity}.`)
+  lines.push(`Target: ${targetTableCount} table(s), ${targetFieldCount} field(s); naming: ${targetConv}; FK density: ${targetFkDensity}.`)
+  lines.push(`Schema docs: ${schemaDocCount}; business-context docs: ${businessDocCount}; migration intelligence: ${intelligencePresent ? 'present' : 'none'}.`)
+  lines.push('</schema_overview>')
+  return lines.join('\n')
+}
+
+function detectNamingConvention(tables: TableContext[]): string {
+  let snake = 0
+  let camel = 0
+  let upper = 0
+  let total = 0
+  for (const t of tables) {
+    for (const f of t.fields) {
+      total++
+      if (/^[A-Z][A-Z0-9_]*$/.test(f.name)) upper++
+      else if (/^[a-z][a-z0-9_]*$/.test(f.name)) snake++
+      else if (/^[a-z][a-zA-Z0-9]*$/.test(f.name) && /[A-Z]/.test(f.name)) camel++
+    }
+  }
+  if (total === 0) return 'unknown (no fields)'
+  const max = Math.max(snake, camel, upper)
+  if (max === 0) return 'mixed'
+  if (snake === max) return 'snake_case'
+  if (camel === max) return 'camelCase'
+  return 'UPPER_SNAKE_CASE'
+}
+
+function computeFkDensity(tables: TableContext[]): string {
+  let fkCount = 0
+  let total = 0
+  for (const t of tables) {
+    for (const f of t.fields) {
+      total++
+      if (f.is_foreign_key) fkCount++
+    }
+  }
+  if (total === 0) return '0/0'
+  const pct = ((fkCount / total) * 100).toFixed(0)
+  return `${fkCount}/${total} (${pct}%)`
+}
+
+/**
  * Format document context for a Claude prompt.
  * Schema docs (DDL/ERD/data-dict) are emitted under <schema_documentation>.
  * Business context docs (migration rules, value mappings) are emitted under <business_context>.

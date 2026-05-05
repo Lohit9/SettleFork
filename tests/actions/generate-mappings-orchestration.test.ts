@@ -325,12 +325,14 @@ describe('[generateMappings] C1 — one Claude call per source table, not per pa
     // Post-PR-6: the wrapper is `callLLM` from `lib/ai/llm-client.ts`
     // (was `callClaude` from `lib/ai/claude.ts` pre-PR-6). Defensive
     // counts: zero `callClaude(` (proves PR 6's migration is complete
-    // for runMappingGeneration) AND exactly two `callLLM(` (primary +
-    // repair).
+    // for runMappingGeneration). Post-PR-3.4b: exactly THREE `callLLM(`
+    // — legacy primary + legacy repair retry + agent-path schema_error
+    // single-shot fallback (LOCK #5). All three are per-source-table,
+    // not per-pair; the C1 invariant holds.
     const callClaudeCount = (RUN_GEN_BODY.match(/callClaude\(/g) ?? []).length
     expect(callClaudeCount).toBe(0)
     const callLLMCount = (RUN_GEN_BODY.match(/callLLM\(/g) ?? []).length
-    expect(callLLMCount).toBe(2)
+    expect(callLLMCount).toBe(3)
   })
 })
 

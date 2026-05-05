@@ -59,6 +59,14 @@ export interface BuildMappingContextInput {
     title: string
     description: string
   }
+  /**
+   * PR 3.4b — when set, populate `projects.business_context` on the
+   * synthetic project after dataset/table/field setup completes. The
+   * value is read by the agent-mode mapping callsites (under
+   * AI_PHASE_3_ENABLED=1) via `readBusinessContext`. NULL/empty values
+   * pass through as "absent" and skip the UPDATE entirely.
+   */
+  businessContext?: string
 }
 
 export interface BuiltMappingContext {
@@ -218,6 +226,37 @@ export async function buildSyntheticMappingContext(
     throw new Error(
       `[eval/synthetic-context] insert table_mapping failed: ${tmErr?.message ?? 'no row'}`,
     )
+  }
+
+  // PR 3.4b — propagate fixture metadata.business_context to
+  // projects.business_context. Skipped when absent / empty so legacy
+  // fixtures (no metadata.business_context) write nothing. When
+  // migration 086 has not yet been applied to the connected Supabase
+  // project, the UPDATE fails with PostgREST's "column ... not in
+  // schema cache" message; the eval gracefully falls back to a NULL
+  // business_context (matches the "absent" branch the production
+  // prompt builder already handles) and warns once. Any other error
+  // is fatal — the column exists but the UPDATE itself failed.
+  if (input.businessContext && input.businessContext.trim().length > 0) {
+    const { error: bcErr } = await supabaseAdmin
+      .from('projects')
+      .update({ business_context: input.businessContext })
+      .eq('id', input.projectId)
+    if (bcErr) {
+      const isMissingColumn =
+        /column[\s\S]*business_context|business_context[\s\S]*schema cache/i.test(
+          bcErr.message,
+        )
+      if (isMissingColumn) {
+        console.warn(
+          `[eval/synthetic-context] projects.business_context column missing (apply migration 086 to enable). Continuing with NULL context.`,
+        )
+      } else {
+        throw new Error(
+          `[eval/synthetic-context] update projects.business_context failed: ${bcErr.message}`,
+        )
+      }
+    }
   }
 
   // Path 2 PR 2 B-1: optional `field_profiles` rows for source fields.

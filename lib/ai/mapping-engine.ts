@@ -17,15 +17,25 @@
 
 import type { SupabaseClient } from '@supabase/supabase-js'
 
-import { callLLM } from '@/lib/ai/llm-client'
+import { callLLM, type CallLLMResult } from '@/lib/ai/llm-client'
+import { runAgentLoop, type AgentLoopResult } from '@/lib/ai/agent-loop'
+import {
+  makeQueryFieldDataHandler,
+  makeCountDistinctPatternsHandler,
+  makeCrossFieldCorrelationHandler,
+} from '@/lib/ai/agent-tools'
 import {
   EMIT_TABLE_MAPPINGS_TOOL,
+  QUERY_FIELD_DATA_TOOL,
+  COUNT_DISTINCT_PATTERNS_TOOL,
+  CROSS_FIELD_CORRELATION_TOOL,
   EMIT_MAPPING_SUGGESTION_TOOL,
 } from '@/lib/ai/tool-schemas'
 import {
   buildAIContext,
   formatDocumentsForPrompt,
   formatSchemaForPrompt,
+  formatSchemaOverviewBlock,
 } from '@/lib/ai/context-builder'
 import type { TFMCombinationType } from '@/lib/types/mapping-redesign'
 import type {
@@ -353,6 +363,78 @@ WHAT NOT TO DO
 /** PR 3.4a — agent-mode prompt = original + AGENT_TOOL_GUIDANCE. */
 export const MAPPING_GENERATION_AGENT_SYSTEM_PROMPT =
   MAPPING_GENERATION_SYSTEM_PROMPT + '\n\n' + AGENT_TOOL_GUIDANCE
+
+// ─── PR 3.4b — Agent-loop helpers ────────────────────────────────────────────
+
+const BUSINESS_CONTEXT_MAX_CHARS = 2000
+
+/**
+ * Read `projects.business_context` for the agent prompt prelude. Both
+ * NULL and empty string read as "absent". Truncated to a hard ceiling
+ * to bound prompt size.
+ */
+export async function readBusinessContext(
+  supabase: SupabaseClient,
+  projectId: string,
+): Promise<string | null> {
+  const { data } = await supabase
+    .from('projects')
+    .select('business_context')
+    .eq('id', projectId)
+    .maybeSingle()
+  const raw = (data as { business_context?: string | null } | null)?.business_context
+  if (!raw || raw.trim().length === 0) return null
+  return raw.slice(0, BUSINESS_CONTEXT_MAX_CHARS)
+}
+
+/**
+ * Compose the agent-mode user message: optional business-context block +
+ * schema-overview block + the existing base user message. Both preludes
+ * are pre-pended so the model sees frame-setting context before the
+ * detailed schema. Pure function.
+ */
+export function buildAgentUserMessage(args: {
+  baseUserMessage: string
+  schemaOverview: string
+  businessContext: string | null
+}): string {
+  const sections: string[] = []
+  if (args.businessContext) {
+    sections.push(
+      `<customer_business_context>\n${args.businessContext}\n</customer_business_context>`,
+    )
+  }
+  if (args.schemaOverview) sections.push(args.schemaOverview)
+  sections.push(args.baseUserMessage)
+  return sections.join('\n\n')
+}
+
+/**
+ * Adapter that maps a successful `AgentLoopResult` (kind='final') to the
+ * existing `CallLLMResult` shape so the downstream persistence path is
+ * untouched. Per-iteration token counters live on the `llm_calls` rows
+ * the agent loop writes; the synthesized result zeroes those fields and
+ * surfaces only the aggregate cost + the head-of-chain callId.
+ */
+export function synthesizeToolUseResult(
+  result: AgentLoopResult & { kind: 'final' },
+): CallLLMResult {
+  const callId = result.callIds[result.callIds.length - 1] ?? ''
+  return {
+    kind: 'toolUse',
+    toolUse: {
+      name: result.finalToolUse.name,
+      input: result.finalToolUse.input,
+    },
+    callId,
+    inputTokens: 0,
+    outputTokens: 0,
+    cacheReadTokens: 0,
+    cacheCreationTokens: 0,
+    costUsd: result.totalCostUsd,
+    anthropicRequestId: null,
+  }
+}
 
 // ─── Row builders ────────────────────────────────────────────────────
 
@@ -1441,6 +1523,12 @@ export async function runMappingGeneration(
   message?: string
 }> {
   try {
+    // PR 3.4b — Phase 3 agent-loop adoption gate. Default OFF preserves
+    // heritage flag-OFF byte-identical behavior. When ON, both the
+    // pre-loop aiCtx (per-role sample bumps) and the per-iteration
+    // gate route through `runAgentLoop` instead of single-shot callLLM.
+    const phase3Enabled = process.env.AI_PHASE_3_ENABLED === '1'
+
     const { data: sourceTables, error: stErr } = await supabase
       .from('tables')
       .select('id, name, dataset_id, datasets(id, name)')
@@ -1477,9 +1565,19 @@ export async function runMappingGeneration(
         includeDocuments: true,
         maxDistributionValues: 15,
         maxSampleValues: 5,
+        // PR 3.4b — agent path uses asymmetric per-role sample budgets
+        // (LOCK #5/#6/#7). Spread is empty under flag-OFF → byte-identical.
+        ...(phase3Enabled && { maxSourceSampleValues: 50, maxTargetSampleValues: 30 }),
       },
       userId,
     )
+
+    // PR 3.4b — fetch business_context + compute schema-overview once
+    // (single read for the whole BULK loop). Both null/empty when flag OFF.
+    const businessContext = phase3Enabled
+      ? await readBusinessContext(supabase, projectId)
+      : null
+    const schemaOverviewBlock = phase3Enabled ? formatSchemaOverviewBlock(aiCtx) : ''
 
     const targetSection = formatSchemaForPrompt(aiCtx.target_tables, 'target')
     const docBlock = formatDocumentsForPrompt(aiCtx.documents)
@@ -1536,33 +1634,113 @@ ${otherSourcesList}
       // on the legacy path being preserved.
       const phase2Enabled = process.env.AI_PHASE_2_ENABLED === '1'
       let primaryResult: Awaited<ReturnType<typeof callLLM>>
-      try {
-        primaryResult = await callLLM({
-          feature: 'mapping_generate',
-          systemPrompt: MAPPING_GENERATION_SYSTEM_PROMPT,
-          userMessage: batchUserMessage,
-          maxTokens: PER_BATCH_MAX_TOKENS,
-          projectId,
-          userId,
-          promptVersion: 'mapping-v1',
-          abuseUserId: userId,
-          metadata: {
-            source_table_id: currentSourceRow?.id ?? null,
-            source_table_name: sourceCtx.table_name,
-            batch_index: i,
-            batch_total: sourceTablesForBatching.length,
-          },
-          ...(phase2Enabled && { tool: EMIT_TABLE_MAPPINGS_TOOL }),
-          // PR 13.1: prompt caching for the engine's primary mapping
-          // call. Per-table batching produces high invocation locality
-          // within Anthropic's 5-min ephemeral TTL — break-even at ≥2
-          // tables per project. System prompt + tool definition are
-          // both static across invocations.
-          cacheControl: true,
+      if (phase3Enabled) {
+        // PR 3.4b — agent-loop path (LOCK #1-#5). Phase 3 default-off in
+        // production; flag-OFF takes the else branch byte-unchanged.
+        const agentBatchUserMessage = buildAgentUserMessage({
+          baseUserMessage: batchUserMessage,
+          schemaOverview: schemaOverviewBlock,
+          businessContext,
         })
-      } catch (err) {
-        console.error(`[Mapping] Claude call failed for source table ${sourceCtx.table_name}:`, err)
-        continue
+        let agentResult: AgentLoopResult
+        try {
+          agentResult = await runAgentLoop({
+            feature: 'mapping_generate',
+            systemPrompt: MAPPING_GENERATION_AGENT_SYSTEM_PROMPT,
+            userMessage: agentBatchUserMessage,
+            tools: [
+              { tool: QUERY_FIELD_DATA_TOOL, handler: makeQueryFieldDataHandler({ supabase, projectId, userId }) },
+              { tool: COUNT_DISTINCT_PATTERNS_TOOL, handler: makeCountDistinctPatternsHandler({ supabase, projectId, userId }) },
+              { tool: CROSS_FIELD_CORRELATION_TOOL, handler: makeCrossFieldCorrelationHandler({ supabase, projectId, userId }) },
+              { tool: EMIT_TABLE_MAPPINGS_TOOL },
+            ],
+            projectId,
+            userId,
+            llmOptions: {
+              model: 'claude-opus-4-7',
+              maxTokens: PER_BATCH_MAX_TOKENS,
+              promptVersion: 'mapping-v2-agent',
+              cacheControl: true,
+              abuseUserId: userId,
+              thinking: { type: 'adaptive' },
+              output_config: { effort: 'max' },
+              metadata: {
+                source_table_id: currentSourceRow?.id ?? null,
+                source_table_name: sourceCtx.table_name,
+                batch_index: i,
+                batch_total: sourceTablesForBatching.length,
+                agent_loop: true,
+              },
+            },
+          })
+        } catch (err) {
+          console.error(`[Mapping] Agent loop failed for source table ${sourceCtx.table_name}:`, err)
+          continue
+        }
+        if (agentResult.kind === 'final') {
+          primaryResult = synthesizeToolUseResult(agentResult)
+        } else if (agentResult.reason === 'schema_error') {
+          // LOCK #5: schema_error fallback → single-shot retry with
+          // EMIT_TABLE_MAPPINGS_TOOL forced. Other abort reasons
+          // hard-fail the batch.
+          console.warn(`[Mapping] Agent schema_error for ${sourceCtx.table_name}; retrying single-shot`)
+          try {
+            primaryResult = await callLLM({
+              feature: 'mapping_generate',
+              systemPrompt: MAPPING_GENERATION_SYSTEM_PROMPT,
+              userMessage: batchUserMessage,
+              maxTokens: PER_BATCH_MAX_TOKENS,
+              projectId,
+              userId,
+              promptVersion: 'mapping-v1',
+              abuseUserId: userId,
+              metadata: {
+                source_table_id: currentSourceRow?.id ?? null,
+                source_table_name: sourceCtx.table_name,
+                batch_index: i,
+                batch_total: sourceTablesForBatching.length,
+                agent_fallback: true,
+              },
+              tool: EMIT_TABLE_MAPPINGS_TOOL,
+              cacheControl: true,
+            })
+          } catch (err) {
+            console.error(`[Mapping] Schema-error fallback failed for ${sourceCtx.table_name}:`, err)
+            continue
+          }
+        } else {
+          console.error(`[Mapping] Agent aborted for ${sourceCtx.table_name}: ${agentResult.reason} — ${agentResult.message}`)
+          continue
+        }
+      } else {
+        try {
+          primaryResult = await callLLM({
+            feature: 'mapping_generate',
+            systemPrompt: MAPPING_GENERATION_SYSTEM_PROMPT,
+            userMessage: batchUserMessage,
+            maxTokens: PER_BATCH_MAX_TOKENS,
+            projectId,
+            userId,
+            promptVersion: 'mapping-v1',
+            abuseUserId: userId,
+            metadata: {
+              source_table_id: currentSourceRow?.id ?? null,
+              source_table_name: sourceCtx.table_name,
+              batch_index: i,
+              batch_total: sourceTablesForBatching.length,
+            },
+            ...(phase2Enabled && { tool: EMIT_TABLE_MAPPINGS_TOOL }),
+            // PR 13.1: prompt caching for the engine's primary mapping
+            // call. Per-table batching produces high invocation locality
+            // within Anthropic's 5-min ephemeral TTL — break-even at ≥2
+            // tables per project. System prompt + tool definition are
+            // both static across invocations.
+            cacheControl: true,
+          })
+        } catch (err) {
+          console.error(`[Mapping] Claude call failed for source table ${sourceCtx.table_name}:`, err)
+          continue
+        }
       }
 
       if (primaryResult.kind === 'toolUse') {

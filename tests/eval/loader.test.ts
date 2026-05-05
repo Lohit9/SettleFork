@@ -19,7 +19,8 @@ describe('loader — happy path', () => {
 
   it('groups examples by task', () => {
     const ds = loadDataset('_fixture')
-    expect(ds.examples.mapping).toHaveLength(1)
+    // Post-PR-3.4b: mapping has 2 examples (001-fixture + 002-with-business-context).
+    expect(ds.examples.mapping).toHaveLength(2)
     expect(ds.examples['validation-rule']).toHaveLength(1)
     expect(ds.examples.transform).toHaveLength(0)
     expect(ds.examples['nl-to-sql']).toHaveLength(0)

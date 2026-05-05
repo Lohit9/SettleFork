@@ -5,12 +5,26 @@ import { createClient } from '@/lib/supabase/server'
 import { supabaseAdmin } from '@/lib/supabase/admin'
 import { requireProjectPermission } from '@/lib/actions/role-resolution'
 import { callLLM, type LLMFeature } from '@/lib/ai/llm-client'
+import { runAgentLoop, type AgentLoopResult } from '@/lib/ai/agent-loop'
+import {
+  makeQueryFieldDataHandler,
+  makeCountDistinctPatternsHandler,
+  makeCrossFieldCorrelationHandler,
+} from '@/lib/ai/agent-tools'
 import {
   EMIT_TABLE_MAPPINGS_TOOL,
   EMIT_FIELD_MAPPINGS_TOOL,
+  QUERY_FIELD_DATA_TOOL,
+  COUNT_DISTINCT_PATTERNS_TOOL,
+  CROSS_FIELD_CORRELATION_TOOL,
 } from '@/lib/ai/tool-schemas'
 import { checkAIRateLimit } from '@/lib/ai/rate-limit'
-import { buildAIContext, formatSchemaForPrompt, formatDocumentsForPrompt } from '@/lib/ai/context-builder'
+import {
+  buildAIContext,
+  formatSchemaForPrompt,
+  formatDocumentsForPrompt,
+  formatSchemaOverviewBlock,
+} from '@/lib/ai/context-builder'
 import { logActivity } from '@/lib/actions/activity-log'
 import { logAIEdit } from '@/lib/actions/ai-edit-history'
 import { assertMappingWritesEnabled } from '@/lib/auth/mapping-writes'
@@ -38,11 +52,15 @@ import type {
 } from '@/lib/types/mapping-redesign'
 import {
   MAPPING_GENERATION_SYSTEM_PROMPT,
+  MAPPING_GENERATION_AGENT_SYSTEM_PROMPT,
   bareTableName,
+  buildAgentUserMessage,
   buildMappingUserMessage,
   parseClaudeJSON,
   persistClaudeFieldMappingsForTM,
+  readBusinessContext,
   runMappingGeneration,
+  synthesizeToolUseResult,
   type ClaudeFieldMapping,
   type ClaudeResponse,
 } from '@/lib/ai/mapping-engine'
@@ -173,6 +191,11 @@ export async function runMappingGenerationForPair(args: {
     if (sfErr) return { inserted: 0, error: sfErr.message }
     if (tfErr) return { inserted: 0, error: tfErr.message }
 
+    // PR 3.4b — Phase 3 agent-loop adoption gate. Default OFF preserves
+    // heritage flag-OFF byte-identical behavior. Flag-ON: aiCtx uses
+    // per-role sample bumps + the gate routes through runAgentLoop.
+    const phase3Enabled = process.env.AI_PHASE_3_ENABLED === '1'
+
     const aiCtx = await buildAIContext(
       projectId,
       {
@@ -183,6 +206,9 @@ export async function runMappingGenerationForPair(args: {
         includeDocuments: true,
         maxDistributionValues: 15,
         maxSampleValues: 5,
+        // PR 3.4b — agent path uses asymmetric per-role sample budgets
+        // (LOCK #5/#6/#7). Spread is empty under flag-OFF → byte-identical.
+        ...(phase3Enabled && { maxSourceSampleValues: 50, maxTargetSampleValues: 30 }),
       },
       userId,
       // Phase 1 PR 10.4: thread the caller's supabase client through so
@@ -208,6 +234,13 @@ export async function runMappingGenerationForPair(args: {
       intelligenceCtx: aiCtx.intelligence_context ?? null,
     })
 
+    // PR 3.4b — agent-mode preludes (read once before the callLLM/agent
+    // gate). Both null/empty under flag-OFF.
+    const businessContext = phase3Enabled
+      ? await readBusinessContext(supabase, projectId)
+      : null
+    const schemaOverviewBlock = phase3Enabled ? formatSchemaOverviewBlock(aiCtx) : ''
+
     const PER_BATCH_MAX_TOKENS = 16000
 
     // PR 12 H1: tool use under flag ON; legacy text + parseClaudeJSON +
@@ -215,30 +248,108 @@ export async function runMappingGenerationForPair(args: {
     // verbatim so heritage byte-identical fingerprints hold.
     const phase2Enabled = process.env.AI_PHASE_2_ENABLED === '1'
     let primaryResult: Awaited<ReturnType<typeof callLLM>>
-    try {
-      primaryResult = await callLLM({
-        // featureOverride lets the eval runner tag this call as
-        // `eval_mapping` so it's excluded from the production cost
-        // report. Production callers omit it and the canonical feature
-        // taxonomy is preserved.
-        feature: featureOverride ?? 'mapping_generate_legacy_pair',
-        systemPrompt: MAPPING_GENERATION_SYSTEM_PROMPT,
-        userMessage,
-        maxTokens: PER_BATCH_MAX_TOKENS,
-        projectId,
-        userId,
-        promptVersion: 'mapping-v1',
-        abuseUserId: userId,
-        metadata: {
-          source_table_id: sourceTableId,
-          target_table_id: targetTableId,
-          table_mapping_id: tableMappingId,
-        },
-        ...(phase2Enabled && { tool: EMIT_TABLE_MAPPINGS_TOOL }),
+    if (phase3Enabled) {
+      // PR 3.4b — agent-loop path (LOCK #1-#5). Per LOCK #4 the
+      // single-pair callsite preserves its existing cacheControl
+      // posture (NOT enabling caching here; it was the PR 13.1 audit
+      // decision that single-pair has poor cache locality).
+      const agentUserMessage = buildAgentUserMessage({
+        baseUserMessage: userMessage,
+        schemaOverview: schemaOverviewBlock,
+        businessContext,
       })
-    } catch (err) {
-      console.error(`[Mapping] Claude call failed for pair ${sourceTables[0].name} → ${targetTables[0].name}:`, err)
-      return { inserted: 0, error: err instanceof Error ? err.message : 'Claude call failed' }
+      let agentResult: AgentLoopResult
+      try {
+        agentResult = await runAgentLoop({
+          feature: featureOverride ?? 'mapping_generate_legacy_pair',
+          systemPrompt: MAPPING_GENERATION_AGENT_SYSTEM_PROMPT,
+          userMessage: agentUserMessage,
+          tools: [
+            { tool: QUERY_FIELD_DATA_TOOL, handler: makeQueryFieldDataHandler({ supabase, projectId, userId }) },
+            { tool: COUNT_DISTINCT_PATTERNS_TOOL, handler: makeCountDistinctPatternsHandler({ supabase, projectId, userId }) },
+            { tool: CROSS_FIELD_CORRELATION_TOOL, handler: makeCrossFieldCorrelationHandler({ supabase, projectId, userId }) },
+            { tool: EMIT_TABLE_MAPPINGS_TOOL },
+          ],
+          projectId,
+          userId,
+          llmOptions: {
+            model: 'claude-opus-4-7',
+            maxTokens: PER_BATCH_MAX_TOKENS,
+            promptVersion: 'mapping-v2-agent',
+            abuseUserId: userId,
+            thinking: { type: 'adaptive' },
+            output_config: { effort: 'max' },
+            metadata: {
+              source_table_id: sourceTableId,
+              target_table_id: targetTableId,
+              table_mapping_id: tableMappingId,
+              agent_loop: true,
+            },
+          },
+        })
+      } catch (err) {
+        console.error(`[Mapping] Agent loop failed for pair ${sourceTables[0].name} → ${targetTables[0].name}:`, err)
+        return { inserted: 0, error: err instanceof Error ? err.message : 'Agent loop failed' }
+      }
+      if (agentResult.kind === 'final') {
+        primaryResult = synthesizeToolUseResult(agentResult)
+      } else if (agentResult.reason === 'schema_error') {
+        // LOCK #5 fallback: single-shot retry with EMIT_TABLE_MAPPINGS_TOOL
+        // forced. Other abort reasons return the error.
+        console.warn(`[Mapping] Agent schema_error for pair; retrying single-shot`)
+        try {
+          primaryResult = await callLLM({
+            feature: featureOverride ?? 'mapping_generate_legacy_pair',
+            systemPrompt: MAPPING_GENERATION_SYSTEM_PROMPT,
+            userMessage,
+            maxTokens: PER_BATCH_MAX_TOKENS,
+            projectId,
+            userId,
+            promptVersion: 'mapping-v1',
+            abuseUserId: userId,
+            metadata: {
+              source_table_id: sourceTableId,
+              target_table_id: targetTableId,
+              table_mapping_id: tableMappingId,
+              agent_fallback: true,
+            },
+            tool: EMIT_TABLE_MAPPINGS_TOOL,
+          })
+        } catch (err) {
+          console.error(`[Mapping] Schema-error fallback failed:`, err)
+          return { inserted: 0, error: err instanceof Error ? err.message : 'Fallback failed' }
+        }
+      } else {
+        const msg = `Agent aborted: ${agentResult.reason} — ${agentResult.message}`
+        console.error(`[Mapping] ${msg}`)
+        return { inserted: 0, error: msg }
+      }
+    } else {
+      try {
+        primaryResult = await callLLM({
+          // featureOverride lets the eval runner tag this call as
+          // `eval_mapping` so it's excluded from the production cost
+          // report. Production callers omit it and the canonical feature
+          // taxonomy is preserved.
+          feature: featureOverride ?? 'mapping_generate_legacy_pair',
+          systemPrompt: MAPPING_GENERATION_SYSTEM_PROMPT,
+          userMessage,
+          maxTokens: PER_BATCH_MAX_TOKENS,
+          projectId,
+          userId,
+          promptVersion: 'mapping-v1',
+          abuseUserId: userId,
+          metadata: {
+            source_table_id: sourceTableId,
+            target_table_id: targetTableId,
+            table_mapping_id: tableMappingId,
+          },
+          ...(phase2Enabled && { tool: EMIT_TABLE_MAPPINGS_TOOL }),
+        })
+      } catch (err) {
+        console.error(`[Mapping] Claude call failed for pair ${sourceTables[0].name} → ${targetTables[0].name}:`, err)
+        return { inserted: 0, error: err instanceof Error ? err.message : 'Claude call failed' }
+      }
     }
 
     // primaryCallId is used downstream by logAIEdit for provenance
