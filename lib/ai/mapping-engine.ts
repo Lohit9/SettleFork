@@ -18,17 +18,9 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 
 import { callLLM, type CallLLMResult } from '@/lib/ai/llm-client'
-import { runAgentLoop, type AgentLoopResult } from '@/lib/ai/agent-loop'
-import {
-  makeQueryFieldDataHandler,
-  makeCountDistinctPatternsHandler,
-  makeCrossFieldCorrelationHandler,
-} from '@/lib/ai/agent-tools'
+import { type AgentLoopResult } from '@/lib/ai/agent-loop'
 import {
   EMIT_TABLE_MAPPINGS_TOOL,
-  QUERY_FIELD_DATA_TOOL,
-  COUNT_DISTINCT_PATTERNS_TOOL,
-  CROSS_FIELD_CORRELATION_TOOL,
   EMIT_MAPPING_SUGGESTION_TOOL,
 } from '@/lib/ai/tool-schemas'
 import {
@@ -56,6 +48,12 @@ import type {
   ValueAssignmentRow,
 } from '@/lib/types/mappings-for-redesign'
 import { inferFkCandidates } from '@/lib/utils/fk-inference'
+// PR 3.4cd — single-agent and multi-agent pipeline helpers. Circular-import
+// safe: both modules import from this file at module-top-level (for
+// shared prompts + helpers), but the function references resolve at
+// call time, not at module-load time.
+import { runSingleAgentMappingLoop } from '@/lib/ai/single-agent-mapping'
+import { runMultiAgentMappingPipeline } from '@/lib/ai/multi-agent-orchestrator'
 
 // ─── Raw row shapes fetched from Supabase ────────────────────────────
 //
@@ -333,7 +331,7 @@ CRITICAL: Respond with ONLY valid JSON, no markdown, no backticks, no explanatio
 // the original constant is UNCHANGED for flag-OFF heritage.
 // Spec: docs/investigations/pr3.4-mapping-agent-adoption.md §C1.
 
-const AGENT_TOOL_GUIDANCE = `
+export const AGENT_TOOL_GUIDANCE = `
 DATA-SCANNING TOOLS — when to use them and when not to.
 
 You have access to three tools that query the actual source data live. The static prompt above already contains aggregate stats and the top sample values per field. Use the tools ONLY when the static prompt is insufficient for a specific decision; they cost real time and tokens.
@@ -1528,6 +1526,11 @@ export async function runMappingGeneration(
     // pre-loop aiCtx (per-role sample bumps) and the per-iteration
     // gate route through `runAgentLoop` instead of single-shot callLLM.
     const phase3Enabled = process.env.AI_PHASE_3_ENABLED === '1'
+    // PR 3.4cd — second-level gate. AI_PHASE_3_MULTI_AGENT_ENABLED=1
+    // routes through the multi-agent pipeline (Generator → specialists →
+    // Critic → refinement). Default OFF: PR 3.4b single-agent path.
+    // Both flags off: legacy Phase 2 single-shot.
+    const multiAgentEnabled = process.env.AI_PHASE_3_MULTI_AGENT_ENABLED === '1'
 
     const { data: sourceTables, error: stErr } = await supabase
       .from('tables')
@@ -1635,82 +1638,72 @@ ${otherSourcesList}
       const phase2Enabled = process.env.AI_PHASE_2_ENABLED === '1'
       let primaryResult: Awaited<ReturnType<typeof callLLM>>
       if (phase3Enabled) {
-        // PR 3.4b — agent-loop path (LOCK #1-#5). Phase 3 default-off in
-        // production; flag-OFF takes the else branch byte-unchanged.
-        const agentBatchUserMessage = buildAgentUserMessage({
-          baseUserMessage: batchUserMessage,
-          schemaOverview: schemaOverviewBlock,
-          businessContext,
-        })
-        let agentResult: AgentLoopResult
-        try {
-          agentResult = await runAgentLoop({
-            feature: 'mapping_generate',
-            systemPrompt: MAPPING_GENERATION_AGENT_SYSTEM_PROMPT,
-            userMessage: agentBatchUserMessage,
-            tools: [
-              { tool: QUERY_FIELD_DATA_TOOL, handler: makeQueryFieldDataHandler({ supabase, projectId, userId }) },
-              { tool: COUNT_DISTINCT_PATTERNS_TOOL, handler: makeCountDistinctPatternsHandler({ supabase, projectId, userId }) },
-              { tool: CROSS_FIELD_CORRELATION_TOOL, handler: makeCrossFieldCorrelationHandler({ supabase, projectId, userId }) },
-              { tool: EMIT_TABLE_MAPPINGS_TOOL },
-            ],
+        // PR 3.4cd — two-level gate. Outer: AI_PHASE_3_ENABLED selects
+        // agent path. Inner: AI_PHASE_3_MULTI_AGENT_ENABLED selects
+        // multi-agent pipeline (commit 2 shell, voting in commit 3) vs
+        // PR 3.4b single-agent loop (extracted to runSingleAgentMappingLoop).
+        // The single-agent extraction is cosmetic — its body is
+        // byte-equivalent to the inline 3.4b code; heritage Capture B
+        // verifies this.
+        const baseMetadata = {
+          source_table_id: currentSourceRow?.id ?? null,
+          source_table_name: sourceCtx.table_name,
+          batch_index: i,
+          batch_total: sourceTablesForBatching.length,
+        }
+        if (multiAgentEnabled) {
+          // PR 3.4cd multi-agent pipeline (commit 2 SHELL — see
+          // multi-agent-orchestrator.ts; voting + telemetry in commit 3).
+          const unmappedTargetFields = (targetFields ?? [])
+            .filter((f) =>
+              (sourceFields ?? []).every((sf) => sf.id !== f.id) // placeholder; commit 3 may refine
+            )
+            .map((f) => f.name)
+          const r = await runMultiAgentMappingPipeline({
+            supabase,
             projectId,
             userId,
-            llmOptions: {
-              model: 'claude-opus-4-7',
-              maxTokens: PER_BATCH_MAX_TOKENS,
-              promptVersion: 'mapping-v2-agent',
-              cacheControl: true,
-              abuseUserId: userId,
-              thinking: { type: 'adaptive' },
-              output_config: { effort: 'max' },
-              metadata: {
-                source_table_id: currentSourceRow?.id ?? null,
-                source_table_name: sourceCtx.table_name,
-                batch_index: i,
-                batch_total: sourceTablesForBatching.length,
-                agent_loop: true,
-              },
-            },
+            feature: 'mapping_generate',
+            baseUserMessage: batchUserMessage,
+            schemaOverviewBlock,
+            businessContext,
+            maxTokens: PER_BATCH_MAX_TOKENS,
+            baseMetadata: { ...baseMetadata, multi_agent: true },
+            cacheControl: true,
+            unmappedTargetFields,
           })
-        } catch (err) {
-          console.error(`[Mapping] Agent loop failed for source table ${sourceCtx.table_name}:`, err)
-          continue
-        }
-        if (agentResult.kind === 'final') {
-          primaryResult = synthesizeToolUseResult(agentResult)
-        } else if (agentResult.reason === 'schema_error') {
-          // LOCK #5: schema_error fallback → single-shot retry with
-          // EMIT_TABLE_MAPPINGS_TOOL forced. Other abort reasons
-          // hard-fail the batch.
-          console.warn(`[Mapping] Agent schema_error for ${sourceCtx.table_name}; retrying single-shot`)
-          try {
-            primaryResult = await callLLM({
-              feature: 'mapping_generate',
-              systemPrompt: MAPPING_GENERATION_SYSTEM_PROMPT,
-              userMessage: batchUserMessage,
-              maxTokens: PER_BATCH_MAX_TOKENS,
-              projectId,
-              userId,
-              promptVersion: 'mapping-v1',
-              abuseUserId: userId,
-              metadata: {
-                source_table_id: currentSourceRow?.id ?? null,
-                source_table_name: sourceCtx.table_name,
-                batch_index: i,
-                batch_total: sourceTablesForBatching.length,
-                agent_fallback: true,
-              },
-              tool: EMIT_TABLE_MAPPINGS_TOOL,
-              cacheControl: true,
-            })
-          } catch (err) {
-            console.error(`[Mapping] Schema-error fallback failed for ${sourceCtx.table_name}:`, err)
+          if (r.kind === 'pair_aborted') {
+            console.error(`[Mapping] Multi-agent pair aborted for ${sourceCtx.table_name}: ${r.reason} — ${r.message}`)
             continue
           }
+          primaryResult = r.result
         } else {
-          console.error(`[Mapping] Agent aborted for ${sourceCtx.table_name}: ${agentResult.reason} — ${agentResult.message}`)
-          continue
+          // PR 3.4b single-agent path — extracted to helper, byte-equivalent.
+          const r = await runSingleAgentMappingLoop({
+            supabase,
+            projectId,
+            userId,
+            feature: 'mapping_generate',
+            baseUserMessage: batchUserMessage,
+            schemaOverviewBlock,
+            businessContext,
+            maxTokens: PER_BATCH_MAX_TOKENS,
+            baseMetadata,
+            cacheControl: true,
+          })
+          if (r.kind === 'agent_threw') {
+            console.error(`[Mapping] Agent loop failed for source table ${sourceCtx.table_name}:`, r.error)
+            continue
+          }
+          if (r.kind === 'fallback_threw') {
+            console.error(`[Mapping] Schema-error fallback failed for ${sourceCtx.table_name}:`, r.error)
+            continue
+          }
+          if (r.kind === 'aborted_other') {
+            console.error(`[Mapping] Agent aborted for ${sourceCtx.table_name}: ${r.reason} — ${r.message}`)
+            continue
+          }
+          primaryResult = r.result
         }
       } else {
         try {

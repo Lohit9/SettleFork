@@ -1,8 +1,13 @@
 // @vitest-environment node
 //
-// PR 3.4b — source-level pins for the AI_PHASE_3_ENABLED gate in
-// lib/actions/mappings.ts (`runMappingGenerationForPair` callsite —
-// the eval-runner-exercised path) + business_context propagation.
+// PR 3.4cd commit 2 — source-level pins for the AI_PHASE_3_ENABLED +
+// AI_PHASE_3_MULTI_AGENT_ENABLED two-level gate at
+// `runMappingGenerationForPair` (lib/actions/mappings.ts) — the
+// eval-runner-exercised path. The 3.4b inline body has been extracted
+// to `lib/ai/single-agent-mapping.ts`; pins here cover the GATE shape
+// and helper-result discrimination. Body patterns are pinned in
+// `tests/lib/single-agent-mapping.test.ts` (commit 4) and in this
+// file under the "extracted helper" describe.
 
 import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
@@ -31,28 +36,39 @@ describe('mappings — runMappingGenerationForPair agent gate (source pins)', ()
     expect(MAPPINGS_SRC).toMatch(/const schemaOverviewBlock\s*=\s*phase3Enabled\s*\?\s*formatSchemaOverviewBlock\(/)
   })
 
-  it('agent path registers 4 tools + locked llmOptions; system prompt is the agent variant', () => {
-    expect(MAPPINGS_SRC).toMatch(/tool:\s*QUERY_FIELD_DATA_TOOL,\s*handler:\s*makeQueryFieldDataHandler\(/)
-    expect(MAPPINGS_SRC).toMatch(/tool:\s*COUNT_DISTINCT_PATTERNS_TOOL,\s*handler:\s*makeCountDistinctPatternsHandler\(/)
-    expect(MAPPINGS_SRC).toMatch(/tool:\s*CROSS_FIELD_CORRELATION_TOOL,\s*handler:\s*makeCrossFieldCorrelationHandler\(/)
-    expect(MAPPINGS_SRC).toMatch(/\{\s*tool:\s*EMIT_TABLE_MAPPINGS_TOOL\s*\}/)
-    expect(MAPPINGS_SRC).toMatch(/model:\s*'claude-opus-4-7'/)
-    expect(MAPPINGS_SRC).toMatch(/promptVersion:\s*'mapping-v2-agent'/)
-    expect(MAPPINGS_SRC).toMatch(/thinking:\s*\{\s*type:\s*'adaptive'\s*\}/)
-    expect(MAPPINGS_SRC).toMatch(/output_config:\s*\{\s*effort:\s*'max'\s*\}/)
-    expect(MAPPINGS_SRC).toMatch(/agent_loop:\s*true/)
-    expect(MAPPINGS_SRC).toMatch(/systemPrompt:\s*MAPPING_GENERATION_AGENT_SYSTEM_PROMPT/)
+  it('PR 3.4cd: declares multiAgentEnabled + dispatches to single-agent helper or multi-agent orchestrator', () => {
+    expect(MAPPINGS_SRC).toMatch(/const multiAgentEnabled = process\.env\.AI_PHASE_3_MULTI_AGENT_ENABLED === '1'/)
+    expect(MAPPINGS_SRC).toMatch(/runSingleAgentMappingLoop\(/)
+    expect(MAPPINGS_SRC).toMatch(/runMultiAgentMappingPipeline\(/)
   })
 
-  it('single-pair agent path does NOT enable cacheControl (PR 13.1 audit posture preserved per LOCK #4)', () => {
-    const agentPathSlice = sliceBetween(MAPPINGS_SRC, 'runAgentLoop({', '})')
-    expect(agentPathSlice).not.toMatch(/cacheControl/)
+  it('single-pair gate passes cacheControl: false (PR 13.1 audit posture preserved per LOCK #4)', () => {
+    // Per LOCK #4: bulk callsite has cacheControl: true; single-pair
+    // does NOT. The gate now passes this flag explicitly to the helper.
+    expect(MAPPINGS_SRC).toMatch(/cacheControl:\s*false/)
   })
 
-  it('aborted-loop handling: schema_error → fallback; other reasons → return error (single-pair semantics)', () => {
-    expect(MAPPINGS_SRC).toMatch(/agentResult\.reason\s*===\s*'schema_error'/)
-    expect(MAPPINGS_SRC).toMatch(/agent_fallback:\s*true/)
-    expect(MAPPINGS_SRC).toMatch(/Agent aborted:\s*\$\{agentResult\.reason\}[\s\S]{0,200}return\s*\{\s*inserted:\s*0/)
+  it('aborted-loop handling: helper-result discrimination preserves single-pair return-error semantics', () => {
+    // Extracted helper returns SingleAgentResult discriminated union;
+    // single-pair callsite maps each kind to its own error-return.
+    expect(MAPPINGS_SRC).toMatch(/r\.kind\s*===\s*'agent_threw'/)
+    expect(MAPPINGS_SRC).toMatch(/r\.kind\s*===\s*'fallback_threw'/)
+    expect(MAPPINGS_SRC).toMatch(/r\.kind\s*===\s*'aborted_other'/)
+    // Single-pair returns on hard-fail (BULK uses `continue`).
+    expect(MAPPINGS_SRC).toMatch(/return\s*\{\s*inserted:\s*0,\s*error:/)
+  })
+
+  it('extracted helper preserves agent body patterns (tools + llmOptions + schema_error fallback)', () => {
+    // PR 3.4b body patterns now live in single-agent-mapping.ts (commit 2 extraction).
+    const HELPER_SRC = readFileSync(
+      resolve(__dirname, '../../lib/ai/single-agent-mapping.ts'),
+      'utf8',
+    )
+    expect(HELPER_SRC).toMatch(/tool:\s*QUERY_FIELD_DATA_TOOL,\s*handler:\s*makeQueryFieldDataHandler\(/)
+    expect(HELPER_SRC).toMatch(/\btool:\s*EMIT_TABLE_MAPPINGS_TOOL\b/)
+    expect(HELPER_SRC).toMatch(/agent_fallback:\s*true/)
+    expect(HELPER_SRC).toMatch(/agentResult\.reason\s*===\s*'schema_error'/)
+    expect(HELPER_SRC).toMatch(/systemPrompt:\s*MAPPING_GENERATION_AGENT_SYSTEM_PROMPT/)
   })
 
   it('legacy else branch preserves featureOverride routing + phase2Enabled tool spread (heritage)', () => {
@@ -77,11 +93,3 @@ describe('eval — business_context propagation', () => {
     )
   })
 })
-
-function sliceBetween(src: string, startMarker: string, endMarker: string): string {
-  const a = src.indexOf(startMarker)
-  if (a < 0) throw new Error(`marker not found: ${startMarker}`)
-  const b = src.indexOf(endMarker, a + startMarker.length)
-  if (b < 0) throw new Error(`end marker not found after ${startMarker}: ${endMarker}`)
-  return src.slice(a, b)
-}

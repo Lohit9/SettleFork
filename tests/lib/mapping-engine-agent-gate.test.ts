@@ -110,6 +110,20 @@ describe('formatSchemaOverviewBlock — naming + FK + doc summary', () => {
 })
 
 // ─── Source-level pins for the BULK callsite gate ───────────────────────────
+//
+// PR 3.4cd commit 2: the 3.4b inline agent body has been extracted to
+// `lib/ai/single-agent-mapping.ts` (`runSingleAgentMappingLoop` helper).
+// The gate at this callsite now DELEGATES to that helper. Source pins
+// for the BODY patterns (tool registration, llmOptions, schema_error
+// fallback) live in `tests/lib/single-agent-mapping.test.ts` instead.
+// Here we pin the GATE shape: per-role sample bumps, business_context +
+// schema_overview pre-loop reads, two-level gate (phase3Enabled +
+// multiAgentEnabled), legacy else branch heritage args.
+
+const HELPER_SRC = readFileSync(
+  resolve(__dirname, '../../lib/ai/single-agent-mapping.ts'),
+  'utf8',
+)
 
 describe('mapping-engine — runMappingGeneration agent gate (source pins)', () => {
   it('declares phase3Enabled + threads per-role sample bumps + reads businessContext + schemaOverview pre-loop', () => {
@@ -121,23 +135,30 @@ describe('mapping-engine — runMappingGeneration agent gate (source pins)', () 
     expect(ENGINE_SRC).toMatch(/const schemaOverviewBlock\s*=\s*phase3Enabled\s*\?\s*formatSchemaOverviewBlock\(/)
   })
 
-  it('agent path registers 4 tools + locked llmOptions (Opus 4.7 + adaptive thinking + max effort + agent_loop)', () => {
-    expect(ENGINE_SRC).toMatch(/tool:\s*QUERY_FIELD_DATA_TOOL,\s*handler:\s*makeQueryFieldDataHandler\(/)
-    expect(ENGINE_SRC).toMatch(/tool:\s*COUNT_DISTINCT_PATTERNS_TOOL,\s*handler:\s*makeCountDistinctPatternsHandler\(/)
-    expect(ENGINE_SRC).toMatch(/tool:\s*CROSS_FIELD_CORRELATION_TOOL,\s*handler:\s*makeCrossFieldCorrelationHandler\(/)
-    expect(ENGINE_SRC).toMatch(/\{\s*tool:\s*EMIT_TABLE_MAPPINGS_TOOL\s*\}/)
-    expect(ENGINE_SRC).toMatch(/model:\s*'claude-opus-4-7'/)
-    expect(ENGINE_SRC).toMatch(/promptVersion:\s*'mapping-v2-agent'/)
-    expect(ENGINE_SRC).toMatch(/thinking:\s*\{\s*type:\s*'adaptive'\s*\}/)
-    expect(ENGINE_SRC).toMatch(/output_config:\s*\{\s*effort:\s*'max'\s*\}/)
-    expect(ENGINE_SRC).toMatch(/agent_loop:\s*true/)
-    expect(ENGINE_SRC).toMatch(/systemPrompt:\s*MAPPING_GENERATION_AGENT_SYSTEM_PROMPT/)
+  it('PR 3.4cd: declares multiAgentEnabled + dispatches to single-agent helper or multi-agent orchestrator', () => {
+    expect(ENGINE_SRC).toMatch(/const multiAgentEnabled = process\.env\.AI_PHASE_3_MULTI_AGENT_ENABLED === '1'/)
+    expect(ENGINE_SRC).toMatch(/runSingleAgentMappingLoop\(/)
+    expect(ENGINE_SRC).toMatch(/runMultiAgentMappingPipeline\(/)
   })
 
-  it('schema_error → single-shot fallback with EMIT_TABLE_MAPPINGS_TOOL forced; other reasons hard-fail with continue', () => {
-    expect(ENGINE_SRC).toMatch(/agentResult\.reason\s*===\s*'schema_error'/)
-    expect(ENGINE_SRC).toMatch(/agent_fallback:\s*true/)
-    expect(ENGINE_SRC).toMatch(/Agent aborted for[\s\S]{0,100}\$\{agentResult\.reason\}/)
+  it('extracted helper registers 4 tools + locked llmOptions (Opus 4.7 + adaptive thinking + max effort + agent_loop)', () => {
+    // Body patterns live in single-agent-mapping.ts now (commit 2 extraction).
+    expect(HELPER_SRC).toMatch(/tool:\s*QUERY_FIELD_DATA_TOOL,\s*handler:\s*makeQueryFieldDataHandler\(/)
+    expect(HELPER_SRC).toMatch(/tool:\s*COUNT_DISTINCT_PATTERNS_TOOL,\s*handler:\s*makeCountDistinctPatternsHandler\(/)
+    expect(HELPER_SRC).toMatch(/tool:\s*CROSS_FIELD_CORRELATION_TOOL,\s*handler:\s*makeCrossFieldCorrelationHandler\(/)
+    expect(HELPER_SRC).toMatch(/\{\s*tool:\s*EMIT_TABLE_MAPPINGS_TOOL\s*\}/)
+    expect(HELPER_SRC).toMatch(/model:\s*'claude-opus-4-7'/)
+    expect(HELPER_SRC).toMatch(/promptVersion:\s*'mapping-v2-agent'/)
+    expect(HELPER_SRC).toMatch(/thinking:\s*\{\s*type:\s*'adaptive'\s*\}/)
+    expect(HELPER_SRC).toMatch(/output_config:\s*\{\s*effort:\s*'max'\s*\}/)
+    expect(HELPER_SRC).toMatch(/agent_loop:\s*true/)
+    expect(HELPER_SRC).toMatch(/systemPrompt:\s*MAPPING_GENERATION_AGENT_SYSTEM_PROMPT/)
+  })
+
+  it('extracted helper preserves schema_error → single-shot fallback with EMIT_TABLE_MAPPINGS_TOOL forced + other-abort routing', () => {
+    expect(HELPER_SRC).toMatch(/agentResult\.reason\s*===\s*'schema_error'/)
+    expect(HELPER_SRC).toMatch(/agent_fallback:\s*true/)
+    expect(HELPER_SRC).toMatch(/'aborted_other'/)
   })
 
   it('legacy else branch preserves heritage args (phase2Enabled tool spread + cacheControl + error-then-continue)', () => {
