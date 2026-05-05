@@ -38,10 +38,13 @@ describe('multi-agent gate — two-level dispatch (BULK callsite)', () => {
     expect(ENGINE_SRC).toMatch(/runSingleAgentMappingLoop\(/)
   })
 
-  it('BULK callsite passes cacheControl: true to multi-agent pipeline (PR 13.1 cohort)', () => {
-    // The if(multiAgentEnabled) branch in mapping-engine.ts must pass
-    // cacheControl: true (BULK matches the existing single-agent posture).
-    expect(ENGINE_SRC).toMatch(/runMultiAgentMappingPipeline\(\{[\s\S]{0,400}cacheControl:\s*true/)
+  it('BULK callsite passes cacheControl: false to multi-agent pipeline (PR-CACHE-HOTFIX disable)', () => {
+    // PR 13.1 originally enabled cache on the BULK callsite. PR-CACHE-HOTFIX
+    // flipped it to false to unblock the Anthropic 4-cache_control-block
+    // limit (INF-5 will re-enable selectively). Pin updated to assert the
+    // flipped value so a future revert without the INF-5 selective work
+    // is caught here.
+    expect(ENGINE_SRC).toMatch(/runMultiAgentMappingPipeline\(\{[\s\S]{0,800}cacheControl:\s*false/)
   })
 
   it('multi_agent: true marker threaded into baseMetadata at BULK callsite', () => {

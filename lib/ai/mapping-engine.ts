@@ -1650,7 +1650,9 @@ ${otherSourcesList}
             businessContext,
             maxTokens: PER_BATCH_MAX_TOKENS,
             baseMetadata: { ...baseMetadata, multi_agent: true },
-            cacheControl: true,
+            // PR-CACHE-HOTFIX: disabled to unblock 4-block limit. See INF-5
+            // for selective re-enable on top 4 blocks.
+            cacheControl: false,
             unmappedTargetFields,
           })
           if (r.kind === 'pair_aborted') {
@@ -1670,7 +1672,9 @@ ${otherSourcesList}
             businessContext,
             maxTokens: PER_BATCH_MAX_TOKENS,
             baseMetadata,
-            cacheControl: true,
+            // PR-CACHE-HOTFIX: disabled to unblock 4-block limit. See INF-5
+            // for selective re-enable on top 4 blocks.
+            cacheControl: false,
           })
           if (r.kind === 'agent_threw') {
             console.error(`[Mapping] Agent loop failed for source table ${sourceCtx.table_name}:`, r.error)
@@ -1709,7 +1713,9 @@ ${otherSourcesList}
             // within Anthropic's 5-min ephemeral TTL — break-even at ≥2
             // tables per project. System prompt + tool definition are
             // both static across invocations.
-            cacheControl: true,
+            // PR-CACHE-HOTFIX: disabled to unblock 4-block limit. See INF-5
+            // for selective re-enable on top 4 blocks.
+            cacheControl: false,
           })
         } catch (err) {
           console.error(`[Mapping] Claude call failed for source table ${sourceCtx.table_name}:`, err)
