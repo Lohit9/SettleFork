@@ -9,7 +9,8 @@ import { Upload, CheckCircle2, AlertCircle, RefreshCw } from '@/components/icons
 import { Database, Loader2, AlertTriangle, XCircle } from 'lucide-react'
 import { testConnection, listRemoteTables, listMssqlSchemas, listTablesForConnection, getConnectionForDataset, disconnectDatabase, resyncTables } from '@/lib/actions/db-connector'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
-import { uploadCSV } from '@/lib/actions/csv'
+import { getCsvUploadSlot, processUploadedCsv } from '@/lib/actions/csv'
+import { uploadToSignedUrl } from '@/lib/utils/upload-helpers'
 import { createDataset, getTablesForDataset } from '@/lib/actions/datasets'
 import { parseDDLFile, confirmDDLSchema } from '@/lib/actions/ddl-upload'
 import type { ParsedTable } from '@/lib/parsers/ddl-parser'
@@ -22,8 +23,18 @@ import { RoleTooltip } from '@/components/app/RoleTooltip'
 type IngestMethod = 'csv' | 'ddl' | 'db' | null
 
 interface UploadState {
-  status: 'idle' | 'uploading' | 'success' | 'error'
+  status:
+    | 'idle'
+    | 'requesting-slot'
+    | 'uploading'
+    | 'processing'
+    | 'success'
+    | 'error'
   filename?: string
+  // bytes uploaded so far (only meaningful in 'uploading' phase)
+  uploadedBytes?: number
+  // total file size in bytes (only meaningful in 'uploading' phase)
+  totalBytes?: number
   rowCount?: number
   fieldCount?: number
   error?: string
@@ -574,16 +585,66 @@ export function IngestionCard({ type, title, projectId, initialDatasets, initial
     async (file: File) => {
       if (!selectedDatasetId || !selectedTableName) return
 
-      setUploadState({ status: 'uploading', filename: file.name })
+      // Phase 1 — request signed upload slot. Tiny round-trip (kilobytes
+      // in, kilobytes out) so it doesn't hit Vercel's 1 MB serverActions
+      // body limit even for very large files.
+      setUploadState({ status: 'requesting-slot', filename: file.name })
+      const slot = await getCsvUploadSlot({
+        projectId,
+        datasetId: selectedDatasetId,
+        role: type,
+        tableName: selectedTableName,
+        filename: file.name,
+      })
+      if (!slot.success) {
+        setUploadState({
+          status: 'error',
+          filename: file.name,
+          error: slot.error ?? 'Failed to start upload',
+        })
+        return
+      }
 
-      const formData = new FormData()
-      formData.append('file', file)
-      formData.append('projectId', projectId)
-      formData.append('role', type)
-      formData.append('datasetId', selectedDatasetId)
-      formData.append('tableName', selectedTableName)
+      // Phase 2 — direct PUT to Supabase Storage with XHR progress.
+      // Bypasses Vercel function bodies entirely.
+      setUploadState({
+        status: 'uploading',
+        filename: file.name,
+        uploadedBytes: 0,
+        totalBytes: file.size,
+      })
+      try {
+        await uploadToSignedUrl(slot.signedUrl, file, {
+          contentType: 'text/csv',
+          onProgress: (e) => {
+            setUploadState((prev) =>
+              prev.status === 'uploading'
+                ? { ...prev, uploadedBytes: e.loaded, totalBytes: e.total }
+                : prev,
+            )
+          },
+        })
+      } catch (err) {
+        setUploadState({
+          status: 'error',
+          filename: file.name,
+          error: err instanceof Error ? err.message : 'Upload to storage failed',
+        })
+        return
+      }
 
-      const result = await uploadCSV(formData)
+      // Phase 3 — kick off server-side processing. Another tiny round
+      // trip; the function reads the file from Storage and runs the
+      // existing pipeline (parse + schema infer + data_rows insert +
+      // field_profiles compute, all synchronous before this returns).
+      setUploadState({ status: 'processing', filename: file.name })
+      const result = await processUploadedCsv({
+        projectId,
+        datasetId: selectedDatasetId,
+        role: type,
+        tableName: selectedTableName,
+        storagePath: slot.storagePath,
+      })
 
       if (result.success && result.tableId) {
         try {
@@ -605,10 +666,14 @@ export function IngestionCard({ type, title, projectId, initialDatasets, initial
         })
         router.refresh()
       } else {
-        setUploadState({ status: 'error', error: result.error ?? 'Upload failed' })
+        setUploadState({
+          status: 'error',
+          filename: file.name,
+          error: result.error ?? 'Processing failed',
+        })
       }
     },
-    [projectId, type, selectedDatasetId, selectedTableName]
+    [projectId, type, selectedDatasetId, selectedTableName, router]
   )
 
   const handleFileSelected = (file: File) => {
@@ -1495,14 +1560,53 @@ export function IngestionCard({ type, title, projectId, initialDatasets, initial
                         : 'border-settle-slate-300 hover:border-settle-slate-400'
                     }`}
                   >
-                    {uploadState.status === 'uploading' && (
+                    {uploadState.status === 'requesting-slot' && (
                       <div className="flex flex-col items-center justify-center h-full py-8">
+                        <div className="flex items-center gap-2.5">
+                          <div className="w-4 h-4 border-2 border-primary/30 border-t-primary rounded-full animate-spin flex-shrink-0" />
+                          <span className="text-sm text-gray-700">Preparing upload for {uploadState.filename}...</span>
+                        </div>
+                      </div>
+                    )}
+
+                    {uploadState.status === 'uploading' && (
+                      <div className="flex flex-col items-center justify-center h-full py-8 w-full">
                         <div className="flex items-center gap-2.5">
                           <div className="w-4 h-4 border-2 border-primary/30 border-t-primary rounded-full animate-spin flex-shrink-0" />
                           <span className="text-sm text-gray-700">Uploading {uploadState.filename}...</span>
                         </div>
+                        {(() => {
+                          const loaded = uploadState.uploadedBytes ?? 0
+                          const total = uploadState.totalBytes ?? 0
+                          const pct = total > 0 ? Math.min(100, Math.round((loaded / total) * 100)) : 0
+                          const loadedMB = (loaded / (1024 * 1024)).toFixed(1)
+                          const totalMB = (total / (1024 * 1024)).toFixed(1)
+                          return (
+                            <div className="ml-[26px] mt-1.5 w-full max-w-xs">
+                              <div className="h-1.5 w-full bg-gray-200 rounded-full overflow-hidden">
+                                <div
+                                  className="h-full bg-primary transition-[width] duration-150 ease-out"
+                                  style={{ width: `${pct}%` }}
+                                  data-testid="csv-upload-progress-bar"
+                                />
+                              </div>
+                              <p className="text-xs text-gray-400 mt-1">
+                                {loadedMB} / {totalMB} MB ({pct}%)
+                              </p>
+                            </div>
+                          )
+                        })()}
+                      </div>
+                    )}
+
+                    {uploadState.status === 'processing' && (
+                      <div className="flex flex-col items-center justify-center h-full py-8">
+                        <div className="flex items-center gap-2.5">
+                          <div className="w-4 h-4 border-2 border-primary/30 border-t-primary rounded-full animate-spin flex-shrink-0" />
+                          <span className="text-sm text-gray-700">Processing {uploadState.filename}...</span>
+                        </div>
                         <p className="text-xs text-gray-400 mt-1.5 ml-[26px]">
-                          Inferring schema · this may take a moment
+                          Inferring schema and running checks · this may take a moment
                         </p>
                       </div>
                     )}

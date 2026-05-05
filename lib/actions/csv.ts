@@ -3,7 +3,6 @@
 import Papa from 'papaparse'
 import { revalidatePath } from 'next/cache'
 import { createClient } from '@/lib/supabase/server'
-import { validateCSVUpload } from '@/lib/upload/validate'
 import { computeFriendlyName } from '@/lib/db/sql-rewriter'
 import { computeValueDistribution, computeMinMax, countFormatIssues } from '@/lib/utils/profiling'
 import { logActivity } from '@/lib/actions/activity-log'
@@ -16,54 +15,214 @@ export interface UploadCSVResult {
   error?: string
 }
 
-export async function uploadCSV(formData: FormData): Promise<UploadCSVResult> {
+// ─── Direct-to-Supabase-Storage upload pipeline ──────────────────────────────
+//
+// Background — production bug we're working around:
+//   Vercel's serverless function body limit is 4.5 MB and Next.js's default
+//   `serverActions.bodySizeLimit` is 1 MB. The previous `uploadCSV(FormData)`
+//   server action received the entire file as multipart body, so any CSV
+//   over ~1 MB failed at the platform layer before reaching application
+//   validation (the 100K-row check, etc.). The 10 MB / 100K-row caps the UI
+//   advertised were unenforceable on production.
+//
+// Architecture — direct-to-Storage:
+//   1. Browser calls `getCsvUploadSlot` (a tiny server action — kilobytes
+//      in, kilobytes out). Server checks permissions and issues a signed
+//      PUT URL scoped to the user's `{user.id}/...` path prefix in the
+//      `project-files` bucket. RLS (migration 002:406-415) gates by the
+//      first path segment, so the signed URL can only be used to write
+//      under the authenticated user's tree.
+//   2. Browser PUTs the file directly to Supabase Storage via XHR (see
+//      lib/utils/upload-helpers.ts — XHR not fetch because fetch lacks
+//      upload progress events). Any size; bypasses Vercel entirely.
+//   3. Browser calls `processUploadedCsv` (another tiny server action).
+//      Server downloads the file from Storage, runs the EXISTING pipeline
+//      (parse → infer schema → insert tables/fields/data_rows → compute
+//      field_profiles synchronously → fire-and-forget quality + enrichment
+//      + FK inference), and moves the file from `pending/` to its final
+//      path.
+//
+// Synchronous contract preserved (PR 3.3 / PR 3.4b coupling):
+//   The order data_rows.insert → compute field_profiles → field_profiles
+//   .insert → return success is unchanged. PR 3.3's data-scanning RPCs
+//   read data_rows; PR 3.4b's mapping engine reads field_profiles
+//   .sample_values. Both expect those rows to exist as soon as the upload
+//   action returns success. We do NOT split profile compute into a
+//   background job.
+//
+// data_rows write shape preserved (PR 3.3 coupling):
+//   The `{ table_id, row_number, row_data }` insert shape is independent
+//   of where the file came from. Whether Papa.parse runs on FormData
+//   multipart content or on a Storage download, the parsed row object
+//   shape is identical.
+
+const PENDING_PREFIX = 'pending'
+
+export interface CsvUploadSlot {
+  success: true
+  signedUrl: string
+  storagePath: string
+}
+
+export interface CsvUploadSlotError {
+  success: false
+  error: string
+}
+
+export async function getCsvUploadSlot(input: {
+  projectId: string
+  datasetId: string
+  role: 'source' | 'target'
+  tableName: string
+  filename: string
+}): Promise<CsvUploadSlot | CsvUploadSlotError> {
+  const { projectId, datasetId, role, tableName, filename } = input
+
+  if (!projectId || !datasetId || !role || !tableName || !filename) {
+    return { success: false, error: 'Missing required fields' }
+  }
+
+  // Filename validation: enforce .csv extension at the slot-issuance
+  // boundary so we never hand out signed URLs for non-CSV uploads.
+  // Path-traversal characters are rejected to defend against signed-URL
+  // misuse — even though the RLS policy already gates by user.id prefix,
+  // a `..` in the filename could let a user write outside their tree
+  // within their own project's namespace.
+  if (!filename.toLowerCase().endsWith('.csv')) {
+    return { success: false, error: 'Filename must end with .csv' }
+  }
+  if (filename.includes('/') || filename.includes('\\') || filename.includes('..')) {
+    return { success: false, error: 'Invalid filename: path traversal not allowed' }
+  }
+
+  const supabase = await createClient()
+  const {
+    data: { user },
+  } = await supabase.auth.getUser()
+  if (!user) return { success: false, error: 'Not authenticated' }
+
+  const { checkProjectPermission } = await import('@/lib/actions/role-resolution')
+  if (!(await checkProjectPermission(projectId, 'editor'))) {
+    return { success: false, error: 'Insufficient permissions' }
+  }
+
+  // Verify dataset ownership BEFORE issuing the signed URL — same
+  // defense-in-depth as the previous uploadCSV. RLS would also catch a
+  // mismatched dataset on the downstream insert, but failing here gives
+  // the user a clean error instead of a half-completed upload.
+  const { data: ownedDataset } = await supabase
+    .from('datasets')
+    .select('id')
+    .eq('id', datasetId)
+    .eq('project_id', projectId)
+    .maybeSingle()
+  if (!ownedDataset) {
+    return { success: false, error: 'Dataset not found or access denied' }
+  }
+
+  // Path convention:
+  //   {user.id}/{projectId}/{role}/pending/{timestamp}-{datasetId}-{filename}
+  //
+  // The `pending/` subprefix marks in-flight uploads; processUploadedCsv
+  // moves the file out of pending/ on success. A daily cron (separate PR)
+  // sweeps pending/ files older than 24h that no DB record references.
+  // Timestamp + datasetId in the leaf prevent collisions between repeated
+  // upload attempts of the same filename.
+  const safeName = filename.replace(/[^a-zA-Z0-9._-]/g, '_')
+  const storagePath = `${user.id}/${projectId}/${role}/${PENDING_PREFIX}/${Date.now()}-${datasetId}-${safeName}`
+
+  const { data, error } = await supabase.storage
+    .from('project-files')
+    .createSignedUploadUrl(storagePath, { upsert: true })
+
+  if (error || !data) {
+    return {
+      success: false,
+      error: error?.message ?? 'Failed to issue signed upload URL',
+    }
+  }
+
+  return { success: true, signedUrl: data.signedUrl, storagePath }
+}
+
+export async function processUploadedCsv(input: {
+  projectId: string
+  datasetId: string
+  role: 'source' | 'target'
+  tableName: string
+  storagePath: string
+}): Promise<UploadCSVResult> {
+  const { projectId, datasetId, role, tableName, storagePath } = input
+
   try {
+    if (!projectId || !datasetId || !role || !tableName || !storagePath) {
+      return { success: false, error: 'Missing required fields' }
+    }
+
     const supabase = await createClient()
     const {
       data: { user },
     } = await supabase.auth.getUser()
     if (!user) return { success: false, error: 'Not authenticated' }
 
-    const file = formData.get('file') as File
-    const projectId = formData.get('projectId') as string
-    const role = formData.get('role') as 'source' | 'target'
-    const datasetId = formData.get('datasetId') as string
-
-    if (projectId) {
-      const { checkProjectPermission } = await import('@/lib/actions/role-resolution')
-      if (!(await checkProjectPermission(projectId, 'editor'))) {
-        return { success: false, error: 'Insufficient permissions' }
-      }
-    }
-    const tableName = formData.get('tableName') as string
-
-    if (!file || !projectId || !role || !datasetId || !tableName) {
-      return { success: false, error: 'Missing required fields' }
+    const { checkProjectPermission } = await import('@/lib/actions/role-resolution')
+    if (!(await checkProjectPermission(projectId, 'editor'))) {
+      return { success: false, error: 'Insufficient permissions' }
     }
 
-    // ── Step 1: Validate file ─────────────────────────────────────────────────
-    const validation = validateCSVUpload(file)
-    if (!validation.valid) {
-      return { success: false, error: validation.reason }
+    // Defense-in-depth: confirm the storage path is under the user's tree
+    // before downloading. RLS would also reject, but a malformed input
+    // should fail fast with a clear error.
+    if (!storagePath.startsWith(`${user.id}/`)) {
+      return { success: false, error: 'Storage path is not under the authenticated user prefix' }
     }
 
-    // ── Step 1b: Verify dataset ownership BEFORE any parsing work ─────────────
-    // This prevents CPU waste from parsing files that will always fail RLS
+    // ── Step 1: Verify dataset ownership ─────────────────────────────────────
     const { data: ownedDataset } = await supabase
       .from('datasets')
       .select('id, name')
       .eq('id', datasetId)
       .eq('project_id', projectId)
       .maybeSingle()
-
     if (!ownedDataset) {
       return { success: false, error: 'Dataset not found or access denied' }
     }
-
     const friendlyName = computeFriendlyName(ownedDataset.name, tableName)
 
-    // ── Step 2: Parse CSV ─────────────────────────────────────────────────────
-    const text = await file.text()
+    // ── Step 2: Download file from Storage ───────────────────────────────────
+    // The browser already PUT the file via the signed URL. Read it back as
+    // text so we can run Papa.parse on the contents. Download size matches
+    // upload size; the only platform constraint we hit here is Vercel's
+    // function memory (default 1024 MB) which is far above realistic CSV
+    // sizes (a 100K-row CSV is ~50 MB peak per the prior investigation).
+    const { data: downloaded, error: downloadError } = await supabase.storage
+      .from('project-files')
+      .download(storagePath)
+    if (downloadError || !downloaded) {
+      return {
+        success: false,
+        error: 'Failed to read uploaded file from storage: ' + (downloadError?.message ?? 'unknown error'),
+      }
+    }
+
+    // Reconstruct a File-shaped wrapper for the rest of the pipeline. We
+    // need both the text (for parsing) and a File (for the storage move
+    // below + the activity-log filename). We pull filename out of the
+    // storage path tail (after the timestamp + datasetId prefix).
+    const text = await downloaded.text()
+    const pathTail = storagePath.split('/').pop() ?? `${tableName}.csv`
+    // pathTail format: `{timestamp}-{datasetId}-{safeName}`. Strip the
+    // timestamp + datasetId prefix to recover the original filename for
+    // logging. Two leading dashes if both timestamp and datasetId have no
+    // dashes themselves (timestamp is digits; datasetId is a uuid which
+    // does have dashes — so split on the FIRST two dashes only).
+    const dashSplit = pathTail.split('-')
+    const filename =
+      dashSplit.length > 6
+        ? dashSplit.slice(6).join('-') // skip [ts, uuidPart×5]
+        : pathTail
+
+    // ── Step 3: Parse CSV ─────────────────────────────────────────────────────
     const parseResult = Papa.parse<Record<string, string>>(text, {
       header: true,
       skipEmptyLines: true,
@@ -82,7 +241,7 @@ export async function uploadCSV(formData: FormData): Promise<UploadCSVResult> {
       return { success: false, error: 'CSV exceeds 100,000 row limit' }
     }
 
-    // ── Step 3: Sanitize + validate headers ───────────────────────────────────
+    // ── Step 4: Sanitize + validate headers ───────────────────────────────────
     const rawHeaders = parseResult.meta.fields || Object.keys(rows[0])
     if (rawHeaders.length < 2) {
       return { success: false, error: 'CSV must have at least 2 columns' }
@@ -90,7 +249,7 @@ export async function uploadCSV(formData: FormData): Promise<UploadCSVResult> {
 
     const headers = deduplicateHeaders(rawHeaders.map(sanitizeHeader))
 
-    // ── Step 4: Sanitize all cell values ─────────────────────────────────────
+    // ── Step 5: Sanitize all cell values ─────────────────────────────────────
     const sanitizedRows = rows.map((row: Record<string, string>) => {
       const out: Record<string, string> = {}
       rawHeaders.forEach((raw: string, i: number) => {
@@ -101,10 +260,11 @@ export async function uploadCSV(formData: FormData): Promise<UploadCSVResult> {
       return out
     })
 
-    // ── Step 5: Infer schema ──────────────────────────────────────────────────
-    // Only value-observable facts are derived here: data_type, inferred_type,
-    // and is_nullable (from observed blanks). Structural metadata (PK/FK) is
-    // deliberately not inferred from CSV — see the comment inside the map.
+    // ── Step 6: Infer schema ──────────────────────────────────────────────────
+    // Same value-observable inference as the legacy uploadCSV. Structural
+    // metadata (PK/FK) is deliberately deferred to higher-priority schema_source
+    // layers (ddl_parsed, doc_enriched, cross_table_inferred, manual) — see
+    // lib/utils/schema-priority.ts for the cascade.
     const sampleRows = sanitizedRows.slice(0, 100)
     const inferredFields = headers.map((header, index) => {
       const values = sampleRows
@@ -114,43 +274,25 @@ export async function uploadCSV(formData: FormData): Promise<UploadCSVResult> {
       const { dataType, inferredType } = inferColumnType(header, values)
       const isNullable = values.length < sampleRows.length
 
-      // CSV files carry no structural metadata — a column's header and value
-      // distribution aren't evidence of PK-ness or FK-ness. Column-name
-      // heuristics produced wrong answers on legacy schemas (e.g. NMLS_ID /
-      // TELLER_ID mis-flagged as PK while BRANCH_NO / CIF_NO / OFFICER_CD
-      // were missed). PK/FK determination is deferred to the higher-priority
-      // layers in the schema_source cascade (see lib/utils/schema-priority.ts):
-      //   - ddl_parsed           (uploaded DDL or DB connector introspection)
-      //   - doc_enriched         (AI reading schema documentation)
-      //   - cross_table_inferred (value-overlap matching once real PKs exist)
-      //   - manual               (user edit in Schema Overview)
-      // Each of those layers operates on actual evidence; CSV upload should
-      // not plant false positives for them to overwrite.
-      const isPrimaryKey = false
-      const isForeignKey = false
-      const fkReference = null
-
       return {
         name: header,
         data_type: dataType,
         inferred_type: inferredType,
         is_nullable: isNullable,
-        is_primary_key: isPrimaryKey,
-        is_foreign_key: isForeignKey,
-        fk_reference: fkReference,
+        is_primary_key: false,
+        is_foreign_key: false,
+        fk_reference: null,
         ordinal_position: index + 1,
       }
     })
 
-    // ── Step 6: Upsert table record (delete old + recreate) ───────────────────
+    // ── Step 7: Upsert table record (delete old + recreate) ───────────────────
     const { data: existingTable } = await supabase
       .from('tables')
       .select('id')
       .eq('dataset_id', datasetId)
       .eq('name', tableName)
       .maybeSingle()
-
-    let tableId: string
 
     if (existingTable) {
       // Cascade delete cleans up fields, data_rows, field_profiles
@@ -166,9 +308,9 @@ export async function uploadCSV(formData: FormData): Promise<UploadCSVResult> {
     if (tableError || !newTable) {
       return { success: false, error: tableError?.message || 'Failed to create table record' }
     }
-    tableId = newTable.id
+    const tableId: string = newTable.id
 
-    // ── Step 7: Insert fields ─────────────────────────────────────────────────
+    // ── Step 8: Insert fields ─────────────────────────────────────────────────
     const { data: createdFields, error: fieldsError } = await supabase
       .from('fields')
       .insert(inferredFields.map((f) => ({ ...f, table_id: tableId })))
@@ -179,7 +321,12 @@ export async function uploadCSV(formData: FormData): Promise<UploadCSVResult> {
       return { success: false, error: 'Failed to create field records: ' + fieldsError?.message }
     }
 
-    // ── Step 8: Insert data_rows in batches of 1,000 ─────────────────────────
+    // ── Step 9: Insert data_rows in batches of 1,000 ─────────────────────────
+    // Insert shape `{ table_id, row_number, row_data }` is preserved
+    // byte-identically from the legacy uploadCSV. PR 3.3's data-scanning
+    // RPCs (agent_query_field_data, agent_count_distinct_patterns,
+    // agent_cross_field_correlation) read data_rows via this shape; the
+    // refactor must NOT change it.
     const BATCH_SIZE = 1000
     for (let i = 0; i < sanitizedRows.length; i += BATCH_SIZE) {
       const batch = sanitizedRows.slice(i, i + BATCH_SIZE).map((row: Record<string, string>, idx: number) => ({
@@ -194,19 +341,19 @@ export async function uploadCSV(formData: FormData): Promise<UploadCSVResult> {
       }
     }
 
-    // ── Step 9: Compute and insert field_profiles ─────────────────────────────
+    // ── Step 10: Compute and insert field_profiles SYNCHRONOUSLY ─────────────
+    // CRITICAL: this MUST complete before the action returns success.
+    // PR 3.4b's formatSchemaForPrompt reads field.sample_values from this
+    // table; mapping-engine invocations downstream of upload assume the
+    // profile rows already exist. Splitting this into background work
+    // would break that contract.
     const profiles = createdFields.map((field) => {
       const fieldValues = sanitizedRows.map((r: Record<string, string>) => r[field.name] ?? '')
       const nonNull = fieldValues.filter((v: string) => v !== '' && v !== null && v !== undefined)
       const formatIssues = countFormatIssues(nonNull, field.data_type, field.inferred_type ?? null, field.name)
 
-      // Frequency distribution — top 25 by count (most useful for low-cardinality fields)
       const valueDistribution = computeValueDistribution(nonNull)
-
-      // Sample values: most frequent distinct values (more representative than insertion order)
       const sampleValues = valueDistribution.slice(0, 10).map((d) => d.value)
-
-      // Min/max: numeric comparison for currency/integer/decimal, lexicographic otherwise
       const { min: minValue, max: maxValue } = computeMinMax(nonNull, field.inferred_type ?? null)
 
       return {
@@ -229,21 +376,26 @@ export async function uploadCSV(formData: FormData): Promise<UploadCSVResult> {
 
     await supabase.from('field_profiles').insert(profiles)
 
-    // ── Step 10: Upload raw CSV to Supabase Storage ───────────────────────────
-    const sanitizedFilename = validation.sanitizedFilename ?? `${tableName}.csv`
-    const storagePath = `${user.id}/${projectId}/${role}/${sanitizedFilename}`
-
-    const { error: storageError } = await supabase.storage
+    // ── Step 11: Move file out of pending/ to its final path ─────────────────
+    // The signed-URL path is `{user}/{project}/{role}/pending/{ts}-{ds}-{name}`.
+    // After successful processing, move it to `{user}/{project}/{role}/{name}`
+    // so the file lives at the same shape the legacy uploadCSV used (and
+    // tables.csv_storage_path records it). Move failure is non-fatal —
+    // the file is still accessible at the pending/ path; the daily cron
+    // sweep would otherwise treat it as orphaned, but Step 12 records
+    // the path against the table so cron won't delete it.
+    const finalPath = `${user.id}/${projectId}/${role}/${filename}`
+    const { error: moveError } = await supabase.storage
       .from('project-files')
-      .upload(storagePath, file, { upsert: true, contentType: 'text/csv' })
-
-    if (!storageError) {
-      await supabase.from('tables').update({ csv_storage_path: storagePath }).eq('id', tableId)
+      .move(storagePath, finalPath)
+    const persistedPath = moveError ? storagePath : finalPath
+    if (moveError) {
+      console.warn('[csv] storage move from pending/ failed (non-fatal):', moveError.message)
     }
-    // Storage failure is non-fatal — DB records are already created
+    await supabase.from('tables').update({ csv_storage_path: persistedPath }).eq('id', tableId)
 
-    // ── Step 11: Auto-run source data quality checks ──────────────────────────
-    // Fire-and-forget: don't fail the upload if detection has an error
+    // ── Step 12: Auto-run source data quality checks ──────────────────────────
+    // Fire-and-forget pattern preserved from legacy uploadCSV.
     try {
       const { runSourceDataChecks } = await import('@/lib/quality/detection-engine')
       await runSourceDataChecks(projectId, tableId, 'auto')
@@ -251,8 +403,7 @@ export async function uploadCSV(formData: FormData): Promise<UploadCSVResult> {
       console.warn('[csv] Auto detection failed (non-fatal):', detectionErr)
     }
 
-    // ── Step 12: AI schema enrichment (if schema docs exist for this dataset) ─
-    // Fire-and-forget: never fail the upload due to enrichment errors
+    // ── Step 13: AI schema enrichment (if schema docs exist for this dataset) ─
     try {
       const { count: docCount } = await supabase
         .from('schema_documents')
@@ -271,17 +422,7 @@ export async function uploadCSV(formData: FormData): Promise<UploadCSVResult> {
       console.warn('[csv] Schema enrichment failed (non-fatal):', enrichErr)
     }
 
-    // ── Step 13: Cross-table FK inference ────────────────────────────────────
-    // Each CSV upload is a separate server-action call, so there is no single
-    // "all CSVs done" hook. Instead, we run inference after every upload and
-    // rely on its idempotent write contract (Step 2 filter in fk-inference.ts):
-    //   - is_foreign_key=false and schema_source='inferred' only, so detections
-    //     from earlier uploads won't be reconsidered and DDL/doc/manual labels
-    //     are never overwritten.
-    //   - First upload is a no-op (one table, nothing to cross-reference).
-    //   - By the final upload the registry has every sibling PK available.
-    // Placed AFTER enrichment so any PKs that enrichment just elevated
-    // (schema_source='doc_enriched') participate in the registry as PK targets.
+    // ── Step 14: Cross-table FK inference ────────────────────────────────────
     try {
       const { inferCrossTableFKs } = await import('@/lib/quality/fk-inference')
       const result = await inferCrossTableFKs(projectId, datasetId)
@@ -301,10 +442,9 @@ export async function uploadCSV(formData: FormData): Promise<UploadCSVResult> {
       actionType,
       `${role === 'source' ? 'Source' : 'Target'} data uploaded: ${tableName} (${sanitizedRows.length} rows, ${inferredFields.length} fields)`,
       'data',
-      { file_name: file.name, table_name: tableName, row_count: sanitizedRows.length, field_count: inferredFields.length }
+      { file_name: filename, table_name: tableName, row_count: sanitizedRows.length, field_count: inferredFields.length },
     )
 
-    // Invalidate the project subtree cache so navigating back to any tab shows fresh data
     revalidatePath(`/app/projects/${projectId}`, 'layout')
 
     return {
@@ -314,7 +454,7 @@ export async function uploadCSV(formData: FormData): Promise<UploadCSVResult> {
       rowCount: sanitizedRows.length,
     }
   } catch (err) {
-    console.error('[uploadCSV]', err)
+    console.error('[processUploadedCsv]', err)
     return {
       success: false,
       error: err instanceof Error ? err.message : 'An unexpected error occurred',
