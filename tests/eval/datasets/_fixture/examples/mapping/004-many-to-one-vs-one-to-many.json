@@ -1,0 +1,20 @@
+{
+  "id": "_fixture/mapping/004-many-to-one-vs-one-to-many",
+  "task": "mapping",
+  "input": {
+    "source_table": "fixture_source_table",
+    "target_table": "fixture_target_table"
+  },
+  "gold": {
+    "mappings": [
+      { "source_field": "id", "target_field": "id", "combination_type": "single" },
+      { "source_field": "name", "target_field": "label", "combination_type": "single" }
+    ]
+  },
+  "metadata": {
+    "author": "hand-authored (PR 3.4cd commit 4)",
+    "difficulty": "medium",
+    "notes": "PR 3.4cd Cardinality specialist exercise. The constrained _fixture schema (single non-key source field 'name') doesn't support genuine many_to_one (which requires ≥ 2 contributing source fields). Within this constraint, the fixture uses business_context to describe a one_to_many split scenario: source 'name' contains a comma-separated full identifier whose first segment maps to target 'label'. The Cardinality specialist should classify this as a one-to-one mapping with a transformation_pattern of 'split_first_segment_on_comma' — NOT one_to_many (which would imply multiple targets). Phase 3.8 cohort eval will replace this with a multi-source-field fixture for genuine many_to_one testing. Score interpretation: 1.0 if the agent emits the mapping with appropriate transformation reasoning; partial credit if the cardinality is correct but transformation_pattern is missing.",
+    "business_context": "The source 'name' field on fixture_source_table stores comma-separated values in the format 'full_identifier,internal_code,version_tag' (e.g., 'customer-alpha-123,INT-001,v1'). The target 'label' field on fixture_target_table expects ONLY the first segment (the full_identifier portion). A transformation is required: split the source 'name' value on the first comma and take the leading segment. This is a one-to-one mapping with a split-and-take-first transformation pattern, NOT a many_to_one (no other source fields contribute) and NOT a one_to_many (only ONE target field receives a derived value)."
+  }
+}

@@ -72,6 +72,16 @@ import { runAIAugmentedChecks } from '@/lib/actions/ai-quality-detection'
 import { extractMigrationIntelligence } from '@/lib/actions/migration-intelligence'
 import { generateFixSuggestions } from '@/lib/quality/fix-engine'
 import { resolveDefaultModel } from '@/lib/ai/llm-client'
+// PR 3.4cd commit 4 — multi-agent scorers + telemetry reader.
+import {
+  scoreMultiAgentVote,
+  pickDominantVoteOutcome,
+} from '@/lib/eval/scorers/multi-agent-vote'
+import { scoreCriticOutput } from '@/lib/eval/scorers/critic-output'
+import type {
+  MultiAgentVoteSummary,
+  Critique,
+} from '@/lib/ai/multi-agent-types'
 import { signSyntheticJwt } from '@/lib/eval/synthetic-jwt'
 import type {
   EvalExample,
@@ -533,8 +543,43 @@ async function runOneMappingExample(args: {
     const proposed = await readProposedMappings({ projectId, ctx })
     const gold = translateGoldMappings({ example: args.example, ctx })
     const scored = scoreMappingFieldPair(proposed, gold)
+    let finalScore = scored.score
 
-    return { score: scored.score, costUsd, errored: false }
+    // PR 3.4cd commit 4 — multi-agent scorer dispatch. When fixture
+    // metadata names an expected_vote or expected_critique_category,
+    // ALSO run the multi-agent scorer on the post-call telemetry and
+    // take the MIN of the field-pair F1 and the multi-agent score.
+    // Min semantics: a fixture is only "passing" if BOTH the structural
+    // mapping AND the multi-agent behavior align with expectations.
+    if (
+      args.example.metadata.expected_vote !== undefined ||
+      args.example.metadata.expected_critique_category !== undefined
+    ) {
+      const telemetry = await readMultiAgentTelemetryFromLlmCalls({
+        projectId,
+        sinceMs: callsBefore - 5_000,
+      })
+      const subScores: number[] = [scored.score]
+      if (args.example.metadata.expected_vote !== undefined) {
+        subScores.push(
+          scoreMultiAgentVote(
+            args.example.metadata.expected_vote,
+            telemetry.generator_summary,
+          ),
+        )
+      }
+      if (args.example.metadata.expected_critique_category !== undefined) {
+        subScores.push(
+          scoreCriticOutput(
+            args.example.metadata.expected_critique_category,
+            { high_confidence: telemetry.critiques, medium_confidence: [], low_confidence: [], summary: telemetry.critic_summary },
+          ),
+        )
+      }
+      finalScore = Math.min(...subScores)
+    }
+
+    return { score: finalScore, costUsd, errored: false }
   } catch (err) {
     return {
       score: 0,
@@ -1273,6 +1318,75 @@ function translateGoldMappings(args: {
 }
 
 /** Sum cost_usd of llm_calls rows for this project since `sinceMs`. */
+/**
+ * PR 3.4cd commit 4 — read multi-agent telemetry from `llm_calls.metadata`
+ * for scoring. Returns vote summaries (Generator + Critic) plus the
+ * critique payloads parsed from response_text on Critic rows.
+ *
+ * The orchestrator's `applyVoteOutcomeMetadata` writes
+ * `vote_outcome` to each per-vote llm_calls row asynchronously
+ * (best-effort). This reader:
+ *   - Counts vote_outcome occurrences per vote_role to derive summaries.
+ *   - Parses response_text on critic rows (which is JSON.stringify of
+ *     the EMIT_CRITIQUE_TOOL toolUse.input — `{ critiques: [...] }`)
+ *     to flatten all critiques across the 3 votes.
+ *   - Returns empty summaries / critiques when telemetry is missing
+ *     (e.g., the run was single-agent or the writeLogAsync didn't
+ *     commit before this read). Scorers handle the empty case as
+ *     "no observed outcome".
+ */
+async function readMultiAgentTelemetryFromLlmCalls(args: {
+  projectId: string
+  sinceMs: number
+}): Promise<{
+  generator_summary: MultiAgentVoteSummary
+  critic_summary: MultiAgentVoteSummary
+  critiques: Critique[]
+}> {
+  const { data, error } = await supabaseAdmin
+    .from('llm_calls')
+    .select('metadata, response_text')
+    .eq('project_id', args.projectId)
+    .gte('created_at', new Date(args.sinceMs).toISOString())
+  if (error || !data) {
+    return {
+      generator_summary: { unanimous: 0, majority: 0, controversial: 0 },
+      critic_summary: { unanimous: 0, majority: 0, controversial: 0 },
+      critiques: [],
+    }
+  }
+
+  const generator_summary: MultiAgentVoteSummary = { unanimous: 0, majority: 0, controversial: 0 }
+  const critic_summary: MultiAgentVoteSummary = { unanimous: 0, majority: 0, controversial: 0 }
+  const critiques: Critique[] = []
+
+  for (const row of data as Array<{ metadata?: Record<string, unknown> | null; response_text?: string | null }>) {
+    const meta = (row.metadata ?? {}) as Record<string, unknown>
+    const role = meta.vote_role as 'generator' | 'critic' | undefined
+    const outcome = meta.vote_outcome as 'unanimous' | 'majority' | 'controversial' | undefined
+    if (!role) continue
+    const summary = role === 'generator' ? generator_summary : critic_summary
+    if (outcome === 'unanimous') summary.unanimous++
+    else if (outcome === 'majority') summary.majority++
+    else if (outcome === 'controversial') summary.controversial++
+
+    if (role === 'critic' && row.response_text) {
+      try {
+        const parsed = JSON.parse(row.response_text) as { critiques?: Critique[] }
+        if (Array.isArray(parsed.critiques)) {
+          critiques.push(...parsed.critiques)
+        }
+      } catch {
+        // Non-fatal: best-effort parse for telemetry only.
+      }
+    }
+  }
+  // Acknowledge the import — used by scoreMultiAgentVote consumers
+  // who derive a single dominant outcome from the summary.
+  void pickDominantVoteOutcome
+  return { generator_summary, critic_summary, critiques }
+}
+
 async function sumLlmCallsCost(args: { projectId: string; sinceMs: number }): Promise<number> {
   const { data, error } = await supabaseAdmin
     .from('llm_calls')

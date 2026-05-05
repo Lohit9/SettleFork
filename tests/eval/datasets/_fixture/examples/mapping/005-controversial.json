@@ -1,0 +1,20 @@
+{
+  "id": "_fixture/mapping/005-controversial",
+  "task": "mapping",
+  "input": {
+    "source_table": "fixture_source_table",
+    "target_table": "fixture_target_table"
+  },
+  "gold": {
+    "mappings": [
+      { "source_field": "id", "target_field": "id", "combination_type": "single" }
+    ]
+  },
+  "metadata": {
+    "author": "hand-authored (PR 3.4cd commit 4)",
+    "difficulty": "hard",
+    "notes": "PR 3.4cd voting validation. Hand-authored ambiguity per Phase A §G2.005 + OQ6 (NOT model-generated to avoid the synthetic-gold-labels trap). The business_context creates GENUINE uncertainty about whether source 'name' should map to target 'label' — the source field has been used inconsistently in the legacy system, sometimes containing the canonical label and sometimes containing internal-only codes. The Generator's 3-vote should produce a controversial outcome (1/1/1 disagreement on whether to emit the mapping, with what tag, or whether to skip it as 'uncertain'). The id→id mapping is unambiguous and should be unanimous. Score interpretation: scoreMultiAgentVote returns 1.0 if vote_summary.controversial > 0 (the pipeline captured the ambiguity); 0.5 if majority > 0 (right disagreement-shape, weaker magnitude); 0.0 if all-unanimous (pipeline missed the ambiguity).",
+    "business_context": "Important context for the source 'name' field: this field has a CONTROVERSIAL history in the source system. The legacy team used it inconsistently — in roughly 30% of records it contains the canonical customer-facing label that should map to target 'label'. In another 30% it contains an internal stock-keeping code (like 'SKU-1234') that should NOT be exposed externally and should remain unmapped. In the remaining 40% it contains free-text notes that vary in usefulness. There is no reliable way to distinguish these uses without inspecting individual records. Equally-defensible interpretations exist: (a) map name→label as a best-effort one-to-one with note that 30% will be wrong, (b) skip the mapping as 'uncertain' and surface for human review, (c) emit name→label only if data scanning shows the active records are mostly canonical labels. There is no single correct answer.",
+    "expected_vote": "controversial"
+  }
+}

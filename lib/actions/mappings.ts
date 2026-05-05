@@ -5,18 +5,12 @@ import { createClient } from '@/lib/supabase/server'
 import { supabaseAdmin } from '@/lib/supabase/admin'
 import { requireProjectPermission } from '@/lib/actions/role-resolution'
 import { callLLM, type LLMFeature } from '@/lib/ai/llm-client'
-import { runAgentLoop, type AgentLoopResult } from '@/lib/ai/agent-loop'
-import {
-  makeQueryFieldDataHandler,
-  makeCountDistinctPatternsHandler,
-  makeCrossFieldCorrelationHandler,
-} from '@/lib/ai/agent-tools'
+// PR 3.4cd — single-agent + multi-agent pipeline helpers.
+import { runSingleAgentMappingLoop } from '@/lib/ai/single-agent-mapping'
+import { runMultiAgentMappingPipeline } from '@/lib/ai/multi-agent-orchestrator'
 import {
   EMIT_TABLE_MAPPINGS_TOOL,
   EMIT_FIELD_MAPPINGS_TOOL,
-  QUERY_FIELD_DATA_TOOL,
-  COUNT_DISTINCT_PATTERNS_TOOL,
-  CROSS_FIELD_CORRELATION_TOOL,
 } from '@/lib/ai/tool-schemas'
 import { checkAIRateLimit } from '@/lib/ai/rate-limit'
 import {
@@ -52,15 +46,12 @@ import type {
 } from '@/lib/types/mapping-redesign'
 import {
   MAPPING_GENERATION_SYSTEM_PROMPT,
-  MAPPING_GENERATION_AGENT_SYSTEM_PROMPT,
   bareTableName,
-  buildAgentUserMessage,
   buildMappingUserMessage,
   parseClaudeJSON,
   persistClaudeFieldMappingsForTM,
   readBusinessContext,
   runMappingGeneration,
-  synthesizeToolUseResult,
   type ClaudeFieldMapping,
   type ClaudeResponse,
 } from '@/lib/ai/mapping-engine'
@@ -195,6 +186,8 @@ export async function runMappingGenerationForPair(args: {
     // heritage flag-OFF byte-identical behavior. Flag-ON: aiCtx uses
     // per-role sample bumps + the gate routes through runAgentLoop.
     const phase3Enabled = process.env.AI_PHASE_3_ENABLED === '1'
+    // PR 3.4cd — second-level gate (multi-agent pipeline).
+    const multiAgentEnabled = process.env.AI_PHASE_3_MULTI_AGENT_ENABLED === '1'
 
     const aiCtx = await buildAIContext(
       projectId,
@@ -249,80 +242,69 @@ export async function runMappingGenerationForPair(args: {
     const phase2Enabled = process.env.AI_PHASE_2_ENABLED === '1'
     let primaryResult: Awaited<ReturnType<typeof callLLM>>
     if (phase3Enabled) {
-      // PR 3.4b — agent-loop path (LOCK #1-#5). Per LOCK #4 the
-      // single-pair callsite preserves its existing cacheControl
-      // posture (NOT enabling caching here; it was the PR 13.1 audit
-      // decision that single-pair has poor cache locality).
-      const agentUserMessage = buildAgentUserMessage({
-        baseUserMessage: userMessage,
-        schemaOverview: schemaOverviewBlock,
-        businessContext,
-      })
-      let agentResult: AgentLoopResult
-      try {
-        agentResult = await runAgentLoop({
-          feature: featureOverride ?? 'mapping_generate_legacy_pair',
-          systemPrompt: MAPPING_GENERATION_AGENT_SYSTEM_PROMPT,
-          userMessage: agentUserMessage,
-          tools: [
-            { tool: QUERY_FIELD_DATA_TOOL, handler: makeQueryFieldDataHandler({ supabase, projectId, userId }) },
-            { tool: COUNT_DISTINCT_PATTERNS_TOOL, handler: makeCountDistinctPatternsHandler({ supabase, projectId, userId }) },
-            { tool: CROSS_FIELD_CORRELATION_TOOL, handler: makeCrossFieldCorrelationHandler({ supabase, projectId, userId }) },
-            { tool: EMIT_TABLE_MAPPINGS_TOOL },
-          ],
+      // PR 3.4cd — two-level gate. Multi-agent pipeline opt-in via
+      // AI_PHASE_3_MULTI_AGENT_ENABLED=1; otherwise PR 3.4b single-agent
+      // path (extracted to runSingleAgentMappingLoop helper, byte-equivalent).
+      const baseMetadata = {
+        source_table_id: sourceTableId,
+        target_table_id: targetTableId,
+        table_mapping_id: tableMappingId,
+      }
+      if (multiAgentEnabled) {
+        // PR 3.4cd multi-agent pipeline (commit 2 SHELL — see
+        // multi-agent-orchestrator.ts; voting + telemetry in commit 3).
+        // Single-pair specifics: no other_source_tables block (it's a
+        // single pair); no cacheControl (LOCK #4 / PR 13.1 audit posture).
+        const unmappedTargetFieldNames = (targetFields ?? [])
+          .filter((f) => f.table_id === targetTableId)
+          .map((f) => f.name)
+        const r = await runMultiAgentMappingPipeline({
+          supabase,
           projectId,
           userId,
-          llmOptions: {
-            model: 'claude-opus-4-7',
-            maxTokens: PER_BATCH_MAX_TOKENS,
-            promptVersion: 'mapping-v2-agent',
-            abuseUserId: userId,
-            thinking: { type: 'adaptive' },
-            output_config: { effort: 'max' },
-            metadata: {
-              source_table_id: sourceTableId,
-              target_table_id: targetTableId,
-              table_mapping_id: tableMappingId,
-              agent_loop: true,
-            },
-          },
+          feature: featureOverride ?? 'mapping_generate_legacy_pair',
+          baseUserMessage: userMessage,
+          schemaOverviewBlock,
+          businessContext,
+          maxTokens: PER_BATCH_MAX_TOKENS,
+          baseMetadata: { ...baseMetadata, multi_agent: true },
+          cacheControl: false,
+          unmappedTargetFields: unmappedTargetFieldNames,
         })
-      } catch (err) {
-        console.error(`[Mapping] Agent loop failed for pair ${sourceTables[0].name} → ${targetTables[0].name}:`, err)
-        return { inserted: 0, error: err instanceof Error ? err.message : 'Agent loop failed' }
-      }
-      if (agentResult.kind === 'final') {
-        primaryResult = synthesizeToolUseResult(agentResult)
-      } else if (agentResult.reason === 'schema_error') {
-        // LOCK #5 fallback: single-shot retry with EMIT_TABLE_MAPPINGS_TOOL
-        // forced. Other abort reasons return the error.
-        console.warn(`[Mapping] Agent schema_error for pair; retrying single-shot`)
-        try {
-          primaryResult = await callLLM({
-            feature: featureOverride ?? 'mapping_generate_legacy_pair',
-            systemPrompt: MAPPING_GENERATION_SYSTEM_PROMPT,
-            userMessage,
-            maxTokens: PER_BATCH_MAX_TOKENS,
-            projectId,
-            userId,
-            promptVersion: 'mapping-v1',
-            abuseUserId: userId,
-            metadata: {
-              source_table_id: sourceTableId,
-              target_table_id: targetTableId,
-              table_mapping_id: tableMappingId,
-              agent_fallback: true,
-            },
-            tool: EMIT_TABLE_MAPPINGS_TOOL,
-          })
-        } catch (err) {
-          console.error(`[Mapping] Schema-error fallback failed:`, err)
-          return { inserted: 0, error: err instanceof Error ? err.message : 'Fallback failed' }
+        if (r.kind === 'pair_aborted') {
+          const msg = `Multi-agent pair aborted: ${r.reason} — ${r.message}`
+          console.error(`[Mapping] ${msg}`)
+          return { inserted: 0, error: msg }
         }
+        primaryResult = r.result
       } else {
-        const msg = `Agent aborted: ${agentResult.reason} — ${agentResult.message}`
-        console.error(`[Mapping] ${msg}`)
-        return { inserted: 0, error: msg }
+        // PR 3.4b single-agent path — extracted to helper, byte-equivalent.
+        const r = await runSingleAgentMappingLoop({
+          supabase,
+          projectId,
+          userId,
+          feature: featureOverride ?? 'mapping_generate_legacy_pair',
+          baseUserMessage: userMessage,
+          schemaOverviewBlock,
+          businessContext,
+          maxTokens: PER_BATCH_MAX_TOKENS,
+          baseMetadata,
+          cacheControl: false,
+        })
+        if (r.kind === 'agent_threw') {
+          console.error(`[Mapping] Agent loop failed for pair ${sourceTables[0].name} → ${targetTables[0].name}:`, r.error)
+          return { inserted: 0, error: r.error instanceof Error ? r.error.message : 'Agent loop failed' }
+        }
+        if (r.kind === 'fallback_threw') {
+          console.error(`[Mapping] Schema-error fallback failed:`, r.error)
+          return { inserted: 0, error: r.error instanceof Error ? r.error.message : 'Fallback failed' }
+        }
+        if (r.kind === 'aborted_other') {
+          const msg = `Agent aborted: ${r.reason} — ${r.message}`
+          console.error(`[Mapping] ${msg}`)
+          return { inserted: 0, error: msg }
+        }
+        primaryResult = r.result
       }
     } else {
       try {

@@ -174,6 +174,14 @@ export interface CallLLMOptions {
    * `{ effort }` via `resolveOutputConfig`. Undefined → no field sent.
    */
   output_config?: OutputConfig
+  /**
+   * PR 3.4cd — pass-through for Anthropic's `temperature` (0-1 range).
+   * Used by self-consistency voting (3 parallel calls with `temperature:
+   * 0.6` produce sample variance; the SDK has no `seed`, so temperature
+   * is the only variance source). Undefined → no field sent (Anthropic
+   * default sampling). Byte-identical to pre-3.4cd when omitted.
+   */
+  temperature?: number
 }
 
 interface CallLLMResultCommon {
@@ -561,6 +569,8 @@ export async function callLLM(opts: CallLLMOptions): Promise<CallLLMResult> {
       ...(outputConfig && { output_config: outputConfig }),
       // PR 3.4a: pass-through for `thinking` (adapter / enabled / disabled).
       ...(opts.thinking && { thinking: opts.thinking }),
+      // PR 3.4cd: pass-through for `temperature` (variance source for voting).
+      ...(opts.temperature !== undefined && { temperature: opts.temperature }),
       // PR 12: include `tools` + `tool_choice` only when a tool surface
       // is registered. `tool_choice` is a top-level request field
       // (NOT nested inside output_config like `effort`); see
@@ -770,6 +780,8 @@ export async function callLLMStreaming(
       // avoids divergence between the two wrappers.
       ...(outputConfig && { output_config: outputConfig }),
       ...(opts.thinking && { thinking: opts.thinking }),
+      // PR 3.4cd: streaming variant of the temperature pass-through.
+      ...(opts.temperature !== undefined && { temperature: opts.temperature }),
       // PR 12: same tool plumbing as callLLM. Streaming + tool_use is
       // supported on SDK 0.78.0; `stream.finalMessage()` returns a
       // fully-assembled message whose `content` array contains the
