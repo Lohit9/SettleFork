@@ -45,7 +45,12 @@ export type CheckConstraint =
 // Provenance label for a field's structural metadata. Added in migration 020,
 // expanded in migration 063 to include 'ddl_parsed' and 'cross_table_inferred'.
 // Precedence for overwrite protection (highest → lowest authority):
-//   'manual' > 'doc_enriched' > 'cross_table_inferred' > 'ddl_parsed' > 'inferred'
+//   'manual' > 'ddl_parsed' > 'doc_enriched' > 'cross_table_inferred' > 'inferred'
+// Canonical source of truth is SCHEMA_SOURCE_PRIORITY in
+// lib/utils/schema-priority.ts — the runtime canOverride() check uses that
+// array. Reasoning for the ordering: DDL is the engineer's verbatim
+// declaration; doc-enrichment comes from AI translation of unstructured
+// uploads (PDFs, data dictionaries) and is therefore lower-trust.
 export type FieldSchemaSource =
   | 'inferred'
   | 'ddl_parsed'

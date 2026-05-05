@@ -14,7 +14,13 @@
 // negative invariant.
 //
 // Invariants:
-//   CAP1.  CSV row-count threshold = 1_000_000 in lib/actions/csv.ts.
+//   CAP1.  RETIRED. PR #75's async-ingestion refactor moved the
+//          row-count enforcement out of lib/actions/csv.ts into
+//          lib/actions/ingestion-jobs.ts (queueIngestionJob). The
+//          1,000,000-row gate + matching error message are pinned by
+//          IGJ3 in tests/actions/ingestion-jobs.test.ts, which is the
+//          natural home for the new architecture's source-text pin.
+//          Re-pointing CAP1 here would duplicate IGJ3.
 //   CAP2.  CSV file-size cap = 250 * 1024 * 1024 in
 //          lib/upload/validate.ts (validateCSVUpload).
 //   CAP3.  Schema-doc file-size cap UNCHANGED at 20 * 1024 * 1024
@@ -38,27 +44,12 @@ import { resolve } from 'node:path'
 const ROOT = resolve(__dirname, '../..')
 const read = (rel: string) => readFileSync(resolve(ROOT, rel), 'utf8')
 
-const CSV_ACTION = read('lib/actions/csv.ts')
 const VALIDATE = read('lib/upload/validate.ts')
 const INGESTION_CARD = read(
   'app/app/projects/[projectId]/project/IngestionCard.tsx',
 )
 
-describe('[csv cap raise] CAP1-CAP5 source-level invariants', () => {
-  it('CAP1: lib/actions/csv.ts enforces 1,000,000-row cap', () => {
-    // The row-count comparison literal must be 1_000_000. Pin the
-    // exact comparison to catch a future change that loosens the
-    // gate (e.g., a literal swap to a constant we forgot to update).
-    expect(CSV_ACTION).toMatch(/rows\.length\s*>\s*1_000_000\b/)
-    // Negative pin: the old cap should no longer appear as a
-    // comparison literal anywhere in the file. Comment text mentioning
-    // historical context (e.g., "the previous 100K cap") would NOT
-    // match the comparison-shaped regex above; this catches the
-    // common mistake of bumping the comparison but leaving a stale
-    // comparison literal in a sibling code path.
-    expect(CSV_ACTION).not.toMatch(/rows\.length\s*>\s*100_000\b/)
-  })
-
+describe('[csv cap raise] CAP2-CAP5 source-level invariants (CAP1 retired — see header)', () => {
   it('CAP2: lib/upload/validate.ts validateCSVUpload caps file size at 250 MB', () => {
     // Locate the validateCSVUpload function body and pin the cap
     // there. We don't pin globally because validateSchemaDocUpload

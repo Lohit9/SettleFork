@@ -278,6 +278,10 @@ Do not skip step 3. `dev` lagging `main` corrupts preview environments and confu
 - Include: what changed, why, what was tested, what could regress, screenshots for UI changes, schema diff for migrations.
 - Migrations require an explicit "applied to prod at \<timestamp\>" comment on merge.
 
+### 7.6 Branch hygiene
+
+Cleanup is the LAST step in the deploy cycle — branch deletion (origin and local) only after merge has been confirmed by `git diff origin/dev..origin/main --stat` returning empty. Do not delete branches eagerly; recovery is non-trivial.
+
 ---
 
 ## 8. CI / CD
