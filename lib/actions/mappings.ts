@@ -5,6 +5,7 @@ import { createClient } from '@/lib/supabase/server'
 import { supabaseAdmin } from '@/lib/supabase/admin'
 import { requireProjectPermission } from '@/lib/actions/role-resolution'
 import { callLLM, type LLMFeature } from '@/lib/ai/llm-client'
+import { withProvenanceGuidance } from '@/lib/ai/agent-provenance-guidance'
 // PR 3.4cd — single-agent + multi-agent pipeline helpers.
 import { runSingleAgentMappingLoop } from '@/lib/ai/single-agent-mapping'
 import { runMultiAgentMappingPipeline } from '@/lib/ai/multi-agent-orchestrator'
@@ -314,7 +315,7 @@ export async function runMappingGenerationForPair(args: {
           // report. Production callers omit it and the canonical feature
           // taxonomy is preserved.
           feature: featureOverride ?? 'mapping_generate_legacy_pair',
-          systemPrompt: MAPPING_GENERATION_SYSTEM_PROMPT,
+          systemPrompt: withProvenanceGuidance(MAPPING_GENERATION_SYSTEM_PROMPT),
           userMessage,
           maxTokens: PER_BATCH_MAX_TOKENS,
           projectId,

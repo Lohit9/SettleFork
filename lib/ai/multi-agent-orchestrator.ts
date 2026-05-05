@@ -32,6 +32,7 @@ import type { SupabaseClient } from '@supabase/supabase-js'
 
 import { callLLM, type CallLLMResult, type LLMFeature } from '@/lib/ai/llm-client'
 import { runAgentLoop, type AgentLoopResult } from '@/lib/ai/agent-loop'
+import { withProvenanceGuidance } from '@/lib/ai/agent-provenance-guidance'
 import {
   makeQueryFieldDataHandler,
   makeCountDistinctPatternsHandler,
@@ -374,7 +375,7 @@ export async function runMultiAgentMappingPipeline(
   try {
     refinementResult = await runAgentLoop({
       feature,
-      systemPrompt: MAPPING_GENERATION_AGENT_SYSTEM_PROMPT,
+      systemPrompt: withProvenanceGuidance(MAPPING_GENERATION_AGENT_SYSTEM_PROMPT),
       userMessage: buildAgentUserMessage({
         baseUserMessage: refinementUserMessage,
         schemaOverview: schemaOverviewBlock,
@@ -467,7 +468,7 @@ async function runGeneratorAgent(args: GeneratorAgentArgs): Promise<GeneratorAge
   try {
     result = await runAgentLoop({
       feature: args.feature,
-      systemPrompt: GENERATOR_SYSTEM_PROMPT,
+      systemPrompt: withProvenanceGuidance(GENERATOR_SYSTEM_PROMPT),
       userMessage: args.userMessage,
       tools: [
         { tool: QUERY_FIELD_DATA_TOOL, handler: makeQueryFieldDataHandler({ supabase: args.supabase, projectId: args.projectId, userId: args.userId }) },
@@ -543,7 +544,7 @@ async function runCrossTableSpecialistAgent(
   try {
     result = await runAgentLoop({
       feature: args.feature,
-      systemPrompt: CROSS_TABLE_SPECIALIST_SYSTEM_PROMPT,
+      systemPrompt: withProvenanceGuidance(CROSS_TABLE_SPECIALIST_SYSTEM_PROMPT),
       userMessage: args.userMessage + candidatesPayload,
       tools: [
         { tool: QUERY_FIELD_DATA_TOOL, handler: makeQueryFieldDataHandler({ supabase: args.supabase, projectId: args.projectId, userId: args.userId }) },
@@ -590,7 +591,7 @@ async function runCardinalitySpecialistAgent(
   try {
     result = await runAgentLoop({
       feature: args.feature,
-      systemPrompt: CARDINALITY_SPECIALIST_SYSTEM_PROMPT,
+      systemPrompt: withProvenanceGuidance(CARDINALITY_SPECIALIST_SYSTEM_PROMPT),
       userMessage: args.userMessage + candidatesPayload,
       tools: [
         { tool: QUERY_FIELD_DATA_TOOL, handler: makeQueryFieldDataHandler({ supabase: args.supabase, projectId: args.projectId, userId: args.userId }) },
@@ -653,7 +654,7 @@ async function runCriticAgent(args: CriticAgentArgs): Promise<CriticAgentResult>
   try {
     result = await runAgentLoop({
       feature: args.feature,
-      systemPrompt: CRITIC_SYSTEM_PROMPT,
+      systemPrompt: withProvenanceGuidance(CRITIC_SYSTEM_PROMPT),
       userMessage: args.userMessage + payload,
       tools: [
         { tool: QUERY_FIELD_DATA_TOOL, handler: makeQueryFieldDataHandler({ supabase: args.supabase, projectId: args.projectId, userId: args.userId }) },

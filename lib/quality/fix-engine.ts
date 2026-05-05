@@ -15,6 +15,7 @@ import { createClient } from '@/lib/supabase/server'
 import { callLLM, type LLMFeature } from '@/lib/ai/llm-client'
 import { EMIT_FIX_OPTIONS_TOOL } from '@/lib/ai/tool-schemas'
 import { checkAIRateLimit } from '@/lib/ai/rate-limit'
+import { withProvenanceGuidance } from '@/lib/ai/agent-provenance-guidance'
 import { buildAIContext, formatFieldForPrompt, formatDocumentsForPrompt } from '@/lib/ai/context-builder'
 import { resolveFixTarget } from '@/lib/quality/fix-target'
 import { logAIEdit } from '@/lib/actions/ai-edit-history'
@@ -478,7 +479,7 @@ Provide 2-3 fix options for this issue. Use table_id = '${effectiveTableId}' in 
     const issueProjectId = (issue as unknown as { project_id: string }).project_id
     const result = await callLLM({
       feature: evalContext?.featureOverride ?? 'quality_fix_options',
-      systemPrompt: SYSTEM_PROMPT,
+      systemPrompt: withProvenanceGuidance(SYSTEM_PROMPT),
       userMessage,
       maxTokens: 4096,
       projectId: issueProjectId,

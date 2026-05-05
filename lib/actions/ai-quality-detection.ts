@@ -5,6 +5,7 @@ import { supabaseAdmin } from '@/lib/supabase/admin'
 import { createClient } from '@/lib/supabase/server'
 import { callLLM, type LLMFeature } from '@/lib/ai/llm-client'
 import { EMIT_QUALITY_ISSUES_TOOL } from '@/lib/ai/tool-schemas'
+import { withProvenanceGuidance } from '@/lib/ai/agent-provenance-guidance'
 import { checkAIRateLimit } from '@/lib/ai/rate-limit'
 import {
   buildAIContext,
@@ -349,7 +350,7 @@ Identify additional data quality issues NOT already listed in existing_issues.`
   try {
     result = await callLLM({
       feature: evalContext?.featureOverride ?? 'quality_detection_ai',
-      systemPrompt: AI_DETECTION_SYSTEM_PROMPT,
+      systemPrompt: withProvenanceGuidance(AI_DETECTION_SYSTEM_PROMPT),
       userMessage,
       maxTokens: 2048,
       projectId,

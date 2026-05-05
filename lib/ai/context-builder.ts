@@ -1,5 +1,9 @@
 import { createClient } from '@/lib/supabase/server'
 import { supabaseAdmin } from '@/lib/supabase/admin'
+import {
+  provenanceFlagFor,
+  provenanceLabelsEnabled,
+} from '@/lib/ai/agent-provenance-guidance'
 import type { CheckConstraint, FieldSchemaSource, MigrationIntelligence } from '@/lib/types/database'
 
 // ── Types ─────────────────────────────────────────────────────────────────────
@@ -538,6 +542,16 @@ export function formatSchemaForPrompt(tables: TableContext[], label: string): st
       if (field.inferred_type) flagList.push(`semantic:${field.inferred_type}`)
       const checkFlag = formatCheckConstraintFlag(field.check_constraint)
       if (checkFlag) flagList.push(checkFlag)
+      // INV-1 PR-A — schema_source provenance flag, gated. Flag-OFF
+      // returns '' and the conditional skips the push (existing flag
+      // list byte-identical). Flag-ON appends e.g. 'manual' /
+      // 'ddl_parsed' / 'doc_enriched' / 'cross_table_inferred'; the
+      // default 'inferred' case still skips so unedited prompts stay
+      // terse.
+      if (provenanceLabelsEnabled()) {
+        const provenanceFlag = provenanceFlagFor(field.schema_source)
+        if (provenanceFlag) flagList.push(provenanceFlag)
+      }
       const flags = flagList.join(', ')
 
       output += `  - ${field.name} (${field.data_type}) [${flags}]\n`
