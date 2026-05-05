@@ -69,8 +69,24 @@ export async function uploadSchemaDocument(formData: FormData): Promise<UploadSc
         const { parseExcelToText } = await import('@/lib/parsers/excel')
         const buffer = Buffer.from(await file.arrayBuffer())
         extractedText = parseExcelToText(buffer) || null
+      } else if (ext === '.docx') {
+        // mammoth: pure-JS Word (.docx) text extractor, no native deps —
+        // works on Vercel serverless. Same shape as the unpdf branch above.
+        // Output flows through convertDocToDDL just like PDF/Excel/CSV/TXT,
+        // so customers uploading data-dictionary docx files now have their
+        // content reach the AI enrichment path instead of being silently
+        // ignored.
+        const mammoth = await import('mammoth')
+        const buffer = Buffer.from(await file.arrayBuffer())
+        const result = await mammoth.extractRawText({ buffer })
+        extractedText = result.value?.trim() || null
+        if (!extractedText) {
+          console.warn('[uploadSchemaDocument] No text extracted from DOCX (may be empty or table-only):', sanitizedFilename)
+        }
       }
-      // .doc/.docx: deferred (no parser in MVP)
+      // .doc: legacy binary Word format — mammoth only supports .docx
+      //       (Office Open XML). Deferred until we add a .doc parser
+      //       (rare in modern enterprise pipelines).
       // .png/.jpg/.jpeg: OCR deferred — falls through convertDocToDDL as a
       //                  graceful no-op until we add vision/OCR.
     } catch (parseErr) {
@@ -352,8 +368,22 @@ export async function uploadBusinessContextDoc(
         const buffer = Buffer.from(await file.arrayBuffer())
         const parsed = parseExcelToText(buffer)
         extractedText = parsed || null
+      } else if (ext === '.docx') {
+        // mammoth: pure-JS Word (.docx) text extractor. Mirrors the
+        // .docx branch in uploadSchemaDocument above so business-context
+        // docx uploads (e.g. migration rules in a Word doc) reach the AI
+        // prompt context the same way schema-document docx files do.
+        const mammoth = await import('mammoth')
+        const buffer = Buffer.from(await file.arrayBuffer())
+        const result = await mammoth.extractRawText({ buffer })
+        extractedText = result.value?.trim() || null
+        if (!extractedText) {
+          console.warn('[uploadBusinessContextDoc] No text extracted from DOCX (may be empty or table-only):', sanitizedFilename)
+        }
       }
-      // .docx, .png, .jpg: text extraction deferred
+      // .doc: legacy binary Word format — mammoth only supports .docx.
+      //       Deferred until we add a .doc parser.
+      // .png, .jpg: text extraction deferred (OCR / vision).
     } catch (parseErr) {
       console.error('[uploadBusinessContextDoc] text extraction failed:', parseErr)
     }
