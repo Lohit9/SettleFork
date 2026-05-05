@@ -107,6 +107,13 @@ export interface ExampleMetadata {
    * 'hard' to keep reviewers oriented.
    */
   notes?: string
+  /**
+   * PR 3.4b — customer-supplied free-text context that the synthetic
+   * project setup writes to `projects.business_context`. Surfaced to
+   * agent-mode mapping prompts (AI_PHASE_3_ENABLED=1). Per-fixture
+   * opt-in; backward-compatible (existing fixtures omit the field).
+   */
+  business_context?: string
 }
 
 /** Loader return shape — bundles schema + examples + metadata. */

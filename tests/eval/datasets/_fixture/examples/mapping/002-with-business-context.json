@@ -1,0 +1,20 @@
+{
+  "id": "_fixture/mapping/002-with-business-context",
+  "task": "mapping",
+  "input": {
+    "source_table": "fixture_source_table",
+    "target_table": "fixture_target_table"
+  },
+  "gold": {
+    "mappings": [
+      { "source_field": "id", "target_field": "id", "combination_type": "single" },
+      { "source_field": "name", "target_field": "label", "combination_type": "single" }
+    ]
+  },
+  "metadata": {
+    "author": "hand-authored (PR 3.4b)",
+    "difficulty": "easy",
+    "notes": "PR 3.4b smoke fixture. Verifies (a) the agent path runs without aborting on a minimal synthetic schema, (b) the projects.business_context field propagates from fixture metadata through synthetic-context-builder, (c) score remains 1.000 against the same gold as 001-fixture (no regression), (d) cache_read_input_tokens > 0 on iteration N>1. Gold is intentionally hand-authored (NOT model-generated) to avoid the synthetic-gold-labels trap (Phase A §E4).",
+    "business_context": "Internal naming convention: the source field 'name' stores customer display strings in uppercase ('JOHN DOE') in the legacy CRM. The target system 'label' field is the canonical display column and expects mixed-case formatting ('John Doe'). When mapping name → label, a casing-normalization transform is required. The id field is a UUID on both sides; pass through unchanged."
+  }
+}

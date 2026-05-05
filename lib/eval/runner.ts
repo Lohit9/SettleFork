@@ -480,11 +480,17 @@ async function runOneMappingExample(args: {
       return { score: 0, costUsd: 0, errored: true, errorMessage: 'example.input missing source_table/target_table' }
     }
 
+    // PR 3.4b — propagate fixture metadata.business_context to the
+    // synthetic project row. Used by agent-mode mapping prompts under
+    // AI_PHASE_3_ENABLED=1; backward-compatible when absent.
     const ctx = await buildSyntheticMappingContext({
       projectId,
       schema: args.schema,
       sourceTableName: input.source_table,
       targetTableName: input.target_table,
+      ...(args.example.metadata.business_context
+        ? { businessContext: args.example.metadata.business_context }
+        : {}),
     })
 
     // Capture the start time so we can attribute llm_calls cost back
