@@ -492,7 +492,9 @@ Provide 2-3 fix options for this issue. Use table_id = '${effectiveTableId}' in 
       // rules + 5-condition risk rubric (~4K tk); EMIT_FIX_OPTIONS_TOOL
       // is similarly large. Per-issue invocation locality is medium
       // (multiple issues in one quality-review session).
-      cacheControl: true,
+      // PR-CACHE-HOTFIX: disabled to unblock 4-block limit. See INF-5 for
+      // selective re-enable on top 4 blocks.
+      cacheControl: false,
     })
     llmCallId = result.callId
 

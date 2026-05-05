@@ -43,8 +43,11 @@ describe('mappings — runMappingGenerationForPair agent gate (source pins)', ()
   })
 
   it('single-pair gate passes cacheControl: false (PR 13.1 audit posture preserved per LOCK #4)', () => {
-    // Per LOCK #4: bulk callsite has cacheControl: true; single-pair
-    // does NOT. The gate now passes this flag explicitly to the helper.
+    // Per LOCK #4: single-pair NEVER cached. The gate passes this flag
+    // explicitly to the helper. PR-CACHE-HOTFIX additionally flipped the
+    // BULK callsite to false (see tests/lib/multi-agent-gate.test.ts);
+    // pending INF-5 selective re-enable, ALL mapping callsites are now
+    // cacheControl: false.
     expect(MAPPINGS_SRC).toMatch(/cacheControl:\s*false/)
   })
 

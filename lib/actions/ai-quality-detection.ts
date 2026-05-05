@@ -362,7 +362,9 @@ Identify additional data quality issues NOT already listed in existing_issues.`
       // PR 13.1: prompt caching. AI_DETECTION_SYSTEM_PROMPT enumerates
       // cross-field/value-domain/format check rules (~2K tk); per-table
       // scan locality is high during onboarding (5-15 tables in burst).
-      cacheControl: true,
+      // PR-CACHE-HOTFIX: disabled to unblock 4-block limit. See INF-5 for
+      // selective re-enable on top 4 blocks.
+      cacheControl: false,
     })
     llmCallId = result.callId
   } catch (err) {

@@ -408,7 +408,9 @@ ${docBlock}User's rule: "${naturalLanguageRule}"`
       // every call — Anthropic's cache key is content-hash-based, not
       // declaration-location-based). EMIT_VALIDATION_RULE_TOOL adds
       // ~2.5K tk of cacheable tool definition.
-      cacheControl: true,
+      // PR-CACHE-HOTFIX: disabled to unblock 4-block limit. See INF-5 for
+      // selective re-enable on top 4 blocks.
+      cacheControl: false,
       abuseUserId: user.id,
       metadata: { field_id: fieldId, table_id: tableId },
       ...(phase2Enabled && { tool: EMIT_VALIDATION_RULE_TOOL }),

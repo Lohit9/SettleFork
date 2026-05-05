@@ -407,7 +407,9 @@ export async function parseDDLWithAI(
     // PR 13.1: prompt caching for DDL parsing. Onboarding bursts process
     // multiple DDL docs in sequence; tool definition (~3.5K tk) is the
     // bulk of cacheable surface. System prompt + tool both static.
-    cacheControl: true,
+    // PR-CACHE-HOTFIX: disabled to unblock 4-block limit. See INF-5 for
+    // selective re-enable on top 4 blocks.
+    cacheControl: false,
   })
 
   let parsed: { tables: ParsedTable[] }

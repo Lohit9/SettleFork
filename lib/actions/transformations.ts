@@ -1350,7 +1350,9 @@ Generate the SQL transformation expression.`
         // system prompt in the codebase (~5K tk of SQL pattern guidance);
         // per-field batching during transform-tab work delivers high
         // invocation locality. Highest single-call savings of the cohort.
-        cacheControl: true,
+        // PR-CACHE-HOTFIX: disabled to unblock 4-block limit. See INF-5 for
+        // selective re-enable on top 4 blocks.
+        cacheControl: false,
       })
       llmCallId = result.callId
       if (result.kind === 'toolUse') {
