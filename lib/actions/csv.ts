@@ -22,7 +22,7 @@ export interface UploadCSVResult {
 //   `serverActions.bodySizeLimit` is 1 MB. The previous `uploadCSV(FormData)`
 //   server action received the entire file as multipart body, so any CSV
 //   over ~1 MB failed at the platform layer before reaching application
-//   validation (the 100K-row check, etc.). The 10 MB / 100K-row caps the UI
+//   validation (the 1M-row check, etc.). The 250 MB / 1M-row caps the UI
 //   advertised were unenforceable on production.
 //
 // Architecture — direct-to-Storage:
@@ -192,9 +192,10 @@ export async function processUploadedCsv(input: {
     // ── Step 2: Download file from Storage ───────────────────────────────────
     // The browser already PUT the file via the signed URL. Read it back as
     // text so we can run Papa.parse on the contents. Download size matches
-    // upload size; the only platform constraint we hit here is Vercel's
-    // function memory (default 1024 MB) which is far above realistic CSV
-    // sizes (a 100K-row CSV is ~50 MB peak per the prior investigation).
+    // upload size; the only platform constraint we hit here is Vercel
+    // function memory (Pro Performance tier: 4096 MB) which is well above
+    // realistic CSV sizes (a 1M-row CSV is ~600-800 MB peak per the prior
+    // investigation, ~15-20% utilisation of the 4 GB ceiling).
     const { data: downloaded, error: downloadError } = await supabase.storage
       .from('project-files')
       .download(storagePath)
@@ -237,8 +238,8 @@ export async function processUploadedCsv(input: {
     if (rows.length === 0) {
       return { success: false, error: 'CSV has no data rows' }
     }
-    if (rows.length > 100_000) {
-      return { success: false, error: 'CSV exceeds 100,000 row limit' }
+    if (rows.length > 1_000_000) {
+      return { success: false, error: 'CSV exceeds 1,000,000 row limit' }
     }
 
     // ── Step 4: Sanitize + validate headers ───────────────────────────────────
