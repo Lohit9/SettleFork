@@ -163,7 +163,14 @@ describe('mapping-engine — runMappingGeneration agent gate (source pins)', () 
     // promptVersion bumped to v2-agent-streaming so llm_calls
     // analytics can distinguish the streaming-era runs.
     expect(HELPER_SRC).toMatch(/promptVersion:\s*'mapping-v2-agent-streaming'/)
-    expect(HELPER_SRC).toMatch(/thinking:\s*\{\s*type:\s*'adaptive'\s*\}/)
+    // HOT-FIX 6 (May 2026): thinking flipped from 'adaptive' to
+    // 'disabled' to satisfy the Anthropic constraint that
+    // tool_choice: { type: 'tool' } (forced) is incompatible with
+    // adaptive/enabled thinking. The agent callsite uses forced
+    // single-tool (EMIT_TABLE_MAPPINGS_TOOL), so thinking must be
+    // disabled. See investigation report in this same session +
+    // mapping-streaming-incident.test.ts for the locking pin.
+    expect(HELPER_SRC).toMatch(/thinking:\s*\{\s*type:\s*'disabled'\s*\}/)
     expect(HELPER_SRC).toMatch(/output_config:\s*\{\s*effort:\s*'max'\s*\}/)
     expect(HELPER_SRC).toMatch(/agent_loop:\s*true/)
     // PR-A wrapped this with withProvenanceGuidance(...) so the prompt

@@ -63,6 +63,23 @@ describe('[May 2026 incident] mapping_generate uses callLLMStreaming + 32k token
     expect(codeOnly).not.toMatch(/import\s*\{[^}]*\brunAgentLoop\b/)
   })
 
+  it('HOT-FIX 6: thinking is { type: "disabled" } at the agent callsite (forced single tool requires thinking off)', () => {
+    // Anthropic API rejects `tool_choice: { type: 'tool' }` (forced)
+    // combined with `thinking: 'adaptive' | 'enabled'` with HTTP 400
+    // ("Thinking may not be enabled when tool_choice forces tool use").
+    // The agent callsite uses `tool: EMIT_TABLE_MAPPINGS_TOOL` (forced
+    // single tool), so thinking MUST stay disabled. Negative pin
+    // guards against an accidental revert to adaptive that would
+    // break production again. See mapping-engine-agent-gate.test.ts
+    // for the pre-PR (multi-tool / auto choice) → post-HOT-FIX-6 pin
+    // history.
+    const src = read('lib/ai/single-agent-mapping.ts')
+    const codeOnly = src.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/[^\n]*/g, '')
+    expect(codeOnly).toMatch(/thinking:\s*\{\s*type:\s*'disabled'\s*\}/)
+    expect(codeOnly).not.toMatch(/thinking:\s*\{\s*type:\s*'adaptive'\s*\}/)
+    expect(codeOnly).not.toMatch(/thinking:\s*\{\s*type:\s*'enabled'/)
+  })
+
   it('BULK legacy callsite (mapping-engine.ts) calls callLLMStreaming with feature mapping_generate', () => {
     const src = read('lib/ai/mapping-engine.ts')
     expect(src).toMatch(

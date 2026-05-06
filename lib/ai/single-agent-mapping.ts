@@ -152,7 +152,19 @@ export async function runSingleAgentMappingLoop(
       model: 'claude-opus-4-7',
       promptVersion: 'mapping-v2-agent-streaming',
       abuseUserId: userId,
-      thinking: { type: 'adaptive' },
+      // HOT-FIX 6 (May 2026): thinking MUST stay 'disabled' on this
+      // callsite. Combination of `tool_choice: { type: 'tool' }` (set
+      // by passing the single `tool: EMIT_TABLE_MAPPINGS_TOOL` above)
+      // and `thinking: 'adaptive' | 'enabled'` is rejected by Anthropic
+      // (HTTP 400 — "Thinking may not be enabled when tool_choice
+      // forces tool use"). Same constraint family as PR 3.4cd's voted
+      // agents (lib/ai/multi-agent-orchestrator.ts:502, 679) which
+      // hit the analogous temperature-incompatibility constraint.
+      // Eval data (docs/investigations/pr3.4-mapping-agent-adoption.md:20)
+      // shows score parity vs adaptive on the available fixture; we
+      // lose no measured quality. See investigation in this same
+      // session for full path-comparison rationale.
+      thinking: { type: 'disabled' },
       output_config: { effort: 'max' },
       metadata: { ...baseMetadata, agent_loop: true },
       ...(cacheControl ? { cacheControl: true } : {}),
