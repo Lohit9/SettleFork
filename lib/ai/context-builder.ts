@@ -122,7 +122,23 @@ const DEFAULT_SCOPE: Required<ContextScope> = {
  * point so the eval runner can pass `supabaseAdmin` and bypass the
  * cookies-based auth path (which throws outside a Next.js request
  * scope). Production callers omit it and the function continues to
- * use `createClient()` as before. Heritage fingerprints unchanged.
+ * use `createClient()` as before.
+ *
+ * RLS posture (PR fix/buildaicontext-field-load-rls):
+ *   1. Project access check uses the USER-AUTHED client (or whatever
+ *      client the caller injected). If RLS denies, this throws — the
+ *      single source of truth for access control.
+ *   2. After the access check passes, ALL subsequent reads use
+ *      `supabaseAdmin` so we don't re-pay the RLS cascade for
+ *      `tables → fields → field_profiles → schema_documents`.
+ *      The fields RLS policy (migration 050:395-399) descends 2 levels
+ *      (tables → datasets, both with RLS) which combined with silent
+ *      `data`-only destructuring produced empty arrays for fresh
+ *      projects in production (Rootstock POC, May 2026). Admin reads
+ *      after the access gate eliminate the failure mode.
+ *   3. Every Supabase query in this function now logs its `.error`
+ *      result on failure (defense-in-depth: the same silent-error
+ *      class that hid the fields bug applies to every other table).
  */
 export async function buildAIContext(
   projectId: string,
@@ -137,40 +153,63 @@ export async function buildAIContext(
     fieldIds: scope.fieldIds ?? DEFAULT_SCOPE.fieldIds,
   }
 
-  const supabase = supabaseClient ?? (await createClient())
+  // Access-check client. When the caller injects (eval runner, etc.),
+  // we honour their choice — `supabaseAdmin` injection bypasses the
+  // RLS access check entirely, which is the eval-runner's contract.
+  const accessClient = supabaseClient ?? (await createClient())
 
-  // 1. Verify project access (RLS enforces ownership)
-  const { data: project } = await supabase
+  // 1. Verify project access (RLS enforces ownership). If the caller
+  //    can SELECT this project row through their client, they are
+  //    authorised; subsequent reads can safely run as service-role.
+  const { data: project, error: projectErr } = await accessClient
     .from('projects')
     .select('id, name')
     .eq('id', projectId)
     .single()
+  if (projectErr) {
+    console.warn(
+      `[buildAIContext] project access check failed for projectId=${projectId}:`,
+      projectErr,
+    )
+  }
   if (!project) throw new Error('Project not found')
 
+  // Post-access-check reads use admin to avoid the multi-level RLS
+  // cascade on fields / field_profiles. Heritage tests already use
+  // admin (they pass `supabaseAdmin` as `supabaseClient`) so heritage
+  // fingerprints are byte-identical pre/post this change.
+  const reader = supabaseAdmin
+
   // 2. Get datasets
-  const { data: datasets } = await supabase
+  const { data: datasets, error: datasetsErr } = await reader
     .from('datasets')
     .select('id, name, role')
     .eq('project_id', projectId)
+  if (datasetsErr) {
+    console.warn(`[buildAIContext] datasets read failed for projectId=${projectId}:`, datasetsErr)
+  }
 
   const sourceDataset = datasets?.find((d) => d.role === 'source')
   const targetDataset = datasets?.find((d) => d.role === 'target')
   const datasetIds = [sourceDataset?.id, targetDataset?.id].filter(Boolean) as string[]
 
   // 3. Get tables (optionally filtered to specific IDs)
-  const tableBaseQuery = supabase
+  const tableBaseQuery = reader
     .from('tables')
     .select('id, name, dataset_id, row_count')
     .in('dataset_id', datasetIds.length ? datasetIds : ['__none__'])
 
-  const { data: tables } = opts.tableIds.length > 0
+  const { data: tables, error: tablesErr } = opts.tableIds.length > 0
     ? await tableBaseQuery.in('id', opts.tableIds)
     : await tableBaseQuery
+  if (tablesErr) {
+    console.warn(`[buildAIContext] tables read failed for projectId=${projectId}:`, tablesErr)
+  }
 
   const tableIds = (tables ?? []).map((t) => t.id)
 
   // 4. Get fields (optionally filtered to specific IDs)
-  const fieldBaseQuery = supabase
+  const fieldBaseQuery = reader
     .from('fields')
     // PR 3.4a — `default_value` and `description` added (target-side
     // rendering only; source rendering byte-unchanged).
@@ -178,9 +217,12 @@ export async function buildAIContext(
     .in('table_id', tableIds.length ? tableIds : ['__none__'])
     .order('ordinal_position', { ascending: true })
 
-  const { data: fields } = opts.fieldIds.length > 0
+  const { data: fields, error: fieldsErr } = opts.fieldIds.length > 0
     ? await fieldBaseQuery.in('id', opts.fieldIds)
     : await fieldBaseQuery
+  if (fieldsErr) {
+    console.warn(`[buildAIContext] fields read failed for projectId=${projectId}:`, fieldsErr)
+  }
 
   const fieldIds = (fields ?? []).map((f) => f.id)
 
@@ -198,10 +240,16 @@ export async function buildAIContext(
       profileColumns.push('sample_values')
     }
 
-    const { data } = await supabase
+    const { data, error: profilesErr } = await reader
       .from('field_profiles')
       .select(profileColumns.join(', '))
       .in('field_id', fieldIds.length ? fieldIds : ['__none__'])
+    if (profilesErr) {
+      console.warn(
+        `[buildAIContext] field_profiles read failed for projectId=${projectId}:`,
+        profilesErr,
+      )
+    }
 
     profilesData = (data as unknown as Record<string, unknown>[]) ?? []
   }
@@ -217,12 +265,18 @@ export async function buildAIContext(
   if (opts.includeDocuments) {
     // 6a. Schema docs — scoped to source/target datasets, doc_type = 'schema'
     if (datasetIds.length > 0) {
-      const { data: schemaDocs } = await supabase
+      const { data: schemaDocs, error: schemaDocsErr } = await reader
         .from('schema_documents')
         .select('dataset_id, filename, extracted_text')
         .in('dataset_id', datasetIds)
         .eq('doc_type', 'schema')
         .not('extracted_text', 'is', null)
+      if (schemaDocsErr) {
+        console.warn(
+          `[buildAIContext] schema_documents (schema) read failed for projectId=${projectId}:`,
+          schemaDocsErr,
+        )
+      }
 
       if (schemaDocs) {
         documents.source_documents = schemaDocs
@@ -241,12 +295,18 @@ export async function buildAIContext(
     }
 
     // 6b. Business context docs — project-scoped, doc_type = 'business_context'
-    const { data: contextDocs } = await supabase
+    const { data: contextDocs, error: contextDocsErr } = await reader
       .from('schema_documents')
       .select('filename, extracted_text')
       .eq('project_id', projectId)
       .eq('doc_type', 'business_context')
       .not('extracted_text', 'is', null)
+    if (contextDocsErr) {
+      console.warn(
+        `[buildAIContext] schema_documents (business_context) read failed for projectId=${projectId}:`,
+        contextDocsErr,
+      )
+    }
 
     if (contextDocs) {
       documents.business_context_documents = contextDocs
