@@ -17,7 +17,7 @@
 
 import type { SupabaseClient } from '@supabase/supabase-js'
 
-import { callLLM, type CallLLMResult } from '@/lib/ai/llm-client'
+import { callLLM, callLLMStreaming, type CallLLMResult } from '@/lib/ai/llm-client'
 import { withProvenanceGuidance } from '@/lib/ai/agent-provenance-guidance'
 import { type AgentLoopResult } from '@/lib/ai/agent-loop'
 import {
@@ -1576,7 +1576,15 @@ export async function runMappingGeneration(
       (sourceTables ?? []).map((t) => [t.name.toLowerCase(), t]),
     )
 
-    const PER_BATCH_MAX_TOKENS = 16000
+    // Streaming + 32k token budget per batch (May 2026 incident).
+    // Pre-incident: 16000, set when mapping_generate ran non-streaming.
+    // Bumped to 32000 because (a) streaming responses for projects with
+    // 100+ source/target field pairs were truncating the
+    // emit_table_mappings tool input mid-array, and (b) streaming
+    // removes the previous "non-streaming requires max_tokens ≤ ~8K
+    // for low-latency" pressure. 32k stays inside Anthropic Sonnet
+    // 4.6 / Opus 4.7 max_tokens limits (64k+).
+    const PER_BATCH_MAX_TOKENS = 32000
     const allTableMappings: ClaudeTableMapping[] = []
     const sourceTablesForBatching = aiCtx.source_tables
 
@@ -1692,14 +1700,24 @@ ${otherSourcesList}
         }
       } else {
         try {
-          primaryResult = await callLLM({
+          // Streaming switch (May 2026 incident): mapping_generate uses
+          // callLLMStreaming on the BULK legacy single-shot path.
+          // Streaming + tool_use is supported on @anthropic-ai/sdk 0.78
+          // via stream.finalMessage() — the wrapper assembles the full
+          // tool_use block and returns the same { kind: 'toolUse' }
+          // shape as the non-streaming wrapper, so callers downstream
+          // (extractTransformSQL, persistence) are unchanged. Streaming
+          // unblocks the 32k token budget required for projects with
+          // 100+ field-pair source/target sets (non-streaming
+          // truncates at the previous 16k).
+          primaryResult = await callLLMStreaming({
             feature: 'mapping_generate',
             systemPrompt: withProvenanceGuidance(MAPPING_GENERATION_SYSTEM_PROMPT),
             userMessage: batchUserMessage,
             maxTokens: PER_BATCH_MAX_TOKENS,
             projectId,
             userId,
-            promptVersion: 'mapping-v1',
+            promptVersion: 'mapping-v1-streaming',
             abuseUserId: userId,
             metadata: {
               source_table_id: currentSourceRow?.id ?? null,
@@ -1708,11 +1726,6 @@ ${otherSourcesList}
               batch_total: sourceTablesForBatching.length,
             },
             ...(phase2Enabled && { tool: EMIT_TABLE_MAPPINGS_TOOL }),
-            // PR 13.1: prompt caching for the engine's primary mapping
-            // call. Per-table batching produces high invocation locality
-            // within Anthropic's 5-min ephemeral TTL — break-even at ≥2
-            // tables per project. System prompt + tool definition are
-            // both static across invocations.
             // PR-CACHE-HOTFIX: disabled to unblock 4-block limit. See INF-5
             // for selective re-enable on top 4 blocks.
             cacheControl: false,

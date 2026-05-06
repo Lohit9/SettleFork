@@ -59,12 +59,17 @@ const CALLSITES: CallsiteSpec[] = [
     file: 'lib/ai/single-agent-mapping.ts',
     wrappedRegex: /systemPrompt:\s*withProvenanceGuidance\(MAPPING_GENERATION_AGENT_SYSTEM_PROMPT\)/,
   },
-  // 5. mapping_generate (Phase 3 agent — schema-error fallback)
-  {
-    agent: 'mapping_generate (schema_error fallback)',
-    file: 'lib/ai/single-agent-mapping.ts',
-    wrappedRegex: /systemPrompt:\s*withProvenanceGuidance\(MAPPING_GENERATION_SYSTEM_PROMPT\)/,
-  },
+  // 5. mapping_generate (Phase 3 agent — schema-error fallback) [REMOVED]
+  //
+  // The May 2026 streaming switch collapsed runSingleAgentMappingLoop
+  // to a direct callLLMStreaming call (the agent loop was degenerate
+  // after HOT-FIX 5 left only the answer tool registered). The
+  // schema_error fallback path that used MAPPING_GENERATION_SYSTEM_PROMPT
+  // (legacy prompt) is no longer reachable — with a single forced
+  // tool, the model can't emit text, so schema_error never fires.
+  // Pin removed; the negative-pin file audit below catches any future
+  // re-introduction of the legacy fallback.
+  //
   // 6. mapping_generate (Phase 3 multi-agent — refinement T3)
   {
     agent: 'mapping_generate (multi-agent refinement)',

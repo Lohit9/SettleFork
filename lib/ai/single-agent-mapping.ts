@@ -29,26 +29,32 @@
 
 import type { SupabaseClient } from '@supabase/supabase-js'
 
-import { callLLM, type CallLLMResult, type LLMFeature } from '@/lib/ai/llm-client'
-import { runAgentLoop, type AgentLoopResult } from '@/lib/ai/agent-loop'
-import {
-  makeQueryFieldDataHandler,
-  makeCountDistinctPatternsHandler,
-  makeCrossFieldCorrelationHandler,
-} from '@/lib/ai/agent-tools'
-import {
-  EMIT_TABLE_MAPPINGS_TOOL,
-  QUERY_FIELD_DATA_TOOL,
-  COUNT_DISTINCT_PATTERNS_TOOL,
-  CROSS_FIELD_CORRELATION_TOOL,
-} from '@/lib/ai/tool-schemas'
+import { callLLMStreaming, type CallLLMResult, type LLMFeature } from '@/lib/ai/llm-client'
+import { EMIT_TABLE_MAPPINGS_TOOL } from '@/lib/ai/tool-schemas'
 import {
   MAPPING_GENERATION_AGENT_SYSTEM_PROMPT,
-  MAPPING_GENERATION_SYSTEM_PROMPT,
   buildAgentUserMessage,
-  synthesizeToolUseResult,
 } from '@/lib/ai/mapping-engine'
 import { withProvenanceGuidance } from '@/lib/ai/agent-provenance-guidance'
+
+// May 2026 incident: the 3 data-scanning tools + the agent-loop
+// dispatcher are intentionally NOT imported here anymore. Pre-incident
+// shape: runSingleAgentMappingLoop wrapped runAgentLoop with all 4
+// tools registered (3 data-scanning + emit_table_mappings answer
+// tool), letting the model iterate. HOT-FIX 5 stripped the 3
+// data-scanning tool registrations; with a single forced answer tool,
+// the agent loop became degenerate (one iteration, terminate on the
+// tool_use). The streaming switch (this PR) collapses the wrapper
+// down to a direct callLLMStreaming call with EMIT_TABLE_MAPPINGS_TOOL
+// forced — same semantics, half the code, plus the streaming benefit
+// of the 32k token budget without the previous tool_use truncation
+// at high field-pair counts.
+//
+// runAgentLoop, the data-scanning tool handler factories, and the
+// schema_error fallback (which used the legacy single-shot path) are
+// no longer reachable from this file. Re-introducing them is a
+// targeted change in a follow-up PR if cohort eval validates lift
+// from the agent-loop pattern over plain streaming.
 
 // ─── Public types ────────────────────────────────────────────────────────────
 
@@ -128,69 +134,32 @@ export async function runSingleAgentMappingLoop(
     businessContext,
   })
 
-  let agentResult: AgentLoopResult
+  // Streaming + forced single-tool single-shot. Bypasses runAgentLoop
+  // (degenerate after HOT-FIX 5 with only the answer tool registered)
+  // and uses callLLMStreaming directly. Same llmOptions block as the
+  // pre-incident agent-loop call (Opus 4.7 + adaptive thinking + max
+  // effort) plus the 32k maxTokens passed through from the caller.
+  let result: CallLLMResult
   try {
-    agentResult = await runAgentLoop({
+    result = await callLLMStreaming({
       feature,
       systemPrompt: withProvenanceGuidance(MAPPING_GENERATION_AGENT_SYSTEM_PROMPT),
       userMessage: agentBatchUserMessage,
-      tools: [
-        { tool: QUERY_FIELD_DATA_TOOL, handler: makeQueryFieldDataHandler({ supabase, projectId, userId }) },
-        { tool: COUNT_DISTINCT_PATTERNS_TOOL, handler: makeCountDistinctPatternsHandler({ supabase, projectId, userId }) },
-        { tool: CROSS_FIELD_CORRELATION_TOOL, handler: makeCrossFieldCorrelationHandler({ supabase, projectId, userId }) },
-        { tool: EMIT_TABLE_MAPPINGS_TOOL },
-      ],
+      tool: EMIT_TABLE_MAPPINGS_TOOL,
+      maxTokens,
       projectId,
       userId,
-      llmOptions: {
-        model: 'claude-opus-4-7',
-        maxTokens,
-        promptVersion: 'mapping-v2-agent',
-        ...(cacheControl ? { cacheControl: true } : {}),
-        abuseUserId: userId,
-        thinking: { type: 'adaptive' },
-        output_config: { effort: 'max' },
-        metadata: { ...baseMetadata, agent_loop: true },
-      },
+      model: 'claude-opus-4-7',
+      promptVersion: 'mapping-v2-agent-streaming',
+      abuseUserId: userId,
+      thinking: { type: 'adaptive' },
+      output_config: { effort: 'max' },
+      metadata: { ...baseMetadata, agent_loop: true },
+      ...(cacheControl ? { cacheControl: true } : {}),
     })
   } catch (err) {
     return { kind: 'agent_threw', error: err }
   }
 
-  if (agentResult.kind === 'final') {
-    return { kind: 'ok', result: synthesizeToolUseResult(agentResult) }
-  }
-
-  if (agentResult.reason === 'schema_error') {
-    // LOCK #5 from PR 3.4b: schema_error fallback → single-shot retry with
-    // EMIT_TABLE_MAPPINGS_TOOL forced + the legacy system prompt. Other
-    // abort reasons hard-fail the batch (caller decides).
-    try {
-      const fallback = await callLLM({
-        feature,
-        systemPrompt: withProvenanceGuidance(MAPPING_GENERATION_SYSTEM_PROMPT),
-        userMessage: baseUserMessage,
-        maxTokens,
-        projectId,
-        userId,
-        promptVersion: 'mapping-v1',
-        abuseUserId: userId,
-        metadata: { ...baseMetadata, agent_fallback: true },
-        tool: EMIT_TABLE_MAPPINGS_TOOL,
-        ...(cacheControl ? { cacheControl: true } : {}),
-      })
-      return { kind: 'ok', result: fallback }
-    } catch (err) {
-      return { kind: 'fallback_threw', error: err }
-    }
-  }
-
-  // Other abort reasons: max_iterations, max_cost, max_wall_clock,
-  // model_error, tool_error. Caller's log message includes both the
-  // reason and the message text from the agent loop.
-  return {
-    kind: 'aborted_other',
-    reason: agentResult.reason,
-    message: agentResult.message,
-  }
+  return { kind: 'ok', result }
 }

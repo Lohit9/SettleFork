@@ -55,22 +55,41 @@ describe('mappings — runMappingGenerationForPair agent gate (source pins)', ()
     // Extracted helper returns SingleAgentResult discriminated union;
     // single-pair callsite maps each kind to its own error-return.
     expect(MAPPINGS_SRC).toMatch(/r\.kind\s*===\s*'agent_threw'/)
-    expect(MAPPINGS_SRC).toMatch(/r\.kind\s*===\s*'fallback_threw'/)
-    expect(MAPPINGS_SRC).toMatch(/r\.kind\s*===\s*'aborted_other'/)
+    // May 2026 streaming switch: single-pair callsite still references
+    // the full SingleAgentResult union for forward-compatibility, but
+    // the helper no longer emits 'fallback_threw' / 'aborted_other'
+    // (the schema_error fallback is dead code; the agent loop is
+    // collapsed to a direct callLLMStreaming call). Pin lifted on
+    // those two cases — they're still in the union shape but never
+    // emitted at runtime.
     // Single-pair returns on hard-fail (BULK uses `continue`).
     expect(MAPPINGS_SRC).toMatch(/return\s*\{\s*inserted:\s*0,\s*error:/)
   })
 
-  it('extracted helper preserves agent body patterns (tools + llmOptions + schema_error fallback)', () => {
-    // PR 3.4b body patterns now live in single-agent-mapping.ts (commit 2 extraction).
+  it('extracted helper streams via callLLMStreaming with EMIT_TABLE_MAPPINGS_TOOL forced (May 2026 streaming switch)', () => {
     const HELPER_SRC = readFileSync(
       resolve(__dirname, '../../lib/ai/single-agent-mapping.ts'),
       'utf8',
     )
-    expect(HELPER_SRC).toMatch(/tool:\s*QUERY_FIELD_DATA_TOOL,\s*handler:\s*makeQueryFieldDataHandler\(/)
+    // HOT-FIX 5 + streaming switch: the 3 data-scanning tools are
+    // gone from the helper's tools array and the agent loop is
+    // bypassed entirely. Negative pins on the data-scanning tool
+    // registrations + positive pin on the streaming wrapper. Strip
+    // comments before matching so historical references in the
+    // docblock don't trip the negative pin.
+    const codeOnly = HELPER_SRC.replace(/\/\*[\s\S]*?\*\//g, '').replace(
+      /\/\/[^\n]*/g,
+      '',
+    )
+    expect(codeOnly).not.toMatch(/QUERY_FIELD_DATA_TOOL,\s*handler:/)
+    expect(codeOnly).not.toMatch(/COUNT_DISTINCT_PATTERNS_TOOL,\s*handler:/)
+    expect(codeOnly).not.toMatch(/CROSS_FIELD_CORRELATION_TOOL,\s*handler:/)
+    expect(HELPER_SRC).toMatch(/await callLLMStreaming\(/)
     expect(HELPER_SRC).toMatch(/\btool:\s*EMIT_TABLE_MAPPINGS_TOOL\b/)
-    expect(HELPER_SRC).toMatch(/agent_fallback:\s*true/)
-    expect(HELPER_SRC).toMatch(/agentResult\.reason\s*===\s*'schema_error'/)
+    // Schema_error fallback collapsed — no longer reachable with a
+    // single forced tool.
+    expect(codeOnly).not.toMatch(/agent_fallback:\s*true/)
+    expect(codeOnly).not.toMatch(/agentResult\.reason\s*===\s*'schema_error'/)
     // PR-A wrapped this with withProvenanceGuidance(...) so the prompt
     // picks up the 4-tier priority block at flag-ON. Allow either form.
     expect(HELPER_SRC).toMatch(
@@ -78,9 +97,12 @@ describe('mappings — runMappingGenerationForPair agent gate (source pins)', ()
     )
   })
 
-  it('legacy else branch preserves featureOverride routing + phase2Enabled tool spread (heritage)', () => {
+  it('legacy else branch preserves featureOverride routing + phase2Enabled tool spread (heritage) — under streaming', () => {
     expect(MAPPINGS_SRC).toMatch(/feature:\s*featureOverride\s*\?\?\s*'mapping_generate_legacy_pair'/)
     expect(MAPPINGS_SRC).toMatch(/\.\.\.\(phase2Enabled\s*&&\s*\{\s*tool:\s*EMIT_TABLE_MAPPINGS_TOOL\s*\}\)/)
+    // May 2026 streaming switch: legacy single-pair callsite uses
+    // callLLMStreaming.
+    expect(MAPPINGS_SRC).toMatch(/await callLLMStreaming\(/)
   })
 })
 
