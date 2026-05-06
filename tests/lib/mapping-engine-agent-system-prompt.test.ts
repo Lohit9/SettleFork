@@ -22,21 +22,40 @@ describe('mapping-engine — agent-mode system prompt', () => {
     )
   })
 
-  it('AGENT_TOOL_GUIDANCE covers all 3 data tools + hard limits + what-not-to-do', () => {
-    // PR 3.4cd commit 4: AGENT_TOOL_GUIDANCE moved to a dependency-free
-    // module (agent-tool-guidance.ts) to break the circular-import cycle
-    // between mapping-engine.ts and multi-agent-prompts.ts. mapping-engine.ts
-    // re-exports it for import-path stability.
+  it('AGENT_TOOL_GUIDANCE is empty post-HOT-FIX-4 (data-scanning tool advertisement removed); export shape preserved', () => {
+    // HOT-FIX 4 (May 2026): the previous content advertised three
+    // live data-scanning tools (query_field_data /
+    // count_distinct_patterns / cross_field_correlation) which the AI
+    // was calling without ever producing emit_table_mappings — the
+    // agent loop drained iterations / cost-cap and persisted zero
+    // mappings. Constant is now empty; agent prompts no longer
+    // advertise these tools. HOT-FIX 5 additionally removed the
+    // tool registrations from runSingleAgentMappingLoop's tools
+    // array (single-agent-mapping.ts:138-141 pre-fix).
+    //
+    // PR 3.4cd commit 4 history: AGENT_TOOL_GUIDANCE was moved to a
+    // dependency-free module (agent-tool-guidance.ts) to break the
+    // circular-import cycle between mapping-engine.ts and
+    // multi-agent-prompts.ts. mapping-engine.ts re-exports it for
+    // import-path stability — that re-export is still in place.
     const GUIDANCE_SRC = readFileSync(
       resolve(__dirname, '../../lib/ai/agent-tool-guidance.ts'),
       'utf8',
     )
-    expect(GUIDANCE_SRC).toMatch(/export const AGENT_TOOL_GUIDANCE\s*=/)
-    expect(GUIDANCE_SRC).toContain('query_field_data')
-    expect(GUIDANCE_SRC).toContain('count_distinct_patterns')
-    expect(GUIDANCE_SRC).toContain('cross_field_correlation')
-    expect(GUIDANCE_SRC).toMatch(/HARD LIMITS/)
-    expect(GUIDANCE_SRC).toMatch(/WHAT NOT TO DO/)
+    // Export shape preserved (consumers compose this constant via
+    // string concatenation; deleting the export would break every
+    // import site).
+    expect(GUIDANCE_SRC).toMatch(/export const AGENT_TOOL_GUIDANCE\s*=\s*['"]['"]/)
+    // Negative pins: the data-scanning tool advertisements MUST stay
+    // out of the constant body until a deliberate restore lands.
+    // Comment lines that REFERENCE the names historically (in the
+    // hot-fix-4 docblock) don't count — strip line comments first.
+    const codeOnly = GUIDANCE_SRC.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/[^\n]*/g, '')
+    expect(codeOnly).not.toContain('query_field_data')
+    expect(codeOnly).not.toContain('count_distinct_patterns')
+    expect(codeOnly).not.toContain('cross_field_correlation')
+    expect(codeOnly).not.toMatch(/HARD LIMITS/)
+    expect(codeOnly).not.toMatch(/WHAT NOT TO DO/)
     // mapping-engine still re-exports for backward-compat import paths.
     expect(ENGINE_SRC).toMatch(/export\s*\{\s*AGENT_TOOL_GUIDANCE\s*\}/)
   })

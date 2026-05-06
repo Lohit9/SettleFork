@@ -249,37 +249,42 @@ describe('[generateMappings] A5 — system prompt: closing JSON-only instruction
 // Group B — Token budget pins
 // ─────────────────────────────────────────────────────────────────────
 
-describe('[generateMappings] B1 — PER_BATCH_MAX_TOKENS = 16000', () => {
-  it('declares PER_BATCH_MAX_TOKENS = 16000 inside runMappingGeneration (engine)', () => {
-    expect(RUN_GEN_BODY).toMatch(/const\s+PER_BATCH_MAX_TOKENS\s*=\s*16000\b/)
+describe('[generateMappings] B1 — PER_BATCH_MAX_TOKENS = 32000 (May 2026 streaming bump)', () => {
+  it('declares PER_BATCH_MAX_TOKENS = 32000 inside runMappingGeneration (engine)', () => {
+    // May 2026 incident: bumped 16000 → 32000 to fit the structured
+    // emit_table_mappings tool input on projects with 100+ field-pair
+    // sets without truncation. The bump is paired with a switch to
+    // callLLMStreaming on the primary call (B2 below).
+    expect(RUN_GEN_BODY).toMatch(/const\s+PER_BATCH_MAX_TOKENS\s*=\s*32000\b/)
   })
 
-  it('passes PER_BATCH_MAX_TOKENS via the callLLM options object on the primary call', () => {
-    // Post-PR-6: the primary AI call goes through `callLLM(opts)` from
-    // `lib/ai/llm-client.ts`, not `callClaude(...)` directly.
-    // Argument shape is now an options object — pin the four key
-    // fields on the primary call so a refactor that drops any of them
-    // breaks CI.
+  it('passes PER_BATCH_MAX_TOKENS via the callLLMStreaming options object on the primary call', () => {
+    // May 2026 incident: the primary AI call goes through
+    // `callLLMStreaming(opts)` (was `callLLM` pre-incident). Streaming
+    // unlocks the 32k token budget without the previous
+    // non-streaming truncation behaviour. Argument shape stays the
+    // same — pin the four key fields so a refactor that drops any of
+    // them breaks CI.
     expect(RUN_GEN_BODY).toMatch(
-      /callLLM\(\{[\s\S]{0,800}feature:\s*['"]mapping_generate['"]/,
+      /callLLMStreaming\(\{[\s\S]{0,800}feature:\s*['"]mapping_generate['"]/,
     )
     // PR-A wrapped the bare constant in `withProvenanceGuidance(...)`
     // so the prompt picks up the 4-tier priority block at flag-ON.
     // Allow either form so this pin is forward-compatible if PR-A is
     // ever rolled back.
     expect(RUN_GEN_BODY).toMatch(
-      /callLLM\(\{[\s\S]{0,800}systemPrompt:\s*(?:withProvenanceGuidance\()?MAPPING_GENERATION_SYSTEM_PROMPT/,
+      /callLLMStreaming\(\{[\s\S]{0,800}systemPrompt:\s*(?:withProvenanceGuidance\()?MAPPING_GENERATION_SYSTEM_PROMPT/,
     )
     expect(RUN_GEN_BODY).toMatch(
-      /callLLM\(\{[\s\S]{0,800}userMessage:\s*batchUserMessage/,
+      /callLLMStreaming\(\{[\s\S]{0,800}userMessage:\s*batchUserMessage/,
     )
     expect(RUN_GEN_BODY).toMatch(
-      /callLLM\(\{[\s\S]{0,800}maxTokens:\s*PER_BATCH_MAX_TOKENS/,
+      /callLLMStreaming\(\{[\s\S]{0,800}maxTokens:\s*PER_BATCH_MAX_TOKENS/,
     )
   })
 })
 
-describe('[generateMappings] B2 — JSON-repair retry uses the same 16000-token budget', () => {
+describe('[generateMappings] B2 — JSON-repair retry uses the same 32000-token budget', () => {
   it('passes PER_BATCH_MAX_TOKENS to the retry callLLM (not a different literal)', () => {
     // The retry block should reference the same constant, not a
     // different magic number. This pins the "same budget on retry"
@@ -335,12 +340,20 @@ describe('[generateMappings] C1 — one Claude call per source table, not per pa
     // runMappingGeneration into `lib/ai/single-agent-mapping.ts` along
     // with the rest of the 3.4b agent body. The C1 invariant (one
     // call per source-table, not per pair) holds: both remaining
-    // callLLMs are inside the per-source-table loop, not nested in a
-    // target-table loop.
+    // callLLM-family invocations are inside the per-source-table
+    // loop, not nested in a target-table loop.
+    //
+    // May 2026 streaming switch: the primary call now uses
+    // callLLMStreaming; the JSON-repair retry stays on callLLM. Total
+    // remains TWO calls, just split across the two wrappers.
     const callClaudeCount = (RUN_GEN_BODY.match(/callClaude\(/g) ?? []).length
     expect(callClaudeCount).toBe(0)
-    const callLLMCount = (RUN_GEN_BODY.match(/callLLM\(/g) ?? []).length
-    expect(callLLMCount).toBe(2)
+    const callLLMCount = (RUN_GEN_BODY.match(/\bcallLLM\(/g) ?? []).length
+    const callLLMStreamingCount = (RUN_GEN_BODY.match(/\bcallLLMStreaming\(/g) ?? []).length
+    expect(callLLMCount + callLLMStreamingCount).toBe(2)
+    // Primary uses streaming (B1 pin above), retry uses non-streaming.
+    expect(callLLMStreamingCount).toBe(1)
+    expect(callLLMCount).toBe(1)
   })
 })
 

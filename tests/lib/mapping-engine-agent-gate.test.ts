@@ -141,15 +141,36 @@ describe('mapping-engine — runMappingGeneration agent gate (source pins)', () 
     expect(ENGINE_SRC).toMatch(/runMultiAgentMappingPipeline\(/)
   })
 
-  it('extracted helper registers 4 tools + locked llmOptions (Opus 4.7 + adaptive thinking + max effort + agent_loop)', () => {
-    // Body patterns live in single-agent-mapping.ts now (commit 2 extraction).
-    expect(HELPER_SRC).toMatch(/tool:\s*QUERY_FIELD_DATA_TOOL,\s*handler:\s*makeQueryFieldDataHandler\(/)
-    expect(HELPER_SRC).toMatch(/tool:\s*COUNT_DISTINCT_PATTERNS_TOOL,\s*handler:\s*makeCountDistinctPatternsHandler\(/)
-    expect(HELPER_SRC).toMatch(/tool:\s*CROSS_FIELD_CORRELATION_TOOL,\s*handler:\s*makeCrossFieldCorrelationHandler\(/)
-    expect(HELPER_SRC).toMatch(/\{\s*tool:\s*EMIT_TABLE_MAPPINGS_TOOL\s*\}/)
+  it('extracted helper streams via callLLMStreaming with EMIT_TABLE_MAPPINGS_TOOL forced + locked llmOptions (Opus 4.7 + adaptive thinking + max effort + agent_loop)', () => {
+    // May 2026 incident: HOT-FIX 5 stripped the 3 data-scanning tool
+    // registrations (QUERY_FIELD_DATA_TOOL, COUNT_DISTINCT_PATTERNS_TOOL,
+    // CROSS_FIELD_CORRELATION_TOOL) — production telemetry showed the
+    // model dispatching them in turns where it never reached
+    // emit_table_mappings, draining the loop's iterations / cost cap.
+    // The streaming switch then collapsed runAgentLoop down to a
+    // direct callLLMStreaming({ tool: EMIT_TABLE_MAPPINGS_TOOL })
+    // because the agent loop was degenerate with one answer-only tool.
+    //
+    // Negative pins on the data-scanning tools — they MUST stay out
+    // of the helper's tools array until cohort eval validates lift.
+    expect(HELPER_SRC).not.toMatch(/QUERY_FIELD_DATA_TOOL,\s*handler:/)
+    expect(HELPER_SRC).not.toMatch(/COUNT_DISTINCT_PATTERNS_TOOL,\s*handler:/)
+    expect(HELPER_SRC).not.toMatch(/CROSS_FIELD_CORRELATION_TOOL,\s*handler:/)
+    // Positive pin: the streaming wrapper is the entry point now.
+    expect(HELPER_SRC).toMatch(/await callLLMStreaming\(/)
+    expect(HELPER_SRC).toMatch(/tool:\s*EMIT_TABLE_MAPPINGS_TOOL/)
     expect(HELPER_SRC).toMatch(/model:\s*'claude-opus-4-7'/)
-    expect(HELPER_SRC).toMatch(/promptVersion:\s*'mapping-v2-agent'/)
-    expect(HELPER_SRC).toMatch(/thinking:\s*\{\s*type:\s*'adaptive'\s*\}/)
+    // promptVersion bumped to v2-agent-streaming so llm_calls
+    // analytics can distinguish the streaming-era runs.
+    expect(HELPER_SRC).toMatch(/promptVersion:\s*'mapping-v2-agent-streaming'/)
+    // HOT-FIX 6 (May 2026): thinking flipped from 'adaptive' to
+    // 'disabled' to satisfy the Anthropic constraint that
+    // tool_choice: { type: 'tool' } (forced) is incompatible with
+    // adaptive/enabled thinking. The agent callsite uses forced
+    // single-tool (EMIT_TABLE_MAPPINGS_TOOL), so thinking must be
+    // disabled. See investigation report in this same session +
+    // mapping-streaming-incident.test.ts for the locking pin.
+    expect(HELPER_SRC).toMatch(/thinking:\s*\{\s*type:\s*'disabled'\s*\}/)
     expect(HELPER_SRC).toMatch(/output_config:\s*\{\s*effort:\s*'max'\s*\}/)
     expect(HELPER_SRC).toMatch(/agent_loop:\s*true/)
     // PR-A wrapped this with withProvenanceGuidance(...) so the prompt
@@ -159,15 +180,38 @@ describe('mapping-engine — runMappingGeneration agent gate (source pins)', () 
     )
   })
 
-  it('extracted helper preserves schema_error → single-shot fallback with EMIT_TABLE_MAPPINGS_TOOL forced + other-abort routing', () => {
-    expect(HELPER_SRC).toMatch(/agentResult\.reason\s*===\s*'schema_error'/)
-    expect(HELPER_SRC).toMatch(/agent_fallback:\s*true/)
-    expect(HELPER_SRC).toMatch(/'aborted_other'/)
+  it('extracted helper no longer carries the schema_error fallback (degenerate agent loop collapsed to direct callLLMStreaming)', () => {
+    // May 2026 streaming switch: the agent-loop wrapper is gone, so
+    // the schema_error fallback (which retried via callLLM with the
+    // legacy prompt) is no longer reachable. With a single forced
+    // tool, the model can't emit text — there's nothing for
+    // schema_error to detect. Negative pins guarantee the fallback
+    // doesn't sneak back via a partial revert. Strip block + line
+    // comments before matching so historical mentions in docblock
+    // prose (PR 3.4cd's docblock references agent_fallback: true)
+    // don't trip the negative pin.
+    const codeOnly = HELPER_SRC.replace(/\/\*[\s\S]*?\*\//g, '').replace(
+      /\/\/[^\n]*/g,
+      '',
+    )
+    expect(codeOnly).not.toMatch(/agentResult\.reason\s*===\s*'schema_error'/)
+    expect(codeOnly).not.toMatch(/agent_fallback:\s*true/)
+    // Note: the SingleAgentResult union still carries `'aborted_other'`
+    // and `'fallback_threw'` members for caller-side API stability —
+    // they're intentionally preserved as type-shape forward-compat. The
+    // helper just never emits them anymore. Pin "kind: 'aborted_other'"
+    // (the return shape) rather than the string itself, so the union
+    // declaration doesn't trip the negative match.
+    expect(codeOnly).not.toMatch(/return\s*\{\s*kind:\s*'aborted_other'/)
+    expect(codeOnly).not.toMatch(/return\s*\{\s*kind:\s*'fallback_threw'/)
   })
 
-  it('legacy else branch preserves heritage args (phase2Enabled tool spread + cacheControl + error-then-continue)', () => {
+  it('legacy else branch preserves heritage args (phase2Enabled tool spread + cacheControl + error-then-continue) under streaming', () => {
     expect(ENGINE_SRC).toMatch(/\.\.\.\(phase2Enabled\s*&&\s*\{\s*tool:\s*EMIT_TABLE_MAPPINGS_TOOL\s*\}\)/)
-    expect(ENGINE_SRC).toMatch(/promptVersion:\s*'mapping-v1'/)
+    // May 2026 streaming switch: legacy promptVersion is now
+    // 'mapping-v1-streaming' (was 'mapping-v1') for analytics parity
+    // with the agent path's '-streaming' suffix.
+    expect(ENGINE_SRC).toMatch(/promptVersion:\s*'mapping-v1(?:-streaming)?'/)
     expect(ENGINE_SRC).toMatch(/Claude call failed for source table[\s\S]{0,150}continue/)
   })
 })

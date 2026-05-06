@@ -4,7 +4,7 @@ import { revalidatePath } from 'next/cache'
 import { createClient } from '@/lib/supabase/server'
 import { supabaseAdmin } from '@/lib/supabase/admin'
 import { requireProjectPermission } from '@/lib/actions/role-resolution'
-import { callLLM, type LLMFeature } from '@/lib/ai/llm-client'
+import { callLLM, callLLMStreaming, type LLMFeature } from '@/lib/ai/llm-client'
 import { withProvenanceGuidance } from '@/lib/ai/agent-provenance-guidance'
 // PR 3.4cd — single-agent + multi-agent pipeline helpers.
 import { runSingleAgentMappingLoop } from '@/lib/ai/single-agent-mapping'
@@ -235,7 +235,10 @@ export async function runMappingGenerationForPair(args: {
       : null
     const schemaOverviewBlock = phase3Enabled ? formatSchemaOverviewBlock(aiCtx) : ''
 
-    const PER_BATCH_MAX_TOKENS = 16000
+    // Streaming + 32k token budget (May 2026 incident — see
+    // mapping-engine.ts:1579 for the pair). Mirrors the BULK callsite's
+    // bump for consistency between BULK and single-pair paths.
+    const PER_BATCH_MAX_TOKENS = 32000
 
     // PR 12 H1: tool use under flag ON; legacy text + parseClaudeJSON +
     // repair-retry under flag OFF. The legacy branch is preserved
@@ -309,7 +312,11 @@ export async function runMappingGenerationForPair(args: {
       }
     } else {
       try {
-        primaryResult = await callLLM({
+        // Streaming switch (May 2026 incident): single-pair legacy
+        // mapping_generate uses callLLMStreaming for parity with the
+        // BULK legacy callsite. Same args, same return shape, same
+        // forced-tool semantics under PHASE_2.
+        primaryResult = await callLLMStreaming({
           // featureOverride lets the eval runner tag this call as
           // `eval_mapping` so it's excluded from the production cost
           // report. Production callers omit it and the canonical feature
@@ -320,7 +327,7 @@ export async function runMappingGenerationForPair(args: {
           maxTokens: PER_BATCH_MAX_TOKENS,
           projectId,
           userId,
-          promptVersion: 'mapping-v1',
+          promptVersion: 'mapping-v1-streaming',
           abuseUserId: userId,
           metadata: {
             source_table_id: sourceTableId,
