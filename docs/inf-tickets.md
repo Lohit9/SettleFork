@@ -380,3 +380,30 @@ Path D's monolithic Opus 4.7 single-call architecture supersedes the multi-agent
 **Acceptance criteria:** Root cause identified; hook config or offending process disabled; clean working tree confirmed across two consecutive Claude Code edits.
 
 ---
+
+## INF-28 — A0a unregistered-data-scanning-tools fix obsolete (closed without landing)
+
+**Status:** CLOSED
+**Filed:** 2026-05-06
+**Closed:** 2026-05-06 by investigation finding the fix already on main. A0a closed obsolete after investigation 2026-05-06; fix was incorporated via commit `b3417b2` (PR #81, merged 2026-05-05 as `5ae0d36`). Branch `fix/remove-unregistered-datascanning-tools` superseded; deletion follows this PR.
+**Description:**
+A0a was scoped (per audit RECOMMENDATION #9) to land the standalone HOT-FIX 4 commit `4c5d7d5` on `fix/remove-unregistered-datascanning-tools` to main before A2 (migration 093 / Path D structural work) begins. Investigation 2026-05-06 confirmed the fix is already on main with the same intent and more:
+
+- `lib/ai/agent-tool-guidance.ts:51` is `export const AGENT_TOOL_GUIDANCE = ''` (HOT-FIX 4 applied)
+- `tests/lib/mapping-engine-agent-system-prompt.test.ts` carries the negative-pin test for `query_field_data` / `count_distinct_patterns` / `cross_field_correlation` strings staying out of the constant body
+- `tests/integration/mapping-persistence-write-path.test.ts` exists on main (378 LOC, expanded from 4c5d7d5's 286 LOC)
+- HOT-FIX 5 (additional, beyond 4c5d7d5's scope) removed the 3 data-scanning tools from `runSingleAgentMappingLoop`'s tools array entirely — `grep QUERY_FIELD_DATA_TOOL lib/ai/single-agent-mapping.ts` returns zero matches
+
+The supersession is documented in `b3417b2`'s own commit message: "This PR supersedes the pending HOT-FIX 4 PR (`fix/remove-unregistered-datascanning-tools`) — it bundles HOT-FIX 4 + HOT-FIX 5 + the streaming switch + the 32k token bump into one self-contained set of changes." Re-applying `4c5d7d5` on top would be a no-op for the prompt fix and would conflict with b3417b2's test pin updates.
+
+**Lesson captured for INF-24 (investigation-first protocol):** the audit RECOMMENDATION #9 cited the fix's branch ref, not its content state vs current main. Branch-ref recommendations need a content-on-main check before scoping work.
+
+**Cleanup follow-up (not blocking):** delete branch from origin after this PR merges:
+
+```
+git push origin --delete fix/remove-unregistered-datascanning-tools
+```
+
+**Related:** INF-24 (investigation-first protocol — this case reinforces the rule).
+
+---
