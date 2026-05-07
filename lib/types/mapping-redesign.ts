@@ -38,6 +38,14 @@ export interface TargetFieldMappingRow {
   combination_type: TFMCombinationType | null
   combination_sql: string | null
   /**
+   * Path D (migration 093) — free-form AI rationale describing the intent of
+   * the transformation. Distinct from `ai_reasoning` which describes the
+   * mapping decision itself. Path D writes this directly; Path B records
+   * carry NULL here and embed combination markers inside `ai_reasoning`.
+   * Read via `lib/utils/transformation-intent.ts:resolveTransformationIntent`.
+   */
+  transformation_intent: string | null
+  /**
    * User/AI assessment of whether this target field needs a transformation.
    *
    *   NULL  = not yet assessed (no primary FM ever set a value)

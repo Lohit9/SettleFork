@@ -388,6 +388,7 @@ function tfm(partial: Partial<TargetFieldMappingRow> & Pick<TargetFieldMappingRo
     acknowledgment_reason: null,
     combination_type: 'single',
     combination_sql: null,
+    transformation_intent: null,
     needs_transformation: null,
     va_dismissed: false,
     dismissal_reason: null,
