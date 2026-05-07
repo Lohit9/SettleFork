@@ -1,0 +1,30 @@
+# INF-26 — narrow .prettierignore until the codebase adopts the new config.
+# Existing dirs with manual-wrapping drift are excluded; new work in
+# components/ + tests/components/ is formatted by the hook on touch.
+# Follow-up PRs migrate excluded dirs out as files are formally formatted.
+
+node_modules
+.next
+out
+build
+dist
+public
+supabase/migrations
+pnpm-lock.yaml
+
+# Documentation + SQL — owned by humans, not Prettier.
+*.md
+*.sql
+
+# Vendored / different-style codebases.
+components/ui
+figma
+
+# Liberal directory-level exclusions until codebase catches up (INF-26 follow-up).
+app
+lib
+scripts
+
+# Tests: ignore everything except tests/components/ which is the formatted surface.
+tests
+!tests/components
