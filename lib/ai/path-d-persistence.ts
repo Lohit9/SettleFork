@@ -485,13 +485,26 @@ async function persistDecisions(
 async function persistProjectNotes(
   admin: SupabaseClient,
   projectId: string,
-  userId: string,
+  _userId: string,
   experimentRunId: string,
   markdown: string,
 ): Promise<void> {
-  // UPSERT into outputs by (project_id, type='path_d_project_notes')
+  // UPSERT into outputs by (project_id, type='path_d_project_notes').
   // The outputs table doesn't have a unique constraint on this combination,
   // so we DELETE+INSERT to maintain idempotency.
+  //
+  // Schema notes:
+  //   - `outputs.metadata` (JSONB) was added in migration 049.
+  //   - `outputs.type` CHECK extended to include 'path_d_project_notes' in
+  //     migration 094 (the 4a draft of this helper assumed the value was
+  //     already allowed; turned out it wasn't).
+  //   - `outputs` has no `user_id` column (the 4a draft of this helper
+  //     spuriously included one and the insert failed in production —
+  //     fixed here by dropping the field). The userId arg stays in the
+  //     signature for symmetry with the other persist helpers; prefixed
+  //     with `_` to signal "intentionally unused".
+  //   - `format` is NOT NULL in the schema (no default), so we set it to
+  //     'markdown' explicitly.
   const delResult = await admin
     .from('outputs')
     .delete()
@@ -502,7 +515,7 @@ async function persistProjectNotes(
   const row = {
     project_id: projectId,
     type: 'path_d_project_notes',
-    user_id: userId,
+    format: 'markdown',
     metadata: {
       markdown,
       experiment_run_id: experimentRunId,

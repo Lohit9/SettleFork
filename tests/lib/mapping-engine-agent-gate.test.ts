@@ -74,7 +74,7 @@ describe('formatSchemaOverviewBlock — naming + FK + doc summary', () => {
     return {
       table_id: 't', table_name: name, dataset_name: 'd', role: 'source', row_count: 10,
       fields: fields.map((f) => ({
-        data_type: 'text', inferred_type: null, is_nullable: true,
+        field_id: 'f-stub', data_type: 'text', inferred_type: null, is_nullable: true,
         is_primary_key: false, is_foreign_key: false, fk_reference: null, check_constraint: null,
         schema_source: 'inferred' as const, default_value: null, description: null,
         null_percentage: 0, cardinality: 0, unique_percentage: 0, format_issues_count: 0,

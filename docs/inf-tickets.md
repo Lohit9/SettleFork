@@ -586,3 +586,52 @@ Mocked coverage includes auth/permission boundary, error paths, happy path with 
 **Related:** INF-32 (sibling — Remove-table v1 deferred items), INF-34 (sibling — IngestionCard wiring tests).
 
 ---
+
+## INF-36 — Audit-invariant allow-list review for Path D entries
+
+**Status:** OPEN
+**Filed:** 2026-05-07
+**Description:**
+Sub-PR 4a + 4b added three entries to the Path D side of the audit-invariant allow-lists:
+
+1. `persistMappings` in `tests/lib/ai-edit-emission-invariant.test.ts:ALLOWED_FUNCTIONS_WITHOUT_LOG_AI_EDIT` — the bulk-upsert leg of `lib/ai/path-d-persistence.ts`. Allow-listed because per-row `logAIEdit` from a bulk insert deserves careful per-row state-capture design (existing Phase 0c follow-up pattern); provenance is emitted from the orchestrator boundary instead via `emitPathDProvenance`.
+2. `emitPathDProvenance` in the same allow-list — the orchestrator's centralised provenance loop. Reads `target_field_mappings` (SELECT) and inserts `ai_edit_history` rows directly. The audit regex matches `.from('target_field_mappings')` followed by `.insert(` (the `ai_edit_history` insert) and produces a false positive on a TFM write. Allow-listed with rationale.
+3. `lib/ai/path-d-mapping.ts` in `tests/lib/no-direct-callclaude.test.ts:ALLOWED_FILES_FOR_SDK_IMPORT` — the orchestrator imports `Anthropic` directly to iterate raw stream events (mid-stream cost-ceiling abort can't go through the shared `callLLMStreaming` wrapper which blocks on `.finalMessage()`). The orchestrator writes its own `llm_calls` row carrying `pathDExperimentMetadata`, so the audit-trail invariant is satisfied.
+
+Each entry is independently justified, but the cluster is load-bearing for Path D's architecture. Should be reviewed periodically — particularly after Phase C prompt iteration — to confirm the rationales still hold.
+
+**Acceptance criteria:** Audit each of the 3 entries; confirm the rationale is still accurate given the then-current code state; document any deltas. If the orchestrator + persistence boundary stabilises across multiple Phase C iterations, consider extracting a shared "bulk AI mutation with centralised provenance" helper that replaces the allow-list entries with a clean abstraction.
+
+**Code references:**
+
+- `lib/ai/path-d-persistence.ts:persistMappings`
+- `lib/ai/path-d-mapping.ts:emitPathDProvenance`
+- `tests/lib/ai-edit-emission-invariant.test.ts:ALLOWED_FUNCTIONS_WITHOUT_LOG_AI_EDIT`
+- `tests/lib/no-direct-callclaude.test.ts:ALLOWED_FILES_FOR_SDK_IMPORT`
+
+**Related:** Sub-PR 4a (PR #97), Sub-PR 4b (this PR).
+
+---
+
+## INF-37 — Pin Heritage Capture D fingerprints in code
+
+**Status:** OPEN
+**Filed:** 2026-05-07
+**Description:**
+`tests/integration/path-d-heritage.test.ts` has three fingerprint pins (Pins 5, 6, 7) whose `PINNED_FINGERPRINT` constants are still `null`. CAPTURE mode (`PATH_D_HERITAGE_CAPTURE=1`) prints the current fingerprint to console for manual inspection; the assertion is skipped until a value is pinned. Sub-PR 4b's verified flag-OFF heritage run captured these baselines:
+
+- Pin 5 (TFM read-path): `f4cf49636cd3baa072aa753c0574f0afde62db6de5c3b768c6209193ee06b541`
+- Pin 6 (transform-page): `182cc344c2ae0a67a0a420a957422194319db8c61401d404bf802748923f7d50`
+- Pin 7 (validation-page): `601152d401a89cdd28ee9fa98d853457a87849a036ad5eb5154340157c6ecf16`
+
+These are not pinned in code yet because a single capture run is insufficient evidence of stability — the fingerprints depend on the canary's TFM/transformation/validation_rule state, which can shift legitimately between Path B production runs. Two more flag-OFF heritage runs across normal Path B activity will confirm the values are stable; pin afterwards.
+
+**Acceptance criteria:** After 2-3 additional flag-OFF heritage runs confirm the same three fingerprint values, replace the three `const PINNED_*_FINGERPRINT: string | null = null` initializers with the verbatim hex values, remove the early-return capture-mode branch, and let the `expect(fingerprint).toBe(PINNED_*)` assertion run unconditionally.
+
+**Code references:**
+
+- `tests/integration/path-d-heritage.test.ts` (Pin 5 ≈ line 155, Pin 6 ≈ line 220, Pin 7 ≈ line 270)
+
+**Related:** Sub-PR 4a (PR #97), Sub-PR 4b (this PR).
+
+---

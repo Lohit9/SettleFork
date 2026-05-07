@@ -44,6 +44,17 @@ const SKIP_DIRS = new Set([
 const ALLOWED_FILES_FOR_SDK_IMPORT = new Set([
   // The single legitimate consumer of the Anthropic SDK
   'lib/ai/llm-client.ts',
+  // Path D orchestrator (Sub-PR 4b). The shared `callLLMStreaming` wrapper
+  // blocks on `await stream.finalMessage()` and cannot expose mid-stream
+  // chunks for cost-ceiling abort. Path D iterates raw events so it can
+  // call `stream.controller.abort()` when cumulative output cost exceeds
+  // PER_PROJECT_MAX_COST_USD. The orchestrator writes its OWN llm_calls
+  // row via `writePathDLlmCallLog` (carrying `pathDExperimentMetadata`),
+  // so the audit-trail invariant ("every AI call must log to llm_calls")
+  // is satisfied. Phase C may extract a shared streaming-with-abort
+  // helper into llm-client.ts; until then this is the second legitimate
+  // SDK consumer.
+  'lib/ai/path-d-mapping.ts',
 ])
 
 function walkSourceFiles(roots: string[]): string[] {

@@ -172,6 +172,19 @@ const ALLOWED_FUNCTIONS_WITHOUT_LOG_AI_EDIT = new Set<string>([
   // stubbed (returns notImplementedError) until Sub-PR 4b. Provenance
   // wiring lands with the orchestrator in 4b.
   'persistMappings',
+
+  // ── Path D orchestrator (Sub-PR 4b) ──────────────────────────────────────
+  // path-d-mapping.ts:emitPathDProvenance is itself the provenance emitter
+  // for the Path D bulk run — it READS target_field_mappings (just inserted
+  // by persistMappings) and INSERTS into ai_edit_history. The audit regex
+  // greedily matches `.from('target_field_mappings')` (the read) followed
+  // within 2000 chars by `.insert(` (on ai_edit_history) and reports a
+  // false-positive write to `target_field_mappings`. The function does
+  // NOT write `target_field_mappings`; allow-listing it documents the
+  // false positive and keeps the audit's other invariants (the orchestrator
+  // boundary IS where Path D's provenance fires; this function is the
+  // boundary).
+  'emitPathDProvenance',
 ])
 
 // ─────────────────────────────────────────────────────────────────────────────

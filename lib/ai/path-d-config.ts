@@ -99,7 +99,8 @@ export class ProjectTooLargeError extends Error {
 
 /**
  * Thrown by the Sub-PR 4b Path D orchestrator when:
- *   - Pre-call gate: predicted cost (input × $15/M + output × $75/M) exceeds
+ *   - Pre-call gate: predicted cost (input × $5/M + output × $25/M, the
+ *     actual Opus 4.7 pricing per `lib/ai/pricing.ts`) exceeds
  *     PER_PROJECT_MAX_COST_USD before the Anthropic stream is opened.
  *   - Mid-stream gate: cumulative output_tokens cost exceeds the ceiling
  *     while streaming. The orchestrator aborts the stream via AbortController
