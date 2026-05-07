@@ -16,6 +16,7 @@
  * was out of scope for Prompt 3c.
  */
 
+import type { SupabaseClient } from '@supabase/supabase-js'
 import { supabaseAdmin } from '@/lib/supabase/admin'
 import { callLLM } from '@/lib/ai/llm-client'
 import { buildAIContext, formatDocumentsForPrompt } from '@/lib/ai/context-builder'
@@ -979,13 +980,33 @@ export async function generateTransformSpecsInternal(
 
 // ── getOutputsPageDataCore ────────────────────────────────────────────────────
 //
-// Core data-assembly function for the outputs page. Uses supabaseAdmin
-// throughout — no cookies, no auth context, no Next.js request scope required.
-// The server action `getOutputsPageData` in outputs.ts enforces auth + project
-// membership and then delegates here.
+// Core data-assembly function for the outputs page. The server action
+// `getOutputsPageData` in outputs.ts enforces auth + project membership and
+// passes its cookies-bound user client through; the rows that feed
+// `projectStats` (datasets, tables, fields, target_field_mappings,
+// mapping_sources, source_field_acknowledgments, transformations,
+// quality_issues, projects) MUST go through that client so the Migration
+// Center widgets see the same RLS-bound rowset as the Mapping page top
+// strip and the dashboard tile. Without this unification, MC would silently
+// see admin-fetched rows the user can't observe elsewhere — which is the
+// alignment bug PR-4 closes.
+//
+// Auxiliary rows (table_mappings, outputs, activity_log, staged_data_rows)
+// stay on supabaseAdmin: they're not stat feeders and their RLS posture
+// hasn't been audited as part of this PR. Pre-PR-1 audit confirmed all 10
+// stat-feeder tables have project-broad SELECT policies via
+// `user_can_access_project`, so the swap is a pure client substitution
+// with no rowset change for project members.
+//
+// Tests / heritage callers that need to bypass auth (e.g.
+// outputs-heritage.test.ts) can omit `client` — the parameter defaults to
+// supabaseAdmin to preserve the prior behavior.
 
-export async function getOutputsPageDataCore(projectId: string): Promise<OutputsPageData> {
-  const { data: project } = await supabaseAdmin
+export async function getOutputsPageDataCore(
+  projectId: string,
+  client: SupabaseClient = supabaseAdmin,
+): Promise<OutputsPageData> {
+  const { data: project } = await client
     .from('projects')
     .select('id, name')
     .eq('id', projectId)
@@ -1002,13 +1023,13 @@ export async function getOutputsPageDataCore(projectId: string): Promise<Outputs
     { data: tfmRows },
     { data: msRows },
   ] = await Promise.all([
-    supabaseAdmin.from('datasets').select('id, role, name').eq('project_id', projectId),
+    client.from('datasets').select('id, role, name').eq('project_id', projectId),
     supabaseAdmin
       .from('table_mappings')
       .select('id, status, source_table_id, target_table_id')
       .eq('project_id', projectId)
       .neq('status', 'rejected'),
-    supabaseAdmin
+    client
       .from('quality_issues')
       .select('id, severity, status, title, description, field_id, stage, issue_kind, created_at')
       .eq('project_id', projectId),
@@ -1023,17 +1044,17 @@ export async function getOutputsPageDataCore(projectId: string): Promise<Outputs
       .eq('project_id', projectId)
       .order('created_at', { ascending: false })
       .limit(200),
-    supabaseAdmin
+    client
       .from('source_field_acknowledgments')
       .select('source_field_id')
       .eq('project_id', projectId),
-    supabaseAdmin
+    client
       .from('target_field_mappings')
       .select(
         'id, target_field_id, confidence, status, ai_reasoning, is_acknowledged, combination_type, needs_transformation, va_dismissed, created_at',
       )
       .eq('project_id', projectId),
-    supabaseAdmin
+    client
       .from('mapping_sources')
       .select(
         'id, target_field_mapping_id, source_field_id, source_table_id, confidence, ordinal, type_compatibility',
@@ -1044,7 +1065,7 @@ export async function getOutputsPageDataCore(projectId: string): Promise<Outputs
   const targetDataset = datasets?.find((d) => d.role === 'target') ?? null
   const allDatasetIds = datasets?.map((d) => d.id) ?? []
 
-  const { data: allTables } = await supabaseAdmin
+  const { data: allTables } = await client
     .from('tables')
     .select('id, dataset_id, name, row_count')
     .in('dataset_id', allDatasetIds.length ? allDatasetIds : ['__none__'])
@@ -1057,11 +1078,11 @@ export async function getOutputsPageDataCore(projectId: string): Promise<Outputs
   const totalSourceRows = sourceTables.reduce((sum, t) => sum + (t.row_count ?? 0), 0)
 
   const [{ data: sourceFieldRows }, { data: targetFieldRows }] = await Promise.all([
-    supabaseAdmin
+    client
       .from('fields')
       .select('id, name, data_type, is_nullable, table_id')
       .in('table_id', sourceTableIds.length ? sourceTableIds : ['__none__']),
-    supabaseAdmin
+    client
       .from('fields')
       .select(
         'id, name, data_type, inferred_type, is_nullable, is_primary_key, is_foreign_key, table_id, default_value',
@@ -1092,7 +1113,7 @@ export async function getOutputsPageDataCore(projectId: string): Promise<Outputs
 
   const { data: transformRows } =
     tfmIdSet.size > 0
-      ? await supabaseAdmin
+      ? await client
           .from('transformations')
           .select('id, target_field_mapping_id, status, description, created_at')
           .in('target_field_mapping_id', Array.from(tfmIdSet))

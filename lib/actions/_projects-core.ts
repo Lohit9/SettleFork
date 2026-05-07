@@ -101,6 +101,7 @@
  */
 
 import type { SupabaseClient } from '@supabase/supabase-js'
+import { unstable_noStore as noStore } from 'next/cache'
 import type { Dataset, ProjectWithStats } from '@/lib/types/database'
 import { computeProjectStats } from '@/lib/quality/stat-formulas'
 import {
@@ -141,6 +142,14 @@ export async function getProjectsWithStatsInternal(
   supabase: SupabaseClient,
   orgId?: string,
 ): Promise<ProjectWithStats[]> {
+  // Opt out of RSC caching: dashboard tile aggregates rows from tables
+  // that mutate via server actions across the project (TFMs, transforms,
+  // quality_issues, source_field_acks). Without noStore() Next.js caches
+  // the aggregation across requests, leaving the tile stale relative to
+  // the Mapping page and Migration Center which fetch fresh per request.
+  // PR-4 chokepoint fix — see feat/stats-data-alignment.
+  noStore()
+
   let query = supabase
     .from('projects')
     .select('*, datasets(id, role, name)')

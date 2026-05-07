@@ -1657,6 +1657,8 @@ export async function ensureValueAssignment(
     }
 
     revalidatePath(`/app/projects/${projectId}`, 'layout')
+    // PR-4: dashboard tile transforms.complete tracks transformations.
+    revalidatePath('/app/projects')
     return { success: true, fieldMappingId, transformationId: created.id }
   })
 }
@@ -2405,6 +2407,8 @@ export async function applyTransform(
     }
 
     revalidatePath(`/app/projects/${ctx.projectId}`, 'layout')
+    // PR-4: dashboard tile transforms.complete tracks transformations.
+    revalidatePath('/app/projects')
     return { success: true, rowsAffected: totalRows }
   })
 }
@@ -2493,6 +2497,8 @@ export async function revertTransform(
     }
 
     revalidatePath(`/app/projects/${ctx.projectId}`, 'layout')
+    // PR-4: dashboard tile transforms.complete tracks transformations.
+    revalidatePath('/app/projects')
     return { success: true, rowsAffected: totalReverted }
   })
 }
@@ -2897,6 +2903,8 @@ export async function dismissTransformNeeded(
   }
 
   revalidatePath(`/app/projects/${projectId}`, 'layout')
+  // PR-4: dashboard tile transforms.complete tracks transformations.
+  revalidatePath('/app/projects')
   return { success: true }
 }
 
@@ -2946,6 +2954,8 @@ export async function reinstateTransformNeeded(
   }
 
   revalidatePath(`/app/projects/${projectId}`, 'layout')
+  // PR-4: dashboard tile transforms.complete tracks transformations.
+  revalidatePath('/app/projects')
   return { success: true }
 }
 
@@ -3036,6 +3046,8 @@ export async function dismissValueAssignment(
   if (error) throw new Error(`Failed to dismiss value assignment: ${error.message}`)
 
   revalidatePath(`/app/projects/${projectId}`, 'layout')
+  // PR-4: value-assignment dismissal shifts transforms.total on the tile.
+  revalidatePath('/app/projects')
   return { success: true, fieldMappingId }
 }
 
@@ -3067,6 +3079,8 @@ export async function reinstateValueAssignment(
   if (error) throw new Error(`Failed to reinstate value assignment: ${error.message}`)
 
   revalidatePath(`/app/projects/${projectId}`, 'layout')
+  // PR-4: value-assignment reinstatement shifts transforms.total on the tile.
+  revalidatePath('/app/projects')
   return { success: true }
 }
 

@@ -878,6 +878,8 @@ export async function createFieldMapping(input: {
   // ── Step 10: revalidate ──────────────────────────────────────────────────
   revalidatePath(`/app/projects/${projectId}/mapping`)
   revalidatePath(`/app/projects/${projectId}/transform`)
+  // PR-4: dashboard tile aggregates target_field_mappings; refresh it too.
+  revalidatePath('/app/projects')
 
   // ── Step 11: activity log ────────────────────────────────────────────────
   // Format: `Mapping created: <src1>, <src2>, +N more → <tgt>` for
@@ -1697,6 +1699,8 @@ export async function editMappingSources(input: {
   // ── Step 16: revalidate ──────────────────────────────────────────────────
   revalidatePath(`/app/projects/${projectId}/mapping`)
   revalidatePath(`/app/projects/${projectId}/transform`)
+  // PR-4: dashboard tile aggregates target_field_mappings; refresh it too.
+  revalidatePath('/app/projects')
 
   // ── Step 17: activity logs ───────────────────────────────────────────────
   const srcNames = orderedSources.map((s) => s.name)
@@ -1908,6 +1912,8 @@ export async function updateMappingCombination(
 
   revalidatePath(`/app/projects/${tfm.project_id}/mapping`)
   revalidatePath(`/app/projects/${tfm.project_id}/transform`)
+  // PR-4: dashboard tile aggregates target_field_mappings; refresh it too.
+  revalidatePath('/app/projects')
 
   await logActivity(
     tfm.project_id,
@@ -2245,6 +2251,8 @@ export async function unacknowledgeField(input: {
 
   // ── Step 9: revalidate /mapping ──────────────────────────────────────────
   revalidatePath(`/app/projects/${projectId}/mapping`)
+  // PR-4: dashboard tile target.approved drops on ack removal.
+  revalidatePath('/app/projects')
 
   await logActivity(
     projectId,
@@ -2643,6 +2651,8 @@ export async function bulkApproveFieldMappingsForTargetTable(input: {
 
   // ── Step 10: revalidate /mapping ─────────────────────────────────────────
   revalidatePath(`/app/projects/${projectId}/mapping`)
+  // PR-4: bulk-approve shifts target.approved on the dashboard tile.
+  revalidatePath('/app/projects')
 
   return {
     success: true,
@@ -2814,6 +2824,8 @@ export async function approveHighConfidenceMappings(input: {
 
   // ── Step 8: revalidate /mapping ──────────────────────────────────────────
   revalidatePath(`/app/projects/${projectId}/mapping`)
+  // PR-4: bulk mutation shifts dashboard tile target/source axes.
+  revalidatePath('/app/projects')
 
   return {
     success: true,
@@ -3244,6 +3256,8 @@ export async function bulkRejectFieldMappingsForTargetTable(input: {
 
   // ── Step 11: revalidate /mapping ─────────────────────────────────────────
   revalidatePath(`/app/projects/${projectId}/mapping`)
+  // PR-4: bulk-reject shifts target.approved on the dashboard tile.
+  revalidatePath('/app/projects')
 
   return {
     success: true,
