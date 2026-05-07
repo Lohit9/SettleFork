@@ -48,6 +48,8 @@ import { SQL_DIALECTS } from '@/lib/types/database'
 import type { SqlDialect, ExecutionPackageFormat } from '@/lib/types/database'
 import { useProjectRole } from '@/lib/hooks/useProjectRole'
 import { RoleTooltip } from '@/components/app/RoleTooltip'
+import { SourceCoverageWidget } from '@/components/app/SourceCoverageWidget'
+import type { ProjectStats } from '@/lib/quality/project-stats'
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -894,7 +896,20 @@ export default function OutputsContent({ projectId, projectName, initialData, is
 
   // ── Computed values ─────────────────────────────────────────────────────
 
-  const { phases, metrics, decisions, outstanding, existingOutputs } = data
+  const { phases, metrics, decisions, outstanding, existingOutputs, projectStats } = data
+  // PR-3: state-aware empty for stat widgets (Q4 — Card height preserved
+  // across states, no layout shift). When the project hasn't reached
+  // `mappings_generated`, the numeric stat in Mapping Coverage and
+  // Transforms is replaced by a state label matching the tile badge
+  // wording from PR-2.
+  const projectStatsState: ProjectStats['state'] = projectStats?.state ?? 'awaiting_data'
+  const isStatsPopulated = projectStatsState === 'mappings_generated'
+  const projectStatsEmptyLabel =
+    projectStatsState === 'awaiting_data'
+      ? 'Awaiting data ingestion'
+      : projectStatsState === 'data_ingested'
+        ? 'Data ingested'
+        : ''
   const filteredDecisions = decisionsTypeFilter === 'all'
     ? decisions
     : decisions.filter((d) => d.type === decisionsTypeFilter)
@@ -921,24 +936,69 @@ export default function OutputsContent({ projectId, projectName, initialData, is
         ════════════════════════════════════════════════════ */}
         <div>
 
-          {/* ── Compact stat cards ─────────────────────────────────────────── */}
-          <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 items-stretch mb-4">
+          {/* ── Compact stat cards ───────────────────────────────────────────
+              PR-3 (feat/inner-page-stats-redesign): 4 cards → 5 cards.
+              Mapping Coverage and Transforms now read from `projectStats`
+              (PR-1's canonical surface) instead of the legacy `metrics.*`
+              fields. New Source Coverage card slotted in between Transforms
+              and Quality Issues — surfaces the source axis on MC for the
+              first time. State-aware empty (Q4) renders the state label
+              when state ≠ 'mappings_generated'; Card height preserved.
+              Q2 numerator note: `transforms.complete` = saved + applied
+              (was `metrics.completedTransforms` = applied-only); user-
+              visible numeric jump on projects with saved-but-not-applied
+              work. */}
+          <div
+            data-testid="mc-stats-grid"
+            className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-4 items-stretch mb-4"
+          >
             {/* Card 1 — Mapping Coverage */}
-            <div className="rounded-lg border border-gray-100 bg-white p-4 flex flex-col justify-between gap-3">
+            <div
+              data-testid="mc-mapping-coverage"
+              data-state={projectStatsState}
+              className="rounded-lg border border-gray-100 bg-white p-4 flex flex-col justify-between gap-3"
+            >
               <div>
                 <p className="text-xs text-gray-500 mb-2">Mapping Coverage</p>
-                <div className="flex items-baseline gap-1">
-                  <span className="text-2xl font-semibold text-settle-slate-900">{metrics.approvedFieldMappings}</span>
-                  <span className="text-sm text-settle-slate-400">/ {metrics.totalFieldMappings}</span>
-                </div>
-                {outstanding.unmappedSourceFields > 0 ? (
-                  <p className="text-xs text-settle-slate-400 mt-1">{outstanding.unmappedSourceFields} unmapped</p>
+                {isStatsPopulated && projectStats ? (
+                  <>
+                    <div className="flex items-baseline gap-1">
+                      <span
+                        data-testid="mc-mapping-approved"
+                        className="text-2xl font-semibold text-settle-slate-900"
+                      >
+                        {projectStats.target.approved}
+                      </span>
+                      <span className="text-sm text-settle-slate-400">
+                        / {projectStats.target.total}
+                      </span>
+                    </div>
+                    {projectStats.target.unmapped > 0 ? (
+                      <p className="text-xs text-settle-slate-400 mt-1">
+                        {projectStats.target.unmapped} unmapped
+                      </p>
+                    ) : (
+                      <p className="text-xs text-green-600 mt-1">All fields mapped</p>
+                    )}
+                    {projectStats.target.total > 0 && (
+                      <div className="mt-2 h-0.5 bg-settle-slate-100 rounded-full overflow-hidden">
+                        <div
+                          className="h-full bg-settle-slate-400 rounded-full"
+                          style={{
+                            width: `${Math.round((projectStats.target.approved / projectStats.target.total) * 100)}%`,
+                          }}
+                        />
+                      </div>
+                    )}
+                  </>
                 ) : (
-                  <p className="text-xs text-green-600 mt-1">All fields mapped</p>
+                  <p
+                    data-testid="mc-mapping-empty-label"
+                    className="text-sm text-settle-slate-400 mt-1"
+                  >
+                    {projectStatsEmptyLabel}
+                  </p>
                 )}
-                <div className="mt-2 h-0.5 bg-settle-slate-100 rounded-full overflow-hidden">
-                  <div className="h-full bg-settle-slate-400 rounded-full" style={{ width: `${metrics.totalFieldMappings > 0 ? Math.round((metrics.approvedFieldMappings / metrics.totalFieldMappings) * 100) : 0}%` }} />
-                </div>
               </div>
               <div className="border-t border-settle-slate-100 pt-2.5">
                 <a href={`/app/projects/${projectId}/mapping`} className="text-xs font-medium text-settle-blue-500 hover:text-settle-blue-700 transition-colors inline-flex items-center gap-1">
@@ -948,29 +1008,57 @@ export default function OutputsContent({ projectId, projectName, initialData, is
               </div>
             </div>
 
-            {/* Card 2 — Transforms */}
-            <div className="rounded-lg border border-gray-100 bg-white p-4 flex flex-col justify-between gap-3">
+            {/* Card 2 — Transforms (PR-3: reads projectStats.transforms;
+                Q2 numerator = saved + applied) */}
+            <div
+              data-testid="mc-transforms"
+              data-state={projectStatsState}
+              className="rounded-lg border border-gray-100 bg-white p-4 flex flex-col justify-between gap-3"
+            >
               <div>
                 <p className="text-xs text-gray-500 mb-2">Transforms</p>
-                <div className="flex items-baseline gap-1">
-                  <span className="text-2xl font-semibold text-settle-slate-900">{metrics.completedTransforms}</span>
-                  <span className="text-sm text-settle-slate-400">/ {metrics.totalTransforms}</span>
-                </div>
-                <div className="flex items-center gap-1.5 mt-1 flex-wrap">
-                  {outstanding.fieldsNeedingTransformWork > 0 && (
-                    <p className="text-xs text-settle-slate-400">{outstanding.fieldsNeedingTransformWork} need work</p>
-                  )}
-                  {outstanding.fieldsNeedingTransformWork > 0 && (outstanding.untestedTransforms > 0 || outstanding.testedTransforms > 0) && (
-                    <span className="text-settle-slate-300 text-xs">·</span>
-                  )}
-                  {outstanding.untestedTransforms > 0 && (
-                    <p className="text-xs text-settle-slate-400">{outstanding.untestedTransforms} untested</p>
-                  )}
-                </div>
-                {metrics.totalTransforms > 0 && (
-                  <div className="mt-2 h-0.5 bg-settle-slate-100 rounded-full overflow-hidden">
-                    <div className="h-full bg-settle-slate-400 rounded-full" style={{ width: `${Math.round((metrics.completedTransforms / metrics.totalTransforms) * 100)}%` }} />
-                  </div>
+                {isStatsPopulated && projectStats ? (
+                  <>
+                    <div className="flex items-baseline gap-1">
+                      <span
+                        data-testid="mc-transforms-complete"
+                        className="text-2xl font-semibold text-settle-slate-900"
+                      >
+                        {projectStats.transforms.complete}
+                      </span>
+                      <span className="text-sm text-settle-slate-400">
+                        / {projectStats.transforms.total}
+                      </span>
+                    </div>
+                    <div className="flex items-center gap-1.5 mt-1 flex-wrap">
+                      {outstanding.fieldsNeedingTransformWork > 0 && (
+                        <p className="text-xs text-settle-slate-400">{outstanding.fieldsNeedingTransformWork} need work</p>
+                      )}
+                      {outstanding.fieldsNeedingTransformWork > 0 && (outstanding.untestedTransforms > 0 || outstanding.testedTransforms > 0) && (
+                        <span className="text-settle-slate-300 text-xs">·</span>
+                      )}
+                      {outstanding.untestedTransforms > 0 && (
+                        <p className="text-xs text-settle-slate-400">{outstanding.untestedTransforms} untested</p>
+                      )}
+                    </div>
+                    {projectStats.transforms.total > 0 && (
+                      <div className="mt-2 h-0.5 bg-settle-slate-100 rounded-full overflow-hidden">
+                        <div
+                          className="h-full bg-settle-slate-400 rounded-full"
+                          style={{
+                            width: `${Math.round((projectStats.transforms.complete / projectStats.transforms.total) * 100)}%`,
+                          }}
+                        />
+                      </div>
+                    )}
+                  </>
+                ) : (
+                  <p
+                    data-testid="mc-transforms-empty-label"
+                    className="text-sm text-settle-slate-400 mt-1"
+                  >
+                    {projectStatsEmptyLabel}
+                  </p>
                 )}
               </div>
               <div className="border-t border-settle-slate-100 pt-2.5">
@@ -980,6 +1068,9 @@ export default function OutputsContent({ projectId, projectName, initialData, is
                 </a>
               </div>
             </div>
+
+            {/* Card 3 — Source Coverage (NEW PR-3) */}
+            <SourceCoverageWidget projectStats={projectStats} projectId={projectId} />
 
             {/* Card 3 — Quality Issues */}
             <div className="rounded-lg border border-gray-100 bg-white p-4 flex flex-col justify-between gap-3">

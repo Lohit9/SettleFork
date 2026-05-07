@@ -2,6 +2,7 @@ import { notFound } from 'next/navigation'
 import { createClient } from '@/lib/supabase/server'
 import { getMappings } from '@/lib/actions/mappings'
 import { getMappingsForRedesign } from '@/lib/actions/mappings-for-redesign'
+import { getProjectStats } from '@/lib/quality/project-stats'
 import MappingContent from './MappingContent'
 import MappingRedesignContent from './redesign/MappingContent'
 
@@ -30,12 +31,24 @@ export default async function MappingPage({ params }: Props) {
   const useRedesign = project.use_mapping_redesign === true
 
   if (useRedesign) {
-    const initialRedesignData = await getMappingsForRedesign(projectId)
+    // PR-3 (feat/inner-page-stats-redesign): fetch the canonical
+    // ProjectStats alongside the grid data feed. Option A from PR-3
+    // Stop 1 — page-level RSC calls the helper directly (already public
+    // from PR-1, no `lib/` touches), threads `projectStats` through
+    // Content to the new `MappingProjectStatsRow` rendered above the
+    // existing strip. The grid result stays scoped to grid concerns;
+    // project-wide stats live at the page tier.
+    const [initialRedesignData, projectStatsByProject] = await Promise.all([
+      getMappingsForRedesign(projectId),
+      getProjectStats([projectId], supabase),
+    ])
+    const projectStats = projectStatsByProject.get(projectId) ?? null
     return (
       <MappingRedesignContent
         projectId={projectId}
         projectName={project.name}
         initialRedesignData={initialRedesignData}
+        projectStats={projectStats}
       />
     )
   }

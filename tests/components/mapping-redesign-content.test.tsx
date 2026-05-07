@@ -1431,16 +1431,26 @@ describe('MappingRedesignContent — structural invariant (post sidebar architec
     if (!sidebarBodyRow) return
     expect(sidebarBodyRow.parentElement).toBe(pageColumn)
 
-    // Pin the sibling order: PageHeader → Strip → FilterRow →
-    // sidebar+body row. Children after that (drawer, dialog) are
-    // position-fixed and not asserted by this invariant.
+    // Pin the sibling order: PageHeader → MappingProjectStatsRow → Strip
+    // → FilterRow → sidebar+body row. Children after that (drawer,
+    // dialog) are position-fixed and not asserted by this invariant.
+    //
+    // PR-3 (feat/inner-page-stats-redesign): added
+    // `MappingProjectStatsRow` as a new direct child between PageHeader
+    // and Strip (project-wide stats above grid-level chips, per Stop 1
+    // Q3). Tests below pin that adjacency so a future regression that
+    // moves the row out of the toolbar block fails immediately.
+    const projectStatsRow = screen.getByTestId('mapping-project-stats-row')
+    expect(projectStatsRow.parentElement).toBe(pageColumn)
     const children = Array.from(pageColumn.children) as HTMLElement[]
     const pageHeaderIdx = children.indexOf(pageHeader)
+    const projectStatsRowIdx = children.indexOf(projectStatsRow)
     const stripIdx = children.indexOf(strip)
     const filterRowIdx = children.indexOf(filterRow)
     const rowIdx = children.indexOf(sidebarBodyRow)
     expect(pageHeaderIdx).toBeGreaterThanOrEqual(0)
-    expect(stripIdx).toBe(pageHeaderIdx + 1)
+    expect(projectStatsRowIdx).toBe(pageHeaderIdx + 1)
+    expect(stripIdx).toBe(projectStatsRowIdx + 1)
     expect(filterRowIdx).toBe(stripIdx + 1)
     expect(rowIdx).toBe(filterRowIdx + 1)
   })
