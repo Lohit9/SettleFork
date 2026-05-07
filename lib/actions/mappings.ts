@@ -3,6 +3,7 @@
 import { revalidatePath } from 'next/cache'
 import { createClient } from '@/lib/supabase/server'
 import { supabaseAdmin } from '@/lib/supabase/admin'
+import { PATH_D_MONOLITHIC_THRESHOLD, ProjectTooLargeError } from '@/lib/ai/path-d-config'
 import { requireProjectPermission } from '@/lib/actions/role-resolution'
 import { callLLM, callLLMStreaming, type LLMFeature } from '@/lib/ai/llm-client'
 import { withProvenanceGuidance } from '@/lib/ai/agent-provenance-guidance'
@@ -512,6 +513,33 @@ export async function generateMappings(
     const existingPairSet = new Set(
       (existingMappingPairs ?? []).map((m) => `${m.source_table_id}::${m.target_table_id}`),
     )
+
+    // ── Path D flag gate (Sub-PR 4a — stub; Sub-PR 4b ships orchestrator) ──
+    // When AI_MAPPING_PATH_D_ENABLED='1', Path D is meant to handle the BULK
+    // entry point. Sub-PR 4a wires the flag + threshold check + cost ceiling
+    // class but defers the actual orchestrator to Sub-PR 4b. The stub returns
+    // a clear error so Path B is NOT silently invoked while Path D is being
+    // built. Flag-OFF (default) preserves Path B behavior unchanged — the
+    // Heritage Capture D test verifies this byte-identical guarantee.
+    const pathDEnabled = process.env.AI_MAPPING_PATH_D_ENABLED === '1'
+    if (pathDEnabled) {
+      const { count: targetFieldCount } = await supabaseAdmin
+        .from('fields')
+        .select('id', { count: 'exact', head: true })
+        .in('table_id', targetTableIds)
+      if ((targetFieldCount ?? 0) > PATH_D_MONOLITHIC_THRESHOLD) {
+        return {
+          success: false,
+          error: new ProjectTooLargeError(targetFieldCount ?? 0).message,
+          errorCode: 'VALIDATION',
+        }
+      }
+      return {
+        success: false,
+        error: 'Path D orchestrator not yet implemented (Sub-PR 4b). Disable AI_MAPPING_PATH_D_ENABLED to use Path B.',
+        errorCode: 'VALIDATION',
+      }
+    }
 
     return runMappingGeneration(supabase, user.id, projectId, sourceTableIds, targetTableIds, existingPairSet)
   })

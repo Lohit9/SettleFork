@@ -160,6 +160,18 @@ const ALLOWED_FUNCTIONS_WITHOUT_LOG_AI_EDIT = new Set<string>([
   'applyManualFix',
   'runFullScan',
   'triggerStagedValidation',
+
+  // ── Path D foundation (Sub-PR 4a) ────────────────────────────────────────
+  // path-d-persistence.ts:persistMappings is the bulk-upsert leg of the
+  // Path D monolithic Opus 4.7 mapping pipeline. Per-row provenance for a
+  // bulk AI generation needs careful per-row state-capture design (the
+  // existing Phase 0c follow-up pattern); wiring it at the orchestrator
+  // boundary instead of the persistence helper is also under consideration.
+  // Flag-gated OFF by default (AI_MAPPING_PATH_D_ENABLED), and Sub-PR 4a
+  // ships only the foundation — the orchestrator that calls this is
+  // stubbed (returns notImplementedError) until Sub-PR 4b. Provenance
+  // wiring lands with the orchestrator in 4b.
+  'persistMappings',
 ])
 
 // ─────────────────────────────────────────────────────────────────────────────
