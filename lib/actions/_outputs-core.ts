@@ -385,11 +385,19 @@ export async function hydrateProjectData(
         'id, project_id, target_field_id, confidence, status, ai_reasoning, is_acknowledged, acknowledgment_reason, combination_type, combination_sql, needs_transformation, va_dismissed, dismissal_reason, created_at, updated_at',
       )
       .eq('project_id', projectId),
+    // PR-4 followup-A: project filter via embedded inner-join. Same bug
+    // and same fix as `getOutputsPageDataCore`'s mapping_sources fetch
+    // (lines ~1066-1080). Without this scope, the global fetch was
+    // silently truncated by PostgREST's server-side `db-max-rows` cap
+    // for orgs with many mapping_sources rows — affecting all output
+    // generators (Gold Standard CSV, SQL Load Scripts, Readiness Report,
+    // Mapping File, Transform Specs) that consume `hydrateProjectData`.
     supabaseAdmin
       .from('mapping_sources')
       .select(
-        'id, target_field_mapping_id, source_field_id, source_table_id, confidence, ai_reasoning, similar_fields_considered, type_compatibility, join_spec, ordinal, created_at',
-      ),
+        'id, target_field_mapping_id, source_field_id, source_table_id, confidence, ai_reasoning, similar_fields_considered, type_compatibility, join_spec, ordinal, created_at, target_field_mappings!inner(project_id)',
+      )
+      .eq('target_field_mappings.project_id', projectId),
     supabaseAdmin
       .from('source_field_acknowledgments')
       .select('id, project_id, source_field_id, reason, notes, acknowledged_by, acknowledged_at')
@@ -398,9 +406,9 @@ export async function hydrateProjectData(
 
   const targetFieldMappings = (tfmRaw ?? []) as TargetFieldMappingRow[]
   const tfmIdSet = new Set(targetFieldMappings.map((t) => t.id))
-  // mapping_sources is fetched unfiltered above for simplicity; narrow to the
-  // project's TFMs here to avoid cross-project leakage in multi-project
-  // installs. Matches what the Supabase RLS policy would enforce.
+  // Defense-in-depth: SQL embedded inner-join already restricts msRaw to
+  // this project's TFMs, so this filter is now a no-op against correct
+  // input. Kept for parity with the consumer-side narrowing pattern.
   const mappingSources = ((msRaw ?? []) as MappingSourceRow[]).filter((ms) =>
     tfmIdSet.has(ms.target_field_mapping_id),
   )
@@ -1054,11 +1062,20 @@ export async function getOutputsPageDataCore(
         'id, target_field_id, confidence, status, ai_reasoning, is_acknowledged, combination_type, needs_transformation, va_dismissed, created_at',
       )
       .eq('project_id', projectId),
+    // PR-4 followup-A: project filter via embedded inner-join. The prior
+    // shape was a global unfiltered fetch + a downstream
+    // `tfmIdSet`-based filter, which silently truncated to PostgREST's
+    // server-side `db-max-rows` cap (1000 in this environment) for orgs
+    // with many mapping_sources rows — driving the cross-surface stats
+    // misalignment diagnosed in Stop 1. Mirrors the transformations fetch
+    // pattern already in `fetchProjectStatsData`
+    // (`lib/quality/project-stats.ts:282`).
     client
       .from('mapping_sources')
       .select(
-        'id, target_field_mapping_id, source_field_id, source_table_id, confidence, ordinal, type_compatibility',
-      ),
+        'id, target_field_mapping_id, source_field_id, source_table_id, confidence, ordinal, type_compatibility, target_field_mappings!inner(project_id)',
+      )
+      .eq('target_field_mappings.project_id', projectId),
   ])
 
   const sourceDataset = datasets?.find((d) => d.role === 'source') ?? null
