@@ -83,6 +83,10 @@ export default function Footer() {
                     className="text-sm text-[#64748B] hover:text-[#0F172A] transition-colors">
                 Book a demo
               </Link>
+              <Link href="/careers"
+                    className="text-sm text-[#64748B] hover:text-[#0F172A] transition-colors">
+                Careers
+              </Link>
               <Link href="/privacy"
                     className="text-sm text-[#64748B] hover:text-[#0F172A] transition-colors">
                 Privacy policy
