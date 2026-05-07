@@ -11,6 +11,8 @@ import { Plus, Database, Search, Layers, FileText } from '@/components/icons'
 import { createProject } from '@/lib/actions/projects'
 import { ProjectWithStats } from '@/lib/types/database'
 import { ProjectMenu } from '@/components/app/ProjectMenu'
+import { ProjectStateBadge } from '@/components/app/ProjectStateBadge'
+import { BlockingPill } from '@/components/app/BlockingPill'
 
 // ── helpers ────────────────────────────────────────────────────────────────
 
@@ -54,52 +56,58 @@ function AutoArchiveCountdown({ completedAt }: { completedAt: string | null }) {
 
 // ── ProjectCard ─────────────────────────────────────────────────────────────
 
-function ProjectCard({ project, onUpdate }: { project: ProjectWithStats; onUpdate: () => void }) {
+// PR-2 (feat/project-tile-redesign): the tile now consumes the new
+// `projectStats: ProjectStats | null` field that PR-1 populated on
+// `ProjectWithStats`. The legacy fields (`mappingApproved`, `mappingTotal`,
+// `transformApplied`, `transformScope`, `blockingIssueCount`, etc.) stay
+// on the type for the Migration Center surface — PR-3 retires them once
+// MC also stops reading them.
+//
+// State machine (3 states + Completed overlay) drives a `<ProjectStateBadge>`
+// next to the project name and gates the stats row entirely:
+//
+//   awaiting_data        → gray badge, no stats
+//   data_ingested        → blue badge, no stats
+//   mappings_generated   → amber badge, 3 stats + blocking pill
+//   completed (overlay)  → green badge regardless of state; stats render
+//                          when underlying state === mappings_generated
+//
+// Archived projects keep their existing "no stats" treatment (data purged
+// on archive — stats meaningless). Q1 in PR-2 Stop 1.
+//
+// Transform numerator note: `projectStats.transforms.complete` counts
+// `saved + applied` rows (Q2 from PR-1) — a numeric SHIFT upward from the
+// previous `transformApplied`-only display. Deliberate spec change; user-
+// visible work-in-progress (Saved status) now reads as completed.
+export function ProjectCard({
+  project,
+  onUpdate,
+}: {
+  project: ProjectWithStats
+  onUpdate: () => void
+}) {
   const isCompleted = project.status === 'completed'
   const isArchived = project.status === 'archived'
-
-  // Bottom stats chips — not shown for archived (data is purged)
-  const stats: { label: string; color?: string }[] = []
-
-  if (!isArchived) {
-    // Prompt B: the card now renders the same mapping / transform /
-    // blocking figures as the Migration Center page. All three come
-    // from `computeProjectStats` (lib/quality/stat-formulas.ts) via
-    // `getProjectsWithStatsInternal`, which populates `mappingApproved`
-    // / `mappingTotal` / `transformApplied` / `transformScope` / a
-    // resolution-suppressed `blockingIssueCount` on `ProjectWithStats`.
-    // Any future formula change lands in the helper and propagates
-    // here automatically — no more dashboard-vs-Migration-Center drift.
-    if (project.mappingTotal > 0) {
-      stats.push({ label: `Mapped: ${project.mappingApproved}/${project.mappingTotal} fields` })
-    } else if (project.totalRows > 0) {
-      stats.push({ label: `Rows: ${project.totalRows.toLocaleString()}` })
-    }
-
-    if (project.transformScope > 0) {
-      stats.push({ label: `Transforms: ${project.transformApplied}/${project.transformScope}` })
-    }
-
-    if (project.blockingIssueCount > 0) {
-      stats.push({ label: `Blocking: ${project.blockingIssueCount}`, color: 'text-red-600' })
-    }
-
-    if (isCompleted && project.outputCount > 0) {
-      stats.push({ label: `Deliverables: ${project.outputCount} generated` })
-    }
-  }
+  const stats = project.projectStats
+  // Stats row visible only when (a) not archived, (b) state machine has
+  // reached `mappings_generated`. Defensive null-fallback (Q5 from
+  // PR-2 Stop 1) treats null as `awaiting_data` — no stats shown.
+  const showStats = !isArchived && stats?.state === 'mappings_generated'
 
   const cardContent = (
     <>
-      {/* Row 1: Project name + badges */}
+      {/* Row 1: Project name + state badge / archived span / countdown */}
       <div className="flex items-center gap-2 mb-1">
-        <span className={`text-sm font-semibold truncate ${isArchived ? 'text-gray-400' : 'text-gray-900'}`}>
+        <span
+          className={`text-sm font-semibold truncate ${isArchived ? 'text-gray-400' : 'text-gray-900'}`}
+        >
           {project.name}
         </span>
-        {isCompleted && (
-          <span className="text-[10px] font-medium text-green-700 bg-green-50 px-1.5 py-0.5 rounded flex-shrink-0">
-            Completed
-          </span>
+        {!isArchived && (
+          <ProjectStateBadge
+            state={stats?.state ?? null}
+            completedAt={project.completed_at}
+          />
         )}
         {isArchived && (
           <span className="text-[10px] font-medium text-gray-500 bg-gray-100 px-1.5 py-0.5 rounded flex-shrink-0">
@@ -128,14 +136,23 @@ function ProjectCard({ project, onUpdate }: { project: ProjectWithStats; onUpdat
           {isArchived && <span className="text-gray-400">· Data purged</span>}
         </div>
 
-        {stats.length > 0 && (
-          <div className="flex items-center gap-0 text-xs text-gray-500 flex-shrink-0">
-            {stats.map((s, i) => (
-              <span key={i} className="flex items-center">
-                {i > 0 && <span className="mx-2 text-gray-300">|</span>}
-                <span className={s.color ?? 'text-gray-500'}>{s.label}</span>
-              </span>
-            ))}
+        {showStats && stats && (
+          <div
+            data-testid="project-stats-row"
+            className="flex items-center gap-0 text-xs text-gray-500 flex-shrink-0"
+          >
+            <span data-testid="stat-target">
+              Mapped: {stats.target.approved}/{stats.target.total} fields
+            </span>
+            <span className="mx-2 text-gray-300">|</span>
+            <span data-testid="stat-source">
+              Sources: {stats.source.decided}/{stats.source.total}
+            </span>
+            <span className="mx-2 text-gray-300">|</span>
+            <span data-testid="stat-transforms">
+              Transforms: {stats.transforms.complete}/{stats.transforms.total}
+            </span>
+            <BlockingPill count={stats.blocking} className="ml-3" />
           </div>
         )}
       </div>
