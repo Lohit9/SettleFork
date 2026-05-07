@@ -349,6 +349,18 @@ export interface ProjectWithStats {
   readinessScore: number | null
   currentPhase: number
   outputCount: number
+  // ── New public-surface stats (PR-1, feat/project-stats-shared-helper) ─
+  //
+  // The state-machine + axis-shaped `ProjectStats` produced by the new
+  // shared helper at `lib/quality/project-stats.ts`. Populated on every
+  // tile-side load; null only if the helper failed (defensive — should
+  // never be null in practice). The legacy fields above stay populated
+  // until PR-2 retires them; the tile UI continues reading them in PR-1.
+  //
+  // Consumers in PR-2 (tile redesign) and PR-3 (Mapping strip + Migration
+  // Center widgets) read `projectStats` directly to get state, source
+  // axis, and the redefined `transforms.complete` (saved + applied).
+  projectStats: import('@/lib/quality/project-stats').ProjectStats | null
 }
 
 export interface MigrationIntelligence {

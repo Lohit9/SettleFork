@@ -167,7 +167,12 @@ export interface ComputeProjectStatsInputs {
 // compatibility with `OutputsContent.tsx` and the heritage snapshot test;
 // that renaming is a separate cleanup pass, not this lift-and-shift.
 
-export interface ProjectStats {
+// PR-1 (feat/project-stats-shared-helper): renamed from `ProjectStats` so the
+// new public-surface type at `lib/quality/project-stats.ts` can own the
+// `ProjectStats` name. The output of `computeProjectStats` is purely
+// internal: callers consume it via the new `ProjectStats` view assembled by
+// `getProjectStats()`. No external file imports this type by name.
+export interface ComputeProjectStatsResult {
   // ── Mapping ────────────────────────────────────────────────────────────
   /** Numerator: approved primary TFMs + fields counted as "acknowledged
    *  unmapped" (both source-side ACKs and bare-ack target TFMs). */
@@ -300,7 +305,7 @@ function isNeverResolvable(q: {
  *                                          - has a transformation row, OR
  *                                          - has needs_transformation=false
  */
-export function computeProjectStats(inputs: ComputeProjectStatsInputs): ProjectStats {
+export function computeProjectStats(inputs: ComputeProjectStatsInputs): ComputeProjectStatsResult {
   const {
     tfms,
     mappingSources,

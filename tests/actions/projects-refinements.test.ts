@@ -195,22 +195,49 @@ describe('[projects refinements] Round 3 — TFM + mapping_sources fetch', () =>
     )
   })
 
-  it('nests mapping_sources(source_field_id, ordinal, type_compatibility) for the source-field union + transform scope heuristic', () => {
-    // Prompt B widened the nested projection with `type_compatibility`
-    // so the shared `computeProjectStats` helper can feed the AI-prose
-    // compat text into `fieldNeedsTransform`. Without it the heuristic
-    // receives an empty string and under-reports scope.
-    expect(code).toMatch(
+  it('does NOT nest mapping_sources on the TFM select (PR-1 leak fix — fetched separately)', () => {
+    // PR-1 (feat/project-stats-shared-helper, 2026-05-07): the previous
+    // nested `mapping_sources(...)` select was the leak vector behind the
+    // tile-vs-Migration-Center stat divergence. Two failure modes
+    // coexisted: (1) the outer `.in('project_id', ...)` could trip the
+    // PostgREST default 1000-row response cap when the org had many
+    // TFMs; (2) the nested-array roll-up made each TFM row larger and
+    // reduced the effective row budget further. Flat select + separate
+    // `mapping_sources` fetch (filtered by tfmIds) eliminates both.
+    expect(code).not.toMatch(
       /mapping_sources\(\s*source_field_id,\s*ordinal,\s*type_compatibility\s*\)/
     )
+  })
+
+  it('selects mapping_sources separately, filtered by target_field_mapping_id (PR-1 safe pattern)', () => {
+    // The replacement for the nested select: a flat `.from('mapping_sources')`
+    // query filtered by the just-fetched TFM ids. Pinned here so a future
+    // refactor doesn't accidentally reintroduce the nested-array leak.
+    expect(code).toMatch(
+      /\.from\(\s*['"]mapping_sources['"]\s*\)\s*[\s\S]*?\.in\(\s*['"]target_field_mapping_id['"]/
+    )
+  })
+
+  it('applies an explicit .limit() on TFM and mapping_sources fetches (PR-1 safe pattern)', () => {
+    // Defensive cap so PostgREST's default 1000-row response cap can never
+    // silently truncate. The cap is set well above realistic project
+    // sizes; if a single org genuinely exceeds it, the helper's
+    // `count: 'exact'` invariant logs a warning.
+    expect(code).toMatch(/\.limit\(\s*TFM_ROW_LIMIT\s*\)/)
   })
 
   it('binds to tfmRows (not legacy fieldMappings)', () => {
     expect(code).toMatch(/data:\s*tfmRows/)
   })
 
-  it('exposes tfms as TfmRollupRow[]', () => {
-    expect(code).toMatch(/const\s+tfms\s*=.*TfmRollupRow\[\]/)
+  it('exposes tfms as TfmRollupRow[] (now built via in-memory join over flat fetches)', () => {
+    // PR-1: the legacy nested-select returned TFMs with `mapping_sources`
+    // already populated. The flat-select + separate-mapping_sources
+    // pattern reconstructs the same shape via in-memory join, preserving
+    // the downstream bucket aggregation contract. Pin the resulting
+    // `TfmRollupRow[]` shape (annotation OR cast) so consumers don't
+    // accidentally drop the `mapping_sources` field.
+    expect(code).toMatch(/(?:const\s+tfms\s*:\s*TfmRollupRow\[\]|const\s+tfms\s*=.*TfmRollupRow\[\])/)
   })
 })
 

@@ -103,6 +103,10 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import type { Dataset, ProjectWithStats } from '@/lib/types/database'
 import { computeProjectStats } from '@/lib/quality/stat-formulas'
+import {
+  getProjectStats,
+  type ProjectStats,
+} from '@/lib/quality/project-stats'
 
 /**
  * TFM row shape used by the `getProjectsWithStatsInternal` aggregation.
@@ -207,11 +211,28 @@ export async function getProjectsWithStatsInternal(
   // dataset has unmapped tables.
   const mappedTargetTableIds = new Set((tableMappings || []).map((tm) => tm.target_table_id))
 
-  // Round 3: source fields, target_field_mappings (+ nested mapping_sources),
-  // ALL target fields (for counting).
+  // Round 3: source fields, target_field_mappings (FLAT — no nested
+  // mapping_sources, see PR-1 INF-32 leak fix), ALL target fields.
+  //
+  // PR-1 (feat/project-stats-shared-helper, 2026-05-07): the previous
+  // nested `mapping_sources(...)` select on `target_field_mappings` was
+  // the leak vector behind the tile-vs-Migration-Center stat divergence.
+  // Two failure modes coexisted: (1) the outer `.in('project_id', ...)`
+  // could trip the PostgREST default 1000-row response cap when the org
+  // had many TFMs; (2) the nested-array roll-up made each TFM row larger
+  // and reduced the effective row budget further. Flat select +
+  // explicit `.limit(50000)` + separate `mapping_sources` fetch
+  // (filtered by tfmIds, also `.limit(50000)`) eliminates both. The new
+  // shared helper at `lib/quality/project-stats.ts` owns the same
+  // pattern and is the canonical consumer for PR-2 / PR-3.
+  const TFM_ROW_LIMIT = 50_000
   const [{ data: fields }, { data: tfmRows }, { data: allTargetFields }] = await Promise.all([
     sourceTableIds.length > 0
-      ? supabase.from('fields').select('id, name, data_type, table_id').in('table_id', sourceTableIds)
+      ? supabase
+          .from('fields')
+          .select('id, name, data_type, table_id')
+          .in('table_id', sourceTableIds)
+          .limit(TFM_ROW_LIMIT)
       : Promise.resolve({
           data: [] as { id: string; name: string | null; data_type: string | null; table_id: string }[],
           error: null,
@@ -220,23 +241,93 @@ export async function getProjectsWithStatsInternal(
       ? supabase
           .from('target_field_mappings')
           .select(
-            'id, project_id, target_field_id, confidence, status, is_acknowledged, combination_type, needs_transformation, va_dismissed, mapping_sources(source_field_id, ordinal, type_compatibility)'
+            'id, project_id, target_field_id, confidence, status, is_acknowledged, combination_type, needs_transformation, va_dismissed',
+            { count: 'exact' },
           )
           .in('project_id', projectIds)
+          .limit(TFM_ROW_LIMIT)
       : Promise.resolve({
-          data: [] as TfmRollupRow[],
+          data: [] as Array<{
+            id: string
+            project_id: string
+            target_field_id: string
+            confidence: number | null
+            status: 'needs_review' | 'approved' | 'rejected'
+            is_acknowledged: boolean
+            combination_type: string | null
+            needs_transformation: boolean | null
+            va_dismissed: boolean | null
+          }>,
+          count: 0,
           error: null,
         }),
     targetTableIds.length > 0
-      ? supabase.from('fields').select('id, name, data_type, table_id').in('table_id', targetTableIds)
+      ? supabase
+          .from('fields')
+          .select('id, name, data_type, table_id')
+          .in('table_id', targetTableIds)
+          .limit(TFM_ROW_LIMIT)
       : Promise.resolve({
           data: [] as { id: string; name: string | null; data_type: string | null; table_id: string }[],
           error: null,
         }),
   ])
 
-  const tfms = (tfmRows ?? []) as unknown as TfmRollupRow[]
-  const tfmIds = tfms.map((t) => t.id)
+  const tfmsFlat = (tfmRows ?? []) as Array<{
+    id: string
+    project_id: string
+    target_field_id: string
+    confidence: number | null
+    status: 'needs_review' | 'approved' | 'rejected'
+    is_acknowledged: boolean
+    combination_type: string | null
+    needs_transformation: boolean | null
+    va_dismissed: boolean | null
+  }>
+  const tfmIds = tfmsFlat.map((t) => t.id)
+
+  // Round 3.5: mapping_sources for the fetched TFMs. Separate query —
+  // not a nested PostgREST select — so the per-parent array roll-up
+  // doesn't compete with the outer row budget. Filtered by `tfmIds` to
+  // avoid pulling rows for projects we're not surfacing.
+  const { data: mappingSourceRows } =
+    tfmIds.length > 0
+      ? await supabase
+          .from('mapping_sources')
+          .select(
+            'target_field_mapping_id, source_field_id, ordinal, type_compatibility',
+            { count: 'exact' },
+          )
+          .in('target_field_mapping_id', tfmIds)
+          .limit(TFM_ROW_LIMIT)
+      : { data: [] as Array<{
+          target_field_mapping_id: string
+          source_field_id: string | null
+          ordinal: number
+          type_compatibility: string | null
+        }> }
+
+  // In-memory join: build a TfmRollupRow-shaped list (same legacy
+  // contract — `mapping_sources` field present on each TFM) so the
+  // downstream bucket aggregation continues to read `tfm.mapping_sources`
+  // without changing.
+  const msByTfmId = new Map<
+    string,
+    Array<{ source_field_id: string | null; ordinal: number; type_compatibility: string | null }>
+  >()
+  for (const ms of mappingSourceRows ?? []) {
+    const list = msByTfmId.get(ms.target_field_mapping_id) ?? []
+    list.push({
+      source_field_id: ms.source_field_id,
+      ordinal: ms.ordinal,
+      type_compatibility: ms.type_compatibility,
+    })
+    msByTfmId.set(ms.target_field_mapping_id, list)
+  }
+  const tfms: TfmRollupRow[] = tfmsFlat.map((t) => ({
+    ...t,
+    mapping_sources: msByTfmId.get(t.id) ?? [],
+  }))
 
   // Round 4: transformations (column rename: field_mapping_id →
   // target_field_mapping_id).
@@ -587,6 +678,16 @@ export async function getProjectsWithStatsInternal(
     )
   }
 
+  // PR-1 (feat/project-stats-shared-helper): the new public-surface
+  // `ProjectStats` view exposed on each `ProjectWithStats` for PR-2 (tile
+  // state-machine redesign) to consume. A separate Supabase round (handled
+  // by the helper) is paid here intentionally — the slices above are
+  // already populated, but they don't carry the (project_id, role)
+  // dataset metadata the helper needs for source/target attribution
+  // without column duplication. Future PR can eliminate the second round
+  // by threading rawData through both consumers.
+  const projectStatsByProject = await getProjectStats(projectIds, supabase)
+
   return projects.map((project) => {
     const b = buckets.get(project.id)!
     const stats = statsByProject.get(project.id)!
@@ -672,6 +773,11 @@ export async function getProjectsWithStatsInternal(
       readinessScore,
       currentPhase,
       outputCount: b.outputCount,
+      // PR-1: new public-surface view (state machine + axis-shaped stats).
+      // Tile rendering still reads the legacy fields above; PR-2 switches
+      // the tile to consume `projectStats` directly and retire the legacy
+      // duplicates.
+      projectStats: projectStatsByProject.get(project.id) ?? null,
     }
   })
 }
