@@ -98,23 +98,31 @@ export function ProjectCard({
   const isCompleted = project.status === 'completed'
   const isArchived = project.status === 'archived'
   const stats = project.projectStats
-  // PR-2.5: Option A predicate from Stop 1. Stats render whenever
-  // (a) not archived AND (b) the project is completed OR in
-  // mappings_generated state. Catches the post-completion edge case
-  // where TFMs become acknowledged → state regresses to data_ingested
-  // but the project's final numbers should still display.
+  // PR-2.6: data-presence predicate. Stats render whenever the project
+  // has data (real or zero) — explicitly NOT gated on the state machine.
+  // Production review surfaced two cases the PR-2.5 state-based gate
+  // got wrong:
+  //   1. Active data_ingested projects with substantial uploaded data
+  //      (target.total > 0) had only "Data ingested" italic label
+  //      where 0/N stats would be more informative.
+  //   2. Active projects with real mappings whose state predicate had
+  //      regressed (e.g., all unack'd TFMs processed → state
+  //      evaluates as data_ingested) lost their numbers entirely.
+  // Both fixed by triggering on data-presence (target.total > 0 OR
+  // transforms.total > 0) instead of the state machine.
   const showStats =
     !isArchived &&
-    (!!project.completed_at || stats?.state === 'mappings_generated')
-  // PR-2.5: state label renders in the stats area (right side) as italic
-  // gray text whenever stats don't render and the project is active. The
-  // null-projectStats fallback maps to `awaiting_data` per Q5.
+    (!!project.completed_at ||
+      (stats?.target.total ?? 0) > 0 ||
+      (stats?.transforms.total ?? 0) > 0)
+  // PR-2.6: state label collapses to a single string. Under the
+  // data-presence predicate the only reachable empty state is the
+  // all-zeros case (which corresponds to `awaiting_data` semantically
+  // OR the null-projectStats defensive fallback). The "Data ingested"
+  // branch from PR-2.5 is unreachable post-PR-2.6 — when a project has
+  // ingested data, target.total > 0 and the stats path is taken instead.
   const stateLabelText =
-    !showStats && !isArchived
-      ? (stats?.state ?? 'awaiting_data') === 'data_ingested'
-        ? 'Data ingested'
-        : 'Awaiting data ingestion'
-      : null
+    !showStats && !isArchived ? 'Awaiting data ingestion' : null
 
   const cardContent = (
     <>
