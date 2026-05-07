@@ -110,10 +110,18 @@ function project(overrides: Partial<ProjectWithStats> = {}): ProjectWithStats {
 
 const noop = () => {}
 
-// ─── State machine — 3 states + null fallback ──────────────────────────────
+// ─── State-aware stats area + badge-drop (PR-2.5) ──────────────────────────
+//
+// PR-2.5 contract:
+//   Active awaiting_data       no badge, italic state label, no stats row
+//   Active data_ingested       no badge, italic state label, no stats row
+//   Active mappings_generated  no badge, no label, stats row visible
+//   Completed (any state)      green Completed badge, stats row visible
+//   Archived                   inline "Archived" gray span, no stats
+//   projectStats === null      no badge, italic "Awaiting data ingestion" label
 
-describe('ProjectCard — state badge', () => {
-  it('renders awaiting_data badge with no stats row', () => {
+describe('ProjectCard — state-aware stats area (PR-2.5)', () => {
+  it('Active awaiting_data: no badge, italic state label "Awaiting data ingestion", no stats row', () => {
     render(
       <ProjectCard
         project={project({
@@ -122,11 +130,17 @@ describe('ProjectCard — state badge', () => {
         onUpdate={noop}
       />,
     )
-    expect(screen.getByText('Awaiting data ingestion')).toBeInTheDocument()
+    // Badge dropped on Active tab tiles — Q3 in PR-2.5 brief.
+    expect(screen.queryByText('Awaiting data ingestion', { selector: 'span[data-state-variant]' })).not.toBeInTheDocument()
+    // Italic state label in stats area.
+    const label = screen.getByTestId('tile-state-label')
+    expect(label).toHaveTextContent('Awaiting data ingestion')
+    expect(label.className).toMatch(/italic/)
+    // No stats row.
     expect(screen.queryByTestId('project-stats-row')).not.toBeInTheDocument()
   })
 
-  it('renders data_ingested badge with no stats row', () => {
+  it('Active data_ingested: no badge, italic state label "Data ingested", no stats row', () => {
     render(
       <ProjectCard
         project={project({
@@ -135,23 +149,56 @@ describe('ProjectCard — state badge', () => {
         onUpdate={noop}
       />,
     )
-    expect(screen.getByText('Data ingested')).toBeInTheDocument()
+    expect(screen.queryByText('Data ingested', { selector: 'span[data-state-variant]' })).not.toBeInTheDocument()
+    expect(screen.getByTestId('tile-state-label')).toHaveTextContent('Data ingested')
     expect(screen.queryByTestId('project-stats-row')).not.toBeInTheDocument()
   })
 
-  it('renders mappings_generated badge AND stats row with 3 stats', () => {
+  it('Active mappings_generated: no badge, no state label, stats row visible', () => {
     render(<ProjectCard project={project()} onUpdate={noop} />)
-    expect(screen.getByText('Ready for review')).toBeInTheDocument()
+    // PR-2.5: "Ready for review" badge dropped on Active tab tiles.
+    expect(screen.queryByText('Ready for review')).not.toBeInTheDocument()
+    // No state label when stats are populated.
+    expect(screen.queryByTestId('tile-state-label')).not.toBeInTheDocument()
+    // Stats row visible.
     expect(screen.getByTestId('project-stats-row')).toBeInTheDocument()
     expect(screen.getByTestId('stat-target')).toHaveTextContent('Mapped: 52/68 fields')
     expect(screen.getByTestId('stat-source')).toHaveTextContent('Sources: 57/70')
     expect(screen.getByTestId('stat-transforms')).toHaveTextContent('Transforms: 15/51')
   })
 
-  it('falls back to awaiting_data styling when projectStats is null', () => {
+  it('falls back to awaiting_data label when projectStats is null (Q5 defensive)', () => {
     render(<ProjectCard project={project({ projectStats: null })} onUpdate={noop} />)
-    expect(screen.getByText('Awaiting data ingestion')).toBeInTheDocument()
+    // No badge.
+    expect(screen.queryByText('Awaiting data ingestion', { selector: 'span[data-state-variant]' })).not.toBeInTheDocument()
+    // Italic label rendered defensively.
+    expect(screen.getByTestId('tile-state-label')).toHaveTextContent('Awaiting data ingestion')
     expect(screen.queryByTestId('project-stats-row')).not.toBeInTheDocument()
+  })
+
+  it('Active mappings_generated does NOT render <ProjectStateBadge> at top (PR-2.5 negative pin)', () => {
+    // Pin the badge-drop with an explicit query against the badge's
+    // own data-state-variant attribute. Forward-compat insurance: if a
+    // future refactor re-introduces the badge for active tiles, this
+    // test fails immediately.
+    const { container } = render(<ProjectCard project={project()} onUpdate={noop} />)
+    expect(container.querySelector('[data-state-variant]')).toBeNull()
+  })
+
+  it('tile-state-label uses italic + slate-500 + flex-shrink-0 styling', () => {
+    render(
+      <ProjectCard
+        project={project({
+          projectStats: projectStats({ state: 'awaiting_data', target: { approved: 0, total: 0, unmapped: 0 }, source: { decided: 0, total: 0 }, transforms: { complete: 0, total: 0 } }),
+        })}
+        onUpdate={noop}
+      />,
+    )
+    const label = screen.getByTestId('tile-state-label')
+    // Pin the visual contract (italic gray, doesn't grow/shrink).
+    expect(label.className).toMatch(/italic/)
+    expect(label.className).toMatch(/text-slate-500/)
+    expect(label.className).toMatch(/flex-shrink-0/)
   })
 })
 
@@ -174,20 +221,39 @@ describe('ProjectCard — Completed overlay', () => {
     expect(screen.getByTestId('project-stats-row')).toBeInTheDocument()
   })
 
-  it('shows Completed badge even if state is awaiting_data (overlay precedence)', () => {
+  it('shows Completed badge AND stats row even when underlying state has regressed (PR-2.5 fix)', () => {
+    // PR-2.5 motivation: post-completion, all TFMs become acknowledged →
+    // PR-1's state predicate evaluates to data_ingested → PR-2 gated
+    // stats off entirely. Users explicitly want their final numbers
+    // shown on completed tiles. The new showStats predicate
+    // (`!!project.completed_at || state === 'mappings_generated'`)
+    // catches this case.
     render(
       <ProjectCard
         project={project({
           status: 'completed',
           completed_at: '2026-05-06T00:00:00Z',
-          projectStats: projectStats({ state: 'awaiting_data', target: { approved: 0, total: 0, unmapped: 0 }, source: { decided: 0, total: 0 }, transforms: { complete: 0, total: 0 } }),
+          // Realistic post-completion projectStats: state regressed to
+          // data_ingested (every TFM is now acknowledged), but the
+          // captured numbers in target/source/transforms are still the
+          // pre-completion final state.
+          projectStats: projectStats({
+            state: 'data_ingested',
+            target: { approved: 68, total: 68, unmapped: 0 },
+            source: { decided: 70, total: 70 },
+            transforms: { complete: 51, total: 51 },
+          }),
         })}
         onUpdate={noop}
       />,
     )
     expect(screen.getByText('Completed')).toBeInTheDocument()
-    // No stats — underlying state still gates the stats row.
-    expect(screen.queryByTestId('project-stats-row')).not.toBeInTheDocument()
+    // Stats row visible — the fix.
+    expect(screen.getByTestId('project-stats-row')).toBeInTheDocument()
+    expect(screen.getByTestId('stat-target')).toHaveTextContent('Mapped: 68/68 fields')
+    expect(screen.getByTestId('stat-transforms')).toHaveTextContent('Transforms: 51/51')
+    // No state label — completed projects show stats, not the empty label.
+    expect(screen.queryByTestId('tile-state-label')).not.toBeInTheDocument()
   })
 })
 
