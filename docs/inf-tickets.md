@@ -482,3 +482,107 @@ Two co-root-causes for the formatter pollution observed on the careers PR (#86) 
 **Related:** INF-27 (this PR closes it as the investigation outcome — root cause identified and fixed); INF-24 (scope discipline informed the "narrow scoping > big-bang reformatting" choice).
 
 ---
+
+## INF-32 — Remove-table feature v1 deferred items
+
+**Status:** OPEN
+**Filed:** 2026-05-07
+**Description:**
+The "Remove table" feature shipped in `feat/remove-table` (Project Setup → Source/Target dropdown trash icon) intentionally deferred three concerns to keep v1 scope minimal. None block customer use; all are tracked here as known limitations.
+
+**Deferred items:**
+
+1. **JSONB dangling references in migration-093 tables.** `project_decisions.applies_to`, `project_lookup_tables.applies_to_fields`, and `project_inferred_targets.evidence_source_fields` carry JSON arrays of TFM IDs and field IDs. After a table delete these JSON references can point at rows that no longer exist. Cleanup is heavyweight (would require either a per-row JSONB rewrite or full row deletion based on payload inspection) and the dangling refs are inert — they don't break reads, queries, or display because these are AI-generated review surfaces that need re-running anyway once the underlying schema changes. Recovery path: re-run the AI on the affected project. If a customer reports stale "this decision references missing field X" UX, revisit.
+
+2. **Cascade-preview RPC.** Stop 2 chose Option A (vague-but-honest copy: "X rows, Y fields, plus mappings/transformations/validation rules will be removed") over Option B (precise dependent counts via a `count_table_dependencies` RPC returning {rows, fields, profiles, target_field_mappings, mapping_sources, transformations, validation_rules, quality_issues}). Joanna's pain (RCB Industries / Rootstock POC) was "I can't undo my mistake," not "give me exact counts." Add the RPC if customer pressure mounts for transparency.
+
+3. **Cascade-driven activity_log gaps.** When `removeTable` deletes the table row, FK CASCADEs delete fields, data_rows, mapping_sources, target_field_mappings, transformations, validation_rules, quality_issues, etc. without per-row `activity_log` entries — only the parent `table_removed` event is emitted. Audit trail for the cascade rows lives implicitly in the metadata of the parent event. If we ever need per-cascade-row audit (e.g. for compliance reporting that requires "who deleted TFM X"), wrap the action in pre-cascade INSERTs into `activity_log` for each affected row, or replay from the parent metadata at query time.
+
+**Acceptance criteria:** all three items remain documented limitations until a customer escalation forces revisitation. No proactive work required for v1.
+
+**Code references:**
+
+- `lib/actions/tables.ts` (`removeTable` action)
+- `app/app/projects/[projectId]/project/IngestionCard.tsx` (UI affordance)
+- `app/app/projects/[projectId]/project/RemoveTableDialog.tsx` (confirmation modal)
+- migration 093 — `project_decisions`, `project_lookup_tables`, `project_inferred_targets` tables for the JSONB dangling-ref item
+
+**Related:** INF-33 (sibling concern — `ingestion_jobs` in-flight race during table delete).
+
+---
+
+## INF-33 — `ingestion_jobs` in-flight race during `removeTable`
+
+**Status:** OPEN
+**Filed:** 2026-05-07
+**Description:**
+`ingestion_jobs.table_id` references `tables(id) ON DELETE SET NULL` (migration 087:35). When a user deletes a table while a CSV ingestion job is actively processing rows for that table, the job's `table_id` becomes NULL mid-run. The cron worker (`app/api/cron/process-ingestion-job/route.ts`) reads the job, picks up rows from `ingestion_jobs.payload`, and writes to `data_rows`. If `table_id` is set NULL between job pickup and row insertion, the worker may either (a) fail mid-batch with a NOT NULL violation on `data_rows.table_id`, or (b) silently no-op writes and mark the job complete with zero rows actually inserted.
+
+The race is unlikely in practice — users uploading and immediately deleting a table within the same minute is rare — but the worker's null-handling is unverified. Surfaced from Stop 1 of the "Remove table" feature investigation; deferred from that PR's scope as a separate concern.
+
+**Acceptance criteria:**
+
+- Verify worker behavior when `ingestion_jobs.table_id IS NULL` mid-run.
+- Either (a) add a null-table guard in the worker that aborts the job cleanly with status `'failed'` and a clear error message, or (b) change the FK to `ON DELETE CASCADE` so the in-flight job row is deleted alongside the table (forces the worker to detect a missing job row).
+- Either approach is fine; pick whichever matches the worker's existing failure-mode conventions.
+
+**Code references:**
+
+- `supabase/migrations/087_ingestion_jobs_table.sql:35` (FK declaration)
+- `app/api/cron/process-ingestion-job/route.ts` (worker)
+- `lib/actions/tables.ts:removeTable` (the table-delete callsite)
+
+**Related:** INF-32 (sibling — Remove-table feature deferred items).
+
+---
+
+## INF-34 — Deferred IngestionCard wiring tests for Remove-table feature
+
+**Status:** OPEN
+**Filed:** 2026-05-07
+**Description:**
+Stop 2's test plan for the "Remove table" feature (PR `feat/remove-table`) included 4 IngestionCard wiring tests (#15–#18 in Stop 2):
+
+- Trash icon hidden when no table selected (conditional rendering)
+- Trash icon disabled when `canEdit=false` (permission UX)
+- Click trash → modal opens with correct props (wiring)
+- After successful delete, dropdown selection clears + table removed from state (UI invalidation)
+
+These were deferred from the v1 PR because IngestionCard is a 1800-LOC component with deep data-fetch + state machinery. Mocking the full surface for 4 small wiring tests would require ~150 LOC of fixture setup (datasets, tables, useProjectRole, server-action mocks for the upload flows that share state). The trash icon's behavior is exercised indirectly by the standalone `RemoveTableDialog` component test (5 cases, shipped) and by manual QA.
+
+**Acceptance criteria:** Add tests #15–#18 as IngestionCard component tests with appropriately scoped mocks. Decide whether to mock the full component or extract the dropdown+trash region into a smaller subcomponent for testability.
+
+**Code references:**
+
+- `app/app/projects/[projectId]/project/IngestionCard.tsx` (current home of the trash-icon wiring)
+- `tests/components/remove-table-dialog.test.tsx` (existing tests for the modal itself)
+
+**Related:** INF-32 (sibling — Remove-table v1 deferred items), INF-35 (sibling — real-DB integration coverage for removeTable).
+
+---
+
+## INF-35 — Real-DB integration coverage for `removeTable` server action
+
+**Status:** OPEN
+**Filed:** 2026-05-07
+**Description:**
+Stop 2 originally scoped `removeTable`'s server-action tests as env-gated integration tests (`RUN_REMOVE_TABLE_INTEGRATION=1`, fresh-fixture-per-test against canary or scratch Supabase). The v1 PR shipped mocked tests instead (default vitest, vi.mock pattern from `mapping-persistence-write-path.test.ts`) for ship-speed.
+
+Mocked coverage includes auth/permission boundary, error paths, happy path with activity-log shape, and the orphan-TFM cleanup filter logic (chain-call inspection pinning the `combination_type IN (single,concat_space,concat_comma)` allowlist + `is_acknowledged=false` exclusion). What it CANNOT cover:
+
+- Actual FK CASCADE behavior on a real Postgres instance (declared by FK constraints in migrations 002 / 074 / 093 — Postgres-tested but not exercised by our suite)
+- Real RLS policy enforcement when a user-authenticated client (not service-role admin) issues the delete
+- Real activity_log row appearing in the database
+
+**Acceptance criteria:** Add `tests/actions/tables-integration.test.ts` (or similar) following the A3a / project-rbac fresh-fixture pattern. Cover at minimum: source-table delete cascades fields/data_rows/mapping_sources; target-table delete cascades target_field_mappings/transformations; viewer-role denial via real RLS; activity_log row written.
+
+**Code references:**
+
+- `lib/actions/tables.ts:removeTable`
+- `tests/actions/remove-table.test.ts` (current mocked coverage)
+- `tests/integration/path-d-foundation-schema.test.ts` (precedent for fresh-fixture integration pattern)
+- `tests/integration/project-rbac-strict-membership.test.ts` (precedent for multi-user RLS testing)
+
+**Related:** INF-32 (sibling — Remove-table v1 deferred items), INF-34 (sibling — IngestionCard wiring tests).
+
+---
