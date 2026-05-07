@@ -1,7 +1,8 @@
 import type { MappingsForRedesignResult } from '@/lib/types/mappings-for-redesign'
+import type { ProjectStats } from '@/lib/quality/project-stats'
 
 // ─────────────────────────────────────────────────────────────────────────────
-// MappingSummaryStrip — Phase 4-polish-1 final refinements.
+// MappingSummaryStrip — Phase 4-polish-1 final refinements + PR-6 consolidation.
 // ─────────────────────────────────────────────────────────────────────────────
 //
 // Restores the legacy `MappingStatPills` density at the top of the mapping
@@ -43,6 +44,27 @@ import type { MappingsForRedesignResult } from '@/lib/types/mappings-for-redesig
 //     Component props simplified accordingly: `sourceSystem` and
 //     `targetSystem` are gone; only `counts` remains.
 //
+// PR-6 (feat/ui-consolidation, 2026-05-07):
+//
+//   • Consolidated single-strip — `MappingProjectStatsRow` retired;
+//     this component now renders BOTH the project-wide axes (target
+//     mapped/total + source decided/total, dot-less, denominator-style)
+//     AND the grid-level status chips (Approved / Needs Review /
+//     conditional Rejected + Unmapped, hued dots). A `║` block divider
+//     separates the two groups so the eye reads "project truth ║
+//     filter chips" rather than one homogeneous chip row.
+//   • The legacy "Total" chip was dropped — `target.total` denominator
+//     in the project-wide axis already conveys the same number.
+//   • State-aware empty: when `projectStats.state !== 'mappings_generated'`
+//     (or `projectStats === null`) the strip renders a single state
+//     label, matching the PR-2 tile-badge wording — visual continuity
+//     across surfaces. The label-only fallback is gated on the prop
+//     being supplied; if a caller omits `projectStats` entirely (as
+//     test fixtures may do), the strip degrades to its pre-PR-6
+//     status-chip-only behaviour.
+//   • New props: `projectStats?: ProjectStats | null` alongside the
+//     existing `counts`. Same import-site shape — no consumer rename.
+//
 // This replaces both the experimental `WipBanner` (dropped per Q2.1) and
 // the `CountersRow` block. The strip is non-sticky (founder Q8.1) — it
 // scrolls away naturally when the user dives into the row body, so the
@@ -62,17 +84,75 @@ import type { MappingsForRedesignResult } from '@/lib/types/mappings-for-redesig
 
 interface MappingSummaryStripProps {
   counts: MappingsForRedesignResult['counts']
+  /** PR-6: project-wide ProjectStats for the consolidated single-strip
+   *  layout. Renders project-level target/source mapped axes BEFORE the
+   *  grid-level status chips. Optional — when omitted (or null) only the
+   *  status chips render, matching pre-PR-6 behaviour. */
+  projectStats?: ProjectStats | null
 }
 
-export function MappingSummaryStrip({ counts }: MappingSummaryStripProps) {
+const STATE_LABEL: Record<ProjectStats['state'], string> = {
+  awaiting_data: 'Awaiting data ingestion',
+  data_ingested: 'Data ingested',
+  mappings_generated: '',
+}
+
+export function MappingSummaryStrip({
+  counts,
+  projectStats,
+}: MappingSummaryStripProps) {
+  // PR-6 state-aware empty: when the project hasn't generated mappings yet
+  // (or projectStats is null defensively), the strip renders a single
+  // state label instead of the chip row. Wording matches the PR-2 tile
+  // badge for visual continuity.
+  const state = projectStats?.state ?? 'awaiting_data'
+  const isPopulated = state === 'mappings_generated' && projectStats !== null && projectStats !== undefined
+
+  if (projectStats !== undefined && !isPopulated) {
+    return (
+      <div
+        data-testid="mapping-summary-strip"
+        data-state={state}
+        className="flex items-center bg-white px-5 py-2 flex-shrink-0"
+      >
+        <span
+          data-testid="mapping-summary-empty-label"
+          className="text-xs text-settle-slate-500"
+        >
+          {STATE_LABEL[state]}
+        </span>
+      </div>
+    )
+  }
+
   return (
     <div
       data-testid="mapping-summary-strip"
+      data-state={state}
       className="flex items-center bg-white px-5 py-2 flex-shrink-0"
     >
       <div className="flex items-center gap-3 text-sm text-settle-slate-600">
-        <SummaryChip label="Total" value={counts.total} />
-        <SummaryChipDivider />
+        {/* PR-6: project-wide axes — undecorated (no dot) so they read
+            as denominator-style truth rather than filter chips. */}
+        {projectStats ? (
+          <>
+            <SummaryChip
+              testId="mapping-summary-chip-project-target"
+              label="Mapped"
+              ratio={`${projectStats.target.approved}/${projectStats.target.total}`}
+            />
+            <SummaryChipDivider />
+            <SummaryChip
+              testId="mapping-summary-chip-project-source"
+              label="Sources"
+              ratio={`${projectStats.source.decided}/${projectStats.source.total}`}
+            />
+            <SummaryChipBlockDivider />
+          </>
+        ) : null}
+        {/* Grid-level status chips. Hued dots distinguish them from the
+            project-wide ratios above. The legacy "Total" chip was retired
+            in PR-6 — `target.total` denominator already conveys it. */}
         <SummaryChip
           label="Approved"
           value={counts.approved}
@@ -110,42 +190,58 @@ export function MappingSummaryStrip({ counts }: MappingSummaryStripProps) {
 }
 
 function SummaryChip({
+  testId,
   label,
   value,
+  ratio,
   dotClassName,
 }: {
+  /** Override the default `mapping-summary-chip-<label>` test id —
+   *  the consolidated PR-6 project-wide chips use stable testids so
+   *  callers don't depend on label text. */
+  testId?: string
   label: string
-  value: number
-  /** Optional colored dot — Total is dot-less per the legacy aesthetic. */
+  /** Single-number value (status chips). */
+  value?: number
+  /** Ratio rendering "X/Y" (project-wide axes). Mutually exclusive
+   *  with `value`. */
+  ratio?: string
+  /** Optional colored dot — project-wide chips are dot-less, status
+   *  chips carry a hue. */
   dotClassName?: string
 }) {
-  const testId = `mapping-summary-chip-${label.toLowerCase().replace(/\s+/g, '-')}`
-  // Phase 4-polish-1 comprehensive pass: dot-less chips (Total) drop the
+  const resolvedTestId =
+    testId ?? `mapping-summary-chip-${label.toLowerCase().replace(/\s+/g, '-')}`
+  // Phase 4-polish-1 comprehensive pass: dot-less chips drop the
   // `flex items-center gap-1.5` wrapper entirely — without a dot the
-  // wrapper just adds an inline-block with no visual effect, and the
-  // legacy reference renders Total as a bare text span. Hued chips keep
-  // the wrapper because they need it to align dot-with-text vertically.
+  // wrapper just adds an inline-block with no visual effect. Hued chips
+  // keep the wrapper because they need it to align dot-with-text
+  // vertically.
+  const valueNode =
+    ratio !== undefined ? (
+      <span className="font-semibold text-settle-slate-900 tabular-nums">
+        {ratio}
+      </span>
+    ) : (
+      <span className="font-semibold text-settle-slate-900 tabular-nums">
+        {value}
+      </span>
+    )
   if (!dotClassName) {
     return (
-      <span data-testid={testId}>
-        {label}{' '}
-        <span className="font-semibold text-settle-slate-900 tabular-nums">
-          {value}
-        </span>
+      <span data-testid={resolvedTestId}>
+        {label} {valueNode}
       </span>
     )
   }
   return (
-    <span className="flex items-center gap-1.5" data-testid={testId}>
+    <span className="flex items-center gap-1.5" data-testid={resolvedTestId}>
       <span
         aria-hidden="true"
         className={`w-1.5 h-1.5 rounded-full ${dotClassName}`}
       />
       <span>
-        {label}{' '}
-        <span className="font-semibold text-settle-slate-900 tabular-nums">
-          {value}
-        </span>
+        {label} {valueNode}
       </span>
     </span>
   )
@@ -153,4 +249,18 @@ function SummaryChip({
 
 function SummaryChipDivider() {
   return <span aria-hidden="true" className="text-settle-slate-300">·</span>
+}
+
+// PR-6: heavier separator between the project-wide axis pair and the
+// grid-level status chip group. Conveys the conceptual boundary (left
+// = project truth; right = filter chips) without a hard border.
+function SummaryChipBlockDivider() {
+  return (
+    <span
+      aria-hidden="true"
+      className="text-settle-slate-300 px-1 select-none"
+    >
+      ║
+    </span>
+  )
 }

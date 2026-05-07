@@ -67,6 +67,10 @@ export interface ProjectStatsTargetAxis {
   total: number
   /** mappingUnmapped — sources/targets with no TFM and no ACK. Always ≤ `total - approved`. */
   unmapped: number
+  /** mappingNeedsReview — primary TFMs (non-rejected, non-bare-ack) with
+   *  status='needs_review'. Added in PR-6 for the consolidated Mapping
+   *  page strip + MC Mapping Coverage card. */
+  needsReview: number
 }
 
 export interface ProjectStatsSourceAxis {
@@ -423,6 +427,7 @@ export function rollupProjectStats(
       approved: stats.mappingApproved,
       total: stats.mappingTotal,
       unmapped: stats.mappingUnmapped,
+      needsReview: stats.mappingNeedsReview,
     },
     source: {
       decided: decidedSourceIds.size,

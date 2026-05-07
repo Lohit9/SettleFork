@@ -387,7 +387,12 @@ describe('rollupProjectStats — output shape', () => {
       'target',
       'transforms',
     ])
-    expect(Object.keys(stats.target).sort()).toEqual(['approved', 'total', 'unmapped'])
+    expect(Object.keys(stats.target).sort()).toEqual([
+      'approved',
+      'needsReview',
+      'total',
+      'unmapped',
+    ])
     expect(Object.keys(stats.source).sort()).toEqual(['decided', 'total'])
     expect(Object.keys(stats.transforms).sort()).toEqual(['complete', 'total'])
   })
@@ -396,7 +401,7 @@ describe('rollupProjectStats — output shape', () => {
     const stats = rollupProjectStats(PROJECT_A, emptyRaw())
     expect(stats).toEqual({
       state: 'awaiting_data',
-      target: { approved: 0, total: 0, unmapped: 0 },
+      target: { approved: 0, total: 0, unmapped: 0, needsReview: 0 },
       source: { decided: 0, total: 0 },
       transforms: { complete: 0, total: 0 },
       blocking: 0,

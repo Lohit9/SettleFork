@@ -62,7 +62,6 @@ import { FilterRow } from './components/FilterRow'
 import { TargetTableGroup } from './components/TargetTableGroup'
 import { MappingDrawer } from './components/MappingDrawer'
 import { MappingSummaryStrip } from './components/MappingSummaryStrip'
-import { MappingProjectStatsRow } from './components/MappingProjectStatsRow'
 import { SourceSchemaSidebar } from './components/SourceSchemaSidebar'
 import { RejectConfirmPopover } from './components/RejectConfirmPopover'
 import {
@@ -1861,13 +1860,14 @@ function MappingContentLoaded({
           present. */}
       {!isEmptyMappingState && (
         <>
-          {/* PR-3 (feat/inner-page-stats-redesign): project-wide stats row
-              ABOVE the existing grid-level strip. Different question
-              (project-level truth vs. filtered grid context); both render
-              when the toolbar is visible. State-aware empty (Q4) renders
-              a single state label when state ≠ 'mappings_generated'. */}
-          <MappingProjectStatsRow projectStats={projectStats} />
-          <MappingSummaryStrip counts={data.counts} />
+          {/* PR-6 (feat/ui-consolidation): single consolidated strip.
+              `MappingSummaryStrip` now renders BOTH project-wide axes
+              (target mapped/total + source decided/total) AND grid-level
+              status chips (Approved / Needs Review / conditional
+              Rejected + Unmapped). The retired `MappingProjectStatsRow`
+              folded into the same component. State-aware empty wording
+              moved with it. */}
+          <MappingSummaryStrip counts={data.counts} projectStats={projectStats} />
           <FilterRow
             filters={filters}
             onFiltersChange={handleFiltersChange}
