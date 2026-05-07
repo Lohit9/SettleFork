@@ -120,6 +120,17 @@ const ALLOWED_FUNCTIONS_WITHOUT_LOG_AI_EDIT = new Set<string>([
   // in field-acknowledgments.ts and is wired through a different UX
   // flow. Phase 0c follow-up will harmonize the three.
   'removeAcknowledgment',
+  // removeTable (lib/actions/tables.ts) issues an FK-cascade-driven delete
+  // of a `tables` row — fields, mapping_sources, target_field_mappings,
+  // transformations, validation_rules, quality_issues etc. all CASCADE
+  // automatically (see migrations 002, 074, 093). The action also runs a
+  // post-cascade cleanup of orphaned TFMs (combination_type single/concat_*
+  // with zero remaining mapping_sources). The whole operation is captured
+  // at the parent level in activity_log via `logActivity('table_removed')`;
+  // per-row logAIEdit on cascade-deleted TFMs would create duplicate
+  // provenance for an event already audited at the parent. Mirrors the
+  // schema-cascade-automation rationale above.
+  'removeTable',
 
   // ── Phase 0c follow-up — bulk + heavy mutators ───────────────────────────
   // Will be wired in a focused follow-up PR after this invariant lands.

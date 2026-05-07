@@ -68,6 +68,10 @@ export type ActionType =
   | 'target_uploaded'
   | 'doc_uploaded'
   | 'project_archived'
+  // INF-32 — Sub-PR 'Remove table' (2026-05-07). Emitted from
+  // `removeTable` in lib/actions/tables.ts when a user removes a data table
+  // from Project Setup. Categorized as 'data' (table-level mutation).
+  | 'table_removed'
   // PR 2a — project-level RBAC member management. Emitted from the
   // server actions in `lib/actions/project-members.ts`. Categorized
   // under `'system'` (administrative actions; no separate dot-color

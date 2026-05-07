@@ -6,7 +6,7 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Upload, CheckCircle2, AlertCircle, RefreshCw } from '@/components/icons'
-import { Database, Loader2, AlertTriangle, XCircle } from 'lucide-react'
+import { Database, Loader2, AlertTriangle, XCircle, Trash2 } from 'lucide-react'
 import { testConnection, listRemoteTables, listMssqlSchemas, listTablesForConnection, getConnectionForDataset, disconnectDatabase, resyncTables } from '@/lib/actions/db-connector'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { getCsvUploadSlot } from '@/lib/actions/csv'
@@ -21,6 +21,8 @@ import type { DBConnectionInfo } from '@/lib/types/database'
 import { DDLSchemaReview } from './DDLSchemaReview'
 import { useProjectRole } from '@/lib/hooks/useProjectRole'
 import { RoleTooltip } from '@/components/app/RoleTooltip'
+import { removeTable } from '@/lib/actions/tables'
+import { RemoveTableDialog } from './RemoveTableDialog'
 
 type IngestMethod = 'csv' | 'ddl' | 'db' | null
 
@@ -98,6 +100,8 @@ export function IngestionCard({ type, title, projectId, initialDatasets, initial
     initialDatasets[0]?.id ?? null
   )
   const [selectedTableId, setSelectedTableId] = useState<string | null>(null)
+  const [removeDialogOpen, setRemoveDialogOpen] = useState(false)
+  const [removeError, setRemoveError] = useState<string | null>(null)
   const [selectedTableName, setSelectedTableName] = useState<string | null>(null)
 
   const [newDatasetName, setNewDatasetName] = useState('')
@@ -551,6 +555,29 @@ export function IngestionCard({ type, title, projectId, initialDatasets, initial
   }
 
   // ── CSV: table handlers ───────────────────────────────────────────────────
+
+  const handleRemoveTable = async () => {
+    if (!selectedTableId || !selectedTable) return
+    setRemoveError(null)
+    const result = await removeTable(selectedTableId)
+    if (!result.success) {
+      setRemoveError(result.error)
+      return
+    }
+    // Optimistic local state mutation so the deleted table disappears
+    // immediately; router.refresh() below re-hydrates server-side state
+    // authoritatively to catch any divergence.
+    setDatasets((prev) =>
+      prev.map((ds) =>
+        ds.id === selectedDatasetId
+          ? { ...ds, tables: ds.tables.filter((t) => t.id !== selectedTableId) }
+          : ds,
+      ),
+    )
+    setSelectedTableId(null)
+    setRemoveDialogOpen(false)
+    router.refresh()
+  }
 
   const handleTableSelect = (value: string) => {
     if (value === 'new') {
@@ -1590,22 +1617,55 @@ export function IngestionCard({ type, title, projectId, initialDatasets, initial
             {/* Step 2: Table selector */}
             <div className="space-y-2">
               <Label htmlFor={`${type}-table`} className="text-[11px] font-medium text-settle-slate-500">Table</Label>
-              <Select
-                value={selectedTableId ?? ''}
-                onValueChange={(val) => handleTableSelect(val)}
-              >
-                <SelectTrigger id={`${type}-table`} className="h-9 text-sm w-full">
-                  <SelectValue placeholder="Select table" />
-                </SelectTrigger>
-                <SelectContent>
-                  {selectedDataset?.tables.map((t) => (
-                    <SelectItem key={t.id} value={t.id}>
-                      {t.name}{t.row_count > 0 ? ` (${t.row_count.toLocaleString()} rows)` : ''}
-                    </SelectItem>
-                  ))}
-                  <SelectItem value="new">+ Add new table</SelectItem>
-                </SelectContent>
-              </Select>
+              <div className="flex items-center gap-2">
+                <div className="flex-1 min-w-0">
+                  <Select
+                    value={selectedTableId ?? ''}
+                    onValueChange={(val) => handleTableSelect(val)}
+                  >
+                    <SelectTrigger id={`${type}-table`} className="h-9 text-sm w-full">
+                      <SelectValue placeholder="Select table" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {selectedDataset?.tables.map((t) => (
+                        <SelectItem key={t.id} value={t.id}>
+                          {t.name}{t.row_count > 0 ? ` (${t.row_count.toLocaleString()} rows)` : ''}
+                        </SelectItem>
+                      ))}
+                      <SelectItem value="new">+ Add new table</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+                {selectedTableId && selectedTableId !== 'new' && selectedTable ? (
+                  <RoleTooltip allowed={canEdit} requiredRole="Editor">
+                    <button
+                      type="button"
+                      onClick={canEdit ? () => setRemoveDialogOpen(true) : undefined}
+                      disabled={!canEdit}
+                      className="flex-shrink-0 p-2 text-gray-400 hover:text-red-500 transition-colors disabled:opacity-40 disabled:cursor-not-allowed rounded-md"
+                      title="Remove table"
+                      aria-label={`Remove table ${selectedTable.name}`}
+                      data-testid="remove-table-button"
+                    >
+                      <Trash2 className="w-4 h-4" />
+                    </button>
+                  </RoleTooltip>
+                ) : null}
+              </div>
+              {selectedTable ? (
+                <RemoveTableDialog
+                  open={removeDialogOpen}
+                  onOpenChange={(next) => {
+                    setRemoveDialogOpen(next)
+                    if (!next) setRemoveError(null)
+                  }}
+                  tableName={selectedTable.name}
+                  rowCount={selectedTable.row_count ?? 0}
+                  fieldCount={selectedTable.field_count ?? 0}
+                  onConfirm={handleRemoveTable}
+                  errorMessage={removeError}
+                />
+              ) : null}
 
               {showNewTableInput && (
                 <div className="flex gap-2">
