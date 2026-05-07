@@ -32,8 +32,10 @@
 
   48k for Path D sits comfortably below this ceiling.
 
-- **Pricing (approximate, Opus 4.7):** $15 / 1M input tokens, $75 / 1M output tokens. Used for cost-ceiling math below.
+- **Pricing (Opus 4.7):** $5 / 1M input tokens, $25 / 1M output tokens. Source: [lib/ai/pricing.ts:55-61](../../lib/ai/pricing.ts). Used for cost-ceiling math below.
 - **Streaming requirement:** non-streaming requests rejected by Anthropic when `max_tokens > ~10K`. Path D must use `callLLMStreaming`.
+
+> **Pricing correction (Sub-PR 4b, 2026-05-07):** Earlier drafts of this doc used $15/$75 per-million pricing, drawn from a stale Anthropic pricing reference. Actual Opus 4.7 pricing per [lib/ai/pricing.ts](../../lib/ai/pricing.ts) is **$5 / $25** — 3× lower than the earlier numbers. The cost projections below were recomputed against $5/$25; the cost ceiling stays at $25 (now an even larger safety margin) and the threshold of 350 target fields is unchanged.
 
 ---
 
@@ -68,7 +70,7 @@ Path B continues to use 32k per-batch. The Path D 48k value lives only at Path D
 | Project notes (markdown)                                    | output    | ~1k                                                                       |
 | **Output total**                                            |           | **~22k** (within 32k Path B budget; comfortably within 48k Path D budget) |
 
-**Per-click cost (POC, monolithic):** input 50k × $15/M = $0.75 + output 22k × $75/M = $1.65 → **~$2.40 / click**.
+**Per-click cost (POC, monolithic):** input 50k × $5/M = $0.25 + output 22k × $25/M = $0.55 → **~$0.80 / click**.
 
 Verdict: ✅ POC fits monolithic Path D with margin.
 
@@ -82,7 +84,7 @@ Verdict: ✅ POC fits monolithic Path D with margin.
 | Decisions / lookup_tables / DQ / inferred_targets / project_notes     | output    | ~7k flat                                           |
 | **Output total**                                                      |           | **~45k** — fits within 48k budget with thin margin |
 
-**Per-click cost (threshold):** input 80k × $15/M = $1.20 + output 45k × $75/M = $3.38 → **~$4.60 / click**.
+**Per-click cost (threshold):** input 80k × $5/M = $0.40 + output 45k × $25/M = $1.13 → **~$1.50 / click**.
 
 Verdict: ✅ Mid-market fits at the threshold edge. Margin is intentionally thin so projects above 350 hit the `ProjectTooLargeError` rather than silently consuming the 48k → 64k headroom.
 
@@ -113,8 +115,8 @@ Verdict: ❌ Monolithic architecturally infeasible at enterprise scale. **Sharde
 
 ### 3. `PER_PROJECT_MAX_COST_USD = 25.0`
 
-- POC at $2.40 / click → 10× headroom.
-- Mid-market threshold at $4.60 / click → 5× headroom.
+- POC at $0.80 / click → ~31× headroom.
+- Mid-market threshold at $1.50 / click → ~17× headroom.
 - Above the ceiling: pre-call estimate fails fast (Sub-PR 4) before opening the Anthropic stream; post-call enforcement aborts the stream if rolling cost exceeds the ceiling, persisting partial state.
 - Env override: `AI_MAPPING_PATH_D_MAX_COST_USD`.
 - **Pattern note:** new pattern in this PR — exported + env-overridable. Distinct from the multi-agent module's hardcoded module-private constants ([multi-agent-orchestrator.ts:75-81](../../lib/ai/multi-agent-orchestrator.ts)). Multi-agent constants are not changed.

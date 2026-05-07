@@ -9,6 +9,14 @@ import type { CheckConstraint, FieldSchemaSource, MigrationIntelligence } from '
 // ── Types ─────────────────────────────────────────────────────────────────────
 
 export interface FieldContext {
+  /**
+   * Field UUID. Carried for Path D's prompt (it emits target_field_id /
+   * source_field_id values that the parser validates as UUIDs against the
+   * verbatim values from the schema). Path B's `formatSchemaForPrompt`
+   * does not render this; `field_id` is purely additive surface and does
+   * not affect Path B output bytes.
+   */
+  field_id: string
   name: string
   data_type: string
   inferred_type: string | null
@@ -353,6 +361,7 @@ export async function buildAIContext(
             }
 
             const ctx: FieldContext = {
+              field_id: field.id as string,
               name: field.name,
               data_type: field.data_type,
               inferred_type: field.inferred_type ?? null,

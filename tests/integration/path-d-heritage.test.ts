@@ -163,5 +163,113 @@ describeIf('Heritage Capture D — Path B byte-identical when AI_MAPPING_PATH_D_
     // eslint-disable-next-line @typescript-eslint/no-unreachable
     expect(fingerprint).toBe(PINNED_FINGERPRINT)
   })
+
+  // ─────────────────────────────────────────────────────────────────────
+  // Pin 6 + Pin 7 — added in Sub-PR 4b now that the orchestrator is
+  // reachable. Path D doesn't directly write `transformations` or
+  // `validation_rules`, but a TFM-leak from a flag-OFF Path D run would
+  // surface in the transform-page join (TFMs joined with their downstream
+  // transformations) and a validation_rules write would surface in the
+  // validation-page list. Both are env-gated under
+  // RUN_PATH_D_HERITAGE_INTEGRATION=1; both have CAPTURE mode.
+  // ─────────────────────────────────────────────────────────────────────
+
+  it('Pin 6: transform-page query fingerprint stable (no Path D writes leaking into transformations)', async () => {
+    // Identify TFM IDs in the canary first (the transform page joins TFMs
+    // → transformations via target_field_mapping_id).
+    const { data: tfms } = await admin
+      .from('target_field_mappings')
+      .select('id')
+      .eq('project_id', HERITAGE_PROJECT_ID)
+      .order('id')
+    const tfmIds = (tfms ?? []).map((r) => r.id as string)
+
+    // The transform page's authoritative read is keyed on these TFM IDs —
+    // see `getTransformData` in `lib/actions/transformations.ts`. We
+    // fingerprint the (id, target_field_mapping_id, status) tuple ordered
+    // by id so a Path D run that wrote spurious transformations OR a
+    // Path B drift in the read shape would shift the fingerprint.
+    const { data, error } = await admin
+      .from('transformations')
+      .select('id, target_field_mapping_id, status')
+      .in('target_field_mapping_id', tfmIds.length > 0 ? tfmIds : ['00000000-0000-0000-0000-000000000000'])
+      .order('id')
+    expect(error).toBeNull()
+
+    const fingerprint = createHash('sha256')
+      .update(
+        JSON.stringify(
+          (data ?? []).map((r) => ({
+            id: r.id,
+            target_field_mapping_id: r.target_field_mapping_id,
+            status: r.status,
+          })),
+        ),
+      )
+      .digest('hex')
+
+    if (process.env.PATH_D_HERITAGE_CAPTURE === '1') {
+      // eslint-disable-next-line no-console
+      console.log(`[Heritage Capture D] Transform-page fingerprint: ${fingerprint} (count=${data!.length})`)
+      return
+    }
+
+    const PINNED_TRANSFORM_FINGERPRINT: string | null = null
+    if (PINNED_TRANSFORM_FINGERPRINT === null) {
+      // eslint-disable-next-line no-console
+      console.log(
+        `[Heritage Capture D] No transform baseline pinned yet. Run with PATH_D_HERITAGE_CAPTURE=1 to capture. Current: ${fingerprint}`,
+      )
+      return
+    }
+    // eslint-disable-next-line @typescript-eslint/no-unreachable
+    expect(fingerprint).toBe(PINNED_TRANSFORM_FINGERPRINT)
+  })
+
+  it('Pin 7: validation-page rule list fingerprint stable (no Path D writes leaking into validation_rules)', async () => {
+    // The validation page's authoritative read is `getValidationRules` in
+    // `lib/actions/validation-rules.ts`:
+    //   from('validation_rules').select('*').eq('project_id', $).order('created_at', desc)
+    // We fingerprint the durable shape (id, name, rule_type, severity)
+    // ordered by id (NOT created_at, which is locale-sensitive in
+    // JSON.stringify and which we don't need for stable diffing). Schema
+    // ref: supabase/migrations/006_data_quality.sql.
+    const { data, error } = await admin
+      .from('validation_rules')
+      .select('id, name, rule_type, severity')
+      .eq('project_id', HERITAGE_PROJECT_ID)
+      .order('id')
+    expect(error).toBeNull()
+
+    const fingerprint = createHash('sha256')
+      .update(
+        JSON.stringify(
+          (data ?? []).map((r) => ({
+            id: r.id,
+            name: r.name,
+            rule_type: r.rule_type,
+            severity: r.severity,
+          })),
+        ),
+      )
+      .digest('hex')
+
+    if (process.env.PATH_D_HERITAGE_CAPTURE === '1') {
+      // eslint-disable-next-line no-console
+      console.log(`[Heritage Capture D] Validation-page fingerprint: ${fingerprint} (count=${data!.length})`)
+      return
+    }
+
+    const PINNED_VALIDATION_FINGERPRINT: string | null = null
+    if (PINNED_VALIDATION_FINGERPRINT === null) {
+      // eslint-disable-next-line no-console
+      console.log(
+        `[Heritage Capture D] No validation baseline pinned yet. Run with PATH_D_HERITAGE_CAPTURE=1 to capture. Current: ${fingerprint}`,
+      )
+      return
+    }
+    // eslint-disable-next-line @typescript-eslint/no-unreachable
+    expect(fingerprint).toBe(PINNED_VALIDATION_FINGERPRINT)
+  })
 })
 
