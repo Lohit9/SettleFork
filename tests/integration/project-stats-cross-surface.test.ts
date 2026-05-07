@@ -84,6 +84,123 @@ describeIf('[integration] project-stats cross-surface alignment', () => {
     expect(mcStats).toEqual(mappingStats)
   }, 60_000)
 
+  it('oracle: each axis matches direct-SQL ground truth', async () => {
+    // PR-4 followup-D: cross-surface equality alone passes the "all
+    // three loaders agree" check even when all three return wrong-but-
+    // stable answers — exactly the failure mode that the PR-4 dev
+    // verification surfaced for "Epicor to Rootstock" (truncated
+    // mapping_sources / target_field_mappings / fields fetches under
+    // PostgREST's `db-max-rows` cap). This test establishes ground
+    // truth via direct SQL counts and asserts ProjectStats against
+    // them — catching loader-formula-vs-DB divergence the equality
+    // check cannot.
+    const { supabaseAdmin } = await import('@/lib/supabase/admin')
+    const { getProjectStats } = await import('@/lib/quality/project-stats')
+
+    const statsMap = await getProjectStats([PROJECT_ID], supabaseAdmin)
+    const stats = statsMap.get(PROJECT_ID)
+    expect(stats).toBeTruthy()
+    if (!stats) return
+
+    // ── Oracle 1: source.total (exact equality) ───────────────────────
+    // SQL: count of fields under the project's source-role datasets.
+    const { data: sourceDatasets } = await supabaseAdmin
+      .from('datasets')
+      .select('id')
+      .eq('project_id', PROJECT_ID)
+      .eq('role', 'source')
+    const { data: sourceTablesData } = await supabaseAdmin
+      .from('tables')
+      .select('id')
+      .in(
+        'dataset_id',
+        (sourceDatasets ?? []).map((d) => d.id),
+      )
+    const sourceTableIds = (sourceTablesData ?? []).map((t) => t.id)
+    const { count: oracleSourceTotal } =
+      sourceTableIds.length > 0
+        ? await supabaseAdmin
+            .from('fields')
+            .select('id', { count: 'exact', head: true })
+            .in('table_id', sourceTableIds)
+        : { count: 0 }
+    expect(stats.source.total).toBe(oracleSourceTotal ?? 0)
+
+    // ── Oracle 2: source.decided (exact equality) ─────────────────────
+    // SQL: |distinct source_field_id in non-rejected TFMs' MS  ∪  source acks|
+    const { data: nonRejectedTfms } = await supabaseAdmin
+      .from('target_field_mappings')
+      .select('id')
+      .eq('project_id', PROJECT_ID)
+      .neq('status', 'rejected')
+    const tfmIds = (nonRejectedTfms ?? []).map((t) => t.id)
+    const { data: msRows } =
+      tfmIds.length > 0
+        ? await supabaseAdmin
+            .from('mapping_sources')
+            .select('source_field_id')
+            .in('target_field_mapping_id', tfmIds)
+        : { data: [] as { source_field_id: string | null }[] }
+    const mappedIds = new Set(
+      (msRows ?? [])
+        .map((m) => m.source_field_id)
+        .filter((id): id is string => Boolean(id)),
+    )
+    const { data: srcAcks } = await supabaseAdmin
+      .from('source_field_acknowledgments')
+      .select('source_field_id')
+      .eq('project_id', PROJECT_ID)
+    const ackedIds = new Set((srcAcks ?? []).map((a) => a.source_field_id))
+    const oracleSourceDecided = new Set([...mappedIds, ...ackedIds]).size
+    expect(stats.source.decided).toBe(oracleSourceDecided)
+
+    // ── Oracle 3: target.approved (lower bound via primary approved TFMs) ─
+    // The full formula adds bare-acks; this oracle asserts target.approved
+    // is at least the count of approved primary (non-bare-ack) TFMs.
+    // A regression that under-counts (e.g. truncated TFM fetch) would
+    // drive this below the SQL lower bound.
+    const { count: primaryApprovedCount } = await supabaseAdmin
+      .from('target_field_mappings')
+      .select('id', { count: 'exact', head: true })
+      .eq('project_id', PROJECT_ID)
+      .eq('status', 'approved')
+      .or('is_acknowledged.eq.false,combination_type.not.is.null')
+    expect(stats.target.approved).toBeGreaterThanOrEqual(
+      primaryApprovedCount ?? 0,
+    )
+
+    // ── Oracle 4: transforms.complete (lower bound via applied count) ──
+    // transforms.complete = saved + applied (Q2 redefinition) — therefore
+    // ≥ the applied-only count.
+    const { count: appliedCount } = await supabaseAdmin
+      .from('transformations')
+      .select('id, target_field_mappings!inner(project_id)', {
+        count: 'exact',
+        head: true,
+      })
+      .eq('target_field_mappings.project_id', PROJECT_ID)
+      .eq('status', 'applied')
+    expect(stats.transforms.complete).toBeGreaterThanOrEqual(appliedCount ?? 0)
+
+    // ── Oracle 5: blocking (upper bound via raw open+in_flight count) ──
+    // ProjectStats.blocking = openBlockingResolutionSuppressed (suppression
+    // can only DECREASE the count). Upper bound: open + in_flight + blocking.
+    const { count: rawBlockingCount } = await supabaseAdmin
+      .from('quality_issues')
+      .select('id', { count: 'exact', head: true })
+      .eq('project_id', PROJECT_ID)
+      .eq('severity', 'blocking')
+      .eq('status', 'open')
+      .eq('stage', 'in_flight')
+    expect(stats.blocking).toBeLessThanOrEqual(rawBlockingCount ?? 0)
+
+    // ── Structural invariants (cheap last-line-of-defense) ────────────
+    expect(stats.source.decided).toBeLessThanOrEqual(stats.source.total)
+    expect(stats.target.approved).toBeLessThanOrEqual(stats.target.total)
+    expect(stats.transforms.complete).toBeLessThanOrEqual(stats.transforms.total)
+    expect(stats.blocking).toBeGreaterThanOrEqual(0)
+  }, 90_000)
+
   it('post-mutation: source.decided increments after a source ack insert and reverts on cleanup', async () => {
     const { supabaseAdmin } = await import('@/lib/supabase/admin')
     const { getProjectStats } = await import('@/lib/quality/project-stats')
