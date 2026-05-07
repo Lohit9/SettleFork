@@ -95,3 +95,30 @@ export class ProjectTooLargeError extends Error {
     this.name = "ProjectTooLargeError";
   }
 }
+
+
+/**
+ * Thrown by the Sub-PR 4b Path D orchestrator when:
+ *   - Pre-call gate: predicted cost (input × $15/M + output × $75/M) exceeds
+ *     PER_PROJECT_MAX_COST_USD before the Anthropic stream is opened.
+ *   - Mid-stream gate: cumulative output_tokens cost exceeds the ceiling
+ *     while streaming. The orchestrator aborts the stream via AbortController
+ *     and persists whatever already parsed (per-section semantics).
+ *
+ * Carries diagnostics so the UI can surface "this run cost $X but the
+ * ceiling is $Y" rather than a generic error.
+ */
+export class CostCeilingExceededError extends Error {
+  constructor(
+    public readonly predictedCostUsd: number,
+    public readonly ceilingUsd: number = PER_PROJECT_MAX_COST_USD,
+    public readonly cumulativeOutputTokens?: number,
+  ) {
+    const phase = cumulativeOutputTokens !== undefined ? 'mid-stream' : 'pre-call'
+    super(
+      `Path D ${phase} cost gate exceeded: predicted $${predictedCostUsd.toFixed(2)} > ceiling $${ceilingUsd.toFixed(2)}. ` +
+        `Reduce project size or raise AI_MAPPING_PATH_D_MAX_COST_USD env var.`,
+    )
+    this.name = 'CostCeilingExceededError'
+  }
+}

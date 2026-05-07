@@ -1,0 +1,107 @@
+<mappings>
+[
+  {
+    "target_field_id": "11111111-1111-4111-8111-111111111111",
+    "source_field_ids": ["aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"],
+    "combination_type": "single",
+    "combination_sql": null,
+    "ai_reasoning": "Mapped, but data_quality_flag_indices reference DQ #0 + #1.",
+    "transformation_intent": "Trim + lowercase email per DQ findings.",
+    "mapping_cardinality": "1:1",
+    "dedup_required": false,
+    "dedup_strategy": null,
+    "data_quality_flag_indices": [0, 1],
+    "confidence": 0.85,
+    "status": "needs_review"
+  },
+  {
+    "target_field_id": "22222222-2222-4222-8222-222222222222",
+    "source_field_ids": [],
+    "combination_type": "custom_sql",
+    "combination_sql": "'DEFAULT'::text",
+    "ai_reasoning": "VA; references DQ #2.",
+    "transformation_intent": "Hardcoded value.",
+    "mapping_cardinality": "1:1",
+    "dedup_required": false,
+    "dedup_strategy": null,
+    "data_quality_flag_indices": [2],
+    "confidence": 1.0,
+    "status": "needs_review"
+  }
+]
+</mappings>
+
+<coverage>
+[
+  {
+    "target_field_id": "11111111-1111-4111-8111-111111111111",
+    "coverage_status": "covered",
+    "ai_reasoning": "Mapped.",
+    "default_value_recommendation": null
+  }
+]
+</coverage>
+
+<decisions>
+[
+  {
+    "decision_type": "field_normalization",
+    "title": "Lowercase email convention",
+    "description": "Source has mixed-case emails; canonical convention is lowercase.",
+    "ai_recommendation": {"option": "lower", "rationale": "Standard convention."},
+    "alternatives": [{"option": "preserve", "rationale": "Match source verbatim."}],
+    "applies_to": {"tfm_indices": [0]},
+    "status": "pending"
+  },
+  {
+    "decision_type": "default_value",
+    "title": "Hardcoded value for tenant_id",
+    "description": "TFM index 1 is a value assignment; confirm hardcoded value is correct.",
+    "ai_recommendation": {"option": "DEFAULT", "rationale": "Per Rootstock deployment policy."},
+    "alternatives": [],
+    "applies_to": {"tfm_indices": [1]},
+    "status": "pending"
+  }
+]
+</decisions>
+
+<lookup_tables>
+[]
+</lookup_tables>
+
+<data_quality>
+[
+  {
+    "source_field_id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+    "severity": "warning",
+    "category": "inconsistent_format",
+    "description": "Email field has mixed casing.",
+    "example_values": ["John@Example.com", "jane@example.com"],
+    "recommendation": "Lowercase + trim."
+  },
+  {
+    "source_field_id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+    "severity": "warning",
+    "category": "leading_whitespace",
+    "description": "Some emails have leading whitespace.",
+    "example_values": [" alice@example.com"],
+    "recommendation": "Trim before lowercasing."
+  },
+  {
+    "source_field_id": null,
+    "severity": "info",
+    "category": "project_level_observation",
+    "description": "Project-level: hardcoded values may need review per deployment.",
+    "example_values": [],
+    "recommendation": "Confirm with customer."
+  }
+]
+</data_quality>
+
+<inferred_targets>
+[]
+</inferred_targets>
+
+<project_notes>
+Cross-reference fixture: mappings reference data_quality flag indices [0,1] and [2]; decisions reference tfm_indices [0] and [1]. Persistence layer must resolve indices → UUIDs in dependency-ordered insert pass.
+</project_notes>

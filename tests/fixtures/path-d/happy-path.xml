@@ -1,0 +1,130 @@
+<mappings>
+[
+  {
+    "target_field_id": "11111111-1111-4111-8111-111111111111",
+    "source_field_ids": ["aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"],
+    "combination_type": "single",
+    "combination_sql": null,
+    "ai_reasoning": "Direct match: customer_id maps cleanly to id.",
+    "transformation_intent": "Identity passthrough; no transformation needed.",
+    "mapping_cardinality": "1:1",
+    "dedup_required": false,
+    "dedup_strategy": null,
+    "data_quality_flag_indices": [],
+    "confidence": 0.95,
+    "status": "needs_review"
+  },
+  {
+    "target_field_id": "22222222-2222-4222-8222-222222222222",
+    "source_field_ids": ["bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb", "cccccccc-cccc-4ccc-8ccc-cccccccccccc"],
+    "combination_type": "concat_space",
+    "combination_sql": null,
+    "ai_reasoning": "Source has first_name and last_name as separate fields; target wants full_name.",
+    "transformation_intent": "Concatenate first_name + ' ' + last_name; trim whitespace.",
+    "mapping_cardinality": "many_to_one",
+    "dedup_required": false,
+    "dedup_strategy": null,
+    "data_quality_flag_indices": [0],
+    "confidence": 0.85,
+    "status": "needs_review"
+  },
+  {
+    "target_field_id": "33333333-3333-4333-8333-333333333333",
+    "source_field_ids": [],
+    "combination_type": "custom_sql",
+    "combination_sql": "'ACTIVE'::text",
+    "ai_reasoning": "No source field; tenant requires hardcoded status.",
+    "transformation_intent": "Value assignment per Rootstock deployment policy.",
+    "mapping_cardinality": "1:1",
+    "dedup_required": false,
+    "dedup_strategy": null,
+    "data_quality_flag_indices": [],
+    "confidence": 1.0,
+    "status": "needs_review"
+  }
+]
+</mappings>
+
+<coverage>
+[
+  {
+    "target_field_id": "11111111-1111-4111-8111-111111111111",
+    "coverage_status": "covered",
+    "ai_reasoning": "Direct mapping in place.",
+    "default_value_recommendation": null
+  },
+  {
+    "target_field_id": "22222222-2222-4222-8222-222222222222",
+    "coverage_status": "covered",
+    "ai_reasoning": "Concatenation handles full_name.",
+    "default_value_recommendation": null
+  },
+  {
+    "target_field_id": "44444444-4444-4444-8444-444444444444",
+    "coverage_status": "gap",
+    "ai_reasoning": "No source field maps to this target; consider default value.",
+    "default_value_recommendation": {"strategy": "static", "value": "UNKNOWN"}
+  }
+]
+</coverage>
+
+<decisions>
+[
+  {
+    "decision_type": "picklist_transform",
+    "title": "Map source 'Active' / 'Inactive' to target enum",
+    "description": "Source has 2-value enum; target supports 4. Pick canonical mapping.",
+    "ai_recommendation": {"option": "A", "value": "Active → ACTIVE, Inactive → INACTIVE"},
+    "alternatives": [
+      {"option": "B", "value": "Active → A, Inactive → I (single-char)"}
+    ],
+    "applies_to": {"tfm_indices": [0]},
+    "status": "pending"
+  }
+]
+</decisions>
+
+<lookup_tables>
+[
+  {
+    "name": "uom_normalization",
+    "description": "Unit-of-measure normalization for quantity fields.",
+    "applies_to_fields": [
+      {"source_field_id": "dddddddd-dddd-4ddd-8ddd-dddddddddddd", "target_field_id": "55555555-5555-4555-8555-555555555555"}
+    ],
+    "mappings": {"Each": "EA", "Lbs": "LB", "Kilograms": "KG"},
+    "data_quality_notes": null
+  }
+]
+</lookup_tables>
+
+<data_quality>
+[
+  {
+    "source_field_id": "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
+    "severity": "warning",
+    "category": "inconsistent_format",
+    "description": "First names contain occasional leading whitespace and mixed casing.",
+    "example_values": ["  John", "JANE", "alice"],
+    "recommendation": "Trim + title-case during transformation."
+  }
+]
+</data_quality>
+
+<inferred_targets>
+[
+  {
+    "inferred_target_object": "Contact",
+    "evidence_source_fields": ["bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb", "cccccccc-cccc-4ccc-8ccc-cccccccccccc"],
+    "reasoning": "Source has contact_first / contact_last columns suggesting a Contact entity not in the target schema."
+  }
+]
+</inferred_targets>
+
+<project_notes>
+Project-wide observations:
+
+- Source schema is well-normalized but uses inconsistent casing in name fields.
+- Target schema requires status enum; coordinate with customer on canonical mapping.
+- 1 inferred Contact entity worth surfacing for customer review.
+</project_notes>
