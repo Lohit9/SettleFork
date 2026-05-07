@@ -373,8 +373,9 @@ Path D's monolithic Opus 4.7 single-call architecture supersedes the multi-agent
 
 ## INF-27 — Investigate PostToolUse hook reformatting repo-wide
 
-**Status:** OPEN
+**Status:** CLOSED
 **Filed:** 2026-05-06
+**Closed:** 2026-05-07 by INF-31. Root cause: empty/unset `$CLAUDE_FILE_PATH` makes `npx prettier --write ""` fall through to a project-wide walk (Prettier 3.8.3 does not error on empty positional arg). Co-root-cause: no `.prettierrc` meant the walk reformatted to Prettier defaults (double quote / semi), conflicting with codebase actual style. Fix shipped in INF-31: `test -n "$CLAUDE_FILE_PATH" &&` guard on both hook commands + `.prettierrc` + narrow `.prettierignore`.
 **Description:** PostToolUse hook in `.claude/settings.json` runs `npx prettier --write "$CLAUDE_FILE_PATH"` and `npx eslint --fix "$CLAUDE_FILE_PATH"` (single-file target by design). 660-file repo-wide drift observed during Claude Code Write/Edit ops on `chore/archive-phase-3-pre-path-d` on 2026-05-06. Either the env var is mis-expanding or another process (IDE-on-save, watchman, husky pre-commit) is firing repo-wide. Investigate as a separate concern; not blocking ongoing work.
 
 **Acceptance criteria:** Root cause identified; hook config or offending process disabled; clean working tree confirmed across two consecutive Claude Code edits.
@@ -440,5 +441,44 @@ git push origin --delete fix/remove-unregistered-datascanning-tools
 - `lib/actions/execution-package.ts:500` — `generateCompartmentalizedPackageInternal` (has `__skipPersistence` option that may help bypass ZIP step)
 
 **Related:** audit RECOMMENDATION #10; INF-29 (sibling A3b deferral).
+
+---
+
+## INF-31 — Add `.prettierrc` + `.prettierignore` and fix PostToolUse empty-path hook bug
+
+**Status:** CLOSED
+**Filed:** 2026-05-07
+**Closed:** 2026-05-07 by this PR (`fix/inf-26-prettierrc`).
+**Description:**
+Two co-root-causes for the formatter pollution observed on the careers PR (#86) and re-observed on the path-d PR (#89):
+
+1. **No `.prettierrc`.** Prettier fell through to defaults (double quotes, trailing semis) which conflict with the codebase actual style (single quotes, no semis). Every hook invocation rewrote files toward Prettier defaults.
+2. **PostToolUse hook empty-path bug.** `npx prettier --write "$CLAUDE_FILE_PATH"` does NOT error when the env var is empty/unset — Prettier 3.8.3 treats an empty positional arg as a fall-through to "walk the project for matching files." Confirmed empirically: `EMPTY=""; npx prettier --write "$EMPTY"` walks `.claude/`, `.cursor/`, etc. without erroring. Same bug applies to the sibling `npx eslint --fix "$CLAUDE_FILE_PATH"` command.
+
+**Closure:**
+
+- `.prettierrc` declares the codebase actual style: `singleQuote: true, semi: false, jsxSingleQuote: false, tabWidth: 2, printWidth: 100, trailingComma: "all"`.
+- `.prettierignore` scopes the new config narrowly. Excludes `app/`, `lib/`, `scripts/`, `tests/` (negation-allows `tests/components/`), `components/ui/`, `figma/`, plus standard build / lockfile / SQL / MD exclusions. Justification: 494-file structural drift between the codebase's manual line-wrapping conventions (heavy multi-line imports, attribute-per-line JSX, manually aligned union types) and Prettier's preferred output. Auto-fixing all 494 in one PR violates scope discipline (per INF-24); narrow scoping defers per-directory adoption to follow-up PRs as code is naturally touched and reformatted.
+- `.claude/settings.json` PostToolUse hook commands now guard against empty path: `test -n "$CLAUDE_FILE_PATH" && npx prettier --write ... 2>/dev/null || true` (and the same fix on the eslint sibling command). When the env var is empty, `test -n` fails, `&&` short-circuits, `|| true` returns 0 — clean no-op, no project walk.
+
+**Validation gate (file-edit test):**
+
+- Edit one file via the `Edit` tool → `git status --short` shows ONLY that file modified. Confirmed.
+- `npx prettier --check .` returns exit 0 in scope.
+- Vitest baseline 3451 unchanged.
+
+**Open follow-ups:**
+
+- **`lib/` Prettier adoption (post-Phase-B format sweep)** — `lib/` is the largest excluded surface (132 drifted files). Format-fix as a separate PR after Phase B Path D core lands real data; touching `lib/` mid-Phase-B risks merge conflicts with A's in-flight work.
+- Per-directory adoption for `app/` (108 files), `tests/` excluding `components/` (187 files), `scripts/` (10 files), and the orphan top-level configs (`middleware.ts`, `postcss.config.js`, `tailwind.config.ts`, `tsconfig.json`) — same cadence as `lib/`. Each becomes a focused per-dir format-fix PR once the surface is stable.
+- `components/ui/` (shadcn primitives) and `figma/` stay permanently excluded — different style conventions by design.
+
+**Code references:**
+
+- `.prettierrc` (new)
+- `.prettierignore` (new)
+- `.claude/settings.json` lines ~40 and ~44 (hook guard)
+
+**Related:** INF-27 (this PR closes it as the investigation outcome — root cause identified and fixed); INF-24 (scope discipline informed the "narrow scoping > big-bang reformatting" choice).
 
 ---
