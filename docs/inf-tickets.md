@@ -407,3 +407,38 @@ git push origin --delete fix/remove-unregistered-datascanning-tools
 **Related:** INF-24 (investigation-first protocol — this case reinforces the rule).
 
 ---
+
+## INF-29 — Add canary fixtures for schema_enrichment_from_docs smoke test
+
+**Status:** OPEN
+**Filed:** 2026-05-06
+**Description:** A3b smoke test for `schema_enrichment_from_docs` was deferred during the A3b PR because the canary project (HERITAGE_PROJECT_ID `6622ddf1-47bd-4e48-ac2a-5b109a25bc13`) has zero `schema_documents` rows. The function reads `schema_documents` to build its enrichment prompt and returns early without them. Building an ~80 LOC per-test fresh fixture was deferred per audit's "minimum smoke tests" framing.
+
+**Acceptance criteria:** Either (a) provision `schema_documents` on canary (also unblocks similar future tests) or (b) build a fresh-fixture helper in the smoke test file. Convert `it.skip` to `it` and verify it passes.
+
+**Code references:**
+
+- `tests/integration/ai-flow-smoke.test.ts` — currently `it.skip(...)` with a docblock pointing here
+- `lib/actions/schema-enrichment.ts:85` — `enrichSchemaFromDocs` entry point
+
+**Related:** audit RECOMMENDATION #10 (smoke coverage for AI flows reshaped by Path D).
+
+---
+
+## INF-30 — compartmentalized_deliverables smoke test runtime exceeds budget
+
+**Status:** OPEN
+**Filed:** 2026-05-06
+**Description:** A3b smoke test for `generateCompartmentalizedPackage` exceeded the 240s timeout without producing the `[generateCompartmentalizedPackage] Tool-use mode: parsed N files` log line, suggesting the streaming response or JSON recovery hung before parsing completed. 32k-token streaming output + ZIP assembly is 4–8 minutes typical, exceeding smoke-test runtime budget. Coverage gap mitigated: `migration_runbook` smoke test (passing) exercises ~90% of the same prompt-assembly pipeline; the streaming-specific code path remains uncovered.
+
+**Acceptance criteria:** Either (a) raise the smoke timeout to 600s and accept the runtime, (b) build a streaming-isolated test that bypasses ZIP assembly, or (c) cover this code path implicitly via Phase B Path D implementation tests where fixture + timing infrastructure is already needed.
+
+**Code references:**
+
+- `tests/integration/ai-flow-smoke.test.ts` — currently `it.skip(...)` with a docblock pointing here
+- `lib/actions/execution-package.ts:821` — `generateCompartmentalizedPackage` entry point
+- `lib/actions/execution-package.ts:500` — `generateCompartmentalizedPackageInternal` (has `__skipPersistence` option that may help bypass ZIP step)
+
+**Related:** audit RECOMMENDATION #10; INF-29 (sibling A3b deferral).
+
+---
