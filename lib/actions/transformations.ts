@@ -102,6 +102,7 @@ import { checkAIRateLimit } from '@/lib/ai/rate-limit'
 import { buildAIContext, formatFieldForPrompt, formatDocumentsForPrompt } from '@/lib/ai/context-builder'
 import { fieldNeedsTransform, wrapFieldRefsInJsonb } from '@/lib/utils/transform-helpers'
 import { buildJoinSpec } from '@/lib/utils/transform-cross-table'
+import { resolveTransformationIntent } from '@/lib/utils/transformation-intent'
 import { logActivity } from '@/lib/actions/activity-log'
 import { logAIEdit } from '@/lib/actions/ai-edit-history'
 import { assertMappingWritesEnabled } from '@/lib/auth/mapping-writes'
@@ -1239,10 +1240,12 @@ export async function generateTransform(
         const cx = allSrcCtxFields.find((f) => f.name === cf.name)
         return cx ? formatFieldForPrompt(cx) : `${cf.name} (${cf.data_type})`
       })
-      // Combination hint lives on the TFM's ai_reasoning (migrated from the
-      // legacy primary FM's reasoning in 074).
-      const hintMatch = ctx.tfm.ai_reasoning?.match(/\[Combination:\s*(.*?)\]/)
-      const combinationHint = hintMatch ? hintMatch[1] : ''
+      // Combination hint resolution prefers the structured `transformation_intent`
+      // column (Path D, migration 093). Path B legacy records have NULL there
+      // and carry the hint inside ai_reasoning as `[Combination: X]`; the
+      // helper falls back to the regex extractor for those. Sub-PR 2 lock —
+      // 10 regression cases at tests/utils/transformation-intent.test.ts.
+      const combinationHint = resolveTransformationIntent(ctx.tfm.transformation_intent, ctx.tfm.ai_reasoning) ?? ''
       contributingSourcesBlock = `\n<contributing_source_fields>
 This is a MANY-TO-ONE mapping. Multiple source fields must be combined into a single target field value.
 
