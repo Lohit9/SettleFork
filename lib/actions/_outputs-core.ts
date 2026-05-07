@@ -23,6 +23,11 @@ import { buildReadinessDocx } from '@/lib/reports/readiness-report-docx'
 import { computeReadinessScore } from '@/lib/quality/readiness-score'
 import { calculateReadinessScore, type ReadinessComponents } from '@/lib/quality/readiness-formula'
 import { computeProjectStats } from '@/lib/quality/stat-formulas'
+import {
+  rollupProjectStats,
+  type ProjectStats,
+  type RawProjectStatsData,
+} from '@/lib/quality/project-stats'
 import type {
   MappingSourceRow,
   SourceFieldAcknowledgmentRow,
@@ -130,6 +135,14 @@ export interface OutputsPageData {
   hasMappings: boolean
   hasSourceData: boolean
   hasTargetData: boolean
+  // PR-1 (feat/project-stats-shared-helper): new public-surface view from
+  // the shared helper at `lib/quality/project-stats.ts`. Carries the
+  // 3-state machine label + axis-shaped stats (target / source / transforms
+  // / blocking). Legacy fields on `metrics` stay populated for current UI;
+  // PR-3 (Migration Center widget redesign) consumes `projectStats`
+  // directly to surface the source axis and the redefined
+  // `transforms.complete` numerator.
+  projectStats: ProjectStats
 }
 
 export interface GeneratedFile {
@@ -183,6 +196,13 @@ export function emptyOutputsPageData(projectId: string): OutputsPageData {
     hasMappings: false,
     hasSourceData: false,
     hasTargetData: false,
+    projectStats: {
+      state: 'awaiting_data',
+      target: { approved: 0, total: 0, unmapped: 0 },
+      source: { decided: 0, total: 0 },
+      transforms: { complete: 0, total: 0 },
+      blocking: 0,
+    },
   }
 }
 
@@ -1120,6 +1140,74 @@ export async function getOutputsPageDataCore(projectId: string): Promise<Outputs
   const openWarnings = stats.openWarningsResolutionSuppressed
   const untestedTransforms = draftTransforms
 
+  // PR-1 (feat/project-stats-shared-helper): produce the new
+  // public-surface `ProjectStats` view via the shared helper. We build a
+  // `RawProjectStatsData` from rows already fetched above (no extra
+  // round-trip) and call `rollupProjectStats` directly. This is the
+  // canonical surface consumed by PR-3 (Migration Center widget redesign);
+  // the legacy `metrics.*` fields above stay populated for the current UI.
+  const projectStatsRaw: RawProjectStatsData = {
+    datasets: (datasets ?? []).map((d) => ({
+      id: d.id,
+      project_id: projectId,
+      role: d.role,
+    })),
+    tables: (allTables ?? []).map((t) => ({ id: t.id, dataset_id: t.dataset_id })),
+    fields: [
+      ...(sourceFieldRows ?? []).map((f) => ({
+        id: f.id,
+        name: f.name,
+        data_type: f.data_type,
+        table_id: f.table_id,
+      })),
+      ...(targetFieldRows ?? []).map((f) => ({
+        id: f.id,
+        name: f.name,
+        data_type: f.data_type,
+        table_id: f.table_id,
+      })),
+    ],
+    tfms: tfms.map((t) => ({
+      id: t.id,
+      project_id: projectId,
+      target_field_id: t.target_field_id,
+      confidence: t.confidence,
+      status: t.status,
+      is_acknowledged: t.is_acknowledged,
+      combination_type: t.combination_type,
+      needs_transformation: t.needs_transformation,
+      va_dismissed: t.va_dismissed,
+    })),
+    mappingSources: (msRows ?? [])
+      .filter((m) => tfmIdSet.has(m.target_field_mapping_id))
+      .map((m) => ({
+        target_field_mapping_id: m.target_field_mapping_id,
+        source_field_id: m.source_field_id,
+        ordinal: m.ordinal,
+        type_compatibility: m.type_compatibility,
+      })),
+    sourceAcks: (sourceAckRows ?? []).map((a) => ({
+      project_id: projectId,
+      source_field_id: a.source_field_id,
+    })),
+    transformations: (transformRows ?? []).map((t) => ({
+      target_field_mapping_id: t.target_field_mapping_id,
+      status: t.status,
+      target_field_mappings: { project_id: projectId },
+    })),
+    qualityIssues: (qualityIssueRows ?? []).map((q) => ({
+      project_id: projectId,
+      severity: q.severity,
+      status: q.status,
+      stage: q.stage,
+      field_id: q.field_id,
+      issue_kind: q.issue_kind,
+      description: q.description,
+      title: q.title,
+    })),
+  }
+  const projectStats = rollupProjectStats(projectId, projectStatsRaw)
+
   const stagingCountResults = nonRejectedTMIds.length > 0
     ? await Promise.all(
         nonRejectedTMIds.map((tmId) =>
@@ -1262,5 +1350,6 @@ export async function getOutputsPageDataCore(projectId: string): Promise<Outputs
     hasMappings: tfms.length > 0,
     hasSourceData: sourceTables.length > 0,
     hasTargetData: targetTables.length > 0,
+    projectStats,
   }
 }
