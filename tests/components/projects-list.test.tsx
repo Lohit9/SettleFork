@@ -140,7 +140,12 @@ describe('ProjectCard — state-aware stats area (PR-2.5)', () => {
     expect(screen.queryByTestId('project-stats-row')).not.toBeInTheDocument()
   })
 
-  it('Active data_ingested: no badge, italic state label "Data ingested", no stats row', () => {
+  it('Active data_ingested with target.total > 0: stats render with 0 numerators, no italic label (PR-2.6)', () => {
+    // PR-2.6 broadens the predicate from state-machine to data-presence:
+    // any project with target.total > 0 (or transforms.total > 0)
+    // shows stats, regardless of state. data_ingested with uploaded
+    // fields renders 0/N stats — more informative than the previous
+    // "Data ingested" italic label.
     render(
       <ProjectCard
         project={project({
@@ -149,9 +154,41 @@ describe('ProjectCard — state-aware stats area (PR-2.5)', () => {
         onUpdate={noop}
       />,
     )
+    // No badge, stats row visible, no italic label.
     expect(screen.queryByText('Data ingested', { selector: 'span[data-state-variant]' })).not.toBeInTheDocument()
-    expect(screen.getByTestId('tile-state-label')).toHaveTextContent('Data ingested')
-    expect(screen.queryByTestId('project-stats-row')).not.toBeInTheDocument()
+    expect(screen.queryByTestId('tile-state-label')).not.toBeInTheDocument()
+    expect(screen.getByTestId('project-stats-row')).toBeInTheDocument()
+    expect(screen.getByTestId('stat-target')).toHaveTextContent('Mapped: 0/68 fields')
+    expect(screen.getByTestId('stat-source')).toHaveTextContent('Sources: 0/70')
+    expect(screen.getByTestId('stat-transforms')).toHaveTextContent('Transforms: 0/0')
+    // PR-2.6 forward-compat insurance (Q3): "Data ingested" text was
+    // the PR-2.5 italic-label string. Under the data-presence
+    // predicate the conditional was simplified to a single string,
+    // and the dead "Data ingested" branch was removed entirely. If a
+    // future regression restores the dead branch, this test fails.
+    expect(screen.queryByText('Data ingested')).not.toBeInTheDocument()
+  })
+
+  it('Active data_ingested with mappings approved (state regression edge case): stats render with real numbers (PR-2.6)', () => {
+    // Production scenario: a project went through mapping work
+    // (target.approved > 0), then all its unacknowledged TFMs got
+    // processed → PR-1's state predicate evaluates as data_ingested.
+    // PR-2.5's state-based gate dropped the stats here. PR-2.6's
+    // data-presence gate (target.total > 0) catches it.
+    render(
+      <ProjectCard
+        project={project({
+          projectStats: projectStats({ state: 'data_ingested', target: { approved: 52, total: 68, unmapped: 16 }, source: { decided: 57, total: 70 }, transforms: { complete: 15, total: 51 } }),
+        })}
+        onUpdate={noop}
+      />,
+    )
+    // Stats render with the project's real numbers (not 0/N).
+    expect(screen.getByTestId('project-stats-row')).toBeInTheDocument()
+    expect(screen.getByTestId('stat-target')).toHaveTextContent('Mapped: 52/68 fields')
+    expect(screen.getByTestId('stat-source')).toHaveTextContent('Sources: 57/70')
+    expect(screen.getByTestId('stat-transforms')).toHaveTextContent('Transforms: 15/51')
+    expect(screen.queryByTestId('tile-state-label')).not.toBeInTheDocument()
   })
 
   it('Active mappings_generated: no badge, no state label, stats row visible', () => {
