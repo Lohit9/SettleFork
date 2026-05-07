@@ -91,7 +91,12 @@ export async function getOutputsPageData(projectId: string): Promise<OutputsPage
     return emptyOutputsPageData(projectId)
   }
 
-  const data = await getOutputsPageDataCore(projectId)
+  // PR-4: thread the cookies-bound user client into core so stat-feeder
+  // rows (TFMs / mapping_sources / fields / etc.) come from the same
+  // RLS-bound rowset the Mapping page and dashboard tile see. Without
+  // this, MC silently surfaced an admin-fetched superset and the
+  // numbers diverged across surfaces.
+  const data = await getOutputsPageDataCore(projectId, supabase)
 
   // Live-join actor identity into the decisions log so the UI can
   // render "timestamp · name" without denormalising user_name into

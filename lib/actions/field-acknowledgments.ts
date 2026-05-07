@@ -1,5 +1,6 @@
 'use server'
 
+import { revalidatePath } from 'next/cache'
 import { createClient } from '@/lib/supabase/server'
 import { supabaseAdmin } from '@/lib/supabase/admin'
 import { requireProjectPermission } from '@/lib/actions/role-resolution'
@@ -150,6 +151,11 @@ export async function acknowledgeField(
 
     await recomputeAffectedTableMappings(supabase, projectId, fieldId)
 
+    // PR-4: dashboard tile reads target.approved which counts acknowledged
+    // unmapped target fields. Without this, the tile stays stale until a
+    // hard refresh.
+    revalidatePath('/app/projects')
+
     return {
       id: `ack::target::${tfmId}`,
       project_id: projectId,
@@ -186,6 +192,9 @@ export async function acknowledgeField(
   }
 
   await recomputeAffectedTableMappings(supabase, projectId, fieldId)
+
+  // PR-4: dashboard tile reads source.decided which counts source acks.
+  revalidatePath('/app/projects')
 
   return {
     id: `ack::source::${data.id}`,
@@ -246,6 +255,9 @@ export async function removeAcknowledgment(
   }
 
   await recomputeAffectedTableMappings(supabase, projectId, fieldId)
+
+  // PR-4: dashboard tile target.approved / source.decided change with acks.
+  revalidatePath('/app/projects')
 }
 
 // ─── getAcknowledgmentsForProject (new helper; used by integration tests) ────

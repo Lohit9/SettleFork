@@ -1,6 +1,7 @@
 'use server'
 
 import type { SupabaseClient } from '@supabase/supabase-js'
+import { revalidatePath } from 'next/cache'
 import { supabaseAdmin } from '@/lib/supabase/admin'
 import { createClient } from '@/lib/supabase/server'
 import { callLLM, type LLMFeature } from '@/lib/ai/llm-client'
@@ -986,6 +987,10 @@ export async function executeCustomRules(
     const { error } = await supabase.from('quality_issues').insert(issuesToInsert)
     if (error) return { success: false, newIssues: 0, warnings, error: error.message }
   }
+
+  // PR-4: dashboard tile blocking-issue count tracks quality_issues; new
+  // custom-rule violations (and stale-issue cleanup at line ~975) shift it.
+  revalidatePath('/app/projects')
 
   return { success: true, newIssues: issuesToInsert.length, warnings }
 }

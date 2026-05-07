@@ -1,5 +1,6 @@
 'use server'
 
+import { revalidatePath } from 'next/cache'
 import { supabaseAdmin } from '@/lib/supabase/admin'
 import { createClient } from '@/lib/supabase/server'
 import { requireProjectPermission } from '@/lib/actions/role-resolution'
@@ -310,6 +311,10 @@ export async function applyFix(
     { fix_history_id: fixHistoryId, quality_issue_id: issueId, affected_rows: rowsAffected }
   )
 
+  // PR-4: dashboard tile blocking-issue count tracks quality_issues.status;
+  // a fix flip ('open' → 'fixed') changes the tile's blocking pill.
+  revalidatePath('/app/projects')
+
   return { success: true, rowsAffected }
 }
 
@@ -370,6 +375,9 @@ export async function acceptRisk(
     editKind: 'human_accepted',
     metadata: { reason: reason ?? null },
   })
+
+  // PR-4: 'open' → 'accepted_risk' shifts the tile's blocking pill count.
+  revalidatePath('/app/projects')
 
   return { success: true }
 }

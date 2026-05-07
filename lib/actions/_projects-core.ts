@@ -101,6 +101,7 @@
  */
 
 import type { SupabaseClient } from '@supabase/supabase-js'
+import { unstable_noStore as noStore } from 'next/cache'
 import type { Dataset, ProjectWithStats } from '@/lib/types/database'
 import { computeProjectStats } from '@/lib/quality/stat-formulas'
 import {
@@ -141,6 +142,14 @@ export async function getProjectsWithStatsInternal(
   supabase: SupabaseClient,
   orgId?: string,
 ): Promise<ProjectWithStats[]> {
+  // Opt out of RSC caching: dashboard tile aggregates rows from tables
+  // that mutate via server actions across the project (TFMs, transforms,
+  // quality_issues, source_field_acks). Without noStore() Next.js caches
+  // the aggregation across requests, leaving the tile stale relative to
+  // the Mapping page and Migration Center which fetch fresh per request.
+  // PR-4 chokepoint fix — see feat/stats-data-alignment.
+  noStore()
+
   let query = supabase
     .from('projects')
     .select('*, datasets(id, role, name)')
@@ -680,13 +689,30 @@ export async function getProjectsWithStatsInternal(
 
   // PR-1 (feat/project-stats-shared-helper): the new public-surface
   // `ProjectStats` view exposed on each `ProjectWithStats` for PR-2 (tile
-  // state-machine redesign) to consume. A separate Supabase round (handled
-  // by the helper) is paid here intentionally — the slices above are
-  // already populated, but they don't carry the (project_id, role)
-  // dataset metadata the helper needs for source/target attribution
-  // without column duplication. Future PR can eliminate the second round
-  // by threading rawData through both consumers.
-  const projectStatsByProject = await getProjectStats(projectIds, supabase)
+  // state-machine redesign) to consume.
+  //
+  // PR-4 followup-B: per-project narrow fetch instead of a single bulk
+  // `getProjectStats(projectIds, supabase)` call. The bulk shape hit
+  // PostgREST's server-side `db-max-rows` cap (1000 in this environment)
+  // for orgs with many projects — silently truncating
+  // `target_field_mappings`, `fields`, and (transitively) the per-project
+  // rollups. The diagnostic for "Epicor to Rootstock" showed
+  // `state=awaiting_data, target=8/8` because the project's source-side
+  // fields fell outside the truncated 1000-row window; per-project
+  // narrowing keeps each fetch well under the cap. Trade-off: O(N)
+  // round-trips instead of O(1), where N = projects in the org.
+  // Acceptable for typical Settle orgs (<50 projects); pagination of
+  // `fetchProjectStatsData` is the future-proof escape hatch when N
+  // grows large. Parallelized via Promise.all so wall-time stays close
+  // to a single round-trip.
+  const perProjectStatsResults = await Promise.all(
+    projectIds.map((projectId) => getProjectStats([projectId], supabase)),
+  )
+  const projectStatsByProject = new Map<string, ProjectStats>()
+  for (let i = 0; i < projectIds.length; i++) {
+    const stats = perProjectStatsResults[i].get(projectIds[i])
+    if (stats) projectStatsByProject.set(projectIds[i], stats)
+  }
 
   return projects.map((project) => {
     const b = buckets.get(project.id)!
