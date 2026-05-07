@@ -63,17 +63,26 @@ function AutoArchiveCountdown({ completedAt }: { completedAt: string | null }) {
 // on the type for the Migration Center surface — PR-3 retires them once
 // MC also stops reading them.
 //
-// State machine (3 states + Completed overlay) drives a `<ProjectStateBadge>`
-// next to the project name and gates the stats row entirely:
+// PR-2.5 (feat/tile-state-aware-stats-area): de-clutter Active tab tiles
+// by dropping `<ProjectStateBadge>` for non-completed projects, and move
+// the state label into the stats area as italic gray text. Completed
+// projects keep the green badge at top. Decoupled the showStats gate
+// from the state predicate: completed projects ALWAYS show stats even
+// when the underlying state predicate evaluates to data_ingested
+// (post-completion, all TFMs become acknowledged → state regresses, but
+// the user wants final numbers shown).
 //
-//   awaiting_data        → gray badge, no stats
-//   data_ingested        → blue badge, no stats
-//   mappings_generated   → amber badge, 3 stats + blocking pill
-//   completed (overlay)  → green badge regardless of state; stats render
-//                          when underlying state === mappings_generated
+// Render contract by status / state:
 //
-// Archived projects keep their existing "no stats" treatment (data purged
-// on archive — stats meaningless). Q1 in PR-2 Stop 1.
+//   Active awaiting_data       no badge, italic state label, no stats row
+//   Active data_ingested       no badge, italic state label, no stats row
+//   Active mappings_generated  no badge, no label, stats row visible
+//   Completed (any state)      green Completed badge, stats row visible
+//   Archived                   inline "Archived" gray span (unchanged),
+//                              no stats (data purged)
+//
+// Defensive null-fallback (Q5 from PR-2 Stop 1, preserved): null
+// projectStats treats state as `awaiting_data` — italic label, no stats.
 //
 // Transform numerator note: `projectStats.transforms.complete` counts
 // `saved + applied` rows (Q2 from PR-1) — a numeric SHIFT upward from the
@@ -89,10 +98,23 @@ export function ProjectCard({
   const isCompleted = project.status === 'completed'
   const isArchived = project.status === 'archived'
   const stats = project.projectStats
-  // Stats row visible only when (a) not archived, (b) state machine has
-  // reached `mappings_generated`. Defensive null-fallback (Q5 from
-  // PR-2 Stop 1) treats null as `awaiting_data` — no stats shown.
-  const showStats = !isArchived && stats?.state === 'mappings_generated'
+  // PR-2.5: Option A predicate from Stop 1. Stats render whenever
+  // (a) not archived AND (b) the project is completed OR in
+  // mappings_generated state. Catches the post-completion edge case
+  // where TFMs become acknowledged → state regresses to data_ingested
+  // but the project's final numbers should still display.
+  const showStats =
+    !isArchived &&
+    (!!project.completed_at || stats?.state === 'mappings_generated')
+  // PR-2.5: state label renders in the stats area (right side) as italic
+  // gray text whenever stats don't render and the project is active. The
+  // null-projectStats fallback maps to `awaiting_data` per Q5.
+  const stateLabelText =
+    !showStats && !isArchived
+      ? (stats?.state ?? 'awaiting_data') === 'data_ingested'
+        ? 'Data ingested'
+        : 'Awaiting data ingestion'
+      : null
 
   const cardContent = (
     <>
@@ -103,7 +125,7 @@ export function ProjectCard({
         >
           {project.name}
         </span>
-        {!isArchived && (
+        {!isArchived && project.completed_at && (
           <ProjectStateBadge
             state={stats?.state ?? null}
             completedAt={project.completed_at}
@@ -154,6 +176,14 @@ export function ProjectCard({
             </span>
             <BlockingPill count={stats.blocking} className="ml-3" />
           </div>
+        )}
+        {stateLabelText && (
+          <span
+            data-testid="tile-state-label"
+            className="text-xs italic text-slate-500 flex-shrink-0"
+          >
+            {stateLabelText}
+          </span>
         )}
       </div>
     </>
