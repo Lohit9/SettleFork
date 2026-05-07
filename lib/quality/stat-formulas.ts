@@ -186,6 +186,11 @@ export interface ComputeProjectStatsResult {
    *  no primary TFM and no bare-ack TFM. Excluded from `mappingApproved`
    *  but counted in `mappingTotal`. */
   mappingUnmapped: number
+  /** Primary TFMs (non-rejected, non-bare-ack) with status='needs_review'.
+   *  Surfaced via `ProjectStatsTargetAxis.needsReview` for the consolidated
+   *  Mapping page strip + MC Mapping Coverage card (PR-6). Always
+   *  `<= mappingTotal - mappingApproved - mappingUnmapped`. */
+  mappingNeedsReview: number
 
   // ── Transform ──────────────────────────────────────────────────────────
   /** Primary TFMs the `fieldNeedsTransform` heuristic flags as needing a
@@ -341,6 +346,7 @@ export function computeProjectStats(inputs: ComputeProjectStatsInputs): ComputeP
     (t) => !(t.is_acknowledged && t.combination_type === null),
   )
   const approvedPrimaryTfms = primaryTfms.filter((t) => t.status === 'approved')
+  const needsReviewPrimaryTfms = primaryTfms.filter((t) => t.status === 'needs_review')
 
   const mappedSourceIds = new Set<string>()
   for (const tfm of primaryTfms) {
@@ -382,6 +388,7 @@ export function computeProjectStats(inputs: ComputeProjectStatsInputs): ComputeP
     primaryTfms.length + unmappedSourceCount + unmappedTargetCount + acknowledgedCount
   const mappingApproved = approvedPrimaryTfms.length + acknowledgedCount
   const mappingUnmapped = unmappedSourceCount + unmappedTargetCount
+  const mappingNeedsReview = needsReviewPrimaryTfms.length
 
   // ── Transform scope ────────────────────────────────────────────────────
   //
@@ -483,6 +490,7 @@ export function computeProjectStats(inputs: ComputeProjectStatsInputs): ComputeP
     mappingApproved,
     mappingTotal,
     mappingUnmapped,
+    mappingNeedsReview,
     transformScope,
     transformApplied,
     transformNeedsWork,

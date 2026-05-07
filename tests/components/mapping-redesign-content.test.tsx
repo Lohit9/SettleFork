@@ -379,11 +379,25 @@ function renderRedesign(
     ...dataOverrides,
     counts: { ...baseData.counts, ...(dataOverrides?.counts ?? {}) },
   }
+  // PR-6: thread a populated projectStats so the consolidated
+  // `MappingSummaryStrip` renders its chip row (rather than the
+  // state-aware empty label). State-aware empty has its own dedicated
+  // tests in mapping-summary-strip.test.tsx; tests in this file
+  // exercise the populated-state code paths and don't need to vary
+  // the project-level state machine.
+  const populatedProjectStats: import('@/lib/quality/project-stats').ProjectStats = {
+    state: 'mappings_generated',
+    target: { approved: 6, total: 10, unmapped: 1, needsReview: 2 },
+    source: { decided: 5, total: 8 },
+    transforms: { complete: 1, total: 4 },
+    blocking: 0,
+  }
   return render(
     <MappingRedesignContent
       projectId="p1"
       projectName="Heritage Core"
       initialRedesignData={data}
+      projectStats={populatedProjectStats}
     />,
   )
 }
@@ -1275,10 +1289,12 @@ describe('MappingRedesignContent — Gap 13 Unmapped counter chip (now on Mappin
     expect(strip.textContent).toContain('Unmapped')
   })
 
-  it('Total/Approved/Needs Review chips always render regardless of Unmapped value', () => {
+  it('Approved/Needs Review chips always render regardless of Unmapped value', () => {
+    // PR-6 retired the Total chip — `target.total` denominator on the
+    // project-wide axis above the chips replaces it. Approved + Needs
+    // Review remain always-on; Rejected/Unmapped stay conditional.
     renderRedesign('', { counts: { total: 5, approved: 5, needsReview: 0, rejected: 0, unmapped: 0 } })
     const strip = screen.getByTestId('mapping-summary-strip')
-    expect(strip.textContent).toContain('Total')
     expect(strip.textContent).toContain('Approved')
     expect(strip.textContent).toContain('Needs Review')
     expect(strip.textContent).not.toContain('Unmapped')
@@ -1431,26 +1447,21 @@ describe('MappingRedesignContent — structural invariant (post sidebar architec
     if (!sidebarBodyRow) return
     expect(sidebarBodyRow.parentElement).toBe(pageColumn)
 
-    // Pin the sibling order: PageHeader → MappingProjectStatsRow → Strip
-    // → FilterRow → sidebar+body row. Children after that (drawer,
-    // dialog) are position-fixed and not asserted by this invariant.
+    // Pin the sibling order: PageHeader → Strip → FilterRow → sidebar+
+    // body row. Children after that (drawer, dialog) are position-fixed
+    // and not asserted by this invariant.
     //
-    // PR-3 (feat/inner-page-stats-redesign): added
-    // `MappingProjectStatsRow` as a new direct child between PageHeader
-    // and Strip (project-wide stats above grid-level chips, per Stop 1
-    // Q3). Tests below pin that adjacency so a future regression that
-    // moves the row out of the toolbar block fails immediately.
-    const projectStatsRow = screen.getByTestId('mapping-project-stats-row')
-    expect(projectStatsRow.parentElement).toBe(pageColumn)
+    // PR-6 (feat/ui-consolidation): the previously-separate
+    // `MappingProjectStatsRow` was retired and folded into
+    // `MappingSummaryStrip`. The chain shortens by one — strip now
+    // directly follows PageHeader.
     const children = Array.from(pageColumn.children) as HTMLElement[]
     const pageHeaderIdx = children.indexOf(pageHeader)
-    const projectStatsRowIdx = children.indexOf(projectStatsRow)
     const stripIdx = children.indexOf(strip)
     const filterRowIdx = children.indexOf(filterRow)
     const rowIdx = children.indexOf(sidebarBodyRow)
     expect(pageHeaderIdx).toBeGreaterThanOrEqual(0)
-    expect(projectStatsRowIdx).toBe(pageHeaderIdx + 1)
-    expect(stripIdx).toBe(projectStatsRowIdx + 1)
+    expect(stripIdx).toBe(pageHeaderIdx + 1)
     expect(filterRowIdx).toBe(stripIdx + 1)
     expect(rowIdx).toBe(filterRowIdx + 1)
   })

@@ -48,7 +48,6 @@ import { SQL_DIALECTS } from '@/lib/types/database'
 import type { SqlDialect, ExecutionPackageFormat } from '@/lib/types/database'
 import { useProjectRole } from '@/lib/hooks/useProjectRole'
 import { RoleTooltip } from '@/components/app/RoleTooltip'
-import { SourceCoverageWidget } from '@/components/app/SourceCoverageWidget'
 import type { ProjectStats } from '@/lib/quality/project-stats'
 
 // ── Types ─────────────────────────────────────────────────────────────────────
@@ -937,22 +936,24 @@ export default function OutputsContent({ projectId, projectName, initialData, is
         <div>
 
           {/* ── Compact stat cards ───────────────────────────────────────────
-              PR-3 (feat/inner-page-stats-redesign): 4 cards → 5 cards.
-              Mapping Coverage and Transforms now read from `projectStats`
-              (PR-1's canonical surface) instead of the legacy `metrics.*`
-              fields. New Source Coverage card slotted in between Transforms
-              and Quality Issues — surfaces the source axis on MC for the
-              first time. State-aware empty (Q4) renders the state label
-              when state ≠ 'mappings_generated'; Card height preserved.
-              Q2 numerator note: `transforms.complete` = saved + applied
-              (was `metrics.completedTransforms` = applied-only); user-
-              visible numeric jump on projects with saved-but-not-applied
-              work. */}
+              PR-3 added a 5th Source Coverage card; PR-6 merged it back
+              into Mapping Coverage so the source axis lives alongside
+              the target axis in a single card. Final shape: 4 cards
+              (Mapping Coverage, Transforms, Quality Issues, Migration
+              Readiness). Mapping Coverage now shows target.approved /
+              target.total + source.decided / source.total + needs-review
+              count in a single tile. State-aware empty (Q4) renders the
+              state label when state ≠ 'mappings_generated'; Card height
+              preserved. Q2 numerator note: `transforms.complete` =
+              saved + applied (was `metrics.completedTransforms` =
+              applied-only); user-visible numeric jump on projects with
+              saved-but-not-applied work. */}
           <div
             data-testid="mc-stats-grid"
-            className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-4 items-stretch mb-4"
+            className="grid grid-cols-2 lg:grid-cols-4 gap-4 items-stretch mb-4"
           >
-            {/* Card 1 — Mapping Coverage */}
+            {/* Card 1 — Mapping Coverage (PR-6: merged Source Coverage in;
+                shows both target and source axes plus needs-review count) */}
             <div
               data-testid="mc-mapping-coverage"
               data-state={projectStatsState}
@@ -970,10 +971,29 @@ export default function OutputsContent({ projectId, projectName, initialData, is
                         {projectStats.target.approved}
                       </span>
                       <span className="text-sm text-settle-slate-400">
-                        / {projectStats.target.total}
+                        / {projectStats.target.total} target fields mapped
                       </span>
                     </div>
-                    {projectStats.target.unmapped > 0 ? (
+                    <p
+                      data-testid="mc-mapping-source-axis"
+                      className="text-xs text-settle-slate-500 mt-1"
+                    >
+                      <span
+                        data-testid="mc-mapping-source-decided"
+                        className="font-medium text-settle-slate-700 tabular-nums"
+                      >
+                        {projectStats.source.decided}
+                      </span>{' '}
+                      / {projectStats.source.total} source fields mapped
+                    </p>
+                    {projectStats.target.needsReview > 0 ? (
+                      <p
+                        data-testid="mc-mapping-needs-review"
+                        className="text-xs text-amber-600 mt-1"
+                      >
+                        {projectStats.target.needsReview} needs review
+                      </p>
+                    ) : projectStats.target.unmapped > 0 ? (
                       <p className="text-xs text-settle-slate-400 mt-1">
                         {projectStats.target.unmapped} unmapped
                       </p>
@@ -1069,9 +1089,6 @@ export default function OutputsContent({ projectId, projectName, initialData, is
               </div>
             </div>
 
-            {/* Card 3 — Source Coverage (NEW PR-3) */}
-            <SourceCoverageWidget projectStats={projectStats} projectId={projectId} />
-
             {/* Card 3 — Quality Issues */}
             <div className="rounded-lg border border-gray-100 bg-white p-4 flex flex-col justify-between gap-3">
               <div>
@@ -1103,7 +1120,8 @@ export default function OutputsContent({ projectId, projectName, initialData, is
               </div>
             </div>
 
-            {/* Card 4 — Migration Readiness */}
+            {/* Card 4 — Migration Readiness (PR-6: was Card 5; off-by-one
+                comment correction after Source Coverage retired) */}
             <div className="rounded-lg border border-gray-100 bg-white p-4 flex flex-col justify-between gap-3">
               <div>
                 <p className="text-xs text-gray-500 mb-2">Migration Readiness</p>
