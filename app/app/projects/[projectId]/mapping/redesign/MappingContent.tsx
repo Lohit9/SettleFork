@@ -62,6 +62,7 @@ import { FilterRow } from './components/FilterRow'
 import { TargetTableGroup } from './components/TargetTableGroup'
 import { MappingDrawer } from './components/MappingDrawer'
 import { MappingSummaryStrip } from './components/MappingSummaryStrip'
+import { MappingProjectStatsRow } from './components/MappingProjectStatsRow'
 import { SourceSchemaSidebar } from './components/SourceSchemaSidebar'
 import { RejectConfirmPopover } from './components/RejectConfirmPopover'
 import {
@@ -95,6 +96,7 @@ import { acknowledgeField } from '@/lib/actions/field-acknowledgments'
 import { ToastProvider, useToast } from '@/lib/contexts/ToastContext'
 import { CONFIDENCE_THRESHOLD_ROW_HIGH } from '@/lib/utils/confidence-format'
 import { useCollapsedGroups } from '@/lib/hooks/useCollapsedGroups'
+import type { ProjectStats } from '@/lib/quality/project-stats'
 
 // Phase 4c-1 — high-confidence threshold (mirrors legacy default).
 // Lives here so the FilterRow contextual link copy, the new Confidence
@@ -120,12 +122,21 @@ interface Props {
    * all happy-path renders under the `use_mapping_redesign` flag.
    */
   initialRedesignData: MappingsForRedesignResult | null
+  /**
+   * Canonical project-wide stats (PR-1's helper output). Threaded from
+   * the page-level RSC; consumed by `MappingProjectStatsRow` rendered
+   * above `MappingSummaryStrip`. Optional + defaults to null so existing
+   * test fixtures that don't construct ProjectStats keep working —
+   * the row falls back to `awaiting_data` styling when null (Q5).
+   */
+  projectStats?: ProjectStats | null
 }
 
 export default function MappingRedesignContent({
   projectId,
   projectName,
   initialRedesignData,
+  projectStats = null,
 }: Props) {
   // Derive drawer-open status from the URL. `useSearchParams` is
   // reactive in the app router; the value re-flows here on every
@@ -373,6 +384,7 @@ export default function MappingRedesignContent({
           <MappingContentLoaded
             projectId={projectId}
             data={initialRedesignData}
+            projectStats={projectStats}
             sidebarState={effectiveSidebarState}
             sidebarFilter={sidebarFilter}
             onSidebarStateChange={handleSidebarStateChange}
@@ -426,6 +438,7 @@ function buildSourceFieldToRowIds(
 function MappingContentLoaded({
   projectId,
   data,
+  projectStats,
   sidebarState,
   sidebarFilter,
   onSidebarStateChange,
@@ -437,6 +450,7 @@ function MappingContentLoaded({
 }: {
   projectId: string
   data: MappingsForRedesignResult
+  projectStats: ProjectStats | null
   /**
    * Sidebar shell props — owned by `MappingRedesignContent` (the
    * outer entry component) so the sidebar persists its state across
@@ -1847,6 +1861,12 @@ function MappingContentLoaded({
           present. */}
       {!isEmptyMappingState && (
         <>
+          {/* PR-3 (feat/inner-page-stats-redesign): project-wide stats row
+              ABOVE the existing grid-level strip. Different question
+              (project-level truth vs. filtered grid context); both render
+              when the toolbar is visible. State-aware empty (Q4) renders
+              a single state label when state ≠ 'mappings_generated'. */}
+          <MappingProjectStatsRow projectStats={projectStats} />
           <MappingSummaryStrip counts={data.counts} />
           <FilterRow
             filters={filters}
