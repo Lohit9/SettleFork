@@ -387,7 +387,10 @@ function renderRedesign(
   // the project-level state machine.
   const populatedProjectStats: import('@/lib/quality/project-stats').ProjectStats = {
     state: 'mappings_generated',
-    target: { approved: 6, total: 10, unmapped: 1, needsReview: 2 },
+    // PR-7: needsReview = total − approved (formula invariant).
+    // approved (6) + needsReview (4) = 10 = total. unmapped (1) is a
+    // sub-component of needsReview.
+    target: { approved: 6, total: 10, unmapped: 1, needsReview: 4 },
     source: { decided: 5, total: 8 },
     transforms: { complete: 1, total: 4 },
     blocking: 0,
@@ -1256,56 +1259,45 @@ describe('MappingRedesignContent — Gap 11b sidebar click-to-highlight', () => 
 })
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Phase 3 Gap 13 — Unmapped counter chip (Phase 4-polish-1: lifted into
-// `MappingSummaryStrip` at the page-header layer).
+// PR-7: conditional Rejected / Unmapped chips RETIRED from the strip.
 // ─────────────────────────────────────────────────────────────────────────────
 //
-// The legacy `mapping-redesign-counters` test surface was retired with
-// the `CountersRow` component in Phase 4-polish-1. Conditional rendering
-// for the Unmapped + Rejected chips now lives on the `MappingSummaryStrip`
-// component (founder Q2 lock — restore legacy density at the page-header
-// layer). The §9 Q6 Rejected gating and the original Gap 13 Unmapped
-// gating are preserved verbatim there; these tests now query the strip's
-// new testid.
+// The original Gap 13 Unmapped + §9 Q6 Rejected chip-gating tests pinned
+// chip rendering against `data.counts.{rejected,unmapped} > 0`. PR-7
+// (feat/mapping-approvals) retired both chips entirely — the redefined
+// `target.needsReview = total − approved` engulfs both rejected primary
+// TFMs and unacknowledged unmapped target fields, so a single Needs Review
+// chip carries the signal that two chips used to. The strip now reads
+// from `projectStats.target.{approved,needsReview}` exclusively (the
+// `counts` prop was dropped).
+//
+// Per-component coverage of the post-PR-7 chip behaviour lives in
+// `tests/components/mapping-summary-strip.test.tsx`. This block now
+// asserts the negative invariant: neither chip ever renders, regardless
+// of what the underlying mapping data looks like.
 
-describe('MappingRedesignContent — Gap 13 Unmapped counter chip (now on MappingSummaryStrip)', () => {
-  it('renders the Unmapped chip when counts.unmapped > 0', () => {
-    renderRedesign('', { counts: { total: 6, approved: 4, needsReview: 1, rejected: 0, unmapped: 3 } })
-    const strip = screen.getByTestId('mapping-summary-strip')
-    expect(strip.textContent).toContain('Unmapped')
-    expect(strip.textContent).toContain('3')
-  })
-
-  it('hides the Unmapped chip when counts.unmapped === 0', () => {
-    renderRedesign('', { counts: { total: 6, approved: 5, needsReview: 1, rejected: 0, unmapped: 0 } })
-    const strip = screen.getByTestId('mapping-summary-strip')
-    expect(strip.textContent).not.toContain('Unmapped')
-  })
-
-  it('renders Unmapped alongside Rejected when both are non-zero', () => {
+describe('MappingRedesignContent — PR-7 retired chips (Rejected / Unmapped)', () => {
+  it('does NOT render the Rejected chip even when grid-level rejected count > 0', () => {
     renderRedesign('', { counts: { total: 8, approved: 4, needsReview: 1, rejected: 1, unmapped: 2 } })
-    const strip = screen.getByTestId('mapping-summary-strip')
-    expect(strip.textContent).toContain('Rejected')
-    expect(strip.textContent).toContain('Unmapped')
+    expect(screen.queryByTestId('mapping-summary-chip-rejected')).toBeNull()
   })
 
-  it('Approved/Needs Review chips always render regardless of Unmapped value', () => {
-    // PR-6 retired the Total chip — `target.total` denominator on the
-    // project-wide axis above the chips replaces it. Approved + Needs
-    // Review remain always-on; Rejected/Unmapped stay conditional.
+  it('does NOT render the Unmapped chip even when grid-level unmapped count > 0', () => {
+    renderRedesign('', { counts: { total: 6, approved: 4, needsReview: 1, rejected: 0, unmapped: 3 } })
+    expect(screen.queryByTestId('mapping-summary-chip-unmapped')).toBeNull()
+  })
+
+  it('Approved + Needs Review chips remain always-on regardless of grid-level status counts', () => {
     renderRedesign('', { counts: { total: 5, approved: 5, needsReview: 0, rejected: 0, unmapped: 0 } })
     const strip = screen.getByTestId('mapping-summary-strip')
     expect(strip.textContent).toContain('Approved')
     expect(strip.textContent).toContain('Needs Review')
-    expect(strip.textContent).not.toContain('Unmapped')
+    // Negative regression guards: chip retirements stay retired.
     expect(strip.textContent).not.toContain('Rejected')
+    expect(strip.textContent).not.toContain('Unmapped')
   })
 
   it('legacy `mapping-redesign-counters` testid is removed (regression guard)', () => {
-    // Pin the retirement: the old testid must NOT appear anywhere in the
-    // rendered tree. If a future refactor accidentally re-introduces a
-    // CountersRow alongside the strip, this assertion catches the
-    // duplication.
     renderRedesign('', { counts: { total: 5, approved: 5, needsReview: 0, rejected: 0, unmapped: 0 } })
     expect(screen.queryByTestId('mapping-redesign-counters')).toBeNull()
   })

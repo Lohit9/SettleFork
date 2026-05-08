@@ -163,20 +163,24 @@ function buildInputs(overrides: Partial<ComputeProjectStatsInputs> = {}): Comput
 // ─── Tests ────────────────────────────────────────────────────────────────
 
 describe('computeProjectStats — mapping counts', () => {
-  it('denominator accounts for every mapping slot (primaries + unmapped + acks)', () => {
-    // Fixture decomposition:
+  it('denominator accounts for every TARGET-SIDE mapping slot (PR-7: primaries + unmapped target + acks)', () => {
+    // Fixture decomposition (post-PR-7 — target-side only):
     //   primary TFMs     = tfm1, tfm2, tfm3, tfm6  (tfm4 rejected, tfm5 bare-ack)
-    //   unmapped source  = s_unused
     //   unmapped target  = (none — every non-ack target has a primary)
     //   acknowledged     = s_ack_only (source-side ACK) + t_ack_only (bare-ack TFM)
     //
-    //   mappingTotal     = 4 + 1 + 0 + 2 = 7
+    //   mappingTotal     = 4 + 0 + 2 = 6
     //   mappingApproved  = 4 approved primaries + 2 acks = 6
-    //   mappingUnmapped  = 1
+    //   mappingUnmapped  = 0 (target-side unmapped only; fixture has none)
+    //
+    // Pre-PR-7 the formula also added unmappedSource (`s_unused` → 1)
+    // to mappingTotal and mappingUnmapped — that path conflated source-
+    // axis accounting into a target-axis denominator and is no longer
+    // counted here. Source-side accounting is on `source.{decided,total}`.
     const stats = computeProjectStats(buildInputs())
-    expect(stats.mappingTotal).toBe(7)
+    expect(stats.mappingTotal).toBe(6)
     expect(stats.mappingApproved).toBe(6)
-    expect(stats.mappingUnmapped).toBe(1)
+    expect(stats.mappingUnmapped).toBe(0)
   })
 
   it('mappingApproved never exceeds mappingTotal (invariant)', () => {
@@ -204,12 +208,13 @@ describe('computeProjectStats — mapping counts', () => {
     })
     const stats = computeProjectStats(inputs)
     // Primary TFMs are now tfm2, tfm3, tfm6 (3 of them).
-    // Unmapped source: s_id + s_unused = 2.
     // Unmapped target: t_id = 1.
     // Acknowledged: s_ack_only + t_ack_only = 2.
-    //   mappingTotal = 3 + 2 + 1 + 2 = 8
+    //   mappingTotal (PR-7 target-side only) = 3 + 1 + 2 = 6
     //   mappingApproved = 3 approved primaries + 2 acks = 5
-    expect(stats.mappingTotal).toBe(8)
+    // Pre-PR-7 the formula added unmappedSource (s_id + s_unused = 2)
+    // to mappingTotal — that path no longer applies.
+    expect(stats.mappingTotal).toBe(6)
     expect(stats.mappingApproved).toBe(5)
   })
 
@@ -217,9 +222,9 @@ describe('computeProjectStats — mapping counts', () => {
     const stats = computeProjectStats(buildInputs())
     // If the bare-ack TFM (tfm5) were mistakenly counted as a primary, we'd
     // see mappingTotal go up by 1 and t_ack_only would no longer be
-    // "unmapped+ack" — it'd be "mapped". The baseline test above pins 7/6
-    // which is only reachable with the bare-ack exclusion.
-    expect(stats.mappingTotal).toBe(7)
+    // "unmapped+ack" — it'd be "mapped". The baseline test above pins 6/6
+    // (post-PR-7 target-side only), only reachable with the bare-ack exclusion.
+    expect(stats.mappingTotal).toBe(6)
     expect(stats.mappingApproved).toBe(6)
   })
 })
@@ -315,9 +320,11 @@ describe('computeProjectStats — transform scope', () => {
     )
     const stats = computeProjectStats({ ...base, tfms: dismissedTfms })
 
-    expect(stats.mappingTotal).toBe(7)
+    // PR-7: target-side-only denominator. va_dismissed has no impact on
+    // the mapping axis (it's a transform-side concern).
+    expect(stats.mappingTotal).toBe(6)
     expect(stats.mappingApproved).toBe(6)
-    expect(stats.mappingUnmapped).toBe(1)
+    expect(stats.mappingUnmapped).toBe(0)
   })
 
   it('omitting va_dismissed (legacy fixtures) preserves pre-077 behavior', () => {
@@ -406,9 +413,15 @@ describe('computeProjectStats — edge cases', () => {
       ],
     }
     const stats = computeProjectStats(inputs)
-    // s_unused should still count as unmapped — the orphan MS row does not
-    // mark it "mapped" because it belongs to a TFM the helper doesn't see.
-    expect(stats.mappingUnmapped).toBe(1)
-    expect(stats.mappingTotal).toBe(7)
+    // PR-7: target-side accounting only. The orphan MS row pointing at
+    // s_unused doesn't change the target-side denominator (s_unused is
+    // a SOURCE field; pre-PR-7 it would have shown up as mappingUnmapped=1
+    // and bumped mappingTotal to 7 via the source-side conflation that
+    // PR-7 removes). Post-PR-7 the orphan-MS pin is preserved at the
+    // SOURCE axis level — `source.decided` remains correct because
+    // `mappedSourceIds` is built only from MS rows belonging to TFMs the
+    // helper sees. Target-side accounting (this test) is unaffected.
+    expect(stats.mappingUnmapped).toBe(0)
+    expect(stats.mappingTotal).toBe(6)
   })
 })

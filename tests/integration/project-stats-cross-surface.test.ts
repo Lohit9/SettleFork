@@ -194,9 +194,89 @@ describeIf('[integration] project-stats cross-surface alignment', () => {
       .eq('stage', 'in_flight')
     expect(stats.blocking).toBeLessThanOrEqual(rawBlockingCount ?? 0)
 
+    // ── Oracle 6: target.total (PR-7 — target-side-only equality) ─────
+    // SQL: primaryTfms (non-rejected, non-bare-ack) + unmappedTarget +
+    // acknowledged (both source-side acks AND target bare-acks). This
+    // oracle pins the PR-7 spec change directly: a regression that
+    // re-conflates unmappedSource into the formula would push the
+    // helper output above the SQL ground truth.
+    const { data: nonRejectedNonBareAck } = await supabaseAdmin
+      .from('target_field_mappings')
+      .select('id, is_acknowledged, combination_type, target_field_id')
+      .eq('project_id', PROJECT_ID)
+      .neq('status', 'rejected')
+    const primaryTfmsForTotal = (nonRejectedNonBareAck ?? []).filter(
+      (t) => !(t.is_acknowledged && t.combination_type === null),
+    )
+    const targetAckIds = new Set(
+      (nonRejectedNonBareAck ?? [])
+        .filter((t) => t.is_acknowledged && t.combination_type === null)
+        .map((t) => t.target_field_id),
+    )
+    const primaryMappedTargetIds = new Set(
+      primaryTfmsForTotal.map((t) => t.target_field_id),
+    )
+    const { data: targetDatasets } = await supabaseAdmin
+      .from('datasets')
+      .select('id')
+      .eq('project_id', PROJECT_ID)
+      .eq('role', 'target')
+    const { data: targetTablesData } = await supabaseAdmin
+      .from('tables')
+      .select('id')
+      .in(
+        'dataset_id',
+        (targetDatasets ?? []).map((d) => d.id),
+      )
+    const targetTableIds = (targetTablesData ?? []).map((t) => t.id)
+    const { data: targetFieldsData } =
+      targetTableIds.length > 0
+        ? await supabaseAdmin
+            .from('fields')
+            .select('id')
+            .in('table_id', targetTableIds)
+        : { data: [] as { id: string }[] }
+    let unmappedTargetCount = 0
+    for (const f of targetFieldsData ?? []) {
+      if (!primaryMappedTargetIds.has(f.id) && !targetAckIds.has(f.id)) {
+        unmappedTargetCount++
+      }
+    }
+    // Acknowledged count = source-side acks ∪ target bare-acks. We already
+    // counted target acks; for source-side, count source-acked source
+    // fields that aren't ALSO mapped (mirrors the helper's logic).
+    const { data: srcAckRows } = await supabaseAdmin
+      .from('source_field_acknowledgments')
+      .select('source_field_id')
+      .eq('project_id', PROJECT_ID)
+    const srcAckIds = new Set(
+      (srcAckRows ?? []).map((a) => a.source_field_id),
+    )
+    // mappedIds reused from oracle 2 above (declared earlier as `mappedIds`)
+    let acknowledgedCountOracle = targetAckIds.size
+    for (const sid of srcAckIds) {
+      if (!mappedIds.has(sid)) acknowledgedCountOracle++
+    }
+    const oracleTargetTotal =
+      primaryTfmsForTotal.length + unmappedTargetCount + acknowledgedCountOracle
+    expect(stats.target.total).toBe(oracleTargetTotal)
+
+    // ── Oracle 7: target.needsReview (PR-7 — total − approved equality) ─
+    // The PR-7 redefinition pins `needsReview = total - approved`. This
+    // is a cheap structural oracle: any deviation indicates the formula
+    // got rewritten away from the residual definition.
+    expect(stats.target.needsReview).toBe(
+      stats.target.total - stats.target.approved,
+    )
+
     // ── Structural invariants (cheap last-line-of-defense) ────────────
     expect(stats.source.decided).toBeLessThanOrEqual(stats.source.total)
     expect(stats.target.approved).toBeLessThanOrEqual(stats.target.total)
+    expect(stats.target.needsReview).toBeLessThanOrEqual(stats.target.total)
+    // PR-7: chip math reconciles — Approved + Needs Review = total.
+    expect(stats.target.approved + stats.target.needsReview).toBe(
+      stats.target.total,
+    )
     expect(stats.transforms.complete).toBeLessThanOrEqual(stats.transforms.total)
     expect(stats.blocking).toBeGreaterThanOrEqual(0)
   }, 90_000)

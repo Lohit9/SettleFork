@@ -158,8 +158,8 @@ describe('ProjectCard — state-aware stats area (PR-2.5)', () => {
     expect(screen.queryByText('Data ingested', { selector: 'span[data-state-variant]' })).not.toBeInTheDocument()
     expect(screen.queryByTestId('tile-state-label')).not.toBeInTheDocument()
     expect(screen.getByTestId('project-stats-row')).toBeInTheDocument()
-    expect(screen.getByTestId('stat-target')).toHaveTextContent('Mapped: 0/68 fields')
-    expect(screen.getByTestId('stat-source')).toHaveTextContent('Sources: 0/70')
+    expect(screen.getByTestId('stat-target')).toHaveTextContent('Mapping Approvals: 0/68')
+    expect(screen.queryByTestId('stat-source')).toBeNull()
     expect(screen.getByTestId('stat-transforms')).toHaveTextContent('Transforms: 0/0')
     // PR-2.6 forward-compat insurance (Q3): "Data ingested" text was
     // the PR-2.5 italic-label string. Under the data-presence
@@ -185,8 +185,8 @@ describe('ProjectCard — state-aware stats area (PR-2.5)', () => {
     )
     // Stats render with the project's real numbers (not 0/N).
     expect(screen.getByTestId('project-stats-row')).toBeInTheDocument()
-    expect(screen.getByTestId('stat-target')).toHaveTextContent('Mapped: 52/68 fields')
-    expect(screen.getByTestId('stat-source')).toHaveTextContent('Sources: 57/70')
+    expect(screen.getByTestId('stat-target')).toHaveTextContent('Mapping Approvals: 52/68')
+    expect(screen.queryByTestId('stat-source')).toBeNull()
     expect(screen.getByTestId('stat-transforms')).toHaveTextContent('Transforms: 15/51')
     expect(screen.queryByTestId('tile-state-label')).not.toBeInTheDocument()
   })
@@ -199,8 +199,8 @@ describe('ProjectCard — state-aware stats area (PR-2.5)', () => {
     expect(screen.queryByTestId('tile-state-label')).not.toBeInTheDocument()
     // Stats row visible.
     expect(screen.getByTestId('project-stats-row')).toBeInTheDocument()
-    expect(screen.getByTestId('stat-target')).toHaveTextContent('Mapped: 52/68 fields')
-    expect(screen.getByTestId('stat-source')).toHaveTextContent('Sources: 57/70')
+    expect(screen.getByTestId('stat-target')).toHaveTextContent('Mapping Approvals: 52/68')
+    expect(screen.queryByTestId('stat-source')).toBeNull()
     expect(screen.getByTestId('stat-transforms')).toHaveTextContent('Transforms: 15/51')
   })
 
@@ -287,7 +287,7 @@ describe('ProjectCard — Completed overlay', () => {
     expect(screen.getByText('Completed')).toBeInTheDocument()
     // Stats row visible — the fix.
     expect(screen.getByTestId('project-stats-row')).toBeInTheDocument()
-    expect(screen.getByTestId('stat-target')).toHaveTextContent('Mapped: 68/68 fields')
+    expect(screen.getByTestId('stat-target')).toHaveTextContent('Mapping Approvals: 68/68')
     expect(screen.getByTestId('stat-transforms')).toHaveTextContent('Transforms: 51/51')
     // No state label — completed projects show stats, not the empty label.
     expect(screen.queryByTestId('tile-state-label')).not.toBeInTheDocument()
@@ -343,10 +343,15 @@ describe('ProjectCard — transforms.complete (Q2 redefinition)', () => {
   })
 })
 
-// ─── Q4: source axis (mapped ∪ acknowledged) ───────────────────────────────
+// ─── PR-7: source axis dropped from the tile ───────────────────────────────
+//
+// PR-7 removed the per-tile Sources stat — the dashboard is space-constrained
+// and source-side coverage lives on the MC Mapping Coverage card and the
+// Mapping page strip where there's room for both axes. Pinning the absence
+// here so a future regression that re-adds the chip fails immediately.
 
-describe('ProjectCard — source axis', () => {
-  it('renders projectStats.source.decided/total as the source stat', () => {
+describe('ProjectCard — PR-7 source axis dropped', () => {
+  it('does NOT render the Sources stat on the tile', () => {
     render(
       <ProjectCard
         project={project({
@@ -355,7 +360,7 @@ describe('ProjectCard — source axis', () => {
         onUpdate={noop}
       />,
     )
-    expect(screen.getByTestId('stat-source')).toHaveTextContent('Sources: 57/70')
+    expect(screen.queryByTestId('stat-source')).toBeNull()
   })
 })
 

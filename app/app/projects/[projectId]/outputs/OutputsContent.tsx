@@ -952,8 +952,11 @@ export default function OutputsContent({ projectId, projectName, initialData, is
             data-testid="mc-stats-grid"
             className="grid grid-cols-2 lg:grid-cols-4 gap-4 items-stretch mb-4"
           >
-            {/* Card 1 — Mapping Coverage (PR-6: merged Source Coverage in;
-                shows both target and source axes plus needs-review count) */}
+            {/* Card 1 — Mapping Coverage (PR-6 merged Source Coverage in;
+                PR-7 restructured the card content to a bare {approved}/{total}
+                headline plus a single source-first sub-line that reconciles
+                both axes — replaces PR-6's two-line layout + needs-review/
+                unmapped caption stack). */}
             <div
               data-testid="mc-mapping-coverage"
               data-state={projectStatsState}
@@ -971,35 +974,37 @@ export default function OutputsContent({ projectId, projectName, initialData, is
                         {projectStats.target.approved}
                       </span>
                       <span className="text-sm text-settle-slate-400">
-                        / {projectStats.target.total} target fields mapped
+                        / {projectStats.target.total}
                       </span>
                     </div>
+                    {/* PR-7: single sub-line, source coverage first. Replaces
+                        the PR-6 two-line layout (target ratio in headline +
+                        secondary source-axis line) and the conditional
+                        needs-review / unmapped / "All fields mapped" caption
+                        stack. The redefined `target.needsReview = total -
+                        approved` is now accessible via the Approved chip on
+                        the Mapping page strip; the MC card focuses on the
+                        coverage numerators only. */}
                     <p
-                      data-testid="mc-mapping-source-axis"
+                      data-testid="mc-mapping-coverage-sub"
                       className="text-xs text-settle-slate-500 mt-1"
                     >
+                      Source coverage{' '}
                       <span
                         data-testid="mc-mapping-source-decided"
                         className="font-medium text-settle-slate-700 tabular-nums"
                       >
-                        {projectStats.source.decided}
-                      </span>{' '}
-                      / {projectStats.source.total} source fields mapped
-                    </p>
-                    {projectStats.target.needsReview > 0 ? (
-                      <p
-                        data-testid="mc-mapping-needs-review"
-                        className="text-xs text-amber-600 mt-1"
+                        {projectStats.source.decided}/{projectStats.source.total}
+                      </span>
+                      {' · '}
+                      Target coverage{' '}
+                      <span
+                        data-testid="mc-mapping-target-approved"
+                        className="font-medium text-settle-slate-700 tabular-nums"
                       >
-                        {projectStats.target.needsReview} needs review
-                      </p>
-                    ) : projectStats.target.unmapped > 0 ? (
-                      <p className="text-xs text-settle-slate-400 mt-1">
-                        {projectStats.target.unmapped} unmapped
-                      </p>
-                    ) : (
-                      <p className="text-xs text-green-600 mt-1">All fields mapped</p>
-                    )}
+                        {projectStats.target.approved}/{projectStats.target.total}
+                      </span>
+                    </p>
                     {projectStats.target.total > 0 && (
                       <div className="mt-2 h-0.5 bg-settle-slate-100 rounded-full overflow-hidden">
                         <div

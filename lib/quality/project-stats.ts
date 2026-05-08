@@ -61,15 +61,26 @@ export type ProjectState =
   | 'mappings_generated'
 
 export interface ProjectStatsTargetAxis {
-  /** mappingApproved — approved primary TFMs + acknowledged-unmapped fields. */
+  /** mappingApproved — approved primary TFMs + acknowledged-unmapped fields.
+   *  Unchanged in PR-7 (only the denominator was redefined). */
   approved: number
-  /** mappingTotal — every "mapping slot" (primary TFMs + unmapped both sides + acknowledged). */
+  /** mappingTotal — TARGET-SIDE mapping slots only (PR-7). Specifically:
+   *  primary TFMs + unmapped target fields + acknowledged-unmapped fields.
+   *  Pre-PR-7 also included unmapped SOURCE fields, conflating source-side
+   *  accounting into a target-axis denominator. Source-side accounting now
+   *  lives on `ProjectStatsSourceAxis.{decided, total}` exclusively. The
+   *  post-PR-7 value matches the visible Mapping page grid count exactly. */
   total: number
-  /** mappingUnmapped — sources/targets with no TFM and no ACK. Always ≤ `total - approved`. */
+  /** mappingUnmapped — TARGET fields with no primary TFM and no bare-ack
+   *  (PR-7 made this target-side-only too, matching `total`). Sub-component
+   *  of `needsReview`; consumers wanting the broader "everything not
+   *  approved" bucket should read `needsReview` instead. */
   unmapped: number
-  /** mappingNeedsReview — primary TFMs (non-rejected, non-bare-ack) with
-   *  status='needs_review'. Added in PR-6 for the consolidated Mapping
-   *  page strip + MC Mapping Coverage card. */
+  /** mappingNeedsReview — `total - approved` (PR-7). Pre-PR-7 (added in
+   *  PR-6) this only counted primary TFMs with status='needs_review'.
+   *  Post-PR-7 it's the residual: needs_review TFMs + rejected primary
+   *  TFMs + unacknowledged unmapped target fields. Aligns the chip math
+   *  on the Mapping page strip — `Approved + Needs Review = total`. */
   needsReview: number
 }
 

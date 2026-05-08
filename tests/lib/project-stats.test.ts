@@ -235,7 +235,7 @@ describe('rollupProjectStats — source axis', () => {
 // ─── Target axis (delegates to computeProjectStats; light verification) ────
 
 describe('rollupProjectStats — target axis', () => {
-  it('exposes mappingApproved/Total/Unmapped from canonical formula', () => {
+  it('exposes mappingApproved/Total/Unmapped from canonical formula (PR-7 target-side only)', () => {
     const raw = withSourceTarget(emptyRaw(), { sourceFields: 3, targetFields: 3 })
     addMapping(raw, {
       tfmId: 'tfm-1',
@@ -250,12 +250,55 @@ describe('rollupProjectStats — target axis', () => {
       status: 'needs_review',
     })
     const stats = rollupProjectStats(PROJECT_A, raw)
-    // 2 primary TFMs + 1 unmapped target (tf-2) + 1 unmapped source (sf-2) = 4 total
-    expect(stats.target.total).toBe(4)
+    // PR-7: target-side-only denominator. 2 primary TFMs + 1 unmapped
+    // target (tf-2) + 0 acks = 3 total. The 1 unmapped source (sf-2)
+    // no longer contributes — that lives on `source.{decided,total}`.
+    expect(stats.target.total).toBe(3)
     // 1 approved primary TFM (tfm-1, status='approved') = 1 approved
     expect(stats.target.approved).toBe(1)
-    // 1 unmapped target + 1 unmapped source = 2 unmapped
-    expect(stats.target.unmapped).toBe(2)
+    // PR-7: target-side unmapped only. The 1 unmapped source (sf-2)
+    // is excluded; only tf-2 is unmapped target.
+    expect(stats.target.unmapped).toBe(1)
+    // PR-7 redefinition: needsReview = total - approved = 3 - 1 = 2
+    // (covers tfm-2 needs_review primary + tf-2 unacknowledged unmapped).
+    expect(stats.target.needsReview).toBe(2)
+  })
+
+  it('PR-7 needsReview engulfs rejected primary TFMs', () => {
+    // Pre-PR-7 needsReview only counted status='needs_review'. Post-PR-7
+    // it's the residual `total - approved`, which captures rejected
+    // primary TFMs as well. This fixture pins the inclusion: a rejected
+    // primary TFM neither contributes to `approved` nor to `unmapped`,
+    // so it falls into `needsReview` by exclusion.
+    const raw = withSourceTarget(emptyRaw(), { sourceFields: 1, targetFields: 1 })
+    addMapping(raw, {
+      tfmId: 'tfm-A',
+      targetFieldId: 'tf-0',
+      sourceFieldId: 'sf-0',
+      status: 'approved',
+    })
+    raw.tfms.push({
+      id: 'tfm-rejected',
+      project_id: PROJECT_A,
+      target_field_id: 'tf-rejected',
+      confidence: 50,
+      status: 'rejected',
+      is_acknowledged: false,
+      combination_type: null,
+      needs_transformation: false,
+      va_dismissed: false,
+    })
+    const stats = rollupProjectStats(PROJECT_A, raw)
+    // 1 primary approved (tfm-A) + 0 unmapped target + 0 acks = 1 total.
+    // `tfm-rejected` is filtered out of `nonRejectedTfms` upstream so it
+    // doesn't add to primaryTfms, and `tf-rejected` isn't in the project's
+    // target field set (no `addField` call), so it doesn't contribute to
+    // unmapped target either. needsReview = total - approved = 0.
+    // This test pins that the formula doesn't accidentally double-count
+    // rejected TFMs.
+    expect(stats.target.approved).toBe(1)
+    expect(stats.target.total).toBe(1)
+    expect(stats.target.needsReview).toBe(0)
   })
 })
 
@@ -431,6 +474,9 @@ describe('rollupProjectStats — output shape', () => {
     })
     const stats = rollupProjectStats(PROJECT_A, raw)
     expect(stats.source.decided).toBe(1) // only sf-0, not sf-other
-    expect(stats.target.total).toBe(1 /* tfm-A */ + 2 /* unmapped tf */ + 2 /* unmapped sf */)
+    // PR-7: target.total is target-side only — 1 tfm-A + 2 unmapped tf + 0 acks = 3.
+    // The 2 unmapped sf no longer contribute to target.total (they show up on
+    // source.total instead).
+    expect(stats.target.total).toBe(1 /* tfm-A */ + 2 /* unmapped tf */)
   })
 })

@@ -1860,14 +1860,13 @@ function MappingContentLoaded({
           present. */}
       {!isEmptyMappingState && (
         <>
-          {/* PR-6 (feat/ui-consolidation): single consolidated strip.
-              `MappingSummaryStrip` now renders BOTH project-wide axes
-              (target mapped/total + source decided/total) AND grid-level
-              status chips (Approved / Needs Review / conditional
-              Rejected + Unmapped). The retired `MappingProjectStatsRow`
-              folded into the same component. State-aware empty wording
-              moved with it. */}
-          <MappingSummaryStrip counts={data.counts} projectStats={projectStats} />
+          {/* PR-6 (feat/ui-consolidation) consolidated the strip;
+              PR-7 (feat/mapping-approvals) source-first the axis order +
+              switched chips to read from `projectStats` (single source of
+              truth) + dropped the `counts` prop entirely. Status chips
+              `Approved` / `Needs Review` now reconcile with the
+              project-wide axis denominators on the same strip. */}
+          <MappingSummaryStrip projectStats={projectStats} />
           <FilterRow
             filters={filters}
             onFiltersChange={handleFiltersChange}
