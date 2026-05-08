@@ -247,8 +247,22 @@ export async function runPathDMapping(
     )
 
     // 2. Build prompts.
+    //
+    // INF-41: forward ctx.intelligence_context as intelligenceCtx. Pre-
+    // INF-41 the call shape was `buildPathDUserMessage({ ctx })`, which
+    // silently dropped the intelligence block — buildAIContext fetches
+    // and writes intelligence_context onto ctx (when userId is supplied,
+    // as it is here at line 243), but the optional intelligenceCtx arg
+    // on buildPathDUserMessage is the read path inside the builder. The
+    // result was: every Path D run since #103 ran intelligence-OFF
+    // regardless of the user's accumulated migration_intelligence rows.
+    // Surfaced by the context-flow audit (PR #107). The eval runner has
+    // the same bug pattern at runner.ts:235 — fixed in this PR too.
     const systemPrompt = buildPathDSystemPrompt({ promptVersion: 'path-d-v0' })
-    const userMessage = buildPathDUserMessage({ ctx })
+    const userMessage = buildPathDUserMessage({
+      ctx,
+      intelligenceCtx: ctx.intelligence_context,
+    })
 
     // 3. Pre-call cost gate.
     const estimatedInputTokens =

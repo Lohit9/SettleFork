@@ -104,6 +104,15 @@ function loadFixture(name: string): EvalFixture {
     ? JSON.parse(readFileSync(resolve(dir, 'sample-data.json'), 'utf-8'))
     : {}
   const businessContext = readFileSync(resolve(dir, 'business-context.md'), 'utf-8')
+  // INF-41: optional intelligence-context.md per fixture. Pre-formatted
+  // (matches `buildIntelligenceContext` output shape from
+  // `lib/ai/context-builder.ts`) so the runner can drop it directly onto
+  // `ctx.intelligence_context`. Empty string when absent — preserves
+  // intelligence-OFF (v0) baseline for legacy fixtures and keeps the
+  // delta attributable to fixture content alone.
+  const intelligenceContext = existsSync(resolve(dir, 'intelligence-context.md'))
+    ? readFileSync(resolve(dir, 'intelligence-context.md'), 'utf-8')
+    : ''
   const expectedRaw = JSON.parse(
     readFileSync(resolve(dir, 'expected-output.json'), 'utf-8'),
   ) as ExpectedPathDOutput & { _authoring_notes?: string }
@@ -120,6 +129,7 @@ function loadFixture(name: string): EvalFixture {
     target: targetSchema,
     sample_data: sampleData,
     business_context: businessContext,
+    intelligence_context: intelligenceContext,
     expected,
   }
 }
@@ -154,7 +164,11 @@ function fixtureToContext(fixture: EvalFixture): ProjectAIContext {
         { filename: 'business-context.md', text: fixture.business_context },
       ],
     },
-    intelligence_context: '',
+    // INF-41: forward the fixture's optional intelligence_context onto
+    // ctx so the runner's call to buildPathDUserMessage can pass it
+    // through to the Path D prompt. Empty string when the fixture has
+    // no intelligence-context.md (preserves v0 baseline shape).
+    intelligence_context: fixture.intelligence_context,
   }
 }
 
@@ -232,7 +246,17 @@ async function runTrial(args: {
   try {
     const ctx = fixtureToContext(fixture)
     const systemPrompt = buildPathDSystemPrompt({ promptVersion: 'eval-path-d-v0' })
-    const userMessage = buildPathDUserMessage({ ctx })
+    // INF-41: forward ctx.intelligence_context as intelligenceCtx so
+    // the eval prompt exercises the intelligence-ON path. The pre-INF-41
+    // call shape (`{ ctx }` only) silently dropped the intelligence
+    // block — same bug as path-d-mapping.ts:251 (production), fixed
+    // there in this PR. Empty intelligence_context flows through as
+    // an empty string and the builder short-circuits the prepend, so
+    // legacy intelligence-OFF fixtures stay byte-identical.
+    const userMessage = buildPathDUserMessage({
+      ctx,
+      intelligenceCtx: ctx.intelligence_context,
+    })
 
     const result = await callLLMStreaming({
       feature: 'eval_path_d',
