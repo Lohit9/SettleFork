@@ -76,8 +76,15 @@ vi.mock('@/lib/ai/path-d-config', async (importOriginal) => {
 })
 
 vi.mock('@/lib/ai/path-d-system-prompt', () => ({
-  buildPathDSystemPrompt: () => promptState.systemPrompt,
-  buildPathDUserMessage: () => promptState.userMessage,
+  buildPathDSystemPrompt: vi.fn(() => promptState.systemPrompt),
+  // INF-41: vi.fn() so tests can inspect the args passed in (the
+  // intelligence-context forwarding regression guard at the bottom of
+  // this file relies on `expect(buildPathDUserMessage).toHaveBeenCalledWith
+  // (...)`). Pre-INF-41 this was `() => promptState.userMessage` — a
+  // static stub. The conversion is byte-equivalent for existing tests
+  // (the function still returns promptState.userMessage); only test-
+  // surface (.mock.calls) becomes inspectable.
+  buildPathDUserMessage: vi.fn(() => promptState.userMessage),
   PATH_D_SYSTEM_PROMPT: '',
 }))
 
@@ -477,5 +484,101 @@ describe('runPathDMapping — orchestrator', () => {
       expect(typeof newVal.ai_reasoning).toBe('string')
       expect(typeof newVal.target_field_id).toBe('string')
     }
+  })
+
+  // ── Test 8: INF-41 regression guard — intelligence forwarding ──────────
+  it('INF-41 — forwards ctx.intelligence_context as intelligenceCtx to buildPathDUserMessage', async () => {
+    // Pre-INF-41 the orchestrator called `buildPathDUserMessage({ ctx })`
+    // and silently dropped the intelligence block — buildAIContext
+    // populates ctx.intelligence_context (when userId is supplied) but
+    // the optional intelligenceCtx arg on the builder is the actual
+    // read path. Surfaced by the context-flow audit (PR #107) as a
+    // load-bearing gap because every Path D run since #103 had been
+    // intelligence-OFF in production. This test pins the call-site
+    // forwarding so a future refactor that drops the arg again fails.
+    const MARKER = 'INF_41_ORCHESTRATOR_MARKER_xyz123'
+    const { buildAIContext } = await import('@/lib/ai/context-builder')
+    vi.mocked(buildAIContext).mockResolvedValueOnce({
+      project_id: 'p1',
+      project_name: 'test',
+      source_tables: [],
+      target_tables: [],
+      documents: {
+        source_documents: [],
+        target_documents: [],
+        business_context_documents: [],
+      },
+      intelligence_context: MARKER,
+    })
+
+    const { buildPathDUserMessage } = await import('@/lib/ai/path-d-system-prompt')
+    vi.mocked(buildPathDUserMessage).mockClear()
+
+    const { runPathDMapping } = await import('@/lib/ai/path-d-mapping')
+    const stream = makeFakeStream(eventsForText(HAPPY_FIXTURE, { inputTokens: 100 }))
+    const { client } = makeFakeAnthropic(stream)
+    const { admin } = makeMockAdmin({
+      tfmReadRows: [{ id: 'tfm-1', target_field_id: 'tf-1', confidence: 0.9, ai_reasoning: 'r' }],
+    })
+
+    await runPathDMapping({
+      projectId: 'p1',
+      userId: 'u1',
+      sourceTableIds: ['s1'],
+      targetTableIds: ['t1'],
+      anthropicClient: client,
+      admin: admin as never,
+    })
+
+    expect(vi.mocked(buildPathDUserMessage)).toHaveBeenCalledWith(
+      expect.objectContaining({ intelligenceCtx: MARKER }),
+    )
+  })
+
+  // ── Test 9: INF-41 negative — empty intelligence_context flows through ─
+  it('INF-41 — empty ctx.intelligence_context still forwards (preserves intelligence-OFF baseline shape)', async () => {
+    // Verify the call-site forwarding works for the empty-string path
+    // too. The builder's null guard (intelligenceCtx ? ...) handles the
+    // empty-string case at render time (empty string is falsy in the
+    // ternary), so an empty forward produces a byte-identical prompt
+    // to the pre-INF-41 dropped behavior. This pins that shape so a
+    // future refactor that adds a `?? null` collapse or similar won't
+    // accidentally change rendered prompt bytes.
+    const { buildAIContext } = await import('@/lib/ai/context-builder')
+    vi.mocked(buildAIContext).mockResolvedValueOnce({
+      project_id: 'p1',
+      project_name: 'test',
+      source_tables: [],
+      target_tables: [],
+      documents: {
+        source_documents: [],
+        target_documents: [],
+        business_context_documents: [],
+      },
+      intelligence_context: '',
+    })
+
+    const { buildPathDUserMessage } = await import('@/lib/ai/path-d-system-prompt')
+    vi.mocked(buildPathDUserMessage).mockClear()
+
+    const { runPathDMapping } = await import('@/lib/ai/path-d-mapping')
+    const stream = makeFakeStream(eventsForText(HAPPY_FIXTURE, { inputTokens: 100 }))
+    const { client } = makeFakeAnthropic(stream)
+    const { admin } = makeMockAdmin({
+      tfmReadRows: [{ id: 'tfm-1', target_field_id: 'tf-1', confidence: 0.9, ai_reasoning: 'r' }],
+    })
+
+    await runPathDMapping({
+      projectId: 'p1',
+      userId: 'u1',
+      sourceTableIds: ['s1'],
+      targetTableIds: ['t1'],
+      anthropicClient: client,
+      admin: admin as never,
+    })
+
+    expect(vi.mocked(buildPathDUserMessage)).toHaveBeenCalledWith(
+      expect.objectContaining({ intelligenceCtx: '' }),
+    )
   })
 })

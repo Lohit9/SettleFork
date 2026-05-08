@@ -165,6 +165,13 @@ export interface EvalFixture {
   sample_data: EvalFixtureSampleData
   /** Free-form markdown describing the migration scenario. */
   business_context: string
+  /** INF-41: optional pre-formatted migration intelligence block. Populated
+   *  by `loadFixture` when `intelligence-context.md` is present in the
+   *  fixture directory. Empty string when absent (preserves the v0
+   *  intelligence-OFF baseline shape for legacy fixtures). The runner
+   *  passes this through to `ctx.intelligence_context` so the resulting
+   *  Path D prompt exercises the intelligence-ON path. */
+  intelligence_context: string
   expected: ExpectedPathDOutput
 }
 
