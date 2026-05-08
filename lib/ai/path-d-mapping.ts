@@ -67,6 +67,10 @@ import {
   type PathDPersistResult,
 } from '@/lib/ai/path-d-persistence'
 import { redactForLog } from '@/lib/ai/redact'
+import type {
+  PathDEvent,
+  PathDSectionName,
+} from '@/lib/types/path-d-events'
 
 // ── Tunables ────────────────────────────────────────────────────────────────
 
@@ -127,6 +131,25 @@ export interface RunPathDMappingArgs {
    * falls back to `supabaseAdmin`.
    */
   admin?: SupabaseClient
+  /**
+   * Optional progress observer. When provided, the orchestrator emits
+   * `PathDEvent` instances at the lifecycle hook points (parser
+   * close-tags, cost samples, persistence outcomes, terminal error/done).
+   * The SSE route (Sub-PR 5) passes a callback that enqueues each event
+   * onto its ReadableStream. Production server-action callsite
+   * (`generateMappings`) passes nothing — orchestrator runs identically
+   * to its pre-Sub-PR-5 behaviour. Errors thrown from the callback are
+   * swallowed so a misbehaving observer cannot fail the run.
+   */
+  onEvent?: (event: PathDEvent) => void
+  /**
+   * Optional external abort signal. When fired, the orchestrator aborts
+   * the Anthropic stream and follows the existing partial-state-persist
+   * path. Used by the SSE route to bridge Next.js
+   * `Request.signal` (which fires on client disconnect) into the
+   * orchestrator's existing internal AbortController.
+   */
+  abortSignal?: AbortSignal
 }
 
 export type PathDErrorCode = 'COST_CEILING' | 'PARSE_ERROR' | 'INTERNAL'
@@ -182,6 +205,21 @@ export async function runPathDMapping(
   const { projectId, userId, sourceTableIds, targetTableIds } = args
   const admin = args.admin ?? supabaseAdmin
   const client = args.anthropicClient ?? anthropic
+
+  // Wrapped event emitter — swallows observer errors so a misbehaving
+  // callback can never fail the run. Production callsite passes no
+  // observer; the wrapper is a no-op in that case.
+  const emit = (event: PathDEvent): void => {
+    if (!args.onEvent) return
+    try {
+      args.onEvent(event)
+    } catch (err) {
+      console.warn(
+        `[path-d-mapping] onEvent observer threw on ${event.kind}; swallowing`,
+        err,
+      )
+    }
+  }
 
   const runId = mintExperimentRunId()
   const callId = randomUUID()
@@ -241,6 +279,24 @@ export async function runPathDMapping(
       stream: true,
     })
 
+    // Bridge the external abort signal (e.g., from a Next.js
+    // `Request.signal` when the client closes the SSE connection) to the
+    // Anthropic stream's internal controller. Any post-bridge writes by
+    // the iterator throw, which is caught below and treated identically
+    // to an internal cost-ceiling abort — partial state is persisted
+    // and the orchestrator returns either a partial-success or
+    // partial-failure as appropriate.
+    const onExternalAbort = (): void => {
+      stream.controller.abort()
+    }
+    if (args.abortSignal) {
+      if (args.abortSignal.aborted) {
+        stream.controller.abort()
+      } else {
+        args.abortSignal.addEventListener('abort', onExternalAbort, { once: true })
+      }
+    }
+
     // 5. Iterate events; track usage; sample cost; abort if ceiling exceeded.
     const parser = createPathDStreamParser()
     let accumulatedText = ''
@@ -271,7 +327,15 @@ export async function runPathDMapping(
           const delta = event.delta as { type?: string; text?: string } | undefined
           if (delta?.type !== 'text_delta' || typeof delta.text !== 'string') continue
           accumulatedText += delta.text
-          parser.feed(delta.text)
+          const feedResult = parser.feed(delta.text)
+          // Emit one section_completed event per close tag detected in
+          // this chunk. The parser dedups across chunks (each section
+          // fires at most once per run).
+          if (feedResult.completedSections.length > 0) {
+            for (const section of feedResult.completedSections) {
+              emit({ kind: 'section_completed', section: section as PathDSectionName })
+            }
+          }
           deltaCount++
 
           if (deltaCount % COST_CHECK_INTERVAL_DELTAS === 0) {
@@ -282,6 +346,15 @@ export async function runPathDMapping(
               (inputTokens * OPUS_4_7_INPUT_PRICE_PER_M +
                 estOutputTokens * OPUS_4_7_OUTPUT_PRICE_PER_M) /
               1_000_000
+            // Surface the cost sample to observers (SSE route uses this
+            // to drive a live cost meter). Emitted at the same cadence
+            // as the cost-ceiling check (every COST_CHECK_INTERVAL_DELTAS
+            // deltas), which is sub-second at typical streaming rates.
+            emit({
+              kind: 'cost_update',
+              outputTokens: estOutputTokens,
+              estimatedCostUsd: runningCostUsd,
+            })
             if (runningCostUsd > PER_PROJECT_MAX_COST_USD) {
               aborted = true
               abortError = new CostCeilingExceededError(
@@ -304,9 +377,23 @@ export async function runPathDMapping(
         }
       }
     } catch (streamErr) {
-      // We may have triggered an AbortError ourselves. Swallow it; otherwise
-      // rethrow so the outer catch records 'INTERNAL' for the caller.
+      // We may have triggered an AbortError ourselves (cost ceiling) OR
+      // an external caller aborted via `args.abortSignal`. Both are
+      // expected cases — swallow and continue to persistence with the
+      // partial state. Anything else is a real failure → rethrow to
+      // the outer catch (records 'INTERNAL' for the caller).
+      const externalAbort = args.abortSignal?.aborted === true
+      if (externalAbort) aborted = true
       if (!aborted) throw streamErr
+    } finally {
+      // Detach the external-abort listener regardless of how the loop
+      // exited (success / cost-ceiling abort / external abort / throw).
+      // Prevents a leak when the orchestrator is invoked many times in
+      // a single process (e.g., the integration test's idempotency
+      // re-run).
+      if (args.abortSignal) {
+        args.abortSignal.removeEventListener('abort', onExternalAbort)
+      }
     }
 
     // 6. Parse the accumulated buffer.
@@ -320,6 +407,41 @@ export async function runPathDMapping(
       experimentRunId: runId,
       parsed,
     })
+
+    // Emit a section_persisted event for each of the 7 sections.
+    // Iterates in dependency-insert order (matches PathDPersistResult
+    // key order: data_quality → mappings → coverage → lookup_tables →
+    // inferred_targets → decisions → project_notes — see
+    // path-d-persistence.ts for why).
+    const sectionOrder: PathDSectionName[] = [
+      'data_quality',
+      'mappings',
+      'coverage',
+      'lookup_tables',
+      'inferred_targets',
+      'decisions',
+      'project_notes',
+    ]
+    for (const section of sectionOrder) {
+      const sectionResult = persistResult[section]
+      if (sectionResult.status === 'inserted') {
+        emit({
+          kind: 'section_persisted',
+          section,
+          status: 'inserted',
+          count: sectionResult.count,
+        })
+      } else if (sectionResult.status === 'errored') {
+        emit({
+          kind: 'section_persisted',
+          section,
+          status: 'errored',
+          error: sectionResult.error,
+        })
+      } else {
+        emit({ kind: 'section_persisted', section, status: 'skipped' })
+      }
+    }
 
     // 8. Compute final cost / output tokens for telemetry.
     let finalOutputTokens: number
@@ -385,6 +507,7 @@ export async function runPathDMapping(
     //     but persistence + telemetry already wrote what we did manage to
     //     get, so the run is partially observable.
     if (aborted && abortError) {
+      emit({ kind: 'error', phase: 'cost_ceiling', message: abortError.message })
       return {
         success: false,
         error: abortError.message,
@@ -397,11 +520,22 @@ export async function runPathDMapping(
       persistResult.mappings.status === 'inserted'
         ? persistResult.mappings.count
         : 0
+    // Final terminal event for SSE consumers. Mirrors the success-return
+    // shape; `summary` is the same `PathDPersistResult` the function
+    // returns.
+    emit({ kind: 'done', runId, summary: persistResult })
     return { success: true, runId, summary: persistResult, tfmCount }
   } catch (err) {
+    const message = (err as Error).message
+    // 'internal' is the catch-all phase for the orchestrator's outer
+    // try/catch. Cost-ceiling errors are emitted from the success-path
+    // branch above (they don't throw); persist errors fall here only
+    // if persistPathDOutput itself throws (uncommon — most failures
+    // surface as per-section 'errored' status, not exceptions).
+    emit({ kind: 'error', phase: 'internal', message })
     return {
       success: false,
-      error: (err as Error).message,
+      error: message,
       errorCode: 'INTERNAL',
       runId,
     }

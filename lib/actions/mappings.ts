@@ -3,8 +3,8 @@
 import { revalidatePath } from 'next/cache'
 import { createClient } from '@/lib/supabase/server'
 import { supabaseAdmin } from '@/lib/supabase/admin'
-import { PATH_D_MONOLITHIC_THRESHOLD, ProjectTooLargeError } from '@/lib/ai/path-d-config'
 import { runPathDMapping } from '@/lib/ai/path-d-mapping'
+import { checkPathDPreconditions } from '@/lib/ai/path-d-preconditions'
 import { requireProjectPermission } from '@/lib/actions/role-resolution'
 import { callLLM, callLLMStreaming, type LLMFeature } from '@/lib/ai/llm-client'
 import { withProvenanceGuidance } from '@/lib/ai/agent-provenance-guidance'
@@ -521,19 +521,25 @@ export async function generateMappings(
     // Threshold check + ProjectTooLargeError stay in place from Sub-PR 4a.
     // Flag-OFF (default) preserves Path B behavior unchanged — the Heritage
     // Capture D test verifies this byte-identical guarantee.
-    const pathDEnabled = process.env.AI_MAPPING_PATH_D_ENABLED === '1'
-    if (pathDEnabled) {
-      const { count: targetFieldCount } = await supabaseAdmin
-        .from('fields')
-        .select('id', { count: 'exact', head: true })
-        .in('table_id', targetTableIds)
-      if ((targetFieldCount ?? 0) > PATH_D_MONOLITHIC_THRESHOLD) {
-        return {
-          success: false,
-          error: new ProjectTooLargeError(targetFieldCount ?? 0).message,
-          errorCode: 'VALIDATION',
-        }
+    //
+    // Sub-PR 5: the inline flag + threshold check has been extracted to
+    // `checkPathDPreconditions` so the new SSE route handler can share
+    // the exact same precondition contract. FLAG_OFF here falls through
+    // to the Path B branch below (preserving the historical behaviour
+    // where flag-unset means "use Path B"); only OVER_THRESHOLD is
+    // surfaced as a user-visible error.
+    const pathDPre = await checkPathDPreconditions({
+      targetTableIds,
+      admin: supabaseAdmin,
+    })
+    if (pathDPre.ok === false && pathDPre.code === 'OVER_THRESHOLD') {
+      return {
+        success: false,
+        error: pathDPre.error,
+        errorCode: 'VALIDATION',
       }
+    }
+    if (pathDPre.ok === true) {
       const pathDResult = await runPathDMapping({
         projectId,
         userId: user.id,
