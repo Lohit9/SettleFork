@@ -1,43 +1,159 @@
 {
-  "_authoring_notes": "Gold-standard expected output for Path D against the CRM (Salesforce → HubSpot) fixture. Scorer reads only the seven section arrays + project_notes_expected; everything else (including this _authoring_notes field) is ignored. Authored by Claude Code, reviewed by user at PAUSE #1 of Sub-PR 6. Expected to be revised as Phase C learns more about what 'comprehensive' means for this scenario.",
+  "_authoring_notes": "Gold-standard expected output for Path D against the CRM (Salesforce \u2192 HubSpot) fixture. Scorer reads only the seven section arrays + project_notes_expected; everything else (including this _authoring_notes field) is ignored. Authored by Claude Code, reviewed by user at PAUSE #1 of Sub-PR 6. Expected to be revised as Phase C learns more about what 'comprehensive' means for this scenario. [Phase C iter 1] decision_type values remapped to canonical vocabulary (see lib/ai/path-d-system-prompt.ts <decisions> guidance + docs/path-d-eval/README.md). Original mapping: lifecycle_stage_mapping\u2192enum_mapping.",
   "mappings": [
-    { "target_field_id": "c1000000-0000-4000-8000-000000000002", "source_field_ids": ["f1000000-0000-4000-8000-000000000002", "f1000000-0000-4000-8000-000000000003"], "combination_type": "concat_space" },
-    { "target_field_id": "c1000000-0000-4000-8000-000000000003", "source_field_ids": ["f1000000-0000-4000-8000-000000000004"], "combination_type": "single" },
-    { "target_field_id": "c1000000-0000-4000-8000-000000000004", "source_field_ids": ["f1000000-0000-4000-8000-000000000005"], "combination_type": "single" },
-    { "target_field_id": "c1000000-0000-4000-8000-000000000005", "source_field_ids": ["f1000000-0000-4000-8000-000000000006"], "combination_type": "single" },
-    { "target_field_id": "c1000000-0000-4000-8000-000000000006", "source_field_ids": ["f1000000-0000-4000-8000-000000000007"], "combination_type": "single" },
-    { "target_field_id": "c1000000-0000-4000-8000-000000000007", "source_field_ids": ["f1000000-0000-4000-8000-000000000008", "f1000000-0000-4000-8000-000000000012"], "combination_type": "custom_sql" },
-    { "target_field_id": "c1000000-0000-4000-8000-000000000008", "source_field_ids": ["f1000000-0000-4000-8000-000000000009"], "combination_type": "single" },
-    { "target_field_id": "c1000000-0000-4000-8000-000000000009", "source_field_ids": ["f1000000-0000-4000-8000-000000000010"], "combination_type": "single" },
-    { "target_field_id": "c1000000-0000-4000-8000-000000000010", "source_field_ids": ["f1000000-0000-4000-8000-000000000011"], "combination_type": "single" },
-    { "target_field_id": "c1000000-0000-4000-8000-000000000012", "source_field_ids": ["f1000000-0000-4000-8000-000000000013"], "combination_type": "single" }
+    {
+      "target_field_id": "c1000000-0000-4000-8000-000000000002",
+      "source_field_ids": [
+        "f1000000-0000-4000-8000-000000000002",
+        "f1000000-0000-4000-8000-000000000003"
+      ],
+      "combination_type": "concat_space"
+    },
+    {
+      "target_field_id": "c1000000-0000-4000-8000-000000000003",
+      "source_field_ids": [
+        "f1000000-0000-4000-8000-000000000004"
+      ],
+      "combination_type": "single"
+    },
+    {
+      "target_field_id": "c1000000-0000-4000-8000-000000000004",
+      "source_field_ids": [
+        "f1000000-0000-4000-8000-000000000005"
+      ],
+      "combination_type": "single"
+    },
+    {
+      "target_field_id": "c1000000-0000-4000-8000-000000000005",
+      "source_field_ids": [
+        "f1000000-0000-4000-8000-000000000006"
+      ],
+      "combination_type": "single"
+    },
+    {
+      "target_field_id": "c1000000-0000-4000-8000-000000000006",
+      "source_field_ids": [
+        "f1000000-0000-4000-8000-000000000007"
+      ],
+      "combination_type": "single"
+    },
+    {
+      "target_field_id": "c1000000-0000-4000-8000-000000000007",
+      "source_field_ids": [
+        "f1000000-0000-4000-8000-000000000008",
+        "f1000000-0000-4000-8000-000000000012"
+      ],
+      "combination_type": "custom_sql"
+    },
+    {
+      "target_field_id": "c1000000-0000-4000-8000-000000000008",
+      "source_field_ids": [
+        "f1000000-0000-4000-8000-000000000009"
+      ],
+      "combination_type": "single"
+    },
+    {
+      "target_field_id": "c1000000-0000-4000-8000-000000000009",
+      "source_field_ids": [
+        "f1000000-0000-4000-8000-000000000010"
+      ],
+      "combination_type": "single"
+    },
+    {
+      "target_field_id": "c1000000-0000-4000-8000-000000000010",
+      "source_field_ids": [
+        "f1000000-0000-4000-8000-000000000011"
+      ],
+      "combination_type": "single"
+    },
+    {
+      "target_field_id": "c1000000-0000-4000-8000-000000000012",
+      "source_field_ids": [
+        "f1000000-0000-4000-8000-000000000013"
+      ],
+      "combination_type": "single"
+    }
   ],
   "coverage": [
-    { "target_field_id": "c1000000-0000-4000-8000-000000000001", "coverage_status": "out_of_scope" },
-    { "target_field_id": "c1000000-0000-4000-8000-000000000002", "coverage_status": "covered" },
-    { "target_field_id": "c1000000-0000-4000-8000-000000000003", "coverage_status": "covered" },
-    { "target_field_id": "c1000000-0000-4000-8000-000000000004", "coverage_status": "partial" },
-    { "target_field_id": "c1000000-0000-4000-8000-000000000005", "coverage_status": "covered" },
-    { "target_field_id": "c1000000-0000-4000-8000-000000000006", "coverage_status": "covered" },
-    { "target_field_id": "c1000000-0000-4000-8000-000000000007", "coverage_status": "covered" },
-    { "target_field_id": "c1000000-0000-4000-8000-000000000008", "coverage_status": "covered" },
-    { "target_field_id": "c1000000-0000-4000-8000-000000000009", "coverage_status": "covered" },
-    { "target_field_id": "c1000000-0000-4000-8000-000000000010", "coverage_status": "covered" },
-    { "target_field_id": "c1000000-0000-4000-8000-000000000011", "coverage_status": "optional" },
-    { "target_field_id": "c1000000-0000-4000-8000-000000000012", "coverage_status": "covered" },
-    { "target_field_id": "c1000000-0000-4000-8000-000000000013", "coverage_status": "gap" }
+    {
+      "target_field_id": "c1000000-0000-4000-8000-000000000001",
+      "coverage_status": "out_of_scope"
+    },
+    {
+      "target_field_id": "c1000000-0000-4000-8000-000000000002",
+      "coverage_status": "covered"
+    },
+    {
+      "target_field_id": "c1000000-0000-4000-8000-000000000003",
+      "coverage_status": "covered"
+    },
+    {
+      "target_field_id": "c1000000-0000-4000-8000-000000000004",
+      "coverage_status": "partial"
+    },
+    {
+      "target_field_id": "c1000000-0000-4000-8000-000000000005",
+      "coverage_status": "covered"
+    },
+    {
+      "target_field_id": "c1000000-0000-4000-8000-000000000006",
+      "coverage_status": "covered"
+    },
+    {
+      "target_field_id": "c1000000-0000-4000-8000-000000000007",
+      "coverage_status": "covered"
+    },
+    {
+      "target_field_id": "c1000000-0000-4000-8000-000000000008",
+      "coverage_status": "covered"
+    },
+    {
+      "target_field_id": "c1000000-0000-4000-8000-000000000009",
+      "coverage_status": "covered"
+    },
+    {
+      "target_field_id": "c1000000-0000-4000-8000-000000000010",
+      "coverage_status": "covered"
+    },
+    {
+      "target_field_id": "c1000000-0000-4000-8000-000000000011",
+      "coverage_status": "optional"
+    },
+    {
+      "target_field_id": "c1000000-0000-4000-8000-000000000012",
+      "coverage_status": "covered"
+    },
+    {
+      "target_field_id": "c1000000-0000-4000-8000-000000000013",
+      "coverage_status": "gap"
+    }
   ],
   "decisions": [
-    { "decision_type": "duplicate_resolution" },
-    { "decision_type": "lifecycle_stage_mapping" }
+    {
+      "decision_type": "duplicate_resolution"
+    },
+    {
+      "decision_type": "enum_mapping"
+    }
   ],
   "lookup_tables": [
-    { "name": "lead_status_to_lifecycle_stage" }
+    {
+      "name": "lead_status_to_lifecycle_stage"
+    }
   ],
   "data_quality": [
-    { "source_field_id": "f1000000-0000-4000-8000-000000000004", "category": "duplicates" },
-    { "source_field_id": "f1000000-0000-4000-8000-000000000004", "category": "format_drift" },
-    { "source_field_id": "f1000000-0000-4000-8000-000000000005", "category": "format_drift" }
+    {
+      "source_field_id": "f1000000-0000-4000-8000-000000000004",
+      "category": "duplicates"
+    },
+    {
+      "source_field_id": "f1000000-0000-4000-8000-000000000004",
+      "category": "format_drift"
+    },
+    {
+      "source_field_id": "f1000000-0000-4000-8000-000000000005",
+      "category": "format_drift"
+    }
   ],
   "inferred_targets": [],
   "project_notes_expected": true
