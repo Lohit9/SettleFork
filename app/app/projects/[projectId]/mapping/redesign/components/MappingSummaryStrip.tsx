@@ -1,4 +1,3 @@
-import type { MappingsForRedesignResult } from '@/lib/types/mappings-for-redesign'
 import type { ProjectStats } from '@/lib/quality/project-stats'
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -47,23 +46,39 @@ import type { ProjectStats } from '@/lib/quality/project-stats'
 // PR-6 (feat/ui-consolidation, 2026-05-07):
 //
 //   • Consolidated single-strip — `MappingProjectStatsRow` retired;
-//     this component now renders BOTH the project-wide axes (target
-//     mapped/total + source decided/total, dot-less, denominator-style)
-//     AND the grid-level status chips (Approved / Needs Review /
-//     conditional Rejected + Unmapped, hued dots). A `║` block divider
-//     separates the two groups so the eye reads "project truth ║
-//     filter chips" rather than one homogeneous chip row.
+//     this component now renders BOTH the project-wide axes AND the
+//     grid-level status chips. A `║` block divider separates the two
+//     groups so the eye reads "project truth ║ filter chips" rather
+//     than one homogeneous chip row.
 //   • The legacy "Total" chip was dropped — `target.total` denominator
 //     in the project-wide axis already conveys the same number.
-//   • State-aware empty: when `projectStats.state !== 'mappings_generated'`
-//     (or `projectStats === null`) the strip renders a single state
-//     label, matching the PR-2 tile-badge wording — visual continuity
-//     across surfaces. The label-only fallback is gated on the prop
-//     being supplied; if a caller omits `projectStats` entirely (as
-//     test fixtures may do), the strip degrades to its pre-PR-6
-//     status-chip-only behaviour.
-//   • New props: `projectStats?: ProjectStats | null` alongside the
-//     existing `counts`. Same import-site shape — no consumer rename.
+//
+// PR-7 (feat/mapping-approvals, 2026-05-08):
+//
+//   • Source-first axis order: `Source Fields X/Y · Target Fields X/Y`.
+//     Pre-PR-7 was target-first (`Mapped X/Y · Sources X/Y`). The new
+//     order foregrounds the user's mental model: "which source data is
+//     decided?" reads first; "what's the target-side migration scope?"
+//     reads second.
+//   • Label rename — "Mapped" → "Target Fields", "Sources" → "Source
+//     Fields". Both labels now name the axis they measure rather than
+//     the action.
+//   • Conditional Rejected / Unmapped chips RETIRED. The redefined
+//     `target.needsReview = total - approved` (PR-7 helper change)
+//     subsumes both — every target-side slot that isn't approved
+//     rolls up into Needs Review.
+//   • Status chip values switched from `MappingsForRedesignResult.counts.*`
+//     to `projectStats.target.{approved,needsReview}`. Pre-PR-7 the
+//     two source paths produced numbers that were one off from each
+//     other (e.g. `Approved 59` vs project-wide `Target Fields 60/72`)
+//     because grid-level `counts.approved` excluded the bare-ack
+//     contribution that project-wide `target.approved` includes.
+//     Single source of truth across the strip — the chips reconcile
+//     with the axes: `Approved + Needs Review = target.total`.
+//   • The `counts: MappingCounts` prop was DROPPED entirely — every
+//     value the strip renders now comes from `projectStats`.
+//   • `projectStats` is REQUIRED (no longer optional). Test fixtures
+//     and callers pass `null` explicitly to render the empty state.
 //
 // This replaces both the experimental `WipBanner` (dropped per Q2.1) and
 // the `CountersRow` block. The strip is non-sticky (founder Q8.1) — it
@@ -83,12 +98,19 @@ import type { ProjectStats } from '@/lib/quality/project-stats'
 // `tests/lib/no-shim-in-redesign-path.test.ts` enforces it at CI time.
 
 interface MappingSummaryStripProps {
-  counts: MappingsForRedesignResult['counts']
-  /** PR-6: project-wide ProjectStats for the consolidated single-strip
-   *  layout. Renders project-level target/source mapped axes BEFORE the
-   *  grid-level status chips. Optional — when omitted (or null) only the
-   *  status chips render, matching pre-PR-6 behaviour. */
-  projectStats?: ProjectStats | null
+  /** PR-7: `projectStats` is now the SOLE source for everything the strip
+   *  renders — project-wide axes AND status chips. The pre-PR-7 `counts`
+   *  prop (from `MappingsForRedesignResult`) was dropped because its
+   *  grid-level "Approved" / "Needs Review" tallies showed values
+   *  one off from the project-wide ratios on the same strip (e.g.
+   *  `Approved 59` next to `Target Fields 60/72`), reintroducing the
+   *  conceptual muddle PR-7 closes. Single source of truth, chips
+   *  reconcile with axes: `Approved + Needs Review = target.total`.
+   *
+   *  Required (no longer optional) when the strip is rendered for a
+   *  populated project. Pass `null` for the defensive empty-state
+   *  fallback (renders the awaiting_data label). */
+  projectStats: ProjectStats | null
 }
 
 const STATE_LABEL: Record<ProjectStats['state'], string> = {
@@ -98,17 +120,16 @@ const STATE_LABEL: Record<ProjectStats['state'], string> = {
 }
 
 export function MappingSummaryStrip({
-  counts,
   projectStats,
 }: MappingSummaryStripProps) {
-  // PR-6 state-aware empty: when the project hasn't generated mappings yet
+  // State-aware empty: when the project hasn't generated mappings yet
   // (or projectStats is null defensively), the strip renders a single
-  // state label instead of the chip row. Wording matches the PR-2 tile
-  // badge for visual continuity.
+  // state label instead of the axis + chip row. Wording matches the
+  // PR-2 tile badge for visual continuity.
   const state = projectStats?.state ?? 'awaiting_data'
-  const isPopulated = state === 'mappings_generated' && projectStats !== null && projectStats !== undefined
+  const isPopulated = state === 'mappings_generated' && projectStats !== null
 
-  if (projectStats !== undefined && !isPopulated) {
+  if (!isPopulated) {
     return (
       <div
         data-testid="mapping-summary-strip"
@@ -132,58 +153,40 @@ export function MappingSummaryStrip({
       className="flex items-center bg-white px-5 py-2 flex-shrink-0"
     >
       <div className="flex items-center gap-3 text-sm text-settle-slate-600">
-        {/* PR-6: project-wide axes — undecorated (no dot) so they read
-            as denominator-style truth rather than filter chips. */}
-        {projectStats ? (
-          <>
-            <SummaryChip
-              testId="mapping-summary-chip-project-target"
-              label="Mapped"
-              ratio={`${projectStats.target.approved}/${projectStats.target.total}`}
-            />
-            <SummaryChipDivider />
-            <SummaryChip
-              testId="mapping-summary-chip-project-source"
-              label="Sources"
-              ratio={`${projectStats.source.decided}/${projectStats.source.total}`}
-            />
-            <SummaryChipBlockDivider />
-          </>
-        ) : null}
-        {/* Grid-level status chips. Hued dots distinguish them from the
-            project-wide ratios above. The legacy "Total" chip was retired
-            in PR-6 — `target.total` denominator already conveys it. */}
+        {/* PR-7: source-first axis order. Source side answers "what's
+            decided?" (mapped ∪ acknowledged); target side answers
+            "what's the migration scope?". Both render dot-less because
+            they're denominator-style truth, not filter chips. */}
+        <SummaryChip
+          testId="mapping-summary-chip-project-source"
+          label="Source Fields"
+          ratio={`${projectStats.source.decided}/${projectStats.source.total}`}
+        />
+        <SummaryChipDivider />
+        <SummaryChip
+          testId="mapping-summary-chip-project-target"
+          label="Target Fields"
+          ratio={`${projectStats.target.approved}/${projectStats.target.total}`}
+        />
+        <SummaryChipBlockDivider />
+        {/* PR-7: status chips read from `projectStats.target.*` (post-PR-7
+            single source of truth). Pre-PR-7 they read from
+            `MappingsForRedesignResult.counts.*` — that path showed
+            grid-level numerators that didn't reconcile with the
+            project-wide axis denominators. Conditional Rejected /
+            Unmapped chips were dropped — both are now subsumed in the
+            redefined `needsReview = total - approved`. */}
         <SummaryChip
           label="Approved"
-          value={counts.approved}
+          value={projectStats.target.approved}
           dotClassName="bg-green-500"
         />
         <SummaryChipDivider />
         <SummaryChip
           label="Needs Review"
-          value={counts.needsReview}
+          value={projectStats.target.needsReview}
           dotClassName="bg-amber-400"
         />
-        {counts.rejected > 0 ? (
-          <>
-            <SummaryChipDivider />
-            <SummaryChip
-              label="Rejected"
-              value={counts.rejected}
-              dotClassName="bg-red-500"
-            />
-          </>
-        ) : null}
-        {counts.unmapped > 0 ? (
-          <>
-            <SummaryChipDivider />
-            <SummaryChip
-              label="Unmapped"
-              value={counts.unmapped}
-              dotClassName="bg-slate-300"
-            />
-          </>
-        ) : null}
       </div>
     </div>
   )

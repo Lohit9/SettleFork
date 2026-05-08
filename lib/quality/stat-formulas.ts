@@ -175,21 +175,40 @@ export interface ComputeProjectStatsInputs {
 export interface ComputeProjectStatsResult {
   // ── Mapping ────────────────────────────────────────────────────────────
   /** Numerator: approved primary TFMs + fields counted as "acknowledged
-   *  unmapped" (both source-side ACKs and bare-ack target TFMs). */
+   *  unmapped" (both source-side ACKs and bare-ack target TFMs).
+   *  Unchanged in PR-7 — only the denominator was redefined. */
   mappingApproved: number
-  /** Denominator: every "mapping slot" that exists — primary TFMs,
-   *  genuinely unmapped source fields, genuinely unmapped target fields,
-   *  and acknowledged-unmapped fields on either side. Always >=
-   *  `mappingApproved`. */
+  /** PR-7 (feat/mapping-approvals): redefined to TARGET-SIDE ONLY. The
+   *  pre-PR-7 formula included `unmappedSourceCount`, conflating source-
+   *  side accounting into a denominator that should answer "how many
+   *  target-side mapping slots exist for this project?". Post-PR-7:
+   *
+   *      mappingTotal = primaryTfms + unmappedTargetCount + acknowledgedCount
+   *
+   *  This now matches the visible Mapping page grid count exactly
+   *  (rows there are target-keyed). Source-side accounting moved to
+   *  the source axis on `ProjectStats.source.{decided, total}`.
+   *  Always >= `mappingApproved`. */
   mappingTotal: number
-  /** Source fields with no MS row and no ACK **plus** target fields with
-   *  no primary TFM and no bare-ack TFM. Excluded from `mappingApproved`
-   *  but counted in `mappingTotal`. */
+  /** PR-7: redefined to TARGET-SIDE ONLY for the same reason as
+   *  `mappingTotal` — keep the field internally consistent. Post-PR-7:
+   *
+   *      mappingUnmapped = unmappedTargetCount
+   *
+   *  Source-side unmapped fields are now reflected by
+   *  `ProjectStats.source.total - ProjectStats.source.decided` on the
+   *  source axis. Sub-component of `mappingNeedsReview` (which also
+   *  covers rejected + needs_review TFMs). */
   mappingUnmapped: number
-  /** Primary TFMs (non-rejected, non-bare-ack) with status='needs_review'.
-   *  Surfaced via `ProjectStatsTargetAxis.needsReview` for the consolidated
-   *  Mapping page strip + MC Mapping Coverage card (PR-6). Always
-   *  `<= mappingTotal - mappingApproved - mappingUnmapped`. */
+  /** PR-7: redefined as the residual `mappingTotal - mappingApproved`.
+   *  Pre-PR-7 (added in PR-6): only `primaryTfms.filter(status=
+   *  'needs_review').length`. Post-PR-7 it engulfs:
+   *    - primary TFMs with status='needs_review'
+   *    - rejected primary TFMs
+   *    - unacknowledged unmapped target fields
+   *  i.e. everything on the target axis that isn't approved. Aligns
+   *  the chip math on the Mapping page strip:
+   *  `Approved + Needs Review = Target Fields total`. */
   mappingNeedsReview: number
 
   // ── Transform ──────────────────────────────────────────────────────────
@@ -346,7 +365,6 @@ export function computeProjectStats(inputs: ComputeProjectStatsInputs): ComputeP
     (t) => !(t.is_acknowledged && t.combination_type === null),
   )
   const approvedPrimaryTfms = primaryTfms.filter((t) => t.status === 'approved')
-  const needsReviewPrimaryTfms = primaryTfms.filter((t) => t.status === 'needs_review')
 
   const mappedSourceIds = new Set<string>()
   for (const tfm of primaryTfms) {
@@ -367,14 +385,19 @@ export function computeProjectStats(inputs: ComputeProjectStatsInputs): ComputeP
     ...targetAckFieldIds,
   ])
 
-  let unmappedSourceCount = 0
   let unmappedTargetCount = 0
   let acknowledgedCount = 0
 
+  // Source-side fields contribute ONLY to `acknowledgedCount` post-PR-7
+  // (source-side acks still count toward the target-side denominator
+  // because they represent "this source field is decided" — the legacy
+  // semantics, preserved). Source-side UNMAPPED fields no longer
+  // contribute anywhere here; the source axis is accounted for
+  // separately on `ProjectStats.source.{decided,total}` in
+  // `rollupProjectStats`.
   for (const f of sourceFields) {
-    if (!mappedSourceIds.has(f.id)) {
-      if (acknowledgedFieldIds.has(f.id)) acknowledgedCount++
-      else unmappedSourceCount++
+    if (!mappedSourceIds.has(f.id) && acknowledgedFieldIds.has(f.id)) {
+      acknowledgedCount++
     }
   }
   for (const f of targetFields) {
@@ -384,11 +407,22 @@ export function computeProjectStats(inputs: ComputeProjectStatsInputs): ComputeP
     }
   }
 
+  // PR-7: target-side-only accounting for `mappingTotal` and
+  // `mappingUnmapped`. `unmappedSourceCount` is no longer folded into
+  // either field — it conflated the source axis into target-side
+  // denominators and inflated `mappingTotal` by ~the gap between
+  // `source.total` and `source.decided`. Source-side accounting lives
+  // on `ProjectStats.source.{decided, total}` exclusively.
+  //
+  // `mappingNeedsReview` is the residual: every target-side slot that
+  // isn't approved, which (under the same primary-vs-bare-ack logic
+  // as `mappingApproved`) maps to needs_review primary TFMs +
+  // rejected primary TFMs + unacknowledged unmapped target fields.
   const mappingTotal =
-    primaryTfms.length + unmappedSourceCount + unmappedTargetCount + acknowledgedCount
+    primaryTfms.length + unmappedTargetCount + acknowledgedCount
   const mappingApproved = approvedPrimaryTfms.length + acknowledgedCount
-  const mappingUnmapped = unmappedSourceCount + unmappedTargetCount
-  const mappingNeedsReview = needsReviewPrimaryTfms.length
+  const mappingUnmapped = unmappedTargetCount
+  const mappingNeedsReview = mappingTotal - mappingApproved
 
   // ── Transform scope ────────────────────────────────────────────────────
   //

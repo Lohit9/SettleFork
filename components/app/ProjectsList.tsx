@@ -171,12 +171,13 @@ export function ProjectCard({
             data-testid="project-stats-row"
             className="flex items-center gap-0 text-xs text-gray-500 flex-shrink-0"
           >
+            {/* PR-7 (feat/mapping-approvals): "Mapped" → "Mapping Approvals"
+                + dropped the Sources stat. The tile is space-constrained;
+                Source Fields coverage lives on the MC Mapping Coverage card
+                and the Mapping page strip where there's room for both axes.
+                Tile reduces to the highest-signal numerator per surface. */}
             <span data-testid="stat-target">
-              Mapped: {stats.target.approved}/{stats.target.total} fields
-            </span>
-            <span className="mx-2 text-gray-300">|</span>
-            <span data-testid="stat-source">
-              Sources: {stats.source.decided}/{stats.source.total}
+              Mapping Approvals: {stats.target.approved}/{stats.target.total}
             </span>
             <span className="mx-2 text-gray-300">|</span>
             <span data-testid="stat-transforms">
