@@ -27,6 +27,11 @@ function makeMockAdmin(opts: {
   insertResolves?: Record<string, { data: { id: string }[]; error: null } | { data: null; error: { message: string } }>
   upsertResolves?: Record<string, { data: { id: string; target_field_id?: string }[]; error: null } | { data: null; error: { message: string } }>
   deleteResolves?: Record<string, { data: null; error: null } | { data: null; error: { message: string } }>
+  // INF-45: select() chain support — needed for the persistMappingSources
+  // pass which batch-fetches fields.table_id by source_field_id. Same
+  // chain shape as the other ops; resolves to { data, error }. Default
+  // is empty data on any unmapped key.
+  selectResolves?: Record<string, { data: { id: string; table_id: string }[]; error: null } | { data: null; error: { message: string } }>
 }) {
   const calls: ChainCall[] = []
 
@@ -68,6 +73,16 @@ function makeMockAdmin(opts: {
           const key = `${table}.delete`
           const resolve = opts.deleteResolves?.[key] ?? { data: null, error: null }
           return buildChain(table, 'delete', () => resolve)
+        },
+        select: (...args: unknown[]) => {
+          // INF-45: top-level select() (no preceding insert/upsert/delete).
+          // Used by persistMappingSources to batch-fetch fields.table_id
+          // for source_table_id resolution. The chain returned here
+          // accepts .in('id', [...]) and resolves to selectResolves entry.
+          calls.push({ table, method: 'select', args })
+          const key = `${table}.select`
+          const resolve = opts.selectResolves?.[key] ?? { data: [], error: null }
+          return buildChain(table, 'select', () => resolve)
         },
       }),
     },
@@ -423,5 +438,203 @@ describe('persistPathDOutput — empty sections', () => {
     // project_notes always counts as 1 insert (markdown body)
     expect(result.project_notes.status).toBe('inserted')
     if (result.project_notes.status === 'inserted') expect(result.project_notes.count).toBe(1)
+  })
+})
+
+// ─── INF-45 regression guard: mapping_sources persistence ────────────────────
+//
+// Pre-INF-45 the TFM UPSERT in Pass 2 silently dropped
+// MappingPayload.source_field_ids — every Path D run wrote TFM shells with
+// no children rows in mapping_sources, leaving the UI to render every
+// Path D-generated mapping as "—" (no source).
+//
+// These tests pin the contract: when a mapping has non-empty
+// source_field_ids, the persistence layer MUST insert one mapping_sources
+// row per source field, with the correct target_field_mapping_id,
+// source_field_id, source_table_id, and ordinal.
+//
+// A future refactor that drops the Pass 2.5 wiring or the persistMappingSources
+// function would fail Test 1 (the load-bearing positive case) immediately.
+
+const INF45_TARGET_FIELD_ID = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'
+const INF45_TFM_ID = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb'
+const INF45_SOURCE_A = 'cccccccc-cccc-4ccc-8ccc-cccccccccccc'
+const INF45_SOURCE_B = 'dddddddd-dddd-4ddd-8ddd-dddddddddddd'
+const INF45_SOURCE_TABLE_A = 'eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee'
+const INF45_SOURCE_TABLE_B = 'ffffffff-ffff-4fff-8fff-ffffffffffff'
+
+function buildInf45Parsed(sourceFieldIds: string[]): PathDParsedOutput {
+  return {
+    mappings: {
+      status: 'parsed_ok',
+      data: [
+        {
+          target_field_id: INF45_TARGET_FIELD_ID,
+          source_field_ids: sourceFieldIds,
+          combination_type: sourceFieldIds.length > 1 ? 'concat_space' : 'single',
+          combination_sql: null,
+          ai_reasoning: 'INF-45 fixture',
+          transformation_intent: 'Identity.',
+          mapping_cardinality: '1:1',
+          dedup_required: false,
+          dedup_strategy: null,
+          data_quality_flag_indices: [],
+          confidence: 0.9,
+          status: 'needs_review',
+        },
+      ],
+    },
+    coverage: { status: 'parsed_ok', data: [] },
+    decisions: { status: 'parsed_ok', data: [] },
+    lookup_tables: { status: 'parsed_ok', data: [] },
+    data_quality: { status: 'parsed_ok', data: [] },
+    inferred_targets: { status: 'parsed_ok', data: [] },
+    project_notes: { status: 'parsed_ok', data: 'INF-45 notes' },
+  }
+}
+
+function inf45MockAdminWithFields(fieldRows: { id: string; table_id: string }[]) {
+  return makeMockAdmin({
+    upsertResolves: {
+      'target_field_mappings.upsert': {
+        data: [{ id: INF45_TFM_ID, target_field_id: INF45_TARGET_FIELD_ID }],
+        error: null,
+      },
+    },
+    selectResolves: {
+      'fields.select': { data: fieldRows, error: null },
+    },
+  })
+}
+
+describe('persistPathDOutput — INF-45 mapping_sources regression guard', () => {
+  it('positive — writes one mapping_sources row per source_field_id, with correct ordinals', async () => {
+    const mockResult = inf45MockAdminWithFields([
+      { id: INF45_SOURCE_A, table_id: INF45_SOURCE_TABLE_A },
+      { id: INF45_SOURCE_B, table_id: INF45_SOURCE_TABLE_B },
+    ])
+
+    const result = await persistPathDOutput({
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      supabaseAdmin: mockResult.admin as any,
+      projectId: PROJECT_ID,
+      userId: USER_ID,
+      experimentRunId: RUN_ID,
+      parsed: buildInf45Parsed([INF45_SOURCE_A, INF45_SOURCE_B]),
+    })
+
+    // Result section reports inserted with count = number of source rows.
+    expect(result.mapping_sources.status).toBe('inserted')
+    if (result.mapping_sources.status === 'inserted') {
+      expect(result.mapping_sources.count).toBe(2)
+    }
+
+    // Mock saw the insert call with 2 rows; verify shape per row.
+    const msInsert = mockResult.calls.find(
+      (c) => c.table === 'mapping_sources' && c.method === 'insert',
+    )
+    expect(msInsert).toBeDefined()
+    const rows = msInsert!.args[0] as Array<{
+      target_field_mapping_id: string
+      source_field_id: string
+      source_table_id: string
+      ordinal: number
+    }>
+    expect(rows).toHaveLength(2)
+
+    // Row 0 — primary source, ordinal 0
+    expect(rows[0]!.target_field_mapping_id).toBe(INF45_TFM_ID)
+    expect(rows[0]!.source_field_id).toBe(INF45_SOURCE_A)
+    expect(rows[0]!.source_table_id).toBe(INF45_SOURCE_TABLE_A)
+    expect(rows[0]!.ordinal).toBe(0)
+
+    // Row 1 — contributor source, ordinal 1 (preserves emit order)
+    expect(rows[1]!.target_field_mapping_id).toBe(INF45_TFM_ID)
+    expect(rows[1]!.source_field_id).toBe(INF45_SOURCE_B)
+    expect(rows[1]!.source_table_id).toBe(INF45_SOURCE_TABLE_B)
+    expect(rows[1]!.ordinal).toBe(1)
+  })
+
+  it('negative — empty source_field_ids array does NOT trigger mapping_sources insert', async () => {
+    // Path D may emit a mapping with zero sources (rare edge case — would
+    // be a value-assignment-shaped mapping in Path B terms). The
+    // persistence pass must short-circuit cleanly: no fields fetch, no
+    // delete, no insert.
+    const mockResult = inf45MockAdminWithFields([])
+
+    const result = await persistPathDOutput({
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      supabaseAdmin: mockResult.admin as any,
+      projectId: PROJECT_ID,
+      userId: USER_ID,
+      experimentRunId: RUN_ID,
+      parsed: buildInf45Parsed([]),
+    })
+
+    expect(result.mapping_sources.status).toBe('inserted')
+    if (result.mapping_sources.status === 'inserted') {
+      expect(result.mapping_sources.count).toBe(0)
+    }
+
+    // Verify the early-return short-circuit: no mapping_sources insert,
+    // no mapping_sources delete, no fields select. The upstream TFM
+    // upsert still happened, but Pass 2.5 produced zero side effects.
+    const msInsert = mockResult.calls.find(
+      (c) => c.table === 'mapping_sources' && c.method === 'insert',
+    )
+    expect(msInsert).toBeUndefined()
+    const msDelete = mockResult.calls.find(
+      (c) => c.table === 'mapping_sources' && c.method === 'delete',
+    )
+    expect(msDelete).toBeUndefined()
+    const fieldsSelect = mockResult.calls.find(
+      (c) => c.table === 'fields' && c.method === 'select',
+    )
+    expect(fieldsSelect).toBeUndefined()
+  })
+
+  it('re-run idempotency — DELETE precedes INSERT and is filtered to upserted TFM ids', async () => {
+    // The TFM UPSERT preserves ids across runs. mapping_sources
+    // therefore must explicitly clear stale rows before inserting fresh
+    // ones — otherwise a re-run that emits fewer sources for a TFM
+    // would leave orphan associations behind. This test pins the
+    // DELETE-before-INSERT order AND verifies the DELETE is scoped to
+    // the upserted TFM ids (not project-wide). A future refactor that
+    // drops the DELETE step would fail this test.
+    const mockResult = inf45MockAdminWithFields([
+      { id: INF45_SOURCE_A, table_id: INF45_SOURCE_TABLE_A },
+    ])
+
+    await persistPathDOutput({
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      supabaseAdmin: mockResult.admin as any,
+      projectId: PROJECT_ID,
+      userId: USER_ID,
+      experimentRunId: RUN_ID,
+      parsed: buildInf45Parsed([INF45_SOURCE_A]),
+    })
+
+    const calls = mockResult.calls
+    const msDeleteIdx = calls.findIndex(
+      (c) => c.table === 'mapping_sources' && c.method === 'delete',
+    )
+    const msDeleteFilterIdx = calls.findIndex(
+      (c) => c.table === 'mapping_sources' && c.method === 'delete.in',
+    )
+    const msInsertIdx = calls.findIndex(
+      (c) => c.table === 'mapping_sources' && c.method === 'insert',
+    )
+
+    // Order invariant: delete → delete.in → insert.
+    expect(msDeleteIdx).toBeGreaterThanOrEqual(0)
+    expect(msDeleteFilterIdx).toBeGreaterThan(msDeleteIdx)
+    expect(msInsertIdx).toBeGreaterThan(msDeleteFilterIdx)
+
+    // Filter scope: the .in() filter targets the upserted TFM ids
+    // (NOT a blanket project-wide delete). Verifies the surgical
+    // scoping that prevents accidental cross-project deletion.
+    const filterCall = calls[msDeleteFilterIdx]!
+    expect(filterCall.args[0]).toBe('target_field_mapping_id')
+    expect(filterCall.args[1]).toEqual([INF45_TFM_ID])
   })
 })
