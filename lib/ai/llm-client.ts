@@ -74,6 +74,7 @@ export type LLMFeature =
   | 'eval_fix_options' // reserved — wired in Path 2 PR 2 B-2
   | 'eval_transform' // reserved — wired in PR 11
   | 'eval_nl_to_sql' // reserved — wired in PR 11
+  | 'eval_path_d' // wired by Sub-PR 6 path-d eval runner — see lib/ai/path-d-eval/runner.ts
 
 // ─── Public option + result shapes ────────────────────────────────────────────
 

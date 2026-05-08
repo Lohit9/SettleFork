@@ -1,0 +1,43 @@
+{
+  "tables": [
+    {
+      "id": "a3000000-0000-4000-8000-000000000001",
+      "name": "mailchimp_subscribers",
+      "fields": [
+        { "id": "f3000000-0000-4000-8000-000000000001", "name": "subscriber_id",  "data_type": "varchar(40)",  "is_nullable": false, "is_primary_key": true,  "description": "Mailchimp internal subscriber id" },
+        { "id": "f3000000-0000-4000-8000-000000000002", "name": "email_address",  "data_type": "varchar(255)", "is_nullable": false, "description": "Subscriber email; UNIQUE within mailchimp" },
+        { "id": "f3000000-0000-4000-8000-000000000003", "name": "first_name",     "data_type": "varchar(60)",  "is_nullable": true,  "description": "First name from signup form" },
+        { "id": "f3000000-0000-4000-8000-000000000004", "name": "last_name",      "data_type": "varchar(60)",  "is_nullable": true,  "description": "Last name from signup form" },
+        { "id": "f3000000-0000-4000-8000-000000000005", "name": "subscribed_at",  "data_type": "timestamptz",  "is_nullable": false, "description": "When the user subscribed" },
+        { "id": "f3000000-0000-4000-8000-000000000006", "name": "unsubscribed_at","data_type": "timestamptz",  "is_nullable": true,  "description": "Unsubscribe timestamp; NULL if active" },
+        { "id": "f3000000-0000-4000-8000-000000000007", "name": "tags",           "data_type": "varchar(500)", "is_nullable": true,  "description": "Comma-separated tag list" }
+      ]
+    },
+    {
+      "id": "a3000000-0000-4000-8000-000000000002",
+      "name": "marketo_leads",
+      "fields": [
+        { "id": "f3000000-0000-4000-8000-000000000020", "name": "id",             "data_type": "bigint",       "is_nullable": false, "is_primary_key": true,  "description": "Marketo Lead Id" },
+        { "id": "f3000000-0000-4000-8000-000000000021", "name": "Email",          "data_type": "varchar(255)", "is_nullable": false, "description": "Lead email" },
+        { "id": "f3000000-0000-4000-8000-000000000022", "name": "FirstName",      "data_type": "varchar(50)",  "is_nullable": true,  "description": "First name" },
+        { "id": "f3000000-0000-4000-8000-000000000023", "name": "LastName",       "data_type": "varchar(50)",  "is_nullable": true,  "description": "Last name" },
+        { "id": "f3000000-0000-4000-8000-000000000024", "name": "Company",        "data_type": "varchar(150)", "is_nullable": true,  "description": "Company name" },
+        { "id": "f3000000-0000-4000-8000-000000000025", "name": "createdAt",      "data_type": "timestamptz",  "is_nullable": false, "description": "Marketo creation timestamp" },
+        { "id": "f3000000-0000-4000-8000-000000000026", "name": "leadScore",      "data_type": "integer",      "is_nullable": true,  "description": "Marketo lead score (0-100)" },
+        { "id": "f3000000-0000-4000-8000-000000000027", "name": "leadSource",     "data_type": "varchar(40)",  "is_nullable": true,  "description": "Acquisition source" }
+      ]
+    },
+    {
+      "id": "a3000000-0000-4000-8000-000000000003",
+      "name": "manual_csv_imports",
+      "fields": [
+        { "id": "f3000000-0000-4000-8000-000000000040", "name": "row_id",         "data_type": "uuid",         "is_nullable": false, "is_primary_key": true,  "description": "Synthesised row id" },
+        { "id": "f3000000-0000-4000-8000-000000000041", "name": "email",          "data_type": "varchar(255)", "is_nullable": false, "description": "Lead email" },
+        { "id": "f3000000-0000-4000-8000-000000000042", "name": "name_full",      "data_type": "varchar(150)", "is_nullable": true,  "description": "Full name; not split into first/last" },
+        { "id": "f3000000-0000-4000-8000-000000000043", "name": "company",        "data_type": "varchar(150)", "is_nullable": true,  "description": "Company name" },
+        { "id": "f3000000-0000-4000-8000-000000000044", "name": "import_date",    "data_type": "date",         "is_nullable": false, "description": "When the CSV was uploaded" },
+        { "id": "f3000000-0000-4000-8000-000000000045", "name": "campaign_name",  "data_type": "varchar(120)", "is_nullable": true,  "description": "Source campaign label" }
+      ]
+    }
+  ]
+}

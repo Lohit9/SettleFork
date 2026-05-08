@@ -1,0 +1,33 @@
+{
+  "f2000000-0000-4000-8000-000000000004": [
+    { "value": "RM",  "count": 142 },
+    { "value": "FG",  "count": 89  },
+    { "value": "WIP", "count": 31  },
+    { "value": "OBS", "count": 8   },
+    { "value": "rm",  "count": 3   }
+  ],
+  "f2000000-0000-4000-8000-000000000005": [
+    { "value": "EA",  "count": 110 },
+    { "value": "PCS", "count": 45  },
+    { "value": "GRM", "count": 32  },
+    { "value": "KGM", "count": 28  },
+    { "value": "LBS", "count": 21  },
+    { "value": "MTR", "count": 18  },
+    { "value": "FT",  "count": 12  },
+    { "value": "GAL", "count": 6   },
+    { "value": "L",   "count": 3   }
+  ],
+  "f2000000-0000-4000-8000-000000000013": [
+    { "value": "1500.00",  "count": 8  },
+    { "value": "750.00",   "count": 12 },
+    { "value": "250.00",   "count": 18 },
+    { "value": "0.00",     "count": 4  },
+    { "value": "-50.00",   "count": 2  }
+  ],
+  "f2000000-0000-4000-8000-000000000022": [
+    { "value": "0.00",     "count": 18 },
+    { "value": "100.00",   "count": 24 },
+    { "value": "500.00",   "count": 11 },
+    { "value": "-12.00",   "count": 3  }
+  ]
+}
