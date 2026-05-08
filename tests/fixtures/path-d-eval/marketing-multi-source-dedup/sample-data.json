@@ -1,0 +1,31 @@
+{
+  "f3000000-0000-4000-8000-000000000002": [
+    { "value": "alice@acme.com",      "count": 1 },
+    { "value": "bob@example.io",      "count": 1 },
+    { "value": "carol@megacorp.net",  "count": 1 }
+  ],
+  "f3000000-0000-4000-8000-000000000021": [
+    { "value": "alice@acme.com",      "count": 1 },
+    { "value": "carol@megacorp.net",  "count": 1 },
+    { "value": "dave@startup.co",     "count": 1 },
+    { "value": "Carol@MegaCorp.net",  "count": 1 }
+  ],
+  "f3000000-0000-4000-8000-000000000041": [
+    { "value": "alice@acme.com",      "count": 1 },
+    { "value": "frank@vendor.org",    "count": 1 },
+    { "value": "carol@megacorp.net",  "count": 1 },
+    { "value": "alice@acme.com",      "count": 1 }
+  ],
+  "f3000000-0000-4000-8000-000000000007": [
+    { "value": "newsletter, beta",    "count": 8  },
+    { "value": "newsletter",          "count": 12 },
+    { "value": "vip, partner",        "count": 3  },
+    { "value": "",                    "count": 4  }
+  ],
+  "f3000000-0000-4000-8000-000000000026": [
+    { "value": "85", "count": 4 },
+    { "value": "60", "count": 7 },
+    { "value": "30", "count": 9 },
+    { "value": "10", "count": 6 }
+  ]
+}

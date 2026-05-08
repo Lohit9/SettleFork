@@ -635,3 +635,61 @@ These are not pinned in code yet because a single capture run is insufficient ev
 **Related:** Sub-PR 4a (PR #97), Sub-PR 4b (this PR).
 
 ---
+
+## INF-39 — Consolidate Path D eval framework with the Phase 1 eval framework
+
+**Status:** OPEN
+**Filed:** 2026-05-08
+**Description:**
+Sub-PR 6 ships a parallel Path D eval framework at `lib/ai/path-d-eval/`
+(scorer + runner + types + 3 fixtures + docs) rather than extending the
+Phase 1 eval framework already at `lib/eval/`. The two coexist:
+
+- `lib/eval/` — Phase 1 framework. Per-example "one short LLM call →
+  score" model. Datasets at `tests/eval/datasets/<name>/`. Scorers per
+  task (mapping, mapping-suggestion, validation-rule, quality-issues,
+  fix-options, extracted-patterns, multi-agent-vote, critic-output).
+  Wired through `lib/eval/runner.ts` with synthetic-project
+  create/teardown, llm_calls cache, JSON + stdout reporters.
+- `lib/ai/path-d-eval/` — Sub-PR 6 framework. Monolithic
+  "one ~5-minute streaming call → 7-section output → score". Fixtures at
+  `tests/fixtures/path-d-eval/<name>/`. Single scorer covering all 8
+  Path D dimensions. Self-contained runner that calls
+  `callLLMStreaming` directly (no synthetic-project machinery, no
+  cache).
+
+The architectural mismatch surfaced during Sub-PR 6 Stop 1: Path D's
+shape (one big streaming call producing 7 sections against a whole
+project schema) didn't fit the existing per-example "short call → score"
+model without significant `runner.ts` restructuring. Parallel was the
+right v0 call.
+
+Both frameworks should be reconsidered for consolidation once Path D's
+eval shape stabilises through Phase C iteration. Possible directions:
+
+  - Extend `lib/eval/` to support a `path-d` task type with its own
+    runner dispatch, sharing reporters / cache / JSON output format.
+  - Generalise the loader to handle directory-of-files fixtures
+    alongside the JSON-per-example shape.
+  - Keep them parallel indefinitely — accept the duplication if Path D's
+    eval surface diverges meaningfully from Phase 1 tasks.
+
+**Acceptance criteria:** After 2-3 Phase C iteration cycles complete and
+the Path D eval surface (scoring dimensions, weights, fixture format)
+has stabilised, audit the duplication between `lib/eval/` and
+`lib/ai/path-d-eval/`. If the two have shared structural seams
+(reporter format, cost-tracking, cache lookup, etc.), extract them into
+a shared layer; if Path D's shape stays distinct, document the
+intentional split and add cross-references.
+
+**Code references:**
+
+- `lib/eval/types.ts` — Phase 1 framework types
+- `lib/eval/runner.ts` — Phase 1 runner
+- `lib/ai/path-d-eval/types.ts` — Sub-PR 6 framework types
+- `lib/ai/path-d-eval/runner.ts` — Sub-PR 6 runner
+- `docs/path-d-eval/README.md` — Sub-PR 6 fixture-authoring guide
+
+**Related:** Sub-PR 6 (this PR), Phase 1 PR #10 (original eval framework).
+
+---

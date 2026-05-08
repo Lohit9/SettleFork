@@ -1,0 +1,35 @@
+{
+  "f1000000-0000-4000-8000-000000000004": [
+    { "value": "alice@acme.com",       "count": 1 },
+    { "value": "bob@example.io",       "count": 1 },
+    { "value": "carol@megacorp.net",   "count": 1 },
+    { "value": "alice@acme.com",       "count": 1 },
+    { "value": "dave@startup.co",      "count": 1 },
+    { "value": "noemail",              "count": 1 },
+    { "value": "eve@megacorp.net",     "count": 1 }
+  ],
+  "f1000000-0000-4000-8000-000000000005": [
+    { "value": "(555) 123-4567",       "count": 2 },
+    { "value": "+1-555-234-5678",      "count": 1 },
+    { "value": "555.345.6789",         "count": 1 },
+    { "value": "5554567890",           "count": 1 }
+  ],
+  "f1000000-0000-4000-8000-000000000008": [
+    { "value": "Open - Not Contacted", "count": 12 },
+    { "value": "Working - Contacted",  "count": 8 },
+    { "value": "Closed - Converted",   "count": 5 },
+    { "value": "Closed - Not Converted", "count": 3 }
+  ],
+  "f1000000-0000-4000-8000-000000000009": [
+    { "value": "Web",                  "count": 14 },
+    { "value": "Referral",             "count": 6 },
+    { "value": "Trade Show",           "count": 4 },
+    { "value": "Cold Call",            "count": 2 }
+  ],
+  "f1000000-0000-4000-8000-000000000010": [
+    { "value": "Software",             "count": 10 },
+    { "value": "Manufacturing",        "count": 6 },
+    { "value": "Healthcare",           "count": 5 },
+    { "value": "Financial Services",   "count": 4 }
+  ]
+}

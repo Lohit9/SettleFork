@@ -1,0 +1,23 @@
+{
+  "tables": [
+    {
+      "id": "b1000000-0000-4000-8000-000000000001",
+      "name": "contacts",
+      "fields": [
+        { "id": "c1000000-0000-4000-8000-000000000001", "name": "id",                 "data_type": "uuid",         "is_nullable": false, "is_primary_key": true,  "description": "HubSpot Contact ID (auto-generated)" },
+        { "id": "c1000000-0000-4000-8000-000000000002", "name": "fullname",           "data_type": "varchar(150)", "is_nullable": false, "description": "Display name; combine first + last" },
+        { "id": "c1000000-0000-4000-8000-000000000003", "name": "email_primary",      "data_type": "varchar(255)", "is_nullable": false, "description": "Primary email — UNIQUE, lowercased" },
+        { "id": "c1000000-0000-4000-8000-000000000004", "name": "phone_primary",      "data_type": "varchar(40)",  "is_nullable": true,  "description": "Phone in E.164 format" },
+        { "id": "c1000000-0000-4000-8000-000000000005", "name": "company_name",       "data_type": "varchar(255)", "is_nullable": true,  "description": "Company / account this contact belongs to" },
+        { "id": "c1000000-0000-4000-8000-000000000006", "name": "job_title",          "data_type": "varchar(128)", "is_nullable": true,  "description": "Title at company" },
+        { "id": "c1000000-0000-4000-8000-000000000007", "name": "lifecycle_stage",    "data_type": "varchar(40)",  "is_nullable": false, "description": "HubSpot lifecycle stage (subscriber/lead/marketingqualifiedlead/salesqualifiedlead/opportunity/customer/evangelist/other)" },
+        { "id": "c1000000-0000-4000-8000-000000000008", "name": "lead_source",        "data_type": "varchar(40)",  "is_nullable": true,  "description": "Original source channel" },
+        { "id": "c1000000-0000-4000-8000-000000000009", "name": "industry_segment",   "data_type": "varchar(40)",  "is_nullable": true,  "description": "Industry vertical for segmentation" },
+        { "id": "c1000000-0000-4000-8000-000000000010", "name": "annual_revenue_usd", "data_type": "numeric(18,2)","is_nullable": true,  "description": "Annual revenue in USD" },
+        { "id": "c1000000-0000-4000-8000-000000000011", "name": "is_active",          "data_type": "boolean",      "is_nullable": false, "default_value": "TRUE", "description": "Soft-delete flag; default true on import" },
+        { "id": "c1000000-0000-4000-8000-000000000012", "name": "created_at",         "data_type": "timestamptz",  "is_nullable": false, "description": "Creation timestamp; preserve from source" },
+        { "id": "c1000000-0000-4000-8000-000000000013", "name": "owner_email",        "data_type": "varchar(255)", "is_nullable": true,  "description": "Email of HubSpot user assigned as owner (resolved from user lookup)" }
+      ]
+    }
+  ]
+}

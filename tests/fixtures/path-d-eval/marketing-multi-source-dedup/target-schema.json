@@ -1,0 +1,21 @@
+{
+  "tables": [
+    {
+      "id": "b3000000-0000-4000-8000-000000000001",
+      "name": "unified_contacts",
+      "fields": [
+        { "id": "c3000000-0000-4000-8000-000000000001", "name": "id",                "data_type": "uuid",         "is_nullable": false, "is_primary_key": true,  "description": "Generated UUID; primary key" },
+        { "id": "c3000000-0000-4000-8000-000000000002", "name": "email",             "data_type": "varchar(255)", "is_nullable": false, "description": "Lowercased email; UNIQUE — dedup key across all sources" },
+        { "id": "c3000000-0000-4000-8000-000000000003", "name": "first_name",        "data_type": "varchar(80)",  "is_nullable": true,  "description": "First name; pick most-recent non-null across sources" },
+        { "id": "c3000000-0000-4000-8000-000000000004", "name": "last_name",         "data_type": "varchar(80)",  "is_nullable": true,  "description": "Last name; pick most-recent non-null across sources" },
+        { "id": "c3000000-0000-4000-8000-000000000005", "name": "company_name",      "data_type": "varchar(150)", "is_nullable": true,  "description": "Company; pick from Marketo or CSV (Mailchimp doesn't have it)" },
+        { "id": "c3000000-0000-4000-8000-000000000006", "name": "first_seen_at",     "data_type": "timestamptz",  "is_nullable": false, "description": "Earliest known timestamp across all sources (MIN)" },
+        { "id": "c3000000-0000-4000-8000-000000000007", "name": "lead_score",        "data_type": "integer",      "is_nullable": true,  "description": "Marketo lead score; null if contact only exists in Mailchimp/CSV" },
+        { "id": "c3000000-0000-4000-8000-000000000008", "name": "subscription_status","data_type": "varchar(20)", "is_nullable": false, "default_value": "'subscribed'", "description": "subscribed / unsubscribed / unknown" },
+        { "id": "c3000000-0000-4000-8000-000000000009", "name": "primary_source",    "data_type": "varchar(40)",  "is_nullable": false, "description": "Highest-priority source: marketo > mailchimp > csv" },
+        { "id": "c3000000-0000-4000-8000-000000000010", "name": "all_sources",       "data_type": "varchar(120)", "is_nullable": false, "description": "Comma-separated list of source names contributing to this contact" },
+        { "id": "c3000000-0000-4000-8000-000000000011", "name": "tag_list",          "data_type": "varchar(500)", "is_nullable": true,  "description": "Mailchimp tags; concat of all tag values found" }
+      ]
+    }
+  ]
+}

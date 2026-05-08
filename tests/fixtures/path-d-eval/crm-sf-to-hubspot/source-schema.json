@@ -1,0 +1,24 @@
+{
+  "tables": [
+    {
+      "id": "a1000000-0000-4000-8000-000000000001",
+      "name": "leads",
+      "fields": [
+        { "id": "f1000000-0000-4000-8000-000000000001", "name": "id",            "data_type": "uuid",         "is_nullable": false, "is_primary_key": true,  "description": "Salesforce Lead Id" },
+        { "id": "f1000000-0000-4000-8000-000000000002", "name": "first_name",    "data_type": "varchar(40)",  "is_nullable": true,  "description": "Given name" },
+        { "id": "f1000000-0000-4000-8000-000000000003", "name": "last_name",     "data_type": "varchar(80)",  "is_nullable": true,  "description": "Family name" },
+        { "id": "f1000000-0000-4000-8000-000000000004", "name": "email",         "data_type": "varchar(80)",  "is_nullable": true,  "description": "Lead email — primary contact channel" },
+        { "id": "f1000000-0000-4000-8000-000000000005", "name": "phone",         "data_type": "varchar(40)",  "is_nullable": true,  "description": "Phone number, free-form" },
+        { "id": "f1000000-0000-4000-8000-000000000006", "name": "company",       "data_type": "varchar(255)", "is_nullable": true,  "description": "Account name the lead is associated with" },
+        { "id": "f1000000-0000-4000-8000-000000000007", "name": "title",         "data_type": "varchar(128)", "is_nullable": true,  "description": "Job title" },
+        { "id": "f1000000-0000-4000-8000-000000000008", "name": "status",        "data_type": "varchar(40)",  "is_nullable": false, "description": "Salesforce LeadStatus picklist value" },
+        { "id": "f1000000-0000-4000-8000-000000000009", "name": "lead_source",   "data_type": "varchar(40)",  "is_nullable": true,  "description": "Where the lead came from (Web, Referral, etc.)" },
+        { "id": "f1000000-0000-4000-8000-000000000010", "name": "industry",      "data_type": "varchar(40)",  "is_nullable": true,  "description": "Industry vertical" },
+        { "id": "f1000000-0000-4000-8000-000000000011", "name": "annual_revenue","data_type": "numeric(18,2)","is_nullable": true,  "description": "Estimated annual revenue (USD)" },
+        { "id": "f1000000-0000-4000-8000-000000000012", "name": "is_converted",  "data_type": "boolean",      "is_nullable": false, "description": "True once converted to a Contact" },
+        { "id": "f1000000-0000-4000-8000-000000000013", "name": "created_date",  "data_type": "timestamptz",  "is_nullable": false, "description": "Created at" },
+        { "id": "f1000000-0000-4000-8000-000000000014", "name": "owner_id",      "data_type": "uuid",         "is_nullable": true,  "description": "Salesforce User Id of lead owner", "is_foreign_key": true, "fk_reference": "users.id" }
+      ]
+    }
+  ]
+}
