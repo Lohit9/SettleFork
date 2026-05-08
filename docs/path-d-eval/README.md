@@ -270,6 +270,42 @@ The gold standard. The scorer reads only the typed fields; everything else
 `ai_reasoning`, `transformation_intent`, etc. — those exist for human review
 of the model's actual output, not for scoring.
 
+#### Canonical `decision_type` vocabulary (Phase C iter 1)
+
+The system prompt instructs the model to prefer one of 12 canonical
+`decision_type` values for each decision it surfaces. Fixture
+`expected-output.json` files MUST use these canonical values too — the
+scorer matches case-insensitive exact-string, so a fixture using
+`uom_normalization` won't match a model emitting `value_normalization`.
+
+| canonical | what it covers |
+|---|---|
+| `value_normalization` | converting source values to canonical target form (UOM codes, status enums, case normalization, currency assumptions) |
+| `unit_conversion` | numeric unit conversion (g→kg, cents→dollars) |
+| `enum_mapping` | translating source vocabulary to target via lookup table (LeadStatus → lifecycle_stage, item-type code → label) |
+| `aggregation_strategy` | combining multiple source rows/values into one target (sum across warehouses, source-priority for multi-source dedup) |
+| `duplicate_resolution` | how to dedupe when source has duplicate keys |
+| `default_value` | what to fill when source is null or missing |
+| `scope_filter` | what subset of source data to include/exclude |
+| `external_dependency` | relies on data outside this migration's scope (vendor mapping, user-id resolution) |
+| `data_quality_handling` | how to treat malformed source rows (invalid emails, format violations) |
+| `schema_interpretation` | how to parse a free-form or ambiguous field |
+| `precision_loss` | handling truncation, rounding, type narrowing |
+| `platform_behaviour` | target-platform constraint or expectation (Salesforce-managed timestamps, trigger requirements) |
+
+The model is instructed to use the closest match and only emit a non-canonical
+value (snake_case, ≤3 words) when none fits. When a fixture's expected
+decision genuinely doesn't fit any canonical value, it's acceptable to use
+a custom value in the fixture — but be aware the model is unlikely to
+spontaneously emit the same custom value, so recall on that decision will
+likely be 0 unless the prompt is also tuned to emit it.
+
+The Phase C iter 1 single-trial empirical comparison validated this
+vocabulary: prompt change with strict canonical list raised
+`decision_recall` mean from 0.278 → 0.694 (+0.42) without aggregate
+regression. See the iter 1 commit body (`feat(ai): Phase C iter 1 —
+decision_type vocabulary alignment`) for the per-fixture deltas.
+
 ### Workflow for authoring expected output
 
 The Stop 1 design choice is **Option C — Claude Chat draft → human review**:

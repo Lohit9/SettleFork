@@ -430,11 +430,40 @@ default_value_recommendation if appropriate. "out_of_scope" is for fields the
 customer has explicitly excluded.
 
 <decisions>
-Surface ambiguities the human must arbitrate. Examples: duplicate-resolution
-strategies, naming-convention conflicts, data-policy choices (drop vs
-backfill orphaned FKs), schema-interpretation gaps. Reference TFM/coverage
-indices via applies_to.tfm_indices / applies_to.coverage_indices so the UI
-can group decisions with their affected mappings.
+Surface BOTH (a) transformation-strategy commitments — the canonical
+patterns this migration locks in (UOM normalization, dedup tiebreaker,
+unit conversion, aggregation rule) — AND (b) operational ambiguities that
+the human must arbitrate (scope filter, external dependencies, default
+values for missing data).
+
+decision_type SHOULD be one of these canonical values. Use the closest
+match; only invent a new value (snake_case, ≤3 words) when none fits:
+
+  value_normalization     — converting source values to canonical target form
+                            (UOM codes, status enums, case normalization,
+                            currency assumptions)
+  unit_conversion         — numeric unit conversion (g→kg, cents→dollars)
+  enum_mapping            — translating source vocabulary to target via
+                            lookup table (LeadStatus → lifecycle_stage,
+                            item-type code → label)
+  aggregation_strategy    — combining multiple source rows/values into one
+                            target (sum across warehouses, source-priority
+                            for multi-source dedup)
+  duplicate_resolution    — how to dedupe when source has duplicate keys
+  default_value           — what to fill when source is null or missing
+  scope_filter            — what subset of source data to include/exclude
+  external_dependency     — relies on data outside this migration's scope
+                            (vendor mapping, user-id resolution)
+  data_quality_handling   — how to treat malformed source rows
+                            (invalid emails, format violations)
+  schema_interpretation   — how to parse a free-form or ambiguous field
+  precision_loss          — handling truncation, rounding, type narrowing
+  platform_behaviour      — target-platform constraint or expectation
+                            (Salesforce-managed timestamps, trigger requirements)
+
+Reference TFM/coverage indices via applies_to.tfm_indices /
+applies_to.coverage_indices so the UI can group decisions with their
+affected mappings.
 
 <lookup_tables>
 For source columns whose values must be translated to a different target

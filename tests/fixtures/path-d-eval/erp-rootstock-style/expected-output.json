@@ -1,57 +1,231 @@
 {
-  "_authoring_notes": "Gold-standard expected output for Path D against the ERP (legacy SQL Server → Rootstock) fixture. Authored by Claude Code, reviewed by user at PAUSE #1.",
+  "_authoring_notes": "Gold-standard expected output for Path D against the ERP (legacy SQL Server \u2192 Rootstock) fixture. Authored by Claude Code, reviewed by user at PAUSE #1. [Phase C iter 1] decision_type values remapped to canonical vocabulary (see lib/ai/path-d-system-prompt.ts <decisions> guidance + docs/path-d-eval/README.md). Original mapping: uom_normalization\u2192value_normalization; weight_unit_conversion\u2192unit_conversion; inventory_aggregation\u2192aggregation_strategy; item_type_normalization\u2192enum_mapping.",
   "mappings": [
-    { "target_field_id": "c2000000-0000-4000-8000-000000000001", "source_field_ids": ["f2000000-0000-4000-8000-000000000002"], "combination_type": "single" },
-    { "target_field_id": "c2000000-0000-4000-8000-000000000002", "source_field_ids": ["f2000000-0000-4000-8000-000000000003"], "combination_type": "custom_sql" },
-    { "target_field_id": "c2000000-0000-4000-8000-000000000003", "source_field_ids": ["f2000000-0000-4000-8000-000000000004"], "combination_type": "custom_sql" },
-    { "target_field_id": "c2000000-0000-4000-8000-000000000004", "source_field_ids": ["f2000000-0000-4000-8000-000000000005"], "combination_type": "custom_sql" },
-    { "target_field_id": "c2000000-0000-4000-8000-000000000005", "source_field_ids": ["f2000000-0000-4000-8000-000000000006"], "combination_type": "single" },
-    { "target_field_id": "c2000000-0000-4000-8000-000000000006", "source_field_ids": ["f2000000-0000-4000-8000-000000000007"], "combination_type": "single" },
-    { "target_field_id": "c2000000-0000-4000-8000-000000000007", "source_field_ids": ["f2000000-0000-4000-8000-000000000008"], "combination_type": "single" },
-    { "target_field_id": "c2000000-0000-4000-8000-000000000008", "source_field_ids": ["f2000000-0000-4000-8000-000000000009"], "combination_type": "single" },
-    { "target_field_id": "c2000000-0000-4000-8000-000000000009", "source_field_ids": ["f2000000-0000-4000-8000-000000000010"], "combination_type": "single" },
-    { "target_field_id": "c2000000-0000-4000-8000-000000000010", "source_field_ids": ["f2000000-0000-4000-8000-000000000011"], "combination_type": "single" },
-    { "target_field_id": "c2000000-0000-4000-8000-000000000011", "source_field_ids": ["f2000000-0000-4000-8000-000000000013"], "combination_type": "custom_sql" },
-    { "target_field_id": "c2000000-0000-4000-8000-000000000012", "source_field_ids": ["f2000000-0000-4000-8000-000000000014"], "combination_type": "single" },
-    { "target_field_id": "c2000000-0000-4000-8000-000000000013", "source_field_ids": ["f2000000-0000-4000-8000-000000000015"], "combination_type": "single" },
-    { "target_field_id": "c2000000-0000-4000-8000-000000000014", "source_field_ids": ["f2000000-0000-4000-8000-000000000022"], "combination_type": "custom_sql" },
-    { "target_field_id": "c2000000-0000-4000-8000-000000000015", "source_field_ids": ["f2000000-0000-4000-8000-000000000023"], "combination_type": "custom_sql" },
-    { "target_field_id": "c2000000-0000-4000-8000-000000000016", "source_field_ids": ["f2000000-0000-4000-8000-000000000016"], "combination_type": "single" },
-    { "target_field_id": "c2000000-0000-4000-8000-000000000017", "source_field_ids": ["f2000000-0000-4000-8000-000000000017"], "combination_type": "single" }
+    {
+      "target_field_id": "c2000000-0000-4000-8000-000000000001",
+      "source_field_ids": [
+        "f2000000-0000-4000-8000-000000000002"
+      ],
+      "combination_type": "single"
+    },
+    {
+      "target_field_id": "c2000000-0000-4000-8000-000000000002",
+      "source_field_ids": [
+        "f2000000-0000-4000-8000-000000000003"
+      ],
+      "combination_type": "custom_sql"
+    },
+    {
+      "target_field_id": "c2000000-0000-4000-8000-000000000003",
+      "source_field_ids": [
+        "f2000000-0000-4000-8000-000000000004"
+      ],
+      "combination_type": "custom_sql"
+    },
+    {
+      "target_field_id": "c2000000-0000-4000-8000-000000000004",
+      "source_field_ids": [
+        "f2000000-0000-4000-8000-000000000005"
+      ],
+      "combination_type": "custom_sql"
+    },
+    {
+      "target_field_id": "c2000000-0000-4000-8000-000000000005",
+      "source_field_ids": [
+        "f2000000-0000-4000-8000-000000000006"
+      ],
+      "combination_type": "single"
+    },
+    {
+      "target_field_id": "c2000000-0000-4000-8000-000000000006",
+      "source_field_ids": [
+        "f2000000-0000-4000-8000-000000000007"
+      ],
+      "combination_type": "single"
+    },
+    {
+      "target_field_id": "c2000000-0000-4000-8000-000000000007",
+      "source_field_ids": [
+        "f2000000-0000-4000-8000-000000000008"
+      ],
+      "combination_type": "single"
+    },
+    {
+      "target_field_id": "c2000000-0000-4000-8000-000000000008",
+      "source_field_ids": [
+        "f2000000-0000-4000-8000-000000000009"
+      ],
+      "combination_type": "single"
+    },
+    {
+      "target_field_id": "c2000000-0000-4000-8000-000000000009",
+      "source_field_ids": [
+        "f2000000-0000-4000-8000-000000000010"
+      ],
+      "combination_type": "single"
+    },
+    {
+      "target_field_id": "c2000000-0000-4000-8000-000000000010",
+      "source_field_ids": [
+        "f2000000-0000-4000-8000-000000000011"
+      ],
+      "combination_type": "single"
+    },
+    {
+      "target_field_id": "c2000000-0000-4000-8000-000000000011",
+      "source_field_ids": [
+        "f2000000-0000-4000-8000-000000000013"
+      ],
+      "combination_type": "custom_sql"
+    },
+    {
+      "target_field_id": "c2000000-0000-4000-8000-000000000012",
+      "source_field_ids": [
+        "f2000000-0000-4000-8000-000000000014"
+      ],
+      "combination_type": "single"
+    },
+    {
+      "target_field_id": "c2000000-0000-4000-8000-000000000013",
+      "source_field_ids": [
+        "f2000000-0000-4000-8000-000000000015"
+      ],
+      "combination_type": "single"
+    },
+    {
+      "target_field_id": "c2000000-0000-4000-8000-000000000014",
+      "source_field_ids": [
+        "f2000000-0000-4000-8000-000000000022"
+      ],
+      "combination_type": "custom_sql"
+    },
+    {
+      "target_field_id": "c2000000-0000-4000-8000-000000000015",
+      "source_field_ids": [
+        "f2000000-0000-4000-8000-000000000023"
+      ],
+      "combination_type": "custom_sql"
+    },
+    {
+      "target_field_id": "c2000000-0000-4000-8000-000000000016",
+      "source_field_ids": [
+        "f2000000-0000-4000-8000-000000000016"
+      ],
+      "combination_type": "single"
+    },
+    {
+      "target_field_id": "c2000000-0000-4000-8000-000000000017",
+      "source_field_ids": [
+        "f2000000-0000-4000-8000-000000000017"
+      ],
+      "combination_type": "single"
+    }
   ],
   "coverage": [
-    { "target_field_id": "c2000000-0000-4000-8000-000000000001", "coverage_status": "covered" },
-    { "target_field_id": "c2000000-0000-4000-8000-000000000002", "coverage_status": "covered" },
-    { "target_field_id": "c2000000-0000-4000-8000-000000000003", "coverage_status": "covered" },
-    { "target_field_id": "c2000000-0000-4000-8000-000000000004", "coverage_status": "covered" },
-    { "target_field_id": "c2000000-0000-4000-8000-000000000005", "coverage_status": "covered" },
-    { "target_field_id": "c2000000-0000-4000-8000-000000000006", "coverage_status": "covered" },
-    { "target_field_id": "c2000000-0000-4000-8000-000000000007", "coverage_status": "covered" },
-    { "target_field_id": "c2000000-0000-4000-8000-000000000008", "coverage_status": "covered" },
-    { "target_field_id": "c2000000-0000-4000-8000-000000000009", "coverage_status": "covered" },
-    { "target_field_id": "c2000000-0000-4000-8000-000000000010", "coverage_status": "covered" },
-    { "target_field_id": "c2000000-0000-4000-8000-000000000011", "coverage_status": "covered" },
-    { "target_field_id": "c2000000-0000-4000-8000-000000000012", "coverage_status": "covered" },
-    { "target_field_id": "c2000000-0000-4000-8000-000000000013", "coverage_status": "covered" },
-    { "target_field_id": "c2000000-0000-4000-8000-000000000014", "coverage_status": "covered" },
-    { "target_field_id": "c2000000-0000-4000-8000-000000000015", "coverage_status": "covered" },
-    { "target_field_id": "c2000000-0000-4000-8000-000000000016", "coverage_status": "covered" },
-    { "target_field_id": "c2000000-0000-4000-8000-000000000017", "coverage_status": "covered" }
+    {
+      "target_field_id": "c2000000-0000-4000-8000-000000000001",
+      "coverage_status": "covered"
+    },
+    {
+      "target_field_id": "c2000000-0000-4000-8000-000000000002",
+      "coverage_status": "covered"
+    },
+    {
+      "target_field_id": "c2000000-0000-4000-8000-000000000003",
+      "coverage_status": "covered"
+    },
+    {
+      "target_field_id": "c2000000-0000-4000-8000-000000000004",
+      "coverage_status": "covered"
+    },
+    {
+      "target_field_id": "c2000000-0000-4000-8000-000000000005",
+      "coverage_status": "covered"
+    },
+    {
+      "target_field_id": "c2000000-0000-4000-8000-000000000006",
+      "coverage_status": "covered"
+    },
+    {
+      "target_field_id": "c2000000-0000-4000-8000-000000000007",
+      "coverage_status": "covered"
+    },
+    {
+      "target_field_id": "c2000000-0000-4000-8000-000000000008",
+      "coverage_status": "covered"
+    },
+    {
+      "target_field_id": "c2000000-0000-4000-8000-000000000009",
+      "coverage_status": "covered"
+    },
+    {
+      "target_field_id": "c2000000-0000-4000-8000-000000000010",
+      "coverage_status": "covered"
+    },
+    {
+      "target_field_id": "c2000000-0000-4000-8000-000000000011",
+      "coverage_status": "covered"
+    },
+    {
+      "target_field_id": "c2000000-0000-4000-8000-000000000012",
+      "coverage_status": "covered"
+    },
+    {
+      "target_field_id": "c2000000-0000-4000-8000-000000000013",
+      "coverage_status": "covered"
+    },
+    {
+      "target_field_id": "c2000000-0000-4000-8000-000000000014",
+      "coverage_status": "covered"
+    },
+    {
+      "target_field_id": "c2000000-0000-4000-8000-000000000015",
+      "coverage_status": "covered"
+    },
+    {
+      "target_field_id": "c2000000-0000-4000-8000-000000000016",
+      "coverage_status": "covered"
+    },
+    {
+      "target_field_id": "c2000000-0000-4000-8000-000000000017",
+      "coverage_status": "covered"
+    }
   ],
   "decisions": [
-    { "decision_type": "uom_normalization" },
-    { "decision_type": "weight_unit_conversion" },
-    { "decision_type": "inventory_aggregation" },
-    { "decision_type": "item_type_normalization" }
+    {
+      "decision_type": "value_normalization"
+    },
+    {
+      "decision_type": "unit_conversion"
+    },
+    {
+      "decision_type": "aggregation_strategy"
+    },
+    {
+      "decision_type": "enum_mapping"
+    }
   ],
   "lookup_tables": [
-    { "name": "uom_legacy_to_rootstock" },
-    { "name": "item_type_legacy_to_rootstock" }
+    {
+      "name": "uom_legacy_to_rootstock"
+    },
+    {
+      "name": "item_type_legacy_to_rootstock"
+    }
   ],
   "data_quality": [
-    { "source_field_id": "f2000000-0000-4000-8000-000000000004", "category": "case_inconsistency" },
-    { "source_field_id": "f2000000-0000-4000-8000-000000000013", "category": "out_of_range_value" },
-    { "source_field_id": "f2000000-0000-4000-8000-000000000022", "category": "out_of_range_value" }
+    {
+      "source_field_id": "f2000000-0000-4000-8000-000000000004",
+      "category": "case_inconsistency"
+    },
+    {
+      "source_field_id": "f2000000-0000-4000-8000-000000000013",
+      "category": "out_of_range_value"
+    },
+    {
+      "source_field_id": "f2000000-0000-4000-8000-000000000022",
+      "category": "out_of_range_value"
+    }
   ],
   "inferred_targets": [],
   "project_notes_expected": true
