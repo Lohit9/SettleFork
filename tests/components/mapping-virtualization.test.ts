@@ -9,8 +9,15 @@
 // Invariants:
 //   VIRT1.  package.json declares @tanstack/react-virtual as a
 //           runtime dependency.
-//   VIRT2.  TargetTableGroup.tsx imports useWindowVirtualizer from
-//           @tanstack/react-virtual.
+//   VIRT2.  TargetTableGroup.tsx imports useVirtualizer (and NOT
+//           useWindowVirtualizer) from @tanstack/react-virtual.
+//           Updated by PR 111: the page's body scroll container is an
+//           inner `flex-1 overflow-auto` div, not the window — a
+//           window-scoped virtualizer never receives scroll events
+//           and renders only the first viewport's worth of rows
+//           (the original whitespace bug). See
+//           target-table-group-virtualizer.test.tsx for the call-site
+//           regression complement.
 //   VIRT3.  TargetTableGroup carries a row-count threshold constant
 //           (VIRTUALIZATION_THRESHOLD or similar) AND uses it in a
 //           conditional gating the virtualized vs non-virtualized
@@ -58,10 +65,25 @@ describe('[mapping-virtualization] VIRT1-VIRT6 source-level invariants', () => {
     )
   })
 
-  it('VIRT2: TargetTableGroup.tsx imports useWindowVirtualizer from @tanstack/react-virtual', () => {
+  it('VIRT2: TargetTableGroup.tsx imports useVirtualizer (NOT useWindowVirtualizer) from @tanstack/react-virtual', () => {
+    // Positive pin: element-based useVirtualizer is imported.
     expect(TARGET_TABLE_GROUP).toMatch(
-      /import\s+\{[^}]*\buseWindowVirtualizer\b[^}]*\}\s+from\s+['"]@tanstack\/react-virtual['"]/,
+      /import\s+\{[^}]*\buseVirtualizer\b[^}]*\}\s+from\s+['"]@tanstack\/react-virtual['"]/,
     )
+    // Negative pin: useWindowVirtualizer is NOT imported and is NOT
+    // invoked anywhere. Belt-and-suspenders against a partial revert
+    // that re-adds the window hook alongside the element hook. The
+    // hook name is allowed to appear in comments (the file documents
+    // why useWindowVirtualizer was abandoned), so we pin import +
+    // call shapes rather than the bare identifier.
+    expect(TARGET_TABLE_GROUP).not.toMatch(
+      /import\s+\{[^}]*\buseWindowVirtualizer\b/,
+    )
+    expect(TARGET_TABLE_GROUP).not.toMatch(/\buseWindowVirtualizer\s*\(/)
+    // The virtualizer call site MUST configure getScrollElement so it
+    // attaches to the body scroll container threaded down from
+    // MappingContent.
+    expect(TARGET_TABLE_GROUP).toMatch(/\bgetScrollElement\s*:/)
   })
 
   it('VIRT3: TargetTableGroup carries a row-count threshold constant AND uses it in a conditional gating the virtualizer path', () => {
