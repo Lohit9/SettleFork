@@ -1,5 +1,5 @@
 {
-  "_authoring_notes": "Gold-standard expected output for Path D against the ERP (legacy SQL Server \u2192 Rootstock) fixture. Authored by Claude Code, reviewed by user at PAUSE #1. [Phase C iter 1] decision_type values remapped to canonical vocabulary (see lib/ai/path-d-system-prompt.ts <decisions> guidance + docs/path-d-eval/README.md). Original mapping: uom_normalization\u2192value_normalization; weight_unit_conversion\u2192unit_conversion; inventory_aggregation\u2192aggregation_strategy; item_type_normalization\u2192enum_mapping.",
+  "_authoring_notes": "Gold-standard expected output for Path D against the ERP (legacy SQL Server \u2192 Rootstock) fixture. Authored by Claude Code, reviewed by user at PAUSE #1. [Phase C iter 1] decision_type values remapped to canonical vocabulary (see lib/ai/path-d-system-prompt.ts <decisions> guidance + docs/path-d-eval/README.md). Original mapping: uom_normalization\u2192value_normalization; weight_unit_conversion\u2192unit_conversion; inventory_aggregation\u2192aggregation_strategy; item_type_normalization\u2192enum_mapping. [Phase C iter 2 Stop 2 correction, 2026-05-09] lookup name `item_type_legacy_to_rootstock` updated to `item_type_code_to_rootstock_label` to match the more-precise naming Path D produces under the iter-2 canonical lookup convention (source-to-target axis). Both names follow the convention; the model's name uses the literal source field name (`item_type_code` per source-schema.json) and a target value-form qualifier (`rootstock_label` for the canonical labels `raw_material`/`finished_good`/etc.) instead of the loose `item_type` + `rootstock` system-only form. Observed deterministic across all 3 N=3 trials. Pattern: explicit conventions surface fixture quality issues that were latent under loose authoring (mirrors Stop 0 Q1+Q2 fixture corrections).",
   "mappings": [
     {
       "target_field_id": "c2000000-0000-4000-8000-000000000001",
@@ -210,7 +210,7 @@
       "name": "uom_legacy_to_rootstock"
     },
     {
-      "name": "item_type_legacy_to_rootstock"
+      "name": "item_type_code_to_rootstock_label"
     }
   ],
   "data_quality": [

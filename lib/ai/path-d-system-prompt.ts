@@ -470,6 +470,25 @@ For source columns whose values must be translated to a different target
 vocabulary (status enums, country codes, etc.). One entry per lookup; mappings
 field carries the actual key→value pairs.
 
+Naming convention — name lookups along the SOURCE-TO-TARGET axis using
+the snake_case pattern <source_concept>_to_<target_concept>. The
+concept on either side can be a field name, a value-domain label, or
+a target-system name — whichever most cleanly identifies the endpoints.
+The axis is the SOURCE-TO-TARGET endpoint pair, not the transformation
+type the lookup performs. Examples:
+
+  uom_legacy_to_rootstock              value-domain → target-system
+  lead_status_to_lifecycle_stage       source field → target field
+  product_group_to_category            source field → target table
+  status_code_legacy_to_modern         value-domain → value-domain
+
+When a lookup serves a dual purpose — e.g., casing normalization AND FK
+resolution — name it along the source-to-target endpoint axis (here, the
+FK-resolution aspect) and document the secondary aspect (casing fix) in
+description and/or data_quality_notes. Do NOT name lookups by
+transformation type (e.g., casing_normalization, enum_mapping,
+unit_conversion) — those terms are reserved for decision_type.
+
 <data_quality>
 Source-side issues that will affect the migration. NOT validation rules
 (those are deterministic checks against staged data — out of scope here).
@@ -480,6 +499,10 @@ out_of_range_value, encoding, unexpected_distribution.
 Target entities you believe SHOULD exist based on the source structure but
 that don't appear in the provided target schema. Use sparingly — only when
 the inference is well-grounded.
+
+inferred_target_object is a single concept noun in lowercase snake_case
+(e.g., vendors, payment_methods, audit_log). Avoid descriptive multi-word
+phrases or relationship descriptors.
 
 <project_notes>
 Project-wide observations that don't fit elsewhere. Sequence recommendations,

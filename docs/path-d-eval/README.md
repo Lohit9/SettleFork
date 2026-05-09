@@ -306,6 +306,52 @@ vocabulary: prompt change with strict canonical list raised
 regression. See the iter 1 commit body (`feat(ai): Phase C iter 1 —
 decision_type vocabulary alignment`) for the per-fixture deltas.
 
+#### Canonical lookup naming convention (Phase C iter 2)
+
+The system prompt instructs the model to name lookups along the
+SOURCE-TO-TARGET axis using the `<source_concept>_to_<target_concept>`
+pattern (snake_case). Fixture `expected-output.json` files MUST follow the
+same convention — the scorer matches case-insensitive exact-string on
+lookup `name`, so a fixture using `casing_normalization_lookup` won't
+match a model emitting `product_group_to_category`.
+
+Source concept and target concept can each be a field name, a
+value-domain label, or a target-system name — whichever most cleanly
+identifies the endpoints. The axis is the SOURCE-TO-TARGET endpoint
+pair, not the transformation type the lookup performs.
+
+| pattern | example |
+|---|---|
+| source field → target field | `lead_status_to_lifecycle_stage` |
+| source field → target table | `product_group_to_category` |
+| value-domain → target-system | `uom_legacy_to_rootstock` |
+| value-domain → value-domain | `status_code_legacy_to_modern` |
+
+When a lookup serves a dual purpose (e.g., casing normalization + FK
+resolution), name along the source-to-target endpoint axis and document
+the secondary aspect in `description` and/or `data_quality_notes`. Do
+NOT name lookups by transformation type (`casing_normalization`,
+`enum_mapping`, `unit_conversion`) — those terms are reserved for
+`decision_type`.
+
+The Phase C iter 2 N=3 empirical measurement validated this convention:
+prompt change lifted manufacturing `lookup_recall` from deterministic
+0.000 → 1.000 (deterministic) and CRM `lookup_recall` from variance
+0.667 (1/0/1) → 1.000 (deterministic stabilization), with overall
+aggregate moving 0.843 → 0.892 (+0.049). See the iter 2 commit body
+(`feat(ai): Phase C iter 2 — lookup naming canonicalization`) for
+per-fixture deltas + the cross-fixture generalization observation.
+
+#### Canonical inferred_targets naming (Phase C iter 2)
+
+`inferred_target_object` is a single concept noun in lowercase
+snake_case (e.g., `vendors`, `payment_methods`, `audit_log`). Avoid
+descriptive multi-word phrases or relationship descriptors. Variance
+signal from iter-2 Stop 0 (`Vendors / PreferredVendor relationship`
+in single-trial vs `vendors` across N=3 trials) showed the model's
+mode behavior already produces this shape; the convention is documented
+to prevent regression.
+
 ### Workflow for authoring expected output
 
 The Stop 1 design choice is **Option C — Claude Chat draft → human review**:
@@ -328,16 +374,17 @@ reasonable that the human draft missed.
 
 ### Diversity goals
 
-The three v0 fixtures intentionally cover different profiles:
+The four v0 fixtures intentionally cover different profiles:
 
 | Fixture | Domain | Scale | Stresses |
 |---|---|---|---|
 | `crm-sf-to-hubspot` | CRM | Small (~10 fields) | 1:1 mappings, picklist transform, dedup |
 | `erp-rootstock-style` | ERP | Medium (~17 fields) | UOM normalisation, custom_sql heavy, lookup tables |
+| `manufacturing-products-with-policies` | Manufacturing | Medium (~14 target fields) | Aggregation-derived rollup tables, constant-value mappings, multi-purpose lookups |
 | `marketing-multi-source-dedup` | Marketing | Medium (~12 fields) | Many-to-one source consolidation, source priority logic |
 
 When adding a new fixture, ask: **what dimension of Path D's behaviour does
-this exercise that the existing 3 don't?** If the answer is "nothing
+this exercise that the existing 4 don't?** If the answer is "nothing
 distinct," Phase C's iteration won't gain signal from the new fixture.
 
 Good candidates for Phase C additions:
