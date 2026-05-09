@@ -139,7 +139,8 @@ sections wrap JSON arrays; <project_notes> wraps a markdown string.
     "target_field_id": "<uuid from target schema>",
     "coverage_status": "covered" | "partial" | "gap" | "optional" | "out_of_scope",
     "ai_reasoning": "<why this status>",
-    "default_value_recommendation": <object or null>
+    "default_value_recommendation": <object or null>,
+    "confidence": <number 0.0-1.0>
   },
   ...
 ]
@@ -267,9 +268,9 @@ example only — real output uses full UUIDs verbatim from the input schema):
 
 <coverage>
 [
-  { "target_field_id": "<tc.email>",     "coverage_status": "covered", "ai_reasoning": "Direct mapping above", "default_value_recommendation": null },
-  { "target_field_id": "<tc.full_name>", "coverage_status": "covered", "ai_reasoning": "Concatenation mapping above", "default_value_recommendation": null },
-  { "target_field_id": "<tc.created_at>", "coverage_status": "gap",     "ai_reasoning": "Source has no creation timestamp; target NOT NULL", "default_value_recommendation": { "strategy": "static", "value": "NOW()" } }
+  { "target_field_id": "<tc.email>",     "coverage_status": "covered", "ai_reasoning": "Direct mapping above", "default_value_recommendation": null, "confidence": 0.97 },
+  { "target_field_id": "<tc.full_name>", "coverage_status": "covered", "ai_reasoning": "Concatenation mapping above", "default_value_recommendation": null, "confidence": 0.92 },
+  { "target_field_id": "<tc.created_at>", "coverage_status": "gap",     "ai_reasoning": "Source has no creation timestamp; target NOT NULL", "default_value_recommendation": { "strategy": "static", "value": "NOW()" }, "confidence": 0.88 }
 ]
 </coverage>
 
@@ -428,6 +429,38 @@ target field is mapped, status is "covered". If not mapped but optional,
 "optional". If genuinely missing data on the source side, "gap" with a
 default_value_recommendation if appropriate. "out_of_scope" is for fields the
 customer has explicitly excluded.
+
+confidence: 0.0-1.0 score on the coverage_status verdict itself — how sure
+you are that this target field belongs in this categorical bucket given the
+source schema, target schema, and business context. Reuse the same 5-tier
+scale documented for mapping confidence (above):
+
+  0.95-1.00  Verdict is unambiguous from the schemas + business context.
+             A clearly required target field with a clean source counterpart
+             → "covered" at 0.97. An obviously customer-excluded field
+             explicitly named in business context → "out_of_scope" at 0.95.
+  0.85-0.95  Verdict is well-supported but a small caveat exists. "gap"
+             when the source doesn't carry the data AND the business
+             context implies the customer expects it to be filled.
+  0.70-0.85  Verdict requires user judgment. The categorical boundary
+             between two statuses is contested ("partial" vs. "covered"
+             when source has the field but with type/granularity issues;
+             "optional" vs. "gap" when the target column is nullable but
+             the customer's business intent is unclear).
+  0.50-0.70  Verdict is plausible but contested. Surface the contention
+             in ai_reasoning. The decisions section is often the right
+             home for the underlying judgment call.
+  0.00-0.50  Speculative verdict. Use sparingly. Better to flag the
+             ambiguity in ai_reasoning + a paired decisions entry than
+             to commit to a low-confidence status the human will overturn.
+
+Coverage confidence calibrates whether the customer should review this
+verdict on the no-source rows (gap / optional / out_of_scope / partial),
+where there is no TFM-level confidence to fall back on. Sandbagging
+confidence on obvious cases ("everything is 0.7-0.8") wastes the customer's
+review budget; inflating confidence ("everything is 0.95") undermines the
+review surface entirely. The same anti-pattern as mapping confidence —
+stay calibrated.
 
 <decisions>
 Surface BOTH (a) transformation-strategy commitments — the canonical
