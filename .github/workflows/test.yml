@@ -6,8 +6,6 @@ on:
   pull_request:
     branches: [main, dev]
 
-# Cancel stale runs on the same PR/branch when a new commit lands. Keeps the
-# Actions queue short and saves minutes during the mapping redesign rollout.
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
@@ -19,18 +17,22 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 11
+
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          # Matches local dev (Node 24). Keep in sync when .nvmrc is introduced.
           node-version: '24'
-          cache: 'npm'
+          cache: 'pnpm'
 
       - name: Install dependencies
-        run: npm ci
+        run: pnpm install --frozen-lockfile
 
       - name: Typecheck
-        run: npx tsc --noEmit
+        run: pnpm tsc --noEmit
 
       - name: Run tests
-        run: npm test
+        run: pnpm test
