@@ -583,6 +583,16 @@ function MappingContentLoaded({
   // immediately because they cause a single state change per interaction.
   const pendingSearchTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
 
+  // Body scroll container ref — threaded down to each `TargetTableGroup`
+  // so its `VirtualizedRowList` can target the inner scrollable div as
+  // the virtualizer's scroll element. The page's only scrollable
+  // ancestor is the inner `flex-1 overflow-auto` div below; the window
+  // itself does not scroll (the outer wrapper is `min-h-0 flex-1
+  // overflow-hidden`). Without this ref, `@tanstack/react-virtual`
+  // listens for scroll events on the wrong element and the visible
+  // range never advances past the first viewport's worth of rows.
+  const scrollContainerRef = useRef<HTMLDivElement>(null)
+
   const writeUrl = useCallback(
     (next: MappingFilterState, nextDrawerRowId: string | null) => {
       // Pattern U1 (single source of truth): one writer composes the
@@ -1896,7 +1906,10 @@ function MappingContentLoaded({
           highlightedSourceFieldId={highlightedSourceFieldId}
           onFieldClick={onSidebarFieldClick}
         />
-        <div className="flex-1 overflow-auto">
+        <div
+          ref={scrollContainerRef}
+          className="relative flex-1 overflow-auto"
+        >
           {/*
             Body reading column. `py-6` provides 24px top + 24px bottom
             breathing room around the group cards. The toolbar above
@@ -1919,6 +1932,7 @@ function MappingContentLoaded({
                       key={summary.id}
                       targetTable={summary}
                       rows={rowsInGroup}
+                      scrollContainerRef={scrollContainerRef}
                       filteredCount={isDefaultState ? undefined : perGroup}
                       onRowClick={handleRowClick}
                       openRowId={drawerRowId}

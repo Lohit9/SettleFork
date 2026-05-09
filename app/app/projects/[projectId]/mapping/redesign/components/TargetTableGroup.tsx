@@ -1,7 +1,7 @@
 'use client'
 
-import { useEffect, useRef, useState } from 'react'
-import { useWindowVirtualizer } from '@tanstack/react-virtual'
+import { useEffect, useRef, useState, type RefObject } from 'react'
+import { useVirtualizer } from '@tanstack/react-virtual'
 import type {
   MappingRow,
   SourceFieldWithState,
@@ -50,6 +50,17 @@ interface TargetTableGroupProps {
    * Must be in server-guaranteed order; do NOT sort here.
    */
   rows: MappingRow[]
+  /**
+   * Ref to the page's body scroll container — the inner `flex-1
+   * overflow-auto` div in `MappingContent`. Forwarded to
+   * `VirtualizedRowList` so the virtualizer can target the correct
+   * scroll element. Optional for legacy / fixture callers that don't
+   * cross the virtualization threshold (≥50 rows); when omitted, a
+   * group at the threshold falls back to a non-functional virtualizer
+   * (acceptable in tests/storybook because no fixture exercises
+   * 50+ rows).
+   */
+  scrollContainerRef?: RefObject<HTMLDivElement | null>
   /**
    * Optional filter-aware counts. When provided AND `matching < total`
    * the header shows "X of Y fields"; when equal it falls through to
@@ -210,6 +221,7 @@ interface TargetTableGroupProps {
 export function TargetTableGroup({
   targetTable,
   rows,
+  scrollContainerRef,
   filteredCount,
   onRowClick,
   openRowId,
@@ -453,6 +465,7 @@ export function TargetTableGroup({
           ) : (
             <VirtualizedRowList
               rows={rows}
+              scrollContainerRef={scrollContainerRef}
               onRowClick={onRowClick}
               openRowId={openRowId}
               highlightedRowIds={highlightedRowIds}
@@ -479,18 +492,28 @@ export function TargetTableGroup({
 // ─── Virtualized row list (large-group renderer) ───────────────────────────
 //
 // Activated when the group has VIRTUALIZATION_THRESHOLD or more rows.
-// Uses @tanstack/react-virtual's `useWindowVirtualizer` because the
-// page already has a single window-level scroll container — per-group
-// internal scrollbars would be a UX regression. The virtualizer
-// measures each row via `measureElement` once it attaches its
-// forwardRef'd outer div, so chevron-expansion height changes are
-// observed automatically (no manual size table).
+// Uses @tanstack/react-virtual's element-based `useVirtualizer`, with
+// `getScrollElement` pointing at the body scroll container threaded
+// down from `MappingContent` (the inner `flex-1 overflow-auto` div).
+//
+// Why not `useWindowVirtualizer`: the page's outer wrapper is
+// `min-h-0 flex-1 overflow-hidden`, so the window itself does not
+// scroll — only the inner body div does. A window-scoped virtualizer
+// listens to window scroll events that never fire and computes the
+// visible range against `window.innerHeight`, leaving everything past
+// the first viewport's worth of rows unrendered (PR 111 fix).
+//
+// `scrollMargin` is the offset of the virtualized list within the
+// scroll container. We rely on `MappingContent` having added
+// `position: relative` to the scroll container so that
+// `parentRef.current.offsetTop` resolves to the scroll container's
+// coordinate space (every intermediate ancestor is statically
+// positioned). The virtualizer measures each row via `measureElement`
+// once it attaches its forwardRef'd outer div, so chevron-expansion
+// height changes are observed automatically (no manual size table).
 //
 // Each visible row renders inside an absolute-positioned wrapper at
 // `translateY(virtualItem.start - virtualizer.options.scrollMargin)`.
-// Anchoring the row container with a ref + scrollMargin lets the
-// virtualizer compute the correct vertical offset of its row list
-// relative to the page scroll position.
 //
 // Backwards-compat note: legacy callers that DON'T pass expandedRowIds
 // / pickerOpenRowId fall back to per-row local state inside
@@ -501,6 +524,7 @@ export function TargetTableGroup({
 
 interface VirtualizedRowListProps {
   rows: MappingRow[]
+  scrollContainerRef: TargetTableGroupProps['scrollContainerRef']
   onRowClick: TargetTableGroupProps['onRowClick']
   openRowId: TargetTableGroupProps['openRowId']
   highlightedRowIds: TargetTableGroupProps['highlightedRowIds']
@@ -520,6 +544,7 @@ interface VirtualizedRowListProps {
 
 function VirtualizedRowList({
   rows,
+  scrollContainerRef,
   onRowClick,
   openRowId,
   highlightedRowIds,
@@ -538,8 +563,9 @@ function VirtualizedRowList({
 }: VirtualizedRowListProps) {
   const parentRef = useRef<HTMLDivElement | null>(null)
 
-  const virtualizer = useWindowVirtualizer({
+  const virtualizer = useVirtualizer({
     count: rows.length,
+    getScrollElement: () => scrollContainerRef?.current ?? null,
     estimateSize: () => 40,
     overscan: 8,
     scrollMargin: parentRef.current?.offsetTop ?? 0,
