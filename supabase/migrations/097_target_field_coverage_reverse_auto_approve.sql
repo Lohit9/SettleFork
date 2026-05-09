@@ -1,0 +1,65 @@
+-- ============================================================
+-- Migration 097: Reverse PR γ auto-approve on coverage rows
+-- ============================================================
+--
+-- Background
+-- ----------
+-- PR γ.2 — Reverse the auto-approve policy on AI-emitted coverage rows.
+--
+-- Founder principle: AI proposes → deterministic validates → human
+-- approves. PR γ (migration 095) introduced a categorical-kind-based
+-- auto-approve mapping in `defaultStatusForCoverageStatus`:
+--
+--     out_of_scope | optional         → status='approved'
+--     gap | covered | partial         → status='needs_review'
+--
+-- Forward-written rows from `path-d-persistence.ts:persistCoverage`
+-- inherited `status_set_by='ai_auto'`. The combination
+-- `status='approved' + status_set_by='ai_auto'` violates the founder
+-- principle: the AI was approving on the customer's behalf without
+-- explicit human review.
+--
+-- PR γ.2 fixes both sides:
+--
+--   * `defaultStatusForCoverageStatus` (lib/ai/path-d-persistence.ts)
+--     now returns 'needs_review' uniformly. Forward writes never
+--     auto-approve; status='approved' + status_set_by='ai_auto' is no
+--     longer producible by the persistence layer.
+--
+--   * This migration backfills existing rows. All coverage rows with
+--     status='approved' AND status_set_by='ai_auto' are flipped to
+--     status='needs_review'. status_set_by stays 'ai_auto' (these rows
+--     ARE Path-D-authored — only the status decision is being reversed).
+--     The customer can re-approve via the drawer, which writes
+--     status_set_by='user' (the explicit-review provenance).
+--
+-- Empirical verification on Rootstock POC TEST (e441baa5,
+-- 2026-05-09 probe): 65 rows flagged for backfill, all
+-- `coverage_status='optional'` + `status='approved'` +
+-- `status_set_by='ai_auto'`. 4 user-approved rows (1 covered/user,
+-- 3 gap/user, all `status_set_by='user'`) are NOT touched — those are
+-- the customer's explicit decisions and are preserved.
+--
+-- Idempotency
+-- -----------
+-- The WHERE clause makes the backfill safe to re-run. After the first
+-- run, no rows match (status='approved' implies status_set_by != 'ai_auto'
+-- for new writes per the helper flip), so re-running is a 0-row UPDATE.
+--
+-- Project-stats alignment
+-- -----------------------
+-- `lib/quality/stat-formulas.ts:computeStats` is updated in the same PR
+-- to UNION TFM-status='approved' with coverage-status='approved'
+-- (excluding fields that have any TFM, since TFM.status drives the row
+-- prop's effective status when a TFM exists — γ resolution priority).
+-- Post-backfill on e441baa5: ~4 approved (1 manual TFM + 3 user-approved
+-- gap rows) / ~141 needs_review.
+--
+-- See migration 095 for the original (now-reversed) policy comment;
+-- migration 095's comment is updated in the same PR with a reversal
+-- note pointing here.
+
+UPDATE public.target_field_coverage
+SET status = 'needs_review',
+    updated_at = now()
+WHERE status = 'approved' AND status_set_by = 'ai_auto';

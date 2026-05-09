@@ -29,6 +29,7 @@ function emptyRaw(): RawData {
     sourceAcks: [],
     transformations: [],
     qualityIssues: [],
+    coverage: [],
   }
 }
 
