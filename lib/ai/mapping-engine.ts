@@ -136,6 +136,26 @@ interface RawTransformationRow {
 }
 
 /**
+ * One row of `target_field_coverage` (migration 093 + 095). Read by
+ * `assembleMappingsForRedesign` to surface PR γ's `coverageStatus` /
+ * `statusSetBy` row-prop fields and to drive the resolution-priority
+ * rule for `UnmappedRow.status` (PR γ unification).
+ *
+ * Resolution priority for the row prop's effective `status` field:
+ *   1. TFM exists       → status = TFM.status
+ *   2. Coverage row     → status = coverage.status (per migration 095)
+ *   3. Neither (orphan) → status = 'needs_review' synthesized
+ *                         (statusSetBy = 'system_default')
+ */
+interface RawCoverageRow {
+  id: string
+  target_field_id: string
+  coverage_status: 'covered' | 'partial' | 'gap' | 'optional' | 'out_of_scope' | string
+  status: 'needs_review' | 'approved' | 'rejected' | string
+  status_set_by: 'ai_auto' | 'user' | 'system_default' | string
+}
+
+/**
  * Server-side cap for `MappingRowBase.transformationSqlPreview`.
  * Mirrors the legacy mapping page preview length (see
  * `app/app/projects/[projectId]/mapping/MappingContent.tsx` Transform
@@ -160,6 +180,14 @@ export interface AssembleInput {
   mappingSources: RawMappingSourceRow[]
   sourceAcks: RawSourceAckRow[]
   transformations: RawTransformationRow[]
+  /**
+   * PR γ — Mapping grid state model unification. Optional with default
+   * `[]` so existing fixture builders + tests don't have to thread an
+   * empty coverage array; orphan target fields synthesize the
+   * target_only row-prop shape (statusSetBy='system_default') when no
+   * coverage row is present.
+   */
+  coverage?: RawCoverageRow[]
 }
 
 // Also export the raw row types so tests and future call sites can
@@ -172,6 +200,7 @@ export type {
   RawMappingSourceRow,
   RawSourceAckRow,
   RawTransformationRow,
+  RawCoverageRow,
 }
 
 // ─── Mapping generation: Claude response shapes ──────────────────────
@@ -437,23 +466,45 @@ function buildTargetFieldRef(
   }
 }
 
-function buildUnmappedRow(targetField: TargetFieldRef): UnmappedRow {
+function buildUnmappedRow(
+  targetField: TargetFieldRef,
+  coverageRow: RawCoverageRow | null,
+): UnmappedRow {
+  // PR γ resolution priority for unmapped rows:
+  //   coverage row exists  → status = coverage.status; statusSetBy =
+  //                          coverage.status_set_by; coverageStatus =
+  //                          coverage.coverage_status
+  //   no coverage (orphan) → status = 'needs_review' (synthesized);
+  //                          statusSetBy = 'system_default';
+  //                          coverageStatus = null
+  const status = coverageRow ? coerceStatus(coverageRow.status) : 'needs_review'
+  const statusSetBy: 'ai_auto' | 'user' | 'system_default' | null = coverageRow
+    ? (coerceStatusSetBy(coverageRow.status_set_by) ?? 'system_default')
+    : 'system_default'
+  const coverageStatus = coverageRow
+    ? coerceCoverageVerdict(coverageRow.coverage_status)
+    : null
+
   return {
     kind: 'unmapped',
     id: `unmapped::${targetField.id}`,
     targetField,
     confidence: null,
-    status: 'unmapped',
+    status,
     hasTransformation: false,
     transformationStatus: null,
     transformationDescription: null,
     transformationSqlPreview: null,
+    mapping_content: 'no-source',
+    coverageStatus,
+    statusSetBy,
   }
 }
 
 function buildTargetAcknowledgedRow(
   tfm: RawTfmRow,
   targetField: TargetFieldRef,
+  coverageRow: RawCoverageRow | null,
 ): TargetAcknowledgedRow {
   return {
     kind: 'target_acknowledged',
@@ -469,6 +520,15 @@ function buildTargetAcknowledgedRow(
     transformationDescription: null,
     transformationSqlPreview: null,
     acknowledgmentReason: tfm.acknowledgment_reason,
+    // PR γ — coverage metadata pass-through. Acks have no sources by
+    // DB CHECK so mapping_content is 'no-source'. Coverage row may or
+    // may not exist; surface its provenance regardless of the row's
+    // effective status (which is hard-coded 'approved' for acks).
+    mapping_content: 'no-source',
+    coverageStatus: coverageRow
+      ? coerceCoverageVerdict(coverageRow.coverage_status)
+      : null,
+    statusSetBy: coverageRow ? coerceStatusSetBy(coverageRow.status_set_by) : null,
   }
 }
 
@@ -476,6 +536,7 @@ function buildValueAssignmentRow(
   tfm: RawTfmRow,
   targetField: TargetFieldRef,
   transformation: RawTransformationRow | null,
+  coverageRow: RawCoverageRow | null,
 ): ValueAssignmentRow {
   return {
     kind: 'value_assignment',
@@ -495,6 +556,15 @@ function buildValueAssignmentRow(
     combinationType: 'custom_sql',
     combinationSql: tfm.combination_sql,
     aiReasoning: tfm.ai_reasoning,
+    // PR γ — coverage metadata pass-through. VAs have zero sources
+    // (custom_sql with empty mapping_sources). Effective row status
+    // comes from TFM.status; coverage's status_set_by is the coverage
+    // row's own provenance metadata, surfaced for the drawer.
+    mapping_content: 'VA',
+    coverageStatus: coverageRow
+      ? coerceCoverageVerdict(coverageRow.coverage_status)
+      : null,
+    statusSetBy: coverageRow ? coerceStatusSetBy(coverageRow.status_set_by) : null,
   }
 }
 
@@ -506,6 +576,7 @@ function buildMappedRow(
   tablesById: Map<string, RawTableRow>,
   fieldsById: Map<string, RawFieldRow>,
   fieldsByTableId: Map<string, RawFieldRow[]>,
+  coverageRow: RawCoverageRow | null,
 ): MappedRow {
   // Filter out defensively-null sources — a live mapping_source with
   // no source_field_id cannot be rendered.
@@ -551,6 +622,15 @@ function buildMappedRow(
     combinationSql:
       tfm.combination_type === 'custom_sql' ? tfm.combination_sql : null,
     aiReasoning: tfm.ai_reasoning,
+    // PR γ — coverage metadata pass-through. Effective row status comes
+    // from TFM.status; coverage's status_set_by is the coverage row's
+    // own provenance metadata, surfaced for the drawer to detect e.g.
+    // "TFM approved but coverage row still needs_review".
+    mapping_content: 'mapped',
+    coverageStatus: coverageRow
+      ? coerceCoverageVerdict(coverageRow.coverage_status)
+      : null,
+    statusSetBy: coverageRow ? coerceStatusSetBy(coverageRow.status_set_by) : null,
   }
 }
 
@@ -711,6 +791,34 @@ function coerceStatus(status: string): 'needs_review' | 'approved' | 'rejected' 
   }
   // Defensive default: unknown DB status values treated as 'needs_review'.
   return 'needs_review'
+}
+
+// PR γ — coverage row enum coercions. Mirror the defensive-default
+// pattern from coerceStatus so unknown DB enum values never leak onto
+// the wire as raw strings.
+
+function coerceCoverageVerdict(
+  v: string,
+): 'covered' | 'partial' | 'gap' | 'optional' | 'out_of_scope' | null {
+  if (
+    v === 'covered' ||
+    v === 'partial' ||
+    v === 'gap' ||
+    v === 'optional' ||
+    v === 'out_of_scope'
+  ) {
+    return v
+  }
+  return null
+}
+
+function coerceStatusSetBy(
+  v: string,
+): 'ai_auto' | 'user' | 'system_default' | null {
+  if (v === 'ai_auto' || v === 'user' || v === 'system_default') {
+    return v
+  }
+  return null
 }
 
 function coerceCombinationType(
@@ -891,6 +999,19 @@ function computeCounts(rows: MappingRow[]): MappingCounts {
   let unmapped = 0
   for (const row of rows) {
     total++
+    // PR γ — chip semantics are kind-based. The `unmapped` chip counts
+    // target fields with no TFM (kind: 'unmapped'), regardless of any
+    // coverage row's status. The needsReview / approved / rejected
+    // chips count TFM-backed rows by their TFM lifecycle status.
+    // Pre-PR-γ, `row.status === 'unmapped'` was the sentinel for
+    // unmapped rows; PR γ widened that case so unmapped rows now
+    // carry coverage-driven status (or synthesized 'needs_review' for
+    // target_only orphans). Switching on `kind` preserves the chip
+    // intent: the unmapped chip is "no TFM yet", not "awaiting review".
+    if (row.kind === 'unmapped') {
+      unmapped++
+      continue
+    }
     switch (row.status) {
       case 'approved':
         approved++
@@ -900,9 +1021,6 @@ function computeCounts(rows: MappingRow[]): MappingCounts {
         break
       case 'rejected':
         rejected++
-        break
-      case 'unmapped':
-        unmapped++
         break
     }
   }
@@ -1031,6 +1149,7 @@ export function assembleMappingsForRedesign(
     mappingSources,
     sourceAcks,
     transformations,
+    coverage = [],
   } = input
 
   // ── Build dataset / table / field indexes ──────────────────────────
@@ -1092,6 +1211,14 @@ export function assembleMappingsForRedesign(
     tfmByTargetFieldId.set(t.target_field_id, t)
   }
 
+  // ── PR γ — coverage by target_field_id for unified row props ──────
+  // Migration 093 enforces UNIQUE (project_id, target_field_id) on
+  // target_field_coverage, so the map collapse is safe.
+  const coverageByTargetFieldId = new Map<string, RawCoverageRow>()
+  for (const c of coverage) {
+    coverageByTargetFieldId.set(c.target_field_id, c)
+  }
+
   // ── Assemble rows ─────────────────────────────────────────────────
   const rows: MappingRow[] = []
 
@@ -1100,8 +1227,10 @@ export function assembleMappingsForRedesign(
     if (!targetFieldRef) continue // Parent target table missing (shouldn't happen under normal ingestion).
 
     const tfm = tfmByTargetFieldId.get(targetField.id)
+    const coverageRow = coverageByTargetFieldId.get(targetField.id) ?? null
+
     if (!tfm) {
-      rows.push(buildUnmappedRow(targetFieldRef))
+      rows.push(buildUnmappedRow(targetFieldRef, coverageRow))
       continue
     }
 
@@ -1113,12 +1242,14 @@ export function assembleMappingsForRedesign(
     //   combination_type === 'custom_sql' with zero sources → 'value_assignment'
     //   otherwise (has ≥ 1 source)            → 'mapped'
     if (tfm.is_acknowledged) {
-      rows.push(buildTargetAcknowledgedRow(tfm, targetFieldRef))
+      rows.push(buildTargetAcknowledgedRow(tfm, targetFieldRef, coverageRow))
       continue
     }
 
     if (tfm.combination_type === 'custom_sql' && tfmSources.length === 0) {
-      rows.push(buildValueAssignmentRow(tfm, targetFieldRef, transformation))
+      rows.push(
+        buildValueAssignmentRow(tfm, targetFieldRef, transformation, coverageRow),
+      )
       continue
     }
 
@@ -1128,7 +1259,7 @@ export function assembleMappingsForRedesign(
     // a MappedRow with an empty `sources` array that would violate
     // the Rules 1-4 selector.
     if (tfmSources.length === 0) {
-      rows.push(buildUnmappedRow(targetFieldRef))
+      rows.push(buildUnmappedRow(targetFieldRef, coverageRow))
       continue
     }
 
@@ -1141,6 +1272,7 @@ export function assembleMappingsForRedesign(
         tablesById,
         fieldsById,
         fieldsByTableId,
+        coverageRow,
       ),
     )
   }
@@ -1236,6 +1368,7 @@ export async function getMappingsForRedesignCore(
     { data: datasetsRaw },
     { data: tfmsRaw },
     { data: sourceAcksRaw },
+    { data: coverageRaw },
   ] = await Promise.all([
     supabase
       .from('datasets')
@@ -1249,11 +1382,20 @@ export async function getMappingsForRedesignCore(
       .from('source_field_acknowledgments')
       .select('id, source_field_id, reason')
       .eq('project_id', projectId),
+    // PR γ — target_field_coverage join for unified row-prop status +
+    // coverageStatus + statusSetBy. Optional read: pre-Path-D projects
+    // have zero coverage rows and the translator synthesises a
+    // target_only row-prop shape for orphans (no coverage, no TFM).
+    supabase
+      .from('target_field_coverage')
+      .select('id, target_field_id, coverage_status, status, status_set_by')
+      .eq('project_id', projectId),
   ])
 
   const datasets = (datasetsRaw ?? []) as RawDatasetRow[]
   const tfms = (tfmsRaw ?? []) as RawTfmRow[]
   const sourceAcks = (sourceAcksRaw ?? []) as RawSourceAckRow[]
+  const coverage = (coverageRaw ?? []) as RawCoverageRow[]
 
   const datasetIds = datasets.map((d) => d.id)
   const tfmIds = tfms.map((t) => t.id)
@@ -1314,6 +1456,7 @@ export async function getMappingsForRedesignCore(
     mappingSources,
     sourceAcks,
     transformations,
+    coverage,
   })
 }
 

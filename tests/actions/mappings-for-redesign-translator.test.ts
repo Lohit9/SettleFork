@@ -206,7 +206,16 @@ describe('assembleMappingsForRedesign — discriminator cases', () => {
     const row = out.rows.find((r) => r.targetField.id === F_T_LEGACY.id) as UnmappedRow
     expect(row.kind).toBe('unmapped')
     expect(row.id).toBe(`unmapped::${F_T_LEGACY.id}`)
-    expect(row.status).toBe('unmapped')
+    // PR γ resolution priority — orphan target field (no TFM, no
+    // coverage row) emits synthesized status 'needs_review' with
+    // statusSetBy='system_default'. The 'unmapped' literal is retained
+    // in the type union for back-compat with fixture builders + the
+    // optimistic-reject construction in MappingContent.tsx, but the
+    // translator never emits it for live wire data.
+    expect(row.status).toBe('needs_review')
+    expect(row.statusSetBy).toBe('system_default')
+    expect(row.coverageStatus).toBeNull()
+    expect(row.mapping_content).toBe('no-source')
     expect(row.confidence).toBeNull()
   })
 

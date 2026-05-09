@@ -281,6 +281,59 @@ interface MappingRowBase {
    * the type extension purely additive on the read path.
    */
   transformationSqlPreview?: string | null
+
+  /**
+   * PR γ — Mapping grid state model unification (additive only).
+   *
+   * Three new optional fields added in lockstep so the redesigned grid
+   * (B's PR α₀) can pattern-match on `mapping_content` for visual
+   * treatment and surface coverage row provenance without a second
+   * round-trip. Optional for back-compat with existing fixture builders
+   * + the client-side optimistic-reject construction in
+   * MappingContent.tsx (mirrors transformationDescription /
+   * transformationSqlPreview pattern). The server translator
+   * (mapping-engine.ts) always emits explicit values on real wire
+   * payloads.
+   */
+
+  /**
+   * Coarse content discriminator for grid rendering (PR γ). Three
+   * values cover the user-visible grid states:
+   *   'mapped'    — TFM with 1+ sources (kind: 'mapped')
+   *   'VA'        — TFM with 0 sources, custom_sql value-assignment
+   *                 (kind: 'value_assignment')
+   *   'no-source' — every other row (kind: 'target_acknowledged' OR
+   *                 'unmapped'). Both have no contributing source rows
+   *                 by DB CHECK / by definition.
+   *
+   * Existing `kind` discriminator is preserved untouched alongside; this
+   * field is purely additive. Future cleanup PR (post-α₀) may collapse
+   * `kind` if convergence is desired — explicitly out of scope for PR γ.
+   */
+  mapping_content?: 'mapped' | 'VA' | 'no-source'
+
+  /**
+   * The coverage row's `coverage_status` (migration 093 enum), or null
+   * when no coverage row exists for this target field (target_only
+   * orphan case). Distinct from `status`: `coverageStatus` is the AI's
+   * verdict on whether the target field is satisfied; `status` is the
+   * row's approval lifecycle.
+   */
+  coverageStatus?: 'covered' | 'partial' | 'gap' | 'optional' | 'out_of_scope' | null
+
+  /**
+   * Provenance of the row's `status` value (migration 095 enum):
+   *   'ai_auto'        — Path D authored the status alongside the
+   *                       coverage_status verdict
+   *   'user'           — drawer-side approve/reject override
+   *   'system_default' — synthesized for target_only orphan cases at
+   *                       read time (no coverage row exists)
+   *
+   * Null when no coverage row exists AND the row is backed by a TFM
+   * (the row's effective status comes from TFM.status, which has its
+   * own provenance lifecycle outside this column's scope).
+   */
+  statusSetBy?: 'ai_auto' | 'user' | 'system_default' | null
 }
 
 /** Mapped row — 1+ mapping_sources, not acknowledged. Rules 1-4. */
@@ -393,7 +446,20 @@ export interface TargetAcknowledgedRow extends MappingRowBase {
  */
 export interface UnmappedRow extends MappingRowBase {
   kind: 'unmapped'
-  status: 'unmapped'
+  /**
+   * PR γ widens this from `'unmapped'` literal to the full status union.
+   * Resolution priority in the read translator (mapping-engine.ts):
+   *   1. Coverage row exists → status = coverage.status (one of
+   *      needs_review | approved | rejected per migration 095)
+   *   2. No coverage row (target_only orphan) → status = 'needs_review'
+   *      with statusSetBy = 'system_default'
+   * The `'unmapped'` literal is retained in the union for back-compat
+   * with existing fixture builders (tests/components/*.test.tsx) and
+   * the client-side optimistic-reject construction at
+   * MappingContent.tsx:991-999. Post-PR-γ wire payloads emit one of
+   * the three real status values.
+   */
+  status: 'needs_review' | 'approved' | 'rejected' | 'unmapped'
   confidence: null
   hasTransformation: false
   transformationStatus: null
