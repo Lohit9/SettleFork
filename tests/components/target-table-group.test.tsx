@@ -439,7 +439,7 @@ describe('TargetTableGroup — column header strip', () => {
     // buttons. The header strip mirrors the row template byte-for-
     // byte and now ships a sixth (empty) header cell.
     expect(header.className).toContain(
-      'grid-cols-[0.75rem_minmax(6rem,8rem)_minmax(8rem,14rem)_1fr_5rem_5rem]',
+      'grid-cols-[0.75rem_minmax(8rem,1fr)_minmax(10rem,1.5fr)_minmax(12rem,2fr)_5rem_5rem]',
     )
   })
 
@@ -457,8 +457,12 @@ describe('TargetTableGroup — column header strip', () => {
       ),
       'utf-8',
     )
+    // INF-50 (2026-05-09): see paired invariant in
+    // `field-mapping-row.test.tsx` — the header strip must mirror the
+    // body row template byte-for-byte, including the fr-based growth
+    // for tracks 2/3/4.
     const expected =
-      'grid-cols-[0.75rem_minmax(6rem,8rem)_minmax(8rem,14rem)_1fr_5rem_5rem]'
+      'grid-cols-[0.75rem_minmax(8rem,1fr)_minmax(10rem,1.5fr)_minmax(12rem,2fr)_5rem_5rem]'
     expect(file).toContain(expected)
     // Belt and suspenders: the prior 6-col template (with trailing
     // `_1rem` chevron column) must NOT appear in the source file —
@@ -471,6 +475,18 @@ describe('TargetTableGroup — column header strip', () => {
     // trailing actions column) must NOT appear either.
     expect(file).not.toMatch(
       /grid-cols-\[0\.75rem_minmax\(6rem,8rem\)_minmax\(8rem,14rem\)_1fr_5rem\](?!_)/,
+    )
+    // Belt and suspenders #3 (INF-50): the polish-3 fixed-rem cap
+    // template must NOT reappear — header strip mirrors the body
+    // row, so the same regression guard applies here.
+    expect(file).not.toContain(
+      'grid-cols-[0.75rem_minmax(6rem,8rem)_minmax(8rem,14rem)_1fr_5rem_5rem]',
+    )
+    // Belt and suspenders #4 (INF-50): tracks 2/3/4 must use fr-
+    // based growth — guards against a future "tighten to fixed
+    // maxes" revert.
+    expect(file).toMatch(
+      /grid-cols-\[0\.75rem(?:_minmax\([^,]+,[^)]*fr\)){3}_5rem_5rem\]/,
     )
   })
 })

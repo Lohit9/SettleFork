@@ -1230,8 +1230,14 @@ describe('FieldMappingRow — column template invariant', () => {
     // file header AND the paired invariant in
     // `target-table-group.test.tsx` at the same time — the column
     // header in `TargetTableGroup.tsx` mirrors this template literal.
+    //
+    // INF-50 (2026-05-09): tracks 2/3/4 moved from fixed-rem caps to
+    // fr-based growth (1 : 1.5 : 2 ratio) so columns expand with
+    // viewport. Mins (8/10/12rem) preserve readability at 1280px;
+    // fr-units take over above the rem floor so long table names
+    // stop overflowing into the next column on wide displays.
     const expected =
-      'grid-cols-[0.75rem_minmax(6rem,8rem)_minmax(8rem,14rem)_1fr_5rem_5rem]'
+      'grid-cols-[0.75rem_minmax(8rem,1fr)_minmax(10rem,1.5fr)_minmax(12rem,2fr)_5rem_5rem]'
     expect(file).toContain(expected)
     // Belt and suspenders: the prior 6-col template (with trailing
     // `_1rem` chevron column) must NOT appear anywhere in the file —
@@ -1246,6 +1252,22 @@ describe('FieldMappingRow — column template invariant', () => {
     // column without restoring the chevron col.
     expect(file).not.toMatch(
       /grid-cols-\[0\.75rem_minmax\(6rem,8rem\)_minmax\(8rem,14rem\)_1fr_5rem\](?!_)/,
+    )
+    // Belt and suspenders #3 (INF-50): the polish-3 fixed-rem cap
+    // template must NOT reappear — that's the exact template that
+    // overflowed on long human-readable table names. A partial
+    // revert that re-tightens cols 2/3 to fixed maxes would re-
+    // introduce the bug this PR fixes.
+    expect(file).not.toContain(
+      'grid-cols-[0.75rem_minmax(6rem,8rem)_minmax(8rem,14rem)_1fr_5rem_5rem]',
+    )
+    // Belt and suspenders #4 (INF-50): tracks 2/3/4 must use fr-
+    // based growth (`Nfr` somewhere in the minmax max-arg) — guards
+    // against a future "tighten to fixed maxes" revert that would
+    // re-introduce overflow. Anchored on the canonical template
+    // literal so accidental partial reverts trip this assertion.
+    expect(file).toMatch(
+      /grid-cols-\[0\.75rem(?:_minmax\([^,]+,[^)]*fr\)){3}_5rem_5rem\]/,
     )
   })
 

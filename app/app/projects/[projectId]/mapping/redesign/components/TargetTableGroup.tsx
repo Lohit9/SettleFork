@@ -704,7 +704,7 @@ function ColumnHeaderRow() {
       role="row"
       aria-hidden="true"
       data-testid="target-table-column-headers"
-      className="grid grid-cols-[0.75rem_minmax(6rem,8rem)_minmax(8rem,14rem)_1fr_5rem_5rem] items-center gap-3 border-b border-settle-slate-100 bg-settle-slate-50 px-5 py-2"
+      className="grid grid-cols-[0.75rem_minmax(8rem,1fr)_minmax(10rem,1.5fr)_minmax(12rem,2fr)_5rem_5rem] items-center gap-3 border-b border-settle-slate-100 bg-settle-slate-50 px-5 py-2"
     >
       <span aria-hidden="true" />
       <div
