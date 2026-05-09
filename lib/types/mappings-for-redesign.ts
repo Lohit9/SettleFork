@@ -460,7 +460,16 @@ export interface UnmappedRow extends MappingRowBase {
    * the three real status values.
    */
   status: 'needs_review' | 'approved' | 'rejected' | 'unmapped'
-  confidence: null
+  /**
+   * PR γ.1 widens this from `null` literal to `number | null`. When a
+   * coverage row exists for this target field, the translator flows the
+   * coverage row's AI confidence (migration 096) onto this field; when
+   * no coverage row exists (target_only orphan), confidence stays null
+   * and the UI's ConfidenceCell renders em-dash via its existing
+   * null-branch. Mirrors the γ status-widening pattern: strict union
+   * widening, no special-casing required in ConfidenceCell.
+   */
+  confidence: number | null
   hasTransformation: false
   transformationStatus: null
 }
