@@ -1,13 +1,13 @@
 // @vitest-environment node
 //
-// Path D eval runner — REAL Anthropic against the 3 starter fixtures,
+// Path D eval runner — REAL Anthropic against the 4 starter fixtures,
 // env-gated, opt-in only.
 //
-// Cost: ~$1.70 per full run (3 fixtures × 1 trial × ~$0.40-0.80 each).
+// Cost: ~$1.30 per full run at N=1; ~$4.00 at N=3 (4 fixtures × 1 trial × ~$0.30-0.40 each).
 // NOT default vitest. NOT CI.
 //
 // What this verifies:
-//   1. The runner loads all 3 fixtures from disk and runs Path D
+//   1. The runner loads all 4 fixtures from disk and runs Path D
 //      against each.
 //   2. The scorer produces an aggregate score per fixture and overall.
 //   3. The v0 prompt clears a generous baseline threshold (overall mean
@@ -42,7 +42,7 @@ const RUN = process.env.RUN_PATH_D_EVAL === '1'
 const HAS_API_KEY = Boolean(process.env.ANTHROPIC_API_KEY)
 const describeIf = RUN && HAS_API_KEY ? describe : describe.skip
 
-describeIf('Path D eval runner — full eval against 3 starter fixtures', () => {
+describeIf('Path D eval runner — full eval against 4 starter fixtures', () => {
   it('runs the suite, scores all fixtures, clears baseline threshold', async () => {
     const { runEvalSuite, formatReportStdout } = await import(
       '@/lib/ai/path-d-eval/runner'
@@ -71,7 +71,7 @@ describeIf('Path D eval runner — full eval against 3 starter fixtures', () => 
     }
 
     // Assertion 1: All fixtures completed (or only the filtered one).
-    const expectedFixtureCount = fixtureFilter ? 1 : 3
+    const expectedFixtureCount = fixtureFilter ? 1 : 4
     expect(report.fixtureSummaries).toHaveLength(expectedFixtureCount)
 
     // Assertion 2: Each fixture ran at least one trial.
@@ -105,5 +105,5 @@ describeIf('Path D eval runner — full eval against 3 starter fixtures', () => 
     expect(typeof report.totalDurationMs).toBe('number')
     expect(report.totalDurationMs).toBeGreaterThan(0)
     expect(Object.keys(report.weights)).toHaveLength(8)
-  }, 30 * 60 * 1000) // 30-minute timeout — 3 fixtures × ~5 min each at N=1
+  }, 60 * 60 * 1000) // 60-minute timeout — accommodates N=3 across 4 fixtures (~25 min observed)
 })

@@ -1,0 +1,188 @@
+{
+  "_authoring_notes": "Gold-standard expected output for Path D against the manufacturing-products-with-policies fixture. Authored by Claude Code; reviewed by user at Stop 0 PAUSE #1 (2026-05-09). First fixture exercising aggregation-derived mappings (CategoryName from DISTINCT ProductGroupName) and constant-value mappings (BusinessUnit / SourceSystem / BusinessSegment with empty source_field_ids). decision_type values use the canonical vocabulary from PR 109. 1 inferred_target for vendors (PreferredVendor has no target home). [Stop 0 PAUSE #1 corrections, 2026-05-09] Q1 applied: Categories.CategoryID (c4...020) flipped from coverage `gap` to `covered`, and a 14th mapping added with empty source_field_ids + combination_type custom_sql to represent the system-generated PK with a default_value_recommendation in coverage. Rationale: a system-generated PK is `covered` with a generation strategy, not `gap` (which means \"unknown how to fill\"). Q2 applied: StandardCost (c4...004) mapping combination_type changed from `single` to `custom_sql`. Rationale: the model folds negative-cost sanitization (CASE WHEN UnitCost < 0 THEN NULL) into combination_sql; that is strictly more correct than treating DQ-cleanup as a separate concern. Both corrections align the fixture to Path D's strictly-more-correct interpretation rather than testing aspirational fixture choices. Naming-axis mismatches on lookup_recall (model: `product_group_casing_normalization`, fixture: `product_group_to_category`) and inferred_targets_recall (model: `Vendors / PreferredVendor relationship`, fixture: `vendors`) intentionally LEFT MISALIGNED — they are the iter-2 Stop 1 target (canonical naming vocabulary for lookups + inferred_targets, mirroring iter-1's decision_type vocabulary fix).",
+  "mappings": [
+    {
+      "target_field_id": "c4000000-0000-4000-8000-000000000001",
+      "source_field_ids": [
+        "f4000000-0000-4000-8000-000000000001"
+      ],
+      "combination_type": "single"
+    },
+    {
+      "target_field_id": "c4000000-0000-4000-8000-000000000002",
+      "source_field_ids": [
+        "f4000000-0000-4000-8000-000000000002"
+      ],
+      "combination_type": "single"
+    },
+    {
+      "target_field_id": "c4000000-0000-4000-8000-000000000003",
+      "source_field_ids": [
+        "f4000000-0000-4000-8000-000000000003"
+      ],
+      "combination_type": "custom_sql"
+    },
+    {
+      "target_field_id": "c4000000-0000-4000-8000-000000000004",
+      "source_field_ids": [
+        "f4000000-0000-4000-8000-000000000004"
+      ],
+      "combination_type": "custom_sql"
+    },
+    {
+      "target_field_id": "c4000000-0000-4000-8000-000000000005",
+      "source_field_ids": [
+        "f4000000-0000-4000-8000-000000000005"
+      ],
+      "combination_type": "custom_sql"
+    },
+    {
+      "target_field_id": "c4000000-0000-4000-8000-000000000006",
+      "source_field_ids": [
+        "f4000000-0000-4000-8000-000000000006"
+      ],
+      "combination_type": "single"
+    },
+    {
+      "target_field_id": "c4000000-0000-4000-8000-000000000007",
+      "source_field_ids": [
+        "f4000000-0000-4000-8000-000000000021"
+      ],
+      "combination_type": "single"
+    },
+    {
+      "target_field_id": "c4000000-0000-4000-8000-000000000008",
+      "source_field_ids": [
+        "f4000000-0000-4000-8000-000000000022"
+      ],
+      "combination_type": "single"
+    },
+    {
+      "target_field_id": "c4000000-0000-4000-8000-000000000009",
+      "source_field_ids": [],
+      "combination_type": "custom_sql"
+    },
+    {
+      "target_field_id": "c4000000-0000-4000-8000-000000000010",
+      "source_field_ids": [],
+      "combination_type": "custom_sql"
+    },
+    {
+      "target_field_id": "c4000000-0000-4000-8000-000000000011",
+      "source_field_ids": [
+        "f4000000-0000-4000-8000-000000000007"
+      ],
+      "combination_type": "single"
+    },
+    {
+      "target_field_id": "c4000000-0000-4000-8000-000000000021",
+      "source_field_ids": [
+        "f4000000-0000-4000-8000-000000000003"
+      ],
+      "combination_type": "custom_sql"
+    },
+    {
+      "target_field_id": "c4000000-0000-4000-8000-000000000022",
+      "source_field_ids": [],
+      "combination_type": "custom_sql"
+    },
+    {
+      "target_field_id": "c4000000-0000-4000-8000-000000000020",
+      "source_field_ids": [],
+      "combination_type": "custom_sql"
+    }
+  ],
+  "coverage": [
+    {
+      "target_field_id": "c4000000-0000-4000-8000-000000000001",
+      "coverage_status": "covered"
+    },
+    {
+      "target_field_id": "c4000000-0000-4000-8000-000000000002",
+      "coverage_status": "covered"
+    },
+    {
+      "target_field_id": "c4000000-0000-4000-8000-000000000003",
+      "coverage_status": "covered"
+    },
+    {
+      "target_field_id": "c4000000-0000-4000-8000-000000000004",
+      "coverage_status": "covered"
+    },
+    {
+      "target_field_id": "c4000000-0000-4000-8000-000000000005",
+      "coverage_status": "covered"
+    },
+    {
+      "target_field_id": "c4000000-0000-4000-8000-000000000006",
+      "coverage_status": "covered"
+    },
+    {
+      "target_field_id": "c4000000-0000-4000-8000-000000000007",
+      "coverage_status": "covered"
+    },
+    {
+      "target_field_id": "c4000000-0000-4000-8000-000000000008",
+      "coverage_status": "covered"
+    },
+    {
+      "target_field_id": "c4000000-0000-4000-8000-000000000009",
+      "coverage_status": "covered"
+    },
+    {
+      "target_field_id": "c4000000-0000-4000-8000-000000000010",
+      "coverage_status": "covered"
+    },
+    {
+      "target_field_id": "c4000000-0000-4000-8000-000000000011",
+      "coverage_status": "covered"
+    },
+    {
+      "target_field_id": "c4000000-0000-4000-8000-000000000020",
+      "coverage_status": "covered"
+    },
+    {
+      "target_field_id": "c4000000-0000-4000-8000-000000000021",
+      "coverage_status": "covered"
+    },
+    {
+      "target_field_id": "c4000000-0000-4000-8000-000000000022",
+      "coverage_status": "covered"
+    }
+  ],
+  "decisions": [
+    {
+      "decision_type": "aggregation_strategy"
+    },
+    {
+      "decision_type": "value_normalization"
+    },
+    {
+      "decision_type": "default_value"
+    },
+    {
+      "decision_type": "data_quality_handling"
+    }
+  ],
+  "lookup_tables": [
+    {
+      "name": "product_group_to_category"
+    }
+  ],
+  "data_quality": [
+    {
+      "source_field_id": "f4000000-0000-4000-8000-000000000003",
+      "category": "case_inconsistency"
+    },
+    {
+      "source_field_id": "f4000000-0000-4000-8000-000000000004",
+      "category": "out_of_range_value"
+    }
+  ],
+  "inferred_targets": [
+    {
+      "inferred_target_object": "vendors"
+    }
+  ],
+  "project_notes_expected": true
+}
