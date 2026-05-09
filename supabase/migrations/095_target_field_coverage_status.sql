@@ -37,6 +37,23 @@
 --   out_of_scope | optional         → status='approved'
 --   gap | covered | partial         → status='needs_review'
 --
+-- ┌──────────────────────────────────────────────────────────────────┐
+-- │ [PR γ.2 REVERSAL, 2026-05-09]                                    │
+-- │                                                                  │
+-- │ The categorical-kind-based auto-approve mapping above (out_of_   │
+-- │ scope/optional → approved) was REVERSED in migration 097 +       │
+-- │ lib/ai/path-d-persistence.ts:defaultStatusForCoverageStatus.     │
+-- │ Per founder principle "AI proposes → deterministic validates →   │
+-- │ human approves", status='approved' + status_set_by='ai_auto' is  │
+-- │ no longer producible by the persistence layer. Forward Path-D-   │
+-- │ authored rows are now uniformly status='needs_review' regardless │
+-- │ of coverage_status. Migration 097 backfills existing auto-       │
+-- │ approved rows. The categorical-kind defaults documented above    │
+-- │ are NO LONGER USED for forward writes — the backfill SQL further │
+-- │ down this file (the WHERE status_set_by='system_default' UPDATE) │
+-- │ remains historical record of the initial column population.      │
+-- └──────────────────────────────────────────────────────────────────┘
+--
 -- Rationale for covered/partial defaulting to needs_review (not
 -- mirroring TFM.status):
 --   The coverage row's status is metadata, not the row's effective

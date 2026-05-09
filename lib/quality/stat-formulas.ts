@@ -137,6 +137,24 @@ export interface StatsTfmRow {
   va_dismissed?: boolean | null
 }
 
+/** PR γ.2 — coverage row shape consumed by `mappingApproved` UNION. Only
+ *  the three columns the formula reads are surfaced; other columns
+ *  (coverage_status, ai_reasoning, default_value_recommendation,
+ *  confidence) are not relevant to the count math.
+ *
+ *  When a target field has NO TFM (any status) and is NOT acknowledged,
+ *  a coverage row with status='approved' contributes to `mappingApproved`.
+ *  This carries the user's drawer-side "approve no-source row" decision
+ *  through to the headline chip count. status_set_by is read for
+ *  documentation/debugging but does not affect the count — any
+ *  status='approved' counts whether ai_auto or user (post-PR-γ.2 the
+ *  ai_auto+approved combination is no longer producible). */
+export interface StatsCoverageRow {
+  target_field_id: string
+  status: 'needs_review' | 'approved' | 'rejected'
+  status_set_by: 'ai_auto' | 'user' | 'system_default'
+}
+
 export interface ComputeProjectStatsInputs {
   /** All TFMs for the project (any status — we filter inside). */
   tfms: StatsTfmRow[]
@@ -155,6 +173,11 @@ export interface ComputeProjectStatsInputs {
   transforms: StatsTransformRow[]
   /** All quality issues for the project. */
   qualityIssues: StatsQualityIssueRow[]
+  /** PR γ.2 — All `target_field_coverage` rows for the project. Optional
+   *  with default `[]` for callers (legacy tests, fixtures) that don't
+   *  thread the table through. When omitted, `mappingApproved` falls
+   *  back to TFM-only counting (pre-γ.2 behavior). */
+  coverage?: StatsCoverageRow[]
 }
 
 // ─── Output shape ─────────────────────────────────────────────────────────
@@ -338,6 +361,7 @@ export function computeProjectStats(inputs: ComputeProjectStatsInputs): ComputeP
     sourceAckFieldIds,
     transforms,
     qualityIssues,
+    coverage = [],
   } = inputs
 
   const tfmIdSet = new Set(tfms.map((t) => t.id))
@@ -418,9 +442,37 @@ export function computeProjectStats(inputs: ComputeProjectStatsInputs): ComputeP
   // isn't approved, which (under the same primary-vs-bare-ack logic
   // as `mappingApproved`) maps to needs_review primary TFMs +
   // rejected primary TFMs + unacknowledged unmapped target fields.
+  //
+  // PR γ.2 — UNION TFM-status='approved' with coverage-status='approved'
+  // for target fields that have NO TFM (any status) AND are NOT
+  // acknowledged. Excluding "any TFM" rather than "approved TFM only"
+  // keeps the chip math consistent with the row prop's effective status
+  // (TFM.status drives row.status when a TFM exists per γ resolution
+  // priority): a TFM-rejected row's row.status is 'rejected' regardless
+  // of any coverage-side approval, so coverage-approved must not slip
+  // into mappingApproved on TFM-backed rows. Acknowledged fields are
+  // already counted via acknowledgedCount; coverage-approved would
+  // double-count.
+  //
+  // Forward semantic: status_set_by='user' + status='approved' is the
+  // drawer-side "approve no-source row" decision (writeCoverageStatus
+  // in lib/actions/mappings-for-redesign.ts). Pre-γ.2 ai_auto+approved
+  // rows are backfilled to needs_review by migration 097, so they no
+  // longer match this filter post-merge.
+  const tfmFieldIds = new Set(tfms.map((t) => t.target_field_id))
+  const coverageApprovedNoTfmCount = coverage.filter(
+    (c) =>
+      c.status === 'approved' &&
+      !tfmFieldIds.has(c.target_field_id) &&
+      !acknowledgedFieldIds.has(c.target_field_id),
+  ).length
+
   const mappingTotal =
     primaryTfms.length + unmappedTargetCount + acknowledgedCount
-  const mappingApproved = approvedPrimaryTfms.length + acknowledgedCount
+  const mappingApproved =
+    approvedPrimaryTfms.length +
+    acknowledgedCount +
+    coverageApprovedNoTfmCount
   const mappingUnmapped = unmappedTargetCount
   const mappingNeedsReview = mappingTotal - mappingApproved
 
