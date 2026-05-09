@@ -161,6 +161,16 @@ interface RawProjectStatsData {
     description: string | null
     title: string | null
   }>
+  /** PR γ.2 — `target_field_coverage` rows for the project set. The
+   *  rollup feeds these into `computeProjectStats` so coverage-status
+   *  ='approved' (user-driven, post-γ.2) contributes to mappingApproved
+   *  on no-source target fields. */
+  coverage: Array<{
+    project_id: string
+    target_field_id: string
+    status: 'needs_review' | 'approved' | 'rejected'
+    status_set_by: 'ai_auto' | 'user' | 'system_default'
+  }>
 }
 
 /** Internal: warn (don't throw) when PostgREST returns fewer rows than the
@@ -200,6 +210,7 @@ export async function fetchProjectStatsData(
       sourceAcks: [],
       transformations: [],
       qualityIssues: [],
+      coverage: [],
     }
   }
 
@@ -223,7 +234,7 @@ export async function fetchProjectStatsData(
   // Round 2: tables (scoped to the project's datasets — narrows the field
   // fetch in round 3). All other project-scoped fetches run in parallel
   // since they don't depend on table IDs.
-  const [tablesRes, tfmsRes, sourceAcksRes, qualityIssuesRes] = await Promise.all([
+  const [tablesRes, tfmsRes, sourceAcksRes, qualityIssuesRes, coverageRes] = await Promise.all([
     datasetIds.length > 0
       ? client
           .from('tables')
@@ -252,6 +263,17 @@ export async function fetchProjectStatsData(
       )
       .in('project_id', projectIds)
       .limit(ROW_LIMIT),
+    // PR γ.2 — fetch target_field_coverage rows so the rollup can UNION
+    // coverage-status='approved' into mappingApproved for no-source rows
+    // (drawer-side user-approved coverage rows post-γ.2). Pre-Path-D
+    // projects return zero rows; pre-PR-γ rows lack the status column
+    // (legacy), but the SELECT defaults missing columns to NULL on the
+    // wire — which is filtered out by the 'approved' check downstream.
+    client
+      .from('target_field_coverage')
+      .select('project_id, target_field_id, status, status_set_by', { count: 'exact' })
+      .in('project_id', projectIds)
+      .limit(ROW_LIMIT),
   ])
   assertNoTruncation('tables', tablesRes.count, tablesRes.data?.length ?? 0)
   assertNoTruncation('target_field_mappings', tfmsRes.count, tfmsRes.data?.length ?? 0)
@@ -261,11 +283,13 @@ export async function fetchProjectStatsData(
     sourceAcksRes.data?.length ?? 0,
   )
   assertNoTruncation('quality_issues', qualityIssuesRes.count, qualityIssuesRes.data?.length ?? 0)
+  assertNoTruncation('target_field_coverage', coverageRes.count, coverageRes.data?.length ?? 0)
 
   const tables = tablesRes.data ?? []
   const tfms = (tfmsRes.data ?? []) as RawProjectStatsData['tfms']
   const sourceAcks = sourceAcksRes.data ?? []
   const qualityIssues = (qualityIssuesRes.data ?? []) as RawProjectStatsData['qualityIssues']
+  const coverage = (coverageRes.data ?? []) as RawProjectStatsData['coverage']
 
   // Round 3: fields scoped to the project's tables; mapping_sources scoped
   // to the project's TFMs; transformations via embedded inner-join on
@@ -325,6 +349,7 @@ export async function fetchProjectStatsData(
     sourceAcks,
     transformations: (transformsRes.data ?? []) as unknown as RawProjectStatsData['transformations'],
     qualityIssues,
+    coverage,
   }
 }
 
@@ -366,6 +391,8 @@ export function rollupProjectStats(
   )
   const projectAcks = raw.sourceAcks.filter((a) => a.project_id === projectId)
   const projectQI = raw.qualityIssues.filter((q) => q.project_id === projectId)
+  // PR γ.2 — project-scoped coverage rows for the mappingApproved UNION.
+  const projectCoverage = raw.coverage.filter((c) => c.project_id === projectId)
 
   // Transformations were fetched via embedded inner-join; the row's
   // `target_field_mappings.project_id` carries the routing key.
@@ -412,6 +439,11 @@ export function rollupProjectStats(
       status: t.status,
     })),
     qualityIssues: projectQI,
+    coverage: projectCoverage.map((c) => ({
+      target_field_id: c.target_field_id,
+      status: c.status,
+      status_set_by: c.status_set_by,
+    })),
   })
 
   // ── Source axis (new — distinct mapped ∪ acknowledged) ──────────────

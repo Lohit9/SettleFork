@@ -1030,6 +1030,7 @@ export async function getOutputsPageDataCore(
     { data: sourceAckRows },
     { data: tfmRows },
     { data: msRows },
+    { data: coverageRows },
   ] = await Promise.all([
     client.from('datasets').select('id, role, name').eq('project_id', projectId),
     supabaseAdmin
@@ -1076,6 +1077,13 @@ export async function getOutputsPageDataCore(
         'id, target_field_mapping_id, source_field_id, source_table_id, confidence, ordinal, type_compatibility, target_field_mappings!inner(project_id)',
       )
       .eq('target_field_mappings.project_id', projectId),
+    // PR γ.2 — coverage rows so computeProjectStats UNIONs coverage-
+    // status='approved' into mappingApproved for no-source target
+    // fields. Pre-Path-D projects return zero rows.
+    client
+      .from('target_field_coverage')
+      .select('target_field_id, status, status_set_by')
+      .eq('project_id', projectId),
   ])
 
   const sourceDataset = datasets?.find((d) => d.role === 'source') ?? null
@@ -1159,6 +1167,12 @@ export async function getOutputsPageDataCore(
       status: t.status,
     })),
     qualityIssues: qualityIssueRows ?? [],
+    // PR γ.2 — coverage UNION input for mappingApproved.
+    coverage: (coverageRows ?? []).map((c) => ({
+      target_field_id: c.target_field_id,
+      status: c.status,
+      status_set_by: c.status_set_by,
+    })),
   })
 
   // The Migration Center's card uses the resolution-suppressed counts so
@@ -1242,6 +1256,13 @@ export async function getOutputsPageDataCore(
       issue_kind: q.issue_kind,
       description: q.description,
       title: q.title,
+    })),
+    // PR γ.2 — coverage rows for the rollup's mappingApproved UNION.
+    coverage: (coverageRows ?? []).map((c) => ({
+      project_id: projectId,
+      target_field_id: c.target_field_id,
+      status: c.status,
+      status_set_by: c.status_set_by,
     })),
   }
   const projectStats = rollupProjectStats(projectId, projectStatsRaw)

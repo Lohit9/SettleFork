@@ -527,25 +527,30 @@ async function persistMappingSources(
 }
 
 /**
- * Default coverage-row `status` per categorical kind, per PR γ spec
- * (Mapping grid state model unification — migration 095). All Path-D-
- * authored rows are 'ai_auto' provenance; user overrides flip
- * status_set_by to 'user' via drawer-side mutations (out of scope for
- * this function).
+ * Default coverage-row `status` for Path-D-authored rows. PR γ.2
+ * reversed the original PR γ categorical-kind mapping (migration 095:
+ * out_of_scope/optional → approved; gap/covered/partial → needs_review)
+ * to a uniform 'needs_review' on every coverage row.
  *
- * Mapping:
- *   out_of_scope | optional         → status='approved'
- *   gap | covered | partial         → status='needs_review'
+ * Founder principle: AI proposes → deterministic validates → human
+ * approves. The original auto-approve policy had the AI approving
+ * out_of_scope and optional rows on the customer's behalf without
+ * explicit review; status_set_by='ai_auto' on status='approved'
+ * violated that principle. PR γ.2 (migration 097 + this helper flip)
+ * removes the auto-approval; status_set_by='ai_auto' is now always
+ * paired with status='needs_review' for forward writes.
  *
- * Mirrors the migration 095 backfill SQL CASE expression — keep both in
- * lockstep if the categorical-kind defaults ever change.
+ * Migration 097 backfills the existing auto-approved rows
+ * (status='approved' AND status_set_by='ai_auto') back to
+ * 'needs_review' to bring production data in line with the new policy.
+ *
+ * Coverage row's status='approved' going forward is exclusively
+ * status_set_by='user' (drawer-side approve action via setCoverageStatus
+ * in lib/actions/mappings-for-redesign.ts).
  */
 function defaultStatusForCoverageStatus(
-  coverageStatus: CoveragePayload['coverage_status'],
-): 'needs_review' | 'approved' {
-  if (coverageStatus === 'out_of_scope' || coverageStatus === 'optional') {
-    return 'approved'
-  }
+  _coverageStatus: CoveragePayload['coverage_status'],
+): 'needs_review' {
   return 'needs_review'
 }
 
