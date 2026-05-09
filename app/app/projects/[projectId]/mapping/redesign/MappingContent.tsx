@@ -977,25 +977,43 @@ function MappingContentLoaded({
   }, [])
 
   // Build the post-reject UnmappedRow shape from the current row's
-  // mapped/value-assignment identity. Returns null for row kinds that
-  // are not rejectable (target_acknowledged, unmapped) — call sites
-  // are upstream-gated so this should never fire in practice; defensive
-  // null on the off-chance.
+  // mapped/value-assignment/unmapped identity. PR α₀: rejecting any
+  // non-acknowledged row produces an UnmappedRow with status='rejected'
+  // (post-PR-γ widened union — coverage row drives the persisted state
+  // on next read). Pre-PR-γ this emitted status='unmapped'; the new
+  // override mirrors the wire-data shape the translator emits when a
+  // coverage row's status='rejected' (no TFM, kind='unmapped').
+  //
+  // mapping_content='no-source' and statusSetBy='user' match the
+  // optimistic intent: the user explicitly clicked reject, so the row
+  // surfaces as user-driven rejection until the server roundtrip
+  // settles. coverageStatus is preserved from the original row when the
+  // translator already attached one; otherwise null (orphan / target_only
+  // case — no coverage row existed yet, the post-reject UPSERT in the
+  // server action creates one with coverage_status='gap' default).
+  //
+  // Returns null only for kinds that are not user-rejectable from the
+  // grid: target_acknowledged is the sole exclusion (use the drawer's
+  // un-acknowledge flow instead). Mapped + VA + unmapped all flow
+  // through here.
   const buildUnmappedOverride = useCallback(
     (rowId: string): MappingRow | null => {
       const row = data.rows.find((r) => r.id === rowId)
       if (!row) return null
-      if (row.kind !== 'mapped' && row.kind !== 'value_assignment') {
-        return null
-      }
+      if (row.kind === 'target_acknowledged') return null
       return {
         id: row.id,
         targetField: row.targetField,
         kind: 'unmapped',
-        status: 'unmapped',
+        status: 'rejected',
         confidence: null,
         hasTransformation: false,
         transformationStatus: null,
+        transformationDescription: null,
+        transformationSqlPreview: null,
+        mapping_content: 'no-source',
+        coverageStatus: row.coverageStatus ?? null,
+        statusSetBy: 'user',
       }
     },
     [data.rows],

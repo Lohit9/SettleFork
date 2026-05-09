@@ -749,42 +749,89 @@ describe('FieldMappingRow — status dot', () => {
     expect(dot.className).toContain('bg-amber-400')
   })
 
-  it('renders the "Rejected" dot via aria-label only', () => {
+  it('renders the "Rejected" dot as a HOLLOW circle (PR α₀ — status-driven hollow)', () => {
+    // PR α₀ (2026-05-09): hollow now signals REJECTED (status-driven),
+    // not UNMAPPED (kind-driven). The form-vs-fill distinction stays
+    // as the colorblind-robust signal, but tracks the explicit "do not
+    // migrate" lifecycle decision rather than the synthesized "no-TFM-
+    // yet" kind dimension. Border is now red (matches the rejected
+    // hue) so a colorblind user can still tell rejected from a hollow
+    // ring of any other color (no other status renders hollow).
     render(<FieldMappingRow row={mapped({ status: 'rejected' })} />)
     expect(screen.queryByText('Rejected')).toBeNull()
     const dot = screen.getByLabelText('status: Rejected')
-    expect(dot.className).toContain('bg-red-500')
-  })
-
-  it('renders the "Unmapped" dot as a HOLLOW circle (Refinement 3 — form vs fill)', () => {
-    // Refinement 3 (Phase 4-polish-1 final-final, 2026-04-26): the
-    // unmapped dot SHIFTED from filled-slate-300 to a hollow ring
-    // (`border border-slate-400 bg-transparent`). The form-vs-fill
-    // distinction holds under colorblindness or low-contrast
-    // monitors where slate-300 vs green/amber could collapse.
-    // Pin the new contract verbatim and the absence of the prior
-    // filled style.
-    render(<FieldMappingRow row={unmapped()} />)
-    const dot = screen.getByLabelText('status: Unmapped')
     expect(dot.className).toContain('border')
-    expect(dot.className).toContain('border-slate-400')
+    expect(dot.className).toContain('border-red-500')
     expect(dot.className).toContain('bg-transparent')
-    expect(dot.className).not.toContain('bg-slate-300')
+    expect(dot.className).not.toContain('bg-red-500')
     expect(dot.getAttribute('data-status-dot-style')).toBe('hollow')
   })
 
-  it('acknowledged rows render a FILLED dot (only kind=unmapped is hollow)', () => {
-    // Refinement 3: the hollow style fires SOLELY on
-    // kind === 'unmapped'. Acknowledged rows reuse their underlying
-    // status color (e.g. bg-green-500 when status='approved') and
-    // remain filled. Pin the boundary so a future regex-based
-    // refactor doesn't accidentally hollow out acknowledged dots.
+  it('rejected hollow treatment fires regardless of kind (mapped / VA / unmapped)', () => {
+    // PR α₀: the hollow rule is purely status-driven. Any row kind
+    // that reaches status='rejected' renders hollow. Translator never
+    // emits status='rejected' for target_acknowledged (forced
+    // 'approved'), so rejected + ack is unreachable on live data —
+    // omitted here.
+    const { unmount: u1 } = render(<FieldMappingRow row={mapped({ status: 'rejected' })} />)
+    expect(
+      screen.getByLabelText('status: Rejected').getAttribute('data-status-dot-style'),
+    ).toBe('hollow')
+    u1()
+
+    const { unmount: u2 } = render(
+      <FieldMappingRow row={valueAssignment({ status: 'rejected' })} />,
+    )
+    expect(
+      screen.getByLabelText('status: Rejected').getAttribute('data-status-dot-style'),
+    ).toBe('hollow')
+    u2()
+
+    render(<FieldMappingRow row={unmapped({ status: 'rejected' })} />)
+    expect(
+      screen.getByLabelText('status: Rejected').getAttribute('data-status-dot-style'),
+    ).toBe('hollow')
+  })
+
+  it('unmapped + needs_review renders a FILLED amber dot (PR α₀ — kind no longer drives hollow)', () => {
+    // PR α₀ (2026-05-09): the hollow branch flipped from kind-based to
+    // status-based. An unmapped row that carries a coverage row with
+    // status='needs_review' (the post-PR-γ default for orphan
+    // target_only fields) now renders identically to a mapped+
+    // needs_review row — filled amber. The state-machine unification
+    // is the point: visually, "this row needs review" reads
+    // identically regardless of whether a TFM backs it.
+    render(<FieldMappingRow row={unmapped({ status: 'needs_review' })} />)
+    const dot = screen.getByLabelText('status: Needs Review')
+    expect(dot.className).toContain('bg-amber-400')
+    expect(dot.className).not.toContain('bg-transparent')
+    expect(dot.getAttribute('data-status-dot-style')).toBe('filled')
+  })
+
+  it('unmapped + status=unmapped (legacy fixture) renders a FILLED slate dot', () => {
+    // The 'unmapped' status literal is retained for fixture back-compat
+    // (PR γ widened UnmappedRow.status). Translator never emits this
+    // value for live wire data post-PR-γ, but pre-existing fixtures and
+    // optimistic-override constructions continue to compile. Under the
+    // PR α₀ status-driven dot, the legacy 'unmapped' literal is treated
+    // like any other non-rejected status — filled with its color.
+    render(<FieldMappingRow row={unmapped()} />)
+    const dot = screen.getByLabelText('status: Unmapped')
+    expect(dot.className).toContain('bg-slate-300')
+    expect(dot.className).not.toContain('bg-transparent')
+    expect(dot.getAttribute('data-status-dot-style')).toBe('filled')
+  })
+
+  it('acknowledged rows render a FILLED dot', () => {
+    // target_acknowledged is hard-coded status='approved' by the
+    // translator. Under PR α₀'s status-driven dot, that resolves to a
+    // filled green dot identical to a regular mapped+approved row.
+    // The kind-aware tooltip override ("Acknowledged" instead of
+    // "Approved") remains as the sighted-user disambiguation channel.
     render(<FieldMappingRow row={targetAck()} />)
-    // targetAck factory uses status='approved' → filled green.
     const dot = screen.getByLabelText('status: Approved')
     expect(dot.className).toContain('bg-green-500')
     expect(dot.className).not.toContain('bg-transparent')
-    expect(dot.className).not.toContain('border-slate-400')
     expect(dot.getAttribute('data-status-dot-style')).toBe('filled')
   })
 
@@ -1397,21 +1444,39 @@ describe('FieldMappingRow — split source columns', () => {
     )
   })
 
-  it('value_assignment renders an em-dash in the table column AND "No source mapped" in the field column', () => {
-    // Pairs the legacy "No source mapped" inline phrase (founder Gap 4a
-    // §9 Q5, preserved verbatim) with the new em-dash table-column slot
-    // so the table column reads consistently across kinds.
+  it('value_assignment renders italic "No source mapped" in the TABLE column + em-dash in the field column (PR α₀)', () => {
+    // PR α₀ unification: the italic "No source mapped" phrase moved
+    // from the source-FIELD column to the source-TABLE column, where
+    // it now serves as the canonical visual identity for every
+    // non-mapped row kind (VA, target_acknowledged, unmapped). The
+    // field column carries an em-dash in all three cases — distinct
+    // aria-label ("no source field") so screen readers hear two
+    // distinct phrases for the two columns.
     render(<FieldMappingRow row={valueAssignment()} />)
-    expect(screen.getByLabelText('no source table')).toBeInTheDocument()
-    expect(screen.getByText('No source mapped')).toBeInTheDocument()
+    const phrase = screen.getByLabelText('no source mapped')
+    expect(phrase).toBeInTheDocument()
+    // The phrase is rendered as italic slate-500 — pin the visual
+    // contract so a future refactor doesn't silently flatten it.
+    expect(phrase.className).toContain('italic')
+    expect(phrase.className).toContain('text-slate-500')
+    expect(phrase.textContent).toBe('No source mapped')
+    expect(screen.getByLabelText('no source field')).toBeInTheDocument()
   })
 
-  it('Rule 5/6 render an em-dash in BOTH the table column AND the field column with distinct aria-labels', () => {
-    // Distinct aria-labels ("no source mapped" vs "no source field")
-    // prevent screen readers from hearing the same phrase twice while
-    // still communicating the absence of each piece of data.
+  it('target_acknowledged + unmapped share the unified non-mapped treatment (PR α₀)', () => {
+    // Both kinds now render the italic "No source mapped" in the
+    // table column and an em-dash in the field column — identical to
+    // value_assignment. Pre-α₀, these rendered an em-dash in the
+    // table column too; the unification consolidates the visual
+    // vocabulary so a user scanning a dense grid doesn't have to
+    // distinguish em-dash from italic phrase.
+    const { unmount } = render(<FieldMappingRow row={targetAck()} />)
+    expect(screen.getByLabelText('no source mapped').textContent).toBe('No source mapped')
+    expect(screen.getByLabelText('no source field')).toBeInTheDocument()
+    unmount()
+
     render(<FieldMappingRow row={unmapped()} />)
-    expect(screen.getByLabelText('no source mapped')).toBeInTheDocument()
+    expect(screen.getByLabelText('no source mapped').textContent).toBe('No source mapped')
     expect(screen.getByLabelText('no source field')).toBeInTheDocument()
   })
 

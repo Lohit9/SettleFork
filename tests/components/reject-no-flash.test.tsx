@@ -107,9 +107,14 @@ describe("[Mapping reject-flash fix] optimistic-data override — invariants", (
     expect(MAPPING_CONTENT).toMatch(
       /const\s+buildUnmappedOverride\s*=\s*useCallback/,
     );
-    // The returned object literal must contain the unmapped sentinels.
+    // The returned object literal must carry kind='unmapped' (the wire
+    // shape the translator produces when no TFM points at the target)
+    // and status='rejected' (PR α₀ — the new optimistic-reject status,
+    // mirrors the post-PR-γ widened union; pre-α₀ this was the legacy
+    // 'unmapped' status sentinel which is now reserved for fixture
+    // back-compat only).
     expect(MAPPING_CONTENT).toMatch(/kind:\s*['"]unmapped['"]/);
-    expect(MAPPING_CONTENT).toMatch(/status:\s*['"]unmapped['"]/);
+    expect(MAPPING_CONTENT).toMatch(/status:\s*['"]rejected['"]/);
   });
 
   it("RF3 — handleRejectConfirm calls writeOptimisticData BEFORE setOptimistic('rejecting')", () => {

@@ -141,6 +141,162 @@ export interface RejectMappingResult extends MappingActionResult {
   stagedRowsReverted?: number
 }
 
+// ─── PR α₀ — no-source row approve/reject helpers ────────────────────────────
+//
+// PR α₀ extends the inline approve/reject affordances to no-source rows
+// (kind: 'unmapped' synthesized by the read translator with a synthetic
+// `unmapped::<targetFieldId>` id). The persistence target is
+// `target_field_coverage.status` (migration 095) — independent of the
+// TFM lifecycle. The two helpers below carry the shared writes.
+
+const UNMAPPED_ID_PREFIX = 'unmapped::'
+
+const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+
+interface FieldOwnership {
+  projectId: string
+  fieldName: string | null
+}
+
+/**
+ * Resolve a target field's project_id + name via the schema ownership
+ * chain (fields → tables → datasets). Used by the no-source approve/reject
+ * paths, which receive a synthetic `unmapped::<targetFieldId>` id and have
+ * no TFM to look up project context from.
+ *
+ * Returns null when the field doesn't exist (caller surfaces NOT_FOUND).
+ */
+async function resolveFieldOwnership(
+  targetFieldId: string,
+): Promise<FieldOwnership | null> {
+  const { data, error } = await supabaseAdmin
+    .from('fields')
+    .select('id, name, tables!inner(datasets!inner(project_id))')
+    .eq('id', targetFieldId)
+    .single<{
+      id: string
+      name: string | null
+      tables: { datasets: { project_id: string } }
+    }>()
+  if (error || !data) return null
+  return {
+    projectId: data.tables.datasets.project_id,
+    fieldName: data.name ?? null,
+  }
+}
+
+/**
+ * UPSERT semantics for `target_field_coverage.status` driven by the user
+ * (drawer/inline approve/reject). Preserves any existing
+ * `coverage_status` verdict authored by Path D — a user-driven approval
+ * decision is orthogonal to the AI's coverage analysis.
+ *
+ * Flow:
+ *   1. UPDATE the existing row (if present) — sets status, status_set_by,
+ *      updated_at. coverage_status untouched.
+ *   2. If no row matched, INSERT a synthesized row with
+ *      coverage_status='gap' (the user is explicitly deciding the row's
+ *      fate; the AI never produced a verdict — 'gap' is the most
+ *      semantically faithful default and is consistent with the PR γ
+ *      backfill mapping `gap → needs_review`).
+ *
+ * Two round-trips in the create-new case, one round-trip in the common
+ * update case. Avoids `.upsert()` because Supabase's upsert does a full
+ * row replace on conflict, which would clobber Path D's coverage_status.
+ */
+async function setCoverageStatus(
+  projectId: string,
+  targetFieldId: string,
+  status: 'needs_review' | 'approved' | 'rejected',
+): Promise<{ success: boolean; error?: string }> {
+  const now = new Date().toISOString()
+  const { data: updated, error: updErr } = await supabaseAdmin
+    .from('target_field_coverage')
+    .update({ status, status_set_by: 'user', updated_at: now })
+    .eq('project_id', projectId)
+    .eq('target_field_id', targetFieldId)
+    .select('id')
+  if (updErr) return { success: false, error: updErr.message }
+  if (updated && updated.length > 0) return { success: true }
+
+  // No existing row — INSERT one. coverage_status defaults to 'gap'
+  // (see helper JSDoc).
+  const { error: insErr } = await supabaseAdmin
+    .from('target_field_coverage')
+    .insert({
+      project_id: projectId,
+      target_field_id: targetFieldId,
+      coverage_status: 'gap',
+      status,
+      status_set_by: 'user',
+    })
+  if (insErr) return { success: false, error: insErr.message }
+  return { success: true }
+}
+
+/**
+ * Shared auth + permission gate for the no-source approve/reject paths.
+ * Mirrors the inline check used by `createFieldMapping` (auth → role →
+ * maintenance-mode) so the surface stays uniform across redesign-side
+ * write actions.
+ */
+async function gateNoSourceWrite(
+  projectId: string,
+): Promise<{ ok: true } | { ok: false; result: MappingActionResult }> {
+  const supabase = await createClient()
+  const {
+    data: { user },
+  } = await supabase.auth.getUser()
+  if (!user) {
+    return {
+      ok: false,
+      result: {
+        success: false,
+        error: 'Not authenticated',
+        errorCode: 'PERMISSION_DENIED',
+      },
+    }
+  }
+  const perm = await requireProjectPermission(projectId, 'editor')
+  if (!perm.allowed) {
+    return {
+      ok: false,
+      result: {
+        success: false,
+        error: perm.error ?? 'Insufficient permissions',
+        errorCode: 'PERMISSION_DENIED',
+      },
+    }
+  }
+  try {
+    await assertMappingWritesEnabled(projectId)
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err)
+    if (
+      message ===
+      'Mapping writes are temporarily disabled for scheduled maintenance'
+    ) {
+      return {
+        ok: false,
+        result: {
+          success: false,
+          error: message,
+          errorCode: 'MAINTENANCE_MODE',
+        },
+      }
+    }
+    return {
+      ok: false,
+      result: {
+        success: false,
+        error: message,
+        errorCode: 'INTERNAL',
+      },
+    }
+  }
+  return { ok: true }
+}
+
 /**
  * Approve a TFM (mapped or value-assignment). Thin wrapper over
  * `updateFieldMappingStatus(rowId, 'approved')`.
@@ -195,12 +351,56 @@ export async function generateMappings(
 export async function approveFieldMapping(
   rowId: string,
 ): Promise<MappingActionResult> {
-  if (rowId.startsWith('unmapped::')) {
-    return {
-      success: false,
-      error: 'Unmapped rows cannot be approved',
-      errorCode: 'VALIDATION',
+  // PR α₀ — no-source approve writes target_field_coverage.status='approved'
+  // independent of any TFM. The synthetic id format is `unmapped::<uuid>`
+  // (see `_mappings-for-redesign-core.ts`'s buildUnmappedRow).
+  if (rowId.startsWith(UNMAPPED_ID_PREFIX)) {
+    const targetFieldId = rowId.slice(UNMAPPED_ID_PREFIX.length)
+    if (!UUID_REGEX.test(targetFieldId)) {
+      return {
+        success: false,
+        error: 'Invalid row id',
+        errorCode: 'VALIDATION',
+      }
     }
+    const ownership = await resolveFieldOwnership(targetFieldId)
+    if (!ownership) {
+      return {
+        success: false,
+        error: 'Target field not found',
+        errorCode: 'NOT_FOUND',
+      }
+    }
+    const gate = await gateNoSourceWrite(ownership.projectId)
+    if (!gate.ok) return gate.result
+
+    const writeResult = await setCoverageStatus(
+      ownership.projectId,
+      targetFieldId,
+      'approved',
+    )
+    if (!writeResult.success) {
+      return {
+        success: false,
+        error: writeResult.error ?? 'Failed to update coverage status',
+        errorCode: 'INTERNAL',
+      }
+    }
+
+    await logActivity(
+      ownership.projectId,
+      'mapping_approved',
+      `Mapping approved: [no source] → ${ownership.fieldName ?? '?'}`,
+      'mapping',
+      {
+        target_field_id: targetFieldId,
+        target_field: ownership.fieldName,
+        source_field: null,
+        no_source: true,
+      },
+    )
+    revalidatePath(`/app/projects/${ownership.projectId}/mapping`)
+    return { success: true }
   }
 
   const decoded = decodeShimmedRowId(rowId)
@@ -255,12 +455,60 @@ export async function approveFieldMapping(
 export async function rejectFieldMapping(
   rowId: string,
 ): Promise<RejectMappingResult> {
-  if (rowId.startsWith('unmapped::')) {
-    return {
-      success: false,
-      error: 'Unmapped rows cannot be rejected',
-      errorCode: 'VALIDATION',
+  // PR α₀ — no-source reject writes target_field_coverage.status='rejected'
+  // independent of any TFM. Mirrors the approve branch in
+  // `approveFieldMapping`; the synthetic id format is `unmapped::<uuid>`.
+  if (rowId.startsWith(UNMAPPED_ID_PREFIX)) {
+    const targetFieldId = rowId.slice(UNMAPPED_ID_PREFIX.length)
+    if (!UUID_REGEX.test(targetFieldId)) {
+      return {
+        success: false,
+        error: 'Invalid row id',
+        errorCode: 'VALIDATION',
+      }
     }
+    const ownership = await resolveFieldOwnership(targetFieldId)
+    if (!ownership) {
+      return {
+        success: false,
+        error: 'Target field not found',
+        errorCode: 'NOT_FOUND',
+      }
+    }
+    const gate = await gateNoSourceWrite(ownership.projectId)
+    if (!gate.ok) {
+      return {
+        ...gate.result,
+      }
+    }
+
+    const writeResult = await setCoverageStatus(
+      ownership.projectId,
+      targetFieldId,
+      'rejected',
+    )
+    if (!writeResult.success) {
+      return {
+        success: false,
+        error: writeResult.error ?? 'Failed to update coverage status',
+        errorCode: 'INTERNAL',
+      }
+    }
+
+    await logActivity(
+      ownership.projectId,
+      'mapping_rejected',
+      `Mapping rejected: [no source] → ${ownership.fieldName ?? '?'}`,
+      'mapping',
+      {
+        target_field_id: targetFieldId,
+        target_field: ownership.fieldName,
+        source_field: null,
+        no_source: true,
+      },
+    )
+    revalidatePath(`/app/projects/${ownership.projectId}/mapping`)
+    return { success: true }
   }
 
   const decoded = decodeShimmedRowId(rowId)
@@ -331,6 +579,31 @@ export async function rejectFieldMapping(
       error: deleteResult.error,
       errorCode: deleteResult.errorCode,
     }
+  }
+
+  // PR \u03b1\u2080 \u2014 write target_field_coverage.status='rejected' so the row
+  // surfaces as rejected (not synthesized 'needs_review') on next read.
+  // The translator's resolution priority post-PR-\u03b3: no TFM \u2192
+  // coverage.status. Without this write, the row would default back to
+  // 'needs_review' the moment the deleteFieldMapping cascade clears the
+  // TFM, and the user's reject click would not stick.
+  //
+  // Best-effort: a failure here does NOT roll back the TFM delete (which
+  // already committed) \u2014 the user gets a "Mapping rejected" success but
+  // the row may transiently render 'needs_review' until the next user
+  // action lands a coverage row. The activity log below will still
+  // reflect the rejection intent; the user can re-click reject if the
+  // visual state lags.
+  const coverageWrite = await setCoverageStatus(
+    tfmLookup.project_id,
+    tfmLookup.target_field_id,
+    'rejected',
+  )
+  if (!coverageWrite.success) {
+    console.warn(
+      '[rejectFieldMapping] coverage status write failed (TFM delete already committed):',
+      coverageWrite.error,
+    )
   }
 
   // Log AFTER successful delete so a failed delete doesn't leave a
