@@ -526,6 +526,29 @@ async function persistMappingSources(
   return rows.length
 }
 
+/**
+ * Default coverage-row `status` per categorical kind, per PR γ spec
+ * (Mapping grid state model unification — migration 095). All Path-D-
+ * authored rows are 'ai_auto' provenance; user overrides flip
+ * status_set_by to 'user' via drawer-side mutations (out of scope for
+ * this function).
+ *
+ * Mapping:
+ *   out_of_scope | optional         → status='approved'
+ *   gap | covered | partial         → status='needs_review'
+ *
+ * Mirrors the migration 095 backfill SQL CASE expression — keep both in
+ * lockstep if the categorical-kind defaults ever change.
+ */
+function defaultStatusForCoverageStatus(
+  coverageStatus: CoveragePayload['coverage_status'],
+): 'needs_review' | 'approved' {
+  if (coverageStatus === 'out_of_scope' || coverageStatus === 'optional') {
+    return 'approved'
+  }
+  return 'needs_review'
+}
+
 async function persistCoverage(
   admin: SupabaseClient,
   projectId: string,
@@ -540,6 +563,8 @@ async function persistCoverage(
     coverage_status: c.coverage_status,
     ai_reasoning: c.ai_reasoning ?? null,
     default_value_recommendation: c.default_value_recommendation ?? null,
+    status: defaultStatusForCoverageStatus(c.coverage_status),
+    status_set_by: 'ai_auto' as const,
     experiment_run_id: experimentRunId,
   }))
 
