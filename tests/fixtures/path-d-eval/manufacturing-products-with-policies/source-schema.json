@@ -1,0 +1,27 @@
+{
+  "tables": [
+    {
+      "id": "a4000000-0000-4000-8000-000000000001",
+      "name": "items",
+      "fields": [
+        { "id": "f4000000-0000-4000-8000-000000000001", "name": "ItemID",            "data_type": "varchar(20)",  "is_nullable": false, "is_primary_key": true,  "description": "Legacy item identifier" },
+        { "id": "f4000000-0000-4000-8000-000000000002", "name": "ItemName",          "data_type": "varchar(120)", "is_nullable": false, "description": "Item display name" },
+        { "id": "f4000000-0000-4000-8000-000000000003", "name": "ProductGroupName",  "data_type": "varchar(60)",  "is_nullable": false, "description": "Free-form product group label assigned by the merchandising team. Small set of distinct values across the catalogue." },
+        { "id": "f4000000-0000-4000-8000-000000000004", "name": "UnitCost",          "data_type": "numeric(12,4)","is_nullable": true,  "description": "Standard cost per unit (USD)" },
+        { "id": "f4000000-0000-4000-8000-000000000005", "name": "Discontinued",      "data_type": "boolean",      "is_nullable": false, "description": "TRUE when the item has been discontinued. Inverse polarity to the modern target's IsActive flag." },
+        { "id": "f4000000-0000-4000-8000-000000000006", "name": "LeadTimeDays",      "data_type": "integer",      "is_nullable": true,  "description": "Standard supplier lead time in days" },
+        { "id": "f4000000-0000-4000-8000-000000000007", "name": "ItemDescription",   "data_type": "varchar(255)", "is_nullable": true,  "description": "Long-form description shown in catalogues" }
+      ]
+    },
+    {
+      "id": "a4000000-0000-4000-8000-000000000002",
+      "name": "item_policies",
+      "fields": [
+        { "id": "f4000000-0000-4000-8000-000000000020", "name": "ItemID",            "data_type": "varchar(20)",  "is_nullable": false, "is_foreign_key": true, "fk_reference": "items.ItemID", "description": "Item this policy belongs to" },
+        { "id": "f4000000-0000-4000-8000-000000000021", "name": "ReorderPoint",      "data_type": "numeric(12,2)","is_nullable": true,  "description": "Stock level at which a reorder is triggered" },
+        { "id": "f4000000-0000-4000-8000-000000000022", "name": "SafetyStock",       "data_type": "numeric(12,2)","is_nullable": true,  "description": "Safety stock buffer in units" },
+        { "id": "f4000000-0000-4000-8000-000000000023", "name": "PreferredVendor",   "data_type": "varchar(80)",  "is_nullable": true,  "description": "Preferred vendor name (free text). No corresponding target table — vendors will be migrated separately under a future engagement." }
+      ]
+    }
+  ]
+}
