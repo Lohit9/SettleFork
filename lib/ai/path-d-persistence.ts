@@ -565,6 +565,12 @@ async function persistCoverage(
     default_value_recommendation: c.default_value_recommendation ?? null,
     status: defaultStatusForCoverageStatus(c.coverage_status),
     status_set_by: 'ai_auto' as const,
+    // PR γ.1 — AI confidence on no-source rows. Path D emits 0.0-1.0
+    // per CoveragePayloadSchema; persisted directly (mirrors the TFM
+    // persistence convention at line 380 above — no ×100 scaling).
+    // Optional on the wire payload, so legacy responses without the
+    // field land as NULL and the UI renders an em-dash.
+    confidence: c.confidence ?? null,
     experiment_run_id: experimentRunId,
   }))
 

@@ -56,6 +56,14 @@ export const CoveragePayloadSchema = z.object({
   coverage_status: z.enum(['covered', 'partial', 'gap', 'optional', 'out_of_scope']),
   ai_reasoning: z.string().optional(),
   default_value_recommendation: z.unknown().nullable().optional(),
+  // PR γ.1 Stop 1 calibration trial — coverage confidence emission. The
+  // model is asked (via the <coverage> prompt section) to emit a 0.0-1.0
+  // confidence score alongside each coverage_status verdict, reusing
+  // the 5-tier scale from the mapping confidence guidance. Optional so
+  // legacy responses without the field still parse cleanly during
+  // calibration; Stop 2 may tighten to required after empirical
+  // calibration confirms the prompt mechanic is sound.
+  confidence: z.number().min(0).max(1).optional(),
 })
 export type CoveragePayload = z.infer<typeof CoveragePayloadSchema>
 
