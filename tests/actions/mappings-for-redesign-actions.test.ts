@@ -92,9 +92,16 @@ describe('[mappings-for-redesign actions] approveFieldMapping', () => {
     'export async function rejectFieldMapping(',
   )
 
-  it("rejects rows whose id begins with 'unmapped::' (no TFM to approve)", () => {
-    expect(body).toMatch(/rowId\.startsWith\(['"]unmapped::['"]\)/)
-    expect(body).toMatch(/errorCode:\s*['"]VALIDATION['"]/)
+  it("routes 'unmapped::' rows to the no-source coverage write path (PR α₀)", () => {
+    // PR α₀ extended approve to accept the synthetic `unmapped::<uuid>`
+    // id format that the read translator emits for kind='unmapped'
+    // rows. The action now writes target_field_coverage.status='approved'
+    // independent of any TFM (the TFM doesn't exist for these rows).
+    // The branch is gated on the prefix constant, then routes to the
+    // shared `setCoverageStatus` helper.
+    expect(body).toMatch(/rowId\.startsWith\(UNMAPPED_ID_PREFIX\)/)
+    expect(body).toContain("setCoverageStatus(")
+    expect(body).toMatch(/['"]approved['"]/)
   })
 
   it('queries is_acknowledged before delegating (defensive against the redesign id-encoding gotcha)', () => {
@@ -128,8 +135,13 @@ describe('[mappings-for-redesign actions] rejectFieldMapping', () => {
     '\n}\n',
   ) + '\n}\n' // re-attach the closing brace eaten by sliceBetween
 
-  it("rejects rows whose id begins with 'unmapped::' (no TFM to delete)", () => {
-    expect(body).toMatch(/rowId\.startsWith\(['"]unmapped::['"]\)/)
+  it("routes 'unmapped::' rows to the no-source coverage write path (PR α₀)", () => {
+    // PR α₀ extended reject to accept the synthetic `unmapped::<uuid>`
+    // id format. The action writes target_field_coverage.status='rejected'
+    // — same coverage helper as the approve branch, different status.
+    expect(body).toMatch(/rowId\.startsWith\(UNMAPPED_ID_PREFIX\)/)
+    expect(body).toContain("setCoverageStatus(")
+    expect(body).toMatch(/['"]rejected['"]/)
   })
 
   it('rejects ids that do not decode to a tfm-primary or tfm-contributor', () => {
@@ -180,11 +192,15 @@ describe('[mappings-for-redesign actions] rejectFieldMapping', () => {
   })
 
   it("emits a 'mapping_rejected' activity log entry AFTER successful delete", () => {
-    // Order constraint: log ONLY after delete success.
+    // Order constraint: log ONLY after delete success. PR α₀ added a
+    // separate logActivity call in the no-source unmapped:: branch
+    // (which does NOT call deleteFieldMapping); pin the order
+    // constraint on the LATER log call (the post-delete one) by
+    // searching from the deleteFieldMapping index forward.
     const deleteIdx = body.indexOf('deleteFieldMapping(')
-    const logIdx = body.indexOf('logActivity(')
     expect(deleteIdx).toBeGreaterThan(0)
-    expect(logIdx).toBeGreaterThan(deleteIdx)
+    const postDeleteLogIdx = body.indexOf('logActivity(', deleteIdx)
+    expect(postDeleteLogIdx).toBeGreaterThan(deleteIdx)
     expect(body).toMatch(/['"]mapping_rejected['"]/)
     expect(body).toMatch(/['"]mapping['"]/)
   })
@@ -201,10 +217,150 @@ describe('[mappings-for-redesign actions] rejectFieldMapping', () => {
   it('exposes alreadyDeleted on the result type so the UI can branch on it', () => {
     expect(SRC).toMatch(/alreadyDeleted\?:\s*boolean/)
   })
+
+  it('post-delete write target_field_coverage.status=rejected (PR α₀ — keeps the row read as rejected)', () => {
+    // PR α₀: after a successful TFM delete, the wrapper UPSERTs a
+    // coverage row with status='rejected'. Without this write, the
+    // read translator's resolution-priority falls back to a
+    // synthesized 'needs_review' on next read (no TFM, no coverage
+    // row, orphan target_only case) — and the user's reject click
+    // would not stick.
+    const deleteIdx = body.indexOf('deleteFieldMapping(')
+    const coverageWriteIdx = body.indexOf('setCoverageStatus(', deleteIdx)
+    expect(coverageWriteIdx).toBeGreaterThan(deleteIdx)
+    // The write uses the TFM lookup's project_id + target_field_id and
+    // 'rejected' as the third arg.
+    const coverageBody = body.slice(coverageWriteIdx, coverageWriteIdx + 500)
+    expect(coverageBody).toContain('tfmLookup.project_id')
+    expect(coverageBody).toContain('tfmLookup.target_field_id')
+    expect(coverageBody).toMatch(/['"]rejected['"]/)
+  })
 })
 
 // ─────────────────────────────────────────────────────────────────────
-// 4. Cross-cutting — generic error copy boundary
+// 4. PR α₀ — no-source approve/reject path (target_field_coverage)
+// ─────────────────────────────────────────────────────────────────────
+
+describe('[mappings-for-redesign actions] PR α₀ no-source helpers', () => {
+  it('declares UNMAPPED_ID_PREFIX as the synthetic id sentinel', () => {
+    expect(SRC).toMatch(/const\s+UNMAPPED_ID_PREFIX\s*=\s*['"]unmapped::['"]/)
+  })
+
+  it('declares a UUID_REGEX guard so malformed unmapped:: ids return VALIDATION', () => {
+    // Defense-in-depth: the slice after `unmapped::` must be a valid
+    // UUID before the action looks up the field. Without this, an
+    // attacker-supplied id could probe the fields table.
+    expect(SRC).toMatch(/const\s+UUID_REGEX\s*=\s*\/\^\[0-9a-f\]/)
+    expect(SRC).toMatch(/UUID_REGEX\.test\(/)
+  })
+
+  it('declares resolveFieldOwnership — walks fields → tables → datasets → project_id', () => {
+    expect(SRC).toMatch(/async function resolveFieldOwnership\(/)
+    // The single round-trip uses the standard ownership-chain join
+    // (matches the pattern at lib/actions/fields.ts:81).
+    expect(SRC).toMatch(/tables!inner\(datasets!inner\(project_id\)\)/)
+  })
+
+  it('declares setCoverageStatus — UPDATE-then-INSERT with coverage_status="gap" default', () => {
+    // The helper avoids `.upsert()` because Supabase's upsert does a
+    // full row replace on conflict, which would clobber Path D's
+    // coverage_status. Instead: try UPDATE first (preserves
+    // coverage_status); if no row matched, INSERT a synthesized row
+    // with coverage_status='gap'.
+    expect(SRC).toMatch(/async function setCoverageStatus\(/)
+    expect(SRC).toContain("from('target_field_coverage')")
+    // The UPDATE branch matches by (project_id, target_field_id) and
+    // sets only status, status_set_by, updated_at.
+    expect(SRC).toMatch(/\.update\(\s*\{[^}]*status[^}]*status_set_by:\s*['"]user['"]/)
+    // The fallback INSERT carries the 'gap' default for
+    // coverage_status (NOT NULL by migration 093 CHECK constraint).
+    expect(SRC).toMatch(/coverage_status:\s*['"]gap['"]/)
+    // status_set_by is hard-coded 'user' on both branches (the helper
+    // is the user-driven write path).
+    const helperBody = sliceBetween(
+      SRC,
+      'async function setCoverageStatus(',
+      'async function gateNoSourceWrite(',
+    )
+    expect(helperBody).not.toMatch(/status_set_by:\s*['"]ai_auto['"]/)
+    expect(helperBody).not.toMatch(/status_set_by:\s*['"]system_default['"]/)
+  })
+
+  it('declares gateNoSourceWrite — auth + role + maintenance-mode gate shared by approve/reject', () => {
+    expect(SRC).toMatch(/async function gateNoSourceWrite\(/)
+    // Gate sequence: auth → requireProjectPermission('editor') →
+    // assertMappingWritesEnabled. Mirrors the inline pattern in
+    // createFieldMapping.
+    const gateBody = sliceBetween(
+      SRC,
+      'async function gateNoSourceWrite(',
+      'export async function approveFieldMapping(',
+    )
+    expect(gateBody).toContain('createClient(')
+    expect(gateBody).toContain("requireProjectPermission(projectId, 'editor')")
+    expect(gateBody).toContain('assertMappingWritesEnabled')
+    expect(gateBody).toMatch(/errorCode:\s*['"]MAINTENANCE_MODE['"]/)
+  })
+
+  it('approve no-source path: validates id, gates auth, writes coverage, logs activity, revalidates', () => {
+    const approveBody = sliceBetween(
+      SRC,
+      'export async function approveFieldMapping(',
+      'export async function rejectFieldMapping(',
+    )
+    // The unmapped:: branch (early in the function body) hits each
+    // step in order: id validation → field ownership → gate → coverage
+    // write → activity log → revalidatePath.
+    const noSourceBranch = sliceBetween(
+      approveBody,
+      'rowId.startsWith(UNMAPPED_ID_PREFIX)',
+      'const decoded = decodeShimmedRowId(rowId)',
+    )
+    expect(noSourceBranch).toContain('UUID_REGEX.test(')
+    expect(noSourceBranch).toContain('resolveFieldOwnership(')
+    expect(noSourceBranch).toContain('gateNoSourceWrite(')
+    expect(noSourceBranch).toContain("setCoverageStatus(")
+    expect(noSourceBranch).toMatch(/['"]approved['"]/)
+    expect(noSourceBranch).toContain("logActivity(")
+    expect(noSourceBranch).toContain("'mapping_approved'")
+    expect(noSourceBranch).toContain('revalidatePath(')
+  })
+
+  it('reject no-source path: validates id, gates auth, writes coverage, logs activity, revalidates', () => {
+    const rejectBody = sliceBetween(
+      SRC,
+      'export async function rejectFieldMapping(',
+      'const decoded = decodeShimmedRowId(rowId)',
+    )
+    expect(rejectBody).toContain('UUID_REGEX.test(')
+    expect(rejectBody).toContain('resolveFieldOwnership(')
+    expect(rejectBody).toContain('gateNoSourceWrite(')
+    expect(rejectBody).toContain("setCoverageStatus(")
+    expect(rejectBody).toMatch(/['"]rejected['"]/)
+    expect(rejectBody).toContain("logActivity(")
+    expect(rejectBody).toContain("'mapping_rejected'")
+    expect(rejectBody).toContain('revalidatePath(')
+  })
+
+  it('activity-log payload tags the no-source path with no_source: true metadata', () => {
+    // Both no-source branches emit `no_source: true` in the metadata
+    // payload so the audit trail can distinguish "user approved/
+    // rejected a no-source row" from a regular TFM-backed action.
+    expect(SRC.match(/no_source:\s*true/g)?.length ?? 0).toBeGreaterThanOrEqual(2)
+  })
+
+  it('activity-log message format for no-source: "Mapping {action}: [no source] → <field>"', () => {
+    // Distinguishes from the TFM-backed format which uses `[value]`
+    // for VA fallback. `[no source]` makes it explicit that the row
+    // had no TFM to begin with — not a VA whose source name was
+    // unrecoverable.
+    expect(SRC).toMatch(/Mapping approved: \[no source\]/)
+    expect(SRC).toMatch(/Mapping rejected: \[no source\]/)
+  })
+})
+
+// ─────────────────────────────────────────────────────────────────────
+// 5. Cross-cutting — generic error copy boundary
 // ─────────────────────────────────────────────────────────────────────
 
 describe('[mappings-for-redesign actions] result-type boundary', () => {
