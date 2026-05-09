@@ -153,6 +153,15 @@ interface RawCoverageRow {
   coverage_status: 'covered' | 'partial' | 'gap' | 'optional' | 'out_of_scope' | string
   status: 'needs_review' | 'approved' | 'rejected' | string
   status_set_by: 'ai_auto' | 'user' | 'system_default' | string
+  /**
+   * PR γ.1 — AI confidence on no-source rows. Migration 096 added
+   * the `confidence` column to target_field_coverage; Path D's
+   * persistence layer writes the LLM's 0.0-1.0 emission directly
+   * (mirrors the TFM convention). Pre-PR-γ.1 rows carry NULL and
+   * render the em-dash branch of ConfidenceCell; post-merge rows
+   * flow onto UnmappedRow.confidence for grid rendering.
+   */
+  confidence: number | null
 }
 
 /**
@@ -484,12 +493,23 @@ function buildUnmappedRow(
   const coverageStatus = coverageRow
     ? coerceCoverageVerdict(coverageRow.coverage_status)
     : null
+  // PR γ.1 — flow AI coverage confidence onto UnmappedRow.confidence.
+  // Coverage row exists + has confidence  → row.confidence = that value
+  // Coverage row exists, NULL confidence  → row.confidence = null (legacy
+  //                                          pre-PR-γ.1 row; em-dash)
+  // No coverage row (target_only orphan)  → row.confidence = null (em-dash)
+  // ConfidenceCell renders the value with no special-casing — its
+  // formatter is scale-tolerant per lib/utils/confidence-format.ts.
+  const confidence: number | null =
+    coverageRow && typeof coverageRow.confidence === 'number'
+      ? coverageRow.confidence
+      : null
 
   return {
     kind: 'unmapped',
     id: `unmapped::${targetField.id}`,
     targetField,
-    confidence: null,
+    confidence,
     status,
     hasTransformation: false,
     transformationStatus: null,
@@ -1383,12 +1403,15 @@ export async function getMappingsForRedesignCore(
       .select('id, source_field_id, reason')
       .eq('project_id', projectId),
     // PR γ — target_field_coverage join for unified row-prop status +
-    // coverageStatus + statusSetBy. Optional read: pre-Path-D projects
-    // have zero coverage rows and the translator synthesises a
-    // target_only row-prop shape for orphans (no coverage, no TFM).
+    // coverageStatus + statusSetBy. PR γ.1 adds `confidence` to the
+    // SELECT so UnmappedRow.confidence can flow from the AI's
+    // coverage-verdict confidence (migration 096). Optional read:
+    // pre-Path-D projects have zero coverage rows and the translator
+    // synthesises a target_only row-prop shape for orphans (no
+    // coverage, no TFM).
     supabase
       .from('target_field_coverage')
-      .select('id, target_field_id, coverage_status, status, status_set_by')
+      .select('id, target_field_id, coverage_status, status, status_set_by, confidence')
       .eq('project_id', projectId),
   ])
 
