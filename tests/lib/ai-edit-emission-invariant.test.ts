@@ -173,6 +173,18 @@ const ALLOWED_FUNCTIONS_WITHOUT_LOG_AI_EDIT = new Set<string>([
   // wiring lands with the orchestrator in 4b.
   'persistMappings',
 
+  // ── Path D INF-45 — mapping_sources persistence ──────────────────────────
+  // path-d-persistence.ts:persistMappingSources is the Pass 2.5 sibling
+  // of persistMappings (added in INF-45 to fix the production bug where
+  // Path D wrote TFM shells without source associations). Same allow-list
+  // rationale as persistMappings above: provenance for the bulk Path D
+  // run fires at the orchestrator boundary via emitPathDProvenance, not
+  // per-table-write inside the persistence helpers. Wiring logAIEdit
+  // here would double-emit per source row (already covered by the per-
+  // TFM provenance row that emitPathDProvenance writes after the parent
+  // TFM upsert).
+  'persistMappingSources',
+
   // ── Path D orchestrator (Sub-PR 4b) ──────────────────────────────────────
   // path-d-mapping.ts:emitPathDProvenance is itself the provenance emitter
   // for the Path D bulk run — it READS target_field_mappings (just inserted

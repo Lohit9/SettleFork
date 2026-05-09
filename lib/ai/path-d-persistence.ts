@@ -8,14 +8,21 @@
  * project_notes), but cross-section references force a different INSERT
  * order:
  *
- *   1. data_quality          — mints DQ UUIDs first
- *   2. mappings              — resolves data_quality_flag_indices → DQ UUIDs
- *   3. coverage              — references target_field_id (no TFM ID needed)
- *   4. lookup_tables         — independent
- *   5. inferred_targets      — independent
- *   6. decisions             — resolves applies_to.tfm_indices → TFM UUIDs
- *                              (mappings inserted first to mint TFM UUIDs)
- *   7. project_notes         — independent; upsert into outputs table
+ *   1.   data_quality          — mints DQ UUIDs first
+ *   2.   mappings              — resolves data_quality_flag_indices → DQ UUIDs
+ *   2.5  mapping_sources       — INF-45: source-field associations per TFM.
+ *                                Mints no UUIDs that downstream passes need;
+ *                                placed immediately after Pass 2 because it
+ *                                consumes the TFM UUIDs Pass 2 returned and
+ *                                completes the TFM logical write before any
+ *                                downstream reads (eg. read-after-write
+ *                                from getMappingsForRedesign).
+ *   3.   coverage              — references target_field_id (no TFM ID needed)
+ *   4.   lookup_tables         — independent
+ *   5.   inferred_targets      — independent
+ *   6.   decisions             — resolves applies_to.tfm_indices → TFM UUIDs
+ *                                (mappings inserted first to mint TFM UUIDs)
+ *   7.   project_notes         — independent; upsert into outputs table
  *
  * ── Idempotency strategy (hybrid) ──────────────────────────────────────────
  * Re-running Path D for the same project should not produce duplicates AND
@@ -29,6 +36,15 @@
  *   project_data_quality_issues  DELETE WHERE acknowledged_at IS NULL, INSERT
  *                                (preserves acknowledged rows)
  *   project_inferred_targets  DELETE WHERE acknowledged_at IS NULL, INSERT
+ *   mapping_sources          DELETE WHERE target_field_mapping_id IN tfmIds,
+ *                            then INSERT (INF-45). The TFM UPSERT preserves
+ *                            ids across runs but does NOT cascade-delete
+ *                            mapping_sources; the explicit DELETE clears
+ *                            stale rows so a re-run that emits fewer
+ *                            sources for the same TFM doesn't leave
+ *                            orphans. Ordinal in the inserted rows = the
+ *                            source's array index in MappingPayload.
+ *                            source_field_ids (preserves emit order).
  *   outputs (project_notes)  UPSERT by (project_id, type='path_d_project_notes')
  *
  * ── Per-section transactions ───────────────────────────────────────────────
@@ -72,6 +88,10 @@ export type SectionPersistStatus =
 export interface PathDPersistResult {
   data_quality: SectionPersistStatus
   mappings: SectionPersistStatus
+  /** INF-45: status of the mapping_sources INSERT pass (Pass 2.5).
+   *  Reported separately from `mappings` so a partial failure (TFMs
+   *  upserted but mapping_sources insert errored) is observable. */
+  mapping_sources: SectionPersistStatus
   coverage: SectionPersistStatus
   lookup_tables: SectionPersistStatus
   inferred_targets: SectionPersistStatus
@@ -95,6 +115,7 @@ export async function persistPathDOutput(
   const result: PathDPersistResult = {
     data_quality: { status: 'skipped', reason: 'not yet attempted' },
     mappings: { status: 'skipped', reason: 'not yet attempted' },
+    mapping_sources: { status: 'skipped', reason: 'not yet attempted' },
     coverage: { status: 'skipped', reason: 'not yet attempted' },
     lookup_tables: { status: 'skipped', reason: 'not yet attempted' },
     inferred_targets: { status: 'skipped', reason: 'not yet attempted' },
@@ -145,6 +166,38 @@ export async function persistPathDOutput(
       status: 'skipped',
       reason: parsed.mappings.status === 'parse_error' ? parsed.mappings.error : 'missing',
     }
+  }
+
+  // Pass 2.5: mapping_sources (INF-45). Pre-INF-45 the TFM UPSERT in
+  // Pass 2 silently dropped MappingPayload.source_field_ids — every Path D
+  // run wrote TFM shells without their source associations, leaving the
+  // UI to render every Path D-generated mapping as "—" (no source). This
+  // pass writes the mapping_sources rows that the UI's read path expects.
+  //
+  // Skipped cleanly when Pass 2 didn't run (mappings parse-errored or
+  // missing) — mapping_sources rows would have no TFMs to attach to.
+  if (parsed.mappings.status === 'parsed_ok' && tfmIds.length > 0) {
+    try {
+      const count = await persistMappingSources(
+        supabaseAdmin,
+        parsed.mappings.data,
+        tfmIds,
+      )
+      result.mapping_sources = { status: 'inserted', count }
+    } catch (err) {
+      result.mapping_sources = {
+        status: 'errored',
+        error: (err as Error).message,
+      }
+    }
+  } else if (parsed.mappings.status !== 'parsed_ok') {
+    result.mapping_sources = {
+      status: 'skipped',
+      reason: 'mappings section not parsed_ok',
+    }
+  } else {
+    // Pass 2 ran but yielded zero TFM ids (empty mappings array).
+    result.mapping_sources = { status: 'inserted', count: 0 }
   }
 
   // Pass 3: coverage (references target_field_id; no TFM UUID resolution needed)
@@ -346,6 +399,131 @@ async function persistMappings(
   // Return TFM IDs in the SAME ORDER as the input data array (so tfm_indices
   // from decisions resolve correctly).
   return data.map((m) => idByTargetFieldId.get(m.target_field_id) ?? '').filter(Boolean)
+}
+
+// ─── Pass 2.5: mapping_sources (INF-45) ──────────────────────────────────────
+//
+// Bug class fixed: pre-INF-45 the TFM UPSERT in Pass 2 silently dropped
+// `MappingPayload.source_field_ids`. The AI emitted source associations
+// per mapping; the parser preserved them; the persistence layer never
+// read them. Result: every Path D run produced TFM shells with no
+// children rows in `mapping_sources`, and the UI rendered every Path D
+// mapping as "—" (no source).
+//
+// Why undetected: tests/lib/path-d-persistence.test.ts had zero
+// mapping_sources references (verified by grep), and the Phase C eval
+// runner scores in-memory parsed output before any persistence runs.
+//
+// Re-run idempotency: TFM ids are stable across runs (Pass 2 UPSERTs
+// by (project_id, target_field_id) preserves ids), so this pass must
+// explicitly clear stale mapping_sources rows for the affected TFMs
+// before inserting fresh ones — otherwise a re-run that emits fewer
+// sources for a TFM would leave orphan source associations in place.
+// Same DELETE-then-INSERT pattern as Passes 6 (decisions), 1
+// (data_quality), and 5 (inferred_targets).
+//
+// `source_table_id` resolution: `MappingPayload.source_field_ids`
+// carries only field UUIDs. The mapping_sources schema has a
+// `source_table_id` FK that the read path consumes. Resolved here
+// via a single batch fetch from `fields` keyed on the union of
+// source_field_ids across all mappings — one round-trip regardless
+// of mapping count.
+async function persistMappingSources(
+  admin: SupabaseClient,
+  data: MappingPayload[],
+  tfmIdsInOrder: string[],
+): Promise<number> {
+  if (data.length === 0 || tfmIdsInOrder.length === 0) return 0
+
+  // Build (tfmId, source_field_id, ordinal) tuples. Skip mappings whose
+  // source_field_ids array is empty (no sources to associate). Skip
+  // entries whose tfmId failed to resolve (defensive — persistMappings
+  // already filtered these out via the `idByTargetFieldId` lookup).
+  type SourceTuple = {
+    tfmId: string
+    sourceFieldId: string
+    ordinal: number
+  }
+  const tuples: SourceTuple[] = []
+  for (let i = 0; i < data.length; i++) {
+    const m = data[i]!
+    const tfmId = tfmIdsInOrder[i]
+    if (!tfmId) continue
+    for (let ord = 0; ord < m.source_field_ids.length; ord++) {
+      tuples.push({
+        tfmId,
+        sourceFieldId: m.source_field_ids[ord]!,
+        ordinal: ord,
+      })
+    }
+  }
+  if (tuples.length === 0) return 0
+
+  // Batch-fetch source_table_id for every distinct source_field_id we
+  // need. One round-trip; ignores duplicates within `tuples` since the
+  // .in() filter dedupes server-side.
+  const distinctSourceFieldIds = Array.from(
+    new Set(tuples.map((t) => t.sourceFieldId)),
+  )
+  const fieldsRes = await admin
+    .from('fields')
+    .select('id, table_id')
+    .in('id', distinctSourceFieldIds)
+  if (fieldsRes.error) {
+    throw new Error(
+      `mapping_sources: source_table_id lookup failed: ${fieldsRes.error.message}`,
+    )
+  }
+  const tableIdBySourceFieldId = new Map<string, string>()
+  for (const row of fieldsRes.data ?? []) {
+    tableIdBySourceFieldId.set(row.id as string, row.table_id as string)
+  }
+
+  // Idempotency DELETE: clear any existing mapping_sources rows for the
+  // TFMs in scope. Re-run safety — see file header.
+  const delRes = await admin
+    .from('mapping_sources')
+    .delete()
+    .in('target_field_mapping_id', tfmIdsInOrder)
+  if (delRes.error) {
+    throw new Error(
+      `mapping_sources: pre-insert clear failed: ${delRes.error.message}`,
+    )
+  }
+
+  // Build INSERT rows. Defensive: skip tuples whose source_field_id
+  // didn't resolve to a table_id (the FK lookup found no match — the
+  // AI emitted a UUID that doesn't exist in this project's fields).
+  // The TFM column `data_quality_flag_ids` is set on the parent TFM,
+  // not duplicated here; per-source `confidence` / `ai_reasoning` /
+  // `type_compatibility` left null since Path D's MappingPayload shape
+  // carries those at the TFM level, not per-source.
+  const rows = tuples
+    .filter((t) => tableIdBySourceFieldId.has(t.sourceFieldId))
+    .map((t) => ({
+      target_field_mapping_id: t.tfmId,
+      source_field_id: t.sourceFieldId,
+      source_table_id: tableIdBySourceFieldId.get(t.sourceFieldId)!,
+      ordinal: t.ordinal,
+      // Path D's MappingPayload doesn't carry per-source metadata; the
+      // parent TFM's `ai_reasoning` and `confidence` cover the mapping
+      // as a whole. Per-source fields stay null until a future Path D
+      // version (or the user via the drawer) populates them.
+      confidence: null,
+      ai_reasoning: null,
+      similar_fields_considered: null,
+      type_compatibility: null,
+      join_spec: null,
+    }))
+
+  if (rows.length === 0) return 0
+
+  const insRes = await admin.from('mapping_sources').insert(rows)
+  if (insRes.error) {
+    throw new Error(`mapping_sources: insert failed: ${insRes.error.message}`)
+  }
+
+  return rows.length
 }
 
 async function persistCoverage(
