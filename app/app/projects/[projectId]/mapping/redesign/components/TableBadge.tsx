@@ -53,6 +53,14 @@ interface TableBadgeProps {
   size?: TableBadgeSize
   /** Optional Tailwind class overrides (e.g. sizing inside a tight cell). */
   className?: string
+  /**
+   * Override the size variant's default max-width cap. Pass `'100%'` from a
+   * grid- or flex-track caller (e.g. `FieldMappingRow`) to defer sizing to
+   * the parent column — without this, the badge's own `max-w-[14rem]` would
+   * exceed a tighter parent track and visually overflow into the next cell.
+   * Falls back to the size variant's default class-based cap when omitted.
+   */
+  maxWidth?: string
 }
 
 const SIZE_CLASSES: Record<TableBadgeSize, { container: string; primary: string; secondary: string }> = {
@@ -68,7 +76,7 @@ const SIZE_CLASSES: Record<TableBadgeSize, { container: string; primary: string;
   },
 }
 
-export function TableBadge({ tableName, datasetName, size = 'md', className }: TableBadgeProps) {
+export function TableBadge({ tableName, datasetName, size = 'md', className, maxWidth }: TableBadgeProps) {
   const sizeClasses = SIZE_CLASSES[size]
   return (
     <span
@@ -77,6 +85,10 @@ export function TableBadge({ tableName, datasetName, size = 'md', className }: T
         sizeClasses.container,
         className,
       )}
+      // Inline style trumps the size class's `max-w-[…]` cap when the caller
+      // needs to defer to a parent grid/flex track (e.g. row col 2 capped at
+      // a smaller width than the badge default).
+      style={maxWidth !== undefined ? { maxWidth } : undefined}
       // Title attribute provides the non-truncated name on hover; the
       // visible text node always truncates to keep rows single-line.
       title={datasetName ? `${tableName} · ${datasetName}` : tableName}

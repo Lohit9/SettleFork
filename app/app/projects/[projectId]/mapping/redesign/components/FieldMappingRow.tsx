@@ -32,13 +32,13 @@ import { InlineSourcePicker } from './InlineSourcePicker'
 // vertical scan across rows stays consistent regardless of mapping
 // complexity.
 //
-// COLUMN LAYOUT (CSS grid, fixed template — 5 columns, Phase 4-polish-1
-// final refinements pass):
+// COLUMN LAYOUT (CSS grid, fixed template — 6 columns, INF-50 fr-based
+// growth pass on top of Phase 4-polish-3):
 //
-//   ┌─┬─────────┬─────────────────┬──────────────┬─────────┐
-//   │S│ src tbl │ src field [▸/▾] │ target field │  conf%  │
-//   │ │ 6-8rem  │ 8-14rem         │ 1fr (flex)   │ 5rem    │
-//   └─┴─────────┴─────────────────┴──────────────┴─────────┘
+//   ┌─┬─────────┬─────────────────┬──────────────┬─────────┬─────────┐
+//   │S│ src tbl │ src field [▸/▾] │ target field │  conf%  │ actions │
+//   │ │ 8rem→1fr│ 10rem→1.5fr     │ 12rem→2fr    │  5rem   │  5rem   │
+//   └─┴─────────┴─────────────────┴──────────────┴─────────┴─────────┘
 //    ↑                ↑                            ↑
 //    status dot —     │                            │
 //    label dropped,   │                            │
@@ -57,14 +57,15 @@ import { InlineSourcePicker } from './InlineSourcePicker'
 //
 // Comprehensive pass changes vs. the prior 7-column layout:
 //
-//   • Col 2 tightened from `minmax(7rem, 12rem)` to `minmax(6rem, 8rem)`.
-//     Heritage's longest source-table badge is 12 chars (`STATUS_CODES`,
-//     `ACCT_TYPE_CD`, …) which renders to ~5.7rem at the badge's
-//     `text-[11px] font-mono` density — `min 6rem` accommodates with a
-//     hair of breathing room, `max 8rem` caps growth so the source
-//     group reads as a tight unit. Extra-long badges (>14 chars, none
-//     exist in Heritage) still truncate gracefully via `TableBadge`'s
-//     own `max-w-[14rem]` + title= tooltip.
+//   • Col 2 originally tightened (polish-1) from `minmax(7rem, 12rem)`
+//     to `minmax(6rem, 8rem)` on the rationale that Heritage's longest
+//     source-table badge was ~12 chars. INF-50 (2026-05-09) reverted
+//     that fixed cap to `minmax(8rem, 1fr)` after enterprise tenants
+//     surfaced longer human-readable table names ("Engineering BOM
+//     Master", 22 chars) that overflowed an 8rem track because
+//     `TableBadge`'s own `max-w-[14rem]` exceeded the column. The
+//     paired fix: `TableBadge` now accepts `maxWidth` and rule-1/2
+//     callsites pass `'100%'` so the badge respects its grid track.
 //   • The dedicated 5rem actions column was DROPPED. The original
 //     justification (host inline ✓/✗ buttons in Phase 4-polish-3) was
 //     reframed: 4-polish-3 buttons land as a hover-only overlay
@@ -80,14 +81,18 @@ import { InlineSourcePicker } from './InlineSourcePicker'
 //     plane (`hasTransformation`, `transformationStatus`) remains
 //     intact for non-row consumers.
 //
-// Why the constrained source-field column (Refinement 4, retained)?
-// Spreading both source-field (col 3) and target-field (col 4) as `1fr`
-// pushed the source-table badge (col 2) far away from the source-field
-// name (col 3) at wide viewports — the eye lost the "source side /
-// target side" grouping. Capping col 3 at 14rem keeps the source group
-// visually adjacent and lets the target column own the bulk of the
-// remaining horizontal space, conveying source→target flow via
-// whitespace alone (no per-row arrow needed).
+// Why fr-based growth with weighted ratios (INF-50)?
+// Refinement 4 originally capped col 3 at `1fr` to prevent the source-
+// table badge (col 2) from drifting away from the source-field name
+// at wide viewports. INF-50 preserves that "source group adjacent,
+// target column dominant" intent by using fr-based growth with a
+// 1 : 1.5 : 2 ratio across cols 2, 3, 4. The target column still owns
+// the largest share of remaining horizontal space (2fr vs 1fr/1.5fr),
+// so source→target flow is still conveyed via whitespace alone — but
+// each column now has a sensible minimum (8/10/12rem) that scales
+// generously into the 1920px+ viewport range used by enterprise
+// tenants, instead of clamping at fixed-rem maxes that overflow on
+// long human-readable table names.
 //
 // Status dot collapses the legacy "dot + label" chip into just the dot
 // per founder Q1 lock — the label was visual noise on Heritage where
@@ -525,7 +530,21 @@ export const FieldMappingRow = forwardRef<HTMLDivElement, FieldMappingRowProps>(
           // makes the column predictable per row state and the 5rem
           // resting whitespace re-earns its place. Template went
           // from 5 cols → 6 cols.
-          'group grid grid-cols-[0.75rem_minmax(6rem,8rem)_minmax(8rem,14rem)_1fr_5rem_5rem] items-center gap-3 px-5 py-1.5',
+          //
+          // INF-50 (2026-05-09): the three text columns moved from
+          // fixed-rem `minmax(min, max-rem)` caps to fr-based growth
+          // (`minmax(min, Nfr)`) so they expand with viewport width.
+          // The prior caps (col 2: max 8rem, col 3: max 14rem, col 4
+          // 1fr) caused long table names like "Engineering BOM Master"
+          // (22 chars) to overflow col 2 because `TableBadge` carried
+          // its own `max-w-[14rem]` cap > the col-2 8rem track. Two
+          // coordinated fixes: (a) badges now accept `maxWidth` and
+          // FieldMappingRow passes `100%` so they respect their grid
+          // track; (b) tracks 2/3/4 grow proportionally via fr ratios
+          // (1 : 1.5 : 2), so at 1280px viewports columns hit minimums
+          // (8/10/12rem) and at 1920px+ viewports they expand and
+          // truncation becomes rare. Action columns remain 5rem each.
+          'group grid grid-cols-[0.75rem_minmax(8rem,1fr)_minmax(10rem,1.5fr)_minmax(12rem,2fr)_5rem_5rem] items-center gap-3 px-5 py-1.5',
           // Color overlays for optimistic UI — added on top of the
           // base layout so animations layer cleanly with the existing
           // `isActive` (drawer-open) and `isHighlighted` (sidebar)
@@ -990,13 +1009,13 @@ function MappedSourceTableCell({ row, rule }: { row: MappedRow; rule: MappingRow
     case 'rule_1':
       return (
         <div className="flex min-w-0 items-center">
-          <TableBadge tableName={pickDominantSource(row.sources).sourceTable.name} />
+          <TableBadge tableName={pickDominantSource(row.sources).sourceTable.name} maxWidth="100%" />
         </div>
       )
     case 'rule_2':
       return (
         <div className="flex min-w-0 items-center">
-          <TableBadge tableName={row.sources[0]!.sourceTable.name} />
+          <TableBadge tableName={row.sources[0]!.sourceTable.name} maxWidth="100%" />
         </div>
       )
     case 'rule_3':

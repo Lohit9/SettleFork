@@ -63,6 +63,46 @@ describe('TableBadge', () => {
     expect(wrapper?.getAttribute('title')).toBe('orders')
   })
 
+  // ─── INF-50 (2026-05-09) ─── maxWidth prop: caller-controlled cap ──────────
+  //
+  // The `md` size class carries `max-w-[14rem]` as its visual default.
+  // FieldMappingRow's grid track for the source-table column is narrower
+  // than 14rem at minimum viewport widths, so the badge would overflow
+  // its grid track without an opt-in cap. Callers in row context now
+  // pass `maxWidth='100%'` to defer sizing to the parent track. Inline
+  // style trumps the size class for the same property.
+  describe('maxWidth prop (INF-50)', () => {
+    it('omits an inline max-width when the prop is not provided', () => {
+      const { container } = render(<TableBadge tableName="orders" />)
+      const wrapper = container.firstElementChild as HTMLElement | null
+      // No inline max-width → falls back to the size class's `max-w-[14rem]`.
+      expect(wrapper?.style.maxWidth).toBe('')
+      expect(wrapper?.className).toContain('max-w-[14rem]')
+    })
+
+    it('applies an inline max-width when the prop is provided', () => {
+      const { container } = render(<TableBadge tableName="orders" maxWidth="100%" />)
+      const wrapper = container.firstElementChild as HTMLElement | null
+      expect(wrapper?.style.maxWidth).toBe('100%')
+    })
+
+    it('passes arbitrary CSS length values through', () => {
+      const { container } = render(<TableBadge tableName="orders" maxWidth="3.5rem" />)
+      const wrapper = container.firstElementChild as HTMLElement | null
+      expect(wrapper?.style.maxWidth).toBe('3.5rem')
+    })
+
+    it('does not strip the size class default when maxWidth is provided', () => {
+      // The class stays on the element for consumers that read className.
+      // The browser resolves to the inline-style value at paint because
+      // inline style trumps class for the same property.
+      const { container } = render(<TableBadge tableName="orders" maxWidth="100%" />)
+      const wrapper = container.firstElementChild as HTMLElement | null
+      expect(wrapper?.className).toContain('max-w-[14rem]')
+      expect(wrapper?.style.maxWidth).toBe('100%')
+    })
+  })
+
   // ─── Gap 5a hotfix 2026-04-23 ─── no dark-prefix Tailwind modifiers ────────
   //
   // The surrounding redesign UI hardcodes a light background (bg-white on
