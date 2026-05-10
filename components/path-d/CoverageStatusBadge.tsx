@@ -6,7 +6,7 @@ import {
   AlertCircle,
   X,
 } from '@/components/icons'
-import type { CoverageStatus } from './types'
+import type { CoverageStatus } from '@/lib/types/path-d'
 
 // ─────────────────────────────────────────────────────────────────────────────
 // CoverageStatusBadge — Path D primitive.

@@ -1,6 +1,6 @@
 import { cn } from '@/components/ui/utils'
 import { AlertTriangle } from '@/components/icons'
-import type { ProjectLookupTableRow } from './types'
+import type { ProjectLookupTableRow } from '@/lib/types/path-d'
 
 // ─────────────────────────────────────────────────────────────────────────────
 // LookupTableViewer — Path D primitive.

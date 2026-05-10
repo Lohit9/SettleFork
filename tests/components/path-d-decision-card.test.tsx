@@ -1,7 +1,7 @@
 import { describe, it, expect, vi } from 'vitest'
 import { render, screen, fireEvent } from '@testing-library/react'
 import { DecisionCard } from '@/components/path-d/DecisionCard'
-import type { ProjectDecisionRow } from '@/components/path-d/types'
+import type { ProjectDecisionRow } from '@/lib/types/path-d'
 
 // ─────────────────────────────────────────────────────────────────────────────
 // DecisionCard — Path D primitive tests.

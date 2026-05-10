@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import { render, screen } from '@testing-library/react'
 import { MappingDetailsPanel } from '@/components/path-d/MappingDetailsPanel'
-import type { TfmPathDEnrichment } from '@/components/path-d/types'
+import type { TfmPathDEnrichment } from '@/lib/types/path-d'
 
 // ─────────────────────────────────────────────────────────────────────────────
 // MappingDetailsPanel — Path D primitive tests.
