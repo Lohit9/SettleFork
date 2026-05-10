@@ -91,6 +91,7 @@ export type DeleteFieldImpactCounts = {
   stagedRows: number
   acknowledgments: number
   coverageRows: number
+  validationRules: number
 }
 
 export type DeleteFieldImpact = {
@@ -114,6 +115,7 @@ export type AppliedCascade = {
   stagedRowsScrubbed: number
   acknowledgments: number
   coverageRows: number
+  validationRules: number
   hadAuthoredTransformSql: boolean
 }
 
