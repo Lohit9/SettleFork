@@ -42,7 +42,6 @@ import type {
   SourceFieldAcknowledgmentSummary,
   SourceFieldWithState,
   SourceTableSummary,
-  TargetAcknowledgedRow,
   TargetFieldRef,
   TargetTableSummary,
   UnmappedRow,
@@ -521,34 +520,43 @@ function buildUnmappedRow(
   }
 }
 
-function buildTargetAcknowledgedRow(
-  tfm: RawTfmRow,
+// INF-57 — Dual-recognition emit for legacy bare-ack TFMs
+// (is_acknowledged=true, combination_type=NULL, zero mapping_sources).
+// Migration 098 backfilled matching coverage rows (status='approved',
+// status_set_by='user', coverage_status='gap'), so most reads will see
+// `coverageRow` populated. The few production projects that haven't
+// re-run getMappingsForRedesign post-098 may briefly hit the no-coverage
+// branch — defensively synthesize the same row prop so the UI doesn't
+// flicker between representations during the transit.
+//
+// Bare-ack always wins on status: legacy intent was unconditional approval,
+// and the 098 backfill mirrors that. The translator does NOT defer to the
+// coverage row's status here (which would normally be the canonical
+// surface) because the bare-ack TFM's existence is the legacy commitment.
+//
+// Row id uses the synthetic `unmapped::<targetFieldId>` format so the
+// drawer's approve/reject/reset write paths route through setCoverageStatus
+// and treat both legacy bare-acks and canonical coverage rows uniformly.
+function buildUnmappedRowFromBareAck(
+  _tfm: RawTfmRow,
   targetField: TargetFieldRef,
   coverageRow: RawCoverageRow | null,
-): TargetAcknowledgedRow {
+): UnmappedRow {
   return {
-    kind: 'target_acknowledged',
-    id: tfm.id,
+    kind: 'unmapped',
+    id: `unmapped::${targetField.id}`,
     targetField,
     confidence: null,
-    // Migration 074 STEP 3c writes 'approved' for all ack rows; narrow
-    // here even if the row happens to carry another value (no recovery
-    // path — the UI treats all acks as approved).
     status: 'approved',
     hasTransformation: false,
     transformationStatus: null,
     transformationDescription: null,
     transformationSqlPreview: null,
-    acknowledgmentReason: tfm.acknowledgment_reason,
-    // PR γ — coverage metadata pass-through. Acks have no sources by
-    // DB CHECK so mapping_content is 'no-source'. Coverage row may or
-    // may not exist; surface its provenance regardless of the row's
-    // effective status (which is hard-coded 'approved' for acks).
     mapping_content: 'no-source',
     coverageStatus: coverageRow
       ? coerceCoverageVerdict(coverageRow.coverage_status)
-      : null,
-    statusSetBy: coverageRow ? coerceStatusSetBy(coverageRow.status_set_by) : null,
+      : 'gap',
+    statusSetBy: 'user',
   }
 }
 
@@ -1019,16 +1027,23 @@ function computeCounts(rows: MappingRow[]): MappingCounts {
   let unmapped = 0
   for (const row of rows) {
     total++
-    // PR γ — chip semantics are kind-based. The `unmapped` chip counts
-    // target fields with no TFM (kind: 'unmapped'), regardless of any
-    // coverage row's status. The needsReview / approved / rejected
-    // chips count TFM-backed rows by their TFM lifecycle status.
-    // Pre-PR-γ, `row.status === 'unmapped'` was the sentinel for
-    // unmapped rows; PR γ widened that case so unmapped rows now
-    // carry coverage-driven status (or synthesized 'needs_review' for
-    // target_only orphans). Switching on `kind` preserves the chip
-    // intent: the unmapped chip is "no TFM yet", not "awaiting review".
-    if (row.kind === 'unmapped') {
+    // INF-57 — chip semantics are status-driven for decided rows, with the
+    // `unmapped` chip reserved for "no TFM AND awaiting decision".
+    //   • kind='unmapped' AND status='needs_review' (or legacy 'unmapped'
+    //     literal) → unmapped chip. This covers true orphans (no coverage
+    //     row, system_default needs_review) AND post-reset rows.
+    //   • kind='unmapped' AND status='approved' → approved chip. This
+    //     preserves the pre-INF-57 "bare-ack counts as approved" semantic
+    //     now that legacy bare-acks render as UnmappedRow under
+    //     dual-recognition. Also covers canonical coverage-approved
+    //     no-source rows (drawer-side approve via setCoverageStatus).
+    //   • kind='unmapped' AND status='rejected' → rejected chip.
+    //   • kind='mapped' / 'value_assignment' → counted by their TFM
+    //     lifecycle status as before.
+    if (
+      row.kind === 'unmapped' &&
+      (row.status === 'needs_review' || row.status === 'unmapped')
+    ) {
       unmapped++
       continue
     }
@@ -1257,12 +1272,15 @@ export function assembleMappingsForRedesign(
     const tfmSources = mappingSourcesByTfm.get(tfm.id) ?? []
     const transformation = transformationByTfm.get(tfm.id) ?? null
 
-    // Discriminator logic per design §3.1 Call A:
-    //   is_acknowledged === true              → 'target_acknowledged'
+    // Discriminator logic (INF-57 dual-recognition):
+    //   is_acknowledged === true → 'unmapped' (legacy bare-ack absorbed
+    //                              under canonical coverage-approved
+    //                              surface; status='approved',
+    //                              statusSetBy='user')
     //   combination_type === 'custom_sql' with zero sources → 'value_assignment'
-    //   otherwise (has ≥ 1 source)            → 'mapped'
+    //   otherwise (has ≥ 1 source) → 'mapped'
     if (tfm.is_acknowledged) {
-      rows.push(buildTargetAcknowledgedRow(tfm, targetFieldRef, coverageRow))
+      rows.push(buildUnmappedRowFromBareAck(tfm, targetFieldRef, coverageRow))
       continue
     }
 

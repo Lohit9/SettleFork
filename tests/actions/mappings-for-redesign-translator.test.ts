@@ -182,7 +182,13 @@ describe('assembleMappingsForRedesign — discriminator cases', () => {
   })
 
   // Case 4 ------------------------------------------------------------
-  it('case 4: target-acknowledged row (is_acknowledged=true)', () => {
+  // INF-57 dual-recognition: legacy bare-ack TFM (is_acknowledged=true,
+  // combination_type=NULL) is absorbed under UnmappedRow with
+  // status='approved', statusSetBy='user'. Row id is the synthetic
+  // `unmapped::<targetFieldId>` format (matches canonical no-source
+  // surface), NOT the bare-ack TFM's UUID. The kind='target_acknowledged'
+  // discriminator is dead at runtime — translator never emits it post-INF-57.
+  it('case 4: legacy bare-ack TFM emits UnmappedRow under dual-recognition', () => {
     const t4 = tfm({
       id: 'tfm-4',
       target_field_id: F_T_NOTES.id,
@@ -192,12 +198,17 @@ describe('assembleMappingsForRedesign — discriminator cases', () => {
       confidence: null,
     })
     const out = assembleMappingsForRedesign(baseInput({ tfms: [t4] }))
-    const row = out.rows.find((r) => r.id === 'tfm-4') as TargetAcknowledgedRow
-    expect(row.kind).toBe('target_acknowledged')
+    const row = out.rows.find(
+      (r) => r.targetField.id === F_T_NOTES.id,
+    ) as UnmappedRow
+    expect(row.kind).toBe('unmapped')
+    expect(row.id).toBe(`unmapped::${F_T_NOTES.id}`)
     expect(row.status).toBe('approved')
-    expect(row.acknowledgmentReason).toBe('populated downstream by legacy process')
+    expect(row.statusSetBy).toBe('user')
+    expect(row.coverageStatus).toBe('gap') // synthesized when no coverage row
     expect(row.confidence).toBeNull()
     expect(row.hasTransformation).toBe(false)
+    expect(row.mapping_content).toBe('no-source')
   })
 
   // Case 5 ------------------------------------------------------------

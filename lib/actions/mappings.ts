@@ -2290,12 +2290,28 @@ export async function approveAllFieldMappings(
     const unmappedTargetIds = targetFieldIds.filter((id) => !coveredTargetIds.has(id))
 
     // Refinement 3: exclude fields already covered by a (non-rejected) ack.
-    // Existing target-side acks are TFM rows with is_acknowledged=true.
-    const existingTargetAckIds = new Set(
-      (allTfms ?? [])
-        .filter((t) => t.is_acknowledged)
-        .map((t) => t.target_field_id),
+    // INF-57 — under dual-recognition, "already acked" means EITHER a legacy
+    // bare-ack TFM (is_acknowledged=true) OR a canonical coverage row with
+    // status='approved' AND status_set_by='user'. Without the coverage
+    // branch, an Approve All on a TM pairing with redesign-drawer-approved
+    // no-source rows would create fresh bare-ack TFMs, producing exactly
+    // the dual representation INF-57 is collapsing.
+    const { data: coverageRows } = targetFieldIds.length > 0
+      ? await supabaseAdmin
+          .from('target_field_coverage')
+          .select('target_field_id, status, status_set_by')
+          .eq('project_id', tm.project_id)
+          .in('target_field_id', targetFieldIds)
+      : { data: [] as { target_field_id: string; status: string; status_set_by: string }[] }
+    const coverageApprovedUserIds = new Set(
+      (coverageRows ?? [])
+        .filter((c) => c.status === 'approved' && c.status_set_by === 'user')
+        .map((c) => c.target_field_id),
     )
+    const existingTargetAckIds = new Set<string>([
+      ...(allTfms ?? []).filter((t) => t.is_acknowledged).map((t) => t.target_field_id),
+      ...coverageApprovedUserIds,
+    ])
     const targetIdsToAck = unmappedTargetIds.filter((id) => !existingTargetAckIds.has(id))
 
     if (targetIdsToAck.length > 0) {

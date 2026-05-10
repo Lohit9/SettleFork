@@ -74,6 +74,7 @@ import {
   type MappingWriteErrorCode,
 } from '@/lib/actions/mappings'
 import { logActivity } from '@/lib/actions/activity-log'
+import { logAIEdit } from '@/lib/actions/ai-edit-history'
 import { requireProjectPermission } from '@/lib/actions/role-resolution'
 import { assertMappingWritesEnabled } from '@/lib/auth/mapping-writes'
 import { removeAcknowledgment } from '@/lib/actions/field-acknowledgments'
@@ -2541,6 +2542,327 @@ export async function unacknowledgeField(input: {
   )
 
   return { success: true, tfmId: tfm.id }
+}
+
+// ─── Write path — INF-57 (reset row status to needs_review) ─────────────────
+//
+// `resetMappingStatus` is the drawer's "Reset to needs_review" affordance.
+// Available on any row that carries a user-set status (the inline approve/
+// reject path's symmetrical undo). Three surface dispatch by row id format:
+//
+//   1. `unmapped::<targetFieldId>` (canonical no-source row) — coverage row
+//      either exists with status_set_by='user' or is absent. Branch:
+//      UPDATE coverage SET status='needs_review', status_set_by='ai_auto'
+//      if a row exists; else NO-OP (target_only orphan already renders as
+//      needs_review+system_default).
+//
+//   2. Raw TFM UUID, lookup is_acknowledged=false (mapped or VA) — UPDATE
+//      target_field_mappings SET status='needs_review'. Per INF-53 lock
+//      semantics (path-d-persistence.ts:fetchTfmUserLocks), needs_review
+//      is NOT in the user-lock set so the next Path D run will refresh AI
+//      metadata cleanly.
+//
+//   3. Raw TFM UUID, lookup is_acknowledged=true (legacy bare-ack) —
+//      DOUBLE WRITE: (a) DELETE the bare-ack TFM (kills legacy path), (b)
+//      UPDATE coverage SET status='needs_review', status_set_by='ai_auto'
+//      (kills canonical path post-098 backfill). Without (b), the row
+//      stays approved via dual-recognition.
+//
+// Single activity_log entry per call: 'mapping_status_reset' with
+// metadata.previous_status + metadata.previous_set_by + metadata.surface.
+
+export type ResetMappingStatusErrorCode =
+  | 'PERMISSION_DENIED'
+  | 'NOT_FOUND'
+  | 'VALIDATION'
+  | 'MAINTENANCE_MODE'
+  | 'INTERNAL'
+
+export type ResetMappingStatusResult =
+  | {
+      success: true
+      surface: 'coverage_only' | 'tfm_mapped_or_va' | 'legacy_bare_ack'
+    }
+  | {
+      success: false
+      error: string
+      errorCode: ResetMappingStatusErrorCode
+    }
+
+export async function resetMappingStatus(input: {
+  rowId: string
+}): Promise<ResetMappingStatusResult> {
+  const { rowId } = input
+  if (!rowId) {
+    return {
+      success: false,
+      error: 'rowId is required',
+      errorCode: 'VALIDATION',
+    }
+  }
+
+  const supabase = await createClient()
+  const {
+    data: { user },
+  } = await supabase.auth.getUser()
+  if (!user) {
+    return {
+      success: false,
+      error: 'Not authenticated',
+      errorCode: 'PERMISSION_DENIED',
+    }
+  }
+
+  // ── Branch 1: canonical no-source row (synthetic id) ───────────────────────
+  if (rowId.startsWith(UNMAPPED_ID_PREFIX)) {
+    const targetFieldId = rowId.slice(UNMAPPED_ID_PREFIX.length)
+    if (!UUID_REGEX.test(targetFieldId)) {
+      return {
+        success: false,
+        error: 'Invalid row id',
+        errorCode: 'VALIDATION',
+      }
+    }
+    const ownership = await resolveFieldOwnership(targetFieldId)
+    if (!ownership) {
+      return {
+        success: false,
+        error: 'Target field not found',
+        errorCode: 'NOT_FOUND',
+      }
+    }
+    const gate = await gateNoSourceWrite(ownership.projectId)
+    if (!gate.ok) {
+      // gateNoSourceWrite returns MappingActionResult; widen errorCode to
+      // ResetMappingStatusErrorCode (the two unions overlap on every value
+      // gateNoSourceWrite can produce: PERMISSION_DENIED, MAINTENANCE_MODE,
+      // INTERNAL).
+      return {
+        success: false,
+        error: gate.result.error ?? 'Failed to authorize reset',
+        errorCode: (gate.result.errorCode ?? 'INTERNAL') as ResetMappingStatusErrorCode,
+      }
+    }
+
+    // Read the existing coverage row's status + provenance for activity-log
+    // metadata. A missing row means the orphan target-only case — the row
+    // already renders needs_review+system_default, so reset is a no-op
+    // (return success without writing anything).
+    const { data: existing } = await supabaseAdmin
+      .from('target_field_coverage')
+      .select('status, status_set_by')
+      .eq('project_id', ownership.projectId)
+      .eq('target_field_id', targetFieldId)
+      .maybeSingle<{
+        status: 'needs_review' | 'approved' | 'rejected'
+        status_set_by: 'ai_auto' | 'user' | 'system_default'
+      }>()
+
+    if (existing) {
+      const { error: updErr } = await supabaseAdmin
+        .from('target_field_coverage')
+        .update({
+          status: 'needs_review',
+          status_set_by: 'ai_auto',
+          updated_at: new Date().toISOString(),
+        })
+        .eq('project_id', ownership.projectId)
+        .eq('target_field_id', targetFieldId)
+      if (updErr) {
+        return {
+          success: false,
+          error: updErr.message,
+          errorCode: 'INTERNAL',
+        }
+      }
+    }
+
+    await logActivity(
+      ownership.projectId,
+      'mapping_status_reset',
+      `Status reset to needs_review: ${ownership.fieldName ?? '?'}`,
+      'mapping',
+      {
+        target_field_id: targetFieldId,
+        target_field: ownership.fieldName,
+        surface: 'coverage_only',
+        previous_status: existing?.status ?? null,
+        previous_set_by: existing?.status_set_by ?? null,
+      },
+    )
+    revalidatePath(`/app/projects/${ownership.projectId}/mapping`)
+    return { success: true, surface: 'coverage_only' }
+  }
+
+  // ── Branches 2 + 3: TFM-backed row ─────────────────────────────────────────
+  if (!UUID_REGEX.test(rowId)) {
+    return {
+      success: false,
+      error: 'Invalid row id',
+      errorCode: 'VALIDATION',
+    }
+  }
+  const { data: tfm } = await supabaseAdmin
+    .from('target_field_mappings')
+    .select('id, project_id, target_field_id, status, is_acknowledged')
+    .eq('id', rowId)
+    .maybeSingle<{
+      id: string
+      project_id: string
+      target_field_id: string
+      status: 'needs_review' | 'approved' | 'rejected'
+      is_acknowledged: boolean
+    }>()
+  if (!tfm) {
+    return {
+      success: false,
+      error: 'Mapping not found',
+      errorCode: 'NOT_FOUND',
+    }
+  }
+
+  const perm = await requireProjectPermission(tfm.project_id, 'editor')
+  if (!perm.allowed) {
+    return {
+      success: false,
+      error: perm.error ?? 'Insufficient permissions',
+      errorCode: 'PERMISSION_DENIED',
+    }
+  }
+  try {
+    await assertMappingWritesEnabled(tfm.project_id)
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err)
+    if (
+      message ===
+      'Mapping writes are temporarily disabled for scheduled maintenance'
+    ) {
+      return {
+        success: false,
+        error: message,
+        errorCode: 'MAINTENANCE_MODE',
+      }
+    }
+    return {
+      success: false,
+      error: message,
+      errorCode: 'INTERNAL',
+    }
+  }
+
+  const { data: targetField } = await supabaseAdmin
+    .from('fields')
+    .select('name')
+    .eq('id', tfm.target_field_id)
+    .maybeSingle<{ name: string }>()
+
+  if (tfm.is_acknowledged) {
+    // ── Branch 3: legacy bare-ack — DOUBLE WRITE ────────────────────────────
+    // Read coverage state before delete so the activity log captures the
+    // pre-reset surface state.
+    const { data: coverage } = await supabaseAdmin
+      .from('target_field_coverage')
+      .select('status, status_set_by')
+      .eq('project_id', tfm.project_id)
+      .eq('target_field_id', tfm.target_field_id)
+      .maybeSingle<{
+        status: 'needs_review' | 'approved' | 'rejected'
+        status_set_by: 'ai_auto' | 'user' | 'system_default'
+      }>()
+
+    const { error: delErr } = await supabaseAdmin
+      .from('target_field_mappings')
+      .delete()
+      .eq('id', tfm.id)
+    if (delErr) {
+      return {
+        success: false,
+        error: delErr.message,
+        errorCode: 'INTERNAL',
+      }
+    }
+
+    if (coverage) {
+      const { error: covErr } = await supabaseAdmin
+        .from('target_field_coverage')
+        .update({
+          status: 'needs_review',
+          status_set_by: 'ai_auto',
+          updated_at: new Date().toISOString(),
+        })
+        .eq('project_id', tfm.project_id)
+        .eq('target_field_id', tfm.target_field_id)
+      if (covErr) {
+        return {
+          success: false,
+          error: covErr.message,
+          errorCode: 'INTERNAL',
+        }
+      }
+    }
+
+    await logActivity(
+      tfm.project_id,
+      'mapping_status_reset',
+      `Status reset to needs_review: ${targetField?.name ?? '?'}`,
+      'mapping',
+      {
+        target_field_id: tfm.target_field_id,
+        target_field: targetField?.name ?? null,
+        surface: 'legacy_bare_ack',
+        deleted_tfm_id: tfm.id,
+        previous_status: coverage?.status ?? 'approved',
+        previous_set_by: coverage?.status_set_by ?? 'user',
+      },
+    )
+    revalidatePath(`/app/projects/${tfm.project_id}/mapping`)
+    return { success: true, surface: 'legacy_bare_ack' }
+  }
+
+  // ── Branch 2: mapped or VA TFM ─────────────────────────────────────────────
+  const previousStatus = tfm.status
+  const { error: updErr } = await supabaseAdmin
+    .from('target_field_mappings')
+    .update({ status: 'needs_review' })
+    .eq('id', tfm.id)
+  if (updErr) {
+    return {
+      success: false,
+      error: updErr.message,
+      errorCode: 'INTERNAL',
+    }
+  }
+
+  // Phase 0c provenance — status flip on a TFM is an AI-vs-human edit.
+  // editKind='human_modified' (parallels updateFieldMappingStatus's mapping
+  // for status='needs_review' in lib/actions/mappings.ts:1056-1061).
+  void logAIEdit({
+    projectId: tfm.project_id,
+    actorId: user.id,
+    entityType: 'target_field_mapping',
+    entityId: tfm.id,
+    fieldPath: 'status',
+    oldValue: previousStatus,
+    newValue: 'needs_review',
+    editKind: 'human_modified',
+  })
+
+  await logActivity(
+    tfm.project_id,
+    'mapping_status_reset',
+    `Status reset to needs_review: ${targetField?.name ?? '?'}`,
+    'mapping',
+    {
+      target_field_id: tfm.target_field_id,
+      target_field: targetField?.name ?? null,
+      surface: 'tfm_mapped_or_va',
+      tfm_id: tfm.id,
+      previous_status: tfm.status,
+      previous_set_by: 'user',
+    },
+  )
+  revalidatePath(`/app/projects/${tfm.project_id}/mapping`)
+  return { success: true, surface: 'tfm_mapped_or_va' }
 }
 
 // ─── Write path — Phase 4c-1 (bulk approve + high-confidence) ───────────────
