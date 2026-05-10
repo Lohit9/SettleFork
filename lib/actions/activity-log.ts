@@ -77,6 +77,13 @@ export type ActionType =
   // `removeTable` in lib/actions/tables.ts when a user removes a data table
   // from Project Setup. Categorized as 'data' (table-level mutation).
   | 'table_removed'
+  // FR-3 — Schema Overview field mutations (createField, deleteField, and a
+  // retroactive emitter inside the existing updateField). Categorized as
+  // 'data' to match `table_removed`. `field_deleted` carries cascade counts
+  // and `had_authored_transform_sql` in metadata; see notes/fr-3-investigation.md.
+  | 'field_created'
+  | 'field_updated'
+  | 'field_deleted'
   // PR 2a — project-level RBAC member management. Emitted from the
   // server actions in `lib/actions/project-members.ts`. Categorized
   // under `'system'` (administrative actions; no separate dot-color
