@@ -126,6 +126,21 @@ vi.mock('@/lib/actions/field-acknowledgments', () => ({
   acknowledgeField: vi.fn().mockResolvedValue({ success: true }),
 }))
 
+// Phase E PR α — `MappingContent` fires `getPathDOutputsForProject` on
+// mount to populate the drawer's enrichment sidecar. The action calls
+// `cookies()` from next/headers which throws "called outside a request
+// scope" in jsdom. Stub to a resolved-empty-output stub so the effect
+// completes cleanly; tests in this file don't assert against drawer
+// enrichment (covered separately in mapping-drawer-path-d.test.tsx).
+vi.mock('@/lib/actions/path-d-outputs', () => ({
+  getPathDOutputsForProject: vi.fn().mockResolvedValue({
+    coverageByTargetFieldId: new Map(),
+    decisionsByTfmId: new Map(),
+    decisionsByCoverageId: new Map(),
+    dqIssuesBySourceFieldId: new Map(),
+  }),
+}))
+
 // ── Fixtures ────────────────────────────────────────────────────────────────
 
 const accountsTable: TargetTableSummary = {

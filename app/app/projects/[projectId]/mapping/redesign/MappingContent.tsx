@@ -92,6 +92,10 @@ import {
   type CreateFieldMappingCombinationType,
 } from '@/lib/actions/mappings-for-redesign'
 import { acknowledgeField } from '@/lib/actions/field-acknowledgments'
+import {
+  getPathDOutputsForProject,
+  type PathDOutputs,
+} from '@/lib/actions/path-d-outputs'
 import { ToastProvider, useToast } from '@/lib/contexts/ToastContext'
 import { CONFIDENCE_THRESHOLD_ROW_HIGH } from '@/lib/utils/confidence-format'
 import { useCollapsedGroups } from '@/lib/hooks/useCollapsedGroups'
@@ -482,6 +486,27 @@ function MappingContentLoaded({
   const router = useRouter()
   const searchParams = useSearchParams()
   const { pushToast } = useToast()
+
+  // ── Phase E PR α — Path D outputs sidecar fetch ──────────────────
+  //
+  // Page-level batch fetch of coverage rows / decisions / DQ issues for
+  // the drawer's per-row enrichment sections. Additive to the existing
+  // `data` prop — the drawer renders gracefully when `pathDOutputs` is
+  // null (loading) or carries empty maps (RLS-denied / unfetchable);
+  // every dependent body section collapses (Linear pattern). One-shot
+  // load on projectId change; no refetch wiring in PR α (drawer-side
+  // mutations are out of scope).
+  const [pathDOutputs, setPathDOutputs] = useState<PathDOutputs | null>(null)
+  useEffect(() => {
+    let cancelled = false
+    void getPathDOutputsForProject(projectId).then((outputs) => {
+      if (cancelled) return
+      setPathDOutputs(outputs)
+    })
+    return () => {
+      cancelled = true
+    }
+  }, [projectId])
 
   // Seed filter state ONCE from the URL. Subsequent URL changes come from
   // user input via our own writers; we don't round-trip through router →
@@ -2012,6 +2037,7 @@ function MappingContentLoaded({
         onRestoreConsumed={handleRestoreConsumed}
         focus={drawerFocus}
         onFocusConsumed={handleFocusConsumed}
+        pathDOutputs={pathDOutputs}
       />
 
       {/*

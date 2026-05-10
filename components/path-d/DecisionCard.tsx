@@ -1,5 +1,5 @@
 import { cn } from '@/components/ui/utils'
-import type { DecisionStatus, ProjectDecisionRow } from './types'
+import type { DecisionStatus, ProjectDecisionRow } from '@/lib/types/path-d'
 
 // ─────────────────────────────────────────────────────────────────────────────
 // DecisionCard — Path D primitive.

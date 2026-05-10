@@ -41,6 +41,11 @@ import type {
   UnmappedRow,
   ValueAssignmentRow,
 } from '@/lib/types/mappings-for-redesign'
+import type { PathDOutputs } from '@/lib/actions/path-d-outputs'
+import type { ProjectDataQualityIssueRow } from '@/lib/types/path-d'
+import { CoverageSection } from './CoverageSection'
+import { DecisionList } from './DecisionList'
+import { DQList } from './DQList'
 import {
   approveFieldMapping,
   previewEditInvalidation,
@@ -303,6 +308,15 @@ export interface MappingDrawerProps {
   focus?: 'unack' | null
   /** See `focus`. */
   onFocusConsumed?: () => void
+  /**
+   * Phase E PR α — Path D outputs sidecar (coverage rows, decisions, DQ
+   * issues) keyed for per-row lookup. Threaded by `MappingContent` from
+   * `getPathDOutputsForProject`. Drawer treats `null` / `undefined` as
+   * "no enrichment available" — every dependent section collapses
+   * (Linear pattern). Never a hard dependency: the drawer renders
+   * row-prop content unchanged when the sidecar is absent.
+   */
+  pathDOutputs?: PathDOutputs | null
 }
 
 /**
@@ -321,6 +335,7 @@ export function MappingDrawer({
   onRestoreConsumed,
   focus,
   onFocusConsumed,
+  pathDOutputs,
 }: MappingDrawerProps) {
   const titleId = useId()
   const drawerRef = useRef<HTMLElement | null>(null)
@@ -1037,6 +1052,8 @@ export function MappingDrawer({
         onEditFormCancel={handleEditFormCancel}
         onEditFormSaveSuccess={handleEditFormSaveSuccess}
         onEditClick={handleEditClick}
+        onCreateMappingClick={() => setIsFormActive(true)}
+        pathDOutputs={pathDOutputs ?? null}
       />
       <DrawerFooter
         row={effectiveRow}
@@ -1338,6 +1355,12 @@ function HeaderStatusBadge({
   const cfg = isAcknowledged
     ? ACKNOWLEDGED_BADGE_CONFIG
     : DRAWER_STATUS_CONFIG[row.status]
+  // Phase E PR α — surface confidence inline with the status word when
+  // the row carries a numeric confidence. Acknowledged rows currently
+  // null this out (post-γ.1 they may populate); the · separator is
+  // suppressed for null so the badge reads cleanly without trailing
+  // punctuation.
+  const confidencePercent = formatConfidencePercent(row.confidence)
   return (
     <span
       data-testid="mapping-drawer-header-status-badge"
@@ -1354,6 +1377,22 @@ function HeaderStatusBadge({
       >
         {cfg.label}
       </span>
+      {row.confidence !== null ? (
+        <>
+          <span
+            aria-hidden="true"
+            className="text-slate-400"
+          >
+            ·
+          </span>
+          <span
+            className="tabular-nums text-slate-600"
+            data-testid="mapping-drawer-header-confidence"
+          >
+            {confidencePercent}
+          </span>
+        </>
+      ) : null}
     </span>
   )
 }
@@ -1423,6 +1462,20 @@ interface DrawerBodyProps {
    * defends in depth by gating render on the same conditions.
    */
   onEditClick: () => void
+  /**
+   * Phase E PR α — invoked by the inline pencil in the Sources section
+   * header on `kind: 'unmapped'` rows. Mirrors the mapped-row pattern
+   * (`onEditClick`); routes to the same imperative state setter the
+   * footer's `[Create mapping]` button uses (`setIsFormActive(true)`).
+   */
+  onCreateMappingClick: () => void
+  /**
+   * Phase E PR α — Path D outputs sidecar for per-row enrichment.
+   * Threaded by the parent from `getPathDOutputsForProject`.
+   * `null` indicates "no enrichment data" — every dependent section
+   * collapses (Linear pattern).
+   */
+  pathDOutputs: PathDOutputs | null
 }
 
 function DrawerBody(props: DrawerBodyProps) {
@@ -1456,6 +1509,8 @@ function BodyContent({
   onEditFormCancel,
   onEditFormSaveSuccess,
   onEditClick,
+  onCreateMappingClick,
+  pathDOutputs,
 }: DrawerBodyProps) {
   switch (row.kind) {
     case 'mapped':
@@ -1471,12 +1526,13 @@ function BodyContent({
           onEditFormCancel={onEditFormCancel}
           onEditFormSaveSuccess={onEditFormSaveSuccess}
           onEditClick={onEditClick}
+          pathDOutputs={pathDOutputs}
         />
       )
     case 'value_assignment':
-      return <ValueAssignmentBody row={row} />
+      return <ValueAssignmentBody row={row} pathDOutputs={pathDOutputs} />
     case 'target_acknowledged':
-      return <AcknowledgedBody row={row} />
+      return <AcknowledgedBody row={row} pathDOutputs={pathDOutputs} />
     case 'unmapped':
       return (
         <UnmappedBody
@@ -1494,6 +1550,8 @@ function BodyContent({
           onAutoSuggestConsumed={onAutoSuggestConsumed}
           tryConsumeAutoSuggest={tryConsumeAutoSuggest}
           onSuggestStateChange={onSuggestStateChange}
+          onCreateMappingClick={onCreateMappingClick}
+          pathDOutputs={pathDOutputs}
         />
       )
   }
@@ -1666,7 +1724,20 @@ const ACKNOWLEDGED_BADGE_CONFIG = {
 // `acknowledgedAt` are NOT on the redesign data contract
 // (`TargetAcknowledgedRow` exposes only `acknowledgmentReason`). Adding
 // them would require a contract change and is out of scope.
-function AcknowledgedBody({ row }: { row: TargetAcknowledgedRow }) {
+function AcknowledgedBody({
+  row,
+  pathDOutputs,
+}: {
+  row: TargetAcknowledgedRow
+  pathDOutputs: PathDOutputs | null
+}) {
+  // Phase E PR α — COVERAGE section. Per align-on-approach: collapse the
+  // section entirely when no coverage row exists for this target field
+  // (the synthesized "Manual entry required" orphan label reads oddly on
+  // an explicitly-closed acknowledged row). The synthesized label only
+  // makes sense on `kind: 'unmapped'` rows where it's a call-to-action.
+  const coverage = pathDOutputs?.coverageByTargetFieldId.get(row.targetField.id)
+
   return (
     <>
       <DrawerSection
@@ -1687,6 +1758,12 @@ function AcknowledgedBody({ row }: { row: TargetAcknowledgedRow }) {
           />
         )}
       </DrawerSection>
+
+      {coverage ? (
+        <DrawerSection title="Coverage" testId="drawer-section-coverage">
+          <CoverageSection coverage={coverage} />
+        </DrawerSection>
+      ) : null}
     </>
   )
 }
@@ -1722,6 +1799,10 @@ interface UnmappedBodyProps {
   onAutoSuggestConsumed?: () => void
   tryConsumeAutoSuggest?: (targetFieldId: string) => boolean
   onSuggestStateChange?: (state: { isSuggestPending: boolean }) => void
+  /** Phase E PR α — fired when the user clicks the inline source pencil. */
+  onCreateMappingClick: () => void
+  /** Phase E PR α — Path D outputs sidecar for COVERAGE + DECISIONS. */
+  pathDOutputs: PathDOutputs | null
 }
 
 function UnmappedBody({
@@ -1739,10 +1820,34 @@ function UnmappedBody({
   onAutoSuggestConsumed,
   tryConsumeAutoSuggest,
   onSuggestStateChange,
+  onCreateMappingClick,
+  pathDOutputs,
 }: UnmappedBodyProps) {
+  // Phase E PR α — coverage rationale always renders (synthesized
+  // "Manual entry required" orphan label when no coverage row exists).
+  // Decisions render only when a coverage row exists AND it has
+  // applicable decisions; otherwise the section collapses (Linear
+  // pattern via DecisionList's empty-array short-circuit).
+  const coverage = pathDOutputs?.coverageByTargetFieldId.get(row.targetField.id)
+  const coverageDecisions = coverage
+    ? pathDOutputs?.decisionsByCoverageId.get(coverage.id) ?? []
+    : []
+
+  // Phase E PR α — pencil affordance. Mirrors the mapped-row pattern at
+  // the SOURCE section's `headerAside` slot. Hidden while the form is
+  // active (the pencil's job is "open the form"; once it's open, the
+  // affordance becomes redundant).
+  const showPencil = !isFormActive
+
   return (
     <>
-      <DrawerSection title="Source" testId={SOURCE_SECTION_TESTID}>
+      <DrawerSection
+        title="Source"
+        testId={SOURCE_SECTION_TESTID}
+        headerAside={
+          showPencil ? <EditPencilButton onClick={onCreateMappingClick} /> : null
+        }
+      >
         {isFormActive && projectId ? (
           <CreateMappingForm
             ref={formRef}
@@ -1769,6 +1874,23 @@ function UnmappedBody({
           />
         )}
       </DrawerSection>
+
+      {!isFormActive ? (
+        <>
+          <DrawerSection title="Coverage" testId="drawer-section-coverage">
+            <CoverageSection coverage={coverage ?? null} />
+          </DrawerSection>
+
+          {coverageDecisions.length > 0 ? (
+            <DrawerSection
+              title={`Decisions (${coverageDecisions.length})`}
+              testId="drawer-section-decisions"
+            >
+              <DecisionList decisions={coverageDecisions} />
+            </DrawerSection>
+          ) : null}
+        </>
+      ) : null}
     </>
   )
 }
@@ -1786,7 +1908,17 @@ function UnmappedBody({
 // moves into the new ANALYSIS section. Type compatibility is
 // intentionally skipped for VAs — they have no source dataType to
 // compare against.
-function ValueAssignmentBody({ row }: { row: ValueAssignmentRow }) {
+function ValueAssignmentBody({
+  row,
+  pathDOutputs,
+}: {
+  row: ValueAssignmentRow
+  pathDOutputs: PathDOutputs | null
+}) {
+  // Phase E PR α — decisions for this VA's TFM (no DQ section: VAs have
+  // no source field to scope DQ findings to).
+  const decisions = pathDOutputs?.decisionsByTfmId.get(row.id) ?? []
+
   return (
     <>
       <DrawerSection title="Source" testId={SOURCE_SECTION_TESTID}>
@@ -1816,6 +1948,15 @@ function ValueAssignmentBody({ row }: { row: ValueAssignmentRow }) {
           />
         )}
       </DrawerSection>
+
+      {decisions.length > 0 ? (
+        <DrawerSection
+          title={`Decisions (${decisions.length})`}
+          testId="drawer-section-decisions"
+        >
+          <DecisionList decisions={decisions} />
+        </DrawerSection>
+      ) : null}
     </>
   )
 }
@@ -1877,6 +2018,8 @@ interface MappedBodyProps {
   onEditFormSaveSuccess: (tfmId: string, meta?: EditSaveMeta) => void
   /** Pencil click handler — mounts the edit form in the Sources section. */
   onEditClick: () => void
+  /** Phase E PR α — Path D outputs sidecar for DATA QUALITY + DECISIONS. */
+  pathDOutputs: PathDOutputs | null
 }
 
 function MappedBody({
@@ -1890,6 +2033,7 @@ function MappedBody({
   onEditFormCancel,
   onEditFormSaveSuccess,
   onEditClick,
+  pathDOutputs,
 }: MappedBodyProps) {
   // Q11.A lock — pencil affordance is visible for needs_review + approved
   // mapped rows, except `custom_sql` (which is a Transform-page concern,
@@ -1988,8 +2132,84 @@ function MappedBody({
       ) : null}
 
       <TransformationSection row={row} projectId={projectId} />
+
+      {!canMountEditForm ? (
+        <MappedEnrichmentSections row={row} pathDOutputs={pathDOutputs} />
+      ) : null}
     </>
   )
+}
+
+/**
+ * Phase E PR α — DATA QUALITY + DECISIONS sections rendered at the tail
+ * of `MappedBody`. Both collapse to nothing when the sidecar carries no
+ * applicable rows. Hidden during edit-mode for the same reason as
+ * SAMPLE VALUES + ANALYSIS — those sections describe the existing row,
+ * not the in-flight form draft.
+ *
+ * DQ fan-in: every source field on the row is looked up against
+ * `dqIssuesBySourceFieldId`. The flat-mapped result is de-duplicated by
+ * issue id (a single DQ issue scoped to a shared source field would
+ * otherwise render twice on a multi-source row that references it).
+ *
+ * Decisions fan-in: looked up by TFM id (`row.id`) against
+ * `decisionsByTfmId`. Decisions tied to the row's coverage row (rather
+ * than the TFM directly) are NOT surfaced on mapped rows in PR α — the
+ * coverage-id channel is reserved for no-source rows where the coverage
+ * row IS the row identity.
+ */
+function MappedEnrichmentSections({
+  row,
+  pathDOutputs,
+}: {
+  row: MappedRow
+  pathDOutputs: PathDOutputs | null
+}) {
+  const dqIssues = collectDqIssuesForSources(row, pathDOutputs)
+  const decisions = pathDOutputs?.decisionsByTfmId.get(row.id) ?? []
+
+  if (dqIssues.length === 0 && decisions.length === 0) return null
+
+  return (
+    <>
+      {dqIssues.length > 0 ? (
+        <DrawerSection
+          title={`Data quality (${dqIssues.length})`}
+          testId="drawer-section-data-quality"
+        >
+          <DQList issues={dqIssues} />
+        </DrawerSection>
+      ) : null}
+
+      {decisions.length > 0 ? (
+        <DrawerSection
+          title={`Decisions (${decisions.length})`}
+          testId="drawer-section-decisions"
+        >
+          <DecisionList decisions={decisions} />
+        </DrawerSection>
+      ) : null}
+    </>
+  )
+}
+
+function collectDqIssuesForSources(
+  row: MappedRow,
+  pathDOutputs: PathDOutputs | null,
+): ProjectDataQualityIssueRow[] {
+  if (!pathDOutputs) return []
+  const seen = new Set<string>()
+  const out: ProjectDataQualityIssueRow[] = []
+  for (const source of row.sources) {
+    const issues =
+      pathDOutputs.dqIssuesBySourceFieldId.get(source.sourceField.id) ?? []
+    for (const issue of issues) {
+      if (seen.has(issue.id)) continue
+      seen.add(issue.id)
+      out.push(issue)
+    }
+  }
+  return out
 }
 
 /**
