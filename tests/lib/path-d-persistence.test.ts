@@ -31,7 +31,9 @@ function makeMockAdmin(opts: {
   // pass which batch-fetches fields.table_id by source_field_id. Same
   // chain shape as the other ops; resolves to { data, error }. Default
   // is empty data on any unmapped key.
-  selectResolves?: Record<string, { data: { id: string; table_id: string }[]; error: null } | { data: null; error: { message: string } }>
+  // INF-53: also used for the coverage + TFM user-lock pre-fetches; the
+  // row shape varies by table, so we accept any record array.
+  selectResolves?: Record<string, { data: Array<Record<string, unknown>>; error: null } | { data: null; error: { message: string } }>
 }) {
   const calls: ChainCall[] = []
 
@@ -636,5 +638,308 @@ describe('persistPathDOutput — INF-45 mapping_sources regression guard', () =>
     const filterCall = calls[msDeleteFilterIdx]!
     expect(filterCall.args[0]).toBe('target_field_mapping_id')
     expect(filterCall.args[1]).toEqual([INF45_TFM_ID])
+  })
+})
+
+// ── INF-53: re-run preserves user-set status ───────────────────────────────
+//
+// Pre-INF-53 the coverage + TFM UPSERTs unconditionally overwrote `status`
+// on every Path D re-run, silently clobbering user approve/reject decisions.
+// These tests verify the pre-fetch + selective-preserve merge logic:
+//
+//   * coverage rows with status_set_by='user' keep their status +
+//     status_set_by; AI metadata (coverage_status, ai_reasoning,
+//     default_value_recommendation, confidence) refreshes on every run
+//   * TFM rows with status IN ('approved', 'rejected') keep their status;
+//     AI metadata (ai_reasoning, transformation_intent, confidence, etc.)
+//     refreshes
+//   * non-locked rows continue to receive the AI default ('needs_review')
+//
+// The chain-mock's top-level `select()` resolves to the configured
+// `selectResolves[<table>.select]` entry, which simulates the user-lock
+// fetch result.
+
+const LOCKED_TARGET_FIELD_ID = '11111111-1111-4111-8111-111111111111'
+
+describe('persistPathDOutput — INF-53 user-lock preservation on re-run', () => {
+  it('coverage: preserves status + status_set_by for user-locked rows on re-run', async () => {
+    const mockResult = makeMockAdmin({
+      insertResolves: {
+        'project_data_quality_issues.insert': { data: [{ id: 'dq-0' }], error: null },
+        'project_decisions.insert': { data: [{ id: 'dec-0' }], error: null },
+        'outputs.insert': { data: [], error: null },
+      },
+      upsertResolves: {
+        'target_field_mappings.upsert': {
+          data: [{ id: 'tfm-0', target_field_id: LOCKED_TARGET_FIELD_ID }],
+          error: null,
+        },
+        'target_field_coverage.upsert': {
+          data: [{ id: 'cov-0', target_field_id: LOCKED_TARGET_FIELD_ID }],
+          error: null,
+        },
+      },
+      selectResolves: {
+        // Simulate one user-approved coverage row already on the project.
+        'target_field_coverage.select': {
+          data: [{ target_field_id: LOCKED_TARGET_FIELD_ID, status: 'approved' }],
+          error: null,
+        },
+        // No user-locked TFMs in this scenario.
+        'target_field_mappings.select': { data: [], error: null },
+      },
+    })
+
+    await persistPathDOutput({
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      supabaseAdmin: mockResult.admin as any,
+      projectId: PROJECT_ID,
+      userId: USER_ID,
+      experimentRunId: RUN_ID,
+      // The fixture's coverage entry has coverage_status='covered' (AI's
+      // new verdict) — locked status should NOT change to 'needs_review'.
+      parsed: ALL_OK_PARSED,
+    })
+
+    const covUpsert = mockResult.calls.find(
+      (c) => c.table === 'target_field_coverage' && c.method === 'upsert',
+    )
+    expect(covUpsert).toBeDefined()
+    const rows = covUpsert!.args[0] as Array<{
+      target_field_id: string
+      status: string
+      status_set_by: string
+      coverage_status: string
+      ai_reasoning: string | null
+    }>
+    const lockedRow = rows.find((r) => r.target_field_id === LOCKED_TARGET_FIELD_ID)
+    expect(lockedRow).toBeDefined()
+    // User decision preserved.
+    expect(lockedRow!.status).toBe('approved')
+    expect(lockedRow!.status_set_by).toBe('user')
+    // AI metadata refreshed (locked semantic = "respect my decision," not
+    // "freeze the AI commentary").
+    expect(lockedRow!.coverage_status).toBe('covered')
+    expect(lockedRow!.ai_reasoning).toBe('Mapped.')
+  })
+
+  it('coverage: non-locked rows still default to needs_review + ai_auto', async () => {
+    const mockResult = makeMockAdmin({
+      insertResolves: {
+        'project_data_quality_issues.insert': { data: [{ id: 'dq-0' }], error: null },
+        'project_decisions.insert': { data: [{ id: 'dec-0' }], error: null },
+        'outputs.insert': { data: [], error: null },
+      },
+      upsertResolves: {
+        'target_field_mappings.upsert': {
+          data: [{ id: 'tfm-0', target_field_id: LOCKED_TARGET_FIELD_ID }],
+          error: null,
+        },
+        'target_field_coverage.upsert': {
+          data: [{ id: 'cov-0', target_field_id: LOCKED_TARGET_FIELD_ID }],
+          error: null,
+        },
+      },
+      // No user locks at all — selectResolves left unset; mock defaults
+      // to empty data → empty user-lock Maps.
+    })
+
+    await persistPathDOutput({
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      supabaseAdmin: mockResult.admin as any,
+      projectId: PROJECT_ID,
+      userId: USER_ID,
+      experimentRunId: RUN_ID,
+      parsed: ALL_OK_PARSED,
+    })
+
+    const covUpsert = mockResult.calls.find(
+      (c) => c.table === 'target_field_coverage' && c.method === 'upsert',
+    )
+    const rows = covUpsert!.args[0] as Array<{
+      status: string
+      status_set_by: string
+    }>
+    expect(rows[0].status).toBe('needs_review')
+    expect(rows[0].status_set_by).toBe('ai_auto')
+  })
+
+  it("TFM: preserves status='approved' for user-locked TFMs on re-run", async () => {
+    const mockResult = makeMockAdmin({
+      insertResolves: {
+        'project_data_quality_issues.insert': { data: [{ id: 'dq-0' }], error: null },
+        'project_decisions.insert': { data: [{ id: 'dec-0' }], error: null },
+        'outputs.insert': { data: [], error: null },
+      },
+      upsertResolves: {
+        'target_field_mappings.upsert': {
+          data: [{ id: 'tfm-0', target_field_id: LOCKED_TARGET_FIELD_ID }],
+          error: null,
+        },
+        'target_field_coverage.upsert': {
+          data: [{ id: 'cov-0', target_field_id: LOCKED_TARGET_FIELD_ID }],
+          error: null,
+        },
+      },
+      selectResolves: {
+        // Simulate one user-approved TFM already on the project.
+        'target_field_mappings.select': {
+          data: [{ target_field_id: LOCKED_TARGET_FIELD_ID, status: 'approved' }],
+          error: null,
+        },
+        'target_field_coverage.select': { data: [], error: null },
+      },
+    })
+
+    await persistPathDOutput({
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      supabaseAdmin: mockResult.admin as any,
+      projectId: PROJECT_ID,
+      userId: USER_ID,
+      experimentRunId: RUN_ID,
+      // Fixture emits status='needs_review' (the AI default) — locked
+      // status should NOT collapse back to needs_review.
+      parsed: ALL_OK_PARSED,
+    })
+
+    const tfmUpsert = mockResult.calls.find(
+      (c) => c.table === 'target_field_mappings' && c.method === 'upsert',
+    )
+    expect(tfmUpsert).toBeDefined()
+    const rows = tfmUpsert!.args[0] as Array<{
+      target_field_id: string
+      status: string
+      ai_reasoning: string
+      confidence: number | null
+    }>
+    const lockedRow = rows.find((r) => r.target_field_id === LOCKED_TARGET_FIELD_ID)
+    expect(lockedRow).toBeDefined()
+    // User approval preserved.
+    expect(lockedRow!.status).toBe('approved')
+    // AI metadata refreshed.
+    expect(lockedRow!.ai_reasoning).toBe('Direct.')
+    expect(lockedRow!.confidence).toBe(0.9)
+  })
+
+  it("TFM: preserves status='rejected' for user-rejected TFMs on re-run", async () => {
+    const mockResult = makeMockAdmin({
+      insertResolves: {
+        'project_data_quality_issues.insert': { data: [{ id: 'dq-0' }], error: null },
+        'project_decisions.insert': { data: [{ id: 'dec-0' }], error: null },
+        'outputs.insert': { data: [], error: null },
+      },
+      upsertResolves: {
+        'target_field_mappings.upsert': {
+          data: [{ id: 'tfm-0', target_field_id: LOCKED_TARGET_FIELD_ID }],
+          error: null,
+        },
+        'target_field_coverage.upsert': { data: [], error: null },
+      },
+      selectResolves: {
+        // Simulate a legacy SimpleLegal-style rejected TFM (rare; pre-
+        // Gap-9 reject==delete amendment, but the lock still applies).
+        'target_field_mappings.select': {
+          data: [{ target_field_id: LOCKED_TARGET_FIELD_ID, status: 'rejected' }],
+          error: null,
+        },
+        'target_field_coverage.select': { data: [], error: null },
+      },
+    })
+
+    await persistPathDOutput({
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      supabaseAdmin: mockResult.admin as any,
+      projectId: PROJECT_ID,
+      userId: USER_ID,
+      experimentRunId: RUN_ID,
+      parsed: ALL_OK_PARSED,
+    })
+
+    const tfmUpsert = mockResult.calls.find(
+      (c) => c.table === 'target_field_mappings' && c.method === 'upsert',
+    )
+    const rows = tfmUpsert!.args[0] as Array<{ status: string }>
+    expect(rows[0].status).toBe('rejected')
+  })
+
+  it('TFM: non-locked rows still write the AI default status', async () => {
+    const mockResult = makeMockAdmin({
+      insertResolves: {
+        'project_data_quality_issues.insert': { data: [{ id: 'dq-0' }], error: null },
+        'project_decisions.insert': { data: [{ id: 'dec-0' }], error: null },
+        'outputs.insert': { data: [], error: null },
+      },
+      upsertResolves: {
+        'target_field_mappings.upsert': {
+          data: [{ id: 'tfm-0', target_field_id: LOCKED_TARGET_FIELD_ID }],
+          error: null,
+        },
+        'target_field_coverage.upsert': { data: [], error: null },
+      },
+      // No locks set — empty data on user-lock fetches.
+    })
+
+    await persistPathDOutput({
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      supabaseAdmin: mockResult.admin as any,
+      projectId: PROJECT_ID,
+      userId: USER_ID,
+      experimentRunId: RUN_ID,
+      parsed: ALL_OK_PARSED,
+    })
+
+    const tfmUpsert = mockResult.calls.find(
+      (c) => c.table === 'target_field_mappings' && c.method === 'upsert',
+    )
+    const rows = tfmUpsert!.args[0] as Array<{ status: string }>
+    expect(rows[0].status).toBe('needs_review')
+  })
+
+  it('issues a user-lock SELECT on each surface before the UPSERT', async () => {
+    // Order invariant: SELECT (user-lock fetch) must precede the UPSERT
+    // for both coverage and TFM. A future refactor that moves the SELECT
+    // after the UPSERT would silently regress to the pre-INF-53 clobber
+    // behaviour.
+    const mockResult = makeMockAdmin({
+      insertResolves: {
+        'project_data_quality_issues.insert': { data: [{ id: 'dq-0' }], error: null },
+        'project_decisions.insert': { data: [{ id: 'dec-0' }], error: null },
+        'outputs.insert': { data: [], error: null },
+      },
+      upsertResolves: {
+        'target_field_mappings.upsert': {
+          data: [{ id: 'tfm-0', target_field_id: LOCKED_TARGET_FIELD_ID }],
+          error: null,
+        },
+        'target_field_coverage.upsert': { data: [], error: null },
+      },
+    })
+
+    await persistPathDOutput({
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      supabaseAdmin: mockResult.admin as any,
+      projectId: PROJECT_ID,
+      userId: USER_ID,
+      experimentRunId: RUN_ID,
+      parsed: ALL_OK_PARSED,
+    })
+
+    const calls = mockResult.calls
+    const tfmSelectIdx = calls.findIndex(
+      (c) => c.table === 'target_field_mappings' && c.method === 'select',
+    )
+    const tfmUpsertIdx = calls.findIndex(
+      (c) => c.table === 'target_field_mappings' && c.method === 'upsert',
+    )
+    const covSelectIdx = calls.findIndex(
+      (c) => c.table === 'target_field_coverage' && c.method === 'select',
+    )
+    const covUpsertIdx = calls.findIndex(
+      (c) => c.table === 'target_field_coverage' && c.method === 'upsert',
+    )
+    expect(tfmSelectIdx).toBeGreaterThanOrEqual(0)
+    expect(tfmUpsertIdx).toBeGreaterThan(tfmSelectIdx)
+    expect(covSelectIdx).toBeGreaterThanOrEqual(0)
+    expect(covUpsertIdx).toBeGreaterThan(covSelectIdx)
   })
 })
