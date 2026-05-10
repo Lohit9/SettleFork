@@ -1,5 +1,7 @@
 'use server'
 
+export const maxDuration = 800  // Vercel Pro/Enterprise max with Fluid Compute; matches Path D envelope (INF-58)
+
 /**
  * Server actions for the Phase 3 redesigned Mapping page.
  *
