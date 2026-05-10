@@ -37,7 +37,6 @@ import type {
   MappingRow,
   MappingSourceRef,
   MappingTransformationStatus,
-  TargetAcknowledgedRow,
   UnmappedRow,
   ValueAssignmentRow,
 } from '@/lib/types/mappings-for-redesign'
@@ -50,7 +49,7 @@ import {
   approveFieldMapping,
   previewEditInvalidation,
   rejectFieldMapping,
-  unacknowledgeField,
+  resetMappingStatus,
 } from '@/lib/actions/mappings-for-redesign'
 import {
   classifyRowConfidence,
@@ -94,23 +93,22 @@ import { EditInvalidationDialog } from './EditInvalidationDialog'
 //
 // Final body kind dispatch:
 //
-//   target_acknowledged → AcknowledgedBody     (Target field / Acknowledgment /
-//                                               Status)
-//   unmapped            → UnmappedBody         (Target field / Mapping status)
+//   unmapped            → UnmappedBody         (Source / Coverage / Decisions —
+//                                               Phase E PR α; coverage-approved
+//                                               no-source rows live here too)
 //   value_assignment    → ValueAssignmentBody  (Target field / Value expression /
 //                                               AI reasoning / Confidence / Status)
 //   mapped              → MappedBody           (Target field / Sources /
 //                                               [Combination] / AI reasoning /
 //                                               Confidence / Status)
 //
-// Footer dispatch (Gap 9):
+// Footer dispatch:
 //
-//   mapped / value_assignment   → ApproveRejectFooter (both buttons, disabled
-//                                                      states per status)
-//   target_acknowledged         → AcknowledgedFooter  (both buttons disabled,
-//                                                      explanatory tooltips)
-//   unmapped                    → no footer (no actions yet — Gap 11+ may add
-//                                            "Suggest mapping" CTA)
+//   mapped / value_assignment   → ApproveRejectButtons (status-driven)
+//   unmapped                    → UnmappedFooterButtons (status-driven —
+//                                  needs_review: Suggest with AI / Create
+//                                  mapping; approved: Un-approve via
+//                                  resetMappingStatus; rejected: Approve)
 //
 // The drawer is deliberately tab-LESS; the spec's Details/Source/Transform
 // tabs were retired at Gap 7 in favour of kind-dispatched single-page bodies.
@@ -241,7 +239,7 @@ export interface MappingDrawerProps {
    * next prop change).
    */
   onActionComplete?: (
-    action: 'approve' | 'reject' | 'unacknowledge',
+    action: 'approve' | 'reject' | 'reset',
     rowId: string,
   ) => void
   /**
@@ -290,25 +288,6 @@ export interface MappingDrawerProps {
   /** See `restoreFormState`. */
   onRestoreConsumed?: () => void
   /**
-   * Phase 4-polish-3 — drawer deep-link focus instruction. Set by the
-   * parent when the URL carries `?focus=unack`; the drawer scrolls
-   * the un-acknowledge button into view and pulses a brief highlight
-   * so users coming from the inline ✗ on a `target_acknowledged` row
-   * land directly on the destructive action without hunting for it.
-   *
-   * Only meaningful when `row?.kind === 'target_acknowledged'`. For
-   * other row kinds the drawer ignores the prop (the un-ack button
-   * doesn't render).
-   *
-   * Once consumed (focused + highlighted), the drawer fires
-   * `onFocusConsumed?.()` so the parent can strip the param from the
-   * URL — leaving it in the URL would re-fire the focus on every
-   * re-render.
-   */
-  focus?: 'unack' | null
-  /** See `focus`. */
-  onFocusConsumed?: () => void
-  /**
    * Phase E PR α — Path D outputs sidecar (coverage rows, decisions, DQ
    * issues) keyed for per-row lookup. Threaded by `MappingContent` from
    * `getPathDOutputsForProject`. Drawer treats `null` / `undefined` as
@@ -333,8 +312,6 @@ export function MappingDrawer({
   onFormDirtyChange,
   restoreFormState,
   onRestoreConsumed,
-  focus,
-  onFocusConsumed,
   pathDOutputs,
 }: MappingDrawerProps) {
   const titleId = useId()
@@ -344,53 +321,6 @@ export function MappingDrawer({
   // when `isOpen` flips from false → true; restoring on close happens in
   // the cleanup of the same effect.
   const triggerRef = useRef<HTMLElement | null>(null)
-
-  // ── Phase 4-polish-3 — `?focus=unack` deep-link state ─────────────
-  //
-  // When the drawer opens with `focus === 'unack'` (set by the parent
-  // off the URL param), we scroll the un-acknowledge button into view
-  // and pulse a 1.5s highlight so the user lands directly on the
-  // destructive action they came for from the inline ✗ on the row.
-  // The highlight is a slate ring rendered via a `data-focus-pulse`
-  // attribute the button reads off (CSS in `AcknowledgedFooterButtons`
-  // ramps a ring on / off based on the attribute).
-  //
-  // After the scroll + highlight fire, we call `onFocusConsumed?.()`
-  // so the parent can strip the param from the URL — leaving it
-  // would re-fire the focus on every drawer-affecting re-render.
-  const [focusPulseActive, setFocusPulseActive] = useState(false)
-  useEffect(() => {
-    if (focus !== 'unack') return
-    if (row?.kind !== 'target_acknowledged') {
-      // Not applicable on this row kind; consume the param so the
-      // URL doesn't keep the stale instruction around.
-      onFocusConsumed?.()
-      return
-    }
-    let pulseTimer: ReturnType<typeof setTimeout> | null = null
-    // Wait one paint so the drawer's body has mounted before we
-    // measure the un-ack button.
-    const rafId = requestAnimationFrame(() => {
-      const btn = drawerRef.current?.querySelector(
-        '[data-testid="mapping-drawer-unacknowledge-button"]',
-      )
-      if (btn instanceof HTMLElement) {
-        btn.scrollIntoView({ behavior: 'smooth', block: 'nearest' })
-        setFocusPulseActive(true)
-        pulseTimer = setTimeout(() => {
-          setFocusPulseActive(false)
-        }, 1500)
-      }
-      // Consume immediately (whether the button was found or not) so
-      // the parent can strip the URL param. The local pulse, if any,
-      // continues independently.
-      onFocusConsumed?.()
-    })
-    return () => {
-      cancelAnimationFrame(rafId)
-      if (pulseTimer !== null) clearTimeout(pulseTimer)
-    }
-  }, [focus, row?.kind, onFocusConsumed])
 
   // ── Phase 4a-2 — manual mapping creation form state ───────────────
   //
@@ -712,11 +642,13 @@ export function MappingDrawer({
   const [isApprovePending, startApproveTransition] = useTransition()
   const [isRejecting, setIsRejecting] = useState(false)
   const [confirmRejectOpen, setConfirmRejectOpen] = useState(false)
-  // Phase 4b-2 — un-acknowledge in-flight + confirm dialog state. Mirrors
-  // the reject-confirmation shape (single-shot destructive action gated
-  // behind an AlertDialog, drawer closes on success).
-  const [isUnacknowledging, setIsUnacknowledging] = useState(false)
-  const [confirmUnacknowledgeOpen, setConfirmUnacknowledgeOpen] = useState(false)
+  // INF-57 cleanup — un-approve in-flight + confirm dialog state. Mirrors
+  // the reject-confirmation shape but is non-destructive: the row's
+  // status flips from approved → needs_review via resetMappingStatus,
+  // the row identity is preserved, and the drawer closes on success
+  // (parent treats `'reset'` like `'reject'` — see handleDrawerActionComplete).
+  const [isUnapproving, setIsUnapproving] = useState(false)
+  const [confirmUnapproveOpen, setConfirmUnapproveOpen] = useState(false)
 
   // Reset transient action state whenever the row identity changes —
   // including drawer close (`row` becomes null between renders) and
@@ -731,8 +663,8 @@ export function MappingDrawer({
     // which unmounts everything; if a new row mounts, the in-flight
     // state was for a different row and would never resolve here.
     setIsRejecting(false)
-    setConfirmUnacknowledgeOpen(false)
-    setIsUnacknowledging(false)
+    setConfirmUnapproveOpen(false)
+    setIsUnapproving(false)
   }, [rowId])
 
   // Clear the optimistic overlay once the server confirms by handing
@@ -822,50 +754,45 @@ export function MappingDrawer({
     }
   }, [row, onActionComplete])
 
-  // ── Phase 4b-2 — un-acknowledge handler ──────────────────────────
+  // ── INF-57 cleanup — un-approve handler ──────────────────────────
   //
-  // Mirrors `handleRejectConfirm`'s shape: a destructive single-shot
-  // action gated behind an AlertDialog. On success the parent closes
-  // the drawer + clears the URL (the TFM row id dissolves; the field
-  // returns to Rule 6 unmapped). On failure we surface uniform copy
-  // and log the underlying errorCode for ops triage.
-  const handleUnacknowledgeConfirm = useCallback(async () => {
-    if (!row || row.kind !== 'target_acknowledged') return
-    // Defensive bail when the drawer was mounted without a projectId
-    // (the real flow always threads it from MappingContent — this is
-    // belt-and-suspenders for storybook / standalone test contexts).
-    if (!projectId) return
+  // Mirrors `handleRejectConfirm`'s shape but is non-destructive: the
+  // row's status flips from approved → needs_review via
+  // `resetMappingStatus`. Surface dispatch (coverage_only / tfm_mapped_or_va
+  // / legacy_bare_ack) is decided server-side off the row id format. On
+  // success the parent closes the drawer + clears the URL (mirrors
+  // reject's drawer-close behavior — see handleDrawerActionComplete's
+  // `'reset'` arm). On failure we surface uniform copy and log the
+  // underlying errorCode for ops triage.
+  const handleUnapproveConfirm = useCallback(async () => {
+    if (!row || row.status !== 'approved') return
     const targetRowId = row.id
-    const targetFieldId = row.targetField.id
     setErrorMessage(null)
-    setIsUnacknowledging(true)
+    setIsUnapproving(true)
     try {
-      const result = await unacknowledgeField({
-        projectId,
-        targetFieldId,
-      })
+      const result = await resetMappingStatus({ rowId: targetRowId })
       if (!result.success) {
-        setIsUnacknowledging(false)
-        setConfirmUnacknowledgeOpen(false)
-        setErrorMessage(GENERIC_UNACKNOWLEDGE_ERROR)
+        setIsUnapproving(false)
+        setConfirmUnapproveOpen(false)
+        setErrorMessage(GENERIC_UNAPPROVE_ERROR)
         if (typeof console !== 'undefined') {
-          console.error('[MappingDrawer] unacknowledgeField failed:', result)
+          console.error('[MappingDrawer] resetMappingStatus failed:', result)
         }
         return
       }
-      // Success — drawer about to unmount. Do NOT clear isUnacknowledging
+      // Success — drawer about to unmount. Do NOT clear isUnapproving
       // for the same reason as the reject path.
-      setConfirmUnacknowledgeOpen(false)
-      onActionComplete?.('unacknowledge', targetRowId)
+      setConfirmUnapproveOpen(false)
+      onActionComplete?.('reset', targetRowId)
     } catch (err) {
-      setIsUnacknowledging(false)
-      setConfirmUnacknowledgeOpen(false)
-      setErrorMessage(GENERIC_UNACKNOWLEDGE_ERROR)
+      setIsUnapproving(false)
+      setConfirmUnapproveOpen(false)
+      setErrorMessage(GENERIC_UNAPPROVE_ERROR)
       if (typeof console !== 'undefined') {
-        console.error('[MappingDrawer] unacknowledgeField threw:', err)
+        console.error('[MappingDrawer] resetMappingStatus threw:', err)
       }
     }
-  }, [row, projectId, onActionComplete])
+  }, [row, onActionComplete])
 
   // ── Phase 4b-1 — edit-mode handlers ──────────────────────────────
   //
@@ -902,8 +829,8 @@ export function MappingDrawer({
   //   drawer settle on the freshly-rendered MappedBody.
   const handleEditClick = useCallback(() => {
     if (!row || row.kind !== 'mapped') return
-    // Status guard mirrors §3.2 — Edit is hidden on rejected /
-    // target_acknowledged / unmapped, but defensively bail here too.
+    // Status guard mirrors §3.2 — Edit is hidden on rejected / unmapped,
+    // but defensively bail here too.
     if (row.status !== 'approved' && row.status !== 'needs_review') return
 
     const sourceFieldIds = row.sources.map((s) => s.sourceField.id)
@@ -1084,9 +1011,8 @@ export function MappingDrawer({
         isEditPreviewPending={isEditPreviewPending}
         onEditFormCancelClick={() => maybeRequestClose()}
         onEditFormSaveClick={() => void handleEditSavePrecheck()}
-        isUnacknowledging={isUnacknowledging}
-        onUnacknowledgeClick={() => setConfirmUnacknowledgeOpen(true)}
-        unacknowledgePulseActive={focusPulseActive}
+        isUnapproving={isUnapproving}
+        onUnapproveClick={() => setConfirmUnapproveOpen(true)}
       />
       <EditInvalidationDialog
         preview={editInvalidationPreview}
@@ -1105,15 +1031,15 @@ export function MappingDrawer({
         isRejecting={isRejecting}
         onConfirm={handleRejectConfirm}
       />
-      <UnacknowledgeConfirmDialog
-        open={confirmUnacknowledgeOpen}
+      <UnapproveConfirmDialog
+        open={confirmUnapproveOpen}
         onOpenChange={(next) => {
-          if (isUnacknowledging) return
-          setConfirmUnacknowledgeOpen(next)
+          if (isUnapproving) return
+          setConfirmUnapproveOpen(next)
         }}
         targetFieldName={effectiveRow.targetField.name}
-        isUnacknowledging={isUnacknowledging}
-        onConfirm={handleUnacknowledgeConfirm}
+        isUnapproving={isUnapproving}
+        onConfirm={handleUnapproveConfirm}
       />
     </aside>
   )
@@ -1121,14 +1047,15 @@ export function MappingDrawer({
 
 // ── Optimistic overlay helper ───────────────────────────────────────────────
 //
-// Apply the "Approve in flight" overlay to a row. Only mapped /
-// value_assignment rows are reachable here — Approve is disabled for
-// `target_acknowledged` and the button does not exist for `unmapped`.
-// Returning the row unchanged for those kinds is purely defensive.
+// Apply the "Approve in flight" overlay to a row. Reachable for any row
+// kind that exposes the Approve button (mapped/VA via ApproveRejectButtons,
+// unmapped via UnmappedFooterButtons's status-driven dispatch when status
+// is 'rejected').
 
 function applyOptimisticApprove(row: MappingRow): MappingRow {
   if (row.kind === 'mapped') return { ...row, status: 'approved' }
   if (row.kind === 'value_assignment') return { ...row, status: 'approved' }
+  if (row.kind === 'unmapped') return { ...row, status: 'approved' }
   return row
 }
 
@@ -1143,8 +1070,8 @@ const GENERIC_APPROVE_ERROR =
   "Couldn't approve this mapping. Please try again."
 const GENERIC_REJECT_ERROR =
   "Couldn't reject this mapping. Please try again."
-const GENERIC_UNACKNOWLEDGE_ERROR =
-  "Couldn't un-acknowledge this field. Please try again."
+const GENERIC_UNAPPROVE_ERROR =
+  "Couldn't un-approve this mapping. Please try again."
 
 // ── Header (drawer redesign — compressed 2-line) ───────────────────────────
 //
@@ -1194,8 +1121,6 @@ const SOURCE_SECTION_TESTID = 'drawer-section-source'
  * Status badge composition:
  *   • mapped / VA: dot + sentence-case status word ("Approved",
  *     "Needs review", "Rejected"), color-matched.
- *   • Rule 5 (target_acknowledged): dot + "Acknowledged" word
- *     (slate hue, separate from the migration-074 storage status).
  *   • Rule 6 (unmapped): badge entirely suppressed — only the close
  *     button renders.
  *
@@ -1233,7 +1158,7 @@ function DrawerHeader({
       >
         <HeaderTargetIdentity row={row} titleId={titleId} />
         <div className="flex flex-shrink-0 items-center gap-3">
-          {row.kind !== 'unmapped' ? <HeaderStatusBadge row={row} /> : null}
+          <HeaderStatusBadge row={row} />
           <button
             type="button"
             onClick={onClose}
@@ -1295,9 +1220,7 @@ function HeaderTargetIdentity({
  *
  * The testid disambiguator (`mapping-drawer-header-status-${variant}`)
  * is the surface tests use to assert which palette the badge picked.
- * For mapped/VA rows, `variant` is the row.status enum; for Rule 5
- * acknowledged it's the literal `'acknowledged'` string (which is NOT
- * a status enum value but a UI presentation token).
+ * `variant` is the row.status enum.
  */
 function HeaderStatusDot({
   variant,
@@ -1335,31 +1258,24 @@ function HeaderStatusDot({
  * colored token.
  *
  * Status mapping by row.kind:
- *   • `mapped` / `value_assignment`: row.status drives variant +
- *     palette via `DRAWER_STATUS_CONFIG`. Sentence-case labels:
- *     "Approved", "Needs review", "Rejected".
- *   • `target_acknowledged` (Rule 5): rendered as the dedicated
- *     "Acknowledged" presentation token (slate hue throughout) —
- *     not the row's `status: 'approved'` payload, which is a
- *     migration-074 storage detail, not a UI signal.
- *   • `unmapped` (Rule 6): handled by the caller — the entire badge
- *     is suppressed and only the close button renders.
+ *   • `mapped` / `value_assignment` / `unmapped`: row.status drives
+ *     variant + palette via `DRAWER_STATUS_CONFIG`. Sentence-case
+ *     labels: "Approved", "Needs review", "Rejected".
+ *   • Coverage-approved no-source rows (kind='unmapped',
+ *     status='approved') unify on the green Approved badge — they
+ *     used to render a separate slate "Acknowledged" token, dropped
+ *     in INF-57 cleanup (2026-05-10).
  */
 function HeaderStatusBadge({
   row,
 }: {
-  row: MappedRow | ValueAssignmentRow | TargetAcknowledgedRow
+  row: MappedRow | ValueAssignmentRow | UnmappedRow
 }) {
-  const isAcknowledged = row.kind === 'target_acknowledged'
-  const variant = isAcknowledged ? 'acknowledged' : row.status
-  const cfg = isAcknowledged
-    ? ACKNOWLEDGED_BADGE_CONFIG
-    : DRAWER_STATUS_CONFIG[row.status]
+  const variant = row.status
+  const cfg = DRAWER_STATUS_CONFIG[row.status]
   // Phase E PR α — surface confidence inline with the status word when
-  // the row carries a numeric confidence. Acknowledged rows currently
-  // null this out (post-γ.1 they may populate); the · separator is
-  // suppressed for null so the badge reads cleanly without trailing
-  // punctuation.
+  // the row carries a numeric confidence. The · separator is suppressed
+  // for null so the badge reads cleanly without trailing punctuation.
   const confidencePercent = formatConfidencePercent(row.confidence)
   return (
     <span
@@ -1405,8 +1321,8 @@ function HeaderStatusBadge({
 //   • Existing Gap 7 tests that use `mapping-drawer-body` to fire `mousedown`
 //     on a non-closing target keep passing.
 // Inside the wrapper, content is dispatched on `row.kind`:
-//   target_acknowledged → AcknowledgedBody
-//   unmapped            → UnmappedBody
+//   unmapped            → UnmappedBody (coverage-approved no-source rows live
+//                                       here too post-INF-57 cleanup)
 //   value_assignment    → ValueAssignmentBody
 //   mapped              → MappedBody (Gap 8b — per-source roster + combination)
 
@@ -1531,8 +1447,6 @@ function BodyContent({
       )
     case 'value_assignment':
       return <ValueAssignmentBody row={row} pathDOutputs={pathDOutputs} />
-    case 'target_acknowledged':
-      return <AcknowledgedBody row={row} pathDOutputs={pathDOutputs} />
     case 'unmapped':
       return (
         <UnmappedBody
@@ -1693,79 +1607,6 @@ const DRAWER_STATUS_CONFIG: Record<
     dotClassName: 'bg-slate-300',
     wordClassName: 'text-slate-500',
   },
-}
-
-// Drawer redesign — TARGET-led identity (this iteration): Rule 5
-// (target_acknowledged) is not a `MappingRow['status']` value — its
-// `row.status === 'approved'` per the type definition (migration 074
-// step 3c) — so the header badge surfaces it as a separate
-// "Acknowledged" presentation token. Slate hue throughout (dot +
-// word) reads as "intentional non-mapping / signed off" rather than
-// the green "approved mapping" affirmation.
-const ACKNOWLEDGED_BADGE_CONFIG = {
-  label: 'Acknowledged',
-  dotClassName: 'bg-slate-400',
-  wordClassName: 'text-slate-700',
-} as const
-
-// ── Rule 5 — Target Acknowledged ───────────────────────────────────────────
-//
-// Drawer redesign: target field identity moves to the header; status
-// + confidence land in the header SOURCE row top-right (drawer
-// redesign refinements §1) — for acknowledged rows the badge surfaces
-// as a filled green dot (no confidence percent because Rule 5 has
-// `confidence === null`). The body is now a single `Acknowledgment`
-// section; the prior pass's leading OVERVIEW section is removed
-// entirely, and ANALYSIS is omitted for Rule 5 (no source = no type
-// compat, no AI reasoning to surface). The edit pencil is hidden —
-// acknowledged rows have no sources to edit.
-//
-// NOTE on omitted fields: `acknowledgmentNotes`, `acknowledgedBy`,
-// `acknowledgedAt` are NOT on the redesign data contract
-// (`TargetAcknowledgedRow` exposes only `acknowledgmentReason`). Adding
-// them would require a contract change and is out of scope.
-function AcknowledgedBody({
-  row,
-  pathDOutputs,
-}: {
-  row: TargetAcknowledgedRow
-  pathDOutputs: PathDOutputs | null
-}) {
-  // Phase E PR α — COVERAGE section. Per align-on-approach: collapse the
-  // section entirely when no coverage row exists for this target field
-  // (the synthesized "Manual entry required" orphan label reads oddly on
-  // an explicitly-closed acknowledged row). The synthesized label only
-  // makes sense on `kind: 'unmapped'` rows where it's a call-to-action.
-  const coverage = pathDOutputs?.coverageByTargetFieldId.get(row.targetField.id)
-
-  return (
-    <>
-      <DrawerSection
-        title="Acknowledgment"
-        testId="drawer-section-acknowledgment"
-      >
-        {row.acknowledgmentReason ? (
-          <p
-            className="text-sm text-slate-900"
-            data-testid="drawer-acknowledgment-reason"
-          >
-            {row.acknowledgmentReason}
-          </p>
-        ) : (
-          <DrawerEmptyState
-            text="No reason recorded"
-            testId="drawer-acknowledgment-reason-empty"
-          />
-        )}
-      </DrawerSection>
-
-      {coverage ? (
-        <DrawerSection title="Coverage" testId="drawer-section-coverage">
-          <CoverageSection coverage={coverage} />
-        </DrawerSection>
-      ) : null}
-    </>
-  )
 }
 
 // ── Rule 6 — Unmapped ──────────────────────────────────────────────────────
@@ -2551,13 +2392,10 @@ function SampleValuesFieldBlock({
 //                                  compat is intentionally skipped
 //                                  (VAs have no source dataType to
 //                                  compare against).
-//   row.kind === 'target_acknowledged'
-//                                → ANALYSIS not rendered (no source =
-//                                  no type compat, no AI reasoning to
-//                                  surface). `AcknowledgedBody`
-//                                  doesn't mount this component.
 //   row.kind === 'unmapped'      → ANALYSIS not rendered. `UnmappedBody`
-//                                  doesn't mount this component.
+//                                  doesn't mount this component (no
+//                                  source = no type compat, no AI
+//                                  reasoning to surface).
 //
 // AI reasoning disclosure (`NestedAiReasoningDisclosure`) keeps its
 // Q11.B/Q11.C lock verbatim:
@@ -2851,7 +2689,7 @@ function NestedAiReasoningDisclosure({
 //   row.kind === 'value_assignment'
 //     → Handled inline by ValueAssignmentBody as a "Value expression"
 //       section (the VA's combinationSql is the value, not a transform).
-//   row.kind === 'target_acknowledged' || row.kind === 'unmapped'
+//   row.kind === 'unmapped'
 //     → Section hidden (no TFM, no transform).
 //
 // Status pill values from `transformationStatus`:
@@ -3036,11 +2874,10 @@ function TransformLink({
 //     Approve: DISABLED ("already approved")    Reject: enabled
 //   mapped/value_assignment + status='rejected'      ← legacy data
 //     Approve: enabled (un-reject)               Reject: enabled (delete)
-//   target_acknowledged
-//     Approve: DISABLED ("acknowledged" tooltip)
-//     Reject:  DISABLED ("acknowledged" tooltip)
-//   unmapped
-//     no footer — no actions are valid yet
+//   unmapped (status-driven, INF-57 cleanup):
+//     status='needs_review' → Suggest with AI / Create mapping (form flow)
+//     status='approved'     → Un-approve (resetMappingStatus)
+//     status='rejected'     → Approve (re-approves coverage row)
 //
 // Optimistic-Approve overlay is applied at the row level before this
 // component sees it, so the button row only needs to read `row.status`.
@@ -3085,23 +2922,17 @@ interface DrawerFooterProps {
   /** Phase 4b-1 — edit-mode [Save changes] click handler (runs preview-then-save). */
   onEditFormSaveClick: () => void
   /**
-   * Phase 4b-2 — true while the un-acknowledge call is in flight.
-   * Drives the spinner on the Un-acknowledge button (and on the
-   * confirm dialog's destructive action).
+   * INF-57 cleanup — true while the un-approve call (resetMappingStatus)
+   * is in flight. Drives the spinner on the Un-approve button (and on
+   * the confirm dialog's primary action).
    */
-  isUnacknowledging: boolean
+  isUnapproving: boolean
   /**
-   * Phase 4b-2 — Un-acknowledge click handler. Opens the confirm
+   * INF-57 cleanup — Un-approve click handler. Opens the confirm
    * dialog; the actual server call fires from the dialog's confirm
    * action.
    */
-  onUnacknowledgeClick: () => void
-  /**
-   * Phase 4-polish-3 — true for ~1.5s after a `?focus=unack` deep-link
-   * lands. The Un-acknowledge button renders a slate ring while this
-   * is true so the user lands on the destructive action they came for.
-   */
-  unacknowledgePulseActive: boolean
+  onUnapproveClick: () => void
 }
 
 function DrawerFooter({
@@ -3125,9 +2956,8 @@ function DrawerFooter({
   isEditPreviewPending,
   onEditFormCancelClick,
   onEditFormSaveClick,
-  isUnacknowledging,
-  onUnacknowledgeClick,
-  unacknowledgePulseActive,
+  isUnapproving,
+  onUnapproveClick,
 }: DrawerFooterProps) {
   // Phase 4b-1 — when the user is editing a mapped row, the footer
   // collapses to `[Cancel] [Save changes]` regardless of the row's
@@ -3183,21 +3013,20 @@ function DrawerFooter({
       ) : null}
       {row.kind === 'unmapped' ? (
         <UnmappedFooterButtons
+          status={row.status}
           isFormActive={isFormActive}
           formCanSave={formCanSave}
           formIsSavePending={formIsSavePending}
           isSuggestPending={isSuggestPending}
+          isApprovePending={isApprovePending}
+          isUnapproving={isUnapproving}
           onCreateMappingClick={onCreateMappingClick}
           onSuggestWithAIClick={onSuggestWithAIClick}
           onCancelSuggestClick={onCancelSuggestClick}
           onFormCancelClick={onFormCancelClick}
           onFormSaveClick={onFormSaveClick}
-        />
-      ) : row.kind === 'target_acknowledged' ? (
-        <AcknowledgedFooterButtons
-          isUnacknowledging={isUnacknowledging}
-          onUnacknowledgeClick={onUnacknowledgeClick}
-          pulseActive={unacknowledgePulseActive}
+          onApproveClick={onApprove}
+          onUnapproveClick={onUnapproveClick}
         />
       ) : (
         // Drawer redesign — Q11.A lock: Edit moved out of the footer
@@ -3216,49 +3045,115 @@ function DrawerFooter({
   )
 }
 
-// ── Unmapped footer (Phase 4a-2 + 4a-4b) ────────────────────────────────────
+// ── Unmapped footer (Phase 4a-2 + 4a-4b + INF-57 cleanup) ───────────────────
 //
-// Mode-switches between THREE visual states (4a-4b adds the third):
+// Mode-switches by `isFormActive` first, then by row.status for the
+// inactive branch (INF-57 cleanup added the status-driven dispatch):
 //
-//   • Inactive — Two-button row: [Suggest with AI] [Create mapping]. The
-//     Suggest variant flips both `isFormActive` AND `autoSuggestRequested`
-//     (drawer level) so the form mounts ready to fire its mount-time
-//     `invokeSuggest`. Both buttons are always enabled on initial render
-//     per locked §2-OQ-2 — rate-limit gating happens INSIDE the form's
-//     pill, not at the footer.
+//   isFormActive = false:
+//     status='needs_review'/'unmapped' → [Suggest with AI] [Create mapping]
+//                                        — the form-entry path
+//     status='approved'                → [Un-approve]
+//                                        — calls resetMappingStatus; the
+//                                        coverage row flips to needs_review
+//                                        and the drawer closes (parent's
+//                                        handleDrawerActionComplete `'reset'`
+//                                        arm mirrors the reject behaviour)
+//     status='rejected'                → [Approve]
+//                                        — re-approves the coverage row
+//                                        via the standard approve flow
 //
-//   • Active + Suggest pending — Single [Cancel suggestion] button. Drives
-//     `formRef.current.cancelSuggest()` which aborts the in-flight
-//     controller and restores the form's pre-pending snapshot.
-//
-//   • Active + not pending — [Cancel] [Save mapping] pair (4a-2 shape).
-//     The Save button is disabled until the form publishes `canSave=true`.
-//     Both buttons are disabled while the save is inflight.
+//   isFormActive = true:
+//     • Suggest pending → [Cancel suggestion] (aborts in-flight AI call)
+//     • Otherwise       → [Cancel] [Save mapping] (form-save flow)
 
 interface UnmappedFooterButtonsProps {
+  status: 'needs_review' | 'approved' | 'rejected' | 'unmapped'
   isFormActive: boolean
   formCanSave: boolean
   formIsSavePending: boolean
   isSuggestPending: boolean
+  isApprovePending: boolean
+  isUnapproving: boolean
   onCreateMappingClick: () => void
   onSuggestWithAIClick: () => void
   onCancelSuggestClick: () => void
   onFormCancelClick: () => void
   onFormSaveClick: () => void
+  onApproveClick: () => void
+  onUnapproveClick: () => void
 }
 
 function UnmappedFooterButtons({
+  status,
   isFormActive,
   formCanSave,
   formIsSavePending,
   isSuggestPending,
+  isApprovePending,
+  isUnapproving,
   onCreateMappingClick,
   onSuggestWithAIClick,
   onCancelSuggestClick,
   onFormCancelClick,
   onFormSaveClick,
+  onApproveClick,
+  onUnapproveClick,
 }: UnmappedFooterButtonsProps) {
   if (!isFormActive) {
+    if (status === 'approved') {
+      return (
+        <div className="flex items-center justify-end gap-2">
+          <button
+            type="button"
+            data-testid="mapping-drawer-unapprove-button"
+            aria-label="Un-approve mapping"
+            onClick={onUnapproveClick}
+            disabled={isUnapproving}
+            className={cn(
+              'inline-flex h-9 items-center justify-center gap-1.5 rounded-md border px-3 text-sm font-medium transition-shadow',
+              'border-slate-300 bg-white text-slate-700 hover:bg-slate-50',
+              'focus:outline-none focus:ring-2 focus:ring-slate-500/30',
+              'disabled:cursor-not-allowed disabled:border-slate-200 disabled:bg-slate-50 disabled:text-slate-400',
+            )}
+          >
+            {isUnapproving ? (
+              <>
+                <Loader2
+                  aria-hidden="true"
+                  className="h-3.5 w-3.5 animate-spin"
+                  data-testid="mapping-drawer-unapprove-spinner"
+                />
+                <span>Un-approving…</span>
+              </>
+            ) : (
+              'Un-approve'
+            )}
+          </button>
+        </div>
+      )
+    }
+    if (status === 'rejected') {
+      return (
+        <div className="flex items-center justify-end gap-2">
+          <button
+            type="button"
+            data-testid="mapping-drawer-approve-button"
+            aria-label="Approve mapping"
+            onClick={onApproveClick}
+            disabled={isApprovePending}
+            className={cn(
+              'inline-flex h-9 items-center justify-center rounded-md border px-3 text-sm font-medium transition-colors',
+              'border-blue-600 bg-blue-600 text-white hover:bg-blue-700',
+              'focus:outline-none focus:ring-2 focus:ring-blue-500/40',
+              'disabled:cursor-not-allowed disabled:border-slate-200 disabled:bg-slate-100 disabled:text-slate-400 disabled:hover:bg-slate-100',
+            )}
+          >
+            Approve
+          </button>
+        </div>
+      )
+    }
     return (
       <div className="flex items-center justify-end gap-2">
         <button
@@ -3510,69 +3405,6 @@ function EditFooterButtons({
   )
 }
 
-/**
- * Footer button row for `target_acknowledged` rows. Drawer redesign:
- * the disabled Approve/Reject pair is removed entirely — acknowledged
- * rows live on a different verb axis (the only meaningful action is
- * "un-acknowledge to return to Rule 6"). Phase 4b-2 introduced
- * [Un-acknowledge] which is now the *only* footer button for these
- * rows. Founder §3.j locked the affordance to the footer (matches
- * Approve/Reject/Edit verb-action shape), and §3.k locked the
- * semantic (delete the row, no new status enum value).
- */
-interface AcknowledgedFooterButtonsProps {
-  isUnacknowledging: boolean
-  onUnacknowledgeClick: () => void
-  /**
-   * Phase 4-polish-3 — true while the `?focus=unack` deep-link pulse
-   * is active (~1.5s). Renders a slate ring around the button so the
-   * user who came from the inline ✗ on a `target_acknowledged` row
-   * lands directly on the destructive action.
-   */
-  pulseActive: boolean
-}
-
-function AcknowledgedFooterButtons({
-  isUnacknowledging,
-  onUnacknowledgeClick,
-  pulseActive,
-}: AcknowledgedFooterButtonsProps) {
-  return (
-    <div className="flex items-center justify-end gap-2">
-      <button
-        type="button"
-        data-testid="mapping-drawer-unacknowledge-button"
-        data-focus-pulse={pulseActive ? 'true' : undefined}
-        aria-label="Un-acknowledge field"
-        onClick={onUnacknowledgeClick}
-        disabled={isUnacknowledging}
-        className={cn(
-          'inline-flex h-9 items-center justify-center gap-1.5 rounded-md border px-3 text-sm font-medium transition-shadow',
-          'border-slate-300 bg-white text-slate-700 hover:bg-slate-50',
-          'focus:outline-none focus:ring-2 focus:ring-slate-500/30',
-          'disabled:cursor-not-allowed disabled:border-slate-200 disabled:bg-slate-50 disabled:text-slate-400',
-          pulseActive
-            ? 'ring-2 ring-slate-400 ring-offset-2 motion-reduce:transition-none'
-            : '',
-        )}
-      >
-        {isUnacknowledging ? (
-          <>
-            <Loader2
-              aria-hidden="true"
-              className="h-3.5 w-3.5 animate-spin"
-              data-testid="mapping-drawer-unacknowledge-spinner"
-            />
-            <span>Un-acknowledging…</span>
-          </>
-        ) : (
-          'Un-acknowledge'
-        )}
-      </button>
-    </div>
-  )
-}
-
 // ── Reject confirmation dialog ──────────────────────────────────────────────
 //
 // Locked copy (Gap 9 alignment):
@@ -3654,55 +3486,54 @@ function RejectConfirmDialog({
   )
 }
 
-// ── Un-acknowledge confirmation dialog (Phase 4b-2) ─────────────────────────
+// ── Un-approve confirmation dialog (INF-57 cleanup) ─────────────────────────
 //
-// Locked copy (founder §3.j + investigation report):
+// Locked copy:
 //
-//   Title:  "Un-acknowledge this field?"
-//   Body:   "This will return <field_name> to unmapped (Rule 6) and clear
-//            the acknowledgment reason."
-//   Buttons: "Cancel" (default) + "Un-acknowledge" (neutral, not destructive
-//            — the operation is reversible by re-acknowledging through the
-//            existing acknowledgment surface).
+//   Title:  "Un-approve this mapping?"
+//   Body:   "This will return <field_name> to needs review. The mapping is
+//            unchanged."
+//   Buttons: "Cancel" (default) + "Un-approve" (neutral, not destructive —
+//            the operation is reversible by re-approving through the
+//            existing approve flow; only the row's coverage status flips).
 //
 // Visually distinct from RejectConfirmDialog: button uses the default blue
-// styling rather than red because un-acknowledge is NOT a destructive
-// "delete and lose data" action — it just toggles the field back to
-// unmapped. The user can re-acknowledge or map it without re-authoring
-// content.
+// styling rather than red because un-approve is NOT a destructive
+// "delete and lose data" action — it just flips the coverage row's status
+// back to needs_review.
 
-interface UnacknowledgeConfirmDialogProps {
+interface UnapproveConfirmDialogProps {
   open: boolean
   onOpenChange: (next: boolean) => void
   targetFieldName: string
-  isUnacknowledging: boolean
+  isUnapproving: boolean
   onConfirm: () => void
 }
 
-function UnacknowledgeConfirmDialog({
+function UnapproveConfirmDialog({
   open,
   onOpenChange,
   targetFieldName,
-  isUnacknowledging,
+  isUnapproving,
   onConfirm,
-}: UnacknowledgeConfirmDialogProps) {
+}: UnapproveConfirmDialogProps) {
   return (
     <AlertDialog open={open} onOpenChange={onOpenChange}>
-      <AlertDialogContent data-testid="mapping-drawer-unacknowledge-confirm-dialog">
+      <AlertDialogContent data-testid="mapping-drawer-unapprove-confirm-dialog">
         <AlertDialogHeader>
-          <AlertDialogTitle>Un-acknowledge this field?</AlertDialogTitle>
+          <AlertDialogTitle>Un-approve this mapping?</AlertDialogTitle>
           <AlertDialogDescription>
             This will return{' '}
             <span className="font-mono text-slate-900">{targetFieldName}</span>{' '}
-            to unmapped (Rule 6) and clear the acknowledgment reason.
+            to needs review. The mapping is unchanged.
           </AlertDialogDescription>
         </AlertDialogHeader>
         <AlertDialogFooter>
           <AlertDialogCancel
-            disabled={isUnacknowledging}
-            data-testid="mapping-drawer-unacknowledge-cancel"
+            disabled={isUnapproving}
+            data-testid="mapping-drawer-unapprove-cancel"
             onClick={() => {
-              if (!isUnacknowledging) onOpenChange(false)
+              if (!isUnapproving) onOpenChange(false)
             }}
           >
             Cancel
@@ -3714,19 +3545,19 @@ function UnacknowledgeConfirmDialog({
               e.preventDefault()
               onConfirm()
             }}
-            disabled={isUnacknowledging}
-            data-testid="mapping-drawer-unacknowledge-confirm"
+            disabled={isUnapproving}
+            data-testid="mapping-drawer-unapprove-confirm"
           >
-            {isUnacknowledging ? (
+            {isUnapproving ? (
               <>
                 <Loader2
                   aria-hidden="true"
                   className="mr-1.5 h-3.5 w-3.5 animate-spin"
                 />
-                Un-acknowledging…
+                Un-approving…
               </>
             ) : (
-              'Un-acknowledge'
+              'Un-approve'
             )}
           </AlertDialogAction>
         </AlertDialogFooter>

@@ -5,7 +5,6 @@ import type {
   MappedRow,
   MappingRow,
   MappingSourceRef,
-  TargetAcknowledgedRow,
   TargetFieldRef,
   TargetTableSummary,
   UnmappedRow,
@@ -91,12 +90,11 @@ function valueAssignment(
   }
 }
 
-function targetAck(
-  overrides: Partial<TargetAcknowledgedRow> = {},
-): TargetAcknowledgedRow {
+// INF-57 cleanup — coverage-approved no-source row (formerly target_acknowledged).
+function targetAck(overrides: Partial<UnmappedRow> = {}): UnmappedRow {
   return {
-    kind: 'target_acknowledged',
-    id: 'tfm-ack-1',
+    kind: 'unmapped',
+    id: 'unmapped::tf-ack',
     targetField: targetField({ id: 'tf-ack', name: 'internal_flag' }),
     confidence: null,
     status: 'approved',
@@ -104,7 +102,9 @@ function targetAck(
     transformationStatus: null,
     transformationDescription: null,
     transformationSqlPreview: null,
-    acknowledgmentReason: 'system default',
+    mapping_content: 'no-source',
+    coverageStatus: 'gap',
+    statusSetBy: 'user',
     ...overrides,
   }
 }
@@ -279,7 +279,7 @@ describe('TargetTableGroup', () => {
   // contract; this case is a shallow integration check that the group
   // component doesn't filter or swallow any kind.
 
-  it('renders every row kind (mapped, VA, target_acknowledged, unmapped) in a mixed group', () => {
+  it('renders every row kind (mapped, VA, coverage-approved no-source, unmapped) in a mixed group', () => {
     const rows: MappingRow[] = [
       mapped({
         id: 'r-m',
@@ -289,6 +289,8 @@ describe('TargetTableGroup', () => {
         id: 'r-va',
         targetField: targetField({ id: 'f-va', name: 'created_at' }),
       }),
+      // Coverage-approved no-source row (formerly target_acknowledged).
+      // Post-INF-57 this surfaces as kind='unmapped' with status='approved'.
       targetAck({
         id: 'r-ack',
         targetField: targetField({ id: 'f-ack', name: 'internal_flag' }),
@@ -307,12 +309,14 @@ describe('TargetTableGroup', () => {
     const rowEls = screen.getAllByTestId('field-mapping-row')
     expect(rowEls).toHaveLength(4)
     // Each kind appears via its data-row-kind attribute — stable hook that
-    // also powers smoke tests and snapshots.
+    // also powers smoke tests and snapshots. The two 'unmapped' entries
+    // reflect the post-INF-57 unification: coverage-approved no-source
+    // rows share the discriminator with raw unmapped rows.
     const kinds = rowEls.map((el) => el.getAttribute('data-row-kind'))
     expect(kinds).toEqual([
       'mapped',
       'value_assignment',
-      'target_acknowledged',
+      'unmapped',
       'unmapped',
     ])
     // Target field name for every kind renders (spot-check).

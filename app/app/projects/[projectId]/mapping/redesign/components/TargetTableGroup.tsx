@@ -210,8 +210,6 @@ interface TargetTableGroupProps {
    */
   onInlineApprove?: (rowId: string) => void
   onInlineReject?: (rowId: string, anchorEl: HTMLElement) => void
-  onInlineAcknowledge?: (rowId: string) => void
-  onInlineUnacknowledge?: (rowId: string) => void
   onInlineSourceCommit?: (
     rowId: string,
     finalSourceFieldIds: string[],
@@ -241,8 +239,6 @@ export function TargetTableGroup({
   onPickerOpenChange,
   onInlineApprove,
   onInlineReject,
-  onInlineAcknowledge,
-  onInlineUnacknowledge,
   onInlineSourceCommit,
 }: TargetTableGroupProps) {
   const label = resolveFieldCountLabel(targetTable, filteredCount)
@@ -456,8 +452,6 @@ export function TargetTableGroup({
                   }
                   onInlineApprove={onInlineApprove}
                   onInlineReject={onInlineReject}
-                  onInlineAcknowledge={onInlineAcknowledge}
-                  onInlineUnacknowledge={onInlineUnacknowledge}
                   onSourceCommit={onInlineSourceCommit}
                 />
               ))}
@@ -478,8 +472,6 @@ export function TargetTableGroup({
               onPickerOpenChange={onPickerOpenChange}
               onInlineApprove={onInlineApprove}
               onInlineReject={onInlineReject}
-              onInlineAcknowledge={onInlineAcknowledge}
-              onInlineUnacknowledge={onInlineUnacknowledge}
               onInlineSourceCommit={onInlineSourceCommit}
             />
           )}
@@ -537,8 +529,6 @@ interface VirtualizedRowListProps {
   onPickerOpenChange: TargetTableGroupProps['onPickerOpenChange']
   onInlineApprove: TargetTableGroupProps['onInlineApprove']
   onInlineReject: TargetTableGroupProps['onInlineReject']
-  onInlineAcknowledge: TargetTableGroupProps['onInlineAcknowledge']
-  onInlineUnacknowledge: TargetTableGroupProps['onInlineUnacknowledge']
   onInlineSourceCommit: TargetTableGroupProps['onInlineSourceCommit']
 }
 
@@ -557,8 +547,6 @@ function VirtualizedRowList({
   onPickerOpenChange,
   onInlineApprove,
   onInlineReject,
-  onInlineAcknowledge,
-  onInlineUnacknowledge,
   onInlineSourceCommit,
 }: VirtualizedRowListProps) {
   const parentRef = useRef<HTMLDivElement | null>(null)
@@ -634,8 +622,6 @@ function VirtualizedRowList({
               }
               onInlineApprove={onInlineApprove}
               onInlineReject={onInlineReject}
-              onInlineAcknowledge={onInlineAcknowledge}
-              onInlineUnacknowledge={onInlineUnacknowledge}
               onSourceCommit={onInlineSourceCommit}
             />
           </div>

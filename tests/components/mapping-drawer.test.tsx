@@ -10,7 +10,6 @@ import type {
   MappingRow,
   MappingSourceRef,
   SourceFieldWithState,
-  TargetAcknowledgedRow,
   TargetFieldRef,
   UnmappedRow,
   ValueAssignmentRow,
@@ -107,12 +106,13 @@ function valueAssignment(
   }
 }
 
-function targetAck(
-  overrides: Partial<TargetAcknowledgedRow> = {},
-): TargetAcknowledgedRow {
+// INF-57 cleanup — coverage-approved no-source row (formerly target_acknowledged).
+// Surfaces as kind='unmapped' with status='approved'. `acknowledgmentReason`
+// dropped from the contract; downstream tests no longer assert reason text.
+function targetAck(overrides: Partial<UnmappedRow> = {}): UnmappedRow {
   return {
-    kind: 'target_acknowledged',
-    id: 'tfm-ack-1',
+    kind: 'unmapped',
+    id: 'unmapped::tf-3',
     targetField: targetField({ id: 'tf-3', name: 'internal_id' }),
     confidence: null,
     status: 'approved',
@@ -120,7 +120,9 @@ function targetAck(
     transformationStatus: null,
     transformationDescription: null,
     transformationSqlPreview: null,
-    acknowledgmentReason: 'system default',
+    mapping_content: 'no-source',
+    coverageStatus: 'gap',
+    statusSetBy: 'user',
     ...overrides,
   }
 }
@@ -403,12 +405,10 @@ describe('MappingDrawer — header status badge (dot + word, no confidence)', ()
   })
 
   it('badge surfaces sentence-case word + matched-hue className for each status variant', () => {
-    // Status mapping (sentence-case + color-matched):
-    //   approved      → 'Approved' / text-green-700
-    //   needs_review  → 'Needs review' / text-amber-700
-    //   rejected      → 'Rejected' / text-red-700
-    //   acknowledged  → 'Acknowledged' / text-slate-700 (Rule 5
-    //                   presentation token, NOT row.status)
+    // Status mapping (sentence-case + color-matched). INF-57 cleanup
+    // dropped the slate "Acknowledged" presentation token — coverage-
+    // approved no-source rows now share the green "Approved" palette
+    // with mapped/VA approved rows.
     for (const [row, variant, label, hueClass] of [
       [mapped({ status: 'approved' }), 'approved', 'Approved', 'text-green-700'] as const,
       [
@@ -418,7 +418,7 @@ describe('MappingDrawer — header status badge (dot + word, no confidence)', ()
         'text-amber-700',
       ] as const,
       [mapped({ status: 'rejected' }), 'rejected', 'Rejected', 'text-red-700'] as const,
-      [targetAck(), 'acknowledged', 'Acknowledged', 'text-slate-700'] as const,
+      [targetAck(), 'approved', 'Approved', 'text-green-700'] as const,
     ]) {
       const { unmount } = render(
         <MappingDrawer row={row} isOpen={true} onClose={() => {}} />,
@@ -438,45 +438,38 @@ describe('MappingDrawer — header status badge (dot + word, no confidence)', ()
     }
   })
 
-  it('header status badge is suppressed entirely for Rule 6 unmapped rows', () => {
-    // Drawer redesign — TARGET-led identity: Rule 6 has no status to
-    // surface and `confidence === null`, so the entire badge is
-    // omitted. Only the close button renders in the header's right-
-    // hand cluster.
+  it('header status badge renders for unmapped rows (INF-57 unification — no longer suppressed)', () => {
+    // Pre-INF-57: Rule 6 unmapped rows suppressed the badge entirely. INF-57
+    // cleanup unified the badge surface across all kinds — coverage-approved
+    // no-source rows need the green "Approved" pill in the drawer header
+    // (visual smoke #1), so the suppression was dropped. The badge now
+    // mirrors DRAWER_STATUS_CONFIG[row.status] for every row kind, including
+    // the legacy 'unmapped' literal sentinel (rendered as slate "Unmapped").
     render(<MappingDrawer row={unmapped()} isOpen={true} onClose={() => {}} />)
     const header = screen.getByTestId('mapping-drawer-header')
     expect(
-      within(header).queryByTestId('mapping-drawer-header-status-badge'),
-    ).toBeNull()
-    expect(
-      within(header).queryByTestId('mapping-drawer-header-status-word'),
-    ).toBeNull()
+      within(header).getByTestId('mapping-drawer-header-status-badge'),
+    ).toBeInTheDocument()
     // Close button still renders.
     expect(within(header).getByTestId('mapping-drawer-close')).toBeInTheDocument()
   })
 
-  it('Rule 5 acknowledged renders slate dot + "Acknowledged" word (no confidence)', () => {
-    // Drawer redesign — TARGET-led identity: Rule 5 surfaces as the
-    // dedicated `acknowledged` presentation token (slate hue dot +
-    // word). Confidence is null on Rule 5; the badge has never
-    // shown it. The prior iteration forced the dot to the
-    // `approved` (green) palette; this iteration switches to slate
-    // so the dot+word reads as "intentional non-mapping / signed
-    // off" rather than "all clear approved mapping".
+  it('coverage-approved no-source rows render the green "Approved" pill (INF-57 unification)', () => {
+    // INF-57 cleanup: legacy target_acknowledged collapsed into
+    // kind='unmapped' with status='approved'. The drawer header surfaces
+    // the standard green "Approved" pill — the dropped slate "Acknowledged"
+    // presentation token is gone (locked design decision 2).
     render(<MappingDrawer row={targetAck()} isOpen={true} onClose={() => {}} />)
     const badge = screen.getByTestId('mapping-drawer-header-status-badge')
     expect(
-      within(badge).getByTestId('mapping-drawer-header-status-acknowledged'),
+      within(badge).getByTestId('mapping-drawer-header-status-approved'),
     ).toBeInTheDocument()
     expect(
-      within(badge).queryByTestId('mapping-drawer-header-status-approved'),
-    ).toBeNull()
-    expect(
-      within(badge).queryByTestId('mapping-drawer-header-status-percent'),
+      within(badge).queryByTestId('mapping-drawer-header-status-acknowledged'),
     ).toBeNull()
     expect(
       within(badge).getByTestId('mapping-drawer-header-status-word').textContent,
-    ).toBe('Acknowledged')
+    ).toBe('Approved')
   })
 })
 
@@ -885,7 +878,7 @@ describe('MappingDrawer — body skeleton invariants (all kinds)', () => {
   const cases: Array<{ name: string; row: () => Parameters<typeof MappingDrawer>[0]['row'] }> = [
     { name: 'mapped', row: () => mapped() },
     { name: 'value_assignment', row: () => valueAssignment() },
-    { name: 'target_acknowledged', row: () => targetAck() },
+    { name: 'coverage_approved_no_source', row: () => targetAck() },
     { name: 'unmapped', row: () => unmapped() },
   ]
 
@@ -902,90 +895,13 @@ describe('MappingDrawer — body skeleton invariants (all kinds)', () => {
   })
 })
 
-// ─── Rule 5 — Target Acknowledged body (drawer redesign) ───────────────────
-//
-// Drawer redesign refinements §1/§2: target field identity sits in the
-// header; status surfaces as a filled green dot in the header SOURCE
-// row top-right (no confidence percent — Rule 5 has `confidence ===
-// null`). The body collapses to a single `Acknowledgment` section
-// (Q11.M lock keeps the existing label) — the prior pass's leading
-// OVERVIEW section is removed entirely, and the new ANALYSIS section
-// is omitted for Rule 5 because there's no source = no type compat,
-// no AI reasoning to surface.
-
-describe('MappingDrawer — Rule 5 (Target Acknowledged) body', () => {
-  it('does NOT render the legacy Target field / Status / Confidence sections (moved to header)', () => {
-    render(<MappingDrawer row={targetAck()} isOpen={true} onClose={() => {}} />)
-    expect(screen.queryByTestId('drawer-section-target-field')).toBeNull()
-    expect(screen.queryByTestId('drawer-section-status')).toBeNull()
-    expect(screen.queryByTestId('drawer-section-confidence')).toBeNull()
-  })
-
-  it('renders Acknowledgment section with the reason text when present', () => {
-    render(
-      <MappingDrawer
-        row={targetAck({ acknowledgmentReason: 'system default' })}
-        isOpen={true}
-        onClose={() => {}}
-      />,
-    )
-    const reason = screen.getByTestId('drawer-acknowledgment-reason')
-    expect(reason.textContent).toBe('system default')
-  })
-
-  it('Acknowledgment section shows empty-state when acknowledgmentReason is null', () => {
-    render(
-      <MappingDrawer
-        row={targetAck({ acknowledgmentReason: null })}
-        isOpen={true}
-        onClose={() => {}}
-      />,
-    )
-    expect(screen.queryByTestId('drawer-acknowledgment-reason')).toBeNull()
-    expect(
-      screen.getByTestId('drawer-acknowledgment-reason-empty'),
-    ).toBeInTheDocument()
-  })
-
-  it('does NOT render acknowledged-by, acknowledged-at, or notes sub-fields (deferred)', () => {
-    render(<MappingDrawer row={targetAck()} isOpen={true} onClose={() => {}} />)
-    expect(screen.queryByText(/acknowledged by/i)).toBeNull()
-    expect(screen.queryByText(/acknowledged at/i)).toBeNull()
-    expect(screen.queryByText(/^notes$/i)).toBeNull()
-  })
-
-  it('Rule 5 body renders ONLY the Acknowledgment section (drawer redesign §2/§4)', () => {
-    // Drawer redesign refinements §2: OVERVIEW is removed entirely.
-    // Drawer redesign refinements §4: ANALYSIS is omitted for Rule 5
-    // (no source = no type compat, no AI reasoning to surface).
-    // The body collapses to the lone Acknowledgment section.
-    render(<MappingDrawer row={targetAck()} isOpen={true} onClose={() => {}} />)
-    const body = screen.getByTestId('mapping-drawer-body')
-    const sections = within(body).getAllByRole('heading', { level: 3 })
-    expect(sections.map((h) => h.textContent)).toEqual(['Acknowledgment'])
-  })
-
-  it('Rule 5 body does NOT render Overview or Analysis sections (drawer redesign §2/§4)', () => {
-    // Negative invariant: the prior pass's OVERVIEW section is gone
-    // for every row kind, and ANALYSIS is omitted for Rule 5.
-    render(<MappingDrawer row={targetAck()} isOpen={true} onClose={() => {}} />)
-    expect(screen.queryByTestId('drawer-section-overview')).toBeNull()
-    expect(screen.queryByTestId('drawer-section-analysis')).toBeNull()
-  })
-
-  it('does NOT render Sources / AI Reasoning / Transformation / Sample Values sections', () => {
-    render(<MappingDrawer row={targetAck()} isOpen={true} onClose={() => {}} />)
-    expect(screen.queryByTestId('drawer-section-source')).toBeNull()
-    expect(screen.queryByTestId('drawer-section-ai-reasoning')).toBeNull()
-    expect(screen.queryByTestId('drawer-section-transformation')).toBeNull()
-    expect(screen.queryByTestId('drawer-section-sample-values')).toBeNull()
-  })
-
-  it('does NOT render the Sources-section edit pencil', () => {
-    render(<MappingDrawer row={targetAck()} isOpen={true} onClose={() => {}} />)
-    expect(screen.queryByTestId('mapping-drawer-edit-pencil')).toBeNull()
-  })
-})
+// INF-57 cleanup (2026-05-10) dropped the entire "Rule 5 — Target
+// Acknowledged body" describe block. Coverage-approved no-source rows
+// (formerly target_acknowledged) now render UnmappedBody, so the Rule 6
+// describe below covers them. The dropped tests asserted on
+// AcknowledgedBody-specific testids (`drawer-section-acknowledgment`,
+// `drawer-acknowledgment-reason`) and the OVERVIEW-vs-ANALYSIS section
+// taxonomy that no longer applies under the unified body.
 
 // ─── Rule 6 — Unmapped body (drawer redesign) ──────────────────────────────
 //
@@ -2230,13 +2146,15 @@ describe('MappingDrawer — Mapped body regression guards', () => {
 //
 // The drawer's footer is now a stateful action surface. These tests cover:
 //
-//   • Disabled-state matrix per row.kind × row.status (the 5 pinned
+//   • Disabled-state matrix per row.kind × row.status (the pinned
 //     decisions act as regression guards):
 //       - mapped/VA + needs_review: both enabled
-//       - mapped/VA + approved:     Approve disabled, Reject enabled
+//       - mapped/VA + approved:     Approve hidden, Reject enabled
 //       - mapped/VA + rejected:     both enabled (legacy un-reject path)
-//       - target_acknowledged:      both disabled with explanatory tooltips
-//       - unmapped:                 footer hidden entirely
+//       - unmapped (status-driven, INF-57 cleanup):
+//           needs_review → Suggest with AI / Create mapping
+//           approved     → Un-approve (resetMappingStatus)
+//           rejected     → Approve (re-approves coverage row)
 //
 //   • Approve UX:
 //       - Click → optimistic status update visible immediately
@@ -2368,7 +2286,12 @@ describe('MappingDrawer Gap 9 — disabled-state matrix (drawer redesign)', () =
     ).not.toBeDisabled()
   })
 
-  it('target_acknowledged: footer is just [Un-acknowledge] (no Approve/Reject)', () => {
+  it('coverage-approved no-source row: footer is just [Un-approve] (INF-57 cleanup)', () => {
+    // Pre-INF-57: target_acknowledged rows rendered AcknowledgedFooterButtons
+    // with a sole [Un-acknowledge] button. INF-57 cleanup collapsed the kind
+    // into kind='unmapped' with status='approved' — the new dispatch in
+    // UnmappedFooterButtons (status='approved' branch) renders the renamed
+    // [Un-approve] button alone, calling resetMappingStatus.
     render(
       <MappingDrawer row={targetAck()} isOpen={true} onClose={() => {}} />,
     )
@@ -2379,7 +2302,7 @@ describe('MappingDrawer Gap 9 — disabled-state matrix (drawer redesign)', () =
       screen.queryByTestId('mapping-drawer-reject-button'),
     ).toBeNull()
     expect(
-      screen.getByTestId('mapping-drawer-unacknowledge-button'),
+      screen.getByTestId('mapping-drawer-unapprove-button'),
     ).toBeInTheDocument()
   })
 
@@ -2396,6 +2319,90 @@ describe('MappingDrawer Gap 9 — disabled-state matrix (drawer redesign)', () =
       screen.queryByTestId('mapping-drawer-approve-button'),
     ).toBeNull()
     expect(screen.queryByTestId('mapping-drawer-reject-button')).toBeNull()
+  })
+
+  // ── INF-57 cleanup — status-driven UnmappedFooterButtons (Option B) ────────
+  //
+  // Locked design decision 4: when an unmapped row's drawer is open, the
+  // footer dispatches by row.status (inside UnmappedFooterButtons):
+  //   needs_review/unmapped → Suggest with AI / Create mapping (form path)
+  //   approved              → [Un-approve] (calls resetMappingStatus)
+  //   rejected              → [Approve] (re-approves coverage row)
+  //
+  // The form-active sub-states (suggest pending / cancel / save) live
+  // inside the form-driven branch and are unchanged — exercised by the
+  // form tests below.
+
+  it('unmapped + status=approved: footer renders ONLY [Un-approve] (Suggest/Create suppressed)', () => {
+    // The status='approved' branch surfaces the un-approve verb alone —
+    // Suggest with AI / Create mapping are gated to the form-entry path
+    // (status='needs_review' / 'unmapped').
+    render(
+      <MappingDrawer
+        row={unmapped({ id: 'unmapped::tf-cov-1', status: 'approved' })}
+        isOpen={true}
+        onClose={() => {}}
+      />,
+    )
+    expect(
+      screen.getByTestId('mapping-drawer-unapprove-button'),
+    ).toBeInTheDocument()
+    expect(
+      screen.queryByTestId('mapping-drawer-suggest-with-ai-button'),
+    ).toBeNull()
+    expect(
+      screen.queryByTestId('mapping-drawer-create-mapping-button'),
+    ).toBeNull()
+  })
+
+  it('unmapped + status=rejected: footer renders ONLY [Approve] (re-approve coverage row)', () => {
+    // The status='rejected' branch surfaces the standard approve flow
+    // alone — clicking it routes through approveFieldMapping (the same
+    // wrapper mapped/VA rejected rows use to un-reject).
+    render(
+      <MappingDrawer
+        row={unmapped({ id: 'unmapped::tf-cov-2', status: 'rejected' })}
+        isOpen={true}
+        onClose={() => {}}
+      />,
+    )
+    expect(
+      screen.getByTestId('mapping-drawer-approve-button'),
+    ).toBeInTheDocument()
+    expect(
+      screen.queryByTestId('mapping-drawer-suggest-with-ai-button'),
+    ).toBeNull()
+    expect(
+      screen.queryByTestId('mapping-drawer-create-mapping-button'),
+    ).toBeNull()
+    expect(
+      screen.queryByTestId('mapping-drawer-unapprove-button'),
+    ).toBeNull()
+  })
+
+  it('unmapped + status=needs_review: footer preserves the existing [Suggest with AI] / [Create mapping] form-entry path (no regression)', () => {
+    // The needs_review branch is unchanged from the pre-INF-57 surface —
+    // Option B layered the new approved/rejected dispatch on top without
+    // disturbing the form-entry flow that drives the create-mapping path.
+    render(
+      <MappingDrawer
+        row={unmapped({ id: 'unmapped::tf-cov-3', status: 'needs_review' })}
+        isOpen={true}
+        onClose={() => {}}
+      />,
+    )
+    expect(
+      screen.getByTestId('mapping-drawer-suggest-with-ai-button'),
+    ).toBeInTheDocument()
+    expect(
+      screen.getByTestId('mapping-drawer-create-mapping-button'),
+    ).toBeInTheDocument()
+    expect(
+      screen.queryByTestId('mapping-drawer-unapprove-button'),
+    ).toBeNull()
+    expect(
+      screen.queryByTestId('mapping-drawer-approve-button'),
+    ).toBeNull()
   })
 })
 
@@ -3429,7 +3436,12 @@ describe('MappingDrawer Phase 4a-4b — Suggest with AI footer auto-trigger', ()
     })
   })
 
-  it('mapped/value_assignment/target_acknowledged rows do NOT render [Suggest with AI] (Rule 6 only)', () => {
+  it('mapped/VA/coverage-approved-no-source rows do NOT render [Suggest with AI] (form-entry path is gated to unmapped+needs_review/unmapped)', () => {
+    // INF-57 cleanup: targetAck() now produces kind='unmapped' with
+    // status='approved', which renders the Un-approve button — not Suggest
+    // with AI. Suggest with AI is gated to the form-entry branch
+    // (unmapped + status ∈ {needs_review, unmapped}). Mapped/VA carry their
+    // own ApproveRejectButtons footer which never surfaces Suggest with AI.
     const rows = [mapped(), valueAssignment(), targetAck()]
     for (const row of rows) {
       const { unmount } = render(

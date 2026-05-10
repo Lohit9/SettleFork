@@ -4,7 +4,6 @@ import type {
   MappingRow,
   MappingSourceRef,
   SourceTableSummary,
-  TargetAcknowledgedRow,
   TargetFieldRef,
   TargetTableSummary,
   UnmappedRow,
@@ -123,10 +122,14 @@ function valueAssignment(
   }
 }
 
-function ack(overrides: Partial<TargetAcknowledgedRow> = {}): TargetAcknowledgedRow {
+// INF-57 cleanup — coverage-approved no-source row (formerly target_acknowledged).
+// Surfaces as kind='unmapped' with status='approved', statusSetBy='user' under
+// the post-INF-57 dual-recognition path. Fixture name kept as `ack` for
+// backwards-compat with existing test cases.
+function ack(overrides: Partial<UnmappedRow> = {}): UnmappedRow {
   return {
-    kind: 'target_acknowledged',
-    id: 'ack-1',
+    kind: 'unmapped',
+    id: 'unmapped::tf-ack',
     targetField: targetField({ id: 'tf-ack', name: 'internal_flag' }),
     confidence: null,
     status: 'approved',
@@ -134,7 +137,9 @@ function ack(overrides: Partial<TargetAcknowledgedRow> = {}): TargetAcknowledged
     transformationStatus: null,
     transformationDescription: null,
     transformationSqlPreview: null,
-    acknowledgmentReason: null,
+    mapping_content: 'no-source',
+    coverageStatus: 'gap',
+    statusSetBy: 'user',
     ...overrides,
   }
 }
@@ -257,7 +262,7 @@ describe('filterRows — source filter', () => {
     expect(out.every((r) => r.kind === 'mapped')).toBe(true)
   })
 
-  it('EXCLUDES VAs, target-acknowledged, and unmapped when a specific source is selected', () => {
+  it('EXCLUDES VAs and unmapped when a specific source is selected', () => {
     const out = filterRows(buildRows(), {
       ...DEFAULT_FILTER_STATE,
       source: sourceTableY.id,
@@ -265,7 +270,6 @@ describe('filterRows — source filter', () => {
     expect(out.map((r) => r.kind)).toEqual(['mapped'])
     // Explicit regression guard — none of the non-mapped kinds should leak.
     expect(out.some((r) => r.kind === 'value_assignment')).toBe(false)
-    expect(out.some((r) => r.kind === 'target_acknowledged')).toBe(false)
     expect(out.some((r) => r.kind === 'unmapped')).toBe(false)
   })
 
@@ -437,9 +441,9 @@ describe('filterRows — confidence filter', () => {
     confidence: 25,
     targetField: targetField({ id: 'tf-low', name: 'conf_low_field' }),
   })
-  const nullConf: TargetAcknowledgedRow = {
-    kind: 'target_acknowledged',
-    id: 'conf-ack',
+  const nullConf: UnmappedRow = {
+    kind: 'unmapped',
+    id: 'unmapped::tf-null',
     targetField: targetField({ id: 'tf-null', name: 'conf_null_field' }),
     confidence: null,
     status: 'approved',
@@ -447,7 +451,9 @@ describe('filterRows — confidence filter', () => {
     transformationStatus: null,
     transformationDescription: null,
     transformationSqlPreview: null,
-    acknowledgmentReason: null,
+    mapping_content: 'no-source',
+    coverageStatus: 'gap',
+    statusSetBy: 'user',
   }
   const rows: MappingRow[] = [high, medium, low, nullConf]
 
