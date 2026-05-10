@@ -55,6 +55,7 @@ export async function computeReadinessScore(projectId: string): Promise<Readines
     { data: rawTableMappings },
     { data: sourceAckRows },
     { data: tfmRows },
+    { data: coverageRows },
   ] = await Promise.all([
     supabaseAdmin.from('datasets').select('id, role').eq('project_id', projectId),
     supabaseAdmin
@@ -77,6 +78,14 @@ export async function computeReadinessScore(projectId: string): Promise<Readines
       .select(
         'id, project_id, target_field_id, confidence, status, ai_reasoning, is_acknowledged, acknowledgment_reason, combination_type, combination_sql, needs_transformation, va_dismissed, dismissal_reason, created_at, updated_at',
       )
+      .eq('project_id', projectId),
+    // INF-57 — coverage rows for the canonical no-source UNION semantics
+    // in computeProjectStats. Without this, readiness-score under-counts
+    // mappingApproved on projects with coverage-approved+user fields that
+    // have no paired bare-ack TFM (post-redesign-drawer-only acks).
+    supabaseAdmin
+      .from('target_field_coverage')
+      .select('target_field_id, status, status_set_by')
       .eq('project_id', projectId),
   ])
 
@@ -163,6 +172,11 @@ export async function computeReadinessScore(projectId: string): Promise<Readines
       status: t.status,
     })),
     qualityIssues: issues,
+    coverage: (coverageRows ?? []).map((c) => ({
+      target_field_id: c.target_field_id,
+      status: c.status,
+      status_set_by: c.status_set_by,
+    })),
   })
 
   const mappingApproved = stats.mappingApproved

@@ -164,9 +164,18 @@ export interface MappingsForRedesignResult {
 // ─── Row shapes (discriminated union) ────────────────────────────────
 
 /**
- * Discriminated union over the four row shapes the Mapping UI
- * renders. Derived once server-side from TFM state; the UI pattern-
+ * Discriminated union over the row shapes the Mapping UI renders.
+ * Derived once server-side from TFM + coverage state; the UI pattern-
  * matches on `kind`.
+ *
+ * INF-57 transit (2026-05-10): the read translator no longer emits
+ * `kind: 'target_acknowledged'` rows — legacy bare-ack TFMs are
+ * absorbed under `UnmappedRow` (status='approved', statusSetBy='user').
+ * `TargetAcknowledgedRow` remains in the union as a `@deprecated`
+ * shape so B's UI tree continues to type-check during the cross-PR
+ * transit; it is dead at runtime. B's follow-up cleanup PR drops the
+ * union member, deletes the interface, and strips the kind references
+ * from app/ + tests/components.
  */
 export type MappingRow =
   | MappedRow
@@ -194,12 +203,21 @@ export type MappingTransformationStatus =
 interface MappingRowBase {
   /**
    * Stable rendering key.
-   *   mapped / value_assignment / target_acknowledged → target_field_mappings.id
-   *   unmapped                                        → `unmapped::<target_field_id>`
+   *   mapped / value_assignment       → target_field_mappings.id
+   *   unmapped (incl. legacy bare-ack
+   *   and canonical coverage-approved
+   *   no-source rows)                → `unmapped::<target_field_id>`
    *
-   * The unmapped sentinel is NEVER sent to a write action. Server
-   * actions that accept an id MUST reject the `unmapped::` prefix
-   * and require the UI to call the explicit create-TFM path first.
+   * INF-57: legacy is_acknowledged=true TFMs no longer use their TFM
+   * UUID as row id. The translator emits the synthetic `unmapped::`
+   * format for both the legacy bare-ack path and the canonical
+   * coverage-only path so write actions like approveFieldMapping /
+   * rejectFieldMapping route uniformly through setCoverageStatus.
+   *
+   * The `unmapped::` synthetic id is NEVER sent to a TFM-mutating write
+   * action. Server actions that accept a TFM id MUST reject the
+   * `unmapped::` prefix and require the UI to call the explicit
+   * create-TFM path first.
    */
   id: string
 
@@ -226,8 +244,8 @@ interface MappingRowBase {
    * SQL itself is NOT included — editing lives on the standalone
    * Transform page (founder decision, design §2 item 3).
    *
-   * False for `kind: 'unmapped'` and `kind: 'target_acknowledged'`
-   * (no TFM or an ack-only TFM — neither can carry a transformation).
+   * False for `kind: 'unmapped'` (no TFM, or a legacy bare-ack TFM
+   * absorbed under dual-recognition — neither can carry a transformation).
    */
   hasTransformation: boolean
 
@@ -302,13 +320,9 @@ interface MappingRowBase {
    *   'mapped'    — TFM with 1+ sources (kind: 'mapped')
    *   'VA'        — TFM with 0 sources, custom_sql value-assignment
    *                 (kind: 'value_assignment')
-   *   'no-source' — every other row (kind: 'target_acknowledged' OR
-   *                 'unmapped'). Both have no contributing source rows
-   *                 by DB CHECK / by definition.
-   *
-   * Existing `kind` discriminator is preserved untouched alongside; this
-   * field is purely additive. Future cleanup PR (post-α₀) may collapse
-   * `kind` if convergence is desired — explicitly out of scope for PR γ.
+   *   'no-source' — kind: 'unmapped' (covers both canonical coverage-
+   *                 only rows and INF-57 dual-recognized legacy bare-ack
+   *                 TFMs). No contributing source rows by definition.
    */
   mapping_content?: 'mapped' | 'VA' | 'no-source'
 
@@ -374,11 +388,12 @@ export interface MappedRow extends MappingRowBase {
    *     CHECK (combination_type IN ('single', 'concat_space',
    *                                 'concat_comma', 'custom_sql')),
    *
-   * The DDL also allows `NULL` (for `is_acknowledged=true` rows —
-   * see `TargetAcknowledgedRow` which carries no `combinationType`
-   * field). If a future migration widens or narrows this set, update
-   * this union, the `ValueAssignmentRow` constant, and the CHECK at
-   * the same time — single source of truth.
+   * The DDL also allows `NULL` (for legacy `is_acknowledged=true` TFMs
+   * — INF-57 dual-recognizes these as `UnmappedRow` so the `MappingRow`
+   * union no longer surfaces a row shape with a missing combinationType).
+   * If a future migration widens or narrows this set, update this union,
+   * the `ValueAssignmentRow` constant, and the CHECK at the same time —
+   * single source of truth.
    */
   combinationType: 'single' | 'concat_space' | 'concat_comma' | 'custom_sql'
 
@@ -423,16 +438,27 @@ export interface ValueAssignmentRow extends MappingRowBase {
   aiReasoning: string | null
 }
 
-/** Target-side acknowledgment. is_acknowledged=true, zero sources. */
+/**
+ * @deprecated INF-57 (2026-05-10): the read translator no longer emits
+ * rows of this shape. Legacy bare-ack TFMs (is_acknowledged=true,
+ * combination_type=NULL, zero mapping_sources) are now surfaced as
+ * `UnmappedRow` with status='approved', statusSetBy='user' under
+ * dual-recognition (mapping-engine.ts:buildUnmappedRowFromBareAck).
+ * Migration 098 backfills paired coverage rows so the canonical surface
+ * (target_field_coverage with status='approved'+status_set_by='user') is
+ * fully populated.
+ *
+ * The interface stays in the `MappingRow` union as a transit shim so B's
+ * UI tree (app/.../mapping/redesign/**, tests/components/*) continues to
+ * compile while B's follow-up cleanup PR strips the kind references and
+ * drops the union member. Do NOT add new emit sites.
+ */
 export interface TargetAcknowledgedRow extends MappingRowBase {
   kind: 'target_acknowledged'
-  /** Migration 074 STEP 3c writes 'approved' for all ack rows. */
   status: 'approved'
   confidence: null
   hasTransformation: false
   transformationStatus: null
-
-  /** The reason the user (or AI) gave for acknowledging. */
   acknowledgmentReason: string | null
 }
 

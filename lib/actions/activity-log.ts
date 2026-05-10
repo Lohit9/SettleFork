@@ -59,6 +59,11 @@ export type ActionType =
   | 'acknowledgment_removed'
   | 'mapping_bulk_approved'
   | 'mapping_bulk_rejected'
+  // INF-57 — drawer "Reset to needs_review" affordance. Single emitter for
+  // all three reset surfaces (coverage-only no-source, mapped/VA TFM,
+  // legacy bare-ack TFM); metadata.previous_status + metadata.previous_set_by
+  // disambiguate.
+  | 'mapping_status_reset'
   | 'transformation_reset'
   | 'rule_added'
   | 'rule_deleted'

@@ -399,11 +399,39 @@ export function computeProjectStats(inputs: ComputeProjectStatsInputs): ComputeP
   const primaryMappedTargetIds = new Set(primaryTfms.map((t) => t.target_field_id))
 
   // Bare-ack TFMs contribute target-side "acknowledged unmapped" entries.
-  const targetAckFieldIds = new Set(
+  // INF-57 — UNION with coverage rows where status='approved' AND
+  // status_set_by='user' (the canonical post-collapse "user-approved no-source"
+  // surface). Migration 098 backfilled coverage rows for every existing
+  // bare-ack TFM, so on a post-098 project both sets converge on the same
+  // target_field_ids; the UNION dedupes via the Set keying.
+  //
+  // Q9 exclusion: coverage-approved+user counts ONLY for fields with NO
+  // non-bare-ack TFM. If a TFM exists (mapped, VA, or rejected), that
+  // TFM's status drives the row's effective status per γ resolution
+  // priority — a TFM-rejected row stays rejected even if coverage was
+  // user-approved. Without the exclusion, a coverage-approved+user +
+  // TFM-rejected pair would falsely count as approved.
+  const nonBareAckTfmFieldIds = new Set(
     tfms
-      .filter((t) => t.is_acknowledged && t.combination_type === null)
+      .filter((t) => !(t.is_acknowledged && t.combination_type === null))
       .map((t) => t.target_field_id),
   )
+  const coverageApprovedUserFieldIds = new Set(
+    coverage
+      .filter(
+        (c) =>
+          c.status === 'approved' &&
+          c.status_set_by === 'user' &&
+          !nonBareAckTfmFieldIds.has(c.target_field_id),
+      )
+      .map((c) => c.target_field_id),
+  )
+  const targetAckFieldIds = new Set<string>([
+    ...tfms
+      .filter((t) => t.is_acknowledged && t.combination_type === null)
+      .map((t) => t.target_field_id),
+    ...coverageApprovedUserFieldIds,
+  ])
   const acknowledgedFieldIds = new Set<string>([
     ...sourceAckFieldIds,
     ...targetAckFieldIds,
@@ -443,36 +471,15 @@ export function computeProjectStats(inputs: ComputeProjectStatsInputs): ComputeP
   // as `mappingApproved`) maps to needs_review primary TFMs +
   // rejected primary TFMs + unacknowledged unmapped target fields.
   //
-  // PR γ.2 — UNION TFM-status='approved' with coverage-status='approved'
-  // for target fields that have NO TFM (any status) AND are NOT
-  // acknowledged. Excluding "any TFM" rather than "approved TFM only"
-  // keeps the chip math consistent with the row prop's effective status
-  // (TFM.status drives row.status when a TFM exists per γ resolution
-  // priority): a TFM-rejected row's row.status is 'rejected' regardless
-  // of any coverage-side approval, so coverage-approved must not slip
-  // into mappingApproved on TFM-backed rows. Acknowledged fields are
-  // already counted via acknowledgedCount; coverage-approved would
-  // double-count.
-  //
-  // Forward semantic: status_set_by='user' + status='approved' is the
-  // drawer-side "approve no-source row" decision (writeCoverageStatus
-  // in lib/actions/mappings-for-redesign.ts). Pre-γ.2 ai_auto+approved
-  // rows are backfilled to needs_review by migration 097, so they no
-  // longer match this filter post-merge.
-  const tfmFieldIds = new Set(tfms.map((t) => t.target_field_id))
-  const coverageApprovedNoTfmCount = coverage.filter(
-    (c) =>
-      c.status === 'approved' &&
-      !tfmFieldIds.has(c.target_field_id) &&
-      !acknowledgedFieldIds.has(c.target_field_id),
-  ).length
-
+  // INF-57 — coverage-approved+user no-source rows are now folded into
+  // `targetAckFieldIds` directly (see UNION construction above), so
+  // `acknowledgedCount` already accounts for them. The pre-INF-57 standalone
+  // `coverageApprovedNoTfmCount` term is removed — its work moved into
+  // the canonical Set, which also dedupes legacy bare-ack vs
+  // post-098-backfilled coverage rows on the same target_field_id.
   const mappingTotal =
     primaryTfms.length + unmappedTargetCount + acknowledgedCount
-  const mappingApproved =
-    approvedPrimaryTfms.length +
-    acknowledgedCount +
-    coverageApprovedNoTfmCount
+  const mappingApproved = approvedPrimaryTfms.length + acknowledgedCount
   const mappingUnmapped = unmappedTargetCount
   const mappingNeedsReview = mappingTotal - mappingApproved
 
