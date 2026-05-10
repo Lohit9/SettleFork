@@ -380,6 +380,7 @@ export async function previewFieldDeletion(
     stagedRes,
     ackNewRes,
     coverageRes,
+    vrRes,
   ] = await Promise.all([
     supabaseAdmin
       .from('mapping_sources')
@@ -415,6 +416,16 @@ export async function previewFieldDeletion(
       .from('target_field_coverage')
       .select('id', { count: 'exact', head: true })
       .eq('target_field_id', fieldId),
+    // validation_rules: field-scoped rules where field_id = $1. Nullable FK
+    // (rules can be table- or project-scoped, with field_id NULL) — the
+    // .eq() correctly excludes those; only field-scoped rules cascade when
+    // the field is deleted. Surfaced in the preview so the UI's honest-
+    // cascade-disclosure isn't lying about zero impact when the FK CASCADE
+    // is about to silently remove rows.
+    supabaseAdmin
+      .from('validation_rules')
+      .select('id', { count: 'exact', head: true })
+      .eq('field_id', fieldId),
   ])
 
   const stagedCountRaw = (stagedRes as { count: number | null }).count ?? 0
@@ -432,6 +443,7 @@ export async function previewFieldDeletion(
       stagedRows,
       acknowledgments: (ackNewRes as { count: number | null }).count ?? 0,
       coverageRows: (coverageRes as { count: number | null }).count ?? 0,
+      validationRules: (vrRes as { count: number | null }).count ?? 0,
     },
     stagedRowsCapped,
     hasAuthoredTransformSQL:
@@ -531,6 +543,7 @@ export async function deleteField(
       staged_rows_scrubbed: number
       acknowledgments: number
       coverage_rows: number
+      validation_rules: number
     }
     had_authored_transform_sql: boolean
   }
@@ -542,6 +555,7 @@ export async function deleteField(
     stagedRowsScrubbed: summary.cascade_counts.staged_rows_scrubbed,
     acknowledgments: summary.cascade_counts.acknowledgments,
     coverageRows: summary.cascade_counts.coverage_rows,
+    validationRules: summary.cascade_counts.validation_rules,
     hadAuthoredTransformSql: summary.had_authored_transform_sql,
   }
 
