@@ -8,7 +8,6 @@ import type {
   MappingRow,
   MappingSourceRef,
   SourceFieldWithState,
-  TargetAcknowledgedRow,
   TargetFieldRef,
   TargetTableSummary,
   UnmappedRow,
@@ -21,7 +20,8 @@ import type {
 //
 // Covers:
 //   • kind-based dispatch (mapped 1-source / mapped multi-source fallback /
-//     value_assignment / target_acknowledged / unmapped)
+//     value_assignment / unmapped — including INF-57 coverage-approved
+//     no-source rows that surface as kind='unmapped' with status='approved')
 //   • source column rendering per rule
 //   • target column rendering + acknowledged subtitle
 //   • confidence formatting / em-dash for null
@@ -109,12 +109,15 @@ function valueAssignment(
   }
 }
 
-function targetAck(
-  overrides: Partial<TargetAcknowledgedRow> = {},
-): TargetAcknowledgedRow {
+// INF-57 cleanup — coverage-approved no-source row (formerly target_acknowledged).
+// Surfaces as kind='unmapped' with status='approved', statusSetBy='user'.
+// `acknowledgmentReason` no longer exists on the contract; tests that
+// previously asserted reason text now assert via the legacy override (drop
+// or re-target as appropriate).
+function targetAck(overrides: Partial<UnmappedRow> = {}): UnmappedRow {
   return {
-    kind: 'target_acknowledged',
-    id: 'tfm-ack-1',
+    kind: 'unmapped',
+    id: 'unmapped::tf-3',
     targetField: targetField({ id: 'tf-3', name: 'internal_id' }),
     confidence: null,
     status: 'approved',
@@ -122,7 +125,9 @@ function targetAck(
     transformationStatus: null,
     transformationDescription: null,
     transformationSqlPreview: null,
-    acknowledgmentReason: 'system default',
+    mapping_content: 'no-source',
+    coverageStatus: 'gap',
+    statusSetBy: 'user',
     ...overrides,
   }
 }
@@ -503,7 +508,7 @@ describe('FieldMappingRow — Rule 1 has no chevron (regression guard)', () => {
     expect(screen.queryByTestId('field-mapping-row-chevron')).toBeNull()
   })
 
-  it('does NOT render a chevron for target-acknowledged rows', () => {
+  it('does NOT render a chevron for coverage-approved no-source rows (formerly target-acknowledged)', () => {
     render(<FieldMappingRow row={targetAck()} />)
     expect(screen.queryByTestId('field-mapping-row-chevron')).toBeNull()
   })
@@ -630,9 +635,14 @@ describe('FieldMappingRow — Value assignment', () => {
   })
 })
 
-// ─── Rule 5: target-acknowledged row ────────────────────────────────────────
+// ─── Rule 5 (formerly target-acknowledged) — coverage-approved no-source ────
 
-describe('FieldMappingRow — Rule 5 (target-acknowledged)', () => {
+describe('FieldMappingRow — coverage-approved no-source row (formerly Rule 5)', () => {
+  // INF-57 cleanup: target_acknowledged collapsed into kind='unmapped' with
+  // status='approved'. The row renders the unified "Approved" pill, no
+  // longer the slate "Acknowledged" pill. Tests preserve the underlying
+  // contract — em-dashes, no transform indicator — but drop the now-defunct
+  // "Acknowledged" tooltip / aria-label / inline-suffix assertions.
   it('renders em-dashes in both source and confidence columns', () => {
     render(<FieldMappingRow row={targetAck()} />)
     // Screen-reader labels hand us a reliable selector for each em-dash.
@@ -642,12 +652,10 @@ describe('FieldMappingRow — Rule 5 (target-acknowledged)', () => {
 
   it('renders the target field name without an "(acknowledged)" suffix (Refinement B)', () => {
     // Phase 4-polish-1 final refinements (Refinement B, 2026-04-26):
-    // the inline "(acknowledged)" suffix was DROPPED. The visual
-    // signals (slate-300 status dot disambiguated via hover tooltip,
-    // em-dashes in source + confidence columns) carry the
-    // distinction without the parenthetical. Pin the absence so a
-    // future refactor cannot silently re-add the suffix.
-    render(<FieldMappingRow row={targetAck({ acknowledgmentReason: 'system default' })} />)
+    // the inline "(acknowledged)" suffix was DROPPED. INF-57 cleanup
+    // (2026-05-10) further unified the dot color on the approved pill
+    // for these rows.
+    render(<FieldMappingRow row={targetAck()} />)
     expect(screen.getByText('internal_id')).toBeInTheDocument()
     expect(screen.queryByTestId('target-acknowledged-suffix')).toBeNull()
     // Belt and suspenders: the literal "(acknowledged)" text must
@@ -656,44 +664,17 @@ describe('FieldMappingRow — Rule 5 (target-acknowledged)', () => {
     expect(row.textContent).not.toContain('(acknowledged)')
   })
 
-  it('renders no suffix even when acknowledgmentReason is null (Refinement B)', () => {
-    render(<FieldMappingRow row={targetAck({ acknowledgmentReason: null })} />)
-    expect(screen.getByText('internal_id')).toBeInTheDocument()
-    expect(screen.queryByTestId('target-acknowledged-suffix')).toBeNull()
-    const row = screen.getByTestId('field-mapping-row')
-    expect(row.textContent).not.toContain('(acknowledged)')
-  })
-
-  it('status dot carries a hover tooltip that says "Acknowledged" (Refinement B)', () => {
-    // Refinement B: the StatusDot's `title=` attribute is the
-    // sighted-user disambiguation path between acknowledged
-    // (kind=target_acknowledged) and other states. The tooltip
-    // branches on `kind` rather than `status` — the targetAck
-    // factory uses status='approved' but the dot still reads as
-    // "Acknowledged" via the kind branch. This is what lets a
-    // hovering user tell apart acknowledged from a regular approved
-    // mapping without AT.
+  it('status dot tooltip unifies on the standard "Approved" copy (INF-57 cleanup)', () => {
+    // Pre-INF-57 the StatusDot had a kind-conditional ternary that
+    // surfaced "Acknowledged" specifically for target_acknowledged rows.
+    // Post-cleanup, all approved rows share the green "Approved" tooltip
+    // — the dropped slate "Acknowledged" pill no longer exists.
     render(<FieldMappingRow row={targetAck()} />)
-    // The aria-label still surfaces the underlying status (factory
-    // uses 'approved'); the title is the kind-aware override.
     const dot = screen.getByLabelText('status: Approved')
-    expect(dot.getAttribute('title')).toBe('Acknowledged')
+    expect(dot.getAttribute('title')).toBe('Approved')
   })
 
-  it('aria-label still carries the acknowledged-as-not-migratable phrase (AT path preserved)', () => {
-    // The row-level aria-label is the screen-reader surface and
-    // remains intact post-Refinement B. Only the visual suffix is
-    // gone; AT users still hear the full description.
-    const { container } = render(
-      <FieldMappingRow row={targetAck({ acknowledgmentReason: 'system default' })} />,
-    )
-    const el = container.querySelector('[data-testid="field-mapping-row"]')
-    expect(el?.getAttribute('aria-label')).toContain(
-      'acknowledged as not migratable: system default',
-    )
-  })
-
-  it('does NOT render a transformation indicator (ack rows never carry one)', () => {
+  it('does NOT render a transformation indicator (no-source rows never carry one)', () => {
     const { container } = render(<FieldMappingRow row={targetAck()} />)
     expect(container.querySelector('[aria-label^="transformation:"]')).toBeNull()
   })
@@ -716,11 +697,11 @@ describe('FieldMappingRow — Rule 6 (unmapped)', () => {
     expect(screen.getByLabelText('status: Unmapped')).toBeInTheDocument()
   })
 
-  it('status dot carries a hover tooltip that says "Unmapped" (Refinement B)', () => {
-    // Refinement B: the unmapped row's tooltip mirrors the status
-    // label (the kind branch in StatusDot only fires for
-    // target_acknowledged); pin the non-acknowledged path as the
-    // foil to the acknowledged-tooltip test above.
+  it('status dot carries a hover tooltip that mirrors the status label (Refinement B)', () => {
+    // Refinement B: the unmapped row's tooltip mirrors the status label
+    // verbatim. INF-57 cleanup dropped the prior kind-conditional override
+    // (which surfaced "Acknowledged" for target_acknowledged); the tooltip
+    // now uniformly mirrors STATUS_CONFIG[status].label across all kinds.
     render(<FieldMappingRow row={unmapped()} />)
     const dot = screen.getByLabelText('status: Unmapped')
     expect(dot.getAttribute('title')).toBe('Unmapped')
@@ -769,10 +750,10 @@ describe('FieldMappingRow — status dot', () => {
 
   it('rejected hollow treatment fires regardless of kind (mapped / VA / unmapped)', () => {
     // PR α₀: the hollow rule is purely status-driven. Any row kind
-    // that reaches status='rejected' renders hollow. Translator never
-    // emits status='rejected' for target_acknowledged (forced
-    // 'approved'), so rejected + ack is unreachable on live data —
-    // omitted here.
+    // that reaches status='rejected' renders hollow. (INF-57 cleanup
+    // collapsed target_acknowledged into kind='unmapped' with
+    // status='approved'; legacy bare-ack TFMs never carried status='rejected'
+    // by the translator so the surface is exercised via 'unmapped' below.)
     const { unmount: u1 } = render(<FieldMappingRow row={mapped({ status: 'rejected' })} />)
     expect(
       screen.getByLabelText('status: Rejected').getAttribute('data-status-dot-style'),
@@ -822,12 +803,13 @@ describe('FieldMappingRow — status dot', () => {
     expect(dot.getAttribute('data-status-dot-style')).toBe('filled')
   })
 
-  it('acknowledged rows render a FILLED dot', () => {
-    // target_acknowledged is hard-coded status='approved' by the
-    // translator. Under PR α₀'s status-driven dot, that resolves to a
-    // filled green dot identical to a regular mapped+approved row.
-    // The kind-aware tooltip override ("Acknowledged" instead of
-    // "Approved") remains as the sighted-user disambiguation channel.
+  it('coverage-approved no-source rows render a FILLED green dot (INF-57 unification)', () => {
+    // INF-57 cleanup: legacy target_acknowledged collapsed into
+    // kind='unmapped' with status='approved'. Under PR α₀'s status-driven
+    // dot, that resolves to a filled green dot identical to a regular
+    // mapped+approved row. The prior kind-aware tooltip override
+    // ("Acknowledged" instead of "Approved") was dropped — the dot now
+    // unifies on the canonical "Approved" label across all kinds.
     render(<FieldMappingRow row={targetAck()} />)
     const dot = screen.getByLabelText('status: Approved')
     expect(dot.className).toContain('bg-green-500')
@@ -1005,15 +987,11 @@ describe('FieldMappingRow — aria-labels', () => {
     )
   })
 
-  it('describes an acknowledged row with the reason inlined', () => {
-    const { container } = render(
-      <FieldMappingRow row={targetAck({ acknowledgmentReason: 'system default' })} />,
-    )
-    const el = container.querySelector('[data-testid="field-mapping-row"]')
-    expect(el?.getAttribute('aria-label')).toBe(
-      'accounts.internal_id acknowledged as not migratable: system default',
-    )
-  })
+  // The "describes an acknowledged row with the reason inlined" test was
+  // dropped by INF-57 cleanup — buildAckAriaLabel and the kind-conditional
+  // aria branch are gone. Coverage-approved no-source rows now share the
+  // unmapped row's aria phrasing ("not yet mapped"), exercised by the
+  // unmapped-row test below.
 
   it('describes an unmapped row as "not yet mapped"', () => {
     const { container } = render(<FieldMappingRow row={unmapped()} />)
@@ -1034,36 +1012,38 @@ describe('FieldMappingRow — data attributes', () => {
   })
 })
 
-// ─── Refinement 4 — opacity fade on empty rows ──────────────────────────────
+// ─── INF-57 cleanup — opacity-70 dropped (regression guard) ────────────────
 //
-// Refinement 4 (Phase 4-polish-1 final-final, 2026-04-26): empty rows
-// (unmapped + target_acknowledged) carry `opacity-70` on the outer
-// listitem container so the eye skips past them when scanning for
-// actionable mappings. Mapped rows + value-assignment rows stay at
-// full opacity. Pin the contract here.
+// Pre-INF-57: empty rows (unmapped + target_acknowledged) carried
+// `opacity-70` on the outer listitem container per Phase 4-polish-1
+// Refinement 4. INF-57 cleanup design lock 6 dropped the opacity treatment
+// — coverage-approved no-source rows now render at full opacity to match
+// the unified non-mapped treatment. Pin the absence so a future refactor
+// cannot silently re-add the fade.
 
-describe('FieldMappingRow — Refinement 4 (opacity fade on empty rows)', () => {
-  it('unmapped rows render with opacity-70 on the listitem container', () => {
+describe('FieldMappingRow — opacity-70 dropped on every row kind (INF-57 cleanup)', () => {
+  it('unmapped rows render at full opacity', () => {
     render(<FieldMappingRow row={unmapped()} />)
     const row = screen.getByTestId('field-mapping-row')
-    expect(row.className).toContain('opacity-70')
-  })
-
-  it('target_acknowledged rows render with opacity-70 on the listitem container', () => {
-    render(<FieldMappingRow row={targetAck()} />)
-    const row = screen.getByTestId('field-mapping-row')
-    expect(row.className).toContain('opacity-70')
-  })
-
-  it('mapped rows render at full opacity (no opacity-N class on the listitem)', () => {
-    render(<FieldMappingRow row={mapped()} />)
-    const row = screen.getByTestId('field-mapping-row')
     expect(row.className).not.toContain('opacity-70')
-    // Defensive: no other opacity utility either.
     expect(row.className).not.toMatch(/\bopacity-\d/)
   })
 
-  it('value-assignment rows render at full opacity (actionable, not faded)', () => {
+  it('coverage-approved no-source rows (formerly target_acknowledged) render at full opacity', () => {
+    render(<FieldMappingRow row={targetAck()} />)
+    const row = screen.getByTestId('field-mapping-row')
+    expect(row.className).not.toContain('opacity-70')
+    expect(row.className).not.toMatch(/\bopacity-\d/)
+  })
+
+  it('mapped rows render at full opacity', () => {
+    render(<FieldMappingRow row={mapped()} />)
+    const row = screen.getByTestId('field-mapping-row')
+    expect(row.className).not.toContain('opacity-70')
+    expect(row.className).not.toMatch(/\bopacity-\d/)
+  })
+
+  it('value-assignment rows render at full opacity', () => {
     render(<FieldMappingRow row={valueAssignment()} />)
     const row = screen.getByTestId('field-mapping-row')
     expect(row.className).not.toContain('opacity-70')
@@ -1152,10 +1132,8 @@ describe('FieldMappingRow — light-mode-only invariant', () => {
     expect(container.innerHTML).not.toMatch(/\bdark:/)
   })
 
-  it('entire rendered tree for an acknowledged row contains no dark-prefix substring', () => {
-    const { container } = render(
-      <FieldMappingRow row={targetAck({ acknowledgmentReason: 'system default' })} />,
-    )
+  it('entire rendered tree for a coverage-approved no-source row contains no dark-prefix substring', () => {
+    const { container } = render(<FieldMappingRow row={targetAck()} />)
     expect(container.innerHTML).not.toMatch(/\bdark:/)
   })
 })
@@ -1448,10 +1426,9 @@ describe('FieldMappingRow — split source columns', () => {
     // PR α₀ unification: the italic "No source mapped" phrase moved
     // from the source-FIELD column to the source-TABLE column, where
     // it now serves as the canonical visual identity for every
-    // non-mapped row kind (VA, target_acknowledged, unmapped). The
-    // field column carries an em-dash in all three cases — distinct
-    // aria-label ("no source field") so screen readers hear two
-    // distinct phrases for the two columns.
+    // non-mapped row kind (VA, unmapped). The field column carries an
+    // em-dash in both cases — distinct aria-label ("no source field")
+    // so screen readers hear two distinct phrases for the two columns.
     render(<FieldMappingRow row={valueAssignment()} />)
     const phrase = screen.getByLabelText('no source mapped')
     expect(phrase).toBeInTheDocument()
@@ -1463,12 +1440,13 @@ describe('FieldMappingRow — split source columns', () => {
     expect(screen.getByLabelText('no source field')).toBeInTheDocument()
   })
 
-  it('target_acknowledged + unmapped share the unified non-mapped treatment (PR α₀)', () => {
-    // Both kinds now render the italic "No source mapped" in the
-    // table column and an em-dash in the field column — identical to
-    // value_assignment. Pre-α₀, these rendered an em-dash in the
-    // table column too; the unification consolidates the visual
-    // vocabulary so a user scanning a dense grid doesn't have to
+  it('coverage-approved no-source + raw unmapped share the unified non-mapped treatment (PR α₀ + INF-57)', () => {
+    // Both fixtures now render kind='unmapped' (INF-57 cleanup collapsed
+    // target_acknowledged into this kind). Both render the italic "No
+    // source mapped" in the table column and an em-dash in the field
+    // column — identical to value_assignment. Pre-α₀, these rendered an
+    // em-dash in the table column too; the unification consolidates the
+    // visual vocabulary so a user scanning a dense grid doesn't have to
     // distinguish em-dash from italic phrase.
     const { unmount } = render(<FieldMappingRow row={targetAck()} />)
     expect(screen.getByLabelText('no source mapped').textContent).toBe('No source mapped')
@@ -1659,7 +1637,7 @@ describe('FieldMappingRow — Gap 7 row click', () => {
     expect(onRowClick).toHaveBeenCalledWith('va-row')
   })
 
-  it('fires for a target_acknowledged row', async () => {
+  it('fires for a coverage-approved no-source row (formerly target_acknowledged)', async () => {
     const onRowClick = vi.fn()
     const user = userEvent.setup()
     render(
@@ -1801,7 +1779,14 @@ describe('FieldMappingRow — source-cell unification (2026-04-28)', () => {
     ).toBeNull()
   })
 
-  it('does NOT render the unified wrapper on target_acknowledged rows', () => {
+  it('renders the unified wrapper on coverage-approved no-source rows (INF-57: kind="unmapped" is source-editable)', () => {
+    // INF-57 cleanup folded target_acknowledged into kind='unmapped' with
+    // status='approved'. Since `isInlineSourceEditable` includes
+    // `kind === 'unmapped'`, the source-trigger wrapper now mounts on
+    // these rows. Pre-cleanup, target_acknowledged was excluded from the
+    // wrapper — design lock 3 accepted the wrapper as a collateral effect
+    // of the body unification (the user hover-pencil affordance is the
+    // same one offered on raw unmapped rows).
     render(
       <FieldMappingRow
         row={targetAck()}
@@ -1810,8 +1795,8 @@ describe('FieldMappingRow — source-cell unification (2026-04-28)', () => {
       />,
     )
     expect(
-      screen.queryByTestId('field-mapping-row-source-trigger'),
-    ).toBeNull()
+      screen.getByTestId('field-mapping-row-source-trigger'),
+    ).toBeInTheDocument()
   })
 
   it('clicking the outer wrapper opens the InlineSourcePicker', async () => {

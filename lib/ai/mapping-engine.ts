@@ -520,46 +520,6 @@ function buildUnmappedRow(
   }
 }
 
-// INF-57 — Dual-recognition emit for legacy bare-ack TFMs
-// (is_acknowledged=true, combination_type=NULL, zero mapping_sources).
-// Migration 098 backfilled matching coverage rows (status='approved',
-// status_set_by='user', coverage_status='gap'), so most reads will see
-// `coverageRow` populated. The few production projects that haven't
-// re-run getMappingsForRedesign post-098 may briefly hit the no-coverage
-// branch — defensively synthesize the same row prop so the UI doesn't
-// flicker between representations during the transit.
-//
-// Bare-ack always wins on status: legacy intent was unconditional approval,
-// and the 098 backfill mirrors that. The translator does NOT defer to the
-// coverage row's status here (which would normally be the canonical
-// surface) because the bare-ack TFM's existence is the legacy commitment.
-//
-// Row id uses the synthetic `unmapped::<targetFieldId>` format so the
-// drawer's approve/reject/reset write paths route through setCoverageStatus
-// and treat both legacy bare-acks and canonical coverage rows uniformly.
-function buildUnmappedRowFromBareAck(
-  _tfm: RawTfmRow,
-  targetField: TargetFieldRef,
-  coverageRow: RawCoverageRow | null,
-): UnmappedRow {
-  return {
-    kind: 'unmapped',
-    id: `unmapped::${targetField.id}`,
-    targetField,
-    confidence: null,
-    status: 'approved',
-    hasTransformation: false,
-    transformationStatus: null,
-    transformationDescription: null,
-    transformationSqlPreview: null,
-    mapping_content: 'no-source',
-    coverageStatus: coverageRow
-      ? coerceCoverageVerdict(coverageRow.coverage_status)
-      : 'gap',
-    statusSetBy: 'user',
-  }
-}
-
 function buildValueAssignmentRow(
   tfm: RawTfmRow,
   targetField: TargetFieldRef,
@@ -1272,15 +1232,15 @@ export function assembleMappingsForRedesign(
     const tfmSources = mappingSourcesByTfm.get(tfm.id) ?? []
     const transformation = transformationByTfm.get(tfm.id) ?? null
 
-    // Discriminator logic (INF-57 dual-recognition):
-    //   is_acknowledged === true → 'unmapped' (legacy bare-ack absorbed
-    //                              under canonical coverage-approved
-    //                              surface; status='approved',
-    //                              statusSetBy='user')
-    //   combination_type === 'custom_sql' with zero sources → 'value_assignment'
+    // Discriminator logic:
+    //   is_acknowledged === true OR zero sources without custom_sql →
+    //     'unmapped' (canonical coverage-approved surface; legacy bare-ack
+    //     TFMs fall through here post-migration-098 backfill)
+    //   combination_type === 'custom_sql' with zero sources →
+    //     'value_assignment'
     //   otherwise (has ≥ 1 source) → 'mapped'
     if (tfm.is_acknowledged) {
-      rows.push(buildUnmappedRowFromBareAck(tfm, targetFieldRef, coverageRow))
+      rows.push(buildUnmappedRow(targetFieldRef, coverageRow))
       continue
     }
 

@@ -104,11 +104,12 @@ describe('[mappings-for-redesign actions] approveFieldMapping', () => {
     expect(body).toMatch(/['"]approved['"]/)
   })
 
-  it('queries is_acknowledged before delegating (defensive against the redesign id-encoding gotcha)', () => {
-    // The redesign's TargetAcknowledgedRow uses the bare TFM UUID as
-    // its id, which decodes as `tfm-primary` — the legacy short-circuit
-    // for `target-ack` does NOT fire. Without this defense, an
-    // acknowledged row's TFM.status would be UPDATEd. See file header.
+  it('queries is_acknowledged before delegating (defensive against legacy bare-ack TFMs)', () => {
+    // Legacy bare-ack TFMs (is_acknowledged=true) surface as kind='unmapped'
+    // post-INF-57 via dual-recognition off the migration-098-backfilled
+    // coverage row. Without this defense, an UPDATE on the bare-ack TFM's
+    // .status would silently no-op the user-visible coverage state. See
+    // file header.
     expect(body).toContain("from('target_field_mappings')")
     expect(body).toContain('is_acknowledged')
   })

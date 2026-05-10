@@ -162,9 +162,8 @@ function rowMatchesConfidenceBand(
 
 /**
  * Row-level predicate for the Source filter. Only mapped rows can
- * match; VA / target_acknowledged / unmapped rows have no sources
- * and therefore are excluded whenever a specific source table is
- * selected.
+ * match; VA / unmapped rows have no sources and therefore are excluded
+ * whenever a specific source table is selected.
  */
 function rowReferencesSourceTable(row: MappingRow, sourceTableId: string): boolean {
   if (row.kind !== 'mapped') return false

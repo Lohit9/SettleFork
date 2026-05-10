@@ -168,19 +168,15 @@ export interface MappingsForRedesignResult {
  * Derived once server-side from TFM + coverage state; the UI pattern-
  * matches on `kind`.
  *
- * INF-57 transit (2026-05-10): the read translator no longer emits
- * `kind: 'target_acknowledged'` rows — legacy bare-ack TFMs are
- * absorbed under `UnmappedRow` (status='approved', statusSetBy='user').
- * `TargetAcknowledgedRow` remains in the union as a `@deprecated`
- * shape so B's UI tree continues to type-check during the cross-PR
- * transit; it is dead at runtime. B's follow-up cleanup PR drops the
- * union member, deletes the interface, and strips the kind references
- * from app/ + tests/components.
+ * INF-57 (2026-05-10): legacy bare-ack TFMs (is_acknowledged=true) are
+ * surfaced as `UnmappedRow` with status='approved', statusSetBy='user'.
+ * Migration 098 backfilled paired coverage rows so the canonical surface
+ * (target_field_coverage with status='approved'+status_set_by='user') is
+ * fully populated.
  */
 export type MappingRow =
   | MappedRow
   | ValueAssignmentRow
-  | TargetAcknowledgedRow
   | UnmappedRow
 
 /** Kind discriminator enumeration, kept exportable for exhaustiveness checks. */
@@ -203,16 +199,9 @@ export type MappingTransformationStatus =
 interface MappingRowBase {
   /**
    * Stable rendering key.
-   *   mapped / value_assignment       → target_field_mappings.id
-   *   unmapped (incl. legacy bare-ack
-   *   and canonical coverage-approved
-   *   no-source rows)                → `unmapped::<target_field_id>`
-   *
-   * INF-57: legacy is_acknowledged=true TFMs no longer use their TFM
-   * UUID as row id. The translator emits the synthetic `unmapped::`
-   * format for both the legacy bare-ack path and the canonical
-   * coverage-only path so write actions like approveFieldMapping /
-   * rejectFieldMapping route uniformly through setCoverageStatus.
+   *   mapped / value_assignment   → target_field_mappings.id
+   *   unmapped (canonical
+   *   coverage-only no-source)    → `unmapped::<target_field_id>`
    *
    * The `unmapped::` synthetic id is NEVER sent to a TFM-mutating write
    * action. Server actions that accept a TFM id MUST reject the
@@ -229,7 +218,7 @@ interface MappingRowBase {
    */
   targetField: TargetFieldRef
 
-  /** Target-level confidence. NULL for unmapped/acknowledged. */
+  /** Target-level confidence. NULL for unmapped rows. */
   confidence: number | null
 
   /**
@@ -388,11 +377,11 @@ export interface MappedRow extends MappingRowBase {
    *     CHECK (combination_type IN ('single', 'concat_space',
    *                                 'concat_comma', 'custom_sql')),
    *
-   * The DDL also allows `NULL` (for legacy `is_acknowledged=true` TFMs
-   * — INF-57 dual-recognizes these as `UnmappedRow` so the `MappingRow`
-   * union no longer surfaces a row shape with a missing combinationType).
-   * If a future migration widens or narrows this set, update this union,
-   * the `ValueAssignmentRow` constant, and the CHECK at the same time —
+   * The DDL also allows `NULL` (for legacy `is_acknowledged=true` TFMs —
+   * INF-57 surfaces these as `UnmappedRow`, so the `MappingRow` union
+   * never carries a row shape with a missing combinationType). If a
+   * future migration widens or narrows this set, update this union, the
+   * `ValueAssignmentRow` constant, and the CHECK at the same time —
    * single source of truth.
    */
   combinationType: 'single' | 'concat_space' | 'concat_comma' | 'custom_sql'
@@ -436,30 +425,6 @@ export interface ValueAssignmentRow extends MappingRowBase {
    * exists (no sources).
    */
   aiReasoning: string | null
-}
-
-/**
- * @deprecated INF-57 (2026-05-10): the read translator no longer emits
- * rows of this shape. Legacy bare-ack TFMs (is_acknowledged=true,
- * combination_type=NULL, zero mapping_sources) are now surfaced as
- * `UnmappedRow` with status='approved', statusSetBy='user' under
- * dual-recognition (mapping-engine.ts:buildUnmappedRowFromBareAck).
- * Migration 098 backfills paired coverage rows so the canonical surface
- * (target_field_coverage with status='approved'+status_set_by='user') is
- * fully populated.
- *
- * The interface stays in the `MappingRow` union as a transit shim so B's
- * UI tree (app/.../mapping/redesign/**, tests/components/*) continues to
- * compile while B's follow-up cleanup PR strips the kind references and
- * drops the union member. Do NOT add new emit sites.
- */
-export interface TargetAcknowledgedRow extends MappingRowBase {
-  kind: 'target_acknowledged'
-  status: 'approved'
-  confidence: null
-  hasTransformation: false
-  transformationStatus: null
-  acknowledgmentReason: string | null
 }
 
 /**
@@ -829,9 +794,9 @@ export interface SourceFieldWithState {
  * is chip-agnostic.
  */
 export interface MappingCounts {
-  /** Every target field (mapped + VA + acknowledged + unmapped). */
+  /** Every target field (mapped + VA + unmapped). */
   total: number
-  /** Every TFM with status='approved' (including acknowledged). */
+  /** Every TFM with status='approved'. */
   approved: number
   /** Every TFM with status='needs_review'. */
   needsReview: number

@@ -61,7 +61,6 @@ interface HeritageMappingsRedesignSnapshot {
   rowCountByKind: {
     mapped: number
     value_assignment: number
-    target_acknowledged: number
     unmapped: number
   }
   counts: {
@@ -146,7 +145,6 @@ async function captureSnapshot(): Promise<HeritageMappingsRedesignSnapshot> {
   const rowCountByKind = {
     mapped: 0,
     value_assignment: 0,
-    target_acknowledged: 0,
     unmapped: 0,
   }
   for (const row of result.rows) {

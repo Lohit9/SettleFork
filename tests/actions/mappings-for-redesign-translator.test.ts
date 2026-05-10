@@ -25,7 +25,6 @@ import {
 } from '@/lib/ai/mapping-engine'
 import type {
   MappedRow,
-  TargetAcknowledgedRow,
   UnmappedRow,
   ValueAssignmentRow,
 } from '@/lib/types/mappings-for-redesign'
@@ -182,13 +181,14 @@ describe('assembleMappingsForRedesign — discriminator cases', () => {
   })
 
   // Case 4 ------------------------------------------------------------
-  // INF-57 dual-recognition: legacy bare-ack TFM (is_acknowledged=true,
-  // combination_type=NULL) is absorbed under UnmappedRow with
-  // status='approved', statusSetBy='user'. Row id is the synthetic
-  // `unmapped::<targetFieldId>` format (matches canonical no-source
-  // surface), NOT the bare-ack TFM's UUID. The kind='target_acknowledged'
-  // discriminator is dead at runtime — translator never emits it post-INF-57.
-  it('case 4: legacy bare-ack TFM emits UnmappedRow under dual-recognition', () => {
+  // INF-57: legacy bare-ack TFM (is_acknowledged=true, combination_type=NULL)
+  // is absorbed under UnmappedRow. Migration 098 backfilled paired coverage
+  // rows (status='approved', status_set_by='user', coverage_status='gap'),
+  // so the surface is fully driven off the coverage row. Row id is the
+  // synthetic `unmapped::<targetFieldId>` format, NOT the bare-ack TFM's UUID.
+  // The translator's bare-ack branch routes through `buildUnmappedRow`, which
+  // sources status/statusSetBy/coverageStatus from the coverage row.
+  it('case 4: legacy bare-ack TFM emits UnmappedRow driven by paired coverage row', () => {
     const t4 = tfm({
       id: 'tfm-4',
       target_field_id: F_T_NOTES.id,
@@ -197,7 +197,19 @@ describe('assembleMappingsForRedesign — discriminator cases', () => {
       acknowledgment_reason: 'populated downstream by legacy process',
       confidence: null,
     })
-    const out = assembleMappingsForRedesign(baseInput({ tfms: [t4] }))
+    // Migration 098 backfill: every legacy bare-ack TFM has a paired
+    // coverage row with status='approved', status_set_by='user'.
+    const cov4 = {
+      id: 'cov-4',
+      target_field_id: F_T_NOTES.id,
+      coverage_status: 'gap',
+      status: 'approved',
+      status_set_by: 'user',
+      confidence: null,
+    }
+    const out = assembleMappingsForRedesign(
+      baseInput({ tfms: [t4], coverage: [cov4] }),
+    )
     const row = out.rows.find(
       (r) => r.targetField.id === F_T_NOTES.id,
     ) as UnmappedRow
@@ -205,7 +217,7 @@ describe('assembleMappingsForRedesign — discriminator cases', () => {
     expect(row.id).toBe(`unmapped::${F_T_NOTES.id}`)
     expect(row.status).toBe('approved')
     expect(row.statusSetBy).toBe('user')
-    expect(row.coverageStatus).toBe('gap') // synthesized when no coverage row
+    expect(row.coverageStatus).toBe('gap')
     expect(row.confidence).toBeNull()
     expect(row.hasTransformation).toBe(false)
     expect(row.mapping_content).toBe('no-source')
@@ -426,14 +438,27 @@ describe('assembleMappingsForRedesign — discriminator cases', () => {
     const tA = tfm({ id: 'tfm-a', target_field_id: F_T_CUSTID.id, status: 'approved' })
     const mA = ms({ id: 'ms-a', target_field_mapping_id: 'tfm-a', source_field_id: F_S_CUSTID.id, source_table_id: F_S_CUSTID.table_id, ordinal: 0 })
     const tB = tfm({ id: 'tfm-b', target_field_id: F_T_NOTES.id, is_acknowledged: true, combination_type: null, confidence: null, acknowledgment_reason: 'n/a' })
+    // INF-57: legacy bare-ack TFM tB is paired with a migration-098-backfilled
+    // coverage row carrying status='approved'+status_set_by='user'. Without
+    // it, tB falls into the orphan branch (status='needs_review') and the
+    // approved count drops to 1.
+    const covB = {
+      id: 'cov-b',
+      target_field_id: F_T_NOTES.id,
+      coverage_status: 'gap',
+      status: 'approved',
+      status_set_by: 'user',
+      confidence: null,
+    }
     const ack: RawSourceAckRow = { id: 'ack-1', source_field_id: F_S_ORDTOTAL.id, reason: 'deprecated' }
     const out = assembleMappingsForRedesign(baseInput({
       tfms: [tA, tB],
       mappingSources: [mA],
+      coverage: [covB],
       sourceAcks: [ack],
     }))
     expect(out.counts.total).toBe(7)       // 7 target fields
-    expect(out.counts.approved).toBe(2)    // tfm-a (mapped) + tfm-b (ack)
+    expect(out.counts.approved).toBe(2)    // tfm-a (mapped) + tfm-b (bare-ack via coverage)
     expect(out.counts.needsReview).toBe(0)
     expect(out.counts.rejected).toBe(0)
     expect(out.counts.unmapped).toBe(5)    // 7 - 2

@@ -49,7 +49,6 @@ import type {
 import type {
   MappedRow,
   MappingSourceRef,
-  TargetAcknowledgedRow,
   TargetFieldRef,
   UnmappedRow,
   ValueAssignmentRow,
@@ -66,8 +65,9 @@ import type {
 // Section order locks:
 //   • MappedBody         : SOURCE → SAMPLE → ANALYSIS → TRANSFORMATION → DQ → DECISIONS
 //   • ValueAssignmentBody: SOURCE → ANALYSIS → VALUE → DECISIONS
-//   • AcknowledgedBody   : ACKNOWLEDGMENT → COVERAGE (collapse when undefined)
 //   • UnmappedBody       : SOURCE (with pencil) → COVERAGE → DECISIONS
+//                          (coverage-approved no-source rows live here too
+//                          post-INF-57 cleanup)
 
 // ── Fixtures (mirror mapping-drawer.test.tsx) ──────────────────────────────
 
@@ -144,12 +144,11 @@ function valueAssignment(
   }
 }
 
-function targetAck(
-  overrides: Partial<TargetAcknowledgedRow> = {},
-): TargetAcknowledgedRow {
+// INF-57 cleanup — coverage-approved no-source row (formerly target_acknowledged).
+function targetAck(overrides: Partial<UnmappedRow> = {}): UnmappedRow {
   return {
-    kind: 'target_acknowledged',
-    id: 'tfm-ack-1',
+    kind: 'unmapped',
+    id: 'unmapped::tf-3',
     targetField: targetField({ id: 'tf-3', name: 'internal_id' }),
     confidence: null,
     status: 'approved',
@@ -157,7 +156,9 @@ function targetAck(
     transformationStatus: null,
     transformationDescription: null,
     transformationSqlPreview: null,
-    acknowledgmentReason: 'system default',
+    mapping_content: 'no-source',
+    coverageStatus: 'gap',
+    statusSetBy: 'user',
     ...overrides,
   }
 }
@@ -250,57 +251,11 @@ function pathDOutputs(
   }
 }
 
-// ── AcknowledgedBody ────────────────────────────────────────────────────────
-
-describe('MappingDrawer — AcknowledgedBody (Phase E PR α)', () => {
-  it('renders ACKNOWLEDGMENT only when no coverage row exists for the target field', () => {
-    render(
-      <MappingDrawer
-        row={targetAck()}
-        isOpen={true}
-        onClose={() => {}}
-        pathDOutputs={pathDOutputs()}
-      />,
-    )
-    expect(
-      screen.getByTestId('drawer-section-acknowledgment'),
-    ).toBeInTheDocument()
-    // Per align-on-approach: acknowledged + missing coverage = collapse
-    // the COVERAGE section (orphan label reads oddly on a closed row).
-    expect(screen.queryByTestId('drawer-section-coverage')).toBeNull()
-  })
-
-  it('renders ACKNOWLEDGMENT followed by COVERAGE when a coverage row exists', () => {
-    const ack = targetAck()
-    const outputs = pathDOutputs({
-      coverageByTargetFieldId: new Map([
-        [
-          ack.targetField.id,
-          coverageRow({
-            target_field_id: ack.targetField.id,
-            coverage_status: 'out_of_scope',
-            ai_reasoning: 'Field is internal-only on the source side.',
-          }),
-        ],
-      ]),
-    })
-    render(
-      <MappingDrawer
-        row={ack}
-        isOpen={true}
-        onClose={() => {}}
-        pathDOutputs={outputs}
-      />,
-    )
-    expect(
-      screen.getByTestId('drawer-section-acknowledgment'),
-    ).toBeInTheDocument()
-    const coverageSection = screen.getByTestId('drawer-section-coverage')
-    expect(
-      within(coverageSection).getByTestId('drawer-coverage-label').textContent,
-    ).toBe('Out of scope')
-  })
-})
+// AcknowledgedBody describe block dropped — INF-57 cleanup folded
+// AcknowledgedBody into UnmappedBody, so coverage-approved no-source rows
+// (formerly target_acknowledged) are exercised by the UnmappedBody describe
+// below using the targetAck() fixture (which now produces a kind='unmapped'
+// row with status='approved').
 
 // ── UnmappedBody ────────────────────────────────────────────────────────────
 
@@ -611,7 +566,7 @@ describe('MappingDrawer — MappedBody (Phase E PR α)', () => {
 // ── Graceful degradation ───────────────────────────────────────────────────
 
 describe('MappingDrawer — graceful degradation when pathDOutputs is null/undefined', () => {
-  it('renders all four body kinds without crashing when pathDOutputs is undefined', () => {
+  it('renders mapped, VA, coverage-approved no-source, and raw unmapped bodies without crashing when pathDOutputs is undefined', () => {
     for (const row of [mapped(), valueAssignment(), targetAck(), unmapped()]) {
       const { unmount } = render(
         <MappingDrawer row={row} isOpen={true} onClose={() => {}} />,
@@ -629,8 +584,13 @@ describe('MappingDrawer — graceful degradation when pathDOutputs is null/undef
     ).toBe('Manual entry required')
   })
 
-  it('collapses the COVERAGE section on acknowledged rows when sidecar is absent', () => {
+  // INF-57 cleanup — coverage-approved no-source rows (formerly target_acknowledged
+  // dispatched into AcknowledgedBody, which collapsed the COVERAGE section
+  // when the sidecar was absent) now render UnmappedBody, which always
+  // mounts the COVERAGE section (synthesizing the orphan label when no
+  // coverage row exists). Mirrors the unmapped+needs_review behavior above.
+  it('renders the COVERAGE section on coverage-approved no-source rows when sidecar is absent', () => {
     render(<MappingDrawer row={targetAck()} isOpen={true} onClose={() => {}} />)
-    expect(screen.queryByTestId('drawer-section-coverage')).toBeNull()
+    expect(screen.getByTestId('drawer-section-coverage')).toBeInTheDocument()
   })
 })
