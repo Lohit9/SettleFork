@@ -1,5 +1,5 @@
 import { cn } from '@/components/ui/utils'
-import type { MappingCardinality, TfmPathDEnrichment } from './types'
+import type { MappingCardinality, TfmPathDEnrichment } from '@/lib/types/path-d'
 
 // ─────────────────────────────────────────────────────────────────────────────
 // MappingDetailsPanel — Path D primitive.

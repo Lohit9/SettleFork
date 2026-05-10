@@ -360,11 +360,11 @@ describe('MappingDrawer — header status badge (dot + word, no confidence)', ()
     }
   })
 
-  it('badge renders dot + sentence-case status word (no confidence percent)', () => {
-    // Drawer redesign — TARGET-led identity (this iteration): the
-    // status word returns to the badge in sentence case alongside
-    // the dot. Confidence is intentionally absent from the header —
-    // the per-source SOURCE body section now carries it.
+  it('badge renders dot + sentence-case status word + confidence percent when confidence is non-null (Phase E PR α)', () => {
+    // Phase E PR α: confidence percent rejoins the header status
+    // badge as a trailing "· 88%" token. Pre-α the per-source SOURCE
+    // body section was the only confidence surface; α adds the header
+    // pill back so users get the row-level number at a glance.
     render(
       <MappingDrawer
         row={mapped({ status: 'needs_review', confidence: 88 })}
@@ -383,9 +383,21 @@ describe('MappingDrawer — header status badge (dot + word, no confidence)', ()
     expect(word.textContent).toBe('Needs review')
     // Status word color matches the dot's hue.
     expect(word.className).toContain('text-amber-700')
-    // No confidence percent in the header.
+    // Phase E PR α — confidence percent renders for non-null confidence.
+    const confidence = within(badge).getByTestId(
+      'mapping-drawer-header-confidence',
+    )
+    expect(confidence.textContent).toMatch(/88%/)
+  })
+
+  it('badge OMITS the confidence pill when row.confidence is null (graceful degradation pre-γ.1)', () => {
+    // Phase E PR α: acknowledged + unmapped rows currently carry
+    // `confidence: null`. The header pill is suppressed entirely (no
+    // trailing "·") so the badge reads as a clean dot+word.
+    render(<MappingDrawer row={targetAck()} isOpen={true} onClose={() => {}} />)
+    const badge = screen.getByTestId('mapping-drawer-header-status-badge')
     expect(
-      within(badge).queryByTestId('mapping-drawer-header-status-percent'),
+      within(badge).queryByTestId('mapping-drawer-header-confidence'),
     ).toBeNull()
     expect(badge.textContent).not.toMatch(/\d+%/)
   })
@@ -1004,14 +1016,45 @@ describe('MappingDrawer — Rule 6 (Unmapped) body', () => {
     expect(screen.queryByTestId('drawer-section-status')).toBeNull()
   })
 
-  it('does NOT render any action buttons in the body (Gap 9 territory)', () => {
+  it('renders ONLY the Sources-section edit pencil button in the body (Phase E PR α — replaces the pre-α negative-assert)', () => {
+    // Pre-Phase E PR α: this test asserted ZERO buttons in the body
+    // (the only path to mounting the create form was the footer's
+    // [Create mapping] button). PR α adds the inline pencil affordance
+    // in the SOURCE section's headerAside slot to mirror the grid's
+    // pencil-edit pattern; the pencil is the only body-level button.
+    // Approve / Reject / Suggest still live in the footer, never in
+    // the body.
     render(<MappingDrawer row={unmapped()} isOpen={true} onClose={() => {}} />)
     const body = screen.getByTestId('mapping-drawer-body')
-    expect(within(body).queryAllByRole('button')).toHaveLength(0)
+    const buttons = within(body).queryAllByRole('button')
+    expect(buttons).toHaveLength(1)
+    expect(buttons[0]?.getAttribute('data-testid')).toBe(
+      'mapping-drawer-edit-pencil',
+    )
   })
 
-  it('does NOT render the Sources-section edit pencil for unmapped rows', () => {
+  it('renders the Sources-section edit pencil for unmapped rows (Phase E PR α — flip of the pre-α negative-assert)', () => {
     render(<MappingDrawer row={unmapped()} isOpen={true} onClose={() => {}} />)
+    const pencil = screen.getByTestId('mapping-drawer-edit-pencil')
+    expect(pencil.tagName).toBe('BUTTON')
+    expect(pencil.getAttribute('aria-label')).toBe('Edit mapping sources')
+  })
+
+  it('hides the Sources-section edit pencil while the create form is mounted (Phase E PR α)', async () => {
+    const user = userEvent.setup()
+    render(
+      <MappingDrawer
+        row={unmapped()}
+        isOpen={true}
+        onClose={() => {}}
+        projectId="project-1"
+        availableSourceFields={[]}
+      />,
+    )
+    // Click the pencil → form should mount and the pencil should
+    // disappear (the affordance is "open the form"; once open it
+    // would be redundant).
+    await user.click(screen.getByTestId('mapping-drawer-edit-pencil'))
     expect(screen.queryByTestId('mapping-drawer-edit-pencil')).toBeNull()
   })
 

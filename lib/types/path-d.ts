@@ -1,5 +1,5 @@
 /**
- * Path D — UI component types.
+ * Path D — shared row-shape types.
  *
  * Schema is the contract. Every shape below traces directly to migration 093
  * (`supabase/migrations/093_path_d_foundation.sql`):
@@ -11,10 +11,11 @@
  *     mapping_cardinality, dedup_required, dedup_strategy,
  *     data_quality_flag_ids
  *
- * Scope: B-side scaffolding ahead of Phase B core landing real data. These
- * types feed mocked-data UI components only — no server actions wire to
- * them yet. When A's Phase B server actions need to import the same shapes,
- * promote this file to lib/types/path-d.ts.
+ * History: scaffolded at `components/path-d/types.ts` for B-side UI work
+ * ahead of Phase B. Phase E PR α promoted the file to `lib/types/` so
+ * server actions in `lib/actions/path-d-outputs.ts` can import the same
+ * shapes without a UI dependency. The components in `components/path-d/`
+ * now re-import from this location.
  */
 
 // ── Schema-derived enums (lines 58, 128, 247, 360 of migration 093) ──
@@ -38,10 +39,9 @@ export type DqSeverity = 'critical' | 'warning' | 'info'
 
 // ── Structured JSONB shapes ──
 
-// Note: B-side scaffolded shape derived from migration 093 column comment (lines 384-385).
-// A's Phase B agent prompt aligns to this shape, or we reconcile in a follow-up PR
-// once Phase B produces real data. Promote this file to lib/types/path-d.ts when
-// server actions need to import the same shapes.
+// Note: shape derived from migration 093 column comment (lines 384-385).
+// A's Phase B agent prompt aligns to this shape, or we reconcile in a
+// follow-up PR once Phase B produces real data.
 export interface DedupStrategy {
   key_fields: string[]
   conflict_resolution: 'first' | 'last' | 'merge'

@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import { render, screen } from '@testing-library/react'
 import { LookupTableViewer } from '@/components/path-d/LookupTableViewer'
-import type { ProjectLookupTableRow } from '@/components/path-d/types'
+import type { ProjectLookupTableRow } from '@/lib/types/path-d'
 
 // ─────────────────────────────────────────────────────────────────────────────
 // LookupTableViewer — Path D primitive tests.

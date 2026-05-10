@@ -90,13 +90,17 @@ describe('[mapping-drawer-edit] D1 — Edit pencil presence', () => {
 // ─────────────────────────────────────────────────────────────────────
 
 describe('[mapping-drawer-edit] D2 — Edit visibility gate', () => {
-  it('D2a: pencil only renders inside MappedBody (unmapped + acknowledged + VA bodies do not mount the pencil)', () => {
-    // Other body components (UnmappedBody, AcknowledgedBody,
-    // ValueAssignmentBody) do not invoke <EditPencilButton ... />.
+  it('D2a: pencil renders inside MappedBody + UnmappedBody (Phase E PR α expansion); AcknowledgedBody + VA do NOT mount it', () => {
+    // Phase E PR α: the pencil affordance now also mounts inside
+    // UnmappedBody — mirrors the grid's source-cell pencil and gives
+    // the drawer parity with the inline grid for no-source rows.
+    // Acknowledged + VA bodies still don't mount the pencil per OQ-3
+    // (acknowledged un-acknowledge is the only mutation path, served
+    // from the footer; VA expression authoring lives on Transform tab).
     const mappedBody = sliceBetween(SRC, 'function MappedBody', '\n}\n')
     expect(mappedBody).toMatch(/<EditPencilButton/)
     const unmappedBody = sliceBetween(SRC, 'function UnmappedBody', '\n}\n')
-    expect(unmappedBody).not.toMatch(/<EditPencilButton/)
+    expect(unmappedBody).toMatch(/<EditPencilButton/)
     const ackBody = sliceBetween(SRC, 'function AcknowledgedBody', '\n}\n')
     expect(ackBody).not.toMatch(/<EditPencilButton/)
     const vaBody = sliceBetween(SRC, 'function ValueAssignmentBody', '\n}\n')

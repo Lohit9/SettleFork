@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import { render, screen } from '@testing-library/react'
 import { CoverageStatusBadge } from '@/components/path-d/CoverageStatusBadge'
-import type { CoverageStatus } from '@/components/path-d/types'
+import type { CoverageStatus } from '@/lib/types/path-d'
 
 // ─────────────────────────────────────────────────────────────────────────────
 // CoverageStatusBadge — Path D primitive tests.
