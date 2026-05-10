@@ -14,7 +14,6 @@ import type {
   MappingRow,
   MappingSourceRef,
   SourceFieldWithState,
-  TargetAcknowledgedRow,
 } from '@/lib/types/mappings-for-redesign'
 import { classifyMappedRow, type MappingRowRule } from '@/lib/utils/mapping-row-rules'
 import { TableBadge } from './TableBadge'
@@ -118,8 +117,6 @@ import { InlineSourcePicker } from './InlineSourcePicker'
 //   'value_assignment'   → Rule 1 visual; source slot shows "No source mapped"
 //                          per founder Gap 4a §9 Q5 decision. VA SQL lives in
 //                          the drawer (Gaps 7-10), NOT on the row.
-//   'target_acknowledged'→ Rule 5. Em-dash source + confidence. Target name
-//                          with "acknowledged[: reason]" subtitle.
 //   'unmapped'           → Rule 6. Em-dash source + confidence. Bare target
 //                          name, no subtitle.
 //
@@ -184,7 +181,6 @@ import { InlineSourcePicker } from './InlineSourcePicker'
  * wrapper call is in flight. States:
  *   • 'approving'     — brief green highlight while approveFieldMapping runs
  *   • 'rejecting'     — slide-fade-out while rejectFieldMapping runs
- *   • 'acknowledging' — brief slate highlight while acknowledgeField runs
  *   • 'mapping'       — brief blue highlight while createFieldMapping /
  *                        editMappingSources runs
  * All transitions honor `motion-reduce:transition-none`.
@@ -192,7 +188,6 @@ import { InlineSourcePicker } from './InlineSourcePicker'
 export type FieldMappingRowOptimisticState =
   | 'approving'
   | 'rejecting'
-  | 'acknowledging'
   | 'mapping'
 
 interface FieldMappingRowProps {
@@ -268,19 +263,6 @@ interface FieldMappingRowProps {
    */
   onInlineReject?: (rowId: string, anchorEl: HTMLElement) => void
   /**
-   * Phase 4-polish-3 — inline acknowledge handler. Wired for unmapped
-   * rows. Parent dispatches `acknowledgeField` with the dedicated
-   * "no-source-required" reason and surfaces a brief highlight.
-   */
-  onInlineAcknowledge?: (rowId: string) => void
-  /**
-   * Phase 4-polish-3 — inline un-acknowledge handler. Wired for
-   * `target_acknowledged` rows. Opens the drawer with
-   * `?focus=unack` (NOT inline). Parent owns the URL navigation; this
-   * row component just announces the click.
-   */
-  onInlineUnacknowledge?: (rowId: string) => void
-  /**
    * Phase 4-polish-3 — fired when the user clicks Save in the inline
    * picker with a non-empty pending set differing from the initial
    * set. The parent dispatches `createFieldMapping` (for unmapped
@@ -331,8 +313,6 @@ export const FieldMappingRow = forwardRef<HTMLDivElement, FieldMappingRowProps>(
     optimisticData,
     onInlineApprove,
     onInlineReject,
-    onInlineAcknowledge,
-    onInlineUnacknowledge,
     onSourceCommit,
     isExpanded: controlledExpanded,
     onExpandedChange,
@@ -374,8 +354,8 @@ export const FieldMappingRow = forwardRef<HTMLDivElement, FieldMappingRowProps>(
   // Eligibility: the inline picker hosts source-set edits for rows where
   // multi-select picking is meaningful AND the wrapper contract supports
   // it. Rows that need the drawer (custom_sql combination, Rule 4
-  // 3+-tables-or-many-fields, value assignments, acknowledged rows)
-  // continue to open the drawer on row-body click. Eligibility ALSO
+  // 3+-tables-or-many-fields, value assignments) continue to open the
+  // drawer on row-body click. Eligibility ALSO
   // requires the parent to have wired the `onSourceCommit` /
   // `availableSourceFields` props — legacy fixtures and storybook
   // callers that omit them fall through to the drawer path.
@@ -450,24 +430,6 @@ export const FieldMappingRow = forwardRef<HTMLDivElement, FieldMappingRowProps>(
       }
     : undefined
 
-  // Refinement 4 (Phase 4-polish-1 final-final, 2026-04-26): empty
-  // rows (unmapped + target_acknowledged) fade to opacity-70 so the
-  // eye skips past them when scanning for actionable mappings. They
-  // stay readable (still ~70% contrast) and the status dot's color +
-  // hover tooltip remain the at-a-glance disambiguators. Mapped /
-  // value-assignment rows render at full opacity (1.0) — these are
-  // the rows users act on.
-  //
-  // Trade-off: opacity is multiplicative, so the status dot fades
-  // along with the rest of the row. Acceptable — the dot at 70% is
-  // still clearly visible and the title=tooltip lets a hovering user
-  // disambiguate without relying on the dot color alone. Honoring
-  // the "dot stays full opacity" qualifier would require either an
-  // opacity arbitrary-selector exception (e.g. `[&>*:not(.dot)]:
-  // opacity-70`) or rewiring the grid; both are heavier than the
-  // signal warrants.
-  const isEmptyRow = row.kind === 'target_acknowledged' || row.kind === 'unmapped'
-
   // Phase 4-polish-3 follow-up (2026-05-04) — row-level optimistic
   // background tints (bg-green-50 / bg-slate-100 / bg-blue-50) were
   // replaced with a Linear-style button-level pulse animation
@@ -492,7 +454,6 @@ export const FieldMappingRow = forwardRef<HTMLDivElement, FieldMappingRowProps>(
       data-optimistic-state={optimisticState ?? undefined}
       aria-label={buildAriaLabel(row, rule, isExpanded, isClickable)}
       className={cn(
-        isEmptyRow && 'opacity-70',
         // Reject slide cue: the row slides 1px left + becomes
         // pointer-inert during the rejection round-trip. PR #58's
         // optimisticData override (in MappingContent) takes care of
@@ -554,7 +515,7 @@ export const FieldMappingRow = forwardRef<HTMLDivElement, FieldMappingRowProps>(
           isHighlighted && 'border-l-2 border-blue-500',
         )}
       >
-        <StatusDot status={row.status} kind={row.kind} />
+        <StatusDot status={row.status} />
         {isInlineSourceEditable ? (
           <UnifiedSourceTrigger
             wrapperRef={sourceWrapperRef}
@@ -609,8 +570,6 @@ export const FieldMappingRow = forwardRef<HTMLDivElement, FieldMappingRowProps>(
           optimisticState={optimisticState}
           onInlineApprove={onInlineApprove}
           onInlineReject={onInlineReject}
-          onInlineAcknowledge={onInlineAcknowledge}
-          onInlineUnacknowledge={onInlineUnacknowledge}
           onInlineMap={isInlineSourceEditable ? handleOpenPicker : undefined}
         />
       </div>
@@ -672,11 +631,10 @@ export const FieldMappingRow = forwardRef<HTMLDivElement, FieldMappingRowProps>(
 //
 // Eligibility: this wrapper is rendered ONLY when `isInlineSourceEditable`
 // is true (mapped non-custom-sql non-rule-4, or unmapped). All other
-// row kinds (Rule 4, value_assignment, custom_sql, target_acknowledged)
-// render the legacy pre-unification fallback (separate SourceTableCell +
-// SourceFieldCell with no triggers, falling through to the row-body
-// drawer-open handler). Eligibility logic is unchanged from the prior
-// two-trigger implementation.
+// row kinds (Rule 4, value_assignment, custom_sql) render the legacy
+// pre-unification fallback (separate SourceTableCell + SourceFieldCell
+// with no triggers, falling through to the row-body drawer-open handler).
+// Eligibility logic is unchanged from the prior two-trigger implementation.
 
 function UnifiedSourceTrigger({
   wrapperRef,
@@ -739,27 +697,25 @@ function buildSourceTriggerAriaLabel(row: MappingRow): string {
 //
 // Rightmost grid cell hosting row-state-aware action buttons. PR α₀
 // unified the dispatch around the row's `status` (lifecycle) for every
-// row kind that participates in the approve/reject lifecycle:
+// row kind:
 //
 //   • status='needs_review'  →  ✓ approve  + ✗ reject
 //   • status='approved'      →              ✗ reject
 //   • status='rejected'      →  ✓ approve   (un-reject)
 //
-// Plus one kind-specific override:
-//
-//   • kind='target_acknowledged' →  ✗ un-acknowledge  (opens drawer)
-//                                (REPLACES the status-driven approve/
-//                                 reject — un-acknowledge is the
-//                                 row's only meaningful undo)
+// INF-57 cleanup (2026-05-10): coverage-approved no-source rows
+// (kind='unmapped', status='approved') participate in the symmetric
+// dispatch — × reject direct-writes to rejected, mirroring mapped/VA
+// approved rows. To un-approve back to needs_review the user opens the
+// drawer (drawer footer's Un-approve button calls resetMappingStatus).
 //
 // PR α₀ Path A (2026-05-09): the kind='unmapped' overlay (+ map and
 // ⊘ acknowledge) was DROPPED from the action cell. Re-mapping is now
 // served by the source-field cell's hover pencil affordance (which
-// opens the same `InlineSourcePicker`); acknowledge moves entirely to
-// the drawer. The action cell stays focused on the lifecycle pair.
-// `onInlineMap` and `onInlineAcknowledge` props remain on the cell's
-// interface for upstream pass-through compatibility but are no longer
-// consumed here — a follow-up cleanup PR may drop them.
+// opens the same `InlineSourcePicker`). The action cell stays focused
+// on the approve/reject lifecycle pair.
+// `onInlineMap` remains on the cell's interface for upstream pass-
+// through compatibility but is no longer consumed here.
 //
 // Buttons are `opacity-0` at rest and reveal on `group-hover` /
 // `focus-within` so the column reads as quiet whitespace until the user
@@ -773,8 +729,6 @@ interface InlineActionsCellProps {
   optimisticState?: FieldMappingRowOptimisticState
   onInlineApprove?: (rowId: string) => void
   onInlineReject?: (rowId: string, anchorEl: HTMLElement) => void
-  onInlineAcknowledge?: (rowId: string) => void
-  onInlineUnacknowledge?: (rowId: string) => void
   onInlineMap?: () => void
 }
 
@@ -784,8 +738,6 @@ function InlineActionsCell({
   optimisticState,
   onInlineApprove,
   onInlineReject,
-  onInlineAcknowledge,
-  onInlineUnacknowledge,
   onInlineMap,
 }: InlineActionsCellProps) {
   // Disable all buttons while an optimistic action is in flight so the
@@ -795,93 +747,62 @@ function InlineActionsCell({
 
   // Map optimistic state → which button should pulse. Reject is
   // intentionally absent — it uses the slide cue (PR #60), not the
-  // pulse. target_acknowledged's unacknowledge button (variant='reject')
-  // is also intentionally absent: there's no 'unacknowledging'
-  // optimistic state in the inline path.
+  // pulse.
   const pulseApprove = optimisticState === 'approving'
-  const pulseAcknowledge = optimisticState === 'acknowledging'
   const pulseMap = optimisticState === 'mapping'
 
   const buttons: React.ReactNode[] = []
 
-  // target_acknowledged is the one row kind that opts OUT of the
-  // status-driven approve/reject. Its only meaningful undo is
-  // un-acknowledge (which opens the drawer for confirmation), and its
-  // status is hard-coded 'approved' by the read translator — exposing a
-  // reject button would invite the user to write a coverage rejection
-  // that doesn't reconcile with the acknowledgment row's intent.
-  if (row.kind === 'target_acknowledged') {
-    if (onInlineUnacknowledge !== undefined) {
-      buttons.push(
-        <ActionIconButton
-          key="unacknowledge"
-          testId="field-mapping-row-unacknowledge-button"
-          ariaLabel="Un-acknowledge field"
-          tooltip="Un-acknowledge (opens details)"
-          onClick={() => onInlineUnacknowledge(row.id)}
-          disabled={isBusy}
-          variant="reject"
-        >
-          <X aria-hidden="true" className="h-3.5 w-3.5" />
-        </ActionIconButton>,
-      )
-    }
-  } else {
-    // PR α₀ — status-driven approve/reject for mapped, value_assignment,
-    // and unmapped. The dispatch table:
-    //   needs_review → ✓ + ✗   (approve/reject both surfaced)
-    //   approved     →     ✗   (reject only)
-    //   rejected     → ✓       (un-reject only — re-runs approve flow)
-    const showApprove =
-      (row.status === 'needs_review' || row.status === 'rejected') &&
-      onInlineApprove !== undefined
-    const showReject =
-      (row.status === 'needs_review' || row.status === 'approved') &&
-      onInlineReject !== undefined
+  // PR α₀ — status-driven approve/reject for every row kind. The dispatch
+  // table:
+  //   needs_review → ✓ + ✗   (approve/reject both surfaced)
+  //   approved     →     ✗   (reject only)
+  //   rejected     → ✓       (un-reject only — re-runs approve flow)
+  const showApprove =
+    (row.status === 'needs_review' || row.status === 'rejected') &&
+    onInlineApprove !== undefined
+  const showReject =
+    (row.status === 'needs_review' || row.status === 'approved') &&
+    onInlineReject !== undefined
 
-    if (showApprove) {
-      buttons.push(
-        <ActionIconButton
-          key="approve"
-          testId="field-mapping-row-approve-button"
-          ariaLabel="Approve mapping"
-          tooltip="Approve mapping"
-          onClick={() => onInlineApprove!(row.id)}
-          disabled={isBusy}
-          variant="approve"
-          pulse={pulseApprove}
-        >
-          <Check aria-hidden="true" className="h-3.5 w-3.5" />
-        </ActionIconButton>,
-      )
-    }
-    if (showReject) {
-      buttons.push(
-        <ActionIconButton
-          key="reject"
-          testId="field-mapping-row-reject-button"
-          ariaLabel="Reject mapping"
-          tooltip="Reject mapping"
-          onClick={(e) => onInlineReject!(row.id, e.currentTarget)}
-          disabled={isBusy}
-          variant="reject"
-        >
-          <X aria-hidden="true" className="h-3.5 w-3.5" />
-        </ActionIconButton>,
-      )
-    }
-
-    // PR α₀ Path A (2026-05-09): the kind='unmapped' overlay (+ map and
-    // ⊘ acknowledge) was DROPPED. Re-mapping moves to the source-field
-    // hover pencil; acknowledge moves to the drawer. See header comment.
-    // `onInlineMap`, `onInlineAcknowledge`, `pulseMap`, and
-    // `pulseAcknowledge` are now intentionally unread inside this cell
-    // until the follow-up cleanup PR removes them from the prop interface.
-    void onInlineMap
-    void onInlineAcknowledge
-    void pulseMap
-    void pulseAcknowledge
+  if (showApprove) {
+    buttons.push(
+      <ActionIconButton
+        key="approve"
+        testId="field-mapping-row-approve-button"
+        ariaLabel="Approve mapping"
+        tooltip="Approve mapping"
+        onClick={() => onInlineApprove!(row.id)}
+        disabled={isBusy}
+        variant="approve"
+        pulse={pulseApprove}
+      >
+        <Check aria-hidden="true" className="h-3.5 w-3.5" />
+      </ActionIconButton>,
+    )
   }
+  if (showReject) {
+    buttons.push(
+      <ActionIconButton
+        key="reject"
+        testId="field-mapping-row-reject-button"
+        ariaLabel="Reject mapping"
+        tooltip="Reject mapping"
+        onClick={(e) => onInlineReject!(row.id, e.currentTarget)}
+        disabled={isBusy}
+        variant="reject"
+      >
+        <X aria-hidden="true" className="h-3.5 w-3.5" />
+      </ActionIconButton>,
+    )
+  }
+
+  // PR α₀ Path A (2026-05-09): the kind='unmapped' overlay (+ map) was
+  // DROPPED. Re-mapping moves to the source-field hover pencil. See
+  // header comment. `onInlineMap` and `pulseMap` are intentionally
+  // unread inside this cell.
+  void onInlineMap
+  void pulseMap
 
   return (
     <div
@@ -907,14 +828,14 @@ interface ActionIconButtonProps {
   tooltip: string
   onClick: (e: React.MouseEvent<HTMLButtonElement>) => void
   disabled?: boolean
-  variant: 'approve' | 'reject' | 'map' | 'acknowledge'
+  variant: 'approve' | 'reject' | 'map'
   /**
    * When true, applies the `.animate-button-pulse` keyframe (defined
    * in globals.css) so the button does a Linear-style soft scale +
    * green ring fade-out for ~280ms. Set by the parent based on which
-   * optimistic state is in flight (approving / acknowledging /
-   * mapping). Honors `prefers-reduced-motion: reduce` via the keyframe's
-   * own media-query gate. Reject's slide cue is unrelated (PR #60).
+   * optimistic state is in flight (approving / mapping). Honors
+   * `prefers-reduced-motion: reduce` via the keyframe's own media-query
+   * gate. Reject's slide cue is unrelated (PR #60).
    */
   pulse?: boolean
   children: React.ReactNode
@@ -969,7 +890,6 @@ const ACTION_VARIANT_CLASSNAME: Record<
   approve: 'text-slate-500 hover:bg-green-100 hover:text-green-700',
   reject: 'text-slate-500 hover:bg-red-100 hover:text-red-700',
   map: 'text-slate-500 hover:bg-blue-100 hover:text-blue-700',
-  acknowledge: 'text-slate-500 hover:bg-slate-200 hover:text-slate-700',
 }
 
 // ─── Rule resolution ─────────────────────────────────────────────────────────
@@ -1077,8 +997,8 @@ function MappedSourceFieldCell({ row, rule }: { row: MappedRow; rule: MappingRow
   if (row.sources.length === 0) {
     // Contract defense: a 'mapped' row without sources is a server-side
     // violation of the discriminated union (would be 'value_assignment'
-    // or 'target_acknowledged' depending on combination_type /
-    // is_acknowledged). Render em-dash rather than crashing.
+    // when combination_type='custom_sql', else 'unmapped'). Render
+    // em-dash rather than crashing.
     return <EmDashCell srLabel="no source field" />
   }
   switch (rule) {
@@ -1177,8 +1097,8 @@ function Rule4FieldRender({ sources }: { sources: MappingSourceRef[] }) {
 
 /**
  * Italic "No source mapped" phrase used by every non-mapped row kind in
- * the source-table column (PR α₀ unification — VA, target_acknowledged,
- * and unmapped rows all share this rendering). Replaces the prior
+ * the source-table column (PR α₀ unification — VA and unmapped rows
+ * share this rendering). Replaces the prior
  * `ValueAssignmentSourceFieldCell` which rendered the same phrase in the
  * source-FIELD column for VA rows only — α₀ moved the phrase to the
  * table column and collapsed the three em-dash branches into a single
@@ -1313,22 +1233,6 @@ function ConfidenceCell({ row }: { row: MappingRow }) {
 }
 
 // ─── Target cell ─────────────────────────────────────────────────────────────
-//
-// Phase 4-polish-1 final refinements (Refinement B, 2026-04-26): the
-// inline "(acknowledged)" suffix was DROPPED. The visual signals
-// already present (slate-300 status dot vs. the slate-300 unmapped
-// dot is differentiated via the StatusDot's hover tooltip; em-dashes
-// in the source columns; em-dash in the confidence column) carry the
-// distinction without the parenthetical. The row-level aria-label
-// still states "acknowledged as not migratable" verbatim for AT
-// users, and the drawer's Acknowledgment section is the source of
-// truth for the reason text. Hover-tooltip on the StatusDot
-// preserves the at-a-glance verification path for sighted users.
-//
-// Earlier passes (founder Q6 lock): the inline suffix was the
-// preferred pattern, which we now revert based on canary review —
-// the suffix duplicated information already conveyed by the dot
-// color and the em-dashes, reading as visual noise in dense groups.
 
 function TargetCell({ row }: { row: MappingRow }) {
   // Refinement 6 (Phase 4-polish-1 final-final, 2026-04-26): the target
@@ -1396,31 +1300,17 @@ function EmDashCell({
 //
 // The aria-label is preserved verbatim ("status: Approved") so screen-
 // reader users continue to hear the status on row entry. Founder Q7.2
-// unified slate-300 for the unmapped + acknowledged dots — both are
-// "not actionable" states; merging the dot color removes a subtle
-// distraction.
-//
-// Refinement B (Phase 4-polish-1 final, 2026-04-26): a `title=` hover
-// tooltip is now wired so sighted users can disambiguate the slate-300
-// dot (acknowledged vs. unmapped — same hue post-Q7.2) without relying
-// on AT. The tooltip text branches on `kind`:
-//
-//   • kind === 'target_acknowledged' → "Acknowledged"
-//   • otherwise                       → STATUS_CONFIG[status].label
-//
-// The aria-label remains the canonical screen-reader surface; the
-// title is purely a sighted-user fallback (mouse hover).
+// unified slate-300 for unmapped+needs_review dots; INF-57 cleanup
+// (2026-05-10) collapsed acknowledged into the canonical approved dot,
+// so the only kind-conditional tooltip override was dropped — the
+// `title=` hover tooltip now mirrors STATUS_CONFIG[status].label
+// uniformly across kinds.
 
 type RowStatus = MappingRow['status']
-type RowKind = MappingRow['kind']
 
-function StatusDot({ status, kind }: { status: RowStatus; kind: RowKind }) {
+function StatusDot({ status }: { status: RowStatus }) {
   const config = STATUS_CONFIG[status]
-  // Acknowledged rows carry status='approved' but visually disambiguate
-  // from a regular green-approved row via the hover tooltip override.
-  // The aria-label remains the canonical screen-reader surface; the
-  // title is purely a sighted-user fallback (Refinement B).
-  const tooltipLabel = kind === 'target_acknowledged' ? 'Acknowledged' : config.label
+  const tooltipLabel = config.label
   // PR α₀ — hollow signals REJECTED (status-driven), not UNMAPPED
   // (kind-driven). The form-vs-fill distinction stays as the
   // colorblind-robust signal: a hollow ring is unambiguous regardless
@@ -1490,9 +1380,9 @@ const STATUS_CONFIG: Record<
 // Splitting the affordances visually (chevron in source area = expand;
 // row body click = open drawer) makes the contract obvious.
 //
-// Single-source rows (Rule 1, VA, target_acknowledged, unmapped) render
-// no chevron at all (this component is gated by `canExpand` at the call
-// site, so single-source rows don't even instantiate it).
+// Single-source rows (Rule 1, VA, unmapped) render no chevron at all
+// (this component is gated by `canExpand` at the call site, so
+// single-source rows don't even instantiate it).
 //
 // Click handler still calls `stopPropagation` so the row-body click
 // (drawer open) doesn't fire when the chevron is clicked. Keyboard
@@ -1578,7 +1468,6 @@ function ExpansionRegion({
  *   "ACCT_MASTER.ACCT_NO mapped to accounts.account_id at 98% confidence,
  *    approved"
  *   "accounts.created_at value assignment at 95% confidence, approved"
- *   "customers.internal_flag acknowledged as not migratable: system default"
  *   "accounts.new_field not yet mapped"
  *
  * Gap 5b addition: multi-source rows (Rule 2/3/4) gain a count phrase
@@ -1623,17 +1512,7 @@ function buildAriaLabel(
     }
     case 'value_assignment':
       return `${targetQualified} value assignment${confPhrase}${statusPhrase}${clickPhrase}`
-    case 'target_acknowledged': {
-      return buildAckAriaLabel(row, targetQualified) + clickPhrase
-    }
     case 'unmapped':
       return `${targetQualified} not yet mapped${clickPhrase}`
   }
-}
-
-function buildAckAriaLabel(row: TargetAcknowledgedRow, targetQualified: string): string {
-  const reasonPhrase = row.acknowledgmentReason
-    ? `: ${row.acknowledgmentReason}`
-    : ''
-  return `${targetQualified} acknowledged as not migratable${reasonPhrase}`
 }

@@ -8,7 +8,7 @@ import type { MappingSourceRef } from '@/lib/types/mappings-for-redesign'
 // defined in the canonical spec (docs/features/mapping-redesign.md §Row design
 // lines ~695-784). The classifier only answers the VISUAL-complexity question;
 // the row kind dispatcher in FieldMappingRow still gates on `row.kind` first
-// (value_assignment / target_acknowledged / unmapped never call this helper).
+// (value_assignment / unmapped never call this helper).
 //
 // Rules (strict — only one fires per row):
 //

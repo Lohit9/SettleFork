@@ -10,8 +10,7 @@
 //   D1.  Edit button is rendered (rightmost in the
 //        ApproveRejectButtons footer) with the documented test-id.
 //   D2.  Edit visibility gate hides the affordance on rejected /
-//        target_acknowledged / unmapped / custom_sql rows
-//        (founder §3.2-§3.3).
+//        unmapped / custom_sql rows (founder §3.2-§3.3).
 //   D3.  `handleEditClick` builds `editInitialState` from the row's
 //        sources (selectedIds in ordinal order; joinAnnotations
 //        recovered from each cross-table source's `joinSpec.viaFkField`,
@@ -90,19 +89,19 @@ describe('[mapping-drawer-edit] D1 — Edit pencil presence', () => {
 // ─────────────────────────────────────────────────────────────────────
 
 describe('[mapping-drawer-edit] D2 — Edit visibility gate', () => {
-  it('D2a: pencil renders inside MappedBody + UnmappedBody (Phase E PR α expansion); AcknowledgedBody + VA do NOT mount it', () => {
-    // Phase E PR α: the pencil affordance now also mounts inside
+  it('D2a: pencil renders inside MappedBody + UnmappedBody (Phase E PR α expansion); VA does NOT mount it', () => {
+    // Phase E PR α: the pencil affordance also mounts inside
     // UnmappedBody — mirrors the grid's source-cell pencil and gives
     // the drawer parity with the inline grid for no-source rows.
-    // Acknowledged + VA bodies still don't mount the pencil per OQ-3
-    // (acknowledged un-acknowledge is the only mutation path, served
-    // from the footer; VA expression authoring lives on Transform tab).
+    // INF-57 cleanup (2026-05-10) folded AcknowledgedBody into
+    // UnmappedBody, so coverage-approved no-source rows pick up the
+    // pencil affordance for free as collateral effect of the body
+    // unification (locked design decision 3). VA still doesn't mount
+    // the pencil — VA expression authoring lives on the Transform tab.
     const mappedBody = sliceBetween(SRC, 'function MappedBody', '\n}\n')
     expect(mappedBody).toMatch(/<EditPencilButton/)
     const unmappedBody = sliceBetween(SRC, 'function UnmappedBody', '\n}\n')
     expect(unmappedBody).toMatch(/<EditPencilButton/)
-    const ackBody = sliceBetween(SRC, 'function AcknowledgedBody', '\n}\n')
-    expect(ackBody).not.toMatch(/<EditPencilButton/)
     const vaBody = sliceBetween(SRC, 'function ValueAssignmentBody', '\n}\n')
     expect(vaBody).not.toMatch(/<EditPencilButton/)
   })

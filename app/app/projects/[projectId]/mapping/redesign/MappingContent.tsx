@@ -91,7 +91,6 @@ import {
   rejectFieldMapping,
   type CreateFieldMappingCombinationType,
 } from '@/lib/actions/mappings-for-redesign'
-import { acknowledgeField } from '@/lib/actions/field-acknowledgments'
 import {
   getPathDOutputsForProject,
   type PathDOutputs,
@@ -409,8 +408,7 @@ export default function MappingRedesignContent({
  * to find every main-view row that consumes a given source field.
  *
  * Only `MappedRow` rows contribute (other row kinds have no sources).
- * `value_assignment`, `target_acknowledged`, and `unmapped` rows are
- * silently skipped.
+ * `value_assignment` and `unmapped` rows are silently skipped.
  *
  * Empty input → empty map (not null) so callers can treat the lookup
  * uniformly.
@@ -528,23 +526,6 @@ function MappingContentLoaded({
   const [drawerRowId, setDrawerRowId] = useState<string | null>(() => {
     const initial = (searchParams ?? new URLSearchParams()).get('drawer')
     return initial && initial.length > 0 ? initial : null
-  })
-
-  // ── Phase 4-polish-3 — `?focus=unack` deep-link param ─────────────
-  //
-  // When the inline ✗ on a `target_acknowledged` row fires, the row
-  // handler writes `?drawer=<rowId>&focus=unack` so the drawer opens
-  // and lands the user on the destructive Un-acknowledge button. The
-  // drawer reads the param via the `focus` prop and pulses the
-  // button, then fires `onFocusConsumed` so we can strip the param
-  // from the URL — leaving it would re-fire the focus on every
-  // unrelated drawer-affecting re-render.
-  //
-  // Initialised from the URL on mount; cleared by
-  // `handleFocusConsumed` after the drawer reports consumption.
-  const [drawerFocus, setDrawerFocus] = useState<'unack' | null>(() => {
-    const initial = (searchParams ?? new URLSearchParams()).get('focus')
-    return initial === 'unack' ? 'unack' : null
   })
 
   // ── Phase 4a-2 — pendingDrawerRowId sentinel ──────────────────────
@@ -1002,12 +983,12 @@ function MappingContentLoaded({
   }, [])
 
   // Build the post-reject UnmappedRow shape from the current row's
-  // mapped/value-assignment/unmapped identity. PR α₀: rejecting any
-  // non-acknowledged row produces an UnmappedRow with status='rejected'
-  // (post-PR-γ widened union — coverage row drives the persisted state
-  // on next read). Pre-PR-γ this emitted status='unmapped'; the new
-  // override mirrors the wire-data shape the translator emits when a
-  // coverage row's status='rejected' (no TFM, kind='unmapped').
+  // mapped/value-assignment/unmapped identity. PR α₀: rejecting any row
+  // produces an UnmappedRow with status='rejected' (post-PR-γ widened
+  // union — coverage row drives the persisted state on next read).
+  // Pre-PR-γ this emitted status='unmapped'; the new override mirrors
+  // the wire-data shape the translator emits when a coverage row's
+  // status='rejected' (no TFM, kind='unmapped').
   //
   // mapping_content='no-source' and statusSetBy='user' match the
   // optimistic intent: the user explicitly clicked reject, so the row
@@ -1016,16 +997,10 @@ function MappingContentLoaded({
   // translator already attached one; otherwise null (orphan / target_only
   // case — no coverage row existed yet, the post-reject UPSERT in the
   // server action creates one with coverage_status='gap' default).
-  //
-  // Returns null only for kinds that are not user-rejectable from the
-  // grid: target_acknowledged is the sole exclusion (use the drawer's
-  // un-acknowledge flow instead). Mapped + VA + unmapped all flow
-  // through here.
   const buildUnmappedOverride = useCallback(
     (rowId: string): MappingRow | null => {
       const row = data.rows.find((r) => r.id === rowId)
       if (!row) return null
-      if (row.kind === 'target_acknowledged') return null
       return {
         id: row.id,
         targetField: row.targetField,
@@ -1429,85 +1404,6 @@ function MappingContentLoaded({
     clearOptimisticData,
   ])
 
-  const handleInlineAcknowledge = useCallback(
-    async (rowId: string) => {
-      const row = data.rows.find((r) => r.id === rowId)
-      if (row === undefined) return
-      const targetFieldId = row.targetField.id
-      setOptimistic(rowId, 'acknowledging')
-      try {
-        // `acknowledgeField` throws on failure (back-compat semantic
-        // from the legacy MappingContent, kept by `field-
-        // acknowledgments.ts`). Inline path uses the bare reason
-        // `'acknowledged'` — same default the legacy sidebar action
-        // surface used. For richer reasons users still go through
-        // the drawer's W1 form.
-        await acknowledgeField(projectId, targetFieldId, 'target', 'acknowledged')
-        pushToast({
-          id: `inline-acknowledge-${rowId}-${Date.now()}`,
-          variant: 'success',
-          message: 'Field acknowledged.',
-        })
-        setTimeout(() => router.refresh(), 150)
-      } catch (err) {
-        pushToast({
-          id: `inline-acknowledge-${rowId}-${Date.now()}`,
-          variant: 'error',
-          message:
-            err instanceof Error ? err.message : 'Could not acknowledge field.',
-        })
-        clearOptimistic(rowId)
-        return
-      }
-      setTimeout(() => clearOptimistic(rowId), 250)
-    },
-    [data.rows, projectId, setOptimistic, clearOptimistic, pushToast, router],
-  )
-
-  // The inline ✗ on `target_acknowledged` rows opens the drawer with
-  // the `?focus=unack` deep-link rather than firing the un-acknowledge
-  // wrapper directly. Founder lock — un-acknowledge is a destructive
-  // identity-dissolving action and deserves a confirmation surface;
-  // the drawer's existing UnacknowledgeConfirmDialog is that surface.
-  // Block F (this same phase) wires the focus param into a scroll +
-  // brief-highlight pulse on the drawer's existing un-ack button.
-  const handleInlineUnacknowledge = useCallback(
-    (rowId: string) => {
-      setDrawerRowId(rowId)
-      setDrawerFocus('unack')
-      const filterQs = serializeFilterStateToQuery(filters)
-      const params = new URLSearchParams(filterQs)
-      params.set('drawer', rowId)
-      params.set('focus', 'unack')
-      const qs = params.toString()
-      router.replace(
-        `/app/projects/${projectId}/mapping${qs ? `?${qs}` : ''}`,
-        { scroll: false },
-      )
-    },
-    [router, projectId, filters],
-  )
-
-  // ── Phase 4-polish-3 — focus consumption + URL strip ──────────────
-  //
-  // Fired by the drawer once it has scrolled the un-acknowledge
-  // button into view and started its highlight pulse. We clear the
-  // local `drawerFocus` state and rewrite the URL without the
-  // `?focus=unack` param so the focus does not re-trigger on
-  // unrelated re-renders (e.g., subsequent filter changes that
-  // re-emit `writeUrl`).
-  const handleFocusConsumed = useCallback(() => {
-    setDrawerFocus(null)
-    const filterQs = serializeFilterStateToQuery(filters)
-    const params = new URLSearchParams(filterQs)
-    if (drawerRowId !== null) params.set('drawer', drawerRowId)
-    const qs = params.toString()
-    router.replace(
-      `/app/projects/${projectId}/mapping${qs ? `?${qs}` : ''}`,
-      { scroll: false },
-    )
-  }, [router, projectId, filters, drawerRowId])
-
   const handleInlineSourceCommit = useCallback(
     async (
       rowId: string,
@@ -1616,7 +1512,7 @@ function MappingContentLoaded({
   )
 
   const handleDrawerActionComplete = useCallback(
-    (action: 'approve' | 'reject' | 'unacknowledge', rowId: string) => {
+    (action: 'approve' | 'reject' | 'reset', rowId: string) => {
       // Phase 3 Gap 11b — clear the sidebar highlight after any
       // drawer action. Reject deletes the TFM (the highlighted row
       // identity dissolves on the server), so a stale highlight
@@ -1625,22 +1521,22 @@ function MappingContentLoaded({
       // over-clearing is acceptable per the founder's "additional
       // concern" decision in the Gap 11b alignment.
       //
-      // Phase 4b-2 — un-acknowledge mirrors reject: the bare-ack
-      // TFM row is deleted, so the row id stops resolving. Close
-      // the drawer + clear the URL identically.
+      // INF-57 cleanup — `reset` (un-approve via resetMappingStatus)
+      // mirrors reject's drawer-close + URL-clear behavior: the row
+      // visually transitions from approved → needs_review and the
+      // user expects the drawer to close on confirm.
       onClearHighlight()
       // Drawer-reject path equivalent of the inline override — pre-
       // apply the unmapped shape on the underlying row so it doesn't
       // blip during the unmount/remount when router.refresh() lands.
-      // Unacknowledge intentionally not covered (separate destructive
-      // action; if user reports flashing, follow-up issue applies the
-      // same pattern using the override map already wired here).
+      // Reset intentionally not covered (the row identity is preserved
+      // and the next refresh resolves it from the coverage row).
       if (action === 'reject') {
         const override = buildUnmappedOverride(rowId)
         if (override) writeOptimisticData(rowId, override)
       }
       router.refresh()
-      if (action === 'reject' || action === 'unacknowledge') {
+      if (action === 'reject' || action === 'reset') {
         setDrawerRowId(null)
         writeUrl(filters, null)
       }
@@ -1838,11 +1734,10 @@ function MappingContentLoaded({
   // kebab item's enabled/disabled state and subtitle. Iterated once
   // over `data.rows` rather than per-group inside the render loop
   // (avoids O(n×m) work on every interaction). Bulk wrapper scope is
-  // hard-coded `status='needs_review' AND is_acknowledged=false`; the
-  // ack-only rows enter the kind discriminator as
-  // `target_acknowledged`, so filtering by `kind === 'mapped' ||
-  // 'value_assignment'` AND `status === 'needs_review'` matches the
-  // server's WHERE clause exactly.
+  // hard-coded `status='needs_review' AND is_acknowledged=false`;
+  // legacy bare-ack TFMs surface as `kind: 'unmapped'` post-INF-57, so
+  // filtering by `kind === 'mapped' || 'value_assignment'` AND
+  // `status === 'needs_review'` matches the server's WHERE clause exactly.
   const needsReviewCountByTable = useMemo(() => {
     const m = new Map<string, number>()
     for (const row of data.rows) {
@@ -1995,8 +1890,6 @@ function MappingContentLoaded({
                       onPickerOpenChange={setPickerOpenRowId}
                       onInlineApprove={handleInlineApprove}
                       onInlineReject={handleInlineRejectClick}
-                      onInlineAcknowledge={handleInlineAcknowledge}
-                      onInlineUnacknowledge={handleInlineUnacknowledge}
                       onInlineSourceCommit={handleInlineSourceCommit}
                     />
                   )
@@ -2035,8 +1928,6 @@ function MappingContentLoaded({
             : null
         }
         onRestoreConsumed={handleRestoreConsumed}
-        focus={drawerFocus}
-        onFocusConsumed={handleFocusConsumed}
         pathDOutputs={pathDOutputs}
       />
 
