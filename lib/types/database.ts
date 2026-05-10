@@ -75,6 +75,8 @@ export interface Field {
   /** Added by migration 064 — raw DEFAULT expression from DDL / information_schema.
    *  NULL means no default. Stored verbatim (e.g. "CURRENT_TIMESTAMP", "0.00"). */
   default_value: string | null
+  /** Added by migration 090. Free-text business description. */
+  description: string | null
 }
 
 export interface DataRow {
