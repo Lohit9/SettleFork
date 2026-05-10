@@ -174,6 +174,12 @@ const rpcSpy = vi.spyOn(supabaseAdmin, 'rpc').mockImplementation(
         .select('id', { count: 'exact', head: true })
         .eq('target_field_id', fieldId)
     ).count ?? 0
+    const vrCount = (
+      await supabaseAdmin
+        .from('validation_rules')
+        .select('id', { count: 'exact', head: true })
+        .eq('field_id', fieldId)
+    ).count ?? 0
 
     // Hard delete (FK CASCADEs handle dependents). JSONB scrub is deliberately
     // skipped in the stub — the real RPC handles it. The Path D smoke check
@@ -193,6 +199,7 @@ const rpcSpy = vi.spyOn(supabaseAdmin, 'rpc').mockImplementation(
           staged_rows_scrubbed: 0,
           acknowledgments: ackLegacy + ackNew,
           coverage_rows: coverageCount,
+          validation_rules: vrCount,
         },
         had_authored_transform_sql: false,
       },
@@ -345,6 +352,7 @@ describeFn('[integration] previewFieldDeletion', () => {
       stagedRows: expect.any(Number),
       acknowledgments: expect.any(Number),
       coverageRows: expect.any(Number),
+      validationRules: expect.any(Number),
     })
     expect(typeof result.data.stagedRowsCapped).toBe('boolean')
     expect(typeof result.data.hasAuthoredTransformSQL).toBe('boolean')
@@ -358,6 +366,7 @@ describeFn('[integration] previewFieldDeletion', () => {
     expect(result.data.counts.tfms).toBe(0)
     expect(result.data.counts.mappingSources).toBe(0)
     expect(result.data.counts.stagedRows).toBe(0)
+    expect(result.data.counts.validationRules).toBe(0)
     expect(result.data.requiresTypedConfirmation).toBe(false)
   })
 
@@ -404,6 +413,7 @@ describeFn('[integration] deleteField', () => {
       stagedRowsScrubbed: expect.any(Number),
       acknowledgments: expect.any(Number),
       coverageRows: expect.any(Number),
+      validationRules: expect.any(Number),
       hadAuthoredTransformSql: expect.any(Boolean),
     })
 
