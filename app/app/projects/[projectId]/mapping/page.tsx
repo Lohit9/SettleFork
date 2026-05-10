@@ -6,6 +6,8 @@ import { getProjectStats } from '@/lib/quality/project-stats'
 import MappingContent from './MappingContent'
 import MappingRedesignContent from './redesign/MappingContent'
 
+export const maxDuration = 800
+
 interface Props {
   params: Promise<{ projectId: string }>
 }
