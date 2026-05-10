@@ -352,6 +352,67 @@ async function persistDataQuality(
   return (insResult.data ?? []).map((r) => r.id as string)
 }
 
+// ─── INF-53 user-lock helpers ────────────────────────────────────────────────
+//
+// Re-running Path D used to silently overwrite customer approve/reject
+// decisions on every UPSERT. INF-53 fixes that by pre-fetching the
+// existing user-locked rows on each surface and preserving their status
+// in the row mapper (Approach B: refresh AI metadata, preserve user
+// status — locked semantic is "respect my decision," not "freeze the
+// AI commentary").
+//
+// Lock signal differs by surface:
+//   * coverage  → status_set_by='user' (explicit provenance from
+//                 setCoverageStatus in mappings-for-redesign.ts)
+//   * TFM       → status IN ('approved', 'rejected'). AI never emits
+//                 these values; MappingPayloadSchema defaults to
+//                 'needs_review'. So the status itself is the user-
+//                 action signal — no separate provenance column needed.
+//
+// Each helper returns a Map<target_field_id, status> the persister
+// consults during the row map. Single round-trip per surface; cheap.
+
+async function fetchCoverageUserLocks(
+  admin: SupabaseClient,
+  projectId: string,
+): Promise<Map<string, 'needs_review' | 'approved' | 'rejected'>> {
+  const res = await admin
+    .from('target_field_coverage')
+    .select('target_field_id, status')
+    .eq('project_id', projectId)
+    .eq('status_set_by', 'user')
+  if (res.error) {
+    throw new Error(`coverage user-lock fetch: ${res.error.message}`)
+  }
+  const map = new Map<string, 'needs_review' | 'approved' | 'rejected'>()
+  for (const row of res.data ?? []) {
+    map.set(
+      row.target_field_id as string,
+      row.status as 'needs_review' | 'approved' | 'rejected',
+    )
+  }
+  return map
+}
+
+async function fetchTfmUserLocks(
+  admin: SupabaseClient,
+  projectId: string,
+): Promise<Map<string, 'approved' | 'rejected'>> {
+  const res = await admin
+    .from('target_field_mappings')
+    .select('target_field_id, status')
+    .eq('project_id', projectId)
+    .in('status', ['approved', 'rejected'])
+  if (res.error) {
+    throw new Error(`tfm user-lock fetch: ${res.error.message}`)
+  }
+  const map = new Map<string, 'approved' | 'rejected'>()
+  for (const row of res.data ?? []) {
+    map.set(row.target_field_id as string, row.status as 'approved' | 'rejected')
+  }
+  return map
+}
+
 async function persistMappings(
   admin: SupabaseClient,
   projectId: string,
@@ -361,11 +422,22 @@ async function persistMappings(
 ): Promise<string[]> {
   if (data.length === 0) return []
 
+  // INF-53 — pre-fetch existing user-approved/rejected TFMs so the
+  // UPSERT below preserves their status. Without this fetch, re-running
+  // Path D would silently overwrite every user approval with the AI's
+  // default 'needs_review', a fundamental trust violation.
+  const userLocks = await fetchTfmUserLocks(admin, projectId)
+
   // Build TFM rows; resolve data_quality_flag_indices → dqIds[]
   const tfmRows = data.map((m) => {
     const dqUuids = m.data_quality_flag_indices
       .map((idx) => dqIds[idx])
       .filter((u): u is string => Boolean(u))
+    // INF-53 — preserve user-set status when re-running Path D. AI
+    // metadata (ai_reasoning, confidence, transformation_intent, etc.)
+    // continues to refresh on every run; only the status decision is
+    // sticky for user-locked rows.
+    const lockedStatus = userLocks.get(m.target_field_id)
     return {
       project_id: projectId,
       target_field_id: m.target_field_id,
@@ -378,7 +450,7 @@ async function persistMappings(
       combination_type: m.combination_type,
       combination_sql: m.combination_sql ?? null,
       confidence: m.confidence ?? null,
-      status: m.status,
+      status: lockedStatus ?? m.status,
       experiment_run_id: experimentRunId,
     }
   })
@@ -562,22 +634,37 @@ async function persistCoverage(
 ): Promise<string[]> {
   if (data.length === 0) return []
 
-  const rows = data.map((c) => ({
-    project_id: projectId,
-    target_field_id: c.target_field_id,
-    coverage_status: c.coverage_status,
-    ai_reasoning: c.ai_reasoning ?? null,
-    default_value_recommendation: c.default_value_recommendation ?? null,
-    status: defaultStatusForCoverageStatus(c.coverage_status),
-    status_set_by: 'ai_auto' as const,
-    // PR γ.1 — AI confidence on no-source rows. Path D emits 0.0-1.0
-    // per CoveragePayloadSchema; persisted directly (mirrors the TFM
-    // persistence convention at line 380 above — no ×100 scaling).
-    // Optional on the wire payload, so legacy responses without the
-    // field land as NULL and the UI renders an em-dash.
-    confidence: c.confidence ?? null,
-    experiment_run_id: experimentRunId,
-  }))
+  // INF-53 — pre-fetch existing user-locked coverage rows
+  // (status_set_by='user') so the UPSERT below preserves their status +
+  // status_set_by. Without this fetch, re-running Path D would silently
+  // overwrite every customer-approved/rejected coverage row with
+  // status='needs_review' + status_set_by='ai_auto'. Edge case
+  // documented in PR body: when coverage_status changes on re-run for
+  // a user-locked row, the AI verdict refreshes (e.g., 'gap' → 'covered'
+  // because a new mapping landed in between) but the approval status
+  // stands — the lock is on STATUS, not on the AI's verdict.
+  const userLocks = await fetchCoverageUserLocks(admin, projectId)
+
+  const rows = data.map((c) => {
+    const lockedStatus = userLocks.get(c.target_field_id)
+    const isLocked = lockedStatus !== undefined
+    return {
+      project_id: projectId,
+      target_field_id: c.target_field_id,
+      coverage_status: c.coverage_status,
+      ai_reasoning: c.ai_reasoning ?? null,
+      default_value_recommendation: c.default_value_recommendation ?? null,
+      status: isLocked ? lockedStatus : defaultStatusForCoverageStatus(c.coverage_status),
+      status_set_by: isLocked ? ('user' as const) : ('ai_auto' as const),
+      // PR γ.1 — AI confidence on no-source rows. Path D emits 0.0-1.0
+      // per CoveragePayloadSchema; persisted directly (mirrors the TFM
+      // persistence convention at line 380 above — no ×100 scaling).
+      // Optional on the wire payload, so legacy responses without the
+      // field land as NULL and the UI renders an em-dash.
+      confidence: c.confidence ?? null,
+      experiment_run_id: experimentRunId,
+    }
+  })
 
   const upResult = await admin
     .from('target_field_coverage')
