@@ -107,6 +107,32 @@ describe('[mapping-virtualization] VIRT1-VIRT6 source-level invariants', () => {
     expect(FIELD_MAPPING_ROW).toMatch(/data-index=\{dataIndex\}/)
   })
 
+  it('VIRT4b: in TargetTableGroup, `data-index` and `ref={virtualizer.measureElement}` live on the SAME JSX element (INF-84 regression guard)', () => {
+    // INF-84 root cause: `@tanstack/virtual-core@3.x` reads `data-index`
+    // ONLY from the DOM node ref'd by `measureElement`; it does not
+    // traverse descendants. A wrapper div that carried a misspelt
+    // `data-virtual-index` (one-char typo) silently failed to register
+    // measurements, all rows stayed at the 40px `estimateSize`, and
+    // multi-source row expansions overlapped neighbours in the
+    // virtualized branch (≥50-row tables like ICC). VIRT4 above
+    // substring-matched `data-index=\{dataIndex\}` globally and missed
+    // this bug because the attribute happened to exist elsewhere in
+    // FieldMappingRow (the inner row div) but NOT on the wrapping div
+    // react-virtual was actually measuring.
+    //
+    // This assertion pins the corrected co-location: order-agnostic
+    // lookaheads from `<div\b` confirm BOTH attributes appear within
+    // the same JSX opening tag (within 400 chars, well above the
+    // current ~120-char element).
+    expect(TARGET_TABLE_GROUP).toMatch(
+      /<div\b(?=[\s\S]{0,400}?\bdata-index=\{virtualItem\.index\})(?=[\s\S]{0,400}?\bref=\{virtualizer\.measureElement\})/,
+    )
+    // Belt-and-suspenders: the misspelt attribute MUST NOT reappear.
+    // A future revert that re-typos the name without touching the
+    // co-location lookahead would otherwise reintroduce INF-84.
+    expect(TARGET_TABLE_GROUP).not.toMatch(/\bdata-virtual-index\b/)
+  })
+
   it('VIRT5: MappingContent owns lifted state (expandedRowIds + pickerOpenRowId), threads it into <TargetTableGroup>, and FieldMappingRow declares the matching props', () => {
     // MappingContent declares both state slots.
     expect(MAPPING_CONTENT).toMatch(

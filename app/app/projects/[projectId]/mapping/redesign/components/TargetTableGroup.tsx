@@ -578,7 +578,7 @@ function VirtualizedRowList({
         return (
           <div
             key={row.id}
-            data-virtual-index={virtualItem.index}
+            data-index={virtualItem.index}
             ref={virtualizer.measureElement}
             style={{
               position: 'absolute',
