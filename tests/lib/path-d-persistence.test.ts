@@ -641,6 +641,92 @@ describe('persistPathDOutput — INF-45 mapping_sources regression guard', () =>
   })
 })
 
+// ─── Flat-view confidence bug — mapping_sources.confidence propagation ───────
+//
+// Before this fix, persistMappingSources hard-coded `confidence: null` on
+// every inserted row. Because the DB-side trigger
+// `mapping_sources_confidence_recompute` (migration 074 STEP 4) runs
+// `SET TFM.confidence = MIN(mapping_sources.confidence)` after every
+// source INSERT, the all-NULL set produced MIN=NULL and clobbered the
+// TFM's Path-D-emitted 0-1 confidence to NULL — leaving the flat
+// (spreadsheet) Mapping view to render "—" for every Path-D-generated
+// mapped TFM, and the per-source rows alongside.
+//
+// The fix propagates the parent MappingPayload's `confidence` onto each
+// inserted mapping_source row (same value for all sources of a TFM —
+// Path D's schema carries one confidence per mapping, not per source).
+// MIN of identical values equals the value, so the trigger no longer
+// overwrites a meaningful TFM.confidence with NULL.
+//
+// These tests pin: (1) the wire shape includes a non-null confidence
+// matching the parent payload, (2) NULL on the payload (defensive)
+// still maps to NULL on the rows.
+
+describe('persistPathDOutput — flat-view confidence propagation', () => {
+  it('propagates parent MappingPayload.confidence onto every mapping_source row', async () => {
+    const mockResult = inf45MockAdminWithFields([
+      { id: INF45_SOURCE_A, table_id: INF45_SOURCE_TABLE_A },
+      { id: INF45_SOURCE_B, table_id: INF45_SOURCE_TABLE_B },
+    ])
+
+    await persistPathDOutput({
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      supabaseAdmin: mockResult.admin as any,
+      projectId: PROJECT_ID,
+      userId: USER_ID,
+      experimentRunId: RUN_ID,
+      parsed: buildInf45Parsed([INF45_SOURCE_A, INF45_SOURCE_B]),
+    })
+
+    const msInsert = mockResult.calls.find(
+      (c) => c.table === 'mapping_sources' && c.method === 'insert',
+    )
+    expect(msInsert).toBeDefined()
+    const rows = msInsert!.args[0] as Array<{
+      target_field_mapping_id: string
+      source_field_id: string
+      confidence: number | null
+    }>
+    expect(rows).toHaveLength(2)
+
+    // buildInf45Parsed pins parent confidence to 0.9. Both source rows
+    // must carry the same value so the trigger's MIN computes 0.9 (not
+    // NULL) and TFM.confidence survives the recompute.
+    expect(rows[0]!.confidence).toBe(0.9)
+    expect(rows[1]!.confidence).toBe(0.9)
+  })
+
+  it('passes through null when the parent MappingPayload omits confidence (defensive)', async () => {
+    // Build a payload with `confidence: undefined` (Zod allows .optional()
+    // on path-d-parser.ts:49). The persistence layer must NOT crash and
+    // must write null — matches the pre-fix safety net for malformed
+    // payloads.
+    const parsed = buildInf45Parsed([INF45_SOURCE_A])
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    ;(parsed.mappings as any).data[0].confidence = undefined
+
+    const mockResult = inf45MockAdminWithFields([
+      { id: INF45_SOURCE_A, table_id: INF45_SOURCE_TABLE_A },
+    ])
+
+    await persistPathDOutput({
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      supabaseAdmin: mockResult.admin as any,
+      projectId: PROJECT_ID,
+      userId: USER_ID,
+      experimentRunId: RUN_ID,
+      parsed,
+    })
+
+    const msInsert = mockResult.calls.find(
+      (c) => c.table === 'mapping_sources' && c.method === 'insert',
+    )
+    const rows = msInsert!.args[0] as Array<{ confidence: number | null }>
+    expect(rows).toHaveLength(1)
+    expect(rows[0]!.confidence).toBeNull()
+  })
+})
+
 // ── INF-53: re-run preserves user-set status ───────────────────────────────
 //
 // Pre-INF-53 the coverage + TFM UPSERTs unconditionally overwrote `status`

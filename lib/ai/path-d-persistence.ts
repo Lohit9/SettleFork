@@ -507,14 +507,16 @@ async function persistMappingSources(
 ): Promise<number> {
   if (data.length === 0 || tfmIdsInOrder.length === 0) return 0
 
-  // Build (tfmId, source_field_id, ordinal) tuples. Skip mappings whose
-  // source_field_ids array is empty (no sources to associate). Skip
-  // entries whose tfmId failed to resolve (defensive — persistMappings
-  // already filtered these out via the `idByTargetFieldId` lookup).
+  // Build (tfmId, source_field_id, ordinal, confidence) tuples. Skip
+  // mappings whose source_field_ids array is empty (no sources to
+  // associate). Skip entries whose tfmId failed to resolve (defensive —
+  // persistMappings already filtered these out via the
+  // `idByTargetFieldId` lookup).
   type SourceTuple = {
     tfmId: string
     sourceFieldId: string
     ordinal: number
+    confidence: number | null
   }
   const tuples: SourceTuple[] = []
   for (let i = 0; i < data.length; i++) {
@@ -526,6 +528,7 @@ async function persistMappingSources(
         tfmId,
         sourceFieldId: m.source_field_ids[ord]!,
         ordinal: ord,
+        confidence: m.confidence ?? null,
       })
     }
   }
@@ -567,9 +570,20 @@ async function persistMappingSources(
   // didn't resolve to a table_id (the FK lookup found no match — the
   // AI emitted a UUID that doesn't exist in this project's fields).
   // The TFM column `data_quality_flag_ids` is set on the parent TFM,
-  // not duplicated here; per-source `confidence` / `ai_reasoning` /
-  // `type_compatibility` left null since Path D's MappingPayload shape
-  // carries those at the TFM level, not per-source.
+  // not duplicated here.
+  //
+  // `confidence`: propagated from the parent MappingPayload onto every
+  // contributing source row. Path D's payload schema carries one
+  // confidence per mapping, not per source — duplicating across sources
+  // is the faithful translation. This is load-bearing for the DB-side
+  // recompute trigger (migration 074 §STEP 4): for non-custom_sql,
+  // non-acknowledged TFMs the trigger runs `SET TFM.confidence =
+  // MIN(mapping_sources.confidence)` after every source INSERT. When
+  // every source was previously NULL the trigger overwrote TFM.confidence
+  // to NULL (the flat-view bug); MIN of identical non-null values now
+  // equals the parent's value, so TFM.confidence survives.
+  // `ai_reasoning` / `similar_fields_considered` / `type_compatibility`
+  // stay null — they're TFM-level on Path D's payload, not per-source.
   const rows = tuples
     .filter((t) => tableIdBySourceFieldId.has(t.sourceFieldId))
     .map((t) => ({
@@ -577,11 +591,7 @@ async function persistMappingSources(
       source_field_id: t.sourceFieldId,
       source_table_id: tableIdBySourceFieldId.get(t.sourceFieldId)!,
       ordinal: t.ordinal,
-      // Path D's MappingPayload doesn't carry per-source metadata; the
-      // parent TFM's `ai_reasoning` and `confidence` cover the mapping
-      // as a whole. Per-source fields stay null until a future Path D
-      // version (or the user via the drawer) populates them.
-      confidence: null,
+      confidence: t.confidence,
       ai_reasoning: null,
       similar_fields_considered: null,
       type_compatibility: null,
