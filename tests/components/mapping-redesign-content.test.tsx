@@ -35,6 +35,27 @@ import type {
 
 // ── Mocks (hoisted) ──────────────────────────────────────────────────────────
 
+// feat/mapping-list-toggle-and-columns: the harness injects
+// `view=target` to keep target-led semantics for legacy tests, and
+// `writeUrl` in MappingContent serializes that view mode back into
+// every URL write. The tests in this file pre-date the view-mode
+// param and assert URLs WITHOUT it. To keep those assertions
+// untouched, the mocked `replace` strips the `view=target` form of
+// the param before recording the call — `view=target` is the
+// harness's noise, not the test's signal.
+function stripDefaultViewParam(rawUrl: unknown): unknown {
+  if (typeof rawUrl !== 'string') return rawUrl
+  return rawUrl
+    .replace(/([?&])view=target(&|$)/, (_, before, after) =>
+      after === '&' ? before : before === '&' ? '' : '',
+    )
+    .replace(/\?$/, '')
+}
+
+// `replaceMock` records the STRIPPED-URL form so `replaceMock.mock
+// .calls` reads cleanly in test assertions. The Next.js mock below
+// strips the URL before invoking replaceMock — the production
+// `router.replace` is never given the stripped form.
 const replaceMock = vi.fn()
 const refreshMock = vi.fn()
 let currentSearch = ''
@@ -42,13 +63,26 @@ let currentSearch = ''
 vi.mock('next/navigation', () => ({
   useRouter: () => ({
     push: vi.fn(),
-    replace: replaceMock,
+    // Strip the harness-injected `view=target` from the URL
+    // before recording. See replaceMock comment above.
+    replace: (url: unknown, opts?: unknown) =>
+      replaceMock(stripDefaultViewParam(url), opts),
     refresh: refreshMock,
     back: vi.fn(),
     forward: vi.fn(),
     prefetch: vi.fn(),
   }),
-  useSearchParams: () => new URLSearchParams(currentSearch),
+  // Inject `view=target` when the test hasn't asked for a specific
+  // view. This file's tests pre-date the view-mode toggle and assume
+  // target-led semantics; rather than threading `view=target` through
+  // every `currentSearch = ...` assignment, the mock applies it on
+  // read. Tests that exercise the flat view set
+  // `currentSearch = 'view=flat'` explicitly.
+  useSearchParams: () => {
+    const params = new URLSearchParams(currentSearch)
+    if (!params.has('view')) params.set('view', 'target')
+    return params
+  },
   usePathname: () => '/app/projects/p1/mapping',
 }))
 
@@ -387,10 +421,20 @@ function buildData(): MappingsForRedesignResult {
 // ── Test setup ──────────────────────────────────────────────────────────────
 
 function renderRedesign(
+  // feat/mapping-list-toggle-and-columns: the page's default view
+  // flipped to 'flat'. Most tests in this file were written to
+  // exercise the target-led layout (TargetTableGroup rendering,
+  // group-filter hides, drawer integration). Rather than threading
+  // `view=target` through every caller's search string, the harness
+  // injects it whenever the caller does NOT already specify a view
+  // param. Tests that exercise the flat view pass `view=flat`
+  // explicitly.
   searchString = '',
   dataOverrides?: Partial<MappingsForRedesignResult>,
 ) {
-  currentSearch = searchString
+  const params = new URLSearchParams(searchString)
+  if (!params.has('view')) params.set('view', 'target')
+  currentSearch = params.toString()
   const baseData = buildData()
   const data: MappingsForRedesignResult = {
     ...baseData,
@@ -1424,7 +1468,7 @@ describe('MappingRedesignContent — zero-gap between strip and FilterRow (post 
 // asserts only the toolbar+body siblings.
 
 describe('MappingRedesignContent — structural invariant (post sidebar architecture refactor)', () => {
-  it('PageHeader, ViewModeToggle, Strip, FilterRow, and sidebar+body row are direct children of the page flex column', () => {
+  it('PageHeader, Strip (with ViewModeToggle in trailing slot), FilterRow, and sidebar+body row are direct children of the page flex column', () => {
     renderRedesign()
     const pageHeader = screen.getByTestId('page-header')
     const viewModeToggle = screen.getByTestId('mapping-view-mode-toggle')
@@ -1446,11 +1490,17 @@ describe('MappingRedesignContent — structural invariant (post sidebar architec
     expect(pageColumn.className).toMatch(/\bh-full\b/)
     expect(pageColumn.className).toMatch(/\bbg-gray-50\b/)
 
-    // Each of the five elements must have `pageColumn` as its
-    // immediate parent.
-    expect(viewModeToggle.parentElement).toBe(pageColumn)
+    // feat/mapping-list-toggle-and-columns: ViewModeToggle moved
+    // INSIDE the strip's trailing slot — it is no longer a direct
+    // child of the page column. The strip still IS, and the toggle
+    // lives within it as a nested descendant.
     expect(strip.parentElement).toBe(pageColumn)
     expect(filterRow.parentElement).toBe(pageColumn)
+    expect(strip.contains(viewModeToggle)).toBe(true)
+    // The toggle sits inside the trailing slot of the strip.
+    const trailingSlot = screen.getByTestId('mapping-summary-trailing')
+    expect(trailingSlot.contains(viewModeToggle)).toBe(true)
+
     // The sidebar lives inside the sidebar+body flex row; that ROW
     // is the direct child of pageColumn. Walk one step up from the
     // sidebar to find the row, then assert.
@@ -1459,24 +1509,18 @@ describe('MappingRedesignContent — structural invariant (post sidebar architec
     if (!sidebarBodyRow) return
     expect(sidebarBodyRow.parentElement).toBe(pageColumn)
 
-    // Pin the sibling order: PageHeader → ViewModeToggle → Strip →
-    // FilterRow → sidebar+body row. Children after that (drawer,
-    // dialog) are position-fixed and not asserted by this invariant.
-    //
-    // feat/spreadsheet-view-toggle-ui (this PR): ViewModeToggle slots
-    // in directly above the strip so the user sees the view choice
-    // before the chips. Target-led behavior is preserved when
-    // `viewMode='target-led'` — the toggle renders, the rest of the
-    // page renders unchanged.
+    // Pin the sibling order: PageHeader → Strip → FilterRow →
+    // sidebar+body row. Children after that (drawer, dialog) are
+    // position-fixed and not asserted by this invariant. The
+    // ViewModeToggle no longer claims its own slot in this chain
+    // since it lives inside the strip.
     const children = Array.from(pageColumn.children) as HTMLElement[]
     const pageHeaderIdx = children.indexOf(pageHeader)
-    const viewModeToggleIdx = children.indexOf(viewModeToggle)
     const stripIdx = children.indexOf(strip)
     const filterRowIdx = children.indexOf(filterRow)
     const rowIdx = children.indexOf(sidebarBodyRow)
     expect(pageHeaderIdx).toBeGreaterThanOrEqual(0)
-    expect(viewModeToggleIdx).toBe(pageHeaderIdx + 1)
-    expect(stripIdx).toBe(viewModeToggleIdx + 1)
+    expect(stripIdx).toBe(pageHeaderIdx + 1)
     expect(filterRowIdx).toBe(stripIdx + 1)
     expect(rowIdx).toBe(filterRowIdx + 1)
   })

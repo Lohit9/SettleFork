@@ -111,6 +111,13 @@ interface MappingSummaryStripProps {
    *  populated project. Pass `null` for the defensive empty-state
    *  fallback (renders the awaiting_data label). */
   projectStats: ProjectStats | null
+  /** feat/mapping-list-toggle-and-columns: optional trailing slot
+   *  rendered right-aligned on the same horizontal line as the
+   *  summary chips. The mapping page passes `<ViewModeToggle />`
+   *  here so the toggle reads as part of the summary toolbar rather
+   *  than a separate row. Unset → strip renders unchanged.
+   */
+  trailing?: React.ReactNode
 }
 
 const STATE_LABEL: Record<ProjectStats['state'], string> = {
@@ -121,6 +128,7 @@ const STATE_LABEL: Record<ProjectStats['state'], string> = {
 
 export function MappingSummaryStrip({
   projectStats,
+  trailing,
 }: MappingSummaryStripProps) {
   // State-aware empty: when the project hasn't generated mappings yet
   // (or projectStats is null defensively), the strip renders a single
@@ -134,7 +142,7 @@ export function MappingSummaryStrip({
       <div
         data-testid="mapping-summary-strip"
         data-state={state}
-        className="flex items-center bg-white px-5 py-2 flex-shrink-0"
+        className="flex items-center justify-between bg-white px-5 py-2 flex-shrink-0"
       >
         <span
           data-testid="mapping-summary-empty-label"
@@ -142,6 +150,14 @@ export function MappingSummaryStrip({
         >
           {STATE_LABEL[state]}
         </span>
+        {trailing ? (
+          <div
+            data-testid="mapping-summary-trailing"
+            className="flex items-center"
+          >
+            {trailing}
+          </div>
+        ) : null}
       </div>
     )
   }
@@ -150,7 +166,7 @@ export function MappingSummaryStrip({
     <div
       data-testid="mapping-summary-strip"
       data-state={state}
-      className="flex items-center bg-white px-5 py-2 flex-shrink-0"
+      className="flex items-center justify-between bg-white px-5 py-2 flex-shrink-0"
     >
       <div className="flex items-center gap-3 text-sm text-settle-slate-600">
         {/* PR-7: source-first axis order. Source side answers "what's
@@ -188,6 +204,14 @@ export function MappingSummaryStrip({
           dotClassName="bg-amber-400"
         />
       </div>
+      {trailing ? (
+        <div
+          data-testid="mapping-summary-trailing"
+          className="flex items-center"
+        >
+          {trailing}
+        </div>
+      ) : null}
     </div>
   )
 }

@@ -4,6 +4,7 @@ import { useCallback, useMemo, useRef, useState } from 'react'
 import { cn } from '@/components/ui/utils'
 import {
   classifyRowConfidence,
+  formatConfidencePercent,
   type RowConfidenceBand,
 } from '@/lib/utils/confidence-format'
 import type {
@@ -521,12 +522,24 @@ export function MappingListView({
         </colgroup>
         <thead className="bg-gray-50">
           <tr>
-            <TableHeader column="targetTable" label="Target Table" />
-            <TableHeader column="targetField" label="Target Field" />
+            {/* feat/mapping-list-toggle-and-columns: column order is
+                now source-first (Source Table / Source Field / Target
+                Table / Target Field / Confidence / Status / Actions),
+                aligned with the locked sort. The Status column is
+                header-less — the cell still renders a colored dot,
+                but the th has no visible label (aria-label retained
+                for assistive tech). */}
             <TableHeader column="sourceTable" label="Source Table" />
             <TableHeader column="sourceField" label="Source Field" />
+            <TableHeader column="targetTable" label="Target Table" />
+            <TableHeader column="targetField" label="Target Field" />
             <TableHeader column="confidence" label="Confidence" align="right" />
-            <TableHeader column="status" label="Status" align="center" />
+            <th
+              scope="col"
+              data-testid="flat-header-status"
+              aria-label="Status"
+              className="border-b border-gray-200 px-3 py-2.5 align-top"
+            />
             <th
               scope="col"
               data-testid="flat-header-actions"
@@ -832,53 +845,21 @@ function FlatRowView({
         'cursor-pointer bg-white transition-colors hover:bg-gray-50',
       )}
     >
-      <td
-        data-testid="flat-cell-target-table"
-        title={targetTable ?? undefined}
-        className={cn(
-          'truncate border-b border-gray-100 px-3 py-2.5 align-top text-sm text-slate-700',
-          // Left-accent border for multi-source rows. Painted on the
-          // first cell so the accent sits in the row's padding and
-          // does not add width. Adjacent siblings render a continuous
-          // vertical line; scattered siblings each show their own
-          // accent (accepted side effect of the locked sort).
-          isMultiSource && 'border-l-2 border-slate-300',
-        )}
-      >
-        {targetTable ?? <span className="text-gray-300">—</span>}
-      </td>
-      <td
-        data-testid="flat-cell-target-field"
-        className="border-b border-gray-100 px-3 py-2.5 align-top text-sm"
-      >
-        {targetFieldName ? (
-          targetCellEditable ? (
-            <button
-              ref={targetCellRef}
-              type="button"
-              data-testid="flat-cell-target-field-button"
-              onClick={(e) => {
-                e.stopPropagation()
-                onTargetCellClick(row, e.currentTarget)
-              }}
-              className={cn(
-                'inline-flex max-w-full items-center justify-start rounded',
-                'focus:outline-none focus-visible:ring-1 focus-visible:ring-blue-500',
-              )}
-            >
-              <FieldNameChip name={targetFieldName} />
-            </button>
-          ) : (
-            <FieldNameChip name={targetFieldName} />
-          )
-        ) : (
-          <span className="text-gray-300">—</span>
-        )}
-      </td>
+      {/* Source-first column order (feat/mapping-list-toggle-and-columns).
+          The Source Table cell is the leading cell, so it now carries
+          the multi-source left-accent border. */}
       <td
         data-testid="flat-cell-source-table"
         title={sourceTableName ?? undefined}
-        className="truncate border-b border-gray-100 px-3 py-2.5 align-top text-sm text-slate-700"
+        className={cn(
+          'truncate border-b border-gray-100 px-3 py-2.5 align-top text-sm text-slate-700',
+          // Left-accent for multi-source rows. Painted on the leading
+          // cell so the accent sits in the row's padding and does NOT
+          // add width. Adjacent siblings render a continuous vertical
+          // line; scattered siblings each show their own accent
+          // (accepted side effect of the locked sort).
+          isMultiSource && 'border-l-2 border-slate-300',
+        )}
       >
         {sourceTableName ?? <span className="text-gray-300">—</span>}
       </td>
@@ -930,14 +911,57 @@ function FlatRowView({
         )}
       </td>
       <td
+        data-testid="flat-cell-target-table"
+        title={targetTable ?? undefined}
+        className="truncate border-b border-gray-100 px-3 py-2.5 align-top text-sm text-slate-700"
+      >
+        {targetTable ?? <span className="text-gray-300">—</span>}
+      </td>
+      <td
+        data-testid="flat-cell-target-field"
+        className="border-b border-gray-100 px-3 py-2.5 align-top text-sm"
+      >
+        {targetFieldName ? (
+          targetCellEditable ? (
+            <button
+              ref={targetCellRef}
+              type="button"
+              data-testid="flat-cell-target-field-button"
+              onClick={(e) => {
+                e.stopPropagation()
+                onTargetCellClick(row, e.currentTarget)
+              }}
+              className={cn(
+                'inline-flex max-w-full items-center justify-start rounded',
+                'focus:outline-none focus-visible:ring-1 focus-visible:ring-blue-500',
+              )}
+            >
+              <FieldNameChip name={targetFieldName} />
+            </button>
+          ) : (
+            <FieldNameChip name={targetFieldName} />
+          )
+        ) : (
+          <span className="text-gray-300">—</span>
+        )}
+      </td>
+      <td
         data-testid="flat-cell-confidence"
         className="border-b border-gray-100 px-3 py-2.5 align-top text-right text-sm tabular-nums"
       >
+        {/* Scale-tolerant render via `formatConfidencePercent` — the
+            helper handles both 0-1 fractional and 0-100 percent
+            scales gracefully. Legacy data and re-run data may coexist
+            on different scales during the transition window
+            (per A's notes/flat-view-confidence-bug.md). For null
+            confidence the helper returns "—" so the empty-state
+            branch below is redundant; kept here so the band tinting
+            short-circuits to neutral em-dash. */}
         {confidence === null || confidenceBand === null ? (
           <span className="text-gray-300">—</span>
         ) : (
           <span className={CONFIDENCE_BAND_TEXT[confidenceBand]}>
-            {Math.round(confidence)}%
+            {formatConfidencePercent(confidence)}
           </span>
         )}
       </td>

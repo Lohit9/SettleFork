@@ -1882,19 +1882,24 @@ function MappingContentLoaded({
           present. */}
       {!isEmptyMappingState && (
         <>
-          {/* Mapping list view — top-of-page segmented control. Renders
-              above the summary strip so the user sees the view choice
-              first; `viewMode` is URL-synced via `?view=flat`. The
-              toggle stays visible across both views (the target-led
-              branch below renders unchanged when `viewMode='target-led'`). */}
-          <ViewModeToggle value={viewMode} onChange={handleViewModeChange} />
           {/* PR-6 (feat/ui-consolidation) consolidated the strip;
               PR-7 (feat/mapping-approvals) source-first the axis order +
               switched chips to read from `projectStats` (single source of
               truth) + dropped the `counts` prop entirely. Status chips
               `Approved` / `Needs Review` now reconcile with the
-              project-wide axis denominators on the same strip. */}
-          <MappingSummaryStrip projectStats={projectStats} />
+              project-wide axis denominators on the same strip.
+              feat/mapping-list-toggle-and-columns: the view-mode toggle
+              now rides on the strip's `trailing` slot so summary + toggle
+              read as one toolbar row (no separate tab strip above). */}
+          <MappingSummaryStrip
+            projectStats={projectStats}
+            trailing={
+              <ViewModeToggle
+                value={viewMode}
+                onChange={handleViewModeChange}
+              />
+            }
+          />
           <FilterRow
             filters={filters}
             onFiltersChange={handleFiltersChange}
