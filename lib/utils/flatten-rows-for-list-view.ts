@@ -127,23 +127,8 @@ export type FlatRow =
   | UnmappedTargetFlatRow
   | UnmappedSourceFlatRow
 
-export interface FlattenOptions {
-  /**
-   * When true, source fields that are NOT referenced by any mapping
-   * AND have no acknowledgment row are emitted as `unmapped-source`
-   * rows with status='needs_review'. When false (default), only
-   * source-side acknowledgments surface on the source-only side.
-   */
-  showUnmappedSourceFields: boolean
-}
-
-export const DEFAULT_FLATTEN_OPTIONS: FlattenOptions = {
-  showUnmappedSourceFields: false,
-}
-
 export function flattenRowsForListView(
   result: MappingsForRedesignResult,
-  options: FlattenOptions = DEFAULT_FLATTEN_OPTIONS,
 ): FlatRow[] {
   const out: FlatRow[] = []
   const sourceFieldIdsReferenced = new Set<string>()
@@ -241,23 +226,25 @@ export function flattenRowsForListView(
     })
   }
 
-  // Pure source-only unmapped — gated by toggle to avoid drowning the
-  // grid with one row per unmapped source field on schemas with hundreds
-  // of unaddressed source fields.
-  if (options.showUnmappedSourceFields) {
-    for (const sf of result.sourceFields) {
-      if (sourceFieldIdsReferenced.has(sf.id)) continue
-      if (ackedSourceFieldIds.has(sf.id)) continue
-      out.push({
-        kind: 'unmapped-source',
-        id: `unmapped-source::${sf.id}`,
-        groupId: `unmapped-source::${sf.id}`,
-        status: 'needs_review',
-        sourceField: sf,
-        acknowledgmentId: null,
-        acknowledgmentReason: null,
-      })
-    }
+  // Pure source-only unmapped — always emitted. The prior
+  // `showUnmappedSourceFields` toggle was retired at the
+  // feat/mapping-list-toggle-and-columns refinement pass: the
+  // flat view always shows every source field. Audit workflows
+  // need a complete picture, and clustering by target keeps
+  // the unaddressed source rows contained at the bottom rather
+  // than drowning the table mid-list.
+  for (const sf of result.sourceFields) {
+    if (sourceFieldIdsReferenced.has(sf.id)) continue
+    if (ackedSourceFieldIds.has(sf.id)) continue
+    out.push({
+      kind: 'unmapped-source',
+      id: `unmapped-source::${sf.id}`,
+      groupId: `unmapped-source::${sf.id}`,
+      status: 'needs_review',
+      sourceField: sf,
+      acknowledgmentId: null,
+      acknowledgmentReason: null,
+    })
   }
 
   return out

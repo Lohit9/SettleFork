@@ -62,7 +62,7 @@ function makeResult(
 }
 
 describe('flattenRowsForListView — source-side rows', () => {
-  it('emits source-side acknowledgment rows even when showUnmappedSourceFields is OFF', () => {
+  it('emits source-side acknowledgment rows', () => {
     const sf = makeSourceField({ id: 'sf-ack', name: 'LEGACY_COL' })
     const ack: SourceFieldAcknowledgmentSummary = {
       id: 'ack-1',
@@ -75,9 +75,7 @@ describe('flattenRowsForListView — source-side rows', () => {
       sourceFieldAcknowledgments: [ack],
     })
 
-    const rows = flattenRowsForListView(result, {
-      showUnmappedSourceFields: false,
-    })
+    const rows = flattenRowsForListView(result)
     const ackRow = rows.find((r) => r.kind === 'unmapped-source')
 
     expect(ackRow).toBeDefined()
@@ -101,9 +99,7 @@ describe('flattenRowsForListView — source-side rows', () => {
       sourceFieldAcknowledgments: [ack],
     })
 
-    const rows = flattenRowsForListView(result, {
-      showUnmappedSourceFields: false,
-    })
+    const rows = flattenRowsForListView(result)
     const ackRow = rows.find((r) => r.kind === 'unmapped-source')
 
     expect(ackRow).toBeDefined()
@@ -115,23 +111,17 @@ describe('flattenRowsForListView — source-side rows', () => {
     expect(ackRow.status).toBe('rejected')
   })
 
-  it('skips source-only unmapped rows when showUnmappedSourceFields is OFF', () => {
-    const sf = makeSourceField({ id: 'sf-untouched' })
-    const result = makeResult({ sourceFields: [sf] })
-
-    const rows = flattenRowsForListView(result, {
-      showUnmappedSourceFields: false,
-    })
-    expect(rows).toHaveLength(0)
-  })
-
-  it('emits source-only unmapped rows when showUnmappedSourceFields is ON', () => {
+  it('always emits source-only unmapped rows (toggle retired)', () => {
+    // The prior `showUnmappedSourceFields` flatten option was retired
+    // at the feat/mapping-list-toggle-and-columns refinement pass —
+    // unaddressed source fields ALWAYS surface as
+    // 'unmapped-source' rows. Audit workflows need a complete
+    // picture; target-first cluster sort keeps these rows contained
+    // at the bottom of the table.
     const sf = makeSourceField({ id: 'sf-untouched', name: 'OPEN_COL' })
     const result = makeResult({ sourceFields: [sf] })
 
-    const rows = flattenRowsForListView(result, {
-      showUnmappedSourceFields: true,
-    })
+    const rows = flattenRowsForListView(result)
     const row = rows.find((r) => r.kind === 'unmapped-source')
     expect(row).toBeDefined()
     if (row?.kind !== 'unmapped-source') throw new Error('shape')
@@ -186,9 +176,7 @@ describe('flattenRowsForListView — source-side rows', () => {
       sourceFields: [sf],
     })
 
-    const rows = flattenRowsForListView(result, {
-      showUnmappedSourceFields: true,
-    })
+    const rows = flattenRowsForListView(result)
     expect(rows.some((r) => r.kind === 'unmapped-source')).toBe(false)
   })
 
@@ -205,9 +193,7 @@ describe('flattenRowsForListView — source-side rows', () => {
       sourceFieldAcknowledgments: [ack],
     })
 
-    const rows = flattenRowsForListView(result, {
-      showUnmappedSourceFields: true,
-    })
+    const rows = flattenRowsForListView(result)
     // Exactly one unmapped-source row, and it carries the ack id (not
     // the synthetic "unmapped-source::<sf-id>" id).
     const sourceRows = rows.filter((r) => r.kind === 'unmapped-source')

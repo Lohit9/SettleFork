@@ -536,10 +536,11 @@ function MappingContentLoaded({
     return initial && initial.length > 0 ? initial : null
   })
 
-  // Mapping list view — view mode is URL-synced (?view=flat); default
-  // 'target-led' is encoded by omitting the param. Local
-  // `showUnmappedSourceFields` is NOT URL-synced (flat-view-only filter,
-  // less valuable to share via link than the main filter axes).
+  // Mapping list view — view mode is URL-synced (?view=flat | ?view=target).
+  // The prior `showUnmappedSourceFields` local state was retired at the
+  // feat/mapping-list-toggle-and-columns refinement pass — the flat
+  // view now always shows every source field; the filter row carries
+  // no toggle.
   // `drawerHighlightedSourceFieldId` is local view state: tracks which
   // child source attribution the flat view clicked through to so the
   // drawer can scroll/highlight on mount. Distinct from the existing
@@ -549,8 +550,6 @@ function MappingContentLoaded({
   const [viewMode, setViewMode] = useState<MappingViewMode>(() =>
     parseViewModeFromParams(searchParams ?? new URLSearchParams()),
   )
-  const [showUnmappedSourceFields, setShowUnmappedSourceFields] =
-    useState<boolean>(false)
   const [drawerHighlightedSourceFieldId, setDrawerHighlightedSourceFieldId] =
     useState<string | null>(null)
 
@@ -1635,13 +1634,6 @@ function MappingContentLoaded({
     [],
   )
 
-  const handleShowUnmappedSourceFieldsChange = useCallback(
-    (next: boolean) => {
-      setShowUnmappedSourceFields(next)
-    },
-    [],
-  )
-
   // Phase 3 Gap 7 — derive the open drawer row from `drawerRowId`. We
   // require the row to be present in `filteredRows` (not just `data.rows`)
   // so the founder rule "filter that hides the open row closes the drawer"
@@ -1908,14 +1900,6 @@ function MappingContentLoaded({
             rejectedCount={data.counts.rejected}
             highConfidenceCount={highConfidenceCount}
             onApproveHighConfidenceClick={handleApproveHighConfidenceClick}
-            showUnmappedSourceFields={
-              viewMode === 'flat' ? showUnmappedSourceFields : undefined
-            }
-            onShowUnmappedSourceFieldsChange={
-              viewMode === 'flat'
-                ? handleShowUnmappedSourceFieldsChange
-                : undefined
-            }
           />
         </>
       )}
@@ -1960,7 +1944,6 @@ function MappingContentLoaded({
             ) : viewMode === 'flat' ? (
               <MappingListView
                 filteredResult={filteredResult}
-                showUnmappedSourceFields={showUnmappedSourceFields}
                 mutations={mutations}
                 onOpenDrawer={handleFlatOpenDrawer}
               />

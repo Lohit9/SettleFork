@@ -199,14 +199,6 @@ export interface MappingListViewProps {
    */
   filteredResult: MappingsForRedesignResult
 
-  /**
-   * When true, source fields that are NOT referenced by any mapping
-   * AND have no acknowledgment row are emitted as `unmapped-source`
-   * rows in the flat output. Default false hides them (only
-   * source-side acks appear on the source-only side).
-   */
-  showUnmappedSourceFields: boolean
-
   /** Mutation handlers from useMappingListMutations. */
   mutations: MappingListMutations
 
@@ -353,6 +345,41 @@ function sortFlatRows(rows: readonly FlatRow[]): FlatRow[] {
   return decorated.map((d) => d.row)
 }
 
+// ─── Bracket position for multi-source groups ────────────────────────────────
+//
+// With the target-first cluster sort, multi-source siblings are
+// guaranteed adjacent in the output. The Source Field cell paints a
+// bracket-style accent: ┌ on the first row, │ on middle rows, └ on
+// the last row — so stacked groups remain visually separated by the
+// horizontal caps even when no row sits between them.
+//
+// `groupPosition` is computed in the parent by inspecting each row's
+// neighbours in the sorted output. Single-source mapped rows return
+// 'none' (no bracket renders). 'solo' is a defensive case — a
+// multi-source TFM where only this single contributor row survives
+// a filter — and renders as both first AND last caps.
+
+export type GroupPosition = 'none' | 'first' | 'middle' | 'last' | 'solo'
+
+function computeGroupPositions(rows: readonly FlatRow[]): GroupPosition[] {
+  const positions: GroupPosition[] = new Array(rows.length).fill('none')
+  for (let i = 0; i < rows.length; i++) {
+    const row = rows[i]
+    if (row.kind !== 'mapped' || row.sourceCount <= 1) continue
+    const prev = rows[i - 1]
+    const next = rows[i + 1]
+    const sameAsPrev =
+      prev?.kind === 'mapped' && prev.groupId === row.groupId
+    const sameAsNext =
+      next?.kind === 'mapped' && next.groupId === row.groupId
+    if (sameAsPrev && sameAsNext) positions[i] = 'middle'
+    else if (sameAsNext) positions[i] = 'first'
+    else if (sameAsPrev) positions[i] = 'last'
+    else positions[i] = 'solo'
+  }
+  return positions
+}
+
 // ─── Picker state ─────────────────────────────────────────────────────────────
 
 type OpenPickerState =
@@ -380,21 +407,28 @@ type OpenPickerState =
 
 export function MappingListView({
   filteredResult,
-  showUnmappedSourceFields,
   mutations,
   onOpenDrawer,
 }: MappingListViewProps) {
   const [openPicker, setOpenPicker] = useState<OpenPickerState>(null)
 
   const flatRows = useMemo(
-    () =>
-      flattenRowsForListView(filteredResult, { showUnmappedSourceFields }),
-    [filteredResult, showUnmappedSourceFields],
+    () => flattenRowsForListView(filteredResult),
+    [filteredResult],
   )
 
   // Fixed single-pass sort — see `compareSortKeys`. No UI state, no
   // re-sort on header click (per the polish pass).
   const sortedRows = useMemo(() => sortFlatRows(flatRows), [flatRows])
+
+  // Per-row bracket position (first / middle / last / solo / none)
+  // for the multi-source accent. Computed once over the sorted
+  // array so each row knows its place in its group without an
+  // O(n) lookup inside its own render.
+  const groupPositions = useMemo(
+    () => computeGroupPositions(sortedRows),
+    [sortedRows],
+  )
 
   // Target field universe — every target field appears in result.rows
   // exactly once (per the data contract).
@@ -539,34 +573,32 @@ export function MappingListView({
     >
       <table className="w-full table-fixed border-collapse text-sm">
         <colgroup>
+          {/* feat/mapping-list-toggle-and-columns refinement pass:
+              the status dot moves to the LEFTMOST column (a thin
+              24px slot with no header text). Column order:
+              status dot | Source Table | Source Field | Target Table
+              | Target Field | Confidence | Actions. */}
+          <col style={{ width: '24px' }} />
           <col style={{ width: '12%' }} />
           <col style={{ width: '26%' }} />
           <col style={{ width: '12%' }} />
           <col style={{ width: '26%' }} />
           <col style={{ width: '80px' }} />
-          <col style={{ width: '40px' }} />
           <col style={{ width: '110px' }} />
         </colgroup>
         <thead className="bg-gray-50">
           <tr>
-            {/* feat/mapping-list-toggle-and-columns: column order is
-                now source-first (Source Table / Source Field / Target
-                Table / Target Field / Confidence / Status / Actions),
-                aligned with the locked sort. The Status column is
-                header-less — the cell still renders a colored dot,
-                but the th has no visible label (aria-label retained
-                for assistive tech). */}
+            <th
+              scope="col"
+              data-testid="flat-header-status"
+              aria-label="Status"
+              className="border-b border-gray-200 px-1 py-2.5 align-top"
+            />
             <TableHeader column="sourceTable" label="Source Table" />
             <TableHeader column="sourceField" label="Source Field" />
             <TableHeader column="targetTable" label="Target Table" />
             <TableHeader column="targetField" label="Target Field" />
             <TableHeader column="confidence" label="Confidence" align="right" />
-            <th
-              scope="col"
-              data-testid="flat-header-status"
-              aria-label="Status"
-              className="border-b border-gray-200 px-3 py-2.5 align-top"
-            />
             <th
               scope="col"
               data-testid="flat-header-actions"
@@ -586,10 +618,11 @@ export function MappingListView({
               </td>
             </tr>
           ) : (
-            sortedRows.map((row) => (
+            sortedRows.map((row, idx) => (
               <FlatRowView
                 key={row.id}
                 row={row}
+                groupPosition={groupPositions[idx]}
                 mutations={mutations}
                 onSourceCellClick={handleSourceCellClick}
                 onTargetCellClick={handleTargetCellClick}
@@ -666,6 +699,12 @@ function TableHeader({
 
 interface FlatRowViewProps {
   row: FlatRow
+  /**
+   * Position within a multi-source group (first/middle/last/solo)
+   * or 'none' for single-source rows. Drives the bracket-style
+   * accent painted on the Source Field cell.
+   */
+  groupPosition: GroupPosition
   mutations: MappingListMutations
   onSourceCellClick: (row: FlatRow, anchorEl: HTMLElement) => void
   onTargetCellClick: (row: FlatRow, anchorEl: HTMLElement) => void
@@ -674,6 +713,7 @@ interface FlatRowViewProps {
 
 function FlatRowView({
   row,
+  groupPosition,
   mutations,
   onSourceCellClick,
   onTargetCellClick,
@@ -826,17 +866,18 @@ function FlatRowView({
       }
     }
     // unmapped-source
+    // feat/mapping-list-toggle-and-columns refinement pass: unmapped
+    // source rows are now informational only — no Approve, no
+    // Reject, no Edit. Interactive assignment lives elsewhere; the
+    // flat view's role for these rows is to surface the schema gap
+    // at the bottom of the list. The `rejectUnmappedRow` action
+    // remains wired in the hook for future use; this branch just
+    // doesn't surface it.
     return {
       onApprove: undefined,
       approveTooltip: 'Nothing to approve — no mapping',
-      onReject: alreadyRejected
-        ? undefined
-        : () =>
-            void mutations.rejectUnmappedRow({
-              pendingKey: row.id,
-              target: { sourceFieldId: row.sourceField.id },
-            }),
-      rejectTooltip: 'Mark as rejected',
+      onReject: undefined,
+      rejectTooltip: undefined,
       onEdit: undefined,
       editTooltip: undefined,
     }
@@ -872,6 +913,17 @@ function FlatRowView({
         'cursor-pointer bg-white transition-colors hover:bg-gray-50',
       )}
     >
+      {/* Leftmost status dot — 24px column, no header text.
+          feat/mapping-list-toggle-and-columns refinement pass moved
+          the dot from its prior position between Confidence and
+          Actions. Tooltip carries the status label + ack reason. */}
+      <td
+        data-testid="flat-cell-status"
+        title={statusTooltip}
+        className="border-b border-gray-100 px-1 py-2.5 align-top text-center"
+      >
+        <StatusDot status={displayStatus} />
+      </td>
       {/* Source-first column order (feat/mapping-list-toggle-and-columns).
           Multi-source accent (feat/mapping-list-cluster-multi-source):
           painted on the Source FIELD cell — the field is the mapping
@@ -889,11 +941,31 @@ function FlatRowView({
       </td>
       <td
         data-testid="flat-cell-source-field"
-        className={cn(
-          'border-b border-gray-100 px-3 py-2.5 align-top text-sm',
-          isMultiSource && 'border-l-2 border-settle-teal-500/50',
-        )}
+        data-group-position={groupPosition}
+        className="relative border-b border-gray-100 px-3 py-2.5 align-top text-sm"
       >
+        {/*
+          Multi-source bracket accent. A single positioned span
+          carries all three strokes (left bar + optional top cap +
+          optional bottom cap). 'first' and 'last' draw their
+          respective caps; 'middle' shows only the vertical bar;
+          'solo' (defensive — multi-source row whose siblings were
+          filtered out) shows both caps so the visual reads as a
+          closed `[` shape.
+        */}
+        {groupPosition !== 'none' && (
+          <span
+            aria-hidden="true"
+            data-testid="flat-source-field-bracket"
+            className={cn(
+              'pointer-events-none absolute left-0 top-0 h-full w-2 border-l-2 border-settle-teal-500/50',
+              (groupPosition === 'first' || groupPosition === 'solo') &&
+                'border-t-2',
+              (groupPosition === 'last' || groupPosition === 'solo') &&
+                'border-b-2',
+            )}
+          />
+        )}
         {sourceFieldName ? (
           sourceCellClickable ? (
             <button
@@ -991,13 +1063,6 @@ function FlatRowView({
             {formatConfidencePercent(confidence)}
           </span>
         )}
-      </td>
-      <td
-        data-testid="flat-cell-status"
-        title={statusTooltip}
-        className="border-b border-gray-100 px-3 py-2.5 align-top text-center"
-      >
-        <StatusDot status={displayStatus} />
       </td>
       <td className="border-b border-gray-100 px-3 py-2.5 align-top">
         <FlatRowActions

@@ -215,7 +215,6 @@ describe('MappingListView — action buttons per row kind', () => {
     render(
       <MappingListView
         filteredResult={result}
-        showUnmappedSourceFields={false}
         mutations={mutations}
         onOpenDrawer={vi.fn()}
       />,
@@ -241,7 +240,6 @@ describe('MappingListView — action buttons per row kind', () => {
     render(
       <MappingListView
         filteredResult={result}
-        showUnmappedSourceFields={false}
         mutations={mutations}
         onOpenDrawer={vi.fn()}
       />,
@@ -266,7 +264,6 @@ describe('MappingListView — action buttons per row kind', () => {
     render(
       <MappingListView
         filteredResult={result}
-        showUnmappedSourceFields={false}
         mutations={mutations}
         onOpenDrawer={vi.fn()}
       />,
@@ -281,18 +278,18 @@ describe('MappingListView — action buttons per row kind', () => {
     ).toBeInTheDocument()
   })
 
-  it('multi-source TFM renders N independent flat rows with shimmed contributor ids + accent border', () => {
+  it('multi-source TFM renders N independent flat rows with shimmed contributor ids + bracket accent', () => {
     // Sixth polish pass: multi-source TFMs emit N independent flat
-    // rows (one per source). feat/mapping-list-cluster-multi-source
-    // (this PR): target-first sort clusters them adjacent, and the
-    // teal left-accent border on the Source Field cell of each row
-    // reads as one contiguous vertical bar across the group.
+    // rows (one per source). feat/mapping-list-toggle-and-columns
+    // refinement pass: target-first sort clusters them adjacent, and
+    // the bracket-style accent (┌ first, │ middle, └ last) on the
+    // Source Field cell of each row reads as one closed bracket
+    // across the group.
     const mutations = makeMutations()
     const result = makeResult([makeMultiSourceMapped()])
     render(
       <MappingListView
         filteredResult={result}
-        showUnmappedSourceFields={false}
         mutations={mutations}
         onOpenDrawer={vi.fn()}
       />,
@@ -312,28 +309,32 @@ describe('MappingListView — action buttons per row kind', () => {
     // The bare TFM uuid is NOT itself a row id when sourceCount > 1.
     expect(document.querySelector('[data-row-id="tfm-multi"]')).toBeNull()
 
-    // feat/mapping-list-cluster-multi-source: the accent border
-    // lives on the Source FIELD cell (the field is the mapping
-    // unit). Source Table cells do NOT carry the accent.
-    for (const row of [rowA, rowB]) {
-      const sourceFieldCell = within(row).getByTestId(
-        'flat-cell-source-field',
-      )
-      const sourceTableCell = within(row).getByTestId(
-        'flat-cell-source-table',
-      )
-      expect(sourceFieldCell.className).toMatch(/\bborder-l-2\b/)
-      expect(sourceTableCell.className).not.toMatch(/\bborder-l-2\b/)
-    }
+    // The bracket accent lives on the Source FIELD cell (the field
+    // is the mapping unit) as an inner span overlay — not on the
+    // cell's own className. Position is exposed via
+    // data-group-position on the cell.
+    // Within a target group, sources sort by source table ASC →
+    // source field ASC. The fixture has ms-a in 'Products' and ms-b
+    // in 'Assemblies'; 'Assemblies' < 'Products', so ms-b is the
+    // first row of the group and ms-a is the last.
+    const sourceFieldA = within(rowA).getByTestId('flat-cell-source-field')
+    const sourceFieldB = within(rowB).getByTestId('flat-cell-source-field')
+    expect(sourceFieldB.getAttribute('data-group-position')).toBe('first')
+    expect(sourceFieldA.getAttribute('data-group-position')).toBe('last')
+    expect(
+      within(sourceFieldA).getByTestId('flat-source-field-bracket'),
+    ).toBeInTheDocument()
+    expect(
+      within(sourceFieldB).getByTestId('flat-source-field-bracket'),
+    ).toBeInTheDocument()
   })
 
-  it('single-source mapped rows carry NO multi-source accent border', () => {
+  it('single-source mapped rows carry NO multi-source bracket accent', () => {
     const mutations = makeMutations()
     const result = makeResult([makeSingleSourceMapped()])
     render(
       <MappingListView
         filteredResult={result}
-        showUnmappedSourceFields={false}
         mutations={mutations}
         onOpenDrawer={vi.fn()}
       />,
@@ -344,7 +345,10 @@ describe('MappingListView — action buttons per row kind', () => {
       'flat-cell-source-field',
     )
     expect(row.getAttribute('data-multi-source')).toBe('false')
-    expect(sourceFieldCell.className).not.toMatch(/\bborder-l-2\b/)
+    expect(sourceFieldCell.getAttribute('data-group-position')).toBe('none')
+    expect(
+      within(sourceFieldCell).queryByTestId('flat-source-field-bracket'),
+    ).toBeNull()
   })
 
   it('multi-source row: Approve is TFM-atomic (parent uuid); Reject is per-source (shimmed id)', async () => {
@@ -353,7 +357,6 @@ describe('MappingListView — action buttons per row kind', () => {
     render(
       <MappingListView
         filteredResult={result}
-        showUnmappedSourceFields={false}
         mutations={mutations}
         onOpenDrawer={vi.fn()}
       />,
@@ -378,7 +381,6 @@ describe('MappingListView — action buttons per row kind', () => {
     render(
       <MappingListView
         filteredResult={result}
-        showUnmappedSourceFields={false}
         mutations={mutations}
         onOpenDrawer={onOpenDrawer}
       />,
@@ -398,7 +400,6 @@ describe('MappingListView — action buttons per row kind', () => {
     render(
       <MappingListView
         filteredResult={result}
-        showUnmappedSourceFields={false}
         mutations={mutations}
         onOpenDrawer={vi.fn()}
       />,
@@ -429,7 +430,6 @@ describe('MappingListView — row body click + cell click', () => {
     render(
       <MappingListView
         filteredResult={result}
-        showUnmappedSourceFields={false}
         mutations={mutations}
         onOpenDrawer={onOpenDrawer}
       />,
@@ -446,7 +446,6 @@ describe('MappingListView — row body click + cell click', () => {
     render(
       <MappingListView
         filteredResult={result}
-        showUnmappedSourceFields={false}
         mutations={mutations}
         onOpenDrawer={onOpenDrawer}
       />,
@@ -464,7 +463,6 @@ describe('MappingListView — row body click + cell click', () => {
     render(
       <MappingListView
         filteredResult={result}
-        showUnmappedSourceFields={false}
         mutations={mutations}
         onOpenDrawer={onOpenDrawer}
       />,
@@ -483,7 +481,6 @@ describe('MappingListView — headers + fixed sort', () => {
     render(
       <MappingListView
         filteredResult={result}
-        showUnmappedSourceFields={false}
         mutations={mutations}
         onOpenDrawer={vi.fn()}
       />,
@@ -515,7 +512,6 @@ describe('MappingListView — headers + fixed sort', () => {
     render(
       <MappingListView
         filteredResult={result}
-        showUnmappedSourceFields={false}
         mutations={mutations}
         onOpenDrawer={vi.fn()}
       />,
@@ -546,7 +542,6 @@ describe('MappingListView — headers + fixed sort', () => {
     render(
       <MappingListView
         filteredResult={result}
-        showUnmappedSourceFields={false}
         mutations={mutations}
         onOpenDrawer={vi.fn()}
       />,

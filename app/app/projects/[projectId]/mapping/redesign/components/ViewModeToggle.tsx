@@ -6,8 +6,13 @@ import type { MappingViewMode } from '@/lib/utils/view-mode-url'
 // ViewModeToggle — segmented outline control for the Mapping page.
 //
 // Two views, mutually exclusive:
-//   • Mapping list (default) — the flat spreadsheet view.
-//   • Target-led             — the per-target-table card layout.
+//   • Mapping First (default) — the flat spreadsheet view.
+//   • Target-led              — the per-target-table card layout.
+//
+// "Mapping First" reads on the LEFT, "Target-led" on the right — the
+// default view leads the segmented control. The URL contract keeps
+// the historical `?view=flat | ?view=target` param values; this is
+// labels-only.
 //
 // Styled to match shadcn's ToggleGroup `variant='outline' size='sm'`
 // aesthetic — bordered pill containing two segment buttons with the
@@ -21,8 +26,8 @@ import type { MappingViewMode } from '@/lib/utils/view-mode-url'
 // segments via `onKeyDown` so the keyboard story matches Radix.
 
 const OPTIONS: ReadonlyArray<{ value: MappingViewMode; label: string }> = [
+  { value: 'flat', label: 'Mapping First' },
   { value: 'target-led', label: 'Target-led' },
-  { value: 'flat', label: 'Mapping list' },
 ]
 
 export function ViewModeToggle({
