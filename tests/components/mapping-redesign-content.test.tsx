@@ -1424,9 +1424,10 @@ describe('MappingRedesignContent — zero-gap between strip and FilterRow (post 
 // asserts only the toolbar+body siblings.
 
 describe('MappingRedesignContent — structural invariant (post sidebar architecture refactor)', () => {
-  it('PageHeader, Strip, FilterRow, and sidebar+body row are direct children of the page flex column', () => {
+  it('PageHeader, ViewModeToggle, Strip, FilterRow, and sidebar+body row are direct children of the page flex column', () => {
     renderRedesign()
     const pageHeader = screen.getByTestId('page-header')
+    const viewModeToggle = screen.getByTestId('mapping-view-mode-toggle')
     const strip = screen.getByTestId('mapping-summary-strip')
     const filterRow = screen.getByTestId('mapping-redesign-filter-row')
     const sidebar = screen.getByTestId('source-schema-sidebar')
@@ -1445,8 +1446,9 @@ describe('MappingRedesignContent — structural invariant (post sidebar architec
     expect(pageColumn.className).toMatch(/\bh-full\b/)
     expect(pageColumn.className).toMatch(/\bbg-gray-50\b/)
 
-    // Each of the four elements must have `pageColumn` as its
+    // Each of the five elements must have `pageColumn` as its
     // immediate parent.
+    expect(viewModeToggle.parentElement).toBe(pageColumn)
     expect(strip.parentElement).toBe(pageColumn)
     expect(filterRow.parentElement).toBe(pageColumn)
     // The sidebar lives inside the sidebar+body flex row; that ROW
@@ -1457,21 +1459,24 @@ describe('MappingRedesignContent — structural invariant (post sidebar architec
     if (!sidebarBodyRow) return
     expect(sidebarBodyRow.parentElement).toBe(pageColumn)
 
-    // Pin the sibling order: PageHeader → Strip → FilterRow → sidebar+
-    // body row. Children after that (drawer, dialog) are position-fixed
-    // and not asserted by this invariant.
+    // Pin the sibling order: PageHeader → ViewModeToggle → Strip →
+    // FilterRow → sidebar+body row. Children after that (drawer,
+    // dialog) are position-fixed and not asserted by this invariant.
     //
-    // PR-6 (feat/ui-consolidation): the previously-separate
-    // `MappingProjectStatsRow` was retired and folded into
-    // `MappingSummaryStrip`. The chain shortens by one — strip now
-    // directly follows PageHeader.
+    // feat/spreadsheet-view-toggle-ui (this PR): ViewModeToggle slots
+    // in directly above the strip so the user sees the view choice
+    // before the chips. Target-led behavior is preserved when
+    // `viewMode='target-led'` — the toggle renders, the rest of the
+    // page renders unchanged.
     const children = Array.from(pageColumn.children) as HTMLElement[]
     const pageHeaderIdx = children.indexOf(pageHeader)
+    const viewModeToggleIdx = children.indexOf(viewModeToggle)
     const stripIdx = children.indexOf(strip)
     const filterRowIdx = children.indexOf(filterRow)
     const rowIdx = children.indexOf(sidebarBodyRow)
     expect(pageHeaderIdx).toBeGreaterThanOrEqual(0)
-    expect(stripIdx).toBe(pageHeaderIdx + 1)
+    expect(viewModeToggleIdx).toBe(pageHeaderIdx + 1)
+    expect(stripIdx).toBe(viewModeToggleIdx + 1)
     expect(filterRowIdx).toBe(stripIdx + 1)
     expect(rowIdx).toBe(filterRowIdx + 1)
   })

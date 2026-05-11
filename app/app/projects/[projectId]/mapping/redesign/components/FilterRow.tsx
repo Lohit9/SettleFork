@@ -115,6 +115,21 @@ interface FilterRowProps {
    * `scope='high_confidence'`.
    */
   onApproveHighConfidenceClick?: () => void
+  /**
+   * Mapping list view affordance — when both `showUnmappedSourceFields`
+   * AND `onShowUnmappedSourceFieldsChange` are provided, the toolbar
+   * renders a "Show unmapped source fields" toggle to the left of the
+   * search input. The toggle drives whether source fields with no
+   * mapping and no acknowledgment surface as `unmapped-source` rows in
+   * the flat view (default OFF to avoid drowning the grid on
+   * source-heavy schemas).
+   *
+   * The target-led view leaves both props undefined; the toggle stays
+   * hidden and FilterRow renders byte-identical to its pre-flat-view
+   * shape.
+   */
+  showUnmappedSourceFields?: boolean
+  onShowUnmappedSourceFieldsChange?: (next: boolean) => void
 }
 
 // Refinement 3 (2026-04-26): prefix labels DROPPED from the toolbar.
@@ -165,7 +180,12 @@ export function FilterRow({
   rejectedCount = 0,
   highConfidenceCount,
   onApproveHighConfidenceClick,
+  showUnmappedSourceFields,
+  onShowUnmappedSourceFieldsChange,
 }: FilterRowProps) {
+  const showUnmappedToggle =
+    showUnmappedSourceFields !== undefined &&
+    onShowUnmappedSourceFieldsChange !== undefined
   // Gate the "Rejected" option on rejectedCount > 0, with a fallback to
   // keep the option visible when the current filter value is already
   // 'rejected' (legacy URL bookmark scenario). Without the fallback the
@@ -367,6 +387,28 @@ export function FilterRow({
         </SelectContent>
       </Select>
 
+      {showUnmappedToggle ? (
+        <label
+          data-testid="filter-row-show-unmapped-source-fields"
+          className={cn(
+            'ml-auto inline-flex h-8 flex-shrink-0 cursor-pointer items-center gap-1.5 rounded-md border px-2 text-[11px] font-medium transition-colors',
+            showUnmappedSourceFields
+              ? 'border-blue-200 bg-blue-50/60 text-blue-900'
+              : 'border-gray-200 bg-white text-gray-600 hover:bg-gray-50',
+          )}
+        >
+          <input
+            type="checkbox"
+            checked={showUnmappedSourceFields}
+            onChange={(e) =>
+              onShowUnmappedSourceFieldsChange?.(e.target.checked)
+            }
+            data-testid="filter-row-show-unmapped-source-fields-checkbox"
+            className="h-3 w-3 cursor-pointer accent-blue-600"
+          />
+          <span>Show unmapped source fields</span>
+        </label>
+      ) : null}
       {/*
         Refinement C (Phase 4-polish-1 final, 2026-04-26): the search
         wrapper is now a fixed `w-72` (288px) compact box pushed to
@@ -378,7 +420,14 @@ export function FilterRow({
         large whitespace between, matching the legacy mapping page.
       */}
       <div
-        className="relative w-72 flex-shrink-0 ml-auto"
+        className={cn(
+          'relative w-72 flex-shrink-0',
+          // When the unmapped-source toggle takes the `ml-auto` slot
+          // (flat view only), the search box sits naturally to its
+          // right via the toolbar's `gap-3`. In the target-led path
+          // the search keeps its original `ml-auto` placement.
+          !showUnmappedToggle && 'ml-auto',
+        )}
         data-testid="filter-row-search-wrapper"
       >
         <Search className="pointer-events-none absolute left-3 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-gray-400" />

@@ -296,6 +296,15 @@ export interface MappingDrawerProps {
    * row-prop content unchanged when the sidecar is absent.
    */
   pathDOutputs?: PathDOutputs | null
+  /**
+   * Mapping list view — flat-view split rows can open the drawer with
+   * a specific source attribution highlighted. When set on a mapped
+   * row, the matching `SourceCard` in the Sources section is rendered
+   * with a left-border accent and scrolled into view on mount. The
+   * prop is optional and defaults to "no highlight" — the target-led
+   * view passes nothing and renders all sources equally.
+   */
+  highlightedSourceFieldId?: string | null
 }
 
 /**
@@ -313,6 +322,7 @@ export function MappingDrawer({
   restoreFormState,
   onRestoreConsumed,
   pathDOutputs,
+  highlightedSourceFieldId,
 }: MappingDrawerProps) {
   const titleId = useId()
   const drawerRef = useRef<HTMLElement | null>(null)
@@ -981,6 +991,7 @@ export function MappingDrawer({
         onEditClick={handleEditClick}
         onCreateMappingClick={() => setIsFormActive(true)}
         pathDOutputs={pathDOutputs ?? null}
+        highlightedSourceFieldId={highlightedSourceFieldId ?? null}
       />
       <DrawerFooter
         row={effectiveRow}
@@ -1392,6 +1403,13 @@ interface DrawerBodyProps {
    * collapses (Linear pattern).
    */
   pathDOutputs: PathDOutputs | null
+  /**
+   * Mapping list view — flat-view split rows can open the drawer with
+   * a specific source attribution highlighted. Threaded through to
+   * `SourcesRoster` so the matching `SourceCard` gets a left-border
+   * accent + scrollIntoView on mount. Null in target-led usage.
+   */
+  highlightedSourceFieldId: string | null
 }
 
 function DrawerBody(props: DrawerBodyProps) {
@@ -1427,6 +1445,7 @@ function BodyContent({
   onEditClick,
   onCreateMappingClick,
   pathDOutputs,
+  highlightedSourceFieldId,
 }: DrawerBodyProps) {
   switch (row.kind) {
     case 'mapped':
@@ -1443,6 +1462,7 @@ function BodyContent({
           onEditFormSaveSuccess={onEditFormSaveSuccess}
           onEditClick={onEditClick}
           pathDOutputs={pathDOutputs}
+          highlightedSourceFieldId={highlightedSourceFieldId}
         />
       )
     case 'value_assignment':
@@ -1861,6 +1881,8 @@ interface MappedBodyProps {
   onEditClick: () => void
   /** Phase E PR α — Path D outputs sidecar for DATA QUALITY + DECISIONS. */
   pathDOutputs: PathDOutputs | null
+  /** Mapping list view — see DrawerBodyProps.highlightedSourceFieldId. */
+  highlightedSourceFieldId: string | null
 }
 
 function MappedBody({
@@ -1875,6 +1897,7 @@ function MappedBody({
   onEditFormSaveSuccess,
   onEditClick,
   pathDOutputs,
+  highlightedSourceFieldId,
 }: MappedBodyProps) {
   // Q11.A lock — pencil affordance is visible for needs_review + approved
   // mapped rows, except `custom_sql` (which is a Transform-page concern,
@@ -1961,7 +1984,10 @@ function MappedBody({
             onStateChange={onFormStateChange}
           />
         ) : (
-          <SourcesRoster row={row} />
+          <SourcesRoster
+            row={row}
+            highlightedSourceFieldId={highlightedSourceFieldId ?? null}
+          />
         )}
       </DrawerSection>
 
@@ -2122,20 +2148,31 @@ function EditPencilButton({ onClick }: { onClick: () => void }) {
 /**
  * Per-source roster body for the Sources section. Renders one `SourceCard`
  * per source in ordinal order.
+ *
+ * `highlightedSourceFieldId` is the flat-view's hook for routing a click
+ * on a split child row to the matching source. When set, the matching
+ * card gets a left-border accent and scrolls into view on mount. The
+ * target-led view passes null (or omits the prop) and every source
+ * renders identically.
  */
-function SourcesRoster({ row }: { row: MappedRow }) {
-  // Drawer redesign — TARGET-led identity (this iteration): per-source
-  // confidence is restored on ALL rows, including Rule 1 single-source.
-  // The header now leads with the target field and carries no
-  // confidence number; the per-source percent here is the only
-  // confidence display in the drawer, so it must show on Rule 1 too.
-  // The minor redundancy with the list view's right-edge confidence
-  // column on Rule 1 is acceptable — adjacency to the source identity
-  // makes the number meaningful in context.
+function SourcesRoster({
+  row,
+  highlightedSourceFieldId,
+}: {
+  row: MappedRow
+  highlightedSourceFieldId: string | null
+}) {
   return (
     <ul className="space-y-3" data-testid="drawer-sources-list">
       {row.sources.map((source) => (
-        <SourceCard key={source.id} source={source} />
+        <SourceCard
+          key={source.id}
+          source={source}
+          isHighlighted={
+            highlightedSourceFieldId !== null &&
+            source.sourceField.id === highlightedSourceFieldId
+          }
+        />
       ))}
     </ul>
   )
@@ -2169,13 +2206,40 @@ const SOURCE_CONFIDENCE_BAND_CLASSNAME: Record<RowConfidenceBand, string> = {
   low: 'text-red-600',
 }
 
-function SourceCard({ source }: { source: MappingSourceRef }) {
+function SourceCard({
+  source,
+  isHighlighted = false,
+}: {
+  source: MappingSourceRef
+  isHighlighted?: boolean
+}) {
   const confidenceBand: RowConfidenceBand | null =
     source.confidence === null
       ? null
       : classifyRowConfidence(source.confidence)
+  // Flat-view split-row entry point. When `isHighlighted` is true, the
+  // card scrolls into view on mount and renders with a 2px left-border
+  // accent so the user lands on the source they clicked through from.
+  // The ref is keyed only on the highlighted card — non-highlighted
+  // cards skip the ref entirely.
+  const cardRef = useRef<HTMLLIElement | null>(null)
+  useEffect(() => {
+    if (!isHighlighted) return
+    const el = cardRef.current
+    if (!el) return
+    el.scrollIntoView({ block: 'nearest', behavior: 'smooth' })
+  }, [isHighlighted])
   return (
-    <li className="space-y-2" data-testid="drawer-source-card">
+    <li
+      ref={isHighlighted ? cardRef : null}
+      className={cn(
+        'space-y-2',
+        isHighlighted &&
+          'border-l-2 border-blue-500 bg-blue-50/40 pl-3 -ml-3 rounded-sm',
+      )}
+      data-testid="drawer-source-card"
+      data-highlighted={isHighlighted ? 'true' : 'false'}
+    >
       <div className="flex min-w-0 items-center gap-2">
         <TableBadge tableName={source.sourceTable.name} />
         <span

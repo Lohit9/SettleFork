@@ -64,6 +64,14 @@ import { MappingDrawer } from './components/MappingDrawer'
 import { MappingSummaryStrip } from './components/MappingSummaryStrip'
 import { SourceSchemaSidebar } from './components/SourceSchemaSidebar'
 import { RejectConfirmPopover } from './components/RejectConfirmPopover'
+import { ViewModeToggle } from './components/ViewModeToggle'
+import { MappingListView } from './components/MappingListView'
+import { useMappingListMutations } from './hooks/useMappingListMutations'
+import {
+  applyViewModeToParams,
+  type MappingViewMode,
+  parseViewModeFromParams,
+} from '@/lib/utils/view-mode-url'
 import {
   EmptyMappingState,
   selectEmptyMappingCase,
@@ -528,6 +536,24 @@ function MappingContentLoaded({
     return initial && initial.length > 0 ? initial : null
   })
 
+  // Mapping list view — view mode is URL-synced (?view=flat); default
+  // 'target-led' is encoded by omitting the param. Local
+  // `showUnmappedSourceFields` is NOT URL-synced (flat-view-only filter,
+  // less valuable to share via link than the main filter axes).
+  // `drawerHighlightedSourceFieldId` is local view state: tracks which
+  // child source attribution the flat view clicked through to so the
+  // drawer can scroll/highlight on mount. Distinct from the existing
+  // body-row `highlightedSourceFieldId` (driven by the sidebar) — that
+  // one highlights rows in the mapping body; this one highlights a
+  // SourceCard inside the drawer. Reset when the drawer closes.
+  const [viewMode, setViewMode] = useState<MappingViewMode>(() =>
+    parseViewModeFromParams(searchParams ?? new URLSearchParams()),
+  )
+  const [showUnmappedSourceFields, setShowUnmappedSourceFields] =
+    useState<boolean>(false)
+  const [drawerHighlightedSourceFieldId, setDrawerHighlightedSourceFieldId] =
+    useState<string | null>(null)
+
   // ── Phase 4a-2 — pendingDrawerRowId sentinel ──────────────────────
   //
   // After a successful `createFieldMapping`, we swap the drawer URL
@@ -600,23 +626,41 @@ function MappingContentLoaded({
   const scrollContainerRef = useRef<HTMLDivElement>(null)
 
   const writeUrl = useCallback(
-    (next: MappingFilterState, nextDrawerRowId: string | null) => {
+    (
+      next: MappingFilterState,
+      nextDrawerRowId: string | null,
+      overrideViewMode?: MappingViewMode,
+    ) => {
       // Pattern U1 (single source of truth): one writer composes the
-      // filter query string and the drawer param together. This keeps
-      // filter writes from clobbering the drawer param and vice versa.
+      // filter query string, the drawer param, and the view-mode param
+      // together. This keeps any single concern's write from clobbering
+      // the others. `overrideViewMode` is an opt-in escape hatch used
+      // by `handleViewModeChange` so it doesn't have to await a re-
+      // render of `viewMode` state to write the new value.
       const filterQs = serializeFilterStateToQuery(next)
       const params = new URLSearchParams(filterQs)
       if (nextDrawerRowId !== null) {
         params.set('drawer', nextDrawerRowId)
       }
+      applyViewModeToParams(params, overrideViewMode ?? viewMode)
       const qs = params.toString()
       router.replace(
         `/app/projects/${projectId}/mapping${qs ? `?${qs}` : ''}`,
         { scroll: false },
       )
     },
-    [router, projectId],
+    [router, projectId, viewMode],
   )
+
+  const handleViewModeChange = useCallback(
+    (next: MappingViewMode) => {
+      setViewMode(next)
+      writeUrl(filters, drawerRowId, next)
+    },
+    [filters, drawerRowId, writeUrl],
+  )
+
+  const mutations = useMappingListMutations({ projectId })
 
   const handleFiltersChange = useCallback(
     (next: MappingFilterState) => {
@@ -696,6 +740,7 @@ function MappingContentLoaded({
 
   const handleDrawerClose = useCallback(() => {
     setDrawerRowId(null)
+    setDrawerHighlightedSourceFieldId(null)
     writeUrl(filters, null)
   }, [writeUrl, filters])
 
@@ -1568,6 +1613,35 @@ function MappingContentLoaded({
     [data.rows, filters],
   )
 
+  // Mapping list view consumes the full MappingsForRedesignResult so
+  // it can synthesise source-only unmapped rows from `sourceFields` +
+  // `sourceFieldAcknowledgments`. We thread a filtered variant
+  // (rows narrowed by the same `filterRows` pipeline) so target-led
+  // and flat views stay aligned on what the active filters select.
+  const filteredResult = useMemo<MappingsForRedesignResult>(
+    () => ({ ...data, rows: filteredRows }),
+    [data, filteredRows],
+  )
+
+  const handleFlatOpenDrawer = useCallback(
+    (rowId: string, hsfId: string | null) => {
+      setDrawerHighlightedSourceFieldId(hsfId)
+      handleRowClick(rowId)
+    },
+    // handleRowClick captured separately; declared further down. Its
+    // own dep array keeps this stable across renders that don't change
+    // the row-click context.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [],
+  )
+
+  const handleShowUnmappedSourceFieldsChange = useCallback(
+    (next: boolean) => {
+      setShowUnmappedSourceFields(next)
+    },
+    [],
+  )
+
   // Phase 3 Gap 7 — derive the open drawer row from `drawerRowId`. We
   // require the row to be present in `filteredRows` (not just `data.rows`)
   // so the founder rule "filter that hides the open row closes the drawer"
@@ -1808,6 +1882,12 @@ function MappingContentLoaded({
           present. */}
       {!isEmptyMappingState && (
         <>
+          {/* Mapping list view — top-of-page segmented control. Renders
+              above the summary strip so the user sees the view choice
+              first; `viewMode` is URL-synced via `?view=flat`. The
+              toggle stays visible across both views (the target-led
+              branch below renders unchanged when `viewMode='target-led'`). */}
+          <ViewModeToggle value={viewMode} onChange={handleViewModeChange} />
           {/* PR-6 (feat/ui-consolidation) consolidated the strip;
               PR-7 (feat/mapping-approvals) source-first the axis order +
               switched chips to read from `projectStats` (single source of
@@ -1823,6 +1903,14 @@ function MappingContentLoaded({
             rejectedCount={data.counts.rejected}
             highConfidenceCount={highConfidenceCount}
             onApproveHighConfidenceClick={handleApproveHighConfidenceClick}
+            showUnmappedSourceFields={
+              viewMode === 'flat' ? showUnmappedSourceFields : undefined
+            }
+            onShowUnmappedSourceFieldsChange={
+              viewMode === 'flat'
+                ? handleShowUnmappedSourceFieldsChange
+                : undefined
+            }
           />
         </>
       )}
@@ -1855,9 +1943,22 @@ function MappingContentLoaded({
             this column; the column only governs the body content's
             reading width.
           */}
-          <div className="mx-auto w-full max-w-5xl px-6 py-6">
+          <div
+            className={
+              viewMode === 'flat'
+                ? 'w-full px-6 py-6'
+                : 'mx-auto w-full max-w-5xl px-6 py-6'
+            }
+          >
             {isEmptyMappingState ? (
               <EmptyMappingState projectId={projectId} data={data} />
+            ) : viewMode === 'flat' ? (
+              <MappingListView
+                filteredResult={filteredResult}
+                showUnmappedSourceFields={showUnmappedSourceFields}
+                mutations={mutations}
+                onOpenDrawer={handleFlatOpenDrawer}
+              />
             ) : visibleTargetTables.length === 0 ? (
               <NoGroupsMatchState />
             ) : (
@@ -1929,6 +2030,7 @@ function MappingContentLoaded({
         }
         onRestoreConsumed={handleRestoreConsumed}
         pathDOutputs={pathDOutputs}
+        highlightedSourceFieldId={drawerHighlightedSourceFieldId}
       />
 
       {/*
