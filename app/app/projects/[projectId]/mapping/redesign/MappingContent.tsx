@@ -62,7 +62,10 @@ import { FilterRow } from './components/FilterRow'
 import { TargetTableGroup } from './components/TargetTableGroup'
 import { MappingDrawer } from './components/MappingDrawer'
 import { MappingSummaryStrip } from './components/MappingSummaryStrip'
-import { SourceSchemaSidebar } from './components/SourceSchemaSidebar'
+// SourceSchemaSidebar removed at the
+// feat/mapping-list-toggle-and-columns refinement pass — the
+// collapsed-state vertical label was retired (Linear-style polish);
+// source-field counts live on the summary chip now.
 import { RejectConfirmPopover } from './components/RejectConfirmPopover'
 import { ViewModeToggle } from './components/ViewModeToggle'
 import { MappingListView } from './components/MappingListView'
@@ -365,18 +368,13 @@ export default function MappingRedesignContent({
           projectId={projectId}
         />
         {initialRedesignData === null ? (
-          // Empty / error path — sidebar is rendered but inert; the
-          // body shows a single inline error card.
+          // Empty / error path — the body shows a single inline
+          // error card. The SourceSchemaSidebar was removed at the
+          // feat/mapping-list-toggle-and-columns refinement pass;
+          // the Source Fields summary chip carries the count
+          // information that the sidebar's collapsed-state label
+          // previously surfaced.
           <div className="flex min-h-0 flex-1 overflow-hidden">
-            <SourceSchemaSidebar
-              state={effectiveSidebarState}
-              filter={sidebarFilter}
-              onStateChange={handleSidebarStateChange}
-              onFilterChange={setSidebarFilter}
-              sourceFields={[]}
-              highlightedSourceFieldId={highlightedSourceFieldId}
-              onFieldClick={handleSidebarFieldClick}
-            />
             <div className="flex-1 overflow-auto">
               <div className="mx-auto w-full max-w-5xl px-6 py-6">
                 <NoDataState />
@@ -1912,15 +1910,11 @@ function MappingContentLoaded({
           without it, flex children stretch indefinitely instead of
           letting the scroll container handle overflow. */}
       <div className="flex min-h-0 flex-1 overflow-hidden">
-        <SourceSchemaSidebar
-          state={sidebarState}
-          filter={sidebarFilter}
-          onStateChange={onSidebarStateChange}
-          onFilterChange={onSidebarFilterChange}
-          sourceFields={data.sourceFields}
-          highlightedSourceFieldId={highlightedSourceFieldId}
-          onFieldClick={onSidebarFieldClick}
-        />
+        {/* SourceSchemaSidebar removed at the
+            feat/mapping-list-toggle-and-columns refinement pass per
+            the Linear-style polish brief — the rotated "Source
+            fields | N" collapsed-state label was redundant chrome
+            and the count is already surfaced in the summary chip. */}
         <div
           ref={scrollContainerRef}
           className="relative flex-1 overflow-auto"
@@ -1932,13 +1926,12 @@ function MappingContentLoaded({
             this column; the column only governs the body content's
             reading width.
           */}
-          <div
-            className={
-              viewMode === 'flat'
-                ? 'w-full px-6 py-6'
-                : 'mx-auto w-full max-w-5xl px-6 py-6'
-            }
-          >
+          {/* Both views share the same horizontal width
+              (feat/mapping-list-toggle-and-columns refinement pass)
+              — the prior `max-w-5xl mx-auto` on target-led made it
+              read narrower than Mapping First and felt inconsistent
+              across the toggle. */}
+          <div className="w-full px-6 py-6">
             {isEmptyMappingState ? (
               <EmptyMappingState projectId={projectId} data={data} />
             ) : viewMode === 'flat' ? (

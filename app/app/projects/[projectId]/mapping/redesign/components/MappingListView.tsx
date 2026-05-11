@@ -75,14 +75,35 @@ function deriveDisplayStatus(row: FlatRow): DisplayStatus {
   return row.status
 }
 
+// Linear-style polish (feat/mapping-list-toggle-and-columns refinement
+// pass): 8px fill + a 2px ring at 25% opacity for the hued states. The
+// ring reads as a soft halo around the dot. Gray states (rejected,
+// unmapped) intentionally render without a ring — neutral colours
+// don't need the additional emphasis.
 const STATUS_DOT_CONFIG: Record<
   DisplayStatus,
-  { label: string; dot: string }
+  { label: string; fill: string; ring: string | null }
 > = {
-  approved: { label: 'Approved', dot: 'bg-green-500' },
-  needs_review: { label: 'Needs review', dot: 'bg-amber-400' },
-  rejected: { label: 'Rejected', dot: 'bg-slate-400' },
-  unmapped: { label: 'Unmapped', dot: 'bg-slate-300' },
+  approved: {
+    label: 'Approved',
+    fill: 'bg-emerald-500',
+    ring: 'ring-2 ring-emerald-500/25',
+  },
+  needs_review: {
+    label: 'Needs review',
+    fill: 'bg-amber-400',
+    ring: 'ring-2 ring-amber-400/25',
+  },
+  rejected: {
+    label: 'Rejected',
+    fill: 'bg-gray-400',
+    ring: null,
+  },
+  unmapped: {
+    label: 'Unmapped',
+    fill: 'bg-gray-400',
+    ring: null,
+  },
 }
 
 function StatusDot({ status }: { status: DisplayStatus }) {
@@ -94,7 +115,8 @@ function StatusDot({ status }: { status: DisplayStatus }) {
       aria-label={`status: ${config.label}`}
       className={cn(
         'inline-block h-2 w-2 rounded-full align-middle',
-        config.dot,
+        config.fill,
+        config.ring,
       )}
     />
   )
@@ -574,15 +596,18 @@ export function MappingListView({
       <table className="w-full table-fixed border-collapse text-sm">
         <colgroup>
           {/* feat/mapping-list-toggle-and-columns refinement pass:
-              the status dot moves to the LEFTMOST column (a thin
-              24px slot with no header text). Column order:
-              status dot | Source Table | Source Field | Target Table
-              | Target Field | Confidence | Actions. */}
+              status dot in the LEFTMOST 24px slot; the four
+              main columns (Source/Target table & field) share the
+              available space EQUALLY at 25% each so a long Target
+              Table doesn't crowd the Source Field, and vice versa.
+              Confidence and Actions stay fixed-width. Final order:
+              [dot] | Source Table | Source Field | Target Table |
+              Target Field | Confidence | Actions. */}
           <col style={{ width: '24px' }} />
-          <col style={{ width: '12%' }} />
-          <col style={{ width: '26%' }} />
-          <col style={{ width: '12%' }} />
-          <col style={{ width: '26%' }} />
+          <col style={{ width: '25%' }} />
+          <col style={{ width: '25%' }} />
+          <col style={{ width: '25%' }} />
+          <col style={{ width: '25%' }} />
           <col style={{ width: '80px' }} />
           <col style={{ width: '110px' }} />
         </colgroup>
@@ -920,7 +945,7 @@ function FlatRowView({
       <td
         data-testid="flat-cell-status"
         title={statusTooltip}
-        className="border-b border-gray-100 px-1 py-2.5 align-top text-center"
+        className="px-1 py-2.5 align-top text-center"
       >
         <StatusDot status={displayStatus} />
       </td>
@@ -935,36 +960,67 @@ function FlatRowView({
       <td
         data-testid="flat-cell-source-table"
         title={sourceTableName ?? undefined}
-        className="truncate border-b border-gray-100 px-3 py-2.5 align-top text-sm text-slate-700"
+        className="truncate px-3 py-2.5 align-top text-sm text-slate-700"
       >
         {sourceTableName ?? <span className="text-gray-300">—</span>}
       </td>
       <td
         data-testid="flat-cell-source-field"
         data-group-position={groupPosition}
-        className="relative border-b border-gray-100 px-3 py-2.5 align-top text-sm"
+        className="relative px-3 py-2.5 align-top text-sm"
       >
         {/*
-          Multi-source bracket accent. A single positioned span
-          carries all three strokes (left bar + optional top cap +
-          optional bottom cap). 'first' and 'last' draw their
-          respective caps; 'middle' shows only the vertical bar;
-          'solo' (defensive — multi-source row whose siblings were
-          filtered out) shows both caps so the visual reads as a
-          closed `[` shape.
+          Multi-source bracket accent (feat/mapping-list-toggle-and-
+          columns refinement pass — tree-branch geometry).
+          The horizontal caps align with the VERTICAL CENTER of the
+          FieldNameChip pill (≈22px from the cell top, given
+          `py-2.5` cell padding + 24px pill height). The vertical bar
+          is split into two halves so the bracket reads like a tree
+          branch connecting to each field name:
+            'first'  — cap at pill center + bar going DOWN to cell
+                       bottom
+            'middle' — bar spans full cell height
+            'last'   — bar coming FROM cell top + cap at pill center
+            'solo'   — cap only (defensive — multi-source row whose
+                       siblings were filtered out)
+          Color is neutral gray-400 — subtle, structural.
         */}
         {groupPosition !== 'none' && (
           <span
             aria-hidden="true"
             data-testid="flat-source-field-bracket"
-            className={cn(
-              'pointer-events-none absolute left-0 top-0 h-full w-2 border-l-2 border-settle-teal-500/50',
-              (groupPosition === 'first' || groupPosition === 'solo') &&
-                'border-t-2',
-              (groupPosition === 'last' || groupPosition === 'solo') &&
-                'border-b-2',
+            className="pointer-events-none absolute inset-y-0 left-0 w-2"
+          >
+            {/* Vertical bar half above the pill center (rendered on
+                'middle' and 'last' rows). */}
+            {(groupPosition === 'middle' || groupPosition === 'last') && (
+              <span
+                aria-hidden="true"
+                className="absolute left-0 top-0 w-0 border-l border-gray-400"
+                style={{ height: '22px' }}
+              />
             )}
-          />
+            {/* Vertical bar half below the pill center (rendered on
+                'first' and 'middle' rows). */}
+            {(groupPosition === 'first' || groupPosition === 'middle') && (
+              <span
+                aria-hidden="true"
+                className="absolute bottom-0 left-0 w-0 border-l border-gray-400"
+                style={{ top: '22px' }}
+              />
+            )}
+            {/* Horizontal cap at pill vertical center (first / last /
+                solo). Connects the bar to the pill. */}
+            {(groupPosition === 'first' ||
+              groupPosition === 'last' ||
+              groupPosition === 'solo') && (
+              <span
+                aria-hidden="true"
+                className="absolute left-0 h-0 w-2 border-t border-gray-400"
+                style={{ top: '22px' }}
+              />
+            )}
+          </span>
         )}
         {sourceFieldName ? (
           sourceCellClickable ? (
@@ -1012,13 +1068,13 @@ function FlatRowView({
       <td
         data-testid="flat-cell-target-table"
         title={targetTable ?? undefined}
-        className="truncate border-b border-gray-100 px-3 py-2.5 align-top text-sm text-slate-700"
+        className="truncate px-3 py-2.5 align-top text-sm text-slate-700"
       >
         {targetTable ?? <span className="text-gray-300">—</span>}
       </td>
       <td
         data-testid="flat-cell-target-field"
-        className="border-b border-gray-100 px-3 py-2.5 align-top text-sm"
+        className="px-3 py-2.5 align-top text-sm"
       >
         {targetFieldName ? (
           targetCellEditable ? (
@@ -1046,7 +1102,7 @@ function FlatRowView({
       </td>
       <td
         data-testid="flat-cell-confidence"
-        className="border-b border-gray-100 px-3 py-2.5 align-top text-right text-sm tabular-nums"
+        className="px-3 py-2.5 align-top text-right text-sm tabular-nums"
       >
         {/* Scale-tolerant render via `formatConfidencePercent` — the
             helper handles both 0-1 fractional and 0-100 percent
@@ -1064,7 +1120,7 @@ function FlatRowView({
           </span>
         )}
       </td>
-      <td className="border-b border-gray-100 px-3 py-2.5 align-top">
+      <td className="px-3 py-2.5 align-top">
         <FlatRowActions
           rowId={row.id}
           isBusy={isBusy}

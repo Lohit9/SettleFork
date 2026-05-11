@@ -118,12 +118,19 @@ describe('MappingSummaryStrip — PR-7 chips read from projectStats', () => {
     expect(target.textContent).toContain('60/72')
   })
 
-  it('Approved chip carries a green dot, Needs Review carries amber', () => {
+  it('Approved chip carries an emerald dot with ring, Needs Review carries amber with ring', () => {
+    // feat/mapping-list-toggle-and-columns refinement pass: dots
+    // switched from green-500/amber-400 (no ring) to
+    // emerald-500 / amber-400 each with a 2px ring at 25% opacity.
+    // Mirrors the row-level `StatusDot` in MappingListView so the
+    // summary and row dots read identically.
     render(<MappingSummaryStrip projectStats={projectStats()} />)
     const approved = screen.getByTestId('mapping-summary-chip-approved')
     const needsReview = screen.getByTestId('mapping-summary-chip-needs-review')
-    expect(approved.innerHTML).toContain('bg-green-500')
+    expect(approved.innerHTML).toContain('bg-emerald-500')
+    expect(approved.innerHTML).toContain('ring-emerald-500/25')
     expect(needsReview.innerHTML).toContain('bg-amber-400')
+    expect(needsReview.innerHTML).toContain('ring-amber-400/25')
   })
 })
 

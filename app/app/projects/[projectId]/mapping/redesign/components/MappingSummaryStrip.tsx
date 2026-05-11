@@ -192,16 +192,20 @@ export function MappingSummaryStrip({
             project-wide axis denominators. Conditional Rejected /
             Unmapped chips were dropped — both are now subsumed in the
             redefined `needsReview = total - approved`. */}
+        {/* Linear-style polish: 8px fill + 2px ring @ 25% opacity for
+            the hued summary dots. Mirrors `StatusDot` in
+            MappingListView so the row-level and summary dots read
+            identically (emerald approved, amber needs-review). */}
         <SummaryChip
           label="Approved"
           value={projectStats.target.approved}
-          dotClassName="bg-green-500"
+          dotClassName="bg-emerald-500 ring-2 ring-emerald-500/25"
         />
         <SummaryChipDivider />
         <SummaryChip
           label="Needs Review"
           value={projectStats.target.needsReview}
-          dotClassName="bg-amber-400"
+          dotClassName="bg-amber-400 ring-2 ring-amber-400/25"
         />
       </div>
       {trailing ? (
@@ -265,7 +269,7 @@ function SummaryChip({
     <span className="flex items-center gap-1.5" data-testid={resolvedTestId}>
       <span
         aria-hidden="true"
-        className={`w-1.5 h-1.5 rounded-full ${dotClassName}`}
+        className={`w-2 h-2 rounded-full ${dotClassName}`}
       />
       <span>
         {label} {valueNode}

@@ -911,414 +911,6 @@ describe('MappingRedesignContent — Gap 7 drawer URL sync', () => {
   })
 })
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Phase 3 Gap 11a — Source schema sidebar integration.
-// ─────────────────────────────────────────────────────────────────────────────
-//
-// The sidebar is owned by `MappingRedesignContent`. Two integration
-// behaviors are exercised here:
-//   1. Coexistence with the drawer above 1024px viewport (no auto-collapse).
-//   2. Auto-collapse when the drawer opens at <= 1024px viewport.
-//   3. Restoration when the drawer closes (or when the viewport widens).
-//   4. Reflow regression: scroll container does NOT carry `xl:pr-[…]`.
-//   5. localStorage persistence honored across mounts.
-
-interface MockMediaQueryList extends MediaQueryList {
-  __setMatches: (m: boolean) => void
-}
-
-/**
- * Install a controllable `window.matchMedia` mock. Returns a setter
- * that flips the `matches` value AND fires the change listener so
- * subscribed components react. The default state is wide (true)
- * unless overridden via the second arg.
- */
-function installMatchMediaMock(initialWide: boolean): MockMediaQueryList {
-  let matches = initialWide
-  const listeners = new Set<(e: MediaQueryListEvent) => void>()
-  const mql: MockMediaQueryList = {
-    media: '(min-width: 1025px)',
-    matches,
-    onchange: null,
-    addListener: (l: ((e: MediaQueryListEvent) => void) | null) => {
-      if (l) listeners.add(l)
-    },
-    removeListener: (l: ((e: MediaQueryListEvent) => void) | null) => {
-      if (l) listeners.delete(l)
-    },
-    addEventListener: (_t: string, l: EventListener | EventListenerObject | null) => {
-      if (typeof l === 'function') {
-        listeners.add(l as (e: MediaQueryListEvent) => void)
-      }
-    },
-    removeEventListener: (_t: string, l: EventListener | EventListenerObject | null) => {
-      if (typeof l === 'function') {
-        listeners.delete(l as (e: MediaQueryListEvent) => void)
-      }
-    },
-    dispatchEvent: () => true,
-    __setMatches: (m: boolean) => {
-      matches = m
-      const event = { matches: m, media: mql.media } as MediaQueryListEvent
-      for (const l of listeners) l(event)
-    },
-  } as MockMediaQueryList
-  // `matches` is declared readonly on the interface. Use a getter so
-  // reads always return the current closure value; tests mutate via
-  // `__setMatches`.
-  Object.defineProperty(mql, 'matches', {
-    get: () => matches,
-    configurable: true,
-  })
-  window.matchMedia = vi.fn().mockReturnValue(mql) as typeof window.matchMedia
-  return mql
-}
-
-describe('MappingRedesignContent — Gap 11a sidebar integration', () => {
-  beforeEach(() => {
-    window.localStorage.clear()
-  })
-
-  afterEach(() => {
-    window.localStorage.clear()
-    // matchMedia was overwritten per-test; reset to the previous value
-    // (jsdom default is `undefined`). The next test that needs it
-    // installs its own mock.
-    delete (window as unknown as { matchMedia?: unknown }).matchMedia
-  })
-
-  it('renders the source schema sidebar shell at the default collapsed state', () => {
-    installMatchMediaMock(true)
-    renderRedesign()
-    const sidebar = screen.getByTestId('source-schema-sidebar')
-    expect(sidebar).toBeInTheDocument()
-    expect(sidebar.getAttribute('data-state')).toBe('collapsed')
-    expect(sidebar.style.width).toBe('28px')
-  })
-
-  it('honors a persisted "expanded" state from localStorage on mount', () => {
-    window.localStorage.setItem('mapping-sidebar-state', 'expanded')
-    installMatchMediaMock(true)
-    renderRedesign()
-    const sidebar = screen.getByTestId('source-schema-sidebar')
-    expect(sidebar.getAttribute('data-state')).toBe('expanded')
-    expect(sidebar.style.width).toBe('200px')
-  })
-
-  it('writes "expanded" to localStorage when the user clicks the rail', () => {
-    installMatchMediaMock(true)
-    renderRedesign()
-    fireEvent.click(screen.getByTestId('source-schema-sidebar-rail'))
-    expect(window.localStorage.getItem('mapping-sidebar-state')).toBe(
-      'expanded',
-    )
-  })
-
-  it('coexists with the drawer above 1024px viewport (no auto-collapse)', () => {
-    window.localStorage.setItem('mapping-sidebar-state', 'expanded')
-    installMatchMediaMock(true) // wide
-    renderRedesign('drawer=r-accounts-1')
-    const sidebar = screen.getByTestId('source-schema-sidebar')
-    // Drawer is open AND viewport is wide → sidebar respects persisted
-    // 'expanded' state. No auto-collapse override.
-    expect(sidebar.getAttribute('data-state')).toBe('expanded')
-    expect(screen.getByTestId('mapping-drawer')).toBeInTheDocument()
-  })
-
-  it('auto-collapses the sidebar when the drawer opens at <= 1024px viewport', () => {
-    window.localStorage.setItem('mapping-sidebar-state', 'expanded')
-    installMatchMediaMock(false) // narrow
-    renderRedesign('drawer=r-accounts-1')
-    const sidebar = screen.getByTestId('source-schema-sidebar')
-    // Persisted state stays 'expanded', but the effective state is
-    // 'collapsed' for this drawer-open + narrow-viewport session.
-    expect(sidebar.getAttribute('data-state')).toBe('collapsed')
-    // Auto-collapse must NOT write to localStorage — it's ephemeral.
-    expect(window.localStorage.getItem('mapping-sidebar-state')).toBe(
-      'expanded',
-    )
-  })
-
-  it('restores the sidebar when the drawer closes at narrow viewport', () => {
-    window.localStorage.setItem('mapping-sidebar-state', 'expanded')
-    installMatchMediaMock(false)
-    const { rerender } = render(
-      <MappingRedesignContent
-        projectId="p1"
-        projectName="Heritage Core"
-        initialRedesignData={buildData()}
-      />,
-    )
-    currentSearch = 'drawer=r-accounts-1'
-    rerender(
-      <MappingRedesignContent
-        projectId="p1"
-        projectName="Heritage Core"
-        initialRedesignData={buildData()}
-      />,
-    )
-    expect(
-      screen.getByTestId('source-schema-sidebar').getAttribute('data-state'),
-    ).toBe('collapsed')
-    // Now drawer closes — sidebar should restore.
-    currentSearch = ''
-    rerender(
-      <MappingRedesignContent
-        projectId="p1"
-        projectName="Heritage Core"
-        initialRedesignData={buildData()}
-      />,
-    )
-    expect(
-      screen.getByTestId('source-schema-sidebar').getAttribute('data-state'),
-    ).toBe('expanded')
-  })
-
-  it('restores the sidebar when the viewport widens above 1024px while drawer is open', () => {
-    window.localStorage.setItem('mapping-sidebar-state', 'expanded')
-    const mql = installMatchMediaMock(false)
-    renderRedesign('drawer=r-accounts-1')
-    expect(
-      screen.getByTestId('source-schema-sidebar').getAttribute('data-state'),
-    ).toBe('collapsed')
-    // Widen the viewport — listener fires, auto-collapse clears.
-    act(() => {
-      mql.__setMatches(true)
-    })
-    expect(
-      screen.getByTestId('source-schema-sidebar').getAttribute('data-state'),
-    ).toBe('expanded')
-  })
-
-  it('re-collapses if the viewport narrows again with the drawer still open', () => {
-    window.localStorage.setItem('mapping-sidebar-state', 'expanded')
-    const mql = installMatchMediaMock(true)
-    renderRedesign('drawer=r-accounts-1')
-    expect(
-      screen.getByTestId('source-schema-sidebar').getAttribute('data-state'),
-    ).toBe('expanded')
-    // Narrow the viewport while drawer is open — auto-collapse fires.
-    act(() => {
-      mql.__setMatches(false)
-    })
-    expect(
-      screen.getByTestId('source-schema-sidebar').getAttribute('data-state'),
-    ).toBe('collapsed')
-  })
-
-  it('drawer overlay refactor: the scroll container does NOT carry xl:pr-[520px] or xl:pr-[480px]', () => {
-    installMatchMediaMock(true)
-    const { container } = render(
-      <MappingRedesignContent
-        projectId="p1"
-        projectName="Heritage Core"
-        initialRedesignData={buildData()}
-      />,
-    )
-    // The post-Gap-11a layout has NO reflow class anywhere on any
-    // scroll container — the drawer is now ALWAYS-overlay. Search the
-    // entire rendered tree to be defensive against refactors.
-    expect(container.innerHTML).not.toContain('xl:pr-[520px]')
-    expect(container.innerHTML).not.toContain('xl:pr-[480px]')
-  })
-
-  it('persists the sidebar filter selection across re-mounts via localStorage', () => {
-    installMatchMediaMock(true)
-    window.localStorage.setItem('mapping-sidebar-state', 'expanded')
-    const { unmount } = renderRedesign()
-    fireEvent.click(screen.getByTestId('source-schema-sidebar-filter-mapped'))
-    expect(window.localStorage.getItem('mapping-sidebar-filter')).toBe(
-      'mapped',
-    )
-    unmount()
-    // Re-mount — the persisted filter survives.
-    renderRedesign()
-    expect(
-      screen
-        .getByTestId('source-schema-sidebar-filter-mapped')
-        .getAttribute('aria-pressed'),
-    ).toBe('true')
-  })
-})
-
-// ─────────────────────────────────────────────────────────────────────────────
-// Phase 3 Gap 11b — sidebar content + click-to-highlight integration.
-// ─────────────────────────────────────────────────────────────────────────────
-//
-// Exercises the parent-owned highlight state machine end-to-end:
-//   1. Sidebar field click highlights every consuming row.
-//   2. Re-clicking the same field clears the highlight (toggle).
-//   3. Clicking a different field replaces (single-select).
-//   4. Esc clears the highlight.
-//   5. Mousedown outside the sidebar AND outside a highlighted row clears.
-//   6. Mousedown inside a highlighted row preserves the highlight (so the
-//      drawer can open from there without losing context on its way in).
-//   7. Drawer Approve/Reject completion clears the highlight (founder-locked
-//      "additional concern" — protects against stale rowId references after
-//      a Reject deletes a TFM).
-
-describe('MappingRedesignContent — Gap 11b sidebar click-to-highlight', () => {
-  beforeEach(() => {
-    window.localStorage.setItem('mapping-sidebar-state', 'expanded')
-    // Default sidebar filter is 'unmapped'; flip to 'all' so both the
-    // mapped (sf-acct-col, sf-cif-col) and unmapped (sf-acct-unused)
-    // fixture fields render in the sidebar.
-    window.localStorage.setItem('mapping-sidebar-filter', 'all')
-    installMatchMediaMock(true)
-  })
-
-  afterEach(() => {
-    window.localStorage.clear()
-    delete (window as unknown as { matchMedia?: unknown }).matchMedia
-  })
-
-  function findFieldButton(sourceFieldId: string): HTMLElement {
-    const fields = screen.getAllByTestId('source-schema-sidebar-field')
-    const match = fields.find(
-      (f) => f.getAttribute('data-source-field-id') === sourceFieldId,
-    )
-    if (!match) {
-      throw new Error(
-        `No sidebar field button found for sourceFieldId=${sourceFieldId}`,
-      )
-    }
-    return match
-  }
-
-  function getRowBody(rowId: string): HTMLElement {
-    const row = document.querySelector(
-      `[data-testid="field-mapping-row"][data-row-id="${rowId}"]`,
-    )
-    if (!row) throw new Error(`Row not found: ${rowId}`)
-    const body = row.querySelector(
-      '[data-testid="field-mapping-row-body"]',
-    ) as HTMLElement | null
-    if (!body) throw new Error(`Row body not found: ${rowId}`)
-    return body
-  }
-
-  function isRowHighlighted(rowId: string): boolean {
-    return getRowBody(rowId).getAttribute('data-highlighted-row') === 'true'
-  }
-
-  it('clicking a sidebar field highlights every main-view row that consumes it', () => {
-    renderRedesign()
-    fireEvent.click(findFieldButton('sf-acct-col'))
-    // sf-acct-col is consumed by accounts-1, accounts-2, and loans-1.
-    expect(isRowHighlighted('r-accounts-1')).toBe(true)
-    expect(isRowHighlighted('r-accounts-2')).toBe(true)
-    expect(isRowHighlighted('r-loans-1')).toBe(true)
-    // customers rows source from sf-cif-col — should remain unhighlighted.
-    expect(isRowHighlighted('r-customers-1')).toBe(false)
-    expect(isRowHighlighted('r-customers-2')).toBe(false)
-  })
-
-  it('clicking the same field a second time clears the highlight (toggle)', () => {
-    renderRedesign()
-    const btn = findFieldButton('sf-acct-col')
-    fireEvent.click(btn)
-    expect(isRowHighlighted('r-accounts-1')).toBe(true)
-    fireEvent.click(btn)
-    expect(isRowHighlighted('r-accounts-1')).toBe(false)
-  })
-
-  it('clicking a different sidebar field replaces the highlight (single-select)', () => {
-    renderRedesign()
-    fireEvent.click(findFieldButton('sf-acct-col'))
-    expect(isRowHighlighted('r-accounts-1')).toBe(true)
-    fireEvent.click(findFieldButton('sf-cif-col'))
-    // accounts/loans rows clear, customers rows light up.
-    expect(isRowHighlighted('r-accounts-1')).toBe(false)
-    expect(isRowHighlighted('r-loans-1')).toBe(false)
-    expect(isRowHighlighted('r-customers-1')).toBe(true)
-    expect(isRowHighlighted('r-customers-2')).toBe(true)
-  })
-
-  it('Esc clears the highlight', () => {
-    renderRedesign()
-    fireEvent.click(findFieldButton('sf-acct-col'))
-    expect(isRowHighlighted('r-accounts-1')).toBe(true)
-    fireEvent.keyDown(document, { key: 'Escape' })
-    expect(isRowHighlighted('r-accounts-1')).toBe(false)
-  })
-
-  it('mousedown outside the sidebar AND outside a highlighted row clears the highlight', () => {
-    renderRedesign()
-    fireEvent.click(findFieldButton('sf-acct-col'))
-    expect(isRowHighlighted('r-accounts-1')).toBe(true)
-    // r-customers-1 is NOT highlighted by sf-acct-col, so mousedown there
-    // should fall through to the click-outside listener and clear.
-    fireEvent.mouseDown(getRowBody('r-customers-1'))
-    expect(isRowHighlighted('r-accounts-1')).toBe(false)
-  })
-
-  it('mousedown inside a highlighted row PRESERVES the highlight', () => {
-    // The user should be able to click a highlighted row to open its drawer
-    // without the act of clicking blowing away the highlight on its way in.
-    renderRedesign()
-    fireEvent.click(findFieldButton('sf-acct-col'))
-    expect(isRowHighlighted('r-accounts-1')).toBe(true)
-    fireEvent.mouseDown(getRowBody('r-accounts-1'))
-    expect(isRowHighlighted('r-accounts-1')).toBe(true)
-  })
-
-  it('mousedown inside the sidebar PRESERVES the highlight', () => {
-    renderRedesign()
-    fireEvent.click(findFieldButton('sf-acct-col'))
-    // Mousedown on the sidebar's filter row, list area, or header should
-    // not clear — the user might be aiming for another field row.
-    const sidebar = screen.getByTestId('source-schema-sidebar')
-    fireEvent.mouseDown(sidebar)
-    expect(isRowHighlighted('r-accounts-1')).toBe(true)
-  })
-
-  it('opening the drawer leaves the highlight intact (drawer + highlight coexist)', () => {
-    renderRedesign()
-    fireEvent.click(findFieldButton('sf-acct-col'))
-    fireEvent.click(getRowBody('r-accounts-1'))
-    expect(screen.getByTestId('mapping-drawer')).toBeInTheDocument()
-    expect(isRowHighlighted('r-accounts-1')).toBe(true)
-  })
-
-  it('drawer Approve completion clears the highlight (mild over-clear is intentional)', async () => {
-    // Founder-locked "additional concern" decision: the existing Gap 9
-    // post-action callback also clears the sidebar highlight so a stale
-    // rowId reference cannot survive a Reject. Approve clears too —
-    // mild over-clearing accepted in exchange for the simpler one-line
-    // fix in `handleDrawerActionComplete`.
-    //
-    // Use r-accounts-2 (status='needs_review') so the Approve button
-    // is enabled. r-accounts-1 is already 'approved' → button disabled.
-    renderRedesign('drawer=r-accounts-2')
-    fireEvent.click(findFieldButton('sf-acct-col'))
-    expect(isRowHighlighted('r-accounts-2')).toBe(true)
-    const approveBtn = screen.getByTestId('mapping-drawer-approve-button')
-    fireEvent.click(approveBtn)
-    // Approve runs inside a React transition; the post-action
-    // callback (which clears the highlight) fires after the mocked
-    // server resolves. Wait until the DOM reflects that.
-    await waitFor(() => {
-      expect(isRowHighlighted('r-accounts-2')).toBe(false)
-    })
-  })
-
-  it('drawer Reject completion clears the highlight (necessary — TFM is gone)', async () => {
-    renderRedesign('drawer=r-accounts-1')
-    fireEvent.click(findFieldButton('sf-acct-col'))
-    expect(isRowHighlighted('r-accounts-1')).toBe(true)
-    fireEvent.click(screen.getByTestId('mapping-drawer-reject-button'))
-    const confirmBtn = await screen.findByTestId('mapping-drawer-reject-confirm')
-    fireEvent.click(confirmBtn)
-    // Drawer closes on Reject and the parent's `handleDrawerActionComplete`
-    // clears the highlight in the same callback. The row stays in the
-    // DOM (only the TFM identity dissolves on the server; the in-memory
-    // fixture is unchanged), so we can assert the data attribute
-    // directly once the post-action callback has flushed.
-    await waitFor(() => {
-      expect(isRowHighlighted('r-accounts-1')).toBe(false)
-    })
-  })
-})
 
 // ─────────────────────────────────────────────────────────────────────────────
 // PR-7: conditional Rejected / Unmapped chips RETIRED from the strip.
@@ -1468,13 +1060,12 @@ describe('MappingRedesignContent — zero-gap between strip and FilterRow (post 
 // asserts only the toolbar+body siblings.
 
 describe('MappingRedesignContent — structural invariant (post sidebar architecture refactor)', () => {
-  it('PageHeader, Strip (with ViewModeToggle in trailing slot), FilterRow, and sidebar+body row are direct children of the page flex column', () => {
+  it('PageHeader, Strip (with ViewModeToggle in trailing slot), FilterRow, and body row are direct children of the page flex column', () => {
     renderRedesign()
     const pageHeader = screen.getByTestId('page-header')
     const viewModeToggle = screen.getByTestId('mapping-view-mode-toggle')
     const strip = screen.getByTestId('mapping-summary-strip')
     const filterRow = screen.getByTestId('mapping-redesign-filter-row')
-    const sidebar = screen.getByTestId('source-schema-sidebar')
 
     // Walk up from PageHeader to find the outer flex column. The
     // testid mock for PageHeader returns `<div data-testid="page-header">`
@@ -1490,39 +1081,34 @@ describe('MappingRedesignContent — structural invariant (post sidebar architec
     expect(pageColumn.className).toMatch(/\bh-full\b/)
     expect(pageColumn.className).toMatch(/\bbg-gray-50\b/)
 
-    // feat/mapping-list-toggle-and-columns: ViewModeToggle moved
-    // INSIDE the strip's trailing slot — it is no longer a direct
-    // child of the page column. The strip still IS, and the toggle
-    // lives within it as a nested descendant.
+    // ViewModeToggle lives INSIDE the strip's trailing slot — it is
+    // not a direct child of the page column. The strip still IS.
     expect(strip.parentElement).toBe(pageColumn)
     expect(filterRow.parentElement).toBe(pageColumn)
     expect(strip.contains(viewModeToggle)).toBe(true)
-    // The toggle sits inside the trailing slot of the strip.
     const trailingSlot = screen.getByTestId('mapping-summary-trailing')
     expect(trailingSlot.contains(viewModeToggle)).toBe(true)
 
-    // The sidebar lives inside the sidebar+body flex row; that ROW
-    // is the direct child of pageColumn. Walk one step up from the
-    // sidebar to find the row, then assert.
-    const sidebarBodyRow = sidebar.parentElement
-    expect(sidebarBodyRow).not.toBeNull()
-    if (!sidebarBodyRow) return
-    expect(sidebarBodyRow.parentElement).toBe(pageColumn)
+    // feat/mapping-list-toggle-and-columns refinement pass: the
+    // SourceSchemaSidebar was removed (Linear-style polish — the
+    // collapsed-state vertical label was redundant chrome). The
+    // page column's bottom row is now the body scroll container
+    // alone, with no sidebar as a sibling inside it.
+    expect(screen.queryByTestId('source-schema-sidebar')).toBeNull()
 
-    // Pin the sibling order: PageHeader → Strip → FilterRow →
-    // sidebar+body row. Children after that (drawer, dialog) are
-    // position-fixed and not asserted by this invariant. The
-    // ViewModeToggle no longer claims its own slot in this chain
-    // since it lives inside the strip.
+    // Pin the sibling order: PageHeader → Strip → FilterRow → body
+    // row. Children after that (drawer, dialog) are position-fixed
+    // and not asserted by this invariant.
     const children = Array.from(pageColumn.children) as HTMLElement[]
     const pageHeaderIdx = children.indexOf(pageHeader)
     const stripIdx = children.indexOf(strip)
     const filterRowIdx = children.indexOf(filterRow)
-    const rowIdx = children.indexOf(sidebarBodyRow)
     expect(pageHeaderIdx).toBeGreaterThanOrEqual(0)
     expect(stripIdx).toBe(pageHeaderIdx + 1)
     expect(filterRowIdx).toBe(stripIdx + 1)
-    expect(rowIdx).toBe(filterRowIdx + 1)
+    // The body row sits at filterRowIdx + 1; its identity is no
+    // longer pinned via a sidebar testid since the sidebar is gone.
+    expect(children.length).toBeGreaterThanOrEqual(filterRowIdx + 2)
   })
 })
 
@@ -2470,10 +2056,13 @@ describe('MappingRedesignContent — Phase 4 empty-state cases', () => {
     expect(screen.queryByTestId('mapping-redesign-empty-generate')).toBeNull()
   })
 
-  it('source schema sidebar persists across the empty-state render', () => {
-    // The sidebar is part of the empty-state shell (Phase 4 prompt
-    // §"Wire-up in redesign MappingContent"): the sidebar+body flex
-    // row keeps mounting in every empty case. This pins it.
+  it('source schema sidebar is gone from the empty-state render (Linear-style polish)', () => {
+    // feat/mapping-list-toggle-and-columns refinement pass retired
+    // the SourceSchemaSidebar — the rotated "Source fields | N"
+    // collapsed-state label was redundant chrome and the count
+    // lives on the summary chip. The body-flex row still mounts
+    // (it holds the inline empty card), but the sidebar is no
+    // longer a child of it.
     renderEmpty(
       buildEmptyData({
         targetSchemaEmpty: true,
@@ -2481,6 +2070,6 @@ describe('MappingRedesignContent — Phase 4 empty-state cases', () => {
         sourceFields: [],
       }),
     )
-    expect(screen.getByTestId('source-schema-sidebar')).toBeInTheDocument()
+    expect(screen.queryByTestId('source-schema-sidebar')).toBeNull()
   })
 })
