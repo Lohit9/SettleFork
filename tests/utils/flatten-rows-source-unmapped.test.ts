@@ -215,7 +215,7 @@ describe('flattenRowsForListView — source-side rows', () => {
     expect(sourceRows[0].id).toBe('ack::source::ack-1')
   })
 
-  it('splits a multi-source TFM into 1 parent + N child rows', () => {
+  it('emits a multi-source TFM as a single row with sources array (Option C dropped)', () => {
     const mappedRow: MappingRow = {
       kind: 'mapped',
       id: 'tfm-multi',
@@ -275,15 +275,15 @@ describe('flattenRowsForListView — source-side rows', () => {
     const result = makeResult({ rows: [mappedRow] })
 
     const rows = flattenRowsForListView(result)
-    expect(rows.map((r) => r.kind)).toEqual([
-      'mapped-parent',
-      'mapped-child',
-      'mapped-child',
-    ])
+    // Third polish pass: multi-source TFMs render as one compact row
+    // with sources[] preserving every contributor. The renderer
+    // surfaces the count via a "N× Multiple sources" badge.
+    expect(rows.length).toBe(1)
+    expect(rows[0].kind).toBe('mapped')
     expect(rows[0].id).toBe('tfm-multi')
-    expect(rows[1].id).toBe('tfm-multi::ms-1')
-    expect(rows[2].id).toBe('tfm-multi::ms-2')
-    // All three share the same groupId — used for visual grouping.
-    expect(new Set(rows.map((r) => r.groupId)).size).toBe(1)
+    if (rows[0].kind !== 'mapped') throw new Error('shape')
+    expect(rows[0].sources.length).toBe(2)
+    expect(rows[0].sources[0].id).toBe('ms-1')
+    expect(rows[0].sources[1].id).toBe('ms-2')
   })
 })

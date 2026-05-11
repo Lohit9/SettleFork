@@ -12,12 +12,14 @@ import type {
  * Flat-view row projection used by the Mapping list view.
  *
  * The redesign data feed already emits a flat `rows: MappingRow[]`
- * array, but the list view needs further granularity for the
- * Option-C parent/child layout decided at architecture review:
+ * array; this helper folds the source-side derivations (acks +
+ * unmapped source fields) in.
  *
- *   • single-source mapped TFM → 1 flat row (kind: 'mapped-single')
- *   • multi-source mapped TFM  → 1 parent + N children
- *                                 (kind: 'mapped-parent', 'mapped-child')
+ *   • mapped TFM (1+ sources)  → 1 flat row (kind: 'mapped')
+ *                                 sources[] carries every contributor;
+ *                                 the renderer shows a compact
+ *                                 "N× Multiple sources" treatment when
+ *                                 sources.length > 1.
  *   • value assignment         → 1 flat row, source cells blank
  *                                 (kind: 'value-assignment')
  *   • unmapped target          → 1 flat row, source cells blank
@@ -31,12 +33,19 @@ import type {
  * INF-57 (2026-05-10): acknowledged target fields are surfaced by the
  * server as `UnmappedRow` with status='approved'. The flat view treats
  * them like any other unmapped target row — the status field carries
- * the 'approved' value and the renderer draws a green dot.
+ * the 'approved' value and the renderer draws the green Approved pill.
  *
  * Source-side acknowledgments live separately on
  * `result.sourceFieldAcknowledgments`. They ALWAYS appear in the flat
  * view (independent of showUnmappedSourceFields), because they
  * represent explicit user decisions worth surfacing.
+ *
+ * Prior to the second visual polish pass, multi-source TFMs split into
+ * a parent + N child rows (Option C). The founder's reference shot
+ * superseded that — multi-source now renders as one compact row with a
+ * blue `N×` badge in the source-table cell + "N fields combined" in
+ * the source-field cell. Per-contributor edits / rejects route through
+ * the drawer.
  */
 
 export type FlatRowStatus = 'approved' | 'needs_review' | 'rejected'
@@ -62,30 +71,16 @@ interface FlatRowBase {
   status: FlatRowStatus
 }
 
-export interface MappedSingleFlatRow extends FlatRowBase {
-  kind: 'mapped-single'
-  source: MappingSourceRef
+export interface MappedFlatRow extends FlatRowBase {
+  kind: 'mapped'
   targetField: TargetFieldRef
-  confidence: number | null
-  parentRow: MappedRow
-}
-
-export interface MappedParentFlatRow extends FlatRowBase {
-  kind: 'mapped-parent'
-  targetField: TargetFieldRef
+  /**
+   * All contributing source attributions, in `ordinal` order (server-
+   * emitted). Always non-empty for 'mapped' rows. The renderer shows a
+   * compact "N× Multiple sources" badge when length > 1.
+   */
+  sources: MappingSourceRef[]
   /** TFM aggregate confidence (MIN across sources, server-derived). */
-  confidence: number | null
-  /** Total source attributions on this TFM. */
-  sourceCount: number
-  parentRow: MappedRow
-}
-
-export interface MappedChildFlatRow extends FlatRowBase {
-  kind: 'mapped-child'
-  source: MappingSourceRef
-  /** Parent's target — carried for filter / search predicates. */
-  targetField: TargetFieldRef
-  /** Per-source confidence (NOT the TFM aggregate). */
   confidence: number | null
   parentRow: MappedRow
 }
@@ -114,9 +109,7 @@ export interface UnmappedSourceFlatRow extends FlatRowBase {
 }
 
 export type FlatRow =
-  | MappedSingleFlatRow
-  | MappedParentFlatRow
-  | MappedChildFlatRow
+  | MappedFlatRow
   | ValueAssignmentFlatRow
   | UnmappedTargetFlatRow
   | UnmappedSourceFlatRow
@@ -147,49 +140,24 @@ export function flattenRowsForListView(
       const status = normalizeMappedStatus(row.status)
       if (row.sources.length === 0) {
         // Defensive: a 'mapped' row with no sources is not expected
-        // server-side, but skip it cleanly rather than producing a
-        // broken parent. The row will reappear as an unmapped target
-        // after the next refresh once server-side state settles.
+        // server-side, but skip it cleanly rather than emit a
+        // half-rendered row. The row will reappear as an unmapped
+        // target after the next refresh once server-side state settles.
         continue
       }
-      if (row.sources.length === 1) {
-        const src = row.sources[0]
+      for (const src of row.sources) {
         sourceFieldIdsReferenced.add(src.sourceField.id)
-        out.push({
-          kind: 'mapped-single',
-          id: row.id,
-          groupId: row.id,
-          status,
-          source: src,
-          targetField: row.targetField,
-          confidence: row.confidence,
-          parentRow: row,
-        })
-        continue
       }
       out.push({
-        kind: 'mapped-parent',
+        kind: 'mapped',
         id: row.id,
         groupId: row.id,
         status,
         targetField: row.targetField,
+        sources: row.sources,
         confidence: row.confidence,
-        sourceCount: row.sources.length,
         parentRow: row,
       })
-      for (const src of row.sources) {
-        sourceFieldIdsReferenced.add(src.sourceField.id)
-        out.push({
-          kind: 'mapped-child',
-          id: `${row.id}::${src.id}`,
-          groupId: row.id,
-          status,
-          source: src,
-          targetField: row.targetField,
-          confidence: src.confidence,
-          parentRow: row,
-        })
-      }
       continue
     }
     if (row.kind === 'value_assignment') {

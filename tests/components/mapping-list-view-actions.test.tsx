@@ -281,7 +281,11 @@ describe('MappingListView — action buttons per row kind', () => {
     ).toBeInTheDocument()
   })
 
-  it('multi-source parent renders + N children render', () => {
+  it('multi-source TFM renders as ONE row with multi-source attribute + badge', () => {
+    // Third polish pass: Option C (parent + indented children) was
+    // dropped in favor of a single compact row per TFM with a `N×`
+    // badge in the source-table cell. Per-contributor edits now
+    // route exclusively through the drawer.
     const mutations = makeMutations()
     const result = makeResult([makeMultiSourceMapped()])
     render(
@@ -293,19 +297,22 @@ describe('MappingListView — action buttons per row kind', () => {
       />,
     )
 
-    // 1 parent + 2 children = 3 rows
-    expect(findRow('tfm-multi').getAttribute('data-row-kind')).toBe(
-      'mapped-parent',
-    )
-    expect(findRow('tfm-multi::ms-a').getAttribute('data-row-kind')).toBe(
-      'mapped-child',
-    )
-    expect(findRow('tfm-multi::ms-b').getAttribute('data-row-kind')).toBe(
-      'mapped-child',
-    )
+    const row = findRow('tfm-multi')
+    expect(row.getAttribute('data-row-kind')).toBe('mapped')
+    expect(row.getAttribute('data-multi-source')).toBe('true')
+    // Blue `N×` badge surfaces the source count.
+    expect(within(row).getByTestId('multi-source-count-badge'))
+      .toHaveTextContent('2×')
+    // No child rows exist anymore — verify no `<tfm>::<source>` ids.
+    expect(
+      document.querySelector('[data-row-id="tfm-multi::ms-a"]'),
+    ).toBeNull()
+    expect(
+      document.querySelector('[data-row-id="tfm-multi::ms-b"]'),
+    ).toBeNull()
   })
 
-  it('multi-source child Approve routes through parent TFM id; Reject deletes the contributor', async () => {
+  it('multi-source row Approve / Reject operates on the whole TFM (no per-contributor button in flat view)', async () => {
     const mutations = makeMutations()
     const result = makeResult([makeMultiSourceMapped()])
     render(
@@ -317,12 +324,12 @@ describe('MappingListView — action buttons per row kind', () => {
       />,
     )
 
-    const childRow = findRow('tfm-multi::ms-a')
-    fireEvent.click(within(childRow).getByTestId('flat-row-action-approve'))
-    expect(mutations.approveTfm).toHaveBeenCalledWith('tfm-multi') // PARENT id
+    const row = findRow('tfm-multi')
+    fireEvent.click(within(row).getByTestId('flat-row-action-approve'))
+    expect(mutations.approveTfm).toHaveBeenCalledWith('tfm-multi')
 
-    fireEvent.click(within(childRow).getByTestId('flat-row-action-reject'))
-    expect(mutations.rejectTfm).toHaveBeenCalledWith('tfm-multi::ms-a') // shimmed CHILD id
+    fireEvent.click(within(row).getByTestId('flat-row-action-reject'))
+    expect(mutations.rejectTfm).toHaveBeenCalledWith('tfm-multi')
   })
 
   it('unmapped-target: Approve omitted; Reject calls setUnmappedRowRejected with targetFieldId', () => {
@@ -369,7 +376,11 @@ describe('MappingListView — row body click + cell click', () => {
     expect(onOpenDrawer).toHaveBeenCalledWith('tfm-1', null)
   })
 
-  it('clicking a mapped-child body opens the drawer with the clicked source highlighted', () => {
+  it('clicking a multi-source row body opens the drawer keyed on the TFM (no per-contributor highlight)', () => {
+    // The Option C parent+children layout was dropped at the third
+    // polish pass. Multi-source TFMs are one row; the drawer opens
+    // with all sources rendered equally (the user chooses which to
+    // edit inside the drawer).
     const mutations = makeMutations()
     const onOpenDrawer = vi.fn()
     const result = makeResult([makeMultiSourceMapped()])
@@ -382,8 +393,8 @@ describe('MappingListView — row body click + cell click', () => {
       />,
     )
 
-    fireEvent.click(findRow('tfm-multi::ms-b'))
-    expect(onOpenDrawer).toHaveBeenCalledWith('tfm-multi', 'sf-assyitem')
+    fireEvent.click(findRow('tfm-multi'))
+    expect(onOpenDrawer).toHaveBeenCalledWith('tfm-multi', null)
   })
 
   it('clicking an action button does NOT bubble to the row body (drawer does not open)', () => {
