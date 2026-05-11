@@ -229,7 +229,11 @@ describe('MappingListView — action buttons per row kind', () => {
     expect(mutations.rejectTfm).toHaveBeenCalledWith('tfm-1')
   })
 
-  it('approve is disabled when row is already approved', () => {
+  it('approve button is omitted when row is already approved', () => {
+    // Polish pass (second round): buttons are no longer rendered in a
+    // disabled state — they're simply omitted from the gutter when
+    // not applicable. Cleaner visual that matches the founder's
+    // reference shot (no greyed-out chrome).
     const mutations = makeMutations()
     const result = makeResult([
       makeSingleSourceMapped({ status: 'approved' }),
@@ -244,14 +248,17 @@ describe('MappingListView — action buttons per row kind', () => {
     )
 
     const row = findRow('tfm-1')
-    const approve = within(row).getByTestId(
-      'flat-row-action-approve',
-    ) as HTMLButtonElement
-    expect(approve.disabled).toBe(true)
-    expect(approve.getAttribute('title')).toBe('Already approved')
+    expect(
+      within(row).queryByTestId('flat-row-action-approve'),
+    ).toBeNull()
+    // Reject still renders on an approved row — "un-approve" is a
+    // legitimate action for an auditor reviewing past decisions.
+    expect(
+      within(row).getByTestId('flat-row-action-reject'),
+    ).toBeInTheDocument()
   })
 
-  it('reject is disabled when row is already rejected', () => {
+  it('reject button is omitted when row is already rejected', () => {
     const mutations = makeMutations()
     const result = makeResult([
       makeSingleSourceMapped({ status: 'rejected' }),
@@ -266,11 +273,12 @@ describe('MappingListView — action buttons per row kind', () => {
     )
 
     const row = findRow('tfm-1')
-    const reject = within(row).getByTestId(
-      'flat-row-action-reject',
-    ) as HTMLButtonElement
-    expect(reject.disabled).toBe(true)
-    expect(reject.getAttribute('title')).toBe('Already rejected')
+    expect(
+      within(row).queryByTestId('flat-row-action-reject'),
+    ).toBeNull()
+    expect(
+      within(row).getByTestId('flat-row-action-approve'),
+    ).toBeInTheDocument()
   })
 
   it('multi-source parent renders + N children render', () => {
@@ -317,7 +325,7 @@ describe('MappingListView — action buttons per row kind', () => {
     expect(mutations.rejectTfm).toHaveBeenCalledWith('tfm-multi::ms-a') // shimmed CHILD id
   })
 
-  it('unmapped-target: Approve disabled; Reject calls setUnmappedRowRejected with targetFieldId', () => {
+  it('unmapped-target: Approve omitted; Reject calls setUnmappedRowRejected with targetFieldId', () => {
     const mutations = makeMutations()
     const result = makeResult([makeUnmappedTarget()])
     render(
@@ -330,10 +338,10 @@ describe('MappingListView — action buttons per row kind', () => {
     )
 
     const row = findRow('unmapped::tf-9')
-    const approve = within(row).getByTestId(
-      'flat-row-action-approve',
-    ) as HTMLButtonElement
-    expect(approve.disabled).toBe(true)
+    // No mapping to approve → Approve button is omitted entirely.
+    expect(
+      within(row).queryByTestId('flat-row-action-approve'),
+    ).toBeNull()
 
     fireEvent.click(within(row).getByTestId('flat-row-action-reject'))
     expect(mutations.rejectUnmappedRow).toHaveBeenCalledWith({

@@ -1,37 +1,31 @@
 'use client'
 
-import { Check, Edit3, X } from 'lucide-react'
+import { Check, X } from 'lucide-react'
 import { cn } from '@/components/ui/utils'
 
 // ─────────────────────────────────────────────────────────────────────────────
 // FlatRowActions — per-row action buttons for the Mapping list view.
 // ─────────────────────────────────────────────────────────────────────────────
 //
-// Three actions, always visible (NOT hover-revealed — divergence from
+// Two actions, always visible (NOT hover-revealed — divergence from
 // the target-led FieldMappingRow per founder review, justified by the
 // Big-4 audit workflow expecting visible affordances):
 //
 //   ✓ Approve   green   approve a mapping (TFM-level for mapped rows;
-//                       disabled for unmapped/already-approved)
+//                       not rendered for already-approved or rows that
+//                       are not approvable)
 //   ✗ Reject    red     reject the row (delete a source attribution,
 //                       reject the whole TFM, or flag an unmapped row)
-//   ✏ Edit     neutral  context-sensitive — for mapped rows opens the
-//                       drawer; for unmapped rows opens the cell picker
-//                       for the missing axis
 //
-// Each handler is optional: when undefined the button renders disabled
-// with a tooltip explaining why (passed via `*Tooltip` props). The
-// parent (MappingListView) decides per-row-kind which actions are
-// available and which are no-ops.
+// Edit (✏) was dropped at the second polish pass — every edit flow has
+// a direct cell-click affordance (source/target cells open inline
+// pickers; row body click opens the drawer). The Edit button was
+// redundant chrome.
 //
-// Visual lineage: the icon + size matches the target-led's
-// `ActionIconButton` (FieldMappingRow.tsx). We do NOT reuse that
-// component directly because (a) it lives inside FieldMappingRow.tsx
-// rather than in components/ui/, (b) it has the hover-reveal coupling
-// that doesn't match the flat view's always-visible UX, and (c)
-// adding an `Edit` variant + extracting the shared button is more
-// scope than this PR earns. Two clear local implementations beats one
-// over-coupled shared one.
+// Each handler is optional: when undefined the corresponding button is
+// NOT rendered (the prior "render-disabled" pattern was traded for
+// a tighter visual that matches the founder's reference shot — empty
+// gutter when no action is applicable, never a greyed-out icon).
 
 export interface FlatRowActionsProps {
   /**
@@ -44,17 +38,14 @@ export interface FlatRowActionsProps {
   isBusy: boolean
 
   /**
-   * Optional handler for Approve. When undefined the button renders
-   * disabled. The tooltip prop documents the disabled reason.
+   * Approve handler. When undefined the Approve button is not
+   * rendered. Tooltip drives the button's `title` attribute.
    */
   onApprove?: () => void
   approveTooltip?: string
 
   onReject?: () => void
   rejectTooltip?: string
-
-  onEdit?: () => void
-  editTooltip?: string
 }
 
 export function FlatRowActions({
@@ -64,8 +55,6 @@ export function FlatRowActions({
   approveTooltip,
   onReject,
   rejectTooltip,
-  onEdit,
-  editTooltip,
 }: FlatRowActionsProps) {
   return (
     <div
@@ -73,36 +62,30 @@ export function FlatRowActions({
       data-row-id={rowId}
       className="flex items-center justify-end gap-1"
     >
-      <ActionIconButton
-        testId="flat-row-action-approve"
-        ariaLabel="Approve mapping"
-        tooltip={approveTooltip ?? 'Approve mapping'}
-        variant="approve"
-        disabled={!onApprove || isBusy}
-        onClick={onApprove}
-      >
-        <Check aria-hidden="true" className="h-3.5 w-3.5" />
-      </ActionIconButton>
-      <ActionIconButton
-        testId="flat-row-action-reject"
-        ariaLabel="Reject mapping"
-        tooltip={rejectTooltip ?? 'Reject mapping'}
-        variant="reject"
-        disabled={!onReject || isBusy}
-        onClick={onReject}
-      >
-        <X aria-hidden="true" className="h-3.5 w-3.5" />
-      </ActionIconButton>
-      <ActionIconButton
-        testId="flat-row-action-edit"
-        ariaLabel="Edit mapping"
-        tooltip={editTooltip ?? 'Edit mapping'}
-        variant="edit"
-        disabled={!onEdit || isBusy}
-        onClick={onEdit}
-      >
-        <Edit3 aria-hidden="true" className="h-3.5 w-3.5" />
-      </ActionIconButton>
+      {onApprove ? (
+        <ActionIconButton
+          testId="flat-row-action-approve"
+          ariaLabel="Approve mapping"
+          tooltip={approveTooltip ?? 'Approve mapping'}
+          variant="approve"
+          disabled={isBusy}
+          onClick={onApprove}
+        >
+          <Check aria-hidden="true" className="h-3.5 w-3.5" />
+        </ActionIconButton>
+      ) : null}
+      {onReject ? (
+        <ActionIconButton
+          testId="flat-row-action-reject"
+          ariaLabel="Reject mapping"
+          tooltip={rejectTooltip ?? 'Reject mapping'}
+          variant="reject"
+          disabled={isBusy}
+          onClick={onReject}
+        >
+          <X aria-hidden="true" className="h-3.5 w-3.5" />
+        </ActionIconButton>
+      ) : null}
     </div>
   )
 }
@@ -111,7 +94,7 @@ interface ActionIconButtonProps {
   testId: string
   ariaLabel: string
   tooltip: string
-  variant: 'approve' | 'reject' | 'edit'
+  variant: 'approve' | 'reject'
   disabled?: boolean
   onClick?: () => void
   children: React.ReactNode
@@ -148,7 +131,6 @@ function ActionIconButton({
         'disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:bg-transparent disabled:hover:text-slate-500',
         variant === 'approve' && 'hover:bg-green-100 hover:text-green-700',
         variant === 'reject' && 'hover:bg-red-100 hover:text-red-700',
-        variant === 'edit' && 'hover:bg-slate-100 hover:text-slate-700',
       )}
     >
       {children}
