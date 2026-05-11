@@ -246,6 +246,14 @@ export async function runPathDMapping(
       >,
     )
 
+    // POC flag (INF-73 sunset): extract the answer key + template from
+    // ctx. Both are NULL on every non-POC project, so the heritage
+    // byte-identical baseline is preserved (buildPathDUserMessage emits
+    // an empty pocBlock when pocAnswerKey is null; the llm_calls write
+    // below falls through to the original 'path-d-v0' prompt_version).
+    const pocAnswerKey = ctx.documents.poc_answer_key
+    const pocTemplate = ctx.poc_template
+
     // 2. Build prompts.
     //
     // INF-41: forward ctx.intelligence_context as intelligenceCtx. Pre-
@@ -262,6 +270,7 @@ export async function runPathDMapping(
     const userMessage = buildPathDUserMessage({
       ctx,
       intelligenceCtx: ctx.intelligence_context,
+      pocAnswerKey,
     })
 
     // 3. Pre-call cost gate.
@@ -502,6 +511,8 @@ export async function runPathDMapping(
       costUsd: finalCostUsd,
       aborted,
       runId,
+      pocTemplate,
+      pocFlagEnabled: pocAnswerKey !== null,
     })
 
     // 10. Emit per-TFM provenance. Centralised at the orchestrator boundary
@@ -580,6 +591,21 @@ interface WritePathDLlmCallLogArgs {
   costUsd: number | null
   aborted: boolean
   runId: string
+  /**
+   * POC discriminator from `ctx.poc_template` — `null` on every heritage
+   * run. Surfaced on `llm_calls.metadata.poc_template` so analyst queries
+   * can group POC vs heritage cohorts. Sunset: INF-73.
+   */
+  pocTemplate: string | null
+  /**
+   * True when the run actually included an answer-key block in the user
+   * message. Distinct from `pocTemplate !== null` because a project with
+   * `poc_template='rootstock'` but no uploaded answer-key document still
+   * runs the heritage prompt — this field tags the SHIPPED block, not
+   * the configured intent. Surfaced on
+   * `llm_calls.metadata.poc_flag_enabled`. Sunset: INF-73.
+   */
+  pocFlagEnabled: boolean
 }
 
 async function writePathDLlmCallLog(
@@ -594,7 +620,9 @@ async function writePathDLlmCallLog(
       // `LLMFeature` for a Path B/D split — the `experiment_label` field in
       // metadata distinguishes Path B from Path D in the analyst views.
       feature: 'mapping_generate',
-      prompt_version: 'path-d-v0',
+      // POC runs get a separate prompt_version so analyst views can
+      // partition POC vs heritage cohorts cleanly. Sunset: INF-73.
+      prompt_version: args.pocFlagEnabled ? 'path-d-poc-v0' : 'path-d-v0',
       model: PATH_D_MODEL,
       is_streaming: true,
       max_tokens: PATH_D_MAX_OUTPUT_TOKENS,
@@ -618,7 +646,15 @@ async function writePathDLlmCallLog(
         : null,
       parent_call_id: null,
       abuse_user_id: null,
-      metadata: pathDExperimentMetadata(args.runId),
+      metadata: {
+        ...pathDExperimentMetadata(args.runId),
+        // POC tagging (INF-73 sunset). Both fields written on every Path
+        // D run so analyst queries can use simple metadata->>'...' reads
+        // without coalescing nulls. `poc_template` is `null` for heritage
+        // runs; `poc_flag_enabled` is `false`.
+        poc_template: args.pocTemplate,
+        poc_flag_enabled: args.pocFlagEnabled,
+      },
     })
     if (error) {
       console.error(

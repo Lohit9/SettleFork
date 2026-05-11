@@ -4,6 +4,7 @@ import {
   provenanceFlagFor,
   provenanceLabelsEnabled,
 } from '@/lib/ai/agent-provenance-guidance'
+import { applyPocOverrides } from '@/lib/ai/poc-overrides'
 import type { CheckConstraint, FieldSchemaSource, MigrationIntelligence } from '@/lib/types/database'
 
 // ── Types ─────────────────────────────────────────────────────────────────────
@@ -68,6 +69,15 @@ export interface DocumentContext {
   target_documents: { filename: string; text: string }[]
   /** Business context docs (migration rules, value mappings) scoped to project */
   business_context_documents: { filename: string; text: string }[]
+  /**
+   * POC answer-key markdown for projects with `poc_template IS NOT NULL`.
+   * Sourced from a single `schema_documents` row with
+   * `doc_type='poc_answer_key'`, run through `applyPocOverrides` with the
+   * project's `poc_overrides` JSONB. Null when the POC flag is off (the
+   * universal case) or when the project has no answer-key document
+   * uploaded. Sunset: INF-73.
+   */
+  poc_answer_key: string | null
 }
 
 export interface ProjectAIContext {
@@ -78,6 +88,14 @@ export interface ProjectAIContext {
   documents: DocumentContext
   /** Formatted migration intelligence section, ready to append to a Claude user message. Empty string if no patterns exist or userId was not provided. */
   intelligence_context: string
+  /**
+   * POC discriminator — `null` for the universal case (flag off);
+   * non-null string identifies which answer-key template the project
+   * runs under (today only `'rootstock'`). Read by Path D's
+   * `runPathDMapping` to tag `llm_calls.metadata.poc_template`. Sunset:
+   * INF-73.
+   */
+  poc_template: string | null
 }
 
 // ── Scope options ─────────────────────────────────────────────────────────────
@@ -169,9 +187,13 @@ export async function buildAIContext(
   // 1. Verify project access (RLS enforces ownership). If the caller
   //    can SELECT this project row through their client, they are
   //    authorised; subsequent reads can safely run as service-role.
+  // POC fields (`poc_template`, `poc_overrides`) added by migration 101 —
+  // both NULL / `'{}'` for every project until the operator flips the flag,
+  // so the heritage byte-identical baseline is preserved (the answer-key
+  // fetch below is gated on `project.poc_template` being non-null).
   const { data: project, error: projectErr } = await accessClient
     .from('projects')
-    .select('id, name')
+    .select('id, name, poc_template, poc_overrides')
     .eq('id', projectId)
     .single()
   if (projectErr) {
@@ -264,11 +286,12 @@ export async function buildAIContext(
 
   const profileMap = new Map(profilesData.map((p) => [p.field_id as string, p]))
 
-  // 6. Get documents (schema docs + business context docs)
+  // 6. Get documents (schema docs + business context docs + POC answer key)
   let documents: DocumentContext = {
     source_documents: [],
     target_documents: [],
     business_context_documents: [],
+    poc_answer_key: null,
   }
   if (opts.includeDocuments) {
     // 6a. Schema docs — scoped to source/target datasets, doc_type = 'schema'
@@ -323,6 +346,44 @@ export async function buildAIContext(
           filename: d.filename,
           text: (d.extracted_text as string).slice(0, opts.maxDocChars),
         }))
+    }
+
+    // 6c. POC answer key — only for projects with poc_template set. Single
+    // row per project (we order by created_at DESC + limit 1 so a project
+    // with multiple answer-key uploads picks up the newest, mirroring the
+    // newest-wins idiom from migration 059's unique-by-(dataset_id,
+    // filename) cleanup). Read failure is non-fatal: the answer key is
+    // enrichment, not a precondition, and Path D's heritage flag-OFF
+    // codepath continues to work when the fetch returns nothing. Note:
+    // intentionally NOT length-capped by `opts.maxDocChars` — the answer
+    // key is the authoritative spec, not reference material, so
+    // truncation would silently drop coverage. Sunset: INF-73.
+    const pocTemplate = (project as { poc_template?: string | null })
+      .poc_template
+    if (pocTemplate) {
+      const { data: pocDocs, error: pocDocsErr } = await reader
+        .from('schema_documents')
+        .select('extracted_text')
+        .eq('project_id', projectId)
+        .eq('doc_type', 'poc_answer_key')
+        .not('extracted_text', 'is', null)
+        .order('created_at', { ascending: false })
+        .limit(1)
+      if (pocDocsErr) {
+        console.warn(
+          `[buildAIContext] schema_documents (poc_answer_key) read failed for projectId=${projectId}:`,
+          pocDocsErr,
+        )
+      } else if (pocDocs && pocDocs.length > 0) {
+        const rawText = (pocDocs[0] as { extracted_text: string | null })
+          .extracted_text
+        if (rawText) {
+          const overrides =
+            ((project as { poc_overrides?: Record<string, unknown> | null })
+              .poc_overrides ?? {}) as Record<string, unknown>
+          documents.poc_answer_key = applyPocOverrides(rawText, overrides)
+        }
+      }
     }
   }
 
@@ -422,6 +483,8 @@ export async function buildAIContext(
     target_tables: targetTables,
     documents,
     intelligence_context,
+    poc_template:
+      (project as { poc_template?: string | null }).poc_template ?? null,
   }
 }
 

@@ -87,8 +87,8 @@ describe('formatSchemaOverviewBlock — naming + FK + doc summary', () => {
   function ctx(overrides: Partial<ProjectAIContext> = {}): ProjectAIContext {
     return {
       project_id: 'p', project_name: 'P', source_tables: [], target_tables: [],
-      documents: { source_documents: [], target_documents: [], business_context_documents: [] },
-      intelligence_context: '', ...overrides,
+      documents: { source_documents: [], target_documents: [], business_context_documents: [], poc_answer_key: null },
+      intelligence_context: '', poc_template: null, ...overrides,
     }
   }
 
@@ -97,7 +97,7 @@ describe('formatSchemaOverviewBlock — naming + FK + doc summary', () => {
       ctx({
         source_tables: [table('customers', [{ name: 'id', is_primary_key: true }, { name: 'org_id', is_foreign_key: true, fk_reference: 'orgs.id' }])],
         target_tables: [table('ACCOUNTS', [{ name: 'ACCOUNT_ID', is_primary_key: true }])],
-        documents: { source_documents: [{ filename: 'a', text: 'x' }], target_documents: [], business_context_documents: [{ filename: 'b', text: 'y' }] },
+        documents: { source_documents: [{ filename: 'a', text: 'x' }], target_documents: [], business_context_documents: [{ filename: 'b', text: 'y' }], poc_answer_key: null },
         intelligence_context: 'present',
       }),
     )

@@ -30,8 +30,10 @@ function emptyCtx(overrides: Partial<ProjectAIContext> = {}): ProjectAIContext {
       source_documents: [],
       target_documents: [],
       business_context_documents: [],
+      poc_answer_key: null,
     },
     intelligence_context: '',
+    poc_template: null,
     ...overrides,
   }
 }

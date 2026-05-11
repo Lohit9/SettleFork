@@ -163,12 +163,18 @@ function fixtureToContext(fixture: EvalFixture): ProjectAIContext {
       business_context_documents: [
         { filename: 'business-context.md', text: fixture.business_context },
       ],
+      // POC answer key — always null in eval fixtures (the eval harness
+      // measures heritage Path D output against gold standards; injecting
+      // a POC override would defeat that). Sunset: INF-73.
+      poc_answer_key: null,
     },
     // INF-41: forward the fixture's optional intelligence_context onto
     // ctx so the runner's call to buildPathDUserMessage can pass it
     // through to the Path D prompt. Empty string when the fixture has
     // no intelligence-context.md (preserves v0 baseline shape).
     intelligence_context: fixture.intelligence_context,
+    // POC template — eval fixtures run flag-off. Sunset: INF-73.
+    poc_template: null,
   }
 }
 
