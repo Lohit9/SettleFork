@@ -639,12 +639,22 @@ function formatPathDSchema(tables: TableContext[], label: string): string {
  * Uses the Path-D-specific UUID-exposing `formatPathDSchema` (above) —
  * NOT `formatSchemaForPrompt` from context-builder. See that helper's
  * docstring for the divergence rationale.
+ *
+ * POC flag: when `pocAnswerKey` is non-null, emit a
+ * `<poc_answer_key authoritative="true">` block immediately before the
+ * TASK instruction. The block is positioned LAST (after schema, after
+ * documents, after intelligence) by design — Anthropic's models weight
+ * late-context instructions more heavily, so the answer key wins
+ * against earlier general guidance from the system prompt and document
+ * blocks. When `pocAnswerKey` is null/undefined the block is omitted
+ * entirely, preserving byte-identical heritage output. Sunset: INF-73.
  */
 export function buildPathDUserMessage(args: {
   ctx: ProjectAIContext
   intelligenceCtx?: string | null
+  pocAnswerKey?: string | null
 }): string {
-  const { ctx, intelligenceCtx } = args
+  const { ctx, intelligenceCtx, pocAnswerKey } = args
 
   const overviewBlock = formatSchemaOverviewBlock(ctx)
   const sourceSection = formatPathDSchema(ctx.source_tables, 'source')
@@ -653,12 +663,32 @@ export function buildPathDUserMessage(args: {
 
   const intelligence = intelligenceCtx ? `${intelligenceCtx}\n\n` : ''
 
+  // POC answer-key block: empty string when flag off (byte-identical
+  // heritage); otherwise an XML-tagged block that explicitly tells the
+  // model this content overrides general guidance. The block is emitted
+  // here (just before TASK) rather than alongside <business_context> so
+  // it sits last in the user message — closest to the TASK instruction
+  // the model executes against.
+  const pocBlock = pocAnswerKey
+    ? `<poc_answer_key authoritative="true">
+The following project-specific answer key takes precedence over general
+guidance in the system prompt and any earlier document blocks. Generate
+mapping output (target_field_mappings, mapping_sources, project_decisions,
+project_lookup_tables, project_data_quality_issues, target_field_coverage,
+project_inferred_targets, project_notes) matching this specification.
+
+${pocAnswerKey}
+</poc_answer_key>
+
+`
+    : ''
+
   return `${overviewBlock}
 
 ${sourceSection}
 ${targetSection}
 ${docBlock}
-${intelligence}─── TASK ─────────────────────────────────────────────────────────────────────
+${intelligence}${pocBlock}─── TASK ─────────────────────────────────────────────────────────────────────
 
 Produce the seven-section Path D output for this migration per the system
 prompt's OUTPUT FORMAT spec. Comprehensive coverage of the target schema is

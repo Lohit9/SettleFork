@@ -93,7 +93,8 @@ vi.mock('@/lib/ai/context-builder', () => ({
     project: { id: 'p1', name: 'test' },
     source_tables: [],
     target_tables: [],
-    documents: { source_documents: [], target_documents: [], business_context_documents: [] },
+    documents: { source_documents: [], target_documents: [], business_context_documents: [], poc_answer_key: null },
+    poc_template: null,
   })),
   // The real module also exports `formatSchemaForPrompt` etc., but with
   // path-d-system-prompt mocked the orchestrator never calls them.
@@ -507,8 +508,10 @@ describe('runPathDMapping — orchestrator', () => {
         source_documents: [],
         target_documents: [],
         business_context_documents: [],
+        poc_answer_key: null,
       },
       intelligence_context: MARKER,
+      poc_template: null,
     })
 
     const { buildPathDUserMessage } = await import('@/lib/ai/path-d-system-prompt')
@@ -554,8 +557,10 @@ describe('runPathDMapping — orchestrator', () => {
         source_documents: [],
         target_documents: [],
         business_context_documents: [],
+        poc_answer_key: null,
       },
       intelligence_context: '',
+      poc_template: null,
     })
 
     const { buildPathDUserMessage } = await import('@/lib/ai/path-d-system-prompt')

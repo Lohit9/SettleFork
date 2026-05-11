@@ -186,8 +186,10 @@ describeIf('Path D coverage confidence calibration spot-check', () => {
           business_context_documents: [
             { filename: 'business-context.md', text: businessContext },
           ],
+          poc_answer_key: null,
         },
         intelligence_context: intelligenceContext,
+        poc_template: null,
       }
       label = `fixture:${fixtureName}`
 
