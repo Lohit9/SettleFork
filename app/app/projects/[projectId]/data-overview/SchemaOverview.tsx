@@ -593,8 +593,18 @@ function SchemaPanel({
                 // fields. Server-driven refresh (Q5 locked) — no
                 // router.refresh(); the local maps mirror server state for the
                 // current session.
+                //
+                // INF-83 dedup: createField's revalidatePath causes Next.js
+                // to refetch the RSC payload, which lands the new field in
+                // `table.fields` independently of our `addedFields` append.
+                // Without dedup, the field appears twice until next remount.
+                // Filter sessionAdded against baseFields ids so a field present
+                // in both sources renders once.
                 const baseFields = table.fields.filter((f) => !deletedFieldIds.has(f.id))
-                const sessionAdded = addedFields.get(table.id) ?? []
+                const baseFieldIds = new Set(baseFields.map((f) => f.id))
+                const sessionAdded = (addedFields.get(table.id) ?? []).filter(
+                  (f) => !baseFieldIds.has(f.id)
+                )
                 const visibleFields: FieldData[] = [...baseFields, ...sessionAdded]
 
                 // Count enrichment coverage for this table
