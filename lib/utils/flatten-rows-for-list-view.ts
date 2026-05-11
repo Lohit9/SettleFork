@@ -85,9 +85,14 @@ export interface MappedFlatRow extends FlatRowBase {
    */
   sourceCount: number
   /**
-   * Per-source confidence — NOT the TFM aggregate. Per-source numbers
-   * matter for the flat view's audit workflow ("ProductSKU is 90%
-   * confident, Assy_Item is 80%" — both visible in the table).
+   * TFM-aggregate confidence (`MappingRow.confidence`, MIN across
+   * sources, server-derived). Used directly here — multi-source split
+   * rows display the same aggregate. Empirically `MappingSourceRef
+   * .confidence` is often null in real data (the AI mapper writes the
+   * aggregate to the TFM and may leave per-source null), so the
+   * aggregate is the right surface for the flat view's Confidence
+   * column. The drawer's per-source SourceCard remains the canonical
+   * place to see per-source confidence when it IS populated.
    */
   confidence: number | null
   parentRow: MappedRow
@@ -173,7 +178,10 @@ export function flattenRowsForListView(
           targetField: row.targetField,
           source: src,
           sourceCount,
-          confidence: src.confidence,
+          // TFM aggregate — see the field's JSDoc for the rationale.
+          // Per-source values are often null in real data; the aggregate
+          // is reliably populated by the AI mapper.
+          confidence: row.confidence,
           parentRow: row,
         })
       }
