@@ -1,7 +1,6 @@
 'use client'
 
 import { useCallback, useMemo, useRef, useState } from 'react'
-import { ChevronDown, ChevronUp, ChevronsUpDown } from 'lucide-react'
 import { cn } from '@/components/ui/utils'
 import { formatConfidencePercent } from '@/lib/utils/confidence-format'
 import type {
@@ -12,10 +11,7 @@ import type {
 import {
   flattenRowsForListView,
   type FlatRow,
-  type FlatRowStatus,
   type MappedChildFlatRow,
-  type MappedSingleFlatRow,
-  type UnmappedSourceFlatRow,
 } from '@/lib/utils/flatten-rows-for-list-view'
 import { FlatStatusDot, flatStatusLabel } from './FlatStatusDot'
 import { FlatRowActions } from './FlatRowActions'
@@ -34,13 +30,16 @@ import type { MappingListMutations } from '../hooks/useMappingListMutations'
 //   • value-assignment / unmapped target → 1 row each (source cells blank)
 //   • source-side ack / source-only unmapped → 1 row each (target cells blank)
 //
-// Columns (locked at architecture review):
+// Columns (locked at architecture review + polish pass):
 //   Source Table | Source Field | Target Table | Target Field | Confidence | Status | Actions
 //
-// Default sort: Source Table ASC → Source Field ASC → Target Table ASC → Target Field ASC.
-// Click headers to override. Sort operates at the GROUP level (multi-
-// source children stay attached to their parent in DOM order). Within
-// a group, children follow the server's `sources[].ordinal` order.
+// Sort: FIXED single-pass — Source Table ASC → Source Field ASC →
+// Target Table ASC → Target Field ASC. Rows lacking a source value
+// (value-assignment, unmapped-target) sort to the BOTTOM, ordered by
+// their target columns. Sort applies at the GROUP level — multi-source
+// children stay attached to their parent in DOM order; children
+// themselves follow the server's `sources[].ordinal` order. Headers
+// are pure labels, no click-to-sort (v1 polish).
 //
 // Interactions:
 //   • Click row body (anywhere except cells with their own click handler
@@ -54,36 +53,39 @@ import type { MappingListMutations } from '../hooks/useMappingListMutations'
 //     useMappingListMutations; e.stopPropagation stops drawer-open
 //     bubbling.
 //
+// Responsive layout (polish pass):
+//   • Outer wrapper carries `overflow-x-auto` so the table can scroll
+//     horizontally at narrow viewports.
+//   • Source Table + Source Field columns are `sticky left-N` so the
+//     row's identity stays visible while the user scrolls right.
+//   • Actions column is `sticky right-0` so the action affordances
+//     stay reachable.
+//   • Long field names use `truncate` + `title` for full text on
+//     hover.
+//
 // Re-render orchestration:
 //   • All mutations call router.refresh() on success (in the hook).
 //   • Server-side unmapped-row synthesis handles last-source reject +
 //     manual-create transitions atomically — no client-side state
 //     plumbing needed.
 
-// ─── Sort state ───────────────────────────────────────────────────────────────
-
-export type SortColumn =
-  | 'sourceTable'
-  | 'sourceField'
-  | 'targetTable'
-  | 'targetField'
-  | 'confidence'
-  | 'status'
-
-export type SortDirection = 'asc' | 'desc'
-
-export interface SortState {
-  column: SortColumn
-  direction: SortDirection
-}
-
-const DEFAULT_SORT: SortState = {
-  column: 'sourceTable',
-  direction: 'asc',
-}
-
-// Default sort: source-first → fallback to target. Implemented as a
-// composite comparator at the group level (see comparators below).
+// ─── Column widths ────────────────────────────────────────────────────────────
+//
+// Fixed pixel widths simplify the `sticky left-N` offsets for the
+// sticky-source columns: Source Field needs to know exactly how wide
+// Source Table is so it can sit flush against its right edge.
+//
+//   Source Table  176px  (sticky left-0)
+//   Source Field  224px  (sticky left-44 = 176px = w-44)
+//   Target Table  176px
+//   Target Field  224px
+//   Confidence     96px
+//   Status         48px  (dot-only)
+//   Actions       112px  (sticky right-0)
+//
+// `min-w-[N]` keeps the columns honest under truncation; the table
+// total width is ~1056px which fits a 1366px desktop comfortably and
+// gracefully overflows on tablet / mobile widths.
 
 // ─── Props ────────────────────────────────────────────────────────────────────
 
@@ -117,130 +119,105 @@ export interface MappingListViewProps {
   onOpenDrawer: (rowId: string, highlightedSourceFieldId: string | null) => void
 }
 
-// ─── Comparators ──────────────────────────────────────────────────────────────
+// ─── Fixed sort (single pass, no UI state) ────────────────────────────────────
+//
+// Polish pass dropped click-to-sort headers (v2 polish). The flat
+// view now applies a single fixed ordering at render time:
+//
+//   Source Table ASC → Source Field ASC → Target Table ASC →
+//   Target Field ASC
+//
+// Rows that LACK a source value (value-assignment, unmapped-target)
+// sort to the BOTTOM, ordered by their target columns. This keeps
+// mapped rows first (auditor-friendly: the meat is at the top) and
+// "constant defaults" / unaddressed-target rows at the bottom.
+//
+// Sort operates at the GROUP level. Multi-source mapped TFMs (parent
+// + N children) use the DOMINANT child's source for source-column
+// sort keys; children themselves follow the server-emitted
+// `sources[].ordinal` order within the group.
 
 interface GroupSortKeys {
+  /**
+   * 0 = group has a source (mapped-single, mapped-parent,
+   * unmapped-source); 1 = group lacks a source (value-assignment,
+   * unmapped-target). Primary discriminator so blank-source rows
+   * always sort to the bottom regardless of subsequent keys.
+   */
+  bucket: 0 | 1
   sourceTable: string
   sourceField: string
   targetTable: string
   targetField: string
-  confidence: number
-  status: FlatRowStatus
 }
 
-/**
- * Compute group-level sort keys from the parent/leaf flat row of a
- * group. For multi-source mapped groups, the parent is the
- * MappedParentFlatRow and its source-side keys are derived from the
- * dominant child (ordinal=0); for everything else the leaf row's own
- * source/target fields are used directly. Confidence is the group's
- * aggregate (server-emitted TFM-level confidence for mapped, the row's
- * own confidence for leaves). Status uses the parent's status.
- */
 function buildGroupSortKeys(
   parent: FlatRow,
   dominantChildSource: MappedChildFlatRow | null,
 ): GroupSortKeys {
-  let sourceTable = ''
-  let sourceField = ''
-  let targetTable = ''
-  let targetField = ''
-  let confidence = Number.POSITIVE_INFINITY
-  const status = parent.status
-
   switch (parent.kind) {
-    case 'mapped-single': {
-      const row = parent as MappedSingleFlatRow
-      sourceTable = row.source.sourceTable.name
-      sourceField = row.source.sourceField.name
-      targetTable = row.targetField.targetTable.name
-      targetField = row.targetField.name
-      confidence = row.confidence ?? Number.POSITIVE_INFINITY
-      break
-    }
-    case 'mapped-parent': {
-      if (dominantChildSource) {
-        sourceTable = dominantChildSource.source.sourceTable.name
-        sourceField = dominantChildSource.source.sourceField.name
+    case 'mapped-single':
+      return {
+        bucket: 0,
+        sourceTable: parent.source.sourceTable.name,
+        sourceField: parent.source.sourceField.name,
+        targetTable: parent.targetField.targetTable.name,
+        targetField: parent.targetField.name,
       }
-      targetTable = parent.targetField.targetTable.name
-      targetField = parent.targetField.name
-      confidence = parent.confidence ?? Number.POSITIVE_INFINITY
-      break
-    }
+    case 'mapped-parent':
+      return {
+        bucket: 0,
+        sourceTable: dominantChildSource?.source.sourceTable.name ?? '',
+        sourceField: dominantChildSource?.source.sourceField.name ?? '',
+        targetTable: parent.targetField.targetTable.name,
+        targetField: parent.targetField.name,
+      }
+    case 'unmapped-source':
+      return {
+        bucket: 0,
+        sourceTable: parent.sourceField.sourceTable.name,
+        sourceField: parent.sourceField.name,
+        targetTable: '',
+        targetField: '',
+      }
     case 'value-assignment':
-    case 'unmapped-target': {
-      targetTable = parent.targetField.targetTable.name
-      targetField = parent.targetField.name
-      confidence = parent.confidence ?? Number.POSITIVE_INFINITY
-      break
-    }
-    case 'unmapped-source': {
-      const row = parent as UnmappedSourceFlatRow
-      sourceTable = row.sourceField.sourceTable.name
-      sourceField = row.sourceField.name
-      break
-    }
+    case 'unmapped-target':
+      return {
+        bucket: 1,
+        sourceTable: '',
+        sourceField: '',
+        targetTable: parent.targetField.targetTable.name,
+        targetField: parent.targetField.name,
+      }
     case 'mapped-child':
-      // Children are sorted within their parent group; this branch is
-      // unreachable when buildGroupSortKeys is called on the group's
-      // anchor row. Guarded for exhaustiveness.
-      break
+      // Children are sorted with their parent group; this branch is
+      // unreachable when buildGroupSortKeys runs on the group's anchor.
+      return {
+        bucket: 0,
+        sourceTable: '',
+        sourceField: '',
+        targetTable: '',
+        targetField: '',
+      }
   }
-
-  return { sourceTable, sourceField, targetTable, targetField, confidence, status }
 }
 
 function compareStringsAsc(a: string, b: string): number {
   return a.localeCompare(b, undefined, { sensitivity: 'base' })
 }
 
-const STATUS_ORDER: Record<FlatRowStatus, number> = {
-  needs_review: 0,
-  approved: 1,
-  rejected: 2,
-}
-
-function compareKeys(
-  a: GroupSortKeys,
-  b: GroupSortKeys,
-  sort: SortState,
-): number {
-  const dir = sort.direction === 'asc' ? 1 : -1
-  let primary = 0
-  switch (sort.column) {
-    case 'sourceTable':
-      primary = compareStringsAsc(a.sourceTable, b.sourceTable)
-      break
-    case 'sourceField':
-      primary = compareStringsAsc(a.sourceField, b.sourceField)
-      break
-    case 'targetTable':
-      primary = compareStringsAsc(a.targetTable, b.targetTable)
-      break
-    case 'targetField':
-      primary = compareStringsAsc(a.targetField, b.targetField)
-      break
-    case 'confidence':
-      primary = a.confidence - b.confidence
-      break
-    case 'status':
-      primary = STATUS_ORDER[a.status] - STATUS_ORDER[b.status]
-      break
-  }
-  if (primary !== 0) return primary * dir
-  // Stable tiebreak chain — applied in the SAME direction as primary.
-  const ts = compareStringsAsc(a.sourceTable, b.sourceTable)
-  if (ts !== 0) return ts * dir
+function compareGroupKeys(a: GroupSortKeys, b: GroupSortKeys): number {
+  if (a.bucket !== b.bucket) return a.bucket - b.bucket
+  const st = compareStringsAsc(a.sourceTable, b.sourceTable)
+  if (st !== 0) return st
   const sf = compareStringsAsc(a.sourceField, b.sourceField)
-  if (sf !== 0) return sf * dir
+  if (sf !== 0) return sf
   const tt = compareStringsAsc(a.targetTable, b.targetTable)
-  if (tt !== 0) return tt * dir
-  const tf = compareStringsAsc(a.targetField, b.targetField)
-  return tf * dir
+  if (tt !== 0) return tt
+  return compareStringsAsc(a.targetField, b.targetField)
 }
 
-// ─── Row grouping for sort ────────────────────────────────────────────────────
+// ─── Row grouping for fixed sort ──────────────────────────────────────────────
 
 interface FlatGroup {
   anchor: FlatRow
@@ -279,12 +256,11 @@ function buildGroups(rows: readonly FlatRow[]): FlatGroup[] {
       children: [],
       // sortKeys is populated by finalize(); placeholder for type.
       sortKeys: {
+        bucket: 0,
         sourceTable: '',
         sourceField: '',
         targetTable: '',
         targetField: '',
-        confidence: Number.POSITIVE_INFINITY,
-        status: row.status,
       },
     }
   }
@@ -324,7 +300,6 @@ export function MappingListView({
   mutations,
   onOpenDrawer,
 }: MappingListViewProps) {
-  const [sort, setSort] = useState<SortState>(DEFAULT_SORT)
   const [openPicker, setOpenPicker] = useState<OpenPickerState>(null)
 
   const flatRows = useMemo(
@@ -333,11 +308,13 @@ export function MappingListView({
     [filteredResult, showUnmappedSourceFields],
   )
 
+  // Fixed single-pass sort — see `compareGroupKeys` for the contract.
+  // No UI state, no re-sort on header click (polish pass).
   const sortedRows = useMemo(() => {
     const groups = buildGroups(flatRows)
-    groups.sort((a, b) => compareKeys(a.sortKeys, b.sortKeys, sort))
+    groups.sort((a, b) => compareGroupKeys(a.sortKeys, b.sortKeys))
     return flattenGroups(groups)
-  }, [flatRows, sort])
+  }, [flatRows])
 
   // Target field universe — every target field appears in result.rows
   // exactly once (per the data contract).
@@ -355,18 +332,6 @@ export function MappingListView({
   // Source field universe — already shaped as SourceFieldWithState[].
   const availableSourceFields: readonly SourceFieldWithState[] =
     filteredResult.sourceFields
-
-  const handleSortClick = useCallback((column: SortColumn) => {
-    setSort((prev) => {
-      if (prev.column !== column) {
-        return { column, direction: 'asc' }
-      }
-      return {
-        column,
-        direction: prev.direction === 'asc' ? 'desc' : 'asc',
-      }
-    })
-  }, [])
 
   const handleSourceCellClick = useCallback(
     (row: FlatRow, anchorEl: HTMLElement) => {
@@ -478,56 +443,44 @@ export function MappingListView({
 
   return (
     <div data-testid="mapping-list-view" className="overflow-x-auto">
-      <table className="w-full text-xs">
-        <thead className="sticky top-0 z-10 border-b border-gray-200 bg-gray-50">
+      <table className="w-full min-w-[1056px] border-separate border-spacing-0 text-xs">
+        <thead className="bg-gray-50">
           <tr>
-            <SortableTh
+            <TableHeader
               column="sourceTable"
               label="Source Table"
-              sort={sort}
-              onClick={handleSortClick}
-              className="w-[14%]"
+              className="sticky left-0 z-20 w-44 bg-gray-50"
             />
-            <SortableTh
+            <TableHeader
               column="sourceField"
               label="Source Field"
-              sort={sort}
-              onClick={handleSortClick}
-              className="w-[18%]"
+              className="sticky left-44 z-20 w-56 bg-gray-50"
             />
-            <SortableTh
+            <TableHeader
               column="targetTable"
               label="Target Table"
-              sort={sort}
-              onClick={handleSortClick}
-              className="w-[14%]"
+              className="w-44 bg-gray-50"
             />
-            <SortableTh
+            <TableHeader
               column="targetField"
               label="Target Field"
-              sort={sort}
-              onClick={handleSortClick}
-              className="w-[18%]"
+              className="w-56 bg-gray-50"
             />
-            <SortableTh
+            <TableHeader
               column="confidence"
               label="Confidence"
-              sort={sort}
-              onClick={handleSortClick}
               align="right"
-              className="w-[10%]"
+              className="w-24 bg-gray-50"
             />
-            <SortableTh
+            <TableHeader
               column="status"
               label="Status"
-              sort={sort}
-              onClick={handleSortClick}
-              className="w-[12%]"
+              className="w-12 bg-gray-50"
             />
             <th
               scope="col"
               data-testid="flat-header-actions"
-              className="px-3 py-2 text-right text-[11px] font-semibold uppercase tracking-wide text-gray-600"
+              className="sticky right-0 z-20 w-28 border-b border-gray-200 bg-gray-50 px-3 py-2 text-right text-[11px] font-semibold uppercase tracking-wide text-gray-600"
             >
               Actions
             </th>
@@ -584,58 +537,39 @@ export function MappingListView({
 }
 
 // ─── Header cell ─────────────────────────────────────────────────────────────
+//
+// Static label only — no click-to-sort (v2 polish). FilterRow remains
+// the canonical filter surface; the flat view's row order is fixed
+// per `compareGroupKeys`.
 
-function SortableTh({
+function TableHeader({
   column,
   label,
-  sort,
-  onClick,
   className,
   align,
 }: {
-  column: SortColumn
+  column:
+    | 'sourceTable'
+    | 'sourceField'
+    | 'targetTable'
+    | 'targetField'
+    | 'confidence'
+    | 'status'
   label: string
-  sort: SortState
-  onClick: (column: SortColumn) => void
   className?: string
   align?: 'right'
 }) {
-  const isActive = sort.column === column
-  const Icon = isActive
-    ? sort.direction === 'asc'
-      ? ChevronUp
-      : ChevronDown
-    : ChevronsUpDown
   return (
     <th
       scope="col"
       data-testid={`flat-header-${column}`}
-      data-sort-active={isActive ? 'true' : 'false'}
-      data-sort-direction={isActive ? sort.direction : undefined}
       className={cn(
-        'px-3 py-2 text-left text-[11px] font-semibold uppercase tracking-wide text-gray-600',
+        'border-b border-gray-200 px-3 py-2 text-left text-[11px] font-semibold uppercase tracking-wide text-gray-600',
         align === 'right' && 'text-right',
         className,
       )}
     >
-      <button
-        type="button"
-        onClick={() => onClick(column)}
-        className={cn(
-          'inline-flex items-center gap-1 transition-colors hover:text-gray-900',
-          'focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-500/30',
-          align === 'right' && 'flex-row-reverse',
-        )}
-      >
-        <span>{label}</span>
-        <Icon
-          aria-hidden="true"
-          className={cn(
-            'h-3 w-3',
-            isActive ? 'text-gray-700' : 'text-gray-400',
-          )}
-        />
-      </button>
+      {label}
     </th>
   )
 }
@@ -846,7 +780,31 @@ function FlatRowView({
     row,
   ])
 
+  // Status tooltip: combine status label with the optional ack reason
+  // so the dot's `title` attribute carries everything the user could
+  // previously see in the text column.
+  const statusTooltip =
+    row.kind === 'unmapped-source' && row.acknowledgmentReason
+      ? `${flatStatusLabel(row.status)} · ${row.acknowledgmentReason}`
+      : flatStatusLabel(row.status)
+
   // ── Render ────────────────────────────────────────────────────────
+  //
+  // Sticky-column layout (polish pass):
+  //   • Source Table  →  sticky left-0       (z-10; bg + group-hover bg)
+  //   • Source Field  →  sticky left-44      (z-10; bg + group-hover bg)
+  //   • Target Table / Field / Confidence / Status — scroll naturally
+  //   • Actions        →  sticky right-0     (z-10; bg + group-hover bg)
+  //
+  // The `group` class on the `<tr>` lets sticky cells participate in
+  // the row's hover state (sticky cells need their own bg to cover
+  // scrolled content underneath, which means they need an explicit
+  // hover bg too — `group-hover:bg-gray-50` matches the row's hover).
+  //
+  // Zebra striping was dropped; rows are uniformly white with the same
+  // gray-50 on hover. Multi-source parent rows are distinguished by
+  // `font-medium` only (per Option C — children stay indented via
+  // `pl-6` on the Source Table cell).
   return (
     <tr
       data-testid="flat-row"
@@ -855,20 +813,28 @@ function FlatRowView({
       data-group-id={row.groupId}
       onClick={() => onRowBodyClick(row)}
       className={cn(
-        'cursor-pointer border-b border-gray-100 transition-colors hover:bg-blue-50/40',
-        isParent && 'bg-slate-50/40 font-medium',
-        isChild && 'bg-white',
+        'group cursor-pointer bg-white transition-colors hover:bg-gray-50',
+        isParent && 'font-medium',
       )}
     >
       <td
         data-testid="flat-cell-source-table"
-        className={cn('px-3 py-2 text-slate-700', isChild && 'pl-6')}
+        title={sourceTable ?? undefined}
+        className={cn(
+          'sticky left-0 z-10 w-44 truncate border-b border-gray-100 bg-white px-3 py-2 text-slate-700 transition-colors group-hover:bg-gray-50',
+          isChild && 'pl-6',
+        )}
       >
         {sourceTable ?? <span className="text-slate-300">—</span>}
       </td>
       <td
         data-testid="flat-cell-source-field"
-        className="px-3 py-2 font-mono text-[11px] text-slate-700"
+        title={
+          typeof sourceField === 'string' && sourceCellEditable
+            ? sourceField
+            : undefined
+        }
+        className="sticky left-44 z-10 w-56 truncate border-b border-gray-100 bg-white px-3 py-2 font-mono text-[11px] text-slate-700 transition-colors group-hover:bg-gray-50"
       >
         {sourceField ? (
           sourceCellEditable ? (
@@ -881,17 +847,17 @@ function FlatRowView({
                 onSourceCellClick(row, e.currentTarget)
               }}
               className={cn(
-                'inline-flex w-full items-center justify-start rounded px-1 py-0.5 text-left',
+                'inline-flex w-full max-w-full items-center justify-start truncate rounded px-1 py-0.5 text-left',
                 'hover:bg-blue-100/60 focus:outline-none focus-visible:ring-1 focus-visible:ring-blue-500',
               )}
             >
               {sourceField}
             </button>
           ) : (
-            <span>{sourceField}</span>
+            <span className="block truncate">{sourceField}</span>
           )
         ) : isParent ? (
-          <span className="text-slate-400 italic">
+          <span className="italic text-slate-400">
             {row.sourceCount} sources
           </span>
         ) : (
@@ -900,13 +866,15 @@ function FlatRowView({
       </td>
       <td
         data-testid="flat-cell-target-table"
-        className="px-3 py-2 text-slate-700"
+        title={targetTable ?? undefined}
+        className="w-44 truncate border-b border-gray-100 px-3 py-2 text-slate-700"
       >
         {targetTable ?? <span className="text-slate-300">—</span>}
       </td>
       <td
         data-testid="flat-cell-target-field"
-        className="px-3 py-2 font-mono text-[11px] text-slate-700"
+        title={typeof targetField === 'string' ? targetField : undefined}
+        className="w-56 truncate border-b border-gray-100 px-3 py-2 font-mono text-[11px] text-slate-700"
       >
         {targetField ? (
           targetCellEditable ? (
@@ -919,16 +887,16 @@ function FlatRowView({
                 onTargetCellClick(row, e.currentTarget)
               }}
               className={cn(
-                'inline-flex w-full items-center justify-start rounded px-1 py-0.5 text-left',
+                'inline-flex w-full max-w-full items-center justify-start truncate rounded px-1 py-0.5 text-left',
                 'hover:bg-blue-100/60 focus:outline-none focus-visible:ring-1 focus-visible:ring-blue-500',
               )}
             >
               {targetField}
             </button>
           ) : (
-            <span>{targetField}</span>
+            <span className="block truncate">{targetField}</span>
           )
-        ) : row.kind === 'unmapped-source' && targetCellEditable ? (
+        ) : row.kind === 'unmapped-source' ? (
           // Source-only row clickable to pick a target.
           <button
             ref={targetCellRef}
@@ -952,7 +920,7 @@ function FlatRowView({
       </td>
       <td
         data-testid="flat-cell-confidence"
-        className="px-3 py-2 text-right tabular-nums text-slate-700"
+        className="w-24 border-b border-gray-100 px-3 py-2 text-right tabular-nums text-slate-700"
       >
         {confidence === null ? (
           <span className="text-slate-300">—</span>
@@ -962,22 +930,12 @@ function FlatRowView({
       </td>
       <td
         data-testid="flat-cell-status"
-        className="px-3 py-2"
+        title={statusTooltip}
+        className="w-12 border-b border-gray-100 px-3 py-2 text-center"
       >
-        <span className="inline-flex items-center gap-1.5">
-          <FlatStatusDot status={row.status} />
-          <span className="text-slate-700">{flatStatusLabel(row.status)}</span>
-          {row.kind === 'unmapped-source' && row.acknowledgmentReason ? (
-            <span
-              className="text-[10px] italic text-slate-400"
-              title={row.acknowledgmentReason}
-            >
-              · {row.acknowledgmentReason}
-            </span>
-          ) : null}
-        </span>
+        <FlatStatusDot status={row.status} />
       </td>
-      <td className="px-3 py-2">
+      <td className="sticky right-0 z-10 w-28 border-b border-gray-100 bg-white px-3 py-2 transition-colors group-hover:bg-gray-50">
         <FlatRowActions
           rowId={row.id}
           isBusy={isBusy}

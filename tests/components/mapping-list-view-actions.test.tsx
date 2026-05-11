@@ -397,8 +397,8 @@ describe('MappingListView — row body click + cell click', () => {
   })
 })
 
-describe('MappingListView — sort + headers', () => {
-  it('renders 6 sortable headers plus an Actions header', () => {
+describe('MappingListView — headers + fixed sort', () => {
+  it('renders 6 column headers plus an Actions header', () => {
     const mutations = makeMutations()
     const result = makeResult([makeSingleSourceMapped()])
     render(
@@ -419,9 +419,19 @@ describe('MappingListView — sort + headers', () => {
     expect(screen.getByTestId('flat-header-actions')).toBeInTheDocument()
   })
 
-  it('default sort is Source Table ASC', () => {
+  it('applies the fixed sort: source-bearing rows first, then blank-source rows by target', () => {
+    // Polish pass dropped click-to-sort headers and pinned a single
+    // ordering: source-bearing groups sort by source columns then
+    // target columns; blank-source groups (VA, unmapped-target) sort
+    // to the bottom by their target columns. This test pins the
+    // bucket-ordering invariant — buyers asked for the deliberate
+    // "mapped meat at the top, defaults at the bottom" layout.
     const mutations = makeMutations()
-    const result = makeResult([makeSingleSourceMapped()])
+    const mapped = makeSingleSourceMapped({ id: 'tfm-mapped' })
+    const unmapped = makeUnmappedTarget()
+    // Pass unmapped FIRST in the input to verify the sort moves it
+    // to the bottom regardless of input order.
+    const result = makeResult([unmapped, mapped])
     render(
       <MappingListView
         filteredResult={result}
@@ -430,8 +440,10 @@ describe('MappingListView — sort + headers', () => {
         onOpenDrawer={vi.fn()}
       />,
     )
-    const header = screen.getByTestId('flat-header-sourceTable')
-    expect(header.getAttribute('data-sort-active')).toBe('true')
-    expect(header.getAttribute('data-sort-direction')).toBe('asc')
+
+    const rows = document.querySelectorAll('[data-testid="flat-row"]')
+    expect(rows.length).toBe(2)
+    expect(rows[0].getAttribute('data-row-id')).toBe('tfm-mapped')
+    expect(rows[1].getAttribute('data-row-id')).toBe('unmapped::tf-9')
   })
 })
