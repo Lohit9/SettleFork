@@ -66,9 +66,13 @@ const BULK_REJECT_START =
   'export async function bulkRejectFieldMappingsForTargetTable('
 const PREVIEW_REJECT_START = 'export async function previewBulkReject('
 
-// `bulkRejectFieldMappingsForTargetTable` is the last function in the
-// file at 4c-2 ship time. Slice to end-of-file.
-const BODY_REJECT = SRC.slice(SRC.indexOf(BULK_REJECT_START))
+// `bulkRejectFieldMappingsForTargetTable` was the last function in the
+// file at 4c-2 ship time. The flat-view server actions appended after
+// it in feat/spreadsheet-view-server-actions; slice to the boundary
+// banner that opens that section so the assertions below stay scoped
+// to the bulk-reject body.
+const FLAT_VIEW_BANNER = '// ─── Flat (spreadsheet) view server actions'
+const BODY_REJECT = sliceFromTo(SRC, BULK_REJECT_START, FLAT_VIEW_BANNER)
 // Preview body slices up to the JSDoc preceding the write wrapper.
 // The `* Bulk-reject every needs-review` sentinel is stable docblock text.
 const BODY_PREVIEW = sliceFromTo(

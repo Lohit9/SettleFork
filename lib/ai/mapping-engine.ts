@@ -119,6 +119,13 @@ interface RawSourceAckRow {
   id: string
   source_field_id: string
   reason: string
+  /**
+   * Migration 103 — user decision. Defaults to `'acknowledged'` on
+   * pre-migration rows. Treated as an open string type because the DB
+   * CHECK constraint enforces the two values; the read translator
+   * coerces unknown values to `'acknowledged'` defensively.
+   */
+  decision?: 'acknowledged' | 'rejected' | string | null
 }
 
 interface RawTransformationRow {
@@ -944,9 +951,19 @@ function buildSourceFieldsWithState(
     mappedSourceFieldIds.add(ms.source_field_id)
   }
 
-  const acknowledgedSourceFieldIds = new Set<string>(
-    sourceAcks.map((a) => a.source_field_id),
-  )
+  // Migration 103 — split source-side decisions by `decision`. The two
+  // sets are mutually exclusive because of UNIQUE (project_id,
+  // source_field_id). Pre-103 rows backfilled to 'acknowledged' land
+  // in the first set as expected.
+  const acknowledgedSourceFieldIds = new Set<string>()
+  const rejectedSourceFieldIds = new Set<string>()
+  for (const a of sourceAcks) {
+    if (a.decision === 'rejected') {
+      rejectedSourceFieldIds.add(a.source_field_id)
+    } else {
+      acknowledgedSourceFieldIds.add(a.source_field_id)
+    }
+  }
 
   const out: SourceFieldWithState[] = []
   for (const field of sourceFields) {
@@ -961,6 +978,7 @@ function buildSourceFieldsWithState(
       mappingStatus: mappedSourceFieldIds.has(field.id) ? 'mapped' : 'unmapped',
       sampleValues: extractSampleValues(field.field_profiles),
       isAcknowledged: acknowledgedSourceFieldIds.has(field.id),
+      isRejected: rejectedSourceFieldIds.has(field.id),
     })
   }
 
@@ -1308,6 +1326,10 @@ export function assembleMappingsForRedesign(
       id: a.id,
       sourceFieldId: a.source_field_id,
       reason: a.reason,
+      // Migration 103 — coerce unknown values to 'acknowledged' so a
+      // pre-103 backfilled row (NULL decision) or any future enum drift
+      // never reaches the UI as an out-of-band value.
+      decision: a.decision === 'rejected' ? 'rejected' : 'acknowledged',
     }))
 
   // ── Source schema sidebar (Phase 3 Gap 11b) ──────────────────────
@@ -1378,7 +1400,7 @@ export async function getMappingsForRedesignCore(
       .eq('project_id', projectId),
     supabase
       .from('source_field_acknowledgments')
-      .select('id, source_field_id, reason')
+      .select('id, source_field_id, reason, decision')
       .eq('project_id', projectId),
     // PR γ — target_field_coverage join for unified row-prop status +
     // coverageStatus + statusSetBy. PR γ.1 adds `confidence` to the

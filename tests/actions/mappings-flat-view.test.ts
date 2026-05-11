@@ -1,0 +1,586 @@
+// @vitest-environment node
+//
+// Flat (spreadsheet) Mapping view — regression guards for the 4 new
+// server actions in `lib/actions/mappings-for-redesign.ts`:
+//
+//   - updateMappingSourceField   (5.1)
+//   - updateMappingTargetField   (5.2)
+//   - createMappingFromUnmapped  (5.3)
+//   - setUnmappedRowRejected     (5.4)
+//
+// Strategy mirrors `edit-mapping-sources.test.ts`: read the action
+// source file and assert call-site shape locks the founder-locked
+// decisions in place (Q1-Q6, see
+// notes/spreadsheet-view-server-investigation.md §11).
+//
+// Open-question resolutions captured here as regression guards:
+//
+//   Q1  Confidence: edited source's confidence set to
+//       FLAT_VIEW_USER_CONFIDENCE (=100); TFM-aggregate left to the
+//       MIN trigger. We assert the confidence write hits ONE
+//       mapping_source row, never a TFM-wide override.
+//   Q2  Status revert on contributor reject: existing rejectFieldMapping
+//       behavior preserved (this test file does NOT touch that path —
+//       its invariants are already locked by `edit-mapping-sources` and
+//       `mappings-for-redesign-phase-4a-actions`).
+//   Q3  createMappingFromUnmapped DELETEs the source_field_acknowledgments
+//       row when present.
+//   Q4  Activity log: reuse mapping_sources_changed + mapping_approved
+//       (with metadata.surface='flat_view'). Single new action_type:
+//       source_field_rejected.
+//   Q5  TARGET_CONFLICT on VA-at-new-target — refuse, do not auto-delete.
+//   Q6  B's UI uses the existing shim id format.
+
+import { describe, it, expect } from 'vitest'
+import { readFileSync } from 'node:fs'
+import { resolve } from 'node:path'
+
+const ACTIONS_PATH = resolve(
+  __dirname,
+  '../../lib/actions/mappings-for-redesign.ts',
+)
+const SRC = readFileSync(ACTIONS_PATH, 'utf8')
+
+const ACTIVITY_LOG_PATH = resolve(
+  __dirname,
+  '../../lib/actions/activity-log.ts',
+)
+const ACTIVITY_LOG_SRC = readFileSync(ACTIVITY_LOG_PATH, 'utf8')
+
+const MIGRATION_PATH = resolve(
+  __dirname,
+  '../../supabase/migrations/103_source_field_rejection.sql',
+)
+const MIGRATION_SRC = readFileSync(MIGRATION_PATH, 'utf8')
+
+function sliceBetween(src: string, startMarker: string, endMarker: string): string {
+  const a = src.indexOf(startMarker)
+  if (a < 0) throw new Error(`marker not found: ${startMarker}`)
+  const b = src.indexOf(endMarker, a + startMarker.length)
+  if (b < 0)
+    throw new Error(`end marker not found after ${startMarker}: ${endMarker}`)
+  return src.slice(a, b)
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// Migration 103 — schema shape
+// ─────────────────────────────────────────────────────────────────────
+
+describe('[flat-view] migration 103', () => {
+  it('adds a `decision` column on source_field_acknowledgments with the expected CHECK constraint', () => {
+    expect(MIGRATION_SRC).toMatch(/ALTER TABLE public\.source_field_acknowledgments/)
+    expect(MIGRATION_SRC).toMatch(
+      /ADD COLUMN IF NOT EXISTS decision TEXT NOT NULL DEFAULT 'acknowledged'/,
+    )
+    expect(MIGRATION_SRC).toMatch(
+      /CHECK \(decision IN \('acknowledged', 'rejected'\)\)/,
+    )
+  })
+
+  it('relaxes the reason NOT NULL constraint so flat-view rejection can omit it', () => {
+    expect(MIGRATION_SRC).toMatch(/ALTER COLUMN reason DROP NOT NULL/)
+    expect(MIGRATION_SRC).toMatch(/ALTER COLUMN reason SET DEFAULT ''/)
+  })
+
+  it('creates a (project_id, decision) index for flat-view filtering', () => {
+    expect(MIGRATION_SRC).toMatch(
+      /CREATE INDEX IF NOT EXISTS idx_source_field_acknowledgments_decision[\s\S]+ON public\.source_field_acknowledgments \(project_id, decision\)/,
+    )
+  })
+
+  it('documents the sticky-rollback caveat in the header comment', () => {
+    expect(MIGRATION_SRC).toMatch(/Rollback requires/)
+  })
+})
+
+// ─────────────────────────────────────────────────────────────────────
+// activity-log.ts — new action_type
+// ─────────────────────────────────────────────────────────────────────
+
+describe('[flat-view] activity-log action_type', () => {
+  it("adds 'source_field_rejected' to the ActionType union", () => {
+    expect(ACTIVITY_LOG_SRC).toMatch(/'source_field_rejected'/)
+  })
+
+  it('does NOT introduce other flat-view-only action_types (Q4 — reuse existing)', () => {
+    expect(ACTIVITY_LOG_SRC).not.toMatch(/'mapping_inline_edited'/)
+    expect(ACTIVITY_LOG_SRC).not.toMatch(/'mapping_target_changed'/)
+  })
+})
+
+// ─────────────────────────────────────────────────────────────────────
+// 5.1 updateMappingSourceField
+// ─────────────────────────────────────────────────────────────────────
+
+const SRC_FIELD_BODY = sliceBetween(
+  SRC,
+  'export async function updateMappingSourceField(',
+  '// ─── 5.2 updateMappingTargetField',
+)
+
+describe('[flat-view] updateMappingSourceField — shape', () => {
+  it('exports updateMappingSourceField as an async function with the documented input', () => {
+    expect(SRC).toMatch(/export async function updateMappingSourceField\(input: \{/)
+    expect(SRC_FIELD_BODY).toMatch(/rowId:\s*string/)
+    expect(SRC_FIELD_BODY).toMatch(/newSourceFieldId:\s*string/)
+    expect(SRC_FIELD_BODY).toMatch(/newConfidence\?:\s*number/)
+  })
+
+  it('returns a discriminated union with tfmId / mappingSourceId / transformReset / stagedRowsReverted', () => {
+    const union = sliceBetween(
+      SRC,
+      'export type UpdateMappingSourceFieldResult',
+      'export async function updateMappingSourceField',
+    )
+    expect(union).toMatch(/tfmId:\s*string/)
+    expect(union).toMatch(/mappingSourceId:\s*string/)
+    expect(union).toMatch(/transformReset:\s*boolean/)
+    expect(union).toMatch(/stagedRowsReverted:\s*number/)
+    expect(union).toMatch(/errorCode:\s*UpdateSourceFieldErrorCode/)
+  })
+
+  it('UpdateSourceFieldErrorCode exposes the 6 expected codes including DUPLICATE_SOURCE', () => {
+    const union = sliceBetween(
+      SRC,
+      'export type UpdateSourceFieldErrorCode',
+      'export type UpdateMappingSourceFieldResult',
+    )
+    expect(union).toContain("'PERMISSION_DENIED'")
+    expect(union).toContain("'NOT_FOUND'")
+    expect(union).toContain("'VALIDATION'")
+    expect(union).toContain("'MAINTENANCE_MODE'")
+    expect(union).toContain("'DUPLICATE_SOURCE'")
+    expect(union).toContain("'INTERNAL'")
+  })
+})
+
+describe('[flat-view] updateMappingSourceField — input validation + decode', () => {
+  it('rejects empty rowId with VALIDATION', () => {
+    expect(SRC_FIELD_BODY).toMatch(/!rowId[\s\S]{0,200}errorCode:\s*['"]VALIDATION['"]/)
+  })
+
+  it('rejects empty newSourceFieldId with VALIDATION', () => {
+    expect(SRC_FIELD_BODY).toMatch(
+      /!newSourceFieldId[\s\S]{0,200}errorCode:\s*['"]VALIDATION['"]/,
+    )
+  })
+
+  it('decodes the shim id and rejects non-TFM kinds with NOT_FOUND', () => {
+    expect(SRC_FIELD_BODY).toMatch(/decodeShimmedRowId\(\s*rowId\s*\)/)
+    expect(SRC_FIELD_BODY).toMatch(
+      /decoded\.kind\s*!==\s*['"]tfm-primary['"]\s*&&\s*decoded\.kind\s*!==\s*['"]tfm-contributor['"]/,
+    )
+  })
+})
+
+describe('[flat-view] updateMappingSourceField — auth + permission + guards', () => {
+  it('checks Supabase auth and returns PERMISSION_DENIED on missing user', () => {
+    expect(SRC_FIELD_BODY).toMatch(/supabase\.auth\.getUser\(\)/)
+    expect(SRC_FIELD_BODY).toMatch(
+      /if\s*\(\s*!user\s*\)[\s\S]{0,200}errorCode:\s*['"]PERMISSION_DENIED['"]/,
+    )
+  })
+
+  it('reads the TFM identity and returns NOT_FOUND when missing', () => {
+    expect(SRC_FIELD_BODY).toMatch(/from\(['"]target_field_mappings['"]\)/)
+    expect(SRC_FIELD_BODY).toMatch(
+      /if\s*\(\s*!tfm\s*\)[\s\S]{0,400}errorCode:\s*['"]NOT_FOUND['"]/,
+    )
+  })
+
+  it('enforces editor permission via requireProjectPermission(projectId, "editor")', () => {
+    expect(SRC_FIELD_BODY).toMatch(
+      /requireProjectPermission\(\s*projectId\s*,\s*['"]editor['"]\s*\)/,
+    )
+  })
+
+  it('refuses acknowledged TFMs with VALIDATION', () => {
+    expect(SRC_FIELD_BODY).toMatch(/tfm\.is_acknowledged/)
+    expect(SRC_FIELD_BODY).toMatch(
+      /is_acknowledged[\s\S]{0,400}errorCode:\s*['"]VALIDATION['"]/,
+    )
+  })
+
+  it('refuses status=rejected TFMs with VALIDATION', () => {
+    expect(SRC_FIELD_BODY).toMatch(/tfm\.status\s*===\s*['"]rejected['"]/)
+  })
+
+  it('runs assertMappingWritesEnabled and surfaces MAINTENANCE_MODE', () => {
+    expect(SRC_FIELD_BODY).toMatch(/assertMappingWritesEnabled\(\s*projectId\s*\)/)
+    expect(SRC_FIELD_BODY).toMatch(
+      /Mapping writes[\s\S]{0,400}errorCode:\s*['"]MAINTENANCE_MODE['"]/,
+    )
+  })
+})
+
+describe('[flat-view] updateMappingSourceField — source identity + duplicate guard', () => {
+  it('reads the new source field with table+dataset join for project ownership', () => {
+    expect(SRC_FIELD_BODY).toMatch(/from\(['"]fields['"]\)/)
+    expect(SRC_FIELD_BODY).toMatch(
+      /tables!inner\(datasets!inner\(project_id\)\)/,
+    )
+  })
+
+  it('refuses source fields from a different project with VALIDATION', () => {
+    expect(SRC_FIELD_BODY).toMatch(/ndDatasets|nsDatasets\?\.project_id\s*!==\s*projectId/)
+  })
+
+  it('checks for an existing mapping_source on this TFM with the same source_field_id → DUPLICATE_SOURCE', () => {
+    expect(SRC_FIELD_BODY).toMatch(/DUPLICATE_SOURCE/)
+    expect(SRC_FIELD_BODY).toMatch(/from\(['"]mapping_sources['"]\)[\s\S]{0,400}eq\(\s*['"]source_field_id['"],\s*newSourceFieldId\s*\)/)
+  })
+})
+
+describe('[flat-view] updateMappingSourceField — write semantics (Q1)', () => {
+  it('resolves the mapping_source row via ordinal=0 for tfm-primary, by decoded id for tfm-contributor', () => {
+    expect(SRC_FIELD_BODY).toMatch(
+      /decoded\.kind\s*===\s*['"]tfm-primary['"][\s\S]{0,800}eq\(\s*['"]ordinal['"],\s*0\s*\)/,
+    )
+    expect(SRC_FIELD_BODY).toMatch(/decoded\.mappingSourceId/)
+  })
+
+  it('resets the field transformation BEFORE the source update (source change invalidates SQL)', () => {
+    expect(SRC_FIELD_BODY).toMatch(/resetFieldTransform\(\s*tfm\.id\s*\)/)
+  })
+
+  it('Q1: UPDATE writes confidence to the edited mapping_source row, NOT a TFM-wide override', () => {
+    // The UPDATE block targets `mapping_sources` and includes a
+    // confidence field. We assert by chain: from('mapping_sources') →
+    // .update({ ... confidence: ... }).
+    expect(SRC_FIELD_BODY).toMatch(
+      /from\(['"]mapping_sources['"]\)[\s\S]{0,800}\.update\(\{[\s\S]{0,800}confidence:\s*newConfidence/,
+    )
+    // And the TFM update does NOT write confidence — only status + updated_at.
+    const tfmUpdateMatch = SRC_FIELD_BODY.match(
+      /from\(['"]target_field_mappings['"]\)[\s\S]{0,800}\.update\(\{([\s\S]{0,400})\}\)\s*\.eq\(\s*['"]id['"],\s*tfm\.id\s*\)/,
+    )
+    expect(tfmUpdateMatch).toBeTruthy()
+    // The match groups every TFM update body in the function; assert none
+    // includes 'confidence:'.
+    const allTfmUpdates = [
+      ...SRC_FIELD_BODY.matchAll(
+        /from\(['"]target_field_mappings['"]\)[\s\S]{0,200}\.update\(\{([\s\S]{0,300})\}\)/g,
+      ),
+    ]
+    for (const m of allTfmUpdates) {
+      expect(m[1]).not.toMatch(/confidence:/)
+    }
+  })
+
+  it('flips TFM.status to "approved" (flat-view affirmation cascade)', () => {
+    expect(SRC_FIELD_BODY).toMatch(
+      /from\(['"]target_field_mappings['"]\)[\s\S]{0,200}\.update\(\{[\s\S]{0,200}status:\s*['"]approved['"]/,
+    )
+  })
+
+  it('has a no-op short-circuit: source unchanged still flips status to approved, skips writes', () => {
+    expect(SRC_FIELD_BODY).toMatch(/currentSourceFieldId\s*===\s*newSourceFieldId/)
+  })
+})
+
+describe('[flat-view] updateMappingSourceField — recompute + revalidate + log', () => {
+  it('fans out recomputeTableMappingStatus across new + previous source tables', () => {
+    expect(SRC_FIELD_BODY).toMatch(/recomputeTableMappingStatus\(supabase,/)
+    expect(SRC_FIELD_BODY).toMatch(/findOrCreateTableMapping\(/)
+  })
+
+  it('revalidates /mapping AND /transform AND /app/projects', () => {
+    expect(SRC_FIELD_BODY).toMatch(/revalidatePath\(`\/app\/projects\/\$\{projectId\}\/mapping`\)/)
+    expect(SRC_FIELD_BODY).toMatch(/revalidatePath\(`\/app\/projects\/\$\{projectId\}\/transform`\)/)
+    expect(SRC_FIELD_BODY).toMatch(/revalidatePath\(['"]\/app\/projects['"]\)/)
+  })
+
+  it('emits mapping_sources_changed + mapping_approved with surface=flat_view metadata (Q4)', () => {
+    expect(SRC_FIELD_BODY).toMatch(/logActivity\([\s\S]{0,80}['"]mapping_sources_changed['"]/)
+    expect(SRC_FIELD_BODY).toMatch(/logActivity\([\s\S]{0,80}['"]mapping_approved['"]/)
+    expect(SRC_FIELD_BODY).toMatch(/surface:\s*['"]flat_view['"]/)
+  })
+})
+
+// ─────────────────────────────────────────────────────────────────────
+// 5.2 updateMappingTargetField
+// ─────────────────────────────────────────────────────────────────────
+
+const TGT_FIELD_BODY = sliceBetween(
+  SRC,
+  'export async function updateMappingTargetField(',
+  '// ─── 5.3 createMappingFromUnmapped',
+)
+
+describe('[flat-view] updateMappingTargetField — shape', () => {
+  it('exports updateMappingTargetField with the documented input', () => {
+    expect(SRC).toMatch(/export async function updateMappingTargetField\(input: \{/)
+    expect(TGT_FIELD_BODY).toMatch(/tfmId:\s*string/)
+    expect(TGT_FIELD_BODY).toMatch(/newTargetFieldId:\s*string/)
+  })
+
+  it('UpdateTargetFieldErrorCode includes TARGET_CONFLICT (Q5)', () => {
+    const union = sliceBetween(
+      SRC,
+      'export type UpdateTargetFieldErrorCode',
+      'export type UpdateMappingTargetFieldResult',
+    )
+    expect(union).toContain("'TARGET_CONFLICT'")
+    expect(union).toContain("'PERMISSION_DENIED'")
+    expect(union).toContain("'NOT_FOUND'")
+    expect(union).toContain("'VALIDATION'")
+    expect(union).toContain("'MAINTENANCE_MODE'")
+    expect(union).toContain("'INTERNAL'")
+  })
+})
+
+describe('[flat-view] updateMappingTargetField — validation + state guards', () => {
+  it('rejects non-UUID tfmId / newTargetFieldId with VALIDATION', () => {
+    expect(TGT_FIELD_BODY).toMatch(/!UUID_REGEX\.test\(tfmId\)/)
+    expect(TGT_FIELD_BODY).toMatch(/!UUID_REGEX\.test\(newTargetFieldId\)/)
+  })
+
+  it('refuses acknowledged / rejected TFMs with VALIDATION', () => {
+    expect(TGT_FIELD_BODY).toMatch(/tfm\.is_acknowledged/)
+    expect(TGT_FIELD_BODY).toMatch(/tfm\.status\s*===\s*['"]rejected['"]/)
+  })
+
+  it('Q5: refuses TARGET_CONFLICT for ANY live TFM at the new target (mapped, VA, or bare-ack)', () => {
+    expect(TGT_FIELD_BODY).toMatch(
+      /existing\.id\s*!==\s*tfm\.id\s*&&\s*existing\.status\s*!==\s*['"]rejected['"]/,
+    )
+    expect(TGT_FIELD_BODY).toMatch(
+      /TARGET_CONFLICT/,
+    )
+    // VA at target NOT auto-deleted — no replaceValueAssignment call here.
+    expect(TGT_FIELD_BODY).not.toMatch(/replaceValueAssignment/)
+  })
+
+  it('has a no-op short-circuit when target_field_id unchanged', () => {
+    expect(TGT_FIELD_BODY).toMatch(/tfm\.target_field_id\s*===\s*newTargetFieldId/)
+  })
+})
+
+describe('[flat-view] updateMappingTargetField — write semantics', () => {
+  it('resets the field transformation BEFORE the target_field_id update', () => {
+    expect(TGT_FIELD_BODY).toMatch(/resetFieldTransform\(\s*tfm\.id\s*\)/)
+  })
+
+  it('UPDATE writes target_field_id + status=approved + updated_at', () => {
+    expect(TGT_FIELD_BODY).toMatch(
+      /\.update\(\{[\s\S]{0,400}target_field_id:\s*newTargetFieldId[\s\S]{0,400}status:\s*['"]approved['"]/,
+    )
+  })
+
+  it('Q1: does NOT touch TFM.confidence — only status + target_field_id + updated_at', () => {
+    const allTfmUpdates = [
+      ...TGT_FIELD_BODY.matchAll(
+        /from\(['"]target_field_mappings['"]\)[\s\S]{0,200}\.update\(\{([\s\S]{0,400})\}\)/g,
+      ),
+    ]
+    for (const m of allTfmUpdates) {
+      expect(m[1]).not.toMatch(/confidence:/)
+    }
+  })
+
+  it('resets coverage status on the new target so stale rejected coverage does not leak through', () => {
+    expect(TGT_FIELD_BODY).toMatch(
+      /setCoverageStatus\(\s*projectId\s*,\s*newTargetFieldId\s*,\s*['"]needs_review['"]/,
+    )
+  })
+
+  it('recomputes TMs for old + new target tables', () => {
+    expect(TGT_FIELD_BODY).toMatch(/targetTablesAffected/)
+    expect(TGT_FIELD_BODY).toMatch(/recomputeTableMappingStatus\(/)
+  })
+
+  it('logs mapping_sources_changed with kind=target_changed + mapping_approved (Q4)', () => {
+    expect(TGT_FIELD_BODY).toMatch(/['"]mapping_sources_changed['"]/)
+    expect(TGT_FIELD_BODY).toMatch(/kind:\s*['"]target_changed['"]/)
+    expect(TGT_FIELD_BODY).toMatch(/['"]mapping_approved['"]/)
+  })
+})
+
+// ─────────────────────────────────────────────────────────────────────
+// 5.3 createMappingFromUnmapped
+// ─────────────────────────────────────────────────────────────────────
+
+const CREATE_BODY = sliceBetween(
+  SRC,
+  'export async function createMappingFromUnmapped(',
+  '// ─── 5.4 setUnmappedRowRejected',
+)
+
+describe('[flat-view] createMappingFromUnmapped — shape', () => {
+  it('exports createMappingFromUnmapped with projectId / sourceFieldId / targetFieldId', () => {
+    expect(SRC).toMatch(/export async function createMappingFromUnmapped\(input: \{/)
+    expect(CREATE_BODY).toMatch(/projectId:\s*string/)
+    expect(CREATE_BODY).toMatch(/sourceFieldId:\s*string/)
+    expect(CREATE_BODY).toMatch(/targetFieldId:\s*string/)
+  })
+
+  it('returns resolvedCase ∈ unmapped_target | unmapped_source | both | neither', () => {
+    const union = sliceBetween(
+      SRC,
+      'export type CreateMappingFromUnmappedResult',
+      'export async function createMappingFromUnmapped',
+    )
+    expect(union).toMatch(/resolvedCase:\s*['"]unmapped_target['"]\s*\|\s*['"]unmapped_source['"]\s*\|\s*['"]both['"]\s*\|\s*['"]neither['"]/)
+  })
+})
+
+describe('[flat-view] createMappingFromUnmapped — case detection + delegation', () => {
+  it('detects unmapped target case via target_field_mappings lookup', () => {
+    expect(CREATE_BODY).toMatch(/from\(['"]target_field_mappings['"]\)/)
+    expect(CREATE_BODY).toMatch(/targetIsUnmapped/)
+  })
+
+  it('detects unmapped source case via source_field_acknowledgments lookup', () => {
+    expect(CREATE_BODY).toMatch(/from\(['"]source_field_acknowledgments['"]\)/)
+    expect(CREATE_BODY).toMatch(/sourceIsUnmapped/)
+  })
+
+  it('returns TARGET_CONFLICT when a live non-bare-ack TFM exists at the target', () => {
+    expect(CREATE_BODY).toMatch(/TARGET_CONFLICT/)
+  })
+
+  it('delegates the actual create to createFieldMapping with combination=single + confidence=100', () => {
+    expect(CREATE_BODY).toMatch(/createFieldMapping\(\{/)
+    expect(CREATE_BODY).toMatch(/combinationType:\s*['"]single['"]/)
+    expect(CREATE_BODY).toMatch(/confidence:\s*FLAT_VIEW_USER_CONFIDENCE/)
+  })
+
+  it('flips the created TFM status to approved (flat-view affirmation cascade)', () => {
+    expect(CREATE_BODY).toMatch(
+      /from\(['"]target_field_mappings['"]\)[\s\S]{0,300}\.update\(\{[\s\S]{0,300}status:\s*['"]approved['"][\s\S]{0,300}\.eq\(\s*['"]id['"],\s*createResult\.tfmId/,
+    )
+  })
+
+  it('clears stale rejected coverage on unmapped-target case', () => {
+    expect(CREATE_BODY).toMatch(
+      /setCoverageStatus\(\s*projectId\s*,\s*targetFieldId\s*,\s*['"]needs_review['"]/,
+    )
+  })
+
+  it('Q3: DELETEs the source_field_acknowledgments row on unmapped-source case', () => {
+    expect(CREATE_BODY).toMatch(
+      /from\(['"]source_field_acknowledgments['"]\)[\s\S]{0,200}\.delete\(\)/,
+    )
+    expect(CREATE_BODY).toMatch(/sourceIsUnmapped\s*&&\s*existingAck/)
+  })
+
+  it('does NOT emit additional activity-log entries (createFieldMapping already logs mapping_created)', () => {
+    // No `logActivity(...)` call sites in createMappingFromUnmapped's body
+    // (createFieldMapping owns the emit).
+    expect(CREATE_BODY).not.toMatch(/logActivity\(/)
+  })
+})
+
+// ─────────────────────────────────────────────────────────────────────
+// 5.4 setUnmappedRowRejected
+// ─────────────────────────────────────────────────────────────────────
+
+// This action is the LAST function in the file — slice from the marker
+// to end-of-file.
+const REJECT_IDX = SRC.indexOf('export async function setUnmappedRowRejected(')
+expect(REJECT_IDX).toBeGreaterThan(0)
+const REJECT_BODY = SRC.slice(REJECT_IDX)
+
+describe('[flat-view] setUnmappedRowRejected — shape', () => {
+  it('exports setUnmappedRowRejected with projectId + targetFieldId? + sourceFieldId?', () => {
+    expect(SRC).toMatch(/export async function setUnmappedRowRejected\(input: \{/)
+    expect(REJECT_BODY).toMatch(/targetFieldId\?:\s*string/)
+    expect(REJECT_BODY).toMatch(/sourceFieldId\?:\s*string/)
+  })
+
+  it('returns side: target | source on success', () => {
+    const union = sliceBetween(
+      SRC,
+      'export type SetUnmappedRowRejectedResult',
+      'export async function setUnmappedRowRejected',
+    )
+    expect(union).toMatch(/side:\s*['"]target['"]\s*\|\s*['"]source['"]/)
+  })
+})
+
+describe('[flat-view] setUnmappedRowRejected — XOR validation', () => {
+  it('refuses when both targetFieldId AND sourceFieldId are supplied', () => {
+    expect(REJECT_BODY).toMatch(
+      /\(targetFieldId\s*&&\s*sourceFieldId\)\s*\|\|\s*\(!targetFieldId\s*&&\s*!sourceFieldId\)/,
+    )
+    expect(REJECT_BODY).toMatch(
+      /Exactly one of targetFieldId or sourceFieldId/,
+    )
+  })
+
+  it('validates UUID shape on both fields', () => {
+    expect(REJECT_BODY).toMatch(/!UUID_REGEX\.test\(targetFieldId\)/)
+    expect(REJECT_BODY).toMatch(/!UUID_REGEX\.test\(sourceFieldId\)/)
+  })
+})
+
+describe('[flat-view] setUnmappedRowRejected — target branch', () => {
+  it('refuses if a live TFM covers the target', () => {
+    expect(REJECT_BODY).toMatch(/liveTfm\s*&&\s*liveTfm\.status\s*!==\s*['"]rejected['"]/)
+    expect(REJECT_BODY).toMatch(/Use Reject on the mapped row instead/)
+  })
+
+  it('writes via setCoverageStatus(projectId, targetFieldId, "rejected")', () => {
+    expect(REJECT_BODY).toMatch(
+      /setCoverageStatus\(\s*projectId\s*,\s*targetFieldId\s*,\s*['"]rejected['"]/,
+    )
+  })
+
+  it('logs mapping_rejected with no_source=true (parity with existing unmapped-target reject)', () => {
+    expect(REJECT_BODY).toMatch(/['"]mapping_rejected['"]/)
+    expect(REJECT_BODY).toMatch(/no_source:\s*true/)
+  })
+})
+
+describe('[flat-view] setUnmappedRowRejected — source branch', () => {
+  it('UPSERTs source_field_acknowledgments with decision=rejected and reason=""', () => {
+    expect(REJECT_BODY).toMatch(/from\(['"]source_field_acknowledgments['"]\)/)
+    expect(REJECT_BODY).toMatch(/\.upsert\(/)
+    expect(REJECT_BODY).toMatch(/decision:\s*['"]rejected['"]/)
+    expect(REJECT_BODY).toMatch(/reason:\s*['"]{2}/)
+  })
+
+  it("uses onConflict: 'project_id,source_field_id' so an existing ack flips cleanly", () => {
+    expect(REJECT_BODY).toMatch(
+      /onConflict:\s*['"]project_id,source_field_id['"]/,
+    )
+  })
+
+  it('recomputes TMs whose source_table_id matches the source field parent table', () => {
+    expect(REJECT_BODY).toMatch(/source_table_id/)
+    expect(REJECT_BODY).toMatch(/recomputeTableMappingStatus\(/)
+  })
+
+  it('Q4: emits source_field_rejected (new action_type)', () => {
+    expect(REJECT_BODY).toMatch(/['"]source_field_rejected['"]/)
+  })
+})
+
+// ─────────────────────────────────────────────────────────────────────
+// Read translator — decision='rejected' surfaces as isRejected
+// ─────────────────────────────────────────────────────────────────────
+
+describe('[flat-view] read translator changes', () => {
+  const ENGINE_PATH = resolve(__dirname, '../../lib/ai/mapping-engine.ts')
+  const ENGINE_SRC = readFileSync(ENGINE_PATH, 'utf8')
+
+  it('fetches the decision column on source_field_acknowledgments', () => {
+    expect(ENGINE_SRC).toMatch(
+      /from\(['"]source_field_acknowledgments['"]\)[\s\S]{0,200}\.select\(\s*['"][^'"]*decision[^'"]*['"]/,
+    )
+  })
+
+  it('coerces unknown decision values to "acknowledged" defensively in the summary projection', () => {
+    expect(ENGINE_SRC).toMatch(/decision:\s*a\.decision\s*===\s*['"]rejected['"]\s*\?\s*['"]rejected['"]\s*:\s*['"]acknowledged['"]/)
+  })
+
+  it('splits the acknowledged + rejected source-field id sets by decision', () => {
+    expect(ENGINE_SRC).toMatch(/acknowledgedSourceFieldIds/)
+    expect(ENGINE_SRC).toMatch(/rejectedSourceFieldIds/)
+    expect(ENGINE_SRC).toMatch(/a\.decision\s*===\s*['"]rejected['"]/)
+  })
+
+  it('emits SourceFieldWithState.isRejected from the rejected set', () => {
+    expect(ENGINE_SRC).toMatch(/isRejected:\s*rejectedSourceFieldIds\.has/)
+  })
+})

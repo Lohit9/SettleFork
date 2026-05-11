@@ -155,6 +155,24 @@ const ALLOWED_FUNCTIONS_WITHOUT_LOG_AI_EDIT = new Set<string>([
   'updateMappingCombination',
   'bulkApproveFieldMappingsForTargetTable',
   'bulkRejectFieldMappingsForTargetTable',
+  // Flat (spreadsheet) Mapping view server actions — same Phase 0c
+  // follow-up bucket as the sibling redesign wrappers above. These
+  // inline-edit actions write to target_field_mappings (status flip
+  // + optional target_field_id) and mapping_sources (source_field_id
+  // + confidence). Per-row provenance wiring lands with the broader
+  // Phase 0c wire-up pass. createMappingFromUnmapped delegates to
+  // createFieldMapping (already allow-listed); listing it explicitly
+  // here too so the audit doesn't flag the post-create status-flip
+  // UPDATE that lives in this wrapper.
+  'updateMappingSourceField',
+  'updateMappingTargetField',
+  'createMappingFromUnmapped',
+  // setUnmappedRowRejected writes target_field_coverage (not in
+  // AI_TABLES) and source_field_acknowledgments (not in AI_TABLES) —
+  // not strictly required on the allow-list today, but listed
+  // defensively to document the flat-view surface as a single block
+  // for the follow-up reviewer.
+  'setUnmappedRowRejected',
   // quality-fixes.ts + manual-fix.ts:
   'markIssueFixed',
   'applyManualFix',

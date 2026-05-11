@@ -708,6 +708,17 @@ export interface SourceFieldAcknowledgmentSummary {
   id: string
   sourceFieldId: string
   reason: string
+  /**
+   * Migration 103 — user decision on this source field. `'acknowledged'`
+   * means the user accepts the field will not be migrated (modal path);
+   * `'rejected'` means the user explicitly rejected the source via the
+   * flat (spreadsheet) view's inline reject affordance. Downstream TM
+   * recompute treats both identically (the source is decided), but the
+   * flat-view UI surfaces them with different visual treatments.
+   *
+   * Defaults to `'acknowledged'` for rows persisted before migration 103.
+   */
+  decision: 'acknowledged' | 'rejected'
 }
 
 // ─── Source schema sidebar (Phase 3 Gap 11b) ─────────────────────────
@@ -769,8 +780,9 @@ export interface SourceFieldWithState {
   sampleValues: string[]
   /**
    * `true` iff this source field has a row in
-   * `source_field_acknowledgments` for this project (the user has
-   * explicitly declared the field as not-to-be-migrated).
+   * `source_field_acknowledgments` for this project with
+   * `decision='acknowledged'` (the user has explicitly declared the
+   * field as not-to-be-migrated via the modal path).
    *
    * Gap 11b consumes this as metadata only — no visual differentiation.
    * Gap 11c will fold acknowledged fields into the Unmapped pill with
@@ -778,6 +790,15 @@ export interface SourceFieldWithState {
    * `SourceSchemaSidebar.tsx` TODO).
    */
   isAcknowledged: boolean
+  /**
+   * Migration 103 — `true` iff this source field has a row in
+   * `source_field_acknowledgments` with `decision='rejected'` (the user
+   * explicitly rejected the source via the flat-view inline affordance).
+   * Mutually exclusive with `isAcknowledged` because the table has a
+   * UNIQUE constraint on (project_id, source_field_id) — at most one
+   * decision row per source.
+   */
+  isRejected: boolean
 }
 
 // ─── Project-level counters ──────────────────────────────────────────

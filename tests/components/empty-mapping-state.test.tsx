@@ -89,6 +89,7 @@ function sourceField(
     mappingStatus: 'unmapped',
     sampleValues: [],
     isAcknowledged: false,
+    isRejected: false,
     ...overrides,
   }
 }

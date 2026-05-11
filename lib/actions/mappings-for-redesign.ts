@@ -3864,3 +3864,1343 @@ export async function bulkRejectFieldMappingsForTargetTable(input: {
     ...(failedTfmIds.length > 0 ? { failedTfmIds } : {}),
   }
 }
+
+// ─── Flat (spreadsheet) view server actions ──────────────────────────────────
+//
+// The 4 actions below back the flat / spreadsheet Mapping view. Each
+// flat-view row represents a single source→target attribution (a
+// mapping_source paired with its parent TFM), or an unmapped row
+// (target with no TFM, or source with no consumer). Inline cell edits
+// drive these wrappers; the auto-approve cascade is intentional —
+// editing a value in the spreadsheet is the user's affirmative
+// statement "this attribution is correct".
+//
+// Founder decisions (2026-05-11, see
+// notes/spreadsheet-view-server-investigation.md):
+//
+//   Q1  Confidence: set ONLY the edited source's confidence to 100; let
+//       the MIN trigger keep TFM.confidence as the aggregate. We do NOT
+//       force TFM.confidence to 100.
+//   Q2  Status revert on contributor rejection: KEEP current behavior
+//       (existing rejectFieldMapping/deleteFieldMapping path). Rejecting
+//       a contributor does NOT revert the TFM to needs_review.
+//   Q3  createMappingFromUnmapped + existing ack: DELETE the
+//       source_field_acknowledgments row, proceed with create.
+//   Q4  Activity log: mostly reuse existing action_types. Single new
+//       action_type `source_field_rejected` for the flat-view source-side
+//       reject. Other inline edits emit existing types
+//       (mapping_sources_changed, mapping_approved, mapping_rejected)
+//       with metadata.surface='flat_view' to disambiguate from drawer/
+//       legacy emitters.
+//   Q5  VA at new target during updateMappingTargetField: REFUSE with
+//       TARGET_CONFLICT. The user must explicitly reject the existing VA
+//       first.
+//   Q6  B's UI investigation lives in worktree B; UI splits multi-source
+//       TFMs into one row per source attribution and uses the
+//       <tfmId>::<msId> shim id format.
+
+const FLAT_VIEW_USER_CONFIDENCE = 100
+
+// ─── 5.1 updateMappingSourceField ────────────────────────────────────────────
+
+export type UpdateSourceFieldErrorCode =
+  | 'PERMISSION_DENIED'
+  | 'NOT_FOUND'
+  | 'VALIDATION'
+  | 'MAINTENANCE_MODE'
+  | 'DUPLICATE_SOURCE'
+  | 'INTERNAL'
+
+export type UpdateMappingSourceFieldResult =
+  | {
+      success: true
+      tfmId: string
+      mappingSourceId: string
+      /** True when `resetFieldTransform` removed a transformation row. */
+      transformReset: boolean
+      stagedRowsReverted: number
+    }
+  | {
+      success: false
+      error: string
+      errorCode: UpdateSourceFieldErrorCode
+    }
+
+/**
+ * Update the source field on a single flat-view row. Triggered when the
+ * user edits the Source Field cell.
+ *
+ * Behaviour:
+ *   • Decodes `rowId` (`<tfmId>` for the primary attribution, or
+ *     `<tfmId>::<mappingSourceId>` for a contributor attribution).
+ *   • Validates the new source field exists in this project and isn't a
+ *     duplicate of an existing source on the TFM.
+ *   • Resets the field transformation (source change invalidates SQL).
+ *   • UPDATEs the resolved `mapping_sources` row's source_field_id /
+ *     source_table_id / confidence; the MIN-aggregate trigger then
+ *     refreshes TFM.confidence.
+ *   • Flips TFM.status → 'approved' (inline edit is an affirmative
+ *     statement of correctness). Other attributions on the same TFM
+ *     ride the TFM-wide status as before.
+ *   • Fans out `recomputeTableMappingStatus` across every distinct
+ *     source-table id in the post-edit source set (parallels
+ *     `editMappingSources`).
+ *   • Emits `mapping_sources_changed` + `mapping_approved` activity-log
+ *     entries with `surface: 'flat_view'` metadata.
+ */
+export async function updateMappingSourceField(input: {
+  rowId: string
+  newSourceFieldId: string
+  newConfidence?: number
+}): Promise<UpdateMappingSourceFieldResult> {
+  const { rowId, newSourceFieldId } = input
+  const newConfidence =
+    typeof input.newConfidence === 'number'
+      ? input.newConfidence
+      : FLAT_VIEW_USER_CONFIDENCE
+
+  // ── Step 1: input validation ────────────────────────────────────────────
+  if (!rowId) {
+    return {
+      success: false,
+      error: 'rowId is required',
+      errorCode: 'VALIDATION',
+    }
+  }
+  if (!newSourceFieldId) {
+    return {
+      success: false,
+      error: 'newSourceFieldId is required',
+      errorCode: 'VALIDATION',
+    }
+  }
+
+  // ── Step 2: decode shim id ──────────────────────────────────────────────
+  const decoded = decodeShimmedRowId(rowId)
+  if (decoded.kind !== 'tfm-primary' && decoded.kind !== 'tfm-contributor') {
+    return {
+      success: false,
+      error: 'Mapping not found',
+      errorCode: 'NOT_FOUND',
+    }
+  }
+
+  // ── Step 3: auth ────────────────────────────────────────────────────────
+  const supabase = await createClient()
+  const {
+    data: { user },
+  } = await supabase.auth.getUser()
+  if (!user) {
+    return {
+      success: false,
+      error: 'Not authenticated',
+      errorCode: 'PERMISSION_DENIED',
+    }
+  }
+
+  // ── Step 4: TFM identity read ───────────────────────────────────────────
+  const { data: tfm } = await supabaseAdmin
+    .from('target_field_mappings')
+    .select(
+      'id, project_id, target_field_id, status, is_acknowledged, combination_type',
+    )
+    .eq('id', decoded.tfmId)
+    .maybeSingle<{
+      id: string
+      project_id: string
+      target_field_id: string
+      status: 'needs_review' | 'approved' | 'rejected'
+      is_acknowledged: boolean
+      combination_type: string | null
+    }>()
+  if (!tfm) {
+    return {
+      success: false,
+      error: 'Mapping not found',
+      errorCode: 'NOT_FOUND',
+    }
+  }
+  const projectId = tfm.project_id
+
+  // ── Step 5: project permission ──────────────────────────────────────────
+  const perm = await requireProjectPermission(projectId, 'editor')
+  if (!perm.allowed) {
+    return {
+      success: false,
+      error: perm.error ?? 'Insufficient permissions',
+      errorCode: 'PERMISSION_DENIED',
+    }
+  }
+
+  // ── Step 6: defensive state guards ──────────────────────────────────────
+  if (tfm.is_acknowledged) {
+    return {
+      success: false,
+      error:
+        'This field is acknowledged. Un-acknowledge it first to edit the source.',
+      errorCode: 'VALIDATION',
+    }
+  }
+  if (tfm.status === 'rejected') {
+    return {
+      success: false,
+      error:
+        'This mapping has been rejected. Reject and re-create instead of editing.',
+      errorCode: 'VALIDATION',
+    }
+  }
+
+  // ── Step 7: maintenance gate ────────────────────────────────────────────
+  try {
+    await assertMappingWritesEnabled(projectId)
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err)
+    if (
+      message ===
+      'Mapping writes are temporarily disabled for scheduled maintenance'
+    ) {
+      return {
+        success: false,
+        error: message,
+        errorCode: 'MAINTENANCE_MODE',
+      }
+    }
+    return {
+      success: false,
+      error: message,
+      errorCode: 'INTERNAL',
+    }
+  }
+
+  // ── Step 8: new source field identity + project ownership ──────────────
+  const { data: newSource, error: nsErr } = await supabaseAdmin
+    .from('fields')
+    .select('id, name, table_id, tables!inner(datasets!inner(project_id))')
+    .eq('id', newSourceFieldId)
+    .single<{
+      id: string
+      name: string
+      table_id: string
+      tables:
+        | { datasets: { project_id: string } | { project_id: string }[] | null }
+        | {
+            datasets: { project_id: string } | { project_id: string }[] | null
+          }[]
+        | null
+    }>()
+  if (nsErr || !newSource) {
+    return {
+      success: false,
+      error: 'Source field not found',
+      errorCode: 'NOT_FOUND',
+    }
+  }
+  const nsTables = Array.isArray(newSource.tables)
+    ? newSource.tables[0]
+    : newSource.tables
+  const nsDatasets = Array.isArray(nsTables?.datasets)
+    ? nsTables?.datasets[0]
+    : nsTables?.datasets
+  if (nsDatasets?.project_id !== projectId) {
+    return {
+      success: false,
+      error: 'Source field does not belong to this project',
+      errorCode: 'VALIDATION',
+    }
+  }
+
+  // ── Step 9: resolve the mapping_source row to edit ──────────────────────
+  let mappingSourceId: string
+  let currentSourceFieldId: string | null = null
+  if (decoded.kind === 'tfm-primary') {
+    const { data: primary } = await supabaseAdmin
+      .from('mapping_sources')
+      .select('id, source_field_id')
+      .eq('target_field_mapping_id', tfm.id)
+      .eq('ordinal', 0)
+      .maybeSingle<{ id: string; source_field_id: string | null }>()
+    if (!primary) {
+      return {
+        success: false,
+        error: 'Primary source row not found for this mapping',
+        errorCode: 'NOT_FOUND',
+      }
+    }
+    mappingSourceId = primary.id
+    currentSourceFieldId = primary.source_field_id
+  } else {
+    const { data: contrib } = await supabaseAdmin
+      .from('mapping_sources')
+      .select('id, source_field_id')
+      .eq('id', decoded.mappingSourceId)
+      .eq('target_field_mapping_id', tfm.id)
+      .maybeSingle<{ id: string; source_field_id: string | null }>()
+    if (!contrib) {
+      return {
+        success: false,
+        error: 'Source attribution not found on this mapping',
+        errorCode: 'NOT_FOUND',
+      }
+    }
+    mappingSourceId = contrib.id
+    currentSourceFieldId = contrib.source_field_id
+  }
+
+  // No-op short circuit: source unchanged. Still flip status to approved
+  // (the user's click is an affirmation) but skip writes that would
+  // pointlessly fire the recompute trigger and transform reset.
+  if (currentSourceFieldId === newSourceFieldId) {
+    const { error: noopErr } = await supabaseAdmin
+      .from('target_field_mappings')
+      .update({ status: 'approved', updated_at: new Date().toISOString() })
+      .eq('id', tfm.id)
+    if (noopErr) {
+      return {
+        success: false,
+        error: noopErr.message,
+        errorCode: 'INTERNAL',
+      }
+    }
+    revalidatePath(`/app/projects/${projectId}/mapping`)
+    revalidatePath('/app/projects')
+    return {
+      success: true,
+      tfmId: tfm.id,
+      mappingSourceId,
+      transformReset: false,
+      stagedRowsReverted: 0,
+    }
+  }
+
+  // ── Step 10: duplicate check (defence in depth before UNIQUE fires) ────
+  const { data: dup } = await supabaseAdmin
+    .from('mapping_sources')
+    .select('id')
+    .eq('target_field_mapping_id', tfm.id)
+    .eq('source_field_id', newSourceFieldId)
+    .maybeSingle<{ id: string }>()
+  if (dup && dup.id !== mappingSourceId) {
+    return {
+      success: false,
+      error:
+        'This source field is already on the mapping. Pick a different field.',
+      errorCode: 'DUPLICATE_SOURCE',
+    }
+  }
+
+  // ── Step 11: existing source-table set (for fan-out recompute) ─────────
+  const { data: existingSources } = await supabaseAdmin
+    .from('mapping_sources')
+    .select('source_table_id')
+    .eq('target_field_mapping_id', tfm.id)
+    .returns<Array<{ source_table_id: string | null }>>()
+  const previousSourceTableIds = new Set(
+    (existingSources ?? [])
+      .map((s) => s.source_table_id)
+      .filter((id): id is string => typeof id === 'string'),
+  )
+
+  // ── Step 12: reset transform (source change invalidates SQL) ───────────
+  const reset = await resetFieldTransform(tfm.id)
+  const transformReset = reset.success ? reset.hadTransform : false
+  const stagedRowsReverted = reset.success ? reset.rowsReverted : 0
+
+  // ── Step 13: UPDATE the mapping_source row ─────────────────────────────
+  const { error: msUpdErr } = await supabaseAdmin
+    .from('mapping_sources')
+    .update({
+      source_field_id: newSourceFieldId,
+      source_table_id: newSource.table_id,
+      confidence: newConfidence,
+      ai_reasoning: 'Manually selected by user (flat view)',
+    })
+    .eq('id', mappingSourceId)
+  if (msUpdErr) {
+    return {
+      success: false,
+      error: msUpdErr.message,
+      errorCode: 'INTERNAL',
+    }
+  }
+
+  // ── Step 14: flip TFM status to approved ───────────────────────────────
+  const { error: tfmUpdErr } = await supabaseAdmin
+    .from('target_field_mappings')
+    .update({
+      status: 'approved',
+      updated_at: new Date().toISOString(),
+    })
+    .eq('id', tfm.id)
+  if (tfmUpdErr) {
+    return {
+      success: false,
+      error: tfmUpdErr.message,
+      errorCode: 'INTERNAL',
+    }
+  }
+
+  // ── Step 15: target field table_id for TM recompute ────────────────────
+  const { data: targetField } = await supabaseAdmin
+    .from('fields')
+    .select('id, name, table_id')
+    .eq('id', tfm.target_field_id)
+    .single<{ id: string; name: string; table_id: string }>()
+
+  // ── Step 16: TM recompute fan-out across every distinct source table ───
+  if (targetField) {
+    const newSourceTableIds = new Set<string>([newSource.table_id])
+    const { data: remainingSources } = await supabaseAdmin
+      .from('mapping_sources')
+      .select('source_table_id')
+      .eq('target_field_mapping_id', tfm.id)
+      .returns<Array<{ source_table_id: string | null }>>()
+    for (const ms of remainingSources ?? []) {
+      if (ms.source_table_id) newSourceTableIds.add(ms.source_table_id)
+    }
+
+    for (const sourceTableIdInLoop of newSourceTableIds) {
+      const tmLoop = await findOrCreateTableMapping(
+        projectId,
+        sourceTableIdInLoop,
+        targetField.table_id,
+      )
+      if (tmLoop.success) {
+        await recomputeTableMappingStatus(supabase, tmLoop.id)
+      }
+    }
+    for (const sourceTableIdInLoop of previousSourceTableIds) {
+      if (newSourceTableIds.has(sourceTableIdInLoop)) continue
+      const { data: existingTm } = await supabaseAdmin
+        .from('table_mappings')
+        .select('id')
+        .eq('project_id', projectId)
+        .eq('source_table_id', sourceTableIdInLoop)
+        .eq('target_table_id', targetField.table_id)
+        .maybeSingle<{ id: string }>()
+      if (existingTm?.id) {
+        await recomputeTableMappingStatus(supabase, existingTm.id)
+      }
+    }
+  }
+
+  // ── Step 17: revalidate ────────────────────────────────────────────────
+  revalidatePath(`/app/projects/${projectId}/mapping`)
+  revalidatePath(`/app/projects/${projectId}/transform`)
+  revalidatePath('/app/projects')
+
+  // ── Step 18: activity logs ─────────────────────────────────────────────
+  const tgtName = targetField?.name ?? null
+  await logActivity(
+    projectId,
+    'mapping_sources_changed',
+    `Mapping source edited: ${newSource.name} → ${tgtName ?? '?'}`,
+    'mapping',
+    {
+      surface: 'flat_view',
+      target_field_mapping_id: tfm.id,
+      mapping_source_id: mappingSourceId,
+      target_field: tgtName,
+      target_field_id: tfm.target_field_id,
+      new_source_field: newSource.name,
+      new_source_field_id: newSourceFieldId,
+      previous_source_field_id: currentSourceFieldId,
+      transform_reset: transformReset,
+    },
+  )
+  await logActivity(
+    projectId,
+    'mapping_approved',
+    `Mapping approved: ${newSource.name} → ${tgtName ?? '?'}`,
+    'mapping',
+    {
+      surface: 'flat_view',
+      target_field_mapping_id: tfm.id,
+      target_field: tgtName,
+      source_field: newSource.name,
+    },
+  )
+
+  if (transformReset) {
+    await logActivity(
+      projectId,
+      'transformation_reset',
+      `Transformation reset on edit: ${tgtName ?? '?'}`,
+      'transform',
+      {
+        surface: 'flat_view',
+        reason: 'flat_view_source_changed',
+        target_field_mapping_id: tfm.id,
+        target_field: tgtName,
+        rows_reverted: stagedRowsReverted,
+      },
+    )
+  }
+
+  return {
+    success: true,
+    tfmId: tfm.id,
+    mappingSourceId,
+    transformReset,
+    stagedRowsReverted,
+  }
+}
+
+// ─── 5.2 updateMappingTargetField ────────────────────────────────────────────
+
+export type UpdateTargetFieldErrorCode =
+  | 'PERMISSION_DENIED'
+  | 'NOT_FOUND'
+  | 'VALIDATION'
+  | 'MAINTENANCE_MODE'
+  | 'TARGET_CONFLICT'
+  | 'INTERNAL'
+
+export type UpdateMappingTargetFieldResult =
+  | {
+      success: true
+      tfmId: string
+      transformReset: boolean
+      stagedRowsReverted: number
+    }
+  | {
+      success: false
+      error: string
+      errorCode: UpdateTargetFieldErrorCode
+    }
+
+/**
+ * Update the target field on a TFM. Triggered when the user edits the
+ * Target Field cell on a flat-view row. This is a TFM-level operation —
+ * the input is the bare TFM uuid, not a shim id.
+ *
+ * Per founder decision Q5 (2026-05-11): a VA at the new target is NOT
+ * auto-deleted (legacy `editFieldMapping` behaviour). Returns
+ * TARGET_CONFLICT; the user must explicitly reject the existing VA
+ * first. Keeps flat-view semantics simple and avoids implicit data
+ * loss.
+ *
+ * Per founder decision Q1: confidence is NOT touched here. The
+ * underlying mapping_sources keep their AI-authored per-source
+ * confidence and the MIN trigger preserves TFM.confidence.
+ */
+export async function updateMappingTargetField(input: {
+  tfmId: string
+  newTargetFieldId: string
+}): Promise<UpdateMappingTargetFieldResult> {
+  const { tfmId, newTargetFieldId } = input
+
+  // ── Step 1: input validation ────────────────────────────────────────────
+  if (!tfmId) {
+    return {
+      success: false,
+      error: 'tfmId is required',
+      errorCode: 'VALIDATION',
+    }
+  }
+  if (!UUID_REGEX.test(tfmId)) {
+    return {
+      success: false,
+      error: 'tfmId must be a valid uuid',
+      errorCode: 'VALIDATION',
+    }
+  }
+  if (!newTargetFieldId) {
+    return {
+      success: false,
+      error: 'newTargetFieldId is required',
+      errorCode: 'VALIDATION',
+    }
+  }
+  if (!UUID_REGEX.test(newTargetFieldId)) {
+    return {
+      success: false,
+      error: 'newTargetFieldId must be a valid uuid',
+      errorCode: 'VALIDATION',
+    }
+  }
+
+  // ── Step 2: auth ────────────────────────────────────────────────────────
+  const supabase = await createClient()
+  const {
+    data: { user },
+  } = await supabase.auth.getUser()
+  if (!user) {
+    return {
+      success: false,
+      error: 'Not authenticated',
+      errorCode: 'PERMISSION_DENIED',
+    }
+  }
+
+  // ── Step 3: TFM identity read ───────────────────────────────────────────
+  const { data: tfm } = await supabaseAdmin
+    .from('target_field_mappings')
+    .select(
+      'id, project_id, target_field_id, status, is_acknowledged, combination_type',
+    )
+    .eq('id', tfmId)
+    .maybeSingle<{
+      id: string
+      project_id: string
+      target_field_id: string
+      status: 'needs_review' | 'approved' | 'rejected'
+      is_acknowledged: boolean
+      combination_type: string | null
+    }>()
+  if (!tfm) {
+    return {
+      success: false,
+      error: 'Mapping not found',
+      errorCode: 'NOT_FOUND',
+    }
+  }
+  const projectId = tfm.project_id
+
+  // ── Step 4: project permission ──────────────────────────────────────────
+  const perm = await requireProjectPermission(projectId, 'editor')
+  if (!perm.allowed) {
+    return {
+      success: false,
+      error: perm.error ?? 'Insufficient permissions',
+      errorCode: 'PERMISSION_DENIED',
+    }
+  }
+
+  // ── Step 5: defensive state guards ──────────────────────────────────────
+  if (tfm.is_acknowledged) {
+    return {
+      success: false,
+      error:
+        'This field is acknowledged. Un-acknowledge it first to edit the target.',
+      errorCode: 'VALIDATION',
+    }
+  }
+  if (tfm.status === 'rejected') {
+    return {
+      success: false,
+      error:
+        'This mapping has been rejected. Reject and re-create instead of editing.',
+      errorCode: 'VALIDATION',
+    }
+  }
+
+  // ── Step 6: maintenance gate ────────────────────────────────────────────
+  try {
+    await assertMappingWritesEnabled(projectId)
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err)
+    if (
+      message ===
+      'Mapping writes are temporarily disabled for scheduled maintenance'
+    ) {
+      return {
+        success: false,
+        error: message,
+        errorCode: 'MAINTENANCE_MODE',
+      }
+    }
+    return {
+      success: false,
+      error: message,
+      errorCode: 'INTERNAL',
+    }
+  }
+
+  // ── Step 7: identity read on the previous target field ─────────────────
+  const { data: prevTarget } = await supabaseAdmin
+    .from('fields')
+    .select('id, name, table_id')
+    .eq('id', tfm.target_field_id)
+    .maybeSingle<{ id: string; name: string; table_id: string }>()
+
+  // ── Step 8: new target field identity + project ownership ──────────────
+  const { data: newTarget, error: ntErr } = await supabaseAdmin
+    .from('fields')
+    .select('id, name, table_id, tables!inner(datasets!inner(project_id))')
+    .eq('id', newTargetFieldId)
+    .single<{
+      id: string
+      name: string
+      table_id: string
+      tables:
+        | { datasets: { project_id: string } | { project_id: string }[] | null }
+        | {
+            datasets: { project_id: string } | { project_id: string }[] | null
+          }[]
+        | null
+    }>()
+  if (ntErr || !newTarget) {
+    return {
+      success: false,
+      error: 'Target field not found',
+      errorCode: 'NOT_FOUND',
+    }
+  }
+  const ntTables = Array.isArray(newTarget.tables)
+    ? newTarget.tables[0]
+    : newTarget.tables
+  const ntDatasets = Array.isArray(ntTables?.datasets)
+    ? ntTables?.datasets[0]
+    : ntTables?.datasets
+  if (ntDatasets?.project_id !== projectId) {
+    return {
+      success: false,
+      error: 'Target field does not belong to this project',
+      errorCode: 'VALIDATION',
+    }
+  }
+
+  // No-op short circuit: target unchanged. Flip status to approved and
+  // exit (the user's click is an affirmation).
+  if (tfm.target_field_id === newTargetFieldId) {
+    const { error: noopErr } = await supabaseAdmin
+      .from('target_field_mappings')
+      .update({ status: 'approved', updated_at: new Date().toISOString() })
+      .eq('id', tfm.id)
+    if (noopErr) {
+      return {
+        success: false,
+        error: noopErr.message,
+        errorCode: 'INTERNAL',
+      }
+    }
+    revalidatePath(`/app/projects/${projectId}/mapping`)
+    revalidatePath('/app/projects')
+    return {
+      success: true,
+      tfmId: tfm.id,
+      transformReset: false,
+      stagedRowsReverted: 0,
+    }
+  }
+
+  // ── Step 9: TARGET_CONFLICT check ──────────────────────────────────────
+  // Mirrors editFieldMapping's logic. UNIQUE (project_id, target_field_id)
+  // would surface as INTERNAL otherwise; pre-check returns a clean code.
+  // Q5: refuse for ANY live TFM at the new target (mapped, VA, or bare-
+  // ack). User must explicitly reject the existing row first.
+  const { data: existing } = await supabaseAdmin
+    .from('target_field_mappings')
+    .select('id, status, is_acknowledged, combination_type')
+    .eq('project_id', projectId)
+    .eq('target_field_id', newTargetFieldId)
+    .maybeSingle<{
+      id: string
+      status: 'needs_review' | 'approved' | 'rejected'
+      is_acknowledged: boolean
+      combination_type: string | null
+    }>()
+  if (existing && existing.id !== tfm.id && existing.status !== 'rejected') {
+    return {
+      success: false,
+      error:
+        'Target field already has a mapping. Reject the existing mapping first.',
+      errorCode: 'TARGET_CONFLICT',
+    }
+  }
+
+  // ── Step 10: reset transform (target change invalidates SQL) ───────────
+  const reset = await resetFieldTransform(tfm.id)
+  const transformReset = reset.success ? reset.hadTransform : false
+  const stagedRowsReverted = reset.success ? reset.rowsReverted : 0
+
+  // ── Step 11: UPDATE the TFM (target_field_id + status='approved') ──────
+  const { error: tfmUpdErr } = await supabaseAdmin
+    .from('target_field_mappings')
+    .update({
+      target_field_id: newTargetFieldId,
+      status: 'approved',
+      updated_at: new Date().toISOString(),
+    })
+    .eq('id', tfm.id)
+  if (tfmUpdErr) {
+    return {
+      success: false,
+      error: tfmUpdErr.message,
+      errorCode: 'INTERNAL',
+    }
+  }
+
+  // ── Step 12: clear stale coverage status on the new target ─────────────
+  // If the new target had a coverage row with status='rejected' or
+  // status_set_by='user', a subsequent read would resurface it as
+  // rejected (the read translator's resolution priority falls back to
+  // coverage when no TFM... but the TFM now exists, so this is mostly
+  // defence in depth). Reset to needs_review + ai_auto so the row
+  // surfaces under TFM control.
+  const coverageReset = await setCoverageStatus(
+    projectId,
+    newTargetFieldId,
+    'needs_review',
+  )
+  if (!coverageReset.success) {
+    console.warn(
+      '[updateMappingTargetField] coverage reset on new target failed (TFM update committed):',
+      coverageReset.error,
+    )
+  }
+
+  // ── Step 13: TM recompute fan-out ──────────────────────────────────────
+  // Recompute every TM whose target_table_id matches EITHER the old
+  // target's table OR the new target's table — the target table may
+  // have crossed table boundaries.
+  const targetTablesAffected = new Set<string>()
+  targetTablesAffected.add(newTarget.table_id)
+  if (prevTarget?.table_id) targetTablesAffected.add(prevTarget.table_id)
+
+  for (const ttId of targetTablesAffected) {
+    const { data: tms } = await supabaseAdmin
+      .from('table_mappings')
+      .select('id')
+      .eq('project_id', projectId)
+      .eq('target_table_id', ttId)
+    for (const tm of (tms ?? []) as Array<{ id: string }>) {
+      await recomputeTableMappingStatus(supabase, tm.id)
+    }
+  }
+
+  // ── Step 14: revalidate ────────────────────────────────────────────────
+  revalidatePath(`/app/projects/${projectId}/mapping`)
+  revalidatePath(`/app/projects/${projectId}/transform`)
+  revalidatePath('/app/projects')
+
+  // ── Step 15: activity logs ─────────────────────────────────────────────
+  // Reuses mapping_sources_changed (broad "mapping mutated" semantic)
+  // with metadata.kind='target_changed' to disambiguate from the
+  // sources-edit emitter. Plus mapping_approved for the cascade.
+  await logActivity(
+    projectId,
+    'mapping_sources_changed',
+    `Mapping target edited: ${prevTarget?.name ?? '?'} → ${newTarget.name}`,
+    'mapping',
+    {
+      surface: 'flat_view',
+      kind: 'target_changed',
+      target_field_mapping_id: tfm.id,
+      previous_target_field: prevTarget?.name ?? null,
+      previous_target_field_id: tfm.target_field_id,
+      new_target_field: newTarget.name,
+      new_target_field_id: newTargetFieldId,
+      transform_reset: transformReset,
+    },
+  )
+  await logActivity(
+    projectId,
+    'mapping_approved',
+    `Mapping approved: → ${newTarget.name}`,
+    'mapping',
+    {
+      surface: 'flat_view',
+      target_field_mapping_id: tfm.id,
+      target_field: newTarget.name,
+    },
+  )
+
+  if (transformReset) {
+    await logActivity(
+      projectId,
+      'transformation_reset',
+      `Transformation reset on edit: ${newTarget.name}`,
+      'transform',
+      {
+        surface: 'flat_view',
+        reason: 'flat_view_target_changed',
+        target_field_mapping_id: tfm.id,
+        target_field: newTarget.name,
+        rows_reverted: stagedRowsReverted,
+      },
+    )
+  }
+
+  return {
+    success: true,
+    tfmId: tfm.id,
+    transformReset,
+    stagedRowsReverted,
+  }
+}
+
+// ─── 5.3 createMappingFromUnmapped ───────────────────────────────────────────
+
+export type CreateFromUnmappedErrorCode =
+  | 'PERMISSION_DENIED'
+  | 'NOT_FOUND'
+  | 'VALIDATION'
+  | 'MAINTENANCE_MODE'
+  | 'TARGET_CONFLICT'
+  | 'INTERNAL'
+
+export type CreateMappingFromUnmappedResult =
+  | {
+      success: true
+      tfmId: string
+      tableMappingId: string
+      resolvedCase: 'unmapped_target' | 'unmapped_source' | 'both' | 'neither'
+    }
+  | {
+      success: false
+      error: string
+      errorCode: CreateFromUnmappedErrorCode
+    }
+
+/**
+ * Create a mapping between a source field and a target field when one
+ * of them is currently in an unmapped state. Detects the case
+ * automatically:
+ *
+ *   • Unmapped target  — target has no live TFM (may have a coverage
+ *     row carrying status='rejected' or status_set_by='user'). The
+ *     wrapper clears that coverage state and creates the mapping.
+ *   • Unmapped source  — source has a row in source_field_acknowledgments
+ *     (decision='acknowledged' or 'rejected'). The wrapper DELETEs the
+ *     ack row (Q3) and creates the mapping.
+ *
+ * Both cases can coexist for a single create — the wrapper reports
+ * `resolvedCase` so the UI can tailor the post-create toast.
+ *
+ * The actual TFM creation delegates to `createFieldMapping`
+ * (single-source, combination='single', confidence=100). The wrapper
+ * then flips the TFM to status='approved' (manual creation is an
+ * affirmative decision per founder Q4 + flat-view semantics).
+ */
+export async function createMappingFromUnmapped(input: {
+  projectId: string
+  sourceFieldId: string
+  targetFieldId: string
+}): Promise<CreateMappingFromUnmappedResult> {
+  const { projectId, sourceFieldId, targetFieldId } = input
+
+  // ── Step 1: input validation ────────────────────────────────────────────
+  if (!projectId || !sourceFieldId || !targetFieldId) {
+    return {
+      success: false,
+      error: 'projectId, sourceFieldId, and targetFieldId are required',
+      errorCode: 'VALIDATION',
+    }
+  }
+
+  // ── Step 2: auth ────────────────────────────────────────────────────────
+  const supabase = await createClient()
+  const {
+    data: { user },
+  } = await supabase.auth.getUser()
+  if (!user) {
+    return {
+      success: false,
+      error: 'Not authenticated',
+      errorCode: 'PERMISSION_DENIED',
+    }
+  }
+
+  // ── Step 3: project permission ──────────────────────────────────────────
+  const perm = await requireProjectPermission(projectId, 'editor')
+  if (!perm.allowed) {
+    return {
+      success: false,
+      error: perm.error ?? 'Insufficient permissions',
+      errorCode: 'PERMISSION_DENIED',
+    }
+  }
+
+  // ── Step 4: case detection ──────────────────────────────────────────────
+  const [existingTfmRes, existingAckRes] = await Promise.all([
+    supabaseAdmin
+      .from('target_field_mappings')
+      .select('id, status, is_acknowledged, combination_type')
+      .eq('project_id', projectId)
+      .eq('target_field_id', targetFieldId)
+      .maybeSingle<{
+        id: string
+        status: 'needs_review' | 'approved' | 'rejected'
+        is_acknowledged: boolean
+        combination_type: string | null
+      }>(),
+    supabaseAdmin
+      .from('source_field_acknowledgments')
+      .select('id, decision')
+      .eq('project_id', projectId)
+      .eq('source_field_id', sourceFieldId)
+      .maybeSingle<{ id: string; decision: string }>(),
+  ])
+
+  const existingTfm = existingTfmRes.data
+  const existingAck = existingAckRes.data
+
+  const targetIsUnmapped =
+    !existingTfm ||
+    (existingTfm.is_acknowledged && existingTfm.combination_type === null)
+  const sourceIsUnmapped = existingAck !== null
+
+  // If a live (non-bare-ack) TFM exists at the target, refuse — the
+  // user reached the flat-view "create" affordance for what should be
+  // a target with NO live mapping. Defer to the drawer/edit surface.
+  if (
+    existingTfm &&
+    !(existingTfm.is_acknowledged && existingTfm.combination_type === null) &&
+    existingTfm.status !== 'rejected'
+  ) {
+    return {
+      success: false,
+      error:
+        'This target field is already mapped. Edit the existing mapping instead.',
+      errorCode: 'TARGET_CONFLICT',
+    }
+  }
+
+  let resolvedCase: 'unmapped_target' | 'unmapped_source' | 'both' | 'neither'
+  if (targetIsUnmapped && sourceIsUnmapped) resolvedCase = 'both'
+  else if (targetIsUnmapped) resolvedCase = 'unmapped_target'
+  else if (sourceIsUnmapped) resolvedCase = 'unmapped_source'
+  else resolvedCase = 'neither'
+
+  // ── Step 5: delegate to createFieldMapping ─────────────────────────────
+  // createFieldMapping handles auth (re-checked), permission (re-checked),
+  // maintenance, identity reads, the bare-ack delete, TM find-or-create,
+  // RPC, coverage recompute, revalidate, and the mapping_created activity-
+  // log entry. We skip duplicating any of that.
+  const createResult = await createFieldMapping({
+    projectId,
+    targetFieldId,
+    sourceFieldIds: [sourceFieldId],
+    combinationType: 'single',
+    aiSuggested: false,
+    confidence: FLAT_VIEW_USER_CONFIDENCE,
+    aiReasoning: 'Mapping created via flat (spreadsheet) view',
+  })
+  if (!createResult.success) {
+    return {
+      success: false,
+      error: createResult.error,
+      // CROSS_TABLE_NOT_YET_SUPPORTED collapses into VALIDATION for the
+      // narrower union here; the flat-view UI surfaces "couldn't map
+      // across tables" copy if needed.
+      errorCode:
+        createResult.errorCode === 'CROSS_TABLE_NOT_YET_SUPPORTED'
+          ? 'VALIDATION'
+          : createResult.errorCode,
+    }
+  }
+
+  // ── Step 6: flip TFM status to approved (flat-view affirmation) ────────
+  const { error: statusErr } = await supabaseAdmin
+    .from('target_field_mappings')
+    .update({
+      status: 'approved',
+      updated_at: new Date().toISOString(),
+    })
+    .eq('id', createResult.tfmId)
+  if (statusErr) {
+    return {
+      success: false,
+      error: statusErr.message,
+      errorCode: 'INTERNAL',
+    }
+  }
+
+  // ── Step 7: clear unmapped-target coverage state (Q3 + §5.3 step 7) ────
+  // If the target had a coverage row carrying status='rejected' or
+  // status_set_by='user', a subsequent read translator resolution would
+  // surface it as rejected. Reset to needs_review + ai_auto so TFM-
+  // driven status wins on the next render.
+  if (targetIsUnmapped) {
+    const coverageReset = await setCoverageStatus(
+      projectId,
+      targetFieldId,
+      'needs_review',
+    )
+    if (!coverageReset.success) {
+      console.warn(
+        '[createMappingFromUnmapped] coverage reset failed (TFM created):',
+        coverageReset.error,
+      )
+    }
+  }
+
+  // ── Step 8: clear source acknowledgment (Q3) ───────────────────────────
+  // Per Q3 resolution: delete the acknowledgment row when present,
+  // regardless of decision. The new mapping is the affirmative decision
+  // for the source.
+  if (sourceIsUnmapped && existingAck) {
+    const { error: ackDelErr } = await supabaseAdmin
+      .from('source_field_acknowledgments')
+      .delete()
+      .eq('id', existingAck.id)
+    if (ackDelErr) {
+      console.warn(
+        '[createMappingFromUnmapped] source ack delete failed (TFM created):',
+        ackDelErr.message,
+      )
+    }
+  }
+
+  // createFieldMapping already revalidates and logs `mapping_created`.
+  // The status flip emits no additional log to keep audit-trail noise
+  // tight (Q4 — reuse existing types).
+
+  return {
+    success: true,
+    tfmId: createResult.tfmId,
+    tableMappingId: createResult.tableMappingId,
+    resolvedCase,
+  }
+}
+
+// ─── 5.4 setUnmappedRowRejected ──────────────────────────────────────────────
+
+export type SetUnmappedRowRejectedErrorCode =
+  | 'PERMISSION_DENIED'
+  | 'NOT_FOUND'
+  | 'VALIDATION'
+  | 'MAINTENANCE_MODE'
+  | 'INTERNAL'
+
+export type SetUnmappedRowRejectedResult =
+  | {
+      success: true
+      side: 'target' | 'source'
+    }
+  | {
+      success: false
+      error: string
+      errorCode: SetUnmappedRowRejectedErrorCode
+    }
+
+/**
+ * Reject an unmapped flat-view row. Exactly one of `targetFieldId` /
+ * `sourceFieldId` must be supplied:
+ *
+ *   • Target branch — writes `target_field_coverage.status='rejected'`
+ *     via `setCoverageStatus`. Refuses if a live TFM already covers
+ *     the target (the user reached the wrong affordance).
+ *   • Source branch — UPSERTs into `source_field_acknowledgments` with
+ *     `decision='rejected'` and `reason=''`. Recomputes affected TMs.
+ *
+ * Activity-log emitters:
+ *   • Target — `mapping_rejected` with `no_source: true` (parity with
+ *     the existing rejectFieldMapping unmapped-target branch).
+ *   • Source — `source_field_rejected` (new action_type added in this
+ *     PR; Q4 resolution).
+ */
+export async function setUnmappedRowRejected(input: {
+  projectId: string
+  targetFieldId?: string
+  sourceFieldId?: string
+}): Promise<SetUnmappedRowRejectedResult> {
+  const { projectId, targetFieldId, sourceFieldId } = input
+
+  // ── Step 1: input validation (XOR) ──────────────────────────────────────
+  if (!projectId) {
+    return {
+      success: false,
+      error: 'projectId is required',
+      errorCode: 'VALIDATION',
+    }
+  }
+  if ((targetFieldId && sourceFieldId) || (!targetFieldId && !sourceFieldId)) {
+    return {
+      success: false,
+      error: 'Exactly one of targetFieldId or sourceFieldId must be supplied',
+      errorCode: 'VALIDATION',
+    }
+  }
+
+  // ── Step 2: auth ────────────────────────────────────────────────────────
+  const supabase = await createClient()
+  const {
+    data: { user },
+  } = await supabase.auth.getUser()
+  if (!user) {
+    return {
+      success: false,
+      error: 'Not authenticated',
+      errorCode: 'PERMISSION_DENIED',
+    }
+  }
+
+  // ── Step 3: project permission ──────────────────────────────────────────
+  const perm = await requireProjectPermission(projectId, 'editor')
+  if (!perm.allowed) {
+    return {
+      success: false,
+      error: perm.error ?? 'Insufficient permissions',
+      errorCode: 'PERMISSION_DENIED',
+    }
+  }
+
+  // ── Step 4: maintenance gate ────────────────────────────────────────────
+  try {
+    await assertMappingWritesEnabled(projectId)
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err)
+    if (
+      message ===
+      'Mapping writes are temporarily disabled for scheduled maintenance'
+    ) {
+      return {
+        success: false,
+        error: message,
+        errorCode: 'MAINTENANCE_MODE',
+      }
+    }
+    return {
+      success: false,
+      error: message,
+      errorCode: 'INTERNAL',
+    }
+  }
+
+  if (targetFieldId) {
+    // ── Target branch ──────────────────────────────────────────────────────
+    if (!UUID_REGEX.test(targetFieldId)) {
+      return {
+        success: false,
+        error: 'targetFieldId must be a valid uuid',
+        errorCode: 'VALIDATION',
+      }
+    }
+    const ownership = await resolveFieldOwnership(targetFieldId)
+    if (!ownership || ownership.projectId !== projectId) {
+      return {
+        success: false,
+        error: 'Target field not found in this project',
+        errorCode: 'NOT_FOUND',
+      }
+    }
+
+    // Refuse if a live TFM exists for the target — the user must reach
+    // the per-row reject path (rejectFieldMapping), not the flat-view
+    // unmapped reject.
+    const { data: liveTfm } = await supabaseAdmin
+      .from('target_field_mappings')
+      .select('id, status')
+      .eq('project_id', projectId)
+      .eq('target_field_id', targetFieldId)
+      .maybeSingle<{ id: string; status: string }>()
+    if (liveTfm && liveTfm.status !== 'rejected') {
+      return {
+        success: false,
+        error:
+          'This target has a mapping. Use Reject on the mapped row instead.',
+        errorCode: 'VALIDATION',
+      }
+    }
+
+    const writeResult = await setCoverageStatus(
+      projectId,
+      targetFieldId,
+      'rejected',
+    )
+    if (!writeResult.success) {
+      return {
+        success: false,
+        error: writeResult.error ?? 'Failed to update coverage status',
+        errorCode: 'INTERNAL',
+      }
+    }
+
+    await logActivity(
+      projectId,
+      'mapping_rejected',
+      `Mapping rejected: [no source] → ${ownership.fieldName ?? '?'}`,
+      'mapping',
+      {
+        surface: 'flat_view',
+        target_field_id: targetFieldId,
+        target_field: ownership.fieldName,
+        source_field: null,
+        no_source: true,
+      },
+    )
+    revalidatePath(`/app/projects/${projectId}/mapping`)
+    revalidatePath('/app/projects')
+
+    return { success: true, side: 'target' }
+  }
+
+  // ── Source branch ──────────────────────────────────────────────────────
+  if (!sourceFieldId) {
+    // unreachable per XOR check, but the type narrows for the compiler.
+    return {
+      success: false,
+      error: 'sourceFieldId is required',
+      errorCode: 'VALIDATION',
+    }
+  }
+  if (!UUID_REGEX.test(sourceFieldId)) {
+    return {
+      success: false,
+      error: 'sourceFieldId must be a valid uuid',
+      errorCode: 'VALIDATION',
+    }
+  }
+
+  const ownership = await resolveFieldOwnership(sourceFieldId)
+  if (!ownership || ownership.projectId !== projectId) {
+    return {
+      success: false,
+      error: 'Source field not found in this project',
+      errorCode: 'NOT_FOUND',
+    }
+  }
+
+  // UPSERT — flip any existing acknowledgment (decision='acknowledged')
+  // to decision='rejected'. The UNIQUE (project_id, source_field_id)
+  // constraint guarantees one row per source field.
+  const { error: upsertErr } = await supabaseAdmin
+    .from('source_field_acknowledgments')
+    .upsert(
+      {
+        project_id: projectId,
+        source_field_id: sourceFieldId,
+        decision: 'rejected',
+        reason: '',
+        acknowledged_by: user.id,
+        acknowledged_at: new Date().toISOString(),
+      },
+      { onConflict: 'project_id,source_field_id' },
+    )
+  if (upsertErr) {
+    return {
+      success: false,
+      error: upsertErr.message,
+      errorCode: 'INTERNAL',
+    }
+  }
+
+  // Recompute TMs whose source_table_id matches this source field's
+  // parent table. The recompute treats any source_field_acknowledgments
+  // row as "source decided", so flipping acknowledged → rejected is a
+  // no-op for TM status but the recompute is harmless and keeps the
+  // dashboard pill snappy if the user flipped from un-acked.
+  const { data: sourceField } = await supabaseAdmin
+    .from('fields')
+    .select('table_id')
+    .eq('id', sourceFieldId)
+    .maybeSingle<{ table_id: string }>()
+  if (sourceField) {
+    const { data: tms } = await supabaseAdmin
+      .from('table_mappings')
+      .select('id')
+      .eq('project_id', projectId)
+      .eq('source_table_id', sourceField.table_id)
+    for (const tm of (tms ?? []) as Array<{ id: string }>) {
+      await recomputeTableMappingStatus(supabase, tm.id)
+    }
+  }
+
+  await logActivity(
+    projectId,
+    'source_field_rejected',
+    `Source field rejected: ${ownership.fieldName ?? '?'}`,
+    'mapping',
+    {
+      surface: 'flat_view',
+      source_field_id: sourceFieldId,
+      source_field: ownership.fieldName,
+    },
+  )
+  revalidatePath(`/app/projects/${projectId}/mapping`)
+  revalidatePath('/app/projects')
+
+  return { success: true, side: 'source' }
+}

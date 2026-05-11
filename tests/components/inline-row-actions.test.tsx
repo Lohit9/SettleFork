@@ -574,6 +574,7 @@ describe('Inline source-edit hint', () => {
         mappingStatus: 'mapped',
         sampleValues: [],
         isAcknowledged: false,
+        isRejected: false,
       },
     ]
   }
@@ -664,6 +665,7 @@ describe('Inline source-edit click', () => {
         mappingStatus: 'mapped',
         sampleValues: [],
         isAcknowledged: false,
+        isRejected: false,
       },
       {
         id: 'sf-2',
@@ -674,6 +676,7 @@ describe('Inline source-edit click', () => {
         mappingStatus: 'unmapped',
         sampleValues: [],
         isAcknowledged: false,
+        isRejected: false,
       },
     ]
   }

@@ -91,6 +91,13 @@ export type ActionType =
   | 'project_member_added'
   | 'project_member_removed'
   | 'project_member_role_changed'
+  // Flat (spreadsheet) Mapping view — source-side rejection. Distinct from
+  // `acknowledgment_removed` (which removes a row) and from the implicit
+  // upsert that writes an acknowledgment; this event captures the user's
+  // explicit "no, this source field will not contribute" decision via the
+  // flat view's inline reject affordance. Categorized as 'mapping'.
+  // See lib/actions/mappings-for-redesign.ts → setUnmappedRowRejected.
+  | 'source_field_rejected'
 
 export type ActionCategory = 'fix' | 'mapping' | 'transform' | 'validation' | 'data' | 'system'
 
