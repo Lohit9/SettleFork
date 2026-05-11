@@ -232,6 +232,36 @@ describe('AddFieldModal', () => {
 
   // ─── Mid-flight UX ──────────────────────────────────────────────────────────
 
+  it('rapid double-click fires createField exactly once (INF-79 guard)', async () => {
+    // Without the useRef guard, both clicks fire from the same render's
+    // closure (canSubmit=true is captured before setSaving(true) commits)
+    // and both invoke createField → duplicate INSERT in the DB.
+    let resolveCreate: (v: { success: true; data: Field }) => void = () => {}
+    createFieldMock.mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          resolveCreate = resolve
+        }),
+    )
+
+    renderModal()
+    fireEvent.change(screen.getByLabelText(/Field Name/i), {
+      target: { value: 'customer_status' },
+    })
+
+    const addBtn = screen.getByRole('button', { name: /^Add$/i })
+    // Two synchronous clicks — no React render between them.
+    fireEvent.click(addBtn)
+    fireEvent.click(addBtn)
+
+    await waitFor(() => {
+      expect(createFieldMock).toHaveBeenCalledTimes(1)
+    })
+
+    // Cleanup
+    resolveCreate({ success: true, data: makeField() })
+  })
+
   it('button label flips to "Adding…" mid-flight; inputs disabled', async () => {
     let resolveCreate: (v: { success: true; data: Field }) => void = () => {}
     createFieldMock.mockImplementationOnce(

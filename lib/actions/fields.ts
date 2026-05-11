@@ -517,8 +517,13 @@ export async function deleteField(
     return { success: false, errorCode: 'db_error', error: message }
   }
 
-  // 5. Atomic RPC: scrub + delete + return cascade summary
-  const { data: rpcResult, error: rpcError } = await supabaseAdmin.rpc(
+  // 5. Atomic RPC: scrub + delete + return cascade summary.
+  // INF-80: invoke via the cookie-forwarding `supabase` client (NOT
+  // supabaseAdmin) so the user's JWT propagates into the RPC. The RPC
+  // calls auth.uid() and re-asserts the editor role — both require the
+  // user's session, which the service-role key does not carry. Pattern
+  // matches mappings.ts:1522 / mappings.ts:2010 / field-acknowledgments.ts:142.
+  const { data: rpcResult, error: rpcError } = await supabase.rpc(
     'delete_field_with_cleanup',
     { p_field_id: fieldId }
   )
