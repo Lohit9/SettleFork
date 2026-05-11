@@ -1,13 +1,17 @@
 'use client'
 
 import { useState, useTransition } from 'react'
-import { ChevronRight, Check, Pencil, Search } from '@/components/icons'
+import { Trash2 } from 'lucide-react'
+import { ChevronRight, Check, Pencil, Plus, Search } from '@/components/icons'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { updateField } from '@/lib/actions/fields'
 import { useProjectRole } from '@/lib/hooks/useProjectRole'
 import { RoleTooltip } from '@/components/app/RoleTooltip'
 import { enrichSchemaFromDocs } from '@/lib/actions/schema-enrichment'
 import type { DatasetSchemaData, TableData, FieldData, CheckConstraint } from '@/lib/actions/data-overview'
+import type { Field } from '@/lib/types/database'
+import AddFieldModal from './AddFieldModal'
+import DeleteFieldConfirmModal from './DeleteFieldConfirmModal'
 
 interface SchemaOverviewProps {
   projectId: string
@@ -39,6 +43,7 @@ function FieldEditModal({
   canEdit = true,
   onClose,
   onSave,
+  onRequestDelete,
 }: {
   field: FieldData
   /** PK options for the dropdown, in canonical "TABLE.FIELD" form.
@@ -53,6 +58,10 @@ function FieldEditModal({
   canEdit?: boolean
   onClose: () => void
   onSave: (updated: FieldData) => void
+  /** When provided, renders a Danger zone footer with a "Delete field"
+   *  trigger. Parent is responsible for closing this modal optimistically
+   *  (Q4: single-modal-at-a-time UX) and opening the delete-confirm dialog. */
+  onRequestDelete?: (field: FieldData) => void
 }) {
   const [name, setName] = useState(field.name)
   const [dataType, setDataType] = useState(field.data_type)
@@ -237,6 +246,22 @@ function FieldEditModal({
         </div>
 
         {error && <p className="mt-3 text-xs text-red-600">{error}</p>}
+
+        {/* Danger zone — only when the parent supplied a delete trigger AND
+            the caller has edit rights. Sits above the primary actions to
+            keep destructive intent visually distinct. */}
+        {canEdit && onRequestDelete && (
+          <div className="mt-5 pt-4 border-t border-gray-200 flex items-center justify-between">
+            <span className="text-xs text-gray-500">Delete this field</span>
+            <button
+              onClick={() => onRequestDelete(field)}
+              disabled={saving}
+              className="inline-flex items-center gap-1 text-xs text-red-600 hover:text-red-700 hover:bg-red-50 px-2 py-1 rounded disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+              <Trash2 className="w-3 h-3" /> Delete field
+            </button>
+          </div>
+        )}
 
         <div className="mt-6 flex justify-end gap-3">
           <button
@@ -427,6 +452,14 @@ function SchemaPanel({
   const [fieldOverrides, setFieldOverrides] = useState<Map<string, FieldData>>(new Map())
   const [editingField, setEditingField] = useState<FieldData | null>(null)
 
+  // FR-3: per-table add + per-field delete state. Server-driven refresh
+  // (Q5 locked); local maps mirror what the user has done in this session
+  // so the UI updates without router.refresh().
+  const [addingFieldForTableId, setAddingFieldForTableId] = useState<string | null>(null)
+  const [addedFields, setAddedFields] = useState<Map<string, FieldData[]>>(new Map())
+  const [deletingField, setDeletingField] = useState<{ id: string; name: string } | null>(null)
+  const [deletedFieldIds, setDeletedFieldIds] = useState<Set<string>>(new Set())
+
   // Per-table enrichment state
   const [enrichingTableId, setEnrichingTableId] = useState<string | null>(null)
   const [enrichToast, setEnrichToast] = useState<{ tableId: string; msg: string } | null>(null)
@@ -472,6 +505,26 @@ function SchemaPanel({
       }
     }
     return options.sort((a, b) => a.localeCompare(b))
+  }
+
+  // FR-3: AddFieldModal calls back with the full Field row from createField
+  // (the canonical published shape). The local rendering uses FieldData,
+  // which is a strict subset (no created_at / table_id / default_value /
+  // description). Strip the extras here at the boundary.
+  function fieldToFieldData(f: Field): FieldData {
+    return {
+      id: f.id,
+      name: f.name,
+      data_type: f.data_type,
+      inferred_type: f.inferred_type,
+      is_nullable: f.is_nullable,
+      is_primary_key: f.is_primary_key,
+      is_foreign_key: f.is_foreign_key,
+      fk_reference: f.fk_reference,
+      ordinal_position: f.ordinal_position,
+      schema_source: f.schema_source,
+      check_constraint: f.check_constraint,
+    }
   }
 
   async function handleReanalyze(datasetId: string, tableId: string) {
@@ -536,6 +589,14 @@ function SchemaPanel({
                 const isEnriching = enrichingTableId === table.id
                 const toast = enrichToast?.tableId === table.id ? enrichToast.msg : null
 
+                // FR-3: filter out session-deleted fields, append session-added
+                // fields. Server-driven refresh (Q5 locked) — no
+                // router.refresh(); the local maps mirror server state for the
+                // current session.
+                const baseFields = table.fields.filter((f) => !deletedFieldIds.has(f.id))
+                const sessionAdded = addedFields.get(table.id) ?? []
+                const visibleFields: FieldData[] = [...baseFields, ...sessionAdded]
+
                 // Count enrichment coverage for this table
                 const enrichedCount = table.fields.filter(
                   (f) => (fieldOverrides.get(f.id) ?? f).schema_source !== 'inferred'
@@ -555,8 +616,20 @@ function SchemaPanel({
                           }`}
                         />
                         <span className="text-sm font-medium text-gray-900">{table.name}</span>
-                        <span className="ml-auto text-xs text-gray-500 shrink-0">{table.fields.length} fields</span>
+                        <span className="ml-auto text-xs text-gray-500 shrink-0">{visibleFields.length} fields</span>
                       </button>
+                      {canEdit && (
+                        <RoleTooltip allowed={canEdit} tooltipKey="editor">
+                          <button
+                            onClick={() => setAddingFieldForTableId(table.id)}
+                            className="p-1 rounded hover:bg-gray-200 transition-colors flex-shrink-0"
+                            aria-label={`Add field to ${table.name}`}
+                            title="Add field"
+                          >
+                            <Plus className="w-4 h-4 text-gray-500" />
+                          </button>
+                        </RoleTooltip>
+                      )}
                     </div>
 
                     {/* Toast for this table */}
@@ -581,7 +654,7 @@ function SchemaPanel({
                             </tr>
                           </thead>
                           <tbody>
-                            {table.fields.map((rawField) => {
+                            {visibleFields.map((rawField) => {
                               const f = fieldOverrides.get(rawField.id) ?? rawField
                               return (
                                 <tr key={f.id} className="border-b border-gray-100 last:border-b-0 hover:bg-white transition-colors group">
@@ -642,8 +715,86 @@ function SchemaPanel({
             handleFieldSaved(updated)
             setEditingField(null)
           }}
+          onRequestDelete={(field) => {
+            // Q4 locked: single-modal-at-a-time UX. Close Edit
+            // optimistically then open Delete; cancelling Delete does NOT
+            // re-open Edit (user re-clicks the row's pencil to retry).
+            setEditingField(null)
+            setDeletingField({ id: field.id, name: field.name })
+          }}
         />
       )}
+
+      {/* FR-3 Add Field — mounted while a per-table create is in flight.
+          The modal owns its own form state; closes via onClose. */}
+      {addingFieldForTableId && (() => {
+        const tbl = filteredDatasets
+          .flatMap((ds) => ds.tables)
+          .find((t) => t.id === addingFieldForTableId)
+        // Defensive: if the table disappeared (e.g. re-fetch), bail.
+        if (!tbl) return null
+        // Reuse the same dataset-scoped FK option list the Edit modal uses.
+        // We need a synthetic FieldData target to drive buildFkOptions; it's
+        // fine that the synthetic id doesn't match any real field — the
+        // function falls through to "owner dataset not found" and returns [].
+        // For a meaningful list, we look up the table's own dataset and
+        // collect PKs from its sibling tables manually.
+        const ownerDataset = datasets.find((ds) => ds.tables.some((t) => t.id === tbl.id))
+        const fkOptionsForCreate = ownerDataset
+          ? ownerDataset.tables
+              .filter((t) => t.id !== tbl.id)
+              .flatMap((t) =>
+                t.fields
+                  .map((rawField) => fieldOverrides.get(rawField.id) ?? rawField)
+                  .filter((f) => f.is_primary_key)
+                  .map((f) => `${t.name}.${f.name}`)
+              )
+              .sort((a, b) => a.localeCompare(b))
+          : []
+        return (
+          <AddFieldModal
+            tableId={tbl.id}
+            tableName={tbl.name}
+            existingFieldNames={tbl.fields.map((f) => f.name)}
+            fkOptions={fkOptionsForCreate}
+            canEdit={canEdit}
+            onClose={() => setAddingFieldForTableId(null)}
+            onAdded={(field) => {
+              setAddedFields((prev) => {
+                const next = new Map(prev)
+                const existing = next.get(tbl.id) ?? []
+                next.set(tbl.id, [...existing, fieldToFieldData(field)])
+                return next
+              })
+              setAddingFieldForTableId(null)
+            }}
+          />
+        )
+      })()}
+
+      {/* FR-3 Delete Field confirm — server-driven impact preview + UI-only
+          type-to-confirm gate. */}
+      {deletingField && (() => {
+        const target = deletingField
+        return (
+          <DeleteFieldConfirmModal
+            open={true}
+            onOpenChange={(next) => {
+              if (!next) setDeletingField(null)
+            }}
+            fieldId={target.id}
+            fieldName={target.name}
+            onDeleted={() => {
+              setDeletedFieldIds((prev) => {
+                const next = new Set(prev)
+                next.add(target.id)
+                return next
+              })
+              setDeletingField(null)
+            }}
+          />
+        )
+      })()}
     </div>
   )
 }
