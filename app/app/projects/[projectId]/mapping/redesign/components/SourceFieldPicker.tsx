@@ -84,6 +84,15 @@ export interface SourceFieldPickerProps {
    * Visual state stays unchanged — the picker is only de-interactivated.
    */
   disabled?: boolean
+  /**
+   * When true, the selected-chips row at the top of the picker is
+   * omitted entirely (including the "No source fields selected yet"
+   * empty state). Added for the Mapping list view's single-pick
+   * auto-commit cell editor, where there is no concept of an
+   * accumulating selection. Default false preserves the
+   * CreateMappingForm / target-led inline picker UX byte-identical.
+   */
+  hideChips?: boolean
 }
 
 /**
@@ -99,6 +108,7 @@ export function SourceFieldPicker({
   selectedIds,
   onSelectedChange,
   disabled = false,
+  hideChips = false,
 }: SourceFieldPickerProps) {
   // ── Search — controlled input + debounced query ───────────────────
   const [searchInput, setSearchInput] = useState('')
@@ -181,12 +191,14 @@ export function SourceFieldPicker({
 
   return (
     <div data-testid="source-field-picker" className="flex flex-col gap-2">
-      <SelectedChipsRow
-        fields={selectedFields}
-        availableSourceFields={availableSourceFields}
-        onRemove={handleToggle}
-        disabled={disabled}
-      />
+      {hideChips ? null : (
+        <SelectedChipsRow
+          fields={selectedFields}
+          availableSourceFields={availableSourceFields}
+          onRemove={handleToggle}
+          disabled={disabled}
+        />
+      )}
       <SearchInput
         value={searchInput}
         onChange={setSearchInput}

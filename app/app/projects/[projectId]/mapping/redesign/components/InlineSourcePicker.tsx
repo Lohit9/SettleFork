@@ -107,6 +107,21 @@ export interface InlineSourcePickerProps {
    * and unmount this component.
    */
   onClose: () => void
+  /**
+   * Selection mode (added for the Mapping list view's cell-level
+   * editing affordance). 'multi' (default) preserves the target-led
+   * chip-strip + Save/Cancel UX byte-identical. 'single' tightens to
+   * one selection at a time; only meaningful in combination with
+   * `autoCommit: true`.
+   */
+  mode?: 'single' | 'multi'
+  /**
+   * When true (only valid with `mode: 'single'`), the picker fires
+   * `onCommit` on the user's first row click and closes on success —
+   * no chip strip, no Save / Cancel footer. The flat list view uses
+   * this for cell-level source swaps. Default false.
+   */
+  autoCommit?: boolean
 }
 
 export function InlineSourcePicker({
@@ -115,7 +130,14 @@ export function InlineSourcePicker({
   availableSourceFields,
   onCommit,
   onClose,
+  mode = 'multi',
+  autoCommit = false,
 }: InlineSourcePickerProps) {
+  // Flat-view single-pick-auto-commit branch. Activates ONLY when
+  // mode === 'single' AND autoCommit === true; every other prop
+  // combination falls through to the existing target-led multi-pick
+  // UX byte-identical.
+  const isSingleAutoCommit = mode === 'single' && autoCommit
   // Snapshot the initial set ONCE so the diff at Save time is stable
   // even if the parent re-renders with a fresh `initialSourceFieldIds`
   // array reference for the same logical value.
@@ -259,9 +281,43 @@ export function InlineSourcePicker({
     return () => document.removeEventListener('keydown', handleKeyDown)
   }, [handleCancel, isSaving])
 
-  const handleSelectedChange = useCallback((next: string[]) => {
-    setPendingIds(next)
-  }, [])
+  const handleSelectedChange = useCallback(
+    (next: string[]) => {
+      if (!isSingleAutoCommit) {
+        setPendingIds(next)
+        return
+      }
+      // Single autoCommit branch: detect the newly added id and fire
+      // onCommit immediately. The inner SourceFieldPicker emits the
+      // full next list (selection + toggle), so the newly added id is
+      // any element in `next` that wasn't in `pendingIds`. Removal
+      // toggles (clicking an already-selected row) are a no-op in
+      // this mode — there is no "deselect" affordance for a cell
+      // swap, and the dedicated reject button covers row deletion.
+      const previous = new Set(pendingIds)
+      const newlyAdded = next.find((id) => !previous.has(id))
+      if (newlyAdded === undefined) return
+      if (isSaving) return
+      setIsSaving(true)
+      setPendingIds([newlyAdded])
+      void (async () => {
+        let result: InlineSourceCommitResult
+        try {
+          result = await onCommit([newlyAdded])
+        } catch {
+          setIsSaving(false)
+          return
+        }
+        if (result.success) {
+          setIsSaving(false)
+          onClose()
+          return
+        }
+        setIsSaving(false)
+      })()
+    },
+    [isSingleAutoCommit, pendingIds, isSaving, onCommit, onClose],
+  )
 
   // Memoise the field map for the picker body. (SourceFieldPicker
   // already does this internally; we just hand the array straight
@@ -323,57 +379,69 @@ export function InlineSourcePicker({
       <div className="flex min-h-0 flex-1 flex-col overflow-y-auto">
         <SourceFieldPicker
           availableSourceFields={fields}
-          selectedIds={pendingIds}
+          selectedIds={isSingleAutoCommit ? [] : pendingIds}
           onSelectedChange={handleSelectedChange}
           disabled={isSaving}
+          hideChips={isSingleAutoCommit}
         />
+        {isSingleAutoCommit && isSaving ? (
+          <div
+            data-testid="inline-source-picker-single-saving"
+            className="mt-2 inline-flex items-center gap-1.5 text-[11px] font-medium text-slate-500"
+          >
+            <Loader2 aria-hidden="true" className="h-3 w-3 animate-spin" />
+            <span>Saving…</span>
+          </div>
+        ) : null}
       </div>
-      <div
-        data-testid="inline-source-picker-footer"
-        className="mt-3 flex shrink-0 items-center justify-end gap-2 border-t border-slate-100 pt-3"
-      >
-        <button
-          type="button"
-          data-testid="inline-source-picker-cancel"
-          onClick={handleCancel}
-          disabled={isSaving}
-          className={cn(
-            'inline-flex h-7 items-center justify-center rounded border border-slate-300 bg-white px-2.5 text-[12px] font-medium text-slate-700',
-            'transition-colors hover:bg-slate-50',
-            'focus:outline-none focus-visible:ring-2 focus-visible:ring-slate-300',
-            'disabled:cursor-not-allowed disabled:border-slate-200 disabled:bg-slate-50 disabled:text-slate-400',
-          )}
+      {isSingleAutoCommit ? null : (
+        <div
+          data-testid="inline-source-picker-footer"
+          className="mt-3 flex shrink-0 items-center justify-end gap-2 border-t border-slate-100 pt-3"
         >
-          Cancel
-        </button>
-        <button
-          type="button"
-          data-testid="inline-source-picker-save"
-          aria-label="Save source field changes"
-          onClick={handleSave}
-          disabled={!canSave}
-          title={saveDisabledHint}
-          className={cn(
-            'inline-flex h-7 items-center justify-center gap-1.5 rounded border px-2.5 text-[12px] font-medium transition-colors',
-            'border-blue-600 bg-blue-600 text-white hover:bg-blue-700',
-            'focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-500/40',
-            'disabled:cursor-not-allowed disabled:border-slate-200 disabled:bg-slate-100 disabled:text-slate-400 disabled:hover:bg-slate-100',
-          )}
-        >
-          {isSaving ? (
-            <>
-              <Loader2
-                aria-hidden="true"
-                data-testid="inline-source-picker-save-spinner"
-                className="h-3 w-3 animate-spin"
-              />
-              <span>Saving…</span>
-            </>
-          ) : (
-            saveLabel
-          )}
-        </button>
-      </div>
+          <button
+            type="button"
+            data-testid="inline-source-picker-cancel"
+            onClick={handleCancel}
+            disabled={isSaving}
+            className={cn(
+              'inline-flex h-7 items-center justify-center rounded border border-slate-300 bg-white px-2.5 text-[12px] font-medium text-slate-700',
+              'transition-colors hover:bg-slate-50',
+              'focus:outline-none focus-visible:ring-2 focus-visible:ring-slate-300',
+              'disabled:cursor-not-allowed disabled:border-slate-200 disabled:bg-slate-50 disabled:text-slate-400',
+            )}
+          >
+            Cancel
+          </button>
+          <button
+            type="button"
+            data-testid="inline-source-picker-save"
+            aria-label="Save source field changes"
+            onClick={handleSave}
+            disabled={!canSave}
+            title={saveDisabledHint}
+            className={cn(
+              'inline-flex h-7 items-center justify-center gap-1.5 rounded border px-2.5 text-[12px] font-medium transition-colors',
+              'border-blue-600 bg-blue-600 text-white hover:bg-blue-700',
+              'focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-500/40',
+              'disabled:cursor-not-allowed disabled:border-slate-200 disabled:bg-slate-100 disabled:text-slate-400 disabled:hover:bg-slate-100',
+            )}
+          >
+            {isSaving ? (
+              <>
+                <Loader2
+                  aria-hidden="true"
+                  data-testid="inline-source-picker-save-spinner"
+                  className="h-3 w-3 animate-spin"
+                />
+                <span>Saving…</span>
+              </>
+            ) : (
+              saveLabel
+            )}
+          </button>
+        </div>
+      )}
     </div>,
     document.body,
   )
