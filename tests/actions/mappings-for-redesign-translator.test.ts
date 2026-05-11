@@ -467,7 +467,10 @@ describe('assembleMappingsForRedesign — discriminator cases', () => {
     expect(out.targetTables[0].fieldCount).toBe(5)
     expect(out.sourceTables.map((t) => t.name)).toEqual(['customers', 'orders'])
     expect(out.sourceFieldAcknowledgments).toEqual([
-      { id: 'ack-1', sourceFieldId: F_S_ORDTOTAL.id, reason: 'deprecated' },
+      // Migration 103 added the `decision` field; the existing fixture
+      // lacks a `decision` on the raw row so the translator's defensive
+      // coercion lands on 'acknowledged' (the pre-103 default).
+      { id: 'ack-1', sourceFieldId: F_S_ORDTOTAL.id, reason: 'deprecated', decision: 'acknowledged' },
     ])
     expect(out.targetSchemaEmpty).toBe(false)
   })

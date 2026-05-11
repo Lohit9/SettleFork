@@ -76,6 +76,7 @@ function makeField(
     mappingStatus: overrides.mappingStatus ?? 'unmapped',
     sampleValues: overrides.sampleValues ?? [],
     isAcknowledged: overrides.isAcknowledged ?? false,
+    isRejected: overrides.isRejected ?? false,
   }
 }
 

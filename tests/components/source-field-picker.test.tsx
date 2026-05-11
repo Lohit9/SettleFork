@@ -18,6 +18,7 @@ function field(overrides: Partial<SourceFieldWithState> = {}): SourceFieldWithSt
     mappingStatus: 'unmapped',
     sampleValues: ['alpha', 'bravo'],
     isAcknowledged: false,
+    isRejected: false,
     ...overrides,
   }
 }
