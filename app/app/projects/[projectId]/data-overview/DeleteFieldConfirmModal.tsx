@@ -15,7 +15,7 @@
  * and the SECURITY DEFINER RPC re-asserts permission as defense-in-depth.
  */
 
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { Trash2 } from 'lucide-react'
 import {
   AlertDialog,
@@ -56,6 +56,11 @@ export default function DeleteFieldConfirmModal({
   const [previewError, setPreviewError] = useState<string | null>(null)
   const [previewLoading, setPreviewLoading] = useState(false)
   const [confirming, setConfirming] = useState(false)
+  // INF-79 (preemptive): synchronous mutex against double-fire on rapid
+  // double-click. The `confirming` state controls the visual; the ref is
+  // the gate that the second click hits before React commits the
+  // disabled-attribute update.
+  const confirmingRef = useRef(false)
   const [deleteError, setDeleteError] = useState<string | null>(null)
   const [typedName, setTypedName] = useState('')
 
@@ -99,7 +104,8 @@ export default function DeleteFieldConfirmModal({
     !!impact && !confirming && (!requiresTypedConfirm || typedNameMatches)
 
   async function handleConfirm() {
-    if (!canDelete) return
+    if (confirmingRef.current || !canDelete) return
+    confirmingRef.current = true
     setDeleteError(null)
     setConfirming(true)
     try {
@@ -111,6 +117,7 @@ export default function DeleteFieldConfirmModal({
       onDeleted(result.data.appliedCascade)
     } finally {
       setConfirming(false)
+      confirmingRef.current = false
     }
   }
 

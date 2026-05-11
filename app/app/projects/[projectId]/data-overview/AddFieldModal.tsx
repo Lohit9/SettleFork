@@ -8,7 +8,7 @@
  * helper would obscure the per-mode handlers).
  */
 
-import { useMemo, useState } from 'react'
+import { useMemo, useRef, useState } from 'react'
 import { Plus } from '@/components/icons'
 import {
   Select,
@@ -84,6 +84,10 @@ export default function AddFieldModal({
   // useTransition with the same shape — that's a known weakness, out of
   // scope to fix here.
   const [saving, setSaving] = useState(false)
+  // INF-79: synchronous mutex against double-fire on rapid double-click.
+  // The `saving` state controls the visual; the ref is the gate that the
+  // second click hits before React commits the disabled-attribute update.
+  const savingRef = useRef(false)
   const [error, setError] = useState<string | null>(null)
 
   // Inline duplicate-name flag — case-sensitive (Q7 locked: Postgres TEXT
@@ -99,7 +103,8 @@ export default function AddFieldModal({
   const canSubmit = canEdit && trimmedName.length > 0 && !isDuplicate && !saving
 
   async function handleSave() {
-    if (!canSubmit) return
+    if (savingRef.current || !canSubmit) return
+    savingRef.current = true
     setError(null)
     setSaving(true)
     try {
@@ -153,6 +158,7 @@ export default function AddFieldModal({
       onClose()
     } finally {
       setSaving(false)
+      savingRef.current = false
     }
   }
 

@@ -341,6 +341,52 @@ describe('DeleteFieldConfirmModal', () => {
 
   // ─── Mid-flight UX (mirrors RemoveTableDialog confirming state) ─────────────
 
+  it('rapid double-click fires deleteField exactly once (INF-79 preemptive guard)', async () => {
+    // Same race shape as INF-79: without the useRef guard, both clicks
+    // fire from the same render's closure (canDelete=true is captured
+    // before setConfirming(true) commits) and both invoke deleteField.
+    previewMock.mockResolvedValueOnce({
+      success: true,
+      data: makeImpact({
+        requiresTypedConfirmation: false,
+        counts: {
+          tfms: 0,
+          mappingSources: 0,
+          transformations: 0,
+          stagedRows: 0,
+          acknowledgments: 0,
+          coverageRows: 0,
+          validationRules: 0,
+        },
+      }),
+    } satisfies FieldActionResult<DeleteFieldImpact>)
+
+    let resolveDelete: (
+      v: FieldActionResult<{ appliedCascade: AppliedCascade }>,
+    ) => void = () => {}
+    deleteMock.mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          resolveDelete = resolve
+        }),
+    )
+
+    renderModal()
+    const deleteBtn = await screen.findByTestId(
+      'delete-field-confirm-modal-confirm',
+    )
+    // Two synchronous clicks — no React render between them.
+    fireEvent.click(deleteBtn)
+    fireEvent.click(deleteBtn)
+
+    await waitFor(() => {
+      expect(deleteMock).toHaveBeenCalledTimes(1)
+    })
+
+    // Cleanup
+    resolveDelete({ success: true, data: { appliedCascade: makeAppliedCascade() } })
+  })
+
   it('disables both buttons mid-flight; flips Delete label to "Deleting…"', async () => {
     previewMock.mockResolvedValueOnce({
       success: true,
