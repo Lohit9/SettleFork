@@ -54,6 +54,7 @@ function makeSourceField(
     mappingStatus: 'unmapped',
     sampleValues: [],
     isAcknowledged: false,
+    isRejected: false,
     ...overrides,
   }
 }

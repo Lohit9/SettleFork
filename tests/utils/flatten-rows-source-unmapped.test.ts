@@ -34,6 +34,7 @@ function makeSourceField(
     mappingStatus: 'unmapped',
     sampleValues: [],
     isAcknowledged: false,
+    isRejected: false,
     ...overrides,
   }
 }
@@ -67,6 +68,7 @@ describe('flattenRowsForListView — source-side rows', () => {
       id: 'ack-1',
       sourceFieldId: 'sf-ack',
       reason: 'OUT_OF_SCOPE',
+      decision: 'acknowledged',
     }
     const result = makeResult({
       sourceFields: [sf],
@@ -84,6 +86,33 @@ describe('flattenRowsForListView — source-side rows', () => {
     expect(ackRow.acknowledgmentReason).toBe('OUT_OF_SCOPE')
     expect(ackRow.status).toBe('approved')
     expect(ackRow.id).toBe('ack::source::ack-1')
+  })
+
+  it('renders ack rows with decision="rejected" as rejected status (gray dot)', () => {
+    const sf = makeSourceField({ id: 'sf-rej' })
+    const ack: SourceFieldAcknowledgmentSummary = {
+      id: 'ack-rej',
+      sourceFieldId: 'sf-rej',
+      reason: '',
+      decision: 'rejected',
+    }
+    const result = makeResult({
+      sourceFields: [sf],
+      sourceFieldAcknowledgments: [ack],
+    })
+
+    const rows = flattenRowsForListView(result, {
+      showUnmappedSourceFields: false,
+    })
+    const ackRow = rows.find((r) => r.kind === 'unmapped-source')
+
+    expect(ackRow).toBeDefined()
+    if (ackRow?.kind !== 'unmapped-source') throw new Error('shape')
+    // Migration 103 / PR #132: ack.decision drives the row's status.
+    // Rejected acks render gray (status='rejected'); acknowledged acks
+    // render green (status='approved'). Both stay visible in the flat
+    // view because they represent explicit user decisions.
+    expect(ackRow.status).toBe('rejected')
   })
 
   it('skips source-only unmapped rows when showUnmappedSourceFields is OFF', () => {
@@ -169,6 +198,7 @@ describe('flattenRowsForListView — source-side rows', () => {
       id: 'ack-1',
       sourceFieldId: 'sf-ack',
       reason: 'OUT_OF_SCOPE',
+      decision: 'acknowledged',
     }
     const result = makeResult({
       sourceFields: [sf],

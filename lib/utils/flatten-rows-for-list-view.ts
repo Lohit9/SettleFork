@@ -219,17 +219,27 @@ export function flattenRowsForListView(
   const sourceFieldById = new Map(result.sourceFields.map((f) => [f.id, f]))
 
   // Source-side acks first — always visible, independent of the toggle.
+  // Migration 103 (A's PR #132): the ack carries a `decision` field
+  // which determines the rendered status:
+  //   decision='acknowledged' → 'approved' (green dot, modal-path
+  //     explicit accept that the field will not be migrated)
+  //   decision='rejected'    → 'rejected' (gray dot, flat-view inline
+  //     reject affordance — explicit user decision against migration)
+  // Both decisions are addressable: the row stays visible because it
+  // represents a deliberate user choice worth surfacing in audit.
   const ackedSourceFieldIds = new Set<string>()
   for (const ack of result.sourceFieldAcknowledgments) {
     const sf = sourceFieldById.get(ack.sourceFieldId)
     if (!sf) continue
     if (sourceFieldIdsReferenced.has(sf.id)) continue
     ackedSourceFieldIds.add(sf.id)
+    const ackStatus: FlatRowStatus =
+      ack.decision === 'rejected' ? 'rejected' : 'approved'
     out.push({
       kind: 'unmapped-source',
       id: `ack::source::${ack.id}`,
       groupId: `ack::source::${ack.id}`,
-      status: 'approved',
+      status: ackStatus,
       sourceField: sf,
       acknowledgmentId: ack.id,
       acknowledgmentReason: ack.reason,

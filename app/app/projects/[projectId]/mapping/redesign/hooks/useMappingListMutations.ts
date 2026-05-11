@@ -5,14 +5,12 @@ import { useRouter } from 'next/navigation'
 import { useToast } from '@/lib/contexts/ToastContext'
 import {
   approveFieldMapping,
-  rejectFieldMapping,
-} from '@/lib/actions/mappings-for-redesign'
-import {
   createMappingFromUnmapped,
+  rejectFieldMapping,
   setUnmappedRowRejected,
   updateMappingSourceField,
   updateMappingTargetField,
-} from '@/lib/actions/mappings-flat-view-stubs'
+} from '@/lib/actions/mappings-for-redesign'
 
 // ─────────────────────────────────────────────────────────────────────────────
 // useMappingListMutations — orchestration hook for the Mapping list view.
@@ -113,8 +111,9 @@ export interface MappingListMutations {
 }
 
 export function useMappingListMutations(
-  _args: UseMappingListMutationsArgs,
+  args: UseMappingListMutationsArgs,
 ): MappingListMutations {
+  const { projectId } = args
   const router = useRouter()
   const { pushToast } = useToast()
   const [pendingKeys, setPendingKeys] = useState<Set<string>>(new Set())
@@ -190,7 +189,10 @@ export function useMappingListMutations(
     (rowId: string, newSourceFieldId: string) =>
       run(
         rowId,
-        () => updateMappingSourceField(rowId, newSourceFieldId),
+        // newConfidence is omitted → server defaults to
+        // FLAT_VIEW_USER_CONFIDENCE (100) per founder's auto-approve
+        // policy for manual edits.
+        () => updateMappingSourceField({ rowId, newSourceFieldId }),
         'Source field updated',
       ),
     [run],
@@ -200,41 +202,42 @@ export function useMappingListMutations(
     (tfmId: string, newTargetFieldId: string) =>
       run(
         tfmId,
-        () => updateMappingTargetField(tfmId, newTargetFieldId),
+        () => updateMappingTargetField({ tfmId, newTargetFieldId }),
         'Target field updated',
       ),
     [run],
   )
 
   const createFromUnmapped = useCallback(
-    (args: {
+    (input: {
       sourceFieldId: string
       targetFieldId: string
       pendingKey: string
     }) =>
       run(
-        args.pendingKey,
+        input.pendingKey,
         () =>
           createMappingFromUnmapped({
-            sourceFieldId: args.sourceFieldId,
-            targetFieldId: args.targetFieldId,
+            projectId,
+            sourceFieldId: input.sourceFieldId,
+            targetFieldId: input.targetFieldId,
           }),
         'Mapping created',
       ),
-    [run],
+    [projectId, run],
   )
 
   const rejectUnmappedRow = useCallback(
-    (args: {
+    (input: {
       pendingKey: string
       target: { targetFieldId: string } | { sourceFieldId: string }
     }) =>
       run(
-        args.pendingKey,
-        () => setUnmappedRowRejected(args.target),
+        input.pendingKey,
+        () => setUnmappedRowRejected({ projectId, ...input.target }),
         'Row rejected',
       ),
-    [run],
+    [projectId, run],
   )
 
   return {
