@@ -283,10 +283,10 @@ describe('MappingListView — action buttons per row kind', () => {
 
   it('multi-source TFM renders N independent flat rows with shimmed contributor ids + accent border', () => {
     // Sixth polish pass: multi-source TFMs emit N independent flat
-    // rows (one per source), not one compact row with a badge.
-    // The renderer paints a left-accent border on each row so
-    // siblings remain visually identifiable even when scattered by
-    // the global sort.
+    // rows (one per source). feat/mapping-list-cluster-multi-source
+    // (this PR): target-first sort clusters them adjacent, and the
+    // teal left-accent border on the Source Field cell of each row
+    // reads as one contiguous vertical bar across the group.
     const mutations = makeMutations()
     const result = makeResult([makeMultiSourceMapped()])
     render(
@@ -311,6 +311,40 @@ describe('MappingListView — action buttons per row kind', () => {
 
     // The bare TFM uuid is NOT itself a row id when sourceCount > 1.
     expect(document.querySelector('[data-row-id="tfm-multi"]')).toBeNull()
+
+    // feat/mapping-list-cluster-multi-source: the accent border
+    // lives on the Source FIELD cell (the field is the mapping
+    // unit). Source Table cells do NOT carry the accent.
+    for (const row of [rowA, rowB]) {
+      const sourceFieldCell = within(row).getByTestId(
+        'flat-cell-source-field',
+      )
+      const sourceTableCell = within(row).getByTestId(
+        'flat-cell-source-table',
+      )
+      expect(sourceFieldCell.className).toMatch(/\bborder-l-2\b/)
+      expect(sourceTableCell.className).not.toMatch(/\bborder-l-2\b/)
+    }
+  })
+
+  it('single-source mapped rows carry NO multi-source accent border', () => {
+    const mutations = makeMutations()
+    const result = makeResult([makeSingleSourceMapped()])
+    render(
+      <MappingListView
+        filteredResult={result}
+        showUnmappedSourceFields={false}
+        mutations={mutations}
+        onOpenDrawer={vi.fn()}
+      />,
+    )
+
+    const row = findRow('tfm-1')
+    const sourceFieldCell = within(row).getByTestId(
+      'flat-cell-source-field',
+    )
+    expect(row.getAttribute('data-multi-source')).toBe('false')
+    expect(sourceFieldCell.className).not.toMatch(/\bborder-l-2\b/)
   })
 
   it('multi-source row: Approve is TFM-atomic (parent uuid); Reject is per-source (shimmed id)', async () => {
@@ -464,18 +498,19 @@ describe('MappingListView — headers + fixed sort', () => {
     expect(screen.getByTestId('flat-header-actions')).toBeInTheDocument()
   })
 
-  it('applies the fixed sort: source-bearing rows first, then blank-source rows by target', () => {
-    // Polish pass dropped click-to-sort headers and pinned a single
-    // ordering: source-bearing groups sort by source columns then
-    // target columns; blank-source groups (VA, unmapped-target) sort
-    // to the bottom by their target columns. This test pins the
-    // bucket-ordering invariant — buyers asked for the deliberate
-    // "mapped meat at the top, defaults at the bottom" layout.
+  it('applies the fixed sort: target-first → source within target group, blank-source rows last within target', () => {
+    // feat/mapping-list-cluster-multi-source: sort flipped from
+    // source-first to target-first. Primary keys are target table +
+    // target field, then a hasSource flag (real sources first,
+    // constant-defaults last within the same target group), then
+    // source columns. This clusters multi-source TFMs as adjacent
+    // rows and keeps constant-default rows at the bottom of their
+    // target's slot.
     const mutations = makeMutations()
     const mapped = makeSingleSourceMapped({ id: 'tfm-mapped' })
     const unmapped = makeUnmappedTarget()
     // Pass unmapped FIRST in the input to verify the sort moves it
-    // to the bottom regardless of input order.
+    // to its proper place regardless of input order.
     const result = makeResult([unmapped, mapped])
     render(
       <MappingListView
@@ -486,9 +521,43 @@ describe('MappingListView — headers + fixed sort', () => {
       />,
     )
 
+    // Both rows share target table 'TGT'. Their target fields
+    // differ: mapped='customer_id', unmapped='orphan_col'.
+    // Target-first sort puts customer_id before orphan_col.
     const rows = document.querySelectorAll('[data-testid="flat-row"]')
     expect(rows.length).toBe(2)
     expect(rows[0].getAttribute('data-row-id')).toBe('tfm-mapped')
     expect(rows[1].getAttribute('data-row-id')).toBe('unmapped::tf-9')
+  })
+
+  it('multi-source rows cluster as adjacent rows regardless of source-side alphabetical order', () => {
+    // The defining behavior of feat/mapping-list-cluster-multi-source:
+    // a 2-source TFM (with sources from Assemblies + Products tables)
+    // + a single-source TFM mapped to a DIFFERENT target — the
+    // multi-source TFM's siblings must appear adjacent in the output.
+    // Under the previous source-first sort, the single-source row
+    // (source from Products) would sort BETWEEN the multi-source
+    // rows alphabetically; under target-first cluster sort it sits
+    // separately under its own target.
+    const mutations = makeMutations()
+    const multi = makeMultiSourceMapped() // target = 'item_number' on TGT
+    const single = makeSingleSourceMapped() // target = 'customer_id' on TGT
+    const result = makeResult([multi, single])
+    render(
+      <MappingListView
+        filteredResult={result}
+        showUnmappedSourceFields={false}
+        mutations={mutations}
+        onOpenDrawer={vi.fn()}
+      />,
+    )
+
+    const rows = document.querySelectorAll('[data-testid="flat-row"]')
+    expect(rows.length).toBe(3)
+    // Single-source first (target 'customer_id' < 'item_number'),
+    // then both multi-source rows clustered.
+    expect(rows[0].getAttribute('data-row-id')).toBe('tfm-1')
+    expect(rows[1].getAttribute('data-group-id')).toBe('tfm-multi')
+    expect(rows[2].getAttribute('data-group-id')).toBe('tfm-multi')
   })
 })

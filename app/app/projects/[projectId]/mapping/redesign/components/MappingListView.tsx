@@ -221,66 +221,92 @@ export interface MappingListViewProps {
 
 // ─── Fixed sort (single pass, no UI state) ────────────────────────────────────
 //
-// Polish pass dropped click-to-sort headers (v2 polish). The flat
-// view now applies a single fixed ordering at render time:
+// Click-to-sort headers were dropped at an earlier polish pass.
+// The flat view applies a single fixed ordering at render time:
 //
-//   Source Table ASC → Source Field ASC → Target Table ASC →
-//   Target Field ASC
+//   Target Table ASC → Target Field ASC → hasSource ASC →
+//   Source Table ASC → Source Field ASC
 //
-// Rows that LACK a source value (value-assignment, unmapped-target)
-// sort to the BOTTOM, ordered by their target columns. This keeps
-// mapped rows first (auditor-friendly: the meat is at the top) and
-// "constant defaults" / unaddressed-target rows at the bottom.
+// Target-first (feat/mapping-list-cluster-multi-source): all
+// source attributions for a given target field cluster as adjacent
+// rows. Many-to-one mappings (the common AI-proposed multi-source
+// case, e.g. Item_Description ← Assy_Desc + Item + ProductName)
+// read as a contiguous group rather than scattered across the
+// table.
 //
-// Sort operates at the GROUP level. Multi-source mapped TFMs (parent
-// + N children) use the DOMINANT child's source for source-column
-// sort keys; children themselves follow the server-emitted
-// `sources[].ordinal` order within the group.
+// The `hasSource` flag is a within-target sub-discriminator: real
+// mapped sources for a target appear first; constant defaults /
+// unmapped-target rows for that same target sit at the bottom of
+// the group.
+//
+// Source-only rows (unmapped-source) have no target to anchor to;
+// they collect at the bottom of the table (bucket=1) and tiebreak
+// by source columns.
 
 interface GroupSortKeys {
   /**
-   * 0 = group has a source (mapped-single, mapped-parent,
-   * unmapped-source); 1 = group lacks a source (value-assignment,
-   * unmapped-target). Primary discriminator so blank-source rows
-   * always sort to the bottom regardless of subsequent keys.
+   * 0 = group has a target (mapped, value-assignment,
+   * unmapped-target); 1 = group is source-only (unmapped-source).
+   * Primary discriminator so source-only rows sort to the bottom
+   * of the table — they have no target to anchor to in the
+   * target-first sort below.
    */
   bucket: 0 | 1
-  sourceTable: string
-  sourceField: string
+  /** Target-side keys drive the primary clustering. */
   targetTable: string
   targetField: string
+  /**
+   * Within a target group, 0 = real source attribution
+   * (mapped), 1 = constant default / unmapped-target.
+   * Sub-discriminator so all mapped rows for a target appear
+   * before the constant-defaults for that same target.
+   */
+  hasSource: 0 | 1
+  /** Source-side keys tiebreak within a target group. */
+  sourceTable: string
+  sourceField: string
 }
 
 function buildSortKeys(row: FlatRow): GroupSortKeys {
   switch (row.kind) {
     case 'mapped':
-      // Each mapped flat row represents ONE source attribution (sixth
-      // polish pass — Option C is gone; multi-source TFMs emit N
-      // independent rows). The row's own source drives sort keys, so
-      // scattered siblings are an accepted visual side effect.
+      // Each mapped flat row represents one source attribution.
+      // Target-first sort below clusters all sources for a given
+      // target field as adjacent rows. Source columns tiebreak
+      // within the target group.
       return {
         bucket: 0,
-        sourceTable: row.source.sourceTable.name,
-        sourceField: row.source.sourceField.name,
         targetTable: row.targetField.targetTable.name,
         targetField: row.targetField.name,
-      }
-    case 'unmapped-source':
-      return {
-        bucket: 0,
-        sourceTable: row.sourceField.sourceTable.name,
-        sourceField: row.sourceField.name,
-        targetTable: '',
-        targetField: '',
+        hasSource: 0,
+        sourceTable: row.source.sourceTable.name,
+        sourceField: row.source.sourceField.name,
       }
     case 'value-assignment':
     case 'unmapped-target':
+      // Same target group as mapped rows for that field, but with
+      // hasSource=1 so they sort to the BOTTOM of the group (real
+      // mapped sources first, constant-defaults last within the
+      // target's slot).
       return {
-        bucket: 1,
-        sourceTable: '',
-        sourceField: '',
+        bucket: 0,
         targetTable: row.targetField.targetTable.name,
         targetField: row.targetField.name,
+        hasSource: 1,
+        sourceTable: '',
+        sourceField: '',
+      }
+    case 'unmapped-source':
+      // Source-only rows have no target to cluster under; they
+      // collect at the bottom of the table (bucket=1) and tiebreak
+      // among themselves by source columns.
+      return {
+        bucket: 1,
+        targetTable: '',
+        targetField: '',
+        hasSource: 0,
+        sourceTable: row.sourceField.sourceTable.name,
+        sourceField: row.sourceField.name,
       }
   }
 }
@@ -291,13 +317,14 @@ function compareStringsAsc(a: string, b: string): number {
 
 function compareSortKeys(a: GroupSortKeys, b: GroupSortKeys): number {
   if (a.bucket !== b.bucket) return a.bucket - b.bucket
-  const st = compareStringsAsc(a.sourceTable, b.sourceTable)
-  if (st !== 0) return st
-  const sf = compareStringsAsc(a.sourceField, b.sourceField)
-  if (sf !== 0) return sf
   const tt = compareStringsAsc(a.targetTable, b.targetTable)
   if (tt !== 0) return tt
-  return compareStringsAsc(a.targetField, b.targetField)
+  const tf = compareStringsAsc(a.targetField, b.targetField)
+  if (tf !== 0) return tf
+  if (a.hasSource !== b.hasSource) return a.hasSource - b.hasSource
+  const st = compareStringsAsc(a.sourceTable, b.sourceTable)
+  if (st !== 0) return st
+  return compareStringsAsc(a.sourceField, b.sourceField)
 }
 
 // ─── Fixed sort ──────────────────────────────────────────────────────────────
@@ -846,26 +873,26 @@ function FlatRowView({
       )}
     >
       {/* Source-first column order (feat/mapping-list-toggle-and-columns).
-          The Source Table cell is the leading cell, so it now carries
-          the multi-source left-accent border. */}
+          Multi-source accent (feat/mapping-list-cluster-multi-source):
+          painted on the Source FIELD cell — the field is the mapping
+          unit; the table is incidental metadata. With the new target-
+          first cluster sort, multi-source siblings are guaranteed
+          adjacent, so the per-cell border reads as one contiguous
+          vertical bar across the group. Brand teal at 50% opacity —
+          obvious but not loud. */}
       <td
         data-testid="flat-cell-source-table"
         title={sourceTableName ?? undefined}
-        className={cn(
-          'truncate border-b border-gray-100 px-3 py-2.5 align-top text-sm text-slate-700',
-          // Left-accent for multi-source rows. Painted on the leading
-          // cell so the accent sits in the row's padding and does NOT
-          // add width. Adjacent siblings render a continuous vertical
-          // line; scattered siblings each show their own accent
-          // (accepted side effect of the locked sort).
-          isMultiSource && 'border-l-2 border-slate-300',
-        )}
+        className="truncate border-b border-gray-100 px-3 py-2.5 align-top text-sm text-slate-700"
       >
         {sourceTableName ?? <span className="text-gray-300">—</span>}
       </td>
       <td
         data-testid="flat-cell-source-field"
-        className="border-b border-gray-100 px-3 py-2.5 align-top text-sm"
+        className={cn(
+          'border-b border-gray-100 px-3 py-2.5 align-top text-sm',
+          isMultiSource && 'border-l-2 border-settle-teal-500/50',
+        )}
       >
         {sourceFieldName ? (
           sourceCellClickable ? (
