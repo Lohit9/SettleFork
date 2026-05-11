@@ -275,15 +275,28 @@ describe('flattenRowsForListView — source-side rows', () => {
     const result = makeResult({ rows: [mappedRow] })
 
     const rows = flattenRowsForListView(result)
-    // Third polish pass: multi-source TFMs render as one compact row
-    // with sources[] preserving every contributor. The renderer
-    // surfaces the count via a "N× Multiple sources" badge.
-    expect(rows.length).toBe(1)
+    // Sixth polish pass: multi-source TFMs emit N INDEPENDENT flat
+    // rows (one per source attribution). Each row carries `source`
+    // (singular) + `sourceCount=N` so the renderer can paint the
+    // left-accent border to identify sibling rows post-sort.
+    expect(rows.length).toBe(2)
     expect(rows[0].kind).toBe('mapped')
-    expect(rows[0].id).toBe('tfm-multi')
-    if (rows[0].kind !== 'mapped') throw new Error('shape')
-    expect(rows[0].sources.length).toBe(2)
-    expect(rows[0].sources[0].id).toBe('ms-1')
-    expect(rows[0].sources[1].id).toBe('ms-2')
+    expect(rows[1].kind).toBe('mapped')
+    // Row ids use the shimmed contributor form for multi-source so
+    // A's `rejectFieldMapping` deletes the right `mapping_sources`
+    // row on per-source reject.
+    expect(rows[0].id).toBe('tfm-multi::ms-1')
+    expect(rows[1].id).toBe('tfm-multi::ms-2')
+    if (rows[0].kind !== 'mapped' || rows[1].kind !== 'mapped') {
+      throw new Error('shape')
+    }
+    expect(rows[0].source.id).toBe('ms-1')
+    expect(rows[1].source.id).toBe('ms-2')
+    expect(rows[0].sourceCount).toBe(2)
+    expect(rows[1].sourceCount).toBe(2)
+    // groupId stays the TFM uuid for both — used by the renderer to
+    // identify sibling rows post-sort.
+    expect(rows[0].groupId).toBe('tfm-multi')
+    expect(rows[1].groupId).toBe('tfm-multi')
   })
 })

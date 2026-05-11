@@ -15,11 +15,12 @@ import type {
  * array; this helper folds the source-side derivations (acks +
  * unmapped source fields) in.
  *
- *   • mapped TFM (1+ sources)  → 1 flat row (kind: 'mapped')
- *                                 sources[] carries every contributor;
- *                                 the renderer shows a compact
- *                                 "N× Multiple sources" treatment when
- *                                 sources.length > 1.
+ *   • mapped TFM with N sources → N flat rows (one per attribution).
+ *     Each row carries the single `source` it represents PLUS the
+ *     full `sourceCount`. The renderer paints a left-accent border
+ *     when sourceCount > 1 so multi-source siblings remain visually
+ *     identifiable even after the global sort (which may scatter
+ *     them).
  *   • value assignment         → 1 flat row, source cells blank
  *                                 (kind: 'value-assignment')
  *   • unmapped target          → 1 flat row, source cells blank
@@ -33,19 +34,19 @@ import type {
  * INF-57 (2026-05-10): acknowledged target fields are surfaced by the
  * server as `UnmappedRow` with status='approved'. The flat view treats
  * them like any other unmapped target row — the status field carries
- * the 'approved' value and the renderer draws the green Approved pill.
+ * the 'approved' value and the renderer draws the green Approved dot.
  *
  * Source-side acknowledgments live separately on
  * `result.sourceFieldAcknowledgments`. They ALWAYS appear in the flat
  * view (independent of showUnmappedSourceFields), because they
  * represent explicit user decisions worth surfacing.
  *
- * Prior to the second visual polish pass, multi-source TFMs split into
- * a parent + N child rows (Option C). The founder's reference shot
- * superseded that — multi-source now renders as one compact row with a
- * blue `N×` badge in the source-table cell + "N fields combined" in
- * the source-field cell. Per-contributor edits / rejects route through
- * the drawer.
+ * Multi-source layout history (for grep-archaeology):
+ *   • v1 architecture review locked Option C — parent + N children.
+ *   • Third polish pass collapsed to ONE compact row with a `N×` badge.
+ *   • Sixth polish pass (this revision) reverts to N independent flat
+ *     rows + left-accent border. Per-source action semantics return:
+ *     Reject deletes one contributor; Approve still TFM-atomic.
  */
 
 export type FlatRowStatus = 'approved' | 'needs_review' | 'rejected'
@@ -74,13 +75,20 @@ interface FlatRowBase {
 export interface MappedFlatRow extends FlatRowBase {
   kind: 'mapped'
   targetField: TargetFieldRef
+  /** The single source attribution THIS row represents. */
+  source: MappingSourceRef
   /**
-   * All contributing source attributions, in `ordinal` order (server-
-   * emitted). Always non-empty for 'mapped' rows. The renderer shows a
-   * compact "N× Multiple sources" badge when length > 1.
+   * Total number of source attributions on the parent TFM. Drives the
+   * left-accent visual cue (sourceCount > 1) and the "approves all N
+   * sources" tooltip on the Approve button. Multi-source TFMs emit
+   * `sourceCount` independent flat rows, each carrying the same value.
    */
-  sources: MappingSourceRef[]
-  /** TFM aggregate confidence (MIN across sources, server-derived). */
+  sourceCount: number
+  /**
+   * Per-source confidence — NOT the TFM aggregate. Per-source numbers
+   * matter for the flat view's audit workflow ("ProductSKU is 90%
+   * confident, Assy_Item is 80%" — both visible in the table).
+   */
   confidence: number | null
   parentRow: MappedRow
 }
@@ -145,19 +153,30 @@ export function flattenRowsForListView(
         // target after the next refresh once server-side state settles.
         continue
       }
+      const sourceCount = row.sources.length
       for (const src of row.sources) {
         sourceFieldIdsReferenced.add(src.sourceField.id)
+        // Single-source TFM → row id is the bare TFM uuid.
+        // Multi-source TFM → row id is the shimmed contributor id
+        // `<tfmId>::<mappingSourceId>` so per-source reject routes
+        // through A's `rejectFieldMapping` with the right key.
+        const rowId =
+          sourceCount === 1 ? row.id : `${row.id}::${src.id}`
+        out.push({
+          kind: 'mapped',
+          id: rowId,
+          // groupId stays the TFM uuid so multi-source siblings are
+          // identifiable as a group post-sort (the renderer uses it
+          // for the accent cue).
+          groupId: row.id,
+          status,
+          targetField: row.targetField,
+          source: src,
+          sourceCount,
+          confidence: src.confidence,
+          parentRow: row,
+        })
       }
-      out.push({
-        kind: 'mapped',
-        id: row.id,
-        groupId: row.id,
-        status,
-        targetField: row.targetField,
-        sources: row.sources,
-        confidence: row.confidence,
-        parentRow: row,
-      })
       continue
     }
     if (row.kind === 'value_assignment') {

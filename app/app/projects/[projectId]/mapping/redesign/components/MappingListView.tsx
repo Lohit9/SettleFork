@@ -20,27 +20,22 @@ import { InlineSourcePicker } from './InlineSourcePicker'
 import { TargetFieldCellPicker } from './TargetFieldCellPicker'
 import type { MappingListMutations } from '../hooks/useMappingListMutations'
 
-// Confidence band → text color. Matches the drawer's per-source card
-// (SOURCE_CONFIDENCE_BAND_CLASSNAME) so a "92% green" on the row's
-// Confidence cell reads the same as the per-source card the user
-// would land on after clicking the row body.
+// Confidence band → text color for the Confidence cell. Matches the
+// drawer's per-source card so a "92% green" reads the same on both
+// surfaces. The flat view shows the colored number alone (no bar);
+// the band is the visual signal.
 const CONFIDENCE_BAND_TEXT: Record<RowConfidenceBand, string> = {
   high: 'text-green-700 font-medium',
   amber: 'text-amber-700',
   low: 'text-red-700',
 }
-const CONFIDENCE_BAND_FILL: Record<RowConfidenceBand, string> = {
-  high: 'bg-green-500',
-  amber: 'bg-amber-500',
-  low: 'bg-red-500',
-}
 
 // ─── Visual subcomponents (Settle-platform-styled) ───────────────────────────
 //
-// FieldNameChip — small gray monospace pill for individual field names.
-// Mirrors the TableBadge aesthetic (`rounded bg-slate-100 font-mono`) at
-// a slightly smaller size so the chip reads as a field identifier
-// inside the row's flow, not a table heading.
+// FieldNameChip — gray monospace pill for individual field names.
+// Mirrors the TableBadge aesthetic (`rounded bg-slate-100 font-mono`)
+// at the row body's text-sm scale so a chip in this column reads as
+// inline content, not as a column-level heading.
 function FieldNameChip({
   name,
   className,
@@ -52,7 +47,7 @@ function FieldNameChip({
     <span
       title={name}
       className={cn(
-        'inline-block max-w-full truncate rounded bg-slate-100 px-1.5 py-0.5 align-middle font-mono text-[11px] font-medium text-slate-700',
+        'inline-block max-w-full truncate rounded bg-slate-100 px-1.5 py-0.5 align-middle font-mono text-sm font-medium text-slate-700',
         className,
       )}
     >
@@ -61,62 +56,11 @@ function FieldNameChip({
   )
 }
 
-// ConfidenceBar — thin horizontal track (16px wide) + colored fill +
-// percentage. Bar is decorative (carries the band visually), the
-// percentage is the authoritative number.
-function ConfidenceBar({
-  confidence,
-  band,
-}: {
-  confidence: number
-  band: RowConfidenceBand
-}) {
-  const pct = Math.max(0, Math.min(100, Math.round(confidence)))
-  return (
-    <span className="inline-flex items-center gap-2">
-      <span
-        aria-hidden="true"
-        className="relative inline-block h-1 w-16 overflow-hidden rounded-full bg-slate-200"
-      >
-        <span
-          className={cn('absolute inset-y-0 left-0', CONFIDENCE_BAND_FILL[band])}
-          style={{ width: `${pct}%` }}
-        />
-      </span>
-      <span
-        className={cn(
-          'inline-block w-8 text-right tabular-nums text-[11px]',
-          CONFIDENCE_BAND_TEXT[band],
-        )}
-      >
-        {pct}%
-      </span>
-    </span>
-  )
-}
-
-// MultiSourceBadge — blue chip carrying the source count, paired with
-// a "Multiple sources" caption. Used in the source-table cell when a
-// TFM has 2+ contributing sources (the founder's reference shot).
-function MultiSourceBadge({ count }: { count: number }) {
-  return (
-    <span className="inline-flex items-center gap-1.5 align-middle">
-      <span
-        data-testid="multi-source-count-badge"
-        className="inline-flex items-center justify-center rounded bg-blue-50 px-1.5 py-0.5 font-mono text-[10px] font-semibold text-blue-700"
-      >
-        {count}×
-      </span>
-      <span className="text-[12px] text-slate-700">Multiple sources</span>
-    </span>
-  )
-}
-
-// Display status — derived from FlatRowStatus + row kind so that
-// unaddressed unmapped rows (target-side or source-side) surface as
-// "Unmapped" rather than "Needs Review". Matches the founder's
-// reference shot: gray-pill "Unmapped" rows sit alongside amber-pill
-// "Needs review" rows.
+// Display status — derives a 4-bucket label/color (the canonical 3
+// status buckets plus an "Unmapped" 4th for unaddressed rows). The
+// flat view paints only a dot (sixth polish pass — pill text dropped);
+// the cell's `title` attribute carries the label, so the user still
+// gets the status name on hover.
 type DisplayStatus =
   | 'approved'
   | 'needs_review'
@@ -130,54 +74,33 @@ function deriveDisplayStatus(row: FlatRow): DisplayStatus {
   return row.status
 }
 
-const STATUS_PILL_CONFIG: Record<
+const STATUS_DOT_CONFIG: Record<
   DisplayStatus,
-  { label: string; pill: string; dot: string }
+  { label: string; dot: string }
 > = {
-  approved: {
-    label: 'Approved',
-    pill: 'bg-green-50 text-green-700',
-    dot: 'bg-green-500',
-  },
-  needs_review: {
-    label: 'Needs review',
-    pill: 'bg-amber-50 text-amber-700',
-    dot: 'bg-amber-500',
-  },
-  rejected: {
-    label: 'Rejected',
-    pill: 'bg-slate-100 text-slate-600',
-    dot: 'bg-slate-400',
-  },
-  unmapped: {
-    label: 'Unmapped',
-    pill: 'bg-slate-100 text-slate-500',
-    dot: 'bg-slate-300',
-  },
+  approved: { label: 'Approved', dot: 'bg-green-500' },
+  needs_review: { label: 'Needs review', dot: 'bg-amber-400' },
+  rejected: { label: 'Rejected', dot: 'bg-slate-400' },
+  unmapped: { label: 'Unmapped', dot: 'bg-slate-300' },
 }
 
-function StatusPill({ status }: { status: DisplayStatus }) {
-  const config = STATUS_PILL_CONFIG[status]
+function StatusDot({ status }: { status: DisplayStatus }) {
+  const config = STATUS_DOT_CONFIG[status]
   return (
     <span
-      data-testid="flat-status-pill"
+      data-testid="flat-status-dot"
       data-status={status}
+      aria-label={`status: ${config.label}`}
       className={cn(
-        'inline-flex items-center gap-1.5 rounded-full px-2 py-0.5 text-[11px] font-medium',
-        config.pill,
+        'inline-block h-2 w-2 rounded-full align-middle',
+        config.dot,
       )}
-    >
-      <span
-        aria-hidden="true"
-        className={cn('h-1.5 w-1.5 rounded-full', config.dot)}
-      />
-      {config.label}
-    </span>
+    />
   )
 }
 
 function statusTooltipFor(row: FlatRow): string {
-  const label = STATUS_PILL_CONFIG[deriveDisplayStatus(row)].label
+  const label = STATUS_DOT_CONFIG[deriveDisplayStatus(row)].label
   if (row.kind === 'unmapped-source' && row.acknowledgmentReason) {
     return `${label} · ${row.acknowledgmentReason}`
   }
@@ -329,18 +252,18 @@ interface GroupSortKeys {
 
 function buildSortKeys(row: FlatRow): GroupSortKeys {
   switch (row.kind) {
-    case 'mapped': {
-      // Multi-source TFMs sort on the DOMINANT source (ordinal=0,
-      // which is sources[0] per server contract).
-      const dominant = row.sources[0]
+    case 'mapped':
+      // Each mapped flat row represents ONE source attribution (sixth
+      // polish pass — Option C is gone; multi-source TFMs emit N
+      // independent rows). The row's own source drives sort keys, so
+      // scattered siblings are an accepted visual side effect.
       return {
         bucket: 0,
-        sourceTable: dominant.sourceTable.name,
-        sourceField: dominant.sourceField.name,
+        sourceTable: row.source.sourceTable.name,
+        sourceField: row.source.sourceField.name,
         targetTable: row.targetField.targetTable.name,
         targetField: row.targetField.name,
       }
-    }
     case 'unmapped-source':
       return {
         bucket: 0,
@@ -464,20 +387,20 @@ export function MappingListView({
 
   const handleSourceCellClick = useCallback(
     (row: FlatRow, anchorEl: HTMLElement) => {
-      // Source-cell click opens the source picker for the rows that
-      // have a meaningful source slot to address:
-      //   • mapped (single source) → swap that source's source field
-      //   • mapped (multi source)  → no inline edit (open drawer instead)
-      //   • unmapped-target        → create-mapping flow (target picks
-      //                              a source)
-      //   • unmapped-source        → noop (source IS the row identity)
-      //   • value-assignment       → no source cell, no click
-      if (row.kind === 'mapped' && row.sources.length === 1) {
+      // Source-cell click opens the source picker for rows with a
+      // meaningful source slot to address:
+      //   • mapped (any source count) → swap THIS row's source field.
+      //     For multi-source TFMs the picker only affects this one
+      //     attribution; siblings stay mapped to their own sources.
+      //   • unmapped-target → create-mapping flow (target picks a source)
+      //   • unmapped-source → noop (source IS the row identity)
+      //   • value-assignment → no source cell, no click
+      if (row.kind === 'mapped') {
         setOpenPicker({
           kind: 'source',
           rowId: row.id,
           anchorEl,
-          initialSourceFieldIds: [row.sources[0].sourceField.id],
+          initialSourceFieldIds: [row.source.sourceField.id],
           targetFieldIdForCreate: null,
         })
         return
@@ -527,12 +450,14 @@ export function MappingListView({
 
   const handleRowBodyClick = useCallback(
     (row: FlatRow) => {
-      // For multi-source mapped TFMs, the drawer opens with no
-      // pre-highlighted source (all contributors render equally in
-      // the Sources section). The flat view no longer routes through
-      // a per-contributor click since multi-source renders as one
-      // compact row.
-      onOpenDrawer(row.groupId, null)
+      // For mapped flat rows (which now represent ONE source each),
+      // open the drawer with this row's source highlighted so the
+      // user lands inside the Sources section anchored to the
+      // contributor they clicked. Non-mapped rows have no source to
+      // highlight; they open the drawer with no highlight.
+      const highlightedSourceFieldId =
+        row.kind === 'mapped' ? row.source.sourceField.id : null
+      onOpenDrawer(row.groupId, highlightedSourceFieldId)
     },
     [onOpenDrawer],
   )
@@ -568,55 +493,45 @@ export function MappingListView({
           pendingKey: openPicker.rowId,
         })
       }
-      // Standard swap-target on an existing TFM. With multi-source
-      // TFMs rendered as a single row, rowId always equals the bare
-      // TFM uuid (no `<tfm>::<source>` shim ids since the second
-      // polish pass dropped per-contributor flat rows).
-      return mutations.swapMappingTarget(openPicker.rowId, newTargetFieldId)
+      // Standard swap-target on an existing TFM. Multi-source flat
+      // rows carry shimmed contributor ids (`<tfmId>::<sourceId>`);
+      // strip the suffix so swapMappingTarget receives the bare TFM
+      // uuid — target swap is TFM-atomic regardless of which
+      // contributor row triggered the click.
+      const bareTfmId = openPicker.rowId.split('::')[0]
+      return mutations.swapMappingTarget(bareTfmId, newTargetFieldId)
     },
     [mutations, openPicker],
   )
 
   return (
-    <div data-testid="mapping-list-view" className="overflow-x-auto">
-      <table className="w-full min-w-[1136px] border-separate border-spacing-0 text-xs">
+    <div
+      data-testid="mapping-list-view"
+      className="overflow-hidden rounded-lg border border-gray-200 bg-white"
+    >
+      <table className="w-full table-fixed border-collapse text-sm">
+        <colgroup>
+          <col style={{ width: '12%' }} />
+          <col style={{ width: '26%' }} />
+          <col style={{ width: '12%' }} />
+          <col style={{ width: '26%' }} />
+          <col style={{ width: '80px' }} />
+          <col style={{ width: '40px' }} />
+          <col style={{ width: '110px' }} />
+        </colgroup>
         <thead className="bg-gray-50">
           <tr>
-            <TableHeader
-              column="targetTable"
-              label="Target Table"
-              className="sticky left-0 z-20 w-44 bg-gray-50"
-            />
-            <TableHeader
-              column="targetField"
-              label="Target Field"
-              className="sticky left-44 z-20 w-56 bg-gray-50"
-            />
-            <TableHeader
-              column="sourceTable"
-              label="Source Table"
-              className="w-44 bg-gray-50"
-            />
-            <TableHeader
-              column="sourceField"
-              label="Source Field"
-              className="w-56 bg-gray-50"
-            />
-            <TableHeader
-              column="confidence"
-              label="Confidence"
-              className="w-32 bg-gray-50"
-            />
-            <TableHeader
-              column="status"
-              label="Status"
-              className="w-32 bg-gray-50"
-            />
+            <TableHeader column="targetTable" label="Target Table" />
+            <TableHeader column="targetField" label="Target Field" />
+            <TableHeader column="sourceTable" label="Source Table" />
+            <TableHeader column="sourceField" label="Source Field" />
+            <TableHeader column="confidence" label="Confidence" align="right" />
+            <TableHeader column="status" label="Status" align="center" />
             <th
               scope="col"
               data-testid="flat-header-actions"
               aria-label="Actions"
-              className="sticky right-0 z-20 w-20 border-b border-gray-200 bg-gray-50 px-3 py-2"
+              className="border-b border-gray-200 px-3 py-2.5 align-top"
             />
           </tr>
         </thead>
@@ -625,7 +540,7 @@ export function MappingListView({
             <tr>
               <td
                 colSpan={7}
-                className="px-3 py-12 text-center text-xs italic text-slate-400"
+                className="px-3 py-12 text-center text-sm italic text-gray-400"
               >
                 No rows match the current filters.
               </td>
@@ -672,14 +587,14 @@ export function MappingListView({
 
 // ─── Header cell ─────────────────────────────────────────────────────────────
 //
-// Static label only — no click-to-sort (v2 polish). FilterRow remains
-// the canonical filter surface; the flat view's row order is fixed
-// per `compareGroupKeys`.
+// Static text label — no click-to-sort (the FilterRow remains the
+// canonical filter surface; row order is fixed per `compareSortKeys`).
+// Typography matches the brief's spec for column headers:
+// text-xs font-medium uppercase tracking-wide text-gray-500.
 
 function TableHeader({
   column,
   label,
-  className,
   align,
 }: {
   column:
@@ -690,17 +605,16 @@ function TableHeader({
     | 'confidence'
     | 'status'
   label: string
-  className?: string
-  align?: 'right'
+  align?: 'right' | 'center'
 }) {
   return (
     <th
       scope="col"
       data-testid={`flat-header-${column}`}
       className={cn(
-        'border-b border-gray-200 px-3 py-2 text-left text-[11px] font-semibold uppercase tracking-wide text-gray-600',
+        'border-b border-gray-200 px-3 py-2.5 align-top text-left text-xs font-medium uppercase tracking-wide text-gray-500',
         align === 'right' && 'text-right',
-        className,
+        align === 'center' && 'text-center',
       )}
     >
       {label}
@@ -726,9 +640,10 @@ function FlatRowView({
   onRowBodyClick,
 }: FlatRowViewProps) {
   const isBusy = mutations.isRowBusy(row.id)
-  const isMultiSource = row.kind === 'mapped' && row.sources.length > 1
-  const dominantSource =
-    row.kind === 'mapped' ? row.sources[0] : null
+  // Multi-source flag drives the left-accent visual cue. Each mapped
+  // flat row already represents one source; we look at `sourceCount`
+  // (carried on the row) to know whether this row has siblings.
+  const isMultiSource = row.kind === 'mapped' && row.sourceCount > 1
 
   const sourceCellRef = useRef<HTMLButtonElement | null>(null)
   const targetCellRef = useRef<HTMLButtonElement | null>(null)
@@ -749,17 +664,13 @@ function FlatRowView({
       : null
 
   const sourceTableName = (() => {
-    if (row.kind === 'mapped' && !isMultiSource && dominantSource) {
-      return dominantSource.sourceTable.name
-    }
+    if (row.kind === 'mapped') return row.source.sourceTable.name
     if (row.kind === 'unmapped-source') return row.sourceField.sourceTable.name
     return null
   })()
 
   const sourceFieldName = (() => {
-    if (row.kind === 'mapped' && !isMultiSource && dominantSource) {
-      return dominantSource.sourceField.name
-    }
+    if (row.kind === 'mapped') return row.source.sourceField.name
     if (row.kind === 'unmapped-source') return row.sourceField.name
     return null
   })()
@@ -779,13 +690,11 @@ function FlatRowView({
     row.kind === 'unmapped-source'
 
   // Source-cell editability:
-  //   • single-source mapped → swap source
+  //   • mapped (any source count) → swap THIS row's source field
+  //     (per-source on multi-source TFMs).
   //   • unmapped-target → create-from-unmapped (target picks source)
-  // Multi-source mapped intentionally does NOT support inline source
-  // editing — the user opens the drawer to manage contributors.
   const sourceCellClickable =
-    (row.kind === 'mapped' && !isMultiSource) ||
-    row.kind === 'unmapped-target'
+    row.kind === 'mapped' || row.kind === 'unmapped-target'
 
   const confidenceBand =
     confidence === null ? null : classifyRowConfidence(confidence)
@@ -795,26 +704,55 @@ function FlatRowView({
 
   // ── Action handlers per row kind ──────────────────────────────────
   //
-  // Only ✓ Approve and ✗ Reject render. Edit was dropped: every edit
-  // path has a direct cell-click affordance (source/target cells open
-  // inline pickers; row body click opens the drawer). When an action
-  // is not applicable (already-approved, already-rejected, unmapped
-  // without a mapping to approve), the handler is left `undefined`
-  // and FlatRowActions omits the button entirely.
+  // Three actions per mapped row: ✓ Approve, ✗ Reject, ✏ Edit.
+  //
+  //   • Approve: TFM-atomic — uses the bare TFM uuid (parentRow.id).
+  //     For a multi-source TFM, approving any contributor row
+  //     approves ALL siblings via the server's TFM-level approve.
+  //     Tooltip surfaces the cross-source semantics so the user
+  //     isn't surprised.
+  //   • Reject: per-source — uses the shimmed contributor id (which
+  //     IS row.id for multi-source) so A's `rejectFieldMapping`
+  //     deletes just this attribution. Single-source rejects the
+  //     whole TFM (the row id IS the TFM uuid for single source).
+  //   • Edit: opens the drawer with this row's source highlighted.
+  //     Drops the user into the drawer's Sources section anchored
+  //     to the specific contributor they clicked.
+  //
+  // Non-mapped rows render only Reject (with row-kind-specific
+  // dispatch). Edit is omitted because the cell-level "Pick a
+  // source…" / "Pick a target…" buttons cover their edit path.
   const actions = useMemo(() => {
     const alreadyApproved = row.status === 'approved'
     const alreadyRejected = row.status === 'rejected'
 
     if (row.kind === 'mapped') {
+      const parentTfmId = row.parentRow.id
+      const sourceFieldId = row.source.sourceField.id
       return {
         onApprove: alreadyApproved
           ? undefined
-          : () => void mutations.approveTfm(row.id),
-        approveTooltip: 'Approve mapping',
+          : () => void mutations.approveTfm(parentTfmId),
+        approveTooltip:
+          row.sourceCount > 1
+            ? `Approves all ${row.sourceCount} sources of this mapping`
+            : 'Approve mapping',
         onReject: alreadyRejected
           ? undefined
           : () => void mutations.rejectTfm(row.id),
-        rejectTooltip: 'Reject mapping',
+        rejectTooltip:
+          row.sourceCount > 1
+            ? 'Remove this source attribution'
+            : 'Reject mapping',
+        // Edit reuses handleRowBodyClick — for mapped rows that helper
+        // already derives the highlighted source from row.source, so
+        // the Edit button and a row-body click land on the same drawer
+        // state. `sourceFieldId` retained as documentation of intent.
+        onEdit: () => {
+          void sourceFieldId
+          onRowBodyClick(row)
+        },
+        editTooltip: 'Open mapping in drawer',
       }
     }
     if (row.kind === 'value-assignment') {
@@ -827,6 +765,8 @@ function FlatRowView({
           ? undefined
           : () => void mutations.rejectTfm(row.id),
         rejectTooltip: 'Reject value assignment',
+        onEdit: undefined,
+        editTooltip: undefined,
       }
     }
     if (row.kind === 'unmapped-target') {
@@ -841,6 +781,8 @@ function FlatRowView({
                 target: { targetFieldId: row.targetField.id },
               }),
         rejectTooltip: 'Mark as rejected',
+        onEdit: undefined,
+        editTooltip: undefined,
       }
     }
     // unmapped-source
@@ -855,45 +797,59 @@ function FlatRowView({
               target: { sourceFieldId: row.sourceField.id },
             }),
       rejectTooltip: 'Mark as rejected',
+      onEdit: undefined,
+      editTooltip: undefined,
     }
-  }, [mutations, row])
+  }, [mutations, onRowBodyClick, row])
 
   // ── Render ────────────────────────────────────────────────────────
   //
-  // Sticky-column layout (third polish pass — founder reference shot):
-  //   • Target Table   →  sticky left-0   (176px)
-  //   • Target Field   →  sticky left-44  (224px)
-  //   • Source Table / Field / Confidence / Status — scroll naturally
-  //   • Actions        →  sticky right-0  (✓ ✗ only)
+  // Sixth polish pass — single-viewport table layout (no horizontal
+  // scroll, no sticky columns). Column widths set via the parent
+  // table's `<colgroup>`. Each cell uses uniform `px-3 py-2.5
+  // align-top`, with `text-sm` body text and a subtle border-b on
+  // every non-header row.
   //
-  // Multi-source mapped TFMs render as ONE row with a blue `N×` badge
-  // in Source Table and "N fields combined" italic in Source Field —
-  // per-contributor edits route through the drawer.
+  // Multi-source mapped TFMs emit N independent flat rows; each row
+  // carries `sourceCount > 1` and renders with a `border-l-2
+  // border-slate-300` left accent so siblings remain visually
+  // identifiable even after the global sort scatters them.
   //
-  // Field names use FieldNameChip (gray rounded monospace pill);
-  // table names render as plain truncated text. Status is a
-  // text+dot pill at the right; confidence is a thin colored bar +
-  // colored percentage.
+  // Em-dashes for blank cells use `text-gray-300` — visibly muted
+  // against the surrounding text-slate-700 data.
   return (
     <tr
       data-testid="flat-row"
       data-row-id={row.id}
       data-row-kind={row.kind}
       data-group-id={row.groupId}
+      data-source-count={
+        row.kind === 'mapped' ? String(row.sourceCount) : undefined
+      }
       data-multi-source={isMultiSource ? 'true' : 'false'}
       onClick={() => onRowBodyClick(row)}
-      className="group cursor-pointer bg-white transition-colors hover:bg-gray-50"
+      className={cn(
+        'cursor-pointer bg-white transition-colors hover:bg-gray-50',
+      )}
     >
       <td
         data-testid="flat-cell-target-table"
         title={targetTable ?? undefined}
-        className="sticky left-0 z-10 w-44 truncate border-b border-gray-100 bg-white px-3 py-2 text-slate-700 transition-colors group-hover:bg-gray-50"
+        className={cn(
+          'truncate border-b border-gray-100 px-3 py-2.5 align-top text-sm text-slate-700',
+          // Left-accent border for multi-source rows. Painted on the
+          // first cell so the accent sits in the row's padding and
+          // does not add width. Adjacent siblings render a continuous
+          // vertical line; scattered siblings each show their own
+          // accent (accepted side effect of the locked sort).
+          isMultiSource && 'border-l-2 border-slate-300',
+        )}
       >
-        {targetTable ?? <span className="text-slate-300">—</span>}
+        {targetTable ?? <span className="text-gray-300">—</span>}
       </td>
       <td
         data-testid="flat-cell-target-field"
-        className="sticky left-44 z-10 w-56 border-b border-gray-100 bg-white px-3 py-2 transition-colors group-hover:bg-gray-50"
+        className="border-b border-gray-100 px-3 py-2.5 align-top text-sm"
       >
         {targetFieldName ? (
           targetCellEditable ? (
@@ -916,31 +872,21 @@ function FlatRowView({
             <FieldNameChip name={targetFieldName} />
           )
         ) : (
-          <span className="text-slate-300">—</span>
+          <span className="text-gray-300">—</span>
         )}
       </td>
       <td
         data-testid="flat-cell-source-table"
         title={sourceTableName ?? undefined}
-        className="w-44 truncate border-b border-gray-100 px-3 py-2 text-slate-700"
+        className="truncate border-b border-gray-100 px-3 py-2.5 align-top text-sm text-slate-700"
       >
-        {isMultiSource && row.kind === 'mapped' ? (
-          <MultiSourceBadge count={row.sources.length} />
-        ) : sourceTableName ? (
-          sourceTableName
-        ) : (
-          <span className="text-slate-300">—</span>
-        )}
+        {sourceTableName ?? <span className="text-gray-300">—</span>}
       </td>
       <td
         data-testid="flat-cell-source-field"
-        className="w-56 border-b border-gray-100 px-3 py-2"
+        className="border-b border-gray-100 px-3 py-2.5 align-top text-sm"
       >
-        {isMultiSource && row.kind === 'mapped' ? (
-          <span className="block truncate text-[11px] italic text-slate-500">
-            {row.sources.length} fields combined
-          </span>
-        ) : sourceFieldName ? (
+        {sourceFieldName ? (
           sourceCellClickable ? (
             <button
               ref={sourceCellRef}
@@ -961,9 +907,8 @@ function FlatRowView({
             <FieldNameChip name={sourceFieldName} />
           )
         ) : row.kind === 'unmapped-target' ? (
-          // Target-only row clickable to pick a source. Routes through
-          // createFromUnmapped on commit (handleSourcePickerCommit
-          // branches on targetFieldIdForCreate).
+          // Target-only row clickable to pick a source. Routes
+          // through createFromUnmapped on commit.
           <button
             ref={sourceCellRef}
             type="button"
@@ -973,7 +918,7 @@ function FlatRowView({
               onSourceCellClick(row, e.currentTarget)
             }}
             className={cn(
-              'inline-flex items-center justify-start rounded px-1 py-0.5 text-[11px]',
+              'inline-flex items-center justify-start rounded px-1 py-0.5 text-sm',
               'italic text-slate-400 hover:bg-blue-100/60 hover:text-slate-600',
               'focus:outline-none focus-visible:ring-1 focus-visible:ring-blue-500',
             )}
@@ -981,27 +926,29 @@ function FlatRowView({
             Pick a source…
           </button>
         ) : (
-          <span className="text-slate-300">—</span>
+          <span className="text-gray-300">—</span>
         )}
       </td>
       <td
         data-testid="flat-cell-confidence"
-        className="w-32 border-b border-gray-100 px-3 py-2"
+        className="border-b border-gray-100 px-3 py-2.5 align-top text-right text-sm tabular-nums"
       >
         {confidence === null || confidenceBand === null ? (
-          <span className="text-slate-300">—</span>
+          <span className="text-gray-300">—</span>
         ) : (
-          <ConfidenceBar confidence={confidence} band={confidenceBand} />
+          <span className={CONFIDENCE_BAND_TEXT[confidenceBand]}>
+            {Math.round(confidence)}%
+          </span>
         )}
       </td>
       <td
         data-testid="flat-cell-status"
         title={statusTooltip}
-        className="w-32 border-b border-gray-100 px-3 py-2"
+        className="border-b border-gray-100 px-3 py-2.5 align-top text-center"
       >
-        <StatusPill status={displayStatus} />
+        <StatusDot status={displayStatus} />
       </td>
-      <td className="sticky right-0 z-10 w-20 border-b border-gray-100 bg-white px-3 py-2 transition-colors group-hover:bg-gray-50">
+      <td className="border-b border-gray-100 px-3 py-2.5 align-top">
         <FlatRowActions
           rowId={row.id}
           isBusy={isBusy}
@@ -1009,6 +956,8 @@ function FlatRowView({
           approveTooltip={actions.approveTooltip}
           onReject={actions.onReject}
           rejectTooltip={actions.rejectTooltip}
+          onEdit={actions.onEdit}
+          editTooltip={actions.editTooltip}
         />
       </td>
     </tr>

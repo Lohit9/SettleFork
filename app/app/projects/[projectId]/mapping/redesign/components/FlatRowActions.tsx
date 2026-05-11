@@ -1,31 +1,28 @@
 'use client'
 
-import { Check, X } from 'lucide-react'
+import { Check, Edit3, X } from 'lucide-react'
 import { cn } from '@/components/ui/utils'
 
 // ─────────────────────────────────────────────────────────────────────────────
 // FlatRowActions — per-row action buttons for the Mapping list view.
 // ─────────────────────────────────────────────────────────────────────────────
 //
-// Two actions, always visible (NOT hover-revealed — divergence from
+// Three actions, always visible (NOT hover-revealed — divergence from
 // the target-led FieldMappingRow per founder review, justified by the
 // Big-4 audit workflow expecting visible affordances):
 //
-//   ✓ Approve   green   approve a mapping (TFM-level for mapped rows;
-//                       not rendered for already-approved or rows that
-//                       are not approvable)
-//   ✗ Reject    red     reject the row (delete a source attribution,
-//                       reject the whole TFM, or flag an unmapped row)
-//
-// Edit (✏) was dropped at the second polish pass — every edit flow has
-// a direct cell-click affordance (source/target cells open inline
-// pickers; row body click opens the drawer). The Edit button was
-// redundant chrome.
+//   ✓ Approve   green     approve the mapping (TFM-atomic — approving
+//                         one row of a multi-source TFM approves all
+//                         siblings)
+//   ✗ Reject    red       reject the row (per-source: deletes this
+//                         attribution; last-source reject cascades the
+//                         target to unmapped)
+//   ✏ Edit      neutral   opens the drawer with the matching source
+//                         highlighted (mapped rows only)
 //
 // Each handler is optional: when undefined the corresponding button is
-// NOT rendered (the prior "render-disabled" pattern was traded for
-// a tighter visual that matches the founder's reference shot — empty
-// gutter when no action is applicable, never a greyed-out icon).
+// NOT rendered (omitted, not disabled). Tighter visual — empty gutter
+// when no action applies, never a greyed-out icon.
 
 export interface FlatRowActionsProps {
   /**
@@ -46,6 +43,16 @@ export interface FlatRowActionsProps {
 
   onReject?: () => void
   rejectTooltip?: string
+
+  /**
+   * Edit handler — opens the drawer (with matching source highlighted
+   * for mapped multi-source rows). Optional; omitted on row kinds
+   * where Edit isn't meaningful (e.g. unmapped rows whose primary
+   * edit affordance is the cell-level "Pick a source…" / "Pick a
+   * target…" button).
+   */
+  onEdit?: () => void
+  editTooltip?: string
 }
 
 export function FlatRowActions({
@@ -55,6 +62,8 @@ export function FlatRowActions({
   approveTooltip,
   onReject,
   rejectTooltip,
+  onEdit,
+  editTooltip,
 }: FlatRowActionsProps) {
   return (
     <div
@@ -86,6 +95,18 @@ export function FlatRowActions({
           <X aria-hidden="true" className="h-3.5 w-3.5" />
         </ActionIconButton>
       ) : null}
+      {onEdit ? (
+        <ActionIconButton
+          testId="flat-row-action-edit"
+          ariaLabel="Edit mapping"
+          tooltip={editTooltip ?? 'Open mapping in drawer'}
+          variant="edit"
+          disabled={isBusy}
+          onClick={onEdit}
+        >
+          <Edit3 aria-hidden="true" className="h-3.5 w-3.5" />
+        </ActionIconButton>
+      ) : null}
     </div>
   )
 }
@@ -94,7 +115,7 @@ interface ActionIconButtonProps {
   testId: string
   ariaLabel: string
   tooltip: string
-  variant: 'approve' | 'reject'
+  variant: 'approve' | 'reject' | 'edit'
   disabled?: boolean
   onClick?: () => void
   children: React.ReactNode
@@ -131,6 +152,7 @@ function ActionIconButton({
         'disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:bg-transparent disabled:hover:text-slate-500',
         variant === 'approve' && 'hover:bg-green-100 hover:text-green-700',
         variant === 'reject' && 'hover:bg-red-100 hover:text-red-700',
+        variant === 'edit' && 'hover:bg-slate-100 hover:text-slate-700',
       )}
     >
       {children}

@@ -281,11 +281,12 @@ describe('MappingListView — action buttons per row kind', () => {
     ).toBeInTheDocument()
   })
 
-  it('multi-source TFM renders as ONE row with multi-source attribute + badge', () => {
-    // Third polish pass: Option C (parent + indented children) was
-    // dropped in favor of a single compact row per TFM with a `N×`
-    // badge in the source-table cell. Per-contributor edits now
-    // route exclusively through the drawer.
+  it('multi-source TFM renders N independent flat rows with shimmed contributor ids + accent border', () => {
+    // Sixth polish pass: multi-source TFMs emit N independent flat
+    // rows (one per source), not one compact row with a badge.
+    // The renderer paints a left-accent border on each row so
+    // siblings remain visually identifiable even when scattered by
+    // the global sort.
     const mutations = makeMutations()
     const result = makeResult([makeMultiSourceMapped()])
     render(
@@ -297,22 +298,22 @@ describe('MappingListView — action buttons per row kind', () => {
       />,
     )
 
-    const row = findRow('tfm-multi')
-    expect(row.getAttribute('data-row-kind')).toBe('mapped')
-    expect(row.getAttribute('data-multi-source')).toBe('true')
-    // Blue `N×` badge surfaces the source count.
-    expect(within(row).getByTestId('multi-source-count-badge'))
-      .toHaveTextContent('2×')
-    // No child rows exist anymore — verify no `<tfm>::<source>` ids.
-    expect(
-      document.querySelector('[data-row-id="tfm-multi::ms-a"]'),
-    ).toBeNull()
-    expect(
-      document.querySelector('[data-row-id="tfm-multi::ms-b"]'),
-    ).toBeNull()
+    const rowA = findRow('tfm-multi::ms-a')
+    const rowB = findRow('tfm-multi::ms-b')
+
+    for (const row of [rowA, rowB]) {
+      expect(row.getAttribute('data-row-kind')).toBe('mapped')
+      expect(row.getAttribute('data-multi-source')).toBe('true')
+      expect(row.getAttribute('data-source-count')).toBe('2')
+      // Both siblings share the TFM uuid as groupId.
+      expect(row.getAttribute('data-group-id')).toBe('tfm-multi')
+    }
+
+    // The bare TFM uuid is NOT itself a row id when sourceCount > 1.
+    expect(document.querySelector('[data-row-id="tfm-multi"]')).toBeNull()
   })
 
-  it('multi-source row Approve / Reject operates on the whole TFM (no per-contributor button in flat view)', async () => {
+  it('multi-source row: Approve is TFM-atomic (parent uuid); Reject is per-source (shimmed id)', async () => {
     const mutations = makeMutations()
     const result = makeResult([makeMultiSourceMapped()])
     render(
@@ -324,12 +325,37 @@ describe('MappingListView — action buttons per row kind', () => {
       />,
     )
 
-    const row = findRow('tfm-multi')
-    fireEvent.click(within(row).getByTestId('flat-row-action-approve'))
+    const rowA = findRow('tfm-multi::ms-a')
+    fireEvent.click(within(rowA).getByTestId('flat-row-action-approve'))
+    // Approve routes through parentRow.id — TFM-atomic, siblings inherit.
     expect(mutations.approveTfm).toHaveBeenCalledWith('tfm-multi')
 
-    fireEvent.click(within(row).getByTestId('flat-row-action-reject'))
-    expect(mutations.rejectTfm).toHaveBeenCalledWith('tfm-multi')
+    fireEvent.click(within(rowA).getByTestId('flat-row-action-reject'))
+    // Reject routes through the shimmed contributor id so the server
+    // deletes only this attribution (sibling row 'tfm-multi::ms-b'
+    // stays mapped).
+    expect(mutations.rejectTfm).toHaveBeenCalledWith('tfm-multi::ms-a')
+  })
+
+  it('multi-source row: Edit button surfaces; click opens drawer with this source highlighted', async () => {
+    const mutations = makeMutations()
+    const onOpenDrawer = vi.fn()
+    const result = makeResult([makeMultiSourceMapped()])
+    render(
+      <MappingListView
+        filteredResult={result}
+        showUnmappedSourceFields={false}
+        mutations={mutations}
+        onOpenDrawer={onOpenDrawer}
+      />,
+    )
+
+    const rowA = findRow('tfm-multi::ms-a')
+    fireEvent.click(within(rowA).getByTestId('flat-row-action-edit'))
+    // Edit reuses the row-body click handler — drawer opens keyed on
+    // the TFM uuid (groupId) with the clicked contributor's source
+    // field id as highlight.
+    expect(onOpenDrawer).toHaveBeenCalledWith('tfm-multi', 'sf-prodsku')
   })
 
   it('unmapped-target: Approve omitted; Reject calls setUnmappedRowRejected with targetFieldId', () => {
@@ -359,7 +385,10 @@ describe('MappingListView — action buttons per row kind', () => {
 })
 
 describe('MappingListView — row body click + cell click', () => {
-  it('clicking a row body opens the drawer with no highlighted source for single rows', () => {
+  it('clicking a single-source row body opens the drawer with the source highlighted', () => {
+    // Sixth polish pass: every mapped flat row represents one source
+    // attribution and the drawer opens anchored to that source. For
+    // single-source TFMs the highlight is the lone source.
     const mutations = makeMutations()
     const onOpenDrawer = vi.fn()
     const result = makeResult([makeSingleSourceMapped()])
@@ -373,14 +402,10 @@ describe('MappingListView — row body click + cell click', () => {
     )
 
     fireEvent.click(findRow('tfm-1'))
-    expect(onOpenDrawer).toHaveBeenCalledWith('tfm-1', null)
+    expect(onOpenDrawer).toHaveBeenCalledWith('tfm-1', 'sf-1')
   })
 
-  it('clicking a multi-source row body opens the drawer keyed on the TFM (no per-contributor highlight)', () => {
-    // The Option C parent+children layout was dropped at the third
-    // polish pass. Multi-source TFMs are one row; the drawer opens
-    // with all sources rendered equally (the user chooses which to
-    // edit inside the drawer).
+  it('clicking a multi-source row body opens the drawer keyed on the TFM with this contributor highlighted', () => {
     const mutations = makeMutations()
     const onOpenDrawer = vi.fn()
     const result = makeResult([makeMultiSourceMapped()])
@@ -393,8 +418,9 @@ describe('MappingListView — row body click + cell click', () => {
       />,
     )
 
-    fireEvent.click(findRow('tfm-multi'))
-    expect(onOpenDrawer).toHaveBeenCalledWith('tfm-multi', null)
+    fireEvent.click(findRow('tfm-multi::ms-b'))
+    // groupId (bare TFM uuid) + the clicked row's own source field id.
+    expect(onOpenDrawer).toHaveBeenCalledWith('tfm-multi', 'sf-assyitem')
   })
 
   it('clicking an action button does NOT bubble to the row body (drawer does not open)', () => {
