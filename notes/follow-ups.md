@@ -108,3 +108,42 @@ The action sits as orphan compiled-but-unused export.
 remain (`grep -rn previewEditInvalidation app/ lib/ tests/`),
 remove the action + its error-code union + result type. No
 migration impact — the action is pure-read.
+
+## Path D POC answer-key inlining duplicates `formatPocAnswerKeyBlock`
+
+**Surfaced by:** `feat/transform-agent-context-blocks` (PR 1, 2026-05-12)
+
+Path D uses bespoke POC answer-key inlining at
+[`lib/ai/path-d-system-prompt.ts:672-684`](../lib/ai/path-d-system-prompt.ts#L672-L684)
+(predates the shared `formatPocAnswerKeyBlock` helper added to
+`lib/ai/context-builder.ts` in PR 1). Migrate Path D to call the shared
+helper for consistency. Byte content is currently identical — the
+poc-answer-key-block snapshot test pins the shared helper's bytes
+against the inlining shape so any drift will be caught at test-time.
+
+**Why not in PR 1:** Path D's user-message builder positions the POC
+block last (immediately before `TASK`); moving the emission into
+`formatDocumentsForPrompt` (the obvious "universal helper") would
+relocate the block inside `<documentation>` and break Path D's
+intentional positional-authority semantic. The shared-helper approach
+preserves both call sites' positional control while still
+deduplicating the byte content.
+
+**Server-side fix sketch:** Replace the bespoke `pocBlock` construction
+in `buildPathDUserMessage` with `formatPocAnswerKeyBlock(pocAnswerKey)`.
+One-line change. Update or remove the Path-D-specific snapshot bytes
+that exercise the inlining path.
+
+---
+
+## TransformContent toast does not surface VA-skip count
+
+**Surfaced by:** `feat/transform-agent-context-blocks` (PR 1, 2026-05-12)
+
+`autoGenerateAllTransforms` now returns
+`{ success, generated, failed, skipped? }`, but
+[`TransformContent.tsx`](../app/app/projects/%5BprojectId%5D/transform/TransformContent.tsx)'s
+"Generating transforms..." toast reads only `generated` / `failed`.
+Update the toast copy to include `"N skipped (already populated)"` when
+`skipped > 0` so users understand why the count doesn't match TFM
+total. Single-file UI tweak; separate PR per single-territory rule.

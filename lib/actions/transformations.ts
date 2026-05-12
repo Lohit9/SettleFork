@@ -99,7 +99,20 @@ import { withProvenanceGuidance } from '@/lib/ai/agent-provenance-guidance'
 import { EMIT_TRANSFORM_SQL_TOOL } from '@/lib/ai/tool-schemas'
 import { extractTransformSQL } from '@/lib/ai/sql-extractor'
 import { checkAIRateLimit } from '@/lib/ai/rate-limit'
-import { buildAIContext, formatFieldForPrompt, formatDocumentsForPrompt } from '@/lib/ai/context-builder'
+import {
+  buildAIContext,
+  formatFieldForPrompt,
+  formatDocumentsForPrompt,
+  formatPocAnswerKeyBlock,
+} from '@/lib/ai/context-builder'
+import {
+  formatLookupTablesBlock,
+  formatProjectDecisionsBlock,
+  formatTransformationIntentBlock,
+  type ProjectDecisionRow,
+  type ProjectLookupTableRow,
+} from '@/lib/ai/project-context-blocks'
+import { composeTransformUserMessage } from '@/lib/ai/transform-prompt'
 import { fieldNeedsTransform, wrapFieldRefsInJsonb } from '@/lib/utils/transform-helpers'
 import { buildJoinSpec } from '@/lib/utils/transform-cross-table'
 import { resolveTransformationIntent } from '@/lib/utils/transformation-intent'
@@ -495,6 +508,40 @@ async function loadTfmContext(tfmId: string): Promise<TfmContext | null> {
     primarySource,
     contributors,
     tableMapping,
+  }
+}
+
+// ─── loadProjectContextBlocks ─────────────────────────────────────────────────
+//
+// Fetches project-scoped Path D outputs (decisions + lookup tables) for
+// inclusion in agent user messages via the formatters at
+// `lib/ai/project-context-blocks.ts`. Empty arrays when the project has none.
+// Read-only; caller is responsible for prior `requireProjectPermission`
+// gating. Uses `supabaseAdmin` to match `loadTfmContext`'s precedent
+// (perm-gated reads bypass RLS for predictable error envelopes).
+async function loadProjectContextBlocks(
+  projectId: string,
+): Promise<{ decisions: ProjectDecisionRow[]; lookupTables: ProjectLookupTableRow[] }> {
+  const [{ data: decisions }, { data: lookupTables }] = await Promise.all([
+    supabaseAdmin
+      .from('project_decisions')
+      .select(
+        'id, decision_type, title, description, ai_recommendation, alternatives, customer_decision, applies_to, status',
+      )
+      .eq('project_id', projectId)
+      .order('created_at', { ascending: true }),
+    supabaseAdmin
+      .from('project_lookup_tables')
+      .select(
+        'id, name, description, mappings, applies_to_fields, data_quality_notes, customer_approved',
+      )
+      .eq('project_id', projectId)
+      .order('created_at', { ascending: true }),
+  ])
+
+  return {
+    decisions: (decisions ?? []) as ProjectDecisionRow[],
+    lookupTables: (lookupTables ?? []) as ProjectLookupTableRow[],
   }
 }
 
@@ -1083,7 +1130,20 @@ Always preserve NULL and empty values unless the user explicitly instructs you t
     WHEN ... (user's specified logic)
     ELSE ...
   END
-This ensures that NULL source values do not accidentally map to a default/catch-all value. "All others" or "everything else" in the user's description means "all other NON-NULL, NON-EMPTY values" unless they explicitly say otherwise (e.g., "including nulls" or "map nulls to X"). Apply this NULL guard to ALL conditional expressions (CASE, COALESCE chains, IIF, etc.) unless the user's instruction explicitly handles nulls differently.`
+This ensures that NULL source values do not accidentally map to a default/catch-all value. "All others" or "everything else" in the user's description means "all other NON-NULL, NON-EMPTY values" unless they explicitly say otherwise (e.g., "including nulls" or "map nulls to X"). Apply this NULL guard to ALL conditional expressions (CASE, COALESCE chains, IIF, etc.) unless the user's instruction explicitly handles nulls differently.
+
+CONTEXT BLOCKS:
+The user message may include any of the following blocks. Treat them per the authority hierarchy below — most authoritative wins when guidance conflicts.
+
+- <poc_answer_key authoritative="true"> — Project-specific answer key. HIGHEST authority. When present, follow it literally; treat its prescriptions as the resolved specification for this project, overriding general guidance.
+- <description> — The user's natural-language description of THIS transformation. Authoritative over project-level defaults; use it verbatim when it conflicts with <transformation_intent>.
+- <project_decisions> — Recorded business decisions. When a decision has a non-null <customer_decision>, treat that outcome as authoritative for any transformation it applies to (check <applies_to>). When status=pending, treat <ai_recommendation> as a strong default.
+- <transformation_intent> — Per-TFM recipe from the upstream mapping pass. Honor unless contradicted by higher-authority context. The intent may reference internal shorthand codes (e.g. T-UOM-1, T-FK-CC, T-DEDUP) — these correspond by semantic context, not by name, to entries in <lookup_tables>.
+- <lookup_tables> — Reusable code-mapping dictionaries. Each <mappings> element is either an object dict {src:tgt} (use literally) OR a free-form string rule (apply as described). When the intent or description involves value mapping, prefer the lookup_table over inventing CASE entries. Do NOT add entries the lookup_table does not list.
+- <business_context> / <schema_documentation> — Reference material. Use for naming conventions, valid value lists, domain context. Lower authority than blocks above.
+
+Authority order (highest first):
+  poc_answer_key > <description> > project_decisions.customer_decision > transformation_intent > project_decisions.ai_recommendation > business_context > schema_documentation > general training`
 
 // ─── wrapWithNullGuard ────────────────────────────────────────────────────────
 //
@@ -1223,6 +1283,23 @@ export async function generateTransform(
 
   const tgtTableName = ctx.targetTable.name
   const transformDocBlock = formatDocumentsForPrompt(txCtx.documents)
+  const pocBlock = formatPocAnswerKeyBlock(txCtx.documents.poc_answer_key)
+
+  // Project-scoped Path D outputs — fetched once per call. All decisions /
+  // lookup tables for the project are included; the agent self-selects
+  // relevant ones (per PR 1 STOP 1 Q2/Q3). Empty arrays format to ''.
+  const { decisions: projectDecisions, lookupTables: projectLookupTables } =
+    await loadProjectContextBlocks(ctx.projectId)
+  const lookupTablesBlock = formatLookupTablesBlock(projectLookupTables)
+  const projectDecisionsBlock = formatProjectDecisionsBlock(projectDecisions)
+
+  // Per-TFM intent — falls back to ai_reasoning's `[Combination: …]` extractor
+  // for legacy (Path B/C) records that pre-date the structured column.
+  const resolvedIntent = resolveTransformationIntent(
+    ctx.tfm.transformation_intent,
+    ctx.tfm.ai_reasoning,
+  )
+  const transformationIntentBlock = formatTransformationIntentBlock(resolvedIntent)
 
   const allSrcCtxFields = txCtx.source_tables.flatMap((t) => t.fields)
   const srcFieldCtx = srcField ? allSrcCtxFields.find((f) => f.name === srcField.name) : null
@@ -1313,24 +1390,48 @@ The user has updated their description. Modify the existing SQL expression above
       ).data?.type_compatibility ?? null
     : null
 
-  const userMessage = `${sourceBlock}
-${contributingSourcesBlock}
-<target_field>
-Field: ${tgtTableName}.${tgtField.name}
-Type: ${(tgtFieldFull as { data_type: string }).data_type}${(tgtFieldFull as { inferred_type?: string | null }).inferred_type ? ` (${(tgtFieldFull as { inferred_type?: string | null }).inferred_type})` : ''}
-Nullable: ${(tgtFieldFull as { is_nullable: boolean }).is_nullable}${checkConstraintLine}
-${tgtFieldCtx && tgtFieldCtx.cardinality > 0 ? `Distinct values: ${tgtFieldCtx.cardinality}` : ''}
-</target_field>
+  const userMessage = composeTransformUserMessage({
+    sourceBlock,
+    contributingSourcesBlock,
+    targetTableName: tgtTableName,
+    targetFieldName: tgtField.name,
+    targetDataType: (tgtFieldFull as { data_type: string }).data_type,
+    targetInferredType: (tgtFieldFull as { inferred_type?: string | null }).inferred_type ?? null,
+    targetIsNullable: (tgtFieldFull as { is_nullable: boolean }).is_nullable,
+    checkConstraintLine,
+    targetCardinalityLine:
+      tgtFieldCtx && tgtFieldCtx.cardinality > 0 ? `Distinct values: ${tgtFieldCtx.cardinality}` : '',
+    typeCompat,
+    lookupTablesBlock,
+    projectDecisionsBlock,
+    documentationBlock: transformDocBlock,
+    intelligenceContext: txCtx.intelligence_context ?? '',
+    iterationBlock,
+    transformationIntentBlock,
+    description,
+    pocBlock,
+  })
 
-<type_compatibility>
-${typeCompat ?? 'Not specified'}
-</type_compatibility>
-${transformDocBlock}
-${txCtx.intelligence_context ? txCtx.intelligence_context + '\n\n' : ''}${iterationBlock}<description>
-${description}
-</description>
-
-Generate the SQL transformation expression.`
+  // Debug-flag-gated prompt dump (PR 1 STOP 1 Q9). Enabled by setting
+  // DEBUG_TRANSFORM_PROMPT=1 — useful for verifying assembled-message
+  // shape locally without triggering an LLM call. Logs char count only;
+  // never logs raw prompt content in production.
+  if (process.env.DEBUG_TRANSFORM_PROMPT === '1') {
+    console.log(
+      '[transformations] generateTransform user message: chars=' +
+        userMessage.length +
+        ' words=' +
+        userMessage.split(/\s+/).length +
+        ' poc=' +
+        (pocBlock ? 'yes' : 'no') +
+        ' decisions=' +
+        projectDecisions.length +
+        ' lookup_tables=' +
+        projectLookupTables.length +
+        ' intent=' +
+        (resolvedIntent ? 'yes' : 'no'),
+    )
+  }
 
   return guardWrites(ctx.projectId, async () => {
     // PR 12.2 B-1: tool use under flag ON; legacy text+extractTransformSQL under flag OFF.
@@ -2095,6 +2196,13 @@ export async function autoGenerateAllTransforms(
   success: boolean
   generated: number
   failed: number
+  /**
+   * Count of VAs skipped because their `target_field_mappings.combination_sql`
+   * is already populated (Path D-authored literal or user-edited draft).
+   * Per-row `generateTransform` invocations bypass this skip — direct
+   * invocation on a VA still runs the agent unconditionally.
+   */
+  skipped?: number
   error?: string
   errorCode?: TransformWriteErrorCode
 }> {
@@ -2131,12 +2239,39 @@ export async function autoGenerateAllTransforms(
       }
     }
 
-    if (targets.length === 0) return { success: true, generated: 0, failed: 0 }
+    if (targets.length === 0) return { success: true, generated: 0, failed: 0, skipped: 0 }
+
+    // Skip VAs whose `combination_sql` is already populated (Path D-authored
+    // literal or user draft). The literal IS the answer; re-running the agent
+    // risks drift. FieldItem does not expose combination_sql, so we batch-
+    // fetch the column for the candidate TFM ids. Mapped TFMs are never
+    // skipped — combination_sql is owned by VA-author flows and is null for
+    // mapped TFMs in production. Per-row `generateTransform` is unchanged.
+    const vaCandidateIds = targets
+      .filter((f) => f.isValueAssignment)
+      .map((f) => f.fieldMappingId)
+    const skipIds = new Set<string>()
+    if (vaCandidateIds.length > 0) {
+      const { data: comboRows } = await supabaseAdmin
+        .from('target_field_mappings')
+        .select('id, combination_sql')
+        .in('id', vaCandidateIds)
+      for (const row of (comboRows ?? []) as { id: string; combination_sql: string | null }[]) {
+        if (row.combination_sql != null && row.combination_sql.trim().length > 0) {
+          skipIds.add(row.id)
+        }
+      }
+    }
 
     let generated = 0
     let failed = 0
+    let skipped = 0
 
     for (const field of targets) {
+      if (skipIds.has(field.fieldMappingId)) {
+        skipped++
+        continue
+      }
       const autoDesc = field.typeCompatibility
         ? `Transform ${field.sourceFieldName} to ${field.targetFieldName}: ${field.typeCompatibility}`
         : `Map ${field.sourceFieldName} (${field.sourceFieldDataType}) to ${field.targetFieldName} (${field.targetFieldDataType})`
@@ -2146,7 +2281,7 @@ export async function autoGenerateAllTransforms(
       else failed++
     }
 
-    return { success: true, generated, failed }
+    return { success: true, generated, failed, skipped }
   })
 }
 
@@ -2693,6 +2828,9 @@ Examples of good descriptions:
 - "Convert boolean representations (Y/N, yes/no, 1/0, true/false) to PostgreSQL TRUE/FALSE"
 - "Strip CUST- prefix and return the numeric portion as a string"
 
+CONTEXT BLOCKS:
+The user message may include <poc_answer_key authoritative="true"> (highest authority — follow literally), <project_decisions> (recorded business outcomes — honor decided customer_decision over pending ai_recommendation), <lookup_tables> (reusable value dictionaries — reference them by name when the mapping involves a known code list), and <transformation_intent> (per-TFM recipe from the upstream mapping pass). When these blocks describe specific mappings, value lists, or rules, the suggested description should reflect them rather than restate generic instructions. Authority order: poc_answer_key > project_decisions.customer_decision > transformation_intent > project_decisions.ai_recommendation > schema/business docs > general training.
+
 Return ONLY the description text — no explanation, no preamble, no markdown.`
 
 export async function suggestTransformDescription(
@@ -2776,6 +2914,17 @@ export async function suggestTransformDescription(
     : null
   const tgtFieldCtx = aiCtx.target_tables.flatMap((t) => t.fields).find((f) => f.name === tgtField.name)
   const docsBlock = formatDocumentsForPrompt(aiCtx.documents)
+  const pocBlock = formatPocAnswerKeyBlock(aiCtx.documents.poc_answer_key)
+
+  const { decisions: projectDecisions, lookupTables: projectLookupTables } =
+    await loadProjectContextBlocks(ctx.projectId)
+  const lookupTablesBlock = formatLookupTablesBlock(projectLookupTables)
+  const projectDecisionsBlock = formatProjectDecisionsBlock(projectDecisions)
+  const resolvedIntent = resolveTransformationIntent(
+    ctx.tfm.transformation_intent,
+    ctx.tfm.ai_reasoning,
+  )
+  const transformationIntentBlock = formatTransformationIntentBlock(resolvedIntent)
 
   const typeCompat = ctx.primarySource?.mappingSourceId
     ? (await supabase
@@ -2790,6 +2939,7 @@ export async function suggestTransformDescription(
     ? `<source_field>\n${srcFieldCtx ? formatFieldForPrompt(srcFieldCtx) : `${(srcFieldFull as { name: string }).name} (${(srcFieldFull as { data_type: string }).data_type})\n  Nullable: ${(srcFieldFull as { is_nullable: boolean }).is_nullable}`}\n</source_field>`
     : `<source_field>\nNo source field — this is a value assignment. Define a constant or expression for the target field.\n</source_field>`
 
+  // Same assembly order as generateTransform — POC last for positional authority.
   const userMessage = `${sourceBlock}
 
 <target_field>
@@ -2803,8 +2953,8 @@ Type compatibility: ${typeCompat ?? 'Not specified'}
 Confidence: ${ctx.primarySource?.mappingSourceId ? (ctx.tfm.confidence ?? 'N/A') : (ctx.tfm.confidence ?? 'N/A')}%
 AI reasoning: ${ctx.tfm.ai_reasoning ?? 'Not available'}
 </mapping_context>
-${docsBlock}
-${aiCtx.intelligence_context ? aiCtx.intelligence_context + '\n\n' : ''}Suggest a transformation description for this field mapping.`
+${lookupTablesBlock ? '\n' + lookupTablesBlock + '\n' : ''}${projectDecisionsBlock ? '\n' + projectDecisionsBlock + '\n' : ''}${docsBlock}
+${aiCtx.intelligence_context ? aiCtx.intelligence_context + '\n\n' : ''}${transformationIntentBlock ? transformationIntentBlock + '\n\n' : ''}${pocBlock ? pocBlock + '\n\n' : ''}Suggest a transformation description for this field mapping.`
 
   let suggestion: string
   let llmCallId: string | null = null
