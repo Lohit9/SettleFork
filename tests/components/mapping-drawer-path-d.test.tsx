@@ -274,7 +274,12 @@ describe('MappingDrawer — UnmappedBody (Phase E PR α)', () => {
         pathDOutputs={pathDOutputs()}
       />,
     )
-    expect(screen.getByTestId('drawer-section-source')).toBeInTheDocument()
+    // PR 3b: body SOURCE section retired. UnmappedBody renders
+    // [rejected banner] → TARGET FIELD → COVERAGE → DECISIONS.
+    expect(screen.queryByTestId('drawer-section-source')).toBeNull()
+    expect(
+      screen.getByTestId('drawer-section-target-field'),
+    ).toBeInTheDocument()
     const coverageSection = screen.getByTestId('drawer-section-coverage')
     expect(
       within(coverageSection).getByTestId('drawer-coverage-label').textContent,
@@ -282,7 +287,8 @@ describe('MappingDrawer — UnmappedBody (Phase E PR α)', () => {
     expect(screen.queryByTestId('drawer-section-decisions')).toBeNull()
   })
 
-  it('renders DECISIONS section when coverage row has applicable decisions', () => {
+  it('renders DECISIONS section when coverage row has applicable decisions', async () => {
+    const user = userEvent.setup()
     const row = unmapped()
     const cov = coverageRow({
       id: 'cov-x',
@@ -312,39 +318,23 @@ describe('MappingDrawer — UnmappedBody (Phase E PR α)', () => {
         pathDOutputs={outputs}
       />,
     )
+    // PR 3b refinement — DECISIONS defaults to collapsed; click to expand
+    // before asserting on inner content.
     const decisionsSection = screen.getByTestId('drawer-section-decisions')
+    await user.click(
+      within(decisionsSection).getByTestId('drawer-decisions-toggle'),
+    )
     expect(
       within(decisionsSection).getByTestId('drawer-decision-title').textContent,
     ).toBe('Acknowledge legacy gap')
   })
 
-  it('hides COVERAGE + DECISIONS while the create-mapping form is mounted', async () => {
-    const row = unmapped()
-    const cov = coverageRow({
-      id: 'cov-x',
-      target_field_id: row.targetField.id,
-      coverage_status: 'gap',
-    })
-    const outputs = pathDOutputs({
-      coverageByTargetFieldId: new Map([[row.targetField.id, cov]]),
-      decisionsByCoverageId: new Map([[cov.id, [decisionRow({ id: 'dec-x' })]]]),
-    })
-    const user = userEvent.setup()
-    render(
-      <MappingDrawer
-        row={row}
-        isOpen={true}
-        onClose={() => {}}
-        pathDOutputs={outputs}
-        projectId="project-1"
-        availableSourceFields={[]}
-      />,
-    )
-    expect(screen.getByTestId('drawer-section-coverage')).toBeInTheDocument()
-    await user.click(screen.getByTestId('mapping-drawer-edit-pencil'))
-    expect(screen.queryByTestId('drawer-section-coverage')).toBeNull()
-    expect(screen.queryByTestId('drawer-section-decisions')).toBeNull()
-  })
+  // PR 3b dropped per Q7 from STOP 1: the body Edit-pencil →
+  // CreateMappingForm flow is retired. COVERAGE + DECISIONS no
+  // longer have a form-active hide path — they render whenever the
+  // unmapped row has a coverage row + applicable decisions. The
+  // "hides COVERAGE + DECISIONS while the create-mapping form is
+  // mounted" assertion is moot.
 })
 
 // ── ValueAssignmentBody ────────────────────────────────────────────────────
@@ -362,7 +352,8 @@ describe('MappingDrawer — ValueAssignmentBody (Phase E PR α)', () => {
     expect(screen.queryByTestId('drawer-section-decisions')).toBeNull()
   })
 
-  it('renders DECISIONS at the tail of the body when sidecar carries TFM-applicable decisions', () => {
+  it('renders DECISIONS at the tail of the body when sidecar carries TFM-applicable decisions', async () => {
+    const user = userEvent.setup()
     const va = valueAssignment()
     const outputs = pathDOutputs({
       decisionsByTfmId: new Map([
@@ -387,6 +378,8 @@ describe('MappingDrawer — ValueAssignmentBody (Phase E PR α)', () => {
       />,
     )
     const section = screen.getByTestId('drawer-section-decisions')
+    // PR 3b refinement — DECISIONS defaults to collapsed; expand first.
+    await user.click(within(section).getByTestId('drawer-decisions-toggle'))
     expect(
       within(section).getByTestId('drawer-decision-title').textContent,
     ).toBe('Stamp NOW() on missing created_at')
@@ -419,7 +412,8 @@ describe('MappingDrawer — MappedBody (Phase E PR α)', () => {
     expect(screen.queryByTestId('drawer-section-decisions')).toBeNull()
   })
 
-  it('renders DATA QUALITY for each unique DQ issue across the row\'s sources', () => {
+  it('renders DATA QUALITY for each unique DQ issue across the row\'s sources', async () => {
+    const user = userEvent.setup()
     const row = mapped({
       sources: [
         source({
@@ -457,6 +451,8 @@ describe('MappingDrawer — MappedBody (Phase E PR α)', () => {
       />,
     )
     const section = screen.getByTestId('drawer-section-data-quality')
+    // PR 3b refinement — DATA QUALITY defaults to collapsed; expand first.
+    await user.click(within(section).getByTestId('drawer-data-quality-toggle'))
     const items = within(section).getAllByTestId('drawer-dq-item')
     expect(items).toHaveLength(2)
     // Severity sort: critical first.
@@ -464,7 +460,8 @@ describe('MappingDrawer — MappedBody (Phase E PR α)', () => {
     expect(items[1]?.getAttribute('data-dq-id')).toBe('dq-B1')
   })
 
-  it('de-duplicates DQ issues that are referenced by multiple sources on the row', () => {
+  it('de-duplicates DQ issues that are referenced by multiple sources on the row', async () => {
+    const user = userEvent.setup()
     // Same DQ id appears in two sources' lookup arrays — the row
     // should render it only once.
     const row = mapped({
@@ -508,10 +505,13 @@ describe('MappingDrawer — MappedBody (Phase E PR α)', () => {
         pathDOutputs={outputs}
       />,
     )
+    // PR 3b refinement — DATA QUALITY defaults to collapsed; expand first.
+    await user.click(screen.getByTestId('drawer-data-quality-toggle'))
     expect(screen.getAllByTestId('drawer-dq-item')).toHaveLength(1)
   })
 
-  it('renders DECISIONS keyed by TFM id', () => {
+  it('renders DECISIONS keyed by TFM id', async () => {
+    const user = userEvent.setup()
     const row = mapped()
     const outputs = pathDOutputs({
       decisionsByTfmId: new Map([
@@ -536,6 +536,8 @@ describe('MappingDrawer — MappedBody (Phase E PR α)', () => {
       />,
     )
     const section = screen.getByTestId('drawer-section-decisions')
+    // PR 3b refinement — DECISIONS defaults to collapsed; expand first.
+    await user.click(within(section).getByTestId('drawer-decisions-toggle'))
     expect(
       within(section).getByTestId('drawer-decision-title').textContent,
     ).toBe('Map to canonical account')
@@ -565,6 +567,80 @@ describe('MappingDrawer — MappedBody (Phase E PR α)', () => {
     const decisionsIndex = sectionTestIds.indexOf('drawer-section-decisions')
     expect(dqIndex).toBeGreaterThan(-1)
     expect(decisionsIndex).toBeGreaterThan(dqIndex)
+  })
+
+  // ── PR 3b refinement — DQ + Decisions collapse pattern ──────────────────
+  //
+  // Generalised from the sample-values disclosure: each enrichment section
+  // mounts as a `Data quality (N)` / `Decisions (N)` button chevron + count
+  // chip that toggles the section's body. Default state is collapsed so
+  // multi-issue rows don't push everything below offscreen.
+  it('keeps DATA QUALITY contents collapsed by default; toggle expands the list', async () => {
+    const user = userEvent.setup()
+    const row = mapped()
+    const outputs = pathDOutputs({
+      dqIssuesBySourceFieldId: new Map([
+        ['sf-1', [dqRow({ id: 'dq-collapse', severity: 'critical' })]],
+      ]),
+    })
+    render(
+      <MappingDrawer
+        row={row}
+        isOpen={true}
+        onClose={() => {}}
+        pathDOutputs={outputs}
+      />,
+    )
+    const section = screen.getByTestId('drawer-section-data-quality')
+    // Toggle exists with "Data quality (N)" label.
+    const toggle = within(section).getByTestId('drawer-data-quality-toggle')
+    expect(toggle.textContent).toContain('Data quality (1)')
+    // Collapsed default — panel + list items not in the tree.
+    expect(toggle.getAttribute('aria-expanded')).toBe('false')
+    expect(within(section).queryByTestId('drawer-data-quality-panel')).toBeNull()
+    expect(within(section).queryByTestId('drawer-dq-item')).toBeNull()
+    // Expand.
+    await user.click(toggle)
+    expect(toggle.getAttribute('aria-expanded')).toBe('true')
+    expect(
+      within(section).getByTestId('drawer-data-quality-panel'),
+    ).toBeInTheDocument()
+    expect(within(section).getAllByTestId('drawer-dq-item')).toHaveLength(1)
+  })
+
+  it('keeps DECISIONS contents collapsed by default; toggle expands the list', async () => {
+    const user = userEvent.setup()
+    const row = mapped()
+    const outputs = pathDOutputs({
+      decisionsByTfmId: new Map([
+        [
+          row.id,
+          [decisionRow({ id: 'dec-collapse', title: 'Collapsed decision' })],
+        ],
+      ]),
+    })
+    render(
+      <MappingDrawer
+        row={row}
+        isOpen={true}
+        onClose={() => {}}
+        pathDOutputs={outputs}
+      />,
+    )
+    const section = screen.getByTestId('drawer-section-decisions')
+    const toggle = within(section).getByTestId('drawer-decisions-toggle')
+    expect(toggle.textContent).toContain('Decisions (1)')
+    expect(toggle.getAttribute('aria-expanded')).toBe('false')
+    expect(within(section).queryByTestId('drawer-decisions-panel')).toBeNull()
+    expect(within(section).queryByTestId('drawer-decision-title')).toBeNull()
+    await user.click(toggle)
+    expect(toggle.getAttribute('aria-expanded')).toBe('true')
+    expect(
+      within(section).getByTestId('drawer-decisions-panel'),
+    ).toBeInTheDocument()
+    expect(
+      within(section).getByTestId('drawer-decision-title').textContent,
+    ).toBe('Collapsed decision')
   })
 })
 

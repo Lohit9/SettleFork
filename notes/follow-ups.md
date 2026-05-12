@@ -76,3 +76,74 @@ issue.
 11:34-11:35 UTC and identify the actor + action. If user-triggered via
 the UI, no further work. If from an unattributed path, surface that
 path for explicit governance.
+
+---
+
+## Orphan server action: previewEditInvalidation
+
+**Surfaced by:** `feat/drawer-body-redesign` PR 3b (2026-05-12)
+
+**Shape:** Server action `previewEditInvalidation` lives in
+[lib/actions/mappings-for-redesign.ts:2211](lib/actions/mappings-for-redesign.ts#L2211).
+Its only consumer was the drawer's `EditInvalidationDialog` —
+which the drawer dispatched between the user's "Save changes" click
+in the legacy inline `CreateMappingForm` (mode='edit') and the
+actual `editMappingSources` call. The dialog warned the user when
+the edit would invalidate N staged transformation rows.
+
+**Why it's orphan now:** PR 3b retires `CreateMappingForm` +
+`EditInvalidationDialog` entirely. Source edits now route through
+the header's per-source ✏ → `InlineSourcePicker` → direct
+`updateMappingSourceField` / `editMappingSources` calls. No preview
+step intervenes; the server actions still emit `transformReset` +
+`stagedRowsReverted` in their result for downstream toasts, but no
+UI consumer reads them today.
+
+**Why not dropped in PR 3b:** Single-territory rule — PR 3b stays
+in `app/.../mapping/redesign/` + `tests/components/`. Touching
+`lib/actions/` for a deletion is a separate cross-territory PR.
+The action sits as orphan compiled-but-unused export.
+
+**Drop in a future server-side cleanup PR.** Verify no consumers
+remain (`grep -rn previewEditInvalidation app/ lib/ tests/`),
+remove the action + its error-code union + result type. No
+migration impact — the action is pure-read.
+
+## Path D POC answer-key inlining duplicates `formatPocAnswerKeyBlock`
+
+**Surfaced by:** `feat/transform-agent-context-blocks` (PR 1, 2026-05-12)
+
+Path D uses bespoke POC answer-key inlining at
+[`lib/ai/path-d-system-prompt.ts:672-684`](../lib/ai/path-d-system-prompt.ts#L672-L684)
+(predates the shared `formatPocAnswerKeyBlock` helper added to
+`lib/ai/context-builder.ts` in PR 1). Migrate Path D to call the shared
+helper for consistency. Byte content is currently identical — the
+poc-answer-key-block snapshot test pins the shared helper's bytes
+against the inlining shape so any drift will be caught at test-time.
+
+**Why not in PR 1:** Path D's user-message builder positions the POC
+block last (immediately before `TASK`); moving the emission into
+`formatDocumentsForPrompt` (the obvious "universal helper") would
+relocate the block inside `<documentation>` and break Path D's
+intentional positional-authority semantic. The shared-helper approach
+preserves both call sites' positional control while still
+deduplicating the byte content.
+
+**Server-side fix sketch:** Replace the bespoke `pocBlock` construction
+in `buildPathDUserMessage` with `formatPocAnswerKeyBlock(pocAnswerKey)`.
+One-line change. Update or remove the Path-D-specific snapshot bytes
+that exercise the inlining path.
+
+---
+
+## TransformContent toast does not surface VA-skip count
+
+**Surfaced by:** `feat/transform-agent-context-blocks` (PR 1, 2026-05-12)
+
+`autoGenerateAllTransforms` now returns
+`{ success, generated, failed, skipped? }`, but
+[`TransformContent.tsx`](../app/app/projects/%5BprojectId%5D/transform/TransformContent.tsx)'s
+"Generating transforms..." toast reads only `generated` / `failed`.
+Update the toast copy to include `"N skipped (already populated)"` when
+`skipped > 0` so users understand why the count doesn't match TFM
+total. Single-file UI tweak; separate PR per single-territory rule.
