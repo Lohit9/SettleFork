@@ -2,7 +2,7 @@
 
 import { useCallback, useRef, useState } from 'react'
 import { cn } from '@/components/ui/utils'
-import { ArrowRight, Pencil, X } from '@/components/icons'
+import { Pencil, X } from '@/components/icons'
 import type {
   MappingRow,
   MappingSourceRef,
@@ -18,40 +18,48 @@ import { InlineSourcePicker } from './InlineSourcePicker'
 // DrawerHeader — PR 1 of drawer redesign (feat/drawer-header-rewrite).
 // ─────────────────────────────────────────────────────────────────────────────
 //
-// Two-row identity header. Row 1 carries [src] → [tgt] identity; row 2
-// carries [● status · confidence] right-aligned. Source and target
-// field names are click-to-edit inline affordances (single-source
-// mapped rows + every mapped/VA target) that open the existing
-// portal-anchored pickers used by the flat view. Multi-source mapped
-// rows show a non-editable dominant source + "+N" chip; VA rows show
-// the literal "Value assignment" label; unmapped rows show
-// "No source mapped" with the target rendered display-only.
+// Vertical FROM/TO stack header. Long field names get the full 440px
+// drawer-content width on their own row — the prior horizontal
+// `[src] → [tgt]` layout truncated aggressively at 480px on real
+// fields (e.g. `Create_Multi_Revision_Product` 28 chars + a TableBadge
+// + a pencil + an arrow + a target side).
+//
+//   ┌─────────────────────────────────────────────────┐
+//   │ FROM                                         ✕  │   ← row 1: label + close
+//   │ [src_tbl] src_field ✏  (or "+N more" multi)     │   ← row 2: source identity
+//   │                                                 │
+//   │ TO                                              │   ← row 3: label
+//   │ [tgt_tbl] tgt_field ✏                           │   ← row 4: target identity
+//   │                       ● Status · confidence     │   ← row 5: meta, right-aligned
+//   └─────────────────────────────────────────────────┘
 //
 // Per-variant render matrix:
 //
 //   mapped, sources.length === 1
-//     [SRC] src_fld ✏  →  [TGT] tgt_fld ✏     ✕
-//                                       ● Status · NN%
+//     FROM  [SRC] src_fld ✏
+//     TO    [TGT] tgt_fld ✏
 //
-//   mapped, sources.length > 1
-//     [SRC] dominant_fld  +N  →  [TGT] tgt_fld ✏     ✕
-//                                       ● Status · NN%
+//   mapped, sources.length > 1 — all N sources stacked vertically
+//     FROM  [SRC_A] field_a
+//           [SRC_B] field_b
+//           [SRC_C] field_c
+//     TO    [TGT] tgt_fld ✏
 //
 //   value_assignment
-//     Value assignment  →  [TGT] tgt_fld ✏     ✕
-//                                       ● Status · —
+//     FROM  Value assignment        (italic, no pencil)
+//     TO    [TGT] tgt_fld ✏
 //
-//   unmapped (rare in drawer — list-view route doesn't open drawer for
-//   unmapped-source rows; the only drawer-reachable unmapped variant
-//   is unmapped-target, which has a target field but no TFM)
-//     No source mapped  →  [TGT] tgt_fld     ✕
-//                                       ● Status · —
+//   unmapped (rare in drawer — only target-side unmapped reaches here)
+//     FROM  No source mapped        (italic, no pencil)
+//     TO    [TGT] tgt_fld           (no pencil — PR 2 routes through
+//                                    createFromUnmapped once the body
+//                                    affordances land)
 //
 // Edit affordances are gated by both (a) the parent threading
-// `onSwapTarget` / `onSwapSource` props AND (b) variant rules above.
-// Tests that mount `MappingDrawer` standalone (no parent commit
-// handlers) get a static header — pencils don't render, no picker
-// dependencies leak into test fixtures.
+// `onSwapTarget` / `onSwapSource` props AND (b) the variant rules
+// above. Tests that mount `MappingDrawer` standalone (no parent
+// commit handlers) get a static header — pencils don't render, no
+// picker dependencies leak into test fixtures.
 //
 // Unmapped + target pencil: deliberately omitted in PR 1. Calling
 // `updateMappingTargetField` on an unmapped row would fail UUID
@@ -59,9 +67,10 @@ import { InlineSourcePicker } from './InlineSourcePicker'
 // clicks through `createFromUnmapped` once the body affordances land.
 //
 // Source pencil + multi-source: deliberately omitted per spec Q2.
-// Editing a single source on a multi-source row is a per-card
-// affordance (PR 2) — the header's dominant-source display would be
-// misleading as an edit surface for one of N sources.
+// Multi-source rows are read-only in the header for PR 1 — every
+// source identity is visible, but per-source edit / remove / add
+// affordances ship in PR 2 (alongside the body SOURCE-section
+// retirement to remove duplication).
 //
 // Light-mode-only invariant: no `dark:` prefixes anywhere in this
 // file. Enforced by tests/lib/no-shim-in-redesign-path.test.ts.
@@ -137,6 +146,14 @@ const STATUS_CONFIG: Record<
   },
 }
 
+// FROM/TO label typography: matches the existing small-caps section
+// heading style used by `DrawerSection` in the body
+// (`text-xs font-medium uppercase tracking-wide text-slate-500`).
+// Keeps the drawer's two label types — header FROM/TO and body
+// section titles — visually unified.
+const STACK_LABEL_CLASSNAME =
+  'text-[11px] font-medium uppercase tracking-wide text-slate-500'
+
 export function DrawerHeader({
   row,
   titleId,
@@ -196,31 +213,23 @@ export function DrawerHeader({
       data-testid="mapping-drawer-header"
       className="border-b border-slate-200 bg-white px-5 py-3"
     >
+      {/*
+        Row 1 — FROM label + close button. The `mapping-drawer-header-row`
+        testid is preserved from the prior horizontal layout so existing
+        tests resolving the close-cluster anchor keep working; its
+        contents collapsed from `[source, arrow, target, close]` to
+        just `[FROM-label, close]`.
+      */}
       <div
         data-testid="mapping-drawer-header-row"
-        className="flex items-center gap-2"
+        className="flex items-center justify-between"
       >
-        <HeaderIdentitySide
-          row={row}
-          which="source"
-          titleId={null}
-          editEnabled={sourceEditEnabled}
-          pencilRef={sourcePencilRef}
-          onPencilClick={() => setOpenPicker('source')}
-        />
-        <ArrowRight
-          aria-hidden="true"
-          data-testid="mapping-drawer-header-arrow"
-          className="h-3.5 w-3.5 flex-shrink-0 text-slate-400"
-        />
-        <HeaderIdentitySide
-          row={row}
-          which="target"
-          titleId={titleId}
-          editEnabled={targetEditEnabled}
-          pencilRef={targetPencilRef}
-          onPencilClick={() => setOpenPicker('target')}
-        />
+        <span
+          data-testid="mapping-drawer-header-from-label"
+          className={STACK_LABEL_CLASSNAME}
+        >
+          FROM
+        </span>
         <button
           type="button"
           onClick={onClose}
@@ -236,9 +245,65 @@ export function DrawerHeader({
         </button>
       </div>
 
+      {/*
+        Source identity block — full row width, no truncation pressure.
+        Wrapper is `flex-col` so multi-source rows stack vertically with
+        a tight 4px gap (`gap-1`). VA / unmapped / single-source render
+        a single child; multi-source renders N children.
+      */}
+      <div
+        data-testid="mapping-drawer-header-source"
+        className="mt-1 flex min-w-0 flex-col gap-1"
+      >
+        <HeaderSourceContent
+          row={row}
+          editEnabled={sourceEditEnabled}
+          pencilRef={sourcePencilRef}
+          onPencilClick={() => setOpenPicker('source')}
+        />
+      </div>
+
+      {/*
+        TO label — 12px above the target identity (the FROM/TO vertical
+        gap). `mt-3` matches Tailwind's 12px spacing token, which is
+        the upper bound from the spec's "8–12px vertical gap between
+        FROM block and TO block".
+      */}
+      <div
+        data-testid="mapping-drawer-header-to-label"
+        className={cn('mt-3', STACK_LABEL_CLASSNAME)}
+      >
+        TO
+      </div>
+
+      {/* Target identity block — full row width, no truncation pressure. */}
+      <div
+        data-testid="mapping-drawer-header-target"
+        className="mt-1 flex min-w-0 items-center gap-1.5"
+      >
+        <TableBadge tableName={row.targetField.targetTable.name} size="sm" />
+        <span
+          id={titleId}
+          data-testid="mapping-drawer-title"
+          className="min-w-0 truncate font-mono text-base font-normal text-slate-900"
+          title={row.targetField.name}
+        >
+          {row.targetField.name}
+        </span>
+        {targetEditEnabled ? (
+          <HeaderPencilButton
+            label="Edit target field"
+            testId="mapping-drawer-header-target-pencil"
+            innerRef={targetPencilRef}
+            onClick={() => setOpenPicker('target')}
+          />
+        ) : null}
+      </div>
+
+      {/* Status + confidence meta row — own line, right-aligned. */}
       <div
         data-testid="mapping-drawer-header-meta"
-        className="mt-1.5 flex justify-end"
+        className="mt-2 flex justify-end"
       >
         <HeaderStatusBadge row={row} />
       </div>
@@ -269,65 +334,6 @@ export function DrawerHeader({
         />
       ) : null}
     </header>
-  )
-}
-
-interface HeaderIdentitySideProps {
-  row: MappingRow
-  which: 'source' | 'target'
-  /** Set on the target side so aria-labelledby resolves; null on source. */
-  titleId: string | null
-  editEnabled: boolean
-  pencilRef: React.MutableRefObject<HTMLButtonElement | null>
-  onPencilClick: () => void
-}
-
-function HeaderIdentitySide({
-  row,
-  which,
-  titleId,
-  editEnabled,
-  pencilRef,
-  onPencilClick,
-}: HeaderIdentitySideProps) {
-  if (which === 'target') {
-    return (
-      <div
-        className="flex min-w-0 flex-1 items-center gap-1.5"
-        data-testid="mapping-drawer-header-target"
-      >
-        <TableBadge tableName={row.targetField.targetTable.name} size="sm" />
-        <span
-          id={titleId ?? undefined}
-          data-testid="mapping-drawer-title"
-          className="min-w-0 truncate font-mono text-base font-normal text-slate-900"
-          title={row.targetField.name}
-        >
-          {row.targetField.name}
-        </span>
-        {editEnabled ? (
-          <HeaderPencilButton
-            label="Edit target field"
-            testId="mapping-drawer-header-target-pencil"
-            innerRef={pencilRef}
-            onClick={onPencilClick}
-          />
-        ) : null}
-      </div>
-    )
-  }
-  return (
-    <div
-      className="flex min-w-0 flex-1 items-center gap-1.5"
-      data-testid="mapping-drawer-header-source"
-    >
-      <HeaderSourceContent
-        row={row}
-        editEnabled={editEnabled}
-        pencilRef={pencilRef}
-        onPencilClick={onPencilClick}
-      />
-    </div>
   )
 }
 
@@ -364,8 +370,7 @@ function HeaderSourceContent({
       </span>
     )
   }
-  const dominant: MappingSourceRef | undefined = row.sources[0]
-  if (!dominant) {
+  if (row.sources.length === 0) {
     return (
       <span
         data-testid="mapping-drawer-header-source-label"
@@ -376,34 +381,40 @@ function HeaderSourceContent({
       </span>
     )
   }
-  const extraCount = row.sources.length - 1
+  // Mapped row: render one source-row per contributor. Single-source
+  // gets the edit pencil (the picker resolves the ordinal-0
+  // mapping_sources row via `updateMappingSourceField`); multi-source
+  // is read-only in the header for PR 1 (per-source ✏/✕/⊕ ships in
+  // PR 2 alongside the body SOURCE-section retirement). Server
+  // ordinal-asc ordering is preserved — DO NOT re-sort client-side.
+  const isSingleSource = row.sources.length === 1
   return (
     <>
-      <TableBadge tableName={dominant.sourceTable.name} size="sm" />
-      <span
-        data-testid="mapping-drawer-header-source-field"
-        className="min-w-0 truncate font-mono text-base font-normal text-slate-900"
-        title={dominant.sourceField.name}
-      >
-        {dominant.sourceField.name}
-      </span>
-      {extraCount > 0 ? (
-        <span
-          data-testid="mapping-drawer-header-sources-chip"
-          className="inline-flex flex-shrink-0 items-center rounded bg-slate-100 px-1 py-0.5 text-[10px] font-medium text-slate-600"
-          title={`${row.sources.length} sources`}
+      {row.sources.map((s: MappingSourceRef, idx: number) => (
+        <div
+          key={s.id}
+          data-testid="mapping-drawer-header-source-row"
+          data-ordinal={s.ordinal}
+          className="flex min-w-0 items-center gap-1.5"
         >
-          +{extraCount}
-        </span>
-      ) : null}
-      {editEnabled ? (
-        <HeaderPencilButton
-          label="Edit source field"
-          testId="mapping-drawer-header-source-pencil"
-          innerRef={pencilRef}
-          onClick={onPencilClick}
-        />
-      ) : null}
+          <TableBadge tableName={s.sourceTable.name} size="sm" />
+          <span
+            data-testid="mapping-drawer-header-source-field"
+            className="min-w-0 truncate font-mono text-base font-normal text-slate-900"
+            title={s.sourceField.name}
+          >
+            {s.sourceField.name}
+          </span>
+          {isSingleSource && editEnabled && idx === 0 ? (
+            <HeaderPencilButton
+              label="Edit source field"
+              testId="mapping-drawer-header-source-pencil"
+              innerRef={pencilRef}
+              onClick={onPencilClick}
+            />
+          ) : null}
+        </div>
+      ))}
     </>
   )
 }
