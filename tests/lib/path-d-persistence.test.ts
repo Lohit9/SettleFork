@@ -1029,3 +1029,354 @@ describe('persistPathDOutput — INF-53 user-lock preservation on re-run', () =>
     expect(covUpsertIdx).toBeGreaterThan(covSelectIdx)
   })
 })
+
+// ─── Transform-page fix: Pass 2.6 table_mappings persistence ─────────────────
+//
+// Path D originally skipped `table_mappings` entirely — its data model is
+// TFM-centric and the redesigned Mapping read path doesn't need TM rows.
+// But `getTransformData` (lib/actions/transformations.ts:551), readiness-
+// score, fix-target, and detection-engine-core all gate on
+// `table_mappings.length > 0` for the project. Without TMs, every Path
+// D-only project showed an empty Transform page despite having approved
+// TFMs in the Mapping page.
+//
+// Pass 2.6 derives one TM per unique (source_table_id, target_table_id)
+// pair implied by MappingPayload.source_field_ids × target_field_id,
+// dedupes against existing TMs, and inserts the rest with
+// status='needs_review'. These tests pin:
+//   1) positive single-source pair → 1 TM insert
+//   2) multi-source-table TFM (sources span 2 source_tables) → 2 TMs
+//   3) VA-only mappings (every source_field_ids is empty) → 0 TMs
+//   4) idempotency: existing-pair pre-fetch filters duplicates
+//   5) skipped when parsed.mappings.status !== 'parsed_ok'
+
+const TM_TGT_FIELD_1 = '99999999-9999-4999-8999-aaaaaaaaaaaa'
+const TM_TGT_FIELD_2 = '99999999-9999-4999-8999-bbbbbbbbbbbb'
+const TM_TGT_TABLE_X = '88888888-8888-4888-8888-aaaaaaaaaaaa'
+const TM_TGT_TABLE_Y = '88888888-8888-4888-8888-bbbbbbbbbbbb'
+const TM_SRC_FIELD_A = '77777777-7777-4777-8777-aaaaaaaaaaaa'
+const TM_SRC_FIELD_B = '77777777-7777-4777-8777-bbbbbbbbbbbb'
+const TM_SRC_TABLE_P = '66666666-6666-4666-8666-aaaaaaaaaaaa'
+const TM_SRC_TABLE_Q = '66666666-6666-4666-8666-bbbbbbbbbbbb'
+
+function buildTmMapping(
+  targetFieldId: string,
+  sourceFieldIds: string[],
+): MappingPayloadFixture {
+  return {
+    target_field_id: targetFieldId,
+    source_field_ids: sourceFieldIds,
+    combination_type: sourceFieldIds.length > 1 ? 'concat_space' : 'single',
+    combination_sql: null,
+    ai_reasoning: 'TM fixture',
+    transformation_intent: 'Identity.',
+    mapping_cardinality: '1:1',
+    dedup_required: false,
+    dedup_strategy: null,
+    data_quality_flag_indices: [],
+    confidence: 0.9,
+    status: 'needs_review',
+  }
+}
+
+// Local helper type — mirrors MappingPayload shape from path-d-parser without
+// re-importing it here. Used only by buildTmMapping for the table_mappings
+// test block; an `any`-cast plugs it into PathDParsedOutput.mappings.data
+// in the same pattern as buildInf45Parsed (which also returns a literal).
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+type MappingPayloadFixture = any
+
+function buildTmParsed(
+  mappings: MappingPayloadFixture[],
+): PathDParsedOutput {
+  return {
+    mappings: { status: 'parsed_ok', data: mappings },
+    coverage: { status: 'parsed_ok', data: [] },
+    decisions: { status: 'parsed_ok', data: [] },
+    lookup_tables: { status: 'parsed_ok', data: [] },
+    data_quality: { status: 'parsed_ok', data: [] },
+    inferred_targets: { status: 'parsed_ok', data: [] },
+    project_notes: { status: 'parsed_ok', data: 'TM notes' },
+  }
+}
+
+describe('persistPathDOutput — Pass 2.6 table_mappings (Transform-page fix)', () => {
+  it('positive — derives one TM per (source_table, target_table) pair and inserts with status=needs_review', async () => {
+    const mockResult = makeMockAdmin({
+      upsertResolves: {
+        'target_field_mappings.upsert': {
+          data: [
+            { id: 'tfm-tm-1', target_field_id: TM_TGT_FIELD_1 },
+            { id: 'tfm-tm-2', target_field_id: TM_TGT_FIELD_2 },
+          ],
+          error: null,
+        },
+      },
+      selectResolves: {
+        'fields.select': {
+          data: [
+            // Source fields → source_table_P / Q
+            { id: TM_SRC_FIELD_A, table_id: TM_SRC_TABLE_P },
+            { id: TM_SRC_FIELD_B, table_id: TM_SRC_TABLE_Q },
+            // Target fields → target_table_X / Y
+            { id: TM_TGT_FIELD_1, table_id: TM_TGT_TABLE_X },
+            { id: TM_TGT_FIELD_2, table_id: TM_TGT_TABLE_Y },
+          ],
+          error: null,
+        },
+        'table_mappings.select': { data: [], error: null },
+      },
+    })
+
+    const result = await persistPathDOutput({
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      supabaseAdmin: mockResult.admin as any,
+      projectId: PROJECT_ID,
+      userId: USER_ID,
+      experimentRunId: RUN_ID,
+      parsed: buildTmParsed([
+        // mapping 1: src_A (table_P) → tgt_field_1 (table_X)
+        buildTmMapping(TM_TGT_FIELD_1, [TM_SRC_FIELD_A]),
+        // mapping 2: src_B (table_Q) → tgt_field_2 (table_Y)
+        buildTmMapping(TM_TGT_FIELD_2, [TM_SRC_FIELD_B]),
+      ]),
+    })
+
+    expect(result.table_mappings.status).toBe('inserted')
+    if (result.table_mappings.status === 'inserted') {
+      expect(result.table_mappings.count).toBe(2)
+    }
+
+    const tmInsert = mockResult.calls.find(
+      (c) => c.table === 'table_mappings' && c.method === 'insert',
+    )
+    expect(tmInsert).toBeDefined()
+    const rows = tmInsert!.args[0] as Array<{
+      project_id: string
+      source_table_id: string
+      target_table_id: string
+      status: string
+      confidence: number | null
+      ai_reasoning: string | null
+    }>
+    expect(rows).toHaveLength(2)
+    // Pair (table_P, table_X) and (table_Q, table_Y) — order is Set-iteration
+    // dependent, so sort for stable comparison.
+    const sorted = [...rows].sort((a, b) =>
+      a.source_table_id.localeCompare(b.source_table_id),
+    )
+    expect(sorted[0]!.source_table_id).toBe(TM_SRC_TABLE_P)
+    expect(sorted[0]!.target_table_id).toBe(TM_TGT_TABLE_X)
+    expect(sorted[1]!.source_table_id).toBe(TM_SRC_TABLE_Q)
+    expect(sorted[1]!.target_table_id).toBe(TM_TGT_TABLE_Y)
+    // All rows: needs_review, null confidence, null ai_reasoning — mirrors
+    // the legacy writer at lib/ai/mapping-engine.ts:1986-1997.
+    for (const r of rows) {
+      expect(r.project_id).toBe(PROJECT_ID)
+      expect(r.status).toBe('needs_review')
+      expect(r.confidence).toBeNull()
+      expect(r.ai_reasoning).toBeNull()
+    }
+  })
+
+  it('multi-source-table TFM — single TFM whose sources span 2 source_tables produces 2 TM pairs', async () => {
+    // One TFM, two sources from different source_tables, one target_table.
+    // Both (P→X) and (Q→X) pairs are real distinct apply batches — the
+    // downstream apply machinery joins on (source_table, target_table)
+    // to fetch staged rows. Test #7 in the wild has 4 TFMs with this shape.
+    const mockResult = makeMockAdmin({
+      upsertResolves: {
+        'target_field_mappings.upsert': {
+          data: [{ id: 'tfm-multi', target_field_id: TM_TGT_FIELD_1 }],
+          error: null,
+        },
+      },
+      selectResolves: {
+        'fields.select': {
+          data: [
+            { id: TM_SRC_FIELD_A, table_id: TM_SRC_TABLE_P },
+            { id: TM_SRC_FIELD_B, table_id: TM_SRC_TABLE_Q },
+            { id: TM_TGT_FIELD_1, table_id: TM_TGT_TABLE_X },
+          ],
+          error: null,
+        },
+        'table_mappings.select': { data: [], error: null },
+      },
+    })
+
+    const result = await persistPathDOutput({
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      supabaseAdmin: mockResult.admin as any,
+      projectId: PROJECT_ID,
+      userId: USER_ID,
+      experimentRunId: RUN_ID,
+      parsed: buildTmParsed([
+        // One TFM, sources spanning 2 distinct source_tables
+        buildTmMapping(TM_TGT_FIELD_1, [TM_SRC_FIELD_A, TM_SRC_FIELD_B]),
+      ]),
+    })
+
+    expect(result.table_mappings.status).toBe('inserted')
+    if (result.table_mappings.status === 'inserted') {
+      expect(result.table_mappings.count).toBe(2)
+    }
+
+    const tmInsert = mockResult.calls.find(
+      (c) => c.table === 'table_mappings' && c.method === 'insert',
+    )
+    const rows = tmInsert!.args[0] as Array<{
+      source_table_id: string
+      target_table_id: string
+    }>
+    expect(rows).toHaveLength(2)
+    const pairKeys = new Set(
+      rows.map((r) => `${r.source_table_id}::${r.target_table_id}`),
+    )
+    expect(pairKeys.has(`${TM_SRC_TABLE_P}::${TM_TGT_TABLE_X}`)).toBe(true)
+    expect(pairKeys.has(`${TM_SRC_TABLE_Q}::${TM_TGT_TABLE_X}`)).toBe(true)
+  })
+
+  it('VA-only mappings — all source_field_ids empty → zero TMs, no fields.select, no insert', async () => {
+    // Every MappingPayload has source_field_ids: []. Pass 2.6 must short-
+    // circuit BEFORE the fields.select round-trip — verifies the early-out
+    // that keeps Pass 2.5's "no fields.select on VA-only" invariant intact.
+    const mockResult = makeMockAdmin({
+      upsertResolves: {
+        'target_field_mappings.upsert': {
+          data: [
+            { id: 'tfm-va-1', target_field_id: TM_TGT_FIELD_1 },
+            { id: 'tfm-va-2', target_field_id: TM_TGT_FIELD_2 },
+          ],
+          error: null,
+        },
+      },
+    })
+
+    const result = await persistPathDOutput({
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      supabaseAdmin: mockResult.admin as any,
+      projectId: PROJECT_ID,
+      userId: USER_ID,
+      experimentRunId: RUN_ID,
+      parsed: buildTmParsed([
+        buildTmMapping(TM_TGT_FIELD_1, []),
+        buildTmMapping(TM_TGT_FIELD_2, []),
+      ]),
+    })
+
+    expect(result.table_mappings.status).toBe('inserted')
+    if (result.table_mappings.status === 'inserted') {
+      expect(result.table_mappings.count).toBe(0)
+    }
+
+    // No insert into table_mappings.
+    const tmInsert = mockResult.calls.find(
+      (c) => c.table === 'table_mappings' && c.method === 'insert',
+    )
+    expect(tmInsert).toBeUndefined()
+    // No fields.select, no table_mappings.select (the existing-pair lookup
+    // is skipped by the early-out).
+    const fieldsSelect = mockResult.calls.find(
+      (c) => c.table === 'fields' && c.method === 'select',
+    )
+    expect(fieldsSelect).toBeUndefined()
+    const tmSelect = mockResult.calls.find(
+      (c) => c.table === 'table_mappings' && c.method === 'select',
+    )
+    expect(tmSelect).toBeUndefined()
+  })
+
+  it('idempotency — existing (source,target) pair pre-fetched and skipped on re-run', async () => {
+    // Simulate a re-run: the second pair already exists in table_mappings.
+    // Only the missing pair should be inserted.
+    const mockResult = makeMockAdmin({
+      upsertResolves: {
+        'target_field_mappings.upsert': {
+          data: [
+            { id: 'tfm-id-1', target_field_id: TM_TGT_FIELD_1 },
+            { id: 'tfm-id-2', target_field_id: TM_TGT_FIELD_2 },
+          ],
+          error: null,
+        },
+      },
+      selectResolves: {
+        'fields.select': {
+          data: [
+            { id: TM_SRC_FIELD_A, table_id: TM_SRC_TABLE_P },
+            { id: TM_SRC_FIELD_B, table_id: TM_SRC_TABLE_Q },
+            { id: TM_TGT_FIELD_1, table_id: TM_TGT_TABLE_X },
+            { id: TM_TGT_FIELD_2, table_id: TM_TGT_TABLE_Y },
+          ],
+          error: null,
+        },
+        'table_mappings.select': {
+          // Pre-existing TM for the (P → X) pair.
+          data: [
+            { source_table_id: TM_SRC_TABLE_P, target_table_id: TM_TGT_TABLE_X },
+          ],
+          error: null,
+        },
+      },
+    })
+
+    const result = await persistPathDOutput({
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      supabaseAdmin: mockResult.admin as any,
+      projectId: PROJECT_ID,
+      userId: USER_ID,
+      experimentRunId: RUN_ID,
+      parsed: buildTmParsed([
+        buildTmMapping(TM_TGT_FIELD_1, [TM_SRC_FIELD_A]), // P → X (exists)
+        buildTmMapping(TM_TGT_FIELD_2, [TM_SRC_FIELD_B]), // Q → Y (new)
+      ]),
+    })
+
+    expect(result.table_mappings.status).toBe('inserted')
+    if (result.table_mappings.status === 'inserted') {
+      expect(result.table_mappings.count).toBe(1)
+    }
+
+    const tmInsert = mockResult.calls.find(
+      (c) => c.table === 'table_mappings' && c.method === 'insert',
+    )
+    expect(tmInsert).toBeDefined()
+    const rows = tmInsert!.args[0] as Array<{
+      source_table_id: string
+      target_table_id: string
+    }>
+    expect(rows).toHaveLength(1)
+    expect(rows[0]!.source_table_id).toBe(TM_SRC_TABLE_Q)
+    expect(rows[0]!.target_table_id).toBe(TM_TGT_TABLE_Y)
+  })
+
+  it('skipped when parsed.mappings.status !== parsed_ok — no fields.select, no table_mappings ops', async () => {
+    const mockResult = makeMockAdmin({})
+    const parsed: PathDParsedOutput = {
+      mappings: { status: 'parse_error', error: 'malformed JSON' },
+      coverage: { status: 'parsed_ok', data: [] },
+      decisions: { status: 'parsed_ok', data: [] },
+      lookup_tables: { status: 'parsed_ok', data: [] },
+      data_quality: { status: 'parsed_ok', data: [] },
+      inferred_targets: { status: 'parsed_ok', data: [] },
+      project_notes: { status: 'parsed_ok', data: '' },
+    }
+
+    const result = await persistPathDOutput({
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      supabaseAdmin: mockResult.admin as any,
+      projectId: PROJECT_ID,
+      userId: USER_ID,
+      experimentRunId: RUN_ID,
+      parsed,
+    })
+
+    expect(result.table_mappings.status).toBe('skipped')
+    if (result.table_mappings.status === 'skipped') {
+      expect(result.table_mappings.reason).toBe('mappings section not parsed_ok')
+    }
+
+    // No table_mappings ops were issued at all.
+    const anyTmCall = mockResult.calls.find((c) => c.table === 'table_mappings')
+    expect(anyTmCall).toBeUndefined()
+  })
+})
