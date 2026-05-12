@@ -2250,7 +2250,11 @@ describe('MappingDrawer — PR 3b SOURCE FIELDS section', () => {
     expect(screen.queryByTestId('drawer-source-field-join')).toBeNull()
   })
 
-  it('renders sample values when source.sampleValues is non-empty', () => {
+  it('renders sample values (collapsed by default) when source.sampleValues is non-empty', async () => {
+    // PR 3b refinement — sample values default-collapsed behind a
+    // disclosure toggle so multi-source TFMs don't push TARGET FIELD
+    // offscreen. Click toggle to expand + assert rows render.
+    const user = userEvent.setup()
     render(
       <MappingDrawer
         row={mapped({
@@ -2263,6 +2267,17 @@ describe('MappingDrawer — PR 3b SOURCE FIELDS section', () => {
       />,
     )
     const block = screen.getByTestId('drawer-source-field-block')
+    // Collapsed default — list not rendered.
+    expect(
+      within(block).queryByTestId('drawer-source-field-sample-values-list'),
+    ).toBeNull()
+    // Toggle exists with "Sample values (N)" label.
+    const toggle = within(block).getByTestId(
+      'drawer-source-field-samples-toggle',
+    )
+    expect(toggle.textContent).toContain('Sample values (3)')
+    await user.click(toggle)
+    // Expanded — rows render.
     const samples = within(block).getAllByTestId(
       'drawer-source-field-sample-row',
     )
@@ -2463,7 +2478,10 @@ describe('MappingDrawer — PR 3b TARGET FIELD section', () => {
     ).toBeNull()
   })
 
-  it('shows sample values when present (capped at 5 UI-side)', () => {
+  it('shows sample values when present (capped at 5 UI-side, collapsed by default)', async () => {
+    // PR 3b refinement — target sample values default-collapsed.
+    // Click toggle, then assert capped rows.
+    const user = userEvent.setup()
     render(
       <MappingDrawer
         row={mapped({
@@ -2475,16 +2493,111 @@ describe('MappingDrawer — PR 3b TARGET FIELD section', () => {
         onClose={() => {}}
       />,
     )
+    expect(
+      screen.queryByTestId('drawer-target-field-sample-values-list'),
+    ).toBeNull()
+    const toggle = screen.getByTestId('drawer-target-field-samples-toggle')
+    // UI cap is 5 (target side); label reflects the visible count.
+    expect(toggle.textContent).toContain('Sample values (5)')
+    await user.click(toggle)
     const samples = screen.getAllByTestId('drawer-target-field-sample-row')
     expect(samples).toHaveLength(5)
     expect(samples.map((s) => s.textContent)).toEqual(['a', 'b', 'c', 'd', 'e'])
   })
 
-  it('shows the "No sample data available" fallback when sampleValues is empty', () => {
+  it('shows the "No sample data available" fallback (no toggle) when sampleValues is empty', () => {
+    // PR 3b refinement — empty target sample-values branch shows
+    // the static fallback string. No disclosure toggle renders.
     render(<MappingDrawer row={mapped()} isOpen={true} onClose={() => {}} />)
     expect(
       screen.getByTestId('drawer-target-field-no-samples').textContent,
     ).toBe('No sample data available — target schema only')
+    expect(
+      screen.queryByTestId('drawer-target-field-samples-toggle'),
+    ).toBeNull()
+  })
+})
+
+// ─── PR 3b — collapsible sample values (source + target) ──────────────────
+//
+// Sample values default-collapsed to keep multi-source TFMs from
+// pushing TARGET FIELD offscreen. Two tests per section pin the
+// minimal contract: collapsed-by-default + click toggles.
+
+describe('MappingDrawer — PR 3b collapsible sample values', () => {
+  it('SOURCE FIELDS: sample values collapsed by default with "Sample values (N)" toggle; click expands', async () => {
+    const user = userEvent.setup()
+    render(
+      <MappingDrawer
+        row={mapped({
+          sources: [source({ sampleValues: ['x', 'y'] })],
+        })}
+        isOpen={true}
+        onClose={() => {}}
+      />,
+    )
+    const block = screen.getByTestId('drawer-source-field-block')
+    const toggle = within(block).getByTestId(
+      'drawer-source-field-samples-toggle',
+    )
+    expect(toggle.textContent).toContain('Sample values (2)')
+    expect(toggle.getAttribute('aria-expanded')).toBe('false')
+    expect(
+      within(block).queryByTestId('drawer-source-field-sample-values-list'),
+    ).toBeNull()
+    await user.click(toggle)
+    expect(toggle.getAttribute('aria-expanded')).toBe('true')
+    expect(
+      within(block).getByTestId('drawer-source-field-sample-values-list'),
+    ).toBeInTheDocument()
+  })
+
+  it('TARGET FIELD: sample values collapsed by default with "Sample values (N)" toggle; click expands', async () => {
+    const user = userEvent.setup()
+    render(
+      <MappingDrawer
+        row={mapped({
+          targetField: targetField({ sampleValues: ['p', 'q', 'r'] }),
+        })}
+        isOpen={true}
+        onClose={() => {}}
+      />,
+    )
+    const toggle = screen.getByTestId('drawer-target-field-samples-toggle')
+    expect(toggle.textContent).toContain('Sample values (3)')
+    expect(toggle.getAttribute('aria-expanded')).toBe('false')
+    expect(
+      screen.queryByTestId('drawer-target-field-sample-values-list'),
+    ).toBeNull()
+    await user.click(toggle)
+    expect(toggle.getAttribute('aria-expanded')).toBe('true')
+    expect(
+      screen.getByTestId('drawer-target-field-sample-values-list'),
+    ).toBeInTheDocument()
+  })
+
+  it('SOURCE FIELDS: multi-source rows each get an independent collapse state', async () => {
+    const user = userEvent.setup()
+    render(
+      <MappingDrawer
+        row={mapped({
+          sources: [
+            source({ id: 'ms-a', sampleValues: ['a1', 'a2'] }),
+            source({ id: 'ms-b', sampleValues: ['b1', 'b2'] }),
+          ],
+        })}
+        isOpen={true}
+        onClose={() => {}}
+      />,
+    )
+    const toggles = screen.getAllByTestId(
+      'drawer-source-field-samples-toggle',
+    )
+    expect(toggles).toHaveLength(2)
+    // Expand the first only — second stays collapsed.
+    await user.click(toggles[0]!)
+    expect(toggles[0]!.getAttribute('aria-expanded')).toBe('true')
+    expect(toggles[1]!.getAttribute('aria-expanded')).toBe('false')
   })
 })
 

@@ -1094,29 +1094,91 @@ function SourceFieldBlock({ source }: { source: MappingSourceRef }) {
 
       {source.sampleValues.length > 0 ? (
         <div data-testid="drawer-source-field-samples">
-          <div className="text-[11px] font-medium uppercase tracking-wide text-slate-500">
-            Sample values
-          </div>
-          <ul
-            data-testid="drawer-source-field-sample-values-list"
-            className="mt-1 flex flex-col"
-          >
-            {source.sampleValues.map((value, idx) => (
-              <li
-                key={`${idx}-${value}`}
-                className={cn(
-                  'border-b border-slate-100 py-1 last:border-b-0',
-                  'break-words font-mono text-xs text-slate-700',
-                )}
-                data-testid="drawer-source-field-sample-row"
-              >
-                {value}
-              </li>
-            ))}
-          </ul>
+          <CollapsibleSampleValues
+            values={source.sampleValues}
+            toggleTestId="drawer-source-field-samples-toggle"
+            listTestId="drawer-source-field-sample-values-list"
+            rowTestId="drawer-source-field-sample-row"
+          />
         </div>
       ) : null}
     </li>
+  )
+}
+
+// ── PR 3b refinement — collapsible sample values ───────────────────────────
+//
+// Surfaced from Kaan's smoke test: multi-source TFMs were pushing
+// TARGET FIELD offscreen with 30+ rows of expanded samples. Each
+// sample-values list in SOURCE FIELDS + TARGET FIELD wraps in a
+// disclosure now, default collapsed.
+//
+// Pattern mirrors `NestedAiReasoningDisclosure` — chevron + label
+// in a single button, `aria-expanded` + `aria-controls` wired,
+// content lives in a separate `<ul>` toggled by `expanded` state.
+// State is local per instance — sources and target don't share
+// open/closed state.
+//
+// Zero-samples case (target only — sources don't render at all when
+// empty) is handled by the caller, NOT this helper. The helper
+// assumes `values.length > 0`.
+function CollapsibleSampleValues({
+  values,
+  toggleTestId,
+  listTestId,
+  rowTestId,
+  initialExpanded = false,
+}: {
+  values: readonly string[]
+  toggleTestId: string
+  listTestId: string
+  rowTestId: string
+  initialExpanded?: boolean
+}) {
+  const panelId = useId()
+  const [expanded, setExpanded] = useState(initialExpanded)
+  return (
+    <div>
+      <button
+        type="button"
+        onClick={() => setExpanded((prev) => !prev)}
+        aria-expanded={expanded}
+        aria-controls={panelId}
+        data-testid={toggleTestId}
+        className={cn(
+          'inline-flex h-6 items-center gap-0.5 rounded px-1 text-[11px] font-medium uppercase tracking-wide',
+          'text-slate-500 transition-colors hover:bg-slate-50 hover:text-slate-700',
+          'focus:outline-none focus-visible:ring-2 focus-visible:ring-slate-300',
+        )}
+      >
+        {expanded ? (
+          <ChevronDown aria-hidden="true" className="h-3 w-3" />
+        ) : (
+          <ChevronRight aria-hidden="true" className="h-3 w-3" />
+        )}
+        <span>Sample values ({values.length})</span>
+      </button>
+      {expanded ? (
+        <ul
+          id={panelId}
+          data-testid={listTestId}
+          className="mt-1 flex flex-col"
+        >
+          {values.map((value, idx) => (
+            <li
+              key={`${idx}-${value}`}
+              className={cn(
+                'border-b border-slate-100 py-1 last:border-b-0',
+                'break-words font-mono text-xs text-slate-700',
+              )}
+              data-testid={rowTestId}
+            >
+              {value}
+            </li>
+          ))}
+        </ul>
+      ) : null}
+    </div>
   )
 }
 
@@ -1251,34 +1313,25 @@ function TargetFieldSection({
         ) : null}
 
         <div className="mt-3">
-          <div className="text-[11px] font-medium uppercase tracking-wide text-slate-500">
-            Sample values
-          </div>
           {visibleSamples.length > 0 ? (
-            <ul
-              data-testid="drawer-target-field-sample-values-list"
-              className="mt-1 flex flex-col"
-            >
-              {visibleSamples.map((value, idx) => (
-                <li
-                  key={`${idx}-${value}`}
-                  className={cn(
-                    'border-b border-slate-100 py-1 last:border-b-0',
-                    'break-words font-mono text-xs text-slate-700',
-                  )}
-                  data-testid="drawer-target-field-sample-row"
-                >
-                  {value}
-                </li>
-              ))}
-            </ul>
+            <CollapsibleSampleValues
+              values={visibleSamples}
+              toggleTestId="drawer-target-field-samples-toggle"
+              listTestId="drawer-target-field-sample-values-list"
+              rowTestId="drawer-target-field-sample-row"
+            />
           ) : (
-            <p
-              data-testid="drawer-target-field-no-samples"
-              className="mt-1 text-xs italic text-slate-400"
-            >
-              No sample data available — target schema only
-            </p>
+            <>
+              <div className="text-[11px] font-medium uppercase tracking-wide text-slate-500">
+                Sample values
+              </div>
+              <p
+                data-testid="drawer-target-field-no-samples"
+                className="mt-1 text-xs italic text-slate-400"
+              >
+                No sample data available — target schema only
+              </p>
+            </>
           )}
         </div>
       </div>
