@@ -226,29 +226,29 @@ describe('MappingDrawer — header', () => {
   })
 })
 
-// ─── Header — TARGET-led identity (drawer redesign §Header flip) ──────────
+// ─── Header — PR 1 redesign (source → target identity, 2 rows) ────────────
 //
-// Drawer redesign — TARGET-led identity (this iteration): the header
-// flips from a stacked SOURCE-then-TARGET two-row identity to a
-// single-row identity anchored on the target field. SOURCE moves
-// into the body's first section (renamed `SOURCE`, singular). The
-// status word returns alongside the dot; confidence consolidates per-
-// source in SOURCE (not in header).
+// Drawer redesign PR 1 (feat/drawer-header-rewrite): the header is a
+// two-row layout. Row 1 carries [src] → [tgt] identity; row 2 carries
+// [● status · confidence] right-aligned. Source and target field
+// names are inline-edit affordances (single-source mapped rows + every
+// mapped/VA target) that open the existing portal-anchored pickers.
+// Multi-source mapped rows show a non-editable dominant source + "+N"
+// chip; VA rows show the literal "Value assignment" label; unmapped
+// rows show "No source mapped" with the target rendered display-only.
 //
-//   [tgtTable] tgtField                ●  Approved   ✕
-//
-// These suites lock the new shape: target-only identity, no SOURCE
-// row in the header, no SOURCE/TARGET small-caps labels, status
-// badge with dot + sentence-case word, and regression guards that
-// the prior stacked-header testids (`mapping-drawer-header-source`,
-// `mapping-drawer-header-source-empty`,
-// `mapping-drawer-header-sources-chip`,
-// `mapping-drawer-header-source-label`,
-// `mapping-drawer-header-source-row`,
-// `mapping-drawer-header-target-label`) are all absent.
+// These suites lock the new shape:
+//   • Target identity always present (testid `mapping-drawer-title`).
+//   • Source-side renders source identity for mapped rows, italic
+//     "Value assignment" for VA, italic "No source mapped" for
+//     unmapped.
+//   • Multi-source mapped rows show dominant source + `+N` chip with
+//     NO source pencil (negative assertion — per-source editing is
+//     PR 2's responsibility).
+//   • Status + confidence on row 2 (right-aligned).
 
-describe('MappingDrawer — TARGET-led header (drops SOURCE row + labels)', () => {
-  it('renders target identity (table badge + field name) on the single header row', () => {
+describe('MappingDrawer — PR 1 header (source → target identity)', () => {
+  it('renders target identity (table badge + field name) on row 1', () => {
     render(<MappingDrawer row={mapped()} isOpen={true} onClose={() => {}} />)
     const tgt = screen.getByTestId('mapping-drawer-header-target')
     expect(within(tgt).getByText('accounts')).toBeInTheDocument()
@@ -258,10 +258,6 @@ describe('MappingDrawer — TARGET-led header (drops SOURCE row + labels)', () =
   })
 
   it('target field renders at font-mono text-base font-normal text-slate-900', () => {
-    // Drawer redesign — TARGET-led identity: typography held verbatim
-    // from the prior pass's identity row. The target field is now
-    // the sole header identity, so its weight + size choice carries
-    // the entire header's visual weight.
     render(<MappingDrawer row={mapped()} isOpen={true} onClose={() => {}} />)
     const title = screen.getByTestId('mapping-drawer-title')
     expect(title.className).toContain('font-mono')
@@ -271,51 +267,160 @@ describe('MappingDrawer — TARGET-led header (drops SOURCE row + labels)', () =
     expect(title.className).not.toContain('font-semibold')
   })
 
-  it('does NOT render any SOURCE-side header element (regression guard)', () => {
-    // Drawer redesign — TARGET-led identity: source identity moves
-    // entirely to the body's first section. Every SOURCE-row testid
-    // from the prior pass is gone.
-    for (const row of [
-      mapped(),
-      mapped({
-        sources: [
-          cifSource(0, 'FNAME'),
-          cifSource(1, 'LNAME'),
-          cifSource(2, 'MI'),
-        ],
-      }),
-      valueAssignment(),
-      targetAck(),
-      unmapped(),
+  it('renders source identity (table badge + field name) on row 1 for single-source mapped', () => {
+    render(<MappingDrawer row={mapped()} isOpen={true} onClose={() => {}} />)
+    const src = screen.getByTestId('mapping-drawer-header-source')
+    expect(within(src).getByText('ACCT_MASTER')).toBeInTheDocument()
+    expect(
+      within(src).getByTestId('mapping-drawer-header-source-field').textContent,
+    ).toBe('ACCT_NO')
+    // Single-source rows do NOT render the `+N` chip.
+    expect(
+      within(src).queryByTestId('mapping-drawer-header-sources-chip'),
+    ).toBeNull()
+  })
+
+  it('renders dominant source + "+N" chip for multi-source mapped (NO source pencil)', () => {
+    render(
+      <MappingDrawer
+        row={mapped({
+          sources: [
+            cifSource(0, 'FNAME'),
+            cifSource(1, 'LNAME'),
+            cifSource(2, 'MI'),
+          ],
+        })}
+        isOpen={true}
+        onClose={() => {}}
+      />,
+    )
+    const src = screen.getByTestId('mapping-drawer-header-source')
+    // Dominant source = ordinal 0 = FNAME.
+    expect(
+      within(src).getByTestId('mapping-drawer-header-source-field').textContent,
+    ).toBe('FNAME')
+    const chip = within(src).getByTestId('mapping-drawer-header-sources-chip')
+    expect(chip.textContent).toBe('+2')
+    // PR 1 lock: source side is display-only on multi-source rows.
+    expect(
+      within(src).queryByTestId('mapping-drawer-header-source-pencil'),
+    ).toBeNull()
+  })
+
+  it('renders "Value assignment" italic label on row 1 for VA rows', () => {
+    render(
+      <MappingDrawer row={valueAssignment()} isOpen={true} onClose={() => {}} />,
+    )
+    const src = screen.getByTestId('mapping-drawer-header-source')
+    const label = within(src).getByTestId('mapping-drawer-header-source-label')
+    expect(label.textContent).toBe('Value assignment')
+    expect(label.className).toContain('italic')
+    expect(label.getAttribute('data-variant')).toBe('value-assignment')
+    // VAs have no source side to edit.
+    expect(
+      within(src).queryByTestId('mapping-drawer-header-source-pencil'),
+    ).toBeNull()
+  })
+
+  it('renders "No source mapped" italic label on row 1 for unmapped rows', () => {
+    render(<MappingDrawer row={unmapped()} isOpen={true} onClose={() => {}} />)
+    const src = screen.getByTestId('mapping-drawer-header-source')
+    const label = within(src).getByTestId('mapping-drawer-header-source-label')
+    expect(label.textContent).toBe('No source mapped')
+    expect(label.className).toContain('italic')
+    expect(label.getAttribute('data-variant')).toBe('unmapped')
+  })
+
+  it('renders the arrow between source and target on row 1', () => {
+    render(<MappingDrawer row={mapped()} isOpen={true} onClose={() => {}} />)
+    const headerRow = screen.getByTestId('mapping-drawer-header-row')
+    expect(
+      within(headerRow).getByTestId('mapping-drawer-header-arrow'),
+    ).toBeInTheDocument()
+  })
+
+  it('row 2 renders the status badge right-aligned (justify-end)', () => {
+    render(<MappingDrawer row={mapped()} isOpen={true} onClose={() => {}} />)
+    const meta = screen.getByTestId('mapping-drawer-header-meta')
+    expect(meta.className).toContain('justify-end')
+    expect(
+      within(meta).getByTestId('mapping-drawer-header-status-badge'),
+    ).toBeInTheDocument()
+  })
+
+  it('row 2 status badge renders dot + sentence-case word + confidence percent', () => {
+    render(
+      <MappingDrawer
+        row={mapped({ status: 'needs_review', confidence: 88 })}
+        isOpen={true}
+        onClose={() => {}}
+      />,
+    )
+    const badge = screen.getByTestId('mapping-drawer-header-status-badge')
+    expect(
+      within(badge).getByTestId('mapping-drawer-header-status-needs_review'),
+    ).toBeInTheDocument()
+    const word = within(badge).getByTestId('mapping-drawer-header-status-word')
+    expect(word.textContent).toBe('Needs review')
+    expect(word.className).toContain('text-amber-700')
+    const confidence = within(badge).getByTestId(
+      'mapping-drawer-header-confidence',
+    )
+    expect(confidence.textContent).toMatch(/88%/)
+  })
+
+  it('row 2 confidence renders em-dash when row.confidence is null (VA / unmapped)', () => {
+    render(<MappingDrawer row={targetAck()} isOpen={true} onClose={() => {}} />)
+    const badge = screen.getByTestId('mapping-drawer-header-status-badge')
+    expect(
+      within(badge).getByTestId('mapping-drawer-header-confidence').textContent,
+    ).toBe('—')
+    expect(badge.textContent).not.toMatch(/\d+%/)
+  })
+
+  it('row 2 status badge surfaces matched-hue className for each status variant', () => {
+    for (const [row, variant, label, hueClass] of [
+      [mapped({ status: 'approved' }), 'approved', 'Approved', 'text-green-700'] as const,
+      [
+        mapped({ status: 'needs_review' }),
+        'needs_review',
+        'Needs review',
+        'text-amber-700',
+      ] as const,
+      [mapped({ status: 'rejected' }), 'rejected', 'Rejected', 'text-red-700'] as const,
+      [targetAck(), 'approved', 'Approved', 'text-green-700'] as const,
     ]) {
       const { unmount } = render(
         <MappingDrawer row={row} isOpen={true} onClose={() => {}} />,
       )
-      expect(screen.queryByTestId('mapping-drawer-header-source')).toBeNull()
-      expect(
-        screen.queryByTestId('mapping-drawer-header-source-empty'),
-      ).toBeNull()
-      expect(
-        screen.queryByTestId('mapping-drawer-header-source-label'),
-      ).toBeNull()
-      expect(
-        screen.queryByTestId('mapping-drawer-header-source-row'),
-      ).toBeNull()
-      expect(
-        screen.queryByTestId('mapping-drawer-header-sources-chip'),
-      ).toBeNull()
+      const dot = screen.getByTestId(`mapping-drawer-header-status-${variant}`)
+      expect(dot.getAttribute('title')).toBe(label)
+      expect(dot.getAttribute('aria-label')).toBe(label)
+      const word = screen.getByTestId('mapping-drawer-header-status-word')
+      expect(word.textContent).toBe(label)
+      expect(word.className).toContain(hueClass)
       unmount()
     }
   })
 
-  it('does NOT render a TARGET small-caps label (regression guard)', () => {
+  it('header is NOT sticky (scrolls with body content)', () => {
     render(<MappingDrawer row={mapped()} isOpen={true} onClose={() => {}} />)
-    expect(
-      screen.queryByTestId('mapping-drawer-header-target-label'),
-    ).toBeNull()
+    const header = screen.getByTestId('mapping-drawer-header')
+    expect(header.className).not.toContain('sticky')
+    expect(header.className).not.toContain('top-0')
   })
 
-  it('does NOT render legacy subheader testids', () => {
+  it('close button stays on row 1 (DOM-positioned after target identity)', () => {
+    render(<MappingDrawer row={mapped()} isOpen={true} onClose={() => {}} />)
+    const headerRow = screen.getByTestId('mapping-drawer-header-row')
+    const target = screen.getByTestId('mapping-drawer-header-target')
+    const close = screen.getByTestId('mapping-drawer-close')
+    expect(headerRow.contains(target)).toBe(true)
+    expect(headerRow.contains(close)).toBe(true)
+    expect(target.compareDocumentPosition(close) & 4).toBe(4)
+  })
+
+  it('does NOT render legacy subheader testids (regression guard)', () => {
     for (const row of [
       mapped(),
       valueAssignment(),
@@ -334,196 +439,157 @@ describe('MappingDrawer — TARGET-led header (drops SOURCE row + labels)', () =
   })
 })
 
-// ─── Header status badge: dot + sentence-case word ────────────────────────
+// ─── Header — inline edit affordances (PR 1) ──────────────────────────────
 //
-// Drawer redesign — TARGET-led identity (this iteration): the status
-// badge in the header top-right shows `[dot] [word]` (no confidence
-// percent). The status word returns alongside the dot in sentence
-// case ("Approved", "Needs review", "Rejected", "Acknowledged"),
-// color-matched to the dot's hue. Confidence consolidates per-source
-// in the body's SOURCE section — the header has no confidence
-// number anywhere.
+// Pencils are gated on (a) the parent threading commit handlers AND
+// (b) the variant rules — single-source mapped + every mapped/VA
+// target. Multi-source mapped rows + unmapped rows do NOT surface a
+// source-side pencil (PR 2 covers per-card editing). When the parent
+// threads handlers, clicking the pencil opens the matching portal
+// picker (`inline-source-picker` / `target-field-cell-picker`).
 
-describe('MappingDrawer — header status badge (dot + word, no confidence)', () => {
-  it('header does NOT render a meta line for any row kind', () => {
-    for (const row of [
-      mapped({ status: 'needs_review' }),
-      mapped({ status: 'approved' }),
-      mapped({ status: 'rejected' }),
-      valueAssignment(),
-      targetAck(),
-      unmapped(),
-    ]) {
-      const { unmount } = render(
-        <MappingDrawer row={row} isOpen={true} onClose={() => {}} />,
-      )
-      expect(screen.queryByTestId('mapping-drawer-header-meta')).toBeNull()
-      unmount()
-    }
-  })
+describe('MappingDrawer — PR 1 header inline edit pencils', () => {
+  const sf: SourceFieldWithState = {
+    id: 'sf-other',
+    name: 'OTHER_ACCT_NO',
+    dataType: 'NUMBER',
+    ordinalPosition: 0,
+    sourceTable: { id: 'st-1', name: 'ACCT_MASTER' },
+    mappingStatus: 'unmapped',
+    sampleValues: [],
+    isAcknowledged: false,
+    isRejected: false,
+  }
+  const tf: TargetFieldRef = targetField({ id: 'tf-other', name: 'other_id' })
 
-  it('badge renders dot + sentence-case status word + confidence percent when confidence is non-null (Phase E PR α)', () => {
-    // Phase E PR α: confidence percent rejoins the header status
-    // badge as a trailing "· 88%" token. Pre-α the per-source SOURCE
-    // body section was the only confidence surface; α adds the header
-    // pill back so users get the row-level number at a glance.
+  it('renders target pencil for single-source mapped when handlers are threaded', () => {
     render(
       <MappingDrawer
-        row={mapped({ status: 'needs_review', confidence: 88 })}
+        row={mapped()}
         isOpen={true}
         onClose={() => {}}
+        availableTargetFields={[tf, mapped().targetField]}
+        availableSourceFields={[sf]}
+        onSwapTarget={vi.fn().mockResolvedValue({ success: true })}
+        onSwapSource={vi.fn().mockResolvedValue({ success: true })}
       />,
     )
-    const header = screen.getByTestId('mapping-drawer-header')
-    const badge = within(header).getByTestId(
-      'mapping-drawer-header-status-badge',
-    )
     expect(
-      within(badge).getByTestId('mapping-drawer-header-status-needs_review'),
+      screen.getByTestId('mapping-drawer-header-target-pencil'),
     ).toBeInTheDocument()
-    const word = within(badge).getByTestId('mapping-drawer-header-status-word')
-    expect(word.textContent).toBe('Needs review')
-    // Status word color matches the dot's hue.
-    expect(word.className).toContain('text-amber-700')
-    // Phase E PR α — confidence percent renders for non-null confidence.
-    const confidence = within(badge).getByTestId(
-      'mapping-drawer-header-confidence',
-    )
-    expect(confidence.textContent).toMatch(/88%/)
+    expect(
+      screen.getByTestId('mapping-drawer-header-source-pencil'),
+    ).toBeInTheDocument()
   })
 
-  it('badge OMITS the confidence pill when row.confidence is null (graceful degradation pre-γ.1)', () => {
-    // Phase E PR α: acknowledged + unmapped rows currently carry
-    // `confidence: null`. The header pill is suppressed entirely (no
-    // trailing "·") so the badge reads as a clean dot+word.
-    render(<MappingDrawer row={targetAck()} isOpen={true} onClose={() => {}} />)
-    const badge = screen.getByTestId('mapping-drawer-header-status-badge')
+  it('renders target pencil but NOT source pencil for multi-source mapped', () => {
+    render(
+      <MappingDrawer
+        row={mapped({
+          sources: [
+            cifSource(0, 'FNAME'),
+            cifSource(1, 'LNAME'),
+          ],
+        })}
+        isOpen={true}
+        onClose={() => {}}
+        availableTargetFields={[tf, mapped().targetField]}
+        availableSourceFields={[sf]}
+        onSwapTarget={vi.fn().mockResolvedValue({ success: true })}
+        onSwapSource={vi.fn().mockResolvedValue({ success: true })}
+      />,
+    )
     expect(
-      within(badge).queryByTestId('mapping-drawer-header-confidence'),
+      screen.getByTestId('mapping-drawer-header-target-pencil'),
+    ).toBeInTheDocument()
+    expect(
+      screen.queryByTestId('mapping-drawer-header-source-pencil'),
     ).toBeNull()
-    expect(badge.textContent).not.toMatch(/\d+%/)
   })
 
-  it('badge surfaces sentence-case word + matched-hue className for each status variant', () => {
-    // Status mapping (sentence-case + color-matched). INF-57 cleanup
-    // dropped the slate "Acknowledged" presentation token — coverage-
-    // approved no-source rows now share the green "Approved" palette
-    // with mapped/VA approved rows.
-    for (const [row, variant, label, hueClass] of [
-      [mapped({ status: 'approved' }), 'approved', 'Approved', 'text-green-700'] as const,
-      [
-        mapped({ status: 'needs_review' }),
-        'needs_review',
-        'Needs review',
-        'text-amber-700',
-      ] as const,
-      [mapped({ status: 'rejected' }), 'rejected', 'Rejected', 'text-red-700'] as const,
-      [targetAck(), 'approved', 'Approved', 'text-green-700'] as const,
-    ]) {
-      const { unmount } = render(
-        <MappingDrawer row={row} isOpen={true} onClose={() => {}} />,
-      )
-      const dot = screen.getByTestId(
-        `mapping-drawer-header-status-${variant}`,
-      )
-      // Dot still carries the label as title + aria-label (preserved
-      // for screen readers + hover at very narrow drawer widths
-      // where the visible word might be ellipsized).
-      expect(dot.getAttribute('title')).toBe(label)
-      expect(dot.getAttribute('aria-label')).toBe(label)
-      const word = screen.getByTestId('mapping-drawer-header-status-word')
-      expect(word.textContent).toBe(label)
-      expect(word.className).toContain(hueClass)
-      unmount()
-    }
-  })
-
-  it('header status badge renders for unmapped rows (INF-57 unification — no longer suppressed)', () => {
-    // Pre-INF-57: Rule 6 unmapped rows suppressed the badge entirely. INF-57
-    // cleanup unified the badge surface across all kinds — coverage-approved
-    // no-source rows need the green "Approved" pill in the drawer header
-    // (visual smoke #1), so the suppression was dropped. The badge now
-    // mirrors DRAWER_STATUS_CONFIG[row.status] for every row kind, including
-    // the legacy 'unmapped' literal sentinel (rendered as slate "Unmapped").
-    render(<MappingDrawer row={unmapped()} isOpen={true} onClose={() => {}} />)
-    const header = screen.getByTestId('mapping-drawer-header')
+  it('renders target pencil for VA rows (no source pencil)', () => {
+    render(
+      <MappingDrawer
+        row={valueAssignment()}
+        isOpen={true}
+        onClose={() => {}}
+        availableTargetFields={[tf, valueAssignment().targetField]}
+        availableSourceFields={[sf]}
+        onSwapTarget={vi.fn().mockResolvedValue({ success: true })}
+      />,
+    )
     expect(
-      within(header).getByTestId('mapping-drawer-header-status-badge'),
-    ).toBeInTheDocument()
-    // Close button still renders.
-    expect(within(header).getByTestId('mapping-drawer-close')).toBeInTheDocument()
-  })
-
-  it('coverage-approved no-source rows render the green "Approved" pill (INF-57 unification)', () => {
-    // INF-57 cleanup: legacy target_acknowledged collapsed into
-    // kind='unmapped' with status='approved'. The drawer header surfaces
-    // the standard green "Approved" pill — the dropped slate "Acknowledged"
-    // presentation token is gone (locked design decision 2).
-    render(<MappingDrawer row={targetAck()} isOpen={true} onClose={() => {}} />)
-    const badge = screen.getByTestId('mapping-drawer-header-status-badge')
-    expect(
-      within(badge).getByTestId('mapping-drawer-header-status-approved'),
+      screen.getByTestId('mapping-drawer-header-target-pencil'),
     ).toBeInTheDocument()
     expect(
-      within(badge).queryByTestId('mapping-drawer-header-status-acknowledged'),
+      screen.queryByTestId('mapping-drawer-header-source-pencil'),
+    ).toBeNull()
+  })
+
+  it('does NOT render target pencil for unmapped rows (PR 2 territory)', () => {
+    render(
+      <MappingDrawer
+        row={unmapped()}
+        isOpen={true}
+        onClose={() => {}}
+        availableTargetFields={[tf, unmapped().targetField]}
+        availableSourceFields={[sf]}
+        onSwapTarget={vi.fn().mockResolvedValue({ success: true })}
+        onSwapSource={vi.fn().mockResolvedValue({ success: true })}
+      />,
+    )
+    expect(
+      screen.queryByTestId('mapping-drawer-header-target-pencil'),
     ).toBeNull()
     expect(
-      within(badge).getByTestId('mapping-drawer-header-status-word').textContent,
-    ).toBe('Approved')
-  })
-})
-
-// ─── Header — close button + status badge cluster (TARGET-led identity) ───
-//
-// The header collapses from a 2-row (SOURCE+TARGET) stack to a
-// single row anchored on the target identity. The right-hand cluster
-// carries [HeaderStatusBadge] [CloseButton]; the close button is the
-// only persistent affordance, the status badge appears for every
-// row kind except Rule 6 unmapped.
-
-describe('MappingDrawer — header close button + status cluster', () => {
-  it('close button and status badge share the same parent flex cluster', () => {
-    render(<MappingDrawer row={mapped()} isOpen={true} onClose={() => {}} />)
-    const close = screen.getByTestId('mapping-drawer-close')
-    const badge = screen.getByTestId('mapping-drawer-header-status-badge')
-    const headerRow = screen.getByTestId('mapping-drawer-header-row')
-    expect(headerRow.contains(close)).toBe(true)
-    expect(headerRow.contains(badge)).toBe(true)
-    expect(close.parentElement).toBe(badge.parentElement)
+      screen.queryByTestId('mapping-drawer-header-source-pencil'),
+    ).toBeNull()
   })
 
-  it('header is NOT sticky (TARGET-led identity lock — scrolls with body content)', () => {
+  it('omits both pencils when commit handlers are not threaded (standalone test mount)', () => {
     render(<MappingDrawer row={mapped()} isOpen={true} onClose={() => {}} />)
-    const header = screen.getByTestId('mapping-drawer-header')
-    expect(header.className).not.toContain('sticky')
-    expect(header.className).not.toContain('top-0')
+    expect(
+      screen.queryByTestId('mapping-drawer-header-target-pencil'),
+    ).toBeNull()
+    expect(
+      screen.queryByTestId('mapping-drawer-header-source-pencil'),
+    ).toBeNull()
   })
 
-  it('header has a single identity row containing target identity + close button', () => {
-    // Drawer redesign — TARGET-led identity: the prior pass had
-    // SOURCE/TARGET small-caps labels stacking two identity rows.
-    // This iteration collapses to a single row that holds the
-    // target identity (left) + status badge + close button (right).
-    render(<MappingDrawer row={mapped()} isOpen={true} onClose={() => {}} />)
-    const headerRow = screen.getByTestId('mapping-drawer-header-row')
-    const target = screen.getByTestId('mapping-drawer-header-target')
-    const close = screen.getByTestId('mapping-drawer-close')
-    expect(headerRow.contains(target)).toBe(true)
-    expect(headerRow.contains(close)).toBe(true)
-    // Target identity precedes the close cluster in DOM order.
-    expect(target.compareDocumentPosition(close) & 4).toBe(4)
-  })
-
-  it('legacy compressed-header arrow grid is gone (no lone ArrowRight at header root)', () => {
-    render(<MappingDrawer row={mapped()} isOpen={true} onClose={() => {}} />)
-    const header = screen.getByTestId('mapping-drawer-header')
-    const directChildren = Array.from(header.children)
-    const hasLooseArrow = directChildren.some(
-      (child) =>
-        child.tagName === 'svg' ||
-        child.querySelector?.('svg.lucide-arrow-right'),
+  it('clicking the target pencil opens the TargetFieldCellPicker portal', async () => {
+    const user = userEvent.setup()
+    render(
+      <MappingDrawer
+        row={mapped()}
+        isOpen={true}
+        onClose={() => {}}
+        availableTargetFields={[tf, mapped().targetField]}
+        availableSourceFields={[sf]}
+        onSwapTarget={vi.fn().mockResolvedValue({ success: true })}
+        onSwapSource={vi.fn().mockResolvedValue({ success: true })}
+      />,
     )
-    expect(hasLooseArrow).toBe(false)
+    await user.click(screen.getByTestId('mapping-drawer-header-target-pencil'))
+    expect(
+      screen.getByTestId('target-field-cell-picker'),
+    ).toBeInTheDocument()
+  })
+
+  it('clicking the source pencil (single-source mapped) opens the InlineSourcePicker portal', async () => {
+    const user = userEvent.setup()
+    render(
+      <MappingDrawer
+        row={mapped()}
+        isOpen={true}
+        onClose={() => {}}
+        availableTargetFields={[tf, mapped().targetField]}
+        availableSourceFields={[sf]}
+        onSwapTarget={vi.fn().mockResolvedValue({ success: true })}
+        onSwapSource={vi.fn().mockResolvedValue({ success: true })}
+      />,
+    )
+    await user.click(screen.getByTestId('mapping-drawer-header-source-pencil'))
+    expect(screen.getByTestId('inline-source-picker')).toBeInTheDocument()
   })
 })
 
@@ -992,16 +1058,15 @@ describe('MappingDrawer — Rule 6 (Unmapped) body', () => {
 //   • Confidence + Status moved to the header line 2 dot/percent.
 
 describe('MappingDrawer — Value Assignment body', () => {
-  it('renders Sources section with VA-specific empty-state', () => {
+  it('does NOT render a SOURCE section (drawer redesign PR 1)', () => {
+    // PR 1: the legacy empty-state "Value assignment — no sources"
+    // SOURCE section is removed. The header's left-side italic
+    // "Value assignment" label carries that signal now.
     render(
       <MappingDrawer row={valueAssignment()} isOpen={true} onClose={() => {}} />,
     )
-    const section = screen.getByTestId('drawer-section-source')
-    expect(within(section).getByRole('heading', { level: 3 }).textContent).toBe(
-      'Source',
-    )
-    const empty = screen.getByTestId('drawer-va-no-sources')
-    expect(empty.textContent).toBe('Value assignment — no sources')
+    expect(screen.queryByTestId('drawer-section-source')).toBeNull()
+    expect(screen.queryByTestId('drawer-va-no-sources')).toBeNull()
   })
 
   it('does NOT render the legacy Target field / Status / Confidence sections', () => {
@@ -1112,12 +1177,12 @@ describe('MappingDrawer — Value Assignment body', () => {
     ).toBeNull()
   })
 
-  it('section ordering for VA is Sources → Analysis → Value expression (drawer redesign §3)', () => {
-    // Drawer redesign refinements §3: body order is SOURCES →
-    // SAMPLE VALUES → ANALYSIS → TRANSFORMATION. For VAs, SAMPLE
-    // VALUES is omitted (no sources = no samples) and TRANSFORMATION
-    // is replaced by VA-specific `Value expression`. The leading
-    // OVERVIEW section from the prior pass is removed entirely.
+  it('section ordering for VA is Value expression → Analysis (drawer redesign PR 1)', () => {
+    // Drawer redesign PR 1 (feat/drawer-header-rewrite): the empty-
+    // state SOURCE section is removed, and VALUE EXPRESSION is
+    // promoted to the lead position. Order is `Value expression →
+    // Analysis [→ Decisions]`. The leading OVERVIEW section from
+    // the prior pass remains removed.
     render(
       <MappingDrawer
         row={valueAssignment({ aiReasoning: 'reason text' })}
@@ -1128,9 +1193,8 @@ describe('MappingDrawer — Value Assignment body', () => {
     const body = screen.getByTestId('mapping-drawer-body')
     const sections = within(body).getAllByRole('heading', { level: 3 })
     expect(sections.map((h) => h.textContent)).toEqual([
-      'Source',
-      'Analysis',
       'Value expression',
+      'Analysis',
     ])
   })
 })
