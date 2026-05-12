@@ -38,6 +38,11 @@ function makeTargetField(overrides: Partial<TargetFieldRef> = {}): TargetFieldRe
     defaultValue: null,
     targetTable: { id: 'tt-1', name: 'TGT' },
     ordinalPosition: 1,
+    isPrimaryKey: false,
+    isForeignKey: false,
+    fkReference: null,
+    description: null,
+    sampleValues: [],
     ...overrides,
   }
 }

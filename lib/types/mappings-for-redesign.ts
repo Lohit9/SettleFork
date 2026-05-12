@@ -491,6 +491,51 @@ export interface TargetFieldRef {
    * rows inside a table group in canonical schema order.
    */
   ordinalPosition: number
+  /**
+   * PR 3a — additive read-shape extension for the drawer body
+   * redesign's TARGET FIELD section. Mirrors columns already pulled
+   * server-side for source fields (see `MappingSourceRef.sourceField`
+   * + `MappingSourceRef.sampleValues`) so the drawer can render a
+   * full target-side identity without an extra fetch.
+   *
+   * Backed by `fields.is_primary_key` (migration 002). Always
+   * populated (DEFAULT false in DDL).
+   */
+  isPrimaryKey: boolean
+  /**
+   * Backed by `fields.is_foreign_key` (migration 002). Always
+   * populated (DEFAULT false in DDL).
+   */
+  isForeignKey: boolean
+  /**
+   * Backed by `fields.fk_reference` (migration 002). Free-form
+   * `"<TargetTable>.<TargetColumn>"` string when `isForeignKey=true`,
+   * NULL otherwise. The DDL parser populates this from foreign-key
+   * clauses on the target schema.
+   */
+  fkReference: string | null
+  /**
+   * Backed by `fields.description` (migration 090). Free-text
+   * description sourced from DDL `COMMENT ON COLUMN` clauses or
+   * (future) operator-supplied Schema Overview edits. NULL means no
+   * description recorded — UI hides the line entirely.
+   */
+  description: string | null
+  /**
+   * Backed by `field_profiles.sample_values` (migration 002).
+   * Top-N distinct sample values from the target dataset's ingested
+   * sample rows, when present. Empty array (NOT null) when no
+   * profile exists OR the profile carries no samples — keeps UI
+   * rendering predictable without nullish-coalescing at every site.
+   *
+   * Server-side cap mirrors `MappingSourceRef.sampleValues`:
+   * `MAX_SAMPLE_VALUES = 10`. UI may render fewer (e.g. drawer body
+   * caps target samples at 5 — read-only orientation, representative
+   * taste is enough).
+   *
+   * Always present; defaults to `[]` when no profile or no samples.
+   */
+  sampleValues: string[]
 }
 
 /**
