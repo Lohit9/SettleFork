@@ -26,6 +26,11 @@ function field(overrides: Partial<TargetFieldRef> = {}): TargetFieldRef {
     defaultValue: null,
     targetTable: { id: 'tt-default', name: 'DEFAULT_TABLE' },
     ordinalPosition: 1,
+    isPrimaryKey: false,
+    isForeignKey: false,
+    fkReference: null,
+    description: null,
+    sampleValues: [],
     ...overrides,
   }
 }

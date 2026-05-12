@@ -218,6 +218,11 @@ function targetField(overrides: Partial<TargetFieldRef> = {}): TargetFieldRef {
     defaultValue: null,
     targetTable: { id: accountsTable.id, name: accountsTable.name },
     ordinalPosition: 1,
+    isPrimaryKey: false,
+    isForeignKey: false,
+    fkReference: null,
+    description: null,
+    sampleValues: [],
     ...overrides,
   }
 }

@@ -45,6 +45,11 @@ function targetField(overrides: Partial<TargetFieldRef> = {}): TargetFieldRef {
     defaultValue: null,
     targetTable: { id: 'tt-1', name: 'accounts' },
     ordinalPosition: 1,
+    isPrimaryKey: false,
+    isForeignKey: false,
+    fkReference: null,
+    description: null,
+    sampleValues: [],
     ...overrides,
   }
 }
