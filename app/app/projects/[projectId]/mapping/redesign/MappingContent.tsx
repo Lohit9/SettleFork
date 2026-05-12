@@ -45,6 +45,7 @@ import { PageHeader } from '@/components/app/PageHeader'
 import type {
   MappingRow,
   MappingsForRedesignResult,
+  TargetFieldRef,
   TargetTableSummary,
 } from '@/lib/types/mappings-for-redesign'
 import {
@@ -658,6 +659,23 @@ function MappingContentLoaded({
   )
 
   const mutations = useMappingListMutations({ projectId })
+
+  // Drawer redesign PR 1 — universe of target fields for the drawer
+  // header's inline target-field picker. Mirrors `MappingListView`'s
+  // derivation: every target field appears exactly once across rows
+  // (data contract), so a one-pass dedup is sufficient. Memoised on
+  // `data.rows` identity — the parent re-renders on every refresh so
+  // we want the memo to cut work between unrelated state changes.
+  const availableTargetFields = useMemo<TargetFieldRef[]>(() => {
+    const seen = new Set<string>()
+    const out: TargetFieldRef[] = []
+    for (const row of data.rows) {
+      if (seen.has(row.targetField.id)) continue
+      seen.add(row.targetField.id)
+      out.push(row.targetField)
+    }
+    return out
+  }, [data.rows])
 
   const handleFiltersChange = useCallback(
     (next: MappingFilterState) => {
@@ -2012,6 +2030,9 @@ function MappingContentLoaded({
         onRestoreConsumed={handleRestoreConsumed}
         pathDOutputs={pathDOutputs}
         highlightedSourceFieldId={drawerHighlightedSourceFieldId}
+        availableTargetFields={availableTargetFields}
+        onSwapTarget={mutations.swapMappingTarget}
+        onSwapSource={mutations.swapMappingSource}
       />
 
       {/*
