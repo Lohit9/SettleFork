@@ -191,7 +191,23 @@ describe('[redesign guard] no legacy shim or UI types in the redesign path', () 
   //     on `.sort(` exactly.
   it('contains no client-side .sort() or .toSorted() on rows', () => {
     const violations: Array<{ file: string; snippet: string }> = []
+    // Allowlist — files under the redesign path that legitimately sort
+    // a non-rows local structure. Each entry MUST carry a documented
+    // rationale below; do NOT add a file here just to silence the guard.
+    //
+    //   • `MappingListView.tsx` — Mapping list view (flat spreadsheet)
+    //     exposes user-controlled column-header sort, per the Big-4
+    //     audit workflow. The `.sort()` call operates on a derived
+    //     groups array built from the already-sorted server rows —
+    //     ordering is a user-facing UI concern, NOT a re-derivation of
+    //     server contract. Target-led view (which IS server-ordered)
+    //     continues to be checked by this guard.
+    const SORT_ALLOWED_FILES = new Set<string>([
+      'app/app/projects/[projectId]/mapping/redesign/components/MappingListView.tsx',
+    ])
     for (const abs of files) {
+      const relPath = abs.replace(REPO_ROOT + '/', '')
+      if (SORT_ALLOWED_FILES.has(relPath)) continue
       const raw = readFileSync(abs, 'utf-8')
       const code = stripComments(raw)
       // Match `.sort(` or `.toSorted(` as a method call. We intentionally
@@ -199,13 +215,13 @@ describe('[redesign guard] no legacy shim or UI types in the redesign path', () 
       // small enough that a bare client-side `.sort(` is always a
       // contract concern worth flagging. If a utility helper ever legit-
       // imately sorts a non-rows array under this path, relax the guard
-      // by scoping to variable names (rows, filteredRows, groupedRows)
-      // and document why.
+      // by adding the file to `SORT_ALLOWED_FILES` above with a
+      // documented rationale.
       const pattern = /\.(?:sort|toSorted)\s*\(/g
       const matches = code.match(pattern) ?? []
       for (const m of matches) {
         violations.push({
-          file: abs.replace(REPO_ROOT + '/', ''),
+          file: relPath,
           snippet: m,
         })
       }

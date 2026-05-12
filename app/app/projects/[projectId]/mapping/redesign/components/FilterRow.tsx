@@ -378,7 +378,7 @@ export function FilterRow({
         large whitespace between, matching the legacy mapping page.
       */}
       <div
-        className="relative w-72 flex-shrink-0 ml-auto"
+        className="relative ml-auto w-72 flex-shrink-0"
         data-testid="filter-row-search-wrapper"
       >
         <Search className="pointer-events-none absolute left-3 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-gray-400" />

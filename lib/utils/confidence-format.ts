@@ -154,6 +154,29 @@ export function classifyRowConfidence(confidence: number): RowConfidenceBand {
 }
 
 /**
+ * feat/mapping-list-toggle-and-columns refinement pass — binary
+ * predicate for the simplified row confidence color in MappingListView
+ * and FieldMappingRow's `ConfidenceCell`. Replaces the prior 3-band
+ * gradient (green ≥85 / amber 40-84 / red <40) with a single 50%
+ * threshold: confidences ≥50% render in neutral slate, <50% in
+ * muted amber as a soft warning. Founder rationale: the high-confidence
+ * number speaks for itself, and the green/amber/red ramp duplicated
+ * the status dot's hue channel; only the low end warrants a color cue.
+ *
+ * INTENTIONALLY distinct from `classifyRowConfidence` — that 3-band
+ * classifier still drives the drawer's `RowConfidenceSection`,
+ * `ExpandedSourceList`, the DQList, and the AI Suggest ConfidencePill.
+ * Those surfaces keep the gradient by founder decision. Don't collapse.
+ *
+ * 0-1 vs 0-100 tolerance mirrors the rest of this file.
+ */
+export function isRowConfidenceLow(confidence: number): boolean {
+  if (!Number.isFinite(confidence)) return false
+  const normalized = confidence > 1 ? confidence : confidence * 100
+  return normalized < 50
+}
+
+/**
  * Threshold-band-prefixed integer label, used exclusively by
  * `ConfidencePill` for AI Suggest pre-fill UI. Examples:
  *

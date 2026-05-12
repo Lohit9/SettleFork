@@ -111,6 +111,13 @@ interface MappingSummaryStripProps {
    *  populated project. Pass `null` for the defensive empty-state
    *  fallback (renders the awaiting_data label). */
   projectStats: ProjectStats | null
+  /** feat/mapping-list-toggle-and-columns: optional trailing slot
+   *  rendered right-aligned on the same horizontal line as the
+   *  summary chips. The mapping page passes `<ViewModeToggle />`
+   *  here so the toggle reads as part of the summary toolbar rather
+   *  than a separate row. Unset → strip renders unchanged.
+   */
+  trailing?: React.ReactNode
 }
 
 const STATE_LABEL: Record<ProjectStats['state'], string> = {
@@ -121,6 +128,7 @@ const STATE_LABEL: Record<ProjectStats['state'], string> = {
 
 export function MappingSummaryStrip({
   projectStats,
+  trailing,
 }: MappingSummaryStripProps) {
   // State-aware empty: when the project hasn't generated mappings yet
   // (or projectStats is null defensively), the strip renders a single
@@ -134,7 +142,7 @@ export function MappingSummaryStrip({
       <div
         data-testid="mapping-summary-strip"
         data-state={state}
-        className="flex items-center bg-white px-5 py-2 flex-shrink-0"
+        className="flex items-center justify-between bg-white px-5 py-2 flex-shrink-0"
       >
         <span
           data-testid="mapping-summary-empty-label"
@@ -142,6 +150,14 @@ export function MappingSummaryStrip({
         >
           {STATE_LABEL[state]}
         </span>
+        {trailing ? (
+          <div
+            data-testid="mapping-summary-trailing"
+            className="flex items-center"
+          >
+            {trailing}
+          </div>
+        ) : null}
       </div>
     )
   }
@@ -150,7 +166,7 @@ export function MappingSummaryStrip({
     <div
       data-testid="mapping-summary-strip"
       data-state={state}
-      className="flex items-center bg-white px-5 py-2 flex-shrink-0"
+      className="flex items-center justify-between bg-white px-5 py-2 flex-shrink-0"
     >
       <div className="flex items-center gap-3 text-sm text-settle-slate-600">
         {/* PR-7: source-first axis order. Source side answers "what's
@@ -176,18 +192,30 @@ export function MappingSummaryStrip({
             project-wide axis denominators. Conditional Rejected /
             Unmapped chips were dropped — both are now subsumed in the
             redefined `needsReview = total - approved`. */}
+        {/* Linear-style polish: 8px fill + 2px ring @ 25% opacity for
+            the hued summary dots. Mirrors `StatusDot` in
+            MappingListView so the row-level and summary dots read
+            identically (emerald approved, amber needs-review). */}
         <SummaryChip
           label="Approved"
           value={projectStats.target.approved}
-          dotClassName="bg-green-500"
+          dotClassName="bg-emerald-500 ring-2 ring-emerald-500/25"
         />
         <SummaryChipDivider />
         <SummaryChip
           label="Needs Review"
           value={projectStats.target.needsReview}
-          dotClassName="bg-amber-400"
+          dotClassName="bg-amber-400 ring-2 ring-amber-400/25"
         />
       </div>
+      {trailing ? (
+        <div
+          data-testid="mapping-summary-trailing"
+          className="flex items-center"
+        >
+          {trailing}
+        </div>
+      ) : null}
     </div>
   )
 }
@@ -241,7 +269,7 @@ function SummaryChip({
     <span className="flex items-center gap-1.5" data-testid={resolvedTestId}>
       <span
         aria-hidden="true"
-        className={`w-1.5 h-1.5 rounded-full ${dotClassName}`}
+        className={`w-2 h-2 rounded-full ${dotClassName}`}
       />
       <span>
         {label} {valueNode}

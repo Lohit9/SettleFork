@@ -1096,23 +1096,21 @@ describe('FieldMappingRow — light-mode-only invariant', () => {
     expect(cls).not.toMatch(/\bdark:/)
   })
 
-  it('color-graded confidence span uses light-mode hues (green/amber/red) and no dark-prefix', () => {
-    // Phase 4-polish-1 (founder Q9): the confidence cell is now band-
-    // classified — high → green-600 + medium-weight, amber → amber-600,
-    // low → red-600. The legacy slate-500 baseline is gone; this test
-    // asserts the new light-mode color set and reaffirms the no-dark-
-    // prefix invariant so the row stays readable in OS dark mode.
-    //
-    // Refinement 3 (2026-04-26): high-band weight dropped from
-    // font-semibold → font-medium so the number sits in the row's
-    // secondary visual layer. The color band still carries the primary
-    // signal; the lighter weight de-emphasizes the digits themselves.
+  it('confidence span uses neutral light-mode hue for ≥50% (no green coloring) and no dark-prefix', () => {
+    // feat/mapping-list-toggle-and-columns refinement pass: the 3-band
+    // gradient (green/amber/red) was retired in favor of a binary
+    // slate / amber-700 split at 50%. ≥50% renders in neutral slate-700
+    // (the high-confidence number speaks for itself); <50% gets a
+    // muted amber warning. The font-medium weight cue tied to the
+    // legacy green band is dropped — typography weight no longer
+    // doubles up with the color signal.
     const { container } = render(<FieldMappingRow row={mapped({ confidence: 98 })} />)
-    const confidence = container.querySelector('[data-confidence-band="high"]')
+    const confidence = container.querySelector('[data-confidence-band]')
     expect(confidence).toBeTruthy()
     const cls = confidence?.className ?? ''
-    expect(cls).toContain('text-green-600')
-    expect(cls).toContain('font-medium')
+    expect(cls).toContain('text-slate-700')
+    expect(cls).not.toContain('text-green-600')
+    expect(cls).not.toContain('font-medium')
     expect(cls).not.toContain('font-semibold')
     expect(cls).not.toMatch(/\bdark:/)
   })
@@ -1138,63 +1136,71 @@ describe('FieldMappingRow — light-mode-only invariant', () => {
   })
 })
 
-// ─── Phase 4-polish-1 — confidence color-grading ────────────────────────────
+// ─── feat/mapping-list-toggle-and-columns — confidence binary scheme ─────────
 //
-// `classifyRowConfidence` (Block B) gates three bands: ≥85 high, 40-84
-// amber, <40 low. The collapsed-row ConfidenceCell renders each with a
-// light-mode hue + the `data-confidence-band` attribute hook so the
-// invariant tests below have a stable selector regardless of class
-// reshuffling. Block A pairs the high band with a slightly heavier weight
-// for the deuteranopia/protanopia accessibility note (founder Q9.1).
+// The 3-band color gradient (Phase 4-polish-1: green ≥85 / amber 40-84 /
+// red <40 with a font-medium weight cue on the high band) was retired in
+// the feat/mapping-list-toggle-and-columns refinement pass. Founder
+// rationale: the high-confidence number speaks for itself, and the
+// green/amber/red ramp duplicated the status dot's hue channel. The new
+// model is a single 50% cutoff:
 //
-// Refinement 3 (2026-04-26): high-band weight is now `font-medium` (was
-// `font-semibold` at the Phase 4-polish-1 baseline). The differentiation
-// channel is preserved (medium vs. amber/low's font-normal) but at a
-// calmer overall density — the color band remains the primary signal,
-// the weight cue is the second channel for color-blind users.
+//   • confidence ≥ 50%  → text-slate-700 (neutral)
+//   • confidence < 50%  → text-amber-700 (muted warning; distinct from
+//                                          the status dot's amber-400)
+//   • confidence = null → em-dash, no `data-confidence-band` attribute
+//
+// `data-confidence-band` is PRESERVED on the rendered span as a stable
+// test-selector hook — it still reads from `classifyRowConfidence`
+// (3-band) so legacy queries like `[data-confidence-band="high"]`
+// continue to work. The color is independent now, driven by the binary
+// `isRowConfidenceLow` predicate.
 
-describe('FieldMappingRow — Phase 4-polish-1 confidence color-grading', () => {
-  it('renders the high band (≥85) in green-600 with font-medium', () => {
+describe('FieldMappingRow — feat/mapping-list-toggle-and-columns confidence binary scheme', () => {
+  it('renders ≥50% confidence in neutral slate-700 (no green, no weight cue)', () => {
     const { container } = render(<FieldMappingRow row={mapped({ confidence: 92 })} />)
-    const cell = container.querySelector('[data-confidence-band="high"]')
+    const cell = container.querySelector('[data-confidence-band]')
     expect(cell).toBeTruthy()
     const cls = cell?.className ?? ''
-    expect(cls).toContain('text-green-600')
-    expect(cls).toContain('font-medium')
-    // Refinement 3 lock-in: font-semibold was the Phase 4-polish-1
-    // baseline before the founder's "de-emphasize the number" refinement;
-    // pin its absence so a future style refactor cannot silently re-bold
-    // the high-band number.
-    expect(cls).not.toContain('font-semibold')
-  })
-
-  it('renders the boundary value 85 as high (inclusive lower bound)', () => {
-    const { container } = render(<FieldMappingRow row={mapped({ confidence: 85 })} />)
-    expect(container.querySelector('[data-confidence-band="high"]')).toBeTruthy()
-  })
-
-  it('renders the amber band (40-84) in amber-600 without font-medium or font-semibold', () => {
-    // Amber and low rely on hue alone (font-normal default). The high
-    // band is the only band carrying a weight cue, per founder Q9.1.
-    const { container } = render(<FieldMappingRow row={mapped({ confidence: 70 })} />)
-    const cell = container.querySelector('[data-confidence-band="amber"]')
-    expect(cell).toBeTruthy()
-    const cls = cell?.className ?? ''
-    expect(cls).toContain('text-amber-600')
+    expect(cls).toContain('text-slate-700')
+    expect(cls).not.toContain('text-green-600')
     expect(cls).not.toContain('font-medium')
     expect(cls).not.toContain('font-semibold')
   })
 
-  it('renders the boundary value 40 as amber (inclusive lower bound for amber)', () => {
-    const { container } = render(<FieldMappingRow row={mapped({ confidence: 40 })} />)
-    expect(container.querySelector('[data-confidence-band="amber"]')).toBeTruthy()
+  it('renders the 50% boundary in neutral slate (≥50 is the neutral side)', () => {
+    const { container } = render(<FieldMappingRow row={mapped({ confidence: 50 })} />)
+    const cell = container.querySelector('[data-confidence-band]')
+    expect(cell?.className).toContain('text-slate-700')
+    expect(cell?.className).not.toContain('text-amber-700')
   })
 
-  it('renders the low band (<40) in red-600', () => {
+  it('renders <50% confidence in muted amber-700 (soft warning)', () => {
+    // amber-700 is intentionally NOT the status dot's amber-400 — the
+    // two color systems (status vs. confidence) read as different
+    // dimensions rather than competing instances of the same signal.
     const { container } = render(<FieldMappingRow row={mapped({ confidence: 30 })} />)
-    const cell = container.querySelector('[data-confidence-band="low"]')
-    expect(cell).toBeTruthy()
-    expect(cell?.className).toContain('text-red-600')
+    const cell = container.querySelector('[data-confidence-band]')
+    const cls = cell?.className ?? ''
+    expect(cls).toContain('text-amber-700')
+    expect(cls).not.toContain('text-red-600')
+  })
+
+  it('renders 49% in muted amber-700 (above the legacy 40 boundary but <50%)', () => {
+    // Catches a regression where the color is keyed off the legacy
+    // 3-band 40/85 thresholds instead of the new 50% cutoff.
+    const { container } = render(<FieldMappingRow row={mapped({ confidence: 49 })} />)
+    expect(container.querySelector('[data-confidence-band]')?.className).toContain(
+      'text-amber-700',
+    )
+  })
+
+  it('keeps `data-confidence-band` reading from the 3-band classifier (test-stable selector)', () => {
+    // The attribute is preserved as a stable test selector — the new
+    // binary color scheme is independent of the 3-band classification.
+    // Drawer / ExpandedSourceList / DQList still use the gradient.
+    const { container } = render(<FieldMappingRow row={mapped({ confidence: 92 })} />)
+    expect(container.querySelector('[data-confidence-band="high"]')).toBeTruthy()
   })
 
   it('still renders an em-dash (no band) when confidence is null', () => {
@@ -1206,13 +1212,13 @@ describe('FieldMappingRow — Phase 4-polish-1 confidence color-grading', () => 
     expect(screen.getByLabelText('no confidence available')).toBeInTheDocument()
   })
 
-  it('treats 0-1 fractional input via the same band classifier (defensive)', () => {
-    // Same defensive 0-1 vs 0-100 tolerance as
-    // `formatConfidencePercent`. A drifted DB that emits 0.92 still
-    // grades as high, so the row reads consistently with the formatted
-    // percent ("92%" post-Refinement H integer rounding).
+  it('treats 0-1 fractional input the same (defensive scale tolerance)', () => {
+    // Same defensive 0-1 vs 0-100 tolerance as `formatConfidencePercent`.
+    // A drifted DB emitting 0.92 still renders as ≥50% → neutral slate.
     const { container } = render(<FieldMappingRow row={mapped({ confidence: 0.92 })} />)
-    expect(container.querySelector('[data-confidence-band="high"]')).toBeTruthy()
+    expect(container.querySelector('[data-confidence-band]')?.className).toContain(
+      'text-slate-700',
+    )
   })
 })
 
@@ -1398,6 +1404,69 @@ describe('FieldMappingRow — inline actions cell structural presence', () => {
     // The confidence cell is col 5; the actions cell at col 6 sits to
     // its right. So the confidence cell is NOT the last child of body.
     expect(body.lastElementChild).not.toBe(confidenceCell)
+  })
+})
+
+// ─── feat/mapping-list-toggle-and-columns — Edit pencil parity ──────────────
+//
+// The flat view (MappingListView) renders an Edit pencil in the actions
+// cell on every row that has a target — opens the drawer for the row's
+// TFM (or to-be-created TFM, for unmapped-target). The target-led view
+// gains the same affordance: a pencil button at the end of the actions
+// cell that routes through `onRowClick` so a click opens the same
+// MappingDrawer the row-body click opens.
+//
+// Always surfaced when `onRowClick` is wired by the parent — every row
+// kind (mapped, value-assignment, unmapped) gets the pencil, regardless
+// of status. Mirrors the flat view's "every row carries an edit
+// affordance" contract.
+
+describe('FieldMappingRow — Edit pencil parity with flat view', () => {
+  it('renders the Edit pencil button on a mapped row when `onRowClick` is wired', () => {
+    render(<FieldMappingRow row={mapped()} onRowClick={vi.fn()} />)
+    expect(
+      screen.getByTestId('field-mapping-row-edit-button'),
+    ).toBeInTheDocument()
+  })
+
+  it('renders the Edit pencil on a value-assignment row (no source, but a target)', () => {
+    render(<FieldMappingRow row={valueAssignment()} onRowClick={vi.fn()} />)
+    expect(
+      screen.getByTestId('field-mapping-row-edit-button'),
+    ).toBeInTheDocument()
+  })
+
+  it('renders the Edit pencil on an unmapped target row (no TFM yet, but a target)', () => {
+    render(<FieldMappingRow row={unmapped()} onRowClick={vi.fn()} />)
+    expect(
+      screen.getByTestId('field-mapping-row-edit-button'),
+    ).toBeInTheDocument()
+  })
+
+  it('clicking the Edit pencil calls `onRowClick` with the row id', async () => {
+    const onRowClick = vi.fn()
+    render(<FieldMappingRow row={mapped()} onRowClick={onRowClick} />)
+    const button = screen.getByTestId('field-mapping-row-edit-button')
+    await userEvent.click(button)
+    expect(onRowClick).toHaveBeenCalledWith('tfm-1')
+  })
+
+  it('omits the Edit pencil when `onRowClick` is NOT wired (fixture/storybook callers)', () => {
+    render(<FieldMappingRow row={mapped()} />)
+    expect(
+      screen.queryByTestId('field-mapping-row-edit-button'),
+    ).toBeNull()
+  })
+
+  it('the Edit pencil uses the `edit` variant (slate hover hue, not approve/reject)', () => {
+    render(<FieldMappingRow row={mapped()} onRowClick={vi.fn()} />)
+    const button = screen.getByTestId('field-mapping-row-edit-button')
+    expect(button.getAttribute('data-action-variant')).toBe('edit')
+    // Neutral slate hover — the pencil is not a semantic-state action,
+    // so it doesn't inherit the green/red hover hues.
+    expect(button.className).toContain('hover:text-slate-700')
+    expect(button.className).not.toContain('hover:text-green-700')
+    expect(button.className).not.toContain('hover:text-red-700')
   })
 })
 

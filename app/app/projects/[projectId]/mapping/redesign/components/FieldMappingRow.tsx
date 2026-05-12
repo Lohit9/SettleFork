@@ -1,13 +1,13 @@
 'use client'
 
 import { forwardRef, useId, useRef, useState } from 'react'
-import { Check, Pencil, X } from 'lucide-react'
+import { Check, Edit3, Pencil, X } from 'lucide-react'
 import { cn } from '@/components/ui/utils'
 import { ChevronDown, ChevronRight } from '@/components/icons'
 import {
   classifyRowConfidence,
   formatConfidencePercent,
-  type RowConfidenceBand,
+  isRowConfidenceLow,
 } from '@/lib/utils/confidence-format'
 import type {
   MappedRow,
@@ -571,6 +571,7 @@ export const FieldMappingRow = forwardRef<HTMLDivElement, FieldMappingRowProps>(
           onInlineApprove={onInlineApprove}
           onInlineReject={onInlineReject}
           onInlineMap={isInlineSourceEditable ? handleOpenPicker : undefined}
+          onInlineEdit={onRowClick}
         />
       </div>
       {canExpand && row.kind === 'mapped' ? (
@@ -730,6 +731,14 @@ interface InlineActionsCellProps {
   onInlineApprove?: (rowId: string) => void
   onInlineReject?: (rowId: string, anchorEl: HTMLElement) => void
   onInlineMap?: () => void
+  /**
+   * feat/mapping-list-toggle-and-columns refinement pass — the row-edit
+   * pencil. Routes through the parent's `onRowClick` so the click opens
+   * the same MappingDrawer the row-body click opens. Always surfaced
+   * (every row gets the pencil) when `onRowClick` is wired by the
+   * parent; omitted in fixture renders that don't pass a drawer host.
+   */
+  onInlineEdit?: (rowId: string) => void
 }
 
 function InlineActionsCell({
@@ -739,6 +748,7 @@ function InlineActionsCell({
   onInlineApprove,
   onInlineReject,
   onInlineMap,
+  onInlineEdit,
 }: InlineActionsCellProps) {
   // Disable all buttons while an optimistic action is in flight so the
   // user cannot double-fire (e.g. spam Approve, then Reject before the
@@ -804,6 +814,29 @@ function InlineActionsCell({
   void onInlineMap
   void pulseMap
 
+  // feat/mapping-list-toggle-and-columns refinement pass — Edit pencil
+  // sits at the end of the approve/reject pair. Always surfaced when
+  // `onInlineEdit` is wired (the parent provides it whenever the row
+  // is mounted with a drawer host), regardless of row kind or status —
+  // every row carries an edit affordance, mirroring the flat view's
+  // pencil contract. Click routes through `onRowClick(row.id)` so the
+  // drawer opens on the same target as a row-body click.
+  if (onInlineEdit !== undefined) {
+    buttons.push(
+      <ActionIconButton
+        key="edit"
+        testId="field-mapping-row-edit-button"
+        ariaLabel="Open mapping in drawer"
+        tooltip="Open mapping in drawer"
+        onClick={() => onInlineEdit(row.id)}
+        disabled={isBusy}
+        variant="edit"
+      >
+        <Edit3 aria-hidden="true" className="h-3.5 w-3.5" />
+      </ActionIconButton>,
+    )
+  }
+
   return (
     <div
       data-testid="field-mapping-row-actions"
@@ -828,7 +861,7 @@ interface ActionIconButtonProps {
   tooltip: string
   onClick: (e: React.MouseEvent<HTMLButtonElement>) => void
   disabled?: boolean
-  variant: 'approve' | 'reject' | 'map'
+  variant: 'approve' | 'reject' | 'map' | 'edit'
   /**
    * When true, applies the `.animate-button-pulse` keyframe (defined
    * in globals.css) so the button does a Linear-style soft scale +
@@ -890,6 +923,7 @@ const ACTION_VARIANT_CLASSNAME: Record<
   approve: 'text-slate-500 hover:bg-green-100 hover:text-green-700',
   reject: 'text-slate-500 hover:bg-red-100 hover:text-red-700',
   map: 'text-slate-500 hover:bg-blue-100 hover:text-blue-700',
+  edit: 'text-slate-500 hover:bg-slate-100 hover:text-slate-700',
 }
 
 // ─── Rule resolution ─────────────────────────────────────────────────────────
@@ -1188,10 +1222,20 @@ function groupAdjacentSourcesByTable(sources: MappingSourceRef[]): SourceGroup[]
 // now integer-rounded ("92%" not "92.00%"). The `formatConfidencePercent`
 // helper carries the rounding contract — see `lib/utils/confidence-format.ts`.
 
-const CONFIDENCE_BAND_CLASSNAME: Record<RowConfidenceBand, string> = {
-  high: 'text-green-600 font-medium',
-  amber: 'text-amber-600',
-  low: 'text-red-600',
+// feat/mapping-list-toggle-and-columns refinement pass — confidence
+// color simplified to a binary slate / amber-700 split at 50%. Replaces
+// the prior 3-band gradient (green ≥85 / amber 40-84 / red <40); the
+// green coloring was retired because the high-confidence number speaks
+// for itself, and the gradient duplicated the status dot's hue channel.
+//
+// `data-confidence-band` is preserved as a TEST-STABLE selector — still
+// reads from `classifyRowConfidence` (3-band) so existing selectors
+// continue to work. The visual color is independent now, driven by
+// `isRowConfidenceLow` (binary 50% cutoff). Warning hue `text-amber-700`
+// is intentionally NOT the status dot's amber-400 — the two color
+// systems read as different dimensions (status vs. confidence).
+function rowConfidenceTextClass(confidence: number): string {
+  return isRowConfidenceLow(confidence) ? 'text-amber-700' : 'text-slate-700'
 }
 
 function ConfidenceCell({ row }: { row: MappingRow }) {
@@ -1223,9 +1267,10 @@ function ConfidenceCell({ row }: { row: MappingRow }) {
     <span
       className={cn(
         'flex items-center justify-end text-[11px] tabular-nums',
-        CONFIDENCE_BAND_CLASSNAME[band],
+        rowConfidenceTextClass(confidence),
       )}
       data-confidence-band={band}
+      data-confidence-low={isRowConfidenceLow(confidence) ? 'true' : 'false'}
     >
       {formatConfidencePercent(confidence)}
     </span>
