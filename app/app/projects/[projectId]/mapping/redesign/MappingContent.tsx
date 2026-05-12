@@ -1079,6 +1079,90 @@ function MappingContentLoaded({
     [data.rows],
   )
 
+  // Drawer redesign PR 2 TASK 1.6 — single-source ✕ "Remove mapping"
+  // flow. Distinct from the footer Reject button: the user wants the
+  // drawer to STAY OPEN and transition to the unmapped variant for
+  // the same target field (so the banner explaining the just-unmapped
+  // state has somewhere to render, and a follow-up FROM-click can
+  // re-map the field without re-opening the drawer).
+  //
+  // Mechanics mirror `handleDrawerSaveSuccess`:
+  //   1. Compute the new drawerRowId (`unmapped::<targetFieldId>`).
+  //   2. Apply `buildUnmappedOverride(oldTfmId)` so the row currently
+  //      rendered as mapped immediately morphs into the unmapped
+  //      shape — no flicker between the TFM-gone state and the new
+  //      unmapped row arriving.
+  //   3. Arm the `pendingDrawerRowId` sentinel — the new id isn't in
+  //      `data.rows` until `router.refresh()` rehydrates, but the
+  //      stale-id auto-close effect (lines 556-578) skips when the
+  //      sentinel matches.
+  //   4. Swap URL + state to the new id.
+  //   5. Call `mutations.rejectTfm` which dispatches
+  //      `rejectFieldMapping` server-side AND fires `router.refresh()`
+  //      on success.
+  const handleUnmapMapping = useCallback(
+    async (tfmId: string, targetFieldId: string) => {
+      const newRowId = `unmapped::${targetFieldId}`
+      const override = buildUnmappedOverride(tfmId)
+      if (override) writeOptimisticData(tfmId, override)
+      setPendingDrawerRowId(newRowId)
+      setDrawerRowId(newRowId)
+      writeUrl(filters, newRowId)
+      return mutations.rejectTfm(tfmId)
+    },
+    [
+      buildUnmappedOverride,
+      filters,
+      mutations,
+      writeOptimisticData,
+      writeUrl,
+    ],
+  )
+
+  // Drawer redesign PR 2 TASK 2+3 — create a TFM from the drawer's
+  // unmapped or rejected variant via the source ✏ pencil. Mirrors
+  // `mutations.createFromUnmapped`: the server clears any coverage
+  // rejection AND auto-approves the new TFM. After `router.refresh()`
+  // the row at this target field carries a TFM uuid; the drawer's
+  // existing post-save URL effect (handleDrawerSaveSuccess) is NOT
+  // hit here (that path is reserved for the form-save flow), so we
+  // skip the pendingDrawerRowId sentinel — the drawer renders the
+  // mapped variant on the next refresh.
+  const handleCreateMapping = useCallback(
+    async (sourceFieldId: string, targetFieldId: string) => {
+      return mutations.createFromUnmapped({
+        sourceFieldId,
+        targetFieldId,
+        pendingKey: `unmapped::${targetFieldId}`,
+      })
+    },
+    [mutations],
+  )
+
+  // Drawer redesign PR 2 TASK 2+3 — target ✏ on unmapped/rejected
+  // variants does NOT swap a target on a TFM (there is no TFM to
+  // swap). The user picks a different target field and the drawer
+  // navigates to that target's row. Client-only — no server action.
+  //
+  // The new rowId depends on whether the picked target field already
+  // has a TFM:
+  //   • mapped / VA TFM exists → new rowId is the TFM uuid
+  //   • no TFM (unmapped) → new rowId is `unmapped::<targetFieldId>`
+  // Resolve via `data.rows` (one row per target field per the
+  // server contract).
+  const handleNavigateTarget = useCallback(
+    async (newTargetFieldId: string) => {
+      const newRow = data.rows.find(
+        (r) => r.targetField.id === newTargetFieldId,
+      )
+      if (!newRow) return { success: false }
+      setDrawerRowId(newRow.id)
+      writeUrl(filters, newRow.id)
+      return { success: true }
+    },
+    [data.rows, filters, writeUrl],
+  )
+
   // Cleanup safety net — drop overrides under two conditions:
   //   (a) the rowId is no longer present in data.rows (post-refresh:
   //       TFM successfully rejected, key dissolved into
@@ -2033,6 +2117,10 @@ function MappingContentLoaded({
         availableTargetFields={availableTargetFields}
         onSwapTarget={mutations.swapMappingTarget}
         onSwapSource={mutations.swapMappingSource}
+        onEditSources={mutations.editMappingSources}
+        onUnmapMapping={handleUnmapMapping}
+        onCreateMapping={handleCreateMapping}
+        onNavigateTarget={handleNavigateTarget}
       />
 
       {/*

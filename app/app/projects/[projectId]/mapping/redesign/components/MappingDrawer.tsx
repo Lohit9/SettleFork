@@ -326,16 +326,70 @@ export interface MappingDrawerProps {
   ) => Promise<{ success: boolean }>
   /**
    * Drawer redesign PR 1 — header inline-edit commit handler for the
-   * source-field swap flow on single-source mapped rows. Receives the
-   * row id (TFM uuid) and the new source field id. The parent wraps
-   * `mutations.swapMappingSource` (which calls
-   * `updateMappingSourceField` server-side, ordinal-0 branch). Multi-
-   * source rows do NOT surface this affordance in PR 1 — per-source
-   * editing ships in PR 2.
+   * source-field swap flow. Receives the row id and the new source
+   * field id. The parent wraps `mutations.swapMappingSource` (which
+   * calls `updateMappingSourceField` server-side).
+   *
+   * PR 1 single-source: caller passes the bare TFM uuid (ordinal-0
+   * branch). PR 2 multi-source per-source ✏: caller passes the
+   * shimmed contributor row id (`<tfmId>::<mappingSourceId>`) via
+   * `encodeContributorRowId` from `lib/compat/mapping-shim.ts`.
    */
   onSwapSource?: (
     rowId: string,
     newSourceFieldId: string,
+  ) => Promise<{ success: boolean }>
+  /**
+   * Drawer redesign PR 2 — header commit handler for source-set
+   * changes on an existing TFM. Used by per-source ✕ remove (and by
+   * TASK 2 ⊕ Add source / TASK 3 VA conversion). The parent wraps
+   * `mutations.editMappingSources` which dispatches the same-named
+   * server action; the server flips status to `needs_review` on any
+   * source change.
+   */
+  onEditSources?: (args: {
+    tfmId: string
+    sourceFieldIds: string[]
+    combinationType: 'single' | 'concat_space' | 'concat_comma'
+  }) => Promise<{ success: boolean }>
+  /**
+   * Drawer redesign PR 2 TASK 1.6 / 2+3 — handler for the
+   * "Remove mapping" flow. Reused by:
+   *   • Single-source row ✕ (TASK 1.6)
+   *   • Target row ✕ on mapped + VA variants (TASK 2+3)
+   * Deletes the TFM via `rejectFieldMapping` BUT keeps the drawer
+   * open and transitions the row identity from `<tfmId>` to
+   * `unmapped::<targetFieldId>`. Distinct from the footer Reject
+   * button (which closes the drawer per founder decision 2). The
+   * parent (`MappingContent`) updates the `drawerRowId` URL state
+   * via the `pendingDrawerRowId` sentinel + `buildUnmappedOverride`
+   * so the drawer renders `UnmappedBody` immediately without
+   * flicker.
+   */
+  onUnmapMapping?: (
+    tfmId: string,
+    targetFieldId: string,
+  ) => Promise<{ success: boolean }>
+  /**
+   * Drawer redesign PR 2 TASK 2+3 — handler for the source ✏ on
+   * unmapped/rejected variants. Picker → on commit fires
+   * `createMappingFromUnmapped(projectId, sourceFieldId,
+   * targetFieldId)` which creates a new TFM AND clears any coverage
+   * rejection. Auto-approves the new TFM (per the server action).
+   */
+  onCreateMapping?: (
+    sourceFieldId: string,
+    targetFieldId: string,
+  ) => Promise<{ success: boolean }>
+  /**
+   * Drawer redesign PR 2 TASK 2+3 — handler for the target ✏ on
+   * unmapped/rejected variants. Distinct from `onSwapTarget` (which
+   * needs a TFM uuid). Picker → on commit navigates the drawer to
+   * the new target field's row id (mapped/VA TFM uuid OR
+   * `unmapped::<newTargetFieldId>`). Client-only — no server action.
+   */
+  onNavigateTarget?: (
+    newTargetFieldId: string,
   ) => Promise<{ success: boolean }>
 }
 
@@ -358,6 +412,10 @@ export function MappingDrawer({
   availableTargetFields,
   onSwapTarget,
   onSwapSource,
+  onEditSources,
+  onUnmapMapping,
+  onCreateMapping,
+  onNavigateTarget,
 }: MappingDrawerProps) {
   const titleId = useId()
   const drawerRef = useRef<HTMLElement | null>(null)
@@ -643,6 +701,21 @@ export function MappingDrawer({
           '[data-testid="source-schema-sidebar"]',
         )
         if (clickedSidebar) return
+        // Drawer redesign PR 2 TASK 1.5 — the header's inline pickers
+        // and per-source remove popover all portal to `document.body`
+        // (outside `drawerRef`). Mousedown inside any of them must
+        // NOT close the drawer. The pickers own their own
+        // outside-click dismissal, so they still close themselves
+        // when the user clicks the page area beyond both the drawer
+        // and the picker. Scoped by testid (explicit allowlist) to
+        // avoid catching future dialogs we'd want to behave
+        // differently.
+        const clickedPickerOrPopover = target.closest(
+          '[data-testid="inline-source-picker"],' +
+            '[data-testid="target-field-cell-picker"],' +
+            '[data-testid="reject-confirm-popover"]',
+        )
+        if (clickedPickerOrPopover) return
       }
       maybeRequestCloseRef.current()
     }
@@ -1002,6 +1075,10 @@ export function MappingDrawer({
         onClose={maybeRequestClose}
         onSwapTarget={onSwapTarget}
         onSwapSource={onSwapSource}
+        onEditSources={onEditSources}
+        onUnmapMapping={onUnmapMapping}
+        onCreateMapping={onCreateMapping}
+        onNavigateTarget={onNavigateTarget}
         availableTargetFields={availableTargetFields}
         availableSourceFields={availableSourceFields}
       />
@@ -1489,8 +1566,27 @@ function UnmappedBody({
   // affordance becomes redundant).
   const showPencil = !isFormActive
 
+  // Drawer redesign PR 2 TASK 1.6 — inline banner shown at the top
+  // of UnmappedBody when the coverage status is 'rejected'. The
+  // banner explains the just-unmapped state and points the user at
+  // the FROM block (which becomes a click target in TASK 3 — until
+  // then, the user can re-map via the bottom Approve / Create
+  // mapping flow). Slate palette reads as informational rather than
+  // alarming; no new component file — one inline div.
+  const showRejectedBanner = row.status === 'rejected' && !isFormActive
+
   return (
     <>
+      {showRejectedBanner ? (
+        <div
+          data-testid="drawer-unmapped-rejected-banner"
+          className="mb-4 rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-600"
+        >
+          This target field was unmapped. Click{' '}
+          <span className="font-medium">FROM</span> above to assign a new
+          source.
+        </div>
+      ) : null}
       <DrawerSection
         title="Source"
         testId={SOURCE_SECTION_TESTID}
