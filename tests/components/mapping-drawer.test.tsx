@@ -1179,7 +1179,12 @@ describe('MappingDrawer — PR 2 TASK 1.6 rejected-state banner', () => {
     }
   })
 
-  it('banner renders ABOVE the COVERAGE section in DOM order', () => {
+  it('banner renders ABOVE the TARGET FIELD section in DOM order (PR 3b)', () => {
+    // PR 3b: UnmappedBody body order is
+    //   [rejected banner] → TARGET FIELD → COVERAGE → DECISIONS
+    // The legacy SOURCE section (which the pre-PR-3b test referenced)
+    // is retired. Banner-above-target-field is the new DOM-order
+    // invariant.
     render(
       <MappingDrawer
         row={unmapped({ status: 'rejected' })}
@@ -1188,28 +1193,10 @@ describe('MappingDrawer — PR 2 TASK 1.6 rejected-state banner', () => {
       />,
     )
     const banner = screen.getByTestId('drawer-unmapped-rejected-banner')
-    const sourceSection = screen.getByTestId('drawer-section-source')
-    expect(banner.compareDocumentPosition(sourceSection) & 4).toBe(4)
-  })
-
-  it('banner is suppressed while the create-mapping form is active', async () => {
-    const user = userEvent.setup()
-    render(
-      <MappingDrawer
-        row={unmapped({ status: 'rejected' })}
-        isOpen={true}
-        onClose={() => {}}
-        projectId="project-1"
-        availableSourceFields={[]}
-      />,
+    const targetFieldSection = screen.getByTestId(
+      'drawer-section-target-field',
     )
-    expect(
-      screen.getByTestId('drawer-unmapped-rejected-banner'),
-    ).toBeInTheDocument()
-    await user.click(screen.getByTestId('mapping-drawer-edit-pencil'))
-    expect(
-      screen.queryByTestId('drawer-unmapped-rejected-banner'),
-    ).toBeNull()
+    expect(banner.compareDocumentPosition(targetFieldSection) & 4).toBe(4)
   })
 })
 
@@ -1607,12 +1594,21 @@ describe('MappingDrawer — PR 2 TASK 2+3 ⊕ Add source button', () => {
 // placeholder may render any longer.
 
 describe('MappingDrawer — mapped-row body shape + footer', () => {
-  it('mapped row body renders the Sources section (drawer redesign — Target field section removed)', () => {
+  it('mapped row body renders the new SOURCE FIELDS + TARGET FIELD sections (PR 3b)', () => {
+    // PR 3b body redesign: SOURCES + SAMPLE VALUES sections fold
+    // into the new SOURCE FIELDS section, and TARGET FIELD lands
+    // between SOURCE FIELDS and TRANSFORMATION. Status / Confidence
+    // remain in the header (PR 1).
     render(<MappingDrawer row={mapped()} isOpen={true} onClose={() => {}} />)
-    expect(screen.getByTestId('drawer-section-source')).toBeInTheDocument()
-    // Drawer redesign: Target field, Status, Confidence sections all
-    // moved into the compressed header. Their testids must not render.
-    expect(screen.queryByTestId('drawer-section-target-field')).toBeNull()
+    expect(
+      screen.getByTestId('drawer-section-source-fields'),
+    ).toBeInTheDocument()
+    expect(
+      screen.getByTestId('drawer-section-target-field'),
+    ).toBeInTheDocument()
+    // Legacy section testids retired.
+    expect(screen.queryByTestId('drawer-section-source')).toBeNull()
+    expect(screen.queryByTestId('drawer-section-sample-values')).toBeNull()
     expect(screen.queryByTestId('drawer-section-status')).toBeNull()
     expect(screen.queryByTestId('drawer-section-confidence')).toBeNull()
   })
@@ -1974,74 +1970,40 @@ describe('MappingDrawer — body skeleton invariants (all kinds)', () => {
 // `drawer-acknowledgment-reason`) and the OVERVIEW-vs-ANALYSIS section
 // taxonomy that no longer applies under the unified body.
 
-// ─── Rule 6 — Unmapped body (drawer redesign) ──────────────────────────────
+// ─── Rule 6 — Unmapped body (PR 3b body redesign) ──────────────────────────
 //
-// Drawer redesign: Rule 6 reuses the `Sources` section title with an
-// empty-state body ("No source mapped yet"). Footer carries the dual
-// `[Suggest with AI] [Create mapping]` pair (Q11.F lock).
+// PR 3b: UnmappedBody body sequence is
+//   [rejected banner if status=rejected] → TARGET FIELD → COVERAGE → DECISIONS
+// The legacy `<DrawerSection title="Source">` (empty-state + body
+// Edit-pencil that mounted CreateMappingForm) is retired. The header
+// FROM stack's source ✏ is the entry point for creating a mapping.
 
 describe('MappingDrawer — Rule 6 (Unmapped) body', () => {
-  it('renders ONE Sources section with empty-state copy', () => {
+  it('does NOT render the legacy body SOURCE section (retired in PR 3b)', () => {
     render(<MappingDrawer row={unmapped()} isOpen={true} onClose={() => {}} />)
-    const section = screen.getByTestId('drawer-section-source')
-    expect(within(section).getByRole('heading', { level: 3 }).textContent).toBe(
-      'Source',
-    )
-    const empty = screen.getByTestId('drawer-unmapped-empty-state')
-    expect(empty.textContent).toBe('No source mapped yet')
-    expect(empty.className).toContain('italic')
+    expect(screen.queryByTestId('drawer-section-source')).toBeNull()
+    expect(screen.queryByTestId('drawer-unmapped-empty-state')).toBeNull()
   })
 
-  it('does NOT render the legacy Target field / Mapping status sections (moved to header)', () => {
+  it('renders the new TARGET FIELD section', () => {
     render(<MappingDrawer row={unmapped()} isOpen={true} onClose={() => {}} />)
-    expect(screen.queryByTestId('drawer-section-target-field')).toBeNull()
+    expect(
+      screen.getByTestId('drawer-section-target-field'),
+    ).toBeInTheDocument()
+  })
+
+  it('does NOT render a Status section (unmapped state is implicit)', () => {
+    render(<MappingDrawer row={unmapped()} isOpen={true} onClose={() => {}} />)
+    expect(screen.queryByTestId('drawer-section-status')).toBeNull()
     expect(screen.queryByTestId('drawer-section-mapping-status')).toBeNull()
   })
 
-  it('does NOT render a Status section (unmapped state is implicit + dot is hidden)', () => {
+  it('does NOT render a body Edit pencil (retired with body SOURCE section)', () => {
+    // PR 3b: the body Edit pencil (EditPencilButton) that mounted the
+    // legacy CreateMappingForm is gone. The header FROM stack's
+    // source ✏ now handles source-creation entry. The form file
+    // remains until commit 3 but is unreachable from the body UI.
     render(<MappingDrawer row={unmapped()} isOpen={true} onClose={() => {}} />)
-    expect(screen.queryByTestId('drawer-section-status')).toBeNull()
-  })
-
-  it('renders ONLY the Sources-section edit pencil button in the body (Phase E PR α — replaces the pre-α negative-assert)', () => {
-    // Pre-Phase E PR α: this test asserted ZERO buttons in the body
-    // (the only path to mounting the create form was the footer's
-    // [Create mapping] button). PR α adds the inline pencil affordance
-    // in the SOURCE section's headerAside slot to mirror the grid's
-    // pencil-edit pattern; the pencil is the only body-level button.
-    // Approve / Reject / Suggest still live in the footer, never in
-    // the body.
-    render(<MappingDrawer row={unmapped()} isOpen={true} onClose={() => {}} />)
-    const body = screen.getByTestId('mapping-drawer-body')
-    const buttons = within(body).queryAllByRole('button')
-    expect(buttons).toHaveLength(1)
-    expect(buttons[0]?.getAttribute('data-testid')).toBe(
-      'mapping-drawer-edit-pencil',
-    )
-  })
-
-  it('renders the Sources-section edit pencil for unmapped rows (Phase E PR α — flip of the pre-α negative-assert)', () => {
-    render(<MappingDrawer row={unmapped()} isOpen={true} onClose={() => {}} />)
-    const pencil = screen.getByTestId('mapping-drawer-edit-pencil')
-    expect(pencil.tagName).toBe('BUTTON')
-    expect(pencil.getAttribute('aria-label')).toBe('Edit mapping sources')
-  })
-
-  it('hides the Sources-section edit pencil while the create form is mounted (Phase E PR α)', async () => {
-    const user = userEvent.setup()
-    render(
-      <MappingDrawer
-        row={unmapped()}
-        isOpen={true}
-        onClose={() => {}}
-        projectId="project-1"
-        availableSourceFields={[]}
-      />,
-    )
-    // Click the pencil → form should mount and the pencil should
-    // disappear (the affordance is "open the form"; once open it
-    // would be redundant).
-    await user.click(screen.getByTestId('mapping-drawer-edit-pencil'))
     expect(screen.queryByTestId('mapping-drawer-edit-pencil')).toBeNull()
   })
 
@@ -2074,11 +2036,16 @@ describe('MappingDrawer — Value Assignment body', () => {
     expect(screen.queryByTestId('drawer-va-no-sources')).toBeNull()
   })
 
-  it('does NOT render the legacy Target field / Status / Confidence sections', () => {
+  it('renders the new TARGET FIELD section (PR 3b)', () => {
+    // PR 3b: VAs now show a TARGET FIELD section between VALUE
+    // EXPRESSION and ANALYSIS. The pre-PR-3b assertion that
+    // `drawer-section-target-field` is null is reversed.
     render(
       <MappingDrawer row={valueAssignment()} isOpen={true} onClose={() => {}} />,
     )
-    expect(screen.queryByTestId('drawer-section-target-field')).toBeNull()
+    expect(
+      screen.getByTestId('drawer-section-target-field'),
+    ).toBeInTheDocument()
     expect(screen.queryByTestId('drawer-section-status')).toBeNull()
     expect(screen.queryByTestId('drawer-section-confidence')).toBeNull()
   })
@@ -2182,12 +2149,11 @@ describe('MappingDrawer — Value Assignment body', () => {
     ).toBeNull()
   })
 
-  it('section ordering for VA is Value expression → Analysis (drawer redesign PR 1)', () => {
-    // Drawer redesign PR 1 (feat/drawer-header-rewrite): the empty-
-    // state SOURCE section is removed, and VALUE EXPRESSION is
-    // promoted to the lead position. Order is `Value expression →
-    // Analysis [→ Decisions]`. The leading OVERVIEW section from
-    // the prior pass remains removed.
+  it('section ordering for VA is Value expression → Target field → Analysis (PR 3b)', () => {
+    // PR 3b: TARGET FIELD section inserts between VALUE EXPRESSION
+    // and ANALYSIS. With aiReasoning present, ANALYSIS still
+    // renders (AI reasoning is its only remaining content; type-comp
+    // moved to per-section displays).
     render(
       <MappingDrawer
         row={valueAssignment({ aiReasoning: 'reason text' })}
@@ -2199,8 +2165,409 @@ describe('MappingDrawer — Value Assignment body', () => {
     const sections = within(body).getAllByRole('heading', { level: 3 })
     expect(sections.map((h) => h.textContent)).toEqual([
       'Value expression',
+      'Target field',
       'Analysis',
     ])
+  })
+})
+
+// ─── PR 3b — SOURCE FIELDS section (mapped rows) ──────────────────────────
+//
+// Replaces the legacy `<DrawerSection title="Source">` +
+// `SampleValuesSection` pair. Renders one block per source in server
+// ordinal-asc order. Each block carries:
+//   • Identity: name · table · type · confidence (one line)
+//   • Join annotation line (when source.joinAnnotation is non-null)
+//   • Sample values list (when source.sampleValues is non-empty)
+// Hidden when the row has no sources (VA / unmapped / rejected).
+
+describe('MappingDrawer — PR 3b SOURCE FIELDS section', () => {
+  it('renders ONE block for a single-source mapped row', () => {
+    render(<MappingDrawer row={mapped()} isOpen={true} onClose={() => {}} />)
+    const section = screen.getByTestId('drawer-section-source-fields')
+    expect(section).toBeInTheDocument()
+    const blocks = within(section).getAllByTestId('drawer-source-field-block')
+    expect(blocks).toHaveLength(1)
+  })
+
+  it('renders N blocks for a multi-source mapped row in server ordinal order', () => {
+    render(
+      <MappingDrawer
+        row={mapped({
+          sources: [
+            cifSource(0, 'FNAME'),
+            cifSource(1, 'LNAME'),
+            cifSource(2, 'MI'),
+          ],
+        })}
+        isOpen={true}
+        onClose={() => {}}
+      />,
+    )
+    const blocks = screen.getAllByTestId('drawer-source-field-block')
+    expect(blocks).toHaveLength(3)
+    expect(blocks.map((b) => b.getAttribute('data-ordinal'))).toEqual([
+      '0',
+      '1',
+      '2',
+    ])
+  })
+
+  it('each block shows field name + table + type + confidence on the identity line', () => {
+    render(<MappingDrawer row={mapped({ confidence: 87 })} isOpen={true} onClose={() => {}} />)
+    const block = screen.getByTestId('drawer-source-field-block')
+    expect(
+      within(block).getByTestId('drawer-source-field-name').textContent,
+    ).toBe('ACCT_NO')
+    expect(
+      within(block).getByTestId('drawer-source-field-table').textContent,
+    ).toBe('ACCT_MASTER')
+    expect(
+      within(block).getByTestId('drawer-source-field-type').textContent,
+    ).toBe('NUMBER')
+    expect(
+      within(block).getByTestId('drawer-source-field-confidence').textContent,
+    ).toMatch(/\d+%/)
+  })
+
+  it('renders the join annotation line ONLY when source.joinAnnotation is non-null', () => {
+    render(
+      <MappingDrawer
+        row={mapped({
+          sources: [source({ joinAnnotation: '(join: ProductSKU)' })],
+        })}
+        isOpen={true}
+        onClose={() => {}}
+      />,
+    )
+    expect(
+      screen.getByTestId('drawer-source-field-join').textContent,
+    ).toBe('(join: ProductSKU)')
+  })
+
+  it('omits the join annotation line when joinAnnotation is null', () => {
+    render(<MappingDrawer row={mapped()} isOpen={true} onClose={() => {}} />)
+    expect(screen.queryByTestId('drawer-source-field-join')).toBeNull()
+  })
+
+  it('renders sample values when source.sampleValues is non-empty', () => {
+    render(
+      <MappingDrawer
+        row={mapped({
+          sources: [
+            source({ sampleValues: ['alpha', 'beta', 'gamma'] }),
+          ],
+        })}
+        isOpen={true}
+        onClose={() => {}}
+      />,
+    )
+    const block = screen.getByTestId('drawer-source-field-block')
+    const samples = within(block).getAllByTestId(
+      'drawer-source-field-sample-row',
+    )
+    expect(samples.map((s) => s.textContent)).toEqual(['alpha', 'beta', 'gamma'])
+  })
+
+  it('omits the sample-values subsection when sampleValues is empty', () => {
+    render(<MappingDrawer row={mapped()} isOpen={true} onClose={() => {}} />)
+    expect(
+      screen.queryByTestId('drawer-source-field-samples'),
+    ).toBeNull()
+  })
+
+  it('is hidden for value-assignment rows (no sources)', () => {
+    render(
+      <MappingDrawer row={valueAssignment()} isOpen={true} onClose={() => {}} />,
+    )
+    expect(screen.queryByTestId('drawer-section-source-fields')).toBeNull()
+  })
+
+  it('is hidden for unmapped rows', () => {
+    render(<MappingDrawer row={unmapped()} isOpen={true} onClose={() => {}} />)
+    expect(screen.queryByTestId('drawer-section-source-fields')).toBeNull()
+  })
+})
+
+// ─── PR 3b — TARGET FIELD section (every variant) ─────────────────────────
+//
+// Consumes the additive `TargetFieldRef` fields from PR 3a:
+//   • Identity: name · table · type
+//   • Primary key / Foreign key → ref / Required / Default / Description
+//   • Sample values list (up to 5) OR "No sample data available" fallback
+
+describe('MappingDrawer — PR 3b TARGET FIELD section', () => {
+  it('renders for mapped rows', () => {
+    render(<MappingDrawer row={mapped()} isOpen={true} onClose={() => {}} />)
+    expect(
+      screen.getByTestId('drawer-section-target-field'),
+    ).toBeInTheDocument()
+  })
+
+  it('renders for value-assignment rows', () => {
+    render(
+      <MappingDrawer row={valueAssignment()} isOpen={true} onClose={() => {}} />,
+    )
+    expect(
+      screen.getByTestId('drawer-section-target-field'),
+    ).toBeInTheDocument()
+  })
+
+  it('renders for unmapped + rejected rows', () => {
+    for (const row of [unmapped(), unmapped({ status: 'rejected' })]) {
+      const { unmount } = render(
+        <MappingDrawer row={row} isOpen={true} onClose={() => {}} />,
+      )
+      expect(
+        screen.getByTestId('drawer-section-target-field'),
+      ).toBeInTheDocument()
+      unmount()
+    }
+  })
+
+  it('shows identity: name · table · type', () => {
+    render(<MappingDrawer row={mapped()} isOpen={true} onClose={() => {}} />)
+    expect(
+      screen.getByTestId('drawer-target-field-name').textContent,
+    ).toBe('customer_id')
+    expect(
+      screen.getByTestId('drawer-target-field-table').textContent,
+    ).toBe('accounts')
+    expect(
+      screen.getByTestId('drawer-target-field-type').textContent,
+    ).toBe('VARCHAR(200)')
+  })
+
+  it('shows "Primary key" line when isPrimaryKey=true', () => {
+    render(
+      <MappingDrawer
+        row={mapped({
+          targetField: targetField({ isPrimaryKey: true }),
+        })}
+        isOpen={true}
+        onClose={() => {}}
+      />,
+    )
+    expect(
+      screen.getByTestId('drawer-target-field-pk').textContent,
+    ).toBe('Primary key')
+    expect(screen.queryByTestId('drawer-target-field-fk')).toBeNull()
+  })
+
+  it('shows "Foreign key → <ref>" line when isForeignKey=true and not PK', () => {
+    render(
+      <MappingDrawer
+        row={mapped({
+          targetField: targetField({
+            isForeignKey: true,
+            fkReference: 'Manufacturing Users.rstk__externalid__c',
+          }),
+        })}
+        isOpen={true}
+        onClose={() => {}}
+      />,
+    )
+    expect(
+      screen.getByTestId('drawer-target-field-fk').textContent,
+    ).toContain('Foreign key →')
+    expect(
+      screen.getByTestId('drawer-target-field-fk').textContent,
+    ).toContain('Manufacturing Users.rstk__externalid__c')
+  })
+
+  it('prefers PK over FK when both are true (compound key)', () => {
+    render(
+      <MappingDrawer
+        row={mapped({
+          targetField: targetField({
+            isPrimaryKey: true,
+            isForeignKey: true,
+            fkReference: 'Division Master.rstk__externalid__c',
+          }),
+        })}
+        isOpen={true}
+        onClose={() => {}}
+      />,
+    )
+    expect(screen.getByTestId('drawer-target-field-pk')).toBeInTheDocument()
+    expect(screen.queryByTestId('drawer-target-field-fk')).toBeNull()
+  })
+
+  it('shows "Required" line when isNullable=false', () => {
+    render(
+      <MappingDrawer
+        row={mapped({
+          targetField: targetField({ isNullable: false }),
+        })}
+        isOpen={true}
+        onClose={() => {}}
+      />,
+    )
+    expect(
+      screen.getByTestId('drawer-target-field-required'),
+    ).toBeInTheDocument()
+  })
+
+  it('omits "Required" line when isNullable=true', () => {
+    render(
+      <MappingDrawer
+        row={mapped({
+          targetField: targetField({ isNullable: true }),
+        })}
+        isOpen={true}
+        onClose={() => {}}
+      />,
+    )
+    expect(screen.queryByTestId('drawer-target-field-required')).toBeNull()
+  })
+
+  it('shows the Default line ONLY when defaultValue is non-null', () => {
+    const { unmount } = render(
+      <MappingDrawer
+        row={mapped({
+          targetField: targetField({ defaultValue: 'NOW()' }),
+        })}
+        isOpen={true}
+        onClose={() => {}}
+      />,
+    )
+    expect(
+      screen.getByTestId('drawer-target-field-default').textContent,
+    ).toContain('NOW()')
+    unmount()
+
+    render(<MappingDrawer row={mapped()} isOpen={true} onClose={() => {}} />)
+    expect(screen.queryByTestId('drawer-target-field-default')).toBeNull()
+  })
+
+  it('shows the Description line ONLY when description is non-null', () => {
+    const { unmount } = render(
+      <MappingDrawer
+        row={mapped({
+          targetField: targetField({
+            description: 'Item-level commodity classification.',
+          }),
+        })}
+        isOpen={true}
+        onClose={() => {}}
+      />,
+    )
+    expect(
+      screen.getByTestId('drawer-target-field-description').textContent,
+    ).toBe('Item-level commodity classification.')
+    unmount()
+
+    render(<MappingDrawer row={mapped()} isOpen={true} onClose={() => {}} />)
+    expect(
+      screen.queryByTestId('drawer-target-field-description'),
+    ).toBeNull()
+  })
+
+  it('shows sample values when present (capped at 5 UI-side)', () => {
+    render(
+      <MappingDrawer
+        row={mapped({
+          targetField: targetField({
+            sampleValues: ['a', 'b', 'c', 'd', 'e', 'f', 'g'],
+          }),
+        })}
+        isOpen={true}
+        onClose={() => {}}
+      />,
+    )
+    const samples = screen.getAllByTestId('drawer-target-field-sample-row')
+    expect(samples).toHaveLength(5)
+    expect(samples.map((s) => s.textContent)).toEqual(['a', 'b', 'c', 'd', 'e'])
+  })
+
+  it('shows the "No sample data available" fallback when sampleValues is empty', () => {
+    render(<MappingDrawer row={mapped()} isOpen={true} onClose={() => {}} />)
+    expect(
+      screen.getByTestId('drawer-target-field-no-samples').textContent,
+    ).toBe('No sample data available — target schema only')
+  })
+})
+
+// ─── PR 3b — body section ordering invariants ─────────────────────────────
+
+describe('MappingDrawer — PR 3b body section ordering', () => {
+  it('mapped (no transform / DQ / decisions): SOURCE FIELDS → TARGET FIELD', () => {
+    render(<MappingDrawer row={mapped()} isOpen={true} onClose={() => {}} />)
+    const body = screen.getByTestId('mapping-drawer-body')
+    const sectionTestIds = Array.from(
+      body.querySelectorAll('[data-testid^="drawer-section-"]'),
+    ).map((el) => el.getAttribute('data-testid'))
+    // No sources, no aiReasoning, no transformation — TRANSFORMATION
+    // still renders as a "Define Transform" nav. ANALYSIS hides when
+    // no AI reasoning.
+    const idx = (id: string) => sectionTestIds.indexOf(id)
+    expect(idx('drawer-section-source-fields')).toBeGreaterThanOrEqual(0)
+    expect(idx('drawer-section-target-field')).toBeGreaterThan(
+      idx('drawer-section-source-fields'),
+    )
+  })
+
+  it('mapped order with all sections: SOURCE FIELDS → TARGET FIELD → TRANSFORMATION → ANALYSIS', () => {
+    render(
+      <MappingDrawer
+        row={mapped({
+          aiReasoning: 'reason',
+          hasTransformation: true,
+          transformationStatus: 'applied',
+          transformationDescription: 'desc',
+          transformationSqlPreview: 'SELECT 1',
+        })}
+        isOpen={true}
+        onClose={() => {}}
+      />,
+    )
+    const body = screen.getByTestId('mapping-drawer-body')
+    const sectionTestIds = Array.from(
+      body.querySelectorAll('[data-testid^="drawer-section-"]'),
+    ).map((el) => el.getAttribute('data-testid'))
+    const idx = (id: string) => sectionTestIds.indexOf(id)
+    expect(idx('drawer-section-source-fields')).toBeLessThan(
+      idx('drawer-section-target-field'),
+    )
+    expect(idx('drawer-section-target-field')).toBeLessThan(
+      idx('drawer-section-transformation'),
+    )
+    expect(idx('drawer-section-transformation')).toBeLessThan(
+      idx('drawer-section-analysis'),
+    )
+  })
+
+  it('VA order: VALUE EXPRESSION → TARGET FIELD → ANALYSIS', () => {
+    render(
+      <MappingDrawer
+        row={valueAssignment({ aiReasoning: 'reason' })}
+        isOpen={true}
+        onClose={() => {}}
+      />,
+    )
+    const body = screen.getByTestId('mapping-drawer-body')
+    const sectionTestIds = Array.from(
+      body.querySelectorAll('[data-testid^="drawer-section-"]'),
+    ).map((el) => el.getAttribute('data-testid'))
+    const idx = (id: string) => sectionTestIds.indexOf(id)
+    expect(idx('drawer-section-value-expression')).toBeLessThan(
+      idx('drawer-section-target-field'),
+    )
+    expect(idx('drawer-section-target-field')).toBeLessThan(
+      idx('drawer-section-analysis'),
+    )
+  })
+
+  it('unmapped order: TARGET FIELD → COVERAGE', () => {
+    render(<MappingDrawer row={unmapped()} isOpen={true} onClose={() => {}} />)
+    const body = screen.getByTestId('mapping-drawer-body')
+    const sectionTestIds = Array.from(
+      body.querySelectorAll('[data-testid^="drawer-section-"]'),
+    ).map((el) => el.getAttribute('data-testid'))
+    const idx = (id: string) => sectionTestIds.indexOf(id)
+    expect(idx('drawer-section-target-field')).toBeLessThan(
+      idx('drawer-section-coverage'),
+    )
   })
 })
 
@@ -2305,909 +2672,6 @@ function rule4Mapped(
     ...overrides,
   })
 }
-
-// ── Rule 1 mapped body (single source) ─────────────────────────────────────
-
-describe('MappingDrawer — Rule 1 (single source) mapped body', () => {
-  it('renders the Sources section as the FIRST body section (drawer redesign §3)', () => {
-    // Drawer redesign refinements §3: SOURCES is now the first body
-    // section. The prior pass's leading OVERVIEW section is removed
-    // entirely (drawer redesign refinements §2).
-    render(<MappingDrawer row={mapped()} isOpen={true} onClose={() => {}} />)
-    const section = screen.getByTestId('drawer-section-source')
-    expect(section).toBeInTheDocument()
-    expect(within(section).getByRole('heading', { level: 3 }).textContent).toBe(
-      'Source',
-    )
-    // OVERVIEW is gone.
-    expect(screen.queryByTestId('drawer-section-overview')).toBeNull()
-  })
-
-  it('renders exactly one source card for Rule 1', () => {
-    render(<MappingDrawer row={mapped()} isOpen={true} onClose={() => {}} />)
-    const cards = screen.getAllByTestId('drawer-source-card')
-    expect(cards).toHaveLength(1)
-  })
-
-  it('Rule 1 source card shows TableBadge + field name AND per-source confidence (TARGET-led identity)', () => {
-    // Drawer redesign — TARGET-led identity (this iteration): per-
-    // source confidence is restored on ALL rows, including Rule 1
-    // single-source. The header now leads with the target field and
-    // carries no confidence number, so the per-source percent is
-    // the drawer's only confidence surface. The minor redundancy
-    // with the list view's right-edge confidence column on Rule 1
-    // is acceptable — adjacency to the source identity makes the
-    // number meaningful in context.
-    render(
-      <MappingDrawer
-        row={mapped({
-          sources: [
-            source({
-              confidence: 98,
-              sourceField: { id: 'sf-1', name: 'CIF_NO', dataType: 'NUMBER', isNullable: false },
-              sourceTable: { id: 'st-1', name: 'CIF_MASTER' },
-            }),
-          ],
-        })}
-        isOpen={true}
-        onClose={() => {}}
-      />,
-    )
-    const card = screen.getByTestId('drawer-source-card')
-    expect(within(card).getByText('CIF_MASTER')).toBeInTheDocument()
-    expect(within(card).getByTestId('drawer-source-field-name').textContent).toBe(
-      'CIF_NO',
-    )
-    // Per-source confidence is VISIBLE on Rule 1, color-banded.
-    const confidence = within(card).getByTestId('drawer-source-confidence')
-    expect(confidence.textContent).toBe('98%')
-    expect(confidence.getAttribute('data-confidence-band')).toBe('high')
-    // High band uses green-medium (matches list-view ConfidenceCell).
-    expect(confidence.className).toContain('text-green-600')
-    expect(confidence.className).toContain('font-medium')
-  })
-
-  it('Rule 1 source confidence color-bands by classifyRowConfidence (≥85 high, 40-84 amber, <40 low)', () => {
-    for (const [conf, band, hueClass] of [
-      [98, 'high', 'text-green-600'] as const,
-      [85, 'high', 'text-green-600'] as const,
-      [70, 'amber', 'text-amber-600'] as const,
-      [40, 'amber', 'text-amber-600'] as const,
-      [25, 'low', 'text-red-600'] as const,
-    ]) {
-      const { unmount } = render(
-        <MappingDrawer
-          row={mapped({
-            sources: [
-              source({
-                confidence: conf,
-                sourceField: { id: 'sf-c', name: 'F', dataType: 'VARCHAR', isNullable: false },
-                sourceTable: { id: 'st-c', name: 'T' },
-              }),
-            ],
-          })}
-          isOpen={true}
-          onClose={() => {}}
-        />,
-      )
-      const cell = screen.getByTestId('drawer-source-confidence')
-      expect(cell.getAttribute('data-confidence-band')).toBe(band)
-      expect(cell.className).toContain(hueClass)
-      unmount()
-    }
-  })
-
-  it('source card does NOT render a join annotation for Rule 1 (always null)', () => {
-    render(<MappingDrawer row={mapped()} isOpen={true} onClose={() => {}} />)
-    expect(screen.queryByTestId('drawer-source-join')).toBeNull()
-  })
-
-  it('Sample Values is a top-level body section between Sources and Analysis (drawer redesign §3)', () => {
-    // Drawer redesign refinements §3: SAMPLE VALUES is the second
-    // body section, sitting between SOURCES and ANALYSIS. The
-    // section is rendered only when at least one source has
-    // non-empty sample data.
-    render(
-      <MappingDrawer
-        row={mapped({
-          sources: [source({ sampleValues: ['12345', '67890', '24680'] })],
-        })}
-        isOpen={true}
-        onClose={() => {}}
-      />,
-    )
-    const section = screen.getByTestId('drawer-section-sample-values')
-    expect(within(section).getByRole('heading', { level: 3 }).textContent).toBe(
-      'Sample values',
-    )
-    // Sources legacy nested block is gone.
-    expect(screen.queryByTestId('drawer-source-samples')).toBeNull()
-  })
-
-  it('Sample Values single-source field block is EXPANDED by default (drawer redesign §5)', () => {
-    // Drawer redesign refinements §5 (founder canary review):
-    // single-source rows default the lone field block to expanded.
-    // There's one source and no choice to make; showing values
-    // immediately serves the verify-task case.
-    render(
-      <MappingDrawer
-        row={mapped({
-          sources: [source({ sampleValues: ['12345', '67890', '24680'] })],
-        })}
-        isOpen={true}
-        onClose={() => {}}
-      />,
-    )
-    const section = screen.getByTestId('drawer-section-sample-values')
-    const toggle = within(section).getByTestId('drawer-sample-values-toggle')
-    expect(toggle.getAttribute('aria-expanded')).toBe('true')
-    const rows = within(section).getAllByTestId('drawer-sample-values-row')
-    expect(rows.map((n) => n.textContent)).toEqual([
-      '12345',
-      '67890',
-      '24680',
-    ])
-  })
-
-  it('Sample Values section is omitted when no source has sample data', () => {
-    render(<MappingDrawer row={mapped()} isOpen={true} onClose={() => {}} />)
-    expect(screen.queryByTestId('drawer-section-sample-values')).toBeNull()
-    expect(screen.queryByTestId('drawer-sample-values-toggle')).toBeNull()
-  })
-
-  it('Sample Values renders one row per value with no client-side truncation', () => {
-    // The wire payload caps sample values at 10. The drawer surfaces
-    // every value verbatim — no "+N more", no truncation, no
-    // grid-mode collapse.
-    const ten = Array.from({ length: 10 }, (_, i) => `v${i + 1}`)
-    render(
-      <MappingDrawer
-        row={mapped({ sources: [source({ sampleValues: ten })] })}
-        isOpen={true}
-        onClose={() => {}}
-      />,
-    )
-    const rows = screen.getAllByTestId('drawer-sample-values-row')
-    expect(rows.map((n) => n.textContent)).toEqual(ten)
-  })
-
-  it('Sample Values long values wrap with break-words rather than truncate', () => {
-    render(
-      <MappingDrawer
-        row={mapped({
-          sources: [
-            source({
-              sampleValues: [
-                'one very long descriptive value that overflows a narrow drawer',
-              ],
-            }),
-          ],
-        })}
-        isOpen={true}
-        onClose={() => {}}
-      />,
-    )
-    const row = screen.getByTestId('drawer-sample-values-row')
-    expect(row.className).toContain('break-words')
-    expect(row.className).not.toContain('truncate')
-    expect(row.getAttribute('title')).toBeNull()
-  })
-
-  it('per-source AI reasoning is NO LONGER rendered inline on the source card', () => {
-    // Drawer redesign §2 lock — per-source aiReasoning folds into the
-    // AI Reasoning section (one labelled paragraph per source) so the
-    // Sources section line stays scannable.
-    render(
-      <MappingDrawer
-        row={mapped({
-          sources: [
-            source({ aiReasoning: 'Direct PK match in dominant table.' }),
-          ],
-        })}
-        isOpen={true}
-        onClose={() => {}}
-      />,
-    )
-    expect(screen.queryByTestId('drawer-source-reasoning')).toBeNull()
-  })
-
-  it('type compatibility renders ONLY in Analysis, not per-source (drawer redesign §4)', () => {
-    // Drawer redesign refinements §4: type compatibility moves from
-    // the now-removed OVERVIEW section into the new ANALYSIS section
-    // as a compact verdict line (`VARCHAR(4) → VARCHAR(10) ✓
-    // compatible`). The per-source `<SourceCard>` does not render
-    // type-compat at all — SOURCES is identity-only.
-    render(
-      <MappingDrawer
-        row={mapped({
-          sources: [
-            source({
-              typeCompatibility: 'NUMBER → VARCHAR(200) needs CAST',
-              sourceField: {
-                id: 'sf-1',
-                name: 'F',
-                dataType: 'NUMBER',
-                isNullable: false,
-              },
-            }),
-          ],
-          targetField: targetField({ dataType: 'VARCHAR(200)' }),
-        })}
-        isOpen={true}
-        onClose={() => {}}
-      />,
-    )
-    // Per-source type-compat span is gone.
-    expect(screen.queryByTestId('drawer-source-type-compat')).toBeNull()
-    // Negative invariant — no standalone Type Compatibility section.
-    expect(screen.queryByTestId('drawer-section-type-compat')).toBeNull()
-    // The prior pass's Overview-scoped testid is gone.
-    expect(screen.queryByTestId('drawer-overview-type-compat')).toBeNull()
-    // Type compat appears in Analysis as a compact verdict line.
-    const compat = screen.getByTestId('drawer-analysis-type-compat')
-    expect(compat.getAttribute('data-verdict')).toBe('warning')
-    expect(compat.textContent).toContain('NUMBER')
-    expect(compat.textContent).toContain('VARCHAR(200)')
-    expect(
-      within(compat).getByTestId(
-        'drawer-analysis-type-compat-verdict-warning',
-      ),
-    ).toBeInTheDocument()
-  })
-
-  it('does NOT render the legacy Target field / Confidence / Status sections', () => {
-    render(<MappingDrawer row={mapped()} isOpen={true} onClose={() => {}} />)
-    expect(screen.queryByTestId('drawer-section-target-field')).toBeNull()
-    expect(screen.queryByTestId('drawer-section-confidence')).toBeNull()
-    expect(screen.queryByTestId('drawer-section-status')).toBeNull()
-  })
-
-  it('does NOT render the Combination "Combine with" label for Rule 1 (single source)', () => {
-    render(<MappingDrawer row={mapped()} isOpen={true} onClose={() => {}} />)
-    expect(screen.queryByTestId('drawer-combination-label')).toBeNull()
-    // Legacy Combination SECTION testid is also absent.
-    expect(screen.queryByTestId('drawer-section-combination')).toBeNull()
-  })
-
-  it('Analysis section omits AI reasoning when neither row-level nor per-source is present (Q11.C lock)', () => {
-    // Drawer redesign refinements §4: AI reasoning lives inside the
-    // ANALYSIS section. The visibility gate (hide when no reasoning
-    // of any kind) carries over verbatim. Type compatibility still
-    // renders for the dominant source.
-    render(
-      <MappingDrawer
-        row={mapped({ aiReasoning: null })}
-        isOpen={true}
-        onClose={() => {}}
-      />,
-    )
-    expect(screen.queryByTestId('drawer-section-ai-reasoning')).toBeNull()
-    expect(screen.queryByTestId('drawer-ai-reasoning-toggle')).toBeNull()
-    // ANALYSIS still renders because type compat is always shown for
-    // mapped rows (mapped rows have a dominant source).
-    expect(screen.getByTestId('drawer-section-analysis')).toBeInTheDocument()
-  })
-
-  it('AI Reasoning toggle inside Analysis is OPEN by default for needs_review (Q11.B lock)', () => {
-    render(
-      <MappingDrawer
-        row={mapped({
-          aiReasoning: 'Single-source mapping; high confidence.',
-          status: 'needs_review',
-        })}
-        isOpen={true}
-        onClose={() => {}}
-      />,
-    )
-    const analysis = screen.getByTestId('drawer-section-analysis')
-    const toggle = within(analysis).getByTestId('drawer-ai-reasoning-toggle')
-    expect(toggle.getAttribute('aria-expanded')).toBe('true')
-    const reasoning = within(analysis).getByTestId('drawer-ai-reasoning')
-    expect(reasoning.textContent).toBe('Single-source mapping; high confidence.')
-  })
-
-  it('AI Reasoning toggle inside Analysis is CLOSED by default for approved (Q11.B lock)', () => {
-    render(
-      <MappingDrawer
-        row={mapped({
-          aiReasoning: 'Single-source mapping; high confidence.',
-          status: 'approved',
-        })}
-        isOpen={true}
-        onClose={() => {}}
-      />,
-    )
-    const analysis = screen.getByTestId('drawer-section-analysis')
-    const toggle = within(analysis).getByTestId('drawer-ai-reasoning-toggle')
-    expect(toggle.getAttribute('aria-expanded')).toBe('false')
-    expect(within(analysis).queryByTestId('drawer-ai-reasoning')).toBeNull()
-  })
-
-  it('clicking the AI Reasoning toggle inside Analysis expands and collapses the panel', async () => {
-    const user = userEvent.setup()
-    render(
-      <MappingDrawer
-        row={mapped({
-          aiReasoning: 'Single-source mapping; high confidence.',
-          status: 'approved',
-        })}
-        isOpen={true}
-        onClose={() => {}}
-      />,
-    )
-    const toggle = screen.getByTestId('drawer-ai-reasoning-toggle')
-    expect(toggle.getAttribute('aria-expanded')).toBe('false')
-    await user.click(toggle)
-    expect(toggle.getAttribute('aria-expanded')).toBe('true')
-    expect(screen.getByTestId('drawer-ai-reasoning')).toBeInTheDocument()
-    await user.click(toggle)
-    expect(toggle.getAttribute('aria-expanded')).toBe('false')
-    expect(screen.queryByTestId('drawer-ai-reasoning')).toBeNull()
-  })
-
-  it('section ordering for Rule 1 is Sources → Analysis → Transformation when no sample data (drawer redesign §3)', () => {
-    // Drawer redesign refinements §3: body order is SOURCES →
-    // SAMPLE VALUES → ANALYSIS → TRANSFORMATION. SAMPLE VALUES is
-    // omitted when no source has sample data, leaving three
-    // sections. The leading OVERVIEW from the prior pass is gone.
-    render(
-      <MappingDrawer
-        row={mapped({
-          aiReasoning: 'reason text',
-          // Force the Transformation section to render via the Define link.
-          combinationType: 'single',
-          hasTransformation: false,
-        })}
-        isOpen={true}
-        onClose={() => {}}
-      />,
-    )
-    const body = screen.getByTestId('mapping-drawer-body')
-    const headings = within(body).getAllByRole('heading', { level: 3 })
-    expect(headings.map((h) => h.textContent)).toEqual([
-      'Source',
-      'Analysis',
-      'Transformation',
-    ])
-  })
-
-  it('section ordering for Rule 1 is Sources → Sample Values → Analysis → Transformation when sample data is present (drawer redesign §3)', () => {
-    // Drawer redesign refinements §3: full four-section body when
-    // every section has content. SAMPLE VALUES sits between SOURCES
-    // and ANALYSIS.
-    render(
-      <MappingDrawer
-        row={mapped({
-          aiReasoning: 'reason text',
-          combinationType: 'single',
-          hasTransformation: false,
-          sources: [source({ sampleValues: ['A', 'B'] })],
-        })}
-        isOpen={true}
-        onClose={() => {}}
-      />,
-    )
-    const body = screen.getByTestId('mapping-drawer-body')
-    const headings = within(body).getAllByRole('heading', { level: 3 })
-    expect(headings.map((h) => h.textContent)).toEqual([
-      'Source',
-      'Sample values',
-      'Analysis',
-      'Transformation',
-    ])
-  })
-})
-
-// ── AI Reasoning aggregation, nested inside Analysis (drawer redesign §4) ──
-//
-// Drawer redesign refinements §4 (founder canary review): the AI
-// reasoning disclosure lives inside the new ANALYSIS section (the
-// prior pass had it nested under OVERVIEW, which is removed entirely).
-// The aggregation rules are unchanged:
-//
-//   • Disclosure visible if EITHER row-level OR any per-source
-//     reasoning is non-null. (Identical Q11.C lock — no reasoning of
-//     any kind ⇒ no toggle.)
-//   • Default-open for `needs_review`, default-closed for everything
-//     else (Q11.B lock).
-//   • When the panel renders: row-level paragraph first (when
-//     present), then one labelled paragraph per source
-//     ("[srcTable].field_name: ...") in server ordinal order.
-//   • Per-source paragraphs carry `data-testid="drawer-ai-reasoning-source"`
-//     plus `data-source-id` to enable per-source assertions.
-//
-// Testid contract: the toggle/panel keep their prior IDs
-// (`drawer-ai-reasoning-toggle`, `drawer-ai-reasoning`,
-// `drawer-ai-reasoning-row`, `drawer-ai-reasoning-source`) so legacy
-// tests resolving the affordances continue to pass. The disclosure
-// wrapper now exposes `drawer-analysis-ai-reasoning` (the prior pass's
-// `drawer-overview-ai-reasoning` is gone alongside OVERVIEW).
-
-describe('MappingDrawer — AI Reasoning aggregation (nested inside Analysis)', () => {
-  it('disclosure is HIDDEN when both row-level AND every per-source reasoning is null', () => {
-    render(
-      <MappingDrawer
-        row={mapped({
-          aiReasoning: null,
-          sources: [source({ aiReasoning: null })],
-        })}
-        isOpen={true}
-        onClose={() => {}}
-      />,
-    )
-    expect(screen.queryByTestId('drawer-analysis-ai-reasoning')).toBeNull()
-    expect(screen.queryByTestId('drawer-ai-reasoning-toggle')).toBeNull()
-    // Legacy testids from prior passes are gone.
-    expect(screen.queryByTestId('drawer-section-ai-reasoning')).toBeNull()
-    expect(screen.queryByTestId('drawer-overview-ai-reasoning')).toBeNull()
-  })
-
-  it('disclosure is VISIBLE when only row-level reasoning is present (single paragraph)', () => {
-    render(
-      <MappingDrawer
-        row={mapped({
-          aiReasoning: 'TFM-level reasoning.',
-          status: 'needs_review',
-          sources: [source({ aiReasoning: null })],
-        })}
-        isOpen={true}
-        onClose={() => {}}
-      />,
-    )
-    expect(
-      screen.getByTestId('drawer-analysis-ai-reasoning'),
-    ).toBeInTheDocument()
-    // needs_review opens the disclosure by default.
-    const row = screen.getByTestId('drawer-ai-reasoning-row')
-    expect(row.textContent).toBe('TFM-level reasoning.')
-    expect(screen.queryByTestId('drawer-ai-reasoning-source')).toBeNull()
-  })
-
-  it('disclosure is VISIBLE when only per-source reasoning is present (no row-level paragraph rendered)', () => {
-    render(
-      <MappingDrawer
-        row={mapped({
-          aiReasoning: null,
-          status: 'needs_review',
-          sources: [
-            source({
-              id: 'ms-only',
-              aiReasoning: 'Per-source-only reasoning.',
-            }),
-          ],
-        })}
-        isOpen={true}
-        onClose={() => {}}
-      />,
-    )
-    expect(
-      screen.getByTestId('drawer-analysis-ai-reasoning'),
-    ).toBeInTheDocument()
-    expect(screen.queryByTestId('drawer-ai-reasoning-row')).toBeNull()
-    const perSource = screen.getByTestId('drawer-ai-reasoning-source')
-    expect(perSource.textContent).toContain('Per-source-only reasoning.')
-    expect(perSource.getAttribute('data-source-id')).toBe('ms-only')
-  })
-
-  it('multi-source row renders row-level paragraph + one labelled paragraph per source (in ordinal order)', () => {
-    render(
-      <MappingDrawer
-        row={mapped({
-          aiReasoning: 'Combined name from FNAME + LNAME.',
-          status: 'needs_review',
-          sources: [
-            source({
-              id: 'ms-fname',
-              ordinal: 0,
-              aiReasoning: 'First name from CIF master.',
-              sourceField: {
-                id: 'sf-fname',
-                name: 'FNAME',
-                dataType: 'VARCHAR',
-                isNullable: false,
-              },
-              sourceTable: { id: 'st-cif', name: 'CIF_MASTER' },
-            }),
-            source({
-              id: 'ms-lname',
-              ordinal: 1,
-              aiReasoning: 'Last name from CIF master.',
-              sourceField: {
-                id: 'sf-lname',
-                name: 'LNAME',
-                dataType: 'VARCHAR',
-                isNullable: false,
-              },
-              sourceTable: { id: 'st-cif', name: 'CIF_MASTER' },
-            }),
-          ],
-        })}
-        isOpen={true}
-        onClose={() => {}}
-      />,
-    )
-    expect(
-      screen.getByTestId('drawer-ai-reasoning-row').textContent,
-    ).toBe('Combined name from FNAME + LNAME.')
-    const perSource = screen.getAllByTestId('drawer-ai-reasoning-source')
-    expect(perSource).toHaveLength(2)
-    expect(perSource[0]!.getAttribute('data-source-id')).toBe('ms-fname')
-    expect(perSource[0]!.textContent).toContain('CIF_MASTER.FNAME:')
-    expect(perSource[0]!.textContent).toContain('First name from CIF master.')
-    expect(perSource[1]!.getAttribute('data-source-id')).toBe('ms-lname')
-    expect(perSource[1]!.textContent).toContain('CIF_MASTER.LNAME:')
-    expect(perSource[1]!.textContent).toContain('Last name from CIF master.')
-  })
-
-  it('whitespace-only per-source reasoning is treated as empty (no paragraph rendered)', () => {
-    render(
-      <MappingDrawer
-        row={mapped({
-          aiReasoning: 'Row-level only.',
-          status: 'needs_review',
-          sources: [source({ id: 'ms-blank', aiReasoning: '   \n  ' })],
-        })}
-        isOpen={true}
-        onClose={() => {}}
-      />,
-    )
-    expect(screen.queryByTestId('drawer-ai-reasoning-source')).toBeNull()
-    expect(
-      screen.getByTestId('drawer-ai-reasoning-row').textContent,
-    ).toBe('Row-level only.')
-  })
-
-  it('VA rows do NOT aggregate per-source reasoning (VAs have no sources)', () => {
-    render(
-      <MappingDrawer
-        row={valueAssignment({
-          aiReasoning: 'NOW() default for created_at.',
-          status: 'needs_review',
-        })}
-        isOpen={true}
-        onClose={() => {}}
-      />,
-    )
-    expect(screen.queryByTestId('drawer-ai-reasoning-source')).toBeNull()
-    expect(
-      screen.getByTestId('drawer-ai-reasoning-row').textContent,
-    ).toBe('NOW() default for created_at.')
-  })
-})
-
-// ── Rule 2 mapped body (multi-source, same table) ──────────────────────────
-
-describe('MappingDrawer — Rule 2 (multi-source, same table) mapped body', () => {
-  it('renders multiple source cards (one per source)', () => {
-    render(<MappingDrawer row={rule2Mapped()} isOpen={true} onClose={() => {}} />)
-    expect(screen.getAllByTestId('drawer-source-card')).toHaveLength(2)
-  })
-
-  it('every source card shares the same source table (Rule 2 invariant)', () => {
-    render(<MappingDrawer row={rule2Mapped()} isOpen={true} onClose={() => {}} />)
-    const cards = screen.getAllByTestId('drawer-source-card')
-    cards.forEach((card) => {
-      expect(within(card).getByText('CIF_MASTER')).toBeInTheDocument()
-    })
-  })
-
-  it('does NOT render any join annotation (same-table sources)', () => {
-    render(<MappingDrawer row={rule2Mapped()} isOpen={true} onClose={() => {}} />)
-    expect(screen.queryByTestId('drawer-source-join')).toBeNull()
-  })
-
-  it('does NOT render any inline `Combine with: …` label or custom-SQL block (Cycle 1 — combination labels removed)', () => {
-    render(<MappingDrawer row={rule2Mapped()} isOpen={true} onClose={() => {}} />)
-    expect(screen.queryByTestId('drawer-combination-label')).toBeNull()
-    expect(screen.queryByTestId('drawer-combination-sql')).toBeNull()
-    // Legacy Combination SECTION testid stays absent.
-    expect(screen.queryByTestId('drawer-section-combination')).toBeNull()
-  })
-
-  it('does NOT surface combination metadata even when combinationType=custom_sql AND combinationSql is non-null (Cycle 1)', () => {
-    const sql = "FNAME || ' / ' || LNAME"
-    render(
-      <MappingDrawer
-        row={rule2Mapped({ combinationType: 'custom_sql', combinationSql: sql })}
-        isOpen={true}
-        onClose={() => {}}
-      />,
-    )
-    // The SourcesRoster-internal combine/SQL preview is removed in
-    // Cycle 1. The VA-path "Value expression" DrawerSection (separate
-    // surface, gated on `kind === 'value_assignment'`) is unaffected
-    // and stays alive elsewhere.
-    expect(screen.queryByTestId('drawer-combination-label')).toBeNull()
-    expect(screen.queryByTestId('drawer-combination-sql')).toBeNull()
-  })
-
-  it('section ordering for Rule 2 is Sources → Analysis → Transformation when no sample data (drawer redesign §3)', () => {
-    // Drawer redesign refinements §3: body order is SOURCES →
-    // SAMPLE VALUES → ANALYSIS → TRANSFORMATION. SAMPLE VALUES is
-    // omitted when no source has sample data. The leading OVERVIEW
-    // from the prior pass is removed entirely.
-    render(
-      <MappingDrawer
-        row={rule2Mapped({ aiReasoning: 'reason' })}
-        isOpen={true}
-        onClose={() => {}}
-      />,
-    )
-    const body = screen.getByTestId('mapping-drawer-body')
-    const headings = within(body).getAllByRole('heading', { level: 3 })
-    expect(headings.map((h) => h.textContent)).toEqual([
-      'Source',
-      'Analysis',
-      'Transformation',
-    ])
-  })
-
-  it('multi-source SAMPLE VALUES field blocks all default to COLLAPSED (drawer redesign §5)', () => {
-    // Drawer redesign refinements §5 (founder canary review):
-    // multi-source rows default all field blocks to collapsed. The
-    // user typically inspects one source at a time; default-
-    // collapsed keeps the section compact while preserving
-    // independent per-block toggle state.
-    render(
-      <MappingDrawer
-        row={rule2Mapped(
-          {},
-          [
-            { sampleValues: ['DDA', 'NOW'] },
-            { sampleValues: ['ABC', 'DEF'] },
-          ],
-        )}
-        isOpen={true}
-        onClose={() => {}}
-      />,
-    )
-    const toggles = screen.getAllByTestId('drawer-sample-values-toggle')
-    expect(toggles).toHaveLength(2)
-    for (const toggle of toggles) {
-      expect(toggle.getAttribute('aria-expanded')).toBe('false')
-    }
-    // No values rendered yet — every block is collapsed.
-    expect(screen.queryByTestId('drawer-sample-values-row')).toBeNull()
-  })
-
-  it('multi-source SAMPLE VALUES blocks toggle independently (drawer redesign §5)', async () => {
-    // Drawer redesign refinements §5: each field block manages its
-    // own open/closed state. Clicking one block does not affect any
-    // other block in the section.
-    const user = userEvent.setup()
-    render(
-      <MappingDrawer
-        row={rule2Mapped(
-          {},
-          [
-            { sampleValues: ['DDA', 'NOW'] },
-            { sampleValues: ['ABC', 'DEF'] },
-          ],
-        )}
-        isOpen={true}
-        onClose={() => {}}
-      />,
-    )
-    const toggles = screen.getAllByTestId('drawer-sample-values-toggle')
-    // Open the first block; the second remains collapsed.
-    await user.click(toggles[0]!)
-    expect(toggles[0]!.getAttribute('aria-expanded')).toBe('true')
-    expect(toggles[1]!.getAttribute('aria-expanded')).toBe('false')
-    // The first block's values render; the second's do not.
-    const firstPanel = screen.getByTestId('drawer-sample-values-panel')
-    expect(
-      within(firstPanel).getAllByTestId('drawer-sample-values-row')
-        .map((n) => n.textContent),
-    ).toEqual(['DDA', 'NOW'])
-  })
-})
-
-// ── Rule 3 mapped body (cross-table, two tables) ───────────────────────────
-
-describe('MappingDrawer — Rule 3 (cross-table, two tables) mapped body', () => {
-  it('renders cards from each of the two source tables (multiple TableBadges, one per card)', () => {
-    render(<MappingDrawer row={rule3Mapped()} isOpen={true} onClose={() => {}} />)
-    const cards = screen.getAllByTestId('drawer-source-card')
-    expect(cards).toHaveLength(2)
-    expect(within(cards[0]!).getByText('AccountMaster')).toBeInTheDocument()
-    expect(within(cards[1]!).getByText('ContactMaster')).toBeInTheDocument()
-  })
-
-  it('renders the join annotation inline as "(join: <annotation>)" when joinAnnotation is non-null', () => {
-    render(<MappingDrawer row={rule3Mapped()} isOpen={true} onClose={() => {}} />)
-    const join = screen.getByTestId('drawer-source-join')
-    expect(join.textContent).toBe('(join: PrimaryContactID)')
-    expect(join.className).toContain('italic')
-  })
-
-  // Regression test (Phase 4a-3 smoke): the canonical
-  // `deriveJoinAnnotation` output (`'(join: …)'`) must NOT be wrapped a
-  // second time by the renderer. Earlier the drawer emitted
-  // `(join: (join: PrimaryContactID))`. Guard against re-introduction.
-  it('does NOT double-wrap the canonical "(join: …)" annotation produced by the server', () => {
-    render(<MappingDrawer row={rule3Mapped()} isOpen={true} onClose={() => {}} />)
-    const join = screen.getByTestId('drawer-source-join')
-    expect(join.textContent).not.toMatch(/\(join:\s*\(join:/)
-    // exactly one "(join:" substring
-    const occurrences = (join.textContent ?? '').match(/\(join:/g) ?? []
-    expect(occurrences).toHaveLength(1)
-  })
-
-  it('does NOT render a join annotation for the dominant source (joinAnnotation === null)', () => {
-    render(<MappingDrawer row={rule3Mapped()} isOpen={true} onClose={() => {}} />)
-    const cards = screen.getAllByTestId('drawer-source-card')
-    expect(within(cards[0]!).queryByTestId('drawer-source-join')).toBeNull()
-    expect(within(cards[1]!).getByTestId('drawer-source-join')).toBeInTheDocument()
-  })
-
-  it('does NOT render the inline `Combine with: …` label even for cross-table multi-source rows (Cycle 1)', () => {
-    render(<MappingDrawer row={rule3Mapped()} isOpen={true} onClose={() => {}} />)
-    expect(screen.queryByTestId('drawer-combination-label')).toBeNull()
-  })
-
-  it('drawer redesign drops the standalone Combination section heading', () => {
-    render(<MappingDrawer row={rule3Mapped()} isOpen={true} onClose={() => {}} />)
-    const body = screen.getByTestId('mapping-drawer-body')
-    const headings = within(body)
-      .getAllByRole('heading', { level: 3 })
-      .map((h) => h.textContent)
-    expect(headings).not.toContain('Combination')
-  })
-
-  // ── Cross-table apply transparency badge (Phase 4a-3 → retired in 4a-6) ──
-  //
-  // Phase 4a-6 wired the cross-table apply RPC branch (migration 076) and
-  // retired the transparency badge. Negative invariant kept here so a
-  // regression that re-introduces the testid surfaces immediately.
-
-  it('does NOT render a cross-table-apply transparency badge for cross-table TFMs (retired in 4a-6)', () => {
-    render(<MappingDrawer row={rule3Mapped()} isOpen={true} onClose={() => {}} />)
-    expect(
-      screen.queryByTestId('drawer-section-source-cross-table-badge'),
-    ).toBeNull()
-    expect(screen.queryByText(/cross-table not yet applicable/i)).toBeNull()
-  })
-})
-
-describe('MappingDrawer — same-table mappings DO NOT render cross-table badge', () => {
-  it('Rule 1 (single-source) does not render the badge', () => {
-    render(<MappingDrawer row={mapped()} isOpen={true} onClose={() => {}} />)
-    expect(
-      screen.queryByTestId('drawer-section-source-cross-table-badge'),
-    ).toBeNull()
-  })
-
-  it('Rule 2 (multi-source same-table) does not render the badge', () => {
-    render(<MappingDrawer row={rule2Mapped()} isOpen={true} onClose={() => {}} />)
-    expect(
-      screen.queryByTestId('drawer-section-source-cross-table-badge'),
-    ).toBeNull()
-  })
-})
-
-// ── Rule 4 mapped body (3+ tables OR 5+ sources) ───────────────────────────
-
-describe('MappingDrawer — Rule 4 (multi-table complex) mapped body', () => {
-  it('renders all 5 sources as individual cards (no truncation in drawer)', () => {
-    render(<MappingDrawer row={rule4Mapped()} isOpen={true} onClose={() => {}} />)
-    expect(screen.getAllByTestId('drawer-source-card')).toHaveLength(5)
-  })
-
-  it('renders join annotations on the cross-table sources (last 2)', () => {
-    render(<MappingDrawer row={rule4Mapped()} isOpen={true} onClose={() => {}} />)
-    const joins = screen.getAllByTestId('drawer-source-join')
-    expect(joins).toHaveLength(2)
-    joins.forEach((j) => {
-      expect(j.textContent).toBe('(join: JoinKey)')
-    })
-  })
-
-  it('does NOT render the inline `Combine with: …` label or custom_sql block (Cycle 1)', () => {
-    render(<MappingDrawer row={rule4Mapped()} isOpen={true} onClose={() => {}} />)
-    expect(screen.queryByTestId('drawer-combination-label')).toBeNull()
-    expect(screen.queryByTestId('drawer-combination-sql')).toBeNull()
-  })
-})
-
-// ── Mapped body regression guards ──────────────────────────────────────────
-
-describe('MappingDrawer — Mapped body regression guards', () => {
-  it('Gap 8a placeholder test-id is gone (drawer-mapped-placeholder must not render)', () => {
-    render(<MappingDrawer row={mapped()} isOpen={true} onClose={() => {}} />)
-    expect(screen.queryByTestId('drawer-mapped-placeholder')).toBeNull()
-  })
-
-  it('mapped body does NOT leak Acknowledgment / Mapping status / Value expression sections', () => {
-    render(<MappingDrawer row={mapped()} isOpen={true} onClose={() => {}} />)
-    expect(screen.queryByTestId('drawer-section-acknowledgment')).toBeNull()
-    expect(screen.queryByTestId('drawer-section-mapping-status')).toBeNull()
-    expect(screen.queryByTestId('drawer-section-value-expression')).toBeNull()
-  })
-
-  it('body wrapper test-id is preserved (Gap 7 outside-click contract)', () => {
-    render(<MappingDrawer row={mapped()} isOpen={true} onClose={() => {}} />)
-    const body = screen.getByTestId('mapping-drawer-body')
-    expect(body).toBeInTheDocument()
-    expect(body.className).toContain('flex-1')
-    expect(body.className).toContain('overflow-auto')
-  })
-
-  it('source-card render order matches the input sources[] (server ordinal order preserved)', () => {
-    const cifA = source({
-      id: 'ms-ord-a',
-      ordinal: 0,
-      sourceField: { id: 'sf-ord-a', name: 'ALPHA', dataType: 'VARCHAR(10)', isNullable: false },
-      sourceTable: { id: 'st-x', name: 'TX' },
-    })
-    const cifB = source({
-      id: 'ms-ord-b',
-      ordinal: 1,
-      sourceField: { id: 'sf-ord-b', name: 'BETA', dataType: 'VARCHAR(10)', isNullable: false },
-      sourceTable: { id: 'st-x', name: 'TX' },
-    })
-    const cifC = source({
-      id: 'ms-ord-c',
-      ordinal: 2,
-      sourceField: { id: 'sf-ord-c', name: 'GAMMA', dataType: 'VARCHAR(10)', isNullable: false },
-      sourceTable: { id: 'st-x', name: 'TX' },
-    })
-    render(
-      <MappingDrawer
-        row={mapped({
-          sources: [cifA, cifB, cifC],
-          combinationType: 'concat_space',
-        })}
-        isOpen={true}
-        onClose={() => {}}
-      />,
-    )
-    const names = screen
-      .getAllByTestId('drawer-source-field-name')
-      .map((el) => el.textContent)
-    expect(names).toEqual(['ALPHA', 'BETA', 'GAMMA'])
-  })
-
-  it('drawer redesign — Target field / Status / Confidence sections are NOT in the body (moved to header)', () => {
-    render(<MappingDrawer row={rule2Mapped()} isOpen={true} onClose={() => {}} />)
-    expect(screen.queryByTestId('drawer-section-target-field')).toBeNull()
-    expect(screen.queryByTestId('drawer-section-status')).toBeNull()
-    expect(screen.queryByTestId('drawer-section-confidence')).toBeNull()
-    // Sources section is the unique entry-point for source identity
-    // inside the body — exactly one render.
-    expect(screen.getAllByTestId('drawer-section-source')).toHaveLength(1)
-  })
-
-  it('body sections use tightened mb-4 spacing (drawer redesign §3 — Sources / Analysis / Transformation)', () => {
-    // Drawer redesign refinements §3: body sections are SOURCES,
-    // SAMPLE VALUES (when present), ANALYSIS, TRANSFORMATION. The
-    // tightened mb-4 spacing applies to every rendered section.
-    // The fixture below has no sample data so SAMPLE VALUES is
-    // omitted; the remaining three sections all carry mb-4.
-    render(
-      <MappingDrawer
-        row={mapped({
-          aiReasoning: 'reason',
-          combinationType: 'single',
-          hasTransformation: false,
-        })}
-        isOpen={true}
-        onClose={() => {}}
-      />,
-    )
-    for (const id of [
-      'drawer-section-source',
-      'drawer-section-analysis',
-      'drawer-section-transformation',
-    ]) {
-      const section = screen.getByTestId(id)
-      expect(section.className).toContain('mb-4')
-      expect(section.className).not.toContain('mb-6')
-    }
-    // OVERVIEW and standalone AI Reasoning are gone.
-    expect(screen.queryByTestId('drawer-section-overview')).toBeNull()
-    expect(screen.queryByTestId('drawer-section-ai-reasoning')).toBeNull()
-  })
-})
 
 // ═══════════════════════════════════════════════════════════════════════════
 // Gap 9 — Footer action buttons (Approve / Reject + confirmation + UX state)

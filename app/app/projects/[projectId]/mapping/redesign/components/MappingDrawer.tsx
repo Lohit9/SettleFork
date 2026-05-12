@@ -1504,6 +1504,312 @@ function DrawerEmptyState({
 // or [Suggest with AI] button). Edit pencil is hidden — there's no mapping
 // to edit until a source is chosen.
 
+// ── PR 3b SOURCE FIELDS section ─────────────────────────────────────────────
+//
+// Replaces the legacy `<DrawerSection title="Source">` + the separate
+// SAMPLE VALUES section on mapped rows. Renders one block per source
+// in server ordinal-asc order. Each block shows:
+//
+//   field_name · table_name · data_type · NN%
+//   (join: <annotation>)               ← when source.joinAnnotation is non-null
+//   Sample values:
+//     "<value-1>"
+//     "<value-2>"
+//     ...
+//
+// Hidden when the row has no sources (VA / unmapped / rejected — those
+// variants render different body content; the FROM stack already
+// communicates their "no source" state).
+//
+// Sample values cap is the wire-side `MAX_SAMPLE_VALUES = 10` (per
+// `mapping-engine.ts:769`). We render all that arrive — no further
+// UI-level cap because the redesigned drawer treats samples as
+// per-source evidence the user wants in full when they expand a row.
+
+function SourceFieldsSection({
+  sources,
+}: {
+  sources: readonly MappingSourceRef[]
+}) {
+  if (sources.length === 0) return null
+  return (
+    <DrawerSection title="Source fields" testId="drawer-section-source-fields">
+      <ul className="space-y-4" data-testid="drawer-source-fields-list">
+        {sources.map((source) => (
+          <SourceFieldBlock key={source.id} source={source} />
+        ))}
+      </ul>
+    </DrawerSection>
+  )
+}
+
+function SourceFieldBlock({ source }: { source: MappingSourceRef }) {
+  const confidenceBand: RowConfidenceBand | null =
+    source.confidence === null
+      ? null
+      : classifyRowConfidence(source.confidence)
+  return (
+    <li
+      data-testid="drawer-source-field-block"
+      data-mapping-source-id={source.id}
+      data-ordinal={source.ordinal}
+      className="space-y-1"
+    >
+      {/* Identity line: name · table · type · confidence */}
+      <div
+        data-testid="drawer-source-field-identity"
+        className="flex min-w-0 flex-wrap items-baseline gap-x-1.5 text-sm"
+      >
+        <span
+          data-testid="drawer-source-field-name"
+          className="min-w-0 truncate font-mono text-slate-900"
+          title={source.sourceField.name}
+        >
+          {source.sourceField.name}
+        </span>
+        <span aria-hidden="true" className="text-slate-400">
+          ·
+        </span>
+        <span
+          data-testid="drawer-source-field-table"
+          className="truncate text-slate-600"
+          title={source.sourceTable.name}
+        >
+          {source.sourceTable.name}
+        </span>
+        <span aria-hidden="true" className="text-slate-400">
+          ·
+        </span>
+        <span
+          data-testid="drawer-source-field-type"
+          className="font-mono text-xs text-slate-500"
+        >
+          {source.sourceField.dataType}
+        </span>
+        {source.confidence !== null ? (
+          <>
+            <span aria-hidden="true" className="text-slate-400">
+              ·
+            </span>
+            <span
+              data-testid="drawer-source-field-confidence"
+              data-confidence-band={confidenceBand ?? 'none'}
+              className={cn(
+                'tabular-nums',
+                confidenceBand !== null
+                  ? SOURCE_CONFIDENCE_BAND_CLASSNAME[confidenceBand]
+                  : 'text-slate-500',
+              )}
+            >
+              {formatConfidencePercent(source.confidence)}
+            </span>
+          </>
+        ) : null}
+      </div>
+
+      {source.joinAnnotation ? (
+        <div
+          data-testid="drawer-source-field-join"
+          className="text-[11px] italic text-slate-500"
+        >
+          {source.joinAnnotation}
+        </div>
+      ) : null}
+
+      {source.sampleValues.length > 0 ? (
+        <div data-testid="drawer-source-field-samples">
+          <div className="text-[11px] font-medium uppercase tracking-wide text-slate-500">
+            Sample values
+          </div>
+          <ul
+            data-testid="drawer-source-field-sample-values-list"
+            className="mt-1 flex flex-col"
+          >
+            {source.sampleValues.map((value, idx) => (
+              <li
+                key={`${idx}-${value}`}
+                className={cn(
+                  'border-b border-slate-100 py-1 last:border-b-0',
+                  'break-words font-mono text-xs text-slate-700',
+                )}
+                data-testid="drawer-source-field-sample-row"
+              >
+                {value}
+              </li>
+            ))}
+          </ul>
+        </div>
+      ) : null}
+    </li>
+  )
+}
+
+// ── PR 3b TARGET FIELD section ──────────────────────────────────────────────
+//
+// Renders for every variant (mapped, value_assignment, unmapped/
+// rejected). Consumes the additive `TargetFieldRef` fields from PR 3a:
+//
+//   field_name · table_name · data_type
+//   Primary key                          ← if isPrimaryKey
+//   Foreign key → <fkReference>          ← if isForeignKey AND not PK
+//   Required                             ← if !isNullable
+//   Default: <defaultValue>              ← if defaultValue is non-null
+//   Description: <description>           ← if description is non-null
+//
+//   Sample values:
+//     "<value-1>"            (up to 5)
+//     "<value-2>"
+//   — OR —
+//     No sample data available — target schema only
+//
+// PK / FK display: PK takes precedence. A target field that is BOTH
+// PK and FK (compound key) shows only "Primary key" — keeps the
+// section compact; the FK reference is recoverable from the target
+// schema view. Spec §TASK 4B Q4.
+//
+// Target sample-values cap is 5 (UI-side cap, even though the wire
+// carries up to 10). Read-only orientation; representative taste is
+// enough — no expand affordance. Spec Q2.
+
+const TARGET_SAMPLE_VALUES_UI_CAP = 5
+
+function TargetFieldSection({
+  targetField,
+}: {
+  targetField: TargetFieldRef
+}) {
+  const showPk = targetField.isPrimaryKey
+  const showFk = !showPk && targetField.isForeignKey
+  const showRequired = !targetField.isNullable
+  const showDefault = targetField.defaultValue !== null
+  const showDescription = targetField.description !== null
+  const visibleSamples = targetField.sampleValues.slice(
+    0,
+    TARGET_SAMPLE_VALUES_UI_CAP,
+  )
+
+  return (
+    <DrawerSection title="Target field" testId="drawer-section-target-field">
+      <div className="space-y-1">
+        <div
+          data-testid="drawer-target-field-identity"
+          className="flex min-w-0 flex-wrap items-baseline gap-x-1.5 text-sm"
+        >
+          <span
+            data-testid="drawer-target-field-name"
+            className="min-w-0 truncate font-mono text-slate-900"
+            title={targetField.name}
+          >
+            {targetField.name}
+          </span>
+          <span aria-hidden="true" className="text-slate-400">
+            ·
+          </span>
+          <span
+            data-testid="drawer-target-field-table"
+            className="truncate text-slate-600"
+            title={targetField.targetTable.name}
+          >
+            {targetField.targetTable.name}
+          </span>
+          <span aria-hidden="true" className="text-slate-400">
+            ·
+          </span>
+          <span
+            data-testid="drawer-target-field-type"
+            className="font-mono text-xs text-slate-500"
+          >
+            {targetField.dataType}
+          </span>
+        </div>
+
+        {showPk ? (
+          <div
+            data-testid="drawer-target-field-pk"
+            className="text-xs text-slate-600"
+          >
+            Primary key
+          </div>
+        ) : null}
+
+        {showFk ? (
+          <div
+            data-testid="drawer-target-field-fk"
+            className="text-xs text-slate-600"
+          >
+            Foreign key →{' '}
+            <span className="font-mono text-slate-700">
+              {targetField.fkReference}
+            </span>
+          </div>
+        ) : null}
+
+        {showRequired ? (
+          <div
+            data-testid="drawer-target-field-required"
+            className="text-xs text-slate-600"
+          >
+            Required
+          </div>
+        ) : null}
+
+        {showDefault ? (
+          <div
+            data-testid="drawer-target-field-default"
+            className="text-xs text-slate-600"
+          >
+            Default:{' '}
+            <span className="font-mono text-slate-700">
+              {targetField.defaultValue}
+            </span>
+          </div>
+        ) : null}
+
+        {showDescription ? (
+          <div
+            data-testid="drawer-target-field-description"
+            className="mt-2 text-xs text-slate-700"
+          >
+            {targetField.description}
+          </div>
+        ) : null}
+
+        <div className="mt-3">
+          <div className="text-[11px] font-medium uppercase tracking-wide text-slate-500">
+            Sample values
+          </div>
+          {visibleSamples.length > 0 ? (
+            <ul
+              data-testid="drawer-target-field-sample-values-list"
+              className="mt-1 flex flex-col"
+            >
+              {visibleSamples.map((value, idx) => (
+                <li
+                  key={`${idx}-${value}`}
+                  className={cn(
+                    'border-b border-slate-100 py-1 last:border-b-0',
+                    'break-words font-mono text-xs text-slate-700',
+                  )}
+                  data-testid="drawer-target-field-sample-row"
+                >
+                  {value}
+                </li>
+              ))}
+            </ul>
+          ) : (
+            <p
+              data-testid="drawer-target-field-no-samples"
+              className="mt-1 text-xs italic text-slate-400"
+            >
+              No sample data available — target schema only
+            </p>
+          )}
+        </div>
+      </div>
+    </DrawerSection>
+  )
+}
+
 const UNMAPPED_EMPTY_STATE_COPY = 'No source mapped yet'
 
 interface UnmappedBodyProps {
@@ -1575,6 +1881,21 @@ function UnmappedBody({
   // alarming; no new component file — one inline div.
   const showRejectedBanner = row.status === 'rejected' && !isFormActive
 
+  // Drawer redesign PR 3b — body section order for unmapped /
+  // rejected variants is now
+  //
+  //   [rejected banner]  →  TARGET FIELD  →  COVERAGE  →  DECISIONS
+  //
+  // The legacy `<DrawerSection title="Source">` (which mounted the
+  // inline create-form OR the "No source mapped yet" empty state)
+  // is gone — the header's FROM stack already communicates the "no
+  // source" state via its italic "No source mapped" / "Value
+  // assignment" labels, and the source ✏ on the header is the
+  // source-creation entry point.
+  //
+  // `isFormActive` keeps gating COVERAGE + DECISIONS visibility
+  // until commit 3 retires the form path entirely; while the form
+  // is mounted, the body is the form's exclusive surface.
   return (
     <>
       {showRejectedBanner ? (
@@ -1587,14 +1908,9 @@ function UnmappedBody({
           source.
         </div>
       ) : null}
-      <DrawerSection
-        title="Source"
-        testId={SOURCE_SECTION_TESTID}
-        headerAside={
-          showPencil ? <EditPencilButton onClick={onCreateMappingClick} /> : null
-        }
-      >
-        {isFormActive && projectId ? (
+
+      {isFormActive && projectId ? (
+        <DrawerSection title="Source" testId={SOURCE_SECTION_TESTID}>
           <CreateMappingForm
             ref={formRef}
             projectId={projectId}
@@ -1613,16 +1929,12 @@ function UnmappedBody({
             tryConsumeAutoSuggest={tryConsumeAutoSuggest}
             onSuggestStateChange={onSuggestStateChange}
           />
-        ) : (
-          <DrawerEmptyState
-            text={UNMAPPED_EMPTY_STATE_COPY}
-            testId="drawer-unmapped-empty-state"
-          />
-        )}
-      </DrawerSection>
+        </DrawerSection>
+      ) : null}
 
       {!isFormActive ? (
         <>
+          <TargetFieldSection targetField={row.targetField} />
           <DrawerSection title="Coverage" testId="drawer-section-coverage">
             <CoverageSection coverage={coverage ?? null} />
           </DrawerSection>
@@ -1692,6 +2004,13 @@ function ValueAssignmentBody({
           />
         )}
       </DrawerSection>
+
+      {/*
+        Drawer redesign PR 3b — TARGET FIELD insertion between
+        VALUE EXPRESSION and ANALYSIS. Order:
+          VALUE EXPRESSION → TARGET FIELD → ANALYSIS → DECISIONS
+      */}
+      <TargetFieldSection targetField={row.targetField} />
 
       <AnalysisSection row={row} />
 
@@ -1852,18 +2171,28 @@ function MappedBody({
   // state. ANALYSIS is also hidden during edit mode for the same
   // reason: type compat + AI reasoning are post-hoc evidence about
   // the row's current shape, not the form's draft state.
+  // Drawer redesign PR 3b — body section order is now
+  //
+  //   SOURCE FIELDS → TARGET FIELD → TRANSFORMATION → ANALYSIS →
+  //   DATA QUALITY → DECISIONS
+  //
+  // The legacy `<DrawerSection title="Source">` (which mounted the
+  // inline `CreateMappingForm` in edit mode) is replaced by
+  // `SourceFieldsSection` — per-source identity + samples in one
+  // block. SAMPLE VALUES merges into SOURCE FIELDS. ANALYSIS no
+  // longer renders the type-compat line (per-section type display
+  // in the new sections covers it). The new `TargetFieldSection`
+  // surfaces PR 3a's additive `TargetFieldRef` fields.
+  //
+  // `canMountEditForm` gating remains in place to keep the legacy
+  // edit-form mount path functional for any consumer that still
+  // routes through it (commit 3 retires the form file entirely).
+  // When mounted, sources / target / analysis hide so the form has
+  // the body to itself.
   return (
     <>
-      <DrawerSection
-        title="Source"
-        testId={SOURCE_SECTION_TESTID}
-        headerAside={
-          showEditPencil && !editFormActive ? (
-            <EditPencilButton onClick={onEditClick} />
-          ) : null
-        }
-      >
-        {canMountEditForm ? (
+      {canMountEditForm ? (
+        <DrawerSection title="Source" testId={SOURCE_SECTION_TESTID}>
           <CreateMappingForm
             ref={formRef}
             mode="edit"
@@ -1878,25 +2207,21 @@ function MappedBody({
             onCancel={onEditFormCancel}
             onStateChange={onFormStateChange}
           />
-        ) : (
-          <SourcesRoster
-            row={row}
-            highlightedSourceFieldId={highlightedSourceFieldId ?? null}
-          />
-        )}
-      </DrawerSection>
-
-      {!canMountEditForm ? (
+        </DrawerSection>
+      ) : (
         <>
-          <SampleValuesSection sources={row.sources} />
-          <AnalysisSection row={row} />
+          <SourceFieldsSection sources={row.sources} />
+          <TargetFieldSection targetField={row.targetField} />
         </>
-      ) : null}
+      )}
 
       <TransformationSection row={row} projectId={projectId} />
 
       {!canMountEditForm ? (
-        <MappedEnrichmentSections row={row} pathDOutputs={pathDOutputs} />
+        <>
+          <AnalysisSection row={row} />
+          <MappedEnrichmentSections row={row} pathDOutputs={pathDOutputs} />
+        </>
       ) : null}
     </>
   )
@@ -2370,8 +2695,6 @@ function AnalysisSection({
   row: MappedRow | ValueAssignmentRow
 }) {
   const isMapped = row.kind === 'mapped'
-  const dominantSource =
-    isMapped && row.sources.length > 0 ? row.sources[0]! : null
 
   const perSourceReasonings = isMapped
     ? collectPerSourceReasonings(row.sources)
@@ -2380,29 +2703,21 @@ function AnalysisSection({
   const hasAnyReasoning =
     rowAiReasoning !== null || perSourceReasonings.length > 0
 
-  // VA: nothing to show without AI reasoning (no type compat for VAs).
-  // Mapped: defensively skip when there's neither a dominant source
-  // nor any reasoning — the section would render an empty shell.
-  if (!isMapped && !hasAnyReasoning) return null
-  if (isMapped && dominantSource === null && !hasAnyReasoning) return null
+  // Drawer redesign PR 3b — ANALYSIS section is now AI-reasoning
+  // only. The type-comp `VARCHAR(80) → VARCHAR(100)` line moved into
+  // the per-section type displays in the new SOURCE FIELDS + TARGET
+  // FIELD sections — having each side show its own type lets users
+  // compare directly without an aggregated verdict line. If there's
+  // no AI reasoning to surface, the section omits itself entirely.
+  if (!hasAnyReasoning) return null
 
   return (
     <DrawerSection title="Analysis" testId="drawer-section-analysis">
-      {dominantSource ? (
-        <TypeCompatibility
-          sourceType={dominantSource.sourceField.dataType}
-          targetType={row.targetField.dataType}
-          rawText={dominantSource.typeCompatibility}
-        />
-      ) : null}
-
-      {hasAnyReasoning ? (
-        <NestedAiReasoningDisclosure
-          rowAiReasoning={rowAiReasoning}
-          perSourceReasonings={perSourceReasonings}
-          rowStatus={row.status}
-        />
-      ) : null}
+      <NestedAiReasoningDisclosure
+        rowAiReasoning={rowAiReasoning}
+        perSourceReasonings={perSourceReasonings}
+        rowStatus={row.status}
+      />
     </DrawerSection>
   )
 }

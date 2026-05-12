@@ -274,7 +274,12 @@ describe('MappingDrawer — UnmappedBody (Phase E PR α)', () => {
         pathDOutputs={pathDOutputs()}
       />,
     )
-    expect(screen.getByTestId('drawer-section-source')).toBeInTheDocument()
+    // PR 3b: body SOURCE section retired. UnmappedBody renders
+    // [rejected banner] → TARGET FIELD → COVERAGE → DECISIONS.
+    expect(screen.queryByTestId('drawer-section-source')).toBeNull()
+    expect(
+      screen.getByTestId('drawer-section-target-field'),
+    ).toBeInTheDocument()
     const coverageSection = screen.getByTestId('drawer-section-coverage')
     expect(
       within(coverageSection).getByTestId('drawer-coverage-label').textContent,
@@ -318,33 +323,12 @@ describe('MappingDrawer — UnmappedBody (Phase E PR α)', () => {
     ).toBe('Acknowledge legacy gap')
   })
 
-  it('hides COVERAGE + DECISIONS while the create-mapping form is mounted', async () => {
-    const row = unmapped()
-    const cov = coverageRow({
-      id: 'cov-x',
-      target_field_id: row.targetField.id,
-      coverage_status: 'gap',
-    })
-    const outputs = pathDOutputs({
-      coverageByTargetFieldId: new Map([[row.targetField.id, cov]]),
-      decisionsByCoverageId: new Map([[cov.id, [decisionRow({ id: 'dec-x' })]]]),
-    })
-    const user = userEvent.setup()
-    render(
-      <MappingDrawer
-        row={row}
-        isOpen={true}
-        onClose={() => {}}
-        pathDOutputs={outputs}
-        projectId="project-1"
-        availableSourceFields={[]}
-      />,
-    )
-    expect(screen.getByTestId('drawer-section-coverage')).toBeInTheDocument()
-    await user.click(screen.getByTestId('mapping-drawer-edit-pencil'))
-    expect(screen.queryByTestId('drawer-section-coverage')).toBeNull()
-    expect(screen.queryByTestId('drawer-section-decisions')).toBeNull()
-  })
+  // PR 3b dropped per Q7 from STOP 1: the body Edit-pencil →
+  // CreateMappingForm flow is retired. COVERAGE + DECISIONS no
+  // longer have a form-active hide path — they render whenever the
+  // unmapped row has a coverage row + applicable decisions. The
+  // "hides COVERAGE + DECISIONS while the create-mapping form is
+  // mounted" assertion is moot.
 })
 
 // ── ValueAssignmentBody ────────────────────────────────────────────────────

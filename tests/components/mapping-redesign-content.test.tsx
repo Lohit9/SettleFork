@@ -1292,15 +1292,17 @@ describe('MappingRedesignContent Phase 4a-2 — save flow swaps URL + refreshes'
       />,
     )
     // Drawer is still open (didn't flicker shut), and now displays
-    // the mapped row's body. Drawer redesign — TARGET-led identity:
-    // the header is target-only (no SOURCE row). Verify the freshly-
-    // mapped row's body now contains the SOURCE section with a
-    // populated source card (the unmapped empty-state body is gone).
+    // the mapped row's body. PR 3b body redesign: the freshly-mapped
+    // row's body renders the new SOURCE FIELDS section with one
+    // source block (the unmapped empty-state body is gone — body
+    // SOURCE section retired entirely).
     expect(screen.getByTestId('mapping-drawer')).toBeInTheDocument()
     expect(
-      screen.getByTestId('drawer-section-source'),
+      screen.getByTestId('drawer-section-source-fields'),
     ).toBeInTheDocument()
-    expect(screen.getByTestId('drawer-source-card')).toBeInTheDocument()
+    expect(
+      screen.getByTestId('drawer-source-field-block'),
+    ).toBeInTheDocument()
     expect(
       screen.queryByTestId('drawer-unmapped-empty-state'),
     ).toBeNull()
