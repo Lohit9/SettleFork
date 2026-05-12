@@ -92,6 +92,14 @@ export interface PathDPersistResult {
    *  Reported separately from `mappings` so a partial failure (TFMs
    *  upserted but mapping_sources insert errored) is observable. */
   mapping_sources: SectionPersistStatus
+  /** Pass 2.6: table_mappings rows derived from the (source_table,
+   *  target_table) pairs implied by MappingPayload.source_field_ids ×
+   *  target_field_id. Path D originally skipped this table entirely,
+   *  which left the Transform page (gated on table_mappings.length>0
+   *  at lib/actions/transformations.ts:551) showing an empty state
+   *  for every Path D-only project. Reported separately so a failure
+   *  here is observable without conflating with mapping_sources. */
+  table_mappings: SectionPersistStatus
   coverage: SectionPersistStatus
   lookup_tables: SectionPersistStatus
   inferred_targets: SectionPersistStatus
@@ -116,6 +124,7 @@ export async function persistPathDOutput(
     data_quality: { status: 'skipped', reason: 'not yet attempted' },
     mappings: { status: 'skipped', reason: 'not yet attempted' },
     mapping_sources: { status: 'skipped', reason: 'not yet attempted' },
+    table_mappings: { status: 'skipped', reason: 'not yet attempted' },
     coverage: { status: 'skipped', reason: 'not yet attempted' },
     lookup_tables: { status: 'skipped', reason: 'not yet attempted' },
     inferred_targets: { status: 'skipped', reason: 'not yet attempted' },
@@ -198,6 +207,39 @@ export async function persistPathDOutput(
   } else {
     // Pass 2 ran but yielded zero TFM ids (empty mappings array).
     result.mapping_sources = { status: 'inserted', count: 0 }
+  }
+
+  // Pass 2.6: table_mappings. Path D originally skipped this table entirely
+  // because its data model (TFM-centric) didn't need it. But the Transform
+  // page, readiness-score, fix-target, and detection-engine-core all gate on
+  // `table_mappings.length > 0` for the project — without a TM row per
+  // (source_table, target_table) pair they degrade to empty/null. This pass
+  // derives the pair set from MappingPayload.source_field_ids × target_field
+  // and inserts any missing TM rows with status='needs_review'. VAs (empty
+  // source_field_ids) contribute zero pairs — matches legacy semantics where
+  // VAs live under TMs the table-pair flow already created. Multi-source-
+  // table TFMs (sources spanning multiple source_tables) contribute one
+  // pair per distinct source_table. Idempotent via existing-pair pre-fetch;
+  // re-running Path D will not duplicate.
+  if (parsed.mappings.status === 'parsed_ok') {
+    try {
+      const count = await persistTableMappings(
+        supabaseAdmin,
+        projectId,
+        parsed.mappings.data,
+      )
+      result.table_mappings = { status: 'inserted', count }
+    } catch (err) {
+      result.table_mappings = {
+        status: 'errored',
+        error: (err as Error).message,
+      }
+    }
+  } else {
+    result.table_mappings = {
+      status: 'skipped',
+      reason: 'mappings section not parsed_ok',
+    }
   }
 
   // Pass 3: coverage (references target_field_id; no TFM UUID resolution needed)
@@ -606,6 +648,139 @@ async function persistMappingSources(
   }
 
   return rows.length
+}
+
+// ─── Pass 2.6: table_mappings ────────────────────────────────────────────────
+//
+// Path D's data model is TFM-centric: a `target_field_mappings` row carries
+// the project/target_field/combination/source_field_ids it needs to render
+// in the Mapping page. The redesigned Mapping read path (mapping-engine.ts
+// :getMappingsForRedesignCore) reflects that — it never reads
+// `table_mappings`. But the Transform page (lib/actions/transformations.ts
+// :545-551), readiness-score (lib/quality/readiness-score.ts:67-71),
+// fix-target (lib/quality/fix-target.ts:93-98), and detection-engine-core
+// (lib/quality/_detection-engine-core.ts:755-758) all still scope their
+// reads on `table_mappings` for the project and degrade to empty/null when
+// the project has none. Pre-this-pass, every Path D-only project hit those
+// degraded paths.
+//
+// This pass derives the unique (source_table_id, target_table_id) pair set
+// from MappingPayload.source_field_ids × target_field_id, pre-fetches any
+// pairs that already exist, and INSERTs the rest with status='needs_review'.
+// Conventions match the legacy AI table-pair writer at mapping-engine.ts
+// :1986-1997: status starts 'needs_review', confidence + ai_reasoning left
+// null. `recomputeTableMappingStatus` (lib/actions/mappings.ts:833) is the
+// downstream single source of truth for promotion — Path D does not call it
+// (importing from lib/actions/* into lib/ai/* would invert layering).
+//
+// Edge cases:
+//   * Empty source_field_ids (VAs / orphans): contribute zero pairs.
+//     Matches legacy — VAs live under TMs the table-pair flow already
+//     created; they never originate a new TM. Target tables that ONLY
+//     receive VA TFMs and zero source-having TFMs WILL still render
+//     empty in Transform (tracked in notes/follow-ups.md).
+//   * Multi-source-table TFMs: contribute one pair per distinct source_
+//     table. Both pairs are real distinct apply-batches downstream.
+//   * Re-run idempotency: pre-fetch existing pairs and skip them. There
+//     is no DB-level UNIQUE on (project_id, source_table_id,
+//     target_table_id) so this app-side check is load-bearing.
+async function persistTableMappings(
+  admin: SupabaseClient,
+  projectId: string,
+  data: MappingPayload[],
+): Promise<number> {
+  if (data.length === 0) return 0
+
+  // Pre-check: if every mapping is VA-shaped (empty source_field_ids), no
+  // pair can be formed — skip the fields.select round-trip entirely. Also
+  // preserves Pass 2.5's "no fields.select when source_field_ids are all
+  // empty" invariant pinned by tests at tests/lib/path-d-persistence.test.ts.
+  if (data.every((m) => m.source_field_ids.length === 0)) return 0
+
+  // Collect the union of field UUIDs we need to resolve to table_id —
+  // every source_field_id plus every target_field_id across all mappings.
+  const fieldIds = new Set<string>()
+  for (const m of data) {
+    fieldIds.add(m.target_field_id)
+    for (const sfId of m.source_field_ids) fieldIds.add(sfId)
+  }
+  if (fieldIds.size === 0) return 0
+
+  const fieldsRes = await admin
+    .from('fields')
+    .select('id, table_id')
+    .in('id', Array.from(fieldIds))
+  if (fieldsRes.error) {
+    throw new Error(
+      `table_mappings: field→table_id lookup failed: ${fieldsRes.error.message}`,
+    )
+  }
+  const tableIdByFieldId = new Map<string, string>()
+  for (const row of fieldsRes.data ?? []) {
+    tableIdByFieldId.set(row.id as string, row.table_id as string)
+  }
+
+  // Derive the unique pair set. VAs (source_field_ids: []) skip naturally.
+  // Defensive: skip pairs whose endpoints failed to resolve (the AI emitted
+  // a UUID not in the project's fields table — same defensive policy as
+  // persistMappingSources).
+  const pairs = new Set<string>()
+  for (const m of data) {
+    const tgtTableId = tableIdByFieldId.get(m.target_field_id)
+    if (!tgtTableId) continue
+    for (const sfId of m.source_field_ids) {
+      const srcTableId = tableIdByFieldId.get(sfId)
+      if (!srcTableId) continue
+      pairs.add(`${srcTableId}::${tgtTableId}`)
+    }
+  }
+  if (pairs.size === 0) return 0
+
+  // Pre-fetch existing pairs for the project; the schema has no UNIQUE
+  // constraint on (project_id, source_table_id, target_table_id) so we
+  // dedupe application-side — same pattern as the legacy writer at
+  // mapping-engine.ts:510-517.
+  const existingRes = await admin
+    .from('table_mappings')
+    .select('source_table_id, target_table_id')
+    .eq('project_id', projectId)
+  if (existingRes.error) {
+    throw new Error(
+      `table_mappings: existing-pair lookup failed: ${existingRes.error.message}`,
+    )
+  }
+  const existing = new Set<string>()
+  for (const row of existingRes.data ?? []) {
+    existing.add(`${row.source_table_id as string}::${row.target_table_id as string}`)
+  }
+
+  const rowsToInsert: Array<{
+    project_id: string
+    source_table_id: string
+    target_table_id: string
+    status: 'needs_review'
+    confidence: null
+    ai_reasoning: null
+  }> = []
+  for (const key of pairs) {
+    if (existing.has(key)) continue
+    const [src, tgt] = key.split('::')
+    rowsToInsert.push({
+      project_id: projectId,
+      source_table_id: src!,
+      target_table_id: tgt!,
+      status: 'needs_review',
+      confidence: null,
+      ai_reasoning: null,
+    })
+  }
+  if (rowsToInsert.length === 0) return 0
+
+  const insRes = await admin.from('table_mappings').insert(rowsToInsert)
+  if (insRes.error) {
+    throw new Error(`table_mappings: insert failed: ${insRes.error.message}`)
+  }
+  return rowsToInsert.length
 }
 
 /**
