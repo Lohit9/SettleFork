@@ -85,6 +85,12 @@ interface RawFieldRow {
   fk_reference: string | null
   default_value: string | null
   ordinal_position: number
+  /**
+   * PR 3a — added to surface DDL-derived description on the
+   * target side. NULL for existing rows (migration 090 backfill is
+   * "DEFAULT NULL"). Source-side reads of this column are unchanged.
+   */
+  description?: string | null
   field_profiles?: Array<{
     field_id: string
     sample_values: unknown
@@ -461,7 +467,16 @@ export function synthesizeToolUseResult(
 
 // ─── Row builders ────────────────────────────────────────────────────
 
-function buildTargetFieldRef(
+/**
+ * Exported for unit-test coverage (PR 3a). Production callers reach the
+ * function only via `getMappingsForRedesignCore`'s row-build path; the
+ * export keeps the row-translator boundary intact while letting
+ * `tests/lib/mapping-engine-target-field-ref.test.ts` exercise the
+ * additive field population (isPrimaryKey, isForeignKey, fkReference,
+ * description, sampleValues) without spinning up a Supabase mock.
+ * Mirrors the existing `buildAgentUserMessage` testability export.
+ */
+export function buildTargetFieldRef(
   field: RawFieldRow,
   tablesById: Map<string, RawTableRow>,
 ): TargetFieldRef | null {
@@ -478,6 +493,16 @@ function buildTargetFieldRef(
     defaultValue: field.default_value,
     targetTable: { id: table.id, name: table.name },
     ordinalPosition: field.ordinal_position,
+    // PR 3a — additive read-shape extension for the drawer body
+    // redesign's TARGET FIELD section. `is_primary_key` /
+    // `is_foreign_key` are nullable in the DB schema (migration 002
+    // declares DEFAULT false but legacy rows could carry NULL); we
+    // coerce to `false` to match the DDL's semantic.
+    isPrimaryKey: field.is_primary_key === true,
+    isForeignKey: field.is_foreign_key === true,
+    fkReference: field.fk_reference,
+    description: field.description ?? null,
+    sampleValues: extractSampleValues(field.field_profiles),
   }
 }
 
@@ -1456,7 +1481,7 @@ export async function getMappingsForRedesignCore(
     tableIds.length > 0
       ? supabase
           .from('fields')
-          .select('id, table_id, name, data_type, is_nullable, is_primary_key, is_foreign_key, fk_reference, default_value, ordinal_position, field_profiles(field_id, sample_values)')
+          .select('id, table_id, name, data_type, is_nullable, is_primary_key, is_foreign_key, fk_reference, default_value, description, ordinal_position, field_profiles(field_id, sample_values)')
           .in('table_id', tableIds)
       : Promise.resolve({ data: [] as RawFieldRow[] }),
     tfmIds.length > 0
