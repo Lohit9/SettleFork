@@ -14,13 +14,11 @@ import { cn } from '@/components/ui/utils'
 import {
   AlertCircle,
   AlertTriangle,
-  ArrowRight,
   Check,
   ChevronDown,
   ChevronRight,
   Pencil,
   Sparkles,
-  X,
 } from '@/components/icons'
 import {
   AlertDialog,
@@ -37,6 +35,7 @@ import type {
   MappingRow,
   MappingSourceRef,
   MappingTransformationStatus,
+  TargetFieldRef,
   UnmappedRow,
   ValueAssignmentRow,
 } from '@/lib/types/mappings-for-redesign'
@@ -65,6 +64,7 @@ import {
   type EditMappingInitialState,
   type EditSaveMeta,
 } from './CreateMappingForm'
+import { DrawerHeader } from './DrawerHeader'
 import { EditInvalidationDialog } from './EditInvalidationDialog'
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -305,6 +305,38 @@ export interface MappingDrawerProps {
    * view passes nothing and renders all sources equally.
    */
   highlightedSourceFieldId?: string | null
+  /**
+   * Drawer redesign PR 1 — universe of target fields for the header's
+   * inline target-field picker. Threaded from the parent
+   * (`MappingContent`) which derives one entry per target field from
+   * `data.rows`. Optional: when absent, the header skips the target
+   * pencil affordance (test fixtures, transitional callers).
+   */
+  availableTargetFields?: readonly TargetFieldRef[]
+  /**
+   * Drawer redesign PR 1 — header inline-edit commit handler for the
+   * target-field swap flow. Receives the bare TFM uuid and the new
+   * target field id. The parent wraps `mutations.swapMappingTarget`
+   * (which calls `updateMappingTargetField` server-side). Optional:
+   * when absent, the header skips the target pencil affordance.
+   */
+  onSwapTarget?: (
+    tfmId: string,
+    newTargetFieldId: string,
+  ) => Promise<{ success: boolean }>
+  /**
+   * Drawer redesign PR 1 — header inline-edit commit handler for the
+   * source-field swap flow on single-source mapped rows. Receives the
+   * row id (TFM uuid) and the new source field id. The parent wraps
+   * `mutations.swapMappingSource` (which calls
+   * `updateMappingSourceField` server-side, ordinal-0 branch). Multi-
+   * source rows do NOT surface this affordance in PR 1 — per-source
+   * editing ships in PR 2.
+   */
+  onSwapSource?: (
+    rowId: string,
+    newSourceFieldId: string,
+  ) => Promise<{ success: boolean }>
 }
 
 /**
@@ -323,6 +355,9 @@ export function MappingDrawer({
   onRestoreConsumed,
   pathDOutputs,
   highlightedSourceFieldId,
+  availableTargetFields,
+  onSwapTarget,
+  onSwapSource,
 }: MappingDrawerProps) {
   const titleId = useId()
   const drawerRef = useRef<HTMLElement | null>(null)
@@ -965,6 +1000,10 @@ export function MappingDrawer({
         row={effectiveRow}
         titleId={titleId}
         onClose={maybeRequestClose}
+        onSwapTarget={onSwapTarget}
+        onSwapSource={onSwapSource}
+        availableTargetFields={availableTargetFields}
+        availableSourceFields={availableSourceFields}
       />
       <DrawerBody
         row={effectiveRow}
@@ -1084,245 +1123,24 @@ const GENERIC_REJECT_ERROR =
 const GENERIC_UNAPPROVE_ERROR =
   "Couldn't un-approve this mapping. Please try again."
 
-// ── Header (drawer redesign — compressed 2-line) ───────────────────────────
+// ── Header ─────────────────────────────────────────────────────────────────
 //
-// Shape (founder lock):
-//
-//   Line 1: [srcTable] sourceField  →  [tgtTable] targetField    [✕]
-//   Line 2: ●  87.50%  ·  VARCHAR(50) → VARCHAR(200)
-//
-// Line 1 collapses the legacy header (target field only) and DrawerSubheader
-// (per-rule "from" prose) into a single source→target identity row. Per
-// Q11.H lock, multi-source rows show only the dominant source on line 1
-// with a `+N sources` chip that scrolls the body to the Sources section.
-//
-// Line 2 collapses the legacy `Status`, `Confidence`, and per-source type-
-// compat sections into a single tabular meta strip. Suppressed entirely
-// for Rule 6 unmapped per founder lock — line 2 just doesn't render.
-//
-// Total height ~52-56px, down from the legacy header+subheader at ~101px
-// combined. Scroll real estate goes to the body sections (Sources / AI
-// Reasoning / Transformation).
+// Drawer redesign PR 1 (feat/drawer-header-rewrite): the header is now a
+// standalone two-row component in [./DrawerHeader.tsx] — source identity →
+// target identity on row 1, status badge + confidence right-aligned on
+// row 2. Click-to-edit pencils on the source field (single-source mapped
+// only) and target field (mapped/VA) open the existing portal-anchored
+// `InlineSourcePicker` / `TargetFieldCellPicker` used by the flat view.
+// See `DrawerHeader.tsx` file header for the full per-variant matrix.
 
-// Drawer redesign — TARGET-led identity (this iteration): the body's
-// first section is renamed `SOURCE` (singular). The testid follows
-// suit: `drawer-section-source`. The section name is singular
-// regardless of source count — Rule 1 has one source, Rule 2/3/4
-// list multiple sources under a single SOURCE section heading; the
-// list itself carries the plurality cue.
+// Drawer redesign — TARGET-led identity: the body's first section is
+// named `SOURCE` (singular). The testid follows suit:
+// `drawer-section-source`. The section name is singular regardless of
+// source count — Rule 1 has one source, Rule 2/3/4 list multiple
+// sources under a single SOURCE section heading; the list itself
+// carries the plurality cue. VA rows omit this section entirely
+// (drawer redesign PR 1 — empty-state SOURCE removed for VAs).
 const SOURCE_SECTION_TESTID = 'drawer-section-source'
-
-/**
- * Drawer header — drawer-redesign refinement (TARGET-led identity).
- *
- * Founder canary review converged on a TARGET-led mental model: the
- * list view is target-table-grouped and the user clicks a row anchored
- * on the target field name. The drawer leads with the target field as
- * the subject ("you are building this target field"); source details
- * render as the first body section describing how the target gets
- * filled.
- *
- *   [tgtTable] tgtField                ●  Approved   ✕
- *
- * Single-row identity. No SOURCE row in the header — sources move to
- * the body's first section (renamed `SOURCE`, singular). No "TARGET"
- * label — the row itself is the target identity, no labelling
- * required at this level.
- *
- * Status badge composition:
- *   • mapped / VA: dot + sentence-case status word ("Approved",
- *     "Needs review", "Rejected"), color-matched.
- *   • Rule 6 (unmapped): badge entirely suppressed — only the close
- *     button renders.
- *
- * Confidence: NOT in the header. The per-source SOURCE section
- * carries it (color-banded, restored on Rule 1 too — the drawer
- * needs a confidence number somewhere, and per-source adjacency to
- * the source identity reads cleaner than a header-level number that
- * would have to compete with the status word for vertical real
- * estate).
- *
- * Sticky vs. scroll-with-body: the header is intentionally NOT
- * sticky — the body has ample empty space on most rows, and pinning
- * a 50-60px header costs more than it saves.
- *
- * Identity field renders at `font-mono text-base font-normal text-
- * slate-900`, matching the list-view source/target weight.
- */
-function DrawerHeader({
-  row,
-  titleId,
-  onClose,
-}: {
-  row: MappingRow
-  titleId: string
-  onClose: () => void
-}) {
-  return (
-    <header
-      data-testid="mapping-drawer-header"
-      className="border-b border-slate-200 bg-white px-5 py-4"
-    >
-      <div
-        data-testid="mapping-drawer-header-row"
-        className="flex items-center justify-between gap-3"
-      >
-        <HeaderTargetIdentity row={row} titleId={titleId} />
-        <div className="flex flex-shrink-0 items-center gap-3">
-          <HeaderStatusBadge row={row} />
-          <button
-            type="button"
-            onClick={onClose}
-            aria-label="Close drawer"
-            data-testid="mapping-drawer-close"
-            className={cn(
-              'inline-flex h-6 w-6 flex-shrink-0 items-center justify-center rounded-md',
-              'text-slate-400 transition-colors hover:bg-slate-100 hover:text-slate-700',
-              'focus:outline-none focus-visible:ring-2 focus-visible:ring-slate-300',
-            )}
-          >
-            <X className="h-3.5 w-3.5" />
-          </button>
-        </div>
-      </div>
-    </header>
-  )
-}
-
-/**
- * Target-side identity. Single fixed shape: `[tgtTable] targetField`.
- * The field name owns the `id={titleId}` so `aria-labelledby` on the
- * drawer aside still references the canonical title (the target field
- * is the row identity per founder Q3 from the Gap 7 spec).
- */
-function HeaderTargetIdentity({
-  row,
-  titleId,
-}: {
-  row: MappingRow
-  titleId: string
-}) {
-  return (
-    <div
-      className="flex min-w-0 items-center gap-2"
-      data-testid="mapping-drawer-header-target"
-    >
-      <TableBadge tableName={row.targetField.targetTable.name} size="sm" />
-      <span
-        id={titleId}
-        data-testid="mapping-drawer-title"
-        className="min-w-0 truncate font-mono text-base font-normal text-slate-900"
-        title={row.targetField.name}
-      >
-        {row.targetField.name}
-      </span>
-    </div>
-  )
-}
-
-/**
- * Status dot used by `HeaderStatusBadge` (drawer redesign — TARGET-led
- * identity).
- *
- * Renders a small colored disc carrying a hue that visually pairs
- * with the adjacent status word. The dot is decorative — the visible
- * word carries the semantic signal — but the dot's color is still
- * load-bearing for at-a-glance scanning.
- *
- * The testid disambiguator (`mapping-drawer-header-status-${variant}`)
- * is the surface tests use to assert which palette the badge picked.
- * `variant` is the row.status enum.
- */
-function HeaderStatusDot({
-  variant,
-  label,
-  dotClassName,
-}: {
-  variant: string
-  label: string
-  dotClassName: string
-}) {
-  return (
-    <span
-      data-testid={`mapping-drawer-header-status-${variant}`}
-      aria-label={label}
-      title={label}
-      className="inline-flex flex-shrink-0 items-center"
-    >
-      <span
-        aria-hidden="true"
-        className={cn('h-2 w-2 flex-shrink-0 rounded-full', dotClassName)}
-      />
-    </span>
-  )
-}
-
-/**
- * Status badge in the header's SOURCE row top-right (drawer redesign
- * — TARGET-led identity).
- *
- * Layout: `● Approved` — a colored status dot followed by the
- * sentence-case status word. The badge is the drawer's only status
- * surface (the prior pass put the confidence percent here; this
- * iteration drops it — the per-source SOURCE section now carries
- * confidence). Word + dot share a hue so the badge reads as a single
- * colored token.
- *
- * Status mapping by row.kind:
- *   • `mapped` / `value_assignment` / `unmapped`: row.status drives
- *     variant + palette via `DRAWER_STATUS_CONFIG`. Sentence-case
- *     labels: "Approved", "Needs review", "Rejected".
- *   • Coverage-approved no-source rows (kind='unmapped',
- *     status='approved') unify on the green Approved badge — they
- *     used to render a separate slate "Acknowledged" token, dropped
- *     in INF-57 cleanup (2026-05-10).
- */
-function HeaderStatusBadge({
-  row,
-}: {
-  row: MappedRow | ValueAssignmentRow | UnmappedRow
-}) {
-  const variant = row.status
-  const cfg = DRAWER_STATUS_CONFIG[row.status]
-  // Phase E PR α — surface confidence inline with the status word when
-  // the row carries a numeric confidence. The · separator is suppressed
-  // for null so the badge reads cleanly without trailing punctuation.
-  const confidencePercent = formatConfidencePercent(row.confidence)
-  return (
-    <span
-      data-testid="mapping-drawer-header-status-badge"
-      className="inline-flex items-center gap-1.5 text-sm font-medium"
-    >
-      <HeaderStatusDot
-        variant={variant}
-        label={cfg.label}
-        dotClassName={cfg.dotClassName}
-      />
-      <span
-        className={cfg.wordClassName}
-        data-testid="mapping-drawer-header-status-word"
-      >
-        {cfg.label}
-      </span>
-      {row.confidence !== null ? (
-        <>
-          <span
-            aria-hidden="true"
-            className="text-slate-400"
-          >
-            ·
-          </span>
-          <span
-            className="tabular-nums text-slate-600"
-            data-testid="mapping-drawer-header-confidence"
-          >
-            {confidencePercent}
-          </span>
-        </>
-      ) : null}
-    </span>
-  )
-}
 
 // ── Body — kind-dispatched (Gap 8a) ────────────────────────────────────────
 //
@@ -1595,39 +1413,10 @@ function DrawerEmptyState({
 // `applied/tested/draft/stale` pill both consume from cousin palettes
 // defined alongside.
 
-type DrawerStatus = MappingRow['status']
-
-// Drawer redesign — TARGET-led identity (this iteration): the status
-// badge in the header now renders `[dot] [word]` (no confidence
-// percent). Labels are sentence-case to match founder spec
-// ("Needs review" not "Needs Review"). `wordClassName` carries the
-// hue that matches the dot — the badge reads as a single colored
-// token rather than a dot disconnected from a slate word.
-const DRAWER_STATUS_CONFIG: Record<
-  DrawerStatus,
-  { label: string; dotClassName: string; wordClassName: string }
-> = {
-  approved: {
-    label: 'Approved',
-    dotClassName: 'bg-green-500',
-    wordClassName: 'text-green-700',
-  },
-  needs_review: {
-    label: 'Needs review',
-    dotClassName: 'bg-amber-400',
-    wordClassName: 'text-amber-700',
-  },
-  rejected: {
-    label: 'Rejected',
-    dotClassName: 'bg-red-500',
-    wordClassName: 'text-red-700',
-  },
-  unmapped: {
-    label: 'Unmapped',
-    dotClassName: 'bg-slate-300',
-    wordClassName: 'text-slate-500',
-  },
-}
+// Drawer redesign PR 1 — the DRAWER_STATUS_CONFIG palette + DrawerStatus
+// type that previously lived here moved to [./DrawerHeader.tsx] alongside
+// the new HeaderStatusBadge. No other body component consumes the
+// palette, so it's no longer re-exported here.
 
 // ── Rule 6 — Unmapped ──────────────────────────────────────────────────────
 //
@@ -1780,17 +1569,15 @@ function ValueAssignmentBody({
   // no source field to scope DQ findings to).
   const decisions = pathDOutputs?.decisionsByTfmId.get(row.id) ?? []
 
+  // Drawer redesign PR 1 — VA body order is VALUE EXPRESSION →
+  // ANALYSIS → DECISIONS. The empty-state SOURCE section ("Value
+  // assignment — no sources") is gone: the header's left-side
+  // "Value assignment" italic label now carries that signal and a
+  // section that exists solely to render "no sources" was pure
+  // chrome. VALUE EXPRESSION is the row's actual definition for a
+  // VA and gets the lead position.
   return (
     <>
-      <DrawerSection title="Source" testId={SOURCE_SECTION_TESTID}>
-        <DrawerEmptyState
-          text="Value assignment — no sources"
-          testId="drawer-va-no-sources"
-        />
-      </DrawerSection>
-
-      <AnalysisSection row={row} />
-
       <DrawerSection
         title="Value expression"
         testId="drawer-section-value-expression"
@@ -1809,6 +1596,8 @@ function ValueAssignmentBody({
           />
         )}
       </DrawerSection>
+
+      <AnalysisSection row={row} />
 
       {decisions.length > 0 ? (
         <DrawerSection
@@ -1903,9 +1692,19 @@ function MappedBody({
   // mapped rows, except `custom_sql` (which is a Transform-page concern,
   // not a sources/combination edit). For other states (rejected) the
   // founder removed the affordance from the source-edit flow.
+  //
+  // Drawer redesign PR 1 (feat/drawer-header-rewrite) — additionally
+  // suppress the inline body pencil on SINGLE-source mapped rows. Those
+  // rows now have a header-level source-field pencil (DrawerHeader.tsx)
+  // that opens the InlineSourcePicker auto-commit flow; the legacy body
+  // pencil → CreateMappingForm inline form is redundant for the
+  // single-source case. Multi-source rows keep the legacy pencil for
+  // now — PR 2 introduces per-card affordances + retires the body
+  // pencil entirely (open Q1 resolved: retire in PR 2).
   const showEditPencil =
     (row.status === 'needs_review' || row.status === 'approved') &&
-    row.combinationType !== 'custom_sql'
+    row.combinationType !== 'custom_sql' &&
+    row.sources.length > 1
 
   // Edit-mode mounts the form INSIDE the Sources section (replacing the
   // source-card list), which keeps the visual context — "you are editing
