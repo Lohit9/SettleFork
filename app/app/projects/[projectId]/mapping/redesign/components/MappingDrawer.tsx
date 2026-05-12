@@ -353,19 +353,43 @@ export interface MappingDrawerProps {
     combinationType: 'single' | 'concat_space' | 'concat_comma'
   }) => Promise<{ success: boolean }>
   /**
-   * Drawer redesign PR 2 TASK 1.6 — handler for the single-source ✕
-   * "Remove mapping" flow. Deletes the TFM via `rejectFieldMapping`
-   * BUT keeps the drawer open and transitions the row identity from
-   * `<tfmId>` to `unmapped::<targetFieldId>`. Distinct from the
-   * footer Reject button (which closes the drawer per founder
-   * decision 2). The parent (`MappingContent`) updates the
-   * `drawerRowId` URL state via the `pendingDrawerRowId` sentinel +
-   * `buildUnmappedOverride` so the drawer renders `UnmappedBody`
-   * immediately without flicker.
+   * Drawer redesign PR 2 TASK 1.6 / 2+3 — handler for the
+   * "Remove mapping" flow. Reused by:
+   *   • Single-source row ✕ (TASK 1.6)
+   *   • Target row ✕ on mapped + VA variants (TASK 2+3)
+   * Deletes the TFM via `rejectFieldMapping` BUT keeps the drawer
+   * open and transitions the row identity from `<tfmId>` to
+   * `unmapped::<targetFieldId>`. Distinct from the footer Reject
+   * button (which closes the drawer per founder decision 2). The
+   * parent (`MappingContent`) updates the `drawerRowId` URL state
+   * via the `pendingDrawerRowId` sentinel + `buildUnmappedOverride`
+   * so the drawer renders `UnmappedBody` immediately without
+   * flicker.
    */
-  onUnmapSingleSource?: (
+  onUnmapMapping?: (
     tfmId: string,
     targetFieldId: string,
+  ) => Promise<{ success: boolean }>
+  /**
+   * Drawer redesign PR 2 TASK 2+3 — handler for the source ✏ on
+   * unmapped/rejected variants. Picker → on commit fires
+   * `createMappingFromUnmapped(projectId, sourceFieldId,
+   * targetFieldId)` which creates a new TFM AND clears any coverage
+   * rejection. Auto-approves the new TFM (per the server action).
+   */
+  onCreateMapping?: (
+    sourceFieldId: string,
+    targetFieldId: string,
+  ) => Promise<{ success: boolean }>
+  /**
+   * Drawer redesign PR 2 TASK 2+3 — handler for the target ✏ on
+   * unmapped/rejected variants. Distinct from `onSwapTarget` (which
+   * needs a TFM uuid). Picker → on commit navigates the drawer to
+   * the new target field's row id (mapped/VA TFM uuid OR
+   * `unmapped::<newTargetFieldId>`). Client-only — no server action.
+   */
+  onNavigateTarget?: (
+    newTargetFieldId: string,
   ) => Promise<{ success: boolean }>
 }
 
@@ -389,7 +413,9 @@ export function MappingDrawer({
   onSwapTarget,
   onSwapSource,
   onEditSources,
-  onUnmapSingleSource,
+  onUnmapMapping,
+  onCreateMapping,
+  onNavigateTarget,
 }: MappingDrawerProps) {
   const titleId = useId()
   const drawerRef = useRef<HTMLElement | null>(null)
@@ -1050,7 +1076,9 @@ export function MappingDrawer({
         onSwapTarget={onSwapTarget}
         onSwapSource={onSwapSource}
         onEditSources={onEditSources}
-        onUnmapSingleSource={onUnmapSingleSource}
+        onUnmapMapping={onUnmapMapping}
+        onCreateMapping={onCreateMapping}
+        onNavigateTarget={onNavigateTarget}
         availableTargetFields={availableTargetFields}
         availableSourceFields={availableSourceFields}
       />
