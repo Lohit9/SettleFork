@@ -42,19 +42,30 @@ export interface RejectConfirmPopoverProps {
   /** Anchor element ref — the inline ✗ button on the row. */
   anchorRef: React.RefObject<HTMLElement | null>
   /**
-   * Confirm — fired when the user clicks the destructive Reject
-   * button. Parent dispatches `rejectFieldMapping` and surfaces the
-   * row removal animation + success toast.
+   * Confirm — fired when the user clicks the destructive action
+   * button. Parent dispatches the destructive server action and
+   * surfaces the row removal animation + success toast.
    */
   onConfirm: () => void
   /** Cancel — fired on Esc, click-outside, or Cancel button click. */
   onCancel: () => void
+  /**
+   * Drawer redesign PR 2 — copy override for re-use as a per-source
+   * remove confirm. Defaults to the row-level reject copy
+   * ("Reject this mapping?" / "Reject"). Per-source remove sets
+   * `title: "Remove this source from the mapping?"` / `confirmLabel:
+   * "Remove"`.
+   */
+  title?: string
+  confirmLabel?: string
 }
 
 export function RejectConfirmPopover({
   anchorRef,
   onConfirm,
   onCancel,
+  title = 'Reject this mapping?',
+  confirmLabel = 'Reject',
 }: RejectConfirmPopoverProps) {
   const containerRef = useRef<HTMLDivElement>(null)
   const cancelButtonRef = useRef<HTMLButtonElement>(null)
@@ -144,7 +155,7 @@ export function RejectConfirmPopover({
       ref={containerRef}
       data-testid="reject-confirm-popover"
       role="dialog"
-      aria-label="Reject this mapping?"
+      aria-label={title}
       style={{
         position: 'fixed',
         top: position.top,
@@ -156,9 +167,7 @@ export function RejectConfirmPopover({
         'flex flex-col gap-3 rounded-md border border-slate-200 bg-white p-3 shadow-lg',
       )}
     >
-      <p className="text-[13px] font-medium text-slate-900">
-        Reject this mapping?
-      </p>
+      <p className="text-[13px] font-medium text-slate-900">{title}</p>
       <div className="flex items-center justify-end gap-2">
         <button
           ref={cancelButtonRef}
@@ -183,7 +192,7 @@ export function RejectConfirmPopover({
             'focus:outline-none focus-visible:ring-2 focus-visible:ring-red-400',
           )}
         >
-          Reject
+          {confirmLabel}
         </button>
       </div>
     </div>,

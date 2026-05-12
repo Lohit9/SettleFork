@@ -6,10 +6,12 @@ import { useToast } from '@/lib/contexts/ToastContext'
 import {
   approveFieldMapping,
   createMappingFromUnmapped,
+  editMappingSources,
   rejectFieldMapping,
   setUnmappedRowRejected,
   updateMappingSourceField,
   updateMappingTargetField,
+  type CreateFieldMappingCombinationType,
 } from '@/lib/actions/mappings-for-redesign'
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -107,6 +109,28 @@ export interface MappingListMutations {
   rejectUnmappedRow: (args: {
     pendingKey: string
     target: { targetFieldId: string } | { sourceFieldId: string }
+  }) => Promise<MutationResult>
+
+  /**
+   * Drawer redesign PR 2 — replace the mapping_sources set on an
+   * existing TFM. Used by:
+   *   • Per-source ✕ remove (multi-source) — pass the remaining
+   *     source-field-id list. Server-side resets `transformReset`
+   *     when the source set changes.
+   *   • ⊕ Add source (PR 2 TASK 2) — pass existing + new.
+   *   • VA → mapped conversion (PR 2 TASK 3) — pass `[newSourceId]`
+   *     with `combinationType: 'single'`; the action overwrites the
+   *     VA's `combination_type='custom_sql'` (orphan `combination_sql`
+   *     remains in DB but is inert for non-custom_sql rows).
+   *
+   * The server action flips TFM status to 'needs_review' on any
+   * source-set change — substantial structure change merits a
+   * re-review, mirroring the existing edit-form semantic.
+   */
+  editMappingSources: (args: {
+    tfmId: string
+    sourceFieldIds: string[]
+    combinationType: CreateFieldMappingCombinationType
   }) => Promise<MutationResult>
 }
 
@@ -240,6 +264,25 @@ export function useMappingListMutations(
     [projectId, run],
   )
 
+  const editMappingSourcesMut = useCallback(
+    (input: {
+      tfmId: string
+      sourceFieldIds: string[]
+      combinationType: CreateFieldMappingCombinationType
+    }) =>
+      run(
+        input.tfmId,
+        () =>
+          editMappingSources({
+            tfmId: input.tfmId,
+            sourceFieldIds: input.sourceFieldIds,
+            combinationType: input.combinationType,
+          }),
+        'Mapping updated',
+      ),
+    [run],
+  )
+
   return {
     isRowBusy,
     approveTfm,
@@ -248,5 +291,6 @@ export function useMappingListMutations(
     swapMappingTarget,
     createFromUnmapped,
     rejectUnmappedRow,
+    editMappingSources: editMappingSourcesMut,
   }
 }
