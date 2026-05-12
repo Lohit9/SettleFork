@@ -417,6 +417,32 @@ describe('MappingListView — action buttons per row kind', () => {
       target: { targetFieldId: 'tf-9' },
     })
   })
+
+  // feat/mapping-list-toggle-and-columns refinement pass: the Edit pencil
+  // now renders on every row with a target — value-assignment AND
+  // unmapped-target — not just rows with a mapped source. Mirrors the
+  // flat view's "every row carries an edit affordance" contract. Click
+  // routes through the row-body handler so the same drawer-open behavior
+  // applies as clicking the row body itself.
+  it('unmapped-target: Edit pencil surfaces and clicking it opens the drawer', () => {
+    const onOpenDrawer = vi.fn()
+    const result = makeResult([makeUnmappedTarget()])
+    render(
+      <MappingListView
+        filteredResult={result}
+        mutations={makeMutations()}
+        onOpenDrawer={onOpenDrawer}
+      />,
+    )
+
+    const row = findRow('unmapped::tf-9')
+    const editButton = within(row).getByTestId('flat-row-action-edit')
+    expect(editButton).toBeInTheDocument()
+    fireEvent.click(editButton)
+    // Drawer opens keyed on the row's groupId (the unmapped-target row's
+    // own id since there's no TFM yet); no source to highlight.
+    expect(onOpenDrawer).toHaveBeenCalledWith('unmapped::tf-9', null)
+  })
 })
 
 describe('MappingListView — row body click + cell click', () => {

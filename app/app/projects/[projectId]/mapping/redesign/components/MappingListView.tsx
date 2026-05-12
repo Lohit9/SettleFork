@@ -3,9 +3,8 @@
 import { useCallback, useMemo, useRef, useState } from 'react'
 import { cn } from '@/components/ui/utils'
 import {
-  classifyRowConfidence,
   formatConfidencePercent,
-  type RowConfidenceBand,
+  isRowConfidenceLow,
 } from '@/lib/utils/confidence-format'
 import type {
   MappingsForRedesignResult,
@@ -21,15 +20,21 @@ import { InlineSourcePicker } from './InlineSourcePicker'
 import { TargetFieldCellPicker } from './TargetFieldCellPicker'
 import type { MappingListMutations } from '../hooks/useMappingListMutations'
 
-// Confidence band → text color for the Confidence cell. Matches the
-// drawer's per-source card so a "92% green" reads the same on both
-// surfaces. The flat view shows the colored number alone (no bar);
-// the band is the visual signal.
-const CONFIDENCE_BAND_TEXT: Record<RowConfidenceBand, string> = {
-  high: 'text-green-700 font-medium',
-  amber: 'text-amber-700',
-  low: 'text-red-700',
-}
+// feat/mapping-list-toggle-and-columns refinement pass — confidence
+// color simplified to a binary scheme: ≥50% renders in neutral slate
+// (the number speaks for itself), <50% in muted amber as a soft warning.
+// The prior 3-band gradient (green/amber/red) was retired because the
+// green coloring duplicated the status dot's hue channel and the high-
+// confidence number didn't need its own visual emphasis. `isRowConfidenceLow`
+// in `lib/utils/confidence-format.ts` carries the predicate (50% cutoff,
+// 0-1 vs 0-100 tolerant). The drawer / ExpandedSourceList / DQList still
+// use the 3-band `classifyRowConfidence` — only the row-grid surfaces
+// (this file + FieldMappingRow's ConfidenceCell) drop the gradient.
+//
+// Warning hue (`text-amber-700`) is intentionally NOT the status dot's
+// amber-400 — the row dot's amber and the confidence amber-700 read as
+// different dimensions (status vs. confidence) rather than competing
+// instances of the same signal.
 
 // ─── Visual subcomponents (Settle-platform-styled) ───────────────────────────
 //
@@ -801,9 +806,6 @@ function FlatRowView({
   const sourceCellClickable =
     row.kind === 'mapped' || row.kind === 'unmapped-target'
 
-  const confidenceBand =
-    confidence === null ? null : classifyRowConfidence(confidence)
-
   const displayStatus = deriveDisplayStatus(row)
   const statusTooltip = statusTooltipFor(row)
 
@@ -861,6 +863,11 @@ function FlatRowView({
       }
     }
     if (row.kind === 'value-assignment') {
+      // feat/mapping-list-toggle-and-columns refinement pass: the edit
+      // pencil now renders on every row that carries a target (value-
+      // assignment + unmapped-target included), removing the prior
+      // mapped-only gating. The drawer is the canonical edit surface
+      // for the row's TFM (or to-be-created TFM, for unmapped-target).
       return {
         onApprove: alreadyApproved
           ? undefined
@@ -870,8 +877,8 @@ function FlatRowView({
           ? undefined
           : () => void mutations.rejectTfm(row.id),
         rejectTooltip: 'Reject value assignment',
-        onEdit: undefined,
-        editTooltip: undefined,
+        onEdit: () => onRowBodyClick(row),
+        editTooltip: 'Open value assignment in drawer',
       }
     }
     if (row.kind === 'unmapped-target') {
@@ -886,8 +893,8 @@ function FlatRowView({
                 target: { targetFieldId: row.targetField.id },
               }),
         rejectTooltip: 'Mark as rejected',
-        onEdit: undefined,
-        editTooltip: undefined,
+        onEdit: () => onRowBodyClick(row),
+        editTooltip: 'Open target field in drawer',
       }
     }
     // unmapped-source
@@ -1108,14 +1115,22 @@ function FlatRowView({
             helper handles both 0-1 fractional and 0-100 percent
             scales gracefully. Legacy data and re-run data may coexist
             on different scales during the transition window
-            (per A's notes/flat-view-confidence-bug.md). For null
-            confidence the helper returns "—" so the empty-state
-            branch below is redundant; kept here so the band tinting
-            short-circuits to neutral em-dash. */}
-        {confidence === null || confidenceBand === null ? (
+            (per A's notes/flat-view-confidence-bug.md).
+            feat/mapping-list-toggle-and-columns refinement pass:
+            color simplified to a binary slate / amber-700 split at
+            50% — see the helper-block comment at the top of this file. */}
+        {confidence === null ? (
           <span className="text-gray-300">—</span>
         ) : (
-          <span className={CONFIDENCE_BAND_TEXT[confidenceBand]}>
+          <span
+            data-testid="flat-cell-confidence-value"
+            data-confidence-low={isRowConfidenceLow(confidence) ? 'true' : 'false'}
+            className={
+              isRowConfidenceLow(confidence)
+                ? 'text-amber-700'
+                : 'text-slate-700'
+            }
+          >
             {formatConfidencePercent(confidence)}
           </span>
         )}
