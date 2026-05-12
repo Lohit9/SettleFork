@@ -1094,46 +1094,68 @@ function SourceFieldBlock({ source }: { source: MappingSourceRef }) {
 
       {source.sampleValues.length > 0 ? (
         <div data-testid="drawer-source-field-samples">
-          <CollapsibleSampleValues
-            values={source.sampleValues}
+          <CollapsibleSection
+            label="Sample values"
+            count={source.sampleValues.length}
             toggleTestId="drawer-source-field-samples-toggle"
-            listTestId="drawer-source-field-sample-values-list"
-            rowTestId="drawer-source-field-sample-row"
-          />
+            panelTestId="drawer-source-field-sample-values-list"
+          >
+            <ul className="flex flex-col">
+              {source.sampleValues.map((value, idx) => (
+                <li
+                  key={`${idx}-${value}`}
+                  className={cn(
+                    'border-b border-slate-100 py-1 last:border-b-0',
+                    'break-words font-mono text-xs text-slate-700',
+                  )}
+                  data-testid="drawer-source-field-sample-row"
+                >
+                  {value}
+                </li>
+              ))}
+            </ul>
+          </CollapsibleSection>
         </div>
       ) : null}
     </li>
   )
 }
 
-// ── PR 3b refinement — collapsible sample values ───────────────────────────
+// ── PR 3b refinement — collapsible section disclosure ──────────────────────
 //
 // Surfaced from Kaan's smoke test: multi-source TFMs were pushing
-// TARGET FIELD offscreen with 30+ rows of expanded samples. Each
-// sample-values list in SOURCE FIELDS + TARGET FIELD wraps in a
-// disclosure now, default collapsed.
+// TARGET FIELD offscreen with 30+ rows of expanded samples. The
+// disclosure pattern now generalises across:
+//   • Sample values lists in SOURCE FIELDS + TARGET FIELD (size='sm',
+//     nested inside an outer block).
+//   • DATA QUALITY (N) + DECISIONS (N) top-level sections inside the
+//     mapped / VA / unmapped body (size='md', replaces the h3 heading
+//     of a `DrawerSection` so the count chip itself is the toggle).
 //
 // Pattern mirrors `NestedAiReasoningDisclosure` — chevron + label
 // in a single button, `aria-expanded` + `aria-controls` wired,
-// content lives in a separate `<ul>` toggled by `expanded` state.
-// State is local per instance — sources and target don't share
-// open/closed state.
+// children render inside a panel toggled by local `expanded` state.
+// State is per-instance — instances don't share open/closed.
 //
-// Zero-samples case (target only — sources don't render at all when
-// empty) is handled by the caller, NOT this helper. The helper
-// assumes `values.length > 0`.
-function CollapsibleSampleValues({
-  values,
+// Empty-content case is handled by the CALLER, not this helper.
+// (Targets render a separate "No sample data available" line; DQ /
+// Decisions sections collapse to null when count===0.)
+function CollapsibleSection({
+  label,
+  count,
   toggleTestId,
-  listTestId,
-  rowTestId,
+  panelTestId,
   initialExpanded = false,
+  size = 'sm',
+  children,
 }: {
-  values: readonly string[]
+  label: string
+  count: number
   toggleTestId: string
-  listTestId: string
-  rowTestId: string
+  panelTestId?: string
   initialExpanded?: boolean
+  size?: 'sm' | 'md'
+  children: React.ReactNode
 }) {
   const panelId = useId()
   const [expanded, setExpanded] = useState(initialExpanded)
@@ -1146,7 +1168,8 @@ function CollapsibleSampleValues({
         aria-controls={panelId}
         data-testid={toggleTestId}
         className={cn(
-          'inline-flex h-6 items-center gap-0.5 rounded px-1 text-[11px] font-medium uppercase tracking-wide',
+          'inline-flex h-6 items-center gap-0.5 rounded px-1 font-medium uppercase tracking-wide',
+          size === 'md' ? 'text-xs' : 'text-[11px]',
           'text-slate-500 transition-colors hover:bg-slate-50 hover:text-slate-700',
           'focus:outline-none focus-visible:ring-2 focus-visible:ring-slate-300',
         )}
@@ -1156,27 +1179,18 @@ function CollapsibleSampleValues({
         ) : (
           <ChevronRight aria-hidden="true" className="h-3 w-3" />
         )}
-        <span>Sample values ({values.length})</span>
+        <span>
+          {label} ({count})
+        </span>
       </button>
       {expanded ? (
-        <ul
+        <div
           id={panelId}
-          data-testid={listTestId}
-          className="mt-1 flex flex-col"
+          data-testid={panelTestId}
+          className={size === 'md' ? 'mt-2' : 'mt-1'}
         >
-          {values.map((value, idx) => (
-            <li
-              key={`${idx}-${value}`}
-              className={cn(
-                'border-b border-slate-100 py-1 last:border-b-0',
-                'break-words font-mono text-xs text-slate-700',
-              )}
-              data-testid={rowTestId}
-            >
-              {value}
-            </li>
-          ))}
-        </ul>
+          {children}
+        </div>
       ) : null}
     </div>
   )
@@ -1314,12 +1328,27 @@ function TargetFieldSection({
 
         <div className="mt-3">
           {visibleSamples.length > 0 ? (
-            <CollapsibleSampleValues
-              values={visibleSamples}
+            <CollapsibleSection
+              label="Sample values"
+              count={visibleSamples.length}
               toggleTestId="drawer-target-field-samples-toggle"
-              listTestId="drawer-target-field-sample-values-list"
-              rowTestId="drawer-target-field-sample-row"
-            />
+              panelTestId="drawer-target-field-sample-values-list"
+            >
+              <ul className="flex flex-col">
+                {visibleSamples.map((value, idx) => (
+                  <li
+                    key={`${idx}-${value}`}
+                    className={cn(
+                      'border-b border-slate-100 py-1 last:border-b-0',
+                      'break-words font-mono text-xs text-slate-700',
+                    )}
+                    data-testid="drawer-target-field-sample-row"
+                  >
+                    {value}
+                  </li>
+                ))}
+              </ul>
+            </CollapsibleSection>
           ) : (
             <>
               <div className="text-[11px] font-medium uppercase tracking-wide text-slate-500">
@@ -1392,12 +1421,20 @@ function UnmappedBody({
       </DrawerSection>
 
       {coverageDecisions.length > 0 ? (
-        <DrawerSection
-          title={`Decisions (${coverageDecisions.length})`}
-          testId="drawer-section-decisions"
+        <section
+          className="mb-4 last:mb-0"
+          data-testid="drawer-section-decisions"
         >
-          <DecisionList decisions={coverageDecisions} />
-        </DrawerSection>
+          <CollapsibleSection
+            label="Decisions"
+            count={coverageDecisions.length}
+            toggleTestId="drawer-decisions-toggle"
+            panelTestId="drawer-decisions-panel"
+            size="md"
+          >
+            <DecisionList decisions={coverageDecisions} />
+          </CollapsibleSection>
+        </section>
       ) : null}
     </>
   )
@@ -1465,12 +1502,20 @@ function ValueAssignmentBody({
       <AnalysisSection row={row} />
 
       {decisions.length > 0 ? (
-        <DrawerSection
-          title={`Decisions (${decisions.length})`}
-          testId="drawer-section-decisions"
+        <section
+          className="mb-4 last:mb-0"
+          data-testid="drawer-section-decisions"
         >
-          <DecisionList decisions={decisions} />
-        </DrawerSection>
+          <CollapsibleSection
+            label="Decisions"
+            count={decisions.length}
+            toggleTestId="drawer-decisions-toggle"
+            panelTestId="drawer-decisions-panel"
+            size="md"
+          >
+            <DecisionList decisions={decisions} />
+          </CollapsibleSection>
+        </section>
       ) : null}
     </>
   )
@@ -1584,21 +1629,37 @@ function MappedEnrichmentSections({
   return (
     <>
       {dqIssues.length > 0 ? (
-        <DrawerSection
-          title={`Data quality (${dqIssues.length})`}
-          testId="drawer-section-data-quality"
+        <section
+          className="mb-4 last:mb-0"
+          data-testid="drawer-section-data-quality"
         >
-          <DQList issues={dqIssues} />
-        </DrawerSection>
+          <CollapsibleSection
+            label="Data quality"
+            count={dqIssues.length}
+            toggleTestId="drawer-data-quality-toggle"
+            panelTestId="drawer-data-quality-panel"
+            size="md"
+          >
+            <DQList issues={dqIssues} />
+          </CollapsibleSection>
+        </section>
       ) : null}
 
       {decisions.length > 0 ? (
-        <DrawerSection
-          title={`Decisions (${decisions.length})`}
-          testId="drawer-section-decisions"
+        <section
+          className="mb-4 last:mb-0"
+          data-testid="drawer-section-decisions"
         >
-          <DecisionList decisions={decisions} />
-        </DrawerSection>
+          <CollapsibleSection
+            label="Decisions"
+            count={decisions.length}
+            toggleTestId="drawer-decisions-toggle"
+            panelTestId="drawer-decisions-panel"
+            size="md"
+          >
+            <DecisionList decisions={decisions} />
+          </CollapsibleSection>
+        </section>
       ) : null}
     </>
   )
