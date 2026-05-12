@@ -857,6 +857,27 @@ export function formatDocumentsForPrompt(docs: DocumentContext): string {
 }
 
 /**
+ * Format the POC answer-key as an authoritative wrapper block. Empty string
+ * when `key` is null (the universal case — flag off, or project has no
+ * answer-key document uploaded). Mirrors Path D's bespoke inlining at
+ * `path-d-system-prompt.ts:672-684` byte-for-byte so future consumers can
+ * call this helper without changing emitted content. Path D will be
+ * migrated to call this helper in a follow-up (see notes/follow-ups.md).
+ */
+export function formatPocAnswerKeyBlock(key: string | null): string {
+  if (!key) return ''
+  return `<poc_answer_key authoritative="true">
+The following project-specific answer key takes precedence over general
+guidance in the system prompt and any earlier document blocks. Generate
+mapping output (target_field_mappings, mapping_sources, project_decisions,
+project_lookup_tables, project_data_quality_issues, target_field_coverage,
+project_inferred_targets, project_notes) matching this specification.
+
+${key}
+</poc_answer_key>`
+}
+
+/**
  * Format a single field's full context for focused operations (transform, fix suggestions).
  * Shows complete value distribution when available.
  */
