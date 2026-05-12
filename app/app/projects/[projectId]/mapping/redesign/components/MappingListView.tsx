@@ -476,14 +476,23 @@ export function MappingListView({
 
   const handleSourceCellClick = useCallback(
     (row: FlatRow, anchorEl: HTMLElement) => {
-      // Source-cell click opens the source picker for rows with a
-      // meaningful source slot to address:
+      // Source-cell click opens the source picker for every row that
+      // carries a target — including the empty-source cases:
       //   • mapped (any source count) → swap THIS row's source field.
       //     For multi-source TFMs the picker only affects this one
       //     attribution; siblings stay mapped to their own sources.
-      //   • unmapped-target → create-mapping flow (target picks a source)
-      //   • unmapped-source → noop (source IS the row identity)
-      //   • value-assignment → no source cell, no click
+      //   • unmapped-target → create-mapping flow (target picks a source).
+      //   • value-assignment → create-mapping flow (the value-assignment
+      //     TFM gets a source field attached). Routes through the same
+      //     `createFromUnmapped` path as unmapped-target since neither
+      //     has a `mapping_sources` slot to swap. Server-side concern
+      //     for value-assignment: `createMappingFromUnmapped` currently
+      //     rejects when a live TFM exists at the target (the existing
+      //     value-assignment TFM trips this guard). The UI affordance
+      //     ships ahead of the server change; the user will see a
+      //     "target already mapped" error toast until the server side
+      //     learns to convert value-assignment → mapped.
+      //   • unmapped-source → noop (source IS the row identity).
       if (row.kind === 'mapped') {
         setOpenPicker({
           kind: 'source',
@@ -494,7 +503,7 @@ export function MappingListView({
         })
         return
       }
-      if (row.kind === 'unmapped-target') {
+      if (row.kind === 'unmapped-target' || row.kind === 'value-assignment') {
         setOpenPicker({
           kind: 'source',
           rowId: row.id,
@@ -1067,6 +1076,32 @@ function FlatRowView({
             )}
           >
             Pick a source…
+          </button>
+        ) : row.kind === 'value-assignment' ? (
+          // feat/mapping-list-toggle-and-columns refinement pass: the
+          // value-assignment "—" gets the same click-to-pick affordance
+          // as unmapped-target. Visually stays a dash (matches the
+          // founder's brief — "clickable —") rather than borrowing the
+          // unmapped-target "Pick a source…" label. Cursor-pointer +
+          // subtle hover signal clickability. Server-side commit
+          // limitation documented in `handleSourceCellClick`.
+          <button
+            ref={sourceCellRef}
+            type="button"
+            data-testid="flat-cell-source-field-button"
+            aria-label="Pick a source field"
+            title="Pick a source field"
+            onClick={(e) => {
+              e.stopPropagation()
+              onSourceCellClick(row, e.currentTarget)
+            }}
+            className={cn(
+              'inline-flex cursor-pointer items-center justify-start rounded px-1 py-0.5 text-sm',
+              'text-gray-300 hover:bg-blue-100/60 hover:text-slate-600',
+              'focus:outline-none focus-visible:ring-1 focus-visible:ring-blue-500',
+            )}
+          >
+            —
           </button>
         ) : (
           <span className="text-gray-300">—</span>

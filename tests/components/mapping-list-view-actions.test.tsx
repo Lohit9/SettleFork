@@ -160,6 +160,23 @@ function makeUnmappedTarget(
   }
 }
 
+function makeValueAssignment(
+  overrides: { status?: 'needs_review' | 'approved' | 'rejected' } = {},
+): MappingRow {
+  return {
+    kind: 'value_assignment',
+    id: 'tfm-va-1',
+    targetField: makeTargetField({ id: 'tf-va', name: 'created_at' }),
+    confidence: 92,
+    status: overrides.status ?? 'approved',
+    hasTransformation: true,
+    transformationStatus: 'applied',
+    combinationType: 'custom_sql',
+    combinationSql: 'NOW()',
+    aiReasoning: null,
+  }
+}
+
 function makeResult(rows: MappingRow[], sourceFields: SourceFieldWithState[] = []) {
   const result: MappingsForRedesignResult = {
     projectId: 'proj-1',
@@ -442,6 +459,92 @@ describe('MappingListView — action buttons per row kind', () => {
     // Drawer opens keyed on the row's groupId (the unmapped-target row's
     // own id since there's no TFM yet); no source to highlight.
     expect(onOpenDrawer).toHaveBeenCalledWith('unmapped::tf-9', null)
+  })
+})
+
+// ─── Clickable "—" in the Source Field column ──────────────────────────────
+//
+// feat/mapping-list-toggle-and-columns refinement pass: value-assignment
+// rows render "—" in the Source Field cell (no source is mapped — the
+// target gets a constant SQL value instead). The "—" is now CLICKABLE:
+// the same InlineSourcePicker that opens for a mapped source pill or
+// the unmapped-target "Pick a source…" affordance opens for the dash.
+// Cursor-pointer on hover signals clickability. The Source TABLE cell
+// stays non-interactive ("—" is purely informational there).
+
+describe('MappingListView — clickable "—" on value-assignment source field', () => {
+  it('value-assignment renders the Source Field cell as a clickable button (not a plain span)', () => {
+    const result = makeResult([makeValueAssignment()])
+    render(
+      <MappingListView
+        filteredResult={result}
+        mutations={makeMutations()}
+        onOpenDrawer={vi.fn()}
+      />,
+    )
+
+    const row = findRow('tfm-va-1')
+    const sourceFieldCell = within(row).getByTestId('flat-cell-source-field')
+    const button = within(sourceFieldCell).getByTestId(
+      'flat-cell-source-field-button',
+    )
+    expect(button).toBeInTheDocument()
+    expect(button.tagName).toBe('BUTTON')
+    expect(button.textContent).toContain('—')
+    // Cursor-pointer + hover signal clickability.
+    expect(button.className).toContain('cursor-pointer')
+  })
+
+  it('the Source TABLE "—" stays a non-interactive span on value-assignment rows', () => {
+    // Per the brief: the source-field click handles source assignment;
+    // the source-table column is derived from the chosen field, so its
+    // own "—" remains informational only.
+    const result = makeResult([makeValueAssignment()])
+    render(
+      <MappingListView
+        filteredResult={result}
+        mutations={makeMutations()}
+        onOpenDrawer={vi.fn()}
+      />,
+    )
+
+    const row = findRow('tfm-va-1')
+    const sourceTableCell = within(row).getByTestId('flat-cell-source-table')
+    expect(sourceTableCell.textContent).toContain('—')
+    expect(
+      within(sourceTableCell).queryByRole('button'),
+    ).toBeNull()
+  })
+
+  it('clicking the value-assignment "—" opens the InlineSourcePicker', async () => {
+    // Pin the affordance: same picker that opens for a populated source
+    // pill or the unmapped-target "Pick a source…" button opens here.
+    const sourceField: SourceFieldWithState = {
+      id: 'sf-new',
+      name: 'NEW_SOURCE',
+      dataType: 'VARCHAR(50)',
+      ordinalPosition: 1,
+      sourceTable: { id: 'st-x', name: 'SRC_X' },
+      mappingStatus: 'unmapped',
+      sampleValues: [],
+      isAcknowledged: false,
+      isRejected: false,
+    }
+    const result = makeResult([makeValueAssignment()], [sourceField])
+    render(
+      <MappingListView
+        filteredResult={result}
+        mutations={makeMutations()}
+        onOpenDrawer={vi.fn()}
+      />,
+    )
+
+    const row = findRow('tfm-va-1')
+    const button = within(row).getByTestId('flat-cell-source-field-button')
+    fireEvent.click(button)
+    expect(
+      await screen.findByTestId('inline-source-picker'),
+    ).toBeInTheDocument()
   })
 })
 
