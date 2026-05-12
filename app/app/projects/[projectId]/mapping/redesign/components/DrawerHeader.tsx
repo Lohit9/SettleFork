@@ -4,6 +4,7 @@ import { useCallback, useRef, useState } from 'react'
 import { cn } from '@/components/ui/utils'
 import { Pencil, X } from '@/components/icons'
 import type {
+  MappedRow,
   MappingRow,
   MappingSourceRef,
   SourceFieldWithState,
@@ -13,6 +14,7 @@ import { formatConfidencePercent } from '@/lib/utils/confidence-format'
 import { TableBadge } from './TableBadge'
 import { TargetFieldCellPicker } from './TargetFieldCellPicker'
 import { InlineSourcePicker } from './InlineSourcePicker'
+import { RejectConfirmPopover } from './RejectConfirmPopover'
 
 // ─────────────────────────────────────────────────────────────────────────────
 // DrawerHeader — PR 1 of drawer redesign (feat/drawer-header-rewrite).
@@ -39,10 +41,11 @@ import { InlineSourcePicker } from './InlineSourcePicker'
 //     FROM  [SRC] src_fld ✏
 //     TO    [TGT] tgt_fld ✏
 //
-//   mapped, sources.length > 1 — all N sources stacked vertically
-//     FROM  [SRC_A] field_a
-//           [SRC_B] field_b
-//           [SRC_C] field_c
+//   mapped, sources.length > 1 — all N sources stacked vertically;
+//   each row gets ✏ (per-source swap) + ✕ (per-source remove)
+//     FROM  [SRC_A] field_a ✏ ✕
+//           [SRC_B] field_b ✏ ✕
+//           [SRC_C] field_c ✏ ✕
 //     TO    [TGT] tgt_fld ✏
 //
 //   value_assignment
@@ -66,11 +69,16 @@ import { InlineSourcePicker } from './InlineSourcePicker'
 // validation (no TFM uuid exists). PR 2 will route unmapped target
 // clicks through `createFromUnmapped` once the body affordances land.
 //
-// Source pencil + multi-source: deliberately omitted per spec Q2.
-// Multi-source rows are read-only in the header for PR 1 — every
-// source identity is visible, but per-source edit / remove / add
-// affordances ship in PR 2 (alongside the body SOURCE-section
-// retirement to remove duplication).
+// Drawer redesign PR 2 — per-source ✏ / ✕ affordances on every
+// source row in the multi-source case. The ✏ pencil opens the
+// `InlineSourcePicker` anchored on the pencil button and dispatches
+// `updateMappingSourceField` with a shimmed contributor row id
+// (`<tfmId>::<mappingSourceId>` — `encodeContributorRowId`); the ✕
+// remove opens a `RejectConfirmPopover` (copy: "Remove this source
+// from the mapping?") and on confirm dispatches `editMappingSources`
+// with the source filtered out. The ✕ is HIDDEN when
+// `sources.length === 1` — removing the last source would leave the
+// TFM empty and `editMappingSources` rejects empty source lists.
 //
 // Light-mode-only invariant: no `dark:` prefixes anywhere in this
 // file. Enforced by tests/lib/no-shim-in-redesign-path.test.ts.
@@ -92,13 +100,44 @@ export interface DrawerHeaderProps {
     newTargetFieldId: string,
   ) => Promise<{ success: boolean }>
   /**
-   * Commit handler for single-source mapped row source swaps. Receives
-   * the row id (TFM uuid; the action's `decodeShimmedRowId` resolves
-   * the ordinal-0 mapping_sources row) and the new source field id.
+   * Commit handler for mapped-row source swaps. Receives the row id
+   * (TFM uuid for single-source ordinal-0 branch; shimmed
+   * `<tfmId>::<mappingSourceId>` contributor id for multi-source
+   * per-source edits) and the new source field id. The action's
+   * `decodeShimmedRowId` resolves both shapes.
    */
   onSwapSource?: (
     rowId: string,
     newSourceFieldId: string,
+  ) => Promise<{ success: boolean }>
+  /**
+   * Drawer redesign PR 2 — commit handler for source-set changes on
+   * an existing TFM. Used by the per-source ✕ remove (and by TASK 2
+   * ⊕ Add source / TASK 3 VA conversion). Parent wraps
+   * `mutations.editMappingSources`. The combinationType is derived
+   * UI-side: removing one of N sources → if remaining count is 1
+   * pass `'single'`, else pass the row's existing combinationType
+   * narrowed to 'concat_space'/'concat_comma' (never 'custom_sql' —
+   * the action rejects that incoming value).
+   */
+  onEditSources?: (args: {
+    tfmId: string
+    sourceFieldIds: string[]
+    combinationType: 'single' | 'concat_space' | 'concat_comma'
+  }) => Promise<{ success: boolean }>
+  /**
+   * Drawer redesign PR 2 TASK 1.6 — handler for the single-source ✕
+   * "Remove mapping" flow. Distinct from `onEditSources` because
+   * removing the LAST source can't go through `editMappingSources`
+   * (which rejects empty source lists). The parent deletes the TFM
+   * via `rejectFieldMapping` AND keeps the drawer open by
+   * transitioning the URL drawerRowId to
+   * `unmapped::<targetFieldId>` — see `MappingContent` for the
+   * sentinel + override plumbing.
+   */
+  onUnmapSingleSource?: (
+    tfmId: string,
+    targetFieldId: string,
   ) => Promise<{ success: boolean }>
   /**
    * Universe of target fields for the target picker. Caller derives
@@ -160,13 +199,13 @@ export function DrawerHeader({
   onClose,
   onSwapTarget,
   onSwapSource,
+  onEditSources,
+  onUnmapSingleSource,
   availableTargetFields,
   availableSourceFields,
 }: DrawerHeaderProps) {
-  const sourcePencilRef = useRef<HTMLButtonElement | null>(null)
   const targetPencilRef = useRef<HTMLButtonElement | null>(null)
-  // Pickers are mutually exclusive — one state slot is enough.
-  const [openPicker, setOpenPicker] = useState<'source' | 'target' | null>(null)
+  const [openPicker, setOpenPicker] = useState<'target' | null>(null)
 
   const handleTargetCommit = useCallback(
     async (newTargetFieldId: string) => {
@@ -181,32 +220,10 @@ export function DrawerHeader({
     [onSwapTarget, row.id],
   )
 
-  const handleSourceCommit = useCallback(
-    async (newSourceFieldIds: string[]) => {
-      const newId = newSourceFieldIds[0]
-      if (!newId || !onSwapSource) return { success: false }
-      // Single-source mapped rows only — the action's ordinal-0 branch
-      // resolves the lone mapping_sources row without a shim suffix.
-      return onSwapSource(row.id, newId)
-    },
-    [onSwapSource, row.id],
-  )
-
   const targetEditEnabled =
     typeof onSwapTarget === 'function' &&
     availableTargetFields !== undefined &&
     (row.kind === 'mapped' || row.kind === 'value_assignment')
-
-  const sourceEditEnabled =
-    typeof onSwapSource === 'function' &&
-    availableSourceFields !== undefined &&
-    row.kind === 'mapped' &&
-    row.sources.length === 1
-
-  const initialSourceFieldIds: string[] =
-    row.kind === 'mapped' && row.sources.length === 1
-      ? [row.sources[0]!.sourceField.id]
-      : []
 
   return (
     <header
@@ -257,9 +274,10 @@ export function DrawerHeader({
       >
         <HeaderSourceContent
           row={row}
-          editEnabled={sourceEditEnabled}
-          pencilRef={sourcePencilRef}
-          onPencilClick={() => setOpenPicker('source')}
+          availableSourceFields={availableSourceFields}
+          onSwapSource={onSwapSource}
+          onEditSources={onEditSources}
+          onUnmapSingleSource={onUnmapSingleSource}
         />
       </div>
 
@@ -321,32 +339,32 @@ export function DrawerHeader({
           onClose={() => setOpenPicker(null)}
         />
       ) : null}
-
-      {openPicker === 'source' && sourceEditEnabled ? (
-        <InlineSourcePicker
-          anchorRef={sourcePencilRef}
-          initialSourceFieldIds={initialSourceFieldIds}
-          availableSourceFields={[...(availableSourceFields ?? [])]}
-          onCommit={handleSourceCommit}
-          onClose={() => setOpenPicker(null)}
-          mode="single"
-          autoCommit
-        />
-      ) : null}
     </header>
   )
 }
 
 function HeaderSourceContent({
   row,
-  editEnabled,
-  pencilRef,
-  onPencilClick,
+  availableSourceFields,
+  onSwapSource,
+  onEditSources,
+  onUnmapSingleSource,
 }: {
   row: MappingRow
-  editEnabled: boolean
-  pencilRef: React.MutableRefObject<HTMLButtonElement | null>
-  onPencilClick: () => void
+  availableSourceFields: readonly SourceFieldWithState[] | undefined
+  onSwapSource:
+    | ((rowId: string, newSourceFieldId: string) => Promise<{ success: boolean }>)
+    | undefined
+  onEditSources:
+    | ((args: {
+        tfmId: string
+        sourceFieldIds: string[]
+        combinationType: 'single' | 'concat_space' | 'concat_comma'
+      }) => Promise<{ success: boolean }>)
+    | undefined
+  onUnmapSingleSource:
+    | ((tfmId: string, targetFieldId: string) => Promise<{ success: boolean }>)
+    | undefined
 }) {
   if (row.kind === 'value_assignment') {
     return (
@@ -381,41 +399,255 @@ function HeaderSourceContent({
       </span>
     )
   }
-  // Mapped row: render one source-row per contributor. Single-source
-  // gets the edit pencil (the picker resolves the ordinal-0
-  // mapping_sources row via `updateMappingSourceField`); multi-source
-  // is read-only in the header for PR 1 (per-source ✏/✕/⊕ ships in
-  // PR 2 alongside the body SOURCE-section retirement). Server
-  // ordinal-asc ordering is preserved — DO NOT re-sort client-side.
-  const isSingleSource = row.sources.length === 1
+  // Mapped row: render one SourceRow per contributor. SourceRow owns
+  // its own ✏ + ✕ state + refs. Single-source rows also flow through
+  // SourceRow so the single-source ✕ "Remove mapping" path
+  // (TASK 1.6) lives next to the multi-source ✕ "Remove this source"
+  // path — copy + handler differ but the picker/popover plumbing is
+  // shared. Server ordinal-asc ordering is preserved — DO NOT
+  // re-sort client-side.
   return (
     <>
-      {row.sources.map((s: MappingSourceRef, idx: number) => (
-        <div
+      {row.sources.map((s) => (
+        <SourceRow
           key={s.id}
-          data-testid="mapping-drawer-header-source-row"
-          data-ordinal={s.ordinal}
-          className="flex min-w-0 items-center gap-1.5"
-        >
-          <TableBadge tableName={s.sourceTable.name} size="sm" />
-          <span
-            data-testid="mapping-drawer-header-source-field"
-            className="min-w-0 truncate font-mono text-base font-normal text-slate-900"
-            title={s.sourceField.name}
-          >
-            {s.sourceField.name}
-          </span>
-          {isSingleSource && editEnabled && idx === 0 ? (
-            <HeaderPencilButton
-              label="Edit source field"
-              testId="mapping-drawer-header-source-pencil"
-              innerRef={pencilRef}
-              onClick={onPencilClick}
-            />
-          ) : null}
-        </div>
+          row={row}
+          source={s}
+          availableSourceFields={availableSourceFields}
+          onSwapSource={onSwapSource}
+          onEditSources={onEditSources}
+          onUnmapSingleSource={onUnmapSingleSource}
+        />
       ))}
     </>
+  )
+}
+
+/**
+ * Per-source row in the FROM stack. Used for both single-source and
+ * multi-source mapped rows so the ✏ + ✕ affordance plumbing lives in
+ * one place. Owns its own pencil + remove state + refs.
+ *
+ * Affordance gating:
+ *   • ✏ pencil — renders when `onSwapSource` AND
+ *     `availableSourceFields` are threaded. Single-source uses bare
+ *     TFM uuid (ordinal-0 branch); multi-source uses
+ *     `<tfmId>::<mappingSourceId>` contributor encoding.
+ *   • ✕ remove — splits by remaining count:
+ *     - Multi-source (sources.length > 1): renders when
+ *       `onEditSources` is threaded. Copy: "Remove this source from
+ *       the mapping?" / "Remove". Confirm fires `onEditSources` with
+ *       the source filtered out (server flips status to
+ *       needs_review).
+ *     - Single-source (sources.length === 1): renders when
+ *       `onUnmapSingleSource` is threaded. Copy: "Remove this
+ *       mapping? The target field will be unmapped." / "Remove
+ *       mapping". Confirm fires `onUnmapSingleSource(tfmId,
+ *       targetFieldId)` — parent deletes the TFM via
+ *       `rejectFieldMapping` AND keeps the drawer open at the new
+ *       `unmapped::<targetFieldId>` row identity (sentinel +
+ *       optimistic override).
+ */
+function SourceRow({
+  row,
+  source,
+  availableSourceFields,
+  onSwapSource,
+  onEditSources,
+  onUnmapSingleSource,
+}: {
+  row: MappedRow
+  source: MappingSourceRef
+  availableSourceFields: readonly SourceFieldWithState[] | undefined
+  onSwapSource:
+    | ((rowId: string, newSourceFieldId: string) => Promise<{ success: boolean }>)
+    | undefined
+  onEditSources:
+    | ((args: {
+        tfmId: string
+        sourceFieldIds: string[]
+        combinationType: 'single' | 'concat_space' | 'concat_comma'
+      }) => Promise<{ success: boolean }>)
+    | undefined
+  onUnmapSingleSource:
+    | ((tfmId: string, targetFieldId: string) => Promise<{ success: boolean }>)
+    | undefined
+}) {
+  const pencilRef = useRef<HTMLButtonElement | null>(null)
+  const removeRef = useRef<HTMLButtonElement | null>(null)
+  const [openAffordance, setOpenAffordance] = useState<
+    'edit' | 'remove' | null
+  >(null)
+
+  const isSingleSource = row.sources.length === 1
+  const editEnabled =
+    typeof onSwapSource === 'function' && availableSourceFields !== undefined
+  // Multi-source ✕ uses `onEditSources`; single-source ✕ uses
+  // `onUnmapSingleSource`. We gate the affordance render on whichever
+  // handler is appropriate so a parent that only threads one of them
+  // still gets a functional surface.
+  const removeEnabled = isSingleSource
+    ? typeof onUnmapSingleSource === 'function'
+    : typeof onEditSources === 'function'
+
+  const handleEditCommit = useCallback(
+    async (newSourceFieldIds: string[]) => {
+      const newId = newSourceFieldIds[0]
+      if (!newId || !onSwapSource) return { success: false }
+      // Single-source: bare TFM uuid hits the action's ordinal-0
+      // branch. Multi-source: shimmed contributor id targets the
+      // specific `mapping_sources` row. Format mirrors
+      // `lib/compat/mapping-shim.ts:encodeContributorRowId` —
+      // duplicated here (one line) rather than imported because the
+      // redesign-path guard at
+      // `tests/lib/no-shim-in-redesign-path.test.ts` forbids
+      // importing from `@/lib/compat/mapping-shim`. The server-side
+      // `decodeShimmedRowId` reads the same `::` separator.
+      const editRowId = isSingleSource ? row.id : `${row.id}::${source.id}`
+      return onSwapSource(editRowId, newId)
+    },
+    [isSingleSource, onSwapSource, row.id, source.id],
+  )
+
+  const handleRemoveConfirm = useCallback(() => {
+    if (isSingleSource) {
+      if (!onUnmapSingleSource) {
+        setOpenAffordance(null)
+        return
+      }
+      setOpenAffordance(null)
+      void onUnmapSingleSource(row.id, row.targetField.id)
+      return
+    }
+    // Multi-source: filter out the removed source + call editMappingSources.
+    if (!onEditSources) {
+      setOpenAffordance(null)
+      return
+    }
+    const remaining = row.sources.filter((s) => s.id !== source.id)
+    const remainingIds = remaining.map((s) => s.sourceField.id)
+    // Collapse to 'single' when the remove leaves exactly one source;
+    // otherwise preserve the row's existing combination strategy.
+    // `MappedRow.combinationType` is 'single' | 'concat_space' |
+    // 'concat_comma' | 'custom_sql' — narrow off 'custom_sql' (the
+    // action rejects it; mapped rows with custom_sql are an edge
+    // case that already lives only on the Transform page).
+    const nextCombinationType: 'single' | 'concat_space' | 'concat_comma' =
+      remainingIds.length === 1
+        ? 'single'
+        : row.combinationType === 'custom_sql'
+          ? 'concat_space'
+          : row.combinationType
+    setOpenAffordance(null)
+    void onEditSources({
+      tfmId: row.id,
+      sourceFieldIds: remainingIds,
+      combinationType: nextCombinationType,
+    })
+  }, [
+    isSingleSource,
+    onEditSources,
+    onUnmapSingleSource,
+    row.combinationType,
+    row.id,
+    row.sources,
+    row.targetField.id,
+    source.id,
+  ])
+
+  // Popover copy splits by remaining count (see SourceRow doc above).
+  const removeTitle = isSingleSource
+    ? 'Remove this mapping? The target field will be unmapped.'
+    : 'Remove this source from the mapping?'
+  const removeConfirmLabel = isSingleSource ? 'Remove mapping' : 'Remove'
+
+  return (
+    <div
+      data-testid="mapping-drawer-header-source-row"
+      data-ordinal={source.ordinal}
+      data-mapping-source-id={source.id}
+      className="flex min-w-0 items-center gap-1.5"
+    >
+      <TableBadge tableName={source.sourceTable.name} size="sm" />
+      <span
+        data-testid="mapping-drawer-header-source-field"
+        className="min-w-0 flex-1 truncate font-mono text-base font-normal text-slate-900"
+        title={source.sourceField.name}
+      >
+        {source.sourceField.name}
+      </span>
+      {editEnabled ? (
+        <HeaderPencilButton
+          label={`Edit source field ${source.sourceField.name}`}
+          testId="mapping-drawer-header-source-pencil"
+          innerRef={pencilRef}
+          onClick={() => setOpenAffordance('edit')}
+        />
+      ) : null}
+      {removeEnabled ? (
+        <HeaderRemoveButton
+          label={
+            isSingleSource
+              ? 'Remove mapping'
+              : `Remove source ${source.sourceField.name}`
+          }
+          innerRef={removeRef}
+          onClick={() => setOpenAffordance('remove')}
+        />
+      ) : null}
+
+      {openAffordance === 'edit' && editEnabled ? (
+        <InlineSourcePicker
+          anchorRef={pencilRef}
+          initialSourceFieldIds={[source.sourceField.id]}
+          availableSourceFields={[...(availableSourceFields ?? [])]}
+          onCommit={handleEditCommit}
+          onClose={() => setOpenAffordance(null)}
+          mode="single"
+          autoCommit
+        />
+      ) : null}
+
+      {openAffordance === 'remove' && removeEnabled ? (
+        <RejectConfirmPopover
+          anchorRef={removeRef}
+          title={removeTitle}
+          confirmLabel={removeConfirmLabel}
+          onConfirm={handleRemoveConfirm}
+          onCancel={() => setOpenAffordance(null)}
+        />
+      ) : null}
+    </div>
+  )
+}
+
+function HeaderRemoveButton({
+  label,
+  innerRef,
+  onClick,
+}: {
+  label: string
+  innerRef: React.MutableRefObject<HTMLButtonElement | null>
+  onClick: () => void
+}) {
+  return (
+    <button
+      type="button"
+      ref={(node) => {
+        innerRef.current = node
+      }}
+      onClick={onClick}
+      aria-label={label}
+      data-testid="mapping-drawer-header-source-remove"
+      className={cn(
+        'inline-flex h-5 w-5 flex-shrink-0 items-center justify-center rounded',
+        'text-slate-400 opacity-55 transition-opacity',
+        'hover:bg-red-50 hover:text-red-600 hover:opacity-100',
+        'focus:outline-none focus-visible:opacity-100 focus-visible:ring-2 focus-visible:ring-red-300',
+      )}
+    >
+      <X aria-hidden="true" className="h-3 w-3" />
+    </button>
   )
 }
 

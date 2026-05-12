@@ -1079,6 +1079,46 @@ function MappingContentLoaded({
     [data.rows],
   )
 
+  // Drawer redesign PR 2 TASK 1.6 — single-source ✕ "Remove mapping"
+  // flow. Distinct from the footer Reject button: the user wants the
+  // drawer to STAY OPEN and transition to the unmapped variant for
+  // the same target field (so the banner explaining the just-unmapped
+  // state has somewhere to render, and a follow-up FROM-click can
+  // re-map the field without re-opening the drawer).
+  //
+  // Mechanics mirror `handleDrawerSaveSuccess`:
+  //   1. Compute the new drawerRowId (`unmapped::<targetFieldId>`).
+  //   2. Apply `buildUnmappedOverride(oldTfmId)` so the row currently
+  //      rendered as mapped immediately morphs into the unmapped
+  //      shape — no flicker between the TFM-gone state and the new
+  //      unmapped row arriving.
+  //   3. Arm the `pendingDrawerRowId` sentinel — the new id isn't in
+  //      `data.rows` until `router.refresh()` rehydrates, but the
+  //      stale-id auto-close effect (lines 556-578) skips when the
+  //      sentinel matches.
+  //   4. Swap URL + state to the new id.
+  //   5. Call `mutations.rejectTfm` which dispatches
+  //      `rejectFieldMapping` server-side AND fires `router.refresh()`
+  //      on success.
+  const handleUnmapSingleSource = useCallback(
+    async (tfmId: string, targetFieldId: string) => {
+      const newRowId = `unmapped::${targetFieldId}`
+      const override = buildUnmappedOverride(tfmId)
+      if (override) writeOptimisticData(tfmId, override)
+      setPendingDrawerRowId(newRowId)
+      setDrawerRowId(newRowId)
+      writeUrl(filters, newRowId)
+      return mutations.rejectTfm(tfmId)
+    },
+    [
+      buildUnmappedOverride,
+      filters,
+      mutations,
+      writeOptimisticData,
+      writeUrl,
+    ],
+  )
+
   // Cleanup safety net — drop overrides under two conditions:
   //   (a) the rowId is no longer present in data.rows (post-refresh:
   //       TFM successfully rejected, key dissolved into
@@ -2033,6 +2073,8 @@ function MappingContentLoaded({
         availableTargetFields={availableTargetFields}
         onSwapTarget={mutations.swapMappingTarget}
         onSwapSource={mutations.swapMappingSource}
+        onEditSources={mutations.editMappingSources}
+        onUnmapSingleSource={handleUnmapSingleSource}
       />
 
       {/*
