@@ -37,3 +37,42 @@ a placeholder `source_table_id`. Two options:
 
 Likely the first. Lives in `persistTableMappings` as a second pass
 after the source-having pair derivation.
+
+---
+
+## Audit: 2 unattributed `table_mappings` rows pre-existed in Test #7
+
+**Surfaced by:** `feat/path-d-write-table-mappings` backfill (2026-05-12)
+
+**Shape:** STOP 1's read-only preview against settle-prod showed
+`table_mappings` empty for project `0f2a95bb-1e80-4a8b-8e59-ae5559277730`
+(0 rows). When the backfill INSERT ran later the same day, the `NOT
+EXISTS` clause correctly skipped 2 of the 3 expected pairs and inserted
+only 1 (`INSERT 0 1`). Post-COMMIT state shows 3 rows for the project,
+2 of them created between the preview and the backfill run — outside
+any documented persistence path:
+
+- `a4aac30a-…` Engineering BOM Masters → Engineering Item Master
+- `d45508d3-…` Products → Engineering Item Master
+- `0eec1e57-…` Products → Inventory Commodity Code (← the 1 the backfill inserted)
+
+**Functional impact:** None. End state is the same 3 TMs the backfill
+would have produced. Transform page renders correctly. Founder confirmed
+on localhost.
+
+**Audit gap:** Two TM rows for a customer project were created outside
+the documented Path D / legacy mapping-engine / backfill paths in the
+~hour between STOP 1 preview and backfill execution. Possibilities:
+ - A concurrent legacy `createTableMapping` action somewhere in
+   `lib/actions/mappings.ts` that triggered between preview and backfill
+   (a user click in the Mapping page on a different worktree).
+ - A scheduled task or cron we don't track.
+ - A platform-admin debug action.
+
+**Why not chased now:** Demo timeline. Audit-only — no data integrity
+issue.
+
+**Post-demo:** Grep `activity_log` for the project around 2026-05-12
+11:34-11:35 UTC and identify the actor + action. If user-triggered via
+the UI, no further work. If from an unattributed path, surface that
+path for explicit governance.
