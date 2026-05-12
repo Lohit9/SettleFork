@@ -76,3 +76,35 @@ issue.
 11:34-11:35 UTC and identify the actor + action. If user-triggered via
 the UI, no further work. If from an unattributed path, surface that
 path for explicit governance.
+
+---
+
+## Orphan server action: previewEditInvalidation
+
+**Surfaced by:** `feat/drawer-body-redesign` PR 3b (2026-05-12)
+
+**Shape:** Server action `previewEditInvalidation` lives in
+[lib/actions/mappings-for-redesign.ts:2211](lib/actions/mappings-for-redesign.ts#L2211).
+Its only consumer was the drawer's `EditInvalidationDialog` —
+which the drawer dispatched between the user's "Save changes" click
+in the legacy inline `CreateMappingForm` (mode='edit') and the
+actual `editMappingSources` call. The dialog warned the user when
+the edit would invalidate N staged transformation rows.
+
+**Why it's orphan now:** PR 3b retires `CreateMappingForm` +
+`EditInvalidationDialog` entirely. Source edits now route through
+the header's per-source ✏ → `InlineSourcePicker` → direct
+`updateMappingSourceField` / `editMappingSources` calls. No preview
+step intervenes; the server actions still emit `transformReset` +
+`stagedRowsReverted` in their result for downstream toasts, but no
+UI consumer reads them today.
+
+**Why not dropped in PR 3b:** Single-territory rule — PR 3b stays
+in `app/.../mapping/redesign/` + `tests/components/`. Touching
+`lib/actions/` for a deletion is a separate cross-territory PR.
+The action sits as orphan compiled-but-unused export.
+
+**Drop in a future server-side cleanup PR.** Verify no consumers
+remain (`grep -rn previewEditInvalidation app/ lib/ tests/`),
+remove the action + its error-code union + result type. No
+migration impact — the action is pure-read.
