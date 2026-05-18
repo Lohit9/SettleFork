@@ -452,7 +452,7 @@ export async function persistStaticMappingsForSelection(
     return {
       kind: 'error',
       error:
-        'Static mapping is enabled for this org, but no configured entries matched the selected source/target tables.',
+        'No configured entries matched the selected source and target tables.',
     }
   }
 
@@ -537,7 +537,7 @@ export async function persistStaticMappingsForSelection(
     return {
       kind: 'error',
       error:
-        'Static mapping is enabled for this org, but none of the configured entries matched live field names for the selected tables.',
+        'Configured entries were found for the selected tables, but none matched the current field names.',
     }
   }
 
@@ -593,7 +593,7 @@ export async function persistStaticMappingsForPair(
     return {
       kind: 'error',
       error:
-        'Static mapping is enabled for this org, but no configured entries matched this source/target table pair.',
+        'No configured entries matched this source and target table pair.',
     }
   }
 
@@ -631,7 +631,7 @@ export async function persistStaticMappingsForPair(
     return {
       kind: 'error',
       error:
-        'Static mapping is enabled for this org, but none of the configured entries matched live field names for this table pair.',
+        'Configured entries were found for this table pair, but none matched the current field names.',
     }
   }
 
@@ -743,7 +743,7 @@ export async function getStaticSuggestionForTarget(
     return {
       kind: 'missing',
       error:
-        'Static mapping is enabled for this org, but no configured entry matched this target field.',
+        'No configured entry matched this target field.',
     }
   }
 
@@ -763,7 +763,7 @@ export async function getStaticSuggestionForTarget(
     return {
       kind: 'missing',
       error:
-        'Static mapping is enabled for this org, but the configured source fields were not found in the project schema.',
+        'Configured source fields were not found in the project schema.',
     }
   }
 
@@ -771,7 +771,7 @@ export async function getStaticSuggestionForTarget(
     return {
       kind: 'missing',
       error:
-        'Static mapping for this target spans multiple source tables and cannot be returned by the single-table suggest flow.',
+        'This target spans multiple source tables and cannot be returned by the single-table suggest flow.',
     }
   }
 
