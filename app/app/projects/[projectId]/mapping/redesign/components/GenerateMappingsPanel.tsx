@@ -296,11 +296,11 @@ export function GenerateMappingsPanel({
         Array.from(selectedSrc),
         Array.from(selectedTgt),
       )
-      if (!result.success) {
+      if (!result || result.success !== true) {
         pushToast({
           id: `generate-mappings-${Date.now()}`,
           variant: 'error',
-          message: result.error ?? 'Could not generate mappings.',
+          message: result?.error ?? 'Could not generate mappings.',
         })
         setPhase('idle')
         return

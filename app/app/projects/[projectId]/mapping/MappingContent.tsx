@@ -223,8 +223,8 @@ function GenerateMappingsPanel({
     setGenerating(true)
     try {
       const result = await generateMappings(projectId, [...selectedSrc], [...selectedTgt])
-      if (!result.success) {
-        setError(result.error ?? 'Generation failed. Please try again.')
+      if (!result || result.success !== true) {
+        setError(result?.error ?? 'Generation failed. Please try again.')
         setGenerating(false)
         return
       }
