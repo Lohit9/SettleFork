@@ -150,7 +150,7 @@ async function processJob(job: IngestionJob): Promise<void> {
   if (rawHeaders.length < 2) {
     throw new Error('CSV must have at least 2 columns')
   }
-  const headers = deduplicateHeaders(rawHeaders.map(sanitizeHeader))
+  const headers = deduplicateHeaders(rawHeaders)
 
   // Step 3: Sanitize cell values. Same formula-injection defense as
   // the legacy processUploadedCsv.
@@ -500,15 +500,9 @@ async function markFailed(jobId: string, error: string): Promise<void> {
 
 // ─── Helpers — same logic as lib/actions/csv.ts ──────────────────────────────
 //
-// Lifted from the legacy processUploadedCsv. Kept inline (not
-// re-exported from csv.ts) so the worker has its own copy and stays
-// resilient if csv.ts is further refactored. Future cleanup can
-// extract these into a shared module if PR 2 also needs them.
-
-function sanitizeHeader(name: string): string {
-  const trimmed = name.trim().slice(0, 100)
-  return trimmed.replace(/[^a-zA-Z0-9_]/g, '_').replace(/^(\d)/, '_$1') || 'column'
-}
+// Header names are preserved verbatim from the uploaded file. The only
+// adjustment is de-duplication when the same header appears multiple times.
+// Cell-value sanitization remains in place for formula-injection defense.
 
 function deduplicateHeaders(headers: string[]): string[] {
   const seen = new Map<string, number>()

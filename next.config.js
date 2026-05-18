@@ -1,5 +1,21 @@
 /** @type {import('next').NextConfig} */
 
+const isDev = process.env.NODE_ENV !== 'production'
+const connectSrc = [
+  "'self'",
+  'https://*.supabase.co',
+  'https://api.anthropic.com',
+]
+
+if (isDev) {
+  connectSrc.push(
+    'http://127.0.0.1:54321',
+    'http://127.0.0.1:55421',
+    'http://localhost:54321',
+    'http://localhost:55421',
+  )
+}
+
 const securityHeaders = [
   { key: 'X-Content-Type-Options', value: 'nosniff' },
   { key: 'X-Frame-Options', value: 'DENY' },
@@ -13,7 +29,7 @@ const securityHeaders = [
       "script-src 'self' 'unsafe-eval' 'unsafe-inline' https://challenges.cloudflare.com https://vercel.live",
       "style-src 'self' 'unsafe-inline'",
       "img-src 'self' data: blob: https://*.supabase.co",
-      "connect-src 'self' https://*.supabase.co https://api.anthropic.com",
+      `connect-src ${connectSrc.join(' ')}`,
       "font-src 'self'",
       "frame-src 'self' https://challenges.cloudflare.com",
       "frame-ancestors 'none'",

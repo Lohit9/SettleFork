@@ -54,6 +54,7 @@ import { inferFkCandidates } from '@/lib/utils/fk-inference'
 // call time, not at module-load time.
 import { runSingleAgentMappingLoop } from '@/lib/ai/single-agent-mapping'
 import { runMultiAgentMappingPipeline } from '@/lib/ai/multi-agent-orchestrator'
+import { getStaticSuggestionForTarget } from '@/lib/mappings/static-provider'
 
 // ─── Raw row shapes fetched from Supabase ────────────────────────────
 //
@@ -2218,6 +2219,26 @@ export async function runMappingSuggestion(
     }
   }
   const targetTableName = targetTablesNode?.name ?? '?'
+
+  const staticSuggestion = await getStaticSuggestionForTarget({
+    supabase,
+    projectId,
+    targetFieldId,
+    rationaleMaxChars: RATIONALE_MAX_CHARS,
+  })
+  if (staticSuggestion.kind === 'suggestion') {
+    return {
+      success: true,
+      suggestion: staticSuggestion.suggestion,
+    }
+  }
+  if (staticSuggestion.kind === 'missing') {
+    return {
+      success: false,
+      error: staticSuggestion.error,
+      errorCode: 'NOT_FOUND',
+    }
+  }
 
   // ── Build AI context (project-wide source schema) ────────────────────────
   // Reuse `buildAIContext` so we get sample values + value distributions +

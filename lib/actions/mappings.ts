@@ -28,6 +28,10 @@ import { logAIEdit } from '@/lib/actions/ai-edit-history'
 import { assertMappingWritesEnabled } from '@/lib/auth/mapping-writes'
 import { computeOrphanedTfmsForTmDelete } from '@/lib/mappings/tm-ownership'
 import {
+  persistStaticMappingsForPair,
+  persistStaticMappingsForSelection,
+} from '@/lib/mappings/static-provider'
+import {
   resetFieldTransform,
   resetAllTransformsForTable,
   checkFieldMappingHasTransform,
@@ -161,6 +165,20 @@ export async function runMappingGenerationForPair(args: {
   const { supabase, userId, projectId, tableMappingId, sourceTableId, targetTableId, featureOverride } = args
 
   try {
+    const staticResult = await persistStaticMappingsForPair({
+      supabase,
+      projectId,
+      tableMappingId,
+      sourceTableId,
+      targetTableId,
+    })
+    if (staticResult.kind === 'persisted') {
+      return { inserted: staticResult.inserted }
+    }
+    if (staticResult.kind === 'error') {
+      return { inserted: 0, error: staticResult.error }
+    }
+
     const [{ data: sourceTables, error: stErr }, { data: targetTables, error: ttErr }] = await Promise.all([
       supabase.from('tables').select('id, name').eq('id', sourceTableId),
       supabase.from('tables').select('id, name').eq('id', targetTableId),
@@ -515,6 +533,29 @@ export async function generateMappings(
     const existingPairSet = new Set(
       (existingMappingPairs ?? []).map((m) => `${m.source_table_id}::${m.target_table_id}`),
     )
+
+    const staticResult = await persistStaticMappingsForSelection({
+      supabase,
+      projectId,
+      sourceTableIds,
+      targetTableIds,
+      existingPairSet,
+    })
+    if (staticResult.kind === 'persisted') {
+      return {
+        success: true,
+        generated: staticResult.generated,
+        skipped: staticResult.skipped,
+        message: staticResult.message,
+      }
+    }
+    if (staticResult.kind === 'error') {
+      return {
+        success: false,
+        error: staticResult.error,
+        errorCode: 'VALIDATION',
+      }
+    }
 
     // ── Path D flag gate (Sub-PR 4b — orchestrator wired) ──────────────────
     // When AI_MAPPING_PATH_D_ENABLED='1', Path D handles the BULK entry point

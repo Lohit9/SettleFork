@@ -1,0 +1,1186 @@
+{
+  "orgs": {
+    "7a560a0a-974a-4d32-9118-9262669138b8": {
+      "enabled": true,
+      "entries": [
+        {
+          "source_table": "Engineering BOM Masters",
+          "source_field": "FG Commodity Code",
+          "target_field": "Unmapped",
+          "target_table": "Unmapped",
+          "explanation": "Parent-row marker formatted <Assy>-<CaseQty> (e.g., P-DWS-1000), populated only on the first row of each assembly. Despite the name, not a Rootstock commodity code. Redundant with Assy Item + ProductCaseQty.",
+          "transformation_needed": false,
+          "transformations": [
+            "Drop. Optionally parse <CaseQty> for cross-validation against ProductCaseQty."
+          ]
+        },
+        {
+          "source_table": "Engineering BOM Masters",
+          "source_field": "Item Type",
+          "target_field": "rstk__peitem_iccomcod__r external id",
+          "target_table": "Engineering Item Master",
+          "explanation": "\"Inventory\" vs \"Non Inventory\" steers which commodity code a component belongs to — inks/glues/tape (\"Non Inventory\") need a separate consumable commodity code with PLANNING POLICY = No MRP Planning.",
+          "transformation_needed": true,
+          "transformations": [
+            "Rule: Non Inventory → RCB-CONSUMABLE-INK or RCB-PACKAGING (based on item pattern); Inventory → category derived from item name pattern."
+          ]
+        },
+        {
+          "source_table": "Engineering BOM Masters",
+          "source_field": "Assy Item",
+          "target_field": "Item Number",
+          "target_table": "Engineering Item Master",
+          "explanation": "Parent assembly SKU. Creates peitem rows for all manufactured items. 100% match rate against products.ProductSKU after trim. Pass A — parent extraction. Each distinct Assy Item produces ONE peitem with Inventory Source = Manufactured. The 1,562 BoM rows collapse to ~123 distinct parents.",
+          "transformation_needed": true,
+          "transformations": [
+            "SELECT DISTINCT TRIM(Assy_Item) FROM BoM WHERE Assy_Item IS NOT NULL. After Pass C runs, dedupe: if the same SKU exists in both Pass A and Pass C, Pass A wins on Inventory Source (Manufactured); Pass C wins on Item Description (see row 5)."
+          ]
+        },
+        {
+          "source_table": "Engineering BOM Masters",
+          "source_field": "Info",
+          "target_field": "Unmapped",
+          "target_table": "Unmapped",
+          "explanation": "Restates Assy Item + case-size description. Redundant.",
+          "transformation_needed": false,
+          "transformations": [
+            "Drop."
+          ]
+        },
+        {
+          "source_table": "Engineering BOM Masters",
+          "source_field": "Assy Desc",
+          "target_field": "Item Description",
+          "target_table": "Engineering Item Master",
+          "explanation": "Description for parent assemblies. Use as fallback when ProductName isn't available. Pass A — parent extraction. Parent description, repeated identically across the assembly's child rows (so DISTINCT collapses naturally). Used only when products.ProductName is absent.",
+          "transformation_needed": true,
+          "transformations": [
+            "TRIM. COALESCE(ProductName, Assy Desc) when joining sources. SELECT DISTINCT TRIM(Assy_Desc) paired with Assy_Item. When merging with Pass C: COALESCE(products.ProductName, BoM.Assy_Desc) — ProductName wins (more complete: 4,587 sources vs 123)."
+          ]
+        },
+        {
+          "source_table": "Engineering BOM Masters",
+          "source_field": "Part #",
+          "target_field": "Item Number",
+          "target_table": "Engineering Item Master",
+          "explanation": "Component SKU. Critical: ~59 of 125 components (raw paper, inks A000x, glues D0001, boxes BX-*, tape) exist nowhere else, so BoM is the only source for them. Pass B — component extraction. Each distinct Part # produces ONE peitem. ~59 of 125 components are BoM-only (raw paper PR-SBS-, inks A000x, glue D0001, boxes BX-, tape) — Pass B is the only source that creates them.",
+          "transformation_needed": true,
+          "transformations": [
+            "TRIM. Deduplicate against ProductSKU and Assy Item before insert. SELECT DISTINCT TRIM(\"Part #\") FROM BoM WHERE \"Part #\" IS NOT NULL. Then EXCEPT against Pass A's parent set and Pass C's ProductSKU set — only emit rows for Part #s that no other pass already created."
+          ]
+        },
+        {
+          "source_table": "Engineering BOM Masters",
+          "source_field": "Item",
+          "target_field": "Item Description",
+          "target_table": "Engineering Item Master",
+          "explanation": "Component description (e.g., \"Atlantic 16pt SBS, 23\"x29\"\"). Pass B — component extraction. Description for component peitems. Used only for Part #s that aren't in products.csv (~59 records).",
+          "transformation_needed": true,
+          "transformations": [
+            "TRIM. COALESCE priority: products.ProductName (if Pass C had it) > BoM.Item."
+          ]
+        },
+        {
+          "source_table": "Engineering BOM Masters",
+          "source_field": "BOM Quantity",
+          "target_field": "Unmapped",
+          "target_table": "Unmapped",
+          "explanation": "Binary flag (0.0 / 1.0 / null) with unclear semantics. Real per-unit consumption is in Qty. No clean target on peitem or iccomcod; belongs on BOM Component (out of scope).",
+          "transformation_needed": false,
+          "transformations": [
+            "Drop on these tables. Preserve for future BOM Component migration."
+          ]
+        },
+        {
+          "source_table": "Engineering BOM Masters",
+          "source_field": "Unit of Measure",
+          "target_field": "rstk__peitem_enguom__r external id",
+          "target_table": "Engineering Item Master",
+          "explanation": "Per-component eng UOM (Sheet, 5Kg, Gallon, Each, Roll, Linear FT, Lbs, Liter). Pass B only — component eng UOM. Parent peitems (Pass A) are finished cups/sleeves counted as Each — their Eng UOM defaults to EA, not from this field.",
+          "transformation_needed": true,
+          "transformations": [
+            "Pass B: lookup → Rootstock UOM external id (Sheet→SHEET, 5Kg→KG, Gallon→GAL, Each→EA, Roll→ROLL, Linear FT→FT, Lbs→LB, Liter/liter→L). Pass A: hardcode EA. Pre-create missing UOM records. Confirm \"5Kg\" semantics — pail size vs unit."
+          ]
+        },
+        {
+          "source_table": "Engineering BOM Masters",
+          "source_field": "Unit of Measure",
+          "target_field": "rstk__iccomcod_dfltenguom__r external id",
+          "target_table": "Inventory Commodity Code",
+          "explanation": "Default Eng UOM at the commodity code level. Derived per commodity code, not per row. Pass B aggregation, applied per commodity code. Default Eng UOM for the commodity code that holds these components. For parent-only commodity codes (RCB-PRINT-CUP, etc.), default is EA.",
+          "transformation_needed": true,
+          "transformations": [
+            "Group by inferred commodity code → take modal UOM among contained items. Per-commodity-code constant. For component commodity codes: group Pass B records by commodity code → take modal UOM → map to Rootstock UOM external id. Per-commodity-code constant, not per-row."
+          ]
+        },
+        {
+          "source_table": "Engineering BOM Masters",
+          "source_field": "Unit of Measure",
+          "target_field": "rstk__iccomcod_dfltinvuom__r external id",
+          "target_table": "Inventory Commodity Code",
+          "explanation": "Default Inventory UOM. Reference data shows EA (Each) across all commodity codes; override only for bulk-tracked consumables. Pass B aggregation. Reference data shows EA across all codes — RCB likely keeps inventory in Each. Override per commodity code only for bulk-tracked consumables.",
+          "transformation_needed": true,
+          "transformations": [
+            "Default EA. Override per commodity code as needed (e.g., inks tracked by KG). For component commodity codes: group Pass B records by commodity code → take modal UOM → map to Rootstock UOM external id. Per-commodity-code constant, not per-row. Default EA. For commodity codes containing bulk inks/glues, override with source UOM (e.g., KG)."
+          ]
+        },
+        {
+          "source_table": "Engineering BOM Masters",
+          "source_field": "Unit of Measure",
+          "target_field": "rstk__iccomcod_dfltpuruom_po__r external id",
+          "target_table": "Inventory Commodity Code",
+          "explanation": "Default Purchasing UOM — how RCB buys items in this commodity code (Sheet for paper, 5Kg for ink, Roll for tape/label). Pass B aggregation. How RCB buys items in this commodity code — Sheet for paper, 5Kg for ink, Roll for tape/label.",
+          "transformation_needed": true,
+          "transformations": [
+            "Same lookup as #9. Per-commodity-code constant. Default EA. For commodity codes containing bulk inks/glues, override with source UOM (e.g., KG)."
+          ]
+        },
+        {
+          "source_table": "Engineering BOM Masters",
+          "source_field": "Qty",
+          "target_field": "Unmapped",
+          "target_table": "Unmapped",
+          "explanation": "Per-finished-unit consumption math (0.0625 sheets, 5e-08 KG ink, etc.). Belongs on BOM Component records.",
+          "transformation_needed": false,
+          "transformations": [
+            "Drop on these tables. Preserve for BOM Component migration."
+          ]
+        },
+        {
+          "source_table": "Engineering BOM Masters",
+          "source_field": "Unlabeled",
+          "target_field": "Unmapped",
+          "target_table": "Unmapped",
+          "explanation": "Per-component cost contribution ($0.02/sheet, etc.). Belongs on Item Cost / BOM Cost, not on Eng Item Master or Commodity Code.",
+          "transformation_needed": false,
+          "transformations": [
+            "Drop on these tables. Preserve for cost migration phase."
+          ]
+        },
+        {
+          "source_table": "Engineering BOM Masters",
+          "source_field": "Unlabeled",
+          "target_field": "Eng Type",
+          "target_table": "Engineering Item Master",
+          "explanation": "Flags components that are themselves assemblies. Only one row populated, but the pattern matters: sub-assemblies that are never inventoried should become Phantom. Pass B attribute, but with cross-pass effect. When a Part # is flagged \"Sub-Assembly\", the resulting peitem's Eng Type should be Phantom (it's a parent in some other BoM but never inventoried).",
+          "transformation_needed": true,
+          "transformations": [
+            "CASE WHEN flag = 'Sub-Assembly' THEN 'Phantom' ELSE 'Standard' END. Confirm with RCB whether other sub-assemblies should also be Phantom. In Pass B: CASE WHEN flag = 'Sub-Assembly' THEN 'Phantom' ELSE 'Standard' END. If that same SKU also appears as Assy Item in Pass A, Pass A's commodity code wins but Phantom Eng Type carries. Confirm with RCB whether all multi-BoM SKUs should be Phantom."
+          ]
+        },
+        {
+          "source_table": "Products",
+          "source_field": "ProductId",
+          "target_field": "Unmapped",
+          "target_table": "Unmapped",
+          "explanation": "Internal Prosys numeric PK with no business meaning outside Prosys.",
+          "transformation_needed": false,
+          "transformations": [
+            "Drop. Optionally preserve in a custom audit field."
+          ]
+        },
+        {
+          "source_table": "Products",
+          "source_field": "ProductWooId",
+          "target_field": "Unmapped",
+          "target_table": "Unmapped",
+          "explanation": "WooCommerce FK. Useful only if RCB will keep the Woo integration post-migration.",
+          "transformation_needed": false,
+          "transformations": [
+            "Drop unless Woo integration continues; then preserve in a custom field."
+          ]
+        },
+        {
+          "source_table": "Products",
+          "source_field": "ProductSKU",
+          "target_field": "Item Number",
+          "target_table": "Engineering Item Master",
+          "explanation": "Business SKU. Most authoritative source (4,587 unique, 100% match with BoM Assy Items). Pass C — catalog extraction. Most authoritative source (4,587 unique). Includes all sellable finished goods, plus stock-tracked raw items via InvMasterSKU linkage.",
+          "transformation_needed": true,
+          "transformations": [
+            "TRIM. Pass C runs against the union of Pass A + Pass B: SKUs already in Pass A keep their Manufactured source; SKUs already in Pass B (rare — would mean a raw material is also a sellable product) merge with Pass C's description. New SKUs in Pass C become Purchased peitems."
+          ]
+        },
+        {
+          "source_table": "Products",
+          "source_field": "ProductName",
+          "target_field": "Item Description",
+          "target_table": "Engineering Item Master",
+          "explanation": "Free-text product description. Pass C — primary description source. Overrides Pass A's Assy Desc and Pass B's Item when the SKU exists in products.csv.",
+          "transformation_needed": true,
+          "transformations": [
+            "TRIM. Truncate to Rootstock Item Description max length. TRIM. Truncate to Rootstock max length. Final resolution: COALESCE(products.ProductName, BoM.Assy_Desc, BoM.Item)."
+          ]
+        },
+        {
+          "source_table": "Products",
+          "source_field": "ProductGroupName",
+          "target_field": "rstk__peitem_iccomcod__r external id",
+          "target_table": "Engineering Item Master",
+          "explanation": "18 distinct values; primary driver of commodity code assignment. Also seeds the commodity code records themselves. Pass C — primary commodity code driver. 18 distinct values map to RCB's product categories. Also seeds the iccomcod records themselves. Components from Pass B that aren't in Pass C still need commodity codes — those come from row 2's rule (item pattern + Item Type).",
+          "transformation_needed": true,
+          "transformations": [
+            "Lookup table ProductGroupName → commodity code external id. Requires business decision on commodity code design (propose 8–10 codes: RCB-PRINT-CUP, RCB-BLANK-CUP, RCB-PRINT-MAT, RCB-CONSUMABLE-INK, RCB-PACKAGING, RCB-STOCK-RESALE, RCB-APPAREL-DROP, etc.)."
+          ]
+        },
+        {
+          "source_table": "Products",
+          "source_field": "ProductVendorName",
+          "target_field": "Unmapped",
+          "target_table": "Unmapped",
+          "explanation": "YBC / PLUS / RCB / Radix are RCB's supplier brands. Belongs on Vendor / Approved Vendor List / Vendor Item, not on peitem or iccomcod.",
+          "transformation_needed": false,
+          "transformations": [
+            "Drop on these tables. Preserve for Vendor migration phase."
+          ]
+        },
+        {
+          "source_table": "Products",
+          "source_field": "ProductUpdated",
+          "target_field": "Unmapped",
+          "target_table": "Unmapped",
+          "explanation": "Audit timestamp; Rootstock maintains its own.",
+          "transformation_needed": false,
+          "transformations": [
+            "Drop."
+          ]
+        },
+        {
+          "source_table": "Products",
+          "source_field": "InvMasterSKU",
+          "target_field": "Inventory Source",
+          "target_table": "Engineering Item Master",
+          "explanation": "388 distinct values + 'NO INVENTORY' sentinel. Together with BoM presence, drives the Manufactured / Purchased / Subcontract / skip decision. Pass C attribute that interacts with Pass A/B membership. 388 distinct + 'NO INVENTORY' sentinel. The combination of \"is in Pass A?\" and \"InvMasterSKU value\" determines Manufactured / Purchased / Subcontract / skip.",
+          "transformation_needed": true,
+          "transformations": [
+            "Resolution rule applied after all three passes: SKU in Pass A → Manufactured; ProductGroupName = Apparel-Outsource → Subcontract; InvMasterSKU non-null and ≠ NO INVENTORY → Purchased; InvMasterSKU = NO INVENTORY AND not in any BoM → filter out or create as Phantom (confirm with RCB)."
+          ]
+        },
+        {
+          "source_table": "Products",
+          "source_field": "ProductCaseQty",
+          "target_field": "Unmapped",
+          "target_table": "Unmapped",
+          "explanation": "Pieces per case — UOM conversion data. Belongs on Rootstock's UOM Conversion table.",
+          "transformation_needed": false,
+          "transformations": [
+            "Drop on these tables. Preserve for UOM Conversion migration."
+          ]
+        },
+        {
+          "source_table": "Products",
+          "source_field": "ProductUnitsName",
+          "target_field": "Unmapped",
+          "target_table": "Unmapped",
+          "explanation": "Selling UOM (Case / Single / Roll). Reference data shows inv/eng UOM is consistently EA — selling-UOM logic lives on UOM Conversion + Sales Order tables. Don't conflate with Eng UOM.",
+          "transformation_needed": false,
+          "transformations": [
+            "Drop on these tables. Preserve for UOM Conversion / Sales migration."
+          ]
+        },
+        {
+          "source_table": "Products",
+          "source_field": "ProductSheets",
+          "target_field": "Unmapped",
+          "target_table": "Unmapped",
+          "explanation": "Print-shop specific count (sheets per case or imposition info). No corresponding standard field.",
+          "transformation_needed": false,
+          "transformations": [
+            "Drop. Add custom field only if RCB needs it post-migration."
+          ]
+        },
+        {
+          "source_table": "Products",
+          "source_field": "ProductSheets2",
+          "target_field": "Unmapped",
+          "target_table": "Unmapped",
+          "explanation": "Related sheet-count math; print-shop specific. No standard target.",
+          "transformation_needed": false,
+          "transformations": [
+            "Drop."
+          ]
+        },
+        {
+          "source_table": "Products",
+          "source_field": "ProductGroupId",
+          "target_field": "Unmapped",
+          "target_table": "Unmapped",
+          "explanation": "Numeric FK to Prosys product-group lookup. Many-to-many with ProductGroupName (same ID has multiple names, same name has multiple IDs), so unreliable for category mapping.",
+          "transformation_needed": false,
+          "transformations": [
+            "Drop. Use ProductGroupName instead."
+          ]
+        },
+        {
+          "source_table": "Products",
+          "source_field": "ProductNotes",
+          "target_field": "Unmapped",
+          "target_table": "Unmapped",
+          "explanation": "30% null, mostly whitespace. No standard Notes field on peitem import template.",
+          "transformation_needed": false,
+          "transformations": [
+            "Drop. If RCB wants notes preserved, add a custom long-text field and extend the import template."
+          ]
+        },
+        {
+          "source_table": "Products",
+          "source_field": "ProductActive",
+          "target_field": "Status",
+          "target_table": "Engineering Item Master",
+          "explanation": "Lifecycle status. Reference data shows Active / Pending; inactive items keep Status=Active but get an Inactive Status code (see row 31). Pass C attribute, applies to all peitems sourced from products.csv. Lifecycle status. Pass B's BoM-only components don't get this from source — default to Active.",
+          "transformation_needed": true,
+          "transformations": [
+            "Apply in Pass C: default 'Active'. Use 'Pending' only if RCB has a specific convention for not-yet-released items. Pass B records (BoM-only raw materials) default to 'Active'."
+          ]
+        },
+        {
+          "source_table": "Products",
+          "source_field": "ProductActive",
+          "target_field": "Inactive Status",
+          "target_table": "Engineering Item Master",
+          "explanation": "Pass C attribute. Inactive flag (I = inactive). Pass A and Pass B records default to NULL (active).",
+          "transformation_needed": true,
+          "transformations": [
+            "CASE WHEN products.ProductActive = 0 THEN 'I' ELSE NULL END, applied only in Pass C. Pass A/B → NULL."
+          ]
+        },
+        {
+          "source_table": "Unmapped",
+          "source_field": "Unmapped",
+          "target_field": "rstk__peitem_div__r external id",
+          "target_table": "Engineering Item Master",
+          "explanation": "Engineering Division FK — assigns the peitem to a division.",
+          "transformation_needed": true,
+          "transformations": [
+            "Constant `2` for all peitems (single-division setup per RCB cleaned file)."
+          ]
+        },
+        {
+          "source_table": "Unmapped",
+          "source_field": "Unmapped",
+          "target_field": "rstk__peitem_invdiv__r external id",
+          "target_table": "Engineering Item Master",
+          "explanation": "Inventory Division FK — where stock physically lives. Can differ from Eng Division.",
+          "transformation_needed": true,
+          "transformations": [
+            "Constant `2` (same as Eng Division for single-division setup)."
+          ]
+        },
+        {
+          "source_table": "Unmapped",
+          "source_field": "Unmapped",
+          "target_field": "Item Type",
+          "target_table": "Engineering Item Master",
+          "explanation": "Item kind on peitem (Direct Material / Labor Only). NOTE: Different concept from BoM.Item Type (Inventory/Non Inventory) — picklists do not align.",
+          "transformation_needed": true,
+          "transformations": [
+            "Constant `Direct Material` for all peitems (no labor-only items in RCB data)."
+          ]
+        },
+        {
+          "source_table": "Unmapped",
+          "source_field": "Unmapped",
+          "target_field": "rstk__peitem_respeng__r external id",
+          "target_table": "Engineering Item Master",
+          "explanation": "Responsible engineer FK (user record). Required even if RCB does not formally track engineering ownership.",
+          "transformation_needed": true,
+          "transformations": [
+            "Constant placeholder user ID (`1990` per Rootstock reference data, or RCB admin user)."
+          ]
+        },
+        {
+          "source_table": "Unmapped",
+          "source_field": "Unmapped",
+          "target_field": "Lot Tracking",
+          "target_table": "Engineering Item Master",
+          "explanation": "Whether lot numbers are tracked at the item level.",
+          "transformation_needed": true,
+          "transformations": [
+            "Constant `No`. Override at item level only if RCB decides to lot-track specific consumables (inks)."
+          ]
+        },
+        {
+          "source_table": "Unmapped",
+          "source_field": "Unmapped",
+          "target_field": "Serial Tracking",
+          "target_table": "Engineering Item Master",
+          "explanation": "Whether serial numbers are tracked.",
+          "transformation_needed": true,
+          "transformations": [
+            "Constant `No` — cups/sleeves are not serialized."
+          ]
+        },
+        {
+          "source_table": "Unmapped",
+          "source_field": "Unmapped",
+          "target_field": "FIFO Costing Method Indicator",
+          "target_table": "Engineering Item Master",
+          "explanation": "FIFO costing override at item level. Normally inherited from commodity code.",
+          "transformation_needed": false,
+          "transformations": [
+            "Leave NULL — inherit from commodity code."
+          ]
+        },
+        {
+          "source_table": "Unmapped",
+          "source_field": "Unmapped",
+          "target_field": "Disassembly Item",
+          "target_table": "Engineering Item Master",
+          "explanation": "Reverse-BoM (disassembly) item flag.",
+          "transformation_needed": false,
+          "transformations": [
+            "Leave NULL/FALSE — does not apply to RCB."
+          ]
+        },
+        {
+          "source_table": "Unmapped",
+          "source_field": "Unmapped",
+          "target_field": "Inventory Revision Master Item",
+          "target_table": "Engineering Item Master",
+          "explanation": "Revision-controlled inventory tracking flag.",
+          "transformation_needed": false,
+          "transformations": [
+            "Leave NULL/FALSE — does not apply to RCB."
+          ]
+        },
+        {
+          "source_table": "Unmapped",
+          "source_field": "Unmapped",
+          "target_field": "Create Multi-Revision Product",
+          "target_table": "Engineering Item Master",
+          "explanation": "Multi-revision product flag.",
+          "transformation_needed": false,
+          "transformations": [
+            "Leave NULL/FALSE — does not apply to RCB."
+          ]
+        },
+        {
+          "source_table": "Unmapped",
+          "source_field": "Unmapped",
+          "target_field": "rstk__iccomcod_div__r external id",
+          "target_table": "Inventory Commodity Code",
+          "explanation": "Eng Division for the commodity code record.",
+          "transformation_needed": true,
+          "transformations": [
+            "Constant `2` for all iccomcod rows."
+          ]
+        },
+        {
+          "source_table": "Unmapped",
+          "source_field": "Unmapped",
+          "target_field": "COMMODITY CODE",
+          "target_table": "Inventory Commodity Code",
+          "explanation": "The commodity code name (primary identifier). One iccomcod row per code.",
+          "transformation_needed": true,
+          "transformations": [
+            "Per-code value. Proposed set: RCB-PRINT-CUP, RCB-BLANK-CUP, RCB-PRINT-MAT, RCB-CONSUMABLE-INK, RCB-PACKAGING, RCB-STOCK-RESALE, RCB-APPAREL-DROP (8–10 total)."
+          ]
+        },
+        {
+          "source_table": "Unmapped",
+          "source_field": "Unmapped",
+          "target_field": "DESCRIPTION",
+          "target_table": "Inventory Commodity Code",
+          "explanation": "Human-readable description of the commodity code.",
+          "transformation_needed": true,
+          "transformations": [
+            "Per-code value (e.g., \"Printed Paper Hot Cups\", \"Cup Blanks\", \"Print Materials — Paper\", \"Ink Consumables\")."
+          ]
+        },
+        {
+          "source_table": "Unmapped",
+          "source_field": "Unmapped",
+          "target_field": "rstk__iccomcod_respinv__r external id",
+          "target_table": "Inventory Commodity Code",
+          "explanation": "Responsible inventory planner FK.",
+          "transformation_needed": true,
+          "transformations": [
+            "Placeholder/admin user ID (`1990` or RCB admin)."
+          ]
+        },
+        {
+          "source_table": "Unmapped",
+          "source_field": "Unmapped",
+          "target_field": "rstk__iccomcod_buydiv__r external id",
+          "target_table": "Inventory Commodity Code",
+          "explanation": "Buying Division FK.",
+          "transformation_needed": true,
+          "transformations": [
+            "Constant `2`."
+          ]
+        },
+        {
+          "source_table": "Unmapped",
+          "source_field": "Unmapped",
+          "target_field": "ABC Class",
+          "target_table": "Inventory Commodity Code",
+          "explanation": "ABC inventory classification (A=high-value, B=mid, C=low).",
+          "transformation_needed": true,
+          "transformations": [
+            "Per-code: `A` for finished printed goods, `B` for blanks/raw materials, `C` for consumables."
+          ]
+        },
+        {
+          "source_table": "Unmapped",
+          "source_field": "Unmapped",
+          "target_field": "Eng Status",
+          "target_table": "Inventory Commodity Code",
+          "explanation": "Lifecycle status of the commodity code.",
+          "transformation_needed": true,
+          "transformations": [
+            "Constant `Active`."
+          ]
+        },
+        {
+          "source_table": "Unmapped",
+          "source_field": "Unmapped",
+          "target_field": "ENG TYPE",
+          "target_table": "Inventory Commodity Code",
+          "explanation": "Default Eng Type for items assigned to this commodity code.",
+          "transformation_needed": true,
+          "transformations": [
+            "Per-code: `Standard` for most codes; `Phantom` only for codes that hold catalog-only sub-assemblies."
+          ]
+        },
+        {
+          "source_table": "Unmapped",
+          "source_field": "Unmapped",
+          "target_field": "INVENTORY SOURCE",
+          "target_table": "Inventory Commodity Code",
+          "explanation": "Default Inventory Source for items in this code.",
+          "transformation_needed": true,
+          "transformations": [
+            "Per-code: `Manufactured` (RCB-PRINT-*); `Purchased` (RCB-BLANK-*, RCB-PRINT-MAT, RCB-CONSUMABLE-*, RCB-PACKAGING, RCB-STOCK-RESALE); `Subcontract` (RCB-APPAREL-DROP)."
+          ]
+        },
+        {
+          "source_table": "Unmapped",
+          "source_field": "Unmapped",
+          "target_field": "rstk__iccomcod_respeng__r external id",
+          "target_table": "Inventory Commodity Code",
+          "explanation": "Responsible engineer for the commodity code.",
+          "transformation_needed": true,
+          "transformations": [
+            "Placeholder/admin user ID."
+          ]
+        },
+        {
+          "source_table": "Unmapped",
+          "source_field": "Unmapped",
+          "target_field": "SERIAL TRACKING",
+          "target_table": "Inventory Commodity Code",
+          "explanation": "Default serial tracking for items in this code.",
+          "transformation_needed": true,
+          "transformations": [
+            "Constant `No`."
+          ]
+        },
+        {
+          "source_table": "Unmapped",
+          "source_field": "Unmapped",
+          "target_field": "LOT TRACKING",
+          "target_table": "Inventory Commodity Code",
+          "explanation": "Default lot tracking for items in this code.",
+          "transformation_needed": true,
+          "transformations": [
+            "Default `No`. Override to `Yes` only if RCB decides to lot-track inks/glues."
+          ]
+        },
+        {
+          "source_table": "Unmapped",
+          "source_field": "Unmapped",
+          "target_field": "PLANNING POLICY",
+          "target_table": "Inventory Commodity Code",
+          "explanation": "MRP planning strategy for items in this code.",
+          "transformation_needed": true,
+          "transformations": [
+            "Per-code: `Lot for Lot` (RCB-PRINT-*, RCB-BLANK-*, RCB-PRINT-MAT); `No MRP Planning` (RCB-CONSUMABLE-*, RCB-PACKAGING); `Days Cover` (RCB-STOCK-RESALE)."
+          ]
+        },
+        {
+          "source_table": "Unmapped",
+          "source_field": "Unmapped",
+          "target_field": "Policy Qty",
+          "target_table": "Inventory Commodity Code",
+          "explanation": "Planning order quantity (used by Lot-for-Lot, Days Cover, etc.).",
+          "transformation_needed": true,
+          "transformations": [
+            "Per-code: `0` for No-MRP codes; RCB-provided value for active planning codes (default `1` if unknown)."
+          ]
+        },
+        {
+          "source_table": "Unmapped",
+          "source_field": "Unmapped",
+          "target_field": "Minimum Qty",
+          "target_table": "Inventory Commodity Code",
+          "explanation": "Minimum order/stock quantity for planning.",
+          "transformation_needed": true,
+          "transformations": [
+            "Per-code: default `0`; RCB sets based on min-stock policy."
+          ]
+        },
+        {
+          "source_table": "Unmapped",
+          "source_field": "Unmapped",
+          "target_field": "Maximum Qty",
+          "target_table": "Inventory Commodity Code",
+          "explanation": "Maximum order/stock quantity for planning.",
+          "transformation_needed": true,
+          "transformations": [
+            "Per-code: default `0`; RCB sets if max-stock policy is used."
+          ]
+        },
+        {
+          "source_table": "Unmapped",
+          "source_field": "Unmapped",
+          "target_field": "Supply Multiplier",
+          "target_table": "Inventory Commodity Code",
+          "explanation": "Multiplier for supply order quantities (lot-sizing).",
+          "transformation_needed": true,
+          "transformations": [
+            "Per-code: default `0` (no multiplier)."
+          ]
+        },
+        {
+          "source_table": "Unmapped",
+          "source_field": "Unmapped",
+          "target_field": "Safety Stock Qty",
+          "target_table": "Inventory Commodity Code",
+          "explanation": "Safety stock quantity.",
+          "transformation_needed": true,
+          "transformations": [
+            "Per-code: default `0`; RCB sets based on demand variability analysis."
+          ]
+        },
+        {
+          "source_table": "Unmapped",
+          "source_field": "Unmapped",
+          "target_field": "Home Project Indicator",
+          "target_table": "Inventory Commodity Code",
+          "explanation": "Project home flag — whether inventory is held against projects vs general stock.",
+          "transformation_needed": true,
+          "transformations": [
+            "Per-code: `Project Home` for items costed to projects, `Not Home` for general stock. Default `Not Home` unless RCB uses project costing."
+          ]
+        },
+        {
+          "source_table": "Unmapped",
+          "source_field": "Unmapped",
+          "target_field": "Lead Time, WO Firm",
+          "target_table": "Inventory Commodity Code",
+          "explanation": "Days from WO firm date to start.",
+          "transformation_needed": true,
+          "transformations": [
+            "Per-code default `0`; RCB provides actuals based on lead time analysis."
+          ]
+        },
+        {
+          "source_table": "Unmapped",
+          "source_field": "Unmapped",
+          "target_field": "Lead Time, WO Release",
+          "target_table": "Inventory Commodity Code",
+          "explanation": "Days from WO firm to WO release.",
+          "transformation_needed": true,
+          "transformations": [
+            "Per-code default `0`; RCB provides actuals."
+          ]
+        },
+        {
+          "source_table": "Unmapped",
+          "source_field": "Unmapped",
+          "target_field": "Lead Time, WO Pick",
+          "target_table": "Inventory Commodity Code",
+          "explanation": "Days from WO release to WO pick.",
+          "transformation_needed": true,
+          "transformations": [
+            "Per-code default `0`; RCB provides actuals."
+          ]
+        },
+        {
+          "source_table": "Unmapped",
+          "source_field": "Unmapped",
+          "target_field": "Lead Time, Manufacturing",
+          "target_table": "Inventory Commodity Code",
+          "explanation": "Manufacturing lead time in days.",
+          "transformation_needed": true,
+          "transformations": [
+            "Per-code default `0`; RCB provides actuals (e.g., 1–3 days for print runs)."
+          ]
+        },
+        {
+          "source_table": "Unmapped",
+          "source_field": "Unmapped",
+          "target_field": "Lead Time, Component Ship",
+          "target_table": "Inventory Commodity Code",
+          "explanation": "Component shipping/transfer lead time in days.",
+          "transformation_needed": true,
+          "transformations": [
+            "Per-code default `0`; RCB provides actuals if components ship between sites."
+          ]
+        },
+        {
+          "source_table": "Unmapped",
+          "source_field": "Unmapped",
+          "target_field": "Lead Time, Lot Issue Expiration",
+          "target_table": "Inventory Commodity Code",
+          "explanation": "Lot expiration lead time in days (for lot-tracked items).",
+          "transformation_needed": false,
+          "transformations": [
+            "Leave NULL — RCB does not track lot expiration."
+          ]
+        },
+        {
+          "source_table": "Unmapped",
+          "source_field": "Unmapped",
+          "target_field": "Lead Time, Vendor Ship",
+          "target_table": "Inventory Commodity Code",
+          "explanation": "Vendor shipping lead time in days.",
+          "transformation_needed": true,
+          "transformations": [
+            "Per-code default `0`; RCB provides actuals from vendor SLAs."
+          ]
+        },
+        {
+          "source_table": "Unmapped",
+          "source_field": "Unmapped",
+          "target_field": "Lead Time, Receiving Inspection",
+          "target_table": "Inventory Commodity Code",
+          "explanation": "Receiving inspection lead time in days.",
+          "transformation_needed": true,
+          "transformations": [
+            "Per-code default `0`; RCB provides actuals if QC inspection is performed."
+          ]
+        },
+        {
+          "source_table": "Unmapped",
+          "source_field": "Unmapped",
+          "target_field": "Lead Time, PO Req Firm",
+          "target_table": "Inventory Commodity Code",
+          "explanation": "Days from PO requisition to firm.",
+          "transformation_needed": true,
+          "transformations": [
+            "Per-code default `0`; RCB provides actuals."
+          ]
+        },
+        {
+          "source_table": "Unmapped",
+          "source_field": "Unmapped",
+          "target_field": "Material Ohd Rate (as decimal)",
+          "target_table": "Inventory Commodity Code",
+          "explanation": "Material overhead rate applied to item cost (as decimal, e.g., 0.10 = 10%).",
+          "transformation_needed": true,
+          "transformations": [
+            "Per-code default `0.0` unless RCB has overhead allocation policy."
+          ]
+        },
+        {
+          "source_table": "Unmapped",
+          "source_field": "Unmapped",
+          "target_field": "FIFO Costing Method Indicator",
+          "target_table": "Inventory Commodity Code",
+          "explanation": "Whether items in this commodity code use FIFO costing.",
+          "transformation_needed": true,
+          "transformations": [
+            "Per-code default `false` (RCB likely uses Standard or Average costing). Confirm with RCB."
+          ]
+        },
+        {
+          "source_table": "Unmapped",
+          "source_field": "Unmapped",
+          "target_field": "rstk__iccomcod_dimval__r external id",
+          "target_table": "Inventory Commodity Code",
+          "explanation": "Accounting dimension value FK for inventory GL coding.",
+          "transformation_needed": true,
+          "transformations": [
+            "Per-code GL/dimension FK based on RCB chart of accounts. Set after RCB provides accounting structure."
+          ]
+        },
+        {
+          "source_table": "Unmapped",
+          "source_field": "Unmapped",
+          "target_field": "Item Type",
+          "target_table": "Inventory Commodity Code",
+          "explanation": "Type of purchase/transaction (Direct Purchases / Service / Outside Operation).",
+          "transformation_needed": true,
+          "transformations": [
+            "Per-code: `Direct Purchases` for most codes; `Outside Operation` for RCB-APPAREL-DROP."
+          ]
+        },
+        {
+          "source_table": "Unmapped",
+          "source_field": "Unmapped",
+          "target_field": "Service Type",
+          "target_table": "Inventory Commodity Code",
+          "explanation": "Service pricing model (Monthly Rate, etc.) — only used when Item Type = Service.",
+          "transformation_needed": false,
+          "transformations": [
+            "Leave NULL — RCB has no service-type commodity codes."
+          ]
+        },
+        {
+          "source_table": "Unmapped",
+          "source_field": "Unmapped",
+          "target_field": "rstk__iccomcod_respbuyer_po__r external id",
+          "target_table": "Inventory Commodity Code",
+          "explanation": "Default buyer FK for POs in this commodity code.",
+          "transformation_needed": true,
+          "transformations": [
+            "Placeholder/admin user ID."
+          ]
+        },
+        {
+          "source_table": "Unmapped",
+          "source_field": "Unmapped",
+          "target_field": "PO Price Option",
+          "target_table": "Inventory Commodity Code",
+          "explanation": "Price strategy when creating POs (Enter New Price, etc.).",
+          "transformation_needed": true,
+          "transformations": [
+            "Per-code: `Enter New Price` for purchased codes; leave NULL for manufactured codes."
+          ]
+        },
+        {
+          "source_table": "Unmapped",
+          "source_field": "Unmapped",
+          "target_field": "Historical Costs Weight Factor",
+          "target_table": "Inventory Commodity Code",
+          "explanation": "Weight applied to historical cost when calculating std cost.",
+          "transformation_needed": true,
+          "transformations": [
+            "Per-code default `0` (use current cost only) unless RCB has specific weighted-cost strategy."
+          ]
+        },
+        {
+          "source_table": "Unmapped",
+          "source_field": "Unmapped",
+          "target_field": "Over Receipt Indicator",
+          "target_table": "Inventory Commodity Code",
+          "explanation": "Whether over-receipt is allowed on POs.",
+          "transformation_needed": true,
+          "transformations": [
+            "Constant `false` for initial load; RCB can enable per-code later."
+          ]
+        },
+        {
+          "source_table": "Unmapped",
+          "source_field": "Unmapped",
+          "target_field": "PO Qty Decimals",
+          "target_table": "Inventory Commodity Code",
+          "explanation": "Decimal precision allowed on PO quantities.",
+          "transformation_needed": true,
+          "transformations": [
+            "Per-code: `0` for whole-unit items (cups, blanks, boxes); `2–3` for bulk consumables tracked in fractional KG/Gallon."
+          ]
+        },
+        {
+          "source_table": "Unmapped",
+          "source_field": "Unmapped",
+          "target_field": "Lead Time, Req Convert",
+          "target_table": "Inventory Commodity Code",
+          "explanation": "Days to convert PR to PO.",
+          "transformation_needed": true,
+          "transformations": [
+            "Per-code default `0`; RCB provides actuals."
+          ]
+        },
+        {
+          "source_table": "Unmapped",
+          "source_field": "Unmapped",
+          "target_field": "Lead Time, Vendor",
+          "target_table": "Inventory Commodity Code",
+          "explanation": "Vendor quoted lead time in days.",
+          "transformation_needed": true,
+          "transformations": [
+            "Per-code default `0`; RCB provides actuals from vendor SLAs."
+          ]
+        },
+        {
+          "source_table": "Unmapped",
+          "source_field": "Unmapped",
+          "target_field": "Current Costs Weight Factor",
+          "target_table": "Inventory Commodity Code",
+          "explanation": "Weight applied to current cost when calculating std cost.",
+          "transformation_needed": true,
+          "transformations": [
+            "Per-code default `1` (current-cost-weighted)."
+          ]
+        },
+        {
+          "source_table": "Unmapped",
+          "source_field": "Unmapped",
+          "target_field": "rstk__iccomcod_dimval_po__r external id",
+          "target_table": "Inventory Commodity Code",
+          "explanation": "Accounting dimension FK for purchasing.",
+          "transformation_needed": true,
+          "transformations": [
+            "Per-code GL/dimension FK; set after RCB provides accounting structure."
+          ]
+        },
+        {
+          "source_table": "Unmapped",
+          "source_field": "Unmapped",
+          "target_field": "rstk__iccomcod_vatclass_po__r external id",
+          "target_table": "Inventory Commodity Code",
+          "explanation": "VAT/tax class FK for purchases.",
+          "transformation_needed": false,
+          "transformations": [
+            "Leave NULL — RCB is US-only, no VAT. Set only if international operations are added."
+          ]
+        },
+        {
+          "source_table": "Unmapped",
+          "source_field": "Unmapped",
+          "target_field": "Std Cost Update Indicator",
+          "target_table": "Inventory Commodity Code",
+          "explanation": "Triggers std cost update on actions like PO receipt.",
+          "transformation_needed": false,
+          "transformations": [
+            "Leave NULL (use Rootstock default) unless RCB has a specific std cost update strategy."
+          ]
+        },
+        {
+          "source_table": "Unmapped",
+          "source_field": "Unmapped",
+          "target_field": "Std Markup/Down",
+          "target_table": "Inventory Commodity Code",
+          "explanation": "Std cost markup/markdown adjustment.",
+          "transformation_needed": true,
+          "transformations": [
+            "Per-code default `0`."
+          ]
+        },
+        {
+          "source_table": "Unmapped",
+          "source_field": "Unmapped",
+          "target_field": "Disassembly Indicator",
+          "target_table": "Inventory Commodity Code",
+          "explanation": "Whether the code supports disassembly workflows.",
+          "transformation_needed": false,
+          "transformations": [
+            "Constant `false` — does not apply to RCB."
+          ]
+        },
+        {
+          "source_table": "Unmapped",
+          "source_field": "Unmapped",
+          "target_field": "rstk__iccomcod_disgoodlocid__r external id",
+          "target_table": "Inventory Commodity Code",
+          "explanation": "Default location ID for disassembly receipts.",
+          "transformation_needed": false,
+          "transformations": [
+            "Leave NULL."
+          ]
+        },
+        {
+          "source_table": "Unmapped",
+          "source_field": "Unmapped",
+          "target_field": "Disassembly Receipt Location No",
+          "target_table": "Inventory Commodity Code",
+          "explanation": "Default location number for disassembly receipts (display).",
+          "transformation_needed": false,
+          "transformations": [
+            "Leave NULL."
+          ]
+        },
+        {
+          "source_table": "Unmapped",
+          "source_field": "Unmapped",
+          "target_field": "rstk__iccomcod_rcptlocid__r external id",
+          "target_table": "Inventory Commodity Code",
+          "explanation": "Default receiving location ID.",
+          "transformation_needed": true,
+          "transformations": [
+            "Per-code location FK; set after warehouse/location master is loaded."
+          ]
+        },
+        {
+          "source_table": "Unmapped",
+          "source_field": "Unmapped",
+          "target_field": "Default Receiving Location No",
+          "target_table": "Inventory Commodity Code",
+          "explanation": "Default receiving location number (display).",
+          "transformation_needed": true,
+          "transformations": [
+            "Per-code location number; set after warehouse master is loaded."
+          ]
+        },
+        {
+          "source_table": "Unmapped",
+          "source_field": "Unmapped",
+          "target_field": "rstk__iccomcod_wmslocid__r external id",
+          "target_table": "Inventory Commodity Code",
+          "explanation": "WMS bin location ID.",
+          "transformation_needed": false,
+          "transformations": [
+            "Leave NULL unless RCB has a WMS deployment."
+          ]
+        },
+        {
+          "source_table": "Unmapped",
+          "source_field": "Unmapped",
+          "target_field": "WMS Location Number",
+          "target_table": "Inventory Commodity Code",
+          "explanation": "WMS bin location number (display).",
+          "transformation_needed": false,
+          "transformations": [
+            "Leave NULL unless RCB has a WMS deployment."
+          ]
+        },
+        {
+          "source_table": "Unmapped",
+          "source_field": "Unmapped",
+          "target_field": "rstk__iccomcod_refroutitem__r external id",
+          "target_table": "Inventory Commodity Code",
+          "explanation": "Reference routing item FK — default routing for manufactured items in this code.",
+          "transformation_needed": true,
+          "transformations": [
+            "Per-code routing FK (e.g., DIGI-PAPER for RCB-PRINT-* codes); set after routing master is loaded."
+          ]
+        },
+        {
+          "source_table": "Unmapped",
+          "source_field": "Unmapped",
+          "target_field": "Backflush Policy",
+          "target_table": "Inventory Commodity Code",
+          "explanation": "When to backflush components from inventory automatically.",
+          "transformation_needed": true,
+          "transformations": [
+            "Per-code: `First Operation` or `Last Operation` for manufactured codes; `No Backflushing` for purchased codes."
+          ]
+        },
+        {
+          "source_table": "Unmapped",
+          "source_field": "Unmapped",
+          "target_field": "Inv Qty Decimals",
+          "target_table": "Inventory Commodity Code",
+          "explanation": "Decimal precision on inventory quantities.",
+          "transformation_needed": true,
+          "transformations": [
+            "Per-code: `0` for whole-unit items; `2–3` for bulk consumables."
+          ]
+        },
+        {
+          "source_table": "Unmapped",
+          "source_field": "Unmapped",
+          "target_field": "ABC Reclassify",
+          "target_table": "Inventory Commodity Code",
+          "explanation": "Whether ABC class auto-reclassifies based on usage.",
+          "transformation_needed": true,
+          "transformations": [
+            "Constant `false` for initial load — RCB can enable later."
+          ]
+        },
+        {
+          "source_table": "Unmapped",
+          "source_field": "Unmapped",
+          "target_field": "Allow Lot to be Entered at WO Receipt",
+          "target_table": "Inventory Commodity Code",
+          "explanation": "Whether lot numbers can be entered at WO receipt.",
+          "transformation_needed": false,
+          "transformations": [
+            "Constant `false` — no lot tracking."
+          ]
+        },
+        {
+          "source_table": "Unmapped",
+          "source_field": "Unmapped",
+          "target_field": "Unique Device Identifier Structure",
+          "target_table": "Inventory Commodity Code",
+          "explanation": "Unique Device Identifier structure (for medical devices).",
+          "transformation_needed": false,
+          "transformations": [
+            "Leave NULL — N/A for foodservice packaging."
+          ]
+        },
+        {
+          "source_table": "Unmapped",
+          "source_field": "Unmapped",
+          "target_field": "Expiration Date is Required",
+          "target_table": "Inventory Commodity Code",
+          "explanation": "Whether expiration date is required at receipt.",
+          "transformation_needed": false,
+          "transformations": [
+            "Constant `false` — non-perishable items."
+          ]
+        },
+        {
+          "source_table": "Unmapped",
+          "source_field": "Unmapped",
+          "target_field": "rstk__iccomcod_orgid__r external id",
+          "target_table": "Inventory Commodity Code",
+          "explanation": "Organizational department FK (cost center, etc.).",
+          "transformation_needed": true,
+          "transformations": [
+            "Per-code or constant placeholder org/dept FK (RCB manufacturing dept)."
+          ]
+        },
+        {
+          "source_table": "Unmapped",
+          "source_field": "Unmapped",
+          "target_field": "Allocation Policy",
+          "target_table": "Inventory Commodity Code",
+          "explanation": "How inventory is allocated to demand.",
+          "transformation_needed": true,
+          "transformations": [
+            "Per-code default; set based on RCB allocation strategy. Often left at Rootstock default unless customized."
+          ]
+        },
+        {
+          "source_table": "Unmapped",
+          "source_field": "Unmapped",
+          "target_field": "Shelf Life",
+          "target_table": "Inventory Commodity Code",
+          "explanation": "Days until item expires.",
+          "transformation_needed": false,
+          "transformations": [
+            "Constant `0` — non-perishable items."
+          ]
+        },
+        {
+          "source_table": "Unmapped",
+          "source_field": "Unmapped",
+          "target_field": "Assign Serial Number at SO Shipment",
+          "target_table": "Inventory Commodity Code",
+          "explanation": "Auto-assign serial number at SO shipment.",
+          "transformation_needed": false,
+          "transformations": [
+            "Constant `false` — no serial tracking."
+          ]
+        },
+        {
+          "source_table": "Unmapped",
+          "source_field": "Unmapped",
+          "target_field": "All WO Lots Must be Predefined",
+          "target_table": "Inventory Commodity Code",
+          "explanation": "Whether all lots must be predefined before WO receipt.",
+          "transformation_needed": false,
+          "transformations": [
+            "Constant `false`."
+          ]
+        },
+        {
+          "source_table": "Unmapped",
+          "source_field": "Unmapped",
+          "target_field": "rstk__iccomcod_labeltemplate__r external id",
+          "target_table": "Inventory Commodity Code",
+          "explanation": "Mobile label template FK.",
+          "transformation_needed": false,
+          "transformations": [
+            "Leave NULL — N/A unless RCB uses mobile labeling."
+          ]
+        },
+        {
+          "source_table": "Unmapped",
+          "source_field": "Unmapped",
+          "target_field": "Print Individual Serials on WO Pick List",
+          "target_table": "Inventory Commodity Code",
+          "explanation": "Print individual serial numbers on WO pick list.",
+          "transformation_needed": false,
+          "transformations": [
+            "Constant `false` — no serial tracking."
+          ]
+        }
+      ]
+    }
+  }
+}
