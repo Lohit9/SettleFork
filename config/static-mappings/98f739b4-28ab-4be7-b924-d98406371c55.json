@@ -1,9 +1,9 @@
 [
   {
     "project_ids": [
-      "730f3138-3c84-4077-984f-3fa8f95908a9", "51df5837-f0ee-48b4-a535-781695c3f35a"
+      "51df5837-f0ee-48b4-a535-781695c3f35a",
+      "730f3138-3c84-4077-984f-3fa8f95908a9"
     ],
-    "enabled": true,
     "entries": [
       {
         "source_table": "Engineering BOM Masters",

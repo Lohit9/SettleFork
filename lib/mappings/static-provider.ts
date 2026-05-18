@@ -18,7 +18,6 @@ export interface StaticMappingEntry {
 
 interface StaticOrgMappingConfig {
   project_ids: string[]
-  enabled: boolean
   entries: StaticMappingEntry[]
 }
 
@@ -36,6 +35,15 @@ interface StaticFieldRow {
   id: string
   table_id: string
   name: string
+}
+
+interface ResolvedMappedEntry {
+  entry: StaticMappingEntry
+  sourceTableId: string
+  sourceFieldId: string
+  targetTableId: string
+  targetFieldId: string
+  pairKey: string
 }
 
 interface PersistSelectionArgs {
@@ -144,13 +152,12 @@ async function resolveStaticOrgMappingForProject(
   if (error || !project?.org_id) return null
 
   const orgConfig = readStaticOrgMappingConfig(project.org_id, projectId)
-  if (!orgConfig?.enabled) return null
+  if (!orgConfig) return null
 
   return {
     orgId: project.org_id,
     config: {
       project_ids: orgConfig.project_ids,
-      enabled: true,
       entries: Array.isArray(orgConfig.entries) ? orgConfig.entries : [],
     },
   }
@@ -169,7 +176,6 @@ function readStaticOrgMappingConfig(
 
   const matched = parsed.find((candidate) => {
     if (!candidate || typeof candidate !== 'object') return false
-    if (candidate.enabled !== true) return false
     return Array.isArray(candidate.project_ids) && candidate.project_ids.includes(projectId)
   })
   if (!matched) return null
@@ -178,7 +184,6 @@ function readStaticOrgMappingConfig(
     project_ids: Array.isArray(matched.project_ids)
       ? matched.project_ids.filter((value): value is string => typeof value === 'string')
       : [],
-    enabled: matched.enabled === true,
     entries: Array.isArray(matched.entries) ? matched.entries as StaticMappingEntry[] : [],
   }
 }
@@ -399,6 +404,202 @@ function buildFieldMapForTable(
   return out
 }
 
+function buildFieldIdByTableAndName(
+  fields: StaticFieldRow[],
+): Map<string, string> {
+  const out = new Map<string, string>()
+  for (const field of fields) {
+    out.set(`${field.table_id}::${normalizeName(field.name)}`, field.id)
+  }
+  return out
+}
+
+function resolveMappedEntriesToLiveFields(args: {
+  entries: StaticMappingEntry[]
+  sourceTableByName: Map<string, StaticTableRow>
+  targetTableByName: Map<string, StaticTableRow>
+  sourceFieldIdByTableAndName: Map<string, string>
+  targetFieldIdByTableAndName: Map<string, string>
+}): ResolvedMappedEntry[] {
+  const resolved: ResolvedMappedEntry[] = []
+
+  for (const entry of args.entries) {
+    const sourceTable = args.sourceTableByName.get(normalizeName(entry.source_table))
+    const targetTable = args.targetTableByName.get(normalizeName(entry.target_table))
+    if (!sourceTable || !targetTable) continue
+
+    const sourceFieldId = args.sourceFieldIdByTableAndName.get(
+      `${sourceTable.id}::${normalizeName(entry.source_field)}`,
+    )
+    const targetFieldId = args.targetFieldIdByTableAndName.get(
+      `${targetTable.id}::${normalizeName(entry.target_field)}`,
+    )
+    if (!sourceFieldId || !targetFieldId) continue
+
+    resolved.push({
+      entry,
+      sourceTableId: sourceTable.id,
+      sourceFieldId,
+      targetTableId: targetTable.id,
+      targetFieldId,
+      pairKey: `${sourceTable.id}::${targetTable.id}`,
+    })
+  }
+
+  return resolved
+}
+
+async function ensureStaticTableMappings(args: {
+  supabase: SupabaseClient
+  projectId: string
+  resolvedEntries: ResolvedMappedEntry[]
+}): Promise<{ pairToTableMappingId: Map<string, string>; created: number; reused: number }> {
+  const pairToTableMappingId = new Map<string, string>()
+  const pairSpecs = new Map<string, { sourceTableId: string; targetTableId: string }>()
+
+  for (const entry of args.resolvedEntries) {
+    if (!pairSpecs.has(entry.pairKey)) {
+      pairSpecs.set(entry.pairKey, {
+        sourceTableId: entry.sourceTableId,
+        targetTableId: entry.targetTableId,
+      })
+    }
+  }
+
+  if (pairSpecs.size === 0) {
+    return { pairToTableMappingId, created: 0, reused: 0 }
+  }
+
+  const sourceTableIds = [...new Set([...pairSpecs.values()].map((pair) => pair.sourceTableId))]
+  const targetTableIds = [...new Set([...pairSpecs.values()].map((pair) => pair.targetTableId))]
+
+  const { data: existingRows } = await args.supabase
+    .from('table_mappings')
+    .select('id, source_table_id, target_table_id')
+    .eq('project_id', args.projectId)
+    .in('source_table_id', sourceTableIds)
+    .in('target_table_id', targetTableIds)
+    .returns<Array<{ id: string; source_table_id: string; target_table_id: string }>>()
+
+  for (const row of existingRows ?? []) {
+    pairToTableMappingId.set(
+      `${row.source_table_id}::${row.target_table_id}`,
+      row.id,
+    )
+  }
+
+  let created = 0
+  for (const [pairKey, pair] of pairSpecs.entries()) {
+    if (pairToTableMappingId.has(pairKey)) continue
+
+    const { data: inserted, error } = await args.supabase
+      .from('table_mappings')
+      .insert({
+        project_id: args.projectId,
+        source_table_id: pair.sourceTableId,
+        target_table_id: pair.targetTableId,
+        confidence: STATIC_CONFIDENCE,
+        status: 'needs_review',
+        ai_reasoning: 'Static mapping configuration applied.',
+      })
+      .select('id, source_table_id, target_table_id')
+      .single<{ id: string; source_table_id: string; target_table_id: string }>()
+
+    if (error || !inserted) continue
+    pairToTableMappingId.set(
+      `${inserted.source_table_id}::${inserted.target_table_id}`,
+      inserted.id,
+    )
+    created++
+  }
+
+  return {
+    pairToTableMappingId,
+    created,
+    reused: pairToTableMappingId.size - created,
+  }
+}
+
+async function persistResolvedStaticTargetMappings(args: {
+  supabase: SupabaseClient
+  projectId: string
+  resolvedEntries: ResolvedMappedEntry[]
+}): Promise<number> {
+  const grouped = new Map<string, ResolvedMappedEntry[]>()
+  for (const entry of args.resolvedEntries) {
+    const key = `${entry.targetTableId}::${entry.targetFieldId}`
+    const bucket = grouped.get(key)
+    if (bucket) bucket.push(entry)
+    else grouped.set(key, [entry])
+  }
+
+  let inserted = 0
+  for (const group of grouped.values()) {
+    const primary = group[0]
+    if (!primary) continue
+
+    const seenSourceFieldIds = new Set<string>()
+    const rpcSources: Array<{
+      source_field_id: string
+      source_table_id: string
+      confidence: number
+      ai_reasoning: string
+      similar_fields_considered: string[]
+      type_compatibility: string | null
+      ordinal: number
+    }> = []
+
+    let ordinal = 0
+    for (const item of group) {
+      if (seenSourceFieldIds.has(item.sourceFieldId)) continue
+      seenSourceFieldIds.add(item.sourceFieldId)
+
+      rpcSources.push({
+        source_field_id: item.sourceFieldId,
+        source_table_id: item.sourceTableId,
+        confidence: STATIC_CONFIDENCE,
+        ai_reasoning:
+          ordinal === 0
+            ? buildReasoning(item.entry)
+            : `Contributing source for configured mapping. ${buildReasoning(item.entry)}`.trim(),
+        similar_fields_considered: [],
+        type_compatibility: item.entry.transformation_needed
+          ? 'configured mapping requires transformation handling'
+          : 'direct compatible — no conversion needed',
+        ordinal,
+      })
+      ordinal++
+    }
+
+    if (rpcSources.length === 0) continue
+
+    const reasoning = group.map((item) => buildReasoning(item.entry)).join(' ')
+    const combinationType = rpcSources.length > 1 ? 'concat_space' : 'single'
+
+    const { error } = await args.supabase.rpc('dq_create_target_field_mapping', {
+      p_project_id: args.projectId,
+      p_target_field_id: primary.targetFieldId,
+      p_sources: rpcSources,
+      p_combination: {
+        type: combinationType,
+        ai_reasoning: reasoning,
+      },
+    })
+
+    if (error) {
+      console.error(
+        `[static-mappings] dq_create_target_field_mapping failed for target ${primary.targetFieldId}:`,
+        error.message,
+      )
+      continue
+    }
+
+    inserted++
+  }
+
+  return inserted
+}
+
 export async function persistStaticMappingsForSelection(
   args: PersistSelectionArgs,
 ): Promise<
@@ -427,6 +628,8 @@ export async function persistStaticMappingsForSelection(
   const targetTableByName = new Map(
     targetTables.map((table) => [normalizeName(table.name), table]),
   )
+  const sourceFieldIdByTableAndName = buildFieldIdByTableAndName(sourceFields)
+  const targetFieldIdByTableAndName = buildFieldIdByTableAndName(targetFields)
 
   const matchedEntries = resolved.config.entries.filter(
     (entry) =>
@@ -442,10 +645,16 @@ export async function persistStaticMappingsForSelection(
   const mappedEntries = matchedEntries.filter(isMappedEntry)
   const sourceUnmappedEntries = matchedEntries.filter(isSourceUnmappedEntry)
   const targetUnmappedEntries = matchedEntries.filter(isTargetUnmappedEntry)
+  const resolvedMappedEntries = resolveMappedEntriesToLiveFields({
+    entries: mappedEntries,
+    sourceTableByName,
+    targetTableByName,
+    sourceFieldIdByTableAndName,
+    targetFieldIdByTableAndName,
+  })
 
-  const groupedPairs = groupEntriesByPair(mappedEntries)
   if (
-    groupedPairs.size === 0 &&
+    resolvedMappedEntries.length === 0 &&
     sourceUnmappedEntries.length === 0 &&
     targetUnmappedEntries.length === 0
   ) {
@@ -474,64 +683,28 @@ export async function persistStaticMappingsForSelection(
     targetFields,
   )
 
-  for (const [key, pairEntries] of groupedPairs.entries()) {
-    const [sourceKey, targetKey] = key.split('::')
-    const sourceTable = sourceTableByName.get(sourceKey)
-    const targetTable = targetTableByName.get(targetKey)
-    if (!sourceTable || !targetTable) continue
+  const { pairToTableMappingId, created, reused } = await ensureStaticTableMappings({
+    supabase: args.supabase,
+    projectId: args.projectId,
+    resolvedEntries: resolvedMappedEntries,
+  })
+  generated = pairToTableMappingId.size
+  skipped = reused
 
-    const pairKey = `${sourceTable.id}::${targetTable.id}`
-    if (args.existingPairSet.has(pairKey)) {
-      skipped++
-      continue
-    }
+  const insertedTargetMappings = await persistResolvedStaticTargetMappings({
+    supabase: args.supabase,
+    projectId: args.projectId,
+    resolvedEntries: resolvedMappedEntries,
+  })
 
-    const sourceFieldMap = buildFieldMapForTable(sourceFields, sourceTable.id)
-    const targetFieldMap = buildFieldMapForTable(targetFields, targetTable.id)
-    const fieldMappings = buildFieldMappingsForPair(pairEntries)
-    if (!hasAnyValidFieldMapping(fieldMappings, sourceFieldMap, targetFieldMap)) {
-      continue
-    }
-
-    const { data: insertedTM, error: tmErr } = await args.supabase
-      .from('table_mappings')
-      .insert({
-        project_id: args.projectId,
-        source_table_id: sourceTable.id,
-        target_table_id: targetTable.id,
-        confidence: STATIC_CONFIDENCE,
-        status: 'needs_review',
-        ai_reasoning: 'Static mapping configuration applied.',
-      })
-      .select('id')
-      .single<{ id: string }>()
-
-    if (tmErr || !insertedTM) continue
-
-    const { persistClaudeFieldMappingsForTM } = await import(
-      '@/lib/ai/mapping-engine'
-    )
-    await persistClaudeFieldMappingsForTM({
-      supabase: args.supabase,
-      projectId: args.projectId,
-      tableMappingId: insertedTM.id,
-      sourceFieldMap,
-      targetFieldMap,
-      fieldMappings,
-      sourceTableId: sourceTable.id,
-    })
-
-    generated++
-  }
-
-  if (generated === 0) {
+  if (insertedTargetMappings === 0) {
     if (skipped > 0) {
       return {
         kind: 'persisted',
-        generated: 0,
+        generated,
         skipped,
         message:
-          'All selected table pairs already have mappings. Go to the Mapping tab to manage them.',
+          'Configured table pairs already exist, but no target mappings were created.',
       }
     }
     return {
@@ -547,7 +720,7 @@ export async function persistStaticMappingsForSelection(
     skipped,
     message:
       skipped > 0
-        ? `Generated mappings for ${generated} table pair${generated !== 1 ? 's' : ''}. Skipped ${skipped} pair${skipped !== 1 ? 's' : ''} that already have mappings.`
+        ? `Applied mappings across ${generated} table pair${generated !== 1 ? 's' : ''}. Reused ${skipped} existing pair${skipped !== 1 ? 's' : ''}.`
         : undefined,
   }
 }
