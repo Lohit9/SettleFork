@@ -1,7 +1,8 @@
+import { existsSync, readFileSync } from 'node:fs'
+import { join } from 'node:path'
+
 import type { SupabaseClient } from '@supabase/supabase-js'
 import type { ClaudeFieldMapping } from '@/lib/ai/mapping-engine'
-
-import staticMappingsConfig from '@/config/static-mappings.json'
 
 type StaticTransform = string | Record<string, unknown>
 
@@ -16,12 +17,9 @@ export interface StaticMappingEntry {
 }
 
 interface StaticOrgMappingConfig {
+  project_ids: string[]
   enabled: boolean
   entries: StaticMappingEntry[]
-}
-
-interface StaticMappingsFile {
-  orgs: Record<string, StaticOrgMappingConfig>
 }
 
 interface ResolvedStaticOrgMapping {
@@ -76,9 +74,9 @@ export type StaticSuggestionResult =
       }
     }
 
-const STATIC_MAPPINGS = staticMappingsConfig as StaticMappingsFile
 const STATIC_CONFIDENCE = 100
 const UNMAPPED_TOKEN = 'unmapped'
+const STATIC_MAPPINGS_DIR = join(process.cwd(), 'config', 'static-mappings')
 
 function normalizeName(value: string | null | undefined): string {
   if (!value || typeof value !== 'string') return ''
@@ -145,15 +143,43 @@ async function resolveStaticOrgMappingForProject(
 
   if (error || !project?.org_id) return null
 
-  const orgConfig = STATIC_MAPPINGS.orgs[project.org_id]
+  const orgConfig = readStaticOrgMappingConfig(project.org_id, projectId)
   if (!orgConfig?.enabled) return null
 
   return {
     orgId: project.org_id,
     config: {
+      project_ids: orgConfig.project_ids,
       enabled: true,
       entries: Array.isArray(orgConfig.entries) ? orgConfig.entries : [],
     },
+  }
+}
+
+function readStaticOrgMappingConfig(
+  orgId: string,
+  projectId: string,
+): StaticOrgMappingConfig | null {
+  const configPath = join(STATIC_MAPPINGS_DIR, `${orgId}.json`)
+  if (!existsSync(configPath)) return null
+
+  const raw = readFileSync(configPath, 'utf8')
+  const parsed = JSON.parse(raw) as Array<Partial<StaticOrgMappingConfig>> | null
+  if (!Array.isArray(parsed)) return null
+
+  const matched = parsed.find((candidate) => {
+    if (!candidate || typeof candidate !== 'object') return false
+    if (candidate.enabled !== true) return false
+    return Array.isArray(candidate.project_ids) && candidate.project_ids.includes(projectId)
+  })
+  if (!matched) return null
+
+  return {
+    project_ids: Array.isArray(matched.project_ids)
+      ? matched.project_ids.filter((value): value is string => typeof value === 'string')
+      : [],
+    enabled: matched.enabled === true,
+    entries: Array.isArray(matched.entries) ? matched.entries as StaticMappingEntry[] : [],
   }
 }
 
