@@ -1,4 +1,5 @@
 import type { ProjectStats } from '@/lib/quality/project-stats'
+import type { MappingCounts } from '@/lib/types/mappings-for-redesign'
 
 // ─────────────────────────────────────────────────────────────────────────────
 // MappingSummaryStrip — Phase 4-polish-1 final refinements + PR-6 consolidation.
@@ -111,6 +112,7 @@ interface MappingSummaryStripProps {
    *  populated project. Pass `null` for the defensive empty-state
    *  fallback (renders the awaiting_data label). */
   projectStats: ProjectStats | null
+  counts?: Pick<MappingCounts, 'total' | 'approved' | 'needsReview'>
   /** feat/mapping-list-toggle-and-columns: optional trailing slot
    *  rendered right-aligned on the same horizontal line as the
    *  summary chips. The mapping page passes `<ViewModeToggle />`
@@ -128,6 +130,7 @@ const STATE_LABEL: Record<ProjectStats['state'], string> = {
 
 export function MappingSummaryStrip({
   projectStats,
+  counts,
   trailing,
 }: MappingSummaryStripProps) {
   // State-aware empty: when the project hasn't generated mappings yet
@@ -136,6 +139,9 @@ export function MappingSummaryStrip({
   // PR-2 tile badge for visual continuity.
   const state = projectStats?.state ?? 'awaiting_data'
   const isPopulated = state === 'mappings_generated' && projectStats !== null
+  const approvedCount = counts?.approved ?? projectStats?.target.approved ?? 0
+  const needsReviewCount =
+    counts?.needsReview ?? projectStats?.target.needsReview ?? 0
 
   if (!isPopulated) {
     return (
@@ -185,27 +191,22 @@ export function MappingSummaryStrip({
           ratio={`${projectStats.target.approved}/${projectStats.target.total}`}
         />
         <SummaryChipBlockDivider />
-        {/* PR-7: status chips read from `projectStats.target.*` (post-PR-7
-            single source of truth). Pre-PR-7 they read from
-            `MappingsForRedesignResult.counts.*` — that path showed
-            grid-level numerators that didn't reconcile with the
-            project-wide axis denominators. Conditional Rejected /
-            Unmapped chips were dropped — both are now subsumed in the
-            redefined `needsReview = total - approved`. */}
+        {/* Status chips use actual status counts so rejected rows do not
+            remain inside the Needs Review number. */}
         {/* Linear-style polish: 8px fill + 2px ring @ 25% opacity for
             the hued summary dots. Mirrors `StatusDot` in
             MappingListView so the row-level and summary dots read
-            identically (emerald approved, amber needs-review). */}
+            identically (emerald approved, slate needs-review). */}
         <SummaryChip
           label="Approved"
-          value={projectStats.target.approved}
+          value={approvedCount}
           dotClassName="bg-emerald-500 ring-2 ring-emerald-500/25"
         />
         <SummaryChipDivider />
         <SummaryChip
           label="Needs Review"
-          value={projectStats.target.needsReview}
-          dotClassName="bg-amber-400 ring-2 ring-amber-400/25"
+          value={needsReviewCount}
+          dotClassName="bg-slate-400 ring-2 ring-slate-400/25"
         />
       </div>
       {trailing ? (

@@ -82,9 +82,9 @@ function deriveDisplayStatus(row: FlatRow): DisplayStatus {
 
 // Linear-style polish (feat/mapping-list-toggle-and-columns refinement
 // pass): 8px fill + a 2px ring at 25% opacity for the hued states. The
-// ring reads as a soft halo around the dot. Gray states (rejected,
-// unmapped) intentionally render without a ring — neutral colours
-// don't need the additional emphasis.
+// ring reads as a soft halo around the dot. Neutral unmapped renders
+// without a ring; rejected now uses a distinct red fill so it reads as
+// a third decision state rather than another neutral bucket.
 const STATUS_DOT_CONFIG: Record<
   DisplayStatus,
   { label: string; fill: string; ring: string | null }
@@ -96,13 +96,13 @@ const STATUS_DOT_CONFIG: Record<
   },
   needs_review: {
     label: 'Needs review',
-    fill: 'bg-amber-400',
-    ring: 'ring-2 ring-amber-400/25',
+    fill: 'bg-slate-400',
+    ring: 'ring-2 ring-slate-400/25',
   },
   rejected: {
     label: 'Rejected',
-    fill: 'bg-gray-400',
-    ring: null,
+    fill: 'bg-red-500',
+    ring: 'ring-2 ring-red-500/25',
   },
   unmapped: {
     label: 'Unmapped',

@@ -428,7 +428,7 @@ describe('MappingDrawer — PR 1 header (FROM/TO stack)', () => {
     ).toBeInTheDocument()
     const word = within(badge).getByTestId('mapping-drawer-header-status-word')
     expect(word.textContent).toBe('Needs review')
-    expect(word.className).toContain('text-amber-700')
+    expect(word.className).toContain('text-slate-700')
     const confidence = within(badge).getByTestId(
       'mapping-drawer-header-confidence',
     )
@@ -451,7 +451,7 @@ describe('MappingDrawer — PR 1 header (FROM/TO stack)', () => {
         mapped({ status: 'needs_review' }),
         'needs_review',
         'Needs review',
-        'text-amber-700',
+        'text-slate-700',
       ] as const,
       [mapped({ status: 'rejected' }), 'rejected', 'Rejected', 'text-red-700'] as const,
       [targetAck(), 'approved', 'Approved', 'text-green-700'] as const,
@@ -1181,7 +1181,8 @@ describe('MappingDrawer — PR 2 TASK 1.6 rejected-state banner', () => {
 
   it('banner renders ABOVE the TARGET FIELD section in DOM order (PR 3b)', () => {
     // PR 3b: UnmappedBody body order is
-    //   [rejected banner] → TARGET FIELD → COVERAGE → DECISIONS
+    //   [rejected banner] → TARGET FIELD → [TRANSFORMATION] →
+    //   [EXPLANATION] → DECISIONS
     // The legacy SOURCE section (which the pre-PR-3b test referenced)
     // is retired. Banner-above-target-field is the new DOM-order
     // invariant.
@@ -2671,16 +2672,9 @@ describe('MappingDrawer — PR 3b body section ordering', () => {
     )
   })
 
-  it('unmapped order: TARGET FIELD → COVERAGE', () => {
+  it('unmapped does not render the retired COVERAGE section', () => {
     render(<MappingDrawer row={unmapped()} isOpen={true} onClose={() => {}} />)
-    const body = screen.getByTestId('mapping-drawer-body')
-    const sectionTestIds = Array.from(
-      body.querySelectorAll('[data-testid^="drawer-section-"]'),
-    ).map((el) => el.getAttribute('data-testid'))
-    const idx = (id: string) => sectionTestIds.indexOf(id)
-    expect(idx('drawer-section-target-field')).toBeLessThan(
-      idx('drawer-section-coverage'),
-    )
+    expect(screen.queryByTestId('drawer-section-coverage')).toBeNull()
   })
 })
 

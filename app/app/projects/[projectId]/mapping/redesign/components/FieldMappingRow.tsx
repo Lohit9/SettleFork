@@ -1389,7 +1389,7 @@ const STATUS_CONFIG: Record<
   { label: string; dotClassName: string }
 > = {
   approved: { label: 'Approved', dotClassName: 'bg-green-500' },
-  needs_review: { label: 'Needs Review', dotClassName: 'bg-amber-400' },
+  needs_review: { label: 'Needs Review', dotClassName: 'bg-slate-400' },
   rejected: { label: 'Rejected', dotClassName: 'bg-red-500' },
   unmapped: { label: 'Unmapped', dotClassName: 'bg-slate-300' },
 }

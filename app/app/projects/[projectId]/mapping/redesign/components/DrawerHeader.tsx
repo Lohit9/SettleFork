@@ -215,9 +215,9 @@ const STATUS_CONFIG: Record<
   },
   needs_review: {
     label: 'Needs review',
-    dotClassName: 'bg-amber-400',
-    ringClassName: 'ring-amber-400/25',
-    wordClassName: 'text-amber-700',
+    dotClassName: 'bg-slate-400',
+    ringClassName: 'ring-slate-400/25',
+    wordClassName: 'text-slate-700',
   },
   rejected: {
     label: 'Rejected',

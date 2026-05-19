@@ -41,7 +41,6 @@ import type {
 } from '@/lib/types/mappings-for-redesign'
 import type { PathDOutputs } from '@/lib/actions/path-d-outputs'
 import type { ProjectDataQualityIssueRow } from '@/lib/types/path-d'
-import { CoverageSection } from './CoverageSection'
 import { DecisionList } from './DecisionList'
 import { DQList } from './DQList'
 import {
@@ -84,7 +83,8 @@ import { DrawerHeader } from './DrawerHeader'
 //
 // Final body kind dispatch:
 //
-//   unmapped            → UnmappedBody         (Source / Coverage / Decisions —
+//   unmapped            → UnmappedBody         (Target field / Transformation /
+//                                               Explanation / Decisions —
 //                                               Phase E PR α; coverage-approved
 //                                               no-source rows live here too)
 //   value_assignment    → ValueAssignmentBody  (Target field / Value expression /
@@ -1401,7 +1401,8 @@ function UnmappedBody({
   // Drawer redesign PR 3b — body section order for unmapped /
   // rejected variants:
   //
-  //   [rejected banner]  →  TARGET FIELD  →  COVERAGE  →  DECISIONS
+  //   [rejected banner]  →  TARGET FIELD  →  TRANSFORMATION  →
+  //   EXPLANATION  →  DECISIONS
   //
   // The legacy body SOURCE section (empty-state + CreateMappingForm
   // mount) is gone — the header's FROM stack source ✏ is the
@@ -1426,10 +1427,6 @@ function UnmappedBody({
       <TransformationSection row={row} projectId={projectId} />
 
       <AnalysisSection row={row} rowAiReasoningOverride={coverage?.ai_reasoning} />
-
-      <DrawerSection title="Explanation" testId="drawer-section-coverage">
-        <CoverageSection coverage={coverage ?? null} />
-      </DrawerSection>
 
       {coverageDecisions.length > 0 ? (
         <section

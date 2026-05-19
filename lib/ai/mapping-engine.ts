@@ -522,10 +522,10 @@ function buildUnmappedRow(
   //   no coverage (orphan) → status = 'needs_review' (synthesized);
   //                          statusSetBy = 'system_default';
   //                          coverageStatus = null
-  const status = tfm
-    ? coerceStatus(tfm.status)
-    : coverageRow
-      ? coerceStatus(coverageRow.status)
+  const status = coverageRow
+    ? coerceStatus(coverageRow.status)
+    : tfm
+      ? coerceStatus(tfm.status)
       : 'needs_review'
   const statusSetBy: 'ai_auto' | 'user' | 'system_default' | null = coverageRow
     ? (coerceStatusSetBy(coverageRow.status_set_by) ?? 'system_default')

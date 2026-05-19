@@ -946,12 +946,24 @@ function MappingContentLoaded({
     (rowId: string): MappingRow | null => {
       const row = data.rows.find((r) => r.id === rowId)
       if (!row) return null
+
+      const confidence = row.confidence ?? null
+      const aiReasoning =
+        row.kind === 'mapped' || row.kind === 'value_assignment'
+          ? row.aiReasoning ?? null
+          : row.aiReasoning ?? null
+      const transformationIntent =
+        row.kind === 'mapped' || row.kind === 'value_assignment'
+          ? row.transformationIntent ?? null
+          : row.transformationIntent ?? null
       return {
         id: row.id,
         targetField: row.targetField,
         kind: 'unmapped',
         status: 'rejected',
-        confidence: null,
+        confidence,
+        aiReasoning,
+        transformationIntent,
         hasTransformation: false,
         transformationStatus: null,
         transformationDescription: null,
@@ -1332,6 +1344,48 @@ function MappingContentLoaded({
     })
   }, [])
 
+  // Approve optimism must persist until fresh server data confirms the
+  // row is actually approved. Clearing on a fixed timer causes a brief
+  // revert back to needs_review when router.refresh() takes longer than
+  // the animation window.
+  useEffect(() => {
+    setOptimisticStates((prev) => {
+      if (prev.size === 0) return prev
+      let changed = false
+      const next = new Map(prev)
+      for (const [rowId, state] of prev.entries()) {
+        if (state !== 'approving') continue
+        const serverRow = data.rows.find((r) => r.id === rowId)
+        if (serverRow?.status === 'approved') {
+          next.delete(rowId)
+          changed = true
+        }
+      }
+      return changed ? next : prev
+    })
+  }, [data.rows])
+
+  // Page-level derived row state used by filters, grouping, and summary
+  // counts. Mirrors the same optimistic contract users see at the row
+  // level:
+  //   - `optimisticData` pre-applies structural row-shape changes
+  //     (reject → unmapped, etc.)
+  //   - `optimisticStates='approving'` should read as approved
+  //     immediately in aggregate counts, not only after router.refresh()
+  const effectiveRows = useMemo(() => {
+    return data.rows.map((row) => {
+      const optimisticRow = optimisticData.get(row.id) ?? row
+      const optimisticState = optimisticStates.get(row.id)
+      if (
+        optimisticState === 'approving' &&
+        optimisticRow.status !== 'approved'
+      ) {
+        return { ...optimisticRow, status: 'approved' as const }
+      }
+      return optimisticRow
+    })
+  }, [data.rows, optimisticData, optimisticStates])
+
   const handleInlineApprove = useCallback(
     async (rowId: string) => {
       setOptimistic(rowId, 'approving')
@@ -1361,9 +1415,6 @@ function MappingContentLoaded({
         clearOptimistic(rowId)
         return
       }
-      // Hold the highlight for ~150ms so the user catches the green
-      // flash before the row settles into its post-approve state.
-      setTimeout(() => clearOptimistic(rowId), 150)
     },
     [setOptimistic, clearOptimistic, pushToast, router],
   )
@@ -1560,6 +1611,9 @@ function MappingContentLoaded({
       // blip during the unmount/remount when router.refresh() lands.
       // Reset intentionally not covered (the row identity is preserved
       // and the next refresh resolves it from the coverage row).
+      if (action === 'approve') {
+        setOptimistic(rowId, 'approving')
+      }
       if (action === 'reject') {
         const override = buildUnmappedOverride(rowId)
         if (override) writeOptimisticData(rowId, override)
@@ -1576,6 +1630,7 @@ function MappingContentLoaded({
       writeUrl,
       onClearHighlight,
       buildUnmappedOverride,
+      setOptimistic,
       writeOptimisticData,
     ],
   )
@@ -1593,8 +1648,8 @@ function MappingContentLoaded({
   // row, so filtering is a pure in-memory pass. No debounce here even
   // when the user is typing.
   const filteredRows = useMemo(
-    () => filterRows(data.rows, filters),
-    [data.rows, filters],
+    () => filterRows(effectiveRows, filters),
+    [effectiveRows, filters],
   )
 
   // Mapping list view consumes the full MappingsForRedesignResult so
@@ -1776,10 +1831,10 @@ function MappingContentLoaded({
     if (!hideEmpty) return data.targetTables
     return data.targetTables.filter(
       (summary) =>
-        !isGroupHiddenByIdentityFilters(summary.id, filters, data.rows) &&
-        !isGroupHiddenBySearch(summary.id, filters, data.rows),
+        !isGroupHiddenByIdentityFilters(summary.id, filters, effectiveRows) &&
+        !isGroupHiddenBySearch(summary.id, filters, effectiveRows),
     )
-  }, [hideEmpty, data.targetTables, data.rows, filters])
+  }, [hideEmpty, data.targetTables, effectiveRows, filters])
 
   // Phase 4c-1 — per-target-table needs-review counts. Drives the
   // kebab item's enabled/disabled state and subtitle. Iterated once
@@ -1791,14 +1846,14 @@ function MappingContentLoaded({
   // `status === 'needs_review'` matches the server's WHERE clause exactly.
   const needsReviewCountByTable = useMemo(() => {
     const m = new Map<string, number>()
-    for (const row of data.rows) {
+    for (const row of effectiveRows) {
       if (row.kind !== 'mapped' && row.kind !== 'value_assignment') continue
       if (row.status !== 'needs_review') continue
       const tableId = row.targetField.targetTable.id
       m.set(tableId, (m.get(tableId) ?? 0) + 1)
     }
     return m
-  }, [data.rows])
+  }, [effectiveRows])
 
   // Phase 4 empty-state — discriminate the four cases that warrant
   // an empty-state CTA in the body and the Strip+FilterRow hide-out
@@ -1820,14 +1875,28 @@ function MappingContentLoaded({
   // already has confidence on every row, so this is a single pass.
   const highConfidenceCount = useMemo(() => {
     let n = 0
-    for (const row of data.rows) {
+    for (const row of effectiveRows) {
       if (row.kind !== 'mapped' && row.kind !== 'value_assignment') continue
       if (row.status !== 'needs_review') continue
       if ((row.confidence ?? 0) < HIGH_CONFIDENCE_THRESHOLD) continue
       n++
     }
     return n
-  }, [data.rows])
+  }, [effectiveRows])
+
+  const effectiveCounts = useMemo(() => {
+    let approved = 0
+    let needsReview = 0
+    for (const row of effectiveRows) {
+      if (row.status === 'approved') approved++
+      if (row.status === 'needs_review') needsReview++
+    }
+    return {
+      total: effectiveRows.length,
+      approved,
+      needsReview,
+    }
+  }, [effectiveRows])
 
   // Phase 4-polish-1 sidebar architecture refactor (2026-04-26): the
   // returned Fragment expands as direct children of the outer flex
@@ -1870,6 +1939,7 @@ function MappingContentLoaded({
               read as one toolbar row (no separate tab strip above). */}
           <MappingSummaryStrip
             projectStats={projectStats}
+            counts={effectiveCounts}
             trailing={
               <ViewModeToggle
                 value={viewMode}

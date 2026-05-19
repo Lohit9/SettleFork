@@ -9,8 +9,8 @@ import type { FlatRowStatus } from '@/lib/utils/flatten-rows-for-list-view'
 // dot). The flat view collapses to 3 buckets per the founder review:
 //
 //   approved     → green filled (acknowledgments included)
-//   needs_review → amber filled
-//   rejected     → gray filled (NOT red, NOT hollow)
+//   needs_review → gray filled
+//   rejected     → red filled
 //
 // Shipping a sibling component keeps the target-led visual stable while
 // the flat view adopts the simpler 3-bucket scheme. Co-evolution risk
@@ -23,8 +23,8 @@ const FLAT_STATUS_CONFIG: Record<
   { label: string; dotClassName: string }
 > = {
   approved: { label: 'Approved', dotClassName: 'bg-green-500' },
-  needs_review: { label: 'Needs Review', dotClassName: 'bg-amber-400' },
-  rejected: { label: 'Rejected', dotClassName: 'bg-slate-400' },
+  needs_review: { label: 'Needs Review', dotClassName: 'bg-slate-400' },
+  rejected: { label: 'Rejected', dotClassName: 'bg-red-500' },
 }
 
 export function FlatStatusDot({

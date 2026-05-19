@@ -12,6 +12,7 @@ export interface StaticMappingEntry {
   target_table: string
   target_field: string
   explanation: string
+  confidence?: number
   transformation_needed: boolean
   transformations: StaticTransform[]
 }
@@ -35,6 +36,7 @@ interface StaticFieldRow {
   id: string
   table_id: string
   name: string
+  ordinal_position?: number
 }
 
 interface ResolvedMappedEntry {
@@ -84,6 +86,7 @@ export type StaticSuggestionResult =
 
 const STATIC_CONFIDENCE = 100
 const UNMAPPED_TOKEN = 'unmapped'
+const UNLABELED_TOKEN = 'unlabeled'
 const STATIC_MAPPINGS_DIR = join(process.cwd(), 'config', 'static-mappings')
 
 function normalizeName(value: string | null | undefined): string {
@@ -96,21 +99,31 @@ function isUnmappedToken(value: string | null | undefined): boolean {
   return normalizeName(value) === UNMAPPED_TOKEN
 }
 
-function isSourceUnmappedEntry(entry: StaticMappingEntry): boolean {
-  return (
-    isUnmappedToken(entry.source_table) &&
-    isUnmappedToken(entry.source_field) &&
-    !isUnmappedToken(entry.target_table) &&
-    !isUnmappedToken(entry.target_field)
-  )
+function isUnlabeledToken(value: string | null | undefined): boolean {
+  return normalizeName(value) === UNLABELED_TOKEN
 }
 
-function isTargetUnmappedEntry(entry: StaticMappingEntry): boolean {
+function isBlankHeaderFieldName(value: string | null | undefined): boolean {
+  if (value == null) return true
+  const trimmed = value.trim()
+  return trimmed === '' || /^_\d+$/.test(trimmed)
+}
+
+function isSourceUnmappedEntry(entry: StaticMappingEntry): boolean {
   return (
     !isUnmappedToken(entry.source_table) &&
     !isUnmappedToken(entry.source_field) &&
     isUnmappedToken(entry.target_table) &&
     isUnmappedToken(entry.target_field)
+  )
+}
+
+function isTargetUnmappedEntry(entry: StaticMappingEntry): boolean {
+  return (
+    isUnmappedToken(entry.source_table) &&
+    isUnmappedToken(entry.source_field) &&
+    !isUnmappedToken(entry.target_table) &&
+    !isUnmappedToken(entry.target_field)
   )
 }
 
@@ -137,6 +150,16 @@ function buildReasoning(entry: StaticMappingEntry): string {
     parts.push(`Transformations: ${rendered}`)
   }
   return parts.filter(Boolean).join(' ')
+}
+
+function resolveStaticConfidence(
+  entry: Pick<StaticMappingEntry, 'confidence'>,
+): number {
+  const confidence = entry.confidence
+  if (typeof confidence !== 'number' || !Number.isFinite(confidence)) {
+    return STATIC_CONFIDENCE
+  }
+  return Math.max(0, Math.min(100, Math.round(confidence)))
 }
 
 function buildTransformationsText(
@@ -225,7 +248,10 @@ function groupEntriesByPair(entries: StaticMappingEntry[]): Map<string, StaticMa
   return grouped
 }
 
-function buildFieldMappingsForPair(entries: StaticMappingEntry[]): ClaudeFieldMapping[] {
+function buildFieldMappingsForPair(
+  entries: StaticMappingEntry[],
+  resolvedSourceFieldNameByEntry?: Map<StaticMappingEntry, string>,
+): ClaudeFieldMapping[] {
   const groupedByTarget = new Map<string, StaticMappingEntry[]>()
   for (const entry of entries) {
     const key = normalizeName(entry.target_field)
@@ -238,11 +264,15 @@ function buildFieldMappingsForPair(entries: StaticMappingEntry[]): ClaudeFieldMa
   for (const group of groupedByTarget.values()) {
     const primary = group[0]
     if (!primary) continue
-    const contributors = group.slice(1).map((entry) => entry.source_field)
+    const resolvedPrimarySourceField =
+      resolvedSourceFieldNameByEntry?.get(primary) ?? primary.source_field
+    const contributors = group.slice(1).map(
+      (entry) => resolvedSourceFieldNameByEntry?.get(entry) ?? entry.source_field,
+    )
     fieldMappings.push({
-      source_field: primary.source_field,
+      source_field: resolvedPrimarySourceField,
       target_field: primary.target_field,
-      confidence: STATIC_CONFIDENCE,
+      confidence: Math.min(...group.map((entry) => resolveStaticConfidence(entry))),
       reasoning: group.map(buildReasoning).join(' '),
       similar_fields_considered: [],
       type_compatibility: primary.transformation_needed
@@ -296,12 +326,12 @@ async function loadTablesAndFieldsForIds(
         .returns<StaticTableRow[]>(),
       supabase
         .from('fields')
-        .select('id, table_id, name')
+        .select('id, table_id, name, ordinal_position')
         .in('table_id', sourceTableIds)
         .returns<StaticFieldRow[]>(),
       supabase
         .from('fields')
-        .select('id, table_id, name')
+        .select('id, table_id, name, ordinal_position')
         .in('table_id', targetTableIds)
         .returns<StaticFieldRow[]>(),
     ])
@@ -360,14 +390,14 @@ async function loadProjectTablesAndFields(
     sourceIds.length > 0
       ? supabase
           .from('fields')
-          .select('id, table_id, name')
+          .select('id, table_id, name, ordinal_position')
           .in('table_id', sourceIds)
           .returns<StaticFieldRow[]>()
       : Promise.resolve({ data: [] as StaticFieldRow[] }),
     targetIds.length > 0
       ? supabase
           .from('fields')
-          .select('id, table_id, name')
+          .select('id, table_id, name, ordinal_position')
           .in('table_id', targetIds)
           .returns<StaticFieldRow[]>()
       : Promise.resolve({ data: [] as StaticFieldRow[] }),
@@ -387,6 +417,7 @@ async function persistSourceAcknowledgments(
   entries: StaticMappingEntry[],
   sourceTables: StaticTableRow[],
   sourceFields: StaticFieldRow[],
+  resolvedSourceFieldByEntry?: Map<StaticMappingEntry, StaticFieldRow>,
 ): Promise<number> {
   if (entries.length === 0) return 0
 
@@ -412,9 +443,11 @@ async function persistSourceAcknowledgments(
   for (const entry of entries) {
     const sourceTable = sourceTableByName.get(normalizeName(entry.source_table))
     if (!sourceTable) continue
-    const sourceFieldId = sourceFieldIdByTableAndName.get(
-      `${sourceTable.id}::${normalizeName(entry.source_field)}`,
-    )
+    const sourceFieldId =
+      resolvedSourceFieldByEntry?.get(entry)?.id ??
+      sourceFieldIdByTableAndName.get(
+        `${sourceTable.id}::${normalizeName(entry.source_field)}`,
+      )
     if (!sourceFieldId) continue
 
     rows.push({
@@ -479,10 +512,10 @@ async function persistTargetAcknowledgments(
         target_field_id: targetFieldId,
         is_acknowledged: true,
         acknowledgment_reason: entry.explanation.trim() || 'Unmapped',
-        status: 'approved',
+        status: 'needs_review',
         combination_type: null,
         combination_sql: null,
-        confidence: STATIC_CONFIDENCE,
+        confidence: resolveStaticConfidence(entry),
         ai_reasoning: buildReasoning(entry),
         transformation_intent: buildTransformationIntent([entry]),
         needs_transformation: entry.transformation_needed,
@@ -505,10 +538,10 @@ async function persistTargetAcknowledgments(
       .from('target_field_mappings')
       .update({
         is_acknowledged: true,
-        status: 'approved',
+        status: 'needs_review',
         combination_type: null,
         combination_sql: null,
-        confidence: STATIC_CONFIDENCE,
+        confidence: resolveStaticConfidence(entry),
         acknowledgment_reason: entry.explanation.trim() || 'Unmapped',
         ai_reasoning: buildReasoning(entry),
         transformation_intent: buildTransformationIntent([entry]),
@@ -547,10 +580,71 @@ function buildFieldIdByTableAndName(
   return out
 }
 
+function buildResolvedSourceFieldByEntry(
+  entries: StaticMappingEntry[],
+  sourceTables: StaticTableRow[],
+  sourceFields: StaticFieldRow[],
+): Map<StaticMappingEntry, StaticFieldRow> {
+  const sourceTableByName = new Map(
+    sourceTables.map((table) => [normalizeName(table.name), table]),
+  )
+  const exactFieldByTableAndName = new Map<string, StaticFieldRow>()
+  const unlabeledFieldsByTable = new Map<string, StaticFieldRow[]>()
+
+  for (const field of sourceFields) {
+    exactFieldByTableAndName.set(
+      `${field.table_id}::${normalizeName(field.name)}`,
+      field,
+    )
+
+    if (!isBlankHeaderFieldName(field.name)) continue
+    const bucket = unlabeledFieldsByTable.get(field.table_id)
+    if (bucket) bucket.push(field)
+    else unlabeledFieldsByTable.set(field.table_id, [field])
+  }
+
+  for (const bucket of unlabeledFieldsByTable.values()) {
+    bucket.sort((a, b) => (a.ordinal_position ?? 0) - (b.ordinal_position ?? 0))
+  }
+
+  const unlabeledUsageByTable = new Map<string, number>()
+  const resolved = new Map<StaticMappingEntry, StaticFieldRow>()
+
+  for (const entry of entries) {
+    if (isUnmappedToken(entry.source_table) || isUnmappedToken(entry.source_field)) {
+      continue
+    }
+
+    const sourceTable = sourceTableByName.get(normalizeName(entry.source_table))
+    if (!sourceTable) continue
+
+    let sourceField: StaticFieldRow | undefined
+    if (isUnlabeledToken(entry.source_field)) {
+      const unlabeledFields = unlabeledFieldsByTable.get(sourceTable.id) ?? []
+      const nextIndex = unlabeledUsageByTable.get(sourceTable.id) ?? 0
+      sourceField = unlabeledFields[nextIndex]
+      if (sourceField) {
+        unlabeledUsageByTable.set(sourceTable.id, nextIndex + 1)
+      }
+    } else {
+      sourceField = exactFieldByTableAndName.get(
+        `${sourceTable.id}::${normalizeName(entry.source_field)}`,
+      )
+    }
+
+    if (sourceField) {
+      resolved.set(entry, sourceField)
+    }
+  }
+
+  return resolved
+}
+
 function resolveMappedEntriesToLiveFields(args: {
   entries: StaticMappingEntry[]
   sourceTableByName: Map<string, StaticTableRow>
   targetTableByName: Map<string, StaticTableRow>
+  resolvedSourceFieldByEntry?: Map<StaticMappingEntry, StaticFieldRow>
   sourceFieldIdByTableAndName: Map<string, string>
   targetFieldIdByTableAndName: Map<string, string>
 }): ResolvedMappedEntry[] {
@@ -561,9 +655,11 @@ function resolveMappedEntriesToLiveFields(args: {
     const targetTable = args.targetTableByName.get(normalizeName(entry.target_table))
     if (!sourceTable || !targetTable) continue
 
-    const sourceFieldId = args.sourceFieldIdByTableAndName.get(
-      `${sourceTable.id}::${normalizeName(entry.source_field)}`,
-    )
+    const sourceFieldId =
+      args.resolvedSourceFieldByEntry?.get(entry)?.id ??
+      args.sourceFieldIdByTableAndName.get(
+        `${sourceTable.id}::${normalizeName(entry.source_field)}`,
+      )
     const targetFieldId = args.targetFieldIdByTableAndName.get(
       `${targetTable.id}::${normalizeName(entry.target_field)}`,
     )
@@ -690,7 +786,7 @@ async function persistResolvedStaticTargetMappings(args: {
       rpcSources.push({
         source_field_id: item.sourceFieldId,
         source_table_id: item.sourceTableId,
-        confidence: STATIC_CONFIDENCE,
+        confidence: resolveStaticConfidence(item.entry),
         ai_reasoning:
           ordinal === 0
             ? buildReasoning(item.entry)
@@ -774,12 +870,16 @@ export async function persistStaticMappingsForSelection(
     args.supabase,
     args.projectId,
   )
-
   const sourceTableByName = new Map(
     sourceTables.map((table) => [normalizeName(table.name), table]),
   )
   const targetTableByName = new Map(
     targetTables.map((table) => [normalizeName(table.name), table]),
+  )
+  const resolvedSourceFieldByEntry = buildResolvedSourceFieldByEntry(
+    resolved.config.entries,
+    projectSchema.sourceTables,
+    projectSchema.sourceFields,
   )
   const sourceFieldIdByTableAndName = buildFieldIdByTableAndName(sourceFields)
   const targetFieldIdByTableAndName = buildFieldIdByTableAndName(targetFields)
@@ -816,6 +916,7 @@ export async function persistStaticMappingsForSelection(
     entries: mappedEntries,
     sourceTableByName,
     targetTableByName,
+    resolvedSourceFieldByEntry,
     sourceFieldIdByTableAndName,
     targetFieldIdByTableAndName,
   })
@@ -841,6 +942,7 @@ export async function persistStaticMappingsForSelection(
     sourceUnmappedEntries,
     projectSchema.sourceTables,
     projectSchema.sourceFields,
+    resolvedSourceFieldByEntry,
   )
   await persistTargetAcknowledgments(
     args.supabase,
@@ -912,6 +1014,11 @@ export async function persistStaticMappingsForPair(
     args.supabase,
     args.projectId,
   )
+  const resolvedSourceFieldByEntry = buildResolvedSourceFieldByEntry(
+    resolved.config.entries,
+    projectSchema.sourceTables,
+    projectSchema.sourceFields,
+  )
 
   const sourceTable = sourceTables[0]
   const targetTable = targetTables[0]
@@ -965,6 +1072,7 @@ export async function persistStaticMappingsForPair(
     sourceUnmappedEntries,
     projectSchema.sourceTables,
     projectSchema.sourceFields,
+    resolvedSourceFieldByEntry,
   )
   await persistTargetAcknowledgments(
     args.supabase,
@@ -983,7 +1091,17 @@ export async function persistStaticMappingsForPair(
 
   const sourceFieldMap = buildFieldMapForTable(sourceFields, sourceTable.id)
   const targetFieldMap = buildFieldMapForTable(targetFields, targetTable.id)
-  const fieldMappings = buildFieldMappingsForPair(mappedEntries)
+  const resolvedSourceFieldNameByEntry = new Map<StaticMappingEntry, string>()
+  for (const entry of matchedEntries) {
+    const resolvedSourceField = resolvedSourceFieldByEntry.get(entry)
+    if (resolvedSourceField) {
+      resolvedSourceFieldNameByEntry.set(entry, resolvedSourceField.name)
+    }
+  }
+  const fieldMappings = buildFieldMappingsForPair(
+    mappedEntries,
+    resolvedSourceFieldNameByEntry,
+  )
 
   if (!hasAnyValidFieldMapping(fieldMappings, sourceFieldMap, targetFieldMap)) {
     return {
@@ -1138,7 +1256,7 @@ export async function getStaticSuggestionForTarget(
     suggestion: {
       sourceFieldIds,
       combinationType: sourceFieldIds.length > 1 ? 'concat_space' : 'single',
-      confidence: STATIC_CONFIDENCE,
+      confidence: Math.min(...matches.map((match) => resolveStaticConfidence(match))),
       rationale: matches
         .map((match) => match.explanation.trim())
         .join(' ')
