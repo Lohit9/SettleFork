@@ -451,13 +451,14 @@ describe('MappingListView — action buttons per row kind', () => {
     expect(onOpenDrawer).toHaveBeenCalledWith('tfm-multi', 'sf-prodsku')
   })
 
-  it('unmapped-target: Approve routes through approveTfm with the unmapped::<targetFieldId> sentinel; Reject calls setUnmappedRowRejected with targetFieldId', () => {
-    // feat/mapping-table-redesign refinement pass 2: approve renders on
-    // unmapped-target rows so the user can one-click "acknowledge this
-    // target as intentionally unmapped" without opening the drawer.
-    // approveTfm dispatches `approveFieldMapping`, which branches on the
-    // `unmapped::` row id prefix and writes target_field_coverage.status
-    // via setCoverageStatus (per the server action contract).
+  it('unmapped-target: Approve and Reject both route through the TFM helpers with the unmapped::<targetFieldId> sentinel', () => {
+    // feat/mapping-table-redesign refinement pass 2 + post-rebase reject
+    // alignment: both approve and reject on the flat-view unmapped-target
+    // dispatch through approveTfm/rejectTfm (the same helpers used for
+    // mapped rows). The server actions `approveFieldMapping` /
+    // `rejectFieldMapping` branch on the `unmapped::` prefix and route to
+    // `setCoverageStatus`. This keeps flat-view reject identical to the
+    // target-led view's reject (which also calls `rejectFieldMapping`).
     const mutations = makeMutations()
     const result = makeResult([makeUnmappedTarget()])
     render(
@@ -473,10 +474,11 @@ describe('MappingListView — action buttons per row kind', () => {
     expect(mutations.approveTfm).toHaveBeenCalledWith('unmapped::tf-9')
 
     fireEvent.click(within(row).getByTestId('flat-row-action-reject'))
-    expect(mutations.rejectUnmappedRow).toHaveBeenCalledWith({
-      pendingKey: 'unmapped::tf-9',
-      target: { targetFieldId: 'tf-9' },
-    })
+    expect(mutations.rejectTfm).toHaveBeenCalledWith('unmapped::tf-9')
+    // Reject no longer routes through `rejectUnmappedRow` — that helper
+    // remains in the hook for future use but the flat-view dispatch was
+    // consolidated post-rebase.
+    expect(mutations.rejectUnmappedRow).not.toHaveBeenCalled()
   })
 
   // feat/mapping-list-toggle-and-columns refinement pass: the Edit pencil

@@ -24,12 +24,13 @@ import type { MappingListMutations } from '../hooks/useMappingListMutations'
 
 // Per-row rationale source. The TFM-level prose is the headline for the
 // new RATIONALE column; the drawer continues to render the full text.
-// Unmapped-target rows currently have no wire field for the coverage's
-// acknowledgment reason — they render em-dash. Adding the wire field is
-// a separate additive change in worktree A.
+// Unmapped-target rows read `UnmappedRow.aiReasoning` (added to the wire
+// shape in aa196e4 — sourced from `target_field_coverage.ai_reasoning` or
+// the acknowledged TFM's `ai_reasoning`). Null falls through to em-dash.
 function deriveRationaleSource(row: FlatRow): string | null {
   if (row.kind === 'mapped') return row.parentRow.aiReasoning
   if (row.kind === 'value-assignment') return row.parentRow.aiReasoning
+  if (row.kind === 'unmapped-target') return row.parentRow.aiReasoning ?? null
   if (row.kind === 'unmapped-source') return row.acknowledgmentReason
   return null
 }
@@ -872,14 +873,15 @@ function FlatRowView({
       }
     }
     if (row.kind === 'unmapped-target') {
-      // feat/mapping-table-redesign refinement pass 2: approve now
-      // renders on unmapped-target rows. The row.id is the synthetic
-      // `unmapped::<targetFieldId>` sentinel; `mutations.approveTfm`
-      // dispatches the server action `approveFieldMapping`, which
-      // branches on the `unmapped::` prefix and routes to
-      // `setCoverageStatus` on the target_field_coverage row — a
-      // one-click "acknowledge this target as intentionally unmapped"
-      // affordance without forcing the drawer.
+      // feat/mapping-table-redesign refinement pass 2: approve renders
+      // on unmapped-target rows. The row.id is the synthetic
+      // `unmapped::<targetFieldId>` sentinel; both `approveTfm` and
+      // `rejectTfm` dispatch through `approveFieldMapping` /
+      // `rejectFieldMapping`, which branch on the `unmapped::` prefix
+      // and route to `setCoverageStatus` server-side. Switching reject
+      // off `rejectUnmappedRow` onto `rejectTfm` aligns the flat-view
+      // reject with the target-led view's reject path (both views now
+      // produce identical DB state for the same user intent).
       return {
         onApprove: alreadyApproved
           ? undefined
@@ -887,11 +889,7 @@ function FlatRowView({
         approveTooltip: 'Acknowledge unmapped target',
         onReject: alreadyRejected
           ? undefined
-          : () =>
-              void mutations.rejectUnmappedRow({
-                pendingKey: row.id,
-                target: { targetFieldId: row.targetField.id },
-              }),
+          : () => void mutations.rejectTfm(row.id),
         rejectTooltip: 'Mark as rejected',
         onEdit: () => onRowBodyClick(row),
         editTooltip: 'Open target field in drawer',
