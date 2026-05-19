@@ -101,9 +101,20 @@ import { DrawerHeader } from './DrawerHeader'
 //                                  mapping; approved: Un-approve via
 //                                  resetMappingStatus; rejected: Approve)
 //
-// The drawer is deliberately tab-LESS; the spec's Details/Source/Transform
-// tabs were retired at Gap 7 in favour of kind-dispatched single-page bodies.
-// Founder Q3.
+// HISTORICAL ADR — Gap 7 (retired): the drawer was originally
+// tab-LESS; the spec's Details/Source/Transform tabs were retired in
+// favour of kind-dispatched single-page bodies (Founder Q3).
+//
+// REVERSED — feat/mapping-drawer-redesign (refinement #3): the unified
+// Configure drawer needs Mapping and Transform accessible from one
+// context, so the drawer is now TABBED with two sub-tabs:
+//   • Mapping  — source/target identity, why this mapping, sample
+//                source values, remove mapping link.
+//   • Transform — transformation intent, status, SQL preview, deep-link
+//                 to the Transform page.
+// The kind-dispatched body model (MappedBody / UnmappedBody /
+// ValueAssignmentBody) is preserved underneath; tab selection just
+// partitions each body's existing sections into the two surfaces.
 //
 // LOCKED FOUNDER DECISIONS (do not re-litigate; see Gap 7 prompt):
 //
@@ -352,6 +363,13 @@ export interface MappingDrawerProps {
 /**
  * Right-side drawer shell. See file header for the full Gap 7 contract.
  */
+/**
+ * Drawer sub-tab discriminator (feat/mapping-drawer-redesign — reverses
+ * Gap-7 ADR). Local to MappingDrawer state, threaded into DrawerHeader
+ * (tab strip render) and BodyContent (content partition).
+ */
+export type DrawerTab = 'mapping' | 'transform'
+
 export function MappingDrawer({
   row,
   isOpen,
@@ -376,6 +394,14 @@ export function MappingDrawer({
   // when `isOpen` flips from false → true; restoring on close happens in
   // the cleanup of the same effect.
   const triggerRef = useRef<HTMLElement | null>(null)
+
+  // feat/mapping-drawer-redesign — Mapping / Transform sub-tabs.
+  // Local state, reset to 'mapping' whenever the drawer opens onto a
+  // different row id so reopening a row never lands on a stale tab.
+  const [activeTab, setActiveTab] = useState<DrawerTab>('mapping')
+  useEffect(() => {
+    setActiveTab('mapping')
+  }, [row?.id])
 
   // PR 3b commit 3 — CreateMappingForm + DiscardChangesDialog +
   // EditInvalidationDialog and their orchestration state (isFormActive,
@@ -715,8 +741,15 @@ export function MappingDrawer({
         availableTargetFields={availableTargetFields}
         availableSourceFields={availableSourceFields}
       />
+      {/* Sub-tab strip — sits between header and body in commit 1.
+          Commit 2 (DrawerHeader rewrite) will move this strip into the
+          new compact header layout so the title row, confidence line,
+          and tabs read as one chrome unit. Reverses Gap-7 ADR — see
+          file-top comment. */}
+      <DrawerTabStrip activeTab={activeTab} onTabChange={setActiveTab} />
       <DrawerBody
         row={effectiveRow}
+        activeTab={activeTab}
         projectId={projectId}
         pathDOutputs={pathDOutputs ?? null}
       />
@@ -802,6 +835,75 @@ const GENERIC_UNAPPROVE_ERROR =
 // (drawer redesign PR 1 — empty-state SOURCE removed for VAs).
 const SOURCE_SECTION_TESTID = 'drawer-section-source'
 
+// ── Sub-tab strip (feat/mapping-drawer-redesign) ───────────────────────────
+//
+// Two-button tab strip between the header and the body. Minimal styling
+// in commit 1 — commit 2 moves this strip into the rewritten compact
+// DrawerHeader. The strip itself stays a pure presentational component;
+// state lives on the parent (MappingDrawer) so the focus/scroll context
+// of the active tab survives re-renders triggered by row mutations.
+
+function DrawerTabStrip({
+  activeTab,
+  onTabChange,
+}: {
+  activeTab: DrawerTab
+  onTabChange: (next: DrawerTab) => void
+}) {
+  return (
+    <div
+      role="tablist"
+      data-testid="drawer-tab-strip"
+      className="flex items-end gap-6 border-b border-slate-200 px-6 pt-2"
+    >
+      <DrawerTabButton
+        tab="mapping"
+        label="Mapping"
+        active={activeTab === 'mapping'}
+        onClick={() => onTabChange('mapping')}
+      />
+      <DrawerTabButton
+        tab="transform"
+        label="Transform"
+        active={activeTab === 'transform'}
+        onClick={() => onTabChange('transform')}
+      />
+    </div>
+  )
+}
+
+function DrawerTabButton({
+  tab,
+  label,
+  active,
+  onClick,
+}: {
+  tab: DrawerTab
+  label: string
+  active: boolean
+  onClick: () => void
+}) {
+  return (
+    <button
+      type="button"
+      role="tab"
+      data-testid={`drawer-tab-${tab}`}
+      data-active={active ? 'true' : 'false'}
+      aria-selected={active}
+      onClick={onClick}
+      className={cn(
+        'border-b-2 pb-2 text-sm transition-colors',
+        'focus:outline-none focus-visible:ring-1 focus-visible:ring-blue-500',
+        active
+          ? 'border-slate-900 font-medium text-slate-900'
+          : 'border-transparent text-slate-500 hover:text-slate-700',
+      )}
+    >
+      {label}
+    </button>
+  )
+}
+
 // ── Body — kind-dispatched (Gap 8a) ────────────────────────────────────────
 //
 // The wrapping `<div data-testid="mapping-drawer-body">` is preserved so:
@@ -814,6 +916,12 @@ const SOURCE_SECTION_TESTID = 'drawer-section-source'
 //                                       here too post-INF-57 cleanup)
 //   value_assignment    → ValueAssignmentBody
 //   mapped              → MappedBody (Gap 8b — per-source roster + combination)
+//
+// feat/mapping-drawer-redesign — each body kind now partitions its
+// sections by `activeTab`: 'mapping' renders identity + analysis +
+// enrichment sections; 'transform' renders the TransformationSection
+// (and intent prose for unmapped rows). The kind-dispatch lives one
+// level up; tab-dispatch lives inside each body.
 
 interface DrawerBodyProps {
   row: MappingRow
@@ -826,12 +934,15 @@ interface DrawerBodyProps {
    * collapses (Linear pattern).
    */
   pathDOutputs: PathDOutputs | null
+  /** feat/mapping-drawer-redesign — which sub-tab content to render. */
+  activeTab: DrawerTab
 }
 
 function DrawerBody(props: DrawerBodyProps) {
   return (
     <div
       data-testid="mapping-drawer-body"
+      data-active-tab={props.activeTab}
       className="flex-1 overflow-auto px-6 py-5"
     >
       <BodyContent {...props} />
@@ -839,7 +950,7 @@ function DrawerBody(props: DrawerBodyProps) {
   )
 }
 
-function BodyContent({ row, projectId, pathDOutputs }: DrawerBodyProps) {
+function BodyContent({ row, projectId, pathDOutputs, activeTab }: DrawerBodyProps) {
   switch (row.kind) {
     case 'mapped':
       return (
@@ -847,16 +958,24 @@ function BodyContent({ row, projectId, pathDOutputs }: DrawerBodyProps) {
           row={row}
           projectId={projectId}
           pathDOutputs={pathDOutputs}
+          activeTab={activeTab}
         />
       )
     case 'value_assignment':
-      return <ValueAssignmentBody row={row} pathDOutputs={pathDOutputs} />
+      return (
+        <ValueAssignmentBody
+          row={row}
+          pathDOutputs={pathDOutputs}
+          activeTab={activeTab}
+        />
+      )
     case 'unmapped':
       return (
         <UnmappedBody
           row={row}
           projectId={projectId}
           pathDOutputs={pathDOutputs}
+          activeTab={activeTab}
         />
       )
   }
@@ -1381,12 +1500,15 @@ interface UnmappedBodyProps {
   projectId: string | undefined
   /** Phase E PR α — Path D outputs sidecar for COVERAGE + DECISIONS. */
   pathDOutputs: PathDOutputs | null
+  /** feat/mapping-drawer-redesign — which sub-tab content to render. */
+  activeTab: DrawerTab
 }
 
 function UnmappedBody({
   row,
   projectId,
   pathDOutputs,
+  activeTab,
 }: UnmappedBodyProps) {
   // Phase E PR α — coverage rationale always renders (synthesized
   // "Manual entry required" orphan label when no coverage row exists).
@@ -1410,6 +1532,13 @@ function UnmappedBody({
   // on row.status === 'rejected'.
   const showRejectedBanner = row.status === 'rejected'
 
+  // feat/mapping-drawer-redesign — same partition rule as MappedBody:
+  // transform-related content lives on the Transform tab; everything
+  // else (target identity, analysis, decisions, rejected banner) lives
+  // on the Mapping tab.
+  if (activeTab === 'transform') {
+    return <TransformationSection row={row} projectId={projectId} />
+  }
   return (
     <>
       {showRejectedBanner ? (
@@ -1424,7 +1553,6 @@ function UnmappedBody({
       ) : null}
 
       <TargetFieldSection targetField={row.targetField} />
-      <TransformationSection row={row} projectId={projectId} />
 
       <AnalysisSection row={row} rowAiReasoningOverride={coverage?.ai_reasoning} />
 
@@ -1464,23 +1592,26 @@ function UnmappedBody({
 function ValueAssignmentBody({
   row,
   pathDOutputs,
+  activeTab,
 }: {
   row: ValueAssignmentRow
   pathDOutputs: PathDOutputs | null
+  activeTab: DrawerTab
 }) {
   // Phase E PR α — decisions for this VA's TFM (no DQ section: VAs have
   // no source field to scope DQ findings to).
   const decisions = pathDOutputs?.decisionsByTfmId.get(row.id) ?? []
 
-  // Drawer redesign PR 1 — VA body order is VALUE EXPRESSION →
-  // ANALYSIS → DECISIONS. The empty-state SOURCE section ("Value
-  // assignment — no sources") is gone: the header's left-side
-  // "Value assignment" italic label now carries that signal and a
-  // section that exists solely to render "no sources" was pure
-  // chrome. VALUE EXPRESSION is the row's actual definition for a
-  // VA and gets the lead position.
-  return (
-    <>
+  // feat/mapping-drawer-redesign — VA body partitions by sub-tab:
+  //   'mapping' tab   → TARGET FIELD · ANALYSIS · DECISIONS
+  //   'transform' tab → VALUE EXPRESSION (the row's SQL — VAs author
+  //                     transform-side prose here rather than via the
+  //                     standalone Transform page).
+  // The header's "Value assignment" italic label carries the
+  // no-source signal so the Mapping tab doesn't need a placeholder
+  // SOURCE section for VAs.
+  if (activeTab === 'transform') {
+    return (
       <DrawerSection
         title="Value expression"
         testId="drawer-section-value-expression"
@@ -1499,12 +1630,10 @@ function ValueAssignmentBody({
           />
         )}
       </DrawerSection>
-
-      {/*
-        Drawer redesign PR 3b — TARGET FIELD insertion between
-        VALUE EXPRESSION and ANALYSIS. Order:
-          VALUE EXPRESSION → TARGET FIELD → ANALYSIS → DECISIONS
-      */}
+    )
+  }
+  return (
+    <>
       <TargetFieldSection targetField={row.targetField} />
 
       <AnalysisSection row={row} />
@@ -1574,30 +1703,35 @@ interface MappedBodyProps {
   projectId: string | undefined
   /** Phase E PR α — Path D outputs sidecar for DATA QUALITY + DECISIONS. */
   pathDOutputs: PathDOutputs | null
+  /** feat/mapping-drawer-redesign — which sub-tab content to render. */
+  activeTab: DrawerTab
 }
 
 function MappedBody({
   row,
   projectId,
   pathDOutputs,
+  activeTab,
 }: MappedBodyProps) {
-  // Drawer redesign PR 3b — body section order is
+  // feat/mapping-drawer-redesign — sections partition by sub-tab:
   //
-  //   SOURCE FIELDS → TARGET FIELD → TRANSFORMATION → ANALYSIS →
-  //   DATA QUALITY → DECISIONS
+  //   'mapping' tab   → SOURCE FIELDS · TARGET FIELD · ANALYSIS ·
+  //                     DATA QUALITY · DECISIONS
+  //   'transform' tab → TRANSFORMATION (intent, status, SQL preview,
+  //                     deep-link to /transform)
   //
-  // The legacy `<DrawerSection title="Source">` (which mounted the
-  // inline `CreateMappingForm` in edit mode) and SAMPLE VALUES are
-  // retired. `SourceFieldsSection` carries per-source identity +
-  // samples in one block. `TargetFieldSection` surfaces PR 3a's
-  // additive `TargetFieldRef` fields. ANALYSIS no longer renders
-  // the type-compat line — per-section type displays in the new
-  // sections cover it.
+  // Commit 3 will rewrite the Mapping tab's content into the
+  // two-column SOURCE/TARGET + WHY THIS MAPPING + SAMPLE SOURCE VALUES
+  // + Remove mapping link layout per the mockup. Commit 1 just
+  // partitions the existing sections so the rest of the drawer
+  // redesign can land incrementally.
+  if (activeTab === 'transform') {
+    return <TransformationSection row={row} projectId={projectId} />
+  }
   return (
     <>
       <SourceFieldsSection sources={row.sources} />
       <TargetFieldSection targetField={row.targetField} />
-      <TransformationSection row={row} projectId={projectId} />
       <AnalysisSection row={row} />
       <MappedEnrichmentSections row={row} pathDOutputs={pathDOutputs} />
     </>

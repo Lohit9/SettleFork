@@ -2052,6 +2052,9 @@ describe('MappingDrawer — Value Assignment body', () => {
   })
 
   it('renders the Value expression section with combinationSql in a code block', () => {
+    // feat/mapping-drawer-redesign — Value expression lives on the
+    // Transform sub-tab for VAs (the Mapping tab now carries target
+    // identity + analysis only). Switch tabs before asserting.
     render(
       <MappingDrawer
         row={valueAssignment({ combinationSql: 'NOW()' })}
@@ -2059,6 +2062,7 @@ describe('MappingDrawer — Value Assignment body', () => {
         onClose={() => {}}
       />,
     )
+    fireEvent.click(screen.getByTestId('drawer-tab-transform'))
     const expr = screen.getByTestId('drawer-value-expression')
     expect(expr.textContent).toBe('NOW()')
     expect(expr.tagName).toBe('PRE')
@@ -2076,6 +2080,7 @@ describe('MappingDrawer — Value Assignment body', () => {
         onClose={() => {}}
       />,
     )
+    fireEvent.click(screen.getByTestId('drawer-tab-transform'))
     const expr = screen.getByTestId('drawer-value-expression')
     expect(expr.className).toContain('whitespace-pre-wrap')
     expect(expr.textContent).toBe(sql)
@@ -2089,6 +2094,7 @@ describe('MappingDrawer — Value Assignment body', () => {
         onClose={() => {}}
       />,
     )
+    fireEvent.click(screen.getByTestId('drawer-tab-transform'))
     expect(screen.queryByTestId('drawer-value-expression')).toBeNull()
     expect(
       screen.getByTestId('drawer-value-expression-empty'),
@@ -2150,11 +2156,10 @@ describe('MappingDrawer — Value Assignment body', () => {
     ).toBeNull()
   })
 
-  it('section ordering for VA is Value expression → Target field → Analysis (PR 3b)', () => {
-    // PR 3b: TARGET FIELD section inserts between VALUE EXPRESSION
-    // and ANALYSIS. With aiReasoning present, ANALYSIS still
-    // renders (AI reasoning is its only remaining content; type-comp
-    // moved to per-section displays).
+  it('section partition for VA — Mapping tab: [Target field, Explanation]; Transform tab: [Value expression] (feat/mapping-drawer-redesign)', () => {
+    // feat/mapping-drawer-redesign — sections partition across the two
+    // sub-tabs. The Mapping tab carries target identity + analysis;
+    // the Transform tab carries the VA's authored SQL (Value expression).
     render(
       <MappingDrawer
         row={valueAssignment({ aiReasoning: 'reason text' })}
@@ -2163,12 +2168,21 @@ describe('MappingDrawer — Value Assignment body', () => {
       />,
     )
     const body = screen.getByTestId('mapping-drawer-body')
-    const sections = within(body).getAllByRole('heading', { level: 3 })
-    expect(sections.map((h) => h.textContent)).toEqual([
-      'Value expression',
-      'Target field',
-      'Explanation',
-    ])
+
+    // Mapping tab (default).
+    expect(
+      within(body)
+        .getAllByRole('heading', { level: 3 })
+        .map((h) => h.textContent),
+    ).toEqual(['Target field', 'Explanation'])
+
+    // Transform tab.
+    fireEvent.click(screen.getByTestId('drawer-tab-transform'))
+    expect(
+      within(body)
+        .getAllByRole('heading', { level: 3 })
+        .map((h) => h.textContent),
+    ).toEqual(['Value expression'])
   })
 })
 
@@ -2621,7 +2635,11 @@ describe('MappingDrawer — PR 3b body section ordering', () => {
     )
   })
 
-  it('mapped order with all sections: SOURCE FIELDS → TARGET FIELD → TRANSFORMATION → ANALYSIS', () => {
+  it('mapped section partition — Mapping tab: SOURCE FIELDS → TARGET FIELD → ANALYSIS; Transform tab: TRANSFORMATION (feat/mapping-drawer-redesign)', () => {
+    // feat/mapping-drawer-redesign — transform-related content moved
+    // to the Transform sub-tab. The Mapping tab keeps the identity +
+    // analysis sections; the Transform tab carries the single
+    // TRANSFORMATION section.
     render(
       <MappingDrawer
         row={mapped({
@@ -2636,22 +2654,39 @@ describe('MappingDrawer — PR 3b body section ordering', () => {
       />,
     )
     const body = screen.getByTestId('mapping-drawer-body')
-    const sectionTestIds = Array.from(
-      body.querySelectorAll('[data-testid^="drawer-section-"]'),
-    ).map((el) => el.getAttribute('data-testid'))
-    const idx = (id: string) => sectionTestIds.indexOf(id)
-    expect(idx('drawer-section-source-fields')).toBeLessThan(
-      idx('drawer-section-target-field'),
+    const sectionTestIdsOnTab = () =>
+      Array.from(
+        body.querySelectorAll('[data-testid^="drawer-section-"]'),
+      ).map((el) => el.getAttribute('data-testid'))
+
+    // Mapping tab (default).
+    const mappingTab = sectionTestIdsOnTab()
+    const idxMapping = (id: string) => mappingTab.indexOf(id)
+    expect(idxMapping('drawer-section-source-fields')).toBeGreaterThanOrEqual(0)
+    expect(idxMapping('drawer-section-source-fields')).toBeLessThan(
+      idxMapping('drawer-section-target-field'),
     )
-    expect(idx('drawer-section-target-field')).toBeLessThan(
-      idx('drawer-section-transformation'),
+    expect(idxMapping('drawer-section-target-field')).toBeLessThan(
+      idxMapping('drawer-section-analysis'),
     )
-    expect(idx('drawer-section-transformation')).toBeLessThan(
-      idx('drawer-section-analysis'),
-    )
+    // Transformation section is NOT on the Mapping tab.
+    expect(mappingTab).not.toContain('drawer-section-transformation')
+
+    // Transform tab.
+    fireEvent.click(screen.getByTestId('drawer-tab-transform'))
+    const transformTab = sectionTestIdsOnTab()
+    expect(transformTab).toContain('drawer-section-transformation')
+    // Sections that belong on the Mapping tab are absent here.
+    expect(transformTab).not.toContain('drawer-section-source-fields')
+    expect(transformTab).not.toContain('drawer-section-target-field')
+    expect(transformTab).not.toContain('drawer-section-analysis')
   })
 
-  it('VA order: VALUE EXPRESSION → TARGET FIELD → ANALYSIS', () => {
+  it('VA section partition — Mapping tab: TARGET FIELD → ANALYSIS; Transform tab: VALUE EXPRESSION (feat/mapping-drawer-redesign)', () => {
+    // feat/mapping-drawer-redesign — VA's authored SQL lives on the
+    // Transform tab (VAs author transform-side prose via the
+    // combinationSql field rather than the standalone Transform page).
+    // The Mapping tab keeps target identity + analysis.
     render(
       <MappingDrawer
         row={valueAssignment({ aiReasoning: 'reason' })}
@@ -2660,16 +2695,26 @@ describe('MappingDrawer — PR 3b body section ordering', () => {
       />,
     )
     const body = screen.getByTestId('mapping-drawer-body')
-    const sectionTestIds = Array.from(
-      body.querySelectorAll('[data-testid^="drawer-section-"]'),
-    ).map((el) => el.getAttribute('data-testid'))
-    const idx = (id: string) => sectionTestIds.indexOf(id)
-    expect(idx('drawer-section-value-expression')).toBeLessThan(
-      idx('drawer-section-target-field'),
+    const sectionTestIdsOnTab = () =>
+      Array.from(
+        body.querySelectorAll('[data-testid^="drawer-section-"]'),
+      ).map((el) => el.getAttribute('data-testid'))
+
+    // Mapping tab (default).
+    const mappingTab = sectionTestIdsOnTab()
+    const idxMapping = (id: string) => mappingTab.indexOf(id)
+    expect(idxMapping('drawer-section-target-field')).toBeGreaterThanOrEqual(0)
+    expect(idxMapping('drawer-section-target-field')).toBeLessThan(
+      idxMapping('drawer-section-analysis'),
     )
-    expect(idx('drawer-section-target-field')).toBeLessThan(
-      idx('drawer-section-analysis'),
-    )
+    expect(mappingTab).not.toContain('drawer-section-value-expression')
+
+    // Transform tab.
+    fireEvent.click(screen.getByTestId('drawer-tab-transform'))
+    const transformTab = sectionTestIdsOnTab()
+    expect(transformTab).toContain('drawer-section-value-expression')
+    expect(transformTab).not.toContain('drawer-section-target-field')
+    expect(transformTab).not.toContain('drawer-section-analysis')
   })
 
   it('unmapped does not render the retired COVERAGE section', () => {
