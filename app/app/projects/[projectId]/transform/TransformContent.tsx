@@ -2159,32 +2159,16 @@ export default function TransformContent({ projectId, projectName, initialData, 
                     {inputMode === 'ai' ? (
                       <>
                         {/* Context hints */}
-                        {selectedContext.field.isValueAssignment && (
+                        {selectedContext.field.isValueAssignment
+                          && selectedContext.field.targetCheckConstraint?.type === 'in_list'
+                          && (selectedContext.field.targetCheckConstraint as { allowedValues?: string[] }).allowedValues && (
                           <div className="mb-3 space-y-2">
-                            <div className="px-3 py-2 bg-purple-50 border border-purple-100 rounded-lg text-xs text-purple-700">
-                              <span className="font-medium">Value assignment.</span> This target field has no source mapping.
-                              Describe a constant, expression, or rule to generate the value
-                              (e.g., <code className="bg-purple-100 px-1 rounded">&apos;FIRM&apos;</code> or <code className="bg-purple-100 px-1 rounded">&apos;TC-&apos; || row_number()</code>).
+                            <div className="px-3 py-2 bg-blue-50 border border-blue-100 rounded-lg text-xs text-blue-700">
+                              <span className="font-medium">Allowed values:</span>{' '}
+                              <span className="font-mono">
+                                {((selectedContext.field.targetCheckConstraint as { allowedValues: string[] }).allowedValues).join(', ')}
+                              </span>
                             </div>
-                            {selectedContext.field.targetCheckConstraint?.type === 'in_list' &&
-                              (selectedContext.field.targetCheckConstraint as { allowedValues?: string[] }).allowedValues && (
-                              <div className="px-3 py-2 bg-blue-50 border border-blue-100 rounded-lg text-xs text-blue-700">
-                                <span className="font-medium">Allowed values:</span>{' '}
-                                <span className="font-mono">
-                                  {((selectedContext.field.targetCheckConstraint as { allowedValues: string[] }).allowedValues).join(', ')}
-                                </span>
-                              </div>
-                            )}
-                          </div>
-                        )}
-                        {selectedContext?.field.contributingSourceFields && selectedContext.field.contributingSourceFields.length > 0 && (
-                          <div className="mb-3 px-3 py-2 bg-blue-50 border border-blue-100 rounded-lg text-xs text-blue-700">
-                            <span className="font-medium">Multi-source mapping.</span> This field also receives data from:{' '}
-                            <span className="font-mono">
-                              {selectedContext.field.contributingSourceFields.map((f) => f.name).join(', ')}
-                            </span>
-                            . Write a transform that combines all source fields
-                            (e.g., <code className="bg-blue-100 px-1 rounded">CONCAT(first_name, &apos; &apos;, last_name)</code>).
                           </div>
                         )}
                         <Textarea
@@ -2288,7 +2272,12 @@ export default function TransformContent({ projectId, projectName, initialData, 
                   </div>
 
                   {/* Why Transform? — collapsible reference block, collapsed by default */}
-                  {selectedContext.field.aiReasoning && (
+                  {(selectedContext.field.aiReasoning
+                    || selectedContext.field.isValueAssignment
+                    || selectedContext.field.typeCompatibility
+                    || selectedContext.field.confidence != null
+                    || selectedContext.field.nullPercentage > 0
+                    || selectedContext.field.formatIssuesCount > 0) && (
                     <div className="rounded-lg border border-gray-100 bg-white overflow-hidden">
                       <button
                         type="button"
@@ -2305,9 +2294,11 @@ export default function TransformContent({ projectId, projectName, initialData, 
                       </button>
                       {whyExpanded && (
                         <div className="px-4 pb-4 pt-0 border-t border-gray-100 bg-amber-50/40">
-                          <p className="text-sm text-amber-900 mt-3">
-                            {selectedContext.field.aiReasoning}
-                          </p>
+                          {selectedContext.field.aiReasoning && (
+                            <p className="text-sm text-amber-900 mt-3">
+                              {selectedContext.field.aiReasoning}
+                            </p>
+                          )}
                           {selectedContext.field.typeCompatibility && (
                             <p className="text-xs text-amber-700 mt-2 font-mono">
                               {selectedContext.field.typeCompatibility}
@@ -2326,6 +2317,23 @@ export default function TransformContent({ projectId, projectName, initialData, 
                               </span>
                             )}
                           </div>
+                          {selectedContext.field.isValueAssignment && (
+                            <p className="mt-3 text-xs text-amber-800">
+                              <span className="font-medium">Value assignment.</span> This target field has no source mapping.
+                              {' '}Describe a constant, expression, or rule to generate the value
+                              {' '}(e.g., <code className="bg-amber-100 px-1 rounded">&apos;FIRM&apos;</code> or <code className="bg-amber-100 px-1 rounded">&apos;TC-&apos; || row_number()</code>).
+                            </p>
+                          )}
+                          {selectedContext?.field.contributingSourceFields && selectedContext.field.contributingSourceFields.length > 0 && (
+                            <p className="mt-3 text-xs text-amber-800">
+                              <span className="font-medium">Multi-source mapping.</span> This field also receives data from:{' '}
+                              <span className="font-mono">
+                                {selectedContext.field.contributingSourceFields.map((f) => f.name).join(', ')}
+                              </span>
+                              . Write a transform that combines all source fields
+                              {' '}(e.g., <code className="bg-amber-100 px-1 rounded">CONCAT(first_name, &apos; &apos;, last_name)</code>).
+                            </p>
+                          )}
                         </div>
                       )}
                     </div>
