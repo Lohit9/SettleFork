@@ -82,6 +82,19 @@ export interface ProjectStatsTargetAxis {
    *  TFMs + unacknowledged unmapped target fields. Aligns the chip math
    *  on the Mapping page strip — `Approved + Needs Review = total`. */
   needsReview: number
+  /** Distinct target_field_id count across primary TFMs (non-rejected,
+   *  non-bare-ack). Answers "how many target fields are used in at least
+   *  one real mapping?" — status-agnostic across `needs_review` and
+   *  `approved`. Numerator for the Mapping page strip's "Target Fields"
+   *  chip alongside `schemaTotal`. Always <= `schemaTotal`. */
+  usedInMapping: number
+  /** Schema-wide target-field count (`datasets.role='target'`). Distinct
+   *  from `total`, which counts addressable mapping slots (primary TFMs
+   *  + unmapped target fields + acknowledged-unmapped). Use `schemaTotal`
+   *  when the question is "how many target fields does the schema
+   *  define?", `total` when the question is "how many mapping slots
+   *  exist?". */
+  schemaTotal: number
 }
 
 export interface ProjectStatsSourceAxis {
@@ -90,6 +103,12 @@ export interface ProjectStatsSourceAxis {
   decided: number
   /** Total source-side fields for the project (from datasets.role='source'). */
   total: number
+  /** Distinct source_field_id count across non-rejected TFMs'
+   *  `mapping_sources` rows. Answers "how many source fields contribute
+   *  to at least one real mapping?". Differs from `decided` by excluding
+   *  acknowledged-only sources (which carry no mapping). Always
+   *  <= `decided` <= `total`. */
+  usedInMapping: number
 }
 
 export interface ProjectStatsTransforms {
@@ -471,10 +490,13 @@ export function rollupProjectStats(
       total: stats.mappingTotal,
       unmapped: stats.mappingUnmapped,
       needsReview: stats.mappingNeedsReview,
+      usedInMapping: stats.targetFieldsUsedInMapping,
+      schemaTotal: targetFields.length,
     },
     source: {
       decided: decidedSourceIds.size,
       total: sourceFields.length,
+      usedInMapping: mappedSourceIds.size,
     },
     transforms: {
       complete: transformsComplete,

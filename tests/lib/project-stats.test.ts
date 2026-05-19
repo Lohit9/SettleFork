@@ -233,6 +233,59 @@ describe('rollupProjectStats — source axis', () => {
   })
 })
 
+// ─── Source axis — usedInMapping ────────────────────────────────────────────
+//
+// `source.usedInMapping` differs from `source.decided` in one specific way:
+// acknowledged-only sources DO NOT count. Both fields count distinct
+// `source_field_id` in non-rejected mapping_sources rows; only `decided`
+// then unions in the `source_field_acknowledgments` set. These tests pin
+// the divergence so a future refactor cannot silently fold the two
+// numerators together.
+
+describe('rollupProjectStats — source.usedInMapping', () => {
+  it('counts distinct source_field_ids in mapping_sources of non-rejected TFMs', () => {
+    const raw = withSourceTarget(emptyRaw(), { sourceFields: 5, targetFields: 5 })
+    addMapping(raw, { tfmId: 'tfm-1', targetFieldId: 'tf-0', sourceFieldId: 'sf-0' })
+    addMapping(raw, { tfmId: 'tfm-2', targetFieldId: 'tf-1', sourceFieldId: 'sf-1' })
+    expect(rollupProjectStats(PROJECT_A, raw).source.usedInMapping).toBe(2)
+  })
+
+  it('deduplicates a source field that maps to multiple TFMs', () => {
+    const raw = withSourceTarget(emptyRaw(), { sourceFields: 5, targetFields: 5 })
+    addMapping(raw, { tfmId: 'tfm-1', targetFieldId: 'tf-0', sourceFieldId: 'sf-0' })
+    addMapping(raw, { tfmId: 'tfm-2', targetFieldId: 'tf-1', sourceFieldId: 'sf-0' })
+    expect(rollupProjectStats(PROJECT_A, raw).source.usedInMapping).toBe(1)
+  })
+
+  it('excludes sources from rejected TFMs', () => {
+    const raw = withSourceTarget(emptyRaw(), { sourceFields: 5, targetFields: 5 })
+    addMapping(raw, {
+      tfmId: 'tfm-rej',
+      targetFieldId: 'tf-0',
+      sourceFieldId: 'sf-0',
+      status: 'rejected',
+    })
+    expect(rollupProjectStats(PROJECT_A, raw).source.usedInMapping).toBe(0)
+  })
+
+  it('excludes acknowledged-only sources (key divergence from source.decided)', () => {
+    const raw = withSourceTarget(emptyRaw(), { sourceFields: 5, targetFields: 5 })
+    // sf-0 is mapped; sf-1 is only acknowledged.
+    addMapping(raw, { tfmId: 'tfm-1', targetFieldId: 'tf-0', sourceFieldId: 'sf-0' })
+    raw.sourceAcks.push({ project_id: PROJECT_A, source_field_id: 'sf-1' })
+    const stats = rollupProjectStats(PROJECT_A, raw)
+    expect(stats.source.decided).toBe(2) // mapped ∪ acknowledged
+    expect(stats.source.usedInMapping).toBe(1) // mapped only
+  })
+
+  it('is zero when only acknowledgments exist (no mappings)', () => {
+    const raw = withSourceTarget(emptyRaw(), { sourceFields: 5, targetFields: 5 })
+    raw.sourceAcks.push({ project_id: PROJECT_A, source_field_id: 'sf-0' })
+    raw.sourceAcks.push({ project_id: PROJECT_A, source_field_id: 'sf-1' })
+    expect(rollupProjectStats(PROJECT_A, raw).source.usedInMapping).toBe(0)
+  })
+})
+
 // ─── Target axis (delegates to computeProjectStats; light verification) ────
 
 describe('rollupProjectStats — target axis', () => {
@@ -300,6 +353,109 @@ describe('rollupProjectStats — target axis', () => {
     expect(stats.target.approved).toBe(1)
     expect(stats.target.total).toBe(1)
     expect(stats.target.needsReview).toBe(0)
+  })
+})
+
+// ─── Target axis — usedInMapping + schemaTotal ──────────────────────────────
+//
+// `target.usedInMapping` counts distinct `target_field_id` across primary
+// TFMs (non-rejected, non-bare-ack). It is status-agnostic — `needs_review`
+// and `approved` primaries both count, because "used in a mapping" is a
+// graph-shape question, not a workflow-state question.
+//
+// `target.schemaTotal` counts every target-side field in the project's
+// schema (`datasets.role='target'`), independent of TFM presence. It is
+// distinct from `target.total`, which counts addressable mapping slots
+// (primary TFMs + unmapped target fields + acknowledged-unmapped) and
+// can drift away from the schema count once acknowledgments enter the
+// picture.
+
+describe('rollupProjectStats — target.usedInMapping + schemaTotal', () => {
+  it('usedInMapping counts distinct target_field_ids across non-rejected primary TFMs', () => {
+    const raw = withSourceTarget(emptyRaw(), { sourceFields: 5, targetFields: 5 })
+    addMapping(raw, {
+      tfmId: 'tfm-1',
+      targetFieldId: 'tf-0',
+      sourceFieldId: 'sf-0',
+      status: 'approved',
+    })
+    addMapping(raw, {
+      tfmId: 'tfm-2',
+      targetFieldId: 'tf-1',
+      sourceFieldId: 'sf-1',
+      status: 'needs_review',
+    })
+    expect(rollupProjectStats(PROJECT_A, raw).target.usedInMapping).toBe(2)
+  })
+
+  it('usedInMapping is status-agnostic across needs_review and approved', () => {
+    const raw = withSourceTarget(emptyRaw(), { sourceFields: 5, targetFields: 5 })
+    addMapping(raw, {
+      tfmId: 'tfm-1',
+      targetFieldId: 'tf-0',
+      sourceFieldId: 'sf-0',
+      status: 'needs_review',
+    })
+    // Approved → usedInMapping still counts.
+    addMapping(raw, {
+      tfmId: 'tfm-2',
+      targetFieldId: 'tf-1',
+      sourceFieldId: 'sf-1',
+      status: 'approved',
+    })
+    const stats = rollupProjectStats(PROJECT_A, raw)
+    expect(stats.target.usedInMapping).toBe(2)
+    expect(stats.target.approved).toBe(1) // sanity — approved still gates on status
+  })
+
+  it('usedInMapping excludes rejected TFMs', () => {
+    const raw = withSourceTarget(emptyRaw(), { sourceFields: 5, targetFields: 5 })
+    addMapping(raw, {
+      tfmId: 'tfm-rej',
+      targetFieldId: 'tf-0',
+      sourceFieldId: 'sf-0',
+      status: 'rejected',
+    })
+    expect(rollupProjectStats(PROJECT_A, raw).target.usedInMapping).toBe(0)
+  })
+
+  it('usedInMapping excludes bare-ack TFMs (is_acknowledged AND combination_type=null)', () => {
+    const raw = withSourceTarget(emptyRaw(), { sourceFields: 5, targetFields: 5 })
+    raw.tfms.push({
+      id: 'tfm-bare-ack',
+      project_id: PROJECT_A,
+      target_field_id: 'tf-0',
+      confidence: null,
+      status: 'needs_review',
+      is_acknowledged: true,
+      combination_type: null,
+      needs_transformation: null,
+      va_dismissed: null,
+    })
+    expect(rollupProjectStats(PROJECT_A, raw).target.usedInMapping).toBe(0)
+  })
+
+  it('schemaTotal counts every target field in the schema (independent of TFM presence)', () => {
+    const raw = withSourceTarget(emptyRaw(), { sourceFields: 5, targetFields: 7 })
+    expect(rollupProjectStats(PROJECT_A, raw).target.schemaTotal).toBe(7)
+  })
+
+  it('schemaTotal can diverge from target.total when acks inflate addressable slots', () => {
+    const raw = withSourceTarget(emptyRaw(), { sourceFields: 3, targetFields: 3 })
+    addMapping(raw, {
+      tfmId: 'tfm-1',
+      targetFieldId: 'tf-0',
+      sourceFieldId: 'sf-0',
+      status: 'approved',
+    })
+    // Acknowledge a SOURCE field (sf-1). Pre-PR-7 this inflated target.total;
+    // post-PR-7 it bumps `acknowledgedCount` which is folded into target.total
+    // but NOT into schemaTotal. The test pins that schemaTotal stays at 3.
+    raw.sourceAcks.push({ project_id: PROJECT_A, source_field_id: 'sf-1' })
+    const stats = rollupProjectStats(PROJECT_A, raw)
+    expect(stats.target.schemaTotal).toBe(3)
+    // target.total is the addressable-slots denominator and may differ;
+    // the test asserts only that schemaTotal remains tied to the schema.
   })
 })
 
@@ -434,10 +590,16 @@ describe('rollupProjectStats — output shape', () => {
     expect(Object.keys(stats.target).sort()).toEqual([
       'approved',
       'needsReview',
+      'schemaTotal',
       'total',
       'unmapped',
+      'usedInMapping',
     ])
-    expect(Object.keys(stats.source).sort()).toEqual(['decided', 'total'])
+    expect(Object.keys(stats.source).sort()).toEqual([
+      'decided',
+      'total',
+      'usedInMapping',
+    ])
     expect(Object.keys(stats.transforms).sort()).toEqual(['complete', 'total'])
   })
 
@@ -445,8 +607,8 @@ describe('rollupProjectStats — output shape', () => {
     const stats = rollupProjectStats(PROJECT_A, emptyRaw())
     expect(stats).toEqual({
       state: 'awaiting_data',
-      target: { approved: 0, total: 0, unmapped: 0, needsReview: 0 },
-      source: { decided: 0, total: 0 },
+      target: { approved: 0, total: 0, unmapped: 0, needsReview: 0, usedInMapping: 0, schemaTotal: 0 },
+      source: { decided: 0, total: 0, usedInMapping: 0 },
       transforms: { complete: 0, total: 0 },
       blocking: 0,
     })

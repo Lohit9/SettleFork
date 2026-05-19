@@ -182,13 +182,13 @@ export function MappingSummaryStrip({
         <SummaryChip
           testId="mapping-summary-chip-project-source"
           label="Source Fields"
-          ratio={`${projectStats.source.decided}/${projectStats.source.total}`}
+          ratio={`${projectStats.source.usedInMapping}/${projectStats.source.total}`}
         />
         <SummaryChipDivider />
         <SummaryChip
           testId="mapping-summary-chip-project-target"
           label="Target Fields"
-          ratio={`${projectStats.target.approved}/${projectStats.target.total}`}
+          ratio={`${projectStats.target.usedInMapping}/${projectStats.target.schemaTotal}`}
         />
         <SummaryChipBlockDivider />
         {/* Status chips use actual status counts so rejected rows do not

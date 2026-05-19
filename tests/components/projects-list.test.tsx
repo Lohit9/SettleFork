@@ -65,8 +65,8 @@ import type { ProjectStats } from '@/lib/quality/project-stats'
 function projectStats(overrides: Partial<ProjectStats> = {}): ProjectStats {
   return {
     state: 'mappings_generated',
-    target: { approved: 52, total: 68, unmapped: 16, needsReview: 0 },
-    source: { decided: 57, total: 70 },
+    target: { approved: 52, total: 68, unmapped: 16, needsReview: 0, usedInMapping: 52, schemaTotal: 68 },
+    source: { decided: 57, total: 70, usedInMapping: 57 },
     transforms: { complete: 15, total: 51 },
     blocking: 0,
     ...overrides,
@@ -125,7 +125,7 @@ describe('ProjectCard — state-aware stats area (PR-2.5)', () => {
     render(
       <ProjectCard
         project={project({
-          projectStats: projectStats({ state: 'awaiting_data', target: { approved: 0, total: 0, unmapped: 0, needsReview: 0 }, source: { decided: 0, total: 0 }, transforms: { complete: 0, total: 0 } }),
+          projectStats: projectStats({ state: 'awaiting_data', target: { approved: 0, total: 0, unmapped: 0, needsReview: 0, usedInMapping: 0, schemaTotal: 0 }, source: { decided: 0, total: 0, usedInMapping: 0 }, transforms: { complete: 0, total: 0 } }),
         })}
         onUpdate={noop}
       />,
@@ -149,7 +149,7 @@ describe('ProjectCard — state-aware stats area (PR-2.5)', () => {
     render(
       <ProjectCard
         project={project({
-          projectStats: projectStats({ state: 'data_ingested', target: { approved: 0, total: 68, unmapped: 68, needsReview: 0 }, source: { decided: 0, total: 70 }, transforms: { complete: 0, total: 0 } }),
+          projectStats: projectStats({ state: 'data_ingested', target: { approved: 0, total: 68, unmapped: 68, needsReview: 0, usedInMapping: 0, schemaTotal: 68 }, source: { decided: 0, total: 70, usedInMapping: 0 }, transforms: { complete: 0, total: 0 } }),
         })}
         onUpdate={noop}
       />,
@@ -178,7 +178,7 @@ describe('ProjectCard — state-aware stats area (PR-2.5)', () => {
     render(
       <ProjectCard
         project={project({
-          projectStats: projectStats({ state: 'data_ingested', target: { approved: 52, total: 68, unmapped: 16, needsReview: 0 }, source: { decided: 57, total: 70 }, transforms: { complete: 15, total: 51 } }),
+          projectStats: projectStats({ state: 'data_ingested', target: { approved: 52, total: 68, unmapped: 16, needsReview: 0, usedInMapping: 52, schemaTotal: 68 }, source: { decided: 57, total: 70, usedInMapping: 57 }, transforms: { complete: 15, total: 51 } }),
         })}
         onUpdate={noop}
       />,
@@ -226,7 +226,7 @@ describe('ProjectCard — state-aware stats area (PR-2.5)', () => {
     render(
       <ProjectCard
         project={project({
-          projectStats: projectStats({ state: 'awaiting_data', target: { approved: 0, total: 0, unmapped: 0, needsReview: 0 }, source: { decided: 0, total: 0 }, transforms: { complete: 0, total: 0 } }),
+          projectStats: projectStats({ state: 'awaiting_data', target: { approved: 0, total: 0, unmapped: 0, needsReview: 0, usedInMapping: 0, schemaTotal: 0 }, source: { decided: 0, total: 0, usedInMapping: 0 }, transforms: { complete: 0, total: 0 } }),
         })}
         onUpdate={noop}
       />,
@@ -276,8 +276,8 @@ describe('ProjectCard — Completed overlay', () => {
           // pre-completion final state.
           projectStats: projectStats({
             state: 'data_ingested',
-            target: { approved: 68, total: 68, unmapped: 0, needsReview: 0 },
-            source: { decided: 70, total: 70 },
+            target: { approved: 68, total: 68, unmapped: 0, needsReview: 0, usedInMapping: 68, schemaTotal: 68 },
+            source: { decided: 70, total: 70, usedInMapping: 70 },
             transforms: { complete: 51, total: 51 },
           }),
         })}
@@ -355,7 +355,7 @@ describe('ProjectCard — PR-7 source axis dropped', () => {
     render(
       <ProjectCard
         project={project({
-          projectStats: projectStats({ source: { decided: 57, total: 70 } }),
+          projectStats: projectStats({ source: { decided: 57, total: 70, usedInMapping: 57 } }),
         })}
         onUpdate={noop}
       />,
