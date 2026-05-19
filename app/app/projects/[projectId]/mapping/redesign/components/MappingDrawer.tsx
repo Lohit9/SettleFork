@@ -741,17 +741,18 @@ export function MappingDrawer({
         availableTargetFields={availableTargetFields}
         availableSourceFields={availableSourceFields}
       />
-      {/* Sub-tab strip — sits between header and body in commit 1.
-          Commit 2 (DrawerHeader rewrite) will move this strip into the
-          new compact header layout so the title row, confidence line,
-          and tabs read as one chrome unit. Reverses Gap-7 ADR — see
-          file-top comment. */}
+      {/* Sub-tab strip — sits between header and body for now (commit 1).
+          The follow-up header redesign PR will fold this strip into the
+          new compact header so title + confidence + tabs read as one
+          chrome unit; until then the existing FROM/TO stack stays.
+          Reverses Gap-7 ADR — see file-top comment. */}
       <DrawerTabStrip activeTab={activeTab} onTabChange={setActiveTab} />
       <DrawerBody
         row={effectiveRow}
         activeTab={activeTab}
         projectId={projectId}
         pathDOutputs={pathDOutputs ?? null}
+        onRemoveMappingClick={() => setConfirmRejectOpen(true)}
       />
       <DrawerFooter
         row={effectiveRow}
@@ -936,6 +937,13 @@ interface DrawerBodyProps {
   pathDOutputs: PathDOutputs | null
   /** feat/mapping-drawer-redesign — which sub-tab content to render. */
   activeTab: DrawerTab
+  /**
+   * feat/mapping-drawer-redesign — handler for the body's "Remove
+   * mapping" link (red text, bottom of Mapping tab). Same trigger as
+   * the footer's reject button: opens the existing RejectConfirmDialog
+   * and on confirm fires the existing `handleRejectConfirm`.
+   */
+  onRemoveMappingClick: () => void
 }
 
 function DrawerBody(props: DrawerBodyProps) {
@@ -950,7 +958,13 @@ function DrawerBody(props: DrawerBodyProps) {
   )
 }
 
-function BodyContent({ row, projectId, pathDOutputs, activeTab }: DrawerBodyProps) {
+function BodyContent({
+  row,
+  projectId,
+  pathDOutputs,
+  activeTab,
+  onRemoveMappingClick,
+}: DrawerBodyProps) {
   switch (row.kind) {
     case 'mapped':
       return (
@@ -959,6 +973,7 @@ function BodyContent({ row, projectId, pathDOutputs, activeTab }: DrawerBodyProp
           projectId={projectId}
           pathDOutputs={pathDOutputs}
           activeTab={activeTab}
+          onRemoveMappingClick={onRemoveMappingClick}
         />
       )
     case 'value_assignment':
@@ -1705,6 +1720,8 @@ interface MappedBodyProps {
   pathDOutputs: PathDOutputs | null
   /** feat/mapping-drawer-redesign — which sub-tab content to render. */
   activeTab: DrawerTab
+  /** feat/mapping-drawer-redesign — Remove mapping link click handler. */
+  onRemoveMappingClick: () => void
 }
 
 function MappedBody({
@@ -1712,29 +1729,249 @@ function MappedBody({
   projectId,
   pathDOutputs,
   activeTab,
+  onRemoveMappingClick,
 }: MappedBodyProps) {
   // feat/mapping-drawer-redesign — sections partition by sub-tab:
   //
-  //   'mapping' tab   → SOURCE FIELDS · TARGET FIELD · ANALYSIS ·
-  //                     DATA QUALITY · DECISIONS
+  //   'mapping' tab   → SOURCE/TARGET two-column grid · WHY THIS MAPPING ·
+  //                     SAMPLE SOURCE VALUES · (enrichment if present) ·
+  //                     Remove mapping link
   //   'transform' tab → TRANSFORMATION (intent, status, SQL preview,
   //                     deep-link to /transform)
   //
-  // Commit 3 will rewrite the Mapping tab's content into the
-  // two-column SOURCE/TARGET + WHY THIS MAPPING + SAMPLE SOURCE VALUES
-  // + Remove mapping link layout per the mockup. Commit 1 just
-  // partitions the existing sections so the rest of the drawer
-  // redesign can land incrementally.
+  // DATA QUALITY + DECISIONS (MappedEnrichmentSections) stay on the
+  // Mapping tab as conditional sections — the mockup doesn't show them
+  // but they only render when Path D produced applicable findings, so
+  // they degrade to nothing on projects without enrichment data
+  // (matching the mockup empirically on the Rootstock POC).
   if (activeTab === 'transform') {
     return <TransformationSection row={row} projectId={projectId} />
   }
   return (
     <>
-      <SourceFieldsSection sources={row.sources} />
-      <TargetFieldSection targetField={row.targetField} />
-      <AnalysisSection row={row} />
+      <MappingSourceTargetGrid
+        sources={row.sources}
+        targetField={row.targetField}
+      />
+      <WhyThisMappingSection aiReasoning={row.aiReasoning} />
+      <SampleSourceValuesSection
+        sampleValues={row.sources[0].sampleValues}
+        sourceFieldName={row.sources[0].sourceField.name}
+      />
       <MappedEnrichmentSections row={row} pathDOutputs={pathDOutputs} />
+      <RemoveMappingLink onClick={onRemoveMappingClick} />
     </>
+  )
+}
+
+// ── feat/mapping-drawer-redesign — new Mapping-tab content blocks ─────────
+//
+// Four reusable section components matching the mockup spec. Each is a
+// thin presentational helper — no external state, no fetching. Data
+// comes in via props from the body kind that mounts them.
+
+/**
+ * Two-column SOURCE / TARGET grid for the Mapping sub-tab. Each column
+ * shows: column label (small-caps muted) · table name (uppercase muted)
+ * · field chip (monospace) · data type (e.g. `VARCHAR(16)`).
+ *
+ * Multi-source TFMs stack each source's block under the SOURCE column,
+ * primary (sources[0]) first. The TARGET column is always a single block.
+ */
+function MappingSourceTargetGrid({
+  sources,
+  targetField,
+}: {
+  sources: readonly MappingSourceRef[]
+  targetField: TargetFieldRef
+}) {
+  return (
+    <section
+      data-testid="drawer-section-mapping-grid"
+      className="mb-6"
+    >
+      <div className="grid grid-cols-2 gap-6">
+        <div data-testid="drawer-mapping-source-col">
+          <div className="mb-2 text-[11px] font-medium uppercase tracking-wide text-slate-500">
+            Source
+          </div>
+          <div className="space-y-3">
+            {sources.map((source) => (
+              <MappingFieldBlock
+                key={source.id}
+                testIdPrefix="drawer-mapping-source"
+                dataMappingSourceId={source.id}
+                tableName={source.sourceTable.name}
+                fieldName={source.sourceField.name}
+                dataType={source.sourceField.dataType}
+              />
+            ))}
+          </div>
+        </div>
+        <div data-testid="drawer-mapping-target-col">
+          <div className="mb-2 text-[11px] font-medium uppercase tracking-wide text-slate-500">
+            Target
+          </div>
+          <MappingFieldBlock
+            testIdPrefix="drawer-mapping-target"
+            tableName={targetField.targetTable.name}
+            fieldName={targetField.name}
+            dataType={targetField.dataType}
+          />
+        </div>
+      </div>
+    </section>
+  )
+}
+
+/**
+ * Per-side block inside the SOURCE/TARGET grid: table name (uppercase
+ * muted) · field chip · data type. The chip uses the same gray monospace
+ * pill aesthetic as the flat view's `FieldNameChip` so the drawer and
+ * grid feel like one visual system.
+ */
+function MappingFieldBlock({
+  testIdPrefix,
+  dataMappingSourceId,
+  tableName,
+  fieldName,
+  dataType,
+}: {
+  testIdPrefix: 'drawer-mapping-source' | 'drawer-mapping-target'
+  dataMappingSourceId?: string
+  tableName: string
+  fieldName: string
+  dataType: string
+}) {
+  return (
+    <div
+      data-testid={`${testIdPrefix}-block`}
+      data-mapping-source-id={dataMappingSourceId}
+      className="space-y-1"
+    >
+      <div
+        data-testid={`${testIdPrefix}-table`}
+        title={tableName}
+        className="truncate text-[10px] font-medium uppercase tracking-wide text-slate-500"
+      >
+        {tableName}
+      </div>
+      <span
+        data-testid={`${testIdPrefix}-field`}
+        title={fieldName}
+        className="inline-block max-w-full truncate rounded bg-slate-100 px-1.5 py-0.5 align-middle font-mono text-sm font-medium text-slate-700"
+      >
+        {fieldName}
+      </span>
+      <div
+        data-testid={`${testIdPrefix}-type`}
+        className="font-mono text-xs text-slate-500"
+      >
+        {dataType}
+      </div>
+    </div>
+  )
+}
+
+/**
+ * WHY THIS MAPPING — full `aiReasoning` text in regular weight. Null
+ * reasoning short-circuits to render nothing (don't render an empty
+ * section label).
+ */
+function WhyThisMappingSection({ aiReasoning }: { aiReasoning: string | null }) {
+  const text = aiReasoning?.trim()
+  if (!text) return null
+  return (
+    <section
+      data-testid="drawer-section-why-this-mapping"
+      className="mb-6"
+    >
+      <h3 className="mb-2 text-[11px] font-medium uppercase tracking-wide text-slate-500">
+        Why this mapping
+      </h3>
+      <p
+        data-testid="drawer-why-this-mapping-text"
+        className="text-sm leading-relaxed text-slate-700"
+      >
+        {text}
+      </p>
+    </section>
+  )
+}
+
+const SAMPLE_SOURCE_VALUES_MAX = 5
+
+/**
+ * SAMPLE SOURCE VALUES — up to 5 rows of sample data from the primary
+ * source's `sampleValues`, each labeled `row N` (1-indexed) on the
+ * right. Empty array short-circuits to render nothing.
+ */
+function SampleSourceValuesSection({
+  sampleValues,
+  sourceFieldName,
+}: {
+  sampleValues: readonly string[]
+  /** Surfaced via `title` on the section heading so multi-source rows
+   *  hint at which source the samples belong to. */
+  sourceFieldName: string
+}) {
+  const rows = sampleValues.slice(0, SAMPLE_SOURCE_VALUES_MAX)
+  if (rows.length === 0) return null
+  return (
+    <section
+      data-testid="drawer-section-sample-source-values"
+      className="mb-6"
+    >
+      <h3
+        title={`Samples from ${sourceFieldName}`}
+        className="mb-2 text-[11px] font-medium uppercase tracking-wide text-slate-500"
+      >
+        Sample source values
+      </h3>
+      <ul
+        data-testid="drawer-sample-source-values-list"
+        className="divide-y divide-slate-100 rounded border border-slate-200"
+      >
+        {rows.map((value, idx) => (
+          <li
+            key={`${idx}-${value}`}
+            data-testid="drawer-sample-source-values-row"
+            className="flex items-center justify-between gap-3 px-3 py-1.5 text-sm"
+          >
+            <span className="min-w-0 flex-1 truncate break-words font-mono text-slate-700">
+              {value}
+            </span>
+            <span className="shrink-0 text-[11px] text-slate-400">
+              row {idx + 1}
+            </span>
+          </li>
+        ))}
+      </ul>
+    </section>
+  )
+}
+
+/**
+ * Remove mapping link — bottom of the Mapping tab, red text, wires to
+ * the same reject flow as the footer button (opens
+ * `RejectConfirmDialog`, on confirm fires `handleRejectConfirm` →
+ * `rejectFieldMapping`).
+ */
+function RemoveMappingLink({ onClick }: { onClick: () => void }) {
+  return (
+    <div className="mt-2 mb-2">
+      <button
+        type="button"
+        data-testid="drawer-remove-mapping-link"
+        onClick={onClick}
+        className={cn(
+          'text-sm text-red-600 underline-offset-2 hover:underline',
+          'focus:outline-none focus-visible:ring-1 focus-visible:ring-red-500',
+        )}
+      >
+        Remove mapping
+      </button>
+    </div>
   )
 }
 
