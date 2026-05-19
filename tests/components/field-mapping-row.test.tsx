@@ -732,7 +732,7 @@ describe('FieldMappingRow — status dot', () => {
     render(<FieldMappingRow row={mapped({ status: 'needs_review' })} />)
     expect(screen.queryByText('Needs Review')).toBeNull()
     const dot = screen.getByLabelText('status: Needs Review')
-    expect(dot.className).toContain('bg-amber-400')
+    expect(dot.className).toContain('bg-slate-400')
   })
 
   it('renders the "Rejected" dot as a HOLLOW circle (PR α₀ — status-driven hollow)', () => {
@@ -779,17 +779,17 @@ describe('FieldMappingRow — status dot', () => {
     ).toBe('hollow')
   })
 
-  it('unmapped + needs_review renders a FILLED amber dot (PR α₀ — kind no longer drives hollow)', () => {
+  it('unmapped + needs_review renders a FILLED slate dot (PR α₀ — kind no longer drives hollow)', () => {
     // PR α₀ (2026-05-09): the hollow branch flipped from kind-based to
     // status-based. An unmapped row that carries a coverage row with
     // status='needs_review' (the post-PR-γ default for orphan
     // target_only fields) now renders identically to a mapped+
-    // needs_review row — filled amber. The state-machine unification
+    // needs_review row — filled slate. The state-machine unification
     // is the point: visually, "this row needs review" reads
     // identically regardless of whether a TFM backs it.
     render(<FieldMappingRow row={unmapped({ status: 'needs_review' })} />)
     const dot = screen.getByLabelText('status: Needs Review')
-    expect(dot.className).toContain('bg-amber-400')
+    expect(dot.className).toContain('bg-slate-400')
     expect(dot.className).not.toContain('bg-transparent')
     expect(dot.getAttribute('data-status-dot-style')).toBe('filled')
   })

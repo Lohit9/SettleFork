@@ -457,6 +457,11 @@ export async function approveFieldMapping(
 export async function rejectFieldMapping(
   rowId: string,
 ): Promise<RejectMappingResult> {
+  const supabase = await createClient()
+  const {
+    data: { user },
+  } = await supabase.auth.getUser()
+
   // PR α₀ — no-source reject writes target_field_coverage.status='rejected'
   // independent of any TFM. Mirrors the approve branch in
   // `approveFieldMapping`; the synthetic id format is `unmapped::<uuid>`.
@@ -615,7 +620,7 @@ export async function rejectFieldMapping(
   // Preserve row-level metadata on the resulting no-source row. Reject
   // deletes the mapped TFM, but the drawer still needs confidence,
   // explanation, and transformation guidance after refresh.
-  const { error: preserveMetadataError } = await supabaseAdmin
+  const { data: preservedTfm, error: preserveMetadataError } = await supabaseAdmin
     .from('target_field_mappings')
     .upsert(
       {
@@ -633,11 +638,24 @@ export async function rejectFieldMapping(
       },
       { onConflict: 'project_id,target_field_id' },
     )
+    .select('id')
+    .single<{ id: string }>()
   if (preserveMetadataError) {
     console.warn(
       '[rejectFieldMapping] rejected-row metadata preservation failed:',
       preserveMetadataError.message,
     )
+  } else if (preservedTfm) {
+    void logAIEdit({
+      projectId: tfmLookup.project_id,
+      actorId: user?.id ?? tfmLookup.project_id,
+      entityType: 'target_field_mapping',
+      entityId: preservedTfm.id,
+      fieldPath: 'status',
+      oldValue: 'mapped',
+      newValue: 'rejected',
+      editKind: 'human_modified',
+    })
   }
 
   // Log AFTER successful delete so a failed delete doesn't leave a

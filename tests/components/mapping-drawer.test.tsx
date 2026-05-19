@@ -2926,14 +2926,17 @@ describe('MappingDrawer Gap 9 — disabled-state matrix (drawer redesign)', () =
     ).not.toBeDisabled()
   })
 
-  it('coverage-approved no-source row: footer matches mapped-row approval semantics', () => {
+  it('coverage-approved no-source row: footer renders only the Un-approve control', () => {
     render(
       <MappingDrawer row={targetAck()} isOpen={true} onClose={() => {}} />,
     )
     expect(
       screen.queryByTestId('mapping-drawer-approve-button'),
     ).toBeNull()
-    expect(screen.getByTestId('mapping-drawer-reject-button')).toBeInTheDocument()
+    expect(screen.queryByTestId('mapping-drawer-reject-button')).toBeNull()
+    expect(
+      screen.getByTestId('mapping-drawer-unapprove-button'),
+    ).toBeInTheDocument()
   })
 
   it('unmapped row + status=needs_review: footer renders approve + reject', () => {
@@ -2967,7 +2970,7 @@ describe('MappingDrawer Gap 9 — disabled-state matrix (drawer redesign)', () =
   // inside the form-driven branch and are unchanged — exercised by the
   // form tests below.
 
-  it('unmapped + status=approved: footer matches mapped-row approval semantics', () => {
+  it('unmapped + status=approved: footer renders only the Un-approve control', () => {
     render(
       <MappingDrawer
         row={unmapped({ id: 'unmapped::tf-cov-1', status: 'approved' })}
@@ -2976,7 +2979,10 @@ describe('MappingDrawer Gap 9 — disabled-state matrix (drawer redesign)', () =
       />,
     )
     expect(screen.queryByTestId('mapping-drawer-approve-button')).toBeNull()
-    expect(screen.getByTestId('mapping-drawer-reject-button')).toBeInTheDocument()
+    expect(screen.queryByTestId('mapping-drawer-reject-button')).toBeNull()
+    expect(
+      screen.getByTestId('mapping-drawer-unapprove-button'),
+    ).toBeInTheDocument()
     expect(
       screen.queryByTestId('mapping-drawer-suggest-with-ai-button'),
     ).toBeNull()

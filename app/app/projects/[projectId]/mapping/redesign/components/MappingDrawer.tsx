@@ -2217,15 +2217,107 @@ function DrawerFooter({
           <span className="leading-snug">{errorMessage}</span>
         </div>
       ) : null}
+      {row.kind === 'unmapped' ? (
+        <UnmappedFooterButtons
+          status={row.status}
+          isApprovePending={isApprovePending}
+          isRejecting={isRejecting}
+          optimisticallyApproved={optimisticallyApproved}
+          onApprove={onApprove}
+          onRejectClick={onRejectClick}
+          isUnapproving={isUnapproving}
+          onUnapproveClick={onUnapproveClick}
+        />
+      ) : (
+        <ApproveRejectButtons
+          status={row.status}
+          isApprovePending={isApprovePending}
+          isRejecting={isRejecting}
+          optimisticallyApproved={optimisticallyApproved}
+          onApprove={onApprove}
+          onRejectClick={onRejectClick}
+        />
+      )}
+    </footer>
+  )
+}
+
+interface UnmappedFooterButtonsProps {
+  status: 'needs_review' | 'approved' | 'rejected' | 'unmapped'
+  isApprovePending: boolean
+  isRejecting: boolean
+  optimisticallyApproved: boolean
+  onApprove: () => void
+  onRejectClick: () => void
+  isUnapproving: boolean
+  onUnapproveClick: () => void
+}
+
+function UnmappedFooterButtons({
+  status,
+  isApprovePending,
+  isRejecting,
+  optimisticallyApproved,
+  onApprove,
+  onRejectClick,
+  isUnapproving,
+  onUnapproveClick,
+}: UnmappedFooterButtonsProps) {
+  if (status === 'approved') {
+    return (
+      <div className="flex items-center justify-end gap-2">
+        <button
+          type="button"
+          data-testid="mapping-drawer-unapprove-button"
+          aria-label="Un-approve mapping"
+          onClick={onUnapproveClick}
+          disabled={isUnapproving}
+          className={cn(
+            'inline-flex h-9 items-center justify-center gap-1.5 rounded-md border px-3 text-sm font-medium transition-colors',
+            'border-blue-200 bg-white text-blue-700 hover:bg-blue-50',
+            'focus:outline-none focus:ring-2 focus:ring-blue-500/30',
+            'disabled:cursor-not-allowed disabled:border-slate-200 disabled:bg-slate-50 disabled:text-slate-400 disabled:hover:bg-slate-50',
+          )}
+        >
+          {isUnapproving ? (
+            <>
+              <Loader2
+                aria-hidden="true"
+                className="h-3.5 w-3.5 animate-spin"
+                data-testid="mapping-drawer-unapprove-spinner"
+              />
+              <span>Un-approving…</span>
+            </>
+          ) : (
+            'Un-approve'
+          )}
+        </button>
+      </div>
+    )
+  }
+
+  if (status === 'rejected') {
+    return (
       <ApproveRejectButtons
-        status={row.status}
+        status={status}
         isApprovePending={isApprovePending}
         isRejecting={isRejecting}
         optimisticallyApproved={optimisticallyApproved}
         onApprove={onApprove}
         onRejectClick={onRejectClick}
       />
-    </footer>
+    )
+  }
+
+  return (
+    <ApproveRejectButtons
+      status={status}
+      isApprovePending={isApprovePending}
+      isRejecting={isRejecting}
+      optimisticallyApproved={optimisticallyApproved}
+      onApprove={onApprove}
+      onRejectClick={onRejectClick}
+    />
   )
 }
 
