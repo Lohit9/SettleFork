@@ -428,7 +428,7 @@ describe('MappingDrawer — PR 1 header (FROM/TO stack)', () => {
     ).toBeInTheDocument()
     const word = within(badge).getByTestId('mapping-drawer-header-status-word')
     expect(word.textContent).toBe('Needs review')
-    expect(word.className).toContain('text-amber-700')
+    expect(word.className).toContain('text-slate-700')
     const confidence = within(badge).getByTestId(
       'mapping-drawer-header-confidence',
     )
@@ -451,7 +451,7 @@ describe('MappingDrawer — PR 1 header (FROM/TO stack)', () => {
         mapped({ status: 'needs_review' }),
         'needs_review',
         'Needs review',
-        'text-amber-700',
+        'text-slate-700',
       ] as const,
       [mapped({ status: 'rejected' }), 'rejected', 'Rejected', 'text-red-700'] as const,
       [targetAck(), 'approved', 'Approved', 'text-green-700'] as const,
@@ -1181,7 +1181,8 @@ describe('MappingDrawer — PR 2 TASK 1.6 rejected-state banner', () => {
 
   it('banner renders ABOVE the TARGET FIELD section in DOM order (PR 3b)', () => {
     // PR 3b: UnmappedBody body order is
-    //   [rejected banner] → TARGET FIELD → COVERAGE → DECISIONS
+    //   [rejected banner] → TARGET FIELD → [TRANSFORMATION] →
+    //   [EXPLANATION] → DECISIONS
     // The legacy SOURCE section (which the pre-PR-3b test referenced)
     // is retired. Banner-above-target-field is the new DOM-order
     // invariant.
@@ -2166,7 +2167,7 @@ describe('MappingDrawer — Value Assignment body', () => {
     expect(sections.map((h) => h.textContent)).toEqual([
       'Value expression',
       'Target field',
-      'Analysis',
+      'Explanation',
     ])
   })
 })
@@ -2671,16 +2672,9 @@ describe('MappingDrawer — PR 3b body section ordering', () => {
     )
   })
 
-  it('unmapped order: TARGET FIELD → COVERAGE', () => {
+  it('unmapped does not render the retired COVERAGE section', () => {
     render(<MappingDrawer row={unmapped()} isOpen={true} onClose={() => {}} />)
-    const body = screen.getByTestId('mapping-drawer-body')
-    const sectionTestIds = Array.from(
-      body.querySelectorAll('[data-testid^="drawer-section-"]'),
-    ).map((el) => el.getAttribute('data-testid'))
-    const idx = (id: string) => sectionTestIds.indexOf(id)
-    expect(idx('drawer-section-target-field')).toBeLessThan(
-      idx('drawer-section-coverage'),
-    )
+    expect(screen.queryByTestId('drawer-section-coverage')).toBeNull()
   })
 })
 
@@ -2932,32 +2926,27 @@ describe('MappingDrawer Gap 9 — disabled-state matrix (drawer redesign)', () =
     ).not.toBeDisabled()
   })
 
-  it('coverage-approved no-source row: footer is just [Un-approve] (INF-57 cleanup)', () => {
-    // Pre-INF-57: target_acknowledged rows rendered AcknowledgedFooterButtons
-    // with a sole [Un-acknowledge] button. INF-57 cleanup collapsed the kind
-    // into kind='unmapped' with status='approved' — the new dispatch in
-    // UnmappedFooterButtons (status='approved' branch) renders the renamed
-    // [Un-approve] button alone, calling resetMappingStatus.
+  it('coverage-approved no-source row: footer renders only the Un-approve control', () => {
     render(
       <MappingDrawer row={targetAck()} isOpen={true} onClose={() => {}} />,
     )
     expect(
       screen.queryByTestId('mapping-drawer-approve-button'),
     ).toBeNull()
-    expect(
-      screen.queryByTestId('mapping-drawer-reject-button'),
-    ).toBeNull()
+    expect(screen.queryByTestId('mapping-drawer-reject-button')).toBeNull()
     expect(
       screen.getByTestId('mapping-drawer-unapprove-button'),
     ).toBeInTheDocument()
   })
 
-  it('unmapped row + status=needs_review: footer renders empty (PR 3b — Create mapping / Suggest retired with form)', () => {
-    // PR 3b commit 3: the footer's `[Create mapping]` / `[Suggest
-    // with AI]` buttons retired with `CreateMappingForm`. Header
-    // source ✏ is the new entry point. The footer still mounts as a
-    // sticky container but is empty for needs_review unmapped rows.
-    render(<MappingDrawer row={unmapped()} isOpen={true} onClose={() => {}} />)
+  it('unmapped row + status=needs_review: footer renders approve + reject', () => {
+    render(
+      <MappingDrawer
+        row={unmapped({ id: 'unmapped::tf-needs-review-1', status: 'needs_review' })}
+        isOpen={true}
+        onClose={() => {}}
+      />,
+    )
     expect(screen.getByTestId('mapping-drawer-footer')).toBeInTheDocument()
     expect(
       screen.queryByTestId('mapping-drawer-create-mapping-button'),
@@ -2965,10 +2954,8 @@ describe('MappingDrawer Gap 9 — disabled-state matrix (drawer redesign)', () =
     expect(
       screen.queryByTestId('mapping-drawer-suggest-with-ai-button'),
     ).toBeNull()
-    expect(
-      screen.queryByTestId('mapping-drawer-approve-button'),
-    ).toBeNull()
-    expect(screen.queryByTestId('mapping-drawer-reject-button')).toBeNull()
+    expect(screen.getByTestId('mapping-drawer-approve-button')).toBeInTheDocument()
+    expect(screen.getByTestId('mapping-drawer-reject-button')).toBeInTheDocument()
   })
 
   // ── INF-57 cleanup — status-driven UnmappedFooterButtons (Option B) ────────
@@ -2983,10 +2970,7 @@ describe('MappingDrawer Gap 9 — disabled-state matrix (drawer redesign)', () =
   // inside the form-driven branch and are unchanged — exercised by the
   // form tests below.
 
-  it('unmapped + status=approved: footer renders ONLY [Un-approve] (Suggest/Create suppressed)', () => {
-    // The status='approved' branch surfaces the un-approve verb alone —
-    // Suggest with AI / Create mapping are gated to the form-entry path
-    // (status='needs_review' / 'unmapped').
+  it('unmapped + status=approved: footer renders only the Un-approve control', () => {
     render(
       <MappingDrawer
         row={unmapped({ id: 'unmapped::tf-cov-1', status: 'approved' })}
@@ -2994,6 +2978,8 @@ describe('MappingDrawer Gap 9 — disabled-state matrix (drawer redesign)', () =
         onClose={() => {}}
       />,
     )
+    expect(screen.queryByTestId('mapping-drawer-approve-button')).toBeNull()
+    expect(screen.queryByTestId('mapping-drawer-reject-button')).toBeNull()
     expect(
       screen.getByTestId('mapping-drawer-unapprove-button'),
     ).toBeInTheDocument()
@@ -3025,17 +3011,10 @@ describe('MappingDrawer Gap 9 — disabled-state matrix (drawer redesign)', () =
     expect(
       screen.queryByTestId('mapping-drawer-create-mapping-button'),
     ).toBeNull()
-    expect(
-      screen.queryByTestId('mapping-drawer-unapprove-button'),
-    ).toBeNull()
+    expect(screen.getByTestId('mapping-drawer-reject-button')).toBeInTheDocument()
   })
 
-  it('unmapped + status=needs_review: footer is empty (PR 3b — form-entry path retired)', () => {
-    // PR 3b commit 3: the needs_review unmapped branch no longer
-    // renders [Suggest with AI] / [Create mapping]. Header source
-    // ✏ → InlineSourcePicker is the new entry point. The footer
-    // dispatches only [Un-approve] (approved) / [Approve] (rejected);
-    // needs_review falls through to no footer affordance.
+  it('unmapped + status=needs_review: footer exposes approve + reject', () => {
     render(
       <MappingDrawer
         row={unmapped({ id: 'unmapped::tf-cov-3', status: 'needs_review' })}
@@ -3049,12 +3028,8 @@ describe('MappingDrawer Gap 9 — disabled-state matrix (drawer redesign)', () =
     expect(
       screen.queryByTestId('mapping-drawer-create-mapping-button'),
     ).toBeNull()
-    expect(
-      screen.queryByTestId('mapping-drawer-unapprove-button'),
-    ).toBeNull()
-    expect(
-      screen.queryByTestId('mapping-drawer-approve-button'),
-    ).toBeNull()
+    expect(screen.getByTestId('mapping-drawer-approve-button')).toBeInTheDocument()
+    expect(screen.getByTestId('mapping-drawer-reject-button')).toBeInTheDocument()
   })
 })
 
@@ -3389,4 +3364,3 @@ const SOURCE_FIELDS_FIXTURE: SourceFieldWithState[] = [
   makeSourceField({ id: 'sf-acc-1', name: 'ACCT_NO', ordinalPosition: 1 }),
   makeSourceField({ id: 'sf-acc-2', name: 'ACCT_TYPE', ordinalPosition: 2 }),
 ]
-

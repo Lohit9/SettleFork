@@ -54,6 +54,7 @@ import { inferFkCandidates } from '@/lib/utils/fk-inference'
 // call time, not at module-load time.
 import { runSingleAgentMappingLoop } from '@/lib/ai/single-agent-mapping'
 import { runMultiAgentMappingPipeline } from '@/lib/ai/multi-agent-orchestrator'
+import { getStaticSuggestionForTarget } from '@/lib/mappings/static-provider'
 
 // ─── Raw row shapes fetched from Supabase ────────────────────────────
 //
@@ -107,6 +108,8 @@ interface RawTfmRow {
   acknowledgment_reason: string | null
   combination_type: 'single' | 'concat_space' | 'concat_comma' | 'custom_sql' | null | string
   combination_sql: string | null
+  transformation_intent?: string | null
+  needs_transformation?: boolean | null
 }
 
 interface RawMappingSourceRow {
@@ -163,6 +166,7 @@ interface RawCoverageRow {
   id: string
   target_field_id: string
   coverage_status: 'covered' | 'partial' | 'gap' | 'optional' | 'out_of_scope' | string
+  ai_reasoning?: string | null
   status: 'needs_review' | 'approved' | 'rejected' | string
   status_set_by: 'ai_auto' | 'user' | 'system_default' | string
   /**
@@ -509,6 +513,7 @@ export function buildTargetFieldRef(
 function buildUnmappedRow(
   targetField: TargetFieldRef,
   coverageRow: RawCoverageRow | null,
+  tfm?: RawTfmRow | null,
 ): UnmappedRow {
   // PR γ resolution priority for unmapped rows:
   //   coverage row exists  → status = coverage.status; statusSetBy =
@@ -517,7 +522,11 @@ function buildUnmappedRow(
   //   no coverage (orphan) → status = 'needs_review' (synthesized);
   //                          statusSetBy = 'system_default';
   //                          coverageStatus = null
-  const status = coverageRow ? coerceStatus(coverageRow.status) : 'needs_review'
+  const status = coverageRow
+    ? coerceStatus(coverageRow.status)
+    : tfm
+      ? coerceStatus(tfm.status)
+      : 'needs_review'
   const statusSetBy: 'ai_auto' | 'user' | 'system_default' | null = coverageRow
     ? (coerceStatusSetBy(coverageRow.status_set_by) ?? 'system_default')
     : 'system_default'
@@ -532,20 +541,24 @@ function buildUnmappedRow(
   // ConfidenceCell renders the value with no special-casing — its
   // formatter is scale-tolerant per lib/utils/confidence-format.ts.
   const confidence: number | null =
-    coverageRow && typeof coverageRow.confidence === 'number'
-      ? coverageRow.confidence
-      : null
+    tfm && typeof tfm.confidence === 'number'
+      ? tfm.confidence
+      : coverageRow && typeof coverageRow.confidence === 'number'
+        ? coverageRow.confidence
+        : null
 
   return {
     kind: 'unmapped',
     id: `unmapped::${targetField.id}`,
     targetField,
     confidence,
+    aiReasoning: tfm?.ai_reasoning ?? coverageRow?.ai_reasoning ?? null,
     status,
     hasTransformation: false,
     transformationStatus: null,
     transformationDescription: null,
     transformationSqlPreview: null,
+    transformationIntent: tfm?.transformation_intent ?? null,
     mapping_content: 'no-source',
     coverageStatus,
     statusSetBy,
@@ -573,6 +586,7 @@ function buildValueAssignmentRow(
     transformationSqlPreview: buildTransformationSqlPreview(
       transformation?.generated_sql ?? null,
     ),
+    transformationIntent: tfm.transformation_intent ?? null,
     combinationType: 'custom_sql',
     combinationSql: tfm.combination_sql,
     aiReasoning: tfm.ai_reasoning,
@@ -635,6 +649,7 @@ function buildMappedRow(
     transformationSqlPreview: buildTransformationSqlPreview(
       transformation?.generated_sql ?? null,
     ),
+    transformationIntent: tfm.transformation_intent ?? null,
     sources,
     combinationType: coerceCombinationType(tfm.combination_type),
     // `combinationSql` is only meaningful for `custom_sql` multi-source
@@ -1283,7 +1298,7 @@ export function assembleMappingsForRedesign(
     //     'value_assignment'
     //   otherwise (has ≥ 1 source) → 'mapped'
     if (tfm.is_acknowledged) {
-      rows.push(buildUnmappedRow(targetFieldRef, coverageRow))
+      rows.push(buildUnmappedRow(targetFieldRef, coverageRow, tfm))
       continue
     }
 
@@ -1300,7 +1315,7 @@ export function assembleMappingsForRedesign(
     // a MappedRow with an empty `sources` array that would violate
     // the Rules 1-4 selector.
     if (tfmSources.length === 0) {
-      rows.push(buildUnmappedRow(targetFieldRef, coverageRow))
+      rows.push(buildUnmappedRow(targetFieldRef, coverageRow, tfm))
       continue
     }
 
@@ -1421,7 +1436,7 @@ export async function getMappingsForRedesignCore(
       .eq('project_id', projectId),
     supabase
       .from('target_field_mappings')
-      .select('id, target_field_id, confidence, status, ai_reasoning, is_acknowledged, acknowledgment_reason, combination_type, combination_sql')
+      .select('id, target_field_id, confidence, status, ai_reasoning, is_acknowledged, acknowledgment_reason, combination_type, combination_sql, transformation_intent, needs_transformation')
       .eq('project_id', projectId),
     supabase
       .from('source_field_acknowledgments')
@@ -1436,7 +1451,7 @@ export async function getMappingsForRedesignCore(
     // coverage, no TFM).
     supabase
       .from('target_field_coverage')
-      .select('id, target_field_id, coverage_status, status, status_set_by, confidence')
+      .select('id, target_field_id, coverage_status, ai_reasoning, status, status_set_by, confidence')
       .eq('project_id', projectId),
   ])
 
@@ -2218,6 +2233,26 @@ export async function runMappingSuggestion(
     }
   }
   const targetTableName = targetTablesNode?.name ?? '?'
+
+  const staticSuggestion = await getStaticSuggestionForTarget({
+    supabase,
+    projectId,
+    targetFieldId,
+    rationaleMaxChars: RATIONALE_MAX_CHARS,
+  })
+  if (staticSuggestion.kind === 'suggestion') {
+    return {
+      success: true,
+      suggestion: staticSuggestion.suggestion,
+    }
+  }
+  if (staticSuggestion.kind === 'missing') {
+    return {
+      success: false,
+      error: staticSuggestion.error,
+      errorCode: 'NOT_FOUND',
+    }
+  }
 
   // ── Build AI context (project-wide source schema) ────────────────────────
   // Reuse `buildAIContext` so we get sample values + value distributions +

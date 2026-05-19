@@ -15,10 +15,25 @@ import {
   flattenRowsForListView,
   type FlatRow,
 } from '@/lib/utils/flatten-rows-for-list-view'
-import { FlatRowActions } from './FlatRowActions'
+import { summarizeRationale } from '@/lib/utils/rationale-summary'
+import { Check, Edit3, X } from 'lucide-react'
+import { ActionIconButton } from './FlatRowActions'
 import { InlineSourcePicker } from './InlineSourcePicker'
 import { TargetFieldCellPicker } from './TargetFieldCellPicker'
 import type { MappingListMutations } from '../hooks/useMappingListMutations'
+
+// Per-row rationale source. The TFM-level prose is the headline for the
+// new RATIONALE column; the drawer continues to render the full text.
+// Unmapped-target rows read `UnmappedRow.aiReasoning` (added to the wire
+// shape in aa196e4 — sourced from `target_field_coverage.ai_reasoning` or
+// the acknowledged TFM's `ai_reasoning`). Null falls through to em-dash.
+function deriveRationaleSource(row: FlatRow): string | null {
+  if (row.kind === 'mapped') return row.parentRow.aiReasoning
+  if (row.kind === 'value-assignment') return row.parentRow.aiReasoning
+  if (row.kind === 'unmapped-target') return row.parentRow.aiReasoning ?? null
+  if (row.kind === 'unmapped-source') return row.acknowledgmentReason
+  return null
+}
 
 // feat/mapping-list-toggle-and-columns refinement pass — confidence
 // color simplified to a binary scheme: ≥50% renders in neutral slate
@@ -82,9 +97,9 @@ function deriveDisplayStatus(row: FlatRow): DisplayStatus {
 
 // Linear-style polish (feat/mapping-list-toggle-and-columns refinement
 // pass): 8px fill + a 2px ring at 25% opacity for the hued states. The
-// ring reads as a soft halo around the dot. Gray states (rejected,
-// unmapped) intentionally render without a ring — neutral colours
-// don't need the additional emphasis.
+// ring reads as a soft halo around the dot. Neutral unmapped renders
+// without a ring; rejected now uses a distinct red fill so it reads as
+// a third decision state rather than another neutral bucket.
 const STATUS_DOT_CONFIG: Record<
   DisplayStatus,
   { label: string; fill: string; ring: string | null }
@@ -95,14 +110,17 @@ const STATUS_DOT_CONFIG: Record<
     ring: 'ring-2 ring-emerald-500/25',
   },
   needs_review: {
+    // Same token as the header "Needs Review N" indicator in
+    // MappingSummaryStrip.tsx — keep aligned so the row dot and the
+    // header dot read as the same status signal. (Refinement #2 lock.)
     label: 'Needs review',
-    fill: 'bg-amber-400',
-    ring: 'ring-2 ring-amber-400/25',
+    fill: 'bg-slate-400',
+    ring: 'ring-2 ring-slate-400/25',
   },
   rejected: {
     label: 'Rejected',
-    fill: 'bg-gray-400',
-    ring: null,
+    fill: 'bg-red-500',
+    ring: 'ring-2 ring-red-500/25',
   },
   unmapped: {
     label: 'Unmapped',
@@ -262,70 +280,58 @@ export interface MappingListViewProps {
 // they collect at the bottom of the table (bucket=1) and tiebreak
 // by source columns.
 
+// feat/mapping-table-refinements — source-first three-bucket ordering:
+//
+//   bucket 0: mapped TFMs                  — sort by source table → source field
+//   bucket 1: unmapped-source rows         — sort by source table → source field
+//   bucket 2: value-assignment + unmapped-target (target-only, no source field)
+//                                          — sort by target table → target field
+//
+// Buckets 0 and 1 share the source-anchored sort so the flat view reads
+// top-to-bottom as one continuous run grouped by source table — mapped
+// rows first, then their unmapped source-side neighbours below. Bucket
+// 2 collects the rows that lack a source field at the bottom, sorted by
+// target columns. Value-assignment rows go in bucket 2 alongside
+// unmapped-target since both share the "target-only" structural shape.
 interface GroupSortKeys {
-  /**
-   * 0 = group has a target (mapped, value-assignment,
-   * unmapped-target); 1 = group is source-only (unmapped-source).
-   * Primary discriminator so source-only rows sort to the bottom
-   * of the table — they have no target to anchor to in the
-   * target-first sort below.
-   */
-  bucket: 0 | 1
-  /** Target-side keys drive the primary clustering. */
-  targetTable: string
-  targetField: string
-  /**
-   * Within a target group, 0 = real source attribution
-   * (mapped), 1 = constant default / unmapped-target.
-   * Sub-discriminator so all mapped rows for a target appear
-   * before the constant-defaults for that same target.
-   */
-  hasSource: 0 | 1
-  /** Source-side keys tiebreak within a target group. */
+  bucket: 0 | 1 | 2
+  /** Source-side keys — used in buckets 0 and 1. Empty string in bucket 2. */
   sourceTable: string
   sourceField: string
+  /** Target-side keys — used in bucket 2. Empty string in buckets 0 and 1. */
+  targetTable: string
+  targetField: string
 }
 
 function buildSortKeys(row: FlatRow): GroupSortKeys {
   switch (row.kind) {
     case 'mapped':
-      // Each mapped flat row represents one source attribution.
-      // Target-first sort below clusters all sources for a given
-      // target field as adjacent rows. Source columns tiebreak
-      // within the target group.
+      // Multi-source rows sort by their PRIMARY source (sources[0],
+      // ordinal=0 by flatten contract) — same source the renderer
+      // shows inline on the main row and the user scans first.
       return {
         bucket: 0,
-        targetTable: row.targetField.targetTable.name,
-        targetField: row.targetField.name,
-        hasSource: 0,
-        sourceTable: row.source.sourceTable.name,
-        sourceField: row.source.sourceField.name,
+        sourceTable: row.sources[0].sourceTable.name,
+        sourceField: row.sources[0].sourceField.name,
+        targetTable: '',
+        targetField: '',
+      }
+    case 'unmapped-source':
+      return {
+        bucket: 1,
+        sourceTable: row.sourceField.sourceTable.name,
+        sourceField: row.sourceField.name,
+        targetTable: '',
+        targetField: '',
       }
     case 'value-assignment':
     case 'unmapped-target':
-      // Same target group as mapped rows for that field, but with
-      // hasSource=1 so they sort to the BOTTOM of the group (real
-      // mapped sources first, constant-defaults last within the
-      // target's slot).
       return {
-        bucket: 0,
-        targetTable: row.targetField.targetTable.name,
-        targetField: row.targetField.name,
-        hasSource: 1,
+        bucket: 2,
         sourceTable: '',
         sourceField: '',
-      }
-    case 'unmapped-source':
-      // Source-only rows have no target to cluster under; they
-      // collect at the bottom of the table (bucket=1) and tiebreak
-      // among themselves by source columns.
-      return {
-        bucket: 1,
-        targetTable: '',
-        targetField: '',
-        hasSource: 0,
-        sourceTable: row.sourceField.sourceTable.name,
-        sourceField: row.sourceField.name,
+        targetTable: row.targetField.targetTable.name,
+        targetField: row.targetField.name,
       }
   }
 }
@@ -336,11 +342,12 @@ function compareStringsAsc(a: string, b: string): number {
 
 function compareSortKeys(a: GroupSortKeys, b: GroupSortKeys): number {
   if (a.bucket !== b.bucket) return a.bucket - b.bucket
-  const tt = compareStringsAsc(a.targetTable, b.targetTable)
-  if (tt !== 0) return tt
-  const tf = compareStringsAsc(a.targetField, b.targetField)
-  if (tf !== 0) return tf
-  if (a.hasSource !== b.hasSource) return a.hasSource - b.hasSource
+  if (a.bucket === 2) {
+    const tt = compareStringsAsc(a.targetTable, b.targetTable)
+    if (tt !== 0) return tt
+    return compareStringsAsc(a.targetField, b.targetField)
+  }
+  // Buckets 0 and 1 — source-anchored.
   const st = compareStringsAsc(a.sourceTable, b.sourceTable)
   if (st !== 0) return st
   return compareStringsAsc(a.sourceField, b.sourceField)
@@ -348,10 +355,10 @@ function compareSortKeys(a: GroupSortKeys, b: GroupSortKeys): number {
 
 // ─── Fixed sort ──────────────────────────────────────────────────────────────
 //
-// Every flat row is now its own anchor (Option C parent/child split
-// was dropped at the second visual polish pass — multi-source TFMs
-// render as a single row with a `N×` badge). So we no longer need a
-// group abstraction; just decorate each row with sort keys and sort.
+// One flat row per TFM (feat/mapping-table-redesign). Decorate each
+// row with sort keys and sort. No grouping pass — multi-source siblings
+// no longer exist as separate sortable rows; they live as sub-rows
+// inside their parent's expand/collapse pill.
 
 interface SortableRow {
   row: FlatRow
@@ -370,41 +377,6 @@ function sortFlatRows(rows: readonly FlatRow[]): FlatRow[] {
   const decorated = buildSortableRows(rows)
   decorated.sort((a, b) => compareSortKeys(a.keys, b.keys))
   return decorated.map((d) => d.row)
-}
-
-// ─── Bracket position for multi-source groups ────────────────────────────────
-//
-// With the target-first cluster sort, multi-source siblings are
-// guaranteed adjacent in the output. The Source Field cell paints a
-// bracket-style accent: ┌ on the first row, │ on middle rows, └ on
-// the last row — so stacked groups remain visually separated by the
-// horizontal caps even when no row sits between them.
-//
-// `groupPosition` is computed in the parent by inspecting each row's
-// neighbours in the sorted output. Single-source mapped rows return
-// 'none' (no bracket renders). 'solo' is a defensive case — a
-// multi-source TFM where only this single contributor row survives
-// a filter — and renders as both first AND last caps.
-
-export type GroupPosition = 'none' | 'first' | 'middle' | 'last' | 'solo'
-
-function computeGroupPositions(rows: readonly FlatRow[]): GroupPosition[] {
-  const positions: GroupPosition[] = new Array(rows.length).fill('none')
-  for (let i = 0; i < rows.length; i++) {
-    const row = rows[i]
-    if (row.kind !== 'mapped' || row.sourceCount <= 1) continue
-    const prev = rows[i - 1]
-    const next = rows[i + 1]
-    const sameAsPrev =
-      prev?.kind === 'mapped' && prev.groupId === row.groupId
-    const sameAsNext =
-      next?.kind === 'mapped' && next.groupId === row.groupId
-    if (sameAsPrev && sameAsNext) positions[i] = 'middle'
-    else if (sameAsNext) positions[i] = 'first'
-    else if (sameAsPrev) positions[i] = 'last'
-    else positions[i] = 'solo'
-  }
-  return positions
 }
 
 // ─── Picker state ─────────────────────────────────────────────────────────────
@@ -439,6 +411,22 @@ export function MappingListView({
 }: MappingListViewProps) {
   const [openPicker, setOpenPicker] = useState<OpenPickerState>(null)
 
+  // feat/mapping-table-redesign — multi-source expand/collapse state.
+  // Set of TFM ids whose "+N source" pill is currently expanded; sub-
+  // rows render only for ids in this set. Local component state — no
+  // URL persistence, no server write. Reset on unmount.
+  const [expandedRowIds, setExpandedRowIds] = useState<ReadonlySet<string>>(
+    () => new Set(),
+  )
+  const toggleExpanded = useCallback((rowId: string) => {
+    setExpandedRowIds((prev) => {
+      const next = new Set(prev)
+      if (next.has(rowId)) next.delete(rowId)
+      else next.add(rowId)
+      return next
+    })
+  }, [])
+
   const flatRows = useMemo(
     () => flattenRowsForListView(filteredResult),
     [filteredResult],
@@ -447,15 +435,6 @@ export function MappingListView({
   // Fixed single-pass sort — see `compareSortKeys`. No UI state, no
   // re-sort on header click (per the polish pass).
   const sortedRows = useMemo(() => sortFlatRows(flatRows), [flatRows])
-
-  // Per-row bracket position (first / middle / last / solo / none)
-  // for the multi-source accent. Computed once over the sorted
-  // array so each row knows its place in its group without an
-  // O(n) lookup inside its own render.
-  const groupPositions = useMemo(
-    () => computeGroupPositions(sortedRows),
-    [sortedRows],
-  )
 
   // Target field universe — every target field appears in result.rows
   // exactly once (per the data contract).
@@ -478,9 +457,12 @@ export function MappingListView({
     (row: FlatRow, anchorEl: HTMLElement) => {
       // Source-cell click opens the source picker for every row that
       // carries a target — including the empty-source cases:
-      //   • mapped (any source count) → swap THIS row's source field.
-      //     For multi-source TFMs the picker only affects this one
-      //     attribution; siblings stay mapped to their own sources.
+      //   • mapped — swap the PRIMARY (sources[0], ordinal=0) source
+      //     field. Multi-source rows use the shimmed contributor id
+      //     `<tfmId>::<mappingSourceId>` so the server's
+      //     `updateMappingSourceField` updates the right
+      //     `mapping_sources` row. Per-source swap for non-primary
+      //     sources moves to the drawer's source list.
       //   • unmapped-target → create-mapping flow (target picks a source).
       //   • value-assignment → create-mapping flow (the value-assignment
       //     TFM gets a source field attached). Routes through the same
@@ -494,11 +476,14 @@ export function MappingListView({
       //     learns to convert value-assignment → mapped.
       //   • unmapped-source → noop (source IS the row identity).
       if (row.kind === 'mapped') {
+        const primary = row.sources[0]
+        const rowId =
+          row.sources.length === 1 ? row.id : `${row.id}::${primary.id}`
         setOpenPicker({
           kind: 'source',
-          rowId: row.id,
+          rowId,
           anchorEl,
-          initialSourceFieldIds: [row.source.sourceField.id],
+          initialSourceFieldIds: [primary.sourceField.id],
           targetFieldIdForCreate: null,
         })
         return
@@ -548,13 +533,12 @@ export function MappingListView({
 
   const handleRowBodyClick = useCallback(
     (row: FlatRow) => {
-      // For mapped flat rows (which now represent ONE source each),
-      // open the drawer with this row's source highlighted so the
-      // user lands inside the Sources section anchored to the
-      // contributor they clicked. Non-mapped rows have no source to
-      // highlight; they open the drawer with no highlight.
+      // Open the drawer keyed on the TFM uuid. For mapped rows we
+      // highlight the primary (ordinal=0) source so the drawer scrolls
+      // there on mount — matches what's rendered inline on the main
+      // row. Non-mapped rows have no source to highlight.
       const highlightedSourceFieldId =
-        row.kind === 'mapped' ? row.source.sourceField.id : null
+        row.kind === 'mapped' ? row.sources[0].sourceField.id : null
       onOpenDrawer(row.groupId, highlightedSourceFieldId)
     },
     [onOpenDrawer],
@@ -609,21 +593,24 @@ export function MappingListView({
     >
       <table className="w-full table-fixed border-collapse text-sm">
         <colgroup>
-          {/* feat/mapping-list-toggle-and-columns refinement pass:
-              status dot in the LEFTMOST 24px slot; the four
-              main columns (Source/Target table & field) share the
-              available space EQUALLY at 25% each so a long Target
-              Table doesn't crowd the Source Field, and vice versa.
-              Confidence and Actions stay fixed-width. Final order:
-              [dot] | Source Table | Source Field | Target Table |
-              Target Field | Confidence | Actions. */}
+          {/* feat/mapping-table-redesign column structure (Banking Core
+              mockup, refinement pass 1):
+                [●] SOURCE | → | TARGET | RATIONALE | CONFIDENCE | actions
+              The status dot lives in its own narrow cell flush against
+              source so the dot reads as a prefix to the source, not its
+              own column. Source / target each render
+              `TABLE_NAME [field_chip]`. Arrow is a muted glyph between.
+              The right-side actions cluster carries approve + reject
+              (always visible) + edit pencil (hover-only via `group`
+              class on each <tr>) — 3×24px buttons with gap-1 plus side
+              padding. */}
           <col style={{ width: '24px' }} />
-          <col style={{ width: '25%' }} />
-          <col style={{ width: '25%' }} />
-          <col style={{ width: '25%' }} />
-          <col style={{ width: '25%' }} />
+          <col />
+          <col style={{ width: '24px' }} />
+          <col />
+          <col />
           <col style={{ width: '80px' }} />
-          <col style={{ width: '110px' }} />
+          <col style={{ width: '104px' }} />
         </colgroup>
         <thead className="bg-gray-50">
           <tr>
@@ -633,16 +620,21 @@ export function MappingListView({
               aria-label="Status"
               className="border-b border-gray-200 px-1 py-2.5 align-top"
             />
-            <TableHeader column="sourceTable" label="Source Table" />
-            <TableHeader column="sourceField" label="Source Field" />
-            <TableHeader column="targetTable" label="Target Table" />
-            <TableHeader column="targetField" label="Target Field" />
+            <TableHeader column="source" label="Source" />
+            <th
+              scope="col"
+              data-testid="flat-header-arrow"
+              aria-hidden="true"
+              className="border-b border-gray-200 px-0 py-2.5 align-top"
+            />
+            <TableHeader column="target" label="Target" />
+            <TableHeader column="rationale" label="Rationale" />
             <TableHeader column="confidence" label="Confidence" align="right" />
             <th
               scope="col"
               data-testid="flat-header-actions"
               aria-label="Actions"
-              className="border-b border-gray-200 px-3 py-2.5 align-top"
+              className="border-b border-gray-200 px-1 py-2.5 align-top"
             />
           </tr>
         </thead>
@@ -657,11 +649,12 @@ export function MappingListView({
               </td>
             </tr>
           ) : (
-            sortedRows.map((row, idx) => (
+            sortedRows.map((row) => (
               <FlatRowView
                 key={row.id}
                 row={row}
-                groupPosition={groupPositions[idx]}
+                isExpanded={expandedRowIds.has(row.id)}
+                onToggleExpanded={toggleExpanded}
                 mutations={mutations}
                 onSourceCellClick={handleSourceCellClick}
                 onTargetCellClick={handleTargetCellClick}
@@ -710,10 +703,9 @@ function TableHeader({
   align,
 }: {
   column:
-    | 'sourceTable'
-    | 'sourceField'
-    | 'targetTable'
-    | 'targetField'
+    | 'source'
+    | 'target'
+    | 'rationale'
     | 'confidence'
     | 'status'
   label: string
@@ -739,11 +731,12 @@ function TableHeader({
 interface FlatRowViewProps {
   row: FlatRow
   /**
-   * Position within a multi-source group (first/middle/last/solo)
-   * or 'none' for single-source rows. Drives the bracket-style
-   * accent painted on the Source Field cell.
+   * Whether this row's multi-source pill is currently expanded. Only
+   * meaningful for mapped rows with sources.length > 1; ignored otherwise.
    */
-  groupPosition: GroupPosition
+  isExpanded: boolean
+  /** Toggle the expanded/collapsed state for a row id. */
+  onToggleExpanded: (rowId: string) => void
   mutations: MappingListMutations
   onSourceCellClick: (row: FlatRow, anchorEl: HTMLElement) => void
   onTargetCellClick: (row: FlatRow, anchorEl: HTMLElement) => void
@@ -752,17 +745,19 @@ interface FlatRowViewProps {
 
 function FlatRowView({
   row,
-  groupPosition,
+  isExpanded,
+  onToggleExpanded,
   mutations,
   onSourceCellClick,
   onTargetCellClick,
   onRowBodyClick,
 }: FlatRowViewProps) {
   const isBusy = mutations.isRowBusy(row.id)
-  // Multi-source flag drives the left-accent visual cue. Each mapped
-  // flat row already represents one source; we look at `sourceCount`
-  // (carried on the row) to know whether this row has siblings.
-  const isMultiSource = row.kind === 'mapped' && row.sourceCount > 1
+  // Multi-source = mapped TFM with >1 sources. The main row shows the
+  // primary inline; sources[1..] appear as indented sub-rows when the
+  // "+N source" pill is expanded.
+  const sourceCount = row.kind === 'mapped' ? row.sources.length : 0
+  const isMultiSource = sourceCount > 1
 
   const sourceCellRef = useRef<HTMLButtonElement | null>(null)
   const targetCellRef = useRef<HTMLButtonElement | null>(null)
@@ -783,13 +778,13 @@ function FlatRowView({
       : null
 
   const sourceTableName = (() => {
-    if (row.kind === 'mapped') return row.source.sourceTable.name
+    if (row.kind === 'mapped') return row.sources[0].sourceTable.name
     if (row.kind === 'unmapped-source') return row.sourceField.sourceTable.name
     return null
   })()
 
   const sourceFieldName = (() => {
-    if (row.kind === 'mapped') return row.source.sourceField.name
+    if (row.kind === 'mapped') return row.sources[0].sourceField.name
     if (row.kind === 'unmapped-source') return row.sourceField.name
     return null
   })()
@@ -820,54 +815,33 @@ function FlatRowView({
 
   // ── Action handlers per row kind ──────────────────────────────────
   //
-  // Three actions per mapped row: ✓ Approve, ✗ Reject, ✏ Edit.
+  // feat/mapping-table-redesign — three actions per mapped row, all
+  // TFM-atomic:
+  //   • Approve  → mutations.approveTfm(row.id)  (bare TFM uuid)
+  //   • Reject   → mutations.rejectTfm(row.id)   (bare TFM uuid)
+  //   • Edit     → opens drawer keyed on the TFM with the primary
+  //                source highlighted.
+  // Per-source reject (deleting a single contributing source without
+  // dropping the whole TFM) lives in the drawer's source list. The
+  // flat view's main row no longer carries that affordance.
   //
-  //   • Approve: TFM-atomic — uses the bare TFM uuid (parentRow.id).
-  //     For a multi-source TFM, approving any contributor row
-  //     approves ALL siblings via the server's TFM-level approve.
-  //     Tooltip surfaces the cross-source semantics so the user
-  //     isn't surprised.
-  //   • Reject: per-source — uses the shimmed contributor id (which
-  //     IS row.id for multi-source) so A's `rejectFieldMapping`
-  //     deletes just this attribution. Single-source rejects the
-  //     whole TFM (the row id IS the TFM uuid for single source).
-  //   • Edit: opens the drawer with this row's source highlighted.
-  //     Drops the user into the drawer's Sources section anchored
-  //     to the specific contributor they clicked.
-  //
-  // Non-mapped rows render only Reject (with row-kind-specific
-  // dispatch). Edit is omitted because the cell-level "Pick a
-  // source…" / "Pick a target…" buttons cover their edit path.
+  // Non-mapped rows: Approve/Reject behave per the row kind (see
+  // branches below); Edit always opens the drawer.
   const actions = useMemo(() => {
     const alreadyApproved = row.status === 'approved'
     const alreadyRejected = row.status === 'rejected'
 
     if (row.kind === 'mapped') {
-      const parentTfmId = row.parentRow.id
-      const sourceFieldId = row.source.sourceField.id
       return {
         onApprove: alreadyApproved
           ? undefined
-          : () => void mutations.approveTfm(parentTfmId),
-        approveTooltip:
-          row.sourceCount > 1
-            ? `Approves all ${row.sourceCount} sources of this mapping`
-            : 'Approve mapping',
+          : () => void mutations.approveTfm(row.id),
+        approveTooltip: 'Approve mapping',
         onReject: alreadyRejected
           ? undefined
           : () => void mutations.rejectTfm(row.id),
-        rejectTooltip:
-          row.sourceCount > 1
-            ? 'Remove this source attribution'
-            : 'Reject mapping',
-        // Edit reuses handleRowBodyClick — for mapped rows that helper
-        // already derives the highlighted source from row.source, so
-        // the Edit button and a row-body click land on the same drawer
-        // state. `sourceFieldId` retained as documentation of intent.
-        onEdit: () => {
-          void sourceFieldId
-          onRowBodyClick(row)
-        },
+        rejectTooltip: 'Reject mapping',
+        onEdit: () => onRowBodyClick(row),
         editTooltip: 'Open mapping in drawer',
       }
     }
@@ -891,16 +865,23 @@ function FlatRowView({
       }
     }
     if (row.kind === 'unmapped-target') {
+      // feat/mapping-table-redesign refinement pass 2: approve renders
+      // on unmapped-target rows. The row.id is the synthetic
+      // `unmapped::<targetFieldId>` sentinel; both `approveTfm` and
+      // `rejectTfm` dispatch through `approveFieldMapping` /
+      // `rejectFieldMapping`, which branch on the `unmapped::` prefix
+      // and route to `setCoverageStatus` server-side. Switching reject
+      // off `rejectUnmappedRow` onto `rejectTfm` aligns the flat-view
+      // reject with the target-led view's reject path (both views now
+      // produce identical DB state for the same user intent).
       return {
-        onApprove: undefined,
-        approveTooltip: 'Nothing to approve — no mapping',
+        onApprove: alreadyApproved
+          ? undefined
+          : () => void mutations.approveTfm(row.id),
+        approveTooltip: 'Acknowledge unmapped target',
         onReject: alreadyRejected
           ? undefined
-          : () =>
-              void mutations.rejectUnmappedRow({
-                pendingKey: row.id,
-                target: { targetFieldId: row.targetField.id },
-              }),
+          : () => void mutations.rejectTfm(row.id),
         rejectTooltip: 'Mark as rejected',
         onEdit: () => onRowBodyClick(row),
         editTooltip: 'Open target field in drawer',
@@ -926,221 +907,237 @@ function FlatRowView({
 
   // ── Render ────────────────────────────────────────────────────────
   //
-  // Sixth polish pass — single-viewport table layout (no horizontal
-  // scroll, no sticky columns). Column widths set via the parent
-  // table's `<colgroup>`. Each cell uses uniform `px-3 py-2.5
-  // align-top`, with `text-sm` body text and a subtle border-b on
-  // every non-header row.
+  // feat/mapping-table-redesign — Banking Core mockup. Seven columns:
+  //   [●] | SOURCE | → | TARGET | RATIONALE | CONFIDENCE | actions
+  // The status dot lives in its own narrow leftmost cell flush against
+  // SOURCE so it reads as a prefix to source. All three action buttons
+  // (approve, reject, edit) cluster on the right side and are
+  // hover-only, revealed via the `group` class on the <tr> root.
   //
-  // Multi-source mapped TFMs emit N independent flat rows; each row
-  // carries `sourceCount > 1` and renders with a `border-l-2
-  // border-slate-300` left accent so siblings remain visually
-  // identifiable even after the global sort scatters them.
+  // Multi-source TFMs render as ONE main row showing sources[0] inline
+  // plus a "+N source" pill. Clicking the pill toggles indented
+  // "Also contributes to <target>" sub-rows for sources[1..]. Sub-rows
+  // are read-only — per-source actions (notably reject) live in the
+  // edit drawer's source list. The stacked rows + left-bracket pattern
+  // is retired by this revision.
   //
   // Em-dashes for blank cells use `text-gray-300` — visibly muted
   // against the surrounding text-slate-700 data.
   return (
+    <>
     <tr
       data-testid="flat-row"
       data-row-id={row.id}
       data-row-kind={row.kind}
       data-group-id={row.groupId}
       data-source-count={
-        row.kind === 'mapped' ? String(row.sourceCount) : undefined
+        row.kind === 'mapped' ? String(sourceCount) : undefined
       }
       data-multi-source={isMultiSource ? 'true' : 'false'}
       onClick={() => onRowBodyClick(row)}
       className={cn(
-        'cursor-pointer bg-white transition-colors hover:bg-gray-50',
+        'group cursor-pointer bg-white transition-colors hover:bg-gray-50',
       )}
     >
-      {/* Leftmost status dot — 24px column, no header text.
-          feat/mapping-list-toggle-and-columns refinement pass moved
-          the dot from its prior position between Confidence and
-          Actions. Tooltip carries the status label + ack reason. */}
+      {/* Status dot — narrow leftmost cell, sits flush against SOURCE.
+          No own column header text; tooltip carries the status label +
+          ack reason. The dot is the only inhabitant of this cell —
+          action icons live in the right-side cluster. */}
       <td
         data-testid="flat-cell-status"
         title={statusTooltip}
-        className="px-1 py-2.5 align-top text-center"
+        className="pl-3 pr-0 py-2.5 align-middle"
       >
         <StatusDot status={displayStatus} />
       </td>
-      {/* Source-first column order (feat/mapping-list-toggle-and-columns).
-          Multi-source accent (feat/mapping-list-cluster-multi-source):
-          painted on the Source FIELD cell — the field is the mapping
-          unit; the table is incidental metadata. With the new target-
-          first cluster sort, multi-source siblings are guaranteed
-          adjacent, so the per-cell border reads as one contiguous
-          vertical bar across the group. Brand teal at 50% opacity —
-          obvious but not loud. */}
+      {/* Merged SOURCE — `TABLE_NAME [primary_chip] [+N source]?` in one
+          cell. Sits flush against the status dot on the left (pl-2). */}
       <td
-        data-testid="flat-cell-source-table"
-        title={sourceTableName ?? undefined}
-        className="truncate px-3 py-2.5 align-top text-sm text-slate-700"
+        data-testid="flat-cell-source"
+        className="pl-2 pr-3 py-2.5 align-top text-sm"
       >
-        {sourceTableName ?? <span className="text-gray-300">—</span>}
-      </td>
-      <td
-        data-testid="flat-cell-source-field"
-        data-group-position={groupPosition}
-        className="relative px-3 py-2.5 align-top text-sm"
-      >
-        {/*
-          Multi-source bracket accent (feat/mapping-list-toggle-and-
-          columns refinement pass — tree-branch geometry).
-          The horizontal caps align with the VERTICAL CENTER of the
-          FieldNameChip pill (≈22px from the cell top, given
-          `py-2.5` cell padding + 24px pill height). The vertical bar
-          is split into two halves so the bracket reads like a tree
-          branch connecting to each field name:
-            'first'  — cap at pill center + bar going DOWN to cell
-                       bottom
-            'middle' — bar spans full cell height
-            'last'   — bar coming FROM cell top + cap at pill center
-            'solo'   — cap only (defensive — multi-source row whose
-                       siblings were filtered out)
-          Color is neutral gray-400 — subtle, structural.
-        */}
-        {groupPosition !== 'none' && (
+        <div className="flex min-w-0 items-center gap-2">
+          {sourceTableName ? (
+            <span
+              data-testid="flat-cell-source-table"
+              title={sourceTableName}
+              className="shrink-0 truncate text-[10px] font-medium uppercase tracking-wide text-slate-500"
+            >
+              {sourceTableName}
+            </span>
+          ) : null}
           <span
-            aria-hidden="true"
-            data-testid="flat-source-field-bracket"
-            className="pointer-events-none absolute inset-y-0 left-0 w-2"
+            data-testid="flat-cell-source-field"
+            className="min-w-0"
           >
-            {/* Vertical bar half above the pill center (rendered on
-                'middle' and 'last' rows). */}
-            {(groupPosition === 'middle' || groupPosition === 'last') && (
-              <span
-                aria-hidden="true"
-                className="absolute left-0 top-0 w-0 border-l border-gray-400"
-                style={{ height: '22px' }}
-              />
-            )}
-            {/* Vertical bar half below the pill center (rendered on
-                'first' and 'middle' rows). */}
-            {(groupPosition === 'first' || groupPosition === 'middle') && (
-              <span
-                aria-hidden="true"
-                className="absolute bottom-0 left-0 w-0 border-l border-gray-400"
-                style={{ top: '22px' }}
-              />
-            )}
-            {/* Horizontal cap at pill vertical center (first / last /
-                solo). Connects the bar to the pill. */}
-            {(groupPosition === 'first' ||
-              groupPosition === 'last' ||
-              groupPosition === 'solo') && (
-              <span
-                aria-hidden="true"
-                className="absolute left-0 h-0 w-2 border-t border-gray-400"
-                style={{ top: '22px' }}
-              />
+            {sourceFieldName ? (
+              sourceCellClickable ? (
+                <button
+                  ref={sourceCellRef}
+                  type="button"
+                  data-testid="flat-cell-source-field-button"
+                  onClick={(e) => {
+                    e.stopPropagation()
+                    onSourceCellClick(row, e.currentTarget)
+                  }}
+                  className={cn(
+                    'inline-flex max-w-full items-center justify-start rounded',
+                    'focus:outline-none focus-visible:ring-1 focus-visible:ring-blue-500',
+                  )}
+                >
+                  <FieldNameChip name={sourceFieldName} />
+                </button>
+              ) : (
+                <FieldNameChip name={sourceFieldName} />
+              )
+            ) : row.kind === 'unmapped-target' ? (
+              <button
+                ref={sourceCellRef}
+                type="button"
+                data-testid="flat-cell-source-field-button"
+                onClick={(e) => {
+                  e.stopPropagation()
+                  onSourceCellClick(row, e.currentTarget)
+                }}
+                className={cn(
+                  'inline-flex items-center justify-start rounded px-1 py-0.5 text-sm',
+                  'italic text-slate-400 hover:bg-blue-100/60 hover:text-slate-600',
+                  'focus:outline-none focus-visible:ring-1 focus-visible:ring-blue-500',
+                )}
+              >
+                Pick a source…
+              </button>
+            ) : row.kind === 'value-assignment' ? (
+              <button
+                ref={sourceCellRef}
+                type="button"
+                data-testid="flat-cell-source-field-button"
+                aria-label="Pick a source field"
+                title="Pick a source field"
+                onClick={(e) => {
+                  e.stopPropagation()
+                  onSourceCellClick(row, e.currentTarget)
+                }}
+                className={cn(
+                  'inline-flex cursor-pointer items-center justify-start rounded px-1 py-0.5 text-sm',
+                  'text-gray-300 hover:bg-blue-100/60 hover:text-slate-600',
+                  'focus:outline-none focus-visible:ring-1 focus-visible:ring-blue-500',
+                )}
+              >
+                —
+              </button>
+            ) : (
+              <span className="text-gray-300">—</span>
             )}
           </span>
-        )}
-        {sourceFieldName ? (
-          sourceCellClickable ? (
+          {/* "+N source" expand/collapse pill — only for multi-source
+              mapped TFMs. Clicking toggles inline sub-rows below the
+              main row. stopPropagation so the pill doesn't bubble to
+              the row's drawer-open click handler. Always singular
+              "source" per mockup. */}
+          {isMultiSource ? (
             <button
-              ref={sourceCellRef}
               type="button"
-              data-testid="flat-cell-source-field-button"
+              data-testid="flat-multi-source-pill"
+              data-expanded={isExpanded ? 'true' : 'false'}
+              aria-expanded={isExpanded}
+              aria-label={
+                isExpanded
+                  ? 'Collapse additional sources'
+                  : 'Expand additional sources'
+              }
+              title={
+                isExpanded
+                  ? 'Collapse additional sources'
+                  : `Show ${sourceCount - 1} more source${sourceCount - 1 === 1 ? '' : 's'}`
+              }
               onClick={(e) => {
                 e.stopPropagation()
-                onSourceCellClick(row, e.currentTarget)
+                onToggleExpanded(row.id)
               }}
               className={cn(
-                'inline-flex max-w-full items-center justify-start rounded',
-                'focus:outline-none focus-visible:ring-1 focus-visible:ring-blue-500',
+                'inline-flex shrink-0 items-center gap-1 rounded-full bg-slate-100 px-2 py-0.5 text-xs text-slate-600',
+                'hover:bg-slate-200 focus:outline-none focus-visible:ring-1 focus-visible:ring-blue-500',
               )}
             >
-              <FieldNameChip name={sourceFieldName} />
+              <span aria-hidden="true" className="text-[10px] leading-none">
+                {isExpanded ? '^' : '⌄'}
+              </span>
+              <span>+ {sourceCount - 1} source</span>
             </button>
-          ) : (
-            <FieldNameChip name={sourceFieldName} />
-          )
-        ) : row.kind === 'unmapped-target' ? (
-          // Target-only row clickable to pick a source. Routes
-          // through createFromUnmapped on commit.
-          <button
-            ref={sourceCellRef}
-            type="button"
-            data-testid="flat-cell-source-field-button"
-            onClick={(e) => {
-              e.stopPropagation()
-              onSourceCellClick(row, e.currentTarget)
-            }}
-            className={cn(
-              'inline-flex items-center justify-start rounded px-1 py-0.5 text-sm',
-              'italic text-slate-400 hover:bg-blue-100/60 hover:text-slate-600',
-              'focus:outline-none focus-visible:ring-1 focus-visible:ring-blue-500',
-            )}
-          >
-            Pick a source…
-          </button>
-        ) : row.kind === 'value-assignment' ? (
-          // feat/mapping-list-toggle-and-columns refinement pass: the
-          // value-assignment "—" gets the same click-to-pick affordance
-          // as unmapped-target. Visually stays a dash (matches the
-          // founder's brief — "clickable —") rather than borrowing the
-          // unmapped-target "Pick a source…" label. Cursor-pointer +
-          // subtle hover signal clickability. Server-side commit
-          // limitation documented in `handleSourceCellClick`.
-          <button
-            ref={sourceCellRef}
-            type="button"
-            data-testid="flat-cell-source-field-button"
-            aria-label="Pick a source field"
-            title="Pick a source field"
-            onClick={(e) => {
-              e.stopPropagation()
-              onSourceCellClick(row, e.currentTarget)
-            }}
-            className={cn(
-              'inline-flex cursor-pointer items-center justify-start rounded px-1 py-0.5 text-sm',
-              'text-gray-300 hover:bg-blue-100/60 hover:text-slate-600',
-              'focus:outline-none focus-visible:ring-1 focus-visible:ring-blue-500',
-            )}
-          >
-            —
-          </button>
-        ) : (
-          <span className="text-gray-300">—</span>
-        )}
+          ) : null}
+        </div>
       </td>
+      {/* Arrow glyph between source and target. Muted, decorative. */}
       <td
-        data-testid="flat-cell-target-table"
-        title={targetTable ?? undefined}
-        className="truncate px-3 py-2.5 align-top text-sm text-slate-700"
+        aria-hidden="true"
+        className="px-0 py-2.5 align-middle text-center text-base leading-tight text-slate-300"
       >
-        {targetTable ?? <span className="text-gray-300">—</span>}
+        →
       </td>
+      {/* Merged TARGET — `table_name [field_chip]` in one cell. */}
       <td
-        data-testid="flat-cell-target-field"
+        data-testid="flat-cell-target"
         className="px-3 py-2.5 align-top text-sm"
       >
-        {targetFieldName ? (
-          targetCellEditable ? (
-            <button
-              ref={targetCellRef}
-              type="button"
-              data-testid="flat-cell-target-field-button"
-              onClick={(e) => {
-                e.stopPropagation()
-                onTargetCellClick(row, e.currentTarget)
-              }}
-              className={cn(
-                'inline-flex max-w-full items-center justify-start rounded',
-                'focus:outline-none focus-visible:ring-1 focus-visible:ring-blue-500',
-              )}
+        <div className="flex min-w-0 items-center gap-2">
+          {targetTable ? (
+            <span
+              data-testid="flat-cell-target-table"
+              title={targetTable}
+              className="shrink-0 truncate text-[10px] font-medium uppercase tracking-wide text-slate-500"
             >
-              <FieldNameChip name={targetFieldName} />
-            </button>
-          ) : (
-            <FieldNameChip name={targetFieldName} />
+              {targetTable}
+            </span>
+          ) : null}
+          <span data-testid="flat-cell-target-field" className="min-w-0">
+            {targetFieldName ? (
+              targetCellEditable ? (
+                <button
+                  ref={targetCellRef}
+                  type="button"
+                  data-testid="flat-cell-target-field-button"
+                  onClick={(e) => {
+                    e.stopPropagation()
+                    onTargetCellClick(row, e.currentTarget)
+                  }}
+                  className={cn(
+                    'inline-flex max-w-full items-center justify-start rounded',
+                    'focus:outline-none focus-visible:ring-1 focus-visible:ring-blue-500',
+                  )}
+                >
+                  <FieldNameChip name={targetFieldName} />
+                </button>
+              ) : (
+                <FieldNameChip name={targetFieldName} />
+              )
+            ) : (
+              <span className="text-gray-300">—</span>
+            )}
+          </span>
+        </div>
+      </td>
+      {/* Rationale — one-line summary of the row's AI reasoning or
+          (for source-side acks) the ack reason. Full text on hover via
+          `title`. Em-dash when nothing to surface (includes unmapped-
+          target rows, which today don't carry coverage acknowledgment
+          reason on the wire — additive wire change is a separate PR). */}
+      <td
+        data-testid="flat-cell-rationale"
+        className="px-3 py-2.5 align-top text-sm text-slate-700"
+      >
+        {(() => {
+          const raw = deriveRationaleSource(row)
+          const summary = summarizeRationale(raw)
+          if (summary === null) {
+            return <span className="text-gray-300">—</span>
+          }
+          return (
+            <span title={raw ?? undefined} className="block truncate">
+              {summary}
+            </span>
           )
-        ) : (
-          <span className="text-gray-300">—</span>
-        )}
+        })()}
       </td>
       <td
         data-testid="flat-cell-confidence"
@@ -1170,18 +1167,105 @@ function FlatRowView({
           </span>
         )}
       </td>
-      <td className="px-3 py-2.5 align-top">
-        <FlatRowActions
-          rowId={row.id}
-          isBusy={isBusy}
-          onApprove={actions.onApprove}
-          approveTooltip={actions.approveTooltip}
-          onReject={actions.onReject}
-          rejectTooltip={actions.rejectTooltip}
-          onEdit={actions.onEdit}
-          editTooltip={actions.editTooltip}
-        />
+      {/* Right-side action cluster — order left-to-right:
+          approve (✓) → reject (✗) → edit (✎). All three icons are
+          hover-only (opacity-0 at rest, faded in via `group-hover` on
+          the <tr>); `group-focus-within` keeps them keyboard-reachable.
+          Status dot on the left edge is the only always-visible
+          per-row affordance. Action button clicks stopPropagation so
+          they don't bubble to the row body's drawer-open handler. */}
+      <td className="px-2 py-2.5 align-top">
+        <div className="flex items-center justify-end gap-1 opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100">
+          {actions.onApprove ? (
+            <ActionIconButton
+              testId="flat-row-action-approve"
+              ariaLabel="Approve mapping"
+              tooltip={actions.approveTooltip ?? 'Approve mapping'}
+              variant="approve"
+              disabled={isBusy}
+              onClick={actions.onApprove}
+            >
+              <Check aria-hidden="true" className="h-3.5 w-3.5" />
+            </ActionIconButton>
+          ) : null}
+          {actions.onReject ? (
+            <ActionIconButton
+              testId="flat-row-action-reject"
+              ariaLabel="Reject mapping"
+              tooltip={actions.rejectTooltip ?? 'Reject mapping'}
+              variant="reject"
+              disabled={isBusy}
+              onClick={actions.onReject}
+            >
+              <X aria-hidden="true" className="h-3.5 w-3.5" />
+            </ActionIconButton>
+          ) : null}
+          {actions.onEdit ? (
+            <ActionIconButton
+              testId="flat-row-action-edit"
+              ariaLabel="Edit mapping"
+              tooltip={actions.editTooltip ?? 'Open mapping in drawer'}
+              variant="edit"
+              disabled={isBusy}
+              onClick={actions.onEdit}
+            >
+              <Edit3 aria-hidden="true" className="h-3.5 w-3.5" />
+            </ActionIconButton>
+          ) : null}
+        </div>
       </td>
     </tr>
+    {/* Expanded multi-source sub-rows. One <tr> per source[1..] with
+        grid-aligned content: SOURCE column carries an indented
+        `↳ SOURCE_TABLE [chip]`; RATIONALE column carries the muted
+        "Also contributes to <target_field_name>" caption. All other
+        columns blank to preserve the column structure. Read-only — no
+        status dot, no actions, no row hover effect, no drawer open on
+        click (sub-rows aren't event surfaces). Sub-row DOM only exists
+        when the pill is expanded; collapsing removes the elements. */}
+    {row.kind === 'mapped' && isMultiSource && isExpanded
+      ? row.sources.slice(1).map((src) => (
+          <tr
+            key={`${row.id}::sub::${src.id}`}
+            data-testid="flat-row-subrow"
+            data-parent-row-id={row.id}
+            data-sub-source-id={src.id}
+            className="bg-white"
+          >
+            <td className="pl-3 pr-0 py-1.5 align-middle" />
+            <td className="pl-2 pr-3 py-1.5 align-middle text-sm">
+              <div className="flex min-w-0 items-center gap-2 pl-6">
+                <span
+                  aria-hidden="true"
+                  className="text-slate-300"
+                >
+                  ↳
+                </span>
+                <span
+                  data-testid="flat-subrow-source-table"
+                  title={src.sourceTable.name}
+                  className="shrink-0 truncate text-[10px] font-medium uppercase tracking-wide text-slate-500"
+                >
+                  {src.sourceTable.name}
+                </span>
+                <span data-testid="flat-subrow-source-field" className="min-w-0">
+                  <FieldNameChip name={src.sourceField.name} />
+                </span>
+              </div>
+            </td>
+            <td aria-hidden="true" className="px-0 py-1.5" />
+            <td className="px-3 py-1.5 align-middle" />
+            <td
+              data-testid="flat-subrow-caption"
+              className="px-3 py-1.5 align-middle text-xs italic text-slate-400"
+            >
+              Also contributes to {row.targetField.name}
+            </td>
+            <td className="px-3 py-1.5 align-middle" />
+            <td className="px-2 py-1.5 align-middle" />
+          </tr>
+        ))
+      : null}
+    </>
   )
 }

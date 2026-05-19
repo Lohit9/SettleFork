@@ -290,6 +290,14 @@ interface MappingRowBase {
   transformationSqlPreview?: string | null
 
   /**
+   * Upstream transform guidance persisted on the mapping record
+   * (`target_field_mappings.transformation_intent`). Distinct from an
+   * authored transform row: this is the suggested recipe from the
+   * mapping phase and can exist even when `hasTransformation=false`.
+   */
+  transformationIntent?: string | null
+
+  /**
    * PR γ — Mapping grid state model unification (additive only).
    *
    * Three new optional fields added in lockstep so the redesigned grid
@@ -461,6 +469,13 @@ export interface UnmappedRow extends MappingRowBase {
    * widening, no special-casing required in ConfidenceCell.
    */
   confidence: number | null
+  /**
+   * Explanation text for no-source rows. Populated from
+   * `target_field_coverage.ai_reasoning` when the row is coverage-only,
+   * or from the acknowledged TFM's `ai_reasoning` when a no-source TFM
+   * exists.
+   */
+  aiReasoning?: string | null
   hasTransformation: false
   transformationStatus: null
 }

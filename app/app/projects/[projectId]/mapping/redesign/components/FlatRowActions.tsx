@@ -111,7 +111,7 @@ export function FlatRowActions({
   )
 }
 
-interface ActionIconButtonProps {
+export interface ActionIconButtonProps {
   testId: string
   ariaLabel: string
   tooltip: string
@@ -121,7 +121,7 @@ interface ActionIconButtonProps {
   children: React.ReactNode
 }
 
-function ActionIconButton({
+export function ActionIconButton({
   testId,
   ariaLabel,
   tooltip,

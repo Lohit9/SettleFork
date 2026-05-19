@@ -302,13 +302,12 @@ describe('MappingListView — action buttons per row kind', () => {
     ).toBeInTheDocument()
   })
 
-  it('multi-source TFM renders N independent flat rows with shimmed contributor ids + bracket accent', () => {
-    // Sixth polish pass: multi-source TFMs emit N independent flat
-    // rows (one per source). feat/mapping-list-toggle-and-columns
-    // refinement pass: target-first sort clusters them adjacent, and
-    // the bracket-style accent (┌ first, │ middle, └ last) on the
-    // Source Field cell of each row reads as one closed bracket
-    // across the group.
+  it('multi-source TFM renders ONE row with sources[0] inline + "+N source" pill', () => {
+    // feat/mapping-table-redesign: one flat row per TFM regardless of
+    // source count. sources[0] (ordinal=0) shows inline; the pill
+    // surfaces sources[1..] via expand/collapse. The fixture has
+    // ms-a at ordinal=0 (ProductSKU / Products) and ms-b at ordinal=1
+    // (Assy_Item / Assemblies), so ms-a is the inline primary.
     const mutations = makeMutations()
     const result = makeResult([makeMultiSourceMapped()])
     render(
@@ -319,63 +318,103 @@ describe('MappingListView — action buttons per row kind', () => {
       />,
     )
 
-    const rowA = findRow('tfm-multi::ms-a')
-    const rowB = findRow('tfm-multi::ms-b')
+    // ONE row for the TFM — no shimmed contributor rows.
+    const rows = document.querySelectorAll('[data-testid="flat-row"]')
+    expect(rows.length).toBe(1)
 
-    for (const row of [rowA, rowB]) {
-      expect(row.getAttribute('data-row-kind')).toBe('mapped')
-      expect(row.getAttribute('data-multi-source')).toBe('true')
-      expect(row.getAttribute('data-source-count')).toBe('2')
-      // Both siblings share the TFM uuid as groupId.
-      expect(row.getAttribute('data-group-id')).toBe('tfm-multi')
-    }
+    const row = findRow('tfm-multi')
+    expect(row.getAttribute('data-row-kind')).toBe('mapped')
+    expect(row.getAttribute('data-multi-source')).toBe('true')
+    expect(row.getAttribute('data-source-count')).toBe('2')
+    expect(row.getAttribute('data-group-id')).toBe('tfm-multi')
 
-    // The bare TFM uuid is NOT itself a row id when sourceCount > 1.
-    expect(document.querySelector('[data-row-id="tfm-multi"]')).toBeNull()
+    // Pill exists and renders "+ 1 source" (sourceCount - 1, singular).
+    const pill = within(row).getByTestId('flat-multi-source-pill')
+    expect(pill.textContent).toContain('+ 1 source')
+    expect(pill.getAttribute('aria-expanded')).toBe('false')
 
-    // The bracket accent lives on the Source FIELD cell (the field
-    // is the mapping unit) as an inner span overlay — not on the
-    // cell's own className. Position is exposed via
-    // data-group-position on the cell.
-    // Within a target group, sources sort by source table ASC →
-    // source field ASC. The fixture has ms-a in 'Products' and ms-b
-    // in 'Assemblies'; 'Assemblies' < 'Products', so ms-b is the
-    // first row of the group and ms-a is the last.
-    const sourceFieldA = within(rowA).getByTestId('flat-cell-source-field')
-    const sourceFieldB = within(rowB).getByTestId('flat-cell-source-field')
-    expect(sourceFieldB.getAttribute('data-group-position')).toBe('first')
-    expect(sourceFieldA.getAttribute('data-group-position')).toBe('last')
+    // No sub-rows render while collapsed.
     expect(
-      within(sourceFieldA).getByTestId('flat-source-field-bracket'),
-    ).toBeInTheDocument()
-    expect(
-      within(sourceFieldB).getByTestId('flat-source-field-bracket'),
-    ).toBeInTheDocument()
+      document.querySelectorAll('[data-testid="flat-row-subrow"]').length,
+    ).toBe(0)
+
+    // sources[0] is shown inline — primary by ordinal, not by source
+    // table name alphabetical order.
+    const sourceTableLabel = within(row).getByTestId('flat-cell-source-table')
+    expect(sourceTableLabel.textContent).toBe('Products')
   })
 
-  it('single-source mapped rows carry NO multi-source bracket accent', () => {
-    const mutations = makeMutations()
+  it('clicking the +N pill expands sub-rows; clicking again collapses', () => {
+    // Sub-rows render only when expanded. Each sub-row carries the
+    // source-table label, field chip, and a muted "Also contributes
+    // to <target>" caption. Sub-rows have NO action buttons (per-source
+    // reject moves to the drawer).
+    const result = makeResult([makeMultiSourceMapped()])
+    render(
+      <MappingListView
+        filteredResult={result}
+        mutations={makeMutations()}
+        onOpenDrawer={vi.fn()}
+      />,
+    )
+
+    const row = findRow('tfm-multi')
+    const pill = within(row).getByTestId('flat-multi-source-pill')
+
+    expect(pill.getAttribute('aria-expanded')).toBe('false')
+    expect(
+      document.querySelectorAll('[data-testid="flat-row-subrow"]').length,
+    ).toBe(0)
+
+    fireEvent.click(pill)
+
+    expect(pill.getAttribute('aria-expanded')).toBe('true')
+    const subRows = document.querySelectorAll('[data-testid="flat-row-subrow"]')
+    expect(subRows.length).toBe(1)
+    const subRow = subRows[0] as HTMLTableRowElement
+    expect(subRow.getAttribute('data-parent-row-id')).toBe('tfm-multi')
+    expect(subRow.getAttribute('data-sub-source-id')).toBe('ms-b')
+    expect(
+      within(subRow).getByTestId('flat-subrow-source-table').textContent,
+    ).toBe('Assemblies')
+    expect(
+      within(subRow).getByTestId('flat-subrow-caption').textContent,
+    ).toBe('Also contributes to item_number')
+    // No actions on sub-rows.
+    expect(within(subRow).queryByTestId('flat-row-action-approve')).toBeNull()
+    expect(within(subRow).queryByTestId('flat-row-action-reject')).toBeNull()
+    expect(within(subRow).queryByTestId('flat-row-action-edit')).toBeNull()
+
+    // Collapse.
+    fireEvent.click(pill)
+    expect(pill.getAttribute('aria-expanded')).toBe('false')
+    expect(
+      document.querySelectorAll('[data-testid="flat-row-subrow"]').length,
+    ).toBe(0)
+  })
+
+  it('single-source mapped rows carry NO "+N source" pill', () => {
     const result = makeResult([makeSingleSourceMapped()])
     render(
       <MappingListView
         filteredResult={result}
-        mutations={mutations}
+        mutations={makeMutations()}
         onOpenDrawer={vi.fn()}
       />,
     )
 
     const row = findRow('tfm-1')
-    const sourceFieldCell = within(row).getByTestId(
-      'flat-cell-source-field',
-    )
     expect(row.getAttribute('data-multi-source')).toBe('false')
-    expect(sourceFieldCell.getAttribute('data-group-position')).toBe('none')
+    expect(within(row).queryByTestId('flat-multi-source-pill')).toBeNull()
     expect(
-      within(sourceFieldCell).queryByTestId('flat-source-field-bracket'),
-    ).toBeNull()
+      document.querySelectorAll('[data-testid="flat-row-subrow"]').length,
+    ).toBe(0)
   })
 
-  it('multi-source row: Approve is TFM-atomic (parent uuid); Reject is per-source (shimmed id)', async () => {
+  it('multi-source row: both Approve and Reject are TFM-atomic on the bare TFM uuid', async () => {
+    // feat/mapping-table-redesign — reject is no longer per-source on
+    // the main row. Per-source reject moves into the drawer's source
+    // list. The flat view's main row operates TFM-atomically.
     const mutations = makeMutations()
     const result = makeResult([makeMultiSourceMapped()])
     render(
@@ -386,19 +425,15 @@ describe('MappingListView — action buttons per row kind', () => {
       />,
     )
 
-    const rowA = findRow('tfm-multi::ms-a')
-    fireEvent.click(within(rowA).getByTestId('flat-row-action-approve'))
-    // Approve routes through parentRow.id — TFM-atomic, siblings inherit.
+    const row = findRow('tfm-multi')
+    fireEvent.click(within(row).getByTestId('flat-row-action-approve'))
     expect(mutations.approveTfm).toHaveBeenCalledWith('tfm-multi')
 
-    fireEvent.click(within(rowA).getByTestId('flat-row-action-reject'))
-    // Reject routes through the shimmed contributor id so the server
-    // deletes only this attribution (sibling row 'tfm-multi::ms-b'
-    // stays mapped).
-    expect(mutations.rejectTfm).toHaveBeenCalledWith('tfm-multi::ms-a')
+    fireEvent.click(within(row).getByTestId('flat-row-action-reject'))
+    expect(mutations.rejectTfm).toHaveBeenCalledWith('tfm-multi')
   })
 
-  it('multi-source row: Edit button surfaces; click opens drawer with this source highlighted', async () => {
+  it('multi-source row: Edit opens the drawer for the TFM with the primary source highlighted', async () => {
     const mutations = makeMutations()
     const onOpenDrawer = vi.fn()
     const result = makeResult([makeMultiSourceMapped()])
@@ -410,15 +445,20 @@ describe('MappingListView — action buttons per row kind', () => {
       />,
     )
 
-    const rowA = findRow('tfm-multi::ms-a')
-    fireEvent.click(within(rowA).getByTestId('flat-row-action-edit'))
-    // Edit reuses the row-body click handler — drawer opens keyed on
-    // the TFM uuid (groupId) with the clicked contributor's source
-    // field id as highlight.
+    const row = findRow('tfm-multi')
+    fireEvent.click(within(row).getByTestId('flat-row-action-edit'))
+    // Primary source (ms-a, ordinal=0) is highlighted; bare TFM uuid as drawer key.
     expect(onOpenDrawer).toHaveBeenCalledWith('tfm-multi', 'sf-prodsku')
   })
 
-  it('unmapped-target: Approve omitted; Reject calls setUnmappedRowRejected with targetFieldId', () => {
+  it('unmapped-target: Approve and Reject both route through the TFM helpers with the unmapped::<targetFieldId> sentinel', () => {
+    // feat/mapping-table-redesign refinement pass 2 + post-rebase reject
+    // alignment: both approve and reject on the flat-view unmapped-target
+    // dispatch through approveTfm/rejectTfm (the same helpers used for
+    // mapped rows). The server actions `approveFieldMapping` /
+    // `rejectFieldMapping` branch on the `unmapped::` prefix and route to
+    // `setCoverageStatus`. This keeps flat-view reject identical to the
+    // target-led view's reject (which also calls `rejectFieldMapping`).
     const mutations = makeMutations()
     const result = makeResult([makeUnmappedTarget()])
     render(
@@ -430,16 +470,15 @@ describe('MappingListView — action buttons per row kind', () => {
     )
 
     const row = findRow('unmapped::tf-9')
-    // No mapping to approve → Approve button is omitted entirely.
-    expect(
-      within(row).queryByTestId('flat-row-action-approve'),
-    ).toBeNull()
+    fireEvent.click(within(row).getByTestId('flat-row-action-approve'))
+    expect(mutations.approveTfm).toHaveBeenCalledWith('unmapped::tf-9')
 
     fireEvent.click(within(row).getByTestId('flat-row-action-reject'))
-    expect(mutations.rejectUnmappedRow).toHaveBeenCalledWith({
-      pendingKey: 'unmapped::tf-9',
-      target: { targetFieldId: 'tf-9' },
-    })
+    expect(mutations.rejectTfm).toHaveBeenCalledWith('unmapped::tf-9')
+    // Reject no longer routes through `rejectUnmappedRow` — that helper
+    // remains in the hook for future use but the flat-view dispatch was
+    // consolidated post-rebase.
+    expect(mutations.rejectUnmappedRow).not.toHaveBeenCalled()
   })
 
   // feat/mapping-list-toggle-and-columns refinement pass: the Edit pencil
@@ -502,10 +541,15 @@ describe('MappingListView — clickable "—" on value-assignment source field',
     expect(button.className).toContain('cursor-pointer')
   })
 
-  it('the Source TABLE "—" stays a non-interactive span on value-assignment rows', () => {
-    // Per the brief: the source-field click handles source assignment;
-    // the source-table column is derived from the chosen field, so its
-    // own "—" remains informational only.
+  it('renders no separate Source TABLE label on value-assignment rows (merged Source cell only carries the field affordance)', () => {
+    // feat/mapping-table-redesign — Source TABLE and Source FIELD
+    // collapsed into one cell. On value-assignment rows there is no
+    // source field, so the cell holds only the clickable em-dash for
+    // picking a source. The source-table label span is conditional and
+    // does NOT render when the row has no source — the table identity
+    // is undefined until a source is picked. Preserves the prior intent
+    // (no interactive source-table affordance on VA rows) under the new
+    // merged structure.
     const result = makeResult([makeValueAssignment()])
     render(
       <MappingListView
@@ -516,11 +560,12 @@ describe('MappingListView — clickable "—" on value-assignment source field',
     )
 
     const row = findRow('tfm-va-1')
-    const sourceTableCell = within(row).getByTestId('flat-cell-source-table')
-    expect(sourceTableCell.textContent).toContain('—')
-    expect(
-      within(sourceTableCell).queryByRole('button'),
-    ).toBeNull()
+    expect(within(row).queryByTestId('flat-cell-source-table')).toBeNull()
+    // The merged Source cell still surfaces the em-dash via the field
+    // affordance — verify it sits inside the source-field button, not
+    // a standalone source-table span.
+    const sourceCell = within(row).getByTestId('flat-cell-source')
+    expect(sourceCell.textContent).toContain('—')
   })
 
   it('clicking the value-assignment "—" opens the InlineSourcePicker', async () => {
@@ -575,7 +620,11 @@ describe('MappingListView — row body click + cell click', () => {
     expect(onOpenDrawer).toHaveBeenCalledWith('tfm-1', 'sf-1')
   })
 
-  it('clicking a multi-source row body opens the drawer keyed on the TFM with this contributor highlighted', () => {
+  it('clicking a multi-source row body opens the drawer keyed on the TFM with the primary source highlighted', () => {
+    // feat/mapping-table-redesign — multi-source TFMs render as one
+    // row. Row-body click opens the drawer with sources[0] highlighted
+    // (the inline primary by ordinal). Per-source navigation to other
+    // contributors happens inside the drawer.
     const mutations = makeMutations()
     const onOpenDrawer = vi.fn()
     const result = makeResult([makeMultiSourceMapped()])
@@ -587,9 +636,8 @@ describe('MappingListView — row body click + cell click', () => {
       />,
     )
 
-    fireEvent.click(findRow('tfm-multi::ms-b'))
-    // groupId (bare TFM uuid) + the clicked row's own source field id.
-    expect(onOpenDrawer).toHaveBeenCalledWith('tfm-multi', 'sf-assyitem')
+    fireEvent.click(findRow('tfm-multi'))
+    expect(onOpenDrawer).toHaveBeenCalledWith('tfm-multi', 'sf-prodsku')
   })
 
   it('clicking an action button does NOT bubble to the row body (drawer does not open)', () => {
@@ -622,26 +670,30 @@ describe('MappingListView — headers + fixed sort', () => {
       />,
     )
 
-    expect(screen.getByTestId('flat-header-sourceTable')).toBeInTheDocument()
-    expect(screen.getByTestId('flat-header-sourceField')).toBeInTheDocument()
-    expect(screen.getByTestId('flat-header-targetTable')).toBeInTheDocument()
-    expect(screen.getByTestId('flat-header-targetField')).toBeInTheDocument()
+    // feat/mapping-table-redesign — header testids reflect the merged
+    // column structure. Source/Target table+field columns collapsed
+    // into single Source / Target columns; new Rationale column inserted
+    // before Confidence; arrow glyph between Source and Target carries
+    // its own (empty) header for sort-tracking parity.
+    expect(screen.getByTestId('flat-header-source')).toBeInTheDocument()
+    expect(screen.getByTestId('flat-header-arrow')).toBeInTheDocument()
+    expect(screen.getByTestId('flat-header-target')).toBeInTheDocument()
+    expect(screen.getByTestId('flat-header-rationale')).toBeInTheDocument()
     expect(screen.getByTestId('flat-header-confidence')).toBeInTheDocument()
     expect(screen.getByTestId('flat-header-status')).toBeInTheDocument()
     expect(screen.getByTestId('flat-header-actions')).toBeInTheDocument()
   })
 
-  it('applies the fixed sort: target-first → source within target group, blank-source rows last within target', () => {
-    // feat/mapping-list-cluster-multi-source: sort flipped from
-    // source-first to target-first. Primary keys are target table +
-    // target field, then a hasSource flag (real sources first,
-    // constant-defaults last within the same target group), then
-    // source columns. This clusters multi-source TFMs as adjacent
-    // rows and keeps constant-default rows at the bottom of their
-    // target's slot.
+  it('applies source-first ordering: mapped rows (bucket 0) precede unmapped-target (bucket 2) regardless of input order', () => {
+    // feat/mapping-table-refinements — source-first three-bucket order:
+    //   bucket 0: mapped (sort by source table → source field)
+    //   bucket 1: unmapped-source
+    //   bucket 2: value-assignment + unmapped-target (sort by target columns)
+    // Mapped rows are always above unmapped-target rows across the
+    // bucket boundary — independent of how their target tables compare.
     const mutations = makeMutations()
-    const mapped = makeSingleSourceMapped({ id: 'tfm-mapped' })
-    const unmapped = makeUnmappedTarget()
+    const mapped = makeSingleSourceMapped({ id: 'tfm-mapped' }) // source: CUST_MASTER/CUST_ID
+    const unmapped = makeUnmappedTarget() // target: TGT/orphan_col
     // Pass unmapped FIRST in the input to verify the sort moves it
     // to its proper place regardless of input order.
     const result = makeResult([unmapped, mapped])
@@ -653,27 +705,22 @@ describe('MappingListView — headers + fixed sort', () => {
       />,
     )
 
-    // Both rows share target table 'TGT'. Their target fields
-    // differ: mapped='customer_id', unmapped='orphan_col'.
-    // Target-first sort puts customer_id before orphan_col.
     const rows = document.querySelectorAll('[data-testid="flat-row"]')
     expect(rows.length).toBe(2)
     expect(rows[0].getAttribute('data-row-id')).toBe('tfm-mapped')
     expect(rows[1].getAttribute('data-row-id')).toBe('unmapped::tf-9')
   })
 
-  it('multi-source rows cluster as adjacent rows regardless of source-side alphabetical order', () => {
-    // The defining behavior of feat/mapping-list-cluster-multi-source:
-    // a 2-source TFM (with sources from Assemblies + Products tables)
-    // + a single-source TFM mapped to a DIFFERENT target — the
-    // multi-source TFM's siblings must appear adjacent in the output.
-    // Under the previous source-first sort, the single-source row
-    // (source from Products) would sort BETWEEN the multi-source
-    // rows alphabetically; under target-first cluster sort it sits
-    // separately under its own target.
+  it('mapped rows sort alphabetically by primary source table within bucket 0', () => {
+    // feat/mapping-table-refinements — within the mapped bucket, sort
+    // is source-anchored. Multi-source TFMs use sources[0] (the
+    // primary by ordinal) as the sort key.
+    //   single-source fixture: CUST_MASTER / CUST_ID
+    //   multi-source fixture:  Products    / ProductSKU  (sources[0])
+    // 'CUST_MASTER' < 'Products' alphabetically → single comes first.
     const mutations = makeMutations()
-    const multi = makeMultiSourceMapped() // target = 'item_number' on TGT
-    const single = makeSingleSourceMapped() // target = 'customer_id' on TGT
+    const multi = makeMultiSourceMapped()
+    const single = makeSingleSourceMapped()
     const result = makeResult([multi, single])
     render(
       <MappingListView
@@ -684,11 +731,46 @@ describe('MappingListView — headers + fixed sort', () => {
     )
 
     const rows = document.querySelectorAll('[data-testid="flat-row"]')
-    expect(rows.length).toBe(3)
-    // Single-source first (target 'customer_id' < 'item_number'),
-    // then both multi-source rows clustered.
+    expect(rows.length).toBe(2)
     expect(rows[0].getAttribute('data-row-id')).toBe('tfm-1')
-    expect(rows[1].getAttribute('data-group-id')).toBe('tfm-multi')
-    expect(rows[2].getAttribute('data-group-id')).toBe('tfm-multi')
+    expect(rows[1].getAttribute('data-row-id')).toBe('tfm-multi')
+  })
+
+  it('emits unmapped-source rows in bucket 1, between mapped (bucket 0) and unmapped-target (bucket 2)', () => {
+    // feat/mapping-table-refinements — pin the full three-bucket order.
+    // Construct a result with one mapped row, one source-only field
+    // (no mapping, no ack — flat view always emits these), and one
+    // unmapped-target row. Expected output order:
+    //   1. mapped         (bucket 0, source CUST_MASTER/CUST_ID)
+    //   2. unmapped-source (bucket 1, source ZZ_LEGACY/ZZ_COL)
+    //   3. unmapped-target (bucket 2, target TGT/orphan_col)
+    const mutations = makeMutations()
+    const mapped = makeSingleSourceMapped({ id: 'tfm-mapped' })
+    const unmappedTarget = makeUnmappedTarget()
+    const orphanSourceField: SourceFieldWithState = {
+      id: 'sf-orphan',
+      name: 'ZZ_COL',
+      dataType: 'VARCHAR(50)',
+      ordinalPosition: 1,
+      sourceTable: { id: 'st-zz', name: 'ZZ_LEGACY' },
+      mappingStatus: 'unmapped',
+      sampleValues: [],
+      isAcknowledged: false,
+      isRejected: false,
+    }
+    const result = makeResult([mapped, unmappedTarget], [orphanSourceField])
+    render(
+      <MappingListView
+        filteredResult={result}
+        mutations={mutations}
+        onOpenDrawer={vi.fn()}
+      />,
+    )
+
+    const rows = document.querySelectorAll('[data-testid="flat-row"]')
+    expect(rows.length).toBe(3)
+    expect(rows[0].getAttribute('data-row-id')).toBe('tfm-mapped')
+    expect(rows[1].getAttribute('data-row-id')).toBe('unmapped-source::sf-orphan')
+    expect(rows[2].getAttribute('data-row-id')).toBe('unmapped::tf-9')
   })
 })

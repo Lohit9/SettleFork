@@ -27,8 +27,30 @@ import type { ProjectStats } from '@/lib/quality/project-stats'
 function projectStats(overrides: Partial<ProjectStats> = {}): ProjectStats {
   return {
     state: 'mappings_generated',
-    target: { approved: 60, total: 72, unmapped: 12, needsReview: 12 },
-    source: { decided: 53, total: 70 },
+    target: {
+      approved: 60,
+      total: 72,
+      unmapped: 12,
+      needsReview: 12,
+      // Chip ratio source — distinct count of target fields used in any
+      // primary (non-rejected, non-bare-ack) TFM. Defaults to `approved`
+      // here so the legacy `Target Fields 60/72` ratio assertion below
+      // still reads identically.
+      usedInMapping: 60,
+      // Schema-wide target field count (`datasets.role='target'`).
+      // Defaults to `total` here for the same reason — preserve the
+      // pre-change ratio in the legacy assertion.
+      schemaTotal: 72,
+    },
+    source: {
+      decided: 53,
+      total: 70,
+      // Chip ratio source — distinct count of source fields contributing
+      // to any non-rejected mapping_sources row. Defaults to `decided`
+      // here so the legacy `Source Fields 53/70` assertion reads
+      // identically.
+      usedInMapping: 53,
+    },
     transforms: { complete: 1, total: 24 },
     blocking: 21,
     ...overrides,
@@ -62,6 +84,48 @@ describe('MappingSummaryStrip — PR-7 source-first axis order', () => {
     expect(
       screen.getByTestId('mapping-summary-chip-project-target'),
     ).toHaveTextContent('Target Fields 60/72')
+  })
+
+  // ─── Ratio shape ─────────────────────────────────────────────────────────
+  //
+  // The two axis chips read `usedInMapping / (source.total | target.schemaTotal)`.
+  // These tests pin the SOURCE FIELDS chip to `source.usedInMapping`
+  // (not `source.decided`) and the TARGET FIELDS chip to
+  // `target.usedInMapping / target.schemaTotal` (not `target.approved / target.total`).
+  // If either reverts, the visual ratio drifts away from "fields used in
+  // mapping" back to "approved over addressable slots".
+
+  it('Source Fields chip uses source.usedInMapping (not source.decided)', () => {
+    render(
+      <MappingSummaryStrip
+        projectStats={projectStats({
+          source: { decided: 999, total: 70, usedInMapping: 41 },
+        })}
+      />,
+    )
+    expect(
+      screen.getByTestId('mapping-summary-chip-project-source'),
+    ).toHaveTextContent('Source Fields 41/70')
+  })
+
+  it('Target Fields chip uses target.usedInMapping and target.schemaTotal (not approved/total)', () => {
+    render(
+      <MappingSummaryStrip
+        projectStats={projectStats({
+          target: {
+            approved: 999,
+            total: 999,
+            unmapped: 0,
+            needsReview: 0,
+            usedInMapping: 80,
+            schemaTotal: 121,
+          },
+        })}
+      />,
+    )
+    expect(
+      screen.getByTestId('mapping-summary-chip-project-target'),
+    ).toHaveTextContent('Target Fields 80/121')
   })
 
   it('project-wide chips are dot-less (denominator truth, not filter chips)', () => {
@@ -118,10 +182,10 @@ describe('MappingSummaryStrip — PR-7 chips read from projectStats', () => {
     expect(target.textContent).toContain('60/72')
   })
 
-  it('Approved chip carries an emerald dot with ring, Needs Review carries amber with ring', () => {
+  it('Approved chip carries an emerald dot with ring, Needs Review carries slate with ring', () => {
     // feat/mapping-list-toggle-and-columns refinement pass: dots
     // switched from green-500/amber-400 (no ring) to
-    // emerald-500 / amber-400 each with a 2px ring at 25% opacity.
+    // emerald-500 / slate-400 each with a 2px ring at 25% opacity.
     // Mirrors the row-level `StatusDot` in MappingListView so the
     // summary and row dots read identically.
     render(<MappingSummaryStrip projectStats={projectStats()} />)
@@ -129,8 +193,8 @@ describe('MappingSummaryStrip — PR-7 chips read from projectStats', () => {
     const needsReview = screen.getByTestId('mapping-summary-chip-needs-review')
     expect(approved.innerHTML).toContain('bg-emerald-500')
     expect(approved.innerHTML).toContain('ring-emerald-500/25')
-    expect(needsReview.innerHTML).toContain('bg-amber-400')
-    expect(needsReview.innerHTML).toContain('ring-amber-400/25')
+    expect(needsReview.innerHTML).toContain('bg-slate-400')
+    expect(needsReview.innerHTML).toContain('ring-slate-400/25')
   })
 })
 
@@ -161,8 +225,8 @@ describe('MappingSummaryStrip — state-aware empty (preserved from PR-6)', () =
       <MappingSummaryStrip
         projectStats={projectStats({
           state: 'awaiting_data',
-          target: { approved: 0, total: 0, unmapped: 0, needsReview: 0 },
-          source: { decided: 0, total: 0 },
+          target: { approved: 0, total: 0, unmapped: 0, needsReview: 0, usedInMapping: 0, schemaTotal: 0 },
+          source: { decided: 0, total: 0, usedInMapping: 0 },
         })}
       />,
     )
@@ -226,7 +290,7 @@ describe('MappingSummaryStrip — always-visible status chips', () => {
     render(
       <MappingSummaryStrip
         projectStats={projectStats({
-          target: { approved: 5, total: 5, unmapped: 0, needsReview: 0 },
+          target: { approved: 5, total: 5, unmapped: 0, needsReview: 0, usedInMapping: 5, schemaTotal: 5 },
         })}
       />,
     )

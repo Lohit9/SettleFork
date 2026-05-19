@@ -229,6 +229,93 @@ describe('computeProjectStats — mapping counts', () => {
   })
 })
 
+// ─── targetFieldsUsedInMapping ─────────────────────────────────────────────
+//
+// Distinct target_field_id count across primary TFMs (non-rejected,
+// non-bare-ack). Status-agnostic: needs_review and approved both count.
+// Tracks "how many target fields appear as the target of at least one
+// real mapping?", which the public-surface `ProjectStats.target.usedInMapping`
+// re-exposes for the Mapping page strip's ratio.
+//
+// Baseline fixture's primary TFMs are tfm1, tfm2, tfm3, tfm6 → distinct
+// target ids = {t_id, t_name, t_zip, t_va} = 4.
+
+describe('computeProjectStats — targetFieldsUsedInMapping', () => {
+  it('counts distinct target_field_ids across primary TFMs', () => {
+    const stats = computeProjectStats(buildInputs())
+    expect(stats.targetFieldsUsedInMapping).toBe(4)
+  })
+
+  it('excludes rejected TFMs (rejected does not claim its target field)', () => {
+    const inputs = buildInputs({
+      tfms: [
+        {
+          id: 'tfm1',
+          target_field_id: 't_id',
+          confidence: 100,
+          status: 'rejected',
+          is_acknowledged: false,
+          combination_type: null,
+          needs_transformation: null,
+        },
+        ...buildInputs().tfms.slice(1),
+      ],
+    })
+    const stats = computeProjectStats(inputs)
+    // tfm1 → rejected, so t_id no longer counted. Primaries now tfm2, tfm3, tfm6.
+    expect(stats.targetFieldsUsedInMapping).toBe(3)
+  })
+
+  it('excludes bare-ack TFMs (the baseline tfm5 → t_ack_only would otherwise inflate)', () => {
+    const stats = computeProjectStats(buildInputs())
+    // If bare-ack tfm5 were counted, the set would include t_ack_only → 5.
+    // The pinned 4 only reachable with the bare-ack exclusion.
+    expect(stats.targetFieldsUsedInMapping).toBe(4)
+  })
+
+  it('deduplicates when multiple primary TFMs share a target_field_id', () => {
+    // Append a second primary TFM also pointing at t_id. Both are primaries
+    // (non-rejected, non-bare-ack); the distinct set must collapse to one
+    // entry for t_id. (NB: in production the UNIQUE constraint on
+    // `target_field_mappings.target_field_id` per project would prevent
+    // this row coexistence; the test pins the formula's defensive DISTINCT,
+    // which mirrors what the Set semantics produce.)
+    const base = buildInputs()
+    const inputs = buildInputs({
+      tfms: [
+        ...base.tfms,
+        {
+          id: 'tfm-extra',
+          target_field_id: 't_id',
+          confidence: 100,
+          status: 'needs_review',
+          is_acknowledged: false,
+          combination_type: null,
+          needs_transformation: null,
+        },
+      ],
+    })
+    const stats = computeProjectStats(inputs)
+    expect(stats.targetFieldsUsedInMapping).toBe(4)
+  })
+
+  it('is status-agnostic across needs_review and approved primaries', () => {
+    // Swap tfm1 to needs_review — must still count.
+    const base = buildInputs()
+    const inputs = buildInputs({
+      tfms: [
+        {
+          ...base.tfms[0],
+          status: 'needs_review',
+        },
+        ...base.tfms.slice(1),
+      ],
+    })
+    const stats = computeProjectStats(inputs)
+    expect(stats.targetFieldsUsedInMapping).toBe(4)
+  })
+})
+
 describe('computeProjectStats — transform scope', () => {
   it('value assignments are always in scope even when needs_transformation is null', () => {
     const stats = computeProjectStats(buildInputs())

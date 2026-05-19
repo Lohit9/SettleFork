@@ -41,7 +41,6 @@ import type {
 } from '@/lib/types/mappings-for-redesign'
 import type { PathDOutputs } from '@/lib/actions/path-d-outputs'
 import type { ProjectDataQualityIssueRow } from '@/lib/types/path-d'
-import { CoverageSection } from './CoverageSection'
 import { DecisionList } from './DecisionList'
 import { DQList } from './DQList'
 import {
@@ -84,7 +83,8 @@ import { DrawerHeader } from './DrawerHeader'
 //
 // Final body kind dispatch:
 //
-//   unmapped            → UnmappedBody         (Source / Coverage / Decisions —
+//   unmapped            → UnmappedBody         (Target field / Transformation /
+//                                               Explanation / Decisions —
 //                                               Phase E PR α; coverage-approved
 //                                               no-source rows live here too)
 //   value_assignment    → ValueAssignmentBody  (Target field / Value expression /
@@ -852,7 +852,13 @@ function BodyContent({ row, projectId, pathDOutputs }: DrawerBodyProps) {
     case 'value_assignment':
       return <ValueAssignmentBody row={row} pathDOutputs={pathDOutputs} />
     case 'unmapped':
-      return <UnmappedBody row={row} pathDOutputs={pathDOutputs} />
+      return (
+        <UnmappedBody
+          row={row}
+          projectId={projectId}
+          pathDOutputs={pathDOutputs}
+        />
+      )
   }
 }
 
@@ -1372,12 +1378,14 @@ const UNMAPPED_EMPTY_STATE_COPY = 'No source mapped yet'
 
 interface UnmappedBodyProps {
   row: UnmappedRow
+  projectId: string | undefined
   /** Phase E PR α — Path D outputs sidecar for COVERAGE + DECISIONS. */
   pathDOutputs: PathDOutputs | null
 }
 
 function UnmappedBody({
   row,
+  projectId,
   pathDOutputs,
 }: UnmappedBodyProps) {
   // Phase E PR α — coverage rationale always renders (synthesized
@@ -1393,7 +1401,8 @@ function UnmappedBody({
   // Drawer redesign PR 3b — body section order for unmapped /
   // rejected variants:
   //
-  //   [rejected banner]  →  TARGET FIELD  →  COVERAGE  →  DECISIONS
+  //   [rejected banner]  →  TARGET FIELD  →  TRANSFORMATION  →
+  //   EXPLANATION  →  DECISIONS
   //
   // The legacy body SOURCE section (empty-state + CreateMappingForm
   // mount) is gone — the header's FROM stack source ✏ is the
@@ -1415,10 +1424,9 @@ function UnmappedBody({
       ) : null}
 
       <TargetFieldSection targetField={row.targetField} />
+      <TransformationSection row={row} projectId={projectId} />
 
-      <DrawerSection title="Coverage" testId="drawer-section-coverage">
-        <CoverageSection coverage={coverage ?? null} />
-      </DrawerSection>
+      <AnalysisSection row={row} rowAiReasoningOverride={coverage?.ai_reasoning} />
 
       {coverageDecisions.length > 0 ? (
         <section
@@ -1773,15 +1781,20 @@ function collectPerSourceReasonings(
 
 function AnalysisSection({
   row,
+  rowAiReasoningOverride,
 }: {
-  row: MappedRow | ValueAssignmentRow
+  row: MappedRow | ValueAssignmentRow | UnmappedRow
+  rowAiReasoningOverride?: string | null
 }) {
   const isMapped = row.kind === 'mapped'
 
   const perSourceReasonings = isMapped
     ? collectPerSourceReasonings(row.sources)
     : []
-  const rowAiReasoning = row.aiReasoning
+  const rowAiReasoning =
+    row.kind === 'unmapped'
+      ? row.aiReasoning ?? rowAiReasoningOverride ?? null
+      : row.aiReasoning
   const hasAnyReasoning =
     rowAiReasoning !== null || perSourceReasonings.length > 0
 
@@ -1794,7 +1807,7 @@ function AnalysisSection({
   if (!hasAnyReasoning) return null
 
   return (
-    <DrawerSection title="Analysis" testId="drawer-section-analysis">
+    <DrawerSection title="Explanation" testId="drawer-section-analysis">
       <NestedAiReasoningDisclosure
         rowAiReasoning={rowAiReasoning}
         perSourceReasonings={perSourceReasonings}
@@ -1959,7 +1972,7 @@ function TransformationSection({
   row,
   projectId,
 }: {
-  row: MappedRow
+  row: MappedRow | UnmappedRow
   projectId: string | undefined
 }) {
   // Resolve the Transform-page route once per render. The route shape
@@ -1972,6 +1985,7 @@ function TransformationSection({
   const transformHref = projectId
     ? `/app/projects/${projectId}/transform?targetFieldMappingId=${row.id}`
     : '#'
+  const transformationIntent = row.transformationIntent?.trim() || null
 
   if (row.hasTransformation) {
     return (
@@ -1980,6 +1994,14 @@ function TransformationSection({
         testId="drawer-section-transformation"
       >
         <div className="space-y-2">
+          {transformationIntent ? (
+            <p
+              className="text-sm text-slate-700"
+              data-testid="drawer-transformation-intent"
+            >
+              {transformationIntent}
+            </p>
+          ) : null}
           {row.transformationStatus ? (
             <TransformationStatusPill status={row.transformationStatus} />
           ) : null}
@@ -2014,11 +2036,28 @@ function TransformationSection({
     )
   }
 
+  if (row.kind === 'unmapped') {
+    if (!transformationIntent) return null
+    return (
+      <DrawerSection
+        title="Transformation"
+        testId="drawer-section-transformation"
+      >
+        <p
+          className="text-sm text-slate-700"
+          data-testid="drawer-transformation-intent"
+        >
+          {transformationIntent}
+        </p>
+      </DrawerSection>
+    )
+  }
+
   // No transformation. Show the "Define Transform →" affordance only for
   // non-custom_sql mapped rows — `custom_sql` flows author SQL through a
   // different surface entirely (the Transform page's custom-SQL editor),
   // and there's no inline transform-author flow to link to.
-  if (row.combinationType === 'custom_sql') return null
+  if (row.combinationType === 'custom_sql' && !transformationIntent) return null
 
   return (
     <DrawerSection
@@ -2026,6 +2065,14 @@ function TransformationSection({
       testId="drawer-section-transformation"
     >
       <div data-testid="drawer-transformation-empty">
+        {transformationIntent ? (
+          <p
+            className="mb-2 text-sm text-slate-700"
+            data-testid="drawer-transformation-intent"
+          >
+            {transformationIntent}
+          </p>
+        ) : null}
         <TransformLink
           href={transformHref}
           label="Define Transform"
@@ -2174,8 +2221,11 @@ function DrawerFooter({
         <UnmappedFooterButtons
           status={row.status}
           isApprovePending={isApprovePending}
+          isRejecting={isRejecting}
+          optimisticallyApproved={optimisticallyApproved}
+          onApprove={onApprove}
+          onRejectClick={onRejectClick}
           isUnapproving={isUnapproving}
-          onApproveClick={onApprove}
           onUnapproveClick={onUnapproveClick}
         />
       ) : (
@@ -2192,27 +2242,25 @@ function DrawerFooter({
   )
 }
 
-// ── Unmapped footer (INF-57 cleanup, slimmed in PR 3b commit 3) ────────────
-//
-// Dispatches by row.status:
-//   approved   → [Un-approve]  (calls resetMappingStatus; drawer closes)
-//   rejected   → [Approve]     (re-approves coverage row)
-//   needs_review / unmapped → no footer affordance (header source ✏ is
-//                             the create-mapping entry point)
-
 interface UnmappedFooterButtonsProps {
   status: 'needs_review' | 'approved' | 'rejected' | 'unmapped'
   isApprovePending: boolean
+  isRejecting: boolean
+  optimisticallyApproved: boolean
+  onApprove: () => void
+  onRejectClick: () => void
   isUnapproving: boolean
-  onApproveClick: () => void
   onUnapproveClick: () => void
 }
 
 function UnmappedFooterButtons({
   status,
   isApprovePending,
+  isRejecting,
+  optimisticallyApproved,
+  onApprove,
+  onRejectClick,
   isUnapproving,
-  onApproveClick,
   onUnapproveClick,
 }: UnmappedFooterButtonsProps) {
   if (status === 'approved') {
@@ -2225,10 +2273,10 @@ function UnmappedFooterButtons({
           onClick={onUnapproveClick}
           disabled={isUnapproving}
           className={cn(
-            'inline-flex h-9 items-center justify-center gap-1.5 rounded-md border px-3 text-sm font-medium transition-shadow',
-            'border-slate-300 bg-white text-slate-700 hover:bg-slate-50',
-            'focus:outline-none focus:ring-2 focus:ring-slate-500/30',
-            'disabled:cursor-not-allowed disabled:border-slate-200 disabled:bg-slate-50 disabled:text-slate-400',
+            'inline-flex h-9 items-center justify-center gap-1.5 rounded-md border px-3 text-sm font-medium transition-colors',
+            'border-blue-200 bg-white text-blue-700 hover:bg-blue-50',
+            'focus:outline-none focus:ring-2 focus:ring-blue-500/30',
+            'disabled:cursor-not-allowed disabled:border-slate-200 disabled:bg-slate-50 disabled:text-slate-400 disabled:hover:bg-slate-50',
           )}
         >
           {isUnapproving ? (
@@ -2247,30 +2295,30 @@ function UnmappedFooterButtons({
       </div>
     )
   }
+
   if (status === 'rejected') {
     return (
-      <div className="flex items-center justify-end gap-2">
-        <button
-          type="button"
-          data-testid="mapping-drawer-approve-button"
-          aria-label="Approve mapping"
-          onClick={onApproveClick}
-          disabled={isApprovePending}
-          className={cn(
-            'inline-flex h-9 items-center justify-center rounded-md border px-3 text-sm font-medium transition-colors',
-            'border-blue-600 bg-blue-600 text-white hover:bg-blue-700',
-            'focus:outline-none focus:ring-2 focus:ring-blue-500/40',
-            'disabled:cursor-not-allowed disabled:border-slate-200 disabled:bg-slate-100 disabled:text-slate-400 disabled:hover:bg-slate-100',
-          )}
-        >
-          Approve
-        </button>
-      </div>
+      <ApproveRejectButtons
+        status={status}
+        isApprovePending={isApprovePending}
+        isRejecting={isRejecting}
+        optimisticallyApproved={optimisticallyApproved}
+        onApprove={onApprove}
+        onRejectClick={onRejectClick}
+      />
     )
   }
-  // needs_review / unmapped: header source ✏ is the create-mapping path;
-  // no footer affordance.
-  return null
+
+  return (
+    <ApproveRejectButtons
+      status={status}
+      isApprovePending={isApprovePending}
+      isRejecting={isRejecting}
+      optimisticallyApproved={optimisticallyApproved}
+      onApprove={onApprove}
+      onRejectClick={onRejectClick}
+    />
+  )
 }
 
 interface ApproveRejectButtonsProps {

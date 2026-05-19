@@ -275,15 +275,13 @@ describe('MappingDrawer — UnmappedBody (Phase E PR α)', () => {
       />,
     )
     // PR 3b: body SOURCE section retired. UnmappedBody renders
-    // [rejected banner] → TARGET FIELD → COVERAGE → DECISIONS.
+    // [rejected banner] → TARGET FIELD → [TRANSFORMATION] →
+    // [EXPLANATION] → DECISIONS.
     expect(screen.queryByTestId('drawer-section-source')).toBeNull()
     expect(
       screen.getByTestId('drawer-section-target-field'),
     ).toBeInTheDocument()
-    const coverageSection = screen.getByTestId('drawer-section-coverage')
-    expect(
-      within(coverageSection).getByTestId('drawer-coverage-label').textContent,
-    ).toBe('Manual entry required')
+    expect(screen.queryByTestId('drawer-section-coverage')).toBeNull()
     expect(screen.queryByTestId('drawer-section-decisions')).toBeNull()
   })
 
@@ -657,21 +655,17 @@ describe('MappingDrawer — graceful degradation when pathDOutputs is null/undef
     }
   })
 
-  it('synthesizes the orphan COVERAGE label on no-source rows when sidecar is absent', () => {
+  it('does not render the legacy COVERAGE section on no-source rows when sidecar is absent', () => {
     render(<MappingDrawer row={unmapped()} isOpen={true} onClose={() => {}} />)
-    const section = screen.getByTestId('drawer-section-coverage')
-    expect(
-      within(section).getByTestId('drawer-coverage-label').textContent,
-    ).toBe('Manual entry required')
+    expect(screen.queryByTestId('drawer-section-coverage')).toBeNull()
   })
 
   // INF-57 cleanup — coverage-approved no-source rows (formerly target_acknowledged
-  // dispatched into AcknowledgedBody, which collapsed the COVERAGE section
-  // when the sidecar was absent) now render UnmappedBody, which always
-  // mounts the COVERAGE section (synthesizing the orphan label when no
-  // coverage row exists). Mirrors the unmapped+needs_review behavior above.
-  it('renders the COVERAGE section on coverage-approved no-source rows when sidecar is absent', () => {
+  // dispatched into AcknowledgedBody) now render UnmappedBody. The
+  // legacy COVERAGE section was retired; explanation content lives in
+  // the main Explanation section when AI reasoning exists.
+  it('does not render the legacy COVERAGE section on coverage-approved no-source rows when sidecar is absent', () => {
     render(<MappingDrawer row={targetAck()} isOpen={true} onClose={() => {}} />)
-    expect(screen.getByTestId('drawer-section-coverage')).toBeInTheDocument()
+    expect(screen.queryByTestId('drawer-section-coverage')).toBeNull()
   })
 })
