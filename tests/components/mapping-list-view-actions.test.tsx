@@ -684,17 +684,16 @@ describe('MappingListView — headers + fixed sort', () => {
     expect(screen.getByTestId('flat-header-actions')).toBeInTheDocument()
   })
 
-  it('applies the fixed sort: target-first → source within target group, blank-source rows last within target', () => {
-    // feat/mapping-list-cluster-multi-source: sort flipped from
-    // source-first to target-first. Primary keys are target table +
-    // target field, then a hasSource flag (real sources first,
-    // constant-defaults last within the same target group), then
-    // source columns. This clusters multi-source TFMs as adjacent
-    // rows and keeps constant-default rows at the bottom of their
-    // target's slot.
+  it('applies source-first ordering: mapped rows (bucket 0) precede unmapped-target (bucket 2) regardless of input order', () => {
+    // feat/mapping-table-refinements — source-first three-bucket order:
+    //   bucket 0: mapped (sort by source table → source field)
+    //   bucket 1: unmapped-source
+    //   bucket 2: value-assignment + unmapped-target (sort by target columns)
+    // Mapped rows are always above unmapped-target rows across the
+    // bucket boundary — independent of how their target tables compare.
     const mutations = makeMutations()
-    const mapped = makeSingleSourceMapped({ id: 'tfm-mapped' })
-    const unmapped = makeUnmappedTarget()
+    const mapped = makeSingleSourceMapped({ id: 'tfm-mapped' }) // source: CUST_MASTER/CUST_ID
+    const unmapped = makeUnmappedTarget() // target: TGT/orphan_col
     // Pass unmapped FIRST in the input to verify the sort moves it
     // to its proper place regardless of input order.
     const result = makeResult([unmapped, mapped])
@@ -706,23 +705,22 @@ describe('MappingListView — headers + fixed sort', () => {
       />,
     )
 
-    // Both rows share target table 'TGT'. Their target fields
-    // differ: mapped='customer_id', unmapped='orphan_col'.
-    // Target-first sort puts customer_id before orphan_col.
     const rows = document.querySelectorAll('[data-testid="flat-row"]')
     expect(rows.length).toBe(2)
     expect(rows[0].getAttribute('data-row-id')).toBe('tfm-mapped')
     expect(rows[1].getAttribute('data-row-id')).toBe('unmapped::tf-9')
   })
 
-  it('multi-source and single-source TFMs each render as one row, sorted by target field name', () => {
-    // feat/mapping-table-redesign — multi-source TFMs are one row, so
-    // the "clustering" concern from the stacked-row era is moot. Sort
-    // is still target table → target field; multi-source rows take
-    // their place by their target like any other row.
+  it('mapped rows sort alphabetically by primary source table within bucket 0', () => {
+    // feat/mapping-table-refinements — within the mapped bucket, sort
+    // is source-anchored. Multi-source TFMs use sources[0] (the
+    // primary by ordinal) as the sort key.
+    //   single-source fixture: CUST_MASTER / CUST_ID
+    //   multi-source fixture:  Products    / ProductSKU  (sources[0])
+    // 'CUST_MASTER' < 'Products' alphabetically → single comes first.
     const mutations = makeMutations()
-    const multi = makeMultiSourceMapped() // target = 'item_number'
-    const single = makeSingleSourceMapped() // target = 'customer_id'
+    const multi = makeMultiSourceMapped()
+    const single = makeSingleSourceMapped()
     const result = makeResult([multi, single])
     render(
       <MappingListView
@@ -734,8 +732,45 @@ describe('MappingListView — headers + fixed sort', () => {
 
     const rows = document.querySelectorAll('[data-testid="flat-row"]')
     expect(rows.length).toBe(2)
-    // Target field sort: 'customer_id' < 'item_number'.
     expect(rows[0].getAttribute('data-row-id')).toBe('tfm-1')
     expect(rows[1].getAttribute('data-row-id')).toBe('tfm-multi')
+  })
+
+  it('emits unmapped-source rows in bucket 1, between mapped (bucket 0) and unmapped-target (bucket 2)', () => {
+    // feat/mapping-table-refinements — pin the full three-bucket order.
+    // Construct a result with one mapped row, one source-only field
+    // (no mapping, no ack — flat view always emits these), and one
+    // unmapped-target row. Expected output order:
+    //   1. mapped         (bucket 0, source CUST_MASTER/CUST_ID)
+    //   2. unmapped-source (bucket 1, source ZZ_LEGACY/ZZ_COL)
+    //   3. unmapped-target (bucket 2, target TGT/orphan_col)
+    const mutations = makeMutations()
+    const mapped = makeSingleSourceMapped({ id: 'tfm-mapped' })
+    const unmappedTarget = makeUnmappedTarget()
+    const orphanSourceField: SourceFieldWithState = {
+      id: 'sf-orphan',
+      name: 'ZZ_COL',
+      dataType: 'VARCHAR(50)',
+      ordinalPosition: 1,
+      sourceTable: { id: 'st-zz', name: 'ZZ_LEGACY' },
+      mappingStatus: 'unmapped',
+      sampleValues: [],
+      isAcknowledged: false,
+      isRejected: false,
+    }
+    const result = makeResult([mapped, unmappedTarget], [orphanSourceField])
+    render(
+      <MappingListView
+        filteredResult={result}
+        mutations={mutations}
+        onOpenDrawer={vi.fn()}
+      />,
+    )
+
+    const rows = document.querySelectorAll('[data-testid="flat-row"]')
+    expect(rows.length).toBe(3)
+    expect(rows[0].getAttribute('data-row-id')).toBe('tfm-mapped')
+    expect(rows[1].getAttribute('data-row-id')).toBe('unmapped-source::sf-orphan')
+    expect(rows[2].getAttribute('data-row-id')).toBe('unmapped::tf-9')
   })
 })
