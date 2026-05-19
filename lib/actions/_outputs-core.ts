@@ -199,8 +199,8 @@ export function emptyOutputsPageData(projectId: string): OutputsPageData {
     hasTargetData: false,
     projectStats: {
       state: 'awaiting_data',
-      target: { approved: 0, total: 0, unmapped: 0, needsReview: 0 },
-      source: { decided: 0, total: 0 },
+      target: { approved: 0, total: 0, unmapped: 0, needsReview: 0, usedInMapping: 0, schemaTotal: 0 },
+      source: { decided: 0, total: 0, usedInMapping: 0 },
       transforms: { complete: 0, total: 0 },
       blocking: 0,
     },

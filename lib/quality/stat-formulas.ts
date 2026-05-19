@@ -233,6 +233,15 @@ export interface ComputeProjectStatsResult {
    *  the chip math on the Mapping page strip:
    *  `Approved + Needs Review = Target Fields total`. */
   mappingNeedsReview: number
+  /** Distinct `target_field_id` count across primary TFMs (i.e. non-rejected
+   *  TFMs excluding bare-acks, where bare-ack = is_acknowledged AND
+   *  combination_type IS NULL). Answers "how many target fields appear as
+   *  the target of at least one real mapping?". Differs from
+   *  `mappingApproved` in two ways: it ignores TFM status (needs_review
+   *  and approved both count) and it excludes the acknowledged-unmapped
+   *  count (a bare-ack does not "use" the target field as a mapping
+   *  target). Always <= `targetFields.length` (the schema-wide count). */
+  targetFieldsUsedInMapping: number
 
   // ── Transform ──────────────────────────────────────────────────────────
   /** Primary TFMs the `fieldNeedsTransform` heuristic flags as needing a
@@ -584,6 +593,7 @@ export function computeProjectStats(inputs: ComputeProjectStatsInputs): ComputeP
     mappingTotal,
     mappingUnmapped,
     mappingNeedsReview,
+    targetFieldsUsedInMapping: primaryMappedTargetIds.size,
     transformScope,
     transformApplied,
     transformNeedsWork,
