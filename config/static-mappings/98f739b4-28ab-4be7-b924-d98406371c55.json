@@ -422,7 +422,7 @@
         "transformations": [
           "Constant `No` — cups/sleeves are not serialized."
         ]
-      },
+      },IFO Costing Method,
       {
         "source_table": "Unmapped",
         "source_field": "Unmapped",

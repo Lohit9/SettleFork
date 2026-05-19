@@ -139,6 +139,32 @@ function buildReasoning(entry: StaticMappingEntry): string {
   return parts.filter(Boolean).join(' ')
 }
 
+function buildTransformationsText(
+  entry: Pick<StaticMappingEntry, 'transformations'>,
+): string | null {
+  if (!Array.isArray(entry.transformations) || entry.transformations.length === 0) {
+    return null
+  }
+  const rendered = entry.transformations
+    .map((t) => (typeof t === 'string' ? t.trim() : JSON.stringify(t)))
+    .filter(Boolean)
+  return rendered.length > 0 ? rendered.join('; ') : null
+}
+
+function buildTransformationIntent(
+  entries: readonly StaticMappingEntry[],
+): string | null {
+  const seen = new Set<string>()
+  const parts: string[] = []
+  for (const entry of entries) {
+    const rendered = buildTransformationsText(entry)
+    if (!rendered || seen.has(rendered)) continue
+    seen.add(rendered)
+    parts.push(rendered)
+  }
+  return parts.length > 0 ? parts.join(' ; ') : null
+}
+
 async function resolveStaticOrgMappingForProject(
   supabase: SupabaseClient,
   projectId: string,
@@ -288,6 +314,73 @@ async function loadTablesAndFieldsForIds(
   }
 }
 
+async function loadProjectTablesAndFields(
+  supabase: SupabaseClient,
+  projectId: string,
+): Promise<{
+  sourceTables: StaticTableRow[]
+  targetTables: StaticTableRow[]
+  sourceFields: StaticFieldRow[]
+  targetFields: StaticFieldRow[]
+}> {
+  const { data: datasets } = await supabase
+    .from('datasets')
+    .select('id, role')
+    .eq('project_id', projectId)
+    .returns<Array<{ id: string; role: string }>>()
+
+  const sourceTableIds = (datasets ?? [])
+    .filter((dataset) => dataset.role === 'source')
+    .map((dataset) => dataset.id)
+  const targetTableIds = (datasets ?? [])
+    .filter((dataset) => dataset.role === 'target')
+    .map((dataset) => dataset.id)
+
+  const [{ data: sourceTables }, { data: targetTables }] = await Promise.all([
+    sourceTableIds.length > 0
+      ? supabase
+          .from('tables')
+          .select('id, name')
+          .in('dataset_id', sourceTableIds)
+          .returns<StaticTableRow[]>()
+      : Promise.resolve({ data: [] as StaticTableRow[] }),
+    targetTableIds.length > 0
+      ? supabase
+          .from('tables')
+          .select('id, name')
+          .in('dataset_id', targetTableIds)
+          .returns<StaticTableRow[]>()
+      : Promise.resolve({ data: [] as StaticTableRow[] }),
+  ])
+
+  const sourceIds = (sourceTables ?? []).map((table) => table.id)
+  const targetIds = (targetTables ?? []).map((table) => table.id)
+
+  const [{ data: sourceFields }, { data: targetFields }] = await Promise.all([
+    sourceIds.length > 0
+      ? supabase
+          .from('fields')
+          .select('id, table_id, name')
+          .in('table_id', sourceIds)
+          .returns<StaticFieldRow[]>()
+      : Promise.resolve({ data: [] as StaticFieldRow[] }),
+    targetIds.length > 0
+      ? supabase
+          .from('fields')
+          .select('id, table_id, name')
+          .in('table_id', targetIds)
+          .returns<StaticFieldRow[]>()
+      : Promise.resolve({ data: [] as StaticFieldRow[] }),
+  ])
+
+  return {
+    sourceTables: sourceTables ?? [],
+    targetTables: targetTables ?? [],
+    sourceFields: sourceFields ?? [],
+    targetFields: targetFields ?? [],
+  }
+}
+
 async function persistSourceAcknowledgments(
   supabase: SupabaseClient,
   projectId: string,
@@ -370,6 +463,7 @@ async function persistTargetAcknowledgments(
   }
 
   let inserted = 0
+  const { supabaseAdmin } = await import('@/lib/supabase/admin')
   for (const entry of entries) {
     const targetTable = targetTableByName.get(normalizeName(entry.target_table))
     if (!targetTable) continue
@@ -378,14 +472,53 @@ async function persistTargetAcknowledgments(
     )
     if (!targetFieldId) continue
 
-    const { error } = await supabase.rpc('dq_acknowledge_target', {
-      p_project_id: projectId,
-      p_target_field_id: targetFieldId,
-      p_reason: entry.explanation.trim() || 'Unmapped',
-    })
-    if (error) {
-      throw new Error(`Static target acknowledgment failed: ${error.message}`)
+    const { data: upserted, error: tfmError } = await supabaseAdmin
+      .from('target_field_mappings')
+      .upsert({
+        project_id: projectId,
+        target_field_id: targetFieldId,
+        is_acknowledged: true,
+        acknowledgment_reason: entry.explanation.trim() || 'Unmapped',
+        status: 'approved',
+        combination_type: null,
+        combination_sql: null,
+        confidence: STATIC_CONFIDENCE,
+        ai_reasoning: buildReasoning(entry),
+        transformation_intent: buildTransformationIntent([entry]),
+        needs_transformation: entry.transformation_needed,
+      }, { onConflict: 'project_id,target_field_id' })
+      .select('id')
+      .single<{ id: string }>()
+    if (tfmError || !upserted) {
+      throw new Error(`Static target acknowledgment mapping update failed: ${tfmError?.message ?? 'Unknown error'}`)
     }
+
+    const { error: msDeleteError } = await supabaseAdmin
+      .from('mapping_sources')
+      .delete()
+      .eq('target_field_mapping_id', upserted.id)
+    if (msDeleteError) {
+      throw new Error(`Static target acknowledgment source cleanup failed: ${msDeleteError.message}`)
+    }
+
+    const { error: tfmNormalizeError } = await supabaseAdmin
+      .from('target_field_mappings')
+      .update({
+        is_acknowledged: true,
+        status: 'approved',
+        combination_type: null,
+        combination_sql: null,
+        confidence: STATIC_CONFIDENCE,
+        acknowledgment_reason: entry.explanation.trim() || 'Unmapped',
+        ai_reasoning: buildReasoning(entry),
+        transformation_intent: buildTransformationIntent([entry]),
+        needs_transformation: entry.transformation_needed,
+      })
+      .eq('id', upserted.id)
+    if (tfmNormalizeError) {
+      throw new Error(`Static target acknowledgment normalization failed: ${tfmNormalizeError.message}`)
+    }
+
     inserted++
   }
 
@@ -574,6 +707,9 @@ async function persistResolvedStaticTargetMappings(args: {
     if (rpcSources.length === 0) continue
 
     const reasoning = group.map((item) => buildReasoning(item.entry)).join(' ')
+    const transformationIntent = buildTransformationIntent(
+      group.map((item) => item.entry),
+    )
     const combinationType = rpcSources.length > 1 ? 'concat_space' : 'single'
 
     const { error } = await args.supabase.rpc('dq_create_target_field_mapping', {
@@ -590,6 +726,19 @@ async function persistResolvedStaticTargetMappings(args: {
       console.error(
         `[static-mappings] dq_create_target_field_mapping failed for target ${primary.targetFieldId}:`,
         error.message,
+      )
+      continue
+    }
+
+    const { error: tfmUpdateError } = await args.supabase
+      .from('target_field_mappings')
+      .update({ transformation_intent: transformationIntent })
+      .eq('project_id', args.projectId)
+      .eq('target_field_id', primary.targetFieldId)
+    if (tfmUpdateError) {
+      console.error(
+        `[static-mappings] target_field_mappings transformation_intent update failed for target ${primary.targetFieldId}:`,
+        tfmUpdateError.message,
       )
       continue
     }
@@ -621,6 +770,10 @@ export async function persistStaticMappingsForSelection(
       args.sourceTableIds,
       args.targetTableIds,
     )
+  const projectSchema = await loadProjectTablesAndFields(
+    args.supabase,
+    args.projectId,
+  )
 
   const sourceTableByName = new Map(
     sourceTables.map((table) => [normalizeName(table.name), table]),
@@ -643,8 +796,22 @@ export async function persistStaticMappingsForSelection(
   )
 
   const mappedEntries = matchedEntries.filter(isMappedEntry)
-  const sourceUnmappedEntries = matchedEntries.filter(isSourceUnmappedEntry)
-  const targetUnmappedEntries = matchedEntries.filter(isTargetUnmappedEntry)
+  const sourceProjectTableByName = new Map(
+    projectSchema.sourceTables.map((table) => [normalizeName(table.name), table]),
+  )
+  const targetProjectTableByName = new Map(
+    projectSchema.targetTables.map((table) => [normalizeName(table.name), table]),
+  )
+  const sourceUnmappedEntries = resolved.config.entries.filter(
+    (entry) =>
+      isSourceUnmappedEntry(entry) &&
+      sourceProjectTableByName.has(normalizeName(entry.source_table)),
+  )
+  const targetUnmappedEntries = resolved.config.entries.filter(
+    (entry) =>
+      isTargetUnmappedEntry(entry) &&
+      targetProjectTableByName.has(normalizeName(entry.target_table)),
+  )
   const resolvedMappedEntries = resolveMappedEntriesToLiveFields({
     entries: mappedEntries,
     sourceTableByName,
@@ -672,15 +839,15 @@ export async function persistStaticMappingsForSelection(
     args.supabase,
     args.projectId,
     sourceUnmappedEntries,
-    sourceTables,
-    sourceFields,
+    projectSchema.sourceTables,
+    projectSchema.sourceFields,
   )
   await persistTargetAcknowledgments(
     args.supabase,
     args.projectId,
     targetUnmappedEntries,
-    targetTables,
-    targetFields,
+    projectSchema.targetTables,
+    projectSchema.targetFields,
   )
 
   const { pairToTableMappingId, created, reused } = await ensureStaticTableMappings({
@@ -741,6 +908,10 @@ export async function persistStaticMappingsForPair(
       [args.sourceTableId],
       [args.targetTableId],
     )
+  const projectSchema = await loadProjectTablesAndFields(
+    args.supabase,
+    args.projectId,
+  )
 
   const sourceTable = sourceTables[0]
   const targetTable = targetTables[0]
@@ -771,22 +942,36 @@ export async function persistStaticMappingsForPair(
   }
 
   const mappedEntries = matchedEntries.filter(isMappedEntry)
-  const sourceUnmappedEntries = matchedEntries.filter(isSourceUnmappedEntry)
-  const targetUnmappedEntries = matchedEntries.filter(isTargetUnmappedEntry)
+  const sourceProjectTableByName = new Map(
+    projectSchema.sourceTables.map((table) => [normalizeName(table.name), table]),
+  )
+  const targetProjectTableByName = new Map(
+    projectSchema.targetTables.map((table) => [normalizeName(table.name), table]),
+  )
+  const sourceUnmappedEntries = resolved.config.entries.filter(
+    (entry) =>
+      isSourceUnmappedEntry(entry) &&
+      sourceProjectTableByName.has(normalizeName(entry.source_table)),
+  )
+  const targetUnmappedEntries = resolved.config.entries.filter(
+    (entry) =>
+      isTargetUnmappedEntry(entry) &&
+      targetProjectTableByName.has(normalizeName(entry.target_table)),
+  )
 
   await persistSourceAcknowledgments(
     args.supabase,
     args.projectId,
     sourceUnmappedEntries,
-    sourceTables,
-    sourceFields,
+    projectSchema.sourceTables,
+    projectSchema.sourceFields,
   )
   await persistTargetAcknowledgments(
     args.supabase,
     args.projectId,
     targetUnmappedEntries,
-    targetTables,
-    targetFields,
+    projectSchema.targetTables,
+    projectSchema.targetFields,
   )
 
   if (mappedEntries.length === 0) {
