@@ -15,7 +15,8 @@
         "transformation_needed": false,
         "transformations": [
           "No transformation needed — this field is not loaded. If desired, parse the case quantity portion (the suffix after the last hyphen) and use it to cross-validate against ProductCaseQty in the Products table."
-        ]
+        ],
+        "confidence": 91
       },
       {
         "source_table": "Engineering BOM Masters",
@@ -26,7 +27,8 @@
         "transformation_needed": true,
         "transformations": [
           "Apply only to SKUs that appear as BoM.Part # but not as Products.ProductSKU:\n\n  WHEN BoM.Item Type = 'Non Inventory' AND Part # matches /^A\\d{4}|^D\\d{4}/ → RCB-CONSUMABLE-INK\n  WHEN BoM.Item Type = 'Non Inventory' AND Part # matches /^H\\d{4}|TAPE|LABEL/ → RCB-PACKAGING\n  WHEN BoM.Item Type = 'Non Inventory' (any other)  → RCB-CONSUMABLE-INK\n  WHEN BoM.Item Type = 'Inventory' AND Part # starts with 'PR-' or contains SBS/KRA → RCB-PRINT-MAT\n  WHEN BoM.Item Type = 'Inventory' AND Part # starts with 'BX-', 'BG-', or 'S-' → RCB-PACKAGING\n  ELSE → RCB-PRINT-MAT"
-        ]
+        ],
+        "confidence": 64
       },
       {
         "source_table": "Engineering BOM Masters",
@@ -37,7 +39,8 @@
         "transformation_needed": true,
         "transformations": [
           "Take distinct trimmed values of Assy Item where Assy Item is not null. When merging with Products.ProductSKU extraction: SKUs that exist in both sources keep Inventory Source = Manufactured (a SKU with a BoM is manufactured regardless of catalog presence), but Products.ProductName wins for Item Description because it is more complete (4,587 catalog descriptions vs 123 BoM descriptions)."
-        ]
+        ],
+        "confidence": 97
       },
       {
         "source_table": "Engineering BOM Masters",
@@ -48,7 +51,8 @@
         "transformation_needed": false,
         "transformations": [
           "No transformation needed — this field is not loaded."
-        ]
+        ],
+        "confidence": 94
       },
       {
         "source_table": "Engineering BOM Masters",
@@ -59,7 +63,8 @@
         "transformation_needed": true,
         "transformations": [
           "Take distinct trimmed values of Assy Desc paired with Assy Item. When the same SKU also exists in Products: use COALESCE(Products.ProductName, BoM.Assy_Desc) — Products.ProductName wins when both are present."
-        ]
+        ],
+        "confidence": 82
       },
       {
         "source_table": "Engineering BOM Masters",
@@ -70,7 +75,8 @@
         "transformation_needed": true,
         "transformations": [
           "Take distinct trimmed values of Part # where Part # is not null. Then exclude any value that already exists as an Assy Item (those are manufactured parents — already loaded with Inventory Source = Manufactured) or as a Products.ProductSKU (those come from the catalog instead). Only emit Part # values that no other source already created."
-        ]
+        ],
+        "confidence": 92
       },
       {
         "source_table": "Engineering BOM Masters",
@@ -81,7 +87,8 @@
         "transformation_needed": true,
         "transformations": [
           "Trim whitespace. Use only when the Part # has no corresponding Products.ProductName. Final priority for Item Description: Products.ProductName > BoM.Assy_Desc > BoM.Item."
-        ]
+        ],
+        "confidence": 80
       },
       {
         "source_table": "Engineering BOM Masters",
@@ -92,7 +99,8 @@
         "transformation_needed": false,
         "transformations": [
           "No transformation needed for these tables. Preserve this field for the future BOM Component migration phase."
-        ]
+        ],
+        "confidence": 86
       },
       {
         "source_table": "Engineering BOM Masters",
@@ -103,7 +111,8 @@
         "transformation_needed": true,
         "transformations": [
           "For components extracted from BoM.Part #, look up the source UOM and map to Rootstock UOM external ID:\n\n  Sheet     → SHEET\n  5Kg       → KG    (note: '5Kg' is the pail size, not a unit — confirm with RCB whether inks should be tracked in KG by weight or in pails as Each)\n  Gallon    → GAL\n  Each      → EA\n  Roll      → ROLL\n  Linear FT → FT\n  Lbs       → LB\n  Liter     → L\n\nFor parent assemblies extracted from BoM.Assy Item, hardcode EA. Pre-create any missing UOM records in Rootstock before loading peitem rows."
-        ]
+        ],
+        "confidence": 83
       },
       {
         "source_table": "Engineering BOM Masters",
@@ -114,7 +123,8 @@
         "transformation_needed": true,
         "transformations": [
           "Group items by their assigned commodity code, take the most common UOM among them, and map to a Rootstock UOM external ID. Per-commodity-code constant. Recommended values for RCB:\n\n  RCB-PRINT-CUP, RCB-PRINT-SLEEVE, RCB-BLANK,\n  RCB-STOCK-RESALE, RCB-PACKAGING, RCB-APPAREL-DROP  → EA\n  RCB-PRINT-MAT       → SHEET\n  RCB-CONSUMABLE-INK  → KG"
-        ]
+        ],
+        "confidence": 71
       },
       {
         "source_table": "Engineering BOM Masters",
@@ -125,7 +135,8 @@
         "transformation_needed": true,
         "transformations": [
           "Default to EA. Override per commodity code only where bulk weight tracking applies:\n\n  RCB-CONSUMABLE-INK → KG\n  All other codes    → EA"
-        ]
+        ],
+        "confidence": 76
       },
       {
         "source_table": "Engineering BOM Masters",
@@ -136,7 +147,8 @@
         "transformation_needed": true,
         "transformations": [
           "Group items by commodity code and take the most common purchasing UOM among them. Recommended values:\n\n  RCB-PRINT-CUP, RCB-PRINT-SLEEVE, RCB-BLANK,\n  RCB-STOCK-RESALE, RCB-PACKAGING, RCB-APPAREL-DROP  → EA\n  RCB-PRINT-MAT       → SHEET\n  RCB-CONSUMABLE-INK  → KG"
-        ]
+        ],
+        "confidence": 73
       },
       {
         "source_table": "Engineering BOM Masters",
@@ -147,7 +159,8 @@
         "transformation_needed": false,
         "transformations": [
           "No transformation needed for these tables. Preserve this field for the future BOM Component migration phase."
-        ]
+        ],
+        "confidence": 96
       },
       {
         "source_table": "Engineering BOM Masters",
@@ -158,7 +171,8 @@
         "transformation_needed": false,
         "transformations": [
           "No transformation needed for these tables. Preserve this field for the future cost migration phase."
-        ]
+        ],
+        "confidence": 89
       },
       {
         "source_table": "Engineering BOM Masters",
@@ -169,7 +183,8 @@
         "transformation_needed": true,
         "transformations": [
           "Apply this rule when extracting components from BoM.Part #:\n\n  CASE WHEN sub-assembly flag = 'Sub-Assembly' THEN 'Phantom' ELSE 'Standard' END\n\nIf a SKU appears as both a parent in one BoM and a sub-assembly component in another, keep Inventory Source = Manufactured but set Eng Type = Phantom. Confirm with RCB whether other multi-BoM SKUs should also be marked Phantom."
-        ]
+        ],
+        "confidence": 54
       },
       {
         "source_table": "Products",
@@ -180,7 +195,8 @@
         "transformation_needed": false,
         "transformations": [
           "No transformation needed — this field is not loaded. If audit traceability back to Prosys is required, optionally preserve in a custom field."
-        ]
+        ],
+        "confidence": 99
       },
       {
         "source_table": "Products",
@@ -191,7 +207,8 @@
         "transformation_needed": false,
         "transformations": [
           "No transformation needed — this field is not loaded. If RCB intends to maintain the WooCommerce integration, preserve in a custom field for the integration layer to use."
-        ]
+        ],
+        "confidence": 86
       },
       {
         "source_table": "Products",
@@ -202,7 +219,8 @@
         "transformation_needed": true,
         "transformations": [
           "Trim whitespace. When merging with items already extracted from the BoM: SKUs that appear as a BoM Assy Item keep Inventory Source = Manufactured; SKUs in the Apparel-Outsource product group become Subcontract; SKUs with InvMasterSKU = 'NO INVENTORY' and no BoM presence are filtered out. All other catalog SKUs become Purchased."
-        ]
+        ],
+        "confidence": 97
       },
       {
         "source_table": "Products",
@@ -213,7 +231,8 @@
         "transformation_needed": true,
         "transformations": [
           "Apply this rule for items that appear in the Products catalog or as BoM parents, after ProductGroupName routing has run:\n\n  WHEN ProductSKU starts with 'P-' OR SKU appears as a BoM Assy Item:\n    IF SKU body (after stripping 'P-') starts with DWS, DKS, CWS, CKS, or WSC → RCB-PRINT-SLEEVE\n    OTHERWISE → RCB-PRINT-CUP"
-        ]
+        ],
+        "confidence": 62
       },
       {
         "source_table": "Products",
@@ -224,7 +243,8 @@
         "transformation_needed": true,
         "transformations": [
           "Trim whitespace. Truncate to Rootstock's Item Description max length. When a SKU has descriptions available from multiple sources, apply this priority: Products.ProductName > BoM.Assy_Desc > BoM.Item."
-        ]
+        ],
+        "confidence": 93
       },
       {
         "source_table": "Products",
@@ -235,7 +255,8 @@
         "transformation_needed": true,
         "transformations": [
           "Apply this rule first, before SKU-pattern routing:\n\n  WHEN ProductGroupName = 'Apparel-Outsource' → RCB-APPAREL-DROP\n  WHEN ProductGroupName = 'Warehoused'        → RCB-STOCK-RESALE\n\nFor any other ProductGroupName value, fall through to the SKU-pattern rule (ProductSKU → iccomcod)."
-        ]
+        ],
+        "confidence": 77
       },
       {
         "source_table": "Products",
@@ -246,7 +267,8 @@
         "transformation_needed": false,
         "transformations": [
           "No transformation needed for these tables. Preserve this field for the future Vendor migration phase."
-        ]
+        ],
+        "confidence": 91
       },
       {
         "source_table": "Products",
@@ -257,7 +279,8 @@
         "transformation_needed": false,
         "transformations": [
           "No transformation needed — this field is not loaded."
-        ]
+        ],
+        "confidence": 98
       },
       {
         "source_table": "Products",
@@ -268,7 +291,8 @@
         "transformation_needed": true,
         "transformations": [
           "Apply this resolution rule:\n\n  IF SKU appears as a BoM Assy Item → Inventory Source = Manufactured\n  ELSE IF ProductGroupName = 'Apparel-Outsource' → Inventory Source = Subcontract\n  ELSE IF InvMasterSKU is non-null AND ≠ 'NO INVENTORY' → Inventory Source = Purchased\n  ELSE IF InvMasterSKU = 'NO INVENTORY' AND SKU not used in any BoM → filter out (do not load) OR create as Phantom (confirm preference with RCB)"
-        ]
+        ],
+        "confidence": 68
       },
       {
         "source_table": "Products",
@@ -279,7 +303,8 @@
         "transformation_needed": false,
         "transformations": [
           "No transformation needed for these tables. Preserve this field for the future UOM Conversion migration phase."
-        ]
+        ],
+        "confidence": 92
       },
       {
         "source_table": "Products",
@@ -290,7 +315,8 @@
         "transformation_needed": false,
         "transformations": [
           "No transformation needed for these tables. Preserve this field for the future UOM Conversion and Sales Order migration phases."
-        ]
+        ],
+        "confidence": 87
       },
       {
         "source_table": "Products",
@@ -301,7 +327,8 @@
         "transformation_needed": false,
         "transformations": [
           "No transformation needed — this field is not loaded. If RCB needs this information after migration, add a custom field to the import template."
-        ]
+        ],
+        "confidence": 84
       },
       {
         "source_table": "Products",
@@ -312,7 +339,8 @@
         "transformation_needed": false,
         "transformations": [
           "No transformation needed — this field is not loaded."
-        ]
+        ],
+        "confidence": 78
       },
       {
         "source_table": "Products",
@@ -323,7 +351,8 @@
         "transformation_needed": false,
         "transformations": [
           "No transformation needed — this field is not loaded."
-        ]
+        ],
+        "confidence": 95
       },
       {
         "source_table": "Products",
@@ -334,7 +363,8 @@
         "transformation_needed": false,
         "transformations": [
           "No transformation needed — this field is not loaded. If RCB wants to preserve notes, add a custom long-text field to peitem and extend the import template."
-        ]
+        ],
+        "confidence": 72
       },
       {
         "source_table": "Products",
@@ -345,7 +375,8 @@
         "transformation_needed": true,
         "transformations": [
           "For items sourced from the Products catalog, set Status = 'Active' regardless of the ProductActive value (the active/inactive distinction is handled by Inactive Status). Use 'Pending' only if RCB has a specific convention for items not yet released. For items sourced only from the BoM with no catalog match, default to Status = 'Active'."
-        ]
+        ],
+        "confidence": 79
       },
       {
         "source_table": "Products",
@@ -356,7 +387,8 @@
         "transformation_needed": true,
         "transformations": [
           "Apply this rule only to items sourced from the Products catalog:\n\n  CASE WHEN Products.ProductActive = 0 THEN TRUE ELSE FALSE END\n\nItems sourced only from the BoM (no catalog match) default to FALSE (active). The field is a Checkbox in Rootstock — values are TRUE (checked = inactive) or FALSE / blank (unchecked = active or pending)."
-        ]
+        ],
+        "confidence": 92
       },
       {
         "source_table": "Unmapped",
@@ -367,7 +399,8 @@
         "transformation_needed": true,
         "transformations": [
           "Constant `2` for all peitems (single-division setup per RCB cleaned file)."
-        ]
+        ],
+        "confidence": 86
       },
       {
         "source_table": "Unmapped",
@@ -378,7 +411,8 @@
         "transformation_needed": true,
         "transformations": [
           "Constant `2` (same as Eng Division for single-division setup)."
-        ]
+        ],
+        "confidence": 81
       },
       {
         "source_table": "Unmapped",
@@ -389,7 +423,8 @@
         "transformation_needed": true,
         "transformations": [
           "Constant `Direct Material` for all peitems (no labor-only items in RCB data)."
-        ]
+        ],
+        "confidence": 89
       },
       {
         "source_table": "Unmapped",
@@ -400,7 +435,8 @@
         "transformation_needed": true,
         "transformations": [
           "Constant placeholder user ID (`1990` per Rootstock reference data, or RCB admin user)."
-        ]
+        ],
+        "confidence": 48
       },
       {
         "source_table": "Unmapped",
@@ -411,7 +447,8 @@
         "transformation_needed": true,
         "transformations": [
           "Constant `No`. Override at item level only if RCB decides to lot-track specific consumables (inks)."
-        ]
+        ],
+        "confidence": 84
       },
       {
         "source_table": "Unmapped",
@@ -422,7 +459,8 @@
         "transformation_needed": true,
         "transformations": [
           "Constant `No` — cups/sleeves are not serialized."
-        ]
+        ],
+        "confidence": 96
       },
       {
         "source_table": "Unmapped",
@@ -433,7 +471,8 @@
         "transformation_needed": false,
         "transformations": [
           "Leave NULL — inherit from commodity code."
-        ]
+        ],
+        "confidence": 76
       },
       {
         "source_table": "Unmapped",
@@ -444,7 +483,8 @@
         "transformation_needed": false,
         "transformations": [
           "Leave NULL — does not apply to RCB."
-        ]
+        ],
+        "confidence": 95
       },
       {
         "source_table": "Unmapped",
@@ -455,7 +495,8 @@
         "transformation_needed": false,
         "transformations": [
           "Leave NULL — does not apply to RCB."
-        ]
+        ],
+        "confidence": 94
       },
       {
         "source_table": "Unmapped",
@@ -466,7 +507,8 @@
         "transformation_needed": false,
         "transformations": [
           "Leave NULL — does not apply to RCB."
-        ]
+        ],
+        "confidence": 94
       },
       {
         "source_table": "Unmapped",
@@ -477,7 +519,8 @@
         "transformation_needed": true,
         "transformations": [
           "Constant `2` for all iccomcod rows."
-        ]
+        ],
+        "confidence": 85
       },
       {
         "source_table": "Unmapped",
@@ -488,7 +531,8 @@
         "transformation_needed": true,
         "transformations": [
           "Per-code value. Proposed set: RCB-PRINT-CUP, RCB-BLANK-CUP, RCB-PRINT-MAT, RCB-CONSUMABLE-INK, RCB-PACKAGING, RCB-STOCK-RESALE, RCB-APPAREL-DROP (8–10 total)."
-        ]
+        ],
+        "confidence": 56
       },
       {
         "source_table": "Unmapped",
@@ -499,7 +543,8 @@
         "transformation_needed": true,
         "transformations": [
           "Per-code value (e.g., \"Printed Paper Hot Cups\", \"Cup Blanks\", \"Print Materials — Paper\", \"Ink Consumables\")."
-        ]
+        ],
+        "confidence": 58
       },
       {
         "source_table": "Unmapped",
@@ -510,7 +555,8 @@
         "transformation_needed": true,
         "transformations": [
           "Placeholder/admin user ID (`1990` or RCB admin)."
-        ]
+        ],
+        "confidence": 44
       },
       {
         "source_table": "Unmapped",
@@ -521,7 +567,8 @@
         "transformation_needed": true,
         "transformations": [
           "Constant `2`."
-        ]
+        ],
+        "confidence": 83
       },
       {
         "source_table": "Unmapped",
@@ -532,7 +579,8 @@
         "transformation_needed": true,
         "transformations": [
           "Per-code: `A` for finished printed goods, `B` for blanks/raw materials, `C` for consumables."
-        ]
+        ],
+        "confidence": 53
       },
       {
         "source_table": "Unmapped",
@@ -543,7 +591,8 @@
         "transformation_needed": true,
         "transformations": [
           "Constant `Active`."
-        ]
+        ],
+        "confidence": 96
       },
       {
         "source_table": "Unmapped",
@@ -554,7 +603,8 @@
         "transformation_needed": true,
         "transformations": [
           "Per-code: `Standard` for most codes; `Phantom` only for codes that hold catalog-only sub-assemblies."
-        ]
+        ],
+        "confidence": 41
       },
       {
         "source_table": "Unmapped",
@@ -565,7 +615,8 @@
         "transformation_needed": true,
         "transformations": [
           "Per-code: `Manufactured` (RCB-PRINT-*); `Purchased` (RCB-BLANK-*, RCB-PRINT-MAT, RCB-CONSUMABLE-*, RCB-PACKAGING, RCB-STOCK-RESALE); `Subcontract` (RCB-APPAREL-DROP)."
-        ]
+        ],
+        "confidence": 82
       },
       {
         "source_table": "Unmapped",
@@ -576,7 +627,8 @@
         "transformation_needed": true,
         "transformations": [
           "Placeholder/admin user ID."
-        ]
+        ],
+        "confidence": 44
       },
       {
         "source_table": "Unmapped",
@@ -587,7 +639,8 @@
         "transformation_needed": true,
         "transformations": [
           "Constant `No`."
-        ]
+        ],
+        "confidence": 93
       },
       {
         "source_table": "Unmapped",
@@ -598,7 +651,8 @@
         "transformation_needed": true,
         "transformations": [
           "Default `No`. Override to `Yes` only if RCB decides to lot-track inks/glues."
-        ]
+        ],
+        "confidence": 74
       },
       {
         "source_table": "Unmapped",
@@ -609,7 +663,8 @@
         "transformation_needed": true,
         "transformations": [
           "Per-code: `Lot for Lot` (RCB-PRINT-*, RCB-BLANK-*, RCB-PRINT-MAT); `No MRP Planning` (RCB-CONSUMABLE-*, RCB-PACKAGING); `Days Cover` (RCB-STOCK-RESALE)."
-        ]
+        ],
+        "confidence": 61
       },
       {
         "source_table": "Unmapped",
@@ -620,7 +675,8 @@
         "transformation_needed": true,
         "transformations": [
           "Per-code: `0` for No-MRP codes; RCB-provided value for active planning codes (default `1` if unknown)."
-        ]
+        ],
+        "confidence": 51
       },
       {
         "source_table": "Unmapped",
@@ -631,7 +687,8 @@
         "transformation_needed": true,
         "transformations": [
           "Per-code: default `0`; RCB sets based on min-stock policy."
-        ]
+        ],
+        "confidence": 49
       },
       {
         "source_table": "Unmapped",
@@ -642,7 +699,8 @@
         "transformation_needed": true,
         "transformations": [
           "Per-code: default `0`; RCB sets if max-stock policy is used."
-        ]
+        ],
+        "confidence": 52
       },
       {
         "source_table": "Unmapped",
@@ -653,7 +711,8 @@
         "transformation_needed": true,
         "transformations": [
           "Per-code: default `0` (no multiplier)."
-        ]
+        ],
+        "confidence": 72
       },
       {
         "source_table": "Unmapped",
@@ -664,7 +723,8 @@
         "transformation_needed": true,
         "transformations": [
           "Per-code: default `0`; RCB sets based on demand variability analysis."
-        ]
+        ],
+        "confidence": 47
       },
       {
         "source_table": "Unmapped",
@@ -675,7 +735,8 @@
         "transformation_needed": true,
         "transformations": [
           "Per-code: `Project Home` for items costed to projects, `Not Home` for general stock. Default `Not Home` unless RCB uses project costing."
-        ]
+        ],
+        "confidence": 77
       },
       {
         "source_table": "Unmapped",
@@ -686,7 +747,8 @@
         "transformation_needed": true,
         "transformations": [
           "Per-code default `0`; RCB provides actuals based on lead time analysis."
-        ]
+        ],
+        "confidence": 48
       },
       {
         "source_table": "Unmapped",
@@ -697,7 +759,8 @@
         "transformation_needed": true,
         "transformations": [
           "Per-code default `0`; RCB provides actuals."
-        ]
+        ],
+        "confidence": 47
       },
       {
         "source_table": "Unmapped",
@@ -708,7 +771,8 @@
         "transformation_needed": true,
         "transformations": [
           "Per-code default `0`; RCB provides actuals."
-        ]
+        ],
+        "confidence": 47
       },
       {
         "source_table": "Unmapped",
@@ -719,7 +783,8 @@
         "transformation_needed": true,
         "transformations": [
           "Per-code default `0`; RCB provides actuals (e.g., 1–3 days for print runs)."
-        ]
+        ],
+        "confidence": 56
       },
       {
         "source_table": "Unmapped",
@@ -730,7 +795,8 @@
         "transformation_needed": true,
         "transformations": [
           "Per-code default `0`; RCB provides actuals if components ship between sites."
-        ]
+        ],
+        "confidence": 44
       },
       {
         "source_table": "Unmapped",
@@ -741,7 +807,8 @@
         "transformation_needed": false,
         "transformations": [
           "Leave NULL — RCB does not track lot expiration."
-        ]
+        ],
+        "confidence": 91
       },
       {
         "source_table": "Unmapped",
@@ -752,7 +819,8 @@
         "transformation_needed": true,
         "transformations": [
           "Per-code default `0`; RCB provides actuals from vendor SLAs."
-        ]
+        ],
+        "confidence": 53
       },
       {
         "source_table": "Unmapped",
@@ -763,7 +831,8 @@
         "transformation_needed": true,
         "transformations": [
           "Per-code default `0`; RCB provides actuals if QC inspection is performed."
-        ]
+        ],
+        "confidence": 49
       },
       {
         "source_table": "Unmapped",
@@ -774,7 +843,8 @@
         "transformation_needed": true,
         "transformations": [
           "Per-code default `0`; RCB provides actuals."
-        ]
+        ],
+        "confidence": 46
       },
       {
         "source_table": "Unmapped",
@@ -785,7 +855,8 @@
         "transformation_needed": true,
         "transformations": [
           "Per-code default `0.0` unless RCB has overhead allocation policy."
-        ]
+        ],
+        "confidence": 58
       },
       {
         "source_table": "Unmapped",
@@ -796,7 +867,8 @@
         "transformation_needed": true,
         "transformations": [
           "Per-code default FALSE (RCB likely uses Standard or Average costing). Confirm with RCB."
-        ]
+        ],
+        "confidence": 66
       },
       {
         "source_table": "Unmapped",
@@ -807,7 +879,8 @@
         "transformation_needed": true,
         "transformations": [
           "Per-code GL/dimension FK based on RCB chart of accounts. Set after RCB provides accounting structure."
-        ]
+        ],
+        "confidence": 34
       },
       {
         "source_table": "Unmapped",
@@ -818,7 +891,8 @@
         "transformation_needed": true,
         "transformations": [
           "Per commodity code, set one of the schema's four picklist values:\n\n  `Direct (including Sub-contract)` for most purchased and manufactured codes\n  `Outside Operation` for RCB-APPAREL-DROP\n\n  `Indirect` and `Service` are not used for RCB."
-        ]
+        ],
+        "confidence": 82
       },
       {
         "source_table": "Unmapped",
@@ -829,7 +903,8 @@
         "transformation_needed": false,
         "transformations": [
           "Leave NULL — RCB has no service-type commodity codes."
-        ]
+        ],
+        "confidence": 97
       },
       {
         "source_table": "Unmapped",
@@ -840,7 +915,8 @@
         "transformation_needed": true,
         "transformations": [
           "Placeholder/admin user ID."
-        ]
+        ],
+        "confidence": 45
       },
       {
         "source_table": "Unmapped",
@@ -851,7 +927,8 @@
         "transformation_needed": true,
         "transformations": [
           "Per-code: `Enter New Price` for purchased codes; leave NULL for manufactured codes."
-        ]
+        ],
+        "confidence": 71
       },
       {
         "source_table": "Unmapped",
@@ -862,7 +939,8 @@
         "transformation_needed": true,
         "transformations": [
           "Per-code default `0` (use current cost only) unless RCB has specific weighted-cost strategy."
-        ]
+        ],
+        "confidence": 67
       },
       {
         "source_table": "Unmapped",
@@ -873,7 +951,8 @@
         "transformation_needed": true,
         "transformations": [
           "Constant FALSE for initial load; RCB can enable per-code later."
-        ]
+        ],
+        "confidence": 81
       },
       {
         "source_table": "Unmapped",
@@ -884,7 +963,8 @@
         "transformation_needed": true,
         "transformations": [
           "Per-code: `0` for whole-unit items (cups, blanks, boxes); `2–3` for bulk consumables tracked in fractional KG/Gallon."
-        ]
+        ],
+        "confidence": 76
       },
       {
         "source_table": "Unmapped",
@@ -895,7 +975,8 @@
         "transformation_needed": true,
         "transformations": [
           "Per-code default `0`; RCB provides actuals."
-        ]
+        ],
+        "confidence": 46
       },
       {
         "source_table": "Unmapped",
@@ -906,7 +987,8 @@
         "transformation_needed": true,
         "transformations": [
           "Per-code default `0`; RCB provides actuals from vendor SLAs."
-        ]
+        ],
+        "confidence": 51
       },
       {
         "source_table": "Unmapped",
@@ -917,7 +999,8 @@
         "transformation_needed": true,
         "transformations": [
           "Per-code default `1` (current-cost-weighted)."
-        ]
+        ],
+        "confidence": 69
       },
       {
         "source_table": "Unmapped",
@@ -928,7 +1011,8 @@
         "transformation_needed": true,
         "transformations": [
           "Per-code GL/dimension FK; set after RCB provides accounting structure."
-        ]
+        ],
+        "confidence": 34
       },
       {
         "source_table": "Unmapped",
@@ -939,7 +1023,8 @@
         "transformation_needed": false,
         "transformations": [
           "Leave NULL — RCB is US-only, no VAT. Set only if international operations are added."
-        ]
+        ],
+        "confidence": 96
       },
       {
         "source_table": "Unmapped",
@@ -950,7 +1035,8 @@
         "transformation_needed": false,
         "transformations": [
           "Leave NULL (use Rootstock default) unless RCB has a specific std cost update strategy."
-        ]
+        ],
+        "confidence": 69
       },
       {
         "source_table": "Unmapped",
@@ -961,7 +1047,8 @@
         "transformation_needed": true,
         "transformations": [
           "Per-code default `0`."
-        ]
+        ],
+        "confidence": 72
       },
       {
         "source_table": "Unmapped",
@@ -972,7 +1059,8 @@
         "transformation_needed": true,
         "transformations": [
           "Constant FALSE — does not apply to RCB."
-        ]
+        ],
+        "confidence": 96
       },
       {
         "source_table": "Unmapped",
@@ -983,7 +1071,8 @@
         "transformation_needed": false,
         "transformations": [
           "Leave NULL."
-        ]
+        ],
+        "confidence": 95
       },
       {
         "source_table": "Unmapped",
@@ -994,7 +1083,8 @@
         "transformation_needed": false,
         "transformations": [
           "Leave NULL."
-        ]
+        ],
+        "confidence": 95
       },
       {
         "source_table": "Unmapped",
@@ -1005,7 +1095,8 @@
         "transformation_needed": true,
         "transformations": [
           "Per-code location FK; set after warehouse/location master is loaded."
-        ]
+        ],
+        "confidence": 51
       },
       {
         "source_table": "Unmapped",
@@ -1016,7 +1107,8 @@
         "transformation_needed": true,
         "transformations": [
           "Per-code location number; set after warehouse master is loaded."
-        ]
+        ],
+        "confidence": 51
       },
       {
         "source_table": "Unmapped",
@@ -1027,7 +1119,8 @@
         "transformation_needed": false,
         "transformations": [
           "Leave NULL unless RCB has a WMS deployment."
-        ]
+        ],
+        "confidence": 97
       },
       {
         "source_table": "Unmapped",
@@ -1038,7 +1131,8 @@
         "transformation_needed": false,
         "transformations": [
           "Leave NULL unless RCB has a WMS deployment."
-        ]
+        ],
+        "confidence": 97
       },
       {
         "source_table": "Unmapped",
@@ -1049,7 +1143,8 @@
         "transformation_needed": true,
         "transformations": [
           "Per-code routing FK (e.g., DIGI-PAPER for RCB-PRINT-* codes); set after routing master is loaded."
-        ]
+        ],
+        "confidence": 63
       },
       {
         "source_table": "Unmapped",
@@ -1060,7 +1155,8 @@
         "transformation_needed": true,
         "transformations": [
           "Per commodity code, set one of the schema's three picklist values:\n\n  `First Op` or `Last Op` for manufactured codes (RCB-PRINT-CUP, RCB-PRINT-SLEEVE)\n  `No Backflush` for purchased codes (RCB-BLANK, RCB-PRINT-MAT, RCB-CONSUMABLE-INK, RCB-PACKAGING, RCB-STOCK-RESALE)\n  `No Backflush` for RCB-APPAREL-DROP (Subcontract)"
-        ]
+        ],
+        "confidence": 86
       },
       {
         "source_table": "Unmapped",
@@ -1071,7 +1167,8 @@
         "transformation_needed": true,
         "transformations": [
           "Per-code: `0` for whole-unit items; `2–3` for bulk consumables."
-        ]
+        ],
+        "confidence": 77
       },
       {
         "source_table": "Unmapped",
@@ -1082,7 +1179,8 @@
         "transformation_needed": true,
         "transformations": [
           "Constant FALSE for initial load — RCB can enable later."
-        ]
+        ],
+        "confidence": 87
       },
       {
         "source_table": "Unmapped",
@@ -1093,7 +1191,8 @@
         "transformation_needed": true,
         "transformations": [
           "Constant FALSE — no lot tracking."
-        ]
+        ],
+        "confidence": 94
       },
       {
         "source_table": "Unmapped",
@@ -1104,7 +1203,8 @@
         "transformation_needed": false,
         "transformations": [
           "Leave NULL — N/A for foodservice packaging."
-        ]
+        ],
+        "confidence": 98
       },
       {
         "source_table": "Unmapped",
@@ -1115,7 +1215,8 @@
         "transformation_needed": true,
         "transformations": [
           "Constant FALSE — non-perishable items."
-        ]
+        ],
+        "confidence": 91
       },
       {
         "source_table": "Unmapped",
@@ -1126,7 +1227,8 @@
         "transformation_needed": true,
         "transformations": [
           "Per-code or constant placeholder org/dept FK (RCB manufacturing dept)."
-        ]
+        ],
+        "confidence": 49
       },
       {
         "source_table": "Unmapped",
@@ -1137,7 +1239,8 @@
         "transformation_needed": true,
         "transformations": [
           "Per-code default; set based on RCB allocation strategy. Often left at Rootstock default unless customized."
-        ]
+        ],
+        "confidence": 63
       },
       {
         "source_table": "Unmapped",
@@ -1148,7 +1251,8 @@
         "transformation_needed": true,
         "transformations": [
           "Constant `0` — non-perishable items."
-        ]
+        ],
+        "confidence": 92
       },
       {
         "source_table": "Unmapped",
@@ -1159,7 +1263,8 @@
         "transformation_needed": true,
         "transformations": [
           "Constant FALSE — no serial tracking."
-        ]
+        ],
+        "confidence": 96
       },
       {
         "source_table": "Unmapped",
@@ -1170,7 +1275,8 @@
         "transformation_needed": true,
         "transformations": [
           "Constant FALSE."
-        ]
+        ],
+        "confidence": 93
       },
       {
         "source_table": "Unmapped",
@@ -1181,7 +1287,8 @@
         "transformation_needed": false,
         "transformations": [
           "Leave NULL — N/A unless RCB uses mobile labeling."
-        ]
+        ],
+        "confidence": 96
       },
       {
         "source_table": "Unmapped",
@@ -1192,7 +1299,8 @@
         "transformation_needed": true,
         "transformations": [
           "Constant FALSE — no serial tracking."
-        ]
+        ],
+        "confidence": 93
       }
     ]
   }
