@@ -16,8 +16,8 @@ import {
   type FlatRow,
 } from '@/lib/utils/flatten-rows-for-list-view'
 import { summarizeRationale } from '@/lib/utils/rationale-summary'
-import { Check, X } from 'lucide-react'
-import { ActionIconButton, FlatRowActions } from './FlatRowActions'
+import { Check, Edit3, X } from 'lucide-react'
+import { ActionIconButton } from './FlatRowActions'
 import { InlineSourcePicker } from './InlineSourcePicker'
 import { TargetFieldCellPicker } from './TargetFieldCellPicker'
 import type { MappingListMutations } from '../hooks/useMappingListMutations'
@@ -624,23 +624,23 @@ export function MappingListView({
       <table className="w-full table-fixed border-collapse text-sm">
         <colgroup>
           {/* feat/mapping-table-redesign column structure (Banking Core
-              mockup):
-                [verdict cluster] | SOURCE | → | TARGET | RATIONALE |
-                CONFIDENCE | [edit pencil, hover]
-              Verdict cluster holds status dot + approve + reject icons,
-              always visible. Source/Target are each one cell rendering
-              TABLE_NAME [field_chip]. Arrow is a muted glyph between.
-              Rationale fills the largest flex slot since text length
-              varies most. Confidence stays right-aligned numeric. Edit
-              pencil is the only right-side affordance, hover-revealed
-              via the `group` class on each <tr>. */}
-          <col style={{ width: '92px' }} />
+              mockup, refinement pass 1):
+                [●] SOURCE | → | TARGET | RATIONALE | CONFIDENCE | actions
+              The status dot lives in its own narrow cell flush against
+              source so the dot reads as a prefix to the source, not its
+              own column. Source / target each render
+              `TABLE_NAME [field_chip]`. Arrow is a muted glyph between.
+              The right-side actions cluster carries approve + reject
+              (always visible) + edit pencil (hover-only via `group`
+              class on each <tr>) — 3×24px buttons with gap-1 plus side
+              padding. */}
+          <col style={{ width: '24px' }} />
           <col />
           <col style={{ width: '24px' }} />
           <col />
           <col />
           <col style={{ width: '80px' }} />
-          <col style={{ width: '44px' }} />
+          <col style={{ width: '104px' }} />
         </colgroup>
         <thead className="bg-gray-50">
           <tr>
@@ -947,14 +947,14 @@ function FlatRowView({
 
   // ── Render ────────────────────────────────────────────────────────
   //
-  // feat/mapping-table-redesign — Banking Core mockup. Seven columns
-  // in order: [verdict cluster] | SOURCE | → | TARGET | RATIONALE |
-  // CONFIDENCE | [edit pencil, hover-only]. Verdict cluster holds the
-  // status dot + Approve + Reject icons, always visible. SOURCE and
-  // TARGET each render `TABLE_NAME [field_chip]` in one cell. RATIONALE
-  // is a one-line summary derived client-side from `aiReasoning` (or
-  // ack reason). Edit pencil hover reveals via the `group` class on
-  // the <tr> root.
+  // feat/mapping-table-redesign refinement pass 1 — Banking Core mockup.
+  // Seven columns in order:
+  //   [●] | SOURCE | → | TARGET | RATIONALE | CONFIDENCE | actions
+  // The status dot lives in its own narrow leftmost cell flush against
+  // SOURCE so it reads as a prefix to source, not its own column. All
+  // three action buttons (approve, reject, edit) cluster on the right
+  // side. Approve + reject are always visible; the edit pencil is
+  // hover-only, revealed via the `group` class on the <tr> root.
   //
   // Multi-source siblings are still indicated by the bracket accent on
   // the left edge of the SOURCE cell, anchored to the chip's vertical
@@ -978,48 +978,25 @@ function FlatRowView({
         'group cursor-pointer bg-white transition-colors hover:bg-gray-50',
       )}
     >
-      {/* Verdict cluster — leftmost. Status dot + Approve icon + Reject
-          icon, always visible. Action button clicks stopPropagation so
-          they don't bubble to the row body's drawer-open handler. */}
+      {/* Status dot — narrow leftmost cell, sits flush against SOURCE.
+          No own column header text; tooltip carries the status label +
+          ack reason. The dot is the only inhabitant of this cell —
+          action icons live in the right-side cluster. */}
       <td
         data-testid="flat-cell-status"
         title={statusTooltip}
-        className="px-2 py-2.5 align-top"
+        className="pl-3 pr-0 py-2.5 align-middle"
       >
-        <div className="flex items-center gap-1">
-          <StatusDot status={displayStatus} />
-          {actions.onApprove ? (
-            <ActionIconButton
-              testId="flat-row-action-approve"
-              ariaLabel="Approve mapping"
-              tooltip={actions.approveTooltip ?? 'Approve mapping'}
-              variant="approve"
-              disabled={isBusy}
-              onClick={actions.onApprove}
-            >
-              <Check aria-hidden="true" className="h-3.5 w-3.5" />
-            </ActionIconButton>
-          ) : null}
-          {actions.onReject ? (
-            <ActionIconButton
-              testId="flat-row-action-reject"
-              ariaLabel="Reject mapping"
-              tooltip={actions.rejectTooltip ?? 'Reject mapping'}
-              variant="reject"
-              disabled={isBusy}
-              onClick={actions.onReject}
-            >
-              <X aria-hidden="true" className="h-3.5 w-3.5" />
-            </ActionIconButton>
-          ) : null}
-        </div>
+        <StatusDot status={displayStatus} />
       </td>
-      {/* Merged SOURCE — `TABLE_NAME [field_chip]` in one cell. Multi-
-          source bracket still anchored to the cell's left padding gap;
-          its horizontal cap aligns with the chip's vertical center. */}
+      {/* Merged SOURCE — `TABLE_NAME [field_chip]` in one cell. Sits
+          flush against the status dot on the left (pl-2 — just enough
+          breathing room for the 8px multi-source bracket overlay). The
+          bracket is absolute-positioned at the cell's left edge; its
+          horizontal cap aligns with the chip's vertical center. */}
       <td
         data-testid="flat-cell-source"
-        className="relative px-3 py-2.5 align-top text-sm"
+        className="relative pl-2 pr-3 py-2.5 align-top text-sm"
       >
         {groupPosition !== 'none' && (
           <span
@@ -1228,19 +1205,53 @@ function FlatRowView({
           </span>
         )}
       </td>
-      {/* Edit pencil — hover-only (revealed via the `group` class on
-          the <tr>). Approve / Reject moved into the verdict cluster on
-          the left; this cell carries only the Edit affordance.
-          group-focus-within: keyboard-focus reveals it too, so keyboard
-          users aren't shut out of the affordance. */}
-      <td className="px-1 py-2.5 align-top">
-        <div className="opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100">
-          <FlatRowActions
-            rowId={row.id}
-            isBusy={isBusy}
-            onEdit={actions.onEdit}
-            editTooltip={actions.editTooltip}
-          />
+      {/* Right-side action cluster — order left-to-right:
+          approve (✓) → reject (✗) → edit (✎). Approve + reject are
+          always visible; the edit pencil is opacity-0 at rest and
+          fades in on row hover (or keyboard focus within the row so
+          keyboard users still reach it). Action button clicks
+          stopPropagation so they don't bubble to the row body's
+          drawer-open handler. */}
+      <td className="px-2 py-2.5 align-top">
+        <div className="flex items-center justify-end gap-1">
+          {actions.onApprove ? (
+            <ActionIconButton
+              testId="flat-row-action-approve"
+              ariaLabel="Approve mapping"
+              tooltip={actions.approveTooltip ?? 'Approve mapping'}
+              variant="approve"
+              disabled={isBusy}
+              onClick={actions.onApprove}
+            >
+              <Check aria-hidden="true" className="h-3.5 w-3.5" />
+            </ActionIconButton>
+          ) : null}
+          {actions.onReject ? (
+            <ActionIconButton
+              testId="flat-row-action-reject"
+              ariaLabel="Reject mapping"
+              tooltip={actions.rejectTooltip ?? 'Reject mapping'}
+              variant="reject"
+              disabled={isBusy}
+              onClick={actions.onReject}
+            >
+              <X aria-hidden="true" className="h-3.5 w-3.5" />
+            </ActionIconButton>
+          ) : null}
+          {actions.onEdit ? (
+            <span className="opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100">
+              <ActionIconButton
+                testId="flat-row-action-edit"
+                ariaLabel="Edit mapping"
+                tooltip={actions.editTooltip ?? 'Open mapping in drawer'}
+                variant="edit"
+                disabled={isBusy}
+                onClick={actions.onEdit}
+              >
+                <Edit3 aria-hidden="true" className="h-3.5 w-3.5" />
+              </ActionIconButton>
+            </span>
+          ) : null}
         </div>
       </td>
     </tr>
