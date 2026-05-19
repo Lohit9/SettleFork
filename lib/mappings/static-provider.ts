@@ -936,14 +936,6 @@ export async function persistStaticMappingsForSelection(
   let generated = 0
   let skipped = 0
 
-  await persistSourceAcknowledgments(
-    args.supabase,
-    args.projectId,
-    sourceUnmappedEntries,
-    projectSchema.sourceTables,
-    projectSchema.sourceFields,
-    resolvedSourceFieldByEntry,
-  )
   await persistTargetAcknowledgments(
     args.supabase,
     args.projectId,
@@ -1049,16 +1041,8 @@ export async function persistStaticMappingsForPair(
   }
 
   const mappedEntries = matchedEntries.filter(isMappedEntry)
-  const sourceProjectTableByName = new Map(
-    projectSchema.sourceTables.map((table) => [normalizeName(table.name), table]),
-  )
   const targetProjectTableByName = new Map(
     projectSchema.targetTables.map((table) => [normalizeName(table.name), table]),
-  )
-  const sourceUnmappedEntries = resolved.config.entries.filter(
-    (entry) =>
-      isSourceUnmappedEntry(entry) &&
-      sourceProjectTableByName.has(normalizeName(entry.source_table)),
   )
   const targetUnmappedEntries = resolved.config.entries.filter(
     (entry) =>
@@ -1066,14 +1050,6 @@ export async function persistStaticMappingsForPair(
       targetProjectTableByName.has(normalizeName(entry.target_table)),
   )
 
-  await persistSourceAcknowledgments(
-    args.supabase,
-    args.projectId,
-    sourceUnmappedEntries,
-    projectSchema.sourceTables,
-    projectSchema.sourceFields,
-    resolvedSourceFieldByEntry,
-  )
   await persistTargetAcknowledgments(
     args.supabase,
     args.projectId,
