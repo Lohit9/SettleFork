@@ -10,10 +10,10 @@
         "source_field": "FG Commodity Code",
         "target_field": "Unmapped",
         "target_table": "Unmapped",
-        "explanation": "Parent-row marker formatted <Assy>-<CaseQty> (e.g., P-DWS-1000), populated only on the first row of each assembly. Despite the name, not a Rootstock commodity code. Redundant with Assy Item + ProductCaseQty.",
+        "explanation": "A label that appears on the first row of each assembly in the BoM, formatted as '<Assembly>-<CaseQuantity>' (for example, 'P-DWS-1000' indicates the P-DWS assembly with 1,000 units per case). Despite the name, this is not a Rootstock commodity code — it is a header marker used by the source system. The information it carries is already available in Assy Item and ProductCaseQty.",
         "transformation_needed": false,
         "transformations": [
-          "Drop. Optionally parse <CaseQty> for cross-validation against ProductCaseQty."
+          "No transformation needed — this field is not loaded. If desired, parse the case quantity portion (the suffix after the last hyphen) and use it to cross-validate against ProductCaseQty in the Products table."
         ]
       },
       {
@@ -21,10 +21,10 @@
         "source_field": "Item Type",
         "target_field": "rstk__peitem_iccomcod__r external id",
         "target_table": "Engineering Item Master",
-        "explanation": "\"Inventory\" vs \"Non Inventory\" steers which commodity code a component belongs to — inks/glues/tape (\"Non Inventory\") need a separate consumable commodity code with PLANNING POLICY = No MRP Planning.",
+        "explanation": "Drives commodity code routing for raw materials and components that exist in the BoM but not in the Products catalog (~68 items: inks, glues, paper sheets, boxes, tape). 'Non Inventory' indicates consumables that should not be MRP-planned (inks coded A0xxx, glues coded D0xxx). 'Inventory' indicates stock-tracked raw materials that do need planning (paper PR-*, boxes BX-*). Note: this BoM field has different semantics from the peitem.Item Type field, which uses Direct Material / Labor Only — the picklists do not align.",
         "transformation_needed": true,
         "transformations": [
-          "Rule: Non Inventory → RCB-CONSUMABLE-INK or RCB-PACKAGING (based on item pattern); Inventory → category derived from item name pattern."
+          "Apply only to SKUs that appear as BoM.Part # but not as Products.ProductSKU:\n\n  WHEN BoM.Item Type = 'Non Inventory' AND Part # matches /^A\\d{4}|^D\\d{4}/ → RCB-CONSUMABLE-INK\n  WHEN BoM.Item Type = 'Non Inventory' AND Part # matches /^H\\d{4}|TAPE|LABEL/ → RCB-PACKAGING\n  WHEN BoM.Item Type = 'Non Inventory' (any other)  → RCB-CONSUMABLE-INK\n  WHEN BoM.Item Type = 'Inventory' AND Part # starts with 'PR-' or contains SBS/KRA → RCB-PRINT-MAT\n  WHEN BoM.Item Type = 'Inventory' AND Part # starts with 'BX-', 'BG-', or 'S-' → RCB-PACKAGING\n  ELSE → RCB-PRINT-MAT"
         ]
       },
       {
@@ -32,10 +32,10 @@
         "source_field": "Assy Item",
         "target_field": "Item Number",
         "target_table": "Engineering Item Master",
-        "explanation": "Parent assembly SKU. Creates peitem rows for all manufactured items. 100% match rate against products.ProductSKU after trim. Pass A — parent extraction. Each distinct Assy Item produces ONE peitem with Inventory Source = Manufactured. The 1,562 BoM rows collapse to ~123 distinct parents.",
+        "explanation": "Each distinct Assy Item is a manufactured assembly that should become one Engineering Item Master record with Inventory Source = Manufactured. The BoM contains 1,562 rows but only 123 unique parent assemblies — duplicates collapse on distinct extraction. After whitespace trimming, all 123 Assy Items match a corresponding Products.ProductSKU.",
         "transformation_needed": true,
         "transformations": [
-          "SELECT DISTINCT TRIM(Assy_Item) FROM BoM WHERE Assy_Item IS NOT NULL. After Pass C runs, dedupe: if the same SKU exists in both Pass A and Pass C, Pass A wins on Inventory Source (Manufactured); Pass C wins on Item Description (see row 5)."
+          "Take distinct trimmed values of Assy Item where Assy Item is not null. When merging with Products.ProductSKU extraction: SKUs that exist in both sources keep Inventory Source = Manufactured (a SKU with a BoM is manufactured regardless of catalog presence), but Products.ProductName wins for Item Description because it is more complete (4,587 catalog descriptions vs 123 BoM descriptions)."
         ]
       },
       {
@@ -43,10 +43,10 @@
         "source_field": "Info",
         "target_field": "Unmapped",
         "target_table": "Unmapped",
-        "explanation": "Restates Assy Item + case-size description. Redundant.",
+        "explanation": "Restates information already available elsewhere — combines Assy Item with the case-size description, for example 'P-DWS, 1 Case (1000 Sleeves)'. The same content can be reconstructed from Assy Item plus ProductCaseQty.",
         "transformation_needed": false,
         "transformations": [
-          "Drop."
+          "No transformation needed — this field is not loaded."
         ]
       },
       {
@@ -54,10 +54,10 @@
         "source_field": "Assy Desc",
         "target_field": "Item Description",
         "target_table": "Engineering Item Master",
-        "explanation": "Description for parent assemblies. Use as fallback when ProductName isn't available. Pass A — parent extraction. Parent description, repeated identically across the assembly's child rows (so DISTINCT collapses naturally). Used only when products.ProductName is absent.",
+        "explanation": "Description for parent assemblies, repeated identically across every component row within an assembly. Used as a fallback when the corresponding SKU has no ProductName in the Products catalog. Products.ProductName is preferred when available because it covers more SKUs (4,587 vs 123) and tends to be more current.",
         "transformation_needed": true,
         "transformations": [
-          "TRIM. COALESCE(ProductName, Assy Desc) when joining sources. SELECT DISTINCT TRIM(Assy_Desc) paired with Assy_Item. When merging with Pass C: COALESCE(products.ProductName, BoM.Assy_Desc) — ProductName wins (more complete: 4,587 sources vs 123)."
+          "Take distinct trimmed values of Assy Desc paired with Assy Item. When the same SKU also exists in Products: use COALESCE(Products.ProductName, BoM.Assy_Desc) — Products.ProductName wins when both are present."
         ]
       },
       {
@@ -65,10 +65,10 @@
         "source_field": "Part #",
         "target_field": "Item Number",
         "target_table": "Engineering Item Master",
-        "explanation": "Component SKU. Critical: ~59 of 125 components (raw paper, inks A000x, glues D0001, boxes BX-*, tape) exist nowhere else, so BoM is the only source for them. Pass B — component extraction. Each distinct Part # produces ONE peitem. ~59 of 125 components are BoM-only (raw paper PR-SBS-, inks A000x, glue D0001, boxes BX-, tape) — Pass B is the only source that creates them.",
+        "explanation": "Each distinct Part # represents a component used in a BoM that should become its own Engineering Item Master record. About 68 of 125 components exist only in the BoM and not in the Products catalog — these include raw paper (PR-SBS-*), inks (A000x), glues (D0001), boxes (BX-*), and tape. For these items, the BoM is the only source available. Items extracted from Part # default to Inventory Source = Purchased unless they also appear as a BoM parent (Assy Item).",
         "transformation_needed": true,
         "transformations": [
-          "TRIM. Deduplicate against ProductSKU and Assy Item before insert. SELECT DISTINCT TRIM(\"Part #\") FROM BoM WHERE \"Part #\" IS NOT NULL. Then EXCEPT against Pass A's parent set and Pass C's ProductSKU set — only emit rows for Part #s that no other pass already created."
+          "Take distinct trimmed values of Part # where Part # is not null. Then exclude any value that already exists as an Assy Item (those are manufactured parents — already loaded with Inventory Source = Manufactured) or as a Products.ProductSKU (those come from the catalog instead). Only emit Part # values that no other source already created."
         ]
       },
       {
@@ -76,10 +76,10 @@
         "source_field": "Item",
         "target_field": "Item Description",
         "target_table": "Engineering Item Master",
-        "explanation": "Component description (e.g., \"Atlantic 16pt SBS, 23\"x29\"\"). Pass B — component extraction. Description for component peitems. Used only for Part #s that aren't in products.csv (~59 records).",
+        "explanation": "Description for components in the BoM (for example, 'Atlantic 16pt SBS, 23\"x29\"'). Used only for the ~68 Part # values that don't exist in the Products catalog. When a Part # also appears in Products.ProductSKU, the catalog's ProductName takes priority.",
         "transformation_needed": true,
         "transformations": [
-          "TRIM. COALESCE priority: products.ProductName (if Pass C had it) > BoM.Item."
+          "Trim whitespace. Use only when the Part # has no corresponding Products.ProductName. Final priority for Item Description: Products.ProductName > BoM.Assy_Desc > BoM.Item."
         ]
       },
       {
@@ -87,10 +87,10 @@
         "source_field": "BOM Quantity",
         "target_field": "Unmapped",
         "target_table": "Unmapped",
-        "explanation": "Binary flag (0.0 / 1.0 / null) with unclear semantics. Real per-unit consumption is in Qty. No clean target on peitem or iccomcod; belongs on BOM Component (out of scope).",
+        "explanation": "A binary flag (0.0, 1.0, or null) with unclear semantics in the source data. The actual per-unit consumption quantity is captured in the BoM's Qty field, not here. This field would belong on a BOM Component record (the table that links a parent to its components with quantities), which is a separate target object not included in the current Engineering Item Master and Inventory Commodity Code migration scope.",
         "transformation_needed": false,
         "transformations": [
-          "Drop on these tables. Preserve for future BOM Component migration."
+          "No transformation needed for these tables. Preserve this field for the future BOM Component migration phase."
         ]
       },
       {
@@ -98,10 +98,10 @@
         "source_field": "Unit of Measure",
         "target_field": "rstk__peitem_enguom__r external id",
         "target_table": "Engineering Item Master",
-        "explanation": "Per-component eng UOM (Sheet, 5Kg, Gallon, Each, Roll, Linear FT, Lbs, Liter). Pass B only — component eng UOM. Parent peitems (Pass A) are finished cups/sleeves counted as Each — their Eng UOM defaults to EA, not from this field.",
+        "explanation": "Per-component engineering UOM in the BoM (Sheet, 5Kg, Gallon, Each, Roll, Linear FT, Lbs, Liter). This drives the Eng UOM for components extracted from BoM.Part #. Parent assemblies (finished cups and sleeves) are always counted as Each and use a hardcoded EA value — they don't pull from this field.",
         "transformation_needed": true,
         "transformations": [
-          "Pass B: lookup → Rootstock UOM external id (Sheet→SHEET, 5Kg→KG, Gallon→GAL, Each→EA, Roll→ROLL, Linear FT→FT, Lbs→LB, Liter/liter→L). Pass A: hardcode EA. Pre-create missing UOM records. Confirm \"5Kg\" semantics — pail size vs unit."
+          "For components extracted from BoM.Part #, look up the source UOM and map to Rootstock UOM external ID:\n\n  Sheet     → SHEET\n  5Kg       → KG    (note: '5Kg' is the pail size, not a unit — confirm with RCB whether inks should be tracked in KG by weight or in pails as Each)\n  Gallon    → GAL\n  Each      → EA\n  Roll      → ROLL\n  Linear FT → FT\n  Lbs       → LB\n  Liter     → L\n\nFor parent assemblies extracted from BoM.Assy Item, hardcode EA. Pre-create any missing UOM records in Rootstock before loading peitem rows."
         ]
       },
       {
@@ -109,10 +109,10 @@
         "source_field": "Unit of Measure",
         "target_field": "rstk__iccomcod_dfltenguom__r external id",
         "target_table": "Inventory Commodity Code",
-        "explanation": "Default Eng UOM at the commodity code level. Derived per commodity code, not per row. Pass B aggregation, applied per commodity code. Default Eng UOM for the commodity code that holds these components. For parent-only commodity codes (RCB-PRINT-CUP, etc.), default is EA.",
+        "explanation": "Default engineering UOM at the commodity code level. Items inherit this default unless overridden at the item level. Set once per commodity code, derived from the most common UOM among the items in that code. Manufactured codes (printed cups, sleeves) use EA. Raw-material codes use the source UOM — paper codes use SHEET, ink codes use KG.",
         "transformation_needed": true,
         "transformations": [
-          "Group by inferred commodity code → take modal UOM among contained items. Per-commodity-code constant. For component commodity codes: group Pass B records by commodity code → take modal UOM → map to Rootstock UOM external id. Per-commodity-code constant, not per-row."
+          "Group items by their assigned commodity code, take the most common UOM among them, and map to a Rootstock UOM external ID. Per-commodity-code constant. Recommended values for RCB:\n\n  RCB-PRINT-CUP, RCB-PRINT-SLEEVE, RCB-BLANK,\n  RCB-STOCK-RESALE, RCB-PACKAGING, RCB-APPAREL-DROP  → EA\n  RCB-PRINT-MAT       → SHEET\n  RCB-CONSUMABLE-INK  → KG"
         ]
       },
       {
@@ -120,10 +120,10 @@
         "source_field": "Unit of Measure",
         "target_field": "rstk__iccomcod_dfltinvuom__r external id",
         "target_table": "Inventory Commodity Code",
-        "explanation": "Default Inventory UOM. Reference data shows EA (Each) across all commodity codes; override only for bulk-tracked consumables. Pass B aggregation. Reference data shows EA across all codes — RCB likely keeps inventory in Each. Override per commodity code only for bulk-tracked consumables.",
+        "explanation": "Default inventory UOM — how RCB tracks stock for items in this commodity code. Reference data shows EA across all codes because cups, sleeves, blanks, boxes, and drop-ship items are all counted in whole units. Override to a bulk unit (KG) only for consumables tracked by weight, such as inks.",
         "transformation_needed": true,
         "transformations": [
-          "Default EA. Override per commodity code as needed (e.g., inks tracked by KG). For component commodity codes: group Pass B records by commodity code → take modal UOM → map to Rootstock UOM external id. Per-commodity-code constant, not per-row. Default EA. For commodity codes containing bulk inks/glues, override with source UOM (e.g., KG)."
+          "Default to EA. Override per commodity code only where bulk weight tracking applies:\n\n  RCB-CONSUMABLE-INK → KG\n  All other codes    → EA"
         ]
       },
       {
@@ -131,10 +131,10 @@
         "source_field": "Unit of Measure",
         "target_field": "rstk__iccomcod_dfltpuruom_po__r external id",
         "target_table": "Inventory Commodity Code",
-        "explanation": "Default Purchasing UOM — how RCB buys items in this commodity code (Sheet for paper, 5Kg for ink, Roll for tape/label). Pass B aggregation. How RCB buys items in this commodity code — Sheet for paper, 5Kg for ink, Roll for tape/label.",
+        "explanation": "Default purchasing UOM — how RCB buys items in this commodity code. Finished and stock items are purchased in Each. Raw materials and consumables are purchased in their bulk forms (paper by the SHEET, ink by the KG, tape by the ROLL).",
         "transformation_needed": true,
         "transformations": [
-          "Same lookup as #9. Per-commodity-code constant. Default EA. For commodity codes containing bulk inks/glues, override with source UOM (e.g., KG)."
+          "Group items by commodity code and take the most common purchasing UOM among them. Recommended values:\n\n  RCB-PRINT-CUP, RCB-PRINT-SLEEVE, RCB-BLANK,\n  RCB-STOCK-RESALE, RCB-PACKAGING, RCB-APPAREL-DROP  → EA\n  RCB-PRINT-MAT       → SHEET\n  RCB-CONSUMABLE-INK  → KG"
         ]
       },
       {
@@ -142,10 +142,10 @@
         "source_field": "Qty",
         "target_field": "Unmapped",
         "target_table": "Unmapped",
-        "explanation": "Per-finished-unit consumption math (0.0625 sheets, 5e-08 KG ink, etc.). Belongs on BOM Component records.",
+        "explanation": "Per-finished-unit consumption (for example, 0.0625 sheets per sleeve, or 0.00000005 kg of ink per cup). This belongs on the BOM Component record that links a parent to its components with quantities, not on the Engineering Item Master or Inventory Commodity Code tables in the current migration scope.",
         "transformation_needed": false,
         "transformations": [
-          "Drop on these tables. Preserve for BOM Component migration."
+          "No transformation needed for these tables. Preserve this field for the future BOM Component migration phase."
         ]
       },
       {
@@ -153,10 +153,10 @@
         "source_field": "Unlabeled",
         "target_field": "Unmapped",
         "target_table": "Unmapped",
-        "explanation": "Per-component cost contribution ($0.02/sheet, etc.). Belongs on Item Cost / BOM Cost, not on Eng Item Master or Commodity Code.",
+        "explanation": "Per-component cost contribution from the source BoM (for example, $0.02 per sheet). This belongs on Item Cost or BOM Cost records, not on the Engineering Item Master or Inventory Commodity Code tables in the current migration scope.",
         "transformation_needed": false,
         "transformations": [
-          "Drop on these tables. Preserve for cost migration phase."
+          "No transformation needed for these tables. Preserve this field for the future cost migration phase."
         ]
       },
       {
@@ -164,10 +164,10 @@
         "source_field": "Unlabeled",
         "target_field": "Eng Type",
         "target_table": "Engineering Item Master",
-        "explanation": "Flags components that are themselves assemblies. Only one row populated, but the pattern matters: sub-assemblies that are never inventoried should become Phantom. Pass B attribute, but with cross-pass effect. When a Part # is flagged \"Sub-Assembly\", the resulting peitem's Eng Type should be Phantom (it's a parent in some other BoM but never inventoried).",
+        "explanation": "When a component is itself an assembly with its own BoM, the source data flags it as 'Sub-Assembly'. Sub-assemblies that are never independently inventoried should be marked Eng Type = Phantom in Rootstock. Only one SKU (WHC16) carries this flag in the current data, but the rule applies more broadly to any SKU that appears as both a parent and a component if RCB confirms it should be treated as a phantom.",
         "transformation_needed": true,
         "transformations": [
-          "CASE WHEN flag = 'Sub-Assembly' THEN 'Phantom' ELSE 'Standard' END. Confirm with RCB whether other sub-assemblies should also be Phantom. In Pass B: CASE WHEN flag = 'Sub-Assembly' THEN 'Phantom' ELSE 'Standard' END. If that same SKU also appears as Assy Item in Pass A, Pass A's commodity code wins but Phantom Eng Type carries. Confirm with RCB whether all multi-BoM SKUs should be Phantom."
+          "Apply this rule when extracting components from BoM.Part #:\n\n  CASE WHEN sub-assembly flag = 'Sub-Assembly' THEN 'Phantom' ELSE 'Standard' END\n\nIf a SKU appears as both a parent in one BoM and a sub-assembly component in another, keep Inventory Source = Manufactured but set Eng Type = Phantom. Confirm with RCB whether other multi-BoM SKUs should also be marked Phantom."
         ]
       },
       {
@@ -175,10 +175,10 @@
         "source_field": "ProductId",
         "target_field": "Unmapped",
         "target_table": "Unmapped",
-        "explanation": "Internal Prosys numeric PK with no business meaning outside Prosys.",
+        "explanation": "Internal numeric primary key from the source system (Prosys). It has no business meaning outside Prosys and is not needed in Rootstock, which generates its own internal IDs.",
         "transformation_needed": false,
         "transformations": [
-          "Drop. Optionally preserve in a custom audit field."
+          "No transformation needed — this field is not loaded. If audit traceability back to Prosys is required, optionally preserve in a custom field."
         ]
       },
       {
@@ -186,10 +186,10 @@
         "source_field": "ProductWooId",
         "target_field": "Unmapped",
         "target_table": "Unmapped",
-        "explanation": "WooCommerce FK. Useful only if RCB will keep the Woo integration post-migration.",
+        "explanation": "Foreign key linking each product to a WooCommerce entry (RCB's e-commerce platform). Relevant only if RCB plans to keep the WooCommerce integration after migration. If not, this field has no destination in Rootstock.",
         "transformation_needed": false,
         "transformations": [
-          "Drop unless Woo integration continues; then preserve in a custom field."
+          "No transformation needed — this field is not loaded. If RCB intends to maintain the WooCommerce integration, preserve in a custom field for the integration layer to use."
         ]
       },
       {
@@ -197,10 +197,21 @@
         "source_field": "ProductSKU",
         "target_field": "Item Number",
         "target_table": "Engineering Item Master",
-        "explanation": "Business SKU. Most authoritative source (4,587 unique, 100% match with BoM Assy Items). Pass C — catalog extraction. Most authoritative source (4,587 unique). Includes all sellable finished goods, plus stock-tracked raw items via InvMasterSKU linkage.",
+        "explanation": "The primary business SKU used across orders, purchase orders, and invoices. The Products catalog contains 4,587 unique SKUs and matches 100% of BoM Assy Items after whitespace trimming, making it the most authoritative and complete source for item identity.",
         "transformation_needed": true,
         "transformations": [
-          "TRIM. Pass C runs against the union of Pass A + Pass B: SKUs already in Pass A keep their Manufactured source; SKUs already in Pass B (rare — would mean a raw material is also a sellable product) merge with Pass C's description. New SKUs in Pass C become Purchased peitems."
+          "Trim whitespace. When merging with items already extracted from the BoM: SKUs that appear as a BoM Assy Item keep Inventory Source = Manufactured; SKUs in the Apparel-Outsource product group become Subcontract; SKUs with InvMasterSKU = 'NO INVENTORY' and no BoM presence are filtered out. All other catalog SKUs become Purchased."
+        ]
+      },
+      {
+        "source_table": "Products",
+        "source_field": "ProductSKU",
+        "target_field": "rstk__peitem_iccomcod__r external id",
+        "target_table": "Engineering Item Master",
+        "explanation": "ProductSKU pattern is the primary signal for routing manufactured items to the correct commodity code. SKUs starting with 'P-' (printed items) are split by body pattern: sleeves go to RCB-PRINT-SLEEVE, all other printed items go to RCB-PRINT-CUP. This rule runs after the ProductGroupName edge-case routing (Apparel-Outsource and Warehoused) and before the BoM Item Type rules for raw materials. The same ProductSKU field also feeds Item Number — that is a one-to-many mapping where the same source feeds two target fields via different transformations.",
+        "transformation_needed": true,
+        "transformations": [
+          "Apply this rule for items that appear in the Products catalog or as BoM parents, after ProductGroupName routing has run:\n\n  WHEN ProductSKU starts with 'P-' OR SKU appears as a BoM Assy Item:\n    IF SKU body (after stripping 'P-') starts with DWS, DKS, CWS, CKS, or WSC → RCB-PRINT-SLEEVE\n    OTHERWISE → RCB-PRINT-CUP"
         ]
       },
       {
@@ -208,10 +219,10 @@
         "source_field": "ProductName",
         "target_field": "Item Description",
         "target_table": "Engineering Item Master",
-        "explanation": "Free-text product description. Pass C — primary description source. Overrides Pass A's Assy Desc and Pass B's Item when the SKU exists in products.csv.",
+        "explanation": "Free-text product description from the catalog. This is the primary source of item descriptions in Rootstock because it covers all 4,587 catalog SKUs and tends to be more complete and current than BoM descriptions.",
         "transformation_needed": true,
         "transformations": [
-          "TRIM. Truncate to Rootstock Item Description max length. TRIM. Truncate to Rootstock max length. Final resolution: COALESCE(products.ProductName, BoM.Assy_Desc, BoM.Item)."
+          "Trim whitespace. Truncate to Rootstock's Item Description max length. When a SKU has descriptions available from multiple sources, apply this priority: Products.ProductName > BoM.Assy_Desc > BoM.Item."
         ]
       },
       {
@@ -219,10 +230,10 @@
         "source_field": "ProductGroupName",
         "target_field": "rstk__peitem_iccomcod__r external id",
         "target_table": "Engineering Item Master",
-        "explanation": "18 distinct values; primary driver of commodity code assignment. Also seeds the commodity code records themselves. Pass C — primary commodity code driver. 18 distinct values map to RCB's product categories. Also seeds the iccomcod records themselves. Components from Pass B that aren't in Pass C still need commodity codes — those come from row 2's rule (item pattern + Item Type).",
+        "explanation": "Product category in the source system, with 18 distinct values such as 20WHC, DWS, Pad, Warehoused, and Apparel-Outsource. For most items the commodity code is determined by SKU pattern rather than this field, but two ProductGroupName values trigger important commodity code routings: 'Apparel-Outsource' routes items to RCB-APPAREL-DROP (Subcontract), and 'Warehoused' routes them to RCB-STOCK-RESALE.",
         "transformation_needed": true,
         "transformations": [
-          "Lookup table ProductGroupName → commodity code external id. Requires business decision on commodity code design (propose 8–10 codes: RCB-PRINT-CUP, RCB-BLANK-CUP, RCB-PRINT-MAT, RCB-CONSUMABLE-INK, RCB-PACKAGING, RCB-STOCK-RESALE, RCB-APPAREL-DROP, etc.)."
+          "Apply this rule first, before SKU-pattern routing:\n\n  WHEN ProductGroupName = 'Apparel-Outsource' → RCB-APPAREL-DROP\n  WHEN ProductGroupName = 'Warehoused'        → RCB-STOCK-RESALE\n\nFor any other ProductGroupName value, fall through to the SKU-pattern rule (ProductSKU → iccomcod)."
         ]
       },
       {
@@ -230,10 +241,10 @@
         "source_field": "ProductVendorName",
         "target_field": "Unmapped",
         "target_table": "Unmapped",
-        "explanation": "YBC / PLUS / RCB / Radix are RCB's supplier brands. Belongs on Vendor / Approved Vendor List / Vendor Item, not on peitem or iccomcod.",
+        "explanation": "Supplier brand name (YBC, PLUS, RCB, or Radix). These are RCB's house brands and supplier identifiers, not Rootstock Vendor records. The field belongs on Vendor, Approved Vendor List, or Vendor Item tables, which are separate target objects not included in the current Engineering Item Master and Inventory Commodity Code migration scope.",
         "transformation_needed": false,
         "transformations": [
-          "Drop on these tables. Preserve for Vendor migration phase."
+          "No transformation needed for these tables. Preserve this field for the future Vendor migration phase."
         ]
       },
       {
@@ -241,10 +252,10 @@
         "source_field": "ProductUpdated",
         "target_field": "Unmapped",
         "target_table": "Unmapped",
-        "explanation": "Audit timestamp; Rootstock maintains its own.",
+        "explanation": "Last-modified timestamp from the source system. Rootstock maintains its own audit timestamps, so legacy timestamps generally are not useful in the new system.",
         "transformation_needed": false,
         "transformations": [
-          "Drop."
+          "No transformation needed — this field is not loaded."
         ]
       },
       {
@@ -252,10 +263,10 @@
         "source_field": "InvMasterSKU",
         "target_field": "Inventory Source",
         "target_table": "Engineering Item Master",
-        "explanation": "388 distinct values + 'NO INVENTORY' sentinel. Together with BoM presence, drives the Manufactured / Purchased / Subcontract / skip decision. Pass C attribute that interacts with Pass A/B membership. 388 distinct + 'NO INVENTORY' sentinel. The combination of \"is in Pass A?\" and \"InvMasterSKU value\" determines Manufactured / Purchased / Subcontract / skip.",
+        "explanation": "The inventory key in the source system, with 388 distinct values plus a special sentinel 'NO INVENTORY'. Items with this sentinel are not stock-tracked (typically one-off custom orders or drop-ship items). Combined with whether the SKU appears in a BoM, this field determines whether an item becomes Manufactured, Purchased, Subcontract, or is filtered out of the migration.",
         "transformation_needed": true,
         "transformations": [
-          "Resolution rule applied after all three passes: SKU in Pass A → Manufactured; ProductGroupName = Apparel-Outsource → Subcontract; InvMasterSKU non-null and ≠ NO INVENTORY → Purchased; InvMasterSKU = NO INVENTORY AND not in any BoM → filter out or create as Phantom (confirm with RCB)."
+          "Apply this resolution rule:\n\n  IF SKU appears as a BoM Assy Item → Inventory Source = Manufactured\n  ELSE IF ProductGroupName = 'Apparel-Outsource' → Inventory Source = Subcontract\n  ELSE IF InvMasterSKU is non-null AND ≠ 'NO INVENTORY' → Inventory Source = Purchased\n  ELSE IF InvMasterSKU = 'NO INVENTORY' AND SKU not used in any BoM → filter out (do not load) OR create as Phantom (confirm preference with RCB)"
         ]
       },
       {
@@ -263,10 +274,10 @@
         "source_field": "ProductCaseQty",
         "target_field": "Unmapped",
         "target_table": "Unmapped",
-        "explanation": "Pieces per case — UOM conversion data. Belongs on Rootstock's UOM Conversion table.",
+        "explanation": "Number of pieces per case (for example, 1,000 sleeves per case). This is UOM conversion data — it captures the relationship 'X cases = Y eaches' for purchasing and shipping. It belongs on the Rootstock UOM Conversion table, a separate target object not in the current migration scope.",
         "transformation_needed": false,
         "transformations": [
-          "Drop on these tables. Preserve for UOM Conversion migration."
+          "No transformation needed for these tables. Preserve this field for the future UOM Conversion migration phase."
         ]
       },
       {
@@ -274,10 +285,10 @@
         "source_field": "ProductUnitsName",
         "target_field": "Unmapped",
         "target_table": "Unmapped",
-        "explanation": "Selling UOM (Case / Single / Roll). Reference data shows inv/eng UOM is consistently EA — selling-UOM logic lives on UOM Conversion + Sales Order tables. Don't conflate with Eng UOM.",
+        "explanation": "The selling unit of measure (Case, Single, or Roll). In Rootstock, inventory and engineering UOMs are always EA for these items — the Case and Roll relationships belong on UOM Conversion and Sales Order tables, not on the item master. Do not conflate this with the engineering UOM.",
         "transformation_needed": false,
         "transformations": [
-          "Drop on these tables. Preserve for UOM Conversion / Sales migration."
+          "No transformation needed for these tables. Preserve this field for the future UOM Conversion and Sales Order migration phases."
         ]
       },
       {
@@ -285,10 +296,10 @@
         "source_field": "ProductSheets",
         "target_field": "Unmapped",
         "target_table": "Unmapped",
-        "explanation": "Print-shop specific count (sheets per case or imposition info). No corresponding standard field.",
+        "explanation": "Print-shop specific count, likely capturing sheets per case or imposition information. There is no corresponding standard field in the Engineering Item Master or Inventory Commodity Code templates.",
         "transformation_needed": false,
         "transformations": [
-          "Drop. Add custom field only if RCB needs it post-migration."
+          "No transformation needed — this field is not loaded. If RCB needs this information after migration, add a custom field to the import template."
         ]
       },
       {
@@ -296,10 +307,10 @@
         "source_field": "ProductSheets2",
         "target_field": "Unmapped",
         "target_table": "Unmapped",
-        "explanation": "Related sheet-count math; print-shop specific. No standard target.",
+        "explanation": "Related to ProductSheets — print-shop math specific to the source system. No standard target field exists in Rootstock.",
         "transformation_needed": false,
         "transformations": [
-          "Drop."
+          "No transformation needed — this field is not loaded."
         ]
       },
       {
@@ -307,10 +318,10 @@
         "source_field": "ProductGroupId",
         "target_field": "Unmapped",
         "target_table": "Unmapped",
-        "explanation": "Numeric FK to Prosys product-group lookup. Many-to-many with ProductGroupName (same ID has multiple names, same name has multiple IDs), so unreliable for category mapping.",
+        "explanation": "Numeric foreign key to a product-group lookup in the source system. The relationship between ProductGroupId and ProductGroupName is many-to-many in the source (the same ID can have multiple names, and the same name can have multiple IDs), making this field unreliable for category mapping. Use ProductGroupName instead.",
         "transformation_needed": false,
         "transformations": [
-          "Drop. Use ProductGroupName instead."
+          "No transformation needed — this field is not loaded."
         ]
       },
       {
@@ -318,10 +329,10 @@
         "source_field": "ProductNotes",
         "target_field": "Unmapped",
         "target_table": "Unmapped",
-        "explanation": "30% null, mostly whitespace. No standard Notes field on peitem import template.",
+        "explanation": "Free-text notes. About 30% of rows are null, and most non-null values are whitespace. No standard Notes field exists on the Engineering Item Master import template.",
         "transformation_needed": false,
         "transformations": [
-          "Drop. If RCB wants notes preserved, add a custom long-text field and extend the import template."
+          "No transformation needed — this field is not loaded. If RCB wants to preserve notes, add a custom long-text field to peitem and extend the import template."
         ]
       },
       {
@@ -329,10 +340,10 @@
         "source_field": "ProductActive",
         "target_field": "Status",
         "target_table": "Engineering Item Master",
-        "explanation": "Lifecycle status. Reference data shows Active / Pending; inactive items keep Status=Active but get an Inactive Status code (see row 31). Pass C attribute, applies to all peitems sourced from products.csv. Lifecycle status. Pass B's BoM-only components don't get this from source — default to Active.",
+        "explanation": "Lifecycle status of the item. Reference data shows Status values of Active and Pending. In Rootstock, Status and Inactive Status are orthogonal: Status represents the record lifecycle (Active = released, Pending = draft), while Inactive Status represents the usage flag. Inactive items typically keep Status = Active and gain an Inactive Status code; see the Inactive Status mapping for that flag.",
         "transformation_needed": true,
         "transformations": [
-          "Apply in Pass C: default 'Active'. Use 'Pending' only if RCB has a specific convention for not-yet-released items. Pass B records (BoM-only raw materials) default to 'Active'."
+          "For items sourced from the Products catalog, set Status = 'Active' regardless of the ProductActive value (the active/inactive distinction is handled by Inactive Status). Use 'Pending' only if RCB has a specific convention for items not yet released. For items sourced only from the BoM with no catalog match, default to Status = 'Active'."
         ]
       },
       {
@@ -340,10 +351,10 @@
         "source_field": "ProductActive",
         "target_field": "Inactive Status",
         "target_table": "Engineering Item Master",
-        "explanation": "Pass C attribute. Inactive flag (I = inactive). Pass A and Pass B records default to NULL (active).",
+        "explanation": "Flag indicating whether an item is currently in use. Status and Inactive Status are orthogonal: Status is the record lifecycle (Active vs Pending), Inactive Status is the usage flag (NULL = in use, 'I' = retired or no longer used). The combination Status = 'Active' with Inactive Status = 'I' represents a legacy item that was once released but is no longer in use — this is the standard end-of-life state.",
         "transformation_needed": true,
         "transformations": [
-          "CASE WHEN products.ProductActive = 0 THEN 'I' ELSE NULL END, applied only in Pass C. Pass A/B → NULL."
+          "Apply this rule only to items sourced from the Products catalog:\n\n  CASE WHEN Products.ProductActive = 0 THEN 'I' ELSE NULL END\n\nItems sourced only from the BoM (no catalog match) default to NULL (in use)."
         ]
       },
       {
