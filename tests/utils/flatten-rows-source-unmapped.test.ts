@@ -12,9 +12,12 @@ import { flattenRowsForListView } from '@/lib/utils/flatten-rows-for-list-view'
 // ─────────────────────────────────────────────────────────────────────────────
 //
 // The flatten utility is responsible for:
-//   • Splitting multi-source mapped TFMs into parent + N child rows
+//   • Emitting one row per mapped TFM with the full sources[] array
+//     (feat/mapping-table-redesign — per-TFM emission; the prior
+//     N-rows-per-TFM stacking was retired with the bracket pattern)
 //   • Emitting source-side acknowledgment rows (always visible)
-//   • Emitting source-only unmapped rows (gated by toggle, default OFF)
+//   • Emitting source-only unmapped rows for fields with no mapping
+//     and no ack
 //   • NOT emitting source-only rows for fields already referenced by
 //     any mapping
 //
@@ -206,7 +209,11 @@ describe('flattenRowsForListView — source-side rows', () => {
     expect(sourceRows[0].id).toBe('ack::source::ack-1')
   })
 
-  it('emits a multi-source TFM as a single row with sources array (Option C dropped)', () => {
+  it('emits a multi-source TFM as ONE flat row carrying the full sources[] array sorted by ordinal ASC', () => {
+    // feat/mapping-table-redesign: per-TFM emission. The renderer
+    // shows `sources[0]` inline on the main row and surfaces sources[1..]
+    // via the "+N source" expand/collapse pill. No more shimmed
+    // contributor ids — the row id IS the bare TFM uuid.
     const mappedRow: MappingRow = {
       kind: 'mapped',
       id: 'tfm-multi',
@@ -228,24 +235,9 @@ describe('flattenRowsForListView — source-side rows', () => {
       status: 'needs_review',
       hasTransformation: false,
       transformationStatus: null,
+      // Intentionally provided in REVERSE ordinal order so the test
+      // asserts the flatten step sorts by ordinal ASC.
       sources: [
-        {
-          id: 'ms-1',
-          ordinal: 0,
-          confidence: 90,
-          aiReasoning: null,
-          typeCompatibility: null,
-          sourceField: {
-            id: 'sf-1',
-            name: 'ProductSKU',
-            dataType: 'VARCHAR(50)',
-            isNullable: false,
-          },
-          sourceTable: { id: 'st-1', name: 'Products' },
-          joinAnnotation: null,
-          joinSpec: null,
-          sampleValues: [],
-        },
         {
           id: 'ms-2',
           ordinal: 1,
@@ -263,6 +255,23 @@ describe('flattenRowsForListView — source-side rows', () => {
           joinSpec: null,
           sampleValues: [],
         },
+        {
+          id: 'ms-1',
+          ordinal: 0,
+          confidence: 90,
+          aiReasoning: null,
+          typeCompatibility: null,
+          sourceField: {
+            id: 'sf-1',
+            name: 'ProductSKU',
+            dataType: 'VARCHAR(50)',
+            isNullable: false,
+          },
+          sourceTable: { id: 'st-1', name: 'Products' },
+          joinAnnotation: null,
+          joinSpec: null,
+          sampleValues: [],
+        },
       ],
       combinationType: 'concat_space',
       combinationSql: null,
@@ -271,28 +280,77 @@ describe('flattenRowsForListView — source-side rows', () => {
     const result = makeResult({ rows: [mappedRow] })
 
     const rows = flattenRowsForListView(result)
-    // Sixth polish pass: multi-source TFMs emit N INDEPENDENT flat
-    // rows (one per source attribution). Each row carries `source`
-    // (singular) + `sourceCount=N` so the renderer can paint the
-    // left-accent border to identify sibling rows post-sort.
-    expect(rows.length).toBe(2)
-    expect(rows[0].kind).toBe('mapped')
-    expect(rows[1].kind).toBe('mapped')
-    // Row ids use the shimmed contributor form for multi-source so
-    // A's `rejectFieldMapping` deletes the right `mapping_sources`
-    // row on per-source reject.
-    expect(rows[0].id).toBe('tfm-multi::ms-1')
-    expect(rows[1].id).toBe('tfm-multi::ms-2')
-    if (rows[0].kind !== 'mapped' || rows[1].kind !== 'mapped') {
-      throw new Error('shape')
+    // ONE flat row for the TFM, regardless of source count.
+    expect(rows.length).toBe(1)
+    const flat = rows[0]
+    if (flat.kind !== 'mapped') throw new Error('shape')
+
+    // Bare TFM uuid — no shimmed contributor suffix.
+    expect(flat.id).toBe('tfm-multi')
+    expect(flat.groupId).toBe('tfm-multi')
+
+    // Full sources array, sorted by ordinal ASC. ms-1 (ordinal=0) is
+    // the primary even though it appeared second in the input.
+    expect(flat.sources.length).toBe(2)
+    expect(flat.sources[0].id).toBe('ms-1')
+    expect(flat.sources[0].ordinal).toBe(0)
+    expect(flat.sources[1].id).toBe('ms-2')
+    expect(flat.sources[1].ordinal).toBe(1)
+  })
+
+  it('emits a single-source mapped TFM as ONE flat row carrying a one-element sources[]', () => {
+    const mappedRow: MappingRow = {
+      kind: 'mapped',
+      id: 'tfm-single',
+      targetField: {
+        id: 'tf-1',
+        name: 'customer_id',
+        dataType: 'VARCHAR(50)',
+        isNullable: false,
+        defaultValue: null,
+        targetTable: { id: 'tt-1', name: 'Customers' },
+        ordinalPosition: 1,
+        isPrimaryKey: false,
+        isForeignKey: false,
+        fkReference: null,
+        description: null,
+        sampleValues: [],
+      },
+      confidence: 95,
+      status: 'approved',
+      hasTransformation: false,
+      transformationStatus: null,
+      sources: [
+        {
+          id: 'ms-1',
+          ordinal: 0,
+          confidence: 95,
+          aiReasoning: null,
+          typeCompatibility: null,
+          sourceField: {
+            id: 'sf-1',
+            name: 'entityid',
+            dataType: 'VARCHAR(50)',
+            isNullable: false,
+          },
+          sourceTable: { id: 'st-1', name: 'Customer' },
+          joinAnnotation: null,
+          joinSpec: null,
+          sampleValues: [],
+        },
+      ],
+      combinationType: 'single',
+      combinationSql: null,
+      aiReasoning: null,
     }
-    expect(rows[0].source.id).toBe('ms-1')
-    expect(rows[1].source.id).toBe('ms-2')
-    expect(rows[0].sourceCount).toBe(2)
-    expect(rows[1].sourceCount).toBe(2)
-    // groupId stays the TFM uuid for both — used by the renderer to
-    // identify sibling rows post-sort.
-    expect(rows[0].groupId).toBe('tfm-multi')
-    expect(rows[1].groupId).toBe('tfm-multi')
+    const result = makeResult({ rows: [mappedRow] })
+
+    const rows = flattenRowsForListView(result)
+    expect(rows.length).toBe(1)
+    const flat = rows[0]
+    if (flat.kind !== 'mapped') throw new Error('shape')
+    expect(flat.id).toBe('tfm-single')
+    expect(flat.sources.length).toBe(1)
+    expect(flat.sources[0].id).toBe('ms-1')
   })
 })
