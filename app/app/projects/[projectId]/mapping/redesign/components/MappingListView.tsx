@@ -110,6 +110,9 @@ const STATUS_DOT_CONFIG: Record<
     ring: 'ring-2 ring-emerald-500/25',
   },
   needs_review: {
+    // Same token as the header "Needs Review N" indicator in
+    // MappingSummaryStrip.tsx — keep aligned so the row dot and the
+    // header dot read as the same status signal. (Refinement #2 lock.)
     label: 'Needs review',
     fill: 'bg-slate-400',
     ring: 'ring-2 ring-slate-400/25',
@@ -277,70 +280,58 @@ export interface MappingListViewProps {
 // they collect at the bottom of the table (bucket=1) and tiebreak
 // by source columns.
 
+// feat/mapping-table-refinements — source-first three-bucket ordering:
+//
+//   bucket 0: mapped TFMs                  — sort by source table → source field
+//   bucket 1: unmapped-source rows         — sort by source table → source field
+//   bucket 2: value-assignment + unmapped-target (target-only, no source field)
+//                                          — sort by target table → target field
+//
+// Buckets 0 and 1 share the source-anchored sort so the flat view reads
+// top-to-bottom as one continuous run grouped by source table — mapped
+// rows first, then their unmapped source-side neighbours below. Bucket
+// 2 collects the rows that lack a source field at the bottom, sorted by
+// target columns. Value-assignment rows go in bucket 2 alongside
+// unmapped-target since both share the "target-only" structural shape.
 interface GroupSortKeys {
-  /**
-   * 0 = group has a target (mapped, value-assignment,
-   * unmapped-target); 1 = group is source-only (unmapped-source).
-   * Primary discriminator so source-only rows sort to the bottom
-   * of the table — they have no target to anchor to in the
-   * target-first sort below.
-   */
-  bucket: 0 | 1
-  /** Target-side keys drive the primary clustering. */
-  targetTable: string
-  targetField: string
-  /**
-   * Within a target group, 0 = real source attribution
-   * (mapped), 1 = constant default / unmapped-target.
-   * Sub-discriminator so all mapped rows for a target appear
-   * before the constant-defaults for that same target.
-   */
-  hasSource: 0 | 1
-  /** Source-side keys tiebreak within a target group. */
+  bucket: 0 | 1 | 2
+  /** Source-side keys — used in buckets 0 and 1. Empty string in bucket 2. */
   sourceTable: string
   sourceField: string
+  /** Target-side keys — used in bucket 2. Empty string in buckets 0 and 1. */
+  targetTable: string
+  targetField: string
 }
 
 function buildSortKeys(row: FlatRow): GroupSortKeys {
   switch (row.kind) {
     case 'mapped':
-      // Each mapped flat row is one TFM. Sort uses the primary
-      // (ordinal=0) source for the source-side tiebreakers — that's
-      // the source rendered inline on the main row, and matches what
-      // the user is scanning by left-to-right.
+      // Multi-source rows sort by their PRIMARY source (sources[0],
+      // ordinal=0 by flatten contract) — same source the renderer
+      // shows inline on the main row and the user scans first.
       return {
         bucket: 0,
-        targetTable: row.targetField.targetTable.name,
-        targetField: row.targetField.name,
-        hasSource: 0,
         sourceTable: row.sources[0].sourceTable.name,
         sourceField: row.sources[0].sourceField.name,
+        targetTable: '',
+        targetField: '',
+      }
+    case 'unmapped-source':
+      return {
+        bucket: 1,
+        sourceTable: row.sourceField.sourceTable.name,
+        sourceField: row.sourceField.name,
+        targetTable: '',
+        targetField: '',
       }
     case 'value-assignment':
     case 'unmapped-target':
-      // Same target group as mapped rows for that field, but with
-      // hasSource=1 so they sort to the BOTTOM of the group (real
-      // mapped sources first, constant-defaults last within the
-      // target's slot).
       return {
-        bucket: 0,
-        targetTable: row.targetField.targetTable.name,
-        targetField: row.targetField.name,
-        hasSource: 1,
+        bucket: 2,
         sourceTable: '',
         sourceField: '',
-      }
-    case 'unmapped-source':
-      // Source-only rows have no target to cluster under; they
-      // collect at the bottom of the table (bucket=1) and tiebreak
-      // among themselves by source columns.
-      return {
-        bucket: 1,
-        targetTable: '',
-        targetField: '',
-        hasSource: 0,
-        sourceTable: row.sourceField.sourceTable.name,
-        sourceField: row.sourceField.name,
+        targetTable: row.targetField.targetTable.name,
+        targetField: row.targetField.name,
       }
   }
 }
@@ -351,11 +342,12 @@ function compareStringsAsc(a: string, b: string): number {
 
 function compareSortKeys(a: GroupSortKeys, b: GroupSortKeys): number {
   if (a.bucket !== b.bucket) return a.bucket - b.bucket
-  const tt = compareStringsAsc(a.targetTable, b.targetTable)
-  if (tt !== 0) return tt
-  const tf = compareStringsAsc(a.targetField, b.targetField)
-  if (tf !== 0) return tf
-  if (a.hasSource !== b.hasSource) return a.hasSource - b.hasSource
+  if (a.bucket === 2) {
+    const tt = compareStringsAsc(a.targetTable, b.targetTable)
+    if (tt !== 0) return tt
+    return compareStringsAsc(a.targetField, b.targetField)
+  }
+  // Buckets 0 and 1 — source-anchored.
   const st = compareStringsAsc(a.sourceTable, b.sourceTable)
   if (st !== 0) return st
   return compareStringsAsc(a.sourceField, b.sourceField)
