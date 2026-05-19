@@ -15,21 +15,19 @@ import type {
  * array; this helper folds the source-side derivations (acks +
  * unmapped source fields) in.
  *
- *   • mapped TFM with N sources → N flat rows (one per attribution).
- *     Each row carries the single `source` it represents PLUS the
- *     full `sourceCount`. The renderer paints a left-accent border
- *     when sourceCount > 1 so multi-source siblings remain visually
- *     identifiable even after the global sort (which may scatter
- *     them).
+ *   • mapped TFM (any source count) → 1 flat row carrying the full
+ *     `sources` array sorted by ordinal ASC. The renderer shows the
+ *     first source inline and, for multi-source TFMs, surfaces an
+ *     expand/collapse pill that reveals indented "Also contributes
+ *     to …" sub-rows for sources[1..]. Per-source actions (reject,
+ *     swap) for non-primary sources move to the edit drawer.
  *   • value assignment         → 1 flat row, source cells blank
  *                                 (kind: 'value-assignment')
  *   • unmapped target          → 1 flat row, source cells blank
  *                                 (kind: 'unmapped-target')
  *   • source-side ack          → 1 flat row, target cells blank
  *                                 (kind: 'unmapped-source')
- *   • source-only unmapped     → 1 flat row, target cells blank;
- *                                 emitted ONLY when
- *                                 showUnmappedSourceFields=true
+ *   • source-only unmapped     → 1 flat row, target cells blank
  *
  * INF-57 (2026-05-10): acknowledged target fields are surfaced by the
  * server as `UnmappedRow` with status='approved'. The flat view treats
@@ -38,15 +36,18 @@ import type {
  *
  * Source-side acknowledgments live separately on
  * `result.sourceFieldAcknowledgments`. They ALWAYS appear in the flat
- * view (independent of showUnmappedSourceFields), because they
- * represent explicit user decisions worth surfacing.
+ * view, because they represent explicit user decisions worth surfacing.
  *
  * Multi-source layout history (for grep-archaeology):
  *   • v1 architecture review locked Option C — parent + N children.
  *   • Third polish pass collapsed to ONE compact row with a `N×` badge.
- *   • Sixth polish pass (this revision) reverts to N independent flat
- *     rows + left-accent border. Per-source action semantics return:
- *     Reject deletes one contributor; Approve still TFM-atomic.
+ *   • Sixth polish pass split into N independent rows + left-accent
+ *     bracket, with per-source reject on the inline row.
+ *   • feat/mapping-table-redesign (this revision) returns to ONE flat
+ *     row per TFM. The full `sources` array travels on the row so the
+ *     renderer can show the first source inline + a "+N source" pill
+ *     and sub-rows on expand. Approve / reject / edit on the main row
+ *     are TFM-atomic; per-source reject moves to the drawer.
  */
 
 export type FlatRowStatus = 'approved' | 'needs_review' | 'rejected'
@@ -75,24 +76,18 @@ interface FlatRowBase {
 export interface MappedFlatRow extends FlatRowBase {
   kind: 'mapped'
   targetField: TargetFieldRef
-  /** The single source attribution THIS row represents. */
-  source: MappingSourceRef
   /**
-   * Total number of source attributions on the parent TFM. Drives the
-   * left-accent visual cue (sourceCount > 1) and the "approves all N
-   * sources" tooltip on the Approve button. Multi-source TFMs emit
-   * `sourceCount` independent flat rows, each carrying the same value.
+   * All sources for this TFM, sorted by ordinal ASC (0 first).
+   * `sources[0]` is shown inline on the main flat row; sources[1..]
+   * surface in the expand/collapse pill's sub-rows. Always length ≥ 1
+   * (zero-source TFMs are emitted as `kind: 'value-assignment'`).
    */
-  sourceCount: number
+  sources: MappingSourceRef[]
   /**
    * TFM-aggregate confidence (`MappingRow.confidence`, MIN across
-   * sources, server-derived). Used directly here — multi-source split
-   * rows display the same aggregate. Empirically `MappingSourceRef
-   * .confidence` is often null in real data (the AI mapper writes the
-   * aggregate to the TFM and may leave per-source null), so the
-   * aggregate is the right surface for the flat view's Confidence
-   * column. The drawer's per-source SourceCard remains the canonical
-   * place to see per-source confidence when it IS populated.
+   * sources, server-derived). Per-source confidence lives on each
+   * `MappingSourceRef` but is often null in real data; the aggregate
+   * is the right surface for the flat view's Confidence column.
    */
   confidence: number | null
   parentRow: MappedRow
@@ -143,33 +138,24 @@ export function flattenRowsForListView(
         // target after the next refresh once server-side state settles.
         continue
       }
-      const sourceCount = row.sources.length
       for (const src of row.sources) {
         sourceFieldIdsReferenced.add(src.sourceField.id)
-        // Single-source TFM → row id is the bare TFM uuid.
-        // Multi-source TFM → row id is the shimmed contributor id
-        // `<tfmId>::<mappingSourceId>` so per-source reject routes
-        // through A's `rejectFieldMapping` with the right key.
-        const rowId =
-          sourceCount === 1 ? row.id : `${row.id}::${src.id}`
-        out.push({
-          kind: 'mapped',
-          id: rowId,
-          // groupId stays the TFM uuid so multi-source siblings are
-          // identifiable as a group post-sort (the renderer uses it
-          // for the accent cue).
-          groupId: row.id,
-          status,
-          targetField: row.targetField,
-          source: src,
-          sourceCount,
-          // TFM aggregate — see the field's JSDoc for the rationale.
-          // Per-source values are often null in real data; the aggregate
-          // is reliably populated by the AI mapper.
-          confidence: row.confidence,
-          parentRow: row,
-        })
       }
+      // One flat row per TFM. The renderer reads `sources[0]` as the
+      // inline primary and exposes sources[1..] via the "+N source"
+      // expand/collapse pill. Sort by ordinal ASC so the primary is
+      // deterministic across reloads.
+      const sources = [...row.sources].sort((a, b) => a.ordinal - b.ordinal)
+      out.push({
+        kind: 'mapped',
+        id: row.id,
+        groupId: row.id,
+        status,
+        targetField: row.targetField,
+        sources,
+        confidence: row.confidence,
+        parentRow: row,
+      })
       continue
     }
     if (row.kind === 'value_assignment') {
