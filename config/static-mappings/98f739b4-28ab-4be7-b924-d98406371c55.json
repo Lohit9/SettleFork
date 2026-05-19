@@ -442,7 +442,7 @@
         "explanation": "Reverse-BoM (disassembly) item flag.",
         "transformation_needed": false,
         "transformations": [
-          "Leave NULL/FALSE — does not apply to RCB."
+          "Leave NULL — does not apply to RCB."
         ]
       },
       {
@@ -453,7 +453,7 @@
         "explanation": "Revision-controlled inventory tracking flag.",
         "transformation_needed": false,
         "transformations": [
-          "Leave NULL/FALSE — does not apply to RCB."
+          "Leave NULL — does not apply to RCB."
         ]
       },
       {
@@ -464,7 +464,7 @@
         "explanation": "Multi-revision product flag.",
         "transformation_needed": false,
         "transformations": [
-          "Leave NULL/FALSE — does not apply to RCB."
+          "Leave NULL — does not apply to RCB."
         ]
       },
       {
@@ -968,7 +968,7 @@
         "target_field": "Disassembly Indicator",
         "target_table": "Inventory Commodity Code",
         "explanation": "Whether the code supports disassembly workflows.",
-        "transformation_needed": false,
+        "transformation_needed": true,
         "transformations": [
           "Constant `false` — does not apply to RCB."
         ]
@@ -1089,7 +1089,7 @@
         "target_field": "Allow Lot to be Entered at WO Receipt",
         "target_table": "Inventory Commodity Code",
         "explanation": "Whether lot numbers can be entered at WO receipt.",
-        "transformation_needed": false,
+        "transformation_needed": true,
         "transformations": [
           "Constant `false` — no lot tracking."
         ]
@@ -1111,7 +1111,7 @@
         "target_field": "Expiration Date is Required",
         "target_table": "Inventory Commodity Code",
         "explanation": "Whether expiration date is required at receipt.",
-        "transformation_needed": false,
+        "transformation_needed": true,
         "transformations": [
           "Constant `false` — non-perishable items."
         ]
@@ -1144,7 +1144,7 @@
         "target_field": "Shelf Life",
         "target_table": "Inventory Commodity Code",
         "explanation": "Days until item expires.",
-        "transformation_needed": false,
+        "transformation_needed": true,
         "transformations": [
           "Constant `0` — non-perishable items."
         ]
@@ -1155,7 +1155,7 @@
         "target_field": "Assign Serial Number at SO Shipment",
         "target_table": "Inventory Commodity Code",
         "explanation": "Auto-assign serial number at SO shipment.",
-        "transformation_needed": false,
+        "transformation_needed": true,
         "transformations": [
           "Constant `false` — no serial tracking."
         ]
@@ -1166,7 +1166,7 @@
         "target_field": "All WO Lots Must be Predefined",
         "target_table": "Inventory Commodity Code",
         "explanation": "Whether all lots must be predefined before WO receipt.",
-        "transformation_needed": false,
+        "transformation_needed": true,
         "transformations": [
           "Constant `false`."
         ]
@@ -1188,7 +1188,7 @@
         "target_field": "Print Individual Serials on WO Pick List",
         "target_table": "Inventory Commodity Code",
         "explanation": "Print individual serial numbers on WO pick list.",
-        "transformation_needed": false,
+        "transformation_needed": true,
         "transformations": [
           "Constant `false` — no serial tracking."
         ]
