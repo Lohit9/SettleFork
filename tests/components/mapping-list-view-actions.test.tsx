@@ -345,11 +345,16 @@ describe('MappingListView — action buttons per row kind', () => {
     const sourceFieldB = within(rowB).getByTestId('flat-cell-source-field')
     expect(sourceFieldB.getAttribute('data-group-position')).toBe('first')
     expect(sourceFieldA.getAttribute('data-group-position')).toBe('last')
+    // feat/mapping-table-redesign — the bracket now lives directly inside
+    // the merged `flat-cell-source` <td> (a sibling of the field-chip
+    // span) so it can span the full cell height for the vertical bar.
+    // Test still asserts a bracket exists per multi-source row; the
+    // anchor moved one level up in the DOM.
     expect(
-      within(sourceFieldA).getByTestId('flat-source-field-bracket'),
+      within(rowA).getByTestId('flat-source-field-bracket'),
     ).toBeInTheDocument()
     expect(
-      within(sourceFieldB).getByTestId('flat-source-field-bracket'),
+      within(rowB).getByTestId('flat-source-field-bracket'),
     ).toBeInTheDocument()
   })
 
@@ -502,10 +507,15 @@ describe('MappingListView — clickable "—" on value-assignment source field',
     expect(button.className).toContain('cursor-pointer')
   })
 
-  it('the Source TABLE "—" stays a non-interactive span on value-assignment rows', () => {
-    // Per the brief: the source-field click handles source assignment;
-    // the source-table column is derived from the chosen field, so its
-    // own "—" remains informational only.
+  it('renders no separate Source TABLE label on value-assignment rows (merged Source cell only carries the field affordance)', () => {
+    // feat/mapping-table-redesign — Source TABLE and Source FIELD
+    // collapsed into one cell. On value-assignment rows there is no
+    // source field, so the cell holds only the clickable em-dash for
+    // picking a source. The source-table label span is conditional and
+    // does NOT render when the row has no source — the table identity
+    // is undefined until a source is picked. Preserves the prior intent
+    // (no interactive source-table affordance on VA rows) under the new
+    // merged structure.
     const result = makeResult([makeValueAssignment()])
     render(
       <MappingListView
@@ -516,11 +526,12 @@ describe('MappingListView — clickable "—" on value-assignment source field',
     )
 
     const row = findRow('tfm-va-1')
-    const sourceTableCell = within(row).getByTestId('flat-cell-source-table')
-    expect(sourceTableCell.textContent).toContain('—')
-    expect(
-      within(sourceTableCell).queryByRole('button'),
-    ).toBeNull()
+    expect(within(row).queryByTestId('flat-cell-source-table')).toBeNull()
+    // The merged Source cell still surfaces the em-dash via the field
+    // affordance — verify it sits inside the source-field button, not
+    // a standalone source-table span.
+    const sourceCell = within(row).getByTestId('flat-cell-source')
+    expect(sourceCell.textContent).toContain('—')
   })
 
   it('clicking the value-assignment "—" opens the InlineSourcePicker', async () => {
@@ -622,10 +633,15 @@ describe('MappingListView — headers + fixed sort', () => {
       />,
     )
 
-    expect(screen.getByTestId('flat-header-sourceTable')).toBeInTheDocument()
-    expect(screen.getByTestId('flat-header-sourceField')).toBeInTheDocument()
-    expect(screen.getByTestId('flat-header-targetTable')).toBeInTheDocument()
-    expect(screen.getByTestId('flat-header-targetField')).toBeInTheDocument()
+    // feat/mapping-table-redesign — header testids reflect the merged
+    // column structure. Source/Target table+field columns collapsed
+    // into single Source / Target columns; new Rationale column inserted
+    // before Confidence; arrow glyph between Source and Target carries
+    // its own (empty) header for sort-tracking parity.
+    expect(screen.getByTestId('flat-header-source')).toBeInTheDocument()
+    expect(screen.getByTestId('flat-header-arrow')).toBeInTheDocument()
+    expect(screen.getByTestId('flat-header-target')).toBeInTheDocument()
+    expect(screen.getByTestId('flat-header-rationale')).toBeInTheDocument()
     expect(screen.getByTestId('flat-header-confidence')).toBeInTheDocument()
     expect(screen.getByTestId('flat-header-status')).toBeInTheDocument()
     expect(screen.getByTestId('flat-header-actions')).toBeInTheDocument()

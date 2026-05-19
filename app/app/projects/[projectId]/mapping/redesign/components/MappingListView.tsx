@@ -15,10 +15,24 @@ import {
   flattenRowsForListView,
   type FlatRow,
 } from '@/lib/utils/flatten-rows-for-list-view'
-import { FlatRowActions } from './FlatRowActions'
+import { summarizeRationale } from '@/lib/utils/rationale-summary'
+import { Check, X } from 'lucide-react'
+import { ActionIconButton, FlatRowActions } from './FlatRowActions'
 import { InlineSourcePicker } from './InlineSourcePicker'
 import { TargetFieldCellPicker } from './TargetFieldCellPicker'
 import type { MappingListMutations } from '../hooks/useMappingListMutations'
+
+// Per-row rationale source. The TFM-level prose is the headline for the
+// new RATIONALE column; the drawer continues to render the full text.
+// Unmapped-target rows currently have no wire field for the coverage's
+// acknowledgment reason — they render em-dash. Adding the wire field is
+// a separate additive change in worktree A.
+function deriveRationaleSource(row: FlatRow): string | null {
+  if (row.kind === 'mapped') return row.parentRow.aiReasoning
+  if (row.kind === 'value-assignment') return row.parentRow.aiReasoning
+  if (row.kind === 'unmapped-source') return row.acknowledgmentReason
+  return null
+}
 
 // feat/mapping-list-toggle-and-columns refinement pass — confidence
 // color simplified to a binary scheme: ≥50% renders in neutral slate
@@ -609,21 +623,24 @@ export function MappingListView({
     >
       <table className="w-full table-fixed border-collapse text-sm">
         <colgroup>
-          {/* feat/mapping-list-toggle-and-columns refinement pass:
-              status dot in the LEFTMOST 24px slot; the four
-              main columns (Source/Target table & field) share the
-              available space EQUALLY at 25% each so a long Target
-              Table doesn't crowd the Source Field, and vice versa.
-              Confidence and Actions stay fixed-width. Final order:
-              [dot] | Source Table | Source Field | Target Table |
-              Target Field | Confidence | Actions. */}
+          {/* feat/mapping-table-redesign column structure (Banking Core
+              mockup):
+                [verdict cluster] | SOURCE | → | TARGET | RATIONALE |
+                CONFIDENCE | [edit pencil, hover]
+              Verdict cluster holds status dot + approve + reject icons,
+              always visible. Source/Target are each one cell rendering
+              TABLE_NAME [field_chip]. Arrow is a muted glyph between.
+              Rationale fills the largest flex slot since text length
+              varies most. Confidence stays right-aligned numeric. Edit
+              pencil is the only right-side affordance, hover-revealed
+              via the `group` class on each <tr>. */}
+          <col style={{ width: '92px' }} />
+          <col />
           <col style={{ width: '24px' }} />
-          <col style={{ width: '25%' }} />
-          <col style={{ width: '25%' }} />
-          <col style={{ width: '25%' }} />
-          <col style={{ width: '25%' }} />
+          <col />
+          <col />
           <col style={{ width: '80px' }} />
-          <col style={{ width: '110px' }} />
+          <col style={{ width: '44px' }} />
         </colgroup>
         <thead className="bg-gray-50">
           <tr>
@@ -633,16 +650,21 @@ export function MappingListView({
               aria-label="Status"
               className="border-b border-gray-200 px-1 py-2.5 align-top"
             />
-            <TableHeader column="sourceTable" label="Source Table" />
-            <TableHeader column="sourceField" label="Source Field" />
-            <TableHeader column="targetTable" label="Target Table" />
-            <TableHeader column="targetField" label="Target Field" />
+            <TableHeader column="source" label="Source" />
+            <th
+              scope="col"
+              data-testid="flat-header-arrow"
+              aria-hidden="true"
+              className="border-b border-gray-200 px-0 py-2.5 align-top"
+            />
+            <TableHeader column="target" label="Target" />
+            <TableHeader column="rationale" label="Rationale" />
             <TableHeader column="confidence" label="Confidence" align="right" />
             <th
               scope="col"
               data-testid="flat-header-actions"
               aria-label="Actions"
-              className="border-b border-gray-200 px-3 py-2.5 align-top"
+              className="border-b border-gray-200 px-1 py-2.5 align-top"
             />
           </tr>
         </thead>
@@ -710,10 +732,9 @@ function TableHeader({
   align,
 }: {
   column:
-    | 'sourceTable'
-    | 'sourceField'
-    | 'targetTable'
-    | 'targetField'
+    | 'source'
+    | 'target'
+    | 'rationale'
     | 'confidence'
     | 'status'
   label: string
@@ -926,16 +947,19 @@ function FlatRowView({
 
   // ── Render ────────────────────────────────────────────────────────
   //
-  // Sixth polish pass — single-viewport table layout (no horizontal
-  // scroll, no sticky columns). Column widths set via the parent
-  // table's `<colgroup>`. Each cell uses uniform `px-3 py-2.5
-  // align-top`, with `text-sm` body text and a subtle border-b on
-  // every non-header row.
+  // feat/mapping-table-redesign — Banking Core mockup. Seven columns
+  // in order: [verdict cluster] | SOURCE | → | TARGET | RATIONALE |
+  // CONFIDENCE | [edit pencil, hover-only]. Verdict cluster holds the
+  // status dot + Approve + Reject icons, always visible. SOURCE and
+  // TARGET each render `TABLE_NAME [field_chip]` in one cell. RATIONALE
+  // is a one-line summary derived client-side from `aiReasoning` (or
+  // ack reason). Edit pencil hover reveals via the `group` class on
+  // the <tr> root.
   //
-  // Multi-source mapped TFMs emit N independent flat rows; each row
-  // carries `sourceCount > 1` and renders with a `border-l-2
-  // border-slate-300` left accent so siblings remain visually
-  // identifiable even after the global sort scatters them.
+  // Multi-source siblings are still indicated by the bracket accent on
+  // the left edge of the SOURCE cell, anchored to the chip's vertical
+  // center (22px from cell top). The bar parts (first/middle/last)
+  // span the cell padding and stitch adjacent rows together.
   //
   // Em-dashes for blank cells use `text-gray-300` — visibly muted
   // against the surrounding text-slate-700 data.
@@ -951,64 +975,58 @@ function FlatRowView({
       data-multi-source={isMultiSource ? 'true' : 'false'}
       onClick={() => onRowBodyClick(row)}
       className={cn(
-        'cursor-pointer bg-white transition-colors hover:bg-gray-50',
+        'group cursor-pointer bg-white transition-colors hover:bg-gray-50',
       )}
     >
-      {/* Leftmost status dot — 24px column, no header text.
-          feat/mapping-list-toggle-and-columns refinement pass moved
-          the dot from its prior position between Confidence and
-          Actions. Tooltip carries the status label + ack reason. */}
+      {/* Verdict cluster — leftmost. Status dot + Approve icon + Reject
+          icon, always visible. Action button clicks stopPropagation so
+          they don't bubble to the row body's drawer-open handler. */}
       <td
         data-testid="flat-cell-status"
         title={statusTooltip}
-        className="px-1 py-2.5 align-top text-center"
+        className="px-2 py-2.5 align-top"
       >
-        <StatusDot status={displayStatus} />
+        <div className="flex items-center gap-1">
+          <StatusDot status={displayStatus} />
+          {actions.onApprove ? (
+            <ActionIconButton
+              testId="flat-row-action-approve"
+              ariaLabel="Approve mapping"
+              tooltip={actions.approveTooltip ?? 'Approve mapping'}
+              variant="approve"
+              disabled={isBusy}
+              onClick={actions.onApprove}
+            >
+              <Check aria-hidden="true" className="h-3.5 w-3.5" />
+            </ActionIconButton>
+          ) : null}
+          {actions.onReject ? (
+            <ActionIconButton
+              testId="flat-row-action-reject"
+              ariaLabel="Reject mapping"
+              tooltip={actions.rejectTooltip ?? 'Reject mapping'}
+              variant="reject"
+              disabled={isBusy}
+              onClick={actions.onReject}
+            >
+              <X aria-hidden="true" className="h-3.5 w-3.5" />
+            </ActionIconButton>
+          ) : null}
+        </div>
       </td>
-      {/* Source-first column order (feat/mapping-list-toggle-and-columns).
-          Multi-source accent (feat/mapping-list-cluster-multi-source):
-          painted on the Source FIELD cell — the field is the mapping
-          unit; the table is incidental metadata. With the new target-
-          first cluster sort, multi-source siblings are guaranteed
-          adjacent, so the per-cell border reads as one contiguous
-          vertical bar across the group. Brand teal at 50% opacity —
-          obvious but not loud. */}
+      {/* Merged SOURCE — `TABLE_NAME [field_chip]` in one cell. Multi-
+          source bracket still anchored to the cell's left padding gap;
+          its horizontal cap aligns with the chip's vertical center. */}
       <td
-        data-testid="flat-cell-source-table"
-        title={sourceTableName ?? undefined}
-        className="truncate px-3 py-2.5 align-top text-sm text-slate-700"
-      >
-        {sourceTableName ?? <span className="text-gray-300">—</span>}
-      </td>
-      <td
-        data-testid="flat-cell-source-field"
-        data-group-position={groupPosition}
+        data-testid="flat-cell-source"
         className="relative px-3 py-2.5 align-top text-sm"
       >
-        {/*
-          Multi-source bracket accent (feat/mapping-list-toggle-and-
-          columns refinement pass — tree-branch geometry).
-          The horizontal caps align with the VERTICAL CENTER of the
-          FieldNameChip pill (≈22px from the cell top, given
-          `py-2.5` cell padding + 24px pill height). The vertical bar
-          is split into two halves so the bracket reads like a tree
-          branch connecting to each field name:
-            'first'  — cap at pill center + bar going DOWN to cell
-                       bottom
-            'middle' — bar spans full cell height
-            'last'   — bar coming FROM cell top + cap at pill center
-            'solo'   — cap only (defensive — multi-source row whose
-                       siblings were filtered out)
-          Color is neutral gray-400 — subtle, structural.
-        */}
         {groupPosition !== 'none' && (
           <span
             aria-hidden="true"
             data-testid="flat-source-field-bracket"
             className="pointer-events-none absolute inset-y-0 left-0 w-2"
           >
-            {/* Vertical bar half above the pill center (rendered on
-                'middle' and 'last' rows). */}
             {(groupPosition === 'middle' || groupPosition === 'last') && (
               <span
                 aria-hidden="true"
@@ -1016,8 +1034,6 @@ function FlatRowView({
                 style={{ height: '22px' }}
               />
             )}
-            {/* Vertical bar half below the pill center (rendered on
-                'first' and 'middle' rows). */}
             {(groupPosition === 'first' || groupPosition === 'middle') && (
               <span
                 aria-hidden="true"
@@ -1025,8 +1041,6 @@ function FlatRowView({
                 style={{ top: '22px' }}
               />
             )}
-            {/* Horizontal cap at pill vertical center (first / last /
-                solo). Connects the bar to the pill. */}
             {(groupPosition === 'first' ||
               groupPosition === 'last' ||
               groupPosition === 'solo') && (
@@ -1038,109 +1052,153 @@ function FlatRowView({
             )}
           </span>
         )}
-        {sourceFieldName ? (
-          sourceCellClickable ? (
-            <button
-              ref={sourceCellRef}
-              type="button"
-              data-testid="flat-cell-source-field-button"
-              onClick={(e) => {
-                e.stopPropagation()
-                onSourceCellClick(row, e.currentTarget)
-              }}
-              className={cn(
-                'inline-flex max-w-full items-center justify-start rounded',
-                'focus:outline-none focus-visible:ring-1 focus-visible:ring-blue-500',
-              )}
+        <div className="flex min-w-0 items-center gap-2">
+          {sourceTableName ? (
+            <span
+              data-testid="flat-cell-source-table"
+              title={sourceTableName}
+              className="shrink-0 truncate text-[10px] font-medium uppercase tracking-wide text-slate-500"
             >
-              <FieldNameChip name={sourceFieldName} />
-            </button>
-          ) : (
-            <FieldNameChip name={sourceFieldName} />
-          )
-        ) : row.kind === 'unmapped-target' ? (
-          // Target-only row clickable to pick a source. Routes
-          // through createFromUnmapped on commit.
-          <button
-            ref={sourceCellRef}
-            type="button"
-            data-testid="flat-cell-source-field-button"
-            onClick={(e) => {
-              e.stopPropagation()
-              onSourceCellClick(row, e.currentTarget)
-            }}
-            className={cn(
-              'inline-flex items-center justify-start rounded px-1 py-0.5 text-sm',
-              'italic text-slate-400 hover:bg-blue-100/60 hover:text-slate-600',
-              'focus:outline-none focus-visible:ring-1 focus-visible:ring-blue-500',
-            )}
+              {sourceTableName}
+            </span>
+          ) : null}
+          <span
+            data-testid="flat-cell-source-field"
+            data-group-position={groupPosition}
+            className="min-w-0"
           >
-            Pick a source…
-          </button>
-        ) : row.kind === 'value-assignment' ? (
-          // feat/mapping-list-toggle-and-columns refinement pass: the
-          // value-assignment "—" gets the same click-to-pick affordance
-          // as unmapped-target. Visually stays a dash (matches the
-          // founder's brief — "clickable —") rather than borrowing the
-          // unmapped-target "Pick a source…" label. Cursor-pointer +
-          // subtle hover signal clickability. Server-side commit
-          // limitation documented in `handleSourceCellClick`.
-          <button
-            ref={sourceCellRef}
-            type="button"
-            data-testid="flat-cell-source-field-button"
-            aria-label="Pick a source field"
-            title="Pick a source field"
-            onClick={(e) => {
-              e.stopPropagation()
-              onSourceCellClick(row, e.currentTarget)
-            }}
-            className={cn(
-              'inline-flex cursor-pointer items-center justify-start rounded px-1 py-0.5 text-sm',
-              'text-gray-300 hover:bg-blue-100/60 hover:text-slate-600',
-              'focus:outline-none focus-visible:ring-1 focus-visible:ring-blue-500',
+            {sourceFieldName ? (
+              sourceCellClickable ? (
+                <button
+                  ref={sourceCellRef}
+                  type="button"
+                  data-testid="flat-cell-source-field-button"
+                  onClick={(e) => {
+                    e.stopPropagation()
+                    onSourceCellClick(row, e.currentTarget)
+                  }}
+                  className={cn(
+                    'inline-flex max-w-full items-center justify-start rounded',
+                    'focus:outline-none focus-visible:ring-1 focus-visible:ring-blue-500',
+                  )}
+                >
+                  <FieldNameChip name={sourceFieldName} />
+                </button>
+              ) : (
+                <FieldNameChip name={sourceFieldName} />
+              )
+            ) : row.kind === 'unmapped-target' ? (
+              <button
+                ref={sourceCellRef}
+                type="button"
+                data-testid="flat-cell-source-field-button"
+                onClick={(e) => {
+                  e.stopPropagation()
+                  onSourceCellClick(row, e.currentTarget)
+                }}
+                className={cn(
+                  'inline-flex items-center justify-start rounded px-1 py-0.5 text-sm',
+                  'italic text-slate-400 hover:bg-blue-100/60 hover:text-slate-600',
+                  'focus:outline-none focus-visible:ring-1 focus-visible:ring-blue-500',
+                )}
+              >
+                Pick a source…
+              </button>
+            ) : row.kind === 'value-assignment' ? (
+              <button
+                ref={sourceCellRef}
+                type="button"
+                data-testid="flat-cell-source-field-button"
+                aria-label="Pick a source field"
+                title="Pick a source field"
+                onClick={(e) => {
+                  e.stopPropagation()
+                  onSourceCellClick(row, e.currentTarget)
+                }}
+                className={cn(
+                  'inline-flex cursor-pointer items-center justify-start rounded px-1 py-0.5 text-sm',
+                  'text-gray-300 hover:bg-blue-100/60 hover:text-slate-600',
+                  'focus:outline-none focus-visible:ring-1 focus-visible:ring-blue-500',
+                )}
+              >
+                —
+              </button>
+            ) : (
+              <span className="text-gray-300">—</span>
             )}
-          >
-            —
-          </button>
-        ) : (
-          <span className="text-gray-300">—</span>
-        )}
+          </span>
+        </div>
       </td>
+      {/* Arrow glyph between source and target. Muted, decorative. */}
       <td
-        data-testid="flat-cell-target-table"
-        title={targetTable ?? undefined}
-        className="truncate px-3 py-2.5 align-top text-sm text-slate-700"
+        aria-hidden="true"
+        className="px-0 py-2.5 align-middle text-center text-base leading-tight text-slate-300"
       >
-        {targetTable ?? <span className="text-gray-300">—</span>}
+        →
       </td>
+      {/* Merged TARGET — `table_name [field_chip]` in one cell. */}
       <td
-        data-testid="flat-cell-target-field"
+        data-testid="flat-cell-target"
         className="px-3 py-2.5 align-top text-sm"
       >
-        {targetFieldName ? (
-          targetCellEditable ? (
-            <button
-              ref={targetCellRef}
-              type="button"
-              data-testid="flat-cell-target-field-button"
-              onClick={(e) => {
-                e.stopPropagation()
-                onTargetCellClick(row, e.currentTarget)
-              }}
-              className={cn(
-                'inline-flex max-w-full items-center justify-start rounded',
-                'focus:outline-none focus-visible:ring-1 focus-visible:ring-blue-500',
-              )}
+        <div className="flex min-w-0 items-center gap-2">
+          {targetTable ? (
+            <span
+              data-testid="flat-cell-target-table"
+              title={targetTable}
+              className="shrink-0 truncate text-[10px] font-medium uppercase tracking-wide text-slate-500"
             >
-              <FieldNameChip name={targetFieldName} />
-            </button>
-          ) : (
-            <FieldNameChip name={targetFieldName} />
+              {targetTable}
+            </span>
+          ) : null}
+          <span data-testid="flat-cell-target-field" className="min-w-0">
+            {targetFieldName ? (
+              targetCellEditable ? (
+                <button
+                  ref={targetCellRef}
+                  type="button"
+                  data-testid="flat-cell-target-field-button"
+                  onClick={(e) => {
+                    e.stopPropagation()
+                    onTargetCellClick(row, e.currentTarget)
+                  }}
+                  className={cn(
+                    'inline-flex max-w-full items-center justify-start rounded',
+                    'focus:outline-none focus-visible:ring-1 focus-visible:ring-blue-500',
+                  )}
+                >
+                  <FieldNameChip name={targetFieldName} />
+                </button>
+              ) : (
+                <FieldNameChip name={targetFieldName} />
+              )
+            ) : (
+              <span className="text-gray-300">—</span>
+            )}
+          </span>
+        </div>
+      </td>
+      {/* Rationale — one-line summary of the row's AI reasoning or
+          (for source-side acks) the ack reason. Full text on hover via
+          `title`. Em-dash when nothing to surface (includes unmapped-
+          target rows, which today don't carry coverage acknowledgment
+          reason on the wire — additive wire change is a separate PR). */}
+      <td
+        data-testid="flat-cell-rationale"
+        className="px-3 py-2.5 align-top text-sm text-slate-700"
+      >
+        {(() => {
+          const raw = deriveRationaleSource(row)
+          const summary = summarizeRationale(raw)
+          if (summary === null) {
+            return <span className="text-gray-300">—</span>
+          }
+          return (
+            <span title={raw ?? undefined} className="block truncate">
+              {summary}
+            </span>
           )
-        ) : (
-          <span className="text-gray-300">—</span>
-        )}
+        })()}
       </td>
       <td
         data-testid="flat-cell-confidence"
@@ -1170,17 +1228,20 @@ function FlatRowView({
           </span>
         )}
       </td>
-      <td className="px-3 py-2.5 align-top">
-        <FlatRowActions
-          rowId={row.id}
-          isBusy={isBusy}
-          onApprove={actions.onApprove}
-          approveTooltip={actions.approveTooltip}
-          onReject={actions.onReject}
-          rejectTooltip={actions.rejectTooltip}
-          onEdit={actions.onEdit}
-          editTooltip={actions.editTooltip}
-        />
+      {/* Edit pencil — hover-only (revealed via the `group` class on
+          the <tr>). Approve / Reject moved into the verdict cluster on
+          the left; this cell carries only the Edit affordance.
+          group-focus-within: keyboard-focus reveals it too, so keyboard
+          users aren't shut out of the affordance. */}
+      <td className="px-1 py-2.5 align-top">
+        <div className="opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100">
+          <FlatRowActions
+            rowId={row.id}
+            isBusy={isBusy}
+            onEdit={actions.onEdit}
+            editTooltip={actions.editTooltip}
+          />
+        </div>
       </td>
     </tr>
   )
