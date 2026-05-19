@@ -423,7 +423,13 @@ describe('MappingListView — action buttons per row kind', () => {
     expect(onOpenDrawer).toHaveBeenCalledWith('tfm-multi', 'sf-prodsku')
   })
 
-  it('unmapped-target: Approve omitted; Reject calls setUnmappedRowRejected with targetFieldId', () => {
+  it('unmapped-target: Approve routes through approveTfm with the unmapped::<targetFieldId> sentinel; Reject calls setUnmappedRowRejected with targetFieldId', () => {
+    // feat/mapping-table-redesign refinement pass 2: approve renders on
+    // unmapped-target rows so the user can one-click "acknowledge this
+    // target as intentionally unmapped" without opening the drawer.
+    // approveTfm dispatches `approveFieldMapping`, which branches on the
+    // `unmapped::` row id prefix and writes target_field_coverage.status
+    // via setCoverageStatus (per the server action contract).
     const mutations = makeMutations()
     const result = makeResult([makeUnmappedTarget()])
     render(
@@ -435,10 +441,8 @@ describe('MappingListView — action buttons per row kind', () => {
     )
 
     const row = findRow('unmapped::tf-9')
-    // No mapping to approve → Approve button is omitted entirely.
-    expect(
-      within(row).queryByTestId('flat-row-action-approve'),
-    ).toBeNull()
+    fireEvent.click(within(row).getByTestId('flat-row-action-approve'))
+    expect(mutations.approveTfm).toHaveBeenCalledWith('unmapped::tf-9')
 
     fireEvent.click(within(row).getByTestId('flat-row-action-reject'))
     expect(mutations.rejectUnmappedRow).toHaveBeenCalledWith({

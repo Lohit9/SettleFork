@@ -912,9 +912,19 @@ function FlatRowView({
       }
     }
     if (row.kind === 'unmapped-target') {
+      // feat/mapping-table-redesign refinement pass 2: approve now
+      // renders on unmapped-target rows. The row.id is the synthetic
+      // `unmapped::<targetFieldId>` sentinel; `mutations.approveTfm`
+      // dispatches the server action `approveFieldMapping`, which
+      // branches on the `unmapped::` prefix and routes to
+      // `setCoverageStatus` on the target_field_coverage row — a
+      // one-click "acknowledge this target as intentionally unmapped"
+      // affordance without forcing the drawer.
       return {
-        onApprove: undefined,
-        approveTooltip: 'Nothing to approve — no mapping',
+        onApprove: alreadyApproved
+          ? undefined
+          : () => void mutations.approveTfm(row.id),
+        approveTooltip: 'Acknowledge unmapped target',
         onReject: alreadyRejected
           ? undefined
           : () =>
@@ -1206,14 +1216,14 @@ function FlatRowView({
         )}
       </td>
       {/* Right-side action cluster — order left-to-right:
-          approve (✓) → reject (✗) → edit (✎). Approve + reject are
-          always visible; the edit pencil is opacity-0 at rest and
-          fades in on row hover (or keyboard focus within the row so
-          keyboard users still reach it). Action button clicks
-          stopPropagation so they don't bubble to the row body's
-          drawer-open handler. */}
+          approve (✓) → reject (✗) → edit (✎). All three icons are
+          hover-only (opacity-0 at rest, faded in via `group-hover` on
+          the <tr>); `group-focus-within` keeps them keyboard-reachable.
+          Status dot on the left edge is the only always-visible
+          per-row affordance. Action button clicks stopPropagation so
+          they don't bubble to the row body's drawer-open handler. */}
       <td className="px-2 py-2.5 align-top">
-        <div className="flex items-center justify-end gap-1">
+        <div className="flex items-center justify-end gap-1 opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100">
           {actions.onApprove ? (
             <ActionIconButton
               testId="flat-row-action-approve"
@@ -1239,18 +1249,16 @@ function FlatRowView({
             </ActionIconButton>
           ) : null}
           {actions.onEdit ? (
-            <span className="opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100">
-              <ActionIconButton
-                testId="flat-row-action-edit"
-                ariaLabel="Edit mapping"
-                tooltip={actions.editTooltip ?? 'Open mapping in drawer'}
-                variant="edit"
-                disabled={isBusy}
-                onClick={actions.onEdit}
-              >
-                <Edit3 aria-hidden="true" className="h-3.5 w-3.5" />
-              </ActionIconButton>
-            </span>
+            <ActionIconButton
+              testId="flat-row-action-edit"
+              ariaLabel="Edit mapping"
+              tooltip={actions.editTooltip ?? 'Open mapping in drawer'}
+              variant="edit"
+              disabled={isBusy}
+              onClick={actions.onEdit}
+            >
+              <Edit3 aria-hidden="true" className="h-3.5 w-3.5" />
+            </ActionIconButton>
           ) : null}
         </div>
       </td>
