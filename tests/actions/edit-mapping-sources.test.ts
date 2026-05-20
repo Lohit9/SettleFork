@@ -52,13 +52,14 @@
 //        as a source change (dominant defines join anchor).
 //  E19.  RPC `dq_replace_mapping_sources` invocation with `p_tfm_id`
 //        + `p_sources`.
-//  E20.  Provenance laundering: zero original AI sources retained →
-//        TFM-level ai_reasoning collapses to 'Mapping edited via
-//        redesign UI'.
-//  E21.  Provenance laundering: ≥1 original AI source retained →
-//        TFM-level ai_reasoning preserved (or fallback). Per-source
-//        marker preserved on retained AI rows; new rows always carry
-//        manual marker.
+//  E20.  AI-reasoning clearing (PR A2): every edit clears the TFM-level
+//        `ai_reasoning` to null. Supersedes the former 4a-4b
+//        provenance-laundering rule for this column — migration 083's
+//        `original_ai_reasoning` freezes the AI proposal independently.
+//  E21.  AI-reasoning clearing is unconditional — no `stillHasOriginalAi`
+//        branch. Per-source `mapping_sources.ai_reasoning` markers are
+//        still laundered: retained AI rows keep 'AI-suggested:…', new
+//        rows carry the manual marker.
 //  E22.  Status revert to `needs_review` on every successful edit
 //        regardless of prior status.
 //  E23.  `resetFieldTransform` invoked when `sourcesChanged` is true,
@@ -397,16 +398,21 @@ describe('[edit-mapping-sources] dq_replace_mapping_sources RPC', () => {
 // E20-E21 — Provenance laundering (§1f)
 // ─────────────────────────────────────────────────────────────────────
 
-describe('[edit-mapping-sources] provenance laundering', () => {
-  it('E20: zero original AI sources retained → TFM-level ai_reasoning collapses to manual marker', () => {
-    expect(BODY).toMatch(/retainedAiSourceIds/)
-    expect(BODY).toMatch(/stillHasOriginalAi\s*=\s*retainedAiSourceIds\.size\s*>\s*0/)
-    expect(BODY).toMatch(/['"]Mapping edited via redesign UI['"]/)
+describe('[edit-mapping-sources] ai_reasoning clearing (PR A2 — supersedes 4a-4b laundering)', () => {
+  it('E20: every edit clears the TFM-level ai_reasoning to null (no manual-marker collapse)', () => {
+    // PR A2 founder-decision override: the 4a-4b laundering rule for the
+    // TFM-level column is gone. `original_ai_reasoning` (migration 083)
+    // freezes the AI proposal, so clearing the live column outright is
+    // audit-safe. The dead laundering computation is removed entirely.
+    expect(BODY).toMatch(/ai_reasoning:\s*null/)
+    expect(BODY).not.toMatch(/['"]Mapping edited via redesign UI['"]/)
+    expect(BODY).not.toMatch(/newTfmAiReasoning/)
   })
 
-  it('E21a: ≥1 original AI source retained → TFM-level ai_reasoning preserved (or AI fallback)', () => {
-    expect(BODY).toMatch(/stillHasOriginalAi[\s\S]{0,200}tfm\.ai_reasoning/)
-    expect(BODY).toMatch(/['"]AI-suggested via per-row Suggest['"]/)
+  it('E21a: ai_reasoning is cleared regardless of whether AI sources survive the edit', () => {
+    // No `stillHasOriginalAi` branch — the TFM-level clear is unconditional.
+    expect(BODY).not.toMatch(/stillHasOriginalAi/)
+    expect(BODY).not.toMatch(/['"]AI-suggested via per-row Suggest['"]/)
   })
 
   it('E21b: per-source marker preserved on retained AI rows; new rows always carry manual marker', () => {
@@ -426,9 +432,9 @@ describe('[edit-mapping-sources] status revert', () => {
     expect(BODY).toMatch(/from\(['"]target_field_mappings['"]\)\s*\.update\(\{[\s\S]{0,300}status:\s*['"]needs_review['"]/)
   })
 
-  it('E22b: combinationType + ai_reasoning + updated_at threaded through the same UPDATE', () => {
+  it('E22b: combination_type + ai_reasoning=null + updated_at threaded through the same UPDATE', () => {
     expect(BODY).toMatch(/combination_type:\s*combinationType/)
-    expect(BODY).toMatch(/ai_reasoning:\s*newTfmAiReasoning/)
+    expect(BODY).toMatch(/ai_reasoning:\s*null/)
     expect(BODY).toMatch(/updated_at:\s*new Date\(\)\.toISOString\(\)/)
   })
 })

@@ -6,6 +6,22 @@
       "699fe032-57cb-4f56-a06e-7a2a882f20e1",
       "6ffd5629-5de9-4e1a-9b3d-d274d477d861"
     ],
+    "load_order": [
+      {
+        "sequence": 1,
+        "target_table": "Inventory Commodity Code",
+        "depends_on": [],
+        "reason": "Foundational object. Holds default values (Inventory Source, Eng Type, Lot/Serial Tracking, Planning Policy, costing weights, lead times, etc.) that propagate to Engineering Item Master records via the rstk__peitem_iccomcod__r external ID foreign key. Must exist in Rootstock before any peitem record can reference it."
+      },
+      {
+        "sequence": 2,
+        "target_table": "Engineering Item Master",
+        "depends_on": [
+          "Inventory Commodity Code"
+        ],
+        "reason": "Every peitem record requires a valid iccomcod external ID via rstk__peitem_iccomcod__r. Loading peitem before iccomcod will cause every row to fail validation on the FK lookup. Per the peitem schema doc: 'The Inventory Commodity Code record must exist before adding the Engineering Item Master for the respective Inventory Division.'"
+      }
+    ],
     "entries": [
       {
         "source_table": "Engineering BOM Masters",
@@ -24,12 +40,12 @@
         "source_field": "Item Type",
         "target_field": "rstk__peitem_iccomcod__r external id",
         "target_table": "Engineering Item Master",
-        "explanation": "Field type: Lookup(Inventory Commodity Code), External ID, Required.\n\nDrives commodity code routing for raw materials and components that exist in the BoM but not in the Products catalog (~68 items: inks, glues, paper sheets, boxes, tape). 'Non Inventory' indicates consumables that should not be MRP-planned (inks coded A0xxx, glues coded D0xxx). 'Inventory' indicates stock-tracked raw materials that do need planning (paper PR-*, boxes BX-*). Note: this BoM field has different semantics from the peitem.Item Type field, which uses Direct Material / Labor Only — the picklists do not align.",
+        "explanation": "Field type: Lookup(Inventory Commodity Code), External ID, Required.\n\nDrives commodity code routing for raw materials and components that exist in the BoM but not in the Products catalog (~68 items: inks, glues, paper sheets, boxes, tape). 'Non Inventory' indicates consumables that should not be MRP-planned (inks coded A0xxx, glues coded D0xxx/C0xxx). 'Inventory' indicates stock-tracked raw materials that do need planning (paper PR-*, boxes BX-/BC-/N0-*, stadium cup blanks WSC*).\n\nNote: this BoM field has different semantics from the peitem.Item Type field, which uses Direct Material / Labor Only — the picklists do not align.\n\nExternal ID format: all outputs prefixed with '2_' (division 2) per schema requirement '<division_external_id>_<commodity_code>'.",
         "transformation_needed": true,
         "transformations": [
-          "Apply only to SKUs that appear as BoM.Part # but not as Products.ProductSKU:\n\n  WHEN BoM.Item Type = 'Non Inventory' AND Part # matches /^A\\d{4}|^D\\d{4}/ → RCB-CONSUMABLE-INK\n  WHEN BoM.Item Type = 'Non Inventory' AND Part # matches /^H\\d{4}|TAPE|LABEL/ → RCB-PACKAGING\n  WHEN BoM.Item Type = 'Non Inventory' (any other)  → RCB-CONSUMABLE-INK\n  WHEN BoM.Item Type = 'Inventory' AND Part # starts with 'PR-' or contains SBS/KRA → RCB-PRINT-MAT\n  WHEN BoM.Item Type = 'Inventory' AND Part # starts with 'BX-', 'BG-', or 'S-' → RCB-PACKAGING\n  ELSE → RCB-PRINT-MAT"
+          "Apply only to SKUs that appear as BoM.Part # but not as Products.ProductSKU:\n\n  WHEN BoM.Item Type = 'Non Inventory':\n    IF Part # matches /^A\\d{4}/                          → '2_RCB-CONSUMABLE-INK'\n    IF Part # matches /^D\\d{4}|^C\\d{4}/                  → '2_RCB-CONSUMABLE-GLUE'  (D0001, C0026 etc. — glues, not inks)\n    IF Part # matches /^H\\d{4}|TAPE|LABEL/ OR = 'BCI'    → '2_RCB-PACKAGING'         (BCI = printed instructions)\n    ELSE                                                  → '2_RCB-UNROUTED'         (explicit catch-all, requires human review)\n\n  WHEN BoM.Item Type = 'Inventory':\n    IF Part # LIKE 'PR-%' OR contains 'SBS'/'KRA'         → '2_RCB-PRINT-MAT'        (paper raw material)\n    IF Part # LIKE 'BX-%'/'BG-%'/'S-%'/'BC%'/'N0%'        → '2_RCB-PACKAGING'        (boxes, bags incl. BCB-*/BCK-*/BCW-*/N0068)\n    IF Part # LIKE 'WSC%'                                 → '2_RCB-BLANK-CUP'        (stadium cup blanks WSC22/WSC32)\n    ELSE                                                  → '2_RCB-UNROUTED'         (explicit catch-all, requires human review)\n\nAll outputs prefixed with '2_' (division 2). Items routed to RCB-UNROUTED must be reviewed by the user before load — silent fallback to a default category is not used."
         ],
-        "confidence": 64
+        "confidence": 68
       },
       {
         "source_table": "Engineering BOM Masters",
@@ -216,24 +232,24 @@
         "source_field": "ProductSKU",
         "target_field": "Item Number",
         "target_table": "Engineering Item Master",
-        "explanation": "Field type: Text(50), Required.\n\nThe primary business SKU used across orders, purchase orders, and invoices. The Products catalog contains 4,587 unique SKUs and matches 100% of BoM Assy Items after whitespace trimming, making it the most authoritative and complete source for item identity.",
+        "explanation": "Field type: Text(50), Required.\n\nThe primary business SKU used across orders, purchase orders, and invoices. Each distinct ProductSKU becomes one Engineering Item Master record. This produces ~4,587 EIM records covering every catalog variant.\n\n**Decision point — EIM grain.** RCB's current production Rootstock org has only 338 EIM records, a curated subset closer to InvMasterSKU grain (~386 unique non-sentinel values). There are two defensible approaches:\n  (a) ProductSKU grain (~4,587 EIMs) — the platform's default, treats every catalog variant as a distinct item. Matches the natural grain of products.csv.\n  (b) InvMasterSKU grain (~386 EIMs) — matches the prod org pattern. Treats EIM as the underlying inventory item; print/decoration variants live on Salesforce Product, not EIM.\nConfidence is reduced (55) to surface this as a decision RCB needs to make. The mapping defaults to ProductSKU grain because it preserves all source rows; switching to InvMasterSKU grain requires remapping the source field on Item Number from ProductSKU to InvMasterSKU (with sentinel filtering).\n\nAdditional consideration: ProductSKU has 622 duplicate values across 1,873 rows (32% of file). See the transformation rule for dedup logic.",
         "transformation_needed": true,
         "transformations": [
-          "Trim whitespace. When merging with items already extracted from the BoM: SKUs that appear as a BoM Assy Item keep Inventory Source = Manufactured; SKUs in the Apparel-Outsource product group become Subcontract; SKUs with InvMasterSKU = 'NO INVENTORY' and no BoM presence are filtered out. All other catalog SKUs become Purchased."
+          "Apply dedup before extracting Item Number:\n\n  WITH ranked AS (\n    SELECT ProductSKU, ProductName, InvMasterSKU, ProductActive, ProductUpdated,\n           ROW_NUMBER() OVER (\n             PARTITION BY TRIM(ProductSKU)\n             ORDER BY \n               CASE WHEN InvMasterSKU IS NOT NULL AND InvMasterSKU NOT IN ('NO INVENTORY','OUTSOURCED') THEN 0 ELSE 1 END,\n               ProductActive DESC,\n               ProductUpdated DESC NULLS LAST\n           ) AS rn\n    FROM products\n  )\n  SELECT TRIM(ProductSKU) AS item_number FROM ranked WHERE rn = 1\n\nTiebreaker priority: (1) rows with real InvMasterSKU win over sentinel/null, (2) active items win over inactive, (3) most recently updated wins. Resolves the 622 duplicate SKUs (1,873 rows = 32% of source).\n\nWhen merging with BoM-sourced Item Numbers: SKUs that exist as BoM Assy Items keep Inventory Source = Manufactured."
         ],
-        "confidence": 97
+        "confidence": 55
       },
       {
         "source_table": "Products",
         "source_field": "ProductSKU",
         "target_field": "rstk__peitem_iccomcod__r external id",
         "target_table": "Engineering Item Master",
-        "explanation": "Field type: Lookup(Inventory Commodity Code), External ID, Required.\n\nProductSKU pattern is the primary signal for routing manufactured items to the correct commodity code. SKUs starting with 'P-' (printed items) are split by body pattern: sleeves go to RCB-PRINT-SLEEVE, all other printed items go to RCB-PRINT-CUP. This rule runs after the ProductGroupName edge-case routing (Apparel-Outsource and Warehoused) and before the BoM Item Type rules for raw materials. The same ProductSKU field also feeds Item Number — that is a one-to-many mapping where the same source feeds two target fields via different transformations.",
+        "explanation": "Field type: Lookup(Inventory Commodity Code), External ID, Required.\n\nProductSKU pattern is the primary signal for routing manufactured items to the correct commodity code. The pattern distinguishes:\n  - Items starting with 'P-' are printed (RCB decorates the blank)\n  - Items without 'P-' prefix that appear as BoM parents are manufactured blanks (RCB cuts/forms the cup/sleeve from raw stock)\nBody pattern then picks sleeve vs cup geometry. This rule runs after ProductGroupName edge-case routing (Apparel-Outsource and Warehoused) and before BoM Item Type rules for raw materials.\n\nThe same ProductSKU field also feeds Item Number — that is a one-to-many mapping where the same source feeds two target fields via different transformations.\n\nExternal ID format: per schema doc, the lookup expects '<division_external_id>_<commodity_code>'. Division 2 prefix applied to all values (e.g., '2_RCB-PRINT-CUP').",
         "transformation_needed": true,
         "transformations": [
-          "Apply this rule for items that appear in the Products catalog or as BoM parents, after ProductGroupName routing has run:\n\n  WHEN ProductSKU starts with 'P-' OR SKU appears as a BoM Assy Item:\n    IF SKU body (after stripping 'P-') starts with DWS, DKS, CWS, CKS, or WSC → RCB-PRINT-SLEEVE\n    OTHERWISE → RCB-PRINT-CUP"
+          "Apply for items in the Products catalog or as BoM parents, after ProductGroupName routing has run:\n\n  WHEN ProductSKU starts with 'P-':\n      IF body matches /(DWS|DKS|CWS|CKS|WSC)/  → '2_RCB-PRINT-SLEEVE'\n      OTHERWISE                                → '2_RCB-PRINT-CUP'\n\n  WHEN SKU is a BoM Assy Item AND does NOT start with 'P-' (manufactured blank):\n      IF body matches /(DWS|DKS|CWS|CKS|WSC)/  → '2_RCB-BLANK-SLEEVE'\n      OTHERWISE                                → '2_RCB-BLANK-CUP'  (covers WHC08/12/16/20, CHC*, B-CHC*, etc.)\n\nExternal ID format follows '<division_external_id>_<commodity_code>'. All outputs prefixed with '2_' (division 2)."
         ],
-        "confidence": 62
+        "confidence": 65
       },
       {
         "source_table": "Products",
@@ -255,7 +271,7 @@
         "explanation": "Field type: Lookup(Inventory Commodity Code), External ID, Required.\n\nProduct category in the source system, with 18 distinct values such as 20WHC, DWS, Pad, Warehoused, and Apparel-Outsource. For most items the commodity code is determined by SKU pattern rather than this field, but two ProductGroupName values trigger important commodity code routings: 'Apparel-Outsource' routes items to RCB-APPAREL-DROP (Subcontract), and 'Warehoused' routes them to RCB-STOCK-RESALE.",
         "transformation_needed": true,
         "transformations": [
-          "Apply this rule first, before SKU-pattern routing:\n\n  WHEN ProductGroupName = 'Apparel-Outsource' → RCB-APPAREL-DROP\n  WHEN ProductGroupName = 'Warehoused'        → RCB-STOCK-RESALE\n\nFor any other ProductGroupName value, fall through to the SKU-pattern rule (ProductSKU → iccomcod)."
+          "Apply this rule first, before SKU-pattern routing:\n\n  WHEN ProductGroupName = 'Apparel-Outsource' → '2_RCB-APPAREL-DROP'\n  WHEN ProductGroupName = 'Warehoused'        → '2_RCB-STOCK-RESALE'\n\nFor any other ProductGroupName value, fall through to the SKU-pattern rule (ProductSKU → iccomcod) and BoM Item Type rule.\n\nExternal ID format follows '<division_external_id>_<commodity_code>'. All outputs prefixed with '2_' (division 2)."
         ],
         "confidence": 77
       },
@@ -288,12 +304,12 @@
         "source_field": "InvMasterSKU",
         "target_field": "Inventory Source",
         "target_table": "Engineering Item Master",
-        "explanation": "Field type: Picklist {Manufactured, Purchased, Subcontract}, Optional (inherits from commodity code if blank).\n\nThe inventory key in the source system, with 388 distinct values plus a special sentinel 'NO INVENTORY'. Items with this sentinel are not stock-tracked (typically one-off custom orders or drop-ship items). Combined with whether the SKU appears in a BoM, this field determines whether an item becomes Manufactured, Purchased, Subcontract, or is filtered out of the migration.",
+        "explanation": "Field type: Picklist {Manufactured, Purchased, Subcontract}, Optional (inherits from commodity code if blank).\n\nThe inventory key in the source system, with 388 distinct values plus TWO sentinels:\n  - 'NO INVENTORY' (376 rows) — items not stock-tracked, typically one-off custom orders\n  - 'OUTSOURCED' (1,378 rows / 1,275 unique SKUs) — drop-ship items supplied by external vendors. All filed under ProductGroupName='20WHC' in the source data but are actually apparel (Bayside hoodies, Comfort Colors t-shirts, Gildan tees, Alternative pullovers, Sportsman caps, etc.). The ProductGroupName label is misleading for these items; the real discriminator is InvMasterSKU='OUTSOURCED'.\n\nCombined with BoM presence, this field determines whether an item becomes Manufactured, Purchased, Subcontract, or is filtered out of the migration.",
         "transformation_needed": true,
         "transformations": [
-          "Apply this resolution rule:\n\n  IF SKU appears as a BoM Assy Item → Inventory Source = Manufactured\n  ELSE IF ProductGroupName = 'Apparel-Outsource' → Inventory Source = Subcontract\n  ELSE IF InvMasterSKU is non-null AND ≠ 'NO INVENTORY' → Inventory Source = Purchased\n  ELSE IF InvMasterSKU = 'NO INVENTORY' AND SKU not used in any BoM → filter out (do not load) OR create as Phantom (confirm preference with RCB)"
+          "Apply this resolution rule (order matters):\n\n  IF SKU appears as a BoM Assy Item\n      → Inventory Source = Manufactured\n  ELSE IF InvMasterSKU = 'OUTSOURCED'\n      → Inventory Source = Subcontract  (catches 1,275 drop-ship apparel SKUs)\n  ELSE IF ProductGroupName = 'Apparel-Outsource'\n      → Inventory Source = Subcontract  (catches 26 stadium cup SKUs)\n  ELSE IF InvMasterSKU is non-null AND ≠ 'NO INVENTORY'\n      → Inventory Source = Purchased\n  ELSE IF InvMasterSKU = 'NO INVENTORY' AND SKU not used in any BoM\n      → Filter out (do not load)\n\nThe OUTSOURCED branch runs BEFORE the ProductGroupName check because the OUTSOURCED sentinel is the more reliable signal (1,275 SKUs vs 26 SKUs)."
         ],
-        "confidence": 68
+        "confidence": 78
       },
       {
         "source_table": "Products",
@@ -384,12 +400,12 @@
         "source_field": "ProductActive",
         "target_field": "Inactive Status",
         "target_table": "Engineering Item Master",
-        "explanation": "Field type: Checkbox, Optional (Checked = Inactive; Unchecked = Active or Pending).\n\nCheckbox indicating whether an item is currently in use. Status and Inactive Status are orthogonal: Status is the record lifecycle (Active vs Pending), Inactive Status is the usage flag (NULL = in use, TRUE = retired or no longer used). The combination Status = 'Active' with Inactive Status = TRUE represents a legacy item that was once released but is no longer in use — this is the standard end-of-life state.",
+        "explanation": "Field type: Checkbox, Optional (Checked = Inactive; Unchecked = Active or Pending).\n\nCheckbox indicating whether an item is currently in use. Status and Inactive Status are orthogonal: Status is the record lifecycle (Active vs Pending), Inactive Status is the usage flag (FALSE/unchecked = in use, TRUE/checked = retired). The combination Status='Active' with Inactive Status=TRUE represents a legacy item that was once released but is no longer in use — the standard end-of-life state.\n\nField type caveat: the schema doc shows Checkbox (TRUE/FALSE). The reference template CSV shows a literal 'I' value in this column for an inactive row, suggesting the field may actually accept a single-character code in some org configurations. The transformation uses TRUE/FALSE per the schema; if the live RCB org rejects boolean values, switch to 'I'/blank.",
         "transformation_needed": true,
         "transformations": [
           "Apply this rule only to items sourced from the Products catalog:\n\n  CASE WHEN Products.ProductActive = 0 THEN TRUE ELSE FALSE END\n\nItems sourced only from the BoM (no catalog match) default to FALSE (active). The field is a Checkbox in Rootstock — values are TRUE (checked = inactive) or FALSE / blank (unchecked = active or pending)."
         ],
-        "confidence": 92
+        "confidence": 82
       },
       {
         "source_table": "Unmapped",
@@ -531,7 +547,7 @@
         "explanation": "Field type: Text(20), Required.\n\nThe commodity code name (primary identifier). One iccomcod row per code.",
         "transformation_needed": true,
         "transformations": [
-          "Per-code value. Proposed set: RCB-PRINT-CUP, RCB-BLANK-CUP, RCB-PRINT-MAT, RCB-CONSUMABLE-INK, RCB-PACKAGING, RCB-STOCK-RESALE, RCB-APPAREL-DROP (8–10 total)."
+          "Per-code value. Proposed set (11 codes):\n\nManufactured:\n  • RCB-PRINT-CUP        — printed paper hot cups (P-WHC*, P-KIC*, P-CHC*, etc.)\n  • RCB-PRINT-SLEEVE     — printed sleeves (P-DWS, P-DKS, P-CWS, P-CKS)\n  • RCB-BLANK-CUP        — manufactured blank cups (WHC08/12/16/20, CHC*, B-CHC*, WSC22/32)\n  • RCB-BLANK-SLEEVE     — manufactured blank sleeves (if any)\n\nPurchased:\n  • RCB-PRINT-MAT        — paper raw materials (PR-* paper sheets)\n  • RCB-CONSUMABLE-INK   — inks (A0xxx)\n  • RCB-CONSUMABLE-GLUE  — glues (D0xxx, C0xxx) — split from INK because operationally different\n  • RCB-PACKAGING        — boxes, bags, tape, labels, printed instructions (BX-*, BG-*, BC*, N0*, TAPE-*, LABEL-*, BCI)\n  • RCB-STOCK-RESALE     — warehoused stock for resale (Products.ProductGroupName = 'Warehoused')\n\nSubcontract:\n  • RCB-APPAREL-DROP     — drop-ship apparel (InvMasterSKU = 'OUTSOURCED', 1,275 SKUs)\n\nCatch-all:\n  • RCB-UNROUTED         — items that did not match any routing rule. Requires user review before load.\n\nExternal IDs format as '2_<code>' (e.g., '2_RCB-PRINT-CUP') per the division prefix requirement."
         ],
         "confidence": 56
       },
@@ -543,7 +559,7 @@
         "explanation": "Field type: Text(100), Required.\n\nHuman-readable description of the commodity code.",
         "transformation_needed": true,
         "transformations": [
-          "Per-code value (e.g., \"Printed Paper Hot Cups\", \"Cup Blanks\", \"Print Materials — Paper\", \"Ink Consumables\")."
+          "Per-code value (human-readable):\n\n  RCB-PRINT-CUP        → 'Printed Paper Hot Cups'\n  RCB-PRINT-SLEEVE     → 'Printed Cup Sleeves'\n  RCB-BLANK-CUP        → 'Manufactured Blank Cups'\n  RCB-BLANK-SLEEVE     → 'Manufactured Blank Sleeves'\n  RCB-PRINT-MAT        → 'Print Materials — Paper Stock'\n  RCB-CONSUMABLE-INK   → 'Ink Consumables'\n  RCB-CONSUMABLE-GLUE  → 'Glue Consumables'\n  RCB-PACKAGING        → 'Packaging Materials (Boxes, Bags, Tape, Labels)'\n  RCB-STOCK-RESALE     → 'Warehoused Stock for Resale'\n  RCB-APPAREL-DROP     → 'Drop-Ship Apparel (Subcontract)'\n  RCB-UNROUTED         → 'Items Requiring Review — Did Not Match Routing Rules'"
         ],
         "confidence": 58
       },
@@ -579,7 +595,7 @@
         "explanation": "Field type: Text(1), Required (typically A/B/C).\n\nABC inventory classification (A=high-value, B=mid, C=low).",
         "transformation_needed": true,
         "transformations": [
-          "Per-code: `A` for finished printed goods, `B` for blanks/raw materials, `C` for consumables."
+          "Per-code (educated guess; RCB should validate via velocity analysis):\n\n  A — RCB-PRINT-CUP, RCB-PRINT-SLEEVE, RCB-BLANK-CUP, RCB-BLANK-SLEEVE (high-value finished/blank items)\n  B — RCB-PRINT-MAT, RCB-STOCK-RESALE, RCB-APPAREL-DROP (mid-value)\n  C — RCB-CONSUMABLE-INK, RCB-CONSUMABLE-GLUE, RCB-PACKAGING (low-value consumables)\n  C — RCB-UNROUTED (default until reviewed)"
         ],
         "confidence": 53
       },
@@ -615,7 +631,7 @@
         "explanation": "Field type: Picklist {Manufactured, Purchased, Subcontract}, Required.\n\nDefault Inventory Source for items in this code.",
         "transformation_needed": true,
         "transformations": [
-          "Per-code: `Manufactured` (RCB-PRINT-*); `Purchased` (RCB-BLANK-*, RCB-PRINT-MAT, RCB-CONSUMABLE-*, RCB-PACKAGING, RCB-STOCK-RESALE); `Subcontract` (RCB-APPAREL-DROP)."
+          "Per commodity code:\n\n  Manufactured: RCB-PRINT-CUP, RCB-PRINT-SLEEVE, RCB-BLANK-CUP, RCB-BLANK-SLEEVE\n  Purchased:    RCB-PRINT-MAT, RCB-CONSUMABLE-INK, RCB-CONSUMABLE-GLUE, RCB-PACKAGING, RCB-STOCK-RESALE\n  Subcontract:  RCB-APPAREL-DROP\n  Catch-all:    RCB-UNROUTED (set after user review; provisionally Purchased)"
         ],
         "confidence": 82
       },
@@ -663,7 +679,7 @@
         "explanation": "Field type: Picklist {Lot for Lot, Days Cover, Reorder Point, No MRP Planning} — schema notes underlying codes L/D/R/N, Required.\n\nMRP planning strategy for items in this code.",
         "transformation_needed": true,
         "transformations": [
-          "Per-code: `Lot for Lot` (RCB-PRINT-*, RCB-BLANK-*, RCB-PRINT-MAT); `No MRP Planning` (RCB-CONSUMABLE-*, RCB-PACKAGING); `Days Cover` (RCB-STOCK-RESALE)."
+          "Per commodity code:\n\n  Lot for Lot:         RCB-PRINT-CUP, RCB-PRINT-SLEEVE, RCB-BLANK-CUP, RCB-BLANK-SLEEVE, RCB-PRINT-MAT\n  No MRP Planning:     RCB-CONSUMABLE-INK, RCB-CONSUMABLE-GLUE, RCB-PACKAGING\n  Days Cover:          RCB-STOCK-RESALE\n  Lot for Lot:         RCB-APPAREL-DROP\n  No MRP Planning:     RCB-UNROUTED (until user reviews and assigns proper code)"
         ],
         "confidence": 61
       },
@@ -732,12 +748,12 @@
         "source_field": "Unmapped",
         "target_field": "Home Project Indicator",
         "target_table": "Inventory Commodity Code",
-        "explanation": "Field type: Picklist {Home Project, Not Home}, Required.\n\nProject home flag — whether inventory is held against projects vs general stock.",
+        "explanation": "Field type: Picklist {Home Project, Not Home}, Required.\n\nProject home flag — whether inventory for items in this code is held against specific projects vs general stock.\n\nPicklist value caveat: the schema doc shows values 'Home Project' and 'Not Home'. The reference template CSV uses 'Project Home' for the active state (note word order differs). The transformation below uses the schema-doc 'Home Project' value; verify against live RCB org.",
         "transformation_needed": true,
         "transformations": [
-          "Per-code: `Project Home` for items costed to projects, `Not Home` for general stock. Default `Not Home` unless RCB uses project costing."
+          "Per commodity code:\n  'Home Project'  for items costed directly to projects\n  'Not Home'      for general stock items\n\nDefault 'Not Home' unless RCB uses project costing.\n\nIf the load rejects 'Home Project', try 'Project Home' (template value, word order reversed)."
         ],
-        "confidence": 77
+        "confidence": 67
       },
       {
         "source_table": "Unmapped",
@@ -888,12 +904,12 @@
         "source_field": "Unmapped",
         "target_field": "Item Type",
         "target_table": "Inventory Commodity Code",
-        "explanation": "Field type: Picklist {Direct (including Sub-contract), Indirect, Outside Operation, Service}, Required.\n\nType of purchase/transaction (Direct (including Sub-contract) / Service / Outside Operation).",
+        "explanation": "Field type: Picklist {Direct (including Sub-contract), Indirect, Outside Operation, Service}, Required.\n\nType of purchase/transaction for items in this commodity code.\n\nPicklist value caveat: the schema doc shows 'Direct (including Sub-contract)' for the direct value. The reference template CSV uses 'Direct Purchases' for the same field. One of the two artifacts is wrong. The mapping below uses the schema-doc value; if the load rejects it, switch to 'Direct Purchases'.\n\nNote: different concept from peitem.Item Type (Blank/Direct Material/Labor Only) — picklists do not align across the two objects.",
         "transformation_needed": true,
         "transformations": [
           "Per commodity code, set one of the schema's four picklist values:\n\n  `Direct (including Sub-contract)` for most purchased and manufactured codes\n  `Outside Operation` for RCB-APPAREL-DROP\n\n  `Indirect` and `Service` are not used for RCB."
         ],
-        "confidence": 82
+        "confidence": 72
       },
       {
         "source_table": "Unmapped",
@@ -1152,12 +1168,12 @@
         "source_field": "Unmapped",
         "target_field": "Backflush Policy",
         "target_table": "Inventory Commodity Code",
-        "explanation": "Field type: Picklist {No Backflush, First Op, Last Op}, Required.\n\nWhen to backflush components from inventory automatically.",
+        "explanation": "Field type: Picklist {No Backflush, First Op, Last Op}, Required.\n\nWhen to backflush components from inventory automatically.\n\nPicklist value caveat: the schema documentation lists values as 'No Backflush', 'First Op', 'Last Op'. The reference template CSV from RCB's other Rootstock org uses 'No Backflushing', 'First Operation', 'Last Operation' for the same field. One of the two artifacts is using display labels and the other API values; we cannot determine which the live RCB org accepts without testing. The mapping below uses the schema-doc values; if the load rejects them, switch to the template values.",
         "transformation_needed": true,
         "transformations": [
           "Per commodity code, set one of the schema's three picklist values:\n\n  `First Op` or `Last Op` for manufactured codes (RCB-PRINT-CUP, RCB-PRINT-SLEEVE)\n  `No Backflush` for purchased codes (RCB-BLANK, RCB-PRINT-MAT, RCB-CONSUMABLE-INK, RCB-PACKAGING, RCB-STOCK-RESALE)\n  `No Backflush` for RCB-APPAREL-DROP (Subcontract)"
         ],
-        "confidence": 86
+        "confidence": 76
       },
       {
         "source_table": "Unmapped",

@@ -1872,21 +1872,22 @@ export async function editMappingSources(input: {
   const anchorTableId = orderedSources[0].table_id
   const sourceTableId = anchorTableId
 
-  // ── Step 10: provenance laundering (§1f, 4a-4b parity) ──────────────────
+  // ── Step 10: per-source provenance markers (§1f, 4a-4b parity) ──────────
   // RULE: any source row whose source_field_id is in
   // `originalAiSuggestedSourceIds` AND survives the edit retains its
   // 'AI-suggested:…' marker; everything else (new sources + originally-
-  // manual sources) gets the manual marker. The TFM-level `ai_reasoning`
-  // collapses to manual when ZERO original AI sources survive — even if
-  // the edit happened to keep some manual sources.
+  // manual sources) gets the manual marker.
+  //
+  // The TFM-level `ai_reasoning` narrative is NO LONGER laundered — every
+  // user edit clears it outright (Step 13). The 4a-4b laundering rule
+  // existed to prevent audit-trail drift; migration 083's
+  // `original_ai_reasoning` now freezes the AI proposal independently, so
+  // clearing the live column is audit-safe and consistent with every other
+  // edit path (PR A2 — supersedes the founder 4a-4b decision).
   const newSourceIdsSet = new Set(sourceFieldIds)
   const retainedAiSourceIds = new Set(
     [...originalAiSuggestedSourceIds].filter((id) => newSourceIdsSet.has(id)),
   )
-  const stillHasOriginalAi = retainedAiSourceIds.size > 0
-  const newTfmAiReasoning = stillHasOriginalAi
-    ? tfm.ai_reasoning ?? 'AI-suggested via per-row Suggest'
-    : 'Mapping edited via redesign UI'
 
   // ── Step 11: source set-diff (drives transform reset + log copy) ─────────
   let sourcesChanged = false
@@ -1950,13 +1951,16 @@ export async function editMappingSources(input: {
     }
   }
 
-  // ── Step 13: TFM-level UPDATE (status revert + combination + AI) ────────
+  // ── Step 13: TFM-level UPDATE (status revert + combination; clear AI) ───
+  // `ai_reasoning` is cleared to null on every edit — the AI narrative now
+  // describes a pairing that no longer exists. The frozen first-proposal
+  // copy survives in `original_ai_reasoning` (migration 083). See Step 10.
   const { error: tfmUpdErr } = await supabaseAdmin
     .from('target_field_mappings')
     .update({
       status: 'needs_review',
       combination_type: combinationType,
-      ai_reasoning: newTfmAiReasoning,
+      ai_reasoning: null,
       updated_at: new Date().toISOString(),
     })
     .eq('id', tfm.id)
@@ -4287,11 +4291,19 @@ export async function updateMappingSourceField(input: {
     }
   }
 
-  // ── Step 14: flip TFM status to approved ───────────────────────────────
+  // ── Step 14: flip TFM status; clear stale AI reasoning ─────────────────
+  // The source field just changed, so the AI's `ai_reasoning` narrative now
+  // describes a source→target pairing that no longer exists. Clear it in the
+  // same UPDATE as the status flip so partial state never persists. The
+  // frozen first-proposal copy survives in `original_ai_reasoning`
+  // (migration 083), so this is non-destructive of provenance. `confidence`
+  // is intentionally left to the MIN-of-mapping_sources trigger (migration
+  // 074), which already refreshed it from the Step-13 source UPDATE.
   const { error: tfmUpdErr } = await supabaseAdmin
     .from('target_field_mappings')
     .update({
       status: 'approved',
+      ai_reasoning: null,
       updated_at: new Date().toISOString(),
     })
     .eq('id', tfm.id)
@@ -4798,12 +4810,21 @@ export async function updateMappingTargetField(input: {
   const transformReset = reset.success ? reset.hadTransform : false
   const stagedRowsReverted = reset.success ? reset.rowsReverted : 0
 
-  // ── Step 11: UPDATE the TFM (target_field_id + status='approved') ──────
+  // ── Step 11: UPDATE the TFM (target swap; clear stale AI reasoning) ────
+  // The target field just changed, so the AI's `ai_reasoning` narrative now
+  // describes a source→target pairing that no longer exists. Clear it in the
+  // same UPDATE as the swap so partial state never persists. The frozen
+  // first-proposal copy survives in `original_ai_reasoning` (migration 083),
+  // so this is non-destructive of provenance. This path covers the plain
+  // swap and the bare-ack fall-through (Path 1); the MERGE path returned at
+  // Step 9 and is out of scope for this PR (its survivor's `ai_reasoning` is
+  // written by `editMappingSources` provenance laundering — see PR notes).
   const { error: tfmUpdErr } = await supabaseAdmin
     .from('target_field_mappings')
     .update({
       target_field_id: newTargetFieldId,
       status: 'approved',
+      ai_reasoning: null,
       updated_at: new Date().toISOString(),
     })
     .eq('id', tfm.id)
