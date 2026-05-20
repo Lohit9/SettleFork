@@ -1607,6 +1607,54 @@ The user has updated their description. Modify the existing SQL expression above
   })
 }
 
+// ─── clearStaleAiReasoningForTransformEdit ────────────────────────────────────
+//
+// When the user hand-edits a transformation's SQL, the AI `ai_reasoning`
+// narrative on the parent TFM no longer describes the live mapping — the
+// transformation is now user-owned. Clear it.
+//
+// Best-effort: the caller's primary SQL write has already committed when this
+// runs, so a clear failure is logged (matching the soft-fail pattern used for
+// coverage/transform-reset cleanup elsewhere) rather than failing the action.
+// Guarded on `currentReasoning` being non-null so a debounced re-save neither
+// re-writes the row nor re-emits an audit entry. The frozen first-proposal
+// copy survives in `target_field_mappings.original_ai_reasoning` (migration
+// 083), so the clear is non-destructive of provenance.
+
+async function clearStaleAiReasoningForTransformEdit(args: {
+  tfmId: string
+  projectId: string
+  actorId: string
+  currentReasoning: string | null
+}): Promise<void> {
+  if (args.currentReasoning === null) return
+
+  const { error } = await supabaseAdmin
+    .from('target_field_mappings')
+    .update({ ai_reasoning: null, updated_at: new Date().toISOString() })
+    .eq('id', args.tfmId)
+
+  if (error) {
+    console.warn(
+      '[transformations] failed to clear stale TFM ai_reasoning (SQL write committed):',
+      error.message,
+    )
+    return
+  }
+
+  void logAIEdit({
+    projectId: args.projectId,
+    actorId: args.actorId,
+    entityType: 'target_field_mapping',
+    entityId: args.tfmId,
+    fieldPath: 'ai_reasoning',
+    oldValue: args.currentReasoning,
+    newValue: null,
+    editKind: 'human_modified',
+    metadata: { reason: 'transformation_edited' },
+  })
+}
+
 // ─── updateTransformSQL ───────────────────────────────────────────────────────
 
 export async function updateTransformSQL(
@@ -1633,9 +1681,9 @@ export async function updateTransformSQL(
 
   const { data: tfmRow } = await supabaseAdmin
     .from('target_field_mappings')
-    .select('project_id')
+    .select('project_id, ai_reasoning')
     .eq('id', tx.target_field_mapping_id)
-    .single<{ project_id: string }>()
+    .single<{ project_id: string; ai_reasoning: string | null }>()
   if (!tfmRow) return { success: false, error: 'Transformation not found' }
 
   const perm = await requireProjectPermission(tfmRow.project_id, 'editor')
@@ -1677,6 +1725,15 @@ export async function updateTransformSQL(
       newValue: cleanSql,
       editKind: wasAiGenerated ? 'human_modified' : 'human_authored',
       metadata: { previous_status: tx.status, next_status: newStatus },
+    })
+
+    // The user now owns this transformation — clear the parent TFM's stale
+    // AI reasoning narrative.
+    await clearStaleAiReasoningForTransformEdit({
+      tfmId: tx.target_field_mapping_id,
+      projectId: tfmRow.project_id,
+      actorId: user.id,
+      currentReasoning: tfmRow.ai_reasoning,
     })
 
     return { success: true }
@@ -1838,9 +1895,9 @@ export async function autoSaveTransform(
 
   const { data: tfmRow } = await supabaseAdmin
     .from('target_field_mappings')
-    .select('project_id')
+    .select('project_id, ai_reasoning')
     .eq('id', tx.target_field_mapping_id)
-    .single<{ project_id: string }>()
+    .single<{ project_id: string; ai_reasoning: string | null }>()
   if (!tfmRow) return { success: false, error: 'Transformation not found' }
 
   const perm = await requireProjectPermission(tfmRow.project_id, 'editor')
@@ -1880,6 +1937,16 @@ export async function autoSaveTransform(
         metadata: { source: 'auto_save' },
       })
     }
+
+    // The user now owns this transformation — clear the parent TFM's stale
+    // AI reasoning narrative. Runs on every auto-save (SQL or description),
+    // but the helper's non-null guard makes a debounced re-save a no-op.
+    await clearStaleAiReasoningForTransformEdit({
+      tfmId: tx.target_field_mapping_id,
+      projectId: tfmRow.project_id,
+      actorId: user.id,
+      currentReasoning: tfmRow.ai_reasoning,
+    })
 
     return { success: true }
   })
