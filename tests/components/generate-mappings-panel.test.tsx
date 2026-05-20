@@ -330,7 +330,7 @@ describe('GenerateMappingsPanel — submit flow', () => {
     expect(pushToastMock).toHaveBeenCalledWith(
       expect.objectContaining({
         variant: 'success',
-        message: 'Generated 14 mappings.',
+        message: 'Mappings generated.',
       }),
     )
     // Phase-2 overlay copy: "Loading mappings…" replaces the
@@ -340,7 +340,7 @@ describe('GenerateMappingsPanel — submit flow', () => {
     )
   })
 
-  it('success copy includes the skipped count when skipped > 0', async () => {
+  it('success copy is count-free regardless of the skipped count', async () => {
     generateMappingsMock.mockResolvedValue({
       success: true,
       generated: 12,
@@ -356,7 +356,7 @@ describe('GenerateMappingsPanel — submit flow', () => {
     expect(pushToastMock).toHaveBeenCalledWith(
       expect.objectContaining({
         variant: 'success',
-        message: 'Generated 12 mappings (2 existing pairs skipped).',
+        message: 'Mappings generated.',
       }),
     )
   })

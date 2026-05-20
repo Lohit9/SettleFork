@@ -305,16 +305,10 @@ export function GenerateMappingsPanel({
         setPhase('idle')
         return
       }
-      const generated = result.generated ?? 0
-      const skipped = result.skipped ?? 0
-      const message =
-        skipped > 0
-          ? `Generated ${generated} mapping${generated === 1 ? '' : 's'} (${skipped} existing pair${skipped === 1 ? '' : 's'} skipped).`
-          : `Generated ${generated} mapping${generated === 1 ? '' : 's'}.`
       pushToast({
         id: `generate-mappings-${Date.now()}`,
         variant: 'success',
-        message,
+        message: 'Mappings generated.',
       })
       // Hold the spinner across the refresh window to avoid a flash of
       // "all-unmapped" state between the action resolving and the new TFM
