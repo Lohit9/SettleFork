@@ -19,6 +19,7 @@ import {
   ChevronRight,
   Pencil,
   Sparkles,
+  X,
 } from '@/components/icons'
 import {
   AlertDialog,
@@ -213,13 +214,43 @@ export const MAPPING_DRAWER_WIDTH_PX = 480
 
 // ── Public API ────────────────────────────────────────────────────────────
 
+/**
+ * feat/mapping-row-uniformity — minimal source-side drawer mount.
+ *
+ * A drawer-internal projection of a source-side flat row
+ * (`unmapped-source` kind in `flatten-rows-for-list-view.ts`). The
+ * flat view dispatches `onOpenDrawer` with the row's `groupId`
+ * (`'unmapped-source::<sfId>'` or `'ack::source::<ackId>'`);
+ * `MappingContent` resolves that id into a `SourceFieldDrawerRow` by
+ * matching against `result.sourceFields` + `result.sourceFieldAcknowledgments`
+ * and passes it here as the drawer's `row` prop alongside the existing
+ * `MappingRow` union.
+ *
+ * Stub rendering only — name + table + sample values + ack reason.
+ * No tabs, no editing UI (approve / reject continue to flow from the
+ * flat-view hover cluster), no footer. Content evolution is a follow-up
+ * PR with proper design.
+ */
+export interface SourceFieldDrawerRow {
+  kind: 'source-field-only'
+  id: string
+  sourceField: SourceFieldWithState
+  acknowledgmentReason: string | null
+}
+
+export type DrawerRow = MappingRow | SourceFieldDrawerRow
+
 export interface MappingDrawerProps {
   /**
    * Row to show in the drawer. When `null` the drawer renders nothing
    * (no DOM at all). The parent decides whether to keep the row prop in
    * sync with `isOpen` — this component does not animate exit on its own.
+   *
+   * Accepts a `SourceFieldDrawerRow` projection for unmapped-source
+   * rows; in that case the drawer mounts a minimal source-side view
+   * (no header pickers, no tabs, no footer — see `SourceFieldBody`).
    */
-  row: MappingRow | null
+  row: DrawerRow | null
   /** Whether the drawer is currently open. */
   isOpen: boolean
   /**
@@ -586,15 +617,20 @@ export function MappingDrawer({
     if (
       optimisticApprove &&
       row &&
+      row.kind !== 'source-field-only' &&
       row.id === optimisticApprove.rowId &&
       row.status === 'approved'
     ) {
       setOptimisticApprove(null)
     }
-  }, [row?.id, row?.status, optimisticApprove])
+  }, [row, optimisticApprove])
 
   const effectiveRow = useMemo<MappingRow | null>(() => {
-    if (!row) return null
+    // feat/mapping-row-uniformity — source-side drawer mount bypasses
+    // the optimistic-approve machinery entirely. `effectiveRow` stays
+    // null when the row is a `SourceFieldDrawerRow`; the source-side
+    // render branch in the main return handles that case explicitly.
+    if (!row || row.kind === 'source-field-only') return null
     if (optimisticApprove && optimisticApprove.rowId === row.id) {
       return applyOptimisticApprove(row)
     }
@@ -602,7 +638,7 @@ export function MappingDrawer({
   }, [row, optimisticApprove])
 
   const handleApprove = useCallback(() => {
-    if (!row) return
+    if (!row || row.kind === 'source-field-only') return
     const targetRowId = row.id
     setErrorMessage(null)
     setOptimisticApprove({ rowId: targetRowId })
@@ -633,7 +669,7 @@ export function MappingDrawer({
   }, [row, onActionComplete])
 
   const handleRejectConfirm = useCallback(async () => {
-    if (!row) return
+    if (!row || row.kind === 'source-field-only') return
     const targetRowId = row.id
     setErrorMessage(null)
     setIsRejecting(true)
@@ -674,7 +710,8 @@ export function MappingDrawer({
   // `'reset'` arm). On failure we surface uniform copy and log the
   // underlying errorCode for ops triage.
   const handleUnapproveConfirm = useCallback(async () => {
-    if (!row || row.status !== 'approved') return
+    if (!row || row.kind === 'source-field-only') return
+    if (row.status !== 'approved') return
     const targetRowId = row.id
     setErrorMessage(null)
     setIsUnapproving(true)
@@ -711,7 +748,43 @@ export function MappingDrawer({
   // edit-form path is gone; header-level inline pickers handle
   // source / target edits directly (PR 2 TASK 2+3).
 
-  if (!isOpen || !row || !effectiveRow) return null
+  if (!isOpen || !row) return null
+
+  // feat/mapping-row-uniformity — minimal source-side mount. The
+  // drawer chrome is the same `<aside>` shell (so outside-click, Esc,
+  // focus restore, and width all behave consistently), but the
+  // contents are a stripped-down identity view: source field name +
+  // table + sample values + ack reason (if present). No DrawerHeader
+  // pickers, no tabs, no footer — editing affordances stay in the
+  // flat-view hover cluster. This is intentionally a stub; richer
+  // source-field content is a follow-up PR with proper design.
+  if (row.kind === 'source-field-only') {
+    return (
+      <aside
+        ref={handleAsideRef}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby={titleId}
+        data-testid="mapping-drawer"
+        data-drawer-kind="source-field-only"
+        className={cn(
+          'fixed inset-y-0 right-0 z-30 flex flex-col',
+          'border-l border-slate-200 bg-white shadow-[-4px_0_16px_-2px_rgba(15,23,42,0.08)]',
+          'translate-x-0 transition-transform duration-150 ease-out',
+          'motion-reduce:transition-none',
+        )}
+        style={{ width: `${MAPPING_DRAWER_WIDTH_PX}px` }}
+      >
+        <SourceFieldDrawerStub
+          row={row}
+          titleId={titleId}
+          onClose={maybeRequestClose}
+        />
+      </aside>
+    )
+  }
+
+  if (!effectiveRow) return null
 
   return (
     <aside
@@ -801,6 +874,137 @@ function applyOptimisticApprove(row: MappingRow): MappingRow {
   if (row.kind === 'value_assignment') return { ...row, status: 'approved' }
   if (row.kind === 'unmapped') return { ...row, status: 'approved' }
   return row
+}
+
+// ── feat/mapping-row-uniformity — source-side drawer stub ──────────────────
+//
+// Minimal viewing surface for source-side rows. Renders identity
+// (table + field name) + up to 5 sample values + ack reason (when the
+// row carries one) + close button. No editing UI: approve / reject
+// for source-side rows continue to live on the flat-view hover
+// cluster. Content evolution is a follow-up PR with proper design.
+
+function SourceFieldDrawerStub({
+  row,
+  titleId,
+  onClose,
+}: {
+  row: SourceFieldDrawerRow
+  titleId: string
+  onClose: () => void
+}) {
+  const sf = row.sourceField
+  const samples = sf.sampleValues.slice(0, 5)
+  return (
+    <>
+      <header
+        data-testid="mapping-drawer-source-stub-header"
+        className="flex items-start justify-between gap-3 border-b border-slate-200 bg-white px-6 py-4"
+      >
+        <div className="min-w-0 flex-1">
+          <div
+            data-testid="mapping-drawer-source-stub-label"
+            className="text-[11px] font-medium uppercase tracking-wide text-slate-500"
+          >
+            Source field
+          </div>
+          <h2
+            id={titleId}
+            data-testid="mapping-drawer-source-stub-title"
+            className="mt-1 flex min-w-0 flex-wrap items-center gap-x-1 gap-y-1 text-base font-normal text-slate-900"
+          >
+            <span
+              data-testid="mapping-drawer-source-stub-table"
+              title={sf.sourceTable.name}
+              className="truncate text-[11px] font-medium uppercase tracking-wide text-slate-500"
+            >
+              {sf.sourceTable.name}
+            </span>
+            <span aria-hidden="true" className="text-slate-300">
+              ·
+            </span>
+            <span
+              data-testid="mapping-drawer-source-stub-field"
+              title={sf.name}
+              className="inline-block max-w-full truncate rounded bg-slate-100 px-1.5 py-0.5 font-mono text-sm font-medium text-slate-700"
+            >
+              {sf.name || '—'}
+            </span>
+          </h2>
+          <div
+            data-testid="mapping-drawer-source-stub-type"
+            className="mt-1 font-mono text-xs text-slate-500"
+          >
+            {sf.dataType}
+          </div>
+        </div>
+        <button
+          type="button"
+          onClick={onClose}
+          aria-label="Close drawer"
+          data-testid="mapping-drawer-close"
+          className={cn(
+            'inline-flex h-6 w-6 flex-shrink-0 items-center justify-center rounded-md',
+            'text-slate-400 transition-colors hover:bg-slate-100 hover:text-slate-700',
+            'focus:outline-none focus-visible:ring-2 focus-visible:ring-slate-300',
+          )}
+        >
+          <X className="h-3.5 w-3.5" />
+        </button>
+      </header>
+      <div
+        data-testid="mapping-drawer-body"
+        data-drawer-kind="source-field-only"
+        className="flex-1 overflow-auto px-6 py-5"
+      >
+        {samples.length > 0 ? (
+          <section
+            data-testid="drawer-section-source-stub-samples"
+            className="mb-6"
+          >
+            <h3 className="mb-2 text-[11px] font-medium uppercase tracking-wide text-slate-500">
+              Sample source values
+            </h3>
+            <ul
+              data-testid="drawer-source-stub-samples-list"
+              className="divide-y divide-slate-100 rounded border border-slate-200"
+            >
+              {samples.map((value, idx) => (
+                <li
+                  key={`${idx}-${value}`}
+                  data-testid="drawer-source-stub-sample-row"
+                  className="flex items-center justify-between gap-3 px-3 py-1.5 text-sm"
+                >
+                  <span className="min-w-0 flex-1 truncate break-words font-mono text-slate-700">
+                    {value}
+                  </span>
+                  <span className="shrink-0 text-[11px] text-slate-400">
+                    row {idx + 1}
+                  </span>
+                </li>
+              ))}
+            </ul>
+          </section>
+        ) : null}
+        {row.acknowledgmentReason ? (
+          <section
+            data-testid="drawer-section-source-stub-ack-reason"
+            className="mb-6"
+          >
+            <h3 className="mb-2 text-[11px] font-medium uppercase tracking-wide text-slate-500">
+              Acknowledgment reason
+            </h3>
+            <p
+              data-testid="drawer-source-stub-ack-reason-text"
+              className="text-sm leading-relaxed text-slate-700"
+            >
+              {row.acknowledgmentReason}
+            </p>
+          </section>
+        ) : null}
+      </div>
+    </>
+  )
 }
 
 // ── Action error copy ───────────────────────────────────────────────────────
