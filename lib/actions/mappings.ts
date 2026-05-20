@@ -2021,21 +2021,30 @@ export async function createValueAssignment(
   return guardWrites(projectId, async () => {
     const { data: existing } = await supabaseAdmin
       .from('target_field_mappings')
-      .select('id, combination_type, is_acknowledged, status')
+      .select(
+        'id, combination_type, is_acknowledged, status, confidence, ai_reasoning, transformation_intent, needs_transformation',
+      )
       .eq('project_id', projectId)
       .eq('target_field_id', targetFieldId)
       .maybeSingle()
 
-    // Bare-ack TFM (acknowledged with no combination_type) blocks new
-    // VA creation due to unique (project_id, target_field_id) constraint.
-    // Delete the bare-ack first; it has no mapping_sources or transformations
-    // that would FK-cascade.
+    // Bare-ack/no-source TFM: convert it in-place into a value assignment so
+    // we preserve existing confidence / ai_reasoning / transformation_intent
+    // from static mapping or earlier AI outputs.
     if (existing && existing.is_acknowledged && existing.combination_type === null) {
-      const { error: delErr } = await supabaseAdmin
+      const { error: updErr } = await supabaseAdmin
         .from('target_field_mappings')
-        .delete()
+        .update({
+          is_acknowledged: false,
+          acknowledgment_reason: null,
+          combination_type: 'custom_sql',
+          combination_sql: null,
+          status: 'approved',
+        })
         .eq('id', existing.id)
-      if (delErr) return { success: false, error: delErr.message, errorCode: 'INTERNAL' }
+      if (updErr) return { success: false, error: updErr.message, errorCode: 'INTERNAL' }
+      revalidatePath(`/app/projects/${projectId}`, 'layout')
+      return { success: true, fieldMappingId: existing.id }
     } else if (existing && existing.status !== 'rejected' && !existing.is_acknowledged) {
       if (existing.combination_type === 'custom_sql') {
         // Already a VA — return its id.
