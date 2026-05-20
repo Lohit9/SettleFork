@@ -60,6 +60,7 @@ function makeSourceField(
     sampleValues: [],
     isAcknowledged: false,
     isRejected: false,
+    aiReasoning: null,
     ...overrides,
   }
 }
@@ -583,6 +584,7 @@ describe('MappingListView — clickable "—" on value-assignment source field',
       sampleValues: [],
       isAcknowledged: false,
       isRejected: false,
+      aiReasoning: null,
     }
     const result = makeResult([makeValueAssignment()], [sourceField])
     render(
@@ -759,6 +761,7 @@ describe('MappingListView — headers + fixed sort', () => {
       sampleValues: [],
       isAcknowledged: false,
       isRejected: false,
+      aiReasoning: null,
     }
     const result = makeResult([mapped, unmappedTarget], [orphanSourceField])
     render(
@@ -793,6 +796,7 @@ describe('MappingListView — unmapped-source affordance uniformity (feat/mappin
       sampleValues: [],
       isAcknowledged: false,
       isRejected: false,
+      aiReasoning: null,
       ...overrides,
     }
   }
@@ -818,6 +822,48 @@ describe('MappingListView — unmapped-source affordance uniformity (feat/mappin
     expect(
       within(row).getByTestId('flat-row-action-edit'),
     ).toBeInTheDocument()
+  })
+
+  it('renders SourceFieldWithState.aiReasoning in the RATIONALE cell of an unmapped-source row', () => {
+    // deriveRationaleSource falls back to the static-config rationale on
+    // `sourceField.aiReasoning` when there is no acknowledgment reason.
+    // The cell shows a one-line summary; the raw text is on the span's
+    // `title`. Assert the raw rationale reached the cell.
+    const result = makeResult(
+      [],
+      [
+        makeOrphanSourceField({
+          aiReasoning:
+            'Internal numeric primary key from the source system (Prosys).',
+        }),
+      ],
+    )
+    render(
+      <MappingListView
+        filteredResult={result}
+        mutations={makeMutations()}
+        onOpenDrawer={vi.fn()}
+      />,
+    )
+    const row = findRow('unmapped-source::sf-orphan')
+    const cell = within(row).getByTestId('flat-cell-rationale')
+    expect(cell.querySelector('span')?.getAttribute('title')).toBe(
+      'Internal numeric primary key from the source system (Prosys).',
+    )
+  })
+
+  it('renders an em-dash in the RATIONALE cell when an unmapped-source row has no aiReasoning', () => {
+    const result = makeResult([], [makeOrphanSourceField({ aiReasoning: null })])
+    render(
+      <MappingListView
+        filteredResult={result}
+        mutations={makeMutations()}
+        onOpenDrawer={vi.fn()}
+      />,
+    )
+    const row = findRow('unmapped-source::sf-orphan')
+    const cell = within(row).getByTestId('flat-cell-rationale')
+    expect(cell.textContent).toBe('—')
   })
 
   it('clicking Approve on an unmapped-source row calls mutations.approveUnmappedSource({pendingKey, sourceFieldId})', async () => {
@@ -963,6 +1009,7 @@ describe('MappingListView — needs-review dot color uniformity (feat/mapping-ro
       sampleValues: [],
       isAcknowledged: false,
       isRejected: false,
+      aiReasoning: null,
     }
     const result = makeResult([], [sf])
     render(

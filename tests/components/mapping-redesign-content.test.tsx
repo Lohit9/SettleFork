@@ -380,6 +380,7 @@ function buildData(): MappingsForRedesignResult {
       sampleValues: ['A', 'B'],
       isAcknowledged: false,
       isRejected: false,
+      aiReasoning: null,
     },
     {
       id: 'sf-acct-unused',
@@ -391,6 +392,7 @@ function buildData(): MappingsForRedesignResult {
       sampleValues: [],
       isAcknowledged: false,
       isRejected: false,
+      aiReasoning: null,
     },
     {
       id: 'sf-cif-col',
@@ -402,6 +404,7 @@ function buildData(): MappingsForRedesignResult {
       sampleValues: ['Cust1', 'Cust2'],
       isAcknowledged: false,
       isRejected: false,
+      aiReasoning: null,
     },
   ]
 
@@ -1481,6 +1484,7 @@ describe('MappingRedesignContent — Phase 4 empty-state cases', () => {
             sampleValues: [],
             isAcknowledged: false,
             isRejected: false,
+            aiReasoning: null,
           } satisfies SourceFieldWithState,
         ],
       }),
@@ -1534,6 +1538,7 @@ describe('MappingRedesignContent — Phase 4 empty-state cases', () => {
             sampleValues: [],
             isAcknowledged: false,
             isRejected: false,
+            aiReasoning: null,
           } satisfies SourceFieldWithState,
         ],
         targetTables: [accountsTable, customersTable],

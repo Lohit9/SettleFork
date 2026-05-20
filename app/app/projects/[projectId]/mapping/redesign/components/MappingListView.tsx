@@ -27,11 +27,16 @@ import type { MappingListMutations } from '../hooks/useMappingListMutations'
 // Unmapped-target rows read `UnmappedRow.aiReasoning` (added to the wire
 // shape in aa196e4 — sourced from `target_field_coverage.ai_reasoning` or
 // the acknowledged TFM's `ai_reasoning`). Null falls through to em-dash.
+// Unmapped-source rows prefer the user's acknowledgment reason; absent
+// that, they fall back to `SourceFieldWithState.aiReasoning` — the
+// display-only static-config explanation. Null falls through to em-dash.
 function deriveRationaleSource(row: FlatRow): string | null {
   if (row.kind === 'mapped') return row.parentRow.aiReasoning
   if (row.kind === 'value-assignment') return row.parentRow.aiReasoning
   if (row.kind === 'unmapped-target') return row.parentRow.aiReasoning ?? null
-  if (row.kind === 'unmapped-source') return row.acknowledgmentReason
+  if (row.kind === 'unmapped-source') {
+    return row.acknowledgmentReason ?? row.sourceField.aiReasoning
+  }
   return null
 }
 

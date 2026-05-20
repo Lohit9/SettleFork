@@ -90,6 +90,7 @@ function sourceField(
     sampleValues: [],
     isAcknowledged: false,
     isRejected: false,
+    aiReasoning: null,
     ...overrides,
   }
 }

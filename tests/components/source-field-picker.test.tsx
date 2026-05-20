@@ -19,6 +19,7 @@ function field(overrides: Partial<SourceFieldWithState> = {}): SourceFieldWithSt
     sampleValues: ['alpha', 'bravo'],
     isAcknowledged: false,
     isRejected: false,
+    aiReasoning: null,
     ...overrides,
   }
 }

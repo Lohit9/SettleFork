@@ -580,6 +580,7 @@ describe('Inline source-edit hint', () => {
         sampleValues: [],
         isAcknowledged: false,
         isRejected: false,
+        aiReasoning: null,
       },
     ]
   }
@@ -671,6 +672,7 @@ describe('Inline source-edit click', () => {
         sampleValues: [],
         isAcknowledged: false,
         isRejected: false,
+        aiReasoning: null,
       },
       {
         id: 'sf-2',
@@ -682,6 +684,7 @@ describe('Inline source-edit click', () => {
         sampleValues: [],
         isAcknowledged: false,
         isRejected: false,
+        aiReasoning: null,
       },
     ]
   }

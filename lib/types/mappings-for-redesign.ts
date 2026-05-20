@@ -859,6 +859,19 @@ export interface SourceFieldWithState {
    * decision row per source.
    */
   isRejected: boolean
+  /**
+   * Informational rationale for an unmapped source field, sourced from
+   * the static-mappings config's `explanation` field (the read path
+   * matches the project's source fields to the config by table + field
+   * name). `null` when the project has no static config, or the config
+   * has no unmapped-source entry for this field.
+   *
+   * Display-only — carries NO decision semantics. It does not imply the
+   * field is acknowledged or rejected, and is never written to
+   * `source_field_acknowledgments`. The flat-view RATIONALE column reads
+   * it as a fallback when no acknowledgment reason is present.
+   */
+  aiReasoning: string | null
 }
 
 // ─── Project-level counters ──────────────────────────────────────────

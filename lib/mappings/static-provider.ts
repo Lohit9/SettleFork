@@ -212,6 +212,58 @@ async function resolveStaticOrgMappingForProject(
   }
 }
 
+/**
+ * Resolve display-only rationale for unmapped source fields from the
+ * static-mappings config.
+ *
+ * Returns a `Map<sourceFieldId, explanation>` covering the source fields
+ * the config marks as unmapped (an entry whose target side is the
+ * "Unmapped" token — see `isSourceUnmappedEntry`). The match is by table
+ * + field NAME via `normalizeName`, the same canonicalization the
+ * persistence path uses, so casing / dotted-prefix differences between
+ * the config and the live schema do not cause misses.
+ *
+ * Empty map when the project has no static config or the config has no
+ * unmapped-source entries. Performs exactly one config-file read (via
+ * `resolveStaticOrgMappingForProject`).
+ *
+ * Informational only: this reads the config, never writes. No
+ * `source_field_acknowledgments` row is created, and the result carries
+ * no acknowledgment / decision semantics.
+ */
+export async function resolveStaticSourceUnmappedRationale(
+  supabase: SupabaseClient,
+  projectId: string,
+  fields: ReadonlyArray<{ id: string; name: string; table_id: string }>,
+  tables: ReadonlyArray<{ id: string; name: string }>,
+): Promise<Map<string, string>> {
+  const out = new Map<string, string>()
+  const resolved = await resolveStaticOrgMappingForProject(supabase, projectId)
+  if (!resolved) return out
+
+  // Name-keyed explanation index from the config's unmapped-source
+  // entries (source side real, target side = "Unmapped" token).
+  const explanationByName = new Map<string, string>()
+  for (const entry of resolved.config.entries) {
+    if (!isSourceUnmappedEntry(entry)) continue
+    const explanation = entry.explanation.trim()
+    if (!explanation) continue
+    const key = `${normalizeName(entry.source_table)}::${normalizeName(entry.source_field)}`
+    explanationByName.set(key, explanation)
+  }
+  if (explanationByName.size === 0) return out
+
+  const tableNameById = new Map(tables.map((t) => [t.id, t.name]))
+  for (const field of fields) {
+    const tableName = tableNameById.get(field.table_id)
+    if (tableName === undefined) continue
+    const key = `${normalizeName(tableName)}::${normalizeName(field.name)}`
+    const explanation = explanationByName.get(key)
+    if (explanation !== undefined) out.set(field.id, explanation)
+  }
+  return out
+}
+
 function readStaticOrgMappingConfig(
   orgId: string,
   projectId: string,
