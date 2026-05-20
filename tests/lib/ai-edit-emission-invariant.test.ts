@@ -414,6 +414,12 @@ describe('[ai-edit-history audit completeness] every AI-table write must call lo
         // for traceability per the user's PR 9 spec.
         const VIRTUAL_ANCHORS = new Set<string>([
           'suggestTransformDescription',
+          // Reject = reset: `rejectFieldMapping` deletes the TFM via the
+          // delegate `deleteFieldMapping` (the AI-table write lives in
+          // that callee, not inline here) and emits logAIEdit for the
+          // `mapped → needs_review` lifecycle transition against the
+          // snapshotted TFM id.
+          'rejectFieldMapping',
         ])
         if (VIRTUAL_ANCHORS.has(slice.name)) continue
         stale.push({ file: rel, fn: slice.name })
