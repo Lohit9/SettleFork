@@ -796,12 +796,11 @@ function FlatRowView({
     return null
   })()
 
-  const confidence =
-    row.kind === 'mapped' ||
-    row.kind === 'value-assignment' ||
-    row.kind === 'unmapped-target'
-      ? row.confidence
-      : null
+  // Every FlatRow kind carries `confidence` (number | null) — mapped /
+  // value-assignment / unmapped-target from the TFM aggregate, and
+  // unmapped-source from the static-config entry. The Confidence cell
+  // renders `null` as an em-dash, so no per-kind branching is needed.
+  const confidence = row.confidence
 
   // Target-cell editability: every row that carries a `targetField`.
   const targetCellEditable =

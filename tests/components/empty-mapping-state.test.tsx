@@ -91,6 +91,7 @@ function sourceField(
     isAcknowledged: false,
     isRejected: false,
     aiReasoning: null,
+    confidence: null,
     ...overrides,
   }
 }

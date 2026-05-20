@@ -298,6 +298,24 @@ interface MappingRowBase {
   transformationIntent?: string | null
 
   /**
+   * Whether the mapping needs a transformation, projected from
+   * `target_field_mappings.needs_transformation`. Distinct from
+   * `hasTransformation` (does a transformation ROW exist?) and
+   * `transformationIntent` (the suggested recipe text): this is the
+   * boolean verdict the static-config / AI recorded at mapping time.
+   *
+   * `null` for `kind: 'unmapped'` rows with no backing TFM (coverage-only
+   * orphans) — there is no `needs_transformation` value to project.
+   *
+   * Optional on the type for the same back-compat reason as
+   * `transformationDescription` / `transformationSqlPreview`: existing
+   * fixture builders and the client-side optimistic-reject construction
+   * don't carry it. The server translator (mapping-engine.ts) always
+   * emits an explicit `boolean | null` on real wire payloads.
+   */
+  transformationNeeded?: boolean | null
+
+  /**
    * PR γ — Mapping grid state model unification (additive only).
    *
    * Three new optional fields added in lockstep so the redesigned grid
@@ -872,6 +890,19 @@ export interface SourceFieldWithState {
    * it as a fallback when no acknowledgment reason is present.
    */
   aiReasoning: string | null
+  /**
+   * Informational confidence for an unmapped source field, sourced from
+   * the static-mappings config's unmapped-source entry `confidence` field
+   * (resolved by the same table + field-name match as `aiReasoning`).
+   * Semantically "confidence the field should stay unmapped" — the UI
+   * renders the percentage identically to mapped rows.
+   *
+   * `null` when the project has no static config, the config has no
+   * unmapped-source entry for this field, or the entry omits a numeric
+   * `confidence`. Display-only — carries NO decision semantics, mirroring
+   * `aiReasoning`.
+   */
+  confidence: number | null
 }
 
 // ─── Project-level counters ──────────────────────────────────────────

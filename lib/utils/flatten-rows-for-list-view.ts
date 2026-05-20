@@ -110,6 +110,14 @@ export interface UnmappedTargetFlatRow extends FlatRowBase {
 export interface UnmappedSourceFlatRow extends FlatRowBase {
   kind: 'unmapped-source'
   sourceField: SourceFieldWithState
+  /**
+   * Static-config confidence for the unmapped source field, mirrored
+   * from `SourceFieldWithState.confidence`. Carried on the flat row so
+   * the list view's Confidence cell reads `row.confidence` uniformly
+   * across all four row kinds. `null` when the project has no static
+   * config entry for this field.
+   */
+  confidence: number | null
   /** Non-null when this row represents a source-side acknowledgment. */
   acknowledgmentId: string | null
   /** Reason text for source-side acks; null otherwise. */
@@ -207,6 +215,7 @@ export function flattenRowsForListView(
       groupId: `ack::source::${ack.id}`,
       status: ackStatus,
       sourceField: sf,
+      confidence: sf.confidence,
       acknowledgmentId: ack.id,
       acknowledgmentReason: ack.reason,
     })
@@ -228,6 +237,7 @@ export function flattenRowsForListView(
       groupId: `unmapped-source::${sf.id}`,
       status: 'needs_review',
       sourceField: sf,
+      confidence: sf.confidence,
       acknowledgmentId: null,
       acknowledgmentReason: null,
     })

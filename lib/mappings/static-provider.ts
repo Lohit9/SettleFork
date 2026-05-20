@@ -17,6 +17,20 @@ export interface StaticMappingEntry {
   transformations: StaticTransform[]
 }
 
+/**
+ * Per-field static metadata for an unmapped source field, resolved from
+ * the static-mappings config by `resolveStaticSourceUnmappedRationale`.
+ * Display-only — carries no acknowledgment / decision semantics.
+ */
+export interface StaticSourceUnmappedInfo {
+  /** The config entry's `explanation` text. Always non-empty (entries
+   *  with a blank explanation are skipped during resolution). */
+  explanation: string
+  /** The config entry's `confidence`, clamped to 0-100 and rounded.
+   *  `null` when the entry omits a numeric `confidence` field. */
+  confidence: number | null
+}
+
 interface StaticOrgMappingConfig {
   project_ids: string[]
   entries: StaticMappingEntry[]
@@ -136,20 +150,22 @@ function isMappedEntry(entry: StaticMappingEntry): boolean {
   )
 }
 
-function buildReasoning(entry: StaticMappingEntry): string {
-  const parts = [entry.explanation.trim()]
-  parts.push(
-    entry.transformation_needed
-      ? 'Transformation needed: yes.'
-      : 'Transformation needed: no.',
-  )
-  if (entry.transformations.length > 0) {
-    const rendered = entry.transformations
-      .map((t) => (typeof t === 'string' ? t : JSON.stringify(t)))
-      .join('; ')
-    parts.push(`Transformations: ${rendered}`)
-  }
-  return parts.filter(Boolean).join(' ')
+/**
+ * The `ai_reasoning` text for a static-config entry — the WHY THIS
+ * MAPPING explanation only.
+ *
+ * Returns ONLY the entry's `explanation` field. The `transformation_needed`
+ * verdict and the `transformations` array are deliberately NOT folded in:
+ * that content belongs on the Transform tab and reaches it through the
+ * `target_field_mappings.needs_transformation` column and the
+ * `transformation_intent` column (`buildTransformationIntent`) — separate
+ * destinations from `ai_reasoning`. Concatenating them here polluted the
+ * WHY THIS MAPPING section with transformation content.
+ *
+ * Exported for unit testing (`tests/lib/static-provider-reasoning.test.ts`).
+ */
+export function buildReasoning(entry: Pick<StaticMappingEntry, 'explanation'>): string {
+  return entry.explanation.trim()
 }
 
 function resolveStaticConfidence(
@@ -213,17 +229,35 @@ async function resolveStaticOrgMappingForProject(
 }
 
 /**
- * Resolve display-only rationale for unmapped source fields from the
+ * Resolve the unmapped-source `confidence` from a config entry. Unlike
+ * `resolveStaticConfidence` (which defaults a missing value to
+ * `STATIC_CONFIDENCE` because a TFM needs a number), an unmapped-source
+ * entry with no `confidence` resolves to `null` — the display surface
+ * renders an em-dash rather than a fabricated 100.
+ */
+function resolveStaticSourceConfidence(
+  entry: Pick<StaticMappingEntry, 'confidence'>,
+): number | null {
+  const confidence = entry.confidence
+  if (typeof confidence !== 'number' || !Number.isFinite(confidence)) {
+    return null
+  }
+  return Math.max(0, Math.min(100, Math.round(confidence)))
+}
+
+/**
+ * Resolve display-only metadata for unmapped source fields from the
  * static-mappings config.
  *
- * Returns a `Map<sourceFieldId, explanation>` covering the source fields
- * the config marks as unmapped (an entry whose target side is the
- * "Unmapped" token — see `isSourceUnmappedEntry`). The match is by table
- * + field NAME via `normalizeName`, the same canonicalization the
+ * Returns a `Map<sourceFieldId, StaticSourceUnmappedInfo>` covering the
+ * source fields the config marks as unmapped (an entry whose target side
+ * is the "Unmapped" token — see `isSourceUnmappedEntry`). The match is by
+ * table + field NAME via `normalizeName`, the same canonicalization the
  * persistence path uses, so casing / dotted-prefix differences between
  * the config and the live schema do not cause misses.
  *
- * Empty map when the project has no static config or the config has no
+ * Each value carries the entry's `explanation` and `confidence`. Empty
+ * map when the project has no static config or the config has no
  * unmapped-source entries. Performs exactly one config-file read (via
  * `resolveStaticOrgMappingForProject`).
  *
@@ -236,30 +270,33 @@ export async function resolveStaticSourceUnmappedRationale(
   projectId: string,
   fields: ReadonlyArray<{ id: string; name: string; table_id: string }>,
   tables: ReadonlyArray<{ id: string; name: string }>,
-): Promise<Map<string, string>> {
-  const out = new Map<string, string>()
+): Promise<Map<string, StaticSourceUnmappedInfo>> {
+  const out = new Map<string, StaticSourceUnmappedInfo>()
   const resolved = await resolveStaticOrgMappingForProject(supabase, projectId)
   if (!resolved) return out
 
-  // Name-keyed explanation index from the config's unmapped-source
-  // entries (source side real, target side = "Unmapped" token).
-  const explanationByName = new Map<string, string>()
+  // Name-keyed info index from the config's unmapped-source entries
+  // (source side real, target side = "Unmapped" token).
+  const infoByName = new Map<string, StaticSourceUnmappedInfo>()
   for (const entry of resolved.config.entries) {
     if (!isSourceUnmappedEntry(entry)) continue
     const explanation = entry.explanation.trim()
     if (!explanation) continue
     const key = `${normalizeName(entry.source_table)}::${normalizeName(entry.source_field)}`
-    explanationByName.set(key, explanation)
+    infoByName.set(key, {
+      explanation,
+      confidence: resolveStaticSourceConfidence(entry),
+    })
   }
-  if (explanationByName.size === 0) return out
+  if (infoByName.size === 0) return out
 
   const tableNameById = new Map(tables.map((t) => [t.id, t.name]))
   for (const field of fields) {
     const tableName = tableNameById.get(field.table_id)
     if (tableName === undefined) continue
     const key = `${normalizeName(tableName)}::${normalizeName(field.name)}`
-    const explanation = explanationByName.get(key)
-    if (explanation !== undefined) out.set(field.id, explanation)
+    const info = infoByName.get(key)
+    if (info !== undefined) out.set(field.id, info)
   }
   return out
 }

@@ -654,20 +654,34 @@ describe('assembleMappingsForRedesign — discriminator cases', () => {
     expect(out.sourceFields).toEqual([])
   })
 
-  // ─── Gap 11b.r — aiReasoning (static-config rationale) ──────────────────
+  // ─── Gap 11b.r — aiReasoning + confidence (static-config metadata) ──────
   //
-  // `SourceFieldWithState.aiReasoning` carries display-only rationale for
-  // unmapped source fields, resolved upstream from the static-mappings
-  // config and threaded into `AssembleInput.staticSourceRationale` as a
-  // `Map<fieldId, explanation>`. The assembler simply projects it onto the
-  // matching source field; matching/resolution lives in the read path.
+  // `SourceFieldWithState.aiReasoning` + `.confidence` carry display-only
+  // metadata for unmapped source fields, resolved upstream from the
+  // static-mappings config and threaded into
+  // `AssembleInput.staticSourceRationale` as a
+  // `Map<fieldId, { explanation, confidence }>`. The assembler simply
+  // projects it onto the matching source field; matching/resolution
+  // lives in the read path.
 
-  it('case 13h: aiReasoning populates from staticSourceRationale (keyed by field id)', () => {
+  it('case 13h: aiReasoning + confidence populate from staticSourceRationale (keyed by field id)', () => {
     const out = assembleMappingsForRedesign(
       baseInput({
         staticSourceRationale: new Map([
-          [F_S_FIRST.id, 'Legacy free-text first name; not migrated.'],
-          [F_S_ORDTOTAL.id, 'Cents column superseded by the money type.'],
+          [
+            F_S_FIRST.id,
+            {
+              explanation: 'Legacy free-text first name; not migrated.',
+              confidence: 99,
+            },
+          ],
+          [
+            F_S_ORDTOTAL.id,
+            {
+              explanation: 'Cents column superseded by the money type.',
+              confidence: 72,
+            },
+          ],
         ]),
       }),
     )
@@ -675,26 +689,130 @@ describe('assembleMappingsForRedesign — discriminator cases', () => {
     expect(byId.get(F_S_FIRST.id)!.aiReasoning).toBe(
       'Legacy free-text first name; not migrated.',
     )
+    expect(byId.get(F_S_FIRST.id)!.confidence).toBe(99)
     expect(byId.get(F_S_ORDTOTAL.id)!.aiReasoning).toBe(
       'Cents column superseded by the money type.',
     )
+    expect(byId.get(F_S_ORDTOTAL.id)!.confidence).toBe(72)
   })
 
-  it('case 13i: aiReasoning is null for source fields absent from the map', () => {
+  it('case 13h.2: confidence is null when the static entry omits it', () => {
     const out = assembleMappingsForRedesign(
       baseInput({
-        staticSourceRationale: new Map([[F_S_FIRST.id, 'Only this one.']]),
+        staticSourceRationale: new Map([
+          [
+            F_S_FIRST.id,
+            { explanation: 'No confidence on this entry.', confidence: null },
+          ],
+        ]),
+      }),
+    )
+    const byId = new Map(out.sourceFields.map((f) => [f.id, f]))
+    expect(byId.get(F_S_FIRST.id)!.aiReasoning).toBe(
+      'No confidence on this entry.',
+    )
+    expect(byId.get(F_S_FIRST.id)!.confidence).toBeNull()
+  })
+
+  it('case 13i: aiReasoning + confidence are null for source fields absent from the map', () => {
+    const out = assembleMappingsForRedesign(
+      baseInput({
+        staticSourceRationale: new Map([
+          [F_S_FIRST.id, { explanation: 'Only this one.', confidence: 88 }],
+        ]),
       }),
     )
     const byId = new Map(out.sourceFields.map((f) => [f.id, f]))
     expect(byId.get(F_S_FIRST.id)!.aiReasoning).toBe('Only this one.')
+    expect(byId.get(F_S_FIRST.id)!.confidence).toBe(88)
     expect(byId.get(F_S_LAST.id)!.aiReasoning).toBeNull()
+    expect(byId.get(F_S_LAST.id)!.confidence).toBeNull()
     expect(byId.get(F_S_CUSTID.id)!.aiReasoning).toBeNull()
+    expect(byId.get(F_S_CUSTID.id)!.confidence).toBeNull()
   })
 
-  it('case 13j: aiReasoning defaults to null for every field when no map is supplied', () => {
+  it('case 13j: aiReasoning + confidence default to null for every field when no map is supplied', () => {
     const out = assembleMappingsForRedesign(baseInput({ tfms: [] }))
-    out.sourceFields.forEach((f) => expect(f.aiReasoning).toBeNull())
+    out.sourceFields.forEach((f) => {
+      expect(f.aiReasoning).toBeNull()
+      expect(f.confidence).toBeNull()
+    })
+  })
+
+  // ─── Refinement #5a — transformationNeeded wire field ──────────────────
+  //
+  // `MappingRowBase.transformationNeeded` projects from
+  // `target_field_mappings.needs_transformation`. Mapped + VA rows carry
+  // the TFM's value; coverage-only unmapped rows (no backing TFM) carry
+  // `null`; bare-ack unmapped rows carry the bare-ack TFM's value.
+
+  it('case 5a-i: transformationNeeded projects from needs_transformation on a mapped row', () => {
+    const tTrue = tfm({
+      id: 'tfm-tn-true',
+      target_field_id: F_T_CUSTID.id,
+      needs_transformation: true,
+    })
+    const mTrue = ms({
+      id: 'ms-tn-true',
+      target_field_mapping_id: 'tfm-tn-true',
+      source_field_id: F_S_CUSTID.id,
+      source_table_id: F_S_CUSTID.table_id,
+      ordinal: 0,
+    })
+    const out = assembleMappingsForRedesign(
+      baseInput({ tfms: [tTrue], mappingSources: [mTrue] }),
+    )
+    const row = out.rows.find((r) => r.id === 'tfm-tn-true') as MappedRow
+    expect(row.kind).toBe('mapped')
+    expect(row.transformationNeeded).toBe(true)
+  })
+
+  it('case 5a-ii: transformationNeeded is false when needs_transformation is false', () => {
+    const tFalse = tfm({
+      id: 'tfm-tn-false',
+      target_field_id: F_T_CUSTID.id,
+      needs_transformation: false,
+    })
+    const mFalse = ms({
+      id: 'ms-tn-false',
+      target_field_mapping_id: 'tfm-tn-false',
+      source_field_id: F_S_CUSTID.id,
+      source_table_id: F_S_CUSTID.table_id,
+      ordinal: 0,
+    })
+    const out = assembleMappingsForRedesign(
+      baseInput({ tfms: [tFalse], mappingSources: [mFalse] }),
+    )
+    const row = out.rows.find((r) => r.id === 'tfm-tn-false') as MappedRow
+    expect(row.transformationNeeded).toBe(false)
+  })
+
+  it('case 5a-iii: transformationNeeded is null on a coverage-only unmapped (orphan) row', () => {
+    // F_T_LEGACY has no TFM and no coverage row — a target_only orphan.
+    const out = assembleMappingsForRedesign(baseInput({ tfms: [] }))
+    const row = out.rows.find(
+      (r) => r.targetField.id === F_T_LEGACY.id,
+    ) as UnmappedRow
+    expect(row.kind).toBe('unmapped')
+    expect(row.transformationNeeded).toBeNull()
+  })
+
+  it('case 5a-iv: transformationNeeded carries through a bare-ack UnmappedRow', () => {
+    const tAck = tfm({
+      id: 'tfm-tn-ack',
+      target_field_id: F_T_NOTES.id,
+      combination_type: null,
+      is_acknowledged: true,
+      acknowledgment_reason: 'no transformation expected',
+      confidence: null,
+      needs_transformation: false,
+    })
+    const out = assembleMappingsForRedesign(baseInput({ tfms: [tAck] }))
+    const row = out.rows.find(
+      (r) => r.targetField.id === F_T_NOTES.id,
+    ) as UnmappedRow
+    expect(row.kind).toBe('unmapped')
+    expect(row.transformationNeeded).toBe(false)
   })
 
   it('case 12c: aiReasoning on mapping_sources flows through to MappingSourceRef', () => {

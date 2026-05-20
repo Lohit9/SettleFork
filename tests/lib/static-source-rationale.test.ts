@@ -61,22 +61,36 @@ describe('resolveStaticSourceUnmappedRationale', () => {
       [PRODUCTS_TABLE],
     )
 
-    expect(map.get('f-product-id')).toBe(
+    expect(map.get('f-product-id')?.explanation).toBe(
       'Internal numeric primary key from the source system (Prosys). It has ' +
         'no business meaning outside Prosys and is not needed in Rootstock, ' +
         'which generates its own internal IDs.',
     )
-    expect(map.get('f-product-woo-id')).toBe(
+    expect(map.get('f-product-woo-id')?.explanation).toBe(
       "Foreign key linking each product to a WooCommerce entry (RCB's " +
         'e-commerce platform). Relevant only if RCB plans to keep the ' +
         'WooCommerce integration after migration. If not, this field has no ' +
         'destination in Rootstock.',
     )
-    expect(map.get('f-product-notes')).toBe(
+    expect(map.get('f-product-notes')?.explanation).toBe(
       'Free-text notes. About 30% of rows are null, and most non-null values ' +
         'are whitespace. No standard Notes field exists on the Engineering ' +
         'Item Master import template.',
     )
+  })
+
+  it('carries the unmapped-source confidence from the config entry', async () => {
+    const map = await resolveStaticSourceUnmappedRationale(
+      mockSupabase(ROOTSTOCK_ORG_ID),
+      ROOTSTOCK_POC_PROJECT_ID,
+      FIELDS,
+      [PRODUCTS_TABLE],
+    )
+
+    // Rootstock POC config (98f739b4) unmapped-source confidences.
+    expect(map.get('f-product-id')?.confidence).toBe(99)
+    expect(map.get('f-product-woo-id')?.confidence).toBe(86)
+    expect(map.get('f-product-notes')?.confidence).toBe(72)
   })
 
   it('omits fields with no matching unmapped-source config entry', async () => {
