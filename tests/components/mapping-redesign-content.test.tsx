@@ -1040,8 +1040,10 @@ describe('MappingRedesignContent — strip counters include unmapped-source rows
     renderRedesign('', sourceSideOverrides)
     const needsReview = screen.getByTestId('mapping-summary-chip-needs-review')
     // 1 mapped needs_review (r-accounts-2) + 1 pure unmapped-source
-    // (sf-acct-unused). Pre-fix this chip showed 1.
-    expect(Number(needsReview.textContent?.match(/\d+/)?.[0])).toBe(2)
+    // (sf-acct-unused) + 1 rejected source ack (sf-rejected) — the
+    // latter renders needs_review under the unified Reject = reset
+    // semantic, so it joins this chip.
+    expect(Number(needsReview.textContent?.match(/\d+/)?.[0])).toBe(3)
   })
 
   it('Approved counts the acknowledged unmapped-source row alongside mapped approved rows', () => {
@@ -1052,13 +1054,16 @@ describe('MappingRedesignContent — strip counters include unmapped-source rows
     expect(Number(approved.textContent?.match(/\d+/)?.[0])).toBe(5)
   })
 
-  it('a rejected source-side ack lands in neither Approved nor Needs Review', () => {
+  it('a rejected source-side ack counts in Needs Review (Reject = reset — neutral grey)', () => {
     renderRedesign('', sourceSideOverrides)
     const approved = screen.getByTestId('mapping-summary-chip-approved')
     const needsReview = screen.getByTestId('mapping-summary-chip-needs-review')
-    // sf-rejected is the 6th flat row; it must not inflate either chip.
+    // PR #157 source-side follow-up: a rejected source ack returns to the
+    // neutral needs_review state — it counts in Needs Review, never
+    // Approved, and never a separate Rejected bucket. sf-rejected joins
+    // needsReview alongside r-accounts-2 and sf-acct-unused.
     expect(Number(approved.textContent?.match(/\d+/)?.[0])).toBe(5)
-    expect(Number(needsReview.textContent?.match(/\d+/)?.[0])).toBe(2)
+    expect(Number(needsReview.textContent?.match(/\d+/)?.[0])).toBe(3)
   })
 
   it('with no source-side rows the chips count only the target-keyed rows', () => {

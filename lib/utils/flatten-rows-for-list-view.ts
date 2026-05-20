@@ -193,12 +193,18 @@ export function flattenRowsForListView(
   const sourceFieldById = new Map(result.sourceFields.map((f) => [f.id, f]))
 
   // Source-side acks first — always visible, independent of the toggle.
-  // Migration 103 (A's PR #132): the ack carries a `decision` field
-  // which determines the rendered status:
+  // The ack carries a `decision` field which determines the rendered
+  // status:
   //   decision='acknowledged' → 'approved' (green dot, modal-path
   //     explicit accept that the field will not be migrated)
-  //   decision='rejected'    → 'rejected' (gray dot, flat-view inline
-  //     reject affordance — explicit user decision against migration)
+  //   decision='rejected'     → 'needs_review' (grey dot). Reject = reset
+  //     (PR #157): a rejected source row returns to the neutral state,
+  //     identical to the mapped / VA / unmapped-target reject outcomes.
+  //     The ack row's PRESENCE — not its rendered status — is the
+  //     suppression marker that zeroes the static-config rationale +
+  //     confidence (handled upstream in `buildSourceFieldsWithState`),
+  //     so the row reads like a fresh unmapped-source row with no AI
+  //     commentary.
   // Both decisions are addressable: the row stays visible because it
   // represents a deliberate user choice worth surfacing in audit.
   const ackedSourceFieldIds = new Set<string>()
@@ -208,7 +214,7 @@ export function flattenRowsForListView(
     if (sourceFieldIdsReferenced.has(sf.id)) continue
     ackedSourceFieldIds.add(sf.id)
     const ackStatus: FlatRowStatus =
-      ack.decision === 'rejected' ? 'rejected' : 'approved'
+      ack.decision === 'rejected' ? 'needs_review' : 'approved'
     out.push({
       kind: 'unmapped-source',
       id: `ack::source::${ack.id}`,

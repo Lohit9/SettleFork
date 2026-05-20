@@ -91,8 +91,25 @@ describe('flattenRowsForListView — source-side rows', () => {
     expect(ackRow.id).toBe('ack::source::ack-1')
   })
 
-  it('renders ack rows with decision="rejected" as rejected status (gray dot)', () => {
-    const sf = makeSourceField({ id: 'sf-rej' })
+  it('renders ack rows with decision="rejected" as needs_review status (Reject = reset)', () => {
+    // PR #157 unified the Reject semantic: reject removes the AI's
+    // proposal and returns the row to the neutral needs_review (grey)
+    // state. The source-side case was the straggler — a rejected source
+    // ack now produces a needs_review flat row, identical in rendered
+    // status to the mapped / VA / unmapped-target reject outcomes.
+    //
+    // `buildSourceFieldsWithState` (upstream) has already suppressed the
+    // static-config rationale + confidence on the SourceFieldWithState
+    // for a rejected field; this fixture mirrors that suppressed shape
+    // (aiReasoning: null, confidence: null, isRejected: true). The flat
+    // row must faithfully carry the suppressed values — no AI commentary
+    // resurfaces — and render the neutral status.
+    const sf = makeSourceField({
+      id: 'sf-rej',
+      isRejected: true,
+      aiReasoning: null,
+      confidence: null,
+    })
     const ack: SourceFieldAcknowledgmentSummary = {
       id: 'ack-rej',
       sourceFieldId: 'sf-rej',
@@ -109,11 +126,43 @@ describe('flattenRowsForListView — source-side rows', () => {
 
     expect(ackRow).toBeDefined()
     if (ackRow?.kind !== 'unmapped-source') throw new Error('shape')
-    // Migration 103 / PR #132: ack.decision drives the row's status.
-    // Rejected acks render gray (status='rejected'); acknowledged acks
-    // render green (status='approved'). Both stay visible in the flat
-    // view because they represent explicit user decisions.
-    expect(ackRow.status).toBe('rejected')
+    // Neutral grey status — NOT a distinct 'rejected'.
+    expect(ackRow.status).toBe('needs_review')
+    // Suppression carried through: no rationale, no confidence.
+    expect(ackRow.sourceField.aiReasoning).toBeNull()
+    expect(ackRow.confidence).toBeNull()
+    // The ack row stays visible and addressable — its id/reason are
+    // preserved so the audit trail and re-decision affordances work.
+    expect(ackRow.acknowledgmentId).toBe('ack-rej')
+  })
+
+  it('keeps decision="rejected" suppression independent of the rendered status', () => {
+    // Defense-in-depth: even if a rejected ack's SourceFieldWithState
+    // still carried rationale (it should not — buildSourceFieldsWithState
+    // zeroes it), the flat row's status mapping is decided solely by
+    // `ack.decision`, never by the presence of rationale. This pins the
+    // status mapping against an accidental coupling to AI commentary.
+    const sf = makeSourceField({
+      id: 'sf-rej-2',
+      isRejected: true,
+      aiReasoning: 'stale rationale that should never have survived',
+      confidence: 88,
+    })
+    const ack: SourceFieldAcknowledgmentSummary = {
+      id: 'ack-rej-2',
+      sourceFieldId: 'sf-rej-2',
+      reason: '',
+      decision: 'rejected',
+    }
+    const result = makeResult({
+      sourceFields: [sf],
+      sourceFieldAcknowledgments: [ack],
+    })
+
+    const rows = flattenRowsForListView(result)
+    const ackRow = rows.find((r) => r.kind === 'unmapped-source')
+    if (ackRow?.kind !== 'unmapped-source') throw new Error('shape')
+    expect(ackRow.status).toBe('needs_review')
   })
 
   it('always emits source-only unmapped rows (toggle retired)', () => {
