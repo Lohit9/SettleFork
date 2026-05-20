@@ -1027,6 +1027,14 @@ function buildSourceFieldsWithState(
   for (const field of sourceFields) {
     const table = tablesById.get(field.table_id)
     if (!table) continue
+    // Reject = reset: a rejected source field carries NO preserved AI
+    // commentary. Suppress the static-config rationale (and its
+    // confidence) regardless of what the config file holds — the
+    // `source_field_acknowledgments` rejection decision is authoritative.
+    const isRejected = rejectedSourceFieldIds.has(field.id)
+    const rationale = isRejected
+      ? undefined
+      : staticSourceRationale.get(field.id)
     out.push({
       id: field.id,
       name: field.name,
@@ -1036,9 +1044,9 @@ function buildSourceFieldsWithState(
       mappingStatus: mappedSourceFieldIds.has(field.id) ? 'mapped' : 'unmapped',
       sampleValues: extractSampleValues(field.field_profiles),
       isAcknowledged: acknowledgedSourceFieldIds.has(field.id),
-      isRejected: rejectedSourceFieldIds.has(field.id),
-      aiReasoning: staticSourceRationale.get(field.id)?.explanation ?? null,
-      confidence: staticSourceRationale.get(field.id)?.confidence ?? null,
+      isRejected,
+      aiReasoning: rationale?.explanation ?? null,
+      confidence: rationale?.confidence ?? null,
     })
   }
 
