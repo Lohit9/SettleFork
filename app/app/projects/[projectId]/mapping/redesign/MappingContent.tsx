@@ -1016,24 +1016,57 @@ function MappingContentLoaded({
     ],
   )
 
-  // Drawer redesign PR 2 TASK 2+3 — create a TFM from the drawer's
-  // unmapped or rejected variant via the source ✏ pencil. Mirrors
-  // `mutations.createFromUnmapped`: the server clears any coverage
-  // rejection AND auto-approves the new TFM. After `router.refresh()`
-  // the row at this target field carries a TFM uuid; the drawer's
-  // existing post-save URL effect (handleDrawerSaveSuccess) is NOT
-  // hit here (that path is reserved for the form-save flow), so we
-  // skip the pendingDrawerRowId sentinel — the drawer renders the
-  // mapped variant on the next refresh.
+  // feat/drawer-body-editing-surface — create a TFM from the drawer's
+  // unmapped-target variant via the body's "Pick a source…" affordance.
+  // `mutations.createFromUnmapped` clears any coverage rejection AND
+  // auto-approves the new TFM.
+  //
+  // Promotion continuity: the unmapped-target row (`unmapped::<tf>`)
+  // becomes a real TFM with a new id. We re-point `drawerRowId` at the
+  // returned TFM id and arm the `pendingDrawerRowId` sentinel — the
+  // SAME machinery `handleUnmapMapping` uses — so `effectiveDrawerRow`
+  // holds the drawer open across the `router.refresh()` window and the
+  // stale-id auto-close effect skips. The drawer follows the row
+  // through its identity change rather than closing.
   const handleCreateMapping = useCallback(
     async (sourceFieldId: string, targetFieldId: string) => {
-      return mutations.createFromUnmapped({
+      const result = await mutations.createFromUnmapped({
         sourceFieldId,
         targetFieldId,
         pendingKey: `unmapped::${targetFieldId}`,
       })
+      if (result.success && result.tfmId) {
+        setPendingDrawerRowId(result.tfmId)
+        setDrawerRowId(result.tfmId)
+        writeUrl(filters, result.tfmId)
+      }
+      return result
     },
-    [mutations],
+    [mutations, filters, writeUrl],
+  )
+
+  // feat/drawer-body-editing-surface — promote an unmapped-source row
+  // (drawer source-field stub) to a mapped row via the stub's "Pick a
+  // target…" affordance. `mutations.promoteUnmappedSource` creates a
+  // new 1:1 TFM (target unmapped) or appends the source to the existing
+  // TFM (target already mapped); either way it returns the resolved TFM
+  // id. Drawer continuity is identical to `handleCreateMapping` — reuse
+  // the `pendingDrawerRowId` sentinel, no parallel path.
+  const handlePromoteSource = useCallback(
+    async (sourceFieldId: string, targetFieldId: string) => {
+      const result = await mutations.promoteUnmappedSource({
+        sourceFieldId,
+        targetFieldId,
+        pendingKey: `unmapped-source::${sourceFieldId}`,
+      })
+      if (result.success && result.tfmId) {
+        setPendingDrawerRowId(result.tfmId)
+        setDrawerRowId(result.tfmId)
+        writeUrl(filters, result.tfmId)
+      }
+      return result
+    },
+    [mutations, filters, writeUrl],
   )
 
   // Drawer redesign PR 2 TASK 2+3 — target ✏ on unmapped/rejected
@@ -2072,6 +2105,7 @@ function MappingContentLoaded({
         onUnmapMapping={handleUnmapMapping}
         onCreateMapping={handleCreateMapping}
         onNavigateTarget={handleNavigateTarget}
+        onPromoteSource={handlePromoteSource}
       />
 
       {/*
