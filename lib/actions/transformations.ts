@@ -836,7 +836,7 @@ export async function getTransformData(
     // mapped-side `fieldNeedsTransform` heuristic does not apply: the user
     // has explicitly opted this field out of value generation.
     const needsTransform = isValueAssignment
-      ? !vaDismissed
+      ? (!vaDismissed && tfm.needs_transformation === true)
       : fieldNeedsTransform({
           typeCompatibility: primary?.typeCompatibility ?? null,
           confidence: primary?.confidence ?? tfm.confidence,
@@ -3213,6 +3213,10 @@ export async function dismissValueAssignment(
   if (!perm.allowed) return { success: false, error: perm.error }
 
   await assertMappingWritesEnabled(projectId)
+  const supabase = await createClient()
+  const {
+    data: { user },
+  } = await supabase.auth.getUser()
 
   // Dynamic import: `mappings.ts` imports symbols from this file at the
   // module top, so a top-level import of `createValueAssignment` would
@@ -3233,12 +3237,26 @@ export async function dismissValueAssignment(
     .from('target_field_mappings')
     .update({
       va_dismissed: true,
+      needs_transformation: false,
       dismissal_reason: reason?.trim() ? reason.trim() : null,
     })
     .eq('id', fieldMappingId)
     .eq('project_id', projectId)
 
   if (error) throw new Error(`Failed to dismiss value assignment: ${error.message}`)
+
+  if (user) {
+    void logAIEdit({
+      projectId,
+      actorId: user.id,
+      entityType: 'target_field_mapping',
+      entityId: fieldMappingId,
+      fieldPath: 'needs_transformation',
+      oldValue: true,
+      newValue: false,
+      editKind: 'human_rejected',
+    })
+  }
 
   revalidatePath(`/app/projects/${projectId}`, 'layout')
   // PR-4: value-assignment dismissal shifts transforms.total on the tile.
@@ -3259,6 +3277,10 @@ export async function reinstateValueAssignment(
   if (!perm.allowed) return { success: false, error: perm.error }
 
   await assertMappingWritesEnabled(projectId)
+  const supabase = await createClient()
+  const {
+    data: { user },
+  } = await supabase.auth.getUser()
 
   const resolved = resolveTfmId(fieldMappingId)
   if (resolved.kind !== 'primary') {
@@ -3267,11 +3289,24 @@ export async function reinstateValueAssignment(
 
   const { error } = await supabaseAdmin
     .from('target_field_mappings')
-    .update({ va_dismissed: false, dismissal_reason: null })
+    .update({ va_dismissed: false, needs_transformation: true, dismissal_reason: null })
     .eq('id', resolved.tfmId)
     .eq('project_id', projectId)
 
   if (error) throw new Error(`Failed to reinstate value assignment: ${error.message}`)
+
+  if (user) {
+    void logAIEdit({
+      projectId,
+      actorId: user.id,
+      entityType: 'target_field_mapping',
+      entityId: resolved.tfmId,
+      fieldPath: 'needs_transformation',
+      oldValue: false,
+      newValue: true,
+      editKind: 'human_modified',
+    })
+  }
 
   revalidatePath(`/app/projects/${projectId}`, 'layout')
   // PR-4: value-assignment reinstatement shifts transforms.total on the tile.

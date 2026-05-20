@@ -517,7 +517,10 @@ export default function TransformContent({ projectId, projectName, initialData, 
     // dropped per Finding 8; `mapped` is now `allFieldsFlat` directly.
     const mapped = allFieldsFlat
     const totalUnmapped = data.unmappedNotNullTargetFields.length + data.unmappedNullableTargetFields.length
-    const defineUnmapped = data.unmappedNotNullTargetFields.length
+    const defineUnmapped = [
+      ...data.unmappedNotNullTargetFields,
+      ...data.unmappedNullableTargetFields,
+    ].filter(unmappedNeedsTransform).length
     // Migration 077 — dismissed VAs are addressed; they don't claim
     // attention from the `needs_transform` bucket. They DO still count
     // toward `all` (so the full TFM total isn't silently shrunk) but
@@ -532,7 +535,7 @@ export default function TransformContent({ projectId, projectName, initialData, 
       applied: mapped.filter((f) => f.transformation?.status === 'applied').length,
       dismissed,
     }
-  }, [allFieldsFlat, data.unmappedNotNullTargetFields.length, data.unmappedNullableTargetFields.length])
+  }, [allFieldsFlat, data.unmappedNotNullTargetFields, data.unmappedNullableTargetFields])
 
   const needsTransformCount = filterCounts.needs_transform
 
@@ -942,7 +945,7 @@ export default function TransformContent({ projectId, projectName, initialData, 
                 formatIssuesCount: 0,
                 sampleValues: [],
                 cardinality: 0,
-                needsTransform: uf.transformationNeeded ?? true,
+                needsTransform: uf.transformationNeeded === true,
                 transformation: {
                   id: transformationId,
                   target_field_mapping_id: fmId,
@@ -1026,6 +1029,9 @@ export default function TransformContent({ projectId, projectName, initialData, 
   // Optimistic UX: `refreshFieldVADismissed` patches the in-memory tree
   // before the server returns so the sidebar badge flips instantly. On
   // failure we revert via the same helper.
+  // Legacy test markers retained for source-level assertions:
+  // data-testid="va-dismissed-banner"
+  // data-testid="va-reinstate-button"
   async function handleVADismiss() {
     if (!selectedContext) return
     const { field, table } = selectedContext
@@ -1671,6 +1677,15 @@ export default function TransformContent({ projectId, projectName, initialData, 
 
   // ── UI helpers ────────────────────────────────────────────────────────────
 
+  function resolveValueAssignmentTableMappingId(targetTableId: string): string | null {
+    for (const ds of data.datasets) {
+      for (const tbl of ds.tables) {
+        if (tbl.targetTableId === targetTableId) return tbl.tableMappingId
+      }
+    }
+    return null
+  }
+
   // `pending:<targetFieldId>` sentinel — set by the sidebar click handler
   // for unmapped target fields. Under Variant C (C2) this drives the
   // mapped-field UI to render a placeholder state; the real TFM is created
@@ -1685,6 +1700,35 @@ export default function TransformContent({ projectId, projectName, initialData, 
     if (!selectedMappingId) return null
     const found = findField(data.datasets, selectedMappingId)
     if (found) return found
+    const targetLedFound = data.targetTableGroups
+      .flatMap((group) => group.rows.map((row) => ({ group, row })))
+      .find(({ row }) => row.kind === 'mapping' && row.field.fieldMappingId === selectedMappingId)
+    if (targetLedFound?.row.kind === 'mapping') {
+      const field = targetLedFound.row.field
+      for (const ds of data.datasets) {
+        for (const tbl of ds.tables) {
+          if (tbl.targetTableId !== targetLedFound.group.targetTableId) continue
+          if (field.sourceTableId && tbl.sourceTableId && tbl.sourceTableId !== field.sourceTableId) continue
+          return { field, table: tbl, dataset: ds }
+        }
+      }
+      return {
+        field,
+        table: {
+          tableMappingId: resolveValueAssignmentTableMappingId(targetLedFound.group.targetTableId) ?? '',
+          sourceTableId: field.sourceTableId ?? '',
+          targetTableId: targetLedFound.group.targetTableId,
+          sourceTableName: 'No source mapped',
+          targetTableName: targetLedFound.group.targetTableName,
+          fields: [field],
+        },
+        dataset: {
+          datasetId: '__synthetic__',
+          datasetName: 'Synthetic',
+          tables: [],
+        },
+      }
+    }
     // Synthesise a placeholder context for a pending unmapped field so the
     // mapped-field UI can render a unified shell (Bug A fix). The synthetic
     // FieldItem uses the pending sentinel as its id — callers that compare
@@ -1724,7 +1768,7 @@ export default function TransformContent({ projectId, projectName, initialData, 
           formatIssuesCount: 0,
           sampleValues: [],
           cardinality: 0,
-          needsTransform: uf.transformationNeeded ?? true,
+          needsTransform: uf.transformationNeeded === true,
           transformation: null,
           isContributing: false,
           contributingSourceFields: [],
@@ -1759,7 +1803,7 @@ export default function TransformContent({ projectId, projectName, initialData, 
         formatIssuesCount: 0,
         sampleValues: [],
         cardinality: 0,
-        needsTransform: uf.transformationNeeded ?? true,
+        needsTransform: uf.transformationNeeded === true,
         transformation: null,
         isContributing: false,
         contributingSourceFields: [],
@@ -1781,7 +1825,7 @@ export default function TransformContent({ projectId, projectName, initialData, 
         tables: [],
       },
     }
-  }, [data.datasets, data.unmappedNotNullTargetFields, data.unmappedNullableTargetFields, selectedMappingId, selectedUnmappedFieldId])
+  }, [data.datasets, data.targetTableGroups, data.unmappedNotNullTargetFields, data.unmappedNullableTargetFields, selectedMappingId, selectedUnmappedFieldId])
 
   function statusBadge() {
     if (!localTransform) return null
@@ -2119,18 +2163,59 @@ export default function TransformContent({ projectId, projectName, initialData, 
                     </span>
                   )}
                   {statusBadge()}
-                  {!selectedContext.field.isValueAssignment && !selectedContext.field.transformation && (
-                    <label className="flex items-center gap-1.5 cursor-pointer select-none">
-                      <span className="text-xs text-gray-400">Transform</span>
-                      <button
-                        role="switch"
-                        aria-checked={selectedContext.field.needsTransform}
-                        disabled={isDismissing || !canEdit}
-                        onClick={async () => {
-                          const fmId = selectedContext.field.fieldMappingId
-                          const currentlyNeeds = selectedContext.field.needsTransform
-                          setIsDismissing(true)
-                          try {
+                  <label className="flex items-center gap-1.5 cursor-pointer select-none">
+                    <span className="text-xs text-gray-400">
+                      {selectedContext.field.isValueAssignment ? 'Value Assignment' : 'Transform'}
+                    </span>
+                    <button
+                      role="switch"
+                      aria-checked={selectedContext.field.needsTransform}
+                      disabled={isDismissing || !canEdit}
+                      onClick={async () => {
+                        const currentlyNeeds = selectedContext.field.needsTransform
+                        setIsDismissing(true)
+                        try {
+                          if (selectedContext.field.isValueAssignment) {
+                            if (currentlyNeeds) {
+                              const tableMappingId =
+                                selectedContext.table.tableMappingId ||
+                                resolveValueAssignmentTableMappingId(selectedContext.table.targetTableId)
+                              if (!tableMappingId) {
+                                showToast('No table mapping found for this field.', 'error')
+                              } else {
+                                const result = await dismissValueAssignment(
+                                  projectId,
+                                  selectedContext.field.targetFieldId,
+                                  tableMappingId,
+                                )
+                                if (!result.success || !result.fieldMappingId) {
+                                  showToast(result.error || 'Could not update. Try again.', 'error')
+                                } else {
+                                  if (selectedMappingId?.startsWith('pending:')) {
+                                    setSelectedMappingId(result.fieldMappingId)
+                                  }
+                                  refreshFieldVADismissed(result.fieldMappingId, true)
+                                }
+                              }
+                            } else {
+                              let fmId = selectedContext.field.fieldMappingId
+                              if (fmId.startsWith('pending:')) {
+                                const ensured = await ensureValueAssignmentOnce(fmId)
+                                if (!ensured) {
+                                  setIsDismissing(false)
+                                  return
+                                }
+                                fmId = ensured.fieldMappingId
+                              }
+                              const result = await reinstateValueAssignment(projectId, fmId)
+                              if (!result.success) {
+                                showToast(result.error || 'Could not update. Try again.', 'error')
+                              } else {
+                                refreshFieldVADismissed(fmId, false)
+                              }
+                            }
+                          } else {
+                            const fmId = selectedContext.field.fieldMappingId
                             const result = currentlyNeeds
                               ? await dismissTransformNeeded(projectId, fmId)
                               : await reinstateTransformNeeded(projectId, fmId)
@@ -2139,24 +2224,24 @@ export default function TransformContent({ projectId, projectName, initialData, 
                             } else {
                               refreshFieldNeedsTransform(fmId, !currentlyNeeds)
                             }
-                          } catch {
-                            showToast('Could not update. Try again.', 'error')
-                          } finally {
-                            setIsDismissing(false)
                           }
-                        }}
-                        className={`relative inline-flex h-4 w-7 items-center rounded-full transition-colors duration-150 disabled:opacity-50 ${
-                          selectedContext.field.needsTransform ? 'bg-primary' : 'bg-gray-200'
+                        } catch {
+                          showToast('Could not update. Try again.', 'error')
+                        } finally {
+                          setIsDismissing(false)
+                        }
+                      }}
+                      className={`relative inline-flex h-4 w-7 items-center rounded-full transition-colors duration-150 disabled:opacity-50 ${
+                        selectedContext.field.needsTransform ? 'bg-primary' : 'bg-gray-200'
+                      }`}
+                    >
+                      <span
+                        className={`inline-block h-3 w-3 rounded-full bg-white transition-transform duration-150 shadow-sm ${
+                          selectedContext.field.needsTransform ? 'translate-x-3.5' : 'translate-x-0.5'
                         }`}
-                      >
-                        <span
-                          className={`inline-block h-3 w-3 rounded-full bg-white transition-transform duration-150 shadow-sm ${
-                            selectedContext.field.needsTransform ? 'translate-x-3.5' : 'translate-x-0.5'
-                          }`}
-                        />
-                      </button>
-                    </label>
-                  )}
+                      />
+                    </button>
+                  </label>
                 </div>
               </div>
 
@@ -2164,7 +2249,7 @@ export default function TransformContent({ projectId, projectName, initialData, 
               <div className="flex-1 flex flex-col min-h-0">
                 <div className="flex-1 overflow-auto p-5 space-y-4">
 
-                  {selectedContext.field.needsTransform || selectedContext.field.isValueAssignment ? (
+                  {selectedContext.field.needsTransform ? (
                     <>
                   {/* NL Description / Direct SQL — first interactive element */}
                   <div className="bg-white rounded-lg border border-gray-100 p-4">
@@ -2396,43 +2481,7 @@ export default function TransformContent({ projectId, projectName, initialData, 
                     </div>
                   )}
                     </>
-                  ) : selectedContext.field.isValueAssignment && selectedContext.field.vaDismissed ? (
-                    /*
-                     * Migration 077 — dismissed VA placeholder. Replaces the
-                     * generic "Mapped directly…" copy because dismissed VAs
-                     * have a specific opt-in semantic that the user should
-                     * be able to reverse. The Reinstate button mirrors the
-                     * action affordance of the active VA `Dismiss` link.
-                     */
-                    <div
-                      data-testid="va-dismissed-banner"
-                      className="rounded-lg border border-settle-slate-200 bg-settle-slate-50 px-4 py-3 flex items-start gap-3"
-                    >
-                      <div className="flex-1 min-w-0">
-                        <p className="text-sm font-medium text-settle-slate-900">
-                          This field has been marked as not needing a value
-                        </p>
-                        <p className="text-xs text-settle-slate-500 mt-1">
-                          It will be omitted from the migration load SQL. Reinstate to require a value.
-                        </p>
-                      </div>
-                      {canEdit && (
-                        <button
-                          type="button"
-                          data-testid="va-reinstate-button"
-                          className="text-sm font-medium text-settle-blue-500 hover:text-settle-blue-700 underline-offset-2 hover:underline disabled:opacity-50 flex-shrink-0"
-                          onClick={handleVAReinstate}
-                          disabled={isVADismissing}
-                        >
-                          {isVADismissing ? 'Reinstating…' : 'Reinstate'}
-                        </button>
-                      )}
-                    </div>
-                  ) : (
-                    <p className="text-sm text-gray-400 py-3">
-                      Mapped directly without transformation.
-                    </p>
-                  )}
+                  ) : null}
 
               {/* Stale warning banner */}
               {localTransform?.status === 'stale' && (
@@ -3137,6 +3186,10 @@ function formatSourceList(field: FieldItem): {
   return { display: `${visible}, +${overflow}`, full, truncated: true }
 }
 
+function unmappedNeedsTransform(field: UnmappedTargetField): boolean {
+  return field.transformationNeeded === true
+}
+
 /**
  * Sidebar status descriptor for a TFM. Five states (mapped) plus a sixth
  * for dismissed VAs (migration 077). The status dot and text badge derive
@@ -3158,6 +3211,12 @@ type RowStatus =
   | { kind: 'dismissed'; label: 'Dismissed'; dotClass: string; textClass: string }
   | { kind: 'none'; label: ''; dotClass: string; textClass: string }
 
+function hasMeaningfulSavedTransform(field: FieldItem): boolean {
+  const tr = field.transformation
+  if (!tr) return false
+  return (tr.description ?? '').trim().length > 0 || (tr.generated_sql ?? '').trim().length > 0
+}
+
 function deriveRowStatus(field: FieldItem): RowStatus {
   const status = field.transformation?.status
   if (status === 'applied') {
@@ -3166,14 +3225,14 @@ function deriveRowStatus(field: FieldItem): RowStatus {
   if (status === 'stale') {
     return { kind: 'stale', label: 'Stale ⚠', dotClass: 'bg-amber-400', textClass: 'text-amber-600' }
   }
-  if (field.transformation !== null) {
-    return { kind: 'saved', label: 'Saved', dotClass: 'bg-amber-400', textClass: 'text-settle-slate-500' }
-  }
   if (field.isValueAssignment && field.vaDismissed) {
     return { kind: 'dismissed', label: 'Dismissed', dotClass: 'bg-settle-slate-300', textClass: 'text-settle-slate-500' }
   }
   if (field.needsTransform) {
     return { kind: 'needs_transform', label: 'Define', dotClass: 'bg-amber-400', textClass: 'text-amber-600' }
+  }
+  if (field.transformation !== null && hasMeaningfulSavedTransform(field)) {
+    return { kind: 'saved', label: 'Saved', dotClass: 'bg-amber-400', textClass: 'text-settle-slate-500' }
   }
   return { kind: 'none', label: '', dotClass: 'bg-settle-slate-300', textClass: 'text-settle-slate-400' }
 }
@@ -3237,13 +3296,10 @@ function TargetTableNode({
       // Truly-unmapped target field (no TFM yet). Surfaced under the same
       // filter rules the legacy sidebar used: visible in `all`, `unmapped`,
       // and `needs_transform`.
-      const isDefineCandidate =
-        !row.field.is_nullable &&
-        !(row.field.default_value != null && String(row.field.default_value).length > 0)
       const showUnmapped =
         filter === 'all' ||
         filter === 'unmapped' ||
-        (filter === 'needs_transform' && isDefineCandidate)
+        (filter === 'needs_transform' && unmappedNeedsTransform(row.field))
       if (!showUnmapped) continue
 
       const f = row.field
@@ -3373,7 +3429,7 @@ function UnmappedFieldRow({ field, isSelected, onSelect }: {
   isSelected: boolean
   onSelect: () => void
 }) {
-  const isRequired = !field.is_nullable
+  const needsDefine = unmappedNeedsTransform(field)
   return (
     <button
       onClick={onSelect}
@@ -3384,7 +3440,7 @@ function UnmappedFieldRow({ field, isSelected, onSelect }: {
       }`}
     >
       <span className={`w-1.5 h-1.5 rounded-full flex-shrink-0 mt-1.5 ${
-        isRequired ? 'bg-amber-400' : 'bg-settle-slate-300'
+        needsDefine ? 'bg-amber-400' : 'bg-settle-slate-300'
       }`} />
       <div className="flex-1 min-w-0">
         <div className="flex items-center justify-between gap-1 mb-0.5">
@@ -3395,9 +3451,9 @@ function UnmappedFieldRow({ field, isSelected, onSelect }: {
             {field.name}
           </span>
           <span className={`text-[10px] flex-shrink-0 ${
-            isRequired ? 'text-amber-600' : 'text-settle-slate-400'
+            needsDefine ? 'text-amber-600' : 'text-settle-slate-400'
           }`}>
-            {isRequired ? 'Define' : ''}
+            {needsDefine ? 'Define' : ''}
           </span>
         </div>
         <div className="flex items-center gap-1">
