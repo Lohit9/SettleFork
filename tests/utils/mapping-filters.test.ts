@@ -2,7 +2,9 @@ import { describe, it, expect } from 'vitest'
 import type {
   MappedRow,
   MappingRow,
+  MappingsForRedesignResult,
   MappingSourceRef,
+  SourceFieldWithState,
   SourceTableSummary,
   TargetFieldRef,
   TargetTableSummary,
@@ -12,6 +14,7 @@ import type {
 import {
   countFilteredPerTargetTable,
   DEFAULT_FILTER_STATE,
+  filterFlatRows,
   filterRows,
   hasActiveFilters,
   isGroupHiddenByIdentityFilters,
@@ -19,8 +22,10 @@ import {
   parseFilterStateFromParams,
   serializeFilterStateToQuery,
   shouldHideEmptyGroups,
+  UNMAPPED_FILTER_VALUE,
   type MappingFilterState,
 } from '@/lib/utils/mapping-filters'
+import { flattenRowsForListView } from '@/lib/utils/flatten-rows-for-list-view'
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Phase 3 Gap 3 — filter pipeline unit tests.
@@ -982,5 +987,184 @@ describe('isGroupHiddenBySearch (Amendment 3, 2026-04-21)', () => {
     }
     expect(isGroupHiddenBySearch(tableA.id, unmappedState, rows)).toBe(false)
     expect(isGroupHiddenBySearch(tableB.id, unmappedState, rows)).toBe(true)
+  })
+})
+
+// ─────────────────────────────────────────────────────────────────────────────
+// filterFlatRows — flat-view filter pipeline (feat/mapping-filter-bugs-ordering)
+// ─────────────────────────────────────────────────────────────────────────────
+//
+// Regression coverage for the bug where source / target / status filters
+// silently ignored the synthesised `unmapped-source` rows: `filterRows`
+// only sees the wire `MappingRow[]`, so those rows must be filtered over
+// the `flattenRowsForListView` projection instead.
+
+function unmappedSourceField(
+  overrides: Partial<SourceFieldWithState> = {},
+): SourceFieldWithState {
+  return {
+    id: 'sf-orphan',
+    name: 'ORPHAN_COL',
+    dataType: 'VARCHAR',
+    ordinalPosition: 1,
+    sourceTable: { id: sourceTableX.id, name: sourceTableX.name },
+    mappingStatus: 'unmapped',
+    sampleValues: [],
+    isAcknowledged: false,
+    isRejected: false,
+    aiReasoning: null,
+    confidence: null,
+    ...overrides,
+  }
+}
+
+// Canonical flat fixture — one row of every kind:
+//   m-x   mapped, target tableA, source tableX, status approved
+//   m-y   mapped, target tableB, source tableY, status needs_review
+//   ut    unmapped-target, tableA, needs_review
+//   va    value-assignment, tableA, approved
+//   sf-orphan-x  unmapped-source, source tableX  (needs_review)
+//   sf-orphan-y  unmapped-source, source tableY  (needs_review)
+function buildFlatRows() {
+  const result: MappingsForRedesignResult = {
+    projectId: 'proj-1',
+    rows: [
+      mapped({
+        id: 'm-x',
+        targetField: targetField({ id: 'tf-mx', name: 'cust_id' }),
+        status: 'approved',
+        sources: [
+          source({
+            id: 'ms-x',
+            sourceField: {
+              id: 'sf-x',
+              name: 'CUST',
+              dataType: 'VARCHAR',
+              isNullable: false,
+            },
+            sourceTable: { id: sourceTableX.id, name: sourceTableX.name },
+          }),
+        ],
+      }),
+      mapped({
+        id: 'm-y',
+        targetField: targetField({
+          id: 'tf-my',
+          name: 'balance',
+          targetTable: { id: tableB.id, name: tableB.name },
+        }),
+        status: 'needs_review',
+        sources: [
+          source({
+            id: 'ms-y',
+            sourceField: {
+              id: 'sf-y',
+              name: 'BAL',
+              dataType: 'DECIMAL',
+              isNullable: true,
+            },
+            sourceTable: { id: sourceTableY.id, name: sourceTableY.name },
+          }),
+        ],
+      }),
+      unmapped({
+        id: 'unmapped::tf-ut',
+        targetField: targetField({ id: 'tf-ut', name: 'orphan_target' }),
+        status: 'needs_review',
+      }),
+      valueAssignment({ id: 'va-1', status: 'approved' }),
+    ],
+    targetTables: [],
+    sourceTables: [],
+    sourceFieldAcknowledgments: [],
+    sourceFields: [
+      unmappedSourceField({
+        id: 'sf-orphan-x',
+        name: 'ORPHAN_X',
+        sourceTable: { id: sourceTableX.id, name: sourceTableX.name },
+      }),
+      unmappedSourceField({
+        id: 'sf-orphan-y',
+        name: 'ORPHAN_Y',
+        sourceTable: { id: sourceTableY.id, name: sourceTableY.name },
+      }),
+    ],
+    counts: { total: 0, approved: 0, needsReview: 0, rejected: 0, unmapped: 0 },
+    targetSchemaEmpty: false,
+  }
+  return flattenRowsForListView(result)
+}
+
+function idsOf(rows: { id: string }[]): string[] {
+  return rows.map((r) => r.id).sort()
+}
+
+describe('filterFlatRows — default state', () => {
+  it('returns every flat row (incl. synthesised unmapped-source) unfiltered', () => {
+    const flat = buildFlatRows()
+    const out = filterFlatRows(flat, DEFAULT_FILTER_STATE)
+    expect(out).toHaveLength(flat.length)
+    // Sanity: the fixture really does carry the synthesised source rows.
+    expect(
+      out.filter((r) => r.kind === 'unmapped-source'),
+    ).toHaveLength(2)
+  })
+})
+
+describe('filterFlatRows — source table filter', () => {
+  it('keeps only rows whose source side is in the chosen table — across ALL kinds', () => {
+    const out = filterFlatRows(buildFlatRows(), {
+      ...DEFAULT_FILTER_STATE,
+      source: sourceTableX.id,
+    })
+    // m-x (mapped, source X) + sf-orphan-x (unmapped-source, table X).
+    // The unmapped-source row from table Y is the regression target —
+    // pre-fix it leaked through because it bypassed filtering entirely.
+    expect(idsOf(out)).toEqual(['m-x', 'unmapped-source::sf-orphan-x'])
+  })
+})
+
+describe('filterFlatRows — target table filter', () => {
+  it('keeps only rows whose target is in the chosen table; drops unmapped-source', () => {
+    const out = filterFlatRows(buildFlatRows(), {
+      ...DEFAULT_FILTER_STATE,
+      target: tableA.id,
+    })
+    // m-x + unmapped-target + VA are all on tableA. m-y is on tableB.
+    // Both unmapped-source rows have no target → excluded.
+    expect(idsOf(out)).toEqual(['m-x', 'unmapped::tf-ut', 'va-1'])
+  })
+})
+
+describe('filterFlatRows — status filter', () => {
+  it('"approved" hides needs_review rows across every kind, incl. unmapped-source', () => {
+    const out = filterFlatRows(buildFlatRows(), {
+      ...DEFAULT_FILTER_STATE,
+      status: 'approved',
+    })
+    // m-x (approved) + va-1 (approved). The two unmapped-source rows are
+    // needs_review — pre-fix they showed through the "Approved" filter.
+    expect(idsOf(out)).toEqual(['m-x', 'va-1'])
+  })
+})
+
+describe('filterFlatRows — "Unmapped" axis options', () => {
+  it('source "Unmapped" shows only rows with no source mapping (unmapped-target)', () => {
+    const out = filterFlatRows(buildFlatRows(), {
+      ...DEFAULT_FILTER_STATE,
+      source: UNMAPPED_FILTER_VALUE,
+    })
+    expect(idsOf(out)).toEqual(['unmapped::tf-ut'])
+  })
+
+  it('target "Unmapped" shows only rows with no target mapping (unmapped-source)', () => {
+    const out = filterFlatRows(buildFlatRows(), {
+      ...DEFAULT_FILTER_STATE,
+      target: UNMAPPED_FILTER_VALUE,
+    })
+    expect(idsOf(out)).toEqual([
+      'unmapped-source::sf-orphan-x',
+      'unmapped-source::sf-orphan-y',
+    ])
   })
 })

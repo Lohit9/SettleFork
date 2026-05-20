@@ -15,6 +15,11 @@ import {
   flattenRowsForListView,
   type FlatRow,
 } from '@/lib/utils/flatten-rows-for-list-view'
+import {
+  filterFlatRows,
+  DEFAULT_FILTER_STATE,
+  type MappingFilterState,
+} from '@/lib/utils/mapping-filters'
 import { summarizeRationale } from '@/lib/utils/rationale-summary'
 import { Check, Edit3, X } from 'lucide-react'
 import { ActionIconButton } from './FlatRowActions'
@@ -251,6 +256,15 @@ export interface MappingListViewProps {
    * highlight the matching MappingSourceRef on mount.
    */
   onOpenDrawer: (rowId: string, highlightedSourceFieldId: string | null) => void
+
+  /**
+   * Active filter state. The flat view flattens `filteredResult` to the
+   * canonical `FlatRow[]` projection and applies `filterFlatRows` over
+   * it — so the synthesised `unmapped-source` rows are filtered too
+   * (the wire `filterRows` pipeline alone never sees them). Optional;
+   * omitting it (test mounts) defaults to the zero-filter state.
+   */
+  filters?: MappingFilterState
 }
 
 // ─── Fixed sort (single pass, no UI state) ────────────────────────────────────
@@ -405,6 +419,7 @@ export function MappingListView({
   filteredResult,
   mutations,
   onOpenDrawer,
+  filters = DEFAULT_FILTER_STATE,
 }: MappingListViewProps) {
   const [openPicker, setOpenPicker] = useState<OpenPickerState>(null)
 
@@ -424,9 +439,13 @@ export function MappingListView({
     })
   }, [])
 
+  // Flatten to the canonical FlatRow[] projection, THEN filter — the
+  // synthesised unmapped-source rows exist only in this projection, so
+  // filtering here (not on the wire MappingRow[]) is what makes the
+  // source / target / status filters cover every row kind.
   const flatRows = useMemo(
-    () => flattenRowsForListView(filteredResult),
-    [filteredResult],
+    () => filterFlatRows(flattenRowsForListView(filteredResult), filters),
+    [filteredResult, filters],
   )
 
   // Fixed single-pass sort — see `compareSortKeys`. No UI state, no
