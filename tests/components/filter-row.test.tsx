@@ -36,10 +36,7 @@ const sourceTables: SourceTableSummary[] = [
   { id: 'st-y', name: 'CIF_MASTER', datasetName: 'legacy', fieldCount: 8 },
 ]
 
-function renderFilterRow(
-  overrides: Partial<MappingFilterState> = {},
-  options: { rejectedCount?: number } = {},
-) {
+function renderFilterRow(overrides: Partial<MappingFilterState> = {}) {
   const onFiltersChange = vi.fn()
   const filters: MappingFilterState = { ...DEFAULT_FILTER_STATE, ...overrides }
   const utils = render(
@@ -48,7 +45,6 @@ function renderFilterRow(
       onFiltersChange={onFiltersChange}
       targetTables={targetTables}
       sourceTables={sourceTables}
-      rejectedCount={options.rejectedCount ?? 0}
     />,
   )
   return { ...utils, onFiltersChange }
@@ -203,63 +199,30 @@ describe('FilterRow — Radix Select integration', () => {
   })
 })
 
-// ─── Gap 9 — "Rejected" option gating ───────────────────────────────────────
+// ─── "Rejected" status option retired ───────────────────────────────────────
 //
-// Founder decision (Gap 9 alignment §4): the "Rejected" option in the
-// status dropdown is gated on `rejectedCount > 0`, mirroring the
-// counter-pill pattern from Gap 4a §9 Q6. Legacy-URL fallback: if the
-// current status filter is already 'rejected' the option must remain
-// visible so the Select stays in a valid state.
-//
-// Radix Select renders items in a portal that is mounted only when the
-// dropdown is open. We avoid the Radix open/close complexity by
-// asserting the trigger's rendered value text instead — the trigger
-// reflects the currently selected option's label via <SelectValue/>,
-// which itself sources from the items list. When the option is missing
-// from the items list (and not in the active filter), the dropdown
-// has 3 entries; otherwise it has 4.
+// Reject = reset (PR #157/#158): rejecting any row returns it to
+// needs_review, so the app never produces a status='rejected' row. The
+// "Rejected" status-filter option (and its `rejectedCount` gating) was
+// removed — the dropdown now offers exactly All status / Needs Review /
+// Approved.
 
-describe('FilterRow — Rejected option gating (Gap 9)', () => {
-  it('renders without crashing when rejectedCount is omitted (back-compat)', () => {
-    const onFiltersChange = vi.fn()
-    expect(() =>
-      render(
-        <FilterRow
-          filters={DEFAULT_FILTER_STATE}
-          onFiltersChange={onFiltersChange}
-          targetTables={targetTables}
-          sourceTables={sourceTables}
-        />,
-      ),
-    ).not.toThrow()
-  })
-
-  it('keeps the trigger valid when status=rejected even though rejectedCount=0 (legacy URL fallback)', () => {
-    // The trigger renders the selected value's label. If the item
-    // were missing, Radix's <SelectValue/> would fall back to the
-    // placeholder, which our config does not define — so an empty
-    // trigger here would indicate the gating logic stripped the
-    // option even when it was needed.
-    renderFilterRow({ status: 'rejected' }, { rejectedCount: 0 })
-    const trigger = screen.getByTestId('filter-status')
-    expect(within(trigger).getByText(/rejected/i)).toBeInTheDocument()
-  })
-
-  it('keeps the trigger valid when status=rejected and rejectedCount > 0', () => {
-    renderFilterRow({ status: 'rejected' }, { rejectedCount: 3 })
-    const trigger = screen.getByTestId('filter-status')
-    expect(within(trigger).getByText(/rejected/i)).toBeInTheDocument()
-  })
-
-  it('renders cleanly with the default state when rejectedCount=0 (option hidden, no errors)', () => {
-    renderFilterRow({ status: 'all' }, { rejectedCount: 0 })
-    const trigger = screen.getByTestId('filter-status')
-    // Refinement 3 (2026-04-26): prefix labels were dropped from the
-    // toolbar and the Status dropdown's "all" label was restored to
-    // its noun-carrying form ("All status"). The trigger displays
-    // "All status" by default — the value itself is now the axis
-    // disambiguator since there's no separate prefix label.
-    expect(within(trigger).getByText(/all status/i)).toBeInTheDocument()
+describe('FilterRow — status dropdown options', () => {
+  it('offers exactly All status / Needs Review / Approved — no "Rejected"', () => {
+    renderFilterRow()
+    fireEvent.click(screen.getByTestId('filter-status'))
+    expect(
+      screen.getByRole('option', { name: /all status/i }),
+    ).toBeInTheDocument()
+    expect(
+      screen.getByRole('option', { name: /needs review/i }),
+    ).toBeInTheDocument()
+    expect(
+      screen.getByRole('option', { name: /^approved$/i }),
+    ).toBeInTheDocument()
+    expect(
+      screen.queryByRole('option', { name: /rejected/i }),
+    ).not.toBeInTheDocument()
   })
 })
 
@@ -490,7 +453,6 @@ describe('FilterRow — contextual bulk-approve link visibility', () => {
         onFiltersChange={onFiltersChange}
         targetTables={targetTables}
         sourceTables={sourceTables}
-        rejectedCount={0}
         highConfidenceCount={opts.highConfidenceCount}
         onApproveHighConfidenceClick={
           opts.onApproveHighConfidenceClick === undefined &&
@@ -522,7 +484,6 @@ describe('FilterRow — contextual bulk-approve link visibility', () => {
           onFiltersChange={vi.fn()}
           targetTables={targetTables}
           sourceTables={sourceTables}
-          rejectedCount={0}
           highConfidenceCount={5}
           onApproveHighConfidenceClick={vi.fn()}
         />,
@@ -629,7 +590,6 @@ describe('FilterRow — contextual bulk-approve link visibility', () => {
         onFiltersChange={vi.fn()}
         targetTables={targetTables}
         sourceTables={sourceTables}
-        rejectedCount={0}
         highConfidenceCount={2}
         onApproveHighConfidenceClick={vi.fn()}
       />,
