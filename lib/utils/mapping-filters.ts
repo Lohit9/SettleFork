@@ -37,12 +37,19 @@ export const UNMAPPED_FILTER_VALUE = 'unmapped'
 //     unmapped rows are excluded because they have no sources. (See the
 //     Gap 3 test cases for regression coverage.)
 
-/** Status filter options exposed in the filter row dropdown. */
+/**
+ * Status filter options exposed in the filter row dropdown.
+ *
+ * 'rejected' was retired with Reject = reset (PR #157/#158): rejecting a
+ * row returns it to needs_review, so no row produced by the app carries
+ * status='rejected' anymore. Legacy status='rejected' rows still exist at
+ * the `FlatRowStatus` level (heritage data) and render normally — they are
+ * just not separately filterable; they surface under 'all'.
+ */
 export type MappingStatusFilter =
   | 'all'
   | 'needs_review'
   | 'approved'
-  | 'rejected'
 
 /**
  * Confidence filter bands. The 'medium' band maps to the internal
@@ -71,7 +78,8 @@ export interface MappingFilterState {
   target: string
   /** Source table id or 'all'. */
   source: string
-  /** Status filter value; 'all' includes rejected (§9 Q6 resolution). */
+  /** Status filter value. 'all' is the pass-through (shows every row,
+   *  including legacy status='rejected' heritage rows). */
   status: MappingStatusFilter
   /**
    * Confidence-band filter (Phase 4-polish-1 comprehensive pass).
@@ -411,9 +419,11 @@ export function serializeFilterStateToQuery(state: MappingFilterState): string {
 }
 
 function normalizeStatus(raw: string | null): MappingStatusFilter {
-  if (raw === 'needs_review' || raw === 'approved' || raw === 'rejected') {
+  if (raw === 'needs_review' || raw === 'approved') {
     return raw
   }
+  // Legacy '?status=rejected' bookmarks fall back to 'all' — the
+  // Rejected filter option was retired with Reject = reset (PR #157/#158).
   return 'all'
 }
 

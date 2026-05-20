@@ -81,18 +81,6 @@ interface FilterRowProps {
   /** Universe of source tables for the Source dropdown. */
   sourceTables: readonly SourceTableSummary[]
   /**
-   * Phase 3 Gap 9 — rejected TFM count, used to gate the "Rejected"
-   * status option in the dropdown. The option is hidden when the count
-   * is zero (mirroring the counter-pill pattern from Gap 4a §9 Q6),
-   * with one exception: if the user already has Rejected selected
-   * (e.g., via a legacy URL bookmark), keep the option visible so the
-   * Select stays in a valid state. They can clear it explicitly.
-   *
-   * Optional for back-compat with existing tests that don't pass it;
-   * default is 0 → option hidden, which matches "fresh project" UX.
-   */
-  rejectedCount?: number
-  /**
    * Phase 4c-1 (4-polish-1 redesign) — count of project-wide
    * needs-review TFMs whose confidence ≥ HIGH_CONFIDENCE_THRESHOLD
    * (default 85). Drives the contextual "Approve N high-confidence"
@@ -130,16 +118,16 @@ interface FilterRowProps {
 // The hairline dividers between groups are also gone — without prefix
 // labels there's nothing to separate, just dropdowns sitting in `gap-3`
 // flow.
-const BASE_STATUS_OPTIONS: Array<{ value: MappingStatusFilter; label: string }> = [
+// Reject = reset (PR #157/#158): rejecting a row returns it to
+// needs_review, so the app no longer produces status='rejected' rows —
+// the "Rejected" status option was retired. Legacy status='rejected'
+// rows (heritage data) still render via FlatRowStatus but are not
+// separately filterable; they surface under "All status".
+const STATUS_OPTIONS: Array<{ value: MappingStatusFilter; label: string }> = [
   { value: 'all', label: 'All status' },
   { value: 'needs_review', label: 'Needs Review' },
   { value: 'approved', label: 'Approved' },
 ]
-
-const REJECTED_STATUS_OPTION: { value: MappingStatusFilter; label: string } = {
-  value: 'rejected',
-  label: 'Rejected',
-}
 
 // Q8 lock — band labels derive from the canonical thresholds in
 // `confidence-format.ts` so the dropdown copy and the row-level color
@@ -162,18 +150,9 @@ export function FilterRow({
   onFiltersChange,
   targetTables,
   sourceTables,
-  rejectedCount = 0,
   highConfidenceCount,
   onApproveHighConfidenceClick,
 }: FilterRowProps) {
-  // Gate the "Rejected" option on rejectedCount > 0, with a fallback to
-  // keep the option visible when the current filter value is already
-  // 'rejected' (legacy URL bookmark scenario). Without the fallback the
-  // Select would render an invalid value.
-  const statusOptions =
-    rejectedCount > 0 || filters.status === 'rejected'
-      ? [...BASE_STATUS_OPTIONS, REJECTED_STATUS_OPTION]
-      : BASE_STATUS_OPTIONS
   // Local mirror for the search input so typing stays instant even
   // when the parent debounces URL writes. We sync back FROM the parent
   // whenever `filters.search` changes externally (e.g., URL-driven
@@ -197,12 +176,7 @@ export function FilterRow({
     onFiltersChange({ ...filters, source: value })
   }
   const handleStatusChange = (value: string) => {
-    if (
-      value === 'all' ||
-      value === 'needs_review' ||
-      value === 'approved' ||
-      value === 'rejected'
-    ) {
+    if (value === 'all' || value === 'needs_review' || value === 'approved') {
       onFiltersChange({ ...filters, status: value })
     }
   }
@@ -348,7 +322,7 @@ export function FilterRow({
           <SelectValue />
         </SelectTrigger>
         <SelectContent>
-          {statusOptions.map((opt) => (
+          {STATUS_OPTIONS.map((opt) => (
             <SelectItem key={opt.value} value={opt.value}>
               {opt.label}
             </SelectItem>

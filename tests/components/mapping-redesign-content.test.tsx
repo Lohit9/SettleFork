@@ -560,16 +560,12 @@ describe('MappingRedesignContent — Source filter HIDES non-matching groups', (
 })
 
 describe('MappingRedesignContent — Status filter KEEPS empty-state headers', () => {
-  it('all groups still render when status narrows to zero matches', () => {
-    // Heritage status semantic: no rejected rows in fixture, so status=rejected → 0 everywhere.
-    renderRedesign('status=rejected')
-    const groups = screen.getAllByTestId('target-table-group')
-    expect(groups).toHaveLength(3)
-    // Every group renders the filtered-empty state because none have rejected rows.
-    const empties = screen.getAllByTestId('target-table-filtered-empty')
-    expect(empties).toHaveLength(3)
-  })
-
+  // The "all groups empty" variant previously used `status=rejected` — a
+  // guaranteed-zero status against the fixture. 'rejected' was retired as
+  // a filter option with Reject = reset (PR #157/#158), so that case is
+  // no longer reachable. The empty-state-header behavior is covered by
+  // the partial-match test below: each group independently renders the
+  // filtered-empty state when the status filter zeroes its rows.
   it('partial status match: matching group shows rows, non-matching groups show empty state', () => {
     // status=needs_review → only the accounts table has a needs_review row;
     // customers and loans both have no needs_review rows.
