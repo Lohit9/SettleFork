@@ -275,13 +275,13 @@ describe('[transforms refinements] R8 — dismissValueAssignment + reinstateValu
     expect(DISMISS_BODY).toMatch(/createValueAssignment\s*\(\s*projectId,\s*tableMappingId,\s*targetFieldId\s*\)/)
   })
 
-  it('dismissValueAssignment writes va_dismissed=true (NOT needs_transformation)', () => {
-    // Asymmetry pin: the VA-side flag is `va_dismissed`, NOT
-    // `needs_transformation`. Conflating them risks readiness-score and
-    // load-SQL bugs documented in migration 077's header.
+  it('dismissValueAssignment writes va_dismissed=true and needs_transformation=false', () => {
+    // Current contract: the VA toggle persists both the VA-specific
+    // dismissal flag and the shared needs_transformation flag, so the
+    // transform page survives refresh without drifting.
     expect(DISMISS_BODY).toContain("from('target_field_mappings')")
     expect(DISMISS_BODY).toMatch(/va_dismissed:\s*true/)
-    expect(DISMISS_BODY).not.toMatch(/needs_transformation:\s*false/)
+    expect(DISMISS_BODY).toMatch(/needs_transformation:\s*false/)
   })
 
   it('dismissValueAssignment captures an optional `reason` into dismissal_reason', () => {
@@ -304,9 +304,10 @@ describe('[transforms refinements] R8 — dismissValueAssignment + reinstateValu
     )
   })
 
-  it('reinstateValueAssignment writes va_dismissed=false and clears dismissal_reason', () => {
+  it('reinstateValueAssignment writes va_dismissed=false, needs_transformation=true, and clears dismissal_reason', () => {
     expect(REINSTATE_BODY).toContain("from('target_field_mappings')")
     expect(REINSTATE_BODY).toMatch(/va_dismissed:\s*false/)
+    expect(REINSTATE_BODY).toMatch(/needs_transformation:\s*true/)
     expect(REINSTATE_BODY).toMatch(/dismissal_reason:\s*null/)
   })
 
@@ -331,11 +332,11 @@ describe('[transforms refinements] R9 — getTransformData reads va_dismissed', 
     expect(TRANSFORMS_SRC).toMatch(/vaDismissed:\s*boolean/)
   })
 
-  it('needsTransform gates VA-only TFMs on !vaDismissed', () => {
-    // The whole point of the dismissal: a dismissed VA stops appearing
-    // as `Define` in the sidebar / header. Pin the gate so a regression
-    // can't silently re-enable the old "VA always needs transform" path.
-    expect(TRANSFORMS_SRC).toMatch(/isValueAssignment[\s\S]{0,200}!vaDismissed/)
+  it('needsTransform gates VA-only TFMs on both !vaDismissed and needs_transformation === true', () => {
+    // The transform page now uses the persisted shared flag as the
+    // source-of-truth for VA rows, with va_dismissed still able to hide
+    // intentionally dismissed fields.
+    expect(TRANSFORMS_SRC).toMatch(/isValueAssignment[\s\S]{0,200}!vaDismissed[\s\S]{0,80}needs_transformation\s*===\s*true/)
   })
 })
 
