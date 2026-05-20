@@ -1140,3 +1140,72 @@ describe('MappingListView — responsive column priority + typography (feat/mapp
     expect(subTable.className).toContain('shrink-[9999]')
   })
 })
+
+describe('MappingListView — unmapped-source "Pick a target…" (feat/unmapped-source-drawer-parity)', () => {
+  function makeOrphanSourceField(): SourceFieldWithState {
+    return {
+      id: 'sf-orphan',
+      name: 'BOM_QUANTITY',
+      dataType: 'NUMBER',
+      ordinalPosition: 1,
+      sourceTable: { id: 'st-bom', name: 'BOM_MASTERS' },
+      mappingStatus: 'unmapped',
+      sampleValues: [],
+      isAcknowledged: false,
+      isRejected: false,
+      aiReasoning: null,
+      confidence: null,
+    }
+  }
+
+  it('renders a "Pick a target…" affordance in the target cell (not an em-dash)', () => {
+    const result = makeResult([], [makeOrphanSourceField()])
+    render(
+      <MappingListView
+        filteredResult={result}
+        mutations={makeMutations()}
+        onOpenDrawer={vi.fn()}
+      />,
+    )
+    const row = findRow('unmapped-source::sf-orphan')
+    const cell = within(row).getByTestId('flat-cell-target')
+    const button = within(cell).getByTestId('flat-cell-target-field-button')
+    expect(button.textContent).toContain('Pick a target')
+  })
+
+  it('clicking "Pick a target…" then selecting a field promotes via promoteUnmappedSource', async () => {
+    // The result needs a row carrying a target field so the picker has
+    // an option to offer — an unmapped-target row contributes tf-9.
+    const mutations = makeMutations()
+    const result = makeResult(
+      [makeUnmappedTarget()],
+      [makeOrphanSourceField()],
+    )
+    render(
+      <MappingListView
+        filteredResult={result}
+        mutations={mutations}
+        onOpenDrawer={vi.fn()}
+      />,
+    )
+    const row = findRow('unmapped-source::sf-orphan')
+    fireEvent.click(
+      within(row).getByTestId('flat-cell-target-field-button'),
+    )
+    const picker = await screen.findByTestId('target-field-cell-picker')
+    const option = within(picker)
+      .getAllByTestId('target-field-cell-picker-field')
+      .find((el) => el.getAttribute('data-target-field-id') === 'tf-9')
+    expect(option).toBeDefined()
+    fireEvent.click(option as HTMLElement)
+
+    expect(mutations.promoteUnmappedSource).toHaveBeenCalledWith({
+      sourceFieldId: 'sf-orphan',
+      targetFieldId: 'tf-9',
+      pendingKey: 'unmapped-source::sf-orphan',
+    })
+    // Regression guard — the source-side target pick must NOT route
+    // through createFromUnmapped (that path is for unmapped-target rows).
+    expect(mutations.createFromUnmapped).not.toHaveBeenCalled()
+  })
+})
