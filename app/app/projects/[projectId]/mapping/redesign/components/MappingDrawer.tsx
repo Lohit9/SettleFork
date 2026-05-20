@@ -59,6 +59,7 @@ import type { SourceFieldWithState } from '@/lib/types/mappings-for-redesign'
 import { TableBadge } from './TableBadge'
 import { DrawerHeader } from './DrawerHeader'
 import { InlineSourcePicker } from './InlineSourcePicker'
+import { TargetFieldCellPicker } from './TargetFieldCellPicker'
 
 // ─────────────────────────────────────────────────────────────────────────────
 // MappingDrawer — Phase 3 Gaps 7 + 8a + 8b + 9, extended in Phase 4a-2 / 4a-3 /
@@ -391,6 +392,20 @@ export interface MappingDrawerProps {
   onNavigateTarget?: (
     newTargetFieldId: string,
   ) => Promise<{ success: boolean }>
+  /**
+   * feat/drawer-body-editing-surface — handler for the source-field
+   * stub's "Pick a target…" affordance. Promotes an unmapped-source
+   * row to a mapped row: picker → on commit fires
+   * `promoteUnmappedSource(projectId, sourceFieldId, targetFieldId)`,
+   * which creates a new 1:1 TFM (target unmapped) or appends the source
+   * to the existing TFM (target already mapped). The parent re-points
+   * the drawer at the resulting TFM id via the `pendingDrawerRowId`
+   * sentinel. Optional: when absent, the stub skips the affordance.
+   */
+  onPromoteSource?: (
+    sourceFieldId: string,
+    targetFieldId: string,
+  ) => Promise<{ success: boolean }>
 }
 
 /**
@@ -419,6 +434,7 @@ export function MappingDrawer({
   onUnmapMapping,
   onCreateMapping,
   onNavigateTarget,
+  onPromoteSource,
 }: MappingDrawerProps) {
   const titleId = useId()
   const drawerRef = useRef<HTMLElement | null>(null)
@@ -781,6 +797,8 @@ export function MappingDrawer({
           row={row}
           titleId={titleId}
           onClose={maybeRequestClose}
+          onPromoteSource={onPromoteSource}
+          availableTargetFields={availableTargetFields}
         />
       </aside>
     )
@@ -828,7 +846,10 @@ export function MappingDrawer({
         onRemoveMappingClick={() => setConfirmRejectOpen(true)}
         onSwapSource={onSwapSource}
         onEditSources={onEditSources}
+        onSwapTarget={onSwapTarget}
+        onCreateMapping={onCreateMapping}
         availableSourceFields={availableSourceFields}
+        availableTargetFields={availableTargetFields}
       />
       <DrawerFooter
         row={effectiveRow}
@@ -891,13 +912,42 @@ function SourceFieldDrawerStub({
   row,
   titleId,
   onClose,
+  onPromoteSource,
+  availableTargetFields,
 }: {
   row: SourceFieldDrawerRow
   titleId: string
   onClose: () => void
+  /**
+   * feat/drawer-body-editing-surface — "Pick a target…" promotion
+   * handler. The stub stays minimal otherwise (per founder direction:
+   * no ack-lifecycle UI, no rich sample layouts) — this is the one
+   * editing affordance it carries.
+   */
+  onPromoteSource?: (
+    sourceFieldId: string,
+    targetFieldId: string,
+  ) => Promise<{ success: boolean }>
+  availableTargetFields?: readonly TargetFieldRef[]
 }) {
   const sf = row.sourceField
   const samples = sf.sampleValues.slice(0, 5)
+
+  // feat/drawer-body-editing-surface — anchored "Pick a target…" picker.
+  const [pickerAnchor, setPickerAnchor] = useState<HTMLElement | null>(null)
+  const pickButtonRef = useRef<HTMLButtonElement | null>(null)
+  const closeTargetPicker = useCallback(() => setPickerAnchor(null), [])
+  const targetPickable = Boolean(onPromoteSource && availableTargetFields)
+
+  const handlePickTargetCommit = useCallback(
+    async (newTargetFieldId: string) => {
+      if (!onPromoteSource) return { success: false }
+      const result = await onPromoteSource(sf.id, newTargetFieldId)
+      if (result.success) setPickerAnchor(null)
+      return result
+    },
+    [onPromoteSource, sf.id],
+  )
   return (
     <>
       <header
@@ -960,6 +1010,35 @@ function SourceFieldDrawerStub({
         data-drawer-kind="source-field-only"
         className="flex-1 overflow-auto px-6 py-5"
       >
+        {targetPickable ? (
+          <section
+            data-testid="drawer-section-source-stub-target"
+            className="mb-6"
+          >
+            <h3 className="mb-2 text-[11px] font-medium uppercase tracking-wide text-slate-500">
+              Target
+            </h3>
+            <button
+              ref={pickButtonRef}
+              type="button"
+              data-testid="drawer-source-stub-pick-target"
+              onClick={() => {
+                if (pickButtonRef.current) {
+                  setPickerAnchor(pickButtonRef.current)
+                }
+              }}
+              className={cn(
+                'inline-flex items-center gap-1 rounded border border-dashed border-slate-300 px-2 py-1',
+                'text-xs text-slate-500 transition-colors',
+                'hover:border-slate-400 hover:text-slate-700',
+                'focus:outline-none focus-visible:ring-1 focus-visible:ring-blue-500',
+              )}
+            >
+              <Plus className="h-3 w-3" />
+              <span>Pick a target…</span>
+            </button>
+          </section>
+        ) : null}
         {samples.length > 0 ? (
           <section
             data-testid="drawer-section-source-stub-samples"
@@ -1004,6 +1083,15 @@ function SourceFieldDrawerStub({
               {row.acknowledgmentReason}
             </p>
           </section>
+        ) : null}
+        {pickerAnchor && availableTargetFields ? (
+          <TargetFieldCellPicker
+            anchorRef={{ current: pickerAnchor }}
+            initialTargetFieldId={null}
+            availableTargetFields={availableTargetFields}
+            onCommit={handlePickTargetCommit}
+            onClose={closeTargetPicker}
+          />
         ) : null}
       </div>
     </>
@@ -1174,8 +1262,28 @@ interface DrawerBodyProps {
     sourceFieldIds: string[]
     combinationType: 'single' | 'concat_space' | 'concat_comma'
   }) => Promise<{ success: boolean }>
+  /**
+   * feat/drawer-body-editing-surface — body TARGET column pencil swap
+   * (mapped rows). Receives the bare TFM uuid and the new target field
+   * id; wraps `mutations.swapMappingTarget`.
+   */
+  onSwapTarget?: (
+    tfmId: string,
+    newTargetFieldId: string,
+  ) => Promise<{ success: boolean }>
+  /**
+   * feat/drawer-body-editing-surface — body SOURCE picker on the
+   * unmapped-target variant. "Pick a source…" → on commit promotes the
+   * unmapped-target row to a mapped row via `createMappingFromUnmapped`.
+   */
+  onCreateMapping?: (
+    sourceFieldId: string,
+    targetFieldId: string,
+  ) => Promise<{ success: boolean }>
   /** Source field universe for the body's source-swap and add-source pickers. */
   availableSourceFields?: readonly SourceFieldWithState[]
+  /** Target field universe for the body's TARGET column swap picker. */
+  availableTargetFields?: readonly TargetFieldRef[]
 }
 
 function DrawerBody(props: DrawerBodyProps) {
@@ -1198,7 +1306,10 @@ function BodyContent({
   onRemoveMappingClick,
   onSwapSource,
   onEditSources,
+  onSwapTarget,
+  onCreateMapping,
   availableSourceFields,
+  availableTargetFields,
 }: DrawerBodyProps) {
   switch (row.kind) {
     case 'mapped':
@@ -1211,7 +1322,9 @@ function BodyContent({
           onRemoveMappingClick={onRemoveMappingClick}
           onSwapSource={onSwapSource}
           onEditSources={onEditSources}
+          onSwapTarget={onSwapTarget}
           availableSourceFields={availableSourceFields}
+          availableTargetFields={availableTargetFields}
         />
       )
     case 'value_assignment':
@@ -1229,6 +1342,8 @@ function BodyContent({
           projectId={projectId}
           pathDOutputs={pathDOutputs}
           activeTab={activeTab}
+          onCreateMapping={onCreateMapping}
+          availableSourceFields={availableSourceFields}
         />
       )
   }
@@ -1755,6 +1870,17 @@ interface UnmappedBodyProps {
   pathDOutputs: PathDOutputs | null
   /** feat/mapping-drawer-redesign — which sub-tab content to render. */
   activeTab: DrawerTab
+  /**
+   * feat/drawer-body-editing-surface — "Pick a source…" promotion
+   * handler. Commits `createMappingFromUnmapped`, promoting this
+   * unmapped-target row to a mapped row.
+   */
+  onCreateMapping?: (
+    sourceFieldId: string,
+    targetFieldId: string,
+  ) => Promise<{ success: boolean }>
+  /** Source field universe for the "Pick a source…" picker. */
+  availableSourceFields?: readonly SourceFieldWithState[]
 }
 
 function UnmappedBody({
@@ -1762,7 +1888,28 @@ function UnmappedBody({
   projectId,
   pathDOutputs,
   activeTab,
+  onCreateMapping,
+  availableSourceFields,
 }: UnmappedBodyProps) {
+  // feat/drawer-body-editing-surface — "Pick a source…" affordance.
+  // The picker is an anchored popover; `pickerAnchor` holds the trigger
+  // button element while open. Hooks stay above the activeTab early
+  // return so the hook order is stable across tab switches.
+  const [pickerAnchor, setPickerAnchor] = useState<HTMLElement | null>(null)
+  const pickButtonRef = useRef<HTMLButtonElement | null>(null)
+  const closeSourcePicker = useCallback(() => setPickerAnchor(null), [])
+  const sourcePickable = Boolean(onCreateMapping && availableSourceFields)
+
+  const handlePickSourceCommit = useCallback(
+    async (newSourceFieldIds: string[]) => {
+      const newId = newSourceFieldIds[0]
+      if (!newId || !onCreateMapping) return { success: false }
+      const result = await onCreateMapping(newId, row.targetField.id)
+      if (result.success) setPickerAnchor(null)
+      return result
+    },
+    [onCreateMapping, row.targetField.id],
+  )
   // Phase E PR α — coverage rationale always renders (synthesized
   // "Manual entry required" orphan label when no coverage row exists).
   // Decisions render only when a coverage row exists AND it has
@@ -1805,6 +1952,36 @@ function UnmappedBody({
         </div>
       ) : null}
 
+      {sourcePickable ? (
+        <section
+          data-testid="drawer-section-unmapped-source"
+          className="mb-4"
+        >
+          <h3 className="mb-2 text-[11px] font-medium uppercase tracking-wide text-slate-500">
+            Source
+          </h3>
+          <button
+            ref={pickButtonRef}
+            type="button"
+            data-testid="drawer-unmapped-pick-source"
+            onClick={() => {
+              if (pickButtonRef.current) {
+                setPickerAnchor(pickButtonRef.current)
+              }
+            }}
+            className={cn(
+              'inline-flex items-center gap-1 rounded border border-dashed border-slate-300 px-2 py-1',
+              'text-xs text-slate-500 transition-colors',
+              'hover:border-slate-400 hover:text-slate-700',
+              'focus:outline-none focus-visible:ring-1 focus-visible:ring-blue-500',
+            )}
+          >
+            <Plus className="h-3 w-3" />
+            <span>Pick a source…</span>
+          </button>
+        </section>
+      ) : null}
+
       <TargetFieldSection targetField={row.targetField} />
 
       <AnalysisSection row={row} rowAiReasoningOverride={coverage?.ai_reasoning} />
@@ -1824,6 +2001,18 @@ function UnmappedBody({
             <DecisionList decisions={coverageDecisions} />
           </CollapsibleSection>
         </section>
+      ) : null}
+
+      {pickerAnchor && availableSourceFields ? (
+        <InlineSourcePicker
+          anchorRef={{ current: pickerAnchor }}
+          initialSourceFieldIds={[]}
+          availableSourceFields={[...availableSourceFields]}
+          onCommit={handlePickSourceCommit}
+          onClose={closeSourcePicker}
+          mode="single"
+          autoCommit={true}
+        />
       ) : null}
     </>
   )
@@ -1971,8 +2160,15 @@ interface MappedBodyProps {
     sourceFieldIds: string[]
     combinationType: 'single' | 'concat_space' | 'concat_comma'
   }) => Promise<{ success: boolean }>
+  /** feat/drawer-body-editing-surface — body TARGET column pencil swap. */
+  onSwapTarget?: (
+    tfmId: string,
+    newTargetFieldId: string,
+  ) => Promise<{ success: boolean }>
   /** Source field universe for body pickers. */
   availableSourceFields?: readonly SourceFieldWithState[]
+  /** Target field universe for the body's TARGET column swap picker. */
+  availableTargetFields?: readonly TargetFieldRef[]
 }
 
 function MappedBody({
@@ -1983,7 +2179,9 @@ function MappedBody({
   onRemoveMappingClick,
   onSwapSource,
   onEditSources,
+  onSwapTarget,
   availableSourceFields,
+  availableTargetFields,
 }: MappedBodyProps) {
   // feat/mapping-drawer-redesign — sections partition by sub-tab:
   //
@@ -2010,7 +2208,9 @@ function MappedBody({
         targetField={row.targetField}
         onSwapSource={onSwapSource}
         onEditSources={onEditSources}
+        onSwapTarget={onSwapTarget}
         availableSourceFields={availableSourceFields}
+        availableTargetFields={availableTargetFields}
       />
       <WhyThisMappingSection aiReasoning={row.aiReasoning} />
       <SampleSourceValuesSection
@@ -2066,7 +2266,9 @@ function MappingSourceTargetGrid({
   targetField,
   onSwapSource,
   onEditSources,
+  onSwapTarget,
   availableSourceFields,
+  availableTargetFields,
 }: {
   tfmId: string
   sources: readonly MappingSourceRef[]
@@ -2081,9 +2283,14 @@ function MappingSourceTargetGrid({
     sourceFieldIds: string[]
     combinationType: 'single' | 'concat_space' | 'concat_comma'
   }) => Promise<{ success: boolean }>
+  onSwapTarget?: (
+    tfmId: string,
+    newTargetFieldId: string,
+  ) => Promise<{ success: boolean }>
   availableSourceFields?: readonly SourceFieldWithState[]
+  availableTargetFields?: readonly TargetFieldRef[]
 }) {
-  // Picker open state. Two modes:
+  // Picker open state. Three modes:
   //   'swap-source'  — pencil clicked on a specific source block. The
   //                     picker pre-selects that source field; on commit
   //                     swap the single mapping_sources row via
@@ -2091,6 +2298,9 @@ function MappingSourceTargetGrid({
   //   'add-source'   — "+ Add source" button clicked. Picker opens with
   //                     no initial selection; on commit append to the
   //                     existing source list via `onEditSources`.
+  //   'swap-target'  — pencil clicked on the TARGET block. The picker
+  //                     pre-selects the current target; on commit swap
+  //                     the TFM's target field via `onSwapTarget`.
   type PickerState =
     | {
         mode: 'swap-source'
@@ -2102,6 +2312,10 @@ function MappingSourceTargetGrid({
         mode: 'add-source'
         anchorEl: HTMLElement
       }
+    | {
+        mode: 'swap-target'
+        anchorEl: HTMLElement
+      }
     | null
   const [picker, setPicker] = useState<PickerState>(null)
   const closePicker = useCallback(() => setPicker(null), [])
@@ -2111,6 +2325,9 @@ function MappingSourceTargetGrid({
   const editable = Boolean(
     onSwapSource && onEditSources && availableSourceFields,
   )
+  // The TARGET pencil is gated independently — a row can be source-
+  // editable without a target-swap handler threaded (test mounts).
+  const targetEditable = Boolean(onSwapTarget && availableTargetFields)
   const isMulti = sources.length > 1
 
   // `editMappingSources` rejects `custom_sql`. For mapped rows this is
@@ -2160,6 +2377,21 @@ function MappingSourceTargetGrid({
       setPicker({ mode: 'add-source', anchorEl })
     },
     [],
+  )
+
+  const handleSwapTargetClick = useCallback((anchorEl: HTMLElement) => {
+    setPicker({ mode: 'swap-target', anchorEl })
+  }, [])
+
+  // Target swap is TFM-atomic. A TARGET_CONFLICT (the picked target is
+  // already mapped) surfaces as an error toast from the mutation layer
+  // and `{ success: false }` keeps the picker open for a retry.
+  const handleTargetPickerCommit = useCallback(
+    async (newTargetFieldId: string) => {
+      if (!onSwapTarget) return { success: false }
+      return onSwapTarget(tfmId, newTargetFieldId)
+    },
+    [onSwapTarget, tfmId],
   )
 
   const handlePickerCommit = useCallback(
@@ -2245,10 +2477,16 @@ function MappingSourceTargetGrid({
             tableName={targetField.targetTable.name}
             fieldName={targetField.name}
             dataType={targetField.dataType}
+            onEditClick={
+              targetEditable ? handleSwapTargetClick : undefined
+            }
+            editAriaLabel={`Edit target ${targetField.name}`}
           />
         </div>
       </div>
-      {picker && availableSourceFields ? (
+      {picker &&
+      (picker.mode === 'swap-source' || picker.mode === 'add-source') &&
+      availableSourceFields ? (
         <InlineSourcePicker
           anchorRef={{ current: picker.anchorEl }}
           initialSourceFieldIds={pickerInitialIds}
@@ -2257,6 +2495,15 @@ function MappingSourceTargetGrid({
           onClose={closePicker}
           mode="single"
           autoCommit={true}
+        />
+      ) : null}
+      {picker && picker.mode === 'swap-target' && availableTargetFields ? (
+        <TargetFieldCellPicker
+          anchorRef={{ current: picker.anchorEl }}
+          initialTargetFieldId={targetField.id}
+          availableTargetFields={availableTargetFields}
+          onCommit={handleTargetPickerCommit}
+          onClose={closePicker}
         />
       ) : null}
     </section>

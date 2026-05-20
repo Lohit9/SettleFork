@@ -5254,3 +5254,207 @@ export async function setUnmappedRowRejected(input: {
 
   return { success: true, side: 'source' }
 }
+
+// ─── 5.5 promoteUnmappedSource ───────────────────────────────────────────────
+
+export type PromoteUnmappedSourceErrorCode =
+  | 'PERMISSION_DENIED'
+  | 'NOT_FOUND'
+  | 'VALIDATION'
+  | 'MAINTENANCE_MODE'
+  | 'INTERNAL'
+
+export type PromoteUnmappedSourceResult =
+  | {
+      success: true
+      tfmId: string
+      /**
+       * 'created'  — the target had no live TFM; a new single-source
+       *              mapping was created (1:1 promotion).
+       * 'appended' — the target was already mapped; the picked source was
+       *              added as a secondary contributor (single/multi → multi).
+       */
+      resolvedCase: 'created' | 'appended'
+    }
+  | {
+      success: false
+      error: string
+      errorCode: PromoteUnmappedSourceErrorCode
+    }
+
+/**
+ * Promote an unmapped-source flat-view row to a mapped row by picking a
+ * target field. Case-detecting — mirrors `createMappingFromUnmapped`'s
+ * internal branching:
+ *
+ *   • Target has no live TFM — delegate to `createMappingFromUnmapped`,
+ *     which creates a new single-source TFM (combination='single',
+ *     status='approved') and clears the source acknowledgment.
+ *   • Target already has a live TFM — append the picked source via
+ *     `editMappingSources([...existing, picked])`. A single-source TFM
+ *     promotes to multi (`combination_type` → 'concat_space'); an
+ *     already-multi TFM keeps its combination type. The source
+ *     acknowledgment row is then deleted so the source stops surfacing
+ *     as unmapped (`editMappingSources` operates on the TFM only and
+ *     does not touch `source_field_acknowledgments`).
+ *
+ * Returns the resulting TFM id so the caller (drawer) can re-point to
+ * the promoted mapped row.
+ */
+export async function promoteUnmappedSource(input: {
+  projectId: string
+  sourceFieldId: string
+  targetFieldId: string
+}): Promise<PromoteUnmappedSourceResult> {
+  const { projectId, sourceFieldId, targetFieldId } = input
+
+  // ── Step 1: input validation ────────────────────────────────────────────
+  if (!projectId || !sourceFieldId || !targetFieldId) {
+    return {
+      success: false,
+      error: 'projectId, sourceFieldId, and targetFieldId are required',
+      errorCode: 'VALIDATION',
+    }
+  }
+
+  // ── Step 2: auth ────────────────────────────────────────────────────────
+  const supabase = await createClient()
+  const {
+    data: { user },
+  } = await supabase.auth.getUser()
+  if (!user) {
+    return {
+      success: false,
+      error: 'Not authenticated',
+      errorCode: 'PERMISSION_DENIED',
+    }
+  }
+
+  // ── Step 3: project permission ──────────────────────────────────────────
+  const perm = await requireProjectPermission(projectId, 'editor')
+  if (!perm.allowed) {
+    return {
+      success: false,
+      error: perm.error ?? 'Insufficient permissions',
+      errorCode: 'PERMISSION_DENIED',
+    }
+  }
+
+  // ── Step 4: case detection — is there a live TFM at the target? ─────────
+  const { data: existingTfm } = await supabaseAdmin
+    .from('target_field_mappings')
+    .select('id, status, is_acknowledged, combination_type')
+    .eq('project_id', projectId)
+    .eq('target_field_id', targetFieldId)
+    .maybeSingle<{
+      id: string
+      status: 'needs_review' | 'approved' | 'rejected'
+      is_acknowledged: boolean
+      combination_type: string | null
+    }>()
+
+  // A bare-acknowledged TFM (is_acknowledged + no combination_type) or a
+  // rejected husk does NOT count as live — the create branch clears
+  // those states itself, matching `createMappingFromUnmapped`'s detection.
+  const targetHasLiveTfm =
+    existingTfm !== null &&
+    !(existingTfm.is_acknowledged && existingTfm.combination_type === null) &&
+    existingTfm.status !== 'rejected'
+
+  // ── Step 5a: target unmapped — delegate to createMappingFromUnmapped ────
+  if (!targetHasLiveTfm) {
+    const created = await createMappingFromUnmapped({
+      projectId,
+      sourceFieldId,
+      targetFieldId,
+    })
+    if (!created.success) {
+      return {
+        success: false,
+        error: created.error,
+        // TARGET_CONFLICT is unreachable here (we already established the
+        // target has no live TFM) but the union must stay narrow.
+        errorCode:
+          created.errorCode === 'TARGET_CONFLICT'
+            ? 'VALIDATION'
+            : created.errorCode,
+      }
+    }
+    return { success: true, tfmId: created.tfmId, resolvedCase: 'created' }
+  }
+
+  // ── Step 5b: target already mapped — append the picked source ───────────
+  const { data: existingSources, error: esErr } = await supabaseAdmin
+    .from('mapping_sources')
+    .select('source_field_id, ordinal')
+    .eq('target_field_mapping_id', existingTfm.id)
+    .order('ordinal', { ascending: true })
+    .returns<
+      Array<{ source_field_id: string | null; ordinal: number | null }>
+    >()
+  if (esErr || !existingSources) {
+    return {
+      success: false,
+      error: 'Failed to read existing mapping sources',
+      errorCode: 'INTERNAL',
+    }
+  }
+  const existingSourceFieldIds = existingSources
+    .map((s) => s.source_field_id)
+    .filter((id): id is string => id !== null)
+
+  if (existingSourceFieldIds.includes(sourceFieldId)) {
+    return {
+      success: false,
+      error: "This source field is already part of the target's mapping.",
+      errorCode: 'VALIDATION',
+    }
+  }
+
+  // Appending a source makes the set size ≥ 2 → a multi combination type
+  // is required. Keep an existing multi type; promote 'single' (or any
+  // non-multi value) to 'concat_space'.
+  const isMultiCombination =
+    existingTfm.combination_type === 'concat_space' ||
+    existingTfm.combination_type === 'concat_comma'
+  const combinationType: CreateFieldMappingCombinationType = isMultiCombination
+    ? (existingTfm.combination_type as CreateFieldMappingCombinationType)
+    : 'concat_space'
+
+  const edited = await editMappingSources({
+    tfmId: existingTfm.id,
+    sourceFieldIds: [...existingSourceFieldIds, sourceFieldId],
+    combinationType,
+  })
+  if (!edited.success) {
+    return {
+      success: false,
+      error: edited.error,
+      // editMappingSources' defensive-only codes collapse into VALIDATION
+      // for this action's narrower union.
+      errorCode:
+        edited.errorCode === 'TFM_REJECTED' ||
+        edited.errorCode === 'TFM_ACKNOWLEDGED'
+          ? 'VALIDATION'
+          : edited.errorCode,
+    }
+  }
+
+  // ── Step 6: clear the source acknowledgment ─────────────────────────────
+  // editMappingSources mutates the TFM only; the source may still carry a
+  // source_field_acknowledgments row. Delete it so the source stops
+  // surfacing as unmapped — mirrors createMappingFromUnmapped step 8.
+  const { error: ackDelErr } = await supabaseAdmin
+    .from('source_field_acknowledgments')
+    .delete()
+    .eq('project_id', projectId)
+    .eq('source_field_id', sourceFieldId)
+  if (ackDelErr) {
+    console.warn(
+      '[promoteUnmappedSource] source ack delete failed (sources edited):',
+      ackDelErr.message,
+    )
+  }
+
+  return { success: true, tfmId: existingTfm.id, resolvedCase: 'appended' }
+}
