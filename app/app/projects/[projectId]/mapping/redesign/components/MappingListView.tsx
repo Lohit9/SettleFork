@@ -572,8 +572,11 @@ export function MappingListView({
       if (openPicker?.kind !== 'target') return { success: false }
       let result: { success: boolean }
       if (openPicker.sourceFieldIdForCreate) {
-        // Create-from-unmapped (source-side row picked a target):
-        result = await mutations.createFromUnmapped({
+        // Unmapped-source row picked a target → promote. Routes through
+        // `promoteUnmappedSource` (not `createFromUnmapped`): the server
+        // action case-detects target-unmapped (new 1:1 TFM) vs
+        // target-already-mapped (append source to the existing TFM).
+        result = await mutations.promoteUnmappedSource({
           sourceFieldId: openPicker.sourceFieldIdForCreate,
           targetFieldId: newTargetFieldId,
           pendingKey: openPicker.rowId,
@@ -1143,6 +1146,27 @@ function FlatRowView({
               ) : (
                 <FieldNameChip name={targetFieldName} />
               )
+            ) : row.kind === 'unmapped-source' ? (
+              // Unmapped-source rows have no target — render a "Pick a
+              // target…" affordance mirroring the unmapped-target
+              // "Pick a source…" cell. Commit routes through
+              // `promoteUnmappedSource`.
+              <button
+                ref={targetCellRef}
+                type="button"
+                data-testid="flat-cell-target-field-button"
+                onClick={(e) => {
+                  e.stopPropagation()
+                  onTargetCellClick(row, e.currentTarget)
+                }}
+                className={cn(
+                  'inline-flex items-center justify-start rounded px-1 py-0.5 text-sm',
+                  'italic text-slate-400 hover:bg-blue-100/60 hover:text-slate-600',
+                  'focus:outline-none focus-visible:ring-1 focus-visible:ring-blue-500',
+                )}
+              >
+                Pick a target…
+              </button>
             ) : (
               <span className="text-gray-300">—</span>
             )}

@@ -799,6 +799,8 @@ export function MappingDrawer({
           onClose={maybeRequestClose}
           onPromoteSource={onPromoteSource}
           availableTargetFields={availableTargetFields}
+          activeTab={activeTab}
+          onTabChange={setActiveTab}
         />
       </aside>
     )
@@ -900,13 +902,109 @@ function applyOptimisticApprove(row: MappingRow): MappingRow {
   return row
 }
 
-// ── feat/mapping-row-uniformity — source-side drawer stub ──────────────────
+// ── feat/unmapped-source-drawer-parity — source-field drawer ───────────────
 //
-// Minimal viewing surface for source-side rows. Renders identity
-// (table + field name) + up to 5 sample values + ack reason (when the
-// row carries one) + close button. No editing UI: approve / reject
-// for source-side rows continue to live on the flat-view hover
-// cluster. Content evolution is a follow-up PR with proper design.
+// Restructured from the PR #146 minimal stub (+ PR #150 target picker)
+// into a full drawer body that mirrors the unmapped-TARGET drawer: a
+// compact header (MAPPING label · source title · confidence line),
+// Mapping / Transform tabs, and SOURCE / TARGET / EXPLANATION sections.
+// `source-field-only` stays on its own `<aside>` branch — it is a
+// structurally distinct entity (no `targetField`, no MappingRow status
+// lifecycle) so it does NOT route through DrawerHeader / DrawerBody /
+// DrawerFooter; visual parity comes from reusing the presentational
+// pieces (DrawerTabStrip, DrawerSection, CollapsibleSection,
+// ReasoningProse).
+
+// SOURCE section — source field identity + collapsible sample values.
+// Mirrors `TargetFieldSection`'s shape for the unmapped-target drawer.
+function SourceFieldDetailSection({
+  sourceField,
+}: {
+  sourceField: SourceFieldWithState
+}) {
+  const visibleSamples = sourceField.sampleValues.slice(
+    0,
+    TARGET_SAMPLE_VALUES_UI_CAP,
+  )
+  return (
+    <DrawerSection
+      title="Source field"
+      testId="drawer-section-source-stub-field"
+    >
+      <div className="space-y-1">
+        <div
+          data-testid="drawer-source-stub-field-identity"
+          className="flex min-w-0 flex-wrap items-baseline gap-x-1.5 text-sm"
+        >
+          <span
+            data-testid="drawer-source-stub-field-name"
+            className="min-w-0 truncate font-mono text-slate-900"
+            title={sourceField.name}
+          >
+            {sourceField.name || '—'}
+          </span>
+          <span aria-hidden="true" className="text-slate-400">
+            ·
+          </span>
+          <span
+            data-testid="drawer-source-stub-field-table"
+            className="truncate text-slate-600"
+            title={sourceField.sourceTable.name}
+          >
+            {sourceField.sourceTable.name}
+          </span>
+          <span aria-hidden="true" className="text-slate-400">
+            ·
+          </span>
+          <span
+            data-testid="drawer-source-stub-field-type"
+            className="font-mono text-xs text-slate-500"
+          >
+            {sourceField.dataType}
+          </span>
+        </div>
+
+        <div className="mt-3">
+          {visibleSamples.length > 0 ? (
+            <CollapsibleSection
+              label="Sample values"
+              count={visibleSamples.length}
+              toggleTestId="drawer-source-stub-field-samples-toggle"
+              panelTestId="drawer-source-stub-field-sample-values-list"
+            >
+              <ul className="flex flex-col">
+                {visibleSamples.map((value, idx) => (
+                  <li
+                    key={`${idx}-${value}`}
+                    className={cn(
+                      'border-b border-slate-100 py-1 last:border-b-0',
+                      'break-words font-mono text-xs text-slate-700',
+                    )}
+                    data-testid="drawer-source-stub-field-sample-row"
+                  >
+                    {value}
+                  </li>
+                ))}
+              </ul>
+            </CollapsibleSection>
+          ) : (
+            <>
+              <div className="text-[11px] font-medium uppercase tracking-wide text-slate-500">
+                Sample values
+              </div>
+              <p
+                data-testid="drawer-source-stub-field-no-samples"
+                className="mt-1 text-xs italic text-slate-400"
+              >
+                No sample data available
+              </p>
+            </>
+          )}
+        </div>
+      </div>
+    </DrawerSection>
+  )
+}
 
 function SourceFieldDrawerStub({
   row,
@@ -914,26 +1012,27 @@ function SourceFieldDrawerStub({
   onClose,
   onPromoteSource,
   availableTargetFields,
+  activeTab,
+  onTabChange,
 }: {
   row: SourceFieldDrawerRow
   titleId: string
   onClose: () => void
   /**
-   * feat/drawer-body-editing-surface — "Pick a target…" promotion
-   * handler. The stub stays minimal otherwise (per founder direction:
-   * no ack-lifecycle UI, no rich sample layouts) — this is the one
-   * editing affordance it carries.
+   * "Pick a target…" promotion handler (PR #150). On commit the row
+   * promotes; the parent re-points the drawer at the resulting TFM.
    */
   onPromoteSource?: (
     sourceFieldId: string,
     targetFieldId: string,
   ) => Promise<{ success: boolean }>
   availableTargetFields?: readonly TargetFieldRef[]
+  activeTab: DrawerTab
+  onTabChange: (next: DrawerTab) => void
 }) {
   const sf = row.sourceField
-  const samples = sf.sampleValues.slice(0, 5)
 
-  // feat/drawer-body-editing-surface — anchored "Pick a target…" picker.
+  // Anchored "Pick a target…" picker.
   const [pickerAnchor, setPickerAnchor] = useState<HTMLElement | null>(null)
   const pickButtonRef = useRef<HTMLButtonElement | null>(null)
   const closeTargetPicker = useCallback(() => setPickerAnchor(null), [])
@@ -948,143 +1047,167 @@ function SourceFieldDrawerStub({
     },
     [onPromoteSource, sf.id],
   )
+
+  const confidencePct =
+    sf.confidence !== null && sf.confidence !== undefined
+      ? formatConfidencePercent(sf.confidence)
+      : null
+
   return (
     <>
+      {/* Compact header — parity with DrawerHeader: MAPPING label,
+          source title (table · field chip), confidence line. The
+          source field has no target, so it always reads "needs
+          review" (slate dot). */}
       <header
         data-testid="mapping-drawer-source-stub-header"
-        className="flex items-start justify-between gap-3 border-b border-slate-200 bg-white px-6 py-4"
+        className="border-b border-slate-200 bg-white px-6 py-4"
       >
-        <div className="min-w-0 flex-1">
-          <div
-            data-testid="mapping-drawer-source-stub-label"
-            className="text-[11px] font-medium uppercase tracking-wide text-slate-500"
-          >
-            Source field
-          </div>
-          <h2
-            id={titleId}
-            data-testid="mapping-drawer-source-stub-title"
-            className="mt-1 flex min-w-0 flex-wrap items-center gap-x-1 gap-y-1 text-base font-normal text-slate-900"
-          >
-            <span
-              data-testid="mapping-drawer-source-stub-table"
-              title={sf.sourceTable.name}
-              className="truncate text-[11px] font-medium uppercase tracking-wide text-slate-500"
+        <div className="flex items-start justify-between gap-3">
+          <div className="min-w-0 flex-1">
+            <div
+              data-testid="mapping-drawer-source-stub-label"
+              className="text-[11px] font-medium uppercase tracking-wide text-slate-500"
             >
-              {sf.sourceTable.name}
-            </span>
-            <span aria-hidden="true" className="text-slate-300">
-              ·
-            </span>
-            <span
-              data-testid="mapping-drawer-source-stub-field"
-              title={sf.name}
-              className="inline-block max-w-full truncate rounded bg-slate-100 px-1.5 py-0.5 font-mono text-sm font-medium text-slate-700"
+              Mapping
+            </div>
+            <h2
+              id={titleId}
+              data-testid="mapping-drawer-source-stub-title"
+              className="mt-1 flex min-w-0 flex-wrap items-center gap-x-1 gap-y-1 text-base font-normal text-slate-900"
             >
-              {sf.name || '—'}
-            </span>
-          </h2>
-          <div
-            data-testid="mapping-drawer-source-stub-type"
-            className="mt-1 font-mono text-xs text-slate-500"
-          >
-            {sf.dataType}
+              <span
+                data-testid="mapping-drawer-source-stub-table"
+                title={sf.sourceTable.name}
+                className="truncate text-[11px] font-medium uppercase tracking-wide text-slate-500"
+              >
+                {sf.sourceTable.name}
+              </span>
+              <span aria-hidden="true" className="text-slate-300">
+                ·
+              </span>
+              <span
+                data-testid="mapping-drawer-source-stub-field"
+                title={sf.name}
+                className="inline-block max-w-full truncate rounded bg-slate-100 px-1.5 py-0.5 font-mono text-sm font-medium text-slate-700"
+              >
+                {sf.name || '—'}
+              </span>
+            </h2>
+            <div
+              data-testid="mapping-drawer-source-stub-confidence"
+              data-status="needs_review"
+              className="mt-2 flex items-center gap-2 text-xs text-slate-600"
+            >
+              <span
+                aria-hidden="true"
+                className="inline-block h-2 w-2 flex-shrink-0 rounded-full bg-slate-400 ring-2 ring-slate-400/25"
+              />
+              <span data-testid="mapping-drawer-source-stub-confidence-text">
+                {confidencePct ? (
+                  <>
+                    <span className="tabular-nums text-slate-700">
+                      {confidencePct}
+                    </span>
+                    <span className="ml-1">needs review</span>
+                  </>
+                ) : (
+                  <span className="capitalize">needs review</span>
+                )}
+              </span>
+            </div>
           </div>
+          <button
+            type="button"
+            onClick={onClose}
+            aria-label="Close drawer"
+            data-testid="mapping-drawer-close"
+            className={cn(
+              'inline-flex h-6 w-6 flex-shrink-0 items-center justify-center rounded-md',
+              'text-slate-400 transition-colors hover:bg-slate-100 hover:text-slate-700',
+              'focus:outline-none focus-visible:ring-2 focus-visible:ring-slate-300',
+            )}
+          >
+            <X className="h-3.5 w-3.5" />
+          </button>
         </div>
-        <button
-          type="button"
-          onClick={onClose}
-          aria-label="Close drawer"
-          data-testid="mapping-drawer-close"
-          className={cn(
-            'inline-flex h-6 w-6 flex-shrink-0 items-center justify-center rounded-md',
-            'text-slate-400 transition-colors hover:bg-slate-100 hover:text-slate-700',
-            'focus:outline-none focus-visible:ring-2 focus-visible:ring-slate-300',
-          )}
-        >
-          <X className="h-3.5 w-3.5" />
-        </button>
       </header>
+      <DrawerTabStrip activeTab={activeTab} onTabChange={onTabChange} />
       <div
         data-testid="mapping-drawer-body"
         data-drawer-kind="source-field-only"
+        data-active-tab={activeTab}
         className="flex-1 overflow-auto px-6 py-5"
       >
-        {targetPickable ? (
-          <section
-            data-testid="drawer-section-source-stub-target"
-            className="mb-6"
+        {activeTab === 'transform' ? (
+          <p
+            data-testid="drawer-source-stub-transform-empty"
+            className="text-sm italic text-slate-400"
           >
-            <h3 className="mb-2 text-[11px] font-medium uppercase tracking-wide text-slate-500">
-              Target
-            </h3>
-            <button
-              ref={pickButtonRef}
-              type="button"
-              data-testid="drawer-source-stub-pick-target"
-              onClick={() => {
-                if (pickButtonRef.current) {
-                  setPickerAnchor(pickButtonRef.current)
-                }
-              }}
-              className={cn(
-                'inline-flex items-center gap-1 rounded border border-dashed border-slate-300 px-2 py-1',
-                'text-xs text-slate-500 transition-colors',
-                'hover:border-slate-400 hover:text-slate-700',
-                'focus:outline-none focus-visible:ring-1 focus-visible:ring-blue-500',
-              )}
+            No transformation — pick a target field first to define one.
+          </p>
+        ) : (
+          <>
+            <SourceFieldDetailSection sourceField={sf} />
+
+            <section
+              data-testid="drawer-section-source-stub-target"
+              className="mb-6"
             >
-              <Plus className="h-3 w-3" />
-              <span>Pick a target…</span>
-            </button>
-          </section>
-        ) : null}
-        {samples.length > 0 ? (
-          <section
-            data-testid="drawer-section-source-stub-samples"
-            className="mb-6"
-          >
-            <h3 className="mb-2 text-[11px] font-medium uppercase tracking-wide text-slate-500">
-              Sample source values
-            </h3>
-            <ul
-              data-testid="drawer-source-stub-samples-list"
-              className="divide-y divide-slate-100 rounded border border-slate-200"
-            >
-              {samples.map((value, idx) => (
-                <li
-                  key={`${idx}-${value}`}
-                  data-testid="drawer-source-stub-sample-row"
-                  className="flex items-center justify-between gap-3 px-3 py-1.5 text-sm"
+              <h3 className="mb-2 text-[11px] font-medium uppercase tracking-wide text-slate-500">
+                Target
+              </h3>
+              {targetPickable ? (
+                <button
+                  ref={pickButtonRef}
+                  type="button"
+                  data-testid="drawer-source-stub-pick-target"
+                  onClick={() => {
+                    if (pickButtonRef.current) {
+                      setPickerAnchor(pickButtonRef.current)
+                    }
+                  }}
+                  className={cn(
+                    'inline-flex items-center gap-1 rounded border border-dashed border-slate-300 px-2 py-1',
+                    'text-xs text-slate-500 transition-colors',
+                    'hover:border-slate-400 hover:text-slate-700',
+                    'focus:outline-none focus-visible:ring-1 focus-visible:ring-blue-500',
+                  )}
                 >
-                  <span className="min-w-0 flex-1 truncate break-words font-mono text-slate-700">
-                    {value}
-                  </span>
-                  <span className="shrink-0 text-[11px] text-slate-400">
-                    row {idx + 1}
-                  </span>
-                </li>
-              ))}
-            </ul>
-          </section>
-        ) : null}
-        {row.acknowledgmentReason ? (
-          <section
-            data-testid="drawer-section-source-stub-ack-reason"
-            className="mb-6"
-          >
-            <h3 className="mb-2 text-[11px] font-medium uppercase tracking-wide text-slate-500">
-              Acknowledgment reason
-            </h3>
-            <p
-              data-testid="drawer-source-stub-ack-reason-text"
-              className="text-sm leading-relaxed text-slate-700"
-            >
-              {row.acknowledgmentReason}
-            </p>
-          </section>
-        ) : null}
-        {pickerAnchor && availableTargetFields ? (
+                  <Plus className="h-3 w-3" />
+                  <span>Pick a target…</span>
+                </button>
+              ) : (
+                <p
+                  data-testid="drawer-source-stub-target-empty"
+                  className="text-sm italic text-slate-400"
+                >
+                  No target picked yet.
+                </p>
+              )}
+            </section>
+
+            <SourceExplanationSection aiReasoning={sf.aiReasoning} />
+
+            {row.acknowledgmentReason ? (
+              <section
+                data-testid="drawer-section-source-stub-ack-reason"
+                className="mb-6"
+              >
+                <h3 className="mb-2 text-[11px] font-medium uppercase tracking-wide text-slate-500">
+                  Acknowledgment reason
+                </h3>
+                <p
+                  data-testid="drawer-source-stub-ack-reason-text"
+                  className="text-sm leading-relaxed text-slate-700"
+                >
+                  {row.acknowledgmentReason}
+                </p>
+              </section>
+            ) : null}
+          </>
+        )}
+        {activeTab === 'mapping' && pickerAnchor && availableTargetFields ? (
           <TargetFieldCellPicker
             anchorRef={{ current: pickerAnchor }}
             initialTargetFieldId={null}
@@ -2688,6 +2811,7 @@ function isReasoningCodeToken(match: string): boolean {
 function renderReasoningInline(
   text: string,
   keyPrefix: string,
+  testIdPrefix: string,
 ): React.ReactNode[] {
   const nodes: React.ReactNode[] = []
   let lastIndex = 0
@@ -2700,7 +2824,7 @@ function renderReasoningInline(
     nodes.push(
       <code
         key={`${keyPrefix}-code-${codeIndex}`}
-        data-testid="drawer-why-this-mapping-code"
+        data-testid={`${testIdPrefix}-code`}
         className="rounded bg-slate-100 px-1 py-0.5 font-mono text-[11px] text-slate-700"
       >
         {matchText}
@@ -2713,13 +2837,57 @@ function renderReasoningInline(
   return nodes
 }
 
-function WhyThisMappingSection({ aiReasoning }: { aiReasoning: string | null }) {
-  const text = aiReasoning?.trim()
-  if (!text) return null
+// Shared reasoning-prose renderer (Refinement #5b → reused by #6). Splits
+// `\n\n`-separated text into paragraphs, bolds a leading "Field type:"
+// prefix, and promotes SQL-keyword phrases to inline code. `testIdPrefix`
+// keeps each consumer's testids stable: WHY THIS MAPPING passes
+// `drawer-why-this-mapping`, the source EXPLANATION passes
+// `drawer-source-explanation`.
+function ReasoningProse({
+  text,
+  testIdPrefix,
+}: {
+  text: string
+  testIdPrefix: string
+}) {
   const paragraphs = text
     .split(/\n{2,}/)
     .map((p) => p.trim())
     .filter((p) => p.length > 0)
+  return (
+    <div data-testid={`${testIdPrefix}-text`} className="space-y-2">
+      {paragraphs.map((para, idx) => {
+        const isLeading = idx === 0 && para.startsWith(FIELD_TYPE_PREFIX)
+        return (
+          <p
+            key={idx}
+            data-testid={`${testIdPrefix}-paragraph`}
+            className="text-sm leading-relaxed text-slate-700"
+          >
+            {isLeading ? (
+              <>
+                <span className="font-semibold text-slate-900">
+                  {FIELD_TYPE_PREFIX}
+                </span>
+                {renderReasoningInline(
+                  para.slice(FIELD_TYPE_PREFIX.length),
+                  `${testIdPrefix}-p${idx}`,
+                  testIdPrefix,
+                )}
+              </>
+            ) : (
+              renderReasoningInline(para, `${testIdPrefix}-p${idx}`, testIdPrefix)
+            )}
+          </p>
+        )
+      })}
+    </div>
+  )
+}
+
+function WhyThisMappingSection({ aiReasoning }: { aiReasoning: string | null }) {
+  const text = aiReasoning?.trim()
+  if (!text) return null
   return (
     <section
       data-testid="drawer-section-why-this-mapping"
@@ -2728,38 +2896,33 @@ function WhyThisMappingSection({ aiReasoning }: { aiReasoning: string | null }) 
       <h3 className="mb-2 text-[11px] font-medium uppercase tracking-wide text-slate-500">
         Why this mapping
       </h3>
-      {/* The `drawer-why-this-mapping-text` testid moves to this wrapper
-          (now spanning every paragraph) so callers reading its
-          textContent stay correct. */}
-      <div
-        data-testid="drawer-why-this-mapping-text"
-        className="space-y-2"
-      >
-        {paragraphs.map((para, idx) => {
-          const isLeading = idx === 0 && para.startsWith(FIELD_TYPE_PREFIX)
-          return (
-            <p
-              key={idx}
-              data-testid="drawer-why-this-mapping-paragraph"
-              className="text-sm leading-relaxed text-slate-700"
-            >
-              {isLeading ? (
-                <>
-                  <span className="font-semibold text-slate-900">
-                    {FIELD_TYPE_PREFIX}
-                  </span>
-                  {renderReasoningInline(
-                    para.slice(FIELD_TYPE_PREFIX.length),
-                    `p${idx}`,
-                  )}
-                </>
-              ) : (
-                renderReasoningInline(para, `p${idx}`)
-              )}
-            </p>
-          )
-        })}
-      </div>
+      <ReasoningProse text={text} testIdPrefix="drawer-why-this-mapping" />
+    </section>
+  )
+}
+
+// feat/unmapped-source-drawer-parity — EXPLANATION section for the
+// source-field drawer. Mirrors WHY THIS MAPPING's visual treatment
+// (shared `ReasoningProse`) over `SourceFieldWithState.aiReasoning`.
+function SourceExplanationSection({
+  aiReasoning,
+}: {
+  aiReasoning: string | null
+}) {
+  const text = aiReasoning?.trim()
+  if (!text) return null
+  return (
+    <section
+      data-testid="drawer-section-source-explanation"
+      className="mb-6"
+    >
+      <h3 className="mb-2 text-[11px] font-medium uppercase tracking-wide text-slate-500">
+        Explanation
+      </h3>
+      <ReasoningProse
+        text={text}
+        testIdPrefix="drawer-source-explanation"
+      />
     </section>
   )
 }
