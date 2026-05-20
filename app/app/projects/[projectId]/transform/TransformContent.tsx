@@ -485,8 +485,6 @@ export default function TransformContent({ projectId, projectName, initialData, 
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [searchParams])
 
-  const needsTransformCount = useMemo(() => countNeedsTransform(data.datasets), [data.datasets])
-
   // Phase 3 — Tables filter is target-table-led to mirror the sidebar's
   // new grouping. The dropdown lists each target table once, with the
   // contained fields (TFMs) as the leaves. Multi-source TFMs surface
@@ -519,11 +517,12 @@ export default function TransformContent({ projectId, projectName, initialData, 
     // dropped per Finding 8; `mapped` is now `allFieldsFlat` directly.
     const mapped = allFieldsFlat
     const totalUnmapped = data.unmappedNotNullTargetFields.length + data.unmappedNullableTargetFields.length
+    const defineUnmapped = data.unmappedNotNullTargetFields.length
     // Migration 077 — dismissed VAs are addressed; they don't claim
     // attention from the `needs_transform` bucket. They DO still count
     // toward `all` (so the full TFM total isn't silently shrunk) but
     // are filtered out everywhere a "needs work" semantic applies.
-    const needsTransform = mapped.filter((f) => f.needsTransform).length
+    const needsTransform = mapped.filter((f) => f.needsTransform).length + defineUnmapped
     const dismissed = mapped.filter((f) => f.vaDismissed).length
     return {
       all: mapped.length + totalUnmapped,
@@ -534,6 +533,8 @@ export default function TransformContent({ projectId, projectName, initialData, 
       dismissed,
     }
   }, [allFieldsFlat, data.unmappedNotNullTargetFields.length, data.unmappedNullableTargetFields.length])
+
+  const needsTransformCount = filterCounts.needs_transform
 
   const sidebarSummary = useMemo(() => {
     const applied = filterCounts.applied
@@ -934,13 +935,14 @@ export default function TransformContent({ projectId, projectName, initialData, 
                 sourceTableId: null,
                 isValueAssignment: true,
                 typeCompatibility: null,
-                confidence: null,
-                aiReasoning: null,
+                confidence: uf.confidence ?? null,
+                aiReasoning: uf.aiReasoning ?? null,
+                transformationIntent: uf.transformationIntent ?? null,
                 nullPercentage: 0,
                 formatIssuesCount: 0,
                 sampleValues: [],
                 cardinality: 0,
-                needsTransform: true,
+                needsTransform: uf.transformationNeeded ?? true,
                 transformation: {
                   id: transformationId,
                   target_field_mapping_id: fmId,
@@ -1715,13 +1717,14 @@ export default function TransformContent({ projectId, projectName, initialData, 
           sourceTableId: null,
           isValueAssignment: true,
           typeCompatibility: null,
-          confidence: null,
-          aiReasoning: null,
+          confidence: uf.confidence ?? null,
+          aiReasoning: uf.aiReasoning ?? null,
+          transformationIntent: uf.transformationIntent ?? null,
           nullPercentage: 0,
           formatIssuesCount: 0,
           sampleValues: [],
           cardinality: 0,
-          needsTransform: true,
+          needsTransform: uf.transformationNeeded ?? true,
           transformation: null,
           isContributing: false,
           contributingSourceFields: [],
@@ -1732,7 +1735,52 @@ export default function TransformContent({ projectId, projectName, initialData, 
         return { field: syntheticField, table: tbl, dataset: ds }
       }
     }
-    return null
+    return {
+      field: {
+        fieldMappingId: selectedMappingId,
+        sourceFieldId: null,
+        sourceFieldName: null,
+        sourceFieldDataType: null,
+        sourceFieldInferredType: null,
+        sourceFieldIsNullable: true,
+        targetFieldId: uf.id,
+        targetFieldName: uf.name,
+        targetFieldDataType: uf.data_type,
+        targetFieldInferredType: null,
+        targetFieldIsNullable: uf.is_nullable,
+        targetFieldIsPrimaryKey: uf.is_primary_key,
+        sourceTableId: null,
+        isValueAssignment: true,
+        typeCompatibility: null,
+        confidence: uf.confidence ?? null,
+        aiReasoning: uf.aiReasoning ?? null,
+        transformationIntent: uf.transformationIntent ?? null,
+        nullPercentage: 0,
+        formatIssuesCount: 0,
+        sampleValues: [],
+        cardinality: 0,
+        needsTransform: uf.transformationNeeded ?? true,
+        transformation: null,
+        isContributing: false,
+        contributingSourceFields: [],
+        isCrossTable: false,
+        vaDismissed: false,
+        targetCheckConstraint: uf.check_constraint,
+      },
+      table: {
+        tableMappingId: '',
+        sourceTableId: '',
+        targetTableId: uf.table_id,
+        sourceTableName: '',
+        targetTableName: uf.table_name,
+        fields: [],
+      },
+      dataset: {
+        datasetId: '',
+        datasetName: '',
+        tables: [],
+      },
+    }
   }, [data.datasets, data.unmappedNotNullTargetFields, data.unmappedNullableTargetFields, selectedMappingId, selectedUnmappedFieldId])
 
   function statusBadge() {
@@ -2116,7 +2164,7 @@ export default function TransformContent({ projectId, projectName, initialData, 
               <div className="flex-1 flex flex-col min-h-0">
                 <div className="flex-1 overflow-auto p-5 space-y-4">
 
-                  {selectedContext.field.needsTransform ? (
+                  {selectedContext.field.needsTransform || selectedContext.field.isValueAssignment ? (
                     <>
                   {/* NL Description / Direct SQL — first interactive element */}
                   <div className="bg-white rounded-lg border border-gray-100 p-4">
@@ -2273,6 +2321,7 @@ export default function TransformContent({ projectId, projectName, initialData, 
 
                   {/* Why Transform? — collapsible reference block, collapsed by default */}
                   {(selectedContext.field.aiReasoning
+                    || selectedContext.field.transformationIntent
                     || selectedContext.field.isValueAssignment
                     || selectedContext.field.typeCompatibility
                     || selectedContext.field.confidence != null
@@ -2286,7 +2335,9 @@ export default function TransformContent({ projectId, projectName, initialData, 
                       >
                         <span className="text-xs font-medium text-gray-500 flex items-center gap-1.5">
                           <AlertCircle className="w-3.5 h-3.5 text-amber-500" />
-                          Why this field needs transformation
+                          {selectedContext.field.isValueAssignment
+                            ? 'Why this field needs value assignment'
+                            : 'Why this field needs transformation'}
                         </span>
                         <span className="text-xs text-gray-400">
                           {whyExpanded ? <ChevronDown className="w-3.5 h-3.5" /> : <ChevronRight className="w-3.5 h-3.5" />}
@@ -2297,6 +2348,12 @@ export default function TransformContent({ projectId, projectName, initialData, 
                           {selectedContext.field.aiReasoning && (
                             <p className="text-sm text-amber-900 mt-3">
                               {selectedContext.field.aiReasoning}
+                            </p>
+                          )}
+                          {selectedContext.field.transformationIntent && (
+                            <p className="text-sm text-amber-900 mt-3">
+                              <span className="font-medium">Transformation suggestion.</span>{' '}
+                              {selectedContext.field.transformationIntent}
                             </p>
                           )}
                           {selectedContext.field.typeCompatibility && (
@@ -2317,7 +2374,7 @@ export default function TransformContent({ projectId, projectName, initialData, 
                               </span>
                             )}
                           </div>
-                          {selectedContext.field.isValueAssignment && (
+                          {selectedContext.field.isValueAssignment && !selectedContext.field.transformationIntent && (
                             <p className="mt-3 text-xs text-amber-800">
                               <span className="font-medium">Value assignment.</span> This target field has no source mapping.
                               {' '}Describe a constant, expression, or rule to generate the value
@@ -3180,8 +3237,13 @@ function TargetTableNode({
       // Truly-unmapped target field (no TFM yet). Surfaced under the same
       // filter rules the legacy sidebar used: visible in `all`, `unmapped`,
       // and `needs_transform`.
+      const isDefineCandidate =
+        !row.field.is_nullable &&
+        !(row.field.default_value != null && String(row.field.default_value).length > 0)
       const showUnmapped =
-        filter === 'all' || filter === 'unmapped' || filter === 'needs_transform'
+        filter === 'all' ||
+        filter === 'unmapped' ||
+        (filter === 'needs_transform' && isDefineCandidate)
       if (!showUnmapped) continue
 
       const f = row.field
