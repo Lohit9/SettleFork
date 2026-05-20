@@ -1,5 +1,6 @@
 'use client'
 
+import { forwardRef } from 'react'
 import { Check, Edit3, X } from 'lucide-react'
 import { cn } from '@/components/ui/utils'
 
@@ -121,17 +122,19 @@ export interface ActionIconButtonProps {
   children: React.ReactNode
 }
 
-export function ActionIconButton({
-  testId,
-  ariaLabel,
-  tooltip,
-  variant,
-  disabled = false,
-  onClick,
-  children,
-}: ActionIconButtonProps) {
+// `forwardRef` so a caller can anchor a popover to the rendered button
+// (the flat-view row-hover ✗ anchors `RejectConfirmPopover` to its
+// reject button). Callers that don't pass a ref are unaffected.
+export const ActionIconButton = forwardRef<
+  HTMLButtonElement,
+  ActionIconButtonProps
+>(function ActionIconButton(
+  { testId, ariaLabel, tooltip, variant, disabled = false, onClick, children },
+  ref,
+) {
   return (
     <button
+      ref={ref}
       type="button"
       data-testid={testId}
       data-variant={variant}
@@ -158,4 +161,4 @@ export function ActionIconButton({
       {children}
     </button>
   )
-}
+})
