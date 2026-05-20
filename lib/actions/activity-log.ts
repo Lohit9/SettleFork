@@ -98,6 +98,12 @@ export type ActionType =
   // flat view's inline reject affordance. Categorized as 'mapping'.
   // See lib/actions/mappings-for-redesign.ts → setUnmappedRowRejected.
   | 'source_field_rejected'
+  // Target-field-swap MERGE — emitted when a swap onto an already-mapped
+  // target folds the swapping TFM's sources into the existing mapping
+  // and deletes the swapping TFM. The survivor's source-add is audited
+  // separately as `mapping_sources_changed`. Categorized as 'mapping'.
+  // See lib/actions/mappings-for-redesign.ts → mergeTargetFieldMappings.
+  | 'mapping_merged'
 
 export type ActionCategory = 'fix' | 'mapping' | 'transform' | 'validation' | 'data' | 'system'
 

@@ -590,7 +590,7 @@ export function MappingListView({
   const handleTargetPickerCommit = useCallback(
     async (newTargetFieldId: string) => {
       if (openPicker?.kind !== 'target') return { success: false }
-      let result: { success: boolean }
+      let result: { success: boolean; mergeOpened?: boolean }
       if (openPicker.sourceFieldIdForCreate) {
         // Unmapped-source row picked a target → promote. Routes through
         // `promoteUnmappedSource` (not `createFromUnmapped`): the server
@@ -610,7 +610,8 @@ export function MappingListView({
         const bareTfmId = openPicker.rowId.split('::')[0]
         result = await mutations.swapMappingTarget(bareTfmId, newTargetFieldId)
       }
-      if (result.success) setOpenPicker(null)
+      // Close on success OR when a merge dialog took over the surface.
+      if (result.success || result.mergeOpened) setOpenPicker(null)
       return result
     },
     [mutations, openPicker],

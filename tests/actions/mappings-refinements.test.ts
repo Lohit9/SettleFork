@@ -109,10 +109,14 @@ describe('[mappings refinements] Refinement 3 — approveAllFieldMappings preser
   })
 
   it('uses the approve_all reason constant (detectable for later cleanup)', () => {
-    // APPROVE_ALL_REASON is a module-level constant so bulk acks are
-    // distinguishable from manual ones during diagnostics.
-    expect(MAPPINGS_SRC).toContain('const APPROVE_ALL_REASON')
-    expect(MAPPINGS_SRC).toMatch(/approved_via_approve_all/)
+    // APPROVE_ALL_REASON moved to lib/constants/approve-all-reason.ts —
+    // a 'use server' file may only export async functions, so the
+    // shared sentinel cannot live in this module. mappings.ts imports
+    // it; bulk acks stay distinguishable from manual ones.
+    expect(MAPPINGS_SRC).toMatch(
+      /import \{ APPROVE_ALL_REASON \} from ['"]@\/lib\/constants\/approve-all-reason['"]/,
+    )
+    expect(MAPPINGS_SRC).toMatch(/acknowledgment_reason: APPROVE_ALL_REASON/)
   })
 })
 

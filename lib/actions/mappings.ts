@@ -27,6 +27,7 @@ import { logActivity } from '@/lib/actions/activity-log'
 import { logAIEdit } from '@/lib/actions/ai-edit-history'
 import { assertMappingWritesEnabled } from '@/lib/auth/mapping-writes'
 import { computeOrphanedTfmsForTmDelete } from '@/lib/mappings/tm-ownership'
+import { APPROVE_ALL_REASON } from '@/lib/constants/approve-all-reason'
 import {
   persistStaticMappingsForPair,
   persistStaticMappingsForSelection,
@@ -2247,8 +2248,6 @@ export async function regenerateFieldMappings(
 // The bulk path uses direct upserts (not looped RPCs) per Concern 2 —
 // each RPC fire would retrigger the confidence recomputation and create
 // excessive log noise on large tables.
-
-const APPROVE_ALL_REASON = 'approved_via_approve_all'
 
 export async function approveAllFieldMappings(
   tableMappingId: string,
