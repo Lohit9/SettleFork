@@ -77,6 +77,7 @@ function makeField(
     sampleValues: overrides.sampleValues ?? [],
     isAcknowledged: overrides.isAcknowledged ?? false,
     isRejected: overrides.isRejected ?? false,
+    aiReasoning: overrides.aiReasoning ?? null,
   }
 }
 

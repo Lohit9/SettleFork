@@ -654,6 +654,49 @@ describe('assembleMappingsForRedesign — discriminator cases', () => {
     expect(out.sourceFields).toEqual([])
   })
 
+  // ─── Gap 11b.r — aiReasoning (static-config rationale) ──────────────────
+  //
+  // `SourceFieldWithState.aiReasoning` carries display-only rationale for
+  // unmapped source fields, resolved upstream from the static-mappings
+  // config and threaded into `AssembleInput.staticSourceRationale` as a
+  // `Map<fieldId, explanation>`. The assembler simply projects it onto the
+  // matching source field; matching/resolution lives in the read path.
+
+  it('case 13h: aiReasoning populates from staticSourceRationale (keyed by field id)', () => {
+    const out = assembleMappingsForRedesign(
+      baseInput({
+        staticSourceRationale: new Map([
+          [F_S_FIRST.id, 'Legacy free-text first name; not migrated.'],
+          [F_S_ORDTOTAL.id, 'Cents column superseded by the money type.'],
+        ]),
+      }),
+    )
+    const byId = new Map(out.sourceFields.map((f) => [f.id, f]))
+    expect(byId.get(F_S_FIRST.id)!.aiReasoning).toBe(
+      'Legacy free-text first name; not migrated.',
+    )
+    expect(byId.get(F_S_ORDTOTAL.id)!.aiReasoning).toBe(
+      'Cents column superseded by the money type.',
+    )
+  })
+
+  it('case 13i: aiReasoning is null for source fields absent from the map', () => {
+    const out = assembleMappingsForRedesign(
+      baseInput({
+        staticSourceRationale: new Map([[F_S_FIRST.id, 'Only this one.']]),
+      }),
+    )
+    const byId = new Map(out.sourceFields.map((f) => [f.id, f]))
+    expect(byId.get(F_S_FIRST.id)!.aiReasoning).toBe('Only this one.')
+    expect(byId.get(F_S_LAST.id)!.aiReasoning).toBeNull()
+    expect(byId.get(F_S_CUSTID.id)!.aiReasoning).toBeNull()
+  })
+
+  it('case 13j: aiReasoning defaults to null for every field when no map is supplied', () => {
+    const out = assembleMappingsForRedesign(baseInput({ tfms: [] }))
+    out.sourceFields.forEach((f) => expect(f.aiReasoning).toBeNull())
+  })
+
   it('case 12c: aiReasoning on mapping_sources flows through to MappingSourceRef', () => {
     const t = tfm({
       id: 'tfm-reasoning',
