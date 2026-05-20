@@ -1595,19 +1595,43 @@ describe('MappingDrawer — PR 2 TASK 2+3 ⊕ Add source button', () => {
 // placeholder may render any longer.
 
 describe('MappingDrawer — mapped-row body shape + footer', () => {
-  it('mapped row body renders the new SOURCE FIELDS + TARGET FIELD sections (PR 3b)', () => {
-    // PR 3b body redesign: SOURCES + SAMPLE VALUES sections fold
-    // into the new SOURCE FIELDS section, and TARGET FIELD lands
-    // between SOURCE FIELDS and TRANSFORMATION. Status / Confidence
-    // remain in the header (PR 1).
-    render(<MappingDrawer row={mapped()} isOpen={true} onClose={() => {}} />)
+  it('mapped row Mapping tab renders the new two-column grid + WHY + SAMPLES + Remove link (feat/mapping-drawer-redesign)', () => {
+    // feat/mapping-drawer-redesign — Mapping-tab body retires
+    // SOURCE FIELDS + TARGET FIELD per-row sections in favor of a
+    // two-column SOURCE/TARGET grid + WHY THIS MAPPING + SAMPLE SOURCE
+    // VALUES + Remove mapping link. PR 3b testids
+    // (drawer-section-source-fields / drawer-section-target-field) are
+    // retired.
+    render(
+      <MappingDrawer
+        row={mapped({ aiReasoning: 'some reasoning' })}
+        isOpen={true}
+        onClose={() => {}}
+      />,
+    )
     expect(
-      screen.getByTestId('drawer-section-source-fields'),
+      screen.getByTestId('drawer-section-mapping-grid'),
     ).toBeInTheDocument()
     expect(
-      screen.getByTestId('drawer-section-target-field'),
+      screen.getByTestId('drawer-section-why-this-mapping'),
     ).toBeInTheDocument()
-    // Legacy section testids retired.
+    // Sample values render only when the primary source has samples;
+    // the default `mapped()` fixture leaves them empty, so the section
+    // is intentionally absent.
+    expect(
+      screen.queryByTestId('drawer-section-sample-source-values'),
+    ).toBeNull()
+    expect(
+      screen.getByTestId('drawer-remove-mapping-link'),
+    ).toBeInTheDocument()
+    // Retired PR 3b sections.
+    expect(
+      screen.queryByTestId('drawer-section-source-fields'),
+    ).toBeNull()
+    expect(
+      screen.queryByTestId('drawer-section-target-field'),
+    ).toBeNull()
+    // Legacy section testids stay retired.
     expect(screen.queryByTestId('drawer-section-source')).toBeNull()
     expect(screen.queryByTestId('drawer-section-sample-values')).toBeNull()
     expect(screen.queryByTestId('drawer-section-status')).toBeNull()
@@ -2052,6 +2076,9 @@ describe('MappingDrawer — Value Assignment body', () => {
   })
 
   it('renders the Value expression section with combinationSql in a code block', () => {
+    // feat/mapping-drawer-redesign — Value expression lives on the
+    // Transform sub-tab for VAs (the Mapping tab now carries target
+    // identity + analysis only). Switch tabs before asserting.
     render(
       <MappingDrawer
         row={valueAssignment({ combinationSql: 'NOW()' })}
@@ -2059,6 +2086,7 @@ describe('MappingDrawer — Value Assignment body', () => {
         onClose={() => {}}
       />,
     )
+    fireEvent.click(screen.getByTestId('drawer-tab-transform'))
     const expr = screen.getByTestId('drawer-value-expression')
     expect(expr.textContent).toBe('NOW()')
     expect(expr.tagName).toBe('PRE')
@@ -2076,6 +2104,7 @@ describe('MappingDrawer — Value Assignment body', () => {
         onClose={() => {}}
       />,
     )
+    fireEvent.click(screen.getByTestId('drawer-tab-transform'))
     const expr = screen.getByTestId('drawer-value-expression')
     expect(expr.className).toContain('whitespace-pre-wrap')
     expect(expr.textContent).toBe(sql)
@@ -2089,6 +2118,7 @@ describe('MappingDrawer — Value Assignment body', () => {
         onClose={() => {}}
       />,
     )
+    fireEvent.click(screen.getByTestId('drawer-tab-transform'))
     expect(screen.queryByTestId('drawer-value-expression')).toBeNull()
     expect(
       screen.getByTestId('drawer-value-expression-empty'),
@@ -2150,11 +2180,10 @@ describe('MappingDrawer — Value Assignment body', () => {
     ).toBeNull()
   })
 
-  it('section ordering for VA is Value expression → Target field → Analysis (PR 3b)', () => {
-    // PR 3b: TARGET FIELD section inserts between VALUE EXPRESSION
-    // and ANALYSIS. With aiReasoning present, ANALYSIS still
-    // renders (AI reasoning is its only remaining content; type-comp
-    // moved to per-section displays).
+  it('section partition for VA — Mapping tab: [Target field, Explanation]; Transform tab: [Value expression] (feat/mapping-drawer-redesign)', () => {
+    // feat/mapping-drawer-redesign — sections partition across the two
+    // sub-tabs. The Mapping tab carries target identity + analysis;
+    // the Transform tab carries the VA's authored SQL (Value expression).
     render(
       <MappingDrawer
         row={valueAssignment({ aiReasoning: 'reason text' })}
@@ -2163,465 +2192,53 @@ describe('MappingDrawer — Value Assignment body', () => {
       />,
     )
     const body = screen.getByTestId('mapping-drawer-body')
-    const sections = within(body).getAllByRole('heading', { level: 3 })
-    expect(sections.map((h) => h.textContent)).toEqual([
-      'Value expression',
-      'Target field',
-      'Explanation',
-    ])
-  })
-})
 
-// ─── PR 3b — SOURCE FIELDS section (mapped rows) ──────────────────────────
-//
-// Replaces the legacy `<DrawerSection title="Source">` +
-// `SampleValuesSection` pair. Renders one block per source in server
-// ordinal-asc order. Each block carries:
-//   • Identity: name · table · type · confidence (one line)
-//   • Join annotation line (when source.joinAnnotation is non-null)
-//   • Sample values list (when source.sampleValues is non-empty)
-// Hidden when the row has no sources (VA / unmapped / rejected).
-
-describe('MappingDrawer — PR 3b SOURCE FIELDS section', () => {
-  it('renders ONE block for a single-source mapped row', () => {
-    render(<MappingDrawer row={mapped()} isOpen={true} onClose={() => {}} />)
-    const section = screen.getByTestId('drawer-section-source-fields')
-    expect(section).toBeInTheDocument()
-    const blocks = within(section).getAllByTestId('drawer-source-field-block')
-    expect(blocks).toHaveLength(1)
-  })
-
-  it('renders N blocks for a multi-source mapped row in server ordinal order', () => {
-    render(
-      <MappingDrawer
-        row={mapped({
-          sources: [
-            cifSource(0, 'FNAME'),
-            cifSource(1, 'LNAME'),
-            cifSource(2, 'MI'),
-          ],
-        })}
-        isOpen={true}
-        onClose={() => {}}
-      />,
-    )
-    const blocks = screen.getAllByTestId('drawer-source-field-block')
-    expect(blocks).toHaveLength(3)
-    expect(blocks.map((b) => b.getAttribute('data-ordinal'))).toEqual([
-      '0',
-      '1',
-      '2',
-    ])
-  })
-
-  it('each block shows field name + table + type + confidence on the identity line', () => {
-    render(<MappingDrawer row={mapped({ confidence: 87 })} isOpen={true} onClose={() => {}} />)
-    const block = screen.getByTestId('drawer-source-field-block')
+    // Mapping tab (default).
     expect(
-      within(block).getByTestId('drawer-source-field-name').textContent,
-    ).toBe('ACCT_NO')
+      within(body)
+        .getAllByRole('heading', { level: 3 })
+        .map((h) => h.textContent),
+    ).toEqual(['Target field', 'Explanation'])
+
+    // Transform tab.
+    fireEvent.click(screen.getByTestId('drawer-tab-transform'))
     expect(
-      within(block).getByTestId('drawer-source-field-table').textContent,
-    ).toBe('ACCT_MASTER')
-    expect(
-      within(block).getByTestId('drawer-source-field-type').textContent,
-    ).toBe('NUMBER')
-    expect(
-      within(block).getByTestId('drawer-source-field-confidence').textContent,
-    ).toMatch(/\d+%/)
-  })
-
-  it('renders the join annotation line ONLY when source.joinAnnotation is non-null', () => {
-    render(
-      <MappingDrawer
-        row={mapped({
-          sources: [source({ joinAnnotation: '(join: ProductSKU)' })],
-        })}
-        isOpen={true}
-        onClose={() => {}}
-      />,
-    )
-    expect(
-      screen.getByTestId('drawer-source-field-join').textContent,
-    ).toBe('(join: ProductSKU)')
-  })
-
-  it('omits the join annotation line when joinAnnotation is null', () => {
-    render(<MappingDrawer row={mapped()} isOpen={true} onClose={() => {}} />)
-    expect(screen.queryByTestId('drawer-source-field-join')).toBeNull()
-  })
-
-  it('renders sample values (collapsed by default) when source.sampleValues is non-empty', async () => {
-    // PR 3b refinement — sample values default-collapsed behind a
-    // disclosure toggle so multi-source TFMs don't push TARGET FIELD
-    // offscreen. Click toggle to expand + assert rows render.
-    const user = userEvent.setup()
-    render(
-      <MappingDrawer
-        row={mapped({
-          sources: [
-            source({ sampleValues: ['alpha', 'beta', 'gamma'] }),
-          ],
-        })}
-        isOpen={true}
-        onClose={() => {}}
-      />,
-    )
-    const block = screen.getByTestId('drawer-source-field-block')
-    // Collapsed default — list not rendered.
-    expect(
-      within(block).queryByTestId('drawer-source-field-sample-values-list'),
-    ).toBeNull()
-    // Toggle exists with "Sample values (N)" label.
-    const toggle = within(block).getByTestId(
-      'drawer-source-field-samples-toggle',
-    )
-    expect(toggle.textContent).toContain('Sample values (3)')
-    await user.click(toggle)
-    // Expanded — rows render.
-    const samples = within(block).getAllByTestId(
-      'drawer-source-field-sample-row',
-    )
-    expect(samples.map((s) => s.textContent)).toEqual(['alpha', 'beta', 'gamma'])
-  })
-
-  it('omits the sample-values subsection when sampleValues is empty', () => {
-    render(<MappingDrawer row={mapped()} isOpen={true} onClose={() => {}} />)
-    expect(
-      screen.queryByTestId('drawer-source-field-samples'),
-    ).toBeNull()
-  })
-
-  it('is hidden for value-assignment rows (no sources)', () => {
-    render(
-      <MappingDrawer row={valueAssignment()} isOpen={true} onClose={() => {}} />,
-    )
-    expect(screen.queryByTestId('drawer-section-source-fields')).toBeNull()
-  })
-
-  it('is hidden for unmapped rows', () => {
-    render(<MappingDrawer row={unmapped()} isOpen={true} onClose={() => {}} />)
-    expect(screen.queryByTestId('drawer-section-source-fields')).toBeNull()
-  })
-})
-
-// ─── PR 3b — TARGET FIELD section (every variant) ─────────────────────────
-//
-// Consumes the additive `TargetFieldRef` fields from PR 3a:
-//   • Identity: name · table · type
-//   • Primary key / Foreign key → ref / Required / Default / Description
-//   • Sample values list (up to 5) OR "No sample data available" fallback
-
-describe('MappingDrawer — PR 3b TARGET FIELD section', () => {
-  it('renders for mapped rows', () => {
-    render(<MappingDrawer row={mapped()} isOpen={true} onClose={() => {}} />)
-    expect(
-      screen.getByTestId('drawer-section-target-field'),
-    ).toBeInTheDocument()
-  })
-
-  it('renders for value-assignment rows', () => {
-    render(
-      <MappingDrawer row={valueAssignment()} isOpen={true} onClose={() => {}} />,
-    )
-    expect(
-      screen.getByTestId('drawer-section-target-field'),
-    ).toBeInTheDocument()
-  })
-
-  it('renders for unmapped + rejected rows', () => {
-    for (const row of [unmapped(), unmapped({ status: 'rejected' })]) {
-      const { unmount } = render(
-        <MappingDrawer row={row} isOpen={true} onClose={() => {}} />,
-      )
-      expect(
-        screen.getByTestId('drawer-section-target-field'),
-      ).toBeInTheDocument()
-      unmount()
-    }
-  })
-
-  it('shows identity: name · table · type', () => {
-    render(<MappingDrawer row={mapped()} isOpen={true} onClose={() => {}} />)
-    expect(
-      screen.getByTestId('drawer-target-field-name').textContent,
-    ).toBe('customer_id')
-    expect(
-      screen.getByTestId('drawer-target-field-table').textContent,
-    ).toBe('accounts')
-    expect(
-      screen.getByTestId('drawer-target-field-type').textContent,
-    ).toBe('VARCHAR(200)')
-  })
-
-  it('shows "Primary key" line when isPrimaryKey=true', () => {
-    render(
-      <MappingDrawer
-        row={mapped({
-          targetField: targetField({ isPrimaryKey: true }),
-        })}
-        isOpen={true}
-        onClose={() => {}}
-      />,
-    )
-    expect(
-      screen.getByTestId('drawer-target-field-pk').textContent,
-    ).toBe('Primary key')
-    expect(screen.queryByTestId('drawer-target-field-fk')).toBeNull()
-  })
-
-  it('shows "Foreign key → <ref>" line when isForeignKey=true and not PK', () => {
-    render(
-      <MappingDrawer
-        row={mapped({
-          targetField: targetField({
-            isForeignKey: true,
-            fkReference: 'Manufacturing Users.rstk__externalid__c',
-          }),
-        })}
-        isOpen={true}
-        onClose={() => {}}
-      />,
-    )
-    expect(
-      screen.getByTestId('drawer-target-field-fk').textContent,
-    ).toContain('Foreign key →')
-    expect(
-      screen.getByTestId('drawer-target-field-fk').textContent,
-    ).toContain('Manufacturing Users.rstk__externalid__c')
-  })
-
-  it('prefers PK over FK when both are true (compound key)', () => {
-    render(
-      <MappingDrawer
-        row={mapped({
-          targetField: targetField({
-            isPrimaryKey: true,
-            isForeignKey: true,
-            fkReference: 'Division Master.rstk__externalid__c',
-          }),
-        })}
-        isOpen={true}
-        onClose={() => {}}
-      />,
-    )
-    expect(screen.getByTestId('drawer-target-field-pk')).toBeInTheDocument()
-    expect(screen.queryByTestId('drawer-target-field-fk')).toBeNull()
-  })
-
-  it('shows "Required" line when isNullable=false', () => {
-    render(
-      <MappingDrawer
-        row={mapped({
-          targetField: targetField({ isNullable: false }),
-        })}
-        isOpen={true}
-        onClose={() => {}}
-      />,
-    )
-    expect(
-      screen.getByTestId('drawer-target-field-required'),
-    ).toBeInTheDocument()
-  })
-
-  it('omits "Required" line when isNullable=true', () => {
-    render(
-      <MappingDrawer
-        row={mapped({
-          targetField: targetField({ isNullable: true }),
-        })}
-        isOpen={true}
-        onClose={() => {}}
-      />,
-    )
-    expect(screen.queryByTestId('drawer-target-field-required')).toBeNull()
-  })
-
-  it('shows the Default line ONLY when defaultValue is non-null', () => {
-    const { unmount } = render(
-      <MappingDrawer
-        row={mapped({
-          targetField: targetField({ defaultValue: 'NOW()' }),
-        })}
-        isOpen={true}
-        onClose={() => {}}
-      />,
-    )
-    expect(
-      screen.getByTestId('drawer-target-field-default').textContent,
-    ).toContain('NOW()')
-    unmount()
-
-    render(<MappingDrawer row={mapped()} isOpen={true} onClose={() => {}} />)
-    expect(screen.queryByTestId('drawer-target-field-default')).toBeNull()
-  })
-
-  it('shows the Description line ONLY when description is non-null', () => {
-    const { unmount } = render(
-      <MappingDrawer
-        row={mapped({
-          targetField: targetField({
-            description: 'Item-level commodity classification.',
-          }),
-        })}
-        isOpen={true}
-        onClose={() => {}}
-      />,
-    )
-    expect(
-      screen.getByTestId('drawer-target-field-description').textContent,
-    ).toBe('Item-level commodity classification.')
-    unmount()
-
-    render(<MappingDrawer row={mapped()} isOpen={true} onClose={() => {}} />)
-    expect(
-      screen.queryByTestId('drawer-target-field-description'),
-    ).toBeNull()
-  })
-
-  it('shows sample values when present (capped at 5 UI-side, collapsed by default)', async () => {
-    // PR 3b refinement — target sample values default-collapsed.
-    // Click toggle, then assert capped rows.
-    const user = userEvent.setup()
-    render(
-      <MappingDrawer
-        row={mapped({
-          targetField: targetField({
-            sampleValues: ['a', 'b', 'c', 'd', 'e', 'f', 'g'],
-          }),
-        })}
-        isOpen={true}
-        onClose={() => {}}
-      />,
-    )
-    expect(
-      screen.queryByTestId('drawer-target-field-sample-values-list'),
-    ).toBeNull()
-    const toggle = screen.getByTestId('drawer-target-field-samples-toggle')
-    // UI cap is 5 (target side); label reflects the visible count.
-    expect(toggle.textContent).toContain('Sample values (5)')
-    await user.click(toggle)
-    const samples = screen.getAllByTestId('drawer-target-field-sample-row')
-    expect(samples).toHaveLength(5)
-    expect(samples.map((s) => s.textContent)).toEqual(['a', 'b', 'c', 'd', 'e'])
-  })
-
-  it('shows the "No sample data available" fallback (no toggle) when sampleValues is empty', () => {
-    // PR 3b refinement — empty target sample-values branch shows
-    // the static fallback string. No disclosure toggle renders.
-    render(<MappingDrawer row={mapped()} isOpen={true} onClose={() => {}} />)
-    expect(
-      screen.getByTestId('drawer-target-field-no-samples').textContent,
-    ).toBe('No sample data available — target schema only')
-    expect(
-      screen.queryByTestId('drawer-target-field-samples-toggle'),
-    ).toBeNull()
-  })
-})
-
-// ─── PR 3b — collapsible sample values (source + target) ──────────────────
-//
-// Sample values default-collapsed to keep multi-source TFMs from
-// pushing TARGET FIELD offscreen. Two tests per section pin the
-// minimal contract: collapsed-by-default + click toggles.
-
-describe('MappingDrawer — PR 3b collapsible sample values', () => {
-  it('SOURCE FIELDS: sample values collapsed by default with "Sample values (N)" toggle; click expands', async () => {
-    const user = userEvent.setup()
-    render(
-      <MappingDrawer
-        row={mapped({
-          sources: [source({ sampleValues: ['x', 'y'] })],
-        })}
-        isOpen={true}
-        onClose={() => {}}
-      />,
-    )
-    const block = screen.getByTestId('drawer-source-field-block')
-    const toggle = within(block).getByTestId(
-      'drawer-source-field-samples-toggle',
-    )
-    expect(toggle.textContent).toContain('Sample values (2)')
-    expect(toggle.getAttribute('aria-expanded')).toBe('false')
-    expect(
-      within(block).queryByTestId('drawer-source-field-sample-values-list'),
-    ).toBeNull()
-    await user.click(toggle)
-    expect(toggle.getAttribute('aria-expanded')).toBe('true')
-    expect(
-      within(block).getByTestId('drawer-source-field-sample-values-list'),
-    ).toBeInTheDocument()
-  })
-
-  it('TARGET FIELD: sample values collapsed by default with "Sample values (N)" toggle; click expands', async () => {
-    const user = userEvent.setup()
-    render(
-      <MappingDrawer
-        row={mapped({
-          targetField: targetField({ sampleValues: ['p', 'q', 'r'] }),
-        })}
-        isOpen={true}
-        onClose={() => {}}
-      />,
-    )
-    const toggle = screen.getByTestId('drawer-target-field-samples-toggle')
-    expect(toggle.textContent).toContain('Sample values (3)')
-    expect(toggle.getAttribute('aria-expanded')).toBe('false')
-    expect(
-      screen.queryByTestId('drawer-target-field-sample-values-list'),
-    ).toBeNull()
-    await user.click(toggle)
-    expect(toggle.getAttribute('aria-expanded')).toBe('true')
-    expect(
-      screen.getByTestId('drawer-target-field-sample-values-list'),
-    ).toBeInTheDocument()
-  })
-
-  it('SOURCE FIELDS: multi-source rows each get an independent collapse state', async () => {
-    const user = userEvent.setup()
-    render(
-      <MappingDrawer
-        row={mapped({
-          sources: [
-            source({ id: 'ms-a', sampleValues: ['a1', 'a2'] }),
-            source({ id: 'ms-b', sampleValues: ['b1', 'b2'] }),
-          ],
-        })}
-        isOpen={true}
-        onClose={() => {}}
-      />,
-    )
-    const toggles = screen.getAllByTestId(
-      'drawer-source-field-samples-toggle',
-    )
-    expect(toggles).toHaveLength(2)
-    // Expand the first only — second stays collapsed.
-    await user.click(toggles[0]!)
-    expect(toggles[0]!.getAttribute('aria-expanded')).toBe('true')
-    expect(toggles[1]!.getAttribute('aria-expanded')).toBe('false')
+      within(body)
+        .getAllByRole('heading', { level: 3 })
+        .map((h) => h.textContent),
+    ).toEqual(['Value expression'])
   })
 })
 
 // ─── PR 3b — body section ordering invariants ─────────────────────────────
 
-describe('MappingDrawer — PR 3b body section ordering', () => {
-  it('mapped (no transform / DQ / decisions): SOURCE FIELDS → TARGET FIELD', () => {
-    render(<MappingDrawer row={mapped()} isOpen={true} onClose={() => {}} />)
+describe('MappingDrawer — body section ordering (feat/mapping-drawer-redesign)', () => {
+  it('mapped Mapping tab: MAPPING GRID is the first content section; WHY THIS MAPPING follows when aiReasoning is present', () => {
+    render(
+      <MappingDrawer
+        row={mapped({ aiReasoning: 'reason text' })}
+        isOpen={true}
+        onClose={() => {}}
+      />,
+    )
     const body = screen.getByTestId('mapping-drawer-body')
     const sectionTestIds = Array.from(
       body.querySelectorAll('[data-testid^="drawer-section-"]'),
     ).map((el) => el.getAttribute('data-testid'))
-    // No sources, no aiReasoning, no transformation — TRANSFORMATION
-    // still renders as a "Define Transform" nav. ANALYSIS hides when
-    // no AI reasoning.
     const idx = (id: string) => sectionTestIds.indexOf(id)
-    expect(idx('drawer-section-source-fields')).toBeGreaterThanOrEqual(0)
-    expect(idx('drawer-section-target-field')).toBeGreaterThan(
-      idx('drawer-section-source-fields'),
+    expect(idx('drawer-section-mapping-grid')).toBeGreaterThanOrEqual(0)
+    expect(idx('drawer-section-why-this-mapping')).toBeGreaterThan(
+      idx('drawer-section-mapping-grid'),
     )
   })
 
-  it('mapped order with all sections: SOURCE FIELDS → TARGET FIELD → TRANSFORMATION → ANALYSIS', () => {
+  it('mapped section partition — Mapping tab: MAPPING GRID → WHY THIS MAPPING; Transform tab: TRANSFORMATION (feat/mapping-drawer-redesign)', () => {
+    // feat/mapping-drawer-redesign — the Mapping-tab body retired the
+    // PR 3b SOURCE FIELDS + TARGET FIELD + ANALYSIS sections in favor
+    // of a two-column MAPPING GRID + WHY THIS MAPPING (full
+    // aiReasoning) + SAMPLE SOURCE VALUES + Remove mapping link. The
+    // Transform sub-tab still carries the single TRANSFORMATION
+    // section.
     render(
       <MappingDrawer
         row={mapped({
@@ -2636,22 +2253,38 @@ describe('MappingDrawer — PR 3b body section ordering', () => {
       />,
     )
     const body = screen.getByTestId('mapping-drawer-body')
-    const sectionTestIds = Array.from(
-      body.querySelectorAll('[data-testid^="drawer-section-"]'),
-    ).map((el) => el.getAttribute('data-testid'))
-    const idx = (id: string) => sectionTestIds.indexOf(id)
-    expect(idx('drawer-section-source-fields')).toBeLessThan(
-      idx('drawer-section-target-field'),
+    const sectionTestIdsOnTab = () =>
+      Array.from(
+        body.querySelectorAll('[data-testid^="drawer-section-"]'),
+      ).map((el) => el.getAttribute('data-testid'))
+
+    // Mapping tab (default).
+    const mappingTab = sectionTestIdsOnTab()
+    const idxMapping = (id: string) => mappingTab.indexOf(id)
+    expect(idxMapping('drawer-section-mapping-grid')).toBeGreaterThanOrEqual(0)
+    expect(idxMapping('drawer-section-mapping-grid')).toBeLessThan(
+      idxMapping('drawer-section-why-this-mapping'),
     )
-    expect(idx('drawer-section-target-field')).toBeLessThan(
-      idx('drawer-section-transformation'),
-    )
-    expect(idx('drawer-section-transformation')).toBeLessThan(
-      idx('drawer-section-analysis'),
-    )
+    // Transformation section is NOT on the Mapping tab.
+    expect(mappingTab).not.toContain('drawer-section-transformation')
+    // Retired PR 3b section testids stay retired on the Mapping tab.
+    expect(mappingTab).not.toContain('drawer-section-source-fields')
+    expect(mappingTab).not.toContain('drawer-section-target-field')
+    expect(mappingTab).not.toContain('drawer-section-analysis')
+
+    // Transform tab.
+    fireEvent.click(screen.getByTestId('drawer-tab-transform'))
+    const transformTab = sectionTestIdsOnTab()
+    expect(transformTab).toContain('drawer-section-transformation')
+    expect(transformTab).not.toContain('drawer-section-mapping-grid')
+    expect(transformTab).not.toContain('drawer-section-why-this-mapping')
   })
 
-  it('VA order: VALUE EXPRESSION → TARGET FIELD → ANALYSIS', () => {
+  it('VA section partition — Mapping tab: TARGET FIELD → ANALYSIS; Transform tab: VALUE EXPRESSION (feat/mapping-drawer-redesign)', () => {
+    // feat/mapping-drawer-redesign — VA's authored SQL lives on the
+    // Transform tab (VAs author transform-side prose via the
+    // combinationSql field rather than the standalone Transform page).
+    // The Mapping tab keeps target identity + analysis.
     render(
       <MappingDrawer
         row={valueAssignment({ aiReasoning: 'reason' })}
@@ -2660,21 +2293,203 @@ describe('MappingDrawer — PR 3b body section ordering', () => {
       />,
     )
     const body = screen.getByTestId('mapping-drawer-body')
-    const sectionTestIds = Array.from(
-      body.querySelectorAll('[data-testid^="drawer-section-"]'),
-    ).map((el) => el.getAttribute('data-testid'))
-    const idx = (id: string) => sectionTestIds.indexOf(id)
-    expect(idx('drawer-section-value-expression')).toBeLessThan(
-      idx('drawer-section-target-field'),
+    const sectionTestIdsOnTab = () =>
+      Array.from(
+        body.querySelectorAll('[data-testid^="drawer-section-"]'),
+      ).map((el) => el.getAttribute('data-testid'))
+
+    // Mapping tab (default).
+    const mappingTab = sectionTestIdsOnTab()
+    const idxMapping = (id: string) => mappingTab.indexOf(id)
+    expect(idxMapping('drawer-section-target-field')).toBeGreaterThanOrEqual(0)
+    expect(idxMapping('drawer-section-target-field')).toBeLessThan(
+      idxMapping('drawer-section-analysis'),
     )
-    expect(idx('drawer-section-target-field')).toBeLessThan(
-      idx('drawer-section-analysis'),
-    )
+    expect(mappingTab).not.toContain('drawer-section-value-expression')
+
+    // Transform tab.
+    fireEvent.click(screen.getByTestId('drawer-tab-transform'))
+    const transformTab = sectionTestIdsOnTab()
+    expect(transformTab).toContain('drawer-section-value-expression')
+    expect(transformTab).not.toContain('drawer-section-target-field')
+    expect(transformTab).not.toContain('drawer-section-analysis')
   })
 
   it('unmapped does not render the retired COVERAGE section', () => {
     render(<MappingDrawer row={unmapped()} isOpen={true} onClose={() => {}} />)
     expect(screen.queryByTestId('drawer-section-coverage')).toBeNull()
+  })
+})
+
+// ─── feat/mapping-drawer-redesign — Mapping-tab redesigned sections ────────
+
+describe('MappingDrawer — Mapping-tab MAPPING GRID (feat/mapping-drawer-redesign)', () => {
+  it('renders SOURCE column + TARGET column with table name, field chip, and data type for each side (single-source mapped row)', () => {
+    // Fixture defaults: source = ACCT_NO in ACCT_MASTER (NUMBER);
+    // target = customer_id in accounts (VARCHAR(200)).
+    render(<MappingDrawer row={mapped()} isOpen={true} onClose={() => {}} />)
+    const grid = screen.getByTestId('drawer-section-mapping-grid')
+    const sourceCol = within(grid).getByTestId('drawer-mapping-source-col')
+    const targetCol = within(grid).getByTestId('drawer-mapping-target-col')
+
+    // SOURCE block — exactly one (single-source row).
+    expect(
+      within(sourceCol).getAllByTestId('drawer-mapping-source-block'),
+    ).toHaveLength(1)
+    expect(
+      within(sourceCol).getByTestId('drawer-mapping-source-table').textContent,
+    ).toBe('ACCT_MASTER')
+    expect(
+      within(sourceCol).getByTestId('drawer-mapping-source-field').textContent,
+    ).toBe('ACCT_NO')
+    expect(
+      within(sourceCol).getByTestId('drawer-mapping-source-type').textContent,
+    ).toBe('NUMBER')
+
+    // TARGET block.
+    expect(
+      within(targetCol).getByTestId('drawer-mapping-target-table').textContent,
+    ).toBe('accounts')
+    expect(
+      within(targetCol).getByTestId('drawer-mapping-target-field').textContent,
+    ).toBe('customer_id')
+    expect(
+      within(targetCol).getByTestId('drawer-mapping-target-type').textContent,
+    ).toBe('VARCHAR(200)')
+  })
+
+  it('stacks one SOURCE block per source for a multi-source mapped row (primary first by ordinal)', () => {
+    render(
+      <MappingDrawer
+        row={mapped({
+          sources: [
+            source({
+              id: 'ms-a',
+              ordinal: 0,
+              sourceField: {
+                id: 'sf-a',
+                name: 'field_a',
+                dataType: 'TEXT',
+                isNullable: false,
+              },
+              sourceTable: { id: 'st-a', name: 'TBL_A' },
+            }),
+            source({
+              id: 'ms-b',
+              ordinal: 1,
+              sourceField: {
+                id: 'sf-b',
+                name: 'field_b',
+                dataType: 'TEXT',
+                isNullable: false,
+              },
+              sourceTable: { id: 'st-b', name: 'TBL_B' },
+            }),
+          ],
+        })}
+        isOpen={true}
+        onClose={() => {}}
+      />,
+    )
+    const sourceCol = screen.getByTestId('drawer-mapping-source-col')
+    const blocks = within(sourceCol).getAllByTestId('drawer-mapping-source-block')
+    expect(blocks).toHaveLength(2)
+    expect(blocks[0]!.getAttribute('data-mapping-source-id')).toBe('ms-a')
+    expect(blocks[1]!.getAttribute('data-mapping-source-id')).toBe('ms-b')
+  })
+})
+
+describe('MappingDrawer — Mapping-tab WHY THIS MAPPING (feat/mapping-drawer-redesign)', () => {
+  it('renders the full aiReasoning text in the WHY THIS MAPPING section', () => {
+    const reasoning = 'Customer external id is the canonical CRM anchor.'
+    render(
+      <MappingDrawer
+        row={mapped({ aiReasoning: reasoning })}
+        isOpen={true}
+        onClose={() => {}}
+      />,
+    )
+    const section = screen.getByTestId('drawer-section-why-this-mapping')
+    expect(
+      within(section).getByTestId('drawer-why-this-mapping-text').textContent,
+    ).toBe(reasoning)
+  })
+
+  it('omits the WHY THIS MAPPING section entirely when aiReasoning is null or whitespace', () => {
+    render(
+      <MappingDrawer
+        row={mapped({ aiReasoning: null })}
+        isOpen={true}
+        onClose={() => {}}
+      />,
+    )
+    expect(
+      screen.queryByTestId('drawer-section-why-this-mapping'),
+    ).toBeNull()
+  })
+})
+
+describe('MappingDrawer — Mapping-tab SAMPLE SOURCE VALUES (feat/mapping-drawer-redesign)', () => {
+  it('renders up to 5 rows of sample values with "row N" labels (1-indexed)', () => {
+    render(
+      <MappingDrawer
+        row={mapped({
+          sources: [
+            source({
+              sampleValues: ['v1', 'v2', 'v3', 'v4', 'v5', 'v6', 'v7'],
+            }),
+          ],
+        })}
+        isOpen={true}
+        onClose={() => {}}
+      />,
+    )
+    const section = screen.getByTestId('drawer-section-sample-source-values')
+    const rows = within(section).getAllByTestId(
+      'drawer-sample-source-values-row',
+    )
+    expect(rows).toHaveLength(5)
+    // Each row: value on the left, "row N" label on the right.
+    expect(rows[0]!.textContent).toContain('v1')
+    expect(rows[0]!.textContent).toContain('row 1')
+    expect(rows[4]!.textContent).toContain('v5')
+    expect(rows[4]!.textContent).toContain('row 5')
+  })
+
+  it('omits the section when sampleValues is empty', () => {
+    render(
+      <MappingDrawer
+        row={mapped({ sources: [source({ sampleValues: [] })] })}
+        isOpen={true}
+        onClose={() => {}}
+      />,
+    )
+    expect(
+      screen.queryByTestId('drawer-section-sample-source-values'),
+    ).toBeNull()
+  })
+})
+
+describe('MappingDrawer — Mapping-tab Remove mapping link (feat/mapping-drawer-redesign)', () => {
+  it('renders a red "Remove mapping" link at the bottom of the Mapping tab', () => {
+    render(<MappingDrawer row={mapped()} isOpen={true} onClose={() => {}} />)
+    const link = screen.getByTestId('drawer-remove-mapping-link')
+    expect(link.textContent).toBe('Remove mapping')
+    expect(link.className).toContain('text-red-600')
+  })
+
+  it('clicking Remove mapping opens the existing RejectConfirmDialog (same flow as the footer reject button)', () => {
+    render(<MappingDrawer row={mapped()} isOpen={true} onClose={() => {}} />)
+    // Dialog is closed at rest.
+    expect(screen.queryByRole('alertdialog')).toBeNull()
+    fireEvent.click(screen.getByTestId('drawer-remove-mapping-link'))
+    expect(screen.getByRole('alertdialog')).toBeInTheDocument()
+  })
+
+  it('Remove mapping link is NOT rendered on the Transform tab', () => {
+    render(<MappingDrawer row={mapped()} isOpen={true} onClose={() => {}} />)
+    fireEvent.click(screen.getByTestId('drawer-tab-transform'))
+    expect(screen.queryByTestId('drawer-remove-mapping-link')).toBeNull()
   })
 })
 
