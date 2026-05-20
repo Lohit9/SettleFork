@@ -2,7 +2,17 @@ import type {
   MappingRow,
   TargetTableSummary,
 } from '@/lib/types/mappings-for-redesign'
+import type { FlatRow } from '@/lib/utils/flatten-rows-for-list-view'
 import { classifyRowConfidence } from '@/lib/utils/confidence-format'
+
+/**
+ * Sentinel value for the source / target table filters selecting rows
+ * that have NO mapping on that axis:
+ *   • source axis → unmapped-target rows (no source attribution)
+ *   • target axis → unmapped-source rows (no target field)
+ * Distinct from a real table id and from the `'all'` pass-through.
+ */
+export const UNMAPPED_FILTER_VALUE = 'unmapped'
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Phase 3 Gap 3 — pure filter pipeline for the redesigned Mapping page.
@@ -113,8 +123,13 @@ export function filterRows(
 
   const out: MappingRow[] = []
   for (const row of rows) {
-    if (hasTargetFilter && row.targetField.targetTable.id !== filters.target) {
-      continue
+    if (hasTargetFilter) {
+      // The target axis's `'unmapped'` value selects source-side flat
+      // rows, which this `MappingRow[]` pipeline never carries — every
+      // MappingRow has a target field, so 'unmapped' excludes all of
+      // them. Specific table ids match on `targetTable.id`.
+      if (filters.target === UNMAPPED_FILTER_VALUE) continue
+      if (row.targetField.targetTable.id !== filters.target) continue
     }
     if (hasSourceFilter && !rowReferencesSourceTable(row, filters.source)) {
       continue
@@ -149,7 +164,7 @@ export function filterRows(
  * that have no confidence at all.
  */
 function rowMatchesConfidenceBand(
-  row: MappingRow,
+  row: { confidence: number | null },
   band: MappingConfidenceFilter,
 ): boolean {
   if (band === 'all') return true
@@ -161,16 +176,123 @@ function rowMatchesConfidenceBand(
 }
 
 /**
- * Row-level predicate for the Source filter. Only mapped rows can
- * match; VA / unmapped rows have no sources and therefore are excluded
- * whenever a specific source table is selected.
+ * Row-level predicate for the Source filter.
+ *
+ *   • `'unmapped'` → rows with no source attribution. In the
+ *     `MappingRow[]` universe that is exactly the unmapped-target rows
+ *     (`kind === 'unmapped'`); mapped + value_assignment are excluded.
+ *   • a table id → only mapped rows can match (they carry sources);
+ *     VA / unmapped rows have no sources and are excluded.
  */
 function rowReferencesSourceTable(row: MappingRow, sourceTableId: string): boolean {
+  if (sourceTableId === UNMAPPED_FILTER_VALUE) return row.kind === 'unmapped'
   if (row.kind !== 'mapped') return false
   for (const source of row.sources) {
     if (source.sourceTable.id === sourceTableId) return true
   }
   return false
+}
+
+// ─── Flat-row filter pipeline (feat/mapping-filter-bugs-ordering) ────────────
+//
+// `filterRows` above operates on the wire `MappingRow[]`. The flat list
+// view ALSO renders client-derived `unmapped-source` rows (synthesised by
+// `flattenRowsForListView` from `sourceFields` / acks) — those never pass
+// through `filterRows`, so source/target/status filters silently ignored
+// them. `filterFlatRows` closes that gap: it filters the canonical
+// `FlatRow[]` projection with full per-kind coverage.
+//
+// Per-axis coverage:
+//   • target table id → mapped / value-assignment / unmapped-target
+//     match on `targetField.targetTable.id`; unmapped-source excluded.
+//   • target 'unmapped' → only unmapped-source rows (no target field).
+//   • source table id → mapped matches on any `sources[].sourceTable.id`;
+//     unmapped-source matches on `sourceField.sourceTable.id`; VA +
+//     unmapped-target excluded.
+//   • source 'unmapped' → only unmapped-target rows (no source).
+//   • status / confidence / search → uniform across all four kinds.
+
+function flatRowMatchesTarget(row: FlatRow, target: string): boolean {
+  if (target === UNMAPPED_FILTER_VALUE) return row.kind === 'unmapped-source'
+  if (row.kind === 'unmapped-source') return false
+  return row.targetField.targetTable.id === target
+}
+
+function flatRowMatchesSource(row: FlatRow, source: string): boolean {
+  if (source === UNMAPPED_FILTER_VALUE) return row.kind === 'unmapped-target'
+  if (row.kind === 'mapped') {
+    return row.sources.some((s) => s.sourceTable.id === source)
+  }
+  if (row.kind === 'unmapped-source') {
+    return row.sourceField.sourceTable.id === source
+  }
+  return false
+}
+
+function flatRowMatchesSearch(row: FlatRow, needle: string): boolean {
+  if (row.kind === 'unmapped-source') {
+    return (
+      row.sourceField.name.toLowerCase().includes(needle) ||
+      row.sourceField.sourceTable.name.toLowerCase().includes(needle)
+    )
+  }
+  if (row.targetField.name.toLowerCase().includes(needle)) return true
+  if (row.targetField.targetTable.name.toLowerCase().includes(needle)) {
+    return true
+  }
+  if (row.kind === 'mapped') {
+    for (const source of row.sources) {
+      if (source.sourceField.name.toLowerCase().includes(needle)) return true
+      if (source.sourceTable.name.toLowerCase().includes(needle)) return true
+    }
+  }
+  return false
+}
+
+/**
+ * Apply all filters to a flat-row projection, preserving input order.
+ * Mirrors `filterRows`'s AND-semantics + `'all'` pass-through contract.
+ */
+export function filterFlatRows(
+  rows: readonly FlatRow[],
+  filters: MappingFilterState,
+): FlatRow[] {
+  const search = filters.search.trim().toLowerCase()
+  const hasSearch = search.length > 0
+  const hasTargetFilter = filters.target !== 'all'
+  const hasSourceFilter = filters.source !== 'all'
+  const hasStatusFilter = filters.status !== 'all'
+  const hasConfidenceFilter = filters.confidence !== 'all'
+
+  if (
+    !hasTargetFilter &&
+    !hasSourceFilter &&
+    !hasStatusFilter &&
+    !hasConfidenceFilter &&
+    !hasSearch
+  ) {
+    return rows.slice()
+  }
+
+  const out: FlatRow[] = []
+  for (const row of rows) {
+    if (hasTargetFilter && !flatRowMatchesTarget(row, filters.target)) {
+      continue
+    }
+    if (hasSourceFilter && !flatRowMatchesSource(row, filters.source)) {
+      continue
+    }
+    if (hasStatusFilter && row.status !== filters.status) continue
+    if (
+      hasConfidenceFilter &&
+      !rowMatchesConfidenceBand(row, filters.confidence)
+    ) {
+      continue
+    }
+    if (hasSearch && !flatRowMatchesSearch(row, search)) continue
+    out.push(row)
+  }
+  return out
 }
 
 /**
@@ -366,9 +488,20 @@ export function isGroupHiddenByIdentityFilters(
   allRows: readonly MappingRow[],
 ): boolean {
   if (state.target !== 'all' && targetTableId !== state.target) {
+    // Covers a real table id AND the `'unmapped'` sentinel — no target
+    // group's id is ever `'unmapped'`, so that value hides every group.
     return true
   }
-  if (state.source !== 'all') {
+  if (state.source === UNMAPPED_FILTER_VALUE) {
+    // Source `'unmapped'` selects unmapped-target rows; a group stays
+    // visible only when it contains one.
+    const hasUnmappedTarget = allRows.some(
+      (row) =>
+        row.kind === 'unmapped' &&
+        row.targetField.targetTable.id === targetTableId,
+    )
+    if (!hasUnmappedTarget) return true
+  } else if (state.source !== 'all') {
     const hasSourceMatch = allRows.some(
       (row) =>
         row.kind === 'mapped' &&

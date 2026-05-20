@@ -745,3 +745,36 @@ describe('FilterRow — Confidence dropdown threshold-derived labels (Q8)', () =
     expect(block).toContain('CONFIDENCE_THRESHOLD_ROW_AMBER')
   })
 })
+
+describe('FilterRow — source-before-target ordering (feat/mapping-filter-bugs-ordering)', () => {
+  it('renders the source filter to the LEFT of the target filter', () => {
+    renderFilterRow()
+    const source = screen.getByTestId('filter-source')
+    const target = screen.getByTestId('filter-target')
+    // DOCUMENT_POSITION_FOLLOWING set on target ⇒ target comes after
+    // source in document order — i.e. source is left of target.
+    expect(
+      source.compareDocumentPosition(target) &
+        Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy()
+  })
+
+  it('keeps source + target ahead of status / confidence', () => {
+    renderFilterRow()
+    const source = screen.getByTestId('filter-source')
+    const target = screen.getByTestId('filter-target')
+    const status = screen.getByTestId('filter-status')
+    const confidence = screen.getByTestId('filter-confidence')
+    // Full left-to-right order: source → target → status → confidence.
+    for (const [earlier, later] of [
+      [source, target],
+      [target, status],
+      [status, confidence],
+    ] as const) {
+      expect(
+        earlier.compareDocumentPosition(later) &
+          Node.DOCUMENT_POSITION_FOLLOWING,
+      ).toBeTruthy()
+    }
+  })
+})

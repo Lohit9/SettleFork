@@ -1686,14 +1686,17 @@ function MappingContentLoaded({
     [effectiveRows, filters],
   )
 
-  // Mapping list view consumes the full MappingsForRedesignResult so
-  // it can synthesise source-only unmapped rows from `sourceFields` +
-  // `sourceFieldAcknowledgments`. We thread a filtered variant
-  // (rows narrowed by the same `filterRows` pipeline) so target-led
-  // and flat views stay aligned on what the active filters select.
-  const filteredResult = useMemo<MappingsForRedesignResult>(
-    () => ({ ...data, rows: filteredRows }),
-    [data, filteredRows],
+  // feat/mapping-filter-bugs-ordering — the flat list view consumes the
+  // UNFILTERED effective result and applies `filterFlatRows` itself,
+  // over the canonical `flattenRowsForListView` projection. This is the
+  // fix for the source/target/status filters silently ignoring the
+  // synthesised `unmapped-source` rows: those rows exist only after
+  // flattening, so filtering must happen there — not on the wire
+  // `MappingRow[]` via `filterRows` (which the target-led view still
+  // uses). `effectiveRows` carries the optimistic overrides.
+  const effectiveResult = useMemo<MappingsForRedesignResult>(
+    () => ({ ...data, rows: effectiveRows }),
+    [data, effectiveRows],
   )
 
   const handleFlatOpenDrawer = useCallback(
@@ -2050,7 +2053,8 @@ function MappingContentLoaded({
               <EmptyMappingState projectId={projectId} data={data} />
             ) : viewMode === 'flat' ? (
               <MappingListView
-                filteredResult={filteredResult}
+                filteredResult={effectiveResult}
+                filters={filters}
                 mutations={mutations}
                 onOpenDrawer={handleFlatOpenDrawer}
               />

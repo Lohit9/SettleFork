@@ -305,24 +305,34 @@ export function FilterRow({
         source tables", "All status", "All confidence"). The dropdowns
         sit in the toolbar's `gap-3` flow with no extra structure.
       */}
-      <FilterSelect
-        ariaLabel="Filter by target table"
-        testId="filter-target"
-        value={filters.target}
-        onChange={handleTargetChange}
-        allLabel="All target tables"
-        options={targetTables}
-        isActive={filters.target !== 'all'}
-      />
-
+      {/*
+        feat/mapping-filter-bugs-ordering — source filter sits LEFT of
+        target, matching the SOURCE → TARGET column order of the table
+        itself. Each carries an "Unmapped" option: source-axis
+        "Unmapped" selects rows with no source (unmapped-target);
+        target-axis "Unmapped" selects rows with no target
+        (unmapped-source).
+      */}
       <FilterSelect
         ariaLabel="Filter by source table"
         testId="filter-source"
         value={filters.source}
         onChange={handleSourceChange}
         allLabel="All source tables"
+        unmappedLabel="Unmapped"
         options={sourceTables}
         isActive={filters.source !== 'all'}
+      />
+
+      <FilterSelect
+        ariaLabel="Filter by target table"
+        testId="filter-target"
+        value={filters.target}
+        onChange={handleTargetChange}
+        allLabel="All target tables"
+        unmappedLabel="Unmapped"
+        options={targetTables}
+        isActive={filters.target !== 'all'}
       />
 
       <Select value={filters.status} onValueChange={handleStatusChange}>
@@ -456,6 +466,11 @@ interface FilterSelectProps {
   value: string
   onChange: (next: string) => void
   allLabel: string
+  /**
+   * Label for the "Unmapped" option (value `'unmapped'`) rendered
+   * directly under "All …". Selects rows with no mapping on this axis.
+   */
+  unmappedLabel: string
   options: readonly { id: string; name: string; datasetName: string }[]
   isActive: boolean
   ariaLabel: string
@@ -466,6 +481,7 @@ function FilterSelect({
   value,
   onChange,
   allLabel,
+  unmappedLabel,
   options,
   isActive,
   ariaLabel,
@@ -485,6 +501,7 @@ function FilterSelect({
       </SelectTrigger>
       <SelectContent>
         <SelectItem value="all">{allLabel}</SelectItem>
+        <SelectItem value="unmapped">{unmappedLabel}</SelectItem>
         {options.map((opt) => (
           <SelectItem key={opt.id} value={opt.id}>
             <span className="flex flex-col items-start">
