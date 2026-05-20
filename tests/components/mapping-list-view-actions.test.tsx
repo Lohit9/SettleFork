@@ -61,6 +61,7 @@ function makeSourceField(
     isAcknowledged: false,
     isRejected: false,
     aiReasoning: null,
+    confidence: null,
     ...overrides,
   }
 }
@@ -587,6 +588,7 @@ describe('MappingListView — clickable "—" on value-assignment source field',
       isAcknowledged: false,
       isRejected: false,
       aiReasoning: null,
+      confidence: null,
     }
     const result = makeResult([makeValueAssignment()], [sourceField])
     render(
@@ -764,6 +766,7 @@ describe('MappingListView — headers + fixed sort', () => {
       isAcknowledged: false,
       isRejected: false,
       aiReasoning: null,
+      confidence: null,
     }
     const result = makeResult([mapped, unmappedTarget], [orphanSourceField])
     render(
@@ -799,6 +802,7 @@ describe('MappingListView — unmapped-source affordance uniformity (feat/mappin
       isAcknowledged: false,
       isRejected: false,
       aiReasoning: null,
+      confidence: null,
       ...overrides,
     }
   }
@@ -1012,6 +1016,7 @@ describe('MappingListView — needs-review dot color uniformity (feat/mapping-ro
       isAcknowledged: false,
       isRejected: false,
       aiReasoning: null,
+      confidence: null,
     }
     const result = makeResult([], [sf])
     render(

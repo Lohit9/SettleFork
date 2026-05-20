@@ -381,6 +381,7 @@ function buildData(): MappingsForRedesignResult {
       isAcknowledged: false,
       isRejected: false,
       aiReasoning: null,
+      confidence: null,
     },
     {
       id: 'sf-acct-unused',
@@ -393,6 +394,7 @@ function buildData(): MappingsForRedesignResult {
       isAcknowledged: false,
       isRejected: false,
       aiReasoning: null,
+      confidence: null,
     },
     {
       id: 'sf-cif-col',
@@ -405,6 +407,7 @@ function buildData(): MappingsForRedesignResult {
       isAcknowledged: false,
       isRejected: false,
       aiReasoning: null,
+      confidence: null,
     },
   ]
 
@@ -977,6 +980,101 @@ describe('MappingRedesignContent — PR-7 retired chips (Rejected / Unmapped)', 
 })
 
 // ─────────────────────────────────────────────────────────────────────────────
+// Refinement #1 — strip Approved / Needs Review count ALL four row kinds.
+// ─────────────────────────────────────────────────────────────────────────────
+//
+// The strip's `Approved` / `Needs Review` chips read `effectiveCounts`,
+// which MappingContent computes over `flattenRowsForListView` — the
+// canonical projection that folds in the source-side rows. Pre-fix the
+// count iterated `data.rows` directly, so `unmapped-source` rows (acks +
+// pure unmapped source fields, which only exist in the flattened
+// projection) were silently omitted. These tests pin the inclusion of
+// every row kind.
+
+describe('MappingRedesignContent — strip counters include unmapped-source rows', () => {
+  function sourceField(
+    overrides: Partial<SourceFieldWithState> & { id: string; name: string },
+  ): SourceFieldWithState {
+    return {
+      dataType: 'VARCHAR',
+      ordinalPosition: 0,
+      sourceTable: { id: sourceTableX.id, name: sourceTableX.name },
+      mappingStatus: 'unmapped',
+      sampleValues: [],
+      isAcknowledged: false,
+      isRejected: false,
+      aiReasoning: null,
+      confidence: null,
+      ...overrides,
+    }
+  }
+
+  // buildData() ships 5 mapped rows (4 approved, 1 needs_review). The
+  // overrides below add source-side rows: one pure unmapped source
+  // field (needs_review), one acknowledged (approved), one rejected.
+  const sourceSideOverrides = {
+    sourceFields: [
+      sourceField({ id: 'sf-acct-col', name: 'COL', mappingStatus: 'mapped' }),
+      sourceField({ id: 'sf-cif-col', name: 'COL', mappingStatus: 'mapped' }),
+      sourceField({ id: 'sf-acct-unused', name: 'UNUSED_COL' }),
+      sourceField({ id: 'sf-acked', name: 'ACKED_COL', isAcknowledged: true }),
+      sourceField({ id: 'sf-rejected', name: 'REJECTED_COL', isRejected: true }),
+    ],
+    sourceFieldAcknowledgments: [
+      {
+        id: 'ack-approved',
+        sourceFieldId: 'sf-acked',
+        reason: 'Decided: will not be migrated.',
+        decision: 'acknowledged' as const,
+      },
+      {
+        id: 'ack-rejected',
+        sourceFieldId: 'sf-rejected',
+        reason: 'Decided: rejected as a source.',
+        decision: 'rejected' as const,
+      },
+    ],
+  }
+
+  it('Needs Review counts the pure unmapped-source row alongside mapped needs_review rows', () => {
+    renderRedesign('', sourceSideOverrides)
+    const needsReview = screen.getByTestId('mapping-summary-chip-needs-review')
+    // 1 mapped needs_review (r-accounts-2) + 1 pure unmapped-source
+    // (sf-acct-unused). Pre-fix this chip showed 1.
+    expect(Number(needsReview.textContent?.match(/\d+/)?.[0])).toBe(2)
+  })
+
+  it('Approved counts the acknowledged unmapped-source row alongside mapped approved rows', () => {
+    renderRedesign('', sourceSideOverrides)
+    const approved = screen.getByTestId('mapping-summary-chip-approved')
+    // 4 mapped approved + 1 acknowledged unmapped-source (sf-acked).
+    // Pre-fix this chip showed 4.
+    expect(Number(approved.textContent?.match(/\d+/)?.[0])).toBe(5)
+  })
+
+  it('a rejected source-side ack lands in neither Approved nor Needs Review', () => {
+    renderRedesign('', sourceSideOverrides)
+    const approved = screen.getByTestId('mapping-summary-chip-approved')
+    const needsReview = screen.getByTestId('mapping-summary-chip-needs-review')
+    // sf-rejected is the 6th flat row; it must not inflate either chip.
+    expect(Number(approved.textContent?.match(/\d+/)?.[0])).toBe(5)
+    expect(Number(needsReview.textContent?.match(/\d+/)?.[0])).toBe(2)
+  })
+
+  it('with no source-side rows the chips count only the target-keyed rows', () => {
+    // Regression guard: the fix must not double-count or shift the
+    // baseline. buildData() with its default empty acks + 1 unreferenced
+    // source field (sf-acct-unused, needs_review).
+    renderRedesign()
+    const approved = screen.getByTestId('mapping-summary-chip-approved')
+    const needsReview = screen.getByTestId('mapping-summary-chip-needs-review')
+    // 4 mapped approved; 1 mapped needs_review + 1 pure unmapped-source.
+    expect(Number(approved.textContent?.match(/\d+/)?.[0])).toBe(4)
+    expect(Number(needsReview.textContent?.match(/\d+/)?.[0])).toBe(2)
+  })
+})
+
+// ─────────────────────────────────────────────────────────────────────────────
 // Phase 4-polish-1 sidebar architecture refactor — zero-gap regression guard.
 // ─────────────────────────────────────────────────────────────────────────────
 //
@@ -1485,6 +1583,7 @@ describe('MappingRedesignContent — Phase 4 empty-state cases', () => {
             isAcknowledged: false,
             isRejected: false,
             aiReasoning: null,
+            confidence: null,
           } satisfies SourceFieldWithState,
         ],
       }),
@@ -1539,6 +1638,7 @@ describe('MappingRedesignContent — Phase 4 empty-state cases', () => {
             isAcknowledged: false,
             isRejected: false,
             aiReasoning: null,
+            confidence: null,
           } satisfies SourceFieldWithState,
         ],
         targetTables: [accountsTable, customersTable],

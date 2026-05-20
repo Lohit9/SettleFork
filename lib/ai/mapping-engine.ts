@@ -57,6 +57,7 @@ import { runMultiAgentMappingPipeline } from '@/lib/ai/multi-agent-orchestrator'
 import {
   getStaticSuggestionForTarget,
   resolveStaticSourceUnmappedRationale,
+  type StaticSourceUnmappedInfo,
 } from '@/lib/mappings/static-provider'
 
 // ─── Raw row shapes fetched from Supabase ────────────────────────────
@@ -217,13 +218,15 @@ export interface AssembleInput {
    */
   coverage?: RawCoverageRow[]
   /**
-   * Display-only rationale for unmapped source fields, keyed by
-   * `fields.id`. Sourced from the static-mappings config's `explanation`
-   * field via `resolveStaticSourceUnmappedRationale`. Optional with
-   * default empty `Map` — projects with no static config (and fixtures /
-   * tests) simply omit it. Flows onto `SourceFieldWithState.aiReasoning`.
+   * Display-only metadata for unmapped source fields, keyed by
+   * `fields.id`. Sourced from the static-mappings config's
+   * `explanation` + `confidence` fields via
+   * `resolveStaticSourceUnmappedRationale`. Optional with default empty
+   * `Map` — projects with no static config (and fixtures / tests)
+   * simply omit it. Flows onto `SourceFieldWithState.aiReasoning` +
+   * `SourceFieldWithState.confidence`.
    */
-  staticSourceRationale?: ReadonlyMap<string, string>
+  staticSourceRationale?: ReadonlyMap<string, StaticSourceUnmappedInfo>
 }
 
 // Also export the raw row types so tests and future call sites can
@@ -570,6 +573,7 @@ function buildUnmappedRow(
     transformationDescription: null,
     transformationSqlPreview: null,
     transformationIntent: tfm?.transformation_intent ?? null,
+    transformationNeeded: tfm?.needs_transformation ?? null,
     mapping_content: 'no-source',
     coverageStatus,
     statusSetBy,
@@ -598,6 +602,7 @@ function buildValueAssignmentRow(
       transformation?.generated_sql ?? null,
     ),
     transformationIntent: tfm.transformation_intent ?? null,
+    transformationNeeded: tfm.needs_transformation ?? null,
     combinationType: 'custom_sql',
     combinationSql: tfm.combination_sql,
     aiReasoning: tfm.ai_reasoning,
@@ -661,6 +666,7 @@ function buildMappedRow(
       transformation?.generated_sql ?? null,
     ),
     transformationIntent: tfm.transformation_intent ?? null,
+    transformationNeeded: tfm.needs_transformation ?? null,
     sources,
     combinationType: coerceCombinationType(tfm.combination_type),
     // `combinationSql` is only meaningful for `custom_sql` multi-source
@@ -990,7 +996,7 @@ function buildSourceFieldsWithState(
   tfms: RawTfmRow[],
   mappingSources: RawMappingSourceRow[],
   sourceAcks: RawSourceAckRow[],
-  staticSourceRationale: ReadonlyMap<string, string>,
+  staticSourceRationale: ReadonlyMap<string, StaticSourceUnmappedInfo>,
 ): SourceFieldWithState[] {
   const tfmStatusById = new Map<string, string>(
     tfms.map((t) => [t.id, t.status]),
@@ -1031,7 +1037,8 @@ function buildSourceFieldsWithState(
       sampleValues: extractSampleValues(field.field_profiles),
       isAcknowledged: acknowledgedSourceFieldIds.has(field.id),
       isRejected: rejectedSourceFieldIds.has(field.id),
-      aiReasoning: staticSourceRationale.get(field.id) ?? null,
+      aiReasoning: staticSourceRationale.get(field.id)?.explanation ?? null,
+      confidence: staticSourceRationale.get(field.id)?.confidence ?? null,
     })
   }
 
@@ -1216,7 +1223,7 @@ export function assembleMappingsForRedesign(
     sourceAcks,
     transformations,
     coverage = [],
-    staticSourceRationale = new Map<string, string>(),
+    staticSourceRationale = new Map<string, StaticSourceUnmappedInfo>(),
   } = input
 
   // ── Build dataset / table / field indexes ──────────────────────────

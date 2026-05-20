@@ -78,6 +78,7 @@ function makeField(
     isAcknowledged: overrides.isAcknowledged ?? false,
     isRejected: overrides.isRejected ?? false,
     aiReasoning: overrides.aiReasoning ?? null,
+    confidence: overrides.confidence ?? null,
   }
 }
 

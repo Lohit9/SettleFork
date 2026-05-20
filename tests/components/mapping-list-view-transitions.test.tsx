@@ -146,6 +146,8 @@ function sourceFieldWithState(
     sampleValues: ['A1', 'B2'],
     isAcknowledged: false,
     isRejected: false,
+    aiReasoning: null,
+    confidence: null,
     ...overrides,
   }
 }
