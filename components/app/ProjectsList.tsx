@@ -12,7 +12,6 @@ import { createProject } from '@/lib/actions/projects'
 import { ProjectWithStats } from '@/lib/types/database'
 import { ProjectMenu } from '@/components/app/ProjectMenu'
 import { ProjectStateBadge } from '@/components/app/ProjectStateBadge'
-import { BlockingPill } from '@/components/app/BlockingPill'
 
 // ── helpers ────────────────────────────────────────────────────────────────
 
@@ -56,38 +55,14 @@ function AutoArchiveCountdown({ completedAt }: { completedAt: string | null }) {
 
 // ── ProjectCard ─────────────────────────────────────────────────────────────
 
-// PR-2 (feat/project-tile-redesign): the tile now consumes the new
-// `projectStats: ProjectStats | null` field that PR-1 populated on
-// `ProjectWithStats`. The legacy fields (`mappingApproved`, `mappingTotal`,
-// `transformApplied`, `transformScope`, `blockingIssueCount`, etc.) stay
-// on the type for the Migration Center surface — PR-3 retires them once
-// MC also stops reading them.
-//
-// PR-2.5 (feat/tile-state-aware-stats-area): de-clutter Active tab tiles
-// by dropping `<ProjectStateBadge>` for non-completed projects, and move
-// the state label into the stats area as italic gray text. Completed
-// projects keep the green badge at top. Decoupled the showStats gate
-// from the state predicate: completed projects ALWAYS show stats even
-// when the underlying state predicate evaluates to data_ingested
-// (post-completion, all TFMs become acknowledged → state regresses, but
-// the user wants final numbers shown).
-//
-// Render contract by status / state:
-//
-//   Active awaiting_data       no badge, italic state label, no stats row
-//   Active data_ingested       no badge, italic state label, no stats row
-//   Active mappings_generated  no badge, no label, stats row visible
-//   Completed (any state)      green Completed badge, stats row visible
-//   Archived                   inline "Archived" gray span (unchanged),
-//                              no stats (data purged)
-//
-// Defensive null-fallback (Q5 from PR-2 Stop 1, preserved): null
-// projectStats treats state as `awaiting_data` — italic label, no stats.
-//
-// Transform numerator note: `projectStats.transforms.complete` counts
-// `saved + applied` rows (Q2 from PR-1) — a numeric SHIFT upward from the
-// previous `transformApplied`-only display. Deliberate spec change; user-
-// visible work-in-progress (Saved status) now reads as completed.
+// feat/dashboard-cleanup-reject-confirm: the tile is intentionally
+// minimal — project name (plus the Completed / Archived badge) and a
+// last-updated relative timestamp. The prior right-side stats cluster
+// (Mapping Approvals count, Transforms count, BlockingPill) and the
+// italic state label were dropped: per-count progress is noise at the
+// dashboard level and lives on the Mapping page / Migration Center
+// where there is room for it. `projectStats` stays on `ProjectWithStats`
+// and is still read here to feed the completed-project state badge.
 export function ProjectCard({
   project,
   onUpdate,
@@ -98,31 +73,6 @@ export function ProjectCard({
   const isCompleted = project.status === 'completed'
   const isArchived = project.status === 'archived'
   const stats = project.projectStats
-  // PR-2.6: data-presence predicate. Stats render whenever the project
-  // has data (real or zero) — explicitly NOT gated on the state machine.
-  // Production review surfaced two cases the PR-2.5 state-based gate
-  // got wrong:
-  //   1. Active data_ingested projects with substantial uploaded data
-  //      (target.total > 0) had only "Data ingested" italic label
-  //      where 0/N stats would be more informative.
-  //   2. Active projects with real mappings whose state predicate had
-  //      regressed (e.g., all unack'd TFMs processed → state
-  //      evaluates as data_ingested) lost their numbers entirely.
-  // Both fixed by triggering on data-presence (target.total > 0 OR
-  // transforms.total > 0) instead of the state machine.
-  const showStats =
-    !isArchived &&
-    (!!project.completed_at ||
-      (stats?.target.total ?? 0) > 0 ||
-      (stats?.transforms.total ?? 0) > 0)
-  // PR-2.6: state label collapses to a single string. Under the
-  // data-presence predicate the only reachable empty state is the
-  // all-zeros case (which corresponds to `awaiting_data` semantically
-  // OR the null-projectStats defensive fallback). The "Data ingested"
-  // branch from PR-2.5 is unreachable post-PR-2.6 — when a project has
-  // ingested data, target.total > 0 and the stats path is taken instead.
-  const stateLabelText =
-    !showStats && !isArchived ? 'Awaiting data ingestion' : null
 
   const cardContent = (
     <>
@@ -147,53 +97,24 @@ export function ProjectCard({
         {isCompleted && !isArchived && <AutoArchiveCountdown completedAt={project.completed_at} />}
       </div>
 
-      {/* Row 2: Meta left, stats right */}
-      <div className="flex items-center justify-between">
-        <div className="flex items-center gap-1.5 text-xs text-gray-500">
-          {project.source_label && (
-            <>
-              <span>{project.source_label}</span>
-              <span className="text-gray-300">→</span>
-              <span>{project.target_label}</span>
-              <span className="text-gray-300">·</span>
-            </>
-          )}
-          <span>
-            {isArchived && project.archived_at
-              ? `Archived ${formatDate(project.archived_at)}`
-              : `Updated ${formatRelativeTime(project.updated_at)}`}
-          </span>
-          {isArchived && <span className="text-gray-400">· Data purged</span>}
-        </div>
-
-        {showStats && stats && (
-          <div
-            data-testid="project-stats-row"
-            className="flex items-center gap-0 text-xs text-gray-500 flex-shrink-0"
-          >
-            {/* PR-7 (feat/mapping-approvals): "Mapped" → "Mapping Approvals"
-                + dropped the Sources stat. The tile is space-constrained;
-                Source Fields coverage lives on the MC Mapping Coverage card
-                and the Mapping page strip where there's room for both axes.
-                Tile reduces to the highest-signal numerator per surface. */}
-            <span data-testid="stat-target">
-              Mapping Approvals: {stats.target.approved}/{stats.target.total}
-            </span>
-            <span className="mx-2 text-gray-300">|</span>
-            <span data-testid="stat-transforms">
-              Transforms: {stats.transforms.complete}/{stats.transforms.total}
-            </span>
-            <BlockingPill count={stats.blocking} className="ml-3" />
-          </div>
+      {/* Row 2: source → target · last-updated relative timestamp.
+          No right-side stats cluster — see the ProjectCard header
+          comment for why the per-count signals were dropped. */}
+      <div className="flex items-center gap-1.5 text-xs text-gray-500">
+        {project.source_label && (
+          <>
+            <span>{project.source_label}</span>
+            <span className="text-gray-300">→</span>
+            <span>{project.target_label}</span>
+            <span className="text-gray-300">·</span>
+          </>
         )}
-        {stateLabelText && (
-          <span
-            data-testid="tile-state-label"
-            className="text-xs italic text-slate-500 flex-shrink-0"
-          >
-            {stateLabelText}
-          </span>
-        )}
+        <span data-testid="project-last-updated">
+          {isArchived && project.archived_at
+            ? `Archived ${formatDate(project.archived_at)}`
+            : `Updated ${formatRelativeTime(project.updated_at)}`}
+        </span>
+        {isArchived && <span className="text-gray-400">· Data purged</span>}
       </div>
     </>
   )
