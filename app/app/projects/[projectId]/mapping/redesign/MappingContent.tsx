@@ -68,6 +68,7 @@ import { MappingSummaryStrip } from './components/MappingSummaryStrip'
 // collapsed-state vertical label was retired (Linear-style polish);
 // source-field counts live on the summary chip now.
 import { RejectConfirmPopover } from './components/RejectConfirmPopover'
+import { MergeTargetDialog } from './components/MergeTargetDialog'
 import { ViewModeToggle } from './components/ViewModeToggle'
 import { MappingListView } from './components/MappingListView'
 import { useMappingListMutations } from './hooks/useMappingListMutations'
@@ -2122,6 +2123,20 @@ function MappingContentLoaded({
         onCreateMapping={handleCreateMapping}
         onNavigateTarget={handleNavigateTarget}
         onPromoteSource={handlePromoteSource}
+      />
+
+      {/*
+        Target-field-swap MERGE confirmation. A single global instance
+        driven by `mutations.pendingMerge` — set when a swap onto an
+        already-mapped target returns MERGE_REQUIRED. Hosted here so
+        both swap entry points (the flat-view inline picker and the
+        drawer pencil) share one dialog surface.
+      */}
+      <MergeTargetDialog
+        pendingMerge={mutations.pendingMerge}
+        isPending={mutations.isMergePending}
+        onConfirm={mutations.confirmPendingMerge}
+        onCancel={mutations.cancelPendingMerge}
       />
 
       {/*

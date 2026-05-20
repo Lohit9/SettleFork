@@ -227,6 +227,10 @@ function makeMutations(): MappingListMutations & {
     approveUnmappedSource: vi.fn().mockResolvedValue(success),
     promoteUnmappedSource: vi.fn().mockResolvedValue(success),
     editMappingSources: vi.fn().mockResolvedValue(success),
+    pendingMerge: null,
+    isMergePending: false,
+    confirmPendingMerge: vi.fn().mockResolvedValue(success),
+    cancelPendingMerge: vi.fn(),
   }
 }
 

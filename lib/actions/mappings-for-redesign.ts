@@ -74,6 +74,7 @@ import {
   updateFieldMappingStatus,
   type MappingWriteErrorCode,
 } from '@/lib/actions/mappings'
+import { APPROVE_ALL_REASON } from '@/lib/constants/approve-all-reason'
 import { logActivity } from '@/lib/actions/activity-log'
 import { logAIEdit } from '@/lib/actions/ai-edit-history'
 import { requireProjectPermission } from '@/lib/actions/role-resolution'
@@ -4415,8 +4416,27 @@ export type UpdateTargetFieldErrorCode =
   | 'NOT_FOUND'
   | 'VALIDATION'
   | 'MAINTENANCE_MODE'
-  | 'TARGET_CONFLICT'
   | 'INTERNAL'
+
+/**
+ * Preview payload for a target-field-swap MERGE conflict. Returned by
+ * `updateMappingTargetField` (phase 1) when the picked target already
+ * carries a live mapping. The UI renders a confirmation dialog from
+ * this and, on confirm, re-invokes the action with `confirmMerge: true`.
+ *
+ * Swap-into-occupied-target is a MERGE, never a Replace: the swapping
+ * mapping's sources are folded into the mapping already at the target.
+ */
+export interface TargetMergePreview {
+  /** The TFM already occupying the picked target (the merge survivor). */
+  conflictingTfmId: string
+  /** Display name of the picked target field. */
+  targetFieldName: string
+  /** Source field names already mapped to the picked target. */
+  existingSourceNames: string[]
+  /** Source field names the swap would fold in (from the swapping TFM). */
+  incomingSourceNames: string[]
+}
 
 export type UpdateMappingTargetFieldResult =
   | {
@@ -4424,11 +4444,24 @@ export type UpdateMappingTargetFieldResult =
       tfmId: string
       transformReset: boolean
       stagedRowsReverted: number
+      /** True when the swap resolved a conflict by merging two mappings. */
+      merged: boolean
     }
   | {
       success: false
       error: string
       errorCode: UpdateTargetFieldErrorCode
+    }
+  | {
+      /**
+       * The picked target is already mapped. Not an error — the caller
+       * must surface `merge` in a confirmation dialog and, on confirm,
+       * re-invoke with `confirmMerge: true`.
+       */
+      success: false
+      errorCode: 'MERGE_REQUIRED'
+      error: string
+      merge: TargetMergePreview
     }
 
 /**
@@ -4436,11 +4469,22 @@ export type UpdateMappingTargetFieldResult =
  * Target Field cell on a flat-view row. This is a TFM-level operation —
  * the input is the bare TFM uuid, not a shim id.
  *
- * Per founder decision Q5 (2026-05-11): a VA at the new target is NOT
- * auto-deleted (legacy `editFieldMapping` behaviour). Returns
- * TARGET_CONFLICT; the user must explicitly reject the existing VA
- * first. Keeps flat-view semantics simple and avoids implicit data
- * loss.
+ * Conflict handling at the picked target depends on what already
+ * occupies it (see Step 9):
+ *   • A static-provider BARE-ACK (`combination_type IS NULL`, not the
+ *     user "approve all" sentinel) — a machine-generated rationale
+ *     carrier, not a user decision. Cleared silently; the plain swap
+ *     proceeds with no dialog and no error.
+ *   • A regular mapping (`combination_type IS NOT NULL`) — resolved by
+ *     MERGE. The first call returns `MERGE_REQUIRED` with a preview; the
+ *     caller surfaces a confirmation dialog and, on confirm, re-invokes
+ *     with `confirmMerge: true`. The merge folds the swapping TFM's
+ *     sources into the existing mapping and deletes the swapping TFM
+ *     (`mergeTargetFieldMappings`). Never a Replace — the existing
+ *     mapping's sources are preserved. For a Replace the user rejects
+ *     the existing mapping first, then swaps onto the freed target.
+ *   • A genuine user "approve all" acknowledgment — refused with
+ *     VALIDATION; the user un-acknowledges it first.
  *
  * Per founder decision Q1: confidence is NOT touched here. The
  * underlying mapping_sources keep their AI-authored per-source
@@ -4449,8 +4493,15 @@ export type UpdateMappingTargetFieldResult =
 export async function updateMappingTargetField(input: {
   tfmId: string
   newTargetFieldId: string
+  /**
+   * Phase-2 opt-in. When the picked target is already mapped, the first
+   * call returns `MERGE_REQUIRED` with a preview; the caller confirms
+   * and re-invokes with `confirmMerge: true` to fold the swapping TFM's
+   * sources into the existing mapping.
+   */
+  confirmMerge?: boolean
 }): Promise<UpdateMappingTargetFieldResult> {
-  const { tfmId, newTargetFieldId } = input
+  const { tfmId, newTargetFieldId, confirmMerge = false } = input
 
   // ── Step 1: input validation ────────────────────────────────────────────
   if (!tfmId) {
@@ -4634,17 +4685,30 @@ export async function updateMappingTargetField(input: {
       tfmId: tfm.id,
       transformReset: false,
       stagedRowsReverted: 0,
+      merged: false,
     }
   }
 
-  // ── Step 9: TARGET_CONFLICT check ──────────────────────────────────────
-  // Mirrors editFieldMapping's logic. UNIQUE (project_id, target_field_id)
-  // would surface as INTERNAL otherwise; pre-check returns a clean code.
-  // Q5: refuse for ANY live TFM at the new target (mapped, VA, or bare-
-  // ack). User must explicitly reject the existing row first.
+  // ── Step 9: conflict detection ─────────────────────────────────────────
+  // The picked target may already carry a TFM. Three discriminated cases:
+  //
+  //   Path 1 — static-provider BARE-ACK (`combination_type IS NULL`, not
+  //     the user "approve all" sentinel). A machine-generated rationale
+  //     carrier, NOT a user decision. It must not block the swap: clear
+  //     it and let the plain swap proceed (no dialog, no error).
+  //   Path 2 — regular TFM (`combination_type IS NOT NULL` — mapped/VA).
+  //     Resolve by MERGING: the swapping TFM's sources fold into the
+  //     existing mapping. Two-phase + confirmed (`confirmMerge`).
+  //   Path 3 — user-acknowledged-as-unmapped (`combination_type IS NULL`
+  //     AND `acknowledgment_reason = APPROVE_ALL_REASON`). A genuine user
+  //     decision that the target stays unmapped — refuse with VALIDATION.
+  //
+  // The bare-ack vs user-ack discriminator is `acknowledgment_reason`:
+  // the legacy bulk "approve all" writes the fixed `APPROVE_ALL_REASON`
+  // sentinel; the static provider writes the JSON rationale text.
   const { data: existing } = await supabaseAdmin
     .from('target_field_mappings')
-    .select('id, status, is_acknowledged, combination_type')
+    .select('id, status, is_acknowledged, combination_type, acknowledgment_reason')
     .eq('project_id', projectId)
     .eq('target_field_id', newTargetFieldId)
     .maybeSingle<{
@@ -4652,13 +4716,80 @@ export async function updateMappingTargetField(input: {
       status: 'needs_review' | 'approved' | 'rejected'
       is_acknowledged: boolean
       combination_type: string | null
+      acknowledgment_reason: string | null
     }>()
+
+  // Set when Path 1 clears a bare-ack — surfaced in the swap audit log.
+  let clearedBareAckTfmId: string | null = null
+
   if (existing && existing.id !== tfm.id && existing.status !== 'rejected') {
-    return {
-      success: false,
-      error:
-        'Target field already has a mapping. Reject the existing mapping first.',
-      errorCode: 'TARGET_CONFLICT',
+    // A `combination_type IS NULL` TFM is an acknowledgment carrier, not
+    // a real mapping (a mapped TFM always has 'single'/'concat_*', a VA
+    // has 'custom_sql'). Mirrors the bare-ack discriminator used by
+    // `createMappingFromUnmapped`.
+    const isAckCarrier = existing.combination_type === null
+
+    if (isAckCarrier && existing.acknowledgment_reason === APPROVE_ALL_REASON) {
+      // Path 3 — genuine user "leave unmapped" decision.
+      return {
+        success: false,
+        error:
+          'The target field is acknowledged. Un-acknowledge it before mapping a source to it.',
+        errorCode: 'VALIDATION',
+      }
+    }
+
+    if (isAckCarrier) {
+      // Path 1 — static-provider bare-ack. Delete it; it never
+      // represented a user decision and must not block the swap. The
+      // bare-ack has zero sources / no transform, so a plain DELETE is
+      // sufficient (its target table's TM recompute is covered by
+      // Step 13 below). Execution falls through to the plain-swap path.
+      const { error: clearErr } = await supabaseAdmin
+        .from('target_field_mappings')
+        .delete()
+        .eq('id', existing.id)
+      if (clearErr) {
+        return {
+          success: false,
+          error: clearErr.message,
+          errorCode: 'INTERNAL',
+        }
+      }
+      clearedBareAckTfmId = existing.id
+    } else {
+      // Path 2 — regular TFM: resolve by MERGE.
+      const incomingSources = await getTfmSourceFieldRefs(tfm.id)
+      const existingSources = await getTfmSourceFieldRefs(existing.id)
+
+      // Phase 1 — no confirmation yet: return a MERGE_REQUIRED preview.
+      if (!confirmMerge) {
+        return {
+          success: false,
+          errorCode: 'MERGE_REQUIRED',
+          error: `"${newTarget.name}" is already mapped. Confirm to merge the sources into the existing mapping.`,
+          merge: {
+            conflictingTfmId: existing.id,
+            targetFieldName: newTarget.name,
+            existingSourceNames: existingSources.map((s) => s.name),
+            incomingSourceNames: incomingSources.map((s) => s.name),
+          },
+        }
+      }
+
+      // Phase 2 — confirmed: execute the merge.
+      return mergeTargetFieldMappings({
+        projectId,
+        swappingTfm: { id: tfm.id, targetFieldId: tfm.target_field_id },
+        survivingTfm: {
+          id: existing.id,
+          combinationType: existing.combination_type,
+        },
+        incomingSourceFieldIds: incomingSources.map((s) => s.id),
+        existingSourceFieldIds: existingSources.map((s) => s.id),
+        prevTargetName: prevTarget?.name ?? null,
+        newTargetName: newTarget.name,
+      })
     }
   }
 
@@ -4731,6 +4862,11 @@ export async function updateMappingTargetField(input: {
   // Reuses mapping_sources_changed (broad "mapping mutated" semantic)
   // with metadata.kind='target_changed' to disambiguate from the
   // sources-edit emitter. Plus mapping_approved for the cascade.
+  //
+  // When Path 1 cleared a static-provider bare-ack off the new target,
+  // `bare_ack_cleared` records it here. This is NOT a merge — the bare-
+  // ack carried no user decision and no sources — so no `mapping_merged`
+  // event is emitted; the plain-swap audit pair stands.
   await logActivity(
     projectId,
     'mapping_sources_changed',
@@ -4745,6 +4881,7 @@ export async function updateMappingTargetField(input: {
       new_target_field: newTarget.name,
       new_target_field_id: newTargetFieldId,
       transform_reset: transformReset,
+      bare_ack_cleared: clearedBareAckTfmId,
     },
   )
   await logActivity(
@@ -4780,6 +4917,179 @@ export async function updateMappingTargetField(input: {
     tfmId: tfm.id,
     transformReset,
     stagedRowsReverted,
+    merged: false,
+  }
+}
+
+/**
+ * Resolve a TFM's `mapping_sources` to `{ id, name }` source-field refs,
+ * ordered by `ordinal` ASC. Helper for the target-swap MERGE path —
+ * phase 1 needs the names for the confirmation preview, phase 2 needs
+ * the ids to fold into the surviving mapping.
+ */
+async function getTfmSourceFieldRefs(
+  tfmId: string,
+): Promise<Array<{ id: string; name: string }>> {
+  const { data } = await supabaseAdmin
+    .from('mapping_sources')
+    .select('source_field_id, fields:source_field_id(name)')
+    .eq('target_field_mapping_id', tfmId)
+    .order('ordinal', { ascending: true })
+  const out: Array<{ id: string; name: string }> = []
+  for (const row of (data ?? []) as Array<{
+    source_field_id: string | null
+    fields: { name: string } | { name: string }[] | null
+  }>) {
+    if (!row.source_field_id) continue
+    const fieldRel = Array.isArray(row.fields) ? row.fields[0] : row.fields
+    out.push({ id: row.source_field_id, name: fieldRel?.name ?? '?' })
+  }
+  return out
+}
+
+/**
+ * Execute a confirmed target-swap MERGE (phase 2 of
+ * `updateMappingTargetField`).
+ *
+ * Swap-into-occupied-target is a MERGE, never a Replace: the swapping
+ * TFM's sources fold into the TFM already at the picked target; the
+ * swapping TFM is then deleted and its old target reverts to unmapped.
+ *
+ * Steps (sequential — Supabase JS has no client-side transaction; order
+ * is chosen so a mid-sequence failure is recoverable, never lossy):
+ *   1. `editMappingSources` on the surviving TFM with the deduped union
+ *      of both source sets. This also flips it to `needs_review` and
+ *      resets its transformation SQL (a multi-source mapping must be
+ *      re-authored) — exactly the spec's "reset on merge". Emits the
+ *      `mapping_sources_changed` audit entry for the survivor.
+ *   2. `deleteFieldMapping` on the swapping TFM (FK-cascades its
+ *      mapping_sources; recomputes its table mappings).
+ *   3. `neutralizeCoverageForReject` on the swapping TFM's OLD target so
+ *      it reverts to a neutral unmapped row (no stale approved/green).
+ *   4. `mapping_merged` activity-log entry for the swapping TFM.
+ *
+ * Step 1 runs before step 2 so that if the delete fails the union has
+ * already landed on the survivor — the swapping TFM merely lingers and
+ * the user can retry; no sources are orphaned.
+ */
+async function mergeTargetFieldMappings(args: {
+  projectId: string
+  swappingTfm: { id: string; targetFieldId: string }
+  survivingTfm: { id: string; combinationType: string | null }
+  incomingSourceFieldIds: string[]
+  existingSourceFieldIds: string[]
+  prevTargetName: string | null
+  newTargetName: string
+}): Promise<UpdateMappingTargetFieldResult> {
+  const {
+    projectId,
+    swappingTfm,
+    survivingTfm,
+    incomingSourceFieldIds,
+    existingSourceFieldIds,
+    prevTargetName,
+    newTargetName,
+  } = args
+
+  // Deduped union — a source field already on the survivor is not added
+  // twice. Existing sources first so the survivor's primary ordering is
+  // preserved; incoming sources append.
+  const unionSourceFieldIds = [
+    ...new Set([...existingSourceFieldIds, ...incomingSourceFieldIds]),
+  ]
+
+  // A multi-source result needs a multi combinator. Preserve the
+  // survivor's existing multi type; promote a 'single' (or a VA's
+  // 'custom_sql') survivor to 'concat_space'. A 1-source union stays
+  // 'single' (degenerate merge — e.g. the swapping TFM was a VA).
+  const survivorIsMulti =
+    survivingTfm.combinationType === 'concat_space' ||
+    survivingTfm.combinationType === 'concat_comma'
+  const mergedCombinationType: CreateFieldMappingCombinationType =
+    unionSourceFieldIds.length > 1
+      ? survivorIsMulti
+        ? (survivingTfm.combinationType as 'concat_space' | 'concat_comma')
+        : 'concat_space'
+      : 'single'
+
+  // Step 1 — fold the sources into the survivor. `editMappingSources`
+  // re-asserts auth/permission/maintenance, flips status to
+  // needs_review, and resets the survivor's transform on a source-set
+  // change. Emits `mapping_sources_changed`.
+  const editResult = await editMappingSources({
+    tfmId: survivingTfm.id,
+    sourceFieldIds: unionSourceFieldIds,
+    combinationType: mergedCombinationType,
+  })
+  if (!editResult.success) {
+    return {
+      success: false,
+      error: editResult.error,
+      errorCode:
+        editResult.errorCode === 'PERMISSION_DENIED' ||
+        editResult.errorCode === 'NOT_FOUND' ||
+        editResult.errorCode === 'VALIDATION' ||
+        editResult.errorCode === 'MAINTENANCE_MODE'
+          ? editResult.errorCode
+          : 'INTERNAL',
+    }
+  }
+
+  // Step 2 — delete the swapping TFM (FK-cascades its mapping_sources;
+  // recomputes its table mappings; resets its transform).
+  const deleteResult = await deleteFieldMapping(swappingTfm.id)
+  if (!deleteResult.success) {
+    return {
+      success: false,
+      error:
+        deleteResult.error ??
+        'Sources were merged, but removing the original mapping failed. Retry to finish.',
+      errorCode: 'INTERNAL',
+    }
+  }
+
+  // Step 3 — neutralize the swapping TFM's OLD target so it reverts to a
+  // neutral unmapped row rather than leaking a stale approved status.
+  const coverageReset = await neutralizeCoverageForReject(
+    projectId,
+    swappingTfm.targetFieldId,
+  )
+  if (!coverageReset.success) {
+    console.warn(
+      '[mergeTargetFieldMappings] old-target coverage neutralization failed (merge already committed):',
+      coverageReset.error,
+    )
+  }
+
+  // Step 4 — audit the merge. The survivor's source-add is already
+  // audited by `editMappingSources` (`mapping_sources_changed`); this
+  // entry records the swapping TFM being merged away.
+  await logActivity(
+    projectId,
+    'mapping_merged',
+    `Mapping merged: ${prevTargetName ?? '?'} → ${newTargetName}`,
+    'mapping',
+    {
+      surface: 'flat_view',
+      kind: 'target_merge',
+      merged_target_field_mapping_id: swappingTfm.id,
+      surviving_target_field_mapping_id: survivingTfm.id,
+      previous_target_field: prevTargetName,
+      new_target_field: newTargetName,
+      sources_folded_in: incomingSourceFieldIds.length,
+    },
+  )
+
+  revalidatePath(`/app/projects/${projectId}/mapping`)
+  revalidatePath(`/app/projects/${projectId}/transform`)
+  revalidatePath('/app/projects')
+
+  return {
+    success: true,
+    tfmId: survivingTfm.id,
+    transformReset: editResult.transformReset,
+    stagedRowsReverted: editResult.stagedRowsReverted,
+    merged: true,
   }
 }
 

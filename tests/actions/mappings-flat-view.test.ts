@@ -314,18 +314,33 @@ describe('[flat-view] updateMappingTargetField — shape', () => {
     expect(TGT_FIELD_BODY).toMatch(/newTargetFieldId:\s*string/)
   })
 
-  it('UpdateTargetFieldErrorCode includes TARGET_CONFLICT (Q5)', () => {
+  it('UpdateTargetFieldErrorCode is the hard-error set — no TARGET_CONFLICT (swap now merges)', () => {
     const union = sliceBetween(
       SRC,
       'export type UpdateTargetFieldErrorCode',
-      'export type UpdateMappingTargetFieldResult',
+      'export interface TargetMergePreview',
     )
-    expect(union).toContain("'TARGET_CONFLICT'")
     expect(union).toContain("'PERMISSION_DENIED'")
     expect(union).toContain("'NOT_FOUND'")
     expect(union).toContain("'VALIDATION'")
     expect(union).toContain("'MAINTENANCE_MODE'")
     expect(union).toContain("'INTERNAL'")
+    // Swap-into-occupied-target is a MERGE, not a hard error — the old
+    // TARGET_CONFLICT refuse-and-reject behaviour is gone.
+    expect(union).not.toContain("'TARGET_CONFLICT'")
+  })
+
+  it('UpdateMappingTargetFieldResult carries a MERGE_REQUIRED member with a merge preview', () => {
+    const resultType = sliceBetween(
+      SRC,
+      'export type UpdateMappingTargetFieldResult',
+      'export async function updateMappingTargetField(',
+    )
+    expect(resultType).toContain("errorCode: 'MERGE_REQUIRED'")
+    expect(resultType).toContain('merge: TargetMergePreview')
+    // The success member exposes `merged` so callers can tell a plain
+    // swap from a conflict-resolving merge.
+    expect(resultType).toMatch(/merged:\s*boolean/)
   })
 })
 
@@ -340,15 +355,67 @@ describe('[flat-view] updateMappingTargetField — validation + state guards', (
     expect(TGT_FIELD_BODY).toMatch(/tfm\.status\s*===\s*['"]rejected['"]/)
   })
 
-  it('Q5: refuses TARGET_CONFLICT for ANY live TFM at the new target (mapped, VA, or bare-ack)', () => {
+  it('routes a conflicting live TFM at the new target to the MERGE path (two-phase)', () => {
     expect(TGT_FIELD_BODY).toMatch(
       /existing\.id\s*!==\s*tfm\.id\s*&&\s*existing\.status\s*!==\s*['"]rejected['"]/,
     )
-    expect(TGT_FIELD_BODY).toMatch(
-      /TARGET_CONFLICT/,
-    )
-    // VA at target NOT auto-deleted — no replaceValueAssignment call here.
+    // Phase 1 (no confirmMerge) returns a MERGE_REQUIRED preview;
+    // phase 2 (confirmMerge) delegates to the merge executor.
+    expect(TGT_FIELD_BODY).toMatch(/if\s*\(!confirmMerge\)/)
+    expect(TGT_FIELD_BODY).toContain("errorCode: 'MERGE_REQUIRED'")
+    expect(TGT_FIELD_BODY).toContain('mergeTargetFieldMappings(')
+    // Swap is a MERGE, never a Replace — the existing mapping's sources
+    // are preserved, not auto-deleted.
     expect(TGT_FIELD_BODY).not.toMatch(/replaceValueAssignment/)
+  })
+
+  it('treats a static-provider bare-ack at the new target as Path 1 — clears it, no dialog/error', () => {
+    // Bug fix: a bare-ack TFM (`combination_type IS NULL`, not the
+    // approve-all sentinel) is a machine-generated rationale carrier,
+    // not a user decision — it must NOT block the swap. The check
+    // discriminates on `combination_type === null` and deletes the
+    // bare-ack so the plain swap proceeds.
+    expect(TGT_FIELD_BODY).toMatch(
+      /const isAckCarrier =\s*existing\.combination_type === null/,
+    )
+    // Path 1 deletes the bare-ack off target_field_mappings.
+    expect(TGT_FIELD_BODY).toMatch(
+      /from\(['"]target_field_mappings['"]\)\s*\.delete\(\)/,
+    )
+    expect(TGT_FIELD_BODY).toContain('clearedBareAckTfmId = existing.id')
+    // The conflict select carries acknowledgment_reason for the
+    // discriminator.
+    expect(TGT_FIELD_BODY).toMatch(
+      /\.select\(\s*['"][^'"]*acknowledgment_reason[^'"]*['"]\s*\)/,
+    )
+  })
+
+  it('refuses VALIDATION only for a genuine user "approve all" acknowledgment (Path 3)', () => {
+    // The VALIDATION case now fires ONLY when the ack-carrier TFM was
+    // written by the user-driven bulk approve-all (APPROVE_ALL_REASON),
+    // never for a static-provider bare-ack.
+    expect(TGT_FIELD_BODY).toMatch(
+      /isAckCarrier && existing\.acknowledgment_reason === APPROVE_ALL_REASON[\s\S]{0,400}errorCode:\s*['"]VALIDATION['"]/,
+    )
+    // The over-firing bare `is_acknowledged` gate from PR A1 is gone.
+    expect(TGT_FIELD_BODY).not.toMatch(
+      /if\s*\(existing\.is_acknowledged\)\s*\{/,
+    )
+  })
+
+  it('records the bare-ack clear in the swap audit log, not as a merge event', () => {
+    // Path 1 is a swap, not a merge — no `mapping_merged`; the cleared
+    // bare-ack id rides on the existing `mapping_sources_changed` entry.
+    expect(TGT_FIELD_BODY).toMatch(/bare_ack_cleared:\s*clearedBareAckTfmId/)
+    // Scope the no-merge assertion to updateMappingTargetField proper —
+    // the `mergeTargetFieldMappings` helper (also in TGT_FIELD_BODY's
+    // span) legitimately emits `mapping_merged`.
+    const updateProper = sliceBetween(
+      SRC,
+      'export async function updateMappingTargetField(',
+      'async function getTfmSourceFieldRefs(',
+    )
+    expect(updateProper).not.toContain("'mapping_merged'")
   })
 
   it('has a no-op short-circuit when target_field_id unchanged', () => {
@@ -393,6 +460,56 @@ describe('[flat-view] updateMappingTargetField — write semantics', () => {
     expect(TGT_FIELD_BODY).toMatch(/['"]mapping_sources_changed['"]/)
     expect(TGT_FIELD_BODY).toMatch(/kind:\s*['"]target_changed['"]/)
     expect(TGT_FIELD_BODY).toMatch(/['"]mapping_approved['"]/)
+  })
+})
+
+// ─────────────────────────────────────────────────────────────────────
+// 5.2b mergeTargetFieldMappings — confirmed target-swap MERGE executor
+// ─────────────────────────────────────────────────────────────────────
+
+const MERGE_BODY = sliceBetween(
+  SRC,
+  'async function mergeTargetFieldMappings(',
+  '// ─── 5.3 createMappingFromUnmapped',
+)
+
+describe('[flat-view] mergeTargetFieldMappings — confirmed merge', () => {
+  it('folds the deduped union of both source sets into the surviving TFM', () => {
+    expect(MERGE_BODY).toMatch(/new Set\(\[/)
+    expect(MERGE_BODY).toMatch(/existingSourceFieldIds/)
+    expect(MERGE_BODY).toMatch(/incomingSourceFieldIds/)
+    // The survivor gains the sources via editMappingSources — which also
+    // flips it to needs_review and resets its transform SQL.
+    expect(MERGE_BODY).toMatch(/editMappingSources\(\{/)
+  })
+
+  it('promotes the survivor to a multi-source combinator when the union is multi', () => {
+    expect(MERGE_BODY).toMatch(/unionSourceFieldIds\.length\s*>\s*1/)
+    expect(MERGE_BODY).toMatch(/['"]concat_space['"]/)
+    expect(MERGE_BODY).toMatch(/['"]single['"]/)
+  })
+
+  it('deletes the swapping TFM after the sources land on the survivor', () => {
+    const editIdx = MERGE_BODY.indexOf('editMappingSources({')
+    const deleteIdx = MERGE_BODY.indexOf('deleteFieldMapping(')
+    expect(editIdx).toBeGreaterThan(0)
+    expect(deleteIdx).toBeGreaterThan(editIdx)
+  })
+
+  it('neutralizes the swapping TFM old target so it reverts to a neutral unmapped row', () => {
+    expect(MERGE_BODY).toMatch(
+      /neutralizeCoverageForReject\(\s*projectId\s*,\s*swappingTfm\.targetFieldId/,
+    )
+  })
+
+  it('emits a mapping_merged activity-log entry for the swapped-away TFM', () => {
+    expect(MERGE_BODY).toMatch(/['"]mapping_merged['"]/)
+    expect(MERGE_BODY).toMatch(/kind:\s*['"]target_merge['"]/)
+  })
+
+  it('returns the surviving TFM id with merged=true', () => {
+    expect(MERGE_BODY).toMatch(/tfmId:\s*survivingTfm\.id/)
+    expect(MERGE_BODY).toMatch(/merged:\s*true/)
   })
 })
 
