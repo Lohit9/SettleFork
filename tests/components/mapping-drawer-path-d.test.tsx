@@ -29,6 +29,16 @@ vi.mock('@/lib/actions/mappings-for-redesign', () => ({
   createFieldMapping: (...args: unknown[]) => createFieldMappingMock(...args),
   suggestMappingForTarget: (...args: unknown[]) =>
     suggestMappingForTargetMock(...args),
+  setUnmappedRowRejected: vi.fn(),
+}))
+
+// MappingDrawer imports `@/lib/actions/field-acknowledgments` for the
+// source-field-only drawer footer (Approve / Un-approve). It is a
+// `'use server'` module that transitively loads `server-only`, which
+// throws in jsdom — mock it so the module never really loads.
+vi.mock('@/lib/actions/field-acknowledgments', () => ({
+  acknowledgeField: vi.fn(),
+  removeAcknowledgment: vi.fn(),
 }))
 
 vi.mock('next/navigation', () => ({

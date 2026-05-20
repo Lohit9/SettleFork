@@ -1209,10 +1209,10 @@ describe('MappingDrawer — source-field-only drawer (feat/unmapped-source-drawe
     ).toBe('—')
   })
 
-  it('does NOT render the mainline DrawerHeader or the approve/reject footer', () => {
-    // The source-field drawer keeps its own header
-    // (`mapping-drawer-source-stub-header`) and carries no DrawerFooter —
-    // source-side approve/reject stays on the flat-view hover cluster.
+  it('keeps its own stub header (not the mainline DrawerHeader)', () => {
+    // The source-field drawer keeps its own compact header
+    // (`mapping-drawer-source-stub-header`), not the mainline
+    // `DrawerHeader`.
     renderSourceDrawer(sourceRow(), {
       onSwapTarget: vi.fn(),
       onCreateMapping: vi.fn(),
@@ -1221,11 +1221,127 @@ describe('MappingDrawer — source-field-only drawer (feat/unmapped-source-drawe
     expect(
       screen.getByTestId('mapping-drawer-source-stub-header'),
     ).toBeInTheDocument()
+  })
+
+  // ── Footer (feat/source-drawer-footer) ──────────────────────────────
+  //
+  // The source-field drawer now carries an Approve / Reject footer for
+  // parity with the other three drawers. needs_review → [Reject][Approve];
+  // an acknowledged source → [Un-approve] only. The buttons reuse the
+  // presentational `UnmappedFooterButtons`, so the test-ids match the
+  // unmapped-target footer.
+
+  it('renders the footer with Reject + Approve in needs_review state', () => {
+    renderSourceDrawer(sourceRow(), { projectId: 'proj-1' })
+    expect(
+      screen.getByTestId('mapping-drawer-source-stub-footer'),
+    ).toBeInTheDocument()
+    expect(
+      screen.getByTestId('mapping-drawer-reject-button'),
+    ).toBeInTheDocument()
+    expect(
+      screen.getByTestId('mapping-drawer-approve-button'),
+    ).toBeInTheDocument()
+    expect(
+      screen.queryByTestId('mapping-drawer-unapprove-button'),
+    ).toBeNull()
+  })
+
+  it('renders Un-approve only (no Reject) when the source is acknowledged', () => {
+    renderSourceDrawer(
+      sourceRow(makeOrphanSourceField({ isAcknowledged: true })),
+      { projectId: 'proj-1' },
+    )
+    expect(
+      screen.getByTestId('mapping-drawer-unapprove-button'),
+    ).toBeInTheDocument()
+    expect(
+      screen.queryByTestId('mapping-drawer-reject-button'),
+    ).toBeNull()
     expect(
       screen.queryByTestId('mapping-drawer-approve-button'),
     ).toBeNull()
+  })
+
+  it('Approve click invokes acknowledgeField for the source field', async () => {
+    const onActionComplete = vi.fn()
+    renderSourceDrawer(sourceRow(), {
+      projectId: 'proj-1',
+      onActionComplete,
+    })
+    await act(async () => {
+      fireEvent.click(screen.getByTestId('mapping-drawer-approve-button'))
+    })
+    expect(acknowledgeFieldMock).toHaveBeenCalledWith(
+      'proj-1',
+      'sf-bom',
+      'source',
+      '',
+    )
+    expect(onActionComplete).toHaveBeenCalledWith(
+      'approve',
+      'unmapped-source::sf-bom',
+    )
+  })
+
+  it('Reject click invokes setUnmappedRowRejected for the source field', async () => {
+    const onActionComplete = vi.fn()
+    renderSourceDrawer(sourceRow(), {
+      projectId: 'proj-1',
+      onActionComplete,
+    })
+    await act(async () => {
+      fireEvent.click(screen.getByTestId('mapping-drawer-reject-button'))
+    })
+    expect(setUnmappedRowRejectedMock).toHaveBeenCalledWith({
+      projectId: 'proj-1',
+      sourceFieldId: 'sf-bom',
+    })
+    expect(onActionComplete).toHaveBeenCalledWith(
+      'reject',
+      'unmapped-source::sf-bom',
+    )
+  })
+
+  it('Un-approve click invokes removeAcknowledgment for the source field', async () => {
+    const onActionComplete = vi.fn()
+    renderSourceDrawer(
+      sourceRow(makeOrphanSourceField({ isAcknowledged: true })),
+      { projectId: 'proj-1', onActionComplete },
+    )
+    await act(async () => {
+      fireEvent.click(screen.getByTestId('mapping-drawer-unapprove-button'))
+    })
+    expect(removeAcknowledgmentMock).toHaveBeenCalledWith('proj-1', 'sf-bom')
+    expect(onActionComplete).toHaveBeenCalledWith(
+      'reset',
+      'unmapped-source::sf-bom',
+    )
+  })
+
+  it('footer follows the row: flips to Un-approve when the row prop becomes acknowledged', () => {
+    // Post-action continuity at the component level — after Approve, the
+    // parent refreshes and re-points the drawer at the same row, now
+    // carrying `isAcknowledged: true`. The footer re-derives its state.
+    const { rerender } = renderSourceDrawer(sourceRow(), {
+      projectId: 'proj-1',
+    })
     expect(
-      screen.queryByTestId('mapping-drawer-reject-button'),
+      screen.getByTestId('mapping-drawer-approve-button'),
+    ).toBeInTheDocument()
+    rerender(
+      <MappingDrawer
+        row={sourceRow(makeOrphanSourceField({ isAcknowledged: true }))}
+        isOpen={true}
+        onClose={() => {}}
+        projectId="proj-1"
+      />,
+    )
+    expect(
+      screen.getByTestId('mapping-drawer-unapprove-button'),
+    ).toBeInTheDocument()
+    expect(
+      screen.queryByTestId('mapping-drawer-approve-button'),
     ).toBeNull()
   })
 })
@@ -2341,11 +2457,17 @@ const {
   rejectFieldMappingMock,
   createFieldMappingMock,
   suggestMappingForTargetMock,
+  setUnmappedRowRejectedMock,
+  acknowledgeFieldMock,
+  removeAcknowledgmentMock,
 } = vi.hoisted(() => ({
   approveFieldMappingMock: vi.fn(),
   rejectFieldMappingMock: vi.fn(),
   createFieldMappingMock: vi.fn(),
   suggestMappingForTargetMock: vi.fn(),
+  setUnmappedRowRejectedMock: vi.fn(),
+  acknowledgeFieldMock: vi.fn(),
+  removeAcknowledgmentMock: vi.fn(),
 }))
 
 vi.mock('@/lib/actions/mappings-for-redesign', () => ({
@@ -2357,6 +2479,14 @@ vi.mock('@/lib/actions/mappings-for-redesign', () => ({
     createFieldMappingMock(...args),
   suggestMappingForTarget: (...args: unknown[]) =>
     suggestMappingForTargetMock(...args),
+  setUnmappedRowRejected: (...args: unknown[]) =>
+    setUnmappedRowRejectedMock(...args),
+}))
+
+vi.mock('@/lib/actions/field-acknowledgments', () => ({
+  acknowledgeField: (...args: unknown[]) => acknowledgeFieldMock(...args),
+  removeAcknowledgment: (...args: unknown[]) =>
+    removeAcknowledgmentMock(...args),
 }))
 
 // Phase 4a-2 — `CreateMappingForm` calls `useRouter().refresh()` on
@@ -2376,6 +2506,12 @@ beforeEach(() => {
   rejectFieldMappingMock.mockReset()
   createFieldMappingMock.mockReset()
   suggestMappingForTargetMock.mockReset()
+  setUnmappedRowRejectedMock.mockReset()
+  acknowledgeFieldMock.mockReset()
+  removeAcknowledgmentMock.mockReset()
+  setUnmappedRowRejectedMock.mockResolvedValue({ success: true, side: 'source' })
+  acknowledgeFieldMock.mockResolvedValue(undefined)
+  removeAcknowledgmentMock.mockResolvedValue(undefined)
 })
 
 describe('MappingDrawer Gap 9 — disabled-state matrix (drawer redesign)', () => {
