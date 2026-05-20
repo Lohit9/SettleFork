@@ -24,6 +24,7 @@ import { summarizeRationale } from '@/lib/utils/rationale-summary'
 import { Check, Edit3, X } from 'lucide-react'
 import { ActionIconButton } from './FlatRowActions'
 import { InlineSourcePicker } from './InlineSourcePicker'
+import { RejectConfirmPopover } from './RejectConfirmPopover'
 import { TargetFieldCellPicker } from './TargetFieldCellPicker'
 import type { MappingListMutations } from '../hooks/useMappingListMutations'
 
@@ -589,7 +590,7 @@ export function MappingListView({
   const handleTargetPickerCommit = useCallback(
     async (newTargetFieldId: string) => {
       if (openPicker?.kind !== 'target') return { success: false }
-      let result: { success: boolean }
+      let result: { success: boolean; mergeOpened?: boolean }
       if (openPicker.sourceFieldIdForCreate) {
         // Unmapped-source row picked a target → promote. Routes through
         // `promoteUnmappedSource` (not `createFromUnmapped`): the server
@@ -609,7 +610,8 @@ export function MappingListView({
         const bareTfmId = openPicker.rowId.split('::')[0]
         result = await mutations.swapMappingTarget(bareTfmId, newTargetFieldId)
       }
-      if (result.success) setOpenPicker(null)
+      // Close on success OR when a merge dialog took over the surface.
+      if (result.success || result.mergeOpened) setOpenPicker(null)
       return result
     },
     [mutations, openPicker],
@@ -790,6 +792,12 @@ function FlatRowView({
 
   const sourceCellRef = useRef<HTMLButtonElement | null>(null)
   const targetCellRef = useRef<HTMLButtonElement | null>(null)
+  // feat/dashboard-cleanup-reject-confirm — anchor + open-state for the
+  // row-hover ✗ reject confirmation popover. Per-row local state: the
+  // popover is keyed to this row's reject button and closes itself on
+  // confirm / cancel / click-outside.
+  const rejectButtonRef = useRef<HTMLButtonElement | null>(null)
+  const [rejectConfirmOpen, setRejectConfirmOpen] = useState(false)
 
   // ── Cell display values ───────────────────────────────────────────
   const targetTable =
@@ -855,6 +863,12 @@ function FlatRowView({
   //
   // Non-mapped rows: Approve/Reject behave per the row kind (see
   // branches below); Edit always opens the drawer.
+  //
+  // feat/dashboard-cleanup-reject-confirm — Reject is destructive and
+  // is now gated behind `RejectConfirmPopover`: the ✗ button opens the
+  // popover (it no longer dispatches the mutation directly), and the
+  // popover's confirm runs `onReject`. `rejectConsequence` is the
+  // per-kind copy for the popover's consequence line.
   const actions = useMemo(() => {
     const alreadyApproved = row.status === 'approved'
     const alreadyRejected = row.status === 'rejected'
@@ -869,6 +883,10 @@ function FlatRowView({
           ? undefined
           : () => void mutations.rejectTfm(row.id),
         rejectTooltip: 'Reject mapping',
+        rejectConsequence: {
+          fieldName: row.targetField.name,
+          text: 'will become unmapped.',
+        },
         onEdit: () => onRowBodyClick(row),
         editTooltip: 'Open mapping in drawer',
       }
@@ -888,6 +906,10 @@ function FlatRowView({
           ? undefined
           : () => void mutations.rejectTfm(row.id),
         rejectTooltip: 'Reject value assignment',
+        rejectConsequence: {
+          fieldName: row.targetField.name,
+          text: 'will become unmapped.',
+        },
         onEdit: () => onRowBodyClick(row),
         editTooltip: 'Open value assignment in drawer',
       }
@@ -911,6 +933,10 @@ function FlatRowView({
           ? undefined
           : () => void mutations.rejectTfm(row.id),
         rejectTooltip: 'Mark as rejected',
+        rejectConsequence: {
+          fieldName: row.targetField.name,
+          text: 'will be marked as rejected.',
+        },
         onEdit: () => onRowBodyClick(row),
         editTooltip: 'Open target field in drawer',
       }
@@ -943,6 +969,10 @@ function FlatRowView({
               target: { sourceFieldId: row.sourceField.id },
             }),
       rejectTooltip: 'Mark as rejected',
+      rejectConsequence: {
+        fieldName: row.sourceField.name,
+        text: 'will be marked as rejected.',
+      },
       onEdit: () => onRowBodyClick(row),
       editTooltip: 'Open source field in drawer',
     }
@@ -1250,7 +1280,18 @@ function FlatRowView({
           per-row affordance. Action button clicks stopPropagation so
           they don't bubble to the row body's drawer-open handler. */}
       <td className="px-2 py-2.5 align-top">
-        <div className="flex items-center justify-end gap-1 opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100">
+        <div
+          className={cn(
+            'flex items-center justify-end gap-1 transition-opacity',
+            // Keep the cluster visible while the reject confirmation
+            // popover is open — the popover anchors to the ✗ button, so
+            // the button must not fade out from under it when the mouse
+            // leaves the row to reach the popover.
+            rejectConfirmOpen
+              ? 'opacity-100'
+              : 'opacity-0 group-hover:opacity-100 group-focus-within:opacity-100',
+          )}
+        >
           {actions.onApprove ? (
             <ActionIconButton
               testId="flat-row-action-approve"
@@ -1265,12 +1306,15 @@ function FlatRowView({
           ) : null}
           {actions.onReject ? (
             <ActionIconButton
+              ref={rejectButtonRef}
               testId="flat-row-action-reject"
               ariaLabel="Reject mapping"
               tooltip={actions.rejectTooltip ?? 'Reject mapping'}
               variant="reject"
               disabled={isBusy}
-              onClick={actions.onReject}
+              // Reject is destructive — open the confirmation popover
+              // instead of dispatching the mutation directly.
+              onClick={() => setRejectConfirmOpen(true)}
             >
               <X aria-hidden="true" className="h-3.5 w-3.5" />
             </ActionIconButton>
@@ -1290,6 +1334,27 @@ function FlatRowView({
         </div>
       </td>
     </tr>
+    {/* Reject confirmation popover — anchored to this row's ✗ button.
+        `RejectConfirmPopover` portals to document.body, so rendering it
+        here (inside the row fragment, nominally under <tbody>) emits no
+        DOM node into the table. Confirm closes the popover, then runs
+        the destructive `onReject`; cancel / Esc / click-outside close
+        it without rejecting. */}
+    {rejectConfirmOpen && actions.onReject ? (
+      <RejectConfirmPopover
+        anchorRef={rejectButtonRef}
+        title="Reject this mapping?"
+        confirmLabel="Reject"
+        consequence={actions.rejectConsequence}
+        onConfirm={() => {
+          // Close first so the popover unmounts before the mutation's
+          // router.refresh() reshapes the row beneath it.
+          setRejectConfirmOpen(false)
+          actions.onReject?.()
+        }}
+        onCancel={() => setRejectConfirmOpen(false)}
+      />
+    ) : null}
     {/* Expanded multi-source sub-rows. One <tr> per source[1..] with
         grid-aligned content: SOURCE column carries an indented
         `↳ SOURCE_TABLE [chip]`; RATIONALE column carries the muted

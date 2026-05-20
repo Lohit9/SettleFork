@@ -227,6 +227,10 @@ function makeMutations(): MappingListMutations & {
     approveUnmappedSource: vi.fn().mockResolvedValue(success),
     promoteUnmappedSource: vi.fn().mockResolvedValue(success),
     editMappingSources: vi.fn().mockResolvedValue(success),
+    pendingMerge: null,
+    isMergePending: false,
+    confirmPendingMerge: vi.fn().mockResolvedValue(success),
+    cancelPendingMerge: vi.fn(),
   }
 }
 
@@ -254,7 +258,10 @@ describe('MappingListView — action buttons per row kind', () => {
     fireEvent.click(within(row).getByTestId('flat-row-action-approve'))
     expect(mutations.approveTfm).toHaveBeenCalledWith('tfm-1')
 
+    // Reject is gated behind the confirmation popover — clicking ✗
+    // opens it; confirming dispatches rejectTfm.
     fireEvent.click(within(row).getByTestId('flat-row-action-reject'))
+    fireEvent.click(await screen.findByTestId('reject-confirm-popover-confirm'))
     expect(mutations.rejectTfm).toHaveBeenCalledWith('tfm-1')
   })
 
@@ -436,6 +443,7 @@ describe('MappingListView — action buttons per row kind', () => {
     expect(mutations.approveTfm).toHaveBeenCalledWith('tfm-multi')
 
     fireEvent.click(within(row).getByTestId('flat-row-action-reject'))
+    fireEvent.click(await screen.findByTestId('reject-confirm-popover-confirm'))
     expect(mutations.rejectTfm).toHaveBeenCalledWith('tfm-multi')
   })
 
@@ -457,7 +465,7 @@ describe('MappingListView — action buttons per row kind', () => {
     expect(onOpenDrawer).toHaveBeenCalledWith('tfm-multi', 'sf-prodsku')
   })
 
-  it('unmapped-target: Approve and Reject both route through the TFM helpers with the unmapped::<targetFieldId> sentinel', () => {
+  it('unmapped-target: Approve and Reject both route through the TFM helpers with the unmapped::<targetFieldId> sentinel', async () => {
     // feat/mapping-table-redesign refinement pass 2 + post-rebase reject
     // alignment: both approve and reject on the flat-view unmapped-target
     // dispatch through approveTfm/rejectTfm (the same helpers used for
@@ -480,6 +488,7 @@ describe('MappingListView — action buttons per row kind', () => {
     expect(mutations.approveTfm).toHaveBeenCalledWith('unmapped::tf-9')
 
     fireEvent.click(within(row).getByTestId('flat-row-action-reject'))
+    fireEvent.click(await screen.findByTestId('reject-confirm-popover-confirm'))
     expect(mutations.rejectTfm).toHaveBeenCalledWith('unmapped::tf-9')
     // Reject no longer routes through `rejectUnmappedRow` — that helper
     // remains in the hook for future use but the flat-view dispatch was
@@ -902,6 +911,7 @@ describe('MappingListView — unmapped-source affordance uniformity (feat/mappin
     )
     const row = findRow('unmapped-source::sf-orphan')
     fireEvent.click(within(row).getByTestId('flat-row-action-reject'))
+    fireEvent.click(await screen.findByTestId('reject-confirm-popover-confirm'))
     expect(mutations.rejectUnmappedRow).toHaveBeenCalledWith({
       pendingKey: 'unmapped-source::sf-orphan',
       target: { sourceFieldId: 'sf-orphan' },
@@ -1207,5 +1217,98 @@ describe('MappingListView — unmapped-source "Pick a target…" (feat/unmapped-
     // Regression guard — the source-side target pick must NOT route
     // through createFromUnmapped (that path is for unmapped-target rows).
     expect(mutations.createFromUnmapped).not.toHaveBeenCalled()
+  })
+})
+
+// ─── feat/dashboard-cleanup-reject-confirm — reject confirmation ─────────────
+//
+// The row-hover ✗ no longer dispatches the rejection directly: it opens
+// `RejectConfirmPopover`. Confirm runs the mutation; Cancel / Esc /
+// click-outside dismiss it without rejecting. Per-row-kind dispatch
+// (mapped / multi-source / unmapped-target / unmapped-source) is pinned
+// in the "action buttons per row kind" suite above — those tests now
+// click through the popover. This suite pins the popover gate itself.
+
+describe('MappingListView — reject confirmation popover', () => {
+  it('clicking the row-hover ✗ opens the popover and does NOT reject immediately', async () => {
+    const mutations = makeMutations()
+    const result = makeResult([makeSingleSourceMapped()])
+    render(
+      <MappingListView
+        filteredResult={result}
+        mutations={mutations}
+        onOpenDrawer={vi.fn()}
+      />,
+    )
+    const row = findRow('tfm-1')
+    fireEvent.click(within(row).getByTestId('flat-row-action-reject'))
+    // Popover appears...
+    expect(
+      await screen.findByTestId('reject-confirm-popover'),
+    ).toBeInTheDocument()
+    // ...and the rejection has NOT fired yet.
+    expect(mutations.rejectTfm).not.toHaveBeenCalled()
+  })
+
+  it('the popover consequence line names the target field in monospace', async () => {
+    const result = makeResult([makeSingleSourceMapped()])
+    render(
+      <MappingListView
+        filteredResult={result}
+        mutations={makeMutations()}
+        onOpenDrawer={vi.fn()}
+      />,
+    )
+    const row = findRow('tfm-1')
+    fireEvent.click(within(row).getByTestId('flat-row-action-reject'))
+    const consequence = await screen.findByTestId(
+      'reject-confirm-popover-consequence',
+    )
+    expect(consequence).toHaveTextContent('customer_id will become unmapped.')
+    // The field name renders as a monospace chip (parity with the
+    // drawer's reject-confirm dialog body).
+    expect(consequence.querySelector('.font-mono')?.textContent).toBe(
+      'customer_id',
+    )
+  })
+
+  it('clicking Cancel dismisses the popover without rejecting', async () => {
+    const mutations = makeMutations()
+    const result = makeResult([makeSingleSourceMapped()])
+    render(
+      <MappingListView
+        filteredResult={result}
+        mutations={mutations}
+        onOpenDrawer={vi.fn()}
+      />,
+    )
+    const row = findRow('tfm-1')
+    fireEvent.click(within(row).getByTestId('flat-row-action-reject'))
+    fireEvent.click(await screen.findByTestId('reject-confirm-popover-cancel'))
+    expect(screen.queryByTestId('reject-confirm-popover')).toBeNull()
+    expect(mutations.rejectTfm).not.toHaveBeenCalled()
+  })
+
+  it('value-assignment rows also gate Reject behind the confirmation popover', async () => {
+    // PR #157/#158 unified Reject — value-assignment is the fourth row
+    // kind. A VA fixture defaults to status='approved'; reject still
+    // renders ("un-approve"), and confirming dispatches rejectTfm on
+    // the VA TFM id.
+    const mutations = makeMutations()
+    const result = makeResult([makeValueAssignment()])
+    render(
+      <MappingListView
+        filteredResult={result}
+        mutations={mutations}
+        onOpenDrawer={vi.fn()}
+      />,
+    )
+    const row = findRow('tfm-va-1')
+    fireEvent.click(within(row).getByTestId('flat-row-action-reject'))
+    expect(
+      await screen.findByTestId('reject-confirm-popover'),
+    ).toBeInTheDocument()
+    fireEvent.click(screen.getByTestId('reject-confirm-popover-confirm'))
+    expect(mutations.rejectTfm).toHaveBeenCalledWith('tfm-va-1')
   })
 })

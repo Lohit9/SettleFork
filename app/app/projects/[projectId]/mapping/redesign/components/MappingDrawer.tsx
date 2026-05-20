@@ -329,7 +329,7 @@ export interface MappingDrawerProps {
   onSwapTarget?: (
     tfmId: string,
     newTargetFieldId: string,
-  ) => Promise<{ success: boolean }>
+  ) => Promise<{ success: boolean; mergeOpened?: boolean }>
   /**
    * Drawer redesign PR 1 — header inline-edit commit handler for the
    * source-field swap flow. Receives the row id and the new source
@@ -1536,7 +1536,7 @@ interface DrawerBodyProps {
   onSwapTarget?: (
     tfmId: string,
     newTargetFieldId: string,
-  ) => Promise<{ success: boolean }>
+  ) => Promise<{ success: boolean; mergeOpened?: boolean }>
   /**
    * feat/drawer-body-editing-surface — body SOURCE picker on the
    * unmapped-target variant. "Pick a source…" → on commit promotes the
@@ -2430,7 +2430,7 @@ interface MappedBodyProps {
   onSwapTarget?: (
     tfmId: string,
     newTargetFieldId: string,
-  ) => Promise<{ success: boolean }>
+  ) => Promise<{ success: boolean; mergeOpened?: boolean }>
   /** Source field universe for body pickers. */
   availableSourceFields?: readonly SourceFieldWithState[]
   /** Target field universe for the body's TARGET column swap picker. */
@@ -2552,7 +2552,7 @@ function MappingSourceTargetGrid({
   onSwapTarget?: (
     tfmId: string,
     newTargetFieldId: string,
-  ) => Promise<{ success: boolean }>
+  ) => Promise<{ success: boolean; mergeOpened?: boolean }>
   availableSourceFields?: readonly SourceFieldWithState[]
   availableTargetFields?: readonly TargetFieldRef[]
 }) {

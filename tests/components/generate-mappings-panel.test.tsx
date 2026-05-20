@@ -8,7 +8,11 @@ import {
 } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 
-import { GenerateMappingsPanel } from '@/app/app/projects/[projectId]/mapping/redesign/components/GenerateMappingsPanel'
+import {
+  GenerateMappingsPanel,
+  computePilotPhaseBoundaries,
+  pickPilotPaddedDurationMs,
+} from '@/app/app/projects/[projectId]/mapping/redesign/components/GenerateMappingsPanel'
 
 // ─────────────────────────────────────────────────────────────────────────────
 // GenerateMappingsPanel — Phase 4 empty-state CTA unit tests.
@@ -459,5 +463,203 @@ describe('GenerateMappingsPanel — fireEvent click parity', () => {
     await waitFor(() => {
       expect(generateMappingsMock).toHaveBeenCalled()
     })
+  })
+})
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Rootstock pilot — padded Generate-Mappings timing.
+// ─────────────────────────────────────────────────────────────────────────────
+//
+// TODO(kaan): delete this block when the pilot padding is removed from
+// `GenerateMappingsPanel.tsx`.
+//
+// Pins the gated behavior:
+//   • For a gated pilot project the success path is held client-side
+//     for a randomized 3-5 minute window before handing off (toast +
+//     router.refresh). Six phase labels render in sequence.
+//   • For every other project the flow is byte-identical to today —
+//     immediate hand-off, no phase labels (covered above + explicitly
+//     re-asserted here).
+//   • The error path bypasses the padding entirely for gated projects.
+
+describe('GenerateMappingsPanel — Rootstock pilot padded timing', () => {
+  // One of the two ids in `PILOT_PADDED_TIMING_PROJECT_IDS`.
+  const GATED_PROJECT_ID = 'eba53ac1-3d35-45ba-852d-a3fa3761850b'
+
+  function renderGatedPanel() {
+    return render(
+      <GenerateMappingsPanel
+        projectId={GATED_PROJECT_ID}
+        sourceTables={SOURCE_TABLES}
+        targetTables={TARGET_TABLES}
+      />,
+    )
+  }
+
+  it('gated project: runs all six phases and hands off after the padded window', async () => {
+    // rand → 0.5 pins a 4-min run with zero boundary jitter.
+    const randSpy = vi.spyOn(Math, 'random').mockReturnValue(0.5)
+    generateMappingsMock.mockResolvedValue({
+      success: true,
+      generated: 14,
+      skipped: 0,
+    })
+    renderGatedPanel()
+
+    fireEvent.click(screen.getByTestId('generate-mappings-submit'))
+
+    // Phase 1 surfaces immediately; the server resolves fast but the
+    // result is held — no refresh yet.
+    await waitFor(() => {
+      expect(
+        screen.getByTestId('generate-mappings-phase-label'),
+      ).toHaveTextContent('Profiling source schemas')
+    })
+    expect(refreshMock).not.toHaveBeenCalled()
+
+    // Walk the five phase-advance boundaries. For a 4-min run with no
+    // jitter the boundaries land at 24s/60s/120s/168s/216s — deltas
+    // below.
+    const steps: Array<[number, string]> = [
+      [24_000, 'Building target field embeddings'],
+      [36_000, 'Evaluating candidate pairings'],
+      [60_000, 'Detecting multi-source patterns'],
+      [48_000, 'Scoring confidence'],
+      [48_000, 'Finalizing proposals'],
+    ]
+    for (const [delta, label] of steps) {
+      act(() => {
+        vi.advanceTimersByTime(delta)
+      })
+      expect(
+        screen.getByTestId('generate-mappings-phase-label'),
+      ).toHaveTextContent(label)
+    }
+    // Still inside the window (216s of 240s) — not finalized.
+    expect(refreshMock).not.toHaveBeenCalled()
+
+    // Cross the result-handoff deadline (216s → 240s).
+    await act(async () => {
+      vi.advanceTimersByTime(24_000)
+    })
+    await waitFor(() => {
+      expect(refreshMock).toHaveBeenCalledTimes(1)
+    })
+    expect(pushToastMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        variant: 'success',
+        message: 'Mappings generated.',
+      }),
+    )
+    randSpy.mockRestore()
+  })
+
+  it('gated project: holds the result until the padded duration elapses ([3min, 5min])', async () => {
+    generateMappingsMock.mockResolvedValue({
+      success: true,
+      generated: 5,
+      skipped: 0,
+    })
+    renderGatedPanel()
+    fireEvent.click(screen.getByTestId('generate-mappings-submit'))
+
+    // Server resolves promptly.
+    await waitFor(() => {
+      expect(generateMappingsMock).toHaveBeenCalledTimes(1)
+    })
+
+    // Just under the 3-min floor — the result must still be held.
+    act(() => {
+      vi.advanceTimersByTime(179_000)
+    })
+    expect(refreshMock).not.toHaveBeenCalled()
+
+    // Past the 5-min ceiling — must have handed off by now.
+    await act(async () => {
+      vi.advanceTimersByTime(121_000)
+    })
+    await waitFor(() => {
+      expect(refreshMock).toHaveBeenCalledTimes(1)
+    })
+  })
+
+  it('gated project: a server error surfaces immediately with no padded delay', async () => {
+    generateMappingsMock.mockResolvedValue({
+      success: false,
+      error: 'Anthropic rate limit hit.',
+    })
+    renderGatedPanel()
+    fireEvent.click(screen.getByTestId('generate-mappings-submit'))
+
+    await waitFor(() => {
+      expect(pushToastMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          variant: 'error',
+          message: 'Anthropic rate limit hit.',
+        }),
+      )
+    })
+    // No artificial hold — overlay dropped, refresh never fired.
+    expect(screen.queryByTestId('generate-mappings-overlay')).toBeNull()
+    expect(refreshMock).not.toHaveBeenCalled()
+  })
+
+  it('gated project: a thrown error surfaces immediately with no padded delay', async () => {
+    generateMappingsMock.mockRejectedValue(new Error('Network outage.'))
+    renderGatedPanel()
+    fireEvent.click(screen.getByTestId('generate-mappings-submit'))
+
+    await waitFor(() => {
+      expect(pushToastMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          variant: 'error',
+          message: 'Network outage.',
+        }),
+      )
+    })
+    expect(screen.queryByTestId('generate-mappings-overlay')).toBeNull()
+    expect(refreshMock).not.toHaveBeenCalled()
+  })
+
+  it('non-gated project: success hands off immediately with no phase labels', async () => {
+    generateMappingsMock.mockResolvedValue({
+      success: true,
+      generated: 3,
+      skipped: 0,
+    })
+    renderPanel() // non-gated PROJECT_ID
+    fireEvent.click(screen.getByTestId('generate-mappings-submit'))
+
+    await waitFor(() => {
+      expect(refreshMock).toHaveBeenCalledTimes(1)
+    })
+    expect(screen.queryByTestId('generate-mappings-phase-label')).toBeNull()
+  })
+})
+
+describe('GenerateMappingsPanel — pilot padded-timing helpers', () => {
+  it('pickPilotPaddedDurationMs stays within [3min, 5min]', () => {
+    expect(pickPilotPaddedDurationMs(() => 0)).toBe(180_000)
+    expect(pickPilotPaddedDurationMs(() => 1)).toBe(300_000)
+    expect(pickPilotPaddedDurationMs(() => 0.5)).toBe(240_000)
+  })
+
+  it('computePilotPhaseBoundaries returns 6 strictly increasing values ending at totalMs', () => {
+    const boundaries = computePilotPhaseBoundaries(240_000)
+    expect(boundaries).toHaveLength(6)
+    for (let i = 1; i < boundaries.length; i += 1) {
+      expect(boundaries[i]).toBeGreaterThan(boundaries[i - 1])
+    }
+    expect(boundaries[0]).toBeGreaterThan(0)
+    expect(boundaries[4]).toBeLessThan(240_000)
+    expect(boundaries[5]).toBe(240_000)
+  })
+
+  it('computePilotPhaseBoundaries with zero jitter sits on the cumulative weights', () => {
+    // rand → 0.5 makes the jitter term zero.
+    const boundaries = computePilotPhaseBoundaries(240_000, () => 0.5)
+    expect(boundaries).toEqual([
+      24_000, 60_000, 120_000, 168_000, 216_000, 240_000,
+    ])
   })
 })

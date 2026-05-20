@@ -36,6 +36,10 @@ import { cn } from '@/components/ui/utils'
 
 const POPOVER_WIDTH_PX = 240
 const POPOVER_HEIGHT_PX = 96
+// Taller estimate used only when a `consequence` line is rendered, so
+// the flip-above / clamp math accounts for the extra paragraph. Terse
+// callers (no `consequence`) keep the original 96px estimate exactly.
+const POPOVER_HEIGHT_WITH_CONSEQUENCE_PX = 144
 const VIEWPORT_MARGIN_PX = 8
 
 export interface RejectConfirmPopoverProps {
@@ -58,6 +62,16 @@ export interface RejectConfirmPopoverProps {
    */
   title?: string
   confirmLabel?: string
+  /**
+   * Optional consequence line rendered directly under the title — the
+   * destructive-detail surface. `fieldName` renders as a monospace
+   * chip (visual parity with the drawer's reject-confirm dialog body);
+   * `text` is the single-line statement that follows it (e.g. "will
+   * become unmapped."). Omitted by the terse callers (FieldMappingRow
+   * inline ✗, per-source remove) which keep the title-only popover.
+   * Supplied by the flat-view (`MappingListView`) row-hover ✗.
+   */
+  consequence?: { fieldName: string; text: string }
 }
 
 export function RejectConfirmPopover({
@@ -66,7 +80,13 @@ export function RejectConfirmPopover({
   onCancel,
   title = 'Reject this mapping?',
   confirmLabel = 'Reject',
+  consequence,
 }: RejectConfirmPopoverProps) {
+  // A consequence line adds a paragraph — feed the taller estimate into
+  // the positioning math so flip-above / viewport clamping stay correct.
+  const popoverHeight = consequence
+    ? POPOVER_HEIGHT_WITH_CONSEQUENCE_PX
+    : POPOVER_HEIGHT_PX
   const containerRef = useRef<HTMLDivElement>(null)
   const cancelButtonRef = useRef<HTMLButtonElement>(null)
   const [isMounted, setIsMounted] = useState(false)
@@ -90,9 +110,9 @@ export function RejectConfirmPopover({
       const width = POPOVER_WIDTH_PX
       const spaceBelow = viewportHeight - rect.bottom
       const top =
-        spaceBelow >= POPOVER_HEIGHT_PX
+        spaceBelow >= popoverHeight
           ? rect.bottom + 4
-          : Math.max(VIEWPORT_MARGIN_PX, rect.top - POPOVER_HEIGHT_PX - 4)
+          : Math.max(VIEWPORT_MARGIN_PX, rect.top - popoverHeight - 4)
       // Right-align the popover under the trigger so it does not
       // overflow the viewport on the right side. The actions column
       // is the rightmost row column, so left-align would push the
@@ -111,7 +131,7 @@ export function RejectConfirmPopover({
       window.removeEventListener('resize', computePosition)
       window.removeEventListener('scroll', computePosition, true)
     }
-  }, [anchorRef])
+  }, [anchorRef, popoverHeight])
 
   // Move focus to Cancel on mount so a stray Enter dismisses rather
   // than confirms. Defensive on a destructive popover.
@@ -168,6 +188,17 @@ export function RejectConfirmPopover({
       )}
     >
       <p className="text-[13px] font-medium text-slate-900">{title}</p>
+      {consequence ? (
+        <p
+          data-testid="reject-confirm-popover-consequence"
+          className="text-[12px] leading-snug text-slate-600"
+        >
+          <span className="font-mono text-slate-900">
+            {consequence.fieldName}
+          </span>{' '}
+          {consequence.text}
+        </p>
+      ) : null}
       <div className="flex items-center justify-end gap-2">
         <button
           ref={cancelButtonRef}

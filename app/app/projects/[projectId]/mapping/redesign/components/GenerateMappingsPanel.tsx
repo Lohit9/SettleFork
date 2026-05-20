@@ -187,6 +187,94 @@ function formatElapsed(seconds: number): string {
   return `${m}:${s.toString().padStart(2, '0')}`
 }
 
+// ─── Rootstock pilot — padded Generate-Mappings timing ───────────────
+//
+// TODO(kaan, YYYY-MM-DD): Remove after Rootstock pilot completes.
+// Padded timing for verbal-disclosed pilot simulation. The Rootstock
+// pilot demonstrates how the production agent pipeline will *feel* once
+// it lands — production generation is expected to run 3-5 minutes, but
+// the current static-config path completes in 20-30s. For the two gated
+// projects only, the client holds the (already-resolved) result and
+// runs a phased progress UI for a randomized 3-5 minute window so the
+// pilot forms an accurate impression of production operations. The
+// customer is told verbally that the timing is simulated. Project-gated
+// and one-time use — every other project is unaffected.
+const PILOT_PADDED_TIMING_PROJECT_IDS = [
+  'eba53ac1-3d35-45ba-852d-a3fa3761850b', // Rootstock customer project
+  '699fe032-57cb-4f56-a06e-7a2a882f20e1', // Rootstock POC Statis Test (internal demo)
+] as const
+
+/** Sequential phase labels shown during the padded pilot simulation. */
+const PILOT_PHASE_LABELS = [
+  'Profiling source schemas…',
+  'Building target field embeddings…',
+  'Evaluating candidate pairings…',
+  'Detecting multi-source patterns…',
+  'Scoring confidence…',
+  'Finalizing proposals…',
+] as const
+
+/**
+ * Fraction of the total padded duration allotted to each of the six
+ * phases. Sums to 1.0 — front-loaded lightly on profiling, heaviest on
+ * candidate evaluation, shaped to read like a real pipeline.
+ */
+const PILOT_PHASE_WEIGHTS = [0.1, 0.15, 0.25, 0.2, 0.2, 0.1] as const
+
+const PILOT_MIN_DURATION_MS = 3 * 60_000
+const PILOT_MAX_DURATION_MS = 5 * 60_000
+
+/** True when `projectId` is one of the gated Rootstock pilot projects. */
+function isPilotPaddedTimingProject(projectId: string): boolean {
+  return (PILOT_PADDED_TIMING_PROJECT_IDS as readonly string[]).includes(
+    projectId,
+  )
+}
+
+/**
+ * Pick the total padded duration, uniformly random in [3min, 5min].
+ * `rand` is injectable so tests can pin the timing deterministically.
+ */
+export function pickPilotPaddedDurationMs(
+  rand: () => number = Math.random,
+): number {
+  const span = PILOT_MAX_DURATION_MS - PILOT_MIN_DURATION_MS
+  return Math.round(PILOT_MIN_DURATION_MS + rand() * span)
+}
+
+/**
+ * Compute the six phase-transition timestamps (ms from simulation
+ * start) for a padded run of `totalMs`. Indices 0-4 are the moments
+ * phases 2-6 begin; index 5 is `totalMs` itself — the result handoff.
+ *
+ * Interior boundaries are placed at the cumulative phase weights, then
+ * jittered by up to ±4% of the total so successive runs vary visibly.
+ * Boundaries are clamped strictly monotonic and strictly inside
+ * (0, totalMs) so phases never reorder or overrun the handoff.
+ */
+export function computePilotPhaseBoundaries(
+  totalMs: number,
+  rand: () => number = Math.random,
+): number[] {
+  const boundaries: number[] = []
+  let cumulative = 0
+  for (let i = 0; i < PILOT_PHASE_WEIGHTS.length - 1; i += 1) {
+    cumulative += PILOT_PHASE_WEIGHTS[i]
+    const jitter = (rand() - 0.5) * 0.08 * totalMs
+    boundaries.push(cumulative * totalMs + jitter)
+  }
+  // Clamp strictly monotonic and within (0, totalMs); round to whole
+  // milliseconds since these feed `setTimeout` durations directly.
+  for (let i = 0; i < boundaries.length; i += 1) {
+    const lowerBound = i === 0 ? 1 : boundaries[i - 1] + 1
+    boundaries[i] = Math.round(
+      Math.min(Math.max(boundaries[i], lowerBound), totalMs - 1),
+    )
+  }
+  boundaries.push(totalMs)
+  return boundaries
+}
+
 export function GenerateMappingsPanel({
   projectId,
   sourceTables,
@@ -208,6 +296,20 @@ export function GenerateMappingsPanel({
   const [phase, setPhase] = useState<'idle' | 'generating' | 'refreshing'>('idle')
   const [elapsedSec, setElapsedSec] = useState(0)
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null)
+
+  // ─── Rootstock pilot padded-timing simulation ──────────────────────
+  // Gated by project id (see `PILOT_PADDED_TIMING_PROJECT_IDS`). For
+  // every other project these stay inert and the flow below is the
+  // unchanged pre-pilot behavior.
+  const isPilotPaddedTiming = isPilotPaddedTimingProject(projectId)
+  const [pilotPhaseIndex, setPilotPhaseIndex] = useState(0)
+  // Timers driving the phased progress + the result-handoff deadline.
+  const pilotTimersRef = useRef<ReturnType<typeof setTimeout>[]>([])
+  // Coordination: the held result renders only once BOTH the server has
+  // returned success AND the padded duration has elapsed.
+  const pilotServerSucceededRef = useRef(false)
+  const pilotDurationElapsedRef = useRef(false)
+  const pilotFinalizedRef = useRef(false)
 
   // Keep elapsed counter ticking while phase === 'generating'. Stop when
   // we transition to 'refreshing' (the user has the success signal at that
@@ -244,6 +346,9 @@ export function GenerateMappingsPanel({
         clearInterval(intervalRef.current)
         intervalRef.current = null
       }
+      // Clear any in-flight pilot simulation timers on unmount.
+      for (const id of pilotTimersRef.current) clearTimeout(id)
+      pilotTimersRef.current = []
     }
   }, [])
 
@@ -287,9 +392,74 @@ export function GenerateMappingsPanel({
     })
   }
 
+  // ─── Rootstock pilot simulation helpers ────────────────────────────
+  // All inert unless `isPilotPaddedTiming` is true. Function declarations
+  // (hoisted) so `handleGenerate` below can reference them freely.
+
+  function clearPilotTimers() {
+    for (const id of pilotTimersRef.current) clearTimeout(id)
+    pilotTimersRef.current = []
+  }
+
+  // Render the held result and hand off to the existing post-Generate
+  // success flow. No-op until BOTH gates are satisfied; safe to call
+  // from either the server-resolution path or the duration-elapsed
+  // timer, whichever completes second.
+  function finalizePilotGenerationIfReady() {
+    if (pilotFinalizedRef.current) return
+    if (!pilotServerSucceededRef.current) return
+    if (!pilotDurationElapsedRef.current) return
+    pilotFinalizedRef.current = true
+    clearPilotTimers()
+    pushToast({
+      id: `generate-mappings-${Date.now()}`,
+      variant: 'success',
+      message: 'Mappings generated.',
+    })
+    setPhase('refreshing')
+    router.refresh()
+  }
+
+  // Kick off the phased progress UI: schedule the five phase advances
+  // and the result-handoff deadline across a randomized 3-5 min window.
+  function startPilotSimulation() {
+    clearPilotTimers()
+    setPilotPhaseIndex(0)
+    pilotServerSucceededRef.current = false
+    pilotDurationElapsedRef.current = false
+    pilotFinalizedRef.current = false
+
+    const totalMs = pickPilotPaddedDurationMs()
+    const boundaries = computePilotPhaseBoundaries(totalMs)
+
+    // boundaries[0..4]: advance into phases 2-6.
+    for (let i = 0; i < PILOT_PHASE_LABELS.length - 1; i += 1) {
+      pilotTimersRef.current.push(
+        setTimeout(() => setPilotPhaseIndex(i + 1), boundaries[i]),
+      )
+    }
+    // boundaries[5] === totalMs: the result-handoff deadline.
+    pilotTimersRef.current.push(
+      setTimeout(() => {
+        pilotDurationElapsedRef.current = true
+        setPilotPhaseIndex(PILOT_PHASE_LABELS.length - 1)
+        finalizePilotGenerationIfReady()
+      }, boundaries[boundaries.length - 1]),
+    )
+  }
+
   async function handleGenerate() {
     if (!canGenerate) return
     setPhase('generating')
+
+    // Rootstock pilot: start the phased progress UI immediately, in
+    // parallel with the server request. The result is held client-side
+    // until the padded duration elapses. Gated by project id — every
+    // other project keeps today's behavior untouched.
+    if (isPilotPaddedTiming) {
+      startPilotSimulation()
+    }
+
     try {
       const result = await generateMappings(
         projectId,
@@ -297,6 +467,9 @@ export function GenerateMappingsPanel({
         Array.from(selectedTgt),
       )
       if (!result || result.success !== true) {
+        // Error path — surface immediately, no artificial delay, even
+        // for gated pilot projects.
+        if (isPilotPaddedTiming) clearPilotTimers()
         pushToast({
           id: `generate-mappings-${Date.now()}`,
           variant: 'error',
@@ -305,6 +478,16 @@ export function GenerateMappingsPanel({
         setPhase('idle')
         return
       }
+
+      if (isPilotPaddedTiming) {
+        // Success — hold the result. The handoff (success toast +
+        // router.refresh) fires from the duration-elapsed timer via
+        // `finalizePilotGenerationIfReady`, whichever resolves last.
+        pilotServerSucceededRef.current = true
+        finalizePilotGenerationIfReady()
+        return
+      }
+
       pushToast({
         id: `generate-mappings-${Date.now()}`,
         variant: 'success',
@@ -317,6 +500,7 @@ export function GenerateMappingsPanel({
       setPhase('refreshing')
       router.refresh()
     } catch (err) {
+      if (isPilotPaddedTiming) clearPilotTimers()
       pushToast({
         id: `generate-mappings-${Date.now()}`,
         variant: 'error',
@@ -346,29 +530,55 @@ export function GenerateMappingsPanel({
               className="mx-auto mb-3 h-10 w-10 animate-spin text-blue-600"
             />
             {phase === 'generating' ? (
-              <>
-                <p
-                  data-testid="generate-mappings-status"
-                  className="text-sm font-semibold text-slate-900"
-                >
-                  Generating AI-powered mappings…
-                </p>
-                <p className="mt-1 text-xs text-slate-500">
-                  Analyzing {sourceTables.length} source{' '}
-                  {sourceTables.length === 1 ? 'table' : 'tables'} and{' '}
-                  {targetTables.length} target{' '}
-                  {targetTables.length === 1 ? 'table' : 'tables'}.
-                </p>
-                <p className="mt-1 text-xs text-slate-500">
-                  This typically takes 1-3 minutes.
-                </p>
-                <p
-                  data-testid="generate-mappings-elapsed"
-                  className="mt-2 font-mono text-xs text-slate-500"
-                >
-                  Elapsed: {formatElapsed(elapsedSec)}
-                </p>
-              </>
+              isPilotPaddedTiming ? (
+                <>
+                  <p
+                    data-testid="generate-mappings-status"
+                    className="text-sm font-semibold text-slate-900"
+                  >
+                    Generating AI-powered mappings…
+                  </p>
+                  <p
+                    data-testid="generate-mappings-phase-label"
+                    className="mt-1 text-xs text-slate-500"
+                  >
+                    {PILOT_PHASE_LABELS[pilotPhaseIndex]}
+                  </p>
+                  <p className="mt-1 text-xs text-slate-400">
+                    Step {pilotPhaseIndex + 1} of {PILOT_PHASE_LABELS.length}
+                  </p>
+                  <p
+                    data-testid="generate-mappings-elapsed"
+                    className="mt-2 font-mono text-xs text-slate-500"
+                  >
+                    Elapsed: {formatElapsed(elapsedSec)}
+                  </p>
+                </>
+              ) : (
+                <>
+                  <p
+                    data-testid="generate-mappings-status"
+                    className="text-sm font-semibold text-slate-900"
+                  >
+                    Generating AI-powered mappings…
+                  </p>
+                  <p className="mt-1 text-xs text-slate-500">
+                    Analyzing {sourceTables.length} source{' '}
+                    {sourceTables.length === 1 ? 'table' : 'tables'} and{' '}
+                    {targetTables.length} target{' '}
+                    {targetTables.length === 1 ? 'table' : 'tables'}.
+                  </p>
+                  <p className="mt-1 text-xs text-slate-500">
+                    This typically takes 1-3 minutes.
+                  </p>
+                  <p
+                    data-testid="generate-mappings-elapsed"
+                    className="mt-2 font-mono text-xs text-slate-500"
+                  >
+                    Elapsed: {formatElapsed(elapsedSec)}
+                  </p>
+                </>
+              )
             ) : (
               <p
                 data-testid="generate-mappings-status"
