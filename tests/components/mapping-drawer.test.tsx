@@ -2049,6 +2049,238 @@ describe('MappingDrawer — Rule 6 (Unmapped) body', () => {
 //     shows the `combinationSql` block verbatim.
 //   • Confidence + Status moved to the header line 2 dot/percent.
 
+// ─── feat/mapping-row-uniformity — source-side drawer mount ───────────────
+
+describe('MappingDrawer — source-field-only stub mount (feat/mapping-row-uniformity)', () => {
+  // Minimal viewing surface for unmapped-source flat rows. The drawer
+  // mounts a SourceFieldDrawerStub when `row.kind === 'source-field-only'`.
+  // No DrawerHeader pickers, no tabs, no footer — approve / reject for
+  // source rows continue to live on the flat-view hover cluster.
+
+  function makeOrphanSourceField(): SourceFieldWithState {
+    return {
+      id: 'sf-bom',
+      name: 'BOM_QUANTITY',
+      dataType: 'NUMBER',
+      ordinalPosition: 1,
+      sourceTable: { id: 'st-bom', name: 'BOM_MASTERS' },
+      mappingStatus: 'unmapped',
+      sampleValues: ['12.5', '7.0', '3.25'],
+      isAcknowledged: false,
+      isRejected: false,
+    }
+  }
+
+  it('renders the source-field stub when row.kind is "source-field-only"', () => {
+    render(
+      <MappingDrawer
+        row={{
+          kind: 'source-field-only',
+          id: 'unmapped-source::sf-bom',
+          sourceField: makeOrphanSourceField(),
+          acknowledgmentReason: null,
+        }}
+        isOpen={true}
+        onClose={() => {}}
+      />,
+    )
+    const drawer = screen.getByTestId('mapping-drawer')
+    expect(drawer.getAttribute('data-drawer-kind')).toBe('source-field-only')
+    // Stub-specific testids.
+    expect(
+      screen.getByTestId('mapping-drawer-source-stub-label').textContent,
+    ).toBe('Source field')
+    expect(
+      screen.getByTestId('mapping-drawer-source-stub-table').textContent,
+    ).toBe('BOM_MASTERS')
+    expect(
+      screen.getByTestId('mapping-drawer-source-stub-field').textContent,
+    ).toBe('BOM_QUANTITY')
+    expect(
+      screen.getByTestId('mapping-drawer-source-stub-type').textContent,
+    ).toBe('NUMBER')
+  })
+
+  it('renders sample values (up to 5, labeled "row N") when the source field has samples', () => {
+    render(
+      <MappingDrawer
+        row={{
+          kind: 'source-field-only',
+          id: 'unmapped-source::sf-bom',
+          sourceField: makeOrphanSourceField(),
+          acknowledgmentReason: null,
+        }}
+        isOpen={true}
+        onClose={() => {}}
+      />,
+    )
+    const samples = screen.getAllByTestId('drawer-source-stub-sample-row')
+    expect(samples).toHaveLength(3)
+    expect(samples[0]!.textContent).toContain('12.5')
+    expect(samples[0]!.textContent).toContain('row 1')
+    expect(samples[2]!.textContent).toContain('3.25')
+    expect(samples[2]!.textContent).toContain('row 3')
+  })
+
+  it('caps sample values at 5 even when more are present on the wire', () => {
+    const sf = makeOrphanSourceField()
+    sf.sampleValues = ['a', 'b', 'c', 'd', 'e', 'f', 'g']
+    render(
+      <MappingDrawer
+        row={{
+          kind: 'source-field-only',
+          id: 'unmapped-source::sf-bom',
+          sourceField: sf,
+          acknowledgmentReason: null,
+        }}
+        isOpen={true}
+        onClose={() => {}}
+      />,
+    )
+    const samples = screen.getAllByTestId('drawer-source-stub-sample-row')
+    expect(samples).toHaveLength(5)
+  })
+
+  it('omits the samples section when sampleValues is empty', () => {
+    const sf = makeOrphanSourceField()
+    sf.sampleValues = []
+    render(
+      <MappingDrawer
+        row={{
+          kind: 'source-field-only',
+          id: 'unmapped-source::sf-bom',
+          sourceField: sf,
+          acknowledgmentReason: null,
+        }}
+        isOpen={true}
+        onClose={() => {}}
+      />,
+    )
+    expect(
+      screen.queryByTestId('drawer-section-source-stub-samples'),
+    ).toBeNull()
+  })
+
+  it('renders the acknowledgment reason section when the row carries one (ack::source::<id> projection)', () => {
+    render(
+      <MappingDrawer
+        row={{
+          kind: 'source-field-only',
+          id: 'ack::source::ack-1',
+          sourceField: makeOrphanSourceField(),
+          acknowledgmentReason: 'Legacy column — not in scope',
+        }}
+        isOpen={true}
+        onClose={() => {}}
+      />,
+    )
+    expect(
+      screen.getByTestId('drawer-source-stub-ack-reason-text').textContent,
+    ).toBe('Legacy column — not in scope')
+  })
+
+  it('omits the acknowledgment reason section when acknowledgmentReason is null', () => {
+    render(
+      <MappingDrawer
+        row={{
+          kind: 'source-field-only',
+          id: 'unmapped-source::sf-bom',
+          sourceField: makeOrphanSourceField(),
+          acknowledgmentReason: null,
+        }}
+        isOpen={true}
+        onClose={() => {}}
+      />,
+    )
+    expect(
+      screen.queryByTestId('drawer-section-source-stub-ack-reason'),
+    ).toBeNull()
+  })
+
+  it('exposes a close button + dialog a11y attributes (aria-labelledby points at the stub title)', () => {
+    render(
+      <MappingDrawer
+        row={{
+          kind: 'source-field-only',
+          id: 'unmapped-source::sf-bom',
+          sourceField: makeOrphanSourceField(),
+          acknowledgmentReason: null,
+        }}
+        isOpen={true}
+        onClose={() => {}}
+      />,
+    )
+    const drawer = screen.getByTestId('mapping-drawer')
+    const ariaLabelledBy = drawer.getAttribute('aria-labelledby')
+    expect(ariaLabelledBy).toBeTruthy()
+    const title = screen.getByTestId('mapping-drawer-source-stub-title')
+    expect(title.id).toBe(ariaLabelledBy)
+    expect(
+      screen.getByTestId('mapping-drawer-close').getAttribute('aria-label'),
+    ).toBe('Close drawer')
+  })
+
+  it('renders em-dash in the field chip when sourceField.name is the empty string (data-issue fallback)', () => {
+    // Pin the graceful degradation for the "ENGINEERING BOM MASTERS
+    // without a field chip" scenario the audit surfaced. The wire's
+    // `name: string` is non-nullable but can carry the empty string.
+    const sf = makeOrphanSourceField()
+    sf.name = ''
+    render(
+      <MappingDrawer
+        row={{
+          kind: 'source-field-only',
+          id: 'unmapped-source::sf-bom',
+          sourceField: sf,
+          acknowledgmentReason: null,
+        }}
+        isOpen={true}
+        onClose={() => {}}
+      />,
+    )
+    expect(
+      screen.getByTestId('mapping-drawer-source-stub-field').textContent,
+    ).toBe('—')
+  })
+
+  it('does NOT render the DrawerHeader pickers, tab strip, or footer on a source-field-only mount', () => {
+    render(
+      <MappingDrawer
+        row={{
+          kind: 'source-field-only',
+          id: 'unmapped-source::sf-bom',
+          sourceField: makeOrphanSourceField(),
+          acknowledgmentReason: null,
+        }}
+        isOpen={true}
+        onClose={() => {}}
+        // Even when commit handlers are threaded, the stub mount must
+        // not surface any editing UI.
+        onSwapTarget={vi.fn()}
+        onSwapSource={vi.fn()}
+        onEditSources={vi.fn()}
+        onUnmapMapping={vi.fn()}
+        onCreateMapping={vi.fn()}
+      />,
+    )
+    // The mainline DrawerHeader's testid is absent — the stub uses
+    // `mapping-drawer-source-stub-header` instead.
+    expect(
+      screen.queryByTestId('mapping-drawer-header'),
+    ).toBeNull()
+    expect(
+      screen.getByTestId('mapping-drawer-source-stub-header'),
+    ).toBeInTheDocument()
+    // No approve/reject footer.
+    expect(
+      screen.queryByTestId('mapping-drawer-approve-button'),
+    ).toBeNull()
+    expect(
+      screen.queryByTestId('mapping-drawer-reject-button'),
+    ).toBeNull()
+  })
+})
+
 describe('MappingDrawer — Value Assignment body', () => {
   it('does NOT render a SOURCE section (drawer redesign PR 1)', () => {
     // PR 1: the legacy empty-state "Value assignment — no sources"

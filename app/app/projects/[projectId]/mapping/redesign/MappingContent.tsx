@@ -61,7 +61,7 @@ import {
 } from '@/lib/utils/mapping-filters'
 import { FilterRow } from './components/FilterRow'
 import { TargetTableGroup } from './components/TargetTableGroup'
-import { MappingDrawer } from './components/MappingDrawer'
+import { MappingDrawer, type DrawerRow, type SourceFieldDrawerRow } from './components/MappingDrawer'
 import { MappingSummaryStrip } from './components/MappingSummaryStrip'
 // SourceSchemaSidebar removed at the
 // feat/mapping-list-toggle-and-columns refinement pass — the
@@ -1680,10 +1680,21 @@ function MappingContentLoaded({
   // is enforced as a single derivation rather than a side-effecting
   // `useEffect`. `useMemo` keeps the lookup cheap; an actual auto-close
   // (URL clean-up + state reset) fires from a sibling `useEffect` below.
-  const drawerRow = useMemo<MappingRow | null>(() => {
+  //
+  // feat/mapping-row-uniformity — the lookup now ALSO recognizes
+  // source-side flat-row ids (`unmapped-source::<sfId>` and
+  // `ack::source::<ackId>`) and projects them into a
+  // `SourceFieldDrawerRow` for the drawer's stub source-side mount.
+  // The projection lives off `data.sourceFields` +
+  // `data.sourceFieldAcknowledgments` — the same shapes
+  // `flattenRowsForListView` consumes — so the drawer mirrors the
+  // flat view's row identity without a wire-shape change.
+  const drawerRow = useMemo<DrawerRow | null>(() => {
     if (drawerRowId === null) return null
+    const sourceSide = resolveSourceSideDrawerRow(drawerRowId, data)
+    if (sourceSide) return sourceSide
     return filteredRows.find((r) => r.id === drawerRowId) ?? null
-  }, [drawerRowId, filteredRows])
+  }, [drawerRowId, filteredRows, data])
 
   // ── Phase 4a-2 — last-valid row retention during save→refresh ────
   //
@@ -1698,7 +1709,7 @@ function MappingContentLoaded({
   // identity so we can keep the drawer mounted with its content until
   // the new mapped row materializes. The body re-mounts naturally on
   // the row.kind 'unmapped' → 'mapped' flip (founder decision §9-OQ-2).
-  const lastValidDrawerRowRef = useRef<MappingRow | null>(null)
+  const lastValidDrawerRowRef = useRef<DrawerRow | null>(null)
   useEffect(() => {
     if (drawerRow !== null) {
       lastValidDrawerRowRef.current = drawerRow
@@ -1709,7 +1720,7 @@ function MappingContentLoaded({
   // valid row only inside the pending sentinel window — never used as
   // a generic fallback (which would mask filter-hide and stale-URL
   // bugs).
-  const effectiveDrawerRow = useMemo<MappingRow | null>(() => {
+  const effectiveDrawerRow = useMemo<DrawerRow | null>(() => {
     if (drawerRow !== null) return drawerRow
     if (
       pendingDrawerRowId !== null &&
@@ -2171,6 +2182,57 @@ function NoGroupsMatchState() {
 }
 
 // ─── Pure helpers ────────────────────────────────────────────────────────────
+
+/**
+ * feat/mapping-row-uniformity — try to resolve a `?drawer=<id>` URL
+ * param into a source-side projection. Mirrors the synthetic ids that
+ * `flattenRowsForListView` emits:
+ *
+ *   • `unmapped-source::<sourceFieldId>` — pure source-only unmapped
+ *     field. Returns a `SourceFieldDrawerRow` with no ack reason.
+ *   • `ack::source::<acknowledgmentId>`  — source-side ack. Looks up
+ *     the ack in `data.sourceFieldAcknowledgments` and the source
+ *     field in `data.sourceFields`; the ack's `reason` carries through
+ *     to the drawer stub.
+ *
+ * Returns `null` for any other id shape (the caller then falls back
+ * to the wire-level `MappingRow` lookup against `filteredRows`).
+ *
+ * Pure module-level function — no React hooks, no state. Cheap enough
+ * to invoke inside the `useMemo` that computes `drawerRow`.
+ */
+function resolveSourceSideDrawerRow(
+  rowId: string,
+  data: MappingsForRedesignResult,
+): SourceFieldDrawerRow | null {
+  const SOURCE_PREFIX = 'unmapped-source::'
+  const ACK_PREFIX = 'ack::source::'
+  if (rowId.startsWith(SOURCE_PREFIX)) {
+    const sourceFieldId = rowId.slice(SOURCE_PREFIX.length)
+    const sf = data.sourceFields.find((f) => f.id === sourceFieldId)
+    if (!sf) return null
+    return {
+      kind: 'source-field-only',
+      id: rowId,
+      sourceField: sf,
+      acknowledgmentReason: null,
+    }
+  }
+  if (rowId.startsWith(ACK_PREFIX)) {
+    const ackId = rowId.slice(ACK_PREFIX.length)
+    const ack = data.sourceFieldAcknowledgments.find((a) => a.id === ackId)
+    if (!ack) return null
+    const sf = data.sourceFields.find((f) => f.id === ack.sourceFieldId)
+    if (!sf) return null
+    return {
+      kind: 'source-field-only',
+      id: rowId,
+      sourceField: sf,
+      acknowledgmentReason: ack.reason ?? null,
+    }
+  }
+  return null
+}
 
 /**
  * Group server-sorted rows by target-table id. Returns a Map so iteration
