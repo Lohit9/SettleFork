@@ -538,20 +538,26 @@ export function MappingListView({
 
   const closePicker = useCallback(() => setOpenPicker(null), [])
 
+  // Gap C (feat/drawer-body-editing-surface) — `openPicker` is keyed by
+  // row id. A create/promote transition changes the row's id under us
+  // (`unmapped::<x>` → TFM uuid), which would leave the picker open and
+  // anchored to a now-unmounted row. Proactively drop picker state on a
+  // successful commit so the open-picker state can never outlive its row.
   const handleSourcePickerCommit = useCallback(
     async (newSourceFieldIds: string[]) => {
       if (openPicker?.kind !== 'source') return { success: false }
       const newId = newSourceFieldIds[0]
       if (!newId) return { success: false }
       // Create-from-unmapped (target-only row picked a source):
-      if (openPicker.targetFieldIdForCreate) {
-        return mutations.createFromUnmapped({
-          sourceFieldId: newId,
-          targetFieldId: openPicker.targetFieldIdForCreate,
-          pendingKey: openPicker.rowId,
-        })
-      }
-      return mutations.swapMappingSource(openPicker.rowId, newId)
+      const result = openPicker.targetFieldIdForCreate
+        ? await mutations.createFromUnmapped({
+            sourceFieldId: newId,
+            targetFieldId: openPicker.targetFieldIdForCreate,
+            pendingKey: openPicker.rowId,
+          })
+        : await mutations.swapMappingSource(openPicker.rowId, newId)
+      if (result.success) setOpenPicker(null)
+      return result
     },
     [mutations, openPicker],
   )
@@ -559,21 +565,25 @@ export function MappingListView({
   const handleTargetPickerCommit = useCallback(
     async (newTargetFieldId: string) => {
       if (openPicker?.kind !== 'target') return { success: false }
-      // Create-from-unmapped (source-side row picked a target):
+      let result: { success: boolean }
       if (openPicker.sourceFieldIdForCreate) {
-        return mutations.createFromUnmapped({
+        // Create-from-unmapped (source-side row picked a target):
+        result = await mutations.createFromUnmapped({
           sourceFieldId: openPicker.sourceFieldIdForCreate,
           targetFieldId: newTargetFieldId,
           pendingKey: openPicker.rowId,
         })
+      } else {
+        // Standard swap-target on an existing TFM. Multi-source flat
+        // rows carry shimmed contributor ids (`<tfmId>::<sourceId>`);
+        // strip the suffix so swapMappingTarget receives the bare TFM
+        // uuid — target swap is TFM-atomic regardless of which
+        // contributor row triggered the click.
+        const bareTfmId = openPicker.rowId.split('::')[0]
+        result = await mutations.swapMappingTarget(bareTfmId, newTargetFieldId)
       }
-      // Standard swap-target on an existing TFM. Multi-source flat
-      // rows carry shimmed contributor ids (`<tfmId>::<sourceId>`);
-      // strip the suffix so swapMappingTarget receives the bare TFM
-      // uuid — target swap is TFM-atomic regardless of which
-      // contributor row triggered the click.
-      const bareTfmId = openPicker.rowId.split('::')[0]
-      return mutations.swapMappingTarget(bareTfmId, newTargetFieldId)
+      if (result.success) setOpenPicker(null)
+      return result
     },
     [mutations, openPicker],
   )

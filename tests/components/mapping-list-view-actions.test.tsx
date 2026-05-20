@@ -210,6 +210,7 @@ function makeMutations(): MappingListMutations & {
   createFromUnmapped: ReturnType<typeof vi.fn>
   rejectUnmappedRow: ReturnType<typeof vi.fn>
   approveUnmappedSource: ReturnType<typeof vi.fn>
+  promoteUnmappedSource: ReturnType<typeof vi.fn>
   editMappingSources: ReturnType<typeof vi.fn>
 } {
   const success = { success: true }
@@ -222,6 +223,7 @@ function makeMutations(): MappingListMutations & {
     createFromUnmapped: vi.fn().mockResolvedValue(success),
     rejectUnmappedRow: vi.fn().mockResolvedValue(success),
     approveUnmappedSource: vi.fn().mockResolvedValue(success),
+    promoteUnmappedSource: vi.fn().mockResolvedValue(success),
     editMappingSources: vi.fn().mockResolvedValue(success),
   }
 }

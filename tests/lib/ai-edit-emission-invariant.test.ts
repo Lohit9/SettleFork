@@ -92,6 +92,16 @@ const ALLOWED_FUNCTIONS_WITHOUT_LOG_AI_EDIT = new Set<string>([
   // so this regex never flags it. Listed defensively in case a future
   // refactor adds a fallback direct-write branch.
   'persistClaudeFieldMappingsForTM',
+  // promoteUnmappedSource (feat/drawer-body-editing-surface) does NOT
+  // write mapping_sources directly — it READS the existing source set
+  // (`.from('mapping_sources').select(...)`) and then delegates the
+  // actual mutation to either `editMappingSources` (target already
+  // mapped) or `createMappingFromUnmapped` → `createFieldMapping`
+  // (target unmapped). Each delegate owns its own audit handling. The
+  // mutation regex false-positives here because the read is followed,
+  // within its 2000-char window, by an unrelated
+  // `source_field_acknowledgments.delete()`.
+  'promoteUnmappedSource',
 
   // ── Permanent skips: deterministic detection / validation engines ───────
   // These functions write quality_issues rows from deterministic rule

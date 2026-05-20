@@ -7,6 +7,7 @@ import {
   approveFieldMapping,
   createMappingFromUnmapped,
   editMappingSources,
+  promoteUnmappedSource,
   rejectFieldMapping,
   setUnmappedRowRejected,
   updateMappingSourceField,
@@ -44,7 +45,12 @@ interface UseMappingListMutationsArgs {
   projectId: string
 }
 
-type MutationResult = { success: boolean }
+// `tfmId` is populated for mutations that resolve to a known target
+// field mapping — creates and promotions in particular. The drawer uses
+// it to re-point at a row whose identity changed (e.g. an unmapped row
+// promoted to a real TFM). Mutations that don't resolve a TFM leave it
+// undefined.
+type MutationResult = { success: boolean; tfmId?: string }
 
 export interface MappingListMutations {
   /**
@@ -134,6 +140,24 @@ export interface MappingListMutations {
   }) => Promise<MutationResult>
 
   /**
+   * feat/drawer-body-editing-surface — promote an unmapped-source row to
+   * a mapped row by picking a target field. Wraps the case-detecting
+   * `promoteUnmappedSource` server action:
+   *   • Target unmapped → a new 1:1 TFM is created.
+   *   • Target already mapped → the picked source is appended to the
+   *     existing TFM (single/multi → multi).
+   *
+   * The resolved TFM id is surfaced on `MutationResult.tfmId` so the
+   * drawer can follow the promoted row through its identity change.
+   */
+  promoteUnmappedSource: (args: {
+    sourceFieldId: string
+    targetFieldId: string
+    /** Pending-state key — the unmapped-source row id the user acted on. */
+    pendingKey: string
+  }) => Promise<MutationResult>
+
+  /**
    * Drawer redesign PR 2 — replace the mapping_sources set on an
    * existing TFM. Used by:
    *   • Per-source ✕ remove (multi-source) — pass the remaining
@@ -184,7 +208,11 @@ export function useMappingListMutations(
   const run = useCallback(
     async (
       key: string,
-      action: () => Promise<{ success: boolean; error?: string }>,
+      action: () => Promise<{
+        success: boolean
+        error?: string
+        tfmId?: string
+      }>,
       successMessage: string,
     ): Promise<MutationResult> => {
       markPending(key)
@@ -199,7 +227,7 @@ export function useMappingListMutations(
         }
         pushToast({ variant: 'success', message: successMessage })
         router.refresh()
-        return { success: true }
+        return { success: true, tfmId: result.tfmId }
       } catch (err) {
         const message =
           err instanceof Error
@@ -314,6 +342,25 @@ export function useMappingListMutations(
     [projectId, run],
   )
 
+  const promoteUnmappedSourceMut = useCallback(
+    (input: {
+      sourceFieldId: string
+      targetFieldId: string
+      pendingKey: string
+    }) =>
+      run(
+        input.pendingKey,
+        () =>
+          promoteUnmappedSource({
+            projectId,
+            sourceFieldId: input.sourceFieldId,
+            targetFieldId: input.targetFieldId,
+          }),
+        'Mapping created',
+      ),
+    [projectId, run],
+  )
+
   const editMappingSourcesMut = useCallback(
     (input: {
       tfmId: string
@@ -342,6 +389,7 @@ export function useMappingListMutations(
     createFromUnmapped,
     rejectUnmappedRow,
     approveUnmappedSource,
+    promoteUnmappedSource: promoteUnmappedSourceMut,
     editMappingSources: editMappingSourcesMut,
   }
 }
