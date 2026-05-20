@@ -162,7 +162,7 @@
       },
       {
         "source_table": "Engineering BOM Masters",
-        "source_field": "Unlabeled",
+        "source_field": "Component Cost",
         "target_field": "Unmapped",
         "target_table": "Unmapped",
         "explanation": "Per-component cost contribution from the source BoM (for example, $0.02 per sheet). This belongs on Item Cost or BOM Cost records, not on the Engineering Item Master or Inventory Commodity Code tables in the current migration scope.",
@@ -174,7 +174,7 @@
       },
       {
         "source_table": "Engineering BOM Masters",
-        "source_field": "Unlabeled",
+        "source_field": "Sub-Assembly Flag",
         "target_field": "Eng Type",
         "target_table": "Engineering Item Master",
         "explanation": "Field type: Picklist {Standard, Phantom, Reference}, Optional (inherits from commodity code if blank).\n\nWhen a component is itself an assembly with its own BoM, the source data flags it as 'Sub-Assembly'. Sub-assemblies that are never independently inventoried should be marked Eng Type = Phantom in Rootstock. Only one SKU (WHC16) carries this flag in the current data, but the rule applies more broadly to any SKU that appears as both a parent and a component if RCB confirms it should be treated as a phantom.",
